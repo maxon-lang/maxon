@@ -151,7 +151,7 @@ function main() returns ExitCode
 	let first = naps.awaitAny()
 	print("first finished: index {first}\n")     // index 1
 
-	var sum = 0
+	var sum = 0 as Tag
 	for p in naps 'drain'
 		sum = sum + await p
 	end 'drain'

@@ -239,3 +239,40 @@ end 'main'
 []
 []
 ```
+
+<!-- test: split-delimiter-longer-than-the-string -->
+A delimiter longer than the string cannot occur in it: the answer is the string, and the search never starts.
+```maxon
+function main() returns ExitCode
+	let parts = "ab".split("abcdef")
+	print("{parts.count()}\n")
+
+	for p in parts 'loop'
+		print("{p}\n")
+	end 'loop'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+ab
+```
+
+<!-- test: replace-old-longer-than-the-string -->
+An `old` longer than the string cannot occur in it: `replace` answers the string unchanged.
+```maxon
+function main() returns ExitCode
+	print("{"ab".replace("abcdef", with: "x")}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+ab
+```

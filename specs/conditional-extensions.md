@@ -301,7 +301,7 @@ end 'Seq'
 
 extension Seq
 	function countItems() returns Integer
-		var n = 0
+		var n = 0 as Integer
 		for _ in self 'loop'
 			n = n + 1
 		end 'loop'

@@ -780,7 +780,7 @@ type Impl implements Counter
 	let value as Integer
 
 	function tally(limit Integer) returns Integer
-		var total = 0
+		var total = 0 as Integer
 		for i in 0 upto 3 'l'
 			total = total + 1
 		end 'l'

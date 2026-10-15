@@ -84,7 +84,7 @@ function main() returns ExitCode
 	for i in 0 upto 6 'seed'
 		a.push(i * 2)
 	end 'seed'
-	var t = 0
+	var t = 0 as Word
 	for i in 0 upto 6 'sum'
 		t = t + pick(a, i: i)
 	end 'sum'
@@ -116,7 +116,7 @@ function main() returns ExitCode
 	for i in 0 upto 5 'seed'
 		a.push(i)
 	end 'seed'
-	var t = 0
+	var t = 0 as Word
 	for i in 0 upto 9 'sum'
 		t = t + pickOr(a, i: i)
 	end 'sum'
@@ -178,7 +178,7 @@ end 'put'
 function main() returns ExitCode
 	var a = WordArray.create()
 	a.resize(4)
-	var stored = 0
+	var stored = 0 as FullRangeInt
 	for i in 0 upto 5 'each'
 		if put(a, i: i, v: i * 10) 'ok'
 			stored = stored + 1
@@ -187,7 +187,7 @@ function main() returns ExitCode
 	if stored != 4 'count'
 		return 1
 	end 'count'
-	var seen = 0
+	var seen = 0 as Word
 	for v in a 'check'
 		seen = seen + v
 	end 'check'
@@ -214,8 +214,8 @@ function main() returns ExitCode
 	a.push(2)
 	a.push(1)
 	a.push(0)
-	var i = 0
-	var steps = 0
+	var i = 0 as ElementIndex
+	var steps = 0 as Word
 	while (try a.get(i) otherwise panic("main: i stays below count()")) > 0 'walk'
 		steps = steps + 1
 		i = i + 1
@@ -307,7 +307,7 @@ look through — those copies are left alone.) The answer depends on which arm r
 typealias Word = int(i64.min to i64.max)
 
 function classify(p bool, q bool, n Word) returns Word
-	var flag = 0
+	var flag = 0 as Word
 	if p 'first'
 		flag = 0
 	end 'first' else if q 'second'
@@ -348,7 +348,7 @@ the branch stays where it was.
 typealias Word = int(i64.min to i64.max)
 
 function pick(p bool) returns Word
-	var tag = 0
+	var tag = 0 as Word
 	if p 'yes'
 		tag = 1
 	end 'yes' else 'no'
@@ -384,8 +384,8 @@ own `7`, not `C`'s phi. All four combinations are read back.
 typealias Word = int(i64.min to i64.max)
 
 function bump(p bool, n Word) returns Word
-	var flag = 0
-	var acc = 5
+	var flag = 0 as Word
+	var acc = 5 as Word
 	if p 'yes'
 		flag = 1
 		acc = n
@@ -428,7 +428,7 @@ every call.
 typealias Word = int(i64.min to i64.max)
 
 function f(p bool, n Word) returns Word
-	var flag = 0
+	var flag = 0 as Word
 	if p 'a'
 		flag = 0
 	end 'a' else 'b'
@@ -441,7 +441,7 @@ function f(p bool, n Word) returns Word
 end 'f'
 
 function main() returns ExitCode
-	var t = 0
+	var t = 0 as Word
 	for i in 0 upto 4 'each'
 		t = t + f(i mod 2 == 0, n: i)
 	end 'each'
@@ -464,14 +464,14 @@ program panics the compiler ("tested arg 13 is outside the block-arg id space").
 typealias Word = int(i64.min to i64.max)
 
 function f(p bool, q bool, n Word) returns Word
-	var flag = 0
+	var flag = 0 as Word
 	if p 'a'
 		flag = 0
 	end 'a' else 'b'
 		flag = 0
 	end 'b'
 	if flag != 0 'nz'
-		var g = 0
+		var g = 0 as Word
 		if q 'c'
 			g = 0
 		end 'c' else 'd'
@@ -486,7 +486,7 @@ function f(p bool, q bool, n Word) returns Word
 end 'f'
 
 function main() returns ExitCode
-	var t = 0
+	var t = 0 as Word
 	for i in 0 upto 4 'each'
 		t = t + f(i mod 2 == 0, q: i > 1, n: i)
 	end 'each'

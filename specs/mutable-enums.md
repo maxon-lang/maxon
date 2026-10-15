@@ -716,7 +716,7 @@ end 'makeSlot'
 
 function main() returns ExitCode
 	var s = makeSlot()
-	var seen = 0
+	var seen = 0 as Integer
 
 	match s 'step'
 		holding(c) then c.raise()
@@ -762,7 +762,7 @@ end 'makeSlot'
 
 function main() returns ExitCode
 	let s = makeSlot()
-	var seen = 0
+	var seen = 0 as Integer
 
 	match s 'step'
 		holding(c) then c.raise()

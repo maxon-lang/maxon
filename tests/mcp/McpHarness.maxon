@@ -547,8 +547,8 @@ export typealias HeaderMap = Map with (String, String)
 // transport case must be able to read back any code the server sends.
 export typealias HttpAnswerStatus = int(100 to 599)
 
-let LowestHttpAnswerStatus = 100 as ParsedInt
-let HighestHttpAnswerStatus = 599 as ParsedInt
+let LowestHttpAnswerStatus = 100 as FullRangeInt
+let HighestHttpAnswerStatus = 599 as FullRangeInt
 
 export typealias SourceLine = int(1 to u32.max)
 
@@ -641,7 +641,7 @@ function httpExchange(port NetworkPort, requestText String) returns HttpAnswer
 	end 'sendFailed'
 
 	var raw = ""
-	var reads = 0
+	var reads = 0 as Count
 	var open = true
 
 	while open 'drain'
@@ -677,7 +677,7 @@ function parseHttpAnswer(raw String) returns HttpAnswer
 	end 'noBody'
 
 	var body = ""
-	var sectionIndex = 1
+	var sectionIndex = 1 as ElementIndex
 
 	while sectionIndex < sections.count() 'rejoin'
 		if sectionIndex > 1 'separator'
@@ -725,7 +725,7 @@ function parseHttpAnswer(raw String) returns HttpAnswer
 	let declared = try headers.get(ContentLengthHeaderName) otherwise panic("McpHarness: an HTTP answer carries no Content-Length, so a truncated one cannot be told from a whole one: {raw}")
 	let declaredBytes = try int.fromString(declared.trim()) otherwise panic("McpHarness: an HTTP answer's Content-Length is not a number: {raw}")
 
-	if (body.byteLength() as ParsedInt) != declaredBytes 'truncated'
+	if (body.byteLength() as FullRangeInt) != declaredBytes 'truncated'
 		panic("McpHarness: an HTTP answer declares {declaredBytes} body bytes and {body.byteLength()} arrived: {raw}")
 	end 'truncated'
 
@@ -736,7 +736,7 @@ end 'parseHttpAnswer'
 // reporting.
 function drainedStderr(child StreamingSubprocess) returns String
 	var said = ""
-	var reads = 0
+	var reads = 0 as Count
 
 	while reads < StderrDrainBudget 'drain'
 		match child.tryReadStderrLine() 'polled'
@@ -900,7 +900,7 @@ export function debuggableProgramSource() returns String
 	lines.push("")
 	lines.push("function work(seed Step) returns Step")
 	lines.push("\tvar total = seed")
-	lines.push("\tvar i = 0")
+	lines.push("\tvar i = 0 as Step")
 	lines.push("")
 	lines.push("\twhile i < 4 'grind'")
 	lines.push("\t\ttotal = total + i {AnchorMarker}{DebuggableProgramAnchor}")
@@ -911,7 +911,7 @@ export function debuggableProgramSource() returns String
 	lines.push("end 'work'")
 	lines.push("")
 	lines.push("function main() returns ExitCode")
-	lines.push("\tvar total = 0")
+	lines.push("\tvar total = 0 as Step")
 	lines.push("\ttotal = total + work(1)")
 	lines.push("\ttotal = total + work(2)")
 	lines.push("\tprint(\"total \{total\}\\n\")")
@@ -953,8 +953,8 @@ end 'stdioHandshake'
 export function anchorLineIn(program FilePath, anchor String) returns SourceLine
 	let body = try File.readText(program) otherwise panic("McpHarness: could not read {program.path}")
 	let marker = "{AnchorMarker}{anchor}"
-	var found = 0
-	var carriers = 0
+	var found = 0 as ElementIndex
+	var carriers = 0 as Count
 
 	for (iter, line) in body.split(LineFeed).withIterator() 'eachLine'
 		if line.trim().endsWith(marker) 'thisAnchor'

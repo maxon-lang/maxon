@@ -13,23 +13,23 @@ let SharedValueCellChainOffset = 0x08 as ByteOffset
 let SharedValueCellRefsOffset = 0x10 as ByteOffset
 let SharedValueCellDropOffset = 0x18 as ByteOffset
 let SharedValueCellRetainOffset = 0x20 as ByteOffset
-let SharedValueCellBytes = 0x28 as ParsedInt
+let SharedValueCellBytes = 0x28 as FullRangeInt
 
 let SharedValueChainNextOffset = 0x00 as ByteOffset
 let SharedValueChainValueOffset = 0x08 as ByteOffset
-let SharedValueChainNodeBytes = 0x10 as ParsedInt
+let SharedValueChainNodeBytes = 0x10 as FullRangeInt
 
 let SharedValueHolderCellOffset = 0x00 as ByteOffset
-let SharedValueBoxBytes = 8 as ParsedInt
+let SharedValueBoxBytes = 8 as FullRangeInt
 
-let SharedValueInitialRefs = 1 as ParsedInt
-let SharedValueRefUp = 1 as ParsedInt
-let SharedValueRefDown = -1 as ParsedInt
-let SharedValueLastRef = 1 as ParsedInt
-let ReleasedHolder = 0 as ParsedInt
-export let NoRuntimeFunction = 0 as ParsedInt
-let PublishedAnswer = 1 as ParsedInt
-let DeclinedAnswer = 0 as ParsedInt
+let SharedValueInitialRefs = 1 as FullRangeInt
+let SharedValueRefUp = 1 as FullRangeInt
+let SharedValueRefDown = -1 as FullRangeInt
+let SharedValueLastRef = 1 as FullRangeInt
+let ReleasedHolder = 0 as FullRangeInt
+export let NoRuntimeFunction = 0 as FullRangeInt
+let PublishedAnswer = 1 as FullRangeInt
+let DeclinedAnswer = 0 as FullRangeInt
 
 let SharedValueRuntimePrefix = b"__shv_"
 let SharedValueNewName = b"__shv_new"
@@ -172,7 +172,7 @@ function emitCasSucceeded(module StdModule, block IrBlock, addr ValueId, expecte
 	return emitCmp(module, block: block, a: swapped, b: emitConst(module, block: block, value: AtomicCasSucceeded, ids: ids), pred: StdCmpPred.eq, ids: ids)
 end 'emitCasSucceeded'
 
-function emitRefStep(module StdModule, block IrBlock, cell ValueId, delta ParsedInt, ids ValueMinter) returns ValueId
+function emitRefStep(module StdModule, block IrBlock, cell ValueId, delta FullRangeInt, ids ValueMinter) returns ValueId
 	let addr = emitFieldAddr(module, block: block, record: cell, offset: SharedValueCellRefsOffset, ids: ids)
 	let prior = ids.mint()
 	module.appendOp(block, op: StdOp.atomicRmw(prior, addrId: addr, operandId: emitConst(module, block: block, value: delta, ids: ids), opcode: StdAtomicRmwOpcode.add))

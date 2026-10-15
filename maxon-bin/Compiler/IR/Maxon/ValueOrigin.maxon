@@ -98,7 +98,7 @@ export function maxonOpDefinedValue(op MaxonOp) returns ValueId throws AbsentErr
 		// A `functionRef` DEFINES its result (an address, like `literal`); an `indirectCall`
 		// DEFINES its result (the call's return value, like `call`).
 		functionRef(result, _, _) then return result
-		indirectCall(result, _, _) then return result
+		indirectCall(result, _, _, _) then return result
 
 		// An async spawn DEFINES its promise handle; an await DEFINES its awaited scalar.
 		asyncCall(result, _, _, _, _, _, _) then return result
@@ -120,11 +120,11 @@ export function maxonOpDefinedValue(op MaxonOp) returns ValueId throws AbsentErr
 
 		// A witness dispatch DEFINES its result (the dispatched method's return value), so it carries a source
 		// origin like any other value-producing call.
-		witnessDispatch(result, _, _, _, _, _, _) then return result
+		witnessDispatch(result, _, _, _, _, _, _, _) then return result
 
 		// A throwing witness dispatch's PRIMARY result is its origin-bearing value, exactly as a `tryCall`'s
 		// is; its error flag is compiler-synthetic and needs no source origin.
-		witnessTryDispatch(result, _, _, _, _, _, _) then return result
+		witnessTryDispatch(result, _, _, _, _, _, _, _) then return result
 
 		// A rendered panic defines nothing, exactly as `panicAbort` does — it aborts.
 		panicAbortValue then throw AbsentError.absent
@@ -174,8 +174,8 @@ export function maxonOpOperandValues(op MaxonOp, into ValueIdArray)
 		tryCall(_, _, _, args, _, _, _, _, _) then appendValues(into, values: args)
 		asyncCall(_, _, args, _, _, _, _) then appendValues(into, values: args)
 		rawIntrinsic(_, _, args, _) then appendValues(into, values: args)
-		witnessDispatch(_, args, witness, _, _, _, _) then appendValuesAndOne(into, values: args, one: witness)
-		witnessTryDispatch(_, _, args, witness, _, _, _) then appendValuesAndOne(into, values: args, one: witness)
+		witnessDispatch(_, args, _, witness, _, _, _, _) then appendValuesAndOne(into, values: args, one: witness)
+		witnessTryDispatch(_, _, args, _, witness, _, _, _) then appendValuesAndOne(into, values: args, one: witness)
 
 		// Its `args` is the variant's TAIL field, so it is bound in a small match — see
 		// `LowerMaxonToStd.lowerIndirectCall`.
@@ -217,7 +217,7 @@ end 'maxonOpOperandValues'
 
 function appendIndirectCallOperands(op MaxonOp, into ValueIdArray)
 	match op 'indirect'
-		indirectCall(_, callee, args) then appendValuesAndOne(into, values: args, one: callee)
+		indirectCall(_, callee, args, _) then appendValuesAndOne(into, values: args, one: callee)
 		default panic("appendIndirectCallOperands: handed an op that is not an indirect call")
 	end 'indirect'
 end 'appendIndirectCallOperands'

@@ -372,7 +372,7 @@ end 'Point'
 
 function pick(p Point, n Integer) returns Integer
 	var q = p
-	var i = 0
+	var i = 0 as Integer
 	while i < n 'l'
 		q = Point.create(9)
 		i = i + 1
@@ -412,7 +412,7 @@ end 'Point'
 
 function pick(p Point, n Integer) returns Integer
 	var q = p
-	var i = 0
+	var i = 0 as Integer
 	while i < n 'l'
 		if i > 0 'b'
 			q = Point.create(9)
@@ -456,7 +456,7 @@ end 'Point'
 
 function pick(p Point, n Integer) returns Integer
 	var q = p
-	var i = 0
+	var i = 0 as Integer
 	while i < n 'l'
 		q = Point.create(i)
 		i = i + 1

@@ -321,7 +321,7 @@ function build(x Integer) returns String
 end 'build'
 
 function run(n Integer) returns ExitCode
-	var i = 0
+	var i = 0 as Integer
 	while i < n 'l'
 		var s = build(i)
 		if i > 0 'b'
@@ -389,7 +389,7 @@ end 'build'
 
 function run(n Integer) returns ExitCode
 	var a = build(1)
-	var i = 0
+	var i = 0 as Integer
 	while i < n 'l'
 		let u = a
 		print(u)
@@ -422,7 +422,7 @@ end 'build'
 
 function run(n Integer) returns ExitCode
 	var a = build(1)
-	var i = 0
+	var i = 0 as Integer
 	while i < n 'l'
 		if i > 0 'b'
 			let u = a
@@ -593,8 +593,8 @@ end 'label'
 
 function movedOnceThenLeaves(stop Integer) returns Integer
 	var s = label(stop)
-	var i = 0
-	var seen = 0
+	var i = 0 as Integer
+	var seen = 0 as Integer
 
 	while i < 3 'trips'
 		if i == stop 'found'
@@ -629,7 +629,7 @@ end 'label'
 
 function main() returns ExitCode
 	var s = label(1)
-	var i = 0
+	var i = 0 as Integer
 
 	while i < 2 'trips'
 		let t = s
@@ -655,8 +655,8 @@ end 'label'
 
 function reassignedThenMoved(count Integer) returns Integer
 	var s = label(0)
-	var total = 0
-	var i = 0
+	var total = 0 as Integer
+	var i = 0 as Integer
 
 	while i < count 'trips'
 		s = label(i)
@@ -695,7 +695,7 @@ end 'keep'
 
 function rearmedPromiseEachTrip(count Integer) returns Integer
 	var p = async work(0)
-	var total = 0
+	var total = 0 as Integer
 
 	for i in 0 upto count 'trips'
 		p = async work(i)
@@ -731,7 +731,7 @@ end 'label'
 
 function forMoveThenBreak(stop Integer) returns Integer
 	var s = label(stop)
-	var seen = 0
+	var seen = 0 as Integer
 
 	for i in 0 upto 3 'trips'
 		if i == stop 'found'
@@ -764,7 +764,7 @@ end 'build'
 
 function main() returns ExitCode
 	var s = build(0)
-	var i = 0
+	var i = 0 as Integer
 
 	while i < 4 'l'
 		i = i + 1
@@ -800,7 +800,7 @@ end 'build'
 
 function main() returns ExitCode
 	var s = build(0)
-	var i = 0
+	var i = 0 as Integer
 
 	while i < 3 'l'
 		i = i + 1
@@ -831,7 +831,7 @@ end 'build'
 
 function main() returns ExitCode
 	var s = build(0)
-	var i = 0
+	var i = 0 as Integer
 
 	while i < 3 'l'
 		i = i + 1
@@ -870,7 +870,7 @@ function main() returns ExitCode
 	var s = build(0)
 	let u = s
 	print("{u}\n")
-	var i = 0
+	var i = 0 as Integer
 
 	while i < 3 'l'
 		i = i + 1
@@ -900,11 +900,11 @@ end 'build'
 
 function main() returns ExitCode
 	var s = build(0)
-	var i = 0
+	var i = 0 as Integer
 
 	while i < 3 'outer'
 		i = i + 1
-		var j = 0
+		var j = 0 as Integer
 
 		while j < 2 'inner'
 			j = j + 1
@@ -973,7 +973,7 @@ end 'build'
 
 function main() returns ExitCode
 	var s = build(0)
-	var i = 0
+	var i = 0 as Integer
 
 	while i < 5 'l'
 		i = i + 1
@@ -1031,7 +1031,7 @@ end 'fill'
 function run(h Echo.handle, send bool, spawn bool) returns Integer
 	var word = "hello padded out long enough to heap allocate {1}"
 	fill(word, n: 2)
-	var total = 0
+	var total = 0 as Integer
 
 	if send 'sendIt'
 		let loud = try await h.shout(word) otherwise "stopped"
@@ -1089,8 +1089,8 @@ end 'fill'
 function main() returns ExitCode
 	let h = spawn Echo.create()
 	var word = "hello padded out long enough to heap allocate {0}"
-	var i = 0
-	var total = 0
+	var i = 0 as Integer
+	var total = 0 as Integer
 
 	while i < 4 'l'
 		i = i + 1
@@ -1136,8 +1136,8 @@ end 'fill'
 
 function main() returns ExitCode
 	var word = "hello padded out long enough to heap allocate {0}"
-	var i = 0
-	var total = 0
+	var i = 0 as Integer
+	var total = 0 as Integer
 
 	while i < 4 'l'
 		i = i + 1
@@ -1190,8 +1190,8 @@ end 'fill'
 function main() returns ExitCode
 	let h = spawn Echo.create()
 	var word = "hello padded out long enough to heap allocate {0}"
-	var i = 0
-	var total = 0
+	var i = 0 as Integer
+	var total = 0 as Integer
 
 	while i < 4 'l'
 		i = i + 1
@@ -1226,8 +1226,8 @@ end 'fill'
 
 function main() returns ExitCode
 	var word = "hello padded out long enough to heap allocate {0}"
-	var i = 0
-	var total = 0
+	var i = 0 as Integer
+	var total = 0 as Integer
 
 	while i < 4 'l'
 		i = i + 1
@@ -1277,8 +1277,8 @@ function main() returns ExitCode
 	let h = spawn Echo.create()
 	var word = "hello padded out long enough to heap allocate {0}"
 	fill(word, n: 0)
-	var i = 0
-	var total = 0
+	var i = 0 as Integer
+	var total = 0 as Integer
 
 	while i < 4 'l'
 		i = i + 1
@@ -1318,8 +1318,8 @@ end 'fill'
 function main() returns ExitCode
 	var word = "hello padded out long enough to heap allocate {0}"
 	fill(word, n: 0)
-	var i = 0
-	var total = 0
+	var i = 0 as Integer
+	var total = 0 as Integer
 
 	while i < 4 'l'
 		i = i + 1

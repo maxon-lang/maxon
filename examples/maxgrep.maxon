@@ -1,7 +1,7 @@
 typealias LineNumber = int(1 to u64.max)
 typealias MatchCount = int(0 to u64.max)
 typealias FileCount = int(0 to u64.max)
-typealias WorkerCount = int(1 to 256)
+typealias WorkerCount = int(1 to 256) implements ElementIndex
 typealias BufferPos = int(0 to u64.max) implements ElementIndex
 typealias PieceIndex = int(0 to u64.max) implements ElementIndex
 
@@ -129,7 +129,7 @@ type Options
 	end 'parse'
 
 	static function parseJobs(argument String) returns WorkerCount throws UsageError
-		var requested = 0
+		var requested = 0 as FullRangeInt
 
 		try 'readNumber'
 			requested = int.fromString(CommandLine.optionValue(argument))
@@ -413,7 +413,7 @@ type RegexMatcher implements Matcher
 		var pieces = PieceArray.create()
 		let anchoredAtStart = not source.isEmpty() and byteAt(source, position: 0) == '^'
 		var anchoredAtEnd = false
-		var cursor = 1 if anchoredAtStart else 0
+		var cursor = (1 if anchoredAtStart else 0) as BufferPos
 
 		while cursor < source.count() 'eachPiece'
 			if cursor == source.count() - 1 and byteAt(source, position: cursor) == '$' 'endAnchor'
@@ -545,8 +545,8 @@ type Searcher
 	function searchBuffer(buffer ByteArray) returns FileReport
 		let isBinary = buffer.contains(ControlByte.nul)
 		var report = FileReport.create(isBinary)
-		var lineStart = 0
-		var lineNumber = firstLineNumber
+		var lineStart = 0 as BufferPos
+		var lineNumber = firstLineNumber as LineNumber
 
 		while lineStart < buffer.count() 'eachLine'
 			let lineEnd = lineEndFrom(buffer, lineStart: lineStart)
@@ -620,7 +620,7 @@ end 'collectFiles'
 function comparePaths(left FilePath, right FilePath) returns Ordering
 	let leftBytes = left.path.toByteArray()
 	let rightBytes = right.path.toByteArray()
-	let sharedLength = leftBytes.count() if leftBytes.count() < rightBytes.count() else rightBytes.count()
+	let sharedLength = (leftBytes.count() if leftBytes.count() < rightBytes.count() else rightBytes.count()) as BufferPos
 
 	for position in 0 upto sharedLength 'eachByte'
 		let leftByte = byteAt(leftBytes, position: position)
@@ -737,12 +737,12 @@ end 'findFiles'
 function searchFiles(files PathArray, request SearchRequest, style OutputStyle, workers WorkerCount, summary RunSummary)
 	var searchers = SearcherArray.create()
 
-	for _ in 0 upto workers 'spawnWorkers'
+	for _ in 1 to workers 'spawnWorkers'
 		searchers.push(spawn Searcher.create(request.clone()))
 	end 'spawnWorkers'
 
 	var replies = ReportPromiseArray.create()
-	var nextWorker = 0
+	var nextWorker = 0 as ElementIndex
 
 	for path in files 'sendFiles'
 		var searcher = try searchers.get(nextWorker) otherwise panic("searchFiles: nextWorker stays below the worker count")

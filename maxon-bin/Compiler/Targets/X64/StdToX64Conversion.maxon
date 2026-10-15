@@ -1745,7 +1745,7 @@ export type StdToX64Lowering
 
 	// Materialize a constant into its virtual register. The op's own StdType picks
 	// the register file (GP vs XMM); there is no second const opcode for floats.
-	function lowerConst(resultId ValueId, value ParsedInt, valueType StdType, dstBlock IrBlock)
+	function lowerConst(resultId ValueId, value FullRangeInt, valueType StdType, dstBlock IrBlock)
 		if stdTypeIsFloat(valueType) 'float'
 			self.lowerFloatConst(resultId, value: value, valueType: valueType, dstBlock: dstBlock)
 			return
@@ -1775,7 +1775,7 @@ export type StdToX64Lowering
 	// ⚠ THE OP IS NOT REMATERIALIZABLE, which is worth knowing precisely because it reads no
 	// register and therefore looks like it should be. See `movsdRegRip` in TargetDialect: rebuilding
 	// it needs a fresh RELOCATION, which the remat path has no way to express.
-	function lowerFloatConst(resultId ValueId, value ParsedInt, valueType StdType, dstBlock IrBlock)
+	function lowerFloatConst(resultId ValueId, value FullRangeInt, valueType StdType, dstBlock IrBlock)
 		requireScalarDouble(valueType, what: "lowerFloatConst")
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movsdRegRip(TargetVReg.virtual(resultId), label: self.rdata.floatConstant(value)))
 	end 'lowerFloatConst'
@@ -2546,23 +2546,23 @@ export type StdToX64Lowering
 		let capacity = x64RegisterArgCapacity()
 
 		for k in 0 upto args.count() 'eachStackArg'
-			if not abiArgIsOnStack(argFloatMask, index: k, capacity: capacity) 'inRegister'
+			if not abiArgIsOnStack(argFloatMask, index: k as ParamCount, capacity: capacity) 'inRegister'
 				continue
 			end 'inRegister'
 
 			let argId = try args.get(k) otherwise panic("emitArgMovesByFloatMask: args.get OOB at {k}")
-			self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(abiStackSlotsBefore(argFloatMask, index: k, capacity: capacity) as MachineWord), src: TargetVReg.virtual(argId), width: X64AccessWidth.word64))
+			self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(abiStackSlotsBefore(argFloatMask, index: k as ParamCount, capacity: capacity) as MachineWord), src: TargetVReg.virtual(argId), width: X64AccessWidth.word64))
 		end 'eachStackArg'
 
 		for k in 0 upto args.count() 'eachRegisterArg'
-			if abiArgIsOnStack(argFloatMask, index: k, capacity: capacity) 'onStack'
+			if abiArgIsOnStack(argFloatMask, index: k as ParamCount, capacity: capacity) 'onStack'
 				continue
 			end 'onStack'
 
 			let argId = try args.get(k) otherwise panic("emitArgMovesByFloatMask: args.get OOB at {k}")
-			let slot = abiFileSlotIndex(argFloatMask, index: k)
+			let slot = abiFileSlotIndex(argFloatMask, index: k as ParamCount)
 
-			if argMaskBit(argFloatMask, argIndex: k) 'floatArg'
+			if argMaskBit(argFloatMask, argIndex: k as ParamCount) 'floatArg'
 				self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(argFpRegisterAt(slot)), srcReg: TargetVReg.virtual(argId)))
 			end 'floatArg' else 'intArg'
 				self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(argRegisterAt(slot)), srcReg: TargetVReg.virtual(argId)))
@@ -3234,8 +3234,8 @@ export type StdToX64Lowering
 	//
 	// ⭐ The fill BYTE is moved nowhere. It is a compile-time constant, broadcast across the word HERE and
 	// carried on the op as an immediate the encoder materialises — which is the entire reason `StdOp.memFill`
-	// takes a `ParsedInt` rather than a third `ValueId` (see that op, and `memFillPatternWord`).
-	function lowerMemFill(destId ValueId, byteCountId ValueId, value ParsedInt, dstBlock IrBlock)
+	// takes a `FullRangeInt` rather than a third `ValueId` (see that op, and `memFillPatternWord`).
+	function lowerMemFill(destId ValueId, byteCountId ValueId, value FullRangeInt, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(MemFillCursorReg), srcReg: TargetVReg.virtual(destId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(MemFillCountReg), srcReg: TargetVReg.virtual(byteCountId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.x64MemFill(memFillByte(value)))

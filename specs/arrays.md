@@ -122,7 +122,7 @@ end 'main'
 <!-- test: index-assignment -->
 ```maxon
 function main() returns ExitCode
-	var arr = [10, 20, 30]
+	var arr = FullRangeIntArray from [10, 20, 30]
 	try arr.set(0, value: 100) otherwise panic("test invariant: set OOB")
 	return try arr.get(0) otherwise 0
 end 'main'
@@ -134,7 +134,7 @@ end 'main'
 <!-- test: assignment-middle -->
 ```maxon
 function main() returns ExitCode
-	var arr = [1, 2, 3]
+	var arr = FullRangeIntArray from [1, 2, 3]
 	try arr.set(1, value: 42) otherwise panic("test invariant: set OOB")
 	return try arr.get(1) otherwise 0
 end 'main'
@@ -146,7 +146,7 @@ end 'main'
 <!-- test: assignment-last -->
 ```maxon
 function main() returns ExitCode
-	var arr = [1, 2, 3, 4, 5]
+	var arr = FullRangeIntArray from [1, 2, 3, 4, 5]
 	try arr.set(4, value: 99) otherwise panic("test invariant: set OOB")
 	return try arr.get(4) otherwise 0
 end 'main'
@@ -171,7 +171,7 @@ end 'main'
 <!-- test: assignment-preserves-others -->
 ```maxon
 function main() returns ExitCode
-	var arr = [10, 20, 30]
+	var arr = FullRangeIntArray from [10, 20, 30]
 	try arr.set(0, value: 100) otherwise panic("test invariant: set OOB")
 	return try arr.get(1) otherwise 0
 end 'main'
@@ -183,7 +183,7 @@ end 'main'
 <!-- test: multiple-assignments -->
 ```maxon
 function main() returns ExitCode
-	var arr = [0, 0, 0]
+	var arr = FullRangeIntArray from [0, 0, 0]
 	try arr.set(0, value: 1) otherwise panic("test invariant: set OOB")
 	try arr.set(1, value: 2) otherwise panic("test invariant: set OOB")
 	try arr.set(2, value: 3) otherwise panic("test invariant: set OOB")
@@ -285,7 +285,7 @@ typealias IntArray = Array with Integer
 
 function main() returns ExitCode
 		var arr = IntArray.create()
-		var i = 0
+		var i = 0 as Integer
 		while i < 100 'loop'
 				arr.push(i)
 				i = i + 1
@@ -439,7 +439,7 @@ end 'main'
 let numbers = [1, 2, 3, 4, 5]
 
 function main() returns ExitCode
-	var sum = 0
+	var sum = 0 as Count
 	for n in numbers 'loop'
 		sum = sum + n
 	end 'loop'
@@ -479,7 +479,7 @@ typealias IntArray = Array with Integer
 let numbers = [1, 2, 3, 4, 5]
 
 function main() returns ExitCode
-	var sum = 0
+	var sum = 0 as Integer
 	for n in numbers 'loop'
 		sum = sum + n
 	end 'loop'
@@ -599,7 +599,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let arr = ["aaa", "bbb", "ccc"]
-	var count = 0
+	var count = 0 as Count
 	for _ in arr 'loop'
 		count = count + 1
 	end 'loop'
@@ -615,7 +615,7 @@ end 'main'
 var names = ["alice", "bob"]
 
 function main() returns ExitCode
-	var count = 0
+	var count = 0 as Count
 	for _ in names 'loop'
 		count = count + 1
 	end 'loop'
@@ -780,7 +780,7 @@ error E3005: <fragment>:4:20: Value -1 is outside the range of 'ElementIndex' (i
 <!-- test: error.set-negative-index-is-refused-at-the-door -->
 ```maxon
 function main() returns ExitCode
-	var arr = [10, 20, 30]
+	var arr = FullRangeIntArray from [10, 20, 30]
 	try arr.set(-1, value: 5) otherwise return 99
 	return 0
 end 'main'
@@ -792,7 +792,7 @@ error E3005: <fragment>:4:10: Value -1 is outside the range of 'ElementIndex' (i
 <!-- test: error.remove-negative-index-is-refused -->
 ```maxon
 function main() returns ExitCode
-	var arr = [10, 20, 30]
+	var arr = FullRangeIntArray from [10, 20, 30]
 	let removed = try arr.remove(-1) otherwise return 99
 	return removed
 end 'main'
@@ -833,7 +833,7 @@ error E3005: <fragment>:4:20: Value -1 is outside the range of 'ElementIndex' (i
 <!-- test: error.insert-negative-index-is-refused -->
 ```maxon
 function main() returns ExitCode
-	var arr = [10, 20, 30]
+	var arr = FullRangeIntArray from [10, 20, 30]
 	arr.insert(-1, value: 99)
 	return arr.count()
 end 'main'
@@ -890,7 +890,7 @@ function launder(n Signed) returns Signed
 end 'launder'
 
 function main() returns ExitCode
-	var arr = [10, 20, 30]
+	var arr = FullRangeIntArray from [10, 20, 30]
 	try arr.set(launder(-1) as ElementIndex, value: 5) otherwise return 99
 	return 0
 end 'main'
@@ -914,7 +914,7 @@ function launder(n Signed) returns Signed
 end 'launder'
 
 function main() returns ExitCode
-	var arr = [10, 20, 30]
+	var arr = FullRangeIntArray from [10, 20, 30]
 	arr.insert(launder(-1) as ElementIndex, value: 99)
 	print("inserted, count is now {arr.count()}\n")
 	return 0
@@ -935,11 +935,11 @@ Stack trace:
 <!-- test: append-basic -->
 ```maxon
 function main() returns ExitCode
-	var a = [1, 2, 3]
+	var a = FullRangeIntArray from [1, 2, 3]
 	let b = [4, 5, 6]
 	a.append(b)
-	var sum = 0
-	var i = 0
+	var sum = 0 as FullRangeInt
+	var i = 0 as Count
 	while i < a.count() 'loop'
 		sum = sum + (try a.get(i) otherwise 0)
 		i = i + 1
@@ -957,7 +957,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var a = [1, 2, 3]
+	var a = IntArray from [1, 2, 3]
 	var b = IntArray.create()
 	a.append(b)
 	return a.count()
@@ -988,7 +988,7 @@ end 'main'
 <!-- test: append-preserves-originals -->
 ```maxon
 function main() returns ExitCode
-	var a = [1, 2]
+	var a = FullRangeIntArray from [1, 2]
 	let b = [3, 4]
 	a.append(b)
 	// b should still have its original elements
@@ -1031,10 +1031,10 @@ function main() returns ExitCode
 	try piece.set(1, 30) otherwise return 8
 	try piece.setLength(2) otherwise return 8
 	a.appendMemory(piece)
-	var sum = 0
-	var i = 0
+	var sum = 0 as Count
+	var i = 0 as Count
 	while i < a.count() 'loop'
-		sum = sum + (try a.get(i) otherwise 0)
+		sum = sum + (try a.get(i) otherwise 0) as Count
 		i = i + 1
 	end 'loop'
 	return sum as ExitCode
@@ -1051,10 +1051,10 @@ The receiver gains the source's elements, and the source is only read and copied
 `append`'s is: the exit code is the receiver's sum (10) times ten plus the source's two elements (7).
 ```maxon
 function main() returns ExitCode
-	var a = [1, 2]
+	var a = FullRangeIntArray from [1, 2]
 	let b = [3, 4]
 	a.appendMemory(b.managed)
-	var sum = 0
+	var sum = 0 as FullRangeInt
 	for x in a 'each'
 		sum = sum + x
 	end 'each'
@@ -1137,7 +1137,7 @@ end 'main'
 ### It is VOID, like every other `Array` mutator
 ```maxon
 function main() returns ExitCode
-	var a = [1, 2]
+	var a = FullRangeIntArray from [1, 2]
 	let b = [3]
 	let x = a.appendMemory(b.managed)
 	return x
@@ -1330,7 +1330,7 @@ returning 42 is kept here to say that it is NOT the arm that runs: the program d
 <!-- test: error.set-negative-index-is-refused -->
 ```maxon
 function main() returns ExitCode
-	var arr = [10, 20, 30]
+	var arr = FullRangeIntArray from [10, 20, 30]
 	try arr.set(-1, value: 99) otherwise 'negative'
 		return 42
 	end 'negative'
@@ -1347,7 +1347,7 @@ error E3005: <fragment>:4:10: Value -1 is outside the range of 'ElementIndex' (i
 Modifying a slice must not affect the original array.
 ```maxon
 function main() returns ExitCode
-	let arr = [10, 20, 30, 40, 50]
+	let arr = FullRangeIntArray from [10, 20, 30, 40, 50]
 	var sub = try arr.slice(1, endIndex: 4) otherwise return 1
 	try sub.set(0, value: 99) otherwise panic("test invariant: set OOB")
 	// Original should be unchanged
@@ -1369,7 +1369,7 @@ end 'main'
 Modifying the original array must not affect an existing slice.
 ```maxon
 function main() returns ExitCode
-	var arr = [10, 20, 30, 40, 50]
+	var arr = FullRangeIntArray from [10, 20, 30, 40, 50]
 	let sub = try arr.slice(1, endIndex: 4) otherwise return 1
 	try arr.set(1, value: 99) otherwise panic("test invariant: set OOB")
 	// Slice should be unchanged
@@ -1399,7 +1399,7 @@ sized to its live elements. This is the one place the sharing is directly observ
 no buffer was allocated: an eager copy would report a grown positive capacity from the moment it was made.
 ```maxon
 function main() returns ExitCode
-	let arr = [10, 20, 30, 40, 50]
+	let arr = FullRangeIntArray from [10, 20, 30, 40, 50]
 	var sub = try arr.slice(1, endIndex: 4) otherwise return 1
 	let notMine = -1
 	let asView = sub.capacity()
@@ -1466,7 +1466,7 @@ end 'main'
 Slicing a slice windows within the window, and writing to the inner one leaves the outer one alone.
 ```maxon
 function main() returns ExitCode
-	let arr = [10, 20, 30, 40, 50, 60]
+	let arr = FullRangeIntArray from [10, 20, 30, 40, 50, 60]
 	let s1 = try arr.slice(1, endIndex: 5) otherwise return 1
 	var s2 = try s1.slice(1, endIndex: 3) otherwise return 2
 	let a = try s2.get(0) otherwise 0
@@ -1497,7 +1497,7 @@ of assuming the String's stride of 1 — one emitted function serves both record
 of the two for which 1 is right.
 ```maxon
 function main() returns ExitCode
-	let arr = [10, 20, 30, 40, 50]
+	let arr = FullRangeIntArray from [10, 20, 30, 40, 50]
 	var sub = try arr.slice(1, endIndex: 4) otherwise return 1
 	try sub.set(0, value: 99) otherwise panic("index 0 is in bounds")
 	let a = try sub.get(0) otherwise 0
@@ -1524,7 +1524,7 @@ typealias IntArray = Array with Integer
 
 function build() returns IntArray
 	var a = IntArray.create()
-	var i = 0
+	var i = 0 as Integer
 	while i < 10 'fill'
 		a.push(i * 10)
 		i = i + 1
@@ -1555,7 +1555,7 @@ count has to walk all the way down and reclaim exactly once — every arm of the
 viewer, viewer-of-a-viewer) runs, and each side keeps the bytes it had when it copied out.
 ```maxon
 function main() returns ExitCode
-	var arr = [1, 2, 3, 4, 5, 6]
+	var arr = FullRangeIntArray from [1, 2, 3, 4, 5, 6]
 	var a = try arr.slice(0, endIndex: 3) otherwise return 1
 	var b = try arr.slice(3, endIndex: 6) otherwise return 2
 	var c = try a.slice(0, endIndex: 2) otherwise return 3
@@ -1576,7 +1576,7 @@ Two live slices of one array, then writes at both ends of the parent. The parent
 slices keep reading the original bytes.
 ```maxon
 function main() returns ExitCode
-	var arr = [10, 20, 30, 40]
+	var arr = FullRangeIntArray from [10, 20, 30, 40]
 	let v1 = try arr.slice(0, endIndex: 2) otherwise return 1
 	let v2 = try arr.slice(2, endIndex: 4) otherwise return 2
 	try arr.set(0, value: 99) otherwise panic("index 0 is in bounds")
@@ -1599,7 +1599,7 @@ end 'main'
 Pushing onto the parent reallocates its buffer. The slice keeps the old one.
 ```maxon
 function main() returns ExitCode
-	var arr = [10, 20, 30]
+	var arr = FullRangeIntArray from [10, 20, 30]
 	let sub = try arr.slice(0, endIndex: 3) otherwise return 1
 	arr.push(40)
 	arr.push(50)
@@ -1621,11 +1621,11 @@ end 'main'
 array is coherent: the destination copies out first and the slice still names the original bytes.
 ```maxon
 function main() returns ExitCode
-	var arr = [1, 2, 3]
+	var arr = FullRangeIntArray from [1, 2, 3]
 	let sub = try arr.slice(0, endIndex: 2) otherwise return 1
 	arr.append(sub)
-	var sum = 0
-	var i = 0
+	var sum = 0 as FullRangeInt
+	var i = 0 as Count
 	while i < arr.count() 'loop'
 		sum = sum + (try arr.get(i) otherwise 0)
 		i = i + 1
@@ -1729,7 +1729,7 @@ is a rule `__managed_cow_detach` keeps on its OWN rather than one this case gate
 recycling, poisoning allocator is an OPEN QUESTION.**
 ```maxon
 function main() returns ExitCode
-	var arr = [10, 20, 30, 40, 50]
+	var arr = FullRangeIntArray from [10, 20, 30, 40, 50]
 	var sub = try arr.slice(1, endIndex: 4) otherwise return 1
 	try arr.set(1, value: 91) otherwise panic("index 1 is in bounds")
 	try sub.set(0, value: 92) otherwise panic("index 0 is in bounds")
@@ -1750,7 +1750,7 @@ end 'main'
 The same pair in the other order.
 ```maxon
 function main() returns ExitCode
-	var arr = [10, 20, 30, 40, 50]
+	var arr = FullRangeIntArray from [10, 20, 30, 40, 50]
 	var sub = try arr.slice(1, endIndex: 4) otherwise return 1
 	try sub.set(0, value: 92) otherwise panic("index 0 is in bounds")
 	try arr.set(1, value: 91) otherwise panic("index 1 is in bounds")
@@ -1777,7 +1777,7 @@ typealias IntArray = Array with Integer
 
 function make() returns IntArray
 	var a = IntArray.create()
-	var i = 0
+	var i = 0 as Integer
 	while i < 8 'fill'
 		a.push(i)
 		i = i + 1
@@ -1808,9 +1808,9 @@ function main() returns ExitCode
 	vGrow.push(1000)
 
 	// Not one of those writes may have reached the shared source.
-	var k = 0
+	var k = 0 as Count
 	while k < 8 'check'
-		if (try src.get(k) otherwise -1) != k 'mismatch'
+		if (try src.get(k) otherwise -1) != k as Integer 'mismatch'
 			return 7
 		end 'mismatch'
 		k = k + 1
@@ -1989,7 +1989,7 @@ end 'main'
 
 <!-- test: multi-line-literal-top-level-var -->
 ```maxon
-var xs = [10,
+var xs = FullRangeIntArray from [10,
 	20]
 
 function main() returns ExitCode
@@ -2513,13 +2513,13 @@ error E3005: <fragment>:19:4: argument type mismatch for 'other': expected 'Colo
 ### A value that is not an `Array` at all names both types, like every other argument door
 ```maxon
 function main() returns ExitCode
-	var a = [1, 2, 3]
+	var a = FullRangeIntArray from [1, 2, 3]
 	a.append(42)
 	return a.count()
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:4:4: argument type mismatch for 'other': expected 'Array with int', got 'int'
+error E3005: <fragment>:4:4: argument type mismatch for 'other': expected 'FullRangeIntArray', got 'int'
 ```
 
 <!-- test: error.append-wider-element-array-refuses-a-narrower-one -->
@@ -2678,7 +2678,7 @@ container path asked a UNION PAYLOAD's rule about it. A payload's float genuinel
 does, and the two are different questions about different storage.
 ```maxon
 function main() returns ExitCode
-	var a = [1.5, 2.5]
+	let a = [1.5, 2.5]
 	let v = try a.get(0) otherwise 0.0
 	return trunc(v + 1.0)
 end 'main'
@@ -2690,8 +2690,10 @@ end 'main'
 <!-- test: a-float-element-round-trips-through-set -->
 ### `set` writes a float element and `get` reads the same value back
 ```maxon
+typealias Reals = Array with FullRangeFloat
+
 function main() returns ExitCode
-	var a = [1.5, 2.5]
+	var a = Reals from [1.5, 2.5]
 	try a.set(1, value: 4.75) otherwise panic("test invariant: set OOB")
 	return trunc(try a.get(1) otherwise 0.0)
 end 'main'
@@ -2700,12 +2702,35 @@ end 'main'
 4
 ```
 
+<!-- test: a-float-alias-array-from-a-literal -->
+### A float literal array headed by a float-element alias takes the alias's element type
+```maxon
+typealias Reals = Array with FullRangeFloat
+
+function main() returns ExitCode
+	var a = Reals from [1.5, 2.5]
+	try a.set(0, value: 3.5) otherwise panic("test invariant: set OOB")
+	var sum = 0.0 as FullRangeFloat
+	for x in a 'each'
+		sum = sum + x
+	end 'each'
+	print("{sum}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+6.0
+```
+
 <!-- test: a-float-element-iterates -->
 ### `for … in` yields float elements
 ```maxon
 function main() returns ExitCode
 	let a = [1.5, 2.5, 3.5]
-	var sum = 0.0
+	var sum = 0.0 as FullRangeFloat
 	for e in a 'each'
 		sum = sum + e
 	end 'each'
@@ -2725,8 +2750,10 @@ convert through, and `f64.max` overflows one. The write half (`containerElementW
 half (`containerSlotValueType`'s float arm) are the two ends of one round trip, and this is the case
 that says so for the LITERAL element.
 ```maxon
+typealias Reals = Array with FullRangeFloat
+
 function main() returns ExitCode
-	var a = [0.1, 2.5]
+	var a = Reals from [0.1, 2.5]
 	try a.set(1, value: -0.0) otherwise panic("test invariant: set OOB")
 	a.push(1.7976931348623157e308)
 	for x in a 'each'
@@ -2769,8 +2796,10 @@ end 'main'
 <!-- test: a-float-element-survives-a-clone -->
 ### A cloned float array carries its elements' bits
 ```maxon
+typealias Reals = Array with FullRangeFloat
+
 function main() returns ExitCode
-	var a = [1.5, 2.5]
+	var a = Reals from [1.5, 2.5]
 	a.push(3.5)
 	let c = a.clone()
 	return trunc((try c.get(2) otherwise 0.0) + (try c.get(0) otherwise 0.0))
@@ -2822,7 +2851,7 @@ type Samples
 end 'Samples'
 
 function total(xs Reals) returns Real
-	var sum = 0.0
+	var sum = 0.0 as Real
 	for x in xs 'each'
 		sum = sum + x
 	end 'each'
@@ -2848,13 +2877,13 @@ integer value set gets everywhere else. The element is nameable, so this rule is
 source as well as from a literal.
 ```maxon
 function main() returns ExitCode
-	var a = [1.5, 2.5]
+	var a = [1.5 as FullRangeFloat, 2.5]
 	try a.managed.setByte(0, value: 223) otherwise panic("test invariant: setByte OOB")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3118: <fragment>:4:16: 'setByte' writes a RAW BYTE at a byte OFFSET, so what the element's own accessors read back is any bit pattern of its 8-byte slot — every value of int(0 to 18446744073709551615). The element 'float' does not admit all of them. Widen the element's declared range to cover its whole slot, or store through the `Array` surface's `set`, which range-checks each value against the element
+error E3118: <fragment>:4:16: 'setByte' writes a RAW BYTE at a byte OFFSET, so what the element's own accessors read back is any bit pattern of its 8-byte slot — every value of int(0 to 18446744073709551615). The element 'FullRangeFloat' (float(-1.7976931348623157E+308 to 1.7976931348623157E+308)) does not admit all of them. Widen the element's declared range to cover its whole slot, or store through the `Array` surface's `set`, which range-checks each value against the element
 ```
 
 <!-- test: error.a-raw-byte-write-is-refused-on-a-declared-float-element -->
@@ -3215,4 +3244,869 @@ end 'main'
 ```
 ```stderr
 fatal error: runtime abort 118 (promiseSlotConsumedTwice)
+```
+
+<!-- test: a-let-array-read-is-range-known-through-get-first-and-last -->
+An element read from a `let` array literal carries the range of the elements written, whichever accessor reads it.
+```maxon
+typealias Small = int(0 to 100)
+
+function take(v Small) returns Small
+	return v
+end 'take'
+
+function main() returns ExitCode
+	let cell = [37, 40]
+	let low = try cell.first() otherwise 0
+	let high = try cell.last() otherwise 0
+	let middle = try cell.get(1) otherwise 0
+	print("{take(low)} {take(high)} {take(middle)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+37 40 40
+```
+
+<!-- test: a-for-in-over-a-let-array-is-range-known -->
+The element a `for … in` binds over a `let` array carries the array's range, and arithmetic over it carries the sum of the ranges.
+```maxon
+typealias Small = int(0 to 100)
+
+function take(v Small) returns Small
+	return v
+end 'take'
+
+function main() returns ExitCode
+	let cell = [1, 2, 3]
+	for x in cell 'each'
+		let y = x + 1
+		print("{take(y)}\n")
+	end 'each'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2
+3
+4
+```
+
+<!-- test: a-for-in-over-an-array-literal-is-range-known -->
+A literal iterated in place is the same constant a `let` of it would be.
+```maxon
+typealias Small = int(0 to 100)
+
+function take(v Small) returns Small
+	return v
+end 'take'
+
+function main() returns ExitCode
+	for x in [4, 5] 'each'
+		print("{take(x * 2)}\n")
+	end 'each'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+8
+10
+```
+
+<!-- test: error.a-for-in-over-a-let-array-outside-a-narrower-alias -->
+The range of the whole array is what each element read carries, so the largest element is the reachable extreme the diagnostic names.
+```maxon
+typealias Small = int(0 to 100)
+
+function take(v Small) returns Small
+	return v
+end 'take'
+
+function main() returns ExitCode
+	let cell = [37, 400]
+	for x in cell 'each'
+		let y = x - 1
+		print("{take(y)}\n")
+	end 'each'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:12:11: Value 399 is outside the range of 'Small' (int(0 to 100))
+```
+
+<!-- test: a-merge-of-let-array-reads-is-range-known -->
+A `match` whose arms read a `let` array, or give a literal, joins the ranges of its arms.
+```maxon
+typealias Small = int(0 to 100)
+
+function take(v Small) returns Small
+	return v
+end 'take'
+
+function main() returns ExitCode
+	let xs = [10, 20]
+	let m = match xs.count() 'm'
+		2 gives try xs.get(0) otherwise 0
+		default gives 5
+	end 'm'
+	print("{take(m)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+10
+```
+
+<!-- test: a-top-level-let-array-read-is-range-known -->
+A top-level `let` array is image data whose elements are all known, so a read of it is range-known too.
+```maxon
+typealias Small = int(0 to 100)
+
+let NUMS = [10, 20, 30]
+
+function take(v Small) returns Small
+	return v
+end 'take'
+
+function main() returns ExitCode
+	let a = try NUMS.get(1) otherwise 0
+	print("{take(a)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+20
+```
+
+<!-- test: error.a-top-level-let-array-read-outside-a-narrower-alias -->
+The elements of a top-level `let` array bound what a read of it can be.
+```maxon
+typealias Small = int(0 to 100)
+
+let NUMS = [10, 2000]
+
+function take(v Small) returns Small
+	return v
+end 'take'
+
+function main() returns ExitCode
+	let a = try NUMS.get(0) otherwise 0
+	let b = take(a)
+	return b as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:12:10: Value 2000 is outside the range of 'Small' (int(0 to 100))
+```
+
+<!-- test: error.an-unnamed-argument-aliasing-a-let-array-is-refused -->
+A `let` array is an immutable root: an argument that names no binding but returns the same record (`pass(a)`)
+reaches the refusal `grow(a)` does.
+```maxon
+typealias CountArray = Array with Count
+
+function pass(a CountArray) returns CountArray
+	return a
+end 'pass'
+
+function grow(a CountArray)
+	a.push(2)
+end 'grow'
+
+function main() returns ExitCode
+	let a = [1 as Count]
+	grow(pass(a))
+	return a.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:14:2: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'a' (in main); pass a clone()
+```
+
+<!-- test: error.an-unnamed-receiver-aliasing-a-let-array-is-refused -->
+The receiver spelling of the same route.
+```maxon
+typealias CountArray = Array with Count
+
+function pass(a CountArray) returns CountArray
+	return a
+end 'pass'
+
+function main() returns ExitCode
+	let a = [1 as Count]
+	pass(a).push(2)
+	return a.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:10:10: cannot write through 'pass(a)': 'a' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
+```
+
+<!-- test: error.a-closure-capturing-a-let-array-cannot-write-it -->
+A closure that captures a `let` array and writes it is refused.
+```maxon
+function main() returns ExitCode
+	let a = [1 as Count]
+	let f = function() gives (try a.pop() otherwise 0)
+	if f() == 1 'popped'
+		return 1
+	end 'popped'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:4:34: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main$closure_0); pass a clone()
+```
+
+<!-- test: error.a-let-array-stored-in-a-var-struct-field-cannot-be-written-through-it -->
+A `let` array stored into a field of a `var` record is still the immutable record.
+```maxon
+typealias CountArray = Array with Count
+
+type Holder
+	export var a as CountArray
+
+	static function create(a CountArray) returns Self
+		return Self{a: a}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let a = [1 as Count]
+	var h = Holder.create(a)
+	h.a.push(2)
+	return a.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:15:6: cannot write through 'h.a': 'a' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
+```
+
+<!-- test: error.a-let-array-element-in-a-dead-branch-outside-a-narrower-alias -->
+A use is checked where it is written, not where analysis happens to reach it: an element of a `let` array that no run can take into `take` is refused exactly as a literal argument in the same branch is.
+```maxon
+typealias Small = int(0 to 100)
+
+function take(v Small) returns Small
+	return v
+end 'take'
+
+function main() returns ExitCode
+	let cell = [400]
+	if 3 > 5 'never'
+		for x in cell 'each'
+			print("{take(x)}\n")
+		end 'each'
+	end 'never'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:12:12: Value 400 is outside the range of 'Small' (int(0 to 100))
+```
+
+<!-- test: reserve-past-the-signed-range-panics -->
+A reservation no allocation can satisfy is an error, never a no-op: `reserve(u64.max)` reaches the growth door and its capacity overflow, exactly as `reserve(1 shl 62)` does.
+```maxon
+function main() returns ExitCode
+	var arr = [1 as Count]
+	arr.reserve(u64.max)
+	return arr.count() as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at Array.maxon:329: Array.reserve: the requested capacity exceeds what the buffer can hold
+Stack trace:
+  in Array.reserve
+  in main
+  in mrt_start
+```
+
+<!-- test: an-array-literal-agrees-on-a-plain-constant-and-a-backing-alias-in-either-order -->
+A literal array mixing a plain `let` constant and an enum's `rawValue` agrees on its element whichever comes first, because a plain constant fits the alias in either position.
+```maxon
+enum Signal
+	hangup = 1
+	interrupt = 2
+end 'Signal'
+
+let Limit = 7
+
+function main() returns ExitCode
+	var seen = 0 as Count
+
+	for claimed in [Limit, Signal.interrupt.rawValue] 'plainFirst'
+		seen = seen + 1
+		print("{claimed}\n")
+	end 'plainFirst'
+
+	for claimed in [Signal.hangup.rawValue, Limit] 'aliasFirst'
+		seen = seen + 1
+		print("{claimed}\n")
+	end 'aliasFirst'
+
+	return seen as ExitCode
+end 'main'
+```
+```exitcode
+4
+```
+```stdout
+7
+2
+1
+7
+```
+
+<!-- test: error.a-let-array-handed-to-a-function-value-that-writes-it-is-refused -->
+A `let` array literal is a constant its range columns were read from: handing it to an indirect call is refused.
+```maxon
+typealias CountArray = Array with Count
+
+function grow(a CountArray)
+	a.push(2)
+end 'grow'
+
+function main() returns ExitCode
+	let a = [1 as Count]
+	let f = grow
+	f(a)
+	return a.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:11:3: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'a' (in main); pass a clone()
+```
+
+<!-- test: error.a-let-vector-handed-to-a-function-value-that-writes-it-is-refused -->
+The same for a `Vector from` literal.
+```maxon
+typealias CountVector = Vector with 3 Count
+
+function poke(v CountVector)
+	try v.set(0, value: 9) otherwise ignore
+end 'poke'
+
+function main() returns ExitCode
+	let v = Vector from [1 as Count, 2 as Count, 3 as Count]
+	let f = poke
+	f(v)
+	return v.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:11:3: cannot pass 'v', which is read-only (a `let` binding), to a function that writes parameter 'v' (in main); pass a clone()
+```
+
+<!-- test: a-let-array-holding-u64-max-reads-back-u64-max -->
+A bare literal array element is the literal's value: `u64.max` reads back as 18446744073709551615, and the `Count` door accepts it.
+```maxon
+function take(c Count) returns Count
+	return c
+end 'take'
+
+function main() returns ExitCode
+	let a = [1, u64.max]
+	var seen = 0 as Count
+
+	for v in a 'each'
+		seen = seen + 1
+		print("{take(v)}\n")
+	end 'each'
+
+	return seen as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+```stdout
+1
+18446744073709551615
+```
+
+<!-- test: a-top-level-let-array-holding-u64-max-reads-back-u64-max -->
+The same at module scope, where the array is laid down as an image.
+```maxon
+let Words = [1, u64.max]
+
+function take(c Count) returns Count
+	return c
+end 'take'
+
+function main() returns ExitCode
+	var seen = 0 as Count
+
+	for v in Words 'each'
+		seen = seen + 1
+		print("{take(v)}\n")
+	end 'each'
+
+	return seen as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+```stdout
+1
+18446744073709551615
+```
+
+<!-- test: a-let-array-element-u64-max-renders-and-compares-as-u64-max -->
+The element is the literal's value everywhere it is read, not only at a `Count` door: it renders as 18446744073709551615, equals `u64.max` and is greater than `1`.
+```maxon
+function main() returns ExitCode
+	let a = [1, u64.max]
+
+	for v in a 'each'
+		print("{v}\n")
+
+		if v == u64.max 'equal'
+			print("equal\n")
+		end 'equal'
+
+		if v > 1 'greater'
+			print("greater\n")
+		end 'greater'
+	end 'each'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+18446744073709551615
+equal
+greater
+```
+
+<!-- test: a-top-level-let-array-element-u64-max-renders-and-compares-as-u64-max -->
+The same for the image.
+```maxon
+let Words = [1, u64.max]
+
+function main() returns ExitCode
+	for v in Words 'each'
+		print("{v}\n")
+
+		if v == u64.max 'equal'
+			print("equal\n")
+		end 'equal'
+
+		if v > 1 'greater'
+			print("greater\n")
+		end 'greater'
+	end 'each'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+18446744073709551615
+equal
+greater
+```
+
+<!-- test: error.a-top-level-let-array-holding-minus-one-keeps-its-range-columns -->
+An image whose words include a genuine `-1` keeps its bounds: a read of `[-1, 5]` is known to lie in `-1 to 5`, so the narrower `Small` refuses it at compile time.
+```maxon
+typealias Small = int(0 to 100)
+
+let Words = [-1, 5]
+
+function take(v Small) returns Small
+	return v
+end 'take'
+
+function main() returns ExitCode
+	let a = try Words.get(1) otherwise 0
+	let b = take(a)
+	return b as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:12:10: Value -1 is outside the range of 'Small' (int(0 to 100))
+```
+
+<!-- test: error.resize-cannot-grow-an-array-whose-element-excludes-zero -->
+Growing exposes zero-filled slots, and zero is an element only if the element type admits it: a `Percent` of `1 to 100` does not, so `resize` is refused as it is for a managed element, and `growFilled` supplies the value.
+```maxon
+typealias Percent = int(1 to 100)
+typealias PercentArray = Array with Percent
+
+function main() returns ExitCode
+	var xs = PercentArray.create()
+	xs.resize(1)
+	return xs.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:7:5: 'resize' cannot grow an array of 'Percent': the grown slots are zero and zero is not a value of 'Percent'. Append with 'push(value)' or 'growFilled(n, value:)'
+```
+
+<!-- test: growfilled-supplies-the-element-an-excluding-alias-needs -->
+`growFilled` makes the caller name the element, so an alias that excludes zero is grown with a value it admits.
+```maxon
+typealias Percent = int(1 to 100)
+typealias PercentArray = Array with Percent
+
+function main() returns ExitCode
+	var xs = PercentArray.create()
+	xs.growFilled(3, value: 7)
+	return (try xs.get(2) otherwise 1) as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: error.a-vector-cannot-hold-an-alias-that-excludes-zero -->
+A `Vector` publishes every slot as zero at `create()`, so an element alias that excludes zero is refused.
+```maxon
+typealias Percent = int(1 to 100)
+typealias PercentVector = Vector with 3 Percent
+
+function main() returns ExitCode
+	let v = PercentVector.create()
+	return v.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:6:10: 'Vector.create' cannot publish slots of 'Percent': every slot is zero and zero is not a value of 'Percent'
+```
+
+<!-- test: error.a-closure-handing-a-captured-let-array-to-a-function-value-is-refused -->
+The same for a captured `let` array literal.
+```maxon
+typealias CountArray = Array with Count
+
+function grow(a CountArray) returns Count
+	a.push(2)
+	return a.count()
+end 'grow'
+
+function main() returns ExitCode
+	let a = [1 as Count]
+	let f = grow
+	let g = function() gives f(a)
+	return g() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:12:28: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'a' (in main$closure_0); pass a clone()
+```
+
+<!-- test: error.a-closure-handing-a-captured-let-vector-to-a-function-value-is-refused -->
+The same for a captured `Vector from` literal.
+```maxon
+typealias CountVector = Vector with 3 Count
+
+function poke(v CountVector) returns Count
+	try v.set(0, value: 9) otherwise ignore
+	return v.count()
+end 'poke'
+
+function main() returns ExitCode
+	let v = Vector from [1 as Count, 2 as Count, 3 as Count]
+	let f = poke
+	let g = function() gives f(v)
+	return g() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:12:28: cannot pass 'v', which is read-only (a `let` binding), to a function that writes parameter 'v' (in main$closure_0); pass a clone()
+```
+
+<!-- test: a-closure-capturing-a-var-array-may-hand-it-to-a-function-value -->
+A `var` array is writable, so the same closure is accepted.
+```maxon
+typealias CountArray = Array with Count
+
+function grow(a CountArray) returns Count
+	a.push(2)
+	return a.count()
+end 'grow'
+
+function main() returns ExitCode
+	var a = [1 as Count]
+	let f = grow
+	let g = function() gives f(a)
+	return g() as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: error.a-let-array-mixing-a-negative-and-a-value-above-i64-max-is-refused -->
+A bare literal array has one integer type, and no integer type holds both `-1` and `u64.max`.
+```maxon
+function main() returns ExitCode
+	let a = [-1, u64.max]
+	return a.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:3:15: no common integer type for -1 and 18446744073709551615: cast the elements to an alias
+```
+
+<!-- test: error.a-let-array-listing-the-large-value-first-is-refused-at-the-negative -->
+The refusal is positioned at the element that makes the column mixed, whichever order they come in.
+```maxon
+function main() returns ExitCode
+	let a = [1, u64.max, -5]
+	return a.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:3:23: no common integer type for -5 and 18446744073709551615: cast the elements to an alias
+```
+
+<!-- test: error.a-top-level-let-array-mixing-a-negative-and-a-value-above-i64-max-is-refused -->
+The same at module scope, where the array is laid down as an image.
+```maxon
+let Words = [-1, u64.max]
+
+function main() returns ExitCode
+	return Words.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:2:18: no common integer type for -1 and 18446744073709551615: cast the elements to an alias
+```
+
+<!-- test: error.a-list-from-a-mixed-sign-literal-is-refused -->
+The typed-head forms read their elements the same way.
+```maxon
+function main() returns ExitCode
+	let xs = List from [-1, u64.max]
+	return xs.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:3:26: no common integer type for -1 and 18446744073709551615: cast the elements to an alias
+```
+
+<!-- test: a-literal-arrays-that-each-keep-to-one-sign-class-are-accepted -->
+A column holding only a large value, or only a negative one, has an integer type.
+```maxon
+function main() returns ExitCode
+	let wide = [1, u64.max]
+	let narrow = [-1, 5]
+	return (wide.count() + narrow.count()) as ExitCode
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: a-try-otherwise-over-an-unsigned-column-is-range-known -->
+The merge of a read out of `[1, u64.max]` with `0` is the unsigned interval `[0, u64.max]`, so the `let` is range-known and prints as the unsigned value it is.
+```maxon
+function main() returns ExitCode
+	let a = [1, u64.max]
+	let v = try a.get(1) otherwise 0
+	print("{v}\n")
+
+	if v > 1 'greater'
+		print("greater\n")
+	end 'greater'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+18446744073709551615
+greater
+```
+
+<!-- test: a-try-otherwise-over-a-top-level-unsigned-column-is-range-known -->
+The same for an image.
+```maxon
+let Words = [1, u64.max]
+
+function main() returns ExitCode
+	let v = try Words.get(1) otherwise 0
+	print("{v}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+18446744073709551615
+```
+
+<!-- test: a-ternary-over-an-unsigned-column-is-range-known -->
+A ternary joins its arms in the unsigned domain when both are non-negative.
+```maxon
+function main() returns ExitCode
+	let a = [1, u64.max]
+
+	for x in a 'each'
+		let w = x if x > 5 else 0
+		print("{w}\n")
+	end 'each'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0
+18446744073709551615
+```
+
+<!-- test: a-match-gives-over-an-unsigned-column-is-range-known -->
+So does a `match` that gives a value in each arm.
+```maxon
+enum Pick
+	keep
+	zero
+end 'Pick'
+
+function main() returns ExitCode
+	let a = [1, u64.max]
+
+	for x in a 'each'
+		let choice = Pick.keep if x > 5 else Pick.zero
+
+		let w = match choice 'pick'
+			keep gives x
+			zero gives 0
+		end 'pick'
+
+		print("{w}\n")
+	end 'each'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0
+18446744073709551615
+```
+
+<!-- test: error.a-merge-of-a-negative-and-an-unsigned-value-has-no-known-range -->
+A merge needing both a negative value and a value above `i64.max` has no common interval, so the `let` is refused as it is for any value of unknown range.
+```maxon
+function main() returns ExitCode
+	let a = [1, u64.max]
+	let v = try a.get(1) otherwise -1
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:4:10: A let cannot start from a number whose range is unknown: write 'let name = expr as Type'.
+```
+
+<!-- test: error.a-set-from-a-mixed-sign-literal-is-refused -->
+The same for a `Set from` literal.
+```maxon
+function main() returns ExitCode
+	let s = Set from [-1, u64.max]
+	return s.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:3:24: no common integer type for -1 and 18446744073709551615: cast the elements to an alias
+```
+
+<!-- test: error.a-vector-from-a-mixed-sign-literal-is-refused -->
+And for a `Vector from` literal.
+```maxon
+function main() returns ExitCode
+	let v = Vector from [-1, u64.max]
+	return v.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:3:27: no common integer type for -1 and 18446744073709551615: cast the elements to an alias
+```
+
+<!-- test: a-closure-capturing-an-unsigned-column-read-prints-it-unsigned -->
+A read out of `[1, u64.max]` that a closure captures is still the unsigned value it was: the closure prints 18446744073709551615 and compares it as unsigned.
+```maxon
+function main() returns ExitCode
+	let a = [1, u64.max]
+
+	for x in a 'each'
+		let show = function() gives "{x}"
+		let big = function() gives x > 1
+		print("{show()} {big()}\n")
+	end 'each'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 false
+18446744073709551615 true
+```
+
+<!-- test: a-vector-from-a-literal-over-an-alias-that-excludes-zero-is-accepted -->
+`Vector from` supplies every slot, so the zero-excluding element is only refused at `create`, which publishes zeroed slots.
+```maxon
+typealias Percent = int(1 to 100)
+
+function main() returns ExitCode
+	let v = Vector from [10 as Percent, 20 as Percent, 30 as Percent]
+	return (try v.get(2) otherwise 1) as ExitCode
+end 'main'
+```
+```exitcode
+30
+```
+
+<!-- test: error.a-var-cannot-start-from-a-clone-of-a-literal-array -->
+A copy of a literal array keeps the literal's column bounds only while no writable name can hold it, so a `var` cannot be born from one.
+```maxon
+function main() returns ExitCode
+	let a = [1, 2, 3]
+	var b = a.clone()
+	b.push(9)
+	return b.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:4:10: A var cannot start from a bare number: write 'var name = expr as Type'.
 ```

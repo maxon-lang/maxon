@@ -389,7 +389,7 @@ live for the whole run — the one shape a compare that retained an operand woul
 function main() returns ExitCode
 	let s = "caféüñ"
 	let pivot = 'ü'
-	var below = 0
+	var below = 0 as Count
 	for c in s 'each'
 		if c < pivot 'lt'
 			below = below + 1
@@ -417,7 +417,7 @@ ordered pair out of four.
 ```maxon
 function main() returns ExitCode
 	let s = "üé"
-	var seen = 0
+	var seen = 0 as Count
 	for c in s 'each'
 		for d in s 'inner'
 			if c < d 'lt'

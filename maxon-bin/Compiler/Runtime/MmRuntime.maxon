@@ -91,7 +91,7 @@ let DebugStreamPackedIdBytes = 8
 // disagree about where the payload starts. (`emitBoxAllocationBase` walks the SAME distance in two hops,
 // from a header base a caller already holds, so an untraced build spends no op on a displacement of zero;
 // both routes come out of `HeaderBytes` and `DebugStreamPackedIdBytes` and there is no third number.)
-function boxPrefixBytes(debugStream bool) returns ParsedInt
+function boxPrefixBytes(debugStream bool) returns FullRangeInt
 	// ⚠ THE PARENTHESES ARE LOAD-BEARING. `a + b if c else d` binds as `a + (b if c else d)`, so the
 	// unparenthesized form returned `HeaderBytes + HeaderBytes` on an UNTRACED build — a 48-byte prefix
 	// where every box has always had 24. It compiled, it linked, and it was found only by the
@@ -110,7 +110,7 @@ end 'boxPrefixBytes'
 // ⚠ **THE VALUE'S PROPERTIES ARE WHAT MATTER.** 2^62 is positive, far from 0, far from
 // wrapping and unreachable by a real count — a program cannot hold 2^62 owners of one box — so no
 // arithmetic on a live refcount arrives at it and no pointer-shaped guard mistakes it for an address.
-let MmImmortalRefcount = 4611686018427387904 as ParsedInt  // 0x4000_0000_0000_0000 = 2^62
+let MmImmortalRefcount = 4611686018427387904 as FullRangeInt  // 0x4000_0000_0000_0000 = 2^62
 
 // ⭐⭐ **THE MARK A SHARED RECORD'S COUNT CARRIES — the word is `mark + owners - 1` from the share
 // on.** A share walk adds it once, on the sharing green thread at the walk's first meeting of the
@@ -121,14 +121,14 @@ let MmImmortalRefcount = 4611686018427387904 as ParsedInt  // 0x4000_0000_0000_0
 // last owner leaves is below it too, the compare being signed — and a shared count stays below
 // `MmImmortalRefcount`, because no program holds 2^61 owners of one box. So ONE signed compare tells a
 // counted box from the other two, and the counted box is the common one.
-let MmSharedRefcountMark = 2305843009213693952 as ParsedInt  // 0x2000_0000_0000_0000 = 2^61
+let MmSharedRefcountMark = 2305843009213693952 as FullRangeInt  // 0x2000_0000_0000_0000 = 2^61
 
 // A header field is one machine word: the three offsets above are eight apart because of it, and the
 // DebugStream prefix word below them is the same width.
 let HeaderSlotBytes = 8 as BytePos
 
 // The packed id of a box that was never allocated.
-let NoAllocationId = 0 as ParsedInt
+let NoAllocationId = 0 as FullRangeInt
 
 // ⭐⭐ **THE SYNTHETIC ALLOCATION HEADER AN IMAGE RECORD IS REGISTERED BEHIND** — the bytes that sit in
 // `.rdata` immediately before the record, so that `ptr - HeaderBytes` reaches a header saying "immortal"
@@ -155,7 +155,7 @@ let NoAllocationId = 0 as ParsedInt
 // Each slot is appended at its named offset and the appender refuses to write it anywhere else, so the
 // offsets the runtime loads by and the offsets this writes are one set of constants that cannot drift —
 // `BufferOwnership.appendRecordSlot`'s discipline, applied to the header the record is addressed through.
-export function immortalBoxHeaderBytes(debugStream bool, recordBytes ParsedInt) returns ByteArray
+export function immortalBoxHeaderBytes(debugStream bool, recordBytes FullRangeInt) returns ByteArray
 	var header = ByteArray.create()
 
 	if debugStream 'tracedBuild'
@@ -167,7 +167,7 @@ export function immortalBoxHeaderBytes(debugStream bool, recordBytes ParsedInt) 
 	appendHeaderSlot(header, base: base, expectedOffset: HeaderSizeOffset, value: recordBytes)
 	appendHeaderSlot(header, base: base, expectedOffset: HeaderRefcountOffset, value: MmImmortalRefcount)
 
-	if header.count() as ParsedInt != boxPrefixBytes(debugStream) 'sizeDrift'
+	if header.count() as FullRangeInt != boxPrefixBytes(debugStream) 'sizeDrift'
 		panic("immortalBoxHeaderBytes: assembled {header.count()} bytes, not the {boxPrefixBytes(debugStream)} `__mm_alloc` prepends — an image record addressed through a header of the wrong width reads its neighbour's bytes")
 	end 'sizeDrift'
 
@@ -182,7 +182,7 @@ export function immortalBoxHeaderSize(debugStream bool) returns ByteOffset
 end 'immortalBoxHeaderSize'
 
 // Append one header word at `expectedOffset` from the header BASE, refusing to write it anywhere else.
-function appendHeaderSlot(header ByteArray, base ByteOffset, expectedOffset ByteOffset, value ParsedInt)
+function appendHeaderSlot(header ByteArray, base ByteOffset, expectedOffset ByteOffset, value FullRangeInt)
 	if (header.count() as ByteOffset) - base != expectedOffset 'offsetDrift'
 		panic("appendHeaderSlot: a header field is being written at offset {(header.count() as ByteOffset) - base} but its constant says {expectedOffset} — the header layout the runtime reads and this writes have drifted")
 	end 'offsetDrift'
@@ -279,8 +279,8 @@ export let MmCounterAllocBytesByTagName = b"__mm_counter_alloc_bytes_by_tag"
 
 let AllocTallyReaderArity = 1 as ParamCount
 let AllocTallyBucketParamPosition = 0 as ParamCount
-let AllocTallyLowestBucket = 0 as ParsedInt
-let MachineWordSignShift = 63 as ParsedInt
+let AllocTallyLowestBucket = 0 as FullRangeInt
+let MachineWordSignShift = 63 as FullRangeInt
 
 // ⭐⭐⭐ **THE THREE PER-THREAD COLUMNS — allocations, frees and bytes asked of ONE GREEN THREAD.** Every
 // process-wide figure counts every thread's traffic, so a bracket opened inside a pool worker would count
@@ -907,7 +907,7 @@ end 'emitParams'
 export function emitTypedParams(module StdModule, block IrBlock, paramTypes StdTypeArray)
 	for k in 0 upto paramTypes.count() 'each'
 		let paramType = try paramTypes.get(k) otherwise panic("emitTypedParams: paramTypes.get OOB at {k}")
-		module.appendOp(block, op: StdOp.param(k, index: k, paramType: paramType))
+		module.appendOp(block, op: StdOp.param(k as ValueId, index: k as ParamCount, paramType: paramType))
 	end 'each'
 end 'emitTypedParams'
 
@@ -939,7 +939,7 @@ end 'emitStoreField'
 // word (`emitAdjustRefcount`, through `emitFieldAccumulate`), `SchedRuntime`'s P fields and `GtRuntime`'s
 // releaser slot are the same arithmetic over three different structs.
 export function emitFieldAddr(module StdModule, block IrBlock, record ValueId, offset ByteOffset, ids ValueMinter) returns ValueId
-	let displacement = emitConst(module, block: block, value: offset as ParsedInt, ids: ids)
+	let displacement = emitConst(module, block: block, value: offset as FullRangeInt, ids: ids)
 	return emitBin(module, block: block, a: record, b: displacement, opcode: StdBinOpcode.add, ids: ids)
 end 'emitFieldAddr'
 
@@ -961,7 +961,7 @@ end 'emitFieldAddr'
 // spellings (`and not (a - 1)` there, `and -a` here — identical for a power of two on two's complement), so
 // they are named for each other here rather than left to be found: a reader who changes one should know the
 // other exists.
-export function emitAlignUp(module StdModule, block IrBlock, value ValueId, width ParsedInt, ids ValueMinter) returns ValueId
+export function emitAlignUp(module StdModule, block IrBlock, value ValueId, width FullRangeInt, ids ValueMinter) returns ValueId
 	if not isPowerOfTwo(width as MachineWord) 'widthNotAPowerOfTwo'
 		panic("emitAlignUp: a width of {width} is not a positive power of two, so `-{width}` is not the mask that clears its low bits")
 	end 'widthNotAPowerOfTwo'
@@ -975,7 +975,7 @@ end 'emitAlignUp'
 // ⭐ **ONE MACHINE-WORD SLOT — the stride every WORD-INDEXED buffer in the runtime uses.** The element
 // buffer of any `Array` whose element is a managed POINTER or a machine-word int addresses slot `i`
 // at `base + i·8`.
-let WordSlotBytes = 8 as ParsedInt
+let WordSlotBytes = 8 as FullRangeInt
 
 // The byte address of word slot `index` in a parallel buffer — `base + index · WordSlotBytes`.
 //
@@ -1151,10 +1151,10 @@ end 'emitFieldAccumulate'
 // It lives here rather than with any one runtime family because "a literal as a C string" is a property of
 // the Std tier and of Win32's ABI: the scheduler, the poller and the subprocess runner all spell one.
 export function emitLiteralCString(module StdModule, block IrBlock, ids ValueMinter, text ByteArray) returns ValueId
-	return emitLiteralInSlab(module, block: block, ids: ids, text: text, byteCount: (text.count() + 1) as ParsedInt)
+	return emitLiteralInSlab(module, block: block, ids: ids, text: text, byteCount: (text.count() + 1) as FullRangeInt)
 end 'emitLiteralCString'
 
-export function emitLiteralInSlab(module StdModule, block IrBlock, ids ValueMinter, text ByteArray, byteCount ParsedInt) returns ValueId
+export function emitLiteralInSlab(module StdModule, block IrBlock, ids ValueMinter, text ByteArray, byteCount FullRangeInt) returns ValueId
 	let sizeConst = emitConst(module, block: block, value: byteCount, ids: ids)
 	let buf = ids.mint()
 	module.appendOp(block, op: StdOp.call(buf, callee: SlabAllocName, args: argsOf(sizeConst)))
@@ -1168,7 +1168,7 @@ end 'emitLiteralInSlab'
 export function emitStoreLiteralBytes(module StdModule, block IrBlock, base ValueId, offset ByteOffset, text ByteArray, ids ValueMinter)
 	for k in 0 upto text.count() 'each'
 		let ch = try text.get(k) otherwise panic("emitStoreLiteralBytes: text.get OOB at {k}")
-		let byteConst = emitConst(module, block: block, value: ch as ParsedInt, ids: ids)
+		let byteConst = emitConst(module, block: block, value: ch as FullRangeInt, ids: ids)
 		module.appendOp(block, op: StdOp.storeIndirect(base, offset: offset + (k as ByteOffset), valueId: byteConst, valueType: StdType.u8))
 	end 'each'
 end 'emitStoreLiteralBytes'
@@ -1213,9 +1213,9 @@ end 'emitStoreReleaseGlobalWord'
 // that parses an environment variable. ⚠ They were `StringRuntime`'s (`DecimalRadix`, `AsciiZeroDigit`) and
 // `SchedRuntime` declared a SECOND `DecimalRadix` under the identical name; two `let`s of one number in one
 // namespace is the shape `maxon flat-namespace check` exists to catch one level up.
-export let DecimalRadix = 10 as ParsedInt
-export let AsciiZeroDigit = 0x30 as ParsedInt
-export let AsciiNineDigit = 0x39 as ParsedInt
+export let DecimalRadix = 10 as FullRangeInt
+export let AsciiZeroDigit = 0x30 as FullRangeInt
+export let AsciiNineDigit = 0x39 as FullRangeInt
 
 // ⭐⭐ **THE BYTES AN OS LOCK NEEDS — the region a caller allocates and `osLockInit` initializes IN PLACE.**
 // ⚠ Declared once because getting it wrong is not a compile error: the OS writes its struct into whatever it
@@ -1230,10 +1230,10 @@ export let AsciiNineDigit = 0x39 as ParsedInt
 // every allocation in the program to save 24 bytes on ONE lock per family. So there is one number, sized for
 // the widest lock, and each backend ASSERTS that its own primitive fits (`Arm64DarwinRuntime`'s
 // `assertDarwinLockFits`) rather than trusting this comment.
-export let OsLockBytes = 64 as ParsedInt
+export let OsLockBytes = 64 as FullRangeInt
 
 // A fresh i64 constant.
-export function emitConst(module StdModule, block IrBlock, value ParsedInt, ids ValueMinter) returns ValueId
+export function emitConst(module StdModule, block IrBlock, value FullRangeInt, ids ValueMinter) returns ValueId
 	let v = ids.mint()
 	module.appendOp(block, op: StdOp.const(v, value: value, valueType: StdType.i64))
 	return v
@@ -1259,7 +1259,7 @@ end 'emitCmp'
 //
 // ⚠ A VOID throwing function passes a 0 through `value` that the ABI never moves (a void
 // `emitReturnValueMove` emits nothing); only the flag register is read.
-export function emitErrorReturn(module StdModule, block IrBlock, flag ParsedInt, ids ValueMinter)
+export function emitErrorReturn(module StdModule, block IrBlock, flag FullRangeInt, ids ValueMinter)
 	let zeroVal = emitConst(module, block: block, value: 0, ids: ids)
 	let flagVal = emitConst(module, block: block, value: flag, ids: ids)
 	module.setTerminator(block, op: StdOp.errorReturn(zeroVal, errorFlagId: flagVal))
@@ -1290,7 +1290,7 @@ end 'emitVoidOkReturn'
 // ⚠ It lives with the single-op emit helpers, for `emitErrorReturn`'s stated reason: a helper about the STD
 // TIER's lack of a `setcc` is the property of no one predicate family, and every family that answers a bool
 // this way reaches it here rather than spelling the two statements out.
-export function emitConstReturn(module StdModule, block IrBlock, value ParsedInt, ids ValueMinter)
+export function emitConstReturn(module StdModule, block IrBlock, value FullRangeInt, ids ValueMinter)
 	let result = emitConst(module, block: block, value: value, ids: ids)
 	module.setTerminator(block, op: StdOp.ret(result))
 end 'emitConstReturn'
@@ -1368,18 +1368,18 @@ end 'buildStrCopy'
 // caller must not read one function's "true" as another's "false" — while being the very thing that could
 // make them disagree. The per-family pairs declined to share only because the HELPER was not shared either;
 // now that it is, the constants ride the same base layer every runtime family already depends on.
-export let PredicateTrue = 1 as ParsedInt
-export let PredicateFalse = 0 as ParsedInt
+export let PredicateTrue = 1 as FullRangeInt
+export let PredicateFalse = 0 as FullRangeInt
 
 // ⭐ **THE TWO DELTAS EVERY COUNTER AND REFCOUNT STEP IN THE EMITTED RUNTIME USES.** Named rather than
 // written as a bare `1` and a bare `-1` at the sites that step a counter or a refcount by one: the two are
 // one keystroke apart, and at a call site whose only other argument is a LABEL there is nothing else in the
-// line to say which direction was meant. They are `ParsedInt` deltas fed to a plain `binOp add` — a counted
+// line to say which direction was meant. They are `FullRangeInt` deltas fed to a plain `binOp add` — a counted
 // box's refcount step and a single-writer counter — or to `StdOp.atomicRmw`'s `add` — a shared box's refcount
 // step and a multi-M counter — which answers identically. That is why a debit is a NEGATIVE addend and not a
 // second opcode: see `StdAtomicRmwOpcode`, which has one member for exactly this reason.
-export let OneMore = 1 as ParsedInt
-export let OneFewer = -1 as ParsedInt
+export let OneMore = 1 as FullRangeInt
+export let OneFewer = -1 as FullRangeInt
 
 // ⭐⭐ **THE COUNTED LOOP EVERY RUNTIME WALK IS, WRITTEN DOWN ONCE.** `i` from `from` up to (but excluding)
 // `to`, stepping by whatever the caller closes it with: a header carrying the induction variable as its own
@@ -1448,7 +1448,7 @@ end 'closeCountedLoop'
 
 // `byteCount and -8` — how many of `byteCount`'s bytes a run of WHOLE machine words covers. Derived from the
 // word size rather than written as a `-8` beside it: the mask and the step of the word loop are one fact.
-let WholeWordsMask = -(MachineWordBytes as ParsedInt)
+let WholeWordsMask = -(MachineWordBytes as FullRangeInt)
 
 // The step of a counted loop that advances ONE item per trip — one byte, one element, one slot. Named
 // because `closeCountedLoop`'s step is a WIDTH everywhere else in this family (a word copy steps eight), so
@@ -1654,7 +1654,7 @@ end 'buildMmAlloc'
 // The TAG names what the box IS. A runtime chunk knows that statically and passes a fixed roster case; a
 // USER allocation's is interned from its own result type at the lowering (see `LowerMaxonToStd`'s
 // `__mm_alloc` arm), which is the only tier that can see it.
-export function emitMmAllocCall(module StdModule, block IrBlock, result ValueId, size ValueId, destructor ValueId, tag ParsedInt, ids ValueMinter)
+export function emitMmAllocCall(module StdModule, block IrBlock, result ValueId, size ValueId, destructor ValueId, tag FullRangeInt, ids ValueMinter)
 	if not module.debugStream 'untracedBuild'
 		module.appendOp(block, op: StdOp.call(result, callee: MmAllocName, args: twoArgs(size, second: destructor)))
 		return
@@ -2308,7 +2308,7 @@ end 'OwnerCountStep'
 // ⭐ **IT ANSWERS THE PRIOR COUNT BECAUSE A DECREMENT CAN ONLY BE JUDGED BY WHAT IT DISPLACED.** The step has
 // already stored the new count — and on the shared arm another green thread may have stepped it again since —
 // so a re-read would ask "was I the last owner?" of the wrong number.
-function emitStepOwnerCount(module StdModule, func IrFunction, entry IrBlock, ptr ValueId, delta ParsedInt, immortal IrBlock, ids ValueMinter) returns OwnerCountStep
+function emitStepOwnerCount(module StdModule, func IrFunction, entry IrBlock, ptr ValueId, delta FullRangeInt, immortal IrBlock, ids ValueMinter) returns OwnerCountStep
 	var counted = module.addBlock(func, label: b"counted", heat: BlockHeat.normal)
 	var shared = module.addBlock(func, label: b"sharedcount", heat: BlockHeat.normal)
 	var stepped = module.addBlock(func, label: b"stepped", heat: BlockHeat.normal)
@@ -2356,7 +2356,7 @@ end 'emitStepOwnerCount'
 // ⛔ **THE CALLER MUST HAVE ROUTED AWAY FROM AN IMMORTAL BOX FIRST.** The store is what makes an image
 // record's header fatal: it lives in `.rdata`, so this is a write into a read-only page — a fault on x64 and a
 // SILENT corruption on wasm, which has no read-only section. `emitStepOwnerCount` is the one caller.
-function emitAdjustRefcount(module StdModule, block IrBlock, header ValueId, delta ParsedInt, sharedCount bool, ids ValueMinter) returns ValueId
+function emitAdjustRefcount(module StdModule, block IrBlock, header ValueId, delta FullRangeInt, sharedCount bool, ids ValueMinter) returns ValueId
 	let step = emitConst(module, block: block, value: delta, ids: ids)
 	return emitFieldAccumulate(module, block: block, record: header, offset: HeaderRefcountOffset, delta: step, multiM: sharedCount, ids: ids)
 end 'emitAdjustRefcount'
@@ -2384,7 +2384,7 @@ export function emitIsSharedAllocation(module StdModule, block IrBlock, ptr Valu
 end 'emitIsSharedAllocation'
 
 // The refcount word of a box with ONE owner — the `owners - 1` convention, stated once.
-let SoleOwnerRefcount = 0 as ParsedInt
+let SoleOwnerRefcount = 0 as FullRangeInt
 
 // The box whose refcount word `loadResultId` reads — `emitLoadRefcount`'s shape read back:
 // `[ (ptr - HeaderBytes) + HeaderRefcountOffset ]`, the subtraction an immediate once
@@ -3957,7 +3957,7 @@ function emitManagedFieldDrops(module StdModule, startBlock IrBlock, box ValueId
 			continue
 		end 'scalarField'
 
-		cur = emitNullGuardedDrop(module, cur: cur, box: box, offset: layout.payloadSlotOffset(fi), kind: payloadDropKind(signatures, typeNames: project.typeNames, field: field, class: class), ids: ids, func: func)
+		cur = emitNullGuardedDrop(module, cur: cur, box: box, offset: layout.payloadSlotOffset(fi as PayloadSlotIndex), kind: payloadDropKind(signatures, typeNames: project.typeNames, field: field, class: class), ids: ids, func: func)
 	end 'eachField'
 
 	module.setTerminator(cur, op: StdOp.branch(dest.id))
@@ -4024,7 +4024,7 @@ function emitDictionaryFieldDrop(module StdModule, block IrBlock, callee ByteArr
 	end 'theFirstBlockIsTheDescriptor'
 
 	let offsetConst = ids.mint()
-	module.appendOp(block, op: StdOp.const(offsetConst, value: blockOffset as ParsedInt, valueType: StdType.i64))
+	module.appendOp(block, op: StdOp.const(offsetConst, value: blockOffset as FullRangeInt, valueType: StdType.i64))
 	let blockAddr = ids.mint()
 	module.appendOp(block, op: StdOp.binOp(blockAddr, lhs: descriptor, rhs: offsetConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
 	module.appendOp(block, op: StdOp.call(dropped, callee: callee, args: twoArgs(blockAddr, second: value)))
@@ -4391,7 +4391,7 @@ function emitFieldCascadeCloner(module StdModule, symbolName ByteArray, boxSize 
 	emitParams(module, block: entry, count: 1)
 	let src = 0 as ValueId
 
-	let size = emitConst(module, block: entry, value: boxSize as ParsedInt, ids: ids)
+	let size = emitConst(module, block: entry, value: boxSize as FullRangeInt, ids: ids)
 	let zeroDtor = emitConst(module, block: entry, value: TrivialDestructor, ids: ids)
 	let newBox = ids.mint()
 	emitMmAllocCall(module, block: entry, result: newBox, size: size, destructor: zeroDtor, tag: userTagIndex(project.globalData, name: tagName, debugStream: module.debugStream), ids: ids)
@@ -4516,7 +4516,7 @@ function synthesizeUnionCloner(module StdModule, layout EnumLayout, project Proj
 	emitParams(module, block: entry, count: 1)
 	let src = 0 as ValueId
 
-	let size = emitConst(module, block: entry, value: layout.boxSizeBytes() as ParsedInt, ids: ids)
+	let size = emitConst(module, block: entry, value: layout.boxSizeBytes() as FullRangeInt, ids: ids)
 	let zeroDtor = emitConst(module, block: entry, value: TrivialDestructor, ids: ids)
 	let newBox = ids.mint()
 	emitMmAllocCall(module, block: entry, result: newBox, size: size, destructor: zeroDtor, tag: userTagIndex(project.globalData, name: layout.name, debugStream: module.debugStream), ids: ids)
@@ -4575,7 +4575,7 @@ function emitManagedFieldCascades(module StdModule, func IrFunction, start Casca
 		end 'scalar'
 
 		let strategy = managedFieldCascadeStrategy(signatures, typeNames: project.typeNames, fieldType: field.declaredType, asElement: false, action: action)
-		cur = emitManagedFieldCascade(module, func: func, cur: cur, box: box, offset: layout.payloadSlotOffset(fi), strategy: strategy, action: action, ids: ids)
+		cur = emitManagedFieldCascade(module, func: func, cur: cur, box: box, offset: layout.payloadSlotOffset(fi as PayloadSlotIndex), strategy: strategy, action: action, ids: ids)
 	end 'eachField'
 
 	emitCascadeBranch(module, from: cur, to: dest)
@@ -4851,7 +4851,7 @@ function buildMmLeakCheck(module StdModule, usage RuntimeUsage)
 
 		// A GT leak reports its OWN code — distinct from the heap 101 — so the diagnosis points at the GT
 		// counter, not the heap one.
-		let gtLeakCode = RuntimeAbort.greenThreadLeak.rawValue as ParsedInt
+		let gtLeakCode = RuntimeAbort.greenThreadLeak.rawValue
 		let gtLeakConst = ids.mint()
 		module.appendOp(gtLeaked, op: StdOp.const(gtLeakConst, value: gtLeakCode, valueType: StdType.i64))
 		module.setTerminator(gtLeaked, op: StdOp.ret(gtLeakConst))
@@ -4859,7 +4859,7 @@ function buildMmLeakCheck(module StdModule, usage RuntimeUsage)
 		module.setTerminator(entry, op: StdOp.condBranch(isLeaked, thenBlockId: leaked.id, elseBlockId: clean.id))
 	end 'noGt'
 
-	let leakCode = RuntimeAbort.leakDetected.rawValue as ParsedInt
+	let leakCode = RuntimeAbort.leakDetected.rawValue
 	let leakConst = ids.mint()
 	module.appendOp(leaked, op: StdOp.const(leakConst, value: leakCode, valueType: StdType.i64))
 	module.setTerminator(leaked, op: StdOp.ret(leakConst))

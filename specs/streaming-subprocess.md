@@ -251,7 +251,7 @@ function main() returns ExitCode
 
 	let h = subpSpawn("for i in a b c d e f g h i j k l m n o p q r s t; do echo line-$i; done")
 	let before = Scheduler.counters().timerScanSteps
-	var total = 0
+	var total = 0 as BytePos
 	var line = subpReadLine(h)
 	while line.byteLength() > 0 'drain'
 		total = total + line.byteLength()
@@ -453,7 +453,7 @@ function main() returns ExitCode
 	let code = subpWait(h)
 	print("{code}")
 	subpRelease(h)
-	var result = 0
+	var result = 0 as FullRangeInt
 	if w1 == 0 and w2 == 0 and first.byteLength() > 0 and first.byteLength() < second.byteLength() 'roundtrip'
 		result = 23
 	end 'roundtrip'
@@ -491,7 +491,7 @@ function main() returns ExitCode
 	let code = subpWait(h)
 	print("{code}")
 	subpRelease(h)
-	var result = 0
+	var result = 0 as FullRangeInt
 	if w1 == 0 and w2 == 0 and first.byteLength() > 0 and first.byteLength() < second.byteLength() 'roundtrip'
 		result = 23
 	end 'roundtrip'
@@ -516,12 +516,12 @@ NOT close the pipe — so the follow-up `subpReadLine(h)` on the same handle re-
 `hi\r\n` (4 bytes), and `subpRelease` is the sole pipe-closer (no double-close). A drop that closed the shared
 pipe would make this return 0 (EOF forever).
 ```maxon
-function reader(h Integer) returns Integer
+function reader(h FullRangeInt) returns Integer
 	let line = subpReadLine(h)
 	return line.byteLength()
 end 'reader'
 
-function dropIt(h Integer) returns Integer
+function dropIt(h FullRangeInt) returns Integer
 	_ = async reader(h)
 	sleep(200)
 	return 0
@@ -552,7 +552,7 @@ empty line (0) and writes NOTHING back — so `h2` still reads `second\r\n` (8 b
 8×10 + 0 = 80. Without the generation guard the stale reader would stamp its EOF into `h2`'s stream and
 this would return 0.
 ```maxon
-function reader(h Integer) returns Integer
+function reader(h FullRangeInt) returns Integer
 	let line = subpReadLine(h)
 	return line.byteLength()
 end 'reader'
@@ -588,8 +588,8 @@ OS-handle leak and no per-iteration buffer leak across a many-iteration loop. Ea
 (7 bytes); the accumulator returns 12×7 mod 256 = 84.
 ```maxon
 function main() returns ExitCode
-	var total = 0
-	var i = 0
+	var total = 0 as BytePos
+	var i = 0 as FullRangeInt
 	while i < 12 'loop'
 		let h = subpSpawn("cmd /c echo hello")
 		let line = subpReadLine(h)
@@ -615,8 +615,8 @@ of those going unreleased is what the leak gate (exit **101**) would catch. Each
 (6 bytes), so the accumulator returns 12x6 = 72.
 ```maxon
 function main() returns ExitCode
-	var total = 0
-	var i = 0
+	var total = 0 as BytePos
+	var i = 0 as FullRangeInt
 	while i < 12 'loop'
 		let h = subpSpawn("echo hello")
 		let line = subpReadLine(h)

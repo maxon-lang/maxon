@@ -176,7 +176,7 @@ typealias StrSet = Set with String
 
 function main() returns ExitCode
 	var s = StrSet.create()
-	var i = 0
+	var i = 0 as FullRangeInt
 	while i < 20 'fill'
 		s.insert("k{i}")
 		i = i + 1
@@ -184,7 +184,7 @@ function main() returns ExitCode
 	if s.count() != 20 'count'
 		return 1
 	end 'count'
-	var j = 0
+	var j = 0 as FullRangeInt
 	while j < 20 'check'
 		if not s.contains("k{j}") 'missing'
 			return 2

@@ -55,7 +55,7 @@ end 'Counter'
 
 function main() returns ExitCode
 	var c = Counter.create(0)
-	var i = 0
+	var i = 0 as Integer
 	while i < 5 'loop'
 		c.value = c.value + 1
 		i = i + 1

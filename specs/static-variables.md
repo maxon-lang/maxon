@@ -91,7 +91,7 @@ end 'main'
 
 <!-- test: top-level-var-basic -->
 ```maxon
-var counter = 0
+var counter = 0 as FullRangeInt
 
 function main() returns ExitCode
 	counter = 42
@@ -107,7 +107,7 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-var total = 10
+var total = 10 as Integer
 
 function add(n Integer)
 	total = total + n
@@ -125,9 +125,9 @@ end 'main'
 
 <!-- test: top-level-var-multiple -->
 ```maxon
-var a = 1
-var b = 2
-var c = 3
+var a = 1 as FullRangeInt
+var b = 2 as FullRangeInt
+var c = 3 as FullRangeInt
 
 function main() returns ExitCode
 	a = a * 10
@@ -143,7 +143,7 @@ end 'main'
 <!-- test: top-level-var-with-let -->
 ```maxon
 let BASE = 40
-var offset = 0
+var offset = 0 as FullRangeInt
 
 function main() returns ExitCode
 	offset = 2
@@ -157,7 +157,7 @@ end 'main'
 <!-- test: static-var-basic -->
 ```maxon
 type Counter
-	static var count = 0
+	static var count = 0 as FullRangeInt
 end 'Counter'
 
 function main() returns ExitCode
@@ -172,7 +172,7 @@ end 'main'
 <!-- test: static-var-increment -->
 ```maxon
 type Counter
-	static var count = 0
+	static var count = 0 as FullRangeInt
 
 	static function increment()
 		Counter.count = Counter.count + 1
@@ -207,11 +207,11 @@ end 'main'
 <!-- test: static-var-multiple-types -->
 ```maxon
 type TypeA
-	static var value = 10
+	static var value = 10 as FullRangeInt
 end 'TypeA'
 
 type TypeB
-	static var value = 20
+	static var value = 20 as FullRangeInt
 end 'TypeB'
 
 function main() returns ExitCode
@@ -230,7 +230,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Thing
-	static var created = 0
+	static var created = 0 as Integer
 	export var id as Integer
 
 	static function make(n Integer) returns Thing
@@ -306,7 +306,7 @@ miss, and one that dropped the type would make two types' `MAX_SIZE` one slot.
 // --- file: api/limits.maxon
 export type Config
 	export static let MAX_SIZE = 40
-	export static var used = 2
+	export static var used = 2 as FullRangeInt
 end 'Config'
 
 // --- file: app/main.maxon
@@ -661,7 +661,7 @@ statement, and both are freed at exit.
 ```maxon
 type Names
 	static let GREETING = "hi"
-	static var items = [1, 2, 3]
+	static var items = FullRangeIntArray from [1, 2, 3]
 end 'Names'
 
 function main() returns ExitCode
@@ -758,7 +758,7 @@ Bool global followed by non-zero global must not bleed adjacent data.
 
 ```maxon
 var flag = false
-var counter = 42
+var counter = 42 as FullRangeInt
 
 function main() returns ExitCode
 	if flag 'checkFalse'
@@ -839,7 +839,7 @@ end 'main'
 <!-- test: top-level-var-const-expr -->
 ```maxon
 let BASE = 20
-var offset = BASE + 1
+var offset = (BASE + 1) as FullRangeInt
 
 function main() returns ExitCode
 	offset = offset * 2
@@ -852,7 +852,7 @@ end 'main'
 
 <!-- test: top-level-var-array-literal -->
 ```maxon
-var items = [10, 20, 30]
+var items = FullRangeIntArray from [10, 20, 30]
 
 function main() returns ExitCode
 	try items.set(1, value: 12) otherwise panic("test invariant: set OOB")
@@ -870,8 +870,8 @@ end 'main'
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
-
-var scores = [10, 20, 30]
+typealias IntegerArray = Array with Integer
+var scores = IntegerArray from [10, 20, 30]
 
 function getTotal() returns Integer
 	let a = try scores.get(0) otherwise 0
@@ -897,8 +897,8 @@ end 'main'
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
-
-var counters = [0, 0, 0]
+typealias IntegerArray = Array with Integer
+var counters = IntegerArray from [0, 0, 0]
 
 function increment(index Integer)
 	let current = try counters.get(index as ElementIndex) otherwise 0
@@ -958,7 +958,7 @@ An array literal's elements go through the same scalar constant evaluator every 
 so a reference to another top-level *scalar* constant — and arithmetic on it — is an element.
 ```maxon
 let BASE = 20
-var xs = [BASE, BASE + 2]
+var xs = FullRangeIntArray from [BASE, BASE + 2]
 
 function main() returns ExitCode
 	let a = try xs.get(0) otherwise 0
@@ -1004,12 +1004,12 @@ and `fixed` are TWO LIVE array globals sharing one `__module_init`, so the prune
 than per-init.
 ```maxon
 
-var grow = [1]
-var untouched = [7, 7, 7]
+var grow = FullRangeIntArray from [1]
+var untouched = FullRangeIntArray from [7, 7, 7]
 let fixed = [4, 5, 6]
 
 function main() returns ExitCode
-	var i = 0
+	var i = 0 as FullRangeInt
 	while i < 200 'fill'
 		grow.push(i)
 		i = i + 1
@@ -1018,7 +1018,7 @@ function main() returns ExitCode
 	let a = try grow.get(0) otherwise 0
 	let b = try grow.get(1) otherwise 0
 	let c = try fixed.get(2) otherwise 0
-	return a + b + c + grow.count()
+	return a + b + c + grow.count() as FullRangeInt
 end 'main'
 ```
 ```exitcode
@@ -1106,7 +1106,7 @@ value in a fresh space, so the mark does not enter it; what crosses is what the 
 `var c = idBox(G)` where `idBox(x Box)` is `return x` is E3078, because the result may share storage with
 `G`. `Holder.of(G)` followed by `h.inner.n = 99` is E3159 at the write, because the record `h` holds is `G`'s.
 ```maxon
-let A = [1, 2]
+let A = FullRangeIntArray from [1, 2]
 
 function main() returns ExitCode
 	var b = A
@@ -1123,10 +1123,10 @@ The same refusal through the other door — a REASSIGNMENT of an already-owned `
 borrowed value through the identical single-sourced path and so CARRIES the mark through the identical
 one. `b = A` is refused at the reassignment, as `var b = A` is at the binding.
 ```maxon
-let A = [1, 2]
+let A = FullRangeIntArray from [1, 2]
 
 function main() returns ExitCode
-	var b = [0]
+	var b = FullRangeIntArray from [0]
 	b = A
 	b.push(9)
 	return A.count()
@@ -1237,8 +1237,8 @@ above rides the VALUE, and a merge mints a NEW value — so the phi has to inher
 else M` launders exactly what `var pick = A` is refused for. Without that inheritance this program would
 compile and return 3.
 ```maxon
-let A = [1, 2]
-var M = [5, 5]
+let A = FullRangeIntArray from [1, 2]
+var M = FullRangeIntArray from [5, 5]
 
 function main() returns ExitCode
 	var pick = A if M.count() == 2 else M
@@ -1254,8 +1254,8 @@ error E3078: <fragment>:6:6: cannot assign a value read out of a module-level `l
 The same merge, through the `match`-expression door rather than the ternary — one `finalizeMatchMerge`
 serves both, so a phi that inherits the mark for one inherits it for the other by construction.
 ```maxon
-let A = [1, 2]
-var M = [5, 5]
+let A = FullRangeIntArray from [1, 2]
+var M = FullRangeIntArray from [5, 5]
 
 enum Which
 	fixed
@@ -1308,8 +1308,8 @@ error E3078: <fragment>:17:6: cannot assign a value, which may share storage wit
 The merge mark is narrow to the same thing the direct one is: a merge of two MUTABLE globals still binds
 and still SHARES, so the phi rule refuses laundering rather than refusing merges. `P` grows, `Q` does not.
 ```maxon
-var P = [1, 2]
-var Q = [5, 5]
+var P = FullRangeIntArray from [1, 2]
+var Q = FullRangeIntArray from [5, 5]
 
 function main() returns ExitCode
 	var pick = P if Q.count() == 2 else Q
@@ -1341,7 +1341,7 @@ end 'main'
 Off a MUTABLE global the same binding is legal and SHARES the record — reference semantics; it returns 3
 here. The refusal above keys on the source's immutability, not on aliasing itself.
 ```maxon
-var A = [1, 2]
+var A = FullRangeIntArray from [1, 2]
 
 function main() returns ExitCode
 	var b = A
@@ -2273,7 +2273,7 @@ type Box
 	end 'sized'
 end 'Box'
 
-var count = 3
+var count = 3 as Integer
 let l = Box.sized()
 
 function main() returns ExitCode
@@ -3030,7 +3030,7 @@ The storage key is kind-independent, so a `var` and a `let` sharing one name in 
 same way — the second declaration is the duplicate.
 
 ```maxon
-var counter = 0
+var counter = 0 as FullRangeInt
 let counter = 5
 
 function main() returns ExitCode
@@ -3880,7 +3880,7 @@ function ordinalOf(r Reg) returns Integer
 end 'ordinalOf'
 
 function main() returns ExitCode
-	var total = 0
+	var total = 0 as Integer
 	for r in calleeSaved 'each'
 		total = total + ordinalOf(r)
 	end 'each'
@@ -3931,7 +3931,7 @@ sentence about it sends the author to a name that is perfectly visible.
 ```maxon
 // --- file: dir_a/config.maxon
 export type Config
-	module static var used = 42
+	module static var used = 42 as FullRangeInt
 end 'Config'
 
 // --- file: dir_b/main.maxon
@@ -4209,9 +4209,9 @@ end 'Hold'
 var hold = Hold.unowned
 
 function main() returns ExitCode
-	var i = 0
+	var i = 0 as Small
 	while i < 10 'fill'
-		hold = Hold.owned(i as Small)
+		hold = Hold.owned(i)
 		i = i + 1
 	end 'fill'
 
@@ -4844,4 +4844,170 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3078: <fragment>:15:5: the initializer of the module-level `var` `v` may hand it a record a module-level `let` holds, through `Box.current` — a `let` is fixed at startup and a `var` may write what it holds, so the two may not share a record. Build the value without taking the `let`'s record, or make `v` a `let`
+```
+
+<!-- test: error.a-top-level-var-bound-to-a-bare-integer -->
+A top-level `var` initialized with a bare integer literal is refused at the literal.
+```maxon
+var Hits = 0
+
+function main() returns ExitCode
+	Hits = Hits + 1
+	return Hits
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:2:12: A var cannot start from a bare number: write 'var name = expr as Type'.
+```
+
+<!-- test: error.a-static-var-bound-to-a-bare-integer -->
+A `static var` initialized with a bare integer literal is refused at the literal.
+```maxon
+type Counter
+	static var hits = 7
+end 'Counter'
+
+function main() returns ExitCode
+	Counter.hits = Counter.hits + 1
+	return Counter.hits
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:3:20: A var cannot start from a bare number: write 'var name = expr as Type'.
+```
+
+<!-- test: error.a-top-level-var-bound-to-a-map-of-bare-numbers -->
+A top-level `var` initialized with a map literal of bare numbers is refused at the bracket.
+```maxon
+var Scores = [1: 10, 2: 20]
+
+function main() returns ExitCode
+	Scores.upsert(3, value: 30)
+	return Scores.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2004: <fragment>:2:14: A var cannot start from a bare number: write 'var name = expr as Type'.
+```
+
+<!-- test: a-top-level-var-map-with-cast-values-reads-back-typed -->
+A cast names its type at file scope too, so a top-level `var` map built from `as Count` values is a typed map that can grow and reads back as `Count`.
+```maxon
+var Tally = [b"one": 1 as Count, b"two": 2 as Count]
+
+function show(v Count)
+	print("{v}\n")
+end 'show'
+
+function main() returns ExitCode
+	let one = try Tally.get(b"one") otherwise 0
+	show(one)
+	Tally.upsert(b"three", value: 3)
+	print("{Tally.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+3
+```
+
+<!-- test: error.a-top-level-var-map-values-keep-their-alias -->
+The alias a file-scope cast names is the column's type, so a read of it does not pass where another alias is declared.
+```maxon
+typealias Score = int(0 to 100)
+
+var Tally = [b"one": 1 as Count]
+
+function show(v Score)
+	print("{v}\n")
+end 'show'
+
+function main() returns ExitCode
+	let one = try Tally.get(b"one") otherwise 0
+	show(one)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:12:2: argument type mismatch for 'v': expected 'Score', got 'Count'
+```
+
+<!-- test: error.a-static-var-adopts-the-brand-of-its-first-branded-store -->
+A `static var` initialized from a literal carries no brand until the first branded value is stored into it; a store of another brand is refused.
+```maxon
+typealias Xs = Array with String
+typealias Ys = Array with String
+
+type Registry
+	static var items = ["a"]
+end 'Registry'
+
+function main() returns ExitCode
+	Registry.items = Xs.create()
+	Registry.items = Ys.create()
+	print("{Registry.items.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:11:2: cannot assign a value of type 'Ys' to global 'Registry.items', which holds 'Xs'
+```
+
+<!-- test: error.a-read-of-an-adopted-static-var-reaches-only-its-own-brands-parameter -->
+```maxon
+typealias Xs = Array with String
+typealias Ys = Array with String
+
+type Registry
+	static var items = ["a"]
+end 'Registry'
+
+function takeYs(ys Ys)
+	print("{ys.count()}\n")
+end 'takeYs'
+
+function main() returns ExitCode
+	Registry.items = Xs.create()
+	takeYs(Registry.items)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:15:2: argument type mismatch for 'ys': expected 'Ys', got 'Xs'
+```
+
+<!-- test: a-static-var-keeps-no-brand-until-a-branded-value-is-stored -->
+A read of a `static var` that was never given a branded value fits a parameter of any brand of its instance.
+```maxon
+typealias Xs = Array with String
+typealias Ys = Array with String
+
+type Registry
+	static var items = ["a"]
+end 'Registry'
+
+function takeXs(xs Xs)
+	print("{xs.count()}\n")
+end 'takeXs'
+
+function takeYs(ys Ys)
+	print("{ys.count()}\n")
+end 'takeYs'
+
+function main() returns ExitCode
+	takeXs(Registry.items)
+	takeYs(Registry.items)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+1
 ```

@@ -8,6 +8,7 @@ N="$1"; FLOATS_PER="$2"; OUT="$3"
 {
   echo "// ladder: $N units x $FLOATS_PER cross-call floats"
   echo "typealias LadderInt = int(i64.min to i64.max)"
+  echo "typealias LadderFloat = float(f64.min to f64.max)"
   echo "function scaleOpaque(a LadderInt) returns LadderInt"
   echo -e "\tif a > 100 'big'"
   echo -e "\t\treturn a - 100"
@@ -16,8 +17,8 @@ N="$1"; FLOATS_PER="$2"; OUT="$3"
   echo "end 'scaleOpaque'"
   echo ""
   echo "function scaleSeed() returns LadderInt"
-  echo -e "\tvar acc = 1"
-  echo -e "\tvar i = 0"
+  echo -e "\tvar acc = 1 as LadderInt"
+  echo -e "\tvar i = 0 as LadderInt"
   echo -e "\twhile i < 4 'seedLoop'"
   echo -e "\t\tacc = acc + i * 3"
   echo -e "\t\ti = i + 1"
@@ -27,19 +28,19 @@ N="$1"; FLOATS_PER="$2"; OUT="$3"
   echo ""
   echo "function driver() returns LadderInt"
   echo -e "\tlet s = scaleSeed()"
-  echo -e "\tvar total = 0.0"
+  echo -e "\tvar total = 0.0 as LadderFloat"
   i=0
   while [ "$i" -lt "$N" ]; do
     v=0
     while [ "$v" -lt "$FLOATS_PER" ]; do
       d=$(( v % 9 + 1 ))
-      echo -e "\tlet g${i}_${v} = s + $d.25"
+      echo -e "\tlet g${i}_${v} = (s as LadderFloat) + $d.25"
       v=$(( v + 1 ))
     done
     echo -e "\tlet k$i = scaleOpaque($i)"
     v=0
     while [ "$v" -lt "$FLOATS_PER" ]; do
-      echo -e "\ttotal = total + g${i}_${v} + (k$i + 0.5)"
+      echo -e "\ttotal = total + g${i}_${v} + ((k$i as LadderFloat) + 0.5)"
       v=$(( v + 1 ))
     done
     i=$(( i + 1 ))

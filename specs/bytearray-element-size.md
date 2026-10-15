@@ -63,7 +63,7 @@ function main() returns ExitCode
 	let src = "Environment.inherit"
 	let bytes = src.toByteArray()
 	var out = ByteArray.create()
-	var i = 12
+	var i = 12 as Count
 	while i < bytes.count() 'copy'
 		let b = try bytes.get(i) otherwise 0
 		out.push(b)

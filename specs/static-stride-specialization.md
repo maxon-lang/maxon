@@ -105,7 +105,7 @@ typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
 function total(a WordArray) returns Word
-	var t = 0
+	var t = 0 as Word
 	for v in a 'loop'
 		t = t + v
 	end 'loop'
@@ -145,7 +145,7 @@ typealias WordArray = Array with Word
 
 function fill(a WordArray, n Word)
 	for i in 0 upto n 'each'
-		try a.set(i, value: i * 3 + 1) otherwise panic("set: index out of range")
+		try a.set(i as ElementIndex, value: i * 3 + 1) otherwise panic("set: index out of range")
 	end 'each'
 end 'fill'
 
@@ -155,7 +155,7 @@ function main() returns ExitCode
 		a.push(0)
 	end 'seed'
 	fill(a, n: 5)
-	var seen = 0
+	var seen = 0 as Word
 	for i in 0 upto 5 'check'
 		seen = seen + (try a.get(i) otherwise panic("get: index out of range"))
 	end 'check'
@@ -187,9 +187,9 @@ typealias Byte = int(0 to 255)
 typealias Total = int(0 to u64.max)
 
 function sumBytes(b ByteArray) returns Total
-	var t = 0
+	var t = 0 as Total
 	for v in b 'loop'
-		t = t + v
+		t = t + v as Total
 	end 'loop'
 	return t
 end 'sumBytes'
@@ -242,9 +242,9 @@ function main() returns ExitCode
 		return 1
 	end 'stamp'
 	try a.set(4, value: 1) otherwise panic("set: index out of range")
-	var seen = 0
+	var seen = 0 as Count
 	for i in 0 upto 5 'read'
-		seen = seen + (try a.get(i) otherwise panic("get: index out of range"))
+		seen = seen + ((try a.get(i) otherwise panic("get: index out of range")) as Count)
 	end 'read'
 	if seen != 7 'sum'
 		return 2

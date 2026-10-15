@@ -31,14 +31,14 @@ this call site on a healthy host — and it shows up HERE, as the compare's cond
 function main() returns ExitCode
 	let first = __Builtins.cpuCount()
 	let second = __Builtins.cpuCount()
-	var score = 0
+	var score = 0 as ExitCode
 	if first >= 1 'atLeastOne'
 		score = score + 1
 	end 'atLeastOne'
 	if second == first 'stable'
 		score = score + 1
 	end 'stable'
-	return score as ExitCode
+	return score
 end 'main'
 ```
 ```exitcode
@@ -67,18 +67,18 @@ func @main {
     x64.callDirect __cpu_count
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 rbx, 1
-    x64.jcc less, ifcont
+    x64.jcc below, ifcont#2
   atLeastOne:
     x64.movRegImm32 rax, 1
-  ifcont:
+  ifcont#2:
     x64.cmpRegReg r8, rbx
     x64.jcc notEqual, critsplit
   stable:
     x64.leaRegRegImm32 r8, rax, 1
-    x64.jmp __rc_ok
+    x64.jmp ifcont#4
   critsplit:
     x64.movRegReg r8, rax
-  __rc_ok:
+  ifcont#4:
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
@@ -125,18 +125,18 @@ func @main {
     x64.callDirect __cpu_count
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 rbx, 1
-    x64.jcc less, ifcont
+    x64.jcc below, ifcont#2
   atLeastOne:
     x64.movRegImm32 rax, 1
-  ifcont:
+  ifcont#2:
     x64.cmpRegReg r8, rbx
     x64.jcc notEqual, critsplit
   stable:
     x64.leaRegRegImm32 r8, rax, 1
-    x64.jmp __rc_ok
+    x64.jmp ifcont#4
   critsplit:
     x64.movRegReg r8, rax
-  __rc_ok:
+  ifcont#4:
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
@@ -178,18 +178,18 @@ func @main {
     arm64.bl __cpu_count
     arm64.movImm x1, 0
     arm64.cmp x19, 1
-    arm64.b.lt ifcont
+    arm64.b.lo ifcont#2
   atLeastOne:
     arm64.movImm x1, 1
-  ifcont:
+  ifcont#2:
     arm64.cmp x0, x19
     arm64.b.ne critsplit
   stable:
     arm64.add x0, x1, 1
-    arm64.b __rc_ok
+    arm64.b ifcont#4
   critsplit:
     arm64.movRegReg x0, x1
-  __rc_ok:
+  ifcont#4:
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
@@ -228,18 +228,18 @@ func @main {
     arm64.bl __cpu_count
     arm64.movImm x1, 0
     arm64.cmp x19, 1
-    arm64.b.lt ifcont
+    arm64.b.lo ifcont#2
   atLeastOne:
     arm64.movImm x1, 1
-  ifcont:
+  ifcont#2:
     arm64.cmp x0, x19
     arm64.b.ne critsplit
   stable:
     arm64.add x0, x1, 1
-    arm64.b __rc_ok
+    arm64.b ifcont#4
   critsplit:
     arm64.movRegReg x0, x1
-  __rc_ok:
+  ifcont#4:
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
@@ -279,14 +279,14 @@ on the machine it runs on.
 function main() returns ExitCode
 	let first = __Builtins.schedProcessorCount()
 	let second = __Builtins.schedProcessorCount()
-	var score = 0
+	var score = 0 as ExitCode
 	if first >= 1 'resolvedBeforeMain'
 		score = score + 1
 	end 'resolvedBeforeMain'
 	if second == first 'stable'
 		score = score + 1
 	end 'stable'
-	return score as ExitCode
+	return score
 end 'main'
 ```
 ```exitcode
@@ -380,18 +380,18 @@ func @main {
     x64.callDirect __sched_processor_count
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 rbx, 1
-    x64.jcc less, ifcont
+    x64.jcc below, ifcont#2
   resolvedBeforeMain:
     x64.movRegImm32 rax, 1
-  ifcont:
+  ifcont#2:
     x64.cmpRegReg r8, rbx
     x64.jcc notEqual, critsplit
   stable:
     x64.leaRegRegImm32 r8, rax, 1
-    x64.jmp __rc_ok
+    x64.jmp ifcont#4
   critsplit:
     x64.movRegReg r8, rax
-  __rc_ok:
+  ifcont#4:
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
@@ -493,18 +493,18 @@ func @main {
     x64.callDirect __sched_processor_count
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 rbx, 1
-    x64.jcc less, ifcont
+    x64.jcc below, ifcont#2
   resolvedBeforeMain:
     x64.movRegImm32 rax, 1
-  ifcont:
+  ifcont#2:
     x64.cmpRegReg r8, rbx
     x64.jcc notEqual, critsplit
   stable:
     x64.leaRegRegImm32 r8, rax, 1
-    x64.jmp __rc_ok
+    x64.jmp ifcont#4
   critsplit:
     x64.movRegReg r8, rax
-  __rc_ok:
+  ifcont#4:
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
@@ -599,18 +599,18 @@ func @main {
     arm64.bl __sched_processor_count
     arm64.movImm x1, 0
     arm64.cmp x19, 1
-    arm64.b.lt ifcont
+    arm64.b.lo ifcont#2
   resolvedBeforeMain:
     arm64.movImm x1, 1
-  ifcont:
+  ifcont#2:
     arm64.cmp x0, x19
     arm64.b.ne critsplit
   stable:
     arm64.add x0, x1, 1
-    arm64.b __rc_ok
+    arm64.b ifcont#4
   critsplit:
     arm64.movRegReg x0, x1
-  __rc_ok:
+  ifcont#4:
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
@@ -707,18 +707,18 @@ func @main {
     arm64.bl __sched_processor_count
     arm64.movImm x1, 0
     arm64.cmp x19, 1
-    arm64.b.lt ifcont
+    arm64.b.lo ifcont#2
   resolvedBeforeMain:
     arm64.movImm x1, 1
-  ifcont:
+  ifcont#2:
     arm64.cmp x0, x19
     arm64.b.ne critsplit
   stable:
     arm64.add x0, x1, 1
-    arm64.b __rc_ok
+    arm64.b ifcont#4
   critsplit:
     arm64.movRegReg x0, x1
-  __rc_ok:
+  ifcont#4:
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret

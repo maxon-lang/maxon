@@ -98,7 +98,7 @@
 // here at all: it is `MmRuntime.emitWordSlotAddr`, exported so a third copy of that
 // arithmetic did not get written. What stays private is the LAYOUT constant, because a shared "8" is not a
 // shared fact — these are strides of tables this file owns.
-let WordBytes = 8
+let WordBytes = 8 as ByteOffset
 
 // --- The mspan record ---
 //
@@ -152,7 +152,7 @@ let MspanRemoteCountOffset = 64 as ByteOffset
 // field is appended past it, and the guard against overlapping headers then silently measures 56 bytes of a
 // 64-byte record. Naming the width once, beside the field that determines it, is what makes the next
 // appended field move it.
-let MspanRecordBytes = (MspanRemoteCountOffset as ParsedInt) + WordBytes
+let MspanRecordBytes = MspanRemoteCountOffset + WordBytes
 
 // One mspan header's slot in the metadata slab. 80 keeps successive headers 16-byte aligned inside the
 // 8 KiB metadata chunk, which holds 102 of them. `checkSlabRuntimeGeometry` asserts the record fits rather
@@ -290,8 +290,8 @@ export let SlabStateLabel = b"__slab_state"
 // Chained rather than written as 0/8/16 so that inserting a head word moves every offset after it — the
 // lock's included, since it is derived from the last of them.
 let SlabStateMetaBumpOffset = 0 as ByteOffset
-let SlabStateMetaEndOffset = ((SlabStateMetaBumpOffset as ParsedInt) + WordBytes) as ByteOffset
-let SlabStateMetaFreeOffset = ((SlabStateMetaEndOffset as ParsedInt) + WordBytes) as ByteOffset
+let SlabStateMetaEndOffset = SlabStateMetaBumpOffset + WordBytes
+let SlabStateMetaFreeOffset = SlabStateMetaEndOffset + WordBytes
 
 // ⭐⭐ **THE SCHEDULER WORD — the TLS slot's TEB offset once `__sched_init_procs` has published it, 0
 // before, and never 0 again.** One word answers the two questions every allocation and every free ask:
@@ -299,12 +299,12 @@ let SlabStateMetaFreeOffset = ((SlabStateMetaEndOffset as ParsedInt) + WordBytes
 // `tlsSlotLoad` takes). It lives HERE and not in a `.data` word because `__sched_tls_teb_offset` is laid
 // out only in a program with a scheduler, while every heap program's allocator reads this one.
 // `emitSlabPublishScheduler` is its single writer.
-let SlabStateSchedulerOffset = ((SlabStateMetaFreeOffset as ParsedInt) + WordBytes) as ByteOffset
+let SlabStateSchedulerOffset = SlabStateMetaFreeOffset + WordBytes
 
 // Where a thread with no machine keeps the lock depth it steps around `__slab_lock` — the allocator's
 // twin of `SchedRuntime.SchedLockDepthSinkLabel`, in the region rather than in `.data` for the scheduler
 // word's reason. Nothing reads it; it is an address that is not zero.
-let SlabStateLockDepthSinkOffset = ((SlabStateSchedulerOffset as ParsedInt) + WordBytes) as ByteOffset
+let SlabStateLockDepthSinkOffset = SlabStateSchedulerOffset + WordBytes
 
 // ⭐⭐ **THE GLOBAL SLOW-PATH LOCK LIVES *HERE*, IN THE STATE REGION, AND NOT IN A `.data` WORD —
 // WHICH IS A `TargetIr`-PIN ARGUMENT, NOT A TIDINESS ONE.** Every `TargetIr` pin renders the whole
@@ -329,8 +329,8 @@ let SlabStateLockDepthSinkOffset = ((SlabStateSchedulerOffset as ParsedInt) + Wo
 // reverse nesting does not exist and there is no order for two files to remember. **A future caller that
 // makes the allocator call into `GtRuntime` while holding this lock introduces a deadlock**, which is why
 // the direction is written down here rather than left to be re-derived.
-let SlabStateLockOffset = ((SlabStateLockDepthSinkOffset as ParsedInt) + WordBytes) as ByteOffset
-let SlabStateMcentralOffset = ((SlabStateLockOffset as ParsedInt) + OsLockBytes) as ByteOffset
+let SlabStateLockOffset = SlabStateLockDepthSinkOffset + WordBytes
+let SlabStateMcentralOffset = SlabStateLockOffset + (OsLockBytes as ByteOffset)
 
 // ⭐⭐ **THE TRAFFIC COLUMNS — six per mcache row, past the mcache.** A row's columns have the row's
 // writer: the P whose id clamps to it steps them with a plain add, and the raw row — every P-less thread
@@ -373,7 +373,7 @@ end 'SlabTrafficEvent'
 // The value the state `.data` word holds until the region is committed. Named rather than left a bare 0
 // because `emitSlabStateBase`'s probe TESTS it while `runtime/SlabRuntime.maxon` both tests and CLEARS it,
 // and a literal at each site is a chance for one to stop meaning the same thing as the others.
-let SlabStateUncommitted = 0 as ParsedInt
+let SlabStateUncommitted = 0 as FullRangeInt
 
 // ⭐ **THE ADDRESS A CALL MUST STEP `__slab_lock`'s DEPTH DOWN AT, OR THIS — *"I hold no lock"*.** The
 // sole-writer arm never takes the lock, so carrying a separate flag beside the address would be two values
@@ -661,7 +661,7 @@ function checkSlabRuntimeGeometry(signatures ProgramSignatures, tierPath FilePat
 
 	// The state region's own arithmetic: the two arrays must not overlap, and the whole must fit the chunk
 	// run committed for it.
-	if slabStateMcacheOffset() <= (SlabStateMcentralOffset as ParsedInt) 'arraysOverlap'
+	if slabStateMcacheOffset() <= (SlabStateMcentralOffset as FullRangeInt) 'arraysOverlap'
 		panic("slab runtime: the mcache starts at {slabStateMcacheOffset()}, not past the mcentral heads at {SlabStateMcentralOffset}")
 	end 'arraysOverlap'
 
@@ -690,7 +690,7 @@ function checkSlabRuntimeGeometry(signatures ProgramSignatures, tierPath FilePat
 	requireArenaCanServe("the widest class's span", chunks: widestSpanChunks)
 end 'checkSlabRuntimeGeometry'
 
-function requireMarkTableCoversTheWidestSpan(widestSpanChunks ParsedInt)
+function requireMarkTableCoversTheWidestSpan(widestSpanChunks FullRangeInt)
 	if (1 shl SlabCensusSlotAlignShift) != SlabCensusSlotAlignBytes 'alignShiftDisagrees'
 		panic("slab runtime: 1 shl {SlabCensusSlotAlignShift} is {1 shl SlabCensusSlotAlignShift}, not the slot alignment {SlabCensusSlotAlignBytes}")
 	end 'alignShiftDisagrees'
@@ -708,23 +708,23 @@ function slabTierPins() returns TierGeometryPinArray
 
 	out.push(TierGeometryPin.create("the chunk granularity", here: SlabPageBytes, named: "SlabPageBytes"))
 	out.push(TierGeometryPin.create("an OS-direct mapping's prefix", here: OsDirectPrefixBytes, named: "OsDirectPrefixBytes"))
-	out.push(TierGeometryPin.create("the exit code for a pointer the OS-direct road never handed out", here: RuntimeAbort.slabOsDirectPointerNotOurs.rawValue as ParsedInt, named: "SlabOsDirectPointerNotOursExit"))
-	out.push(TierGeometryPin.create("the exit code for a slab-state read before the first allocation committed it", here: RuntimeAbort.slabStateReadBeforeCommit.rawValue as ParsedInt, named: "SlabStateReadBeforeCommitExit"))
+	out.push(TierGeometryPin.create("the exit code for a pointer the OS-direct road never handed out", here: RuntimeAbort.slabOsDirectPointerNotOurs.rawValue, named: "SlabOsDirectPointerNotOursExit"))
+	out.push(TierGeometryPin.create("the exit code for a slab-state read before the first allocation committed it", here: RuntimeAbort.slabStateReadBeforeCommit.rawValue, named: "SlabStateReadBeforeCommitExit"))
 
-	out.push(TierGeometryPin.create("the state region's word stride", here: WordBytes, named: "SlabWordBytes"))
-	out.push(TierGeometryPin.create("the metadata slab's bump cursor", here: SlabStateMetaBumpOffset as ParsedInt, named: "SlabStateMetaBumpOffset"))
-	out.push(TierGeometryPin.create("the metadata slab's limit", here: SlabStateMetaEndOffset as ParsedInt, named: "SlabStateMetaEndOffset"))
-	out.push(TierGeometryPin.create("the metadata slab's free list", here: SlabStateMetaFreeOffset as ParsedInt, named: "SlabStateMetaFreeOffset"))
-	out.push(TierGeometryPin.create("the scheduler word", here: SlabStateSchedulerOffset as ParsedInt, named: "SlabStateSchedulerOffset"))
-	out.push(TierGeometryPin.create("the lock-depth sink", here: SlabStateLockDepthSinkOffset as ParsedInt, named: "SlabStateLockDepthSinkOffset"))
-	out.push(TierGeometryPin.create("the slow-path lock", here: SlabStateLockOffset as ParsedInt, named: "SlabStateLockOffset"))
+	out.push(TierGeometryPin.create("the state region's word stride", here: WordBytes as FullRangeInt, named: "SlabWordBytes"))
+	out.push(TierGeometryPin.create("the metadata slab's bump cursor", here: SlabStateMetaBumpOffset as FullRangeInt, named: "SlabStateMetaBumpOffset"))
+	out.push(TierGeometryPin.create("the metadata slab's limit", here: SlabStateMetaEndOffset as FullRangeInt, named: "SlabStateMetaEndOffset"))
+	out.push(TierGeometryPin.create("the metadata slab's free list", here: SlabStateMetaFreeOffset as FullRangeInt, named: "SlabStateMetaFreeOffset"))
+	out.push(TierGeometryPin.create("the scheduler word", here: SlabStateSchedulerOffset as FullRangeInt, named: "SlabStateSchedulerOffset"))
+	out.push(TierGeometryPin.create("the lock-depth sink", here: SlabStateLockDepthSinkOffset as FullRangeInt, named: "SlabStateLockDepthSinkOffset"))
+	out.push(TierGeometryPin.create("the slow-path lock", here: SlabStateLockOffset as FullRangeInt, named: "SlabStateLockOffset"))
 	out.push(TierGeometryPin.create("an OS lock's width", here: OsLockBytes, named: "OsLockBytes"))
 
-	out.push(TierGeometryPin.create("the size-class count", here: slabClassCount() as ParsedInt, named: "SlabClassCount"))
+	out.push(TierGeometryPin.create("the size-class count", here: slabClassCount() as FullRangeInt, named: "SlabClassCount"))
 	out.push(TierGeometryPin.create("the shard count", here: SlabMaxShards, named: "SlabMaxShards"))
-	out.push(TierGeometryPin.create("a row's traffic columns", here: SlabTrafficColumn.allCases.count() as ParsedInt, named: "SlabTrafficColumns"))
+	out.push(TierGeometryPin.create("a row's traffic columns", here: SlabTrafficColumn.allCases.count() as FullRangeInt, named: "SlabTrafficColumns"))
 
-	out.push(TierGeometryPin.create("the mcentral heads", here: SlabStateMcentralOffset as ParsedInt, named: "SlabStateMcentralOffset"))
+	out.push(TierGeometryPin.create("the mcentral heads", here: SlabStateMcentralOffset as FullRangeInt, named: "SlabStateMcentralOffset"))
 	out.push(TierGeometryPin.create("the mcache rows", here: slabStateMcacheOffset(), named: "SlabStateMcacheOffset"))
 	out.push(TierGeometryPin.create("the OS-direct census word", here: slabStateOsDirectBytesOffset(), named: "SlabStateOsDirectBytesOffset"))
 	out.push(TierGeometryPin.create("the state region's size", here: slabStateBytes(), named: "SlabStateBytes"))
@@ -733,14 +733,14 @@ function slabTierPins() returns TierGeometryPinArray
 	out.push(TierGeometryPin.create("the census tag-bucket count", here: SlabCensusTagBuckets, named: "SlabCensusTagBuckets"))
 
 	out.push(TierGeometryPin.create("an mspan's metadata slot", here: MspanSlotBytes, named: "MspanSlotBytes"))
-	out.push(TierGeometryPin.create("an mspan's base address", here: MspanBaseAddrOffset as ParsedInt, named: "MspanBaseAddrOffset"))
-	out.push(TierGeometryPin.create("an mspan's free list", here: MspanFreeListOffset as ParsedInt, named: "MspanFreeListOffset"))
-	out.push(TierGeometryPin.create("an mspan's bump cursor", here: MspanBumpNextOffset as ParsedInt, named: "MspanBumpNextOffset"))
-	out.push(TierGeometryPin.create("an mspan's free count", here: MspanFreeCountOffset as ParsedInt, named: "MspanFreeCountOffset"))
-	out.push(TierGeometryPin.create("an mspan's class index", here: MspanClassIdxOffset as ParsedInt, named: "MspanClassIdxOffset"))
-	out.push(TierGeometryPin.create("an mspan's owner", here: MspanOwningPOffset as ParsedInt, named: "MspanOwningPOffset"))
-	out.push(TierGeometryPin.create("an mspan's remote free list", here: MspanRemoteHeadOffset as ParsedInt, named: "MspanRemoteHeadOffset"))
-	out.push(TierGeometryPin.create("an mspan's remote free count", here: MspanRemoteCountOffset as ParsedInt, named: "MspanRemoteCountOffset"))
+	out.push(TierGeometryPin.create("an mspan's base address", here: MspanBaseAddrOffset as FullRangeInt, named: "MspanBaseAddrOffset"))
+	out.push(TierGeometryPin.create("an mspan's free list", here: MspanFreeListOffset as FullRangeInt, named: "MspanFreeListOffset"))
+	out.push(TierGeometryPin.create("an mspan's bump cursor", here: MspanBumpNextOffset as FullRangeInt, named: "MspanBumpNextOffset"))
+	out.push(TierGeometryPin.create("an mspan's free count", here: MspanFreeCountOffset as FullRangeInt, named: "MspanFreeCountOffset"))
+	out.push(TierGeometryPin.create("an mspan's class index", here: MspanClassIdxOffset as FullRangeInt, named: "MspanClassIdxOffset"))
+	out.push(TierGeometryPin.create("an mspan's owner", here: MspanOwningPOffset as FullRangeInt, named: "MspanOwningPOffset"))
+	out.push(TierGeometryPin.create("an mspan's remote free list", here: MspanRemoteHeadOffset as FullRangeInt, named: "MspanRemoteHeadOffset"))
+	out.push(TierGeometryPin.create("an mspan's remote free count", here: MspanRemoteCountOffset as FullRangeInt, named: "MspanRemoteCountOffset"))
 	out.push(TierGeometryPin.create("a destroyed span's owner sentinel", here: MspanOwningPFreed, named: "MspanOwningPFreed"))
 	out.push(TierGeometryPin.create("a parked span's owner sentinel", here: MspanStatePartial, named: "MspanStatePartial"))
 
@@ -766,7 +766,7 @@ function slabTierPins() returns TierGeometryPinArray
 	out.push(TierGeometryPin.create("the per-span free-set mark table", here: SlabCensusSpanMarkBytes, named: "SlabCensusSpanMarkBytes"))
 	out.push(TierGeometryPin.create("the tally's histogram", here: slabStateCensusTableOffset(), named: "SlabStateCensusTableOffset"))
 	out.push(TierGeometryPin.create("the per-span free-set mark table's place", here: slabStateCensusMarksOffset(), named: "SlabStateCensusMarksOffset"))
-	out.push(TierGeometryPin.create("the exit code for a tally that cannot be taken soundly", here: RuntimeAbort.slabCensusTallyUnsound.rawValue as ParsedInt, named: "SlabCensusTallyUnsoundExit"))
+	out.push(TierGeometryPin.create("the exit code for a tally that cannot be taken soundly", here: RuntimeAbort.slabCensusTallyUnsound.rawValue, named: "SlabCensusTallyUnsoundExit"))
 
 	return out
 end 'slabTierPins'
@@ -782,12 +782,12 @@ end 'checkHeapStatsBuckets'
 // A chunk run this file will ask `__slab_arena_alloc_chunks` for, checked against what an arena can serve on
 // each lane. One helper rather than two pairs of `if`s, so a third request cannot arrive checked against one
 // geometry only.
-function requireArenaCanServe(what String, chunks ParsedInt)
+function requireArenaCanServe(what String, chunks FullRangeInt)
 	requireArenaCanServeOnLane(what, chunks: chunks, hasPageReservation: true)
 	requireArenaCanServeOnLane(what, chunks: chunks, hasPageReservation: false)
 end 'requireArenaCanServe'
 
-function requireArenaCanServeOnLane(what String, chunks ParsedInt, hasPageReservation bool)
+function requireArenaCanServeOnLane(what String, chunks FullRangeInt, hasPageReservation bool)
 	let available = slabArenaAllocatableChunks(hasPageReservation)
 
 	if chunks > available 'unsatisfiable'
@@ -808,50 +808,50 @@ end 'arenaLaneLabel'
 
 // One mcache row: one span pointer per class. DERIVED from the class count rather than written as a
 // number a regenerated ladder invalidates in silence.
-function slabMcacheRowStride() returns ParsedInt
-	return (slabClassCount() as ParsedInt) * WordBytes
+function slabMcacheRowStride() returns FullRangeInt
+	return ((slabClassCount() as ByteOffset) * WordBytes) as FullRangeInt
 end 'slabMcacheRowStride'
 
-function slabStateMcacheOffset() returns ParsedInt
-	return (SlabStateMcentralOffset as ParsedInt) + (slabClassCount() as ParsedInt) * WordBytes
+function slabStateMcacheOffset() returns FullRangeInt
+	return (SlabStateMcentralOffset + (slabClassCount() as ByteOffset) * WordBytes) as FullRangeInt
 end 'slabStateMcacheOffset'
 
 // One row of traffic columns, one word per `SlabTrafficColumn`.
-function slabTrafficRowBytes() returns ParsedInt
-	return (SlabTrafficColumn.allCases.count() as ParsedInt) * WordBytes
+function slabTrafficRowBytes() returns FullRangeInt
+	return ((SlabTrafficColumn.allCases.count() as ByteOffset) * WordBytes) as FullRangeInt
 end 'slabTrafficRowBytes'
 
-function slabStateTrafficOffset() returns ParsedInt
+function slabStateTrafficOffset() returns FullRangeInt
 	return slabStateMcacheOffset() + SlabMaxShards * slabMcacheRowStride()
 end 'slabStateTrafficOffset'
 
 // Nothing here reads the word. The derivation exists so `slabStateBytes()` covers it and
 // `checkSlabRuntimeGeometry` can pin it; `runtime/SlabRuntime.maxon` owns the step, the read, and the rule
 // that keeps a word added to this region past the last array rather than in the head.
-function slabStateOsDirectBytesOffset() returns ParsedInt
+function slabStateOsDirectBytesOffset() returns FullRangeInt
 	return slabStateTrafficOffset() + SlabMaxShards * slabTrafficRowBytes()
 end 'slabStateOsDirectBytesOffset'
 
-function slabCensusBucketStride() returns ParsedInt
-	return SlabCensusBucketWords * WordBytes
+function slabCensusBucketStride() returns FullRangeInt
+	return ((SlabCensusBucketWords as ByteOffset) * WordBytes) as FullRangeInt
 end 'slabCensusBucketStride'
 
-function slabStateCensusTableOffset() returns ParsedInt
-	return slabStateOsDirectBytesOffset() + WordBytes
+function slabStateCensusTableOffset() returns FullRangeInt
+	return slabStateOsDirectBytesOffset() + (WordBytes as FullRangeInt)
 end 'slabStateCensusTableOffset'
 
-function slabStateCensusMarksOffset() returns ParsedInt
+function slabStateCensusMarksOffset() returns FullRangeInt
 	return slabStateCensusTableOffset() + SlabCensusTagBuckets * slabCensusBucketStride()
 end 'slabStateCensusMarksOffset'
 
 // Moving the state region's size takes a STAGED build: `slabTierPins` compares these figures with the
 // tier file's restated copies, so the building compiler refuses a tree where the two disagree and no
 // single build can change both. `maxon-bin/AGENTS.md` owns the sequence.
-function slabStateBytes() returns ParsedInt
+function slabStateBytes() returns FullRangeInt
 	return slabStateCensusMarksOffset() + SlabCensusSpanMarkBytes
 end 'slabStateBytes'
 
-function slabStateChunks() returns ParsedInt
+function slabStateChunks() returns FullRangeInt
 	return (slabStateBytes() + SlabPageBytes - 1) / SlabPageBytes
 end 'slabStateChunks'
 
@@ -893,7 +893,7 @@ end 'emitGeomTotalSlots'
 // The address of `state`'s word-indexed slot at `arrayOffset + index * 8` — the mcentral head for a class,
 // and (with the row folded into `index`) an mcache entry. Both arrays are word-indexed off one base, so the
 // arithmetic is written once and the callers differ only in what they index by.
-function emitStateSlotAddr(module StdModule, block IrBlock, state ValueId, arrayOffset ParsedInt, index ValueId, ids ValueMinter) returns ValueId
+function emitStateSlotAddr(module StdModule, block IrBlock, state ValueId, arrayOffset FullRangeInt, index ValueId, ids ValueMinter) returns ValueId
 	let arrayBase = emitConst(module, block: block, value: arrayOffset, ids: ids)
 	let fromBase = emitBin(module, block: block, a: state, b: arrayBase, opcode: StdBinOpcode.add, ids: ids)
 	return emitWordSlotAddr(module, block: block, base: fromBase, index: index, ids: ids)
@@ -920,7 +920,7 @@ end 'emitSpanChunkCount'
 // ⛔⛔ **A CONSTANT ROW IS FOLDED HERE OR NOT AT ALL**, for `emitSlabTrafficRowAt`'s reason: no Std pass
 // runs over a body an installer mints, so a `mul` of two `const`s reaches instruction selection as a real
 // `imul` — and this one is on the path of every allocation that pops a slot.
-function emitMcacheRowAt(module StdModule, block IrBlock, state ValueId, row ParsedInt, ids ValueMinter) returns ValueId
+function emitMcacheRowAt(module StdModule, block IrBlock, state ValueId, row FullRangeInt, ids ValueMinter) returns ValueId
 	return emitFieldAddr(module, block: block, record: state, offset: (row * slabMcacheRowStride()) as ByteOffset, ids: ids)
 end 'emitMcacheRowAt'
 
@@ -1373,7 +1373,7 @@ end 'emitSlabLockDepthAddr'
 // The global slow-path lock, at its fixed offset in the state region. One spelling, because a lock reached
 // through two different address computations is two locks the day one of them is wrong.
 function emitSlabLockAddr(module StdModule, block IrBlock, state ValueId, ids ValueMinter) returns ValueId
-	let offset = emitConst(module, block: block, value: SlabStateLockOffset as ParsedInt, ids: ids)
+	let offset = emitConst(module, block: block, value: SlabStateLockOffset as FullRangeInt, ids: ids)
 	return emitBin(module, block: block, a: state, b: offset, opcode: StdBinOpcode.add, ids: ids)
 end 'emitSlabLockAddr'
 
@@ -1404,7 +1404,7 @@ end 'emitSlabLockLeave'
 // which is over before any installer mints a runtime body — so `255 * rowBytes` written as a `mul` of two
 // `const`s reaches instruction selection as a real `imul` on the hot path of every allocation. The two
 // spellings below differ only in whether the row is a build-time number.
-function emitSlabTrafficRowAt(module StdModule, block IrBlock, state ValueId, row ParsedInt, ids ValueMinter) returns ValueId
+function emitSlabTrafficRowAt(module StdModule, block IrBlock, state ValueId, row FullRangeInt, ids ValueMinter) returns ValueId
 	return emitFieldAddr(module, block: block, record: state, offset: (slabStateTrafficOffset() + row * slabTrafficRowBytes()) as ByteOffset, ids: ids)
 end 'emitSlabTrafficRowAt'
 
@@ -1417,7 +1417,7 @@ function emitSlabTrafficRowBase(module StdModule, block IrBlock, state ValueId, 
 end 'emitSlabTrafficRowBase'
 
 function slabTrafficColumnOffset(column SlabTrafficColumn) returns ByteOffset
-	return ((column.ordinal as ParsedInt) * WordBytes) as ByteOffset
+	return (column.ordinal as ByteOffset) * WordBytes
 end 'slabTrafficColumnOffset'
 
 function slabLayerFreesColumn(layer SlabTrafficLayer) returns SlabTrafficColumn
@@ -1489,7 +1489,7 @@ export union SlabTrafficFigure
 
 	// A raw column less the tracked column nested inside it, less `prefixPerBox` bytes for every tracked
 	// box — the byte reader's per-box prefix, and 0 for a count.
-	disjoint(raw SlabTrafficColumn, tracked SlabTrafficColumn, prefixPerBox ParsedInt)
+	disjoint(raw SlabTrafficColumn, tracked SlabTrafficColumn, prefixPerBox FullRangeInt)
 
 	// The raw layer's live count less the tracked layer's.
 	disjointLive
@@ -1573,7 +1573,7 @@ function emitSlabRowDisjointLive(module StdModule, block IrBlock, rowBase ValueI
 	return emitBin(module, block: block, a: rawLive, b: trackedLive, opcode: StdBinOpcode.sub, ids: ids)
 end 'emitSlabRowDisjointLive'
 
-function emitSlabRowDisjoint(module StdModule, block IrBlock, rowBase ValueId, raw SlabTrafficColumn, tracked SlabTrafficColumn, prefixPerBox ParsedInt, ids ValueMinter) returns ValueId
+function emitSlabRowDisjoint(module StdModule, block IrBlock, rowBase ValueId, raw SlabTrafficColumn, tracked SlabTrafficColumn, prefixPerBox FullRangeInt, ids ValueMinter) returns ValueId
 	let rawHere = emitSlabColumnLoad(module, block: block, rowBase: rowBase, column: raw, ids: ids)
 	let trackedHere = emitSlabColumnLoad(module, block: block, rowBase: rowBase, column: tracked, ids: ids)
 	var answer = emitBin(module, block: block, a: rawHere, b: trackedHere, opcode: StdBinOpcode.sub, ids: ids)
@@ -1749,7 +1749,7 @@ end 'emitSlabClassIndex'
 // The rounding is `(x + divisor - 1) shr divShift`, and it is exact for both arms because every value
 // reaching either is positive: the small arm sees `size <= 1016` and the large arm sees `size >= 1017`, so
 // `size - 1024 + 127 >= 120`.
-function emitReverseTableLookup(module StdModule, block IrBlock, size ValueId, subtract ParsedInt, divShift ParsedInt, divisor ParsedInt, label ByteArray, ids ValueMinter) returns ValueId
+function emitReverseTableLookup(module StdModule, block IrBlock, size ValueId, subtract FullRangeInt, divShift FullRangeInt, divisor FullRangeInt, label ByteArray, ids ValueMinter) returns ValueId
 	let bias = emitConst(module, block: block, value: divisor - 1 - subtract, ids: ids)
 	let raised = emitBin(module, block: block, a: size, b: bias, opcode: StdBinOpcode.add, ids: ids)
 	let shift = emitConst(module, block: block, value: divShift, ids: ids)
@@ -1855,7 +1855,7 @@ function buildSlabRefill(module StdModule, model MachineModel)
 	let depthAddr = ids.mint()
 	var locked = emitSlabLockDepthAddr(module, func: func, cur: entry, state: state, model: model, addrId: depthAddr, ids: ids, label: b"depth")
 	emitSlabLockEnter(module, block: locked, state: state, depthAddr: depthAddr, ids: ids)
-	let mcentralSlot = emitStateSlotAddr(module, block: locked, state: state, arrayOffset: SlabStateMcentralOffset as ParsedInt, index: classIdx, ids: ids)
+	let mcentralSlot = emitStateSlotAddr(module, block: locked, state: state, arrayOffset: SlabStateMcentralOffset as FullRangeInt, index: classIdx, ids: ids)
 	let mcacheSlot = emitMcacheSlotAddr(module, block: locked, mcacheRow: mcacheRow, classIdx: classIdx, ids: ids)
 	let none = emitConst(module, block: locked, value: 0, ids: ids)
 	module.setTerminator(locked, op: StdOp.branch(popPartial.id))
@@ -2266,7 +2266,7 @@ end 'buildSlabOsDirectArm'
 // store: between the caller's unlocked read and this one a span may have been relisted, cached by another
 // processor, popped dry and evicted again. A plain re-read would leave the free-list words under it free to
 // be satisfied from before those pops, and this slot would go back onto a list a live slot is already on.
-function emitSlabLockedDoorEntry(module StdModule, func IrFunction, entry IrBlock, handled IrBlock, ownerExpected ParsedInt, ids ValueMinter)
+function emitSlabLockedDoorEntry(module StdModule, func IrFunction, entry IrBlock, handled IrBlock, ownerExpected FullRangeInt, ids ValueMinter)
 	var elsewhere = module.addBlock(func, label: b"notowner", heat: BlockHeat.cold)
 	var doubleFree = module.addBlock(func, label: b"doublefree", heat: BlockHeat.cold)
 	var moved = module.addBlock(func, label: b"moved", heat: BlockHeat.cold)
@@ -2316,7 +2316,7 @@ function buildSlabFreeToFull(module StdModule)
 
 	let state = emitSlabStateCommitted(module, block: exhausted, ids: ids)
 	let classIdx = emitLoadField(module, block: exhausted, record: span, offset: MspanClassIdxOffset, ids: ids)
-	let mcentralSlot = emitStateSlotAddr(module, block: exhausted, state: state, arrayOffset: SlabStateMcentralOffset as ParsedInt, index: classIdx, ids: ids)
+	let mcentralSlot = emitStateSlotAddr(module, block: exhausted, state: state, arrayOffset: SlabStateMcentralOffset as FullRangeInt, index: classIdx, ids: ids)
 
 	// The queue is collected first, so a span whose slots came back across processors while it was
 	// unreachable arrives on the list carrying them rather than needing a second visit to notice.
@@ -2470,7 +2470,7 @@ function buildSlabScavenge(module StdModule, model MachineModel)
 	let classIdx = ids.mint()
 	classLoop.blockArgs.push(IrBlockArg.create(classIdx, argType: StdType.i64))
 
-	let classCount = emitConst(module, block: classLoop, value: slabClassCount() as ParsedInt, ids: ids)
+	let classCount = emitConst(module, block: classLoop, value: slabClassCount() as FullRangeInt, ids: ids)
 	let swept = emitCmp(module, block: classLoop, a: classIdx, b: classCount, pred: StdCmpPred.ge, ids: ids)
 	module.setTerminator(classLoop, op: StdOp.condBranch(swept, thenBlockId: arenas.id, elseBlockId: classStart.id))
 
@@ -2479,7 +2479,7 @@ function buildSlabScavenge(module StdModule, model MachineModel)
 	emitSlabLockLeave(module, block: arenas, state: state, depthAddr: depthAddr, ids: ids)
 	module.setTerminator(arenas, op: StdOp.ret(decommitted))
 
-	let mcentralSlot = emitStateSlotAddr(module, block: classStart, state: state, arrayOffset: SlabStateMcentralOffset as ParsedInt, index: classIdx, ids: ids)
+	let mcentralSlot = emitStateSlotAddr(module, block: classStart, state: state, arrayOffset: SlabStateMcentralOffset as FullRangeInt, index: classIdx, ids: ids)
 	let head = emitLoadField(module, block: classStart, record: mcentralSlot, offset: 0, ids: ids)
 	let empty = emitConst(module, block: classStart, value: 0, ids: ids)
 	emitStoreField(module, block: classStart, record: mcentralSlot, offset: 0, value: empty)
@@ -2547,7 +2547,7 @@ end 'buildSlabScavenge'
 // machine model and a tier body has no knob for that. `__slab_census` carries why a read-only walk still
 // needs the lock.
 union SlabCensusArgument
-	constant(kind ParsedInt)
+	constant(kind FullRangeInt)
 	forwarded
 end 'SlabCensusArgument'
 

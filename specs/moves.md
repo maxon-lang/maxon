@@ -1034,8 +1034,10 @@ immutable source freely — there is no shared storage for the writable names to
 
 <!-- test: var-destructure-scalars-from-immutable -->
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
 function main() returns ExitCode
-	let t = (10, 20)
+	let t = (10 as Integer, 20 as Integer)
 	var (a, b) = t
 	a = a + b
 	b = b + 1

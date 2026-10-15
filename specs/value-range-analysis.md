@@ -71,8 +71,8 @@ the bound check is the first test the access makes.
 typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
-function total(a WordArray, n Word) returns Word
-	var t = 0
+function total(a WordArray, n Count) returns Word
+	var t = 0 as Word
 	for i in 0 upto n 'sum'
 		t = t + (try a.get(i) otherwise panic("total: i < n = a.count()"))
 	end 'sum'
@@ -84,7 +84,7 @@ function main() returns ExitCode
 	for i in 0 upto 6 'seed'
 		a.push(i * i)
 	end 'seed'
-	if total(a, n: a.count() as Word) != 55 'sum'
+	if total(a, n: a.count()) != 55 'sum'
 		return 1
 	end 'sum'
 	return 0
@@ -133,13 +133,13 @@ typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
 function reverseMiddle(a WordArray, first Word)
-	var low = 1
+	var low = 1 as Word
 	var high = first - 1
 
 	while low < high 'swap'
-		let atLow = try a.get(low) otherwise panic("reverseMiddle: low < high < first <= a.count()")
+		let atLow = try a.get(low as ElementIndex) otherwise panic("reverseMiddle: low < high < first <= a.count()")
 		let atHigh = try a.get(high as ElementIndex) otherwise panic("reverseMiddle: high < first <= a.count()")
-		try a.set(low, value: atHigh) otherwise panic("reverseMiddle: low is in range")
+		try a.set(low as ElementIndex, value: atHigh) otherwise panic("reverseMiddle: low is in range")
 		try a.set(high as ElementIndex, value: atLow) otherwise panic("reverseMiddle: high is in range")
 		low = low + 1
 		high = high - 1
@@ -180,7 +180,7 @@ inlined loop's body follows its `forhdr` with no compare against 0 between them.
 typealias Word = int(i64.min to i64.max)
 
 function countNonNegative(n Word) returns Word
-	var c = 0
+	var c = 0 as Word
 	for i in 0 upto n 'each'
 		if i >= 0 'yes'
 			c = c + 1
@@ -215,10 +215,10 @@ function main() returns ExitCode
 	a.push(1)
 	a.push(2)
 	a.push(3)
-	var i = 2
-	var t = 0
+	var i = 2 as Word
+	var t = 0 as Word
 	while i > -2 'walk'
-		t = t + (try a.get(i) otherwise 0)
+		t = t + (try a.get(i as ElementIndex) otherwise 0)
 		i = i - 1
 	end 'walk'
 	if t != 6 'total'
@@ -299,9 +299,9 @@ Stack trace:
 ```
 
 <!-- test: a-two-sided-alias-keeps-its-upper-check-under-a-runtime-bound -->
-Control for the upper bound. `Small = int(0 to 100)` is two-sided; the counter proves the lower
-check and nothing proves the upper one under a bound only known at run time. With `n = 150` the
-call at `i = 101` is refused, so the program never reaches its return.
+Control for the upper bound. `Small = int(0 to 100)` is two-sided; the counter proves the cast's lower
+check and nothing proves the upper one under a bound only known at run time. With `n = 150` the cast
+at `i = 101` is refused, so the program never reaches its return.
 ```maxon
 typealias Word = int(i64.min to i64.max)
 typealias Small = int(0 to 100)
@@ -315,9 +315,9 @@ function main() returns ExitCode
 	var a = WordArray.create()
 	a.push(150)
 	let n = try a.get(0) otherwise 0
-	var t = 0
+	var t = 0 as Word
 	for i in 0 upto n 'each'
-		t = t + weigh(i)
+		t = t + weigh(i as Small)
 	end 'each'
 	return 3 if t == 0 else 4
 end 'main'
@@ -326,9 +326,8 @@ end 'main'
 1
 ```
 ```stderr
-panic at a-two-sided-alias-keeps-its-upper-check-under-a-runtime-bound.test:6: Range check failed: value outside typealias 'Small'
+panic at a-two-sided-alias-keeps-its-upper-check-under-a-runtime-bound.test:16: Range check failed: value outside typealias 'Small'
 Stack trace:
-  in weigh
   in main
   in mrt_start
 ```

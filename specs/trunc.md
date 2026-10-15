@@ -109,3 +109,21 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: error.trunc-is-a-full-range-int -->
+`trunc` produces a `FullRangeInt`, which a parameter of another alias refuses.
+```maxon
+typealias Score = int(0 to u64.max)
+
+function show(v Score)
+	print("{v}\n")
+end 'show'
+
+function main() returns ExitCode
+	show(trunc(2.5))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:9:2: argument type mismatch for 'v': expected 'Score', got 'FullRangeInt'
+```

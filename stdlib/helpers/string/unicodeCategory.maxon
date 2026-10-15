@@ -52,11 +52,12 @@ let UCD_SUPP_COUNT = 806
 
 public function unicodeGeneralCategory(cp Codepoint) returns GeneralCategory
 	if cp < 65536 'bmp'
-		return __Builtins.ucdByteAt("__ucd_bmp", offset: cp)
+		return __Builtins.ucdByteAt("__ucd_bmp", offset: cp) as GeneralCategory
 	end 'bmp'
 
-	var lo = 0
-	var hi = UCD_SUPP_COUNT - 1
+	let target = cp as FullRangeInt
+	var lo = 0 as FullRangeInt
+	var hi = (UCD_SUPP_COUNT - 1) as FullRangeInt
 
 	while lo <= hi 'bsearch'
 		let mid = (lo + hi) shr 1
@@ -64,13 +65,13 @@ public function unicodeGeneralCategory(cp Codepoint) returns GeneralCategory
 		let rangeStart = entry and 2097151
 		let rangeEnd = (entry shr 21) and 2097151
 
-		if cp < rangeStart 'left'
+		if target < rangeStart 'left'
 			hi = mid - 1
 		end 'left' else 'not_left'
-			if cp > rangeEnd 'right'
+			if target > rangeEnd 'right'
 				lo = mid + 1
 			end 'right' else 'found'
-				return (entry shr 42) and 31
+				return ((entry shr 42) and 31) as GeneralCategory
 			end 'found'
 		end 'not_left'
 	end 'bsearch'

@@ -324,8 +324,8 @@ Fifty trips, each building a fresh `CharacterSet` of seven members and minting o
 grapheme scanned. Anything held past its trip shows up as a leak.
 ```maxon
 function main() returns ExitCode
-	var i = 0
-	var total = 0
+	var i = 0 as Count
+	var total = 0 as Count
 	while i < 50 'loop'
 		let padded = "  x  "
 		let t = padded.trim()

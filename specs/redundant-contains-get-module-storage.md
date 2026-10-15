@@ -20,7 +20,7 @@ walk cannot connect to it. Reporting one would be a false accusation, so a path 
 `var` is not linted.
 
 **The boundary is MUTABILITY and not "the base is a local".** A top-level `let` refuses mutation at
-every door — `m.upsert(…)` on it directly and `fill(m)` into a mutating parameter are both E3019 —
+every door — `m.upsert(…)` on it directly and `fill(m)` into a mutating parameter are both E3159 —
 so nothing in a then-block can invalidate a membership answer probed through one, and a key that is
 a top-level `let` cannot be rewritten either. Both of those are exactly what the lint is for, and a
 test of "is the base a local or a capture" would skip both.

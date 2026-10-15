@@ -289,8 +289,8 @@ function callThunk(t IntThunk) returns ExitCode
 end 'callThunk'
 
 function allocate(ranges LRArray) returns ExitCode
-	var total = 0
-	var oi = 0
+	var total = 0 as ExitCode
+	var oi = 0 as Count
 	while oi < ranges.count() 'assign'
 		let range = try ranges.get(oi) otherwise panic("oob")
 		total = total + callThunk(function() gives earliest(range))
@@ -503,7 +503,7 @@ function bumped(n Integer) returns Integer
 end 'bumped'
 
 let Base = 20
-var offset = 21
+var offset = 21 as Integer
 
 function main() returns ExitCode
 	offset = offset + 1
@@ -807,7 +807,7 @@ function main() returns ExitCode
 	var a = IntArray.create()
 	a.push(1)
 	a.push(2)
-	var total = 0
+	var total = 0 as Integer
 	for x in a 'loop'
 		total = total + x + apply(function(n Integer) gives n + 1, x: 0)
 	end 'loop'
@@ -1504,7 +1504,7 @@ and the closure keeps the value it saw.
 typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
-	var count = 1
+	var count = 1 as Integer
 	let f = function(n Integer) gives n + count
 	count = count + 1
 	print("{f(10)} {count}\n")
@@ -2057,7 +2057,7 @@ function bump(dest Integer)
 end 'bump'
 
 function main() returns ExitCode
-	var n = 1
+	var n = 1 as Integer
 	bump(n)
 	let f = function() gives n
 	n = 7
@@ -2388,7 +2388,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer
 typealias Thunk = function() returns Integer
 
-var flag = 0
+var flag = 0 as Integer
 
 function setFlag() returns Integer
 	flag = 1
@@ -3849,4 +3849,255 @@ end 'main'
 ```
 ```maxoncstderr
 error E3102: <fragment>:20:2: use of moved value 'h': its ownership moved to the closure that captures it
+```
+
+<!-- test: closure-capture.error.a-closure-writing-a-captured-parameter-writes-the-functions-parameter -->
+A parameter a closure captures is the caller's record, retained: a write through it in the closure's body is a write of the parameter, so a `let` handed to `bump` is refused.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+function zero(b Box) returns Count
+	b.n = 0
+	return 0
+end 'zero'
+
+function bump(b Box) returns Count
+	let f = function() gives zero(b)
+	return f()
+end 'bump'
+
+function main() returns ExitCode
+	let a = Box.create(2)
+	let r = bump(a)
+	print("{a.n}{r}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:24:10: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'b' (in main); pass a clone()
+```
+
+<!-- test: closure-capture.error.a-captured-parameter-written-through-a-closure-handed-to-a-callee-or-nested-in-another -->
+The write happens wherever the closure is called, so a closure handed to a callee that calls it, and a closure written inside another closure, write the captured parameter alike.
+```maxon
+typealias Count = int(0 to 1000)
+typealias Thunk = function() returns Count
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+function zero(b Box) returns Count
+	b.n = 0
+	return 0
+end 'zero'
+
+function apply(g Thunk) returns Count
+	return g()
+end 'apply'
+
+function bump(b Box) returns Count
+	return apply(function() gives zero(b))
+end 'bump'
+
+function bumpNested(b Box) returns Count
+	let outer = function() gives apply(function() gives zero(b))
+	return outer()
+end 'bumpNested'
+
+function main() returns ExitCode
+	let a = Box.create(2)
+	let c = Box.create(3)
+	let r = bump(a)
+	let s = bumpNested(c)
+	print("{a.n}{r}{c.n}{s}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:34:10: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'b' (in main); pass a clone()
+error E3159: <fragment>:35:10: cannot pass 'c', which is read-only (a `let` binding), to a function that writes parameter 'b' (in main); pass a clone()
+```
+
+<!-- test: closure-capture.a-closure-only-reading-a-captured-parameter-leaves-it-unwritten -->
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+
+	function read() returns Count
+		return n
+	end 'read'
+end 'Box'
+
+function peek(b Box) returns Count
+	let f = function() gives b.read()
+	return f()
+end 'peek'
+
+function main() returns ExitCode
+	let a = Box.create(2)
+	print("{peek(a)}\n")
+	return 0
+end 'main'
+```
+```stdout
+2
+```
+```exitcode
+0
+```
+
+<!-- test: closure-capture.error.a-closure-writing-within-a-captured-parameter-writes-a-let-global -->
+A closure that writes the record a captured parameter's field holds writes the graph the parameter denotes, which a `let` global is refused by.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Inner
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export var inner as Inner
+
+	static function create(n Count) returns Self
+		return Self{inner: Inner.create(n)}
+	end 'create'
+end 'Outer'
+
+function zero(i Inner) returns Count
+	i.n = 0
+	return 0
+end 'zero'
+
+let G = Outer.create(2)
+
+function bump(o Outer) returns Count
+	let f = function() gives zero(o.inner)
+	return f()
+end 'bump'
+
+function main() returns ExitCode
+	let r = bump(G)
+	print("{G.inner.n}{r}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:33:10: cannot pass 'G', which is read-only (a module-level `let`), to a function that writes parameter 'o' (in main); pass a clone()
+```
+
+<!-- test: closure-capture.error.a-captured-parameter-written-within-by-a-closure-handed-to-a-callee-writes-a-let-global -->
+The closure is handed to a callee that calls it; the write is the same wherever the closure runs.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Inner
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export var inner as Inner
+
+	static function create(n Count) returns Self
+		return Self{inner: Inner.create(n)}
+	end 'create'
+end 'Outer'
+
+function zero(i Inner) returns Count
+	i.n = 0
+	return 0
+end 'zero'
+
+typealias Thunk = function() returns Count
+
+let G = Outer.create(2)
+
+function apply(g Thunk) returns Count
+	return g()
+end 'apply'
+
+function bump(o Outer) returns Count
+	let f = function() gives zero(o.inner)
+	return apply(f)
+end 'bump'
+
+function main() returns ExitCode
+	let r = bump(G)
+	print("{G.inner.n}{r}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:39:10: cannot pass 'G', which is read-only (a module-level `let`), to a function that writes parameter 'o' (in main); pass a clone()
+```
+
+<!-- test: closure-capture.error.a-closure-writing-within-a-captured-parameter-refuses-a-local-let -->
+A `let` is read-only all the way down, so a closure that writes inside the record a captured `let` holds is refused, as the same write in the body is.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Inner
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export let inner as Inner
+
+	static function create(n Count) returns Self
+		return Self{inner: Inner.create(n)}
+	end 'create'
+end 'Outer'
+
+function zero(i Inner) returns Count
+	i.n = 0
+	return 0
+end 'zero'
+
+function bump(o Outer) returns Count
+	let f = function() gives zero(o.inner)
+	return f()
+end 'bump'
+
+function main() returns ExitCode
+	let a = Outer.create(2)
+	let r = bump(a)
+	print("{a.inner.n}{r}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:26:27: cannot pass a `let` field of 'o', which is read-only, to a function that writes parameter 'i' (in bump$closure_0); pass a clone()
 ```

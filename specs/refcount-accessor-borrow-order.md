@@ -90,7 +90,7 @@ end 'makeFresh'
 
 function walk(rounds TokenId) returns Expr
 	var last = Expr.unresolved
-	var total = 0
+	var total = 0 as TokenId
 
 	for i in 1 to rounds 'loop'
 		let e = makeFresh(i)

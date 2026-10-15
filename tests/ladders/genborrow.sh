@@ -57,14 +57,14 @@ if [ "$K" -lt 1 ]; then echo "genborrow.sh: K must be >= 1" >&2; exit 2; fi
       # `try … otherwise <value>` merges the read with its fallback at each.
       echo -e "\tvar arr = StringArray.create()"
       echo -e "\tvar s = \"\""
-      echo -e "\tvar total = 0"
+      echo -e "\tvar total = 0 as BytePos"
       n=0
       while [ "$n" -lt "$K" ]; do
         echo -e "\ts = try arr.get(0) otherwise \"\""
         echo -e "\ttotal = total + s.byteLength()"
         n=$(( n + 1 ))
       done
-      echo -e "\treturn total"
+      echo -e "\treturn total as Int"
       ;;
     subjects)
       # K DISTINCT storages, each read once and written once.
@@ -74,7 +74,7 @@ if [ "$K" -lt 1 ]; then echo "genborrow.sh: K must be >= 1" >&2; exit 2; fi
       # are all live to the function's `end` (each owes a drop there), and the allocator REFUSES at
       # K=128 rather than spill (E5001). A block gives each one a scope to die in while the FUNCTION
       # still holds all K storages.
-      echo -e "\tvar seed = 1"
+      echo -e "\tvar seed = 1 as BytePos"
       n=0
       while [ "$n" -lt "$K" ]; do
         echo -e "\tif seed > 0 'b${n}'"
@@ -85,7 +85,7 @@ if [ "$K" -lt 1 ]; then echo "genborrow.sh: K must be >= 1" >&2; exit 2; fi
         echo -e "\tend 'b${n}'"
         n=$(( n + 1 ))
       done
-      echo -e "\treturn seed"
+      echo -e "\treturn seed as Int"
       ;;
     dead)
       # ONE storage, K reads and K writes. Every read's binding is last used before the first write.
@@ -100,14 +100,14 @@ if [ "$K" -lt 1 ]; then echo "genborrow.sh: K must be >= 1" >&2; exit 2; fi
       # THE CONTROL. A TRIVIAL element type takes no counted reference whatever the method, while the
       # receiver still travels all the doors `parseArrayMethodCall` has.
       echo -e "\tvar arr = IntArray.create()"
-      echo -e "\tvar total = 0"
+      echo -e "\tvar total = 0 as Count"
       n=0
       while [ "$n" -lt "$K" ]; do
         echo -e "\tarr.push(${n})"
         echo -e "\ttotal = total + arr.count()"
         n=$(( n + 1 ))
       done
-      echo -e "\treturn total"
+      echo -e "\treturn total as Int"
       ;;
   esac
 

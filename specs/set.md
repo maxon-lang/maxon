@@ -167,8 +167,8 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let s = Set from [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
-	var allPresent = 1
-	var i = 1
+	var allPresent = 1 as FullRangeInt
+	var i = 1 as FullRangeInt
 	while i <= 15 'check'
 		if not s.contains(i) 'missing'
 			allPresent = 0
@@ -233,7 +233,7 @@ typealias IntSet = Set with Int
 
 function main() returns ExitCode
 	var s = IntSet.create()
-	var i = 0
+	var i = 0 as Int
 	while i < 20 'fill'
 		s.insert(i)
 		i = i + 1
@@ -241,7 +241,7 @@ function main() returns ExitCode
 	if s.count() != 20 'count'
 		return 1
 	end 'count'
-	var j = 0
+	var j = 0 as Int
 	while j < 20 'check'
 		if not s.contains(j) 'missing'
 			return 2

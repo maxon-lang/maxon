@@ -379,7 +379,7 @@ export let LinuxSearchEntriesOffset = 0x400 as Imm32
 export let LinuxSearchBytes = 0x1000
 
 // What the `getdents64` buffer may hold: the whole tail of the page above the two variable-length regions.
-export let LinuxSearchEntriesBytes = LinuxSearchBytes - (LinuxSearchEntriesOffset as ParsedInt)
+export let LinuxSearchEntriesBytes = LinuxSearchBytes - (LinuxSearchEntriesOffset as FullRangeInt)
 
 // The `dirfd` of a search that has no directory to walk. DERIVED from the handle sentinel rather than
 // re-spelled, because both mean "there is nothing here" and the tests that read them are in different files:
@@ -408,13 +408,13 @@ export let LinuxDirentRecordLengthMask = 0xFFFF as Imm32
 // functions, with a byte-for-byte overrun of a mapped page as the failure. Checked here rather than
 // commented, which is this project's cure ladder: an offset moved without its neighbour fails the build.
 export function assertLinuxSearchGeometry()
-	let patternBytes = (LinuxSearchPrefixOffset - LinuxSearchPatternOffset) as ParsedInt
+	let patternBytes = (LinuxSearchPrefixOffset - LinuxSearchPatternOffset) as FullRangeInt
 
 	if patternBytes < MaxPathBytes 'patternRegion'
 		panic("LinuxRuntime: the search object's pattern region is {patternBytes} bytes and a pattern copy writes up to {MaxPathBytes} (`PosixPathStringCapacity` plus its terminator) — it would run into the directory-prefix scratch above it")
 	end 'patternRegion'
 
-	let prefixBytes = (LinuxSearchEntriesOffset - LinuxSearchPrefixOffset) as ParsedInt
+	let prefixBytes = (LinuxSearchEntriesOffset - LinuxSearchPrefixOffset) as FullRangeInt
 
 	if prefixBytes < MaxPathBytes 'prefixRegion'
 		panic("LinuxRuntime: the search object's directory-prefix scratch is {prefixBytes} bytes and `mrt_linux_dir_prefix` writes up to {MaxPathBytes} — it would run into the `getdents64` buffer above it")
@@ -430,7 +430,7 @@ end 'assertLinuxSearchGeometry'
 // deliberately a bound rather than the exact rounded size — this is the threshold of a check, not the size of
 // an allocation, and a bound that is a few bytes generous cannot be wrong in the direction that matters.
 let LinuxDirentMaxNameBytes = 255
-let LinuxSearchMinimumEntriesBytes = (LinuxDirentNameOffset as ParsedInt) + LinuxDirentMaxNameBytes + (SpillSlotBytes as ParsedInt)
+let LinuxSearchMinimumEntriesBytes = (LinuxDirentNameOffset as FullRangeInt) + LinuxDirentMaxNameBytes + (SpillSlotBytes as FullRangeInt)
 
 // ==========================================================================
 // THE GREEN-THREAD FLOOR'S LINUX FACTS — arch-neutral, read by both Linux lanes
@@ -564,7 +564,7 @@ export let LinuxMutexReleaseStep = 0xFFFFFFFFFFFFFFFF as MachineWord
 
 // How many keys one block holds — DERIVED from the page and the slot width, and a FUNCTION rather than a
 // `let` for `runtimeFrameSlots`' language reason: a global initializer folds `/` as a float.
-export function linuxTlsSlotCount() returns ParsedInt
+export function linuxTlsSlotCount() returns FullRangeInt
 	return LinuxHostObjectPageBytes / SpillSlotBytes
 end 'linuxTlsSlotCount'
 
@@ -742,7 +742,7 @@ export let LinuxWaitOnDescriptorMessage = b"panic: WaitForSingleObject was reach
 // says so, but a COMMENT cannot keep that true — so this is the check, at chunk-build time, on the lane that
 // would be corrupted.
 export function assertLinuxLockFits()
-	let needed = (LinuxLockOffDepth as ParsedInt) + (SpillSlotBytes as ParsedInt)
+	let needed = (LinuxLockOffDepth as FullRangeInt) + (SpillSlotBytes as FullRangeInt)
 
 	if OsLockBytes < needed 'tooSmall'
 		panic("LinuxRuntime: `OsLockBytes` is {OsLockBytes} but this lane's recursive futex mutex needs {needed} bytes — `osLockInit` would write the owner and depth words past the region the allocator gave it and corrupt whatever it placed after, with no diagnostic anywhere")

@@ -355,7 +355,7 @@ function main() returns ExitCode
 		return 2
 	end 'theSecondClassGrewTheHeap'
 
-	var bad = 0
+	var bad = 0 as FullRangeInt
 	for k in 0 upto 600 'check'
 		let b = try large.get(k) otherwise return 3
 		if b.count() != LargePayload 'length'
@@ -662,7 +662,7 @@ function main() returns ExitCode
 		return 1
 	end 'theTallysOwnWalkMissedTheLevel'
 
-	var total = 0
+	var total = 0 as HeapBytes
 	for i in 0 upto BucketCount 'sum'
 		total = total + census.bucketBytes(i)
 	end 'sum'
@@ -766,7 +766,7 @@ function main() returns ExitCode
 		return 1
 	end 'theTallysOwnWalkMissedTheLevel'
 
-	var total = 0
+	var total = 0 as HeapBytes
 	for i in 0 upto BucketCount 'sum'
 		total = total + census.bucketBytes(i)
 	end 'sum'
@@ -856,7 +856,7 @@ function main() returns ExitCode
 		return 1
 	end 'theSecondTallysOwnWalkMissedTheLevel'
 
-	var biggestRise = 0
+	var biggestRise = 0 as HeapCount
 	for i in 0 upto BucketCount 'compare'
 		let was = try before.get(i) otherwise panic("the snapshot is sized to every bucket")
 		let now = census.bucketCount(i)
@@ -1338,8 +1338,8 @@ function main() returns ExitCode
 		return 1
 	end 'theSecondTallysOwnWalkMissedTheLevel'
 
-	var biggestRise = 0
-	var biggestIndex = 0
+	var biggestRise = 0 as HeapCount
+	var biggestIndex = 0 as HeapBucketIndex
 	for i in 0 upto BucketCount 'compare'
 		let was = try before.get(i) otherwise panic("the snapshot is sized to every bucket")
 		let now = census.bucketCount(i)
@@ -1366,7 +1366,7 @@ function main() returns ExitCode
 		return 4
 	end 'theBucketMixesSlotSizes'
 
-	if slot < (sizeof(Widget) + HeaderBytes) 'slotTooSmallForAWidget'
+	if slot < ((sizeof(Widget) + HeaderBytes) as HeapBytes) 'slotTooSmallForAWidget'
 		return 4
 	end 'slotTooSmallForAWidget'
 
@@ -1451,7 +1451,7 @@ function main() returns ExitCode
 		return 1
 	end 'theSecondTallysOwnWalkMissedTheLevel'
 
-	var biggestFall = 0
+	var biggestFall = 0 as HeapCount
 	for i in 0 upto BucketCount 'compare'
 		let was = try before.get(i) otherwise panic("the snapshot is sized to every bucket")
 		let now = census.bucketCount(i)

@@ -924,7 +924,9 @@ kind=2 descendantSurvived=false
 with `3`, but the grandchild it started in the background holds the stdout pipe, so the collect cannot finish
 until the deadline kills the tree. The kill reaches only the grandchild: the child had already exited, and
 `TerminateJobObject` leaves an exited process's code alone. The status kind is `timedOut` (`2`) because the
-deadline fired, and the code is the child's own `3`.
+deadline fired, and the code is the child's own `3`. The program waits for the child's exit before it collects,
+so the deadline can only fire on a child that has already exited: a deadline that fired while `cmd` was still
+starting would kill it with the kill's code and say nothing about the property.
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
@@ -946,6 +948,7 @@ function main() returns ExitCode
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
 	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
+	_ = __Builtins.subprocessWaitExit(h, 0)
 	let r = __Builtins.subprocessWaitCollect(h, 300)
 	let kind = __Builtins.subprocessResultStatusKind(r)
 	let code = __Builtins.subprocessResultStatusCode(r)
@@ -967,10 +970,11 @@ kind=2 code=3
 <!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows -->
 `a-child-that-exited-before-the-deadline-keeps-its-own-code` on this lane. The shell exits with `3` and the
-`sleep` it left in the background holds the stdout pipe, so the child is an unreaped zombie when the deadline
-fires. `kill(-pgid, SIGKILL)` still answers success for a group whose leader is a zombie, and the reap is
-what tells the two apart: the kill's code is reported only for a child whose wait status says `SIGKILL` ended
-it, and this one says it exited with `3`.
+`sleep` it left in the background holds the stdout pipe, so the collect cannot finish before the deadline. The
+program waits for the shell's exit before it collects, so the deadline can only fire on a child that has
+already exited: a deadline that fired while the shell was still starting would end it with `SIGKILL` and say
+nothing about the property. The kill reaches only the `sleep`, and the kill's code is reported only for a child
+whose wait status says `SIGKILL` ended it, and this one says it exited with `3`.
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
@@ -992,6 +996,67 @@ function main() returns ExitCode
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
 	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
+	_ = __Builtins.subprocessWaitExit(h, 0)
+	let r = __Builtins.subprocessWaitCollect(h, 300)
+	let kind = __Builtins.subprocessResultStatusKind(r)
+	let code = __Builtins.subprocessResultStatusCode(r)
+	print("kind={kind} code={code}")
+	__Builtins.subprocessResultRelease(r)
+	__Builtins.subprocessReleaseHandle(h)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+kind=2 code=3
+
+```
+
+<!-- test: subprocess-builtins.posix-a-zombie-group-leader-keeps-its-own-code-when-the-deadline-kills-its-group -->
+<!-- tier: stdlib -->
+<!-- unsupported-targets: x64-windows, arm64-macos -->
+**A DEADLINE KILL OF A GROUP WHOSE LEADER HAS EXITED UNREAPED REPORTS THE LEADER'S OWN CODE.** The shell exits
+with `3` and the `sleep` it left in the background holds the stdout pipe, so the collect cannot finish before
+the deadline. The program reads `/proc/<pid>/stat` until the shell's state is `Z`, which observes the exit
+without reaping it, and only then collects: the shell is a zombie when the deadline fires. `kill(-pgid, SIGKILL)`
+answers success for a group whose leader is a zombie, because the `sleep` is still in it, and the reap is what
+tells the two apart: the kill's code is reported only for a child whose wait status says `SIGKILL` ended it, and
+this one says it exited with `3`.
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias Pid = int(0 to u32.max)
+
+function appendToken(out ByteArray, token String)
+	let bytes = token.toByteArray()
+	let n = bytes.count()
+	for i in 0 upto n 'byteLoop'
+		out.push(try bytes.get(i) otherwise panic("appendToken: get is in range"))
+	end 'byteLoop'
+	out.push(0)
+end 'appendToken'
+
+function isZombie(pid Pid) returns bool
+	let stat = try File.readText(FilePath from "/proc/{pid}/stat") otherwise panic("/proc/{pid}/stat must stay readable until the child is reaped")
+	return stat.contains(") Z")
+end 'isZombie'
+
+function main() returns ExitCode
+	var argv = ByteArray.create()
+	appendToken(argv, token: "/bin/sh")
+	appendToken(argv, token: "-c")
+	appendToken(argv, token: "sleep 3 & exit 3")
+	let empty = ""
+	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
+	let h = __Builtins.subprocessSpawn(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 2, empty.cstr(), 0, 0, empty.cstr(), 0, 0)
+	let pid = __Builtins.subprocessGetPid(h)
+
+	while not isZombie(pid as Pid) 'untilExited'
+		Scheduler.yield()
+	end 'untilExited'
+
 	let r = __Builtins.subprocessWaitCollect(h, 300)
 	let kind = __Builtins.subprocessResultStatusKind(r)
 	let code = __Builtins.subprocessResultStatusCode(r)
@@ -1036,7 +1101,6 @@ only pin the order the markers already fix.
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
-typealias ChildHandle = int(i64.min to i64.max)
 
 // Long enough that the release lands while the collect is parked, well inside the collect's own deadline.
 let collectDeadlineMs = 10000
@@ -1050,7 +1114,7 @@ function appendToken(out ByteArray, token String)
 	out.push(0)
 end 'appendToken'
 
-function collector(h ChildHandle) returns ExitCode
+function collector(h FullRangeInt) returns ExitCode
 	let r = __Builtins.subprocessWaitCollect(h, collectDeadlineMs)
 	__Builtins.subprocessResultRelease(r)
 	return 0
@@ -1108,7 +1172,6 @@ first. `main` prints nothing.
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
-typealias ChildHandle = int(i64.min to i64.max)
 
 // Long enough that the second collect lands while the first is parked, well inside the collect's own deadline.
 let collectDeadlineMs = 10000
@@ -1122,7 +1185,7 @@ function appendToken(out ByteArray, token String)
 	out.push(0)
 end 'appendToken'
 
-function collector(h ChildHandle) returns ExitCode
+function collector(h FullRangeInt) returns ExitCode
 	let r = __Builtins.subprocessWaitCollect(h, collectDeadlineMs)
 	__Builtins.subprocessResultRelease(r)
 	return 0
@@ -1271,8 +1334,8 @@ function main() returns ExitCode
 	appendToken(argv, token: "exit")
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
-	var spawned = 0
-	var firstFailure = -1
+	var spawned = 0 as Count
+	var firstFailure = -1 as FullRangeInt
 	for i in 0 upto 65 'detachLoop'
 		let pid = __Builtins.subprocessDetach(argv, 3, empty.cstr(), env, 1, 0, empty.cstr(), 0, empty.cstr(), 0, 0, empty.cstr(), 0, 4)
 		if pid > 0 'counted'
@@ -1318,8 +1381,8 @@ function main() returns ExitCode
 	appendToken(argv, token: "/usr/bin/true")
 	let empty = ""
 	let env = try __ManagedMemory.create(1, 1) otherwise panic("create(1, 1) cannot fail")
-	var spawned = 0
-	var firstFailure = -1
+	var spawned = 0 as Count
+	var firstFailure = -1 as FullRangeInt
 	for i in 0 upto 65 'detachLoop'
 		let pid = __Builtins.subprocessDetach(argv, 1, empty.cstr(), env, 1, 0, empty.cstr(), 0, empty.cstr(), 0, 0, empty.cstr(), 0, 4)
 		if pid > 0 'counted'

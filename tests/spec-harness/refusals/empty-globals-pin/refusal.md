@@ -11,7 +11,7 @@ prefix matches every image ever linked.
 <!-- test: empty-globals-pin -->
 
 ```maxon
-var counter = 42
+var counter = 42 as Count
 
 function main() returns ExitCode
 	counter = counter + 1

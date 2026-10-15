@@ -76,12 +76,12 @@
 // that this value and `NoOwedAllocation` both come pre-zeroed from `__mm_alloc`, so `__managed_create`
 // never writes either — the same zeroing contract `__mm_alloc` relies on, and the reason a String record's
 // own `element_destroy@40` needs no store either (`StringRuntime.emitAllocOwnedInlineString`).
-export let TrivialElementDestroy = 0 as ParsedInt
+export let TrivialElementDestroy = 0 as FullRangeInt
 
 // The value `buffer@0` holds when a record has no element buffer at all — an array that never grew. It
 // is the zero `__mm_alloc` leaves the record at, and `__managed_cow_detach`'s `checkShared` arm
 // compares against exactly it.
-export let NoBufferAllocated = 0 as ParsedInt
+export let NoBufferAllocated = 0 as FullRangeInt
 
 // --- Constant array literals over an immortal `.rdata` blob ---
 //
@@ -108,7 +108,7 @@ export let NoBufferAllocated = 0 as ParsedInt
 // literal's record, an owned inline record, an interpolation's record and the byte view — is the
 // stride of an `Array with Byte`, and only this constant carries the derivation above and the
 // parser gate that checks it.
-export let ByteStringElementSize = 1 as ParsedInt
+export let ByteStringElementSize = 1 as FullRangeInt
 
 // The `.rdata` label prefix a byte-string literal's blob registers under. `__`-prefixed so it never
 // collides with a user name and stays out of the rendered Target IR (`isRuntimeFunction`'s data
@@ -142,9 +142,9 @@ let ByteArrayRecordPrefix = "__barr_rec_"
 // emitManagedConstant`) — so the reads reach one record only because their payload, length and stride are
 // identical and the table pools them. Two DISTINCT declarations whose three agree therefore share it too,
 // exactly as two identical String literals do.
-export function registerImmortalByteArrayRecord(globalData GlobalDataTable, elementSize ElementStride, elementCount ParsedInt, bytes ByteArray, debugStream bool) returns String
+export function registerImmortalByteArrayRecord(globalData GlobalDataTable, elementSize ElementStride, elementCount FullRangeInt, bytes ByteArray, debugStream bool) returns String
 	let blobLabel = registerByteArrayLiteralBlob(globalData, bytes: bytes)
-	let recordBytes = immortalRecordBytes(globalData.rdataOffsetOf(blobLabel), length: elementCount, elementSize: elementSize as ParsedInt, elementDestroy: TrivialElementDestroy)
+	let recordBytes = immortalRecordBytes(globalData.rdataOffsetOf(blobLabel), length: elementCount, elementSize: elementSize as FullRangeInt, elementDestroy: TrivialElementDestroy)
 	let recordLabel = registerImmortalRecord(globalData, prefix: ByteArrayRecordPrefix, record: recordBytes, kind: RdataPayloadKind.byteArrayRecord, debugStream: debugStream)
 	globalData.recordStringBufferFixup(recordLabel, blobLabel: blobLabel)
 	return recordLabel
@@ -161,7 +161,7 @@ let TrivialElementDestroyLabelSegment = "trivial"
 // and a layout descriptor's `destroyFunc@40` are registered under. It equals `TrivialElementDestroy` and is
 // named apart from it because the two say opposite things: that one is the finished answer for an element
 // that owns nothing, this one is an unfinished slot the writer must fill.
-let RelocatedElementDestroy = 0 as ParsedInt
+let RelocatedElementDestroy = 0 as FullRangeInt
 
 // ⭐⭐ **THE IMMORTAL RECORD A MODULE-LEVEL EMPTY `Array with T` IS** — `registerImmortalByteArrayRecord`'s
 // sibling over the same six slots, differing in the two things an empty container has no answer for and one
@@ -192,7 +192,7 @@ export function registerImmortalEmptyArrayRecord(globalData GlobalDataTable, ele
 		named gives RelocatedElementDestroy
 	end 'destroy'
 
-	let recordBytes = immortalRecordBytes(NoImmortalBlob, length: 0, elementSize: elementSize as ParsedInt, elementDestroy: destroySlot)
+	let recordBytes = immortalRecordBytes(NoImmortalBlob, length: 0, elementSize: elementSize as FullRangeInt, elementDestroy: destroySlot)
 	return registerImmortalRecordLabeled(globalData, label: "{EmptyArrayRecordPrefix}{elementSize}_{destroyName}", record: recordBytes, kind: RdataPayloadKind.byteArrayRecord, debugStream: debugStream)
 end 'registerImmortalEmptyArrayRecord'
 
@@ -250,7 +250,7 @@ export function registerImmortalStringTableRecord(globalData GlobalDataTable, te
 	end 'eachElement'
 
 	let bufferLabel = globalData.registerRdataConstant(StringTableBufferPrefix, bytes: stringTableBufferBytes(globalData, elementLabels: elementLabels), kind: RdataPayloadKind.stringTableBuffer)
-	let recordBytes = immortalRecordBytes(globalData.rdataOffsetOf(bufferLabel), length: elementLabels.count() as ParsedInt, elementSize: elementSize as ParsedInt, elementDestroy: RelocatedElementDestroy)
+	let recordBytes = immortalRecordBytes(globalData.rdataOffsetOf(bufferLabel), length: elementLabels.count() as FullRangeInt, elementSize: elementSize as FullRangeInt, elementDestroy: RelocatedElementDestroy)
 	let recordLabel = registerImmortalRecord(globalData, prefix: StringTableRecordPrefix, record: recordBytes, kind: RdataPayloadKind.byteArrayRecord, debugStream: debugStream)
 	globalData.recordStringBufferFixup(recordLabel, blobLabel: bufferLabel)
 	return ImmortalStringTable.create(recordLabel, bufferLabel: bufferLabel, elementLabels: elementLabels)
@@ -262,7 +262,7 @@ function stringTableBufferBytes(globalData GlobalDataTable, elementLabels String
 	var buffer = ByteArray.create()
 
 	for label in elementLabels 'eachSlot'
-		buffer.append(scalarImage(globalData.rdataOffsetOf(label) as ParsedInt, byteCount: ManagedArrayElementBytes as BytePos))
+		buffer.append(scalarImage(globalData.rdataOffsetOf(label) as FullRangeInt, byteCount: ManagedArrayElementBytes as BytePos))
 	end 'eachSlot'
 
 	return buffer
@@ -325,7 +325,7 @@ end 'stringTableBufferBytes'
 // value routes to the handler; the specific code is the honest ordinal for the day a handler binds it.
 // DERIVED from the one bias rather than spelled `1`, exactly as `GtRuntime`'s two `RunProcess*Flag`s are —
 // the success value it reserves is `MaxonDialect.NoErrorFlag`, which this file does not re-declare.
-let ArrayErrorIndexOutOfBoundsOrdinal = 0 as ParsedInt
+let ArrayErrorIndexOutOfBoundsOrdinal = 0 as FullRangeInt
 let ArrayErrorIndexOutOfBoundsFlag = ArrayErrorIndexOutOfBoundsOrdinal + ErrorFlagOrdinalBias
 
 // ⭐⭐ **THE OTHER `ArrayError` FLAG — `emptySlot`, ordinal 1.** An index INSIDE `[0, length)` whose
@@ -335,7 +335,7 @@ let ArrayErrorIndexOutOfBoundsFlag = ArrayErrorIndexOutOfBoundsOrdinal + ErrorFl
 // ⚠ **`indexOutOfBounds` FOR BOTH WOULD BE A WRONG ANSWER, NOT A ROUNDING** —
 // `specs/array-slots.md` states it exactly: `emptySlot` is "NOT `indexOutOfBounds`, which would
 // blame an index that is perfectly in range". Its four cases pin the split.
-let ArrayErrorEmptySlotOrdinal = 1 as ParsedInt
+let ArrayErrorEmptySlotOrdinal = 1 as FullRangeInt
 let ArrayErrorEmptySlotFlag = ArrayErrorEmptySlotOrdinal + ErrorFlagOrdinalBias
 
 // THE GROWTH POLICY — Go's `nextslicecap`, and the only one in the tree: every `Array` door that grows
@@ -352,14 +352,14 @@ let ArrayErrorEmptySlotFlag = ArrayErrorEmptySlotOrdinal + ErrorFlagOrdinalBias
 // ×2.0 at the threshold toward ×5, and a phase whose bytes are LINEAR in the program reads ABOVE ×2.00 per
 // doubling while it climbs. A reading of ×2.1 on a linear phase is the EXPECTED cost of this policy, not a
 // quadratic; it saturates at 5, but the ladder's six rungs sit inside the transition.
-let GrowthThreshold = 256 as ParsedInt
-let MinimumCapacity = 4 as ParsedInt
+let GrowthThreshold = 256 as FullRangeInt
+let MinimumCapacity = 4 as FullRangeInt
 
 // The easing step is `capacity + (capacity + 3·GrowthThreshold)/4`. The `3` and the `4` are named (and
 // the `3·GrowthThreshold` addend is derived from `GrowthThreshold` in the IR, not written as a second
 // literal 768) so the formula reads as the policy and no fact is written twice.
-let EaseNumeratorScale = 3 as ParsedInt
-let EaseDivisor = 4 as ParsedInt
+let EaseNumeratorScale = 3 as FullRangeInt
+let EaseDivisor = 4 as FullRangeInt
 
 // The runtime entry points. `__`-prefixed (`isCompilerInternalCallee` routes their calls past the
 // user-function checks — no file declares them, so no E3004, no signature slotting) and `__managed_`-
@@ -682,7 +682,7 @@ export let ManagedCursorDecrefName = b"__managed_cursor_decref"
 // `ProgramSignatures.genericInstanceBoxSize` has to answer how big a cursor's box is.
 export let CursorSourceOffset = 0 as ByteOffset
 let CursorPositionOffset = 8 as ByteOffset
-export let CursorRecordBytes = 16 as ParsedInt
+export let CursorRecordBytes = 16 as FullRangeInt
 
 // ⭐⭐ **`__managed_mem_set` — THE BUFFER'S ELEMENT WRITE, BOUNDED BY CAPACITY.**
 //
@@ -768,20 +768,20 @@ export let ManagedFillName = b"__managed_fill"
 // its tag from that declaration itself, so there is no second half there to drift. These two positions
 // are transcribed because they are what puts `invalidLength` at 3 — left out, they would be a gap a
 // corpus reorder could move in silence.
-let MemoryIndexOutOfBoundsOrdinal = 0 as ParsedInt
-let MemoryEmptySlotOrdinal = 1 as ParsedInt
-let MemorySliceOutOfBoundsOrdinal = 2 as ParsedInt
-let MemoryInvalidLengthOrdinal = 3 as ParsedInt
-let MemoryInvalidCapacityOrdinal = 4 as ParsedInt
+let MemoryIndexOutOfBoundsOrdinal = 0 as FullRangeInt
+let MemoryEmptySlotOrdinal = 1 as FullRangeInt
+let MemorySliceOutOfBoundsOrdinal = 2 as FullRangeInt
+let MemoryInvalidLengthOrdinal = 3 as FullRangeInt
+let MemoryInvalidCapacityOrdinal = 4 as FullRangeInt
 
 // ⭐ **THE TWO SHIFTS' OWN CASE, AND IT BLAMES A RANGE RATHER THAN AN INDEX.** `shiftOutOfBounds` is
 // the case `stdlib/Builtins.maxon:157` declares for exactly this pair, and it is a different
 // complaint from `indexOutOfBounds`: a shift is handed `(index, count)` and refuses when their SUM
 // leaves the live length, so naming one index would blame a value that may be perfectly in range on
 // its own.
-let MemoryShiftOutOfBoundsOrdinal = 5 as ParsedInt
-let MemoryInvalidByteRangeOrdinal = 6 as ParsedInt
-let MemoryInvalidAllocationOrdinal = 7 as ParsedInt
+let MemoryShiftOutOfBoundsOrdinal = 5 as FullRangeInt
+let MemoryInvalidByteRangeOrdinal = 6 as FullRangeInt
+let MemoryInvalidAllocationOrdinal = 7 as FullRangeInt
 let MemoryIndexOutOfBoundsFlag = MemoryIndexOutOfBoundsOrdinal + ErrorFlagOrdinalBias
 let MemoryInvalidLengthFlag = MemoryInvalidLengthOrdinal + ErrorFlagOrdinalBias
 let MemoryInvalidCapacityFlag = MemoryInvalidCapacityOrdinal + ErrorFlagOrdinalBias
@@ -1593,7 +1593,7 @@ function emitCopyRun(module StdModule, func IrFunction, cur IrBlock, dest ValueI
 
 	if fromTheTop 'highestChunkFirst'
 		let span = emitBin(module, block: cur, a: from, b: to, opcode: StdBinOpcode.add, ids: ids)
-		let stride = emitConst(module, block: cur, value: copyChunkStride(chunk) as ParsedInt, ids: ids)
+		let stride = emitConst(module, block: cur, value: copyChunkStride(chunk) as FullRangeInt, ids: ids)
 		let mirror = emitBin(module, block: cur, a: span, b: stride, opcode: StdBinOpcode.sub, ids: ids)
 		srcAnchor = emitBin(module, block: cur, a: src, b: mirror, opcode: StdBinOpcode.add, ids: ids)
 		destAnchor = emitBin(module, block: cur, a: dest, b: mirror, opcode: StdBinOpcode.add, ids: ids)
@@ -2041,8 +2041,8 @@ end 'slotIndexOf'
 //
 // ⭐ `BitPosToByteShift` stays a named LITERAL: it is `log2(BitsPerByte)`, and there is no arithmetic
 // spelling of a logarithm here to derive it from. Naming it is the whole of what can be done about it.
-export let MachineWordBits = BitsPerByte * (MachineWordBytes as ParsedInt)
-let BitPosToByteShift = 3 as ParsedInt
+export let MachineWordBits = BitsPerByte * (MachineWordBytes as FullRangeInt)
+let BitPosToByteShift = 3 as FullRangeInt
 let BitPosWithinByteMask = BitsPerByte - 1
 
 // ⛔⛔ **`runtime/ManagedGeometry.maxon` RESTATES ALL THREE, AND THE TWO DRIFT DIRECTIONS ARE CAUGHT BY
@@ -2059,9 +2059,9 @@ let BitPosWithinByteMask = BitsPerByte - 1
 //
 // ⇒ **A READER OF THESE THREE LITERALS MUST NOT TREAT THEM AS THE TIER'S VALUES — they are a copy the
 // gate below measures the OWNER against.**
-let TierBitsPerByte = 8 as ParsedInt
-let TierMachineWordBytes = 8 as ParsedInt
-let TierBitPosToByteShift = 3 as ParsedInt
+let TierBitsPerByte = 8 as FullRangeInt
+let TierMachineWordBytes = 8 as FullRangeInt
+let TierBitPosToByteShift = 3 as FullRangeInt
 
 // The tier's copies against this compiler's owners. It panics rather than reporting, for
 // `checkSlabRuntimeGeometry`'s reason: a disagreement here cannot produce a working program, so no caller
@@ -2071,7 +2071,7 @@ function checkManagedGeometry()
 		panic("managed geometry: a byte is {BitsPerByte} bits and `runtime/ManagedGeometry.maxon` derives {TierBitsPerByte} — update `BitsPerByte` there, and this constant")
 	end 'bitsPerByteDisagrees'
 
-	if (MachineWordBytes as ParsedInt) != TierMachineWordBytes 'machineWordBytesDisagree'
+	if (MachineWordBytes as FullRangeInt) != TierMachineWordBytes 'machineWordBytesDisagree'
 		panic("managed geometry: a machine word is {MachineWordBytes} bytes and `runtime/ManagedGeometry.maxon` derives {TierMachineWordBytes} — update `MachineWordBytes` there, and this constant")
 	end 'machineWordBytesDisagree'
 
@@ -2084,7 +2084,7 @@ end 'checkManagedGeometry'
 // width mask and is WRONG at the top of the range: `1 << 64` is undefined, and on x64 the shift count is
 // masked to 6 bits so it yields `1`, making a machine-word element's mask ZERO. `-1 >>logical (64 - bits)`
 // is correct for every width from 1 to 64 and needs no special case.
-let AllBitsSet = -1 as ParsedInt
+let AllBitsSet = -1 as FullRangeInt
 
 // ⭐ **THE BIT WIDTH OF ONE ELEMENT, FROM EITHER LADDER, BRANCHLESS** — `-es` when the stamp is negative,
 // `es · 8` when it is positive. It is the join that lets every derivation below be one formula: a byte
@@ -2232,9 +2232,9 @@ end 'SingleOpStride'
 // `ByteStringElementSize` is the checked 1 — the stride `ProgramSignatures.arrayElementSize` gives an
 // `Array with Byte` and the one every String producer stamps — so the byte arm is spelled out of the same
 // constant the producers are, never out of a second literal that could come to mean something else.
-export function singleOpStrideBytes(stride SingleOpStride) returns ParsedInt
+export function singleOpStrideBytes(stride SingleOpStride) returns FullRangeInt
 	return match stride 's'
-		word gives MachineWordBytes as ParsedInt
+		word gives MachineWordBytes as FullRangeInt
 		byte gives ByteStringElementSize
 	end 's'
 end 'singleOpStrideBytes'
@@ -2321,7 +2321,7 @@ end 'StrideDispatchPlan'
 // call. That is the opposite polarity from `emitStrideDispatch` above, where a wrong stamp would take an arm
 // the runtime would not.
 export function strideDispatchPlanForStamp(stamp ElementStride) returns StrideDispatchPlan
-	let stampBytes = stamp as ParsedInt
+	let stampBytes = stamp as FullRangeInt
 
 	if stampBytes == singleOpStrideBytes(SingleOpStride.word) 'oneMachineWord'
 		return StrideDispatchPlan.singleArm(SingleOpStride.word)
@@ -3036,7 +3036,7 @@ export type ManagedGuardOperands
 	// `capacity@16`.
 	export var indexIsVariable as bool
 	export var index as ValueId
-	export var constantIndex as ParsedInt
+	export var constantIndex as FullRangeInt
 	export var limitOffset as ByteOffset
 
 	export static function create() returns ManagedGuardOperands
@@ -3056,7 +3056,7 @@ export type ManagedGuardOperands
 		self.limitOffset = limit
 	end 'recordVariableBound'
 
-	function recordConstantBound(tested ValueId, at ParsedInt, limit ByteOffset)
+	function recordConstantBound(tested ValueId, at FullRangeInt, limit ByteOffset)
 		self.kind = ManagedGuardKind.indexOutOfRange
 		self.record = tested
 		self.indexIsVariable = false
@@ -3118,7 +3118,7 @@ function classifyIndexOutOfRange(reader StdShapeReader, condId ValueId, out Mana
 	end 'variableIndex'
 
 	if reader.arith.isComparisonImm() and reader.arith.pred == StdCmpPred.le 'constantIndex'
-		let index = reader.arith.imm as ParsedInt
+		let index = reader.arith.imm as FullRangeInt
 		let record = try limitFieldRecord(reader, limit: reader.arith.lhs) otherwise return false
 		out.recordConstantBound(record, at: index, limit: reader.load.offset)
 		return true
@@ -3348,7 +3348,7 @@ function emitViewRecordHead(module StdModule, block IrBlock, srcBuffer ValueId, 
 	let viewBuffer = emitSlotAddr(module, block: block, buffer: srcBuffer, index: start, elementSize: elementSize, ids: ids)
 	emitStoreField(module, block: block, record: newRec, offset: ManagedRecordBufferOffset, value: viewBuffer)
 	emitStoreField(module, block: block, record: newRec, offset: ManagedRecordLengthOffset, value: sliceLen)
-	let sentinel = emitConst(module, block: block, value: ViewBufferCapacity as ParsedInt, ids: ids)
+	let sentinel = emitConst(module, block: block, value: ViewBufferCapacity as FullRangeInt, ids: ids)
 	emitStoreField(module, block: block, record: newRec, offset: ManagedRecordCapacityOffset, value: sentinel)
 
 	return newRec
@@ -3680,7 +3680,7 @@ function buildManagedCreate(module StdModule)
 	// `emitRuntimeAbort` derives from `func.returnType` rather than being told.
 	emitRuntimeAbort(module, func: func, block: badSize, abort: RuntimeAbort.arrayElementSizeZero, ids: ids)
 
-	let recordSize = emitConst(module, block: ok, value: ManagedRecordBytes as ParsedInt, ids: ids)
+	let recordSize = emitConst(module, block: ok, value: ManagedRecordBytes as FullRangeInt, ids: ids)
 	let recordDtor = emitConst(module, block: ok, value: TrivialDestructor, ids: ids)
 	let record = ids.mint()
 	emitMmAllocCall(module, block: ok, result: record, size: recordSize, destructor: recordDtor, tag: mmTagIndex(MmTag.ArrayRecord), ids: ids)
@@ -5195,7 +5195,7 @@ end 'buildManagedMemShiftLeft'
 //
 // ⚠ **IT IS ASKED BEFORE THE DETACH, AND THAT ORDER IS `__managed_set_length`'s RULE APPLIED** — a
 // detach ALLOCATES, and a call refused on every possible buffer must not copy one first.
-function emitShiftArgumentIsNegative(module StdModule, block IrBlock, index ValueId, count ValueId, floor ParsedInt, ids ValueMinter) returns ValueId
+function emitShiftArgumentIsNegative(module StdModule, block IrBlock, index ValueId, count ValueId, floor FullRangeInt, ids ValueMinter) returns ValueId
 	let limit = emitConst(module, block: block, value: floor, ids: ids)
 	let indexTooLow = emitCmp(module, block: block, a: index, b: limit, pred: StdCmpPred.lt, ids: ids)
 	let countNegative = emitIsNegative(module, block: block, value: count, ids: ids)
@@ -5394,7 +5394,7 @@ export function emitSlotMustBeFilled(module StdModule, block IrBlock, destroy Va
 end 'emitSlotMustBeFilled'
 
 let CursorPastEndPanicText = b"panic: index out of range: the cursor's position is past the end of its array\n"
-let CursorPanicLineBytes = 96 as ParsedInt
+let CursorPanicLineBytes = 96 as FullRangeInt
 let EmptySlotMessagePrefixName = "EmptySlotMessagePrefix"
 let EmptySlotMessageSuffixName = "EmptySlotMessageSuffix"
 export let EmptySlotMessageStdlibFileName = "Builtins.maxon"
@@ -5427,7 +5427,7 @@ function emitCursorEmptySlotPanic(module StdModule, func IrFunction, block IrBlo
 	emitMmAllocCall(module, block: block, result: line, size: lineBytes, destructor: lineDestructor, tag: mmTagIndex(MmTag.ElementBuffer), ids: ids)
 	emitStoreLiteralBytes(module, block: block, base: line, offset: 0, text: text.prefix, ids: ids)
 
-	let digits = emitBin(module, block: block, a: line, b: emitConst(module, block: block, value: text.prefix.count() as ParsedInt, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let digits = emitBin(module, block: block, a: line, b: emitConst(module, block: block, value: text.prefix.count() as FullRangeInt, ids: ids), opcode: StdBinOpcode.add, ids: ids)
 	let digitCount = ids.mint()
 	module.appendOp(block, op: StdOp.call(digitCount, callee: IntToStringName, args: twoArgs(position, second: digits)))
 
@@ -5569,7 +5569,7 @@ end 'managedMemoryThrows'
 // `throws __ManagedMemoryError` by the corpus and FORWARDS to `managed.byteAt`, so there is one raiser of
 // the wire format rather than two spellings that must agree. A cross-file keyword with no cross-file caller
 // is a claim nothing checks.
-function emitMemoryThrow(module StdModule, block IrBlock, flag ParsedInt, ids ValueMinter)
+function emitMemoryThrow(module StdModule, block IrBlock, flag FullRangeInt, ids ValueMinter)
 	emitErrorReturn(module, block: block, flag: flag, ids: ids)
 end 'emitMemoryThrow'
 

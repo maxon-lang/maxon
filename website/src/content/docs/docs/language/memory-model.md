@@ -127,9 +127,13 @@ The rules:
 
 - **No write through a read-only value.** A field store, a method that writes its receiver, or an argument the
   callee writes is **E3159**. The diagnostic names the read-only root.
-- **No mutable alias of a read-only value.** Binding a read-only value to a `var` is **E3078**, and so is storing
-  it into a `var` field, a mutable container element, a parameter that keeps it mutably, or a module `var`
-  initializer. [`clone()`](#explicit-cloning) makes an independent mutable copy.
+- **No mutable alias of a read-only value.** Binding a read-only value to a `var` is **E3078**, and so is a module
+  `var` initializer that may take a module-level `let`'s record. A value read out of a `let` field, a `let`
+  payload, a `readonly` element, a `SharedValue` or a registry is read-only for good, so storing it into a `var`
+  field or a mutable container element, or passing it to a parameter that keeps it mutably, is **E3078** too; a
+  module-level `let`'s record follows the rules in [Top-Level Variables](/docs/language/variables/#top-level-variables). A `let` binding's own
+  record may be stored or kept: it stays read-only through its new holder while the binding is live, so a write
+  through that holder is **E3159**. [`clone()`](#explicit-cloning) makes an independent mutable copy.
 - **A `let` field has no other writer.** A value stored into a `let` field must be:
   - already read-only;
   - a value type;

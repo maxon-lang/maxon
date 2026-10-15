@@ -1,0 +1,17 @@
+let CaseDirName = "declaration-limit-fields"
+let Refusal = "more than 65535 fields"
+
+test 'a struct that declares 65,536 fields is refused where the 65,536th is declared'
+	try requireDeclarationRefused(CaseDirName, source: structFieldsSource(), refusal: Refusal)
+end 'a struct that declares 65,536 fields is refused where the 65,536th is declared'
+
+function structFieldsSource() returns String
+	var text = "{DeclarationPrelude}type Big\n"
+
+	for i in 0 upto DeclaredMemberCount 'eachField'
+		text.append("\texport var f{i} as Count\n")
+	end 'eachField'
+
+	text.append("end 'Big'\n\n{DeclarationMain}")
+	return text
+end 'structFieldsSource'

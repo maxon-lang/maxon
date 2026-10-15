@@ -53,7 +53,7 @@ span=4
 <!-- test: batch-apart.keeps-a-ledger -->
 
 ```maxon
-var ledger = 0
+var ledger = 0 as Integer
 
 typealias Step = function(Integer) returns Integer
 
@@ -123,7 +123,7 @@ doubled=10
 <!-- test: batch-apart.keeps-a-tally -->
 
 ```maxon
-var tally = 0
+var tally = 0 as Integer
 
 typealias Bump = function(Integer) returns Integer
 

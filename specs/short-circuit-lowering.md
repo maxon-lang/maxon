@@ -49,7 +49,7 @@ function f() returns bool
 end 'f'
 
 function main() returns ExitCode
-	var code = 0
+	var code = 0 as FullRangeInt
 	if t() and f() 'a'
 		code = code + 1
 	end 'a'
@@ -84,7 +84,7 @@ cannot stay in EFLAGS — it must be written to a register (`setcc`).
 function main() returns ExitCode
 	let x = 4
 	let y = 0
-	var code = 0
+	var code = 0 as FullRangeInt
 	if x > 0 and y > 0 'both'
 		code = code + 1
 	end 'both'
@@ -118,7 +118,7 @@ function main() returns ExitCode
 	let a = t() and t()
 	let b = t() and f()
 	let c = f() or t()
-	var code = 0
+	var code = 0 as FullRangeInt
 	if a 'a'
 		code = code + 1
 	end 'a'
@@ -150,7 +150,7 @@ function f() returns bool
 end 'f'
 
 function main() returns ExitCode
-	var code = 0
+	var code = 0 as FullRangeInt
 	if not (f() or f()) 'a'
 		code = code + 1
 	end 'a'
@@ -224,7 +224,7 @@ function eitherTrue() returns bool
 end 'eitherTrue'
 
 function main() returns ExitCode
-	var code = 0
+	var code = 0 as FullRangeInt
 	if bothTrue() 'a'
 		code = code + 1
 	end 'a'
@@ -254,8 +254,8 @@ function underLimit(v Integer) returns bool
 end 'underLimit'
 
 function main() returns ExitCode
-	var n = 1
-	var steps = 0
+	var n = 1 as Integer
+	var steps = 0 as Integer
 	while positive(n) and underLimit(n) 'loop'
 		n = n + 1
 		steps = steps + 1
@@ -286,7 +286,7 @@ function f() returns bool
 end 'f'
 
 function main() returns ExitCode
-	var code = 0
+	var code = 0 as FullRangeInt
 	if f() or (t() and t()) 'a'
 		code = code + 1
 	end 'a'

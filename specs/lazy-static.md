@@ -83,7 +83,7 @@ end 'main'
 typealias Count = int(0 to u64.max)
 
 type Counter
-	static var initCount = 0
+	static var initCount = 0 as Count
 	static var cached = Counter.createInstance()
 	export var id as Count
 
@@ -232,9 +232,10 @@ end 'main'
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
 
 type Lookup
-	static var values = [10, 20, 30]
+	static var values = IntArray from [10, 20, 30]
 
 	static function get(index Integer) returns Integer
 		return try Lookup.values.get(index as ElementIndex) otherwise -1

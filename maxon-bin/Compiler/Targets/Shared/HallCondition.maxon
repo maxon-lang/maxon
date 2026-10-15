@@ -294,6 +294,20 @@ export type RegPoolCensus
 		return Self{byPoolSize: byPoolSize, occupied: 0, constrained: 0, classPoolSizes: zeroClassRow()}
 	end 'create'
 
+	export function assignFrom(other RegPoolCensus)
+		for size in 0 upto RegisterFileSize + 1 'eachSize'
+			try self.byPoolSize.set(size, value: try other.byPoolSize.get(size) otherwise panic("RegPoolCensus.assignFrom: byPoolSize.get OOB at {size}")) otherwise panic("RegPoolCensus.assignFrom: byPoolSize.set OOB at {size}")
+		end 'eachSize'
+
+		self.occupied = other.occupied
+		self.constrained = other.constrained
+
+		for classOrdinal in 0 upto RegClassCount 'eachClass'
+			let class = regClassAt(classOrdinal)
+			classRowSet(self.classPoolSizes, class: class, value: classRowGet(other.classPoolSizes, class: class))
+		end 'eachClass'
+	end 'assignFrom'
+
 	export function reset(pool RegMask, file RegisterFile)
 		for size in 0 upto RegisterFileSize + 1 'eachSize'
 			try self.byPoolSize.set(size, value: 0) otherwise panic("RegPoolCensus.reset: byPoolSize.set OOB at {size}")
@@ -521,10 +535,63 @@ export type HallScratch
 	// fresh verdict object is a heap allocation per op.
 	export var verdict as HallVerdict
 
+	export var memo as HallMemo
+
 	export static function create() returns HallScratch
-		return Self{allowed: RegMaskColumn.create(), regOfValue: RegNumColumn.create(), valueMatched: BoolArray.create(), valueOfReg: LiveIndexColumn.create(), heldRegisters: 0, parentOfReg: LiveIndexColumn.create(), queue: LiveIndexColumn.create(), classLive: ValueIdArray.create(), verdict: HallVerdict.create()}
+		return Self{allowed: RegMaskColumn.create(), regOfValue: RegNumColumn.create(), valueMatched: BoolArray.create(), valueOfReg: LiveIndexColumn.create(), heldRegisters: 0, parentOfReg: LiveIndexColumn.create(), queue: LiveIndexColumn.create(), classLive: ValueIdArray.create(), verdict: HallVerdict.create(), memo: HallMemo.create()}
 	end 'create'
 end 'HallScratch'
+
+type HallMemoEntry
+	export var masks as RegMaskColumn
+	export var feasible as bool
+	export var witness as RegMask
+	export var tight as RegCount
+
+	static function create(masks RegMaskColumn, verdict HallVerdict) returns HallMemoEntry
+		return Self{masks: masks, feasible: verdict.feasible, witness: verdict.witness, tight: verdict.tight}
+	end 'create'
+end 'HallMemoEntry'
+
+// A verdict, witness and count included, is a function of the ordered allowed-mask column alone, so
+// a hit whose masks are equal (`sameAllowedMasks` — the digest alone can collide) answers what a
+// fresh matching would. A hit runs no matching, so nothing outside `hallVerdictAt` may read the
+// matching's columns.
+export typealias HallMemo = Map with (HashDigest, HallMemoEntry)
+
+let HallMemoLimit = 8192 as EntryCount
+
+function hallMemoKey(allowed RegMaskColumn, valueCount ElementIndex) returns HashDigest
+	var state = Hasher.empty()
+
+	for i in 0 upto valueCount 'eachValue'
+		state = Hasher.combined(state, value: (try allowed.get(i) otherwise panic("hallMemoKey: allowed.get OOB at {i}")) as HashDigest)
+	end 'eachValue'
+
+	return Hasher.combined(state, value: valueCount as HashDigest)
+end 'hallMemoKey'
+
+function sameAllowedMasks(remembered RegMaskColumn, allowed RegMaskColumn, valueCount ElementIndex) returns bool
+	if remembered.count() != valueCount 'differentLength'
+		return false
+	end 'differentLength'
+
+	for i in 0 upto valueCount 'eachValue'
+		if (try remembered.get(i) otherwise panic("sameAllowedMasks: remembered.get OOB at {i}")) != (try allowed.get(i) otherwise panic("sameAllowedMasks: allowed.get OOB at {i}")) 'differs'
+			return false
+		end 'differs'
+	end 'eachValue'
+
+	return true
+end 'sameAllowedMasks'
+
+function rememberVerdict(scratch HallScratch, key HashDigest, allowed RegMaskColumn, verdict HallVerdict)
+	if scratch.memo.count() >= HallMemoLimit 'full'
+		scratch.memo = HallMemo.create()
+	end 'full'
+
+	scratch.memo.upsert(key, value: HallMemoEntry.create(allowed.clone(), verdict: verdict))
+end 'rememberVerdict'
 
 // What the exact test says about one program point.
 //
@@ -629,6 +696,22 @@ export function hallVerdictAt(liveness LivenessResult, live ValueIdArray, pool R
 		try allowed.set(i, value: allowedRegistersOf(liveness, valueId: v, pool: pool)) otherwise panic("hallVerdictAt: allowed.set OOB at {i}")
 	end 'eachValue'
 
+	let key = hallMemoKey(allowed, valueCount: valueCount)
+
+	if let remembered = try scratch.memo.get(key) 'seenBefore'
+		if sameAllowedMasks(remembered.masks, allowed: allowed, valueCount: valueCount) 'sameQuestion'
+			var answer = scratch.verdict
+
+			if remembered.feasible 'aFeasiblePoint'
+				answer.becomeFeasible()
+			end 'aFeasiblePoint' else 'anOverflow'
+				answer.becomeOverflow(remembered.witness, confinedCount: remembered.tight)
+			end 'anOverflow'
+
+			return answer
+		end 'sameQuestion'
+	end 'seenBefore'
+
 	// The matching, as its two inverse maps. Positions in `live`, not ValueIds — the search is over
 	// this point's live set alone, so a dense 0..valueCount numbering is the right one.
 	var regOfValue = scratch.regOfValue
@@ -651,6 +734,7 @@ export function hallVerdictAt(liveness LivenessResult, live ValueIdArray, pool R
 
 	if matched == valueCount as RegCount 'saturated'
 		verdict.becomeFeasible()
+		rememberVerdict(scratch, key: key, allowed: allowed, verdict: verdict)
 		return verdict
 	end 'saturated'
 
@@ -669,6 +753,7 @@ export function hallVerdictAt(liveness LivenessResult, live ValueIdArray, pool R
 	end 'inconsistentTightSet'
 
 	verdict.becomeOverflow(witness, confinedCount: tight)
+	rememberVerdict(scratch, key: key, allowed: allowed, verdict: verdict)
 	return verdict
 end 'hallVerdictAt'
 

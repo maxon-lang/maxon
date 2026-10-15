@@ -23,37 +23,37 @@ export let WalkSettleName = b"__mm_walk_settle"
 let WalkSlotName = b"__mm_walk_slot"
 
 // The visit table a walk starts from: none yet.
-export let NoVisitTable = 0 as ParsedInt
+export let NoVisitTable = 0 as FullRangeInt
 
 // What `__mm_walk_revisit` answers.
-export let WalkNotMetBefore = 0 as ParsedInt
-let WalkMetBefore = 1 as ParsedInt
+export let WalkNotMetBefore = 0 as FullRangeInt
+let WalkMetBefore = 1 as FullRangeInt
 
 let VisitTableMaskOffset = 0 as ByteOffset
 let VisitTableUsedOffset = 8 as ByteOffset
 let VisitTableEntriesOffset = 16 as ByteOffset
 let VisitEntryRecordOffset = 0 as ByteOffset
 let VisitEntryUnmetOffset = 8 as ByteOffset
-let VisitEntryBytes = 16 as ParsedInt
-let VacantVisitEntry = 0 as ParsedInt
-let AllOwnersMet = 0 as ParsedInt
-let VisitTableFirstEntries = 16 as ParsedInt
+let VisitEntryBytes = 16 as FullRangeInt
+let VacantVisitEntry = 0 as FullRangeInt
+let AllOwnersMet = 0 as FullRangeInt
+let VisitTableFirstEntries = 16 as FullRangeInt
 
 // Set in an entry's unmet word while only views have met its record. A counted record's word stays below 2^61
 // (`MmSharedRefcountMark`), so the flag never meets a count.
-let ViewsOnlyFlag = 4611686018427387904 as ParsedInt  // 2^62
-let ViewsOnlyFlagShift = 62 as ParsedInt
+let ViewsOnlyFlag = 4611686018427387904 as FullRangeInt  // 2^62
+let ViewsOnlyFlagShift = 62 as FullRangeInt
 
 // What a revisit keeps of an entry's unmet word: an owner's meeting clears `ViewsOnlyFlag`, a view's keeps it.
-let OwnerMeetingKeeps = -4611686018427387905 as ParsedInt  // every bit but 2^62
-let ViewMeetingKeeps = -1 as ParsedInt
+let OwnerMeetingKeeps = -4611686018427387905 as FullRangeInt  // every bit but 2^62
+let ViewMeetingKeeps = -1 as FullRangeInt
 
 // Entries per used entry the table keeps at least, and the factor it grows by when it would not.
-let VisitTableSpareFactor = 2 as ParsedInt
+let VisitTableSpareFactor = 2 as FullRangeInt
 
 // Fibonacci hashing: an address times 2^64/φ, whose high half mixes every bit of the address into the index.
-let VisitHashMultiplier = -7046029254386353131 as ParsedInt  // 0x9E3779B97F4A7C15
-let VisitHashDiscardBits = 32 as ParsedInt
+let VisitHashMultiplier = -7046029254386353131 as FullRangeInt  // 0x9E3779B97F4A7C15
+let VisitHashDiscardBits = 32 as FullRangeInt
 
 let SlotParamCount = 2 as ParamCount
 let RevisitParamCount = 3 as ParamCount
@@ -299,7 +299,7 @@ end 'onlyCarried'
 function emitVisitTableAlloc(module StdModule, block IrBlock, entries ValueId, ids ValueMinter) returns ValueId
 	let stride = emitConst(module, block: block, value: VisitEntryBytes, ids: ids)
 	let entryBytes = emitBin(module, block: block, a: entries, b: stride, opcode: StdBinOpcode.mul, ids: ids)
-	let headBytes = emitConst(module, block: block, value: VisitTableEntriesOffset as ParsedInt, ids: ids)
+	let headBytes = emitConst(module, block: block, value: VisitTableEntriesOffset as FullRangeInt, ids: ids)
 	let bytes = emitBin(module, block: block, a: entryBytes, b: headBytes, opcode: StdBinOpcode.add, ids: ids)
 	let noDestructor = emitConst(module, block: block, value: TrivialDestructor, ids: ids)
 	let table = ids.mint()

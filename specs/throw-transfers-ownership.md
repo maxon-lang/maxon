@@ -222,7 +222,7 @@ end 'Lex'
 
 function main() returns ExitCode
 	var lex = Lex.create()
-	var caught = 0
+	var caught = 0 as N
 	try lex.run() otherwise (e) 'fail'
 		match e 'k'
 			unterminatedString(line, column) then caught = (line + column)

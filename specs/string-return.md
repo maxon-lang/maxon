@@ -130,7 +130,7 @@ function build(x Integer) returns String
 end 'build'
 
 function main() returns ExitCode
-	var i = 0
+	var i = 0 as Integer
 	while i < 3 'loop'
 		print(build(i))
 		i = i + 1

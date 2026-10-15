@@ -180,7 +180,7 @@ function run(label String, lens LenArray, pivotIndex Small) returns String
 		scratch.push(pad(1))
 	end 'build'
 	var hold = StrArray.create()
-	let p = a.stablePartition(0, hi: lens.count(), pivotIndex: pivotIndex, scratch: scratch, pivotHold: hold, cmp: function(x String, y String) gives x.byteLength().compare(y.byteLength()))
+	let p = a.stablePartition(0, hi: lens.count() as Small, pivotIndex: pivotIndex, scratch: scratch, pivotHold: hold, cmp: function(x String, y String) gives x.byteLength().compare(y.byteLength()))
 	var out = "{label} p={p} lens="
 	for j in 0 upto lens.count() 'show'
 		out.append(" {(try a.get(j) otherwise "").byteLength()}")

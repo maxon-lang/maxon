@@ -779,8 +779,8 @@ type CycleTrace implements SummaryCallWalker
 			call(result, callee, args, argLabels, argRanges, _, _, _) then dispatchNamedCall(self, func: self.traced, op: op, opIdx: opIdx, result: result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges)
 			tryCall(result, _, callee, args, argLabels, argRanges, _, _, _) then dispatchNamedCall(self, func: self.traced, op: op, opIdx: opIdx, result: result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges)
 			asyncCall(result, callee, args, argLabels, argRanges, _, _) then dispatchNamedCall(self, func: self.traced, op: op, opIdx: opIdx, result: result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges)
-			witnessDispatch(result, args, _, methodIndex, interfaceDeclIndex, _, _) then dispatchLandingCall(self, func: self.traced, op: op, opIdx: opIdx, result: result, args: args, bodies: self.checker.calls.resolution.implsOf(methodIndex, interfaceDeclIndex: interfaceDeclIndex))
-			witnessTryDispatch(result, _, args, _, methodIndex, interfaceDeclIndex, _) then dispatchLandingCall(self, func: self.traced, op: op, opIdx: opIdx, result: result, args: args, bodies: self.checker.calls.resolution.implsOf(methodIndex, interfaceDeclIndex: interfaceDeclIndex))
+			witnessDispatch(result, args, _, _, methodIndex, interfaceDeclIndex, _, _) then dispatchLandingCall(self, func: self.traced, op: op, opIdx: opIdx, result: result, args: args, bodies: self.checker.calls.resolution.implsOf(methodIndex, interfaceDeclIndex: interfaceDeclIndex))
+			witnessTryDispatch(result, _, args, _, _, methodIndex, interfaceDeclIndex, _) then dispatchLandingCall(self, func: self.traced, op: op, opIdx: opIdx, result: result, args: args, bodies: self.checker.calls.resolution.implsOf(methodIndex, interfaceDeclIndex: interfaceDeclIndex))
 			indirectCall then self.walkIndirectCall(op, opIdx: opIdx)
 			functionRef(result, _, _) then self.walkFresh(result)
 			globalAddr(result, label) then self.addToBase(result, origin: self.globalOriginOf(label))
@@ -818,7 +818,7 @@ type CycleTrace implements SummaryCallWalker
 
 	function walkIndirectCall(op MaxonOp, opIdx ElementIndex)
 		match op 'indirect'
-			indirectCall(result, callee, args) then dispatchLandingCall(self, func: self.traced, op: op, opIdx: opIdx, result: result, args: args, bodies: self.checker.calls.resolution.functionValueBodiesCalledThrough(self.traced, callee: callee))
+			indirectCall(result, callee, args, _) then dispatchLandingCall(self, func: self.traced, op: op, opIdx: opIdx, result: result, args: args, bodies: self.checker.calls.resolution.functionValueBodiesCalledThrough(self.traced, callee: callee))
 			default panic("CycleTrace.walkIndirectCall: handed an op that is not an indirect call")
 		end 'indirect'
 	end 'walkIndirectCall'

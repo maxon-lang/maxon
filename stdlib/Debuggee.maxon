@@ -34,6 +34,7 @@ public typealias TransferByteCount = int(0 to u64.max)
 module typealias ScratchBytes = int(0 to 0x20000)
 module typealias ScratchOffset = int(0 to 0x1FFF8)
 typealias BitShift = int(0 to 63)
+typealias ByteLane = int(0 to 8)
 typealias RegisterWordArray = Array with RegisterWord
 
 let WordBytes = 8
@@ -55,10 +56,10 @@ end 'wordToBytes'
 
 function packedWord(content ByteArray, from RegisterOffset) returns RegisterWord
 	var packed = 0 as RegisterWord
-	var lane = 0
+	var lane = 0 as ByteLane
 
-	while lane < WordBytes and from + lane < (content.count() as RegisterOffset) 'eachByte'
-		let byte = (try content.get((from + lane) as ElementIndex) otherwise panic("packedWord: byte {from + lane} of {content.count()} was bounds-checked by the loop")) as RegisterWord
+	while lane < WordBytes and from + (lane as RegisterOffset) < (content.count() as RegisterOffset) 'eachByte'
+		let byte = (try content.get((from + (lane as RegisterOffset)) as ElementIndex) otherwise panic("packedWord: byte {from + (lane as RegisterOffset)} of {content.count()} was bounds-checked by the loop")) as RegisterWord
 		let weight = (1 as RegisterWord) shl ((lane * BitsPerByte) as BitShift)
 
 		if lane + 1 == WordBytes and byte >= SignBearingByte 'theWordsSignByte'
@@ -109,7 +110,7 @@ module type ScratchPages
 	end 'heldBase'
 
 	module function word(offset ScratchOffset) returns RegisterWord
-		return __Builtins.profileReadWord(self.heldBase(offset), offset)
+		return __Builtins.profileReadWord(self.heldBase(offset), offset) as RegisterWord
 	end 'word'
 
 	module function setWord(offset ScratchOffset, value RegisterWord)
@@ -124,10 +125,10 @@ module type ScratchPages
 
 	module function bytesAt(offset ScratchOffset, count DebuggeeByteCount) returns ByteArray
 		var taken = ByteArray.create()
-		var index = 0
+		var index = 0 as DebuggeeByteCount
 
 		while index < count 'eachWord'
-			let lanes = wordToBytes(self.word((offset + index) as ScratchOffset))
+			let lanes = wordToBytes(self.word(offset + (index as ScratchOffset)))
 
 			for lane in 0 upto WordBytes 'eachByte'
 				if index + lane >= count 'pastTheCount'
@@ -144,10 +145,10 @@ module type ScratchPages
 	end 'bytesAt'
 
 	module function fill(offset ScratchOffset, content ByteArray)
-		var index = 0
+		var index = 0 as ElementIndex
 
 		while index < content.count() 'eachWord'
-			self.setWord((offset + index) as ScratchOffset, value: packedWord(content, from: index as RegisterOffset))
+			self.setWord(offset + (index as ScratchOffset), value: packedWord(content, from: index as RegisterOffset))
 			index = index + WordBytes
 		end 'eachWord'
 	end 'fill'
@@ -160,10 +161,10 @@ public type RegisterBlock
 
 	module static function readFrom(pages ScratchPages, at ScratchOffset, length ScratchBytes) returns RegisterBlock
 		var words = RegisterWordArray.create()
-		var index = 0
+		var index = 0 as ScratchBytes
 
 		while index < length 'eachWord'
-			words.push(pages.word((at + index) as ScratchOffset))
+			words.push(pages.word(at + (index as ScratchOffset)))
 			index = index + WordBytes
 		end 'eachWord'
 
@@ -308,19 +309,19 @@ function windowsDebugCall(verb WindowsDebugVerb, a0 RegisterWord, a1 RegisterWor
 		var answer = 0 as RegisterWord
 
 		match verb 'verb'
-			readMemory then answer = __Builtins.debugReadMemory(a0, a1, a2, a3, a4)
-			writeMemory then answer = __Builtins.debugWriteMemory(a0, a1, a2, a3, a4)
-			readContext then answer = __Builtins.debugReadContext(a0, a1)
-			writeContext then answer = __Builtins.debugWriteContext(a0, a1)
-			waitEvent then answer = __Builtins.debugWaitEvent(a0, a1)
-			continueEvent then answer = __Builtins.debugContinueEvent(a0, a1, a2)
-			breakProcess then answer = __Builtins.debugBreakProcess(a0)
-			detachProcess then answer = __Builtins.debugDetachProcess(a0)
-			protectRegion then answer = __Builtins.debugProtectRegion(a0, a1, a2, a3, a4)
-			flushCode then answer = __Builtins.debugFlushCode(a0, a1, a2)
-			closeHandle then answer = __Builtins.debugCloseHandle(a0)
-			suspendThread then answer = __Builtins.debugSuspendThread(a0)
-			resumeThread then answer = __Builtins.debugResumeThread(a0)
+			readMemory then answer = __Builtins.debugReadMemory(a0, a1, a2, a3, a4) as RegisterWord
+			writeMemory then answer = __Builtins.debugWriteMemory(a0, a1, a2, a3, a4) as RegisterWord
+			readContext then answer = __Builtins.debugReadContext(a0, a1) as RegisterWord
+			writeContext then answer = __Builtins.debugWriteContext(a0, a1) as RegisterWord
+			waitEvent then answer = __Builtins.debugWaitEvent(a0, a1) as RegisterWord
+			continueEvent then answer = __Builtins.debugContinueEvent(a0, a1, a2) as RegisterWord
+			breakProcess then answer = __Builtins.debugBreakProcess(a0) as RegisterWord
+			detachProcess then answer = __Builtins.debugDetachProcess(a0) as RegisterWord
+			protectRegion then answer = __Builtins.debugProtectRegion(a0, a1, a2, a3, a4) as RegisterWord
+			flushCode then answer = __Builtins.debugFlushCode(a0, a1, a2) as RegisterWord
+			closeHandle then answer = __Builtins.debugCloseHandle(a0) as RegisterWord
+			suspendThread then answer = __Builtins.debugSuspendThread(a0) as RegisterWord
+			resumeThread then answer = __Builtins.debugResumeThread(a0) as RegisterWord
 		end 'verb'
 
 		return answer
@@ -618,11 +619,11 @@ function traceHostCall(verb TraceHostVerb, a0 RegisterWord, a1 RegisterWord, a2 
 		var answer = 0 as RegisterWord
 
 		match verb 'verb'
-			request then answer = __Builtins.debugTraceRequest(a0, a1, a2, a3)
-			readTracee then answer = __Builtins.debugTraceeRead(a0, a1, a2, a3, a4)
-			awaitTracee then answer = __Builtins.debugAwaitTracee(a0, a1, a2)
-			signalThread then answer = __Builtins.debugThreadSignal(a0, a1, a2)
-			signalProcess then answer = __Builtins.debugProcessSignal(a0, a1)
+			request then answer = __Builtins.debugTraceRequest(a0, a1, a2, a3) as RegisterWord
+			readTracee then answer = __Builtins.debugTraceeRead(a0, a1, a2, a3, a4) as RegisterWord
+			awaitTracee then answer = __Builtins.debugAwaitTracee(a0, a1, a2) as RegisterWord
+			signalThread then answer = __Builtins.debugThreadSignal(a0, a1, a2) as RegisterWord
+			signalProcess then answer = __Builtins.debugProcessSignal(a0, a1) as RegisterWord
 		end 'verb'
 
 		return answer

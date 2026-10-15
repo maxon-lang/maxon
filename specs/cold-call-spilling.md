@@ -75,8 +75,8 @@ The shape the row was opened for: two arrays, four accesses and an accumulator i
 typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
-function rotateAll(current WordArray, count WordArray, n Word) returns Word
-	var t = 0
+function rotateAll(current WordArray, count WordArray, n Count) returns Word
+	var t = 0 as Word
 	for i in 1 upto n 'each'
 		let c = try count.get(i) otherwise panic("rotateAll: i < n <= count.count()")
 		try count.set(i, value: c + 1) otherwise panic("rotateAll: i < n <= count.count()")
@@ -118,11 +118,11 @@ typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
 function walk(a WordArray, n Word) returns Word
-	var t = 0
-	var w = 1
+	var t = 0 as Word
+	var w = 1 as Word
 	for i in 0 upto n 'each'
 		w = w * 3 + i
-		t = t + (try a.get(i) otherwise 99) + w
+		t = t + (try a.get(i as ElementIndex) otherwise 99) + w
 	end 'each'
 	return t
 end 'walk'
@@ -151,8 +151,8 @@ typealias Word = int(i64.min to i64.max)
 typealias Real = float(f64.min to f64.max)
 typealias WordArray = Array with Word
 
-function halves(a WordArray, n Word) returns Real
-	var f = 0.5
+function halves(a WordArray, n Count) returns Real
+	var f = 0.5 as Real
 	for i in 0 upto n 'each'
 		let v = try a.get(i) otherwise 8
 		f = f + (v as Real) * 0.5
@@ -182,9 +182,9 @@ same values live across both.
 typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
-function pairs(a WordArray, n Word) returns Word
-	var t = 0
-	var w = 2
+function pairs(a WordArray, n Count) returns Word
+	var t = 0 as Word
+	var w = 2 as Word
 	for i in 0 upto n 'each'
 		let first = try a.get(i) otherwise 100
 		let second = try a.get(i + 1) otherwise 1000
@@ -214,11 +214,10 @@ Control for the heat rule. A `set` over `String` elements takes its slow arm on 
 arm is the common path and is `normal`: its emitted code (`--emit-ir`) shows no save/reload bracket, and the values
 across it are confined. Every occupant is destroyed (no leak) and every new value is read back.
 ```maxon
-typealias Word = int(i64.min to i64.max)
 typealias Names = Array with String
 
-function relabel(a Names, n Word) returns Word
-	var bytes = 0
+function relabel(a Names, n Count) returns Count
+	var bytes = 0 as Count
 	for i in 0 upto n 'each'
 		try a.set(i, value: "name-{i}") otherwise panic("relabel: i < n = a.count()")
 		let s = try a.get(i) otherwise panic("relabel: i < n = a.count()")
@@ -258,8 +257,8 @@ function weigh(a WordArray, i Word) returns Word
 end 'weigh'
 
 function total(a WordArray, n Word) returns Word
-	var t = 0
-	var w = 5
+	var t = 0 as Word
+	var w = 5 as Word
 	for i in 0 upto n 'each'
 		w = w + i
 		t = t + weigh(a, i: i) + w
@@ -298,16 +297,16 @@ typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
 function viaArray(a WordArray, n Word) returns Word
-	var a0 = 1
-	var a1 = 2
-	var a2 = 3
-	var a3 = 4
-	var a4 = 5
-	var a5 = 6
-	var a6 = 7
-	var a7 = 8
-	var a8 = 9
-	var t = 0
+	var a0 = 1 as Word
+	var a1 = 2 as Word
+	var a2 = 3 as Word
+	var a3 = 4 as Word
+	var a4 = 5 as Word
+	var a5 = 6 as Word
+	var a6 = 7 as Word
+	var a7 = 8 as Word
+	var a8 = 9 as Word
+	var t = 0 as Word
 	for i in 0 upto n 'each'
 		a0 = a0 + i
 		a1 = a1 xor a0
@@ -318,23 +317,23 @@ function viaArray(a WordArray, n Word) returns Word
 		a6 = a6 + a5
 		a7 = a7 xor a6
 		a8 = a8 + a7
-		let e = try a.get(i) otherwise 99
+		let e = try a.get(i as ElementIndex) otherwise 99
 		t = t + e + a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8
 	end 'each'
 	return t
 end 'viaArray'
 
 function reference(n Word) returns Word
-	var a0 = 1
-	var a1 = 2
-	var a2 = 3
-	var a3 = 4
-	var a4 = 5
-	var a5 = 6
-	var a6 = 7
-	var a7 = 8
-	var a8 = 9
-	var t = 0
+	var a0 = 1 as Word
+	var a1 = 2 as Word
+	var a2 = 3 as Word
+	var a3 = 4 as Word
+	var a4 = 5 as Word
+	var a5 = 6 as Word
+	var a6 = 7 as Word
+	var a7 = 8 as Word
+	var a8 = 9 as Word
+	var t = 0 as Word
 	for i in 0 upto n 'each'
 		a0 = a0 + i
 		a1 = a1 xor a0
@@ -375,17 +374,17 @@ typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
 function viaArray(a WordArray, n Word) returns Word
-	var a0 = 1
-	var a1 = 2
-	var a2 = 3
-	var a3 = 4
-	var a4 = 5
-	var a5 = 6
-	var a6 = 7
-	var a7 = 8
-	var a8 = 9
-	var a9 = 10
-	var t = 0
+	var a0 = 1 as Word
+	var a1 = 2 as Word
+	var a2 = 3 as Word
+	var a3 = 4 as Word
+	var a4 = 5 as Word
+	var a5 = 6 as Word
+	var a6 = 7 as Word
+	var a7 = 8 as Word
+	var a8 = 9 as Word
+	var a9 = 10 as Word
+	var t = 0 as Word
 	for i in 0 upto n 'each'
 		a0 = a0 + i
 		a1 = a1 xor a0
@@ -397,24 +396,24 @@ function viaArray(a WordArray, n Word) returns Word
 		a7 = a7 xor a6
 		a8 = a8 + a7
 		a9 = a9 xor a8
-		let e = try a.get(i) otherwise 99
+		let e = try a.get(i as ElementIndex) otherwise 99
 		t = t + e + a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9
 	end 'each'
 	return t
 end 'viaArray'
 
 function reference(n Word) returns Word
-	var a0 = 1
-	var a1 = 2
-	var a2 = 3
-	var a3 = 4
-	var a4 = 5
-	var a5 = 6
-	var a6 = 7
-	var a7 = 8
-	var a8 = 9
-	var a9 = 10
-	var t = 0
+	var a0 = 1 as Word
+	var a1 = 2 as Word
+	var a2 = 3 as Word
+	var a3 = 4 as Word
+	var a4 = 5 as Word
+	var a5 = 6 as Word
+	var a6 = 7 as Word
+	var a7 = 8 as Word
+	var a8 = 9 as Word
+	var a9 = 10 as Word
+	var t = 0 as Word
 	for i in 0 upto n 'each'
 		a0 = a0 + i
 		a1 = a1 xor a0
@@ -456,16 +455,16 @@ typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
 function viaArray(a WordArray, n Word) returns Word
-	var a0 = 1
-	var a1 = 2
-	var a2 = 3
-	var a3 = 4
-	var a4 = 5
-	var a5 = 6
-	var a6 = 7
-	var a7 = 8
-	var a8 = 9
-	var t = 0
+	var a0 = 1 as Word
+	var a1 = 2 as Word
+	var a2 = 3 as Word
+	var a3 = 4 as Word
+	var a4 = 5 as Word
+	var a5 = 6 as Word
+	var a6 = 7 as Word
+	var a7 = 8 as Word
+	var a8 = 9 as Word
+	var t = 0 as Word
 	for i in 0 upto n 'each'
 		let z = 1 if i < 6 else 0
 		a0 = (a0 + i) * z
@@ -477,23 +476,23 @@ function viaArray(a WordArray, n Word) returns Word
 		a6 = (a6 + a5) * z
 		a7 = (a7 xor a6) * z
 		a8 = (a8 + a7) * z
-		let e = try a.get(i) otherwise 99
+		let e = try a.get(i as ElementIndex) otherwise 99
 		t = t + e + a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8
 	end 'each'
 	return t
 end 'viaArray'
 
 function reference(n Word) returns Word
-	var a0 = 1
-	var a1 = 2
-	var a2 = 3
-	var a3 = 4
-	var a4 = 5
-	var a5 = 6
-	var a6 = 7
-	var a7 = 8
-	var a8 = 9
-	var t = 0
+	var a0 = 1 as Word
+	var a1 = 2 as Word
+	var a2 = 3 as Word
+	var a3 = 4 as Word
+	var a4 = 5 as Word
+	var a5 = 6 as Word
+	var a6 = 7 as Word
+	var a7 = 8 as Word
+	var a8 = 9 as Word
+	var t = 0 as Word
 	for i in 0 upto n 'each'
 		let z = 1 if i < 6 else 0
 		a0 = (a0 + i) * z
@@ -537,8 +536,8 @@ typealias Word = int(i64.min to i64.max)
 typealias Real = float(f64.min to f64.max)
 typealias WordArray = Array with Word
 
-function walk(a WordArray, n Word, f Real) returns Word
-	var t = 0
+function walk(a WordArray, n Count, f Real) returns Word
+	var t = 0 as Word
 	for i in 0 upto n 'each'
 		let v = try a.get(i) otherwise panic("index {i} is past the end; scale was {-f}")
 		t = t + v

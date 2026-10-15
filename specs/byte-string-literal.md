@@ -151,7 +151,7 @@ end 'main'
 <!-- test: byte-string-literal.top-level-map -->
 
 ```maxon
-var m = [b"hello": 1, b"world": 2]
+var m = [b"hello": 1 as Count, b"world": 2 as Count]
 
 function main() returns ExitCode
 		let v1 = try m.get(b"hello") otherwise 0
@@ -551,8 +551,8 @@ function detachAndRead(n Integer) returns Integer
 end 'detachAndRead'
 
 function main() returns ExitCode
-		var total = 0
-		var i = 0
+		var total = 0 as Integer
+		var i = 0 as Integer
 		while i < 5 'round'
 				total = total + detachAndRead(i)
 				i = i + 1
@@ -576,12 +576,12 @@ the sentinel and its drop must still skip the buffer free. `__mm_free` on a `.rd
 never allocated corrupts the allocator; three rounds make it loud.
 ```maxon
 function main() returns ExitCode
-		var total = 0
-		var i = 0
+		var total = 0 as Count
+		var i = 0 as Count
 		while i < 3 'round'
 				var a = b"hi"
 				let v = try a.get(0) otherwise 0
-				total = total + v
+				total = total + (v as Count)
 				i = i + 1
 		end 'round'
 		print("{total}")

@@ -293,7 +293,7 @@ enum Color
 end 'Color'
 
 function main() returns ExitCode
-	var x = 0
+	var x = 0 as ExitCode
 	let c = Color.blue
 	match c 'check'
 		red then x = 1

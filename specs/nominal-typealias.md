@@ -43,7 +43,7 @@ value fits an unnamed slot. Two DIFFERENT names conflict unless one `implements`
 **Subtypes.** `typealias BlockId = int(0 to u64.max) implements ElementIndex` makes `BlockId` a subtype
 of `ElementIndex`: a `BlockId` goes wherever an `ElementIndex` (or any alias `ElementIndex` implements)
 is declared, with no cast. The relation is one way — an `ElementIndex` needs a cast to become a
-`BlockId`, and a cast to an ancestor is E3010 — and two subtypes of one parent are still two types. The
+`BlockId`, and a cast to an ancestor retypes the value as the ancestor — and two subtypes of one parent are still two types. The
 subtype's range must fit its parent's over the same primitive and signedness (E3178), a chain that comes
 back to itself is E3091, and a parent that is not a ranged typealias is E2003.
 
@@ -55,9 +55,10 @@ the destination's type, and elsewhere it is the nearest alias both implement —
 names. Two aliases with no common ancestor are an error; the same rule governs comparisons,
 `min`/`max` and unary minus. The `match` and ternary arms of two subtypes join to their nearest common
 ancestor the same way. A shift adopts its LEFT operand only, so `n shl w` is `n`'s type whatever
-`w` is. Negation adopts a SIGNED alias's identity; negating an UNSIGNED alias yields an unnamed value,
-because the result is outside the alias's own range — `-x` for an unsigned `x` renders as a signed
-number.
+`w` is. Negation, complement, `or` and `xor` adopt an alias's identity only where the alias is closed under
+the operator: a symmetric signed alias, or a full-width unsigned one that wraps modulo 2^64. Over any other
+alias the result is an unnamed signed value, because it is outside the alias's own range — `-x` for an
+`int(0 to 100)` `x` renders as a signed number.
 
 An arithmetic result carries its alias as a NAME, not as a PROOF: `a + a2` over `Score` is `Score`-typed
 but may lie outside `Score`'s range, so every range guard on it still fires.
@@ -210,22 +211,30 @@ end 'main'
 error E3010: <fragment>:8:22: unneeded cast: 'Count' already fits in 'Count'
 ```
 
-<!-- test: error.array-count-cast-to-element-index-is-an-ancestor-cast -->
-`Count` implements `ElementIndex`, so a cast to its ancestor is unneeded.
+<!-- test: array-count-cast-to-element-index-is-an-ancestor-cast -->
+`Count` implements `ElementIndex`, so a cast to its ancestor is never unneeded: it RETYPES the value.
+`n` below holds `ElementIndex`, so a rebind from an `ElementIndex` result is accepted, where a `var`
+holding `Count` would refuse it with E3005.
 ```maxon
 typealias Narrow = int(0 to 1000)
 typealias NarrowArray = Array with Narrow
 
+function firstIndex() returns ElementIndex
+	return 0
+end 'firstIndex'
+
 function main() returns ExitCode
 	var arr = NarrowArray.create()
 	arr.push(4)
-	let n = arr.count() as ElementIndex
+	var n = arr.count() as ElementIndex
 	print("{n}")
+	n = firstIndex()
+	print("{n}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3010: <fragment>:8:22: unneeded cast: 'Count' already fits in 'ElementIndex'
+```stdout
+10
 ```
 
 <!-- test: every-collection-count-is-a-count -->
@@ -1460,11 +1469,10 @@ end 'main'
 error E3005: <fragment>:17:17: argument type mismatch for 'v': expected 'Integer', got 'Narrow'
 ```
 
-<!-- test: error.a-user-struct-sharing-a-stdlib-alias-name-is-still-a-record -->
-`stdlib/Builtins.maxon` declares `public typealias ParsedInt`, and a user `type ParsedInt` stands beside it
-(`stdlib-user-shadows.md`). The struct's identity is the bare name and the alias's is a compiler mint, so
-the struct does not decay: an `int` at a `Box with ParsedInt`'s `T` is refused rather than stored in the
-box and freed as a record.
+<!-- test: error.a-user-struct-named-parsedint-is-still-a-record -->
+`stdlib/Builtins.maxon` declares its full-range alias as `FullRangeInt`, so the user `type ParsedInt` is the
+only declaration of its name. The struct's identity is the bare name, so it does not decay: an `int` at a
+`Box with ParsedInt`'s `T` is refused rather than stored in the box and freed as a record.
 ```maxon
 type ParsedInt
 	export var s as String
@@ -1720,7 +1728,7 @@ end 'takesWide'
 function main() returns ExitCode
 	var col = NarrowCol.create()
 	col.push(4)
-	var acc = 0
+	var acc = 0 as Wide
 	for x in col 'each'
 		acc = acc + takesWide(x)
 	end 'each'
@@ -1760,7 +1768,7 @@ end 'main'
 ```
 
 <!-- test: an-unnamed-operand-adopts-the-named-one -->
-A literal, a counted-loop counter and a bare `var` are all unnamed, and each adopts `Age` beside an `Age`
+A literal, a counted-loop counter and a plain `let` constant are all unnamed, and each adopts `Age` beside an `Age`
 — on either side of the operator.
 ```maxon
 typealias Age = int(0 to 150)
@@ -1771,8 +1779,7 @@ end 'takesAge'
 
 function main() returns ExitCode
 	let a = 30 as Age
-	var bare = 10
-	bare = bare + 1
+	let bare = 11
 	var acc = 0 as Age
 	for i in 0 upto 3 'count'
 		acc = acc + takesAge(a + i)
@@ -1841,9 +1848,9 @@ end 'main'
 121
 ```
 
-<!-- test: a-named-value-decays-into-an-unnamed-slot -->
-A `var` initialised from a literal has no alias, and an `Age` may be stored into it. What the binding then
-holds is its own unnamed value: `acc` reaches a `Year` slot, where `a` itself could not.
+<!-- test: error.a-named-value-is-refused-by-the-vars-own-alias -->
+Every `var` names its alias, so no binding is an unnamed slot a named value can decay into: an `Age`
+stored into a `Year` var is refused at the store, as it is at a `Year` parameter.
 ```maxon
 typealias Age = int(0 to 150)
 typealias Year = int(0 to 3000)
@@ -1854,19 +1861,15 @@ end 'takesYear'
 
 function main() returns ExitCode
 	let a = 30 as Age
-	var acc = 0
+	var acc = 0 as Year
 	acc = a
-	let doubled = acc * 2
 	let y = takesYear(acc)
-	print("{acc} {doubled} {y}")
+	print("{acc} {y}")
 	return 0
 end 'main'
 ```
-```exitcode
-0
-```
-```stdout
-30 60 30
+```maxoncstderr
+error E3005: <fragment>:12:2: cannot assign a value of type 'Age' to variable 'acc', which holds 'Year'
 ```
 
 <!-- test: a-payload-free-enum-decays-into-an-alias-slot -->
@@ -1921,9 +1924,9 @@ end 'main'
 12
 ```
 
-<!-- test: negating-an-unsigned-alias-yields-an-unnamed-value -->
-`-d` over the signed `Delta` is a `Delta`; `-c` over the unsigned `Count` is unnamed — its value cannot
-be a `Count` — and so decays into the `Delta` slot beside it.
+<!-- test: negating-an-unsigned-alias-keeps-the-alias -->
+`-d` over the signed `Delta` is a `Delta`; `-c` over the unsigned `Count` is still named `Count` although its
+value cannot be one, so it reaches the `Delta` slot beside it only through a cast.
 ```maxon
 typealias Delta = int(-100 to 100)
 typealias Count = int(0 to u64.max)
@@ -1935,7 +1938,7 @@ end 'takesDelta'
 function main() returns ExitCode
 	let d = 5 as Delta
 	let c = 7 as Count
-	print("{takesDelta(-d)} {takesDelta(-c)}")
+	print("{takesDelta(-d)} {takesDelta((-c) as Delta)}")
 	return 0
 end 'main'
 ```

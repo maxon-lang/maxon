@@ -1,0 +1,37 @@
+let CaseDirName = "declaration-limit-backing"
+let Refusal = "more than 65536 backing entries"
+
+test 'an enum case whose struct backing writes more than 65,536 entries is refused'
+	try requireDeclarationRefused(CaseDirName, source: backingEntriesSource(), refusal: Refusal)
+end 'an enum case whose struct backing writes more than 65,536 entries is refused'
+
+let BackingInnerFieldCount = 40000
+
+function backingEntriesSource() returns String
+	var text = "{DeclarationPrelude}type Inner\n"
+
+	for i in 0 upto BackingInnerFieldCount 'eachInnerField'
+		text.append("\texport let a{i} as Count\n")
+	end 'eachInnerField'
+
+	text.append("end 'Inner'\n\ntype Meta\n\texport let x as Inner\n\texport let y as Inner\nend 'Meta'\n\nenum Big\n\tone = Meta\{x: ")
+	appendBackingInnerLiteral(text)
+	text.append(", y: ")
+	appendBackingInnerLiteral(text)
+	text.append("}\nend 'Big'\n\n{DeclarationMain}")
+	return text
+end 'backingEntriesSource'
+
+function appendBackingInnerLiteral(text String)
+	text.append("Inner\{")
+
+	for i in 0 upto BackingInnerFieldCount 'eachInnerValue'
+		if i > 0 'separator'
+			text.append(", ")
+		end 'separator'
+
+		text.append("a{i}: 0")
+	end 'eachInnerValue'
+
+	text.append("}")
+end 'appendBackingInnerLiteral'

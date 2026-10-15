@@ -365,6 +365,7 @@ module function resolveTypes(project Project, module MaxonModule)
 	end 'eachFunc'
 
 	checkStructFieldTypes(project, signatures: signatures)
+	checkEnumPayloadTypes(project, signatures: signatures)
 	project.functionAliasShapes = functionAliasShapesIn(project, signatures: signatures, form: FunctionAliasShapeForm.resolved)
 end 'resolveTypes'
 
@@ -623,13 +624,97 @@ end 'functionTypeRegistryOf'
 // depends on, because a call site derives its argument register files, its argument count and its result
 // register from the type it was DECLARED with and gets whatever the callee actually is.
 //
-// It is deliberately NOT `typesAgree`, and the difference is the whole rule: `typesAgree` puts `int` and
-// `float` in one class (`5 + 2.0` must compile), so it would accept `fn(Real) returns Integer` standing in
-// for `fn(Real) returns Real` — the very silent wrong answer this exists to close. A value merge
-// asks it too, of parse-time shapes; FunctionShape states why a door and a merge get different rules.
+// It is deliberately NOT `typesAgree`, and the difference is the whole rule: `typesAgree` puts
+// `int` and `float` in one class (`5 + 2.0` must compile), so it would accept
+// `fn(FullRangeFloat) returns FullRangeInt` standing in for
+// `fn(FullRangeFloat) returns FullRangeFloat` — the very silent wrong answer this exists to
+// close. A value merge asks it too, of parse-time shapes; FunctionShape states why a door and a
+// merge get different rules.
 export function functionShapesAgree(registry FunctionTypeRegistry, signatures ProgramSignatures, declared FunctionShape, got FunctionShape, readerFilePath FilePath) returns bool
 	return shapesAgreeUnder(registry, signatures: signatures, declared: declared, got: got, pending: sharedEmptyFunctionTypePairs, readerFilePath: readerFilePath)
 end 'functionShapesAgree'
+
+let MaxNestedFunctionTypeDepth = 8 as ElementIndex
+
+function typeMentionsATypeParameter(registry FunctionTypeRegistry, signatures ProgramSignatures, t MaxonType) returns bool
+	return typeMentionsATypeParameterWithin(registry, signatures: signatures, t: t, depth: 0)
+end 'typeMentionsATypeParameter'
+
+export function functionShapeMentionsATypeParameter(registry FunctionTypeRegistry, signatures ProgramSignatures, shape FunctionShape) returns bool
+	return shapeMentionsATypeParameterWithin(registry, signatures: signatures, shape: shape, depth: 0)
+end 'functionShapeMentionsATypeParameter'
+
+function shapeMentionsATypeParameterWithin(registry FunctionTypeRegistry, signatures ProgramSignatures, shape FunctionShape, depth ElementIndex) returns bool
+	for paramType in shape.paramTypes 'eachParam'
+		if typeMentionsATypeParameterWithin(registry, signatures: signatures, t: paramType, depth: depth) 'aMention'
+			return true
+		end 'aMention'
+	end 'eachParam'
+
+	return match shape.returnType 'returned'
+		void gives false
+		value(inner) gives typeMentionsATypeParameterWithin(registry, signatures: signatures, t: inner, depth: depth)
+	end 'returned'
+end 'shapeMentionsATypeParameterWithin'
+
+function typeMentionsATypeParameterWithin(registry FunctionTypeRegistry, signatures ProgramSignatures, t MaxonType, depth ElementIndex) returns bool
+	let tag = maxonTypeTag(t)
+
+	if tag == ValueTypeTag.typeParameter 'theParameterItself'
+		return true
+	end 'theParameterItself'
+
+	if tag == ValueTypeTag.genericInstance 'aGenericInstance'
+		return signatures.instanceIsBuiltOnATypeParameter(genericInstanceIdOf(t))
+	end 'aGenericInstance'
+
+	if tag != ValueTypeTag.function 'notANestedFunctionType'
+		return false
+	end 'notANestedFunctionType'
+
+	if depth >= MaxNestedFunctionTypeDepth 'tooDeepToTell'
+		return true
+	end 'tooDeepToTell'
+
+	return match declaredFunctionShapeOf(registry, name: functionTypeNameOf(registry, nameId: typeNameIdOf(t))) 'nested'
+		declared(nestedShape) gives shapeMentionsATypeParameterWithin(registry, signatures: signatures, shape: nestedShape, depth: depth + 1)
+		undeclared gives false
+	end 'nested'
+end 'typeMentionsATypeParameterWithin'
+
+export function functionShapesAgreeUnderSomeInstantiation(registry FunctionTypeRegistry, signatures ProgramSignatures, declared FunctionShape, got FunctionShape, readerFilePath FilePath) returns bool
+	if not functionShapeMentionsATypeParameter(registry, signatures: signatures, shape: declared) 'nothingToSubstitute'
+		return functionShapesAgree(registry, signatures: signatures, declared: declared, got: got, readerFilePath: readerFilePath)
+	end 'nothingToSubstitute'
+
+	if declared.paramTypes.count() != got.paramTypes.count() 'arity'
+		return false
+	end 'arity'
+
+	for i in 0 upto declared.paramTypes.count() 'eachParam'
+		let declaredParam = try declared.paramTypes.get(i) otherwise panic("functionShapesAgreeUnderSomeInstantiation: declared.paramTypes.get OOB at {i} — the count was just read from the same array")
+		let gotParam = try got.paramTypes.get(i) otherwise panic("functionShapesAgreeUnderSomeInstantiation: got.paramTypes.get OOB at {i} — the arity check above proved the two counts equal")
+
+		if not positionAgreesUnderSomeInstantiation(registry, signatures: signatures, declaredType: declaredParam, gotType: gotParam, declaredIdentity: shapeParamIdentity(declared, index: i as ParamCount), gotIdentity: shapeParamIdentity(got, index: i as ParamCount), readerFilePath: readerFilePath) 'paramMismatch'
+			return false
+		end 'paramMismatch'
+	end 'eachParam'
+
+	return match declared.returnType 'declaredSlot'
+		void gives isVoidReturnType(got.returnType)
+		value(declaredValue) gives not isVoidReturnType(got.returnType) and positionAgreesUnderSomeInstantiation(registry, signatures: signatures, declaredType: declaredValue, gotType: returnedValueType(got.returnType), declaredIdentity: declared.returnAggregateName, gotIdentity: got.returnAggregateName, readerFilePath: readerFilePath)
+	end 'declaredSlot'
+end 'functionShapesAgreeUnderSomeInstantiation'
+
+function positionAgreesUnderSomeInstantiation(registry FunctionTypeRegistry, signatures ProgramSignatures, declaredType MaxonType, gotType MaxonType, declaredIdentity ByteArray, gotIdentity ByteArray, readerFilePath FilePath) returns bool
+	let declaredIsOpen = typeMentionsATypeParameter(registry, signatures: signatures, t: declaredType)
+
+	if declaredIsOpen or typeMentionsATypeParameter(registry, signatures: signatures, t: gotType) 'aWildcardPosition'
+		return maxonTypeTag(declaredType) == ValueTypeTag.typeParameter or maxonTypeTag(gotType) == ValueTypeTag.typeParameter or maxonTypeTag(declaredType) == maxonTypeTag(gotType)
+	end 'aWildcardPosition'
+
+	return resolvedTypesMatch(registry, signatures: signatures, declared: declaredType, got: gotType, pending: sharedEmptyFunctionTypePairs, readerFilePath: readerFilePath) and not signatures.identitiesConflict(declaredIdentity, got: gotIdentity, readerFilePath: readerFilePath)
+end 'positionAgreesUnderSomeInstantiation'
 
 // The rule proper, carrying the pairs of function-type names already under comparison further down the
 // same descent (see `FunctionTypePair`). Split from the entry point above only so the cycle guard is one
@@ -666,7 +751,7 @@ function shapesAgreeUnder(registry FunctionTypeRegistry, signatures ProgramSigna
 		// `function(Integer)` reaching a `function(Color)` place would have the callee read an ordinal as a
 		// number, or a number as an ordinal. `identitiesConflict` is the same rule every coercion site asks,
 		// so a ranged alias — a scalar wearing a name — decays here exactly as it does there.
-		if signatures.identitiesConflict(shapeParamIdentity(declared, index: i), got: shapeParamIdentity(got, index: i), readerFilePath: readerFilePath) 'paramIdentityMismatch'
+		if signatures.identitiesConflict(shapeParamIdentity(declared, index: i as ParamCount), got: shapeParamIdentity(got, index: i as ParamCount), readerFilePath: readerFilePath) 'paramIdentityMismatch'
 			return false
 		end 'paramIdentityMismatch'
 	end 'eachParam'
@@ -691,12 +776,12 @@ export function formatFunctionShapeDisplay(shape FunctionShape, typeNames TypeNa
 	var unerasedParams = MaxonTypeArray.create()
 
 	for i in 0 upto shape.paramTypes.count() 'eachParam'
-		unerasedParams.push(unerasedType(try shape.paramTypes.get(i) otherwise panic("formatFunctionShapeDisplay: paramTypes.get OOB at {i} — the count was just read from the same array"), identity: shapeParamIdentity(shape, index: i), typeNames: typeNames, signatures: signatures))
+		unerasedParams.push(unerasedType(try shape.paramTypes.get(i) otherwise panic("formatFunctionShapeDisplay: paramTypes.get OOB at {i} — the count was just read from the same array"), identity: shapeParamIdentity(shape, index: i as ParamCount), typeNames: typeNames))
 	end 'eachParam'
 
 	let unerasedReturn = match shape.returnType 'r'
 		void gives MaxonReturnType.void
-		value(inner) gives MaxonReturnType.value(unerasedType(inner, identity: shape.returnAggregateName, typeNames: typeNames, signatures: signatures))
+		value(inner) gives MaxonReturnType.value(unerasedType(inner, identity: shape.returnAggregateName, typeNames: typeNames))
 	end 'r'
 
 	return formatFnTypeDisplay(unerasedParams, returnType: unerasedReturn, typeNames: typeNames, signatures: signatures)
@@ -712,8 +797,8 @@ end 'formatFunctionShapeDisplay'
 // A shape caption spells a slot by its CLASS WORD — `fn(int) returns int` — so a ranged alias's identity
 // (`Integer`) is not un-erased here: only a declared aggregate's is, because `int` would be a wrong
 // caption for a `Color` and the identity is the only thing that still says so.
-function unerasedType(t MaxonType, identity ByteArray, typeNames TypeNameInterner, signatures ProgramSignatures) returns MaxonType
-	if identity.isEmpty() or signatures.isRangedAliasIdentity(identity) 'survivedResolution'
+function unerasedType(t MaxonType, identity ByteArray, typeNames TypeNameInterner) returns MaxonType
+	if identity.isEmpty() 'survivedResolution'
 		return t
 	end 'survivedResolution'
 
@@ -912,8 +997,8 @@ function pendingWithPair(pending FunctionTypePairArray, declaredName ByteArray, 
 	return extended
 end 'pendingWithPair'
 
-// ⭐ **THE THIRD DECLARATION SITE.** A program names a type in exactly three places — a PARAMETER,
-// a RETURN type, and a FIELD. Without this walk a field declared `as Nonexistent` reaches no check at
+// ⭐ **THE FIELD DECLARATION SITE.** A program names a type in a PARAMETER, a RETURN type, a FIELD and
+// an enum case's PAYLOAD (`checkEnumPayloadTypes`). Without this walk a field declared `as Nonexistent` reaches no check at
 // all, and `Parser.fieldStorageType`'s recovery value becomes the FINAL answer: the program compiles
 // clean and the field silently types itself `i64`. A wrong answer, not a crash.
 //
@@ -948,11 +1033,35 @@ function checkStructFieldTypes(project Project, signatures ProgramSignatures)
 	end 'eachDeclaredStruct'
 
 	for layout in layouts 'eachStruct'
-		for fieldType in layout.fieldTypes 'eachField'
-			_ = resolveType(project, signatures: signatures, t: fieldType, readerFilePath: layout.declFilePath)
-		end 'eachField'
+		requireDeclaredTypesResolve(project, signatures: signatures, declared: layout.fieldTypes, readerFilePath: layout.declFilePath)
 	end 'eachStruct'
 end 'checkStructFieldTypes'
+
+function requireDeclaredTypesResolve(project Project, signatures ProgramSignatures, declared MaxonTypeArray, readerFilePath FilePath)
+	for t in declared 'eachDeclared'
+		_ = resolveType(project, signatures: signatures, t: t, readerFilePath: readerFilePath)
+	end 'eachDeclared'
+end 'requireDeclaredTypesResolve'
+
+function checkEnumPayloadTypes(project Project, signatures ProgramSignatures)
+	var layouts = EnumLayoutArray.create()
+
+	for (_, layout) in project.enumTypes 'eachDeclaredEnum'
+		layouts.push(layout)
+	end 'eachDeclaredEnum'
+
+	for layout in layouts 'eachEnum'
+		var declared = MaxonTypeArray.create()
+
+		for payloads in layout.casePayloads 'eachCase'
+			for payload in payloads 'eachPayload'
+				declared.push(payload.declaredType)
+			end 'eachPayload'
+		end 'eachCase'
+
+		requireDeclaredTypesResolve(project, signatures: signatures, declared: declared, readerFilePath: layout.declFilePath)
+	end 'eachEnum'
+end 'checkEnumPayloadTypes'
 
 // Re-sync a function's `funcSignatures` entry with its now-resolved param types.
 // The parser recorded the signature with the SAME raw param types it put on
@@ -975,7 +1084,7 @@ function syncResolvedSignature(project Project, func IrFunction)
 	end 'noSig'
 
 	let sig = try project.funcSignatures.get(func.name) otherwise panic("syncResolvedSignature: contains({String.from(func.name)}) true but get failed")
-	project.funcSignatures.upsert(func.name, value: FuncSignature.create(sig.paramNames, paramTypes: sourceParamTypesOf(func, declaredCount: sig.paramNames.count() as ParamCount), paramAggregateNames: sig.paramAggregateNames, paramDeclaredNames: sig.paramDeclaredNames, returnAggregateName: sig.returnAggregateName, paramExistentialSites: sig.paramExistentialSites, returnExistentialSites: sig.returnExistentialSites, extensionConstraints: sig.extensionConstraints, writtenTypeNames: sig.writtenTypeNames))
+	project.funcSignatures.upsert(func.name, value: FuncSignature.create(sig.paramNames, paramTypes: sourceParamTypesOf(func, declaredCount: sig.paramNames.count() as ParamCount), paramAggregateNames: sig.paramAggregateNames, paramDeclaredNames: sig.paramDeclaredNames, returnAggregateName: sig.returnAggregateName, paramExistentialSites: sig.paramExistentialSites, returnExistentialSites: sig.returnExistentialSites, extensionConstraints: sig.extensionConstraints, writtenTypeNames: sig.writtenTypeNames, selfSpelledParams: sig.selfSpelledParams))
 end 'syncResolvedSignature'
 
 // ⭐ **THE FUNCTION'S SOURCE PARAMETER TYPES — WHICH IS NOT ALWAYS ALL OF `maxonParamTypes`.** A LIFTED
@@ -1241,7 +1350,7 @@ end 'isCompilerOwnedTypeName'
 // may now stand at once when neither can see the other (`typeNamePairMayCoexist`), and at that point the
 // three NOMINAL arms below and the alias arms beneath them are BOTH right — for different files. Without
 // the reader, the arm ORDER decided it for the whole program: MEASURED, `stdlib/Builtins.maxon`'s own
-// `i64.min as ParsedInt` resolved to a USER program's `type ParsedInt` and the E3009 named a library line
+// `i64.min as FullRangeInt` resolved to a USER program's `type FullRangeInt` and the E3009 named a library line
 // the author never opened. The reader for a stored DECLARATION's type is its DECLARING file, never the
 // caller's — see `resolveNamedType`, which is where each of the three is obtained.
 export function denotedNamedType(signatures ProgramSignatures, name ByteArray, id TypeNameId, readerFilePath FilePath) returns MaxonType throws UnknownTypeName

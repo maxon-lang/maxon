@@ -1,0 +1,111 @@
+let FloatExponentShift = 52
+let FloatExponentFieldMask = 0x7FF
+let FloatNonFiniteExponent = 0x7FF
+let FloatPositiveZeroBits = 0
+
+module function floatBitsAreFinite(bits FullRangeInt) returns bool
+	return ((bits shr FloatExponentShift) and FloatExponentFieldMask) != FloatNonFiniteExponent
+end 'floatBitsAreFinite'
+
+module function floatBitsMinimum(a FullRangeInt, b FullRangeInt) returns FullRangeInt
+	return a if floatOrderKey(a) <= floatOrderKey(b) else b
+end 'floatBitsMinimum'
+
+module function floatBitsMaximum(a FullRangeInt, b FullRangeInt) returns FullRangeInt
+	return a if floatOrderKey(a) >= floatOrderKey(b) else b
+end 'floatBitsMaximum'
+
+function floatRangeBetween(low FullRangeInt, high FullRangeInt) returns ProvenFloatRange throws AbsentError
+	if not floatBitsAreFinite(low) or not floatBitsAreFinite(high) or floatOrderKey(low) > floatOrderKey(high) 'notAFiniteInterval'
+		throw AbsentError.absent
+	end 'notAFiniteInterval'
+
+	return ProvenFloatRange.create(low, high: high)
+end 'floatRangeBetween'
+
+module function floatRangeOfPoint(bits FullRangeInt) returns ProvenFloatRange throws AbsentError
+	return try floatRangeBetween(bits, high: bits)
+end 'floatRangeOfPoint'
+
+module function floatRangeHull(a ProvenFloatRange, b ProvenFloatRange) returns ProvenFloatRange throws AbsentError
+	return try floatRangeBetween(floatBitsMinimum(a.low, b: b.low), high: floatBitsMaximum(a.high, b: b.high))
+end 'floatRangeHull'
+
+module function floatRangeOfIntegers(low FullRangeInt, high FullRangeInt) returns ProvenFloatRange throws AbsentError
+	return try floatRangeBetween(foldSiToFp(low), high: foldSiToFp(high))
+end 'floatRangeOfIntegers'
+
+function foldedFloatBits(fold FoldedInt) returns FullRangeInt throws AbsentError
+	return match fold 'fold'
+		folded(bits) gives bits
+		notFoldable throws AbsentError.absent
+	end 'fold'
+end 'foldedFloatBits'
+
+function floatRangeOfCorners(op MaxonBinOp, left ProvenFloatRange, right ProvenFloatRange) returns ProvenFloatRange throws AbsentError
+	let lowLow = try foldedFloatBits(foldFloatBinOp(op, lhs: left.low, rhs: right.low))
+	let lowHigh = try foldedFloatBits(foldFloatBinOp(op, lhs: left.low, rhs: right.high))
+	let highLow = try foldedFloatBits(foldFloatBinOp(op, lhs: left.high, rhs: right.low))
+	let highHigh = try foldedFloatBits(foldFloatBinOp(op, lhs: left.high, rhs: right.high))
+
+	return try floatRangeBetween(floatBitsMinimum(floatBitsMinimum(lowLow, b: lowHigh), b: floatBitsMinimum(highLow, b: highHigh)), high: floatBitsMaximum(floatBitsMaximum(lowLow, b: lowHigh), b: floatBitsMaximum(highLow, b: highHigh)))
+end 'floatRangeOfCorners'
+
+function floatRangeOfQuotient(left ProvenFloatRange, right ProvenFloatRange) returns ProvenFloatRange throws AbsentError
+	if floatOrderKey(right.low) <= 0 and floatOrderKey(right.high) >= 0 'theDivisorMayBeZero'
+		throw AbsentError.absent
+	end 'theDivisorMayBeZero'
+
+	return try floatRangeOfCorners(MaxonBinOp.div, left: left, right: right)
+end 'floatRangeOfQuotient'
+
+module function floatRangeOfBinOp(op MaxonBinOp, left ProvenFloatRange, right ProvenFloatRange) returns ProvenFloatRange throws AbsentError
+	return match op 'operator'
+		add gives try floatRangeBetween(try foldedFloatBits(foldFloatBinOp(op, lhs: left.low, rhs: right.low)), high: try foldedFloatBits(foldFloatBinOp(op, lhs: left.high, rhs: right.high)))
+		sub gives try floatRangeBetween(try foldedFloatBits(foldFloatBinOp(op, lhs: left.low, rhs: right.high)), high: try foldedFloatBits(foldFloatBinOp(op, lhs: left.high, rhs: right.low)))
+		mul gives try floatRangeOfCorners(op, left: left, right: right)
+		div gives try floatRangeOfQuotient(left, right: right)
+		min gives try floatRangeBetween(floatBitsMinimum(left.low, b: right.low), high: floatBitsMinimum(left.high, b: right.high))
+		max gives try floatRangeBetween(floatBitsMaximum(left.low, b: right.low), high: floatBitsMaximum(left.high, b: right.high))
+		default throws AbsentError.absent
+	end 'operator'
+end 'floatRangeOfBinOp'
+
+function floatRangeOfMonotoneOp(op MaxonUnaryOp, operand ProvenFloatRange) returns ProvenFloatRange throws AbsentError
+	return try floatRangeBetween(try foldedFloatBits(foldFloatUnaryOp(op, operand: operand.low)), high: try foldedFloatBits(foldFloatUnaryOp(op, operand: operand.high)))
+end 'floatRangeOfMonotoneOp'
+
+function floatRangeOfRoot(operand ProvenFloatRange) returns ProvenFloatRange throws AbsentError
+	if floatOrderKey(operand.low) < 0 'aNegativeLowerBound'
+		throw AbsentError.absent
+	end 'aNegativeLowerBound'
+
+	return try floatRangeOfMonotoneOp(MaxonUnaryOp.sqrt, operand: operand)
+end 'floatRangeOfRoot'
+
+function floatRangeOfMagnitude(operand ProvenFloatRange) returns ProvenFloatRange throws AbsentError
+	if floatOrderKey(operand.low) >= 0 'nonNegative'
+		return operand
+	end 'nonNegative'
+
+	let lowMagnitude = try foldedFloatBits(foldFloatUnaryOp(MaxonUnaryOp.abs, operand: operand.low))
+	let highMagnitude = try foldedFloatBits(foldFloatUnaryOp(MaxonUnaryOp.abs, operand: operand.high))
+
+	if floatOrderKey(operand.high) <= 0 'nonPositive'
+		return try floatRangeBetween(highMagnitude, high: lowMagnitude)
+	end 'nonPositive'
+
+	return try floatRangeBetween(FloatPositiveZeroBits, high: floatBitsMaximum(lowMagnitude, b: highMagnitude))
+end 'floatRangeOfMagnitude'
+
+module function floatRangeOfUnaryOp(op MaxonUnaryOp, operand ProvenFloatRange) returns ProvenFloatRange throws AbsentError
+	return match op 'operator'
+		fneg gives try floatRangeBetween(negatedFloatBits(operand.high), high: negatedFloatBits(operand.low))
+		abs gives try floatRangeOfMagnitude(operand)
+		floor or
+		ceil or
+		round gives try floatRangeOfMonotoneOp(op, operand: operand)
+		sqrt gives try floatRangeOfRoot(operand)
+		default throws AbsentError.absent
+	end 'operator'
+end 'floatRangeOfUnaryOp'

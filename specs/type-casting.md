@@ -1095,6 +1095,26 @@ end 'main'
 error E3010: specs/type-casting/error.unneeded.call-result-same-alias.maxon:10:26: unneeded cast: 'Score' already fits in 'Score'
 ```
 
+<!-- test: error.a-redundant-cast-in-an-argument-is-unneeded -->
+A rebound `var` keeps its alias, so casting it to that alias in an argument is unneeded, as it is
+everywhere else.
+```maxon
+function main() returns ExitCode
+	let xs = FullRangeIntArray from [4, 5, 6]
+	var i = 0 as ElementIndex
+	var sum = 0 as FullRangeInt
+	while i < xs.count() 'each'
+		sum = sum + (try xs.get(i as ElementIndex) otherwise 0)
+		i = i + 1
+	end 'each'
+	print("{sum}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3010: specs/type-casting/error.a-redundant-cast-in-an-argument-is-unneeded.maxon:7:29: unneeded cast: 'ElementIndex' already fits in 'ElementIndex'
+```
+
 E3010 is a recoverable diagnostic: the parser keeps walking the function so every
 unneeded cast in the file is reported in a single compile, not just the first.
 
@@ -1429,6 +1449,47 @@ end 'main'
 ```
 ```stdout
 n=5 back=5
+```
+
+<!-- test: a-widening-cast-names-the-wider-alias -->
+A widening cast gives its value the wider alias: `hi` is an `ElementIndex`, not the `Count` that `count()`
+returns, so an `ElementIndex` stores into it.
+```maxon
+typealias Values = Array with FullRangeInt
+
+function middle(lo ElementIndex, hi ElementIndex) returns ElementIndex
+	return (lo + hi) shr 1
+end 'middle'
+
+function firstAtLeast(xs Values, target FullRangeInt) returns ElementIndex
+	var lo = 0 as ElementIndex
+	var hi = xs.count() as ElementIndex
+
+	while lo < hi 'halve'
+		let mid = middle(lo, hi: hi)
+		let v = try xs.get(mid) otherwise panic("test invariant: mid in bounds")
+
+		if v < target 'right'
+			lo = mid + 1
+		end 'right' else 'left'
+			hi = mid
+		end 'left'
+	end 'halve'
+
+	return lo
+end 'firstAtLeast'
+
+function main() returns ExitCode
+	let xs = Values from [1, 3, 5, 7, 9]
+	print("{firstAtLeast(xs, target: 6)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3
 ```
 
 <!-- test: error.a-full-range-cast-names-its-value -->

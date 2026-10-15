@@ -531,9 +531,13 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
 		let selfLen = byteLength()
 
+		if oldLen > selfLen 'longerThanSelf'
+			return clone()
+		end 'longerThanSelf'
+
 		// First pass: count matches
-		var matchCount = 0
-		var searchPos = 0
+		var matchCount = 0 as Count
+		var searchPos = 0 as BytePos
 
 		while searchPos <= selfLen - oldLen 'count_loop'
 			if let idx = try findIn(self, offset: searchPos, len: selfLen - searchPos, needle: old) 'try_count'
@@ -555,7 +559,8 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		// `StringBuilder`.)
 		let withLen = with.byteLength()
 		var out = StringBuilder.create()
-		out.reserve(selfLen + matchCount * withLen - matchCount * oldLen)
+		let matches = matchCount as BytePos
+		out.reserve(selfLen + matches * withLen - matches * oldLen)
 
 		// ONE of the few places inside `String` that genuinely needs a real `__ManagedMemory`, and the
 		// reason is `StringBuilder`: it takes each piece by BULK MEMCPY, which needs the bytes at an
@@ -567,7 +572,7 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		// and a `replace` already allocates a builder and its buffer, so one more is noise beside them.
 		let selfBytes = addressableBytes()
 
-		var pos = 0
+		var pos = 0 as BytePos
 
 		while pos <= selfLen - oldLen 'search'
 			if let idx = try findIn(self, offset: pos, len: selfLen - pos, needle: old) 'try_find'
@@ -651,7 +656,13 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		end 'empty_delim'
 
 		let selfLen = byteLength()
-		var pos = 0
+
+		if delimLen > selfLen 'longerThanSelf'
+			result.push(clone())
+			return result
+		end 'longerThanSelf'
+
+		var pos = 0 as BytePos
 
 		while pos <= selfLen - delimLen 'search'
 			if let idx = try findIn(self, offset: pos, len: selfLen - pos, needle: delimiter) 'try_find'
@@ -723,7 +734,7 @@ public type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// that shape.
 	function scanTrimStart(chars CharacterSet) returns BytePos
 		let len = byteLength()
-		var start = 0
+		var start = 0 as BytePos
 
 		while start < len 'scan'
 			let endByte = findGraphemeEnd(self, startPos: start)

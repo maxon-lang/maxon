@@ -57,9 +57,9 @@ Iterate over string bytes via the ByteView iterable.
 ```maxon
 function main() returns ExitCode
 	let s = "abc"
-	var sum = 0
+	var sum = 0 as FullRangeInt
 	for b in s.bytes() 'loop'
-		sum = sum + b
+		sum = sum + b as FullRangeInt
 	end 'loop'
 	print("{sum}\n")
 	return 0
@@ -79,7 +79,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 function main() returns ExitCode
 	let arr = IntArray.create()
-	var total = 0
+	var total = 0 as Integer
 	for v in arr 'loop'
 		total = total + v
 	end 'loop'
@@ -119,7 +119,7 @@ Calling `iter.retreat()` inside the body causes the next iteration to re-visit t
 ```maxon
 function main() returns ExitCode
 	let arr = [10, 20, 30]
-	var visits = 0
+	var visits = 0 as FullRangeInt
 	var retreated = false
 	for (iter, value) in arr.withIterator() 'loop'
 		visits = visits + 1
@@ -286,10 +286,10 @@ function main() returns ExitCode
 	var promises = TallyPromiseArray.create()
 	promises.push(async slowTally(1))
 	promises.push(async slowTally(2))
-	var seen = 0
+	var seen = 0 as Tally
 
 	for (position, _) in promises.withIterator() 'each'
-		seen = seen + 1 + position.index()
+		seen = seen + 1 + position.index() as Tally
 	end 'each'
 
 	return seen as ExitCode
@@ -317,7 +317,7 @@ function main() returns ExitCode
 	promises.push(async slowTally(1))
 	promises.push(async slowTally(2))
 	promises.push(async slowTally(4))
-	var total = 0
+	var total = 0 as Tally
 
 	for (position, promise) in promises.withIterator() 'each'
 		if position.index() == 1 'second'
@@ -347,7 +347,7 @@ function main() returns ExitCode
 	var promises = TallyPromiseArray.create()
 	promises.push(async slowTally(1))
 	promises.push(async slowTally(2))
-	var total = 0
+	var total = 0 as Tally
 
 	for (position, promise) in promises.withIterator() 'each'
 		if position.index() == 1 'second'
@@ -382,13 +382,13 @@ function main() returns ExitCode
 	var inner = TallyPromiseArray.create()
 	inner.push(async slowTally(10))
 	inner.push(async slowTally(20))
-	var total = 0
+	var total = 0 as Tally
 
 	for (_, o) in outer.withIterator() 'eachOuter'
 		total = total + (await o)
 
 		for (position, i) in inner.withIterator() 'eachInner'
-			if position.index() == total - 1 'matching'
+			if position.index() as Tally == total - 1 'matching'
 				total = total + (await i)
 			end 'matching'
 		end 'eachInner'

@@ -98,7 +98,7 @@ function add(a Integer, b Integer) returns Integer
 ```
 
 Use stdlib aliases when appropriate: `ExitCode`, `HashValue`, `Codepoint`, `Byte`, `ByteArray`, `Count`,
-`FileSize`, `Timestamp`, `NetworkPort`, `Real` — that is the whole list, so an example that uses
+`FileSize`, `Timestamp`, `NetworkPort`, `FullRangeFloat` — that is the whole list, so an example that uses
 `Integer` declares it in the same file. `Count` is what a collection's `count()` returns. For per-domain quantities (tallies, indices, byte offsets, math values), declare a typealias local to your file with a name that describes the *purpose* (`Tally`, `BytePos`, `Coord`).
 
 An alias of your own that shares a stdlib alias's name is a second type, and every value crossing between the two needs a cast: use the stdlib alias where it fits, and otherwise give yours a different name. Every typealias declaration is its own type, so two files declaring one name over one range declare two types too.
@@ -416,9 +416,15 @@ end 'MyType'
 
 ```maxon
 let x = 42          // immutable
-var y = 10          // mutable
+var y = 10 as Count // mutable: a var names its alias (E2004 without the cast)
 _ = sideEffect()     // discard (RHS MUST be a function call)
 ```
+
+A `let` of a bare number, literal arithmetic or a literal container is a constant that fits any alias its
+value fits, checked at each use. A `var` — local, top-level or `static` — starts from a value of an alias:
+cast the number (`var total = 0 as Count`, `var size = (16 * 1024) as ByteCount`) or give an array literal a
+typed head (`TallyArray from [1, 2]`). A `for` counter takes the alias of its non-literal bound
+(`for i in 0 upto xs.count()` counts in `Count`) and is immutable in the body.
 
 Use `var` for any variable you call mutating methods on (`push`, `set`, `remove`, `clear`, `append`, etc.):
 ```maxon
@@ -837,7 +843,7 @@ step and is slower.
 
 ```maxon
 // AVOID — indexed loop with a per-step try
-var i = 0
+var i = 0 as ElementIndex
 while i < arr.count() 'loop'
 	let v = try arr.get(i) otherwise 0
 	process(v)
@@ -928,7 +934,7 @@ sleep(100)                   // sleep current green thread (milliseconds)
 
 ### Math Library (`Math.*`)
 
-All accept and return `Math.Real` (full-range float). Implemented in the standard library.
+All accept and return `FullRangeFloat` (full-range float). Implemented in the standard library.
 
 ```maxon
 Math.sin(x)                  // sine (radians)
@@ -1068,8 +1074,8 @@ var (result, _) = compute()
 #### Tuple assignment (to existing variables)
 
 ```maxon
-var x = 0
-var y = 0
+var x = 0 as Integer
+var y = 0 as Integer
 (x, y) = makePair(10, b: 32)       // assigns to existing variables
 
 // Mixed: existing + new declarations

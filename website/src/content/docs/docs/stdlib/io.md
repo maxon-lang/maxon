@@ -241,7 +241,7 @@ program: a new reader does not see input an earlier one already buffered.
 ```maxon
 function main() returns ExitCode
 	let stdin = Console.stdin()
-	var lines = 0
+	var lines = 0 as Count
 
 	while true 'read'
 		let line = try stdin.readLine() otherwise break

@@ -169,7 +169,7 @@ function main() returns ExitCode
 	var buf = ByteArray.create()
 	buf.push(1)
 	let after = __Builtins.mmAllocTotal()
-	var score = 0
+	var score = 0 as Count
 	if after >= before 'monotonic'
 		score = score + 1
 	end 'monotonic'
@@ -207,7 +207,7 @@ function main() returns ExitCode
 	fill()
 	let liveAfter = __Builtins.mmAllocLive()
 	let totalAfter = __Builtins.mmAllocTotal()
-	var score = 0
+	var score = 0 as Count
 	if liveAfter == liveBefore 'liveCameBack'
 		score = score + 3
 	end 'liveCameBack'
@@ -252,7 +252,7 @@ function main() returns ExitCode
 	let afterLarge = volume()
 	let small = afterSmall - before
 	let large = afterLarge - afterSmall
-	var score = 0
+	var score = 0 as Count
 	if large > small 'bytesScaleWithTheRequest'
 		score = score + 2
 	end 'bytesScaleWithTheRequest'
@@ -282,7 +282,7 @@ function main() returns ExitCode
 	let live = __Builtins.mmAllocLive()
 	let rawTotal = __Builtins.mmRawAllocTotal()
 	let rawLive = __Builtins.mmRawAllocLive()
-	var score = 0
+	var score = 0 as Count
 	if total >= live 'trackedInvariant'
 		score = score + 1
 	end 'trackedInvariant'
@@ -321,7 +321,7 @@ function main() returns ExitCode
 	end 'push'
 	let tracked = __Builtins.mmAllocTotal()
 	let raw = __Builtins.mmRawAllocTotal()
-	var score = 0
+	var score = 0 as Count
 	if tracked > 0 'trackedMoved'
 		score = score + 2
 	end 'trackedMoved'
@@ -362,7 +362,7 @@ function main() returns ExitCode
 	end 'push'
 	let raw = __Builtins.mmRawAllocTotal()
 	let boxes = __Builtins.mmAllocTotal()
-	var score = 0
+	var score = 0 as Count
 	if boxes > boxesBefore 'theWindowBoxedSomething'
 		score = score + 1
 	end 'theWindowBoxedSomething'
@@ -516,7 +516,7 @@ typealias ByteArray = Array with Byte
 function main() returns ExitCode
 	var buf = ByteArray.create()
 	buf.push(1)
-	var score = 0
+	var score = 0 as Count
 	if __Builtins.mmAllocTotal() > 0 'total'
 		score = score + 1
 	end 'total'
@@ -563,7 +563,6 @@ necessary and neither alone is enough:
 and before it there is no green thread for a per-thread column to be about.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias Tally = int(0 to u64.max)
 typealias Byte = int(0 to u8.max)
 typealias Bytes = Array with Byte
 
@@ -584,8 +583,8 @@ type Churn
 	end 'churn'
 end 'Churn'
 
-function processWide() returns Tally
-	return (__Builtins.mmAllocTotal() + __Builtins.mmRawAllocTotal()) as Tally
+function processWide() returns Count
+	return __Builtins.mmAllocTotal() + __Builtins.mmRawAllocTotal()
 end 'processWide'
 
 function main() returns ExitCode
@@ -607,7 +606,7 @@ function main() returns ExitCode
 	let busyThread = __Builtins.threadAllocTotal() - busyThreadBefore
 	let busyProcess = processWide() - busyProcessBefore
 
-	var score = 0
+	var score = 0 as Count
 	if serialThread > 0 and serialThread == serialProcess 'serialSourcesAgree'
 		score = score + 1
 	end 'serialSourcesAgree'
@@ -653,17 +652,17 @@ function main() returns ExitCode
 	let frees = __Builtins.processFreeTotal()
 	let bytes = __Builtins.processAllocBytes()
 	let boxes = __Builtins.mmAllocTotal() as BoxCount
-	let total = boxes + __Builtins.mmRawAllocTotal()
+	let total = (boxes as Count) + __Builtins.mmRawAllocTotal()
 	let live = __Builtins.mmAllocLive() + __Builtins.mmRawAllocLive()
 	let volume = __Builtins.mmAllocBytes() + __Builtins.mmRawAllocBytes()
-	var score = 0
+	var score = 0 as Count
 	if allocs > 0 and allocs == total 'allocsAreBothLayers'
 		score = score + 1
 	end 'allocsAreBothLayers'
 	if frees > 0 and frees == total - live 'freesAreTotalLessLive'
 		score = score + 2
 	end 'freesAreTotalLessLive'
-	if bytes > volume and (bytes - volume) mod boxes == 0 'bytesAddOneHeaderPerBox'
+	if bytes > volume and ((bytes - volume) as BoxCount) mod boxes == 0 'bytesAddOneHeaderPerBox'
 		score = score + 4
 	end 'bytesAddOneHeaderPerBox'
 	return score as ExitCode
@@ -785,7 +784,7 @@ function main() returns ExitCode
 	var lastAllocs = __Builtins.processAllocTotal()
 	var lastFrees = __Builtins.processFreeTotal()
 	var lastBytes = __Builtins.processAllocBytes()
-	var backwards = 0
+	var backwards = 0 as Count
 
 	for _ in 0 upto 20000 'watch'
 		let allocs = __Builtins.processAllocTotal()
@@ -802,11 +801,11 @@ function main() returns ExitCode
 	end 'watch'
 
 	let rounds = try await reply otherwise 0
-	var score = 0
+	var score = 0 as Count
 	if backwards == 0 'onlyRose'
 		score = score + 1
 	end 'onlyRose'
-	if rounds == 100000 and __Builtins.processFreeTotal() - freesBefore >= rounds 'theServiceWasCounted'
+	if rounds == 100000 and __Builtins.processFreeTotal() - freesBefore >= (rounds as Count) 'theServiceWasCounted'
 		score = score + 2
 	end 'theServiceWasCounted'
 	return score as ExitCode

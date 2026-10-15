@@ -664,13 +664,13 @@ is the construct the author has to remove, and the element goes with it.
 ```maxon
 // --- runtime-file: Probe.maxon
 module function probeWalk() returns MachineWord
-	var seen = 0
+	var seen = 0 as MachineWord
 
 	for c in "abc" 'eachByte'
 		seen = seen + (c.byteLength() as MachineWord)
 	end 'eachByte'
 
-	return seen as MachineWord
+	return seen
 end 'probeWalk'
 // --- file: main.maxon
 function main() returns ExitCode

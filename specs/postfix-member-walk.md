@@ -18,7 +18,7 @@ receiver may be a binding (`s.byteLength()`), but it may equally be a **literal*
 Every one of those is the same question — *what type is this value, and what does that type call
 this member?* — so the parser answers it in exactly one place (`Parser.dispatchMethodOnReceiver`),
 reached both by the binding door (`dispatchMethodOnBinding`, which additionally owns the
-live-binding guard, the self-field materialization, the E3019 blame name and the E3070 subject) and
+live-binding guard, the self-field materialization, the E3159 blame name and the E3070 subject) and
 by the postfix loop.
 
 A chain of FIELDS walks as a chain (`o.inner.x`); the walk stops one hop short of a
@@ -375,7 +375,7 @@ union Outcome
 end 'Outcome'
 
 function main() returns ExitCode
-	var i = 0
+	var i = 0 as Count
 
 	while i < 200 'loop'
 		if Outcome.fail("a rather long failure reason to force a heap allocation").isPass() 'y'
@@ -570,7 +570,7 @@ end 'main'
 <!-- test: mutating-method-on-a-temporary -->
 ⭐ **A mutating method on a temporary is LEGAL, and that is the provenance argument paying out.**
 The receiver is bound to no name, so no `let` promises anything about it and there is nothing for
-E3019 to blame — the empty blame name is the correct answer rather than a missing one. The clone is
+E3159 to blame — the empty blame name is the correct answer rather than a missing one. The clone is
 then dropped at statement end, so a leak here is exit 101 and the untouched `s` still reads 3.
 ```maxon
 

@@ -186,7 +186,7 @@ end 'obtainMaker'
 function main() returns ExitCode
 	var store = Store.create()
 	let maker = obtainMaker(40)
-	var i = 1
+	var i = 1 as Payload
 	while i <= 4 'loop'
 		store.refresh(maker)
 		i = i + 1

@@ -16,6 +16,11 @@ fi
 
 n=$1; kind=$2; out=$3
 
+if [ "$n" -lt 1 ]; then
+	echo "genexitdrops.sh: <n> must be at least 1" >&2
+	exit 2
+fi
+
 case $kind in
 	try|throw|return|none) ;;
 	*) echo "genexitdrops.sh: kind must be try, throw, return or none, got '$kind'" >&2; exit 2 ;;

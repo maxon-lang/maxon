@@ -74,9 +74,10 @@ end 'main'
 - `as` converts in both directions. A widening cast (the source range fits the target) emits no check;
   a narrowing cast keeps a run-time check.
 - Casting a value to its own alias is **E3010** (`unneeded cast: 'Age' already fits in 'Age'`).
-- A value with **no** alias fits any alias of its kind: a literal, a counted-loop counter, a `var`
-  initialized from a literal, the raw value of a payload-free enum case. A named value also fits an
-  unnamed slot. Two *different* names conflict unless one implements the other (next section).
+- A value with **no** alias fits any alias of its kind whose range admits it, checked at compile time at
+  each use: a literal, a plain `let` constant, a loop counter between two literal bounds, and a value
+  computed from them (see [Variables](/docs/language/variables/)). A named value also fits an unnamed slot. Two
+  *different* names conflict unless one implements the other (next section).
 - A value keeps its alias wherever it is held: a local or global initialized by a cast has the cast's alias,
   and each tuple element keeps its own, so `(Tally, Tally)` and `(Score, Score)` are two types. Float
   aliases follow these rules exactly as integer aliases do — through locals, parameters, fields, captures
@@ -128,7 +129,8 @@ function main() returns ExitCode
 end 'main'
 ```
 
-- A subtype goes wherever an ancestor is declared, with no cast. Casting it to an ancestor is **E3010**.
+- A subtype goes wherever an ancestor is declared, with no cast. Casting it to an ancestor retypes the value
+  as the ancestor: `let hi = xs.count() as ElementIndex` is an `ElementIndex`.
 - The relation is one way: an ancestor value needs a cast to become the subtype, and that cast keeps its
   run-time range check. Two subtypes of one parent are two different types.
 - The subtype's range lies inside the parent's, over the same primitive and signedness (**E3178**). Its own
@@ -189,7 +191,7 @@ destination's alias, so the result is range-checked there. Anywhere else its typ
 common ancestor, and a diagnostic names that ancestor. At an overloaded call each operand's alias counts:
 `show(block + varId)` against `show(b BlockId)` and `show(v VarId)` is **E3007**, and the candidate list
 names the aliases (`Candidates: (b BlockId), (v VarId)`).
-Negating a signed alias keeps the alias; negating an unsigned one gives an unnamed value.
+Unary `-`, `not`, `or` and `xor` keep the operand's alias only where its range is closed under the operator: a full-width unsigned alias (`int(0 to u64.max)`, `bits(64)`) wraps modulo 2^64 and keeps it, and a range symmetric about zero keeps it under `-`. Over any other alias the result is an unnamed signed value carrying the range it computes (`-b` over `int(0 to 100)` is `[-100, 0]`), and it needs `as` to reach an alias slot. `and` always keeps the alias.
 
 ```maxon
 typealias Score = int(0 to 100)
@@ -214,7 +216,10 @@ where the value lands (next section). All integer arithmetic is 64-bit and wraps
 ## Range Checks
 
 A value is checked where it reaches a place **declared** with the alias: a call argument, a `return`, a
-struct-literal field, a field store, a field's declared default, an array element, or an explicit `as`.
+`var`'s initializer and every assignment to a ranged `var` (local, top-level, `static` or field), a
+struct-literal field, a field store, a field's declared default, an array element, a union case's payload,
+or an explicit `as`. A `var` therefore always holds a value of its alias: `var t = a + b` over two `Score`s
+checks the sum where `t` is born.
 The rules below hold for every ranged alias, integer or float, including one declared inside a type or
 extension body. A field is checked against the alias its declaring file names, and a literal passed through
 an interface is checked at compile time against the interface's own parameter type.
@@ -237,16 +242,15 @@ an interface is checked at compile time against the interface's own parameter ty
   `panic at <file>:<line>: Range check failed: value outside typealias '<Name>'` and a stack trace, and exits
   with code 1. No `try` is involved.
 
-**Reassigning a local is not a checked place**, so a local may hold an out-of-range value until it escapes:
+**Reassigning a ranged `var` is a checked place**, so the panic names the assignment that left the range:
 
 ```maxon
 typealias Score = int(0 to 100)
 
 function bump(start Score) returns Score
 	var s = start
-	s = s + 200       // no check: a local rebind
-	print("{s}\n")    // prints 210 for bump(10)
-	return s          // panics: Range check failed: value outside typealias 'Score'
+	s = s + 200       // bump(10) panics here: Range check failed: value outside typealias 'Score'
+	return s
 end 'bump'
 ```
 
@@ -291,7 +295,7 @@ same pattern and exports a small set of cross-cutting aliases:
 | `Codepoint` | `int(0 to 1114111)` | Unicode scalar values |
 | `Count` | `int(0 to u64.max) implements ElementIndex` | a collection's `count()` |
 | `SourceLineNumber` | `int(1 to i32.max)` | caller line numbers (`__line__`) |
-| `Real` | `float(f64.min to f64.max)` | general floating-point values |
+| `FullRangeFloat` | `float(f64.min to f64.max)` | general floating-point values |
 
 Because every alias is its own type, a quantity crossing from one module's alias to another's is cast at
 the crossing.
@@ -315,6 +319,13 @@ Integer` and `typealias Ys = Array with Integer` are one instance (one layout, o
 no cost, and `return` re-brands implicitly.
 
 - A `[...]` literal carries no brand and fits either.
+- A brand travels with the value: through a tuple element (`(Xs, Item)` and `(Ys, Item)` are two types),
+  a destructuring, a merge and a read of a `var`. The arms of a merge holding two brands are refused.
+- An unbranded `var` takes the brand of the first branded value stored into it, and keeps it: a later
+  store of another brand is **E3005** (see [Variables](/docs/language/variables/#rules)).
+- Comparing values of two brands (`xs == ys`) is **E3005**: a `Self` parameter, as `equals`' operand is,
+  takes the receiver's brand. Inside a generic type, a parameter spelled with the bare base (`other Box`)
+  fits every brand of the instance.
 - A closure literal or a declared function carries no brand and fits any function alias of its shape.
 - A function alias declared **inside a type or extension body** carries no brand either, in both
   directions: `Array.SortComparator` spells the shared body's signature over the type's own parameters,

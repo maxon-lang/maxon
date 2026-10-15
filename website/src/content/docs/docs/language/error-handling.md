@@ -170,7 +170,7 @@ function firstDigitOrMinusOne(text String) returns Amount
 end 'firstDigitOrMinusOne'
 
 function sumDigits(parts StringArray) returns Amount
-	var total = 0
+	var total = 0 as Amount
 	for part in parts 'each'
 		let d = try parseDigit(part) otherwise continue      // skip bad parts
 		total = total + d

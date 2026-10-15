@@ -600,19 +600,18 @@ a negative one as unsigned.
 #### A narrow divisor does not narrow the dividend
 ```maxon
 typealias Integer = int(i64.min to i64.max)
+typealias Positive = int(1 to i64.max)
 typealias HalfRadix = int(1 to 8)
 
-// A global initialised from a literal has no alias, so `bits shr 1` carries no ranged type of its
-// own and the divisor's `int(1 to 8)` is the only range in the division.
-var bits = 0
+var bits = 1 as Positive
 
-function ident(v Integer) returns Integer
+function ident(v Positive) returns Positive
 	return v
 end 'ident'
 
 function quotient(halfRadix HalfRadix) returns Integer
 	let half = bits shr 1
-	return half / halfRadix
+	return half / (halfRadix as Positive)
 end 'quotient'
 
 function main() returns ExitCode
@@ -623,6 +622,29 @@ end 'main'
 ```
 ```stdout
 576460752303423487
+```
+```exitcode
+0
+```
+
+<!-- test: div-divisor-range-does-not-narrow-an-unnamed-dividend -->
+#### A narrow divisor does not narrow a dividend that names no alias
+The dividend is `(1 shl shifts) - 1`, a number of unknown range that names no alias, so the divisor's `int(1 to 8)` is the only range in the division. At 63 shifts it is `i64.max`, and a divide narrowed to the divisor's width would answer from its low 32 bits.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias HalfRadix = int(1 to 8)
+
+function quotient(halfRadix HalfRadix, shifts Count) returns Integer
+	return (((1 shl shifts) - 1) / halfRadix) as Integer
+end 'quotient'
+
+function main() returns ExitCode
+	print("{quotient(8, shifts: CommandLine.args().count() + 62)}\n")
+	return 0
+end 'main'
+```
+```stdout
+1152921504606846975
 ```
 ```exitcode
 0
@@ -3040,7 +3062,7 @@ function widen(n Wide) returns Wide
 end 'widen'
 
 function main() returns ExitCode
-	var acc = 0
+	var acc = 0 as Small
 	let w0 = widen(0)
 	let w1 = widen(1)
 	let w2 = widen(2)
@@ -3341,7 +3363,7 @@ function pick(n Wide) returns Small
 end 'pick'
 
 function main() returns ExitCode
-	var acc = 0
+	var acc = 0 as Small
 	acc = acc + pick(0)
 	acc = acc + pick(1)
 	acc = acc + pick(2)
@@ -3522,7 +3544,7 @@ typealias Small = int(0 to 100)
 typealias Wide = int(0 to 100000)
 
 function pick(n Wide) returns Small
-	var i = 0
+	var i = 0 as Count
 	while i < 3 'spin'
 		if n > 100 'big'
 			return n

@@ -158,7 +158,7 @@ typealias RecordFieldArray = Array with RecordField
 // argument value, and a constant is re-materialized from the literal the factory carried.
 union RecordFieldSource
 	fromParameter(index ParamCount)
-	fromConstant(value ParsedInt, constType StdType)
+	fromConstant(value FullRangeInt, constType StdType)
 end 'RecordFieldSource'
 
 // A function's verdict: is it a RECORD CONSTRUCTOR, and if so what does it build?
@@ -536,7 +536,7 @@ end 'returnedValueOf'
 // The three columns `ConstructorScan` builds as it walks a candidate body: which values are its parameters,
 // and the literal (and its type) behind each of its constants.
 typealias ValueToParamMap = Map with (ValueId, ParamCount)
-typealias ValueToConstMap = Map with (ValueId, ParsedInt)
+typealias ValueToConstMap = Map with (ValueId, FullRangeInt)
 typealias ValueToStdTypeMap = Map with (ValueId, StdType)
 
 // The running state of clauses 2–6 above. A type rather than a pile of locals because `admit` answers for
@@ -691,7 +691,7 @@ type ConstructorScan
 		end 'op'
 	end 'admit'
 
-	function admitConst(resultId ValueId, value ParsedInt, valueType StdType) returns bool
+	function admitConst(resultId ValueId, value FullRangeInt, valueType StdType) returns bool
 		self.constOfValue.upsert(resultId, value: value)
 		self.constTypeOfValue.upsert(resultId, value: valueType)
 		return true
@@ -895,7 +895,7 @@ function seedEscapingParams(seeds BoolArray, nodes ParamNodeSpace, funcIndex Ele
 		// walk can mark it, and an unseeded node reads as "does not escape" — the unsafe direction.
 		let untracked = not (try tracked.get(param) otherwise panic("seedEscapingParams: tracked.get OOB at {param} — the column is sized to the function's parameter count"))
 
-		if untracked or scan.escapedLocallyAt(param) or scan.dropSitesAt(param) > 0 'realEscapeSite'
+		if untracked or scan.escapedLocallyAt(param as ValueId) or scan.dropSitesAt(param as ValueId) > 0 'realEscapeSite'
 			try seeds.set(nodes.nodeOf(funcIndex, param: param), value: true) otherwise panic("seedEscapingParams: seeds.set OOB for parameter {param} of function {funcIndex}")
 		end 'realEscapeSite'
 	end 'eachParam'
@@ -1016,7 +1016,9 @@ function scanPointerUses(module StdModule, func IrFunction, liveOps OpIndexArray
 		end 'eachEdge'
 	end 'eachBlock'
 
-	for v in 0 upto tracked.count() 'settleOtherReads'
+	for valueIndex in 0 upto tracked.count() 'settleOtherReads'
+		let v = valueIndex as ValueId
+
 		if isTracked(tracked, v: v) and readByOtherOps.contains(v) 'readByAnUnadmittedOp'
 			scan.markEscaped(v)
 		end 'readByAnUnadmittedOp'
@@ -1225,7 +1227,7 @@ function forwardCallArguments(args ValueIdArray, tracked BoolArray, calleeFuncIn
 			continue
 		end 'beyondTheSignature'
 
-		scan.noteForward(argId, calleeFuncIndex: calleeFuncIndex, position: position)
+		scan.noteForward(argId, calleeFuncIndex: calleeFuncIndex, position: position as ParamCount)
 	end 'eachArg'
 end 'forwardCallArguments'
 
@@ -1629,7 +1631,7 @@ function fieldValueId(module StdModule, source RecordFieldSource, callArgs Value
 	end 'source'
 end 'fieldValueId'
 
-function emitFieldConstant(module StdModule, value ParsedInt, constType StdType, mint ValueMinter, rebuilt OpIndexArray) returns ValueId
+function emitFieldConstant(module StdModule, value FullRangeInt, constType StdType, mint ValueMinter, rebuilt OpIndexArray) returns ValueId
 	let id = mint.mint()
 	rebuilt.push(appendModuleOp(module, op: StdOp.const(id, value: value, valueType: constType)))
 	return id

@@ -90,8 +90,8 @@ function idleLets(p Integer) returns Integer
 	let k13 = p + 13
 	let k14 = p + 14
 	let k15 = p + 15
-	var sum = 0
-	var i = 0
+	var sum = 0 as Integer
+	var i = 0 as Integer
 	while i < 4 'loop'
 		sum = sum + i
 		i = i + 1
@@ -133,38 +133,38 @@ IS `k` — leaving ordinary values the splitter spills around the loop exactly a
 Same answer, 126.
 ```maxon
 function idleVars(p Integer) returns Integer
-	var k1 = 0
+	var k1 = 0 as Integer
 	k1 = p + 1
-	var k2 = 0
+	var k2 = 0 as Integer
 	k2 = p + 2
-	var k3 = 0
+	var k3 = 0 as Integer
 	k3 = p + 3
-	var k4 = 0
+	var k4 = 0 as Integer
 	k4 = p + 4
-	var k5 = 0
+	var k5 = 0 as Integer
 	k5 = p + 5
-	var k6 = 0
+	var k6 = 0 as Integer
 	k6 = p + 6
-	var k7 = 0
+	var k7 = 0 as Integer
 	k7 = p + 7
-	var k8 = 0
+	var k8 = 0 as Integer
 	k8 = p + 8
-	var k9 = 0
+	var k9 = 0 as Integer
 	k9 = p + 9
-	var k10 = 0
+	var k10 = 0 as Integer
 	k10 = p + 10
-	var k11 = 0
+	var k11 = 0 as Integer
 	k11 = p + 11
-	var k12 = 0
+	var k12 = 0 as Integer
 	k12 = p + 12
-	var k13 = 0
+	var k13 = 0 as Integer
 	k13 = p + 13
-	var k14 = 0
+	var k14 = 0 as Integer
 	k14 = p + 14
-	var k15 = 0
+	var k15 = 0 as Integer
 	k15 = p + 15
-	var sum = 0
-	var i = 0
+	var sum = 0 as Integer
+	var i = 0 as Integer
 	while i < 4 'loop'
 		sum = sum + i
 		i = i + 1
@@ -194,34 +194,34 @@ sweep; one pass over the function would leave every inner phi in place.
 outer runs `i = 0,1,2` — so the loop contributes `3 · 1 = 3`. Total `78 + 3 = 81`.
 ```maxon
 function nestedIdle(p Integer) returns Integer
-	var k1 = 0
+	var k1 = 0 as Integer
 	k1 = p + 1
-	var k2 = 0
+	var k2 = 0 as Integer
 	k2 = p + 2
-	var k3 = 0
+	var k3 = 0 as Integer
 	k3 = p + 3
-	var k4 = 0
+	var k4 = 0 as Integer
 	k4 = p + 4
-	var k5 = 0
+	var k5 = 0 as Integer
 	k5 = p + 5
-	var k6 = 0
+	var k6 = 0 as Integer
 	k6 = p + 6
-	var k7 = 0
+	var k7 = 0 as Integer
 	k7 = p + 7
-	var k8 = 0
+	var k8 = 0 as Integer
 	k8 = p + 8
-	var k9 = 0
+	var k9 = 0 as Integer
 	k9 = p + 9
-	var k10 = 0
+	var k10 = 0 as Integer
 	k10 = p + 10
-	var k11 = 0
+	var k11 = 0 as Integer
 	k11 = p + 11
-	var k12 = 0
+	var k12 = 0 as Integer
 	k12 = p + 12
-	var sum = 0
-	var i = 0
+	var sum = 0 as Integer
+	var i = 0 as Integer
 	while i < 3 'outer'
-		var j = 0
+		var j = 0 as Integer
 		while j < 2 'inner'
 			sum = sum + j
 			j = j + 1
@@ -272,38 +272,38 @@ function gate(p Integer) returns bool
 end 'gate'
 
 function idleVarsPastABreak(p Integer) returns Integer
-	var k1 = 0
+	var k1 = 0 as Integer
 	k1 = p + 1
-	var k2 = 0
+	var k2 = 0 as Integer
 	k2 = p + 2
-	var k3 = 0
+	var k3 = 0 as Integer
 	k3 = p + 3
-	var k4 = 0
+	var k4 = 0 as Integer
 	k4 = p + 4
-	var k5 = 0
+	var k5 = 0 as Integer
 	k5 = p + 5
-	var k6 = 0
+	var k6 = 0 as Integer
 	k6 = p + 6
-	var k7 = 0
+	var k7 = 0 as Integer
 	k7 = p + 7
-	var k8 = 0
+	var k8 = 0 as Integer
 	k8 = p + 8
-	var k9 = 0
+	var k9 = 0 as Integer
 	k9 = p + 9
-	var k10 = 0
+	var k10 = 0 as Integer
 	k10 = p + 10
-	var k11 = 0
+	var k11 = 0 as Integer
 	k11 = p + 11
-	var k12 = 0
+	var k12 = 0 as Integer
 	k12 = p + 12
-	var k13 = 0
+	var k13 = 0 as Integer
 	k13 = p + 13
-	var k14 = 0
+	var k14 = 0 as Integer
 	k14 = p + 14
-	var k15 = 0
+	var k15 = 0 as Integer
 	k15 = p + 15
-	var sum = 0
-	var i = 0
+	var sum = 0 as Integer
+	var i = 0 as Integer
 	if gate(p) 'guard'
 		while i < 100 'loop'
 			sum = sum + i
@@ -353,7 +353,7 @@ function fourAcross(p Integer) returns Integer
 	var a2 = p + 2
 	var a3 = p + 3
 	var a4 = p + 4
-	var i = 0
+	var i = 0 as Integer
 	while i < 3 'loop'
 		let d = bump(i)
 		a1 = a1 + d
@@ -400,7 +400,7 @@ function sevenAcross(p Integer) returns Integer
 	var a5 = p + 5
 	var a6 = p + 6
 	var a7 = p + 7
-	var i = 0
+	var i = 0 as Integer
 	while i < 3 'loop'
 		let d = bump(i)
 		a1 = a1 + d
@@ -453,7 +453,7 @@ function pick(k Integer) returns Integer
 	let v4 = k + 44
 	let v5 = k + 55
 	let v6 = k + 66
-	var out = 0
+	var out = 0 as Integer
 	if k == 1 'b1'
 		let t = sink(1)
 		out = v1 + t
@@ -511,8 +511,8 @@ function breakUnderPressure(p Integer) returns Integer
 	let k10 = p + 10
 	let k11 = p + 11
 	let k12 = p + 12
-	var sum = 0
-	var i = 0
+	var sum = 0 as Integer
+	var i = 0 as Integer
 	while i < 100 'loop'
 		sum = sum + i
 		i = i + 1
@@ -558,10 +558,10 @@ function depthTwo(p Integer) returns Integer
 	let k10 = p + 10
 	let k11 = p + 11
 	let k12 = p + 12
-	var sum = 0
-	var i = 0
+	var sum = 0 as Integer
+	var i = 0 as Integer
 	while i < 3 'outer'
-		var j = 0
+		var j = 0 as Integer
 		while j < 3 'inner'
 			sum = sum + j
 			j = j + 1

@@ -24,6 +24,11 @@
 set -euo pipefail
 FUNCS="$1"; IFS_N="$2"; OUT="$3"
 
+if [ "$FUNCS" -lt 1 ]; then
+  echo "genawait.sh: <funcs> must be at least 1" >&2
+  exit 2
+fi
+
 {
   echo "// ladder: $FUNCS await-bearing functions, $IFS_N two-way branches each"
   echo "typealias LadderInt = int(i64.min to i64.max)"
@@ -40,7 +45,11 @@ FUNCS="$1"; IFS_N="$2"; OUT="$3"
     # walk from the await has to cross every block the thicket minted. An await at the top would
     # make the walk trivial and measure nothing.
     echo -e "\tlet p = async producer(seed)"
-    echo -e "\tvar acc = seed"
+    if [ "$IFS_N" -gt 0 ]; then
+      echo -e "\tvar acc = seed"
+    else
+      echo -e "\tlet acc = seed"
+    fi
     k=0
     while [ "$k" -lt "$IFS_N" ]; do
       d=$(( k % 7 + 1 ))
@@ -59,7 +68,7 @@ FUNCS="$1"; IFS_N="$2"; OUT="$3"
   done
 
   echo "function main() returns ExitCode"
-  echo -e "\tvar t = 0"
+  echo -e "\tvar t = 0 as LadderInt"
   f=0
   while [ "$f" -lt "$FUNCS" ]; do
     echo -e "\tt = t + heavy$f($f)"

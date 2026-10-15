@@ -55,8 +55,8 @@ end 'main'
 | `StringArray` | `Array with String` | Json |
 | `CharSet` | `Set with Character` | CharacterSet |
 | `FilePathArray` | `Array with FilePath` | Directory |
-| `ParsedInt` / `ParsedIntArray` | `int(i64.min to i64.max)` / `Array with ParsedInt` | Builtins |
-| `ParsedFloat` | `float(f64.min to f64.max)` | Builtins |
+| `FullRangeInt` / `FullRangeIntArray` | `int(i64.min to i64.max)` / `Array with FullRangeInt` | Builtins |
+| `FullRangeFloat` | `float(f64.min to f64.max)` | Builtins |
 | `IndentDepth` | `int(0 to u64.max)` — a nesting depth while `Json` renders | Json |
 | `RandomDraw` / `RandomBound` | `int(0 to u64.max)` / `int(1 to u64.max)` | Random |
 | `BytePos`, `GraphemeIndex` | `int(0 to u64.max)` | String |
@@ -66,12 +66,11 @@ end 'main'
 | `HashValue` | `int(0 to u32.max)` | Interfaces |
 | `IterStep` | `int(0 to u64.max)` | Interfaces |
 | `RangeBound` | `int(i64.min to i64.max)` | Range |
-| `Real` | `float(f64.min to f64.max)` | Math |
 | `HashDigest` | `bits(64)` | Hasher |
 | `SourceLineNumber` | `int(1 to i32.max)` | Builtins |
 | `FileSize`, `Timestamp` | `int(0 to u64.max)` | File |
-| `DurationMs`, `InstantMs`, `DurationNanos`, `InstantNanos`, `UnixSeconds` | `int(0 to u64.max)` | Clock |
-| `UnixNanos`, `UnixDays` | `int(i64.min to i64.max)` | Clock |
+| `DurationMs`, `InstantMs`, `DurationNanos`, `InstantNanos` | `int(0 to u64.max)` | Clock |
+| `UnixSeconds`, `UnixNanos`, `UnixDays` | `int(i64.min to i64.max)` | Clock |
 | `SchedulerProcessorCount` | `int(1 to u64.max)` | Scheduler |
 | `NetworkPort` | `int(0 to 65535)` | TcpClient; also `URL.port()` |
 | `EnvMap` | `Map with String, String` | Subprocess |
@@ -92,7 +91,7 @@ library signature mentions is `public` too and can be written down in your own c
 to declare a value you are about to pass in. They are listed here because they are part of the surface, not
 because a program normally spells them: a value cast to the alias the signature asks for is the usual reason
 to name one. Float aliases are distinct types as integer aliases are, so a value of a program's own float
-alias reaches a `Real`, `JsonFloat` or `ParsedFloat` parameter through `as`; a float literal needs no cast.
+alias reaches a `FullRangeFloat` or `JsonFloat` parameter through `as`; a float literal needs no cast.
 
 | Name | Definition | Declared by |
 |------|------------|-------------|
@@ -241,14 +240,17 @@ To print something that is not a `String`, interpolate it: `print("{count}\n")`.
 
 | Function | Returns | Description |
 |----------|---------|-------------|
-| `abs(x float)` | `float` | Absolute value. An integer argument is promoted to `float`. |
-| `sqrt(x float)` | `float` | Square root. |
+| `abs(x float)` | `float` | Absolute value. A value of an integer alias is converted to `float`. |
+| `sqrt(x float)` | `float` | Square root. A value of an integer alias is converted. |
 | `floor(x float)` | `float` | Round toward negative infinity. |
 | `ceil(x float)` | `float` | Round toward positive infinity. |
 | `round(x float)` | `float` | Round to nearest; halfway cases round to even (`round(2.5)` is `2.0`). |
-| `trunc(x float)` | `int` | Truncate toward zero; the way to turn a `float` into an `int`. |
-| `min(a float, b float)` | `float` | The smaller value. Integer arguments are promoted. |
-| `max(a float, b float)` | `float` | The larger value. Integer arguments are promoted. |
+| `trunc(x float)` | `FullRangeInt` | Truncate toward zero; the way to turn a `float` into an integer. Cast the result to reach a narrower alias. |
+| `min(a float, b float)` | `float` | The smaller value. Integer arguments are converted. |
+| `max(a float, b float)` | `float` | The larger value. Integer arguments are converted. |
+
+A float result whose range the compiler knows — from a literal, a `let` constant or another range-known
+value — carries that range and fits any float alias admitting it; any other is a `FullRangeFloat`.
 
 Trigonometry, logarithms and powers are in [Math](/docs/stdlib/runtime/#math).
 
@@ -256,8 +258,8 @@ Trigonometry, logarithms and powers are in [Math](/docs/stdlib/runtime/#math).
 
 | Builtin | Description |
 |---------|-------------|
-| `sizeof(TypeName)` | Storage size of a type in bytes, as a constant: `int` and `float` are 8, `bool` and `byte` are 1. |
-| `countof(TypeName)` | How many elements a fixed-size container type holds, such as `Vector with 3 Coord`. A type with no fixed element count is refused; ask an `Array` value for `count()`. |
+| `sizeof(TypeName)` | Storage size of a type in bytes, as a constant `Count`: `int` and `float` are 8, `bool` and `byte` are 1. |
+| `countof(TypeName)` | How many elements a fixed-size container type holds, as a `Count`, such as `Vector with 3 Coord`. A type with no fixed element count is refused; ask an `Array` value for `count()`. |
 | `__file__`, `__line__` | Legal only as a parameter's default value; each expands at the **call site**. |
 
 `__line__` parameters are declared `SourceLineNumber` and `__file__` parameters `String`. The file is the

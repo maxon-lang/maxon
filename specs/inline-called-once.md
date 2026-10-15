@@ -67,18 +67,18 @@ typealias IntArray = Array with Integer
 
 function flipOnce(current IntArray, temp IntArray, n Integer) returns Integer
 	for i in 0 upto n 'copy'
-		let element = try current.get(i) otherwise panic("flipOnce: i < n = current.count()")
-		try temp.set(i, value: element) otherwise panic("flipOnce: i < n = temp.count()")
+		let element = try current.get(i as ElementIndex) otherwise panic("flipOnce: i < n = current.count()")
+		try temp.set(i as ElementIndex, value: element) otherwise panic("flipOnce: i < n = temp.count()")
 	end 'copy'
 
 	let firstValue = try temp.get(0) otherwise panic("flipOnce: n >= 1")
-	var low = 0
+	var low = 0 as Integer
 	var high = firstValue
 
 	while low < high 'reverse'
-		let atLow = try temp.get(low) otherwise panic("flipOnce: low < high <= firstValue < n")
+		let atLow = try temp.get(low as ElementIndex) otherwise panic("flipOnce: low < high <= firstValue < n")
 		let atHigh = try temp.get(high as ElementIndex) otherwise panic("flipOnce: high <= firstValue < n")
-		try temp.set(low, value: atHigh) otherwise panic("flipOnce: low < n")
+		try temp.set(low as ElementIndex, value: atHigh) otherwise panic("flipOnce: low < n")
 		try temp.set(high as ElementIndex, value: atLow) otherwise panic("flipOnce: high < n")
 		low = low + 1
 		high = high - 1
@@ -97,10 +97,10 @@ function main() returns ExitCode
 	temp.resize(n)
 
 	for i in 0 upto n 'fill'
-		try current.set(i, value: i) otherwise panic("main: i < n = current.count()")
+		try current.set(i as ElementIndex, value: i) otherwise panic("main: i < n = current.count()")
 	end 'fill'
 
-	var total = 0
+	var total = 0 as Integer
 
 	for round in 1 to 4 'rounds'
 		try current.set(0, value: round) otherwise panic("main: n >= 1")
@@ -124,11 +124,11 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function inner(a IntArray, n Integer) returns Integer
-	var sum = 0
+	var sum = 0 as Integer
 
 	for i in 0 upto n 'each'
-		let v = try a.get(i) otherwise panic("inner: i < n = a.count()")
-		try a.set(i, value: v * 2) otherwise panic("inner: i < n = a.count()")
+		let v = try a.get(i as ElementIndex) otherwise panic("inner: i < n = a.count()")
+		try a.set(i as ElementIndex, value: v * 2) otherwise panic("inner: i < n = a.count()")
 		sum = sum + v
 	end 'each'
 
@@ -137,7 +137,7 @@ end 'inner'
 
 function outer(a IntArray, n Integer) returns Integer
 	for i in 0 upto n 'fill'
-		try a.set(i, value: i + 1) otherwise panic("outer: i < n = a.count()")
+		try a.set(i as ElementIndex, value: i + 1) otherwise panic("outer: i < n = a.count()")
 	end 'fill'
 
 	let before = inner(a, n: n)
@@ -169,18 +169,18 @@ typealias IntArray = Array with Integer
 
 function flipOnce(current IntArray, temp IntArray, n Integer) returns Integer
 	for i in 0 upto n 'copy'
-		let element = try current.get(i) otherwise panic("flipOnce: current is shorter than n")
-		try temp.set(i, value: element) otherwise panic("flipOnce: temp is shorter than n")
+		let element = try current.get(i as ElementIndex) otherwise panic("flipOnce: current is shorter than n")
+		try temp.set(i as ElementIndex, value: element) otherwise panic("flipOnce: temp is shorter than n")
 	end 'copy'
 
 	let firstValue = try temp.get(0) otherwise panic("flipOnce: n >= 1")
-	var low = 0
+	var low = 0 as Integer
 	var high = firstValue
 
 	while low < high 'reverse'
-		let atLow = try temp.get(low) otherwise panic("flipOnce: low < high <= firstValue < n")
+		let atLow = try temp.get(low as ElementIndex) otherwise panic("flipOnce: low < high <= firstValue < n")
 		let atHigh = try temp.get(high as ElementIndex) otherwise panic("flipOnce: high <= firstValue < n")
-		try temp.set(low, value: atHigh) otherwise panic("flipOnce: low < n")
+		try temp.set(low as ElementIndex, value: atHigh) otherwise panic("flipOnce: low < n")
 		try temp.set(high as ElementIndex, value: atLow) otherwise panic("flipOnce: high < n")
 		low = low + 1
 		high = high - 1
@@ -197,10 +197,10 @@ function main() returns ExitCode
 	temp.resize(n - 1)
 
 	for i in 0 upto n 'fill'
-		try current.set(i, value: i) otherwise panic("main: i < n = current.count()")
+		try current.set(i as ElementIndex, value: i) otherwise panic("main: i < n = current.count()")
 	end 'fill'
 
-	var total = 0
+	var total = 0 as Integer
 
 	for round in 1 to 2 'rounds'
 		try current.set(0, value: round) otherwise panic("main: n >= 1")
@@ -231,11 +231,11 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function inner(a IntArray, n Integer) returns Integer
-	var sum = 0
+	var sum = 0 as Integer
 
 	for i in 0 upto n 'each'
-		let v = try a.get(i) otherwise panic("inner: a is shorter than n")
-		try a.set(i, value: v * 2) otherwise panic("inner: a is shorter than n")
+		let v = try a.get(i as ElementIndex) otherwise panic("inner: a is shorter than n")
+		try a.set(i as ElementIndex, value: v * 2) otherwise panic("inner: a is shorter than n")
 		sum = sum + v
 	end 'each'
 
@@ -244,7 +244,7 @@ end 'inner'
 
 function outer(a IntArray, n Integer) returns Integer
 	for i in 0 upto a.count() 'fill'
-		try a.set(i, value: i + 1) otherwise panic("outer: i < a.count()")
+		try a.set(i as ElementIndex, value: i + 1) otherwise panic("outer: i < a.count()")
 	end 'fill'
 
 	let before = inner(a, n: n)
@@ -282,11 +282,11 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function scale(a IntArray, n Integer, factor Integer) returns Integer
-	var total = 0
+	var total = 0 as Integer
 
 	for i in 0 upto n 'each'
-		let v = try a.get(i) otherwise panic("scale: a is shorter than n")
-		try a.set(i, value: v * factor) otherwise panic("scale: a is shorter than n")
+		let v = try a.get(i as ElementIndex) otherwise panic("scale: a is shorter than n")
+		try a.set(i as ElementIndex, value: v * factor) otherwise panic("scale: a is shorter than n")
 		total = total + v * factor
 	end 'each'
 
@@ -298,7 +298,7 @@ function main() returns ExitCode
 	a.resize(3)
 
 	for i in 0 upto 3 'fill'
-		try a.set(i, value: i + 1) otherwise panic("main: i < 3 = a.count()")
+		try a.set(i as ElementIndex, value: i + 1) otherwise panic("main: i < 3 = a.count()")
 	end 'fill'
 
 	return scale(a, n: 5, factor: 3) as ExitCode
@@ -315,45 +315,84 @@ Stack trace:
   in mrt_start
 ```
 
-<!-- test: a-hardware-fault-inside-a-spliced-body-names-the-callee -->
-<!-- unsupported-targets: arm64-macos, arm64-linux, wasm32-wasi -->
-⭐ **A FAULT HAS NO PANIC BLOCK TO TAG — ONLY AN ADDRESS.** `specs/safety.md`'s
-`divide-by-zero-fault-through-a-resized-array-slot`, with the dividing function given a store loop
-so it is no leaf and called exactly once, so it is spliced. The zero a `resize` exposed reaches a bare
-`idiv` that the splice places in `main`'s code and raises `#DE`; the fault handler has nothing but the faulting
-address, and the range record covering it is what names `divide`.
-
-The arm64 lanes and wasm32-wasi are excluded for that case's reason: their divide does not raise a fault
-the handler converts.
+<!-- test: a-range-check-inside-a-spliced-body-names-the-callee -->
+⭐ **A RANGE GUARD IS A PANIC BLOCK THE COMPILER WROTE, AND THE SPLICE MUST TAG IT TOO.** `divide` has a store loop
+so it is no leaf and is called exactly once, so it is spliced. Its `returns NonZero` guard fires on a value built
+by honest arithmetic: `a - a` wears `NonZero` without proving it, and is zero. The guard's block
+sits in `main`'s code, and the range record covering it is what names `divide`.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 typealias NonZero = int(1 to i64.max)
-typealias NonZeroArray = Array with NonZero
 
-function divide(scratch IntArray) returns Integer
+function divide(scratch IntArray, a NonZero) returns NonZero
 	for i in 0 upto scratch.count() 'fill'
 		try scratch.set(i, value: i) otherwise panic("divide: i < scratch.count()")
 	end 'fill'
 
-	var xs = NonZeroArray.create()
-	xs.resize(1)
-	let d = try xs.get(0) otherwise 1
-	return 100 / d
+	return a - a
 end 'divide'
 
 function main() returns ExitCode
 	var scratch = IntArray.create()
 	scratch.resize(4)
-	return divide(scratch) as ExitCode
+	return divide(scratch, a: 7) as ExitCode
 end 'main'
 ```
 ```exitcode
 1
 ```
 ```stderr
-panic: integer divide by zero
+panic at a-range-check-inside-a-spliced-body-names-the-callee.test:11: Range check failed: value outside typealias 'NonZero'
+Stack trace:
+  in divide
+  in main
+  in mrt_start
+```
+
+<!-- test: a-hardware-fault-inside-a-spliced-body-names-the-callee -->
+<!-- unsupported-targets: arm64-macos, arm64-linux, wasm32-wasi -->
+⭐ **A FAULT HAS NO PANIC BLOCK TO TAG — ONLY AN ADDRESS.** `specs/safety.md`'s
+`integer-overflow-fault-from-int-min-over-minus-one`, with the dividing function given a store loop
+so it is no leaf and called exactly once, so it is spliced. `i64.min / -1` reaches a bare `idiv` that the
+splice places in `main`'s code and raises `#DE`; the fault handler has nothing but the faulting address, and
+the range record covering it is what names `divide`.
+
+The arm64 lanes and wasm32-wasi are excluded because their divide does not raise a fault the handler
+converts.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+typealias NegativeOne = int(-1 to -1) implements Integer
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function divide(scratch IntArray, d NegativeOne) returns Integer
+	for i in 0 upto scratch.count() 'fill'
+		try scratch.set(i, value: i as Integer) otherwise panic("divide: i < scratch.count()")
+	end 'fill'
+
+	return dividend / d
+end 'divide'
+
+function main() returns ExitCode
+	dividend = ident(i64.min)
+	var scratch = IntArray.create()
+	scratch.resize(4)
+	let d = ident(-1)
+	return divide(scratch, d: d as NegativeOne) as ExitCode
+end 'main'
+var dividend = 0 as Integer
+```
+```exitcode
+1
+```
+```stderr
+panic: integer overflow
 Stack trace:
   in divide
   in main
@@ -370,11 +409,11 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function fill(a IntArray, n Integer, base Integer) returns Integer
-	var total = 0
+	var total = 0 as Integer
 
 	for i in 0 upto n 'each'
 		let v = base + i * i
-		try a.set(i, value: v) otherwise panic("fill: i < n = a.count()")
+		try a.set(i as ElementIndex, value: v) otherwise panic("fill: i < n = a.count()")
 		total = total + v
 	end 'each'
 
@@ -444,10 +483,10 @@ function fillChecked(a IntArray, n Integer) returns Integer throws FillError
 		throw FillError.tooShort
 	end 'short'
 
-	var total = 0
+	var total = 0 as Integer
 
 	for i in 0 upto n 'each'
-		try a.set(i, value: i * 3) otherwise panic("fillChecked: i < n <= a.count()")
+		try a.set(i as ElementIndex, value: i * 3) otherwise panic("fillChecked: i < n <= a.count()")
 		total = total + i * 3
 	end 'each'
 
@@ -477,8 +516,8 @@ typealias IntArray = Array with Integer
 
 function bumpAll(a IntArray, n Integer, bumps Integer) returns Integer
 	for i in 0 upto n 'each'
-		let v = try a.get(i) otherwise panic("bumpAll: i < n = a.count()")
-		try a.set(i, value: v + 1) otherwise panic("bumpAll: i < n = a.count()")
+		let v = try a.get(i as ElementIndex) otherwise panic("bumpAll: i < n = a.count()")
+		try a.set(i as ElementIndex, value: v + 1) otherwise panic("bumpAll: i < n = a.count()")
 		bumps = bumps + 1
 	end 'each'
 
@@ -489,7 +528,7 @@ function main() returns ExitCode
 	let n = 4
 	var a = IntArray.create()
 	a.resize(n)
-	var bumps = 10
+	var bumps = 10 as Integer
 	let returned = bumpAll(a, n: n, bumps: bumps)
 	return (returned + bumps) as ExitCode
 end 'main'
@@ -509,7 +548,7 @@ typealias IntArray = Array with Integer
 
 function firstIndexOf(a IntArray, n Integer, needle Integer) returns Integer
 	for i in 0 upto n 'scan'
-		let v = try a.get(i) otherwise panic("firstIndexOf: i < n = a.count()")
+		let v = try a.get(i as ElementIndex) otherwise panic("firstIndexOf: i < n = a.count()")
 
 		if v == needle 'hit'
 			return i
@@ -525,10 +564,10 @@ function main() returns ExitCode
 	a.resize(n)
 
 	for i in 0 upto n 'fill'
-		try a.set(i, value: 5 + 2 * i) otherwise panic("main: i < n = a.count()")
+		try a.set(i as ElementIndex, value: 5 + 2 * i) otherwise panic("main: i < n = a.count()")
 	end 'fill'
 
-	var total = 0
+	var total = 0 as Integer
 
 	for round in 0 to 1 'rounds'
 		let needle = 9 if round == 0 else 100
@@ -552,7 +591,7 @@ typealias IntArray = Array with Integer
 
 function fillSquares(a IntArray, n Integer)
 	for i in 0 upto n 'each'
-		try a.set(i, value: i * i) otherwise panic("fillSquares: i < n = a.count()")
+		try a.set(i as ElementIndex, value: i * i) otherwise panic("fillSquares: i < n = a.count()")
 	end 'each'
 end 'fillSquares'
 
@@ -803,4 +842,401 @@ Stack trace:
   in check
   in main
   in mrt_start
+```
+
+<!-- test: a-long-chain-of-called-once-functions-with-ranged-parameters-is-spliced-through -->
+Twenty-four called-once functions in a line, each taking a ranged `total` and `step`, looping, branching once and returning through the next. Every call site is the only one its callee has, so the whole chain folds into `main`; the program still adds up the same way it does as calls.
+
+```maxon
+typealias Count = int(0 to 1000000)
+typealias Step = int(1 to 7)
+
+function link0(total Count, step Step) returns Count
+	var running = total
+
+	for _ in 0 upto 1 'rounds'
+		running = running + (step as Count)
+	end 'rounds'
+
+	var carried = running
+
+	if (running and 1) == 0 'even'
+		carried = running + 2
+	end 'even'
+
+	return link1(carried, step: step) + 1
+end 'link0'
+
+function link1(total Count, step Step) returns Count
+	var running = total
+
+	for _ in 0 upto 2 'rounds'
+		running = running + (step as Count)
+	end 'rounds'
+
+	var carried = running
+
+	if (running and 1) == 0 'even'
+		carried = running + 2
+	end 'even'
+
+	return link2(carried, step: step) + 1
+end 'link1'
+
+function link2(total Count, step Step) returns Count
+	var running = total
+
+	for _ in 0 upto 3 'rounds'
+		running = running + (step as Count)
+	end 'rounds'
+
+	var carried = running
+
+	if (running and 1) == 0 'even'
+		carried = running + 2
+	end 'even'
+
+	return link3(carried, step: step) + 1
+end 'link2'
+
+function link3(total Count, step Step) returns Count
+	var running = total
+
+	for _ in 0 upto 1 'rounds'
+		running = running + (step as Count)
+	end 'rounds'
+
+	var carried = running
+
+	if (running and 1) == 0 'even'
+		carried = running + 2
+	end 'even'
+
+	return link4(carried, step: step) + 1
+end 'link3'
+
+function link4(total Count, step Step) returns Count
+	var running = total
+
+	for _ in 0 upto 2 'rounds'
+		running = running + (step as Count)
+	end 'rounds'
+
+	var carried = running
+
+	if (running and 1) == 0 'even'
+		carried = running + 2
+	end 'even'
+
+	return link5(carried, step: step) + 1
+end 'link4'
+
+function link5(total Count, step Step) returns Count
+	var running = total
+
+	for _ in 0 upto 3 'rounds'
+		running = running + (step as Count)
+	end 'rounds'
+
+	var carried = running
+
+	if (running and 1) == 0 'even'
+		carried = running + 2
+	end 'even'
+
+	return link6(carried, step: step) + 1
+end 'link5'
+
+function link6(total Count, step Step) returns Count
+	var running = total
+
+	for _ in 0 upto 1 'rounds'
+		running = running + (step as Count)
+	end 'rounds'
+
+	var carried = running
+
+	if (running and 1) == 0 'even'
+		carried = running + 2
+	end 'even'
+
+	return link7(carried, step: step) + 1
+end 'link6'
+
+function link7(total Count, step Step) returns Count
+	var running = total
+
+	for _ in 0 upto 2 'rounds'
+		running = running + (step as Count)
+	end 'rounds'
+
+	var carried = running
+
+	if (running and 1) == 0 'even'
+		carried = running + 2
+	end 'even'
+
+	return link8(carried, step: step) + 1
+end 'link7'
+
+function link8(total Count, step Step) returns Count
+	var running = total
+
+	for _ in 0 upto 3 'rounds'
+		running = running + (step as Count)
+	end 'rounds'
+
+	var carried = running
+
+	if (running and 1) == 0 'even'
+		carried = running + 2
+	end 'even'
+
+	return link9(carried, step: step) + 1
+end 'link8'
+
+function link9(total Count, step Step) returns Count
+	var running = total
+
+	for _ in 0 upto 1 'rounds'
+		running = running + (step as Count)
+	end 'rounds'
+
+	var carried = running
+
+	if (running and 1) == 0 'even'
+		carried = running + 2
+	end 'even'
+
+	return link10(carried, step: step) + 1
+end 'link9'
+
+function link10(total Count, step Step) returns Count
+	var running = total
+
+	for _ in 0 upto 2 'rounds'
+		running = running + (step as Count)
+	end 'rounds'
+
+	var carried = running
+
+	if (running and 1) == 0 'even'
+		carried = running + 2
+	end 'even'
+
+	return link11(carried, step: step) + 1
+end 'link10'
+
+function link11(total Count, step Step) returns Count
+	var running = total
+
+	for _ in 0 upto 3 'rounds'
+		running = running + (step as Count)
+	end 'rounds'
+
+	var carried = running
+
+	if (running and 1) == 0 'even'
+		carried = running + 2
+	end 'even'
+
+	return link12(carried, step: step) + 1
+end 'link11'
+
+function link12(total Count, step Step) returns Count
+	var running = total
+
+	for _ in 0 upto 1 'rounds'
+		running = running + (step as Count)
+	end 'rounds'
+
+	var carried = running
+
+	if (running and 1) == 0 'even'
+		carried = running + 2
+	end 'even'
+
+	return link13(carried, step: step) + 1
+end 'link12'
+
+function link13(total Count, step Step) returns Count
+	var running = total
+
+	for _ in 0 upto 2 'rounds'
+		running = running + (step as Count)
+	end 'rounds'
+
+	var carried = running
+
+	if (running and 1) == 0 'even'
+		carried = running + 2
+	end 'even'
+
+	return link14(carried, step: step) + 1
+end 'link13'
+
+function link14(total Count, step Step) returns Count
+	var running = total
+
+	for _ in 0 upto 3 'rounds'
+		running = running + (step as Count)
+	end 'rounds'
+
+	var carried = running
+
+	if (running and 1) == 0 'even'
+		carried = running + 2
+	end 'even'
+
+	return link15(carried, step: step) + 1
+end 'link14'
+
+function link15(total Count, step Step) returns Count
+	var running = total
+
+	for _ in 0 upto 1 'rounds'
+		running = running + (step as Count)
+	end 'rounds'
+
+	var carried = running
+
+	if (running and 1) == 0 'even'
+		carried = running + 2
+	end 'even'
+
+	return link16(carried, step: step) + 1
+end 'link15'
+
+function link16(total Count, step Step) returns Count
+	var running = total
+
+	for _ in 0 upto 2 'rounds'
+		running = running + (step as Count)
+	end 'rounds'
+
+	var carried = running
+
+	if (running and 1) == 0 'even'
+		carried = running + 2
+	end 'even'
+
+	return link17(carried, step: step) + 1
+end 'link16'
+
+function link17(total Count, step Step) returns Count
+	var running = total
+
+	for _ in 0 upto 3 'rounds'
+		running = running + (step as Count)
+	end 'rounds'
+
+	var carried = running
+
+	if (running and 1) == 0 'even'
+		carried = running + 2
+	end 'even'
+
+	return link18(carried, step: step) + 1
+end 'link17'
+
+function link18(total Count, step Step) returns Count
+	var running = total
+
+	for _ in 0 upto 1 'rounds'
+		running = running + (step as Count)
+	end 'rounds'
+
+	var carried = running
+
+	if (running and 1) == 0 'even'
+		carried = running + 2
+	end 'even'
+
+	return link19(carried, step: step) + 1
+end 'link18'
+
+function link19(total Count, step Step) returns Count
+	var running = total
+
+	for _ in 0 upto 2 'rounds'
+		running = running + (step as Count)
+	end 'rounds'
+
+	var carried = running
+
+	if (running and 1) == 0 'even'
+		carried = running + 2
+	end 'even'
+
+	return link20(carried, step: step) + 1
+end 'link19'
+
+function link20(total Count, step Step) returns Count
+	var running = total
+
+	for _ in 0 upto 3 'rounds'
+		running = running + (step as Count)
+	end 'rounds'
+
+	var carried = running
+
+	if (running and 1) == 0 'even'
+		carried = running + 2
+	end 'even'
+
+	return link21(carried, step: step) + 1
+end 'link20'
+
+function link21(total Count, step Step) returns Count
+	var running = total
+
+	for _ in 0 upto 1 'rounds'
+		running = running + (step as Count)
+	end 'rounds'
+
+	var carried = running
+
+	if (running and 1) == 0 'even'
+		carried = running + 2
+	end 'even'
+
+	return link22(carried, step: step) + 1
+end 'link21'
+
+function link22(total Count, step Step) returns Count
+	var running = total
+
+	for _ in 0 upto 2 'rounds'
+		running = running + (step as Count)
+	end 'rounds'
+
+	var carried = running
+
+	if (running and 1) == 0 'even'
+		carried = running + 2
+	end 'even'
+
+	return link23(carried, step: step) + 1
+end 'link22'
+
+function link23(total Count, step Step) returns Count
+	var running = total
+
+	for _ in 0 upto 3 'rounds'
+		running = running + (step as Count)
+	end 'rounds'
+
+	return running
+end 'link23'
+
+function main() returns ExitCode
+	print("{link0(3, step: 5)}\n")
+	return 0
+end 'main'
+```
+```stdout
+298
+```
+```exitcode
+0
 ```

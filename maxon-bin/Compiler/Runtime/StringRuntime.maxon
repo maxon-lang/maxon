@@ -93,14 +93,14 @@ export let StringRecordBytes = ManagedRecordBytes + ManagedRecordSlotBytes
 // The fixed bytes an owned interpolation result allocates BEYOND its text: the 56-byte record the bytes
 // live inline behind, plus one trailing NUL (which the slab's zeroing supplies for free — nothing writes
 // it). `Parser.emitStringInterp` sizes its one `__mm_alloc` as `totalLen + StringInterpOverheadBytes`.
-export let StringInterpOverheadBytes = (StringRecordBytes as ParsedInt) + 1
+export let StringInterpOverheadBytes = (StringRecordBytes as FullRangeInt) + 1
 
 // `singleByteGraphemes@48` — 1 iff every byte is < 128 AND no byte is a CR (a compile-time scan). An empty
 // string satisfies it vacuously. The high-bit threshold and the two flag values are named rather than bare
 // so the scan reads as the property it computes.
 let AsciiHighBit = 128 as Byte
-let SingleByteGraphemesTrue = 1 as ParsedInt
-let SingleByteGraphemesFalse = 0 as ParsedInt
+let SingleByteGraphemesTrue = 1 as FullRangeInt
+let SingleByteGraphemesFalse = 0 as FullRangeInt
 
 // ⚠ **U+000D, AND THIS IS THE THIRD STATEMENT OF THE BYTE — the corpus already carries two, WITH a measured
 // reason, and this one has the same shape of reason.** `stdlib/helpers/string/grapheme.maxon:38` is the
@@ -129,13 +129,13 @@ export let NulTerminator = 0 as Byte
 // `i64.min` is handled with no overflow: signed `%`/`/` keep the value's sign (`x % 10 ∈ [-9,0]` for a
 // negative `x`), and the per-digit magnitude is recovered by MULTIPLYING by `sign = 1 - 2*neg` (`+1` for
 // a non-negative value, `-1` for a negative one) rather than by an `abs` that `i64.min` would overflow.
-let AsciiMinusSign = 45 as ParsedInt
+let AsciiMinusSign = 45 as FullRangeInt
 
 // `value >>logical 63` is `1` exactly when the sign bit is set — the branch-free `isNegative` the sign
 // and the leading `-` are both derived from.
-let SignBitPosition = 63 as ParsedInt
-let SignMultiplierBase = 1 as ParsedInt
-let SignMultiplierSpan = 2 as ParsedInt
+let SignBitPosition = 63 as FullRangeInt
+let SignMultiplierBase = 1 as FullRangeInt
+let SignMultiplierSpan = 2 as FullRangeInt
 
 // The scratch an integer part reserves before `__int_to_string` fills it: `i64.min` renders as
 // "-9223372036854775808", 20 digits and a sign = 21 bytes, and no i64 is wider. `Parser.emitStringInterp`
@@ -146,7 +146,7 @@ let SignMultiplierSpan = 2 as ParsedInt
 // `integerToStringScratchBytes(signedness)` below, and keeping this constant private MAKES the argument in
 // its header true rather than merely urged: a second selection site cannot name the wrong budget, because
 // it cannot name a budget at all.
-let IntToStringScratchBytes = 21 as ParsedInt
+let IntToStringScratchBytes = 21 as FullRangeInt
 
 // The scratch the UNSIGNED renderer reserves: `u64.max` renders as "18446744073709551615", 20
 // digits and NO sign, and no u64 is wider. It is a constant of its own rather than the signed budget
@@ -154,25 +154,25 @@ let IntToStringScratchBytes = 21 as ParsedInt
 // made of — the sign — is precisely the byte this renderer never writes. Pairing it with the wrong
 // name is what `integerToStringScratchBytes` exists to make impossible — see its twin above for why
 // neither is `export`ed.
-let UIntToStringScratchBytes = 20 as ParsedInt
+let UIntToStringScratchBytes = 20 as FullRangeInt
 
 // `__bool_to_string` renders "true" (4) or "false" (5). The ASCII bytes of both, and the two lengths.
 //
 // ⚠ None is `export`ed: `AsciiLowerA` here is the byte `a` of "false" and nothing else, and the file that
 // owns the only reader owns the only name.
-let AsciiLowerT = 116 as ParsedInt
-let AsciiLowerR = 114 as ParsedInt
-let AsciiLowerU = 117 as ParsedInt
-let AsciiLowerE = 101 as ParsedInt
-let AsciiLowerF = 102 as ParsedInt
-let AsciiLowerA = 97 as ParsedInt
-let AsciiLowerL = 108 as ParsedInt
-let AsciiLowerS = 115 as ParsedInt
-let BoolTrueLength = 4 as ParsedInt
-let BoolFalseLength = 5 as ParsedInt
+let AsciiLowerT = 116 as FullRangeInt
+let AsciiLowerR = 114 as FullRangeInt
+let AsciiLowerU = 117 as FullRangeInt
+let AsciiLowerE = 101 as FullRangeInt
+let AsciiLowerF = 102 as FullRangeInt
+let AsciiLowerA = 97 as FullRangeInt
+let AsciiLowerL = 108 as FullRangeInt
+let AsciiLowerS = 115 as FullRangeInt
+let BoolTrueLength = 4 as FullRangeInt
+let BoolFalseLength = 5 as FullRangeInt
 
 // "false" is the longest rendering, so 5 bytes cover both.
-export let BoolToStringScratchBytes = 5 as ParsedInt
+export let BoolToStringScratchBytes = 5 as FullRangeInt
 
 // The `.rdata` label prefixes for a literal's blob and its record. Distinct so a reader of the section
 // can tell the two apart; `__`-prefixed so they never collide with a user name and stay out of the
@@ -242,7 +242,7 @@ export function integerToStringName(signedness IntegerSignedness) returns ByteAr
 	end 'reading'
 end 'integerToStringName'
 
-export function integerToStringScratchBytes(signedness IntegerSignedness) returns ParsedInt
+export function integerToStringScratchBytes(signedness IntegerSignedness) returns FullRangeInt
 	return match signedness 'reading'
 		signed gives IntToStringScratchBytes
 		unsigned gives UIntToStringScratchBytes
@@ -510,7 +510,7 @@ end 'stringBlobBytes'
 // and the door every other file comes through; an `export` here advertised a second way to assemble the
 // record that would skip the blob registration the offset seed depends on.
 function buildStringRecordBytes(blobOffset ByteOffset, byteLength BytePos, singleByteGraphemes bool) returns ByteArray
-	var record = immortalRecordBytes(blobOffset, length: byteLength as ParsedInt, elementSize: ByteStringElementSize, elementDestroy: TrivialElementDestroy)
+	var record = immortalRecordBytes(blobOffset, length: byteLength as FullRangeInt, elementSize: ByteStringElementSize, elementDestroy: TrivialElementDestroy)
 	appendRecordSlot(record, expectedOffset: StringSingleByteGraphemesOffset, value: singleByteGraphemesFlagValue(singleByteGraphemes))
 
 	if record.count() != StringRecordBytes 'sizeDrift'
@@ -520,7 +520,7 @@ function buildStringRecordBytes(blobOffset ByteOffset, byteLength BytePos, singl
 	return record
 end 'buildStringRecordBytes'
 
-function singleByteGraphemesFlagValue(singleByteGraphemes bool) returns ParsedInt
+function singleByteGraphemesFlagValue(singleByteGraphemes bool) returns FullRangeInt
 	if singleByteGraphemes 'oneByteEach'
 		return SingleByteGraphemesTrue
 	end 'oneByteEach'
@@ -1194,7 +1194,7 @@ export function emitAllocOwnedInlineString(module StdModule, block IrBlock, ids 
 
 	emitStoreField(module, block: block, record: newRec, offset: StringBufferOffset, value: emitInlineStringBuffer(module, block: block, ids: ids, record: newRec))
 	emitStoreField(module, block: block, record: newRec, offset: StringLengthOffset, value: byteLen)
-	let capacity = emitConst(module, block: block, value: InlineBufferCapacity as ParsedInt, ids: ids)
+	let capacity = emitConst(module, block: block, value: InlineBufferCapacity as FullRangeInt, ids: ids)
 	emitStoreField(module, block: block, record: newRec, offset: StringCapacityOffset, value: capacity)
 	let elementSize = emitConst(module, block: block, value: ByteStringElementSize, ids: ids)
 	emitStoreField(module, block: block, record: newRec, offset: StringElementSizeOffset, value: elementSize)
@@ -1207,7 +1207,7 @@ end 'emitAllocOwnedInlineString'
 // that writes those bytes — so a caller re-deriving it (two ops, a const and an add, in a compiler-internal
 // graph) is cheaper than a second place that could be told a different record size.
 export function emitInlineStringBuffer(module StdModule, block IrBlock, ids ValueMinter, record ValueId) returns ValueId
-	let recordBytes = emitConst(module, block: block, value: StringRecordBytes as ParsedInt, ids: ids)
+	let recordBytes = emitConst(module, block: block, value: StringRecordBytes as FullRangeInt, ids: ids)
 	return emitBin(module, block: block, a: record, b: recordBytes, opcode: StdBinOpcode.add, ids: ids)
 end 'emitInlineStringBuffer'
 
@@ -1374,12 +1374,12 @@ function buildStrFromBytes(module StdModule)
 	module.setTerminator(scan, op: StdOp.condBranch(scanned, thenBlockId: build.id, elseBlockId: scanBody.id))
 
 	let raw = emitLoadByteIndexed(module, block: scanBody, base: buf, index: i, ids: ids)
-	let highBit = emitConst(module, block: scanBody, value: AsciiHighBit as ParsedInt, ids: ids)
+	let highBit = emitConst(module, block: scanBody, value: AsciiHighBit as FullRangeInt, ids: ids)
 	let isLow = emitCmp(module, block: scanBody, a: raw, b: highBit, pred: StdCmpPred.lt, ids: ids)
 	let iNext = emitBin(module, block: scanBody, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
 	module.setTerminator(scanBody, op: StdOp.condBranch(isLow, thenBlockId: notHigh.id, elseBlockId: sawMultiByteGrapheme.id))
 
-	let crByte = emitConst(module, block: notHigh, value: CarriageReturnByte as ParsedInt, ids: ids)
+	let crByte = emitConst(module, block: notHigh, value: CarriageReturnByte as FullRangeInt, ids: ids)
 	let isNotCr = emitCmp(module, block: notHigh, a: raw, b: crByte, pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(notHigh, op: StdOp.condBranch(isNotCr, thenBlockId: stillSingleByte.id, elseBlockId: sawMultiByteGrapheme.id))
 
@@ -1579,7 +1579,7 @@ end 'buildStrBytesView'
 
 // Store one constant byte at `dest[offset]`. The shape a fixed-text renderer (`__bool_to_string`) writes
 // each of its bytes with — a `const` typed i64, stored as a `u8` (the store keeps the low byte).
-function storeConstByte(module StdModule, block IrBlock, ids ValueMinter, dest ValueId, offset ByteOffset, charValue ParsedInt)
+function storeConstByte(module StdModule, block IrBlock, ids ValueMinter, dest ValueId, offset ByteOffset, charValue FullRangeInt)
 	let ch = ids.mint()
 	module.appendOp(block, op: StdOp.const(ch, value: charValue, valueType: StdType.i64))
 	module.appendOp(block, op: StdOp.storeIndirect(dest, offset: offset, valueId: ch, valueType: StdType.u8))

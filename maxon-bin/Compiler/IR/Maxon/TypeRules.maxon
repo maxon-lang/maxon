@@ -890,15 +890,15 @@ end 'typeTagName'
 // bool?" (`tagIsBool`, `typeClassOf`), and because the FOLDS below need them — TypeRules is the
 // lower layer, so the constants had to move down to it rather than the rules reaching up into the
 // parser for them.
-export let BoolTrueValue = 1 as ParsedInt
-export let BoolFalseValue = 0 as ParsedInt
+export let BoolTrueValue = 1 as FullRangeInt
+export let BoolFalseValue = 0 as FullRangeInt
 
 // The 0/1 payload of a `bool` the compiler computed. The one place a Maxon `bool` becomes the
 // number a `boolean`-tagged value carries, so the two constants above are never re-spelled at a
 // fold site — nor at an EMIT site: the interpolation lowering hands `stdlib`'s formatted renderers
 // four `bool` arguments it decided itself (`Parser.materializeFormattedIntPart`), and those are the
 // same conversion rather than a second one.
-export function boolPayload(value bool) returns ParsedInt
+export function boolPayload(value bool) returns FullRangeInt
 	if value 'true'
 		return BoolTrueValue
 	end 'true'
@@ -909,7 +909,7 @@ end 'boolPayload'
 // Fold `lhs <op> rhs` over two integers the compiler already holds, yielding the comparison's
 // answer as the 0/1 payload a `boolean` value carries.
 //
-// It returns a `ParsedInt` rather than a `bool` because its caller — the top-level constant
+// It returns a `FullRangeInt` rather than a `bool` because its caller — the top-level constant
 // evaluator — carries every constant as a (payload, tag) pair, and a comparison's payload IS that
 // 0/1. Handing back a `bool` would only make the caller convert it, and the conversion is where
 // the convention would get written down a second time.
@@ -921,7 +921,7 @@ end 'boolPayload'
 // leaves the answer to the hardware's `setcc`. So this is the FIRST statement of the rule, not a
 // second one. The day the parser gains a comparison fold, it must call THIS rather than restate
 // it, exactly as `emitShift` and `evalShift` share one shift rule.
-export function foldIntCompare(op MaxonCmpOp, lhs ParsedInt, rhs ParsedInt) returns ParsedInt
+export function foldIntCompare(op MaxonCmpOp, lhs FullRangeInt, rhs FullRangeInt) returns FullRangeInt
 	return match op 'o'
 		eq gives boolPayload(lhs == rhs)
 		ne gives boolPayload(lhs != rhs)
@@ -944,7 +944,7 @@ end 'foldIntCompare'
 //
 // Both operands are float here: a mixed int/float compare is E3005 (`comparableOperands`), so the
 // caller reaches this only when both sides carry float bits.
-export function foldFloatCompare(op MaxonCmpOp, lhs ParsedInt, rhs ParsedInt) returns ParsedInt
+export function foldFloatCompare(op MaxonCmpOp, lhs FullRangeInt, rhs FullRangeInt) returns FullRangeInt
 	let a = floatOfBits(lhs)
 	let b = floatOfBits(rhs)
 
@@ -965,7 +965,7 @@ end 'foldFloatCompare'
 // (`not 5` is the bitwise complement, `bitNot`); this one folds over the BOOL domain, where the
 // operator is meaningful and total. `notOperatorFor` is what tells the two apart, and every caller
 // reaches these through it rather than choosing for itself.
-export function foldLogicalNot(operand ParsedInt) returns ParsedInt
+export function foldLogicalNot(operand FullRangeInt) returns FullRangeInt
 	return boolPayload(operand == BoolFalseValue)
 end 'foldLogicalNot'
 
@@ -1162,30 +1162,6 @@ function wordOperator(op MaxonBinOp) returns bool
 		modUnsigned gives false
 	end 'k'
 end 'wordOperator'
-
-// The two operators whose result wears NO typealias. `or` and `xor` SET bits, so `0x0F or 0xF0`
-// lands above both operands and no alias either operand carries describes the result; `and` can
-// only clear bits and hands its operands' alias down (`Parser.bitAndInheritedAliasId`). A `Wide or
-// Wide` that wore `Wide` would shift and divide UNSIGNED, though the result is a bare int.
-export function setsBits(op MaxonBinOp) returns bool
-	return match op 'k'
-		add or
-		sub or
-		mul or
-		div or
-		mod or
-		bitAnd gives false
-		bitOr or
-		bitXor gives true
-		shl or
-		shr or
-		shrLogical or
-		min or
-		max or
-		divUnsigned or
-		modUnsigned gives false
-	end 'k'
-end 'setsBits'
 
 // The two operators whose RIGHT operand is not an ordinary number but a shift DISTANCE, and so
 // the two the shift rule below governs.
@@ -1447,7 +1423,7 @@ end 'divisionOpcodeFor'
 // `+0.0` and `-0.0` to 0, so a range whose bound IS a zero of either sign admits zero, which is what a
 // divisor test needs. Bounds are INCLUSIVE in both domains (`float(… upto …)` is refused outright), so there
 // is no exclusive-upper adjustment on either arm.
-export function rangeExcludesZero(low ParsedInt, high ParsedInt, isFloat bool) returns bool
+export function rangeExcludesZero(low FullRangeInt, high FullRangeInt, isFloat bool) returns bool
 	if isFloat 'float'
 		return floatOrderKey(low) > 0 or floatOrderKey(high) < 0
 	end 'float'
@@ -1475,7 +1451,7 @@ end 'rangeExcludesZero'
 // `rangeExcludesZero`, and it is load-bearing for the same reason: the representation, not the range,
 // is what makes the naive test wrong. `rangeIsUnsignedTopped` is the ONE place that shape is
 // recognized, so this asks it rather than restating it.
-export function rangeExcludesNegativeOne(low ParsedInt, high ParsedInt) returns bool
+export function rangeExcludesNegativeOne(low FullRangeInt, high FullRangeInt) returns bool
 	if rangeIsUnsignedTopped(low, high: high) 'admitsTheMinusOnePattern'
 		return false
 	end 'admitsTheMinusOnePattern'
@@ -1487,7 +1463,7 @@ end 'rangeExcludesNegativeOne'
 // overflow pair, beside the divisor's. An unsigned-topped range admits the `i64.min` BIT PATTERN as
 // `2^63`, which a signed divide reads as `i64.min`, so it answers `false` for
 // `rangeExcludesNegativeOne`'s reason.
-export function rangeExcludesIntMin(low ParsedInt, high ParsedInt) returns bool
+export function rangeExcludesIntMin(low FullRangeInt, high FullRangeInt) returns bool
 	if rangeIsUnsignedTopped(low, high: high) 'admitsTheIntMinPattern'
 		return false
 	end 'admitsTheIntMinPattern'
@@ -1541,11 +1517,11 @@ end 'rangeExcludesIntMin'
 // It lives HERE, among the source-level operand rules, because the shift's meaning is a
 // FRONT-END fact. The lower tiers ask for it rather than re-deciding it — which is the only thing
 // that keeps the count the parser accepts and the count the backend can encode from drifting.
-export let MinShiftCount = 0 as ParsedInt
+export let MinShiftCount = 0 as FullRangeInt
 
 // The width of the value being shifted. A count of `ShiftCountBits` or more shifts every bit out,
 // which is LEGAL and well-defined. It is not the top of a legal range — there is no top.
-export let ShiftCountBits = 64 as ParsedInt
+export let ShiftCountBits = 64 as FullRangeInt
 
 // The largest count the shift INSTRUCTION distinguishes, and so the largest that may reach an
 // unguarded `shl`/`sar`. Anything above it must be saturated by the compiler, never handed to the
@@ -1567,16 +1543,16 @@ export let ShiftCountBits = 64 as ParsedInt
 // restatement, it says so itself, and it must move with this line. **Do not read "unrepresentable"
 // above as "there is only one copy":** it means the `63`/`64` pair here cannot disagree. The Target
 // tier's copy is a third number and it moves BY HAND.
-export let MaxUnguardedShiftCount = (ShiftCountBits - 1) as ParsedInt
+export let MaxUnguardedShiftCount = (ShiftCountBits - 1) as FullRangeInt
 
 // The one count that is not a shift at all.
-export function shiftCountIsNegative(count ParsedInt) returns bool
+export function shiftCountIsNegative(count FullRangeInt) returns bool
 	return count < MinShiftCount
 end 'shiftCountIsNegative'
 
 // True iff the instruction may be handed this count DIRECTLY — it is non-negative, and the
 // hardware's mask would be a no-op on it. Every other count needs the guard.
-export function shiftCountIsUnguarded(count ParsedInt) returns bool
+export function shiftCountIsUnguarded(count FullRangeInt) returns bool
 	return count >= MinShiftCount and count <= MaxUnguardedShiftCount
 end 'shiftCountIsUnguarded'
 
@@ -1616,6 +1592,10 @@ export function aliasAdmitsEveryValue(alias RangedTypeAlias) returns bool
 	return alias.low == i64.min and alias.high == i64.max
 end 'aliasAdmitsEveryValue'
 
+export function aliasIsClosedUnderWordArithmetic(alias RangedTypeAlias) returns bool
+	return aliasAdmitsEveryValue(alias) or aliasIsUnsignedFullQuantity(alias)
+end 'aliasIsClosedUnderWordArithmetic'
+
 export function aliasIsUnsignedFullQuantity(alias RangedTypeAlias) returns bool
 	return not aliasIsFloat(alias) and alias.low == 0 and alias.high == UnsignedFullUpperPattern
 end 'aliasIsUnsignedFullQuantity'
@@ -1640,20 +1620,20 @@ export function binOpKeepsUnsignedOperandsUnsigned(op MaxonBinOp) returns bool
 	end 'op'
 end 'binOpKeepsUnsignedOperandsUnsigned'
 
-export function unsignedSubtractionBorrows(lhs ParsedInt, rhs ParsedInt) returns bool
+export function unsignedSubtractionBorrows(lhs FullRangeInt, rhs FullRangeInt) returns bool
 	let difference = lhs - rhs
 	let witness = ((lhs xor UnsignedFullUpperPattern) and rhs) or (((lhs xor rhs) xor UnsignedFullUpperPattern) and difference)
 	return witness < 0
 end 'unsignedSubtractionBorrows'
 
-export function isLegalBitWidth(width ParsedInt) returns bool
+export function isLegalBitWidth(width FullRangeInt) returns bool
 	return width == 1 or width == 2 or width == 4 or width == 8 or width == 16 or width == 32 or width == 64
 end 'isLegalBitWidth'
 
 // The inclusive top of a `bits(n)` pattern. At 64 that is the wrapped `u64.max` the whole file already
 // carries as `UnsignedFullUpperPattern`, so a raw word stores the range an `int(0 to u64.max)` quantity
 // stores — which is why the two are told apart by `rawBitWidth` and never by their bounds.
-export function rawPatternUpperBound(width ParsedInt) returns ParsedInt
+export function rawPatternUpperBound(width FullRangeInt) returns FullRangeInt
 	if width == 64 'theWholeWord'
 		return UnsignedFullUpperPattern
 	end 'theWholeWord'
@@ -1661,7 +1641,7 @@ export function rawPatternUpperBound(width ParsedInt) returns ParsedInt
 	return (1 shl width) - 1
 end 'rawPatternUpperBound'
 
-export function rangeIsUnsigned(low ParsedInt) returns bool
+export function rangeIsUnsigned(low FullRangeInt) returns bool
 	return low >= 0
 end 'rangeIsUnsigned'
 
@@ -1678,7 +1658,7 @@ end 'rangeIsUnsigned'
 // ⚠ **INTEGER BOUNDS ONLY.** A float alias carries IEEE bit patterns, so `float(1.0 to 5.0)` has two
 // positive ones and would answer `true` about a question it was never asked. Its one caller excludes
 // floats first, as `rangeExcludesZero` and `rangeIsFull` do by taking `isFloat` outright.
-export function rangeIsWithinSignedNonNegative(low ParsedInt, high ParsedInt) returns bool
+export function rangeIsWithinSignedNonNegative(low FullRangeInt, high FullRangeInt) returns bool
 	return low >= 0 and high >= 0
 end 'rangeIsWithinSignedNonNegative'
 
@@ -1702,7 +1682,7 @@ end 'rangeIsWithinSignedNonNegative'
 // ⚠ `or`/`xor` carry NOTHING at any low bound, and for a different reason rather than a stricter
 // one: they SET bits, so `0x0F or 0xF0` is `0xFF` — a result above both operands' HIGH bound, which
 // no low bound can repair.
-export function rangeIsClosedUnderBitAnd(low ParsedInt) returns bool
+export function rangeIsClosedUnderBitAnd(low FullRangeInt) returns bool
 	return low == 0
 end 'rangeIsClosedUnderBitAnd'
 
@@ -1733,27 +1713,27 @@ end 'rangeIsClosedUnderBitAnd'
 // The i64 pattern an unsigned `u64.max` upper bound rides as — named so the `-1`-means-
 // `u64.max` reinterpretation is not a bare literal (see RangedTypeAlias, and the sentinel case
 // in specs/ranged-typealias.md).
-export let UnsignedFullUpperPattern = -1 as ParsedInt
+export let UnsignedFullUpperPattern = -1 as FullRangeInt
 
 // The finite extremes `f32`/`f64`'s `.min` / `.max` denote in a `float(...)` range declaration,
-// carried as the IEEE-754 **f64** bit pattern the `ParsedInt` bound field holds. A float alias
+// carried as the IEEE-754 **f64** bit pattern the `FullRangeInt` bound field holds. A float alias
 // resolves to `MaxonType.float` (= f64) with NO width narrowing — int narrows via an optimal-width
 // choice, float never does — so an `f32` alias's bounds are the f64 VALUES of the f32 extremes, not
 // an f32 encoding. `.min` is the most-negative finite and `.max` the most-positive — the sign bit
 // apart, which is why `negatedFloatBits` relates the pair.
 //
-// Spelled as decimal bit patterns rather than `f64.max as ParsedInt`: an `as` cast would TRUNCATE the
+// Spelled as decimal bit patterns rather than `f64.max as FullRangeInt`: an `as` cast would TRUNCATE the
 // float VALUE to an integer, not reinterpret its bits, so the type-identifier spelling the integer
-// bounds use (`u32.max as ParsedInt`) cannot express a float bound. A `.min`/`.max` pair differs only
+// bounds use (`u32.max as FullRangeInt`) cannot express a float bound. A `.min`/`.max` pair differs only
 // in the sign bit (`negatedFloatBits` is the runtime form of that relation), but a top-level `let`
 // takes no call, so each is written out.
 //
 // They live HERE rather than in the parser because TWO parties read them: the parser, resolving a
 // `f64.max` bound token, and `rangeIsFull` below, recognizing the span that needs no guard.
-export let F64MaxBound = 9218868437227405311 as ParsedInt  // 0x7FEF_FFFF_FFFF_FFFF  = +1.7976931348623157e308
-export let F64MinBound = -4503599627370497 as ParsedInt  // 0xFFEF_FFFF_FFFF_FFFF  = -1.7976931348623157e308
-export let F32MaxBound = 5183643170566569984 as ParsedInt  // 0x47EF_FFFF_E000_0000  = +3.4028234663852886e38
-export let F32MinBound = -4039728866288205824 as ParsedInt  // 0xC7EF_FFFF_E000_0000  = -3.4028234663852886e38
+export let F64MaxBound = 9218868437227405311 as FullRangeInt  // 0x7FEF_FFFF_FFFF_FFFF  = +1.7976931348623157e308
+export let F64MinBound = -4503599627370497 as FullRangeInt  // 0xFFEF_FFFF_FFFF_FFFF  = -1.7976931348623157e308
+export let F32MaxBound = 5183643170566569984 as FullRangeInt  // 0x47EF_FFFF_E000_0000  = +3.4028234663852886e38
+export let F32MinBound = -4039728866288205824 as FullRangeInt  // 0xC7EF_FFFF_E000_0000  = -3.4028234663852886e38
 
 // ⭐ **IS THIS ALIAS'S DOMAIN THE FLOAT ONE?** THE one place that is decided, because EVERY range
 // predicate below forks on it and the fork is not cosmetic: an integer alias's `low`/`high` are
@@ -1805,7 +1785,7 @@ end 'aliasElementStride'
 // comparison (`foldFloatCompare`, which compares as real f64 for exactly this reason), the Std dialect
 // (`StdDialect`'s `binOpImm`) and `FoldConstOperands` — this is the fourth party that has to know it,
 // and it answers it as an order-preserving KEY where `foldFloatCompare` answers it as a comparison.
-export function floatOrderKey(bits ParsedInt) returns ParsedInt
+export function floatOrderKey(bits FullRangeInt) returns FullRangeInt
 	if bits >= 0 'positive'
 		return bits
 	end 'positive'
@@ -1836,7 +1816,7 @@ end 'floatOrderKey'
 // `i64.min`) and every full-range float alias would then carry a pointless guard whose signed
 // compares would REJECT ordinary values. `float(f32.min to f32.max)` is deliberately NOT full: an f64
 // outside the f32 span is exactly the narrowing its guard must reject.
-function rangeIsFull(low ParsedInt, high ParsedInt, isFloat bool) returns bool
+function rangeIsFull(low FullRangeInt, high FullRangeInt, isFloat bool) returns bool
 	if isFloat 'float'
 		return low == F64MinBound and high == F64MaxBound
 	end 'float'
@@ -1861,7 +1841,7 @@ end 'rangeIsFull'
 // a value arriving from a signed domain, so `boundChecks` gives it the one test its bounds ask for
 // — `value < 0`. The literal check calls this directly with no gate at all, and there the low == 0
 // reading — in range for every value — is exactly right.
-export function rangeIsUnsignedTopped(low ParsedInt, high ParsedInt) returns bool
+export function rangeIsUnsignedTopped(low FullRangeInt, high FullRangeInt) returns bool
 	return high < 0 and rangeIsUnsigned(low)
 end 'rangeIsUnsignedTopped'
 
@@ -1883,7 +1863,7 @@ end 'rangeIsUnsignedTopped'
 // ⚠ The EXCLUSIVE form needs no such rule and it is not an oversight: `upto` stops the first time the test
 // fails, which it does at `bound` itself under either reading, so its counter never reaches a step that
 // wraps.
-export function inclusiveTopBoundWraps(bound ParsedInt) returns bool
+export function inclusiveTopBoundWraps(bound FullRangeInt) returns bool
 	return bound == i64.max or bound == UnsignedFullUpperPattern
 end 'inclusiveTopBoundWraps'
 
@@ -1894,7 +1874,7 @@ end 'inclusiveTopBoundWraps'
 // FLOAT: only when it is above the most-negative finite double. `F64MinBound` is a small NEGATIVE
 // i64 as a bit pattern, so the integer test would call every float lower bound necessary — and, far
 // worse, would call `float(f64.min to X)`'s bound necessary while comparing the wrong way round.
-export function rangeNeedsLowerCheck(low ParsedInt, isFloat bool) returns bool
+export function rangeNeedsLowerCheck(low FullRangeInt, isFloat bool) returns bool
 	if isFloat 'float'
 		return low != F64MinBound
 	end 'float'
@@ -1934,7 +1914,7 @@ end 'rangeNeedsLowerCheck'
 // FLOAT: only below the largest finite double. A sign test is meaningless on a bit pattern —
 // `float(-1.0 to -0.5)`'s upper is a NEGATIVE i64 and is a perfectly real bound that must be checked —
 // which is the same mistake one domain over.
-export function rangeNeedsUpperCheck(low ParsedInt, high ParsedInt, isFloat bool) returns bool
+export function rangeNeedsUpperCheck(low FullRangeInt, high FullRangeInt, isFloat bool) returns bool
 	if isFloat 'float'
 		return high != F64MaxBound
 	end 'float'
@@ -1977,7 +1957,7 @@ end 'rangeNeedsUpperCheck'
 //
 // ⚠ The `-0` case is why this is a CLAUSE and not an early `return false`: `-0` is written negative and
 // denotes 0, which `int(0 to u64.max)` admits — so the non-negative arm still decides it.
-export function literalInRange(value ParsedInt, low ParsedInt, high ParsedInt, isFloat bool, writtenNegative bool, writtenAboveSignedMax bool) returns bool
+export function literalInRange(value FullRangeInt, low FullRangeInt, high FullRangeInt, isFloat bool, writtenNegative bool, writtenAboveSignedMax bool) returns bool
 	if isFloat 'float'
 		let key = floatOrderKey(value)
 		return key >= floatOrderKey(low) and key <= floatOrderKey(high)
@@ -2080,7 +2060,7 @@ end 'rangeCoversRange'
 // narrow `float(0.0 to 1.0)` the claim is false (a counter reaching 10 converts to `10.0`, outside it), so
 // the interval that names nothing declines rather than inheriting a premise it cannot check. It costs an
 // elision on a shape nothing in the corpus writes.
-export function rangeCoversIntBounds(target RangedTypeAlias, low ParsedInt, high ParsedInt) returns bool
+export function rangeCoversIntBounds(target RangedTypeAlias, low FullRangeInt, high FullRangeInt) returns bool
 	if aliasIsFloat(target) 'aFloatTarget'
 		return false
 	end 'aFloatTarget'
@@ -2138,11 +2118,9 @@ end 'rangeCoversIntBounds'
 // ⚠ **WHAT THE `true` ANSWER RESTS ON: that a value denoting alias `A` is IN `A`'s range.** That is the
 // induction every door in this family maintains — a cast site guards its result, a parameter is guarded
 // at the callee's entry, a `return` before its `ret`, a field or element at its store — so a value handed
-// on under `A` has already passed `A`'s cascade or been refused by E3005. The one producer that breaks it
-// is `Array.resize`, which EXPOSES zero-initialized slots crossing no door at all (`specs/safety.md`'s
-// `divide-by-zero-fault-through-a-resized-array-slot`); a wider door downstream catches such a slot only
-// BY COINCIDENCE — it fires only where the exposed `0` also falls outside the SECOND range — and a
-// coincidence is not a guarantee this elision may be written against. That hole is `resize`'s to close.
+// on under `A` has already passed `A`'s cascade or been refused by E3005. The producers of a slot crossing
+// no door — `Array.resize`, `__ManagedMemory.setLength` and `Vector.create`, which expose zero-initialized
+// slots — are refused (E3106) for an element range that excludes zero.
 export function rangeCoversDenotedRange(target RangedTypeAlias, source DeclaredAlias) returns bool
 	return match source 'source'
 		undeclared gives false
@@ -2161,11 +2139,11 @@ end 'rangeCoversDenotedRange'
 // tier, so neither can quote a declaration the program does not contain — MEASURED as
 // `outside the range of 'Byte$0_1000' (int(0 to 1000))`, which names no line the author wrote and prints
 // the real bounds beside the suffix that was supposed to carry them.
-export function literalOutOfRangeMessage(value ParsedInt, aliasName String, low ParsedInt, high ParsedInt, isFloat bool, writtenNegative bool, domain RangedAliasDomain = RangedAliasDomain.quantity) returns String
+export function literalOutOfRangeMessage(value FullRangeInt, aliasName String, low FullRangeInt, high FullRangeInt, isFloat bool, writtenNegative bool, domain RangedAliasDomain = RangedAliasDomain.quantity) returns String
 	return "Value {literalValueText(value, isFloat: isFloat, writtenNegative: writtenNegative)} is outside the range of {rangedAliasValueSetDisplay(aliasName, low: low, high: high, isFloat: isFloat, domain: domain)}"
 end 'literalOutOfRangeMessage'
 
-function literalValueText(value ParsedInt, isFloat bool, writtenNegative bool) returns String
+function literalValueText(value FullRangeInt, isFloat bool, writtenNegative bool) returns String
 	if not isFloat and value < 0 and not writtenNegative 'aboveTheSignedTop'
 		return unsignedScalarText(value)
 	end 'aboveTheSignedTop'
@@ -2185,7 +2163,7 @@ end 'literalValueText'
 // 'Byte$300_1000' (int(300 to 1000))`: a declaration the program does not contain, with the real
 // bounds printed in the same sentence. One alias, two spellings, decided by which of two E3005s the
 // value happens to meet.
-export function otherwiseOutOfRangeMessage(value ParsedInt, aliasName String, low ParsedInt, high ParsedInt, writtenNegative bool, domain RangedAliasDomain = RangedAliasDomain.quantity) returns String
+export function otherwiseOutOfRangeMessage(value FullRangeInt, aliasName String, low FullRangeInt, high FullRangeInt, writtenNegative bool, domain RangedAliasDomain = RangedAliasDomain.quantity) returns String
 	return "otherwise value {literalValueText(value, isFloat: false, writtenNegative: writtenNegative)} is outside the range of {rangedAliasValueSetDisplay(aliasName, low: low, high: high, isFloat: false, domain: domain)}"
 end 'otherwiseOutOfRangeMessage'
 
@@ -2202,7 +2180,7 @@ end 'otherwiseOutOfRangeMessage'
 // ⚠ The VALUE is a byte and is spelled plainly — it is never the wrapped `u64.max` pattern
 // `scalarConstantText` exists to un-wrap. The RANGE is not: an element alias's bounds may be a float's bit
 // patterns, so it keeps the alias's own domain rather than assuming the byte's.
-export function byteStringByteOutOfRangeMessage(value ParsedInt, offset ParsedInt, aliasName String, low ParsedInt, high ParsedInt, isFloat bool, domain RangedAliasDomain = RangedAliasDomain.quantity) returns String
+export function byteStringByteOutOfRangeMessage(value FullRangeInt, offset FullRangeInt, aliasName String, low FullRangeInt, high FullRangeInt, isFloat bool, domain RangedAliasDomain = RangedAliasDomain.quantity) returns String
 	return "byte {value} at offset {offset} of a `b\"…\"` byte-string literal is outside the range of {rangedAliasValueSetDisplay(aliasName, low: low, high: high, isFloat: isFloat, domain: domain)}"
 end 'byteStringByteOutOfRangeMessage'
 
@@ -2231,7 +2209,7 @@ end 'byteStringByteOutOfRangeMessage'
 // refusal has none — there is no other way to ask for a String's bytes, or to read a file into a buffer —
 // so what the author has to change is the declaration, and the message says so rather than leaving it to be
 // inferred from a range.
-export function rawByteFillNarrowElementMessage(member String, aliasName String, low ParsedInt, high ParsedInt, isFloat bool) returns String
+export function rawByteFillNarrowElementMessage(member String, aliasName String, low FullRangeInt, high FullRangeInt, isFloat bool) returns String
 	return "'{member}' stores RAW bytes into an element declared {rangedAliasValueSetDisplay(aliasName, low: low, high: high, isFloat: isFloat)}, which does not hold every byte value {ByteValueSetLow} to {ByteValueSetHigh} — widen the element's declared range to store raw bytes through it"
 end 'rawByteFillNarrowElementMessage'
 
@@ -2284,7 +2262,7 @@ end 'rawByteWriteSlotDomainMessage'
 // The sentence around the pair is each site's own; only the pair is shared. And E3118 cannot pass a
 // `low`/`high` at all for a `bool` or an enum ordinal, which is why its parser picks the shape and calls
 // this for the one shape that has bounds (`Parser.slotElementDisplay`).
-export function rangedAliasValueSetDisplay(aliasName String, low ParsedInt, high ParsedInt, isFloat bool, domain RangedAliasDomain = RangedAliasDomain.quantity) returns String
+export function rangedAliasValueSetDisplay(aliasName String, low FullRangeInt, high FullRangeInt, isFloat bool, domain RangedAliasDomain = RangedAliasDomain.quantity) returns String
 	// ⚠ A RAW-PATTERN ALIAS SPELLS ITS WIDTH, because its bounds are not what the author wrote:
 	// `bits(64)`'s value set renders as `int(0 to 18446744073709551615)`, a declaration nobody typed —
 	// the same reason the name is spelled as SOURCE spells it.
@@ -2311,7 +2289,7 @@ end 'rangedAliasValueSetDisplay'
 //
 // It applies to the UPPER alone: a low above `i64.max`, and a negative low under an upper above it,
 // are refused at declaration, so a low bound is never unsigned.
-function formatRangeDisplay(low ParsedInt, high ParsedInt, isFloat bool) returns String
+function formatRangeDisplay(low FullRangeInt, high FullRangeInt, isFloat bool) returns String
 	let keyword = "float" if isFloat else "int"
 	let upper = unsignedScalarText(high) if not isFloat and rangeIsUnsignedTopped(low, high: high) else scalarConstantText(high, isFloat: isFloat)
 
@@ -2367,7 +2345,7 @@ end 'shiftOpcodeFor'
 // every bit out, and so saturates to 0; one that fills with the SIGN leaves the sign behind, and
 // `lhs shr 63` already IS the sign — which is why an out-of-range arithmetic right shift is a CLAMP
 // OF THE COUNT and not a select of the result.
-export function evalShift(lhs ParsedInt, count ParsedInt, op MaxonBinOp) returns ParsedInt
+export function evalShift(lhs FullRangeInt, count FullRangeInt, op MaxonBinOp) returns FullRangeInt
 	if shiftCountIsNegative(count) 'negative'
 		panic("evalShift: negative count {count} — a negative count is E2054 and must never reach the folder")
 	end 'negative'
@@ -2396,15 +2374,15 @@ export function evalShift(lhs ParsedInt, count ParsedInt, op MaxonBinOp) returns
 		return lhs shl count
 	end 'left'
 
-	// A LOGICAL right shift, folded with the only right shift a `ParsedInt` HAS — which is the
-	// ARITHMETIC one, because a `ParsedInt` is signed. So: shift, then CLEAR the high bits the sign
+	// A LOGICAL right shift, folded with the only right shift a `FullRangeInt` HAS — which is the
+	// ARITHMETIC one, because a `FullRangeInt` is signed. So: shift, then CLEAR the high bits the sign
 	// replicated into. `64 - count` bits survive a shift by `count`, and the mask keeps exactly
 	// those.
 	//
 	// `count == 0` needs no special case, and that is not luck — it is this language's own rule,
 	// stated at the top of this file: `1 shl 64` shifts every bit out and is 0, so the mask is
 	// `0 - 1`, every bit kept, and the shift is the identity it should be.
-	let survivingBits = (1 shl (ShiftCountBits - count)) - 1
+	let survivingBits = ((1 shl (ShiftCountBits - count)) - 1) as FullRangeInt
 	return (lhs shr count) and survivingBits
 end 'evalShift'
 
@@ -2412,7 +2390,7 @@ end 'evalShift'
 // computed, or a refusal. A refusal is NOT a failure — it is the folder declining to answer a
 // question whose answer would be a DIAGNOSTIC rather than a value.
 export union FoldedInt
-	folded(value ParsedInt)
+	folded(value FullRangeInt)
 	notFoldable
 end 'FoldedInt'
 
@@ -2423,7 +2401,7 @@ end 'FoldedInt'
 // `notFoldable` here too, and deliberately: their rule is `evalShift`'s, it needs the count checked
 // FIRST (a negative one is E2054), and `Parser.emitShift` is the one place that asks. A second
 // shift fold here is exactly the drift this file exists to prevent.
-export function foldIntBinOp(op MaxonBinOp, lhs ParsedInt, rhs ParsedInt) returns FoldedInt
+export function foldIntBinOp(op MaxonBinOp, lhs FullRangeInt, rhs FullRangeInt) returns FoldedInt
 	return match op 'o'
 		add gives FoldedInt.folded(lhs + rhs)
 		sub gives FoldedInt.folded(lhs - rhs)
@@ -2466,7 +2444,7 @@ end 'foldIntBinOp'
 // dividend, so declining it here would leave the folder disagreeing with the language it folds for: the
 // runtime answers `0` (the `mod` overflow guard), and a constant domain that called the same expression
 // unknowable would lose diagnostics the runtime's answer earns — see `Parser.recordBinOpFold`.
-function foldIntDivision(op MaxonBinOp, lhs ParsedInt, rhs ParsedInt) returns FoldedInt
+function foldIntDivision(op MaxonBinOp, lhs FullRangeInt, rhs FullRangeInt) returns FoldedInt
 	if rhs == 0 'noAnswerForEither'
 		return FoldedInt.notFoldable
 	end 'noAnswerForEither'
@@ -2487,7 +2465,7 @@ function foldIntDivision(op MaxonBinOp, lhs ParsedInt, rhs ParsedInt) returns Fo
 	end 'remainderAtTheOverflowPair'
 
 	// rhs is guarded non-zero (and not the i64.min/-1 overflow) above, so these never fail. The
-	// divisor is any non-zero ParsedInt — BOTH signs — which no single contiguous ranged type can
+	// divisor is any non-zero FullRangeInt — BOTH signs — which no single contiguous ranged type can
 	// express (non-zero is not a range), so the guaranteed-safe divide/remainder ride `try`; the
 	// `otherwise` arms are unreachable, so they PANIC rather than fold a wrong answer — a silent
 	// `otherwise 0` would fold to 0 if the guard above ever regressed.
@@ -2516,17 +2494,17 @@ end 'foldIntDivision'
 // compiler that builds THIS compiler emits for these two lines the same `div` the compiled program
 // will. Both casts are guard-free: `rangeIsFull` names the signed-full and the unsigned-full spans as
 // the two that hold every 64-bit pattern, so neither direction can be out of range.
-function foldUnsignedIntDivision(op MaxonBinOp, lhs ParsedInt, rhs ParsedInt) returns FoldedInt
+function foldUnsignedIntDivision(op MaxonBinOp, lhs FullRangeInt, rhs FullRangeInt) returns FoldedInt
 	let dividend = lhs as MachineWord
 	let divisor = rhs as MachineWord
 
 	// `rhs` is guarded non-zero by the caller, so neither divide can fail; the `otherwise` arms PANIC
 	// rather than fold a wrong answer, exactly as the signed arm's do and for its stated reason.
 	if divisionReadsRemainder(op) 'remainder'
-		return FoldedInt.folded((try (dividend mod divisor) otherwise panic("foldUnsignedIntDivision: divisor was 0 past the zero guard")) as ParsedInt)
+		return FoldedInt.folded((try (dividend mod divisor) otherwise panic("foldUnsignedIntDivision: divisor was 0 past the zero guard")) as FullRangeInt)
 	end 'remainder'
 
-	return FoldedInt.folded((try (dividend / divisor) otherwise panic("foldUnsignedIntDivision: divisor was 0 past the zero guard")) as ParsedInt)
+	return FoldedInt.folded((try (dividend / divisor) otherwise panic("foldUnsignedIntDivision: divisor was 0 past the zero guard")) as FullRangeInt)
 end 'foldUnsignedIntDivision'
 
 // Fold `lhs <op> rhs` over two float BIT PATTERNS with the host's native f64 — the float twin of
@@ -2552,7 +2530,7 @@ end 'foldUnsignedIntDivision'
 // path. (A documented divergence from the compiler's emitted `divsd`, which yields ±inf/nan: a constant cannot,
 // because the host gives no float `/0` value and the compiler does not reimplement IEEE division in
 // software.)
-export function foldFloatBinOp(op MaxonBinOp, lhs ParsedInt, rhs ParsedInt) returns FoldedInt
+export function foldFloatBinOp(op MaxonBinOp, lhs FullRangeInt, rhs FullRangeInt) returns FoldedInt
 	let a = floatOfBits(lhs)
 	let b = floatOfBits(rhs)
 
@@ -2616,7 +2594,7 @@ end 'foldFloatBinOp'
 // being absent: `trunc` (`fpToSi`) needs a RANGE decided before the host may be asked, and the two
 // promotions and the two reinterpretations have no float operand to read at all. `foldFpToSi`,
 // `foldSiToFp` and `foldUiToFp` below are where those live.
-export function foldFloatUnaryOp(op MaxonUnaryOp, operand ParsedInt) returns FoldedInt
+export function foldFloatUnaryOp(op MaxonUnaryOp, operand FullRangeInt) returns FoldedInt
 	return match op 'o'
 		// The integer/bool operators, plus the conversions — which decline for opposite reasons, which
 		// is why none is answered here. The two promotions read an INTEGER, so
@@ -2637,7 +2615,7 @@ export function foldFloatUnaryOp(op MaxonUnaryOp, operand ParsedInt) returns Fol
 
 		// The two REINTERPRETATIONS compute nothing and their fold would be the identity, which is
 		// exactly why they are not answered here: what changes across one is the DOMAIN of the value,
-		// and a `ParsedInt` column cannot say which of its entries is a pattern (`foldIntUnaryOp`'s
+		// and a `FullRangeInt` column cannot say which of its entries is a pattern (`foldIntUnaryOp`'s
 		// header argues this at length). The Std tier holds the types that settle it, so it folds them
 		// itself. The sign-extension family has no float operand at all.
 		floatToBits or
@@ -2660,29 +2638,29 @@ end 'foldFloatUnaryOp'
 // Every signed int→f64 fold in both tiers asks it and none may restate it: the parser's constant
 // promotion (`Parser.constFloatBits`), `IR/Std/FoldConstants.evaluateIntSourceUnaryOp`'s `siToFp`,
 // and `foldUiToFp` for an unsigned value below `2^63`.
-export function foldSiToFp(value ParsedInt) returns ParsedInt
+export function foldSiToFp(value FullRangeInt) returns FullRangeInt
 	return bitsOfFloat(0.0 + value)
 end 'foldSiToFp'
 
 // Above `i64.max` the pattern is halved with its dropped bit kept as a sticky low bit, so the
 // convert's one rounding lands where a direct unsigned conversion's does (the doubling is exact). A
 // plain halving can fold a constant one ulp away from what every target computes.
-export function foldUiToFp(value ParsedInt) returns ParsedInt
+export function foldUiToFp(value FullRangeInt) returns FullRangeInt
 	if value >= 0 'withinTheSignedRange'
 		return foldSiToFp(value)
 	end 'withinTheSignedRange'
 
 	let pattern = value as UnsignedScalarPattern
-	let rounded = ((pattern shr 1) or (pattern and 1)) as ParsedInt
+	let rounded = ((pattern shr 1) or (pattern and 1)) as FullRangeInt
 	return bitsOfFloat((0.0 + rounded) * 2.0)
 end 'foldUiToFp'
 
-export function floatOfBits(bits ParsedInt) returns ParsedFloat
-	return Math.fromBits(bits as FloatBits) as ParsedFloat
+export function floatOfBits(bits FullRangeInt) returns FullRangeFloat
+	return Math.fromBits(bits as FloatBits)
 end 'floatOfBits'
 
-export function bitsOfFloat(value ParsedFloat) returns ParsedInt
-	return Math.bitsOf(value as Real) as ParsedInt
+export function bitsOfFloat(value FullRangeFloat) returns FullRangeInt
+	return Math.bitsOf(value) as FullRangeInt
 end 'bitsOfFloat'
 
 // ⭐⭐ **THE COMPILE-TIME `cvttsd2si`, AND IT DECLINES EVERYWHERE THE THREE TARGETS DISAGREE.** `trunc`
@@ -2706,7 +2684,7 @@ end 'bitsOfFloat'
 // A case COULD exist — it is the one decline here that a program can observe — and does not, because
 // pinning it means pinning wasmtime's stderr, which names the module by absolute path and
 // `SpecTestRunner.checkRunStderr` compares exactly. `specs/fold-constants.md` records both facts.
-export function foldFpToSi(operand ParsedInt) returns FoldedInt
+export function foldFpToSi(operand FullRangeInt) returns FoldedInt
 	let value = floatOfBits(operand)
 
 	if not (value >= FpToSiLowestFoldable and value < FpToSiFirstAboveFoldable) 'noI64Answer'
@@ -2728,7 +2706,7 @@ let FpToSiFirstAboveFoldable = 9223372036854775808.0
 // Fold a unary operator over an integer the parser already holds. `logicalNot` is a BOOL operator —
 // the parser has already resolved which `not` the source meant (see MaxonUnaryOp), so meeting it on
 // an integer is a parser bug, not a fold to decline.
-export function foldIntUnaryOp(op MaxonUnaryOp, operand ParsedInt) returns FoldedInt
+export function foldIntUnaryOp(op MaxonUnaryOp, operand FullRangeInt) returns FoldedInt
 	return match op 'o'
 		neg gives FoldedInt.folded(-operand)
 		bitNot gives FoldedInt.folded(not operand)
@@ -2738,13 +2716,13 @@ export function foldIntUnaryOp(op MaxonUnaryOp, operand ParsedInt) returns Folde
 		//
 		// `trunc` cannot ARRIVE here with an integer to fold: `Parser.emitTrunc` answers
 		// `trunc(int)` with the operand itself and emits no op at all, so the only `trunc` in the
-		// stream has a float operand — whose `ParsedInt` is an IEEE BIT PATTERN, not the number.
+		// stream has a float operand — whose `FullRangeInt` is an IEEE BIT PATTERN, not the number.
 		// Folding it as an integer is precisely the wrong answer this column is gated against.
 		//
 		// The two promotions are unreachable for the structural reason: this folder runs only when
 		// `tagIsInteger(resultTag)` (see `Parser.emitUnaryOp`), and a promotion's result tag is
 		// float by construction. Constant-folding a promotion would mean computing an IEEE
-		// encoding at compile time — a real thing to want, and a `ParsedInt` column that cannot
+		// encoding at compile time — a real thing to want, and a `FullRangeInt` column that cannot
 		// say which of its entries are bit patterns is not the place to put it.
 		//
 		// The five MATH INTRINSICS are unreachable for `promoteToFloat`'s structural reason, twice
@@ -2752,14 +2730,14 @@ export function foldIntUnaryOp(op MaxonUnaryOp, operand ParsedInt) returns Folde
 		// promoted an integer argument, so neither the result nor the operand is an integer by the
 		// time this folder could run. Folding them would mean evaluating
 		// `sqrt`/`floor`/`ceil`/`round`/`abs` on IEEE bit patterns at compile time — a real thing to
-		// want, and not something a `ParsedInt` column that cannot say which entries are bit patterns
+		// want, and not something a `FullRangeInt` column that cannot say which entries are bit patterns
 		// may do. (`abs` alone WOULD be a pure bit operation on that pattern, but the column's
 		// ambiguity is what forbids it, not the arithmetic.) `fneg` is `abs`'s case exactly — a bit
 		// FLIP rather than a bit clear — and is refused for the same reason; a `-K` over a float
 		// constant is folded by `evalConstUnary`'s own float arm instead.
 		//
 		// `floatToBits` is refused for `abs`'s reason and no other, and it is the sharpest case of it:
-		// its fold WOULD BE THE IDENTITY — a float operand's `ParsedInt` already IS the bit pattern this
+		// its fold WOULD BE THE IDENTITY — a float operand's `FullRangeInt` already IS the bit pattern this
 		// op answers with. Folding it would mean this column asserting of one entry that it holds a
 		// pattern rather than a number, which is exactly the distinction its header says it cannot make.
 		//
@@ -3098,7 +3076,7 @@ end 'operandsAreInterfaceRef'
 // input, signed zeroes included) — so the zero it subtracts and the bit pattern a float literal carries
 // are one constant, not two. Negation does NOT read it: `-x` is a sign-bit flip (`MaxonUnaryOp.fneg`),
 // because `0.0 - (+0.0)` is `+0.0`.
-export let FloatZeroBits = 0 as ParsedInt
+export let FloatZeroBits = 0 as FullRangeInt
 
 // The type a `binOp` yields. The ARITHMETIC family (`+`/`-`/`*`/`/`/`mod`) promotes (see
 // `arithResultTag`); the shifts are integral by definition on both sides. Only the WORD operators

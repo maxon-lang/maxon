@@ -41,7 +41,7 @@ The standard library defines two range types:
 <!-- test: ranges.basic-inclusive -->
 ```maxon
 function main() returns ExitCode
-		var sum = 0
+		var sum = 0 as ExitCode
 		for i in 1 to 5 'loop'
 				sum = sum + i
 		end 'loop'
@@ -55,7 +55,7 @@ end 'main'
 <!-- test: ranges.basic-exclusive -->
 ```maxon
 function main() returns ExitCode
-		var sum = 0
+		var sum = 0 as ExitCode
 		for i in 1 upto 5 'loop'
 				sum = sum + i
 		end 'loop'
@@ -69,7 +69,7 @@ end 'main'
 <!-- test: ranges.zero-start -->
 ```maxon
 function main() returns ExitCode
-		var sum = 0
+		var sum = 0 as ExitCode
 		for i in 0 to 3 'loop'
 				sum = sum + i
 		end 'loop'
@@ -83,7 +83,7 @@ end 'main'
 <!-- test: ranges.single-element-inclusive -->
 ```maxon
 function main() returns ExitCode
-		var count = 0
+		var count = 0 as ExitCode
 		for _ in 5 to 5 'loop'
 				count = count + 1
 		end 'loop'
@@ -97,7 +97,7 @@ end 'main'
 <!-- test: ranges.single-element-exclusive -->
 ```maxon
 function main() returns ExitCode
-		var count = 0
+		var count = 0 as ExitCode
 		for _ in 5 upto 6 'loop'
 				count = count + 1
 		end 'loop'
@@ -111,7 +111,7 @@ end 'main'
 <!-- test: ranges.empty-inclusive -->
 ```maxon
 function main() returns ExitCode
-		var count = 0
+		var count = 0 as ExitCode
 		for _ in 5 to 3 'loop'
 				count = count + 1
 		end 'loop'
@@ -125,7 +125,7 @@ end 'main'
 <!-- test: ranges.empty-exclusive -->
 ```maxon
 function main() returns ExitCode
-		var count = 0
+		var count = 0 as ExitCode
 		for _ in 5 upto 5 'loop'
 				count = count + 1
 		end 'loop'
@@ -141,7 +141,7 @@ end 'main'
 function main() returns ExitCode
 		let start = 2
 		let finish = 4
-		var sum = 0
+		var sum = 0 as ExitCode
 		for i in start to finish 'loop'
 				sum = sum + i
 		end 'loop'
@@ -166,11 +166,11 @@ function getEnd() returns Integer
 end 'getEnd'
 
 function main() returns ExitCode
-		var sum = 0
+		var sum = 0 as Integer
 		for i in getStart() to getEnd() 'loop'
 				sum = sum + i
 		end 'loop'
-		return sum
+		return sum as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -180,11 +180,11 @@ end 'main'
 <!-- test: ranges.negative-bounds -->
 ```maxon
 function main() returns ExitCode
-		var sum = 0
+		var sum = 0 as FullRangeInt
 		for i in -2 to 2 'loop'
 				sum = sum + i
 		end 'loop'
-		return sum
+		return sum as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -194,7 +194,7 @@ end 'main'
 <!-- test: ranges.break-in-range -->
 ```maxon
 function main() returns ExitCode
-		var last = 0
+		var last = 0 as ExitCode
 		for i in 1 to 100 'loop'
 				last = i
 				if i == 5 'done'
@@ -211,7 +211,7 @@ end 'main'
 <!-- test: ranges.continue-in-range -->
 ```maxon
 function main() returns ExitCode
-		var sum = 0
+		var sum = 0 as ExitCode
 		for i in 1 to 10 'loop'
 				if i mod 2 == 0 'skip'
 						continue
@@ -228,7 +228,7 @@ end 'main'
 <!-- test: ranges.nested-ranges -->
 ```maxon
 function main() returns ExitCode
-		var sum = 0
+		var sum = 0 as ExitCode
 		for i in 1 to 3 'outer'
 				for j in 1 to 3 'inner'
 						sum = sum + i * j
@@ -244,7 +244,7 @@ end 'main'
 <!-- test: ranges.large-range -->
 ```maxon
 function main() returns ExitCode
-		var sum = 0
+		var sum = 0 as Count
 		for _ in 1 to 1000 'loop'
 				sum = sum + 1
 		end 'loop'
@@ -262,7 +262,7 @@ end 'main'
 <!-- test: ranges.character-range -->
 ```maxon
 function main() returns ExitCode
-		var count = 0
+		var count = 0 as ExitCode
 		for _ in 'a' to 'z' 'loop'
 				count = count + 1
 		end 'loop'
@@ -298,11 +298,11 @@ A range used outside a for-in header is a first-class value with `createIterator
 ```maxon
 function main() returns ExitCode
 		let it = try (1 upto 4).createIterator() otherwise return 99
-		var sum = 0
+		var sum = 0 as RangeBound
 		for v in it 'loop'
 				sum = sum + v
 		end 'loop'
-		return sum
+		return sum as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -314,11 +314,11 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 		let it = try (1 to 4).createIterator() otherwise return 99
-		var sum = 0
+		var sum = 0 as RangeBound
 		for v in it 'loop'
 				sum = sum + v
 		end 'loop'
-		return sum
+		return sum as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -373,11 +373,11 @@ A range can be bound to a variable and iterated via the standard for-in path.
 ```maxon
 function main() returns ExitCode
 		let r = 1 upto 5
-		var sum = 0
+		var sum = 0 as RangeBound
 		for x in r 'loop'
 				sum = sum + x
 		end 'loop'
-		return sum
+		return sum as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -391,7 +391,7 @@ the x64 emitter and panics (*"rax is in the gpr register file where the xmm file
 an internal error rather than a diagnostic.
 ```maxon
 function main() returns ExitCode
-	var trips = 0
+	var trips = 0 as Count
 	for x in 1.0 to 3.0 'l'
 		trips = trips + 1
 	end 'l'
@@ -407,7 +407,7 @@ The same for a `bool` range. Nothing else in the lowering rejects it: the other 
 comparison type error, which is `emitCompare` refusing two operands and says nothing about the step.
 ```maxon
 function main() returns ExitCode
-	var trips = 0
+	var trips = 0 as Count
 	for b in false to true 'l'
 		trips = trips + 1
 	end 'l'
@@ -423,7 +423,7 @@ Each bound is asked separately and anchored on its own half, so a mixed range na
 is wrong — here the END bound, at the `to`.
 ```maxon
 function main() returns ExitCode
-	var trips = 0
+	var trips = 0 as Count
 	for x in 1 to 3.5 'l'
 		trips = trips + 1
 	end 'l'
@@ -451,7 +451,7 @@ function sumTo(lastRow Row) returns Row
 end 'sumTo'
 
 function main() returns ExitCode
-	var chars = 0
+	var chars = 0 as Row
 	for _ in 'a' to 'e' 'k'
 		chars = chars + 1
 	end 'k'
@@ -511,7 +511,7 @@ four=😀😁😂😃
 A label written after `end` must repeat the `for` loop's opening label.
 ```maxon
 function main() returns ExitCode
-	var sum = 0
+	var sum = 0 as ExitCode
 	for i in 1 to 3 'each'
 		sum = sum + i
 	end 'every'
@@ -520,4 +520,113 @@ end 'main'
 ```
 ```maxoncstderr
 error E2008: <fragment>:6:2: Mismatched end label: expected 'each', got 'every'
+```
+
+<!-- test: a-literal-start-adopts-the-limits-alias -->
+A literal start bound adopts the other bound's alias, so the counter is a `Count` where the limit is one.
+```maxon
+typealias Score = int(0 to u64.max)
+
+function show(v Score)
+	print("{v}\n")
+end 'show'
+
+function walk(n Count)
+	for i in 0 upto n 'each'
+		show(i)
+	end 'each'
+end 'walk'
+
+function main() returns ExitCode
+	walk(3)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:10:3: argument type mismatch for 'v': expected 'Score', got 'Count'
+```
+
+<!-- test: error.a-loop-counter-is-immutable -->
+A loop counter is immutable inside the loop body.
+```maxon
+function main() returns ExitCode
+	var total = 0 as Count
+	for i in 0 upto 5 'each'
+		i = 3
+		total = total + i
+	end 'each'
+	return total as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2013: <fragment>:5:3: cannot assign to immutable variable: 'i'
+```
+
+<!-- test: error.a-both-literal-counter-outside-a-slots-range -->
+A counter between two literal bounds is range-checked at each use against its largest value.
+```maxon
+typealias Small = int(0 to 100)
+
+function take(v Small) returns Small
+	return v
+end 'take'
+
+function main() returns ExitCode
+	for i in 0 upto 200 'each'
+		let t = take(i)
+		print("{t}\n")
+	end 'each'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:10:11: Value 199 is outside the range of 'Small' (int(0 to 100))
+```
+
+<!-- test: error.a-let-derived-from-a-literal-counter-outside-a-slots-range -->
+A `let` computed from a both-literal counter carries the computed range and is range-checked at each use
+against it, so `i - 1` meets `Count` at its smallest value.
+```maxon
+function take(v Count) returns Count
+	return v
+end 'take'
+
+function main() returns ExitCode
+	for i in 0 upto 2 'each'
+		let n = i - 1
+		let t = take(n)
+		print("{t}\n")
+	end 'each'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:9:11: Value -1 is outside the range of 'Count' (int(0 to 18446744073709551615))
+```
+
+<!-- test: a-guarded-use-of-a-literal-counter-is-not-refused -->
+A use of a literal counter is checked against the range the counter can have AT that use, so a branch that excludes the out-of-range values admits it.
+```maxon
+typealias Small = int(0 to 100)
+
+function take(v Small) returns Small
+	return v
+end 'take'
+
+function main() returns ExitCode
+	var total = 0 as Count
+	for i in 0 upto 200 'each'
+		if i < 100 'inRange'
+			total = total + (take(i) as Count)
+		end 'inRange'
+	end 'each'
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4950
 ```

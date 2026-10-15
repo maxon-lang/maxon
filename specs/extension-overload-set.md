@@ -540,7 +540,7 @@ typealias OpaqueHolder = Holder with Opaque
 function main() returns ExitCode
 	let h = IntHolder.create(7)
 	let o = OpaqueHolder.create(Opaque.create())
-	var n = 0
+	var n = 0 as Integer
 	if h.beats(3) 'cmp'
 		n = n + 1
 	end 'cmp'

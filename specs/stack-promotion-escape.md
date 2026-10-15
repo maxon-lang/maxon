@@ -58,7 +58,7 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-	var total = 0
+	var total = 0 as Integer
 	for i in 0 upto 6 'each'
 		let p = Point.create(i, y: i + 1)
 		total = total + p.x + p.y
@@ -396,7 +396,7 @@ function main() returns ExitCode
 	let a = Point.create(1, y: 2)
 	let b = Point.create(1, y: 2)
 	let c = a
-	var score = 0
+	var score = 0 as Integer
 	if a is b 'distinctRecordsAreNotIdentical'
 		score = score + 1
 	end 'distinctRecordsAreNotIdentical'

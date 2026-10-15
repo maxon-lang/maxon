@@ -120,7 +120,7 @@ function main() returns ExitCode
 		bufs.push(build(n as Len))
 	end 'alloc'
 
-	var bad = 0
+	var bad = 0 as FullRangeInt
 	for n in 1 upto 261 'check'
 		let b = try bufs.get(n - 1) otherwise return 1
 		if b.count() != n 'length'
@@ -175,7 +175,7 @@ function main() returns ExitCode
 		bufs.push(build(k as Index))
 	end 'alloc'
 
-	var bad = 0
+	var bad = 0 as FullRangeInt
 	for k in 0 upto 3000 'check'
 		let b = try bufs.get(k) otherwise return 1
 		for i in 0 upto 24 'bytes'
@@ -223,7 +223,7 @@ function roundTrip(r Round) returns Integer
 		big.push(((r + i) mod 251) as Byte)
 	end 'fill'
 
-	var wrong = 0
+	var wrong = 0 as Integer
 	for i in 0 upto 512 'check'
 		let got = try big.get(i) otherwise return 1
 		if (got as Round) != ((r + i) mod 251) 'value'
@@ -234,7 +234,7 @@ function roundTrip(r Round) returns Integer
 end 'roundTrip'
 
 function main() returns ExitCode
-	var bad = 0
+	var bad = 0 as Integer
 	for r in 0 upto 64 'rounds'
 		bad = bad + roundTrip(r as Round)
 	end 'rounds'
@@ -279,7 +279,7 @@ function main() returns ExitCode
 		bufs.push(build(k as Index))
 	end 'alloc'
 
-	var bad = 0
+	var bad = 0 as FullRangeInt
 	for k in 0 upto 40 'check'
 		let b = try bufs.get(k) otherwise return 1
 		for i in 0 upto 64 'bytes'
@@ -328,7 +328,7 @@ function countNonZero() returns Integer
 	var mm = try __ManagedMemory.create(4096, elementSize: 1) otherwise return 1
 	try mm.setLength(4096) otherwise return 2
 	let arr = ByteArray.init(mm)
-	var seen = 0
+	var seen = 0 as FullRangeInt
 	for i in 0 upto 4096 'scan'
 		let got = try arr.get(i) otherwise return 3
 		if got != 0 'nonZero'
@@ -379,9 +379,9 @@ function verify(b ByteArray, n Len, seed Len) returns Integer
 	if (b.count() as Len) != n 'length'
 		return 1
 	end 'length'
-	var wrong = 0
+	var wrong = 0 as Integer
 	for i in 0 upto n 'bytes'
-		let got = try b.get(i) otherwise return 1
+		let got = try b.get(i as ElementIndex) otherwise return 1
 		if (got as Len) != ((i + seed) mod 251) 'value'
 			wrong = wrong + 1
 		end 'value'
@@ -404,7 +404,7 @@ function main() returns ExitCode
 		end 'build'
 	end 'waves'
 
-	var bad = 0
+	var bad = 0 as Integer
 	for k in 0 upto 120 'check'
 		let b = try keep.get(k) otherwise return 1
 		bad = bad + verify(b, n: (k + 8) as Len, seed: k as Len)
@@ -465,7 +465,7 @@ function main() returns ExitCode
 		scratch.push(1)
 	end 'churn'
 
-	var bad = 0
+	var bad = 0 as FullRangeInt
 	for k in 0 upto 40 'check'
 		let b = try keep.get(k) otherwise return 1
 		let n = k + 1
@@ -530,7 +530,7 @@ function sweep() returns Integer
 		bufs.push(build((FirstLen + k * LenStep) as Len))
 	end 'alloc'
 
-	var bad = 0
+	var bad = 0 as FullRangeInt
 	for k in 0 upto SweepCount 'check'
 		let n = FirstLen + k * LenStep
 		let b = try bufs.get(k) otherwise return 1
@@ -596,7 +596,7 @@ function main() returns ExitCode
 		bufs.push(build((9000 + k * 220) as Len, seed: k as Len))
 	end 'alloc'
 
-	var bad = 0
+	var bad = 0 as FullRangeInt
 	for k in 0 upto 96 'check'
 		let b = try bufs.get(k) otherwise return 1
 		for i in 0 upto 32 'bytes'
@@ -647,11 +647,11 @@ function main() returns ExitCode
 	// Sixteen sizes spread across the ladder, forty spans' worth of each: the arena serves a run per
 	// span, and the runs are of sixteen different lengths.
 	for k in 0 upto 640 'alloc'
-		let size = 1000 + (k mod 16) * 1800
-		bufs.push(build(size as Len, seed: k as Len))
+		let size = (1000 + (k mod 16) * 1800) as Len
+		bufs.push(build(size, seed: k as Len))
 	end 'alloc'
 
-	var bad = 0
+	var bad = 0 as FullRangeInt
 	for k in 0 upto 640 'check'
 		let b = try bufs.get(k) otherwise return 1
 		for i in 0 upto 16 'bytes'

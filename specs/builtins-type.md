@@ -194,7 +194,7 @@ function main() returns ExitCode
 
 	// Negative zero: its bit pattern is 0x8000000000000000, which `==` on
 	// floats cannot detect because -0.0 == 0.0. Comparing bits does.
-	let negativeZeroBits = __Builtins.floatToBits(-0.0)
+	let negativeZeroBits = __Builtins.floatToBits(-0.0) as FloatBits
 	if roundTripBits(negativeZeroBits) != negativeZeroBits 'negativeZero'
 		return 5
 	end 'negativeZero'

@@ -256,7 +256,7 @@ function buildServiceLoop(module MaxonModule, project Project, signatures Progra
 	var armIds = BlockIdArray.create()
 
 	for caseIndex in 0 upto request.caseCount() 'eachVariant'
-		armIds.push(buildServiceArm(fn, signatures: signatures, funcNames: funcNames, typeName: typeName, instance: instance, request: request, caseIndex: caseIndex, req: req, receive: receive, exit: exit, site: site).id)
+		armIds.push(buildServiceArm(fn, signatures: signatures, funcNames: funcNames, typeName: typeName, instance: instance, request: request, caseIndex: caseIndex, req: req, receive: receive, exit: exit, site: site))
 	end 'eachVariant'
 
 	// ⚠ **THE DEFAULT IS THE EXIT, NOT AN ABORT, AND THAT IS A CHOICE ABOUT A CASE THAT CANNOT HAPPEN.** The
@@ -354,14 +354,14 @@ function buildServiceAbandon(module MaxonModule, project Project, signatures Pro
 
 	// Opened BEFORE the arms so every arm has a block id to branch to — `buildServiceLoop`'s arrangement, for
 	// its reason.
-	let destruct = fn.openBlock(b"abandondrop")
+	var destruct = fn.openBlock(b"abandondrop")
 	fn.emitPositionalCallDiscarding(signatures.unionBoxDropCallee(requestName), args: argsOf(box), site: site)
 	fn.terminate(MaxonOp.retVoid, site: site)
 
 	var armIds = BlockIdArray.create()
 
 	for caseIndex in 0 upto request.caseCount() 'eachVariant'
-		armIds.push(buildServiceAbandonArm(fn, signatures: signatures, request: request, caseIndex: caseIndex, box: box, destruct: destruct, site: site).id)
+		armIds.push(buildServiceAbandonArm(fn, signatures: signatures, request: request, caseIndex: caseIndex, box: box, destruct: destruct, site: site))
 	end 'eachVariant'
 
 	// The default is the DROP, which is also every arm's exit: the table covers every tag the union has, so
@@ -371,8 +371,8 @@ function buildServiceAbandon(module MaxonModule, project Project, signatures Pro
 end 'buildServiceAbandon'
 
 // One abandon arm: answer this variant's reply if it has one, then fall through to the shared release.
-function buildServiceAbandonArm(fn SynthesizedFunction, signatures ProgramSignatures, request EnumLayout, caseIndex CaseIndex, box ValueId, destruct IrBlock, site SynthesizedSite) returns IrBlock
-	let arm = fn.openBlock(request.caseNameAt(caseIndex))
+function buildServiceAbandonArm(fn SynthesizedFunction, signatures ProgramSignatures, request EnumLayout, caseIndex CaseIndex, box ValueId, destruct IrBlock, site SynthesizedSite) returns BlockId
+	let armId = fn.openBlock(request.caseNameAt(caseIndex)).id
 	let payloads = request.payloadsAt(caseIndex)
 
 	match serviceReplySlotIndex(payloads) 'reply'
@@ -381,7 +381,7 @@ function buildServiceAbandonArm(fn SynthesizedFunction, signatures ProgramSignat
 	end 'reply'
 
 	fn.terminate(MaxonOp.branch(destruct.id), site: site)
-	return arm
+	return armId
 end 'buildServiceAbandonArm'
 
 // `<T>.__abandon`'s one parameter, by the ValueId the parameter numbering reserves for it —
@@ -390,15 +390,15 @@ let ServiceAbandonBoxParam = 0 as ValueId
 
 // ⭐ **ONE DISPATCH ARM**, as `serviceArmAt` classifies it: the `__shutdown` pill stops the loop, and a
 // message runs its handler. The arm's ENTRY block is what it returns, because that is what the switch jumps to.
-function buildServiceArm(fn SynthesizedFunction, signatures ProgramSignatures, funcNames FunctionNameIndex, typeName ByteArray, instance ServiceStateInstance, request EnumLayout, caseIndex CaseIndex, req ValueId, receive IrBlock, exit IrBlock, site SynthesizedSite) returns IrBlock
-	let arm = fn.openBlock(request.caseNameAt(caseIndex))
+function buildServiceArm(fn SynthesizedFunction, signatures ProgramSignatures, funcNames FunctionNameIndex, typeName ByteArray, instance ServiceStateInstance, request EnumLayout, caseIndex CaseIndex, req ValueId, receive IrBlock, exit IrBlock, site SynthesizedSite) returns BlockId
+	let armId = fn.openBlock(request.caseNameAt(caseIndex)).id
 
 	match serviceArmAt(request, typeName: typeName, caseIndex: caseIndex) 'dispatch'
 		shutdownPill then buildShutdownPillArm(fn, request: request, caseIndex: caseIndex, req: req, exit: exit, site: site)
 		message(callee) then buildMessageArm(fn, signatures: signatures, funcNames: funcNames, callee: callee, instance: instance, request: request, caseIndex: caseIndex, req: req, receive: receive, site: site)
 	end 'dispatch'
 
-	return arm
+	return armId
 end 'buildServiceArm'
 
 function buildShutdownPillArm(fn SynthesizedFunction, request EnumLayout, caseIndex CaseIndex, req ValueId, exit IrBlock, site SynthesizedSite)
@@ -432,7 +432,7 @@ function buildMessageArm(fn SynthesizedFunction, signatures ProgramSignatures, f
 	var payloadTypes = MaxonTypeArray.create()
 
 	for param in 0 upto decl.paramTypes.count() 'eachParam'
-		let slot = serviceParamPayloadSlot(payloads, paramIndex: param)
+		let slot = serviceParamPayloadSlot(payloads, paramIndex: param as ParamCount)
 		let field = try payloads.get(slot) otherwise panic("buildMessageArm: `serviceParamPayloadSlot` answered slot {slot} of a variant holding {payloads.count()} payload(s)")
 		let declared = signatures.payloadTypeOf(field, layout: request, into: signatures.indexTypeNames())
 		let class = classifyUnionPayload(signatures, typeNames: signatures.indexTypeNames(), fieldType: declared, slotScopeFilePath: request.declFilePath)
@@ -828,7 +828,7 @@ function dropUnconsumedPayloads(fn SynthesizedFunction, signatures ProgramSignat
 			continue
 		end 'aFatPointer'
 
-		let field = try payloads.get(serviceParamPayloadSlot(payloads, paramIndex: param)) otherwise panic("dropUnconsumedPayloads: `serviceParamPayloadSlot` answered a slot past the variant's payloads")
+		let field = try payloads.get(serviceParamPayloadSlot(payloads, paramIndex: param as ParamCount)) otherwise panic("dropUnconsumedPayloads: `serviceParamPayloadSlot` answered a slot past the variant's payloads")
 		fn.emitPositionalCallDiscarding(managedFieldDropCallee(signatures, typeNames: signatures.indexTypeNames(), fieldType: signatures.payloadTypeOf(field, layout: request, into: signatures.indexTypeNames())), args: argsOf(loaded), site: site)
 	end 'eachPayload'
 end 'dropUnconsumedPayloads'

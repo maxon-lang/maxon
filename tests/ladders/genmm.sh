@@ -141,7 +141,7 @@ trythrows)
 			echo "function mm$i() returns LadderInt"
 			echo "	var arr = IntArray.create()"
 			echo "	arr.push(7)"
-			echo "	var acc = 0"
+			echo "	var acc = 0 as LadderInt"
 			for ((t = 0; t < TRIES_PER_FN; t++)); do
 				echo "	acc = acc + (try arr.get(0) otherwise 0)"
 			done
@@ -171,7 +171,7 @@ trynone)
 			echo "function mm$i() returns LadderInt"
 			echo "	var arr = IntArray.create()"
 			echo "	arr.push(7)"
-			echo "	var acc = 0"
+			echo "	var acc = 0 as LadderInt"
 			for ((t = 0; t < TRIES_PER_FN; t++)); do
 				echo "	acc = acc + (try probeThrower(0) otherwise 0)"
 			done

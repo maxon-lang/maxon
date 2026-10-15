@@ -40,7 +40,7 @@ the point is the allocation ledger, not the text.
 
 ```maxon
 function fallthroughTrips(s String) returns Integer
-	var n = 0
+	var n = 0 as Integer
 	for c in s 'a'
 		n = n + 1 if c == c else n
 	end 'a'
@@ -48,7 +48,7 @@ function fallthroughTrips(s String) returns Integer
 end 'fallthroughTrips'
 
 function continueTrips(s String) returns Integer
-	var n = 0
+	var n = 0 as Integer
 	for c in s 'b'
 		n = n + 1 if c == c else n
 		if n > 0 'always'
@@ -59,7 +59,7 @@ function continueTrips(s String) returns Integer
 end 'continueTrips'
 
 function breakTrips(s String) returns Integer
-	var n = 0
+	var n = 0 as Integer
 	for c in s 'd'
 		n = n + 1 if c == c else n
 		if n == 2 'stop'
@@ -70,7 +70,7 @@ function breakTrips(s String) returns Integer
 end 'breakTrips'
 
 function returnFromLoop(s String) returns Integer
-	var n = 0
+	var n = 0 as Integer
 	for c in s 'e'
 		n = n + 1 if c == c else n
 		if n == 3 'out'
@@ -81,7 +81,7 @@ function returnFromLoop(s String) returns Integer
 end 'returnFromLoop'
 
 function discardTrips(s String) returns Integer
-	var n = 0
+	var n = 0 as Integer
 	for _ in s 'f'
 		n = n + 1
 	end 'f'
@@ -90,8 +90,8 @@ end 'discardTrips'
 
 function main() returns ExitCode
 	let s = "aé中!xéy"
-	var total = 0
-	var i = 0
+	var total = 0 as Integer
+	var i = 0 as Count
 	while i < 200 'rep'
 		total = total + fallthroughTrips(s) + continueTrips(s) + breakTrips(s) + returnFromLoop(s) + discardTrips(s)
 		i = i + 1
@@ -117,13 +117,13 @@ agree.
 ```maxon
 function main() returns ExitCode
 	let s = "\r\n"
-	var n = 0
+	var n = 0 as Count
 	for _ in s 'each'
 		n = n + 1
 	end 'each'
 	print("{s.count()} {n}\n")
 	let mid = "ab\r\ncd"
-	var m = 0
+	var m = 0 as Count
 	for _ in mid 'more'
 		m = m + 1
 	end 'more'
@@ -145,7 +145,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let s = ""
-	var n = 0
+	var n = 0 as Count
 	for _ in s 'each'
 		n = n + 1
 	end 'each'
@@ -205,7 +205,7 @@ Five regional indicators are two flags and one unpaired indicator.
 ```maxon
 function main() returns ExitCode
 	let s = "🇺🇸🇬🇧🇫"
-	var n = 0
+	var n = 0 as Count
 	for _ in s 'each'
 		n = n + 1
 	end 'each'
@@ -228,7 +228,7 @@ The scan must not read past the buffer when the widest sequence sits at the very
 ```maxon
 function main() returns ExitCode
 	let s = "ab🎉"
-	var n = 0
+	var n = 0 as Count
 	for _ in s 'each'
 		n = n + 1
 	end 'each'
@@ -286,7 +286,7 @@ function isTarget(c Character, target Character) returns bool
 end 'isTarget'
 
 function main() returns ExitCode
-	var hits = 0
+	var hits = 0 as Count
 	for c in "héllo wörld" 'each'
 		if isTarget(c, target: 'ö') 'match'
 			hits = hits + 1
@@ -335,8 +335,8 @@ function litOnly() returns Character
 end 'litOnly'
 
 function main() returns ExitCode
-	var i = 0
-	var n = 0
+	var i = 0 as Count
+	var n = 0 as Count
 	while i < 50 'rep'
 		let c = litOnly()
 		n = n + 1 if c == c else n
@@ -362,7 +362,7 @@ The element carries its owned-heap provenance; a reassignment that saw a borrow 
 
 ```maxon
 function reassignInLoop(s String) returns Integer
-	var n = 0
+	var n = 0 as Integer
 	var found = 'é'
 	for c in s 'each'
 		found = c
@@ -381,8 +381,8 @@ function lastOf(s String) returns Character
 end 'lastOf'
 
 function main() returns ExitCode
-	var i = 0
-	var t = 0
+	var i = 0 as Count
+	var t = 0 as Integer
 	let word = "héllö"
 	while i < 50 'rep'
 		t = t + reassignInLoop(word)
@@ -439,21 +439,21 @@ function firstAscii() returns Character
 end 'firstAscii'
 
 function main() returns ExitCode
-	var n = 0
+	var n = 0 as Count
 	for c in "banana" 'scan'
 		if c == 'a' 'hit'
 			n = n + 1
 		end 'hit'
 	end 'scan'
 
-	var m = 0
+	var m = 0 as Count
 	for c in "banana" 'scan2'
 		if c != 'a' 'miss'
 			m = m + 1
 		end 'miss'
 	end 'scan2'
 
-	var w = 0
+	var w = 0 as Count
 	for c in "héllö théré" 'scan3'
 		if 'é' == c 'lhs'
 			w = w + 1
@@ -483,7 +483,7 @@ arithmetic pins the rest of it.
 ```maxon
 function main() returns ExitCode
 	let cp = 45
-	var hits = 0
+	var hits = 0 as Count
 	if cp == '-' 'dash'
 		hits = hits + 1
 	end 'dash'
@@ -511,7 +511,7 @@ function isTarget(c Character, target Character) returns bool
 end 'isTarget'
 
 function main() returns ExitCode
-	var hits = 0
+	var hits = 0 as Count
 	for c in "banana" 'each'
 		if isTarget(c, target: 'a') 'match'
 			hits = hits + 1
@@ -538,7 +538,7 @@ visited.
 ```maxon
 function main() returns ExitCode
 	var s = "abcdefgh ijklmnop {40 + 2}"
-	var n = 0
+	var n = 0 as Count
 	var seen = ""
 	for c in s 'each'
 		n = n + 1
@@ -568,7 +568,7 @@ so the two bytes appended in the body are visited too.
 ```maxon
 function main() returns ExitCode
 	var s = "heap string number {40 + 2} here"
-	var n = 0
+	var n = 0 as Count
 	var seen = ""
 	for c in s 'each'
 		n = n + 1
@@ -639,8 +639,8 @@ function build(s String) returns Integer
 end 'build'
 
 function main() returns ExitCode
-	var i = 0
-	var t = 0
+	var i = 0 as Count
+	var t = 0 as Integer
 	while i < 200 'rep'
 		t = t + build("héllö")
 		i = i + 1
@@ -734,13 +734,13 @@ left operand compared with itself would answer about nothing.
 
 ```maxon
 function main() returns ExitCode
-	var n = 0
+	var n = 0 as Count
 	for c in "banana" 'scan'
 		if 'a' == c 'hit'
 			n = n + 1
 		end 'hit'
 	end 'scan'
-	var m = 0
+	var m = 0 as Count
 	for c in "banana" 'scan2'
 		if 'a' != c 'miss'
 			m = m + 1
@@ -860,7 +860,7 @@ function main() returns ExitCode
 		print("{c}")
 	end 'chars'
 	let stop = 99
-	var total = 0
+	var total = 0 as Codepoint
 	for i in 'a' to stop 'codepoints'
 		total = total + i
 	end 'codepoints'
@@ -884,7 +884,7 @@ one-byte case.
 
 ```maxon
 function main() returns ExitCode
-	var hits = 0
+	var hits = 0 as Count
 	let cp = 233
 	if cp == 'é' 'accent'
 		hits = hits + 1

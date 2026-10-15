@@ -72,7 +72,7 @@ end 'twice'
 
 function main() returns ExitCode
 	let h = Holder.create(16)
-	var module = 5
+	var module = 5 as Integer
 	module = module + 1
 	return (twice(module) + h.module + module) as ExitCode
 end 'main'

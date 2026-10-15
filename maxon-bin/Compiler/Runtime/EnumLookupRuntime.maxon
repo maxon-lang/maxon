@@ -136,9 +136,9 @@ end 'enumLookupThrows'
 // (`CheckedDivisionRuntime.verifyDivisionByZeroOrdinals`): *"ONE case is not an excuse to skip the claim; it
 // is the cheapest possible claim"* — and this family has two, each ordinal a second transcription of the
 // same declaration order.
-let EnumLookupNoSuchRawValueOrdinal = 0 as ParsedInt
+let EnumLookupNoSuchRawValueOrdinal = 0 as FullRangeInt
 let EnumLookupNoSuchRawValueFlag = EnumLookupNoSuchRawValueOrdinal + ErrorFlagOrdinalBias
-let EnumLookupNoSuchCaseNameOrdinal = 1 as ParsedInt
+let EnumLookupNoSuchCaseNameOrdinal = 1 as FullRangeInt
 let EnumLookupNoSuchCaseNameFlag = EnumLookupNoSuchCaseNameOrdinal + ErrorFlagOrdinalBias
 
 // ⭐ **THE ORDINAL DRIFT GUARD, FOR THIS FAMILY.** The enum's case ORDER is the wire format and
@@ -421,7 +421,7 @@ function synthesizeEnumFromNameCase(module StdModule, layout EnumLayout, caseInd
 		// Written as an `if` and not a ternary because the else arm EMITS: a ternary would append the zero
 		// constant on the parameter path too, leaving one orphan op per filled slot in the IR.
 		if j < arity 'ownSlot'
-			emitStoreField(module, block: build, record: box, offset: layout.payloadSlotOffset(j), value: j + 1)
+			emitStoreField(module, block: build, record: box, offset: layout.payloadSlotOffset(j), value: (j + 1) as ValueId)
 		end 'ownSlot' else 'widerSiblingsSlot'
 			emitStoreField(module, block: build, record: box, offset: layout.payloadSlotOffset(j), value: emitConst(module, block: build, value: 0, ids: ids))
 		end 'widerSiblingsSlot'
@@ -476,7 +476,7 @@ end 'emitCaseValueReturn'
 // (a union box is dropped through the `__destruct_<U>` cascade at scope exit, never through the mm header),
 // and the tag word sits at `UnionTagOffset`. The caller fills the payload slots.
 function emitBoxWithTag(module StdModule, block IrBlock, layout EnumLayout, caseIndex CaseIndex, project Project, ids ValueMinter) returns ValueId
-	let size = emitConst(module, block: block, value: layout.boxSizeBytes() as ParsedInt, ids: ids)
+	let size = emitConst(module, block: block, value: layout.boxSizeBytes() as FullRangeInt, ids: ids)
 	let destructor = emitConst(module, block: block, value: TrivialDestructor, ids: ids)
 	let box = ids.mint()
 	emitMmAllocCall(module, block: block, result: box, size: size, destructor: destructor, tag: userTagIndex(project.globalData, name: layout.name, debugStream: module.debugStream), ids: ids)

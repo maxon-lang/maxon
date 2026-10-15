@@ -869,7 +869,7 @@ typealias StrChain = __ManagedList with String
 
 function main() returns ExitCode
 	var empty = StrChain.create()
-	var caught = 0
+	var caught = 0 as Count
 	for _ in 0 upto 50 'headSpin'
 		let n = try empty.head() otherwise 'noHead'
 			caught = caught + 1

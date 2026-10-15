@@ -371,8 +371,8 @@ function noop() returns Integer
 end 'noop'
 
 function main() returns ExitCode
-	var i = 0
-	var acc = 0
+	var i = 0 as Integer
+	var acc = 0 as Integer
 	while i < 5000 'loop'
 		let p = async noop()
 		let r = await p
@@ -402,8 +402,8 @@ function dbl(x Integer) returns Integer
 end 'dbl'
 
 function main() returns ExitCode
-	var i = 1
-	var acc = 0
+	var i = 1 as Integer
+	var acc = 0 as Integer
 	while i <= 5 'loop'
 		let p = async dbl(i)
 		let r = await p
@@ -540,9 +540,9 @@ mismatch returns its own exit code so a partial corruption names the level it st
 ```maxon
 function scale(x Real, depth Integer) returns Integer
 	if depth == 0 'base'
-		return trunc(x)
+		return trunc(x) as Integer
 	end 'base'
-	return trunc(x) + scale(x * 2.0, depth: depth - 1)
+	return (trunc(x) as Integer) + scale(x * 2.0, depth: depth - 1)
 end 'scale'
 
 function sweep() returns Integer
@@ -593,7 +593,7 @@ recursion runs while `a >= 1.0` from 6.0 down to 0.0 — seven levels, 105. A de
 recursion at the first level (15); a destroyed xmm1–5 drops that register's term from every level.
 ```maxon
 function six(a Real, b Real, c Real, d Real, e Real, f Real) returns Integer
-	let sum = trunc(b) + trunc(c) + trunc(d) + trunc(e) + trunc(f)
+	let sum = (trunc(b) + trunc(c) + trunc(d) + trunc(e) + trunc(f)) as Integer
 	if a < 1.0 'base'
 		return sum
 	end 'base'
@@ -640,8 +640,8 @@ function square(n Integer) returns Integer
 end 'square'
 
 function main() returns ExitCode
-	var sum = 0
-	var i = 0
+	var sum = 0 as Integer
+	var i = 0 as Integer
 	while i < 200 'rounds'
 		let p = async square(i)
 		sum = sum + await p
@@ -680,13 +680,13 @@ end 'twice'
 
 function wave(base Integer) returns Integer
 	var ps = IntPromiseArray.create()
-	var i = 0
+	var i = 0 as Integer
 	while i < 100 'spawnEach'
 		ps.push(async twice(base + i))
 		i = i + 1
 	end 'spawnEach'
-	var sum = 0
-	var k = 0
+	var sum = 0 as Integer
+	var k = 0 as ElementIndex
 	while k < 100 'awaitEach'
 		let p = try ps.get(k) otherwise panic("ps.get OOB at {k} — bounded by the pushes above")
 		sum = sum + await p

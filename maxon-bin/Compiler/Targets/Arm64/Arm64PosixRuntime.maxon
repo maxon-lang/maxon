@@ -205,7 +205,7 @@ end 'arm64EmitWin32BoolFromZeroStatus'
 //
 // `EBUSY` and `ETXTBSY` answer `ERROR_SHARING_VIOLATION`, the code the file surface classifies as
 // busy (`ManagedFileRuntime`), so a busy file throws the same case on every lane.
-export function arm64EmitErrnoToWin32(asm Arm64RuntimeAsm, wouldBlock ParsedInt, dirNotEmpty ParsedInt)
+export function arm64EmitErrnoToWin32(asm Arm64RuntimeAsm, wouldBlock FullRangeInt, dirNotEmpty FullRangeInt)
 	let notFound = asm.newLabel()
 	let pathNotFound = asm.newLabel()
 	let denied = asm.newLabel()
@@ -555,7 +555,7 @@ function arm64PosixEmitStashFailure(asm Arm64RuntimeAsm, call PosixHostCall)
 	end 'route'
 end 'arm64PosixEmitStashFailure'
 
-function arm64PosixEmitPublishErrno(asm Arm64RuntimeAsm, call PosixHostCall, value ParsedInt)
+function arm64PosixEmitPublishErrno(asm Arm64RuntimeAsm, call PosixHostCall, value FullRangeInt)
 	match call 'route'
 		importCall then arm64DarwinEmitPublishAndStashErrno(asm, value: value)
 		syscall then arm64LinuxEmitPublishErrno(asm, value: value)
@@ -721,7 +721,7 @@ function arm64PosixEmitOpenatArguments(asm Arm64RuntimeAsm)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: PosixNoFileMode as MachineWord)
 end 'arm64PosixEmitOpenatArguments'
 
-function arm64PosixEmitEnsureStdDescriptor(asm Arm64RuntimeAsm, globalData GlobalDataTable, fcntl PosixHostCall, open PosixHostCall, descriptor ParsedInt, refused BlockId)
+function arm64PosixEmitEnsureStdDescriptor(asm Arm64RuntimeAsm, globalData GlobalDataTable, fcntl PosixHostCall, open PosixHostCall, descriptor FullRangeInt, refused BlockId)
 	let present = asm.newLabel()
 
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: descriptor as MachineWord)

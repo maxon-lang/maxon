@@ -1334,7 +1334,7 @@ function main() returns ExitCode
 		replies.push(h.bump(step))
 	end 'eachSend'
 
-	var total = 0
+	var total = 0 as Integer
 	for r in replies 'eachReply'
 		total = try await r otherwise 0
 	end 'eachReply'
@@ -2375,7 +2375,7 @@ end 'Source'
 function main() returns ExitCode
 	let h = spawn Source.create()
 	let xs = try await h.values() otherwise IntegerArray.create()
-	var sum = 0
+	var sum = 0 as Integer
 	for x in xs 'each'
 		sum = sum + x
 	end 'each'
@@ -2500,7 +2500,7 @@ type Svc
 	end 'create'
 
 	export function take(cs CellArray)
-		var sum = 0
+		var sum = 0 as Integer
 		for c in cs 'each'
 			sum = sum + c.n
 		end 'each'
@@ -2776,7 +2776,7 @@ function main() returns ExitCode
 		readers.push(spawn Reader.create())
 	end 'spawnEach'
 
-	var kept = 0
+	var kept = 0 as Count
 	for i in 1 to rounds 'round'
 		let r = try readers.get(i mod serviceCount) otherwise panic("readers.get")
 		var s = ""
@@ -2786,7 +2786,7 @@ function main() returns ExitCode
 		kept = kept + bytes.count()
 	end 'round'
 
-	var total = 0
+	var total = 0 as Integer
 	for k in 0 upto serviceCount 'collect'
 		let r = try readers.get(k) otherwise panic("readers.get({k})")
 		total = total + (try await r.report() otherwise 0)
@@ -5333,7 +5333,7 @@ type Relay
 	end 'adopt'
 
 	export function forward(by Integer) returns Integer
-		var total = 0
+		var total = 0 as Integer
 		for peer in self.peers 'each'
 			total = total + (try await peer.bump(by) otherwise 0)
 		end 'each'
@@ -5528,7 +5528,7 @@ function main() returns ExitCode
 	let h = spawn Svc.create()
 	var xs = Boxes.create()
 	let b = Box.create(3)
-	var trip = 0
+	var trip = 0 as Integer
 	while trip < 2 'twice'
 		match routeFor(trip) 'send'
 			toArray then stash(xs, item: b)
@@ -5590,7 +5590,7 @@ end 'routeFor'
 function main() returns ExitCode
 	let h = spawn Svc.create()
 	var xs = Boxes.create()
-	var trip = 0
+	var trip = 0 as Integer
 	while trip < 4 'eachTrip'
 		let b = Box.create(trip + 1)
 		match routeFor(trip) 'send'
@@ -5601,7 +5601,7 @@ function main() returns ExitCode
 	end 'eachTrip'
 
 	let seen = try await h.total() otherwise 0
-	var kept = 0
+	var kept = 0 as Integer
 	for box in xs 'sum'
 		kept = kept + box.n
 	end 'sum'
@@ -6944,7 +6944,7 @@ type Slow
 end 'Slow'
 
 function main() returns ExitCode
-	var stops = 0
+	var stops = 0 as Integer
 	let h = spawn Slow.create()
 	h.shutdown()
 	try await h.value() otherwise (e) 'first'
@@ -7568,7 +7568,7 @@ function main() returns ExitCode
 	let ready = ps.awaitAny()
 	let p = try ps.get(ready) otherwise panic("awaitAny named a slot that is in range")
 	let v = try await p otherwise 0
-	return (ready + v) as ExitCode
+	return (ready as Integer + v) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -7738,7 +7738,7 @@ type Slow
 end 'Slow'
 
 function main() returns ExitCode
-	var stops = 0
+	var stops = 0 as Integer
 	let h = spawn Slow.create()
 	h.shutdown()
 	var ps = ReplyPromiseArray.create()
@@ -7811,7 +7811,7 @@ end 'Box'
 
 function main() returns ExitCode
 	let h = spawn Box.create(1)
-	let v = try await h.peek() otherwise 0
+	let v = (try await h.peek() otherwise 0) as FullRangeInt
 	return v as ExitCode
 end 'main'
 ```
@@ -8932,7 +8932,7 @@ type Worker
 end 'Worker'
 
 function main() returns ExitCode
-	var parked = 0
+	var parked = 0 as Integer
 
 	for round in 1 to 8 'rounds'
 		let w = spawn Worker.create()
@@ -11811,7 +11811,7 @@ module type Calc
 	end 'put'
 end 'Calc'
 module function poke(h Calc.handle)
-	var k = 5
+	var k = 5 as Integer
 	h.put(1, b: k)
 	print("{k}\n")
 end 'poke'
@@ -11850,7 +11850,7 @@ end 'Calc'
 
 function main() returns ExitCode
 	let h = spawn Calc.create()
-	var k = 5
+	var k = 5 as Integer
 	let r = try await h.put(1, b: k) otherwise 0
 	print("{r} {k}\n")
 	return 0
@@ -11884,7 +11884,7 @@ end 'Calc'
 
 function main() returns ExitCode
 	let h = spawn Calc.create()
-	var k = 5
+	var k = 5 as Integer
 	let r = try await h.add(k) otherwise 0
 	print("{r} {k}\n")
 	return 0
@@ -11922,7 +11922,7 @@ type Calc
 end 'Calc'
 
 function poke(h Calc.handle)
-	var k = 5
+	var k = 5 as Integer
 	h.put(1, b: k)
 end 'poke'
 

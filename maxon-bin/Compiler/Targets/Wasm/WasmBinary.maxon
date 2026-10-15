@@ -75,11 +75,11 @@ function writeUleb128(buf ByteArray, value Wasm32Index)
 	panic("writeUleb128: {value} did not terminate within {ulebMaxBytes} bytes — outside the u32 index space")
 end 'writeUleb128'
 
-// Encode a signed constant immediate as SLEB128. `value` is signed (ParsedInt), so
+// Encode a signed constant immediate as SLEB128. `value` is signed (FullRangeInt), so
 // `v shr 7` is an ARITHMETIC shift (ShiftSemantics: signed left operand ⇒ sign-fill): a
 // negative value converges to -1 and a non-negative one to 0, with the sign preserved. That
 // is exactly what SLEB128 needs, so no manual sign extension is required here.
-function writeSleb128(buf ByteArray, value ParsedInt)
+function writeSleb128(buf ByteArray, value FullRangeInt)
 	var v = value
 
 	for _ in 0 upto slebMaxBytes 'encode'
@@ -470,13 +470,13 @@ export type WasmBody
 	end 'localTee'
 
 	// Constants carry SIGNED (SLEB128) immediates. i32Const takes the 32-bit Imm32 the Std
-	// tier carries; i64Const takes the full ParsedInt a `const` op holds (i64.min..i64.max).
+	// tier carries; i64Const takes the full FullRangeInt a `const` op holds (i64.min..i64.max).
 	export function i32Const(v Imm32)
 		self.buf.push(opI32Const)
-		writeSleb128(self.buf, value: v as ParsedInt)
+		writeSleb128(self.buf, value: v as FullRangeInt)
 	end 'i32Const'
 
-	export function i64Const(v ParsedInt)
+	export function i64Const(v FullRangeInt)
 		self.buf.push(opI64Const)
 		writeSleb128(self.buf, value: v)
 	end 'i64Const'
@@ -645,10 +645,10 @@ export type WasmBody
 	end 'i32GeU'
 
 	// f64 constant. `v` is the double's IEEE-754 bit pattern reinterpreted as a signed integer
-	// (the ParsedInt a `const` op carries — the SAME value the `.data`/`.rdata` scalar serializer
+	// (the FullRangeInt a `const` op carries — the SAME value the `.data`/`.rdata` scalar serializer
 	// renders), written as 8 RAW little-endian bytes. Fixed-width, NOT SLEB128: `f64.const` is the
 	// one const opcode whose immediate is not a LEB128.
-	export function f64Const(v ParsedInt)
+	export function f64Const(v FullRangeInt)
 		self.buf.push(opF64Const)
 		writeQword(self.buf, value: v as MachineWord)
 	end 'f64Const'
@@ -937,7 +937,7 @@ end 'writeIdTaggedBlob'
 // Write a constant OFFSET EXPRESSION — `i32.const <offset>` (SLEB immediate) terminated by `end` — the
 // active-segment offset both a data segment and an element segment carry (each lays its bytes at this
 // linear-memory / table position). One door so the two encoders cannot drift on the expression's shape.
-function writeI32ConstOffsetExpr(buf ByteArray, offset ParsedInt)
+function writeI32ConstOffsetExpr(buf ByteArray, offset FullRangeInt)
 	buf.push(opI32Const)
 	writeSleb128(buf, value: offset)
 	buf.push(opEnd)
@@ -1389,7 +1389,7 @@ export type WasmModuleBuilder
 
 		for segment in self.dataSegments 'each'
 			contents.push(wasmDataSegmentActiveMem0)
-			writeI32ConstOffsetExpr(contents, offset: segment.base as ParsedInt)
+			writeI32ConstOffsetExpr(contents, offset: segment.base as FullRangeInt)
 			writeUleb128(contents, value: segment.bytes.count() as Wasm32Index)
 			contents.append(segment.bytes)
 		end 'each'

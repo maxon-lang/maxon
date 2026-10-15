@@ -21,7 +21,7 @@ function main() returns ExitCode
 	let s = try arr.get(0) otherwise ""
 
 	// Push enough elements to force multiple growths (capacity: 4 -> 8 -> 16 -> 32)
-	var i = 0
+	var i = 0 as Count
 	while i < 30 'grow'
 		arr.push("padding string that is long enough for heap allocation too")
 		i = i + 1
@@ -71,7 +71,7 @@ function main() returns ExitCode
 	let item = try arr.get(0) otherwise Item.create("", value: 0)
 
 	// Force many growths
-	var i = 0
+	var i = 0 as Integer
 	while i < 30 'grow'
 		arr.push(Item.create("padding item with long name for heap allocation too", value: i))
 		i = i + 1
@@ -111,7 +111,7 @@ function main() returns ExitCode
 	let c = try arr.get(2) otherwise ""
 
 	// Force many growths
-	var i = 0
+	var i = 0 as Count
 	while i < 30 'grow'
 		arr.push("padding string that is long enough for heap allocation too x")
 		i = i + 1

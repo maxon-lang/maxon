@@ -9,31 +9,31 @@ category: core
 
 ## Documentation
 
-In Maxon, all parameters are passed by reference. When you pass a variable to a function, the function receives a reference to the original value, not a copy.
+In Maxon, a parameter the function only reads is passed by value. A parameter the function assigns to — directly, or through one of its fields or elements — is passed by reference: the function receives the caller's variable, not a copy.
 
 ### Reading Referenced Values
 
-A function can read a parameter that was passed by reference:
+A function that only reads a parameter receives its value:
 
 ```text
 function double(x Integer) returns Integer
   return x * 2
 end 'double'
 
-var n = 21
+var n = 21 as Integer
 var result = double(n)  // result is 42
 ```
 
 ### Mutating Referenced Values
 
-A function can assign to its parameters, and the caller will see the change:
+A function can assign to its parameters, and a caller that passed a `var` sees the change:
 
 ```text
 function increment(x Integer)
   x = x + 1
 end 'increment'
 
-var n = 10
+var n = 10 as Integer
 increment(n)
 // n is now 11
 ```
@@ -63,6 +63,10 @@ A reference-typed (managed) parameter may be reassigned, and the caller observes
 ### Reassigning Scalar Parameter Types
 
 Write-back on reassignment is independent of a scalar parameter's representation. A `float` (or a `Float`-aliased ranged type), a float-backed enum, an integer-backed enum, a payload-free union, `bool`, and byte all propagate their reassignment to the caller, exactly as an integer does. The caller always observes the reassigned value.
+
+### A call through a function value
+
+A call through a function value of arity n passes the argument's storage at position i exactly when some free function of arity n writes its parameter i, whichever function the value holds: one that writes the parameter updates the caller's variable, one that only reads it reads the value held there. A closure literal takes its parameters by value and so only reads. A function that forwards one of its parameters to a function value passes that parameter by reference on the same terms. A `let` handed to a position the function the value may hold writes is refused as it is at a direct call (**E3159**), and an expression that is not storage gives the callee a temporary whose writes have no visible effect, also as at a direct call.
 
 ## Tests
 
@@ -94,7 +98,7 @@ function setTo99(x Integer)
 end 'setTo99'
 
 function main() returns ExitCode
-	var n = 0
+	var n = 0 as Integer
 	setTo99(n)
 	print("{n}")
 	return 0
@@ -115,7 +119,7 @@ other. It is not cell-resident the way a local `var` is, so the write has to rea
 
 typealias Integer = int(i64.min to i64.max)
 
-var counter = 0
+var counter = 0 as Integer
 
 function setTo99(x Integer)
 	x = 99
@@ -382,7 +386,7 @@ function setTo99(x Integer)
 end 'setTo99'
 
 function main() returns ExitCode
-	var pair = (1, 2)
+	var pair = (1 as Integer, 2 as Integer)
 	setTo99(pair.0)
 	setTo99(pair._1)
 	print("{pair.0} {pair.1}")
@@ -511,7 +515,7 @@ end 'reassignVoid'
 function main() returns ExitCode
 	let fromLiteral = reassignReturn(5)
 	let fromCall = reassignReturn(makeThirty())
-	var v = 100
+	var v = 100 as Integer
 	reassignVoid(v)
 	print("{fromLiteral}\n")
 	print("{fromCall}\n")
@@ -753,7 +757,7 @@ function setIt(dest Integer) returns Integer
 end 'setIt'
 
 function main() returns ExitCode
-	var x = 1
+	var x = 1 as Integer
 	x = 2
 	let f = function() gives setIt(x)
 	print("{f()} {x}\n")
@@ -780,7 +784,7 @@ function run(p Integer) returns Integer
 end 'run'
 
 function main() returns ExitCode
-	var n = 1
+	var n = 1 as Integer
 	print("{run(n)} {n}\n")
 	return 0
 end 'main'
@@ -803,7 +807,7 @@ function settle(dest String, src String) returns String
 end 'settle'
 
 function main() returns ExitCode
-	var n = 1
+	var n = 1 as Integer
 	settle(n, src: 5)
 	var s = "a"
 	print("{settle(s, src: "b")} {n}\n")
@@ -877,7 +881,7 @@ function settle(dest String, src String) returns String
 end 'settle'
 
 function main() returns ExitCode
-	var n = 1
+	var n = 1 as Integer
 	let p = async settle(n, src: 5)
 	var s = "a"
 	let q = async settle(s, src: "b")
@@ -907,7 +911,7 @@ function settle(dest String, src String) returns String
 end 'settle'
 
 function main() returns ExitCode
-	var n = 1
+	var n = 1 as Integer
 	let p = async settle(n, src: 5)
 	var s = "a"
 	let q = async settle(s, src: "b")
@@ -942,7 +946,7 @@ function relay(a String)
 end 'relay'
 
 function main() returns ExitCode
-	var n = 1
+	var n = 1 as Integer
 	var s = "unset"
 	relay(n)
 	relay(s)
@@ -968,7 +972,7 @@ function outer(x Integer)
 end 'outer'
 
 function main() returns ExitCode
-	var n = 0
+	var n = 0 as Integer
 	outer(n)
 	print("{n}")
 	return 0
@@ -1260,7 +1264,7 @@ end 'process'
 
 function main() returns ExitCode
 	let x = 1
-	var y = 2
+	var y = 2 as Integer
 	let z = 3
 	process(x, b: y, c: z)
 	print("{x}\n")
@@ -1351,7 +1355,7 @@ function apply(f FnTypeAlias1) returns Integer
 end 'apply'
 
 function main() returns ExitCode
-	var x = 10
+	var x = 10 as Integer
 	let f = function() gives x
 	x = 99
 	let result = apply(f)
@@ -1372,7 +1376,7 @@ function setTo99(x Float)
 end 'setTo99'
 
 function main() returns ExitCode
-	var n = 0.0
+	var n = 0.0 as Float
 	setTo99(n)
 	print("{n}")
 	return 0
@@ -1406,7 +1410,7 @@ end 'reassignVoid'
 function main() returns ExitCode
 	let fromLiteral = reassignReturn(5.0)
 	let fromCall = reassignReturn(makeThirty())
-	var v = 100.0
+	var v = 100.0 as Float
 	reassignVoid(v)
 	print("{fromLiteral}\n")
 	print("{fromCall}\n")
@@ -1535,7 +1539,7 @@ function bump(dest Integer, n Integer) returns Integer
 end 'bump'
 
 function kick(promises IntPromiseArray)
-	var c = 100
+	var c = 100 as Integer
 	promises.push(async bump(c, n: 7))
 	print("kick sees {c}\n")
 end 'kick'
@@ -1789,4 +1793,1710 @@ end 'main'
 ```
 ```maxoncstderr
 error E3005: <fragment>:32:7: argument type mismatch for 's': expected 'Shape', got 'Square'
+```
+
+### A call through a function value passes the variable's storage
+
+<!-- test: pass-by-reference.function-value-call-updates-the-variable -->
+A call through a function value is a call like any other: `bump` assigns its parameter, so the function value passes the variable's cell and the write reaches `v`.
+```maxon
+typealias Small = int(1 to 100)
+
+function bump(n Small)
+	n = 7
+end 'bump'
+
+function main() returns ExitCode
+	var v = 3 as Small
+	let f = bump
+	f(v)
+	return v as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: pass-by-reference.callback-parameter-with-mixed-by-reference-and-by-value-candidates -->
+`run` calls whichever function it is given on a local; `bump` writes its parameter and `keep` only reads it. Both reach the same call site through one convention: the cell is passed, `bump` writes through it and `keep`'s thunk reads it.
+```maxon
+typealias Small = int(1 to 100)
+typealias Step = function(Small) returns Small
+
+function bump(n Small) returns Small
+	n = 7
+	return n
+end 'bump'
+
+function keep(n Small) returns Small
+	return n
+end 'keep'
+
+function run(f Step) returns Small
+	var v = 3 as Small
+	_ = f(v)
+	return v
+end 'run'
+
+function main() returns ExitCode
+	let updated = run(bump)
+	let untouched = run(keep)
+	print("{updated} {untouched}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7 3
+```
+
+<!-- test: pass-by-reference.closure-literal-callee-is-read-through-the-cell -->
+A closure literal takes its parameters by value, so in a class with a by-reference function it is reached through a thunk that reads the cell, and it leaves the variable alone.
+```maxon
+typealias Small = int(1 to 100)
+typealias Step = function(Small) returns Small
+
+function bump(n Small) returns Small
+	n = 7
+	return n
+end 'bump'
+
+function run(f Step) returns Small
+	var v = 3 as Small
+	_ = f(v)
+	return v
+end 'run'
+
+function main() returns ExitCode
+	let moved = run(bump)
+	let offset = 10 as Small
+	let untouched = run(function(n Small) gives n)
+	let capturing = run(function(_ Small) gives offset)
+	print("{moved} {untouched} {capturing}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7 3 3
+```
+
+<!-- test: pass-by-reference.function-value-call-updates-a-float-variable -->
+A by-reference `float` position is an address through a function value too, not a value in a float register.
+```maxon
+typealias Float = float(f64.min to f64.max)
+
+function setTo99(x Float)
+	x = 99.0
+end 'setTo99'
+
+function main() returns ExitCode
+	var n = 0.0 as Float
+	let f = setTo99
+	f(n)
+	print("{n}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+99.0
+```
+
+<!-- test: pass-by-reference.function-value-forwarded-through-a-caller-updates-the-variable -->
+`apply` forwards its own parameter to the function it is given, so that parameter is passed by reference as it is for a direct `bump(n)`, and the caller's variable is updated.
+```maxon
+typealias Small = int(1 to 100)
+typealias Step = function(Small)
+
+function bump(n Small)
+	n = 7
+end 'bump'
+
+function apply(n Small, f Step)
+	f(n)
+end 'apply'
+
+function main() returns ExitCode
+	var v = 3 as Small
+	apply(v, f: bump)
+	return v as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: pass-by-reference.error.a-let-handed-to-a-by-reference-function-value-is-refused -->
+A `let` handed to a position the function value writes is refused as it is at a direct call.
+```maxon
+typealias Small = int(1 to 100)
+
+function bump(n Small)
+	n = 7
+end 'bump'
+
+function main() returns ExitCode
+	let v = 3 as Small
+	let f = bump
+	f(v)
+	return v as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:11:3: cannot pass 'v', which is read-only (a `let` binding), to a function that writes parameter 'n' (in main); pass a clone()
+```
+
+
+<!-- test: pass-by-reference.function-value-closure-and-named-share-one-convention -->
+A closure literal and a named function of one function type are called alike: the named one writes through the cell, the closure reads it and leaves the variable alone.
+```maxon
+typealias Small = int(1 to 100)
+
+function bump(n Small) returns Small
+	n = 7
+	return n
+end 'bump'
+
+function main() returns ExitCode
+	var a = 3 as Small
+	var b = 3 as Small
+	let named = bump
+	let literal = function(n Small) gives n
+	_ = named(a)
+	_ = literal(b)
+	print("{a} {b}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7 3
+```
+
+<!-- test: pass-by-reference.function-value-held-in-a-field-updates-the-variable -->
+A function value read out of a field passes the variable's storage as a local one does.
+```maxon
+typealias Small = int(1 to 100)
+typealias Step = function(Small)
+
+function bump(n Small)
+	n = 7
+end 'bump'
+
+type Holder
+	export let op as Step
+
+	static function create(op Step) returns Holder
+		return Self{op: op}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let holder = Holder.create(bump)
+	var v = 3 as Small
+	holder.op(v)
+	return v as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: pass-by-reference.function-value-call-with-an-expression-gives-the-callee-a-temporary -->
+An expression at a by-reference position of a function value gives the callee a temporary whose writes have no visible effect, exactly as a direct call does.
+```maxon
+typealias Small = int(1 to 100)
+
+function bump(n Small)
+	n = 7
+end 'bump'
+
+function main() returns ExitCode
+	let v = 3 as Small
+	let f = bump
+	f(v + 1)
+	return v as ExitCode
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: pass-by-reference.function-value-shadowing-a-declared-function-updates-the-variable -->
+A local function value named like a declared function is the one the call reaches, so the call is through a function value and passes the variable's storage.
+```maxon
+typealias Small = int(1 to 100)
+
+function bump(n Small)
+	n = 7
+end 'bump'
+
+function f(n Small) returns Small
+	return n
+end 'f'
+
+function main() returns ExitCode
+	var v = 3 as Small
+	let f = bump
+	f(v)
+	return v as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: pass-by-reference.parameter-shadowing-a-declared-function-updates-the-variable -->
+A function-typed parameter named like a declared function is called through its value, and the caller's variable is the one written.
+```maxon
+typealias Small = int(1 to 100)
+typealias Step = function(Small)
+
+function bump(n Small)
+	n = 7
+end 'bump'
+
+function f(n Small) returns Small
+	return n
+end 'f'
+
+function run(f Step) returns Small
+	var v = 3 as Small
+	f(v)
+	return v
+end 'run'
+
+function main() returns ExitCode
+	return run(bump) as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: pass-by-reference.field-named-like-a-method-called-dotted-updates-the-variable -->
+A function-typed field is called through its value even when another type declares a method of that name.
+```maxon
+typealias Small = int(1 to 100)
+typealias Step = function(Small)
+
+function bump(n Small)
+	n = 7
+end 'bump'
+
+type Holder
+	export let step as Step
+
+	static function create(step Step) returns Holder
+		return Self{step: step}
+	end 'create'
+end 'Holder'
+
+type Counter
+	let total as Small
+
+	static function create() returns Counter
+		return Self{total: 1}
+	end 'create'
+
+	function step(by Small) returns Small
+		return total + by - by
+	end 'step'
+end 'Counter'
+
+function main() returns ExitCode
+	let holder = Holder.create(bump)
+	let counter = Counter.create()
+	var v = 3 as Small
+	holder.step(v)
+	return (v as ExitCode) + (counter.step(2) as ExitCode)
+end 'main'
+```
+```exitcode
+8
+```
+
+<!-- test: pass-by-reference.field-called-by-bare-name-in-a-method-updates-the-variable -->
+Inside a method a field is in scope by its bare name; a function-typed field is called through its value even when a declared function has that name.
+```maxon
+typealias Small = int(1 to 100)
+typealias Step = function(Small)
+
+function bump(n Small)
+	n = 7
+end 'bump'
+
+function step(n Small) returns Small
+	return n
+end 'step'
+
+type Runner
+	let step as Step
+
+	static function create(step Step) returns Runner
+		return Self{step: step}
+	end 'create'
+
+	function run() returns Small
+		var v = 3 as Small
+		step(v)
+		return v
+	end 'run'
+end 'Runner'
+
+function main() returns ExitCode
+	let runner = Runner.create(bump)
+	return runner.run() as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: pass-by-reference.captured-function-value-shadowing-a-declared-function-is-called-through-its-value -->
+A closure calls a captured function value named like a declared function, through the value.
+```maxon
+typealias Small = int(1 to 100)
+typealias Step = function(Small) returns Small
+
+function bump(n Small) returns Small
+	n = 7
+	return n
+end 'bump'
+
+function f(n Small) returns Small
+	return n
+end 'f'
+
+function apply(op Step, x Small) returns Small
+	return op(x)
+end 'apply'
+
+function main() returns ExitCode
+	let f = bump
+	let viaClosure = function(x Small) gives apply(f, x: x)
+	return apply(viaClosure, x: 3) as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: pass-by-reference.match-payload-named-like-a-declared-function-updates-the-variable -->
+A name bound by a match arm shadows a declared function, so a call through it is a call through a function value.
+```maxon
+typealias Small = int(1 to 100)
+typealias Step = function(Small)
+
+function bump(n Small)
+	n = 7
+end 'bump'
+
+function keep(n Small) returns Small
+	return n
+end 'keep'
+
+union Choice
+	use(op Step)
+	skip
+end 'Choice'
+
+function main() returns ExitCode
+	let choice = Choice.use(bump)
+	var v = 3 as Small
+
+	match choice 'which'
+		use(keep) then keep(v)
+		skip then v = 1
+	end 'which'
+
+	return v as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: pass-by-reference.agreeing-shapes-share-one-convention-bump-first -->
+Two function values whose parameter types differ only by an `implements` widening are one convention: the call through the `Percent` callback passes the cell the `Small` body writes through, whichever value is taken first.
+```maxon
+typealias Percent = int(0 to 100)
+typealias Small = int(0 to 10) implements Percent
+typealias Cb = function(Percent)
+
+function bump(v Small)
+	v = 3
+end 'bump'
+
+function show(v Percent)
+	print("{v}\n")
+end 'show'
+
+function run(cb Cb)
+	var p = 5 as Percent
+	cb(p)
+	print("{p}\n")
+end 'run'
+
+function main() returns ExitCode
+	let b = bump
+	let s = show
+	var small = 8 as Small
+	var big = 9 as Percent
+	b(small)
+	s(big)
+	run(bump)
+	print("{small}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+9
+3
+3
+```
+
+<!-- test: pass-by-reference.agreeing-shapes-share-one-convention-show-first -->
+The same program with the values taken in the other order.
+```maxon
+typealias Percent = int(0 to 100)
+typealias Small = int(0 to 10) implements Percent
+typealias Cb = function(Percent)
+
+function bump(v Small)
+	v = 3
+end 'bump'
+
+function show(v Percent)
+	print("{v}\n")
+end 'show'
+
+function run(cb Cb)
+	var p = 5 as Percent
+	cb(p)
+	print("{p}\n")
+end 'run'
+
+function main() returns ExitCode
+	let s = show
+	let b = bump
+	var small = 8 as Small
+	var big = 9 as Percent
+	b(small)
+	s(big)
+	run(bump)
+	print("{small}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+9
+3
+3
+```
+
+<!-- test: pass-by-reference.library-callback-that-only-reads-is-unchanged -->
+The program the next case differs from by one assignment: with no function writing a parameter, the stdlib parse the next program reuses carries no places, and the types here are named alike so the two are compiled as two programs.
+```maxon
+typealias Count = int(0 to 1000)
+typealias Counts = Array with Count
+
+function isBig(v Count) returns bool
+	return v / 2 > 3
+end 'isBig'
+
+function main() returns ExitCode
+	var xs = Counts.create()
+	xs.push(4)
+	xs.push(10)
+	xs.push(20)
+	xs.push(9)
+	let big = xs.filter(isBig)
+	print("{big.count()} {xs.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3 4
+```
+
+<!-- test: pass-by-reference.error.a-let-handed-through-a-callback-parameter-is-refused -->
+A `let` handed through a function-typed parameter to a position the function it may hold writes is refused, as at a direct call.
+```maxon
+typealias Small = int(1 to 100)
+typealias Step = function(Small)
+
+function bump(n Small)
+	n = 7
+end 'bump'
+
+function run(f Step)
+	let v = 3 as Small
+	f(v)
+end 'run'
+
+function main() returns ExitCode
+	run(bump)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:11:3: cannot pass 'v', which is read-only (a `let` binding), to a function that writes parameter 'n' (in run); pass a clone()
+```
+
+<!-- test: pass-by-reference.a-ranged-var-handed-to-a-function-value-keeps-its-range-guard -->
+A `var` handed to a function value that takes the position by reference lives in a cell; the guard its sum owes is still run, before the cell is ever handed over.
+```maxon
+typealias Wide = int(0 to 5000)
+typealias Num = int(0 to 1000) implements Wide
+
+function bump(n Wide)
+	n = 1
+end 'bump'
+
+function keep(n Wide)
+	print("{n}\n")
+end 'keep'
+
+function f(a Num, b Num) returns Num
+	let g = keep
+	var t = a + b
+	g(t)
+	return t
+end 'f'
+
+function main() returns ExitCode
+	var w = 3 as Wide
+	bump(w)
+	print("{f(900, b: 900)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at pass-by-reference.a-ranged-var-handed-to-a-function-value-keeps-its-range-guard.test:15: Range check failed: value outside typealias 'Num'
+Stack trace:
+  in f
+  in main
+  in mrt_start
+```
+
+<!-- test: pass-by-reference.error.a-branded-var-read-back-from-a-cell-keeps-its-brand -->
+A cell-resident `var` of one array alias read back and handed where another alias is declared is the same refusal a plain local gets.
+```maxon
+typealias Item = int(0 to 100)
+typealias Xs = Array with Item
+typealias Ys = Array with Item
+
+function reset(ys Ys)
+	ys = Ys.create()
+end 'reset'
+
+function take(xs Xs)
+	print("{xs.count()}\n")
+end 'take'
+
+function main() returns ExitCode
+	var ys = Ys.create()
+	reset(ys)
+	take(ys)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:17:2: argument type mismatch for 'xs': expected 'Xs', got 'Ys'
+```
+
+<!-- test: pass-by-reference.error.a-let-handed-to-a-callback-is-refused-when-only-a-widening-body-writes-it -->
+A body whose parameter alias implements the callback's parameter alias stands for that callback type, so a `let` handed through the callback is refused even though no body of the callback's own alias writes it.
+```maxon
+typealias Wide = int(1 to 100)
+typealias Narrow = int(1 to 10) implements Wide
+typealias Step = function(Wide)
+
+function bump(n Narrow)
+	n = 7
+end 'bump'
+
+function show(n Wide)
+	print("{n}\n")
+end 'show'
+
+function run(f Step)
+	let v = 3 as Wide
+	f(v)
+end 'run'
+
+function main() returns ExitCode
+	run(show)
+	run(bump)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:16:3: cannot pass 'v', which is read-only (a `let` binding), to a function that writes parameter 'n' (in run); pass a clone()
+```
+
+<!-- test: pass-by-reference.error.a-function-variable-repointed-by-a-callee-takes-the-union -->
+A function variable a callee re-points lives in a cell, so a call through it may land on the new function and a `let` handed to it is refused.
+```maxon
+typealias Count = int(0 to 1000)
+typealias Counts = Array with Count
+typealias Mutator = function(Counts)
+
+function noop(xs Counts)
+	print("{xs.count()}\n")
+end 'noop'
+
+function grow(xs Counts)
+	xs.push(1)
+end 'grow'
+
+function repoint(g Mutator)
+	g = grow
+end 'repoint'
+
+function make() returns Counts
+	var made = Counts.create()
+	made.push(2)
+	return made
+end 'make'
+
+function main() returns ExitCode
+	let data = make()
+	var f = noop
+	repoint(f)
+	f(data)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:28:3: cannot pass 'data', which is read-only (a `let` binding), to a function that writes parameter 'xs' (in main); pass a clone()
+```
+
+<!-- test: pass-by-reference.library-callback-beside-a-writing-function-value -->
+A program that takes a writing function as a value still calls a library method with a callback that only reads: the method hands its element on as a value, and the writer is no landing the method's element could reach, because nothing hands it in.
+```maxon
+typealias Count = int(0 to 1000)
+typealias Counts = Array with Count
+
+function bump(n Count)
+	n = n / 2
+end 'bump'
+
+function main() returns ExitCode
+	var xs = Counts.create()
+	xs.push(4)
+	xs.push(10)
+	xs.push(20)
+	xs.push(9)
+	var halved = 40 as Count
+	let step = bump
+	step(halved)
+	let big = xs.filter(function(c Count) gives c > 3)
+	print("{big.count()} {xs.count()} {halved} {try big.get(0) otherwise 0} {try big.get(2) otherwise 0}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4 4 20 4 20
+```
+
+<!-- test: pass-by-reference.error.a-writing-callback-handed-to-a-library-method-is-refused -->
+`filter` hands each element of the array it walks to the callback as an immutable binding, so a callback that writes its parameter is refused where it is handed in, as the direct call `isBig(item)` inside a `for` is.
+```maxon
+typealias Count = int(0 to 1000)
+typealias Counts = Array with Count
+
+function isBig(n Count) returns bool
+	n = n / 2
+	return n > 3
+end 'isBig'
+
+function main() returns ExitCode
+	var xs = Counts.create()
+	xs.push(4)
+	xs.push(10)
+	let big = xs.filter(isBig)
+	print("{big.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:14:15: 'isBig' writes its parameter 'n', but 'Array.filter' passes it the immutable 'item'
+```
+
+<!-- test: pass-by-reference.error.a-loop-variable-handed-to-a-parameter-that-reassigns-it-is-refused -->
+A `for` loop variable cannot be reassigned, so handing it to a parameter its callee reassigns is refused, as `filter` handing its element to such a callback is.
+```maxon
+typealias Count = int(0 to 1000)
+typealias Counts = Array with Count
+
+function isBig(n Count) returns bool
+	n = n / 2
+	return n > 3
+end 'isBig'
+
+function main() returns ExitCode
+	var xs = Counts.create()
+	xs.push(4)
+	xs.push(10)
+	var big = 0 as Count
+
+	for item in xs 'walk'
+		if isBig(item) 'big'
+			big = big + 1
+		end 'big'
+	end 'walk'
+
+	print("{big}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:17:6: cannot pass 'item', which is read-only (a `for` loop variable), to a function that writes parameter 'n' (in main); pass a clone()
+```
+
+<!-- test: pass-by-reference.error.a-let-handed-to-a-type-parameter-a-callback-writes-is-refused -->
+A callback typed over the type parameter writes the record it is called with, so the parameter the body hands it to is written, and a `let` handed there is refused.
+```maxon
+typealias Count = int(0 to 1000)
+typealias Counts = Array with Count
+
+type Applier uses T
+	typealias Each = function(T)
+	export let size as Count
+
+	static function create(size Count) returns Self
+		return Self{size: size}
+	end 'create'
+
+	function apply(f Each, x T)
+		f(x)
+	end 'apply'
+end 'Applier'
+
+function grow(xs Counts)
+	xs.push(1)
+end 'grow'
+
+typealias CountsApplier = Applier with Counts
+
+function main() returns ExitCode
+	let applier = CountsApplier.create(1)
+	let xs = Counts.create()
+	applier.apply(grow, x: xs)
+	print("{xs.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:27:10: cannot pass 'xs', which is read-only (a `let` binding), to a function that writes parameter 'x' (in main); pass a clone()
+```
+
+<!-- test: pass-by-reference.a-field-typed-with-a-directory-qualified-function-alias-passes-by-reference -->
+A field whose type is a function alias named through its directory is a function value, so a call through it passes its argument by reference.
+```maxon
+// --- file: alpha/ops.maxon
+export typealias Count = int(0 to 1000)
+export typealias Bump = function(Count)
+
+// --- file: main.maxon
+function bump(n alpha.Count)
+	n = n + 1
+end 'bump'
+
+type Holder
+	export var op as alpha.Bump
+
+	static function create() returns Holder
+		return Self{op: bump}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	var n = 1 as alpha.Count
+	h.op(n)
+	print("{n}\n")
+	return 0
+end 'main'
+```
+```stdout
+2
+```
+```exitcode
+0
+```
+
+<!-- test: pass-by-reference.error.a-writing-callback-handed-to-a-generic-user-method-is-refused -->
+The same rule for a callback typed over a type parameter of a user type: `visit` passes its `let` to the callback.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Visitor uses T
+	typealias Each = function(T)
+	let seed as T
+
+	static function create(seed T) returns Self
+		return Self{seed: seed}
+	end 'create'
+
+	function visit(f Each)
+		let v = seed
+		f(v)
+	end 'visit'
+end 'Visitor'
+
+function bump(n Count)
+	n = n / 2
+end 'bump'
+
+typealias CountVisitor = Visitor with Count
+
+function main() returns ExitCode
+	let visitor = CountVisitor.create(8)
+	visitor.visit(bump)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:26:10: 'bump' writes its parameter 'n', but 'Visitor.visit' passes it the immutable 'v'
+```
+
+<!-- test: pass-by-reference.a-sort-beside-an-unrelated-writer-of-the-same-arity-is-accepted -->
+A comparator handed to `sort` is the only function value the sort's helpers call, so a function of the comparator's arity that writes its second parameter does not make them write theirs.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Ints = Array with Integer
+
+function byValue(a Integer, b Integer) returns Ordering
+	return a.compare(b)
+end 'byValue'
+
+function addTo(n Integer, total Integer)
+	total = total + n
+end 'addTo'
+
+function main() returns ExitCode
+	var xs = Ints.create()
+	xs.push(3)
+	xs.push(1)
+	xs.push(2)
+	xs.sort(byValue)
+	let add = addTo
+	var total = 0 as Integer
+	add(5, total)
+
+	for x in xs 'show'
+		print("{x} ")
+	end 'show'
+
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```stdout
+1 2 3 5
+```
+```exitcode
+0
+```
+
+<!-- test: pass-by-reference.error.a-writing-callback-chosen-by-a-ternary-is-refused-where-it-is-handed-in -->
+A callback picked between two functions by a ternary is handed in as whichever it is, so the writer among them refuses the immutable element.
+```maxon
+typealias Count = int(0 to 1000)
+typealias Counts = Array with Count
+
+function isBig(n Count) returns bool
+	n = n / 2
+	return n > 3
+end 'isBig'
+
+function isSmall(n Count) returns bool
+	return n < 3
+end 'isSmall'
+
+function main() returns ExitCode
+	var xs = Counts.create()
+	xs.push(4)
+	xs.push(10)
+	let pick = isBig if xs.count() > 1 else isSmall
+	let big = xs.filter(pick)
+	print("{big.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:19:15: 'isBig' writes its parameter 'n', but 'Array.filter' passes it the immutable 'item'
+```
+
+<!-- test: pass-by-reference.error.a-writing-callback-read-from-a-field-is-refused-where-it-is-handed-in -->
+A callback read out of a field is handed in as any function of its type, so a writer of that type refuses the immutable element.
+```maxon
+typealias Count = int(0 to 1000)
+typealias Counts = Array with Count
+typealias Pred = function(Count) returns bool
+
+function isBig(n Count) returns bool
+	n = n / 2
+	return n > 3
+end 'isBig'
+
+function isSmall(n Count) returns bool
+	return n < 3
+end 'isSmall'
+
+type Holder
+	export let pred as Pred
+
+	static function make(pred Pred) returns Holder
+		return Holder{pred: pred}
+	end 'make'
+end 'Holder'
+
+function main() returns ExitCode
+	var xs = Counts.create()
+	xs.push(4)
+	xs.push(10)
+	let holder = Holder.make(isBig)
+	let big = xs.filter(holder.pred)
+	print("{big.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:28:15: 'isBig' writes its parameter 'n', but 'Array.filter' passes it the immutable 'item'
+```
+
+<!-- test: pass-by-reference.error.a-writing-callback-returned-by-a-call-is-refused-where-it-is-handed-in -->
+A callback returned by a call is handed in as any function of its type.
+```maxon
+typealias Count = int(0 to 1000)
+typealias Counts = Array with Count
+typealias Pred = function(Count) returns bool
+
+function isBig(n Count) returns bool
+	n = n / 2
+	return n > 3
+end 'isBig'
+
+function isSmall(n Count) returns bool
+	return n < 3
+end 'isSmall'
+
+function choose() returns Pred
+	return isBig
+end 'choose'
+
+function main() returns ExitCode
+	var xs = Counts.create()
+	xs.push(4)
+	xs.push(10)
+	let big = xs.filter(choose())
+	print("{big.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:23:15: 'isBig' writes its parameter 'n', but 'Array.filter' passes it the immutable 'item'
+```
+
+<!-- test: pass-by-reference.error.a-writing-callback-held-in-a-var-is-refused-where-it-is-handed-in -->
+A callback held in a variable that is re-pointed is handed in as any function of its type.
+```maxon
+typealias Count = int(0 to 1000)
+typealias Counts = Array with Count
+
+function isBig(n Count) returns bool
+	n = n / 2
+	return n > 3
+end 'isBig'
+
+function isSmall(n Count) returns bool
+	return n < 3
+end 'isSmall'
+
+function main() returns ExitCode
+	var xs = Counts.create()
+	xs.push(4)
+	xs.push(10)
+	var pick = isSmall
+	pick = isBig
+	let big = xs.filter(pick)
+	print("{big.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:20:15: 'isBig' writes its parameter 'n', but 'Array.filter' passes it the immutable 'item'
+```
+
+<!-- test: pass-by-reference.error.a-writing-callback-over-a-generic-instance-is-refused-where-it-is-handed-in -->
+A type parameter inside a generic instance of the callback's parameter type still leaves the body compiled once for every instantiation, so the writer is refused where it is handed in.
+```maxon
+typealias Count = int(0 to 1000)
+typealias Counts = Array with Count
+
+type Walker uses T
+	typealias Items = Array with T
+	typealias Step = function(Items)
+	let items as Items
+
+	static function create(items Items) returns Self
+		return Self{items: items}
+	end 'create'
+
+	function walk(step Step)
+		let view = items
+		step(view)
+	end 'walk'
+end 'Walker'
+
+function grow(xs Counts)
+	xs.push(1)
+end 'grow'
+
+typealias CountWalker = Walker with Count
+
+function main() returns ExitCode
+	let walker = CountWalker.create(Counts.create())
+	walker.walk(grow)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:28:9: 'grow' writes its parameter 'xs', but 'Walker.walk' passes it the immutable 'view'
+```
+
+<!-- test: pass-by-reference.error.a-writing-callback-returning-a-type-parameter-is-refused-where-it-is-handed-in -->
+A type parameter only in the callback's return type is enough for the body to be compiled once for every instantiation, so a `let` handed through the body to a writing callback is refused.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Picker uses T
+	typealias Make = function(Count) returns T
+	let fallback as T
+
+	static function create(fallback T) returns Self
+		return Self{fallback: fallback}
+	end 'create'
+
+	function pick(make Make, count Count) returns T
+		return make(count)
+	end 'pick'
+end 'Picker'
+
+function bump(n Count) returns Count
+	n = n / 2
+	return n
+end 'bump'
+
+typealias CountPicker = Picker with Count
+
+function main() returns ExitCode
+	let picker = CountPicker.create(1)
+	let eight = 8 as Count
+	print("{picker.pick(bump, count: eight)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:27:17: cannot pass 'eight', which is read-only (a `let` binding), to a function that writes parameter 'count' (in main); pass a clone()
+```
+
+<!-- test: pass-by-reference.error.a-callback-union-is-refused-for-the-position-its-second-writer-writes -->
+A callback chosen at run time between two functions is handed in as either, so a `let` at the position only the second one writes is refused.
+```maxon
+typealias Count = int(0 to 1000)
+typealias Counts = Array with Count
+typealias Pair = function(Counts, Counts)
+
+function growFirst(x Counts, y Counts)
+	x.push(1)
+	print("{y.count()}\n")
+end 'growFirst'
+
+function growSecond(x Counts, y Counts)
+	y.push(1)
+	print("{x.count()}\n")
+end 'growSecond'
+
+function choose(k Count) returns Pair
+	return growFirst if k > 0 else growSecond
+end 'choose'
+
+type Walker uses T
+	typealias Each = function(T, T)
+	export let size as Count
+
+	static function create(size Count) returns Self
+		return Self{size: size}
+	end 'create'
+
+	function both(f Each, a T, b T)
+		let r = b
+		f(a, r)
+	end 'both'
+end 'Walker'
+
+typealias CountsWalker = Walker with Counts
+
+function main() returns ExitCode
+	let walker = CountsWalker.create(2)
+	var xs = Counts.create()
+	var ys = Counts.create()
+	walker.both(choose(0), a: xs, b: ys)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:40:9: 'growSecond' writes its parameter 'y', but 'Walker.both' passes it the immutable 'r'
+```
+
+<!-- test: pass-by-reference.error.a-cell-resident-var-initialised-from-a-branded-local-keeps-the-brand -->
+A `var` that lives in a cell and was initialised from a bare local of one array alias wears that alias on every read, so it is not an argument for a parameter of another.
+```maxon
+typealias Item = int(0 to 100)
+typealias Xs = Array with Item
+typealias Ys = Array with Item
+
+function reset(ys Ys)
+	ys = Ys.create()
+end 'reset'
+
+function take(xs Xs)
+	print("{xs.count()}\n")
+end 'take'
+
+function main() returns ExitCode
+	let ys = Ys.create()
+	var a = ys.clone()
+	reset(a)
+	take(a)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:18:2: argument type mismatch for 'xs': expected 'Xs', got 'Ys'
+```
+
+<!-- test: pass-by-reference.a-narrow-var-written-wider-by-a-callee-is-caught-at-its-next-read -->
+A callee that takes the position at a wider alias writes through the cell, and the caller's variable, which names the narrower alias, is range-checked when it is next read.
+```maxon
+typealias Wide = int(0 to 100)
+typealias Narrow = int(0 to 10) implements Wide
+
+function bumpWide(n Wide)
+	n = 50
+end 'bumpWide'
+
+function main() returns ExitCode
+	var x = 3 as Narrow
+	bumpWide(x)
+	print("{x}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at pass-by-reference.a-narrow-var-written-wider-by-a-callee-is-caught-at-its-next-read.test:11: Range check failed: value outside typealias 'Narrow'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: pass-by-reference.a-narrow-var-written-wider-through-a-function-value-is-caught-at-its-next-read -->
+The same through a function value of the callee's own type.
+```maxon
+typealias Wide = int(0 to 100)
+typealias Narrow = int(0 to 10) implements Wide
+
+function bumpWide(n Wide)
+	n = 50
+end 'bumpWide'
+
+function main() returns ExitCode
+	var x = 3 as Narrow
+	let g = bumpWide
+	g(x)
+	print("{x}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at pass-by-reference.a-narrow-var-written-wider-through-a-function-value-is-caught-at-its-next-read.test:12: Range check failed: value outside typealias 'Narrow'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: pass-by-reference.a-narrow-parameter-relayed-to-a-wider-callee-is-caught-at-the-call -->
+A by-reference parameter of a narrow alias handed on to a callee that takes the wider alias is range-checked when that call returns, in the frame that handed it on.
+```maxon
+typealias Wide = int(0 to 100)
+typealias Narrow = int(0 to 10) implements Wide
+
+function bumpWide(n Wide)
+	n = 50
+end 'bumpWide'
+
+function relay(n Narrow)
+	bumpWide(n)
+end 'relay'
+
+function main() returns ExitCode
+	var x = 3 as Narrow
+	relay(x)
+	print("{x}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at pass-by-reference.a-narrow-parameter-relayed-to-a-wider-callee-is-caught-at-the-call.test:10: Range check failed: value outside typealias 'Narrow'
+Stack trace:
+  in relay
+  in main
+  in mrt_start
+```
+
+<!-- test: pass-by-reference.a-narrow-var-written-wider-by-a-throwing-callee-is-caught-at-the-call -->
+The copy-back check follows a call routed through `try` exactly as it follows a plain one.
+```maxon
+typealias Wide = int(0 to 100)
+typealias Narrow = int(0 to 10) implements Wide
+
+enum StepError implements Error
+	refused
+end 'StepError'
+
+function bumpWide(n Wide) throws StepError
+	n = 50
+
+	if n > 60 'never'
+		throw StepError.refused
+	end 'never'
+end 'bumpWide'
+
+function main() returns ExitCode
+	var x = 3 as Narrow
+	try bumpWide(x) otherwise return 1
+	print("{x}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at pass-by-reference.a-narrow-var-written-wider-by-a-throwing-callee-is-caught-at-the-call.test:19: Range check failed: value outside typealias 'Narrow'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: pass-by-reference.a-callee-taking-the-vars-own-alias-needs-no-copy-back-check -->
+A callee that takes the variable's own alias writes only values that alias admits, so the variable is read back as written.
+```maxon
+typealias Wide = int(0 to 100)
+typealias Narrow = int(0 to 10) implements Wide
+
+function bumpNarrow(n Narrow)
+	n = 7
+end 'bumpNarrow'
+
+function main() returns ExitCode
+	var x = 3 as Narrow
+	bumpNarrow(x)
+	print("{x}\n")
+	return 0
+end 'main'
+```
+```stdout
+7
+```
+```exitcode
+0
+```
+
+<!-- test: pass-by-reference.a-narrow-field-written-wider-by-a-callee-is-caught-at-the-call -->
+A field handed by reference to a callee that takes the wider alias is range-checked when the call returns.
+```maxon
+typealias Wide = int(0 to 100)
+typealias Narrow = int(0 to 10) implements Wide
+
+type Meter
+	export var level as Narrow
+
+	static function create(level Narrow) returns Self
+		return Self{level: level}
+	end 'create'
+end 'Meter'
+
+function bumpWide(n Wide)
+	n = 50
+end 'bumpWide'
+
+function main() returns ExitCode
+	var m = Meter.create(3)
+	bumpWide(m.level)
+	print("{m.level}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at pass-by-reference.a-narrow-field-written-wider-by-a-callee-is-caught-at-the-call.test:19: Range check failed: value outside typealias 'Narrow'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: pass-by-reference.a-narrow-module-var-written-wider-by-a-callee-is-caught-at-the-call -->
+A module `var` handed by reference to a callee that takes the wider alias is range-checked when the call returns.
+```maxon
+typealias Wide = int(0 to 100)
+typealias Narrow = int(0 to 10) implements Wide
+
+var level = 3 as Narrow
+
+function bumpWide(n Wide)
+	n = 50
+end 'bumpWide'
+
+function main() returns ExitCode
+	bumpWide(level)
+	print("{level}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at pass-by-reference.a-narrow-module-var-written-wider-by-a-callee-is-caught-at-the-call.test:12: Range check failed: value outside typealias 'Narrow'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: pass-by-reference.an-async-call-copies-a-narrow-var-so-the-coroutine-cannot-widen-it -->
+An `async` callee receives a copy of a scalar argument in a cell of its own, so a wider parameter it assigns never reaches the caller's narrower variable.
+```maxon
+typealias Wide = int(0 to 100)
+typealias Narrow = int(0 to 10) implements Wide
+
+function bumpWide(n Wide) returns Wide
+	Scheduler.yield()
+	n = 50
+	return n
+end 'bumpWide'
+
+function main() returns ExitCode
+	var x = 3 as Narrow
+	let p = async bumpWide(x)
+	let r = await p
+	print("{x} {r}\n")
+	return 0
+end 'main'
+```
+```stdout
+3 50
+```
+```exitcode
+0
+```
+
+<!-- test: pass-by-reference.a-service-message-copies-a-narrow-var-so-the-handler-cannot-widen-it -->
+A message carries its arguments by value in the request, so a handler that assigns its wider parameter leaves the sender's narrower variable alone.
+```maxon
+typealias Wide = int(0 to 100)
+typealias Narrow = int(0 to 10) implements Wide
+
+type Meter
+	var level as Wide
+
+	static function create() returns Self
+		return Self{level: 1}
+	end 'create'
+
+	export function set(n Wide)
+		n = 50
+		self.level = n
+	end 'set'
+
+	export function read() returns Wide
+		return self.level
+	end 'read'
+end 'Meter'
+
+function main() returns ExitCode
+	let h = spawn Meter.create()
+	var x = 3 as Narrow
+	h.set(x)
+	let level = try await h.read() otherwise 0
+	print("{x} {level}\n")
+	return 0
+end 'main'
+```
+```stdout
+3 50
+```
+```exitcode
+0
+```
+
+<!-- test: pass-by-reference.error.a-callback-typed-at-a-narrower-alias-refuses-a-body-taking-a-wider-one -->
+A function type over the narrower alias does not admit a body that takes the wider alias, so the wider body can never be reached through it.
+```maxon
+typealias Wide = int(0 to 100)
+typealias Narrow = int(0 to 10) implements Wide
+typealias Step = function(Narrow)
+
+function bumpWide(n Wide)
+	n = 50
+end 'bumpWide'
+
+function run(f Step)
+	var x = 3 as Narrow
+	f(x)
+	print("{x}\n")
+end 'run'
+
+function main() returns ExitCode
+	run(bumpWide)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:17:2: argument type mismatch for 'f': expected 'fn(Narrow)', got 'fn(Wide)'
+```
+
+<!-- test: pass-by-reference.error.a-union-cannot-be-generic-so-no-callback-position-mentions-one -->
+A union takes no type parameters, so a function type cannot name an instance of a generic union.
+```maxon
+union Maybe uses T
+	some(value T)
+	none
+end 'Maybe'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2001: <fragment>:2:13: unexpected token: 'uses'
+```
+
+<!-- test: pass-by-reference.error.an-indirect-call-with-too-few-arguments-beside-a-writer-of-the-written-arity -->
+A call through a function value written with one argument to a two-parameter value is the arity error, whatever functions of the written arity write their parameter.
+```maxon
+typealias Small = int(1 to 100)
+
+function bump(n Small)
+	n = 7
+end 'bump'
+
+function add(a Small, b Small)
+	print("{a}{b}\n")
+end 'add'
+
+function main() returns ExitCode
+	let g = add
+	var x = 3 as Small
+	g(x)
+	bump(x)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3036: <fragment>:15:3: 'add' expects 2 argument(s) but 1 were provided
+```
+
+<!-- test: pass-by-reference.a-narrow-var-written-through-a-type-parameter-formal-is-caught-at-the-call -->
+A formal that names no alias, a type parameter here, may be wider than the variable handed to it, so the variable is range-checked when the call returns.
+```maxon
+typealias Wide = int(0 to 10000)
+typealias Narrow = int(0 to 10) implements Wide
+
+type Slot uses T
+	export var held as T
+
+	static function create(held T) returns Self
+		return Self{held: held}
+	end 'create'
+
+	function overwrite(n T, with T)
+		n = with
+	end 'overwrite'
+end 'Slot'
+
+typealias WideSlot = Slot with Wide
+
+function main() returns ExitCode
+	var x = 3 as Narrow
+	let s = WideSlot.create(7)
+	let big = 5000 as Wide
+	s.overwrite(x, with: big)
+	print("{x}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at pass-by-reference.a-narrow-var-written-through-a-type-parameter-formal-is-caught-at-the-call.test:23: Range check failed: value outside typealias 'Narrow'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: pass-by-reference.a-narrow-var-written-wider-by-a-callee-that-then-throws-is-caught-before-the-handler -->
+The check runs when the call returns, ahead of the branch to the handler, so a handler never reads the widened variable.
+```maxon
+typealias Wide = int(0 to 10000)
+typealias Narrow = int(0 to 10) implements Wide
+
+enum StepError implements Error
+	refused
+end 'StepError'
+
+function bumpWide(n Wide) throws StepError
+	n = 5000
+	throw StepError.refused
+end 'bumpWide'
+
+function main() returns ExitCode
+	var x = 3 as Narrow
+
+	try bumpWide(x) otherwise 'handler'
+		print("caught {x}\n")
+	end 'handler'
+
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at pass-by-reference.a-narrow-var-written-wider-by-a-callee-that-then-throws-is-caught-before-the-handler.test:17: Range check failed: value outside typealias 'Narrow'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: pass-by-reference.error.a-float-var-handed-to-an-integer-parameter-is-refused-before-any-cell-is-shared -->
+A variable and a parameter of different register classes never share a cell: the argument is refused where it is written.
+```maxon
+typealias Count = int(0 to 100)
+typealias Real = float(0.0 to 100.0)
+
+function bump(k Count)
+	k = 7
+end 'bump'
+
+function main() returns ExitCode
+	var r = 2.5 as Real
+	bump(r)
+	print("{r}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:11:2: argument type mismatch for 'k': expected 'Count', got 'Real'
+```
+
+<!-- test: pass-by-reference.error.an-integer-var-handed-to-a-float-parameter-is-refused-before-any-cell-is-shared -->
+```maxon
+typealias Count = int(0 to 100)
+typealias Real = float(0.0 to 100.0)
+
+function scale(k Real)
+	k = 2.5
+end 'scale'
+
+function main() returns ExitCode
+	var n = 3 as Count
+	scale(n)
+	print("{n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:11:2: argument type mismatch for 'k': expected 'Real', got 'Count'
+```
+
+<!-- test: pass-by-reference.error.a-callback-writing-two-parameters-is-refused-once-per-parameter-however-often-the-body-calls-it -->
+Both parameters of `bump` are written, and the body of `visit` calls the callback twice. The site where `bump` is handed in earns one diagnostic per parameter it writes, not one per call.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Visitor uses T
+	typealias Each = function(T, T)
+	let seed as T
+
+	static function create(seed T) returns Self
+		return Self{seed: seed}
+	end 'create'
+
+	function visit(f Each)
+		let v = seed
+		let w = seed
+		f(v, w)
+		f(v, w)
+	end 'visit'
+end 'Visitor'
+
+function bump(a Count, b Count)
+	a = a / 2
+	b = b / 2
+end 'bump'
+
+typealias CountVisitor = Visitor with Count
+
+function main() returns ExitCode
+	let visitor = CountVisitor.create(8)
+	visitor.visit(bump)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:29:10: 'bump' writes its parameter 'a', but 'Visitor.visit' passes it the immutable 'v'
+error E3159: <fragment>:29:10: 'bump' writes its parameter 'b', but 'Visitor.visit' passes it the immutable 'w'
 ```

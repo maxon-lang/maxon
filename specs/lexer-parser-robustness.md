@@ -249,7 +249,7 @@ error E2001: specs/lexer-parser-robustness/mid-keyword-retur.maxon:3:2: unexpect
 <!-- test: mid-keyword-els -->
 ```maxon
 function main() returns ExitCode
-	var x = 0
+	var x = 0 as ExitCode
 	if true 'p'
 		x = 1
 	els 'p'

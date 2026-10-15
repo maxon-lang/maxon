@@ -39,7 +39,7 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 		let numElements = arr.count()
 
 		// Calculate capacity: at least 16, or next power of 2 above numElements * 2
-		var cap = 16
+		var cap = 16 as TableCapacity
 
 		while cap < numElements * 2 'calc_cap'
 			cap = cap * 2
@@ -120,18 +120,12 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 		let mask = (capacity - 1) as TableSlotIndex
 		var index = (spreadHash(hash) and (mask as HashValue)) as TableSlotIndex
 
-		// ⚠ A LOCAL SENTINEL, and it must STAY a plain untyped local. `-1` means "no tombstone seen
-		// yet", so this binding legitimately holds a negative and its `>= 0` / `< 0` tests must read
-		// SIGNED. Annotating it `TableSlotIndex` is a COMPILE ERROR:
-		// that alias is non-negative, so the `-1` initializer is an out-of-range constant (E3005).
-		// Every use of it below sits inside a `>= 0` test, so the value that reaches an `elements`/
-		// `states`/`hashes` slot is always a real one. `Map.findSlot` carries the identical local for
-		// the identical reason.
-		var firstDeleted = -1
-		var probes = 0
+		var firstDeleted = 0 as TableSlotIndex
+		var sawDeleted = false
+		var probes = 0 as TableCapacity
 
 		while probes < capacity 'probe'
-			let state = try states.get(index as ElementIndex) otherwise SlotState.Empty
+			let state = try states.get(index as ElementIndex) otherwise panic("Set.insert: states.get OOB — index is masked into [0, capacity)")
 
 			let isEmpty = match state 'se1'
 				Empty gives true
@@ -141,13 +135,7 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 
 			if isEmpty 'empty'
 				// Empty slot - insert here or at first deleted
-				var insertIndex = index
-
-				if firstDeleted >= 0 'use_deleted'
-					insertIndex = firstDeleted
-				end 'use_deleted'
-
-				insertAtSlot(insertIndex, element: element, hash: hash, takesATombstone: firstDeleted >= 0)
+				insertAtSlot(firstDeleted if sawDeleted else index, element: element, hash: hash, takesATombstone: sawDeleted)
 				return
 			end 'empty'
 
@@ -157,8 +145,9 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 				Occupied gives false
 			end 'sd1'
 
-			if isDeleted and firstDeleted < 0 'mark_deleted'
+			if isDeleted and not sawDeleted 'mark_deleted'
 				firstDeleted = index
+				sawDeleted = true
 			end 'mark_deleted'
 
 			let isOccupied = match state 'so1'
@@ -169,15 +158,15 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 
 			if isOccupied 'check_exists'
 				// Skip the full element.equals() unless the cached hash matches.
-				let slotHash = try hashes.get(index as ElementIndex) otherwise hash
+				let slotHash = try hashes.get(index as ElementIndex) otherwise panic("Set.insert: hashes.get OOB — the hash column is parallel to the states")
 
 				if slotHash == hash 'hash_match'
-					if let existing = try elements.get(index as ElementIndex) 'get_existing'
-						if existing == element 'exists'
-							// Element already exists - no-op for sets
-							return
-						end 'exists'
-					end 'get_existing'
+					let existing = try elements.get(index as ElementIndex) otherwise panic("Set.insert: an occupied slot holds an element")
+
+					if existing == element 'exists'
+						// Element already exists - no-op for sets
+						return
+					end 'exists'
 				end 'hash_match'
 			end 'check_exists'
 
@@ -188,7 +177,7 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 
 		// Every slot probed without finding the element or an empty one. A tombstone is still a
 		// vacancy an insert can take, so it is a perfectly good answer.
-		if firstDeleted >= 0 'fallback'
+		if sawDeleted 'fallback'
 			insertAtSlot(firstDeleted, element: element, hash: hash, takesATombstone: true)
 			return
 		end 'fallback'
@@ -217,10 +206,10 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 		let mask = (capacity - 1) as TableSlotIndex
 		var index = (spreadHash(hash) and (mask as HashValue)) as TableSlotIndex
 
-		var probes = 0
+		var probes = 0 as TableCapacity
 
 		while probes < capacity 'probe'
-			let state = try states.get(index as ElementIndex) otherwise SlotState.Empty
+			let state = try states.get(index as ElementIndex) otherwise panic("Set.contains: states.get OOB — index is masked into [0, capacity)")
 
 			let isEmpty = match state 'se1'
 				Empty gives true
@@ -240,14 +229,14 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 
 			if isOccupied 'check_found'
 				// Skip the full element.equals() unless the cached hash matches.
-				let slotHash = try hashes.get(index as ElementIndex) otherwise hash
+				let slotHash = try hashes.get(index as ElementIndex) otherwise panic("Set.contains: hashes.get OOB — the hash column is parallel to the states")
 
 				if slotHash == hash 'hash_match'
-					if let existing = try elements.get(index as ElementIndex) 'get_existing'
-						if existing == element 'found'
-							return true
-						end 'found'
-					end 'get_existing'
+					let existing = try elements.get(index as ElementIndex) otherwise panic("Set.contains: an occupied slot holds an element")
+
+					if existing == element 'found'
+						return true
+					end 'found'
 				end 'hash_match'
 			end 'check_found'
 
@@ -272,10 +261,10 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 		let mask = (capacity - 1) as TableSlotIndex
 		var index = (spreadHash(hash) and (mask as HashValue)) as TableSlotIndex
 
-		var probes = 0
+		var probes = 0 as TableCapacity
 
 		while probes < capacity 'probe'
-			let state = try states.get(index as ElementIndex) otherwise SlotState.Empty
+			let state = try states.get(index as ElementIndex) otherwise panic("Set.remove: states.get OOB — index is masked into [0, capacity)")
 
 			let isEmpty = match state 'se1'
 				Empty gives true
@@ -295,20 +284,20 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 
 			if isOccupied 'check_found'
 				// Skip the full element.equals() unless the cached hash matches.
-				let slotHash = try hashes.get(index as ElementIndex) otherwise hash
+				let slotHash = try hashes.get(index as ElementIndex) otherwise panic("Set.remove: hashes.get OOB — the hash column is parallel to the states")
 
 				if slotHash == hash 'hash_match'
-					if let existing = try elements.get(index as ElementIndex) 'get_existing'
-						if existing == element 'found'
-							// A tombstone owns nothing, for `Map.remove`'s reason. The cached hash stays,
-							// because the hash-guard only runs inside the Occupied branch.
-							try elements.clearSlot(index as ElementIndex) otherwise panic("Set.remove: elements.clearSlot OOB — probe index is in-bounds")
-							try states.set(index as ElementIndex, value: SlotState.Deleted) otherwise panic("Set.remove: states.set OOB — probe index is in-bounds")
-							count = count - 1
-							tombstones = tombstones + 1
-							return true
-						end 'found'
-					end 'get_existing'
+					let existing = try elements.get(index as ElementIndex) otherwise panic("Set.remove: an occupied slot holds an element")
+
+					if existing == element 'found'
+						// A tombstone owns nothing, for `Map.remove`'s reason. The cached hash stays,
+						// because the hash-guard only runs inside the Occupied branch.
+						try elements.clearSlot(index as ElementIndex) otherwise panic("Set.remove: elements.clearSlot OOB — probe index is in-bounds")
+						try states.set(index as ElementIndex, value: SlotState.Deleted) otherwise panic("Set.remove: states.set OOB — probe index is in-bounds")
+						count = count - 1
+						tombstones = tombstones + 1
+						return true
+					end 'found'
 				end 'hash_match'
 			end 'check_found'
 
@@ -371,7 +360,7 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 		// Rehash all occupied entries from old arrays, reusing the cached hash
 		// instead of re-calling element.hash().
 		for i in 0 upto oldCapacity 'eachOldSlot'
-			let state = try oldStates.get(i) otherwise SlotState.Empty
+			let state = try oldStates.get(i) otherwise panic("Set.rehash: oldStates.get OOB — i is below the old capacity")
 
 			let isOccupied = match state 'so1'
 				Occupied gives true
@@ -380,34 +369,32 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 			end 'so1'
 
 			if isOccupied 'occupied'
-				// Re-insert into new arrays using insert logic
-				if let element = try oldElements.get(i) 'get_elem'
-					let hash = try oldHashes.get(i) otherwise element.hash()
-					var index = (spreadHash(hash) and (mask as HashValue)) as TableSlotIndex
+				let element = try oldElements.get(i) otherwise panic("Set.rehash: an occupied slot holds an element")
+				let hash = try oldHashes.get(i) otherwise panic("Set.rehash: oldHashes.get OOB — the hash column is parallel to the states")
+				var index = (spreadHash(hash) and (mask as HashValue)) as TableSlotIndex
 
-					// Find empty slot (no deleted slots in fresh array)
-					var currentState = try states.get(index as ElementIndex) otherwise SlotState.Empty
-					var isNotEmpty = match currentState 'se1'
+				// Find empty slot (no deleted slots in fresh array)
+				var currentState = try states.get(index as ElementIndex) otherwise panic("Set.rehash: states.get OOB — index is masked into [0, capacity)")
+				var isNotEmpty = match currentState 'se1'
+					Empty gives false
+					Occupied gives true
+					Deleted gives true
+				end 'se1'
+
+				while isNotEmpty 'find_slot'
+					index = (index + 1) and mask
+					currentState = try states.get(index as ElementIndex) otherwise panic("Set.rehash: states.get OOB — index is masked into [0, capacity)")
+					isNotEmpty = match currentState 'se2'
 						Empty gives false
 						Occupied gives true
 						Deleted gives true
-					end 'se1'
+					end 'se2'
+				end 'find_slot'
 
-					while isNotEmpty 'find_slot'
-						index = (index + 1) and mask
-						currentState = try states.get(index as ElementIndex) otherwise SlotState.Empty
-						isNotEmpty = match currentState 'se2'
-							Empty gives false
-							Occupied gives true
-							Deleted gives true
-						end 'se2'
-					end 'find_slot'
-
-					try elements.set(index as ElementIndex, value: element) otherwise panic("Set.rehash: elements.set OOB — rehash slot is in-bounds")
-					try states.set(index as ElementIndex, value: SlotState.Occupied) otherwise panic("Set.rehash: states.set OOB — rehash slot is in-bounds")
-					try hashes.set(index as ElementIndex, value: hash) otherwise panic("Set.rehash: hashes.set OOB — rehash slot is in-bounds")
-					count = count + 1
-				end 'get_elem'
+				try elements.set(index as ElementIndex, value: element) otherwise panic("Set.rehash: elements.set OOB — rehash slot is in-bounds")
+				try states.set(index as ElementIndex, value: SlotState.Occupied) otherwise panic("Set.rehash: states.set OOB — rehash slot is in-bounds")
+				try hashes.set(index as ElementIndex, value: hash) otherwise panic("Set.rehash: hashes.set OOB — rehash slot is in-bounds")
+				count = count + 1
 			end 'occupied'
 		end 'eachOldSlot'
 	end 'rehash'

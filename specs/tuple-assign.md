@@ -57,8 +57,8 @@ function makePair(a Integer, b Integer) returns (Integer, Integer)
 end 'makePair'
 
 function main() returns ExitCode
-	var x = 0
-	var y = 0
+	var x = 0 as Integer
+	var y = 0 as Integer
 	(x, y) = makePair(10, b: 32)
 	return x + y
 end 'main'
@@ -76,9 +76,9 @@ function step(n Integer) returns (Integer, Integer)
 end 'step'
 
 function main() returns ExitCode
-	var a = 0
-	var b = 0
-	var i = 0
+	var a = 0 as Integer
+	var b = 0 as Integer
+	var i = 0 as Integer
 	while i < 3 'loop'
 		(a, b) = step(a)
 		i = i + 1
@@ -99,7 +99,7 @@ function makePair(a Integer, b Integer) returns (Integer, Integer)
 end 'makePair'
 
 function main() returns ExitCode
-	var x = 0
+	var x = 0 as Integer
 	(x, _) = makePair(42, b: 99)
 	return x
 end 'main'
@@ -153,7 +153,7 @@ function makePair(a Integer, b Integer) returns (Integer, Integer)
 end 'makePair'
 
 function main() returns ExitCode
-	var x = 0
+	var x = 0 as Integer
 	(x, let y) = makePair(10, b: 32)
 	return x + y
 end 'main'
@@ -188,7 +188,7 @@ function makePair(a Integer, b Integer) returns (Integer, Integer)
 end 'makePair'
 
 function main() returns ExitCode
-	var x = 0
+	var x = 0 as Integer
 	(x, let y) = makePair(10, b: 32)
 	return x + y
 end 'main'
@@ -206,7 +206,7 @@ function makePair(a Integer, b Integer) returns (Integer, Integer)
 end 'makePair'
 
 function main() returns ExitCode
-	var x = 0
+	var x = 0 as Integer
 	(x, let y) = makePair(10, b: 32)
 	(x, y) = makePair(1, b: 2)
 	return x + y
@@ -225,7 +225,7 @@ function makePair(a Integer, b Integer) returns (Integer, Integer)
 end 'makePair'
 
 function main() returns ExitCode
-	var x = 0
+	var x = 0 as Integer
 	(x) = makePair(10, b: 32)
 	return x
 end 'main'

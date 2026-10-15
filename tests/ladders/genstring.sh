@@ -59,7 +59,7 @@
 #
 #   e.g. genstring.sh 512 sites-split a.maxon   and   genstring.sh 1024 sites-split b.maxon
 #        genstring.sh 512 sites-control c.maxon has the same site count, in the P1.2 surface only.
-#        genstring.sh 12 data-split d.maxon     builds 9*2^12 = 36,864 bytes and 4,096 segments.
+#        genstring.sh 12 data-split d.maxon     builds 9*2^12 = 36,864 bytes and 4,097 segments (the trailing comma ends an empty one).
 #
 # The `data-*` programs each print ONE CSV line — `mode,bytes,units,nanos,reps` — where `units` is the
 # count the operation's own cost should be linear in (segments for `split`, matches for `replace`, bytes
@@ -105,13 +105,12 @@ emit_sites_program() {
 
 	echo "// string ladder: $N sites, mode $MODE — see tests/ladders/genstring.sh"
 	echo "typealias Int = int(i64.min to i64.max)"
-	echo "typealias ExitCode = int(0 to 255)"
 	echo ""
 
 	f=0
 	while [ "$f" -lt "$FNS" ]; do
 		echo "function fn${f}(${SITE_PARAMS}) returns Int"
-		echo -e "\tvar total = 0"
+		echo -e "\tvar total = 0 as Int"
 		n=0
 		while [ "$n" -lt "$SITES_PER_FN" ]; do
 			case "$MODE" in
@@ -132,17 +131,17 @@ emit_sites_program() {
 			sites-case)
 				echo -e "\tlet lo${n} = s.toLower()"
 				echo -e "\tlet hi${n} = s.toUpper()"
-				echo -e "\ttotal = total + lo${n}.byteLength() + hi${n}.byteLength()"
+				echo -e "\ttotal = total + (lo${n}.byteLength() as Int) + (hi${n}.byteLength() as Int)"
 				;;
 			sites-replace)
 				echo -e "\tlet r${n} = s.replace(p, with: q)"
-				echo -e "\ttotal = total + r${n}.byteLength()"
+				echo -e "\ttotal = total + (r${n}.byteLength() as Int)"
 				;;
 			sites-split)
 				# The one site that mints an `Array with String` per call — `arrayInstanceForString()`
 				# is re-interned at EVERY site, so this mode is where a per-site registry cost shows.
 				echo -e "\tlet parts${n} = s.split(p)"
-				echo -e "\ttotal = total + parts${n}.count()"
+				echo -e "\ttotal = total + (parts${n}.count() as Int)"
 				;;
 			sites-control)
 				# THE CONTROL: the P1.2 wave D String surface and nothing from Slice C. Same function
@@ -153,7 +152,7 @@ emit_sites_program() {
 				echo -e "\tend 'e${n}'"
 				echo -e "\tvar acc${n} = q"
 				echo -e "\tacc${n}.append(p)"
-				echo -e "\ttotal = total + acc${n}.byteLength()"
+				echo -e "\ttotal = total + (acc${n}.byteLength() as Int)"
 				;;
 			esac
 			n=$(( n + 1 ))
@@ -165,7 +164,7 @@ emit_sites_program() {
 	done
 
 	echo "function main() returns ExitCode"
-	echo -e "\tvar sum = 0"
+	echo -e "\tvar sum = 0 as Int"
 	f=0
 	while [ "$f" -lt "$FNS" ]; do
 		echo -e "\tsum = sum + fn${f}(${SITE_ARGS})"
@@ -178,13 +177,10 @@ emit_sites_program() {
 emit_data_program() {
 	echo "// string ladder: $N doublings, mode $MODE — see tests/ladders/genstring.sh"
 	echo "typealias Int = int(i64.min to i64.max)"
-	echo "typealias ExitCode = int(0 to 255)"
 	echo ""
-	echo "// Self-append doubling: O(final length) in total, because __str_append reallocates to the EXACT"
-	echo "// required length and a chunk-at-a-time loop would therefore be quadratic in the setup alone."
 	echo "function grown(seed String, doublings Int) returns String"
 	echo -e "\tvar s = seed"
-	echo -e "\tvar d = 0"
+	echo -e "\tvar d = 0 as Int"
 	echo -e "\twhile d < doublings 'dbl'"
 	echo -e "\t\ts.append(s)"
 	echo -e "\t\td = d + 1"
@@ -193,7 +189,7 @@ emit_data_program() {
 	echo "end 'grown'"
 	echo ""
 	echo "function main() returns ExitCode"
-	echo -e "\tvar total = 0"
+	echo -e "\tvar total = 0 as Int"
 
 	case "$MODE" in
 	data-find)
@@ -201,7 +197,7 @@ emit_data_program() {
 		# first-byte fast reject answers every position and the scan is one pass.
 		echo -e "\tlet hay = grown(\"abcdefgh,\", doublings: $N)"
 		echo -e "\tlet t0 = Clock.nowNanos()"
-		echo -e "\tvar r = 0"
+		echo -e "\tvar r = 0 as Int"
 		echo -e "\twhile r < $REPS 'rep'"
 		echo -e "\t\tif hay.contains(\"zzz\") 'hit'"
 		echo -e "\t\t\ttotal = total + 1"
@@ -221,7 +217,7 @@ emit_data_program() {
 		echo -e "\tvar needle = grown(\"aaaaaaaa\", doublings: $(( N - 1 )))"
 		echo -e "\tneedle.append(\"b\")"
 		echo -e "\tlet t0 = Clock.nowNanos()"
-		echo -e "\tvar r = 0"
+		echo -e "\tvar r = 0 as Int"
 		echo -e "\twhile r < $REPS 'rep'"
 		echo -e "\t\tif hay.contains(needle) 'hit'"
 		echo -e "\t\t\ttotal = total + 1"
@@ -235,12 +231,12 @@ emit_data_program() {
 		# SEGMENTS, the knob the two-pass question is about: if the search restarted from position 0 for
 		# each segment the total would be quadratic in them.
 		echo -e "\tlet hay = grown(\"abcdefgh,\", doublings: $N)"
-		echo -e "\tvar units = 0"
+		echo -e "\tvar units = 0 as Int"
 		echo -e "\tlet t0 = Clock.nowNanos()"
-		echo -e "\tvar r = 0"
+		echo -e "\tvar r = 0 as Int"
 		echo -e "\twhile r < $REPS 'rep'"
 		echo -e "\t\tlet parts = hay.split(\",\")"
-		echo -e "\t\tunits = parts.count()"
+		echo -e "\t\tunits = parts.count() as Int"
 		echo -e "\t\ttotal = total + units"
 		echo -e "\t\tr = r + 1"
 		echo -e "\tend 'rep'"
@@ -251,12 +247,12 @@ emit_data_program() {
 		# MATCHES. The replacement is LONGER than the needle, so the result is a different size from the
 		# receiver and the two-pass count is actually load-bearing rather than incidentally right.
 		echo -e "\tlet hay = grown(\"abcdefgh,\", doublings: $N)"
-		echo -e "\tvar units = 0"
+		echo -e "\tvar units = 0 as Int"
 		echo -e "\tlet t0 = Clock.nowNanos()"
-		echo -e "\tvar r = 0"
+		echo -e "\tvar r = 0 as Int"
 		echo -e "\twhile r < $REPS 'rep'"
 		echo -e "\t\tlet out = hay.replace(\",\", with: \";;\")"
-		echo -e "\t\tunits = out.byteLength() - hay.byteLength()"
+		echo -e "\t\tunits = (out.byteLength() as Int) - (hay.byteLength() as Int)"
 		echo -e "\t\ttotal = total + units"
 		echo -e "\t\tr = r + 1"
 		echo -e "\tend 'rep'"
@@ -269,30 +265,30 @@ emit_data_program() {
 		# should carry a number. Doubling the CHUNK COUNT is the knob: linear growth reads x2 and a
 		# reallocate-to-exact-length policy would read x4. **It reads x2**, and that is the instrument for
 		# the one property a `String.append` retirement could silently destroy — see the header.
-		echo -e "\tvar chunks = 1024"
-		echo -e "\tvar d = 0"
+		echo -e "\tvar chunks = 1024 as Int"
+		echo -e "\tvar d = 0 as Int"
 		echo -e "\twhile d < $N 'dbl'"
 		echo -e "\t\tchunks = chunks * 2"
 		echo -e "\t\td = d + 1"
 		echo -e "\tend 'dbl'"
 		echo -e "\tlet t0 = Clock.nowNanos()"
 		echo -e "\tvar s = \"\""
-		echo -e "\tvar i = 0"
+		echo -e "\tvar i = 0 as Int"
 		echo -e "\twhile i < chunks 'grow'"
 		echo -e "\t\ts.append(\"abcdefgh,\")"
 		echo -e "\t\ti = i + 1"
 		echo -e "\tend 'grow'"
 		echo -e "\tlet t1 = Clock.nowNanos()"
-		echo -e "\ttotal = total + s.byteLength()"
+		echo -e "\ttotal = total + (s.byteLength() as Int)"
 		echo -e "\tprint(\"$MODE,{s.byteLength()},{chunks},{t1 - t0},1\\\\n\")"
 		;;
 	data-case)
 		echo -e "\tlet hay = grown(\"abcdefgh,\", doublings: $N)"
 		echo -e "\tlet t0 = Clock.nowNanos()"
-		echo -e "\tvar r = 0"
+		echo -e "\tvar r = 0 as Int"
 		echo -e "\twhile r < $REPS 'rep'"
 		echo -e "\t\tlet up = hay.toUpper()"
-		echo -e "\t\ttotal = total + up.byteLength()"
+		echo -e "\t\ttotal = total + (up.byteLength() as Int)"
 		echo -e "\t\tr = r + 1"
 		echo -e "\tend 'rep'"
 		echo -e "\tlet t1 = Clock.nowNanos()"

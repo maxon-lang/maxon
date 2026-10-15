@@ -92,7 +92,7 @@ states above.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-var flag = 0
+var flag = 0 as Integer
 
 function setter() returns Integer
 	flag = 1
@@ -127,7 +127,7 @@ straight back; the thread runs to completion and its value is awaited normally.
 typealias Integer = int(i64.min to i64.max)
 
 function lonely() returns Integer
-	var i = 0
+	var i = 0 as Integer
 	while i < 100 'l'
 		Scheduler.yield()
 		i = i + 1
@@ -153,7 +153,7 @@ spin, `7` means a thousand yields went by without it running once.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-var progressed = 0
+var progressed = 0 as Integer
 
 function worker() returns Integer
 	progressed = 1
@@ -219,7 +219,7 @@ typealias Integer = int(i64.min to i64.max)
 
 function held() returns Integer
 	let label = "green"
-	var i = 0
+	var i = 0 as Integer
 	while i < 50 'l'
 		Scheduler.yield()
 		i = i + 1

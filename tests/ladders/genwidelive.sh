@@ -60,7 +60,7 @@ TOTAL=$(( N * (N - 1) / 2 ))
     done
     echo -e "\tlet total = $terms"
   else
-    echo -e "\tvar total = 0"
+    echo -e "\tvar total = 0 as WideNum"
     i=0
     while [ "$i" -lt "$N" ]; do
       echo -e "\tlet v$i = scaleOpaque($i)"

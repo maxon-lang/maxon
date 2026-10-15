@@ -14,7 +14,7 @@ The compiler prevents using the same block identifier for multiple blocks within
 
 ```maxon
 function main() returns ExitCode
-	var x = 0
+	var x = 0 as ExitCode
 	if true 'outer'
 		x = 1
 	end 'outer'
@@ -35,7 +35,7 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-	var x = 0
+	var x = 0 as ExitCode
 	if true 'check'
 		x = 1
 		if true 'check'
@@ -79,7 +79,7 @@ end 'main'
 <!-- test: duplicate-block-identifiers.different-blocks -->
 ```maxon
 function main() returns ExitCode
-	var x = 0
+	var x = 0 as ExitCode
 	if true 'outer'
 		x = 1
 	end 'outer'
@@ -98,7 +98,7 @@ end 'main'
 <!-- test: duplicate-block-identifiers.nested-same-id -->
 ```maxon
 function main() returns ExitCode
-	var x = 0
+	var x = 0 as ExitCode
 	if true 'check'
 		x = 1
 		if true 'check'
@@ -115,7 +115,7 @@ end 'main'
 <!-- test: duplicate-block-identifiers.multiple-nested -->
 ```maxon
 function main() returns ExitCode
-	var x = 0
+	var x = 0 as ExitCode
 	if true 'outer'
 		x = 1
 		while true 'inner'
@@ -133,7 +133,7 @@ end 'main'
 <!-- test: duplicate-block-identifiers.else-nested -->
 ```maxon
 function main() returns ExitCode
-	var x = 0
+	var x = 0 as ExitCode
 	if false 'check'
 		x = 1
 	end 'check' else 'else_check'

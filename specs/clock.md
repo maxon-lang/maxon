@@ -89,7 +89,7 @@ function main() returns ExitCode
 		let a = Clock.nowMs()
 		let b = Clock.nowMs()
 		let c = Clock.nowMs()
-		var score = 0
+		var score = 0 as Count
 		if b >= a 'nondecreasing1'
 				score = score + 1
 		end 'nondecreasing1'
@@ -114,7 +114,7 @@ function main() returns ExitCode
 		let start = Clock.nowMs()
 		sleep(30)
 		let elapsed = Clock.elapsedMs(start)
-		var score = 0
+		var score = 0 as Count
 		if elapsed > 0 'advanced'
 				score = score + 1
 		end 'advanced'
@@ -137,7 +137,7 @@ positive amount); `elapsedMs` never returns a negative value.
 function main() returns ExitCode
 		let start = Clock.nowMs()
 		let elapsed = Clock.elapsedMs(start)
-		var ok = 0
+		var ok = 0 as Count
 		if elapsed < 10000 'bounded'
 				ok = 1
 		end 'bounded'
@@ -159,7 +159,7 @@ function main() returns ExitCode
 		let a = Clock.nowNanos()
 		let b = Clock.nowNanos()
 		let c = Clock.nowNanos()
-		var score = 0
+		var score = 0 as Count
 		if b >= a 'nondecreasing1'
 				score = score + 1
 		end 'nondecreasing1'
@@ -187,9 +187,9 @@ counter and not from a coarse tick source.
 
 ```maxon
 function main() returns ExitCode
-		var smallest = 0
+		var smallest = 0 as InstantNanos
 		var prev = Clock.nowNanos()
-		var i = 0
+		var i = 0 as Count
 		while i < 200000 'sample'
 				let now = Clock.nowNanos()
 				let delta = now - prev
@@ -201,7 +201,7 @@ function main() returns ExitCode
 				end 'advanced'
 				i = i + 1
 		end 'sample'
-		var ok = 0
+		var ok = 0 as Count
 		if smallest > 0 and smallest < 1000000 'subMillisecond'
 				ok = 1
 		end 'subMillisecond'
@@ -250,9 +250,9 @@ tick-derived deadline returns early on most of the iterations.
 function main() returns ExitCode
 		let requestedNanos = 30000000
 		let reps = 16
-		var early = 0
-		var slowest = 0
-		var spins = 0
+		var early = 0 as Count
+		var slowest = 0 as DurationNanos
+		var spins = 0 as Count
 
 		for i in 0 upto reps 'sweep'
 				let spinStart = Clock.nowNanos()
@@ -274,7 +274,7 @@ function main() returns ExitCode
 				end 'newSlowest'
 		end 'sweep'
 
-		var score = 0
+		var score = 0 as Count
 		if early == 0 'neverEarly'
 				score = score + 1
 		end 'neverEarly'
@@ -309,7 +309,7 @@ would sail past 2100 and fail.
 ```maxon
 function main() returns ExitCode
 		let now = WallClock.nowUnixSeconds()
-		var score = 0
+		var score = 0 as Count
 		if now > 1735689600 'afterKnownPast'
 				score = score + 1
 		end 'afterKnownPast'
@@ -334,7 +334,7 @@ function main() returns ExitCode
 		let before = WallClock.nowUnixSeconds()
 		sleep(1100)
 		let after = WallClock.nowUnixSeconds()
-		var ok = 0
+		var ok = 0 as Count
 		if after >= before + 1 'advanced'
 				ok = 1
 		end 'advanced'

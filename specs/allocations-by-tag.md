@@ -112,8 +112,8 @@ function main() returns ExitCode
 		holder.push(Widget.create((k mod 65536) as WidgetField, high: ((k + 1) mod 65536) as WidgetField))
 	end 'buildWidgets'
 
-	var biggestRise = 0
-	var biggestIndex = 0
+	var biggestRise = 0 as HeapCount
+	var biggestIndex = 0 as HeapBucketIndex
 	for i in 0 upto TallyBuckets 'compare'
 		let was = try beforeCounts.get(i) otherwise panic("the snapshot is sized to every bucket")
 		let now = HeapStats.allocationsTagged(i)
@@ -132,7 +132,7 @@ function main() returns ExitCode
 		return 1
 	end 'noBucketRoseByThePopulation'
 
-	let bytesWere = try beforeBytes.get(biggestIndex) otherwise panic("the snapshot is sized to every bucket")
+	let bytesWere = try beforeBytes.get(biggestIndex as ElementIndex) otherwise panic("the snapshot is sized to every bucket")
 
 	if HeapStats.bytesTagged(biggestIndex) <= bytesWere 'theBucketsBytesDidNotRise'
 		return 3
@@ -389,7 +389,7 @@ function main() returns ExitCode
 	holder.reserve(Population)
 
 	let totalBefore = HeapStats.allocationsMade()
-	var sumBefore = 0
+	var sumBefore = 0 as HeapCount
 	for i in 0 upto TallyBuckets 'totalTheBucketsBefore'
 		sumBefore = sumBefore + HeapStats.allocationsTagged(i)
 	end 'totalTheBucketsBefore'
@@ -403,7 +403,7 @@ function main() returns ExitCode
 	end 'buildWidgets'
 
 	let totalAfter = HeapStats.allocationsMade()
-	var sumAfter = 0
+	var sumAfter = 0 as HeapCount
 	for i in 0 upto TallyBuckets 'totalTheBucketsAfter'
 		sumAfter = sumAfter + HeapStats.allocationsTagged(i)
 	end 'totalTheBucketsAfter'
@@ -661,8 +661,8 @@ function main() returns ExitCode
 		holder.push(Widget.create((k mod 65536) as WidgetField, high: ((k + 1) mod 65536) as WidgetField))
 	end 'buildWidgets'
 
-	var biggestRise = 0
-	var biggestIndex = 0
+	var biggestRise = 0 as HeapCount
+	var biggestIndex = 0 as HeapBucketIndex
 	for i in 0 upto TallyBuckets 'compare'
 		let was = try beforeCounts.get(i) otherwise panic("the snapshot is sized to every bucket")
 		let now = HeapStats.allocationsTagged(i)
@@ -1023,8 +1023,8 @@ function main() returns ExitCode
 	holder = Widgets.create()
 
 	let threadAfter = HeapStats.thread()
-	let widgetBytes = Population * sizeof(Widget)
-	var score = 0
+	let widgetBytes = (Population * sizeof(Widget)) as HeapBytes
+	var score = 0 as ExitCode
 
 	if bytesAfter - bytesBefore >= widgetBytes 'theProcessCountedTheBytes'
 		score = score + 1
@@ -1042,7 +1042,7 @@ function main() returns ExitCode
 		score = score + 8
 	end 'theThreadCountedTheFrees'
 
-	return score as ExitCode
+	return score
 end 'main'
 ```
 ```exitcode
@@ -1062,7 +1062,7 @@ function main() returns ExitCode
 	let bytesSecond = HeapStats.threadBytes()
 	let before = HeapStats.thread()
 	let after = HeapStats.thread()
-	var score = 0
+	var score = 0 as ExitCode
 
 	if threadSecond == threadFirst and bytesSecond == bytesFirst 'aScalarReadingMovedNothing'
 		score = score + 1
@@ -1072,7 +1072,7 @@ function main() returns ExitCode
 		score = score + 2
 	end 'aRecordReadingCountedItself'
 
-	return score as ExitCode
+	return score
 end 'main'
 ```
 ```exitcode

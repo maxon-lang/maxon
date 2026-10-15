@@ -162,7 +162,7 @@ end 'takeInt'
 
 function main() returns ExitCode
 	let f = 3.7
-	return takeInt(trunc(f))
+	return takeInt(trunc(f) as Integer)
 end 'main'
 ```
 ```exitcode
@@ -384,7 +384,7 @@ And the third spelling of that one write: the bare field name inside an instance
 type Reading
 	export var value = 0.0 as Real
 
-	function bump() returns Integer
+	function bump() returns FullRangeInt
 		value = 3
 		return 0
 	end 'bump'
@@ -402,7 +402,6 @@ function main() returns ExitCode
 	end 'exact'
 	return 7
 end 'main'
-typealias Integer = int(i64.min to i64.max)
 typealias Real = float(f64.min to f64.max)
 ```
 ```exitcode
@@ -438,7 +437,7 @@ typealias Real = float(f64.min to f64.max)
 A top-level `var` keeps the type its initializer gave it, so a later store of an integer widens into
 the slot rather than overwriting an f64 with eight bytes of two's complement.
 ```maxon
-var scale = 0.0
+var scale = 0.0 as FullRangeFloat
 
 function main() returns ExitCode
 	scale = 3
@@ -459,7 +458,7 @@ compare int with float" against a legal program, and the same rebind inside a lo
 and an f64 into one header phi.
 ```maxon
 function main() returns ExitCode
-	var scale = 0.0
+	var scale = 0.0 as FullRangeFloat
 	scale = 3
 	if scale == 3.0 'exact'
 		return trunc(scale * 14.0)
@@ -589,12 +588,13 @@ error E3009: specs/implicit-type-conversion/float-to-int-alias-field-default-rej
 
 <!-- test: float-to-int-global-rejected -->
 ```maxon
-var counter = 0
+var counter = 0 as Integer
 
 function main() returns ExitCode
 	counter = 3.7
 	return counter
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3009: specs/implicit-type-conversion/float-to-int-global-rejected.maxon:5:2: cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
@@ -603,10 +603,11 @@ error E3009: specs/implicit-type-conversion/float-to-int-global-rejected.maxon:5
 <!-- test: float-to-int-local-rejected -->
 ```maxon
 function main() returns ExitCode
-	var counter = 0
+	var counter = 0 as Integer
 	counter = 3.7
 	return counter
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3009: specs/implicit-type-conversion/float-to-int-local-rejected.maxon:4:2: cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)

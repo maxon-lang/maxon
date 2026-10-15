@@ -329,8 +329,8 @@ function main() returns ExitCode
 	print("{firstWord("alpha beta gamma")}\n")
 	let s = "Hello"
 	print("{s.replace("l", with: "L")}{s.toUpper()}\n")
-	var i = 0
-	var total = 0
+	var i = 0 as FullRangeInt
+	var total = 0 as Count
 	while i < 200 'loop'
 		let line = "k{i},v{i}"
 		let parts = line.split(",")

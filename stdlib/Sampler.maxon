@@ -124,7 +124,7 @@
 		end 'byteCount'
 
 		public function word(offset StackWindowOffset) returns RegisterWord throws SamplerError
-			if not self.readable() or (offset as RegisterWord) > self.copied - sizeof(RegisterWord) 'outsideTheCopy'
+			if not self.readable() or (offset as RegisterWord) > self.copied - (sizeof(RegisterWord) as RegisterWord) 'outsideTheCopy'
 				throw SamplerError.outOfWindow
 			end 'outsideTheCopy'
 
@@ -276,7 +276,7 @@
 		end 'nextCapture'
 
 		public function modules() returns SampledModuleArray throws SamplerError
-			var attempt = 0
+			var attempt = 0 as Count
 
 			while attempt < ModuleSnapshotAttempts 'retry'
 				attempt = attempt + 1
@@ -312,10 +312,10 @@
 
 		function moduleName() returns String
 			var name = ByteArray.create()
-			var offset = ModuleEntryNameOffset
+			var offset = ModuleEntryNameOffset as ScratchOffset
 
 			while offset < ModuleEntryBytes 'eachWord'
-				let packed = self.scratch.word((SampleModuleEntrySlot + offset) as ScratchOffset)
+				let packed = self.scratch.word(SampleModuleEntrySlot + offset)
 
 				for unit in 0 upto Utf16UnitsPerWord 'eachUnit'
 					let code = (packed shr ((unit * Utf16UnitBits) as UnitShift)) and Utf16UnitMask
@@ -327,7 +327,7 @@
 					name.push((code if code < AsciiCeiling else NonAsciiPlaceholder) as Byte)
 				end 'eachUnit'
 
-				offset = offset + sizeof(RegisterWord)
+				offset = offset + (sizeof(RegisterWord) as ScratchOffset)
 			end 'eachWord'
 
 			return String.from(name)

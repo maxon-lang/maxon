@@ -52,6 +52,10 @@ for both; it gives the one the corpus pins (`self-keyword.md`'s `self-with-param
 `let f = grow` followed by `f(a)` calls a function chosen at run time, so there is no single callee to summarise.
 The call is judged against every function whose type can flow into the value's type: if any of them writes the
 parameter, `f(a)` writes `a`. A `let` argument is then `E3159`, as for a direct call; a `var` runs.
+A function that forwards a parameter to such a value is summarised the same way, so `apply(xs, f)` whose body
+is `f(xs)` writes `xs` when any of those functions does. A position some candidate writes is passed as the
+argument's own storage whichever body the call reaches, so a candidate that writes it updates the caller's
+variable exactly as a direct call does (`pass-by-reference.md` pins the runs).
 
 ## Tests
 
@@ -1252,6 +1256,230 @@ end 'main'
 ```
 ```exitcode
 1
+```
+
+<!-- test: error.function-value-call-with-a-literal-container-is-refused -->
+A call through a function VALUE may still not carry a LITERAL container: `a` is a `let` array literal, a
+constant the compiler read its range columns from, and the call may write it.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function grow(d IntArray)
+	d.push(9)
+end 'grow'
+
+function main() returns ExitCode
+	let a = [1 as Integer]
+	let f = grow
+	f(a)
+	return a.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:12:3: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'd' (in main); pass a clone()
+```
+
+<!-- test: function-value-call-with-a-let-array-to-a-read-only-callback-is-accepted -->
+The same call through a value naming a callback that only reads is accepted.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function size(d IntArray) returns Count
+	return d.count()
+end 'size'
+
+function main() returns ExitCode
+	let a = [1 as Integer, 2 as Integer, 3 as Integer]
+	let f = size
+	return f(a) as ExitCode
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: function-value-call-with-a-let-map-to-a-read-only-callback-is-accepted -->
+A `let` map literal is accepted by a read-only callback too.
+
+```maxon
+typealias CountMap = Map with (Count, Count)
+
+function size(m CountMap) returns Count
+	return m.count()
+end 'size'
+
+function main() returns ExitCode
+	let m = [1 as Count: 10 as Count]
+	let f = size
+	return f(m) as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: function-value-call-with-a-let-record-to-a-read-only-callback-is-accepted -->
+So is a `let` record.
+
+```maxon
+type Box
+	export var n = 7 as Count
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Box'
+
+function read(b Box) returns Count
+	return b.n
+end 'read'
+
+function main() returns ExitCode
+	let b = Box.create()
+	let f = read
+	return f(b) as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: error.function-value-call-with-a-let-record-to-a-writing-callback-is-refused -->
+A `let` record handed to a callback that writes one of its fields is refused.
+
+```maxon
+type Box
+	export var n = 7 as Count
+
+	static function create() returns Self
+		return Self{n: 7}
+	end 'create'
+end 'Box'
+
+function bump(b Box)
+	b.n = 99
+end 'bump'
+
+function main() returns ExitCode
+	let b = Box.create()
+	let f = bump
+	f(b)
+	return b.n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:17:3: cannot pass 'b', which is read-only (a `let` binding), to a function that writes parameter 'b' (in main); pass a clone()
+```
+
+<!-- test: error.a-closure-literal-callee-that-writes-its-parameter-refuses-a-let -->
+A closure literal is the exact callee, and its body's write counts.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function growAndCount(d IntArray) returns Count
+	d.push(9)
+	return d.count()
+end 'growAndCount'
+
+function main() returns ExitCode
+	let a = IntArray.create()
+	let f = function(d IntArray) gives growAndCount(d)
+	return f(a) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:13:10: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'd' (in main); pass a clone()
+```
+
+<!-- test: error.a-callback-parameter-that-may-write-refuses-a-let-handed-through-the-caller -->
+`apply` forwards its array to an unknown callback; some function of the callback's shape writes it, so `apply` writes its parameter and a `let` handed to `apply` is refused.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+typealias Mutator = function(IntArray)
+
+function grow(d IntArray)
+	d.push(9)
+end 'grow'
+
+function apply(xs IntArray, f Mutator)
+	f(xs)
+end 'apply'
+
+function main() returns ExitCode
+	let a = IntArray.create()
+	let g = grow
+	apply(a, f: g)
+	return a.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:17:2: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'xs' (in main); pass a clone()
+```
+
+<!-- test: a-callback-parameter-whose-candidates-only-read-accepts-a-let -->
+When no function of the callback's shape that is used as a value writes the parameter, the `let` is accepted.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+typealias Reader = function(IntArray) returns Count
+
+function look(d IntArray) returns Count
+	return d.count()
+end 'look'
+
+function apply(xs IntArray, f Reader) returns Count
+	return f(xs)
+end 'apply'
+
+function main() returns ExitCode
+	let a = IntArray.create()
+	let g = look
+	_ = apply(a, f: g)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.a-higher-order-call-is-written-through-two-levels -->
+The write is carried through a second forwarding function.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+typealias Mutator = function(IntArray)
+
+function grow(d IntArray)
+	d.push(9)
+end 'grow'
+
+function apply(xs IntArray, f Mutator)
+	f(xs)
+end 'apply'
+
+function relay(ys IntArray, g Mutator)
+	apply(ys, f: g)
+end 'relay'
+
+function main() returns ExitCode
+	let a = IntArray.create()
+	let w = grow
+	relay(a, g: w)
+	return a.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:21:2: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'ys' (in main); pass a clone()
 ```
 
 <!-- test: var-self-field-passed-to-mutating-param-ok -->

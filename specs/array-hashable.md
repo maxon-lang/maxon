@@ -704,7 +704,7 @@ typealias DwordArray = Array with Dword
 typealias SignedArray = Array with Signed
 
 function foldWide(values WideArray) returns HashValue
-	var h = 5381
+	var h = 5381 as HashValue
 
 	for item in values 'eachElement'
 		h = (h * 33 + item.hash()) and 0xFFFFFFFF
@@ -714,7 +714,7 @@ function foldWide(values WideArray) returns HashValue
 end 'foldWide'
 
 function foldBytes(values ByteArray) returns HashValue
-	var h = 5381
+	var h = 5381 as HashValue
 
 	for item in values 'eachElement'
 		h = (h * 33 + item.hash()) and 0xFFFFFFFF
@@ -724,7 +724,7 @@ function foldBytes(values ByteArray) returns HashValue
 end 'foldBytes'
 
 function foldWords(values WordArray) returns HashValue
-	var h = 5381
+	var h = 5381 as HashValue
 
 	for item in values 'eachElement'
 		h = (h * 33 + item.hash()) and 0xFFFFFFFF
@@ -734,7 +734,7 @@ function foldWords(values WordArray) returns HashValue
 end 'foldWords'
 
 function foldDwords(values DwordArray) returns HashValue
-	var h = 5381
+	var h = 5381 as HashValue
 
 	for item in values 'eachElement'
 		h = (h * 33 + item.hash()) and 0xFFFFFFFF
@@ -744,7 +744,7 @@ function foldDwords(values DwordArray) returns HashValue
 end 'foldDwords'
 
 function foldSigned(values SignedArray) returns HashValue
-	var h = 5381
+	var h = 5381 as HashValue
 
 	for item in values 'eachElement'
 		h = (h * 33 + item.hash()) and 0xFFFFFFFF
@@ -847,7 +847,7 @@ typealias Byte = float(-1.0 to 1.0)
 typealias Bs = Array with Byte
 
 function fold(values Bs) returns HashValue
-	var h = 5381
+	var h = 5381 as HashValue
 
 	for item in values 'eachElement'
 		h = (h * 33 + item.hash()) and 0xFFFFFFFF
@@ -880,7 +880,7 @@ true
 
 <!-- test: a-float-array-compares-and-searches-by-its-values -->
 ```maxon
-typealias Reals = Array with Real
+typealias Reals = Array with FullRangeFloat
 
 function main() returns ExitCode
 	var a = Reals.create()

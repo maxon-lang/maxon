@@ -95,7 +95,7 @@ two Ms can interleave. The refusal is anchored at the ACCESS — the line the cu
 `spawn` rides as the note, because it is what makes `Counter` a service.
 wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
-var total = 0
+var total = 0 as Integer
 
 type Counter
 	var n as Integer
@@ -127,7 +127,7 @@ note: <fragment>:17:10: the `spawn` that makes `Counter` a service
 reaches the access: the race does not care which frame the store sits in.
 wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
-var total = 0
+var total = 0 as Integer
 
 function record(by Integer)
 	total = total + by
@@ -165,7 +165,7 @@ a target chosen at run time may land on any function whose address the program t
 message as reaching all of them.
 wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
-var ledger = 0
+var ledger = 0 as Integer
 
 typealias Step = function(Integer) returns Integer
 
@@ -225,8 +225,8 @@ type Reader
 	end 'create'
 
 	export function size() returns Integer
-		var odd = 0
-		var i = 0
+		var odd = 0 as GraphemeIndex
+		var i = 0 as Count
 		while i < 4000 'spin'
 			let c = label.count()
 			if c < 5 or c > 40 'implausible'
@@ -240,14 +240,14 @@ end 'Reader'
 
 function main() returns ExitCode
 	var hs = ReaderHandleArray.create()
-	var i = 0
+	var i = 0 as Count
 	while i < 12 'sp'
 		hs.push(spawn Reader.create())
 		i = i + 1
 	end 'sp'
 
 	var ps = IntPromiseArray.create()
-	var k = 0
+	var k = 0 as Count
 	while k < 12 'send'
 		let h = try hs.get(k) otherwise panic("get")
 		ps.push(h.size())
@@ -255,14 +255,14 @@ function main() returns ExitCode
 	end 'send'
 
 	// Reassign while the readers are already running on worker Ms.
-	var r = 0
+	var r = 0 as Count
 	while r < 4000 'churn'
 		label = "bravo-{r}"
 		r = r + 1
 	end 'churn'
 
-	var worst = 0
-	var a = 0
+	var worst = 0 as Integer
+	var a = 0 as Count
 	while a < 12 'collect'
 		let p = try ps.get(a) otherwise panic("get p")
 		let v = try await p otherwise 0
@@ -409,7 +409,7 @@ end 'Sorter'
 
 function main() returns ExitCode
 	let h = spawn Sorter.create()
-	var n = 40
+	var n = 40 as Integer
 
 	while n > 0 'fill'
 		h.add(n)
@@ -497,7 +497,7 @@ type Churner
 	end 'create'
 
 	export function churn(rounds Integer) returns Integer
-		var held = 0
+		var held = 0 as Count
 
 		for _ in 0 upto rounds 'eachRound'
 			var kept = HeldNamesArray.create()
@@ -505,7 +505,7 @@ type Churner
 			held = held + kept.count()
 		end 'eachRound'
 
-		return held
+		return held as Integer
 	end 'churn'
 end 'Churner'
 
@@ -517,7 +517,7 @@ function main() returns ExitCode
 		replies.push(h.churn(RoundsPerChurner))
 	end 'eachChurner'
 
-	var held = 0
+	var held = 0 as Integer
 
 	for r in replies 'eachReply'
 		held = held + (try await r otherwise 0)
@@ -757,7 +757,7 @@ note: <fragment>:41:5: the initializer of `box`, which reaches it
 the program's own strand: no other OS thread can reach the word, whether or not the program spawns a service.
 The twin below reads the same `ledger` from a handler and is refused.
 ```maxon
-var ledger = 0
+var ledger = 0 as Integer
 
 function bookKeeping(by Integer)
 	ledger = ledger + by
@@ -803,7 +803,7 @@ ledger=15 count=5
 runs on a green thread the scheduler may put on any OS thread, while `main` writes the same word.
 wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
-var ledger = 0
+var ledger = 0 as Integer
 
 function bookKeeping(by Integer)
 	ledger = ledger + by
@@ -852,7 +852,7 @@ handler dispatches `greet` through `Greeter`, so the dispatch can land on `Polit
 `bookKeeping` writes a module `var` and has its address taken in `main`, but it is no member of the requirement, so
 no dispatch reaches it and the `var` is legal.
 ```maxon
-var ledger = 0
+var ledger = 0 as Integer
 
 typealias Step = function(Integer) returns Integer
 
@@ -922,7 +922,7 @@ The handler hashes and compares its keys through a `Map`'s witness slots and cal
 whose address `main` takes, writes `ledger`. Nothing a message runs can land on `bookKeeping`, so the `var` is
 legal.
 ```maxon
-var ledger = 0
+var ledger = 0 as Integer
 
 typealias Step = function(Integer) returns Integer
 
@@ -973,7 +973,7 @@ The handler dispatches `greet` through an interface value, and `Loud.greet` writ
 names the member the dispatch could land on, as for every other road to the `var`.
 wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
-var greetings = 0
+var greetings = 0 as Integer
 
 interface Greeter
 	function greet() returns String
@@ -1121,7 +1121,7 @@ typealias Integer = int(i64.min to i64.max)
 **`async` ALONE DOES NOT MAKE A SERVICE PROGRAM.** `triple` runs on a green thread of its own twice, and
 `main` folds each awaited answer into `total`. Nothing is spawned, so `total` is a legal declaration.
 ```maxon
-var total = 0
+var total = 0 as Integer
 
 function triple(n Integer) returns Integer
 	sleep(1)
@@ -1151,7 +1151,7 @@ total=27
 **A PROGRAM THAT LOGS SPAWNS A SERVICE, AND ITS `var` IS STILL `main`'S.** The log handler is a service, so
 `Log.info` runs on a green thread of its own, but nothing it runs touches `calls`: `main` alone counts it.
 ```maxon
-var calls = 0
+var calls = 0 as Count
 
 function main() returns ExitCode
 	let options = LogHandlerOptions.create(LogStream.standardOutput, addTime: false, addSource: false)
@@ -1173,7 +1173,7 @@ level=INFO msg="started 1"
 A `default` whose value is a `spawn` starts its service before `main` once anything reaches its key, so the
 program has a service. `lookups` is touched by `main` alone, so it is legal.
 ```maxon
-var lookups = 0
+var lookups = 0 as Integer
 
 interface Greeter
 	function greet() returns Integer
@@ -1210,7 +1210,7 @@ typealias Integer = int(i64.min to i64.max)
 strand, so `Counter.created` is `main`'s and the program is legal.
 ```maxon
 type Counter
-	static var created = 0
+	static var created = 0 as Integer
 
 	var n as Integer
 
@@ -1242,7 +1242,7 @@ with its type.
 wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
 type Counter
-	static var created = 0
+	static var created = 0 as Integer
 
 	var n as Integer
 
@@ -1305,7 +1305,7 @@ A `default` whose value is a `spawn` starts its service before `main`, so a modu
 touches is shared by two threads. The note points at the `spawn` inside the `default`.
 wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
-var lookups = 0
+var lookups = 0 as Integer
 
 interface Greeter
 	function greet() returns Integer
@@ -1344,7 +1344,7 @@ A program that logs spawns the handler the `LogSink` `default` names. A module `
 touches is shared by two threads, and the note points at the `spawn` inside the `default`.
 wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
-var calls = 0
+var calls = 0 as Integer
 
 type CountingHandler implements LogHandler
 	var seen as Integer
@@ -1379,7 +1379,7 @@ A handler that runs `async` work starts a coroutine on the handler's own strand,
 touches is reached by a message and is refused.
 wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
-var ledger = 0
+var ledger = 0 as Integer
 
 function book(by Integer) returns Integer
 	sleep(1)

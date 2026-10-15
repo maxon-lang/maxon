@@ -167,7 +167,7 @@ baz
 function main() returns ExitCode
 	// Skip argv[0] and print the rest
 	let args = CommandLine.args()
-	var i = 1
+	var i = 1 as Count
 	while i < args.count() 'loop'
 		let arg = try args.get(i) otherwise ""
 		print(arg)

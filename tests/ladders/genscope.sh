@@ -95,7 +95,12 @@ esac
   # every construct is 2 however large V grows.
   w=0
   while [ "$w" -lt 6 ]; do
-    echo -e "\tvar w${w} = a + $(( w + 1 ))"
+    if [ "$V" -gt "$w" ] || [ "$C" -gt $(( w % 3 )) ]; then
+      binding="var"
+    else
+      binding="let"
+    fi
+    echo -e "\t${binding} w${w} = a + $(( w + 1 ))"
     w=$(( w + 1 ))
   done
 
@@ -133,7 +138,7 @@ esac
         echo -e "\tend 'e${i}'"
         ;;
       while)
-        echo -e "\tvar n${i} = 4"
+        echo -e "\tvar n${i} = 4 as LadderInt"
         echo -e "\twhile n${i} > 0 'c${i}'"
         echo -e "\t\tw${p} = w${p} + ${i}"
         echo -e "\t\tw${q} = w${q} + 1"

@@ -476,7 +476,7 @@ function isSorted(a IntArray) returns bool
 	if n <= 1 'trivial'
 		return true
 	end 'trivial'
-	var i = 1
+	var i = 1 as Count
 	while i < n 'scan'
 		let prev = try a.get(i - 1) otherwise return false
 		let curr = try a.get(i) otherwise return false
@@ -512,8 +512,8 @@ function nthPerm4(k Integer) returns IntArray
 end 'nthPerm4'
 
 function main() returns ExitCode
-	var k = 0
-	var failed = 0
+	var k = 0 as Integer
+	var failed = 0 as Count
 	while k < 24 'eachPerm'
 		var perm = nthPerm4(k)
 		perm.sort(ascending)
@@ -683,7 +683,7 @@ function main() returns ExitCode
 	// Walk the sorted output: within each equal-key run the tag sequence
 	// must be non-decreasing for stability. Print the first violator if any.
 	var ok = true
-	var i = 1
+	var i = 1 as Count
 	while i < a.count() 'check'
 		let prev = try a.get(i - 1) otherwise return 99
 		let curr = try a.get(i) otherwise return 99
@@ -791,8 +791,8 @@ function main() returns ExitCode
 	a.push(32)
 	a.push(36)
 	let n = a.count()
-	var sum = 0
-	var squares = 0
+	var sum = 0 as Integer
+	var squares = 0 as Integer
 
 	for x in a 'tally'
 		sum = sum + x
@@ -802,8 +802,8 @@ function main() returns ExitCode
 	a.sort(ascending)
 
 	var ordered = a.count() == n
-	var sumAfter = 0
-	var squaresAfter = 0
+	var sumAfter = 0 as Integer
+	var squaresAfter = 0 as Integer
 
 	for i in 0 upto a.count() 'walk'
 		let v = try a.get(i) otherwise return 99
@@ -961,8 +961,8 @@ function main() returns ExitCode
 	a.push(49)
 	a.push(50)
 	let n = a.count()
-	var sum = 0
-	var squares = 0
+	var sum = 0 as Integer
+	var squares = 0 as Integer
 
 	for x in a 'tally'
 		sum = sum + x
@@ -972,8 +972,8 @@ function main() returns ExitCode
 	a.sort(ascending)
 
 	var ordered = a.count() == n
-	var sumAfter = 0
-	var squaresAfter = 0
+	var sumAfter = 0 as Integer
+	var squaresAfter = 0 as Integer
 
 	for i in 0 upto a.count() 'walk'
 		let v = try a.get(i) otherwise return 99
@@ -1060,8 +1060,8 @@ function main() returns ExitCode
 	a.push(74)
 	a.push(6)
 	let n = a.count()
-	var sum = 0
-	var squares = 0
+	var sum = 0 as Integer
+	var squares = 0 as Integer
 
 	for x in a 'tally'
 		sum = sum + x
@@ -1071,8 +1071,8 @@ function main() returns ExitCode
 	a.sort(ascending)
 
 	var ordered = a.count() == n
-	var sumAfter = 0
-	var squaresAfter = 0
+	var sumAfter = 0 as Integer
+	var squaresAfter = 0 as Integer
 
 	for i in 0 upto a.count() 'walk'
 		let v = try a.get(i) otherwise return 99
@@ -1120,7 +1120,7 @@ end 'ascending'
 
 function main() returns ExitCode
 	var a = IntArray.create()
-	var r = 2463534242
+	var r = 2463534242 as Integer
 
 	for i in 0 upto 5000 'fill'
 		r = (r * 1103515245 + 12345) and 0x7FFFFFFF
@@ -1128,8 +1128,8 @@ function main() returns ExitCode
 	end 'fill'
 
 	let n = a.count()
-	var sum = 0
-	var squares = 0
+	var sum = 0 as Integer
+	var squares = 0 as Integer
 
 	for x in a 'tally'
 		sum = sum + x
@@ -1139,8 +1139,8 @@ function main() returns ExitCode
 	a.sort(ascending)
 
 	var ordered = a.count() == n
-	var sumAfter = 0
-	var squaresAfter = 0
+	var sumAfter = 0 as Integer
+	var squaresAfter = 0 as Integer
 
 	for i in 0 upto a.count() 'walk'
 		let v = try a.get(i) otherwise return 99
@@ -1199,7 +1199,7 @@ end 'sortCounting'
 
 function main() returns ExitCode
 	var a = IntArray.create()
-	var r = 2463534242
+	var r = 2463534242 as Integer
 
 	for i in 0 upto 65536 'fill'
 		r = (r * 1103515245 + 12345) and 0x7FFFFFFF
@@ -1254,7 +1254,118 @@ type Adversary
 
 	static function create(items Integer) returns Adversary
 		var values = IntArray.create()
-		var solid = 0
+		var solid = 0 as Integer
+
+		for i in 0 upto items 'fill'
+			if i mod RunBreakerStride == RunBreakerStride - 1 'breaksARun'
+				values.push(solid)
+				solid = solid + 1
+			end 'breaksARun' else 'undecided'
+				values.push(items)
+			end 'undecided'
+		end 'fill'
+
+		return Self{values: values, solid: solid, candidate: 0, gas: items, calls: 0}
+	end 'create'
+
+	function valueOf(item Integer) returns Integer
+		return try self.values.get(item as ElementIndex) otherwise panic("Adversary.valueOf: every item the sort holds is one this adversary numbered")
+	end 'valueOf'
+
+	function freeze(item Integer)
+		try self.values.set(item as ElementIndex, value: self.solid) otherwise panic("Adversary.freeze: every item the sort holds is one this adversary numbered")
+		self.solid = self.solid + 1
+	end 'freeze'
+
+	function compare(x Integer, y Integer) returns Ordering
+		self.calls = self.calls + 1
+
+		if self.valueOf(x) == self.gas and self.valueOf(y) == self.gas 'bothUndecided'
+			if x == self.candidate 'freezeTheCandidate'
+				self.freeze(x)
+			end 'freezeTheCandidate' else 'freezeTheOther'
+				self.freeze(y)
+			end 'freezeTheOther'
+		end 'bothUndecided'
+
+		if self.valueOf(x) == self.gas 'xUndecided'
+			self.candidate = x
+		end 'xUndecided' else if self.valueOf(y) == self.gas 'yUndecided'
+			self.candidate = y
+		end 'yUndecided'
+
+		return self.valueOf(x).compare(self.valueOf(y))
+	end 'compare'
+end 'Adversary'
+
+function adversarial(x Integer, y Integer, adversary Adversary) returns Ordering
+	return adversary.compare(x, y: y)
+end 'adversarial'
+
+function sortAgainst(items IntArray, adversary Adversary)
+	items.sort(function(x Integer, y Integer) gives adversarial(x, y: y, adversary: adversary))
+end 'sortAgainst'
+
+function main() returns ExitCode
+	var items = IntArray.create()
+
+	for i in 0 upto Items 'fill'
+		items.push(i)
+	end 'fill'
+
+	var adversary = Adversary.create(Items)
+	sortAgainst(items, adversary: adversary)
+
+	var ordered = true
+
+	for i in 1 upto items.count() 'walk'
+		let before = try items.get(i - 1) otherwise return 99
+		let after = try items.get(i) otherwise return 99
+
+		if adversary.valueOf(before) > adversary.valueOf(after) 'outOfOrder'
+			ordered = false
+		end 'outOfOrder'
+	end 'walk'
+
+	if ordered and adversary.calls <= ComparesPerItemBound * Items 'withinTheBound'
+		print("sorted within the bound\n")
+	end 'withinTheBound' else 'overTheBound'
+		print("ordered={ordered} compares={adversary.calls} perItem={adversary.calls / Items}\n")
+	end 'overTheBound'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+sorted within the bound
+```
+
+
+## Duplicate-heavy inputs
+
+<!-- test: error.a-let-adversary-a-comparator-closure-writes-is-refused -->
+The same program with the adversary bound by `let`: the comparator closure writes the adversary it captured, so handing it over is refused.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+let Items = 65536
+let ComparesPerItemBound = 64
+let RunBreakerStride = 8
+
+type Adversary
+	export var values as IntArray
+	export var solid as Integer
+	export var candidate as Integer
+	export var gas as Integer
+	export var calls as Integer
+
+	static function create(items Integer) returns Adversary
+		var values = IntArray.create()
+		var solid = 0 as Integer
 
 		for i in 0 upto items 'fill'
 			if i mod RunBreakerStride == RunBreakerStride - 1 'breaksARun'
@@ -1336,15 +1447,9 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```exitcode
-0
+```maxoncstderr
+error E3159: <fragment>:78:2: cannot pass 'adversary', which is read-only (a `let` binding), to a function that writes parameter 'adversary' (in main); pass a clone()
 ```
-```stdout
-sorted within the bound
-```
-
-
-## Duplicate-heavy inputs
 
 <!-- test: sort-duplicate-heavy-arrays-come-out-sorted -->
 `sort()` on arrays of 100 to 400 elements drawn from 2 to 40 distinct values. The

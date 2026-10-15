@@ -164,7 +164,7 @@ class Emitter:
             return tabs + "writer.signed(%s as CacheSigned)" % value
 
         if kind == "real":
-            return tabs + "writer.real(%s as ParsedFloat)" % value
+            return tabs + "writer.real(%s as FullRangeFloat)" % value
 
         if kind == "bytes":
             return tabs + "writer.bytes(%s)" % value

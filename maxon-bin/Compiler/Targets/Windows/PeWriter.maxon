@@ -1011,7 +1011,7 @@ end 'dllThunkRunBytes'
 
 // Byte offset of `dll`'s thunk run within one pass of the thunk table.
 function dllRunOffset(dll ImportDll, gates ImportGates) returns ByteOffset
-	var cursor = 0
+	var cursor = 0 as ByteOffset
 
 	for d in ImportDll.allCases 'walk'
 		if dllIsEmitted(d, gates: gates) 'live'
@@ -1028,7 +1028,7 @@ end 'dllRunOffset'
 
 // Total bytes of the thunk table in one pass, across every emitted DLL.
 function thunkTableBytes(gates ImportGates) returns ByteOffset
-	var total = 0
+	var total = 0 as ByteOffset
 
 	for d in ImportDll.allCases 'walk'
 		if dllIsEmitted(d, gates: gates) 'live'
@@ -1041,7 +1041,7 @@ end 'thunkTableBytes'
 
 // Total bytes of the Hint/Name table across every emitted DLL — where the DLL-name strings begin.
 function totalHintBytes(gates ImportGates) returns ByteOffset
-	var total = 0
+	var total = 0 as ByteOffset
 
 	for d in ImportDll.allCases 'walk'
 		if dllIsEmitted(d, gates: gates) 'live'
@@ -1054,7 +1054,7 @@ end 'totalHintBytes'
 
 // How many import directory entries this binary carries (excluding the null terminator).
 function emittedDllCount(gates ImportGates) returns DllTally
-	var n = 0
+	var n = 0 as DllTally
 
 	for d in ImportDll.allCases 'walk'
 		if dllIsEmitted(d, gates: gates) 'live'
@@ -1125,7 +1125,7 @@ end 'appendImportHintNameEntry'
 // Sum of Hint/Name entry sizes across a run of imports — the offset delta from
 // the first entry to whatever follows the run in the table.
 function sumHintSizes(names StringArray) returns BytePos
-	var total = 0
+	var total = 0 as BytePos
 
 	for name in names 'each'
 		total = total + importHintNameEntrySize(name)
@@ -1267,7 +1267,7 @@ end 'iatSlotByteOffset'
 // position and the run cannot disagree.
 function slotPositionInRun(slot IatSlot, optionalImports bool) returns BytePos
 	let dll = slotDll(slot)
-	var position = 0
+	var position = 0 as BytePos
 
 	for other in IatSlot.allCases 'walk'
 		if iatSlotIndex(other) == iatSlotIndex(slot) 'reached'
@@ -1894,7 +1894,7 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	let hasData = dataSize > 0
 
 	// Sections: .text + .idata + .rsrc always; .rdata / .symtab / .data only when non-empty.
-	var numSections = 3
+	var numSections = 3 as Count
 
 	if hasRdata 'countRdata'
 		numSections = numSections + 1
@@ -1908,7 +1908,7 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 		numSections = numSections + 1
 	end 'countData'
 
-	let headersSize = DosAndPeSigBytes + CoffHeaderBytes + OptionalHeaderBytes + SectionHeaderBytes * numSections
+	let headersSize = (DosAndPeSigBytes + CoffHeaderBytes + OptionalHeaderBytes + SectionHeaderBytes * numSections) as BytePos
 	let headersAligned = alignUp(headersSize, alignment: FileAlignment)
 
 	// .text — its RVA is the page-aligned `SectionAlignment`, so every branch window the x64 encoder padded
@@ -1921,7 +1921,7 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	// .rdata (optional)
 	let rdataRva = textRva + codeSizeVirtual
 	let rdataSizeAligned = alignUp(rdataSize as BytePos, alignment: FileAlignment)
-	var rdataSizeVirtual = 0
+	var rdataSizeVirtual = 0 as BytePos
 
 	if hasRdata 'rdataVirtual'
 		rdataSizeVirtual = alignUp(rdataSize as BytePos, alignment: SectionAlignment)
@@ -1930,7 +1930,7 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	// .symtab (optional)
 	let symdataRva = rdataRva + rdataSizeVirtual
 	let symdataSizeAligned = alignUp(symdataSize as BytePos, alignment: FileAlignment)
-	var symdataSizeVirtual = 0
+	var symdataSizeVirtual = 0 as BytePos
 
 	if hasSymdata 'symdataVirtual'
 		symdataSizeVirtual = alignUp(symdataSize as BytePos, alignment: SectionAlignment)
@@ -1939,7 +1939,7 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	// .data (optional) — WRITABLE, and laid out between .symtab and .idata.
 	let dataRva = symdataRva + symdataSizeVirtual
 	let dataSizeAligned = alignUp(dataSize as BytePos, alignment: FileAlignment)
-	var dataSizeVirtual = 0
+	var dataSizeVirtual = 0 as BytePos
 
 	if hasData 'dataVirtual'
 		dataSizeVirtual = alignUp(dataSize as BytePos, alignment: SectionAlignment)
@@ -2012,7 +2012,7 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	end 'coffCpu'
 
 	writeWord(pe, value: coffMachine)
-	writeWord(pe, value: numSections)
+	writeWord(pe, value: numSections as MachineWord)
 	writeZeros(pe, n: 4)  // TimeDateStamp
 	let pointerToSymbolTableOffset = pe.count()
 	writeZeros(pe, n: 4)  // PointerToSymbolTable (patched after the symbol table lands)

@@ -106,7 +106,7 @@ it), `x >= 5` is true (+16), and `x < 5` is false (+0 — a `<` lowered as `<=` 
 ```maxon
 function main() returns ExitCode
 	let x = 5
-	var r = 0
+	var r = 0 as ExitCode
 	if x == 6 'eqFalse'
 		r = r + 1
 	end 'eqFalse'

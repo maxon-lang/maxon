@@ -180,7 +180,7 @@ error E3092: api/<fragment>:3:18: exported typealias 'UnusedAlias' is never refe
 // --- file: api/counter.maxon
 export typealias Integer = int(i64.min to i64.max)
 
-export var unusedCounter = 99
+export var unusedCounter = 99 as Integer
 
 export function readCounter() returns Integer
 	return unusedCounter
@@ -364,7 +364,7 @@ end 'main'
 // --- file: api/counter.maxon
 export typealias Integer = int(i64.min to i64.max)
 
-public var unusedCounter = 99
+public var unusedCounter = 99 as Integer
 
 export function readCounter() returns Integer
 	return unusedCounter
@@ -474,7 +474,7 @@ end 'main'
 <!-- test: cross-file-var-read-is-a-reference -->
 ```maxon
 // --- file: api/counter.maxon
-export var usedCounter = 9
+export var usedCounter = 9 as FullRangeInt
 
 // --- file: app/main.maxon
 function main() returns ExitCode
@@ -595,9 +595,9 @@ end 'makeHolder'
 typealias Count = int(i64.min to i64.max)
 
 function total(h Holder) returns Count
-	var t = 0
+	var t = 0 as Count
 	for it in h.items 'each'
-		t = t + it.n
+		t = t + it.n as Count
 	end 'each'
 	return t
 end 'total'
@@ -782,7 +782,7 @@ end 'makeHolder'
 typealias Count = int(i64.min to i64.max)
 
 function total(h Holder) returns Count
-	var t = 0
+	var t = 0 as Count
 	for _ in h.items 'each'
 		t = t + 1
 	end 'each'
@@ -922,9 +922,9 @@ end 'itemValue'
 typealias Count = int(i64.min to i64.max)
 
 function total(h Holder) returns Count
-	var t = 0
+	var t = 0 as Count
 	for it in h.items 'each'
-		t = t + it.n
+		t = t + it.n as Count
 	end 'each'
 	return t
 end 'total'

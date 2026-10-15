@@ -63,7 +63,7 @@ function pickNamed() returns Kind
 end 'pickNamed'
 
 function main() returns ExitCode
-	var score = 0
+	var score = 0 as Count
 	if isScalar(pickFloat()) 'f'
 		score = score + 1
 	end 'f'

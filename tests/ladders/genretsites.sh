@@ -140,9 +140,9 @@ rm -f "$OUT"/*.maxon
 		# The dispatcher returns the WIDE alias, so it contributes no ranged site of its own and the knob
 		# stays exactly <n>.
 		echo "function rrPick(n RrWide) returns RrWide"
-		echo "	var acc = 0"
+		echo "	var acc = 0 as RrWide"
 		for ((i = 0; i < N; i++)); do
-			echo "	acc = acc + rrOne$i(n)"
+			echo "	acc = acc + (rrOne$i(n) as RrWide)"
 		done
 		echo ""
 		echo "	return acc"

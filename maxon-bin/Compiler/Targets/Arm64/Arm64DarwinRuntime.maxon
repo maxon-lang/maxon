@@ -1212,7 +1212,7 @@ function arm64DarwinEmitStashIfStatusFailed(asm Arm64RuntimeAsm)
 	asm.placeLabel(succeeded)
 end 'arm64DarwinEmitStashIfStatusFailed'
 
-module function arm64DarwinEmitPublishAndStashErrno(asm Arm64RuntimeAsm, value ParsedInt)
+module function arm64DarwinEmitPublishAndStashErrno(asm Arm64RuntimeAsm, value FullRangeInt)
 	arm64DarwinEmitPublishErrno(asm, value: value)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: DarwinStashErrnoName)
 end 'arm64DarwinEmitPublishAndStashErrno'
@@ -2543,7 +2543,7 @@ let DarwinOneChange = 1
 
 // The kevent's second quadword — the 16-bit `filter`, the 16-bit `flags` and the 32-bit `fflags`, little-endian —
 // as the one value stored at `DarwinKeventFilterOffset`.
-function darwinKeventFilterWord(filter ParsedInt, flags MachineWord, fflags MachineWord) returns MachineWord
+function darwinKeventFilterWord(filter FullRangeInt, flags MachineWord, fflags MachineWord) returns MachineWord
 	let filterBits = (filter and DarwinKeventHalfMask) as MachineWord
 	return filterBits or (flags shl DarwinKeventFlagsShift) or (fflags shl DarwinKeventFflagsShift)
 end 'darwinKeventFilterWord'
@@ -2759,7 +2759,7 @@ end 'buildArm64DarwinNetpollChildCloseChunk'
 
 // One change record of the pair: `(fd, filter, EV_ADD | EV_CLEAR)` at `index` in the changelist `changes`
 // points at. x9 is the value scratch every chunk in this file uses.
-function arm64DarwinEmitSocketFilter(asm Arm64RuntimeAsm, changes Arm64Register, fd Arm64Register, index ParsedInt, filter ParsedInt)
+function arm64DarwinEmitSocketFilter(asm Arm64RuntimeAsm, changes Arm64Register, fd Arm64Register, index FullRangeInt, filter FullRangeInt)
 	let recordAt = index * DarwinKeventBytes
 	arm64EmitStoreWord64At(asm, src: fd, base: changes, byteOffset: (recordAt + DarwinKeventIdentOffset) as MachineWord)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x9, value: darwinKeventFilterWord(filter, flags: (DarwinEvAdd or DarwinEvClear) as MachineWord, fflags: 0))
@@ -2806,7 +2806,7 @@ end 'buildArm64DarwinSocketBirthChunk'
 // `fcntl(fd, command, value)` — the value is the VARARG and goes at `[sp, #0]`, the one outgoing word
 // `beginVariadicCallerFunction` reserves. A negative answer leaves the branch at `failed`, where the errno is
 // fetched.
-function arm64DarwinEmitFcntl(asm Arm64RuntimeAsm, fdSlot StackSize, command ParsedInt, value ParsedInt, failed BlockId)
+function arm64DarwinEmitFcntl(asm Arm64RuntimeAsm, fdSlot StackSize, command FullRangeInt, value FullRangeInt, failed BlockId)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: fdSlot)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: command as MachineWord)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: value as MachineWord)
@@ -2846,7 +2846,7 @@ function arm64DarwinEmitNegatedErrno(asm Arm64RuntimeAsm)
 	arm64EmitSubRuntimeReg(asm, dest: Arm64Register.x0, lhs: Arm64Register.x9, rhs: Arm64Register.x0)
 end 'arm64DarwinEmitNegatedErrno'
 
-function arm64DarwinEmitPublishErrno(asm Arm64RuntimeAsm, value ParsedInt)
+function arm64DarwinEmitPublishErrno(asm Arm64RuntimeAsm, value FullRangeInt)
 	arm64DarwinCallImport(asm, slot: OsImportSlot.errnoLocation)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: value as MachineWord)
 	arm64EmitStoreWord32At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: 0)

@@ -591,7 +591,7 @@ the loop has nothing to absorb and the call takes the test body's implied handle
 test 'counts up from a peeked bound'
 	let steps = [1, 2, 3]
 	let it = steps.cursor()
-	var total = 0
+	var total = 0 as FullRangeInt
 
 	for i in it.peek(1) upto 4 'each'
 		total = total + i
@@ -632,7 +632,7 @@ end 'start'
 
 test 'counts up from an awaited bound'
 	let p = async start(true)
-	var total = 0
+	var total = 0 as Integer
 
 	for i in await p upto 5 'each'
 		total = total + i
@@ -724,7 +724,7 @@ end 'items'
 
 test 'walks the chosen items'
 	let useFirst = true
-	var total = 0
+	var total = 0 as Tally
 
 	for x in items(true) if useFirst else items(true) 'each'
 		total = total + x
@@ -797,7 +797,7 @@ typealias LevelArray = Array with Level
 test 'counts up from a stored level'
 	var levels = LevelArray.create()
 	levels.push(Level.high)
-	var total = 0
+	var total = 0 as FullRangeInt
 
 	for i in levels.get(0).rawValue upto 4 'each'
 		total = total + i
@@ -824,7 +824,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 test 'an empty traversal runs no trips'
-	var total = 0
+	var total = 0 as Integer
 
 	for (_, value) in IntArray.create().withIterator() 'each'
 		total = total + value
@@ -851,7 +851,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 test 'an empty parenthesized traversal runs no trips'
-	var total = 0
+	var total = 0 as Integer
 
 	for (_, value) in (IntArray.create().withIterator()) 'each'
 		total = total + value
@@ -890,7 +890,7 @@ function first(hit bool) returns Integer throws ApiError
 end 'first'
 
 test 'counts up from a cast bound'
-	var total = 0
+	var total = 0 as Small
 
 	for i in first(true) as Small upto 5 'each'
 		total = total + i
@@ -1061,7 +1061,7 @@ typealias IntArray = Array with Integer
 typealias Walk = ArrayIterator with Integer
 
 test 'an empty rebranded traversal runs no trips'
-	var total = 0
+	var total = 0 as Integer
 
 	for x in IntArray.create().cursor() as Walk 'each'
 		total = total + x

@@ -690,7 +690,8 @@ exit code and output. The shared half is `SpecHarness.maxon`.
 - **`gates/<case>/`** holds well-formed specs the harness must accept and then report something about:
   a live-network case left out of a default run and named, an `alone` case run with nothing beside it, a
   run that writes no `fragments/` directory and speaks of no golden, a `TargetIr` pin that fails its case
-  when it differs and that `--update-required` replaces or adds, plain run cases that batch into programs
+  when it differs and that `--update-required` replaces or adds without asking a compile-error case for
+  one, plain run cases that batch into programs
   by type name and keep their own names, a case declaring a module `var` and a case spawning a service
   kept in separate programs, the cases that stay out of it, `--batch=off` running every case
   alone, a crash mid-batch attributed to its own case, a batched case's services finishing before its end

@@ -58,10 +58,12 @@ build and a plain one differ in the events they emit and in nothing else.
 Two distinct names take 1 and 2 in the order they are written, and the second mention of the first
 answers 1 again. This is the whole observable contract.
 ```maxon
+typealias NameId = int(0 to 65535)
+
 function main() returns ExitCode
-	let a = __DebugStream.nameId("alpha")
-	let b = __DebugStream.nameId("beta")
-	let c = __DebugStream.nameId("alpha")
+	let a = __DebugStream.nameId("alpha") as NameId
+	let b = __DebugStream.nameId("beta") as NameId
+	let c = __DebugStream.nameId("alpha") as NameId
 	print("a={a} b={b} c={c}")
 	return 0
 end 'main'

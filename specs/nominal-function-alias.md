@@ -180,7 +180,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:16:2: function type mismatch in return: expected 'fn(int) returns int', got 'fn(int, int) returns int'
+error E3005: <fragment>:16:2: function type mismatch in return: expected 'fn(Integer) returns Integer', got 'fn(Integer, Integer) returns Integer'
 ```
 
 <!-- test: error.ternary-over-two-function-aliases -->
@@ -613,7 +613,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:20:10: argument type mismatch for 'o': expected 'fn(Handler) returns int', got 'fn(Callback) returns int'
+error E3005: <fragment>:20:10: argument type mismatch for 'o': expected 'fn(Handler) returns Integer', got 'fn(Callback) returns Integer'
 ```
 
 <!-- test: error.a-function-value-over-a-contested-shape-is-named-in-source-form -->

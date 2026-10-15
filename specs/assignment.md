@@ -35,7 +35,7 @@ two variables, and the canonical accumulator loop.
 <!-- test: basic-assignment -->
 ```maxon
 function main() returns ExitCode
-	var x = 3
+	var x = 3 as ExitCode
 	x = x + 2
 	return x
 end 'main'
@@ -47,8 +47,8 @@ end 'main'
 <!-- test: multiple-assignments -->
 ```maxon
 function main() returns ExitCode
-	var x = 10
-	var y = 20
+	var x = 10 as ExitCode
+	var y = 20 as ExitCode
 	x = y
 	y = 30
 	return x + y
@@ -61,8 +61,8 @@ end 'main'
 <!-- test: assignment-in-loop -->
 ```maxon
 function main() returns ExitCode
-	var sum = 0
-	var i = 1
+	var sum = 0 as ExitCode
+	var i = 1 as ExitCode
 	while i <= 5 'loop'
 		sum = sum + i
 		i = i + 1
@@ -179,13 +179,13 @@ union Holder
 end 'Holder'
 
 function main() returns ExitCode
-	var n = 5
+	var n = 5 as Integer
 	n = Holder.holds(BoxA.create(9))
 	return 0 as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/assignment/error.reassign-union-as-scalar.maxon:18:2: cannot assign a value of type 'Holder' to variable 'n', which holds 'int'
+error E3005: specs/assignment/error.reassign-union-as-scalar.maxon:18:2: cannot assign a value of type 'Holder' to variable 'n', which holds 'Integer'
 ```
 
 <!-- test: error.wrong-enum-into-an-enum-field -->
@@ -404,11 +404,9 @@ error E3005: specs/assignment/error.retype-struct-field-errors.maxon:15:4: canno
 A literal into a ranged typealias — the most common assignment there is. The declared type is the
 alias; a literal in range is the same type, not a retype.
 
-⭐ **AND A REBIND IS NOT A RANGE-CHECK DOOR.** `s = s + 20` stores a computed value into a narrowly
-ranged binding and is guarded by nothing: a binding NAMES a value, where a door is a declared SLOT a
-value is stored INTO, and `completeLocalRebind` records no site. The result stays in range here, so
-this case cannot tell the two apart on its own — `a-rebind-out-of-range-is-caught-at-the-return-door`
-below is the half that can, and the pair is what pins the exemption as a decision.
+⭐ **A REBIND IS A RANGE-CHECK DOOR.** `s = s + 20` stores a computed value into a narrowly ranged
+`var`, and the store checks it against `Score`. The result stays in range here, so the check passes;
+`a-rebind-out-of-range-panics-at-the-rebind` below is the case where it does not.
 ```maxon
 
 typealias Score = int(0 to 100)
@@ -424,10 +422,10 @@ end 'main'
 25
 ```
 
-<!-- test: a-rebind-out-of-range-is-caught-at-the-return-door -->
-⭐ The other half. `s` leaves `Score` inside `bump` and NOTHING fires — the print proves the binding is
-holding 200 — and the check lands at the `return`, the first door the value reaches. A rebind that
-guarded would have panicked one line earlier and printed nothing.
+<!-- test: a-rebind-out-of-range-panics-at-the-rebind -->
+⭐ The value leaves `Score` at the rebind inside `bump`, and the check fires there: the panic names
+line 7, the print after it never runs, and the `return` door is never reached. A `var` never holds a
+value outside its own range.
 ```maxon
 
 typealias Score = int(0 to 100)
@@ -446,15 +444,42 @@ function main() returns ExitCode
 end 'main'
 ```
 ```stdout
-s=200
 ```
 ```exitcode
 1
 ```
 ```stderr
-panic at a-rebind-out-of-range-is-caught-at-the-return-door.test:9: Range check failed: value outside typealias 'Score'
+panic at a-rebind-out-of-range-panics-at-the-rebind.test:7: Range check failed: value outside typealias 'Score'
 Stack trace:
   in bump
+  in main
+  in mrt_start
+```
+
+<!-- test: a-rebind-of-a-ranged-var-is-checked -->
+A rebind of a ranged `var` is a range door: a value the compiler cannot prove inside the alias is checked
+where it is stored, so the panic lands on the rebind line and the print after it never runs.
+```maxon
+
+typealias Bits = int(0 to 63)
+
+function opaque(v Bits) returns Bits
+	return v
+end 'opaque'
+
+function main() returns ExitCode
+	var w = 50 as Bits
+	w = w + opaque(50)
+	print("unreachable w={w}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-rebind-of-a-ranged-var-is-checked.test:11: Range check failed: value outside typealias 'Bits'
+Stack trace:
   in main
   in mrt_start
 ```
@@ -484,7 +509,7 @@ declared type, so this prints `5.0`. A widening that is legal but unapplied woul
 reader would see the raw int.
 ```maxon
 function main() returns ExitCode
-	var f = 1.5
+	var f = 1.5 as FullRangeFloat
 	f = 5
 	print("{f}")
 	return 0

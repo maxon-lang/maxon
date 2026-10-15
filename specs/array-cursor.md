@@ -397,7 +397,7 @@ function main() returns ExitCode
 		return 99
 	end 'fail'
 
-	var count = 0
+	var count = 0 as Count
 	if cursor.current() 'c0'
 		count = count + 1
 	end 'c0'

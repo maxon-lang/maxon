@@ -247,7 +247,7 @@ end 'main'
 ```
 
 An empty literal `''`, or one holding two characters, is **E2016**. A character literal beside an integer
-operand is its codepoint (`cp - '0'`).
+operand is its codepoint, a `Codepoint` (`cp - '0'`).
 
 ### String Literals
 
@@ -333,13 +333,20 @@ Every character becomes exactly one byte: `\xNN` is the byte `NN`, and a charact
 ### Array and Dictionary Literals
 
 ```maxon
-let primes = [2, 3, 5, 7]              // an Array
-let ages = ["ada": 36, "alan": 41]     // a Map
+typealias Age = int(0 to 150)
+typealias AgeArray = Array with Age
+
+let primes = [2, 3, 5, 7]              // a constant Array
+let ages = ["ada": 36, "alan": 41]     // a constant Map
+var known = ["ada": 36 as Age]         // a Map with (String, Age) that can grow
+var seen = AgeArray from [36, 41]      // an AgeArray that can grow
 ```
 
-The element type comes from the first element (or pair). See
-[Initializing From Literals](#initializing-from-literals) for literals of
-other collection types.
+The element type comes from the first element (or pair). A `let` bound to a literal of bare numbers is a
+constant: its elements fit any element alias that admits them at each use, and it is immutable — a method
+that writes it is **E3159**. A `var` of such a literal is **E2004**: cast the numbers, or name the alias of an
+`Array`, `Set`, `List` or `Vector` (`AgeArray from [...]`). See
+[Initializing From Literals](#initializing-from-literals) for literals of other collection types.
 
 ---
 
@@ -377,18 +384,24 @@ end 'connect'
 
 A bare `int` in a declaration is **E3005** (`Cannot use bare 'int' as a type. Define a typealias with
 range constraints, e.g., typealias MyInt = int(0 to 100)`); a bare `int` type argument (`Array with int`)
-is **E2061**. `bool` and `cstring` are used bare. Local variables never need an annotation — the type is
-inferred from the initializer:
+is **E2061**. `bool` and `cstring` are used bare. A variable takes its type from its initializer, and a
+`var` holding a number names its alias there:
 
 ```maxon
-let count = 0          // an integer
-let ratio = 0.5        // a float
+typealias Tally = int(0 to u64.max)
+
+let limit = 10         // a constant: fits any alias its value fits
+let ratio = 0.5        // a float constant
 let done = false       // bool
+var count = 0 as Tally // a Tally
+// var total = 0       // E2004: A var cannot start from a bare number
 ```
+
+See [Variables](#variables) for the rules.
 
 The standard library declares a few aliases every file can use, among them `ExitCode`, `Byte`
 (`int(0 to u8.max)`), `ByteArray` (`Array with Byte`), `Codepoint` (`int(0 to 1114111)`), `HashValue`
-(`int(0 to u32.max)`), `Count` (what a collection's `count()` returns), `SourceLineNumber` and `Real`
+(`int(0 to u32.max)`), `Count` (what a collection's `count()` returns), `SourceLineNumber` and `FullRangeFloat`
 (`float(f64.min to f64.max)`).
 [Ranged Type Aliases](#ranged-type-aliases) covers declaring your own.
 
@@ -424,6 +437,12 @@ typealias Tally = int(0 to u64.max)
   `i64.max`, or arithmetic over unsigned operands — passes its door unchecked (see
   [Range Checks](#range-checks)). A value that is a pattern rather than a count is a
   [`bits(64)`](#bit-patterns--bitsn).
+- An array, set, list, vector or map-column literal whose bare elements need both a negative value and a value
+  above `i64.max` (`[-1, u64.max]`) has no integer type that holds them all, and is **E3005** at the element
+  that makes it so (`no common integer type for -1 and 18446744073709551615`); cast the elements to an
+  alias. A `let` whose value merges a range-known value above `i64.max` with a non-negative one (`try
+  big.get(1) otherwise 0`) is range-known as an unsigned interval; a merge needing both a negative value and a
+  value above `i64.max` has no known range.
 
 ### Floats
 
@@ -450,6 +469,10 @@ end 'main'
 - `inf` and `NaN` produced by arithmetic are ordinary IEEE values; only division *by zero* is intercepted.
   There is no float `mod`.
 - A float alias bounded by `f32.min to f32.max` is still stored as a double; the bound is a range check.
+- A float whose range is known — a literal, a `let` constant, an element of a `let` literal, a merge of
+  such values, and arithmetic over them — carries that interval, and a use where the interval leaves the
+  float alias it reaches is **E3005** at compile time. A quotient whose divisor's interval holds zero, and
+  any float whose range is unknown, is a `FullRangeFloat`.
 
 ### Booleans
 
@@ -594,23 +617,27 @@ Choose the rounding explicitly:
 
 | Function | Result | Example |
 |----------|--------|---------|
-| `trunc(x)` | integer, toward zero | `trunc(-2.7)` is `-2` |
+| `trunc(x)` | `FullRangeInt`, toward zero | `trunc(-2.7)` is `-2` |
 | `round(x)` | float, nearest, ties to even | `round(2.5)` is `2.0` |
 | `floor(x)` | float, toward negative infinity | `floor(-2.5)` is `-3.0` |
 | `ceil(x)` | float, toward positive infinity | `ceil(2.1)` is `3.0` |
 
 `trunc` is the one that produces an integer; apply it to the result of `round`, `floor` or `ceil` to get
-an integer from those.
+an integer from those. Its result is a `FullRangeInt` (`int(i64.min to i64.max)`); cast it to reach a
+narrower alias. `round`, `floor`, `ceil`, `sqrt`, `abs` and the float `min` and `max` also accept a value of
+an integer alias, which they convert. A float result whose range the compiler knows carries that range and
+fits any float alias admitting it; any other is a `FullRangeFloat`.
 
 #### Implicit Conversions
 
 Maxon converts implicitly in only these places:
 
 - **Integer to float in mixed arithmetic and float slots.** `let x = 5` then `x + 2.0` is `7.0`, and an
-  unaliased integer (a literal, or a local initialized from one) is accepted where a float is expected. A
-  value of a *named* integer alias reaches a float-alias parameter through `as`, and so does a value of one
-  float alias at a place declared with another — the standard library's `Real` among them.
-- **A character literal beside an integer** is that character's codepoint:
+  unaliased integer (a literal, or a `let` constant) is accepted where a float is expected. A value of a
+  *named* integer alias beside a float operand converts too, and the result is a `FullRangeFloat`. A named
+  integer value reaches a float-alias parameter through `as`, and so does a value of one float alias at a
+  place declared with another — the standard library's `FullRangeFloat` among them.
+- **A character literal beside an integer** is that character's codepoint, a `Codepoint`:
 
   ```maxon
   let cp = 45
@@ -699,9 +726,10 @@ end 'main'
 - `as` converts in both directions. A widening cast (the source range fits the target) emits no check;
   a narrowing cast keeps a run-time check.
 - Casting a value to its own alias is **E3010** (`unneeded cast: 'Age' already fits in 'Age'`).
-- A value with **no** alias fits any alias of its kind: a literal, a counted-loop counter, a `var`
-  initialized from a literal, the raw value of a payload-free enum case. A named value also fits an
-  unnamed slot. Two *different* names conflict unless one implements the other (next section).
+- A value with **no** alias fits any alias of its kind whose range admits it, checked at compile time at
+  each use: a literal, a plain `let` constant, a loop counter between two literal bounds, and a value
+  computed from them (see [Variables](#variables)). A named value also fits an unnamed slot. Two
+  *different* names conflict unless one implements the other (next section).
 - A value keeps its alias wherever it is held: a local or global initialized by a cast has the cast's alias,
   and each tuple element keeps its own, so `(Tally, Tally)` and `(Score, Score)` are two types. Float
   aliases follow these rules exactly as integer aliases do — through locals, parameters, fields, captures
@@ -753,7 +781,8 @@ function main() returns ExitCode
 end 'main'
 ```
 
-- A subtype goes wherever an ancestor is declared, with no cast. Casting it to an ancestor is **E3010**.
+- A subtype goes wherever an ancestor is declared, with no cast. Casting it to an ancestor retypes the value
+  as the ancestor: `let hi = xs.count() as ElementIndex` is an `ElementIndex`.
 - The relation is one way: an ancestor value needs a cast to become the subtype, and that cast keeps its
   run-time range check. Two subtypes of one parent are two different types.
 - The subtype's range lies inside the parent's, over the same primitive and signedness (**E3178**). Its own
@@ -814,7 +843,7 @@ destination's alias, so the result is range-checked there. Anywhere else its typ
 common ancestor, and a diagnostic names that ancestor. At an overloaded call each operand's alias counts:
 `show(block + varId)` against `show(b BlockId)` and `show(v VarId)` is **E3007**, and the candidate list
 names the aliases (`Candidates: (b BlockId), (v VarId)`).
-Negating a signed alias keeps the alias; negating an unsigned one gives an unnamed value.
+Unary `-`, `not`, `or` and `xor` keep the operand's alias only where its range is closed under the operator: a full-width unsigned alias (`int(0 to u64.max)`, `bits(64)`) wraps modulo 2^64 and keeps it, and a range symmetric about zero keeps it under `-`. Over any other alias the result is an unnamed signed value carrying the range it computes (`-b` over `int(0 to 100)` is `[-100, 0]`), and it needs `as` to reach an alias slot. `and` always keeps the alias.
 
 ```maxon
 typealias Score = int(0 to 100)
@@ -839,7 +868,10 @@ where the value lands (next section). All integer arithmetic is 64-bit and wraps
 ### Range Checks
 
 A value is checked where it reaches a place **declared** with the alias: a call argument, a `return`, a
-struct-literal field, a field store, a field's declared default, an array element, or an explicit `as`.
+`var`'s initializer and every assignment to a ranged `var` (local, top-level, `static` or field), a
+struct-literal field, a field store, a field's declared default, an array element, a union case's payload,
+or an explicit `as`. A `var` therefore always holds a value of its alias: `var t = a + b` over two `Score`s
+checks the sum where `t` is born.
 The rules below hold for every ranged alias, integer or float, including one declared inside a type or
 extension body. A field is checked against the alias its declaring file names, and a literal passed through
 an interface is checked at compile time against the interface's own parameter type.
@@ -862,16 +894,15 @@ an interface is checked at compile time against the interface's own parameter ty
   `panic at <file>:<line>: Range check failed: value outside typealias '<Name>'` and a stack trace, and exits
   with code 1. No `try` is involved.
 
-**Reassigning a local is not a checked place**, so a local may hold an out-of-range value until it escapes:
+**Reassigning a ranged `var` is a checked place**, so the panic names the assignment that left the range:
 
 ```maxon
 typealias Score = int(0 to 100)
 
 function bump(start Score) returns Score
 	var s = start
-	s = s + 200       // no check: a local rebind
-	print("{s}\n")    // prints 210 for bump(10)
-	return s          // panics: Range check failed: value outside typealias 'Score'
+	s = s + 200       // bump(10) panics here: Range check failed: value outside typealias 'Score'
+	return s
 end 'bump'
 ```
 
@@ -916,7 +947,7 @@ same pattern and exports a small set of cross-cutting aliases:
 | `Codepoint` | `int(0 to 1114111)` | Unicode scalar values |
 | `Count` | `int(0 to u64.max) implements ElementIndex` | a collection's `count()` |
 | `SourceLineNumber` | `int(1 to i32.max)` | caller line numbers (`__line__`) |
-| `Real` | `float(f64.min to f64.max)` | general floating-point values |
+| `FullRangeFloat` | `float(f64.min to f64.max)` | general floating-point values |
 
 Because every alias is its own type, a quantity crossing from one module's alias to another's is cast at
 the crossing.
@@ -940,6 +971,13 @@ Integer` and `typealias Ys = Array with Integer` are one instance (one layout, o
 no cost, and `return` re-brands implicitly.
 
 - A `[...]` literal carries no brand and fits either.
+- A brand travels with the value: through a tuple element (`(Xs, Item)` and `(Ys, Item)` are two types),
+  a destructuring, a merge and a read of a `var`. The arms of a merge holding two brands are refused.
+- An unbranded `var` takes the brand of the first branded value stored into it, and keeps it: a later
+  store of another brand is **E3005** (see [Variables](#rules)).
+- Comparing values of two brands (`xs == ys`) is **E3005**: a `Self` parameter, as `equals`' operand is,
+  takes the receiver's brand. Inside a generic type, a parameter spelled with the bare base (`other Box`)
+  fits every brand of the instance.
 - A closure literal or a declared function carries no brand and fits any function alias of its shape.
 - A function alias declared **inside a type or extension body** carries no brand either, in both
   directions: `Array.SortComparator` spells the shared body's signature over the type's own parameters,
@@ -1552,9 +1590,9 @@ end 'main'
   (`Node with (Pair with T)` inside `Node`) has no finite set of instances, and is **E2015**.
 - Wrong argument count is **E2056**; a bare `int` argument is **E2061**; a type argument to a non-generic
   type is **E2055**.
-- A `float` type argument, bare or through a ranged float alias such as `Real`, is **E2062**
-  (`Box with Real`). The element of an `Array` or a `Vector` is the exception, because it is stored
-  inline in a buffer: `Array with Real` and `Vector with 2 Real` compile, and there a bare `float` is
+- A `float` type argument, bare or through a ranged float alias such as `FullRangeFloat`, is **E2062**
+  (`Box with FullRangeFloat`). The element of an `Array` or a `Vector` is the exception, because it is stored
+  inline in a buffer: `Array with FullRangeFloat` and `Vector with 2 FullRangeFloat` compile, and there a bare `float` is
   **E2061**.
 
 Inside `type Outer uses T`, another generic type written without `with` arguments binds by parameter NAME:
@@ -1891,8 +1929,8 @@ let (first, _) = makePair(1, b: 2)
 A tuple pattern on the left of `=` assigns to existing `var`s, and may declare new names in the same pattern:
 
 ```maxon
-var p = 0
-var q = 0
+var p = 0 as Amount
+var q = 0 as Amount
 (p, q) = makePair(1, b: 2)       // both existing
 (p, let r) = makePair(3, b: 4)   // p existing, r newly declared
 (q, _) = makePair(5, b: 6)       // discard the second element
@@ -1908,7 +1946,7 @@ A `for` loop over tuples can destructure each one — a `Map` yields `(key, valu
 
 ```maxon
 let ages = ["ada": 36, "alan": 41]
-var total = 0
+var total = 0 as Count
 for (_, age) in ages 'loop'
 	total = total + age
 end 'loop'
@@ -1992,8 +2030,8 @@ Every enum case has:
 | Property | Result |
 |----------|--------|
 | `.name` | the case name as a `String` |
-| `.ordinal` | the zero-based declaration position |
-| `.rawValue` | the case's raw value (the ordinal when none is declared) |
+| `.ordinal` | the zero-based declaration position, an `ElementIndex` |
+| `.rawValue` | the case's raw value (the ordinal when none is declared), of the backing type — a `FullRangeInt` for an integer backing |
 
 and every enum type has:
 
@@ -2570,9 +2608,17 @@ tags; treat a persisted union as append-only.
 ### Mutable Variables (`var`)
 
 ```maxon
-var x = 42              // type inferred from the initializer
-x = x + 5               // reassignment allowed
+typealias Tally = int(0 to u64.max)
+
+var x = 42 as Tally     // a Tally: the cast names the type
+x = x + 5               // reassignment allowed, range-checked against Tally
+// var y = 42           // E2004: A var cannot start from a bare number: write 'var name = expr as Type'.
 ```
+
+A `var` holding a number names its alias where it is born, locally, at file scope and as a `static`. A bare
+number, arithmetic over bare numbers (`16 * 1024`), a plain `let` constant, and an array, map or tuple literal
+of bare numbers are refused as its initializer (**E2004**); cast it (`var size = (16 * 1024) as ByteCount`).
+A `var` initialized from a value of some alias is that alias.
 
 ### Immutable Variables (`let`)
 
@@ -2580,6 +2626,29 @@ x = x + 5               // reassignment allowed
 let pi = 3.14159
 let name = "Maxon"
 // pi = 3.14            // E2013: cannot assign to immutable variable: 'pi'
+```
+
+A `let` bound to a bare number, to arithmetic over bare numbers or to a literal container of them is a
+**constant**: it acts like the literal it holds, and fits any alias its value fits, checked at compile time
+at each use. A `let` computed from such constants or from a loop counter between two literal bounds carries
+the range its value can have, and each use is checked against it the same way, for integers and floats
+alike. A `let` of a number whose range the compiler cannot know (`let w = 1 shl k`) is **E2004**; write
+`let w = (1 shl k) as Width`.
+
+```maxon
+typealias Port = int(0 to 65535)
+
+function open(p Port) returns Port
+	return p
+end 'open'
+
+function main() returns ExitCode
+	let base = 8000
+	let port = base + 80        // a constant: 8080
+	print("{open(port)}\n")     // 8080
+	// open(base * 10)          // E3005: Value 80000 is outside the range of 'Port' (int(0 to 65535))
+	return 0
+end 'main'
 ```
 
 A `let` is read-only all the way down (see [Read-Only Values](#read-only-values)): calling a method that writes
@@ -2605,6 +2674,13 @@ end 'main'
 - Every variable is initialized where it is declared, and its type is inferred from the initializer.
   A declaration takes no type annotation: `var x as Tally = 0` is **E2010** (`Expected '=' but got 'as'`).
   A cast names the type instead — `var x = 0 as Tally` declares a `Tally`, locally and at file scope.
+- **A `var` is born a value of its alias, and every assignment to it is checked against it** (see
+  [Range Checks](#range-checks)).
+- **A `var` takes the brand of the first branded value stored into it** when its initializer has none:
+  `var a = [1 as Item, 2 as Item]` followed by `a = xs` for an `Xs` makes `a` an `Xs` for its whole life,
+  and a later store of a `Ys` is **E3005** (`cannot assign a value of type 'Ys' to variable 'a', which
+  holds 'Xs'`). The first store in source order decides; for a module `var`, the first in the program's
+  file order. See [Generic-Instance and Function-Type Aliases Are Brands](#generic-instance-and-function-type-aliases-are-brands).
 - Variables are block-scoped.
 - **A `var` that is never reassigned or mutated is E3077** (`variable 'x' is never reassigned; use 'let'
   instead of 'var'`).
@@ -2653,7 +2729,7 @@ Variables can be declared at file scope, outside any function:
 ```maxon
 typealias Tally = int(0 to u64.max)
 
-var callCount = 0
+var callCount = 0 as Tally
 let MAX_SIZE = 1024
 var names = ["ada", "alan"]
 let dataFile = FilePath from "data.txt"
@@ -2698,7 +2774,10 @@ end 'main'
 - A module-level `let` is [read-only](#read-only-values) through everything it reaches, for the program's whole
   life. A write through it, or through a record a call handed back out of it, is **E3159**; binding it, a field
   of it (`var m = H.index`) or such a call result to a `var` is **E3078**. Read it through a `let`, or bind a
-  `clone()`.
+  `clone()`. Pushing its record into a container, local or module-level, or storing it into a field of a
+  module-level `var` is **E3078** too; push or store a `clone()`. Handed to a function that stores its
+  parameter, put in an array literal or given to `upsert`, it is stored as a copy, and a write through the
+  copy leaves the `let` as it was.
 - A `spawn` reachable from a global initializer is **E3164**; start services in `main`, or declare a
   program-wide one with [`default`](#program-wide-defaults--default). A `Key.current()` or `Key.register()`
   reachable from a global initializer is [E3173](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3173): the
@@ -2895,7 +2974,7 @@ function increment(n Tally)
 end 'increment'
 
 function main() returns ExitCode
-	var x = 10
+	var x = 10 as Tally
 	increment(x)
 	print("{x}\n")     // 11
 	return 0
@@ -2912,6 +2991,28 @@ end 'main'
   method counts as a parameter, so `let acc = Accumulator.create()` followed by `acc.add(10)`, where `add`
   writes a field of `acc`, is refused too. A `let` field, or anything reached through a read-only value, is
   refused for the same reason the equivalent assignment is.
+- A call through a function value passes its arguments as a direct call does. A function value of arity n
+  passes the argument's own storage at position i exactly when some free function of arity n writes its
+  parameter i, whichever body the call reaches: a body that writes the parameter updates the variable, and
+  one that only reads it reads the value held there. After `let f = bump` with `bump` assigning its
+  parameter, `f(v)` updates `v` exactly as `bump(v)` does. The argument is held to the rules above. When the
+  value is the function or closure a reference names, the callee is that body; a value read out of storage
+  (a variable, a field, an element, a capture) or arriving through a parameter or a merge may hold any
+  function used as a value whose shape agrees with its function type. A read-only value handed to a position
+  the callee may write is **E3159**, reported for every such argument and once for each body that writes it,
+  naming that body's parameter, also when a closure captured it; a callback that only reads accepts it. An
+  expression that is not storage gives the callee a temporary. A function that forwards a parameter to such a
+  callback writes that parameter when any candidate does.
+- A callback parameter typed over a type parameter (`f function(T) returns T` in a generic body) holds the
+  functions handed in for it, so a read-only value passed to it is refused only where a writing function is
+  handed in, and the refusal names that call (`'isBig' writes its parameter 'n', but 'Array.filter' passes it
+  the immutable 'item'`).
+- A call through an interface follows the same rule as a call through a function value: a requirement's
+  position is passed as the argument's storage when any conformer writes it, the caller's `var` is updated,
+  and a read-only value there is **E3159**, once for each conformer that writes it (`'Doubler.bump' writes
+  its parameter 'n', but 'bump' passes it the immutable 'x'`).
+- A variable passed by reference to a parameter whose alias is wider than its own, or that names no alias,
+  is range-checked when the call returns.
 - Passing storage to a parameter the callee **reassigns**, while another argument of the same call reaches
   that storage, is **E3186** (see [Aliasing Between Arguments](#aliasing-between-arguments)).
 - Passing a literal or another expression gives the callee a temporary; its writes have no visible effect.
@@ -2964,7 +3065,7 @@ function apply(f UnaryOp, x Score) returns Score
 end 'apply'
 
 function main() returns ExitCode
-	var offset = 10
+	var offset = 10 as Score
 	let addOffset = function(n Score) gives n + offset
 	offset = 20
 	print("{apply(addOffset, x: 5)} {offset}\n")     // 15 20: the closure keeps the offset it captured
@@ -3028,7 +3129,7 @@ to globals or parameters, only pure callees) or **impure**, and the rules for ig
 ```maxon
 typealias Tally = int(0 to u64.max)
 
-var counter = 0
+var counter = 0 as Tally
 
 function incrementAndGet() returns Tally
 	counter = counter + 1
@@ -3158,7 +3259,12 @@ end 'handle'
 All produce `bool`. Numbers, `bool` and `Character` support every comparison; `String` supports only `==`
 and `!=`. Comparing two records with `==` calls the type's `equals` method (see
 [Equality and Copying](#equality-and-copying)); unions cannot be compared
-(**E3066**). Values of different types never compare (**E3005**).
+(**E3066**). Comparing values of different types is **E3005**, two brands of one instance included.
+
+`==` and `!=` call `equals`, and `<`, `<=`, `>` and `>=` call `compare`. A method of either name that takes
+one operand besides its receiver may not write that operand or its receiver, directly or through a
+function it calls (**E3187**, reported at the method). Operands are only read, so a `let`, a
+`var`, a field or an expression compares alike.
 
 ### Reference Identity Operators
 
@@ -3216,7 +3322,7 @@ Integer `and`/`or` always evaluate both sides.
 `-` does not chain: write `-(-x)`, since `--x` is a syntax error. `not not x` is allowed.
 
 On a float, `-x` flips the sign bit (IEEE-754 negation), so `-0.0` is a distinct value and `-(0.0)` prints
-`-0.0`. Negating a signed integer alias keeps the alias; negating an unsigned alias gives an unaliased value.
+`-0.0`. Negating an integer alias keeps the alias only where its range is closed under negation; otherwise the result is an unaliased signed value.
 
 ### Conditional Expression
 
@@ -3241,7 +3347,7 @@ iterated (see [For Loop](#for-loop)).
 
 ### `sizeof` and `countof`
 
-Both take a **type** and produce a compile-time integer.
+Both take a **type** and produce a compile-time `Count`.
 
 - `sizeof(T)` is the size of a value of type `T` in bytes: `sizeof(int)` and `sizeof(float)` are `8`,
   `sizeof(bool)` is `1`, and a record type is the size of its fields — except an
@@ -3298,8 +3404,9 @@ end 'main'
 
 **Sizing an array.** `create()` makes an empty array; `push(value)` appends; `reserve(n)` grows capacity
 without changing `count()`. `resize(n)` changes the length and fills new slots with zero, so it is available
-only for elements stored inline — integers, floats, `bool`, payload-free enums. For an array of records,
-strings or other managed values, `resize` is **E3106**; grow with `push` or `growFilled(n, value:)` and shrink
+only for elements stored inline — integers, floats, `bool`, payload-free enums — whose type admits zero. For an
+array of records, strings or other managed values, or of an alias whose range excludes 0 (`int(1 to 100)`),
+`resize` is **E3106**; grow with `push` or `growFilled(n, value:)` and shrink
 with `truncate(n)`:
 
 ```maxon
@@ -3348,7 +3455,7 @@ A function with a `returns` clause must return a value on every path; a path tha
 ### Variable Declaration and Assignment
 
 ```maxon
-var count = 10
+var count = 10 as Count
 let limit = 20
 count = count + limit
 ```
@@ -3362,8 +3469,8 @@ Assign the elements of a tuple to existing `var`s, declare new names in the same
 elements with `_`:
 
 ```maxon
-var x = 0
-var y = 0
+var x = 0 as Amount
+var y = 0 as Amount
 (x, y) = makePair(10, b: 32)      // x = 10, y = 32
 (x, let z) = makePair(3, b: 4)    // x existing, z newly declared
 (y, _) = makePair(5, b: 6)        // discard the second element
@@ -3401,7 +3508,7 @@ end 'large'
 ### While Loop
 
 ```maxon
-var i = 0
+var i = 0 as Count
 while i < 10 'loop'
 	print("{i}\n")
 	i = i + 1
@@ -3420,6 +3527,9 @@ for num in numbers 'loop'
 end 'loop'
 ```
 
+The element of a `let` array, map, tuple or `Vector` literal keeps the range its literal elements span, so
+it fits any alias that admits all of them.
+
 **Ranges.** `a to b` is inclusive and `a upto b` excludes `b`. Integer and `Character` ranges are both
 supported:
 
@@ -3437,7 +3547,14 @@ for c in 'a' to 'z' 'letters'
 end 'letters'
 ```
 
-In a `for` header a range compiles to a counted loop with no allocation. Anywhere else an integer range is
+In a `for` header a range compiles to a counted loop with no allocation. The counter is immutable inside
+the body (assigning it is **E2013**) and takes its type from the bounds: a literal bound adopts the other
+bound's alias, so `for i in 0 upto xs.count()` counts in `Count`. Between two literal bounds the counter
+is a value whose range is known — `[0, 10)` for `0 upto 10` — and each use is checked at compile time
+against the alias it reaches, as a literal is, under the conditions that lead to that use; a `let`
+computed from it carries the computed range the same way.
+
+Anywhere else an integer range is
 a value: `a to b` is a `Range` and `a upto b` an `OpenRange`, both `Iterable`, so a range can be stored,
 passed and iterated later:
 
@@ -3470,7 +3587,8 @@ end 'loop'
 
 **Notes:**
 - The loop variable cannot be reassigned. It follows its source: read-only all the way down over a
-  [read-only](#read-only-values) source, writable through over a `var` one.
+  [read-only](#read-only-values) source, writable through over a `var` one. Handing it to a parameter the
+  callee reassigns is **E3159**, which names it a `for` loop variable.
 - The loop holds a counted reference to its source, so the body may write the collection. A loop over an
   `Array` or a `String` re-reads the live count each step: a `push` in the body extends the loop, and a
   `clear` ends it.
@@ -3489,7 +3607,7 @@ continue 'label'   // next iteration of the labelled enclosing loop
 ```
 
 ```maxon
-var total = 0
+var total = 0 as Count
 for i in 0 upto 3 'rows'
 	for j in 0 upto 3 'cols'
 		if j == 2 'skip'
@@ -3584,7 +3702,7 @@ span later would be absorbed without anyone deciding about it.
 `<statement> and fallthrough` runs the arm and then the next arm's body without testing its pattern:
 
 ```maxon
-var result = 0
+var result = 0 as Count
 match x 'cascade'
 	1 then result = result + 10 and fallthrough
 	2 then result = result + 20
@@ -3858,7 +3976,7 @@ function firstDigitOrMinusOne(text String) returns Amount
 end 'firstDigitOrMinusOne'
 
 function sumDigits(parts StringArray) returns Amount
-	var total = 0
+	var total = 0 as Amount
 	for part in parts 'each'
 		let d = try parseDigit(part) otherwise continue      // skip bad parts
 		total = total + d
@@ -4599,7 +4717,7 @@ function main() returns ExitCode
 	let first = naps.awaitAny()
 	print("first finished: index {first}\n")     // index 1
 
-	var sum = 0
+	var sum = 0 as Tag
 	for p in naps 'drain'
 		sum = sum + await p
 	end 'drain'
@@ -5298,9 +5416,13 @@ The rules:
 
 - **No write through a read-only value.** A field store, a method that writes its receiver, or an argument the
   callee writes is **E3159**. The diagnostic names the read-only root.
-- **No mutable alias of a read-only value.** Binding a read-only value to a `var` is **E3078**, and so is storing
-  it into a `var` field, a mutable container element, a parameter that keeps it mutably, or a module `var`
-  initializer. [`clone()`](#explicit-cloning) makes an independent mutable copy.
+- **No mutable alias of a read-only value.** Binding a read-only value to a `var` is **E3078**, and so is a module
+  `var` initializer that may take a module-level `let`'s record. A value read out of a `let` field, a `let`
+  payload, a `readonly` element, a `SharedValue` or a registry is read-only for good, so storing it into a `var`
+  field or a mutable container element, or passing it to a parameter that keeps it mutably, is **E3078** too; a
+  module-level `let`'s record follows the rules in [Top-Level Variables](#top-level-variables). A `let` binding's own
+  record may be stored or kept: it stays read-only through its new holder while the binding is live, so a write
+  through that holder is **E3159**. [`clone()`](#explicit-cloning) makes an independent mutable copy.
 - **A `let` field has no other writer.** A value stored into a `let` field must be:
   - already read-only;
   - a value type;
@@ -5661,7 +5783,7 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-	var i = 0
+	var i = 0 as Count
 	while true 'forever'
 		if i >= 3 'done'
 			break
@@ -5801,6 +5923,12 @@ let x = 5
 x = 10                        // E2013: cannot assign to immutable variable: 'x'
 ```
 
+**A `var` started from a bare number**
+
+```maxon
+var total = 0                 // E2004: A var cannot start from a bare number: write 'var name = expr as Type'.
+```
+
 **Self-assignment**
 
 ```maxon
@@ -5810,7 +5938,7 @@ x = x                         // E3067: self-assignment has no effect: 'x = x'
 **A `var` that never changes**
 
 ```maxon
-var x = 10
+var x = 10 as Count
 return x                      // E3077: variable 'x' is never reassigned; use 'let' instead of 'var'
 ```
 

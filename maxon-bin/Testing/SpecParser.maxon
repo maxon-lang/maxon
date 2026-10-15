@@ -665,6 +665,13 @@ end 'SpecExitCode'
 export union SpecExpectation
 	run(exitCode SpecExitCode, stderr SpecStderr, stdout SpecStdout, sectionPins SpecSectionPinArray)
 	compilerError(text String)
+
+	export function expectsCompileError() returns bool
+		return match self 'e'
+			compilerError gives true
+			run gives false
+		end 'e'
+	end 'expectsCompileError'
 end 'SpecExpectation'
 
 // One named SECTION of a ```maxon block — a `// --- file: <name>` file of a multi-file test, or a
@@ -1101,7 +1108,7 @@ end 'valueAfterKey'
 function extractTests(lines StringArray, specPath FilePath, effectiveTargetKey String) returns SpecTestArray
 	var tests = SpecTestArray.create()
 	let lineCount = lines.count()
-	var i = 0
+	var i = 0 as ElementIndex
 	var inTests = false
 
 	while i < lineCount 'find'
@@ -2338,12 +2345,12 @@ end 'SpecProcsReading'
 // Accepts exactly what `SchedRuntime.emitParseRequestedProcessorCount` accepts: a value the scheduler
 // ignores would pass here and run the case on the machine's count.
 function specRequestedProcessorsIn(value String) returns SpecProcsReading
-	var total = 0 as ParsedInt
+	var total = 0 as FullRangeInt
 	var sawADigit = false
 	var atTheStart = true
 
 	for cp in value.codepoints() 'eachCharacter'
-		let code = cp as ParsedInt
+		let code = cp as FullRangeInt
 
 		if atTheStart and code == RequestedProcessorCountSign 'theOptionalSign'
 			atTheStart = false
@@ -2360,12 +2367,12 @@ function specRequestedProcessorsIn(value String) returns SpecProcsReading
 		total = total * DecimalRadix + (code - AsciiZeroDigit)
 		sawADigit = true
 
-		if total > (MostRequestedProcessors as ParsedInt) 'pastTheRange'
+		if total > (MostRequestedProcessors as FullRangeInt) 'pastTheRange'
 			return SpecProcsReading.notACount
 		end 'pastTheRange'
 	end 'eachCharacter'
 
-	if not sawADigit or total < (FewestRequestedProcessors as ParsedInt) 'noCount'
+	if not sawADigit or total < (FewestRequestedProcessors as FullRangeInt) 'noCount'
 		return SpecProcsReading.notACount
 	end 'noCount'
 

@@ -80,6 +80,10 @@ is doing. The ratio between rungs is the growth: ×2.00 is linear, ×4.00 quadra
 It is an instrument, not a gate: it exits 0 whatever the numbers say, and non-zero only when the run
 itself broke.
 
+Before the first measured rung it compiles the smallest rung once, unmeasured, to warm the library cache,
+so every measured rung reads the cache the same way. A phase's memory counts the compile's own work: what
+the tree lock's upkeep allocates while the phase runs is subtracted from it.
+
 ```bash
 maxon scale-test [options]
 ```

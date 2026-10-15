@@ -47,7 +47,7 @@ end 'main'
 ```maxon
 
 function main() returns ExitCode
-	var x = 42
+	var x = 42 as FullRangeInt
 	return 0
 end 'main'
 ```
@@ -154,7 +154,7 @@ error E3012: specs/unused-variables/multiple-unused-first-reported.maxon:4:6: un
 
 function main() returns ExitCode
 	let arr = [1, 2, 3]
-	var count = 0
+	var count = 0 as FullRangeInt
 	for s in arr 'loop'
 		count = count + 1
 	end 'loop'
@@ -170,7 +170,7 @@ error E3012: specs/unused-variables/unused-for-in-variable.maxon:6:6: unused var
 
 function main() returns ExitCode
 	let arr = [10, 20, 30]
-	var total = 0
+	var total = 0 as FullRangeInt
 	for s in arr 'loop'
 		total = total + s
 	end 'loop'
@@ -186,7 +186,7 @@ end 'main'
 
 function main() returns ExitCode
 	let arr = [1, 2, 3]
-	var count = 0
+	var count = 0 as FullRangeInt
 	for _ in arr 'loop'
 		count = count + 1
 	end 'loop'
@@ -201,7 +201,7 @@ end 'main'
 ```maxon
 
 function main() returns ExitCode
-	var count = 0
+	var count = 0 as FullRangeInt
 	for i in 0 upto 3 'loop'
 		count = count + 1
 	end 'loop'
@@ -351,7 +351,7 @@ function mayFail() returns Score throws MyError
 end 'mayFail'
 
 function main() returns ExitCode
-	var x = 0
+	var x = 0 as Score
 	try mayFail() otherwise (e) 'handler'
 		x = 42
 	end 'handler'
@@ -377,7 +377,7 @@ function mayFail() returns Score throws MyError
 end 'mayFail'
 
 function main() returns ExitCode
-	var x = 0
+	var x = 0 as Score
 	try mayFail() otherwise (e) 'handler'
 		match e 'kind'
 			failed then x = 42

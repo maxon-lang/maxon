@@ -46,11 +46,13 @@ esac
 
 {
   printf '// ladder: %s gate site(s) over a %s-field graph, mode %s\n' "$SITES" "$FIELDS" "$MODE"
-  echo "typealias Integer = int(i64.min to i64.max)"
-  echo "typealias Ints = Array with Integer"
-  echo ""
+  if [ "$FIELDS" -gt 0 ]; then
+    echo "typealias Integer = int(i64.min to i64.max)"
+    echo "typealias Ints = Array with Integer"
+    echo ""
+  fi
 
-  echo "function scaleOpaque(a Integer) returns Integer"
+  echo "function scaleOpaque(a Count) returns Count"
   echo -e "\tif a > 1000000 'big'"
   echo -e "\t\treturn a - 1"
   echo -e "\tend 'big'"

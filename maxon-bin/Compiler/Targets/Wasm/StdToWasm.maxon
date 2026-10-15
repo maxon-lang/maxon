@@ -140,7 +140,7 @@ let WasmPageSizeMask = 0xFFFF as BytePos
 // `memory.grow` returns the previous page count, or this sentinel — -1 as an i32, which
 // `emitOsAllocPages` sign-extends to -1 in i64 — on OOM. The allocator lowering tests for it and
 // traps.
-let WasmMemoryGrowOom = -1 as ParsedInt
+let WasmMemoryGrowOom = -1 as FullRangeInt
 
 // The atomic word's memarg offset. An atomic names the address it operates on and nothing else:
 // unlike `loadIndirect`/`storeIndirect`, whose Std op carries a field displacement, `StdOp.atomicCas` and
@@ -151,7 +151,7 @@ let WasmAtomicWordOffset = 0 as Wasm32Index
 // The token `currentThreadToken` answers on a lane with exactly one thread. It is `1` because the op's
 // contract is "per-OS-thread stable and NON-ZERO"; the value is otherwise arbitrary, and that is precisely
 // why it is named rather than spelled as a bare literal at the emitter.
-let WasmSingleThreadToken = 1 as ParsedInt
+let WasmSingleThreadToken = 1 as FullRangeInt
 
 // The minimum page count a memory must declare to hold a `.data` image ending at `base +
 // dataSize`, rounded up to whole 64 KiB pages. `base` is a positive constant, so the count is
@@ -193,10 +193,10 @@ let WasiGetStderrFieldName = b"get-stderr"
 
 let WasiRandomModuleName = b"wasi:random/random@0.2.6"
 let WasiGetRandomU64FieldName = b"get-random-u64"
-let WasmRandomWordBytes = 8 as ParsedInt
-let WasmRandomByteStep = 1 as ParsedInt
-let WasmRandomFillNothingFilled = 0 as ParsedInt
-let WasmRandomFillSucceeded = 0 as ParsedInt
+let WasmRandomWordBytes = 8 as FullRangeInt
+let WasmRandomByteStep = 1 as FullRangeInt
+let WasmRandomFillNothingFilled = 0 as FullRangeInt
+let WasmRandomFillSucceeded = 0 as FullRangeInt
 let WasmRandomFillStoreOffset = 0 as Wasm32Index
 let WasmRandomFillLoopDepth = 0 as Wasm32Index
 let WasmRandomFillExitDepth = 1 as Wasm32Index
@@ -1545,7 +1545,7 @@ function buildValtypeTable(module StdModule, func IrFunction, funcNames Function
 	// `funcParamValTypes` declares, never the narrower storage class the Std type would give.
 	for i in 0 upto func.paramCount 'eachParam'
 		let pt = try func.paramTypes.get(i) otherwise panic("buildValtypeTable: paramTypes.get OOB at {i} (paramCount={func.paramCount})")
-		setValtype(valtypes, v: i, vt: wasmMachineValTypeOf(pt))
+		setValtype(valtypes, v: i as ValueId, vt: wasmMachineValTypeOf(pt))
 	end 'eachParam'
 
 	for blockRef in func.blockRefs 'eachBlock'
@@ -2568,7 +2568,7 @@ type WasmFuncEmitter
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitCurrentThreadToken'
 
-	function emitConst(resultId ValueId, value ParsedInt, valueType StdType)
+	function emitConst(resultId ValueId, value FullRangeInt, valueType StdType)
 		if stdTypeIsFloat(valueType) 'float'
 			self.emitFloatConst(value, valueType: valueType)
 		end 'float' else 'int'
@@ -2579,18 +2579,18 @@ type WasmFuncEmitter
 	end 'emitConst'
 
 	// Materialize an f64 constant. `value` is the double's IEEE-754 bits reinterpreted as an
-	// integer (the SAME ParsedInt the `.data`/`.rdata` serializer renders — see
+	// integer (the SAME FullRangeInt the `.data`/`.rdata` serializer renders — see
 	// GlobalDataTable.scalarImage), which `f64.const` takes as 8 raw little-endian bytes. NO
 	// constant pool: unlike x64/arm64, which stash the bits in `.rdata` and load them, wasm has a
 	// native f64 immediate.
-	function emitFloatConst(value ParsedInt, valueType StdType)
+	function emitFloatConst(value FullRangeInt, valueType StdType)
 		requireF64(valueType, what: "const")
 		self.body.f64Const(value)
 	end 'emitFloatConst'
 
 	// Push an integer constant of the selected width. The i32 form takes the low 32 bits of the
 	// value reinterpreted as signed, so a `u32`/negative literal encodes correctly.
-	function emitIntConst(wide bool, value ParsedInt)
+	function emitIntConst(wide bool, value FullRangeInt)
 		if wide 'i64'
 			self.body.i64Const(value)
 		end 'i64' else 'i32'
@@ -2738,7 +2738,7 @@ type WasmFuncEmitter
 		// operand type ride the integer ALU.
 		requireIntegerOperand(operandType, what: "binOpImm")
 		self.pushOperandAt(lhs, targetVt: wasmMachineValTypeOf(operandType))
-		self.body.i64Const(imm as ParsedInt)
+		self.body.i64Const(imm as FullRangeInt)
 		self.emitBinOpcode(opcode)
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitBinOpImm'
@@ -2973,7 +2973,7 @@ type WasmFuncEmitter
 	function emitCmpImm(resultId ValueId, lhs ValueId, imm Imm32, pred StdCmpPred, operandType StdType)
 		requireIntegerOperand(operandType, what: "cmpImm")
 		self.pushOperandAt(lhs, targetVt: wasmMachineValTypeOf(operandType))
-		self.body.i64Const(imm as ParsedInt)
+		self.body.i64Const(imm as FullRangeInt)
 		self.emitCmpPred(pred, isUnsigned: stdTypeIsUnsigned(operandType))
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitCmpImm'
@@ -3185,7 +3185,7 @@ type WasmFuncEmitter
 	// address consumed in place — which is why it is i64 here, not the i32 those two produce.
 	function emitFuncAddr(resultId ValueId, funcName ByteArray)
 		let funcIdx = try wasmFuncIdxOf(self.funcNames, callee: funcName) otherwise panic("emitFuncAddr: no wasm function index for function value '{String.from(funcName)}'")
-		self.body.i64Const(funcIdx as ParsedInt)
+		self.body.i64Const(funcIdx as FullRangeInt)
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitFuncAddr'
 
@@ -3222,7 +3222,7 @@ type WasmFuncEmitter
 	function pushIndirectArgs(args ValueIdArray, argFloatMask ArgFloatMask)
 		for argIdx in 0 upto args.count() 'eachArg'
 			let arg = try args.get(argIdx) otherwise panic("pushIndirectArgs: args.get OOB at {argIdx}")
-			self.pushOperandAt(arg, targetVt: indirectCallArgValType(argFloatMask, argIndex: argIdx))
+			self.pushOperandAt(arg, targetVt: indirectCallArgValType(argFloatMask, argIndex: argIdx as ParamCount))
 		end 'eachArg'
 	end 'pushIndirectArgs'
 
@@ -3460,7 +3460,7 @@ type WasmFuncEmitter
 	//
 	// ⚠ The fill byte reaches wasm as a BYTE, not as the 64-bit broadcast the two native isels compute:
 	// `memory.fill` takes the value it replicates, so `memFillPatternWord` has no caller on this lane.
-	function emitMemFill(destId ValueId, byteCountId ValueId, value ParsedInt)
+	function emitMemFill(destId ValueId, byteCountId ValueId, value FullRangeInt)
 		self.pushOperandAt(destId, targetVt: WasmValType.i32)
 		self.body.i32Const(memFillByte(value) as Imm32)
 		self.pushOperandAt(byteCountId, targetVt: WasmValType.i32)
@@ -3514,9 +3514,9 @@ type WasmFuncEmitter
 	function emitOsAllocPages(resultId ValueId, sizeId ValueId)
 		// pages = (size + 65535) >> 16  — ceil(size / 64 KiB)
 		self.pushOperandAt(sizeId, targetVt: WasmValType.i64)
-		self.body.i64Const(WasmPageSizeMask as ParsedInt)
+		self.body.i64Const(WasmPageSizeMask as FullRangeInt)
 		self.body.i64Add()
-		self.body.i64Const(WasmPageSizeLog2 as ParsedInt)
+		self.body.i64Const(WasmPageSizeLog2 as FullRangeInt)
 		self.body.i64ShrU()
 		self.body.i32WrapI64()
 
@@ -3537,7 +3537,7 @@ type WasmFuncEmitter
 
 		// base = prevPages << 16  — the byte base of the freshly-grown region
 		self.body.localGet(resultId as Wasm32Index)
-		self.body.i64Const(WasmPageSizeLog2 as ParsedInt)
+		self.body.i64Const(WasmPageSizeLog2 as FullRangeInt)
 		self.body.i64Shl()
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitOsAllocPages'
@@ -3743,7 +3743,7 @@ type WasmFuncEmitter
 		end 'notI64'
 
 		self.body.localGet(subjectId as Wasm32Index)
-		self.body.i64Const(span as ParsedInt)
+		self.body.i64Const(span as FullRangeInt)
 		self.body.i64GeU()
 		self.body.brIf(0)
 	end 'emitSwitchBoundsGuard'
@@ -3916,7 +3916,7 @@ end 'WasmPhiCopies'
 // The low 32 bits of `value`, reinterpreted as a signed i32 — what a wasm `i32.const` (an
 // SLEB128 of a 32-bit two's-complement value) encodes. Lets a `u32`/negative literal round-trip
 // through the signed `Imm32` the encoder carries.
-function narrowToImm32(value ParsedInt) returns Imm32
+function narrowToImm32(value FullRangeInt) returns Imm32
 	let low = value and 0xFFFFFFFF
 
 	if low > i32.max 'negative'

@@ -351,7 +351,7 @@ end 'patchJumpTables'
 // larger than 2 GiB is not reachable) — but a delta that did NOT fit would silently truncate
 // to a wrong jump, so it is checked and a violation is a loud link error, not a corrupt table.
 function jumpTableEntry(targetAddr MachineWord, tableBaseAddr MachineWord, tableLabel String, slotIndex ElementIndex) returns MachineWord
-	let delta = (targetAddr as ParsedInt) - (tableBaseAddr as ParsedInt)
+	let delta = (targetAddr as FullRangeInt) - (tableBaseAddr as FullRangeInt)
 
 	if delta < I32MinValue or delta > I32MaxValue 'outOfReach'
 		panic("patchJumpTables: slot {slotIndex} of '{tableLabel}' resolves to offset {delta}, outside the signed 32-bit reach of a jump-table entry — the code section has grown beyond 2 GiB from its jump tables")
@@ -361,8 +361,8 @@ function jumpTableEntry(targetAddr MachineWord, tableBaseAddr MachineWord, table
 end 'jumpTableEntry'
 
 // The i32 reach a jump-table entry (a table-base-relative signed offset) must stay within.
-let I32MinValue = -0x80000000 as ParsedInt
-let I32MaxValue = 0x7FFFFFFF as ParsedInt
+let I32MinValue = -0x80000000 as FullRangeInt
+let I32MaxValue = 0x7FFFFFFF as FullRangeInt
 
 // One row of the emitted line table: at `codeOffset`, execution is at the source position `spanId`
 // names. Chunk-local while the chunk is being emitted, rebased to whole-`.text` at the concat

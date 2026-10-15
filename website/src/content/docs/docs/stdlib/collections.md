@@ -82,8 +82,8 @@ Output: `1 5 9` and `4 9 -1 true`.
 
 | Member | Description |
 |--------|-------------|
-| `reserve(minCapacity)` | Ensure at least `minCapacity` slots. |
-| `resize(newLength)` | Set the length. Growing exposes zero-valued elements, so it is refused at compile time (E3106) for an element type that is not a plain value — a struct, a `String`, a nested container. Use `growFilled` or `truncate` for those. |
+| `reserve(minCapacity)` | Ensure at least `minCapacity` slots. A capacity no allocation can satisfy (`u64.max`) panics. |
+| `resize(newLength)` | Set the length. Growing exposes zero-valued elements, so it is refused at compile time (E3106) for an element type that is not a plain value — a struct, a `String`, a nested container — and for a ranged alias that excludes 0. Use `growFilled` or `truncate` for those. |
 | `truncate(newLength)` | Shorten to `newLength`, releasing the removed elements. A longer `newLength` does nothing. |
 | `growFilled(newLength, value Element)` | Lengthen to `newLength`, setting only the added elements to `value`. Grows capacity geometrically, so repeated small extensions stay amortized linear. A shorter `newLength` does nothing. |
 | `refill(newLength, value Element)` | Set the length to `newLength` and write `value` into every element, growing or shrinking. |
@@ -275,7 +275,7 @@ three elements, and `countof(Vec3)` is the constant `3`. It implements `Iterable
 
 | Member | Returns | Description |
 |--------|---------|-------------|
-| `Vector.create()` | `Vector` | Every element zero. |
+| `Vector.create()` | `Vector` | Every element zero; refused (E3106) for an element alias whose range excludes 0. |
 | `Vector from [a, b, c]` | `Vector` | A literal; the count is the literal's length. |
 | `count()` | `Count` | The fixed size, answered from the type. |
 | `get(index)` | `Element` | Throws `ArrayError.indexOutOfBounds`. |
@@ -297,7 +297,7 @@ function main() returns ExitCode
 	end 'outside'
 
 	let literal = Vector from [1, 2, 3]
-	var sum = 0
+	var sum = 0 as Count
 
 	for x in literal 'each'
 		sum = sum + x
@@ -341,7 +341,7 @@ Both implement `Iterable with (RangeBound, RangeIterator)`; `RangeBound` is `int
 ```maxon
 function main() returns ExitCode
 	let inclusive = 1 to 4
-	var total = 0
+	var total = 0 as RangeBound
 
 	for x in inclusive 'sum'
 		total = total + x

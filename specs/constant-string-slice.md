@@ -145,8 +145,8 @@ above and fail this one.
 function main() returns ExitCode
 	let s = "hello world"
 	let before = HeapStats.allocationsMade() + HeapStats.rawAllocationsMade()
-	var total = 0
-	var trips = 0
+	var total = 0 as BytePos
+	var trips = 0 as Count
 	while trips < 500 'loop'
 		let sub = s.slice(s.startIndex(), length: 5)
 		total = total + sub.byteLength()

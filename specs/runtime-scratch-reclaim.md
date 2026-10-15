@@ -79,7 +79,7 @@ function main() returns ExitCode
 	let c = spawnReadLine("cmd /c echo hello")
 	let totalGrew = HeapStats.rawAllocationsMade() - totalBefore
 	let liveGrew = HeapStats.rawAllocationsLive() - liveBefore
-	var score = 0
+	var score = 0 as FullRangeInt
 	if warm + a + b + c == 28 'everyReadReturnedSevenBytes'
 		score = score + 1
 	end 'everyReadReturnedSevenBytes'
@@ -124,7 +124,7 @@ function main() returns ExitCode
 	let b = await p2
 	let totalGrew = HeapStats.rawAllocationsMade() - totalBefore
 	let liveGrew = HeapStats.rawAllocationsLive() - liveBefore
-	var score = 0
+	var score = 0 as Integer
 	if w + a + b == 9 'everyChildExitedThree'
 		score = score + 1
 	end 'everyChildExitedThree'
@@ -301,7 +301,7 @@ function main() returns ExitCode
 	let totalGrew = HeapStats.rawAllocationsMade() - totalBefore
 	let liveGrew = HeapStats.rawAllocationsLive() - liveBefore
 	let recycled = Scheduler.counters().recycledThreads - recycledBefore
-	var score = 0
+	var score = 0 as Integer
 	if acc == 9 'everyThreadRanExactlyOnce'
 		score = score + 1
 	end 'everyThreadRanExactlyOnce'

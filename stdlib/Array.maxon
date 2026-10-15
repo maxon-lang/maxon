@@ -324,9 +324,9 @@ public type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 	public function reserve(minCapacity ElementIndex)
 		let cap = managed.capacity()
 
-		if minCapacity > cap 'grow'
+		if cap < 0 or minCapacity > (cap as ElementIndex) 'grow'
 			try managed.grow(minCapacity) otherwise 'growErr'
-				panic("Array.reserve: grow failed — minCapacity > cap guaranteed")
+				panic("Array.reserve: the requested capacity exceeds what the buffer can hold")
 			end 'growErr'
 		end 'grow'
 	end 'reserve'
@@ -625,13 +625,13 @@ let ArrayHashMask = 0xFFFFFFFF
 // Conditional conformance: Array implements Hashable and Equatable when Element does
 public extension Array implements Hashable, Equatable where Element is Hashable and Equatable
 	public function hash() returns HashValue
-		var h = ArrayHashSeed
+		var h = ArrayHashSeed as FullRangeInt
 
 		for item in self 'eachElement'
-			h = (h * ArrayHashMultiplier + item.hash()) and ArrayHashMask
+			h = (h * ArrayHashMultiplier + (item.hash() as FullRangeInt)) and ArrayHashMask
 		end 'eachElement'
 
-		return h
+		return h as HashValue
 	end 'hash'
 
 	public function equals(other Self) returns bool

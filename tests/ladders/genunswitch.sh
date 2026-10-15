@@ -63,7 +63,7 @@ EXPECTED=$(( N * TRIPS * (TRIPS - 1) / 2 + TRIPS * N * (N - 1) / 2 + PAD * (PAD 
 
 {
 	echo "// unswitch ladder: $N loops, $PAD pad statements, mode $MODE"
-	echo "typealias Word = int(i64.min to i64.max)"
+	echo "typealias Word = int(0 to u64.max) implements ElementIndex"
 	echo "typealias WordArray = Array with Word"
 	echo ""
 	echo "function helper(x Word, k Word) returns Word"
@@ -71,7 +71,7 @@ EXPECTED=$(( N * TRIPS * (TRIPS - 1) / 2 + TRIPS * N * (N - 1) / 2 + PAD * (PAD 
 	echo "end 'helper'"
 	echo ""
 	echo "function work(a WordArray, n Word) returns Word"
-	echo "	var t = 0"
+	echo "	var t = 0 as Word"
 	for ((k = 0; k < N; k++)); do
 		echo "	for i in 0 upto n 'l$k'"
 		echo "		try a.set(i, value: i + $k) otherwise panic(\"l$k: i < n = a.count()\")"

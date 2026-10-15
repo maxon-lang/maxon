@@ -163,7 +163,7 @@ type Adder
 	end 'create'
 
 	export function grind(seed Integer, work Integer)
-		var j = 0
+		var j = 0 as Integer
 		while j < work 'spin'
 			self.acc = self.acc + ((seed + j) mod mixModulus)
 			j = j + 1
@@ -178,30 +178,30 @@ end 'Adder'
 function main() returns ExitCode
 	var hs = AdderHandleArray.create()
 
-	var i = 0
+	var i = 0 as Integer
 	while i < serviceCount 'spawnEach'
 		hs.push(spawn Adder.create())
 		i = i + 1
 	end 'spawnEach'
 
-	var k = 0
+	var k = 0 as Integer
 	while k < serviceCount 'sendEach'
-		let h = try hs.get(k) otherwise panic("hs.get OOB at {k} — the loop is bounded by the count the pushes above filled")
+		let h = try hs.get(k as ElementIndex) otherwise panic("hs.get OOB at {k} — the loop is bounded by the count the pushes above filled")
 		h.grind(k, work: workPerService)
 		k = k + 1
 	end 'sendEach'
 
-	var aggregate = 0
-	var n = 0
+	var aggregate = 0 as Integer
+	var n = 0 as Integer
 	while n < serviceCount 'collect'
-		let h = try hs.get(n) otherwise panic("hs.get OOB at {n} — the loop is bounded by the count the pushes above filled")
+		let h = try hs.get(n as ElementIndex) otherwise panic("hs.get OOB at {n} — the loop is bounded by the count the pushes above filled")
 		aggregate = aggregate + (try await h.total() otherwise 0)
 		n = n + 1
 	end 'collect'
 
 	// ⭐ The default's contract, as a comparison this program can make on any machine: with no
 	// `MAXON_MAX_PROCS` in the environment, the scheduler built one P per processor the OS reports.
-	var every = 0
+	var every = 0 as Integer
 	if Scheduler.processorCount() == Scheduler.machineCpuCount() 'agrees'
 		every = 1
 	end 'agrees'
@@ -244,7 +244,7 @@ type Adder
 	end 'create'
 
 	export function grind(seed Integer, work Integer)
-		var j = 0
+		var j = 0 as Integer
 		while j < work 'spin'
 			self.acc = self.acc + ((seed + j) mod mixModulus)
 			j = j + 1
@@ -259,23 +259,23 @@ end 'Adder'
 function main() returns ExitCode
 	var hs = AdderHandleArray.create()
 
-	var i = 0
+	var i = 0 as Integer
 	while i < serviceCount 'spawnEach'
 		hs.push(spawn Adder.create())
 		i = i + 1
 	end 'spawnEach'
 
-	var k = 0
+	var k = 0 as Integer
 	while k < serviceCount 'sendEach'
-		let h = try hs.get(k) otherwise panic("hs.get OOB at {k} — the loop is bounded by the count the pushes above filled")
+		let h = try hs.get(k as ElementIndex) otherwise panic("hs.get OOB at {k} — the loop is bounded by the count the pushes above filled")
 		h.grind(k, work: workPerService)
 		k = k + 1
 	end 'sendEach'
 
-	var aggregate = 0
-	var n = 0
+	var aggregate = 0 as Integer
+	var n = 0 as Integer
 	while n < serviceCount 'collect'
-		let h = try hs.get(n) otherwise panic("hs.get OOB at {n} — the loop is bounded by the count the pushes above filled")
+		let h = try hs.get(n as ElementIndex) otherwise panic("hs.get OOB at {n} — the loop is bounded by the count the pushes above filled")
 		aggregate = aggregate + (try await h.total() otherwise 0)
 		n = n + 1
 	end 'collect'
@@ -322,7 +322,7 @@ type Adder
 	end 'create'
 
 	export function grind(seed Integer, work Integer)
-		var j = 0
+		var j = 0 as Integer
 		while j < work 'spin'
 			self.acc = self.acc + ((seed + j) mod mixModulus)
 			j = j + 1
@@ -337,23 +337,23 @@ end 'Adder'
 function main() returns ExitCode
 	var hs = AdderHandleArray.create()
 
-	var i = 0
+	var i = 0 as Integer
 	while i < serviceCount 'spawnEach'
 		hs.push(spawn Adder.create())
 		i = i + 1
 	end 'spawnEach'
 
-	var k = 0
+	var k = 0 as Integer
 	while k < serviceCount 'sendEach'
-		let h = try hs.get(k) otherwise panic("hs.get OOB at {k} — the loop is bounded by the count the pushes above filled")
+		let h = try hs.get(k as ElementIndex) otherwise panic("hs.get OOB at {k} — the loop is bounded by the count the pushes above filled")
 		h.grind(k, work: workPerService)
 		k = k + 1
 	end 'sendEach'
 
-	var aggregate = 0
-	var n = 0
+	var aggregate = 0 as Integer
+	var n = 0 as Integer
 	while n < serviceCount 'collect'
-		let h = try hs.get(n) otherwise panic("hs.get OOB at {n} — the loop is bounded by the count the pushes above filled")
+		let h = try hs.get(n as ElementIndex) otherwise panic("hs.get OOB at {n} — the loop is bounded by the count the pushes above filled")
 		aggregate = aggregate + (try await h.total() otherwise 0)
 		n = n + 1
 	end 'collect'
@@ -394,7 +394,7 @@ type Adder
 	end 'create'
 
 	export function grind(seed Integer, work Integer)
-		var j = 0
+		var j = 0 as Integer
 		while j < work 'spin'
 			self.acc = self.acc + ((seed + j) mod mixModulus)
 			j = j + 1
@@ -409,23 +409,23 @@ end 'Adder'
 function main() returns ExitCode
 	var hs = AdderHandleArray.create()
 
-	var i = 0
+	var i = 0 as Integer
 	while i < serviceCount 'spawnEach'
 		hs.push(spawn Adder.create())
 		i = i + 1
 	end 'spawnEach'
 
-	var k = 0
+	var k = 0 as Integer
 	while k < serviceCount 'sendEach'
-		let h = try hs.get(k) otherwise panic("hs.get OOB at {k} — the loop is bounded by the count the pushes above filled")
+		let h = try hs.get(k as ElementIndex) otherwise panic("hs.get OOB at {k} — the loop is bounded by the count the pushes above filled")
 		h.grind(k, work: workPerService)
 		k = k + 1
 	end 'sendEach'
 
-	var aggregate = 0
-	var n = 0
+	var aggregate = 0 as Integer
+	var n = 0 as Integer
 	while n < serviceCount 'collect'
-		let h = try hs.get(n) otherwise panic("hs.get OOB at {n} — the loop is bounded by the count the pushes above filled")
+		let h = try hs.get(n as ElementIndex) otherwise panic("hs.get OOB at {n} — the loop is bounded by the count the pushes above filled")
 		aggregate = aggregate + (try await h.total() otherwise 0)
 		n = n + 1
 	end 'collect'

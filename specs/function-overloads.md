@@ -1248,7 +1248,7 @@ function check(value bool) returns Num throws Boom
 end 'check'
 
 function main() returns ExitCode
-	var result = 0
+	var result = 0 as Num
 	try check(-1) otherwise (e) 'fromTheNumberMember'
 		match e 'which'
 			fromNumber then result = result + 10
@@ -1298,7 +1298,7 @@ function check(value Num) returns Num throws Boom
 end 'check'
 
 function main() returns ExitCode
-	var result = 0
+	var result = 0 as Num
 	try check(-1) otherwise (e) 'fromTheNumberMember'
 		match e 'which'
 			fromNumber then result = result + 10
@@ -1896,7 +1896,7 @@ end 'Holder'
 function main() returns ExitCode
 	var word = "ab{1}"
 	let held = Holder.make(word)
-	var count = 1
+	var count = 1 as Integer
 	Holder.make(count)
 	print("{held.s} {count} {word}\n")
 	word = "done"
@@ -2048,7 +2048,7 @@ end 'keep'
 
 function main() returns ExitCode
 	let p = async work(1)
-	var i = 0
+	var i = 0 as Integer
 
 	while i < 2 'loop'
 		let q = keep(p, v: i)
@@ -2081,7 +2081,7 @@ end 'keep'
 
 function main() returns ExitCode
 	let p = async work(1)
-	var i = 0
+	var i = 0 as Integer
 
 	while i < 2 'loop'
 		let q = keep(p, v: i)

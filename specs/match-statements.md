@@ -85,7 +85,7 @@ By default, only the matching case executes. Use `and fallthrough` to continue t
 ```maxon
 function main() returns ExitCode
 	let role = 1
-	var permissions = 0
+	var permissions = 0 as ExitCode
 	match role 'auth'
 		1 then permissions = permissions + 100 and fallthrough
 		2 then permissions = permissions + 10 and fallthrough
@@ -468,7 +468,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let x = 1
-	var result = 0
+	var result = 0 as ExitCode
 	match x 'check'
 		1 then result = result + 10 and fallthrough
 		2 then result = result + 20
@@ -485,7 +485,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let x = 1
-	var result = 0
+	var result = 0 as ExitCode
 	match x 'cascade'
 		1 then result = result + 10 and fallthrough
 		2 then result = result + 20 and fallthrough
@@ -503,7 +503,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let x = 3
-	var result = 0
+	var result = 0 as ExitCode
 	match x 'check'
 		1 then result = 10
 		2 then result = 20
@@ -546,7 +546,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let x = 2
-	var result = 0
+	var result = 0 as ExitCode
 	match x 'process'
 		1 then result = 60
 		2 then result = 120
@@ -570,13 +570,13 @@ end 'double'
 
 function main() returns ExitCode
 	let x = 2
-	var result = 0
+	var result = 0 as Integer
 	match x 'process'
 		1 then result = double(10)
 		2 then result = double(20)
 		default then result = 0
 	end 'process'
-	return result
+	return result as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -1365,7 +1365,7 @@ exactly once. `x` (one ASCII byte, `0x78`) falls below `'é'` (`C3 A9`) and take
 ```maxon
 function main() returns ExitCode
 	let s = "éxü"
-	var hits = 0
+	var hits = 0 as Count
 	for c in s 'each'
 		match c 'classify'
 			'é' to 'ü' then hits = hits + 1
@@ -1414,7 +1414,7 @@ is what makes it a CODEPOINT rule rather than a byte one: `'é'` is 233.
 
 ```maxon
 function main() returns ExitCode
-	var hits = 0
+	var hits = 0 as Count
 	let dash = 45
 	match dash 'ascii'
 		'-' then hits = hits + 1
@@ -1530,7 +1530,7 @@ end 'main'
 <!-- test: match-break.basic -->
 ```maxon
 function main() returns ExitCode
-	var result = 0
+	var result = 0 as ExitCode
 	match 2 'check'
 		1 then result = 10
 		2 then break
@@ -1546,7 +1546,7 @@ end 'main'
 <!-- test: match-break.error-labeled-own-match -->
 ```maxon
 function main() returns ExitCode
-	var result = 0
+	var result = 0 as ExitCode
 	match 3 'outer'
 		1 then result = 10
 		2 then result = 20
@@ -1563,8 +1563,8 @@ error E2048: <fragment>:7:16: 'break' with label 'outer' targets its own match; 
 <!-- test: match-break.inside-loop -->
 ```maxon
 function main() returns ExitCode
-	var result = 0
-	var i = 0
+	var result = 0 as ExitCode
+	var i = 0 as Count
 	while i < 5 'loop'
 		match i 'check'
 			3 then break 'loop'
@@ -1582,8 +1582,8 @@ end 'main'
 <!-- test: match-break.exits-match-not-loop -->
 ```maxon
 function main() returns ExitCode
-	var result = 0
-	var i = 0
+	var result = 0 as ExitCode
+	var i = 0 as Count
 	while i < 3 'loop'
 		match i 'check'
 			1 then break
@@ -1608,8 +1608,8 @@ and released by the loop body's own `end`.
 <!-- test: match-break.managed-string-live-across -->
 ```maxon
 function main() returns ExitCode
-	var total = 0
-	var i = 0
+	var total = 0 as Count
+	var i = 0 as Count
 	while i < 3 'loop'
 		let s = "abc"
 		match i 'check'
@@ -1619,7 +1619,7 @@ function main() returns ExitCode
 		total = total + 1
 		i = i + 1
 	end 'loop'
-	return total
+	return total as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -1640,7 +1640,7 @@ end 'Note'
 typealias Count = int(0 to 1000)
 
 function weigh(n Note) returns Count
-	var r = 0
+	var r = 0 as Count
 	match n 'check'
 		text then break
 		none then r = 5
@@ -1691,8 +1691,8 @@ label is: a bare `break` inside `match … 'check'` already leaves that match.
 <!-- test: match-break.error-match-own-label -->
 ```maxon
 function main() returns ExitCode
-	var r = 0
-	var i = 0
+	var r = 0 as ExitCode
+	var i = 0 as Count
 	while i < 3 'loop'
 		match i 'check'
 			1 then break 'check'
@@ -1713,10 +1713,10 @@ A labelled `break` still reaches PAST a match to an outer loop.
 <!-- test: match-break.crosses-match-to-outer-loop -->
 ```maxon
 function main() returns ExitCode
-	var r = 0
-	var i = 0
+	var r = 0 as ExitCode
+	var i = 0 as Count
 	while i < 3 'outer'
-		var j = 0
+		var j = 0 as Count
 		while j < 3 'inner'
 			match j 'check'
 				1 then break 'outer'
@@ -1755,7 +1755,7 @@ function risky(k Count) returns Count throws Err
 end 'risky'
 
 function pick(k Count) returns Count
-	var r = 0
+	var r = 0 as Count
 	match k 'check'
 		1 then r = try risky(k) otherwise break
 		default then r = 50
@@ -1778,8 +1778,8 @@ redundant-label rule is unchanged for `continue`.
 <!-- test: match-break.continue-across-match-still-redundant -->
 ```maxon
 function main() returns ExitCode
-	var total = 0
-	var i = 0
+	var total = 0 as ExitCode
+	var i = 0 as Count
 	while i < 3 'loop'
 		match i 'check'
 			1 then continue 'loop'
@@ -1801,8 +1801,8 @@ still names the innermost loop redundantly.
 <!-- test: match-break.loop-label-across-if-still-redundant -->
 ```maxon
 function main() returns ExitCode
-	var total = 0
-	var i = 0
+	var total = 0 as ExitCode
+	var i = 0 as Count
 	while i < 3 'loop'
 		if i == 1 'check'
 			break 'loop'
@@ -1828,8 +1828,8 @@ through a fallthrough edge.
 <!-- test: match-break.fallthrough-into-break-arm -->
 ```maxon
 function main() returns ExitCode
-	var r = 0
-	var n = 1
+	var r = 0 as ExitCode
+	var n = 1 as Count
 	match n 'check'
 		1 then r = 5 and fallthrough
 		2 then break
@@ -1851,8 +1851,8 @@ reversing them would stay green everywhere else while this program compiled and 
 <!-- test: match-break.error-match-label-shadows-loop-label -->
 ```maxon
 function main() returns ExitCode
-	var n = 0
-	var trips = 0
+	var n = 0 as Count
+	var trips = 0 as ExitCode
 	while n < 3 'dup'
 		n = n + 1
 		match n 'dup'
@@ -1878,8 +1878,8 @@ fails if `resolveControlTarget` ever stops gating its match search on the keywor
 <!-- test: match-break.continue-in-for-reaches-step -->
 ```maxon
 function main() returns ExitCode
-	var seen = 0
-	var skipped = 0
+	var seen = 0 as ExitCode
+	var skipped = 0 as ExitCode
 	for i in 0 upto 6 'each'
 		match i 'check'
 			2 then continue
@@ -1903,7 +1903,7 @@ reaching arm the same way on both paths, and nothing else pins that.
 <!-- test: match-break.string-scrutinee-chain-dispatch -->
 ```maxon
 function main() returns ExitCode
-	var total = 0
+	var total = 0 as ExitCode
 	let words = ["red", "green", "blue"]
 	for w in words 'each'
 		match w 'check'
@@ -1989,7 +1989,7 @@ union Container
 end 'Container'
 
 function process(c Container) returns Integer
-	var result = 0
+	var result = 0 as Integer
 	match c 'check'
 		empty then break
 		value(n) then result = n

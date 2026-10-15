@@ -23,7 +23,7 @@ Always use **tabs for indentation**. One level per nested block.
 
 ```maxon
 function main() returns ExitCode
-	var x = 5
+	let x = 5
 	if x > 0 'check'
 		print(x)
 	end 'check'
@@ -84,9 +84,9 @@ end 'printGreeting'
 Use **camelCase** for variable names.
 
 ```maxon
-var myValue = 42
-var userCount = 100
-var isValid = true
+let myValue = 42
+let userCount = 100
+let isValid = true
 ```
 
 ### Constants
@@ -94,8 +94,8 @@ var isValid = true
 Use **UPPER_CASE** with underscores for constants (when supported).
 
 ```maxon
-var MAX_ITERATIONS = 1000
-var DEFAULT_TIMEOUT = 30
+let MAX_ITERATIONS = 1000
+let DEFAULT_TIMEOUT = 30
 ```
 
 ### Block Identifiers
@@ -212,7 +212,7 @@ Most lines need none. A comment earns its place only where the code cannot carry
 
 ```maxon
 // Bad: restates the code
-var i = 0  // set i to zero
+let i = 0  // set i to zero
 
 // Bad: narrates the block below
 // Loop over the items and add them up
@@ -246,7 +246,7 @@ give the block a statement or delete it.
 
 ```maxon
 // Line comment
-var x = 5  // Trailing comment
+let x = 5  // Trailing comment
 ```
 
 ---
@@ -377,10 +377,12 @@ The VSCode extension includes a built-in code formatter that will automatically:
 Here's a complete program following all style guide conventions:
 
 ```maxon
+typealias Number = int(0 to i64.max)
+
 // Calculate the sum of integers from 1 to N
-function sum(n int) returns int
-	var result = 0
-	var i = 1
+function sum(n Number) returns Number
+	var result = 0 as Number
+	var i = 1 as Number
 
 	while i <= n 'loop'
 		result = result + i
@@ -391,28 +393,28 @@ function sum(n int) returns int
 end 'sum'
 
 // Check if a number is prime
-function isPrime(num int) returns int
+function isPrime(num Number) returns bool
 	if num <= 1 'notPrime'
-		return 0
+		return false
 	end 'notPrime'
 
-	var i = 2
+	var i = 2 as Number
 	while i * i <= num 'divisorCheck'
 		if num mod i == 0 'hasDivisor'
-			return 0
+			return false
 		end 'hasDivisor'
 		i = i + 1
 	end 'divisorCheck'
 
-	return 1
+	return true
 end 'isPrime'
 
 function main() returns ExitCode
-	var total = sum(10)
-	print(total)
+	let total = sum(10)
+	print("{total}\n")
 
-	var prime = isPrime(7)
-	print(prime)
+	let prime = isPrime(7)
+	print("{prime}\n")
 
 	return 0
 end 'main'

@@ -8,6 +8,8 @@ let BoundValueWrite = ".boundValue = "
 let SetterMovedFromWrite = "self.movedFrom = "
 let SetterBoundValueWrite = "self.boundValue = "
 
+typealias LineNumber = int(0 to u64.max)
+
 test 'an owned binding is moved and rebound only through the setters that tell the move ledger'
 	var offenders = StringArray.create()
 	collectDirectWrites(compilerSourceRoot(), into: offenders)
@@ -43,7 +45,7 @@ end 'collectDirectWrites'
 
 function collectDirectWritesIn(source FilePath, into StringArray)
 	let text = try File.readText(source) otherwise panic("owned-binding-move-state: the gate could not run - could not read {source.toString()}")
-	var number = 0
+	var number = 0 as LineNumber
 
 	for line in text.split(LineFeed) 'eachLine'
 		number = number + 1

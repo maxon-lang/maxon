@@ -135,7 +135,7 @@ enum WorkError implements Error
 	failed
 end 'WorkError'
 
-var flag = 0
+var flag = 0 as ExitCode
 
 function maySetFlag(succeed bool) throws WorkError
 	Scheduler.yield()
@@ -149,7 +149,7 @@ end 'maySetFlag'
 function main() returns ExitCode
 	let p = async maySetFlag(true)
 	try await p otherwise ignore
-	return flag as ExitCode
+	return flag
 end 'main'
 ```
 ```exitcode
@@ -244,7 +244,7 @@ end 'work'
 
 function main() returns ExitCode
 	let p = async work(true)
-	var guard = 1
+	var guard = 1 as Integer
 	if guard == 1 'sep'
 		guard = 2
 	end 'sep'
@@ -270,7 +270,7 @@ enum TaskError implements Error
 	crashed
 end 'TaskError'
 
-var flag = 0
+var flag = 0 as ExitCode
 
 function maySetFlag(succeed bool) throws TaskError
 	Scheduler.yield()
@@ -289,7 +289,7 @@ function main() returns ExitCode
 			crashed gives 9
 		end 'which'
 	end 'failed'
-	return flag as ExitCode
+	return flag
 end 'main'
 ```
 ```exitcode

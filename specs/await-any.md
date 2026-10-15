@@ -165,11 +165,11 @@ function main() returns ExitCode
 	arr.push(async quick())
 	arr.push(async slow(240))
 	let ready = arr.awaitAny()
-	var score = 0
+	var score = 0 as Integer
 	if ready == 1 'themiddleonefinishedfirst'
 		score = score + 3
 	end 'themiddleonefinishedfirst'
-	var sum = 0
+	var sum = 0 as Integer
 	for p in arr 'drainthemall'
 		sum = sum + await p
 	end 'drainthemall'
@@ -207,14 +207,14 @@ function main() returns ExitCode
 	var arr = IntPromiseArray.create()
 	arr.push(async makeValue())
 	let p = try arr.get(0) otherwise panic("the promise was just pushed")
-	var spins = 0
+	var spins = 0 as Integer
 	var done = false
 	while spins < maxSpins and not done 'drive'
 		Scheduler.yield()
 		done = p.isComplete()
 		spins = spins + 1
 	end 'drive'
-	var score = 0
+	var score = 0 as Integer
 	if done 'itwasalreadycompletebeforethecall'
 		score = score + 1
 	end 'itwasalreadycompletebeforethecall'
@@ -253,11 +253,11 @@ function main() returns ExitCode
 	arr.push(async value(30))
 	let first = arr.awaitAny()
 	let second = arr.awaitAny()
-	var score = 0
+	var score = 0 as Integer
 	if first == second 'aselectiswithoutsideeffect'
 		score = score + 1
 	end 'aselectiswithoutsideeffect'
-	var sum = 0
+	var sum = 0 as Integer
 	for p in arr 'awaiteveryone'
 		sum = sum + await p
 	end 'awaiteveryone'
@@ -293,11 +293,11 @@ function main() returns ExitCode
 	arr.push(async nap(20, tag: 2))
 	arr.push(async nap(400, tag: 3))
 	let ready = arr.awaitAny()
-	var score = 0
+	var score = 0 as Integer
 	if ready == 1 'theearliestdeadlinewon'
 		score = score + 3
 	end 'theearliestdeadlinewon'
-	var sum = 0
+	var sum = 0 as Integer
 	for p in arr 'drainthemall'
 		sum = sum + await p
 	end 'drainthemall'
@@ -358,11 +358,11 @@ function main() returns ExitCode
 	ps.push(slow.value())
 	ps.push(quick.value())
 	let ready = ps.awaitAny()
-	var score = 0
+	var score = 0 as Integer
 	if ready == 1 'thequickreplywonthoughitwassentsecond'
 		score = score + 3
 	end 'thequickreplywonthoughitwassentsecond'
-	var sum = 0
+	var sum = 0 as Integer
 	for p in ps 'drainbothreplies'
 		sum = sum + (try await p otherwise 0)
 	end 'drainbothreplies'
@@ -400,11 +400,11 @@ function selectOver() returns Integer
 	ps.push(async inner(3))
 	ps.push(async inner(4))
 	let ready = ps.awaitAny()
-	var sum = 0
+	var sum = 0 as Integer
 	for p in ps 'all'
 		sum = sum + await p
 	end 'all'
-	return sum + ready
+	return sum + (ready as Integer)
 end 'selectOver'
 
 function main() returns ExitCode
@@ -441,7 +441,7 @@ function main() returns ExitCode
 	arr.push(async makeValue())
 	let ready = arr.awaitAny()
 	let p = try arr.get(ready) otherwise panic("awaitAny named a slot that is in range")
-	return (ready * 10 + await p) as ExitCode
+	return ((ready as Integer) * 10 + await p) as ExitCode
 end 'main'
 ```
 ```exitcode

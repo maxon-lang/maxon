@@ -625,7 +625,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:27:11: argument type mismatch for 'f': expected 'fn(int) returns int', got 'fn(int, int) returns int'
+error E3005: <fragment>:27:11: argument type mismatch for 'f': expected 'fn(Integer) returns Integer', got 'fn(Integer, Integer) returns Integer'
 ```
 
 
@@ -1407,10 +1407,10 @@ type SumWorker implements Worker
 	let tag as Integer
 
 	function process(values IntArray) returns Integer
-		var total = 0
-		var i = 0
+		var total = 0 as Integer
+		var i = 0 as Count
 		while i < values.count() 'loop'
-			let v = try values.get(i) otherwise 0
+			let v = try values.get(i as ElementIndex) otherwise 0
 			total = total + v
 			i = i + 1
 		end 'loop'
@@ -1718,15 +1718,15 @@ end 'allocateFor'
 
 function main() returns ExitCode
 	let concrete = ConcreteQuery.create(7)
-	var trueCount = 0
-	var i = 0
+	var trueCount = 0 as Count
+	var i = 0 as Count
 	while i < 4 'loop'
 		if allocateFor(concrete) 'ok'
 			trueCount = trueCount + 1
 		end 'ok'
 		i = i + 1
 	end 'loop'
-	return trueCount
+	return trueCount as ExitCode
 end 'main'
 ```
 ```exitcode

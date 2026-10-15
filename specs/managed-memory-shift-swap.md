@@ -70,7 +70,7 @@ function main() returns ExitCode
 	arr.push(20)
 	arr.push(30)
 	let gone = try arr.managed.remove(1) otherwise return 99
-	return gone + arr.managed.length()
+	return ((gone as Count) + arr.managed.length()) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -144,9 +144,9 @@ function main() returns ExitCode
 	arr.resize(4)
 	try arr.managed.shiftRight(1, 2) otherwise return 98
 	try arr.managed.set(1, 99) otherwise return 97
-	var total = 0
+	var total = 0 as ExitCode
 	for v in arr 'sum'
-		total = total + v
+		total = total + (v as ExitCode)
 	end 'sum'
 	return total
 end 'main'
@@ -169,9 +169,9 @@ function main() returns ExitCode
 	arr.push(30)
 	try arr.managed.shiftLeft(2, 1) otherwise return 98
 	try arr.managed.setLength(2) otherwise return 97
-	var total = 0
+	var total = 0 as ExitCode
 	for v in arr 'sum'
-		total = total + v
+		total = total + (v as ExitCode)
 	end 'sum'
 	return total
 end 'main'
@@ -755,7 +755,7 @@ function main() returns ExitCode
 	xs.push("three heap string long enough to require an allocation")
 	xs.push("four heap string long enough to require an allocation")
 
-	var lo = 0
+	var lo = 0 as Count
 	var hi = xs.count() - 1
 	while lo < hi 'reverse'
 		try xs.managed.swap(lo, j: hi) otherwise return 99
@@ -795,7 +795,7 @@ function main() returns ExitCode
 	try flags.managed.swap(0, j: 1) otherwise return 99
 	let atZero = try flags.get(0) otherwise true
 	let atOne = try flags.get(1) otherwise false
-	var total = 0
+	var total = 0 as ExitCode
 	if atZero 'zero'
 		total = total + 1
 	end 'zero'

@@ -2967,7 +2967,7 @@ export typealias Level = int(0 to 9)
 
 // --- file: main.maxon
 function main() returns ExitCode
-	var n = 0
+	var n = 0 as FullRangeInt
 
 	for e in Journal.make().entries 'each'
 		match e 'pick'
@@ -3626,7 +3626,7 @@ interface Comparable
 end 'Comparable'
 
 function main() returns ExitCode
-	var values = [3, 1, 2]
+	var values = FullRangeIntArray from [3, 1, 2]
 	values.sort()
 	let first = try values.get(0) otherwise return 3
 	print("{first}\n")
@@ -3874,7 +3874,7 @@ end 'Comparable'
 
 function main() returns ExitCode
 	let held = Comparable.create()
-	var values = [3, 1, 2]
+	var values = FullRangeIntArray from [3, 1, 2]
 	values.sort()
 	let first = try values.get(0) otherwise return 3
 	print("{first} {held.count}\n")

@@ -161,7 +161,7 @@ retake is CORRECT: it is what lets the sleeper run at all while a child is being
 `streaming-subprocess.posix-a-parked-line-read-needs-no-rescue` is the case that pins the retake property,
 because its two-call surface (`subpSpawn` then `subpReadLine`) CAN bracket the read by itself.
 ```maxon
-var order = 0
+var order = 0 as Integer
 
 function slow() returns Integer
 	_ = spawnReadLine("sleep 1; echo hello")
@@ -237,7 +237,7 @@ function dropInFlight() returns Integer
 end 'dropInFlight'
 
 function main() returns ExitCode
-	var i = 0
+	var i = 0 as Integer
 	while i < 5 'loop'
 		_ = dropInFlight()
 		i = i + 1

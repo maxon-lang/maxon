@@ -51,7 +51,7 @@ is otherwise pinned by nothing in the suite.
 <!-- test: a-later-loop-of-the-same-name-excuses-an-earlier-one -->
 ```maxon
 function main() returns ExitCode
-	var total = 0
+	var total = 0 as FullRangeInt
 	for i in 0 upto 3 'a'
 		total = total + 1
 	end 'a'
@@ -68,7 +68,7 @@ end 'main'
 <!-- test: one-loop-of-that-name-and-no-mention-is-still-refused -->
 ```maxon
 function main() returns ExitCode
-	var total = 0
+	var total = 0 as FullRangeInt
 	for i in 0 upto 3 'a'
 		total = total + 1
 	end 'a'
@@ -84,7 +84,7 @@ The only mention of `i` in `main` is the one INSIDE the closure, which reaches t
 enclosing binding as a CAPTURE. `4 + 1 + 3 = 9`.
 ```maxon
 function main() returns ExitCode
-	let i = 5
+	let i = 5 as FullRangeInt
 	let f = function() gives i + 1
 	var total = f()
 	for i in 0 upto 3 'a'
@@ -104,7 +104,7 @@ function never mentions, so the loop binding is still unused.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 function main() returns ExitCode
-	var total = 0
+	var total = 0 as Integer
 	for i in 0 upto 3 'a'
 		total = total + 1
 	end 'a'

@@ -162,7 +162,7 @@ function main() returns ExitCode
 	end 'everyPower'
 
 	for (iter, power) in powers.withIterator() 'eachPower'
-		let k = iter.index() as Real
+		let k = iter.index() as FullRangeFloat
 		let answer = Math.log10(power)
 
 		if answer > k 'above'

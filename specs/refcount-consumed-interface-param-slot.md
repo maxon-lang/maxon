@@ -111,7 +111,7 @@ function withTarget(items ItemArray, p Payload) returns Integer
 		return 0
 	end 'empty'
 
-	var total = 0
+	var total = 0 as Integer
 	for item in items 'each'
 		total = total + forFunc(item, p: p)
 	end 'each'

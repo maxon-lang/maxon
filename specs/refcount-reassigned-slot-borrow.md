@@ -201,8 +201,8 @@ end 'Box'
 var gbox = Box.create(0)
 
 function main() returns ExitCode
-	var sum = 0
-	var i = 0
+	var sum = 0 as Int
+	var i = 0 as Int
 	while i < 3 'loop'
 		let old = gbox
 		gbox = Box.create(i + 1)

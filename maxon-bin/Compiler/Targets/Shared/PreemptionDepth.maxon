@@ -6,7 +6,7 @@ export function requireAsyncPreemptionFitsItsMargin(tree StackSize, target Targe
 		compilerLogger(CompilerLogGroup.codegen).debug("async preemption depth ({targetToString(target)}): trampoline {trampoline} + tree {tree} = {trampoline + tree} of a {margin}-byte stop margin")
 	end 'debugging'
 
-	if (trampoline + tree) as ParsedInt > margin 'overflowsTheMargin'
+	if (trampoline + tree) as FullRangeInt > margin 'overflowsTheMargin'
 		panic("requireAsyncPreemptionFitsItsMargin: stopping a thread where it stands takes {trampoline} bytes for `{String.from(AsyncPreemptName)}`'s register block and {tree} for `{String.from(AsyncPreemptParkName)}`'s call tree on {targetToString(target)}, {trampoline + tree} in all, but the safe-point predicate only refuses a stack pointer nearer its base than {margin} bytes — a thread stopped just above that floor would write past its stack. Shrink the tree, or raise GtRuntime.GtAsyncPreemptMarginBytes and measure the self-compile")
 	end 'overflowsTheMargin'
 end 'requireAsyncPreemptionFitsItsMargin'

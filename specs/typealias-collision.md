@@ -509,22 +509,22 @@ end 'main'
 ```
 
 <!-- test: a-user-type-beside-the-librarys-alias-is-what-the-bare-name-means -->
-The cross-KIND pair: a user `type` against `stdlib/Builtins.maxon`'s public `typealias ParsedInt`, read from a
+The cross-KIND pair: a user `type` against `stdlib/Builtins.maxon`'s public `typealias FullRangeInt`, read from a
 third file as a static call's base. The library's declaration takes no part in ambiguity, so the bare name
 is the user's `type`, the only one of the two with a `create`.
 ```maxon
 // --- file: lib/p.maxon
-export type ParsedInt
+export type FullRangeInt
 	export let value as ExitCode
 
-	export static function create(value ExitCode) returns ParsedInt
+	export static function create(value ExitCode) returns FullRangeInt
 		return Self{value: value}
 	end 'create'
-end 'ParsedInt'
+end 'FullRangeInt'
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	let p = ParsedInt.create(7)
+	let p = FullRangeInt.create(7)
 	return p.value
 end 'main'
 ```
@@ -536,22 +536,22 @@ end 'main'
 The qualified twin of the case above.
 ```maxon
 // --- file: lib/p.maxon
-export type ParsedInt
+export type FullRangeInt
 	export let value as ExitCode
 
-	export static function create(value ExitCode) returns ParsedInt
+	export static function create(value ExitCode) returns FullRangeInt
 		return Self{value: value}
 	end 'create'
-end 'ParsedInt'
+end 'FullRangeInt'
 
 // --- file: app/main.maxon
-function valueOf(p lib.ParsedInt) returns ExitCode
+function valueOf(p lib.FullRangeInt) returns ExitCode
 	return p.value
 end 'valueOf'
 
 function main() returns ExitCode
-	let p = lib.ParsedInt.create(7)
-	let n = 5 as stdlib.ParsedInt
+	let p = lib.FullRangeInt.create(7)
+	let n = 5 as stdlib.FullRangeInt
 	return valueOf(p) + (n as ExitCode)
 end 'main'
 ```

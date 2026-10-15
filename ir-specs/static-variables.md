@@ -138,7 +138,7 @@ func @main {
 A single i64 global occupies 8 bytes in the .data section.
 
 ```maxon
-var counter = 42
+var counter = 42 as FullRangeInt
 
 function main() returns ExitCode
 	return counter - 42
@@ -287,7 +287,7 @@ func @main {
 A single f64 global occupies 8 bytes in the .data section.
 
 ```maxon
-var pi = 3.14
+var pi = 3.14 as FullRangeFloat
 
 function main() returns ExitCode
 	if pi > 3.0 'read'
@@ -416,7 +416,7 @@ func @main {
 A FOLDED float initializer lays down the same 8 bytes as the literal: `3.0 + 0.14` produces `3.14`, the strongest proof the constant evaluator produced a NUMBER (folded with the host's f64) and not a summed bit pattern (byte-identical to the literal `3.14`).
 
 ```maxon
-var pi = 3.0 + 0.14
+var pi = (3.0 + 0.14) as FullRangeFloat
 
 function main() returns ExitCode
 	if pi > 3.0 'read'
@@ -546,7 +546,7 @@ A bool and i64 global: sorted largest-first, no padding needed.
 
 ```maxon
 var flag = false
-var counter = 42
+var counter = 42 as FullRangeInt
 
 function main() returns ExitCode
 	if flag 'read'
@@ -740,7 +740,7 @@ A true bool and i64: sorted largest-first, no padding needed.
 
 ```maxon
 var flag = true
-var counter = 99
+var counter = 99 as FullRangeInt
 
 function main() returns ExitCode
 	if flag 'read'
@@ -933,7 +933,7 @@ func @main {
 An i64 followed by a bool: no padding needed since bool has 1-byte alignment.
 
 ```maxon
-var counter = 7
+var counter = 7 as FullRangeInt
 var flag = true
 
 function main() returns ExitCode
@@ -1347,8 +1347,8 @@ Mixed bool, i64, f64 globals sorted largest-first, no padding.
 
 ```maxon
 var flag = true
-var count = 10
-var ratio = 2.5
+var count = 10 as FullRangeInt
+var ratio = 2.5 as FullRangeFloat
 
 function main() returns ExitCode
 	if flag and (count == 10) and (ratio > 2.0) 'read'

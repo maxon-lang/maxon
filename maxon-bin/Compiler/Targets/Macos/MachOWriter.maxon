@@ -345,7 +345,7 @@ end 'machoImportCount'
 // Write a 16-byte, NUL-padded segment/section name (Mach-O names are ASCII
 // literals fixed at their call sites, so a non-ASCII byte is a programmer error).
 function writeMachoName(buf ByteArray, name String)
-	var written = 0
+	var written = 0 as Count
 
 	for ch in name 'chars'
 		let b = try ch.asciiValue() otherwise panic("writeMachoName: non-ASCII character in Mach-O name '{name}'")
@@ -418,7 +418,7 @@ function buildGot() returns ByteArray
 	for slot in 0 upto count 'eachSlot'
 		let isLast = slot == count - 1
 		let nextField = 0 if isLast else MachoGotEntryBytes / DyldChainedNextStride
-		let entry = (1 shl DyldChainedBindBit) or (nextField shl DyldChainedNextShift) or slot
+		let entry = (1 shl DyldChainedBindBit) or (nextField shl DyldChainedNextShift) or (slot as MachineWord)
 		writeQword(got, value: entry)
 	end 'eachSlot'
 
@@ -441,7 +441,7 @@ end 'buildGot'
 // each page. Counts are tiny (one entry per distinct string literal).
 function sortMachoRebases(offsets ByteOffsetArray, targets ByteOffsetArray)
 	let n = offsets.count()
-	var i = 1
+	var i = 1 as ElementIndex
 
 	while i < n 'outer'
 		let keyOffset = try offsets.get(i) otherwise panic("sortMachoRebases: i < n by the guard but offsets.get({i}) failed")
@@ -452,23 +452,23 @@ function sortMachoRebases(offsets ByteOffsetArray, targets ByteOffsetArray)
 		// `j` carries no non-negative declared type. Annotating it `ByteOffset` (or any other
 		// `int(0 to …)` alias) would both flip this test to the unsigned reading and put an
 		// out-of-range value through the alias's guard on the final decrement.
-		var j = i - 1
+		var j = (i - 1) as FullRangeInt
 
 		while j >= 0 'inner'
-			let valOffset = try offsets.get(j) otherwise panic("sortMachoRebases: 0 <= j < i but offsets.get({j}) failed")
+			let valOffset = try offsets.get(j as ElementIndex) otherwise panic("sortMachoRebases: 0 <= j < i but offsets.get({j}) failed")
 
 			if valOffset <= keyOffset 'placed'
 				break
 			end 'placed'
 
-			let valTarget = try targets.get(j) otherwise panic("sortMachoRebases: targets.get({j}) failed")
-			try offsets.set(j + 1, value: valOffset) otherwise panic("sortMachoRebases: offsets.set OOB at {j + 1}")
-			try targets.set(j + 1, value: valTarget) otherwise panic("sortMachoRebases: targets.set OOB at {j + 1}")
+			let valTarget = try targets.get(j as ElementIndex) otherwise panic("sortMachoRebases: targets.get({j}) failed")
+			try offsets.set((j + 1) as ElementIndex, value: valOffset) otherwise panic("sortMachoRebases: offsets.set OOB at {j + 1}")
+			try targets.set((j + 1) as ElementIndex, value: valTarget) otherwise panic("sortMachoRebases: targets.set OOB at {j + 1}")
 			j = j - 1
 		end 'inner'
 
-		try offsets.set(j + 1, value: keyOffset) otherwise panic("sortMachoRebases: offsets.set OOB at {j + 1}")
-		try targets.set(j + 1, value: keyTarget) otherwise panic("sortMachoRebases: targets.set OOB at {j + 1}")
+		try offsets.set((j + 1) as ElementIndex, value: keyOffset) otherwise panic("sortMachoRebases: offsets.set OOB at {j + 1}")
+		try targets.set((j + 1) as ElementIndex, value: keyTarget) otherwise panic("sortMachoRebases: targets.set OOB at {j + 1}")
 		i = i + 1
 	end 'outer'
 end 'sortMachoRebases'
@@ -562,7 +562,7 @@ function writeMachoRdataRebases(rdata ByteArray, globalData GlobalDataTable, deb
 			panic("writeMachoRdataRebases: rebase target offset {target} does not fit in {DyldChainedRebaseTargetBits} bits — the image outgrew the DYLD_CHAINED_PTR_64_OFFSET reach")
 		end 'targetTooLarge'
 
-		var nextField = 0
+		var nextField = 0 as ByteOffset
 
 		if i + 1 < count 'hasNext'
 			let followingOffset = try slots.get(i + 1) otherwise panic("writeMachoRdataRebases: i+1 < count but slots.get({i + 1}) failed")
@@ -591,7 +591,7 @@ function buildMachoDataPageStarts(rebaseSlots ByteOffsetArray, rdataPages BytePo
 	for page in 0 upto rdataPages 'rdataPage'
 		let pageBase = page * MachoPageSize
 		let pageEnd = pageBase + MachoPageSize
-		var start = DyldChainedPtrStartNone
+		var start = DyldChainedPtrStartNone as ByteOffset
 
 		for slotOffset in rebaseSlots 'find'
 			if slotOffset >= pageBase and slotOffset < pageEnd 'inPage'
@@ -670,12 +670,12 @@ function buildChainedFixups(dataSegmentFileOff MachineWord, pageStarts ByteOffse
 	// name_offset into the symbol pool. The pool opens with a NUL, so the first name
 	// sits at offset 1 and each following name trails the previous `_name\0`.
 	let importNames = machoImportSymbols()
-	var nameOff = 1
+	var nameOff = 1 as MachineWord
 
 	for name in importNames 'eachImport'
 		let importEntry = 1 or (0 shl 8) or (nameOff shl 9)
 		writeDword(cf, value: importEntry)
-		nameOff = nameOff + name.toByteArray().count() + 1
+		nameOff = nameOff + (name.toByteArray().count() as MachineWord) + 1
 	end 'eachImport'
 
 	// Symbol pool: leading NUL, then each `_name\0`.
@@ -782,12 +782,12 @@ function buildCodeSignature(fileData ByteArray, codeLimit MachineWord, execSegLi
 		end 'clamp'
 
 		var pageData = ByteArray.create()
-		pageData.reserve(pageEnd - pageStart)
+		pageData.reserve((pageEnd - pageStart) as ElementIndex)
 
 		for i in pageStart upto pageEnd 'copyPage'
 			// pageEnd <= codeLimit <= fileData.count() (the caller signs the file it
 			// just built), so every index is in range.
-			let b = try fileData.get(i) otherwise panic("buildCodeSignature: page byte {i} past fileData ({fileData.count()} bytes) despite pageEnd <= codeLimit — layout bug")
+			let b = try fileData.get(i as ElementIndex) otherwise panic("buildCodeSignature: page byte {i} past fileData ({fileData.count()} bytes) despite pageEnd <= codeLimit — layout bug")
 			pageData.push(b)
 		end 'copyPage'
 
@@ -899,7 +899,7 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	// the String-literal `buffer@0` pointers it holds (see the file header). __DATA: [__const] +
 	// __got (imports always present) + [__data (globals)].
 	let textSectionCount = 1
-	var dataSectionCount = 1  // __got
+	var dataSectionCount = 1 as BytePos  // __got
 
 	if hasRdata 'countConst'
 		dataSectionCount = dataSectionCount + 1
@@ -1023,7 +1023,7 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	writeDword(macho, value: CpuSubtypeArm64All)
 	writeDword(macho, value: MhExecute)
 	writeDword(macho, value: MachoNumCommands)
-	writeDword(macho, value: loadCommandsSize)
+	writeDword(macho, value: loadCommandsSize as MachineWord)
 	writeDword(macho, value: flags)
 	writeDword(macho, value: 0)  // reserved
 

@@ -294,7 +294,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function probe(a IntArray) returns Int
-	var hits = 0
+	var hits = 0 as Int
 	if (try a.managed.get(0) otherwise -1) != -1 'zero'
 		hits = hits + 1
 	end 'zero'
@@ -459,7 +459,7 @@ function main() returns ExitCode
 
 	// stop == length + 1: one element past, refused, and nothing written.
 	try a.managed.fill(1, count: 4, value: 9) otherwise 'pastEnd'
-		var sum = 0
+		var sum = 0 as Int
 		for v in a 'check'
 			sum = sum + v
 		end 'check'
@@ -498,7 +498,7 @@ function main() returns ExitCode
 	let huge = 9223372036854775807
 
 	try a.managed.fill(1, count: huge, value: 5) otherwise 'wrapped'
-		var sum = 0
+		var sum = 0 as Int
 		for v in a 'check'
 			sum = sum + v
 		end 'check'

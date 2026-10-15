@@ -395,7 +395,7 @@ Iterating a string with combining marks yields grapheme clusters:
 ```maxon
 function main() returns ExitCode
 	let s = "caf\u0065\u0301"  // c, a, f, e+combining accent = 4 graphemes
-	var count = 0
+	var count = 0 as Count
 	for _ in s 'loop'
 		count = count + 1
 	end 'loop'

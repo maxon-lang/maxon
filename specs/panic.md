@@ -211,7 +211,7 @@ function main() returns ExitCode
 	let m = ["a": 1, "b": 2]
 	n = n + (m.count() as Signed)
 	print("{n}\n")
-	var a = [10, 20, 30]
+	var a = FullRangeIntArray from [10, 20, 30]
 	a.insert(launder(-2) as ElementIndex, value: 99)
 	return 0
 end 'main'
@@ -254,7 +254,7 @@ function main() returns ExitCode
 	let m = ["a": 1, "b": 2]
 	n = n + (m.count() as Signed)
 	print("{n}\n")
-	var a = [10, 20, 30]
+	var a = FullRangeIntArray from [10, 20, 30]
 	a.insert(launder(-2) as ElementIndex, value: 99)
 	return 0
 end 'main'

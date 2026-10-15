@@ -93,9 +93,9 @@ buffer loads.
 typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
-function carry(count WordArray, n Word) returns Word
+function carry(count WordArray, n ElementIndex) returns Word
 	try count.set(1, value: 0) otherwise panic("carry: n >= 2")
-	var carried = 0
+	var carried = 0 as Word
 	for i in 1 upto n 'each'
 		let digit = try count.get(i) otherwise panic("carry: i < n = count.count()")
 		carried = carried + digit + 1

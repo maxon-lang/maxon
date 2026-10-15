@@ -45,7 +45,7 @@ Readings are always in nanoseconds, but two back-to-back readings can be equal w
 | `WallClock.rfc3339Millis(nanos UnixNanos)` | `String` | `nanos` as an RFC 3339 UTC time with milliseconds: `2023-11-14T22:13:20.123Z`. |
 | `WallClock.rfc3339Nanos(nanos UnixNanos)` | `String` | The same with nanoseconds: `2023-11-14T22:13:20.123456789Z`. |
 
-Every reading and format is in UTC. `UnixSeconds` is `int(0 to u64.max)`; `UnixNanos` is signed, negative
+Every reading and format is in UTC. `UnixSeconds` and `UnixNanos` are signed, negative
 before 1970. The wall clock can step backwards (an NTP correction, a resumed virtual machine), so measure
 durations with `Clock`.
 
@@ -302,28 +302,28 @@ It prints a number from 1 to 6.
 
 ## Math
 
-`Math` provides the elementary functions over `Real`, which is `float(f64.min to f64.max)`. The rounding and
+`Math` provides the elementary functions over `FullRangeFloat`, which is `float(f64.min to f64.max)`. The rounding and
 `sqrt`/`abs`/`min`/`max` builtins are in [Core Functions](/docs/stdlib/#core-functions).
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `Math.sin(x Real)` | `Real` | Sine of radians. |
-| `Math.cos(x Real)` | `Real` | Cosine of radians. |
-| `Math.tan(x Real)` | `Real` | Tangent of radians. |
-| `Math.atan(z Real)` | `Real` | Arc tangent. |
-| `Math.atan2(y Real, x Real)` | `Real` | The angle of `(x, y)`, in `[-π, π]`. |
-| `Math.exp(x Real)` | `Real` | e raised to `x`. |
-| `Math.log(x Real)` | `Real` | Natural logarithm. |
-| `Math.log2(x Real)` | `Real` | Base-2 logarithm. |
-| `Math.log10(x Real)` | `Real` | Base-10 logarithm. Exact at every power of ten a double represents exactly: `log10(10^k)` is `k` for `k` in 0 to 22. |
-| `Math.pow(base Real, exponent Real)` | `Real` | `base` raised to `exponent`, following IEEE 754's special cases (`pow(0.0, -1.0)` is infinity; `pow(x, 0)` and `pow(1, y)` are 1 even for NaN). |
-| `Math.hasNegativeSignBit(z Real)` | `bool` | True when the sign bit is set, including `-0.0`, which no comparison can distinguish from `0.0`. |
-| `Math.isNaN(z Real)` | `bool` | True for every NaN, whatever its bit pattern. |
-| `Math.positiveInfinity()` | `Real` | +∞. |
-| `Math.negativeInfinity()` | `Real` | −∞. |
-| `Math.quietNaN()` | `Real` | A quiet NaN. |
-| `Math.bitsOf(x Real)` | `FloatBits` | The 64-bit IEEE 754 pattern of `x`, as a signed word: `Math.bitsOf(1.0)` is `0x3FF0000000000000`, and every negative value, `-0.0` included, has a negative pattern. |
-| `Math.fromBits(bits FloatBits)` | `Real` | The double whose IEEE 754 pattern is `bits`; the inverse of `bitsOf`. |
+| `Math.sin(x FullRangeFloat)` | `FullRangeFloat` | Sine of radians. |
+| `Math.cos(x FullRangeFloat)` | `FullRangeFloat` | Cosine of radians. |
+| `Math.tan(x FullRangeFloat)` | `FullRangeFloat` | Tangent of radians. |
+| `Math.atan(z FullRangeFloat)` | `FullRangeFloat` | Arc tangent. |
+| `Math.atan2(y FullRangeFloat, x FullRangeFloat)` | `FullRangeFloat` | The angle of `(x, y)`, in `[-π, π]`. |
+| `Math.exp(x FullRangeFloat)` | `FullRangeFloat` | e raised to `x`. |
+| `Math.log(x FullRangeFloat)` | `FullRangeFloat` | Natural logarithm. |
+| `Math.log2(x FullRangeFloat)` | `FullRangeFloat` | Base-2 logarithm. |
+| `Math.log10(x FullRangeFloat)` | `FullRangeFloat` | Base-10 logarithm. Exact at every power of ten a double represents exactly: `log10(10^k)` is `k` for `k` in 0 to 22. |
+| `Math.pow(base FullRangeFloat, exponent FullRangeFloat)` | `FullRangeFloat` | `base` raised to `exponent`, following IEEE 754's special cases (`pow(0.0, -1.0)` is infinity; `pow(x, 0)` and `pow(1, y)` are 1 even for NaN). |
+| `Math.hasNegativeSignBit(z FullRangeFloat)` | `bool` | True when the sign bit is set, including `-0.0`, which no comparison can distinguish from `0.0`. |
+| `Math.isNaN(z FullRangeFloat)` | `bool` | True for every NaN, whatever its bit pattern. |
+| `Math.positiveInfinity()` | `FullRangeFloat` | +∞. |
+| `Math.negativeInfinity()` | `FullRangeFloat` | −∞. |
+| `Math.quietNaN()` | `FullRangeFloat` | A quiet NaN. |
+| `Math.bitsOf(x FullRangeFloat)` | `FloatBits` | The 64-bit IEEE 754 pattern of `x`, as a signed word: `Math.bitsOf(1.0)` is `0x3FF0000000000000`, and every negative value, `-0.0` included, has a negative pattern. |
+| `Math.fromBits(bits FloatBits)` | `FullRangeFloat` | The double whose IEEE 754 pattern is `bits`; the inverse of `bitsOf`. |
 
 `FloatBits` is `int(i64.min to i64.max)`.
 
@@ -358,7 +358,7 @@ Output: `0.0 1.0 3.0 1024.0` and `0.7853981633974483 true`.
 | `compare(other Self)` | `Ordering` | Through `Comparable`. |
 | `toString()` | `String` | The same text as interpolation. |
 | `clone()` | `Self` | The value itself. |
-| `int.fromString(input String)` | `int` | Throws `ParseError.invalidFormat`; likewise `float.fromString`, `bool.fromString`, `byte.fromString`. |
+| `int.fromString(input String)` | `FullRangeInt` | Takes one optional leading `-` and decimal digits; throws `ParseError.invalidFormat` for anything else and for a value outside `i64.min` to `i64.max`. Likewise `float.fromString`, `bool.fromString`, `byte.fromString`. |
 
 ```maxon
 function main() returns ExitCode

@@ -352,7 +352,7 @@ end 'IntFloat'
 function main() returns ExitCode
 	let p = IntFloat.create(40, b: 2.5)
 	let x = p.getFirst()
-	let y = trunc(p.getSecond())
+	let y = trunc(p.getSecond()) as Integer
 	return x + y
 end 'main'
 ```
@@ -4480,14 +4480,14 @@ interface Sink uses Item
 	function tag() returns Integer
 end 'Sink'
 
-type A implements Sink with Real
-	var base as Real
+type A implements Sink with FullRangeFloat
+	var base as FullRangeFloat
 
 	static function create() returns Self
 		return Self{base: 0.5}
 	end 'create'
 
-	function put(x Real) returns Integer
+	function put(x FullRangeFloat) returns Integer
 		return trunc(x + self.base)
 	end 'put'
 
@@ -4544,14 +4544,14 @@ interface Giver uses Element
 	function tag() returns Integer
 end 'Giver'
 
-type Runner implements Giver with Real
+type Runner implements Giver with FullRangeFloat
 	let base as Integer
 
 	static function create() returns Self
 		return Self{base: 0}
 	end 'create'
 
-	function give() returns Real
+	function give() returns FullRangeFloat
 		return 1.5
 	end 'give'
 
@@ -4586,14 +4586,14 @@ interface Giver uses Element
 	function tag() returns Integer
 end 'Giver'
 
-type Runner implements Giver with Real
+type Runner implements Giver with FullRangeFloat
 	let base as Integer
 
 	static function create() returns Self
 		return Self{base: 0}
 	end 'create'
 
-	function give() returns Real
+	function give() returns FullRangeFloat
 		return 1.5
 	end 'give'
 
@@ -4602,7 +4602,7 @@ type Runner implements Giver with Real
 	end 'tag'
 end 'Runner'
 
-function giveBare(g Giver) returns Real
+function giveBare(g Giver) returns FullRangeFloat
 	return g.give()
 end 'giveBare'
 
@@ -4616,7 +4616,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3120: <fragment>:9:6: 'Runner' binds 'Giver's associated type 'Element' to 'Real', and 'Element' is the RETURN type of one of 'Giver's requirements. A dispatch's result type flows on into the code around it — which instruction the arithmetic picks, and whether the value is OWNED and released — and no dispatch through it holds a receiver that says which binding it is, so that is chosen while the interface is still only a NAME. Declare such a receiver at 'Giver with <binding>', which settles the result type at the site; or bind it to an `int`, a ranged typealias or a payload-free enum; or take the value as a PARAMETER instead, where the binding IS resolved
+error E3120: <fragment>:9:6: 'Runner' binds 'Giver's associated type 'Element' to 'FullRangeFloat', and 'Element' is the RETURN type of one of 'Giver's requirements. A dispatch's result type flows on into the code around it — which instruction the arithmetic picks, and whether the value is OWNED and released — and no dispatch through it holds a receiver that says which binding it is, so that is chosen while the interface is still only a NAME. Declare such a receiver at 'Giver with <binding>', which settles the result type at the site; or bind it to an `int`, a ranged typealias or a payload-free enum; or take the value as a PARAMETER instead, where the binding IS resolved
 ```
 
 <!-- test: a-conformance-declared-by-an-extension-binds-its-own-associated-type -->

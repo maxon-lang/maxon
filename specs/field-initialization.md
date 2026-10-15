@@ -391,7 +391,7 @@ type LoopOnly
 	export var value as Integer
 
 	static function make(limit Integer) returns Self
-		var i = 0
+		var i = 0 as Integer
 		while i < limit 'loop'
 			self.value = i
 			i = i + 1

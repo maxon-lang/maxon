@@ -95,7 +95,7 @@ end 'runtimeDirBeside'
 export function stdlibDirAbove(start FilePath) returns FilePath throws CompileError
 	var dir = start
 
-	var depth = 0
+	var depth = 0 as Count
 
 	while depth < MaxStdlibSearchDepth 'search'
 		// Interpolated so the argument is a committed `String`: a bare module-`let` literal stays
@@ -834,7 +834,7 @@ function reachableMaxonFunctionNames(module MaxonModule, project Project, signat
 	let enumConformers = enumConformersByInterface(project)
 	var witnessInterfaces = InterfaceNameSet.create()
 	var witnessInterfaceOrder = NameRoster.create()
-	var interfacesSeeded = 0 as FieldIndex
+	var interfacesSeeded = 0 as ElementIndex
 	var creditedServices = CreditedServiceSet.create()
 	var ownerLedger = ConstrainedOwnerLedger.over(signatures)
 
@@ -848,12 +848,12 @@ function reachableMaxonFunctionNames(module MaxonModule, project Project, signat
 
 		markConstraintArgumentImpls(ownerLedger, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
 
-		if interfacesSeeded == witnessInterfaceOrder.count() as FieldIndex and worklist.count() == 0 'nothingLeftToSeedOrDrain'
+		if interfacesSeeded == witnessInterfaceOrder.count() and worklist.count() == 0 'nothingLeftToSeedOrDrain'
 			break
 		end 'nothingLeftToSeedOrDrain'
 
-		while interfacesSeeded < witnessInterfaceOrder.count() as FieldIndex 'eachNewlyNamedInterface'
-			let interfaceName = try witnessInterfaceOrder.get(interfacesSeeded as ElementIndex) otherwise panic("reachableMaxonFunctionNames: witnessInterfaceOrder.get OOB at {interfacesSeeded} despite the loop guard")
+		while interfacesSeeded < witnessInterfaceOrder.count() 'eachNewlyNamedInterface'
+			let interfaceName = try witnessInterfaceOrder.get(interfacesSeeded) otherwise panic("reachableMaxonFunctionNames: witnessInterfaceOrder.get OOB at {interfacesSeeded} despite the loop guard")
 			interfacesSeeded = interfacesSeeded + 1
 
 			for conformerName in seedConformers 'eachSeededConformer'
@@ -1825,7 +1825,7 @@ function stdlibSubstrateEntries(module MaxonModule, stdlibNames NameRoster, unre
 	var nodeOf = StdlibNodeByName.create()
 
 	for i in 0 upto nodeCount 'index'
-		nodeOf.upsert(try stdlibNames.get(i) otherwise panic("stdlibSubstrateEntries: stdlibNames.get({i}) OOB below its own count()"), value: i)
+		nodeOf.upsert(try stdlibNames.get(i) otherwise panic("stdlibSubstrateEntries: stdlibNames.get({i}) OOB below its own count()"), value: i as CsrIndex)
 	end 'index'
 
 	var state = SubstrateFixpoint.overNodes(nodeCount as CsrIndex)
@@ -1852,8 +1852,8 @@ function stdlibSubstrateEntries(module MaxonModule, stdlibNames NameRoster, unre
 	var entries = StdlibSubstrateEntryMap.create()
 
 	for i in 0 upto nodeCount 'publish'
-		if state.requiresSubstrate(i) 'needsIt'
-			entries.upsert(try stdlibNames.get(i) otherwise panic("stdlibSubstrateEntries: stdlibNames.get({i}) OOB in publish"), value: state.entryOf(i))
+		if state.requiresSubstrate(i as CsrIndex) 'needsIt'
+			entries.upsert(try stdlibNames.get(i) otherwise panic("stdlibSubstrateEntries: stdlibNames.get({i}) OOB in publish"), value: state.entryOf(i as CsrIndex))
 		end 'needsIt'
 	end 'publish'
 
@@ -1937,7 +1937,7 @@ type SubstrateFixpoint
 		var head = 0 as CsrIndex
 
 		while head < self.worklist.count() as CsrIndex 'drain'
-			let node = try self.worklist.get(head as ElementIndex) otherwise panic("SubstrateFixpoint.propagateToCallers: worklist.get({head}) below its own count()")
+			let node = try self.worklist.get(head) otherwise panic("SubstrateFixpoint.propagateToCallers: worklist.get({head}) below its own count()")
 			head = head + 1
 			let seedIndex = try self.seedOf.get(node) otherwise panic("SubstrateFixpoint.propagateToCallers: seedOf.get({node}) outside the node space")
 

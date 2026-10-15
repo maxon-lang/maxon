@@ -1798,7 +1798,7 @@ export union MaxonOp
 	// parser converts the raw token text via NumberParsing.parseInt at emit
 	// time). `valueType` is the literal's source-level type (integer, or a
 	// named ranged alias). `result` is the freshly-minted ValueId it defines.
-	literal(result ValueId, value ParsedInt, let valueType MaxonType) = MaxonOpMeta{category: OpCategory.plain}
+	literal(result ValueId, value FullRangeInt, let valueType MaxonType) = MaxonOpMeta{category: OpCategory.plain}
 
 	// Value-returning return terminator. Always placed as a block terminator via
 	// setTerminator, never as a regular body op. `retVal` is the value to return.
@@ -1891,7 +1891,7 @@ export union MaxonOp
 	// `bytes` is the literal's DECODED UTF-8 payload — the parser has already resolved every escape
 	// (`decodeEscapes`), so what rides here is the exact byte sequence the record's blob will hold.
 	//
-	// The bytes ride the op inline, exactly as `literal`'s `ParsedInt value` does — a string literal
+	// The bytes ride the op inline, exactly as `literal`'s `FullRangeInt value` does — a string literal
 	// is DATA, not a name to look up, and it is not on any hot path (one op per literal occurrence).
 	// A per-artifact string registry (with the id-remap-on-merge machinery `named` types need) would
 	// be strictly more moving parts for no benefit: `LowerMaxonToStd` registers the rdata and
@@ -1990,7 +1990,7 @@ export union MaxonOp
 	// `lowerMaxonToStd.lowerOp`'s big one — see `LowerMaxonToStd.lowerIndirectCall` for the miscompile
 	// that forces the indirection (a tail-slot `Array` binding in a large match corrupts the scrutinee's
 	// decref). A design fact about how this op is CONSUMED, recorded where it is DECLARED.
-	indirectCall(result ValueId, callee ValueId, args ValueIdArray) = MaxonOpMeta{category: OpCategory.callFree}
+	indirectCall(result ValueId, callee ValueId, args ValueIdArray, argImmutableNames WriteBlameArray) = MaxonOpMeta{category: OpCategory.callFree}
 
 	// --- async / await (green-thread scheduler) ---
 	//
@@ -2067,7 +2067,7 @@ export union MaxonOp
 	// ⚠ For a `b"…"` the payload is the DECODED Latin-1 text (`Parser.decodeByteStringLiteral`: escapes
 	// resolved, each source codepoint mapped to one byte, a codepoint above 0xFF already rejected E1004).
 	// For a packed literal it is the LSB-first bit image `Parser.packConstantElements` lays down.
-	constArrayLiteral(result ValueId, elementSize ElementStride, elementCount ParsedInt, let bytes ByteArray) = MaxonOpMeta{category: OpCategory.plain}
+	constArrayLiteral(result ValueId, elementSize ElementStride, elementCount FullRangeInt, let bytes ByteArray) = MaxonOpMeta{category: OpCategory.plain}
 
 	// --- the DENSE-match jump table ---
 	//
@@ -2130,7 +2130,7 @@ export union MaxonOp
 	// tier invariant holds: it is an IDENTITY, and `LowerMaxonToStd` does the width collapse, recovering the
 	// requirement's declared FORMALS from it so a call's per-argument ABI comes from the CALLEE's signature
 	// rather than from whatever the actuals happen to be typed.
-	witnessDispatch(result ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex, isVoid bool, isThrowing bool) = MaxonOpMeta{category: OpCategory.callFree}
+	witnessDispatch(result ValueId, args ValueIdArray, let argImmutableNames WriteBlameArray, witness ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex, isVoid bool, isThrowing bool) = MaxonOpMeta{category: OpCategory.callFree}
 
 	// --- the THROWING witness dispatch ---
 	//
@@ -2146,7 +2146,7 @@ export union MaxonOp
 	//
 	// ⚠ Its `args` is bound only in a SMALL match (`lowerWitnessTryDispatch`), never in `lowerOp`'s big one —
 	// `witnessDispatch`'s trap, unchanged.
-	witnessTryDispatch(result ValueId, errorFlag ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex, isVoid bool) = MaxonOpMeta{category: OpCategory.callFree}
+	witnessTryDispatch(result ValueId, errorFlag ValueId, args ValueIdArray, let argImmutableNames WriteBlameArray, witness ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex, isVoid bool) = MaxonOpMeta{category: OpCategory.callFree}
 
 	// --- a panic whose message is RENDERED AT RUN TIME ---
 	//
@@ -2318,7 +2318,7 @@ export union MaxonOp
 	//
 	// `OpCategory.plain` — it is an instruction, not a call to a function this program contains, so it is no
 	// edge in any call graph.
-	rawIntrinsic(result ValueId, intrinsic RawIntrinsic, args ValueIdArray, constant ParsedInt) = MaxonOpMeta{category: OpCategory.plain}
+	rawIntrinsic(result ValueId, intrinsic RawIntrinsic, args ValueIdArray, constant FullRangeInt) = MaxonOpMeta{category: OpCategory.plain}
 
 	// ⭐⭐ **THE WITNESS HALF A CONCRETE CONFORMER GAINS WHERE A STORE WIDENS IT INTO AN INTERFACE-TYPED FIELD.**
 	// `result` is the address of `__witness_<conformer>.<interfaceName>`, the second word the store writes
@@ -2365,15 +2365,15 @@ export function cacheWriteMaxonOp(writer LibraryCacheWriter, value MaxonOp)
 		propagateError(a0) then cacheWriteMaxonOpPropagateError(writer, a0: a0)
 		panicAbort(a0) then cacheWriteMaxonOpPanicAbort(writer, a0: a0)
 		functionRef(a0, a1, a2) then cacheWriteMaxonOpFunctionRef(writer, a0: a0, a1: a1, a2: a2)
-		indirectCall(a0, a1, a2) then cacheWriteMaxonOpIndirectCall(writer, a0: a0, a1: a1, a2: a2)
+		indirectCall(a0, a1, a2, a3) then cacheWriteMaxonOpIndirectCall(writer, a0: a0, a1: a1, a2: a2, a3: a3)
 		asyncCall(a0, a1, a2, a3, a4, a5, a6) then cacheWriteMaxonOpAsyncCall(writer, a0: a0, a1: a1, a2: a2, a3: a3, a4: a4, a5: a5, a6: a6)
 		await (a0, a1) then cacheWriteMaxonOpAwait(writer, a0: a0, a1: a1)
 		tryAwait(a0, a1, a2) then cacheWriteMaxonOpTryAwait(writer, a0: a0, a1: a1, a2: a2)
 		sizeofType(a0, a1) then cacheWriteMaxonOpSizeofType(writer, a0: a0, a1: a1)
 		constArrayLiteral(a0, a1, a2, a3) then cacheWriteMaxonOpConstArrayLiteral(writer, a0: a0, a1: a1, a2: a2, a3: a3)
 		switch(a0, a1, a2) then cacheWriteMaxonOpSwitch(writer, a0: a0, a1: a1, a2: a2)
-		witnessDispatch(a0, a1, a2, a3, a4, a5, a6) then cacheWriteMaxonOpWitnessDispatch(writer, a0: a0, a1: a1, a2: a2, a3: a3, a4: a4, a5: a5, a6: a6)
-		witnessTryDispatch(a0, a1, a2, a3, a4, a5, a6) then cacheWriteMaxonOpWitnessTryDispatch(writer, a0: a0, a1: a1, a2: a2, a3: a3, a4: a4, a5: a5, a6: a6)
+		witnessDispatch(a0, a1, a2, a3, a4, a5, a6, a7) then cacheWriteMaxonOpWitnessDispatch(writer, a0: a0, a1: a1, a2: a2, a3: a3, a4: a4, a5: a5, a6: a6, a7: a7)
+		witnessTryDispatch(a0, a1, a2, a3, a4, a5, a6, a7) then cacheWriteMaxonOpWitnessTryDispatch(writer, a0: a0, a1: a1, a2: a2, a3: a3, a4: a4, a5: a5, a6: a6, a7: a7)
 		panicAbortValue(a0) then cacheWriteMaxonOpPanicAbortValue(writer, a0: a0)
 		errorFlagEncode(a0, a1, a2) then cacheWriteMaxonOpErrorFlagEncode(writer, a0: a0, a1: a1, a2: a2)
 		serviceSpawn(a0, a1, a2) then cacheWriteMaxonOpServiceSpawn(writer, a0: a0, a1: a1, a2: a2)
@@ -2400,7 +2400,7 @@ function cacheWriteMaxonOpCall(writer LibraryCacheWriter, a0 ValueId, a1 ByteArr
 	writer.unsigned(a7.ordinal as CacheUnsigned)
 end 'cacheWriteMaxonOpCall'
 
-function cacheWriteMaxonOpLiteral(writer LibraryCacheWriter, a0 ValueId, a1 ParsedInt, a2 MaxonType)
+function cacheWriteMaxonOpLiteral(writer LibraryCacheWriter, a0 ValueId, a1 FullRangeInt, a2 MaxonType)
 	writer.unsigned(a0 as CacheUnsigned)
 	writer.signed(a1 as CacheSigned)
 	cacheWriteMaxonType(writer, value: a2)
@@ -2496,10 +2496,11 @@ function cacheWriteMaxonOpFunctionRef(writer LibraryCacheWriter, a0 ValueId, a1 
 	writer.unsigned(a2.ordinal as CacheUnsigned)
 end 'cacheWriteMaxonOpFunctionRef'
 
-function cacheWriteMaxonOpIndirectCall(writer LibraryCacheWriter, a0 ValueId, a1 ValueId, a2 ValueIdArray)
+function cacheWriteMaxonOpIndirectCall(writer LibraryCacheWriter, a0 ValueId, a1 ValueId, a2 ValueIdArray, a3 WriteBlameArray)
 	writer.unsigned(a0 as CacheUnsigned)
 	writer.unsigned(a1 as CacheUnsigned)
 	cacheWriteValueIdArray(writer, value: a2)
+	cacheWriteWriteBlameArray(writer, value: a3)
 end 'cacheWriteMaxonOpIndirectCall'
 
 function cacheWriteMaxonOpAsyncCall(writer LibraryCacheWriter, a0 ValueId, a1 ByteArray, a2 ValueIdArray, a3 NameRoster, a4 SourceRangeArray, a5 WriteBlameArray, a6 ParamCountArray)
@@ -2528,7 +2529,7 @@ function cacheWriteMaxonOpSizeofType(writer LibraryCacheWriter, a0 ValueId, a1 M
 	cacheWriteMaxonType(writer, value: a1)
 end 'cacheWriteMaxonOpSizeofType'
 
-function cacheWriteMaxonOpConstArrayLiteral(writer LibraryCacheWriter, a0 ValueId, a1 ElementStride, a2 ParsedInt, a3 ByteArray)
+function cacheWriteMaxonOpConstArrayLiteral(writer LibraryCacheWriter, a0 ValueId, a1 ElementStride, a2 FullRangeInt, a3 ByteArray)
 	writer.unsigned(a0 as CacheUnsigned)
 	writer.signed(a1 as CacheSigned)
 	writer.signed(a2 as CacheSigned)
@@ -2541,24 +2542,26 @@ function cacheWriteMaxonOpSwitch(writer LibraryCacheWriter, a0 ValueId, a1 Block
 	writer.unsigned(a2 as CacheUnsigned)
 end 'cacheWriteMaxonOpSwitch'
 
-function cacheWriteMaxonOpWitnessDispatch(writer LibraryCacheWriter, a0 ValueId, a1 ValueIdArray, a2 ValueId, a3 WitnessMethodIndex, a4 ElementIndex, a5 bool, a6 bool)
+function cacheWriteMaxonOpWitnessDispatch(writer LibraryCacheWriter, a0 ValueId, a1 ValueIdArray, a2 WriteBlameArray, a3 ValueId, a4 WitnessMethodIndex, a5 ElementIndex, a6 bool, a7 bool)
 	writer.unsigned(a0 as CacheUnsigned)
 	cacheWriteValueIdArray(writer, value: a1)
-	writer.unsigned(a2 as CacheUnsigned)
-	writer.unsigned(a3 as CacheUnsigned)
-	writer.unsigned(a4 as CacheUnsigned)
-	writer.flag(a5)
-	writer.flag(a6)
-end 'cacheWriteMaxonOpWitnessDispatch'
-
-function cacheWriteMaxonOpWitnessTryDispatch(writer LibraryCacheWriter, a0 ValueId, a1 ValueId, a2 ValueIdArray, a3 ValueId, a4 WitnessMethodIndex, a5 ElementIndex, a6 bool)
-	writer.unsigned(a0 as CacheUnsigned)
-	writer.unsigned(a1 as CacheUnsigned)
-	cacheWriteValueIdArray(writer, value: a2)
+	cacheWriteWriteBlameArray(writer, value: a2)
 	writer.unsigned(a3 as CacheUnsigned)
 	writer.unsigned(a4 as CacheUnsigned)
 	writer.unsigned(a5 as CacheUnsigned)
 	writer.flag(a6)
+	writer.flag(a7)
+end 'cacheWriteMaxonOpWitnessDispatch'
+
+function cacheWriteMaxonOpWitnessTryDispatch(writer LibraryCacheWriter, a0 ValueId, a1 ValueId, a2 ValueIdArray, a3 WriteBlameArray, a4 ValueId, a5 WitnessMethodIndex, a6 ElementIndex, a7 bool)
+	writer.unsigned(a0 as CacheUnsigned)
+	writer.unsigned(a1 as CacheUnsigned)
+	cacheWriteValueIdArray(writer, value: a2)
+	cacheWriteWriteBlameArray(writer, value: a3)
+	writer.unsigned(a4 as CacheUnsigned)
+	writer.unsigned(a5 as CacheUnsigned)
+	writer.unsigned(a6 as CacheUnsigned)
+	writer.flag(a7)
 end 'cacheWriteMaxonOpWitnessTryDispatch'
 
 function cacheWriteMaxonOpPanicAbortValue(writer LibraryCacheWriter, a0 ValueId)
@@ -2607,7 +2610,7 @@ function cacheWriteMaxonOpCovPoint(writer LibraryCacheWriter, a0 CovPointId)
 	writer.unsigned(a0 as CacheUnsigned)
 end 'cacheWriteMaxonOpCovPoint'
 
-function cacheWriteMaxonOpRawIntrinsic(writer LibraryCacheWriter, a0 ValueId, a1 RawIntrinsic, a2 ValueIdArray, a3 ParsedInt)
+function cacheWriteMaxonOpRawIntrinsic(writer LibraryCacheWriter, a0 ValueId, a1 RawIntrinsic, a2 ValueIdArray, a3 FullRangeInt)
 	writer.unsigned(a0 as CacheUnsigned)
 	writer.unsigned(a1.ordinal as CacheUnsigned)
 	cacheWriteValueIdArray(writer, value: a2)
@@ -2698,7 +2701,7 @@ end 'cacheReadMaxonOpCall'
 
 function cacheReadMaxonOpLiteral(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
 	let a0 = (try reader.unsigned()) as ValueId
-	let a1 = (try reader.signed()) as ParsedInt
+	let a1 = (try reader.signed()) as FullRangeInt
 	let a2 = try cacheReadMaxonType(reader)
 
 	return MaxonOp.literal(a0, value: a1, valueType: a2)
@@ -2828,8 +2831,9 @@ function cacheReadMaxonOpIndirectCall(reader LibraryCacheReader) returns MaxonOp
 	let a0 = (try reader.unsigned()) as ValueId
 	let a1 = (try reader.unsigned()) as ValueId
 	let a2 = try cacheReadValueIdArray(reader)
+	let a3 = try cacheReadWriteBlameArray(reader)
 
-	return MaxonOp.indirectCall(a0, callee: a1, args: a2)
+	return MaxonOp.indirectCall(a0, callee: a1, args: a2, argImmutableNames: a3)
 end 'cacheReadMaxonOpIndirectCall'
 
 function cacheReadMaxonOpAsyncCall(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
@@ -2869,7 +2873,7 @@ end 'cacheReadMaxonOpSizeofType'
 function cacheReadMaxonOpConstArrayLiteral(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
 	let a0 = (try reader.unsigned()) as ValueId
 	let a1 = (try reader.boundedSigned(-4, high: 8)) as ElementStride
-	let a2 = (try reader.signed()) as ParsedInt
+	let a2 = (try reader.signed()) as FullRangeInt
 	let a3 = try reader.bytes()
 
 	return MaxonOp.constArrayLiteral(a0, elementSize: a1, elementCount: a2, bytes: a3)
@@ -2886,25 +2890,27 @@ end 'cacheReadMaxonOpSwitch'
 function cacheReadMaxonOpWitnessDispatch(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
 	let a0 = (try reader.unsigned()) as ValueId
 	let a1 = try cacheReadValueIdArray(reader)
-	let a2 = (try reader.unsigned()) as ValueId
-	let a3 = (try reader.boundedUnsigned(0, high: u16.max)) as WitnessMethodIndex
-	let a4 = (try reader.unsigned()) as ElementIndex
-	let a5 = try reader.flag()
+	let a2 = try cacheReadWriteBlameArray(reader)
+	let a3 = (try reader.unsigned()) as ValueId
+	let a4 = (try reader.boundedUnsigned(0, high: u16.max)) as WitnessMethodIndex
+	let a5 = (try reader.unsigned()) as ElementIndex
 	let a6 = try reader.flag()
+	let a7 = try reader.flag()
 
-	return MaxonOp.witnessDispatch(a0, args: a1, witness: a2, methodIndex: a3, interfaceDeclIndex: a4, isVoid: a5, isThrowing: a6)
+	return MaxonOp.witnessDispatch(a0, args: a1, argImmutableNames: a2, witness: a3, methodIndex: a4, interfaceDeclIndex: a5, isVoid: a6, isThrowing: a7)
 end 'cacheReadMaxonOpWitnessDispatch'
 
 function cacheReadMaxonOpWitnessTryDispatch(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
 	let a0 = (try reader.unsigned()) as ValueId
 	let a1 = (try reader.unsigned()) as ValueId
 	let a2 = try cacheReadValueIdArray(reader)
-	let a3 = (try reader.unsigned()) as ValueId
-	let a4 = (try reader.boundedUnsigned(0, high: u16.max)) as WitnessMethodIndex
-	let a5 = (try reader.unsigned()) as ElementIndex
-	let a6 = try reader.flag()
+	let a3 = try cacheReadWriteBlameArray(reader)
+	let a4 = (try reader.unsigned()) as ValueId
+	let a5 = (try reader.boundedUnsigned(0, high: u16.max)) as WitnessMethodIndex
+	let a6 = (try reader.unsigned()) as ElementIndex
+	let a7 = try reader.flag()
 
-	return MaxonOp.witnessTryDispatch(a0, errorFlag: a1, args: a2, witness: a3, methodIndex: a4, interfaceDeclIndex: a5, isVoid: a6)
+	return MaxonOp.witnessTryDispatch(a0, errorFlag: a1, args: a2, argImmutableNames: a3, witness: a4, methodIndex: a5, interfaceDeclIndex: a6, isVoid: a7)
 end 'cacheReadMaxonOpWitnessTryDispatch'
 
 function cacheReadMaxonOpPanicAbortValue(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
@@ -2973,7 +2979,7 @@ function cacheReadMaxonOpRawIntrinsic(reader LibraryCacheReader) returns MaxonOp
 	let a0 = (try reader.unsigned()) as ValueId
 	let a1 = try cacheReadRawIntrinsic(reader)
 	let a2 = try cacheReadValueIdArray(reader)
-	let a3 = (try reader.signed()) as ParsedInt
+	let a3 = (try reader.signed()) as FullRangeInt
 
 	return MaxonOp.rawIntrinsic(a0, intrinsic: a1, args: a2, constant: a3)
 end 'cacheReadMaxonOpRawIntrinsic'
@@ -3029,13 +3035,13 @@ end 'witnessDispatchReceiver'
 // ENCODES a throw (`lowerThrowError`: ordinal + bias) and the Maxon-tier parser DECODES an `(e)` binding
 // (`parseOtherwiseBlock`: flag - bias). A divergence here would not fail to compile — it would silently
 // bind `match e` to the wrong case — so the two derive from this constant rather than each spelling `1`.
-export let ErrorFlagOrdinalBias = 1 as ParsedInt
+export let ErrorFlagOrdinalBias = 1 as FullRangeInt
 
 // ⭐ **THE OTHER HALF OF THAT ONE FACT: the flag value that means "no error in flight".** It is what the
 // bias RESERVES, so it belongs beside the bias and not in whichever runtime family happens to need it —
 // a private `0` per runtime family would be several spellings of the same ABI register. Every THROWING
 // Std graph's success edge reads THIS one, so a change to the encoding reaches all of them or none.
-export let NoErrorFlag = 0 as ParsedInt
+export let NoErrorFlag = 0 as FullRangeInt
 
 // ⭐ **WHICH NAME, IF ANY, AN OP BINDS A CALLEE BY — the dialect's own answer to the one question overload
 // resolution asks of every op**. It lives here, beside the op set, because the answer is a property of
@@ -3179,6 +3185,50 @@ end 'maxonOpCalleeName'
 // ⭐ **DOES THIS OP START A SERVICE?** A `spawn` binds no callee (`maxonOpCalleeKind`), yet it makes the
 // synthesized `<T>.__loop` — and every handler that loop dispatches — live, so a walk that follows calls must
 // ask this too. Every arm is named, so a variant added later is a compile error here rather than an omission.
+export function maxonOpIsIndirectCall(op MaxonOp) returns bool
+	return match op 'op'
+		indirectCall gives true
+		call or
+		literal or
+		ret or
+		retVoid or
+		binOp or
+		unaryOp or
+		compare or
+		condBranch or
+		branch or
+		globalAddr or
+		loadIndirect or
+		storeIndirect or
+		stringLiteral or
+		tryCall or
+		throwError or
+		propagateError or
+		panicAbort or
+		functionRef or
+		asyncCall or
+		await or
+		tryAwait or
+		sizeofType or
+		constArrayLiteral or
+		switch or
+		witnessDispatch or
+		witnessTryDispatch or
+		panicAbortValue or
+		errorFlagEncode or
+		serviceSpawn or
+		serviceSend or
+		serviceReplyCell or
+		immortalStructRecord or
+		immortalStringTable or
+		covPoint or
+		rawIntrinsic or
+		existentialWitness or
+		holdValue or
+		holdEnd gives false
+	end 'op'
+end 'maxonOpIsIndirectCall'
+
 export function maxonOpIsServiceSpawn(op MaxonOp) returns bool
 	return match op 'op'
 		serviceSpawn gives true
@@ -3306,6 +3356,7 @@ export enum WriteBlameHolder
 	binding
 	closure
 	forElement
+	loopVariable
 	ifLetBinding
 	matchBinding
 	letField
@@ -3318,7 +3369,7 @@ export enum WriteBlameHolder
 end 'WriteBlameHolder'
 
 // @generated library-cache begin
-let CacheCasesWriteBlameHolder = [WriteBlameHolder.binding, WriteBlameHolder.closure, WriteBlameHolder.forElement, WriteBlameHolder.ifLetBinding, WriteBlameHolder.matchBinding, WriteBlameHolder.letField, WriteBlameHolder.letPayload, WriteBlameHolder.readOnlyElement, WriteBlameHolder.storedMapKey, WriteBlameHolder.storedSetElement, WriteBlameHolder.moduleLet, WriteBlameHolder.sharedView]
+let CacheCasesWriteBlameHolder = [WriteBlameHolder.binding, WriteBlameHolder.closure, WriteBlameHolder.forElement, WriteBlameHolder.loopVariable, WriteBlameHolder.ifLetBinding, WriteBlameHolder.matchBinding, WriteBlameHolder.letField, WriteBlameHolder.letPayload, WriteBlameHolder.readOnlyElement, WriteBlameHolder.storedMapKey, WriteBlameHolder.storedSetElement, WriteBlameHolder.moduleLet, WriteBlameHolder.sharedView]
 
 function cacheReadWriteBlameHolder(reader LibraryCacheReader) returns WriteBlameHolder throws LibraryCacheDamage
 	let ordinal = try reader.unsigned()
@@ -3350,34 +3401,60 @@ end 'cacheTableAgreesWriteBlameHolder'
 export union WriteBlame
 	unblamed
 	blamed(name ByteArray, holder WriteBlameHolder)
+	// A binding that may be written through but not rebound: a `for` or `if let` binding over a
+	// writable source. Only a callee that reassigns its by-reference parameter blames it
+	// (`whenRebinding`).
+	rebindOnly(name ByteArray, holder WriteBlameHolder)
 
 	export function isBlamed() returns bool
 		return match self 'blame'
-			unblamed gives false
+			unblamed or
+			rebindOnly gives false
 			blamed gives true
 		end 'blame'
 	end 'isBlamed'
 
 	export function isHeldByAClosure() returns bool
 		return match self 'blame'
-			unblamed gives false
+			unblamed or
+			rebindOnly gives false
 			blamed(_, holder) gives holder == WriteBlameHolder.closure
 		end 'blame'
 	end 'isHeldByAClosure'
 
 	export function blamedName() returns ByteArray throws WriteBlameError
 		match self 'blame'
-			unblamed then throw WriteBlameError.unblamed
+			unblamed or
+			rebindOnly then throw WriteBlameError.unblamed
 			blamed(name, _) then return name
 		end 'blame'
 	end 'blamedName'
 
 	export function blamedHolder() returns WriteBlameHolder throws WriteBlameError
 		match self 'blame'
-			unblamed then throw WriteBlameError.unblamed
+			unblamed or
+			rebindOnly then throw WriteBlameError.unblamed
 			blamed(_, holder) then return holder
 		end 'blame'
 	end 'blamedHolder'
+
+	export function isRebindOnly() returns bool
+		return match self 'blame'
+			unblamed or
+			blamed gives false
+			rebindOnly gives true
+		end 'blame'
+	end 'isRebindOnly'
+
+	// A rebound `for` element is named a loop variable: its source is writable, so the `forElement`
+	// wording, "of a read-only source", would be false.
+	export function whenRebinding() returns WriteBlame
+		return match self 'blame'
+			unblamed gives WriteBlame.unblamed
+			blamed(name, holder) gives WriteBlame.blamed(name, holder: holder)
+			rebindOnly(name, holder) gives WriteBlame.blamed(name, holder: WriteBlameHolder.loopVariable if holder == WriteBlameHolder.forElement else holder)
+		end 'blame'
+	end 'whenRebinding'
 end 'WriteBlame'
 
 // @generated library-cache begin
@@ -3387,6 +3464,7 @@ export function cacheWriteWriteBlame(writer LibraryCacheWriter, value WriteBlame
 	match value 'payload'
 		unblamed then break
 		blamed(a0, a1) then cacheWriteWriteBlameBlamed(writer, a0: a0, a1: a1)
+		rebindOnly(a0, a1) then cacheWriteWriteBlameRebindOnly(writer, a0: a0, a1: a1)
 	end 'payload'
 end 'cacheWriteWriteBlame'
 
@@ -3395,12 +3473,18 @@ function cacheWriteWriteBlameBlamed(writer LibraryCacheWriter, a0 ByteArray, a1 
 	writer.unsigned(a1.ordinal as CacheUnsigned)
 end 'cacheWriteWriteBlameBlamed'
 
+function cacheWriteWriteBlameRebindOnly(writer LibraryCacheWriter, a0 ByteArray, a1 WriteBlameHolder)
+	writer.bytes(a0)
+	writer.unsigned(a1.ordinal as CacheUnsigned)
+end 'cacheWriteWriteBlameRebindOnly'
+
 export function cacheReadWriteBlame(reader LibraryCacheReader) returns WriteBlame throws LibraryCacheDamage
 	let tag = try reader.unsigned()
 
 	return match tag 'case'
 		0 gives WriteBlame.unblamed
 		1 gives try cacheReadWriteBlameBlamed(reader)
+		2 gives try cacheReadWriteBlameRebindOnly(reader)
 		default throws LibraryCacheDamage.unknownTag(tag)
 	end 'case'
 end 'cacheReadWriteBlame'
@@ -3411,6 +3495,13 @@ function cacheReadWriteBlameBlamed(reader LibraryCacheReader) returns WriteBlame
 
 	return WriteBlame.blamed(a0, holder: a1)
 end 'cacheReadWriteBlameBlamed'
+
+function cacheReadWriteBlameRebindOnly(reader LibraryCacheReader) returns WriteBlame throws LibraryCacheDamage
+	let a0 = try reader.bytes()
+	let a1 = try cacheReadWriteBlameHolder(reader)
+
+	return WriteBlame.rebindOnly(a0, holder: a1)
+end 'cacheReadWriteBlameRebindOnly'
 
 // @generated library-cache end
 
@@ -3457,7 +3548,8 @@ export function withRewrittenArgs(op MaxonOp, args ValueIdArray, argImmutableNam
 		call(result, callee, _, argLabels, argRanges, _, argDefaultSlots, mint) gives MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint)
 		tryCall(result, errorFlag, callee, _, argLabels, argRanges, _, argDefaultSlots, mint) gives MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint)
 		asyncCall(result, callee, _, argLabels, argRanges, _, argDefaultSlots) gives MaxonOp.asyncCall(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots)
-		default panic("withRewrittenArgs: asked of an op that supplies no substitutable argument list — only the three direct-call variants carry one")
+		indirectCall(result, callee, _, _) gives MaxonOp.indirectCall(result, callee: callee, args: args, argImmutableNames: argImmutableNames)
+		default panic("withRewrittenArgs: asked of an op that supplies no substitutable argument list — only the three direct-call variants and the indirect call carry one")
 
 		// ⚠ `serviceSend` supplies none either: its arguments were moved into the request BOX at the parser,
 		// so there is no argument list left on the op for `LiteralArgPromotion` to substitute into.
@@ -3469,6 +3561,7 @@ export function callArgImmutableNamesOf(op MaxonOp) returns WriteBlameArray
 		call(_, _, _, _, _, argImmutableNames, _, _) gives argImmutableNames
 		tryCall(_, _, _, _, _, _, argImmutableNames, _, _) gives argImmutableNames
 		asyncCall(_, _, _, _, _, argImmutableNames, _) gives argImmutableNames
-		default panic("callArgImmutableNamesOf: asked of an op that supplies no argument list — only the three direct-call variants carry one")
+		indirectCall(_, _, _, argImmutableNames) gives argImmutableNames
+		default panic("callArgImmutableNamesOf: asked of an op that supplies no argument list — only the three direct-call variants and the indirect call carry one")
 	end 'op'
 end 'callArgImmutableNamesOf'

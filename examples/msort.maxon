@@ -1,7 +1,7 @@
 typealias LineCount = int(0 to u64.max) implements ElementIndex
 typealias ChunkPosition = int(0 to u64.max) implements ElementIndex
 typealias FieldNumber = int(0 to 1024)
-typealias WorkerCount = int(1 to 256)
+typealias WorkerCount = int(1 to 256) implements ElementIndex
 typealias BytePosition = int(0 to u64.max) implements ElementIndex
 typealias SortNumber = int(i64.min to i64.max)
 
@@ -121,10 +121,10 @@ type Options
 	end 'parse'
 
 	static function optionNumber(argument String) returns SortNumber throws UsageError
-		var value = 0
+		var value = 0 as SortNumber
 
 		try 'readNumber'
-			value = int.fromString(CommandLine.optionValue(argument))
+			value = int.fromString(CommandLine.optionValue(argument)) as SortNumber
 		end 'readNumber' otherwise throws UsageError.notANumber
 
 		return value
@@ -240,7 +240,7 @@ function textAgainst(value ByteArray, other SortKey) returns Ordering
 end 'textAgainst'
 
 function compareBytes(left ByteArray, right ByteArray) returns Ordering
-	let shared = left.count() if left.count() < right.count() else right.count()
+	let shared = (left.count() if left.count() < right.count() else right.count()) as BytePosition
 
 	for position in 0 upto shared 'eachByte'
 		let leftByte = byteAt(left, position: position)
@@ -306,7 +306,7 @@ type NumberKey implements KeyReader
 	end 'create'
 
 	function read(text ByteArray) returns SortKey
-		var first = 0
+		var first = 0 as BytePosition
 
 		while first < text.count() and isBlank(byteAt(text, position: first)) 'skipBlanks'
 			first = first + 1
@@ -358,7 +358,7 @@ type KeyMaker
 end 'KeyMaker'
 
 function fieldBounds(bytes ByteArray, field FieldNumber) returns (BytePosition, BytePosition, bool)
-	var position = 0
+	var position = 0 as BytePosition
 	var remaining = field
 
 	while remaining > 0 'eachField'
@@ -509,20 +509,20 @@ end 'readInput'
 function sortedChunks(lines LineArray, settings SortSettings, workers WorkerCount, maker KeyMaker, summary RunSummary) returns ChunkArray
 	var sorters = SorterArray.create()
 
-	for _ in 0 upto workers 'spawnWorkers'
+	for _ in 1 to workers 'spawnWorkers'
 		sorters.push(spawn Sorter.create(settings.clone()))
 	end 'spawnWorkers'
 
 	var replies = SortedPromiseArray.create()
-	var first = 0
+	var first = 0 as ElementIndex
 
-	for slot in 0 upto workers 'sendChunks'
+	for slot in 0 upto (workers as ElementIndex) 'sendChunks'
 		var sorter = try sorters.get(slot) otherwise panic("sortedChunks: one sorter per slot")
 		let remaining = (workers - slot) as WorkerCount
-		let share = (lines.count() - first) as WorkerCount / remaining
+		let share = (lines.count() - first) / remaining
 		let stop = first + share
 		var chunk = LineArray.create()
-		chunk.reserve(share as ElementIndex)
+		chunk.reserve(share)
 
 		for position in first upto stop 'eachLine'
 			let line = try lines.get(position) otherwise panic("sortedChunks: every position lies inside the input")
@@ -559,8 +559,8 @@ end 'rowAt'
 function mergedPair(left RowArray, right RowArray, compare RowComparator) returns RowArray
 	var merged = RowArray.create()
 	merged.reserve(left.count() + right.count())
-	var nextLeft = 0
-	var nextRight = 0
+	var nextLeft = 0 as LineCount
+	var nextRight = 0 as LineCount
 
 	while nextLeft < left.count() or nextRight < right.count() 'eachRow'
 		if nextRight == right.count() 'onlyLeftIsLeft'
@@ -590,7 +590,7 @@ function mergeChunks(chunks ChunkArray, compare RowComparator) returns RowArray
 
 	while round.count() > 1 'eachRound'
 		var joined = ChunkArray.create()
-		var slot = 0
+		var slot = 0 as ChunkPosition
 
 		while slot < round.count() 'eachPair'
 			let left = chunkAt(round, position: slot)

@@ -53,7 +53,7 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 		let numElements = initKeys.length()
 
 		// Calculate capacity: at least 16, or next power of 2 above numElements * 2
-		var cap = 16
+		var cap = 16 as TableCapacity
 
 		while cap < numElements * 2 'calc_cap'
 			cap = cap * 2
@@ -256,18 +256,12 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 		let mask = (capacity - 1) as TableSlotIndex
 		var index = (spreadHash(hash) and (mask as HashValue)) as TableSlotIndex
 
-		// ⚠ A LOCAL SENTINEL, and it must STAY a plain untyped local. `-1` means "no tombstone seen
-		// yet", so this binding legitimately holds a negative and its `>= 0` / `< 0` tests must read
-		// SIGNED. Annotating it `TableSlotIndex` is a COMPILE ERROR:
-		// that alias is non-negative, so the `-1` initializer is an out-of-range constant (E3005).
-		// Neither `return` below hands this binding back un-tested — each sits inside a `>= 0` test,
-		// so the value crossing the narrowed return door is always a real slot. `Set.maxon` carries
-		// the identical local for the identical reason.
-		var firstDeleted = -1
-		var probes = 0
+		var firstDeleted = 0 as TableSlotIndex
+		var sawDeleted = false
+		var probes = 0 as TableCapacity
 
 		while probes < capacity 'probe'
-			let state = try states.get(index as ElementIndex) otherwise SlotState.Empty
+			let state = try states.get(index as ElementIndex) otherwise panic("Map.findSlot: states.get OOB — index is masked into [0, capacity)")
 
 			let isEmpty = match state 'se1'
 				Empty gives true
@@ -278,13 +272,7 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 			if isEmpty 'empty_slot'
 				// Key not found — hand back the vacancy an insert should take: the first tombstone
 				// on the probe path if there was one, else this empty slot.
-				var bestIndex = index
-
-				if firstDeleted >= 0 'use_deleted'
-					bestIndex = firstDeleted
-				end 'use_deleted'
-
-				return bestIndex
+				return firstDeleted if sawDeleted else index
 			end 'empty_slot'
 
 			let isDeleted = match state 'sd1'
@@ -293,8 +281,9 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 				Occupied gives false
 			end 'sd1'
 
-			if isDeleted and firstDeleted < 0 'mark_deleted'
+			if isDeleted and not sawDeleted 'mark_deleted'
 				firstDeleted = index
+				sawDeleted = true
 			end 'mark_deleted'
 
 			let isOccupied = match state 'so1'
@@ -306,14 +295,14 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 			if isOccupied 'check_key'
 				// Skip the full key.equals() unless the cached hash matches — this
 				// is the hot-path win for string-keyed maps.
-				let slotHash = try hashes.get(index as ElementIndex) otherwise hash
+				let slotHash = try hashes.get(index as ElementIndex) otherwise panic("Map.findSlot: hashes.get OOB — the hash column is parallel to the states")
 
 				if slotHash == hash 'hash_match'
-					if let existing = try keys.get(index as ElementIndex) 'get_existing'
-						if existing == key 'found'
-							return index
-						end 'found'
-					end 'get_existing'
+					let existing = try keys.get(index as ElementIndex) otherwise panic("Map.findSlot: an occupied slot holds a key")
+
+					if existing == key 'found'
+						return index
+					end 'found'
 				end 'hash_match'
 			end 'check_key'
 
@@ -324,7 +313,7 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 
 		// All slots probed without finding the key or an empty slot. A tombstone is still a vacancy
 		// an insert can take, so it is a perfectly good answer.
-		if firstDeleted >= 0 'use_deleted_fallback'
+		if sawDeleted 'use_deleted_fallback'
 			return firstDeleted
 		end 'use_deleted_fallback'
 
@@ -400,7 +389,7 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 		// (no tombstones), so we can place each entry with a plain empty-slot
 		// probe and reuse the cached hash instead of re-calling key.hash().
 		for i in 0 upto oldCapacity 'eachOldSlot'
-			let state = try oldStates.get(i) otherwise SlotState.Empty
+			let state = try oldStates.get(i) otherwise panic("Map.rehash: oldStates.get OOB — i is below the old capacity")
 
 			let isOccupied = match state 'so1'
 				Occupied gives true
@@ -409,20 +398,11 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 			end 'so1'
 
 			if isOccupied 'occupied'
-				let key = try oldKeys.get(i) otherwise 'skip_key'
-					continue
-				end 'skip_key'
-
-				let value = try oldValues.get(i) otherwise 'skip_val'
-					continue
-				end 'skip_val'
-
-				let hash = try oldHashes.get(i) otherwise 'skip_hash'
-					continue
-				end 'skip_hash'
-
+				let key = try oldKeys.get(i) otherwise panic("Map.rehash: an occupied slot holds a key")
+				let value = try oldValues.get(i) otherwise panic("Map.rehash: an occupied slot holds a value")
+				let hash = try oldHashes.get(i) otherwise panic("Map.rehash: oldHashes.get OOB — the hash column is parallel to the states")
 				var index = (spreadHash(hash) and (mask as HashValue)) as TableSlotIndex
-				var currentState = try states.get(index as ElementIndex) otherwise SlotState.Empty
+				var currentState = try states.get(index as ElementIndex) otherwise panic("Map.rehash: states.get OOB — index is masked into [0, capacity)")
 				var isNotEmpty = match currentState 'ns1'
 					Empty gives false
 					Occupied gives true
@@ -431,7 +411,7 @@ public type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 
 				while isNotEmpty 'find_slot'
 					index = (index + 1) and mask
-					currentState = try states.get(index as ElementIndex) otherwise SlotState.Empty
+					currentState = try states.get(index as ElementIndex) otherwise panic("Map.rehash: states.get OOB — index is masked into [0, capacity)")
 					isNotEmpty = match currentState 'ns2'
 						Empty gives false
 						Occupied gives true

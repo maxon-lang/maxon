@@ -180,7 +180,7 @@ end 'main'
 
 <!-- test: async-await.void -->
 ```maxon
-var flag = 0
+var flag = 0 as ExitCode
 
 function setFlag()
 		_ = File.exists(FilePath from "noyield.txt")
@@ -333,7 +333,7 @@ end 'main'
 
 <!-- test: async-await.try-await.void -->
 ```maxon
-var flag = 0
+var flag = 0 as ExitCode
 
 enum TestError implements Error
 		failed
@@ -462,7 +462,7 @@ end 'work'
 
 function main() returns ExitCode
 		let p = async work(-1)
-		var guard = 1
+		var guard = 1 as Integer
 		if guard == 1 'sep'
 				guard = 2
 		end 'sep'
@@ -488,7 +488,7 @@ The `otherwise (e)` binding must still be typed at the thunk's `throws` type.
 ```maxon
 typealias Code = int(0 to 100)
 
-var flag = 0
+var flag = 0 as Code
 
 enum TaskError implements Error
 		timedOut
@@ -1170,7 +1170,7 @@ function main() returns ExitCode
 		arr.push(async compute(10))
 		arr.push(async compute(20))
 		arr.push(async compute(12))
-		var sum = 0
+		var sum = 0 as Integer
 		for p in arr 'each'
 				sum = sum + await p
 		end 'each'
@@ -1208,7 +1208,7 @@ function main() returns ExitCode
 		arr.push(async work(10))
 		arr.push(async work(20))
 		arr.push(async work(-1))
-		var sum = 0
+		var sum = 0 as Integer
 		for p in arr 'each'
 				sum = sum + try await p otherwise 0
 		end 'each'
@@ -1249,7 +1249,7 @@ function main() returns ExitCode
 		arr.push(async work(10))
 		arr.push(async work(20))
 		arr.push(async work(-1))
-		var sum = 0
+		var sum = 0 as Integer
 		for p in arr 'each'
 				sum = sum + try await p otherwise 0
 		end 'each'
@@ -1289,7 +1289,7 @@ function main() returns ExitCode
 				argv.push("arg{i}.b")
 				promises.push(async joinArgs("L{i}", args: argv))
 		end 'spawn'
-		var total = 0
+		var total = 0 as ExitCode
 		for p in promises 'await'
 				let s = await p
 				if not s.isEmpty() 'good'
@@ -1429,7 +1429,7 @@ to publish, so the wakeup is the whole notification.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-var flag = 0
+var flag = 0 as Integer
 
 function setFlag()
 		_ = File.exists(FilePath from "noyield.txt")
@@ -1550,7 +1550,7 @@ end 'timedPlain'
 
 function main() returns ExitCode
 		let awaitStart = Clock.nowMs()
-		var plain = 0
+		var plain = 0 as Integer
 		for _ in 0 upto 6 'plainRound'
 				let p = async timedPlain()
 				plain = plain + (await p)
@@ -1558,14 +1558,14 @@ function main() returns ExitCode
 		let awaitMs = Clock.elapsedMs(awaitStart)
 
 		let tryStart = Clock.nowMs()
-		var thrown = 0
+		var thrown = 0 as Integer
 		for _ in 0 upto 6 'tryRound'
 				let p = async timedThrowing()
 				thrown = thrown + (try await p otherwise 0)
 		end 'tryRound'
 		let tryMs = Clock.elapsedMs(tryStart)
 
-		var score = 0
+		var score = 0 as Integer
 		if awaitMs < 10000 'controlSane'
 				score = score + 1
 		end 'controlSane'
@@ -1661,7 +1661,7 @@ function main() returns ExitCode
 	var promises = DrainPromiseArray.create()
 	promises.push(async drainThunk(1))
 	promises.push(async drainThunk(2))
-	var total = 0
+	var total = 0 as Count
 	for p in promises 'each'
 		let lines = try await p otherwise 'died'
 			continue
@@ -2003,7 +2003,7 @@ end 'start'
 
 function main() returns ExitCode
 	let p = async start()
-	var total = 0
+	var total = 0 as Integer
 
 	for i in await p upto 5 'each'
 		total = total + i
@@ -2032,7 +2032,7 @@ end 'items'
 
 function main() returns ExitCode
 	let q = async items()
-	var total = 0
+	var total = 0 as Integer
 
 	for x in await q 'each'
 		total = total + x
@@ -2070,7 +2070,7 @@ end 'check'
 
 function main() returns ExitCode
 	let p = async start()
-	var total = 0
+	var total = 0 as Integer
 
 	try 'work'
 		for i in await p upto 5 'each'
@@ -2990,7 +2990,7 @@ function shout(text String) returns Integer
 end 'shout'
 
 function total(values Integers) returns Integer
-	var sum = 0
+	var sum = 0 as Integer
 
 	for v in values 'each'
 		sum = sum + v
@@ -3032,7 +3032,7 @@ type Box
 end 'Box'
 
 function total(values Integers) returns Integer
-	var sum = 0
+	var sum = 0 as Integer
 
 	for v in values 'each'
 		sum = sum + v
@@ -3075,7 +3075,7 @@ typealias Words = Array with String
 
 function measure(words Words) returns Integer
 	Scheduler.yield()
-	var total = 0
+	var total = 0 as Integer
 
 	for word in words 'each'
 		total = total + (word.byteLength() as Integer)

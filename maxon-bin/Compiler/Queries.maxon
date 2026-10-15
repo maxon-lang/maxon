@@ -863,6 +863,7 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// puts an extension's methods onto their conformers, and before `deriveInstanceNames`, because the
 	// scan's opaque-array seed interns a generic alias instance and an instance minted after the
 	// warming walk derives its name memos lazily, by the parse, which must only ever read them.
+	signatures.settleByRefConventions()
 	try foldDescriptorNeeds(project, signatures: signatures)
 	signatures.attributeHashEventsTo(HashEventSource.whole)
 
@@ -1292,7 +1293,7 @@ end 'NoServiceSpawn'
 function headerDeclaresTheArrayLiteralMarker(tokens TokenArray, headerStart ElementIndex) returns bool
 	var atAConformanceHead = false
 	var pastImplements = false
-	var parenDepth = 0
+	var parenDepth = 0 as NestingDepth
 
 	for i in headerStart upto tokens.count() 'eachHeaderToken'
 		let tok = try tokens.get(i) otherwise panic("headerDeclaresTheArrayLiteralMarker: tokens.get OOB at {i} below count {tokens.count()}")
@@ -2007,7 +2008,7 @@ export function queryAllModule(project Project, directories NamespaceDirectoryCh
 	// finish, and a front end that threw with its workers still held would leave services no exit can end.
 	var pool = FrontEndPool.create()
 
-	let merged = try queryAllModuleOn(project, pool: pool, directories: directories) otherwise (err) 'frontEndFailed'
+	var merged = try queryAllModuleOn(project, pool: pool, directories: directories) otherwise (err) 'frontEndFailed'
 		pool.close(project)
 		finishLibraryCache(project)
 		throw err
@@ -3017,6 +3018,7 @@ function resetMergeTargets(project Project, signatures ProgramSignatures)
 	project.overloadSets = OverloadSetMap.create()
 	project.pendingFnMergeChecks = PendingFnMergeCheckArray.create()
 	project.pendingFunctionTypeDoors = PendingFunctionTypeDoorArray.create()
+	project.pendingBrandRecords = PendingBrandRecordArray.create()
 	project.pendingDiscardedResults = PendingDiscardedResultArray.create()
 
 	// The two deferred name-diagnostic lists and the collision set they are suppressed by are all
@@ -3214,6 +3216,10 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		// A field default whose tokens fit none of the shapes a field takes its type from. Pinned
 		// byte-for-byte by `specs/field-defaults.md`'s refusal cases.
 		uninferrableFieldDefault(line, column) gives Diagnostic.create(ErrorCode.parserExpressionError, message: "Expected default value: a bool or string literal, 'Type.member', 'Type.member(...)', or an expression cast with 'as': 'var name = expr as Type'.", line: line, column: column, filePath: path)
+
+		varStartsFromBareNumber(line, column) gives Diagnostic.create(ErrorCode.parserExpressionError, message: "A var cannot start from a bare number: write 'var name = expr as Type'.", line: line, column: column, filePath: path)
+
+		letStartsFromUnboundedNumber(line, column) gives Diagnostic.create(ErrorCode.parserExpressionError, message: "A let cannot start from a number whose range is unknown: write 'let name = expr as Type'.", line: line, column: column, filePath: path)
 
 		// E2060, pinned byte-for-byte by `source-location-defaults`' three refusal cases. The cure it
 		// names is the feature's only legal spelling, which is why it names both keywords whichever one
@@ -3621,6 +3627,10 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 
 		// Omits the `growFilled`/`truncate` suggestions: The compiler synthesizes neither method, so naming them
 		// would send the reader to something that is not there.
+		arrayResizeZeroOutsideElement(elementType, line, column) gives Diagnostic.create(ErrorCode.semanticArrayResizeManagedElement, message: "'resize' cannot grow an array of '{elementType}': the grown slots are zero and zero is not a value of '{elementType}'. Append with 'push(value)' or 'growFilled(n, value:)'", line: line, column: column, filePath: path)
+		literalsShareNoIntegerType(negativeValue, unsignedPattern, line, column) gives Diagnostic.create(ErrorCode.typeMismatch, message: "no common integer type for {negativeValue} and {unsignedScalarText(unsignedPattern)}: cast the elements to an alias", line: line, column: column, filePath: path)
+		bufferSetLengthZeroOutsideElement(elementType, line, column) gives Diagnostic.create(ErrorCode.semanticArrayResizeManagedElement, message: "'setLength' cannot publish slots of '{elementType}': a slot nothing wrote is zero and zero is not a value of '{elementType}'", line: line, column: column, filePath: path)
+		vectorCreateZeroOutsideElement(elementType, line, column) gives Diagnostic.create(ErrorCode.semanticArrayResizeManagedElement, message: "'Vector.create' cannot publish slots of '{elementType}': every slot is zero and zero is not a value of '{elementType}'", line: line, column: column, filePath: path)
 		arrayResizeManagedElement(elementType, line, column) gives Diagnostic.create(ErrorCode.semanticArrayResizeManagedElement, message: "'resize' cannot grow an array of '{elementType}': a grown slot holds NO element — Maxon has no default constructor — so 'count()' would not agree with 'get()'. Append with 'push(value)'", line: line, column: column, filePath: path)
 
 		// ⭐ It names the REPLACEMENT, not just the refusal, because there is an exact one: the array

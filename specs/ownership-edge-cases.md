@@ -96,7 +96,7 @@ type Widget
 end 'Widget'
 
 function main() returns ExitCode
-	var result = 0
+	var result = 0 as Integer
 	if true 'inner'
 		@heap let w = Widget.create(7)
 		result = w.id
@@ -173,8 +173,8 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	var total = 0
-	var i = 0
+	var total = 0 as Integer
+	var i = 0 as Integer
 	while i < 4 'loop'
 		@heap let c = Counter.create(i)
 		total = total + c.n
@@ -201,7 +201,7 @@ type Step
 end 'Step'
 
 function main() returns ExitCode
-	var i = 0
+	var i = 0 as Integer
 	while i < 10 'loop'
 		@heap let s = Step.create(i)
 		if s.val == 3 'stop'
@@ -230,8 +230,8 @@ type Item
 end 'Item'
 
 function main() returns ExitCode
-	var total = 0
-	var i = 0
+	var total = 0 as Integer
+	var i = 0 as Integer
 	while i < 5 'loop'
 		@heap let item = Item.create(i)
 		i = i + 1
@@ -551,12 +551,12 @@ typealias EntryArray = Array with Entry
 
 function main() returns ExitCode
 	var arr = EntryArray.create()
-	var i = 0
+	var i = 0 as Integer
 	while i < 5 'push'
 		arr.push(Entry.create(i))
 		i = i + 1
 	end 'push'
-	var total = 0
+	var total = 0 as Integer
 	while arr.count() > 0 'pop'
 		let e = try arr.remove(0) otherwise 'err'
 			return 99
@@ -1045,7 +1045,7 @@ function main() returns ExitCode
 	scores.push(Score.create(10))
 	scores.push(Score.create(20))
 	scores.push(Score.create(30))
-	var total = 0
+	var total = 0 as Integer
 	for s in scores 'loop'
 		total = total + s.pts
 	end 'loop'
@@ -1305,7 +1305,7 @@ end 'main'
 A character created in an inner if-block is freed when that block exits.
 ```maxon
 function main() returns ExitCode
-	var result = 0
+	var result = 0 as Count
 	if true 'inner'
 		let c = 'Q'
 		result = c.byteLength()
@@ -1346,7 +1346,7 @@ end 'main'
 Reassigning a tuple var decrefs the old tuple before storing the new one.
 ```maxon
 function main() returns ExitCode
-	var t = (1, 2)
+	var t = (1 as FullRangeInt, 2 as FullRangeInt)
 	t = (3, 4)
 	return t.0 + t.1
 end 'main'
@@ -1781,7 +1781,7 @@ Repeatedly appending strings in a loop must not leak memory. Each append grows t
 function main() returns ExitCode
 	var s = ""
 	let a = "x"
-	var i = 0
+	var i = 0 as Count
 	while i < 5 'loop'
 		s.append(a)
 		i = i + 1
@@ -1961,12 +1961,12 @@ typealias ItemArray = Array with Item
 var globalArr = ItemArray.create()
 
 function main() returns ExitCode
-	var i = 0
+	var i = 0 as Integer
 	while i < 10 'push'
 		globalArr.push(Item.create(i))
 		i = i + 1
 	end 'push'
-	var total = 0
+	var total = 0 as Integer
 	while globalArr.count() > 0 'remove'
 		let elem = try globalArr.remove(0) otherwise 'err'
 			return 99
@@ -2137,7 +2137,7 @@ end 'main'
 <!-- test: rc-top-level-array-literal-no-leak -->
 A module-level array literal must not leak. The array and its element storage must be freed during global cleanup.
 ```maxon
-var items = [10, 20, 30]
+var items = FullRangeIntArray from [10, 20, 30]
 
 function main() returns ExitCode
 	let a = try items.get(0) otherwise 0
@@ -2154,11 +2154,11 @@ end 'main'
 Array.append must not leak. Appending one array to another must properly manage the element storage and not leak the source array's data.
 ```maxon
 function main() returns ExitCode
-	var a = [1, 2, 3]
+	var a = FullRangeIntArray from [1, 2, 3]
 	let b = [4, 5, 6]
 	a.append(b)
-	var sum = 0
-	var i = 0
+	var sum = 0 as FullRangeInt
+	var i = 0 as Count
 	while i < a.count() 'loop'
 		sum = sum + (try a.get(i) otherwise 0)
 		i = i + 1
@@ -2270,7 +2270,7 @@ function tagCode(project N, useNamed bool) returns N
 end 'tagCode'
 
 function main() returns ExitCode
-	var sum = 0
+	var sum = 0 as N
 	sum = sum + tagCode(3, useNamed: false)
 	sum = sum + tagCode(5, useNamed: true)
 	sum = sum + tagCode(7, useNamed: false)
@@ -2312,7 +2312,7 @@ end 'OpBuffer'
 function rewrap(buf OpBuffer) returns Integer
 	let old = buf.ops
 	buf.ops = IntList.create()
-	var total = 0
+	var total = 0 as Integer
 	for x in old 'each'
 		total = total + x
 	end 'each'
@@ -2651,7 +2651,7 @@ end 'Cell'
 
 function main() returns ExitCode
 	var a = Cell.create(10)
-	var result = 0
+	var result = 0 as Integer
 	if true 'inner'
 		let b = a
 		a = Cell.create(20)
@@ -2811,11 +2811,11 @@ type Pair
 end 'Pair'
 
 function main() returns ExitCode
-	var result = 0
-	var i = 0
+	var result = 0 as Integer
+	var i = 0 as Integer
 	while i < 3 'outer'
 		let p = Pair.create(i, b: i * 10)
-		var j = 0
+		var j = 0 as Integer
 		while j < 3 'inner'
 			let q = Pair.create(j, b: j * 10)
 			if p.a == 1 'check'
@@ -2851,7 +2851,7 @@ end 'Item'
 
 function main() returns ExitCode
 	let items = [10, 20, 30, 40, 50]
-	var result = 0
+	var result = 0 as Integer
 
 	for item in items 'search'
 		let wrapped = Item.create(item)
@@ -2974,7 +2974,7 @@ end 'check'
 
 function scan(limit Integer, stopAt Integer) returns Integer throws ScanError
 	let header = "scan {limit}"
-	var total = 0
+	var total = 0 as Integer
 
 	for i in 0 upto limit 'each'
 		let row = "{header}/{i}"

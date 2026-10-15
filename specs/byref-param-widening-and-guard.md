@@ -70,7 +70,7 @@ end 'swap'
 function main() returns ExitCode
 	var owned = Node.create(5)
 	let bumped = swap(owned)
-	var nums = [3, 1, 2]
+	var nums = [3 as Integer, 1, 2]
 	nums.sort()
 	return bumped + (try nums.get(0) otherwise 0)
 end 'main'
@@ -145,7 +145,7 @@ end 'Runner'
 
 function main() returns ExitCode
 	var r = Runner.create()
-	var start = 7
+	var start = 7 as Integer
 	return r.outer(start)
 end 'main'
 ```
@@ -165,7 +165,7 @@ function bump(n Int) returns Int
 end 'bump'
 
 function main() returns ExitCode
-	var v = 5
+	var v = 5 as Int
 	return bump(v)
 end 'main'
 ```
@@ -186,7 +186,7 @@ function bump(n Wide) returns Wide
 end 'bump'
 
 function main() returns ExitCode
-	var v = 5
+	var v = 5 as Wide
 	return bump(v)
 end 'main'
 ```
@@ -194,20 +194,22 @@ end 'main'
 99
 ```
 
-<!-- test: out-of-range-argument-to-a-byref-param-still-panics -->
-Reading the pointee is not the same as not reading anything: a runtime-computed 2000 handed to a
-`Small` by-reference parameter is still refused, at the parameter's own declaration line.
+<!-- test: out-of-range-write-through-a-byref-param-still-panics -->
+Reading the pointee is not the same as not reading anything, and writing through it is a door like any other:
+`bump` doubles the `Small` it was handed by reference, and the sum of two in-range values is refused where it is
+written, on the line of the write. Every door into a `Small` `var` checks what it stores, and a slot nothing wrote
+cannot be made over a `Small`: `resize`, `setLength` and `Vector.create` over an element whose range excludes zero
+are **E3106**. So no out-of-range value can arrive at the parameter itself.
 ```maxon
-typealias Small = int(0 to 100)
+typealias Small = int(1 to 100)
 
 function bump(n Small) returns Small
-	n = 7
+	n = n + n
 	return n
 end 'bump'
 
 function main() returns ExitCode
-	var v = 40
-	v = v * 50
+	var v = 60 as Small
 	return bump(v)
 end 'main'
 ```
@@ -215,7 +217,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at out-of-range-argument-to-a-byref-param-still-panics.test:4: Range check failed: value outside typealias 'Small'
+panic at out-of-range-write-through-a-byref-param-still-panics.test:5: Range check failed: value outside typealias 'Small'
 Stack trace:
   in bump
   in main
@@ -253,7 +255,7 @@ function scale(r Ratio) returns Ratio
 end 'scale'
 
 function main() returns ExitCode
-	var v = 3.0
+	var v = 3.0 as Ratio
 	let doubled = scale(v)
 	if doubled == 6.0 'exact'
 		return 6

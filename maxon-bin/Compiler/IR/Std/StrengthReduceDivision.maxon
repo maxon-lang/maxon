@@ -94,7 +94,7 @@ let TwoToThe63 = 9223372036854775808 as DivisionWord
 let MaxMagicRefinements = 64
 
 // The modulus `divideTwoToThe63` divides by. ⭐ **THE RANGE IS THE PRECONDITION, DECLARED RATHER THAN
-// CHECKED BY HAND**: `2^63 / m` needs `m` non-zero, and a `ParsedInt` parameter would make that divide
+// CHECKED BY HAND**: `2^63 / m` needs `m` non-zero, and a `FullRangeInt` parameter would make that divide
 // FALLIBLE (E3103's runtime twin — `Parser.emitDivOrMod` requires a `try` for a possibly-zero divisor).
 // Declaring the narrower type makes the divide total, and the cast at each call site is where the
 // caller's own proof is checked — at compile time where the compiler can see it, and by a range guard
@@ -164,7 +164,7 @@ module type DivisionReduction
 	export var shift as ShiftCount
 
 	// `magicMultiply` only: the multiplier, read as a SIGNED 64-bit number.
-	export var magic as ParsedInt
+	export var magic as FullRangeInt
 
 	// `magicMultiply` only: whether the magic's true (unsigned) value was at least `2^63`, i.e. whether
 	// the signed `magic` above came out negative. The sequence then adds the dividend back — see
@@ -200,7 +200,7 @@ module type DivisionReduction
 		self.addIndicator = false
 	end 'recordPowerOfTwo'
 
-	function recordMagic(magnitude MachineWord, multiplier ParsedInt, postShift ShiftCount, negate bool, unsigned bool, carriesImplicitBit bool)
+	function recordMagic(magnitude MachineWord, multiplier FullRangeInt, postShift ShiftCount, negate bool, unsigned bool, carriesImplicitBit bool)
 		self.kind = DivisionReductionKind.magicMultiply
 		self.divisorMagnitude = magnitude
 		self.magic = multiplier
@@ -230,7 +230,7 @@ end 'DivisionReduction'
 // The `(multiplier, postShift)` pair either derivation answers with. Caller-owned and refilled, for
 // `DivisionReduction`'s reason.
 module type DivisionMagic
-	export var multiplier as ParsedInt
+	export var multiplier as FullRangeInt
 	export var postShift as ShiftCount
 	export var addIndicator as bool
 
@@ -309,7 +309,7 @@ function deriveSignedMagic(divisor DivisionWord, out DivisionMagic)
 
 	var ancRatio = divideTwoToThe63(anc as PositiveModulus)
 
-	var p = SignBitIndex
+	var p = SignBitIndex as FullRangeInt
 
 	for _ in 0 upto MaxMagicRefinements 'refine'
 		p = p + 1
@@ -329,7 +329,7 @@ function deriveSignedMagic(divisor DivisionWord, out DivisionMagic)
 		let keepRefining = ancRatio.quotient < delta or (ancRatio.quotient == delta and ancRatio.remainder == 0)
 
 		if not keepRefining 'converged'
-			out.multiplier = ((divisorRatio.quotient + 1) as MachineWord) as ParsedInt
+			out.multiplier = (divisorRatio.quotient + 1) as FullRangeInt
 			out.postShift = (p - ReducedWordBits) as ShiftCount
 			return
 		end 'converged'
@@ -365,19 +365,19 @@ function deriveUnsignedMagic(divisor DivisionWord, out DivisionMagic)
 	let roundUpBound = (1 as DivisionWord) shl (scale as DivisionWord)
 
 	if divisor - ratio.remainder < roundUpBound 'roundUpFitsSixtyFourBits'
-		out.multiplier = ((ratio.quotient + 1) as MachineWord) as ParsedInt
+		out.multiplier = (ratio.quotient + 1) as FullRangeInt
 		out.addIndicator = false
 		return
 	end 'roundUpFitsSixtyFourBits'
 
 	ratio.raiseByOneBit(divisor)
-	out.multiplier = ((ratio.quotient + 1) as MachineWord) as ParsedInt
+	out.multiplier = (ratio.quotient + 1) as FullRangeInt
 	out.addIndicator = true
 end 'deriveUnsignedMagic'
 
 // `floor(2^63 / m)` and `2^63 mod m`.
 //
-// ⚠ `m` is a `PositiveModulus` rather than a `ParsedInt`, which is what makes the two divides below
+// ⚠ `m` is a `PositiveModulus` rather than a `FullRangeInt`, which is what makes the two divides below
 // TOTAL — see that typealias. Both call sites pass a magnitude the classifier has already proven to be
 // at least 2, or an `anc` derived from one.
 function divideTwoToThe63(m PositiveModulus) returns FixedPointRatio
@@ -387,7 +387,7 @@ end 'divideTwoToThe63'
 // ⭐ **THE ONE ADMISSION RULE — what one `div`/`mod` site reduces to, written into `out`.** Every
 // refusal in this file's header is decided here and nowhere else, so the emitters below may assume
 // `divisorMagnitude >= 2` unconditionally.
-function classifyDivision(divisor ParsedInt, signedness IntegerSignedness, isRemainder bool, magic DivisionMagic, out DivisionReduction)
+function classifyDivision(divisor FullRangeInt, signedness IntegerSignedness, isRemainder bool, magic DivisionMagic, out DivisionReduction)
 	out.recordNotReducible()
 
 	let unsigned = signedness == IntegerSignedness.unsigned
@@ -830,7 +830,7 @@ end 'emitReducedQuotient'
 // reduced remainder there is (`x mod 2` in a halving loop).
 function emitReducedRemainder(module StdModule, resultId ValueId, dividend ValueId, reduction DivisionReduction, mint ValueMinter, rebuilt OpIndexArray)
 	if reduction.isUnsigned and reduction.kind == DivisionReductionKind.powerOfTwo 'lowBitsMask'
-		let mask = emitReducedConst(module, value: (reduction.divisorMagnitude - 1) as ParsedInt, mint: mint, rebuilt: rebuilt)
+		let mask = emitReducedConst(module, value: (reduction.divisorMagnitude - 1) as FullRangeInt, mint: mint, rebuilt: rebuilt)
 		rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(resultId, lhs: dividend, rhs: mask, opcode: StdBinOpcode.bitAnd, operandType: ReducedOperandType)))
 		return
 	end 'lowBitsMask'
@@ -838,7 +838,7 @@ function emitReducedRemainder(module StdModule, resultId ValueId, dividend Value
 	let quotient = mint.mint()
 	emitReducedQuotient(module, resultId: quotient, dividend: dividend, reduction: reduction, mint: mint, rebuilt: rebuilt)
 
-	let divisorValue = emitReducedConst(module, value: reduction.divisorMagnitude as ParsedInt, mint: mint, rebuilt: rebuilt)
+	let divisorValue = emitReducedConst(module, value: reduction.divisorMagnitude as FullRangeInt, mint: mint, rebuilt: rebuilt)
 	let product = mint.mint()
 	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(product, lhs: quotient, rhs: divisorValue, opcode: StdBinOpcode.mul, operandType: ReducedOperandType)))
 	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(resultId, lhs: dividend, rhs: product, opcode: StdBinOpcode.sub, operandType: ReducedOperandType)))
@@ -859,7 +859,7 @@ end 'emitReducedRemainder'
 // replaces.
 function emitPowerOfTwoQuotient(module StdModule, resultId ValueId, dividend ValueId, reduction DivisionReduction, mint ValueMinter, rebuilt OpIndexArray)
 	if reduction.isUnsigned 'logicalShift'
-		let count = emitReducedConst(module, value: reduction.shift as ParsedInt, mint: mint, rebuilt: rebuilt)
+		let count = emitReducedConst(module, value: reduction.shift as FullRangeInt, mint: mint, rebuilt: rebuilt)
 		rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(resultId, lhs: dividend, rhs: count, opcode: StdBinOpcode.shrLogical, operandType: ReducedOperandType)))
 		return
 	end 'logicalShift'
@@ -869,18 +869,18 @@ function emitPowerOfTwoQuotient(module StdModule, resultId ValueId, dividend Val
 	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(signBroadcast, lhs: dividend, rhs: signBitCount, opcode: StdBinOpcode.shr, operandType: ReducedOperandType)))
 
 	let bias = mint.mint()
-	let biasCount = emitReducedConst(module, value: ((ReducedWordBits - reduction.shift) as ParsedInt), mint: mint, rebuilt: rebuilt)
+	let biasCount = emitReducedConst(module, value: ((ReducedWordBits - reduction.shift) as FullRangeInt), mint: mint, rebuilt: rebuilt)
 	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(bias, lhs: signBroadcast, rhs: biasCount, opcode: StdBinOpcode.shrLogical, operandType: ReducedOperandType)))
 
 	let biased = mint.mint()
 	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(biased, lhs: dividend, rhs: bias, opcode: StdBinOpcode.add, operandType: ReducedOperandType)))
 
-	let quotientCount = emitReducedConst(module, value: reduction.shift as ParsedInt, mint: mint, rebuilt: rebuilt)
+	let quotientCount = emitReducedConst(module, value: reduction.shift as FullRangeInt, mint: mint, rebuilt: rebuilt)
 	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(resultId, lhs: biased, rhs: quotientCount, opcode: StdBinOpcode.shr, operandType: ReducedOperandType)))
 end 'emitPowerOfTwoQuotient'
 
 function emitComparisonBitQuotient(module StdModule, resultId ValueId, dividend ValueId, reduction DivisionReduction, mint ValueMinter, rebuilt OpIndexArray)
-	let divisorValue = emitReducedConst(module, value: reduction.divisorMagnitude as ParsedInt, mint: mint, rebuilt: rebuilt)
+	let divisorValue = emitReducedConst(module, value: reduction.divisorMagnitude as FullRangeInt, mint: mint, rebuilt: rebuilt)
 
 	let difference = mint.mint()
 	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(difference, lhs: dividend, rhs: divisorValue, opcode: StdBinOpcode.sub, operandType: ReducedOperandType)))
@@ -950,7 +950,7 @@ function emitUnsignedMagicTail(module StdModule, resultId ValueId, dividend Valu
 		scaled = recombined
 	end 'restoreTheImplicitBit'
 
-	let scaleCount = emitReducedConst(module, value: reduction.shift as ParsedInt, mint: mint, rebuilt: rebuilt)
+	let scaleCount = emitReducedConst(module, value: reduction.shift as FullRangeInt, mint: mint, rebuilt: rebuilt)
 	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(resultId, lhs: scaled, rhs: scaleCount, opcode: StdBinOpcode.shrLogical, operandType: ReducedOperandType)))
 end 'emitUnsignedMagicTail'
 
@@ -974,7 +974,7 @@ function emitSignedMagicTail(module StdModule, resultId ValueId, dividend ValueI
 
 	if reduction.shift > 0 'scaleDown'
 		let shifted = mint.mint()
-		let scaleCount = emitReducedConst(module, value: reduction.shift as ParsedInt, mint: mint, rebuilt: rebuilt)
+		let scaleCount = emitReducedConst(module, value: reduction.shift as FullRangeInt, mint: mint, rebuilt: rebuilt)
 		rebuilt.push(appendReducedSequenceOp(module, op: StdOp.binOp(shifted, lhs: high, rhs: scaleCount, opcode: StdBinOpcode.shr, operandType: ReducedOperandType)))
 		high = shifted
 	end 'scaleDown'
@@ -993,7 +993,7 @@ end 'emitSignedMagicTail'
 // hold, and the multiply-back wants `|K|` where the op holds `K`. `foldConstOperands` then folds each
 // of them INTO the op that reads it, so none survives as an instruction unless its value is too wide
 // for the immediate field — which for the 64-bit magic is always, and for every shift count never.
-function emitReducedConst(module StdModule, value ParsedInt, mint ValueMinter, rebuilt OpIndexArray) returns ValueId
+function emitReducedConst(module StdModule, value FullRangeInt, mint ValueMinter, rebuilt OpIndexArray) returns ValueId
 	let id = mint.mint()
 	rebuilt.push(appendReducedSequenceOp(module, op: StdOp.const(id, value: value, valueType: ReducedOperandType)))
 	return id

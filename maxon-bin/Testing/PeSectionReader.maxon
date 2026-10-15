@@ -306,7 +306,7 @@ end 'findByteRun'
 function byteRunMatchesAt(haystack ByteArray, needle ByteArray, start ByteOffset) returns bool
 	for i in 0 upto needle.count() 'eachByte'
 		let want = try needle.get(i) otherwise panic("byteRunMatchesAt: needle.get OOB at {i} despite the upto bound")
-		let got = try haystack.get((start + i) as ElementIndex) otherwise panic("byteRunMatchesAt: haystack.get OOB at {start + i} — the caller's bound keeps the window inside the section")
+		let got = try haystack.get(start + i) otherwise panic("byteRunMatchesAt: haystack.get OOB at {start + i} — the caller's bound keeps the window inside the section")
 
 		if want != got 'differs'
 			return false
@@ -378,7 +378,7 @@ function utf8PinBytes(valueText String) returns ByteArray throws TypedValueError
 	var i = 1 as ByteOffset
 
 	while i < bodyEnd as ByteOffset 'eachByte'
-		let ch = try raw.get(i as ElementIndex) otherwise panic("utf8PinBytes: i < bodyEnd just held but get({i}) failed")
+		let ch = try raw.get(i) otherwise panic("utf8PinBytes: i < bodyEnd just held but get({i}) failed")
 
 		if ch != PinBackslash 'aPlainByte'
 			out.push(ch)
@@ -482,7 +482,7 @@ let NulByte = 0 as Byte
 // ⚠ **AN ACCEPTED, STATED RISK: `float.fromString` SEGFAULTS ON arm64-macOS** while
 // answering correctly on every other lane. arm64 is a remote, opt-in, never-blocking lane, so this does
 // not gate the suite — but the `RequiredData` gate inherits that defect on that host, knowingly.
-function parseTypedValueBits(typeName String, text String) returns ParsedInt throws TypedValueError
+function parseTypedValueBits(typeName String, text String) returns FullRangeInt throws TypedValueError
 	if typeName == F64TypeName 'float'
 		let value = try float.fromString(text) otherwise throw TypedValueError.badNumber(typeName, text: text)
 		return bitsOfFloat(value)
@@ -555,7 +555,7 @@ function typedValueByteCount(typeName String) returns BytePos throws TypedValueE
 	throw TypedValueError.unknownType(typeName)
 end 'typedValueByteCount'
 
-function appendLittleEndian(out ByteArray, value ParsedInt, byteCount BytePos)
+function appendLittleEndian(out ByteArray, value FullRangeInt, byteCount BytePos)
 	// The value is SIGNED and the shift-and-mask is defined on the unsigned word, so it crosses
 	// once, explicitly, here — the same cast `GlobalDataTable.appendScalar` makes for the same
 	// reason, in the code this gate exists to check independently.

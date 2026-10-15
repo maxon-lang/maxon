@@ -126,8 +126,8 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let list = List from [10, 20, 30]
-	let f = try list.first() otherwise 0
-	let l = try list.last() otherwise 0
+	let f = (try list.first() otherwise 0) as FullRangeInt
+	let l = (try list.last() otherwise 0) as FullRangeInt
 	print("{f}\n")
 	print("{l}\n")
 	return 0
@@ -261,10 +261,10 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let list = List from [10, 20, 30, 40]
-	let v0 = try list.get(0) otherwise 0
-	let v1 = try list.get(1) otherwise 0
-	let v2 = try list.get(2) otherwise 0
-	let v3 = try list.get(3) otherwise 0
+	let v0 = (try list.get(0) otherwise 0) as FullRangeInt
+	let v1 = (try list.get(1) otherwise 0) as FullRangeInt
+	let v2 = (try list.get(2) otherwise 0) as FullRangeInt
+	let v3 = (try list.get(3) otherwise 0) as FullRangeInt
 	print("{v0}\n")
 	print("{v1}\n")
 	print("{v2}\n")
@@ -286,8 +286,8 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let list = List from [10, 20, 30]
-	let v = try list.get(5) otherwise 99
-	return v
+	let v = (try list.get(5) otherwise 99) as FullRangeInt
+	return v as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -301,9 +301,9 @@ function main() returns ExitCode
 	try list.insert(0, value: 10) otherwise 'err'
 		return 1
 	end 'err'
-	let v0 = try list.get(0) otherwise 0
-	let v1 = try list.get(1) otherwise 0
-	let v2 = try list.get(2) otherwise 0
+	let v0 = (try list.get(0) otherwise 0) as FullRangeInt
+	let v1 = (try list.get(1) otherwise 0) as FullRangeInt
+	let v2 = (try list.get(2) otherwise 0) as FullRangeInt
 	print("{v0}\n")
 	print("{v1}\n")
 	print("{v2}\n")
@@ -326,9 +326,9 @@ function main() returns ExitCode
 	try list.insert(1, value: 20) otherwise 'err'
 		return 1
 	end 'err'
-	let v0 = try list.get(0) otherwise 0
-	let v1 = try list.get(1) otherwise 0
-	let v2 = try list.get(2) otherwise 0
+	let v0 = (try list.get(0) otherwise 0) as FullRangeInt
+	let v1 = (try list.get(1) otherwise 0) as FullRangeInt
+	let v2 = (try list.get(2) otherwise 0) as FullRangeInt
 	print("{v0}\n")
 	print("{v1}\n")
 	print("{v2}\n")
@@ -351,9 +351,9 @@ function main() returns ExitCode
 	try list.insert(2, value: 30) otherwise 'err'
 		return 1
 	end 'err'
-	let v0 = try list.get(0) otherwise 0
-	let v1 = try list.get(1) otherwise 0
-	let v2 = try list.get(2) otherwise 0
+	let v0 = (try list.get(0) otherwise 0) as FullRangeInt
+	let v1 = (try list.get(1) otherwise 0) as FullRangeInt
+	let v2 = (try list.get(2) otherwise 0) as FullRangeInt
 	print("{v0}\n")
 	print("{v1}\n")
 	print("{v2}\n")
@@ -399,10 +399,10 @@ threw
 ```maxon
 function main() returns ExitCode
 	var list = List from [10, 20, 30]
-	let removed = try list.removeFirst() otherwise 0
+	let removed = (try list.removeFirst() otherwise 0) as FullRangeInt
 	print("{removed}\n")
 	print("{list.count()}\n")
-	let f = try list.first() otherwise 0
+	let f = (try list.first() otherwise 0) as FullRangeInt
 	print("{f}\n")
 	return 0
 end 'main'
@@ -420,10 +420,10 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	var list = List from [10, 20, 30]
-	let removed = try list.removeLast() otherwise 0
+	let removed = (try list.removeLast() otherwise 0) as FullRangeInt
 	print("{removed}\n")
 	print("{list.count()}\n")
-	let l = try list.last() otherwise 0
+	let l = (try list.last() otherwise 0) as FullRangeInt
 	print("{l}\n")
 	return 0
 end 'main'
@@ -441,12 +441,12 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	var list = List from [10, 20, 30, 40]
-	let removed = try list.remove(1) otherwise 0
+	let removed = (try list.remove(1) otherwise 0) as FullRangeInt
 	print("{removed}\n")
 	print("{list.count()}\n")
-	let v0 = try list.get(0) otherwise 0
-	let v1 = try list.get(1) otherwise 0
-	let v2 = try list.get(2) otherwise 0
+	let v0 = (try list.get(0) otherwise 0) as FullRangeInt
+	let v1 = (try list.get(1) otherwise 0) as FullRangeInt
+	let v2 = (try list.get(2) otherwise 0) as FullRangeInt
 	print("{v0}\n")
 	print("{v1}\n")
 	print("{v2}\n")
@@ -493,7 +493,7 @@ function main() returns ExitCode
 	for i in 1 to 100 'build'
 		list.append(i)
 	end 'build'
-	var sum = 0
+	var sum = 0 as Integer
 	for item in list 'loop'
 		sum = sum + item
 	end 'loop'
@@ -508,11 +508,11 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let list = List from [1, 2, 3]
-	var sum1 = 0
+	var sum1 = 0 as FullRangeInt
 	for item in list 'loop1'
 		sum1 = sum1 + item
 	end 'loop1'
-	var sum2 = 0
+	var sum2 = 0 as FullRangeInt
 	for item in list 'loop2'
 		sum2 = sum2 + item
 	end 'loop2'
@@ -792,10 +792,10 @@ typealias N = int(0 to u64.max)
 typealias NList = List with N
 
 function walkSum(list NList, n N) returns N
-	var sum = 0
-	var i = 0
+	var sum = 0 as N
+	var i = 0 as N
 	while i < n 'loop'
-		let v = try list.get(i) otherwise panic("oob")
+		let v = try list.get(i as ElementIndex) otherwise panic("oob")
 		sum = sum + v
 		i = i + 1
 	end 'loop'
@@ -804,7 +804,7 @@ end 'walkSum'
 
 function main() returns ExitCode
 	var list = NList.create()
-	var k = 0
+	var k = 0 as N
 	while k < 12 'build'
 		list.append(k * 10)
 		k = k + 1

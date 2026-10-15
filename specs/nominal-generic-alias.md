@@ -51,7 +51,7 @@ typealias Xs = Array with Integer
 typealias Ys = Array with Integer
 
 function sumYs(ys Ys) returns Integer
-	var t = 0
+	var t = 0 as Integer
 	for y in ys 'each'
 		t = t + y
 	end 'each'
@@ -138,6 +138,708 @@ end 'main'
 ```
 ```maxoncstderr
 error E3005: <fragment>:11:2: cannot assign a value of type 'Xs' to variable 'ys', which holds 'Ys'
+```
+
+<!-- test: error.an-unbranded-var-adopts-the-brand-of-its-first-branded-store -->
+A `var` initialized from a literal carries no brand until the first branded value is stored into it; from that store it is a variable of that brand for its whole life, and a store of another brand is refused.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Xs = Array with Integer
+typealias Ys = Array with Integer
+
+function main() returns ExitCode
+	var xs = Xs.create()
+	xs.push(1)
+	var ys = Ys.create()
+	ys.push(2)
+	var a = [3 as Integer]
+	a = xs
+	a = ys
+	print("{a.count()}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:13:2: cannot assign a value of type 'Ys' to variable 'a', which holds 'Xs'
+```
+
+<!-- test: an-unbranded-var-that-adopted-a-brand-reaches-that-brands-parameter -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Xs = Array with Integer
+
+function sumXs(xs Xs) returns Integer
+	var t = 0 as Integer
+
+	for x in xs 'each'
+		t = t + x
+	end 'each'
+
+	return t
+end 'sumXs'
+
+function main() returns ExitCode
+	var xs = Xs.create()
+	xs.push(4)
+	var a = [3 as Integer]
+	a = xs
+	print("{sumXs(a)}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4
+```
+
+<!-- test: error.an-adopted-brand-is-the-brand-every-later-read-has -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Xs = Array with Integer
+typealias Ys = Array with Integer
+
+function sumYs(ys Ys) returns Integer
+	var t = 0 as Integer
+
+	for y in ys 'each'
+		t = t + y
+	end 'each'
+
+	return t
+end 'sumYs'
+
+function main() returns ExitCode
+	var xs = Xs.create()
+	xs.push(4)
+	var a = [3 as Integer]
+	a = xs
+	print("{sumYs(a)}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:21:10: argument type mismatch for 'ys': expected 'Ys', got 'Xs'
+```
+
+<!-- test: error.a-cell-resident-var-adopts-its-first-branded-store -->
+A variable a callee writes through lives in a cell, and the cell is as branded as the variable.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Xs = Array with Integer
+typealias Ys = Array with Integer
+
+function reset(target Xs)
+	target = Xs.create()
+end 'reset'
+
+function main() returns ExitCode
+	var xs = Xs.create()
+	xs.push(1)
+	var ys = Ys.create()
+	ys.push(2)
+	var a = [3 as Integer]
+	a = xs
+	reset(a)
+	a = ys
+	print("{a.count()}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:18:2: cannot assign a value of type 'Ys' to variable 'a', which holds 'Xs'
+```
+
+<!-- test: error.branches-storing-different-brands-are-refused-at-the-second -->
+The first branded store in source order fixes the brand, whichever branch it sits in.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Xs = Array with Integer
+typealias Ys = Array with Integer
+
+function main() returns ExitCode
+	let k = 3 as Integer
+	var xs = Xs.create()
+	xs.push(1)
+	var ys = Ys.create()
+	ys.push(2)
+	var a = [3 as Integer]
+
+	if k > 2 'first'
+		a = xs
+	end 'first' else 'second'
+		a = ys
+	end 'second'
+
+	print("{a.count()}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:17:3: cannot assign a value of type 'Ys' to variable 'a', which holds 'Xs'
+```
+
+<!-- test: error.an-unbranded-global-adopts-the-brand-of-its-first-branded-store -->
+A module `var` initialized from a literal carries no brand until the first branded value is stored into it; a store of another brand is refused.
+```maxon
+typealias Xs = Array with String
+typealias Ys = Array with String
+
+var shared = ["a"]
+
+function main() returns ExitCode
+	shared = Xs.create()
+	shared = Ys.create()
+	print("{shared.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:9:2: cannot assign a value of type 'Ys' to global 'shared', which holds 'Xs'
+```
+
+<!-- test: error.two-files-storing-different-brands-into-one-global-are-judged-in-file-order -->
+The first store in the program's canonical file order fixes the brand, so the store in the later file is the one refused.
+```maxon
+// --- file: a.maxon
+export function storeFirst()
+	shared = Xs.create()
+end 'storeFirst'
+
+// --- file: b.maxon
+export function storeSecond()
+	shared = Ys.create()
+end 'storeSecond'
+
+// --- file: main.maxon
+export typealias Xs = Array with String
+export typealias Ys = Array with String
+export var shared = ["a"]
+
+function main() returns ExitCode
+	storeFirst()
+	storeSecond()
+	print("{shared.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:9:2: cannot assign a value of type 'Ys' to global 'shared', which holds 'Xs'
+```
+
+<!-- test: error.two-files-storing-different-brands-into-one-global-are-judged-in-file-order-either-way -->
+Naming the files the other way round moves the refusal to the other store: the order is the files', not the order they were parsed in.
+```maxon
+// --- file: a.maxon
+export function storeSecond()
+	shared = Ys.create()
+end 'storeSecond'
+
+// --- file: b.maxon
+export function storeFirst()
+	shared = Xs.create()
+end 'storeFirst'
+
+// --- file: main.maxon
+export typealias Xs = Array with String
+export typealias Ys = Array with String
+export var shared = ["a"]
+
+function main() returns ExitCode
+	storeFirst()
+	storeSecond()
+	print("{shared.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:9:2: cannot assign a value of type 'Xs' to global 'shared', which holds 'Ys'
+```
+
+<!-- test: error.a-read-of-an-adopted-global-reaches-only-its-own-brands-parameter -->
+```maxon
+typealias Xs = Array with String
+typealias Ys = Array with String
+
+var shared = ["a"]
+
+function takeXs(xs Xs)
+	print("{xs.count()}\n")
+end 'takeXs'
+
+function takeYs(ys Ys)
+	print("{ys.count()}\n")
+end 'takeYs'
+
+function main() returns ExitCode
+	shared = Xs.create()
+	takeXs(shared)
+	takeYs(shared)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:18:2: argument type mismatch for 'ys': expected 'Ys', got 'Xs'
+```
+
+<!-- test: an-adopted-global-reaches-its-own-brands-parameter -->
+```maxon
+typealias Xs = Array with String
+
+var shared = ["a"]
+
+function takeXs(xs Xs)
+	print("{xs.count()}\n")
+end 'takeXs'
+
+function main() returns ExitCode
+	shared = Xs.create()
+	takeXs(shared)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0
+```
+
+<!-- test: error.a-read-of-a-global-before-its-first-store-sees-the-adopted-brand -->
+The brand is the variable's for its whole life, so a read in a function that runs before the adopting store is judged against it too.
+```maxon
+typealias Xs = Array with String
+typealias Ys = Array with String
+
+var shared = ["a"]
+
+function takeYs(ys Ys)
+	print("{ys.count()}\n")
+end 'takeYs'
+
+function early()
+	takeYs(shared)
+end 'early'
+
+function main() returns ExitCode
+	early()
+	shared = Xs.create()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:12:2: argument type mismatch for 'ys': expected 'Ys', got 'Xs'
+```
+
+<!-- test: error.a-read-of-an-adopted-global-into-another-brands-local-is-refused -->
+A read of the adopted global is a value of its brand wherever it lands, so a local of the other brand refuses it.
+```maxon
+typealias Xs = Array with String
+typealias Ys = Array with String
+
+var shared = ["a"]
+
+function main() returns ExitCode
+	shared = Xs.create()
+	var ys = Ys.create()
+	ys = shared
+	print("{ys.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:10:2: cannot assign a value of type 'Xs' to variable 'ys', which holds 'Ys'
+```
+
+<!-- test: error.handing-an-unbranded-var-to-a-branded-by-reference-parameter-adopts-that-brand -->
+The callee writes a value of the parameter's brand into the variable, so the call is the variable's first branded store.
+```maxon
+typealias Xs = Array with String
+typealias Ys = Array with String
+
+function reset(ys Ys)
+	ys = Ys.create()
+end 'reset'
+
+function takeXs(xs Xs)
+	print("{xs.count()}\n")
+end 'takeXs'
+
+function takeYs(ys Ys)
+	print("{ys.count()}\n")
+end 'takeYs'
+
+function main() returns ExitCode
+	var a = ["a"]
+	reset(a)
+	takeXs(a)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:20:2: argument type mismatch for 'xs': expected 'Xs', got 'Ys'
+```
+
+<!-- test: a-var-handed-to-a-branded-by-reference-parameter-reaches-that-brands-parameter -->
+```maxon
+typealias Xs = Array with String
+typealias Ys = Array with String
+
+function reset(ys Ys)
+	ys = Ys.create()
+end 'reset'
+
+function takeXs(xs Xs)
+	print("{xs.count()}\n")
+end 'takeXs'
+
+function takeYs(ys Ys)
+	print("{ys.count()}\n")
+end 'takeYs'
+
+function main() returns ExitCode
+	var a = ["a"]
+	reset(a)
+	takeYs(a)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0
+```
+
+<!-- test: error.an-assignment-of-another-brand-after-a-hand-over-is-refused-at-the-assignment -->
+The hand-over comes first in the source, so it fixes the brand and the later assignment is the store that disagrees.
+```maxon
+typealias Xs = Array with String
+typealias Ys = Array with String
+
+function reset(ys Ys)
+	ys = Ys.create()
+end 'reset'
+
+function takeXs(xs Xs)
+	print("{xs.count()}\n")
+end 'takeXs'
+
+function takeYs(ys Ys)
+	print("{ys.count()}\n")
+end 'takeYs'
+
+function main() returns ExitCode
+	var a = ["a"]
+	reset(a)
+	a = Xs.create()
+	print("{a.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:20:2: cannot assign a value of type 'Xs' to variable 'a', which holds 'Ys'
+```
+
+<!-- test: error.a-read-before-the-adopting-assignment-is-judged-against-the-adopted-brand -->
+The brand is the variable's for its whole life, so a read that comes earlier in the source is judged against it too.
+```maxon
+typealias Xs = Array with String
+typealias Ys = Array with String
+
+function reset(ys Ys)
+	ys = Ys.create()
+end 'reset'
+
+function takeXs(xs Xs)
+	print("{xs.count()}\n")
+end 'takeXs'
+
+function takeYs(ys Ys)
+	print("{ys.count()}\n")
+end 'takeYs'
+
+function main() returns ExitCode
+	var a = ["a"]
+	takeYs(a)
+	a = Xs.create()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:19:2: argument type mismatch for 'ys': expected 'Ys', got 'Xs'
+```
+
+<!-- test: error.a-module-var-handed-to-a-branded-by-reference-parameter-adopts-that-brand -->
+```maxon
+typealias Xs = Array with String
+typealias Ys = Array with String
+
+function reset(ys Ys)
+	ys = Ys.create()
+end 'reset'
+
+function takeXs(xs Xs)
+	print("{xs.count()}\n")
+end 'takeXs'
+
+function takeYs(ys Ys)
+	print("{ys.count()}\n")
+end 'takeYs'
+
+var shared = ["a"]
+
+function main() returns ExitCode
+	reset(shared)
+	takeXs(shared)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:21:2: argument type mismatch for 'xs': expected 'Xs', got 'Ys'
+```
+
+<!-- test: error.comparing-two-brands-of-one-instance-is-refused -->
+An equality passes its right operand to a `Self`-typed parameter, and that parameter takes the receiver's brand.
+```maxon
+typealias Xs = Array with String
+typealias Ys = Array with String
+
+function main() returns ExitCode
+	let xs = Xs.create()
+	let ys = Ys.create()
+
+	if xs == ys 'same'
+		print("same\n")
+	end 'same'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:9:8: argument type mismatch for 'other': expected 'Xs', got 'Ys'
+```
+
+<!-- test: error.equals-with-another-brand-is-refused -->
+```maxon
+typealias Xs = Array with String
+typealias Ys = Array with String
+
+function main() returns ExitCode
+	let xs = Xs.create()
+	let ys = Ys.create()
+	print("{xs.equals(ys)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:8:13: argument type mismatch for 'other': expected 'Xs', got 'Ys'
+```
+
+<!-- test: error.a-self-parameter-of-a-declared-generic-takes-the-receivers-brand -->
+```maxon
+typealias Count = int(0 to 100)
+
+type Box uses T
+	export let item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function itemOf(other Self) returns T
+		return other.item
+	end 'itemOf'
+end 'Box'
+
+typealias CountsA = Box with Count
+typealias CountsB = Box with Count
+
+function main() returns ExitCode
+	let a = CountsA.create(1)
+	let b = CountsB.create(1)
+	print("{a.itemOf(b)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:22:12: argument type mismatch for 'other': expected 'CountsA', got 'CountsB'
+```
+
+<!-- test: an-unbranded-argument-fits-a-self-parameter -->
+```maxon
+typealias Xs = Array with String
+
+function main() returns ExitCode
+	let xs = Xs.create()
+	print("{xs.equals(["b"])}\n")
+	print("{xs == xs}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+false
+true
+```
+
+<!-- test: error.a-merge-of-unadopted-reads-carries-the-adopted-brand -->
+A value merged from reads of an adopted global is a value of the adopted brand, so the door it reaches judges that brand.
+```maxon
+typealias Xs = Array with String
+typealias Ys = Array with String
+
+var shared = ["a"]
+
+function takeXs(xs Xs)
+	print("{xs.count()}\n")
+end 'takeXs'
+
+function takeYs(ys Ys)
+	print("{ys.count()}\n")
+end 'takeYs'
+
+function resetYs(ys Ys)
+	ys = Ys.create()
+end 'resetYs'
+
+function pick(flag bool)
+	takeYs(shared if flag else shared)
+end 'pick'
+
+function main() returns ExitCode
+	shared = Xs.create()
+	pick(true)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:20:2: argument type mismatch for 'ys': expected 'Ys', got 'Xs'
+```
+
+<!-- test: error.a-function-value-call-handing-a-var-to-a-branded-parameter-adopts-that-brand -->
+The function value lands on `resetYs`, whose parameter is a `Ys`, so the call is the variable's first branded store.
+```maxon
+typealias Xs = Array with String
+typealias Ys = Array with String
+
+function takeXs(xs Xs)
+	print("{xs.count()}\n")
+end 'takeXs'
+
+function takeYs(ys Ys)
+	print("{ys.count()}\n")
+end 'takeYs'
+
+function resetYs(ys Ys)
+	ys = Ys.create()
+end 'resetYs'
+
+function main() returns ExitCode
+	var a = ["a"]
+	let f = resetYs
+	f(a)
+	takeXs(a)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:21:2: argument type mismatch for 'xs': expected 'Xs', got 'Ys'
+```
+
+<!-- test: error.a-function-value-call-whose-candidates-disagree-on-the-brand-is-refused -->
+A function value of one type may land on a body declaring either brand, so no one brand can be adopted for the argument.
+```maxon
+typealias Xs = Array with String
+typealias Ys = Array with String
+
+typealias Reset = function(Xs)
+
+function resetXs(xs Xs)
+	xs = Xs.create()
+end 'resetXs'
+
+function resetYs(ys Ys)
+	ys = Ys.create()
+end 'resetYs'
+
+function run(f Reset)
+	var a = ["a"]
+	f(a)
+	print("{a.count()}\n")
+end 'run'
+
+function main() returns ExitCode
+	run(resetXs)
+	run(resetYs)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:17:3: argument type mismatch for 1: the function value may land on bodies that declare 'Xs' and 'Ys' for this parameter, so no one brand fits it
+```
+
+<!-- test: a-hand-over-to-an-overloaded-callee-adopts-the-brand-of-the-overload-the-call-resolves-to -->
+The overload that takes the call's arguments decides the brand, not the first declaration of the name.
+```maxon
+typealias Xs = Array with String
+typealias Ys = Array with String
+
+function reset(xs Xs, extra Integer)
+	xs = Xs.create()
+	print("{extra}\n")
+end 'reset'
+
+function reset(ys Ys)
+	ys = Ys.create()
+end 'reset'
+
+function takeYs(ys Ys)
+	print("{ys.count()}\n")
+end 'takeYs'
+
+typealias Integer = int(0 to 100)
+
+function main() returns ExitCode
+	var a = ["a"]
+	reset(a)
+	takeYs(a)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0
+```
+
+<!-- test: error.a-field-of-an-inner-alias-holds-that-alias-as-its-brand -->
+A field whose type is a generic instance is always spelled through an alias, so it holds that alias as its brand from its declaration and has no first store to adopt from.
+```maxon
+typealias Xs = Array with String
+
+type Holder
+	typealias Items = Array with String
+	export var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	var h = Holder.create()
+	h.items = Xs.create()
+	print("{h.items.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:15:4: cannot assign a value of type 'Xs' to field 'items' of 'Holder', which holds 'Items'
 ```
 
 <!-- test: error.otherwise-across-brands -->
@@ -536,7 +1238,7 @@ end 'Holder'
 var shared = Xs.create()
 
 function sumXs(xs Xs) returns Integer
-	var t = 0
+	var t = 0 as Integer
 	for x in xs 'each'
 		t = t + x
 	end 'each'
@@ -544,7 +1246,7 @@ function sumXs(xs Xs) returns Integer
 end 'sumXs'
 
 function sumYs(ys Ys) returns Integer
-	var t = 0
+	var t = 0 as Integer
 	for y in ys 'each'
 		t = t + y
 	end 'each'
@@ -601,7 +1303,7 @@ typealias Rows = Array with Row
 typealias Col = Array with Integer
 
 function sumCol(c Col) returns Integer
-	var t = 0
+	var t = 0 as Integer
 	for v in c 'each'
 		t = t + v
 	end 'each'
@@ -611,7 +1313,7 @@ end 'sumCol'
 function main() returns ExitCode
 	var rows = Rows.create()
 	rows.push([1, 2])
-	var total = 0
+	var total = 0 as Integer
 	for row in rows 'each'
 		total = total + sumCol(row)
 	end 'each'
@@ -637,7 +1339,7 @@ function first(xs Xs) returns Integer
 end 'first'
 
 function total(ys Ys) returns Integer
-	var t = 0
+	var t = 0 as Integer
 	for y in ys 'each'
 		t = t + y
 	end 'each'
@@ -648,7 +1350,7 @@ function main() returns ExitCode
 	var rows = Inline.create()
 	rows.push([1, 2])
 	rows.push([3])
-	var acc = 0
+	var acc = 0 as Integer
 	for row in rows 'each'
 		acc = acc + first(row) + total(row)
 	end 'each'
@@ -713,7 +1415,7 @@ type Holder
 end 'Holder'
 
 function sumYs(ys Ys) returns Integer
-	var t = 0
+	var t = 0 as Integer
 	for y in ys 'each'
 		t = t + y
 	end 'each'
@@ -739,7 +1441,7 @@ typealias Xs = Array with Integer
 typealias Ys = Array with Integer
 
 function sumXs(xs Xs) returns Integer
-	var t = 0
+	var t = 0 as Integer
 	for x in xs 'each'
 		t = t + x
 	end 'each'
@@ -747,7 +1449,7 @@ function sumXs(xs Xs) returns Integer
 end 'sumXs'
 
 function sumYs(ys Ys) returns Integer
-	var t = 0
+	var t = 0 as Integer
 	for y in ys 'each'
 		t = t + y
 	end 'each'
@@ -816,7 +1518,7 @@ typealias Xs = Array with Integer
 typealias Ys = Array with Integer
 
 function sumXs(xs Xs) returns Integer
-	var t = 0
+	var t = 0 as Integer
 	for x in xs 'each'
 		t = t + x
 	end 'each'
@@ -824,7 +1526,7 @@ function sumXs(xs Xs) returns Integer
 end 'sumXs'
 
 function sumYs(ys Ys) returns Integer
-	var t = 0
+	var t = 0 as Integer
 	for y in ys 'each'
 		t = t + y
 	end 'each'
@@ -1325,4 +2027,582 @@ end 'main'
 ```
 ```stdout
 first second
+```
+
+<!-- test: error.a-union-payload-meeting-a-read-adopted-later-is-judged-against-the-adopted-brand -->
+The read `a` has no brand when the payload is built; the call after it gives `a` the brand `Xs`, and the payload holds `Ys`.
+```maxon
+typealias Xs = Array with String
+typealias Ys = Array with String
+
+union Slot
+	held(v Ys)
+	empty
+end 'Slot'
+
+function main() returns ExitCode
+	var a = ["a"]
+	let s = Slot.held(a)
+	resetXs(a)
+
+	match s 'go'
+		held(v) then print("{v.count()}\n")
+		empty then print("empty\n")
+	end 'go'
+
+	return 0
+end 'main'
+
+function resetXs(xs Xs)
+	xs = Xs.create()
+end 'resetXs'
+```
+```maxoncstderr
+error E3005: <fragment>:12:21: cannot assign a value of type 'Xs' to union payload 'v', which holds 'Ys'
+```
+
+<!-- test: error.a-container-element-meeting-a-read-adopted-later-is-judged-against-the-adopted-brand -->
+```maxon
+typealias Xs = Array with String
+typealias Ys = Array with String
+typealias Rows = Array with Ys
+
+function main() returns ExitCode
+	var a = ["a"]
+	var rows = Rows.create()
+	rows.push(a)
+	resetXs(a)
+	print("{rows.count()}\n")
+	return 0
+end 'main'
+
+function resetXs(xs Xs)
+	xs = Xs.create()
+end 'resetXs'
+```
+```maxoncstderr
+error E3005: <fragment>:9:7: cannot assign a value of type 'Xs' to the element of 'push', which holds 'Ys'
+```
+
+<!-- test: error.a-tuple-column-meeting-a-read-adopted-later-is-judged-against-the-adopted-brand -->
+The tuple names its column `Ys` where it is built, so the column is judged like a field of that brand.
+```maxon
+typealias Xs = Array with String
+typealias Ys = Array with String
+typealias Count = int(0 to 100)
+
+function main() returns ExitCode
+	var a = ["a"]
+	print("{pairCount((a, 1))}\n")
+	resetXs(a)
+	return 0
+end 'main'
+
+function resetXs(xs Xs)
+	xs = Xs.create()
+end 'resetXs'
+
+function pairCount(p (Ys, Count)) returns Count
+	return p.0.count() as Count
+end 'pairCount'
+```
+```maxoncstderr
+error E3005: <fragment>:8:20: cannot assign a value of type 'Xs' to field '_0' of '__Tuple2.Array_String@Ys.Count$0_100', which holds 'Ys'
+```
+
+<!-- test: error.the-first-store-fixes-the-brand-even-when-it-stores-a-read-adopted-later -->
+`b = a` stores a value whose brand is settled later as `Xs`, and it is the first branded store of `b`, so `b` is an `Xs` and the store after it is the one refused.
+```maxon
+typealias Xs = Array with String
+typealias Ys = Array with String
+
+function main() returns ExitCode
+	var a = ["a"]
+	var b = ["b"]
+	b = a
+	b = Ys.create()
+	resetXs(a)
+	print("{b.count()}\n")
+	return 0
+end 'main'
+
+function resetXs(xs Xs)
+	xs = Xs.create()
+end 'resetXs'
+```
+```maxoncstderr
+error E3005: <fragment>:9:2: cannot assign a value of type 'Ys' to variable 'b', which holds 'Xs'
+```
+
+<!-- test: error.a-var-holding-a-read-adopted-later-takes-its-brand-and-is-judged-at-a-hand-over -->
+`b` is given `a`'s brand by the store, which comes first, so handing it to a `Ys` parameter is the one refusal.
+```maxon
+typealias Xs = Array with String
+typealias Ys = Array with String
+
+function main() returns ExitCode
+	var a = ["a"]
+	resetXs(a)
+	var b = ["b"]
+	b = a
+	touchYs(b)
+	print("{b.count()}\n")
+	return 0
+end 'main'
+
+function resetXs(xs Xs)
+	xs = Xs.create()
+end 'resetXs'
+
+function touchYs(ys Ys)
+	ys = Ys.create()
+end 'touchYs'
+```
+```maxoncstderr
+error E3005: <fragment>:10:2: argument type mismatch for 'ys': expected 'Ys', got 'Xs'
+```
+
+<!-- test: error.a-hand-over-before-a-store-of-a-read-adopted-later-fixes-the-brand-and-the-store-is-refused -->
+The hand-over comes first, so `b` is a `Ys` and the store of `a`, whose brand is settled later as `Xs`, is the one refused.
+```maxon
+typealias Xs = Array with String
+typealias Ys = Array with String
+
+function touchYs(ys Ys)
+	ys = Ys.create()
+end 'touchYs'
+
+function main() returns ExitCode
+	var b = ["b"]
+	touchYs(b)
+	var a = ["a"]
+	b = a
+	resetXs(a)
+	print("{b.count()}\n")
+	return 0
+end 'main'
+
+function resetXs(xs Xs)
+	xs = Xs.create()
+end 'resetXs'
+```
+```maxoncstderr
+error E3005: <fragment>:13:2: cannot assign a value of type 'Xs' to variable 'b', which holds 'Ys'
+```
+
+<!-- test: error.a-global-stored-a-read-adopted-later-takes-its-brand -->
+```maxon
+typealias Xs = Array with String
+typealias Ys = Array with String
+
+var shared = ["s"]
+
+function main() returns ExitCode
+	var a = ["a"]
+	resetXs(a)
+	shared = a
+	takeYs(shared)
+	return 0
+end 'main'
+
+function resetXs(xs Xs)
+	xs = Xs.create()
+end 'resetXs'
+
+function takeYs(ys Ys)
+	print("{ys.count()}\n")
+end 'takeYs'
+```
+```maxoncstderr
+error E3005: <fragment>:11:2: argument type mismatch for 'ys': expected 'Ys', got 'Xs'
+```
+
+<!-- test: error.a-merge-of-a-read-adopted-later-and-a-branded-value-is-judged-at-the-merge -->
+Whichever arm is taken, the merged value would have to be an `Xs` and a `Ys` at once.
+```maxon
+typealias Xs = Array with String
+typealias Ys = Array with String
+
+function main() returns ExitCode
+	var a = ["a"]
+	let ys = Ys.create()
+	let c = true
+	let z = a if c else ys
+	resetXs(a)
+	takeXs(z)
+	return 0
+end 'main'
+
+function resetXs(xs Xs)
+	xs = Xs.create()
+end 'resetXs'
+
+function takeXs(xs Xs)
+	print("{xs.count()}\n")
+end 'takeXs'
+```
+```maxoncstderr
+error E3005: <fragment>:9:12: the arms of this merge hold 'Xs' and 'Ys', so the merged value has no one brand
+```
+
+<!-- test: error.a-merge-of-two-reads-adopted-later-is-judged-for-every-arm -->
+```maxon
+typealias Xs = Array with String
+typealias Ys = Array with String
+
+function main() returns ExitCode
+	var a = ["a"]
+	var b = ["b"]
+	let c = true
+	let z = a if c else b
+	resetXs(a)
+	resetYs(b)
+	takeXs(z)
+	return 0
+end 'main'
+
+function resetXs(xs Xs)
+	xs = Xs.create()
+end 'resetXs'
+
+function resetYs(ys Ys)
+	ys = Ys.create()
+end 'resetYs'
+
+function takeXs(xs Xs)
+	print("{xs.count()}\n")
+end 'takeXs'
+```
+```maxoncstderr
+error E3005: <fragment>:9:12: the arms of this merge hold 'Xs' and 'Ys', so the merged value has no one brand
+```
+
+<!-- test: a-merge-of-two-reads-adopted-alike-wears-the-adopted-brand -->
+```maxon
+typealias Xs = Array with String
+
+function main() returns ExitCode
+	var a = ["a"]
+	var b = ["b", "c"]
+	let c = true
+	let z = a if c else b
+	resetXs(a)
+	resetXs(b)
+	takeXs(z)
+	return 0
+end 'main'
+
+function resetXs(xs Xs)
+	xs = Xs.create()
+end 'resetXs'
+
+function takeXs(xs Xs)
+	print("{xs.count()}\n")
+end 'takeXs'
+```
+```stdout
+1
+```
+```exitcode
+0
+```
+
+<!-- test: error.a-closure-capturing-a-var-adopted-later-reads-its-adopted-brand -->
+The closure is the first reader of `a`, so the capture is where its brand is carried from.
+```maxon
+typealias Xs = Array with String
+typealias Ys = Array with String
+typealias Count = int(0 to 100)
+
+function main() returns ExitCode
+	var a = ["a"]
+	resetXs(a)
+	let f = function() gives countYs(a)
+	print("{f()}\n")
+	return 0
+end 'main'
+
+function resetXs(xs Xs)
+	xs = Xs.create()
+end 'resetXs'
+
+function countYs(ys Ys) returns Count
+	return ys.count() as Count
+end 'countYs'
+```
+```maxoncstderr
+error E3005: <fragment>:9:27: argument type mismatch for 'ys': expected 'Ys', got 'Xs'
+```
+
+<!-- test: a-parameter-spelled-with-the-receivers-bare-base-fits-any-brand-of-its-instance -->
+Only a parameter spelled `Self` takes the receiver's brand. One spelled with the generic base is an ordinary parameter, and an ordinary parameter of a bare instance fits every brand of it.
+```maxon
+typealias Count = int(0 to 100)
+
+type Box uses T
+	export let item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function itemOf(other Box) returns T
+		return other.item
+	end 'itemOf'
+end 'Box'
+
+typealias CountsA = Box with Count
+typealias CountsB = Box with Count
+
+function main() returns ExitCode
+	let a = CountsA.create(1)
+	let b = CountsB.create(2)
+	print("{a.itemOf(b)}\n")
+	return 0
+end 'main'
+```
+```stdout
+2
+```
+```exitcode
+0
+```
+
+<!-- test: error.two-vars-each-first-storing-the-other-resolve-from-the-first-store-and-the-later-direct-store-is-refused -->
+`b = a` and `a = b` each store a value whose brand is settled later. Resolution starts at the first store, `b = a`, which needs `a`'s brand. `a`'s first store, `a = b`, needs `b`'s brand, which is the one being resolved, so it carries nothing and `a` adopts the `Xs` of its direct store. `b = a` then carries `Xs`, `b` is an `Xs`, and the direct `Ys` store into it is the one refused.
+```maxon
+typealias Xs = Array with String
+typealias Ys = Array with String
+
+function main() returns ExitCode
+	var a = ["a"]
+	var b = ["b"]
+	b = a
+	a = b
+	a = Xs.create()
+	b = Ys.create()
+	print("{a.count()}{b.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:11:2: cannot assign a value of type 'Ys' to variable 'b', which holds 'Xs'
+```
+
+<!-- test: error.a-return-meeting-a-read-adopted-later-is-judged-against-the-adopted-brand -->
+`return a` meets a read whose brand is settled later as `Xs`, and the function returns `Ys`.
+```maxon
+typealias Xs = Array with String
+typealias Ys = Array with String
+
+function launder() returns Ys
+	var a = ["a"]
+	refill(a)
+	return a
+end 'launder'
+
+function main() returns ExitCode
+	let r = launder()
+	print("{r.count()}\n")
+	return 0
+end 'main'
+
+function refill(xs Xs)
+	xs = Xs.create()
+end 'refill'
+```
+```maxoncstderr
+error E3005: <fragment>:8:2: cannot assign a value of type 'Xs' to the return value of 'launder', which holds 'Ys'
+```
+
+<!-- test: error.a-chain-resolves-through-the-first-branded-store-of-the-var-it-reads -->
+`b` reads `a` before it is given a `Ys`, so `b` is an `Xs` for every var that reads it: `c = b` carries `Xs`, and only the store of `ys` into `b` is refused.
+```maxon
+typealias Xs = Array with String
+typealias Ys = Array with String
+
+function main() returns ExitCode
+	var a = ["a"]
+	var b = ["b"]
+	var c = ["c"]
+	b = a
+	c = b
+	var ys = Ys.create()
+	b = ys
+	refill(a)
+	takeXs(c)
+	return 0
+end 'main'
+
+function refill(xs Xs)
+	xs = Xs.create()
+end 'refill'
+
+function takeXs(xs Xs)
+	print("{xs.count()}\n")
+end 'takeXs'
+```
+```maxoncstderr
+error E3005: <fragment>:12:2: cannot assign a value of type 'Ys' to variable 'b', which holds 'Xs'
+```
+
+<!-- test: error.an-indirect-call-argument-of-another-brand-is-refused -->
+The function value is `takeYs`, whose parameter is a `Ys`.
+```maxon
+typealias Xs = Array with String
+typealias Ys = Array with String
+
+function main() returns ExitCode
+	let a = Xs.create()
+	let f = takeYs
+	f(a)
+	return 0
+end 'main'
+
+function takeYs(ys Ys)
+	print("{ys.count()}\n")
+end 'takeYs'
+```
+```maxoncstderr
+error E3005: <fragment>:8:3: argument type mismatch for 1: expected 'Ys', got 'Xs'
+```
+
+<!-- test: a-tuple-alias-over-a-brand-declared-after-its-uses-is-the-tuple-a-literal-builds -->
+The tuple type is named where the alias is declared, and a literal of the same elements is that type, whichever of the declarations the file reads first.
+```maxon
+function make(x Xs) returns Pair
+	return (x, 1)
+end 'make'
+
+function total(p Pair) returns Count
+	return p.0.count() as Count
+end 'total'
+
+function main() returns ExitCode
+	var x = Xs.create()
+	x.push("a")
+	x.push("b")
+	let p = make(x)
+	print("{total(p)}\n")
+	var y = Xs.create()
+	y.push("c")
+	let q = (y, 2 as Count)
+	print("{total(q)}\n")
+	return 0
+end 'main'
+
+typealias Pair = (Xs, Count)
+typealias Count = int(0 to 100)
+typealias Xs = Array with String
+```
+```stdout
+2
+1
+```
+```exitcode
+0
+```
+
+<!-- test: error.the-arms-of-a-three-way-merge-are-judged-against-each-other -->
+The first arm's var has no brand of its own, so neither of the other two conflicts with it; the second and third conflict with each other.
+```maxon
+typealias Xs = Array with String
+typealias Ys = Array with String
+
+enum Pick
+	one
+	two
+	three
+end 'Pick'
+
+function main() returns ExitCode
+	var a = ["a"]
+	var b = ["b"]
+	let ys = Ys.create()
+	refill(a)
+	let choice = Pick.two
+	let z = match choice 'pick'
+		one gives b
+		two gives a
+		three gives ys
+	end 'pick'
+	print("{z.count()}\n")
+	return 0
+end 'main'
+
+function refill(xs Xs)
+	xs = Xs.create()
+end 'refill'
+```
+```maxoncstderr
+error E3005: <fragment>:17:10: the arms of this merge hold 'Xs' and 'Ys', so the merged value has no one brand
+```
+
+<!-- test: error.a-service-message-argument-of-another-brand-is-refused -->
+<!-- unsupported-targets: wasm32-wasi -->
+The message parameter is a `Ys`; the argument is an `Xs`.
+```maxon
+typealias Xs = Array with String
+typealias Ys = Array with String
+typealias Count = int(0 to 100)
+
+type Sink
+	var seen as Count
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function take(ys Ys)
+		self.seen = self.seen + 1
+		print("{ys.count()}\n")
+	end 'take'
+end 'Sink'
+
+function main() returns ExitCode
+	let h = spawn Sink.create()
+	let a = Xs.create()
+	h.take(a)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:22:9: argument type mismatch for 'ys': expected 'Ys', got 'Xs'
+```
+
+<!-- test: error.a-service-message-argument-adopted-later-is-judged-against-the-parameter-brand -->
+<!-- unsupported-targets: wasm32-wasi -->
+`a` takes the brand `Xs` from the call that follows its creation, and the message parameter is a `Ys`.
+```maxon
+typealias Xs = Array with String
+typealias Ys = Array with String
+typealias Count = int(0 to 100)
+
+type Sink
+	var seen as Count
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function take(ys Ys)
+		self.seen = self.seen + 1
+		print("{ys.count()}\n")
+	end 'take'
+end 'Sink'
+
+function main() returns ExitCode
+	let h = spawn Sink.create()
+	var a = ["a"]
+	refill(a)
+	h.take(a)
+	return 0
+end 'main'
+
+function refill(xs Xs)
+	xs = Xs.create()
+end 'refill'
+```
+```maxoncstderr
+error E3005: <fragment>:23:9: cannot assign a value of type 'Xs' to union payload 'ys', which holds 'Ys'
 ```

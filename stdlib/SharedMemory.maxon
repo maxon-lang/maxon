@@ -48,8 +48,8 @@ typealias SegmentAddress = int(0 to u64.max)
 let NoSection = 0
 
 // The runtime's `SharedSegmentAnswer`s, pinned against these by `checkSharedMemoryAnswers` on every compile.
-let NameAlreadyPublished = 0xFFFFFFFFFFFFFFFF as SegmentHandle
-let NotYetPublished = 0xFFFFFFFFFFFFFFFE as SegmentHandle
+let NameAlreadyPublished = -1 as FullRangeInt
+let NotYetPublished = -2 as FullRangeInt
 
 let MostPublishOrAdoptAttempts = 1000
 let PublishOrAdoptRetryMs = 1
@@ -154,14 +154,14 @@ public type SharedSegment
 			return SegmentAttempt.notOpenedYet
 		end 'notYet'
 
-		return SegmentAttempt.opened(try mapped(raw, name: name, bytes: bytes, publisher: road == SegmentRoad.publish))
+		return SegmentAttempt.opened(try mapped(raw as SegmentHandle, name: name, bytes: bytes, publisher: road == SegmentRoad.publish))
 	end 'attempt'
 
 	static function mapped(rawHandle SegmentHandle, name String, bytes SegmentByteCount, publisher bool) returns SharedSegment throws SharedMemoryError
-		let rawBase = __Builtins.sharedMemoryMap(rawHandle, bytes)
-		var segment = SharedSegment{handle: rawHandle, base: rawBase, bytes: bytes, name: name, latch: OwnerLatch.create(true), publisher: publisher}
+		let mappedAt = __Builtins.sharedMemoryMap(rawHandle, bytes)
+		var segment = SharedSegment{handle: rawHandle, base: NoSection if mappedAt == NoSection else mappedAt as SegmentAddress, bytes: bytes, name: name, latch: OwnerLatch.create(true), publisher: publisher}
 
-		if rawBase == NoSection 'mapFailed'
+		if mappedAt == NoSection 'mapFailed'
 			segment.close()
 			throw SharedMemoryError.mapFailed
 		end 'mapFailed'
@@ -195,7 +195,7 @@ public type SharedSegment
 	/// Throws `outOfBounds` when the word would reach past the end of the mapping.
 	public function readWord(offset SegmentOffset) returns SegmentWord throws SharedMemoryError
 		try requireInside(offset, byteCount: SegmentWordBytes)
-		return __Builtins.sharedMemoryReadWord(base, offset)
+		return __Builtins.sharedMemoryReadWord(base, offset) as SegmentWord
 	end 'readWord'
 
 	/// Write `value` as a 64-bit word at `offset` bytes into the mapping, with a release store: every write

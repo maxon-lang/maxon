@@ -55,7 +55,7 @@ function maybeFail(x bool) returns Score throws MyError
 end 'maybeFail'
 
 function main() returns ExitCode
-    var sum = 0
+    var sum = 0 as Score
     try 'work'
         let a = maybeFail(false)
         let b = maybeFail(false)
@@ -90,7 +90,7 @@ function maybeFail(x bool) returns Score throws MyError
 end 'maybeFail'
 
 function main() returns ExitCode
-    var sum = 0
+    var sum = 0 as Score
     try 'work'
         let a = maybeFail(false)
         let b = maybeFail(true)
@@ -136,7 +136,7 @@ function callB(x bool) returns Score throws ErrB
 end 'callB'
 
 function main() returns ExitCode
-    var sum = 0
+    var sum = 0 as Score
     try 'work'
         let a = callA(true)
         let b = callB(false)
@@ -183,7 +183,7 @@ function callB(x bool) returns Score throws ErrB
 end 'callB'
 
 function main() returns ExitCode
-    var sum = 0
+    var sum = 0 as Score
     try 'work'
         let a = callA(false)
         let b = callB(true)
@@ -230,7 +230,7 @@ function callB(x bool) returns Score throws ErrB
 end 'callB'
 
 function main() returns ExitCode
-    var sum = 0
+    var sum = 0 as Score
     try 'work'
         let a = callA(false)
         let b = callB(false)
@@ -282,7 +282,7 @@ function callA() returns Score throws ErrA
 end 'callA'
 
 function main() returns ExitCode
-    var x = 0
+    var x = 0 as Score
     try 'work'
         let a = callA()
         x = a
@@ -326,7 +326,7 @@ function callB(x bool) returns Score throws ErrB
 end 'callB'
 
 function main() returns ExitCode
-    var x = 0
+    var x = 0 as Score
     try 'work'
         let a = callA(false)
         let b = callB(false)
@@ -372,7 +372,7 @@ function callB(x bool) returns Score throws ErrB
 end 'callB'
 
 function main() returns ExitCode
-    var x = 0
+    var x = 0 as Score
     try 'work'
         let a = callA(false)
         let b = callB(false)
@@ -418,7 +418,7 @@ function callB(x bool) returns Score throws ErrB
 end 'callB'
 
 function main() returns ExitCode
-    var sum = 0
+    var sum = 0 as Score
     try 'work'
         let a = callA(false)
         let b = callB(true)
@@ -465,7 +465,7 @@ function callB(x bool) returns Score throws ErrB
 end 'callB'
 
 function main() returns ExitCode
-    var x = 0
+    var x = 0 as Score
     try 'work'
         let a = callA(false)
         let b = callB(false)
@@ -494,7 +494,7 @@ function main() returns ExitCode
     arr.push(7)
     arr.push(11)
 
-    var sum = 0
+    var sum = 0 as Score
     try 'work'
         let a = arr.get(0)
         let b = arr.get(1)
@@ -532,7 +532,7 @@ function callA(x bool) returns Score throws ErrA
 end 'callA'
 
 function main() returns ExitCode
-    var sum = 0
+    var sum = 0 as Score
     try 'work'
         let a = callA(true)
         sum = a
@@ -579,7 +579,7 @@ function callB(x bool) returns Score throws ErrB
 end 'callB'
 
 function main() returns ExitCode
-    var sum = 0
+    var sum = 0 as Score
     try 'work'
         let a = callA(true)
         let b = callB(false)
@@ -627,7 +627,7 @@ function callB(x bool) returns Score throws ErrB
 end 'callB'
 
 function main() returns ExitCode
-    var sum = 0
+    var sum = 0 as Score
     try 'work'
         let a = callA(false)
         let b = callB(true)
@@ -675,7 +675,7 @@ function callB(x bool) returns Score throws ErrB
 end 'callB'
 
 function main() returns ExitCode
-    var sum = 0
+    var sum = 0 as Score
     try 'work'
         let a = callA(false)
         let b = callB(false)
@@ -725,7 +725,7 @@ function callB(x bool) returns Score throws ErrB
 end 'callB'
 
 function main() returns ExitCode
-    var sum = 0
+    var sum = 0 as Score
     try 'work'
         let a = callA(true)
         let b = callB(false)
@@ -780,7 +780,7 @@ function callB(x bool) returns Score throws ErrB
 end 'callB'
 
 function main() returns ExitCode
-    var sum = 0
+    var sum = 0 as Score
     try 'work'
         let a = callA(true)
         let b = callB(false)
@@ -829,7 +829,7 @@ function callB(x bool) returns Score throws ErrB
 end 'callB'
 
 function main() returns ExitCode
-    var sum = 0
+    var sum = 0 as Score
     try 'work'
         let a = callA(true)
         let b = callB(false)
@@ -882,7 +882,7 @@ function callB(x bool) returns Score throws ErrB
 end 'callB'
 
 function main() returns ExitCode
-    var sum = 0
+    var sum = 0 as Score
     try 'work'
         let a = callA(2)
         let b = callB(false)
@@ -931,7 +931,7 @@ function callB(x bool) returns Score throws ErrB
 end 'callB'
 
 function main() returns ExitCode
-    var sum = 0
+    var sum = 0 as Score
     try 'work'
         let a = callA(false)
         let b = callB(false)
@@ -965,7 +965,7 @@ function main() returns ExitCode
     arr.push(0)
     arr.push(0)
 
-    var sum = 0
+    var sum = 0 as Score
     try 'work'
         arr.set(0, value: 10)
         arr.set(1, value: 20)
@@ -1000,12 +1000,12 @@ function main() returns ExitCode
     arr.push(-7)
     arr.push(11)
     arr.push(-25)
-    var sum = 100
+    var sum = 100 as FullRangeInt
     try 'work'
         let a = arr.get(0)
         let b = arr.get(1)
         let c = arr.get(2)
-        sum = sum + a + b + c
+        sum = sum + a as FullRangeInt + b as FullRangeInt + c as FullRangeInt
     end 'work'
     otherwise (e) 'h'
         match e 'k'
@@ -1031,7 +1031,7 @@ function main() returns ExitCode
     arr.push(7)
     arr.push(11)
 
-    var sum = 0
+    var sum = 0 as Integer
     try 'work'
         let a = arr.get(0)
         let b = arr.get(99)
@@ -1079,7 +1079,7 @@ function callB(x bool) returns Score throws ErrB
 end 'callB'
 
 function main() returns ExitCode
-    var sum = 0
+    var sum = 0 as Score
     try 'outer'
         try 'inner'
             let a = callA(true)
@@ -1133,7 +1133,7 @@ function callB(x bool) returns Score throws ErrB
 end 'callB'
 
 function main() returns ExitCode
-    var sum = 0
+    var sum = 0 as Score
     try 'work'
         let a = try callA(true) otherwise 0
         let b = callB(false)
@@ -1170,7 +1170,7 @@ enum MyError implements Error
 end 'MyError'
 
 function dispatch(k Kind) returns Count throws MyError
-    var result = 0
+    var result = 0 as Count
     try 'd'
         match k 'm'
             alpha then result = 1
@@ -1295,7 +1295,7 @@ function workFunc(arr IntArray) throws MyError
 end 'workFunc'
 
 function main() returns ExitCode
-    var sum = 0
+    var sum = 0 as Idx
     try 'work'
         workFunc(IntArray.create())
     end 'work' otherwise (e) 'h'
@@ -1322,7 +1322,7 @@ enum MyError implements Error
 end 'MyError'
 
 function main() returns ExitCode
-    var sum = 0
+    var sum = 0 as FullRangeInt
     try 'work'
         if true 'gate'
             throw MyError.failed
@@ -1372,7 +1372,7 @@ function makeShape(r Num) returns Shape throws ShapeError
 end 'makeShape'
 
 function classify(r Num) returns Num
-    var out = 0
+    var out = 0 as Num
 
     // The success path must FALL OUT of the try block rather than return from inside it.
     // An early return runs the function-exit cleanup, which released the routed temp anyway;
@@ -1394,7 +1394,7 @@ function classify(r Num) returns Num
 end 'classify'
 
 function main() returns ExitCode
-    var total = 0
+    var total = 0 as Num
     total = total + classify(3)
     total = total + classify(4)
     total = total + classify(900)
@@ -1465,7 +1465,7 @@ end 'callBC'
 
 // --- file: main.maxon
 function main() returns ExitCode
-    var sum = 0
+    var sum = 0 as Score
     try 'work'
         let a = callAB(true)
         let b = callC(false)
@@ -1507,7 +1507,7 @@ function mayFail() returns ExitCode throws MyError
 end 'mayFail'
 
 function main() returns ExitCode
-	var result = 0
+	var result = 0 as ExitCode
 	try 'work'
 		result = mayFail()
 	end 'job'
@@ -1557,7 +1557,7 @@ function callB(fail bool) returns Score throws ErrB
 end 'callB'
 
 function classify(failA bool, failB bool) returns Score
-	var sum = 0
+	var sum = 0 as Score
 
 	try 'work'
 		let a = callA(failA)
@@ -1628,7 +1628,7 @@ function callB(which Score) returns Score throws ErrB
 end 'callB'
 
 function classify(which Score) returns Score
-	var sum = 0
+	var sum = 0 as Score
 
 	try 'work'
 		let a = callA(which)
@@ -1693,7 +1693,7 @@ function callB(which Score) returns Score throws ErrB
 end 'callB'
 
 function classify(which Score) returns Score
-	var sum = 0
+	var sum = 0 as Score
 
 	try 'work'
 		let a = callA(which)
@@ -1748,7 +1748,7 @@ function callB() returns Score throws ErrB
 end 'callB'
 
 function main() returns ExitCode
-	var sum = 0
+	var sum = 0 as Score
 
 	try 'work'
 		let a = callA()
@@ -1812,7 +1812,7 @@ function callB(which Score) returns Score throws ErrB
 end 'callB'
 
 function intoSeveral(which Score) returns Score
-	var sum = 0
+	var sum = 0 as Score
 
 	try 'work'
 		let a = callA(which)
@@ -1832,7 +1832,7 @@ function intoSeveral(which Score) returns Score
 end 'intoSeveral'
 
 function intoBoxedArm(which Score) returns Score
-	var sum = 0
+	var sum = 0 as Score
 
 	try 'work'
 		let a = callA(which)
@@ -1856,7 +1856,7 @@ enum Gave implements Error
 end 'Gave'
 
 function intoDefault(which Score) returns Score throws Gave
-	var sum = 0
+	var sum = 0 as Score
 
 	try 'work'
 		let a = callA(which)
@@ -2451,7 +2451,7 @@ function classify(which Score) returns String
 		said = "sum {a + b}"
 	end 'work'
 	otherwise (e) 'h'
-		var extra = 0
+		var extra = 0 as Score
 
 		try 'inner'
 			extra = callC(which)
@@ -2578,7 +2578,7 @@ function callB() returns Score throws ErrB
 end 'callB'
 
 function classify(which Score) returns Score
-	var trips = 0
+	var trips = 0 as Score
 
 	try 'work'
 		let a = callA(which)
@@ -2873,7 +2873,7 @@ function outer(n Score) returns Score throws ErrB
 end 'outer'
 
 function main() returns ExitCode
-	var sum = 0
+	var sum = 0 as Score
 
 	try 'work'
 		let v = try outer(inner(true)) otherwise 0
@@ -3223,6 +3223,69 @@ sharp 2
 6 2 3
 ```
 
+<!-- test: an-error-union-binding-copies-into-a-var -->
+```maxon
+typealias Tally = int(0 to 1000)
+
+union BoxErr implements Error
+	boxed(text String)
+end 'BoxErr'
+
+enum Plain implements Error
+	flat
+	sharp
+end 'Plain'
+
+function fa(n Tally) returns Tally throws BoxErr
+	if n > 5 'big'
+		throw BoxErr.boxed("big {n}")
+	end 'big'
+
+	return 1
+end 'fa'
+
+function fb(n Tally) returns Tally throws Plain
+	if n == 1 'one'
+		throw Plain.sharp
+	end 'one'
+
+	return 2
+end 'fb'
+
+function probe(n Tally) returns Tally
+	var total = 0 as Tally
+
+	try 'work'
+		total = total + fa(n)
+		total = total + fb(n)
+	end 'work' otherwise (e) 'handler'
+		match e 'kind'
+			BoxErr.boxed(text) then total = text.byteLength() as Tally
+			Plain.flat then total = 100
+			Plain.sharp then print("sharp {e}\n")
+		end 'kind'
+
+		var again = e
+		again = again + 1
+		total = total + (1 if again > 1 else 0)
+	end 'handler'
+
+	return total
+end 'probe'
+
+function main() returns ExitCode
+	print("{probe(9)} {probe(1)} {probe(4)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+sharp 2
+6 2 3
+```
+
 <!-- test: an-error-union-binding-assigned-to-an-outer-var-after-a-boxed-arm -->
 ```maxon
 typealias Tally = int(0 to 1000)
@@ -3254,7 +3317,7 @@ end 'fb'
 
 function probe(n Tally) returns Tally
 	var total = 0 as Tally
-	var x = 0
+	var x = 0 as FullRangeInt
 
 	try 'work'
 		total = total + fa(n)
@@ -3324,7 +3387,7 @@ function probe(n Tally) returns Tally
 		let got = match e 'kind'
 			BoxErr.boxed(text) gives text.byteLength()
 			Plain.flat gives 100
-			Plain.sharp gives e
+			Plain.sharp gives e as BytePos
 		end 'kind'
 
 		total = got as Tally

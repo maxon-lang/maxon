@@ -63,10 +63,10 @@ type Spinner
 	end 'create'
 
 	export function spin(bursts Integer, startMs InstantMs) returns Integer
-		var acc = 0
-		var b = 0
+		var acc = 0 as Integer
+		var b = 0 as Integer
 		while b < bursts 'spin'
-			var i = 0
+			var i = 0 as Integer
 			while i < 1000 'burst'
 				acc = step(acc, depth: 4)
 				i = i + 1
@@ -146,8 +146,8 @@ type Recurser
 
 	export function churn(rounds Integer, startMs InstantMs) returns Integer
 		let expected = down(20000, acc: 1)
-		var wrong = 0
-		var r = 0
+		var wrong = 0 as Integer
+		var r = 0 as Integer
 		while r < rounds 'churn'
 			if down(20000, acc: 1) != expected 'differs'
 				wrong = wrong + 1
@@ -228,10 +228,10 @@ type Spinner
 	end 'create'
 
 	export function spin(bursts Integer, startMs InstantMs) returns Integer
-		var acc = 0
-		var b = 0
+		var acc = 0 as Integer
+		var b = 0 as Integer
 		while b < bursts 'spin'
-			var i = 0
+			var i = 0 as Integer
 			while i < 1000 'burst'
 				acc = step(acc, depth: 4)
 				i = i + 1
@@ -262,7 +262,7 @@ end 'Bystander'
 
 function main() returns ExitCode
 	var spinners = SpinnerHandleArray.create()
-	var i = 0
+	var i = 0 as Count
 	while i < Scheduler.processorCount() 'spawnEach'
 		spinners.push(spawn Spinner.create())
 		i = i + 1
@@ -270,7 +270,7 @@ function main() returns ExitCode
 	let b = spawn Bystander.create()
 	let start = Clock.nowMs()
 	var spun = ReplyPromiseArray.create()
-	var k = 0
+	var k = 0 as Count
 	while k < spinners.count() 'sendEach'
 		let s = try spinners.get(k) otherwise panic("spinners.get out of range at {k}: bounded by the pushes above")
 		spun.push(s.spin(spinBursts, startMs: start))
@@ -279,7 +279,7 @@ function main() returns ExitCode
 	sleep(20)
 	let p = try await b.ping() otherwise 0
 	let pingAtMs = Clock.elapsedMs(start) as Integer
-	var ran = 0
+	var ran = 0 as Count
 	while spun.count() > 0 'collect'
 		let r = try spun.pop() otherwise panic("spun.pop on a non-empty array")
 		let q = try await r otherwise 0
@@ -287,8 +287,8 @@ function main() returns ExitCode
 			ran = ran + 1
 		end 'spun'
 	end 'collect'
-	var firstEndMs = 0 - 1
-	var j = 0
+	var firstEndMs = (0 - 1) as Integer
+	var j = 0 as Count
 	while j < spinners.count() 'earliest'
 		let s = try spinners.get(j) otherwise panic("spinners.get out of range at {j}: bounded by the pushes above")
 		let e = try await s.endedAt() otherwise 0 - 1
@@ -342,7 +342,7 @@ let spinFloorMs = 150
 let deadlinesDueMs = 35
 let spinCapMs = 8000
 
-var phase = 0
+var phase = 0 as Integer
 var honoured = false
 
 // Recursive, so it is never inlined and every iteration passes a function prologue.
@@ -357,12 +357,12 @@ function busy() returns Integer
 	sleep(1)
 	phase = 1
 	let start = Clock.nowMs()
-	var acc = 0
-	var elapsed = 0
+	var acc = 0 as Integer
+	var elapsed = 0 as Integer
 	var baseline = Scheduler.counters().preempts
 	var baselined = false
 	while elapsed < spinCapMs and (elapsed < spinFloorMs or not honoured) 'spin'
-		var i = 0
+		var i = 0 as Integer
 		while i < 1000 'burst'
 			acc = step(acc, depth: 4)
 			i = i + 1
@@ -388,7 +388,7 @@ function nap() returns Integer
 end 'nap'
 
 function main() returns ExitCode
-	var tries = 0
+	var tries = 0 as Integer
 	while tries < attemptCap 'attempts'
 		tries = tries + 1
 		phase = 0
@@ -458,17 +458,17 @@ type Mixer
 
 	export function churn(ms Integer) returns Integer
 		var expected = Checksums.create()
-		var k = 0
+		var k = 0 as Integer
 		while k < variants 'reference'
 			expected.push(mix(k, b: 2 + self.shift, c: 3, d: 4 + self.shift, e: 5, f: 6 + self.shift, g: 7, h: 8 + self.shift, p: 1.5 * self.scale, q: 2.25, r: 3.125 * self.scale, s: 4.0625, t: 5.5 * self.scale, u: 6.75, v: 7.875 * self.scale, w: 8.5, depth: 7))
 			k = k + 1
 		end 'reference'
 		let start = Clock.nowMs()
-		var wrong = 0
-		var i = 0
+		var wrong = 0 as Integer
+		var i = 0 as Integer
 		while (Clock.elapsedMs(start) as Integer) < ms 'churn'
 			let k = i mod variants
-			let want = try expected.get(k) otherwise panic("expected.get out of range at {k}: bounded by variants")
+			let want = try expected.get(k as ElementIndex) otherwise panic("expected.get out of range at {k}: bounded by variants")
 			if mix(k, b: 2 + self.shift, c: 3, d: 4 + self.shift, e: 5, f: 6 + self.shift, g: 7, h: 8 + self.shift, p: 1.5 * self.scale, q: 2.25, r: 3.125 * self.scale, s: 4.0625, t: 5.5 * self.scale, u: 6.75, v: 7.875 * self.scale, w: 8.5, depth: 7) != want 'differs'
 				wrong = wrong + 1
 			end 'differs'
@@ -520,8 +520,8 @@ type Spinner
 	// ⛔ NOT ONE CALL IN THE LOOP, which is the whole point: a poisoned stack guard is read by a function
 	// that reserves a frame, and this body never enters one. The reading below the loop dates its end.
 	export function spin(steps Integer, startMs InstantMs) returns Integer
-		var acc = 0
-		var i = 0
+		var acc = 0 as Integer
+		var i = 0 as Integer
 		while i < steps 'spin'
 			acc = (acc * 31 + i) mod 1000003
 			i = i + 1
@@ -593,8 +593,8 @@ type Spinner
 	// ⛔ NOT ONE CALL IN THE LOOP, which is the whole point: a poisoned stack guard is read by a function
 	// that reserves a frame, and this body never enters one. The reading below the loop dates its end.
 	export function spin(steps Integer, startMs InstantMs) returns Integer
-		var acc = 0
-		var i = 0
+		var acc = 0 as Integer
+		var i = 0 as Integer
 		while i < steps 'spin'
 			acc = (acc * 31 + i) mod 1000003
 			i = i + 1
@@ -623,7 +623,7 @@ end 'Bystander'
 
 function main() returns ExitCode
 	var spinners = SpinnerHandleArray.create()
-	var i = 0
+	var i = 0 as Count
 	while i < Scheduler.processorCount() 'spawnEach'
 		spinners.push(spawn Spinner.create())
 		i = i + 1
@@ -631,7 +631,7 @@ function main() returns ExitCode
 	let b = spawn Bystander.create()
 	let start = Clock.nowMs()
 	var spun = ReplyPromiseArray.create()
-	var k = 0
+	var k = 0 as Count
 	while k < spinners.count() 'sendEach'
 		let s = try spinners.get(k) otherwise panic("spinners.get out of range at {k}: bounded by the pushes above")
 		spun.push(s.spin(spinSteps, startMs: start))
@@ -640,7 +640,7 @@ function main() returns ExitCode
 	sleep(20)
 	let p = try await b.ping() otherwise 0
 	let pingAtMs = Clock.elapsedMs(start) as Integer
-	var ran = 0
+	var ran = 0 as Count
 	while spun.count() > 0 'collect'
 		let r = try spun.pop() otherwise panic("spun.pop on a non-empty array")
 		let q = try await r otherwise 0
@@ -648,8 +648,8 @@ function main() returns ExitCode
 			ran = ran + 1
 		end 'spun'
 	end 'collect'
-	var firstEndMs = 0 - 1
-	var j = 0
+	var firstEndMs = (0 - 1) as Integer
+	var j = 0 as Count
 	while j < spinners.count() 'earliest'
 		let s = try spinners.get(j) otherwise panic("spinners.get out of range at {j}: bounded by the pushes above")
 		let e = try await s.endedAt() otherwise 0 - 1
@@ -690,27 +690,27 @@ type Churner
 	// Sixteen values live across a loop with no call in it: a preemption that restores one of them wrongly
 	// changes the round's checksum, and every round after the first is compared with the first.
 	export function churn() returns Integer
-		var wrong = 0
-		var expected = 0
-		var r = 0
+		var wrong = 0 as Integer
+		var expected = 0 as Integer
+		var r = 0 as Integer
 		while r < rounds 'rounds'
-			var a = 1
-			var b = 2
-			var c = 3
-			var d = 4
-			var e = 5
-			var f = 6
-			var g = 7
-			var h = 8
-			var p = 1.5
-			var q = 2.25
-			var u = 3.125
-			var v = 4.0625
-			var w = 5.5
-			var x = 6.75
-			var y = 7.875
-			var z = 8.5
-			var i = 0
+			var a = 1 as Integer
+			var b = 2 as Integer
+			var c = 3 as Integer
+			var d = 4 as Integer
+			var e = 5 as Integer
+			var f = 6 as Integer
+			var g = 7 as Integer
+			var h = 8 as Integer
+			var p = 1.5 as FullRangeFloat
+			var q = 2.25 as FullRangeFloat
+			var u = 3.125 as FullRangeFloat
+			var v = 4.0625 as FullRangeFloat
+			var w = 5.5 as FullRangeFloat
+			var x = 6.75 as FullRangeFloat
+			var y = 7.875 as FullRangeFloat
+			var z = 8.5 as FullRangeFloat
+			var i = 0 as Integer
 			while i < stepsPerRound 'spin'
 				a = (a * 31 + i) mod 1000003
 				b = (b * 17 + a) mod 1000003
@@ -824,7 +824,7 @@ function main() returns ExitCode
 	let e = spawn Echo.create()
 	let reply = e.ping()
 	let start = Clock.nowMs()
-	var acc = 0
+	var acc = 0 as Integer
 	while (Clock.elapsedMs(start) as Integer) < holdMs 'hold'
 		acc = step(acc, depth: 4)
 	end 'hold'
@@ -905,10 +905,10 @@ function attempt() returns (Integer, Integer) throws Attempt
 		throw Attempt.preemptedBeforeTheWindow
 	end 'early'
 
-	var acc = 0
-	var bursts = 0
+	var acc = 0 as Integer
+	var bursts = 0 as Integer
 	while Scheduler.counters().preempts == c0 and bursts < burstCap 'hold'
-		var i = 0
+		var i = 0 as Integer
 		while i < 1000 'burst'
 			acc = step(acc, depth: 4)
 			i = i + 1
@@ -925,7 +925,7 @@ function attempt() returns (Integer, Integer) throws Attempt
 	replies.push(b.rank())
 	replies.push(c.rank())
 	let first = replies.awaitAny()
-	var sum = 0
+	var sum = 0 as Integer
 	for p in replies 'drainthemall'
 		sum = sum + (try await p otherwise 0)
 	end 'drainthemall'
@@ -933,7 +933,7 @@ function attempt() returns (Integer, Integer) throws Attempt
 		throw Attempt.preemptedAfterTheWindow
 	end 'late'
 
-	return (first, sum)
+	return (first as Integer, sum)
 end 'attempt'
 
 function monitorNeverAsked() returns ExitCode
@@ -942,7 +942,7 @@ function monitorNeverAsked() returns ExitCode
 end 'monitorNeverAsked'
 
 function main() returns ExitCode
-	var tries = 0
+	var tries = 0 as Integer
 	while tries < attemptCap 'attempts'
 		tries = tries + 1
 		let outcome = try attempt() otherwise (e) 'disturbed'

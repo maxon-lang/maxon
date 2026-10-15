@@ -19,8 +19,8 @@ have. The dead global is declared FIRST deliberately — the gate is a PREFIX co
 slot has to sit ahead of a live one to be visible to it.
 
 ```maxon
-var unused = 99
-var used = 42
+var unused = 99 as FullRangeInt
+var used = 42 as FullRangeInt
 
 function main() returns ExitCode
 	return used - 42
@@ -172,7 +172,7 @@ declared FIRST, so a slot that came back would be a byte at offset 0 the pin doe
 
 ```maxon
 let deadArr = [1, 2, 3, 4, 5]
-var live = 7
+var live = 7 as FullRangeInt
 
 function main() returns ExitCode
 	return live
@@ -324,9 +324,9 @@ IMAGE DATA — no slot, no build, nothing for a prune to reach — so declaring 
 leave `probe` as the only slot and the pin would hold whether or not this pass ran at all.
 
 ```maxon
-var deadArr = [1, 2, 3]
-var liveArr = [10, 20, 30]
-var probe = 4
+var deadArr = FullRangeIntArray from [1, 2, 3]
+var liveArr = FullRangeIntArray from [10, 20, 30]
+var probe = 4 as FullRangeInt
 
 function main() returns ExitCode
 	return ((try liveArr.get(1) otherwise 0) - probe) as ExitCode
@@ -581,9 +581,9 @@ STORED to and stays, because a store is observable. The pin fails from both side
 `writeOnly`'s 0.
 
 ```maxon
-var dead = 1
-var writeOnly = 0
-var live = 5
+var dead = 1 as FullRangeInt
+var writeOnly = 0 as FullRangeInt
+var live = 5 as FullRangeInt
 
 function main() returns ExitCode
 	writeOnly = 99
@@ -754,7 +754,7 @@ function countdown() returns Integer
 end 'countdown'
 
 var deadStep = countdown
-var live = 7
+var live = 7 as FullRangeInt
 
 function main() returns ExitCode
 	return live

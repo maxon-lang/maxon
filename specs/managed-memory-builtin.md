@@ -316,3 +316,46 @@ end 'main'
 0
 ```
 
+<!-- test: a-managed-memory-buffer-binds-to-a-var -->
+<!-- tier: stdlib -->
+A buffer is not a number, so a `var` binds it with no cast.
+```maxon
+function main() returns ExitCode
+	var mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
+	try mm.setLength(1) otherwise return 2
+	try mm.set(0, value: 42) otherwise return 3
+	let v = try mm.get(0) otherwise return 4
+	print("{v}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+42
+```
+
+<!-- test: a-typed-managed-memory-buffer-binds-to-a-var -->
+<!-- tier: stdlib -->
+A buffer created through an alias of `__ManagedMemory with T` binds to a `var` with no cast, as the bare
+builtin does.
+```maxon
+typealias Words = __ManagedMemory with FullRangeInt
+
+function main() returns ExitCode
+	var w = try Words.create(2, elementSize: 8) otherwise return 1
+	try w.setLength(2) otherwise return 2
+	try w.set(1, value: 7) otherwise return 3
+	let v = try w.get(1) otherwise return 4
+	print("{v}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+

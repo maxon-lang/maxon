@@ -116,7 +116,7 @@ Two async threads sleep for different durations; the shorter-sleep one resumes a
 records its completion order into a global (`order = order * 10 + tag`), so `21` proves the fast thread
 (tag 2) completed before the slow thread (tag 1) — deadline order, not spawn order.
 ```maxon
-var order = 0
+var order = 0 as Integer
 
 function slow() returns Integer
 	sleep(100)
@@ -164,7 +164,7 @@ on a fast machine and a slow one alike; 600 ms clears the longest deadline by 20
 typealias Integer = int(i64.min to i64.max)
 typealias Millis = int(0 to u64.max)
 
-var order = 0
+var order = 0 as Integer
 
 function sleeper(ms Millis, tag Integer) returns Integer
 	sleep(ms as Milliseconds)
@@ -174,7 +174,7 @@ end 'sleeper'
 
 function hog(ns DurationNanos) returns Integer
 	let started = Clock.nowNanos()
-	var spins = 0
+	var spins = 0 as Integer
 	while Clock.elapsedNanos(started) < ns 'spin'
 		spins = spins + 1
 	end 'spin'
@@ -226,8 +226,8 @@ function sleeper() returns Integer
 end 'sleeper'
 
 function main() returns ExitCode
-	var i = 0
-	var sum = 0
+	var i = 0 as Integer
+	var sum = 0 as Integer
 	while i < 50 'l'
 		let p = async sleeper()
 		let r = await p

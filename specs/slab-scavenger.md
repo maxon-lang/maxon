@@ -220,7 +220,7 @@ function main() returns ExitCode
 	_ = HeapStats.scavenge()
 	_ = HeapStats.scavenge()
 
-	var bad = 0
+	var bad = 0 as FullRangeInt
 	for k in 0 upto 16000 'check'
 		let b = try bufs.get(k) otherwise return 1
 		if b.count() != 96 'length'
@@ -293,7 +293,7 @@ function main() returns ExitCode
 		second.push(build((k + 7) as Seed))
 	end 'allocSecond'
 
-	var bad = 0
+	var bad = 0 as FullRangeInt
 	for k in 0 upto 16000 'check'
 		let b = try second.get(k) otherwise return 2
 		for i in 0 upto 96 'bytes'
@@ -360,7 +360,7 @@ function main() returns ExitCode
 		large.push(build(k as Seed, n: 500))
 	end 'allocLarge'
 
-	var bad = 0
+	var bad = 0 as FullRangeInt
 	for k in 0 upto 3000 'check'
 		let b = try large.get(k) otherwise return 2
 		if b.count() != 500 'length'
@@ -409,7 +409,7 @@ function main() returns ExitCode
 	_ = HeapStats.scavenge()
 	_ = HeapStats.scavenge()
 
-	var bad = 0
+	var bad = 0 as Byte
 	for i in 0 upto 512 'check'
 		let got = try big.get(i) otherwise return 1
 		if got != (i mod 251) 'value'

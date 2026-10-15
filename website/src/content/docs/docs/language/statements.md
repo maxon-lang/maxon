@@ -32,7 +32,7 @@ A function with a `returns` clause must return a value on every path; a path tha
 ## Variable Declaration and Assignment
 
 ```maxon
-var count = 10
+var count = 10 as Count
 let limit = 20
 count = count + limit
 ```
@@ -46,8 +46,8 @@ Assign the elements of a tuple to existing `var`s, declare new names in the same
 elements with `_`:
 
 ```maxon
-var x = 0
-var y = 0
+var x = 0 as Amount
+var y = 0 as Amount
 (x, y) = makePair(10, b: 32)      // x = 10, y = 32
 (x, let z) = makePair(3, b: 4)    // x existing, z newly declared
 (y, _) = makePair(5, b: 6)        // discard the second element
@@ -85,7 +85,7 @@ end 'large'
 ## While Loop
 
 ```maxon
-var i = 0
+var i = 0 as Count
 while i < 10 'loop'
 	print("{i}\n")
 	i = i + 1
@@ -104,6 +104,9 @@ for num in numbers 'loop'
 end 'loop'
 ```
 
+The element of a `let` array, map, tuple or `Vector` literal keeps the range its literal elements span, so
+it fits any alias that admits all of them.
+
 **Ranges.** `a to b` is inclusive and `a upto b` excludes `b`. Integer and `Character` ranges are both
 supported:
 
@@ -121,7 +124,14 @@ for c in 'a' to 'z' 'letters'
 end 'letters'
 ```
 
-In a `for` header a range compiles to a counted loop with no allocation. Anywhere else an integer range is
+In a `for` header a range compiles to a counted loop with no allocation. The counter is immutable inside
+the body (assigning it is **E2013**) and takes its type from the bounds: a literal bound adopts the other
+bound's alias, so `for i in 0 upto xs.count()` counts in `Count`. Between two literal bounds the counter
+is a value whose range is known — `[0, 10)` for `0 upto 10` — and each use is checked at compile time
+against the alias it reaches, as a literal is, under the conditions that lead to that use; a `let`
+computed from it carries the computed range the same way.
+
+Anywhere else an integer range is
 a value: `a to b` is a `Range` and `a upto b` an `OpenRange`, both `Iterable`, so a range can be stored,
 passed and iterated later:
 
@@ -154,7 +164,8 @@ end 'loop'
 
 **Notes:**
 - The loop variable cannot be reassigned. It follows its source: read-only all the way down over a
-  [read-only](/docs/language/memory-model/#read-only-values) source, writable through over a `var` one.
+  [read-only](/docs/language/memory-model/#read-only-values) source, writable through over a `var` one. Handing it to a parameter the
+  callee reassigns is **E3159**, which names it a `for` loop variable.
 - The loop holds a counted reference to its source, so the body may write the collection. A loop over an
   `Array` or a `String` re-reads the live count each step: a `push` in the body extends the loop, and a
   `clear` ends it.
@@ -173,7 +184,7 @@ continue 'label'   // next iteration of the labelled enclosing loop
 ```
 
 ```maxon
-var total = 0
+var total = 0 as Count
 for i in 0 upto 3 'rows'
 	for j in 0 upto 3 'cols'
 		if j == 2 'skip'
@@ -268,7 +279,7 @@ span later would be absorbed without anyone deciding about it.
 `<statement> and fallthrough` runs the arm and then the next arm's body without testing its pattern:
 
 ```maxon
-var result = 0
+var result = 0 as Count
 match x 'cascade'
 	1 then result = result + 10 and fallthrough
 	2 then result = result + 20

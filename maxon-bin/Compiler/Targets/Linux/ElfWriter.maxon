@@ -327,7 +327,7 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 	bakeFuncAbs64Relocs(codeResult.rdata, globalData: codeResult.globalData, debugSymbols: codeResult.debugSymbols, textBaseVa: textVAddr)
 
 	var elf = ByteArray.create()
-	elf.reserve(((dataFileOffset + dataSegmentSize) as ElementIndex))
+	elf.reserve(dataFileOffset + dataSegmentSize)
 
 	// === Elf64_Ehdr (64 bytes) ===
 	// `e_shoff`/`e_shentsize`/`e_shnum`/`e_shstrndx` are written as zero placeholders and backpatched
@@ -356,7 +356,7 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 	// Segment 1 maps from file offset 0, so it covers the ELF header and these program headers too —
 	// which is why `entryPoint` is `.text`'s address and not the segment's.
 	writeElfProgramHeader(elf, flags: ElfPfRead or ElfPfExec, fileOffset: 0, vaddr: ElfLoadAddr, fileSize: codeSegmentSize as MachineWord, memSize: codeSegmentSize as MachineWord)
-	writeElfProgramHeader(elf, flags: ElfPfRead or ElfPfWrite, fileOffset: dataFileOffset as MachineWord, vaddr: dataVAddr as MachineWord, fileSize: dataSegmentSize, memSize: dataSegmentSize)
+	writeElfProgramHeader(elf, flags: ElfPfRead or ElfPfWrite, fileOffset: dataFileOffset as MachineWord, vaddr: dataVAddr as MachineWord, fileSize: dataSegmentSize as MachineWord, memSize: dataSegmentSize as MachineWord)
 
 	// === Segment contents ===
 	padTo(elf, size: textFileOffset)
@@ -412,7 +412,7 @@ function writeElfTrailingSections(elf ByteArray, codeResult CodeResult, textVAdd
 	let hasRodata = rdataSize > 0
 
 	let textShndx = 1
-	var sectionCount = 2  // SHT_NULL + .text
+	var sectionCount = 2 as MachineWord  // SHT_NULL + .text
 
 	if hasRodata 'countRodata'
 		sectionCount = sectionCount + 1

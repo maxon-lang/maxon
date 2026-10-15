@@ -122,7 +122,7 @@ export let SlabPageBytes = 8192
 
 DECL
 # ⚠ The table is emitted as `.create()` + `.push()` and NOT as an array literal. A literal infers
-# `ParsedIntArray`, which is E3005 against a ranged typealias return — and widening the return type to
+# `FullRangeIntArray`, which is E3005 against a ranged typealias return — and widening the return type to
 # match the literal would throw away the domain bound that keeps an out-of-table size unstorable.
 emit_table() {
 	printf '\tvar out = %s.create()\n' "$2"

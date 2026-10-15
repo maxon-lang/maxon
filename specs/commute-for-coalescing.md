@@ -99,7 +99,7 @@ function classify(flags Word, n Word) returns Word
 end 'classify'
 
 function main() returns ExitCode
-	var seen = 0
+	var seen = 0 as Word
 	for i in 0 upto 4 'feed'
 		seen = seen + classify(i * 2, n: i)
 	end 'feed'
@@ -130,7 +130,7 @@ function classifyBoth(flags Word, n Word) returns Word
 end 'classifyBoth'
 
 function main() returns ExitCode
-	var seen = 0
+	var seen = 0 as Word
 	for i in 0 upto 4 'feed'
 		seen = seen + classifyBoth(i * 2, n: i)
 	end 'feed'
@@ -167,7 +167,7 @@ function difference(a Word, b Word) returns Word
 end 'difference'
 
 function main() returns ExitCode
-	var seen = 0
+	var seen = 0 as Word
 	for i in 0 upto 4 'feed'
 		seen = seen + difference(i * 10, b: i)
 	end 'feed'
@@ -197,7 +197,7 @@ function scale(x Wide, k Wide) returns Wide
 end 'scale'
 
 function main() returns ExitCode
-	var seen = 0.0
+	var seen = 0.0 as Wide
 	for i in 0 upto 4 'feed'
 		seen = seen + scale(i + 1.0, k: 2.0)
 	end 'feed'
@@ -237,7 +237,7 @@ function accumulate(total Word, step Word) returns Word
 end 'accumulate'
 
 function main() returns ExitCode
-	var seen = 0
+	var seen = 0 as Word
 	for i in 0 upto 4 'feed'
 		seen = seen + accumulate(i * 3, step: i)
 	end 'feed'

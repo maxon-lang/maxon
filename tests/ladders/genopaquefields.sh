@@ -67,7 +67,7 @@ UNITS="$1"; OUT="$2"
   done
 
   echo "function main() returns ExitCode"
-  echo -e "\tvar acc = 0"
+  echo -e "\tvar acc = 0 as Integer"
   k=1
   while [ "$k" -le "$UNITS" ]; do
     printf '\tlet g%d = I%d.create(%d, y: S%d.create(%d))\n' "$k" "$k" "$k" "$k" "$k"

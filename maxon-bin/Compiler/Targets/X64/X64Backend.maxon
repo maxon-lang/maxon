@@ -552,7 +552,7 @@ end 'regIsExtended'
 // relative). A separate `emitRexRXB` differing in that one bit and in nothing else would be the same
 // fact written down twice, one bit apart.
 function emitRex(code ByteArray, wide bool, regField X64Register, rmField X64Register, force bool = false, indexIsExtended bool = false)
-	var rex = RexBase
+	var rex = RexBase as Byte
 
 	if wide 'w'
 		rex = rex or RexW
@@ -1381,7 +1381,7 @@ end 'encodeJccBackward'
 // for a loop an emitter lays down whole and knows is short. A target a signed byte cannot reach is an emitter that
 // grew past that promise, so it panics rather than quietly widening.
 export function encodeJmpBackwardShort(code ByteArray, targetOffset CodeOffset)
-	let rel = (targetOffset as ParsedInt) - ((code.count() + JmpRel8Bytes) as ParsedInt)
+	let rel = (targetOffset as FullRangeInt) - ((code.count() + JmpRel8Bytes) as FullRangeInt)
 
 	if rel < i8.min 'outOfReach'
 		panic("encodeJmpBackwardShort: the target at chunk offset {targetOffset} is {0 - rel} bytes back from the end of this jump, past a rel8's {0 - i8.min} — the loop that asked for a short jump is longer than it promised")
@@ -1480,6 +1480,9 @@ let MemFillQwordBytes = 8  // one qword store — the smallest width the overlap
 let MemFillTwoQwordBytes = 16
 let MemFillFourQwordBytes = 32
 
+typealias MemFillRunLength = int(0 to 8)
+typealias MemFillSpanBytes = int(8 to 32)
+
 // Bytes per iteration of the bulk store loop (8 qwords), and the lower edge of the loop band.
 let MemFillLoopStride = 64
 
@@ -1505,11 +1508,12 @@ function encodeRepStosq(code ByteArray)
 end 'encodeRepStosq'
 
 // `count` consecutive qword stores of the fill pattern, from `[base + startDisp]` upward.
-function encodeMemFillQwordRun(code ByteArray, base X64Register, startDisp Imm32, count MachineWord)
+function encodeMemFillQwordRun(code ByteArray, base X64Register, startDisp Imm32, count MemFillRunLength)
 	for i in 0 upto count 'stores'
-		// ⚠ The cast brackets the WHOLE sum — `a + b as Imm32` casts only `b`, `as` binding tighter than `+`.
-		// Stated as its own `let` so the reading cannot be mistaken (the arm64 twin says the same).
-		let disp = (startDisp + i * MemFillQwordBytes) as Imm32
+		// ⚠ The cast brackets the PRODUCT, and the sum wears `startDisp`'s `Imm32` — `a + b as Imm32` casts
+		// only `b`, `as` binding tighter than `+`. Stated as its own `let` so the reading cannot be mistaken
+		// (the arm64 twin says the same).
+		let disp = startDisp + ((i * MemFillQwordBytes) as Imm32)
 		encodeStoreBaseDispReg(code, base: base, disp: disp, srcReg: MemFillPatternReg, wide: true)
 	end 'stores'
 end 'encodeMemFillQwordRun'
@@ -1519,8 +1523,8 @@ end 'encodeMemFillQwordRun'
 // `spanBytes/8` qwords BACKWARD from the end. Together they cover the whole region for ANY length in the
 // band, with the middle written twice — so there is no loop and, crucially, no ragged-tail handling for a
 // length that is not a multiple of 8. Zeroing a byte twice is free; branching to decide whether to is not.
-function encodeMemFillOverlappingSpan(code ByteArray, spanBytes MachineWord)
-	let qwords = spanBytes / MemFillQwordBytes
+function encodeMemFillOverlappingSpan(code ByteArray, spanBytes MemFillSpanBytes)
+	let qwords = (spanBytes / MemFillQwordBytes) as MemFillRunLength
 	encodeMemFillQwordRun(code, base: MemFillCursorReg, startDisp: 0, count: qwords)
 	encodeMemFillQwordRun(code, base: MemFillEndReg, startDisp: -(spanBytes as Imm32), count: qwords)
 end 'encodeMemFillOverlappingSpan'
@@ -1538,7 +1542,7 @@ end 'encodeMemFillOverlappingSpan'
 // what lets every arm anchor its backward stores without recomputing anything.
 //
 // A count of 0 falls into the `< 8` arm and exits on its first test, writing nothing.
-function encodeX64MemFill(code ByteArray, fillByte ParsedInt)
+function encodeX64MemFill(code ByteArray, fillByte FullRangeInt)
 	encodeMovRegImm64(code, dest: MemFillPatternReg, value: memFillPatternWord(fillByte))
 
 	// end = cursor + count, computed BEFORE the ladder touches either.

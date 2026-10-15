@@ -636,7 +636,7 @@ end 'Mark'
 
 function main() returns ExitCode
 	var point = Point.create(3, y: 4)
-	var tick = 5
+	var tick = 5 as Integer
 	let mark = Mark.at(point, tick: tick)
 	tick = tick + point.x
 

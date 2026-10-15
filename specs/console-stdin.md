@@ -158,8 +158,8 @@ that answered a stale buffer, or that stopped throwing, would not.
 ```maxon
 function main() returns ExitCode
 	var stdin = Console.stdin()
-	var thrown = 0
-	var i = 0
+	var thrown = 0 as Count
+	var i = 0 as Count
 	while i < 3 'again'
 		let line = try stdin.readLine() otherwise 'atEof'
 			thrown = thrown + 1
@@ -200,8 +200,8 @@ which the runtime reports as exit 101 rather than as a wrong number.
 ```maxon
 function main() returns ExitCode
 	var stdin = Console.stdin()
-	var total = 0
-	var i = 0
+	var total = 0 as Count
+	var i = 0 as Count
 	while i < 100 'reads'
 		let bytes = stdin.readBytes(4096)
 		total = total + bytes.count()

@@ -1,0 +1,154 @@
+export enum LiteralColumn
+	first
+	second
+end 'LiteralColumn'
+
+export union ColumnBounds
+	unknown
+	integers(low FullRangeInt, high FullRangeInt)
+	unsignedIntegers(low FullRangeInt, high FullRangeInt)
+	floats(low FullRangeInt, high FullRangeInt)
+
+	export function isKnown() returns bool
+		return match self 'mine'
+			unknown gives false
+			integers or
+			unsignedIntegers or
+			floats gives true
+		end 'mine'
+	end 'isKnown'
+
+	export function joinedWith(other ColumnBounds) returns ColumnBounds
+		match self 'mine'
+			unknown then return ColumnBounds.unknown
+			integers(low, high) then return other.joinedIntegers(low, high: high)
+			unsignedIntegers(low, high) then return other.joinedUnsignedIntegers(low, high: high)
+			floats(low, high) then return other.joinedFloats(low, high: high)
+		end 'mine'
+	end 'joinedWith'
+
+	function joinedIntegers(low FullRangeInt, high FullRangeInt) returns ColumnBounds
+		match self 'theirs'
+			unknown or
+			floats then return ColumnBounds.unknown
+			integers(otherLow, otherHigh) then return ColumnBounds.integers(lesser(low, b: otherLow), high: greater(high, b: otherHigh))
+			unsignedIntegers(otherLow, otherHigh) then return unsignedHullOfSigned(low, high: high, otherLow: otherLow, otherHigh: otherHigh)
+		end 'theirs'
+	end 'joinedIntegers'
+
+	function joinedUnsignedIntegers(low FullRangeInt, high FullRangeInt) returns ColumnBounds
+		match self 'theirs'
+			unknown or
+			floats then return ColumnBounds.unknown
+			integers(otherLow, otherHigh) then return unsignedHullOfSigned(otherLow, high: otherHigh, otherLow: low, otherHigh: high)
+			unsignedIntegers(otherLow, otherHigh) then return unsignedHull(low, high: high, otherLow: otherLow, otherHigh: otherHigh)
+		end 'theirs'
+	end 'joinedUnsignedIntegers'
+
+	function joinedFloats(low FullRangeInt, high FullRangeInt) returns ColumnBounds
+		match self 'theirs'
+			unknown or
+			integers or
+			unsignedIntegers then return ColumnBounds.unknown
+			floats(otherLow, otherHigh) then return ColumnBounds.floats(floatBitsMinimum(low, b: otherLow), high: floatBitsMaximum(high, b: otherHigh))
+		end 'theirs'
+	end 'joinedFloats'
+end 'ColumnBounds'
+
+let UnsignedOrderFlip = i64.min
+
+function unsignedMinimum(a FullRangeInt, b FullRangeInt) returns FullRangeInt
+	return a if (a xor UnsignedOrderFlip) <= (b xor UnsignedOrderFlip) else b
+end 'unsignedMinimum'
+
+function unsignedMaximum(a FullRangeInt, b FullRangeInt) returns FullRangeInt
+	return a if (a xor UnsignedOrderFlip) >= (b xor UnsignedOrderFlip) else b
+end 'unsignedMaximum'
+
+function unsignedHullOfSigned(low FullRangeInt, high FullRangeInt, otherLow FullRangeInt, otherHigh FullRangeInt) returns ColumnBounds
+	if low < 0 'aSignedNegative'
+		return ColumnBounds.unknown
+	end 'aSignedNegative'
+
+	return unsignedHull(low, high: high, otherLow: otherLow, otherHigh: otherHigh)
+end 'unsignedHullOfSigned'
+
+function unsignedHull(low FullRangeInt, high FullRangeInt, otherLow FullRangeInt, otherHigh FullRangeInt) returns ColumnBounds
+	let hullLow = unsignedMinimum(low, b: otherLow)
+	let hullHigh = unsignedMaximum(high, b: otherHigh)
+
+	if hullHigh >= 0 'withinTheSignedRange'
+		return ColumnBounds.integers(hullLow, high: hullHigh)
+	end 'withinTheSignedRange'
+
+	return ColumnBounds.unsignedIntegers(hullLow, high: hullHigh)
+end 'unsignedHull'
+
+export function columnBoundsOfWords(low FullRangeInt, high FullRangeInt, isFloat bool) returns ColumnBounds
+	if not isFloat 'integerWords'
+		return ColumnBounds.integers(low, high: high)
+	end 'integerWords'
+
+	if not floatBitsAreFinite(low) or not floatBitsAreFinite(high) 'aNonFiniteWord'
+		return ColumnBounds.unknown
+	end 'aNonFiniteWord'
+
+	return ColumnBounds.floats(low, high: high)
+end 'columnBoundsOfWords'
+
+export function columnBoundsOfPoint(word FullRangeInt, unsignedPattern bool, isFloat bool) returns ColumnBounds
+	if unsignedPattern and word < 0 'anUnsignedPoint'
+		return ColumnBounds.unsignedIntegers(word, high: word)
+	end 'anUnsignedPoint'
+
+	return columnBoundsOfWords(word, high: word, isFloat: isFloat)
+end 'columnBoundsOfPoint'
+
+export type ColumnPair
+	export var first as ColumnBounds
+	export var second as ColumnBounds
+
+	export static function create(first ColumnBounds, second ColumnBounds) returns ColumnPair
+		return Self{first: first, second: second}
+	end 'create'
+
+	export function boundsOf(column LiteralColumn) returns ColumnBounds
+		return match column 'which'
+			first gives self.first
+			second gives self.second
+		end 'which'
+	end 'boundsOf'
+
+	export function holdsAKnownColumn() returns bool
+		return self.first.isKnown() or self.second.isKnown()
+	end 'holdsAKnownColumn'
+
+	export function joinedWith(other ColumnPair) returns ColumnPair
+		return ColumnPair.create(self.first.joinedWith(other.first), second: self.second.joinedWith(other.second))
+	end 'joinedWith'
+end 'ColumnPair'
+
+export union ColumnSigns
+	unseen
+	negative(value FullRangeInt)
+	unsigned(pattern FullRangeInt)
+	mixed(negativeValue FullRangeInt, unsignedPattern FullRangeInt)
+
+	export function withNegative(value FullRangeInt) returns ColumnSigns
+		return match self 'mine'
+			unseen gives ColumnSigns.negative(value)
+			negative or
+			mixed gives self
+			unsigned(pattern) gives ColumnSigns.mixed(value, unsignedPattern: pattern)
+		end 'mine'
+	end 'withNegative'
+
+	export function withUnsigned(pattern FullRangeInt) returns ColumnSigns
+		return match self 'mine'
+			unseen gives ColumnSigns.unsigned(pattern)
+			negative(value) gives ColumnSigns.mixed(value, unsignedPattern: pattern)
+			unsigned or
+			mixed gives self
+		end 'mine'
+	end 'withUnsigned'
+end 'ColumnSigns'

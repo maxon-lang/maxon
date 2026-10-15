@@ -11,15 +11,12 @@ category: runtime
 
 A ranged typealias binds every value that meets it. Wherever a value reaches a place declared with
 one — a **call argument**, a `return`, a **struct-literal field**, a **field store**, a field's
-**declared default**, an **array element**, an explicit `as` — the declared bounds are enforced.
+**declared default**, an **array element**, a **rebind** of a ranged `var`, global or static, an
+explicit `as` — the declared bounds are enforced.
 
-**REASSIGNING A LOCAL IS NOT ONE OF THOSE PLACES, AND THAT IS A DECISION RATHER THAN AN OVERSIGHT.**
-`completeLocalRebind` records no site: a binding is a name for a value, not a declared slot a value is
-stored into, and the value it names has already met its range wherever it came from. So a narrow local
-may hold a value outside its own range for as long as it stays local — `var s = 0 as Score` then
-`s = s + 200` prints `200` and exits 0 — and the check fires where the value ESCAPES, at whichever
-door above it reaches first. `assignment.md`'s `assign-ranged-typealias` and
-`a-rebind-out-of-range-is-caught-at-the-return-door` are the two halves of that pin.
+**A REBIND IS A DOOR.** `var s = 0 as Score` then `s = s + 200` panics at the rebind, so a ranged
+`var` never holds a value outside its own range. `assignment.md`'s `assign-ranged-typealias` and
+`a-rebind-out-of-range-panics-at-the-rebind` pin both outcomes.
 
 **How they are enforced depends on what the compiler can know, and the two halves are one rule:**
 
@@ -95,9 +92,12 @@ stand behind. But the argument obstacle above never applied to it either: an ele
 there in the instance's declared element type, at parse time, so it records an ordinary positioned site
 and its guard goes at the **store**, immediately in front of the `__managed_*` call.
 
-⚠ **What is left unenforced is not a position at all** — `Array.resize` GROWS an array by *exposing*
-zero-initialized slots, so an `Array with NonZero` can acquire a `0` with no value crossing any door.
-`specs/safety.md`'s `divide-by-zero-fault-through-a-resized-array-slot` pins it.
+⚠ **A slot nothing wrote crosses no door at all**, so it is refused where it would be made: `Array.resize`,
+`__ManagedMemory.setLength` and `Vector.create` expose zero-initialized slots, and over an element whose range
+excludes zero each of them is **E3106** at compile time. `safety.md`'s
+`error.resize-cannot-expose-a-zero-to-a-non-zero-alias`, `array-slots.md`'s
+`error.set-length-cannot-publish-slots-of-an-element-that-excludes-zero` and `arrays.md`'s
+`error.a-vector-cannot-hold-an-alias-that-excludes-zero` pin the three.
 
 ### ⭐ A `return` of a guarded parameter is ALREADY guarded — and the elision has to earn that
 
@@ -142,10 +142,9 @@ is inside the destination's* — asked through one predicate (`TypeRules.rangeCo
 rule about `ExitCode`, about builtins, or about which alias is "wide":
 
 - **Every door asks it**, because every door holds both ends: a `return`, an explicit `as`, a
-  struct-literal field, a field store, a field's declared default, an array element.
-  A local rebind holds only ONE end — a binding declares no slot — so it is not a door and asks nothing.
-- **A source that names no alias proves nothing**, and that is the direction that keeps the check: a bare
-  `int` local, a folded literal, a `trunc` result. So the **compile-time E3005 half is untouched** —
+  struct-literal field, a field store, a field's declared default, an array element, a rebind.
+- **A source that names no alias proves nothing**, and that is the direction that keeps the check: an unnamed
+  number, a folded literal, a `trunc` result. So the **compile-time E3005 half is untouched** —
   `InsertRangeChecks` reports it only for a value it can fold, and a folded literal denotes no alias.
 - **Equal ranges are contained.** `returns ExitCode` returning an `ExitCode` call result emits nothing.
 - **Anything else guards, and panics** — the mechanism above, none of which this elision removes.
@@ -153,12 +152,9 @@ rule about `ExitCode`, about builtins, or about which alias is "wide":
 ⚠ **WHAT THE ELISION RESTS ON, stated rather than assumed** (the same discipline the four clauses above
 are written in): *a value denoting alias `A` is in `A`'s range*. Every door in this spec maintains it — a
 cast guards its result, a parameter is guarded at the callee's entry, a `return` before its `ret`, a field
-or element at its store. The one producer that does not is **`Array.resize`**, which *exposes*
-zero-initialized slots crossing no door at all (see the array-element section above, and `safety.md`'s
-`divide-by-zero-fault-through-a-resized-array-slot`). A wider door downstream catches such a slot only
-**by coincidence** — it fires only when the exposed `0` happens to fall outside the *second* range too —
-and a coincidence is not a guarantee an elision may be written against. **That hole is `resize`'s to
-close, and closing it is what makes this premise total.**
+or element at its store. The producers of slots nothing wrote — `Array.resize`, `__ManagedMemory.setLength`
+and `Vector.create` — cross no door, so over an element whose range excludes zero they are refused at compile
+time (**E3106**, see the array-element section above), and the premise holds for every value.
 
 ### ⛔⛔ A guard runs on the PATH ITS SITE IS ON — and a ternary's TRUE ARM moves after it is parsed
 
@@ -998,24 +994,46 @@ end 'main'
 ```
 
 <!-- test: range-check-panic.float-argument -->
-⭐ A narrowed FLOAT parameter is guarded on exactly the same terms as an integer one. Shipping the
-integer half alone would have replaced *five doors of which four guard* with *parameters of which only
-the int ones guard* — a fresh instance of the very asymmetry the entry guard exists to delete. The
-cascade is the f64 one `emitGuardAt` already forks for the `as` and `return` doors; nothing about a
-parameter is special.
+⭐ A narrowed FLOAT parameter is checked on exactly the same terms as an integer one. The loop counter here is
+the literal 2, so `i * 1.0` is a float whose interval is `[2.0, 2.0]`, and the argument is refused where it is
+written rather than at the parameter's entry guard.
 ```maxon
 typealias Ratio = float(0.0 to 1.0)
-
-function widen(x Real) returns Real
-  return x * 4.0
-end 'widen'
 
 function scale(r Ratio) returns Real
   return r * 100.0
 end 'scale'
 
 function main() returns ExitCode
-  let big = widen(0.5) * 1.0
+  for i in 2 upto 3 'each'
+    let big = i * 1.0
+    return trunc(scale(big))
+  end 'each'
+  return 0
+end 'main'
+typealias Real = float(f64.min to f64.max)
+```
+```maxoncstderr
+error E3005: <fragment>:11:18: Value 2 is outside the range of 'Ratio' (float(0 to 1))
+```
+
+<!-- test: range-check-panic.float-argument-unproven -->
+⭐ A narrowed FLOAT parameter is guarded on exactly the same terms as an integer one. Shipping the
+integer half alone would have replaced *five doors of which four guard* with *parameters of which only
+the int ones guard* — a fresh instance of the very asymmetry the entry guard exists to delete. The
+cascade is the f64 one `emitGuardAt` already forks for the `as` and `return` doors; nothing about a
+parameter is special. The argument wears `Ratio` without proving it, so no interval is known and the
+entry guard is what catches it.
+```maxon
+typealias Ratio = float(0.0 to 1.0)
+
+function scale(r Ratio) returns Real
+  return r * 100.0
+end 'scale'
+
+function main() returns ExitCode
+  let half = 0.5 as Ratio
+  let big = half * 4.0
   return trunc(scale(big))
 end 'main'
 typealias Real = float(f64.min to f64.max)
@@ -1024,7 +1042,7 @@ typealias Real = float(f64.min to f64.max)
 1
 ```
 ```stderr
-panic at range-check-panic.float-argument.test:8: Range check failed: value outside typealias 'Ratio'
+panic at range-check-panic.float-argument-unproven.test:4: Range check failed: value outside typealias 'Ratio'
 Stack trace:
   in scale
   in main
@@ -1558,10 +1576,10 @@ total=2016
 ```
 
 
-<!-- test: range-check-panic.a-counted-loop-one-past-the-alias-still-panics -->
+<!-- test: range-check-panic.a-counted-loop-one-past-the-alias-is-refused -->
 ⚠ **THE DISCRIMINATING CASE FOR THE EXCLUSIVE ARITHMETIC.** One more trip and the counter reaches 64,
-which `RegNum` does not admit — so the guard stays and fires. A rule that took the interval as
-`[0, b-2]`, or that compared it the other way round, would print `2080` here instead.
+which `RegNum` does not admit — so the cast is refused at compile time. A rule that took the interval as
+`[0, b-2]`, or that compared it the other way round, would compile it.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias RegNum = int(0 to 63)
@@ -1576,14 +1594,8 @@ function main() returns ExitCode
   return 0
 end 'main'
 ```
-```exitcode
-1
-```
-```stderr
-panic at range-check-panic.a-counted-loop-one-past-the-alias-still-panics.test:8: Range check failed: value outside typealias 'RegNum'
-Stack trace:
-  in main
-  in mrt_start
+```maxoncstderr
+error E3005: <fragment>:8:15: Value 64 is outside the range of 'RegNum' (int(0 to 63))
 ```
 
 
@@ -1609,10 +1621,9 @@ total=2016
 ```
 
 
-<!-- test: range-check-panic.an-inclusive-counted-loop-one-past-its-top-bound-still-panics -->
+<!-- test: range-check-panic.an-inclusive-counted-loop-one-past-its-top-bound-is-refused -->
 ⚠ **THE DISCRIMINATING CASE FOR THE INCLUSIVE ARITHMETIC**, and it is the one that would go silently
-wrong if `to` were read as `upto`: under `[0, 63]` the guard would be elided and this would print
-`2080` rather than panicking at 64.
+wrong if `to` were read as `upto`: under `[0, 63]` the cast would be admitted rather than refused at 64.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias RegNum = int(0 to 63)
@@ -1627,14 +1638,8 @@ function main() returns ExitCode
   return 0
 end 'main'
 ```
-```exitcode
-1
-```
-```stderr
-panic at range-check-panic.an-inclusive-counted-loop-one-past-its-top-bound-still-panics.test:8: Range check failed: value outside typealias 'RegNum'
-Stack trace:
-  in main
-  in mrt_start
+```maxoncstderr
+error E3005: <fragment>:8:15: Value 64 is outside the range of 'RegNum' (int(0 to 63))
 ```
 
 
@@ -1997,10 +2002,9 @@ total=2080
 ```
 
 
-<!-- test: range-check-panic.a-counted-loop-past-a-callees-parameter-still-panics -->
-⚠ The negative control for the inlined cascade, and it pins the FRAME as well as the panic: the
-counter is not inside `RegNum`, the cascade is copied as it always was, and the slow arm re-issues the
-real call — so the trace still names `weigh`, at `weigh`'s own parameter line.
+<!-- test: range-check-panic.a-counted-loop-past-a-callees-parameter-is-refused -->
+⚠ The negative control for the inlined cascade: the counter is not inside `RegNum`, so the argument is
+refused at compile time.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias RegNum = int(0 to 63)
@@ -2018,15 +2022,8 @@ function main() returns ExitCode
   return 0
 end 'main'
 ```
-```exitcode
-1
-```
-```stderr
-panic at range-check-panic.a-counted-loop-past-a-callees-parameter-still-panics.test:5: Range check failed: value outside typealias 'RegNum'
-Stack trace:
-  in weigh
-  in main
-  in mrt_start
+```maxoncstderr
+error E3005: <fragment>:12:21: Value 99 is outside the range of 'RegNum' (int(0 to 63))
 ```
 
 
@@ -2165,7 +2162,7 @@ would vouch for `d` on paths the guard never ran on. The cast mints its own valu
 typealias Positive = float(2.2250738585072014e-308 to f64.max)
 
 function main() returns ExitCode
-  var d = 0.0
+  var d = 0.0 as FullRangeFloat
   d = d + 4.0
   let s = d as Positive
   print("q={8.0 / s}\n")
@@ -2185,7 +2182,7 @@ at the CAST, before the divide the proof exempted. An elided guard here would pr
 typealias Positive = float(2.2250738585072014e-308 to f64.max)
 
 function main() returns ExitCode
-  var d = 1.0
+  var d = 1.0 as FullRangeFloat
   d = d - 1.0
   let s = d as Positive
   print("q={8.0 / s}\n")
@@ -2203,12 +2200,10 @@ Stack trace:
 ```
 
 
-<!-- test: range-check-panic.a-merge-fed-by-a-counted-loop-denotes-no-alias -->
-⛔ **THE RED-GATE CONTROL FOR THE THIRD WITHHOLD.** `x` is an `if`-continuation merge — one of the four that
-MAY lift a phi's withheld alias claim — and one of its edges is a counted counter whose interval lies inside
-`Small`. Letting `edgeProvesAlias` read the interval would lift that claim, putting the merge's DECLARED name
-back into circulation, and `x as Small` would become E3010: an interval that names nothing would have refused
-a program every other compiler accepts. Verified by making that edit and watching this case go red.
+<!-- test: range-check-panic.a-merge-fed-by-a-counted-loop-denotes-the-vars-alias -->
+`x` is an `if`-continuation merge, and one of its edges stores a counted counter whose interval lies
+inside `Small`. Every store into the ranged `var` is a range door, so the merge denotes `Small` and reads
+into `Integer` with the one cast; a second `as Small` would be E3010.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Small = int(0 to 10)
@@ -2222,7 +2217,7 @@ function main() returns ExitCode
     end 'high' else 'low'
       x = 1
     end 'low'
-    t = t + ((x as Small) as Integer)
+    t = t + (x as Integer)
   end 'l'
   print("t={t}\n")
   return 0
@@ -2489,6 +2484,8 @@ end 'main'
 ```
 
 <!-- test: a-negative-value-into-a-generic-cell-is-refused-where-it-enters -->
+`n` is derived from a counted loop's counter, so the `-1` it reaches is known at compile time and the
+cell's `Count` parameter refuses it with E3005.
 ```maxon
 type Cell uses T
 	export var v as T
@@ -2512,10 +2509,8 @@ function echo(c Count) returns Count
 end 'echo'
 
 function main() returns ExitCode
-	var n = 3
-
 	for i in 0 upto 2 'each'
-		n = i - 1
+		let n = i - 1
 		let cell = CountCell.make(n, pick: echo)
 		print("{cell.run()}\n")
 	end 'each'
@@ -2523,14 +2518,8 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```exitcode
-1
-```
-```stderr
-panic at a-negative-value-into-a-generic-cell-is-refused-where-it-enters.test:28: Range check failed: value outside typealias 'Count'
-Stack trace:
-  in main
-  in mrt_start
+```maxoncstderr
+error E3005: <fragment>:26:24: Value -1 is outside the range of 'Count' (int(0 to 18446744073709551615))
 ```
 
 <!-- test: a-large-count-reaches-a-service-handler -->
@@ -2571,6 +2560,9 @@ end 'main'
 ```
 
 <!-- test: a-negative-value-sent-to-a-service-handler-is-refused-at-the-send -->
+<!-- unsupported-targets: wasm32-wasi -->
+`i - 1` is arithmetic over a counted loop's counter, so the `-1` it reaches is known at compile time and
+the handler's `Count` parameter refuses it at the send with E3005.
 ```maxon
 type Sink
 	var seen = 0 as Count
@@ -2594,14 +2586,8 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```exitcode
-1
-```
-```stderr
-panic at a-negative-value-sent-to-a-service-handler-is-refused-at-the-send.test:18: Range check failed: value outside typealias 'Count'
-Stack trace:
-  in main
-  in mrt_start
+```maxoncstderr
+error E3005: <fragment>:18:5: Value -1 is outside the range of 'Count' (int(0 to 18446744073709551615))
 ```
 
 <!-- test: a-large-count-through-a-generic-instances-function-field -->
@@ -2641,17 +2627,52 @@ end 'main'
 ```
 
 <!-- test: a-negative-value-through-a-closure-is-refused-at-the-call -->
-A negative value handed to a closure's `Count` parameter is refused where the closure is called.
+A negative value handed to a closure's `Count` parameter is refused where the closure is called. `n` is
+derived from a counted loop's counter, so its interval is known and the refusal is a compile error.
 ```maxon
 function main() returns ExitCode
 	let f = function(tag String, c Count) gives c if tag == "x" else c
-	var n = 3
 
 	for i in 0 upto 2 'each'
-		n = i - 1
+		let n = i - 1
 		print("{f("x", n)}\n")
 	end 'each'
 
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:7:12: Value -1 is outside the range of 'Count' (int(0 to 18446744073709551615))
+```
+
+<!-- test: a-negative-difference-into-a-generic-cell-panics-where-it-enters -->
+The run-time twin of the refusal above: `args - 2` is a `Count` difference the compiler cannot evaluate, so the borrow is caught where the value enters the cell.
+```maxon
+type Cell uses T
+	export var v as T
+	export var pick as Pick
+
+	typealias Pick = function(T) returns T
+
+	static function make(v T, pick Pick) returns Self
+		return Self{v: v, pick: pick}
+	end 'make'
+
+	export function run() returns T
+		return self.pick(self.v)
+	end 'run'
+end 'Cell'
+
+typealias CountCell = Cell with Count
+
+function echo(c Count) returns Count
+	return c
+end 'echo'
+
+function main() returns ExitCode
+	let n = CommandLine.args().count() - 2
+	let cell = CountCell.make(n, pick: echo)
+	print("{cell.run()}\n")
 	return 0
 end 'main'
 ```
@@ -2659,8 +2680,89 @@ end 'main'
 1
 ```
 ```stderr
-panic at a-negative-value-through-a-closure-is-refused-at-the-call.test:8: Range check failed: value outside typealias 'Count'
+panic at a-negative-difference-into-a-generic-cell-panics-where-it-enters.test:25: Range check failed: value outside typealias 'Count'
 Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: a-negative-difference-sent-to-a-service-handler-panics-at-the-send -->
+The run-time twin of the refusal above: the difference is unknown to the compiler, so the handler's `Count` parameter catches the borrow when the send is made.
+```maxon
+type Sink
+	var seen = 0 as Count
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function put(c Count)
+		self.seen = c
+	end 'put'
+end 'Sink'
+
+function main() returns ExitCode
+	let h = spawn Sink.create()
+	h.put(CommandLine.args().count() - 2)
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-negative-difference-sent-to-a-service-handler-panics-at-the-send.test:16: Range check failed: value outside typealias 'Count'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: a-negative-difference-through-a-closure-panics-at-the-call -->
+The run-time twin of the refusal above: the difference is unknown to the compiler, so the closure's `Count` parameter catches the borrow where the closure is called.
+```maxon
+function main() returns ExitCode
+	let f = function(tag String, c Count) gives c if tag == "x" else c
+	print("{f("x", CommandLine.args().count() - 2)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at a-negative-difference-through-a-closure-panics-at-the-call.test:4: Range check failed: value outside typealias 'Count'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: range-check-panic.a-sum-past-a-callees-parameter-still-panics -->
+⚠ The run-time twin of the refusal above, and it pins the FRAME as well as the panic: the argument is a sum of two `RegNum`s, which wears `RegNum` without proving it, so the cascade is copied as it always was and the slow arm re-issues the real call — the trace names `weigh`, at `weigh`'s own parameter line.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias RegNum = int(0 to 63)
+
+function weigh(table Integer, regNum RegNum) returns Integer
+  return table + (regNum as Integer)
+end 'weigh'
+
+function main() returns ExitCode
+  var total = 0 as Integer
+  for r in 0 upto 64 'scan'
+    let cell = r as RegNum
+    total = total + weigh(1, regNum: cell + cell)
+  end 'scan'
+  print("total={total}\n")
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at range-check-panic.a-sum-past-a-callees-parameter-still-panics.test:5: Range check failed: value outside typealias 'RegNum'
+Stack trace:
+  in weigh
   in main
   in mrt_start
 ```

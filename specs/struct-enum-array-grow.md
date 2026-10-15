@@ -70,7 +70,7 @@ end 'Function'
 
 function main() returns ExitCode
 		var f = Function.create(1, body: IntArray.create(), terminator: Instruction.load(99), hasTerminator: true)
-		var i = 0
+		var i = 0 as Integer
 		while i < 20 'fill'
 				f.body.push(i)
 				i = i + 1
@@ -105,7 +105,7 @@ typealias EntryArray = Array with Entry
 
 function main() returns ExitCode
 		var entries = EntryArray.create()
-		var i = 0
+		var i = 0 as Integer
 		while i < 10 'fill'
 				let e = Entry.create(i, tag: Tag.number(i * 10))
 				entries.push(e)

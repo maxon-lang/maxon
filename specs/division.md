@@ -198,10 +198,10 @@ that excludes 0 buys back. The cast costs one `cmp`/branch against the lower bou
 typealias Positive = int(1 to i64.max)
 
 function main() returns ExitCode
-	var sum = 0
-	var i = 1
+	var sum = 0 as FullRangeInt
+	var i = 1 as FullRangeInt
 	while i <= 6 'loop'
-		sum = sum + 100 / (i as Positive)
+		sum = sum + (100 / (i as Positive)) as FullRangeInt
 		i = i + 1
 	end 'loop'
 	return sum
@@ -272,8 +272,8 @@ function opaque(x Integer) returns Integer
 end 'opaque'
 
 function main() returns ExitCode
-	var sum = 0
-	var i = 1
+	var sum = 0 as Integer
+	var i = 1 as Integer
 	while i <= 6 'loop'
 		sum = sum + (try (100 / opaque(i)) otherwise 0)
 		i = i + 1

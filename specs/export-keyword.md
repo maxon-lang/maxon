@@ -230,7 +230,7 @@ export type Container
 	end 'add'
 
 	export function sum() returns Integer
-		var total = 0
+		var total = 0 as Integer
 		for item in items 'loop'
 			total = total + item
 		end 'loop'
@@ -885,7 +885,7 @@ end 'Holder'
 // --- file: main.maxon
 function main() returns ExitCode
 	let seq = Holder.make().seq
-	var sum = 0
+	var sum = 0 as Integer
 
 	for v in seq 'each'
 		sum = sum + v
@@ -1202,7 +1202,7 @@ end 'main'
 Cross-file access to an exported module-level var with a simple constant value.
 ```maxon
 // --- file: api/counter.maxon
-export var counter = 10
+export var counter = 10 as ExitCode
 
 // --- file: app/main.maxon
 function main() returns ExitCode
@@ -1244,7 +1244,7 @@ end 'main'
 Non-exported module-level var should not be accessible from another file.
 ```maxon
 // --- file: state.maxon
-var secret = 99
+var secret = 99 as ExitCode
 
 // --- file: main.maxon
 function main() returns ExitCode
@@ -1618,7 +1618,7 @@ static rather than the in-band pointer sentinel a record slot allows.
 ```maxon
 // --- file: counter.maxon
 export type Counter
-	static var hits = 7
+	static var hits = 7 as FullRangeInt
 end 'Counter'
 
 // --- file: main.maxon

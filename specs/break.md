@@ -19,7 +19,7 @@ break 'label'   // Break from loop with specified label
 **Example:**
 
 ```maxon
-var x = 5
+var x = 5 as Count
 while true 'loop'
 	x = x + 2
 	if x == 11 'check'
@@ -67,7 +67,7 @@ end 'outer'
 <!-- test: break.in-loop -->
 ```maxon
 function main() returns ExitCode
-	var x = 0
+	var x = 0 as ExitCode
 	while true 'loop'
 		x = x + 1
 		if x == 5 'check'
@@ -84,7 +84,7 @@ end 'main'
 <!-- test: break.with-if -->
 ```maxon
 function main() returns ExitCode
-	var x = 0
+	var x = 0 as ExitCode
 	while true 'loop'
 		x = x + 1
 		if x == 10 'check'
@@ -101,8 +101,8 @@ end 'main'
 <!-- test: break.multiple-conditions -->
 ```maxon
 function main() returns ExitCode
-	var x = 5
-	var count = 0
+	var x = 5 as ExitCode
+	var count = 0 as Count
 	while x < 100 'loop'
 		x = x + 1
 		count = count + 1
@@ -120,7 +120,7 @@ end 'main'
 <!-- test: break.labeled-break-outer -->
 ```maxon
 function main() returns ExitCode
-	var x = 0
+	var x = 0 as ExitCode
 	while x < 10 'outer'
 		x = x + 1
 		while true 'inner'
@@ -140,8 +140,8 @@ end 'main'
 <!-- test: break.labeled-break-inner -->
 ```maxon
 function main() returns ExitCode
-	var x = 0
-	var y = 0
+	var x = 0 as ExitCode
+	var y = 0 as Count
 	while x < 5 'outer'
 		x = x + 1
 		while y < 10 'inner'
@@ -161,7 +161,7 @@ end 'main'
 <!-- test: break.labeled-break-triple-nested -->
 ```maxon
 function main() returns ExitCode
-	var result = 0
+	var result = 0 as ExitCode
 	while true 'outer'
 		while true 'middle'
 			while true 'inner'
@@ -182,11 +182,11 @@ end 'main'
 <!-- test: break.labeled-continue-outer -->
 ```maxon
 function main() returns ExitCode
-	var x = 0
-	var count = 0
+	var x = 0 as Count
+	var count = 0 as ExitCode
 	while x < 3 'outer'
 		x = x + 1
-		var y = 0
+		var y = 0 as Count
 		while y < 5 'inner'
 			y = y + 1
 			count = count + 1
@@ -205,11 +205,11 @@ end 'main'
 <!-- test: break.labeled-continue-inner -->
 ```maxon
 function main() returns ExitCode
-	var sum = 0
-	var x = 0
+	var sum = 0 as ExitCode
+	var x = 0 as Count
 	while x < 3 'outer'
 		x = x + 1
-		var y = 0
+		var y = 0 as Count
 		while y < 5 'inner'
 			y = y + 1
 			if y == 3 'check'
@@ -228,14 +228,14 @@ end 'main'
 <!-- test: break.labeled-continue-triple-nested -->
 ```maxon
 function main() returns ExitCode
-	var count = 0
-	var a = 0
+	var count = 0 as ExitCode
+	var a = 0 as Count
 	while a < 2 'outer'
 		a = a + 1
-		var b = 0
+		var b = 0 as Count
 		while b < 3 'middle'
 			b = b + 1
-			var c = 0
+			var c = 0 as Count
 			while c < 4 'inner'
 				c = c + 1
 				count = count + 1
@@ -270,7 +270,7 @@ error E2048: specs/break/break.error-break-own-label.maxon:4:9: 'break' with lab
 Error: continue with the label of its own loop is redundant.
 ```maxon
 function main() returns ExitCode
-	var x = 0
+	var x = 0 as ExitCode
 	while x < 10 'loop'
 		x = x + 1
 		continue 'loop'
@@ -291,8 +291,8 @@ here would append its ops AFTER a terminator, and the successor walk reads only
 the last op.
 ```maxon
 function main() returns ExitCode
-	var total = 0
-	var i = 0
+	var total = 0 as Count
+	var i = 0 as Count
 	while i < 5 'loop'
 		i = i + 1
 		if i == 2 'skip'
@@ -313,8 +313,8 @@ error E3071: specs/break/break.error-unreachable-after-break.maxon:9:4: unreacha
 Error: the same for `continue`, which branches to the loop header.
 ```maxon
 function main() returns ExitCode
-	var total = 0
-	var i = 0
+	var total = 0 as Count
+	var i = 0 as Count
 	while i < 5 'loop'
 		i = i + 1
 		if i == 2 'skip'

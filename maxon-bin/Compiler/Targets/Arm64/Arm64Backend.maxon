@@ -657,7 +657,7 @@ end 'Arm64LogicalImmResult'
 
 // The number of low-order set bits of `value` (trailing ones).
 function arm64CountTrailingOnes(value MachineWord) returns MachineWord
-	var count = 0
+	var count = 0 as MachineWord
 	var v = value
 
 	while (v and 0x1) == 0x1 'each'
@@ -674,7 +674,7 @@ function arm64CountTrailingZeros(value MachineWord) returns MachineWord
 		return Arm64WordBits
 	end 'allZero'
 
-	var count = 0
+	var count = 0 as MachineWord
 	var v = value
 
 	while (v and 0x1) == 0x0 'each'
@@ -693,7 +693,7 @@ end 'arm64CountTrailingZeros'
 // walk would never terminate on a wrapped-run logical immediate. The
 // `count < Arm64WordBits` cap bounds the walk even for an all-ones input.
 function arm64CountLeadingOnes(value MachineWord) returns MachineWord
-	var count = 0
+	var count = 0 as MachineWord
 	var v = value
 
 	while count < Arm64WordBits and (v and Arm64WordSignBit) != 0 'each'
@@ -728,11 +728,11 @@ function arm64EncodeLogicalImm(value MachineWord) returns Arm64LogicalImmResult
 	end 'degenerate'
 
 	// Find the repeating element size: halve until the two halves of the candidate element differ.
-	var size = 64
+	var size = 64 as MachineWord
 
 	while size > 2 'shrink'
 		let half = size / 2
-		let mask = (1 shl half) - 1
+		let mask = ((1 shl half) - 1) as MachineWord
 
 		if (value and mask) != ((value shr half) and mask) 'differ'
 			break
@@ -744,8 +744,8 @@ function arm64EncodeLogicalImm(value MachineWord) returns Arm64LogicalImmResult
 	let elementMask = fullMaskOfSize(size)
 	var imm = value and elementMask
 
-	var rotationStart = 0
-	var runLength = 0
+	var rotationStart = 0 as MachineWord
+	var runLength = 0 as MachineWord
 
 	if arm64IsShiftedMask(imm) 'directRun'
 		// The run does not wrap: its bottom is at the trailing-zero count, its length the ones above.
@@ -1891,18 +1891,20 @@ let Arm64MemFillTwoPairBytes = 32
 // analogue on this ISA the bulk loop IS the large path — there is no third arm above it.
 let Arm64MemFillLoopStride = 64
 
+typealias Arm64MemFillRunLength = int(0 to 4)
+typealias Arm64MemFillSpanBytes = int(16 to 32)
+
 // `count` consecutive `stp pattern, pattern` pairs (16 bytes each) from `[base + startOffset]` upward.
 //
 // ⭐ STP rather than STR: an STP retires as a SINGLE micro-op writing 16 bytes, so it halves the instruction
 // count at identical store bandwidth. And no `dc zva` anywhere in this ladder — it needs the block size read
 // from DCZID_EL0, wants 64-byte alignment, can be turned off by DCZID_EL0.DZP, and buys nothing at the 8..64
 // byte sizes that dominate the allocator's hot path.
-function arm64EmitFillPairRun(code ByteArray, baseReg MachineWord, startOffset Imm32, count MachineWord)
+function arm64EmitFillPairRun(code ByteArray, baseReg MachineWord, startOffset Imm32, count Arm64MemFillRunLength)
 	for i in 0 upto count 'pairs'
-		// ⚠ The cast brackets the WHOLE sum. `a + b as Imm32` casts only `b` — `as` binds tighter than `+` —
-		// which leaves the sum at whatever wider type the operands join to and pushes the narrowing onto the
-		// callee's parameter bind. Stated as its own `let` so the reading cannot be mistaken.
-		let byteOffset = (startOffset + i * Arm64MemFillPairBytes) as Imm32
+		// ⚠ The cast brackets the PRODUCT, and the sum wears `startOffset`'s `Imm32`. `a + b as Imm32` casts
+		// only `b` — `as` binds tighter than `+`. Stated as its own `let` so the reading cannot be mistaken.
+		let byteOffset = startOffset + ((i * Arm64MemFillPairBytes) as Imm32)
 		arm64EmitPairOffset(code, opcode: Arm64OpStpOffX, rt1: Arm64MemFillPattern, rt2: Arm64MemFillPattern, baseReg: baseReg, byteOffset: byteOffset)
 	end 'pairs'
 end 'arm64EmitFillPairRun'
@@ -1911,8 +1913,8 @@ end 'arm64EmitFillPairRun'
 // a length at least `spanBytes` and under twice it, `spanBytes/16` pairs forward from the cursor and
 // `spanBytes/16` pairs backward from the end cover the whole region with straight-line code, the middle
 // written twice and no ragged tail to test for.
-function arm64EmitFillOverlappingSpan(code ByteArray, spanBytes MachineWord)
-	let pairs = spanBytes / Arm64MemFillPairBytes
+function arm64EmitFillOverlappingSpan(code ByteArray, spanBytes Arm64MemFillSpanBytes)
+	let pairs = (spanBytes / Arm64MemFillPairBytes) as Arm64MemFillRunLength
 	arm64EmitFillPairRun(code, baseReg: Arm64MemFillCursor, startOffset: 0, count: pairs)
 	arm64EmitFillPairRun(code, baseReg: Arm64MemFillEnd, startOffset: -(spanBytes as Imm32), count: pairs)
 end 'arm64EmitFillOverlappingSpan'
@@ -1929,7 +1931,7 @@ end 'arm64EmitFillOverlappingSpan'
 // x2 is pinned to the region's END before anything mutates x0/x1, and left alone.
 //
 // A count of 0 falls into the `< 8` arm and its `cbz` exits at once, writing nothing.
-function arm64EmitMemFill(code ByteArray, fillByte ParsedInt)
+function arm64EmitMemFill(code ByteArray, fillByte FullRangeInt)
 	arm64EmitMovImm(code, rd: Arm64MemFillPattern, value: memFillPatternWord(fillByte))
 	emitArm64Rrr(code, opcode: Arm64OpAdd, rd: Arm64MemFillEnd, rn: Arm64MemFillCursor, rm: Arm64MemFillCount)
 
@@ -2544,8 +2546,8 @@ end 'arm64EmitStoreOutgoingArg'
 
 // STP x29, x30, [sp, #-frameSize]! (pre-indexed). imm7 is signed, scaled by 8.
 export function arm64EmitStpPreIndex(code ByteArray, frameSize StackSize)
-	let imm7 = (-frameSize / 8) and Arm64PairImm7Mask
-	emitArm64Insn(code, insn: Arm64OpStpPreX or (imm7 shl Arm64PairImm7Shift) or (Arm64Lr shl Arm64Rt2Shift) or (Arm64SpBaseField shl Arm64RnShift) or Arm64Fp)
+	let imm7 = (-(frameSize as FullRangeInt) / 8) and Arm64PairImm7Mask
+	emitArm64Insn(code, insn: ((Arm64OpStpPreX or (imm7 shl Arm64PairImm7Shift) or (Arm64Lr shl Arm64Rt2Shift) or (Arm64SpBaseField shl Arm64RnShift) or Arm64Fp) as MachineWord))
 end 'arm64EmitStpPreIndex'
 
 // LDP x29, x30, [sp], #frameSize (post-indexed).

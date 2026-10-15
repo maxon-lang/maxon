@@ -89,7 +89,7 @@ function main() returns ExitCode
 	for i in 0 upto 6 'seed'
 		a.push(i * i)
 	end 'seed'
-	var t = 0
+	var t = 0 as Word
 	for i in 0 upto 6 'sum'
 		t = t + pick(a, i: i)
 	end 'sum'
@@ -117,7 +117,7 @@ typealias WordArray = Array with Word
 
 function fill(a WordArray, n Word)
 	for i in 0 upto n 'each'
-		try a.set(i, value: i * 3 + 1) otherwise panic("set: index out of range")
+		try a.set(i as ElementIndex, value: i * 3 + 1) otherwise panic("set: index out of range")
 	end 'each'
 end 'fill'
 
@@ -125,7 +125,7 @@ function main() returns ExitCode
 	var a = WordArray.create()
 	a.resize(5)
 	fill(a, n: 5)
-	var seen = 0
+	var seen = 0 as Word
 	for v in a 'check'
 		seen = seen + v
 	end 'check'
@@ -160,7 +160,7 @@ function main() returns ExitCode
 	for i in 0 upto 4 'rewrite'
 		relabel(a, i: i)
 	end 'rewrite'
-	var bytes = 0
+	var bytes = 0 as Idx
 	for s in a 'measure'
 		bytes = bytes + s.byteLength()
 	end 'measure'

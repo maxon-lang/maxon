@@ -231,7 +231,7 @@ function main() returns ExitCode
 	let a = Token.create(10)
 	let b = Token.create(10)
 	let c = Token.create(20)
-	var result = 0
+	var result = 0 as Integer
 	if a.equals(b) 'first'
 		result = result + 1
 	end 'first'

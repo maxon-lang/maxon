@@ -91,7 +91,7 @@ type Module
 	end 'addBlock'
 
 	function sumIds() returns Num
-		var sum = 0
+		var sum = 0 as Num
 		for b in blocks 'each'
 			sum = sum + b.id
 		end 'each'

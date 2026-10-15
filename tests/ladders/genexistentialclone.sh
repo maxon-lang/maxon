@@ -35,6 +35,11 @@ if [ "$CONFORMERS" -lt 1 ]; then
   exit 2
 fi
 
+if [ "$HOLDERS" -lt 1 ]; then
+  echo "genexistentialclone.sh: <holders> must be at least 1 (main clones every holder)" >&2
+  exit 2
+fi
+
 {
   printf '// ladder: %s holder(s), %s conformer(s), %s pad type(s), mode %s\n' "$HOLDERS" "$CONFORMERS" "$TYPES" "$MODE"
   echo "typealias Integer = int(i64.min to i64.max)"

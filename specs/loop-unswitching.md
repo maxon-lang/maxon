@@ -64,9 +64,9 @@ the store.
 typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
-function fill(a WordArray, n Word)
+function fill(a WordArray, n Count)
 	for i in 0 upto n 'each'
-		try a.set(i, value: i * 3 + 1) otherwise panic("fill: i < n = a.count()")
+		try a.set(i, value: (i * 3 + 1) as Word) otherwise panic("fill: i < n = a.count()")
 	end 'each'
 end 'fill'
 
@@ -74,7 +74,7 @@ function main() returns ExitCode
 	var a = WordArray.create()
 	a.resize(5)
 	fill(a, n: 5)
-	var seen = 0
+	var seen = 0 as Word
 	for v in a 'check'
 		seen = seen + v
 	end 'check'
@@ -96,8 +96,8 @@ is the bound check and the element load.
 typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
-function total(a WordArray, n Word) returns Word
-	var t = 0
+function total(a WordArray, n Count) returns Word
+	var t = 0 as Word
 	for i in 0 upto n 'sum'
 		t = t + (try a.get(i) otherwise panic("total: i < n = a.count()"))
 	end 'sum'
@@ -127,9 +127,9 @@ and `a` is untouched. A fast version entered here would write through the sharin
 typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
-function overwrite(b WordArray, n Word)
+function overwrite(b WordArray, n Count)
 	for i in 0 upto n 'each'
-		try b.set(i, value: 100 + i) otherwise panic("overwrite: i < n = b.count()")
+		try b.set(i, value: (100 + i) as Word) otherwise panic("overwrite: i < n = b.count()")
 	end 'each'
 end 'overwrite'
 
@@ -140,11 +140,11 @@ function main() returns ExitCode
 	end 'seed'
 	var b = try a.slice(0, endIndex: 4) otherwise panic("main: 0..4 is within a")
 	overwrite(b, n: 4)
-	var sumA = 0
+	var sumA = 0 as Word
 	for v in a 'readA'
 		sumA = sumA + v
 	end 'readA'
-	var sumB = 0
+	var sumB = 0 as Word
 	for v in b 'readB'
 		sumB = sumB + v
 	end 'readB'
@@ -170,10 +170,10 @@ buffer would be the one a growing `push` frees, and the read would follow a stal
 typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
-function grow(a WordArray, n Word) returns Word
-	var t = 0
+function grow(a WordArray, n Count) returns Word
+	var t = 0 as Word
 	for i in 0 upto n 'each'
-		a.push(i)
+		a.push(i as Word)
 		t = t + (try a.get(0) otherwise panic("grow: a holds an element on entry"))
 	end 'each'
 	return t
@@ -203,11 +203,11 @@ and the loop continues with its hoisted length and buffer still true.
 typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
-function walk(a WordArray, n Word) returns Word
-	var t = 0
+function walk(a WordArray, n Count) returns Word
+	var t = 0 as Word
 	for i in 0 upto n 'each'
 		t = t + (try a.get(i) otherwise 99)
-		try a.set(i, value: i * 2) otherwise ignore
+		try a.set(i, value: (i * 2) as Word) otherwise ignore
 	end 'each'
 	return t
 end 'walk'
@@ -220,7 +220,7 @@ function main() returns ExitCode
 	if walk(a, n: 9) != 406 'sum'
 		return 1
 	end 'sum'
-	var seen = 0
+	var seen = 0 as Word
 	for v in a 'check'
 		seen = seen + v
 	end 'check'
@@ -241,8 +241,8 @@ hand it to the exit block through one block argument.
 typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
-function lastDoubled(a WordArray, n Word) returns Word
-	var last = -1
+function lastDoubled(a WordArray, n Count) returns Word
+	var last = -1 as Word
 	for i in 0 upto n 'each'
 		let v = try a.get(i) otherwise panic("lastDoubled: i < n = a.count()")
 		try a.set(i, value: v * 2) otherwise panic("lastDoubled: i < n = a.count()")
@@ -278,16 +278,16 @@ its reader and the inner loop is refused too. Behaviour is pinned; the emitted c
 typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
-function firstBigRow(rows WordArray, width Word, limit Word) returns Word
-	var found = -1
-	var r = 0
+function firstBigRow(rows WordArray, width Count, limit Word) returns Word
+	var found = -1 as Word
+	var r = 0 as Word
 	while r < limit 'outer'
 		rows.push(r * 10)
 		for c in 0 upto width 'inner'
 			let v = try rows.get(c) otherwise panic("firstBigRow: c < width <= rows.count()")
 			try rows.set(c, value: v + 1) otherwise panic("firstBigRow: c < width <= rows.count()")
 			if v > 25 'hit'
-				found = r * 100 + c
+				found = r * 100 + (c as Word)
 				break 'outer'
 			end 'hit'
 		end 'inner'
@@ -325,9 +325,9 @@ typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
 function tally(a WordArray) returns Word
-	var t = 0
-	var last = 0
-	var i = 0
+	var t = 0 as Word
+	var last = 0 as Count
+	var i = 0 as ElementIndex
 	while true 'l'
 		t = t + (try a.get(i) otherwise 0)
 		last = a.count()
@@ -336,7 +336,7 @@ function tally(a WordArray) returns Word
 		end 'stop'
 		i = i + 1
 	end 'l'
-	return last * 100 + t
+	return (last as Word) * 100 + t
 end 'tally'
 
 function main() returns ExitCode
@@ -363,10 +363,10 @@ one name must be the record's, so writes through `a` are read back through `b`.
 typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
-function crossWrite(a WordArray, b WordArray, n Word) returns Word
-	var t = 0
+function crossWrite(a WordArray, b WordArray, n Count) returns Word
+	var t = 0 as Word
 	for i in 0 upto n 'each'
-		try a.set(i, value: i + 10) otherwise panic("crossWrite: i < n")
+		try a.set(i, value: (i + 10) as Word) otherwise panic("crossWrite: i < n")
 		t = t + (try b.get(i) otherwise panic("crossWrite: i < n"))
 	end 'each'
 	return t

@@ -214,7 +214,7 @@ export function x64PrologueFrameOf(module TargetModule, func IrFunction) returns
 		let op = try module.ops.get(opIdx) otherwise panic("x64PrologueFrameOf: opIdx {opIdx} not in module.ops")
 
 		match op 'frameOp'
-			pushReg(reg) then pushed = regMaskAdd(pushed, regNum: reg.rawValue)
+			pushReg(reg) then pushed = regMaskAdd(pushed, regNum: reg.rawValue as RegNum)
 			prologue(stackSize) then frameBytes = stackSize
 			epilogue or
 			ret or
@@ -450,7 +450,7 @@ function usedRegsFrom(order X64RegisterArray, coloured RegMask) returns X64Regis
 	var used = X64RegisterArray.create()
 
 	for reg in order 'eachCallee'
-		if regMaskContains(coloured, regNum: reg.rawValue) 'isUsed'
+		if regMaskContains(coloured, regNum: reg.rawValue as RegNum) 'isUsed'
 			used.push(reg)
 		end 'isUsed'
 	end 'eachCallee'
@@ -511,7 +511,7 @@ end 'insertPrologueAtEntry'
 function appendEpilogueBeforeReturn(module TargetModule, block IrBlock, usedCallee X64RegisterArray, usedXmm X64RegisterArray, xmmBaseSlot SpillSlot, frameBytes StackSize)
 	for xi in 0 upto usedXmm.count() 'eachXmmRestore'
 		let reg = try usedXmm.get(xi) otherwise panic("appendEpilogueBeforeReturn: usedXmm.get OOB")
-		module.appendOp(block, op: TargetOp.loadRegSlot(x64PhysReg(reg), slot: xmmBaseSlot + xi))
+		module.appendOp(block, op: TargetOp.loadRegSlot(x64PhysReg(reg), slot: xmmBaseSlot + (xi as SpillSlot)))
 	end 'eachXmmRestore'
 
 	if frameBytes > 0 'release'

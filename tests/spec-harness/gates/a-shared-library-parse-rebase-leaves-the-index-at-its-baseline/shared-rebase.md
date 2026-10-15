@@ -112,10 +112,12 @@ end 'main'
 
 <!-- test: shared-rebase.case6 -->
 ```maxon
+typealias RebaseCount = int(0 to 100)
+
 function main() returns ExitCode
 	let list = List from [10, 20, 30]
-	let f = try list.first() otherwise 0
-	let l = try list.last() otherwise 0
+	let f = (try list.first() otherwise 0) as RebaseCount
+	let l = (try list.last() otherwise 0) as RebaseCount
 	print("{f}\n")
 	print("{l}\n")
 	return 0

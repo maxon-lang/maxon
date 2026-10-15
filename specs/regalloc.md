@@ -55,7 +55,7 @@ function main() returns ExitCode
 	let v4 = ident(seed + 44)
 
 	// Many distinct constants combined with the working values.
-	var total = 0
+	var total = 0 as Integer
 	total = total + (v1 and 255)
 	total = total + (v2 and 61680)
 	total = total + (v3 and 1193046)
@@ -123,7 +123,7 @@ function main() returns ExitCode
 	let v1 = ident(seed + 7)
 	let v2 = ident(seed + 13)
 
-	var acc = 0
+	var acc = 0 as Integer
 	acc = acc + (v1 and 255)
 	acc = acc + (v2 or 4096)
 	acc = acc + (v1 xor 21845)
@@ -196,8 +196,8 @@ function main() returns ExitCode
 	let v5 = ident(seed + 5)
 	let v6 = ident(seed + 6)
 
-	var total = 0
-	var i = 0
+	var total = 0 as Integer
+	var i = 0 as Integer
 	while i < 4 'loop'
 		// Each iteration's ALU mix uses every v_i. Spilled-source uses
 		// of these reg-reg forms are exactly the fold-eligible shape for
@@ -276,8 +276,8 @@ function main() returns ExitCode
 	// Hot inner loop: 4 high-weight values that benefit from being in
 	// callee-saved registers (they survive the inner `combine` call).
 	// In total the loop body keeps 4 hot scalars live across each call.
-	var sum = 0
-	var i = 0
+	var sum = 0 as Integer
+	var i = 0 as Integer
 	while i < 10 'hot'
 		let h1 = combine(seed, b: i, c: 1)
 		let h2 = combine(seed, b: i, c: 2)

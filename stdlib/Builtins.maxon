@@ -258,27 +258,36 @@ end '__SubprocessStreamState'
 // so a `__file__` parameter is declared `String` directly. Add one here if that ever lifts.
 public typealias SourceLineNumber = int(1 to i32.max)
 
-// Wide-signed integer used as the return type of __int_fromString /
-// __byte_fromString and propagated through user-facing parse APIs.
-public typealias ParsedInt = int(i64.min to i64.max)
+// Every value a signed 64-bit integer holds: the alias an integer wears when no narrower range is
+// honest — `trunc`'s result, `__int_fromString`'s, and the parse APIs'.
+public typealias FullRangeInt = int(i64.min to i64.max)
 
-public function __int_fromString(input String) returns ParsedInt throws ParseError
-	var result = 0
+let __intTenthOfMinMagnitude = 922337203685477580 as FullRangeInt
+let __intLastDigitOfMinMagnitude = 8 as FullRangeInt
+
+public function __int_fromString(input String) returns FullRangeInt throws ParseError
+	var result = 0 as FullRangeInt
 	var negative = false
 	var hasDigits = false
 
 	for cp in input.codepoints() 'chars'
 		if cp == '-' 'minus'
-			if hasDigits 'minus_after_digits'
+			if hasDigits or negative 'minus_after_digits_or_another_minus'
 				throw ParseError.invalidFormat
-			end 'minus_after_digits'
+			end 'minus_after_digits_or_another_minus'
 
 			negative = true
 		end 'minus' else 'not_minus'
 			if cp >= '0' 'maybe_digit'
 				if cp <= '9' 'is_digit'
 					hasDigits = true
-					result = result * 10 + (cp - '0')
+					let digit = (cp - '0') as FullRangeInt
+
+					if result < -__intTenthOfMinMagnitude or (result == -__intTenthOfMinMagnitude and digit > __intLastDigitOfMinMagnitude) 'pastTheRange'
+						throw ParseError.invalidFormat
+					end 'pastTheRange'
+
+					result = result * 10 - digit
 				end 'is_digit' else 'not_digit'
 					throw ParseError.invalidFormat
 				end 'not_digit'
@@ -292,14 +301,18 @@ public function __int_fromString(input String) returns ParsedInt throws ParseErr
 		throw ParseError.invalidFormat
 	end 'empty'
 
-	if negative 'negate'
+	if not negative 'negate'
+		if result == i64.min 'noPositiveCounterpart'
+			throw ParseError.invalidFormat
+		end 'noPositiveCounterpart'
+
 		result = -result
 	end 'negate'
 
 	return result
 end '__int_fromString'
 
-public typealias ParsedFloat = float(f64.min to f64.max)
+public typealias FullRangeFloat = float(f64.min to f64.max)
 
 // ⭐⭐ **`float.fromString` AND A FLOAT LITERAL ARE THE SAME CONVERSION — ONE READER, NOT TWO.**
 //
@@ -320,7 +333,7 @@ public typealias ParsedFloat = float(f64.min to f64.max)
 // and not a stdlib detail (`__FloatTextResult`'s header carries the full argument). It costs nothing
 // real here — a magnitude past `f64.max` is not a representable float, so text naming one is text this
 // function cannot turn into its return type, which is exactly what `invalidFormat` says.
-public function __float_fromString(input String) returns ParsedFloat throws ParseError
+public function __float_fromString(input String) returns FullRangeFloat throws ParseError
 	match __float_bitsFromText(input) 'decoded'
 		bits(value) then return __Builtins.bitsToFloat(value)
 		overflow or
@@ -340,7 +353,7 @@ public function __bool_fromString(input String) returns bool throws ParseError
 	throw ParseError.invalidFormat
 end '__bool_fromString'
 
-public function __byte_fromString(input String) returns ParsedInt throws ParseError
+public function __byte_fromString(input String) returns FullRangeInt throws ParseError
 	let result = try __int_fromString(input) otherwise 'err'
 		throw ParseError.invalidFormat
 	end 'err'
@@ -423,8 +436,8 @@ let __MaxDecimalDigit = 9 as DecimalDigit
 // ⇒ the reader takes a `String` and unpacks it into a LOCAL, which needs no annotation and therefore
 // no alias. A stdlib module must add no type NAME a program's own types resolve against.
 
-// A magnitude's limbs, and a column of parsed integers generally.
-public typealias ParsedIntArray = Array with ParsedInt
+// A column of full-range integers, a magnitude's limbs among them.
+public typealias FullRangeIntArray = Array with FullRangeInt
 
 // How a float literal's text can fail to become a number, as a RESULT rather than a `throws`.
 //
@@ -434,7 +447,7 @@ public typealias ParsedIntArray = Array with ParsedInt
 // (E2011 for one arm, an internal-invariant panic for the other). Handing back a value it maps lets it
 // keep that vocabulary without this file publishing a second public error type.
 public union __FloatTextResult
-	bits(value ParsedInt)
+	bits(value FullRangeInt)
 
 	// The magnitude is past f64.max — a real program saying a real thing too big to hold.
 	overflow
@@ -454,10 +467,10 @@ let __ExponentBias = 1023
 let __ImplicitLeadingBit = 0x0010000000000000
 let __InfinityBits = 0x7FF0000000000000
 
-// Bit 63. Spelled `i64.min` because a `ParsedInt` is SIGNED and a literal above `i64.max` does not fit
+// Bit 63. Spelled `i64.min` because a `FullRangeInt` is SIGNED and a literal above `i64.max` does not fit
 // it — the mirror of `NumberParsing.FloatSignBit`. `__FloatMagnitudeMask` below is its complement and
 // is derived from it, so the two cannot come to disagree about where the sign lives.
-let __FloatSignBit = i64.min as ParsedInt
+let __FloatSignBit = i64.min as FullRangeInt
 
 // The same sign as TEXT — the leading minus `__float_bitsFromText` peels off. Beside the bit it becomes,
 // because the two are one fact seen from the two ends of the conversion.
@@ -619,13 +632,13 @@ end '__float_bitsFromText'
 //
 // Digits arrive one at a time but a magnitude is scaled in 9-digit strides (the widest power of ten
 // a limb holds), so they are gathered in `pendingChunk` and folded in a chunk at a time.
-function __float_magnitudeBitsFromText(text String, startAt ParsedInt) returns __FloatTextResult
+function __float_magnitudeBitsFromText(text String, startAt FullRangeInt) returns __FloatTextResult
 	let bytes = text.toByteArray()
-	var significandDigits = ParsedIntArray.create()  // kept significant digits, as a magnitude
-	var pendingChunk = 0  // digits gathered but not yet folded into `significandDigits`
-	var pendingCount = 0
+	var significandDigits = FullRangeIntArray.create()  // kept significant digits, as a magnitude
+	var pendingChunk = 0 as FullRangeInt  // digits gathered but not yet folded into `significandDigits`
+	var pendingCount = 0 as DecimalScaleExponent
 	var droppedNonZeroDigit = false  // the sticky bit: a dropped digit past the budget was non-zero
-	var decExp = 0  // implicit decimal exponent for the accumulated digits
+	var decExp = 0 as DecimalPointScale  // implicit decimal exponent for the accumulated digits
 	var pastDot = false
 	var hasNonZeroDigit = false
 
@@ -636,12 +649,12 @@ function __float_magnitudeBitsFromText(text String, startAt ParsedInt) returns _
 	// not set this: `"e5"` would then pass the no-digits gate below, fall through to the zero shortcut
 	// and answer **+0.0**. A number needs digits to scale; a scale with nothing to scale is not a number.
 	var sawMantissaDigit = false
-	var sigDigits = 0
+	var sigDigits = 0 as ElementIndex
 
 	// --- PHASE 1: the MANTISSA, up to the `e`/`E` (or the end of the text) ---
 	var pi = startAt
 
-	while pi < bytes.count() as ParsedInt 'mantissa'
+	while pi < bytes.count() as FullRangeInt 'mantissa'
 		let b = try bytes.get(pi as ElementIndex) otherwise panic("__float_magnitudeBitsFromText: pi < bytes.count() by loop guard but get({pi}) failed")
 
 		if b == '_' 'skipUnderscore'
@@ -670,7 +683,7 @@ function __float_magnitudeBitsFromText(text String, startAt ParsedInt) returns _
 		end 'isDot' else 'notDot'
 			if b >= '0' and b <= '9' 'isDigit'
 				sawMantissaDigit = true
-				let digitVal = b - '0'
+				let digitVal = (b - '0') as FullRangeInt
 
 				if not hasNonZeroDigit and digitVal == 0 'leading'
 					// Leading zeros contribute no mantissa digit — only SCALE. A leading zero AFTER the
@@ -692,7 +705,7 @@ function __float_magnitudeBitsFromText(text String, startAt ParsedInt) returns _
 						pendingCount = pendingCount + 1
 
 						if pendingCount == __Pow10ChunkDigits 'chunkFull'
-							__bigAppendDigits(significandDigits, chunk: pendingChunk as ParsedInt, digits: pendingCount)
+							__bigAppendDigits(significandDigits, chunk: pendingChunk, digits: pendingCount)
 							pendingChunk = 0
 							pendingCount = 0
 						end 'chunkFull'
@@ -740,15 +753,15 @@ function __float_magnitudeBitsFromText(text String, startAt ParsedInt) returns _
 
 	// --- PHASE 2: the SCIENTIFIC EXPONENT. Reached only if phase 1 stopped ON an `e`/`E`, which is
 	// the only way it exits early, so the cursor's position IS the "is there an exponent?" flag.
-	var sciExp = 0
+	var sciExp = 0 as DecimalPointScale
 	var sciExpNeg = false
 
-	if pi < bytes.count() as ParsedInt 'hasExponent'
+	if pi < bytes.count() as FullRangeInt 'hasExponent'
 		pi = pi + 1
 
 		// The exponent's own sign — `1.5e+2` and `1.5e-2` are both admitted, unlike the MANTISSA's
 		// leading `+` (see `__float_bitsFromText`'s header for why the two positions differ).
-		if pi < bytes.count() as ParsedInt 'peekSign'
+		if pi < bytes.count() as FullRangeInt 'peekSign'
 			let signByte = try bytes.get(pi as ElementIndex) otherwise panic("__float_magnitudeBitsFromText.peekSign: pi < bytes.count() just checked but get({pi}) failed")
 
 			if signByte == '-' 'negSign'
@@ -759,7 +772,7 @@ function __float_magnitudeBitsFromText(text String, startAt ParsedInt) returns _
 			end 'posSign'
 		end 'peekSign'
 
-		while pi < bytes.count() as ParsedInt 'expDigits'
+		while pi < bytes.count() as FullRangeInt 'expDigits'
 			let b = try bytes.get(pi as ElementIndex) otherwise panic("__float_magnitudeBitsFromText: pi < bytes.count() by loop guard but get({pi}) failed")
 
 			if b == '_' 'skipExpUnderscore'
@@ -774,14 +787,14 @@ function __float_magnitudeBitsFromText(text String, startAt ParsedInt) returns _
 				return __FloatTextResult.malformed
 			end 'notExpDigit'
 
-			sciExp = sciExp * 10 + (b - '0')
+			sciExp = sciExp * 10 + ((b - '0') as DecimalPointScale)
 
 			// This literal's exponent ceiling, RECOMPUTED at its one use rather than held in a local
 			// across both loops. It is per-literal because the `decExp` it has to out-rank is bounded
 			// by the literal's LENGTH and by nothing else — see `__DecimalWindowSpan` — so
 			// `bytes.count()`, which this loop already holds, is the whole of it. One add per exponent
 			// digit buys back a register this function has none to spare of.
-			let maxSciExp = bytes.count() + __DecimalWindowSpan
+			let maxSciExp = (bytes.count() as DecimalPointScale) + __DecimalWindowSpan
 
 			if sciExp > maxSciExp 'capExp'
 				sciExp = maxSciExp
@@ -830,7 +843,7 @@ end '__float_magnitudeBitsFromText'
 // `droppedNonZeroDigit` is the STICKY BIT: true iff a non-zero digit was dropped past
 // `__SignificantDigitBudget`. The round-trip caller passes false — its candidate is at most 17 digits and
 // nothing was dropped — and the scanner passes what it saw.
-function __float_bitsFromDecimal(significandDigits ParsedIntArray, totalExp DecimalPointScale, sigDigits ElementIndex, droppedNonZeroDigit bool) returns __FloatTextResult
+function __float_bitsFromDecimal(significandDigits FullRangeIntArray, totalExp DecimalPointScale, sigDigits ElementIndex, droppedNonZeroDigit bool) returns __FloatTextResult
 	// `significandDigits` holds exactly `sigDigits` digits and its leading one is non-zero (leading
 	// zeros are skipped by the scanner), so the value lies in [10^m, 10^(m+1)) and `m` is EXACTLY
 	// floor(log10(value)) — not an estimate. It is exact for the TRUE value too, dropped digits and
@@ -853,7 +866,7 @@ function __float_bitsFromDecimal(significandDigits ParsedIntArray, totalExp Deci
 	// all the way to the significand; `droppedNonZeroDigit` carries everything below it. The limb
 	// representation, and why an i64 pair cannot do this job, are at BOUNDED-WIDTH MAGNITUDES below.
 	var numerator = significandDigits
-	var denominator = ParsedIntArray.create()
+	var denominator = FullRangeIntArray.create()
 	denominator.push(1)
 
 	if totalExp > 0 'scaleNumerator'
@@ -896,7 +909,7 @@ function __float_bitsFromDecimal(significandDigits ParsedIntArray, totalExp Deci
 	// writes to this binding while reading like it constrained all of them. The negative half is not
 	// an accident to be typed away: it is the shortfall the `< 0` correction below MOVES onto the
 	// denominator, which is the step that keeps `+0` and the least subnormal one rounding apart.
-	var significandBits = __SignificandFieldBits
+	var significandBits = __SignificandFieldBits as BigBitDelta
 	let isSubnormal = exponent < __MinNormalBinaryExponent
 
 	if isSubnormal 'denormalize'
@@ -914,14 +927,14 @@ function __float_bitsFromDecimal(significandDigits ParsedIntArray, totalExp Deci
 	// Long-division: one bit per step, exactly as the i64 version did, but over magnitudes wide
 	// enough to hold the operands. The leading bit is taken separately because it is implicit in a
 	// normal's encoding and explicit in a subnormal's.
-	var significand = 0
+	var significand = 0 as FullRangeInt
 
 	if __bigCompare(numerator, against: denominator) >= 0 'leadingOne'
 		significand = 1
 		__bigSubtract(numerator, subtrahend: denominator)
 	end 'leadingOne'
 
-	var produced = 0
+	var produced = 0 as BigBitDelta
 
 	while produced < significandBits 'divideBits'
 		__bigShiftLeft(numerator, bits: 1)
@@ -973,13 +986,13 @@ function __float_bitsFromDecimal(significandDigits ParsedIntArray, totalExp Deci
 	// significand that rounded up to 2^53 carry into the exponent field on its own, which is exactly
 	// the renormalization that case wants — and the only way it can then reach the infinity pattern
 	// is a genuine overflow of the literal.
-	let bits = ((exponent + __ExponentBias) shl __SignificandFieldBits) + (significand - __ImplicitLeadingBit)
+	let bits = (((exponent + __ExponentBias) shl __SignificandFieldBits) as FullRangeInt) + (significand - __ImplicitLeadingBit)
 
 	if bits >= __InfinityBits 'roundedToInfinity'
 		return __FloatTextResult.overflow
 	end 'roundedToInfinity'
 
-	return __FloatTextResult.bits(bits as ParsedInt)
+	return __FloatTextResult.bits(bits)
 end '__float_bitsFromDecimal'
 
 // --- Bounded-width magnitudes for the conversion above ---
@@ -1074,7 +1087,7 @@ let __Pow5ChunkDigits = 13
 // Every site that GROWS a magnitude ends here, so the budget is one fact in one place. There are
 // exactly two shapes of growth and both are routed: a carry out the top (`__bigPushCarry`) and a
 // whole-limb shift's `growFilled` (checked at the end of `__bigShiftLeft`).
-function __requireLimbBudget(limbs ParsedIntArray)
+function __requireLimbBudget(limbs FullRangeIntArray)
 	if limbs.count() > __MaxBigLimbs 'overBudget'
 		panic("float-literal magnitude grew to {limbs.count()} limbs, past the {__MaxBigLimbs}-limb budget — a decimal guard in __float_bitsFromText was widened without widening __MaxBigLimbs")
 	end 'overBudget'
@@ -1085,7 +1098,7 @@ end '__requireLimbBudget'
 // finish this way rather than each spelling "push the masked carry, shift it down, check the budget"
 // for itself. Nothing would make four copies agree — one of them dropping the mask, or the budget
 // check, is a silently corrupt high limb rather than a compile error.
-function __bigPushCarry(limbs ParsedIntArray, carry ParsedInt)
+function __bigPushCarry(limbs FullRangeIntArray, carry FullRangeInt)
 	var remaining = carry
 
 	while remaining > 0 'carryOut'
@@ -1099,9 +1112,9 @@ end '__bigPushCarry'
 // `base`^`exponent`, for a result no wider than a limb. The one place a small power is built, so a
 // chunk stride and the scaling loop that consumes it cannot come to disagree about what a step is
 // worth.
-function __powOf(base ParsedInt, exponent DecimalScaleExponent) returns ParsedInt
-	var factor = 1
-	var i = 0
+function __powOf(base FullRangeInt, exponent DecimalScaleExponent) returns FullRangeInt
+	var factor = 1 as FullRangeInt
+	var i = 0 as DecimalScaleExponent
 
 	while i < exponent 'multiply'
 		factor = factor * base
@@ -1113,15 +1126,15 @@ end '__powOf'
 
 // Shift `digits` decimal places into `limbs` and drop `chunk` into the space that opens up — the
 // digit-accumulation step, done a chunk at a time rather than a digit at a time.
-function __bigAppendDigits(limbs ParsedIntArray, chunk ParsedInt, digits DecimalScaleExponent)
+function __bigAppendDigits(limbs FullRangeIntArray, chunk FullRangeInt, digits DecimalScaleExponent)
 	__bigMulSmall(limbs, multiplier: __powOf(10, exponent: digits))
 	__bigAddSmall(limbs, addend: chunk)
 end '__bigAppendDigits'
 
 // `limbs` += `addend`, in place. `addend` must fit a limb.
-function __bigAddSmall(limbs ParsedIntArray, addend ParsedInt)
+function __bigAddSmall(limbs FullRangeIntArray, addend FullRangeInt)
 	var carry = addend
-	var i = 0
+	var i = 0 as ElementIndex
 
 	while carry > 0 and i < limbs.count() 'addEach'
 		let widened = (try limbs.get(i) otherwise panic("__bigAddSmall: i < count() by loop guard but get({i}) failed")) + carry
@@ -1135,9 +1148,9 @@ end '__bigAddSmall'
 
 // `limbs` *= `multiplier`, in place. `multiplier` must fit a limb so that `limb * multiplier + carry`
 // stays inside an i64 — the one obligation the whole representation rests on.
-function __bigMulSmall(limbs ParsedIntArray, multiplier ParsedInt)
-	var carry = 0
-	var i = 0
+function __bigMulSmall(limbs FullRangeIntArray, multiplier FullRangeInt)
+	var carry = 0 as FullRangeInt
+	var i = 0 as ElementIndex
 
 	while i < limbs.count() 'scaleEach'
 		let widened = (try limbs.get(i) otherwise panic("__bigMulSmall: i < count() by loop guard but get({i}) failed")) * multiplier + carry
@@ -1152,7 +1165,7 @@ end '__bigMulSmall'
 // `limbs` *= `base`^`exponent`, in place, in strides of `chunkFactors` factors — one shared loop for
 // the decimal scaling `__float_bitsFromText` needs and the base-five scaling `__float_shortestDigits`
 // needs.
-function __bigMulPow(limbs ParsedIntArray, base ParsedInt, chunkFactors DecimalScaleExponent, exponent DecimalScaleExponent)
+function __bigMulPow(limbs FullRangeIntArray, base FullRangeInt, chunkFactors DecimalScaleExponent, exponent DecimalScaleExponent)
 	var remaining = exponent
 
 	while remaining > 0 'chunks'
@@ -1171,8 +1184,8 @@ end '__bigMulPow'
 // running `remainder * 2^32 + limb` dividend stays inside an i64 — the mirror of the obligation
 // `__bigMulSmall` carries. Restores the no-leading-zero-limb invariant, so an exhausted magnitude
 // becomes the empty (zero) one.
-function __bigDivModSmall(limbs ParsedIntArray, divisor ParsedInt) returns ParsedInt
-	var remainder = 0
+function __bigDivModSmall(limbs FullRangeIntArray, divisor FullRangeInt) returns FullRangeInt
+	var remainder = 0 as FullRangeInt
 	var i = limbs.count()
 
 	while i > 0 'divideEach'
@@ -1194,7 +1207,7 @@ end '__bigDivModSmall'
 // since nothing would make two copies agree. A copy that stopped one limb early leaves a magnitude
 // that compares WIDER than an equal one, which `__bigCompare` decides on width alone: a wrong
 // ordering, not a compile error.
-function __bigTrimLeadingZeroLimbs(limbs ParsedIntArray)
+function __bigTrimLeadingZeroLimbs(limbs FullRangeIntArray)
 	var used = limbs.count()
 
 	while used > 0 and (try limbs.get(used - 1) otherwise panic("__bigTrimLeadingZeroLimbs: used > 0 by loop guard but get({used - 1}) failed")) == 0 'trim'
@@ -1248,17 +1261,17 @@ end '__singleDigit'
 // A DIGIT STRING's magnitude — the round-trip probe's way in to `__float_bitsFromDecimal`. Folded a
 // chunk at a time on the same nine-digit stride `__float_bitsFromText`'s scan uses, and for the same
 // reason: nine is the widest power of ten a limb holds.
-function __bigFromDigits(digits DigitString) returns ParsedIntArray
-	var limbs = ParsedIntArray.create()
-	var chunk = 0
-	var pending = 0
+function __bigFromDigits(digits DigitString) returns FullRangeIntArray
+	var limbs = FullRangeIntArray.create()
+	var chunk = 0 as FullRangeInt
+	var pending = 0 as DecimalScaleExponent
 
 	for i in 0 upto digits.count() 'eachDigit'
-		chunk = chunk * 10 + (try digits.get(i) otherwise panic("__bigFromDigits: i < digits.count() by loop guard but get({i}) failed"))
+		chunk = chunk * 10 + ((try digits.get(i) otherwise panic("__bigFromDigits: i < digits.count() by loop guard but get({i}) failed")) as FullRangeInt)
 		pending = pending + 1
 
 		if pending == __Pow10ChunkDigits 'chunkFull'
-			__bigAppendDigits(limbs, chunk: chunk as ParsedInt, digits: pending as DecimalScaleExponent)
+			__bigAppendDigits(limbs, chunk: chunk, digits: pending)
 			chunk = 0
 			pending = 0
 		end 'chunkFull'
@@ -1277,17 +1290,17 @@ end '__bigFromDigits'
 // Building it is EXACTLY flushing a carry into an empty magnitude, so it goes through `__bigPushCarry`
 // rather than spelling the split-and-mask loop a second time — which also keeps that helper's "every
 // site that GROWS a magnitude ends here" true of this one.
-function __bigFromScalar(value ParsedInt) returns ParsedIntArray
-	var limbs = ParsedIntArray.create()
+function __bigFromScalar(value FullRangeInt) returns FullRangeIntArray
+	var limbs = FullRangeIntArray.create()
 	__bigPushCarry(limbs, carry: value)
 	return limbs
 end '__bigFromScalar'
 
 // A magnitude's decimal digits, most significant first, with no leading zero (empty magnitude ⇒
 // `"0"`). CONSUMES `limbs` — the repeated division that produces the digits is what destroys it.
-function __bigToDecimalDigits(limbs ParsedIntArray) returns DigitString
+function __bigToDecimalDigits(limbs FullRangeIntArray) returns DigitString
 	let groupDivisor = __powOf(10, exponent: __Pow10ChunkDigits)
-	var groups = ParsedIntArray.create()
+	var groups = FullRangeIntArray.create()
 
 	while not limbs.isEmpty() 'eachGroup'
 		groups.push(__bigDivModSmall(limbs, divisor: groupDivisor))
@@ -1313,8 +1326,8 @@ function __bigToDecimalDigits(limbs ParsedIntArray) returns DigitString
 end '__bigToDecimalDigits'
 
 // How many decimal digits `value` (0 to 10^9 - 1) needs, at least one.
-function __decimalWidthOf(value ParsedInt) returns ElementIndex
-	var width = 1
+function __decimalWidthOf(value FullRangeInt) returns ElementIndex
+	var width = 1 as ElementIndex
 	var remaining = value / 10
 
 	while remaining > 0 'count'
@@ -1328,7 +1341,7 @@ end '__decimalWidthOf'
 // Append `value` as exactly `width` decimal digits, zero-padded on the left. Digits fall out
 // least-significant first, so they are gathered and then emitted in reverse — which also keeps every
 // divisor a LITERAL ten, and so keeps the whole routine free of a can-throw division.
-function __appendDecimalGroup(digits DigitString, value ParsedInt, width ElementIndex)
+function __appendDecimalGroup(digits DigitString, value FullRangeInt, width ElementIndex)
 	var reversed = DigitString.create()
 	var remaining = value
 
@@ -1346,7 +1359,7 @@ function __appendDecimalGroup(digits DigitString, value ParsedInt, width Element
 end '__appendDecimalGroup'
 
 // `limbs` <<= `bits`, in place.
-function __bigShiftLeft(limbs ParsedIntArray, bits BigBitCount)
+function __bigShiftLeft(limbs FullRangeIntArray, bits BigBitCount)
 	if limbs.isEmpty() or bits == 0 'nothingToShift'
 		return
 	end 'nothingToShift'
@@ -1354,8 +1367,8 @@ function __bigShiftLeft(limbs ParsedIntArray, bits BigBitCount)
 	let withinLimb = bits mod __LimbBits
 
 	if withinLimb != 0 'partialLimb'
-		var carry = 0
-		var i = 0
+		var carry = 0 as FullRangeInt
+		var i = 0 as ElementIndex
 
 		while i < limbs.count() 'shiftEach'
 			let widened = ((try limbs.get(i) otherwise panic("__bigShiftLeft: i < count() by loop guard but get({i}) failed")) shl withinLimb) or carry
@@ -1395,9 +1408,9 @@ function __bigShiftLeft(limbs ParsedIntArray, bits BigBitCount)
 			try limbs.set((src as BigBitCount + wholeLimbs) as ElementIndex, value: limb) otherwise panic("__bigShiftLeft: resize sized for src + wholeLimbs but set({src as BigBitCount + wholeLimbs}) failed")
 		end 'moveUp'
 
-		var vacated = 0
+		var vacated = 0 as ElementIndex
 
-		while vacated < wholeLimbs 'clearVacated'
+		while vacated < (wholeLimbs as ElementIndex) 'clearVacated'
 			try limbs.set(vacated, value: 0) otherwise panic("__bigShiftLeft: vacated < wholeLimbs <= count() but set({vacated}) failed")
 			vacated = vacated + 1
 		end 'clearVacated'
@@ -1407,33 +1420,33 @@ function __bigShiftLeft(limbs ParsedIntArray, bits BigBitCount)
 end '__bigShiftLeft'
 
 // The position of the highest set bit, counting from one. Zero has bit length zero.
-function __bigBitLength(limbs ParsedIntArray) returns BigBitCount
+function __bigBitLength(limbs FullRangeIntArray) returns BigBitCount
 	if limbs.isEmpty() 'zero'
 		return 0
 	end 'zero'
 
 	let topIndex = limbs.count() - 1
 	var top = try limbs.get(topIndex) otherwise panic("__bigBitLength: topIndex = count() - 1 but get({topIndex}) failed")
-	var bitsInTop = 0
+	var bitsInTop = 0 as BigBitCount
 
 	while top > 0 'countTopBits'
 		bitsInTop = bitsInTop + 1
 		top = top shr 1
 	end 'countTopBits'
 
-	return topIndex * __LimbBits + bitsInTop
+	return ((topIndex * __LimbBits) as BigBitCount) + bitsInTop
 end '__bigBitLength'
 
 // How far `a`'s bit length sits above (positive) or below (negative) `against`'s. THE one place a bit
 // DELTA is minted, so the `+/-4608` bound is checked at the door rather than asserted in a comment —
 // a local cannot carry a range in Maxon, so a value that stays in one is only ever as honest as the
 // site that produced it.
-function __bigBitDelta(a ParsedIntArray, against ParsedIntArray) returns BigBitDelta
+function __bigBitDelta(a FullRangeIntArray, against FullRangeIntArray) returns BigBitDelta
 	return __bigBitLength(a) - __bigBitLength(against)
 end '__bigBitDelta'
 
 // Ordering. The no-leading-zero-limb invariant is what makes the width comparison decisive.
-function __bigCompare(a ParsedIntArray, against ParsedIntArray) returns MagnitudeOrder
+function __bigCompare(a FullRangeIntArray, against FullRangeIntArray) returns MagnitudeOrder
 	if a.count() != against.count() 'differentWidths'
 		return -1 if a.count() < against.count() else 1
 	end 'differentWidths'
@@ -1455,9 +1468,9 @@ end '__bigCompare'
 
 // `a` -= `subtrahend`, in place. The caller guarantees `a >= subtrahend`; every call site has just
 // compared the two.
-function __bigSubtract(a ParsedIntArray, subtrahend ParsedIntArray)
-	var borrow = 0
-	var i = 0
+function __bigSubtract(a FullRangeIntArray, subtrahend FullRangeIntArray)
+	var borrow = 0 as FullRangeInt
+	var i = 0 as ElementIndex
 
 	while i < a.count() 'subtractEach'
 		var diff = (try a.get(i) otherwise panic("__bigSubtract: i < count() by loop guard but a.get({i}) failed")) - borrow
@@ -1511,7 +1524,7 @@ let __InfiniteExponentField = 0x7FF
 
 // Everything below the sign bit — DERIVED from `__FloatSignBit` rather than spelled `i64.max`, so the
 // two halves of one 64-bit split are one fact and not two that could drift apart.
-let __FloatMagnitudeMask = (not __FloatSignBit) as ParsedInt
+let __FloatMagnitudeMask = (not __FloatSignBit) as FullRangeInt
 
 // The most significant digits a binary64 can need to round-trip. Also the search's upper bound: a
 // 17-digit candidate always reads back, so the loop cannot fall off the end.
@@ -1534,7 +1547,7 @@ let __ScientificExponentMinDigits = 2
 // and NaN are each a SPELLING question, and the two renderers below answer them differently, so they
 // are kept out here rather than decided once inside. What is decided once is the only part that is not
 // a matter of spelling: WHICH DIGITS.
-function __float_shortestDigits(magnitude ParsedInt) returns __ScaledDigits
+function __float_shortestDigits(magnitude FullRangeInt) returns __ScaledDigits
 	let exact = __float_exactDigits(magnitude)
 	return __shortestRoundTrip(exact.digits, scale: exact.scale, target: magnitude)
 end '__float_shortestDigits'
@@ -1543,7 +1556,7 @@ end '__float_shortestDigits'
 // of how many to KEEP. The shortest-round-trip search shortens it from the front; `"{x:.N}"` cuts it
 // at a fixed place instead. Both cuts have to be made against the exact digits, so the expansion is
 // computed once, here, rather than inside whichever of them happens to want it.
-function __float_exactDigits(magnitude ParsedInt) returns __ScaledDigits
+function __float_exactDigits(magnitude FullRangeInt) returns __ScaledDigits
 	let exponentField = (magnitude shr __SignificandFieldBits) and __ExponentFieldMask
 	let fraction = magnitude and __SignificandFieldMask
 
@@ -1556,21 +1569,21 @@ function __float_exactDigits(magnitude ParsedInt) returns __ScaledDigits
 	// scales an integer by a power of two and stays one; a negative one is `m / 2^k`, which is
 	// `m * 5^k / 10^k` — exact, and the reason base five earns its own chunk stride.
 	var digitsMagnitude = __bigFromScalar(significand)
-	var pointExponent = 0
+	var pointExponent = 0 as DecimalPointScale
 
 	if binaryExponent >= 0 'scaleUp'
 		__bigShiftLeft(digitsMagnitude, bits: binaryExponent)
 	end 'scaleUp' else 'scaleDown'
 		__bigMulPow(digitsMagnitude, base: 5, chunkFactors: __Pow5ChunkDigits, exponent: -binaryExponent)
-		pointExponent = binaryExponent
+		pointExponent = binaryExponent as DecimalPointScale
 	end 'scaleDown'
 
 	let exactDigits = __bigToDecimalDigits(digitsMagnitude)
 
 	// value = 0.<exactDigits> × 10^scale. Trailing zeros carry no information and are dropped, which
 	// leaves `scale` untouched (it counts from the FRONT).
-	let scale = exactDigits.count() + pointExponent
-	return __ScaledDigits.create(__withoutTrailingZeros(exactDigits), scale: scale as DecimalPointScale)
+	let scale = (exactDigits.count() as DecimalPointScale) + pointExponent
+	return __ScaledDigits.create(__withoutTrailingZeros(exactDigits), scale: scale)
 end '__float_exactDigits'
 
 // The decimal text of the double `bits` encodes: the shortest string that reads back as the same
@@ -1593,7 +1606,7 @@ end '__float_exactDigits'
 // real guard rather than a formality. A `nan` spelling would collapse every NaN PAYLOAD onto one name and
 // open exactly the label-space collision that guard exists to catch. The pattern is always sixteen digits
 // (a non-finite exponent field sets bit 62), so it needs no padding.
-public function __float_textFromBits(bits ParsedInt) returns String
+public function __float_textFromBits(bits FullRangeInt) returns String
 	let negative = bits < 0
 	let magnitude = bits and __FloatMagnitudeMask
 	let exponentField = (magnitude shr __SignificandFieldBits) and __ExponentFieldMask
@@ -1615,7 +1628,7 @@ end '__float_textFromBits'
 
 // The shortest correctly-rounded prefix of `digits` that reads back as `target`. Returns the DIGITS,
 // not text: the notation is the caller's (see `__float_shortestDigits`).
-function __shortestRoundTrip(digits DigitString, scale DecimalPointScale, target ParsedInt) returns __ScaledDigits
+function __shortestRoundTrip(digits DigitString, scale DecimalPointScale, target FullRangeInt) returns __ScaledDigits
 	let longest = digits.count() if digits.count() < __RoundTripDigitBudget else __RoundTripDigitBudget
 
 	for kept in 1 to longest 'eachLength'
@@ -1623,7 +1636,7 @@ function __shortestRoundTrip(digits DigitString, scale DecimalPointScale, target
 
 		// `value = 0.<digits> × 10^scale`, and the converter wants the digits as a WHOLE number times a
 		// power of ten — which moves the point past all of them: `<digits> × 10^(scale - count)`.
-		var readBack = 0
+		var readBack = 0 as FullRangeInt
 
 		// ⭐⭐ **A ROUNDED-UP PREFIX *CAN* LEAVE THE FINITE RANGE, AND SHARING ONE ARM WITH `malformed`
 		// TURNED THAT INTO A PANIC.** The two arms were joined on the claim that a rounded prefix of a
@@ -1866,7 +1879,7 @@ let __NegativeSignText = "-"
 // The Maxon spelling of `value`: the shortest decimal that reads back as the same double, always with
 // a decimal point, never in exponent notation. THE entry point `"{x}"` lowers to for a float part
 // (`Parser.materializeInterpExpr`).
-public function __float_toString(value ParsedFloat) returns String
+public function __float_toString(value FullRangeFloat) returns String
 	let bits = __Builtins.floatToBits(value)
 
 	// ⭐ **THE ZERO-WIDE FIELD IS NOT CEREMONY — IT IS HOW THE SIGN MEETS THE MAGNITUDE EXACTLY ONCE.**
@@ -1881,7 +1894,7 @@ end '__float_toString'
 // with zeros AFTER the sign, so the padded and fixed-precision spellings need the two halves apart —
 // and re-deriving "is this negative?" at those call sites would be a second copy of a decision this
 // function already makes, free to disagree with it about a NaN.
-function __floatSignText(bits ParsedInt) returns String
+function __floatSignText(bits FullRangeInt) returns String
 	if bits >= 0 'positive'
 		return ""
 	end 'positive'
@@ -1896,7 +1909,7 @@ function __floatSignText(bits ParsedInt) returns String
 end '__floatSignText'
 
 // Everything `__float_toString` writes after the sign, for a magnitude whose sign bit is already clear.
-function __floatMagnitudeText(magnitude ParsedInt) returns String
+function __floatMagnitudeText(magnitude FullRangeInt) returns String
 	if __floatIsNotFinite(magnitude) 'notFinite'
 		return __NotANumberText if __floatIsNan(magnitude) else __InfinityText
 	end 'notFinite'
@@ -1912,11 +1925,11 @@ function __floatMagnitudeText(magnitude ParsedInt) returns String
 	return __float_fixedText(shortest.digits, scale: shortest.scale)
 end '__floatMagnitudeText'
 
-function __floatIsNotFinite(magnitude ParsedInt) returns bool
+function __floatIsNotFinite(magnitude FullRangeInt) returns bool
 	return ((magnitude shr __SignificandFieldBits) and __ExponentFieldMask) == __InfiniteExponentField
 end '__floatIsNotFinite'
 
-function __floatIsNan(magnitude ParsedInt) returns bool
+function __floatIsNan(magnitude FullRangeInt) returns bool
 	return __floatIsNotFinite(magnitude) and (magnitude and __SignificandFieldMask) != 0
 end '__floatIsNan'
 
@@ -1948,13 +1961,13 @@ let __SpaceFillText = " "
 // `"{x}"` asks for no field at all, which is the same thing as a field nothing can be short of.
 let __NoFieldWidth = 0
 
-public function __float_toStringPadded(value ParsedFloat, width PadWidth, zeroFill bool) returns String
+public function __float_toStringPadded(value FullRangeFloat, width PadWidth, zeroFill bool) returns String
 	let bits = __Builtins.floatToBits(value)
 	return __numericFieldText(__floatSignText(bits), magnitude: __floatMagnitudeText(bits and __FloatMagnitudeMask), width: width, zeroFill: zeroFill)
 end '__float_toStringPadded'
 
 // `value` written with EXACTLY `precision` digits after the point, in a `width`-wide field.
-public function __float_toStringFixed(value ParsedFloat, precision DecimalPrecision, width PadWidth, zeroFill bool) returns String
+public function __float_toStringFixed(value FullRangeFloat, precision DecimalPrecision, width PadWidth, zeroFill bool) returns String
 	let bits = __Builtins.floatToBits(value)
 	let magnitude = bits and __FloatMagnitudeMask
 	let sign = __floatSignText(bits)
@@ -1987,7 +2000,7 @@ end '__numericFieldText'
 
 // `magnitude`'s exact expansion correctly rounded to `precision` decimal places, round-half-EVEN — the
 // same rule the shortest-round-trip search cuts with, so the two cuts cannot disagree about a tie.
-function __float_roundedToDecimals(magnitude ParsedInt, precision DecimalPrecision) returns __ScaledDigits
+function __float_roundedToDecimals(magnitude FullRangeInt, precision DecimalPrecision) returns __ScaledDigits
 	if magnitude == 0 'zero'
 		return __zeroScaledDigits()
 	end 'zero'
@@ -2089,7 +2102,7 @@ typealias RadixDigit = int(0 to 15)
 //
 // Full-range SIGNED aliases are deliberate too and do NOT appear in that grep, so none of them is
 // evidence about the rule above. Each admits a NEGATIVE because a negative MEANS something to it:
-// `ParsedInt` here, and `Array.ReportedCapacity` — an integer literal's own value, and the flag a
+// `FullRangeInt` here — any value a signed 64-bit integer holds — and `Array.ReportedCapacity`, the flag a
 // non-owned buffer answers instead of a capacity.
 // A range that must admit a sentinel is honest only by admitting it; the rule is not "narrow
 // everything", it is "say what the value can be".
@@ -2099,9 +2112,9 @@ typealias RadixDigit = int(0 to 15)
 // outside the grep.
 
 // ⭐ **THE TWO-STEP CAST THROUGH THESE IS THE ONE BINDING DOOR THAT MAKES THE DIGIT LOOP'S DIVIDE
-// UNSIGNED, AND BOTH STEPS ARE LOAD-BEARING.** `ParsedInt` is signed, so `bits(64)` is the only spelling
+// UNSIGNED, AND BOTH STEPS ARE LOAD-BEARING.** `FullRangeInt` is signed, so `bits(64)` is the only spelling
 // that reinterprets a set bit 63 without a check, and `int(0 to u64.max)` is the only one that then makes
-// `/` and `mod` read the whole pattern as a magnitude. Typed back to `ParsedInt` anywhere in that loop,
+// `/` and `mod` read the whole pattern as a magnitude. Typed back to `FullRangeInt` anywhere in that loop,
 // every value past `i64.max` renders as its negative — and the divide stops reaching a magic multiply.
 typealias RenderedPattern = bits(64)
 
@@ -2122,7 +2135,7 @@ let __FirstLetterRadixDigit = 10
 // TYPE, so `"{u:d}"` printed `-1` for the same `u64.max` that `"{u}"` printed in full. The parser
 // passes it false for every base but decimal, because `"{n:x}"`, `"{n:o}"` and `"{n:b}"` spell the bit
 // pattern and never a sign.
-public function __int_toStringFormatted(value ParsedInt, signed bool, halfRadix HalfRadix, uppercase bool, width PadWidth, zeroFill bool) returns String
+public function __int_toStringFormatted(value FullRangeInt, signed bool, halfRadix HalfRadix, uppercase bool, width PadWidth, zeroFill bool) returns String
 	let negative = signed and value < 0
 
 	// Negating i64.min overflows every SIGNED reading of the result, and is exactly right here: the
@@ -2134,7 +2147,7 @@ public function __int_toStringFormatted(value ParsedInt, signed bool, halfRadix 
 end '__int_toStringFormatted'
 
 // `bits` read as an UNSIGNED 64-bit pattern, written in the base `2 * halfRadix`.
-function __unsignedDigits(bits ParsedInt, halfRadix HalfRadix, uppercase bool) returns String
+function __unsignedDigits(bits FullRangeInt, halfRadix HalfRadix, uppercase bool) returns String
 	var text = ""
 	var rest = bits as RenderedPattern as RenderedMagnitude
 	let radix = 2 * (halfRadix as RenderedMagnitude)

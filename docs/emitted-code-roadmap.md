@@ -313,7 +313,7 @@ for `Parser.recordBinOpFold`; the pass CALLS them rather than carrying its own a
 `StdBinOpcode`/`StdCmpPred` back to `MaxonBinOp`/`MaxonCmpOp` through CHECKED INVERSES of the
 lowering's own maps (`maxonBinOpOfStdOpcode`, `maxonCmpOpOfStdPred`) that panic if the two directions
 ever diverge. It is sound because every integer `binOp`/`cmp` in the compiler computes at the MACHINE WORD on
-all three targets and every comparison is signed — which is exactly the arithmetic a `ParsedInt` is.
+all three targets and every comparison is signed — which is exactly the arithmetic a `FullRangeInt` is.
 
 ⚠ **THE ROW'S PLAN SAID DEAD-BLOCK REMOVAL COULD BE LEFT TO `EC11`. IT CANNOT.** MEASURED: `match x`
 over a constant subject panicked the register allocator (`seedInUse: value 18 is live-in to block 11
@@ -1167,7 +1167,7 @@ wrapped past `i64.max` — **`9223372036854776807 / 18446744073709551600` printe
 where `0` is correct.** An unsigned divisor's magnitude is read as the unsigned word, and one at or
 above `2^63` takes the comparison-bit quotient — `x /u K` is `(x and not (x - K)) shrLogical 63`, the
 `0` or `1` it can only be — pinned by `an-unsigned-divisor-above-the-signed-range-keeps-its-answer`.
-⇒ **the sign of a `ParsedInt` divisor means two different things to the two signednesses.**
+⇒ **the sign of a `FullRangeInt` divisor means two different things to the two signednesses.**
 
 ⭐⭐ **THE TIMED A/B — AND IT IS THE SECOND NON-ZERO RESULT THIS WORKSTREAM HAS HAD, ON THE PROGRAM
 THE ROW WAS DESIGNED AROUND.** Two compilers from ONE tree differing in the one line that turns the

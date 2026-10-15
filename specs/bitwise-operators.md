@@ -95,11 +95,14 @@ A zero low bound with a 64-bit top is the *only* shape on which the two readings
 apart: a value of `int(0 to 100)` is provably non-negative, so an arithmetic and a logical shift of it
 agree bit for bit. Any case that means to pin this rule has to use it — which is why `8 shr 2` cannot.
 
-**`and` hands its operands' ranged alias down to its result; `or` and `xor` do not.** `and` can only
-CLEAR bits, so `0 <= (a and b) <= a` over a non-negative operand: the AND of two `int(0 to u64.max)`
-values is still an `int(0 to u64.max)`, and the `shr` after it still zero-fills. `or` and `xor` SET
-bits — `0x0F or 0xF0` is `0xFF`, above both operands' high bound — so their result carries no
-operand's range and reverts to the signed bare `int`.
+**`and` always hands its operands' ranged alias down to its result; `or`, `xor`, `not` and unary `-` hand it
+down only where the alias is CLOSED under the operator.** `and` can only CLEAR bits, so
+`0 <= (a and b) <= a` over a non-negative operand: the AND of two `int(0 to u64.max)` values is still an
+`int(0 to u64.max)`, and the `shr` after it still zero-fills. `or` and `xor` SET bits — `0x0F or 0xF0` is
+`0xFF`, above both operands' high bound — and `not` and `-` leave a non-negative range altogether, so over an
+`int(0 to 100)` their result is an UNNAMED SIGNED value carrying the interval it computes (`-b` is
+`[-100, 0]`) and needs `as` to reach an alias slot. A full-width unsigned alias (`int(0 to u64.max)`,
+`bits(64)`) wraps modulo 2^64 and is closed under all four, so it keeps its name.
 
 The inheritance holds only where the range is CLOSED under `and`, which means a **low bound of 0**.
 `int(1 to 100)` is not closed (`1 and 2` is `0`), and neither is a signed range (`-3 and -9` is
@@ -596,7 +599,7 @@ end 'main'
 <!-- test: bit-clear -->
 ```maxon
 function main() returns ExitCode
-	var flags = 7        // binary 111
+	var flags = 7 as ExitCode        // binary 111
 	// Clear bit 1 using xor
 	flags = flags xor 2
 	return flags         // 5 (binary 101)
@@ -713,7 +716,7 @@ end 'main'
 <!-- test: shr-in-method-call-arg -->
 ```maxon
 function main() returns ExitCode
-	var buf = [0, 0]
+	var buf = [0 as FullRangeInt, 0]
 	buf.push(42)
 	let x = 0xABCD
 	buf.push(x shr 9)
@@ -727,7 +730,7 @@ end 'main'
 <!-- test: shr-consecutive-method-calls -->
 ```maxon
 function main() returns ExitCode
-	var buf = [0]
+	var buf = [0 as FullRangeInt]
 	let value = 0xAABBCCDD
 	buf.push(value and 0xFF)
 	buf.push((value shr 8) and 0xFF)
@@ -950,8 +953,8 @@ function afterBranch(v Wide, flag bool) returns Wide
 end 'afterBranch'
 
 function insideLoop(v Wide, n Num) returns Wide
-	var acc = 0
-	var i = 0
+	var acc = 0 as Wide
+	var i = 0 as Num
 	while i < n 'each'
 		acc = v shr 60
 		i = i + 1
@@ -1133,9 +1136,11 @@ ways, and they are not hypothetical — the AArch64 logical-immediate encoder *i
 (`imm = value and mask`, then `imm shr rotationStart`), and a sign-filled shift made its `imms` come
 out `63`, the RESERVED encoding, instead of `47`.
 
-**`or` and `xor` hand nothing down, and for a different reason than a stricter one.** They SET bits,
-so `0x0F or 0xF0` is `0xFF` — a result above both operands' high bound. Only `and` is bounded by its
-operands.
+**`or` and `xor` hand the alias down where it is closed under them, and prove nothing by it.** They SET
+bits, so `0x0F or 0xF0` is `0xFF` — a result above both operands' high bound — but over a full-width alias
+such as `Wide` the result is still a value of its operands' type, so `m shr 60` over two `Wide`s fills with
+zeros as it does for `and`. Over a narrower alias the result is an unnamed signed number. Only `and` is
+bounded by its operands.
 ```maxon
 typealias Wide = bits(64)
 typealias Num = int(i64.min to i64.max)
@@ -1167,12 +1172,12 @@ function main() returns ExitCode
 	if andThenDivide(u64.max, b: u64.max) != 6148914691236517205 'andDividesUnsigned'
 		return 2
 	end 'andDividesUnsigned'
-	if orThenShift(u64.max, b: 0) != -1 'orCarriesNothing'
+	if orThenShift(u64.max, b: 0) != 15 'orCarriesTheAlias'
 		return 3
-	end 'orCarriesNothing'
-	if xorThenShift(u64.max, b: 0) != -1 'xorCarriesNothing'
+	end 'orCarriesTheAlias'
+	if xorThenShift(u64.max, b: 0) != 15 'xorCarriesTheAlias'
 		return 4
-	end 'xorCarriesNothing'
+	end 'xorCarriesTheAlias'
 	return 42
 end 'main'
 ```
@@ -1208,15 +1213,10 @@ end 'main'
 
 <!-- test: an-and-does-not-launder-an-unproven-merge-into-a-proof -->
 ⛔⛔ **AN `and` THAT CHANGES NOTHING MUST NOT CHANGE WHAT IS PROVEN.** The inheritance above hands an
-operand's ranged alias to the `and`'s result, and that answer is RECORDED — into the same map a cast
-writes, which every proof reader takes AHEAD of the merge withhold. So reading the operand through the
-DECLARED-type door would launder `a-merged-count-is-not-proven-around-a-loop`'s phi straight past the
-merge withhold: `n` declares `int(0 to 63)` and holds **71**, and `m = n and 127` holds the SAME 71.
-
-⚠ **That would be one value with two answers:** `1 shl n` gives the saturated **0**, and `1 shl m` would
-give **128** — the hardware's masked `1 shl 7` — differing only by an `and` with an all-ones mask. The
-operand is read through the PROOF door instead, so a merge nothing proved hands down nothing and the
-`and` result falls back to a bare `int`.
+operand's ranged alias to the `and`'s result, so the operand must really be inside that alias. A loop's
+merge of a ranged `var` is: every rebind is a range door, so `n = n + 10` is checked against `Bits` at the
+store. The seventh step would make `n` **71**, and the program panics there — `m = n and 127` never sees a
+count its alias does not admit, and `1 shl m` can never differ from `1 shl n`.
 ```maxon
 typealias Num = int(i64.min to i64.max)
 typealias Bits = int(0 to 63)
@@ -1229,7 +1229,6 @@ function main() returns ExitCode
 		i = i + 1
 	end 'step'
 
-	// The premise, asserted before it is spent: the merge really does hold a value its alias cannot.
 	if n != 71 'reached'
 		return 1
 	end 'reached'
@@ -1247,7 +1246,13 @@ function main() returns ExitCode
 end 'main'
 ```
 ```exitcode
-42
+1
+```
+```stderr
+panic at an-and-does-not-launder-an-unproven-merge-into-a-proof.test:9: Range check failed: value outside typealias 'Bits'
+Stack trace:
+  in main
+  in mrt_start
 ```
 
 <!-- test: proven-count-at-the-boundary -->
@@ -1376,7 +1381,7 @@ declared `int(i64.min to i64.max)` states bounds, and they reach far outside wha
 takes. Two different arms of one question, and neither implies the other.
 ```maxon
 function main() returns ExitCode
-	var seen = 0
+	var seen = 0 as Count
 	for n in 68 upto 72 'each'
 		if 7 shl n != 0 'shl'
 			return 1
@@ -1458,7 +1463,7 @@ reaches the top of the range.
 typealias Bits = int(0 to 63)
 
 function main() returns ExitCode
-	var acc = 0
+	var acc = 0 as FullRangeInt
 	for i in 0 upto 8 'lowBits'
 		let n = i as Bits
 		acc = acc + (1 shl n)
@@ -1467,7 +1472,7 @@ function main() returns ExitCode
 		return 1
 	end 'sum'
 
-	var top = 0
+	var top = 0 as FullRangeInt
 	for i in 0 upto 2 'boundary'
 		let n = (i * 63) as Bits
 		top = top + (1 shl n)
@@ -1549,21 +1554,13 @@ Stack trace:
 1
 ```
 
-<!-- test: a-merged-count-is-not-proven-around-a-loop -->
-⛔⛔ **A MERGE'S DECLARED ALIAS IS NOT A PROOF, AND A SHIFT COUNT IS THE THIRD READER THAT MUST NOT
-SPEND IT AS ONE.** The cases above prove a count through a PARAMETER (guarded at the callee's
-entry) and through an `as` (guarded at the cast). A `var` reassigned around a loop crosses NEITHER:
-an assignment is a door on no tier, so the loop's header phi keeps the name `Bits` while the body
-hands it whatever it computed. `n` below is declared `int(0 to 63)` and holds **71**.
-
-⚠ **THIS IS THE CASE THAT SEPARATES "DECLARED" FROM "PROVEN", AND NOTHING ELSE IN THIS FILE CAN
-SEE IT.** Every other count here really is inside its alias, so an elision reading the DECLARED type
-answers those identically whether or not it is sound. Read as a proof, this count elides the
-saturation and the hardware masks 71 to 7: `1 shl 71` becomes **128** and `0 - 4` shifted right by
-71 becomes `0 - 1` by luck rather than by rule. The saturated value is the answer.
-
-⚠ Its expectation rides on an assignment to a ranged alias not being a door. If one ever becomes a
-door, this program panics at `n = n + 10` instead, and the case moves to that expectation.
+<!-- test: a-rebound-count-is-proven-around-a-loop -->
+⛔⛔ **A SHIFT COUNT REACHED THROUGH A LOOP'S MERGE IS PROVEN BY THE REBIND DOOR.** The cases above
+prove a count through a PARAMETER (guarded at the callee's entry) and through an `as` (guarded at the
+cast). A `var` reassigned around a loop is proven the same way: every rebind of a ranged `var` is a range
+door, so `n = n + 10` is checked against `Bits` at the store and the loop's header phi never holds a
+value outside `int(0 to 63)`. The seventh step would make `n` **71**, and the program panics there — an
+elided saturation below it can never meet a count the hardware would mask.
 ```maxon
 typealias Num = int(i64.min to i64.max)
 typealias Word = bits(64)
@@ -1577,7 +1574,6 @@ function main() returns ExitCode
 		i = i + 1
 	end 'step'
 
-	// The premise, asserted before it is spent: the merge really does hold a value its alias cannot.
 	if n != 71 'reached'
 		return 1
 	end 'reached'
@@ -1599,18 +1595,25 @@ function main() returns ExitCode
 end 'main'
 ```
 ```exitcode
-42
+1
+```
+```stderr
+panic at a-rebound-count-is-proven-around-a-loop.test:10: Range check failed: value outside typealias 'Bits'
+Stack trace:
+  in main
+  in mrt_start
 ```
 
 <!-- test: a-merged-count-is-not-proven-through-a-fallback -->
-⚠ **THE SECOND MERGE THAT CAN CARRY A COUNT ITS ALIAS NEVER ADMITTED: `try … otherwise <variable>`.**
+⚠ **A MERGE THAT CAN CARRY A COUNT ITS ALIAS NEVER ADMITTED: `try … otherwise <computed value>`.**
 The ok edge is the callee's own guarded `return`, so a `try f() otherwise 0` merge IS provable and
-keeps its elision — but a VARIABLE fallback is not range-checked, so the merge below denotes `Bits`
-while holding **100**. One rule covers both: the edge proves, or the claim is withheld.
+keeps its elision — but a computed fallback is not range-checked, so the merge below denotes `Bits`
+while holding **100**. One rule covers both: the edge proves, or the claim is withheld. The fallback is
+the sum of two opaque calls rather than a literal, because `requireOtherwiseInRangedReturn` refuses an
+out-of-range literal fallback outright.
 
 Masked, `1 shl 100` would be `1 shl 36` = **68719476736**. It is 0 here.
 ```maxon
-var wide = 90
 typealias Bits = int(0 to 63)
 
 union Missing implements Error
@@ -1625,10 +1628,12 @@ function firstBit(ok bool) returns Bits throws Missing
 	return 3
 end 'firstBit'
 
+function opaque(v Bits) returns Bits
+	return v
+end 'opaque'
+
 function main() returns ExitCode
-	// Stepped so the fallback is not a literal: `requireOtherwiseInRangedReturn` refuses an
-	// out-of-range LITERAL fallback outright, which is the only fallback shape that is checked.
-	wide = wide + 10
+	let wide = opaque(50) + opaque(50)
 
 	let n = try firstBit(false) otherwise wide
 
@@ -1724,4 +1729,325 @@ end 'main'
 ```
 ```stdout
 t=-1
+```
+
+<!-- test: bitwise-operators.a-negation-over-a-narrow-alias-is-a-signed-number -->
+⛔⛔ **A RESULT WEARS AN OPERAND'S ALIAS ONLY WHERE THE ALIAS IS CLOSED UNDER THE OPERATOR.** `-b` over an
+`int(0 to 100)` is `[-100, 0]`, a number the alias cannot hold, so it is an UNNAMED SIGNED value: the
+quotient and the right shift after it read the sign, not the alias's `0` low bound. A compiler that let the
+negation keep the name divides it UNSIGNED and answers a number near 2^63.
+```maxon
+typealias Small = int(0 to 100)
+typealias Num = int(i64.min to i64.max)
+
+function negatedHalf(b Small) returns Num
+	return (-b) / 2
+end 'negatedHalf'
+
+function negatedShift(b Small) returns Num
+	return (-b) shr 1
+end 'negatedShift'
+
+function main() returns ExitCode
+	if negatedHalf(7) != -3 'divide'
+		return 1
+	end 'divide'
+	if negatedShift(7) != -4 'shift'
+		return 2
+	end 'shift'
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: bitwise-operators.a-complement-over-a-narrow-alias-is-a-signed-number -->
+⛔⛔ **`not` IS `-1 - x`, SO IT LEAVES A NON-NEGATIVE ALIAS FOR EVERY OPERAND.** `not b` over an `int(0 to 100)`
+is `[-101, -1]`.
+```maxon
+typealias Small = int(0 to 100)
+typealias Num = int(i64.min to i64.max)
+
+function complementHalf(b Small) returns Num
+	return (not b) / 2
+end 'complementHalf'
+
+function complementShift(b Small) returns Num
+	return (not b) shr 1
+end 'complementShift'
+
+function main() returns ExitCode
+	if complementHalf(7) != -4 'divide'
+		return 1
+	end 'divide'
+	if complementShift(7) != -4 'shift'
+		return 2
+	end 'shift'
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: bitwise-operators.an-xor-with-minus-one-over-a-narrow-alias-is-a-signed-number -->
+⛔⛔ **AN `xor` WITH A NEGATIVE OPERAND IS NEGATIVE, AND THE OPERAND'S ALIAS CANNOT HOLD IT.** `b xor -1` is
+`not b`.
+```maxon
+typealias Small = int(0 to 100)
+typealias Num = int(i64.min to i64.max)
+
+function flippedHalf(b Small) returns Num
+	return (b xor -1) / 2
+end 'flippedHalf'
+
+function main() returns ExitCode
+	if flippedHalf(7) != -4 'divide'
+		return 1
+	end 'divide'
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: bitwise-operators.a-difference-over-a-narrow-alias-divides-signed -->
+⛔⛔ **A DIFFERENCE WEARS ITS OPERANDS' NAME AND PROVES NOTHING ABOUT IT, SO THE NAME DECIDES NO SIGNEDNESS.**
+`b - 10` over an `int(0 to 100)` is `-3` at `b = 7`; the quotient is `-1`, not the unsigned quotient of the bit
+pattern.
+```maxon
+typealias Small = int(0 to 100)
+typealias Num = int(i64.min to i64.max)
+
+function differenceHalf(b Small) returns Num
+	return (b - 10) / 2
+end 'differenceHalf'
+
+function differenceShift(b Small) returns Num
+	return (b - 10) shr 1
+end 'differenceShift'
+
+function differenceIsLess(b Small) returns bool
+	return (b - 10) < 5
+end 'differenceIsLess'
+
+function main() returns ExitCode
+	if differenceHalf(7) != -1 'divide'
+		return 1
+	end 'divide'
+	if differenceShift(7) != -2 'shift'
+		return 2
+	end 'shift'
+	if not differenceIsLess(7) 'compare'
+		return 3
+	end 'compare'
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: bitwise-operators.a-full-width-unsigned-alias-keeps-its-name-under-negation-and-complement -->
+**A FULL-WIDTH UNSIGNED ALIAS IS CLOSED UNDER `-`, `not`, `or` AND `xor`** — they wrap modulo 2^64 and every
+result is a value of the alias. The result keeps the name, so the quotient and the shift after it are
+UNSIGNED.
+```maxon
+typealias Count = int(0 to u64.max)
+typealias Wide = bits(64)
+
+function negatedHalf(c Count) returns Count
+	return (-c) / 2
+end 'negatedHalf'
+
+function complementShift(c Count) returns Count
+	return (not c) shr 1
+end 'complementShift'
+
+function flippedHalf(c Count) returns Count
+	return (c xor 18446744073709551615) / 2
+end 'flippedHalf'
+
+function wideComplementShift(w Wide) returns Wide
+	return (not w) shr 60
+end 'wideComplementShift'
+
+function wideNegatedShift(w Wide) returns Wide
+	return (-w) shr 60
+end 'wideNegatedShift'
+
+function main() returns ExitCode
+	if negatedHalf(3) != 9223372036854775806 'negatedHalf'
+		return 1
+	end 'negatedHalf'
+	if complementShift(0) != 9223372036854775807 'complementShift'
+		return 2
+	end 'complementShift'
+	if flippedHalf(0) != 9223372036854775807 'flippedHalf'
+		return 3
+	end 'flippedHalf'
+	if wideComplementShift(0) != 15 'wideComplementShift'
+		return 4
+	end 'wideComplementShift'
+	if wideNegatedShift(1) != 15 'wideNegatedShift'
+		return 5
+	end 'wideNegatedShift'
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: bitwise-operators.a-ternary-merge-of-a-difference-reads-signed -->
+⛔⛔ **A VALUE'S SIGNEDNESS DOES NOT DEPEND ON WHICH EDGE MADE IT.** `b - 10` wears `Small` without proving it, and a merge of that value with a `Small` is a new value wearing the same name: it must read signed too, for the divide, the shift and the decimal renderer.
+```maxon
+typealias Small = int(0 to 100)
+typealias Num = int(i64.min to i64.max)
+
+function half(b Small, c bool) returns Num
+	let d = (b - 10) if c else b
+	return (d / 2) as Num
+end 'half'
+
+function shifted(b Small, c bool) returns Num
+	let d = (b - 10) if c else b
+	return (d shr 1) as Num
+end 'shifted'
+
+function shown(b Small, c bool) returns String
+	let d = (b - 10) if c else b
+	return "{d}"
+end 'shown'
+
+function main() returns ExitCode
+	if half(5, c: true) != -2 'divide'
+		return 1
+	end 'divide'
+	if shifted(5, c: true) != -3 'shift'
+		return 2
+	end 'shift'
+	if shown(5, c: true) != "-5" 'render'
+		return 3
+	end 'render'
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: bitwise-operators.a-match-merge-of-a-difference-reads-signed -->
+The same through a `match` expression's merge.
+```maxon
+typealias Small = int(0 to 100)
+typealias Num = int(i64.min to i64.max)
+
+function half(b Small, n Count) returns Num
+	let d = match n 'pick'
+		0 gives b - 10
+		default gives b
+	end 'pick'
+	return (d / 2) as Num
+end 'half'
+
+function main() returns ExitCode
+	if half(5, n: 0) != -2 'divide'
+		return 1
+	end 'divide'
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: bitwise-operators.a-try-otherwise-merge-of-a-difference-reads-signed -->
+The same through the fallback of a `try … otherwise`.
+```maxon
+typealias Small = int(0 to 100)
+typealias Num = int(i64.min to i64.max)
+
+function fetch(b Small) returns Small throws ArrayError
+	if b < 200 'always'
+		throw ArrayError.indexOutOfBounds
+	end 'always'
+
+	return b
+end 'fetch'
+
+function half(b Small) returns Num
+	let d = try fetch(b) otherwise b - 10
+	return (d / 2) as Num
+end 'half'
+
+function main() returns ExitCode
+	if half(5) != -2 'divide'
+		return 1
+	end 'divide'
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: bitwise-operators.a-closure-captures-a-difference-as-signed -->
+A closure that captures the difference reads it signed: the capture is neither a proof of the alias nor a reason to read it unsigned.
+```maxon
+typealias Small = int(0 to 100)
+typealias Num = int(i64.min to i64.max)
+
+typealias Thunk = function() returns Num
+
+function make(b Small) returns Thunk
+	let d = b - 10
+	return function() gives (d / 2) as Num
+end 'make'
+
+function main() returns ExitCode
+	let g = make(5)
+	if g() != -2 'divide'
+		return 1
+	end 'divide'
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: bitwise-operators.a-closure-capturing-a-difference-still-meets-the-parameter-door -->
+A captured value that wears `Small` without proving it is checked where it enters a `Small` parameter inside the closure.
+```maxon
+typealias Small = int(0 to 100)
+
+function take(v Small) returns Small
+	return v
+end 'take'
+
+typealias Thunk = function() returns Small
+
+function make(b Small) returns Thunk
+	let d = b - 10
+	return function() gives take(d)
+end 'make'
+
+function main() returns ExitCode
+	let g = make(5)
+	return g() as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at bitwise-operators.a-closure-capturing-a-difference-still-meets-the-parameter-door.test:4: Range check failed: value outside typealias 'Small'
+Stack trace:
+  in take
+  in make$closure_0
+  in main
+  in mrt_start
 ```

@@ -179,7 +179,7 @@ function main() returns ExitCode
 		promises.push(async step(i))
 	end 'spawn'
 
-	var total = 0
+	var total = 0 as Counted
 
 	for p in promises 'await'
 		total = total + await p
@@ -275,6 +275,28 @@ everyButMain=true
 0
 ```
 
+<!-- test: sched-processor.a-builtin-scalar-result-binds-to-a-var -->
+<!-- tier: stdlib -->
+<!-- procs: 4 -->
+A builtin's result is a call's value, not a bare number, so a `var` binds it with no cast.
+```maxon
+function main() returns ExitCode
+	var lowest = __Builtins.schedIdleProcessorCount()
+	let again = __Builtins.schedIdleProcessorCount()
+	if again < lowest 'lower'
+		lowest = again
+	end 'lower'
+	print("everyButMain={lowest == __Builtins.schedProcessorCount() - 1}\n")
+	return 0
+end 'main'
+```
+```stdout
+everyButMain=true
+```
+```exitcode
+0
+```
+
 <!-- test: sched-processor.idle-processor-count-returns-after-a-burst -->
 <!-- procs: 4 -->
 **THE COUNT FOLLOWS THE PROCESSORS BACK TO THE IDLE LIST.** Four services each do a share of work on
@@ -301,8 +323,8 @@ type Share
 	end 'create'
 
 	export function work(rounds Integer) returns Integer
-		var acc = 0
-		var i = 0
+		var acc = 0 as Integer
+		var i = 0 as Integer
 		while i < rounds 'spin'
 			acc = (acc + i * self.id) mod 1000003
 			i = i + 1
@@ -313,27 +335,27 @@ end 'Share'
 
 function main() returns ExitCode
 	var hs = ShareHandleArray.create()
-	var i = 0
+	var i = 0 as Integer
 	while i < shares 'spawnEach'
 		hs.push(spawn Share.create(i + 1))
 		i = i + 1
 	end 'spawnEach'
 	var replies = ReplyPromiseArray.create()
-	var k = 0
+	var k = 0 as Integer
 	while k < shares 'sendEach'
-		let h = try hs.get(k) otherwise panic("hs.get OOB at {k} — bounded by the pushes above")
+		let h = try hs.get(k as ElementIndex) otherwise panic("hs.get OOB at {k} — bounded by the pushes above")
 		replies.push(h.work(200000))
 		k = k + 1
 	end 'sendEach'
-	var total = 0
-	var n = 0
+	var total = 0 as Integer
+	var n = 0 as Integer
 	while n < shares 'collect'
-		let p = try replies.get(n) otherwise panic("replies.get OOB at {n} — bounded by the pushes above")
+		let p = try replies.get(n as ElementIndex) otherwise panic("replies.get OOB at {n} — bounded by the pushes above")
 		total = total + (try await p otherwise 0)
 		n = n + 1
 	end 'collect'
 	let everyButMain = (Scheduler.processorCount() as Integer) - 1
-	var turn = 0
+	var turn = 0 as Integer
 	while turn < settleTurns and (Scheduler.counters().idleProcessors as Integer) != everyButMain 'settle'
 		sleep(1)
 		turn = turn + 1

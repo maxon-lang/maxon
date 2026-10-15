@@ -76,7 +76,7 @@
 set -euo pipefail
 
 if [ $# -ne 3 ]; then
-	echo "usage: genleafsites.sh <n> <onefunc|spread|nosites|guardone|guardspread> <outdir>" >&2
+	echo "usage: genleafsites.sh <n> <onefunc|spread|nosites|guardone|guardspread|pressure> <outdir>" >&2
 	exit 2
 fi
 
@@ -175,7 +175,7 @@ GUARD_ALIAS="LeafReg"
 		# says anything (`genrangesites.sh` measured that trap). A ladder
 		# moves ONE axis.
 		echo "function leafMany(a LadderInt) returns LadderInt"
-		echo "	var acc = 0"
+		echo "	var acc = 0 as LadderInt"
 		for ((i = 0; i < N; i++)); do
 			case "$MODE" in
 			nosites) echo "	acc = acc + (try leafPure(a, b: $i) otherwise 0)" ;;
@@ -208,7 +208,7 @@ GUARD_ALIAS="LeafReg"
 		# ⭐ ONE SITE PER BLOCK. The `if` bodies are what put each call in a block of its own; the
 		# condition is against `a`, which `main` supplies, so no arm folds away.
 		echo "function leafMany(a LadderInt) returns LadderInt"
-		echo "	var acc = 0"
+		echo "	var acc = 0 as LadderInt"
 		for ((i = 0; i < N; i++)); do
 			echo "	if a > $i 'g$i'"
 			case "$MODE" in

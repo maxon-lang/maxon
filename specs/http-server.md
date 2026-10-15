@@ -151,7 +151,7 @@ let ChunkCount = 320
 
 function bigBody() returns String
 	var body = ""
-	var written = 0
+	var written = 0 as Count
 
 	while written < ChunkCount 'fill'
 		body.append(ChunkText)
@@ -1874,7 +1874,7 @@ end 'statusCodeOf'
 
 function oversizeRequest() returns String
 	var block = "POST /upload HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {DeclaredBodyBytes}\r\n\r\n"
-	var written = 0
+	var written = 0 as Count
 
 	while written < SentBodyChunks 'fill'
 		block.append(BodyChunk)
@@ -1960,7 +1960,7 @@ end 'acceptedAs'
 
 function postWithBody() returns String
 	var block = "POST /upload HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {BodyBytes}\r\n\r\n"
-	var written = 0
+	var written = 0 as Count
 
 	while written < BodyBytes 'fill'
 		block.append("b")
@@ -2028,7 +2028,7 @@ end 'BigAnswerHandler'
 
 function bigAnswer() returns String
 	var body = StringBuilder.create()
-	var written = 0
+	var written = 0 as Count
 
 	while written < AnswerBytes 'fill'
 		body.append("0123456789abcdef")

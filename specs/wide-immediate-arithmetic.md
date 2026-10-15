@@ -292,9 +292,9 @@ takes `+ 1000000007` three times, and `i` counts with a small immediate beside i
 bands in one block. `3 * 1000000007 = 3000000021`.
 ```maxon
 function main() returns ExitCode
-	let cell = [0]
+	let cell = FullRangeIntArray from [0]
 	var acc = try cell.get(0) otherwise 0
-	var i = 0
+	var i = 0 as FullRangeInt
 	while i < 3 'loop'
 		acc = acc + 1000000007
 		i = i + 1

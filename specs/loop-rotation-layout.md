@@ -60,8 +60,8 @@ typealias WordArray = Array with Word
 
 function copyTail(source WordArray, scratch WordArray, n Word)
 	for i in 1 upto n 'copy'
-		let element = try source.get(i) otherwise panic("copyTail: i < n = source.count()")
-		try scratch.set(i, value: element) otherwise panic("copyTail: i < n = scratch.count()")
+		let element = try source.get(i as ElementIndex) otherwise panic("copyTail: i < n = source.count()")
+		try scratch.set(i as ElementIndex, value: element) otherwise panic("copyTail: i < n = scratch.count()")
 	end 'copy'
 end 'copyTail'
 
@@ -73,7 +73,7 @@ function main() returns ExitCode
 		scratch.push(0)
 	end 'seed'
 	copyTail(source, scratch: scratch, n: 6)
-	var total = 0
+	var total = 0 as Word
 	for v in scratch 'sum'
 		total = total + v
 	end 'sum'
@@ -94,7 +94,7 @@ typealias WordArray = Array with Word
 function sumFrom(a WordArray, n Word, start Word) returns Word
 	var t = start
 	for i in 0 upto n 'each'
-		t = t + (try a.get(i) otherwise panic("sumFrom: i < n = a.count()"))
+		t = t + (try a.get(i as ElementIndex) otherwise panic("sumFrom: i < n = a.count()"))
 	end 'each'
 	return t
 end 'sumFrom'
@@ -120,7 +120,7 @@ typealias WordArray = Array with Word
 function sumFrom(a WordArray, n Word, start Word) returns Word
 	var t = start
 	for i in 0 upto n 'each'
-		t = t + (try a.get(i) otherwise panic("sumFrom: i < n = a.count()"))
+		t = t + (try a.get(i as ElementIndex) otherwise panic("sumFrom: i < n = a.count()"))
 	end 'each'
 	return t
 end 'sumFrom'
@@ -145,9 +145,9 @@ typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
 function grid(a WordArray, rows Word, width Word) returns Word
-	var t = 0
+	var t = 0 as Word
 	for r in 0 upto rows 'row'
-		var line = 0
+		var line = 0 as Word
 		for c in 0 upto width 'col'
 			line = line + (try a.get((r * width + c) as ElementIndex) otherwise panic("grid: r * width + c < rows * width = a.count()"))
 		end 'col'
@@ -178,10 +178,10 @@ typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
 function oddSum(a WordArray, n Word) returns Word
-	var t = 0
-	var i = 0
+	var t = 0 as Word
+	var i = 0 as Word
 	while i < n 'each'
-		let v = try a.get(i) otherwise panic("oddSum: i < n = a.count()")
+		let v = try a.get(i as ElementIndex) otherwise panic("oddSum: i < n = a.count()")
 		i = i + 1
 		if v mod 2 == 0 'even'
 			continue
@@ -213,10 +213,10 @@ typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
 function weightedSum(a WordArray, n Word) returns Word
-	var t = 0
-	var i = 0
+	var t = 0 as Word
+	var i = 0 as Word
 	while i < n 'each'
-		let v = try a.get(i) otherwise panic("weightedSum: i < n = a.count()")
+		let v = try a.get(i as ElementIndex) otherwise panic("weightedSum: i < n = a.count()")
 		i = i + 1
 		if v mod 2 == 0 'even'
 			t = t + 10
@@ -249,9 +249,9 @@ it as part of the inner chain. Each outer step adds `j` from where the inner loo
 typealias Word = int(i64.min to i64.max)
 
 function staircase(n Word) returns Word
-	var i = 0
-	var j = 0
-	var t = 0
+	var i = 0 as Word
+	var j = 0 as Word
+	var t = 0 as Word
 	while i < n 'outer'
 		i = i + 1
 		while j < i 'inner'
@@ -278,9 +278,9 @@ typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
 function clampedSum(a WordArray, n Word) returns Word
-	var t = 0
+	var t = 0 as Word
 	for i in 0 upto n 'each'
-		t = t + (try a.get(i) otherwise 7)
+		t = t + (try a.get(i as ElementIndex) otherwise 7)
 	end 'each'
 	return t
 end 'clampedSum'
@@ -305,7 +305,7 @@ typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
 function walkDown(a WordArray, start Word) returns Word
-	var t = 0
+	var t = 0 as Word
 	var i = start
 	while i > -2 'down'
 		t = t + (try a.get(i as ElementIndex) otherwise 0)
@@ -342,10 +342,10 @@ typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
 function sumUntilZero(a WordArray) returns Word
-	var i = 0
-	var t = 0
-	while (try a.get(i) otherwise panic("sumUntilZero: a ends with a 0")) > 0 'scan'
-		t = t + (try a.get(i) otherwise panic("sumUntilZero: i < a.count()"))
+	var i = 0 as Word
+	var t = 0 as Word
+	while (try a.get(i as ElementIndex) otherwise panic("sumUntilZero: a ends with a 0")) > 0 'scan'
+		t = t + (try a.get(i as ElementIndex) otherwise panic("sumUntilZero: i < a.count()"))
 		i = i + 1
 	end 'scan'
 	return t
@@ -375,10 +375,10 @@ typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
 function firstNegative(a WordArray, n Word) returns Word
-	var i = 0
-	var found = -1
+	var i = 0 as Word
+	var found = -1 as Word
 	while i < n 'scan'
-		let v = try a.get(i) otherwise panic("firstNegative: i < n = a.count()")
+		let v = try a.get(i as ElementIndex) otherwise panic("firstNegative: i < n = a.count()")
 		if v < 0 'hit'
 			found = i
 			break
@@ -410,7 +410,7 @@ typealias WordArray = Array with Word
 
 function indexOf(a WordArray, n Word, target Word) returns Word
 	for i in 0 upto n 'scan'
-		if (try a.get(i) otherwise panic("indexOf: i < n = a.count()")) == target 'hit'
+		if (try a.get(i as ElementIndex) otherwise panic("indexOf: i < n = a.count()")) == target 'hit'
 			return i
 		end 'hit'
 	end 'scan'

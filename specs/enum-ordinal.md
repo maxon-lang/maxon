@@ -219,7 +219,7 @@ end 'lookup'
 
 function main() returns ExitCode
 	var table = IdxArray.create()
-	var i = 0
+	var i = 0 as Idx
 	while i < 100 'fill'
 		table.push(i)
 		i = i + 1
@@ -410,4 +410,130 @@ end 'main'
 ```
 ```stdout
 enumAccessor=notFound plainField=7
+```
+
+<!-- test: enum-ordinal.ordinal-is-an-element-index -->
+`.ordinal` is the position of a case, never negative, and it is typed `ElementIndex`, so it indexes an array with no cast.
+```maxon
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+function colorFor(n Count) returns Color
+	if n > 1 'second'
+		return Color.blue
+	end 'second'
+
+	return Color.green
+end 'colorFor'
+
+function main() returns ExitCode
+	let table = [10 as Count, 20 as Count, 30 as Count]
+	let c = colorFor(CommandLine.args().count())
+	let at = try table.get(c.ordinal) otherwise 0
+	return at as ExitCode
+end 'main'
+```
+```exitcode
+20
+```
+
+<!-- test: enum-ordinal.error.an-ordinal-is-not-a-narrower-alias -->
+An `ElementIndex` is its own type: handing it to a narrower alias is the mismatch every two aliases are, and `as` is the door.
+```maxon
+typealias Small = int(0 to 100)
+
+enum Color
+	red
+	green
+end 'Color'
+
+function take(v Small) returns Small
+	return v
+end 'take'
+
+function colorFor(n Count) returns Color
+	if n > 1 'second'
+		return Color.green
+	end 'second'
+
+	return Color.red
+end 'colorFor'
+
+function main() returns ExitCode
+	let c = colorFor(2)
+	return take(c.ordinal) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:23:9: argument type mismatch for 'v': expected 'Small', got 'ElementIndex'
+```
+
+<!-- test: enum-ordinal.rawvalue-of-an-integer-enum-is-a-full-range-int -->
+An integer-backed enum's `.rawValue` is a `FullRangeInt`, the backing type the raw values decide, so it reaches a `FullRangeInt` slot with no cast and any narrower alias only through `as`.
+```maxon
+typealias Small = int(0 to 100)
+
+enum Step
+	small = 10
+	large = 90
+end 'Step'
+
+function stepFor(n Count) returns Step
+	if n > 1 'second'
+		return Step.large
+	end 'second'
+
+	return Step.small
+end 'stepFor'
+
+function total(v FullRangeInt) returns FullRangeInt
+	return v + v
+end 'total'
+
+function take(v Small) returns Small
+	return v
+end 'take'
+
+function main() returns ExitCode
+	let s = stepFor(CommandLine.args().count())
+	let doubled = total(s.rawValue)
+	return (take(s.rawValue as Small) as ExitCode) + (doubled as ExitCode)
+end 'main'
+```
+```exitcode
+30
+```
+
+<!-- test: enum-ordinal.error.a-rawvalue-is-not-a-narrower-alias -->
+The backing type is `FullRangeInt` and no narrower alias: the mismatch names it.
+```maxon
+typealias Small = int(0 to 100)
+
+enum Step
+	small = 10
+	large = 90
+end 'Step'
+
+function take(v Small) returns Small
+	return v
+end 'take'
+
+function stepFor(n Count) returns Step
+	if n > 1 'second'
+		return Step.large
+	end 'second'
+
+	return Step.small
+end 'stepFor'
+
+function main() returns ExitCode
+	let s = stepFor(2)
+	return take(s.rawValue) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:23:9: argument type mismatch for 'v': expected 'Small', got 'FullRangeInt'
 ```

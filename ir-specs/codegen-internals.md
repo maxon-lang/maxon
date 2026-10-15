@@ -70,13 +70,6 @@ func @main {
   trycont:
     x64.movRegReg rcx, r8
     x64.callDirect __managed_decref
-    x64.cmpRegImm32 rbx, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg rbx, rax
-    x64.jcc greater, __rc_panic
-  __rc_ok:
     x64.movRegReg r8, rbx
     x64.epilogue 40
     x64.popReg rbx
@@ -91,14 +84,6 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at rdata-constant-array-uses-rdata.test:4: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
 }
 ```
 
@@ -146,12 +131,6 @@ func @main {
   trycont:
     x64.movRegReg rcx, r8
     x64.callDirect __managed_decref
-    x64.cmpRegImm32 rbx, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 rbx, 255
-    x64.jcc greater, __rc_panic
-  __rc_ok:
     x64.movRegReg r8, rbx
     x64.epilogue 40
     x64.popReg rbx
@@ -166,14 +145,6 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at rdata-constant-array-uses-rdata.test:4: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
 }
 ```
 
@@ -216,12 +187,6 @@ func @main {
     arm64.movRegReg x19, x1
   trycont:
     arm64.bl __managed_decref
-    arm64.cmp x19, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x19, 255
-    arm64.b.gt __rc_panic
-  __rc_ok:
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.epilogue 32
@@ -234,13 +199,6 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.ne tryerr
     arm64.b tryok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at rdata-constant-array-uses-rdata.test:4: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot1
-    arm64.epilogue 32
-    arm64.ret
 }
 ```
 
@@ -285,12 +243,6 @@ func @main {
     arm64.movRegReg x19, x1
   trycont:
     arm64.bl __managed_decref
-    arm64.cmp x19, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x19, 255
-    arm64.b.gt __rc_panic
-  __rc_ok:
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.epilogue 32
@@ -303,13 +255,6 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.ne tryerr
     arm64.b tryok
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at rdata-constant-array-uses-rdata.test:4: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot1
-    arm64.epilogue 32
-    arm64.ret
 }
 ```
 
@@ -321,7 +266,7 @@ function main() returns ExitCode
 	let v1 = try arr.get(1) otherwise true
 	let v2 = try arr.get(2) otherwise false
 	let v3 = try arr.get(3) otherwise true
-	var sum = 0
+	var sum = 0 as FullRangeInt
 	if v0 'c0'
 		sum = sum + 1
 	end 'c0'
@@ -440,10 +385,10 @@ func @main {
     x64.jcc equal, critsplit
   c3:
     x64.leaRegRegImm32 r12, rcx, 1
-    x64.jmp ifcont#20
+    x64.jmp __rc_ok
   critsplit:
     x64.movRegReg r12, rcx
-  ifcont#20:
+  __rc_ok:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
@@ -552,10 +497,10 @@ func @main {
     x64.jcc equal, critsplit
   c3:
     x64.leaRegRegImm32 r12, rcx, 1
-    x64.jmp ifcont#20
+    x64.jmp __rc_ok
   critsplit:
     x64.movRegReg r12, rcx
-  ifcont#20:
+  __rc_ok:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
@@ -653,10 +598,10 @@ func @main {
     arm64.cbz x0, critsplit
   c3:
     arm64.add x20, x1, 1
-    arm64.b ifcont#20
+    arm64.b __rc_ok
   critsplit:
     arm64.movRegReg x20, x1
-  ifcont#20:
+  __rc_ok:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
@@ -755,10 +700,10 @@ func @main {
     arm64.cbz x0, critsplit
   c3:
     arm64.add x20, x1, 1
-    arm64.b ifcont#20
+    arm64.b __rc_ok
   critsplit:
     arm64.movRegReg x20, x1
-  ifcont#20:
+  __rc_ok:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
@@ -2131,7 +2076,7 @@ func @main {
 <!-- test: rdata-cow-mutation-copies-to-heap -->
 ```maxon
 function main() returns ExitCode
-	var arr = [42]
+	var arr = FullRangeIntArray from [42]
 	try arr.set(0, value: 77) otherwise panic("test invariant: set OOB")
 	return try arr.get(0) otherwise 0
 end 'main'
@@ -2195,8 +2140,6 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
   trycont:
-    x64.movRegReg rcx, r8
-    x64.callDirect __managed_decref
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
   __rc_chk:
@@ -2204,6 +2147,8 @@ func @main {
     x64.cmpRegReg rbx, rax
     x64.jcc greater, __rc_panic
   __rc_ok:
+    x64.movRegReg rcx, r8
+    x64.callDirect __managed_decref
     x64.movRegReg r8, rbx
     x64.epilogue 40
     x64.popReg rbx
@@ -2287,14 +2232,14 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
   trycont:
-    x64.movRegReg rcx, r8
-    x64.callDirect __managed_decref
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 rbx, 255
     x64.jcc greater, __rc_panic
   __rc_ok:
+    x64.movRegReg rcx, r8
+    x64.callDirect __managed_decref
     x64.movRegReg r8, rbx
     x64.epilogue 40
     x64.popReg rbx
@@ -2374,13 +2319,13 @@ func @main {
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x19, [x1 + 0]
   trycont:
-    arm64.bl __managed_decref
     arm64.cmp x19, 0
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 255
     arm64.b.gt __rc_panic
   __rc_ok:
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.epilogue 32
@@ -2458,13 +2403,13 @@ func @main {
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x19, [x1 + 0]
   trycont:
-    arm64.bl __managed_decref
     arm64.cmp x19, 0
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 255
     arm64.b.gt __rc_panic
   __rc_ok:
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.epilogue 32
@@ -2496,11 +2441,11 @@ func @main {
 <!-- test: rdata-cow-multiple-mutations -->
 ```maxon
 function main() returns ExitCode
-	var arr = [1, 2, 3]
+	var arr = FullRangeIntArray from [1, 2, 3]
 	try arr.set(0, value: 10) otherwise panic("test invariant: set OOB")
 	try arr.set(1, value: 20) otherwise panic("test invariant: set OOB")
 	try arr.set(2, value: 30) otherwise panic("test invariant: set OOB")
-	var sum = 0
+	var sum = 0 as FullRangeInt
 	sum = sum + (try arr.get(0) otherwise 0)
 	sum = sum + (try arr.get(1) otherwise 0)
 	sum = sum + (try arr.get(2) otherwise 0)
@@ -2601,8 +2546,6 @@ func @main {
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
   trycont#15:
     x64.leaRegRegReg rbx, rax, rcx
-    x64.movRegReg rcx, r8
-    x64.callDirect __managed_decref
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
   __rc_chk:
@@ -2610,6 +2553,8 @@ func @main {
     x64.cmpRegReg rbx, rax
     x64.jcc greater, __rc_panic
   __rc_ok:
+    x64.movRegReg rcx, r8
+    x64.callDirect __managed_decref
     x64.movRegReg r8, rbx
     x64.epilogue 40
     x64.popReg rbx
@@ -2763,14 +2708,14 @@ func @main {
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
   trycont#15:
     x64.leaRegRegReg rbx, rax, rcx
-    x64.movRegReg rcx, r8
-    x64.callDirect __managed_decref
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 rbx, 255
     x64.jcc greater, __rc_panic
   __rc_ok:
+    x64.movRegReg rcx, r8
+    x64.callDirect __managed_decref
     x64.movRegReg r8, rbx
     x64.epilogue 40
     x64.popReg rbx
@@ -2920,13 +2865,13 @@ func @main {
     arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
   trycont#15:
     arm64.add x19, x1, x2
-    arm64.bl __managed_decref
     arm64.cmp x19, 0
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 255
     arm64.b.gt __rc_panic
   __rc_ok:
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.epilogue 32
@@ -3070,13 +3015,13 @@ func @main {
     arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
   trycont#15:
     arm64.add x19, x1, x2
-    arm64.bl __managed_decref
     arm64.cmp x19, 0
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x19, 255
     arm64.b.gt __rc_panic
   __rc_ok:
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.epilogue 32
@@ -3181,13 +3126,6 @@ func @main {
   tryok:
     x64.movRegReg r8, rax
   trycont:
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r8, rax
-    x64.jcc greater, __rc_panic
-  __rc_ok:
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -3198,13 +3136,6 @@ func @main {
   critsplit:
     x64.movRegReg rax, r8
     x64.jmp tryok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at rdata-global-let-array-uses-rdata.test:5: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
 }
 ```
 
@@ -3237,12 +3168,6 @@ func @main {
   tryok:
     x64.movRegReg r8, rax
   trycont:
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 r8, 255
-    x64.jcc greater, __rc_panic
-  __rc_ok:
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -3253,13 +3178,6 @@ func @main {
   critsplit:
     x64.movRegReg rax, r8
     x64.jmp tryok
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at rdata-global-let-array-uses-rdata.test:5: Range check failed: value outside typealias 'ExitCode'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
 }
 ```
 
@@ -3286,12 +3204,6 @@ func @main {
     arm64.add x0, x0, 8
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
   trycont:
-    arm64.cmp x0, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x0, 255
-    arm64.b.gt __rc_panic
-  __rc_ok:
     arm64.epilogue 16
     arm64.ret
   __im_slow:
@@ -3299,12 +3211,6 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.ne tryerr
     arm64.b trycont
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_3  ; "panic at rdata-global-let-array-uses-rdata.test:5: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
 }
 ```
 
@@ -3333,12 +3239,6 @@ func @main {
     arm64.add x0, x0, 8
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
   trycont:
-    arm64.cmp x0, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.cmp x0, 255
-    arm64.b.gt __rc_panic
-  __rc_ok:
     arm64.epilogue 16
     arm64.ret
   __im_slow:
@@ -3346,18 +3246,12 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.ne tryerr
     arm64.b trycont
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_3  ; "panic at rdata-global-let-array-uses-rdata.test:5: Range check failed: value outside typealias 'ExitCode'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.epilogue 16
-    arm64.ret
 }
 ```
 
 <!-- test: rdata-global-var-array-cow -->
 ```maxon
-var globalArr = [1, 2, 3]
+var globalArr = FullRangeIntArray from [1, 2, 3]
 
 function main() returns ExitCode
 	try globalArr.set(0, value: 42) otherwise panic("test invariant: set OOB")
@@ -3729,7 +3623,7 @@ func @main {
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-var globalArr = [10, 20, 30]
+var globalArr = FullRangeIntArray from [10, 20, 30]
 
 function readFirst() returns Integer
 	return try globalArr.get(0) otherwise 0

@@ -532,7 +532,7 @@ function main() returns ExitCode
 		items.push(Item.value(10))
 		items.push(Item.value(20))
 		items.push(Item.value(12))
-		var total = 0
+		var total = 0 as Integer
 		for item in items 'loop'
 				match item 'add'
 						empty then break
@@ -563,7 +563,7 @@ function main() returns ExitCode
 		slots.push(Slot.val(5))
 		slots.push(Slot.none)
 		slots.push(Slot.val(3))
-		var total = 0
+		var total = 0 as Integer
 		for e in slots 'loop'
 				match e 'check'
 						none then total = total + 100
@@ -592,7 +592,7 @@ typealias BoxArray = Array with Box
 function main() returns ExitCode
 		var boxes = BoxArray.create()
 		boxes.push(Box.full(42))
-		var result = 0
+		var result = 0 as Integer
 		for b in boxes 'loop'
 				match b 'check'
 						empty then result = 0

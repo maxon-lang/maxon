@@ -59,7 +59,7 @@ function main() returns ExitCode
 	arr.push("first {3} long enough for the heap")
 	arr.push("second {4} long enough for the heap")
 	let first = try arr.get(0) otherwise "none"
-	var i = 0
+	var i = 0 as Count
 
 	while i < 2 'loop'
 		print("{first}\n")

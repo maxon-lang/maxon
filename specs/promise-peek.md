@@ -80,14 +80,14 @@ function main() returns ExitCode
 	arr.push(async makeValue())
 	let p = try arr.get(0) otherwise panic("the promise was just pushed")
 	let before = p.isComplete()
-	var spins = 0
+	var spins = 0 as Count
 	var after = false
 	while spins < maxSpins and not after 'drive'
 		Scheduler.yield()
 		after = p.isComplete()
 		spins = spins + 1
 	end 'drive'
-	var score = 0
+	var score = 0 as Count
 	if not before 'notCompleteOnArrival'
 		score = score + 1
 	end 'notCompleteOnArrival'
@@ -124,7 +124,7 @@ function main() returns ExitCode
 	let a = p.isComplete()
 	let b = p.isComplete()
 	let c = p.isComplete()
-	var score = 0
+	var score = 0 as Count
 	if a == b and b == c 'threePeeksAgree'
 		score = score + 3
 	end 'threePeeksAgree'
@@ -164,14 +164,14 @@ function main() returns ExitCode
 	let maxSpins = 100
 	let p = async makeValue()
 	let before = peek(p)
-	var spins = 0
+	var spins = 0 as Count
 	var after = false
 	while spins < maxSpins and not after 'drive'
 		Scheduler.yield()
 		after = peek(p)
 		spins = spins + 1
 	end 'drive'
-	var score = 0
+	var score = 0 as Count
 	if not before 'notCompleteOnArrival'
 		score = score + 1
 	end 'notCompleteOnArrival'
@@ -215,14 +215,14 @@ function main() returns ExitCode
 	arr.push(async makeValue())
 	let first = try arr.get(0) otherwise panic("both promises were just pushed")
 	let second = try arr.get(1) otherwise panic("both promises were just pushed")
-	var score = 0
+	var score = 0 as Count
 	if first.inner != 0 and second.inner != 0 'bothAreRealHandles'
 		score = score + 1
 	end 'bothAreRealHandles'
 	if first.inner != second.inner 'twoDistinctThreads'
 		score = score + 2
 	end 'twoDistinctThreads'
-	var sum = 0
+	var sum = 0 as Integer
 	for p in arr 'each'
 		sum = sum + await p
 	end 'each'
@@ -269,14 +269,14 @@ function main() returns ExitCode
 	let p = try arr.get(0) otherwise panic("the promise was just pushed")
 	let h = Holder.of(p)
 	let before = h.p.isComplete()
-	var spins = 0
+	var spins = 0 as Count
 	var after = false
 	while spins < maxSpins and not after 'drive'
 		Scheduler.yield()
 		after = h.p.isComplete()
 		spins = spins + 1
 	end 'drive'
-	var score = 0
+	var score = 0 as Count
 	if not before 'notcompleteonarrival'
 		score = score + 1
 	end 'notcompleteonarrival'
@@ -320,7 +320,7 @@ function main() returns ExitCode
 	let p = async makeValue()
 	let handle = p.inner
 	let h = Holder.of(p)
-	var score = 0
+	var score = 0 as Count
 	if h.p.inner == handle 'theTwoDoorsAgree'
 		score = score + 1
 	end 'theTwoDoorsAgree'

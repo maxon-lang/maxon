@@ -22,7 +22,7 @@ slot back out.
 
 ```maxon
 function main() returns ExitCode
-	var a = [1, 2, 3]
+	var a = FullRangeIntArray from [1, 2, 3]
 	a.refill(6, value: 7)
 	return (try a.get(5) otherwise 9) as ExitCode
 end 'main'
@@ -70,7 +70,7 @@ func @main {
     x64.storeBaseDispReg.word64 [rbx + 24], rax
     x64.movRegImm32 r12, 6
     x64.movRegImm32 r13, 7
-    x64.leaRegRdata r14, [rip + __layout_Array_int]
+    x64.leaRegRdata r14, [rip + __layout_Array_FullRangeInt]
   __il_body#12:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
@@ -606,7 +606,7 @@ func @main {
     x64.storeBaseDispReg.word64 [rbx + 24], rax
     x64.movRegImm32 r12, 6
     x64.movRegImm32 r13, 7
-    x64.leaRegRdata r14, [rip + __layout_Array_int]
+    x64.leaRegRdata r14, [rip + __layout_Array_FullRangeInt]
   __il_body#12:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
@@ -1142,7 +1142,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x19 + 24], x0
     arm64.movImm x20, 6
     arm64.movImm x21, 7
-    arm64.leaRdata x22, __layout_Array_int
+    arm64.leaRdata x22, __layout_Array_FullRangeInt
   __il_body#12:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
@@ -1664,7 +1664,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x19 + 24], x0
     arm64.movImm x20, 6
     arm64.movImm x21, 7
-    arm64.leaRdata x22, __layout_Array_int
+    arm64.leaRdata x22, __layout_Array_FullRangeInt
   __il_body#12:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20

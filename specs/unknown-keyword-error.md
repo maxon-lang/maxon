@@ -39,7 +39,7 @@ When you see this error, consider:
 <!-- test: bare-identifier -->
 ```maxon
 function main() returns ExitCode
-	var x = 0
+	var x = 0 as FullRangeInt
 	foo
 		x = 5
 	end 'foo'

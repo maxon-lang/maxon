@@ -17,13 +17,13 @@
 /// 4b-2 lands, i.e. one allocation per key hash, and the stage would be a net loss. Going through
 /// `String.byteAt` means 4b-2 changes that one intrinsic's lowering and this function never notices.
 public function hashString(s String) returns HashValue
-	var h = 5381
+	var h = 5381 as FullRangeInt
 	let len = s.byteLength()
 
 	for i in 0 upto len 'hash_loop'
 		let b = try s.byteAt(i) otherwise panic("hashString: byteAt OOB — i < s.byteLength() invariant")
-		h = h * 33 + b
+		h = h * 33 + (b as FullRangeInt)
 	end 'hash_loop'
 
-	return h and 0xFFFFFFFF
+	return (h and 0xFFFFFFFF) as HashValue
 end 'hashString'

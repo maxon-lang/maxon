@@ -400,7 +400,7 @@ caught noParent
 ```maxon
 function main() returns ExitCode
 	var level = FilePath from "/a/b/c"
-	var steps = 0
+	var steps = 0 as Count
 
 	while steps < 10 'upwards'
 		let above = try level.parent() otherwise 'atTheTop'

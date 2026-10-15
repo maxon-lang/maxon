@@ -116,7 +116,7 @@ typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
 function total(a WordArray) returns Word
-	var t = 0
+	var t = 0 as Word
 	for v in a 'loop'
 		t = t + v
 	end 'loop'
@@ -156,7 +156,7 @@ typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
 function total(a WordArray) returns Word
-	var t = 0
+	var t = 0 as Word
 	for v in a 'loop'
 		t = t + v
 	end 'loop'
@@ -192,7 +192,7 @@ point: the pass moves the invariant SUBEXPRESSION, not the statement that contai
 typealias Word = int(i64.min to i64.max)
 
 function weighted(n Word, k Word) returns Word
-	var t = 0
+	var t = 0 as Word
 	for _ in 0 upto n 'loop'
 		t = t + k * 31 + 7
 	end 'loop'
@@ -200,7 +200,7 @@ function weighted(n Word, k Word) returns Word
 end 'weighted'
 
 function main() returns ExitCode
-	var seed = 0
+	var seed = 0 as Word
 	for i in 0 upto 4 'feed'
 		seed = seed + weighted(i, k: i + 1)
 	end 'feed'
@@ -244,7 +244,7 @@ type Cell
 end 'Cell'
 
 function drain(c Cell, budget Word) returns Word
-	var trips = 0
+	var trips = 0 as Word
 	var room = budget
 	while c.value + room > 0 'loop'
 		c.value = c.value - 1
@@ -289,8 +289,8 @@ type Cell
 end 'Cell'
 
 function conditionalRead(c Cell, n Word) returns Word
-	var t = 0
-	var i = 0
+	var t = 0 as Word
+	var i = 0 as Word
 	while i < n 'loop'
 		if i == 3 'once'
 			t = t + c.value
@@ -301,7 +301,7 @@ function conditionalRead(c Cell, n Word) returns Word
 end 'conditionalRead'
 
 function main() returns ExitCode
-	var trips = 0
+	var trips = 0 as Word
 	for _ in 0 upto 9 'feed'
 		trips = trips + 1
 	end 'feed'
@@ -336,7 +336,7 @@ typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
 function grid(a WordArray, rows Word, k Word) returns Word
-	var t = 0
+	var t = 0 as Word
 	for _ in 0 upto rows 'outer'
 		for v in a 'inner'
 			t = t + v + k * 5

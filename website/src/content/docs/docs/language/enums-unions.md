@@ -73,8 +73,8 @@ Every enum case has:
 | Property | Result |
 |----------|--------|
 | `.name` | the case name as a `String` |
-| `.ordinal` | the zero-based declaration position |
-| `.rawValue` | the case's raw value (the ordinal when none is declared) |
+| `.ordinal` | the zero-based declaration position, an `ElementIndex` |
+| `.rawValue` | the case's raw value (the ordinal when none is declared), of the backing type — a `FullRangeInt` for an integer backing |
 
 and every enum type has:
 

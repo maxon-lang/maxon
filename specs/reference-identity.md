@@ -222,7 +222,7 @@ end 'areSame'
 function main() returns ExitCode
 	let x = Box.create(42)
 	let y = Box.create(42)
-	var result = 0
+	var result = 0 as ExitCode
 	if areSame(x, b: x) 'same'
 		result = result + 1
 	end 'same'
@@ -243,7 +243,7 @@ function main() returns ExitCode
 	// shared immortal object, so `a` and `b` refer to the same object and `a is b` is true.
 	let a = "hello"
 	let b = "hello"
-	var result = 0
+	var result = 0 as ExitCode
 	if a is a 'self'
 		result = result + 1
 	end 'self'
@@ -308,7 +308,7 @@ let B = b"hi"
 let C = b"ho"
 
 function main() returns ExitCode
-	var result = 0
+	var result = 0 as ExitCode
 	if A is A 'self'
 		result = result + 1
 	end 'self'
@@ -394,7 +394,7 @@ typealias Holder = Array with NumArray
 let Anchor = NumArray.create()
 
 function main() returns ExitCode
-	var result = 0
+	var result = 0 as ExitCode
 	let bound = Anchor
 	if bound is Anchor 'bindingBorrows'
 		result = result + 1

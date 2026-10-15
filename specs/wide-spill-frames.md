@@ -9469,8 +9469,8 @@ function wide() returns Integer
 end 'wide'
 
 function main() returns ExitCode
-	var wrong = 0
-	var i = 0
+	var wrong = 0 as Integer
+	var i = 0 as Integer
 
 	while i < 64 'each'
 		let p = async wide()

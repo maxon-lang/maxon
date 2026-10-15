@@ -532,7 +532,7 @@ module union ServiceRosterVerdict
 
 	// A message declared more than once. One variant carries one payload shape, so an overloaded message has
 	// no single shape to become — and the dispatch `match` would have no arm to pick between them. E2015.
-	messageIsOverloaded(methodName ByteArray, declarationCount FieldIndex)
+	messageIsOverloaded(methodName ByteArray, declarationCount ElementIndex)
 
 	// A message parameter of a type that cannot cross to another green thread. `noun` is what it IS, so the
 	// sentence reads as the reason rather than as a spelling (see `untransferableParameterNoun`).
@@ -676,7 +676,7 @@ module function classifyServiceRoster(signatures ProgramSignatures, typeName Byt
 		let decls = signatures.overloadedDeclsOf(messageKey)
 
 		if decls.count() > 1 'overloaded'
-			return ServiceRosterVerdict.messageIsOverloaded(methodName, declarationCount: decls.count() as FieldIndex)
+			return ServiceRosterVerdict.messageIsOverloaded(methodName, declarationCount: decls.count())
 		end 'overloaded'
 
 		let decl = serviceFirstDeclOf(decls, key: messageKey)
@@ -701,7 +701,7 @@ module function classifyServiceRoster(signatures ProgramSignatures, typeName Byt
 
 			match untransferableParameterNoun(signatures, declared: declared, declFilePath: layout.declFilePath) 'cannotCross'
 				acceptable then break
-				refused(noun) then return ServiceRosterVerdict.messageParameterIsNotTransferable(methodName, paramName: serviceParamName(decl, index: p), noun: noun)
+				refused(noun) then return ServiceRosterVerdict.messageParameterIsNotTransferable(methodName, paramName: serviceParamName(decl, index: p as ParamCount), noun: noun)
 			end 'cannotCross'
 		end 'eachParam'
 	end 'eachMessage'
@@ -1001,7 +1001,7 @@ end 'fieldIsAServiceWitnessHalf'
 // ⭐ **THE PAYLOAD SLOT OF A MESSAGE'S PARAMETER `paramIndex`** — its position plus one for every
 // interface-typed parameter before it, whose witness half takes the slot after it. The send slots an
 // argument through it and the loop loads one through it, so the two cannot come to name different slots.
-module function serviceParamPayloadSlot(payloads PayloadFieldArray, paramIndex ParamCount) returns CaseIndex
+module function serviceParamPayloadSlot(payloads PayloadFieldArray, paramIndex ParamCount) returns PayloadSlotIndex
 	var seen = 0 as ParamCount
 
 	for slot in 0 upto payloads.count() 'eachSlot'
@@ -1089,7 +1089,7 @@ end 'serviceReplyInstanceUnknownRefusal'
 // `SemanticCheck.resolveOverloadedCalls`' answer and it is not available here, so the arguments cannot be
 // matched against a parameter list without guessing which one — and a guess binds the type argument from
 // the wrong position.
-module function spawnOverloadedFactoryRefusal(typeName ByteArray, member ByteArray, declarationCount FieldIndex) returns String
+module function spawnOverloadedFactoryRefusal(typeName ByteArray, member ByteArray, declarationCount ElementIndex) returns String
 	return "`spawn {String.from(typeName)}.{String.from(member)}(…)` — `{String.from(typeName)}` is generic and `{String.from(member)}` is declared {declarationCount} times, so its type arguments cannot be read off the call: which overload the arguments resolve to is settled after this point, and the parameter list they must be matched against is that overload's. Give the factories distinct names, or spawn a type whose factory is declared once"
 end 'spawnOverloadedFactoryRefusal'
 
@@ -1329,9 +1329,9 @@ function serviceRequestPayloads(signatures ProgramSignatures, typeName ByteArray
 
 	for p in 0 upto decl.paramTypes.count() 'eachParam'
 		let declared = try decl.paramTypes.get(p) otherwise panic("serviceRequestPayloads: paramTypes.get OOB at {p} below count {decl.paramTypes.count()} for '{String.from(key)}'")
-		let paramName = serviceParamName(decl, index: p)
+		let paramName = serviceParamName(decl, index: p as ParamCount)
 		let slotType = serviceParamSlotType(signatures, declared: declared, into: into, declFilePath: declFilePath)
-		payloads.push(PayloadField.create(paramName, declaredType: slotType, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText, isLet: false))
+		payloads.push(PayloadField.create(paramName, declaredType: slotType, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: serviceParamBrand(decl, index: p, slotType: slotType), isLet: false))
 
 		if maxonTypeTag(slotType) == ValueTypeTag.interfaceRef 'aFatPointer'
 			payloads.push(PayloadField.create(serviceWitnessHalfSlotName(paramName), declaredType: MaxonType.integer, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText, isLet: false))
@@ -1344,6 +1344,11 @@ function serviceRequestPayloads(signatures ProgramSignatures, typeName ByteArray
 
 	return payloads
 end 'serviceRequestPayloads'
+
+function serviceParamBrand(decl OverloadedDecl, index ElementIndex, slotType MaxonType) returns ByteArray
+	let spelled = try decl.paramDeclaredBrands.get(index) otherwise return EmptySourceText
+	return declaredBrandOf(spelled, paramTag: maxonTypeTag(slotType))
+end 'serviceParamBrand'
 
 // Does this DECLARATION deliver a reply? A value-returning message obviously does; a THROWING one does too,
 // and that is the half a `returns`-only test would miss — `try await h.wipe()` on a `function wipe() throws E`
@@ -1378,7 +1383,7 @@ module function serviceReplySlotIndex(payloads PayloadFieldArray) returns Servic
 		let field = try payloads.get(slot) otherwise panic("serviceReplySlotIndex: payloads.get OOB at {slot} on a list walked to its own count")
 
 		if fieldIsTheServiceReplySlot(field) 'theReplySlot'
-			return ServiceReplySlotIndex.at(slot)
+			return ServiceReplySlotIndex.at(slot as PayloadSlotIndex)
 		end 'theReplySlot'
 	end 'eachSlot'
 
@@ -1400,7 +1405,7 @@ end 'fieldIsTheServiceReplySlot'
 // and `-1` would be a number every reader had to remember not to index with.
 module union ServiceReplySlotIndex
 	absent
-	at(slot CaseIndex)
+	at(slot PayloadSlotIndex)
 end 'ServiceReplySlotIndex'
 
 // ⭐⭐⭐ **THE REPLY'S ERROR UNION IS `{ServiceError, throwsOf(<message>)}`, AND ITS TWO POSITIONS ARE
@@ -1428,7 +1433,7 @@ end 'ServiceReplySlotIndex'
 // FAMILY.** The number this returns is written into a word another green thread decodes against the
 // DECLARED layout, so a reordering of `stdlib/Builtins.maxon`'s cases with this transcription left behind
 // would select the wrong arm silently.
-module function serviceStoppedErrorFlag(signatures ProgramSignatures) returns ParsedInt
+module function serviceStoppedErrorFlag(signatures ProgramSignatures) returns FullRangeInt
 	let layout = serviceReplyErrorLayout(signatures, errorName: ServiceErrorTypeName)
 	let index = try layout.indexOfCase(ServiceErrorStoppedCaseName) otherwise panic("serviceStoppedErrorFlag: `enum {String.from(ServiceErrorTypeName)}` declares no `{String.from(ServiceErrorStoppedCaseName)}` case — `stdlib/Builtins.maxon` declares it and `Project.BuiltinErrorOrdinalCheck` verifies the transcription, so reaching here means the stdlib this program was compiled against is not the one that declares it")
 
@@ -1456,7 +1461,7 @@ end 'serviceReplyHandlerPlacement'
 //
 // ⚠ It is the same `offset` `Parser.serviceReplyErrorMembers` builds the awaiter's dispatch table from,
 // read through the same function. A second derivation is an arm running for a case that was not raised.
-module function serviceReplyHandlerFusedShift(signatures ProgramSignatures, errorName ByteArray) returns ParsedInt
+module function serviceReplyHandlerFusedShift(signatures ProgramSignatures, errorName ByteArray) returns FullRangeInt
 	let placement = serviceReplyHandlerPlacement(signatures, errorName: errorName)
 
 	if not placement.fusable 'refusedAtTheSpawn'
@@ -1482,7 +1487,7 @@ end 'serviceReplyErrorLayout'
 // enum's — a literal here would be a second statement of the position and the two are free to disagree.
 function addServiceRequestCase(request EnumLayout, caseName ByteArray, payloads PayloadFieldArray)
 	let tag = request.caseCount()
-	request.addCase(caseName, tag: tag as ParsedInt, rawValue: "{tag}", declaresRawValue: false, payloads: payloads, backingFields: sharedEmptyEnumBackingFields)
+	request.addCase(caseName, tag: tag as FullRangeInt, rawValue: "{tag}", declaresRawValue: false, payloads: payloads, backingFields: sharedEmptyEnumBackingFields)
 end 'addServiceRequestCase'
 
 // The handle: ONE field holding the mailbox pointer. On `SignatureIndex.managedFileLayout`'s shape, and for
@@ -1886,7 +1891,7 @@ end 'mintInterfaceHandlesOf'
 
 let InterfaceHandleTableFieldName = b"sendTable"
 module let InterfaceHandleTableOffset = 8 as ByteOffset
-module let InterfaceHandleBoxSize = 16 as ParsedInt
+module let InterfaceHandleBoxSize = 16 as FullRangeInt
 
 function buildInterfaceHandleStruct(interfaceName ByteArray, visibility Visibility, declFilePath FilePath) returns StructLayout
 	var handle = StructLayout.create(serviceHandleCompanionName(interfaceName), visibility: visibility, declFilePath: declFilePath)
@@ -1976,7 +1981,7 @@ module function interfaceMessageRepresentative(signatures ProgramSignatures, int
 
 	for service in interfaceServiceImplementers(signatures, interfaceName: interfaceName) 'eachSender'
 		if let caseIndex = try serviceMessageCaseIndex(requireServiceRequestLayout(signatures, typeName: service), member: member) 'declaresIt'
-			return (service, caseIndex)
+			return (service.clone(), caseIndex)
 		end 'declaresIt'
 	end 'eachSender'
 

@@ -51,6 +51,9 @@ if [ "$FNS" -lt 1 ]; then FNS=1; fi
 
 TABS="$(printf '\t%.0s' $(seq 1 72))"
 
+ARR_PARAM="_"
+if [ "$MODE" = "array" ]; then ARR_PARAM="arr"; fi
+
 {
   echo "// for ladder: $L loops x depth $D x $A accesses per level, mode $MODE"
   echo "typealias Int = int(i64.min to i64.max)"
@@ -59,8 +62,8 @@ TABS="$(printf '\t%.0s' $(seq 1 72))"
 
   f=0
   while [ "$f" -lt "$FNS" ]; do
-    echo "function fn${f}(arr IntArray, other IntArray) returns Int"
-    echo -e "\tvar total = 0"
+    echo "function fn${f}(${ARR_PARAM} IntArray, other IntArray) returns Int"
+    echo -e "\tvar total = 0 as Int"
 
     if [ "$MODE" = "noloop" ]; then
       echo -e "\ttotal = total + arr.count()"
@@ -111,7 +114,7 @@ TABS="$(printf '\t%.0s' $(seq 1 72))"
   echo -e "\tvar arr = IntArray.create()"
   echo -e "\tvar other = IntArray.create()"
   echo -e "\tarr.push(1)"
-  echo -e "\tvar s = 0"
+  echo -e "\tvar s = 0 as Int"
   f=0
   while [ "$f" -lt "$FNS" ]; do
     echo -e "\ts = s + fn${f}(arr, other: other)"

@@ -893,7 +893,7 @@ type Ping uses T implements Sized
 	end 'create'
 
 	function size() returns Val
-		return sizeof(T) + self.keep.touch()
+		return sizeof(T) as Val + self.keep.touch()
 	end 'size'
 end 'Ping'
 
@@ -909,7 +909,7 @@ type Pong uses U implements Sized
 	end 'create'
 
 	function size() returns Val
-		return sizeof(U) + self.keep.touch()
+		return sizeof(U) as Val + self.keep.touch()
 	end 'size'
 end 'Pong'
 

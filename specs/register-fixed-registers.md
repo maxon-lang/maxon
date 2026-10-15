@@ -284,7 +284,7 @@ end 'bump'
 
 function main() returns ExitCode
 	let n = 500
-	var d = 6
+	var d = 6 as Integer
 	let t = bump(d)
 	let q = n / d
 	let r = q + t
@@ -360,8 +360,8 @@ function press(p Integer) returns Integer
 	let k7 = p + 17
 	let k8 = p + 18
 	let k9 = p + 19
-	var sum = 0
-	var i = 1
+	var sum = 0 as Integer
+	var i = 1 as Integer
 	while i <= 5 'loop'
 		let t = k1 + k2 + k3 + k4 + k5 + k6 + k7 + k8 + k9
 		sum = sum + (try (t / i) otherwise panic("i is never zero"))

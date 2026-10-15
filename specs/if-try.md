@@ -104,7 +104,7 @@ function runStep(succeed bool) throws MyError
 end 'runStep'
 
 function main() returns ExitCode
-	var result = 0
+	var result = 0 as ExitCode
 	if try runStep(true) 'check'
 		result = 1
 	end 'check'
@@ -129,7 +129,7 @@ function runStep(succeed bool) throws MyError
 end 'runStep'
 
 function main() returns ExitCode
-	var result = 0
+	var result = 0 as ExitCode
 	if try runStep(false) 'check'
 		result = 1
 	end 'check'
@@ -208,7 +208,7 @@ function runStep(succeed bool) throws MyError
 end 'runStep'
 
 function main() returns ExitCode
-	var result = 0
+	var result = 0 as ExitCode
 	if try runStep(false) 'check'
 		result = 1
 	end 'check' else 'err'
@@ -235,7 +235,7 @@ function runStep(succeed bool) throws MyError
 end 'runStep'
 
 function main() returns ExitCode
-	var result = 0
+	var result = 0 as ExitCode
 	if try runStep(true) 'check'
 		result = 1
 	end 'check' else 'err'
@@ -410,7 +410,7 @@ function runStep(which Integer) throws MyError
 end 'runStep'
 
 function main() returns ExitCode
-	var result = 0
+	var result = 0 as ExitCode
 	if try runStep(1) 'check'
 		result = 100
 	end 'check' else (e) 'err'
@@ -440,7 +440,7 @@ function runStep(succeed bool) throws MyError
 end 'runStep'
 
 function main() returns ExitCode
-	var result = 0
+	var result = 0 as ExitCode
 	if try runStep(true) 'outer'
 		if try runStep(true) 'inner'
 			result = 3
@@ -470,8 +470,8 @@ function mayFail(n Integer) returns Integer throws MyError
 end 'mayFail'
 
 function main() returns ExitCode
-	var sum = 0
-	var i = 0
+	var sum = 0 as Integer
+	var i = 0 as Integer
 	while i < 5 'loop'
 		if let val = try mayFail(i) 'check'
 			sum = sum + val
@@ -598,15 +598,15 @@ function mayFail(succeed bool) returns MultiManaged throws MyError
 end 'mayFail'
 
 function main() returns ExitCode
-	var result = 0
-	var i = 0
+	var result = 0 as Int
+	var i = 0 as Count
 	while i < 3 'loop'
 		if let item = try mayFail(true) 'check'
 			result = result + (try item.numbers.get(0) otherwise 0)
 		end 'check'
 		i = i + 1
 	end 'loop'
-	return result
+	return result as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -722,13 +722,13 @@ function tryB(n Integer) returns Integer throws MyError
 end 'tryB'
 
 function main() returns ExitCode
-	var result = 0
+	var result = 0 as Integer
 	if let a = try tryA() 'a'
 		result = a
 	end 'a' else if let b = try tryB(42) 'b'
 		result = b
 	end 'b'
-	return result
+	return result as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -755,7 +755,7 @@ function tryB() returns Integer throws MyError
 end 'tryB'
 
 function main() returns ExitCode
-	var result = 0
+	var result = 0 as Integer
 	if let a = try tryA() 'a'
 		result = a
 	end 'a' else if let b = try tryB() 'b'
@@ -763,7 +763,7 @@ function main() returns ExitCode
 	end 'b' else 'fallback'
 		result = 7
 	end 'fallback'
-	return result
+	return result as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -787,7 +787,7 @@ end 'mayFail'
 
 function main() returns ExitCode
 	let x = 2
-	var result = 0
+	var result = 0 as Integer
 	if let v = try mayFail() 'check'
 		result = v
 	end 'check' else if x == 2 'two'
@@ -795,7 +795,7 @@ function main() returns ExitCode
 	end 'two' else 'fallback'
 		result = 99
 	end 'fallback'
-	return result
+	return result as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -929,7 +929,7 @@ function recordVisit(succeed bool) throws MyError
 end 'recordVisit'
 
 function main() returns ExitCode
-	var taken = 0
+	var taken = 0 as Count
 	if try recordVisit(true) 'ok'
 		taken = taken + 1
 	end 'ok'
@@ -971,7 +971,7 @@ function impureFail(succeed bool) returns Integer throws MyError
 end 'impureFail'
 
 function main() returns ExitCode
-	var taken = 0
+	var taken = 0 as Count
 	if let _ = try impureFail(true) 'ok'
 		taken = taken + 1
 	end 'ok'

@@ -208,13 +208,13 @@ typealias Tally = int(0 to 125)
 typealias BoolArray = Array with bool
 
 function countSet(bits BoolArray) returns Tally
-	var n = 0
+	var n = 0 as Tally
 	for i in 0 upto bits.count() 'each'
 		if (try bits.get(i) otherwise false) 'set'
 			n = n + 1
 		end 'set'
 	end 'each'
-	return n as Tally
+	return n
 end 'countSet'
 
 function main() returns ExitCode
@@ -288,8 +288,8 @@ end 'Row'
 typealias RowArray = Array with Row
 
 function longestLen(rows RowArray) returns ExitCode
-	var best = 0
-	var i = 0
+	var best = 0 as GraphemeIndex
+	var i = 0 as Count
 	while i < rows.count() 'scan'
 		let len = (try rows.get(i) otherwise break).label.count()
 		if len > best 'bigger'

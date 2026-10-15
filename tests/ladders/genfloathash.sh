@@ -87,7 +87,7 @@ UNITS=$(( SITES / SITES_PER_UNIT ))
   u=0
   while [ "$u" -lt "$UNITS" ]; do
     printf 'function u%06d(s LadderInt) returns LadderInt\n' "$u"
-    echo -e "\tvar acc = 0"
+    echo -e "\tvar acc = 0 as LadderInt"
     j=0
     while [ "$j" -lt "$SITES_PER_UNIT" ]; do
       if [ "$MODE" = "inthash" ]; then
@@ -121,7 +121,7 @@ UNITS=$(( SITES / SITES_PER_UNIT ))
   done
 
   echo "function main() returns ExitCode"
-  echo -e "\tvar total = 0"
+  echo -e "\tvar total = 0 as LadderInt"
   u=0
   while [ "$u" -lt "$UNITS" ]; do
     printf '\tlet k%06d = scaleOpaque(%d)\n' "$u" "$u"

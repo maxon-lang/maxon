@@ -54,7 +54,7 @@ constant an observable wrong answer instead of a compile-time tautology.
 
 ### FLOATS FOLD, and the rule is HOST BITS == INSTRUCTION BITS OR NOTHING
 
-A float constant is a `ParsedInt` holding the double's IEEE-754 BITS on the same `StdOp.const` an
+A float constant is a `FullRangeInt` holding the double's IEEE-754 BITS on the same `StdOp.const` an
 integer uses, so folding one is the same rewrite — what is different is the argument that the answer
 the compiling host computes is the answer the *target's* instruction would have computed, bit for
 bit. Where that argument holds the operation folds; where it does not, the operation keeps its
@@ -412,7 +412,7 @@ function pick(a Word) returns Word
 end 'pick'
 
 function main() returns ExitCode
-	var taken = 0
+	var taken = 0 as Word
 	if pick(5) > 3 'thenArm'
 		taken = 7
 	end 'thenArm' else 'elseArm'
@@ -422,7 +422,7 @@ function main() returns ExitCode
 		return 1
 	end 'thenArmRan'
 
-	var other = 0
+	var other = 0 as Word
 	if pick(5) < 3 'falseThenArm'
 		other = 7
 	end 'falseThenArm' else 'falseElseArm'
@@ -672,7 +672,7 @@ end 'main'
 
 <!-- test: a-comparison-on-float-constants-folds -->
 The float twin of `comparisons-fold-signed-at-the-machine-word`, and it exists for the same reason:
-one bit pattern, two readings. A folder that compared the raw `ParsedInt`s would get `-1.0 > -2.0`
+one bit pattern, two readings. A folder that compared the raw `FullRangeInt`s would get `-1.0 > -2.0`
 BACKWARDS — a double's pattern is sign-and-magnitude, so the negative side orders the wrong way round
 — and it would call `-0.0 == 0.0` false where IEEE-754 calls it true. The last pair is the payoff: a
 folded float `cmp` is a known condition, so `foldConstantBranches` folds the `if` on it and drops the
@@ -707,7 +707,7 @@ function main() returns ExitCode
 		return 3
 	end 'theTwoZerosCompareEqual'
 
-	var taken = 0
+	var taken = 0 as ExitCode
 	if greater(2.5, b: 1.5) 'thenArm'
 		taken = 7
 	end 'thenArm' else 'elseArm'
@@ -797,7 +797,7 @@ typealias Real = float(f64.min to f64.max)
 typealias Word = int(i64.min to i64.max)
 
 function mix(i Word, f Real) returns Real
-	return i + f
+	return i as Real + f
 end 'mix'
 
 function main() returns ExitCode

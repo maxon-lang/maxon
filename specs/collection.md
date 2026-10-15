@@ -207,7 +207,7 @@ end 'main'
 <!-- test: set-basic -->
 ```maxon
 function main() returns ExitCode
-	var arr = [1, 2, 3]
+	var arr = FullRangeIntArray from [1, 2, 3]
 	try arr.set(0, value: 100) otherwise panic("test invariant: set OOB")
 	try arr.set(2, value: 300) otherwise panic("test invariant: set OOB")
 	let val0 = try arr.get(0) otherwise 0
@@ -239,11 +239,11 @@ end 'double'
 function main() returns ExitCode
 	let arr = [1, 2, 3, 4, 5]
 	let result = arr.map(double)
-	let val0 = try result.get(0) otherwise 0
-	let val1 = try result.get(1) otherwise 0
-	let val2 = try result.get(2) otherwise 0
-	let val3 = try result.get(3) otherwise 0
-	let val4 = try result.get(4) otherwise 0
+	let val0 = (try result.get(0) otherwise 0) as Integer
+	let val1 = (try result.get(1) otherwise 0) as Integer
+	let val2 = (try result.get(2) otherwise 0) as Integer
+	let val3 = (try result.get(3) otherwise 0) as Integer
+	let val4 = (try result.get(4) otherwise 0) as Integer
 	print("{val0}\n")
 	print("{val1}\n")
 	print("{val2}\n")
@@ -270,9 +270,9 @@ typealias Integer = int(i64.min to i64.max)
 function main() returns ExitCode
 	let arr = [2, 3, 4]
 	let result = arr.map(function(x Integer) gives x * 3)
-	let val0 = try result.get(0) otherwise 0
-	let val1 = try result.get(1) otherwise 0
-	let val2 = try result.get(2) otherwise 0
+	let val0 = (try result.get(0) otherwise 0) as Integer
+	let val1 = (try result.get(1) otherwise 0) as Integer
+	let val2 = (try result.get(2) otherwise 0) as Integer
 	print("{val0}\n")
 	print("{val1}\n")
 	print("{val2}\n")
@@ -295,10 +295,10 @@ typealias Integer = int(i64.min to i64.max)
 function main() returns ExitCode
 	let arr = [1, 2, 3, 4]
 	let squared = arr.map(function(n Integer) gives n * n)
-	let val0 = try squared.get(0) otherwise 0
-	let val1 = try squared.get(1) otherwise 0
-	let val2 = try squared.get(2) otherwise 0
-	let val3 = try squared.get(3) otherwise 0
+	let val0 = (try squared.get(0) otherwise 0) as Integer
+	let val1 = (try squared.get(1) otherwise 0) as Integer
+	let val2 = (try squared.get(2) otherwise 0) as Integer
+	let val3 = (try squared.get(3) otherwise 0) as Integer
 	print("{val0}\n")
 	print("{val1}\n")
 	print("{val2}\n")
@@ -327,9 +327,9 @@ end 'identity'
 function main() returns ExitCode
 	let arr = [10, 20, 30]
 	let result = arr.map(identity)
-	let val0 = try result.get(0) otherwise 0
-	let val1 = try result.get(1) otherwise 0
-	let val2 = try result.get(2) otherwise 0
+	let val0 = (try result.get(0) otherwise 0) as Integer
+	let val1 = (try result.get(1) otherwise 0) as Integer
+	let val2 = (try result.get(2) otherwise 0) as Integer
 	print("{val0}\n")
 	print("{val1}\n")
 	print("{val2}\n")
@@ -356,9 +356,9 @@ end 'negate'
 function main() returns ExitCode
 	let arr = [1, 2, 3]
 	let result = arr.map(negate)
-	let val0 = try result.get(0) otherwise 0
-	let val1 = try result.get(1) otherwise 0
-	let val2 = try result.get(2) otherwise 0
+	let val0 = (try result.get(0) otherwise 0) as Integer
+	let val1 = (try result.get(1) otherwise 0) as Integer
+	let val2 = (try result.get(2) otherwise 0) as Integer
 	print("{val0}\n")
 	print("{val1}\n")
 	print("{val2}\n")
@@ -381,7 +381,7 @@ typealias Integer = int(i64.min to i64.max)
 function main() returns ExitCode
 	let arr = [42]
 	let result = arr.map(function(x Integer) gives x + 8)
-	let val = try result.get(0) otherwise 0
+	let val = (try result.get(0) otherwise 0) as Integer
 	print("{val}\n")
 	return 0
 end 'main'

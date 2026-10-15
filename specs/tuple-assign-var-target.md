@@ -60,7 +60,7 @@ function pair(n Integer) returns (Integer, Integer)
 end 'pair'
 
 function main() returns ExitCode
-	var x = 0
+	var x = 0 as Integer
 	(x, var y) = pair(7)
 	y = y - 1
 	return x + y
@@ -102,9 +102,9 @@ function step(n Integer) returns (Integer, Integer)
 end 'step'
 
 function main() returns ExitCode
-	var acc = 0
-	var total = 0
-	var i = 0
+	var acc = 0 as Integer
+	var total = 0 as Integer
+	var i = 0 as Integer
 	while i < 4 'loop'
 		(acc, var doubled) = step(acc)
 		doubled = doubled + 1

@@ -266,7 +266,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at Debuggee.maxon:97: ScratchPages: offset 744 was asked of pages that are not held — a caller used them before reserving them or after releasing them
+panic at Debuggee.maxon:98: ScratchPages: offset 744 was asked of pages that are not held — a caller used them before reserving them or after releasing them
 Stack trace:
   in ScratchPages.requireWordInside
   in ScratchPages.heldBase

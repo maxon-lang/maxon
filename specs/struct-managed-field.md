@@ -579,7 +579,7 @@ end 'Holder'
 
 function main() returns ExitCode
 	var h = Holder.create(Named.create("start"))
-	var i = 0
+	var i = 0 as FullRangeInt
 	while i < 5 'loop'
 		h.n = Named.create("iter")
 		i = i + 1

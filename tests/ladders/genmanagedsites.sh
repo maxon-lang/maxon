@@ -66,7 +66,7 @@ rm -f "$OUT"/*.maxon
 	echo "end 'mpOpaque'"
 
 	echo "function mpNone(a LadderInt) returns LadderInt"
-	echo "	var acc = 0"
+	echo "	var acc = 0 as LadderInt"
 	for ((i = 0; i < N; i++)); do
 		echo "	acc = acc + mpOpaque(a + $i)"
 	done

@@ -144,8 +144,7 @@
 #              reserve — so the whole cost rests on `__arr_grown_cap` being geometric. It is (double
 #              below `GrowthThreshold`, then ease toward 1.25×), but that is READING; this family is
 #              MEASURING. If a push ever reallocated to the exact required length, every one of these
-#              would read ×4 per doubling, exactly as `__str_append` does (see `gentrim.sh`'s note on
-#              why the setup is `s.append(s)` and not an append loop).
+#              would read ×4 per doubling.
 #              ⭐ `data-replacefirst` vs `data-replace` is the A/B that checks THE SLICE'S OWN CLAIM
 #              that `replaceFirst` needs neither of `replace`'s two loops because one match means the
 #              result size is known outright.
@@ -175,10 +174,9 @@
 #                                     `utf16`'s SURROGATE-PAIR arm, which pushes TWO units per
 #                                     codepoint. A ladder without it has not measured that arm at all.
 #
-# ⚠ **THE SETUP IS `s.append(s)`, NOT AN APPEND LOOP** — `genstring.sh`'s reason, unchanged:
-# `__str_append` reallocates to the EXACT required length on every grow, so building an N-byte string by
-# N appends copies O(N²) bytes and would swamp every reading below with a quadratic that is not the one
-# being measured. Self-append doubles the length per step.
+# ⚠ **THE SETUP IS `s.append(s)`, NOT AN APPEND LOOP** — `genstring.sh`'s reason: self-append doubles
+# the length per step, so the subject reaches its final length in `<n>` steps and the setup cost stays
+# off the timed region whatever the string growth policy is.
 #
 # Usage: genstringviews.sh <n> <mode> <out>
 #   sites-tobytes | sites-clone | sites-codepoints | sites-utf16 | sites-isempty      (<n> = CALL SITES)
@@ -275,6 +273,14 @@ esac
 
 if [ "$N" -lt 1 ]; then echo "genstringviews.sh: <n> must be >= 1" >&2; exit 2; fi
 
+case "$SEED" in
+ascii | wide | supp) ;;
+*)
+	echo "genstringviews.sh: unknown SEED '$SEED' (want ascii | wide | supp)" >&2
+	exit 2
+	;;
+esac
+
 # One SITE GROUP per function, `genstring.sh`'s reason: a function stays a constant size as `<n>`
 # doubles, so the register allocator's own curves stay out of the reading. OVERRIDABLE because a
 # per-function term and a per-site term are different findings and a fixed ratio cannot tell them apart
@@ -297,22 +303,15 @@ seed_bytes() {
 
 emit_prelude() {
 	echo "// string-views ladder: $N, mode $MODE, seed $SEED — see tests/ladders/genstringviews.sh"
-
-	if [ "$FAMILY" != "loop" ]; then
-		echo "typealias Int = int(i64.min to i64.max)"
-	fi
-
-	echo "typealias ExitCode = int(0 to 255)"
+	echo "typealias Int = int(i64.min to i64.max)"
 	echo ""
 }
 
 # The self-append doubler, shared by every run family. O(final length) in total.
 emit_grown() {
-	echo "// Self-append doubling: O(final length) in total, because __str_append reallocates to the EXACT"
-	echo "// required length and a chunk-at-a-time loop would therefore be quadratic in the setup alone."
 	echo "function grown(seed String, doublings Int) returns String"
 	echo -e "\tvar s = seed"
-	echo -e "\tvar d = 0"
+	echo -e "\tvar d = 0 as Int"
 	echo -e "\twhile d < doublings 'dbl'"
 	echo -e "\t\ts.append(s)"
 	echo -e "\t\td = d + 1"
@@ -328,19 +327,19 @@ emit_site() {
 	case "$MODE" in
 	sites-tobytes)
 		echo -e "\tlet v${n} = s.toByteArray()"
-		echo -e "\ttotal = total + v${n}.count()"
+		echo -e "\ttotal = total + (v${n}.count() as Int)"
 		;;
 	sites-clone)
 		echo -e "\tlet v${n} = s.clone()"
-		echo -e "\ttotal = total + v${n}.byteLength()"
+		echo -e "\ttotal = total + (v${n}.byteLength() as Int)"
 		;;
 	sites-codepoints)
 		echo -e "\tlet v${n} = s.codepoints()"
-		echo -e "\ttotal = total + v${n}.count()"
+		echo -e "\ttotal = total + (v${n}.count() as Int)"
 		;;
 	sites-utf16)
 		echo -e "\tlet v${n} = s.utf16()"
-		echo -e "\ttotal = total + v${n}.count()"
+		echo -e "\ttotal = total + (v${n}.count() as Int)"
 		;;
 	sites-isempty)
 		# The one member that allocates NOTHING — a field load and an integer compare. It is here so a
@@ -350,7 +349,7 @@ emit_site() {
 		;;
 	sites-replacefirst)
 		echo -e "\tlet v${n} = s.replaceFirst(p, with: q)"
-		echo -e "\ttotal = total + v${n}.byteLength()"
+		echo -e "\ttotal = total + (v${n}.byteLength() as Int)"
 		;;
 	sites-from)
 		# `String.from` is the one exported `String` static, and `from` is a KEYWORD — so this site also
@@ -358,15 +357,15 @@ emit_site() {
 		# before this slice.
 		echo -e "\tlet w${n} = s.toByteArray()"
 		echo -e "\tlet v${n} = String.from(w${n})"
-		echo -e "\ttotal = total + v${n}.byteLength()"
+		echo -e "\ttotal = total + (v${n}.byteLength() as Int)"
 		;;
 	sites-utf16fns)
 		# ⭐ The STDLIB-DELIVERED surface: nine free functions declared in a stdlib module, called by
 		# BARE NAME. Every site cycles a different one so no single declaration dominates the reading.
 		case $((n % 3)) in
-		0) echo -e "\ttotal = total + utf16Width(total)" ;;
-		1) echo -e "\ttotal = total + 1 if utf16IsLeadSurrogate(total) else total" ;;
-		2) echo -e "\ttotal = total + utf16LeadSurrogate(total + 65536)" ;;
+		0) echo -e "\ttotal = total + (utf16Width((total mod 65536) as Codepoint) as Int)" ;;
+		1) echo -e "\ttotal = total + 1 if utf16IsLeadSurrogate((total mod 65536) as CodeUnit16) else total" ;;
+		2) echo -e "\ttotal = total + (utf16LeadSurrogate(((total mod 1048576) + 65536) as Codepoint) as Int)" ;;
 		esac
 		;;
 	sites-control)
@@ -375,7 +374,7 @@ emit_site() {
 		# program that does not use it.
 		echo -e "\tvar acc${n} = p"
 		echo -e "\tacc${n}.append(s)"
-		echo -e "\ttotal = total + acc${n}.byteLength()"
+		echo -e "\ttotal = total + (acc${n}.byteLength() as Int)"
 		;;
 	esac
 }
@@ -408,7 +407,7 @@ emit_sites_program() {
 	f=0
 	while [ "$f" -lt "$FNS" ]; do
 		echo "function fn${f}(${SITE_PARAMS}) returns Int"
-		echo -e "\tvar total = 0"
+		echo -e "\tvar total = 0 as Int"
 		n=0
 		while [ "$n" -lt "$SITES_PER_FN" ]; do
 			emit_site "$n"
@@ -421,7 +420,7 @@ emit_sites_program() {
 	done
 
 	echo "function main() returns ExitCode"
-	echo -e "\tvar sum = 0"
+	echo -e "\tvar sum = 0 as Int"
 	f=0
 	while [ "$f" -lt "$FNS" ]; do
 		echo -e "\tsum = sum + fn${f}(${SITE_ARGS})"
@@ -434,15 +433,15 @@ emit_sites_program() {
 # The measured expression, and what `units` means for it.
 emit_data_body() {
 	case "$MODE" in
-	data-tobytes) echo -e "\t\tlet res = subject.toByteArray()\n\t\ttotal = total + res.count()" ;;
-	data-clone) echo -e "\t\tlet res = subject.clone()\n\t\ttotal = total + res.byteLength()" ;;
-	data-codepoints) echo -e "\t\tlet res = subject.codepoints()\n\t\ttotal = total + res.count()" ;;
-	data-utf16) echo -e "\t\tlet res = subject.utf16()\n\t\ttotal = total + res.count()" ;;
+	data-tobytes) echo -e "\t\tlet res = subject.toByteArray()\n\t\ttotal = total + (res.count() as Int)" ;;
+	data-clone) echo -e "\t\tlet res = subject.clone()\n\t\ttotal = total + (res.byteLength() as Int)" ;;
+	data-codepoints) echo -e "\t\tlet res = subject.codepoints()\n\t\ttotal = total + (res.count() as Int)" ;;
+	data-utf16) echo -e "\t\tlet res = subject.utf16()\n\t\ttotal = total + (res.count() as Int)" ;;
 	# ⭐ The A/B behind the slice's own claim. Both search for a needle that is NOT PRESENT, so both walk
 	# the whole subject and neither's result-size arithmetic is short-circuited by an early hit — which
 	# is what makes the pair comparable at all.
-	data-replacefirst) echo -e "\t\tlet res = subject.replaceFirst(\"zqx\", with: \"y\")\n\t\ttotal = total + res.byteLength()" ;;
-	data-replace) echo -e "\t\tlet res = subject.replace(\"zqx\", with: \"y\")\n\t\ttotal = total + res.byteLength()" ;;
+	data-replacefirst) echo -e "\t\tlet res = subject.replaceFirst(\"zqx\", with: \"y\")\n\t\ttotal = total + (res.byteLength() as Int)" ;;
+	data-replace) echo -e "\t\tlet res = subject.replace(\"zqx\", with: \"y\")\n\t\ttotal = total + (res.byteLength() as Int)" ;;
 	esac
 }
 
@@ -451,11 +450,11 @@ emit_data_program() {
 	emit_grown
 
 	echo "function main() returns ExitCode"
-	echo -e "\tvar total = 0"
+	echo -e "\tvar total = 0 as Int"
 	echo -e "\tlet subject = grown(\"$(seed_bytes)\", doublings: $N)"
 	echo -e "\tlet units = subject.byteLength()"
 	echo -e "\tlet t0 = Clock.nowNanos()"
-	echo -e "\tvar r = 0"
+	echo -e "\tvar r = 0 as Int"
 	echo -e "\twhile r < $REPS 'rep'"
 	emit_data_body
 	echo -e "\t\tr = r + 1"
@@ -470,21 +469,21 @@ emit_loop_program() {
 	emit_prelude
 
 	echo "function main() returns ExitCode"
-	echo -e "\tvar total = 0"
+	echo -e "\tvar total = 0 as Int"
 	echo -e "\tlet subject = \"$(seed_bytes)ij\""
-	echo -e "\tlet trips = $((1 << N))"
+	echo -e "\tlet trips = $((1 << N)) as Int"
 	echo -e "\tlet units = trips"
 	echo -e "\tlet t0 = Clock.nowNanos()"
-	echo -e "\tvar i = 0"
+	echo -e "\tvar i = 0 as Int"
 	echo -e "\twhile i < trips 'trip'"
 	case "$MODE" in
-	loop-tobytes) echo -e "\t\tlet c = subject.toByteArray()\n\t\ttotal = total + c.count()" ;;
-	loop-clone) echo -e "\t\tlet c = subject.clone()\n\t\ttotal = total + c.byteLength()" ;;
-	loop-codepoints) echo -e "\t\tlet c = subject.codepoints()\n\t\ttotal = total + c.count()" ;;
-	loop-utf16) echo -e "\t\tlet c = subject.utf16()\n\t\ttotal = total + c.count()" ;;
+	loop-tobytes) echo -e "\t\tlet c = subject.toByteArray()\n\t\ttotal = total + (c.count() as Int)" ;;
+	loop-clone) echo -e "\t\tlet c = subject.clone()\n\t\ttotal = total + (c.byteLength() as Int)" ;;
+	loop-codepoints) echo -e "\t\tlet c = subject.codepoints()\n\t\ttotal = total + (c.count() as Int)" ;;
+	loop-utf16) echo -e "\t\tlet c = subject.utf16()\n\t\ttotal = total + (c.count() as Int)" ;;
 	# THE CONTROL: a per-trip owned String from machinery this rung did not touch, so the slab's own
 	# per-trip growth is separated from anything slice E added.
-	loop-control) echo -e "\t\tvar acc = subject\n\t\tacc.append(subject)\n\t\ttotal = total + acc.byteLength()" ;;
+	loop-control) echo -e "\t\tvar acc = subject\n\t\tacc.append(subject)\n\t\ttotal = total + (acc.byteLength() as Int)" ;;
 	esac
 	echo -e "\t\ti = i + 1"
 	echo -e "\tend 'trip'"

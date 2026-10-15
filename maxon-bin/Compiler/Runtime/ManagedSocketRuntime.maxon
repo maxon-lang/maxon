@@ -43,7 +43,7 @@
 // and written here by these constants, and two readers of one shape is the pair this project keeps finding
 // drifted.
 export let ManagedSocketHandleOffset = 0 as ByteOffset
-export let ManagedSocketBoxBytes = 8 as ParsedInt
+export let ManagedSocketBoxBytes = 8 as FullRangeInt
 
 // The value a handle SLOT carries when it holds no socket — `ManagedFileClosedHandle`'s twin, and zero for
 // its reason: the box is allocated zeroed, so a box whose `socket()` never ran and one that has been closed
@@ -54,7 +54,7 @@ export let ManagedSocketBoxBytes = 8 as ParsedInt
 // (`ManagedFileRuntime.emitLiveHandleOrClosedThrow`) is shared with two families where a descriptor of 0 is
 // ordinary, so the ENCODING has to be one encoding. A POSIX `socket(2)` answers the lowest free descriptor
 // exactly as `open(2)` does, so this is also the same latent defect one library over.
-export let ManagedSocketClosedHandle = 0 as ParsedInt
+export let ManagedSocketClosedHandle = 0 as FullRangeInt
 
 // A POSIX lane answers `-errno` where Winsock answers -1, so `< 0` is the one failure test right on
 // both routes. Winsock's -1 is negative only because `PeWriter.importAnswerOf` sign-extends an
@@ -83,7 +83,7 @@ end 'emitSocketCallFailed'
 // editing them.
 //
 // ⚠ **`AfInet`, `SockStream` and `IpprotoTcp` HERE — AND `SockaddrInBytes` BELOW — are declared WITHOUT a
-// `ParsedInt` suffix**, and that is load-bearing rather than sloppy: this file reads all four as `ParsedInt`
+// `FullRangeInt` suffix**, and that is load-bearing rather than sloppy: this file reads all four as `FullRangeInt`
 // (an `emitConst` value) while the x64 lowering reads all four as `MachineWord` (`int(0 to u64.max)`, a
 // `movRegImm32` immediate). A literal type widens into both; stamping either one here would refuse the other
 // reader. ⛔ The count is written where the members are NAMED, because this sentence said "the four" while
@@ -160,7 +160,7 @@ module function emitErrnoOfAnswer(module StdModule, block IrBlock, answer ValueI
 	return emitBin(module, block: block, a: emitConst(module, block: block, value: 0, ids: ids), b: answer, opcode: StdBinOpcode.sub, ids: ids)
 end 'emitErrnoOfAnswer'
 
-module function emitCodeIsOneOf(module StdModule, block IrBlock, code ValueId, codes ParsedIntArray, ids ValueMinter) returns ValueId
+module function emitCodeIsOneOf(module StdModule, block IrBlock, code ValueId, codes FullRangeIntArray, ids ValueMinter) returns ValueId
 	var matches = ValueIdArray.create()
 
 	for candidate in codes 'eachCode'
@@ -178,7 +178,7 @@ module function emitCodeIsOneOf(module StdModule, block IrBlock, code ValueId, c
 	return anyOf
 end 'emitCodeIsOneOf'
 
-function socketErrnoWouldBlock(target Target) returns ParsedInt
+function socketErrnoWouldBlock(target Target) returns FullRangeInt
 	return match target.os 'os'
 		linux gives LinuxErrno.wouldBlock.rawValue
 		macos gives DarwinErrno.wouldBlock.rawValue
@@ -187,7 +187,7 @@ function socketErrnoWouldBlock(target Target) returns ParsedInt
 	end 'os'
 end 'socketErrnoWouldBlock'
 
-function socketErrnoInProgress(target Target) returns ParsedInt
+function socketErrnoInProgress(target Target) returns FullRangeInt
 	return match target.os 'os'
 		linux gives LinuxErrno.inProgress.rawValue
 		macos gives DarwinErrno.inProgress.rawValue
@@ -207,7 +207,7 @@ export let SocketNoServiceName = 0
 // ⚠ The Windows spelling passes on Darwin by accident and may not be relied on: 2 in byte 0 sets
 // `sin_len = 2` and leaves `sin_family` as `AF_UNSPEC`, which Darwin's `connect` accepts on an
 // already `AF_INET` socket. Byte 1 is the load-bearing one, and any other value there is refused.
-export function sockaddrFamilyHalfword(target Target) returns ParsedInt
+export function sockaddrFamilyHalfword(target Target) returns FullRangeInt
 	return match target.os 'os'
 		windows or
 		linux or
@@ -223,7 +223,7 @@ let SockaddrFamilyByteScale = 256
 
 // `sizeof(WSADATA)` on Win64. `WSAStartup` fills it and nothing here reads it back — it is a scratch buffer
 // the API demands, freed the moment the call returns.
-let WsaDataBytes = 408 as ParsedInt
+let WsaDataBytes = 408 as FullRangeInt
 
 // ⭐ **WINSOCK MUST BE INITIALIZED BEFORE ANY OTHER ws2_32 ENTRY POINT ANSWERS**, so every builder that opens
 // a socket opens with this. Terminates `block`: `ready` when Winsock is started, `notReady` when the startup
@@ -261,8 +261,8 @@ end 'emitWinsockStartup'
 // The once-per-process startup's `.data` word: `WinsockNotStarted` in the image, `WinsockStarted` after the
 // first successful `WSAStartup`.
 let WinsockStartedLabel = b"__ms_wsa_started"
-let WinsockNotStarted = 0 as ParsedInt
-let WinsockStarted = 1 as ParsedInt
+let WinsockNotStarted = 0 as FullRangeInt
+let WinsockStarted = 1 as FullRangeInt
 
 // This family's one `.data` word, laid out where a surviving body names it (`DataReach.walked`).
 // `lastWriterWins`: every writer stores the same `WinsockStarted` — `emitWinsockStartup` argues the race.
@@ -281,7 +281,7 @@ end 'managedSocketRuntimeGlobals'
 //   [32 .. 39]  ai_addr         [40 .. 47]  ai_next
 //
 // ⚠ `ai_addr` at 32 (0x20) is the one offset that is READ rather than written.
-let AddrInfoBytes = 48 as ParsedInt
+let AddrInfoBytes = 48 as FullRangeInt
 
 // The two WORDS this file writes into `hints`, named for the DWORD PAIR each one carries — `emitStoreDwordPair`
 // composes two 32-bit fields into one 64-bit store, so an offset here names a word and not a field.
@@ -308,8 +308,8 @@ export let SockaddrFamilyPortAddrOffset = 0 as ByteOffset
 // field is written by composing it into the 64-bit word that contains it, and these are the two multipliers
 // that place a field at byte 2 and at byte 4 of that word. Named rather than spelled `65536`/`4294967296` at
 // five sites: a bare power of two at a shift says nothing about which field offset it encodes.
-let ByteTwoScale = 65536 as ParsedInt
-let ByteFourScale = 4294967296 as ParsedInt
+let ByteTwoScale = 65536 as FullRangeInt
+let ByteFourScale = 4294967296 as FullRangeInt
 
 // ⚠ **THE TEST-NET-1 SENTINEL, SHORT-CIRCUITED HERE RATHER THAN ATTEMPTED.** `192.0.2.1` is RFC 5737's
 // documentation range: it is guaranteed to route nowhere, so a real `connect` to it does not get refused
@@ -319,11 +319,11 @@ let ByteFourScale = 4294967296 as ParsedInt
 //
 // The value is the address AS `sin_addr` HOLDS IT — network byte order, so `192.0.2.1` reads `0x010200C0`
 // little-endian-first. It is compared against the resolved `sin_addr` word, never against a dotted string.
-let TestNet1NetOrder = 0x010200C0 as ParsedInt
+let TestNet1NetOrder = 0x010200C0 as FullRangeInt
 
 // The three "the call succeeded" readings. `WSAStartup` and `getaddrinfo` answer a plain int where 0 is
 // success (`getaddrinfo` returns an EAI_* code otherwise), and `connect` answers 0 or `SOCKET_ERROR`.
-export let WinsockCallOk = 0 as ParsedInt
+export let WinsockCallOk = 0 as FullRangeInt
 
 // ⭐ **THE `__ManagedSocketError` ORDINALS, AS ERROR FLAGS (`ordinal + ErrorFlagOrdinalBias`)** — the
 // `ManagedFileRuntime`/`ManagedDirectoryRuntime` discipline, and the ordinals are positional facts about the
@@ -340,14 +340,14 @@ export let WinsockCallOk = 0 as ParsedInt
 // ordinals after it depend on its slot — and deliberately unthrown, which is why its ORDINAL is here even
 // though its flag is not, and why `claimManagedSocketOrdinals` states it as `neverThrown` rather than
 // leaving a gap a corpus reorder could move in silence.
-let ManagedSocketBufferOutOfBoundsOrdinal = 0 as ParsedInt
-let ManagedSocketResolveFailedOrdinal = 1 as ParsedInt
-let ManagedSocketConnectFailedOrdinal = 2 as ParsedInt
-let ManagedSocketSendFailedOrdinal = 3 as ParsedInt
-let ManagedSocketRecvFailedOrdinal = 4 as ParsedInt
-let ManagedSocketConnectionClosedOrdinal = 5 as ParsedInt
-let ManagedSocketClosedOrdinal = 6 as ParsedInt
-let ManagedSocketTimedOutOrdinal = 7 as ParsedInt
+let ManagedSocketBufferOutOfBoundsOrdinal = 0 as FullRangeInt
+let ManagedSocketResolveFailedOrdinal = 1 as FullRangeInt
+let ManagedSocketConnectFailedOrdinal = 2 as FullRangeInt
+let ManagedSocketSendFailedOrdinal = 3 as FullRangeInt
+let ManagedSocketRecvFailedOrdinal = 4 as FullRangeInt
+let ManagedSocketConnectionClosedOrdinal = 5 as FullRangeInt
+let ManagedSocketClosedOrdinal = 6 as FullRangeInt
+let ManagedSocketTimedOutOrdinal = 7 as FullRangeInt
 let ManagedSocketBufferOutOfBoundsFlag = ManagedSocketBufferOutOfBoundsOrdinal + ErrorFlagOrdinalBias
 let ManagedSocketResolveFailedFlag = ManagedSocketResolveFailedOrdinal + ErrorFlagOrdinalBias
 let ManagedSocketConnectFailedFlag = ManagedSocketConnectFailedOrdinal + ErrorFlagOrdinalBias
@@ -450,7 +450,7 @@ end 'emitLiveSocketOrThrow'
 //
 // ⚠ Both values are COMPILE-TIME here, so the packing is folded into a single `emitConst` rather than emitted
 // as a shift and an or.
-export function emitStoreDwordPair(module StdModule, block IrBlock, record ValueId, offset ByteOffset, low ParsedInt, high ParsedInt, ids ValueMinter)
+export function emitStoreDwordPair(module StdModule, block IrBlock, record ValueId, offset ByteOffset, low FullRangeInt, high FullRangeInt, ids ValueMinter)
 	let packed = emitConst(module, block: block, value: low + (high * ByteFourScale), ids: ids)
 	emitStoreField(module, block: block, record: record, offset: offset, value: packed)
 end 'emitStoreDwordPair'
@@ -467,7 +467,7 @@ end 'emitStoreDwordPair'
 //
 // ⚠ The FAMILY half is the caller's, because it is the one field whose byte position is per-platform — see
 // `sockaddrFamilyHalfword`, which carries the measurement.
-export function emitSockaddrInWord(module StdModule, block IrBlock, port ValueId, ip ValueId, familyHalfword ParsedInt, ids ValueMinter) returns ValueId
+export function emitSockaddrInWord(module StdModule, block IrBlock, port ValueId, ip ValueId, familyHalfword FullRangeInt, ids ValueMinter) returns ValueId
 	// htons: `((port and 0xFF) shl 8) or ((port shrLogical 8) and 0xFF)`.
 	let lowMask = emitConst(module, block: block, value: 0xFF, ids: ids)
 	let byteBits = emitConst(module, block: block, value: 8, ids: ids)
@@ -502,7 +502,7 @@ end 'emitSockaddrInWord'
 // of the ring: everything a re-issue reads (the descriptor, the buffer, the length) is computed in
 // a block that dominates it, so the trace reports one yield/resume pair per blocking operation
 // however many times the call is re-issued.
-export function emitSocketAttempt(module StdModule, func IrFunction, attempt IrBlock, answer ValueId, pollKey ValueId, gen ValueId, mode ParsedInt, ok IrBlock, failed IrBlock, stale IrBlock, timedOut IrBlock, target Target, ids ValueMinter)
+export function emitSocketAttempt(module StdModule, func IrFunction, attempt IrBlock, answer ValueId, pollKey ValueId, gen ValueId, mode FullRangeInt, ok IrBlock, failed IrBlock, stale IrBlock, timedOut IrBlock, target Target, ids ValueMinter)
 	let failedCall = emitSocketCallFailed(module, block: attempt, answer: answer, ids: ids)
 
 	// The retry is unconditional because the OVERLAPPED lane has no call that can reach here — its transfers go
@@ -513,7 +513,7 @@ export function emitSocketAttempt(module StdModule, func IrFunction, attempt IrB
 	attempt.branchEdges.push(BranchEdge.create(ok.id, argIds: argsOf(answer)))
 end 'emitSocketAttempt'
 
-function emitSocketPolledRetry(module StdModule, func IrFunction, attempt IrBlock, failedCall ValueId, answer ValueId, pollKey ValueId, gen ValueId, mode ParsedInt, ok IrBlock, failed IrBlock, stale IrBlock, timedOut IrBlock, target Target, ids ValueMinter)
+function emitSocketPolledRetry(module StdModule, func IrFunction, attempt IrBlock, failedCall ValueId, answer ValueId, pollKey ValueId, gen ValueId, mode FullRangeInt, ok IrBlock, failed IrBlock, stale IrBlock, timedOut IrBlock, target Target, ids ValueMinter)
 	var classify = module.addBlock(func, label: b"msclassify", heat: BlockHeat.normal)
 	var waitReady = module.addBlock(func, label: b"mswait", heat: BlockHeat.normal)
 
@@ -539,7 +539,7 @@ end 'emitSocketPolledRetry'
 // a bare error return; the dial passes an exit of its own because its `failed` closes the socket.
 // The resolver reuses its closing exit because its socket is its own frame's for the whole
 // exchange.
-function emitSocketWaitReady(module StdModule, func IrFunction, block IrBlock, pollKey ValueId, gen ValueId, mode ParsedInt, timedOut IrBlock, stale IrBlock, ready IrBlock, ids ValueMinter)
+function emitSocketWaitReady(module StdModule, func IrFunction, block IrBlock, pollKey ValueId, gen ValueId, mode FullRangeInt, timedOut IrBlock, stale IrBlock, ready IrBlock, ids ValueMinter)
 	var live = module.addBlock(func, label: b"mswaitlive", heat: BlockHeat.normal)
 
 	let outcome = emitNetpollPdWait(module, block: block, source: pollKey, mode: mode, gen: gen, ids: ids)
@@ -558,7 +558,7 @@ end 'emitSocketWaitReady'
 // The mark is stored only into the life of the record the operation began in (`gen`): this block
 // runs after a park of the thread's own, and by then the descriptor may name another socket's life
 // of the same record (`NetpollRuntime.PdOffTimedOut`).
-module function emitSocketLateExit(module StdModule, func IrFunction, pollKey ValueId, gen ValueId, failureFlag ParsedInt, ids ValueMinter) returns IrBlock
+module function emitSocketLateExit(module StdModule, func IrFunction, pollKey ValueId, gen ValueId, failureFlag FullRangeInt, ids ValueMinter) returns IrBlock
 	var late = module.addBlock(func, label: b"mslate", heat: BlockHeat.normal)
 	emitNetpollPdMarkTimedOut(module, block: late, source: pollKey, gen: gen, ids: ids)
 	emitErrorReturn(module, block: late, flag: failureFlag, ids: ids)
@@ -846,13 +846,13 @@ function buildManagedSocketTcpConnect(module StdModule, target Target)
 	module.functions.push(func)
 end 'buildManagedSocketTcpConnect'
 
-function emitSocketCloseAndThrow(module StdModule, block IrBlock, pollKey ValueId, socket ValueId, flag ParsedInt, ids ValueMinter)
+function emitSocketCloseAndThrow(module StdModule, block IrBlock, pollKey ValueId, socket ValueId, flag FullRangeInt, ids ValueMinter)
 	emitSocketPollerRelease(module, block: block, pollKey: pollKey, ids: ids)
 	module.appendOp(block, op: StdOp.osSocketClose(socket))
 	emitErrorReturn(module, block: block, flag: flag, ids: ids)
 end 'emitSocketCloseAndThrow'
 
-function emitSocketDeadline(module StdModule, block IrBlock, pollKey ValueId, mode ParsedInt, ms ValueId, ids ValueMinter)
+function emitSocketDeadline(module StdModule, block IrBlock, pollKey ValueId, mode FullRangeInt, ms ValueId, ids ValueMinter)
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: NetpollPdDeadlineName, args: threeArgs(pollKey, second: emitConst(module, block: block, value: mode, ids: ids), third: ms)))
 end 'emitSocketDeadline'
 
@@ -1041,8 +1041,8 @@ end 'emitHandshakeRefused'
 // `getsockopt(SO_ERROR)`'s scratch: a 32-bit value at 0 and the 32-bit `socklen_t` at 4, seeded with the
 // value's own size because the call reads that length before it writes.
 let SocketOptionValueOffset = 0 as ByteOffset
-let SocketOptionValueBytes = 4 as ParsedInt
-let SocketOptionScratchBytes = 8 as ParsedInt
+let SocketOptionValueBytes = 4 as FullRangeInt
+let SocketOptionScratchBytes = 8 as FullRangeInt
 
 // `__ms_send_from(box, arrRec, offset, length) -> (bytesSent, flag)` — send `length` bytes starting at
 // `offset` in the managed buffer.
@@ -1216,7 +1216,7 @@ end 'SocketTransferDirection'
 
 // The poller direction a transfer waits on. Named here because both shapes read it and neither may pick its
 // own: a receive published on the write word would never be found.
-function socketTransferMode(direction SocketTransferDirection) returns ParsedInt
+function socketTransferMode(direction SocketTransferDirection) returns FullRangeInt
 	return match direction 'd'
 		receiving gives NetpollModeRead
 		sending gives NetpollModeWrite
@@ -1230,7 +1230,7 @@ end 'socketTransferMode'
 // `failed` and `ok` arrive from the caller rather than being minted here so the function's block ORDER is
 // the caller's to state — it is what the emitted code's layout follows. `gen` is the life of the record the
 // operation began in (`__np_pd_op_begin`), which every wait and the late exit carry.
-function emitSocketTransfer(module StdModule, func IrFunction, ids ValueMinter, attempt IrBlock, socket ValueId, pollKey ValueId, gen ValueId, buffer ValueId, length ValueId, direction SocketTransferDirection, failureFlag ParsedInt, failed IrBlock, ok IrBlock, shape SocketWaitShape, target Target)
+function emitSocketTransfer(module StdModule, func IrFunction, ids ValueMinter, attempt IrBlock, socket ValueId, pollKey ValueId, gen ValueId, buffer ValueId, length ValueId, direction SocketTransferDirection, failureFlag FullRangeInt, failed IrBlock, ok IrBlock, shape SocketWaitShape, target Target)
 	let moved = ids.mint()
 	ok.blockArgs.push(IrBlockArg.create(moved, argType: StdType.i64))
 	let mode = socketTransferMode(direction)
@@ -1247,7 +1247,7 @@ end 'emitSocketTransfer'
 
 // ⚠ **THE ERRNO IS READ OFF THE ANSWER ITSELF**, which is what lets `EAGAIN` send the green thread to the
 // poller where a real failure reports this operation's variant.
-function emitSocketPolledTransfer(module StdModule, func IrFunction, ids ValueMinter, attempt IrBlock, socket ValueId, pollKey ValueId, gen ValueId, buffer ValueId, length ValueId, direction SocketTransferDirection, mode ParsedInt, ok IrBlock, failed IrBlock, timedOut IrBlock, target Target)
+function emitSocketPolledTransfer(module StdModule, func IrFunction, ids ValueMinter, attempt IrBlock, socket ValueId, pollKey ValueId, gen ValueId, buffer ValueId, length ValueId, direction SocketTransferDirection, mode FullRangeInt, ok IrBlock, failed IrBlock, timedOut IrBlock, target Target)
 	let transferred = ids.mint()
 
 	match direction 'd'
@@ -1271,7 +1271,7 @@ end 'emitSocketPolledTransfer'
 // ⚠ **THE `WSABUF` AND THE FLAGS WORD BELONG TO THE KERNEL FOR THE WHOLE OPERATION**, so they are a block of
 // this call's own, and every road out frees it exactly once — including the two that must first collect an
 // outstanding packet.
-function emitSocketOverlappedTransfer(module StdModule, func IrFunction, ids ValueMinter, attempt IrBlock, socket ValueId, pollKey ValueId, gen ValueId, buffer ValueId, length ValueId, direction SocketTransferDirection, mode ParsedInt, ok IrBlock, failed IrBlock, timedOut IrBlock)
+function emitSocketOverlappedTransfer(module StdModule, func IrFunction, ids ValueMinter, attempt IrBlock, socket ValueId, pollKey ValueId, gen ValueId, buffer ValueId, length ValueId, direction SocketTransferDirection, mode FullRangeInt, ok IrBlock, failed IrBlock, timedOut IrBlock)
 	var issueFailed = module.addBlock(func, label: b"msnostart", heat: BlockHeat.normal)
 	var waitHdr = module.addBlock(func, label: b"mswaitovl", heat: BlockHeat.normal)
 	var landed = module.addBlock(func, label: b"mslanded", heat: BlockHeat.normal)
@@ -1283,14 +1283,14 @@ function emitSocketOverlappedTransfer(module StdModule, func IrFunction, ids Val
 	var completed = module.addBlock(func, label: b"mscompleted", heat: BlockHeat.normal)
 
 	let gt = emitLoadCurrentGt(module, block: attempt, ids: ids)
-	let overlapped = emitBin(module, block: attempt, a: gt, b: emitConst(module, block: attempt, value: GtOffOverlapped as ParsedInt, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let overlapped = emitBin(module, block: attempt, a: gt, b: emitConst(module, block: attempt, value: GtOffOverlapped as FullRangeInt, ids: ids), opcode: StdBinOpcode.add, ids: ids)
 	emitSocketZeroOverlapped(module, block: attempt, overlapped: overlapped, ids: ids)
 
 	let buffers = emitRawAlloc(module, block: attempt, byteCount: emitConst(module, block: attempt, value: WsaTransferScratchBytes, ids: ids), ids: ids)
 	emitStoreField(module, block: attempt, record: buffers, offset: WsaBufLengthOffset, value: emitSocketWsaLength(module, block: attempt, length: length, ids: ids))
 	emitStoreField(module, block: attempt, record: buffers, offset: WsaBufPointerOffset, value: buffer)
 	emitStoreField(module, block: attempt, record: buffers, offset: WsaTransferFlagsOffset, value: emitConst(module, block: attempt, value: SendRecvNoFlags, ids: ids))
-	let flags = emitBin(module, block: attempt, a: buffers, b: emitConst(module, block: attempt, value: WsaTransferFlagsOffset as ParsedInt, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let flags = emitBin(module, block: attempt, a: buffers, b: emitConst(module, block: attempt, value: WsaTransferFlagsOffset as FullRangeInt, ids: ids), opcode: StdBinOpcode.add, ids: ids)
 
 	// The aim goes on the thread BEFORE the transfer is issued: the packet may be decoded on another machine the
 	// instant the kernel takes the request, which is before this call has even returned.
@@ -1385,7 +1385,7 @@ end 'emitSocketPacketPair'
 // (`NetpollRuntime.__np_op_settle`) rather than on the socket's record, which a close may already have given to
 // somebody else. Whether the request still has to be CANCELLED to make that packet come is the caller's
 // question, because only the caller knows whether it may still name the descriptor.
-function emitSocketCollectOutstanding(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, mode ParsedInt, cont IrBlock)
+function emitSocketCollectOutstanding(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, mode FullRangeInt, cont IrBlock)
 	var wait = module.addBlock(func, label: b"mscollect", heat: BlockHeat.normal)
 	var collected = module.addBlock(func, label: b"mscollected", heat: BlockHeat.normal)
 	var notACompletion = module.addBlock(func, label: b"mscollectbad", heat: BlockHeat.normal)
@@ -1434,7 +1434,7 @@ end 'emitSocketWsaLength'
 let WsaBufLengthOffset = 0 as ByteOffset
 let WsaBufPointerOffset = 8 as ByteOffset
 let WsaTransferFlagsOffset = 16 as ByteOffset
-let WsaTransferScratchBytes = 24 as ParsedInt
+let WsaTransferScratchBytes = 24 as FullRangeInt
 
 // `WSABUF.len` is a `ULONG`.
 let WsaBufMaxBytes = 4294967295
@@ -1512,7 +1512,7 @@ end 'buildManagedSocketShutdownWrite'
 //
 // ⚠ It THROWS, and the only variant it can raise is `closed` — a deadline set on a socket that has been
 // closed is a caller error, and the guard that says so is the one every other method uses.
-function buildManagedSocketSetDeadline(module StdModule, name ByteArray, mode ParsedInt, target Target)
+function buildManagedSocketSetDeadline(module StdModule, name ByteArray, mode FullRangeInt, target Target)
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), throwsTypeName: managedSocketThrows())
 	var ids = ValueMinter.create(2)
 
@@ -1718,7 +1718,7 @@ end 'isManagedSocketRuntimeCallee'
 // The answer both the parser and the whole resolver give when there is no address. -1 is not a possible
 // `sin_addr` word: it would be 255.255.255.255, the limited broadcast address, which is not a connect
 // target — so the sentinel costs no legal answer.
-let ResolveNoAddress = -1 as ParsedInt
+let ResolveNoAddress = -1 as FullRangeInt
 
 // The resolver's entry point and the helpers it is built out of; `__ms_ipv4` alone serves the `getaddrinfo`
 // shape too. All are `__ms_`-prefixed, which is what puts them inside `isManagedSocketRuntimeCallee` — the
@@ -1746,13 +1746,13 @@ let ResolveNameserverKeyword = b"nameserver"
 // One buffer serves both files, one read fills it, and a file longer than this is TRUNCATED — so a host
 // defined past 8 KiB of `/etc/hosts` is not found. Both files are conventionally a few hundred bytes; a
 // growing read loop would be a second allocator's worth of code for a case neither file reaches.
-let ResolveTextBytes = 8192 as ParsedInt
+let ResolveTextBytes = 8192 as FullRangeInt
 
 // The scratch a DNS exchange is built and read in. It bounds the QUERY (a name is at most 255 bytes, so a
 // query is at most 273) and the RESPONSE, which a server may legally make far larger — an answer section
 // precedes the authority and additional sections, so an `A` record is inside this window for every response
 // a stub resolver receives in practice, and a longer one is parsed as far as it arrived.
-let DnsMessageBytes = 4096 as ParsedInt
+let DnsMessageBytes = 4096 as FullRangeInt
 
 // The bytes this file's scanners test. Named because a bare 0x2E in a compare says nothing.
 let ResolveDotByte = 0x2E
@@ -1840,7 +1840,7 @@ end 'installManagedSocketResolver'
 
 // One CONSTANT byte at a CONSTANT offset — the shape the DNS header is written with, where
 // `emitStoreByte`'s runtime index would be an add of two constants at every field.
-function emitStoreConstByte(module StdModule, block IrBlock, base ValueId, offset ByteOffset, value ParsedInt, ids ValueMinter)
+function emitStoreConstByte(module StdModule, block IrBlock, base ValueId, offset ByteOffset, value FullRangeInt, ids ValueMinter)
 	let byteValue = emitConst(module, block: block, value: value, ids: ids)
 	module.appendOp(block, op: StdOp.storeIndirect(base, offset: offset, valueId: byteValue, valueType: StdType.u8))
 end 'emitStoreConstByte'
@@ -2159,12 +2159,12 @@ end 'buildManagedSocketSlurp'
 // its scratch has to be released — and therefore has to come from the tracked allocator `emitRawFree`
 // answers. The terminator needs no store: an `__mm_alloc` block is zeroed.
 function emitOwnedCString(module StdModule, block IrBlock, text ByteArray, ids ValueMinter) returns ValueId
-	let size = emitConst(module, block: block, value: (text.count() + 1) as ParsedInt, ids: ids)
+	let size = emitConst(module, block: block, value: (text.count() + 1) as FullRangeInt, ids: ids)
 	let buf = emitRawAlloc(module, block: block, byteCount: size, ids: ids)
 
 	for k in 0 upto text.count() 'eachByte'
 		let ch = try text.get(k) otherwise panic("emitOwnedCString: text.get out of range at {k} of {text.count()}")
-		emitStoreConstByte(module, block: block, base: buf, offset: k as ByteOffset, value: ch as ParsedInt, ids: ids)
+		emitStoreConstByte(module, block: block, base: buf, offset: k as ByteOffset, value: ch as FullRangeInt, ids: ids)
 	end 'eachByte'
 
 	return buf
@@ -2314,7 +2314,7 @@ function buildManagedSocketNameserver(module StdModule)
 	let cap = 1 as ValueId
 
 	let keyword = emitOwnedCString(module, block: entry, text: ResolveNameserverKeyword, ids: ids)
-	let keywordLength = emitConst(module, block: entry, value: ResolveNameserverKeyword.count() as ParsedInt, ids: ids)
+	let keywordLength = emitConst(module, block: entry, value: ResolveNameserverKeyword.count() as FullRangeInt, ids: ids)
 	let linePos = ids.mint()
 	let lineEnd = ids.mint()
 	emitResolverLineWalk(module, entry: entry, lineHeader: lineHeader, lineStart: lineStart, nextLine: nextLine, notFound: notFound, path: ResolveConfPath, buf: buf, cap: cap, linePos: linePos, lineEnd: lineEnd, ids: ids)
@@ -2754,7 +2754,7 @@ end 'emitDnsLabelGuard'
 
 // One CONSTANT byte at a RUNTIME index plus a constant delta — the shape the question's tail is written
 // with, where the index is a value and the field positions past it are compile-time.
-function emitStoreOffsetByte(module StdModule, block IrBlock, base ValueId, index ValueId, delta ParsedInt, value ParsedInt, ids ValueMinter)
+function emitStoreOffsetByte(module StdModule, block IrBlock, base ValueId, index ValueId, delta FullRangeInt, value FullRangeInt, ids ValueMinter)
 	let step = emitConst(module, block: block, value: delta, ids: ids)
 	let at = emitBin(module, block: block, a: index, b: step, opcode: StdBinOpcode.add, ids: ids)
 	let byteValue = emitConst(module, block: block, value: value, ids: ids)
@@ -2765,7 +2765,7 @@ end 'emitStoreOffsetByte'
 // order and neither is swapped.
 function emitDnsAddressWord(module StdModule, block IrBlock, message ValueId, at ValueId, ids ValueMinter) returns ValueId
 	var word = emitLoadByte(module, block: block, base: message, index: at, ids: ids)
-	var scale = 1 as ParsedInt
+	var scale = 1 as FullRangeInt
 
 	for byteIndex in 1 to Ipv4LastOctetIndex 'eachByte'
 		scale = scale * Ipv4OctetScale

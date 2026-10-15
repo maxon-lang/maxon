@@ -370,8 +370,8 @@ function noteDispatchedSlot(op MaxonOp, slots DispatchedSlotMap, signatures Prog
 		sizeofType or
 		constArrayLiteral or
 		switch then break
-		witnessDispatch(_, args, _, methodIndex, interfaceDeclIndex, _, _) then noteOneDispatchedSlot(slots, signatures: signatures, func: func, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex)
-		witnessTryDispatch(_, _, args, _, methodIndex, interfaceDeclIndex, _) then noteOneDispatchedSlot(slots, signatures: signatures, func: func, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex)
+		witnessDispatch(_, args, _, _, methodIndex, interfaceDeclIndex, _, _) then noteOneDispatchedSlot(slots, signatures: signatures, func: func, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex)
+		witnessTryDispatch(_, _, args, _, _, methodIndex, interfaceDeclIndex, _) then noteOneDispatchedSlot(slots, signatures: signatures, func: func, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex)
 		panicAbortValue then break
 
 		// The error-flag encode dispatches nothing — it is arithmetic on a value already in hand, so it fills no
@@ -497,7 +497,7 @@ function dispatchedAssociatedNamesOf(interfaces IrInterfaceMap, dispatched Dispa
 	let requirements = interfaceWitnessSlots(interfaces, iface: iface)
 
 	for methodIndex in 0 upto requirements.count() 'eachRequirement'
-		let claimed = try slots.get(methodIndex) otherwise 'noCallJumpsThroughThisSlot'
+		let claimed = try slots.get(methodIndex as WitnessMethodIndex) otherwise 'noCallJumpsThroughThisSlot'
 			continue
 		end 'noCallJumpsThroughThisSlot'
 
@@ -1253,7 +1253,7 @@ module function opaqueParamDischarge(signatures ProgramSignatures, interfaces Ir
 		end 'aboutAnotherParameter'
 
 		if promised.interfaceName.equals(interfaceName) or conformanceSatisfiesInterface(interfaces, declaredName: promised.interfaceName, wanted: interfaceName) 'discharges'
-			return OpaqueConstraintDischarge.slot(i)
+			return OpaqueConstraintDischarge.slot(i as WitnessSlotIndex)
 		end 'discharges'
 	end 'eachOwnerConstraint'
 
@@ -2502,7 +2502,7 @@ function signatureMatches(project Project, method InterfaceMethodSig, interfaceD
 				return false
 			end 'differentInstances'
 
-			if brandsConflict(signatures.genericBrandOfWritten(written, readerFilePath: interfaceDeclFilePath), got: signatures.genericBrandOfWritten(implParamSpelling(implSig, position: i + selfOffset), readerFilePath: implFunc.sourceFilePath)) 'twoBrandsOfOneInstance'
+			if brandsConflict(signatures.genericBrandOfWritten(written, readerFilePath: interfaceDeclFilePath), got: signatures.genericBrandOfWritten(implParamSpelling(implSig, position: (i + selfOffset) as ParamCount), readerFilePath: implFunc.sourceFilePath)) 'twoBrandsOfOneInstance'
 				return false
 			end 'twoBrandsOfOneInstance'
 
@@ -2540,7 +2540,7 @@ function formatActualSignature(project Project, methodName ByteArray, conforming
 
 	for i in selfOffset upto implFunc.maxonParamTypes.count() 'eachParam'
 		paramNames.push(try implSig.paramNames.get(i) otherwise panic("formatActualSignature: paramNames.get OOB at {i}"))
-		paramTypes.push(implParamDisplay(project, implFunc: implFunc, implSig: implSig, position: i, conformingType: conformingType, typeParamNames: typeParamNames, signatures: signatures))
+		paramTypes.push(implParamDisplay(project, implFunc: implFunc, implSig: implSig, position: i as ParamCount, conformingType: conformingType, typeParamNames: typeParamNames, signatures: signatures))
 	end 'eachParam'
 
 	return assembleMethodSignature(methodName, paramNames: paramNames, paramTypes: paramTypes, returnType: renderReturnType(project, returnType: implFunc.maxonReturnType, conformingType: conformingType, typeParamNames: typeParamNames, signatures: signatures), isStatic: implIsStatic, signatures: signatures)

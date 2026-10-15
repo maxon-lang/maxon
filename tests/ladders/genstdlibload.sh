@@ -47,7 +47,7 @@
 #            term are different findings and the extra modules are themselves files.
 #   mode   = synth | real
 #            `synth` — MODULES generated modules, each a SHAPE MATCH for `stdlib/helpers/string/utf16.maxon`:
-#                      DECLS_PER_MODULE exported free functions over two ranged typealiases, pure
+#                      DECLS_PER_MODULE public free functions over two ranged typealiases, pure
 #                      arithmetic bodies, no imports, NEVER CALLED by the corpus. Uniquely named, so
 #                      any count is legal (E3006 would catch a collision loudly).
 #            `real`  — MODULES copies of the ACTUAL `stdlib/helpers/string/utf16.maxon`, with every
@@ -195,7 +195,7 @@ emit_corpus() {
 				echo -e "\tif b <= a 'le'"
 				echo -e "\t\tacc = acc - b"
 				echo -e "\tend 'le'"
-				echo -e "\tvar k = 0"
+				echo -e "\tvar k = 0 as Int"
 				echo -e "\twhile k < 3 'spin'"
 				echo -e "\t\tacc = acc + k"
 				echo -e "\t\tk = k + 1"
@@ -215,8 +215,8 @@ emit_corpus() {
 		# a constant-foldable argument and `foldConstOperands` cannot collapse the program this ladder
 		# exists to measure. (`main` takes no parameters, so an argv-derived seed is not available.)
 		echo "function ladderSeed() returns Int"
-		echo -e "\tvar acc = 1"
-		echo -e "\tvar i = 0"
+		echo -e "\tvar acc = 1 as Int"
+		echo -e "\tvar i = 0 as Int"
 		echo -e "\twhile i < 4 'seedLoop'"
 		echo -e "\t\tacc = acc + i * 3"
 		echo -e "\t\ti = i + 1"
@@ -237,7 +237,7 @@ emit_corpus() {
 }
 
 # --- THE EXTRA MODULES. A shape match for `stdlib/helpers/string/utf16.maxon`: two ranged typealiases
-# and DECLS_PER_MODULE exported free functions over them, pure arithmetic, no imports, never called.
+# and DECLS_PER_MODULE public free functions over them, pure arithmetic, no imports, never called.
 emit_synth_module() {
 	M="$1"
 	{
@@ -273,7 +273,7 @@ emit_real_module() {
 	fi
 
 	sed -e "s/\bCodeUnit16\b/CodeUnit16_${M}/g" \
-		-e "s/\bUtf16UnitCount\b/Utf16UnitCount_${M}/g" \
+		-e "s/\bUtf16Width\b/Utf16Width_${M}/g" \
 		-e "s/\butf16\([A-Za-z]*\)\b/utf16\1_${M}/g" \
 		"$REAL_MODULE" >"$OUT/m$(printf '%05d' "$M")_real.maxon"
 }

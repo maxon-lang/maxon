@@ -239,9 +239,9 @@ typealias Vec10 = Vector with 10 Int
 
 function main() returns ExitCode
 	var v = Vec10.create()
-	var i = 0
+	var i = 0 as Int
 	while i < 10 'fill'
-		try v.set(i, value: i * 10) otherwise panic("test invariant: set OOB")
+		try v.set(i as ElementIndex, value: i * 10) otherwise panic("test invariant: set OOB")
 		i = i + 1
 	end 'fill'
 	let first = try v.get(0) otherwise -1
@@ -384,7 +384,7 @@ function main() returns ExitCode
 	try v.set(1, value: 2) otherwise panic("test invariant: set OOB")
 	try v.set(2, value: 3) otherwise panic("test invariant: set OOB")
 	try v.set(3, value: 4) otherwise panic("test invariant: set OOB")
-	var sum = 0
+	var sum = 0 as Int
 	for elem in v 'loop'
 		sum = sum + elem
 	end 'loop'
@@ -462,7 +462,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let v = Vector from [1, 2, 3, 4]
-	var sum = 0
+	var sum = 0 as FullRangeInt
 	for elem in v 'loop'
 		sum = sum + elem
 	end 'loop'
@@ -523,8 +523,8 @@ function main() returns ExitCode
 	try v.set(2, value: 3) otherwise panic("test invariant: set OOB")
 	try v.set(3, value: 4) otherwise panic("test invariant: set OOB")
 	try v.set(4, value: 5) otherwise panic("test invariant: set OOB")
-	var sum = 0
-	var i = 0
+	var sum = 0 as Int
+	var i = 0 as Count
 	while i < v.count() 'loop'
 		sum = sum + (try v.get(i) otherwise 0)
 		i = i + 1
@@ -546,8 +546,8 @@ function main() returns ExitCode
 	try v.set(3, value: true) otherwise panic("test invariant: set OOB")
 	try v.set(8, value: true) otherwise panic("test invariant: set OOB")
 	try v.set(15, value: true) otherwise panic("test invariant: set OOB")
-	var count = 0
-	var i = 0
+	var count = 0 as FullRangeInt
+	var i = 0 as Count
 	while i < v.count() 'scan'
 		let bit = try v.get(i) otherwise false
 		if bit 'isSet'
@@ -573,7 +573,7 @@ function main() returns ExitCode
 	try v.set(2, value: false) otherwise panic("test invariant: set OOB")
 	let a = try v.get(2) otherwise true
 	let b = try v.get(5) otherwise false
-	var r = 0
+	var r = 0 as FullRangeInt
 	if not a 'cleared'
 		r = r + 1
 	end 'cleared'
@@ -591,7 +591,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let v = Vector from [true, false, true, true, false, true, false, false, true]
-	var count = 0
+	var count = 0 as FullRangeInt
 	for bit in v 'each'
 		if bit 'isSet'
 			count = count + 1
@@ -1047,7 +1047,7 @@ end 'runtimeIndex'
 function main() returns ExitCode
 	var made = Vec3.create()
 	var lit = Vector from [1, 2, 3]
-	var refused = 0
+	var refused = 0 as Int
 	try made.set(runtimeIndex(3) as ElementIndex, value: 99) otherwise 'madePastEnd'
 		refused = refused + 1
 	end 'madePastEnd'
@@ -1866,7 +1866,7 @@ extension Vector
 		var fromContainer = try b.get(0) otherwise panic("no element")
 		fromContainer.clear()
 
-		var t = (try managed.slice(0, 2) otherwise panic("slice"), 1)
+		var t = (try managed.slice(0, 2) otherwise panic("slice"), 1 as Int)
 		t.0.clear()
 
 		var boxed = BufBox.create(try managed.slice(0, 2) otherwise panic("slice"))
@@ -1988,12 +1988,12 @@ typealias Vec3 = Vector with 3 Int
 
 extension Vector
 	function walkedTwoWays() returns Int
-		var viaSelf = 0
+		var viaSelf = 0 as Int
 		for e in self 'eachOwn'
 			viaSelf = viaSelf + (e - e) + 1
 		end 'eachOwn'
 
-		var viaSlice = 0
+		var viaSlice = 0 as Int
 		for e in try managed.slice(0, countof(Self)) otherwise panic("slice") 'eachSliced'
 			viaSlice = viaSlice + (e - e) + 1
 		end 'eachSliced'
@@ -2214,4 +2214,60 @@ end 'main'
 ```
 ```maxoncstderr
 error E3008: <fragment>:13:10: typealias 'Pair' is not exported
+```
+
+<!-- test: a-let-vector-read-is-range-known -->
+A `Vector from […]` bound by `let` is a constant, so a value read from it carries the range of the elements written.
+```maxon
+typealias Small = int(0 to 100)
+
+function take(v Small) returns Small
+	return v
+end 'take'
+
+function main() returns ExitCode
+	let v = Vector from [10, 20, 30]
+	let a = try v.get(1) otherwise 0
+	print("{take(a)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+20
+```
+
+<!-- test: error.a-let-vector-read-outside-a-narrower-alias -->
+The range a `let` vector's elements carry is checked at the use, and the reachable extreme is named.
+```maxon
+typealias Small = int(0 to 100)
+
+function take(v Small) returns Small
+	return v
+end 'take'
+
+function main() returns ExitCode
+	let v = Vector from [10, 2000]
+	let a = try v.get(0) otherwise 0
+	let b = take(a)
+	return b as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:11:10: Value 2000 is outside the range of 'Small' (int(0 to 100))
+```
+
+<!-- test: error.a-let-vector-mutation-is-refused -->
+A `let` vector literal is immutable, so a write through it is refused as a `let` array's is.
+```maxon
+function main() returns ExitCode
+	let v = Vector from [10, 20, 30]
+	try v.set(0, value: 99) otherwise ignore
+	return v.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:4:8: cannot pass 'v', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
 ```

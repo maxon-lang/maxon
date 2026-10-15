@@ -178,6 +178,7 @@ export type FuncReturnTypeEntry
 	export var opaqueParams as OpaqueParamInfo
 	export let paramNames as NameRoster
 	export let paramTypes as MaxonTypeArray
+	export let paramDeclaredBrands as NameRoster
 
 	// The bare NAME the `returns` clause wrote, when it wrote one — `DenseColumn` for
 	// `returns DenseColumn`, and `none` for `returns Array with Integer`, for a primitive, or for no
@@ -194,8 +195,8 @@ export type FuncReturnTypeEntry
 	// ⚠ **THE THREE EMPTY DEFAULTS ARE FRESH, NOT SHARED ANCHORS.** A default naming a module-level `let`
 	// makes that anchor an export nothing calls, which `checkUnusedExports` reports as E3092. An empty
 	// container costs a record; the anchor costs a build.
-	export static function create(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility, takesReceiver bool = false, opaqueParams OpaqueParamInfo = sharedNoOpaqueParams, paramNames NameRoster = NameRoster.create(), paramTypes MaxonTypeArray = MaxonTypeArray.create(), returnAliasName ReturnAliasSpelling = ReturnAliasSpelling.none, nameLine LineNumber = 0, nameColumn ColumnNumber = 0) returns FuncReturnTypeEntry
-		return Self{name: name, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver, opaqueParams: opaqueParams, paramNames: paramNames, paramTypes: paramTypes, returnAliasName: returnAliasName, nameLine: nameLine, nameColumn: nameColumn}
+	export static function create(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility, takesReceiver bool = false, opaqueParams OpaqueParamInfo = sharedNoOpaqueParams, paramNames NameRoster = NameRoster.create(), paramTypes MaxonTypeArray = MaxonTypeArray.create(), paramDeclaredBrands NameRoster = NameRoster.create(), returnAliasName ReturnAliasSpelling = ReturnAliasSpelling.none, nameLine LineNumber = 0, nameColumn ColumnNumber = 0) returns FuncReturnTypeEntry
+		return Self{name: name, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver, opaqueParams: opaqueParams, paramNames: paramNames, paramTypes: paramTypes, paramDeclaredBrands: paramDeclaredBrands, returnAliasName: returnAliasName, nameLine: nameLine, nameColumn: nameColumn}
 	end 'create'
 end 'FuncReturnTypeEntry'
 
@@ -501,6 +502,7 @@ export type FileParseArtifact
 	// `project.pendingFunctionTypeDoors` by `commitPendingFunctionTypeDoors`; the check itself is drained
 	// after RESOLUTION (see PendingFunctionTypeDoor).
 	export var pendingFunctionTypeDoors as PendingFunctionTypeDoorArray
+	export var pendingBrandRecords as PendingBrandRecordArray
 
 	// ⭐ Sites that used none of a call's result, folded into `project.pendingDiscardedResults` by
 	// `commitPendingDiscardedResults`; drained beside the list above, after the effect summary is
@@ -661,6 +663,7 @@ export type FileParseArtifact
 			overloadSets: noOverloadSets,
 			pendingFnMergeChecks: PendingFnMergeCheckArray.create(),
 			pendingFunctionTypeDoors: PendingFunctionTypeDoorArray.create(),
+			pendingBrandRecords: PendingBrandRecordArray.create(),
 			pendingDiscardedResults: PendingDiscardedResultArray.create(),
 			rangeChecks: FunctionRangeCheckEntryArray.create(),
 			typeAliases: RangedTypeAliasArray.create(),
@@ -999,6 +1002,10 @@ export type FileParseArtifact
 		self.pendingFunctionTypeDoors.push(door.clone())
 	end 'recordFunctionTypeDoor'
 
+	export function recordBrandRecord(record PendingBrandRecord)
+		self.pendingBrandRecords.push(record.clone())
+	end 'recordBrandRecord'
+
 	// Record a statement that used none of a call's result (see PendingDiscardedResult).
 	export function recordDiscardedResult(site PendingDiscardedResult)
 		self.pendingDiscardedResults.push(site.clone())
@@ -1033,6 +1040,7 @@ export type FileParseArtifact
 		cacheWriteOverloadSetTable(writer, value: self.overloadSets)
 		cacheWritePendingFnMergeCheckArray(writer, value: self.pendingFnMergeChecks)
 		cacheWritePendingFunctionTypeDoorArray(writer, value: self.pendingFunctionTypeDoors)
+		cacheWritePendingBrandRecordArray(writer, value: self.pendingBrandRecords)
 		cacheWritePendingDiscardedResultArray(writer, value: self.pendingDiscardedResults)
 		cacheWriteFunctionRangeCheckEntryArray(writer, value: self.rangeChecks)
 		cacheWriteRangedTypeAliasArray(writer, value: self.typeAliases)
@@ -1077,6 +1085,7 @@ export type FileParseArtifact
 		let f_overloadSets = try cacheReadOverloadSetTable(reader)
 		let f_pendingFnMergeChecks = try cacheReadPendingFnMergeCheckArray(reader)
 		let f_pendingFunctionTypeDoors = try cacheReadPendingFunctionTypeDoorArray(reader)
+		let f_pendingBrandRecords = try cacheReadPendingBrandRecordArray(reader)
 		let f_pendingDiscardedResults = try cacheReadPendingDiscardedResultArray(reader)
 		let f_rangeChecks = try cacheReadFunctionRangeCheckEntryArray(reader)
 		let f_typeAliases = try cacheReadRangedTypeAliasArray(reader)
@@ -1101,11 +1110,11 @@ export type FileParseArtifact
 		let f_parseMints = try cacheReadParseMints(reader)
 		let f_instanceIdsInUse = try cacheReadGenericInstanceIdArray(reader)
 
-		return Self{filePath: f_filePath, livesUnderStdlibDirectory: f_livesUnderStdlibDirectory, typeIdsAreProjectGlobal: f_typeIdsAreProjectGlobal, module: f_module, opRanges: f_opRanges, covPoints: f_covPoints, asyncSpawnSites: f_asyncSpawnSites, serviceAwaitSites: f_serviceAwaitSites, registryUseSites: f_registryUseSites, allocTagSites: f_allocTagSites, debugStreamNameSites: f_debugStreamNameSites, immortalConstArraySites: f_immortalConstArraySites, valueOrigins: f_valueOrigins, deferralSources: f_deferralSources, funcSignatures: f_funcSignatures, overloadSets: f_overloadSets, pendingFnMergeChecks: f_pendingFnMergeChecks, pendingFunctionTypeDoors: f_pendingFunctionTypeDoors, pendingDiscardedResults: f_pendingDiscardedResults, rangeChecks: f_rangeChecks, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, structTypes: f_structTypes, enumTypes: f_enumTypes, interfaces: f_interfaces, typeNameDecls: f_typeNameDecls, genericInstanceRequests: f_genericInstanceRequests, usedTypeNames: f_usedTypeNames, memberAccessedTypeNames: f_memberAccessedTypeNames, conformances: f_conformances, literalInitSites: f_literalInitSites, inferredInstantiationSites: f_inferredInstantiationSites, typeNames: f_typeNames, currentFuncIndex: f_currentFuncIndex, diagnostics: f_diagnostics, unusedTypeAliases: f_unusedTypeAliases, hiddenTypeNames: f_hiddenTypeNames, deferredParseErrors: f_deferredParseErrors, bindingHygieneDiagnostics: f_bindingHygieneDiagnostics, parseMints: f_parseMints, instanceIdsInUse: f_instanceIdsInUse}
+		return Self{filePath: f_filePath, livesUnderStdlibDirectory: f_livesUnderStdlibDirectory, typeIdsAreProjectGlobal: f_typeIdsAreProjectGlobal, module: f_module, opRanges: f_opRanges, covPoints: f_covPoints, asyncSpawnSites: f_asyncSpawnSites, serviceAwaitSites: f_serviceAwaitSites, registryUseSites: f_registryUseSites, allocTagSites: f_allocTagSites, debugStreamNameSites: f_debugStreamNameSites, immortalConstArraySites: f_immortalConstArraySites, valueOrigins: f_valueOrigins, deferralSources: f_deferralSources, funcSignatures: f_funcSignatures, overloadSets: f_overloadSets, pendingFnMergeChecks: f_pendingFnMergeChecks, pendingFunctionTypeDoors: f_pendingFunctionTypeDoors, pendingBrandRecords: f_pendingBrandRecords, pendingDiscardedResults: f_pendingDiscardedResults, rangeChecks: f_rangeChecks, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, structTypes: f_structTypes, enumTypes: f_enumTypes, interfaces: f_interfaces, typeNameDecls: f_typeNameDecls, genericInstanceRequests: f_genericInstanceRequests, usedTypeNames: f_usedTypeNames, memberAccessedTypeNames: f_memberAccessedTypeNames, conformances: f_conformances, literalInitSites: f_literalInitSites, inferredInstantiationSites: f_inferredInstantiationSites, typeNames: f_typeNames, currentFuncIndex: f_currentFuncIndex, diagnostics: f_diagnostics, unusedTypeAliases: f_unusedTypeAliases, hiddenTypeNames: f_hiddenTypeNames, deferredParseErrors: f_deferredParseErrors, bindingHygieneDiagnostics: f_bindingHygieneDiagnostics, parseMints: f_parseMints, instanceIdsInUse: f_instanceIdsInUse}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize328
-		return sizeof(FileParseArtifact) as CacheSize328
+	static function cacheLayoutBytes() returns CacheSize336
+		return sizeof(FileParseArtifact) as CacheSize336
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -1241,6 +1250,7 @@ function commitArtifactRegistries(project Project, artifact FileParseArtifact, o
 	commitOverloadSets(project, artifact: artifact)
 	commitPendingFnMergeChecks(project, artifact: artifact)
 	commitPendingFunctionTypeDoors(project, artifact: artifact)
+	commitPendingBrandRecords(project, artifact: artifact, opOffset: opOffset)
 	commitPendingDiscardedResults(project, artifact: artifact, opOffset: opOffset)
 	commitRangeChecks(project, artifact: artifact)
 	commitTypeAliases(project, artifact: artifact)
@@ -2068,8 +2078,8 @@ function renumberedOp(op MaxonOp, remap TypeIdRemap) returns MaxonOp
 		loadIndirect(result, addr, offset, valueType) gives MaxonOp.loadIndirect(result, addr: addr, offset: offset, valueType: remapMaxonType(valueType, remap: remap))
 		storeIndirect(addr, offset, value, valueType) gives MaxonOp.storeIndirect(addr, offset: offset, value: value, valueType: remapMaxonType(valueType, remap: remap))
 		sizeofType(result, targetType) gives MaxonOp.sizeofType(result, targetType: remapMaxonType(targetType, remap: remap))
-		witnessDispatch(result, args, witness, methodIndex, interfaceDeclIndex, isVoid, isThrowing) gives MaxonOp.witnessDispatch(result, args: args, witness: witness, methodIndex: methodIndex, interfaceDeclIndex: remap.applyInterface(interfaceDeclIndex), isVoid: isVoid, isThrowing: isThrowing)
-		witnessTryDispatch(result, errorFlag, args, witness, methodIndex, interfaceDeclIndex, isVoid) gives MaxonOp.witnessTryDispatch(result, errorFlag: errorFlag, args: args, witness: witness, methodIndex: methodIndex, interfaceDeclIndex: remap.applyInterface(interfaceDeclIndex), isVoid: isVoid)
+		witnessDispatch(result, args, argImmutableNames, witness, methodIndex, interfaceDeclIndex, isVoid, isThrowing) gives MaxonOp.witnessDispatch(result, args: args, argImmutableNames: argImmutableNames, witness: witness, methodIndex: methodIndex, interfaceDeclIndex: remap.applyInterface(interfaceDeclIndex), isVoid: isVoid, isThrowing: isThrowing)
+		witnessTryDispatch(result, errorFlag, args, argImmutableNames, witness, methodIndex, interfaceDeclIndex, isVoid) gives MaxonOp.witnessTryDispatch(result, errorFlag: errorFlag, args: args, argImmutableNames: argImmutableNames, witness: witness, methodIndex: methodIndex, interfaceDeclIndex: remap.applyInterface(interfaceDeclIndex), isVoid: isVoid)
 		call or
 		ret or
 		retVoid or
@@ -2341,6 +2351,12 @@ function commitPendingFunctionTypeDoors(project Project, artifact FileParseArtif
 		project.pendingFunctionTypeDoors.push(door)
 	end 'each'
 end 'commitPendingFunctionTypeDoors'
+
+function commitPendingBrandRecords(project Project, artifact FileParseArtifact, opOffset ElementIndex)
+	for record in artifact.pendingBrandRecords 'each'
+		project.pendingBrandRecords.push(record.relocated(opOffset))
+	end 'each'
+end 'commitPendingBrandRecords'
 
 // ⚠ The debug-stream names are NOT interned here. The order names take their INDICES in must be the
 // LOWERING's, which walks the merged module once; interning here would give them the merge's file order

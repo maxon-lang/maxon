@@ -93,7 +93,7 @@ takes a phi and the ELSE edge carries `r`'s incoming `7`. `3.5 > 9.5` is false, 
 edge is the one taken and 7 is the value that must arrive.
 ```maxon
 function main() returns ExitCode
-	var r = 7
+	var r = 7 as ExitCode
 	let x = 3.5
 	let y = 9.5
 	if x > y 'check'
@@ -113,7 +113,7 @@ pass THIS test — only `lt-nan-is-false` below can tell the two apart — so th
 read together.
 ```maxon
 function main() returns ExitCode
-	var r = 7
+	var r = 7 as ExitCode
 	let x = 3.5
 	let y = 9.5
 	if x < y 'check'
@@ -131,7 +131,7 @@ end 'main'
 operands take the then-branch.
 ```maxon
 function main() returns ExitCode
-	var r = 7
+	var r = 7 as ExitCode
 	let x = 4.25
 	let y = 4.25
 	if x <= y 'check'
@@ -150,7 +150,7 @@ else edge is reached by the fallthrough out of the SECOND block. `r`'s incoming 
 arrive on it.
 ```maxon
 function main() returns ExitCode
-	var r = 7
+	var r = 7 as ExitCode
 	let x = 3.5
 	let y = 2.5
 	if x == y 'check'
@@ -167,7 +167,7 @@ end 'main'
 The same lowering with the `je` TAKEN — the then edge, out of the second block, past a phi.
 ```maxon
 function main() returns ExitCode
-	var r = 7
+	var r = 7 as ExitCode
 	let x = 2.5
 	let y = 2.5
 	if x == y 'check'
@@ -196,10 +196,10 @@ saying why. Division by zero is a language-level error (a constant zero divisor 
 a possibly-zero one throws), so there is no route from a divide to a NaN at all. Overflow to
 `inf` and `inf - inf` are silent, which is exactly what this case needs.
 ```maxon
-var big = 1.0e308
+var big = 1.0e308 as FullRangeFloat
 
 function main() returns ExitCode
-	var r = 7
+	var r = 7 as ExitCode
 	let inf = big * 10.0
 	let nan = inf - inf
 	if nan == nan 'check'
@@ -218,10 +218,10 @@ the `jp` takes the THEN edge. So this is the same first-block jump as `eq-nan-el
 carrying a phi to the OTHER successor — a lowering that routed only the second block's jump
 through the trampoline fails here with `7` instead of `1`.
 ```maxon
-var big = 1.0e308
+var big = 1.0e308 as FullRangeFloat
 
 function main() returns ExitCode
-	var r = 7
+	var r = 7 as ExitCode
 	let inf = big * 10.0
 	let nan = inf - inf
 	if nan != nan 'check'
@@ -239,10 +239,10 @@ end 'main'
 which `ucomisd` SETS on unordered, so it would take the then-branch and return 1. Only an
 `above`-family jump on swapped operands returns 7.
 ```maxon
-var big = 1.0e308
+var big = 1.0e308 as FullRangeFloat
 
 function main() returns ExitCode
-	var r = 7
+	var r = 7 as ExitCode
 	let inf = big * 10.0
 	let nan = inf - inf
 	let x = 5.0
@@ -259,10 +259,10 @@ end 'main'
 <!-- test: le-nan-is-false -->
 `nan <= x` must be FALSE, for the same reason with ZF also set.
 ```maxon
-var big = 1.0e308
+var big = 1.0e308 as FullRangeFloat
 
 function main() returns ExitCode
-	var r = 7
+	var r = 7 as ExitCode
 	let inf = big * 10.0
 	let nan = inf - inf
 	let x = 5.0
@@ -282,10 +282,10 @@ unordered sets CF. It is here to pin that the lowering does NOT grow a `jp` it d
 need: if this ever starts emitting one, the `above` family's whole reason for existing has
 been forgotten.
 ```maxon
-var big = 1.0e308
+var big = 1.0e308 as FullRangeFloat
 
 function main() returns ExitCode
-	var r = 7
+	var r = 7 as ExitCode
 	let inf = big * 10.0
 	let nan = inf - inf
 	let x = 5.0
@@ -306,14 +306,14 @@ A float compare whose result is a VALUE rather than a branch condition — it is
 and `nan != nan` materializes TRUE, which for `==` means the parity bit has to be folded
 into the byte `sete` produced rather than into a jump.
 ```maxon
-var big = 1.0e308
+var big = 1.0e308 as FullRangeFloat
 
 function main() returns ExitCode
 	let inf = big * 10.0
 	let nan = inf - inf
 	let a = nan == nan
 	let b = nan != nan
-	var r = 0
+	var r = 0 as ExitCode
 	if a 'isEq'
 		r = r + 1
 	end 'isEq'
@@ -347,12 +347,12 @@ typealias Num = int(i64.min to i64.max)
 
 function classify(x Num, n Num) returns Num
 	let small = x < 10
-	var acc = 0
+	var acc = 0 as Num
 	if small 'first'
 		acc = acc + 1
 	end 'first'
 
-	var i = 0
+	var i = 0 as Num
 	while i < n 'loop'
 		acc = acc + i
 		i = i + 1

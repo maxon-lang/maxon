@@ -133,7 +133,7 @@ the mechanism. Its POSIX sibling below asserts the same property in that platfor
 ```maxon
 function main() returns ExitCode
 	let exe = try Process.executablePath() otherwise return 2
-	var score = 0
+	var score = 0 as Count
 	if exe.path.byteLength() > 3 'longerThanADrive'
 		score = score + 1
 	end 'longerThanADrive'
@@ -160,7 +160,7 @@ widened pair. Nothing here compares the two spellings; each lane asserts its own
 ```maxon
 function main() returns ExitCode
 	let exe = try Process.executablePath() otherwise return 2
-	var score = 0
+	var score = 0 as Count
 	if exe.path.byteLength() > 1 'longerThanTheRoot'
 		score = score + 1
 	end 'longerThanTheRoot'
@@ -218,8 +218,8 @@ exit, which the runtime reports as exit 101 rather than as a wrong number. The l
 so every answer is read, not merely produced.
 ```maxon
 function main() returns ExitCode
-	var seen = 0
-	var i = 0
+	var seen = 0 as Count
+	var i = 0 as Count
 	while i < 50 'reads'
 		let mm = __Builtins.executablePath()
 		if mm.length() > 0 'nonEmpty'

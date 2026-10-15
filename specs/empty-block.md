@@ -50,7 +50,7 @@ error E3082: specs/empty-block/empty-else.maxon:6:2: empty block: 'otherwise'
 <!-- test: empty-while -->
 ```maxon
 function main() returns ExitCode
-	var x = 5
+	var x = 5 as Count
 	while x > 0 'loop'
 	end 'loop'
 	return 0
@@ -96,7 +96,7 @@ typealias IntArray = Array with Int
 function main() returns ExitCode
 	var a = IntArray.create()
 	a.push(1)
-	var n = 0
+	var n = 0 as Int
 	n = try a.get(0) otherwise 'oops'
 	end 'oops'
 	return n as ExitCode

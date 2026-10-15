@@ -33,14 +33,14 @@ moved into its caller, which would leave this pin holding an emitted leftover.
 function main() returns ExitCode
 	let first = __Builtins.currentUnixTimeSeconds()
 	let second = __Builtins.currentUnixTimeSeconds()
-	var score = 0
+	var score = 0 as ExitCode
 	if second >= first 'nondecreasing'
 		score = score + 1
 	end 'nondecreasing'
 	if first > 1735689600 'afterKnownPast'
 		score = score + 1
 	end 'afterKnownPast'
-	return score as ExitCode
+	return score
 end 'main'
 ```
 ```exitcode
@@ -69,18 +69,18 @@ func @main {
     x64.callDirect __clock_now_unix_s
     x64.movRegImm32 rax, 0
     x64.cmpRegReg r8, rbx
-    x64.jcc less, ifcont
+    x64.jcc less, ifcont#2
   nondecreasing:
     x64.movRegImm32 rax, 1
-  ifcont:
+  ifcont#2:
     x64.cmpRegImm32 rbx, 1735689600
     x64.jcc lessEqual, critsplit
   afterKnownPast:
     x64.leaRegRegImm32 r8, rax, 1
-    x64.jmp __rc_ok
+    x64.jmp ifcont#4
   critsplit:
     x64.movRegReg r8, rax
-  __rc_ok:
+  ifcont#4:
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
@@ -115,7 +115,7 @@ func @__clock_now_unix_s {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at Clock.maxon:73: Range check failed: value outside typealias 'FileTimeTicks'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at Clock.maxon:73: Range check failed: value outside typealias 'FileTimeTicks'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -142,18 +142,18 @@ func @main {
     x64.callDirect __clock_now_unix_s
     x64.movRegImm32 rax, 0
     x64.cmpRegReg r8, rbx
-    x64.jcc less, ifcont
+    x64.jcc less, ifcont#2
   nondecreasing:
     x64.movRegImm32 rax, 1
-  ifcont:
+  ifcont#2:
     x64.cmpRegImm32 rbx, 1735689600
     x64.jcc lessEqual, critsplit
   afterKnownPast:
     x64.leaRegRegImm32 r8, rax, 1
-    x64.jmp __rc_ok
+    x64.jmp ifcont#4
   critsplit:
     x64.movRegReg r8, rax
-  __rc_ok:
+  ifcont#4:
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
@@ -188,7 +188,7 @@ func @__clock_now_unix_s {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at Clock.maxon:73: Range check failed: value outside typealias 'FileTimeTicks'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at Clock.maxon:73: Range check failed: value outside typealias 'FileTimeTicks'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -214,16 +214,16 @@ func @main {
     arm64.b.lt critsplit
   nondecreasing:
     arm64.movImm x0, 1
-    arm64.b ifcont
+    arm64.b ifcont#2
   critsplit:
     arm64.movRegReg x0, x1
-  ifcont:
+  ifcont#2:
     arm64.movImm x16, 1735689600
     arm64.cmp x19, x16
-    arm64.b.le __rc_ok
+    arm64.b.le ifcont#4
   afterKnownPast:
     arm64.add x0, x0, 1
-  __rc_ok:
+  ifcont#4:
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
@@ -253,7 +253,7 @@ func @__clock_now_unix_s {
     arm64.epilogue 16
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at Clock.maxon:73: Range check failed: value outside typealias 'FileTimeTicks'\x0a"
+    arm64.leaRdata x0, __str_blob_2  ; "panic at Clock.maxon:73: Range check failed: value outside typealias 'FileTimeTicks'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.epilogue 16
@@ -280,16 +280,16 @@ func @main {
     arm64.b.lt critsplit
   nondecreasing:
     arm64.movImm x0, 1
-    arm64.b ifcont
+    arm64.b ifcont#2
   critsplit:
     arm64.movRegReg x0, x1
-  ifcont:
+  ifcont#2:
     arm64.movImm x16, 1735689600
     arm64.cmp x19, x16
-    arm64.b.le __rc_ok
+    arm64.b.le ifcont#4
   afterKnownPast:
     arm64.add x0, x0, 1
-  __rc_ok:
+  ifcont#4:
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
@@ -319,7 +319,7 @@ func @__clock_now_unix_s {
     arm64.epilogue 16
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_1  ; "panic at Clock.maxon:73: Range check failed: value outside typealias 'FileTimeTicks'\x0a"
+    arm64.leaRdata x0, __str_blob_2  ; "panic at Clock.maxon:73: Range check failed: value outside typealias 'FileTimeTicks'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.epilogue 16

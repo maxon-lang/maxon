@@ -82,7 +82,7 @@ let Arm64GtRegistersPerPair = 2
 // ⭐ Enforce the cross-tier byte-match. Called at chunk-build time, so an async compile for arm64 panics
 // the moment the two sides disagree.
 function assertArm64GtFrameConsistent(target Target)
-	let framedBytes = (arm64GtSavedPairCount() as ParsedInt) * Arm64GtPairBytes
+	let framedBytes = (arm64GtSavedPairCount() as FullRangeInt) * Arm64GtPairBytes
 	let declared = gtInitialFrameBytes(target)
 
 	if framedBytes != declared 'drift'
@@ -866,7 +866,7 @@ let Arm64GuardSaveBytes = 16 as StackSize
 // they are declared together with it rather than chosen here.
 let Arm64GuardScratchReg = Arm64Register.x13
 
-export function arm64WidestGuardedFrame(margin ParsedInt) returns StackSize
+export function arm64WidestGuardedFrame(margin FullRangeInt) returns StackSize
 	return (Arm64AddSubImmWideMax as StackSize) - (margin as StackSize) - Arm64GuardSaveBytes
 end 'arm64WidestGuardedFrame'
 
@@ -885,7 +885,7 @@ end 'arm64WidestGuardedFrame'
 // It emits into the function's own byte stream with a guard-local branch table, exactly as the x64
 // twin does, so it is invisible to the rendered Target IR and is verified by the run plus a
 // disassembly instead.
-export function emitArm64GtStackGuard(code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, frameBytes StackSize, margin ParsedInt, site GtGuardSite, target Target)
+export function emitArm64GtStackGuard(code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, frameBytes StackSize, margin FullRangeInt, site GtGuardSite, target Target)
 	var asm = Arm64RuntimeAsm.beginRawFunction()
 	let top = asm.newLabel()
 	let skip = asm.newLabel()
@@ -1113,7 +1113,7 @@ end 'buildArm64DarwinLibcCallChunk'
 // written only by the thread that IS this machine, and the only other party reads it from a signal handler
 // running on that same thread — so there is no interleaving for an exclusive pair to prevent, and an
 // exclusive pair here would be a reservation the stop itself could break.
-function emitArm64ShimLockDepthStep(asm Arm64RuntimeAsm, m Arm64Register, delta ParsedInt, scratch Arm64Register)
+function emitArm64ShimLockDepthStep(asm Arm64RuntimeAsm, m Arm64Register, delta FullRangeInt, scratch Arm64Register)
 	arm64EmitLoadWord64At(asm, dest: scratch, base: m, byteOffset: MOffLocks as MachineWord)
 	arm64EmitAddRuntimeImm(asm, dest: scratch, base: scratch, imm: delta as Imm32)
 	arm64EmitStoreWord64At(asm, src: scratch, base: m, byteOffset: MOffLocks as MachineWord)

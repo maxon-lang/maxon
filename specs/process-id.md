@@ -85,7 +85,7 @@ call site that keeps it true, not the ABI; see the section above.
 function main() returns ExitCode
 	let pid = Process.id()
 	let dwordLimit = 4294967296
-	var score = 0
+	var score = 0 as Count
 	if pid > 0 'aboveZero'
 		score = score + 1
 	end 'aboveZero'
@@ -108,7 +108,7 @@ function main() returns ExitCode
 	let first = Process.id()
 	let second = Process.id()
 	let third = Process.id()
-	var score = 0
+	var score = 0 as Count
 	if first == second 'firstPair'
 		score = score + 1
 	end 'firstPair'
@@ -145,7 +145,7 @@ function main() returns ExitCode
 	let result = try Subprocess.run(exe, arguments: argv) otherwise return 21
 	let childPid = result.pid
 	let selfPid = Process.id()
-	var score = 0
+	var score = 0 as Count
 	if childPid > 0 'childHasAnId'
 		score = score + 1
 	end 'childHasAnId'

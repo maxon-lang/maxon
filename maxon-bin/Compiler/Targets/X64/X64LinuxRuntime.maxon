@@ -459,7 +459,7 @@ end 'x64LinuxEmitStashErrno'
 // Publish a known errno rather than one a syscall just answered: the walk's clear before each step
 // (`PosixErrno.cleared`, which is how end-of-iteration reaches `ERROR_NO_MORE_FILES`), and the
 // places a reason has to be invented because no call failed.
-function x64LinuxEmitPublishErrno(asm X64RuntimeAsm, value ParsedInt)
+function x64LinuxEmitPublishErrno(asm X64RuntimeAsm, value FullRangeInt)
 	encodeMovRegImm32(asm.code, dest: X64Register.rsi, value: value as MachineWord)
 	x64LinuxEmitStoreErrno(asm, valueReg: X64Register.rsi)
 end 'x64LinuxEmitPublishErrno'
@@ -4211,7 +4211,7 @@ function buildX64LinuxShmUnmapChunk() returns FunctionCodeChunk
 	return asm.finishFunction(HostShmUnmapName)
 end 'buildX64LinuxShmUnmapChunk'
 
-function x64LinuxEmitEnsureStdDescriptor(asm X64RuntimeAsm, descriptor ParsedInt, refused BlockId)
+function x64LinuxEmitEnsureStdDescriptor(asm X64RuntimeAsm, descriptor FullRangeInt, refused BlockId)
 	let present = asm.newLabel()
 
 	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: descriptor as MachineWord)

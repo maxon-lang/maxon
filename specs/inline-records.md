@@ -97,7 +97,7 @@ function main() returns ExitCode
 	end 'build'
 	let after = HeapStats.allocationsLive()
 
-	var sum = 0
+	var sum = 0 as Half
 	for p in holder 'read'
 		sum = sum + p.lo
 	end 'read'
@@ -223,7 +223,7 @@ function main() returns ExitCode
 		return 3
 	end 'alloc'
 
-	var sum = 0
+	var sum = 0 as Half
 	for p in arr 'read'
 		sum = sum + p.lo
 	end 'read'
@@ -282,7 +282,7 @@ function main() returns ExitCode
 		m.upsert(k, value: k.x)
 	end 'insert'
 
-	var found = 0
+	var found = 0 as Count
 	for k in keys 'lookup'
 		if m.contains(k) 'hit'
 			found = found + 1
@@ -718,9 +718,8 @@ error E3005: specs/inline-records/inline-records.field-range-check-at-the-door.m
 ```
 
 <!-- test: inline-records.runtime-field-range-check -->
-CONTROL: a value the compiler cannot fold panics at the field's door, the second field's as readily as the
-first's. The panic is reported at the factory's own door — the parameter is where the laundered value
-arrives — so the frame is the static method's.
+CONTROL: a sum of two in-range values of the field's own alias, which the compiler cannot fold, panics at the field's
+door in the factory. The second field is checked as readily as the first.
 ```maxon
 typealias Nib = int(0 to 15)
 
@@ -729,14 +728,12 @@ type Duo
 	export let b as Nib
 
 	static function create(a Nib, b Nib) returns Self
-		return Self{a: a, b: b}
+		return Self{a: a, b: b + b}
 	end 'create'
 end 'Duo'
 
 function main() returns ExitCode
-	var bad = 4
-	bad = bad * 5
-	let d = Duo.create(1, b: bad)
+	let d = Duo.create(1, b: 8)
 	return d.a + d.b
 end 'main'
 ```
@@ -744,7 +741,37 @@ end 'main'
 1
 ```
 ```stderr
-panic at inline-records.runtime-field-range-check.test:8: Range check failed: value outside typealias 'Nib'
+panic at inline-records.runtime-field-range-check.test:9: Range check failed: value outside typealias 'Nib'
+Stack trace:
+  in Duo.create
+  in main
+  in mrt_start
+```
+
+<!-- test: inline-records.runtime-first-field-range-check -->
+CONTROL: the first field's door is the same door.
+```maxon
+typealias Nib = int(0 to 15)
+
+type Duo
+	export let a as Nib
+	export let b as Nib
+
+	static function create(a Nib, b Nib) returns Self
+		return Self{a: a + a, b: b}
+	end 'create'
+end 'Duo'
+
+function main() returns ExitCode
+	let d = Duo.create(8, b: 1)
+	return d.a + d.b
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at inline-records.runtime-first-field-range-check.test:9: Range check failed: value outside typealias 'Nib'
 Stack trace:
   in Duo.create
   in main

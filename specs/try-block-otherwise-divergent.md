@@ -56,7 +56,7 @@ function maybeFail(b bool) returns Integer throws PanicNotHitError
 end 'maybeFail'
 
 function main() returns ExitCode
-	var total = 0
+	var total = 0 as Integer
 	try 'work'
 		let a = maybeFail(false)
 		let b = maybeFail(false)
@@ -86,7 +86,7 @@ function maybeFail(b bool) returns Integer throws PanicHitError
 end 'maybeFail'
 
 function main() returns ExitCode
-	var total = 0
+	var total = 0 as Integer
 	try 'work'
 		let a = maybeFail(true)
 		total = a
@@ -125,7 +125,7 @@ function maybeFail(b bool) returns Integer throws ThrowsNotHitInner
 end 'maybeFail'
 
 function compute() returns Integer throws ThrowsNotHitOuter
-	var total = 0
+	var total = 0 as Integer
 	try 'work'
 		let a = maybeFail(false)
 		total = a
@@ -163,7 +163,7 @@ function maybeFail(b bool) returns Integer throws ThrowsHitInner
 end 'maybeFail'
 
 function compute() returns Integer throws ThrowsHitOuter
-	var total = 0
+	var total = 0 as Integer
 	try 'work'
 		let a = maybeFail(true)
 		total = a
@@ -201,7 +201,7 @@ function maybeFail(b bool) returns Integer throws BindingWrapInner
 end 'maybeFail'
 
 function compute() returns Integer throws BindingWrapOuter
-	var total = 0
+	var total = 0 as Integer
 	try 'work'
 		let a = maybeFail(true)
 		total = a
@@ -235,7 +235,7 @@ function maybeFail(b bool) returns Integer throws UnusedBindingError
 end 'maybeFail'
 
 function main() returns ExitCode
-	var total = 0
+	var total = 0 as Integer
 	try 'work'
 		let a = maybeFail(true)
 		total = a

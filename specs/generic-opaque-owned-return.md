@@ -97,7 +97,7 @@ end 'fresh'
 
 function main() returns ExitCode
 	let t = TextHolder.create("a held string long enough to force a heap allocation")
-	var i = 0
+	var i = 0 as Count
 	while i < 100 'spin'
 		if t.remade().byteLength() == 0 'empty'
 			return 1
@@ -280,7 +280,7 @@ typealias TextHolder = Holder with String
 
 function main() returns ExitCode
 	let t = TextHolder.create("a held string long enough to force a heap allocation")
-	var i = 0
+	var i = 0 as Count
 	while i < 100 'spin'
 		let got = t.get()
 		print("{got}")

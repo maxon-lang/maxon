@@ -385,7 +385,7 @@ function main() returns ExitCode
 		replies.push(setter.apply())
 	end 'spawnEach'
 
-	var applied = 0
+	var applied = 0 as Integer
 
 	for r in replies 'awaitEach'
 		applied = applied + (try await r otherwise 0)

@@ -110,7 +110,7 @@ type Config
 end 'Config'
 
 var chosen = Colour.green
-var top = u8.max
+var top = u8.max as Count
 
 function main() returns ExitCode
 	if chosen == Colour.green 'isGreen'

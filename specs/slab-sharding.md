@@ -91,7 +91,7 @@ typealias IntPromise = Promise with Integer
 typealias IntPromiseArray = Array with IntPromise
 
 function churn(idx Integer) returns Integer
-	var acc = 0
+	var acc = 0 as Integer
 	for j in 0 upto 60 'alloc'
 		let tmp = "shard-{idx}-slot-{j}"
 		if not tmp.isEmpty() 'nonEmpty'
@@ -116,7 +116,7 @@ function main() returns ExitCode
 		kept.push(async survivor(k))
 	end 'spawnKeep'
 
-	var total = 0
+	var total = 0 as Integer
 	for c in churns 'awaitChurn'
 		total = total + await c
 	end 'awaitChurn'
@@ -177,7 +177,7 @@ function build(seed Seed) returns ByteArray
 end 'build'
 
 function work() returns Integer
-	var acc = 0
+	var acc = 0 as FullRangeInt
 	for j in 0 upto 200 'alloc'
 		let tmp = "post-scheduler-{j}"
 		if not tmp.isEmpty() 'nonEmpty'
@@ -202,7 +202,7 @@ function main() returns ExitCode
 
 	// Read the pre-scheduler population back, THEN drop it — every one of these frees is of a
 	// slot on a span that no processor owns, with a scheduler running.
-	var bad = 0
+	var bad = 0 as FullRangeInt
 	for (iter, b) in early.withIterator() 'check'
 		let seed = iter.index()
 		if b.count() != 48 'length'
@@ -293,7 +293,7 @@ function main() returns ExitCode
 		keep.push(build((k + 900) as Seed))
 	end 'survivors'
 
-	var bad = 0
+	var bad = 0 as FullRangeInt
 	for (iter, b) in keep.withIterator() 'check'
 		let seed = iter.index() + 900
 		if b.count() != 80 'length'
@@ -418,7 +418,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias Count = int(0 to 65536)
 
 function churn(seed Count) returns Integer
-	var acc = 0
+	var acc = 0 as FullRangeInt
 	for j in 0 upto 400 'alloc'
 		let tmp = "count-{seed}-{j}"
 		if not tmp.isEmpty() 'nonEmpty'
@@ -457,7 +457,7 @@ function main() returns ExitCode
 	let first = totalMid - totalBefore
 	let second = totalAfter - totalMid
 
-	var score = 0
+	var score = 0 as FullRangeInt
 	if liveAfter == liveBefore 'liveCameBack'
 		score = score + 1
 	end 'liveCameBack'
@@ -527,26 +527,26 @@ end 'Sink'
 
 function main() returns ExitCode
 	var sinks = SinkHandleArray.create()
-	var i = 0
+	var i = 0 as Integer
 	while i < sinkCount 'spawnEach'
 		sinks.push(spawn Sink.create())
 		i = i + 1
 	end 'spawnEach'
 
-	var delivered = 0
-	var wave = 0
+	var delivered = 0 as Integer
+	var wave = 0 as Integer
 	while wave < waves 'waves'
 		var replies = CountPromiseArray.create()
-		var k = 0
+		var k = 0 as Integer
 		while k < sinkCount 'sendEach'
-			let s = try sinks.get(k) otherwise panic("sinks.get OOB at {k}")
+			let s = try sinks.get(k as ElementIndex) otherwise panic("sinks.get OOB at {k}")
 			replies.push(s.take("payload-{k}-{wave}"))
 			k = k + 1
 		end 'sendEach'
 
-		var n = 0
+		var n = 0 as Integer
 		while n < sinkCount 'collect'
-			let p = try replies.get(n) otherwise panic("replies.get OOB at {n}")
+			let p = try replies.get(n as ElementIndex) otherwise panic("replies.get OOB at {n}")
 			delivered = delivered + (try await p otherwise 0)
 			n = n + 1
 		end 'collect'

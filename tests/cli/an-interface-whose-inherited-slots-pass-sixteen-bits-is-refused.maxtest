@@ -1,0 +1,24 @@
+let InheritedCaseDirName = "declaration-limit-inherited-slots"
+let InheritedRefusal = "more than 65535 witness slots"
+let MethodsPerInterface = 40000
+
+test 'an interface whose own and inherited methods pass 65,535 is refused'
+	try requireDeclarationRefused(InheritedCaseDirName, source: inheritedSlotsSource(), refusal: InheritedRefusal)
+end 'an interface whose own and inherited methods pass 65,535 is refused'
+
+function inheritedSlotsSource() returns String
+	var text = "{DeclarationPrelude}interface Base\n"
+
+	for i in 0 upto MethodsPerInterface 'eachBaseMethod'
+		text.append("\tfunction b{i}()\n")
+	end 'eachBaseMethod'
+
+	text.append("end 'Base'\n\ninterface Derived extends Base\n")
+
+	for i in 0 upto MethodsPerInterface 'eachDerivedMethod'
+		text.append("\tfunction d{i}()\n")
+	end 'eachDerivedMethod'
+
+	text.append("end 'Derived'\n\n{DeclarationMain}")
+	return text
+end 'inheritedSlotsSource'

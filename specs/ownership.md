@@ -142,7 +142,7 @@ type Widget
 end 'Widget'
 
 function testNestedBlock(cond bool)
-	var result = 0
+	var result = 0 as Integer
 	if cond 'check'
 		@heap let w = Widget.create(42)
 		result = w.id
@@ -367,7 +367,7 @@ typealias NodeArray = Array with Node
 
 function main() returns ExitCode
 	var arr = NodeArray.create()
-	var count = 0
+	var count = 0 as Count
 	if true 'scope'
 		let n = Node.create(10)
 		arr.push(n)
@@ -440,12 +440,12 @@ typealias ItemArray = Array with Item
 
 function main() returns ExitCode
 	var arr = ItemArray.create()
-	var i = 0
+	var i = 0 as Integer
 	while i < 10 'push'
 		arr.push(Item.create(i))
 		i = i + 1
 	end 'push'
-	var total = 0
+	var total = 0 as Integer
 	while arr.count() > 0 'remove'
 		let elem = try arr.remove(0) otherwise 'err'
 			return 99
@@ -789,12 +789,12 @@ typealias ItemArray = Array with Item
 var globalArr = ItemArray.create()
 
 function main() returns ExitCode
-	var i = 0
+	var i = 0 as Integer
 	while i < 20 'push'
 		globalArr.push(Item.create(i))
 		i = i + 1
 	end 'push'
-	var total = 0
+	var total = 0 as Integer
 	while globalArr.count() > 0 'remove'
 		let elem = try globalArr.remove(0) otherwise 'err'
 			return 99
@@ -826,7 +826,7 @@ type Widget
 end 'Widget'
 
 function main() returns ExitCode
-	var result = 0
+	var result = 0 as Integer
 	if true 'check'
 		@heap let w = Widget.create(5)
 		result = w.id
@@ -894,8 +894,8 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	var total = 0
-	var i = 0
+	var total = 0 as Integer
+	var i = 0 as Integer
 	while i < 5 'loop'
 		@heap let c = Counter.create(i)
 		total = total + c.val
@@ -932,7 +932,7 @@ function main() returns ExitCode
 	scores.push(Score.create(10))
 	scores.push(Score.create(20))
 	scores.push(Score.create(30))
-	var total = 0
+	var total = 0 as Integer
 	for s in scores 'loop'
 		total = total + s.points
 	end 'loop'
@@ -967,7 +967,7 @@ end 'Paint'
 
 function main() returns ExitCode
 	let c = Color.red
-	var result = 0
+	var result = 0 as Integer
 	var p = Paint.create(0)
 	match c 'pick'
 		red then p = Paint.create(7)
@@ -999,8 +999,8 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	var total = 0
-	var i = 0
+	var total = 0 as Integer
+	var i = 0 as Integer
 	while i < 5 'loop'
 		let c = Counter.create(i)
 		if i == 3 'brk'
@@ -1035,8 +1035,8 @@ type Item
 end 'Item'
 
 function main() returns ExitCode
-	var total = 0
-	var i = 0
+	var total = 0 as Integer
+	var i = 0 as Integer
 	while i < 5 'loop'
 		let item = Item.create(i)
 		i = i + 1
@@ -1485,7 +1485,7 @@ type Wrap
 	export var mark as Tally
 
 	static function make(p String) returns Wrap
-		var mark = 0
+		var mark = 0 as Tally
 		for p in 0 upto 2 'digits'
 			mark = mark + p
 		end 'digits'

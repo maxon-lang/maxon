@@ -250,7 +250,7 @@ end 'main'
 ```
 
 An empty literal `''`, or one holding two characters, is **E2016**. A character literal beside an integer
-operand is its codepoint (`cp - '0'`).
+operand is its codepoint, a `Codepoint` (`cp - '0'`).
 
 ### String Literals
 
@@ -336,10 +336,17 @@ Every character becomes exactly one byte: `\xNN` is the byte `NN`, and a charact
 ### Array and Dictionary Literals
 
 ```maxon
-let primes = [2, 3, 5, 7]              // an Array
-let ages = ["ada": 36, "alan": 41]     // a Map
+typealias Age = int(0 to 150)
+typealias AgeArray = Array with Age
+
+let primes = [2, 3, 5, 7]              // a constant Array
+let ages = ["ada": 36, "alan": 41]     // a constant Map
+var known = ["ada": 36 as Age]         // a Map with (String, Age) that can grow
+var seen = AgeArray from [36, 41]      // an AgeArray that can grow
 ```
 
-The element type comes from the first element (or pair). See
-[Initializing From Literals](/docs/language/composite-types/#initializing-from-literals) for literals of
-other collection types.
+The element type comes from the first element (or pair). A `let` bound to a literal of bare numbers is a
+constant: its elements fit any element alias that admits them at each use, and it is immutable — a method
+that writes it is **E3159**. A `var` of such a literal is **E2004**: cast the numbers, or name the alias of an
+`Array`, `Set`, `List` or `Vector` (`AgeArray from [...]`). See
+[Initializing From Literals](/docs/language/composite-types/#initializing-from-literals) for literals of other collection types.

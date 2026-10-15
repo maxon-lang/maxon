@@ -521,7 +521,7 @@ Value {x} is 42
 <!-- test: interpolation-loop -->
 ```maxon
 function main() returns ExitCode
-	var i = 0
+	var i = 0 as FullRangeInt
 	while i < 3 'loop'
 		print("Count: {i}\n")
 		i = i + 1
@@ -1733,7 +1733,7 @@ and the leak gate reports exit 101 instead of 0.
 <!-- test: interp-temporary-dropped-per-loop-iteration -->
 ```maxon
 function main() returns ExitCode
-	var i = 0
+	var i = 0 as FullRangeInt
 	while i < 8 'loop'
 		print("iter {i}\n")
 		i = i + 1

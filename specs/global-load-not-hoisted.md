@@ -36,15 +36,15 @@ load. `0+1+2+3+4 = 10`. A hoisted read of `i` would make the condition permanent
 the program would never terminate; a hoisted read of `acc` would return 4.
 
 ```maxon
-var acc = 0
-var i = 0
+var acc = 0 as Count
+var i = 0 as Count
 
 function main() returns ExitCode
 	while i < 5 'loop'
 		acc = acc + i
 		i = i + 1
 	end 'loop'
-	return acc
+	return acc as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -59,21 +59,21 @@ return 0.
 ```maxon
 
 
-var counter = 0
+var counter = 0 as Count
 
 function bump()
 	counter = counter + 1
 end 'bump'
 
 function main() returns ExitCode
-	var seen = 0
-	var n = 0
+	var seen = 0 as Count
+	var n = 0 as Count
 	while n < 5 'loop'
 		bump()
 		seen = seen + counter
 		n = n + 1
 	end 'loop'
-	return seen
+	return seen as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -88,13 +88,13 @@ must produce DIFFERENT values, so the second cannot be CSE'd onto the first — 
 ```maxon
 
 
-var slot = 3
+var slot = 3 as Count
 
 function main() returns ExitCode
 	let before = slot
 	slot = 40
 	let after = slot
-	return before + after - 1
+	return (before + after - 1) as ExitCode
 end 'main'
 ```
 ```exitcode

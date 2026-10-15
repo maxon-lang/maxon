@@ -20,10 +20,10 @@ typealias PlanetArray = Array with Planet
 // so in the type is what keeps `/` a plain divide; a quantity that ever did reach zero
 // panics at the narrowing instead of silently producing an infinity. The bound is the
 // smallest positive normal double — the claim is "not zero", and nothing stronger.
-typealias PositiveDivisor = float(2.2250738585072014e-308 to f64.max)
+typealias PositiveDivisor = float(2.2250738585072014e-308 to f64.max) implements FullRangeFloat
 
 let bodyCount = 5
-let solarMass = 39.478417604357432 as Real  // 4.0 * PI * PI
+let solarMass = 39.478417604357432 as FullRangeFloat  // 4.0 * PI * PI
 let daysPerYear = 365.24
 
 let defaultSteps = 50000000
@@ -50,15 +50,15 @@ function requestedSteps() returns Integer throws ParseError
 end 'requestedSteps'
 
 type Planet
-	export var x as Real
-	export var y as Real
-	export var z as Real
-	export var vx as Real
-	export var vy as Real
-	export var vz as Real
-	export var mass as Real
+	export var x as FullRangeFloat
+	export var y as FullRangeFloat
+	export var z as FullRangeFloat
+	export var vx as FullRangeFloat
+	export var vy as FullRangeFloat
+	export var vz as FullRangeFloat
+	export var mass as FullRangeFloat
 
-	static function create(x Real, y Real, z Real, vx Real, vy Real, vz Real, mass Real) returns Planet
+	static function create(x FullRangeFloat, y FullRangeFloat, z FullRangeFloat, vx FullRangeFloat, vy FullRangeFloat, vz FullRangeFloat, mass FullRangeFloat) returns Planet
 		return Planet{x: x, y: y, z: z, vx: vx, vy: vy, vz: vz, mass: mass}
 	end 'create'
 end 'Planet'
@@ -85,10 +85,10 @@ function initBodies(bodies PlanetArray)
 	bodies.push(neptune)
 end 'initBodies'
 
-function offsetMomentum(bodies PlanetArray, n Integer)
-	var px = 0.0
-	var py = 0.0
-	var pz = 0.0
+function offsetMomentum(bodies PlanetArray, n Count)
+	var px = 0.0 as FullRangeFloat
+	var py = 0.0 as FullRangeFloat
+	var pz = 0.0 as FullRangeFloat
 
 	for i in 0 upto n 'momentum_loop'
 		let body = try bodies.get(i) otherwise panic("offsetMomentum: i < n and the array is sized n")
@@ -106,8 +106,8 @@ function offsetMomentum(bodies PlanetArray, n Integer)
 	sun.vz = -pz / sunMassDivisor
 end 'offsetMomentum'
 
-function energy(bodies PlanetArray, n Integer) returns Real
-	var e = 0.0
+function energy(bodies PlanetArray, n Count) returns FullRangeFloat
+	var e = 0.0 as FullRangeFloat
 
 	for i in 0 upto n 'outer_energy'
 		let bi = try bodies.get(i) otherwise panic("energy: i < n and the array is sized n")
@@ -136,7 +136,7 @@ end 'energy'
 
 // `get` hands back the element itself, not a copy of it, so every field assignment
 // below updates the body in the array and no write-back is needed.
-function advance(bodies PlanetArray, n Integer, dt Real)
+function advance(bodies PlanetArray, n Count, dt FullRangeFloat)
 	for i in 0 upto n 'outer_advance'
 		var bi = try bodies.get(i) otherwise panic("advance: i < n and the array is sized n")
 		var j = i + 1
@@ -193,7 +193,7 @@ function main() returns ExitCode
 	let e1 = energy(bodies, n: bodyCount)
 	print("{e1:.9}\n")
 
-	var step = 0
+	var step = 0 as Integer
 
 	while step < steps 'simulation'
 		advance(bodies, n: bodyCount, dt: timeStep)

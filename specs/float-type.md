@@ -14,7 +14,7 @@ The `float` type stores 64-bit double-precision floating-point numbers.
 ### Syntax
 
 ```maxon
-var pi = 3.14159
+var pi = 3.14159 as FullRangeFloat
 let ratio = 2.5
 ```
 Float literals must include a decimal point:
@@ -108,8 +108,8 @@ value is a float, so the phi's own register class must be XMM. Every other float
 suite keeps its floats in straight-line code, where no phi is minted at all.
 ```maxon
 function main() returns ExitCode
-	var f = 0.0
-	var i = 0
+	var f = 0.0 as FullRangeFloat
+	var i = 0 as Count
 	while i < 4 'loop'
 		f = f + 2.5
 		i = i + 1
@@ -129,7 +129,7 @@ phi. `float-compare-branch.md` puts a phi on a float compare's edges, but the va
 is an `int` — so a float-TYPED phi was covered by nothing.
 ```maxon
 function work(a Integer) returns Integer
-	var f = a + 0.0
+	var f = a as FullRangeFloat + 0.0
 	if a > 5 'gt'
 		f = f + 1.5
 	end 'gt'
@@ -151,7 +151,7 @@ Both arms assign the float, so the merge phi has two real incoming values rather
 incoming plus the fall-through definition.
 ```maxon
 function work(a Integer) returns Integer
-	var f = a + 0.0
+	var f = a as FullRangeFloat + 0.0
 	if a > 100 'big'
 		f = f * 2.0
 	end 'big' else 'small'
@@ -393,7 +393,7 @@ A diverging `panic()` still owes its block a terminator, and `Parser.emitDeadRet
 value is dead. Its BITS are dead; its REGISTER FILE is not — `ret` moves the value into the return register,
 which is XMM0 here, so an integer zero would be a register-to-register move from rax to xmm0 across register
 files. `LowerMaxonToStd`'s `emitZeroConstOfReturnType` states this rule for the THROW edge, and the
-parser's dead return reads the same fact (through `floatResolvedTag`, so a `returns ParsedFloat` ranged
+parser's dead return reads the same fact (through `floatResolvedTag`, so a `returns FullRangeFloat` ranged
 alias is XMM-classed too).
 
 ⚠ **IT NEEDS NO `try` AND NO `Parsable` — THE REPRODUCER IS BELOW, AND THAT IS WHY IT LIVES HERE.** It
@@ -600,4 +600,379 @@ end 'main'
 ```
 ```exitcode
 7
+```
+
+<!-- test: a-float-array-read-is-range-known -->
+An element read from a `let` float array carries the interval of the elements written, and fits a float alias that admits the whole interval.
+```maxon
+typealias Unit = float(0.0 to 1.0)
+
+function take(v Unit) returns Unit
+	return v
+end 'take'
+
+function main() returns ExitCode
+	let xs = [0.25, 0.75]
+	let r = try xs.get(0) otherwise 0.5
+	print("{take(r)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0.25
+```
+
+<!-- test: error.a-float-array-read-outside-a-narrower-alias -->
+A float read whose interval reaches past the alias is refused at the use, naming the extreme that does.
+```maxon
+typealias Unit = float(0.0 to 1.0)
+
+function take(v Unit) returns Unit
+	return v
+end 'take'
+
+function main() returns ExitCode
+	let xs = [0.25, 2.5]
+	let r = try xs.get(0) otherwise 0.5
+	let s = take(r)
+	print("{s}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:11:10: Value 2.5 is outside the range of 'Unit' (float(0 to 1))
+```
+
+<!-- test: a-for-in-over-a-float-array-is-range-known -->
+The element a `for … in` binds over a `let` float array carries the array's interval, and float arithmetic over it carries a computed one.
+```maxon
+typealias Span = float(0.0 to 10.0)
+
+function take(v Span) returns Span
+	return v
+end 'take'
+
+function main() returns ExitCode
+	let xs = [1.5, 2.5]
+	for x in xs 'each'
+		print("{take(x * 2.0)}\n")
+	end 'each'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3.0
+5.0
+```
+
+<!-- test: a-literal-counter-times-a-float-is-range-known -->
+A both-literal counter promoted to float carries its range, so `i * 2.0` fits an alias that admits `[2.0, 6.0]`.
+```maxon
+typealias Span = float(0.0 to 10.0)
+
+function take(v Span) returns Span
+	return v
+end 'take'
+
+function main() returns ExitCode
+	for i in 1 upto 4 'each'
+		print("{take(i * 2.0)}\n")
+	end 'each'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2.0
+4.0
+6.0
+```
+
+<!-- test: error.a-literal-counter-times-a-float-outside-an-alias -->
+The same counter times 4.0 reaches 12.0, which the alias refuses at compile time.
+```maxon
+typealias Span = float(0.0 to 10.0)
+
+function take(v Span) returns Span
+	return v
+end 'take'
+
+function main() returns ExitCode
+	for i in 1 upto 4 'each'
+		print("{take(i * 4.0)}\n")
+	end 'each'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:10:11: Value 12 is outside the range of 'Span' (float(0 to 10))
+```
+
+<!-- test: a-float-merge-of-literals-is-range-known -->
+A ternary of two float literals joins their values, so the result fits an alias that admits both.
+```maxon
+typealias Unit = float(0.0 to 1.0)
+
+function take(v Unit) returns Unit
+	return v
+end 'take'
+
+function main() returns ExitCode
+	let flag = 3 > 2
+	let r = 0.25 if flag else 0.75
+	print("{take(r)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0.25
+```
+
+<!-- test: a-float-quotient-by-an-interval-holding-zero-is-unknown -->
+A divisor whose interval holds zero leaves the quotient with no known range, so it wears the full-range float alias and a narrower slot refuses it.
+```maxon
+typealias Unit = float(0.0 to 1.0)
+
+function take(v Unit) returns Unit
+	return v
+end 'take'
+
+function main() returns ExitCode
+	let ds = [0.0, 1.0]
+	let d = try ds.get(1) otherwise 1.0
+	let q = try (1.0 / d) otherwise 0.5
+	let s = take(q)
+	print("{s}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:12:10: argument type mismatch for 'v': expected 'Unit', got 'FullRangeFloat'
+```
+
+<!-- test: a-float-interval-flows-through-arithmetic -->
+Float arithmetic over range-known operands computes an interval, so every result below fits an alias that admits it.
+```maxon
+typealias Span = float(0.0 to 10.0)
+
+function take(v Span) returns Span
+	return v
+end 'take'
+
+function main() returns ExitCode
+	let xs = [1.5, 2.5]
+	let r = try xs.get(0) otherwise 2.0
+	let q = try (4.5 / r) otherwise 0.0
+	print("{take(r + r)} {take(r * r)} {take(r - 1.0)} {take(q)} {take(5.0 - r)} {take(abs(-r))}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3.0 2.25 0.5 3.0 3.5 1.5
+```
+
+<!-- test: a-float-interval-flows-through-the-math-builtins -->
+The rounding builtins, `sqrt`, `min` and `max` map an interval to an interval.
+```maxon
+typealias Span = float(0.0 to 10.0)
+
+function take(v Span) returns Span
+	return v
+end 'take'
+
+function main() returns ExitCode
+	let xs = [4.0, 9.0]
+	let r = try xs.get(0) otherwise 4.0
+	print("{take(sqrt(r))} {take(floor(r))} {take(ceil(r))} {take(round(r))} {take(min(r, 5.0))} {take(max(r, 6.0))}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2.0 4.0 4.0 4.0 4.0 6.0
+```
+
+<!-- test: a-float-absolute-value-folds-an-interval-across-zero -->
+`abs` of an interval holding zero is non-negative, so it fits an alias that the interval itself does not.
+```maxon
+typealias Span = float(0.0 to 10.0)
+
+function take(v Span) returns Span
+	return v
+end 'take'
+
+function main() returns ExitCode
+	let xs = [-3.0, 2.0]
+	let r = try xs.get(0) otherwise 0.0
+	print("{take(abs(r))}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3.0
+```
+
+<!-- test: error.a-float-product-interval-reaches-past-an-alias -->
+A product's interval is taken at its corners, so the largest corner is the extreme the diagnostic names.
+```maxon
+typealias Span = float(0.0 to 10.0)
+
+function take(v Span) returns Span
+	return v
+end 'take'
+
+function main() returns ExitCode
+	let xs = [2.0, 6.0]
+	let r = try xs.get(0) otherwise 3.0
+	let s = take(r * r)
+	print("{s}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:11:10: Value 36 is outside the range of 'Span' (float(0 to 10))
+```
+
+<!-- test: error.a-float-difference-interval-reaches-below-an-alias -->
+The low end of an interval is refused as well as the high end, and it is the one named when it is the one outside.
+```maxon
+typealias Span = float(0.0 to 10.0)
+
+function take(v Span) returns Span
+	return v
+end 'take'
+
+function main() returns ExitCode
+	let xs = [2.0, 6.0]
+	let r = try xs.get(0) otherwise 3.0
+	let s = take(r - 4.0)
+	print("{s}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:11:10: Value -2 is outside the range of 'Span' (float(0 to 10))
+```
+
+<!-- test: a-float-root-of-an-interval-holding-negatives-is-unknown -->
+The root of an interval that reaches below zero has no known range, so it wears the full-range float alias and a narrower slot refuses it.
+```maxon
+typealias Span = float(0.0 to 10.0)
+
+function take(v Span) returns Span
+	return v
+end 'take'
+
+function main() returns ExitCode
+	let xs = [-1.0, 4.0]
+	let r = try xs.get(1) otherwise 4.0
+	let s = take(sqrt(r))
+	print("{s}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:11:10: argument type mismatch for 'v': expected 'Span', got 'FullRangeFloat'
+```
+
+<!-- test: a-let-tuple-float-fields-are-range-known -->
+A float field of a `let` tuple is the number written there, or the interval of the value written there.
+```maxon
+typealias Unit = float(0.0 to 1.0)
+
+function take(v Unit) returns Unit
+	return v
+end 'take'
+
+function main() returns ExitCode
+	let xs = [0.25, 0.75]
+	let r = try xs.get(0) otherwise 0.5
+	let t = (r, 0.5)
+	print("{take(t.0)} {take(t.1)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0.25 0.5
+```
+
+<!-- test: error.a-let-tuple-float-field-outside-an-alias -->
+A float tuple field written as a literal outside the alias is refused where it is used.
+```maxon
+typealias Unit = float(0.0 to 1.0)
+
+function take(v Unit) returns Unit
+	return v
+end 'take'
+
+function main() returns ExitCode
+	let t = (0.25, 2.0)
+	let s = take(t.1)
+	print("{s}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:10:10: Value 2 is outside the range of 'Unit' (float(0 to 1))
+```
+
+<!-- test: error.a-folded-float-arithmetic-outside-an-alias -->
+Float arithmetic over literals folds, and the folded value is checked against the alias like a literal.
+```maxon
+typealias Unit = float(0.0 to 1.0)
+
+function take(v Unit) returns Unit
+	return v
+end 'take'
+
+function main() returns ExitCode
+	let s = take(0.5 * 4.0)
+	print("{s}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:9:10: Value 2 is outside the range of 'Unit' (float(0 to 1))
+```
+
+<!-- test: float-builtins-accept-an-integer-alias -->
+`sqrt`, `floor`, `ceil`, `round`, `abs`, `min` and `max` take an integer alias, convert it, and answer a `FullRangeFloat`; the mixed arithmetic `count + 1.5` converts the same way.
+```maxon
+function echo(v FullRangeFloat) returns FullRangeFloat
+	return v
+end 'echo'
+
+function main() returns ExitCode
+	let n = CommandLine.args().count() + 8
+	print("{echo(sqrt(n))} {echo(floor(n))} {echo(ceil(n))} {echo(round(n))} {echo(abs(n))} {echo(min(n, 4.5))} {echo(max(n, 4.5))} {echo(n + 1.5)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3.0 9.0 9.0 9.0 9.0 4.5 9.0 10.5
 ```

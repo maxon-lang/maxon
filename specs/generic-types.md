@@ -330,8 +330,8 @@ type Box uses T
 end 'Box'
 typealias StrBox = Box with String
 function main() returns ExitCode
-	var i = 0
-	var total = 0
+	var i = 0 as Count
+	var total = 0 as BytePos
 	while i < 100 'loop'
 		let b = StrBox.create("{i}")
 		total = total + b.value.byteLength()
@@ -403,8 +403,8 @@ end 'Box'
 typealias StrBox = Box with String
 typealias BoxBox = Box with (Box with String)
 function main() returns ExitCode
-	var i = 0
-	var total = 0
+	var i = 0 as Count
+	var total = 0 as BytePos
 	while i < 50 'loop'
 		let inner = StrBox.create("{i}")
 		let outer = BoxBox.create(inner)
@@ -575,7 +575,7 @@ end 'Box'
 typealias StringBox = Box with String
 function main() returns ExitCode
 	var b = StringBox.create("start")
-	var i = 0
+	var i = 0 as Count
 	while i < 3 'loop'
 		b.replace("iter")
 		i = i + 1
@@ -2884,14 +2884,14 @@ end 'Box'
 typealias AlphaBox = Box with Alpha
 function main() returns ExitCode
 	var bx = AlphaBox.create()
-	var i = 0
-	var total = 0
+	var i = 0 as Integer
+	var total = 0 as Integer
 	while i < 100 'loop'
 		let back = bx.echo(Alpha.create(i))
 		total = total + back.a
 		i = i + 1
 	end 'loop'
-	return total - 4950
+	return (total - 4950) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -2917,14 +2917,14 @@ end 'Box'
 typealias StrBox = Box with String
 function main() returns ExitCode
 	var bx = StrBox.create()
-	var i = 0
-	var total = 0
+	var i = 0 as Count
+	var total = 0 as BytePos
 	while i < 100 'loop'
 		let s = bx.echo("{i}")
 		total = total + s.byteLength()
 		i = i + 1
 	end 'loop'
-	return total - 190
+	return (total - 190) as ExitCode
 end 'main'
 ```
 ```exitcode

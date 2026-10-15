@@ -66,12 +66,12 @@ Every signed integer predicate, each written so that ONE arm is correct and the 
 its own exit code. The operands come from a global the constant folder cannot see through, so
 each comparison survives to the backend as a real compare-and-branch pair.
 ```maxon
-var seed = 4
+var seed = 4 as FullRangeInt
 
 function main() returns ExitCode
 	let a = seed
 	let b = seed + 1
-	var hits = 0
+	var hits = 0 as Count
 
 	if a < b 'lt'
 		hits = hits + 1
@@ -128,13 +128,13 @@ The NaN is built at RUNTIME from a global by overflow (`inf - inf`) rather than 
 folded NaN reaches the backend as a constant and emits no compare at all, and division by zero
 is a language-level error with no route to a NaN.
 ```maxon
-var big = 1.0e308
+var big = 1.0e308 as FullRangeFloat
 
 function main() returns ExitCode
 	let inf = big * 10.0
 	let nan = inf - inf
 	let x = 5.0
-	var hits = 0
+	var hits = 0 as Count
 
 	if nan < x 'lt'
 		return 21
@@ -193,7 +193,7 @@ function main() returns ExitCode
 	xs.push(5)
 	let a = try xs.get(0) otherwise 200
 	let b = try xs.get(1) otherwise 200
-	var hits = 0
+	var hits = 0 as Count
 
 	if a < b 'lo'
 		hits = hits + 1
@@ -232,11 +232,11 @@ A branch on a materialized boolean, which AArch64 selects as a register zero-tes
 cleanup that reached for a condition-code table here would find nothing to invert; one that
 swapped the targets without swapping the spelling inverts the program.
 ```maxon
-var seed = 4
+var seed = 4 as FullRangeInt
 
 function main() returns ExitCode
 	let flag = seed > 3
-	var hits = 0
+	var hits = 0 as Count
 
 	if flag 'yes'
 		hits = hits + 1
@@ -264,13 +264,13 @@ edge's parallel copies and must therefore NOT be threaded away; a cleanup that b
 block because it "looks like" a forwarding jump drops the copy and the loop accumulates whatever
 the register happened to hold. The four iterations contribute 1, 10, 1, 10.
 ```maxon
-var seed = 4
+var seed = 4 as Count
 
 function main() returns ExitCode
-	var total = 0
-	var i = 0
+	var total = 0 as ExitCode
+	var i = 0 as Count
 	while i < seed 'loop'
-		var step = 0
+		var step = 0 as ExitCode
 		if i mod 2 == 0 'even'
 			step = 1
 		end 'even' else 'odd'
@@ -295,7 +295,7 @@ branches, and an entry re-pointed at the wrong survivor returns another arm's nu
 ```maxon
 typealias Val = int(i64.min to i64.max)
 
-var seed = 4
+var seed = 4 as Val
 
 function classify(n Val) returns Val
 	if n > 3 'big'

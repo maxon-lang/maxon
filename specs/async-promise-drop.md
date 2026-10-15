@@ -121,7 +121,7 @@ Pins the divergence from a fire-and-forget-run model: a dropped thread's body NE
 the global to 1 if it ran, but `p` is never awaited and `main` never parks or yields, so its strand never
 reaches `incFlag` and the global stays 0. The drop cancels the never-run thread; it does not run it.
 ```maxon
-var flag = 0
+var flag = 0 as Integer
 
 function incFlag() returns Integer
 	Scheduler.yield()
@@ -154,7 +154,7 @@ function trivial() returns Integer
 end 'trivial'
 
 function main() returns ExitCode
-	var i = 0
+	var i = 0 as Integer
 	while i < 1000 'loop'
 		_ = async trivial()
 		i = i + 1
@@ -363,7 +363,7 @@ answer 42 alike — there is nothing on that stack to strand.
 function slowProc(tag Integer) returns Integer
 	let held = "held-{tag}"
 	let code = try __Builtins.runProcess("cmd /c ping -n 3 127.0.0.1 >nul") otherwise 99
-	return code + held.byteLength()
+	return (code as Integer) + (held.byteLength() as Integer)
 end 'slowProc'
 
 function fast() returns Integer
@@ -399,7 +399,7 @@ strand that `String`, and the leak gate would report **exit 101**.
 function slowProc(tag Integer) returns Integer
 	let held = "held-{tag}"
 	let code = try __Builtins.runProcess("sleep 2") otherwise 99
-	return code + held.byteLength()
+	return (code as Integer) + (held.byteLength() as Integer)
 end 'slowProc'
 
 function fast() returns Integer
@@ -435,13 +435,13 @@ discards at its own statement, before the coroutine has run, and takes the never
 `isComplete()` peek adds `0`, which is that thread saying it was still parked when `dropWhileParked`
 returned and dropped it.
 ```maxon
-function reader(h Integer, tag Integer) returns Integer
+function reader(h FullRangeInt, tag Integer) returns Integer
 	let held = "held-{tag}"
 	let line = subpReadLine(h)
 	return line.byteLength() + held.byteLength()
 end 'reader'
 
-function dropWhileParked(h Integer) returns Integer
+function dropWhileParked(h FullRangeInt) returns Integer
 	let p = async reader(h, tag: 1)
 	sleep(200)
 	return 1 if p.isComplete() else 0
@@ -517,7 +517,7 @@ end 'trivial'
 
 function main() returns ExitCode
 	var p = async trivial()
-	var i = 0
+	var i = 0 as Integer
 	while i < 8 'loop'
 		p = async trivial()
 		i = i + 1
@@ -600,7 +600,7 @@ end 'five'
 
 function main() returns ExitCode
 	var p = async five()
-	var i = 0
+	var i = 0 as Integer
 	while i < 3 'loop'
 		p = async five()
 		i = i + 1
@@ -696,7 +696,7 @@ function arm(slots IntPromiseArray, slot Integer, n Integer)
 end 'arm'
 
 function completesUnderTheDrive(slots IntPromiseArray) returns bool
-	var spins = 0
+	var spins = 0 as Integer
 	while spins < MaxSpins 'drive'
 		Scheduler.yield()
 		let p = try slots.get(0) otherwise panic("slot 0 was armed before the drive")
@@ -760,7 +760,7 @@ function arm(slots IntPromiseArray, slot Integer, n Integer)
 end 'arm'
 
 function completesUnderTheDrive(slots IntPromiseArray) returns bool
-	var spins = 0
+	var spins = 0 as Integer
 	while spins < MaxSpins 'drive'
 		Scheduler.yield()
 		let p = try slots.get(0) otherwise panic("slot 0 was armed before the drive")
@@ -1336,7 +1336,7 @@ end 'plain'
 function main() returns ExitCode
 	var s = IntPromiseArray.create()
 	s.push(async plain(7))
-	var total = 0
+	var total = 0 as Integer
 	for pair in s.withIterator() 'each'
 		total = total + (await pair.1)
 	end 'each'
@@ -1363,7 +1363,7 @@ end 'plain'
 function main() returns ExitCode
 	var m = IntPromiseMap.create()
 	m.upsert("a", value: async plain(9))
-	var total = 0
+	var total = 0 as Integer
 	for (_, v) in m 'each'
 		total = total + (await v)
 	end 'each'
@@ -1775,7 +1775,7 @@ function main() returns ExitCode
 	let p = try a.get(0) otherwise panic("has one")
 
 	var b = IntPromiseArray.create()
-	var i = 0
+	var i = 0 as Integer
 
 	while i < 2 'loop'
 		b.push(p)
@@ -1811,8 +1811,8 @@ function main() returns ExitCode
 
 	let p = try a.get(0) otherwise panic("has one")
 
-	var acc = 0
-	var i = 0
+	var acc = 0 as Integer
+	var i = 0 as Integer
 
 	while i < 2 'loop'
 		let s = await p

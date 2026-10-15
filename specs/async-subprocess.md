@@ -229,7 +229,7 @@ function once() returns Integer
 end 'once'
 
 function main() returns ExitCode
-	var done = 0
+	var done = 0 as Integer
 
 	for _ in 0 upto 50 'spawns'
 		if once() == 7 'reaped'
@@ -296,7 +296,7 @@ earliest timer, not a blocking wait on the child). Each records its completion o
 (`order = order * 10 + tag`), so `21` proves the sleeper (tag 2) completed before the child thread (tag 1). A wait
 that blocked the single thread on the child would instead produce `12`.
 ```maxon
-var order = 0
+var order = 0 as Integer
 
 function slow() returns Integer
 	_ = try __Builtins.runProcess("cmd /c ping -n 2 127.0.0.1 >nul") otherwise 99
@@ -338,7 +338,7 @@ on the STREAMING reader answers `12` on this lane: the process wait parks and a 
 comes from). So on arm64-macOS this case and its streaming counterpart genuinely disagree, and only a
 measurement can say which way each falls.
 ```maxon
-var order = 0
+var order = 0 as Integer
 
 function slow() returns Integer
 	_ = try __Builtins.runProcess("sleep 1") otherwise 99
@@ -474,8 +474,8 @@ function child() returns Integer
 end 'child'
 
 function main() returns ExitCode
-	var i = 0
-	var sum = 0
+	var i = 0 as Integer
+	var sum = 0 as Integer
 	while i < 25 'l'
 		let p = async child()
 		let r = await p
@@ -506,8 +506,8 @@ function child() returns Integer
 end 'child'
 
 function main() returns ExitCode
-	var i = 0
-	var sum = 0
+	var i = 0 as Integer
+	var sum = 0 as Integer
 	while i < 50 'l'
 		let p = async child()
 		let r = await p
@@ -594,7 +594,7 @@ sixty-fifth parks: the program would never hold sixty-five waits open together, 
 exercising the property at all, and would say nothing about the ceiling it exists to deny. A two-second
 child is still running when the last spawn returns, however the spawns interleave with that machine.
 ```maxon
-var done = 0
+var done = 0 as Integer
 
 function child() returns Integer
 	let code = try __Builtins.runProcess("cmd /c ping -n 3 127.0.0.1 >nul") otherwise 99
@@ -754,7 +754,7 @@ completed. `sleep 2` outlives the burst of spawns for the same reason as the Win
 child — a child that exited at once would be reaped by another machine's idle poll before the sixty-fifth
 parked, and the program would never hold sixty-five waits open at the same time.
 ```maxon
-var done = 0
+var done = 0 as Integer
 
 function child() returns Integer
 	let code = try __Builtins.runProcess("sleep 2") otherwise 99

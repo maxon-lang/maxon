@@ -104,7 +104,7 @@
 // is declared at this type, whose range STOPS at `-1`, so a fourth one written `= 4` — or `= 0` — does not
 // compile. That matters because a GROWER need not test the sign at all: it can test
 // `capacity < requiredLen` and rely on every non-owned capacity being below every byte count. Under a
-// bare `ParsedInt` that reliance rested on three separate literals staying negative by convention, and a
+// bare `FullRangeInt` that reliance rested on three separate literals staying negative by convention, and a
 // convention that is only written in a comment is a test nobody wrote — the exact shape of every bug this
 // file exists to end. Here the compiler that builds the compiler checks it, once per provenance, at the
 // declaration.
@@ -141,7 +141,7 @@ let ImmortalRecordCapacity = -4 as NotOwnedBufferCapacity
 // String literal over an immortal `.rdata` blob, a String whose bytes are inline, or an array that never
 // allocated a buffer at all. It is an ORDINARY answer, not an error case, which is why every release
 // step is null-guarded.
-let NoOwedAllocation = 0 as ParsedInt
+let NoOwedAllocation = 0 as FullRangeInt
 
 // `buffer@0` when an immortal record names NO blob — a module-level EMPTY `Array with T`, whose `length@8`
 // is 0 so no reader ever strides off the slot. It is the same null a `__managed_create` record is born
@@ -217,11 +217,11 @@ export let ManagedRecordSlotBytes = 8 as BytePos
 //
 // Each slot is appended at its named offset and the appender asserts it lands there, so the offsets the
 // runtime loads by and the offsets this writes are one set of constants that cannot drift.
-export function immortalRecordBytes(blobOffset ByteOffset, length ParsedInt, elementSize ParsedInt, elementDestroy ParsedInt) returns ByteArray
+export function immortalRecordBytes(blobOffset ByteOffset, length FullRangeInt, elementSize FullRangeInt, elementDestroy FullRangeInt) returns ByteArray
 	var record = ByteArray.create()
-	appendRecordSlot(record, expectedOffset: ManagedRecordBufferOffset, value: blobOffset as ParsedInt)
+	appendRecordSlot(record, expectedOffset: ManagedRecordBufferOffset, value: blobOffset as FullRangeInt)
 	appendRecordSlot(record, expectedOffset: ManagedRecordLengthOffset, value: length)
-	appendRecordSlot(record, expectedOffset: ManagedRecordCapacityOffset, value: ImmortalRecordCapacity as ParsedInt)
+	appendRecordSlot(record, expectedOffset: ManagedRecordCapacityOffset, value: ImmortalRecordCapacity as FullRangeInt)
 	appendRecordSlot(record, expectedOffset: ManagedRecordElementSizeOffset, value: elementSize)
 	appendRecordSlot(record, expectedOffset: ManagedRecordParentOffset, value: NoOwedAllocation)
 	appendRecordSlot(record, expectedOffset: ManagedRecordElementDestroyOffset, value: elementDestroy)
@@ -285,7 +285,7 @@ function immortalRecordPayload(record ByteArray, kind RdataPayloadKind, debugStr
 		panic("immortalRecordPayload: a {record.count()}-byte managed record is being given the immortal HEADER without ImmortalRecordCapacity at capacity@16 — the two marks are read by different runtime entries, so a record carrying one of them is skipped by half the readers and counted by the other half")
 	end 'markSplit'
 
-	var payload = immortalBoxHeaderBytes(debugStream, recordBytes: record.count() as ParsedInt)
+	var payload = immortalBoxHeaderBytes(debugStream, recordBytes: record.count() as FullRangeInt)
 	payload.append(record)
 	return payload
 end 'immortalRecordPayload'
@@ -297,7 +297,7 @@ function recordCarriesImmortalCapacity(record ByteArray) returns bool
 		return false
 	end 'noCapacitySlot'
 
-	let sentinel = scalarImage(ImmortalRecordCapacity as ParsedInt, byteCount: ManagedRecordSlotBytes)
+	let sentinel = scalarImage(ImmortalRecordCapacity as FullRangeInt, byteCount: ManagedRecordSlotBytes)
 	var offset = ManagedRecordCapacityOffset
 
 	for expected in sentinel 'eachByte'
@@ -329,7 +329,7 @@ end 'registerImmortalRecordLabeled'
 
 // Append one machine-word slot at `expectedOffset`, refusing to write it anywhere else. Exported because a
 // String record's seventh slot rides the same rule.
-export function appendRecordSlot(record ByteArray, expectedOffset ByteOffset, value ParsedInt)
+export function appendRecordSlot(record ByteArray, expectedOffset ByteOffset, value FullRangeInt)
 	if record.count() as ByteOffset != expectedOffset 'offsetDrift'
 		panic("appendRecordSlot: a record slot is being written at offset {record.count()} but its constant says {expectedOffset} — the record layout the runtime reads and this writes have drifted")
 	end 'offsetDrift'
@@ -361,7 +361,7 @@ end 'emitBufferNotOwned'
 
 // The smallest `capacity@16` an OWNED buffer publishes; every `NotOwnedBufferCapacity` sentinel lies
 // below it.
-let LowestOwnedCapacity = 0 as ParsedInt
+let LowestOwnedCapacity = 0 as FullRangeInt
 
 // The record an `emitBufferNotOwned` compare tests, read back off the compare: `cmpImm lt
 // [record + capacity@16], LowestOwnedCapacity` once `foldConstOperands` has moved the constant into the
@@ -462,7 +462,7 @@ end 'emitRecordIsImmortal'
 // only ever against a declared provenance, and asking it about `0` or `length` is a different question with
 // a different emitter (`emitBufferNotOwned`, or the `>` in the router).
 function emitCapacityIsSentinel(module StdModule, block IrBlock, capacity ValueId, sentinel NotOwnedBufferCapacity, ids ValueMinter) returns ValueId
-	let value = emitConst(module, block: block, value: sentinel as ParsedInt, ids: ids)
+	let value = emitConst(module, block: block, value: sentinel as FullRangeInt, ids: ids)
 	return emitCmp(module, block: block, a: capacity, b: value, pred: StdCmpPred.eq, ids: ids)
 end 'emitCapacityIsSentinel'
 

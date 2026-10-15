@@ -8,9 +8,17 @@ sidebar:
 ## Mutable Variables (`var`)
 
 ```maxon
-var x = 42              // type inferred from the initializer
-x = x + 5               // reassignment allowed
+typealias Tally = int(0 to u64.max)
+
+var x = 42 as Tally     // a Tally: the cast names the type
+x = x + 5               // reassignment allowed, range-checked against Tally
+// var y = 42           // E2004: A var cannot start from a bare number: write 'var name = expr as Type'.
 ```
+
+A `var` holding a number names its alias where it is born, locally, at file scope and as a `static`. A bare
+number, arithmetic over bare numbers (`16 * 1024`), a plain `let` constant, and an array, map or tuple literal
+of bare numbers are refused as its initializer (**E2004**); cast it (`var size = (16 * 1024) as ByteCount`).
+A `var` initialized from a value of some alias is that alias.
 
 ## Immutable Variables (`let`)
 
@@ -18,6 +26,29 @@ x = x + 5               // reassignment allowed
 let pi = 3.14159
 let name = "Maxon"
 // pi = 3.14            // E2013: cannot assign to immutable variable: 'pi'
+```
+
+A `let` bound to a bare number, to arithmetic over bare numbers or to a literal container of them is a
+**constant**: it acts like the literal it holds, and fits any alias its value fits, checked at compile time
+at each use. A `let` computed from such constants or from a loop counter between two literal bounds carries
+the range its value can have, and each use is checked against it the same way, for integers and floats
+alike. A `let` of a number whose range the compiler cannot know (`let w = 1 shl k`) is **E2004**; write
+`let w = (1 shl k) as Width`.
+
+```maxon
+typealias Port = int(0 to 65535)
+
+function open(p Port) returns Port
+	return p
+end 'open'
+
+function main() returns ExitCode
+	let base = 8000
+	let port = base + 80        // a constant: 8080
+	print("{open(port)}\n")     // 8080
+	// open(base * 10)          // E3005: Value 80000 is outside the range of 'Port' (int(0 to 65535))
+	return 0
+end 'main'
 ```
 
 A `let` is read-only all the way down (see [Read-Only Values](/docs/language/memory-model/#read-only-values)): calling a method that writes
@@ -43,6 +74,13 @@ end 'main'
 - Every variable is initialized where it is declared, and its type is inferred from the initializer.
   A declaration takes no type annotation: `var x as Tally = 0` is **E2010** (`Expected '=' but got 'as'`).
   A cast names the type instead — `var x = 0 as Tally` declares a `Tally`, locally and at file scope.
+- **A `var` is born a value of its alias, and every assignment to it is checked against it** (see
+  [Range Checks](/docs/language/ranged-typealiases/#range-checks)).
+- **A `var` takes the brand of the first branded value stored into it** when its initializer has none:
+  `var a = [1 as Item, 2 as Item]` followed by `a = xs` for an `Xs` makes `a` an `Xs` for its whole life,
+  and a later store of a `Ys` is **E3005** (`cannot assign a value of type 'Ys' to variable 'a', which
+  holds 'Xs'`). The first store in source order decides; for a module `var`, the first in the program's
+  file order. See [Generic-Instance and Function-Type Aliases Are Brands](/docs/language/ranged-typealiases/#generic-instance-and-function-type-aliases-are-brands).
 - Variables are block-scoped.
 - **A `var` that is never reassigned or mutated is E3077** (`variable 'x' is never reassigned; use 'let'
   instead of 'var'`).
@@ -91,7 +129,7 @@ Variables can be declared at file scope, outside any function:
 ```maxon
 typealias Tally = int(0 to u64.max)
 
-var callCount = 0
+var callCount = 0 as Tally
 let MAX_SIZE = 1024
 var names = ["ada", "alan"]
 let dataFile = FilePath from "data.txt"
@@ -136,7 +174,10 @@ end 'main'
 - A module-level `let` is [read-only](/docs/language/memory-model/#read-only-values) through everything it reaches, for the program's whole
   life. A write through it, or through a record a call handed back out of it, is **E3159**; binding it, a field
   of it (`var m = H.index`) or such a call result to a `var` is **E3078**. Read it through a `let`, or bind a
-  `clone()`.
+  `clone()`. Pushing its record into a container, local or module-level, or storing it into a field of a
+  module-level `var` is **E3078** too; push or store a `clone()`. Handed to a function that stores its
+  parameter, put in an array literal or given to `upsert`, it is stored as a copy, and a write through the
+  copy leaves the `let` as it was.
 - A `spawn` reachable from a global initializer is **E3164**; start services in `main`, or declare a
   program-wide one with [`default`](/docs/language/async/#program-wide-defaults--default). A `Key.current()` or `Key.register()`
   reachable from a global initializer is [E3173](/docs/cli/error-codes/#e3173--registryreachedfromglobalinitializer): the

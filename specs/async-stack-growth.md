@@ -1382,13 +1382,13 @@ function main() returns ExitCode
 	let first = async seedBytes()
 	let before = await first
 	var ps = IntPromiseArray.create()
-	var i = 0
+	var i = 0 as Integer
 	while i < 64 'deepEach'
 		ps.push(async deep(4000))
 		i = i + 1
 	end 'deepEach'
-	var total = 0
-	var k = 0
+	var total = 0 as Integer
+	var k = 0 as ElementIndex
 	while k < 64 'awaitEach'
 		let p = try ps.get(k) otherwise panic("ps.get OOB at {k} — bounded by the pushes above")
 		total = total + await p
@@ -1644,13 +1644,13 @@ function main() returns ExitCode
 	let first = async seedBytes()
 	let before = await first
 	var deeps = IntPromiseArray.create()
-	var i = 0
+	var i = 0 as Integer
 	while i < 64 'deepEach'
 		deeps.push(async deep(4000))
 		i = i + 1
 	end 'deepEach'
-	var deepTotal = 0
-	var k = 0
+	var deepTotal = 0 as Integer
+	var k = 0 as ElementIndex
 	while k < 64 'awaitDeep'
 		let p = try deeps.get(k) otherwise panic("deeps.get OOB at {k} — bounded by the pushes above")
 		deepTotal = deepTotal + await p
@@ -1659,13 +1659,13 @@ function main() returns ExitCode
 	let mid = async seedBytes()
 	let raised = await mid
 	var shallows = IntPromiseArray.create()
-	var j = 0
+	var j = 0 as Integer
 	while j < 128 'shallowEach'
 		shallows.push(async shallow(1))
 		j = j + 1
 	end 'shallowEach'
-	var shallowTotal = 0
-	var m = 0
+	var shallowTotal = 0 as Integer
+	var m = 0 as ElementIndex
 	while m < 128 'awaitShallow'
 		let p = try shallows.get(m) otherwise panic("shallows.get OOB at {m} — bounded by the pushes above")
 		shallowTotal = shallowTotal + await p
@@ -1703,13 +1703,13 @@ let warmupRounds = 100000
 let spinRounds = 25000000
 
 function spin(rounds Integer) returns Integer
-	var total = 0
-	var round = 0
+	var total = 0 as Integer
+	var round = 0 as Integer
 	while round < rounds 'rounds'
 		var words = SpinWords.create()
 		words.push(round)
 		words.push(round + 1)
-		total = total + words.count()
+		total = total + (words.count() as Integer)
 		round = round + 1
 	end 'rounds'
 	return total

@@ -37,7 +37,7 @@ module function probeWorkers() returns MachineWord
 	return __sched_max_active_workers()
 end 'probeWorkers'
 // --- file: main.maxon
-var used = 42
+var used = 42 as FullRangeInt
 
 function main() returns ExitCode
 	return used - 42
@@ -125,7 +125,7 @@ module function probeWorkers() returns MachineWord
 	return __sched_max_active_workers()
 end 'probeWorkers'
 // --- file: main.maxon
-var used = 42
+var used = 42 as Count
 
 function main() returns ExitCode
 	let workers = __Builtins.schedMaxActiveWorkers()
@@ -215,7 +215,7 @@ module function probeWorkers() returns MachineWord
 	return __sched_max_active_workers()
 end 'probeWorkers'
 // --- file: main.maxon
-var used = 42
+var used = 42 as FullRangeInt
 
 function main() returns ExitCode
 	let pid = Process.id()
@@ -294,7 +294,7 @@ would land between `used` and the console probes, which is where a prefix compar
 ```maxon
 typealias WorkerCount = int(0 to u64.max)
 
-var used = 42
+var used = 42 as FullRangeInt
 
 function dormant() returns WorkerCount
 	return Scheduler.counters().maxActiveWorkers

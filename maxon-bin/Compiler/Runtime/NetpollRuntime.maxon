@@ -81,7 +81,7 @@ function epollEntryLayout(cpu CpuArch) returns NetpollEntryLayout
 end 'epollEntryLayout'
 
 // How many entries one wait may answer — Go's batch on Windows and kqueue.
-let NetpollBatchEntries = 64 as ParsedInt
+let NetpollBatchEntries = 64 as FullRangeInt
 
 // `__np_poll`'s frame: the scratch word (the Windows entry count, the epoll drain buffer) in slot 0, then the
 // batch. It lives on the polling machine's OS-thread stack, which has room for it; no green thread polls.
@@ -89,7 +89,7 @@ let NetpollScratchSlot = 0 as SpillSlot
 let NetpollEntriesSlot = 1 as SpillSlot
 
 function netpollFrameBytes(layout NetpollEntryLayout) returns StackSize
-	let batchSlots = runtimeFrameSlots(NetpollBatchEntries * (layout.entryBytes as ParsedInt))
+	let batchSlots = runtimeFrameSlots(NetpollBatchEntries * (layout.entryBytes as FullRangeInt))
 	return ((NetpollEntriesSlot as StackSize) + batchSlots) * SpillSlotBytes
 end 'netpollFrameBytes'
 
@@ -126,8 +126,8 @@ export function netpollRuntimeGlobals() returns DataSectionEntryArray
 	return out
 end 'netpollRuntimeGlobals'
 
-let WakeSigClear = 0 as ParsedInt
-let WakeSigRaised = 1 as ParsedInt
+let WakeSigClear = 0 as FullRangeInt
+let WakeSigRaised = 1 as FullRangeInt
 
 // ==========================================================================
 // Entry points
@@ -259,7 +259,7 @@ end 'buildNetpollFail'
 
 function emitNetpollFailText(module StdModule, block IrBlock, ids ValueMinter, text ByteArray)
 	let buf = emitLiteralCString(module, block: block, ids: ids, text: text)
-	module.appendOp(block, op: StdOp.osWriteStderr(ids.mint(), bufId: buf, lenId: emitConst(module, block: block, value: text.count() as ParsedInt, ids: ids)))
+	module.appendOp(block, op: StdOp.osWriteStderr(ids.mint(), bufId: buf, lenId: emitConst(module, block: block, value: text.count() as FullRangeInt, ids: ids)))
 end 'emitNetpollFailText'
 
 function emitNetpollFailNumber(module StdModule, block IrBlock, ids ValueMinter, digits ValueId, value ValueId)
@@ -276,7 +276,7 @@ end 'emitNetpollFailNumber'
 // it was read \u2014 and a value that reads as a stack address names that shape outright. MEASURED: `armPipeSource`
 // answered `-1` twice with no way to tell those apart, at ten minutes a round trip.
 function emitNetpollFailWith(module StdModule, func IrFunction, block IrBlock, verb NetpollVerb, subject ValueId, answer ValueId, ids ValueMinter)
-	let ordinal = verb.rawValue as ParsedInt
+	let ordinal = verb.rawValue
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: NetpollFailName, args: threeArgs(emitConst(module, block: block, value: ordinal, ids: ids), second: subject, third: answer)))
 	emitRuntimeAbort(module, func: func, block: block, abort: RuntimeAbort.netpollFailed, ids: ids)
 end 'emitNetpollFailWith'
@@ -359,7 +359,7 @@ function buildNetpollBreak(module StdModule, target Target)
 end 'buildNetpollBreak'
 
 // CAS `__np_wake_sig` from `expected` to `replacement`, answering the CAS's success boolean.
-function emitNetpollClaimWakeSig(module StdModule, block IrBlock, expected ParsedInt, replacement ParsedInt, ids ValueMinter) returns ValueId
+function emitNetpollClaimWakeSig(module StdModule, block IrBlock, expected FullRangeInt, replacement FullRangeInt, ids ValueMinter) returns ValueId
 	let addr = ids.mint()
 	module.appendOp(block, op: StdOp.globalAddr(addr, label: NetpollWakeSigLabel))
 	let won = ids.mint()
@@ -431,7 +431,7 @@ function buildNetpollPoll(module StdModule, target Target)
 	let walked = emitCmp(module, block: entryHdr, a: index, b: count, pred: StdCmpPred.ge, ids: ids)
 	module.setTerminator(entryHdr, op: StdOp.condBranch(walked, thenBlockId: doneBlock.id, elseBlockId: entryBody.id))
 
-	let stride = emitConst(module, block: entryBody, value: layout.entryBytes as ParsedInt, ids: ids)
+	let stride = emitConst(module, block: entryBody, value: layout.entryBytes as FullRangeInt, ids: ids)
 	let entryAddr = emitBin(module, block: entryBody, a: entries, b: emitBin(module, block: entryBody, a: index, b: stride, opcode: StdBinOpcode.mul, ids: ids), opcode: StdBinOpcode.add, ids: ids)
 	let source = emitLoadField(module, block: entryBody, record: entryAddr, offset: layout.sourceOffset, ids: ids)
 	let isBreak = emitCmp(module, block: entryBody, a: source, b: emitConst(module, block: entryBody, value: NetpollBreakToken, ids: ids), pred: StdCmpPred.eq, ids: ids)
@@ -484,7 +484,7 @@ function emitNetpollDecodeCompletion(module StdModule, func IrFunction, cur IrBl
 	module.setTerminator(cur, op: StdOp.condBranch(isOverlapped, thenBlockId: overlappedDone.id, elseBlockId: childExit.id))
 
 	let overlapped = emitLoadField(module, block: overlappedDone, record: entryAddr, offset: CompletionEntryOverlappedOffset, ids: ids)
-	let gt = emitBin(module, block: overlappedDone, a: overlapped, b: emitConst(module, block: overlappedDone, value: GtOffOverlapped as ParsedInt, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+	let gt = emitBin(module, block: overlappedDone, a: overlapped, b: emitConst(module, block: overlappedDone, value: GtOffOverlapped as FullRangeInt, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
 	emitStoreField(module, block: overlappedDone, record: gt, offset: GtOffIoResult, value: emitLoadField(module, block: overlappedDone, record: entryAddr, offset: CompletionEntryTransferredOffset, ids: ids))
 	let status = emitLoadField(module, block: overlappedDone, record: entryAddr, offset: CompletionEntryStatusOffset, ids: ids)
 	emitStoreField(module, block: overlappedDone, record: gt, offset: GtOffIoStatus, value: emitBin(module, block: overlappedDone, a: status, b: emitConst(module, block: overlappedDone, value: NetpollStatusMask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids))
@@ -496,7 +496,7 @@ function emitNetpollDecodeCompletion(module StdModule, func IrFunction, cur IrBl
 end 'emitNetpollDecodeCompletion'
 
 // An NTSTATUS is 32 bits in a word that is 64 — see `emitNetpollDecodeCompletion`.
-let NetpollStatusMask = 4294967295 as ParsedInt
+let NetpollStatusMask = 4294967295 as FullRangeInt
 
 // ⭐⭐ **AN ENTRY THAT NAMES A SOURCE — a SOCKET or a CHILD on a POSIX lane, a CHILD or a pipe read on the
 // completion-port one.** Every shape carries the same two facts (which source, and in which directions), each
@@ -549,7 +549,7 @@ function emitEpollEntryReadiness(module StdModule, block IrBlock, entryAddr Valu
 	return NetpollReadiness.create(readable, writeReady: emitNetpollEventTest(module, block: block, events: events, mask: LinuxEpollOut + LinuxEpollErr + LinuxEpollHup, ids: ids))
 end 'emitEpollEntryReadiness'
 
-function emitNetpollEventTest(module StdModule, block IrBlock, events ValueId, mask ParsedInt, ids ValueMinter) returns ValueId
+function emitNetpollEventTest(module StdModule, block IrBlock, events ValueId, mask FullRangeInt, ids ValueMinter) returns ValueId
 	let hit = emitBin(module, block: block, a: events, b: emitConst(module, block: block, value: mask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
 	return emitCmp(module, block: block, a: hit, b: emitConst(module, block: block, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
 end 'emitNetpollEventTest'
@@ -673,7 +673,7 @@ end 'emitNetpollDrain'
 
 // ⭐ **THE RECORD.** `rg`/`wg` are Go's per-direction state words and `rd`/`wd` their deadlines; each pair is
 // laid out so a DIRECTION is an index rather than a branch (`emitPdDirectionAddr`).
-let PdSlotBytes = 8 as ParsedInt
+let PdSlotBytes = 8 as FullRangeInt
 let PdOffFd = 0 as ByteOffset
 let PdOffRg = 8 as ByteOffset
 let PdOffWg = 16 as ByteOffset
@@ -713,16 +713,16 @@ let PdOffGen = 48 as ByteOffset
 // one and this word is where a released key waits for the next holder. It holds `key + 1`, so a zero is the end
 // of the list rather than key zero.
 let PdOffNextFreeKey = 56 as ByteOffset
-let PdBytes = 64 as ParsedInt
+let PdBytes = 64 as FullRangeInt
 
 // The values a direction word holds that are not a green thread. The first three are Go's `pdNil`, `pdReady`
 // and `pdWait`: nothing, a readiness nobody has consumed, and a wait that is marked but not published
 // (`__np_pd_commit`) — or, on a group member, held for a group wait that has ended (see `PdWoken`). A parked
 // thread's record address is a heap pointer, so a word above `PdExpired`, the largest of them, is a published
 // waiter (`emitPdIsWaiter`).
-let PdNil = 0 as ParsedInt
-let PdReady = 1 as ParsedInt
-let PdWait = 2 as ParsedInt
+let PdNil = 0 as FullRangeInt
+let PdReady = 1 as FullRangeInt
+let PdWait = 2 as FullRangeInt
 
 // ⛔⛔ **A WAIT HOLDS ITS DIRECTION UNTIL ITS OWN THREAD RESUMES, NOT UNTIL SOMETHING READIES IT.** Whatever ends
 // a wait readies the thread and leaves the verdict on the word — `PdWoken` for readiness, `PdExpired` for a
@@ -736,19 +736,19 @@ let PdWait = 2 as ParsedInt
 // is its answer — a renounced reader must not issue its call again on a descriptor nobody wants — while a
 // group member the wait did not fire on is held as `PdWait`, so a readiness landing on it before the group
 // resumes becomes `PdWoken` and is reported: the collect drain's child source reports exactly once.
-let PdWoken = 3 as ParsedInt
-let PdExpired = 4 as ParsedInt
+let PdWoken = 3 as FullRangeInt
+let PdExpired = 4 as FullRangeInt
 
 // The two directions, as the index the pairs above are addressed by. EXPORTED because the socket band names
 // the direction of every wait it makes.
-export let NetpollModeRead = 0 as ParsedInt
-export let NetpollModeWrite = 1 as ParsedInt
+export let NetpollModeRead = 0 as FullRangeInt
+export let NetpollModeWrite = 1 as FullRangeInt
 
 // What `__np_pd_wait` answers, with `NetpollWaitStale` below. The socket band's retry loops issue the call again
 // on `NetpollWaitReady` alone; a child's wait has no retry and asks only whether it was ready, so both ends of
 // the pair are exported.
-export let NetpollWaitReady = 0 as ParsedInt
-export let NetpollWaitTimedOut = 1 as ParsedInt
+export let NetpollWaitReady = 0 as FullRangeInt
+export let NetpollWaitTimedOut = 1 as FullRangeInt
 
 // ⛔⛔ **THE WAIT ENDED ON A RECORD THAT IS NO LONGER THIS THREAD’S, AND THE CALLER MUST NOT RETRY.** The
 // generation test (`PdOffGen`) answers this when a release readied the waiter and the descriptor was then
@@ -756,13 +756,13 @@ export let NetpollWaitTimedOut = 1 as ParsedInt
 // at function entry (`emitLiveSocketOrThrow`), so a retry would issue the syscall on a live descriptor that
 // now belongs to ANOTHER socket — stealing its bytes when data is waiting, and parking on its record when not.
 // The caller reports its own operation’s failure instead, with no syscall (`emitSocketWaitReady`).
-export let NetpollWaitStale = 2 as ParsedInt
+export let NetpollWaitStale = 2 as FullRangeInt
 
 // The record table: how many indices the first allocation covers, and one pointer per slot. 64 covers a POSIX
 // process's whole ordinary descriptor range; a Windows SOCKET is a handle value rather than a low dense index
 // and its record sits at twice it (`emitNetpollDescriptorIndex`), so a program that opens one grows the table.
-let PdTableSeedSlots = 64 as ParsedInt
-let PdTableSlotBytes = 8 as ParsedInt
+let PdTableSeedSlots = 64 as FullRangeInt
+let PdTableSlotBytes = 8 as FullRangeInt
 
 // The table's base and how many slots it has. Both move inside ONE hold of `__sched_lock`, which is what
 // `MultiMSharing.underSchedLock` states: what is indivisible here is the PAIR, and no atomic can make a pair
@@ -896,7 +896,7 @@ end 'emitPdDeadline'
 // `&pd.rg`/`&pd.wg`, or `&pd.rd`/`&pd.wd` — `base` names the pair and `mode` the direction.
 function emitPdDirectionAddr(module StdModule, block IrBlock, pd ValueId, base ByteOffset, mode ValueId, ids ValueMinter) returns ValueId
 	let scaled = emitBin(module, block: block, a: mode, b: emitConst(module, block: block, value: PdSlotBytes, ids: ids), opcode: StdBinOpcode.mul, ids: ids)
-	let offset = emitBin(module, block: block, a: emitConst(module, block: block, value: base as ParsedInt, ids: ids), b: scaled, opcode: StdBinOpcode.add, ids: ids)
+	let offset = emitBin(module, block: block, a: emitConst(module, block: block, value: base as FullRangeInt, ids: ids), b: scaled, opcode: StdBinOpcode.add, ids: ids)
 	return emitBin(module, block: block, a: pd, b: offset, opcode: StdBinOpcode.add, ids: ids)
 end 'emitPdDirectionAddr'
 
@@ -941,7 +941,7 @@ end 'emitNetpollUnhookExpired'
 // is a published waiter some road readied without taking it off — clearing it would drop the thread without
 // the `__np_waiters` debit its publication took. Anything else is another party writing a word only this
 // thread may settle, and whatever it stood for would be lost with it.
-function emitNetpollSettleHold(module StdModule, func IrFunction, cur IrBlock, gpp ValueId, ended ParsedInt, woken IrBlock, unwoken IrBlock, ids ValueMinter)
+function emitNetpollSettleHold(module StdModule, func IrFunction, cur IrBlock, gpp ValueId, ended FullRangeInt, woken IrBlock, unwoken IrBlock, ids ValueMinter)
 	var notWoken = module.addBlock(func, label: b"npholdnotwoken", heat: BlockHeat.normal)
 	var notEnded = module.addBlock(func, label: b"npholdnotended", heat: BlockHeat.normal)
 	var stillPublished = module.addBlock(func, label: b"npholdpublished", heat: BlockHeat.normal)
@@ -961,7 +961,7 @@ function emitNetpollSettleHold(module StdModule, func IrFunction, cur IrBlock, g
 	emitRuntimeAbort(module, func: func, block: lost, abort: RuntimeAbort.netpollHoldLost, ids: ids)
 end 'emitNetpollSettleHold'
 
-function emitNetpollStepWaiters(module StdModule, block IrBlock, delta ParsedInt, ids ValueMinter)
+function emitNetpollStepWaiters(module StdModule, block IrBlock, delta FullRangeInt, ids ValueMinter)
 	let waiters = emitLoadAcquireGlobalWord(module, block: block, label: NetpollWaitersLabel, ids: ids)
 	emitStoreReleaseGlobalWord(module, block: block, label: NetpollWaitersLabel, value: emitBin(module, block: block, a: waiters, b: emitConst(module, block: block, value: delta, ids: ids), opcode: StdBinOpcode.add, ids: ids), ids: ids)
 end 'emitNetpollStepWaiters'
@@ -1027,7 +1027,7 @@ export function emitNetpollPdMarkTimedOut(module StdModule, block IrBlock, sourc
 end 'emitNetpollPdMarkTimedOut'
 
 // Call `__np_pd_wait(source, mode, gen)` in `block` and answer its verdict.
-export function emitNetpollPdWait(module StdModule, block IrBlock, source ValueId, mode ParsedInt, gen ValueId, ids ValueMinter) returns ValueId
+export function emitNetpollPdWait(module StdModule, block IrBlock, source ValueId, mode FullRangeInt, gen ValueId, ids ValueMinter) returns ValueId
 	let verdict = ids.mint()
 	module.appendOp(block, op: StdOp.call(verdict, callee: NetpollPdWaitName, args: threeArgs(source, second: emitConst(module, block: block, value: mode, ids: ids), third: gen)))
 	return verdict
@@ -1366,7 +1366,7 @@ function buildNetpollPdDeadline(module StdModule)
 end 'buildNetpollPdDeadline'
 
 // Leave `__sched_lock` and answer `verdict` — every exit `__np_pd_wait` takes while holding the lock.
-function emitNetpollWaitAnswer(module StdModule, block IrBlock, verdict ParsedInt, ids ValueMinter)
+function emitNetpollWaitAnswer(module StdModule, block IrBlock, verdict FullRangeInt, ids ValueMinter)
 	emitSchedLockLeave(module, block: block, ids: ids)
 	emitConstReturn(module, block: block, value: verdict, ids: ids)
 end 'emitNetpollWaitAnswer'
@@ -1921,7 +1921,7 @@ export let NetpollChildCloseName = b"__np_child_close"
 
 // What a POSIX lane's arm answers on success. Its close takes the SOURCE back rather than a token, so the
 // value only has to be distinguishable from the 0 that means refused.
-let NetpollChildArmed = 1 as ParsedInt
+let NetpollChildArmed = 1 as FullRangeInt
 
 // The completion-port lane's source-key allocator: the head of the free list (a key + 1, so 0 is "empty") and
 // the lowest key never yet handed out. Its holders are a parked child and an overlapped read in flight.
@@ -1944,8 +1944,8 @@ let NetpollSourceKeyHighLabel = b"__np_src_key_high"
 // ⚠ **32 BITS EACH IS NOT A COMPROMISE HERE.** An index is a dense allocator's counter and a generation is a
 // per-record close count; neither approaches 2^32 in a process, and the break token is decoded BEFORE any
 // key is split, so no stamped key can be mistaken for it.
-let NetpollKeyGenShift = 32 as ParsedInt
-let NetpollKeyIndexMask = 4294967295 as ParsedInt
+let NetpollKeyGenShift = 32 as FullRangeInt
+let NetpollKeyIndexMask = 4294967295 as FullRangeInt
 
 // `__np_src_key_alloc() -> key` / `__np_src_key_release(key)` — the completion-port lane's stand-in for a
 // descriptor table. `__sched_lock` is taken here, because the PAIR of words is what must move indivisibly.
@@ -2498,7 +2498,7 @@ function buildNetpollOpSettle(module StdModule)
 end 'buildNetpollOpSettle'
 
 // The three doors the socket band reaches the overlapped aim through — see each name's own note.
-export function emitNetpollOpAim(module StdModule, block IrBlock, source ValueId, mode ParsedInt, handle ValueId, ids ValueMinter)
+export function emitNetpollOpAim(module StdModule, block IrBlock, source ValueId, mode FullRangeInt, handle ValueId, ids ValueMinter)
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: NetpollOpAimName, args: threeArgs(source, second: emitConst(module, block: block, value: mode, ids: ids), third: handle)))
 end 'emitNetpollOpAim'
 
@@ -2702,7 +2702,7 @@ let GroupOffArgs = 32 as ByteOffset
 
 // The most members a group may hold: `__np_pd_wait_any` answers one bit per member in a 64-bit word. EXPORTED
 // so a caller sizing its group can be held to it where the size is chosen.
-export let NetpollGroupMaxMembers = 64 as ParsedInt
+export let NetpollGroupMaxMembers = 64 as FullRangeInt
 
 // ⭐⭐⭐ **A MEMBER IS A PAIR, AND THE SECOND HALF IS THE RECORD'S GENERATION WHEN THE CALLER'S OPERATION
 // BEGAN.** It is written at the build, by `emitNetpollGroupSetMember` from the `__np_pd_op_begin` the caller
@@ -2719,7 +2719,7 @@ export let NetpollGroupMaxMembers = 64 as ParsedInt
 // socket band documents as ordinary, so the stamp must predate the gap.
 let GroupSlotArg = 0 as ByteOffset
 let GroupSlotGen = 8 as ByteOffset
-let GroupSlotBytes = 16 as ParsedInt
+let GroupSlotBytes = 16 as FullRangeInt
 
 // The deadline a multi-source wait armed, or 0 for one that armed none — read off the group its park note
 // names, which is `emitPdDeadline`'s question asked of the other park shape.
@@ -2739,20 +2739,20 @@ export let NetpollPdWaitAnyName = b"__np_pd_wait_any"
 let NetpollGroupUnhookName = b"__np_group_unhook"
 
 // EXPORTED so the caller can SIZE the record it owns: its header plus one slot per member.
-export let NetpollGroupHeaderBytes = GroupOffArgs as ParsedInt
+export let NetpollGroupHeaderBytes = GroupOffArgs as FullRangeInt
 export let NetpollGroupSlotBytes = GroupSlotBytes
 
 // `&group[index]` — the one place a member's address is computed, for the writer above and the walk below.
 function emitNetpollGroupSlotAddr(module StdModule, block IrBlock, group ValueId, index ValueId, ids ValueMinter) returns ValueId
 	let scaled = emitBin(module, block: block, a: index, b: emitConst(module, block: block, value: GroupSlotBytes, ids: ids), opcode: StdBinOpcode.mul, ids: ids)
-	let offset = emitBin(module, block: block, a: emitConst(module, block: block, value: GroupOffArgs as ParsedInt, ids: ids), b: scaled, opcode: StdBinOpcode.add, ids: ids)
+	let offset = emitBin(module, block: block, a: emitConst(module, block: block, value: GroupOffArgs as FullRangeInt, ids: ids), b: scaled, opcode: StdBinOpcode.add, ids: ids)
 	return emitBin(module, block: block, a: group, b: offset, opcode: StdBinOpcode.add, ids: ids)
 end 'emitNetpollGroupSlotAddr'
 
 // Write one member into `group` at `index`: its `(fd, mode)` pair and `gen`, the generation `__np_pd_op_begin`
 // answered for `fd` (see `GroupSlotGen`). EXPORTED for the collect drain, which fills a group from whichever of
 // its sources are still live.
-export function emitNetpollGroupSetMember(module StdModule, block IrBlock, group ValueId, index ValueId, fd ValueId, mode ParsedInt, gen ValueId, ids ValueMinter)
+export function emitNetpollGroupSetMember(module StdModule, block IrBlock, group ValueId, index ValueId, fd ValueId, mode FullRangeInt, gen ValueId, ids ValueMinter)
 	let arg = emitNetpollParkArg(module, block: block, fd: fd, mode: emitConst(module, block: block, value: mode, ids: ids), ids: ids)
 	let slot = emitNetpollGroupSlotAddr(module, block: block, group: group, index: index, ids: ids)
 	emitStoreField(module, block: block, record: slot, offset: GroupSlotArg, value: arg)

@@ -1,6 +1,5 @@
 /// Mathematical functions including trigonometry, logarithms, and exponentiation.
 /// @category Math
-public typealias Real = float(f64.min to f64.max)
 public typealias FloatBits = int(i64.min to i64.max)
 
 /// How far a series in this module is pushed. Every series here converges geometrically, so the
@@ -49,7 +48,7 @@ let mathTanPiEighth = 0.41421356237309503
 // ⚠⚠ **THESE ARE A SECOND COPY. THE FIRST IS `stdlib/Builtins.maxon`'s IEEE 754 LAYOUT BLOCK** —
 // `__InfinityBits` and `__FloatSignBit`, the same two values reached by the same reasoning
 // (`i64.min` because a signed int cannot take a literal above `i64.max`), though not
-// the same TEXT: that one is `i64.min as ParsedInt` and this one is bare, because the alias differs.
+// the same TEXT: that one is `i64.min as FullRangeInt` and this one is bare, because the alias differs.
 // Nothing makes the two agree, and a typo in either is a wrong NUMBER rather than a compile error,
 // so the twin is named here and named there, which is the only guard available.
 //
@@ -68,8 +67,8 @@ let mathTanPiEighth = 0.41421356237309503
 // than written out, so `-4503599627370496` never appears in this file meaning something a reader has
 // to decode.
 //
-// `Real` is `float(f64.min to f64.max)` and holds all of them. MEASURED: a float bound written as
-// `f64.min` or `f64.max` is elided as "unbounded on that side", so `Real` carries no range check at
+// `FullRangeFloat` is `float(f64.min to f64.max)` and holds all of them. MEASURED: a float bound written as
+// `f64.min` or `f64.max` is elided as "unbounded on that side", so `FullRangeFloat` carries no range check at
 // all — while `float(-1.0 to f64.max)` does panic on -inf, and `float(0.0 to 1.0)` panics on either
 // infinity.
 let mathFloatSignBit = i64.min  // bit 63; a bare literal above `i64.max` is refused, so it is `i64.min`
@@ -82,7 +81,7 @@ public type Math
 	/// Bring an angle into [-π, π] by whole turns, which is where both trigonometric series below
 	/// converge fast enough for their term counts. Shared by `sin` and `cos`: the loop pair was
 	/// written out twice, and a reduction is exactly the kind of code where one copy gets fixed.
-	static function reduceToPiRange(x Real) returns Real
+	static function reduceToPiRange(x FullRangeFloat) returns FullRangeFloat
 		var angle = x
 
 		while angle > mathPi 'reduce_pos'
@@ -98,7 +97,7 @@ public type Math
 
 	/// Calculate the sine of an angle (in radians)
 	/// Uses Taylor series: sin(x) = x - x^3/3! + x^5/5! - x^7/7! + ...
-	public static function sin(x Real) returns Real
+	public static function sin(x FullRangeFloat) returns FullRangeFloat
 		// Returning `x` rather than the literal 0.0 is what makes sin(-0.0) == -0.0, as IEEE 754
 		// requires of every odd function. (cos needs no such care: it is even, and cos(-0.0) is 1.0.)
 		if x == 0.0 'zero'
@@ -114,7 +113,7 @@ public type Math
 		let x_squared = angle * angle
 		var term = angle  // First term is angle
 		var sum = angle
-		var n = 1.0
+		var n = 1.0 as FullRangeFloat
 
 		// Exclusive bound: `n` runs 1…11, so 11 correction terms follow the leading `angle`. Term n
 		// is x^(2n+1)/(2n+1)!, so at the worst reduced argument |x| = π the first omitted term is
@@ -139,7 +138,7 @@ public type Math
 
 	/// Calculate the cosine of an angle (in radians)
 	/// Uses Taylor series: cos(x) = 1 - x^2/2! + x^4/4! - x^6/6! + ...
-	public static function cos(x Real) returns Real
+	public static function cos(x FullRangeFloat) returns FullRangeFloat
 		// Handle zero case
 		if x == 0.0 'zero'
 			return 1.0
@@ -152,9 +151,9 @@ public type Math
 		// Term n: (-1)^n * x^(2n) / (2n)!
 
 		let x_squared = angle * angle
-		var term = 1.0  // First term is 1
-		var sum = 1.0
-		var n = 1.0
+		var term = 1.0 as FullRangeFloat  // First term is 1
+		var sum = 1.0 as FullRangeFloat
+		var n = 1.0 as FullRangeFloat
 
 		// Exclusive bound: `n` runs 1…11, so 11 correction terms follow the leading 1. Term n is
 		// x^(2n)/(2n)!, so at the worst reduced argument |x| = π the first omitted term is
@@ -177,7 +176,7 @@ public type Math
 
 	/// Calculate e^x where e is Euler's number
 	/// Uses Taylor series: e^x = 1 + x + x^2/2! + x^3/3! + ...
-	public static function exp(x Real) returns Real
+	public static function exp(x FullRangeFloat) returns FullRangeFloat
 		// Handle special cases
 		if x == 0.0 'zero'
 			return 1.0
@@ -212,7 +211,7 @@ public type Math
 		end 'neg'
 
 		// Reduce val to a smaller range using exp(val) = exp(val/2)^2
-		var reduction_count = 0
+		var reduction_count = 0 as ElementIndex
 
 		while val > 1.0 'reduce'
 			val = val / 2.0
@@ -220,9 +219,9 @@ public type Math
 		end 'reduce'
 
 		// Compute exp(val) using Taylor series for small val
-		var term = 1.0
-		var sum = 1.0
-		var k = 1.0
+		var term = 1.0 as FullRangeFloat
+		var sum = 1.0 as FullRangeFloat
+		var k = 1.0 as FullRangeFloat
 
 		// Exclusive bound: `k` runs 1…19, so 19 terms follow the leading 1. The halving loop above
 		// leaves `val` in (0, 1], where the first omitted term is at most 1/20! ≈ 4.1e-19 — two
@@ -263,7 +262,7 @@ public type Math
 	/// Shared by `log` and `log2`. They differ only in how far they push the sum, so the term
 	/// limit is the caller's to state — two written-out copies of this loop is how the two ln 2
 	/// literals at the top of this file came to disagree, and this is the same shape.
-	static function lnBySeries(y Real, termLimit SeriesTermLimit) returns Real
+	static function lnBySeries(y FullRangeFloat, termLimit SeriesTermLimit) returns FullRangeFloat
 		let num = y - 1.0
 		let den = y + 1.0
 
@@ -271,12 +270,12 @@ public type Math
 		// divide, no ranged type to prove it — rides `try`, `otherwise` unreachable.
 		let z = try (num / den) otherwise panic("log series divisor y+1 is > 1")
 		let z_squared = z * z
-		var term = z
-		var sum = z
+		var term = z as FullRangeFloat
+		var sum = z as FullRangeFloat
 
-		for k in 1 upto termLimit 'series'
+		for k in 1 upto (termLimit as ElementIndex) 'series'
 			term = term * z_squared
-			let divisor = 2.0 * k + 1.0
+			let divisor = 2.0 * (k as FullRangeFloat) + 1.0
 
 			// `k >= 1`, so `divisor = 2k+1 >= 3`. Safe divide, no ranged type to prove it — rides
 			// `try`, `otherwise` unreachable.
@@ -295,36 +294,36 @@ public type Math
 	// `bitsOf` and `fromBits` are the bit-pattern doors a program outside the library tier has.
 
 	/// The IEEE 754 binary64 bit pattern of `x`, read as a signed 64-bit integer.
-	public static function bitsOf(x Real) returns FloatBits
+	public static function bitsOf(x FullRangeFloat) returns FloatBits
 		return __Builtins.floatToBits(x)
 	end 'bitsOf'
 
 	/// The double whose IEEE 754 binary64 bit pattern is `bits`.
-	public static function fromBits(bits FloatBits) returns Real
+	public static function fromBits(bits FloatBits) returns FullRangeFloat
 		return __Builtins.bitsToFloat(bits)
 	end 'fromBits'
 
-	public static function positiveInfinity() returns Real
+	public static function positiveInfinity() returns FullRangeFloat
 		return Math.fromBits(mathInfinityBits)
 	end 'positiveInfinity'
 
-	public static function negativeInfinity() returns Real
+	public static function negativeInfinity() returns FullRangeFloat
 		return Math.fromBits(mathNegativeInfinityBits)
 	end 'negativeInfinity'
 
-	public static function quietNaN() returns Real
+	public static function quietNaN() returns FullRangeFloat
 		return Math.fromBits(mathQuietNaNBits)
 	end 'quietNaN'
 
-	static function isPositiveInfinity(z Real) returns bool
+	static function isPositiveInfinity(z FullRangeFloat) returns bool
 		return Math.bitsOf(z) == mathInfinityBits
 	end 'isPositiveInfinity'
 
-	static function isNegativeInfinity(z Real) returns bool
+	static function isNegativeInfinity(z FullRangeFloat) returns bool
 		return Math.bitsOf(z) == mathNegativeInfinityBits
 	end 'isNegativeInfinity'
 
-	static function isInfinite(z Real) returns bool
+	static function isInfinite(z FullRangeFloat) returns bool
 		return Math.isPositiveInfinity(z) or Math.isNegativeInfinity(z)
 	end 'isInfinite'
 
@@ -337,7 +336,7 @@ public type Math
 	/// ⚠ TOTAL over every double, which is what lets `powOfExtremeBase` ask ONE question about a
 	/// zero and an infinity alike: `floatToBits(-inf)` is `0xFFF0000000000000`, negative as an i64,
 	/// exactly as `floatToBits(-0.0)` is. Nothing here is special-cased to the zeros.
-	public static function hasNegativeSignBit(z Real) returns bool
+	public static function hasNegativeSignBit(z FullRangeFloat) returns bool
 		return Math.bitsOf(z) < 0
 	end 'hasNegativeSignBit'
 
@@ -345,7 +344,7 @@ public type Math
 	/// them (any non-zero significand under an all-ones exponent), so comparing against
 	/// `mathQuietNaNBits` would recognise exactly the one this file mints and miss every other. The
 	/// unordered-with-itself property is the only total test, and it is IEEE 754's own.
-	public static function isNaN(z Real) returns bool
+	public static function isNaN(z FullRangeFloat) returns bool
 		return z != z
 	end 'isNaN'
 
@@ -358,7 +357,7 @@ public type Math
 	///
 	/// Shared by `log` and `log2`; `log10` inherits both answers through its divide of `log`
 	/// (-inf/ln10 is -inf, NaN/ln10 is NaN).
-	static function nonPositiveLogResult(x Real) returns Real
+	static function nonPositiveLogResult(x FullRangeFloat) returns FullRangeFloat
 		if x == 0.0 'zero'
 			return Math.negativeInfinity()
 		end 'zero'
@@ -368,7 +367,7 @@ public type Math
 
 	/// Calculate natural logarithm (ln) of x
 	/// Uses Taylor series approximation around x=1
-	public static function log(x Real) returns Real
+	public static function log(x FullRangeFloat) returns FullRangeFloat
 		// ⭐ NOT a sentinel 0.0, which `log(1.0)` also returns — a caller could then not tell a valid
 		// answer from an invalid argument. IEEE 754's answers collide with nothing.
 		if x <= 0.0 'nonPositive'
@@ -396,7 +395,7 @@ public type Math
 
 		// For values far from 1, use log(x) = log(x/2^n) + n*log(2)
 		// to bring x closer to 1 where Taylor series converges faster
-		var n = 0
+		var n = 0 as FullRangeInt
 		var y = x
 
 		// Normalize to range [0.5, 1.0)
@@ -424,7 +423,7 @@ public type Math
 
 	/// Calculate base-10 logarithm of x. Exact at every power of ten a double holds exactly:
 	/// `log10(10^k)` is `k` for k in 0…22.
-	public static function log10(x Real) returns Real
+	public static function log10(x FullRangeFloat) returns FullRangeFloat
 		// Rounded twice, so an exact power can land an ULP off its integer (`log10(100.0)` would be
 		// 1.9999999999999996). The error is far under 0.5, so the nearest integer names the only power
 		// `x` can be, and the exact cases are recovered by comparing against that power.
@@ -438,14 +437,14 @@ public type Math
 		let exponent = trunc(round(answer))
 
 		// Each product is a power of ten a double holds exactly, so no step rounds.
-		var power = 1.0
+		var power = 1.0 as FullRangeFloat
 
 		for _ in 0 upto exponent 'raise'
 			power = power * 10.0
 		end 'raise'
 
 		if x == power 'exactPower'
-			return exponent as Real
+			return exponent as FullRangeFloat
 		end 'exactPower'
 
 		return answer
@@ -453,7 +452,7 @@ public type Math
 
 	/// Calculate base-2 logarithm of x
 	/// Normalizes x to [1.0, 2.0) then uses series for the fractional part
-	public static function log2(x Real) returns Real
+	public static function log2(x FullRangeFloat) returns FullRangeFloat
 		// Not delegated to `log`: the normalization below is by exact halvings, which is what makes
 		// every power of two come back an exact integer. But the two share the special-case answer —
 		// and the guard is load-bearing here for a second reason: `normalize_up` below multiplies by
@@ -474,7 +473,7 @@ public type Math
 		// Powers of 2 normalize to y=1.0 exactly, giving exact integer results. That is also why the
 		// there is no `x == 1.0` shortcut here: y stays 1.0, z is 0, the series is 0 and
 		// `n` is 0, so the general path already answers exactly 0.0.
-		var n = 0
+		var n = 0 as FullRangeInt
 		var y = x
 
 		while y >= 2.0 'normalize_down'
@@ -499,13 +498,13 @@ public type Math
 		let frac = ln_y / mathLn2
 
 		// n is exact integer, frac is the small fractional correction
-		let result = n + frac
+		let result = (n as FullRangeFloat) + frac
 		return result
 	end 'log2'
 
 	/// Calculate the tangent of an angle (in radians)
 	/// Uses the identity: tan(x) = sin(x) / cos(x)
-	public static function tan(x Real) returns Real
+	public static function tan(x FullRangeFloat) returns FullRangeFloat
 		// Returning `x` rather than the literal 0.0 keeps tan(-0.0) == -0.0, as IEEE 754 requires.
 		// The general path would preserve it anyway — sin(-0.0)/cos(-0.0) is -0.0/1.0 — so this is
 		// the shortcut being made to agree with the arithmetic it stands in for.
@@ -536,7 +535,7 @@ public type Math
 	/// True when `value` is a mathematical integer. `pow` asks this of its exponent from several
 	/// arms — a negative base is defined only at integer exponents, and the sign rules below turn on
 	/// the parity of that integer — so the `floor` round-trip is written once.
-	static function isIntegerValue(value Real) returns bool
+	static function isIntegerValue(value FullRangeFloat) returns bool
 		return (value - floor(value)) == 0.0
 	end 'isIntegerValue'
 
@@ -549,7 +548,7 @@ public type Math
 	/// integer — the spacing is 2 across [2^53, 2^54) and doubles again in each binade above it, so
 	/// it is never odd anywhere in that range — so this answers false, which is what IEEE 754
 	/// requires and not an artefact of the test.
-	static function isOddIntegerValue(value Real) returns bool
+	static function isOddIntegerValue(value FullRangeFloat) returns bool
 		if not Math.isIntegerValue(value) 'notAnInteger'
 			return false
 		end 'notAnInteger'
@@ -564,7 +563,7 @@ public type Math
 	/// ln|base| is the side of 1 that |base| falls on. The irregular row is `pow(-1, ±inf) = 1`,
 	/// which IEEE 754 states outright: |-1| is exactly 1, so the limit is 1 from both directions
 	/// rather than the oscillation the bare sequence suggests.
-	static function powOfInfiniteExponent(base Real, exponent Real) returns Real
+	static function powOfInfiniteExponent(base FullRangeFloat, exponent FullRangeFloat) returns FullRangeFloat
 		let magnitude = abs(base)
 
 		if magnitude == 1.0 'unitMagnitude'
@@ -597,7 +596,7 @@ public type Math
 	/// ⚠ THIS IS ALSO THE ARM THAT USED TO RETURN THE SENTINEL `0.0` for a zero base with a negative
 	/// exponent, where the answer is an INFINITY: `pow(0.0, exponent: -1.0)` is a division by zero and
 	/// IEEE 754 says so in as many words.
-	static function powOfExtremeBase(base Real, exponent Real, baseIsInfinite bool) returns Real
+	static function powOfExtremeBase(base FullRangeFloat, exponent FullRangeFloat, baseIsInfinite bool) returns FullRangeFloat
 		// The sign survives only through an odd integer power, and it is read from the BITS for both
 		// kinds of base: `-0.0 < 0.0` is false, so no comparison can tell the two zeros apart, and
 		// the same test answers correctly for -inf.
@@ -612,7 +611,7 @@ public type Math
 		return -0.0 if negative else 0.0
 	end 'powOfExtremeBase'
 
-	/// Calculate base^exponent for Real values, as IEEE 754 defines it.
+	/// Calculate base^exponent for FullRangeFloat values, as IEEE 754 defines it.
 	///
 	/// ⭐ THE ORDER OF THE GUARDS BELOW IS THE SPECIFICATION, not a convenience. IEEE 754 makes
 	/// `pow(x, ±0)` and `pow(1, y)` beat EVERY other rule including the NaN ones, so they come first
@@ -623,7 +622,7 @@ public type Math
 	/// exists partly to keep those two honest: by the time control reaches the series, `base` is
 	/// FINITE and STRICTLY POSITIVE and `exponent` is FINITE and non-zero. No zero, no negative, no
 	/// infinity and no NaN ever reaches `log`.
-	public static function pow(base Real, exponent Real) returns Real
+	public static function pow(base FullRangeFloat, exponent FullRangeFloat) returns FullRangeFloat
 		// Any x to the power of either zero is 1.0 — NaN and the infinities included.
 		if exponent == 0.0 'exponentZero'
 			return 1.0
@@ -685,8 +684,8 @@ public type Math
 			if exponent > 0.0 'positive_int'
 				if exponent <= repeatedMultiplicationLimit 'small_int'
 					// Simple multiplication for small positive integers
-					var result = 1.0
-					var i = 0.0
+					var result = 1.0 as FullRangeFloat
+					var i = 0.0 as FullRangeFloat
 
 					while i < exponent 'mult_loop'
 						result = result * base
@@ -702,8 +701,8 @@ public type Math
 				let neg_exp = -exponent
 
 				if neg_exp <= repeatedMultiplicationLimit 'small_neg'
-					var result = 1.0
-					var i = 0.0
+					var result = 1.0 as FullRangeFloat
+					var i = 0.0 as FullRangeFloat
 
 					while i < neg_exp 'div_loop'
 						// `base` is guarded non-zero (== 0.0 returns early) and positive (< 0.0 returns
@@ -727,7 +726,7 @@ public type Math
 	/// Calculate the arc tangent of z
 	/// Odd symmetry and two range reductions bring every argument down to |z| <= tan(π/8), where
 	/// the series below is exhausted well before a double can resolve its next term.
-	public static function atan(z Real) returns Real
+	public static function atan(z FullRangeFloat) returns FullRangeFloat
 		// Returning `z` rather than the literal 0.0 is what makes atan(-0.0) == -0.0, as IEEE 754
 		// requires and as the oddness fold below claims.
 		if z == 0.0 'zero'
@@ -788,7 +787,7 @@ public type Math
 		let z_squared = z * z
 		var term = z
 		var sum = z
-		var k = 1.0
+		var k = 1.0 as FullRangeFloat
 
 		while k < atan_series_term_limit 'series'
 			term = term * (-z_squared)
@@ -805,7 +804,7 @@ public type Math
 
 	/// Calculate the two-argument arc tangent
 	/// Returns the angle in radians between [-π, π]
-	public static function atan2(y Real, x Real) returns Real
+	public static function atan2(y FullRangeFloat, x FullRangeFloat) returns FullRangeFloat
 		// ⭐ EVERY branch below turns on the SIGN OF y, and where y is a zero, a comparison cannot
 		// supply it. IEEE 754 defines atan2 to carry y's sign through all of the zero cases —
 		// atan2(-0.0, x: -1.0) is -π, not +π — so the sign is read once, from the bits, and every

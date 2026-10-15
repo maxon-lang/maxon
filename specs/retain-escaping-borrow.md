@@ -163,7 +163,7 @@ typealias PointBox = Box with Point
 
 function main() returns ExitCode
 	var b = PointBox.create(Point.create(0, y: 0))
-	var i = 0
+	var i = 0 as FullRangeInt
 	while i < 5 'loop'
 		let pIn = Point.create(3, y: 4)
 		b = PointBox.create(pIn)

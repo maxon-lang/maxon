@@ -55,7 +55,7 @@ type Holder
 		fresh.push(99)
 		items = fresh
 
-		var sum = 0
+		var sum = 0 as Integer
 		for i in 0 upto old.count() 'walk'
 			sum = sum + (try old.get(i) otherwise 0)
 		end 'walk'
@@ -93,7 +93,7 @@ type Holder
 		var old = items
 		items = IntArray.create()
 
-		var sum = 0
+		var sum = 0 as Integer
 		for i in 0 upto old.count() 'walk'
 			sum = sum + (try old.get(i) otherwise 0)
 		end 'walk'
@@ -158,7 +158,7 @@ function main() returns ExitCode
 	fresh.push(99)
 	G = fresh
 
-	var sum = 0
+	var sum = 0 as Integer
 	for i in 0 upto old.count() 'walk'
 		sum = sum + (try old.get(i) otherwise 0)
 	end 'walk'
@@ -190,7 +190,7 @@ type Frozen
 	function total() returns Integer
 		let held = items
 
-		var sum = 0
+		var sum = 0 as Integer
 		for i in 0 upto held.count() 'walk'
 			sum = sum + (try held.get(i) otherwise 0)
 		end 'walk'

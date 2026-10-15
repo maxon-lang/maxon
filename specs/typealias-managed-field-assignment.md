@@ -48,7 +48,7 @@ type Blk
 end 'Blk'
 
 function main() returns ExitCode
-	var i = 0
+	var i = 0 as Num
 
 	while i < 3000 'l'
 		var a = Blk.create()
@@ -88,7 +88,7 @@ type Blk
 end 'Blk'
 
 function main() returns ExitCode
-	var i = 0
+	var i = 0 as Num
 
 	while i < 3000 'l'
 		var a = Blk.create()
@@ -133,14 +133,14 @@ function cloneBlk(src Blk) returns Blk
 end 'cloneBlk'
 
 function main() returns ExitCode
-	var i = 0
-	var total = 0
+	var i = 0 as Num
+	var total = 0 as Num
 
 	while i < 3000 'l'
 		var a = Blk.create()
 		a.args.push(i)
 		let c = cloneBlk(a)
-		total = total + a.args.count() + c.args.count()
+		total = total + (a.args.count() + c.args.count()) as Num
 		i = i + 1
 	end 'l'
 

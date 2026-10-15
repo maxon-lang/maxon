@@ -43,7 +43,14 @@ export enum ErrorCode
 	// anything but a ranged typealias is E2003 too.
 	parserExpectedType = "E2003"
 
-	// An expression is not well formed, or is well formed and not usable where only a constant is. Broader than its name suggests: six distinct message families report under it -- a primary was required and the token stream had something else; a name in an expression has no binding in scope; a binary arithmetic/shift operator got a non-numeric operand; a unary '-' got a non-numeric operand; a top-level binding's initializer does not fold to a compile-time constant; and a field default names no type.
+	// An expression is not well formed, or is well formed and not usable where only a constant is. Broader than its name suggests: eight distinct message families report under it -- a primary was required and the token stream had something else; a name in an expression has no binding in scope; a binary arithmetic/shift operator got a non-numeric operand; a unary '-' got a non-numeric operand; a top-level binding's initializer does not fold to a compile-time constant; a field default names no type; a `var` starts from a bare number; and a `let` starts from a number whose range is unknown.
+	// Every `var` -- local, top-level or `static` -- names its type. One whose initializer is a bare
+	// number (`var x = 0`), arithmetic over bare numbers, a plain `let` constant, or an array, map or
+	// tuple literal of bare numbers with no typed head is refused at the initializer: cast it
+	// (`var x = 0 as Tally`, `var size = (16 * 1024) as ByteCount`). A `let` of a bare number, of
+	// arithmetic over bare numbers or of a literal container is a constant that fits any alias its value
+	// fits, checked at compile time at each use. A `let` of a number whose range the compiler cannot
+	// know (`let w = 1 shl k`) is refused: `let w = (1 shl k) as Width`.
 	// A field with a default takes its type from the default, which is a `true`/`false` or string
 	// literal, `Type.member` or `Type.member(...)` (typed `Type`), or an expression whose outermost
 	// node is a cast (`var count = 0 as Tally`). A bare number (`var count = 0`), a bare global, and
@@ -75,7 +82,7 @@ export enum ErrorCode
 	// A declaration cycle: something is defined in terms of itself. Broader than 'import cycle', which is one of several shapes all three compilers report under it -- others are a cycle among top-level constants ('let A = B + 1' / 'let B = A + 1'), where no initializer can be evaluated because each waits on the other, and a circular typealias ('typealias A = Array with A', or a mutual pair), which describes an infinite type with no finite layout. The list is not a roster to keep exhaustive: what the code means is the cycle, not the construct it was found in.
 	parserCircularDependency = "E2012"
 
-	// An assignment targets a binding declared 'let'. Declare it 'var', or do not reassign it.
+	// An assignment targets a binding declared 'let', a loop counter, or a field of a `let` tuple. Declare it 'var', or do not reassign it.
 	assignToImmutable = "E2013"
 
 	// One parameter list declares the same name twice. The second parameter would be dead and uncallable.
@@ -88,6 +95,10 @@ export enum ErrorCode
 	// refused here when the call names no instance and the calling function holds none to hand on:
 	// call it through a typealias that names the instance (`IntBox.make()`), or from a method of the
 	// type.
+	// A declaration with more members than its layout can number in sixteen bits is refused too: more than
+	// 65,535 fields in a `type`, cases in an `enum`, payload fields in one case, requirements in an
+	// `interface` (its inherited ones included) or elements in a tuple, or more than 65,536 backing entries
+	// written for one enum case. Split the declaration.
 	parserUnsupportedFeature = "E2015"
 
 	// A character literal is malformed (empty, or holding more than one character).
@@ -432,7 +443,18 @@ export enum ErrorCode
 	// `i64.max` written into a signed or narrower alias (`9223372036854775808 as Offset` for an
 	// `int(i64.min to i64.max)` Offset). So is a range that cannot be declared: an empty one
 	// (`int(0 to -1)`), one whose lower bound is above `i64.max`, or one spanning negative values and
-	// values above `i64.max`.
+	// values above `i64.max`. A plain `let` constant, a loop counter between two literal bounds and a value
+	// computed from either carry the range their values can have, integer or float, and a use that reaches
+	// an alias that range leaves is refused at the use (`Value 400 is outside the range of 'Small'`). A
+	// literal container whose bare integer elements need both a negative value and a value above `i64.max`
+	// (`[-1, u64.max]`) has no common integer type: cast the elements to an alias.
+	// A brand is part of a type. Values of two brands over one instance are compared, merged or stored into
+	// one place only through a cast (`xs == ys` for an `Xs` and a `Ys`); a `Self` parameter takes the
+	// receiver's brand, while inside a generic type a parameter spelled with the bare base (`other Box`) fits
+	// every brand of the instance. A tuple element keeps its brand. A `var` born from an unbranded value takes
+	// the brand of the first branded value stored into it -- the first in source order, and for a module
+	// `var` the first in the program's file order -- and a later store of another brand is refused
+	// (`cannot assign a value of type 'Ys' to variable 'a', which holds 'Xs'`).
 	typeMismatch = "E3005"
 
 	// A name is declared twice where exactly one binding is legal: two functions with the same signature, a top-level `let`/`var` declared twice, a TYPE name claimed by two declarations, or a local shadowing a 'self' field.
@@ -516,9 +538,9 @@ export enum ErrorCode
 	// field its type (`var count = 0 as Tally`), an array-literal element, a generic parameter, an
 	// operator operand. A field default that already names its type takes no cast to it: `var gauge =
 	// Gauge.make() as Gauge` is refused. At an overloaded call the casts are reported only when
-	// removing all of them still selects the same overload. A cast to an alias the value's own alias implements, directly
-	// or through its parents, is unneeded too: the value already widens to it. A cast between two
-	// declarations of one name in two files converts, and is never unneeded.
+	// removing all of them still selects the same overload. A cast to an alias the value's own alias implements,
+	// directly or through its parents, is legal: it retypes the value as that ancestor. A cast between two
+	// declarations of one name in two files converts, and is legal too.
 	semanticUnneededCast = "E3010"
 
 	// A named type resolves to no declared type -- a typo, or a type this compiler slice does not have.
@@ -811,14 +833,21 @@ export enum ErrorCode
 	// `let` union payload, a module-level `let`, a value read from a `SharedValue` or a registry `default`, an
 	// element of a `readonly` element type, and a `for`, `if let` or `match` binding over a read-only source,
 	// each through everything it reaches. Refused: binding such a value, a field of it or a call result that may
-	// share its storage to a `var`; storing it
-	// into a `var` field or a mutable container element; passing it to a parameter the callee keeps where
-	// something may write it; and a module-level `var` initializer that may take a module-level `let`'s record.
+	// share its storage to a `var`; storing a value read out of a `let` field, a `let` payload, a `readonly`
+	// element, a `SharedValue` or a registry `default` into a `var` field or a mutable container element, or
+	// passing it to a parameter the callee keeps where something may write it; and a module-level `var`
+	// initializer that may take a module-level `let`'s record. A `let` binding's own record may be stored or
+	// kept: it stays read-only through its new holder while the binding is live, so a write through it there is
+	// E3159.
 	// A `let` field, a `let` payload and a `readonly` element have no other writer, so what is stored into one,
 	// directly or through a parameter the callee stores there, must be read-only, a value type, or moved in (a
 	// sole-owned value, or a `var` at its last use). A generic body that keeps a value of its type parameter is
 	// judged at each instantiation. Use `let` for the binding, or bind or pass a `clone()`. Scalars, `String`,
 	// `Character`, function values and records whose fields are all `let` are value types and are allowed.
+	// A module-level `let` is image data. Its record pushed into a container, local or module-level,
+	// or stored into a field of a module-level `var` is refused; push or store a `clone()`. Handed to
+	// a function that stores its parameter, put in an array literal or given to `upsert`, it is stored
+	// as a copy, so a write through the copy leaves the `let` as it was.
 	semanticVarFromImmutable = "E3078"
 
 	// A match arm binds a case's payload values and then never reads them. Drop the bindings, or use them.
@@ -1022,6 +1051,9 @@ export enum ErrorCode
 	// no default constructor, so there is nothing correct to put there, and the array it hands
 	// back is one whose `count()` does not agree with its `get()` -- `count()` says N while
 	// `get(0)` throws. Refused at the call site, naming the element type.
+	// The same call is refused for an inline element whose range excludes zero (`int(1 to 100)`): the grown
+	// slots hold zero, which is not a value of the element. So are the other producers of slots nothing
+	// wrote, over such an element: `__ManagedMemory.setLength` and `Vector.create`.
 	// The refusal covers the WHOLE call and not only its growing half, because which half a
 	// `resize(n)` is cannot be known until it runs: `n` is compared against a length, and a
 	// compiler holds neither. The two halves therefore split by NAME. Growing supplies the element
@@ -1035,7 +1067,7 @@ export enum ErrorCode
 	// sparse slot tables in `stdlib/Map.maxon` and `stdlib/Set.maxon` are built exactly that way
 	// -- they track occupancy in a parallel `states` column and never read a slot they did not
 	// write. The layer where an unwritten slot is a defined state is `__ManagedMemory.setLength`,
-	// and it stays available.
+	// and it stays available for every element that admits zero.
 	semanticArrayResizeManagedElement = "E3106"
 
 	// Two `test` declarations in one file carry names that SANITIZE to the same symbol. A test has
@@ -1943,6 +1975,14 @@ export enum ErrorCode
 	// receiver too. Inside a closure, a captured name is the closure's own copy, so handing it to a parameter
 	// the callee writes is refused for the same reason. The diagnostic names the read-only root. Use `var`, or
 	// write a `clone()`.
+	// A `for` loop variable or an `if let` binding over a writable source is writable through and is
+	// reassigned by nothing, so handing it to a parameter the callee reassigns is refused; the
+	// diagnostic calls a `for` one a loop variable. A call through a function value or an interface
+	// reports every argument a body it may land on writes, once for each writing body, and a dispatch
+	// names the conformer (`'Doubler.bump' writes its parameter 'n', but 'bump' passes it the
+	// immutable 'x'`). A function handed to a callback parameter is refused where it is handed in when
+	// it writes a read-only value the callee passes it (`'isBig' writes its parameter 'n', but
+	// 'Array.filter' passes it the immutable 'item'`).
 	semanticWriteThroughImmutableRecord = "E3159"
 
 	// A handler over a combined error -- a block-form `try` whose calls throw several error types, at least one
@@ -2155,6 +2195,14 @@ export enum ErrorCode
 	// parameter the callee only writes through, without reassigning it, may overlap a read argument, since
 	// reads are counted. Reported at the argument the callee does not reassign. Pass a `.clone()` of it.
 	argumentOverlapsWrittenParameter = "E3186"
+
+	// A method behind the comparison operators writes its operand or its receiver. `==` and `!=` call
+	// `equals`, and `<`, `<=`, `>` and `>=` call `compare`, so a method of either name that takes one
+	// operand besides its receiver may not write that operand or its receiver -- reassigning it, writing a
+	// field or element of it, or handing it to a function that does. Reported at the method's declaration,
+	// whichever type declares it and whether or not it implements `Equatable` or `Comparable`. Write the
+	// comparison so it only reads both sides.
+	comparisonMethodWritesItsParameter = "E3187"
 
 	// A field access could not be lowered: the base is not a struct, or the field has no slot.
 	invalidFieldAccess = "E4006"

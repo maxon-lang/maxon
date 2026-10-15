@@ -65,8 +65,8 @@ The same defect through `break`. Without the refusal this program prints `105` a
 the `break` never happens.
 ```maxon
 function main() returns ExitCode
-	var total = 0
-	var i = 0
+	var total = 0 as FullRangeInt
+	var i = 0 as FullRangeInt
 	while i < 5 'loop'
 		i = i + 1
 		if i == 2 'skip'
@@ -128,8 +128,8 @@ function classify(x ExitCode) returns ExitCode
 	if x > 5 'big'
 		return 1
 	end 'big'
-	var seen = 0
-	var i = 0
+	var seen = 0 as FullRangeInt
+	var i = 0 as FullRangeInt
 	while i < 4 'scan'
 		i = i + 1
 		if i == 2 'hit'

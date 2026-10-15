@@ -16,6 +16,7 @@ public typealias JsonNodeId = int(0 to u64.max) implements ElementIndex
 public typealias JsonNodeIdArray = Array with JsonNodeId
 
 public typealias JsonInt = int(i64.min to i64.max)
+
 public typealias JsonFloat = float(f64.min to f64.max)
 
 // Nesting depth while rendering. Every level is a live frame of a recursive walk over a tree whose
@@ -623,7 +624,7 @@ type JsonParser
 	end 'decodeUnicodeEscape'
 
 	function parseHex4() returns JsonInt throws JsonError
-		var value = 0
+		var value = 0 as JsonInt
 
 		for _ in 0 upto 4 'loop'
 			let b = try peek()
@@ -734,122 +735,10 @@ end 'JsonParser'
 // =============================================================================
 
 function numberFromBytes(bytes ByteArray, start BytePos, endPos BytePos) returns JsonFloat throws JsonError
-	var i = start
-	var negative = false
-	let first = try bytes.get(i) otherwise 'b1'
-		throw JsonError.invalidNumber
-	end 'b1'
+	let slice = try bytes.slice(start, endIndex: endPos) otherwise throw JsonError.invalidNumber
 
-	if first == 0x2D 'neg'
-		negative = true
-		i = i + 1
-	end 'neg'
-
-	var intValue = 0.0
-
-	while i < endPos 'intLoop'
-		let b = try bytes.get(i as ElementIndex) otherwise 'b2'
-			throw JsonError.invalidNumber
-		end 'b2'
-
-		if b < 0x30 or b > 0x39 'stopInt'
-			break
-		end 'stopInt'
-
-		intValue = intValue * 10.0 + (b - 0x30)
-		i = i + 1
-	end 'intLoop'
-
-	var fracValue = 0.0
-	var fracScale = 1.0
-
-	if i < endPos 'maybeDot'
-		let b = try bytes.get(i as ElementIndex) otherwise 'b3'
-			throw JsonError.invalidNumber
-		end 'b3'
-
-		if b == 0x2E 'dot'
-			i = i + 1
-
-			while i < endPos 'fracLoop'
-				let fb = try bytes.get(i as ElementIndex) otherwise 'b4'
-					throw JsonError.invalidNumber
-				end 'b4'
-
-				if fb < 0x30 or fb > 0x39 'stopFrac'
-					break
-				end 'stopFrac'
-
-				fracScale = fracScale * 10.0
-
-				// `fracScale` is seeded to 1.0 and multiplied by 10.0 immediately above, so it is >= 10
-				// here. Float `/` is fallible with no float ranged type to prove the divisor non-zero,
-				// so the safe divide rides `try`; the `otherwise` is unreachable.
-				fracValue = fracValue + (try ((fb - 0x30) / fracScale) otherwise panic("json parse: fracScale is >= 10"))
-				i = i + 1
-			end 'fracLoop'
-		end 'dot'
-	end 'maybeDot'
-
-	var expValue = 0
-	var expNegative = false
-
-	if i < endPos 'maybeExp'
-		let b = try bytes.get(i as ElementIndex) otherwise 'b5'
-			throw JsonError.invalidNumber
-		end 'b5'
-
-		if b == 0x65 or b == 0x45 'e'
-			i = i + 1
-
-			if i < endPos 'expSign'
-				let s = try bytes.get(i as ElementIndex) otherwise 'b6'
-					throw JsonError.invalidNumber
-				end 'b6'
-
-				if s == 0x2B 'plus'
-					i = i + 1
-				end 'plus'
-
-				if s == 0x2D 'minusExp'
-					expNegative = true
-					i = i + 1
-				end 'minusExp'
-			end 'expSign'
-
-			while i < endPos 'expLoop'
-				let eb = try bytes.get(i as ElementIndex) otherwise 'b7'
-					throw JsonError.invalidNumber
-				end 'b7'
-
-				if eb < 0x30 or eb > 0x39 'stopExp'
-					break
-				end 'stopExp'
-
-				expValue = expValue * 10 + (eb - 0x30)
-				i = i + 1
-			end 'expLoop'
-		end 'e'
-	end 'maybeExp'
-
-	var result = intValue + fracValue
-
-	if expValue != 0 'applyExp'
-		var signedExp = expValue
-
-		if expNegative 'negExp'
-			signedExp = -expValue
-		end 'negExp'
-
-		let factor = Math.pow(10.0, exponent: signedExp as Real)
-		result = result * factor
-	end 'applyExp'
-
-	if negative 'applyNeg'
-		result = -result
-	end 'applyNeg'
-
-	return result
+	let value = try float.fromString(String.from(slice)) otherwise throw JsonError.invalidNumber
+	return value as JsonFloat
 end 'numberFromBytes'
 
 function hexDigit(b Byte) returns JsonInt throws JsonError
@@ -1205,7 +1094,7 @@ function writeNumber(n JsonFloat, out ByteArray)
 			// `-0.0 == 0.0`, so the integral shortcut cannot see a negative zero's sign and would emit `0`,
 			// losing what `numberFromBytes` just preserved for `-0`. RFC 8259's grammar admits `-0`
 			// (`[ minus ] int`), so the sign is written back as the one character it is.
-			if asInt == 0 and Math.hasNegativeSignBit(n as Real) 'negativeZero'
+			if asInt == 0 and Math.hasNegativeSignBit(n as FullRangeFloat) 'negativeZero'
 				writeBytes(out, src: "-0".toByteArray())
 				return
 			end 'negativeZero'

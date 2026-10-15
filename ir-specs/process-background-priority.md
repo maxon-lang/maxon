@@ -32,14 +32,14 @@ what keeps the call standing in every other case's emitted code.
 function main() returns ExitCode
 	let first = __Builtins.enterBackgroundPriority()
 	let second = __Builtins.enterBackgroundPriority()
-	var score = 0
+	var score = 0 as ExitCode
 	if first > 0 'live'
 		score = score + 1
 	end 'live'
 	if second == first 'stable'
 		score = score + 1
 	end 'stable'
-	return score as ExitCode
+	return score
 end 'main'
 ```
 ```exitcode
@@ -68,18 +68,18 @@ func @main {
     x64.callDirect __proc_bg_priority
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 rbx, 0
-    x64.jcc lessEqual, ifcont
+    x64.jcc lessEqual, ifcont#2
   live:
     x64.movRegImm32 rax, 1
-  ifcont:
+  ifcont#2:
     x64.cmpRegReg r8, rbx
     x64.jcc notEqual, critsplit
   stable:
     x64.leaRegRegImm32 r8, rax, 1
-    x64.jmp __rc_ok
+    x64.jmp ifcont#4
   critsplit:
     x64.movRegReg r8, rax
-  __rc_ok:
+  ifcont#4:
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
@@ -121,18 +121,18 @@ func @main {
     x64.callDirect __proc_bg_priority
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 rbx, 0
-    x64.jcc lessEqual, ifcont
+    x64.jcc lessEqual, ifcont#2
   live:
     x64.movRegImm32 rax, 1
-  ifcont:
+  ifcont#2:
     x64.cmpRegReg r8, rbx
     x64.jcc notEqual, critsplit
   stable:
     x64.leaRegRegImm32 r8, rax, 1
-    x64.jmp __rc_ok
+    x64.jmp ifcont#4
   critsplit:
     x64.movRegReg r8, rax
-  __rc_ok:
+  ifcont#4:
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
@@ -173,18 +173,18 @@ func @main {
     arm64.bl __proc_bg_priority
     arm64.movImm x1, 0
     arm64.cmp x19, 0
-    arm64.b.le ifcont
+    arm64.b.le ifcont#2
   live:
     arm64.movImm x1, 1
-  ifcont:
+  ifcont#2:
     arm64.cmp x0, x19
     arm64.b.ne critsplit
   stable:
     arm64.add x0, x1, 1
-    arm64.b __rc_ok
+    arm64.b ifcont#4
   critsplit:
     arm64.movRegReg x0, x1
-  __rc_ok:
+  ifcont#4:
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
@@ -223,18 +223,18 @@ func @main {
     arm64.bl __proc_bg_priority
     arm64.movImm x1, 0
     arm64.cmp x19, 0
-    arm64.b.le ifcont
+    arm64.b.le ifcont#2
   live:
     arm64.movImm x1, 1
-  ifcont:
+  ifcont#2:
     arm64.cmp x0, x19
     arm64.b.ne critsplit
   stable:
     arm64.add x0, x1, 1
-    arm64.b __rc_ok
+    arm64.b ifcont#4
   critsplit:
     arm64.movRegReg x0, x1
-  __rc_ok:
+  ifcont#4:
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret

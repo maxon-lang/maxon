@@ -152,7 +152,7 @@ end 'main'
 <!-- test: tuple-field-write -->
 ```maxon
 function main() returns ExitCode
-	var t = (0, 0)
+	var t = (0 as FullRangeInt, 0 as FullRangeInt)
 	t.0 = 20
 	t.1 = 22
 	return t.0 + t.1
@@ -188,7 +188,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let m = ["a": 10, "b": 32]
-	var sum = 0
+	var sum = 0 as FullRangeInt
 	for (_, value) in m 'loop'
 		sum = sum + value
 	end 'loop'
@@ -584,7 +584,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntMap = Map with (Integer, Integer)
 
 function sum(m IntMap) returns Integer
-	var total = 0
+	var total = 0 as Integer
 	for (_, v) in m 'loop'
 		total = total + v
 	end 'loop'
@@ -831,7 +831,7 @@ A `var` tuple holding a MANAGED element, written through `.1` and read back. The
 scope exit — a missed drop exits 101.
 ```maxon
 function main() returns ExitCode
-	var t = ("a", 1)
+	var t = ("a", 1 as FullRangeInt)
 	t.1 = 41
 	return t.1 + 1
 end 'main'
@@ -845,7 +845,7 @@ Reassigning a whole `var` tuple drops the record it held before binding the new 
 `String`, so a missed drop is a leak (101) and a doubled one an over-release.
 ```maxon
 function main() returns ExitCode
-	var t = ("a", 10)
+	var t = ("a", 10 as FullRangeInt)
 	t = ("b", 32)
 	return t.1 + 10
 end 'main'
@@ -2341,7 +2341,7 @@ function main() returns ExitCode
 	let first = s.pair.0() + s.pair.1
 	s.rearm(41)
 	let second = s.pair.0() + s.pair.1
-	var t = (idle, 0)
+	var t = (idle, 0 as Integer)
 	t = (function() gives 7, 1)
 	print("{first} {second} {t.0()}\n")
 	return 0
@@ -2732,4 +2732,341 @@ end 'main'
 ```
 ```maxoncstderr
 error E3005: specs/tuples/error.a-tuple-element-keeps-its-range.maxon:5:13: Value 2000 is outside the range of 'Tally' (int(0 to 1000))
+```
+
+<!-- test: a-let-tuple-field-is-range-known -->
+A field of a `let` tuple literal is the number written there, so it fits an alias that admits it.
+```maxon
+typealias Small = int(0 to 100)
+
+function take(v Small) returns Small
+	return v
+end 'take'
+
+function main() returns ExitCode
+	let t = (3, 4)
+	let a = t.0
+	print("{take(a)} {take(t.1)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3 4
+```
+
+<!-- test: a-destructured-let-tuple-is-range-known -->
+Destructuring a `let` tuple literal binds names that keep the range of the elements written, whether the tuple is named or in place.
+```maxon
+typealias Small = int(0 to 100)
+
+function take(v Small) returns Small
+	return v
+end 'take'
+
+function main() returns ExitCode
+	let t = (3, 4)
+	let (p, q) = t
+	let (u, w) = (7, 8)
+	print("{take(p + q)} {take(u + w)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7 15
+```
+
+<!-- test: error.a-let-tuple-field-outside-a-narrower-alias -->
+A tuple field is checked against the alias it is handed to, with the element's value named.
+```maxon
+typealias Small = int(0 to 100)
+
+function take(v Small) returns Small
+	return v
+end 'take'
+
+function main() returns ExitCode
+	let t = (3, 400)
+	let big = t.1
+	let w = take(big)
+	return w as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:11:10: Value 400 is outside the range of 'Small' (int(0 to 100))
+```
+
+<!-- test: error.a-let-tuple-field-write-is-refused -->
+A `let` tuple is immutable, so a field write through it is refused as a `let` record's direct field write is.
+```maxon
+function main() returns ExitCode
+	let t = (1 as Count, 2 as Count)
+	t.0 = 5
+	return t.0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:4:2: cannot write through 't': 't' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
+```
+
+<!-- test: a-tuple-literal-keeps-each-field-its-own-integer-type -->
+A tuple's fields are separate slots, so a negative field and a field above `i64.max` do not share an integer type and each keeps its own value.
+```maxon
+function main() returns ExitCode
+	let t = (-1, u64.max)
+	print("{t.0}\n")
+	print("{t.1}\n")
+
+	if t.1 > 1 'greater'
+		print("greater\n")
+	end 'greater'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+-1
+18446744073709551615
+greater
+```
+
+<!-- test: error.a-tuple-literal-of-another-brand-is-refused-at-a-tuple-parameter -->
+A tuple type is its element aliases in order, so `(Ys, Item)` is not `(Xs, Item)` even though both arrays are one instance.
+```maxon
+typealias Item = int(0 to 100)
+typealias Xs = Array with Item
+typealias Ys = Array with Item
+
+function take(xs Xs)
+	print("{xs.count()}\n")
+end 'take'
+
+function pass(p (Xs, Item))
+	take(p.0)
+end 'pass'
+
+function main() returns ExitCode
+	let ys = Ys.create()
+	pass((ys, 1 as Item))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:16:2: argument type mismatch for 'p': expected '(Xs, Item)', got '(Ys, Item)'
+```
+
+<!-- test: error.a-tuple-element-read-keeps-its-brand -->
+An element read out of a `(Ys, Item)` is a `Ys`.
+```maxon
+typealias Item = int(0 to 100)
+typealias Xs = Array with Item
+typealias Ys = Array with Item
+
+function take(xs Xs)
+	print("{xs.count()}\n")
+end 'take'
+
+function pass(p (Ys, Item))
+	take(p.0)
+end 'pass'
+
+function main() returns ExitCode
+	pass((Ys.create(), 1 as Item))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:11:2: argument type mismatch for 'xs': expected 'Xs', got 'Ys'
+```
+
+<!-- test: error.a-destructured-tuple-element-keeps-its-brand -->
+```maxon
+typealias Item = int(0 to 100)
+typealias Xs = Array with Item
+typealias Ys = Array with Item
+
+function take(xs Xs)
+	print("{xs.count()}\n")
+end 'take'
+
+function main() returns ExitCode
+	let pair = (Ys.create(), 1 as Item)
+	let (a, n) = pair
+	print("{n}\n")
+	take(a)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:14:2: argument type mismatch for 'xs': expected 'Xs', got 'Ys'
+```
+
+<!-- test: error.a-tuple-typealias-keeps-its-element-brands -->
+```maxon
+typealias Item = int(0 to 100)
+typealias Xs = Array with Item
+typealias Ys = Array with Item
+
+function take(xs Xs)
+	print("{xs.count()}\n")
+end 'take'
+
+typealias XPair = (Xs, Item)
+typealias YPair = (Ys, Item)
+
+function pass(p XPair)
+	take(p.0)
+end 'pass'
+
+function make() returns YPair
+	return (Ys.create(), 1 as Item)
+end 'make'
+
+function main() returns ExitCode
+	pass(make())
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:22:2: argument type mismatch for 'p': expected 'XPair', got '(Ys, Item)'
+```
+
+<!-- test: error.a-callback-over-a-tuple-of-one-brand-refuses-a-body-over-another -->
+```maxon
+typealias Item = int(0 to 100)
+typealias Xs = Array with Item
+typealias Ys = Array with Item
+
+function take(xs Xs)
+	print("{xs.count()}\n")
+end 'take'
+
+typealias Visit = function((Xs, Item))
+
+function seeYs(p (Ys, Item))
+	print("{p.1}\n")
+end 'seeYs'
+
+function run(v Visit)
+	v((Xs.create(), 1 as Item))
+end 'run'
+
+function main() returns ExitCode
+	run(seeYs)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:21:2: argument type mismatch for 'v': expected 'fn((Xs, Item))', got 'fn((Ys, Item))'
+```
+
+<!-- test: a-tuple-literal-element-without-a-brand-fits-a-branded-tuple-parameter -->
+An element that carries no brand fits the brand its tuple parameter declares, as a literal fits any alias of its kind.
+```maxon
+typealias Item = int(0 to 100)
+typealias Xs = Array with Item
+
+function take(xs Xs)
+	print("{xs.count()}\n")
+end 'take'
+
+function pass(p (Xs, Item))
+	take(p.0)
+	print("{p.1}\n")
+end 'pass'
+
+function main() returns ExitCode
+	pass(([1 as Item, 2 as Item], 3 as Item))
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2
+3
+```
+
+<!-- test: a-tuple-of-matching-brands-is-accepted-and-reads-back-its-brand -->
+```maxon
+typealias Item = int(0 to 100)
+typealias Xs = Array with Item
+
+function take(xs Xs)
+	print("{xs.count()}\n")
+end 'take'
+
+function pass(p (Xs, Item))
+	take(p.0)
+end 'pass'
+
+function main() returns ExitCode
+	let xs = Xs.create()
+	pass((xs, 1 as Item))
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0
+```
+
+<!-- test: error.two-tuples-differing-only-by-the-file-an-alias-brand-comes-from-name-each-one -->
+`pkg/lib.maxon` and `pkg/main.maxon` each declare a file-private `Xs` over one and the same instance, so a `(Xs, Item)` from one file is not a `(Xs, Item)` of the other even though the arrays are one record. The refusal says which file each brand was declared in.
+```maxon
+// --- file: pkg/item.maxon
+export typealias Item = int(0 to 100)
+
+// --- file: pkg/lib.maxon
+typealias Xs = Array with Item
+
+export type Holder
+	export var pair as (Xs, Item)
+
+	export static function make() returns Holder
+		return Holder{pair: (Xs.create(), 1 as Item)}
+	end 'make'
+end 'Holder'
+
+// --- file: pkg/main.maxon
+typealias Xs = Array with Item
+
+function takes(p (Xs, Item)) returns ExitCode
+	return p.1 as ExitCode
+end 'takes'
+
+function main() returns ExitCode
+	return takes(Holder.make().pair)
+end 'main'
+```
+```maxoncstderr
+error E3005: pkg/<fragment>:24:9: argument type mismatch for 'p': expected '(Xs (declared in pkg/main.maxon), Item (declared in pkg/item.maxon))', got '(Xs (declared in pkg/lib.maxon), Item (declared in pkg/item.maxon))'
+```
+
+<!-- test: error.two-tuples-differing-only-by-brand-name-the-brands -->
+Two tuples over one instance whose elements are branded differently print their brands, so the refusal reads `(Xs, Item)` against `(Ys, Item)`.
+```maxon
+typealias Item = int(0 to 100)
+typealias Xs = Array with Item
+typealias Ys = Array with Item
+
+function main() returns ExitCode
+	var pair = (Xs.create(), 1 as Item)
+	pair = (Ys.create(), 2 as Item)
+	return pair.1 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:8:2: cannot assign a value of type '(Ys, Item)' to variable 'pair', which holds '(Xs, Item)'
 ```

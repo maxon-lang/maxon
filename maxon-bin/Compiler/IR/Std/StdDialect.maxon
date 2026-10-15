@@ -769,8 +769,8 @@ end 'StdAtomicRmwOpcode'
 // answer must not spell it from memory: the two native lanes read the boolean straight off the hardware
 // (x86 `setz`, AArch64 `CSET`, both of which produce 1/0 by definition), while the wasm lane materializes
 // it and is therefore the one reader. Inverting the convention has to be possible in ONE place.
-export let AtomicCasSucceeded = 1 as ParsedInt
-export let AtomicCasFailed = 0 as ParsedInt
+export let AtomicCasSucceeded = 1 as FullRangeInt
+export let AtomicCasFailed = 0 as FullRangeInt
 
 // Per-variant static metadata backing for StdOp (read via `op.rawValue`). Carries
 // what passes need to classify an op WITHOUT matching on it: the category (see
@@ -1095,7 +1095,7 @@ end 'NetpollVerb'
 // the two runs rather than outside both. Nearly four billion is what no run reaches — a minted key steps from
 // zero and is bounded by the operations alive at once, and a descriptor's index is twice a Windows handle,
 // which the kernel hands out as small multiples of four.
-export let NetpollBreakToken = 0xEE1EB9F4 as ParsedInt
+export let NetpollBreakToken = 0xEE1EB9F4 as FullRangeInt
 
 // ⭐⭐ **THE IDENTITY AN OVERLAPPED OPERATION COMPLETES UNDER, ON THE COMPLETION-PORT LANE.** A completion key
 // is fixed when the handle joins the port and cannot vary per operation, so it cannot name the OPERATION — and
@@ -1103,7 +1103,7 @@ export let NetpollBreakToken = 0xEE1EB9F4 as ParsedInt
 // transfer"* and the packet's `lpOverlapped` names the operation: `NetpollRuntime`'s decode recovers the issuing
 // thread from it by CONTAINING_RECORD. Beside the break token because the decode tells the three packet shapes
 // apart by these two words alone, and neither may equal a source key.
-export let NetpollOverlappedToken = 0xEE1EB9F5 as ParsedInt
+export let NetpollOverlappedToken = 0xEE1EB9F5 as FullRangeInt
 
 // ⭐⭐ **WHICH WINSOCK ENTRY POINT ONE `osSocketOverlapped` ASKS FOR, AND WHICH OPERANDS IT READS.** Each verb
 // is one call with one argument list; the op carries four operands and a verb reads a prefix of them, so the
@@ -1220,7 +1220,7 @@ export union StdOp
 	// `const`'s answer becomes value-dependent (false for every value but 0) and per-variant
 	// metadata cannot express that. Split the variant, or take `true` back. The guard is
 	// repeated at the idiom's own site so whoever adds it trips over it there.
-	const(resultId ValueId, value ParsedInt, valueType StdType) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
+	const(resultId ValueId, value FullRangeInt, valueType StdType) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
 
 	// Binary op `resultId = lhs <opcode> rhs` over two virtual registers. The integer
 	// `add`/`sub`/`mul` are `isPure` (they never trap — unlike the trapping `div`
@@ -2536,7 +2536,7 @@ export union StdOp
 	// vocabulary to say. ⇒ the size dispatch is the backend's, and this op is the request. The per-target
 	// ladders are specified in docs/internals/memory-allocator.md, memFill and the fill ladders.
 	//
-	// ⭐ **`value` IS A COMPILE-TIME `ParsedInt`, NOT A `ValueId`, AND THAT IS WHAT MAKES THE FILL PATTERN
+	// ⭐ **`value` IS A COMPILE-TIME `FullRangeInt`, NOT A `ValueId`, AND THAT IS WHAT MAKES THE FILL PATTERN
 	// FREE.** Every call site passes a literal (0 to restore the zeroing contract, `PoisonByte` to poison a
 	// dead payload), and a constant lets the isel compute the 64-bit broadcast `byte × 0x0101010101010101`
 	// AT COMPILE TIME and hand the backend an immediate. A `ValueId` operand would buy a generality no caller
@@ -2556,7 +2556,7 @@ export union StdOp
 	// `functionMakesCall`, which decides whether a function needs a frame at all; a `true` here would give
 	// every heap-touching runtime body a prologue it does not need. `isMemory`/`isStore` are the true facts:
 	// it writes memory, so it must order against every load and store around it.
-	memFill(destId ValueId, byteCountId ValueId, value ParsedInt) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: false, clobbersFlags: true, isCmp: false}
+	memFill(destId ValueId, byteCountId ValueId, value FullRangeInt) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: false, clobbersFlags: true, isCmp: false}
 
 	// --- RESERVE address space, and COMMIT a range inside a reservation ---
 	//
@@ -4007,7 +4007,7 @@ export type StdAccessOperands
 	export var addrId as ValueId
 	export var offset as ByteOffset
 	export var valueType as StdType
-	export var constValue as ParsedInt
+	export var constValue as FullRangeInt
 	export var valueId as ValueId
 	export var label as ByteArray
 
@@ -4019,7 +4019,7 @@ export type StdAccessOperands
 		self.shape = StdAccessShape.neither
 	end 'recordNeither'
 
-	function recordConstant(defined ValueId, literal ParsedInt, readType StdType)
+	function recordConstant(defined ValueId, literal FullRangeInt, readType StdType)
 		self.shape = StdAccessShape.constant
 		self.resultId = defined
 		self.constValue = literal
@@ -4653,12 +4653,12 @@ export type StdShapeReader
 	// Whether `valueId` is `cmpImm <pred> x, imm` — a runtime guard's compare against a constant once
 	// `foldConstOperands` has moved it into the immediate; `x` is then `arith.lhs`. The caller names the
 	// constant the emitter compared against, so a renumbered one cannot silently stop matching.
-	export function compareImmDefining(valueId ValueId, pred StdCmpPred, imm ParsedInt) returns bool
+	export function compareImmDefining(valueId ValueId, pred StdCmpPred, imm FullRangeInt) returns bool
 		if not self.arithDefining(valueId) or not self.arith.isComparisonImm() 'notAnImmediateCompare'
 			return false
 		end 'notAnImmediateCompare'
 
-		return self.arith.pred == pred and self.arith.imm as ParsedInt == imm
+		return self.arith.pred == pred and self.arith.imm as FullRangeInt == imm
 	end 'compareImmDefining'
 
 	// The base a field load reads `offset` from: `valueId` must be `loadIndirect(base, offset)`.
@@ -5670,7 +5670,7 @@ module type StdOpCloner
 
 	module function clone(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray, payloads ClonePayloads) returns StdOp
 		let cloned = cloneStdOp(op, valueSubst: valueSubst, blockSubst: blockSubst, payloads: payloads)
-		let variant = op.ordinal as ElementIndex
+		let variant = op.ordinal
 		self.verified.growFilled(variant + 1, value: false)
 		let checked = try self.verified.get(variant) otherwise panic("StdOpCloner.clone: verified.get OOB at {variant} after growing to hold it")
 

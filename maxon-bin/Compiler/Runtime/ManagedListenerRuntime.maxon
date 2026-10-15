@@ -45,7 +45,7 @@
 // it as fast as a peer fills it. 128 is the conventional server figure; `SOMAXCONN` is deliberately not used,
 // because it is 0x7FFFFFFF on Winsock and a kernel-capped 4096 on Linux — one name for two very different
 // requests.
-let ListenBacklog = 128 as ParsedInt
+let ListenBacklog = 128 as FullRangeInt
 
 // ⭐ **THE SCRATCH `getsockname` FILLS, AND WHY IT IS BIGGER THAN THE ADDRESS.** The call writes a
 // `sockaddr_in` AND reads back an in-out `socklen_t`, so one block carries both: the address at 0, and the
@@ -53,7 +53,7 @@ let ListenBacklog = 128 as ParsedInt
 // 32-bit length is written as the low half of that word (`emitStoreDwordPair`).
 let ListenerNameAddressOffset = 0 as ByteOffset
 let ListenerNameLengthOffset = 16 as ByteOffset
-let ListenerNameScratchBytes = 24 as ParsedInt
+let ListenerNameScratchBytes = 24 as FullRangeInt
 
 // `sin_port` is at byte 2 on every platform this compiler targets, and big-endian there. Linux and
 // Windows open the record with a 16-bit `sin_family`; the BSDs open it with a one-byte `sin_len`
@@ -65,18 +65,18 @@ let SinPortLowOffset = 3 as ByteOffset
 
 // A byte's worth of shift as a MULTIPLIER, so the big-endian halfword is composed rather than loaded: this
 // tier has no 16-bit load, and a bare 256 at a field position says nothing about which byte it places.
-let SinPortHighScale = 256 as ParsedInt
+let SinPortHighScale = 256 as FullRangeInt
 
 // ⭐ **THE `__ManagedListenerError` ORDINALS, AS ERROR FLAGS (`ordinal + ErrorFlagOrdinalBias`)** — the
 // `ManagedSocketRuntime` discipline, and the ordinals are positional facts about the case order of the enum
 // DECLARED in `stdlib/Builtins.maxon`. `claimManagedListenerOrdinals` below is what holds these literals to
 // that declaration.
-let ManagedListenerResolveFailedOrdinal = 0 as ParsedInt
-let ManagedListenerBindFailedOrdinal = 1 as ParsedInt
-let ManagedListenerAcceptFailedOrdinal = 2 as ParsedInt
-let ManagedListenerAddressFailedOrdinal = 3 as ParsedInt
-let ManagedListenerClosedOrdinal = 4 as ParsedInt
-let ManagedListenerAcceptRetriableOrdinal = 5 as ParsedInt
+let ManagedListenerResolveFailedOrdinal = 0 as FullRangeInt
+let ManagedListenerBindFailedOrdinal = 1 as FullRangeInt
+let ManagedListenerAcceptFailedOrdinal = 2 as FullRangeInt
+let ManagedListenerAddressFailedOrdinal = 3 as FullRangeInt
+let ManagedListenerClosedOrdinal = 4 as FullRangeInt
+let ManagedListenerAcceptRetriableOrdinal = 5 as FullRangeInt
 let ManagedListenerResolveFailedFlag = ManagedListenerResolveFailedOrdinal + ErrorFlagOrdinalBias
 let ManagedListenerBindFailedFlag = ManagedListenerBindFailedOrdinal + ErrorFlagOrdinalBias
 let ManagedListenerAcceptFailedFlag = ManagedListenerAcceptFailedOrdinal + ErrorFlagOrdinalBias
@@ -246,7 +246,7 @@ function buildManagedListenerPort(module StdModule)
 
 	let scratch = emitRawAlloc(module, block: ask, byteCount: emitConst(module, block: ask, value: ListenerNameScratchBytes, ids: ids), ids: ids)
 	emitStoreDwordPair(module, block: ask, record: scratch, offset: ListenerNameLengthOffset, low: SockaddrInBytes, high: 0, ids: ids)
-	let lengthAt = emitBin(module, block: ask, a: scratch, b: emitConst(module, block: ask, value: ListenerNameLengthOffset as ParsedInt, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let lengthAt = emitBin(module, block: ask, a: scratch, b: emitConst(module, block: ask, value: ListenerNameLengthOffset as FullRangeInt, ids: ids), opcode: StdBinOpcode.add, ids: ids)
 	let status = ids.mint()
 	module.appendOp(ask, op: StdOp.osSocketServe(status, verb: SocketServeVerb.localName, a0Id: socket, a1Id: scratch, a2Id: lengthAt))
 
@@ -345,7 +345,7 @@ end 'emitListenerPolledAccept'
 
 // The refusals that name the listener itself as unusable. Every other refused accept answers
 // `acceptRetriable`, so a server loop may accept again.
-function acceptFatalCodes(os Os) returns ParsedIntArray
+function acceptFatalCodes(os Os) returns FullRangeIntArray
 	return match os 'os'
 		linux or
 		macos gives [socketErrnoNotASocket(os), PosixErrno.badDescriptor.rawValue, PosixErrno.invalidArgument.rawValue, PosixErrno.badAddress.rawValue]
@@ -354,7 +354,7 @@ function acceptFatalCodes(os Os) returns ParsedIntArray
 	end 'os'
 end 'acceptFatalCodes'
 
-function socketErrnoNotASocket(os Os) returns ParsedInt
+function socketErrnoNotASocket(os Os) returns FullRangeInt
 	return match os 'os'
 		linux gives LinuxErrno.notASocket.rawValue
 		macos gives DarwinErrno.notASocket.rawValue

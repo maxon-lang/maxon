@@ -234,7 +234,7 @@ type Mixer uses T where T is Hashable and Equatable
 		var a10 = base + 10
 		var a11 = base + 11
 		var a12 = base + 12
-		var i = 0
+		var i = 0 as Integer
 		while i < 3 'loop'
 			let d = bump(i)
 			let h = key.hash()

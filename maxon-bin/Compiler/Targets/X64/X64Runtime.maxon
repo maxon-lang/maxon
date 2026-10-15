@@ -682,7 +682,7 @@ let UnguardedDiagnosticChainBytes = 528 + 56
 // The frame is read back from `beginFunction` rather than recomputed, so this certificate cannot come to
 // disagree with the frame it certifies.
 function requireWriteStreamFitsGreenThreadStack(asm X64RuntimeAsm, target Target)
-	let footprint = asm.stackBytesPerCall() as ParsedInt
+	let footprint = asm.stackBytesPerCall() as FullRangeInt
 	let budget = gtStackGuardMargin(target) - UnguardedDiagnosticChainBytes
 
 	if footprint > budget 'overflowsGreenThreadStack'
@@ -1462,7 +1462,7 @@ end 'emitFaultCodeArm'
 // A guard-page exception inside `[StackLimit − guardRegionBytes, StackLimit)` is the system stack's
 // own `PAGE_GUARD` (`GtRuntime.SystemStackGuard.pageGuardWithHeadroom`) and is reported as a stack
 // overflow: the page's guard status is one-shot, so resuming would let the write land past it.
-function emitSystemStackGuardFaultArm(asm X64RuntimeAsm, codeReg X64Register, guardRegionBytes ParsedInt, prefixSlot StackSize, classified BlockId)
+function emitSystemStackGuardFaultArm(asm X64RuntimeAsm, codeReg X64Register, guardRegionBytes FullRangeInt, prefixSlot StackSize, classified BlockId)
 	let next = asm.newLabel()
 
 	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: ExcCodeGuardPage as MachineWord)
@@ -1975,7 +1975,7 @@ function buildLinuxRuntimeInitChunk(usesGt bool, target Target) returns Function
 	return asm.finishFunction(RuntimeInitName)
 end 'buildLinuxRuntimeInitChunk'
 
-function x64LinuxSigactionFieldDisp(asm X64RuntimeAsm, actFirstSlot StackSize, field ParsedInt) returns Imm32
+function x64LinuxSigactionFieldDisp(asm X64RuntimeAsm, actFirstSlot StackSize, field FullRangeInt) returns Imm32
 	return x64LinuxBufferDisp(asm, firstSlot: actFirstSlot, slotCount: LinuxSigactionSlots) + (field as Imm32)
 end 'x64LinuxSigactionFieldDisp'
 

@@ -58,7 +58,7 @@ function main() returns ExitCode
 	arr.push(true)
 	arr.push(false)
 	arr.refill(11, value: true)
-	var lit = 0
+	var lit = 0 as Count
 	for b in arr 'count'
 		if b 'set'
 			lit = lit + 1
@@ -82,7 +82,7 @@ function main() returns ExitCode
 	var arr = BoolArray.create()
 	arr.refill(9, value: true)
 	arr.refill(9, value: false)
-	var lit = 0
+	var lit = 0 as Count
 	for b in arr 'count'
 		if b 'set'
 			lit = lit + 1
@@ -108,9 +108,9 @@ function main() returns ExitCode
 	var arr = QuarterArray.create()
 	arr.push(1 as Quarter)
 	arr.refill(7, value: 3 as Quarter)
-	var total = 0
+	var total = 0 as FullRangeInt
 	for q in arr 'sum'
-		total = total + q
+		total = total + q as FullRangeInt
 	end 'sum'
 	return total + arr.managed.elementSize()
 end 'main'
@@ -157,7 +157,7 @@ typealias IntArray = Array with Integer
 function main() returns ExitCode
 	var arr = IntArray.create()
 	arr.refill(3, value: 16909060)
-	var total = 0
+	var total = 0 as Integer
 	for v in arr 'sum'
 		total = total + v
 	end 'sum'
@@ -204,7 +204,7 @@ function main() returns ExitCode
 	arr.push(1)
 	arr.push(2)
 	arr.growFilled(5, value: 9)
-	var total = 0
+	var total = 0 as Integer
 	for v in arr 'sum'
 		total = total + v
 	end 'sum'
@@ -228,11 +228,11 @@ function main() returns ExitCode
 	arr.push(4)
 	arr.push(5)
 	arr.growFilled(2, value: 9)
-	var total = 0
+	var total = 0 as Integer
 	for v in arr 'sum'
 		total = total + v
 	end 'sum'
-	return total + arr.count()
+	return total + arr.count() as Integer
 end 'main'
 ```
 ```exitcode
@@ -271,17 +271,17 @@ two 8-byte elements is sixteen bytes, two whole words and no tail at all.
 ```maxon
 function main() returns ExitCode
 	var b = ByteArray.create()
-	var i = 0
+	var i = 0 as Count
 	while i < 5 'fill'
 		b.push(9)
 		i = i + 1
 	end 'fill'
 	b.resize(2)
 	b.resize(5)
-	var total = 0
-	var k = 2
+	var total = 0 as Count
+	var k = 2 as Count
 	while k < 5 'sum'
-		total = total + (try b.get(k) otherwise 99)
+		total = total + (try b.get(k) otherwise 99) as Count
 		k = k + 1
 	end 'sum'
 	return total as ExitCode
@@ -304,7 +304,7 @@ function main() returns ExitCode
 	arr.push("alpha")
 	arr.push("beta")
 	arr.refill(4, value: "zeta")
-	var hits = 0
+	var hits = 0 as Count
 	for s in arr 'sum'
 		if s == "zeta" 'match'
 			hits = hits + 1
@@ -338,7 +338,7 @@ function main() returns ExitCode
 	var arr = SlotArray.create()
 	arr.push(Slot.create(1))
 	arr.refill(3, value: Slot.create(4))
-	var total = 0
+	var total = 0 as Integer
 	for s in arr 'sum'
 		total = total + s.value
 	end 'sum'
@@ -360,7 +360,7 @@ function main() returns ExitCode
 	var arr = StringArray.create()
 	arr.push("ab")
 	arr.growFilled(4, value: "cde")
-	var hits = 0
+	var hits = 0 as Count
 	for s in arr 'sum'
 		if s == "cde" 'match'
 			hits = hits + 1
@@ -398,7 +398,7 @@ function main() returns ExitCode
 	var arr = SlotArray.create()
 	arr.push(Slot.create(6))
 	arr.growFilled(3, value: Slot.create(7))
-	var total = 0
+	var total = 0 as Integer
 	for s in arr 'sum'
 		total = total + s.value
 	end 'sum'
@@ -571,8 +571,8 @@ function main() returns ExitCode
 	if not applied 'aTrivialElementMustApply'
 		return 5
 	end 'aTrivialElementMustApply'
-	var total = 0
-	var i = 0
+	var total = 0 as FullRangeInt
+	var i = 0 as Count
 	while i < 4 'sum'
 		total = total + (try mm.get(i) otherwise return 6)
 		i = i + 1
@@ -603,10 +603,10 @@ function main() returns ExitCode
 	if not applied 'aTrivialElementMustApply'
 		return 7
 	end 'aTrivialElementMustApply'
-	var total = 0
-	var i = 0
+	var total = 0 as Count
+	var i = 0 as Count
 	while i < 5 'sum'
-		total = total + (try mm.get(i) otherwise return 8)
+		total = total + (try mm.get(i) otherwise return 8) as Count
 		i = i + 1
 	end 'sum'
 	return total as ExitCode

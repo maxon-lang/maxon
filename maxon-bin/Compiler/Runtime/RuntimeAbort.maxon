@@ -540,12 +540,12 @@ export function emitRuntimeAbort(module StdModule, func IrFunction, block IrBloc
 	let messageAddr = ids.mint()
 	module.appendOp(block, op: StdOp.rdataAddr(messageAddr, label: runtimeAbortMessageLabel(abort)))
 	let messageLength = ids.mint()
-	module.appendOp(block, op: StdOp.const(messageLength, value: runtimeAbortMessage(abort).count() as ParsedInt, valueType: StdType.i64))
+	module.appendOp(block, op: StdOp.const(messageLength, value: runtimeAbortMessage(abort).count() as FullRangeInt, valueType: StdType.i64))
 
 	// Bound to a local FIRST: the union-case argument type-checker cannot lower an
 	// `EnumMember.rawValue` written directly as a case argument (E9001) — the same reason
 	// `StdToArm64Conversion.vregOf` binds `reg.rawValue` before using it.
-	let code = abort.rawValue as ParsedInt
+	let code = abort.rawValue
 	let codeId = ids.mint()
 	module.appendOp(block, op: StdOp.const(codeId, value: code, valueType: StdType.i64))
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: RuntimeAbortName, args: threeArgs(messageAddr, second: messageLength, third: codeId)))

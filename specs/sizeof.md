@@ -393,12 +393,12 @@ type Cell uses T where T is Equatable
 	end 'make'
 
 	static function width(n Count) returns Count
-		return (sizeof(T) as Count) + n
+		return sizeof(T) + n
 	end 'width'
 
 	static function widthOf(x T) returns Count
 		let c = Self{v: x}
-		return Self.width(0) + (sizeof(T) as Count) + (0 if c.v == c.v else 0)
+		return Self.width(0) + sizeof(T) + (0 if c.v == c.v else 0)
 	end 'widthOf'
 end 'Cell'
 
@@ -432,7 +432,7 @@ type Cell uses T
 	end 'create'
 
 	static function sized(v T, n Int) returns Self
-		let f = function() gives sizeof(T) + n
+		let f = function() gives (sizeof(T) as Int) + n
 		if f() != 9 'theSizeOfAnIntegerPlusOne'
 			panic("the closure read the wrong size")
 		end 'theSizeOfAnIntegerPlusOne'
@@ -451,4 +451,22 @@ end 'main'
 ```
 ```exitcode
 6
+```
+
+<!-- test: error.sizeof-is-a-count -->
+`sizeof` produces a `Count`, which a parameter of another alias refuses.
+```maxon
+typealias Score = int(0 to u64.max)
+
+function show(v Score)
+	print("{v}\n")
+end 'show'
+
+function main() returns ExitCode
+	show(sizeof(int))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:9:2: argument type mismatch for 'v': expected 'Score', got 'Count'
 ```

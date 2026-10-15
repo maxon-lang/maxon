@@ -781,7 +781,7 @@ export type VarInfo
 	// / parameter of a build writing a sidecar and for nothing else. `boundValue` is the CURRENT value and
 	// is overwritten in place, so it alone cannot say where a debugger should look: a `var` written in both
 	// arms of an `if` and read past the join is three values under one name, and the value the read holds
-	// is the one the merge minted rather than the one the declaration produced. `Parser.recordDebugRebind`
+	// is the one the merge minted rather than the one the declaration produced. `Parser.recordRebind`
 	// is what keeps the whole sequence, and this is what tells it which record to keep it in.
 	export var debugLocalRecorded = false
 	export var debugLocalSlot = 0 as DebugLocalSlot
@@ -1002,6 +1002,7 @@ export type VarInfo
 	// The merge renumbering that last rewrote this binding's type ids (`ParseStaging.renumberArtifact`). One
 	// binding is filed in several places, and a name renumbering applied twice moves an id it already moved.
 	export var renumberedIn = 0 as RenumberingEpoch
+	export var brandKey = ByteArray.create()
 
 	// ⭐⭐ **THE ONE PLACE A `VarInfo` LITERAL IS SPELLED.** Every constructor below names ONLY the fields
 	// its binding kind actually differs on; everything else — the whole inert tail, and every per-path bit
@@ -1120,8 +1121,8 @@ export type VarInfo
 
 	// The owned entry that holds a combined error's match obligation (`isErrorMatchObligation`) — named after the
 	// `(e)` binding it answers for, and bound to the caught flag.
-	export static function createErrorMatchObligation(name ByteArray, flag ValueId) returns VarInfo
-		return Self.make(name, varType: MaxonType.integer, mutable: false, boundValue: flag, isErrorMatchObligation: true)
+	export static function createErrorMatchObligation(name ByteArray, varType MaxonType, flag ValueId) returns VarInfo
+		return Self.make(name, varType: varType, mutable: false, boundValue: flag, isErrorMatchObligation: true)
 	end 'createErrorMatchObligation'
 
 	// Construct a value binding: `name` aliases the SSA value `boundValue`. No stack slot is
@@ -1228,6 +1229,7 @@ export type VarInfo
 		writer.unsigned(self.brandId as CacheUnsigned)
 		writer.unsigned(self.awaitingMoveReads as CacheUnsigned)
 		writer.unsigned(self.renumberedIn as CacheUnsigned)
+		writer.bytes(self.brandKey)
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns VarInfo throws LibraryCacheDamage
@@ -1258,12 +1260,13 @@ export type VarInfo
 		let f_brandId = (try reader.unsigned()) as TypeNameId
 		let f_awaitingMoveReads = (try reader.unsigned()) as ElementIndex
 		let f_renumberedIn = (try reader.unsigned()) as RenumberingEpoch
+		let f_brandKey = try reader.bytes()
 
-		return Self{name: f_name, varType: f_varType, mutable: f_mutable, slot: f_slot, boundValue: f_boundValue, debugLocalRecorded: f_debugLocalRecorded, debugLocalSlot: f_debugLocalSlot, movedFrom: f_movedFrom, partiallyMoved: f_partiallyMoved, isSelfField: f_isSelfField, fieldIndex: f_fieldIndex, payload: f_payload, payloadSlotVacated: f_payloadSlotVacated, isParameter: f_isParameter, lastReadToken: f_lastReadToken, namesModuleStorage: f_namesModuleStorage, referenced: f_referenced, mutabilityExercised: f_mutabilityExercised, isCellBinding: f_isCellBinding, cellCrossesByReference: f_cellCrossesByReference, elementWritable: f_elementWritable, rootKind: f_rootKind, cellEpoch: f_cellEpoch, isErrorMatchObligation: f_isErrorMatchObligation, brandId: f_brandId, awaitingMoveReads: f_awaitingMoveReads, isEnrolled: false, enrolledAt: 0, renumberedIn: f_renumberedIn}
+		return Self{name: f_name, varType: f_varType, mutable: f_mutable, slot: f_slot, boundValue: f_boundValue, debugLocalRecorded: f_debugLocalRecorded, debugLocalSlot: f_debugLocalSlot, movedFrom: f_movedFrom, partiallyMoved: f_partiallyMoved, isSelfField: f_isSelfField, fieldIndex: f_fieldIndex, payload: f_payload, payloadSlotVacated: f_payloadSlotVacated, isParameter: f_isParameter, lastReadToken: f_lastReadToken, namesModuleStorage: f_namesModuleStorage, referenced: f_referenced, mutabilityExercised: f_mutabilityExercised, isCellBinding: f_isCellBinding, cellCrossesByReference: f_cellCrossesByReference, elementWritable: f_elementWritable, rootKind: f_rootKind, cellEpoch: f_cellEpoch, isErrorMatchObligation: f_isErrorMatchObligation, brandId: f_brandId, awaitingMoveReads: f_awaitingMoveReads, isEnrolled: false, enrolledAt: 0, renumberedIn: f_renumberedIn, brandKey: f_brandKey}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize232
-		return sizeof(VarInfo) as CacheSize232
+	static function cacheLayoutBytes() returns CacheSize240
+		return sizeof(VarInfo) as CacheSize240
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -1869,7 +1872,7 @@ export typealias UnusedBindingCandidateArray = Array with UnusedBindingCandidate
 // ARE the alias's definition: they are what a narrowing conversion is checked against,
 // and a name is never a proof that a value lies inside them.
 //
-// `low`/`high` are INCLUSIVE and stored as the raw 64-bit pattern `ParsedInt` holds:
+// `low`/`high` are INCLUSIVE and stored as the raw 64-bit pattern `FullRangeInt` holds:
 // `upto` (an exclusive upper bound) is normalized to `high - 1` at parse time so the
 // registry has ONE representation, and an unsigned-domain bound such as `u64.max`
 // rides as the signed value with the same bits (which is exactly how a cast against
@@ -1961,8 +1964,8 @@ export type RangedTypeAlias
 	// The primitive the alias resolves to — the `int` / `float` keyword it was
 	// declared over. What TypeResolution substitutes for `named(alias)`.
 	export var underlying as MaxonType
-	export var low as ParsedInt
-	export var high as ParsedInt
+	export var low as FullRangeInt
+	export var high as FullRangeInt
 
 	// WHERE it was declared. The file makes resolution file-scoped (`RangedAliasRegistry.lookup` — a
 	// use resolves to its OWN file's alias before anyone else's), and the name's position anchors the
@@ -1989,7 +1992,7 @@ export type RangedTypeAlias
 	// 64: so a reader never has to guess which one a range meant.
 	export var domain as RangedAliasDomain
 
-	export static function create(name ByteArray, underlying MaxonType, low ParsedInt, high ParsedInt, visibility Visibility, declFilePath FilePath, nameLine LineNumber, nameColumn ColumnNumber, domain RangedAliasDomain = RangedAliasDomain.quantity) returns RangedTypeAlias
+	export static function create(name ByteArray, underlying MaxonType, low FullRangeInt, high FullRangeInt, visibility Visibility, declFilePath FilePath, nameLine LineNumber, nameColumn ColumnNumber, domain RangedAliasDomain = RangedAliasDomain.quantity) returns RangedTypeAlias
 		return Self{name: name, underlying: underlying, low: low, high: high, visibility: visibility, declFilePath: declFilePath, nameLine: nameLine, nameColumn: nameColumn, domain: domain}
 	end 'create'
 
@@ -2023,8 +2026,8 @@ export type RangedTypeAlias
 	module static function cacheRead(reader LibraryCacheReader) returns RangedTypeAlias throws LibraryCacheDamage
 		let f_name = try reader.bytes()
 		let f_underlying = try cacheReadMaxonType(reader)
-		let f_low = (try reader.signed()) as ParsedInt
-		let f_high = (try reader.signed()) as ParsedInt
+		let f_low = (try reader.signed()) as FullRangeInt
+		let f_high = (try reader.signed()) as FullRangeInt
 		let f_declFilePath = try reader.path()
 		let f_nameLine = (try reader.unsigned()) as LineNumber
 		let f_nameColumn = (try reader.unsigned()) as ColumnNumber
@@ -2077,10 +2080,10 @@ export type AliasImplementsClause
 	export var visibility as Visibility
 	export var declFilePath as FilePath
 	export var isFloat as bool
-	export var low as ParsedInt
-	export var high as ParsedInt
+	export var low as FullRangeInt
+	export var high as FullRangeInt
 
-	export static function create(name ByteArray, parentName ByteArray, visibility Visibility, declFilePath FilePath, isFloat bool, low ParsedInt, high ParsedInt) returns AliasImplementsClause
+	export static function create(name ByteArray, parentName ByteArray, visibility Visibility, declFilePath FilePath, isFloat bool, low FullRangeInt, high FullRangeInt) returns AliasImplementsClause
 		return Self{name: name, parentName: parentName, visibility: visibility, declFilePath: declFilePath, isFloat: isFloat, low: low, high: high}
 	end 'create'
 
@@ -2101,8 +2104,8 @@ export type AliasImplementsClause
 		let f_visibility = try cacheReadVisibility(reader)
 		let f_declFilePath = try reader.path()
 		let f_isFloat = try reader.flag()
-		let f_low = (try reader.signed()) as ParsedInt
-		let f_high = (try reader.signed()) as ParsedInt
+		let f_low = (try reader.signed()) as FullRangeInt
+		let f_high = (try reader.signed()) as FullRangeInt
 
 		return Self{name: f_name, parentName: f_parentName, visibility: f_visibility, declFilePath: f_declFilePath, isFloat: f_isFloat, low: f_low, high: f_high}
 	end 'cacheRead'
@@ -2485,16 +2488,16 @@ end 'cacheReadRangeContestedAliasMap'
 // on EVERY target, and neither may start to derive from the bounds below. A guard narrower than its slot
 // is what every ranged alias in the language already is — `int(0 to 100)` rides an i64, and `lookup`'s
 // header spells that argument out in full.
-let ExitCodeAliasLow = 0 as ParsedInt
+let ExitCodeAliasLow = 0 as FullRangeInt
 
 // The byte-sized POSIX status shared by Linux, macOS and WASI — the `#else` arm of the declaration
 // mirrored above.
-let PosixExitCodeAliasHigh = 255 as ParsedInt
+let PosixExitCodeAliasHigh = 255 as FullRangeInt
 
 // The platform shape, spelled ONCE. A `match` over `Os` rather than a "Windows or not" test, for
 // `cpuCanonicalName`'s reason: a fifth OS must be unable to arrive without an arm being written here,
 // where an `else` would quietly hand it Windows' bound or POSIX's.
-function exitCodeAliasHigh(os Os) returns ParsedInt
+function exitCodeAliasHigh(os Os) returns FullRangeInt
 	return match os 'os'
 		windows gives U32MaxBound
 		linux or
@@ -2515,7 +2518,7 @@ end 'exitCodeAliasHigh'
 // width on Windows nothing truncates on the way in, so there is nothing to separate.) What is an
 // error is a range the slot CANNOT hold — a guard admitting values that would be silently cut down
 // on every store.
-function requireExitCodeRangeFitsItsWidth(high ParsedInt)
+function requireExitCodeRangeFitsItsWidth(high FullRangeInt)
 	let rangeBytes = rangedAliasStorageBytes(ExitCodeAliasLow, high: high)
 	let widthBytes = primitiveTypeByteSize(ValueTypeTag.exitCode)
 
@@ -2540,7 +2543,7 @@ end 'requireExitCodeRangeFitsItsWidth'
 // answers with one platform's range by construction rather than by every caller remembering to ask.
 //
 // ⚠ `public`, not `global`: a `public` library signature names `ExitCode`, and at `global` E3167 would refuse it.
-function builtinExitCodeAlias(readerFilePath FilePath, high ParsedInt) returns RangedTypeAlias
+function builtinExitCodeAlias(readerFilePath FilePath, high FullRangeInt) returns RangedTypeAlias
 	return RangedTypeAlias.create(ExitCodeBuiltinName, underlying: MaxonType.integer, low: ExitCodeAliasLow, high: high, visibility: Visibility.public, declFilePath: readerFilePath, nameLine: 0, nameColumn: 0)
 end 'builtinExitCodeAlias'
 
@@ -2986,7 +2989,7 @@ export type RangedAliasRegistry
 	//
 	// A `let`, mirroring `Project.target`'s, and for its reason: a registry is aimed at one target when it
 	// is built and re-aiming it mid-compile would make two lookups of one name disagree.
-	let exitCodeHigh as ParsedInt
+	let exitCodeHigh as FullRangeInt
 
 	// ⚠ **IT TAKES THE TARGET'S `Os`, WHICH IS THE ONE THING A REGISTRY CANNOT LEARN LATER** — see
 	// `exitCodeHigh` above. Every construction site supplies it from the `Target` its own caller was
@@ -3518,7 +3521,7 @@ export type RangedAliasRegistry
 	//
 	// ⭐⭐ **`alsoScope` IS EVERY NAME A SECOND *KIND* OF DECLARATION ALSO HOLDS** — the cross-KIND contest's
 	// names (`ProgramSignatures.crossKindScopedAliasNames`), scoped through exactly this mechanism and not a
-	// second one. A `type ParsedInt` in a user file and a `typealias ParsedInt` in `stdlib/Builtins.maxon`
+	// second one. A `type FullRangeInt` in a user file and a `typealias FullRangeInt` in `stdlib/Builtins.maxon`
 	// give the name two MEANINGS rather than two ranges, but the thing that has to happen to a container
 	// over it is identical: its element needs a spelling only ONE declaration answers for, so that a reader
 	// with no file — the whole managed tier (`typeIsManaged`, `managedFieldDropCallee`) — cannot resolve it
@@ -3844,7 +3847,7 @@ export type RangedAliasRegistry
 		let f_underlyingContested = try cacheReadUnderlyingContestedAliasSet(reader)
 		let f_rangeContested = try cacheReadRangeContestedAliasMap(reader)
 		let f_identities = try cacheReadDeclarationIdentityMap(reader)
-		let f_exitCodeHigh = (try reader.signed()) as ParsedInt
+		let f_exitCodeHigh = (try reader.signed()) as FullRangeInt
 
 		return Self{byName: f_byName, multiplyDeclared: f_multiplyDeclared, storageBytes: f_storageBytes, packedBits: f_packedBits, provenance: f_provenance, underlyingContested: f_underlyingContested, rangeContested: f_rangeContested, identities: f_identities, exitCodeHigh: f_exitCodeHigh}
 	end 'cacheRead'
@@ -3936,14 +3939,14 @@ end 'mintsOfDeclarations'
 // ⚠ Nothing is lost by that: an element with a negative lower bound is not byte-packed either
 // (`rangedAliasStorageBytes` gives it the machine word), so the boundary's stride test refuses it a second
 // time. The two clauses agree here rather than one leaning on the other.
-export function rangeHoldsEveryByte(low ParsedInt, high ParsedInt) returns bool
+export function rangeHoldsEveryByte(low FullRangeInt, high FullRangeInt) returns bool
 	return low == ByteValueSetLow and high >= ByteValueSetHigh
 end 'rangeHoldsEveryByte'
 
 // ⭐ **DOES THIS RANGE SPAN EVERY `int` — i.e. is the alias declaring it a pure second NAME for `int`?**
 // EXACT on both ends, for the reason `spansEveryIntInEveryFile` states: the bounds are raw 64-bit patterns,
 // so anything looser reads a bound above `i64.max` as one below zero.
-function rangeSpansEveryInt(low ParsedInt, high ParsedInt) returns bool
+function rangeSpansEveryInt(low FullRangeInt, high FullRangeInt) returns bool
 	return low == I64MinBound and high == I64MaxBound
 end 'rangeSpansEveryInt'
 
@@ -3952,8 +3955,8 @@ end 'rangeSpansEveryInt'
 // COMPILER-OWNED byte element (`SynthesizedByteElementName`) admits, because a buffer the compiler minted is
 // a run of raw bytes and has no declaration to read bounds off. Spelling `0` and `u8.max` at the second site
 // would be a second definition of what a byte is — the thing this file's own header refuses at length.
-export let ByteValueSetLow = 0 as ParsedInt
-export let ByteValueSetHigh = u8.max as ParsedInt
+export let ByteValueSetLow = 0 as FullRangeInt
+export let ByteValueSetHigh = u8.max as FullRangeInt
 
 // --- The TYPE-NAME namespace: one name, one declaration ---
 
@@ -4014,6 +4017,10 @@ module function cacheEnumTablesAgreeInCompilerProject() returns bool
 	if not cacheTableAgreesFunctionTypeDoor() 'disagreesCacheTableAgreesFunctionTypeDoor'
 		return false
 	end 'disagreesCacheTableAgreesFunctionTypeDoor'
+
+	if not cacheTableAgreesBrandRecordKind() 'disagreesCacheTableAgreesBrandRecordKind'
+		return false
+	end 'disagreesCacheTableAgreesBrandRecordKind'
 
 	if not cacheTableAgreesDiscardDoor() 'disagreesCacheTableAgreesDiscardDoor'
 		return false
@@ -4725,9 +4732,8 @@ end 'claimReachesEveryReader'
 // in the instance's declared element type, so it records an ordinary positioned site and its guard goes
 // at the STORE, in front of the `__managed_*` call. See `Parser.requireContainerElementType`.
 //
-// ⚠ **WHAT IS STILL UNENFORCED IS NOT A POSITION** — it is the zero-initialized slot `Array.resize`
-// EXPOSES, which no value ever crosses into. Pinned by `specs/safety.md`'s
-// `divide-by-zero-fault-through-a-resized-array-slot`.
+// ⚠ The zero-initialized slot `Array.resize` EXPOSES crosses no position, so it is refused at the
+// `resize` instead (E3106) for an element range that excludes zero.
 // ⚠ `module`, not `export`: `InsertRangeChecks` is the only reader and it sits under `Compiler/`, and
 // `checkUnusedExports` (E3093) is what says so — the SELF-COMPILE runs that pass.
 module enum RangeCheckGuard
@@ -4930,6 +4936,7 @@ export let noBorrowOperands = BorrowOperandsColumn.unwritten
 export union RangeCheckSiteTarget
 	alias(alias RangedTypeAlias)
 	callArgument(callResult ValueId, argIndex ParamCount, label ByteArray, sourceMayBeNegative bool)
+	literalUse(alias RangedTypeAlias)
 end 'RangeCheckSiteTarget'
 
 // @generated library-cache begin
@@ -4939,6 +4946,7 @@ function cacheWriteRangeCheckSiteTarget(writer LibraryCacheWriter, value RangeCh
 	match value 'payload'
 		alias(a0) then cacheWriteRangeCheckSiteTargetAlias(writer, a0: a0)
 		callArgument(a0, a1, a2, a3) then cacheWriteRangeCheckSiteTargetCallArgument(writer, a0: a0, a1: a1, a2: a2, a3: a3)
+		literalUse(a0) then cacheWriteRangeCheckSiteTargetLiteralUse(writer, a0: a0)
 	end 'payload'
 end 'cacheWriteRangeCheckSiteTarget'
 
@@ -4953,12 +4961,17 @@ function cacheWriteRangeCheckSiteTargetCallArgument(writer LibraryCacheWriter, a
 	writer.flag(a3)
 end 'cacheWriteRangeCheckSiteTargetCallArgument'
 
+function cacheWriteRangeCheckSiteTargetLiteralUse(writer LibraryCacheWriter, a0 RangedTypeAlias)
+	a0.cacheWrite(writer)
+end 'cacheWriteRangeCheckSiteTargetLiteralUse'
+
 function cacheReadRangeCheckSiteTarget(reader LibraryCacheReader) returns RangeCheckSiteTarget throws LibraryCacheDamage
 	let tag = try reader.unsigned()
 
 	return match tag 'case'
 		0 gives try cacheReadRangeCheckSiteTargetAlias(reader)
 		1 gives try cacheReadRangeCheckSiteTargetCallArgument(reader)
+		2 gives try cacheReadRangeCheckSiteTargetLiteralUse(reader)
 		default throws LibraryCacheDamage.unknownTag(tag)
 	end 'case'
 end 'cacheReadRangeCheckSiteTarget'
@@ -4977,6 +4990,12 @@ function cacheReadRangeCheckSiteTargetCallArgument(reader LibraryCacheReader) re
 
 	return RangeCheckSiteTarget.callArgument(a0, argIndex: a1, label: a2, sourceMayBeNegative: a3)
 end 'cacheReadRangeCheckSiteTargetCallArgument'
+
+function cacheReadRangeCheckSiteTargetLiteralUse(reader LibraryCacheReader) returns RangeCheckSiteTarget throws LibraryCacheDamage
+	let a0 = try RangedTypeAlias.cacheRead(reader)
+
+	return RangeCheckSiteTarget.literalUse(a0)
+end 'cacheReadRangeCheckSiteTargetLiteralUse'
 
 // @generated library-cache end
 
@@ -5275,13 +5294,13 @@ end 'cacheReadRangeCheckReturnSiteArray'
 // about whether a runtime GUARD can fail, because that is a question about the value's bounds and
 // not about its spelling.
 //
-// `low`/`high` are INCLUSIVE and stored as the raw 64-bit patterns `ParsedInt` holds, exactly as
+// `low`/`high` are INCLUSIVE and stored as the raw 64-bit patterns `FullRangeInt` holds, exactly as
 // `RangedTypeAlias`' bounds are, so one containment (`TypeRules.rangeCoversIntBounds`) answers for both.
 export type ProvenIntRange
-	export var low as ParsedInt
-	export var high as ParsedInt
+	export var low as FullRangeInt
+	export var high as FullRangeInt
 
-	export static function create(low ParsedInt, high ParsedInt) returns ProvenIntRange
+	export static function create(low FullRangeInt, high FullRangeInt) returns ProvenIntRange
 		return Self{low: low, high: high}
 	end 'create'
 
@@ -5292,8 +5311,8 @@ export type ProvenIntRange
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns ProvenIntRange throws LibraryCacheDamage
-		let f_low = (try reader.signed()) as ParsedInt
-		let f_high = (try reader.signed()) as ParsedInt
+		let f_low = (try reader.signed()) as FullRangeInt
+		let f_high = (try reader.signed()) as FullRangeInt
 
 		return Self{low: f_low, high: f_high}
 	end 'cacheRead'
@@ -5387,6 +5406,107 @@ export function provenIntRangeOf(column ProvenIntRangeColumn, value ValueId) ret
 		entries(proven) then return try proven.get(value)
 	end 'state'
 end 'provenIntRangeOf'
+
+export type ProvenFloatRange
+	export var low as FullRangeInt
+	export var high as FullRangeInt
+
+	export static function create(low FullRangeInt, high FullRangeInt) returns ProvenFloatRange
+		return Self{low: low, high: high}
+	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.signed(self.low as CacheSigned)
+		writer.signed(self.high as CacheSigned)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns ProvenFloatRange throws LibraryCacheDamage
+		let f_low = (try reader.signed()) as FullRangeInt
+		let f_high = (try reader.signed()) as FullRangeInt
+
+		return Self{low: f_low, high: f_high}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize16
+		return sizeof(ProvenFloatRange) as CacheSize16
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
+end 'ProvenFloatRange'
+
+export typealias ProvenFloatRangeMap = Map with (ValueId, ProvenFloatRange)
+
+// @generated library-cache begin
+function cacheWriteProvenFloatRangeMap(writer LibraryCacheWriter, value ProvenFloatRangeMap)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for (key, entry) in value 'eachEntry'
+		writer.unsigned(key as CacheUnsigned)
+		entry.cacheWrite(writer)
+	end 'eachEntry'
+end 'cacheWriteProvenFloatRangeMap'
+
+function cacheReadProvenFloatRangeMap(reader LibraryCacheReader) returns ProvenFloatRangeMap throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = ProvenFloatRangeMap.create()
+
+	for _ in 0 upto count 'eachEntry'
+		let key = (try reader.unsigned()) as ValueId
+		let entry = try ProvenFloatRange.cacheRead(reader)
+		result.upsert(key, value: entry)
+	end 'eachEntry'
+
+	return result
+end 'cacheReadProvenFloatRangeMap'
+
+// @generated library-cache end
+
+export union ProvenFloatRangeColumn
+	unwritten
+	entries(proven ProvenFloatRangeMap)
+end 'ProvenFloatRangeColumn'
+
+// @generated library-cache begin
+function cacheWriteProvenFloatRangeColumn(writer LibraryCacheWriter, value ProvenFloatRangeColumn)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		unwritten then break
+		entries(a0) then cacheWriteProvenFloatRangeColumnEntries(writer, a0: a0)
+	end 'payload'
+end 'cacheWriteProvenFloatRangeColumn'
+
+function cacheWriteProvenFloatRangeColumnEntries(writer LibraryCacheWriter, a0 ProvenFloatRangeMap)
+	cacheWriteProvenFloatRangeMap(writer, value: a0)
+end 'cacheWriteProvenFloatRangeColumnEntries'
+
+function cacheReadProvenFloatRangeColumn(reader LibraryCacheReader) returns ProvenFloatRangeColumn throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives ProvenFloatRangeColumn.unwritten
+		1 gives try cacheReadProvenFloatRangeColumnEntries(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadProvenFloatRangeColumn'
+
+function cacheReadProvenFloatRangeColumnEntries(reader LibraryCacheReader) returns ProvenFloatRangeColumn throws LibraryCacheDamage
+	let a0 = try cacheReadProvenFloatRangeMap(reader)
+
+	return ProvenFloatRangeColumn.entries(a0)
+end 'cacheReadProvenFloatRangeColumnEntries'
+
+// @generated library-cache end
+
+export let noProvenFloatRanges = ProvenFloatRangeColumn.unwritten
+
+export function provenFloatRangeOf(column ProvenFloatRangeColumn, value ValueId) returns ProvenFloatRange throws MapError
+	match column 'state'
+		unwritten then throw MapError.keyNotFound
+		entries(proven) then return try proven.get(value)
+	end 'state'
+end 'provenFloatRangeOf'
 
 // ⭐⭐ **ONE NARROWED-RANGE PARAMETER OF A FUNCTION — AND IT IS A SITE, NOT MERELY A PUBLICATION.**
 // It carries the pre-erasure alias the PARAMETER was declared with, captured where
@@ -5579,6 +5699,7 @@ export type FunctionRangeChecks
 	// The proven integer intervals — see `ProvenIntRangeColumn`. `unwritten` only for a function with
 	// no counted loop and no `.count()`.
 	export var provenValueRanges as ProvenIntRangeColumn
+	export var provenFloatRanges as ProvenFloatRangeColumn
 
 	// ⭐⭐ **WHICH OF THIS FUNCTION'S VALUES THE SOURCE WROTE AS NEGATIVE NUMBERS** — see
 	// `Parser.writtenNegativeLiterals` for what the mark decides and why the value's 64 bits cannot say it.
@@ -5602,8 +5723,8 @@ export type FunctionRangeChecks
 
 	export var borrowOperands as BorrowOperandsColumn
 
-	export static function create(filePath FilePath, sites RangeCheckSiteArray, argSites RangeCheckArgSiteArray, returnAlias DeclaredAlias, returnSites RangeCheckReturnSiteArray, paramSites RangeCheckParamSiteArray, provenValueRanges ProvenIntRangeColumn, writtenNegativeLiterals ValueMarkColumn, unsignedMaxLiterals ValueMarkColumn, unsignedPatternValues ValueMarkColumn, checkedCalls ValueMarkColumn, borrowOperands BorrowOperandsColumn) returns FunctionRangeChecks
-		return Self{filePath: filePath, sites: sites, positionsResolved: false, argSites: argSites, returnAlias: returnAlias, returnSites: returnSites, paramSites: paramSites, provenValueRanges: provenValueRanges, writtenNegativeLiterals: writtenNegativeLiterals, unsignedMaxLiterals: unsignedMaxLiterals, unsignedPatternValues: unsignedPatternValues, checkedCalls: checkedCalls, borrowOperands: borrowOperands}
+	export static function create(filePath FilePath, sites RangeCheckSiteArray, argSites RangeCheckArgSiteArray, returnAlias DeclaredAlias, returnSites RangeCheckReturnSiteArray, paramSites RangeCheckParamSiteArray, provenValueRanges ProvenIntRangeColumn, provenFloatRanges ProvenFloatRangeColumn, writtenNegativeLiterals ValueMarkColumn, unsignedMaxLiterals ValueMarkColumn, unsignedPatternValues ValueMarkColumn, checkedCalls ValueMarkColumn, borrowOperands BorrowOperandsColumn) returns FunctionRangeChecks
+		return Self{filePath: filePath, sites: sites, positionsResolved: false, argSites: argSites, returnAlias: returnAlias, returnSites: returnSites, paramSites: paramSites, provenValueRanges: provenValueRanges, provenFloatRanges: provenFloatRanges, writtenNegativeLiterals: writtenNegativeLiterals, unsignedMaxLiterals: unsignedMaxLiterals, unsignedPatternValues: unsignedPatternValues, checkedCalls: checkedCalls, borrowOperands: borrowOperands}
 	end 'create'
 
 	export function paramAliasAt(slot ParamCount) returns RangedTypeAlias throws MapError
@@ -5626,6 +5747,7 @@ export type FunctionRangeChecks
 		cacheWriteRangeCheckReturnSiteArray(writer, value: self.returnSites)
 		cacheWriteRangeCheckParamSiteArray(writer, value: self.paramSites)
 		cacheWriteProvenIntRangeColumn(writer, value: self.provenValueRanges)
+		cacheWriteProvenFloatRangeColumn(writer, value: self.provenFloatRanges)
 		cacheWriteValueMarkColumn(writer, value: self.writtenNegativeLiterals)
 		cacheWriteValueMarkColumn(writer, value: self.unsignedMaxLiterals)
 		cacheWriteValueMarkColumn(writer, value: self.unsignedPatternValues)
@@ -5642,17 +5764,18 @@ export type FunctionRangeChecks
 		let f_returnSites = try cacheReadRangeCheckReturnSiteArray(reader)
 		let f_paramSites = try cacheReadRangeCheckParamSiteArray(reader)
 		let f_provenValueRanges = try cacheReadProvenIntRangeColumn(reader)
+		let f_provenFloatRanges = try cacheReadProvenFloatRangeColumn(reader)
 		let f_writtenNegativeLiterals = try cacheReadValueMarkColumn(reader)
 		let f_unsignedMaxLiterals = try cacheReadValueMarkColumn(reader)
 		let f_unsignedPatternValues = try cacheReadValueMarkColumn(reader)
 		let f_checkedCalls = try cacheReadValueMarkColumn(reader)
 		let f_borrowOperands = try cacheReadBorrowOperandsColumn(reader)
 
-		return Self{filePath: f_filePath, sites: f_sites, positionsResolved: f_positionsResolved, argSites: f_argSites, returnAlias: f_returnAlias, returnSites: f_returnSites, paramSites: f_paramSites, provenValueRanges: f_provenValueRanges, writtenNegativeLiterals: f_writtenNegativeLiterals, unsignedMaxLiterals: f_unsignedMaxLiterals, unsignedPatternValues: f_unsignedPatternValues, checkedCalls: f_checkedCalls, borrowOperands: f_borrowOperands}
+		return Self{filePath: f_filePath, sites: f_sites, positionsResolved: f_positionsResolved, argSites: f_argSites, returnAlias: f_returnAlias, returnSites: f_returnSites, paramSites: f_paramSites, provenValueRanges: f_provenValueRanges, provenFloatRanges: f_provenFloatRanges, writtenNegativeLiterals: f_writtenNegativeLiterals, unsignedMaxLiterals: f_unsignedMaxLiterals, unsignedPatternValues: f_unsignedPatternValues, checkedCalls: f_checkedCalls, borrowOperands: f_borrowOperands}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize104
-		return sizeof(FunctionRangeChecks) as CacheSize104
+	static function cacheLayoutBytes() returns CacheSize112
+		return sizeof(FunctionRangeChecks) as CacheSize112
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -6372,6 +6495,8 @@ export typealias FieldIndex = int(0 to 65535) implements ElementIndex
 // cases in declaration order.
 export typealias CaseIndex = int(0 to 65535) implements ElementIndex
 
+export typealias PayloadSlotIndex = int(0 to 65535) implements ElementIndex
+
 // ⭐ **ONE 8-BYTE SLOT IS WHAT A FIELD OCCUPIES, AND THE LAYOUT COUNTS SLOTS RATHER THAN BYTES.** It is
 // not an alignment convenience: a struct FIELD of struct type is a POINTER (`valueTagToStdType(structRef)`
 // → i64), so `sizeof(Outer{p Point, n Integer})` is 16 rather than 24 — which is exactly what
@@ -6481,11 +6606,11 @@ let EmptyStructBytes = FieldSlotBytes
 
 // The value a field declaration supplies when a `Self{…}` literal omits it — `export var value = 0`.
 //
-// The payload is a `ParsedInt` for a float exactly as for an integer — a float literal's value IS
+// The payload is a `FullRangeInt` for a float exactly as for an integer — a float literal's value IS
 // its IEEE-754 bit pattern (see `Parser.parseFloatLiteral`), which is why a defaulted float costs no
 // second column and no second decoder.
 //
-// ⚠⚠ **AND THAT IS PRECISELY WHY THE LITERAL'S OWN TAG RIDES BESIDE IT.** Two `ParsedInt`s are
+// ⚠⚠ **AND THAT IS PRECISELY WHY THE LITERAL'S OWN TAG RIDES BESIDE IT.** Two `FullRangeInt`s are
 // indistinguishable once written down, so the payload alone cannot say which representation it is in:
 // the integer `3` and the f64 bits of `3.0` are both just numbers here. `as float = 3` therefore has
 // to be WIDENED before it fills the slot (`Parser.fillFieldDefault`), and the only fact that can
@@ -6508,7 +6633,7 @@ export union FieldDefault
 	// `float` for `= 3.0 as T`) — NOT the field's declared type, which `StructLayout.fieldTypes` holds
 	// and which may still be an unresolved alias name here.
 	// ⚠ Its `writtenNegative` and `aboveSignedMax` marks ride along for the same reason, one question
-	// further out: `= -1` and `= 0xFFFFFFFFFFFFFFFE` both store a negative `ParsedInt`, and only the first
+	// further out: `= -1` and `= 0xFFFFFFFFFFFFFFFE` both store a negative `FullRangeInt`, and only the first
 	// is a negative NUMBER — so whether a default fits an `int(0 to u64.max)` field cannot be judged from
 	// the payload at all. This arm is how those facts reach the reader, which may be another file
 	// entirely, and they ride the layout's content hash beside the payload and tag.
@@ -7289,8 +7414,13 @@ export type StructLayout
 	// per retyped field on a program that declares an interface at all, and a partial rebuild would be a
 	// second statement of the prefix sum.
 	export function retypeField(index FieldIndex, declaredType MaxonType)
+		let fieldName = try self.fieldNames.get(index) otherwise panic("StructLayout.retypeField: fieldNames.get OOB at {index} for `type {String.from(self.name)}`, which declares {self.fieldCount()} — the caller walks `0 upto fieldCount()`")
+		let slotsBefore = self.bytesOfField(fieldName, declaredType: try self.fieldTypes.get(index) otherwise panic("StructLayout.retypeField: fieldTypes.get OOB at {index} for `type {String.from(self.name)}`, which declares {self.fieldCount()} — the caller walks `0 upto fieldCount()`"))
 		try self.fieldTypes.set(index, value: declaredType) otherwise panic("StructLayout.retypeField: fieldTypes.set OOB at {index} for `type {String.from(self.name)}`, which declares {self.fieldCount()} — the caller walks `0 upto fieldCount()`")
-		self.rebuildSlotGeometry()
+
+		if self.bytesOfField(fieldName, declaredType: declaredType) != slotsBefore 'slotCountMoved'
+			self.rebuildSlotGeometry()
+		end 'slotCountMoved'
 	end 'retypeField'
 
 	export function rebrandField(index FieldIndex, declaredBrand ByteArray)
@@ -7737,22 +7867,20 @@ end 'nestedBackingGroupOf'
 // `Cat.bool`).
 export union EnumBackingFieldValue
 	// A literal: `bits` is its value — an int's number, a bool's 0/1, or a float's IEEE-754 BIT PATTERN, the
-	// same `ParsedInt` payload every other constant in this compiler travels in (`ConstValue`,
+	// same `FullRangeInt` payload every other constant in this compiler travels in (`ConstValue`,
 	// `EnumLayout.caseTags`) — and `tag` is WHICH of those it was.
 	//
-	// ⛔⛔ **`tag` IS NOT DECORATION, AND ITS ABSENCE WAS A COMPILER PANIC AND A WILD POINTER.** This arm
-	// carried only the bits for one edit, which made `1`, `1.5` and `true` indistinguishable after parse — so
-	// nothing could check a written value against the field's DECLARED type, and nothing did. MEASURED on the
-	// tree that shipped it: a `Real` field written `1.5` reached `X64Backend.maxon:828` as
-	// *"a register-to-register move from rax to xmm0 crosses register files"*, a compiler panic on a
-	// legal-looking program; and a `String` field written `1` COMPILED CLEAN and access-violated at run time
-	// (exit `0xC0000005`), a String record address of 1 dereferenced on print. The check that consumes this
-	// is `Parser.checkStructBackedCase`.
+	// ⛔⛔ **`tag` IS NOT DECORATION: WITHOUT IT A WRITTEN VALUE CANNOT BE CHECKED AGAINST THE FIELD'S
+	// DECLARED TYPE**, because the bits alone make `1`, `1.5` and `true` indistinguishable after parse. Unchecked,
+	// a `FullRangeFloat` field written `1.5` panics the x64 emitter with *"a register-to-register move from rax
+	// to xmm0 crosses register files"*, and a `String` field written `1` compiles clean and access-violates at
+	// run time (exit `0xC0000005`), a String record address of 1 dereferenced on print. The check that
+	// consumes this is `Parser.checkStructBackedCase`.
 	//
 	// It is an `EnumBackingLiteralKind` and not a `ValueTypeTag` because exactly three literals can be
 	// written here: a tag would give the door a match over the whole value space to answer, most of which
 	// `readEnumBackingFieldValue` cannot produce, and the two could then drift apart.
-	literal(bits ParsedInt, kind EnumBackingLiteralKind)
+	literal(bits FullRangeInt, kind EnumBackingLiteralKind)
 
 	// `Priority.low` — a case of ANOTHER enum, whose tag is a whole-program fact the declaration cannot
 	// reach. Both names ride verbatim and the tag is read at the use site.
@@ -7777,7 +7905,7 @@ function cacheWriteEnumBackingFieldValue(writer LibraryCacheWriter, value EnumBa
 	end 'payload'
 end 'cacheWriteEnumBackingFieldValue'
 
-function cacheWriteEnumBackingFieldValueLiteral(writer LibraryCacheWriter, a0 ParsedInt, a1 EnumBackingLiteralKind)
+function cacheWriteEnumBackingFieldValueLiteral(writer LibraryCacheWriter, a0 FullRangeInt, a1 EnumBackingLiteralKind)
 	writer.signed(a0 as CacheSigned)
 	writer.unsigned(a1.ordinal as CacheUnsigned)
 end 'cacheWriteEnumBackingFieldValueLiteral'
@@ -7803,7 +7931,7 @@ function cacheReadEnumBackingFieldValue(reader LibraryCacheReader) returns EnumB
 end 'cacheReadEnumBackingFieldValue'
 
 function cacheReadEnumBackingFieldValueLiteral(reader LibraryCacheReader) returns EnumBackingFieldValue throws LibraryCacheDamage
-	let a0 = (try reader.signed()) as ParsedInt
+	let a0 = (try reader.signed()) as FullRangeInt
 	let a1 = try cacheReadEnumBackingLiteralKind(reader)
 
 	return EnumBackingFieldValue.literal(a0, kind: a1)
@@ -7826,7 +7954,7 @@ end 'cacheReadEnumBackingFieldValueNestedStruct'
 
 // ⭐ **THE THREE LITERALS A BACKING FIELD MAY BE WRITTEN AS** — the whole of what `readEnumBackingFieldValue`
 // can produce, and therefore the whole of what the door has to answer for. `1` and `1.0` fold to the SAME
-// `ParsedInt` (`floatLiteralBits(0.0)` is 0), so the bits alone cannot tell them apart and this is the fact
+// `FullRangeInt` (`floatLiteralBits(0.0)` is 0), so the bits alone cannot tell them apart and this is the fact
 // that does.
 export enum EnumBackingLiteralKind
 	integerLiteral
@@ -7993,7 +8121,7 @@ end 'enumBackingLiteralSuitsDomain'
 //
 // Every other admitted pairing already carries the right bits: an int in an integer field, a `true`/`false`
 // in a bool field, a float literal in a float field (parsed as its IEEE pattern by `floatLiteralBits`).
-export function enumBackingLiteralBits(bits ParsedInt, kind EnumBackingLiteralKind, domain EnumBackingFieldDomain) returns ParsedInt
+export function enumBackingLiteralBits(bits FullRangeInt, kind EnumBackingLiteralKind, domain EnumBackingFieldDomain) returns FullRangeInt
 	if domainIsEnumBackingFloatBits(domain) and kind == EnumBackingLiteralKind.integerLiteral 'promoteToFloat'
 		return foldSiToFp(bits)
 	end 'promoteToFloat'
@@ -8222,7 +8350,7 @@ end 'builtinErrorConformance'
 // for `StructLayout.addField`'s reason: a caller that pushed a name and forgot a tag would shift
 // every later case's tag onto the wrong case.
 //
-// **TAGS ARE UNIFORMLY `ParsedInt` (i64), for int AND float backing.** An int-backed case's tag is
+// **TAGS ARE UNIFORMLY `FullRangeInt` (i64), for int AND float backing.** An int-backed case's tag is
 // its raw value; a FLOAT-backed case's tag is its IEEE-754 BIT PATTERN — the same representation
 // `FieldDefault.literal` stores a float default as. An enum value is therefore always an i64 (the
 // tag, or the float bits), living in a GENERAL-PURPOSE register and matched by an i64 compare, so a
@@ -8507,7 +8635,7 @@ export let ServiceHandleMailboxFieldIndex = 0 as FieldIndex
 export let ServiceShutdownMethodName = b"shutdown"
 
 export let ServiceHandleMailboxOffset = 0 as ByteOffset
-export let ServiceHandleBoxSize = 8 as ParsedInt
+export let ServiceHandleBoxSize = 8 as FullRangeInt
 
 // ⭐⭐ **SYNTHESIZE `<Union>.unionCases` BESIDE THE UNION THAT WAS JUST READ** (`/specs/union-cases.md`).
 // One bare case per variant, in declaration order, tag = index — which makes it an ordinary payload-free
@@ -8629,7 +8757,7 @@ end 'buildUnionCasesCompanion'
 export let EnumAllCaseNamesMemberName = b"allCaseNames"
 
 // ⭐⭐ **WHICH KIND OF NUMBER AN ENUM'S i64 TAG *IS*** — the fact `caseTags` structurally cannot carry,
-// because both backings store a `ParsedInt` and one bit pattern says nothing about how to read it.
+// because both backings store a `FullRangeInt` and one bit pattern says nothing about how to read it.
 // `enum Z  z = 0` and `enum Z  z = 0.0` produce the IDENTICAL tag column (`floatLiteralBits(0.0)` is 0),
 // and every read site — the interpolation renderer, an arithmetic operand, a comparison's domain — must
 // answer them differently. So the backing rides the LAYOUT, which is what survives the declaration.
@@ -8808,8 +8936,9 @@ export function enumBackingNoun(backing EnumBacking, backingStruct EnumBackingSt
 end 'enumBackingNoun'
 
 // ⭐⭐ **WHAT MAKES TWO CASES' RAW VALUES THE SAME VALUE — the THREE-WAY answer that replaced a bool.** Two
-// readers with nothing else in common ask it: E3031's collision test (`EnumLayout.rawValueCollidesAt`) and
-// the decl-shape content hash (`ProgramSignatures.mixEnumCase`), and both must be exhaustive over it.
+// readers with nothing else in common ask it: E3031's collision test
+// (`Parser.EnumCaseLedger.rawValueIsClaimed`) and the decl-shape content hash
+// (`ProgramSignatures.mixEnumCase`), and both must be exhaustive over it.
 //
 // ⛔ **IT WAS `tagCarriesRawValue`, A BOOL, AND A THIRD ANSWER DOES NOT FIT IN ONE.** A struct backing
 // records no comparable raw value at all, which is neither of the two the bool could say — and either
@@ -8846,7 +8975,7 @@ export type EnumLayout
 	// `caseTags[i]` and declares payload fields `casePayloads[i]` (empty for a payload-free case).
 	// NEVER appended to directly — `addCase` is the one writer (see the header).
 	export var caseNames as NameRoster
-	export var caseTags as ParsedIntArray
+	export var caseTags as FullRangeIntArray
 
 	// ⭐ **HOW EACH CASE's RAW VALUE WAS WRITTEN** — `"200"`, `"1.1"`, `"application/json"`, `"n"` — the
 	// fact `caseTags` structurally cannot carry for a STRING backing, where the tag is only a declaration
@@ -8919,7 +9048,7 @@ export type EnumLayout
 	export var caseBackingFields as EnumBackingFieldArrayArray
 
 	export static function create(name ByteArray, isUnion bool, conformsTo NameRoster, visibility Visibility, declFilePath FilePath, backing EnumBacking) returns EnumLayout
-		return Self{name: name, isUnion: isUnion, caseNames: NameRoster.create(), caseTags: ParsedIntArray.create(), caseRawValues: StringArray.create(), casePayloads: PayloadFieldArrayArray.create(), conformsTo: conformsTo, visibility: visibility, declFilePath: declFilePath, backing: backing, declaresRawValues: false, backingStruct: EnumBackingStruct.none, caseBackingFields: EnumBackingFieldArrayArray.create()}
+		return Self{name: name, isUnion: isUnion, caseNames: NameRoster.create(), caseTags: FullRangeIntArray.create(), caseRawValues: StringArray.create(), casePayloads: PayloadFieldArrayArray.create(), conformsTo: conformsTo, visibility: visibility, declFilePath: declFilePath, backing: backing, declaresRawValues: false, backingStruct: EnumBackingStruct.none, caseBackingFields: EnumBackingFieldArrayArray.create()}
 	end 'create'
 
 	// The `EnumLayout` twin of `StructLayout.createCompilerOwned`, for the same reason and with the same
@@ -8950,7 +9079,7 @@ export type EnumLayout
 	// ⭐ `declaresRawValue` — did THIS case write one? It is folded into the declaration-wide
 	// `declaresRawValues` here rather than set by the case readers, so the one writer of the columns is also
 	// the one writer of the fact derived from them and a reader that appends a case cannot forget it.
-	export function addCase(caseName ByteArray, tag ParsedInt, rawValue String, declaresRawValue bool, payloads PayloadFieldArray, backingFields EnumBackingFieldArray)
+	export function addCase(caseName ByteArray, tag FullRangeInt, rawValue String, declaresRawValue bool, payloads PayloadFieldArray, backingFields EnumBackingFieldArray)
 		self.caseNames.push(caseName)
 		self.caseTags.push(tag)
 		self.caseRawValues.push(rawValue)
@@ -8979,15 +9108,15 @@ export type EnumLayout
 	end 'payloadsAt'
 
 	// The number of payload slots case `index` declares.
-	export function payloadArityAt(index CaseIndex) returns CaseIndex
+	export function payloadArityAt(index CaseIndex) returns PayloadSlotIndex
 		return self.payloadsAt(index).count()
 	end 'payloadArityAt'
 
 	// The union-wide MAX payload arity — the number of payload slots the box reserves, so every case
 	// (narrow ones included) shares one allocation size. This is what makes the box's layout a
 	// function of the WIDEST case, and it is what a narrow case's zero-fill fills up to.
-	export function maxPayloadArity() returns CaseIndex
-		var widest = 0 as CaseIndex
+	export function maxPayloadArity() returns PayloadSlotIndex
+		var widest = 0 as PayloadSlotIndex
 
 		for i in 0 upto self.caseCount() 'each'
 			let arity = self.payloadArityAt(i)
@@ -9029,7 +9158,7 @@ export type EnumLayout
 
 	// The byte offset of payload slot `slot` from the box pointer `__mm_alloc` returns — past the
 	// tag word. The enum twin of `StructLayout.offsetOfField`.
-	export function payloadSlotOffset(slot CaseIndex) returns ByteOffset
+	export function payloadSlotOffset(slot PayloadSlotIndex) returns ByteOffset
 		return UnionTagBytes + (slot as ByteOffset) * FieldSlotBytes
 	end 'payloadSlotOffset'
 
@@ -9044,13 +9173,14 @@ export type EnumLayout
 
 	// The tag of case `index` — its raw value (int/char backing) or IEEE-754 bit pattern (float backing),
 	// and its declaration index for a STRING backing, whose raw value is not a number (see `caseRawValues`).
-	export function tagOfIndex(index CaseIndex) returns ParsedInt
+	export function tagOfIndex(index CaseIndex) returns FullRangeInt
 		return try self.caseTags.get(index) otherwise panic("EnumLayout.tagOfIndex: caseTags.get OOB at {index} for `{self.kindWord()} {String.from(self.name)}`, which declares {self.caseCount()} cases")
 	end 'tagOfIndex'
 
 	// ⭐⭐ **DOES THIS DECLARATION'S TAG COLUMN CARRY THE RAW VALUES, OR ONLY DECLARATION INDICES?** — ONE
 	// fact, needed by two readers with nothing else in common: E3031's collision test
-	// (`rawValueCollidesAt` below) and the decl-shape content hash (`ProgramSignatures.mixEnumCase`).
+	// (`Parser.EnumCaseLedger.rawValueIsClaimed`) and the decl-shape content hash
+	// (`ProgramSignatures.mixEnumCase`).
 	//
 	// An `integer`, `float` or `character` raw value IS a number — a raw int, an IEEE-754 bit pattern, a
 	// Unicode codepoint — so for those the tag is the value and both readers need nothing else. A `string`
@@ -9076,20 +9206,6 @@ export type EnumLayout
 			unresolved then panic("EnumLayout.rawValueIdentity: `{self.kindWord()} {String.from(self.name)}` has no backing yet — both readers ask this about a case already read, and reading a case is what fixes the backing (`Parser.requireEnumBacking`)")
 		end 'backing'
 	end 'rawValueIdentity'
-
-	// ⭐ **DO CASE `index` AND AN INCOMING CASE CARRY THE SAME RAW VALUE?** — the E3031 question. A tag
-	// compare where the tag is the value (`1.1` and `1.10` are one float, whatever the source text wrote),
-	// a byte compare where it is not — because a string backing's tags are declaration indices, never
-	// equal between two cases, which would make a tag compare a silent acceptance of `a = "x"  b = "x"` —
-	// and NO comparison at all for a struct backing, which declares no comparable raw value
-	// (see `EnumRawValueIdentity.incomparable` for the measurement behind that).
-	export function rawValueCollidesAt(index CaseIndex, tag ParsedInt, rawValue String) returns bool
-		match self.rawValueIdentity() 'identity'
-			theTag then return self.tagOfIndex(index) == tag
-			recordedText then return self.rawValueAt(index).equals(rawValue)
-			incomparable then return false
-		end 'identity'
-	end 'rawValueCollidesAt'
 
 	// Replace case `index`'s backing function name with the declaration it resolves to
 	// (`ProgramSignatures.settleFunctionBackedEnumCases`).
@@ -9125,13 +9241,30 @@ export type EnumLayout
 		for i in 0 upto self.caseTags.count() 'each'
 			let tag = try self.caseTags.get(i) otherwise panic("EnumLayout.tagsAreDeclarationIndices: caseTags.get OOB at {i} for `{self.kindWord()} {String.from(self.name)}`, which declares {self.caseCount()} cases")
 
-			if tag != i 'renumbered'
+			if tag != (i as FullRangeInt) 'renumbered'
 				return false
 			end 'renumbered'
 		end 'each'
 
 		return true
 	end 'tagsAreDeclarationIndices'
+
+	export function tagRange() returns ProvenIntRange
+		var lowest = self.tagOfIndex(0)
+		var highest = lowest
+
+		for tag in self.caseTags 'each'
+			if tag < lowest 'lower'
+				lowest = tag
+			end 'lower'
+
+			if tag > highest 'higher'
+				highest = tag
+			end 'higher'
+		end 'each'
+
+		return ProvenIntRange.create(lowest, high: highest)
+	end 'tagRange'
 
 	// A linear scan for `StructLayout.indexOfField`'s reason: case counts are tiny.
 	export function indexOfCase(wanted ByteArray) returns CaseIndex throws MapError
@@ -9147,7 +9280,7 @@ export type EnumLayout
 	// It PANICS on an absent case rather than returning a sentinel: a caller that does not already know the
 	// layout declares the name asks `hasCase` first, which is what that predicate is for — and its two callers
 	// name cases the layout they pass DECLARES (`Ordering`.s three, read from `stdlib/Interfaces.maxon`).
-	export function tagOfCase(wanted ByteArray) returns ParsedInt
+	export function tagOfCase(wanted ByteArray) returns FullRangeInt
 		let index = try self.indexOfCase(wanted) otherwise panic("EnumLayout.tagOfCase: `{self.kindWord()} {String.from(self.name)}` declares no case '{String.from(wanted)}' — ask `hasCase` first when the name is not known to be one of this declaration's own")
 		return self.tagOfIndex(index)
 	end 'tagOfCase'
@@ -9165,7 +9298,7 @@ export type EnumLayout
 		writer.bytes(self.name)
 		writer.flag(self.isUnion)
 		cacheWriteNameRoster(writer, value: self.caseNames)
-		cacheWriteParsedIntArray(writer, value: self.caseTags)
+		cacheWriteFullRangeIntArray(writer, value: self.caseTags)
 		cacheWriteStringArray(writer, value: self.caseRawValues)
 		cacheWritePayloadFieldArrayArray(writer, value: self.casePayloads)
 		cacheWriteNameRoster(writer, value: self.conformsTo)
@@ -9183,7 +9316,7 @@ export type EnumLayout
 		let f_name = try reader.bytes()
 		let f_isUnion = try reader.flag()
 		let f_caseNames = try cacheReadNameRoster(reader)
-		let f_caseTags = try cacheReadParsedIntArray(reader)
+		let f_caseTags = try cacheReadFullRangeIntArray(reader)
 		let f_caseRawValues = try cacheReadStringArray(reader)
 		let f_casePayloads = try cacheReadPayloadFieldArrayArray(reader)
 		let f_conformsTo = try cacheReadNameRoster(reader)
@@ -9213,7 +9346,7 @@ end 'EnumLayout'
 // gives it no slice of the dispatch line, because nothing can ever be thrown that lands in one).
 export union EnumTagSpan
 	noCases
-	spanning(low ParsedInt, high ParsedInt)
+	spanning(low FullRangeInt, high FullRangeInt)
 end 'EnumTagSpan'
 
 // ⭐⭐ **THE SMALLEST AND LARGEST TAG A DECLARATION USES — ONE WALK, TWO READERS, AND THEY HAD ALREADY
@@ -9370,7 +9503,7 @@ end 'builtinEnumLookupErrorEnum'
 // error enum does.
 function addBuiltinEnumCase(layout EnumLayout, caseName ByteArray)
 	let tag = layout.caseCount()
-	layout.addCase(caseName, tag: tag as ParsedInt, rawValue: "{tag}", declaresRawValue: false, payloads: PayloadFieldArray.create(), backingFields: sharedEmptyEnumBackingFields)
+	layout.addCase(caseName, tag: tag as FullRangeInt, rawValue: "{tag}", declaresRawValue: false, payloads: PayloadFieldArray.create(), backingFields: sharedEmptyEnumBackingFields)
 end 'addBuiltinEnumCase'
 
 // ⭐⭐ **THE ORDINAL DRIFT GUARD FOR THE BUILTIN ERROR ENUMS — ONE MECHANISM, EVERY FAMILY.**
@@ -9514,14 +9647,14 @@ module type BuiltinErrorOrdinalCheck
 
 	// One claim — "`installer` throws `caseName` as `ordinal`" — verified against the declaration on the
 	// spot. THE only way to state a claim, so a name can never be recorded without the ordinal it belongs to.
-	module function claim(caseName ByteArray, ordinal ParsedInt)
+	module function claim(caseName ByteArray, ordinal FullRangeInt)
 		self.recordCase(caseName, ordinal: ordinal, use: BuiltinErrorCaseUse.thrown)
 	end 'claim'
 
 	// One case the runtime NEVER throws, at the ordinal the declaration gives it — an exemption
 	// STATED rather than an omission left to be read as one. See this type's header for why the ordinal is
 	// named when the throw is not, and each caller for the per-case evidence that nothing produces it.
-	module function neverThrown(caseName ByteArray, ordinal ParsedInt)
+	module function neverThrown(caseName ByteArray, ordinal FullRangeInt)
 		self.recordCase(caseName, ordinal: ordinal, use: BuiltinErrorCaseUse.neverThrown)
 	end 'neverThrown'
 
@@ -9529,7 +9662,7 @@ module type BuiltinErrorOrdinalCheck
 	// what "accounted for" means or about which ordinal a case sits at. Both halves belong together for
 	// `EnumLayout.addCase`'s reason: a verb that checked an ordinal without marking the case, or marked it
 	// without checking, would let `requireTotal` pass over a case nothing verified.
-	function recordCase(caseName ByteArray, ordinal ParsedInt, use BuiltinErrorCaseUse)
+	function recordCase(caseName ByteArray, ordinal FullRangeInt, use BuiltinErrorCaseUse)
 		let index = try self.declaration.indexOfCase(caseName) otherwise 'noSuchCase'
 			match use 'absentCase'
 				thrown then self.refuse("{String.from(self.installer)} claims ordinal {ordinal} for '{String.from(caseName)}', but `{self.declaration.kindWord()} {String.from(self.declaration.name)}` declares no such case — the runtime throws a case the enum does not have, so no handler arm could ever match it")
@@ -9929,7 +10062,7 @@ end 'paramExistentialSiteAt'
 // Where a method's receiver sits in its parameter list — the position `parseTypeMember` binds `__self` at,
 // named so the rules that treat the receiver differently from every other parameter read as the one fact they
 // share rather than as a repeated `0`.
-let ReceiverParamPosition = 0 as ParamCount
+module let ReceiverParamPosition = 0 as ParamCount
 
 // The type names a signature WROTE, in its declaring file's spelling — what E3167 and the unused-export
 // audit judge. Empty for a library file's signature and for a file-private function's.
@@ -10084,9 +10217,10 @@ export type FuncSignature
 	export var extensionConstraints as WhereConstraintArray
 
 	export var writtenTypeNames as WrittenTypeNames
+	export let selfSpelledParams as ParamPositionMask
 
-	export static function create(paramNames NameRoster, paramTypes MaxonTypeArray, paramAggregateNames NameRoster, paramDeclaredNames NameRoster, returnAggregateName ByteArray, paramExistentialSites ParamExistentialSiteArray, returnExistentialSites GenericInstanceIdArray, extensionConstraints WhereConstraintArray, writtenTypeNames WrittenTypeNames) returns FuncSignature
-		return Self{paramNames: paramNames, paramTypes: paramTypes, paramAggregateNames: paramAggregateNames, paramDeclaredNames: paramDeclaredNames, returnAggregateName: returnAggregateName, paramExistentialSites: paramExistentialSites, returnExistentialSites: returnExistentialSites, extensionConstraints: extensionConstraints, writtenTypeNames: writtenTypeNames}
+	export static function create(paramNames NameRoster, paramTypes MaxonTypeArray, paramAggregateNames NameRoster, paramDeclaredNames NameRoster, returnAggregateName ByteArray, paramExistentialSites ParamExistentialSiteArray, returnExistentialSites GenericInstanceIdArray, extensionConstraints WhereConstraintArray, writtenTypeNames WrittenTypeNames, selfSpelledParams ParamPositionMask) returns FuncSignature
+		return Self{paramNames: paramNames, paramTypes: paramTypes, paramAggregateNames: paramAggregateNames, paramDeclaredNames: paramDeclaredNames, returnAggregateName: returnAggregateName, paramExistentialSites: paramExistentialSites, returnExistentialSites: returnExistentialSites, extensionConstraints: extensionConstraints, writtenTypeNames: writtenTypeNames, selfSpelledParams: selfSpelledParams}
 	end 'create'
 
 	// The declared parameter count — the arity a call must match.
@@ -10151,6 +10285,7 @@ export type FuncSignature
 		cacheWriteGenericInstanceIdArray(writer, value: self.returnExistentialSites)
 		cacheWriteWhereConstraintArray(writer, value: self.extensionConstraints)
 		self.writtenTypeNames.cacheWrite(writer)
+		writer.unsigned(self.selfSpelledParams as CacheUnsigned)
 	end 'cacheWrite'
 
 	module static function cacheRead(reader LibraryCacheReader) returns FuncSignature throws LibraryCacheDamage
@@ -10163,12 +10298,13 @@ export type FuncSignature
 		let f_returnExistentialSites = try cacheReadGenericInstanceIdArray(reader)
 		let f_extensionConstraints = try cacheReadWhereConstraintArray(reader)
 		let f_writtenTypeNames = try WrittenTypeNames.cacheRead(reader)
+		let f_selfSpelledParams = (try reader.unsigned()) as ParamPositionMask
 
-		return Self{paramNames: f_paramNames, paramTypes: f_paramTypes, paramAggregateNames: f_paramAggregateNames, paramDeclaredNames: f_paramDeclaredNames, returnAggregateName: f_returnAggregateName, paramExistentialSites: f_paramExistentialSites, returnExistentialSites: f_returnExistentialSites, extensionConstraints: f_extensionConstraints, writtenTypeNames: f_writtenTypeNames}
+		return Self{paramNames: f_paramNames, paramTypes: f_paramTypes, paramAggregateNames: f_paramAggregateNames, paramDeclaredNames: f_paramDeclaredNames, returnAggregateName: f_returnAggregateName, paramExistentialSites: f_paramExistentialSites, returnExistentialSites: f_returnExistentialSites, extensionConstraints: f_extensionConstraints, writtenTypeNames: f_writtenTypeNames, selfSpelledParams: f_selfSpelledParams}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize72
-		return sizeof(FuncSignature) as CacheSize72
+	static function cacheLayoutBytes() returns CacheSize80
+		return sizeof(FuncSignature) as CacheSize80
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -10971,6 +11107,20 @@ export function assignedPlacePhrase(door FunctionTypeDoor, name ByteArray, owner
 	end 'owner'
 end 'assignedPlacePhrase'
 
+export function brandedPlacePhrase(door FunctionTypeDoor, name ByteArray, owner SlotOwner) returns String
+	match door 'door'
+		variable or
+		global or
+		field then return assignedPlacePhrase(door, name: name, owner: owner)
+		payload then return "union payload '{String.from(name)}'"
+		containerElement then return "the element of '{String.from(name)}'"
+		tupleElement then return "tuple element '{String.from(name)}'"
+		returned then return "the return value of '{String.from(name)}'"
+		cast or
+		enumCaseBacking then panic("brandedPlacePhrase: a cast and an enum case name no place a brand is held by")
+	end 'door'
+end 'brandedPlacePhrase'
+
 // ⭐ **A RECORDED FUNCTION-TYPE DOOR awaiting whole-program shape agreement.** A function value meeting a
 // function-typed place — `f as Scaler`, `return twice` from a `returns Scaler`, `slot.op = twice` — must
 // be a function of THAT type, and until this record existed only the `function` TAG was compared: every
@@ -11056,6 +11206,130 @@ module function cacheReadPendingFunctionTypeDoorArray(reader LibraryCacheReader)
 
 	return result
 end 'cacheReadPendingFunctionTypeDoorArray'
+
+// @generated library-cache end
+
+export enum BrandRecordKind
+	store
+	handOver
+	handOverIndirect
+	handOverWitness
+	assignDoor
+	mergeArms
+end 'BrandRecordKind'
+
+// @generated library-cache begin
+let CacheCasesBrandRecordKind = [BrandRecordKind.store, BrandRecordKind.handOver, BrandRecordKind.handOverIndirect, BrandRecordKind.handOverWitness, BrandRecordKind.assignDoor, BrandRecordKind.mergeArms]
+
+function cacheReadBrandRecordKind(reader LibraryCacheReader) returns BrandRecordKind throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesBrandRecordKind.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadBrandRecordKind'
+
+function cacheTableAgreesBrandRecordKind() returns bool
+	let declared = BrandRecordKind.allCases
+
+	if CacheCasesBrandRecordKind.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesBrandRecordKind.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesBrandRecordKind'
+
+// @generated library-cache end
+
+export type PendingBrandRecord
+	export var key as ByteArray
+	export var kind as BrandRecordKind
+	export var brand as ByteArray
+	export var opIndex as ElementIndex
+	export var argIndex as ParamCount
+	export var label as ByteArray
+	export var phrase as ByteArray
+	export var line as LineNumber
+	export var column as ColumnNumber
+	export var filePath as FilePath
+	export var originKey as ByteArray
+
+	export static function create(key ByteArray, kind BrandRecordKind, brand ByteArray, opIndex ElementIndex, argIndex ParamCount, label ByteArray, phrase ByteArray, line LineNumber, column ColumnNumber, filePath FilePath, originKey ByteArray = EmptySourceText) returns PendingBrandRecord
+		return Self{key: key, kind: kind, brand: brand, opIndex: opIndex, argIndex: argIndex, label: label, phrase: phrase, line: line, column: column, filePath: filePath, originKey: originKey}
+	end 'create'
+
+	export function relocated(offset ElementIndex) returns PendingBrandRecord
+		return Self{key: self.key.clone(), kind: self.kind, brand: self.brand.clone(), opIndex: self.opIndex + offset, argIndex: self.argIndex, label: self.label.clone(), phrase: self.phrase.clone(), line: self.line, column: self.column, filePath: self.filePath, originKey: self.originKey.clone()}
+	end 'relocated'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.key)
+		writer.unsigned(self.kind.ordinal as CacheUnsigned)
+		writer.bytes(self.brand)
+		writer.unsigned(self.opIndex as CacheUnsigned)
+		writer.unsigned(self.argIndex as CacheUnsigned)
+		writer.bytes(self.label)
+		writer.bytes(self.phrase)
+		writer.unsigned(self.line as CacheUnsigned)
+		writer.unsigned(self.column as CacheUnsigned)
+		writer.text(self.filePath.toString())
+		writer.bytes(self.originKey)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns PendingBrandRecord throws LibraryCacheDamage
+		let f_key = try reader.bytes()
+		let f_kind = try cacheReadBrandRecordKind(reader)
+		let f_brand = try reader.bytes()
+		let f_opIndex = (try reader.unsigned()) as ElementIndex
+		let f_argIndex = (try reader.unsigned()) as ParamCount
+		let f_label = try reader.bytes()
+		let f_phrase = try reader.bytes()
+		let f_line = (try reader.unsigned()) as LineNumber
+		let f_column = (try reader.unsigned()) as ColumnNumber
+		let f_filePath = try reader.path()
+		let f_originKey = try reader.bytes()
+
+		return Self{key: f_key, kind: f_kind, brand: f_brand, opIndex: f_opIndex, argIndex: f_argIndex, label: f_label, phrase: f_phrase, line: f_line, column: f_column, filePath: f_filePath, originKey: f_originKey}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize88
+		return sizeof(PendingBrandRecord) as CacheSize88
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
+end 'PendingBrandRecord'
+
+export typealias PendingBrandRecordArray = Array with PendingBrandRecord
+
+// @generated library-cache begin
+module function cacheWritePendingBrandRecordArray(writer LibraryCacheWriter, value PendingBrandRecordArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWritePendingBrandRecordArray'
+
+module function cacheReadPendingBrandRecordArray(reader LibraryCacheReader) returns PendingBrandRecordArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = PendingBrandRecordArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try PendingBrandRecord.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadPendingBrandRecordArray'
 
 // @generated library-cache end
 
@@ -11447,19 +11721,20 @@ export function slotCallArgs(paramNames NameRoster, args ValueIdArray, argLabels
 	let sourceCount = args.count() - argDefaultSlots.count()
 
 	for i in 0 upto args.count() 'placeArgs'
+		let argIndex = i as ParamCount
 		let argId = try args.get(i) otherwise panic("slotCallArgs: args.get OOB at {i}")
 		let label = try argLabels.get(i) otherwise panic("slotCallArgs: argLabels.get OOB at {i}")
 
 		// A SYNTHESIZED default names its slot outright; only a SOURCE-written argument is resolved by label.
 		// That split is what keeps two `_` parameters apart: `_` binds nothing, so a signature may declare it
 		// twice, and a name lookup then cannot tell the two apart (`MaxonOp.call`'s `argDefaultSlots`).
-		let pos = try callArgSlot(paramNames, argDefaultSlots: argDefaultSlots, sourceCount: sourceCount, argIndex: i, label: label) otherwise return ArgSlotResult.unknownLabel(i, label: String.from(label))
+		let pos = try callArgSlot(paramNames, argDefaultSlots: argDefaultSlots, sourceCount: sourceCount, argIndex: argIndex, label: label) otherwise return ArgSlotResult.unknownLabel(argIndex, label: String.from(label))
 
 		let alreadyFilled = try filled.get(pos) otherwise panic("slotCallArgs: filled.get OOB at {pos}")
 
 		if alreadyFilled 'dup'
 			let paramName = try paramNames.get(pos) otherwise panic("slotCallArgs: paramNames.get OOB at {pos}")
-			return ArgSlotResult.duplicateArg(i, paramName: String.from(paramName))
+			return ArgSlotResult.duplicateArg(argIndex, paramName: String.from(paramName))
 		end 'dup'
 
 		try slotIds.set(pos, value: argId) otherwise panic("slotCallArgs: slotIds.set OOB at {pos}")
@@ -11547,6 +11822,7 @@ export type Project
 	// resolved — the one thing that keeps it out of `checkValueMergeSignatures`' pre-resolution sweep. Reset
 	// with the other push-merge targets so a warm rebuild does not double it.
 	export var pendingFunctionTypeDoors as PendingFunctionTypeDoorArray
+	export var pendingBrandRecords as PendingBrandRecordArray
 
 	// ⭐ Recorded sites that used none of a call's result, awaiting the whole-program effect summary (see
 	// PendingDiscardedResult). Filled and drained exactly as the list above.
@@ -11717,6 +11993,7 @@ export type Project
 	// before the thunk exists: a callee spliced away on the strength of its one visible site would leave
 	// the thunk calling an emptied body.
 	export var functionValueTargets as NameRoster
+	export var functionValueConventions as FunctionValueConventions
 	export var uncheckedCallPaths as UncheckedCallPaths
 
 	// The calls the entry stub makes by name in THIS build (`DeadFunctionElimination.EntryStubCalls`), set
@@ -12070,6 +12347,7 @@ export type Project
 			bindingHygieneDiagnostics: DiagnosticArray.create(),
 			collidedTypeNames: CollidedTypeNameSet.create(),
 			pendingFunctionTypeDoors: PendingFunctionTypeDoorArray.create(),
+			pendingBrandRecords: PendingBrandRecordArray.create(),
 			pendingDiscardedResults: PendingDiscardedResultArray.create(),
 			// Aimed at the TARGET this project was created for, never the host — see `exitCodeHigh`.
 			typeAliases: RangedAliasRegistry.create(target.os),
@@ -12095,6 +12373,7 @@ export type Project
 			rendersTargetIr: false,
 			compilesOnceAndExits: false,
 			functionValueTargets: NameRoster.create(),
+			functionValueConventions: FunctionValueConventions.none(),
 			uncheckedCallPaths: UncheckedCallPaths.none(),
 			entryStubCalls: EntryStubCalls.none(),
 			hostContext: HostContextLayout.unread(),

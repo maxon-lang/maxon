@@ -100,8 +100,9 @@ mkdir -p "$OUT"
 rm -f "$OUT"/*.maxon
 
 # The three element spellings the base-3 site index is rendered in, and the literal that produces one.
-# `int` leads so element 0 — always digit 0 — makes `t.0` an int in every generated program.
-ELEM_TYPE=(int float bool)
+# The integer spelling leads so element 0 — always digit 0 — makes `t.0` an integer in every generated
+# program. The types are ranged aliases because a bare `int` or `float` type is E3005.
+ELEM_TYPE=(LadderInt LadderFloat bool)
 ELEM_VALUE=("1" "2.5" "true")
 
 # The number of type-carrying element positions. Element 0 is pinned to `int`, so an arity-8 tuple
@@ -122,7 +123,7 @@ tuple_literal() {
 
 # The TYPE spelling of the same tuple — what a parameter or return annotation writes.
 tuple_type() {
-	local k="$1" i d out="(int"
+	local k="$1" i d out="(LadderInt"
 	for ((i = 0; i < TYPE_DIGITS; i++)); do
 		d=$((k % 3)); k=$((k / 3))
 		out="$out, ${ELEM_TYPE[$d]}"
@@ -166,7 +167,7 @@ arity)
 		echo -n "	let t = (1"
 		for ((i = 1; i < N; i++)); do echo -n ", 1"; done
 		echo ")"
-		echo "	var acc = 0"
+		echo "	var acc = 0 as LadderInt"
 		for ((i = 0; i < N; i++)); do echo "	acc = acc + t.$i"; done
 		echo "	return acc"
 		echo "end 'tpWide'"
@@ -174,7 +175,7 @@ arity)
 
 	{
 		echo "function main() returns ExitCode"
-		echo "	return tpWide() as ExitCode"
+		echo "	return (tpWide() and 255) as ExitCode"
 		echo "end 'main'"
 	} > "$OUT/z_main.maxon"
 	;;
@@ -187,7 +188,7 @@ access)
 		echo "module typealias LadderInt = int(i64.min to i64.max)"
 		echo "module function tpRead() returns LadderInt"
 		echo "	let t = (1, 2)"
-		echo "	var acc = 0"
+		echo "	var acc = 0 as LadderInt"
 		for ((i = 0; i < N; i++)); do echo "	acc = acc + t.$((i % 2))"; done
 		echo "	return acc"
 		echo "end 'tpRead'"
@@ -195,7 +196,7 @@ access)
 
 	{
 		echo "function main() returns ExitCode"
-		echo "	return tpRead() as ExitCode"
+		echo "	return (tpRead() and 255) as ExitCode"
 		echo "end 'main'"
 	} > "$OUT/z_main.maxon"
 	;;
@@ -228,6 +229,9 @@ files|fileset)
 
 	{
 		echo "module typealias LadderInt = int(i64.min to i64.max)"
+		if [ "$MODE" = "files" ] && [ "$N" -ge 2 ]; then
+			echo "module typealias LadderFloat = float(f64.min to f64.max)"
+		fi
 		echo "function main() returns ExitCode"
 		echo "	return 0"
 		echo "end 'main'"

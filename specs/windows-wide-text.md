@@ -745,7 +745,7 @@ function main() returns ExitCode
 	let entries = try Directory.list(base) otherwise return 2
 	for entry in entries 'each'
 		let name = entry.filename()
-		var units = 0
+		var units = 0 as FullRangeInt
 		for _ in name.codepoints() 'count'
 			units = units + 1
 		end 'count'

@@ -87,7 +87,7 @@ end 'Pair'
 typealias PairArray = Array with Pair
 
 function sumAll(pairs PairArray) returns Integer
-		var total = 0
+		var total = 0 as Integer
 		for pair in pairs 'loop'
 				total = total + pair.a + pair.b
 		end 'loop'

@@ -91,7 +91,7 @@ done
 
   echo ""
   echo "function main() returns ExitCode"
-  echo -e "\tvar acc = 0"
+  echo -e "\tvar acc = 0 as Integer"
   i=0
   while [ "$i" -lt "$CLOSURES" ]; do
     echo -e "\tacc = acc + useClosure${i}($CALL_ARGS)"

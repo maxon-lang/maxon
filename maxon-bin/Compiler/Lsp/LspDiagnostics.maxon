@@ -184,14 +184,14 @@ extension Project
 	function refusalCorrectedBy(corpus Project, signatures ProgramSignatures, reader FilePath, buffer FilePath, reported DiagnosticArray, text String, tokens TokenArray) returns DiagnosticArray
 		let live = try queryActiveTokens(self, path: buffer) otherwise return reported
 
-		match corpus.sweptParseDiagnostics(reader, signatures: signatures, live: live) 'sweptParse'
+		match corpus.sweptParseDiagnostics(reader, live: live) 'sweptParse'
 			parsed(published) then return published
 			unavailable then return reported
 			bufferHasBeenTypedInto then return self.unsuppressedRefusals(reported, signatures: signatures, reader: reader, buffer: buffer, text: text, tokens: tokens, road: RefusalRoad.aModifiedBuffersParse)
 		end 'sweptParse'
 	end 'refusalCorrectedBy'
 
-	function sweptParseDiagnostics(reader FilePath, signatures ProgramSignatures, live TokenArray) returns SweptParse
+	function sweptParseDiagnostics(reader FilePath, live TokenArray) returns SweptParse
 		let swept = try queryActiveTokens(self, path: reader) otherwise return SweptParse.unavailable
 
 		if not tokenStreamsAgree(live, swept: swept) 'theAuthorHasTyped'
@@ -202,14 +202,14 @@ extension Project
 
 		return match query 'query'
 			memoized(artifact) gives SweptParse.parsed(artifact.diagnostics)
-			needed(job, sweptTokens, overrides, stamp) gives self.landedSweptParse(job, tokens: sweptTokens, overrides: overrides, stamp: stamp, signatures: signatures, reader: reader)
+			needed(job, sweptTokens, overrides, stamp) gives self.landedSweptParse(job, tokens: sweptTokens, overrides: overrides, stamp: stamp, reader: reader)
 		end 'query'
 	end 'sweptParseDiagnostics'
 
-	function landedSweptParse(job ParseJob, tokens TokenArray, overrides RowSetOverrideTable, stamp ParseStamp, signatures ProgramSignatures, reader FilePath) returns SweptParse
+	function landedSweptParse(job ParseJob, tokens TokenArray, overrides RowSetOverrideTable, stamp ParseStamp, reader FilePath) returns SweptParse
 		self.diagnostics.clear()
 
-		let artifact = landParseOutcome(self, path: reader, outcome: parseFile(job, tokens: tokens, overrides: overrides, signatures: signatures), stamp: stamp)
+		let artifact = landParseOutcome(self, path: reader, outcome: parseFile(job, tokens: tokens, overrides: overrides, signatures: try queryProgramSignatures(self) otherwise return SweptParse.unavailable), stamp: stamp)
 		var published = self.diagnostics.clone()
 		published.append(artifact.diagnostics)
 

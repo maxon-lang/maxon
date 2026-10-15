@@ -20,7 +20,7 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-	var i = 0
+	var i = 0 as Count
 	while true 'forever'
 		if i >= 3 'done'
 			break
@@ -158,6 +158,12 @@ let x = 5
 x = 10                        // E2013: cannot assign to immutable variable: 'x'
 ```
 
+**A `var` started from a bare number**
+
+```maxon
+var total = 0                 // E2004: A var cannot start from a bare number: write 'var name = expr as Type'.
+```
+
 **Self-assignment**
 
 ```maxon
@@ -167,7 +173,7 @@ x = x                         // E3067: self-assignment has no effect: 'x = x'
 **A `var` that never changes**
 
 ```maxon
-var x = 10
+var x = 10 as Count
 return x                      // E3077: variable 'x' is never reassigned; use 'let' instead of 'var'
 ```
 

@@ -84,7 +84,7 @@ function work(x Word, y Word) returns Word
 end 'work'
 
 function main() returns ExitCode
-	var seed = 0
+	var seed = 0 as Word
 	for i in 0 upto 4 'feed'
 		seed = seed + work(i, y: i + 1)
 	end 'feed'
@@ -116,7 +116,7 @@ function pick(x Word, y Word) returns Word
 end 'pick'
 
 function main() returns ExitCode
-	var seed = 0
+	var seed = 0 as Word
 	for i in 0 upto 4 'feed'
 		seed = seed + pick(i, y: i - 2)
 	end 'feed'
@@ -139,7 +139,7 @@ answers are what would move.
 typealias Word = int(i64.min to i64.max)
 
 function branchy(x Word, y Word) returns Word
-	var out = 0
+	var out = 0 as Word
 	if y > 0 'positive'
 		out = (x * 31 + y) * 2
 	end 'positive' else 'negative'
@@ -149,7 +149,7 @@ function branchy(x Word, y Word) returns Word
 end 'branchy'
 
 function main() returns ExitCode
-	var seed = 0
+	var seed = 0 as Word
 	for i in 0 upto 4 'feed'
 		seed = seed + branchy(i, y: i - 2)
 	end 'feed'
@@ -180,7 +180,7 @@ function differences(a Word, b Word) returns Word
 end 'differences'
 
 function main() returns ExitCode
-	var total = 0
+	var total = 0 as Word
 	for i in 0 upto 4 'feed'
 		total = total + sums(i, b: i + 3) + differences(i, b: i + 3)
 	end 'feed'
@@ -308,7 +308,7 @@ function across(x Word, y Word) returns Word
 end 'across'
 
 function main() returns ExitCode
-	var seed = 0
+	var seed = 0 as Word
 	for i in 0 upto 3 'feed'
 		seed = seed + across(i, y: i + 1)
 	end 'feed'

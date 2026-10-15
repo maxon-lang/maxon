@@ -137,19 +137,19 @@ let CommandLineScanOneName = b"__cl_scan_one"
 // `__cl_scan_one`'s "there is no argument here" answer, and a NEGATIVE position rather than a flag: a byte
 // position is non-negative by construction, so -1 is outside the answer domain rather than inside it, and
 // both callers test `>= 0`.
-let NoMoreArguments = -1 as ParsedInt
+let NoMoreArguments = -1 as FullRangeInt
 
 // The two bytes that separate arguments outside quotes, and the quote and escape that do the rest. Named
 // because a bare `0x20` at a branch says nothing about which of the two roles a byte is being tested for.
-let SpaceByte = 0x20 as ParsedInt
-let TabByte = 0x09 as ParsedInt
-let QuoteByte = 0x22 as ParsedInt
-let BackslashByte = 0x5C as ParsedInt
+let SpaceByte = 0x20 as FullRangeInt
+let TabByte = 0x09 as FullRangeInt
+let QuoteByte = 0x22 as FullRangeInt
+let BackslashByte = 0x5C as FullRangeInt
 
 // The scanner's quoting state, as the 0/1 it rides the loop as. `not q` is spelled `1 - q` at the one site
 // that toggles it, which is why both values are named rather than just the true one.
-let OutsideQuotes = 0 as ParsedInt
-let InsideQuotes = 1 as ParsedInt
+let OutsideQuotes = 0 as FullRangeInt
+let InsideQuotes = 1 as FullRangeInt
 
 // The scratch buffer holds one argument plus its NUL. An unescaped argument is never LONGER than the
 // command line it came from — every rule above consumes at least as many bytes as it emits — so the whole
@@ -159,7 +159,7 @@ let InsideQuotes = 1 as ParsedInt
 // ⚠ It is a COUNT OF BYTES, not a byte VALUE, and the name says so because `NulByte` (the value 0) is in
 // scope in this same file. Spelling this one `NulTerminatorByte` invited exactly one edit — using `NulByte`
 // here — and that edit sizes the scratch at `length` and overflows it by one on the terminating store.
-let NulTerminatorSlackBytes = 1 as ParsedInt
+let NulTerminatorSlackBytes = 1 as FullRangeInt
 
 // ⭐ **`__cl_scan_one(cmd, pos, dest) -> nextPos`** — skip separators, then copy ONE unescaped argument into
 // `dest` NUL-terminated and answer the position just past it, or `NoMoreArguments` when the line is spent.
@@ -511,7 +511,7 @@ end 'quintArgsOf'
 // One byte of the separator test, and the reason it is a function: the leading skip asks it twice (space,
 // then tab) and would otherwise carry two copies of "load the byte, compare, branch". `miss` is where a
 // non-match goes — the next test for the first call, the argument start for the second.
-function emitSeparatorTest(module StdModule, block IrBlock, cmd ValueId, at ValueId, byte ParsedInt, hit IrBlock, miss IrBlock, ids ValueMinter)
+function emitSeparatorTest(module StdModule, block IrBlock, cmd ValueId, at ValueId, byte FullRangeInt, hit IrBlock, miss IrBlock, ids ValueMinter)
 	let loaded = emitLoadByte(module, block: block, base: cmd, index: at, ids: ids)
 	let sep = emitConst(module, block: block, value: byte, ids: ids)
 	let matches = emitCmp(module, block: block, a: loaded, b: sep, pred: StdCmpPred.eq, ids: ids)
@@ -522,7 +522,7 @@ end 'emitSeparatorTest'
 // where a hit ENDS the argument (two carried values) and a miss carries all three onward. Two functions
 // rather than one parameterized over the edge shapes, because the two edges genuinely differ in ARITY and
 // folding them would mean passing both argument lists in anyway.
-function emitScanSeparatorExit(module StdModule, block IrBlock, cmd ValueId, byte ParsedInt, ends IrBlock, continues IrBlock, ids ValueMinter)
+function emitScanSeparatorExit(module StdModule, block IrBlock, cmd ValueId, byte FullRangeInt, ends IrBlock, continues IrBlock, ids ValueMinter)
 	let at = ids.mint()
 	let wrote = ids.mint()
 	let quoted = ids.mint()
@@ -537,7 +537,7 @@ end 'emitScanSeparatorExit'
 
 // Step both cursors by the caller's deltas and go round again — the tail three of the copy blocks share,
 // which differ only in how far the READ cursor moves (one byte for a copied byte, two for a `""` pair).
-function emitResumeScan(module StdModule, block IrBlock, scan IrBlock, at ValueId, atDelta ParsedInt, wrote ValueId, wroteDelta ParsedInt, quoted ValueId, ids ValueMinter)
+function emitResumeScan(module StdModule, block IrBlock, scan IrBlock, at ValueId, atDelta FullRangeInt, wrote ValueId, wroteDelta FullRangeInt, quoted ValueId, ids ValueMinter)
 	let readStep = emitConst(module, block: block, value: atDelta, ids: ids)
 	let nextAt = emitBin(module, block: block, a: at, b: readStep, opcode: StdBinOpcode.add, ids: ids)
 	let writeStep = emitConst(module, block: block, value: wroteDelta, ids: ids)
@@ -773,7 +773,7 @@ function buildCommandLineVectorArg(module StdModule)
 end 'buildCommandLineVectorArg'
 
 // `argv` is an array of POINTERS, so an index scales by the width of one.
-let ArgvPointerBytes = 8 as ParsedInt
+let ArgvPointerBytes = 8 as FullRangeInt
 
 // ⚠ **THE INSTALL FORKS ON THE TARGET, AND THAT IS THIS FAMILY'S WHOLE DIVERGENCE FROM THE OTHERS.** Every
 // other runtime installer builds ONE graph for every target; argv cannot, because the two platforms do not

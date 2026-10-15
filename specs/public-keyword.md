@@ -151,7 +151,7 @@ end 'main'
 ```maxon
 // --- file: api/limits.maxon
 public let BASE = 30
-public var counter = 5
+public var counter = 5 as ExitCode
 
 // --- file: app/main.maxon
 function main() returns ExitCode

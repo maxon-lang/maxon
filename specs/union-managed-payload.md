@@ -2654,7 +2654,7 @@ end 'Expr'
 
 function main() returns ExitCode
 	var e = Expr.direct(Ty.concrete("the first nested payload, long enough to be a real heap allocation"))
-	var total = 0
+	var total = 0 as FullRangeInt
 
 	for i in 1 to 2 'round'
 		total = total + i
@@ -2692,7 +2692,7 @@ end 'Expr'
 
 function main() returns ExitCode
 	var e = Expr.direct("the first payload, long enough to be a real heap allocation")
-	var total = 0
+	var total = 0 as FullRangeInt
 
 	for i in 1 to 2 'round'
 		total = total + i
@@ -3390,7 +3390,7 @@ measured=62055
 A `float` payload is built, carried in the union's box and bound back out by a match, like any other scalar.
 ```maxon
 union Reading
-	celsius(value Real)
+	celsius(value FullRangeFloat)
 	missing
 end 'Reading'
 
@@ -3421,7 +3421,7 @@ celsius -3.25
 A union with a `float` payload is a message argument like any other; one service prints in FIFO order.
 ```maxon
 union Reading
-	celsius(value Real)
+	celsius(value FullRangeFloat)
 	missing
 end 'Reading'
 
@@ -3464,7 +3464,7 @@ typealias Integer = int(i64.min to i64.max)
 A case carrying a `String` and a `float` binds both fields; the managed field is released with the box.
 ```maxon
 union Sample
-	labelled(label String, value Real)
+	labelled(label String, value FullRangeFloat)
 	count(n Integer)
 end 'Sample'
 
@@ -3495,7 +3495,7 @@ An integer literal at a `float` payload widens to the float, in a function body 
 initializer alike.
 ```maxon
 union Reading
-	celsius(value Real)
+	celsius(value FullRangeFloat)
 	missing
 end 'Reading'
 
@@ -3526,7 +3526,7 @@ celsius 3.0
 `fromName` with a literal case name takes the payload as its extra argument, a `float` one included.
 ```maxon
 union Reading
-	celsius(value Real)
+	celsius(value FullRangeFloat)
 	missing
 end 'Reading'
 
@@ -3553,7 +3553,7 @@ Matching a `var` binds the payload mutably: the write lands in the union's own p
 from the bound value carries the new float.
 ```maxon
 union Reading
-	celsius(value Real)
+	celsius(value FullRangeFloat)
 	missing
 end 'Reading'
 

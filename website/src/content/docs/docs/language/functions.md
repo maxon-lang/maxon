@@ -189,7 +189,7 @@ function increment(n Tally)
 end 'increment'
 
 function main() returns ExitCode
-	var x = 10
+	var x = 10 as Tally
 	increment(x)
 	print("{x}\n")     // 11
 	return 0
@@ -206,6 +206,28 @@ end 'main'
   method counts as a parameter, so `let acc = Accumulator.create()` followed by `acc.add(10)`, where `add`
   writes a field of `acc`, is refused too. A `let` field, or anything reached through a read-only value, is
   refused for the same reason the equivalent assignment is.
+- A call through a function value passes its arguments as a direct call does. A function value of arity n
+  passes the argument's own storage at position i exactly when some free function of arity n writes its
+  parameter i, whichever body the call reaches: a body that writes the parameter updates the variable, and
+  one that only reads it reads the value held there. After `let f = bump` with `bump` assigning its
+  parameter, `f(v)` updates `v` exactly as `bump(v)` does. The argument is held to the rules above. When the
+  value is the function or closure a reference names, the callee is that body; a value read out of storage
+  (a variable, a field, an element, a capture) or arriving through a parameter or a merge may hold any
+  function used as a value whose shape agrees with its function type. A read-only value handed to a position
+  the callee may write is **E3159**, reported for every such argument and once for each body that writes it,
+  naming that body's parameter, also when a closure captured it; a callback that only reads accepts it. An
+  expression that is not storage gives the callee a temporary. A function that forwards a parameter to such a
+  callback writes that parameter when any candidate does.
+- A callback parameter typed over a type parameter (`f function(T) returns T` in a generic body) holds the
+  functions handed in for it, so a read-only value passed to it is refused only where a writing function is
+  handed in, and the refusal names that call (`'isBig' writes its parameter 'n', but 'Array.filter' passes it
+  the immutable 'item'`).
+- A call through an interface follows the same rule as a call through a function value: a requirement's
+  position is passed as the argument's storage when any conformer writes it, the caller's `var` is updated,
+  and a read-only value there is **E3159**, once for each conformer that writes it (`'Doubler.bump' writes
+  its parameter 'n', but 'bump' passes it the immutable 'x'`).
+- A variable passed by reference to a parameter whose alias is wider than its own, or that names no alias,
+  is range-checked when the call returns.
 - Passing storage to a parameter the callee **reassigns**, while another argument of the same call reaches
   that storage, is **E3186** (see [Aliasing Between Arguments](/docs/language/memory-model/#aliasing-between-arguments)).
 - Passing a literal or another expression gives the callee a temporary; its writes have no visible effect.
@@ -258,7 +280,7 @@ function apply(f UnaryOp, x Score) returns Score
 end 'apply'
 
 function main() returns ExitCode
-	var offset = 10
+	var offset = 10 as Score
 	let addOffset = function(n Score) gives n + offset
 	offset = 20
 	print("{apply(addOffset, x: 5)} {offset}\n")     // 15 20: the closure keeps the offset it captured
@@ -322,7 +344,7 @@ to globals or parameters, only pure callees) or **impure**, and the rules for ig
 ```maxon
 typealias Tally = int(0 to u64.max)
 
-var counter = 0
+var counter = 0 as Tally
 
 function incrementAndGet() returns Tally
 	counter = counter + 1

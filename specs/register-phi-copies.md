@@ -69,7 +69,7 @@ the original and prove nothing): `(1,2)` → `(2,1)` → `(1,2)` → `(2,1)`, so
 function swapLoop(p Integer) returns Integer
 	var a = p + 1
 	var b = p + 2
-	var i = 0
+	var i = 0 as Integer
 	while i < 3 'loop'
 		let t = a
 		a = b
@@ -105,7 +105,7 @@ function rotate3(p Integer) returns Integer
 	var a = p + 1
 	var b = p + 2
 	var c = p + 3
-	var i = 0
+	var i = 0 as Integer
 	while i < 4 'loop'
 		let t = a
 		a = b
@@ -144,7 +144,7 @@ function rotate5(p Integer) returns Integer
 	var c = p + 3
 	var d = p + 4
 	var e = p + 5
-	var i = 0
+	var i = 0 as Integer
 	while i < 3 'loop'
 		let t = a
 		a = b
@@ -187,7 +187,7 @@ function cycleAndLeaf(p Integer) returns Integer
 	var b = p + 2
 	var c = p + 3
 	var d = p
-	var i = 0
+	var i = 0 as Integer
 	while i < 4 'loop'
 		let t = a
 		d = a
@@ -228,7 +228,7 @@ function twoPerms(p Integer) returns Integer
 	var a = p + 1
 	var b = p + 2
 	var c = p + 3
-	var i = 0
+	var i = 0 as Integer
 	while i < 4 'loop'
 		if i mod 2 == 0 'even'
 			let t = a
@@ -283,7 +283,7 @@ function permutePressure(p Integer) returns Integer
 	let k12 = p + 12
 	var a = p + 1
 	var b = p + 2
-	var i = 0
+	var i = 0 as Integer
 	while i < 3 'loop'
 		let t = a
 		a = b
@@ -323,7 +323,7 @@ end 'sink'
 function swapAcrossCall(p Integer) returns Integer
 	var a = p + 1
 	var b = p + 2
-	var i = 0
+	var i = 0 as Integer
 	while i < 3 'loop'
 		let t = a
 		a = b

@@ -226,13 +226,6 @@ function pinsStderrOf(test SpecTest) returns bool
 	end 'e'
 end 'pinsStderrOf'
 
-function expectsCompileError(test SpecTest) returns bool
-	return match test.expectation 'e'
-		compilerError gives true
-		run gives false
-	end 'e'
-end 'expectsCompileError'
-
 function pinsLinkedPayload(test SpecTest) returns bool
 	return test.pinsLinkedSection() or not test.runtimeNames.isEmpty()
 end 'pinsLinkedPayload'
@@ -269,7 +262,7 @@ end 'usesNetwork'
 // The reasons a case runs alone that its spec text states; `claimedPlacementOf` asks the rest of the
 // front end's claims. Together they are the one list of `SoloReason`s.
 module function placementOf(test SpecTest, irAction IrAction) returns Placement
-	if expectsCompileError(test) 'compileError'
+	if test.expectation.expectsCompileError() 'compileError'
 		return Placement.apart(SoloReason.compileError)
 	end 'compileError'
 

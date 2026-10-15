@@ -37,18 +37,24 @@ end 'connect'
 
 A bare `int` in a declaration is **E3005** (`Cannot use bare 'int' as a type. Define a typealias with
 range constraints, e.g., typealias MyInt = int(0 to 100)`); a bare `int` type argument (`Array with int`)
-is **E2061**. `bool` and `cstring` are used bare. Local variables never need an annotation — the type is
-inferred from the initializer:
+is **E2061**. `bool` and `cstring` are used bare. A variable takes its type from its initializer, and a
+`var` holding a number names its alias there:
 
 ```maxon
-let count = 0          // an integer
-let ratio = 0.5        // a float
+typealias Tally = int(0 to u64.max)
+
+let limit = 10         // a constant: fits any alias its value fits
+let ratio = 0.5        // a float constant
 let done = false       // bool
+var count = 0 as Tally // a Tally
+// var total = 0       // E2004: A var cannot start from a bare number
 ```
+
+See [Variables](/docs/language/variables/) for the rules.
 
 The standard library declares a few aliases every file can use, among them `ExitCode`, `Byte`
 (`int(0 to u8.max)`), `ByteArray` (`Array with Byte`), `Codepoint` (`int(0 to 1114111)`), `HashValue`
-(`int(0 to u32.max)`), `Count` (what a collection's `count()` returns), `SourceLineNumber` and `Real`
+(`int(0 to u32.max)`), `Count` (what a collection's `count()` returns), `SourceLineNumber` and `FullRangeFloat`
 (`float(f64.min to f64.max)`).
 [Ranged Type Aliases](/docs/language/ranged-typealiases/) covers declaring your own.
 
@@ -84,6 +90,12 @@ typealias Tally = int(0 to u64.max)
   `i64.max`, or arithmetic over unsigned operands — passes its door unchecked (see
   [Range Checks](/docs/language/ranged-typealiases/#range-checks)). A value that is a pattern rather than a count is a
   [`bits(64)`](#bit-patterns--bitsn).
+- An array, set, list, vector or map-column literal whose bare elements need both a negative value and a value
+  above `i64.max` (`[-1, u64.max]`) has no integer type that holds them all, and is **E3005** at the element
+  that makes it so (`no common integer type for -1 and 18446744073709551615`); cast the elements to an
+  alias. A `let` whose value merges a range-known value above `i64.max` with a non-negative one (`try
+  big.get(1) otherwise 0`) is range-known as an unsigned interval; a merge needing both a negative value and a
+  value above `i64.max` has no known range.
 
 ## Floats
 
@@ -110,6 +122,10 @@ end 'main'
 - `inf` and `NaN` produced by arithmetic are ordinary IEEE values; only division *by zero* is intercepted.
   There is no float `mod`.
 - A float alias bounded by `f32.min to f32.max` is still stored as a double; the bound is a range check.
+- A float whose range is known — a literal, a `let` constant, an element of a `let` literal, a merge of
+  such values, and arithmetic over them — carries that interval, and a use where the interval leaves the
+  float alias it reaches is **E3005** at compile time. A quotient whose divisor's interval holds zero, and
+  any float whose range is unknown, is a `FullRangeFloat`.
 
 ## Booleans
 
@@ -254,23 +270,27 @@ Choose the rounding explicitly:
 
 | Function | Result | Example |
 |----------|--------|---------|
-| `trunc(x)` | integer, toward zero | `trunc(-2.7)` is `-2` |
+| `trunc(x)` | `FullRangeInt`, toward zero | `trunc(-2.7)` is `-2` |
 | `round(x)` | float, nearest, ties to even | `round(2.5)` is `2.0` |
 | `floor(x)` | float, toward negative infinity | `floor(-2.5)` is `-3.0` |
 | `ceil(x)` | float, toward positive infinity | `ceil(2.1)` is `3.0` |
 
 `trunc` is the one that produces an integer; apply it to the result of `round`, `floor` or `ceil` to get
-an integer from those.
+an integer from those. Its result is a `FullRangeInt` (`int(i64.min to i64.max)`); cast it to reach a
+narrower alias. `round`, `floor`, `ceil`, `sqrt`, `abs` and the float `min` and `max` also accept a value of
+an integer alias, which they convert. A float result whose range the compiler knows carries that range and
+fits any float alias admitting it; any other is a `FullRangeFloat`.
 
 ### Implicit Conversions
 
 Maxon converts implicitly in only these places:
 
 - **Integer to float in mixed arithmetic and float slots.** `let x = 5` then `x + 2.0` is `7.0`, and an
-  unaliased integer (a literal, or a local initialized from one) is accepted where a float is expected. A
-  value of a *named* integer alias reaches a float-alias parameter through `as`, and so does a value of one
-  float alias at a place declared with another — the standard library's `Real` among them.
-- **A character literal beside an integer** is that character's codepoint:
+  unaliased integer (a literal, or a `let` constant) is accepted where a float is expected. A value of a
+  *named* integer alias beside a float operand converts too, and the result is a `FullRangeFloat`. A named
+  integer value reaches a float-alias parameter through `as`, and so does a value of one float alias at a
+  place declared with another — the standard library's `FullRangeFloat` among them.
+- **A character literal beside an integer** is that character's codepoint, a `Codepoint`:
 
   ```maxon
   let cp = 45

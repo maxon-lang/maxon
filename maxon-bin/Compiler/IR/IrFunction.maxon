@@ -765,7 +765,7 @@ end 'cacheReadExistentialFieldStoreArray'
 
 export union DebugFoldedConstant
 	none
-	immediate(value ParsedInt)
+	immediate(value FullRangeInt)
 end 'DebugFoldedConstant'
 
 // @generated library-cache begin
@@ -778,7 +778,7 @@ function cacheWriteDebugFoldedConstant(writer LibraryCacheWriter, value DebugFol
 	end 'payload'
 end 'cacheWriteDebugFoldedConstant'
 
-function cacheWriteDebugFoldedConstantImmediate(writer LibraryCacheWriter, a0 ParsedInt)
+function cacheWriteDebugFoldedConstantImmediate(writer LibraryCacheWriter, a0 FullRangeInt)
 	writer.signed(a0 as CacheSigned)
 end 'cacheWriteDebugFoldedConstantImmediate'
 
@@ -793,7 +793,7 @@ function cacheReadDebugFoldedConstant(reader LibraryCacheReader) returns DebugFo
 end 'cacheReadDebugFoldedConstant'
 
 function cacheReadDebugFoldedConstantImmediate(reader LibraryCacheReader) returns DebugFoldedConstant throws LibraryCacheDamage
-	let a0 = (try reader.signed()) as ParsedInt
+	let a0 = (try reader.signed()) as FullRangeInt
 
 	return DebugFoldedConstant.immediate(a0)
 end 'cacheReadDebugFoldedConstantImmediate'
@@ -821,7 +821,7 @@ export type DebugLocalDecl
 
 	export var foldedConstant = DebugFoldedConstant.none
 
-	export var foldedRecord = ParsedIntArray.create()
+	export var foldedRecord = FullRangeIntArray.create()
 
 	export var inlineSite = InlineSiteRef.none
 
@@ -846,7 +846,7 @@ export type DebugLocalDecl
 		return Self{name: self.name, declaredType: self.declaredType, valueIds: splicedValues, heldInACell: self.heldInACell, foldedConstant: self.foldedConstant, foldedRecord: self.foldedRecord, inlineSite: site}
 	end 'splicedCopy'
 
-	export function noteFoldedConstant(value ValueId, constant ParsedInt)
+	export function noteFoldedConstant(value ValueId, constant FullRangeInt)
 		match self.foldedConstant 'already'
 			none then break
 			immediate then return
@@ -857,7 +857,7 @@ export type DebugLocalDecl
 		end 'thisBinding'
 	end 'noteFoldedConstant'
 
-	export function noteFoldedRecord(value ValueId, words ParsedIntArray)
+	export function noteFoldedRecord(value ValueId, words FullRangeIntArray)
 		if self.foldedRecord.count() > 0 'alreadyRecorded'
 			return
 		end 'alreadyRecorded'
@@ -888,7 +888,7 @@ export type DebugLocalDecl
 		cacheWriteValueIdArray(writer, value: self.valueIds)
 		writer.flag(self.heldInACell)
 		cacheWriteDebugFoldedConstant(writer, value: self.foldedConstant)
-		cacheWriteParsedIntArray(writer, value: self.foldedRecord)
+		cacheWriteFullRangeIntArray(writer, value: self.foldedRecord)
 		cacheWriteInlineSiteRef(writer, value: self.inlineSite)
 	end 'cacheWrite'
 
@@ -898,7 +898,7 @@ export type DebugLocalDecl
 		let f_valueIds = try cacheReadValueIdArray(reader)
 		let f_heldInACell = try reader.flag()
 		let f_foldedConstant = try cacheReadDebugFoldedConstant(reader)
-		let f_foldedRecord = try cacheReadParsedIntArray(reader)
+		let f_foldedRecord = try cacheReadFullRangeIntArray(reader)
 		let f_inlineSite = try cacheReadInlineSiteRef(reader)
 
 		return Self{name: f_name, declaredType: f_declaredType, valueIds: f_valueIds, heldInACell: f_heldInACell, foldedConstant: f_foldedConstant, foldedRecord: f_foldedRecord, inlineSite: f_inlineSite}
@@ -2600,6 +2600,30 @@ export typealias ParamPositionMask = bits(64)
 // published as the name-keyed summary a call site reads.
 export typealias ParamPositionMaskArray = Array with ParamPositionMask
 
+// @generated library-cache begin
+export function cacheWriteParamPositionMaskArray(writer LibraryCacheWriter, value ParamPositionMaskArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.unsigned(item as CacheUnsigned)
+	end 'eachItem'
+end 'cacheWriteParamPositionMaskArray'
+
+export function cacheReadParamPositionMaskArray(reader LibraryCacheReader) returns ParamPositionMaskArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = ParamPositionMaskArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = (try reader.unsigned()) as ParamPositionMask
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadParamPositionMaskArray'
+
+// @generated library-cache end
+
 // Is parameter `param` in `mask`? The ONE reader of the bit order — the parser sets bits and
 // SemanticCheck's fixpoint both propagates and tests them, and a second spelling of the shift is a
 // second chance for the two ends to disagree about which bit is which.
@@ -2923,6 +2947,9 @@ export type IrFunction
 	// `SemanticCheck.buildParamMutationSummary`. Zero for a Std-phase function.
 	export var writesThroughParamMask as ParamPositionMask
 
+	export var brandOriginValues as ValueIdArray
+	export var brandOriginKeys as NameRoster
+
 	// ⭐ **IT ASSIGNS MODULE-LEVEL STORAGE — the effect summary's "modifies global state" seed (E3064).**
 	// Set at `Parser.emitCheckedGlobalStore`, the one door every `g = …` on a module `let`/`var` passes
 	// through, and read by `EffectSummaryBuilder.walkNode`.
@@ -3105,6 +3132,8 @@ export type IrFunction
 			writtenParamMask: 0,
 			reassignedParamMask: 0,
 			writesThroughParamMask: 0,
+			brandOriginValues: ValueIdArray.create(),
+			brandOriginKeys: NameRoster.create(),
 			writesModuleStorage: false,
 			bodyWasSkippedAsUnreached: false,
 			bodySplicedAway: false,
@@ -3186,6 +3215,8 @@ export type IrFunction
 			writtenParamMask: 0,
 			reassignedParamMask: 0,
 			writesThroughParamMask: 0,
+			brandOriginValues: ValueIdArray.create(),
+			brandOriginKeys: NameRoster.create(),
 			writesModuleStorage: false,
 			bodyWasSkippedAsUnreached: false,
 			bodySplicedAway: false,
@@ -3258,6 +3289,8 @@ export type IrFunction
 			writtenParamMask: src.writtenParamMask,
 			reassignedParamMask: src.reassignedParamMask,
 			writesThroughParamMask: src.writesThroughParamMask,
+			brandOriginValues: src.brandOriginValues,
+			brandOriginKeys: src.brandOriginKeys,
 			writesModuleStorage: src.writesModuleStorage,
 			bodyWasSkippedAsUnreached: src.bodyWasSkippedAsUnreached,
 			bodySplicedAway: src.bodySplicedAway,
@@ -3590,6 +3623,8 @@ export type IrFunction
 		writer.unsigned(self.closureSubCounter as CacheUnsigned)
 		writer.unsigned(self.writtenParamMask as CacheUnsigned)
 		writer.unsigned(self.writesThroughParamMask as CacheUnsigned)
+		cacheWriteValueIdArray(writer, value: self.brandOriginValues)
+		cacheWriteNameRoster(writer, value: self.brandOriginKeys)
 		writer.flag(self.writesModuleStorage)
 		writer.flag(self.bodyWasSkippedAsUnreached)
 		writer.flag(self.bodySplicedAway)
@@ -3649,6 +3684,8 @@ export type IrFunction
 		let f_closureSubCounter = (try reader.unsigned()) as ClosureSubIndex
 		let f_writtenParamMask = (try reader.unsigned()) as ParamPositionMask
 		let f_writesThroughParamMask = (try reader.unsigned()) as ParamPositionMask
+		let f_brandOriginValues = try cacheReadValueIdArray(reader)
+		let f_brandOriginKeys = try cacheReadNameRoster(reader)
 		let f_writesModuleStorage = try reader.flag()
 		let f_bodyWasSkippedAsUnreached = try reader.flag()
 		let f_bodySplicedAway = try reader.flag()
@@ -3662,11 +3699,11 @@ export type IrFunction
 		let f_debugLocalLocations = try cacheReadDebugValueLocationArray(reader)
 		let f_debugLocalRanges = try cacheReadDebugValueRangeArray(reader)
 
-		return Self{name: f_name, visibility: f_visibility, sourceFilePath: f_sourceFilePath, paramCount: f_paramCount, blockRefs: f_blockRefs, nextBlockId: f_nextBlockId, nameLine: f_nameLine, nameColumn: f_nameColumn, closeLine: f_closeLine, closeColumn: f_closeColumn, needsGreenThreadStackGuard: f_needsGreenThreadStackGuard, keepsItsOwnFrame: f_keepsItsOwnFrame, pinsItsThread: f_pinsItsThread, mustBeSplicedAtEverySite: f_mustBeSplicedAtEverySite, closureLayout: f_closureLayout, closureFixedElementCount: f_closureFixedElementCount, closureEnvFields: f_closureEnvFields, closureStoreSites: f_closureStoreSites, maxonReturnType: f_maxonReturnType, maxonParamTypes: f_maxonParamTypes, valueTags: f_valueTags, valueNameIds: f_valueNameIds, valueBrandIds: f_valueBrandIds, valueMintedSole: f_valueMintedSole, filedProvenance: f_filedProvenance, valueColumnsArePrivate: f_valueColumnsArePrivate, valueWitnessIds: f_valueWitnessIds, valueExistentialInstances: f_valueExistentialInstances, valueCallInstances: f_valueCallInstances, literalCastArguments: f_literalCastArguments, deferredArgumentBindings: f_deferredArgumentBindings, conditionalOps: f_conditionalOps, conditionalRefusals: f_conditionalRefusals, existentialFieldStores: f_existentialFieldStores, throwsTypeName: f_throwsTypeName, scope: f_scope, returnType: f_returnType, paramTypes: f_paramTypes, varSlotCount: f_varSlotCount, stackSize: f_stackSize, outgoingArgSize: f_outgoingArgSize, closureSubCounter: f_closureSubCounter, writtenParamMask: f_writtenParamMask, writesThroughParamMask: f_writesThroughParamMask, writesModuleStorage: f_writesModuleStorage, bodyWasSkippedAsUnreached: f_bodyWasSkippedAsUnreached, bodySplicedAway: f_bodySplicedAway, usesValueTupleReturn: f_usesValueTupleReturn, reassignedParamMask: f_reassignedParamMask, argumentOverlaps: f_argumentOverlaps, paramGuards: f_paramGuards, inlineSites: f_inlineSites, debugLocals: f_debugLocals, ownsItsDebugLocals: f_ownsItsDebugLocals, debugLocalLocations: f_debugLocalLocations, debugLocalRanges: f_debugLocalRanges}
+		return Self{name: f_name, visibility: f_visibility, sourceFilePath: f_sourceFilePath, paramCount: f_paramCount, blockRefs: f_blockRefs, nextBlockId: f_nextBlockId, nameLine: f_nameLine, nameColumn: f_nameColumn, closeLine: f_closeLine, closeColumn: f_closeColumn, needsGreenThreadStackGuard: f_needsGreenThreadStackGuard, keepsItsOwnFrame: f_keepsItsOwnFrame, pinsItsThread: f_pinsItsThread, mustBeSplicedAtEverySite: f_mustBeSplicedAtEverySite, closureLayout: f_closureLayout, closureFixedElementCount: f_closureFixedElementCount, closureEnvFields: f_closureEnvFields, closureStoreSites: f_closureStoreSites, maxonReturnType: f_maxonReturnType, maxonParamTypes: f_maxonParamTypes, valueTags: f_valueTags, valueNameIds: f_valueNameIds, valueBrandIds: f_valueBrandIds, valueMintedSole: f_valueMintedSole, filedProvenance: f_filedProvenance, valueColumnsArePrivate: f_valueColumnsArePrivate, valueWitnessIds: f_valueWitnessIds, valueExistentialInstances: f_valueExistentialInstances, valueCallInstances: f_valueCallInstances, literalCastArguments: f_literalCastArguments, deferredArgumentBindings: f_deferredArgumentBindings, conditionalOps: f_conditionalOps, conditionalRefusals: f_conditionalRefusals, existentialFieldStores: f_existentialFieldStores, throwsTypeName: f_throwsTypeName, scope: f_scope, returnType: f_returnType, paramTypes: f_paramTypes, varSlotCount: f_varSlotCount, stackSize: f_stackSize, outgoingArgSize: f_outgoingArgSize, closureSubCounter: f_closureSubCounter, writtenParamMask: f_writtenParamMask, writesThroughParamMask: f_writesThroughParamMask, brandOriginValues: f_brandOriginValues, brandOriginKeys: f_brandOriginKeys, writesModuleStorage: f_writesModuleStorage, bodyWasSkippedAsUnreached: f_bodyWasSkippedAsUnreached, bodySplicedAway: f_bodySplicedAway, usesValueTupleReturn: f_usesValueTupleReturn, reassignedParamMask: f_reassignedParamMask, argumentOverlaps: f_argumentOverlaps, paramGuards: f_paramGuards, inlineSites: f_inlineSites, debugLocals: f_debugLocals, ownsItsDebugLocals: f_ownsItsDebugLocals, debugLocalLocations: f_debugLocalLocations, debugLocalRanges: f_debugLocalRanges}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize448
-		return sizeof(IrFunction) as CacheSize448
+	static function cacheLayoutBytes() returns CacheSize464
+		return sizeof(IrFunction) as CacheSize464
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end

@@ -193,7 +193,7 @@ and a calendar reading are both positive on any real host.
 function main() returns ExitCode
 	let ms = Clock.nowMs()
 	let secs = WallClock.nowUnixSeconds()
-	var score = 0
+	var score = 0 as FullRangeInt
 	if ms > 0 'monotonicPositive'
 		score = score + 1
 	end 'monotonicPositive'
@@ -215,7 +215,7 @@ non-negative.
 ```maxon
 function main() returns ExitCode
 	let start = Clock.nowMs()
-	var spins = 0
+	var spins = 0 as FullRangeInt
 	while spins < 50000 'burn'
 		spins = spins + 1
 	end 'burn'
@@ -1000,7 +1000,7 @@ in a reduction.
 ```maxon
 function main() returns ExitCode
 	let r = Range.create(3, finish: 7)
-	var total = 0
+	var total = 0 as RangeBound
 	for v in r 'loop'
 		total = total + v
 	end 'loop'
@@ -1026,7 +1026,7 @@ module's own documentation advertises, and a load that did not deliver it would 
 ```maxon
 function main() returns ExitCode
 	let r = 3 to 7
-	var sum = 0
+	var sum = 0 as RangeBound
 	for x in r 'walk'
 		sum = sum + x
 	end 'walk'
@@ -1104,7 +1104,7 @@ function main() returns ExitCode
 	print("{name} count={count} tags={n} second={second} ok={ok}\n")
 	let absent = try doc.getInt(doc.root, key: "missing") otherwise 'absent'
 		print("absent key refused\n")
-		return (count + (n as JsonInt) + second) as ExitCode
+		return (count + (n as JsonInt) + second as JsonInt) as ExitCode
 	end 'absent'
 	print("UNREACHED {absent}\n")
 	return 0
@@ -1201,7 +1201,7 @@ function main() returns ExitCode
 	let negativeZero = try Json.parse("-0") otherwise 'parseNegativeZero'
 		panic("Json.parse rejected -0")
 	end 'parseNegativeZero'
-	if not Math.hasNegativeSignBit(negativeZero.get(negativeZero.root).numberValue as Real) 'signLost'
+	if not Math.hasNegativeSignBit(negativeZero.get(negativeZero.root).numberValue as FullRangeFloat) 'signLost'
 		return 1
 	end 'signLost'
 	print("{Json.stringify(negativeZero)}\n")

@@ -17,7 +17,7 @@ Loop iterator variables in `for` loops are also scoped to the loop body and are 
 
 ```text
 if condition 'check'
-  var x = 42
+  var x = 42 as Count
 end 'check'
 // x is not accessible here
 ```
@@ -27,7 +27,7 @@ end 'check'
 The iterator variable is immutable and scoped to the loop body:
 
 ```text
-var arr = [1, 2, 3]
+var arr = [1 as Count, 2, 3]
 for item in arr 'loop'
   // item is immutable
   // item = 99  // error: not mutable
@@ -39,7 +39,7 @@ end 'loop'
 
 ```text
 while condition 'loop'
-  var x = 42
+  var x = 42 as Count
 end 'loop'
 // x is not accessible here
 ```
@@ -147,7 +147,7 @@ error E2004: specs/block-scoping/if-else-body-var-not-accessible-after.maxon:8:9
 <!-- test: while-body-var-not-accessible-after -->
 ```maxon
 function main() returns ExitCode
-	var i = 0
+	var i = 0 as Count
 	while i < 3 'loop'
 		let x = i
 		i = i + 1
@@ -162,7 +162,7 @@ error E2004: specs/block-scoping/while-body-var-not-accessible-after.maxon:8:9: 
 <!-- test: outer-var-accessible-in-block -->
 ```maxon
 function main() returns ExitCode
-	var sum = 0
+	var sum = 0 as ExitCode
 	let arr = [10, 20, 12]
 	for item in arr 'loop'
 		sum = sum + item

@@ -172,7 +172,7 @@ typealias IntArray = Array with Integer
 
 function build(n Integer) returns Integer
 	var arr = IntArray.create()
-	var i = 0
+	var i = 0 as Integer
 	while i < n 'loop'
 		i = i + 1
 		if i == 2 'skip'
@@ -233,7 +233,7 @@ the merge. A scalar has no method-call statement form, so this pins the plain
 cross-block read the receiver cases build on.
 ```maxon
 function main() returns ExitCode
-	var x = 1
+	var x = 1 as FullRangeInt
 	if 2 > 1 'grow'
 		x = 2
 	end 'grow'

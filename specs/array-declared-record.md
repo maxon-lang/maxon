@@ -456,7 +456,8 @@ function main() returns ExitCode
 	var b = NumBag.create()
 	b.push(4 as Num)
 	b.push(5 as Num)
-	return (b.count() + try b.get(1) otherwise panic("get: index 1 was just pushed")) as ExitCode
+	let second = try b.get(1) otherwise panic("get: index 1 was just pushed")
+	return (b.count() + second as Count) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -1295,9 +1296,9 @@ function main() returns ExitCode
 	mine.push(4 as Num)
 	mine.push(5 as Num)
 
-	var total = 0
+	var total = 0 as Count
 	for n in mine 'ownLoop'
-		total = total + n
+		total = total + n as Count
 	end 'ownLoop'
 
 	for part in "a,bb,ccc".split(",") 'librarysLoop'
@@ -1503,11 +1504,11 @@ type Bag uses Element implements BuiltinArrayLiteral
 	end 'create'
 end 'Bag'
 
-typealias IntBag = Bag with int
+typealias IntBag = Bag with Integer
 
 function main() returns ExitCode
 	var b = IntBag.create()
-	b.push(7)
+	b.push(7 as Integer)
 	return b.at(0) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -1538,13 +1539,14 @@ type Bag uses Element implements BuiltinArrayLiteral
 	end 'create'
 end 'Bag'
 
-typealias IntBag = Bag with int
+typealias IntBag = Bag with Integer
 
 function main() returns ExitCode
 	var b = IntBag.create()
-	b.push(1)
+	b.push(1 as Integer)
 	return b.nosuchmember() as ExitCode
 end 'main'
+typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E2015: <fragment>:21:11: Unsupported: `Bag` member 'nosuchmember' — the compiler provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here

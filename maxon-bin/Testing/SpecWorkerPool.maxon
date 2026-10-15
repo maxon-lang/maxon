@@ -428,7 +428,7 @@ export function parseWorkerCount(raw String) returns WorkerCountArg
 		return WorkerCountArg.invalid
 	end 'notANumber'
 
-	if value < (MinWorkerCount as ParsedInt) or value > (MaxWorkerCount as ParsedInt) 'outOfRange'
+	if value < (MinWorkerCount as FullRangeInt) or value > (MaxWorkerCount as FullRangeInt) 'outOfRange'
 		return WorkerCountArg.invalid
 	end 'outOfRange'
 
@@ -589,7 +589,7 @@ function popHeaviestJob(queue SpecJobArray) returns SpecJob
 		panic("popHeaviestJob: the dispatch loop only pops from a queue it has proved non-empty")
 	end 'emptyQueue'
 
-	var bestIdx = 0
+	var bestIdx = 0 as ElementIndex
 	var bestWeight = 0 as JobWeight
 
 	for i in 0 upto n 'scan'
@@ -832,7 +832,7 @@ function decodeRecordPayload(payload String) returns String
 	let bytes = payload.toByteArray()
 	let n = bytes.count()
 	var decoded = ByteArray.create()
-	var i = 0
+	var i = 0 as ElementIndex
 
 	while i < n 'walk'
 		let b = try bytes.get(i) otherwise panic("decodeRecordPayload: bytes.get({i}) is in bounds by construction")
@@ -2010,7 +2010,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 	// the start, so the three are indexed by the same slot number.
 	let idleInstant = Clock.nowMs()
 
-	for _ in 0 upto poolSize 'initSlots'
+	for _ in 0 upto poolSize as ElementIndex 'initSlots'
 		busy.push(false)
 		inFlight.push(idleJob)
 		dispatchedAt.push(idleInstant)
@@ -2267,11 +2267,11 @@ end 'prepareSharedDirs'
 function spawnPool(harnessExe FilePath, count WorkerCount, specDir FilePath, filterPatterns FilterPatternArray, mode SpecRunMode, effectiveTarget Target, includeNetwork bool) returns PersistentWorkerHandleArray
 	var workers = PersistentWorkerHandleArray.create()
 
-	for i in 0 upto count 'spawnPhase'
-		workers.push(spawnWorker(harnessExe, workerId: i, specDir: specDir, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork))
+	for i in 0 upto count as ElementIndex 'spawnPhase'
+		workers.push(spawnWorker(harnessExe, workerId: i as WorkerId, specDir: specDir, filterPatterns: filterPatterns, mode: mode, effectiveTarget: effectiveTarget, includeNetwork: includeNetwork))
 	end 'spawnPhase'
 
-	for i in 0 upto count 'readyPhase'
+	for i in 0 upto count as ElementIndex 'readyPhase'
 		var handle = try workers.get(i) otherwise panic("spawnPool: workers.get({i}) is in bounds by construction")
 		awaitWorkerHello(handle)
 	end 'readyPhase'

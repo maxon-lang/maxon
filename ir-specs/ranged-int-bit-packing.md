@@ -21,10 +21,10 @@ function main() returns ExitCode
 	if a.managed.elementSize() != -2 'notPacked'
 		return 99
 	end 'notPacked'
-	var sum = 0
-	var i = 0
+	var sum = 0 as FullRangeInt
+	var i = 0 as ElementIndex
 	while i < 4 'read'
-		sum = sum + (try a.get(i) otherwise 0)
+		sum = sum + ((try a.get(i) otherwise 0) as FullRangeInt)
 		i = i + 1
 	end 'read'
 	return sum
@@ -87,7 +87,7 @@ func @main {
     x64.movRegImm32 r12, 0
     x64.movRegImm32 r13, 0
     x64.jmp whilehdr
-  __rc_ok#10:
+  read:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
     x64.callDirect __managed_get
@@ -103,17 +103,17 @@ func @main {
     x64.leaRegRegImm32 r13, r13, 1
   whilehdr:
     x64.cmpRegImm32 r13, 4
-    x64.jcc less, __rc_ok#10
+    x64.jcc below, read
   whileexit:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r12, rax
     x64.jcc greater, __rc_panic
-  __rc_ok#12:
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
     x64.movRegReg r8, r12
     x64.epilogue 40
     x64.popReg r13
@@ -122,7 +122,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at static-2bit-cast-packed.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at static-2bit-cast-packed.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -183,7 +183,7 @@ func @main {
     x64.movRegImm32 r12, 0
     x64.movRegImm32 r13, 0
     x64.jmp whilehdr
-  __rc_ok#10:
+  read:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
     x64.callDirect __managed_get
@@ -199,16 +199,16 @@ func @main {
     x64.leaRegRegImm32 r13, r13, 1
   whilehdr:
     x64.cmpRegImm32 r13, 4
-    x64.jcc less, __rc_ok#10
+    x64.jcc below, read
   whileexit:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_decref
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
   __rc_chk:
     x64.cmpRegImm32 r12, 255
     x64.jcc greater, __rc_panic
-  __rc_ok#12:
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
     x64.movRegReg r8, r12
     x64.epilogue 40
     x64.popReg r13
@@ -217,7 +217,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at static-2bit-cast-packed.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at static-2bit-cast-packed.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -273,7 +273,7 @@ func @main {
     arm64.movImm x20, 0
     arm64.movImm x21, 0
     arm64.b whilehdr
-  __rc_ok#10:
+  read:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
     arm64.bl __managed_get
@@ -286,16 +286,16 @@ func @main {
     arm64.add x21, x21, 1
   whilehdr:
     arm64.cmp x21, 4
-    arm64.b.lt __rc_ok#10
+    arm64.b.lo read
   whileexit:
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
     arm64.cmp x20, 0
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
     arm64.b.gt __rc_panic
-  __rc_ok#12:
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -303,7 +303,7 @@ func @main {
     arm64.epilogue 48
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_3  ; "panic at static-2bit-cast-packed.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_2  ; "panic at static-2bit-cast-packed.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0
@@ -360,7 +360,7 @@ func @main {
     arm64.movImm x20, 0
     arm64.movImm x21, 0
     arm64.b whilehdr
-  __rc_ok#10:
+  read:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
     arm64.bl __managed_get
@@ -373,16 +373,16 @@ func @main {
     arm64.add x21, x21, 1
   whilehdr:
     arm64.cmp x21, 4
-    arm64.b.lt __rc_ok#10
+    arm64.b.lo read
   whileexit:
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_decref
     arm64.cmp x20, 0
     arm64.b.lt __rc_panic
   __rc_chk:
     arm64.cmp x20, 255
     arm64.b.gt __rc_panic
-  __rc_ok#12:
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -390,7 +390,7 @@ func @main {
     arm64.epilogue 48
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_3  ; "panic at static-2bit-cast-packed.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_2  ; "panic at static-2bit-cast-packed.test:15: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot0

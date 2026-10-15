@@ -1,0 +1,17 @@
+let CaseDirName = "declaration-limit-methods"
+let Refusal = "more than 65535 methods and associated types"
+
+test 'an interface that declares 65,536 methods is refused'
+	try requireDeclarationRefused(CaseDirName, source: interfaceMethodsSource(), refusal: Refusal)
+end 'an interface that declares 65,536 methods is refused'
+
+function interfaceMethodsSource() returns String
+	var text = "{DeclarationPrelude}interface Big\n"
+
+	for i in 0 upto DeclaredMemberCount 'eachMethod'
+		text.append("\tfunction m{i}()\n")
+	end 'eachMethod'
+
+	text.append("end 'Big'\n\n{DeclarationMain}")
+	return text
+end 'interfaceMethodsSource'

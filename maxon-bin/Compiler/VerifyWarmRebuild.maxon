@@ -314,8 +314,8 @@ let ConstantValueEditAfter = "let warmRebuildProbeConstant = 8"
 // and NOTHING ELSE HERE CAN SEE IT. The constant probe asserts `fileCount` and would keep passing,
 // because a pessimal key re-parses everything for everything. Only an assertion that a var's value
 // edit re-parses ONE file can tell a correct key from an over-broad one.
-let GlobalValueEditBefore = "var warmRebuildProbeGlobal = 7"
-let GlobalValueEditAfter = "var warmRebuildProbeGlobal = 8"
+let GlobalValueEditBefore = "var warmRebuildProbeGlobal = 7 as Count"
+let GlobalValueEditAfter = "var warmRebuildProbeGlobal = 8 as Count"
 
 // ⭐ **THE IMAGED-RECORD PROBE: the same declaration twice, differing only in the BYTES A READER BAKES.**
 //
@@ -335,6 +335,9 @@ let GlobalValueEditAfter = "var warmRebuildProbeGlobal = 8"
 let ArrayValueEditBefore = "let warmRebuildProbeArray = [1, 2]"
 let ArrayValueEditAfter = "let warmRebuildProbeArray = [9, 9, 9]"
 
+let ArraySignEditBefore = "let warmRebuildProbeSignArray = [1, -1]"
+let ArraySignEditAfter = "let warmRebuildProbeSignArray = [1, u64.max]"
+
 // ⭐ **AND THE SAME EDIT ON A `var` ARRAY, ASSERTING THE OPPOSITE — the `let`/`var` pair one shape up.**
 //
 // A `var` is never imaged (`settleRecordValue` overrules the keyword), so its record is a `.data` slot and
@@ -346,8 +349,8 @@ let ArrayValueEditAfter = "let warmRebuildProbeArray = [9, 9, 9]"
 // through DIFFERENT arms (`mixDeclAnswer` and `mixConstArrayRecord`), so a key that mixed an array's
 // elements unconditionally would pass every other probe in this file, the scalar `var` one included, and
 // silently throw property (b) away for arrays.
-let ArrayGlobalValueEditBefore = "var warmRebuildProbeArrayGlobal = [1, 2]"
-let ArrayGlobalValueEditAfter = "var warmRebuildProbeArrayGlobal = [9, 9, 9]"
+let ArrayGlobalValueEditBefore = "var warmRebuildProbeArrayGlobal = FullRangeIntArray from [1, 2]"
+let ArrayGlobalValueEditAfter = "var warmRebuildProbeArrayGlobal = FullRangeIntArray from [9, 9, 9]"
 
 // ⭐⭐ **THE DECLARATION BOTH BOX PROBES ARE BUILT OVER — BOUND ONCE, so "the type is held byte-identical
 // across the pair" is STRUCTURAL rather than asserted.** A second copy could drift by one byte — a renamed
@@ -626,6 +629,14 @@ function verifyInvalidation(inputPath FilePath, target Target) returns bool thro
 	fileChanged(project, path: editedPath, content: "{original}\n{ArrayValueEditAfter}\n")
 	let arrayValueEditMisses = try parseMissesOnRequery(project)
 
+	// Seat the SIGN probe, then measure it: the elements' payload bits are identical, and only whether the
+	// source wrote `-1` or `u64.max` moved, which is what decides how every reader renders and compares a read.
+	fileChanged(project, path: editedPath, content: "{original}\n{ArraySignEditBefore}\n")
+	_ = try parseMissesOnRequery(project)
+
+	fileChanged(project, path: editedPath, content: "{original}\n{ArraySignEditAfter}\n")
+	let arraySignEditMisses = try parseMissesOnRequery(project)
+
 	// Seat the `var` ARRAY probe, then measure the same edit on a binding whose readers bake nothing.
 	fileChanged(project, path: editedPath, content: "{original}\n{ArrayGlobalValueEditBefore}\n")
 	_ = try parseMissesOnRequery(project)
@@ -694,6 +705,7 @@ function verifyInvalidation(inputPath FilePath, target Target) returns bool thro
 	let constantValueEditInvalidatesEveryFile = assertParseMisses("a top-level constant's VALUE edit re-parses EVERY file (parseMisses)", probe: constantValueEditMisses, expectedDelta: fileCount as QueryCount, project: project)
 
 	let arrayValueEditInvalidatesEveryFile = assertParseMisses("a top-level constant ARRAY's value edit re-parses EVERY file (parseMisses)", probe: arrayValueEditMisses, expectedDelta: fileCount as QueryCount, project: project)
+	let arraySignEditInvalidatesEveryFile = assertParseMisses("a top-level constant ARRAY's element SIGN edit re-parses EVERY file (parseMisses)", probe: arraySignEditMisses, expectedDelta: fileCount as QueryCount, project: project)
 	let structFieldEditInvalidatesEveryFile = assertParseMisses("an IMAGED struct constant's field edit re-parses EVERY file (parseMisses)", probe: structFieldEditMisses, expectedDelta: fileCount as QueryCount, project: project)
 
 	let globalValueEditIsLocal = assertParseMisses("a top-level VAR's value edit re-parses only the edited file (parseMisses)", probe: globalValueEditMisses, expectedDelta: OneQuery, project: project)
@@ -706,10 +718,10 @@ function verifyInvalidation(inputPath FilePath, target Target) returns bool thro
 	let visibilityFlipsInvalidate = measurementsInvalidateEveryFile(visibilityFlips, fileCount: fileCount as QueryCount, project: project)
 	let declarationMovesInvalidate = measurementsInvalidateEveryFile(declarationMoves, fileCount: fileCount as QueryCount, project: project)
 
-	let allOk = bytesEditIsLocal and declarationEditInvalidatesEveryFile and constantValueEditInvalidatesEveryFile and arrayValueEditInvalidatesEveryFile and structFieldEditInvalidatesEveryFile and globalValueEditIsLocal and arrayGlobalValueEditIsLocal and structGlobalFieldEditIsLocal and receiverKindEditInvalidatesEveryFile and methodReceiverKindEditInvalidatesEveryFile and visibilityFlipsInvalidate and declarationMovesInvalidate
+	let allOk = bytesEditIsLocal and declarationEditInvalidatesEveryFile and constantValueEditInvalidatesEveryFile and arrayValueEditInvalidatesEveryFile and arraySignEditInvalidatesEveryFile and structFieldEditInvalidatesEveryFile and globalValueEditIsLocal and arrayGlobalValueEditIsLocal and structGlobalFieldEditIsLocal and receiverKindEditInvalidatesEveryFile and methodReceiverKindEditInvalidatesEveryFile and visibilityFlipsInvalidate and declarationMovesInvalidate
 
 	if allOk 'passed'
-		print("PASS invalidation: bytes-only edit re-parsed 1 file; declaration edit re-parsed all {fileCount}; constant-value, constant-array and imaged-struct edits each re-parsed all {fileCount}; var-value, var-array and stored-struct edits each re-parsed 1 file; a requirement's and a method's `static`-flag edits each re-parsed all {fileCount}; {visibilityFlips.count()} visibility edits each re-parsed all {fileCount}; {declarationMoves.count()} declarations moved to another file each re-parsed all {fileCount}\n")
+		print("PASS invalidation: bytes-only edit re-parsed 1 file; declaration edit re-parsed all {fileCount}; constant-value, constant-array, constant-array-sign and imaged-struct edits each re-parsed all {fileCount}; var-value, var-array and stored-struct edits each re-parsed 1 file; a requirement's and a method's `static`-flag edits each re-parsed all {fileCount}; {visibilityFlips.count()} visibility edits each re-parsed all {fileCount}; {declarationMoves.count()} declarations moved to another file each re-parsed all {fileCount}\n")
 		return true
 	end 'passed'
 
@@ -795,7 +807,7 @@ function loadProbedProject(inputPath FilePath, target Target, session CompileSes
 end 'loadProbedProject'
 
 function verifyLibraryParseReuse(inputPath FilePath, target Target) returns LibraryReuseOutcome throws CompileError
-	let session = CompileSession.create(DiagnosticSink.printing(), fileMemos: SharedFileMemoMap.withoutLibraryCache(), treeLock: LockHold.none())
+	var session = CompileSession.create(DiagnosticSink.printing(), fileMemos: SharedFileMemoMap.withoutLibraryCache(), treeLock: LockHold.none())
 	var primer = try loadReplacedProject(inputPath, target: target, session: session, firstFileText: PrimerMainText)
 	_ = try compileToCodeResult(primer)
 

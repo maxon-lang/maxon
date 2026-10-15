@@ -155,10 +155,10 @@ below observes.
 what that prevents.** Asking whether the two declarations are the same alias FORM is a proxy for
 "neither can see the other" that fails in two directions:
 
-- **A user NOMINAL declaration against a stdlib module's alias.** Under that proxy `type ParsedInt`
-  against `stdlib/Builtins.maxon`'s `typealias ParsedInt` is `E3006` — blamed on the STDLIB line,
+- **A user NOMINAL declaration against a stdlib module's alias.** Under that proxy `type FullRangeInt`
+  against `stdlib/Builtins.maxon`'s `typealias FullRangeInt` is `E3006` — blamed on the STDLIB line,
   because stdlib merges last and is therefore the "newcomer" — plus `E3009` at
-  `stdlib/Builtins.maxon`'s `__FloatSignBit`, where the module's own `i64.min as ParsedInt` resolves to the USER's
+  `stdlib/Builtins.maxon`'s `__FloatSignBit`, where the module's own `i64.min as FullRangeInt` resolves to the USER's
   struct. Both diagnostics name a file the author never opened. The four nominal keywords all reach it,
   and `enum`/`union` reach only the first: they resolve to `integer` as an alias does, so the module's
   own uses still type-check.
@@ -471,29 +471,29 @@ error E3006: <fragment>:6:6: duplicate definition of 'Clock' — already declare
 ```
 
 <!-- test: stdlib-user-shadows.user-type-coexists-with-a-listed-modules-typealias -->
-`stdlib/Builtins.maxon` declares `public typealias ParsedInt`, and a user program declaring its own
-`type ParsedInt` compiles. Two refusals are what it must avoid, both inside a file the author never
+`stdlib/Builtins.maxon` declares `public typealias FullRangeInt`, and a user program declaring its own
+`type FullRangeInt` compiles. Two refusals are what it must avoid, both inside a file the author never
 opened: `E3006` blaming the stdlib declaration as the duplicate — stdlib merges after the user's files, so
 the stdlib line is the "newcomer" — and `E3009: Cannot cast from int to struct` at `stdlib/Builtins.maxon`'s
-`__FloatSignBit`, where the module's own `i64.min as ParsedInt` would resolve to the USER's struct if the
+`__FloatSignBit`, where the module's own `i64.min as FullRangeInt` would resolve to the USER's struct if the
 bare, whole-program struct registry were consulted first.
 
 The two declarations sit in two layers, so neither is a duplicate of the other: the user's file means its
-own `type`, and the library file never sees it. The same program with the type named `UserParsedInt`
+own `type`, and the library file never sees it. The same program with the type named `UserFullRangeInt`
 compiles and returns 7 — the name is the ONLY difference.
 ```maxon
 typealias Value = int(0 to 200)
 
-type ParsedInt
+type FullRangeInt
 	export let value as Value
 
-	static function create(value Value) returns ParsedInt
+	static function create(value Value) returns FullRangeInt
 		return Self{value: value}
 	end 'create'
-end 'ParsedInt'
+end 'FullRangeInt'
 
 function main() returns ExitCode
-	let p = ParsedInt.create(7)
+	let p = FullRangeInt.create(7)
 	return p.value
 end 'main'
 ```
@@ -598,24 +598,24 @@ end 'main'
 
 <!-- test: stdlib-user-shadows.the-listed-module-keeps-its-own-alias -->
 ⭐ **The discriminating case: it is not enough that no diagnostic is raised.** Every case above would
-also pass if `stdlib/Builtins.maxon`'s `ParsedInt` meant the user's struct and the compiler simply
+also pass if `stdlib/Builtins.maxon`'s `FullRangeInt` meant the user's struct and the compiler simply
 did not complain about it. Here the user owns the name AND the program runs stdlib code that depends
 on the module's own meaning of it — `stdlib/Builtins.maxon`'s `let __FloatSignBit = i64.min as
-ParsedInt` is the sign bit float printing reads, and it is a CONST INITIALIZER, evaluated in every
+FullRangeInt` is the sign bit float printing reads, and it is a CONST INITIALIZER, evaluated in every
 compile. A wrong answer inside the module shows up as the negative sign, not as an error.
 ```maxon
 typealias Value = int(0 to 200)
 
-type ParsedInt
+type FullRangeInt
 	export let value as Value
 
-	static function create(value Value) returns ParsedInt
+	static function create(value Value) returns FullRangeInt
 		return Self{value: value}
 	end 'create'
-end 'ParsedInt'
+end 'FullRangeInt'
 
 function main() returns ExitCode
-	let p = ParsedInt.create(0)
+	let p = FullRangeInt.create(0)
 	let x = 2.5
 	print("{x}")
 	print("{-x}")
@@ -634,36 +634,36 @@ end 'main'
 accident.** A container's ELEMENT is classified by a tier that has no reading file — `typeIsManaged`, and
 the drop and clone routers behind it — so for a name that is a `type` in one file and a `typealias` in
 another, an element left as the bare name makes them GUESS. **Without the element mint,**
-`stdlib/Builtins.maxon`'s own `typealias ParsedIntArray = Array with ParsedInt` has its element read as a
-user program's struct, so printing a float drops an array of INTEGERS through `__destruct_ParsedInt` —
+`stdlib/Builtins.maxon`'s own `typealias FullRangeIntArray = Array with FullRangeInt` has its element read as a
+user program's struct, so printing a float drops an array of INTEGERS through `__destruct_FullRangeInt` —
 **exit 0xC0000005, no diagnostic and no output.**
 
 Here BOTH containers are live at once and each must keep its own element: the user's `ValueBoxes` holds
-`ParsedInt` STRUCTS that own their boxes, while `print("{x}")` runs the library's big-integer path over its
-own array of `ParsedInt` LIMBS. The declaring file decides the element, so the two are two instances — and
+`FullRangeInt` STRUCTS that own their boxes, while `print("{x}")` runs the library's big-integer path over its
+own array of `FullRangeInt` LIMBS. The declaring file decides the element, so the two are two instances — and
 a compiler that fused them either faults on the limbs or leaks the boxes.
 ```maxon
 typealias Value = int(0 to 200)
 
-type ParsedInt
+type FullRangeInt
 	export let value as Value
 
-	static function create(value Value) returns ParsedInt
+	static function create(value Value) returns FullRangeInt
 		return Self{value: value}
 	end 'create'
-end 'ParsedInt'
+end 'FullRangeInt'
 
-typealias ValueBoxes = Array with ParsedInt
+typealias ValueBoxes = Array with FullRangeInt
 
 function main() returns ExitCode
 	var boxes = ValueBoxes.create()
-	boxes.push(ParsedInt.create(3))
-	boxes.push(ParsedInt.create(4))
+	boxes.push(FullRangeInt.create(3))
+	boxes.push(FullRangeInt.create(4))
 
 	let x = 2.5
 	print("{x}")
 
-	var total = 0
+	var total = 0 as Value
 	for b in boxes 'each'
 		total = total + b.value
 	end 'each'
@@ -682,8 +682,8 @@ end 'main'
 ⭐⭐ **The route the two cases above cannot reach, and it was still wrong when they went green.** Float
 printing enters `stdlib/Builtins.maxon` through `__float_toString`; an INTEGER format spec — `"{n:x}"`,
 `"{n:b}"`, `"{n:o}"`, `"{n:d}"` and their padded forms — enters somewhere else entirely, at
-`__int_toStringFormatted(value ParsedInt, …)`, whose FIRST PARAMETER is the contested name. Nothing about
-a working float path constrains it: a compiler that resolved `ParsedInt` correctly for the module's
+`__int_toStringFormatted(value FullRangeInt, …)`, whose FIRST PARAMETER is the contested name. Nothing about
+a working float path constrains it: a compiler that resolved `FullRangeInt` correctly for the module's
 arrays and still let its meaning slip in this signature passes every case above and faults here —
 **exit 0xC0000005 with no diagnostic and no output at all**, the plain integer
 argument arriving at a parameter typed as the user's STRUCT.
@@ -696,16 +696,16 @@ case also fails if the module's meaning wins in the other direction.
 typealias Value = int(0 to 200)
 typealias Bits = int(0 to u64.max)
 
-type ParsedInt
+type FullRangeInt
 	export let value as Value
 
-	static function create(value Value) returns ParsedInt
+	static function create(value Value) returns FullRangeInt
 		return Self{value: value}
 	end 'create'
-end 'ParsedInt'
+end 'FullRangeInt'
 
 function main() returns ExitCode
-	let p = ParsedInt.create(11)
+	let p = FullRangeInt.create(11)
 	let n = 48879 as Bits
 
 	print("{n:x}")
@@ -727,23 +727,23 @@ beef|BEEF|137357|1011111011101111|00beef|48879
 
 <!-- test: stdlib-user-shadows.the-format-spec-path-control-under-an-uncontested-name -->
 The CONTROL for the case above, and the reason its failure can be attributed to the name rather than to
-the format specs. Byte for byte the same program with the type renamed to `UserParsedInt`, so nothing in
+the format specs. Byte for byte the same program with the type renamed to `UserFullRangeInt`, so nothing in
 `stdlib/Builtins.maxon` is contested — same six spellings, same expected text. A fault in the case above
 that this one does not share is therefore a fault of the SHADOW and not of `"{n:x}"`.
 ```maxon
 typealias Value = int(0 to 200)
 typealias Bits = int(0 to u64.max)
 
-type UserParsedInt
+type UserFullRangeInt
 	export let value as Value
 
-	static function create(value Value) returns UserParsedInt
+	static function create(value Value) returns UserFullRangeInt
 		return Self{value: value}
 	end 'create'
-end 'UserParsedInt'
+end 'UserFullRangeInt'
 
 function main() returns ExitCode
-	let p = UserParsedInt.create(11)
+	let p = UserFullRangeInt.create(11)
 	let n = 48879 as Bits
 
 	print("{n:x}")
@@ -1040,16 +1040,16 @@ main 4
 ```
 
 <!-- test: stdlib-user-shadows.a-cast-of-a-library-float-alias-to-the-programs-own-alias-of-that-name-is-not-unneeded -->
-`Math.pow` answers the library's `Real`, and this file's `Real` is a different declaration of that name, so the cast between them is a conversion rather than an unneeded cast.
+`Math.pow` answers the library's `FullRangeFloat`, and this file's `FullRangeFloat` is a different declaration of that name, so the cast between them is a conversion rather than an unneeded cast.
 ```maxon
-typealias Real = float(f64.min to f64.max)
+typealias FullRangeFloat = float(f64.min to f64.max)
 
-function half(x Real) returns Real
+function half(x FullRangeFloat) returns FullRangeFloat
 	return x / 2.0
 end 'half'
 
 function main() returns ExitCode
-	let cube = Math.pow(2.0, exponent: 3.0) as Real
+	let cube = Math.pow(2.0, exponent: 3.0) as FullRangeFloat
 	print("{half(cube)}\n")
 	return 0
 end 'main'
@@ -1081,19 +1081,19 @@ end 'main'
 ```
 
 <!-- test: stdlib-user-shadows.arithmetic-between-the-librarys-real-and-the-programs-own-real-is-refused -->
-`Math.pow` answers the library's `Real` and `mine` is this file's `Real`. They share a spelling and a range but are two declarations, so `+` refuses the pair, quoting the library's as `stdlib.Real`.
+`Math.pow` answers the library's `FullRangeFloat` and `mine` is this file's `FullRangeFloat`. They share a spelling and a range but are two declarations, so `+` refuses the pair, quoting the library's as `stdlib.FullRangeFloat`.
 ```maxon
-typealias Real = float(f64.min to f64.max)
+typealias FullRangeFloat = float(f64.min to f64.max)
 
 function main() returns ExitCode
-	let mine = 2.0 as Real
+	let mine = 2.0 as FullRangeFloat
 	let sum = Math.pow(2.0, exponent: 3.0) + mine
 	print("{sum}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:6:41: operator '+' requires both operands to be the same type: 'stdlib.Real' and 'Real' are different typealiases — cast one side with 'as'
+error E3005: <fragment>:6:41: operator '+' requires both operands to be the same type: 'stdlib.FullRangeFloat' and 'FullRangeFloat' are different typealiases — cast one side with 'as'
 ```
 
 <!-- test: stdlib-user-shadows.a-librarys-count-and-the-programs-own-count-do-not-mix -->

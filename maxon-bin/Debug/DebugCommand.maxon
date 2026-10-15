@@ -185,7 +185,7 @@ end 'DebugImageCheck'
 let ClassifySequenceSeparator = ","
 let ClassifyProbeAddress = 0x1000 as DecodedAddress
 let ClassifyArm64ProbeAddress = 0x1000 as DecodedAddress
-let HexDigitsPerByte = 2
+module let HexDigitsPerByte = 2
 
 typealias ClassificationPrinter = function(ByteArray)
 
@@ -205,8 +205,10 @@ function runClassifySequences(spelling String, classified ClassificationPrinter)
 	end 'nothingToClassify'
 
 	for sequence in spelling.split(ClassifySequenceSeparator) 'eachSequence'
-		match hexByteSequence(sequence.trim()) 'read'
-			notHex(text) then return refuseDebugCommand("'{text}' is not a sequence of hex byte pairs")
+		let text = sequence.trim()
+
+		match hexByteSequence(text) 'read'
+			notHex then return refuseDebugCommand("'{text}' is not a sequence of hex byte pairs")
 			bytes(code) then classified(code)
 		end 'read'
 	end 'eachSequence'
@@ -214,39 +216,47 @@ function runClassifySequences(spelling String, classified ClassificationPrinter)
 	return SucceededExit
 end 'runClassifySequences'
 
-union HexByteRead
-	bytes(let code ByteArray)
-	notHex(text String)
-end 'HexByteRead'
-
-function hexByteSequence(text String) returns HexByteRead
+function hexByteSequence(text String) returns HexBytesRead
 	let digits = text.replaceFirst(HexOffsetPrefix, with: "") if text.startsWith(HexOffsetPrefix) else text
 
-	if digits.isEmpty() or (digits.count() mod HexDigitsPerByte) != 0 'notWholeBytes'
-		return HexByteRead.notHex(text)
+	if digits.isEmpty() 'noDigits'
+		return HexBytesRead.notHex
+	end 'noDigits'
+
+	return hexBytesOf(digits)
+end 'hexByteSequence'
+
+module union HexBytesRead
+	bytes(let value ByteArray)
+	notHex
+end 'HexBytesRead'
+
+module function hexBytesOf(digits String) returns HexBytesRead
+	if (digits.count() mod HexDigitsPerByte) != 0 'notWholeBytes'
+		return HexBytesRead.notHex
 	end 'notWholeBytes'
 
-	var code = ByteArray.create()
-	var pending = 0
-	var half = 0
+	var bytes = ByteArray.create()
+	var pending = 0 as Byte
+	var half = 0 as Count
 
 	for character in digits 'eachDigit'
 		match digitValue(character, base: HexBase) 'read'
-			invalid then return HexByteRead.notHex(text)
-			valid(value) then pending = pending * HexBase + (value as ParsedCodeOffset)
+			invalid then return HexBytesRead.notHex
+			valid(digit) then pending = pending * HexBase + (digit as Byte)
 		end 'read'
 
 		half = half + 1
 
 		if half == HexDigitsPerByte 'aWholeByte'
-			code.push(pending as Byte)
+			bytes.push(pending)
 			pending = 0
 			half = 0
 		end 'aWholeByte'
 	end 'eachDigit'
 
-	return HexByteRead.bytes(code)
-end 'hexByteSequence'
+	return HexBytesRead.bytes(bytes)
+end 'hexBytesOf'
 
 function printClassification(code ByteArray)
 	match decodeX64Instruction(code, at: 0, address: ClassifyProbeAddress) 'classified'

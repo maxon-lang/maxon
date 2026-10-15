@@ -106,7 +106,7 @@ end 'opaque'
 
 function main() returns ExitCode
 	let zero = opaque(0)
-	var result = 0
+	var result = 0 as Integer
 	try 'work'
 		result = 100 / zero
 	end 'work'
@@ -156,7 +156,7 @@ end 'opaque'
 
 function main() returns ExitCode
 	let zero = opaque(0.0)
-	var result = 0
+	var result = 0 as FullRangeInt
 	try 'work'
 		let q = 100.0 / zero
 		// Unreachable: the divide throws before this runs. `q > 0.0` keeps the value used so the
@@ -193,7 +193,7 @@ end 'opaque'
 
 function main() returns ExitCode
 	let zero = opaque(0)
-	var result = 0
+	var result = 0 as Integer
 	// A STATEMENT-position `try`, which is what the block form's `result = 100 / zero` body amounts to.
 	// The quotient is discarded, and the throw survives that: what raises the error is the divisor test
 	// feeding the fork, not the divide whose value nobody reads.
@@ -220,7 +220,7 @@ end 'opaque'
 
 function main() returns ExitCode
 	let zero = opaque(0.0)
-	var result = 0
+	var result = 0 as FullRangeInt
 	try (100.0 / zero) otherwise (e) 'handle'
 		match e 'kind'
 			divisionByZero then result = 42
@@ -263,7 +263,7 @@ end 'opaque'
 
 function main() returns ExitCode
 	let negZero = opaque(-0.0)
-	var result = 0
+	var result = 0 as FullRangeInt
 	try (1.0 / negZero) otherwise (e) 'handle'
 		match e 'kind'
 			divisionByZero then result = 42
@@ -532,18 +532,18 @@ r=0
 overflow": it earns the bare divide by the fallible-division rule and is `-1` every time. The
 DIVISOR arrives through a call argument, the one position a ranged type is not re-checked at runtime, so
 nothing holds the caller to the range the proof read — the same door
-`divide-by-zero-fault-through-an-unchecked-call-argument` uses below, and
-`mod-overflow-fault-through-an-unchecked-call-argument` is what happens when it is walked through.
+`divide-by-zero-premise-enforced-at-the-callee-entry` closes below, and
+`mod-overflow-premise-enforced-at-the-callee-entry` is what happens when it is walked through.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias NegativeOne = int(-1 to -1)
+typealias NegativeOne = int(-1 to -1) implements Integer
 
 function ident(v Integer) returns Integer
 	return v
 end 'ident'
 
 function remainder(d NegativeOne) returns Integer
-	return (dividend mod d) as Integer
+	return dividend mod d
 end 'remainder'
 
 function main() returns ExitCode
@@ -553,7 +553,7 @@ function main() returns ExitCode
 	print("r={r}\n")
 	return 0
 end 'main'
-var dividend = 0
+var dividend = 0 as Integer
 ```
 ```stdout
 r=0
@@ -718,9 +718,9 @@ the `#DE` handler, so the fault runtime's coverage comes from elsewhere:
 `integer-overflow-fault-from-int-min-over-minus-one` reaches `STATUS_INTEGER_OVERFLOW` (0xC0000095) with
 a divisor that is genuinely IN range (`-1` in `int(-1 to -1)`, so the entry guard passes and the
 quotient overflows anyway), and `a-checked-divide-still-faults-at-int-min-over-minus-one` reaches it
-through the fallible spelling. The `STATUS_INTEGER_DIVIDE_BY_ZERO` (0xC0000094) arm has its own test —
-see `divide-by-zero-fault-through-a-resized-array-slot` below, and the paragraph above it for why its
-route is a resized slot rather than an array-element STORE.
+through the fallible spelling. No program reaches the `STATUS_INTEGER_DIVIDE_BY_ZERO` (0xC0000094) arm:
+every door that carries a value into a slot whose type excludes zero checks the range where the value
+lands, and the `divide-by-zero-premise-enforced-at-*` cases below pin each door.
 
 <!-- test: divide-by-zero-premise-enforced-at-the-callee-entry -->
 #### ⭐ A runtime zero is refused AT `divide`'S PARAMETER — the `idiv` it would have reached is still bare
@@ -728,7 +728,8 @@ route is a resized slot rather than an array-element STORE.
 The proof is the CALLER's to keep, and the entry guard holds it to it: the guard fires at line 9,
 the parameter's own declaration, before a single body op runs. Unguarded, this program would die
 `panic: integer divide by zero` — an uncatchable CPU fault where the language promises a catchable
-`DivisionByZero`.
+`DivisionByZero`. The zero is `one - one`, a difference of `NonZero`s: it wears `NonZero` without proving
+it, so it reaches the parameter with no cast and the guard that refuses it is the callee's own.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias NonZero = int(1 to i64.max)
@@ -742,10 +743,9 @@ function divide(n NonZero, d NonZero) returns Integer
 end 'divide'
 
 function main() returns ExitCode
-	z = ident(0)
-	return divide(10, d: z) as ExitCode
+	let one = ident(1) as NonZero
+	return divide(10, d: one - one) as ExitCode
 end 'main'
-var z = 0
 ```
 ```exitcode
 1
@@ -758,16 +758,16 @@ Stack trace:
   in mrt_start
 ```
 
-<!-- test: mod-overflow-premise-enforced-at-the-callee-entry -->
-#### ⭐ A runtime `-1` is refused at `remainder`'S PARAMETER — what the `i64.min mod -1` guarantee rests on
+<!-- test: mod-overflow-premise-enforced-at-the-callers-cast -->
+#### ⭐ A runtime `-1` is refused before it reaches `remainder` — what the `i64.min mod -1` guarantee rests on
 
-The twin of the case above, through the same door, and the one that says what the `i64.min mod -1` guarantee rests
-on: the compiler's PROOF, not the hardware. `BelowMinusOne` rules out BOTH of `idiv`'s hazardous
-divisors, so `n mod d` compiles to the bare sequence with no guard and no `try` spellable — correctly,
-given the declared type. A caller that breaks the type it declared gets the range panic rather than
-the fault the type stands in front of, naming `BelowMinusOne` at the parameter that declared it.
-**One cure, two hazards** — the divide-by-zero premise and the `i64.min mod -1` premise are one
-premise.
+The twin of the case above, and the one that says what the `i64.min mod -1` guarantee rests on: the
+compiler's PROOF, not the hardware. `BelowMinusOne` rules out BOTH of `idiv`'s hazardous divisors, so
+`n mod d` compiles to the bare sequence with no guard and no `try` spellable — correctly, given the
+declared type. An `Integer` reaches a `BelowMinusOne` parameter only through an `as`, so a caller that
+breaks the type gets the range panic at that cast, naming `BelowMinusOne`, rather than the fault the
+type stands in front of. **One cure, two hazards** — the divide-by-zero premise and the
+`i64.min mod -1` premise are one premise.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias BelowMinusOne = int(i64.min to -2)
@@ -782,9 +782,40 @@ end 'remainder'
 
 function main() returns ExitCode
 	bad = ident(-1)
-	return remainder(i64.min, d: bad) as ExitCode
+	return remainder(i64.min, d: bad as BelowMinusOne) as ExitCode
 end 'main'
-var bad = 0
+var bad = 0 as Integer
+```
+```exitcode
+1
+```
+```stderr
+panic at mod-overflow-premise-enforced-at-the-callers-cast.test:15: Range check failed: value outside typealias 'BelowMinusOne'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: mod-overflow-premise-enforced-at-the-callee-entry -->
+#### ⭐ A runtime `-1` that wears `BelowMinusOne` without proving it is refused AT `remainder`'S PARAMETER
+
+The callee-entry half of the case above. `a - a - a` is a difference of `BelowMinusOne`s, so it wears the alias and proves nothing about it; here it is `3`. No cast stands at the call, so the guard that refuses it is the one at `remainder`'s own entry, before the bare `idiv` the type licenses.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias BelowMinusOne = int(i64.min to -2)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function remainder(n BelowMinusOne, d BelowMinusOne) returns Integer
+	return (n mod d) as Integer
+end 'remainder'
+
+function main() returns ExitCode
+	let a = ident(-3) as BelowMinusOne
+	return remainder(i64.min, d: a - a - a) as ExitCode
+end 'main'
 ```
 ```exitcode
 1
@@ -838,28 +869,14 @@ Stack trace:
   in mrt_start
 ```
 
-<!-- test: divide-by-zero-fault-through-a-resized-array-slot -->
-<!-- unsupported-targets: arm64-macos, arm64-linux, wasm32-wasi -->
-#### ⚠⚠ THE ROUTE TO `#DE` A STORE GUARD STRUCTURALLY CANNOT CLOSE — a slot `resize` EXPOSED, which no value ever crossed a door into
+<!-- test: error.resize-cannot-expose-a-zero-to-a-non-zero-alias -->
+#### The route to `#DE` that a store guard could not close is closed at its source: `resize` refuses an element range that excludes its zero
 
-**Closing a door deletes the tests that came through it, and that is the trap this case exists to
-disarm.** The store-guard case above does not reach the `STATUS_INTEGER_DIVIDE_BY_ZERO` (0xC0000094)
-arm of the Windows fault thunk; this one does. Break that arm and this case fails, and it is the only
-0xC0000094 case there is.
+Growing an array *exposes* zero-initialized slots, and a zero is an element only while the element type
+admits it. An `Array with NonZero` would acquire a `0` element with no value crossing any door, and
+`100 / d` is a bare `idiv` because the compiler believes `NonZero` — so `resize` is refused, as it is for a
+MANAGED element it cannot invent, with **E3106**; `growFilled` supplies a value the type admits.
 
-**The route is `Array.resize`, and it is not a store at all.** Growing an array *exposes*
-zero-initialized slots, which `stdlib/Array.maxon` documents as elements for exactly the inline
-element types this range applies to — *"a zero is an ELEMENT only while the element lives INLINE in the
-buffer — an int, a float, a bool, a byte, **a ranged typealias over one of those**"*. So an
-`Array with NonZero` acquires a `0` element with **no value crossing any door**: there is nothing for a
-store guard to stand in front of, and the store guard is structurally out of reach of it exactly
-as the entry guard is out of reach of the store. `100 / d` is a bare `idiv` because the compiler believes
-`NonZero`, and `print("before")` runs, proving the zero travelled the whole way.
-
-⛔ **This is a REMAINING unenforced ranged premise, not a settled rule.** Whether `resize` should be
-refused for an element range that excludes its zero — as it already is, with **E3106**, for a MANAGED
-element it cannot invent — is a language decision with its own diagnostic and its own corpus sweep, and
-it is filed rather than decided here.
 ```maxon
 typealias NonZero = int(1 to i64.max)
 typealias NonZeroArray = Array with NonZero
@@ -872,17 +889,8 @@ function main() returns ExitCode
 	return 100 / d
 end 'main'
 ```
-```stdout
-before
-```
-```exitcode
-1
-```
-```stderr
-panic: integer divide by zero
-Stack trace:
-  in main
-  in mrt_start
+```maxoncstderr
+error E3106: <fragment>:7:5: 'resize' cannot grow an array of 'NonZero': the grown slots are zero and zero is not a value of 'NonZero'. Append with 'push(value)' or 'growFilled(n, value:)'
 ```
 
 ⭐⭐ **NO DOOR LEAKS, AND THE TWO CASES BELOW PIN THE WHOLLY-NEGATIVE RANGES.** The claim above rests
@@ -891,13 +899,11 @@ NEGATIVE** divisor range: a `-1` stored upper bound read as the unbounded `u64.m
 bound says would leave `int(-100 to -1)` and `int(i64.min to -2)` with no upper compare and let the
 plain `as` cast admit anything (`specs/ranged-typealias.md`'s `negative-upper-bound-cast-is-checked`
 owns the rule). Both of `idiv`'s hazards are reachable that way, so both are pinned here — the SAME
-hazard as the array-element store above, through a door that is supposed to be shut. What remains is not a door at all: it is the EXPOSED slot
-`resize` hands back, which no value ever crossed into.
+hazard as the array-element store above, through a door that is supposed to be shut. `resize` no longer hands back a slot that no value crossed into: it is refused for a range that excludes 0.
 
-⚠ **THERE ARE TWO PRODUCERS THAT ARE NOT DOORS.** The other is a MERGE, which claims the declared
-type of ONE incoming edge while another edge hands it whatever an assignment or a `gives` arm put
-there; it is pinned by `error.divide-by-a-loop-carried-merge-is-refused` below, and it is CLOSED — a
-merge does not prove a range — so `resize`'s slot is the only one left.
+⚠ **A MERGE IS NOT A SECOND SUCH PRODUCER.** Every edge into a loop-carried ranged `var` is a door —
+the rebind checks the value it stores — so the merge holds only values its type admits;
+`divide-by-a-loop-carried-divisor-panics-at-the-rebind` below pins it. No producer crosses no door.
 
 <!-- test: negative-range-cast-guard-fires-before-the-divide -->
 #### A zero cast into a wholly-negative divisor range is refused at the CAST, not at the `idiv`
@@ -969,7 +975,7 @@ Stack trace:
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias NegativeOne = int(-1 to -1)
+typealias NegativeOne = int(-1 to -1) implements Integer
 
 function ident(v Integer) returns Integer
 	return v
@@ -978,7 +984,7 @@ end 'ident'
 // The divisor's range excludes 0, so no `DivisionByZero` is possible — that error is about the
 // DIVISOR, and says nothing about a quotient that does not fit. `i64.min / -1` is `i64.max + 1`.
 function divide(d NegativeOne) returns Integer
-	return (dividend / d) as Integer
+	return dividend / d
 end 'divide'
 
 function main() returns ExitCode
@@ -987,7 +993,7 @@ function main() returns ExitCode
 	let d = ident(-1)
 	return divide(d as NegativeOne) as ExitCode
 end 'main'
-var dividend = 0
+var dividend = 0 as Integer
 ```
 ```exitcode
 1
@@ -1038,23 +1044,15 @@ Stack trace:
   in mrt_start
 ```
 
-<!-- test: error.divide-by-a-loop-carried-merge-is-refused -->
-#### ⚠⚠ A MERGE IS THE SECOND PRODUCER THAT IS NOT A DOOR
+<!-- test: divide-by-a-loop-carried-divisor-panics-at-the-rebind -->
+#### ⚠⚠ A LOOP-CARRIED DIVISOR IS GUARDED AT ITS REBIND
 
-**`resize`'s exposed slot is not the only way a ranged binding acquires a value that crossed no
-door.** A `var` declared from a `NonZero` and then REASSIGNED inside a loop merges at the loop header,
-and a merge takes its declared type from ONE incoming edge — here the seed — while the other edge is
-an ASSIGNMENT, which is a door on no tier. A merge that proved a range would let the binding claim
-`NonZero` while holding `0`, `divisorProof` answer `neverZero` off that claim, and `100 / d` compile to
-a **bare `idiv` that needs no `try` at all** — `panic: integer divide by zero`, the uncatchable `#DE`
-where the language promises a catchable `DivisionByZero`, which is the very fault the entry guard shuts
-the PARAMETER door to prevent.
-
-⭐ **IT IS REFUSED AT COMPILE TIME RATHER THAN GUARDED AT RUNTIME, and that is the honest answer here.**
-The cure is not a check on the divide: it is that a merge does not PROVE a range, so the divisor
-falls to `possiblyZero` — the conservative arm this rule already documents — and the program is exactly
-the `error.divide-without-try` above wearing a loop. There is no proof because none would be true; the
-`try` the language asks for takes its place.
+A `var` declared from a `NonZero` and then REASSIGNED inside a loop merges at the loop header. Both edges
+into that merge are doors: the seed is the callee's guarded `return`, and the rebind `d = d - 1` checks
+the value it stores against `NonZero`. So the merge proves `NonZero`, `100 / d` compiles to a bare
+`idiv` with no `try`, and the `0` the loop computes never reaches it — the program panics at the
+rebind, naming `NonZero`, rather than dying `panic: integer divide by zero`, the uncatchable `#DE`
+where the language promises a catchable `DivisionByZero`.
 ```maxon
 typealias NonZero = int(1 to i64.max)
 
@@ -1064,7 +1062,7 @@ end 'seed'
 
 function main() returns ExitCode
 	var d = seed(1)
-	var i = 0
+	var i = 0 as FullRangeInt
 	while i < 1 'lp'
 		d = d - 1
 		i = i + 1
@@ -1072,8 +1070,14 @@ function main() returns ExitCode
 	return 100 / d
 end 'main'
 ```
-```maxoncstderr
-error E3057: <fragment>:15:13: throwing division requires try: wrap it as `try (a / b) otherwise …`, or give the divisor a ranged type that excludes 0 (e.g. `int(1 to ...)`) — a bare divide drops the divide-by-zero error
+```exitcode
+1
+```
+```stderr
+panic at divide-by-a-loop-carried-divisor-panics-at-the-rebind.test:12: Range check failed: value outside typealias 'NonZero'
+Stack trace:
+  in main
+  in mrt_start
 ```
 
 <!-- test: unbounded-recursion-panics-with-stack-overflow -->
@@ -1511,4 +1515,493 @@ end 'main'
 ```
 ```maxoncstderr
 error E2051: sub/<fragment>:3:10: identifier 'maxon_force_segfault' is reserved: it is the compiler's own fault-probe entry point, which the library tiers reach through `__Builtins.forceSegfault()`
+```
+
+<!-- test: divide-by-zero-premise-enforced-at-the-map-value-store -->
+#### A runtime zero is refused where it is stored as a `Map` value, not at the `idiv`
+The map's value type excludes 0, so a value read back out of it is proven non-zero and `100 / d` is a bare `idiv`. The store holds the proof: the zero is refused at `upsert`, ahead of the `print`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias NonZero = int(1 to i64.max)
+typealias NonZeroMap = Map with (Count, NonZero)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function main() returns ExitCode
+	let one = ident(1) as NonZero
+	var m = NonZeroMap.create()
+	m.upsert(1, value: one - one)
+	let d = try m.get(1) otherwise 1
+	print("before\n")
+	return 100 / d
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at divide-by-zero-premise-enforced-at-the-map-value-store.test:13: Range check failed: value outside typealias 'NonZero'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: divide-by-zero-premise-enforced-at-the-var-assignment -->
+#### A runtime zero is refused where it is assigned to a `NonZero` `var`
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias NonZero = int(1 to i64.max)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function main() returns ExitCode
+	let one = ident(1) as NonZero
+	var d = ident(5) as NonZero
+	d = one - one
+	print("before\n")
+	return 100 / d
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at divide-by-zero-premise-enforced-at-the-var-assignment.test:12: Range check failed: value outside typealias 'NonZero'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: divide-by-zero-premise-enforced-at-the-field-store -->
+#### A runtime zero is refused where it is stored in a `NonZero` field
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias NonZero = int(1 to i64.max)
+
+type Holder
+	export var d = 1 as NonZero
+
+	static function create(d NonZero) returns Self
+		return Self{d: d}
+	end 'create'
+end 'Holder'
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function main() returns ExitCode
+	let one = ident(1) as NonZero
+	var h = Holder.create(3)
+	h.d = one - one
+	print("before\n")
+	return 100 / h.d
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at divide-by-zero-premise-enforced-at-the-field-store.test:20: Range check failed: value outside typealias 'NonZero'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: divide-by-zero-premise-enforced-at-the-array-set -->
+#### A runtime zero is refused at `Array.set`
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias NonZero = int(1 to i64.max)
+typealias NonZeroArray = Array with NonZero
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function main() returns ExitCode
+	let one = ident(1) as NonZero
+	var xs = NonZeroArray.create()
+	xs.push(one)
+	try xs.set(0, value: one - one) otherwise ignore
+	let d = try xs.get(0) otherwise 1
+	print("before\n")
+	return 100 / d
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at divide-by-zero-premise-enforced-at-the-array-set.test:14: Range check failed: value outside typealias 'NonZero'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: divide-by-zero-premise-enforced-at-the-array-insert -->
+#### A runtime zero is refused at `Array.insert`
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias NonZero = int(1 to i64.max)
+typealias NonZeroArray = Array with NonZero
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function main() returns ExitCode
+	let one = ident(1) as NonZero
+	var xs = NonZeroArray.create()
+	xs.push(one)
+	xs.insert(0, value: one - one)
+	let d = try xs.get(0) otherwise 1
+	print("before\n")
+	return 100 / d
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at divide-by-zero-premise-enforced-at-the-array-insert.test:14: Range check failed: value outside typealias 'NonZero'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: divide-by-zero-premise-enforced-at-the-array-grow-filled -->
+#### A runtime zero is refused as the `growFilled` value
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias NonZero = int(1 to i64.max)
+typealias NonZeroArray = Array with NonZero
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function main() returns ExitCode
+	let one = ident(1) as NonZero
+	var xs = NonZeroArray.create()
+	xs.growFilled(2, value: one - one)
+	let d = try xs.get(1) otherwise 1
+	print("before\n")
+	return 100 / d
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at divide-by-zero-premise-enforced-at-the-array-grow-filled.test:13: Range check failed: value outside typealias 'NonZero'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: divide-by-zero-premise-enforced-at-the-array-refill -->
+#### A runtime zero is refused as the `refill` value
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias NonZero = int(1 to i64.max)
+typealias NonZeroArray = Array with NonZero
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function main() returns ExitCode
+	let one = ident(1) as NonZero
+	var xs = NonZeroArray.create()
+	xs.push(one)
+	xs.refill(2, value: one - one)
+	let d = try xs.get(1) otherwise 1
+	print("before\n")
+	return 100 / d
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at divide-by-zero-premise-enforced-at-the-array-refill.test:14: Range check failed: value outside typealias 'NonZero'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: divide-by-zero-premise-enforced-at-a-union-payload -->
+#### A runtime zero is refused where it is built into a `NonZero` union payload
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias NonZero = int(1 to i64.max)
+
+union Divisor
+	by(amount NonZero)
+end 'Divisor'
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function main() returns ExitCode
+	let one = ident(1) as NonZero
+	let wrapped = Divisor.by(one - one)
+	print("before\n")
+
+	match wrapped 'which'
+		by(amount) then return 100 / amount
+	end 'which'
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at divide-by-zero-premise-enforced-at-a-union-payload.test:15: Range check failed: value outside typealias 'NonZero'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: divide-by-zero-premise-enforced-at-the-struct-literal -->
+#### A runtime zero is refused where it initialises a `NonZero` field in a struct literal
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias NonZero = int(1 to i64.max)
+
+type Holder
+	export var d = 1 as NonZero
+
+	static function create(d NonZero) returns Self
+		return Self{d: d}
+	end 'create'
+end 'Holder'
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function main() returns ExitCode
+	let one = ident(1) as NonZero
+	let h = Holder.create(one - one)
+	print("before\n")
+	return 100 / h.d
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at divide-by-zero-premise-enforced-at-the-struct-literal.test:8: Range check failed: value outside typealias 'NonZero'
+Stack trace:
+  in Holder.create
+  in main
+  in mrt_start
+```
+
+<!-- test: divide-by-zero-premise-enforced-at-a-generic-payload -->
+#### A runtime zero is refused where it is stored in a generic record instantiated over `NonZero`
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias NonZero = int(1 to i64.max)
+
+type Box uses T
+	export let value as T
+
+	static function create(value T) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+typealias NonZeroBox = Box with NonZero
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function main() returns ExitCode
+	let one = ident(1) as NonZero
+	let b = NonZeroBox.create(one - one)
+	print("before\n")
+	return 100 / b.value
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at divide-by-zero-premise-enforced-at-a-generic-payload.test:21: Range check failed: value outside typealias 'NonZero'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: divide-by-zero-premise-enforced-at-the-map-key-store -->
+#### A runtime zero is refused where it is stored as a `Map` key
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias NonZero = int(1 to i64.max)
+typealias NonZeroKeys = Map with (NonZero, Count)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function main() returns ExitCode
+	let one = ident(1) as NonZero
+	var m = NonZeroKeys.create()
+	m.upsert(one - one, value: 5)
+	print("before\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at divide-by-zero-premise-enforced-at-the-map-key-store.test:13: Range check failed: value outside typealias 'NonZero'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: divide-by-zero-premise-enforced-at-the-set-insert -->
+#### A runtime zero is refused where it is inserted into a `Set`
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias NonZero = int(1 to i64.max)
+typealias NonZeroSet = Set with NonZero
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function main() returns ExitCode
+	let one = ident(1) as NonZero
+	var s = NonZeroSet.create()
+	s.insert(one - one)
+	print("before\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at divide-by-zero-premise-enforced-at-the-set-insert.test:13: Range check failed: value outside typealias 'NonZero'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: divide-by-zero-premise-enforced-at-the-list-append -->
+#### A runtime zero is refused where it is appended to a `List`
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias NonZero = int(1 to i64.max)
+typealias NonZeroList = List with NonZero
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function main() returns ExitCode
+	let one = ident(1) as NonZero
+	var xs = NonZeroList.create()
+	xs.append(one - one)
+	print("before\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at divide-by-zero-premise-enforced-at-the-list-append.test:13: Range check failed: value outside typealias 'NonZero'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: divide-by-zero-premise-enforced-at-the-closure-parameter -->
+#### A runtime zero is refused at a closure's `NonZero` parameter
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias NonZero = int(1 to i64.max)
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function main() returns ExitCode
+	let one = ident(1) as NonZero
+	let divide = function(d NonZero) gives 100 / d
+	print("before\n")
+	return divide(one - one)
+end 'main'
+```
+```exitcode
+1
+```
+```stdout
+before
+```
+```stderr
+panic at divide-by-zero-premise-enforced-at-the-closure-parameter.test:11: Range check failed: value outside typealias 'NonZero'
+Stack trace:
+  in main$closure_0
+  in main
+  in mrt_start
+```
+
+<!-- test: divide-by-zero-premise-enforced-at-a-service-handler-entry -->
+#### A runtime zero is refused at the entry of a service handler whose parameter is `NonZero`
+The handler divides by its `NonZero` parameter with a bare `idiv`, so the proof has to hold when the message arrives; the entry guard on the service's own thread holds it. The zero is a difference of two `NonZero`s, which wears the alias without proving it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias NonZero = int(1 to i64.max)
+
+type Divider
+	var last = 0 as Integer
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function divideBy(d NonZero) returns Integer
+		self.last = (100 / d) as Integer
+		return self.last
+	end 'divideBy'
+end 'Divider'
+
+function ident(v Integer) returns Integer
+	return v
+end 'ident'
+
+function main() returns ExitCode
+	let one = ident(1) as NonZero
+	let h = spawn Divider.create()
+	print("before\n")
+	let q = try await h.divideBy(one - one) otherwise 0
+	return q as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+```stdout
+before
+```
+```stderr
+panic at divide-by-zero-premise-enforced-at-a-service-handler-entry.test:12: Range check failed: value outside typealias 'NonZero'
+Stack trace:
+  in Divider.divideBy
+  in Divider.__loop
+  in __gt_trampoline
 ```

@@ -124,56 +124,56 @@ let SubpTimedOutRc = -2
 
 // The `ResultStatusKind` discriminator `stdlib/Subprocess.maxon` decodes. Its raw values are declared THERE
 // and travel across the builtin boundary unchanged, exactly as the stdio kinds do.
-let SubpStatusExited = 0 as ParsedInt
-let SubpStatusSignalled = 1 as ParsedInt
-let SubpStatusTimedOut = 2 as ParsedInt
-export let SubpNoExitSignal = 0 as ParsedInt
+let SubpStatusExited = 0 as FullRangeInt
+let SubpStatusSignalled = 1 as FullRangeInt
+let SubpStatusTimedOut = 2 as FullRangeInt
+export let SubpNoExitSignal = 0 as FullRangeInt
 
 let SubprocessStdlibFileName = "Subprocess.maxon"
 
 // The exit code a child is TERMINATED with when its deadline fires. Any non-zero value would do; 1 is what a
 // killed process conventionally reports.
-let SubpKilledExitCode = 1 as ParsedInt
+let SubpKilledExitCode = 1 as FullRangeInt
 
 // `WaitForSingleObject`'s two answers this file distinguishes: the object became signalled, or the timeout
 // elapsed. Named because a bare `0`/`0x102` at a compare says nothing about which.
-let WaitObjectSignalled = 0 as ParsedInt
-let WaitTimedOut = 0x102 as ParsedInt
+let WaitObjectSignalled = 0 as FullRangeInt
+let WaitTimedOut = 0x102 as FullRangeInt
 
 // The `dwCreationFlags` bits `stdlib/Subprocess.maxon`'s `SpawnFlag` surface maps onto. The SURFACE
 // values (bit 0 hide window, bit 1 new process group, bit 2 detach, bit 3 traced) are the corpus's; these
 // are Win32's, and the translation between them lives in one place (`emitSubpCreationFlags`).
-let CreateNoWindow = 0x08000000 as ParsedInt
-let CreateNewProcessGroup = 0x00000200 as ParsedInt
-export let DetachedProcess = 0x00000008 as ParsedInt
+let CreateNoWindow = 0x08000000 as FullRangeInt
+let CreateNewProcessGroup = 0x00000200 as FullRangeInt
+export let DetachedProcess = 0x00000008 as FullRangeInt
 
 // `DEBUG_ONLY_THIS_PROCESS` — the child reports its debug events to this process and its own children are
 // left alone, which is the debugger's launch.
-export let DebugOnlyThisProcess = 0x00000002 as ParsedInt
+export let DebugOnlyThisProcess = 0x00000002 as FullRangeInt
 
 // The surface bitfield's own four bits, as the shifts that extract them.
-let SpawnFlagHideWindowShift = 0 as ParsedInt
-let SpawnFlagNewGroupShift = 1 as ParsedInt
-let SpawnFlagDetachShift = 2 as ParsedInt
-let SpawnFlagTracedShift = 3 as ParsedInt
+let SpawnFlagHideWindowShift = 0 as FullRangeInt
+let SpawnFlagNewGroupShift = 1 as FullRangeInt
+let SpawnFlagDetachShift = 2 as FullRangeInt
+let SpawnFlagTracedShift = 3 as FullRangeInt
 
 // How long the collect loop sleeps when a pass moved no bytes and the child is still running, on the lane
 // whose pipes ride a completion port and have no poll descriptor to suspend on. It is a GREEN sleep
 // (`__gt_sleep`), so the whole scheduler runs while it waits. One millisecond is the smallest value a Win32
 // timer resolves at all.
-let SubpPollMs = 1 as ParsedInt
-let SubpNoWaitMs = 0 as ParsedInt
+let SubpPollMs = 1 as FullRangeInt
+let SubpNoWaitMs = 0 as FullRangeInt
 
 // ⭐ **HOW LONG `delayed` HOLDS THE PIPE AFTER THE CHILD'S FIRST STDOUT BYTE BEFORE FEEDING IT.** Fixed rather
 // than a spawn argument because the spawn contract carries a `limit` slot for stdout and stderr and NONE for
 // stdin — a caller-chosen delay is a change to the builtin's arity. One harness drives every lane through
 // this one marker, so the number is the same everywhere.
-let SubpStdinDelayedFeedMs = 1000 as ParsedInt
+let SubpStdinDelayedFeedMs = 1000 as FullRangeInt
 
 // The initial size of each collected stream's buffer, and the growth policy. It doubles past what a pass
 // needs, exactly as the streaming line buffer does, so a child producing N bytes costs O(log N) reallocations.
-let SubpCollectInitialBytes = 4096 as ParsedInt
-let SubpGrowthFactor = 2 as ParsedInt
+let SubpCollectInitialBytes = 4096 as FullRangeInt
+let SubpGrowthFactor = 2 as FullRangeInt
 
 // ⭐ **THE `waitCollect` LOOP'S STATE, IN MEMORY.** See this file's header for why none of it is a block
 // argument. `progress` counts the bytes a pass moved: a pass that moved none and did not find the run
@@ -220,18 +220,18 @@ let WcGroupCount = 168 as ByteOffset
 let WcGroup = 176 as ByteOffset
 
 // How many sources one collect wait can hold: stdout, stderr, the child and the stdin write end.
-let WcGroupMembers = 4 as ParsedInt
+let WcGroupMembers = 4 as FullRangeInt
 
 // How the completion-port lane waits for a full stdin pipe to drain: 1, 3, 7, 15, then 16 ms per
 // blocked pass. A PIPE_NOWAIT handle reports no readiness to wait on, and an overlapped write end
 // would take the synchronous writes `__gt_subp_write_all` and `__gt_subp_write_line` make from
 // under them.
-let SubpStdinBackoffGrowth = 2 as ParsedInt
+let SubpStdinBackoffGrowth = 2 as FullRangeInt
 
-let SubpStdinBackoffFloorMs = 1 as ParsedInt
+let SubpStdinBackoffFloorMs = 1 as FullRangeInt
 
-let SubpStdinMaxBackoffMs = 16 as ParsedInt
-let WcBytes = (WcGroup as ParsedInt) + NetpollGroupHeaderBytes + WcGroupMembers * NetpollGroupSlotBytes
+let SubpStdinMaxBackoffMs = 16 as FullRangeInt
+let WcBytes = (WcGroup as FullRangeInt) + NetpollGroupHeaderBytes + WcGroupMembers * NetpollGroupSlotBytes
 
 // ⭐ **THE RESULT STRUCT `subprocessWaitCollect` ANSWERS A POINTER TO**, and the six `subprocessResult*`
 // readers decode. It is `__mm_alloc`'d rather than slab, and so are the two captured buffers it owns.
@@ -247,7 +247,7 @@ let ResOutBuf = 24 as ByteOffset
 let ResOutLen = 32 as ByteOffset
 let ResErrBuf = 40 as ByteOffset
 let ResErrLen = 48 as ByteOffset
-let ResBytes = 56 as ParsedInt
+let ResBytes = 56 as FullRangeInt
 
 // ⭐ **THE COMMAND-LINE BUILDER'S STATE, IN MEMORY** — this file's header again. `needsQuote` and `scanStart`
 // are per-ARGUMENT and live across the inner scan, which is exactly what a block argument could not carry
@@ -261,21 +261,21 @@ let ClArg = 40 as ByteOffset  // which argument is being emitted
 let ClScanStart = 48 as ByteOffset
 let ClNeedsQuote = 56 as ByteOffset
 let ClSawByte = 64 as ByteOffset
-let ClBytes = 72 as ParsedInt
+let ClBytes = 72 as FullRangeInt
 
 // The bytes the quoting rule reacts to, and the two it writes.
-let SpaceByte = 32 as ParsedInt
-let TabByte = 9 as ParsedInt
-let QuoteByte = 34 as ParsedInt
-let BackslashByte = 92 as ParsedInt
+let SpaceByte = 32 as FullRangeInt
+let TabByte = 9 as FullRangeInt
+let QuoteByte = 34 as FullRangeInt
+let BackslashByte = 92 as FullRangeInt
 
 // ⭐ **THE WORST-CASE COMMAND LINE, PER BYTE AND PER ARGUMENT.** Every source byte becomes at most TWO output
 // bytes (a `"` inside a quoted argument is written `\"`), and every argument costs at most three more: a
 // separating space and its two surrounding quotes. Plus one terminator for the whole line. Sizing the buffer
 // from that bound up front is what lets the builder be a SINGLE pass with no growth logic — and the bound is
 // tight enough that the over-allocation is a few bytes per argument.
-let ClBytesPerSourceByte = 2 as ParsedInt
-let ClBytesPerArg = 3 as ParsedInt
+let ClBytesPerSourceByte = 2 as FullRangeInt
+let ClBytesPerArg = 3 as FullRangeInt
 
 // ⭐ **THE ENVIRONMENT WALK'S STATE, IN MEMORY** — this file's header again: a hand-built runtime function's
 // values are span-less, so loop state lives in a slab record rather than in block arguments.
@@ -285,11 +285,11 @@ let ClBytesPerArg = 3 as ParsedInt
 let EnvCursor = 0 as ByteOffset
 let EnvRemaining = 8 as ByteOffset
 let EnvBlock = 16 as ByteOffset
-let EnvWalkBytes = 24 as ParsedInt
+let EnvWalkBytes = 24 as FullRangeInt
 
 // One `char *` in the `EnvironmentSnapshotShape.pointerVector` table. Both lanes that answer that shape are
 // 64-bit; the day a 32-bit one does, this is the one place it is written down.
-let EnvPointerStride = 8 as ParsedInt
+let EnvPointerStride = 8 as FullRangeInt
 
 // ⭐ **THE `envInherit` SLOT'S VALUE MEANING "the child inherits this process's environment".**
 // `stdlib/Subprocess.maxon`'s `EnvSource.parent` decides it; this is that number read back, named rather
@@ -299,7 +299,7 @@ let EnvPointerStride = 8 as ParsedInt
 // produces and differ only on the direction an unrecognised one fails in: "non-zero" fails toward INHERIT
 // — a child silently given the parent's environment while its caller was told it had another, which is the
 // failure `StdDialect`'s `osProcessSpawn` note says the design exists to prevent.
-let EnvSourceParent = 1 as ParsedInt
+let EnvSourceParent = 1 as FullRangeInt
 
 let RpName = 0 as ByteOffset
 let RpNameLen = 8 as ByteOffset
@@ -330,11 +330,12 @@ let RpLegacySystemDir = 200 as ByteOffset
 let RpLegacySystemDirLen = 208 as ByteOffset
 
 // `emitSubpWindowsSearchRungs` pushes at most five rungs; a sixth would overwrite `RpRungLens`.
-let SearchRungsMax = 5 as ParsedInt
-let RungSlotBytes = 8 as ParsedInt
+let SearchRungsMax = 5 as FullRangeInt
+let RungSlotBytes = 8 as FullRangeInt
 let RpRungDirs = 216 as ByteOffset
-let RpRungLens = ((RpRungDirs as ParsedInt) + SearchRungsMax * RungSlotBytes) as ByteOffset
-let RpBytes = (RpRungLens as ParsedInt) + SearchRungsMax * RungSlotBytes
+let RungsRegionBytes = SearchRungsMax * RungSlotBytes
+let RpRungLens = RpRungDirs + (RungsRegionBytes as ByteOffset)
+let RpBytes = (RpRungLens as FullRangeInt) + RungsRegionBytes
 
 // The environment variables the PATH walk reads, and each platform's separator between their members and
 // between a directory and a file name. `PathSearchShape` chooses the pair.
@@ -342,14 +343,14 @@ let PathVarName = b"PATH"
 let PathExtVarName = b"PATHEXT"
 let NoCurrentDirectorySearchVarName = b"NoDefaultCurrentDirectoryInExePath"
 let LegacySystemSubdirectory = b"System"
-let ExtensionDotByte = 46 as ParsedInt
-let DriveColonByte = 58 as ParsedInt
-let DriveColonIndex = 1 as ParsedInt
-let DriveSpecBytes = 2 as ParsedInt
-let WindowsPathListSeparatorByte = 59 as ParsedInt  // ';'
-let WindowsDirSeparatorByte = 92 as ParsedInt  // '\'
-let PosixPathListSeparatorByte = 58 as ParsedInt  // ':'
-let PosixDirSeparatorByte = 47 as ParsedInt  // '/'
+let ExtensionDotByte = 46 as FullRangeInt
+let DriveColonByte = 58 as FullRangeInt
+let DriveColonIndex = 1 as FullRangeInt
+let DriveSpecBytes = 2 as FullRangeInt
+let WindowsPathListSeparatorByte = 59 as FullRangeInt  // ';'
+let WindowsDirSeparatorByte = 92 as FullRangeInt  // '\'
+let PosixPathListSeparatorByte = 58 as FullRangeInt  // ':'
+let PosixDirSeparatorByte = 47 as FullRangeInt  // '/'
 
 let PosixNoExtensions = b""
 
@@ -361,7 +362,7 @@ let PathExtDefault = b".COM;.EXE;.BAT;.CMD"
 
 // The first guess at an environment variable's size. `PATH` is routinely longer than this, and
 // `emitSubpReadEnvInto` then retries at exactly the size Win32 names.
-let EnvFirstGuessBytes = 512 as ParsedInt
+let EnvFirstGuessBytes = 512 as FullRangeInt
 
 // The prefix `subprocessLastErrorMessage()` puts in front of the error number `osLastError` answers. That
 // number is in Win32's vocabulary on every lane (`buildSubpLastError` says why), so the prefix names the
@@ -373,7 +374,7 @@ let DecimalDigitsMax = 24 as Count
 
 // A fresh slab scratch record of `size` bytes, zero-filled by the allocator's contract. The one place this
 // file's walks allocate their state, and each walk gives it back on every road out of its function.
-function emitSubpScratch(module StdModule, block IrBlock, ids ValueMinter, size ParsedInt) returns ValueId
+function emitSubpScratch(module StdModule, block IrBlock, ids ValueMinter, size FullRangeInt) returns ValueId
 	let sizeConst = emitConst(module, block: block, value: size, ids: ids)
 	let rec = ids.mint()
 	module.appendOp(block, op: StdOp.call(rec, callee: SlabAllocName, args: argsOf(sizeConst)))
@@ -501,14 +502,14 @@ function pathSearchShape(target Target) returns PathSearchShape
 	end 'os'
 end 'pathSearchShape'
 
-function pathListSeparator(shape PathSearchShape) returns ParsedInt
+function pathListSeparator(shape PathSearchShape) returns FullRangeInt
 	return match shape 'shape'
 		windowsPathExt gives WindowsPathListSeparatorByte
 		posix gives PosixPathListSeparatorByte
 	end 'shape'
 end 'pathListSeparator'
 
-function pathDirSeparator(shape PathSearchShape) returns ParsedInt
+function pathDirSeparator(shape PathSearchShape) returns FullRangeInt
 	return match shape 'shape'
 		windowsPathExt gives WindowsDirSeparatorByte
 		posix gives PosixDirSeparatorByte
@@ -572,7 +573,7 @@ function buildSubpShellCommand(module StdModule)
 	let slotBytes = (ShellArgvSlots * PointerFieldBytes) as ByteOffset
 	let flagOffset = slotBytes + ((ShellPathBytes.count() + TrailingNulBytes) as ByteOffset)
 	let regionBytes = flagOffset + ((ShellCommandFlagBytes.count() + TrailingNulBytes) as ByteOffset)
-	let vecSize = emitConst(module, block: entry, value: regionBytes as ParsedInt, ids: ids)
+	let vecSize = emitConst(module, block: entry, value: regionBytes as FullRangeInt, ids: ids)
 	let vec = ids.mint()
 	module.appendOp(entry, op: StdOp.call(vec, callee: SlabAllocName, args: argsOf(vecSize)))
 
@@ -623,9 +624,9 @@ function buildSubpArgvVector(module StdModule)
 	let argvBuf = emitLoadField(module, block: entry, record: argvRec, offset: ManagedRecordBufferOffset, ids: ids)
 	emitStoreField(module, block: entry, record: state, offset: AvArgvBuf, value: argvBuf)
 	emitStoreField(module, block: entry, record: state, offset: AvArgc, value: argc)
-	let slotBytes = emitConst(module, block: entry, value: PointerFieldBytes as ParsedInt, ids: ids)
+	let slotBytes = emitConst(module, block: entry, value: PointerFieldBytes as FullRangeInt, ids: ids)
 	let slots = emitBin(module, block: entry, a: argc, b: slotBytes, opcode: StdBinOpcode.mul, ids: ids)
-	let terminatorRoom = emitConst(module, block: entry, value: PointerFieldBytes as ParsedInt, ids: ids)
+	let terminatorRoom = emitConst(module, block: entry, value: PointerFieldBytes as FullRangeInt, ids: ids)
 	let vecSize = emitBin(module, block: entry, a: slots, b: terminatorRoom, opcode: StdBinOpcode.add, ids: ids)
 	let vec = ids.mint()
 	module.appendOp(entry, op: StdOp.call(vec, callee: SlabAllocName, args: argsOf(vecSize)))
@@ -644,7 +645,7 @@ function buildSubpArgvVector(module StdModule)
 	let tokenPtr = emitBin(module, block: recordSlot, a: bufR, b: posR, opcode: StdBinOpcode.add, ids: ids)
 	let vecR = emitLoadField(module, block: recordSlot, record: state, offset: AvVec, ids: ids)
 	let argR = emitLoadField(module, block: recordSlot, record: state, offset: AvArg, ids: ids)
-	let strideR = emitConst(module, block: recordSlot, value: PointerFieldBytes as ParsedInt, ids: ids)
+	let strideR = emitConst(module, block: recordSlot, value: PointerFieldBytes as FullRangeInt, ids: ids)
 	let slotOff = emitBin(module, block: recordSlot, a: argR, b: strideR, opcode: StdBinOpcode.mul, ids: ids)
 	let slotAddr = emitBin(module, block: recordSlot, a: vecR, b: slotOff, opcode: StdBinOpcode.add, ids: ids)
 	emitStoreField(module, block: recordSlot, record: slotAddr, offset: 0, value: tokenPtr)
@@ -680,7 +681,7 @@ let AvArgc = 8 as ByteOffset
 let AvVec = 16 as ByteOffset
 let AvPos = 24 as ByteOffset  // read cursor into the argv blob
 let AvArg = 32 as ByteOffset  // which argument is being recorded
-let AvBytes = 40 as ParsedInt
+let AvBytes = 40 as FullRangeInt
 
 // ⭐ `__gt_subp_env_vector(envRec) -> envp` under `SpawnEnvironmentShape.pointerVector` — the environment
 // BLOCK turned into a NULL-terminated pointer vector, with NO copying.
@@ -741,7 +742,7 @@ function buildSubpEnvVector(module StdModule)
 	let entryPtr = emitBin(module, block: recordSlot, a: bufR, b: posR, opcode: StdBinOpcode.add, ids: ids)
 	let vecR = emitLoadField(module, block: recordSlot, record: state, offset: EvVec, ids: ids)
 	let idxR = emitLoadField(module, block: recordSlot, record: state, offset: EvEntry, ids: ids)
-	let strideR = emitConst(module, block: recordSlot, value: PointerFieldBytes as ParsedInt, ids: ids)
+	let strideR = emitConst(module, block: recordSlot, value: PointerFieldBytes as FullRangeInt, ids: ids)
 	let slotOff = emitBin(module, block: recordSlot, a: idxR, b: strideR, opcode: StdBinOpcode.mul, ids: ids)
 	let slotAddr = emitBin(module, block: recordSlot, a: vecR, b: slotOff, opcode: StdBinOpcode.add, ids: ids)
 	emitStoreField(module, block: recordSlot, record: slotAddr, offset: 0, value: entryPtr)
@@ -774,7 +775,7 @@ function buildSubpEnvVector(module StdModule)
 	let entries = emitLoadField(module, block: sizeVector, record: state, offset: EvEntry, ids: ids)
 	let terminatorRoom = emitConst(module, block: sizeVector, value: 1, ids: ids)
 	let slots = emitBin(module, block: sizeVector, a: entries, b: terminatorRoom, opcode: StdBinOpcode.add, ids: ids)
-	let slotBytes = emitConst(module, block: sizeVector, value: PointerFieldBytes as ParsedInt, ids: ids)
+	let slotBytes = emitConst(module, block: sizeVector, value: PointerFieldBytes as FullRangeInt, ids: ids)
 	let vecSize = emitBin(module, block: sizeVector, a: slots, b: slotBytes, opcode: StdBinOpcode.mul, ids: ids)
 	let vec = ids.mint()
 	module.appendOp(sizeVector, op: StdOp.call(vec, callee: SlabAllocName, args: argsOf(vecSize)))
@@ -796,7 +797,7 @@ let EvBuf = 0 as ByteOffset
 let EvVec = 8 as ByteOffset  // unset until the counting pass ends, which is what tells the two passes apart
 let EvPos = 16 as ByteOffset  // read cursor into the environment block
 let EvEntry = 24 as ByteOffset
-let EvBytes = 32 as ParsedInt
+let EvBytes = 32 as FullRangeInt
 
 // ⭐ `__gt_subp_argv_cmdline(argvRec, argc) -> cmdlineBuf` — join an argv blob into ONE mutable
 // NUL-terminated Windows command line.
@@ -971,7 +972,7 @@ end 'buildSubpArgvCmdline'
 
 // `out[len] = value ; len = len + 1` — the one append the command-line builder makes, spelled once for its
 // four call sites (the separator, the two quotes and the escape) and once more for the value form below.
-function emitSubpAppendByte(module StdModule, block IrBlock, ids ValueMinter, state ValueId, outOffset ByteOffset, lenOffset ByteOffset, value ParsedInt)
+function emitSubpAppendByte(module StdModule, block IrBlock, ids ValueMinter, state ValueId, outOffset ByteOffset, lenOffset ByteOffset, value FullRangeInt)
 	let byteConst = emitConst(module, block: block, value: value, ids: ids)
 	emitSubpAppendValue(module, block: block, ids: ids, state: state, outOffset: outOffset, lenOffset: lenOffset, value: byteConst)
 end 'emitSubpAppendByte'
@@ -1477,7 +1478,7 @@ function emitSubpTerminateChild(module StdModule, func IrFunction, cur IrBlock, 
 	return gone
 end 'emitSubpTerminateChild'
 
-function emitSubpWaitForTheChild(module StdModule, block IrBlock, hProcess ValueId, timeoutMs ParsedInt, ended IrBlock, stillRunning IrBlock, ids ValueMinter)
+function emitSubpWaitForTheChild(module StdModule, block IrBlock, hProcess ValueId, timeoutMs FullRangeInt, ended IrBlock, stillRunning IrBlock, ids ValueMinter)
 	let settled = ids.mint()
 	module.appendOp(block, op: StdOp.osWaitChild(settled, handleId: hProcess, timeoutMsId: emitConst(module, block: block, value: timeoutMs, ids: ids)))
 	let signalled = emitCmp(module, block: block, a: settled, b: emitConst(module, block: block, value: WaitObjectSignalled, ids: ids), pred: StdCmpPred.eq, ids: ids)
@@ -2032,7 +2033,7 @@ end 'emitSelectWord'
 
 // `&state[WcGroup]` — the group record lives inside the wait's own scratch.
 function emitSubpGroupAddr(module StdModule, block IrBlock, ids ValueMinter, state ValueId) returns ValueId
-	return emitBin(module, block: block, a: state, b: emitConst(module, block: block, value: WcGroup as ParsedInt, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	return emitBin(module, block: block, a: state, b: emitConst(module, block: block, value: WcGroup as FullRangeInt, ids: ids), opcode: StdBinOpcode.add, ids: ids)
 end 'emitSubpGroupAddr'
 
 // Add one stream's read end to the group, unless the stream is finished or never had a pipe.
@@ -2074,7 +2075,7 @@ end 'emitSubpGroupAddChild'
 // Append `fd` to the group and answer the member index it took. The member carries the generation its record
 // is in NOW, from `__np_pd_op_begin`, so a release between here and the wait's lock is a refusal there rather
 // than a mark in the next owner's record (`NetpollRuntime.GroupSlotGen`).
-function emitSubpGroupAdd(module StdModule, block IrBlock, ids ValueMinter, state ValueId, group ValueId, fd ValueId, mode ParsedInt) returns ValueId
+function emitSubpGroupAdd(module StdModule, block IrBlock, ids ValueMinter, state ValueId, group ValueId, fd ValueId, mode FullRangeInt) returns ValueId
 	let index = emitLoadField(module, block: block, record: state, offset: WcGroupCount, ids: ids)
 	let gen = emitNetpollPdOpBegin(module, block: block, source: fd, ids: ids)
 	emitNetpollGroupSetMember(module, block: block, group: group, index: index, fd: fd, mode: mode, gen: gen, ids: ids)
@@ -2320,7 +2321,7 @@ function emitSubpArmDelayedFeed(module StdModule, func IrFunction, ids ValueMint
 end 'emitSubpArmDelayedFeed'
 
 // `state[outOffset] = min(a, limit)`, through memory for this file's stated reason.
-function emitSubpMinInto(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, outOffset ByteOffset, a ValueId, limit ParsedInt) returns IrBlock
+function emitSubpMinInto(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, outOffset ByteOffset, a ValueId, limit FullRangeInt) returns IrBlock
 	var takeLimit = module.addBlock(func, label: b"wcmincap", heat: BlockHeat.normal)
 	let cont = module.addBlock(func, label: b"wcmindone", heat: BlockHeat.normal)
 
@@ -2341,7 +2342,7 @@ end 'emitSubpMinInto'
 function emitSubpStreamReadEnd(module StdModule, block IrBlock, ids ValueMinter, state ValueId, streamBase ByteOffset) returns ValueId
 	let handle = emitLoadField(module, block: block, record: state, offset: WcHandle, ids: ids)
 	let slot = emitSubpSlotOf(module, block: block, ids: ids, handle: handle)
-	let stream = emitBin(module, block: block, a: slot, b: emitConst(module, block: block, value: streamBase as ParsedInt, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let stream = emitBin(module, block: block, a: slot, b: emitConst(module, block: block, value: streamBase as FullRangeInt, ids: ids), opcode: StdBinOpcode.add, ids: ids)
 	return emitLoadField(module, block: block, record: stream, offset: SubpStreamReadEnd, ids: ids)
 end 'emitSubpStreamReadEnd'
 
@@ -2386,7 +2387,7 @@ function emitSubpDrainStream(module StdModule, func IrFunction, ids ValueMinter,
 	module.setTerminator(notDone, op: StdOp.condBranch(noPipe, thenBlockId: markDone.id, elseBlockId: doPeek.id))
 
 	let readEndP = emitSubpStreamReadEnd(module, block: doPeek, ids: ids, state: state, streamBase: streamBase)
-	let availOffset = emitConst(module, block: doPeek, value: WcAvail as ParsedInt, ids: ids)
+	let availOffset = emitConst(module, block: doPeek, value: WcAvail as FullRangeInt, ids: ids)
 	let availSlot = emitBin(module, block: doPeek, a: state, b: availOffset, opcode: StdBinOpcode.add, ids: ids)
 	let peekOk = ids.mint()
 	module.appendOp(doPeek, op: StdOp.osPipePeek(peekOk, handleId: readEndP, availPtrId: availSlot))
@@ -2429,7 +2430,7 @@ function emitSubpDrainStream(module StdModule, func IrFunction, ids ValueMinter,
 	let lenD = emitLoadField(module, block: doRead, record: state, offset: lenOffset, ids: ids)
 	let dst = emitBin(module, block: doRead, a: bufD, b: lenD, opcode: StdBinOpcode.add, ids: ids)
 	let wantD = emitLoadField(module, block: doRead, record: state, offset: WcAvail, ids: ids)
-	let bytesOutOffset = emitConst(module, block: doRead, value: WcBytesOut as ParsedInt, ids: ids)
+	let bytesOutOffset = emitConst(module, block: doRead, value: WcBytesOut as FullRangeInt, ids: ids)
 	let bytesOutSlot = emitBin(module, block: doRead, a: state, b: bytesOutOffset, opcode: StdBinOpcode.add, ids: ids)
 	let got = ids.mint()
 	module.appendOp(doRead, op: StdOp.call(got, callee: SubpYieldReadName, args: fourArgs(readEndD, second: dst, third: wantD, fourth: bytesOutSlot)))
@@ -2514,7 +2515,7 @@ end 'emitSubpKeepWithinLimit'
 //
 // A live result is a heap address, so `<= 0` is the whole test: it catches the `-1` `waitCollect` answers on
 // failure and the `0` an uninitialized slot would hold.
-let SubpResultNullValue = 0 as ParsedInt
+let SubpResultNullValue = 0 as FullRangeInt
 
 // Terminate `cur` on a result pointer that names no struct, and return the block where it does. The three
 // builders below share it for the reason `emitSubpRequireHandle` is shared: one test, one place.
@@ -2644,7 +2645,7 @@ function buildSubpLastError(module StdModule)
 	// time, the digits after it by the shared `__int_to_string`, which writes into a caller buffer and answers
 	// the length it wrote — then copied out once, and the scratch given back.
 	let prefixBytes = SubpErrorPrefix.count() as ByteOffset
-	let scratchSize = emitConst(module, block: render, value: (SubpErrorPrefix.count() + DecimalDigitsMax) as ParsedInt, ids: ids)
+	let scratchSize = emitConst(module, block: render, value: (SubpErrorPrefix.count() + DecimalDigitsMax) as FullRangeInt, ids: ids)
 	let scratch = ids.mint()
 	module.appendOp(render, op: StdOp.call(scratch, callee: SlabAllocName, args: argsOf(scratchSize)))
 	emitStoreLiteralBytes(module, block: render, base: scratch, offset: 0, text: SubpErrorPrefix, ids: ids)
@@ -2654,7 +2655,7 @@ function buildSubpLastError(module StdModule)
 	let digitsDest = emitFieldAddr(module, block: render, record: scratch, offset: prefixBytes, ids: ids)
 	let digitCount = ids.mint()
 	module.appendOp(render, op: StdOp.call(digitCount, callee: IntToStringName, args: twoArgs(code2, second: digitsDest)))
-	let prefixLen = emitConst(module, block: render, value: SubpErrorPrefix.count() as ParsedInt, ids: ids)
+	let prefixLen = emitConst(module, block: render, value: SubpErrorPrefix.count() as FullRangeInt, ids: ids)
 	let total = emitBin(module, block: render, a: prefixLen, b: digitCount, opcode: StdBinOpcode.add, ids: ids)
 
 	let record = ids.mint()
@@ -2703,7 +2704,7 @@ end 'emitSubpEmptyManaged'
 
 // The one byte `__gt_subp_env_entry`'s unreadable answer holds: a NUL, which no cstring entry can contain.
 // `stdlib/Process.maxon`'s `EnvironmentUnreadableByte` is the reader's half of the same statement.
-let SubpEnvUnreadableByte = 0 as ParsedInt
+let SubpEnvUnreadableByte = 0 as FullRangeInt
 
 // `__gt_subp_env_entry`'s answer when the host handed over no environment: an owned one-byte record holding
 // `SubpEnvUnreadableByte`.
@@ -3117,7 +3118,7 @@ let EmptyPathFallback = b""
 // Room for the separator between a directory and the name, and for the candidate's terminator, on
 // top of the lengths the buffer is sized from. Four rather than two so a future separator or suffix
 // cannot make the bound tight without anyone noticing.
-let CandidateSlackBytes = 4 as ParsedInt
+let CandidateSlackBytes = 4 as FullRangeInt
 
 // Read an environment variable into a fresh NUL-terminated slab buffer, falling back to a literal
 // when it is unset. `GetEnvironmentVariableW` answers the size it needs when the buffer is too
@@ -3471,7 +3472,7 @@ end 'emitSubpPushRung'
 // The length of the member of `list` that starts at `start` — up to the next `separator` or the
 // terminator, whichever comes first. Shared by the PATH walk and the PATHEXT walk, which are the same list
 // shape with different contents.
-function emitSubpMemberLength(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, listOffset ByteOffset, startOffset ByteOffset, lenOffset ByteOffset, separator ParsedInt) returns IrBlock
+function emitSubpMemberLength(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, listOffset ByteOffset, startOffset ByteOffset, lenOffset ByteOffset, separator FullRangeInt) returns IrBlock
 	var scanHdr = module.addBlock(func, label: b"rpmemhdr", heat: BlockHeat.normal)
 	var scanStep = module.addBlock(func, label: b"rpmemstep", heat: BlockHeat.normal)
 	var sepTest = module.addBlock(func, label: b"rpmemsep", heat: BlockHeat.normal)
@@ -3515,12 +3516,12 @@ function emitSubpStoreFlag(module StdModule, block IrBlock, ids ValueMinter, sta
 	emitStoreField(module, block: block, record: state, offset: offset, value: emitConst(module, block: block, value: value, ids: ids))
 end 'emitSubpStoreFlag'
 
-let FlagSetWord = 1 as ParsedInt
-let FlagClearWord = 0 as ParsedInt
+let FlagSetWord = 1 as FullRangeInt
+let FlagClearWord = 0 as FullRangeInt
 
 // Past this member; a separator at the cursor is consumed too, and the terminator simply leaves the cursor
 // on it, which is what the loop header reads as "the list is spent".
-function emitSubpStepPastMember(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, listOffset ByteOffset, startOffset ByteOffset, lenOffset ByteOffset, separator ParsedInt) returns IrBlock
+function emitSubpStepPastMember(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, listOffset ByteOffset, startOffset ByteOffset, lenOffset ByteOffset, separator FullRangeInt) returns IrBlock
 	var skipSep = module.addBlock(func, label: b"rpadvskip", heat: BlockHeat.normal)
 	let cont = module.addBlock(func, label: b"rpadvdone", heat: BlockHeat.normal)
 
@@ -3541,7 +3542,7 @@ end 'emitSubpStepPastMember'
 
 // Assemble `<dir><dirSeparator><name><ext>` into the reused candidate buffer, NUL-terminated.
 // A zero-length directory adds neither itself nor a separator: its candidate is the name as given.
-function emitSubpBuildCandidate(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, dirSeparator ParsedInt) returns IrBlock
+function emitSubpBuildCandidate(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, dirSeparator FullRangeInt) returns IrBlock
 	var withDir = module.addBlock(func, label: b"rpcdir", heat: BlockHeat.normal)
 	var afterDirJoin = module.addBlock(func, label: b"rpcdirj", heat: BlockHeat.normal)
 	var withExt = module.addBlock(func, label: b"rpcext", heat: BlockHeat.normal)

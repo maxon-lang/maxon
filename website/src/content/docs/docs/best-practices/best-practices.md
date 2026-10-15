@@ -254,7 +254,7 @@ Use `let` unless you need to reassign the variable. This communicates intent and
 let maxRetries = 3               // constant, never changes
 let userName = getUserName()     // assigned once from a function
 
-var retryCount = 0               // needs to be incremented
+var retryCount = 0 as Count      // needs to be incremented
 var buffer = ByteArray.create()         // needs push/set operations
 ```
 
@@ -272,7 +272,7 @@ for item in items 'process'
 end 'process'
 
 // Avoid: declaring everything at the top of the function
-var score = 0
+var score = 0 as Score
 var temp = ""
 var found = false
 // ... 30 lines later ...
@@ -426,7 +426,7 @@ When you intentionally handle only a subset of enum or union cases, use `default
 
 ```maxon
 // Recoverable: caller decides what to do (Shape is a union with associated values)
-function areaOf(shape Shape) returns Real throws ShapeError
+function areaOf(shape Shape) returns FullRangeFloat throws ShapeError
 	return match shape 'calc'
 		circle(r) gives 3.14159 * r * r
 		square(s) gives s * s

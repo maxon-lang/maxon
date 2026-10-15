@@ -138,7 +138,7 @@ function main() returns ExitCode
 	let a = __Builtins.currentTimeNanos()
 	let b = __Builtins.currentTimeNanos()
 	let c = __Builtins.currentTimeNanos()
-	var score = 0
+	var score = 0 as Count
 	if b >= a 'nondecreasing1'
 		score = score + 1
 	end 'nondecreasing1'
@@ -162,7 +162,7 @@ scale; `ms-tracks-nanos` does).
 ```maxon
 function main() returns ExitCode
 	let start = __Builtins.currentTimeNanos()
-	var spins = 0
+	var spins = 0 as Count
 	while spins < 200000 'burn'
 		spins = spins + 1
 	end 'burn'
@@ -187,8 +187,8 @@ really microseconds or raw ticks would miss by three or four orders of magnitude
 function main() returns ExitCode
 	let ns = __Builtins.currentTimeNanos()
 	let ms = __Builtins.currentTimeMs()
-	let nsAsMs = ns / 1000000
-	var score = 0
+	let nsAsMs = (ns / 1000000) as InstantMs
+	var score = 0 as Count
 	if ms >= nsAsMs 'notBehind'
 		score = score + 1
 	end 'notBehind'
@@ -214,12 +214,12 @@ from the performance counter and not from the coarse tick, which is exactly the 
 "simplification" of this lowering would introduce.
 ```maxon
 function main() returns ExitCode
-	var smallest = 0
+	var smallest = 0 as DurationMs
 	var prev = __Builtins.currentTimeMs()
-	var i = 0
+	var i = 0 as Count
 	while i < 200000 'sample'
 		let now = __Builtins.currentTimeMs()
-		let delta = now - prev
+		let delta = (now - prev) as DurationMs
 		if delta > 0 'advanced'
 			if smallest == 0 or delta < smallest 'newMin'
 				smallest = delta
@@ -252,7 +252,7 @@ nanoseconds (~1.78e18) sails past 2100.
 ```maxon
 function main() returns ExitCode
 	let now = __Builtins.currentUnixTimeSeconds()
-	var score = 0
+	var score = 0 as Count
 	if now > 1735689600 'afterKnownPast'
 		score = score + 1
 	end 'afterKnownPast'
@@ -292,7 +292,7 @@ orders of magnitude larger than seconds-since-boot on any machine that has not b
 1970, so a wall clock wired to the monotonic source collapses the gap.
 ```maxon
 function main() returns ExitCode
-	let uptimeSeconds = __Builtins.currentTimeNanos() / 1000000000
+	let uptimeSeconds = (__Builtins.currentTimeNanos() / 1000000000) as UnixSeconds
 	let wallSeconds = __Builtins.currentUnixTimeSeconds()
 	if wallSeconds > uptimeSeconds + 1000000000 'differentEpochs'
 		return 5
@@ -406,7 +406,7 @@ function main() returns ExitCode
 	let first = __Builtins.threadCpuTicks()
 	let second = __Builtins.threadCpuTicks()
 	let third = __Builtins.threadCpuTicks()
-	var score = 0
+	var score = 0 as Count
 	if second >= first 'firstPair'
 		score = score + 1
 	end 'firstPair'
@@ -428,12 +428,12 @@ first.
 ```maxon
 function main() returns ExitCode
 	let before = __Builtins.threadCpuTicks()
-	var sum = 0
+	var sum = 0 as Count
 	for i in 0 upto 2000000 'spin'
 		sum = sum + i
 	end 'spin'
 	let after = __Builtins.threadCpuTicks()
-	var score = 0
+	var score = 0 as Count
 	if sum > 0 'workHappened'
 		score = score + 1
 	end 'workHappened'
@@ -466,11 +466,11 @@ typealias SpinCount = int(0 to 100000000)
 typealias SpinSum = int(0 to i64.max)
 
 function spin(n SpinCount) returns SpinSum
-	var sum = 0
+	var sum = 0 as SpinSum
 	for i in 0 upto n 'each'
-		sum = sum + i
+		sum = sum + (i as SpinSum)
 	end 'each'
-	return sum as SpinSum
+	return sum
 end 'spin'
 
 function main() returns ExitCode
@@ -487,7 +487,7 @@ function main() returns ExitCode
 	let busyCpu = busyCpuAfter - busyCpuBefore
 	let sleepCpu = sleepCpuAfter - sleepCpuBefore
 	let sleepWall = sleepWallAfter - sleepWallBefore
-	var score = 0
+	var score = 0 as Count
 	if worked > 0 'workReallyRan'
 		score = score + 1
 	end 'workReallyRan'
@@ -544,11 +544,11 @@ typealias SpinCount = int(0 to 100000000)
 typealias SpinSum = int(0 to i64.max)
 
 function spin(n SpinCount) returns SpinSum
-	var sum = 0
+	var sum = 0 as SpinSum
 	for i in 0 upto n 'each'
-		sum = sum + i
+		sum = sum + (i as SpinSum)
 	end 'each'
-	return sum as SpinSum
+	return sum
 end 'spin'
 
 function main() returns ExitCode
@@ -565,7 +565,7 @@ function main() returns ExitCode
 	let busyCpu = busyCpuAfter - busyCpuBefore
 	let sleepCpu = sleepCpuAfter - sleepCpuBefore
 	let sleepWall = sleepWallAfter - sleepWallBefore
-	var score = 0
+	var score = 0 as ExitCode
 	if worked > 0 'workReallyRan'
 		score = score + 1
 	end 'workReallyRan'
@@ -575,7 +575,7 @@ function main() returns ExitCode
 	if busyCpu > sleepCpu * 4 'cpuFollowsTheThreadNotTheClock'
 		score = score + 4
 	end 'cpuFollowsTheThreadNotTheClock'
-	return score as ExitCode
+	return score
 end 'main'
 ```
 ```exitcode
@@ -595,7 +595,7 @@ function main() returns ExitCode
 	let before = Clock.osTickMs()
 	sleep(SleepMs)
 	let after = Clock.osTickMs()
-	var score = 0
+	var score = 0 as ExitCode
 	if before > 0 'theMachineIsUp'
 		score = score + 1
 	end 'theMachineIsUp'
@@ -605,7 +605,7 @@ function main() returns ExitCode
 	if after - before >= SleepMs - TickGranularityMs 'theSleepWasCounted'
 		score = score + 4
 	end 'theSleepWasCounted'
-	return score as ExitCode
+	return score
 end 'main'
 ```
 ```exitcode

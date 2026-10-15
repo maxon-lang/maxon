@@ -1143,7 +1143,7 @@ end 'specHoldsAnyPin'
 // An unpinned case is minted a pin only in a spec that already holds one, so `--update-required`
 // over `specs/`, which carries no pins, adds none.
 function irActionFor(test SpecTest, holdsPins bool, mode SpecRunMode, effectiveTarget Target) returns IrAction
-	if not emitsTargetIr(effectiveTarget) 'noTargetIr'
+	if not emitsTargetIr(effectiveTarget) or test.expectation.expectsCompileError() 'noTargetIr'
 		return IrAction.none
 	end 'noTargetIr'
 
@@ -1545,12 +1545,7 @@ function refusalThatSkips(outcome TestOutcome, expectation SpecExpectation, comp
 		return TargetRefusal.notRefused
 	end 'itRanHere'
 
-	let compilerIsTheSubject = match expectation 'e'
-		run gives false
-		compilerError gives true
-	end 'e'
-
-	if compilerIsTheSubject 'diagnosticsAreTheAssertion'
+	if expectation.expectsCompileError() 'diagnosticsAreTheAssertion'
 		return TargetRefusal.notRefused
 	end 'diagnosticsAreTheAssertion'
 
@@ -5347,7 +5342,7 @@ function rewriteDiagnosticLine(line String, path String, lineOffset ElementIndex
 		message = "{message}{PositionSeparator}{field}"
 	end 'rejoinMessage'
 
-	return "{prefix}{token}{PositionSeparator}{sourceLine + (lineOffset as ParsedInt)}{PositionSeparator}{column}{message}"
+	return "{prefix}{token}{PositionSeparator}{sourceLine + (lineOffset as FullRangeInt)}{PositionSeparator}{column}{message}"
 end 'rewriteDiagnosticLine'
 
 // The path a /specs expectation names for this very test — RECONSTRUCTED, not pattern-matched

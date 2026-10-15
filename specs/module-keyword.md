@@ -229,7 +229,7 @@ end 'main'
 <!-- test: module-var-same-directory -->
 ```maxon
 // --- file: feature/state.maxon
-module var counter = 42
+module var counter = 42 as ExitCode
 
 // --- file: feature/main.maxon
 function main() returns ExitCode

@@ -50,8 +50,8 @@ end 'main'
 | `StringArray` | `Array with String` | Json |
 | `CharSet` | `Set with Character` | CharacterSet |
 | `FilePathArray` | `Array with FilePath` | Directory |
-| `ParsedInt` / `ParsedIntArray` | `int(i64.min to i64.max)` / `Array with ParsedInt` | Builtins |
-| `ParsedFloat` | `float(f64.min to f64.max)` | Builtins |
+| `FullRangeInt` / `FullRangeIntArray` | `int(i64.min to i64.max)` / `Array with FullRangeInt` | Builtins |
+| `FullRangeFloat` | `float(f64.min to f64.max)` | Builtins |
 | `IndentDepth` | `int(0 to u64.max)` — a nesting depth while `Json` renders | Json |
 | `RandomDraw` / `RandomBound` | `int(0 to u64.max)` / `int(1 to u64.max)` | Random |
 | `BytePos`, `GraphemeIndex` | `int(0 to u64.max)` | String |
@@ -61,12 +61,11 @@ end 'main'
 | `HashValue` | `int(0 to u32.max)` | Interfaces |
 | `IterStep` | `int(0 to u64.max)` | Interfaces |
 | `RangeBound` | `int(i64.min to i64.max)` | Range |
-| `Real` | `float(f64.min to f64.max)` | Math |
 | `HashDigest` | `bits(64)` | Hasher |
 | `SourceLineNumber` | `int(1 to i32.max)` | Builtins |
 | `FileSize`, `Timestamp` | `int(0 to u64.max)` | File |
-| `DurationMs`, `InstantMs`, `DurationNanos`, `InstantNanos`, `UnixSeconds` | `int(0 to u64.max)` | Clock |
-| `UnixNanos`, `UnixDays` | `int(i64.min to i64.max)` | Clock |
+| `DurationMs`, `InstantMs`, `DurationNanos`, `InstantNanos` | `int(0 to u64.max)` | Clock |
+| `UnixSeconds`, `UnixNanos`, `UnixDays` | `int(i64.min to i64.max)` | Clock |
 | `SchedulerProcessorCount` | `int(1 to u64.max)` | Scheduler |
 | `NetworkPort` | `int(0 to 65535)` | TcpClient; also `URL.port()` |
 | `EnvMap` | `Map with String, String` | Subprocess |
@@ -87,7 +86,7 @@ library signature mentions is `public` too and can be written down in your own c
 to declare a value you are about to pass in. They are listed here because they are part of the surface, not
 because a program normally spells them: a value cast to the alias the signature asks for is the usual reason
 to name one. Float aliases are distinct types as integer aliases are, so a value of a program's own float
-alias reaches a `Real`, `JsonFloat` or `ParsedFloat` parameter through `as`; a float literal needs no cast.
+alias reaches a `FullRangeFloat` or `JsonFloat` parameter through `as`; a float literal needs no cast.
 
 | Name | Definition | Declared by |
 |------|------------|-------------|
@@ -236,14 +235,17 @@ To print something that is not a `String`, interpolate it: `print("{count}\n")`.
 
 | Function | Returns | Description |
 |----------|---------|-------------|
-| `abs(x float)` | `float` | Absolute value. An integer argument is promoted to `float`. |
-| `sqrt(x float)` | `float` | Square root. |
+| `abs(x float)` | `float` | Absolute value. A value of an integer alias is converted to `float`. |
+| `sqrt(x float)` | `float` | Square root. A value of an integer alias is converted. |
 | `floor(x float)` | `float` | Round toward negative infinity. |
 | `ceil(x float)` | `float` | Round toward positive infinity. |
 | `round(x float)` | `float` | Round to nearest; halfway cases round to even (`round(2.5)` is `2.0`). |
-| `trunc(x float)` | `int` | Truncate toward zero; the way to turn a `float` into an `int`. |
-| `min(a float, b float)` | `float` | The smaller value. Integer arguments are promoted. |
-| `max(a float, b float)` | `float` | The larger value. Integer arguments are promoted. |
+| `trunc(x float)` | `FullRangeInt` | Truncate toward zero; the way to turn a `float` into an integer. Cast the result to reach a narrower alias. |
+| `min(a float, b float)` | `float` | The smaller value. Integer arguments are converted. |
+| `max(a float, b float)` | `float` | The larger value. Integer arguments are converted. |
+
+A float result whose range the compiler knows — from a literal, a `let` constant or another range-known
+value — carries that range and fits any float alias admitting it; any other is a `FullRangeFloat`.
 
 Trigonometry, logarithms and powers are in [Math](#math).
 
@@ -251,8 +253,8 @@ Trigonometry, logarithms and powers are in [Math](#math).
 
 | Builtin | Description |
 |---------|-------------|
-| `sizeof(TypeName)` | Storage size of a type in bytes, as a constant: `int` and `float` are 8, `bool` and `byte` are 1. |
-| `countof(TypeName)` | How many elements a fixed-size container type holds, such as `Vector with 3 Coord`. A type with no fixed element count is refused; ask an `Array` value for `count()`. |
+| `sizeof(TypeName)` | Storage size of a type in bytes, as a constant `Count`: `int` and `float` are 8, `bool` and `byte` are 1. |
+| `countof(TypeName)` | How many elements a fixed-size container type holds, as a `Count`, such as `Vector with 3 Coord`. A type with no fixed element count is refused; ask an `Array` value for `count()`. |
 | `__file__`, `__line__` | Legal only as a parameter's default value; each expands at the **call site**. |
 
 `__line__` parameters are declared `SourceLineNumber` and `__file__` parameters `String`. The file is the
@@ -679,8 +681,8 @@ Output: `1 5 9` and `4 9 -1 true`.
 
 | Member | Description |
 |--------|-------------|
-| `reserve(minCapacity)` | Ensure at least `minCapacity` slots. |
-| `resize(newLength)` | Set the length. Growing exposes zero-valued elements, so it is refused at compile time (E3106) for an element type that is not a plain value — a struct, a `String`, a nested container. Use `growFilled` or `truncate` for those. |
+| `reserve(minCapacity)` | Ensure at least `minCapacity` slots. A capacity no allocation can satisfy (`u64.max`) panics. |
+| `resize(newLength)` | Set the length. Growing exposes zero-valued elements, so it is refused at compile time (E3106) for an element type that is not a plain value — a struct, a `String`, a nested container — and for a ranged alias that excludes 0. Use `growFilled` or `truncate` for those. |
 | `truncate(newLength)` | Shorten to `newLength`, releasing the removed elements. A longer `newLength` does nothing. |
 | `growFilled(newLength, value Element)` | Lengthen to `newLength`, setting only the added elements to `value`. Grows capacity geometrically, so repeated small extensions stay amortized linear. A shorter `newLength` does nothing. |
 | `refill(newLength, value Element)` | Set the length to `newLength` and write `value` into every element, growing or shrinking. |
@@ -872,7 +874,7 @@ three elements, and `countof(Vec3)` is the constant `3`. It implements `Iterable
 
 | Member | Returns | Description |
 |--------|---------|-------------|
-| `Vector.create()` | `Vector` | Every element zero. |
+| `Vector.create()` | `Vector` | Every element zero; refused (E3106) for an element alias whose range excludes 0. |
 | `Vector from [a, b, c]` | `Vector` | A literal; the count is the literal's length. |
 | `count()` | `Count` | The fixed size, answered from the type. |
 | `get(index)` | `Element` | Throws `ArrayError.indexOutOfBounds`. |
@@ -894,7 +896,7 @@ function main() returns ExitCode
 	end 'outside'
 
 	let literal = Vector from [1, 2, 3]
-	var sum = 0
+	var sum = 0 as Count
 
 	for x in literal 'each'
 		sum = sum + x
@@ -938,7 +940,7 @@ Both implement `Iterable with (RangeBound, RangeIterator)`; `RangeBound` is `int
 ```maxon
 function main() returns ExitCode
 	let inclusive = 1 to 4
-	var total = 0
+	var total = 0 as RangeBound
 
 	for x in inclusive 'sum'
 		total = total + x
@@ -1363,7 +1365,7 @@ program: a new reader does not see input an earlier one already buffered.
 ```maxon
 function main() returns ExitCode
 	let stdin = Console.stdin()
-	var lines = 0
+	var lines = 0 as Count
 
 	while true 'read'
 		let line = try stdin.readLine() otherwise break
@@ -2664,7 +2666,7 @@ refers to its children by `JsonNodeId`. Walk a document through the `JsonDoc` ac
 
 | Method | Returns | Throws | Description |
 |--------|---------|--------|-------------|
-| `Json.parse(text String)` | `JsonDoc` | `JsonError` | Parse a document; `doc.root` is the top-level value. |
+| `Json.parse(text String)` | `JsonDoc` | `JsonError` | Parse a document; `doc.root` is the top-level value. A number reads as the float nearest its decimal value; one too large for a float is `invalidNumber`, and one too small reads as zero. |
 | `Json.stringify(doc JsonDoc)` | `String` | — | Compact output of the tree at `doc.root`. NaN and infinities are written as `null`. |
 | `Json.stringifyPrettyNode(doc JsonDoc, root JsonNodeId)` | `String` | — | Indented output (two spaces per level) of the subtree at `root`. |
 | `Json.quote(text String)` | `String` | — | `text` as one quoted JSON string value, with `"`, `\` and control characters escaped. |
@@ -2837,7 +2839,7 @@ Readings are always in nanoseconds, but two back-to-back readings can be equal w
 | `WallClock.rfc3339Millis(nanos UnixNanos)` | `String` | `nanos` as an RFC 3339 UTC time with milliseconds: `2023-11-14T22:13:20.123Z`. |
 | `WallClock.rfc3339Nanos(nanos UnixNanos)` | `String` | The same with nanoseconds: `2023-11-14T22:13:20.123456789Z`. |
 
-Every reading and format is in UTC. `UnixSeconds` is `int(0 to u64.max)`; `UnixNanos` is signed, negative
+Every reading and format is in UTC. `UnixSeconds` and `UnixNanos` are signed, negative
 before 1970. The wall clock can step backwards (an NTP correction, a resumed virtual machine), so measure
 durations with `Clock`.
 
@@ -3094,28 +3096,28 @@ It prints a number from 1 to 6.
 
 ## Math
 
-`Math` provides the elementary functions over `Real`, which is `float(f64.min to f64.max)`. The rounding and
+`Math` provides the elementary functions over `FullRangeFloat`, which is `float(f64.min to f64.max)`. The rounding and
 `sqrt`/`abs`/`min`/`max` builtins are in [Core Functions](#core-functions).
 
 | Method | Returns | Description |
 |--------|---------|-------------|
-| `Math.sin(x Real)` | `Real` | Sine of radians. |
-| `Math.cos(x Real)` | `Real` | Cosine of radians. |
-| `Math.tan(x Real)` | `Real` | Tangent of radians. |
-| `Math.atan(z Real)` | `Real` | Arc tangent. |
-| `Math.atan2(y Real, x Real)` | `Real` | The angle of `(x, y)`, in `[-π, π]`. |
-| `Math.exp(x Real)` | `Real` | e raised to `x`. |
-| `Math.log(x Real)` | `Real` | Natural logarithm. |
-| `Math.log2(x Real)` | `Real` | Base-2 logarithm. |
-| `Math.log10(x Real)` | `Real` | Base-10 logarithm. Exact at every power of ten a double represents exactly: `log10(10^k)` is `k` for `k` in 0 to 22. |
-| `Math.pow(base Real, exponent Real)` | `Real` | `base` raised to `exponent`, following IEEE 754's special cases (`pow(0.0, -1.0)` is infinity; `pow(x, 0)` and `pow(1, y)` are 1 even for NaN). |
-| `Math.hasNegativeSignBit(z Real)` | `bool` | True when the sign bit is set, including `-0.0`, which no comparison can distinguish from `0.0`. |
-| `Math.isNaN(z Real)` | `bool` | True for every NaN, whatever its bit pattern. |
-| `Math.positiveInfinity()` | `Real` | +∞. |
-| `Math.negativeInfinity()` | `Real` | −∞. |
-| `Math.quietNaN()` | `Real` | A quiet NaN. |
-| `Math.bitsOf(x Real)` | `FloatBits` | The 64-bit IEEE 754 pattern of `x`, as a signed word: `Math.bitsOf(1.0)` is `0x3FF0000000000000`, and every negative value, `-0.0` included, has a negative pattern. |
-| `Math.fromBits(bits FloatBits)` | `Real` | The double whose IEEE 754 pattern is `bits`; the inverse of `bitsOf`. |
+| `Math.sin(x FullRangeFloat)` | `FullRangeFloat` | Sine of radians. |
+| `Math.cos(x FullRangeFloat)` | `FullRangeFloat` | Cosine of radians. |
+| `Math.tan(x FullRangeFloat)` | `FullRangeFloat` | Tangent of radians. |
+| `Math.atan(z FullRangeFloat)` | `FullRangeFloat` | Arc tangent. |
+| `Math.atan2(y FullRangeFloat, x FullRangeFloat)` | `FullRangeFloat` | The angle of `(x, y)`, in `[-π, π]`. |
+| `Math.exp(x FullRangeFloat)` | `FullRangeFloat` | e raised to `x`. |
+| `Math.log(x FullRangeFloat)` | `FullRangeFloat` | Natural logarithm. |
+| `Math.log2(x FullRangeFloat)` | `FullRangeFloat` | Base-2 logarithm. |
+| `Math.log10(x FullRangeFloat)` | `FullRangeFloat` | Base-10 logarithm. Exact at every power of ten a double represents exactly: `log10(10^k)` is `k` for `k` in 0 to 22. |
+| `Math.pow(base FullRangeFloat, exponent FullRangeFloat)` | `FullRangeFloat` | `base` raised to `exponent`, following IEEE 754's special cases (`pow(0.0, -1.0)` is infinity; `pow(x, 0)` and `pow(1, y)` are 1 even for NaN). |
+| `Math.hasNegativeSignBit(z FullRangeFloat)` | `bool` | True when the sign bit is set, including `-0.0`, which no comparison can distinguish from `0.0`. |
+| `Math.isNaN(z FullRangeFloat)` | `bool` | True for every NaN, whatever its bit pattern. |
+| `Math.positiveInfinity()` | `FullRangeFloat` | +∞. |
+| `Math.negativeInfinity()` | `FullRangeFloat` | −∞. |
+| `Math.quietNaN()` | `FullRangeFloat` | A quiet NaN. |
+| `Math.bitsOf(x FullRangeFloat)` | `FloatBits` | The 64-bit IEEE 754 pattern of `x`, as a signed word: `Math.bitsOf(1.0)` is `0x3FF0000000000000`, and every negative value, `-0.0` included, has a negative pattern. |
+| `Math.fromBits(bits FloatBits)` | `FullRangeFloat` | The double whose IEEE 754 pattern is `bits`; the inverse of `bitsOf`. |
 
 `FloatBits` is `int(i64.min to i64.max)`.
 
@@ -3150,7 +3152,7 @@ Output: `0.0 1.0 3.0 1024.0` and `0.7853981633974483 true`.
 | `compare(other Self)` | `Ordering` | Through `Comparable`. |
 | `toString()` | `String` | The same text as interpolation. |
 | `clone()` | `Self` | The value itself. |
-| `int.fromString(input String)` | `int` | Throws `ParseError.invalidFormat`; likewise `float.fromString`, `bool.fromString`, `byte.fromString`. |
+| `int.fromString(input String)` | `FullRangeInt` | Takes one optional leading `-` and decimal digits; throws `ParseError.invalidFormat` for anything else and for a value outside `i64.min` to `i64.max`. Likewise `float.fromString`, `bool.fromString`, `byte.fromString`. |
 
 ```maxon
 function main() returns ExitCode

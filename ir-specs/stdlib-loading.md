@@ -48,9 +48,9 @@ simplify it back.** A folded version of this program passes its exit code and ga
 precisely the failure mode the paragraph above this one is about, arriving by a second route.
 ```maxon
 function main() returns ExitCode
-	var scale = 12.5
+	var scale = 12.5 as FullRangeFloat
 	let floor = 1.5
-	var spins = 0
+	var spins = 0 as FullRangeInt
 	while spins < 1 'spin'
 		scale = scale + floor
 		spins = spins + 1

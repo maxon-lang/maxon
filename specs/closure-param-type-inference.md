@@ -88,7 +88,7 @@ applied — so this fails on its VALUE if the refusal below ever over-reaches.
 function main() returns ExitCode
 	let nums = [1, 2, 3]
 	let out = nums.map(function(a) gives a * 10)
-	var sum = 0
+	var sum = 0 as FullRangeInt
 	for n in out 'loop'
 		sum = sum + n
 	end 'loop'
@@ -112,7 +112,7 @@ typealias Integer = int(i64.min to i64.max)
 function main() returns ExitCode
 	let nums = [1, 2, 3]
 	let out = nums.map(function(a Integer, b Integer) gives a + b)
-	var sum = 0
+	var sum = 0 as Integer
 	for n in out 'loop'
 		sum = sum + n
 	end 'loop'
@@ -121,7 +121,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:6:17: argument type mismatch for 'transform': expected 'fn(int) returns int', got 'fn(int, int) returns int'
+error E3005: <fragment>:6:17: argument type mismatch for 'transform': expected 'fn(int) returns int', got 'fn(Integer, Integer) returns int'
 ```
 
 <!-- test: error-a-transform-that-declares-no-parameter-is-refused-too -->
@@ -159,7 +159,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:10:17: argument type mismatch for 'transform': expected 'fn(int) returns int', got 'fn(int, int) returns int'
+error E3005: <fragment>:10:17: argument type mismatch for 'transform': expected 'fn(int) returns int', got 'fn(Integer, Integer) returns Integer'
 ```
 
 <!-- test: error-a-second-untyped-closure-parameter-is-uninferrable -->

@@ -1216,7 +1216,7 @@ function main() returns ExitCode
 	a.push(3)
 	a.push(4)
 	let w = IntWalker.create(a)
-	var total = 0
+	var total = 0 as Integer
 	for x in w 'walk'
 		total = total + x
 	end 'walk'
@@ -1373,7 +1373,7 @@ function main() returns ExitCode
 	a.push(3)
 	a.push(4)
 	let b = B.create(a)
-	var total = 0
+	var total = 0 as Integer
 	for x in b 'walk'
 		total = total + x
 	end 'walk'

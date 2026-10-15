@@ -100,7 +100,7 @@ function main() returns ExitCode
 	// Busy, so this machine does not go idle: the other machine settles into the poller on the 600 ms
 	// deadline first, and only an interrupt can end that wait at 50.
 	let spinFrom = Clock.nowMs()
-	var spins = 0
+	var spins = 0 as Integer
 
 	while Clock.elapsedMs(spinFrom) < 10 'spin'
 		spins = spins + 1
@@ -148,7 +148,7 @@ end 'Sleeper'
 
 function spinMs(ms Integer) returns Integer
 	let began = Clock.nowMs()
-	var spins = 0
+	var spins = 0 as Integer
 
 	while (Clock.elapsedMs(began) as Integer) < ms 'spin'
 		spins = spins + 1

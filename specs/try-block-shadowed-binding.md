@@ -76,7 +76,7 @@ function callB(x bool) returns Score throws ErrB
 end 'callB'
 
 function main() returns ExitCode
-    var sum = 0
+    var sum = 0 as Score
     try 'work'
         let a = callA(true)
         let b = callB(false)
@@ -134,7 +134,7 @@ function callB(x bool) returns Score throws ErrB
 end 'callB'
 
 function main() returns ExitCode
-    var sum = 0
+    var sum = 0 as Score
     try 'work'
         let a = callA(true)
         let b = callB(false)
@@ -185,7 +185,7 @@ function callB(x bool) returns Score throws ErrB
 end 'callB'
 
 function main() returns ExitCode
-    var sum = 0
+    var sum = 0 as Score
     try 'work'
         let a = callA(false)
         let b = callB(true)
@@ -241,7 +241,7 @@ function callB(x bool) returns Score throws ErrB
 end 'callB'
 
 function main() returns ExitCode
-    var sum = 0
+    var sum = 0 as Score
     try 'work'
         let a = callA(true)
         let b = callB(false)
@@ -304,7 +304,7 @@ function callB(x bool) returns Score throws ErrB
 end 'callB'
 
 function main() returns ExitCode
-    var sum = 0
+    var sum = 0 as Score
     try 'work'
         let a = callA(true)
         let b = callB(false)
@@ -360,7 +360,7 @@ function callB(x bool) returns Score throws ErrB
 end 'callB'
 
 function main() returns ExitCode
-    var sum = 0
+    var sum = 0 as Score
     try 'work'
         let a = callA(true)
         let b = callB(false)

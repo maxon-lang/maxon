@@ -104,7 +104,7 @@ function main() returns ExitCode
 		sleep(300)
 		let elapsed = Clock.elapsedMs(start)
 		let probed = await worker
-		var score = 0
+		var score = 0 as Probe
 		if elapsed >= 250 'slept'
 				score = score + 1
 		end 'slept'
@@ -131,7 +131,7 @@ function main() returns ExitCode
 		let start = Clock.nowMs()
 		sleep(300)
 		let elapsed = Clock.elapsedMs(start)
-		var score = 0
+		var score = 0 as FullRangeInt
 		if elapsed >= 250 'slept'
 				score = score + 1
 		end 'slept'

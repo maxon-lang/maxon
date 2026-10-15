@@ -6,6 +6,8 @@ module typealias WitnessSlotKey = int(0 to u64.max)
 typealias WitnessImplsMemo = Map with (WitnessSlotKey, CallLandingBodies)
 typealias FunctionValueBodiesMemo = Map with (ByteArray, CallLandingBodies)
 typealias InstanceRecordMemo = Map with (GenericInstanceId, bool)
+typealias FunctionRefNameMap = Map with (ValueId, ByteArray)
+typealias FunctionRefNamesByFunc = Map with (ElementIndex, FunctionRefNameMap)
 
 let WitnessSlotKeyShift = 16 as WitnessSlotKey
 
@@ -144,8 +146,8 @@ function storeThroughRuntimeShape(walker SummaryCallWalker, func IrFunction, arg
 	end 'eachReceiver'
 end 'storeThroughRuntimeShape'
 
-// A least fixpoint: every body is traced once, then the callers of each body whose summary grew are traced
-// again until nothing grows.
+// A least fixpoint: every body `tracesFirst` admits is traced once, then the callers of each body whose summary
+// grew are traced again until nothing grows.
 module function settleSummaries(project Project, order CsrColumn, bodies SummarizedBodies, dependencies CallDependencies) throws CompileError
 	let funcCount = order.count()
 	let ranks = ranksOf(order)
@@ -182,7 +184,7 @@ module function settleSummaries(project Project, order CsrColumn, bodies Summari
 
 	while head < worklist.count() as CsrIndex 'drain'
 		try requireStillWanted(project)
-		let calleeIndex = try worklist.get(head as ElementIndex) otherwise panic("settleSummaries: worklist.get OOB at {head}")
+		let calleeIndex = try worklist.get(head) otherwise panic("settleSummaries: worklist.get OOB at {head}")
 		head = head + 1
 		try queued.set(calleeIndex, value: false) otherwise panic("settleSummaries: queued.set OOB at {calleeIndex}")
 
@@ -303,11 +305,14 @@ module type CallSummaryIndex
 	var functionRefBodies as CallLandingBodies
 	var functionRefBodiesGathered as bool
 	var functionValueBodies as FunctionValueBodiesMemo
+	var callbackFlows as CallbackFlows
+	var functionRefBodiless as NameRoster
+	var functionRefNames as FunctionRefNamesByFunc
 	var instanceHoldsARecord as InstanceRecordMemo
 	var instanceSharesFunctions as InstanceRecordMemo
 
 	module static function create(project Project, module MaxonModule, signatures ProgramSignatures, funcIndexByName FuncIndexByName, funcCount ElementIndex) returns CallSummaryIndex
-		return Self{project: project, module: module, signatures: signatures, funcIndexByName: funcIndexByName, sites: CallSites.create(funcCount), conformers: ConformersByInterface.create(), witnessSlots: WitnessSlotsByDeclIndex.create(), witnessImpls: WitnessImplsMemo.create(), functionRefBodies: CallLandingBodies.create(), functionRefBodiesGathered: false, functionValueBodies: FunctionValueBodiesMemo.create(), instanceHoldsARecord: InstanceRecordMemo.create(), instanceSharesFunctions: InstanceRecordMemo.create()}
+		return Self{project: project, module: module, signatures: signatures, funcIndexByName: funcIndexByName, sites: CallSites.create(funcCount), conformers: ConformersByInterface.create(), witnessSlots: WitnessSlotsByDeclIndex.create(), witnessImpls: WitnessImplsMemo.create(), functionRefBodies: CallLandingBodies.create(), functionRefBodiesGathered: false, functionValueBodies: FunctionValueBodiesMemo.create(), callbackFlows: CallbackFlows.create(), functionRefBodiless: NameRoster.create(), functionRefNames: FunctionRefNamesByFunc.create(), instanceHoldsARecord: InstanceRecordMemo.create(), instanceSharesFunctions: InstanceRecordMemo.create()}
 	end 'create'
 
 	module function summarizedCalleeIndex(callee ByteArray) returns ElementIndex throws AbsentError
@@ -348,9 +353,12 @@ module type CallSummaryIndex
 		return try self.project.funcSignatures.get(callee) otherwise panic("CallSummaryIndex.signatureOf: '{String.from(callee)}' is no declared function — the caller asked `summarizedCalleeIndex` first")
 	end 'signatureOf'
 
+	module function witnessSlotOf(methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex) returns CollectedInterfaceMethod
+		return witnessSlotAt(self.signatures, interfaces: self.signatures.interfaceMap(), witnessSlots: self.witnessSlots, interfaceDeclIndex: interfaceDeclIndex, methodIndex: methodIndex)
+	end 'witnessSlotOf'
+
 	module function witnessMethodName(methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex) returns String
-		let slot = witnessSlotAt(self.signatures, interfaces: self.signatures.interfaceMap(), witnessSlots: self.witnessSlots, interfaceDeclIndex: interfaceDeclIndex, methodIndex: methodIndex)
-		return String.from(slot.method.name)
+		return String.from(self.witnessSlotOf(methodIndex, interfaceDeclIndex: interfaceDeclIndex).method.name)
 	end 'witnessMethodName'
 
 	module function implsOf(methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex) returns CallLandingBodies
@@ -365,18 +373,40 @@ module type CallSummaryIndex
 		return found
 	end 'implsOf'
 
-	// A call through a function value lands only on a function used as a value whose shape agrees with the
-	// callee value's function type — the same agreement every door a function value passes through asks.
+	// The narrowest answer that holds. A callee a `functionRef` of `func` minted lands on that one
+	// body. A parameter whose function type mentions a type parameter lands on the bodies its callers
+	// hand it (`CallbackFlows.landingOf`), because the shape answer admits every function value that
+	// agrees under some instantiation. Any other callee lands on the shape answer.
 	module function functionValueBodiesCalledThrough(func IrFunction, callee ValueId) returns CallLandingBodies
-		var registry = functionTypeRegistryOf(self.project)
-		let calleeType = functionTypeNameOf(registry, nameId: try func.valueNameIds.get(callee) otherwise panic("CallSummaryIndex.functionValueBodiesCalledThrough: v{callee} of '{String.from(func.name)}' has no type name — the type columns are minted in lockstep"))
+		if let target = try self.functionRefTargetOf(func, value: callee) 'aFunctionRefResult'
+			if isFunctionValueBodyName(target, funcSignatures: self.project.funcSignatures) 'aFunctionValueBody'
+				if let index = try self.funcIndexByName.get(target) 'theExactBody'
+					var exact = CallLandingBodies.create()
+					exact.impls.push(index)
+					return exact
+				end 'theExactBody'
+			end 'aFunctionValueBody'
+		end 'aFunctionRefResult'
 
-		let memoKey = functionValueBodiesKey(calleeType, readerFilePath: func.sourceFilePath)
+		if let position = try self.callbackParameterPositionOf(func, callee: callee) 'aCallbackTypedOverATypeParameter'
+			var flows = self.callbackFlows
+			return flows.landingOf(self.project, module: self.module, calls: self, funcIndex: self.functionIndexOf(func.name), position: position)
+		end 'aCallbackTypedOverATypeParameter'
+
+		return self.functionValueBodiesOfType(functionValueOwnTypeName(self.project, func: func, value: callee), readerFilePath: func.sourceFilePath)
+	end 'functionValueBodiesCalledThrough'
+
+	// A call through a function value lands only on a function used as a value whose shape agrees with the
+	// callee value's function type under some instantiation of the type parameters that type mentions.
+	// A type that mentions none asks the agreement every door a function value passes through asks.
+	module function functionValueBodiesOfType(calleeType ByteArray, readerFilePath FilePath) returns CallLandingBodies
+		let memoKey = functionValueBodiesKey(calleeType, readerFilePath: readerFilePath)
 
 		if let memoized = try self.functionValueBodies.get(memoKey) 'asked'
 			return memoized
 		end 'asked'
 
+		var registry = functionTypeRegistryOf(self.project)
 		self.gatherFunctionRefBodies()
 		let calleeShape = requireFunctionShapeOf(registry, name: calleeType, side: "called")
 		var found = CallLandingBodies.create()
@@ -385,20 +415,86 @@ module type CallSummaryIndex
 
 		for index in self.functionRefBodies.impls 'eachBody'
 			match declaredFunctionShapeOf(registry, name: self.functionAt(index).name) 'bodyShape'
-				declared(bodyShape) then self.admitBodyOfShape(index, bodyShape: bodyShape, calleeShape: calleeShape, registry: registry, readerFilePath: func.sourceFilePath, into: found)
+				declared(bodyShape) then self.admitBodyOfShape(index, bodyShape: bodyShape, calleeShape: calleeShape, registry: registry, readerFilePath: readerFilePath, into: found)
 				undeclared then found.impls.push(index)
 			end 'bodyShape'
 		end 'eachBody'
 
 		self.functionValueBodies.upsert(memoKey, value: found)
 		return found
-	end 'functionValueBodiesCalledThrough'
+	end 'functionValueBodiesOfType'
 
 	function admitBodyOfShape(index ElementIndex, bodyShape FunctionShape, calleeShape FunctionShape, registry FunctionTypeRegistry, readerFilePath FilePath, into CallLandingBodies)
-		if functionShapesAgree(registry, signatures: self.signatures, declared: calleeShape, got: bodyShape, readerFilePath: readerFilePath) 'agrees'
+		if functionShapesAgreeUnderSomeInstantiation(registry, signatures: self.signatures, declared: calleeShape, got: bodyShape, readerFilePath: readerFilePath) 'agrees'
 			into.impls.push(index)
 		end 'agrees'
 	end 'admitBodyOfShape'
+
+	module function closureBodiesOf(bodies CallLandingBodies) returns CallLandingBodies
+		var found = CallLandingBodies.create()
+		found.unresolved = bodies.unresolved
+		found.unresolvedMayStore = bodies.unresolvedMayStore
+
+		for index in bodies.impls 'eachBody'
+			if isLiftedClosureName(self.functionAt(index).name) 'takesItsOwnRecord'
+				found.impls.push(index)
+			end 'takesItsOwnRecord'
+		end 'eachBody'
+
+		return found
+	end 'closureBodiesOf'
+
+	module function functionRefTargetOf(func IrFunction, value ValueId) returns ByteArray throws AbsentError
+		let funcIndex = self.functionIndexOf(func.name)
+
+		if let names = try self.functionRefNames.get(funcIndex) 'gathered'
+			return try names.get(value) otherwise throw AbsentError.absent
+		end 'gathered'
+
+		var names = FunctionRefNameMap.create()
+
+		for opIdx in self.module.liveOpIndices(func) 'eachOp'
+			let op = try self.module.ops.get(opIdx) otherwise panic("CallSummaryIndex.functionRefTargetOf: opIdx {opIdx} from liveOpIndices is not in module.ops")
+
+			if maxonOpCalleeKind(op) == MaxonCalleeKind.functionValue 'aFunctionRef'
+				names.upsert(try maxonOpDefinedValue(op) otherwise panic("CallSummaryIndex.functionRefTargetOf: a `functionRef` defines its result"), value: maxonOpCalleeName(op).clone())
+			end 'aFunctionRef'
+		end 'eachOp'
+
+		self.functionRefNames.upsert(funcIndex, value: names)
+		return try names.get(value) otherwise throw AbsentError.absent
+	end 'functionRefTargetOf'
+
+	module function callbackFlowsOf() returns CallbackFlows
+		return self.callbackFlows
+	end 'callbackFlowsOf'
+
+	module function callbackParameterPositionOf(func IrFunction, callee ValueId) returns ParamCount throws AbsentError
+		if not self.callsATypeParameterCallback(func, callee: callee) 'notACallbackParameter'
+			throw AbsentError.absent
+		end 'notACallbackParameter'
+
+		return paramPositionOfValueId(callee)
+	end 'callbackParameterPositionOf'
+
+	module function callsATypeParameterCallback(func IrFunction, callee ValueId) returns bool
+		if callee >= valueIdAtParamPosition(func.paramCount) 'notAParameter'
+			return false
+		end 'notAParameter'
+
+		var registry = functionTypeRegistryOf(self.project)
+		return functionShapeMentionsATypeParameter(registry, signatures: self.signatures, shape: requireFunctionShapeOf(registry, name: functionValueOwnTypeName(self.project, func: func, value: callee), side: "called"))
+	end 'callsATypeParameterCallback'
+
+	module function bodilessFunctionValueNames() returns NameRoster
+		self.gatherFunctionRefBodies()
+		return self.functionRefBodiless
+	end 'bodilessFunctionValueNames'
+
+	module function allFunctionValueBodies() returns FuncIndexArray
+		self.gatherFunctionRefBodies()
+		return self.functionRefBodies.impls
+	end 'allFunctionValueBodies'
 
 	function gatherFunctionRefBodies()
 		if self.functionRefBodiesGathered 'gathered'
@@ -412,7 +508,7 @@ module type CallSummaryIndex
 
 		for op in self.module.ops 'eachOp'
 			if maxonOpCalleeKind(op) == MaxonCalleeKind.functionValue 'aFunctionRef'
-				noteFunctionRefBody(maxonOpCalleeName(op), byName: self.funcIndexByName, named: named, into: bodies)
+				noteFunctionRefBody(maxonOpCalleeName(op), byName: self.funcIndexByName, named: named, funcSignatures: self.project.funcSignatures, into: bodies, bodiless: self.functionRefBodiless)
 			end 'aFunctionRef'
 		end 'eachOp'
 
@@ -522,6 +618,14 @@ module type CallSiteCursor
 		end 'outOfStep'
 	end 'requireMetEveryCallSite'
 
+	module function position() returns ElementIndex
+		return self.cursor
+	end 'position'
+
+	module function seek(row ElementIndex)
+		self.cursor = row
+	end 'seek'
+
 	module function takeCallSite() returns ElementIndex
 		let site = self.cursor
 		self.cursor = site + 1
@@ -556,7 +660,7 @@ module type CallSiteCursor
 		self.argFills.clear()
 
 		for i in 0 upto argCount 'eachArg'
-			if let slot = try self.resolution.sites.argPositionAt(row, argIndex: i) 'fillsAParameter'
+			if let slot = try self.resolution.sites.argPositionAt(row, argIndex: i as ParamCount) 'fillsAParameter'
 				self.pushFilledArg(slot)
 			end 'fillsAParameter' else 'fillsNone'
 				self.pushUnfilledArg(i)
@@ -571,10 +675,10 @@ module type CallSiteCursor
 		for i in 0 upto args.count() 'eachArg'
 			let label = try argLabels.get(i) otherwise panic("CallSiteCursor.slotNamedArgs: argLabels.get OOB at {i} — a call's argument columns are parallel by construction")
 
-			if let slot = try argSlotPosition(sig.paramNames, argIndex: i, label: label) 'fillsAParameter'
+			if let slot = try argSlotPosition(sig.paramNames, argIndex: i as ParamCount, label: label) 'fillsAParameter'
 				self.pushFilledArg(slot)
 			end 'fillsAParameter' else 'fillsNone'
-				self.pushUnfilledArg(i)
+				self.pushUnfilledArg(i as ParamCount)
 			end 'fillsNone'
 		end 'eachArg'
 	end 'slotNamedArgs'

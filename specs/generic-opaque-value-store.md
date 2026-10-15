@@ -2767,7 +2767,7 @@ typealias CountBox = Box with Count
 
 function main() returns ExitCode
 	let b = CountBox.make(10)
-	var s = 20
+	var s = 20 as Count
 	b.setOnce(s)
 	b.setOnce(160)
 	print("once {s}\n")
@@ -4659,7 +4659,7 @@ end 'Cell'
 typealias StrCell = Cell with String
 
 function main() returns ExitCode
-	var seed = 0
+	var seed = 0 as Count
 
 	while seed < 3 'grow'
 		seed = seed + 1

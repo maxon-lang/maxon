@@ -91,23 +91,23 @@ array); the counter `i`, read by all sixteen updates plus the condition plus its
 increment, ranks last. Each value points at its declaration's source span.
 ```maxon
 function hot(_ Integer) returns Integer
-	var s1 = 1
-	var s2 = 2
-	var s3 = 3
-	var s4 = 4
-	var s5 = 5
-	var s6 = 6
-	var s7 = 7
-	var s8 = 8
-	var s9 = 9
-	var s10 = 10
-	var s11 = 11
-	var s12 = 12
-	var s13 = 13
-	var s14 = 14
-	var s15 = 15
-	var s16 = 16
-	var i = 0
+	var s1 = 1 as Integer
+	var s2 = 2 as Integer
+	var s3 = 3 as Integer
+	var s4 = 4 as Integer
+	var s5 = 5 as Integer
+	var s6 = 6 as Integer
+	var s7 = 7 as Integer
+	var s8 = 8 as Integer
+	var s9 = 9 as Integer
+	var s10 = 10 as Integer
+	var s11 = 11 as Integer
+	var s12 = 12 as Integer
+	var s13 = 13 as Integer
+	var s14 = 14 as Integer
+	var s15 = 15 as Integer
+	var s16 = 16 as Integer
+	var i = 0 as Integer
 	while i < 5 'loop'
 		s1 = s1 + i
 		s2 = s2 + i
@@ -171,35 +171,35 @@ error E5001: the loop at <fragment>:21 needs 3 more register(s) than are availab
 arm64 allocates from 25 GPRs (x0-x14 ∪ x19-x28), not x64's 14 — x15 is the register the asynchronous-preemption trampoline returns through, since this ISA has no stack-popping return and every other scratch is spoken for, so an overflow needs more live values than `hot-loop-overflow`. Twenty-eight accumulators `s1`..`s28` are all updated every iteration, plus the counter `i` — twenty-nine values live at the loop header against a pool of twenty-five. The condition adds nothing: `i < N` lowers to a fused `cmp`+`b.cond`, materializing no boolean into a GPR. The deficit is exactly 4 (29 − 25), reported against the FULL arm64 pool, and each accumulator points at its declaration span.
 ```maxon
 function hot(_ Integer) returns Integer
-	var s1 = 1
-	var s2 = 2
-	var s3 = 3
-	var s4 = 4
-	var s5 = 5
-	var s6 = 6
-	var s7 = 7
-	var s8 = 8
-	var s9 = 9
-	var s10 = 10
-	var s11 = 11
-	var s12 = 12
-	var s13 = 13
-	var s14 = 14
-	var s15 = 15
-	var s16 = 16
-	var s17 = 17
-	var s18 = 18
-	var s19 = 19
-	var s20 = 20
-	var s21 = 21
-	var s22 = 22
-	var s23 = 23
-	var s24 = 24
-	var s25 = 25
-	var s26 = 26
-	var s27 = 27
-	var s28 = 28
-	var i = 0
+	var s1 = 1 as Integer
+	var s2 = 2 as Integer
+	var s3 = 3 as Integer
+	var s4 = 4 as Integer
+	var s5 = 5 as Integer
+	var s6 = 6 as Integer
+	var s7 = 7 as Integer
+	var s8 = 8 as Integer
+	var s9 = 9 as Integer
+	var s10 = 10 as Integer
+	var s11 = 11 as Integer
+	var s12 = 12 as Integer
+	var s13 = 13 as Integer
+	var s14 = 14 as Integer
+	var s15 = 15 as Integer
+	var s16 = 16 as Integer
+	var s17 = 17 as Integer
+	var s18 = 18 as Integer
+	var s19 = 19 as Integer
+	var s20 = 20 as Integer
+	var s21 = 21 as Integer
+	var s22 = 22 as Integer
+	var s23 = 23 as Integer
+	var s24 = 24 as Integer
+	var s25 = 25 as Integer
+	var s26 = 26 as Integer
+	var s27 = 27 as Integer
+	var s28 = 28 as Integer
+	var i = 0 as Integer
 	while i < 5 'loop'
 		s1 = s1 + i
 		s2 = s2 + i
@@ -308,22 +308,22 @@ pool is the subject, exactly as this file's header says. `main` reaches `parseFl
 called-once inliner leaves it a function; spliced into `main`, `i < 0` folds and the loop vanishes.
 ```maxon
 function parseFlags(argc Integer) returns Integer
-	var f0 = 0
-	var f1 = 0
-	var f2 = 0
-	var f3 = 0
-	var f4 = 0
-	var f5 = 0
-	var f6 = 0
-	var f7 = 0
-	var f8 = 0
-	var f9 = 0
-	var f10 = 0
-	var f11 = 0
-	var f12 = 0
-	var f13 = 0
-	var f14 = 0
-	var i = 0
+	var f0 = 0 as Integer
+	var f1 = 0 as Integer
+	var f2 = 0 as Integer
+	var f3 = 0 as Integer
+	var f4 = 0 as Integer
+	var f5 = 0 as Integer
+	var f6 = 0 as Integer
+	var f7 = 0 as Integer
+	var f8 = 0 as Integer
+	var f9 = 0 as Integer
+	var f10 = 0 as Integer
+	var f11 = 0 as Integer
+	var f12 = 0 as Integer
+	var f13 = 0 as Integer
+	var f14 = 0 as Integer
+	var i = 0 as Integer
 	while i < argc 'scan'
 		if i == 0 'k0'
 			f0 = 1
@@ -421,12 +421,12 @@ function sink(x Integer) returns Integer
 end 'sink'
 
 function hotCall(_ Integer) returns Integer
-	var s1 = 1
-	var s2 = 2
-	var s3 = 3
-	var s4 = 4
-	var s5 = 5
-	var i = 0
+	var s1 = 1 as Integer
+	var s2 = 2 as Integer
+	var s3 = 3 as Integer
+	var s4 = 4 as Integer
+	var s5 = 5 as Integer
+	var i = 0 as Integer
 	while i < 5 'loop'
 		let r = sink(i)
 		s1 = s1 + r
@@ -685,8 +685,8 @@ function rescued(p Integer) returns Integer
 	let k14 = p + 14
 	let k15 = p + 15
 	let k16 = p + 16
-	var sum = 0
-	var i = 0
+	var sum = 0 as Integer
+	var i = 0 as Integer
 	while i < 5 'loop'
 		sum = sum + i
 		i = i + 1
@@ -1032,20 +1032,20 @@ reaches `hot` from two sites so the called-once inliner leaves it a function; sp
 is a constant and the fourteen values fit the pool.
 ```maxon
 function hot(p Integer) returns Integer
-	var s1 = 1
-	var s2 = 2
-	var s3 = 3
-	var s4 = 4
-	var s5 = 5
-	var s6 = 6
-	var s7 = 7
-	var s8 = 8
-	var s9 = 9
-	var s10 = 10
-	var s11 = 11
-	var s12 = 12
-	var s13 = 13
-	var i = 0
+	var s1 = 1 as Integer
+	var s2 = 2 as Integer
+	var s3 = 3 as Integer
+	var s4 = 4 as Integer
+	var s5 = 5 as Integer
+	var s6 = 6 as Integer
+	var s7 = 7 as Integer
+	var s8 = 8 as Integer
+	var s9 = 9 as Integer
+	var s10 = 10 as Integer
+	var s11 = 11 as Integer
+	var s12 = 12 as Integer
+	var s13 = 13 as Integer
+	var i = 0 as Integer
 	while i < 5 'loop'
 		s1 = s1 + i + p
 		s2 = s2 + i
@@ -1231,33 +1231,33 @@ func @main {
 The arm64 twin of `hot-loop-param-used`: a PARAMETER read every iteration is part of the hot working set and must resolve to its declaration span through `ParamOriginTable` (it is minted by no op) rather than trip the Rule-3 panic. `p` is read in `s1 = s1 + i + p`, so with twenty-six accumulators and the counter it is one of twenty-eight values live against arm64's 25-GPR pool. It ranks first (`<fragment>:2:14` — the `p` token); the counter `i` ranks last. Deficit 3. `main` reaches `hot` from two sites so the called-once inliner leaves it a function; spliced into `main`, `p` would fold to a constant and the diagnostic would be a DIFFERENT one — twenty-seven values and deficit 2, with every span pointing into `main`. The x64 twin fits its pool outright when spliced; this one does not, so the second site is what keeps the case pinning `hot`'s own shape rather than what makes it compile.
 ```maxon
 function hot(p Integer) returns Integer
-	var s1 = 1
-	var s2 = 2
-	var s3 = 3
-	var s4 = 4
-	var s5 = 5
-	var s6 = 6
-	var s7 = 7
-	var s8 = 8
-	var s9 = 9
-	var s10 = 10
-	var s11 = 11
-	var s12 = 12
-	var s13 = 13
-	var s14 = 14
-	var s15 = 15
-	var s16 = 16
-	var s17 = 17
-	var s18 = 18
-	var s19 = 19
-	var s20 = 20
-	var s21 = 21
-	var s22 = 22
-	var s23 = 23
-	var s24 = 24
-	var s25 = 25
-	var s26 = 26
-	var i = 0
+	var s1 = 1 as Integer
+	var s2 = 2 as Integer
+	var s3 = 3 as Integer
+	var s4 = 4 as Integer
+	var s5 = 5 as Integer
+	var s6 = 6 as Integer
+	var s7 = 7 as Integer
+	var s8 = 8 as Integer
+	var s9 = 9 as Integer
+	var s10 = 10 as Integer
+	var s11 = 11 as Integer
+	var s12 = 12 as Integer
+	var s13 = 13 as Integer
+	var s14 = 14 as Integer
+	var s15 = 15 as Integer
+	var s16 = 16 as Integer
+	var s17 = 17 as Integer
+	var s18 = 18 as Integer
+	var s19 = 19 as Integer
+	var s20 = 20 as Integer
+	var s21 = 21 as Integer
+	var s22 = 22 as Integer
+	var s23 = 23 as Integer
+	var s24 = 24 as Integer
+	var s25 = 25 as Integer
+	var s26 = 26 as Integer
+	var i = 0 as Integer
 	while i < 5 'loop'
 		s1 = s1 + i + p
 		s2 = s2 + i
@@ -1348,21 +1348,21 @@ plus the counter) still overflows by two, and the deficit (2) never exceeds the 
 values. This pins that a fresh rematerialized id never trips a false panic.
 ```maxon
 function hot() returns Integer
-	var s1 = 1
-	var s2 = 2
-	var s3 = 3
-	var s4 = 4
-	var s5 = 5
-	var s6 = 6
-	var s7 = 7
-	var s8 = 8
-	var s9 = 9
-	var s10 = 10
-	var s11 = 11
-	var s12 = 12
-	var s13 = 13
-	var s14 = 14
-	var i = 0
+	var s1 = 1 as Integer
+	var s2 = 2 as Integer
+	var s3 = 3 as Integer
+	var s4 = 4 as Integer
+	var s5 = 5 as Integer
+	var s6 = 6 as Integer
+	var s7 = 7 as Integer
+	var s8 = 8 as Integer
+	var s9 = 9 as Integer
+	var s10 = 10 as Integer
+	var s11 = 11 as Integer
+	var s12 = 12 as Integer
+	var s13 = 13 as Integer
+	var s14 = 14 as Integer
+	var i = 0 as Integer
 	while i < 5 'loop'
 		s1 = s1 + i
 		s2 = s2 + i
@@ -1424,33 +1424,33 @@ error E5001: the loop at <fragment>:19 needs 2 more register(s) than are availab
 The arm64 twin of `hot-loop-rematerialized-constant`: a constant the loop uses (`let d`, read by `s26 = d - s26`) is REMATERIALIZED by the splitter with a fresh ValueId that has no origin of its own, and must be chased through `SplitLineage` back to the `let d` literal (`<fragment>:56:11`) rather than trip the Rule-3 panic. Twenty-six accumulators plus the counter plus the rematerialized constant overflow arm64's 25-GPR pool by three.
 ```maxon
 function hot() returns Integer
-	var s1 = 1
-	var s2 = 2
-	var s3 = 3
-	var s4 = 4
-	var s5 = 5
-	var s6 = 6
-	var s7 = 7
-	var s8 = 8
-	var s9 = 9
-	var s10 = 10
-	var s11 = 11
-	var s12 = 12
-	var s13 = 13
-	var s14 = 14
-	var s15 = 15
-	var s16 = 16
-	var s17 = 17
-	var s18 = 18
-	var s19 = 19
-	var s20 = 20
-	var s21 = 21
-	var s22 = 22
-	var s23 = 23
-	var s24 = 24
-	var s25 = 25
-	var s26 = 26
-	var i = 0
+	var s1 = 1 as Integer
+	var s2 = 2 as Integer
+	var s3 = 3 as Integer
+	var s4 = 4 as Integer
+	var s5 = 5 as Integer
+	var s6 = 6 as Integer
+	var s7 = 7 as Integer
+	var s8 = 8 as Integer
+	var s9 = 9 as Integer
+	var s10 = 10 as Integer
+	var s11 = 11 as Integer
+	var s12 = 12 as Integer
+	var s13 = 13 as Integer
+	var s14 = 14 as Integer
+	var s15 = 15 as Integer
+	var s16 = 16 as Integer
+	var s17 = 17 as Integer
+	var s18 = 18 as Integer
+	var s19 = 19 as Integer
+	var s20 = 20 as Integer
+	var s21 = 21 as Integer
+	var s22 = 22 as Integer
+	var s23 = 23 as Integer
+	var s24 = 24 as Integer
+	var s25 = 25 as Integer
+	var s26 = 26 as Integer
+	var i = 0 as Integer
 	while i < 5 'loop'
 		s1 = s1 + i
 		s2 = s2 + i
@@ -1552,27 +1552,27 @@ anchored at its def would land inside the first loop's body — the placement Ru
 can move it, so it holds a register across the second loop and is counted.
 ```maxon
 function hot(_ Integer) returns Integer
-	var pad = 0
+	var pad = 0 as Integer
 	while pad < 3 'pad'
 		pad = pad + 1
 	end 'pad'
-	var s1 = 1
-	var s2 = 2
-	var s3 = 3
-	var s4 = 4
-	var s5 = 5
-	var s6 = 6
-	var s7 = 7
-	var s8 = 8
-	var s9 = 9
-	var s10 = 10
-	var s11 = 11
-	var s12 = 12
-	var s13 = 13
-	var s14 = 14
-	var s15 = 15
-	var s16 = 16
-	var i = 0
+	var s1 = 1 as Integer
+	var s2 = 2 as Integer
+	var s3 = 3 as Integer
+	var s4 = 4 as Integer
+	var s5 = 5 as Integer
+	var s6 = 6 as Integer
+	var s7 = 7 as Integer
+	var s8 = 8 as Integer
+	var s9 = 9 as Integer
+	var s10 = 10 as Integer
+	var s11 = 11 as Integer
+	var s12 = 12 as Integer
+	var s13 = 13 as Integer
+	var s14 = 14 as Integer
+	var s15 = 15 as Integer
+	var s16 = 16 as Integer
+	var i = 0 as Integer
 	while i < 5 'loop'
 		s1 = s1 + i
 		s2 = s2 + i
@@ -1650,23 +1650,23 @@ line of it is identical under a whole-function anchor, so it also pins that rest
 the peak's own nest changes nothing for a function that has only one.
 ```maxon
 function hot(_ Integer) returns Integer
-	var acc = 0
-	var o = 0
+	var acc = 0 as Integer
+	var o = 0 as Integer
 	while o < 2 'outer'
-		var i = 0
-		var s1 = 1
-		var s2 = 2
-		var s3 = 3
-		var s4 = 4
-		var s5 = 5
-		var s6 = 6
-		var s7 = 7
-		var s8 = 8
-		var s9 = 9
-		var s10 = 10
-		var s11 = 11
-		var s12 = 12
-		var s13 = 13
+		var i = 0 as Integer
+		var s1 = 1 as Integer
+		var s2 = 2 as Integer
+		var s3 = 3 as Integer
+		var s4 = 4 as Integer
+		var s5 = 5 as Integer
+		var s6 = 6 as Integer
+		var s7 = 7 as Integer
+		var s8 = 8 as Integer
+		var s9 = 9 as Integer
+		var s10 = 10 as Integer
+		var s11 = 11 as Integer
+		var s12 = 12 as Integer
+		var s13 = 13 as Integer
 		while i < 5 'inner'
 			s1 = s1 + i
 			s2 = s2 + i
@@ -1749,8 +1749,8 @@ function relievable(p Integer) returns Integer
 	let k14 = p + 14
 	let k15 = p + 15
 	let k16 = p + 16
-	var sum = 0
-	var i = 0
+	var sum = 0 as Integer
+	var i = 0 as Integer
 	while i < 5 'loop'
 		sum = sum + i
 		i = i + 1
@@ -3698,9 +3698,9 @@ function keep(x Limb) returns Limb
 	return x
 end 'keep'
 
-function shift(limbs Limbs, s Limb, n Limb)
-	var carry = 0
-	var i = 0
+function shift(limbs Limbs, s Limb, n ElementIndex)
+	var carry = 0 as Limb
+	var i = 0 as ElementIndex
 	while i < limbs.count() 'shiftEach'
 		let widened = (keep(try limbs.get(i) otherwise panic("get")) shl s) or carry
 		try limbs.set(i, value: widened and 0xFFFFFFFF) otherwise panic("set")
@@ -3708,7 +3708,7 @@ function shift(limbs Limbs, s Limb, n Limb)
 		i = i + 1
 	end 'shiftEach'
 
-	var v = 0
+	var v = 0 as ElementIndex
 	while v < n 'clear'
 		try limbs.set(v, value: 0) otherwise panic("clear")
 		v = v + 1
@@ -3761,19 +3761,19 @@ func @main {
     x64.movRegImm32 r12, 0
     x64.movRegImm32 r13, 0
     x64.jmp whilehdr#13
-  __rc_ok#27:
+  shiftEach:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegReg r13, rax
-    x64.jcc aboveEqual, __im_slow#34
-  __im_load#35:
+    x64.jcc aboveEqual, __im_slow#28
+  __im_load#29:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseIndexScale.word64 r14, [rax + r13*8 + 0]
-  __il_body#49:
+  __il_body#43:
     x64.cmpRegImm32 r14, 0
     x64.jcc greaterEqual, shiftok
   never:
     x64.leaRegRdata rcx, [rip + __str_rec_1]  ; ""
-  __il_body#53:
+  __il_body#47:
     x64.callDirect __write_stdout
   shiftok:
     x64.shlRegImm8 r14, r14, 4
@@ -3781,24 +3781,23 @@ func @main {
     x64.movRegImm32 rax, 4294967295
     x64.movRegReg rsi, r14
     x64.andRegReg rsi, r14, rax
-  __rc_ok#29:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc less, __im_slow#37
-  __im_bounds#38:
+    x64.jcc less, __im_slow#31
+  __im_bounds#32:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegReg r13, rax
-    x64.jcc aboveEqual, __im_slow#37
-  __im_buffer#39:
+    x64.jcc aboveEqual, __im_slow#31
+  __im_buffer#33:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __im_slow#37
-  __im_viewed#40:
+    x64.jcc equal, __im_slow#31
+  __im_viewed#34:
     x64.leaRegRegImm32 rcx, rax, -24
     x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow#37
-  __im_store#41:
+    x64.jcc notEqual, __im_slow#31
+  __im_store#35:
     x64.storeBaseIndexScaleReg.word64 [rax + r13*8 + 0], rsi
   tryok#20:
     x64.sarRegImm8 r14, r14, 32
@@ -3807,63 +3806,62 @@ func @main {
   whilehdr#13:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegReg r13, rax
-    x64.jcc less, __rc_ok#27
+    x64.jcc below, shiftEach
   whileexit:
     x64.movRegImm32 rdx, 0
-  __us_test#64:
+  __us_test#57:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, whilehdr#22
-  __us_test#65:
+  __us_test#58:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, whilehdr#22
-  __us_test#66:
+  __us_test#59:
     x64.leaRegRegImm32 rsi, rcx, -24
     x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
     x64.cmpRegImm32 rsi, 0
     x64.jcc notEqual, whilehdr#22
-    x64.jmp whilehdr#54
+    x64.jmp whilehdr#48
   clear#23:
     x64.movRegImm32 rax, 0
-  __rc_ok#31:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
     x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __im_slow#43
-  __im_bounds#44:
+    x64.jcc less, __im_slow#37
+  __im_bounds#38:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.cmpRegReg rdx, rcx
-    x64.jcc aboveEqual, __im_slow#43
-  __im_buffer#45:
+    x64.jcc aboveEqual, __im_slow#37
+  __im_buffer#39:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, __im_slow#43
-  __im_viewed#46:
+    x64.jcc equal, __im_slow#37
+  __im_viewed#40:
     x64.leaRegRegImm32 rsi, rcx, -24
     x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __im_slow#43
-  __im_store#47:
+    x64.jcc notEqual, __im_slow#37
+  __im_store#41:
     x64.storeBaseIndexScaleReg.word64 [rcx + rdx*8 + 0], rax
   tryok#25:
     x64.leaRegRegImm32 rdx, rdx, 1
   whilehdr#22:
     x64.cmpRegImm32 rdx, 1
-    x64.jcc less, clear#23
+    x64.jcc below, clear#23
     x64.jmp __il_cont
-  clear#63:
+  clear#56:
     x64.movRegImm32 rsi, 0
-  __im_bounds#61:
+  __im_bounds#55:
     x64.cmpRegReg rdx, rax
-    x64.jcc aboveEqual, __im_slow#57
-  __im_store#58:
+    x64.jcc aboveEqual, __im_slow#51
+  __im_store#52:
     x64.storeBaseIndexScaleReg.word64 [rcx + rdx*8 + 0], rsi
-  tryok#55:
+  tryok#49:
     x64.leaRegRegImm32 rdx, rdx, 1
-  whilehdr#54:
+  whilehdr#48:
     x64.cmpRegImm32 rdx, 1
-    x64.jcc less, clear#63
+    x64.jcc below, clear#56
   __il_cont:
     x64.movRegImm32 rdx, 1
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
@@ -3885,7 +3883,7 @@ func @main {
     x64.movRegImm32 rax, 4294967295
     x64.cmpRegReg r12, rax
     x64.jcc greater, __rc_panic
-  __rc_ok#5:
+  __rc_ok:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
@@ -3896,16 +3894,16 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __im_slow#34:
+  __im_slow#28:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#17
-  critsplit#69:
+  critsplit#62:
     x64.movRegReg r14, r8
-    x64.jmp __il_body#49
-  __im_slow#37:
+    x64.jmp __il_body#43
+  __im_slow#31:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
     x64.movRegReg rax, rsi
@@ -3913,7 +3911,7 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#21
     x64.jmp tryok#20
-  __im_slow#43:
+  __im_slow#37:
     x64.storeSlotReg slot0, rdx
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_set
@@ -3921,7 +3919,7 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#26
     x64.jmp tryok#25
-  __im_slow#57:
+  __im_slow#51:
     x64.storeSlotReg slot1, rax
     x64.storeSlotReg slot2, rcx
     x64.storeSlotReg slot0, rdx
@@ -3933,13 +3931,13 @@ func @main {
     x64.loadRegSlot rdx, slot0
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#26
-    x64.jmp tryok#55
+    x64.jmp tryok#49
   __im_slow#9:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#2
-  critsplit#68:
+  critsplit#61:
     x64.movRegReg rax, r8
     x64.jmp tryok#1
   tryerr#17:
@@ -3976,7 +3974,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_10]  ; "panic at reuse-def-confined-by-a-later-call.test:34: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at reuse-def-confined-by-a-later-call.test:34: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 64
@@ -4022,19 +4020,19 @@ func @main {
     x64.movRegImm32 r12, 0
     x64.movRegImm32 r13, 0
     x64.jmp whilehdr#13
-  __rc_ok#27:
+  shiftEach:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegReg r13, rax
-    x64.jcc aboveEqual, __im_slow#34
-  __im_load#35:
+    x64.jcc aboveEqual, __im_slow#28
+  __im_load#29:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseIndexScale.word64 r14, [rax + r13*8 + 0]
-  __il_body#49:
+  __il_body#43:
     x64.cmpRegImm32 r14, 0
     x64.jcc greaterEqual, shiftok
   never:
     x64.leaRegRdata rcx, [rip + __str_rec_1]  ; ""
-  __il_body#53:
+  __il_body#47:
     x64.callDirect __write_stdout
   shiftok:
     x64.shlRegImm8 r14, r14, 4
@@ -4042,24 +4040,23 @@ func @main {
     x64.movRegImm32 rax, 4294967295
     x64.movRegReg rsi, r14
     x64.andRegReg rsi, r14, rax
-  __rc_ok#29:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
-    x64.jcc less, __im_slow#37
-  __im_bounds#38:
+    x64.jcc less, __im_slow#31
+  __im_bounds#32:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegReg r13, rax
-    x64.jcc aboveEqual, __im_slow#37
-  __im_buffer#39:
+    x64.jcc aboveEqual, __im_slow#31
+  __im_buffer#33:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, __im_slow#37
-  __im_viewed#40:
+    x64.jcc equal, __im_slow#31
+  __im_viewed#34:
     x64.leaRegRegImm32 rcx, rax, -24
     x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
     x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __im_slow#37
-  __im_store#41:
+    x64.jcc notEqual, __im_slow#31
+  __im_store#35:
     x64.storeBaseIndexScaleReg.word64 [rax + r13*8 + 0], rsi
   tryok#20:
     x64.sarRegImm8 r14, r14, 32
@@ -4068,63 +4065,62 @@ func @main {
   whilehdr#13:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.cmpRegReg r13, rax
-    x64.jcc less, __rc_ok#27
+    x64.jcc below, shiftEach
   whileexit:
     x64.movRegImm32 rdx, 0
-  __us_test#64:
+  __us_test#57:
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.cmpRegImm32 rax, 0
     x64.jcc less, whilehdr#22
-  __us_test#65:
+  __us_test#58:
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, whilehdr#22
-  __us_test#66:
+  __us_test#59:
     x64.leaRegRegImm32 rsi, rcx, -24
     x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
     x64.cmpRegImm32 rsi, 0
     x64.jcc notEqual, whilehdr#22
-    x64.jmp whilehdr#54
+    x64.jmp whilehdr#48
   clear#23:
     x64.movRegImm32 rax, 0
-  __rc_ok#31:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
     x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __im_slow#43
-  __im_bounds#44:
+    x64.jcc less, __im_slow#37
+  __im_bounds#38:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.cmpRegReg rdx, rcx
-    x64.jcc aboveEqual, __im_slow#43
-  __im_buffer#45:
+    x64.jcc aboveEqual, __im_slow#37
+  __im_buffer#39:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, __im_slow#43
-  __im_viewed#46:
+    x64.jcc equal, __im_slow#37
+  __im_viewed#40:
     x64.leaRegRegImm32 rsi, rcx, -24
     x64.loadRegBaseDisp.word64 rsi, [rsi + 16]
     x64.cmpRegImm32 rsi, 0
-    x64.jcc notEqual, __im_slow#43
-  __im_store#47:
+    x64.jcc notEqual, __im_slow#37
+  __im_store#41:
     x64.storeBaseIndexScaleReg.word64 [rcx + rdx*8 + 0], rax
   tryok#25:
     x64.leaRegRegImm32 rdx, rdx, 1
   whilehdr#22:
     x64.cmpRegImm32 rdx, 1
-    x64.jcc less, clear#23
+    x64.jcc below, clear#23
     x64.jmp __il_cont
-  clear#63:
+  clear#56:
     x64.movRegImm32 rsi, 0
-  __im_bounds#61:
+  __im_bounds#55:
     x64.cmpRegReg rdx, rax
-    x64.jcc aboveEqual, __im_slow#57
-  __im_store#58:
+    x64.jcc aboveEqual, __im_slow#51
+  __im_store#52:
     x64.storeBaseIndexScaleReg.word64 [rcx + rdx*8 + 0], rsi
-  tryok#55:
+  tryok#49:
     x64.leaRegRegImm32 rdx, rdx, 1
-  whilehdr#54:
+  whilehdr#48:
     x64.cmpRegImm32 rdx, 1
-    x64.jcc less, clear#63
+    x64.jcc below, clear#56
   __il_cont:
     x64.movRegImm32 rdx, 1
     x64.loadRegBaseDisp.word64 rax, [rbx + 8]
@@ -4145,7 +4141,7 @@ func @main {
   __rc_chk:
     x64.cmpRegImm32 r12, 255
     x64.jcc greater, __rc_panic
-  __rc_ok#5:
+  __rc_ok:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
     x64.movRegReg r8, r12
@@ -4156,16 +4152,16 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __im_slow#34:
+  __im_slow#28:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#17
-  critsplit#69:
+  critsplit#62:
     x64.movRegReg r14, r8
-    x64.jmp __il_body#49
-  __im_slow#37:
+    x64.jmp __il_body#43
+  __im_slow#31:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
     x64.movRegReg rax, rsi
@@ -4173,7 +4169,7 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#21
     x64.jmp tryok#20
-  __im_slow#43:
+  __im_slow#37:
     x64.storeSlotReg slot0, rdx
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_set
@@ -4181,7 +4177,7 @@ func @main {
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#26
     x64.jmp tryok#25
-  __im_slow#57:
+  __im_slow#51:
     x64.storeSlotReg slot1, rax
     x64.storeSlotReg slot2, rcx
     x64.storeSlotReg slot0, rdx
@@ -4193,13 +4189,13 @@ func @main {
     x64.loadRegSlot rdx, slot0
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#26
-    x64.jmp tryok#55
+    x64.jmp tryok#49
   __im_slow#9:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#2
-  critsplit#68:
+  critsplit#61:
     x64.movRegReg rax, r8
     x64.jmp tryok#1
   tryerr#17:
@@ -4236,7 +4232,7 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_10]  ; "panic at reuse-def-confined-by-a-later-call.test:34: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.leaRegRdata rcx, [rip + __str_blob_7]  ; "panic at reuse-def-confined-by-a-later-call.test:34: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 64
@@ -4278,43 +4274,42 @@ func @main {
     arm64.movImm x20, 0
     arm64.movImm x21, 0
     arm64.b whilehdr#13
-  __rc_ok#27:
+  shiftEach:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x21, x0
-    arm64.b.hs __im_slow#34
-  __im_load#35:
+    arm64.b.hs __im_slow#28
+  __im_load#29:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseIndexScale.word64 x22, [x0 + x21*8 + 0]
-  __il_body#49:
+  __il_body#43:
     arm64.cmp x22, 0
     arm64.b.ge shiftok
   never:
     arm64.leaRdata x0, __str_rec_1  ; ""
-  __il_body#53:
+  __il_body#47:
     arm64.bl __write_stdout
   shiftok:
     arm64.lsl x0, x22, 4
     arm64.orr x0, x0, x20
     arm64.movImm x1, 4294967295
     arm64.and x2, x0, x1
-  __rc_ok#29:
     arm64.loadRegBaseDisp.word64 x1, [x19 + 16]
     arm64.cmp x1, 0
-    arm64.b.lt __im_slow#37
-  __im_bounds#38:
+    arm64.b.lt __im_slow#31
+  __im_bounds#32:
     arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
     arm64.cmp x21, x1
-    arm64.b.hs __im_slow#37
-  __im_buffer#39:
+    arm64.b.hs __im_slow#31
+  __im_buffer#33:
     arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.cmp x1, 0
-    arm64.b.eq __im_slow#37
-  __im_viewed#40:
+    arm64.b.eq __im_slow#31
+  __im_viewed#34:
     arm64.sub x3, x1, 24
     arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
     arm64.cmp x3, 0
-    arm64.b.ne __im_slow#37
-  __im_store#41:
+    arm64.b.ne __im_slow#31
+  __im_store#35:
     arm64.storeBaseIndexScaleReg.word64 [x1 + x21*8 + 0], x2
   tryok#20:
     arm64.asr x0, x0, 32
@@ -4323,63 +4318,62 @@ func @main {
   whilehdr#13:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x21, x0
-    arm64.b.lt __rc_ok#27
+    arm64.b.lo shiftEach
   whileexit:
     arm64.movImm x1, 0
-  __us_test#64:
+  __us_test#57:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
     arm64.b.lt whilehdr#22
-  __us_test#65:
+  __us_test#58:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
     arm64.cmp x2, 0
     arm64.b.eq whilehdr#22
-  __us_test#66:
+  __us_test#59:
     arm64.sub x3, x2, 24
     arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
     arm64.cmp x3, 0
     arm64.b.ne whilehdr#22
-    arm64.b whilehdr#54
+    arm64.b whilehdr#48
   clear#23:
     arm64.movImm x2, 0
-  __rc_ok#31:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.b.lt __im_slow#43
-  __im_bounds#44:
+    arm64.b.lt __im_slow#37
+  __im_bounds#38:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x1, x0
-    arm64.b.hs __im_slow#43
-  __im_buffer#45:
+    arm64.b.hs __im_slow#37
+  __im_buffer#39:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
-    arm64.b.eq __im_slow#43
-  __im_viewed#46:
+    arm64.b.eq __im_slow#37
+  __im_viewed#40:
     arm64.sub x3, x0, 24
     arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
     arm64.cmp x3, 0
-    arm64.b.ne __im_slow#43
-  __im_store#47:
+    arm64.b.ne __im_slow#37
+  __im_store#41:
     arm64.storeBaseIndexScaleReg.word64 [x0 + x1*8 + 0], x2
   tryok#25:
     arm64.add x1, x1, 1
   whilehdr#22:
     arm64.cmp x1, 1
-    arm64.b.lt clear#23
+    arm64.b.lo clear#23
     arm64.b __il_cont
-  clear#63:
+  clear#56:
     arm64.movImm x3, 0
-  __im_bounds#61:
+  __im_bounds#55:
     arm64.cmp x1, x0
-    arm64.b.hs __im_slow#57
-  __im_store#58:
+    arm64.b.hs __im_slow#51
+  __im_store#52:
     arm64.storeBaseIndexScaleReg.word64 [x2 + x1*8 + 0], x3
-  tryok#55:
+  tryok#49:
     arm64.add x1, x1, 1
-  whilehdr#54:
+  whilehdr#48:
     arm64.cmp x1, 1
-    arm64.b.lt clear#63
+    arm64.b.lo clear#56
   __il_cont:
     arm64.movImm x1, 1
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
@@ -4400,7 +4394,7 @@ func @main {
   __rc_chk:
     arm64.cmp x20, 255
     arm64.b.gt __rc_panic
-  __rc_ok#5:
+  __rc_ok:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
@@ -4410,7 +4404,7 @@ func @main {
     arm64.loadRegSlot x22, slot6
     arm64.epilogue 80
     arm64.ret
-  __im_slow#34:
+  __im_slow#28:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
     arm64.bl __managed_get
@@ -4418,8 +4412,8 @@ func @main {
     arm64.b.ne tryerr#17
   critsplit:
     arm64.movRegReg x22, x0
-    arm64.b __il_body#49
-  __im_slow#37:
+    arm64.b __il_body#43
+  __im_slow#31:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
@@ -4429,7 +4423,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.ne tryerr#21
     arm64.b tryok#20
-  __im_slow#43:
+  __im_slow#37:
     arm64.storeSlotReg slot1, x1
     arm64.movRegReg x0, x19
     arm64.bl __managed_set
@@ -4437,7 +4431,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.ne tryerr#26
     arm64.b tryok#25
-  __im_slow#57:
+  __im_slow#51:
     arm64.storeSlotReg slot0, x0
     arm64.storeSlotReg slot1, x1
     arm64.storeSlotReg slot2, x2
@@ -4450,7 +4444,7 @@ func @main {
     arm64.loadRegSlot x2, slot2
     arm64.cmp x9, 0
     arm64.b.ne tryerr#26
-    arm64.b tryok#55
+    arm64.b tryok#49
   __im_slow#9:
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
@@ -4488,7 +4482,7 @@ func @main {
     arm64.epilogue 80
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_10  ; "panic at reuse-def-confined-by-a-later-call.test:34: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_7  ; "panic at reuse-def-confined-by-a-later-call.test:34: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot3
@@ -4531,43 +4525,42 @@ func @main {
     arm64.movImm x20, 0
     arm64.movImm x21, 0
     arm64.b whilehdr#13
-  __rc_ok#27:
+  shiftEach:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x21, x0
-    arm64.b.hs __im_slow#34
-  __im_load#35:
+    arm64.b.hs __im_slow#28
+  __im_load#29:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseIndexScale.word64 x22, [x0 + x21*8 + 0]
-  __il_body#49:
+  __il_body#43:
     arm64.cmp x22, 0
     arm64.b.ge shiftok
   never:
     arm64.leaRdata x0, __str_rec_1  ; ""
-  __il_body#53:
+  __il_body#47:
     arm64.bl __write_stdout
   shiftok:
     arm64.lsl x0, x22, 4
     arm64.orr x0, x0, x20
     arm64.movImm x1, 4294967295
     arm64.and x2, x0, x1
-  __rc_ok#29:
     arm64.loadRegBaseDisp.word64 x1, [x19 + 16]
     arm64.cmp x1, 0
-    arm64.b.lt __im_slow#37
-  __im_bounds#38:
+    arm64.b.lt __im_slow#31
+  __im_bounds#32:
     arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
     arm64.cmp x21, x1
-    arm64.b.hs __im_slow#37
-  __im_buffer#39:
+    arm64.b.hs __im_slow#31
+  __im_buffer#33:
     arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.cmp x1, 0
-    arm64.b.eq __im_slow#37
-  __im_viewed#40:
+    arm64.b.eq __im_slow#31
+  __im_viewed#34:
     arm64.sub x3, x1, 24
     arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
     arm64.cmp x3, 0
-    arm64.b.ne __im_slow#37
-  __im_store#41:
+    arm64.b.ne __im_slow#31
+  __im_store#35:
     arm64.storeBaseIndexScaleReg.word64 [x1 + x21*8 + 0], x2
   tryok#20:
     arm64.asr x0, x0, 32
@@ -4576,63 +4569,62 @@ func @main {
   whilehdr#13:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x21, x0
-    arm64.b.lt __rc_ok#27
+    arm64.b.lo shiftEach
   whileexit:
     arm64.movImm x1, 0
-  __us_test#64:
+  __us_test#57:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
     arm64.b.lt whilehdr#22
-  __us_test#65:
+  __us_test#58:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
     arm64.cmp x2, 0
     arm64.b.eq whilehdr#22
-  __us_test#66:
+  __us_test#59:
     arm64.sub x3, x2, 24
     arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
     arm64.cmp x3, 0
     arm64.b.ne whilehdr#22
-    arm64.b whilehdr#54
+    arm64.b whilehdr#48
   clear#23:
     arm64.movImm x2, 0
-  __rc_ok#31:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
     arm64.cmp x0, 0
-    arm64.b.lt __im_slow#43
-  __im_bounds#44:
+    arm64.b.lt __im_slow#37
+  __im_bounds#38:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.cmp x1, x0
-    arm64.b.hs __im_slow#43
-  __im_buffer#45:
+    arm64.b.hs __im_slow#37
+  __im_buffer#39:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
-    arm64.b.eq __im_slow#43
-  __im_viewed#46:
+    arm64.b.eq __im_slow#37
+  __im_viewed#40:
     arm64.sub x3, x0, 24
     arm64.loadRegBaseDisp.word64 x3, [x3 + 16]
     arm64.cmp x3, 0
-    arm64.b.ne __im_slow#43
-  __im_store#47:
+    arm64.b.ne __im_slow#37
+  __im_store#41:
     arm64.storeBaseIndexScaleReg.word64 [x0 + x1*8 + 0], x2
   tryok#25:
     arm64.add x1, x1, 1
   whilehdr#22:
     arm64.cmp x1, 1
-    arm64.b.lt clear#23
+    arm64.b.lo clear#23
     arm64.b __il_cont
-  clear#63:
+  clear#56:
     arm64.movImm x3, 0
-  __im_bounds#61:
+  __im_bounds#55:
     arm64.cmp x1, x0
-    arm64.b.hs __im_slow#57
-  __im_store#58:
+    arm64.b.hs __im_slow#51
+  __im_store#52:
     arm64.storeBaseIndexScaleReg.word64 [x2 + x1*8 + 0], x3
-  tryok#55:
+  tryok#49:
     arm64.add x1, x1, 1
-  whilehdr#54:
+  whilehdr#48:
     arm64.cmp x1, 1
-    arm64.b.lt clear#63
+    arm64.b.lo clear#56
   __il_cont:
     arm64.movImm x1, 1
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
@@ -4653,7 +4645,7 @@ func @main {
   __rc_chk:
     arm64.cmp x20, 255
     arm64.b.gt __rc_panic
-  __rc_ok#5:
+  __rc_ok:
     arm64.movRegReg x0, x19
     arm64.bl __managed_decref
     arm64.movRegReg x0, x20
@@ -4663,7 +4655,7 @@ func @main {
     arm64.loadRegSlot x22, slot6
     arm64.epilogue 80
     arm64.ret
-  __im_slow#34:
+  __im_slow#28:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
     arm64.bl __managed_get
@@ -4671,8 +4663,8 @@ func @main {
     arm64.b.ne tryerr#17
   critsplit:
     arm64.movRegReg x22, x0
-    arm64.b __il_body#49
-  __im_slow#37:
+    arm64.b __il_body#43
+  __im_slow#31:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x21
@@ -4682,7 +4674,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.ne tryerr#21
     arm64.b tryok#20
-  __im_slow#43:
+  __im_slow#37:
     arm64.storeSlotReg slot1, x1
     arm64.movRegReg x0, x19
     arm64.bl __managed_set
@@ -4690,7 +4682,7 @@ func @main {
     arm64.cmp x9, 0
     arm64.b.ne tryerr#26
     arm64.b tryok#25
-  __im_slow#57:
+  __im_slow#51:
     arm64.storeSlotReg slot0, x0
     arm64.storeSlotReg slot1, x1
     arm64.storeSlotReg slot2, x2
@@ -4703,7 +4695,7 @@ func @main {
     arm64.loadRegSlot x2, slot2
     arm64.cmp x9, 0
     arm64.b.ne tryerr#26
-    arm64.b tryok#55
+    arm64.b tryok#49
   __im_slow#9:
     arm64.movRegReg x0, x19
     arm64.bl __managed_get
@@ -4741,7 +4733,7 @@ func @main {
     arm64.epilogue 80
     arm64.ret
   __rc_panic:
-    arm64.leaRdata x0, __str_blob_10  ; "panic at reuse-def-confined-by-a-later-call.test:34: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.leaRdata x0, __str_blob_7  ; "panic at reuse-def-confined-by-a-later-call.test:34: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot3
@@ -4845,9 +4837,9 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 192
-  __il_body#9:
+  __il_body#6:
     x64.movRegImm32 rax, 4
-  __il_cont#8:
+  __il_cont#5:
     x64.leaRegRegImm32 rcx, rax, 1
     x64.leaRegRegImm32 rdx, rax, 2
     x64.leaRegRegImm32 rsi, rax, 3
@@ -4946,9 +4938,9 @@ func @main {
     x64.leaRegRegReg rcx, rcx, r15
     x64.loadRegSlot rdx, slot12
     x64.leaRegRegReg rcx, rcx, rdx
-  __il_body#10:
+  __il_body#7:
     x64.leaRegRegImm32 rcx, rcx, 1
-  __il_cont#7:
+  __il_cont#4:
     x64.loadRegSlot rdx, slot13
     x64.loadRegSlot rsi, slot14
     x64.leaRegRegReg rdx, rdx, rsi
@@ -4972,7 +4964,7 @@ func @main {
     x64.leaRegRegReg rax, rax, rcx
   ternarytrue:
     x64.movRegImm32 r8, 0
-  __rc_ok:
+  matchcont:
     x64.epilogue 192
     x64.popReg r15
     x64.popReg r14
@@ -5001,9 +4993,9 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 192
-  __il_body#9:
+  __il_body#6:
     x64.movRegImm32 rax, 4
-  __il_cont#8:
+  __il_cont#5:
     x64.leaRegRegImm32 rcx, rax, 1
     x64.leaRegRegImm32 rdx, rax, 2
     x64.leaRegRegImm32 rsi, rax, 3
@@ -5102,9 +5094,9 @@ func @main {
     x64.leaRegRegReg rcx, rcx, r15
     x64.loadRegSlot rdx, slot12
     x64.leaRegRegReg rcx, rcx, rdx
-  __il_body#10:
+  __il_body#7:
     x64.leaRegRegImm32 rcx, rcx, 1
-  __il_cont#7:
+  __il_cont#4:
     x64.loadRegSlot rdx, slot13
     x64.loadRegSlot rsi, slot14
     x64.leaRegRegReg rdx, rdx, rsi
@@ -5128,7 +5120,7 @@ func @main {
     x64.leaRegRegReg rax, rax, rcx
   ternarytrue:
     x64.movRegImm32 r8, 0
-  __rc_ok:
+  matchcont:
     x64.epilogue 192
     x64.popReg r15
     x64.popReg r14
@@ -5158,9 +5150,9 @@ func @main {
     arm64.storeSlotReg slot14, x21
     arm64.storeSlotReg slot13, x20
     arm64.storeSlotReg slot12, x19
-  __il_body#9:
+  __il_body#6:
     arm64.movImm x0, 4
-  __il_cont#8:
+  __il_cont#5:
     arm64.add x1, x0, 1
     arm64.add x2, x0, 2
     arm64.add x3, x0, 3
@@ -5237,9 +5229,9 @@ func @main {
     arm64.add x1, x1, x28
     arm64.loadRegSlot x2, slot1
     arm64.add x1, x1, x2
-  __il_body#10:
+  __il_body#7:
     arm64.add x1, x1, 1
-  __il_cont#7:
+  __il_cont#4:
     arm64.loadRegSlot x2, slot2
     arm64.loadRegSlot x3, slot3
     arm64.add x2, x2, x3
@@ -5263,7 +5255,7 @@ func @main {
     arm64.add x0, x0, x1
   ternarytrue:
     arm64.movImm x0, 0
-  __rc_ok:
+  matchcont:
     arm64.loadRegSlot x19, slot12
     arm64.loadRegSlot x20, slot13
     arm64.loadRegSlot x21, slot14
@@ -5299,9 +5291,9 @@ func @main {
     arm64.storeSlotReg slot14, x21
     arm64.storeSlotReg slot13, x20
     arm64.storeSlotReg slot12, x19
-  __il_body#9:
+  __il_body#6:
     arm64.movImm x0, 4
-  __il_cont#8:
+  __il_cont#5:
     arm64.add x1, x0, 1
     arm64.add x2, x0, 2
     arm64.add x3, x0, 3
@@ -5378,9 +5370,9 @@ func @main {
     arm64.add x1, x1, x28
     arm64.loadRegSlot x2, slot1
     arm64.add x1, x1, x2
-  __il_body#10:
+  __il_body#7:
     arm64.add x1, x1, 1
-  __il_cont#7:
+  __il_cont#4:
     arm64.loadRegSlot x2, slot2
     arm64.loadRegSlot x3, slot3
     arm64.add x2, x2, x3
@@ -5404,7 +5396,7 @@ func @main {
     arm64.add x0, x0, x1
   ternarytrue:
     arm64.movImm x0, 0
-  __rc_ok:
+  matchcont:
     arm64.loadRegSlot x19, slot12
     arm64.loadRegSlot x20, slot13
     arm64.loadRegSlot x21, slot14
@@ -5511,9 +5503,9 @@ func @main {
     x64.storeSlotReg slot32, xmm13
     x64.storeSlotReg slot33, xmm14
     x64.storeSlotReg slot34, xmm15
-  __il_body#9:
+  __il_body#6:
     x64.movsdRegRip xmm0, [rip + __fconst_4]
-  __il_cont#8:
+  __il_cont#5:
     x64.movsdRegRip xmm1, [rip + __fconst_1]
     x64.movRegReg xmm2, xmm0
     x64.addsdRegReg xmm2, xmm0, xmm1
@@ -5707,10 +5699,10 @@ func @main {
     x64.addsdRegReg xmm2, xmm2, xmm15
     x64.loadRegSlot xmm0, slot16
     x64.addsdRegReg xmm2, xmm2, xmm0
-  __il_body#10:
+  __il_body#7:
     x64.movsdRegRip xmm0, [rip + __fconst_1]
     x64.addsdRegReg xmm2, xmm2, xmm0
-  __il_cont#7:
+  __il_cont#4:
     x64.loadRegSlot xmm0, slot17
     x64.loadRegSlot xmm3, slot18
     x64.addsdRegReg xmm0, xmm0, xmm3
@@ -5733,10 +5725,10 @@ func @main {
     x64.jcc notEqual, ternaryfalse
   ternarytrue:
     x64.movRegImm32 r8, 0
-    x64.jmp __rc_ok
+    x64.jmp matchcont
   ternaryfalse:
     x64.movRegImm32 r8, 99
-  __rc_ok:
+  matchcont:
     x64.loadRegSlot xmm6, slot25
     x64.loadRegSlot xmm7, slot26
     x64.loadRegSlot xmm8, slot27
@@ -5775,9 +5767,9 @@ func @main {
     x64.storeSlotReg slot32, xmm13
     x64.storeSlotReg slot33, xmm14
     x64.storeSlotReg slot34, xmm15
-  __il_body#9:
+  __il_body#6:
     x64.movsdRegRip xmm0, [rip + __fconst_4]
-  __il_cont#8:
+  __il_cont#5:
     x64.movsdRegRip xmm1, [rip + __fconst_1]
     x64.movRegReg xmm2, xmm0
     x64.addsdRegReg xmm2, xmm0, xmm1
@@ -5971,10 +5963,10 @@ func @main {
     x64.addsdRegReg xmm2, xmm2, xmm15
     x64.loadRegSlot xmm0, slot16
     x64.addsdRegReg xmm2, xmm2, xmm0
-  __il_body#10:
+  __il_body#7:
     x64.movsdRegRip xmm0, [rip + __fconst_1]
     x64.addsdRegReg xmm2, xmm2, xmm0
-  __il_cont#7:
+  __il_cont#4:
     x64.loadRegSlot xmm0, slot17
     x64.loadRegSlot xmm3, slot18
     x64.addsdRegReg xmm0, xmm0, xmm3
@@ -5997,10 +5989,10 @@ func @main {
     x64.jcc notEqual, ternaryfalse
   ternarytrue:
     x64.movRegImm32 r8, 0
-    x64.jmp __rc_ok
+    x64.jmp matchcont
   ternaryfalse:
     x64.movRegImm32 r8, 99
-  __rc_ok:
+  matchcont:
     x64.loadRegSlot xmm6, slot25
     x64.loadRegSlot xmm7, slot26
     x64.loadRegSlot xmm8, slot27
@@ -6033,9 +6025,9 @@ func @main {
     arm64.storeSlotReg slot10, d10
     arm64.storeSlotReg slot9, d9
     arm64.storeSlotReg slot8, d8
-  __il_body#9:
+  __il_body#6:
     arm64.fpLoadRdata d0, [rdata + __fconst_4]
-  __il_cont#8:
+  __il_cont#5:
     arm64.fpLoadRdata d1, [rdata + __fconst_1]
     arm64.fadd d1, d0, d1
     arm64.fpLoadRdata d2, [rdata + __fconst_2]
@@ -6157,10 +6149,10 @@ func @main {
     arm64.fadd d1, d1, d2
     arm64.loadRegSlot d2, slot0
     arm64.fadd d1, d1, d2
-  __il_body#10:
+  __il_body#7:
     arm64.fpLoadRdata d2, [rdata + __fconst_1]
     arm64.fadd d1, d1, d2
-  __il_cont#7:
+  __il_cont#4:
     arm64.loadRegSlot d2, slot1
     arm64.loadRegSlot d3, slot2
     arm64.fadd d2, d2, d3
@@ -6180,10 +6172,10 @@ func @main {
     arm64.b.ne ternaryfalse
   ternarytrue:
     arm64.movImm x0, 0
-    arm64.b __rc_ok
+    arm64.b matchcont
   ternaryfalse:
     arm64.movImm x0, 99
-  __rc_ok:
+  matchcont:
     arm64.loadRegSlot d8, slot8
     arm64.loadRegSlot d9, slot9
     arm64.loadRegSlot d10, slot10
@@ -6215,9 +6207,9 @@ func @main {
     arm64.storeSlotReg slot10, d10
     arm64.storeSlotReg slot9, d9
     arm64.storeSlotReg slot8, d8
-  __il_body#9:
+  __il_body#6:
     arm64.fpLoadRdata d0, [rdata + __fconst_4]
-  __il_cont#8:
+  __il_cont#5:
     arm64.fpLoadRdata d1, [rdata + __fconst_1]
     arm64.fadd d1, d0, d1
     arm64.fpLoadRdata d2, [rdata + __fconst_2]
@@ -6339,10 +6331,10 @@ func @main {
     arm64.fadd d1, d1, d2
     arm64.loadRegSlot d2, slot0
     arm64.fadd d1, d1, d2
-  __il_body#10:
+  __il_body#7:
     arm64.fpLoadRdata d2, [rdata + __fconst_1]
     arm64.fadd d1, d1, d2
-  __il_cont#7:
+  __il_cont#4:
     arm64.loadRegSlot d2, slot1
     arm64.loadRegSlot d3, slot2
     arm64.fadd d2, d2, d3
@@ -6362,10 +6354,10 @@ func @main {
     arm64.b.ne ternaryfalse
   ternarytrue:
     arm64.movImm x0, 0
-    arm64.b __rc_ok
+    arm64.b matchcont
   ternaryfalse:
     arm64.movImm x0, 99
-  __rc_ok:
+  matchcont:
     arm64.loadRegSlot d8, slot8
     arm64.loadRegSlot d9, slot9
     arm64.loadRegSlot d10, slot10
@@ -6453,9 +6445,9 @@ func @main {
     x64.storeSlotReg slot12, xmm13
     x64.storeSlotReg slot13, xmm14
     x64.storeSlotReg slot14, xmm15
-  __il_body#9:
+  __il_body#6:
     x64.movsdRegRip xmm0, [rip + __fconst_4]
-  __il_cont#8:
+  __il_cont#5:
     x64.movsdRegRip xmm1, [rip + __fconst_1]
     x64.movRegReg xmm2, xmm0
     x64.addsdRegReg xmm2, xmm0, xmm1
@@ -6537,10 +6529,10 @@ func @main {
     x64.addsdRegReg xmm2, xmm2, xmm15
     x64.loadRegSlot xmm0, slot0
     x64.addsdRegReg xmm2, xmm2, xmm0
-  __il_body#10:
+  __il_body#7:
     x64.movsdRegRip xmm0, [rip + __fconst_1]
     x64.addsdRegReg xmm2, xmm2, xmm0
-  __il_cont#7:
+  __il_cont#4:
     x64.loadRegSlot xmm0, slot1
     x64.loadRegSlot xmm3, slot2
     x64.addsdRegReg xmm0, xmm0, xmm3
@@ -6555,10 +6547,10 @@ func @main {
     x64.jcc notEqual, ternaryfalse
   ternarytrue:
     x64.movRegImm32 r8, 0
-    x64.jmp __rc_ok
+    x64.jmp matchcont
   ternaryfalse:
     x64.movRegImm32 r8, 99
-  __rc_ok:
+  matchcont:
     x64.loadRegSlot xmm6, slot5
     x64.loadRegSlot xmm7, slot6
     x64.loadRegSlot xmm8, slot7
@@ -6597,9 +6589,9 @@ func @main {
     x64.storeSlotReg slot12, xmm13
     x64.storeSlotReg slot13, xmm14
     x64.storeSlotReg slot14, xmm15
-  __il_body#9:
+  __il_body#6:
     x64.movsdRegRip xmm0, [rip + __fconst_4]
-  __il_cont#8:
+  __il_cont#5:
     x64.movsdRegRip xmm1, [rip + __fconst_1]
     x64.movRegReg xmm2, xmm0
     x64.addsdRegReg xmm2, xmm0, xmm1
@@ -6681,10 +6673,10 @@ func @main {
     x64.addsdRegReg xmm2, xmm2, xmm15
     x64.loadRegSlot xmm0, slot0
     x64.addsdRegReg xmm2, xmm2, xmm0
-  __il_body#10:
+  __il_body#7:
     x64.movsdRegRip xmm0, [rip + __fconst_1]
     x64.addsdRegReg xmm2, xmm2, xmm0
-  __il_cont#7:
+  __il_cont#4:
     x64.loadRegSlot xmm0, slot1
     x64.loadRegSlot xmm3, slot2
     x64.addsdRegReg xmm0, xmm0, xmm3
@@ -6699,10 +6691,10 @@ func @main {
     x64.jcc notEqual, ternaryfalse
   ternarytrue:
     x64.movRegImm32 r8, 0
-    x64.jmp __rc_ok
+    x64.jmp matchcont
   ternaryfalse:
     x64.movRegImm32 r8, 99
-  __rc_ok:
+  matchcont:
     x64.loadRegSlot xmm6, slot5
     x64.loadRegSlot xmm7, slot6
     x64.loadRegSlot xmm8, slot7
@@ -6727,9 +6719,9 @@ data {
 func @main {
   entry:
     arm64.prologue 16
-  __il_body#9:
+  __il_body#6:
     arm64.fpLoadRdata d0, [rdata + __fconst_4]
-  __il_cont#8:
+  __il_cont#5:
     arm64.fpLoadRdata d1, [rdata + __fconst_1]
     arm64.fadd d1, d0, d1
     arm64.fpLoadRdata d2, [rdata + __fconst_2]
@@ -6785,10 +6777,10 @@ func @main {
     arm64.fadd d1, d1, d22
     arm64.fadd d1, d1, d23
     arm64.fadd d0, d1, d0
-  __il_body#10:
+  __il_body#7:
     arm64.fpLoadRdata d1, [rdata + __fconst_1]
     arm64.fadd d0, d0, d1
-  __il_cont#7:
+  __il_cont#4:
     arm64.fadd d1, d24, d25
     arm64.fadd d1, d1, d26
     arm64.fadd d1, d1, d27
@@ -6798,10 +6790,10 @@ func @main {
     arm64.b.ne ternaryfalse
   ternarytrue:
     arm64.movImm x0, 0
-    arm64.b __rc_ok
+    arm64.b matchcont
   ternaryfalse:
     arm64.movImm x0, 99
-  __rc_ok:
+  matchcont:
     arm64.epilogue 16
     arm64.ret
 }
@@ -6817,9 +6809,9 @@ data {
 func @main {
   entry:
     arm64.prologue 16
-  __il_body#9:
+  __il_body#6:
     arm64.fpLoadRdata d0, [rdata + __fconst_4]
-  __il_cont#8:
+  __il_cont#5:
     arm64.fpLoadRdata d1, [rdata + __fconst_1]
     arm64.fadd d1, d0, d1
     arm64.fpLoadRdata d2, [rdata + __fconst_2]
@@ -6875,10 +6867,10 @@ func @main {
     arm64.fadd d1, d1, d22
     arm64.fadd d1, d1, d23
     arm64.fadd d0, d1, d0
-  __il_body#10:
+  __il_body#7:
     arm64.fpLoadRdata d1, [rdata + __fconst_1]
     arm64.fadd d0, d0, d1
-  __il_cont#7:
+  __il_cont#4:
     arm64.fadd d1, d24, d25
     arm64.fadd d1, d1, d26
     arm64.fadd d1, d1, d27
@@ -6888,10 +6880,10 @@ func @main {
     arm64.b.ne ternaryfalse
   ternarytrue:
     arm64.movImm x0, 0
-    arm64.b __rc_ok
+    arm64.b matchcont
   ternaryfalse:
     arm64.movImm x0, 99
-  __rc_ok:
+  matchcont:
     arm64.epilogue 16
     arm64.ret
 }
@@ -6959,9 +6951,9 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 32
-  __il_body#9:
+  __il_body#6:
     x64.movRegImm32 rax, 4
-  __il_cont#8:
+  __il_cont#5:
     x64.leaRegRegImm32 rcx, rax, 1
     x64.leaRegRegImm32 rdx, rax, 2
     x64.leaRegRegImm32 rsi, rax, 3
@@ -6998,9 +6990,9 @@ func @main {
     x64.leaRegRegReg rcx, rcx, r15
     x64.loadRegSlot rdx, slot0
     x64.leaRegRegReg rcx, rcx, rdx
-  __il_body#10:
+  __il_body#7:
     x64.leaRegRegImm32 rcx, rcx, 1
-  __il_cont#7:
+  __il_cont#4:
     x64.loadRegSlot rdx, slot1
     x64.loadRegSlot rsi, slot2
     x64.leaRegRegReg rdx, rdx, rsi
@@ -7010,7 +7002,7 @@ func @main {
     x64.leaRegRegReg rax, rax, rcx
   ternarytrue:
     x64.movRegImm32 r8, 0
-  __rc_ok:
+  matchcont:
     x64.epilogue 32
     x64.popReg r15
     x64.popReg r14
@@ -7039,9 +7031,9 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 32
-  __il_body#9:
+  __il_body#6:
     x64.movRegImm32 rax, 4
-  __il_cont#8:
+  __il_cont#5:
     x64.leaRegRegImm32 rcx, rax, 1
     x64.leaRegRegImm32 rdx, rax, 2
     x64.leaRegRegImm32 rsi, rax, 3
@@ -7078,9 +7070,9 @@ func @main {
     x64.leaRegRegReg rcx, rcx, r15
     x64.loadRegSlot rdx, slot0
     x64.leaRegRegReg rcx, rcx, rdx
-  __il_body#10:
+  __il_body#7:
     x64.leaRegRegImm32 rcx, rcx, 1
-  __il_cont#7:
+  __il_cont#4:
     x64.loadRegSlot rdx, slot1
     x64.loadRegSlot rsi, slot2
     x64.leaRegRegReg rdx, rdx, rsi
@@ -7090,7 +7082,7 @@ func @main {
     x64.leaRegRegReg rax, rax, rcx
   ternarytrue:
     x64.movRegImm32 r8, 0
-  __rc_ok:
+  matchcont:
     x64.epilogue 32
     x64.popReg r15
     x64.popReg r14
@@ -7113,9 +7105,9 @@ func @main {
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-  __il_body#9:
+  __il_body#6:
     arm64.movImm x0, 4
-  __il_cont#8:
+  __il_cont#5:
     arm64.add x1, x0, 1
     arm64.add x2, x0, 2
     arm64.add x3, x0, 3
@@ -7147,16 +7139,16 @@ func @main {
     arm64.add x1, x1, x12
     arm64.add x1, x1, x13
     arm64.add x0, x1, x0
-  __il_body#10:
+  __il_body#7:
     arm64.add x0, x0, 1
-  __il_cont#7:
+  __il_cont#4:
     arm64.add x1, x14, x19
     arm64.add x1, x1, x20
     arm64.add x1, x1, x21
     arm64.add x0, x1, x0
   ternarytrue:
     arm64.movImm x0, 0
-  __rc_ok:
+  matchcont:
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
@@ -7178,9 +7170,9 @@ func @main {
     arm64.storeSlotReg slot2, x21
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-  __il_body#9:
+  __il_body#6:
     arm64.movImm x0, 4
-  __il_cont#8:
+  __il_cont#5:
     arm64.add x1, x0, 1
     arm64.add x2, x0, 2
     arm64.add x3, x0, 3
@@ -7212,16 +7204,16 @@ func @main {
     arm64.add x1, x1, x12
     arm64.add x1, x1, x13
     arm64.add x0, x1, x0
-  __il_body#10:
+  __il_body#7:
     arm64.add x0, x0, 1
-  __il_cont#7:
+  __il_cont#4:
     arm64.add x1, x14, x19
     arm64.add x1, x1, x20
     arm64.add x1, x1, x21
     arm64.add x0, x1, x0
   ternarytrue:
     arm64.movImm x0, 0
-  __rc_ok:
+  matchcont:
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2

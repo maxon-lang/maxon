@@ -153,7 +153,7 @@ function main() returns ExitCode
 	let postFuncs = modA.funcCount()
 
 	// Iterate the block's opRefs list to verify list integrity
-	var opRefSum = 0
+	var opRefSum = 0 as Integer
 	for opRef in blockA.opRefs 'eachRef'
 		opRefSum = opRefSum + opRef
 	end 'eachRef'
@@ -216,12 +216,12 @@ function main() returns ExitCode
 	sc.push("hello")
 	sc.push("world")
 
-	var intSum = 0
+	var intSum = 0 as Integer
 	for val in ic.ops 'intLoop'
 		intSum = intSum + val
 	end 'intLoop'
 
-	var strCount = 0
+	var strCount = 0 as Count
 	for val in sc.ops 'strLoop'
 		strCount = strCount + 1
 	end 'strLoop'

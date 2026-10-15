@@ -74,29 +74,29 @@ let MboxOffAbandonFn = 0x30 as ByteOffset
 // (`ServiceLoop`) while the site that reads it is `__mbox_service_exit` here — the two files must spell one
 // number, which is `GtParkKind`'s rule read from the other end.
 export let MboxOffShutdownReply = 0x38 as ByteOffset
-let MboxStructSize = 0x40 as ParsedInt
+let MboxStructSize = 0x40 as FullRangeInt
 
 // An envelope: the intrusive link and the request box. 16 bytes out of the slab, freed the moment its box is
 // handed to the loop — the queue costs one small allocation per message and nothing while it is empty.
 let EnvOffNext = 0x00 as ByteOffset
 let EnvOffBox = 0x08 as ByteOffset
-let EnvStructSize = 16 as ParsedInt
+let EnvStructSize = 16 as FullRangeInt
 
 // The two counts' initial values, named because they are a PAIR and their difference is the whole lifetime
 // rule: one handle names the mailbox, and the loop is the second thing that keeps it alive.
-let MboxInitialHandles = 1 as ParsedInt
-let MboxInitialRefs = 2 as ParsedInt
+let MboxInitialHandles = 1 as FullRangeInt
+let MboxInitialRefs = 2 as FullRangeInt
 
 // A count step, as the `lock xadd` operand. `xadd` answers the PRIOR value, so "I was the last" is
 // `prior == 1` — read off the displaced value rather than from a re-read, which is the same discipline
 // `MmRuntime.emitRefcountCheckToLastOwner` states for a decref.
-let MboxCountUp = 1 as ParsedInt
-let MboxCountDown = -1 as ParsedInt
-let MboxLastOwner = 1 as ParsedInt
+let MboxCountUp = 1 as FullRangeInt
+let MboxCountDown = -1 as FullRangeInt
+let MboxLastOwner = 1 as FullRangeInt
 
 // The value stored into `closed`. Any non-zero would do; the constant is what stops a reader spelling `1`
 // and a writer spelling something else.
-let MboxIsClosed = 1 as ParsedInt
+let MboxIsClosed = 1 as FullRangeInt
 
 // --- Entry points ---
 
@@ -194,7 +194,7 @@ export let MboxInterfaceSendName = b"__mbox_iface_send"
 let MboxInterfaceConversionPrefix = b"__mbox_iface_from."
 let MboxInterfaceStubPrefix = b"__mbox_iface_stub."
 let MboxInterfaceTablePrefix = b"__mbox_iface_table."
-let MboxInterfaceSlotBytes = 8 as ParsedInt
+let MboxInterfaceSlotBytes = 8 as FullRangeInt
 
 export function isInterfaceHandleRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: MboxInterfaceRuntimePrefix)
@@ -216,8 +216,8 @@ function interfaceHandleTableLabel(serviceTypeName ByteArray, interfaceName Byte
 	return "{String.from(MboxInterfaceTablePrefix)}{String.from(serviceTypeName)}.{String.from(interfaceName)}"
 end 'interfaceHandleTableLabel'
 
-export function interfaceSendSlotOffset(slot CaseIndex) returns ParsedInt
-	return (slot as ParsedInt) * MboxInterfaceSlotBytes
+export function interfaceSendSlotOffset(slot CaseIndex) returns FullRangeInt
+	return (slot as FullRangeInt) * MboxInterfaceSlotBytes
 end 'interfaceSendSlotOffset'
 
 function buildMboxInterfaceCloneBox(module StdModule)
@@ -280,7 +280,7 @@ export function installInterfaceHandleConversions(module StdModule, globalData G
 		return
 	end 'noConversion'
 
-	var built = 0
+	var built = 0 as Count
 
 	for serviceTypeName in serviceCompanionRoster(signatures) 'eachService'
 		for interfaceName in signatures.interfacesWithHandles() 'eachInterfaceHandle'
@@ -301,7 +301,7 @@ function buildInterfaceHandleConversion(module StdModule, globalData GlobalDataT
 	let serviceRequest = requireServiceRequestLayout(signatures, typeName: serviceTypeName)
 	let label = interfaceHandleTableLabel(serviceTypeName, interfaceName: interfaceName)
 	var blob = ByteArray.create()
-	blob.growFilled((interfaceRequest.caseCount() as ParsedInt * MboxInterfaceSlotBytes) as ElementIndex, value: 0)
+	blob.growFilled(interfaceSendSlotOffset(interfaceRequest.caseCount()) as ElementIndex, value: 0)
 	_ = globalData.registerRdataConstantLabeled(label, bytes: blob, kind: RdataPayloadKind.witnessTable)
 
 	for slot in 0 upto interfaceRequest.caseCount() 'eachSlot'
@@ -325,7 +325,7 @@ function buildInterfaceHandleConversion(module StdModule, globalData GlobalDataT
 	module.functions.push(func)
 end 'buildInterfaceHandleConversion'
 
-function buildInterfaceSendStub(module StdModule, name ByteArray, serviceTag ParsedInt)
+function buildInterfaceSendStub(module StdModule, name ByteArray, serviceTag FullRangeInt)
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -387,7 +387,7 @@ end 'emitMboxWakeAndUnlock'
 // One count stepped by `delta`, answering whether the caller was the LAST owner — `prior == 1` on a step
 // down. Both counts are read this way and neither is ever re-read, which is what makes "was I the last?"
 // a property of the instruction rather than of two loads with a window between them.
-function emitMboxCountStep(module StdModule, block IrBlock, mbox ValueId, offset ByteOffset, delta ParsedInt, ids ValueMinter) returns ValueId
+function emitMboxCountStep(module StdModule, block IrBlock, mbox ValueId, offset ByteOffset, delta FullRangeInt, ids ValueMinter) returns ValueId
 	let addr = emitFieldAddr(module, block: block, record: mbox, offset: offset, ids: ids)
 	let step = emitConst(module, block: block, value: delta, ids: ids)
 	let prior = ids.mint()

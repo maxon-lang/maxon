@@ -46,12 +46,12 @@ end 'sleeper'
 
 function main() returns ExitCode
 	var arr = IntPromiseArray.create()
-	var i = 0
+	var i = 0 as Integer
 	while i < 5000 'spawn'
 		arr.push(async sleeper(i))
 		i = i + 1
 	end 'spawn'
-	var sum = 0
+	var sum = 0 as Integer
 	for p in arr 'each'
 		sum = sum + await p
 	end 'each'

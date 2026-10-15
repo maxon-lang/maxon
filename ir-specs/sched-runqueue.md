@@ -290,7 +290,7 @@ func @Ping.__loop {
     x64.jcc equal, stopping
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=hit] @__jumptable_11
+    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=hit] @__jumptable_6
   __shutdown:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.storeBaseDispReg.word64 [r12 + 56], rax
@@ -345,7 +345,7 @@ func @Ping.__abandon {
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=hit] @__jumptable_12
+    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=hit] @__jumptable_7
   __shutdown:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.movRegImm32 rdx, 0
@@ -692,7 +692,7 @@ func @Ping.__loop {
     x64.jcc equal, stopping
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=hit] @__jumptable_11
+    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=hit] @__jumptable_6
   __shutdown:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.storeBaseDispReg.word64 [r12 + 56], rax
@@ -747,7 +747,7 @@ func @Ping.__abandon {
     x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=hit] @__jumptable_12
+    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=hit] @__jumptable_7
   __shutdown:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.movRegImm32 rdx, 0
@@ -1086,7 +1086,7 @@ func @Ping.__loop {
     arm64.b.eq stopping
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=hit] @__jumptable_11
+    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=hit] @__jumptable_6
   __shutdown:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.storeBaseDispReg.word64 [x20 + 56], x1
@@ -1138,7 +1138,7 @@ func @Ping.__abandon {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=hit] @__jumptable_12
+    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=hit] @__jumptable_7
   __shutdown:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.movImm x1, 0
@@ -1474,7 +1474,7 @@ func @Ping.__loop {
     arm64.b.eq stopping
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=hit] @__jumptable_11
+    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=hit] @__jumptable_6
   __shutdown:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.storeBaseDispReg.word64 [x20 + 56], x1
@@ -1526,7 +1526,7 @@ func @Ping.__abandon {
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=hit] @__jumptable_12
+    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=hit] @__jumptable_7
   __shutdown:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 8]
     arm64.movImm x1, 0

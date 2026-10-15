@@ -162,7 +162,7 @@ end 'Instr'
 
 function main() returns ExitCode
 	let op = Instr.add(1, src: 2)
-	var r = 0
+	var r = 0 as ID
 	match op 'h'
 		add(d, s) then r = d + s
 		nop then r = 99

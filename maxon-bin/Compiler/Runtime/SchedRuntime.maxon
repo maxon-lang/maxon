@@ -246,7 +246,7 @@ end 'MultiMSharing'
 // `reach` says who lays the slot out (`DataReach`): a `walked` slot only if a function surviving
 // dead-function elimination names it, a `declared` slot whenever this push runs — so a `declared` push sits
 // behind the gate of the chunk or stub that reads the word, and a `walked` push behind no gate at all.
-export function pushRuntimeGlobal(out DataSectionEntryArray, label ByteArray, sharing MultiMSharing, reach DataReach, seed ParsedInt = 0, valueType StdType = StdType.i64)
+export function pushRuntimeGlobal(out DataSectionEntryArray, label ByteArray, sharing MultiMSharing, reach DataReach, seed FullRangeInt = 0, valueType StdType = StdType.i64)
 	match sharing 'classified'
 		atomicStep or
 		underSchedLock or
@@ -267,7 +267,7 @@ end 'pushRuntimeGlobal'
 //
 // ⚠ It is declared ABOVE both structs because both derive offsets from it — inside either one it would read
 // as though it were that struct's own stride.
-let PointerSlotBytes = 8 as ParsedInt
+let PointerSlotBytes = 8 as ByteOffset
 
 // ==========================================================================
 // ⭐⭐⭐ THE MACHINE (M) STRUCT — ONE PER OS THREAD THAT RUNS MAXON CODE
@@ -384,7 +384,7 @@ export let MOffSchedulerContext = 0x18 as ByteOffset
 // ⚠ **A STRAY SIGNAL LEFT PENDING** — a signal to the main machine while it was running, or one that landed after
 // the wait it was for had already ended — costs its next wait one extra lap of a loop that re-tests everything.
 // That is a lap, not a lost wakeup.
-let MOffParkEvent = ((MOffSchedulerContext as ParsedInt) + GtStructSize) as ByteOffset
+let MOffParkEvent = MOffSchedulerContext + (GtStructSize as ByteOffset)
 
 // ⭐⭐ **THE `CreateThread` HANDLE OF *THIS* M, AND IT SITS ON THE M FOR CORRECTNESS RATHER THAN TIDINESS.**
 // A P is released at every park and re-taken by whoever `startm` hands it to, so a handle keyed on the
@@ -397,7 +397,7 @@ let MOffParkEvent = ((MOffSchedulerContext as ParsedInt) + GtStructSize) as Byte
 // `buildSchedSyscallRegain`'s shutdown escape reads it to tell the machine that RUNS the process exit from a
 // worker the exit discards. Both reads are exact rather than probable because `__sched_startm` stores this
 // word before releasing `__sched_lock`, so no machine can observe its own zero after taking that lock.
-let MOffOsThreadHandle = MOffParkEvent + (PointerSlotBytes as ByteOffset)
+let MOffOsThreadHandle = MOffParkEvent + PointerSlotBytes
 
 // ⭐⭐⭐ **THE P A `startm` HAS HANDED THIS M, OR 0 — Go's `m.nextp`.** A waker takes a processor out of
 // `__sched_pidle` and must give it to the M it is about to signal;
@@ -408,7 +408,7 @@ let MOffOsThreadHandle = MOffParkEvent + (PointerSlotBytes as ByteOffset)
 // ⚠ **A ZERO HERE ON WAKE IS NORMAL AND IS NOT AN ERROR.** An M is also woken by the main machine's signal, by
 // `__sched_wake_poller` and at teardown, none of which hands it anything; it then goes back round the final look.
 // `buildSchedLoop`'s `wafterwait` is the one reader, and it is written for both.
-let MOffNextP = MOffOsThreadHandle + (PointerSlotBytes as ByteOffset)
+let MOffNextP = MOffOsThreadHandle + PointerSlotBytes
 
 // ⭐⭐ **DOES THIS M HOLD A UNIT OF `__sched_nmspinning`? — Go's `mp.spinning` (`proc.go:3228`).** 1 means
 // *"one unit of the global count belongs to this M"*. See `SchedSpinningLabel` for what the count buys and
@@ -437,13 +437,13 @@ let MOffNextP = MOffOsThreadHandle + (PointerSlotBytes as ByteOffset)
 //
 // ⚠ **A `.data`-free slot, for `POffStealCount`'s reason** — a `.data` word appears in the `data {` section
 // of every green-thread program's Target IR, and this is per-machine state, not program state.
-let MOffSpinning = MOffNextP + (PointerSlotBytes as ByteOffset)
+let MOffSpinning = MOffNextP + PointerSlotBytes
 
 // The two states, named for `PStatusUnused`/`PStatusActive`'s reason one field family up: the CAS that
 // claims the word and the CAS that releases it must agree about which value means *held*, and a pair of
 // bare literals at two sites is that fact written twice.
-let MSpinningFree = 0 as ParsedInt
-let MSpinningHeld = 1 as ParsedInt
+let MSpinningFree = 0 as FullRangeInt
+let MSpinningHeld = 1 as FullRangeInt
 
 // ⭐⭐⭐ **THE ROSTER'S LINK — Go's `allm`.** Every M pushes itself here at birth, under `__sched_lock`, and
 // is never removed: an M is never freed, so the roster is append-only and a walker needs no snapshot.
@@ -452,7 +452,7 @@ let MSpinningHeld = 1 as ParsedInt
 // is also on the roster — the teardown must signal and join a PARKED worker, which is the common case at
 // exit — so a single link would splice one list into the other the first time an M parked. Two lists, two
 // links, and each door names the one it threads.
-export let MOffAllNext = MOffSpinning + (PointerSlotBytes as ByteOffset)
+export let MOffAllNext = MOffSpinning + PointerSlotBytes
 
 // ⭐⭐ **`__sched_midle`'s FORWARD LINK — Go's `m.idleNode.next`.** The list is doubly linked through this
 // word and `MOffIdlePrev`, and both are written only under `__sched_lock` by the list's three doors:
@@ -462,7 +462,7 @@ export let MOffAllNext = MOffSpinning + (PointerSlotBytes as ByteOffset)
 // ⚠ **THERE IS NO "AM I ON THE IDLE LIST" FLAG BESIDE IT, DELIBERATELY.** Membership of a list guarded by a
 // mutex already answers that question, atomically with the act of joining; `buildSchedLoop`'s park
 // carries the missed-wakeup argument that rests on it. The back-link is what makes the answer O(1).
-let MOffIdleNext = MOffAllNext + (PointerSlotBytes as ByteOffset)
+let MOffIdleNext = MOffAllNext + PointerSlotBytes
 
 // ==========================================================================
 // ⭐⭐⭐ THE SYSCALL BRACKET'S WORDS — "IS THIS MACHINE INSIDE A KERNEL CALL, AND MAY ITS PROCESSOR
@@ -554,22 +554,22 @@ let MOffIdleNext = MOffAllNext + (PointerSlotBytes as ByteOffset)
 //
 // `atomicStep` in `MultiMSharing`'s vocabulary, though it is a per-machine FIELD rather than a `.data` slot:
 // two threads write it, and every mutation is `lock add`, `lock xadd` or `StdOp.atomicCas`.
-export let MOffSyscallState = MOffIdleNext + (PointerSlotBytes as ByteOffset)
+export let MOffSyscallState = MOffIdleNext + PointerSlotBytes
 
 // *"This machine is inside a bracketed kernel call."* Bit 0.
-export let MSyscallInCall = 1 as ParsedInt
+export let MSyscallInCall = 1 as FullRangeInt
 
 // *"sysmon has taken this machine's processor."* Bit 1 — the only bit in this word with a different party on
 // each of its two edges: `__sched_retake` sets it, `__sched_syscall_regain` clears it.
-export let MSyscallStolen = 2 as ParsedInt
+export let MSyscallStolen = 2 as FullRangeInt
 
 // The two state bits together. A word whose state bits are ALL ZERO is a machine running ordinary Maxon code,
 // which is the arena's zero and therefore already right for a machine before its first shimmed call.
-let MSyscallStateMask = 3 as ParsedInt
+let MSyscallStateMask = 3 as FullRangeInt
 
 // One generation — the first bit above the state bits, so adding it steps the generation and leaves the state
 // alone, which is the property `MSyscallEnterDelta` is built out of.
-let MSyscallGenStep = 4 as ParsedInt
+let MSyscallGenStep = 4 as FullRangeInt
 
 // What `entersyscall` adds: a new generation AND the in-call bit, in ONE `lock add`. Stated as the sum of its
 // two terms rather than as `5`, so that widening the state bits moves the delta with them instead of leaving a
@@ -602,25 +602,25 @@ export let MSyscallEnterDelta = MSyscallGenStep + MSyscallInCall
 // ⚠ **A ZERO NOTE CANNOT BE MISTAKEN FOR AN OBSERVATION**, which is what makes the arena's zero safe here: a
 // machine sysmon can act on has the in-call bit set and a generation of at least one, so its word is at least
 // `MSyscallEnterDelta` and never compares equal to an unwritten note.
-let MOffSysmonWord = MOffSyscallState + (PointerSlotBytes as ByteOffset)
-let MOffSysmonWhen = MOffSysmonWord + (PointerSlotBytes as ByteOffset)
+let MOffSysmonWord = MOffSyscallState + PointerSlotBytes
+let MOffSysmonWhen = MOffSysmonWord + PointerSlotBytes
 
 // ⭐⭐ **`__sched_midle`'s BACK-LINK — Go's `m.idleNode.prev`, and what makes both removals from the middle of
 // the list O(1).** A machine woken by a signal that handed it no processor unlinks itself, and `mgetSpecific`
 // takes one particular machine; a singly linked list could answer either only by walking from the head. 0 on the
 // head and on every machine that is not on the list, which is why *"on the list"* is `head == m or prev != 0`.
-let MOffIdlePrev = MOffSysmonWhen + (PointerSlotBytes as ByteOffset)
+let MOffIdlePrev = MOffSysmonWhen + PointerSlotBytes
 
 // ⭐ **HOW MANY TIMES THIS MACHINE'S BLOCKING WAITS HAVE RETURNED, FOR ANY REASON** — a hand-over, a signal, a
 // deadline. The reading `__Builtins.schedParkWakeCount()` sums over `__sched_allm`, and the number an idle
 // program keeps near zero. Owner-written, so a plain step; per-machine rather than `.data` for
 // `POffStealCount`'s reason.
-let MOffParkWakes = MOffIdlePrev + (PointerSlotBytes as ByteOffset)
+let MOffParkWakes = MOffIdlePrev + PointerSlotBytes
 
 // ⭐ **`__sched_regain_head`'s LINK** — the machines back from a kernel call whose processor was taken, each
 // waiting on its own park event for `pidleput` to hand it one (`emitSchedPidlePutLocked`). Separate from the idle
 // links because such a machine holds a green thread and is not idle.
-let MOffRegainNext = MOffParkWakes + (PointerSlotBytes as ByteOffset)
+let MOffRegainNext = MOffParkWakes + PointerSlotBytes
 
 // ==========================================================================
 // ⭐⭐⭐ ASYNCHRONOUS PREEMPTION'S WORDS — "MAY THIS THREAD BE STOPPED WHERE IT STANDS, AND HAS IT BEEN ASKED?"
@@ -641,13 +641,13 @@ let MOffRegainNext = MOffParkWakes + (PointerSlotBytes as ByteOffset)
 // per-machine field.
 //
 // ⚠ **A THREAD WITH NO MACHINE STEPS `SchedLockDepthSinkLabel` INSTEAD** — see `emitSchedLockDepthAddr`.
-export let MOffLocks = MOffRegainNext + (PointerSlotBytes as ByteOffset)
+export let MOffLocks = MOffRegainNext + PointerSlotBytes
 
 // ⭐ **THE OS THREAD ID THIS MACHINE RUNS ON**, recorded by the thread itself at `emitSchedBecomeM`. Windows
 // needs it to open a suspendable handle; a POSIX lane needs it as the `tgkill`/`pthread_kill` target. 0 means
 // this machine has not adopted its thread yet, which no reader can observe: the publish that makes the M
 // reachable is the TLS store at the end of the same block.
-export let MOffOsThreadId = MOffLocks + (PointerSlotBytes as ByteOffset)
+export let MOffOsThreadId = MOffLocks + PointerSlotBytes
 
 // ⭐⭐ **A HANDLE THAT CAN SUSPEND AND RESUME *THIS* THREAD, AND IT IS NOT `MOffOsThreadHandle`.** That field
 // is the JOINABLE handle the CREATOR got back, and it is 0 for the main OS thread, which this runtime never
@@ -660,7 +660,7 @@ export let MOffOsThreadId = MOffLocks + (PointerSlotBytes as ByteOffset)
 //
 // ⚠ **A SIGNALLING LANE LEAVES IT 0.** A signal is addressed to the thread ID above, so there is no handle
 // to open and nothing reads this word (`PreemptDelivery.signal`).
-export let MOffPreemptThreadHandle = MOffOsThreadId + (PointerSlotBytes as ByteOffset)
+export let MOffPreemptThreadHandle = MOffOsThreadId + PointerSlotBytes
 
 // ⭐⭐ **IS A STOP ALREADY OUTSTANDING AGAINST THIS MACHINE? — Go's `m.signalPending`, and the rate limit that
 // keeps the monitor from stacking two.** The sender compare-and-swaps 0→1 and the trampoline clears it on the
@@ -670,9 +670,9 @@ export let MOffPreemptThreadHandle = MOffOsThreadId + (PointerSlotBytes as ByteO
 // ⚠ **A LANE THAT DELIVERS SYNCHRONOUSLY STILL NEEDS IT.** On x64-windows the suspend/inject/resume is over
 // before the sender returns, so the window is short — but the trampoline has not RUN yet when the sender
 // releases, and the next poll would otherwise inject a second one on top of the first.
-export let MOffSignalPending = MOffPreemptThreadHandle + (PointerSlotBytes as ByteOffset)
+export let MOffSignalPending = MOffPreemptThreadHandle + PointerSlotBytes
 
-export let MOffLockedGt = MOffSignalPending + (PointerSlotBytes as ByteOffset)
+export let MOffLockedGt = MOffSignalPending + PointerSlotBytes
 
 // Raised by a machine that has given up its processor and is about to wait on `MOffParkEvent` for its
 // pinned thread's next turn; cleared by whoever hands that turn over.
@@ -680,18 +680,18 @@ export let MOffLockedGt = MOffSignalPending + (PointerSlotBytes as ByteOffset)
 // ⚠ It is published and `__sched_lock` dropped BEFORE the wait, which is sound only because the park object
 // is an EVENT: a `SetEvent` arriving first leaves it signalled and the wait returns at once. Under a
 // condition variable the same order loses the wakeup.
-let MOffLockedPark = MOffLockedGt + (PointerSlotBytes as ByteOffset)
+let MOffLockedPark = MOffLockedGt + PointerSlotBytes
 
-let MOffLockedStrand = MOffLockedPark + (PointerSlotBytes as ByteOffset)
+let MOffLockedStrand = MOffLockedPark + PointerSlotBytes
 
-let MLockedParkWaiting = 1 as ParsedInt
+let MLockedParkWaiting = 1 as FullRangeInt
 
-export let MOffOsThreadUniqueId = MOffLockedStrand + (PointerSlotBytes as ByteOffset)
+export let MOffOsThreadUniqueId = MOffLockedStrand + PointerSlotBytes
 
 // The three head scalars, the inline GT, the idle tail, the syscall bracket's three, the idle back-link, the
 // wake count, the regain link, asynchronous preemption's four and the pinned thread's three. Derived, never
 // written down as a number, for `PStructSize`'s reason.
-let MStructSize = ((MOffOsThreadUniqueId as ParsedInt) + PointerSlotBytes) as ParsedInt
+let MStructSize = ((MOffOsThreadUniqueId + PointerSlotBytes) as FullRangeInt)
 
 // ==========================================================================
 // The ProcContext (P) struct
@@ -804,8 +804,8 @@ let POffReservedOsThreadHandle = 0x40 as ByteOffset
 // critical section, which is the shape `MOffSpinning` and `__sched_nmspinning` already have: a per-party bit
 // beside a collective structure, with one door for the pair.
 let POffStatus = 0x48 as ByteOffset
-let PStatusUnused = 0 as ParsedInt
-let PStatusActive = 1 as ParsedInt
+let PStatusUnused = 0 as FullRangeInt
+let PStatusActive = 1 as FullRangeInt
 
 // Reserved: part of the portable header, and nothing reads or writes it.
 let POffReservedPendingWaiter = 0x50 as ByteOffset
@@ -862,7 +862,7 @@ let POffSchedTick = 0x80 as ByteOffset
 // visible in the rendered Target IR's `data {` section, so one added here would move the emitted
 // image of every green-thread program to carry a number nothing but a torture harness reads.
 // Owner-written, like `schedTick`, and summed across `__sched_procs` by `__sched_steal_count`.
-let POffStealCount = POffSchedTick + (PointerSlotBytes as ByteOffset)
+let POffStealCount = POffSchedTick + PointerSlotBytes
 
 // ⭐⭐ **HOW MANY TIMES THIS PROCESSOR HAS BEEN RETAKEN FROM A MACHINE STUCK IN A KERNEL CALL — the reading
 // `__Builtins.schedRetakeCount()` sums, and the one way a program can observe that a HANDOFF really happened
@@ -876,7 +876,7 @@ let POffStealCount = POffSchedTick + (PointerSlotBytes as ByteOffset)
 //
 // ⚠ **SYSMON IS ITS ONLY WRITER, SO IT IS A PLAIN LOAD/ADD/STORE.** There is one sysmon thread; nothing else
 // steps it, and a reader that wants it exact reads it after its work has finished, which is when it is.
-let POffRetakeCount = POffStealCount + (PointerSlotBytes as ByteOffset)
+let POffRetakeCount = POffStealCount + PointerSlotBytes
 
 // ⭐⭐⭐ **HOW MANY SLOTS THIS PROCESSOR HAS QUEUED AGAINST A SPAN IT DOES NOT HOLD CACHED — the
 // reading `__Builtins.slabRemoteFreeCount()` sums, and the ONE way a program can observe that the
@@ -913,7 +913,7 @@ let POffRetakeCount = POffStealCount + (PointerSlotBytes as ByteOffset)
 // and the decision is not.
 // EXPORTED, unlike its two neighbours, because its one WRITER is in another file: the credit happens at
 // `SlabRuntime.emitSlabRemotePush`, where the slot is queued. The sum stays here with the walk.
-export let POffRemoteFreeCount = POffRetakeCount + (PointerSlotBytes as ByteOffset)
+export let POffRemoteFreeCount = POffRetakeCount + PointerSlotBytes
 
 // ⭐⭐⭐ **`__sched_pidle`'s LINK — Go's `p.link` as `pidleput`/`pidleget` use it (`proc.go:7425`/`:7454`),
 // and the slot that makes *"a processor with no machine"* a state this runtime can write down.**
@@ -944,12 +944,12 @@ export let POffRemoteFreeCount = POffRetakeCount + (PointerSlotBytes as ByteOffs
 // `POffStatus` on the P it is already addressing, which answers the same question with nothing to keep in
 // step. ⇒ **the ORDERING those two comments protect is preserved by there being nothing to order**, and
 // porting the masks would have been two words maintained beside facts that already answer for them.
-let POffPidleNext = POffRemoteFreeCount + (PointerSlotBytes as ByteOffset)
+let POffPidleNext = POffRemoteFreeCount + PointerSlotBytes
 
 // ⭐ **HOW MANY GT RECORDS THIS P's FREE LIST HAS SERVED — the reading `__Builtins.schedGtRecycleCount()`
 // sums.** Stepped by `__gt_free_get` on every allocation its local list answered, owner-written like
 // `schedTick`, and a per-P word for `POffStealCount`'s reason.
-let POffGtRecycleCount = POffPidleNext + (PointerSlotBytes as ByteOffset)
+let POffGtRecycleCount = POffPidleNext + PointerSlotBytes
 
 // ⭐⭐ **THE MACHINE THAT LAST RELEASED THIS PROCESSOR ONTO `__sched_pidle`, OR 0 — Go's `p.oldm`
 // (`runtime2.go:786`).** `__sched_startm` asks for that machine first (`mgetSpecific`), so a processor goes
@@ -960,31 +960,31 @@ let POffGtRecycleCount = POffPidleNext + (PointerSlotBytes as ByteOffset)
 // real M struct, and the only question a reader asks of it — is that machine on `__sched_midle`? — is answered
 // under the lock by `emitSchedMidleHolds`. Written by `emitSchedReleaseProcLocked` and read by
 // `__sched_startm`, both under `__sched_lock`.
-let POffOldM = POffGtRecycleCount + (PointerSlotBytes as ByteOffset)
+let POffOldM = POffGtRecycleCount + PointerSlotBytes
 
 // ⭐⭐ **THE MACHINE HOLDING THIS PROCESSOR, OR 0 — Go's `p.m`.** Written beside `M->currentP` by the two doors
 // that move a processor (`emitSchedAdoptProc`, `emitSchedReleaseProcLocked`), and cleared by the retake that wins
 // it. Its one reader is `__sched_retake`, which finds the machines worth asking about by walking the processors
 // and reads it unlocked: that function's header argues why a stale answer is only a candidate.
-let POffM = POffOldM + (PointerSlotBytes as ByteOffset)
+let POffM = POffOldM + PointerSlotBytes
 
 // ⭐⭐ **`__sysmon`'s NOTE ON THIS PROCESSOR's SCHEDULE COUNTER — Go's `sysmontick.schedtick`/`schedwhen`.** The
 // `POffSchedTick` it last saw and the time it first saw it. An unchanged tick means one strand has held the
 // processor since then, and `SchedForcePreemptNs` of that is a preemption request (`__sched_retake`). On the
 // processor, as Go keeps it, because the tick is the processor's. sysmon is the only reader and writer of both,
 // so neither is synchronised; a zero note cannot match a processor running a strand, whose tick is at least one.
-let POffSysmonTick = POffM + (PointerSlotBytes as ByteOffset)
-let POffSysmonWhen = POffSysmonTick + (PointerSlotBytes as ByteOffset)
+let POffSysmonTick = POffM + PointerSlotBytes
+let POffSysmonWhen = POffSysmonTick + PointerSlotBytes
 
 // ⭐ **HOW MANY PREEMPTION REQUESTS THREADS ON THIS PROCESSOR HAVE HONOURED — the reading
 // `__Builtins.schedPreemptCount()` sums.** Stepped by `__gt_preempt` on the machine holding the processor, which
 // is its only writer, and a per-P word for `POffStealCount`'s reason.
-let POffPreemptCount = POffSysmonWhen + (PointerSlotBytes as ByteOffset)
+let POffPreemptCount = POffSysmonWhen + PointerSlotBytes
 
 // ⭐ **HOW MANY TIMES A GREEN THREAD ON THIS PROCESSOR HAS SUSPENDED ON THE NETWORK POLLER — the reading
 // `__Builtins.schedNetpollBlockCount()` sums.** Stepped by `__gt_register_park`'s netpoll arm on the machine
 // holding the processor, which is its only writer, and a per-P word for `POffStealCount`'s reason.
-let POffNetpollBlockCount = POffPreemptCount + (PointerSlotBytes as ByteOffset)
+let POffNetpollBlockCount = POffPreemptCount + PointerSlotBytes
 
 // ⭐ **HOW MANY BRACKETED KERNEL CALLS MACHINES HOLDING THIS PROCESSOR HAVE ENTERED — the reading
 // `__Builtins.schedSyscallCount()` sums.** Stepped on every lane that brackets, immediately BEFORE the
@@ -992,7 +992,7 @@ let POffNetpollBlockCount = POffPreemptCount + (PointerSlotBytes as ByteOffset)
 // holding it is the word's only writer and a plain step is exact. After it the processor may already belong to
 // another machine. A per-P word for `POffStealCount`'s reason. EXPORTED because the x64-windows step is
 // hand-assembled in `X64GtRuntime.emitGtEnterSyscall`.
-export let POffSyscallCount = POffNetpollBlockCount + (PointerSlotBytes as ByteOffset)
+export let POffSyscallCount = POffNetpollBlockCount + PointerSlotBytes
 
 // ⭐⭐ **THE RING'S 256 SLOTS, AT THE P's TAIL.** Go's `runq [256]guintptr` (`runtime2.go:807`). FIXED
 // rather than grown: the overflow has somewhere to go (the global queue), so a full ring is a routing
@@ -1001,7 +1001,7 @@ export let POffSyscallCount = POffNetpollBlockCount + (PointerSlotBytes as ByteO
 //
 // It sits at the TAIL because everything above it is either the portable header or an 8-byte scalar, and a
 // 2 KB array in the middle would push every one of them past an offset every graft above already knows.
-let RunqSlots = 256 as ParsedInt
+let RunqSlots = 256 as FullRangeInt
 
 // `counter mod RunqSlots` as a mask, which is what makes the slot computation an `and` rather than an
 // `idiv`. It is `RunqSlots - 1` and is only a mask because `RunqSlots` is a power of two — stated here so
@@ -1021,16 +1021,16 @@ let RunqHalfSlots = RunqSlots shr 1
 //
 // ⚠ **IT IS NOT `POffSchedTick` AND CANNOT BE.** That counter is DELIBERATELY frozen for the whole of a slot
 // chain (`POffRunnext`), which is exactly the interval this one has to measure.
-let POffRunnextStreak = POffSyscallCount + (PointerSlotBytes as ByteOffset)
+let POffRunnextStreak = POffSyscallCount + PointerSlotBytes
 
-let POffRunqBase = POffRunnextStreak + (PointerSlotBytes as ByteOffset)
+let POffRunqBase = POffRunnextStreak + PointerSlotBytes
 
 // The portable header, the inline GT, the tail scalars and the ring. See the layout header.
 //
 // ⚠⚠ **THE BYTE COUNT IS DELIBERATELY NOT WRITTEN HERE.** Every offset above is derived from
 // `GtStructSize`, so a prose number beside a derived one is the same fact written twice — and the prose is
 // the copy that rots.
-let PStructSize = ((POffRunqBase as ParsedInt) + RunqSlots * PointerSlotBytes) as ParsedInt
+let PStructSize = ((POffRunqBase + (RunqSlots as ByteOffset) * PointerSlotBytes) as FullRangeInt)
 
 // ⭐ **HOW OFTEN THE GLOBAL QUEUE IS CONSULTED FIRST — Go's 61 (`proc.go:3457`).** Without it two green
 // threads that keep
@@ -1043,7 +1043,7 @@ let PStructSize = ((POffRunqBase as ParsedInt) + RunqSlots * PointerSlotBytes) a
 // its very first schedule a global check; here that would be a special case with no reader, since the global
 // queue is empty before anything has overflowed into it. The property both spell is the one that matters —
 // nothing waits in the global queue for more than 61 schedules.
-let GtFairnessInterval = 61 as ParsedInt
+let GtFairnessInterval = 61 as FullRangeInt
 
 // ⛔⛔⛔ **HOW MANY SCHEDULES IN A ROW MAY COME OUT OF THE `runnext` SLOT WHILE ANOTHER TIER HOLDS WORK — THE
 // LOCAL TIER'S `GtFairnessInterval`, AND THE ONE PIECE OF THIS SLOT GO DOES NOT HAVE.**
@@ -1072,7 +1072,7 @@ let RunnextStreakLimit = GtFairnessInterval
 // ⭐ **FOUR ROUNDS OF STEALING BEFORE A P GIVES UP — Go's `stealTries` (`proc.go:3849`).** More than one
 // because a victim that is momentarily empty may be about to publish; bounded because a P that finds nothing
 // four times over should park and let an enqueuer wake it rather than burn a core.
-let StealRounds = 4 as ParsedInt
+let StealRounds = 4 as FullRangeInt
 
 // ⭐ **THE ROUND ON WHICH A THIEF MAY ALSO TAKE THE VICTIM'S `runnext` — Go's `i > 2` over those four
 // (`proc.go:3886`).** The slot holds the thread the victim's own machine is most likely to run next, so it is
@@ -1085,11 +1085,11 @@ let StealRunNextRound = StealRounds - 1
 // pause gives the victim's machine time to reach its own scheduler and run the thread itself, rather than
 // having it thrashed to another processor. Go's own margin: a channel hand-off is ~50 ns, so 3 µs overshoots
 // by ~50×.
-let StealRunNextBackoffUs = 3 as ParsedInt
+let StealRunNextBackoffUs = 3 as FullRangeInt
 
 // Whether the thread `__sched_find_runnable` hands back carries the running slice on with it (`POffRunnext`).
-let SchedSliceInherited = 1 as ParsedInt
-let SchedSliceFresh = 0 as ParsedInt
+let SchedSliceInherited = 1 as FullRangeInt
+let SchedSliceFresh = 0 as FullRangeInt
 
 // ⭐ **THE MOST GREEN THREADS ONE GRAB TAKES OFF THE GLOBAL QUEUE — half a ring, Go's first term
 // (`proc.go:3492`, `globrunqgetbatch(int32(len(pp.runq)) / 2)`).** The grab is `min(this, size,
@@ -1102,12 +1102,12 @@ let GlobalBatchMax = RunqHalfSlots
 // takes `__sched_lock`, pushes, and moves records to the global list until the local one is back at the low
 // mark; a get that finds the local list empty moves up to the low mark back. The gap between the two is what keeps a spawn/reclaim rhythm near either mark from taking
 // `__sched_lock` on every record.
-let GtFreeLocalHigh = 64 as ParsedInt
-let GtFreeLocalLow = 32 as ParsedInt
+let GtFreeLocalHigh = 64 as FullRangeInt
+let GtFreeLocalLow = 32 as FullRangeInt
 
 // ⭐ **ONE SCHEDULER-ARENA CHUNK: 64 KiB, Windows' allocation granularity**, so no reservation strands address
 // space, and a whole multiple of every lane's page. A tail too short for the next carve is never carved.
-let SchedArenaChunkBytes = 65536 as ParsedInt
+let SchedArenaChunkBytes = 65536 as FullRangeInt
 
 // ==========================================================================
 // The `.data` slots
@@ -1172,7 +1172,7 @@ let SchedMcountLabel = b"__sched_mcount"
 // machine is an OS thread with its own 64 KB syscall stack and event, and none is ever reclaimed, so a
 // runaway spawn arm would otherwise exhaust the address space and fail somewhere unrelated. Reaching it aborts
 // with `RuntimeAbort.schedulerThreadExhaustion`, which is Go's `throw("thread exhaustion")`.
-let SchedMaxMachines = 10000 as ParsedInt
+let SchedMaxMachines = 10000 as FullRangeInt
 
 // ⭐⭐⭐ **THE IDLE-M LIST — Go's `sched.midle`, doubly linked through `MOffIdleNext`/`MOffIdlePrev`.** An M
 // with nothing to run puts itself here and blocks on its own `MOffParkEvent`; a `startm` takes one off and
@@ -1369,29 +1369,29 @@ let SchedShutdownFlagLabel = b"__sched_shutdown_flag"
 // handoff costs more than the stall it removes (a machine started, a search run and a park paid for a call
 // that was about to return); above it a genuinely blocked machine holds a processor for longer than it needs
 // to. It is compared against `__gt_now_ns`, which is why it is written in nanoseconds.
-let SysmonRetakeAfterNs = 10 * 1000 * 1000 as ParsedInt
+let SysmonRetakeAfterNs = 10 * 1000 * 1000 as FullRangeInt
 
 // ⭐ **HOW LONG ONE STRAND MAY HOLD A PROCESSOR BEFORE IT IS ASKED TO GIVE IT UP — Go's `forcePreemptNS`.** Long
 // enough that a strand doing useful work pays one switch per interval, short enough that a thread waiting behind
 // it — `main` among them — is not held up past it by more than a sysmon lap.
-let SchedForcePreemptNs = 10 * 1000 * 1000 as ParsedInt
+let SchedForcePreemptNs = 10 * 1000 * 1000 as FullRangeInt
 
 // ⭐⭐ **THE MONITOR'S SLEEP BETWEEN LAPS — Go's ladder (`proc.go`'s `sysmon`): 20 µs, doubling once fifty laps
 // in a row have retaken nothing, capped at 10 ms.** A short first interval notices a blocking call soon after
 // it starts; the back-off keeps a process that is not blocking from paying a thread wake every 20 µs. The
 // sleep is `NetpollVerb.sleepOnTimer`, the one wait fine enough for the floor on every lane.
-let SysmonMinSleepUs = 20 as ParsedInt
-let SysmonMaxSleepUs = 10 * 1000 as ParsedInt
+let SysmonMinSleepUs = 20 as FullRangeInt
+let SysmonMaxSleepUs = 10 * 1000 as FullRangeInt
 
 // How many consecutive laps that retook nothing start the back-off. Go's 50, and the same reasoning: a process
 // that has not blocked in fifty laps is one whose next block can afford to be noticed a little later. Any
 // retake snaps the interval straight back to `SysmonMinSleepUs`.
-let SysmonIdlePollsBeforeBackoff = 50 as ParsedInt
+let SysmonIdlePollsBeforeBackoff = 50 as FullRangeInt
 
 // ⭐ **HOW LONG THE POLLER MAY GO UNPOLLED BEFORE THE MONITOR LOOKS ITSELF — Go's 10 ms.** While every machine
 // is busy nobody waits in the poller, so an event there would wait for a machine to go idle; the monitor takes
 // a non-blocking look instead (`__np_poll(0)`).
-let SysmonPollStaleNs = 10 * 1000 * 1000 as ParsedInt
+let SysmonPollStaleNs = 10 * 1000 * 1000 as FullRangeInt
 
 // ⭐⭐ **THE MONITOR'S DEEP SLEEP — Go's `sysmonwait`/`sysmonnote`.** With every processor idle there is no
 // processor to retake and no machine to preempt, so the monitor blocks on its own event rather than lapping, and
@@ -1426,7 +1426,7 @@ let SchedRegainHeadLabel = b"__sched_regain_head"
 // ⭐ **THE LONGEST ONE POLL WAITS — Go's cap of 1e9 ms.** Every lane's wait takes its timeout as a 32-bit count, and
 // `epoll_wait` reads it SIGNED, so a deadline further out than ~24.8 days would wrap into a wait for ever; the
 // poller wakes at the cap and waits again for the rest.
-let PollerMaxWaitMs = 1000 * 1000 * 1000 as ParsedInt
+let PollerMaxWaitMs = 1000 * 1000 * 1000 as FullRangeInt
 
 // ⛔⛔⛔ **A TARGET FORK IN THE SCHEDULER — READ THIS BEFORE THE FOUR SITES THAT ASK IT.**
 //
@@ -1562,7 +1562,7 @@ export let SchedPreemptContextLabel = b"__sched_preempt_context"
 
 // A page. An x64 `CONTEXT` is 1232 bytes and `osAllocPages` has no finer unit, so the reservation is stated
 // as what it actually takes rather than as a struct size the Std tier has no other use for.
-let SchedPreemptContextBytes = 0x1000 as ParsedInt
+let SchedPreemptContextBytes = 0x1000 as FullRangeInt
 
 // ⭐⭐ **`__gt_preempt_self_register(m)` — WHAT A NEW MACHINE RECORDS ABOUT ITS OWN THREAD SO THE MONITOR CAN
 // STOP IT.** A hand-assembled chunk per lane, because what it records is the host's: on x64-windows the
@@ -1729,9 +1729,9 @@ let SchedDrainRunqName = b"__sched_drain_runq"
 // them, or 0; with `stealRunNext` an empty ring falls back to the victim's slot. Go's `runqgrab` + `runqsteal`.
 let SchedStealName = b"__sched_steal"
 
-let SchedStealThiefParamIndex = 0 as ParsedInt
-let SchedStealVictimParamIndex = 1 as ParsedInt
-let SchedPreemptOneMachineParamIndex = 0 as ParsedInt
+let SchedStealThiefParamIndex = 0 as FullRangeInt
+let SchedStealVictimParamIndex = 1 as FullRangeInt
+let SchedPreemptOneMachineParamIndex = 0 as FullRangeInt
 
 // ⭐⭐ `__sched_find_runnable() -> gt` — **THE ONE PLACE THE SCHEDULER DECIDES WHAT RUNS NEXT**, and 0 when
 // there is nothing. Go's `findRunnable`, minus everything the compiler has no equivalent of.
@@ -2004,7 +2004,7 @@ end 'emitLoadCurrentM'
 // `bailValues` are the constants the bail edge carries, one per block arg of `bail` — minted fresh in
 // whichever block takes the arm, because a branch edge's arguments must be defined in the block that
 // branches. A `bail` with no block args (`__sched_runq_put`'s global queue) passes none.
-export function emitLoadCurrentMOrBail(module StdModule, cur IrBlock, haveOffset IrBlock, haveMachine IrBlock, bail IrBlock, bailValues ParsedIntArray, ids ValueMinter) returns ValueId
+export function emitLoadCurrentMOrBail(module StdModule, cur IrBlock, haveOffset IrBlock, haveMachine IrBlock, bail IrBlock, bailValues FullRangeIntArray, ids ValueMinter) returns ValueId
 	let tebOffset = emitLoadGlobalWord(module, block: cur, label: SchedTlsTebOffsetLabel, ids: ids)
 	emitBailIfZero(module, block: cur, tested: tebOffset, bail: bail, bailValues: bailValues, otherwise: haveOffset, ids: ids)
 
@@ -2020,7 +2020,7 @@ end 'emitLoadCurrentMOrBail'
 // because a caller that wants a processor's per-P state has none to use in any of them. The blocks are the
 // caller's, for `emitLoadCurrentMOrBail`'s reason.
 function emitLoadCurrentPOrBail(module StdModule, cur IrBlock, haveOffset IrBlock, haveMachine IrBlock, haveProc IrBlock, noProc IrBlock, ids ValueMinter) returns ValueId
-	let m = emitLoadCurrentMOrBail(module, cur: cur, haveOffset: haveOffset, haveMachine: haveMachine, bail: noProc, bailValues: ParsedIntArray.create(), ids: ids)
+	let m = emitLoadCurrentMOrBail(module, cur: cur, haveOffset: haveOffset, haveMachine: haveMachine, bail: noProc, bailValues: FullRangeIntArray.create(), ids: ids)
 
 	let p = emitLoadField(module, block: haveMachine, record: m, offset: MOffCurrentP, ids: ids)
 	let none = emitConst(module, block: haveMachine, value: 0, ids: ids)
@@ -2031,7 +2031,7 @@ end 'emitLoadCurrentPOrBail'
 
 // Terminate `block` with *"`tested` is 0 → `bail`, otherwise `otherwise`"*, giving the bail edge this
 // block's own copy of each of its arguments.
-function emitBailIfZero(module StdModule, block IrBlock, tested ValueId, bail IrBlock, bailValues ParsedIntArray, otherwise IrBlock, ids ValueMinter)
+function emitBailIfZero(module StdModule, block IrBlock, tested ValueId, bail IrBlock, bailValues FullRangeIntArray, otherwise IrBlock, ids ValueMinter)
 	let zero = emitConst(module, block: block, value: 0, ids: ids)
 	let isZero = emitCmp(module, block: block, a: tested, b: zero, pred: StdCmpPred.eq, ids: ids)
 
@@ -2116,7 +2116,7 @@ export function emitLoadCurrentGtAndProcIdOrZero(module StdModule, func IrFuncti
 	merge.blockArgs.push(IrBlockArg.create(procIdId, argType: StdType.i64))
 
 	// The first two zeros are the shared walk's, and both answer 0 for BOTH halves.
-	var bothHalvesZero = ParsedIntArray.create()
+	var bothHalvesZero = FullRangeIntArray.create()
 	bothHalvesZero.push(0)
 	bothHalvesZero.push(0)
 	let m = emitLoadCurrentMOrBail(module, cur: cur, haveOffset: haveOffset, haveMachine: haveMachine, bail: merge, bailValues: bothHalvesZero, ids: ids)
@@ -2190,7 +2190,7 @@ let PreemptEnvOnValue = b"on"
 // The first scratch one `GetEnvironmentVariableW` of a scheduler setting gets. A switch value that fills
 // it is not a switch value, so `emitResolvePreemptSwitch` refuses it; a processor count may carry any
 // number of leading zeros, so `emitResolveMaxProcs` reads a longer one again at the size the OS reports.
-let SchedEnvValueBufBytes = 32 as ParsedInt
+let SchedEnvValueBufBytes = 32 as FullRangeInt
 
 // ⭐⭐ **THE BASE OF THIS OS THREAD'S PER-THREAD SLOT ARRAY — the one number that turns `tlsAlloc`'s answer
 // into the byte offset `tlsSlotLoad` reads at.** `__sched_init_procs` computes `index * 8 + base` once and
@@ -2210,7 +2210,7 @@ let SchedEnvValueBufBytes = 32 as ParsedInt
 //
 // ⚠ It is keyed on the OS rather than the CPU: it is an operating system's thread-local storage layout, and
 // a hypothetical arm64-Windows would want 0x1480 exactly as x64-Windows does.
-function tlsSlotArrayBase(target Target) returns ParsedInt
+function tlsSlotArrayBase(target Target) returns FullRangeInt
 	return match target.os 'os'
 		windows gives WindowsTebTlsSlotsOffset
 		linux gives LinuxThreadPointerBase
@@ -2230,13 +2230,13 @@ end 'tlsSlotArrayBase'
 // only the instruction that writes it — an `msr TPIDR_EL0` on AArch64, an `arch_prctl(ARCH_SET_FS)` on
 // x86-64, where the register is not addressable in user mode at all. Neither difference is visible here,
 // which is the point of keying this on the OS.
-function noTlsSlotArray(os Os) returns ParsedInt
+function noTlsSlotArray(os Os) returns FullRangeInt
 	panic("tlsSlotArrayBase: {os.name} has no per-OS-thread slot this scheduler could publish a P in — a WASI component has no OS-thread concept at all. `targetProvidesFacility` denies `greenThreads` there, so a source-written `async` is refused at its own span; reaching here means a COMPILER-INSERTED `__sched_init_procs` got past that name-keyed gate")
 end 'noTlsSlotArray'
 
-let WindowsTebTlsSlotsOffset = 0x1480 as ParsedInt
-let WindowsTebTlsSlotCount = 64 as ParsedInt
-let DarwinTsdArrayBase = 0 as ParsedInt
+let WindowsTebTlsSlotsOffset = 0x1480 as FullRangeInt
+let WindowsTebTlsSlotCount = 64 as FullRangeInt
+let DarwinTsdArrayBase = 0 as FullRangeInt
 
 function emitRequireAddressableTlsSlot(module StdModule, func IrFunction, cur IrBlock, tlsIndex ValueId, target Target, ids ValueMinter) returns IrBlock
 	match target.os 'os'
@@ -2269,7 +2269,7 @@ end 'emitRequireTebTlsSlot'
 // Windows's 0x1480 is not — it would also be key 0's slot — and both answer it the same way, by refusing to
 // hand out key 0 at run time rather than by trusting the arithmetic
 // (`Arm64LinuxRuntime.buildArm64LinuxTlsAllocChunk`, `X64LinuxRuntime.buildX64LinuxTlsAllocChunk`).
-let LinuxThreadPointerBase = 0 as ParsedInt
+let LinuxThreadPointerBase = 0 as FullRangeInt
 
 // The scheduler's `.data` slots, in the order the image lays them out. Every word a Std body reads is
 // `walked`: pushed for every program and kept only where a function surviving dead-function elimination
@@ -2512,13 +2512,13 @@ end 'emitSchedLockLeave'
 // same word through `emitStepLockDepthAt`: a thread holding the ALLOCATOR's slow-path lock is as
 // unstoppable as one holding `__sched_lock`, and two mechanisms writing one word through two spellings is
 // the shape this file's header refuses.
-function emitSchedStepLockDepth(module StdModule, block IrBlock, delta ParsedInt, ids ValueMinter)
+function emitSchedStepLockDepth(module StdModule, block IrBlock, delta FullRangeInt, ids ValueMinter)
 	emitStepLockDepthAt(module, block: block, depthAddr: emitSchedLockDepthAddr(module, block: block, ids: ids), delta: delta, ids: ids)
 end 'emitSchedStepLockDepth'
 
 // The step itself, for a caller that resolved the depth word by its own walk — the allocator's, which has
 // no `.data` teb offset to read in a program without a scheduler (`SlabRuntime.emitSlabResolveShard`).
-export function emitStepLockDepthAt(module StdModule, block IrBlock, depthAddr ValueId, delta ParsedInt, ids ValueMinter)
+export function emitStepLockDepthAt(module StdModule, block IrBlock, depthAddr ValueId, delta FullRangeInt, ids ValueMinter)
 	module.appendOp(block, op: StdOp.atomicRmw(ids.mint(), addrId: depthAddr, operandId: emitConst(module, block: block, value: delta, ids: ids), opcode: StdAtomicRmwOpcode.add))
 end 'emitStepLockDepthAt'
 
@@ -2545,7 +2545,7 @@ export function emitSchedLockDepthAddr(module StdModule, block IrBlock, ids Valu
 	let onMachine = emitBin(module, block: block, a: scheduled, b: hasMachine, opcode: StdBinOpcode.bitAnd, ids: ids)
 	let mineMask = emitBin(module, block: block, a: emitConst(module, block: block, value: 0, ids: ids), b: onMachine, opcode: StdBinOpcode.sub, ids: ids)
 	let sinkMask = emitBin(module, block: block, a: onMachine, b: emitConst(module, block: block, value: OneMore, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
-	let mine = emitBin(module, block: block, a: m, b: emitConst(module, block: block, value: MOffLocks as ParsedInt, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let mine = emitBin(module, block: block, a: m, b: emitConst(module, block: block, value: MOffLocks as FullRangeInt, ids: ids), opcode: StdBinOpcode.add, ids: ids)
 	let sink = ids.mint()
 	module.appendOp(block, op: StdOp.globalAddr(sink, label: SchedLockDepthSinkLabel))
 	let mineBits = emitBin(module, block: block, a: mine, b: mineMask, opcode: StdBinOpcode.bitAnd, ids: ids)
@@ -2632,7 +2632,7 @@ end 'emitSchedListTakeHead'
 // and `__gt_records_carved` — or a locked decision, `__sched_timer_starts`.** A plain load/add/store, because
 // every writer holds `__sched_lock`; each count is stepped only inside the doors that mutate its structure or
 // make its decision, so the two cannot drift apart. The prior value has no reader.
-export function emitSchedStepLockedCount(module StdModule, block IrBlock, label ByteArray, delta ParsedInt, ids ValueMinter)
+export function emitSchedStepLockedCount(module StdModule, block IrBlock, label ByteArray, delta FullRangeInt, ids ValueMinter)
 	_ = emitGlobalAccumulate(module, block: block, label: label, delta: emitConst(module, block: block, value: delta, ids: ids), multiM: false, ids: ids)
 end 'emitSchedStepLockedCount'
 
@@ -2909,7 +2909,7 @@ function buildSchedInitProcs(module StdModule, target Target)
 	module.appendOp(entry, op: StdOp.tlsAlloc(tlsIndex))
 	var slotHeld = emitRequireAddressableTlsSlot(module, func: func, cur: entry, tlsIndex: tlsIndex, target: target, ids: ids)
 	emitStoreGlobalWord(module, block: slotHeld, label: SchedTlsIndexLabel, value: tlsIndex, ids: ids)
-	let slotStride = emitConst(module, block: slotHeld, value: PointerSlotBytes, ids: ids)
+	let slotStride = emitConst(module, block: slotHeld, value: PointerSlotBytes as FullRangeInt, ids: ids)
 	let slotBytes = emitBin(module, block: slotHeld, a: tlsIndex, b: slotStride, opcode: StdBinOpcode.mul, ids: ids)
 	let tebBase = emitConst(module, block: slotHeld, value: tlsSlotArrayBase(target), ids: ids)
 	let tebOffset = emitBin(module, block: slotHeld, a: slotBytes, b: tebBase, opcode: StdBinOpcode.add, ids: ids)
@@ -2938,7 +2938,7 @@ function buildSchedInitProcs(module StdModule, target Target)
 
 	// The `P*` array. `__slab_alloc` zeroes it, so a slot the loop has not reached yet reads as a null P
 	// rather than as garbage — which matters only until the loop fills every one, and costs nothing.
-	let arrayStride = emitConst(module, block: settled, value: PointerSlotBytes, ids: ids)
+	let arrayStride = emitConst(module, block: settled, value: PointerSlotBytes as FullRangeInt, ids: ids)
 	let arrayBytes = emitBin(module, block: settled, a: numProcs, b: arrayStride, opcode: StdBinOpcode.mul, ids: ids)
 	let procs = ids.mint()
 	module.appendOp(settled, op: StdOp.call(procs, callee: SlabAllocName, args: argsOf(arrayBytes)))
@@ -3162,7 +3162,7 @@ end 'emitSchedAdoptProc'
 // The floor a processor count never answers below, spelled here because this is the only Std builder that
 // clamps one. `runtime/CpuParallel.maxon` states the same number for the entry point a program reads: no
 // name crosses the tier boundary.
-let MinimumProcessorCount = 1 as ParsedInt
+let MinimumProcessorCount = 1 as FullRangeInt
 
 // The counts `MAXON_MAX_PROCS` is honoured at; `emitParseRequestedProcessorCount` ignores any other
 // value. The spec harness and `debug_start` refuse a count outside it, which would be dropped silently.
@@ -3171,7 +3171,7 @@ export typealias RequestedProcessorCount = int(1 to i32.max)
 export let FewestRequestedProcessors = 1 as RequestedProcessorCount
 export let MostRequestedProcessors = i32.max as RequestedProcessorCount
 
-export let RequestedProcessorCountSign = 0x2B as ParsedInt
+export let RequestedProcessorCountSign = 0x2B as FullRangeInt
 
 // `osCpuCount` is read directly rather than through `__cpu_count`, which is a separate runtime entry a
 // program opts into and which a scheduler must not drag in.
@@ -3272,16 +3272,16 @@ function emitCStringEqualsLiteral(module StdModule, block IrBlock, cstr ValueId,
 	var equal = emitConst(module, block: block, value: 1, ids: ids)
 
 	for (iter, expected) in literal.withIterator() 'eachByte'
-		let same = emitByteAtEquals(module, block: block, cstr: cstr, index: iter.index() as ParsedInt, expected: expected as ParsedInt, ids: ids)
+		let same = emitByteAtEquals(module, block: block, cstr: cstr, index: iter.index() as FullRangeInt, expected: expected as FullRangeInt, ids: ids)
 		equal = emitBin(module, block: block, a: equal, b: same, opcode: StdBinOpcode.bitAnd, ids: ids)
 	end 'eachByte'
 
-	let terminated = emitByteAtEquals(module, block: block, cstr: cstr, index: literal.count() as ParsedInt, expected: 0, ids: ids)
+	let terminated = emitByteAtEquals(module, block: block, cstr: cstr, index: literal.count() as FullRangeInt, expected: 0, ids: ids)
 	return emitBin(module, block: block, a: equal, b: terminated, opcode: StdBinOpcode.bitAnd, ids: ids)
 end 'emitCStringEqualsLiteral'
 
 // 1 when the byte at `cstr[index]` is `expected`, else 0.
-function emitByteAtEquals(module StdModule, block IrBlock, cstr ValueId, index ParsedInt, expected ParsedInt, ids ValueMinter) returns ValueId
+function emitByteAtEquals(module StdModule, block IrBlock, cstr ValueId, index FullRangeInt, expected FullRangeInt, ids ValueMinter) returns ValueId
 	let indexConst = emitConst(module, block: block, value: index, ids: ids)
 	let actual = emitLoadByteIndexed(module, block: block, base: cstr, index: indexConst, ids: ids)
 	let expectedConst = emitConst(module, block: block, value: expected, ids: ids)
@@ -3361,7 +3361,7 @@ function emitParseRequestedProcessorCount(module StdModule, func IrFunction, cur
 	let atEnd = emitCmp(module, block: scanHdr, a: ch, b: terminator, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(scanHdr, op: StdOp.condBranch(atEnd, thenBlockId: ended.id, elseBlockId: scanDigit.id))
 
-	let fewest = emitConst(module, block: ended, value: FewestRequestedProcessors as ParsedInt, ids: ids)
+	let fewest = emitConst(module, block: ended, value: FewestRequestedProcessors as FullRangeInt, ids: ids)
 	let belowFewest = emitCmp(module, block: ended, a: accId, b: fewest, pred: StdCmpPred.lt, ids: ids)
 	module.setTerminator(ended, op: StdOp.condBranch(belowFewest, thenBlockId: rejected.id, elseBlockId: accepted.id))
 	ended.branchEdges.push(BranchEdge.create(accepted.id, argIds: argsOf(accId)))
@@ -3377,7 +3377,7 @@ function emitParseRequestedProcessorCount(module StdModule, func IrFunction, cur
 
 	// The bound is tested after every digit: tested once at the end, a long enough run of digits wraps the
 	// 64-bit accumulator back into range and is taken as a count.
-	let most = emitConst(module, block: scanStep, value: MostRequestedProcessors as ParsedInt, ids: ids)
+	let most = emitConst(module, block: scanStep, value: MostRequestedProcessors as FullRangeInt, ids: ids)
 	let overflows = emitCmp(module, block: scanStep, a: nextAcc, b: most, pred: StdCmpPred.gt, ids: ids)
 	module.setTerminator(scanStep, op: StdOp.condBranch(overflows, thenBlockId: rejected.id, elseBlockId: scanHdr.id))
 	scanStep.branchEdges.push(BranchEdge.create(scanHdr.id, argIds: twoArgs(nextIndex, second: nextAcc)))
@@ -3467,7 +3467,7 @@ function emitSchedRunqIs(module StdModule, block IrBlock, p ValueId, pred StdCmp
 end 'emitSchedRunqIs'
 
 // `__sched_runq_empty`'s YES, which every caller reaches through `emitSchedRunqIs` and none spells itself.
-let SchedRunqIsEmpty = 1 as ParsedInt
+let SchedRunqIsEmpty = 1 as FullRangeInt
 
 // ⭐⭐ **DOES THIS PROCESSOR'S RUN QUEUE OR THE GLOBAL QUEUE HOLD A TOKEN RIGHT NOW?** Asked by a machine whose
 // own poll may have readied something (`widlefire`, choosing between searching again and parking), and by
@@ -3986,8 +3986,8 @@ end 'buildSchedSteal'
 // The ring's ordering check — `assertRunQueueObservationIsOrdered`
 // ==========================================================================
 
-function isRunqWordDisplacement(displacement ParsedInt) returns bool
-	return displacement == (POffRunqHead as ParsedInt) or displacement == (POffRunqTail as ParsedInt) or displacement == (POffRunnext as ParsedInt)
+function isRunqWordDisplacement(displacement FullRangeInt) returns bool
+	return displacement == (POffRunqHead as FullRangeInt) or displacement == (POffRunqTail as FullRangeInt) or displacement == (POffRunnext as FullRangeInt)
 end 'isRunqWordDisplacement'
 
 function runqWordNameOf(offset ByteOffset) returns String
@@ -4033,12 +4033,12 @@ end 'isMachineListLabel'
 type RunqTaintChannel
 	export var values as StdValueUseSet
 	export var argCallees as NameRoster
-	export var argIndices as ParsedIntArray
+	export var argIndices as FullRangeIntArray
 	export var returningCallees as NameRoster
 	export var crossedAFunction as bool
 
 	static function create() returns Self
-		return Self{values: StdValueUseSet.createRecordingIds(), argCallees: NameRoster.create(), argIndices: ParsedIntArray.create(), returningCallees: NameRoster.create(), crossedAFunction: false}
+		return Self{values: StdValueUseSet.createRecordingIds(), argCallees: NameRoster.create(), argIndices: FullRangeIntArray.create(), returningCallees: NameRoster.create(), crossedAFunction: false}
 	end 'create'
 
 	// A value id means something only inside the function that minted it, so the ids go at each function.
@@ -4052,7 +4052,7 @@ type RunqTaintChannel
 		self.crossedAFunction = false
 	end 'beginRound'
 
-	function paramIsTainted(funcName ByteArray, index ParsedInt) returns bool
+	function paramIsTainted(funcName ByteArray, index FullRangeInt) returns bool
 		for i in 0 upto self.argCallees.count() 'eachPair'
 			let callee = try self.argCallees.get(i) otherwise panic("RunqTaintChannel.paramIsTainted: argCallees.get OOB at {i}, inside a loop bounded by its own count")
 
@@ -4080,7 +4080,7 @@ type RunqTaintChannel
 		return false
 	end 'calleeReturnsTainted'
 
-	function noteArgument(callee ByteArray, index ParsedInt) returns bool
+	function noteArgument(callee ByteArray, index FullRangeInt) returns bool
 		if self.paramIsTainted(callee, index: index) 'alreadyKnown'
 			return false
 		end 'alreadyKnown'
@@ -4273,7 +4273,7 @@ function recordTaintedCall(channel RunqTaintChannel, resultId ValueId, callee By
 			continue
 		end 'notThisChannels'
 
-		grew = channel.noteArgument(callee, index: i as ParsedInt) or grew
+		grew = channel.noteArgument(callee, index: i as FullRangeInt) or grew
 	end 'eachArgument'
 
 	if channel.calleeReturnsTainted(callee) 'answersOne'
@@ -4291,7 +4291,7 @@ function recordTaintedReturn(channel RunqTaintChannel, funcName ByteArray, retVa
 	return channel.noteReturn(funcName)
 end 'recordTaintedReturn'
 
-function recordTaintedParam(channel RunqTaintChannel, funcName ByteArray, resultId ValueId, index ParsedInt) returns bool
+function recordTaintedParam(channel RunqTaintChannel, funcName ByteArray, resultId ValueId, index FullRangeInt) returns bool
 	if not channel.paramIsTainted(funcName, index: index) 'takesNoneThere'
 		return false
 	end 'takesNoneThere'
@@ -4311,7 +4311,7 @@ function recordReturnTaint(taint RunqRingTaint, funcName ByteArray, retValId Val
 	return recordTaintedReturn(taint.machineChannel, funcName: funcName, retValId: retValId) or processorsMoved
 end 'recordReturnTaint'
 
-function recordParamTaint(taint RunqRingTaint, funcName ByteArray, resultId ValueId, index ParsedInt) returns bool
+function recordParamTaint(taint RunqRingTaint, funcName ByteArray, resultId ValueId, index FullRangeInt) returns bool
 	let processorsMoved = recordTaintedParam(taint.processorChannel, funcName: funcName, resultId: resultId, index: index)
 
 	return recordTaintedParam(taint.machineChannel, funcName: funcName, resultId: resultId, index: index) or processorsMoved
@@ -4437,7 +4437,7 @@ function recordRunqTaintOfOp(func IrFunction, op StdOp, taint RunqRingTaint) ret
 		osSocketServe then return false
 		binOpImm(resultId, lhs, imm, opcode, _) then return recordImmediateAddressTaint(taint, resultId: resultId, lhs: lhs, imm: imm, opcode: opcode)
 		ret(retValId) then return recordReturnTaint(taint, funcName: func.name, retValId: retValId)
-		param(resultId, index, _) then return recordParamTaint(taint, funcName: func.name, resultId: resultId, index: index as ParsedInt)
+		param(resultId, index, _) then return recordParamTaint(taint, funcName: func.name, resultId: resultId, index: index as FullRangeInt)
 		call(resultId, callee, args) then return recordCallTaint(taint, resultId: resultId, callee: callee, args: args)
 		globalAddr(resultId, label) then return recordSchedulerGlobalAddr(taint, resultId: resultId, label: label)
 		loadIndirect(resultId, addrId, offset, _) then return recordLoadedRecord(taint, resultId: resultId, addrId: addrId, offset: offset)
@@ -4447,7 +4447,7 @@ function recordRunqTaintOfOp(func IrFunction, op StdOp, taint RunqRingTaint) ret
 	end 'k'
 end 'recordRunqTaintOfOp'
 
-function recordRunqOffsetConst(taint RunqRingTaint, resultId ValueId, value ParsedInt) returns bool
+function recordRunqOffsetConst(taint RunqRingTaint, resultId ValueId, value FullRangeInt) returns bool
 	if not isRunqWordDisplacement(value) 'namesNoRingWord'
 		return false
 	end 'namesNoRingWord'
@@ -4484,7 +4484,7 @@ function recordAddressTaint(taint RunqRingTaint, resultId ValueId, lhs ValueId, 
 end 'recordAddressTaint'
 
 function recordImmediateAddressTaint(taint RunqRingTaint, resultId ValueId, lhs ValueId, imm Imm32, opcode StdBinOpcode) returns bool
-	let displaces = opcode == StdBinOpcode.add and taint.processorChannel.values.contains(lhs) and isRunqWordDisplacement(imm as ParsedInt)
+	let displaces = opcode == StdBinOpcode.add and taint.processorChannel.values.contains(lhs) and isRunqWordDisplacement(imm as FullRangeInt)
 
 	return recordComputedAddress(taint, resultId: resultId, walksTheArray: walksProcessorArray(taint, valueId: lhs), addressesARingWord: displaces)
 end 'recordImmediateAddressTaint'
@@ -4541,7 +4541,7 @@ function requireOrderedRingReadsIn(module StdModule, func IrFunction, taint Runq
 			continue
 		end 'notAPlainLoad'
 
-		if taint.processorChannel.values.contains(load.addrId) and isRunqWordDisplacement(load.offset as ParsedInt) 'readsARingWordPlainly'
+		if taint.processorChannel.values.contains(load.addrId) and isRunqWordDisplacement(load.offset as FullRangeInt) 'readsARingWordPlainly'
 			panic("assertRunQueueObservationIsOrdered: '{String.from(func.name)}' reads a processor's `{runqWordNameOf(load.offset)}` with a PLAIN load. That word is published by another OS thread's release — `emitRunqPublishTail`'s locked add, or a claim's compare-and-swap — and on a weakly-ordered ISA a plain load may answer the new counter while the ring slot it describes is still unwritten: a green thread run twice, not a crash. Read it through `emitLoadAcquireField`")
 		end 'readsARingWordPlainly'
 
@@ -5211,8 +5211,8 @@ end 'buildSchedAnyWork'
 
 // What `__sched_any_work` answers. Named because its two callers compare against one of them, and a bare
 // literal at each end would be the answer written three times.
-let SchedWorkFound = 1 as ParsedInt
-let SchedNoWorkFound = 0 as ParsedInt
+let SchedWorkFound = 1 as FullRangeInt
+let SchedNoWorkFound = 0 as FullRangeInt
 
 // ==========================================================================
 // `__sched_sweep_dropped`
@@ -5808,7 +5808,7 @@ function buildSchedStartM(module StdModule, target Target)
 	// that arrives before the machine reaches its `osWaitHandle` is not lost, and one that arrives after it
 	// has already collected `MOffNextP` on another wake is a harmless spurious one.
 	var unlinked = emitSchedMidleUnlinkLocked(module, func: func, cur: wakeIt, m: chosenMachine, ids: ids)
-	let unreserved = emitConst(module, block: unlinked, value: SchedStartMCredit.unreserved.rawValue as ParsedInt, ids: ids)
+	let unreserved = emitConst(module, block: unlinked, value: SchedStartMCredit.unreserved.rawValue, ids: ids)
 	let nothingToHand = emitCmp(module, block: unlinked, a: credit, b: unreserved, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(unlinked, op: StdOp.condBranch(nothingToHand, thenBlockId: deliver.id, elseBlockId: handOver.id))
 
@@ -5898,7 +5898,7 @@ end 'emitSchedRaiseNeedSpinningIfReserved'
 
 // Call `__sched_startm` on `p` — 0 for *"take one off `__sched_pidle`"*.
 function emitSchedStartM(module StdModule, block IrBlock, p ValueId, credit SchedStartMCredit, ids ValueMinter)
-	let creditArg = emitConst(module, block: block, value: credit.rawValue as ParsedInt, ids: ids)
+	let creditArg = emitConst(module, block: block, value: credit.rawValue, ids: ids)
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: SchedStartMName, args: twoArgs(p, second: creditArg)))
 end 'emitSchedStartM'
 
@@ -6028,7 +6028,7 @@ end 'SchedMainLoopUntil'
 // Run the scheduler on the main machine until `until` is met. It returns holding a processor or not; the
 // next call's entry takes either.
 export function emitSchedMainLoop(module StdModule, block IrBlock, until SchedMainLoopUntil, ids ValueMinter)
-	let word = emitConst(module, block: block, value: until.rawValue as ParsedInt, ids: ids)
+	let word = emitConst(module, block: block, value: until.rawValue, ids: ids)
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: SchedMainLoopName, args: argsOf(word)))
 end 'emitSchedMainLoop'
 
@@ -6053,7 +6053,7 @@ end 'emitSchedSignalMainMachine'
 // held. EXPORTED for `GtRuntime.__gt_runner_done`,
 // which moves it when `main` completes; `__sched_checkdead` is the other mover.
 export function emitSchedEnterPhaseLocked(module StdModule, block IrBlock, phase SchedPhase, ids ValueMinter)
-	emitStoreReleaseGlobalWord(module, block: block, label: SchedPhaseLabel, value: emitConst(module, block: block, value: phase.rawValue as ParsedInt, ids: ids), ids: ids)
+	emitStoreReleaseGlobalWord(module, block: block, label: SchedPhaseLabel, value: emitConst(module, block: block, value: phase.rawValue, ids: ids), ids: ids)
 	emitSchedSignalMainMachine(module, block: block, ids: ids)
 end 'emitSchedEnterPhaseLocked'
 
@@ -6071,7 +6071,7 @@ end 'emitSchedDrainIsStuck'
 
 // 1 when the loaded phase word `phase` is `want`, else 0.
 function emitSchedPhaseIs(module StdModule, block IrBlock, phase ValueId, want SchedPhase, ids ValueMinter) returns ValueId
-	return emitCmp(module, block: block, a: phase, b: emitConst(module, block: block, value: want.rawValue as ParsedInt, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	return emitCmp(module, block: block, a: phase, b: emitConst(module, block: block, value: want.rawValue, ids: ids), pred: StdCmpPred.eq, ids: ids)
 end 'emitSchedPhaseIs'
 
 // ⭐⭐ **WHAT ENDS A LOOP**, with the one value the main machine's test needs.
@@ -6767,7 +6767,7 @@ function emitSchedMainLoopUntilMet(module StdModule, block IrBlock, until ValueI
 	let phase = emitLoadAcquireGlobalWord(module, block: block, label: SchedPhaseLabel, ids: ids)
 
 	let mainDone = emitCmp(module, block: block, a: emitSchedPhaseIs(module, block: block, phase: phase, want: SchedPhase.mainRunning, ids: ids), b: emitConst(module, block: block, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	let awaitingMainOnly = emitCmp(module, block: block, a: until, b: emitConst(module, block: block, value: SchedMainLoopUntil.mainCompleted.rawValue as ParsedInt, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let awaitingMainOnly = emitCmp(module, block: block, a: until, b: emitConst(module, block: block, value: SchedMainLoopUntil.mainCompleted.rawValue, ids: ids), pred: StdCmpPred.eq, ids: ids)
 
 	if not underTheLock 'mainCompletionOnly'
 		return emitBin(module, block: block, a: awaitingMainOnly, b: mainDone, opcode: StdBinOpcode.bitAnd, ids: ids)
@@ -6810,7 +6810,7 @@ function emitSchedMainLoopUntilMet(module StdModule, block IrBlock, until ValueI
 	let nothingLeft = emitBin(module, block: block, a: nothingOwned, b: settled, opcode: StdBinOpcode.bitAnd, ids: ids)
 	let drainOver = emitBin(module, block: block, a: nothingLeft, b: isStuck, opcode: StdBinOpcode.bitOr, ids: ids)
 
-	let draining = emitCmp(module, block: block, a: until, b: emitConst(module, block: block, value: SchedMainLoopUntil.drained.rawValue as ParsedInt, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let draining = emitCmp(module, block: block, a: until, b: emitConst(module, block: block, value: SchedMainLoopUntil.drained.rawValue, ids: ids), pred: StdCmpPred.eq, ids: ids)
 	let drainMet = emitBin(module, block: block, a: draining, b: drainOver, opcode: StdBinOpcode.bitAnd, ids: ids)
 	let mainMet = emitBin(module, block: block, a: awaitingMainOnly, b: mainDone, opcode: StdBinOpcode.bitAnd, ids: ids)
 	return emitBin(module, block: block, a: drainMet, b: mainMet, opcode: StdBinOpcode.bitOr, ids: ids)
@@ -7662,13 +7662,13 @@ function buildGtPreemptSafe(module StdModule, target Target)
 	// takes the green thread of the machine it left for its own. `BacktraceFormat.SymtabSafeFromBias`
 	// carries the argument.
 	let entryStride = emitBin(module, block: pastTheGuard, a: index, b: emitConst(module, block: pastTheGuard, value: SymtabEntryShift, ids: ids), opcode: StdBinOpcode.shl, ids: ids)
-	let entryOffset = emitBin(module, block: pastTheGuard, a: entryStride, b: emitConst(module, block: pastTheGuard, value: SymtabOffEntries as ParsedInt, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let entryOffset = emitBin(module, block: pastTheGuard, a: entryStride, b: emitConst(module, block: pastTheGuard, value: SymtabOffEntries as FullRangeInt, ids: ids), opcode: StdBinOpcode.add, ids: ids)
 	let entryAddr = emitBin(module, block: pastTheGuard, a: symtable, b: entryOffset, opcode: StdBinOpcode.add, ids: ids)
 	let entryWord = emitLoadField(module, block: pastTheGuard, record: entryAddr, offset: 0, ids: ids)
 	let funcStart = emitBin(module, block: pastTheGuard, a: entryWord, b: emitConst(module, block: pastTheGuard, value: SymtabEntryCodeOffsetMask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
 	let intoFunc = emitBin(module, block: pastTheGuard, a: textOffset, b: funcStart, opcode: StdBinOpcode.sub, ids: ids)
 	let safeGranules = emitBin(module, block: pastTheGuard, a: safeFrom, b: emitConst(module, block: pastTheGuard, value: SymtabSafeFromBias, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
-	let firstSafe = emitBin(module, block: pastTheGuard, a: safeGranules, b: emitConst(module, block: pastTheGuard, value: safePointGranuleOf(target) as ParsedInt, ids: ids), opcode: StdBinOpcode.mul, ids: ids)
+	let firstSafe = emitBin(module, block: pastTheGuard, a: safeGranules, b: emitConst(module, block: pastTheGuard, value: safePointGranuleOf(target) as FullRangeInt, ids: ids), opcode: StdBinOpcode.mul, ids: ids)
 	let insideTheGuard = emitCmp(module, block: pastTheGuard, a: intoFunc, b: firstSafe, pred: StdCmpPred.lt, ids: ids)
 	let cleared = emitGtPreemptSafeLlscLookback(module, func: func, pc: pc, notSafe: notSafe, safe: safe, target: target, ids: ids)
 	module.setTerminator(pastTheGuard, op: StdOp.condBranch(insideTheGuard, thenBlockId: notSafe.id, elseBlockId: cleared.id))
@@ -7718,7 +7718,7 @@ end 'emitGtPreemptSafeLlscLookback'
 
 // `psnollsc1` … `psnollsc4` — the block that refuses on the `wordsBack`-th word before the interrupted one.
 // One ASCII digit, which the refusal below is what makes safe rather than the reader's arithmetic.
-function arm64LookbackBlockLabel(wordsBack ParsedInt) returns ByteArray
+function arm64LookbackBlockLabel(wordsBack FullRangeInt) returns ByteArray
 	if Arm64ExclusiveLookbackWords > SingleDigitLimit 'twoDigits'
 		panic("arm64LookbackBlockLabel: the lookback walks {Arm64ExclusiveLookbackWords} words and this label carries one ASCII digit — widen it, or blocks {SingleDigitLimit + 1} and up would collide with earlier ones under one name")
 	end 'twoDigits'
@@ -7730,14 +7730,14 @@ function arm64LookbackBlockLabel(wordsBack ParsedInt) returns ByteArray
 end 'arm64LookbackBlockLabel'
 
 // The largest number one ASCII digit spells.
-let SingleDigitLimit = 9 as ParsedInt
+let SingleDigitLimit = 9 as FullRangeInt
 
 // The instruction word `wordsBack` words before `pc`, read through the naturally aligned 64-bit word that
 // holds it: the Std tier has no 32-bit memory access (`StdLoweringShared.accessWidthFor`), and an AArch64
 // PC is 4-aligned, so the wanted half is selected by the address's own bit 2.
-function emitLoadInstructionWord(module StdModule, block IrBlock, pc ValueId, wordsBack ParsedInt, ids ValueMinter) returns ValueId
+function emitLoadInstructionWord(module StdModule, block IrBlock, pc ValueId, wordsBack FullRangeInt, ids ValueMinter) returns ValueId
 	let addr = emitBin(module, block: block, a: pc, b: emitConst(module, block: block, value: wordsBack * Arm64InstructionBytes, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
-	let aligned = emitBin(module, block: block, a: addr, b: emitConst(module, block: block, value: 0 - (SpillSlotBytes as ParsedInt), ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
+	let aligned = emitBin(module, block: block, a: addr, b: emitConst(module, block: block, value: 0 - (SpillSlotBytes as FullRangeInt), ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
 	let pair = emitLoadField(module, block: block, record: aligned, offset: 0, ids: ids)
 	let half = emitBin(module, block: block, a: addr, b: emitConst(module, block: block, value: Arm64InstructionBytes, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
 	let shift = emitBin(module, block: block, a: half, b: emitConst(module, block: block, value: BitsPerByte, ids: ids), opcode: StdBinOpcode.mul, ids: ids)
@@ -7999,7 +7999,7 @@ function emitSchedMinWord(module StdModule, block IrBlock, a ValueId, b ValueId,
 end 'emitSchedMinWord'
 
 // A signed word's sign, shifted down to fill it.
-let WordSignShift = 63 as ParsedInt
+let WordSignShift = 63 as FullRangeInt
 
 // ==========================================================================
 // `__sched_enter_syscall` / `__sched_exit_syscall`
@@ -8040,10 +8040,10 @@ function buildSchedEnterSyscall(module StdModule)
 	var announce = module.addBlock(func, label: b"esann", heat: BlockHeat.normal)
 	var noMachine = module.addBlock(func, label: b"esnone", heat: BlockHeat.normal)
 
-	let machine = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: noMachine, bailValues: ParsedIntArray.create(), ids: ids)
+	let machine = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: noMachine, bailValues: FullRangeIntArray.create(), ids: ids)
 
 	let p = emitLoadField(module, block: haveMachine, record: machine, offset: MOffCurrentP, ids: ids)
-	emitBailIfZero(module, block: haveMachine, tested: p, bail: announce, bailValues: ParsedIntArray.create(), otherwise: haveProc, ids: ids)
+	emitBailIfZero(module, block: haveMachine, tested: p, bail: announce, bailValues: FullRangeIntArray.create(), otherwise: haveProc, ids: ids)
 
 	emitSchedProcCountOne(module, block: haveProc, p: p, offset: POffSyscallCount, ids: ids)
 	module.setTerminator(haveProc, op: StdOp.branch(announce.id))
@@ -8083,7 +8083,7 @@ function buildSchedExitSyscall(module StdModule)
 	var regainProc = module.addBlock(func, label: b"xsregain", heat: BlockHeat.normal)
 	var doneBlock = module.addBlock(func, label: b"xsdone", heat: BlockHeat.normal)
 
-	let machine = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: doneBlock, bailValues: ParsedIntArray.create(), ids: ids)
+	let machine = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: doneBlock, bailValues: FullRangeIntArray.create(), ids: ids)
 
 	let delta = emitConst(module, block: haveMachine, value: 0 - MSyscallInCall, ids: ids)
 	let prior = emitFieldAccumulate(module, block: haveMachine, record: machine, offset: MOffSyscallState, delta: delta, multiM: true, ids: ids)

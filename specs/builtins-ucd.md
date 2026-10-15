@@ -61,7 +61,7 @@ the library tier (`<!-- tier: stdlib -->`). These two have no public replacement
 `Zs` (23).
 ```maxon
 function main() returns ExitCode
-	var score = 0
+	var score = 0 as Count
 	if __Builtins.ucdByteAt("__ucd_bmp", offset: 65) == 1 'upper'
 		score = score + 1
 	end 'upper'
@@ -88,8 +88,8 @@ byte above 127, and the whole BMP table is scanned here rather than one entry be
 carries a high bit is a property of the checked-in data, not of the program.
 ```maxon
 function main() returns ExitCode
-	var i = 0
-	var negatives = 0
+	var i = 0 as Count
+	var negatives = 0 as Count
 	while i < 65536 'scan'
 		if __Builtins.ucdByteAt("__ucd_bmp", offset: i) < 0 'negative'
 			negatives = negatives + 1
@@ -121,7 +121,7 @@ on a coincidence in either direction.
 function main() returns ExitCode
 	let entry = __Builtins.ucdI64At("__ucd_supp", index: 0)
 	let next = __Builtins.ucdI64At("__ucd_supp", index: 1)
-	var score = 0
+	var score = 0 as Count
 	if (entry and 2097151) == 65536 'rangeStart'
 		score = score + 1
 	end 'rangeStart'
@@ -164,13 +164,13 @@ function categoryOf(cp Codepoint) returns GeneralCategory
 	if cp < 65536 'bmp'
 		return __Builtins.ucdByteAt("__ucd_bmp", offset: cp)
 	end 'bmp'
-	var lo = 0
-	var hi = 805
+	var lo = 0 as FullRangeInt
+	var hi = 805 as FullRangeInt
 	while lo <= hi 'bsearch'
 		let mid = (lo + hi) shr 1
 		let entry = __Builtins.ucdI64At("__ucd_supp", index: mid)
-		let rangeStart = entry and 2097151
-		let rangeEnd = (entry shr 21) and 2097151
+		let rangeStart = (entry and 2097151) as Codepoint
+		let rangeEnd = ((entry shr 21) and 2097151) as Codepoint
 		if cp < rangeStart 'left'
 			hi = mid - 1
 		end 'left' else 'notLeft'
@@ -185,7 +185,7 @@ function categoryOf(cp Codepoint) returns GeneralCategory
 end 'categoryOf'
 
 function main() returns ExitCode
-	var score = 0
+	var score = 0 as Count
 	if categoryOf(66560) == 1 'deseretIsUppercase'
 		score = score + 1
 	end 'deseretIsUppercase'

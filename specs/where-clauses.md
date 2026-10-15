@@ -114,7 +114,7 @@ function main() returns ExitCode
 	let p = Point.create(2, y: 3)
 	let b = PointBox.create(p)
 	var total = b.itemDigest()
-	var i = 0
+	var i = 0 as FullRangeInt
 	while i < 10 'loop'
 		total = b.itemDigest()
 		i = i + 1
@@ -355,7 +355,7 @@ type Point implements Mixed
 		return Self{ x: x }
 	end 'create'
 	function combine(a Integer, k Real, b Integer) returns Real
-		return k + a + b
+		return k + (a + b) as Real
 	end 'combine'
 end 'Point'
 
@@ -3771,7 +3771,7 @@ end 'Ticks'
 
 extension Ticks
 	function skip(n Step) throws IterationError
-		var i = 0
+		var i = 0 as Step
 		while i < n 'loop'
 			try self.advance()
 			i = i + 1

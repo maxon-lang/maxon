@@ -70,8 +70,8 @@ An ordinary build — no `--debugstream` — computes exactly what it would have
 the compile-time gate seen from inside the program.
 ```maxon
 function main() returns ExitCode
-	let phase = __DebugStream.nameId("compile")
-	let ev = __DebugStream.nameId("allocated")
+	let phase = __DebugStream.nameId("compile") as NameId
+	let ev = __DebugStream.nameId("allocated") as NameId
 	__DebugStream.phaseBegin(phase, 7)
 	__DebugStream.event(ev, 1, 2, 7, 100, 200)
 	let msg = "hello ring"
@@ -80,6 +80,7 @@ function main() returns ExitCode
 	print("enabled={__DebugStream.enabled()}\n")
 	return 0
 end 'main'
+typealias NameId = int(0 to 65535)
 ```
 ```stdout
 enabled=false
@@ -101,8 +102,8 @@ chose it.
 <!-- LogTrace -->
 ```maxon
 function main() returns ExitCode
-	let phase = __DebugStream.nameId("compile")
-	let ev = __DebugStream.nameId("allocated")
+	let phase = __DebugStream.nameId("compile") as NameId
+	let ev = __DebugStream.nameId("allocated") as NameId
 	__DebugStream.phaseBegin(phase, 7)
 	__DebugStream.event(ev, 1, 2, 7, 100, 200)
 	let msg = "hello ring"
@@ -110,6 +111,7 @@ function main() returns ExitCode
 	__DebugStream.phaseEnd(phase, 7)
 	return 0
 end 'main'
+typealias NameId = int(0 to 65535)
 ```
 ```log-trace
 log_phase_begin compile unit=7
@@ -145,7 +147,7 @@ function work(n Integer) returns Integer
 end 'work'
 
 function main() returns ExitCode
-	let phase = __DebugStream.nameId("early")
+	let phase = __DebugStream.nameId("early") as NameId
 	__DebugStream.phaseBegin(phase, 1)
 	__DebugStream.event(phase, 1, 2, 3, 4, 5)
 	__DebugStream.phaseEnd(phase, 1)
@@ -153,6 +155,7 @@ function main() returns ExitCode
 	return await p as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
+typealias NameId = int(0 to 65535)
 ```
 ```log-trace
 log_phase_begin early unit=1
@@ -170,13 +173,14 @@ the whole of what the gate does.
 <!-- LogTrace -->
 ```maxon
 function main() returns ExitCode
-	let ev = __DebugStream.nameId("guarded")
+	let ev = __DebugStream.nameId("guarded") as NameId
 	if __DebugStream.enabled() 'attached'
 		__DebugStream.event(ev, 5, 6, 11, 1, 2)
 	end 'attached'
 	print("enabled={__DebugStream.enabled()}\n")
 	return 0
 end 'main'
+typealias NameId = int(0 to 65535)
 ```
 ```log-trace
 log_event guarded cat=5 lvl=6 unit=11 a0=1 a1=2
@@ -194,11 +198,12 @@ units stay distinguishable in one ring — which is the whole reason the field i
 <!-- LogTrace -->
 ```maxon
 function main() returns ExitCode
-	let ev = __DebugStream.nameId("step")
+	let ev = __DebugStream.nameId("step") as NameId
 	__DebugStream.event(ev, 0, 0, 100, 1, 0)
 	__DebugStream.event(ev, 0, 0, 200, 2, 0)
 	return 0
 end 'main'
+typealias NameId = int(0 to 65535)
 ```
 ```log-trace
 log_event step cat=0 lvl=0 unit=100 a0=1 a1=0
@@ -213,10 +218,11 @@ An intrinsic has no declaration for the ordinary arity check to read, so the cou
 call — the same `builtinArity` every other builtin raises, at the callee's own token.
 ```maxon
 function main() returns ExitCode
-	let ev = __DebugStream.nameId("e")
+	let ev = __DebugStream.nameId("e") as NameId
 	__DebugStream.event(ev, 1, 2)
 	return 0
 end 'main'
+typealias NameId = int(0 to 65535)
 ```
 ```maxoncstderr
 error E3036: <fragment>:4:16: '__DebugStream.event' takes exactly 6 argument, but 3 were given
@@ -257,10 +263,11 @@ The four emitting members return nothing, so reading a result is reading a value
 the same refusal a void user call gets in value position.
 ```maxon
 function main() returns ExitCode
-	let ev = __DebugStream.nameId("e")
+	let ev = __DebugStream.nameId("e") as NameId
 	let x = __DebugStream.event(ev, 1, 2, 3, 4, 5)
 	return 0
 end 'main'
+typealias NameId = int(0 to 65535)
 ```
 ```maxoncstderr
 error E2004: <fragment>:4:24: Function '__DebugStream.event' does not return a value
@@ -272,10 +279,11 @@ has no parameter names for this family and an unchecked label on a positional ca
 waiting to happen. See this spec's documentation.
 ```maxon
 function main() returns ExitCode
-	let phase = __DebugStream.nameId("compile")
+	let phase = __DebugStream.nameId("compile") as NameId
 	__DebugStream.phaseBegin(phase, unitId: 7)
 	return 0
 end 'main'
+typealias NameId = int(0 to 65535)
 ```
 ```maxoncstderr
 error E2067: <fragment>:4:34: a builtin's arguments are all positional and cannot be named ('name:' labels a parameter, and a builtin has no declaration to have one)

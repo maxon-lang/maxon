@@ -160,10 +160,10 @@ a wrong answer. Removing the stamp altogether is the coarser sabotage and does n
 green-thread program takes an access violation (exit `0xC0000005`).
 A zero here is not a benign default and a plausible-looking non-zero is not enough either.
 ```maxon
-var order = 0
-var posA = 0
-var posB = 0
-var posC = 0
+var order = 0 as Integer
+var posA = 0 as Integer
+var posB = 0 as Integer
+var posC = 0 as Integer
 
 function inner() returns Integer
 	Scheduler.parallelBoundary()
@@ -209,10 +209,10 @@ ra=1 rb=1 posA=1 posB=2 posC=3
 in order run in that order, whatever order their promises are awaited in. The awaits here run BACKWARDS
 on purpose — `p3` first — so a queue that handed back the newest entry would be visible as `a3=1`.
 ```maxon
-var order = 0
-var a1 = 0
-var a2 = 0
-var a3 = 0
+var order = 0 as Integer
+var a1 = 0 as Integer
+var a2 = 0 as Integer
+var a3 = 0 as Integer
 
 function first() returns Integer
 	Scheduler.parallelBoundary()
@@ -294,7 +294,7 @@ function main() returns ExitCode
 	replies.push(b.rank())
 	replies.push(c.rank())
 	let first = replies.awaitAny()
-	var sum = 0
+	var sum = 0 as Integer
 	for p in replies 'drainthemall'
 		sum = sum + (try await p otherwise 0)
 	end 'drainthemall'
@@ -412,10 +412,10 @@ decides whether `sibling` ever gets a turn:
 
 It reads the sibling's flag as its own result, so the assertion is what the YIELDER saw.
 ```maxon
-var siblingRan = 0
+var siblingRan = 0 as Integer
 
 function yielder() returns Integer
-	var i = 0
+	var i = 0 as Integer
 	while i < 1000 'spin'
 		Scheduler.yield()
 		i = i + 1
@@ -455,7 +455,7 @@ awaits the strand runner reaches `marker`, and it must reclaim that coroutine in
 `ran` stays 0 and the two live results still arrive. A scheduler that ran it would both set `ran` and leave
 a thread nobody awaits, which is the `__gt_live_count` abort (75) rather than 7.
 ```maxon
-var ran = 0
+var ran = 0 as Integer
 
 function marker() returns Integer
 	Scheduler.parallelBoundary()
@@ -497,7 +497,7 @@ before it, which `Scheduler.counters().recycledThreads` counts.
 ✅ **THIS CASE OWNS THE FRONT SWEEP.** With the drop's front sweep removed, this case reads `recycled=0`
 while the other two drop cases below stay GREEN, so the count is this case's road and nobody else's.
 ```maxon
-var ran = 0
+var ran = 0 as Integer
 
 function neverRuns() returns Integer
 	Scheduler.parallelBoundary()
@@ -506,7 +506,7 @@ function neverRuns() returns Integer
 end 'neverRuns'
 
 function main() returns ExitCode
-	var i = 0
+	var i = 0 as Integer
 	while i < 5000 'loop'
 		_ = async neverRuns()
 		i = i + 1
@@ -545,9 +545,9 @@ function done() returns Integer
 end 'done'
 
 function main() returns ExitCode
-	var total = 0
-	var finished = 0
-	var i = 0
+	var total = 0 as Integer
+	var finished = 0 as Integer
+	var i = 0 as Integer
 
 	while i < 1 'warm'
 		let p = async done()
@@ -558,7 +558,7 @@ function main() returns ExitCode
 	end 'warm'
 
 	let recycledBefore = Scheduler.counters().recycledThreads
-	var j = 0
+	var j = 0 as Integer
 
 	while j < 3 'completedThenDropped'
 		let p = async done()
@@ -625,9 +625,9 @@ function sleeper() returns Integer
 end 'sleeper'
 
 function main() returns ExitCode
-	var total = 0
-	var stillParked = 0
-	var i = 0
+	var total = 0 as Integer
+	var stillParked = 0 as Integer
+	var i = 0 as Integer
 
 	while i < 1 'warm'
 		let s = async sleeper()
@@ -638,7 +638,7 @@ function main() returns ExitCode
 	end 'warm'
 
 	let recycledBefore = Scheduler.counters().recycledThreads
-	var j = 0
+	var j = 0 as Integer
 
 	while j < 3 'parkedThenDropped'
 		// The previous round's renounced sleeper is queued ahead of us on this strand; one yield lets it run
@@ -706,9 +706,9 @@ function sleeper() returns Integer
 end 'sleeper'
 
 function main() returns ExitCode
-	var total = 0
-	var stillParked = 0
-	var i = 0
+	var total = 0 as Integer
+	var stillParked = 0 as Integer
+	var i = 0 as Integer
 
 	while i < rounds 'parkedThenDropped'
 		let s = async sleeper()
@@ -818,7 +818,7 @@ end 'Sink'
 function main() returns ExitCode
 	var sinks = SinkHandleArray.create()
 
-	var i = 0
+	var i = 0 as Integer
 	while i < 300 'spawnEach'
 		sinks.push(spawn Sink.create())
 		i = i + 1
@@ -830,17 +830,17 @@ function main() returns ExitCode
 	let beforeAnyRan = try await first.total() otherwise 0
 	print("beforeAnyRan={beforeAnyRan}\n")
 
-	var k = 0
+	var k = 0 as Integer
 	while k < 300 'sendEach'
-		let sink = try sinks.get(k) otherwise panic("sinks.get OOB at {k} — the loop is bounded by the count the pushes above filled")
+		let sink = try sinks.get(k as ElementIndex) otherwise panic("sinks.get OOB at {k} — the loop is bounded by the count the pushes above filled")
 		sink.bump()
 		k = k + 1
 	end 'sendEach'
 
-	var ran = 0
-	var n = 0
+	var ran = 0 as Integer
+	var n = 0 as Integer
 	while n < 300 'collect'
-		let sink = try sinks.get(n) otherwise panic("sinks.get OOB at {n} — the loop is bounded by the count the pushes above filled")
+		let sink = try sinks.get(n as ElementIndex) otherwise panic("sinks.get OOB at {n} — the loop is bounded by the count the pushes above filled")
 		ran = ran + (try await sink.total() otherwise 0)
 		n = n + 1
 	end 'collect'
@@ -914,8 +914,8 @@ end 'Step'
 function main() returns ExitCode
 	let h = spawn Step.create()
 
-	var sum = 0
-	var i = 0
+	var sum = 0 as Integer
+	var i = 0 as Integer
 	while i < 6000 'rounds'
 		h.tick()
 		// Queued behind the tick, so this IS the settle: the service is drained and re-published once more
@@ -1032,7 +1032,7 @@ end 'Leaf'
 function main() returns ExitCode
 	var leaves = LeafHandleArray.create()
 
-	var i = 0
+	var i = 0 as Integer
 	while i < leafCount 'spawnEach'
 		leaves.push(spawn Leaf.create(i + 1))
 		i = i + 1
@@ -1045,9 +1045,9 @@ function main() returns ExitCode
 
 	let pushedBefore = Scheduler.counters().globalPushes
 
-	var k = 0
+	var k = 0 as Integer
 	while k < leafCount 'sendEach'
-		let leaf = try leaves.get(k) otherwise panic("leaves.get OOB at {k} — the loop is bounded by the count the pushes above filled")
+		let leaf = try leaves.get(k as ElementIndex) otherwise panic("leaves.get OOB at {k} — the loop is bounded by the count the pushes above filled")
 		// A temporary argument moves, so each leaf gets its own reference to the collector.
 		leaf.go(tally.clone())
 		k = k + 1
@@ -1055,8 +1055,8 @@ function main() returns ExitCode
 
 	let burstPushes = Scheduler.counters().globalPushes - pushedBefore
 
-	var runCount = 0
-	var spins = 0
+	var runCount = 0 as Integer
+	var spins = 0 as Integer
 	while runCount < leafCount and spins < drainSpinLimit 'drain'
 		runCount = try await tally.count() otherwise 0
 		spins = spins + 1
@@ -1194,8 +1194,8 @@ function main() returns ExitCode
 	y.go(tally.clone())
 	s.go(tally.clone())
 
-	var order = 0
-	var spins = 0
+	var order = 0 as Integer
+	var spins = 0 as Integer
 	while order < 2 and spins < drainSpinLimit 'drain'
 		order = try await tally.count() otherwise 0
 		spins = spins + 1
@@ -1267,17 +1267,17 @@ end 'Work'
 function main() returns ExitCode
 	var workers = WorkHandleArray.create()
 
-	var i = 0
+	var i = 0 as Integer
 	while i < 12 'spawnEach'
 		workers.push(spawn Work.create())
 		i = i + 1
 	end 'spawnEach'
 
-	var r = 0
+	var r = 0 as Integer
 	while r < 100 'eachRound'
-		var k = 0
+		var k = 0 as Integer
 		while k < 12 'eachWorker'
-			let worker = try workers.get(k) otherwise panic("workers.get OOB at {k} — the loop is bounded by the count the pushes above filled")
+			let worker = try workers.get(k as ElementIndex) otherwise panic("workers.get OOB at {k} — the loop is bounded by the count the pushes above filled")
 			worker.go()
 			k = k + 1
 		end 'eachWorker'
@@ -1285,10 +1285,10 @@ function main() returns ExitCode
 	end 'eachRound'
 
 	// A reply is queued behind the 100 sends that came before it, so awaiting all twelve is the drain.
-	var done = 0
-	var n = 0
+	var done = 0 as Integer
+	var n = 0 as Integer
 	while n < 12 'collect'
-		let worker = try workers.get(n) otherwise panic("workers.get OOB at {n} — the loop is bounded by the count the pushes above filled")
+		let worker = try workers.get(n as ElementIndex) otherwise panic("workers.get OOB at {n} — the loop is bounded by the count the pushes above filled")
 		done = done + (try await worker.total() otherwise 0)
 		n = n + 1
 	end 'collect'

@@ -73,31 +73,27 @@ proof. A door keyed on the mark would refuse `stdlib/File.maxon:135`'s shape for
 to do with the stride. So an ORDINARY array of the instance is admitted too
 (`an-ordinary-array-of-the-instance-adopts`), and adopting one is an ordinary co-owning retain.
 
-### ⚠ Every reachable adoption is a BYTE one, and the reason is not this door
+### ⚠ A buffer adopts only into the instance it minted
 
 It is worth writing down because the door looks byte-agnostic and is:
 
 | receiver alias | buffer | verdict |
 |---|---|---|
 | `Array with Byte` | `__ManagedMemory.create(n, elementSize: 1)` | adopts |
-| `Array with Integer` | `__ManagedMemory.create(n, elementSize: 8)` | refused — `Array_int` |
+| `FullRangeIntArray` | `__ManagedMemory.create(n, elementSize: 8)` | adopts |
+| `Array with Integer` | `__ManagedMemory.create(n, elementSize: 8)` | refused — `FullRangeIntArray` |
 | `Array with Small` (`int(0 to 200)`) | `__ManagedMemory.create(n, elementSize: 1)` | refused — `Array_Byte` |
 
 The verdict column names the INSTANCE the buffer minted. The DIAGNOSTIC spells that instance by the
-`typealias` the program declares for it where one exists, which is why the byte
-row's refusal below reads `got 'ByteArray'` — `stdlib/File.maxon`'s own
-`export typealias ByteArray = Array with Byte`, the same instance under a name a person wrote. The word
-row has no such name, which is the next paragraph's whole subject, so it reads `Array_int`.
+`typealias` declared for it, which is why the byte row's refusal below reads `got 'ByteArray'` —
+`stdlib/File.maxon`'s own `export typealias ByteArray = Array with Byte` — and the word row's reads
+`got 'FullRangeIntArray'`, the stdlib's public alias for `Array with FullRangeInt`.
 
 `managedMemoryInstanceForElementSize` mints exactly two instances — `Array with Byte` for width 1
-and `Array with int` for width 8 — and **`Array with int` is a type no program can name**:
-`typealias IntArray = Array with int` is `E2061: Cannot use bare type 'int' as a type argument; use
-a ranged typealias instead`, and every ranged alias over it (`Integer`, `Small`) interns a DIFFERENT instance, exactly
-as `default-values.md` and `string-views.md` pin for array literals (`Array_int` vs
-`Array_Integer`). So the only nameable alias a `__ManagedMemory` value can be adopted into is
-`Array with Byte`. That is the standing `Array_int`-unnameability gap, observed here rather than
-caused here — a door that keyed on element WIDTH instead would close it only by giving up the
-soundness the row above depends on.
+and `FullRangeIntArray` for width 8. Every other ranged alias (`Integer`, `Small`) interns a DIFFERENT
+instance even where its range is the same, exactly as `default-values.md` and `string-views.md` pin
+for array literals, so it is refused. A door that keyed on element WIDTH instead would admit those
+only by giving up the soundness the rows above depend on.
 
 `stdlib/File.maxon:135`'s `return ByteArray.init(managed)` is the byte row, which is why this
 door admits it.
@@ -157,7 +153,7 @@ end 'main'
 ⭐ **THE CASE A PURE IDENTITY FAILS.** `push` is an `Array` member the buffer surface does not
 have. If `init` handed back the argument's own `ValueId`, that value would still carry the buffer
 mark and this call would be refused as an unknown `Array` method — the roster, exactly inverted.
-It compiles because the retain mints a fresh, unmarked name.
+It compiles because the adoption clears the mark the retain carries over (`unmarkBufferSurface`).
 ```maxon
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
@@ -346,8 +342,8 @@ typealias ByteArray = Array with Byte
 function main() returns ExitCode
 	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(3) otherwise return 2
-	var i = 0
-	var total = 0
+	var i = 0 as Count
+	var total = 0 as Count
 	while i < 64 'spin'
 		let a = ByteArray.init(mm)
 		total = total + a.count()
@@ -377,7 +373,7 @@ function main() returns ExitCode
 	var mm = try __ManagedMemory.create(2, elementSize: 1) otherwise return 1
 	var a = ByteArray.init(mm)
 	var b = ByteArray.init(mm)
-	var i = 0
+	var i = 0 as Count
 	while i < 200 'fill'
 		a.push(1)
 		i = i + 1
@@ -386,7 +382,7 @@ function main() returns ExitCode
 		return 2
 	end 'notShared'
 	let last = try b.get(199) otherwise return 3
-	return (last + mm.length() - 200) as ExitCode
+	return (last as Count + mm.length() - 200) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -477,7 +473,7 @@ function main() returns ExitCode
 	try mm.setLength(2) otherwise return 2
 	let length = mm.length()
 	let r = apply(function(n Integer) gives (ByteArray.init(mm).count() as Integer) + n, x: 5)
-	return (r * 10 + length) as ExitCode
+	return (r * 10 + length as Integer) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -589,8 +585,8 @@ function adoptThenThrow(fail bool) returns Integer throws Boom
 end 'adoptThenThrow'
 
 function main() returns ExitCode
-	var total = 0
-	var i = 0
+	var total = 0 as Integer
+	var i = 0 as Count
 	while i < 8 'spin'
 		total = total + (try adoptThenThrow(true) otherwise 1)
 		total = total + (try adoptThenThrow(false) otherwise 9)
@@ -628,14 +624,14 @@ end 'eat'
 function main() returns ExitCode
 	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(2) otherwise return 2
-	var total = 0
-	var i = 0
+	var total = 0 as Integer
+	var i = 0 as Count
 	while i < 8 'spin'
 		total = total + (try eat(ByteArray.init(mm), fail: true) otherwise 1)
 		total = total + (try eat(ByteArray.init(mm), fail: false) otherwise 9)
 		i = i + 1
 	end 'spin'
-	return (total * 10 + mm.length()) as ExitCode
+	return (total * 10 + mm.length() as Integer) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -678,14 +674,11 @@ end 'main'
 error E3005: <fragment>:7:19: argument type mismatch for 'managed': expected '__ManagedMemory with Integer', got 'ByteArray'
 ```
 
-<!-- test: error.a-word-buffer-has-no-nameable-array -->
+<!-- test: error.a-word-buffer-adopts-only-into-full-range-int-array -->
 <!-- tier: stdlib -->
-⚠ **THE ROW THIS DOOR OBSERVES RATHER THAN CAUSES.** `__ManagedMemory.create(n, elementSize: 8)`
-mints `Array with int` — and `Array with int` is a type no program can spell (E2061 refuses a bare
-`int` as a type argument), while every ranged alias over it interns a different instance. So there
-is no nameable receiver a WORD buffer can be adopted into, and the diagnostic below names an
-instance the author cannot write. It is pinned so the day `Array_int` becomes nameable is a RED
-case rather than a silent widening.
+⚠ `__ManagedMemory.create(n, elementSize: 8)` mints `FullRangeIntArray`, and `Array with Integer` is a
+different instance even though `Integer` spans the same range, so a WORD buffer is refused here. Its
+own receiver is `FullRangeIntArray.init(mm)`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -697,7 +690,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:7:19: argument type mismatch for 'managed': expected '__ManagedMemory with Integer', got 'Array with int'
+error E3005: <fragment>:7:19: argument type mismatch for 'managed': expected '__ManagedMemory with Integer', got 'FullRangeIntArray'
 ```
 
 <!-- test: error.an-unknown-array-static -->

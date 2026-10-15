@@ -93,7 +93,7 @@ module type GdbRemoteConnection
 	end 'threadSuffixSupported'
 
 	module function transferLimit() returns GdbPayloadBytes
-		return ((self.payloadLimit - GdbPacketOverheadBytes) / GdbHexDigitsPerByte) as GdbPayloadBytes
+		return ((self.payloadLimit - GdbPacketOverheadBytes) / HexDigitsPerByte) as GdbPayloadBytes
 	end 'transferLimit'
 
 	module function close()
@@ -377,7 +377,6 @@ let GdbReplyBudgetMs = 20000 as GdbWaitMs
 
 let GdbPacketOverheadBytes = 4
 
-let GdbHexDigitsPerByte = 2
 
 function gdbPayloadLimitOf(size GdbWireWord) returns GdbPayloadBytes
 	if size <= (GdbDefaultPayloadBytes as GdbWireWord) or size > 0x4000000 'notUsableAsALimit'
@@ -446,7 +445,7 @@ end 'classifiedAnswer'
 // ⚠ `E` OPENS AN ERROR CODE AND ALSO EVERY REGISTER NAMED `Exxx`, so a refusal is told from a payload by
 // its SHAPE: the stub spells one as `E` and two hex digits and nothing else.
 function gdbLooksLikeAnErrorCode(payload String) returns bool
-	if payload.count() != 1 + GdbHexDigitsPerByte 'notThreeCharacters'
+	if payload.count() != 1 + HexDigitsPerByte 'notThreeCharacters'
 		return false
 	end 'notThreeCharacters'
 
@@ -540,38 +539,6 @@ module function gdbHexValueOf(text String) returns GdbHexRead
 
 	return GdbHexRead.value(value)
 end 'gdbHexValueOf'
-
-module function gdbHexBytesOf(text String) returns GdbHexBytesRead
-	if (text.count() mod GdbHexDigitsPerByte) != 0 'notWholeBytes'
-		return GdbHexBytesRead.notHex
-	end 'notWholeBytes'
-
-	var bytes = ByteArray.create()
-	var pending = 0
-	var half = 0
-
-	for character in text 'eachDigit'
-		match digitValue(character, base: HexBase) 'read'
-			invalid then return GdbHexBytesRead.notHex
-			valid(digit) then pending = pending * HexBase + (digit as ParsedCodeOffset)
-		end 'read'
-
-		half = half + 1
-
-		if half == GdbHexDigitsPerByte 'aWholeByte'
-			bytes.push(pending as Byte)
-			pending = 0
-			half = 0
-		end 'aWholeByte'
-	end 'eachDigit'
-
-	return GdbHexBytesRead.bytes(bytes)
-end 'gdbHexBytesOf'
-
-module union GdbHexBytesRead
-	bytes(value ByteArray)
-	notHex
-end 'GdbHexBytesRead'
 
 module function gdbHexTextOf(bytes ByteArray) returns String
 	var out = ""

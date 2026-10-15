@@ -40,7 +40,7 @@ Short-circuit semantics compose through chains of `and`/`or` expressions. In
 
 <!-- test: and-skips-right-when-left-false -->
 ```maxon
-var sideEffectCount = 0
+var sideEffectCount = 0 as FullRangeInt
 
 function trackAndReturn(result bool) returns bool
 	sideEffectCount = sideEffectCount + 1
@@ -61,7 +61,7 @@ end 'main'
 
 <!-- test: and-evaluates-right-when-left-true -->
 ```maxon
-var sideEffectCount = 0
+var sideEffectCount = 0 as FullRangeInt
 
 function trackAndReturn(result bool) returns bool
 	sideEffectCount = sideEffectCount + 1
@@ -82,7 +82,7 @@ end 'main'
 
 <!-- test: or-skips-right-when-left-true -->
 ```maxon
-var sideEffectCount = 0
+var sideEffectCount = 0 as FullRangeInt
 
 function trackAndReturn(result bool) returns bool
 	sideEffectCount = sideEffectCount + 1
@@ -103,7 +103,7 @@ end 'main'
 
 <!-- test: or-evaluates-right-when-left-false -->
 ```maxon
-var sideEffectCount = 0
+var sideEffectCount = 0 as FullRangeInt
 
 function trackAndReturn(result bool) returns bool
 	sideEffectCount = sideEffectCount + 1
@@ -124,7 +124,7 @@ end 'main'
 
 <!-- test: and-chain-short-circuits-on-first-false -->
 ```maxon
-var sideEffectCount = 0
+var sideEffectCount = 0 as FullRangeInt
 
 function trackAndReturn(result bool) returns bool
 	sideEffectCount = sideEffectCount + 1
@@ -145,7 +145,7 @@ end 'main'
 
 <!-- test: or-chain-short-circuits-on-first-true -->
 ```maxon
-var sideEffectCount = 0
+var sideEffectCount = 0 as FullRangeInt
 
 function trackAndReturn(result bool) returns bool
 	sideEffectCount = sideEffectCount + 1
@@ -222,7 +222,7 @@ end 'main'
 
 <!-- test: short-circuit-in-while-condition -->
 ```maxon
-var trace = 0
+var trace = 0 as FullRangeInt
 
 function check() returns bool
 	trace = trace + 1
@@ -247,7 +247,7 @@ end 'main'
 
 <!-- test: nested-short-circuit -->
 ```maxon
-var calls = 0
+var calls = 0 as FullRangeInt
 
 function a() returns bool
 	calls = calls + 1
@@ -311,7 +311,7 @@ end 'Bag'
 function main() returns ExitCode
 	let b = Box.make(5)
 	let g = Bag.make(9)
-	var code = 0
+	var code = 0 as Integer
 	if not (b.contains(5) or g.contains(1)) 'a'
 		code = code + 1
 	end 'a'

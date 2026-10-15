@@ -101,17 +101,17 @@ let IntHashHighHalfMultiplier = 0x9E3779B1
 
 // ⭐ **`-0.0`'s IEEE-754 BIT PATTERN.** `+0.0` is 64 zero bits and `-0.0` is those bits with the SIGN
 // BIT set, so the pattern IS the sign bit alone: `0x8000000000000000`. It is spelled `i64.min` because
-// `ParsedInt` is SIGNED and that is the number Maxon can write for the top bit.
+// `FullRangeInt` is SIGNED and that is the number Maxon can write for the top bit.
 //
 // ⚠ It is the same bit `NumberParsing.FloatSignBit` XORs to negate a float literal, and the two are NOT one
 // constant: that one is a MASK the front end applies to a literal, this one is a VALUE `float.hash` compares
 // against. Merging them would make the parser export a numeric constant down into the runtime layer, and
 // `Arm64Backend.Arm64WordSignBit` is a third same-valued constant that declines the same merge for the
 // same reason.
-let NegativeZeroBits = i64.min as ParsedInt
+let NegativeZeroBits = i64.min as FullRangeInt
 
 // What `-0.0` hashes to: `+0.0`'s fold, which is zero because every bit of `+0.0` is.
-let ZeroFloatHash = 0 as ParsedInt
+let ZeroFloatHash = 0 as FullRangeInt
 
 // djb2 over `String`'s bytes: `h = Djb2Seed`, then `h = h * Djb2Multiplier + b` per byte. The two magic
 // numbers of the algorithm, named rather than bare so the loop reads as djb2. `""` -> `5381`, `"abc"` ->

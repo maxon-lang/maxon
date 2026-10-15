@@ -497,7 +497,7 @@ enum Weird
 	function
 
 	function mid() returns Integer
-		var total = 0
+		var total = 0 as Integer
 		while total < 2 'spin'
 			total = total + 1
 		end 'spin'

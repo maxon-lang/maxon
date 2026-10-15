@@ -78,7 +78,7 @@ end 'build'
 
 function main() returns ExitCode
 	var s = build(99)
-	var i = 0
+	var i = 0 as Integer
 	while i < 3 'loop'
 		s = build(i)
 		print(s)
@@ -173,7 +173,7 @@ end 'build'
 
 function main() returns ExitCode
 	var s = build(1)
-	var i = 0
+	var i = 0 as Integer
 	while i < 3 'loop'
 		let t = build(i)
 		print(t)

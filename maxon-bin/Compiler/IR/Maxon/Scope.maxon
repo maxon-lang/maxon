@@ -289,12 +289,22 @@ export type Scope
 	// through here; it writes `boundValue` on the binding it holds (see the header).
 	//
 	// ⚠ Every caller records the rebind for the debug-info sidecar first
-	// (`Parser.recordDebugRebind`), which is checked rather than assumed: the record's tail is compared
+	// (`Parser.recordRebind`), which is checked rather than assumed: the record's tail is compared
 	// against `boundValue` at the next rebind and again when the function's roster is published.
 	export function setValue(name ByteArray, value ValueId, ledger MoveLedger)
 		var info = try vars.get(name) otherwise panic("Scope.setValue: '{String.from(name)}' not declared — caller must establish the binding before rebinding it")
 		info.setBoundValue(value, ledger: ledger)
 	end 'setValue'
+
+	export function setBrandKey(name ByteArray, key ByteArray)
+		var info = try vars.get(name) otherwise panic("Scope.setBrandKey: '{String.from(name)}' not declared — caller must establish the binding before keying it")
+		info.brandKey = key
+	end 'setBrandKey'
+
+	export function adoptBrand(name ByteArray, brandId TypeNameId)
+		var info = try vars.get(name) otherwise panic("Scope.adoptBrand: '{String.from(name)}' not declared — caller must establish the binding before branding it")
+		info.brandId = brandId
+	end 'adoptBrand'
 
 	// Resolve a value binding to the SSA value it aliases. Throws
 	// `ScopeLookupError.notFound` for an unbound name; the parser turns that into a

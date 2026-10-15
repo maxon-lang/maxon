@@ -312,7 +312,7 @@ Backed by `gt->io_error_code` populated by the runtime sync worker
 
 ```maxon
 function main() returns ExitCode
-	var result = 0
+	var result = 0 as ExitCode
 	try __ManagedFile.openRead("nonexistent_phaseB_open_xyz.txt".toByteArray().managed) otherwise (e) 'h'
 		match e 'k'
 			notFound then result = 42
@@ -330,7 +330,7 @@ end 'main'
 <!-- tier: stdlib -->
 ```maxon
 function main() returns ExitCode
-	var result = 0
+	var result = 0 as ExitCode
 	try __ManagedFile.delete("nonexistent_phaseB_delete_xyz.txt".toByteArray().managed) otherwise (e) 'h'
 		match e 'k'
 			notFound then result = 42
@@ -348,7 +348,7 @@ end 'main'
 <!-- tier: stdlib -->
 ```maxon
 function main() returns ExitCode
-	var result = 0
+	var result = 0 as ExitCode
 	try __ManagedFile.stat("nonexistent_phaseB_stat_xyz.txt".toByteArray().managed) otherwise (e) 'h'
 		match e 'k'
 			notFound then result = 42
@@ -590,7 +590,7 @@ function main() returns ExitCode
 	if let over = try r.readAppending(buffer, 2) 'read'
 		answer = (10 + over) as ExitCode
 	end 'read' else (e) 'refused'
-		answer = 42 if e == __ManagedFileError.readFailed and buffer.length() == first else 7
+		answer = 42 if e == __ManagedFileError.readFailed and (buffer.length() as FileSize) == first else 7
 	end 'refused'
 
 	r.close()
@@ -600,6 +600,49 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+<!-- test: managed-file.a-buffer-passed-through-a-function-value-keeps-its-surface-for-a-builtin -->
+<!-- tier: stdlib -->
+A buffer passed to a function value of a by-reference arity lives in a cell, and the file member that fills it and the buffer's own members are still served through that cell.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function observe(held __ManagedMemory, step Integer)
+	print("{held.length()} {step}\n")
+end 'observe'
+
+function advance(dest Integer, step Integer)
+	dest = dest + step
+end 'advance'
+
+function main() returns ExitCode
+	let path = "test_managed_read_appending_by_reference.txt"
+	var w = try __ManagedFile.openWrite(path.toByteArray().managed) otherwise return 1
+	try w.write("abcdef".toByteArray().managed) otherwise return 2
+	w.close()
+
+	var r = try __ManagedFile.openRead(path.toByteArray().managed) otherwise return 3
+	var buffer = try __ManagedMemory.create(8, 1) otherwise return 4
+	let look = observe
+	look(buffer, 1)
+	let got = try r.readAppending(buffer, 6) otherwise return 5
+	look(buffer, 2)
+	var total = 0 as Integer
+	advance(total, step: buffer.length() as Integer)
+	r.close()
+	try __ManagedFile.delete(path.toByteArray().managed) otherwise return 8
+	print("{got} {total}\n")
+	return 0
+end 'main'
+```
+```stdout
+0 1
+6 2
+6 6
+```
+```exitcode
+0
 ```
 
 <!-- test: error.managed-file.read-appending-into-a-buffer-of-wider-elements-is-refused -->
@@ -616,7 +659,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:5:18: argument type mismatch for 'managed': expected '__ManagedMemory', got 'Array with int'
+error E3005: <fragment>:5:18: argument type mismatch for 'managed': expected '__ManagedMemory', got 'FullRangeIntArray'
 ```
 
 <!-- test: managed-file.a-file-held-open-for-reading-can-be-rewritten-and-deleted -->
@@ -694,7 +737,7 @@ function main() returns ExitCode
 		return 3
 	end 'statFail'
 	print("size={__ManagedFile.statField(st, 0)} isDirectory={__ManagedFile.statField(st, 4)} isReadOnly={__ManagedFile.statField(st, 5)}\n")
-	var implausible = 0
+	var implausible = 0 as Count
 	for i in 1 to 3 'stamps'
 		let t = __ManagedFile.statField(st, i)
 		if t < 1577836800 or t > 4102444800 'window'

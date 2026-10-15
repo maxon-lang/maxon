@@ -364,7 +364,7 @@ end 'arm64SetIncomingArgLoad'
 function insertArm64PrologueAtEntry(module TargetModule, block IrBlock, usedCallee Arm64RegNumArray, spillSlotCount SpillSlot, frameSize StackSize, recordOffset StackSize)
 	for i in 0 upto usedCallee.count() 'eachSave'
 		let reg = try usedCallee.get(i) otherwise panic("insertArm64PrologueAtEntry: usedCallee.get OOB")
-		arm64PrependOp(module, block: block, op: TargetOp.storeSlotReg(spillSlotCount + i, srcReg: TargetVReg.physical(reg)))
+		arm64PrependOp(module, block: block, op: TargetOp.storeSlotReg(spillSlotCount + (i as SpillSlot), srcReg: TargetVReg.physical(reg)))
 	end 'eachSave'
 
 	arm64PrependOp(module, block: block, op: TargetOp.arm64Prologue(frameSize, recordOffset: recordOffset))
@@ -376,7 +376,7 @@ end 'insertArm64PrologueAtEntry'
 function appendArm64EpilogueBeforeReturn(module TargetModule, block IrBlock, usedCallee Arm64RegNumArray, spillSlotCount SpillSlot, frameSize StackSize, recordOffset StackSize)
 	for i in 0 upto usedCallee.count() 'eachRestore'
 		let reg = try usedCallee.get(i) otherwise panic("appendArm64EpilogueBeforeReturn: usedCallee.get OOB")
-		module.appendOp(block, op: TargetOp.loadRegSlot(TargetVReg.physical(reg), slot: spillSlotCount + i))
+		module.appendOp(block, op: TargetOp.loadRegSlot(TargetVReg.physical(reg), slot: spillSlotCount + (i as SpillSlot)))
 	end 'eachRestore'
 
 	module.appendOp(block, op: TargetOp.arm64Epilogue(frameSize, recordOffset: recordOffset))

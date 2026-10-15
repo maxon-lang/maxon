@@ -50,10 +50,9 @@
 #              step block would double the constant; `__gr_count` is O(n) BY DESIGN, so `data-countloop`
 #              exists to show what that costs a user who calls it inside a loop.
 #
-# ⚠ **THE SETUP IS `s.append(s)`, NOT AN APPEND LOOP, AND THAT IS LOAD-BEARING** — `genstring.sh`'s
-# reason, unchanged: `__str_append` reallocates to the EXACT required length on every grow, so building
-# an N-byte string by N appends copies O(N²) bytes and would swamp every reading below with a quadratic
-# that is not the one being measured. Self-append doubles the length per step.
+# ⚠ **THE SETUP IS `s.append(s)`, NOT AN APPEND LOOP** — `genstring.sh`'s reason: self-append doubles
+# the length per step, so the subject reaches its final length in `<n>` steps and the setup cost stays
+# off the timed region whatever the string growth policy is.
 #
 # ⚠ **AND THE SEED IS WHAT PICKS THE PATH THROUGH `__gr_end`, so the seeds are the real knobs here.**
 # `__gr_end` has an ASCII fast path (two byte loads and a compare, no codepoint decode, no property
@@ -158,13 +157,12 @@ emit_sites_program() {
 
 	echo "// grapheme ladder: $N sites, mode $MODE — see tests/ladders/genstring-grapheme.sh"
 	echo "typealias Int = int(i64.min to i64.max)"
-	echo "typealias ExitCode = int(0 to 255)"
 	echo ""
 
 	f=0
 	while [ "$f" -lt "$FNS" ]; do
 		echo "function fn${f}(${SITE_PARAMS}) returns Int"
-		echo -e "\tvar total = 0"
+		echo -e "\tvar total = 0 as Int"
 		if [ "$MODE" = "sites-charlit" ]; then
 			# The Character the literals are compared AGAINST. Minted once per function from a lone literal
 			# rather than from a segmentation scan, so the function's cost is dominated by the comparison
@@ -188,8 +186,8 @@ emit_sites_program() {
 				echo -e "\tend 'i${n}'"
 				;;
 			sites-count)
-				echo -e "\ttotal = total + s.count()"
-				echo -e "\ttotal = total + p.count()"
+				echo -e "\ttotal = total + (s.count() as Int)"
+				echo -e "\ttotal = total + (p.count() as Int)"
 				;;
 			sites-charlit)
 				# ⭐ THE LITERAL-DIRECTED TYPING PATH, and nothing else. `integerizedOperand` is asked of
@@ -216,7 +214,7 @@ emit_sites_program() {
 				;;
 			sites-bytes)
 				echo -e "\tlet b${n} = s.bytes()"
-				echo -e "\ttotal = total + b${n}.count()"
+				echo -e "\ttotal = total + (b${n}.count() as Int)"
 				;;
 			sites-control)
 				# THE CONTROL: the P1.2 wave D String surface and NOT ONE Character. Same function shape,
@@ -227,7 +225,7 @@ emit_sites_program() {
 				echo -e "\tend 'e${n}'"
 				echo -e "\tvar acc${n} = p"
 				echo -e "\tacc${n}.append(s)"
-				echo -e "\ttotal = total + acc${n}.byteLength()"
+				echo -e "\ttotal = total + (acc${n}.byteLength() as Int)"
 				;;
 			esac
 			n=$(( n + 1 ))
@@ -239,7 +237,7 @@ emit_sites_program() {
 	done
 
 	echo "function main() returns ExitCode"
-	echo -e "\tvar sum = 0"
+	echo -e "\tvar sum = 0 as Int"
 	f=0
 	while [ "$f" -lt "$FNS" ]; do
 		echo -e "\tsum = sum + fn${f}(${SITE_ARGS})"
@@ -262,13 +260,10 @@ seed_for_mode() {
 emit_data_program() {
 	echo "// grapheme ladder: $N doublings, mode $MODE — see tests/ladders/genstring-grapheme.sh"
 	echo "typealias Int = int(i64.min to i64.max)"
-	echo "typealias ExitCode = int(0 to 255)"
 	echo ""
-	echo "// Self-append doubling: O(final length) in total, because __str_append reallocates to the EXACT"
-	echo "// required length and a chunk-at-a-time loop would therefore be quadratic in the setup alone."
 	echo "function grown(seed String, doublings Int) returns String"
 	echo -e "\tvar s = seed"
-	echo -e "\tvar d = 0"
+	echo -e "\tvar d = 0 as Int"
 	echo -e "\twhile d < doublings 'dbl'"
 	echo -e "\t\ts.append(s)"
 	echo -e "\t\td = d + 1"
@@ -277,7 +272,7 @@ emit_data_program() {
 	echo "end 'grown'"
 	echo ""
 	echo "function main() returns ExitCode"
-	echo -e "\tvar total = 0"
+	echo -e "\tvar total = 0 as Int"
 	echo -e "\tlet subject = grown(\"$(seed_for_mode "$MODE")\", doublings: $N)"
 
 	case "$MODE" in
@@ -287,9 +282,9 @@ emit_data_program() {
 		# cluster end — a step block that called `__gr_end` again, or a `__gr_end` that scanned from 0 —
 		# this reads ×4 per doubling. `units` is the CLUSTER count, which is what the loop's trip count is
 		# and therefore what its cost should be linear in.
-		echo -e "\tvar units = 0"
+		echo -e "\tvar units = 0 as Int"
 		echo -e "\tlet t0 = Clock.nowNanos()"
-		echo -e "\tvar r = 0"
+		echo -e "\tvar r = 0 as Int"
 		echo -e "\twhile r < $REPS 'rep'"
 		echo -e "\t\tunits = 0"
 		echo -e "\t\tfor _ in subject 'walk'"
@@ -304,11 +299,11 @@ emit_data_program() {
 	data-count-*)
 		# `String.count()` — `__gr_count`, which is `__gr_end` in a loop. O(n) PER CALL by design, so this
 		# ladder should read ×2 per doubling and a ×4 would mean the scan restarts.
-		echo -e "\tvar units = 0"
+		echo -e "\tvar units = 0 as Int"
 		echo -e "\tlet t0 = Clock.nowNanos()"
-		echo -e "\tvar r = 0"
+		echo -e "\tvar r = 0 as Int"
 		echo -e "\twhile r < $REPS 'rep'"
-		echo -e "\t\tunits = subject.count()"
+		echo -e "\t\tunits = subject.count() as Int"
 		echo -e "\t\ttotal = total + units"
 		echo -e "\t\tr = r + 1"
 		echo -e "\tend 'rep'"
@@ -320,10 +315,10 @@ emit_data_program() {
 		# `count()` is O(n) per call and this calls it once per cluster, so the program is O(n²) — exactly
 		# what `String.count`'s own doc warns about. It is here so a future O(1)-on-ASCII `count()` has a
 		# before to be measured against.
-		echo -e "\tvar units = 0"
+		echo -e "\tvar units = 0 as Int"
 		echo -e "\tlet t0 = Clock.nowNanos()"
 		echo -e "\tfor _ in subject 'walk'"
-		echo -e "\t\ttotal = total + subject.count()"
+		echo -e "\t\ttotal = total + (subject.count() as Int)"
 		echo -e "\t\tunits = units + 1"
 		echo -e "\tend 'walk'"
 		echo -e "\tlet t1 = Clock.nowNanos()"
@@ -333,12 +328,12 @@ emit_data_program() {
 		# `.bytes()` — `__str_to_bytes` pushing every byte into a caller-created `Array with Byte`. The
 		# array grows by `Array`'s own doubling, so this is linear; it is measured because it is the one
 		# member of the rung that allocates per BYTE rather than per CLUSTER.
-		echo -e "\tvar units = 0"
+		echo -e "\tvar units = 0 as Int"
 		echo -e "\tlet t0 = Clock.nowNanos()"
-		echo -e "\tvar r = 0"
+		echo -e "\tvar r = 0 as Int"
 		echo -e "\twhile r < $REPS 'rep'"
 		echo -e "\t\tlet bs = subject.bytes()"
-		echo -e "\t\tunits = bs.count()"
+		echo -e "\t\tunits = bs.count() as Int"
 		echo -e "\t\ttotal = total + units"
 		echo -e "\t\tr = r + 1"
 		echo -e "\tend 'rep'"

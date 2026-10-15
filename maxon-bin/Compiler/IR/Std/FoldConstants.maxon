@@ -21,7 +21,7 @@
 // `maxonCmpOpOfStdPred` — CHECKED INVERSES of the lowering's own maps, which panic rather than answer if
 // the two directions ever diverge. See their header for why they live beside the forward map.
 //
-// ⭐ **WHY THE ANSWER IS THE SAME AT BOTH TIERS, WHICH IS WHAT MAKES THE SHARING SOUND.** A `ParsedInt` is
+// ⭐ **WHY THE ANSWER IS THE SAME AT BOTH TIERS, WHICH IS WHAT MAKES THE SHARING SOUND.** A `FullRangeInt` is
 // a signed 64-bit integer, and EVERY integer `binOp` and `cmp` in this compiler computes at the MACHINE
 // WORD on all three targets — x64 selects 64-bit register forms and reads no width at all, arm64 selects
 // the X-register forms, and wasm computes at `wasmMachineValTypeOf`, which is `i64` for every integer
@@ -61,7 +61,7 @@
 //     two never see each other's work — and both spell the same `-x`.
 //
 // ⭐⭐ **FLOATS FOLD, AND THE RULE IS: THE HOST'S BITS ARE THE INSTRUCTION'S BITS, OR THE OPERATION
-// KEEPS ITS INSTRUCTION.** A float constant is a `ParsedInt` holding the double's IEEE-754 BIT PATTERN
+// KEEPS ITS INSTRUCTION.** A float constant is a `FullRangeInt` holding the double's IEEE-754 BIT PATTERN
 // on the same `StdOp.const` an integer uses (float-ness is the op's `valueType`, not a second opcode),
 // so the REWRITE is identical and the only new question is whether the compiling host computes what the
 // target's instruction would. For
@@ -283,7 +283,7 @@ end 'operandsAreFoldableFloats'
 // — `y != y` — is true of every payload. What sees it is `a-computed-nan-keeps-its-instruction`'s
 // committed fragment, where the decline is the surviving `subsd`. Do not read the green suite as
 // evidence that removing this is safe; read the fragment.
-function foldedFloatConst(op StdOp, resultId ValueId, bits ParsedInt) returns StdOp
+function foldedFloatConst(op StdOp, resultId ValueId, bits FullRangeInt) returns StdOp
 	if floatBitsAreNaN(bits) 'payloadIsTheMachinesToChoose'
 		return op
 	end 'payloadIsTheMachinesToChoose'
@@ -373,7 +373,7 @@ end 'evaluateCmp'
 // answer is FALSE (`comparison-operators/compared-against-the-unsigned-extreme` pins it). `foldIntCompare`
 // speaks the signed reading only, and where one folder cannot speak for the operation, the operation
 // keeps its instruction — the rule this pass applies to `div`/`mod` and to floats as well.
-module function evaluateIntCompare(pred StdCmpPred, lhs ParsedInt, rhs ParsedInt, operandType StdType) returns FoldedInt
+module function evaluateIntCompare(pred StdCmpPred, lhs FullRangeInt, rhs FullRangeInt, operandType StdType) returns FoldedInt
 	if stdTypeIsUnsigned(operandType) 'unsignedReading'
 		return FoldedInt.notFoldable
 	end 'unsignedReading'
@@ -432,12 +432,12 @@ end 'evaluateUnaryOp'
 // three different "only":
 //
 //   • `siToFp`, `uiToFp` and `bitcastI64ToF64` — `foldIntUnaryOp` declines all three, and it is
-//     RIGHT to, for the reason its own arms give: a `ParsedInt` column that cannot say which of its
+//     RIGHT to, for the reason its own arms give: a `FullRangeInt` column that cannot say which of its
 //     entries is a bit pattern may not assert of one that it holds an encoding. A Std op carries
 //     `valueType`, so this pass CAN. The first two are real conversions, computed once in
 //     `TypeRules.foldSiToFp` / `foldUiToFp` (the parser's own promotion calls the same functions,
 //     so `1 + 2.0` in a `let` and `1 + 2.0` past the inliner cannot disagree); the third is a
-//     REINTERPRETATION whose fold is the identity on the payload — the same `ParsedInt`, re-minted
+//     REINTERPRETATION whose fold is the identity on the payload — the same `FullRangeInt`, re-minted
 //     at f64. None goes through `foldedFloatConst`, deliberately: an integer has no NaN to carry
 //     into a conversion, and a bitcast asked for exactly those bits.
 //   • ⭐⭐ **`logicalNot` — because THE OPCODE IS WHICH `not` THE SOURCE MEANT, and only this tier has
@@ -456,7 +456,7 @@ end 'evaluateUnaryOp'
 //     ⚠ It is NOT what leaves the `xor`/`cmp` pairs in `a-comparison-on-float-constants-folds`' own
 //     fragment: those `not`s read a leaf call's result, which arrives as a BLOCK ARG of `__il_cont`, and
 //     this pass is deliberately not a constant propagator. Two different boundaries, one symptom.
-function evaluateIntSourceUnaryOp(op StdOp, resultId ValueId, opcode StdUnaryOpcode, bits ParsedInt) returns StdOp
+function evaluateIntSourceUnaryOp(op StdOp, resultId ValueId, opcode StdUnaryOpcode, bits FullRangeInt) returns StdOp
 	if opcode == StdUnaryOpcode.siToFp 'promotion'
 		return StdOp.const(resultId, value: foldSiToFp(bits), valueType: FoldedFloatType)
 	end 'promotion'
@@ -581,10 +581,10 @@ let FoldedFloatType = StdType.f64
 // immediate against, and asking it once covers both signs instead of adding a second negative-only
 // test that would have to be kept in step. Declining costs one unfolded shift inside a cascade that is
 // already six ops.
-module function evaluateIntBinOp(opcode StdBinOpcode, lhs ParsedInt, rhs ParsedInt) returns FoldedInt
+module function evaluateIntBinOp(opcode StdBinOpcode, lhs FullRangeInt, rhs FullRangeInt) returns FoldedInt
 	// ⚠ **THE HIGH MULTIPLY IS DECLINED BEFORE THE BRIDGE, NOT INSIDE IT.** Two independent facts
 	// say no and it needs only the first: its answer is bits 64..127 of a 128-bit product, which a
-	// 64-bit `ParsedInt` cannot hold, so this pass has no arithmetic for it; and it has no `MaxonBinOp`
+	// 64-bit `FullRangeInt` cannot hold, so this pass has no arithmetic for it; and it has no `MaxonBinOp`
 	// twin at all, so `maxonBinOpOfStdOpcode` PANICS rather than answering. The guard is therefore ahead
 	// of the bridge. It is unreachable today — `StrengthReduceDivision` is scheduled AFTER this pass, so
 	// neither high multiply exists in the module when it runs — and it is written anyway, because "the
@@ -710,7 +710,7 @@ end 'applyCompareDecisions'
 // The i1 payload a FALSE condition carries. Named because it is a fact about the bool encoding
 // (`TypeRules.boolPayload`) rather than a number that happens to appear here. `threadConstantBranches`
 // reads a folded verdict against it for the same decision.
-module let ConditionIsFalse = 0 as ParsedInt
+module let ConditionIsFalse = 0 as FullRangeInt
 
 // `edges` without the ONE edge to `droppedTarget` — the arm the fold made unreachable from this block.
 //

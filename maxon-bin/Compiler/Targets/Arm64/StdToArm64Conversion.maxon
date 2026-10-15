@@ -195,7 +195,7 @@ end 'Arm64MemOperand'
 // vreg carries — in ONE place. The `.rawValue` is bound to a local first for the reason `x64PhysReg`
 // states at its own declaration.
 export function arm64PhysReg(reg Arm64Register) returns TargetVReg
-	let n = reg.rawValue
+	let n = reg.rawValue as RegNum
 	return TargetVReg.physical(n)
 end 'arm64PhysReg'
 
@@ -1279,7 +1279,7 @@ export type StdToArm64Lowering
 	end 'emitJumpTable'
 
 	// Materialize a constant. The `movz`/`movk` ladder is the encoder's; the isel emits one op.
-	function lowerConst(resultId ValueId, value ParsedInt, valueType StdType, dstRef ElementIndex)
+	function lowerConst(resultId ValueId, value FullRangeInt, valueType StdType, dstRef ElementIndex)
 		if stdTypeIsFloat(valueType) 'float'
 			self.lowerFloatConst(resultId, value: value, valueType: valueType, dstRef: dstRef)
 			return
@@ -1295,7 +1295,7 @@ export type StdToArm64Lowering
 	// The island's NAME and its eight bytes are both the shared table's
 	// (`GlobalDataTable.registerFloatConstant`, requested through the log as x64 does): the width and the
 	// serializer are the same fact x64 needs. What is genuinely arm64's stays — the type check and the load op.
-	function lowerFloatConst(resultId ValueId, value ParsedInt, valueType StdType, dstRef ElementIndex)
+	function lowerFloatConst(resultId ValueId, value FullRangeInt, valueType StdType, dstRef ElementIndex)
 		arm64RequireScalarDouble(valueType, what: "lowerFloatConst")
 		self.emit(dstRef, op: TargetOp.arm64FpLoadRdata(TargetVReg.virtual(resultId), label: self.rdata.floatConstant(value)))
 	end 'lowerFloatConst'
@@ -2023,23 +2023,23 @@ export type StdToArm64Lowering
 		let capacity = arm64RegisterArgCapacity()
 
 		for k in 0 upto args.count() 'eachStackArg'
-			if not abiArgIsOnStack(argFloatMask, index: k, capacity: capacity) 'inRegister'
+			if not abiArgIsOnStack(argFloatMask, index: k as ParamCount, capacity: capacity) 'inRegister'
 				continue
 			end 'inRegister'
 
 			let argId = try args.get(k) otherwise panic("emitArgMovesByFloatMask: args.get OOB at {k}")
-			self.emit(dstRef, op: TargetOp.arm64StoreOutgoingArg(abiStackSlotsBefore(argFloatMask, index: k, capacity: capacity) as SpillSlot, srcReg: TargetVReg.virtual(argId)))
+			self.emit(dstRef, op: TargetOp.arm64StoreOutgoingArg(abiStackSlotsBefore(argFloatMask, index: k as ParamCount, capacity: capacity) as SpillSlot, srcReg: TargetVReg.virtual(argId)))
 		end 'eachStackArg'
 
 		for k in 0 upto args.count() 'eachRegisterArg'
-			if abiArgIsOnStack(argFloatMask, index: k, capacity: capacity) 'onStack'
+			if abiArgIsOnStack(argFloatMask, index: k as ParamCount, capacity: capacity) 'onStack'
 				continue
 			end 'onStack'
 
 			let argId = try args.get(k) otherwise panic("emitArgMovesByFloatMask: args.get OOB at {k}")
-			let slot = abiFileSlotIndex(argFloatMask, index: k)
+			let slot = abiFileSlotIndex(argFloatMask, index: k as ParamCount)
 
-			if argMaskBit(argFloatMask, argIndex: k) 'floatArg'
+			if argMaskBit(argFloatMask, argIndex: k as ParamCount) 'floatArg'
 				self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(arm64FpArgRegisterAt(slot)), srcReg: TargetVReg.virtual(argId)))
 			end 'floatArg' else 'intArg'
 				self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(arm64ArgRegisterAt(slot)), srcReg: TargetVReg.virtual(argId)))
@@ -2730,7 +2730,7 @@ export type StdToArm64Lowering
 	//
 	// The fill BYTE is moved nowhere: it is broadcast across the word at compile time and rides the op as an
 	// immediate (`memFillPatternWord`), which is the whole reason `StdOp.memFill`'s value is a constant.
-	function lowerMemFill(destId ValueId, byteCountId ValueId, value ParsedInt, dstRef ElementIndex)
+	function lowerMemFill(destId ValueId, byteCountId ValueId, value FullRangeInt, dstRef ElementIndex)
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.physical(Arm64MemFillCursorRegNum), srcReg: TargetVReg.virtual(destId)))
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.physical(Arm64MemFillCountRegNum), srcReg: TargetVReg.virtual(byteCountId)))
 		self.emit(dstRef, op: TargetOp.arm64MemFill(memFillByte(value)))

@@ -100,7 +100,7 @@ typealias SlotArray = Array with Slot
 function main() returns ExitCode
 	var arr = SlotArray.create()
 	arr.growFilled(3, value: Slot.create(14))
-	var total = 0
+	var total = 0 as Integer
 	for s in arr 'sum'
 		total = total + s.value
 	end 'sum'
@@ -495,7 +495,7 @@ type Bag uses Element
 	end 'create'
 
 	static function keepFirstAfterClear(items ElementArray) returns Integer
-		var seen = 0
+		var seen = 0 as Integer
 
 		for e in items 'each'
 			items.clear()
@@ -557,4 +557,23 @@ end 'main'
 ```
 ```maxoncstderr
 error E2015: <fragment>:5:6: Unsupported: a declaration of the type name 'ArrayError', which the compiler owns — its one meaning comes from the compiler itself or from the stdlib module that declares it, and the compiler has no namespace to tell a user declaration of the name apart from that one
+```
+
+<!-- test: error.set-length-cannot-publish-slots-of-an-element-that-excludes-zero -->
+<!-- tier: stdlib -->
+`setLength` publishes the slots between the length and the capacity, and a slot nothing wrote is zero, which is not a `NonZero`. The buffer layer refuses it as `resize` does, so no read hands out a `NonZero` that is zero.
+```maxon
+typealias NonZero = int(1 to i64.max)
+typealias NonZeroArray = Array with NonZero
+
+function main() returns ExitCode
+	var xs = NonZeroArray.create()
+	xs.reserve(1)
+	try xs.managed.setLength(1) otherwise panic("setLength: capacity just reserved for 1")
+	let d = try xs.get(0) otherwise 1
+	return 100 / d
+end 'main'
+```
+```maxoncstderr
+error E3106: <fragment>:8:17: 'setLength' cannot publish slots of 'NonZero': a slot nothing wrote is zero and zero is not a value of 'NonZero'
 ```

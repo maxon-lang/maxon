@@ -145,11 +145,11 @@ type FileReader
 		end 'createErr'
 
 		while true 'eachChunk'
-			if managed.capacity() - managed.length() < ReadChunkBytes 'roomForAChunk'
-				try managed.grow(managed.length() + ReadChunkBytes) otherwise panic("File.readAll: grow — the new capacity is above the current one")
+			if managed.capacity() - (managed.length() as ReportedCapacity) < (ReadChunkBytes as ReportedCapacity) 'roomForAChunk'
+				try managed.grow((managed.length() as FileSize) + ReadChunkBytes) otherwise panic("File.readAll: grow — the new capacity is above the current one")
 			end 'roomForAChunk'
 
-			let got = try file.readAppending(managed, managed.capacity() - managed.length()) otherwise (e) 'readFailed'
+			let got = try file.readAppending(managed, managed.capacity() - (managed.length() as ReportedCapacity)) otherwise (e) 'readFailed'
 				throw readFailureOf(e)
 			end 'readFailed'
 
@@ -160,8 +160,8 @@ type FileReader
 
 		file.close()
 
-		if managed.capacity() < managed.length() + extraBytes 'roomForTheExtra'
-			try managed.grow(managed.length() + extraBytes) otherwise panic("File.readAll: grow — the new capacity is above the current one")
+		if managed.capacity() < ((managed.length() as FileSize) + extraBytes) as ReportedCapacity 'roomForTheExtra'
+			try managed.grow((managed.length() as FileSize) + extraBytes) otherwise panic("File.readAll: grow — the new capacity is above the current one")
 		end 'roomForTheExtra'
 
 		return managed

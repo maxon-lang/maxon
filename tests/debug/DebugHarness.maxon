@@ -346,11 +346,11 @@ end 'opensASection'
 // is not one, so a token carrying no digits reads 0 — which fails the assertion that consumes it rather
 // than standing in for a number nobody published.
 export function hexValue(token String) returns SidecarNumber
-	var value = 0
+	var value = 0 as SidecarNumber
 
 	for c in token.trim().replace(HexPrefix, with: "") 'eachCharacter'
 		match hexDigitOf(c) 'digit'
-			value(digit) then value = value * HexBase + digit
+			value(digit) then value = value * HexBase + (digit as SidecarNumber)
 			notAHexDigit then break 'eachCharacter'
 		end 'digit'
 	end 'eachCharacter'
@@ -746,8 +746,8 @@ end 'renderedEvents'
 export function anchorLine(staged FilePath, anchor String, file String = StagedProgramFileName) returns SourceLine
 	let program = staged.join(file)
 	let marker = "{AnchorMarker}{anchor}"
-	var found = 0
-	var carriers = 0
+	var found = 0 as ElementIndex
+	var carriers = 0 as Count
 
 	for (iter, line) in linesOfStagedSource(program).withIterator() 'eachLine'
 		if line.trim().endsWith(marker) 'thisAnchor'
@@ -778,13 +778,13 @@ end 'sourceColumnOf'
 let FirstSourcePosition = 1
 
 export function stagedLinesContaining(staged FilePath, needle String) returns EventTally
-	var tally = 0
+	var tally = 0 as EventTally
 
 	for line in linesOfStagedSource(staged.join(StagedProgramFileName)) 'eachLine'
 		tally = tally + 1 if line.contains(needle) else tally
 	end 'eachLine'
 
-	return tally as EventTally
+	return tally
 end 'stagedLinesContaining'
 
 // The staged program's own file name, as a `file:line` break target and an event's `file` field spell it.
@@ -906,7 +906,7 @@ export function columnValueIn(row String, column String) returns SidecarNumber
 end 'columnValueIn'
 
 function decimalValue(token String) returns SidecarNumber
-	var value = 0
+	var value = 0 as SidecarNumber
 
 	for c in token.trim() 'eachCharacter'
 		let code = try c.asciiValue() otherwise break
@@ -915,7 +915,7 @@ function decimalValue(token String) returns SidecarNumber
 			break
 		end 'pastTheDigits'
 
-		value = value * DecimalBase + (code - AsciiDigitZero)
+		value = value * DecimalBase + ((code - AsciiDigitZero) as SidecarNumber)
 	end 'eachCharacter'
 
 	return value
@@ -1452,7 +1452,7 @@ export let NotTracedReason = "not-traced"
 export let NotBuiltWithDebugStreamReason = "program-not-built-with-debugstream"
 
 export let AbsentThreadId = -1
-export let AbsentEventIndex = -1
+export let AbsentEventIndex = -1 as EventNumber
 let SelectorFunctionSeparator = ":"
 
 export let GreenThreadPlaceholderText = "green-thread"
@@ -1468,13 +1468,13 @@ export function conditionalBreak(target String, condition String) returns String
 end 'conditionalBreak'
 
 export function linesStartingWith(text String, prefix String) returns EventTally
-	var tally = 0
+	var tally = 0 as EventTally
 
 	for line in withoutCarriageReturns(text).split(LineFeed) 'eachLine'
 		tally = tally + 1 if line.startsWith(prefix) else tally
 	end 'eachLine'
 
-	return tally as EventTally
+	return tally
 end 'linesStartingWith'
 
 export function threadRows(doc JsonDoc) returns JsonNodeIdArray
@@ -1502,13 +1502,13 @@ export function threadFieldOfId(doc JsonDoc, id EventNumber, key String) returns
 end 'threadFieldOfId'
 
 export function countThreadsWhere(doc JsonDoc, key String, value String) returns EventTally
-	var tally = 0
+	var tally = 0 as EventTally
 
 	for row in threadRows(doc) 'eachRow'
 		tally = tally + 1 if textOf(doc, node: row, key: key) == value else tally
 	end 'eachRow'
 
-	return tally as EventTally
+	return tally
 end 'countThreadsWhere'
 
 export function renderedThreads(doc JsonDoc) returns String
@@ -1522,17 +1522,17 @@ export function renderedThreads(doc JsonDoc) returns String
 end 'renderedThreads'
 
 export function stopsAtLine(events JsonDocArray, line SourceLine) returns EventTally
-	var tally = 0
+	var tally = 0 as EventTally
 
 	for stop in eventsOfKind(events, kind: StopEventName) 'eachStop'
 		tally = tally + 1 if numberOf(stop, node: stop.root, key: LineKey) == line as EventNumber else tally
 	end 'eachStop'
 
-	return tally as EventTally
+	return tally
 end 'stopsAtLine'
 
 export function stopsOnThreadInRange(events JsonDocArray, id EventNumber, after EventNumber, upto EventNumber) returns EventTally
-	var tally = 0
+	var tally = 0 as EventTally
 
 	for (iter, event) in events.withIterator() 'eachEvent'
 		let at = iter.index() as EventNumber
@@ -1542,7 +1542,7 @@ export function stopsOnThreadInRange(events JsonDocArray, id EventNumber, after 
 		end 'thisThread'
 	end 'eachEvent'
 
-	return tally as EventTally
+	return tally
 end 'stopsOnThreadInRange'
 
 export function eventsOfKindBeforeTheExit(events JsonDocArray, kind String) returns JsonDocArray
@@ -1583,7 +1583,7 @@ export function lastIndexOfKind(events JsonDocArray, kind String) returns EventN
 end 'lastIndexOfKind'
 
 export function stopsAfterIndex(events JsonDocArray, index EventNumber) returns EventTally
-	var tally = 0
+	var tally = 0 as EventTally
 
 	for (iter, event) in events.withIterator() 'eachEvent'
 		if (iter.index() as EventNumber) > index and eventKind(event) == StopEventName 'aLaterStop'
@@ -1591,7 +1591,7 @@ export function stopsAfterIndex(events JsonDocArray, index EventNumber) returns 
 		end 'aLaterStop'
 	end 'eachEvent'
 
-	return tally as EventTally
+	return tally
 end 'stopsAfterIndex'
 
 export function innermostPhysicalFrameFunction(doc JsonDoc, key String) returns String

@@ -1,0 +1,445 @@
+type AdoptedBrand
+	export let brand as ByteArray
+	export let line as LineNumber
+	export let column as ColumnNumber
+	export let filePath as FilePath
+
+	static function create(brand ByteArray, line LineNumber, column ColumnNumber, filePath FilePath) returns Self
+		return Self{brand: brand, line: line, column: column, filePath: filePath}
+	end 'create'
+
+	function isTheStoreAt(record PendingBrandRecord) returns bool
+		return self.line == record.line and self.column == record.column and self.filePath.equals(record.filePath)
+	end 'isTheStoreAt'
+
+	function precedes(record PendingBrandRecord) returns bool
+		return self.filePath.equals(record.filePath) and (self.line < record.line or (self.line == record.line and self.column < record.column))
+	end 'precedes'
+end 'AdoptedBrand'
+
+typealias AdoptedBrandMap = Map with (ByteArray, AdoptedBrand)
+typealias HandOverOwnerMap = Map with (ElementIndex, ElementIndex)
+typealias HandOverOpSet = Set with ElementIndex
+
+export type HandedParameter
+	export let brand as ByteArray
+	export let name as ByteArray
+	export let rival as ByteArray
+	export let otherRival as ByteArray
+
+	static function agreeing(brand ByteArray, name ByteArray) returns Self
+		return Self{brand: brand, name: name, rival: EmptySourceText, otherRival: EmptySourceText}
+	end 'agreeing'
+
+	static function disagreeing(rival ByteArray, otherRival ByteArray) returns Self
+		return Self{brand: EmptySourceText, name: EmptySourceText, rival: rival, otherRival: otherRival}
+	end 'disagreeing'
+
+	static function none() returns Self
+		return Self{brand: EmptySourceText, name: EmptySourceText, rival: EmptySourceText, otherRival: EmptySourceText}
+	end 'none'
+end 'HandedParameter'
+
+typealias HandedParameterArray = Array with HandedParameter
+
+type BrandCandidates
+	var agreed as ByteArray
+	var other as ByteArray
+
+	static function create() returns Self
+		return Self{agreed: ByteArray.create(), other: ByteArray.create()}
+	end 'create'
+
+	function offer(brand ByteArray)
+		if brand.isEmpty() 'aParameterThatFitsAnyBrand'
+			return
+		end 'aParameterThatFitsAnyBrand'
+
+		if self.agreed.isEmpty() 'theFirstDeclaredBrand'
+			self.agreed = brand.clone()
+			return
+		end 'theFirstDeclaredBrand'
+
+		if brandsConflict(self.agreed, got: brand) and self.other.isEmpty() 'aSecondBrand'
+			self.other = brand.clone()
+		end 'aSecondBrand'
+	end 'offer'
+
+	function settled(name ByteArray) returns HandedParameter
+		return HandedParameter.disagreeing(self.agreed.clone(), otherRival: self.other.clone()) if not self.other.isEmpty() else HandedParameter.agreeing(self.agreed.clone(), name: name)
+	end 'settled'
+end 'BrandCandidates'
+
+type HandOverContext
+	export var program as MaxonModule
+	export var calls as CallSummaryIndex
+	export var signatures as ProgramSignatures
+	export var owners as HandOverOwnerMap
+
+	static function create(program MaxonModule, calls CallSummaryIndex, signatures ProgramSignatures, owners HandOverOwnerMap) returns Self
+		return Self{program: program, calls: calls, signatures: signatures, owners: owners}
+	end 'create'
+end 'HandOverContext'
+
+module function settleBrandAdoption(project Project, module MaxonModule, signatures ProgramSignatures, calls CallSummaryIndex)
+	if project.pendingBrandRecords.count() == 0 'nothingIsAdoptable'
+		return
+	end 'nothingIsAdoptable'
+
+	var context = HandOverContext.create(module, calls: calls, signatures: signatures, owners: ownersOfIndirectHandOvers(project, module: module))
+	let handed = handedParametersOf(project, context: context)
+	let resolved = resolveBrands(project, handed: handed)
+
+	for recordIndex in 0 upto project.pendingBrandRecords.count() 'eachJudgedRecord'
+		judgeBrandRecord(project, signatures: signatures, adopted: resolved.adopted, record: try project.pendingBrandRecords.get(recordIndex) otherwise panic("settleBrandAdoption: pendingBrandRecords.get OOB at {recordIndex}"), handed: try handed.get(recordIndex) otherwise panic("settleBrandAdoption: handed.get OOB at {recordIndex} — one parameter is derived per record"), carried: try resolved.carried.get(recordIndex) otherwise panic("settleBrandAdoption: carried.get OOB at {recordIndex} — one brand is carried per record"))
+	end 'eachJudgedRecord'
+
+	judgeMergeGroups(project, signatures: signatures, adopted: resolved.adopted)
+	patchAdoptedBrands(project, module: module, adopted: resolved.adopted)
+end 'settleBrandAdoption'
+
+function handedParametersOf(project Project, context HandOverContext) returns HandedParameterArray
+	var handed = HandedParameterArray.create()
+	handed.reserve(project.pendingBrandRecords.count())
+
+	for record in project.pendingBrandRecords 'eachRecord'
+		handed.push(handedParameterOf(project, context: context, record: record))
+	end 'eachRecord'
+
+	return handed
+end 'handedParametersOf'
+
+typealias RecordIndexArray = Array with ElementIndex
+typealias RecordIndexMap = Map with (ByteArray, ElementIndex)
+typealias BrandKeySet = Set with ByteArray
+typealias MergeBrandMap = Map with (ByteArray, ByteArray)
+
+type BrandResolver
+	let firstOf as RecordIndexMap
+	let nextOf as RecordIndexArray
+	export var carried as NameRoster
+	var known as BoolArray
+	export var adopted as AdoptedBrandMap
+	var done as BrandKeySet
+	var active as BrandKeySet
+
+	static function create(project Project, handed HandedParameterArray) returns Self
+		let count = project.pendingBrandRecords.count()
+		var firstOf = RecordIndexMap.create()
+		var lastOf = RecordIndexMap.create()
+		var nextOf = RecordIndexArray.create()
+		var carried = NameRoster.create()
+		var known = BoolArray.create()
+
+		for index in 0 upto count 'eachRecord'
+			let record = try project.pendingBrandRecords.get(index) otherwise panic("BrandResolver.create: pendingBrandRecords.get OOB at {index}")
+			nextOf.push(count)
+
+			if let last = try lastOf.get(record.key) 'aLaterRecordOfTheKey'
+				try nextOf.set(last, value: index) otherwise panic("BrandResolver.create: nextOf.set OOB at {last}")
+			end 'aLaterRecordOfTheKey'
+
+			if not firstOf.contains(record.key) 'theFirstRecordOfTheKey'
+				firstOf.upsert(record.key, value: index)
+			end 'theFirstRecordOfTheKey'
+
+			lastOf.upsert(record.key, value: index)
+			carried.push(brandOfStoringRecord(record, handed: try handed.get(index) otherwise panic("BrandResolver.create: handed.get OOB at {index} — one parameter is derived per record")))
+			known.push(false)
+		end 'eachRecord'
+
+		return Self{firstOf: firstOf, nextOf: nextOf, carried: carried, known: known, adopted: AdoptedBrandMap.create(), done: BrandKeySet.create(), active: BrandKeySet.create()}
+	end 'create'
+
+	function carriedBy(project Project, index ElementIndex) returns ByteArray
+		let isKnown = try self.known.get(index) otherwise panic("BrandResolver.carriedBy: known.get OOB at {index}")
+
+		if isKnown 'alreadyCarried'
+			return try self.carried.get(index) otherwise panic("BrandResolver.carriedBy: carried.get OOB at {index}")
+		end 'alreadyCarried'
+
+		let record = try project.pendingBrandRecords.get(index) otherwise panic("BrandResolver.carriedBy: pendingBrandRecords.get OOB at {index}")
+
+		if record.kind == BrandRecordKind.store and not record.originKey.isEmpty() 'aChainStore'
+			self.resolve(project, key: record.originKey)
+
+			if self.done.contains(record.originKey) 'theSourceIsResolved'
+				if let source = try self.adopted.get(record.originKey) 'theSourceAdopted'
+					try self.carried.set(index, value: source.brand) otherwise panic("BrandResolver.carriedBy: carried.set OOB at {index}")
+				end 'theSourceAdopted'
+			end 'theSourceIsResolved'
+		end 'aChainStore'
+
+		try self.known.set(index, value: true) otherwise panic("BrandResolver.carriedBy: known.set OOB at {index}")
+		return try self.carried.get(index) otherwise panic("BrandResolver.carriedBy: carried.get OOB at {index}")
+	end 'carriedBy'
+
+	function resolve(project Project, key ByteArray)
+		if self.done.contains(key) or self.active.contains(key) 'alreadyAnswered'
+			return
+		end 'alreadyAnswered'
+
+		self.active.insert(key)
+		var index = try self.firstOf.get(key) otherwise project.pendingBrandRecords.count()
+
+		while index < project.pendingBrandRecords.count() 'eachRecordOfTheKey'
+			let record = try project.pendingBrandRecords.get(index) otherwise panic("BrandResolver.resolve: pendingBrandRecords.get OOB at {index}")
+			let brand = self.carriedBy(project, index: index)
+
+			if not brand.isEmpty() 'aBrandedRecord'
+				self.adoptFrom(record, brand: brand)
+			end 'aBrandedRecord'
+
+			index = try self.nextOf.get(index) otherwise panic("BrandResolver.resolve: nextOf.get OOB at {index}")
+		end 'eachRecordOfTheKey'
+
+		_ = self.active.remove(key)
+		self.done.insert(key)
+	end 'resolve'
+
+	function adoptFrom(record PendingBrandRecord, brand ByteArray)
+		let incumbent = try self.adopted.get(record.key) otherwise 'theFirstStore'
+			self.adopted.upsert(record.key.clone(), value: AdoptedBrand.create(brand, line: record.line, column: record.column, filePath: record.filePath))
+			return
+		end 'theFirstStore'
+
+		if not incumbent.precedes(record) and incumbent.filePath.equals(record.filePath) and not incumbent.isTheStoreAt(record) 'anEarlierStoreOfTheSameFile'
+			self.adopted.upsert(record.key.clone(), value: AdoptedBrand.create(brand, line: record.line, column: record.column, filePath: record.filePath))
+		end 'anEarlierStoreOfTheSameFile'
+	end 'adoptFrom'
+end 'BrandResolver'
+
+function resolveBrands(project Project, handed HandedParameterArray) returns BrandResolver
+	var resolver = BrandResolver.create(project, handed: handed)
+
+	for index in 0 upto project.pendingBrandRecords.count() 'eachRecord'
+		resolver.resolve(project, key: (try project.pendingBrandRecords.get(index) otherwise panic("resolveBrands: pendingBrandRecords.get OOB at {index}")).key.clone())
+	end 'eachRecord'
+
+	return resolver
+end 'resolveBrands'
+
+function ownersOfIndirectHandOvers(project Project, module MaxonModule) returns HandOverOwnerMap
+	var owners = HandOverOwnerMap.create()
+	var wanted = HandOverOpSet.create()
+
+	for record in project.pendingBrandRecords 'eachRecord'
+		if record.kind == BrandRecordKind.handOverIndirect 'anIndirectCall'
+			wanted.insert(record.opIndex)
+		end 'anIndirectCall'
+	end 'eachRecord'
+
+	if wanted.count() == 0 'nothingToLocate'
+		return owners
+	end 'nothingToLocate'
+
+	for (funcIndex, func) in module.functions.withIterator() 'eachFunc'
+		for opIdx in module.liveOpIndices(func) 'eachOp'
+			if wanted.contains(opIdx) 'aHandedOverCall'
+				owners.upsert(opIdx, value: funcIndex.index())
+			end 'aHandedOverCall'
+		end 'eachOp'
+	end 'eachFunc'
+
+	return owners
+end 'ownersOfIndirectHandOvers'
+
+function brandOfStoringRecord(record PendingBrandRecord, handed HandedParameter) returns ByteArray
+	return match record.kind 'kind'
+		store gives record.brand
+		handOver or
+		handOverIndirect or
+		handOverWitness gives handed.brand
+		assignDoor or
+		mergeArms gives EmptySourceText
+	end 'kind'
+end 'brandOfStoringRecord'
+
+function handedParameterOf(project Project, context HandOverContext, record PendingBrandRecord) returns HandedParameter
+	return match record.kind 'kind'
+		handOver gives directlyHandedParameterOf(project, context: context, record: record)
+		handOverIndirect gives indirectlyHandedParameterOf(project, context: context, record: record)
+		handOverWitness gives dispatchedParameterOf(project, context: context, record: record)
+		store or
+		assignDoor or
+		mergeArms gives HandedParameter.none()
+	end 'kind'
+end 'handedParameterOf'
+
+function directlyHandedParameterOf(project Project, context HandOverContext, record PendingBrandRecord) returns HandedParameter
+	let op = try context.program.ops.get(record.opIndex) otherwise panic("directlyHandedParameterOf: ops.get OOB at {record.opIndex} — a hand-over record is relocated onto the module's op column")
+	let sig = try project.funcSignatures.get(maxonOpCalleeName(op)) otherwise return HandedParameter.none()
+	let position = try argSlotPosition(sig.paramNames, argIndex: record.argIndex, label: record.label) otherwise return HandedParameter.none()
+	return HandedParameter.agreeing(declaredParameterBrand(sig, position: position), name: declaredParameterName(sig, position: position))
+end 'directlyHandedParameterOf'
+
+function declaredParameterBrand(sig FuncSignature, position ParamCount) returns ByteArray
+	let paramType = try sig.paramTypes.get(position) otherwise panic("declaredParameterBrand: position {position} is past the {sig.paramTypes.count()} parameters the signature declares")
+	let spelled = try sig.paramDeclaredNames.get(position) otherwise panic("declaredParameterBrand: paramDeclaredNames.get OOB at {position} — a signature's param columns are built in lockstep")
+	return declaredBrandOf(spelled, paramTag: maxonTypeTag(paramType))
+end 'declaredParameterBrand'
+
+function declaredParameterName(sig FuncSignature, position ParamCount) returns ByteArray
+	return try sig.paramNames.get(position) otherwise panic("declaredParameterName: position {position} is past the {sig.paramNames.count()} parameters the signature declares")
+end 'declaredParameterName'
+
+function indirectlyHandedParameterOf(project Project, context HandOverContext, record PendingBrandRecord) returns HandedParameter
+	let funcIndex = try context.owners.get(record.opIndex) otherwise panic("indirectlyHandedParameterOf: no function owns op {record.opIndex} — an indirect hand-over record names a live indirect call")
+	let func = try context.program.functions.get(funcIndex) otherwise panic("indirectlyHandedParameterOf: functions.get OOB at {funcIndex}")
+	let op = try context.program.ops.get(record.opIndex) otherwise panic("indirectlyHandedParameterOf: ops.get OOB at {record.opIndex}")
+
+	match op 'op'
+		indirectCall(_, callee, _, _) then return landedBrandsOf(project, module: context.program, bodies: context.calls.functionValueBodiesCalledThrough(func, callee: callee), position: record.argIndex)
+		default panic("indirectlyHandedParameterOf: op {record.opIndex} is not an `indirectCall`")
+	end 'op'
+end 'indirectlyHandedParameterOf'
+
+module function landedBrandsOf(project Project, module MaxonModule, bodies CallLandingBodies, position ParamCount) returns HandedParameter
+	var candidates = BrandCandidates.create()
+	offerLandedBrands(project, module: module, bodies: bodies, position: position, into: candidates)
+	return candidates.settled(EmptySourceText)
+end 'landedBrandsOf'
+
+function offerLandedBrands(project Project, module MaxonModule, bodies CallLandingBodies, position ParamCount, into BrandCandidates)
+	for implIndex in bodies.impls 'eachCandidate'
+		let body = try module.functions.get(implIndex) otherwise panic("offerLandedBrands: functions.get OOB at {implIndex}")
+		let sig = try project.funcSignatures.get(body.name) otherwise continue
+		into.offer(declaredParameterBrand(sig, position: position))
+	end 'eachCandidate'
+end 'offerLandedBrands'
+
+function dispatchedParameterOf(project Project, context HandOverContext, record PendingBrandRecord) returns HandedParameter
+	let op = try context.program.ops.get(record.opIndex) otherwise panic("dispatchedParameterOf: ops.get OOB at {record.opIndex}")
+
+	match op 'op'
+		witnessDispatch(_, _, _, _, methodIndex, interfaceDeclIndex, _, _) then return witnessLandedParameterOf(project, context: context, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, position: record.argIndex)
+		witnessTryDispatch(_, _, _, _, _, methodIndex, interfaceDeclIndex, _) then return witnessLandedParameterOf(project, context: context, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, position: record.argIndex)
+		default panic("dispatchedParameterOf: op {record.opIndex} is not a witness dispatch")
+	end 'op'
+end 'dispatchedParameterOf'
+
+function witnessLandedParameterOf(project Project, context HandOverContext, methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex, position ParamCount) returns HandedParameter
+	let slot = context.calls.witnessSlotOf(methodIndex, interfaceDeclIndex: interfaceDeclIndex)
+	let formal = (position - WitnessReceiverArgCount) as ElementIndex
+	var candidates = BrandCandidates.create()
+	candidates.offer(context.signatures.interfaceFormalBrand(slot.sourceInterfaceName, formalName: try slot.method.paramTypeNames.get(formal) otherwise panic("witnessLandedParameterOf: paramTypeNames.get OOB at {formal} — a hand-over record names a formal of its requirement")))
+	offerLandedBrands(project, module: context.program, bodies: context.calls.implsOf(methodIndex, interfaceDeclIndex: interfaceDeclIndex), position: position, into: candidates)
+	return candidates.settled(try slot.method.paramNames.get(formal) otherwise EmptySourceText)
+end 'witnessLandedParameterOf'
+
+function judgeBrandRecord(project Project, signatures ProgramSignatures, adopted AdoptedBrandMap, record PendingBrandRecord, handed HandedParameter, carried ByteArray)
+	match record.kind 'kind'
+		handOverIndirect or
+		handOverWitness then judgeLandingCandidates(project, signatures: signatures, handed: handed, record: record)
+		store or
+		handOver or
+		assignDoor or
+		mergeArms then break
+	end 'kind'
+
+	let held = try adopted.get(record.key) otherwise return
+
+	match record.kind 'kind'
+		store then judgeAdoptingStore(project, signatures: signatures, held: held, expected: carried, record: record)
+		handOver or
+		handOverIndirect or
+		handOverWitness then judgeHandOver(project, signatures: signatures, held: held, handed: handed, record: record)
+		assignDoor then judgeReadDoor(project, signatures: signatures, held: held, record: record)
+		mergeArms then break
+	end 'kind'
+end 'judgeBrandRecord'
+
+function judgeLandingCandidates(project Project, signatures ProgramSignatures, handed HandedParameter, record PendingBrandRecord)
+	if handed.rival.isEmpty() 'theCandidatesAgree'
+		return
+	end 'theCandidatesAgree'
+
+	let subject = "the function value" if record.kind == BrandRecordKind.handOverIndirect else "the interface requirement"
+	reportPositioned(project, code: ErrorCode.typeMismatch, message: "argument type mismatch for {record.argIndex + 1}: {subject} may land on bodies that declare '{signatures.aliasIdentityDisplay(handed.rival)}' and '{signatures.aliasIdentityDisplay(handed.otherRival)}' for this parameter, so no one brand fits it", line: record.line, column: record.column, filePath: record.filePath)
+end 'judgeLandingCandidates'
+
+function judgeHandOver(project Project, signatures ProgramSignatures, held AdoptedBrand, handed HandedParameter, record PendingBrandRecord)
+	if handed.brand.isEmpty() or held.isTheStoreAt(record) or not brandsConflict(handed.brand, got: held.brand) 'theParameterAgrees'
+		return
+	end 'theParameterAgrees'
+
+	let label = quotedParamLabel(String.from(handed.name)) if not handed.name.isEmpty() else "{record.argIndex + 1}"
+	reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchSentence(label, expected: signatures.aliasIdentityDisplay(handed.brand), got: signatures.aliasIdentityDisplay(held.brand)), line: record.line, column: record.column, filePath: record.filePath)
+end 'judgeHandOver'
+
+function judgeReadDoor(project Project, signatures ProgramSignatures, held AdoptedBrand, record PendingBrandRecord)
+	if not brandsConflict(record.brand, got: held.brand) 'theReadFitsThePlace'
+		return
+	end 'theReadFitsThePlace'
+
+	reportPositioned(project, code: ErrorCode.typeMismatch, message: "cannot assign a value of type '{signatures.aliasIdentityDisplay(held.brand)}' to {String.from(record.phrase)}, which holds '{signatures.aliasIdentityDisplay(record.brand.clone())}'", line: record.line, column: record.column, filePath: record.filePath)
+end 'judgeReadDoor'
+
+function judgeAdoptingStore(project Project, signatures ProgramSignatures, held AdoptedBrand, expected ByteArray, record PendingBrandRecord)
+	if held.isTheStoreAt(record) or not brandsConflict(held.brand, got: expected) 'theStoreAgrees'
+		return
+	end 'theStoreAgrees'
+
+	reportPositioned(project, code: ErrorCode.typeMismatch, message: "cannot assign a value of type '{signatures.aliasIdentityDisplay(expected)}' to {String.from(record.phrase)}, which holds '{signatures.aliasIdentityDisplay(held.brand)}'", line: record.line, column: record.column, filePath: record.filePath)
+end 'judgeAdoptingStore'
+
+function judgeMergeGroups(project Project, signatures ProgramSignatures, adopted AdoptedBrandMap)
+	var firstBrands = MergeBrandMap.create()
+	var refused = BrandKeySet.create()
+
+	for index in 0 upto project.pendingBrandRecords.count() 'eachRecord'
+		judgeMergeArm(project, signatures: signatures, adopted: adopted, record: try project.pendingBrandRecords.get(index) otherwise panic("judgeMergeGroups: pendingBrandRecords.get OOB at {index}"), firstBrands: firstBrands, refused: refused)
+	end 'eachRecord'
+end 'judgeMergeGroups'
+
+function judgeMergeArm(project Project, signatures ProgramSignatures, adopted AdoptedBrandMap, record PendingBrandRecord, firstBrands MergeBrandMap, refused BrandKeySet)
+	if record.kind != BrandRecordKind.mergeArms 'notAMergeArm'
+		return
+	end 'notAMergeArm'
+
+	let brand = armBrandOf(record, adopted: adopted)
+
+	if brand.isEmpty() 'anArmThatHoldsNoBrand'
+		return
+	end 'anArmThatHoldsNoBrand'
+
+	let group = "{record.filePath.toString()}|{record.line}|{record.column}".toByteArray()
+	let first = try firstBrands.get(group) otherwise 'theFirstBrandedArm'
+		firstBrands.upsert(group, value: brand.clone())
+		return
+	end 'theFirstBrandedArm'
+
+	if brandsConflict(first, got: brand) and not refused.contains(group) 'aSecondBrand'
+		reportPositioned(project, code: ErrorCode.typeMismatch, message: "the arms of this merge hold '{signatures.aliasIdentityDisplay(first)}' and '{signatures.aliasIdentityDisplay(brand)}', so the merged value has no one brand", line: record.line, column: record.column, filePath: record.filePath)
+		refused.insert(group)
+	end 'aSecondBrand'
+end 'judgeMergeArm'
+
+function armBrandOf(record PendingBrandRecord, adopted AdoptedBrandMap) returns ByteArray
+	if not record.brand.isEmpty() 'anAuthoredBrand'
+		return record.brand
+	end 'anAuthoredBrand'
+
+	let held = try adopted.get(record.key) otherwise return EmptySourceText
+	return held.brand
+end 'armBrandOf'
+
+function patchAdoptedBrands(project Project, module MaxonModule, adopted AdoptedBrandMap)
+	for func in module.functions 'eachFunc'
+		if func.brandOriginValues.count() == 0 'originatesNothing'
+			continue
+		end 'originatesNothing'
+
+		for (position, value) in func.brandOriginValues.withIterator() 'eachOrigin'
+			let key = try func.brandOriginKeys.get(position.index()) otherwise panic("patchAdoptedBrands: brandOriginKeys.get OOB at {position.index()} — the two origin columns are published together")
+			let held = try adopted.get(key) otherwise continue
+
+			if (try func.valueBrandIds.get(value) otherwise panic("patchAdoptedBrands: v{value} of function '{String.from(func.name)}' has no brand slot — the brand column is pushed in lockstep with the type columns")) != UnnamedTypeId 'alreadyWearsABrand'
+				continue
+			end 'alreadyWearsABrand'
+
+			func.makeValueColumnsPrivate()
+			try func.valueBrandIds.set(value, value: project.typeNames.intern(held.brand)) otherwise panic("patchAdoptedBrands: v{value} of function '{String.from(func.name)}' has no brand slot — the brand column is pushed in lockstep with the type columns")
+		end 'eachOrigin'
+	end 'eachFunc'
+end 'patchAdoptedBrands'

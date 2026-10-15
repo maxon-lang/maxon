@@ -37,7 +37,7 @@ featB's slot and answering 101.
 // --- file: featA/a.maxon
 export typealias Num = int(i64.min to i64.max)
 
-var counter = 7
+var counter = 7 as Num
 
 export function bumpA() returns Num
 	counter = counter + 1
@@ -45,7 +45,7 @@ export function bumpA() returns Num
 end 'bumpA'
 
 // --- file: featB/b.maxon
-var counter = 100
+var counter = 100 as Num
 
 export function bumpB() returns Num
 	counter = counter + 10

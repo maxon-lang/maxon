@@ -145,11 +145,11 @@ typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
 typealias Vec5 = Vector with 5 Int
 
-var trips = 0
+var trips = 0 as Int
 
 extension Vector
 	static function counted() returns Self
-		var i = 0
+		var i = 0 as Count
 		while i < countof(Self) 'each'
 			trips = trips + 1
 			i = i + 1
@@ -159,7 +159,7 @@ extension Vector
 
 	function rebuild() returns Int
 		let fresh = Self.counted()
-		var slots = 0
+		var slots = 0 as Count
 		for _ in fresh 'countTheRecordsSlots'
 			slots = slots + 1
 		end 'countTheRecordsSlots'
@@ -193,7 +193,7 @@ extension Vector
 	end 'slotsOf'
 
 	static function scaled(factor Int) returns Int
-		return countof(Self) * factor
+		return (countof(Self) as Int) * factor
 	end 'scaled'
 
 	function viaSelf() returns Int
@@ -223,7 +223,7 @@ typealias Vec3 = Vector with 3 Int
 
 extension Vector
 	static function slotsOf(extra Int) returns Int
-		return countof(Self) + extra
+		return (countof(Self) as Int) + extra
 	end 'slotsOf'
 
 	static function slotsOf() returns Int
@@ -231,7 +231,7 @@ extension Vector
 	end 'slotsOf'
 
 	static function makeOf(extra Int) returns Self
-		if countof(Self) + extra == 0 'never'
+		if (countof(Self) as Int) + extra == 0 'never'
 			panic("never")
 		end 'never'
 
@@ -269,7 +269,7 @@ extension Vector
 	end 'slotsOf'
 
 	static function slotsOf(extra Int) returns Int
-		return countof(Self) + extra
+		return (countof(Self) as Int) + extra
 	end 'slotsOf'
 end 'Vector'
 
@@ -299,7 +299,7 @@ extension Vector
 	end 'slotsPlus'
 
 	function slotsPlus(extra Int) returns Int
-		return countof(Self) + extra
+		return (countof(Self) as Int) + extra
 	end 'slotsPlus'
 end 'Vector'
 
@@ -326,7 +326,7 @@ typealias Vec5 = Vector with 5 Int
 
 extension Vector
 	function slotsPlus(extra Int) returns Int
-		return countof(Self) + extra
+		return (countof(Self) as Int) + extra
 	end 'slotsPlus'
 
 	function slotsPlus() returns Int
@@ -764,4 +764,36 @@ end 'main'
 ```
 ```exitcode
 3
+```
+
+<!-- test: error.countof-is-a-count -->
+`countof` answers a `Count`, the alias of a number of elements, so adding it to a value of another alias is the mismatch two aliases always are.
+```maxon
+typealias Small = int(0 to 100)
+typealias Vec3 = Vector with 3 Small
+
+function main() returns ExitCode
+	let base = 5 as Small
+	let size = countof(Vec3)
+	return (base + size) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:8:15: operator '+' requires both operands to be the same type: 'Small' and 'Count' are different typealiases — cast one side with 'as'
+```
+
+<!-- test: countof-is-a-count-that-indexes -->
+`countof` is a `Count`, which is an `ElementIndex`, so the last slot of a fixed-size container is addressed with no cast.
+```maxon
+typealias Vec3 = Vector with 3 Count
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	try v.set(2, value: 42) otherwise ignore
+	let last = countof(Vec3) - 1
+	return (try v.get(last) otherwise 0) as ExitCode
+end 'main'
+```
+```exitcode
+42
 ```

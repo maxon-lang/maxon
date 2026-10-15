@@ -95,7 +95,7 @@ sum proves the surviving position still reads the pair's VALUE and not its key.
 ```maxon
 function main() returns ExitCode
 	let m = [1: 10, 2: 20]
-	var total = 0
+	var total = 0 as ExitCode
 	for (_, v) in m 'each'
 		total = total + v
 	end 'each'

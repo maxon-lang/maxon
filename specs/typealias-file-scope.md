@@ -1540,14 +1540,14 @@ export function alphaSide()
 	let h2 = h.clone()
 
 	let sv = match s 'm'
-		empty gives 0
+		empty gives 0 as Count
 		some(v) gives v.0 - v.1
 	end 'm'
 
 	print("alpha {h.p.0 - h.p.1} {e.0 - e.1} {b.item.0 - b.item.1} {sv} {e2.0 - e2.1} {h2.p.0 - h2.p.1}\n")
 end 'alphaSide'
 
-typealias Pair = (int, int)
+typealias Pair = (Count, Count)
 typealias PairsA = Array with Pair
 typealias BoxA = Box with Pair
 
@@ -1685,14 +1685,14 @@ export function alphaSide()
 	let h2 = h.clone()
 
 	let sv = match s 'm'
-		empty gives 0
+		empty gives 0 as Count
 		some(v) gives v.0 - v.1
 	end 'm'
 
 	print("alpha {h.p.0 - h.p.1} {e.0 - e.1} {b.item.0 - b.item.1} {sv} {e2.0 - e2.1} {h2.p.0 - h2.p.1}\n")
 end 'alphaSide'
 
-typealias Pair = (int, int)
+typealias Pair = (Count, Count)
 typealias PairsA = Array with Pair
 typealias BoxA = Box with Pair
 ```
@@ -2072,7 +2072,7 @@ export function sumA() returns ExitCode
 	var xs = IntMeasures.create()
 	xs.push(40 as Measure)
 	xs.push(2 as Measure)
-	var total = 0
+	var total = 0 as Measure
 	for x in xs 'each'
 		total = total + x
 	end 'each'
@@ -2087,7 +2087,7 @@ export function sumB() returns ExitCode
 	var xs = FloatMeasures.create()
 	xs.push(0.25 as Measure)
 	xs.push(0.25 as Measure)
-	var total = 0.0
+	var total = 0.0 as Measure
 	for x in xs 'each'
 		total = total + x
 	end 'each'
@@ -2809,4 +2809,52 @@ end 'main'
 ```
 ```maxoncstderr
 error E3063: <fragment>:18:11: Ambiguous type name 'StringArray': more than one visible declaration matches it. Qualify it as one of: alpha.StringArray, beta.StringArray
+```
+
+<!-- test: a-top-level-factory-argument-cast-to-a-contested-name-keeps-the-casting-files-alias -->
+⭐ **A FOLDED CAST ARGUMENT CARRIES THE ALIAS ITS FILE MEANS, NOT THE BARE SPELLING.** `2 as Small` in the
+first file names that file's private `int(0 to 100)` alias; a sibling declares `type Small`. The folded scalar
+is typed through the reading file's identity, so the factory argument is a `Small` of the alias and never the
+sibling's struct.
+
+```maxon
+// --- file: a-main.maxon
+function main() returns ExitCode
+	return cellValue() + nominalQ()
+end 'main'
+
+// --- file: m-alpha.maxon
+typealias Small = int(0 to 100)
+
+type Holder
+	export var n as Small
+
+	static function create(n Small) returns Holder
+		return Self{n: n}
+	end 'create'
+end 'Holder'
+
+let Cell = Holder.create(2 as Small)
+
+export function cellValue() returns ExitCode
+	return Cell.n as ExitCode
+end 'cellValue'
+
+// --- file: n-nominal.maxon
+type Small
+	export var q as Slot
+
+	static function create() returns Small
+		return Self{q: 5}
+	end 'create'
+end 'Small'
+
+typealias Slot = int(0 to 100)
+
+export function nominalQ() returns ExitCode
+	return Small.create().q as ExitCode
+end 'nominalQ'
+```
+```exitcode
+7
 ```

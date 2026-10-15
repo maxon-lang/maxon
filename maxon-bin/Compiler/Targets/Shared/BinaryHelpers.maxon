@@ -141,7 +141,7 @@ export function readDword(buf ByteArray, offset ByteOffset) returns MachineWord 
 		throw ByteReadError.outOfRange(offset, width: 4, available: buf.count() as BytePos)
 	end 'oob'
 
-	var result = 0
+	var result = 0 as MachineWord
 	try 'readBytes'
 		let b0 = buf.get(offset)
 		let b1 = buf.get((offset + 1) as ElementIndex)
@@ -293,8 +293,8 @@ export enum PatchSite
 end 'PatchSite'
 
 function assertSignedReach(byteOff MachineWord, bits MachineWord, what PatchSite, codeOffset CodeOffset, targetAddr MachineWord)
-	let posMax = (1 shl (bits - 1)) - 1  // largest positive displacement
-	let negMin = u64.max - (1 shl (bits - 1)) + 1  // smallest (most negative) two's-complement value, unsigned-wrapped
+	let posMax = ((1 shl (bits - 1)) - 1) as MachineWord  // largest positive displacement
+	let negMin = (u64.max - (1 shl (bits - 1)) + 1) as MachineWord  // smallest (most negative) two's-complement value, unsigned-wrapped
 
 	if byteOff > posMax and byteOff < negMin 'overflow'
 		panic("{what.name}: displacement out of ±{1 shl (bits - 1)} byte range (codeOffset={codeOffset}, target={targetAddr}, disp={byteOff}) — relocation overflow")

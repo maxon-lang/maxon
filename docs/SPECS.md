@@ -50,7 +50,7 @@ For code that should compile and run successfully:
 
 ```maxon
 function main() returns ExitCode
-		var x = 10
+		let x = 10
 		return x
 end 'main'
 ```
@@ -159,7 +159,7 @@ Example:
 
 ```maxon
 function main() returns ExitCode
-		var x = 3.14
+		let x = 3.14
 		if x == 3.14 'check'
 				return 1
 		end 'check' else 'other'
@@ -190,7 +190,7 @@ Example:
 
 ```maxon
 var flag = true
-var counter = 42
+var counter = 42 as Count
 
 function main() returns ExitCode
 	return 0
@@ -417,8 +417,8 @@ Calculate the absolute value of a number.
 **Example (non-executable syntax):**
 
 ```text
-var x = -5.5
-var y = abs(x)  // Returns 5.5
+let x = -5.5
+let y = abs(x)  // Returns 5.5
 ```
 
 **Example (illustrative — the Documentation section runs nothing):**

@@ -2435,7 +2435,7 @@ typealias LocalColor = int(0 to 10)
 function main() returns ExitCode
 	let local = 3 as LocalColor
 	let c = a.pick()
-	return (c.rawValue - 38 + local) as ExitCode + a.rank(c) - 41
+	return ((((c.rawValue - 38) as LocalColor) + local) as ExitCode) + a.rank(c) - 41
 end 'main'
 ```
 ```exitcode
@@ -2550,7 +2550,7 @@ function main() returns ExitCode
 	let b = a.pick(false)
 	let c = a.ElementIndex.above
 	let q = 3 as stdlib.ElementIndex
-	return (b.rawValue + c.rawValue + 1 + xs.count() + q) as ExitCode
+	return (((b.rawValue + c.rawValue + 1) as stdlib.ElementIndex) + xs.count() + q) as ExitCode
 end 'main'
 ```
 ```exitcode

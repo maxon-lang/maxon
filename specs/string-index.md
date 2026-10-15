@@ -342,8 +342,8 @@ Every trip allocates and every allocation must be reclaimed; a leak is exit 101 
 answer, so only a loop with enough trips to be unmistakable can pin it.
 ```maxon
 function main() returns ExitCode
-	var total = 0
-	var trips = 0
+	var total = 0 as GraphemeIndex
+	var trips = 0 as FullRangeInt
 	while trips < 500 'loop'
 		let s = "hello world"
 		let idx = try s.findFirst("world") otherwise s.endIndex()
@@ -475,7 +475,7 @@ the allocator's standing limit.
 function main() returns ExitCode
 	let uni = "aéb👨‍👩‍👧cd"
 	var i = uni.startIndex()
-	var n = 0
+	var n = 0 as FullRangeInt
 	while n < 6 'walk'
 		print(uni.charAt(i).toString())
 		print(" {i.charIndex()}")
@@ -508,7 +508,7 @@ disagree with the forward walk above at the ZWJ family.
 function main() returns ExitCode
 	let uni = "aéb👨‍👩‍👧cd"
 	var back = uni.endIndex()
-	var m = 0
+	var m = 0 as FullRangeInt
 	while m < 3 'walkBack'
 		back = try uni.indexBefore(back) otherwise uni.startIndex()
 		print("{back.charIndex()}")

@@ -81,7 +81,7 @@ end 'posixStreamFd'
 // It lives HERE for `buildFunctionValueClasses`'s reason: it reads a byte and answers a word, naming no ISA.
 // Its callers are the two native ENCODERS, which materialize the answer into the register their ladder
 // stores from; wasm needs none of it — `memory.fill` takes the byte itself, via `memFillByte` below.
-export function memFillPatternWord(value ParsedInt) returns MachineWord
+export function memFillPatternWord(value FullRangeInt) returns MachineWord
 	return (memFillByte(value) as MachineWord) * FillByteBroadcast
 end 'memFillPatternWord'
 
@@ -90,7 +90,7 @@ end 'memFillPatternWord'
 // `storeIndirect u8` loop `memFill` replaced used only the low byte of its constant: the mask is the op's
 // CONTRACT, not defensiveness, and it is stated once here so the broadcast and the byte cannot disagree
 // about which bits the fill value has.
-export function memFillByte(value ParsedInt) returns ParsedInt
+export function memFillByte(value FullRangeInt) returns FullRangeInt
 	return value and FillByteMask
 end 'memFillByte'
 
@@ -506,7 +506,7 @@ export function abiFileSlotIndex(mask ArgFloatMask, index ParamCount) returns Pa
 	var slotIndex = 0 as ParamCount
 
 	for i in 0 upto index 'countPreceding'
-		if argMaskBit(mask, argIndex: i) == isFloat 'sameFile'
+		if argMaskBit(mask, argIndex: i as ParamCount) == isFloat 'sameFile'
 			slotIndex = slotIndex + 1
 		end 'sameFile'
 	end 'countPreceding'
@@ -536,7 +536,7 @@ export function abiStackSlotsBefore(mask ArgFloatMask, index ParamCount, capacit
 	let fileCapacity = capacity as ParamCount
 
 	for i in 0 upto index 'eachPreceding'
-		if argMaskBit(mask, argIndex: i) 'floatArg'
+		if argMaskBit(mask, argIndex: i as ParamCount) 'floatArg'
 			if floatFileSlots >= fileCapacity 'floatOverflows'
 				stackSlots = stackSlots + 1
 			end 'floatOverflows'

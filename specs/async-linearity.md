@@ -100,8 +100,8 @@ end 'makeValue'
 
 function main() returns ExitCode
 	let p = async makeValue()
-	var i = 0
-	var acc = 0
+	var i = 0 as Integer
+	var acc = 0 as Integer
 	while i < 3 'loop'
 		let s = await p
 		acc = acc + s
@@ -267,7 +267,7 @@ end 'makeValue'
 
 function main() returns ExitCode
 	let p = async makeValue()
-	var x = 1
+	var x = 1 as Integer
 	match x 'pick'
 		1 then x = 2
 		default then return (await p) as ExitCode
@@ -316,8 +316,8 @@ function makeValue(i Integer) returns Integer
 end 'makeValue'
 
 function main() returns ExitCode
-	var i = 0
-	var acc = 0
+	var i = 0 as Integer
+	var acc = 0 as Integer
 	while i < 3 'await'
 		let p = async makeValue(i)
 		let q = p

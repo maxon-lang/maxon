@@ -42,7 +42,7 @@ typealias Nibble = bits(4)          // sub-byte, packed
 
 Range identifiers as expressions:
 ```maxon
-var x = u16.max                     // 65535 — usable anywhere a literal is valid
+let x = u16.max                     // 65535 — usable anywhere a literal is valid
 if value == i32.max 'check'         // comparisons, arithmetic, etc.
 ```
 
@@ -67,7 +67,7 @@ Every typealias declaration is its own type — two files declaring one name ove
 
 Storage in arrays and globals uses the smallest fitting integer width (u8/i8, u16/i16, u32/i32, or i64). All arithmetic uses 64-bit operations regardless of storage type.
 
-Standard library aliases: `ExitCode`, `HashValue`, `Codepoint`, `NetworkPort`, `Count`. Each module also defines its own domain-specific numeric aliases (e.g. `String`'s `BytePos` and `GraphemeIndex`, `Math`'s `Real`) — declare a local typealias for your own domain.
+Standard library aliases: `ExitCode`, `HashValue`, `Codepoint`, `NetworkPort`, `Count`, `FullRangeInt` (`int(i64.min to i64.max)`) and `FullRangeFloat` (`float(f64.min to f64.max)`). Each module also defines its own domain-specific numeric aliases (e.g. `String`'s `BytePos` and `GraphemeIndex`, `Json`'s `JsonFloat`) — declare a local typealias for your own domain.
 
 ## Literals
 
@@ -141,12 +141,12 @@ print("Status: {"on" if flag else "off"}")
 ## Variables
 
 ```maxon
-let x = 42          // immutable (type inferred)
-var y = 10          // mutable (type inferred)
+let x = 42          // immutable constant: fits any alias its value fits
+var y = 10 as Count // mutable: a var names its alias (E2004 without the cast)
 _ = sideEffect()  // discard: no binding, no unused check
 
 // Top-level variables (outside functions)
-var globalCounter = 0   // mutable, accessible from any function
+var globalCounter = 0 as Count   // mutable, accessible from any function
 let MAX_SIZE = 1024     // immutable constant
 
 // Static fields (inside types): every initializer runs once, before main,
@@ -157,7 +157,7 @@ type Origin
 
 	static let zero = Origin{x: 0, y: 0}                    // struct literal: own type only
 	static let ws = CharacterSet.whitespacesAndNewlines()   // function call
-	static var data = [10, 20, 30]                          // array literal
+	static var data = [10 as Coord, 20 as Coord, 30 as Coord] // array literal: a var names its element alias
 	static let MAX = 100                                    // compile-time constant
 end 'Origin'
 
@@ -212,8 +212,8 @@ end 'minMax'
 var (lo, hi) = minMax(3, b: 7)
 
 // Tuple assignment (assigns to existing variables)
-var x = 0
-var y = 0
+var x = 0 as Score
+var y = 0 as Score
 (x, y) = minMax(3, b: 7)    // x = 3, y = 7
 
 // Discard individual elements with _
@@ -516,8 +516,8 @@ type Point implements Hashable, Describable   // interface conformance
 				return x * 31 + y
 		end 'hash'
 
-		function magnitude() returns Real      // regular method (Real is a ranged float typealias)
-				return sqrt((x * x + y * y) as Real)
+		function magnitude() returns FullRangeFloat      // regular method (FullRangeFloat is a ranged float typealias)
+				return sqrt((x * x + y * y) as FullRangeFloat)
 		end 'magnitude'
 
 		function describe() returns String      // Describable conformance
@@ -1081,7 +1081,7 @@ sleep(100)                   // sleep current green thread (milliseconds)
 
 ### Math Library (`Math.*`)
 
-All accept and return `Math.Real` (full-range float). Static methods on the `Math` type.
+All accept and return `FullRangeFloat` (full-range float). Static methods on the `Math` type.
 
 ```maxon
 Math.sin(x)                  // sine (radians)

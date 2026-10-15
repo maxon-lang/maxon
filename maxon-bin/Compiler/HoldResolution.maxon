@@ -179,8 +179,8 @@ type HoldJudge
 
 	function dispatchCandidates(op MaxonOp) returns NameRoster
 		return match op 'op'
-			witnessDispatch(_, _, _, methodIndex, interfaceDeclIndex, _, _) gives self.dispatch.candidatesFor(self.dispatch.requirementNameAt(methodIndex, interfaceDeclIndex: interfaceDeclIndex))
-			witnessTryDispatch(_, _, _, _, methodIndex, interfaceDeclIndex, _) gives self.dispatch.candidatesFor(self.dispatch.requirementNameAt(methodIndex, interfaceDeclIndex: interfaceDeclIndex))
+			witnessDispatch(_, _, _, _, methodIndex, interfaceDeclIndex, _, _) gives self.dispatch.candidatesFor(self.dispatch.requirementNameAt(methodIndex, interfaceDeclIndex: interfaceDeclIndex))
+			witnessTryDispatch(_, _, _, _, _, methodIndex, interfaceDeclIndex, _) gives self.dispatch.candidatesFor(self.dispatch.requirementNameAt(methodIndex, interfaceDeclIndex: interfaceDeclIndex))
 			default panic("HoldJudge.dispatchCandidates: handed an op that is not a witness dispatch")
 		end 'op'
 	end 'dispatchCandidates'
@@ -2086,7 +2086,7 @@ type HoldResolver
 	function deleteEntry(entry ElementIndex, isEnd bool, kind HoldKind, replacing bool)
 		if replacing and not isEnd 'anAliasOfItsSource'
 			self.aliasEntry(entry)
-			self.tally.deleted.add(kind.ordinal as ElementIndex, count: 1)
+			self.tally.deleted.add(kind.ordinal, count: 1)
 			return
 		end 'anAliasOfItsSource'
 
@@ -2095,7 +2095,7 @@ type HoldResolver
 		self.deletedKeys.push(holdKey(block, position: position))
 
 		if not isEnd 'aMarker'
-			self.tally.deleted.add(kind.ordinal as ElementIndex, count: 1)
+			self.tally.deleted.add(kind.ordinal, count: 1)
 		end 'aMarker'
 	end 'deleteEntry'
 
@@ -2110,7 +2110,7 @@ type HoldResolver
 		try self.module.ops.set(opIdx, value: lowered) otherwise panic("HoldResolver.lowerEntry: ops.set OOB at {opIdx}")
 
 		if not isEnd 'aMarker'
-			self.tally.lowered.add(kind.ordinal as ElementIndex, count: 1)
+			self.tally.lowered.add(kind.ordinal, count: 1)
 		end 'aMarker'
 	end 'lowerEntry'
 

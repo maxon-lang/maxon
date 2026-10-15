@@ -89,7 +89,7 @@ end 'main'
 <!-- test: int-reassignment -->
 ```maxon
 function main() returns ExitCode
-	var x = 100
+	var x = 100 as FullRangeInt
 	let y = x - 80
 	x = 22
 	return x + y
@@ -210,9 +210,9 @@ end 'main'
 <!-- test: int-parallel-accumulation -->
 ```maxon
 function main() returns ExitCode
-	var sum1 = 0
-	var sum2 = 0
-	var sum3 = 0
+	var sum1 = 0 as FullRangeInt
+	var sum2 = 0 as FullRangeInt
+	var sum3 = 0 as FullRangeInt
 	sum1 = sum1 + 10
 	sum2 = sum2 + 20
 	sum3 = sum3 + 30
@@ -368,7 +368,7 @@ end 'main'
 function main() returns ExitCode
 	let base = 40
 	let cond = 1
-	var extra = 0
+	var extra = 0 as FullRangeInt
 	if cond == 1 'check'
 		extra = 2
 	end 'check' else 'other'
@@ -383,7 +383,7 @@ end 'main'
 <!-- test: int-while-loop-counter -->
 ```maxon
 function main() returns ExitCode
-	var i = 0
+	var i = 0 as FullRangeInt
 	while i < 42 'loop'
 		i = i + 1
 	end 'loop'
@@ -396,8 +396,8 @@ end 'main'
 <!-- test: int-while-loop-accumulator -->
 ```maxon
 function main() returns ExitCode
-	var sum = 0
-	var i = 0
+	var sum = 0 as FullRangeInt
+	var i = 0 as FullRangeInt
 	while i < 10 'loop'
 		sum = sum + i
 		i = i + 1
@@ -411,10 +411,10 @@ end 'main'
 <!-- test: int-while-loop-multiple-accumulators -->
 ```maxon
 function main() returns ExitCode
-	var even_sum = 0
-	var odd_sum = 0
-	var count = 0
-	var i = 0
+	var even_sum = 0 as FullRangeInt
+	var odd_sum = 0 as FullRangeInt
+	var count = 0 as FullRangeInt
+	var i = 0 as FullRangeInt
 	while i < 20 'loop'
 		if i mod 2 == 0 'even'
 			even_sum = even_sum + i
@@ -433,8 +433,8 @@ end 'main'
 <!-- test: int-nested-if-in-loop -->
 ```maxon
 function main() returns ExitCode
-	var result = 0
-	var i = 1
+	var result = 0 as FullRangeInt
+	var i = 1 as FullRangeInt
 	while i <= 10 'loop'
 		if i <= 5 'first'
 			result = result + i
@@ -452,10 +452,10 @@ end 'main'
 <!-- test: int-nested-loops -->
 ```maxon
 function main() returns ExitCode
-	var total = 0
-	var i = 0
+	var total = 0 as FullRangeInt
+	var i = 0 as FullRangeInt
 	while i < 5 'outer'
-		var j = 0
+		var j = 0 as FullRangeInt
 		while j < 4 'inner'
 			total = total + 1
 			j = j + 1
@@ -471,10 +471,10 @@ end 'main'
 <!-- test: int-nested-loops-with-outer-var -->
 ```maxon
 function main() returns ExitCode
-	var total = 0
-	var i = 1
+	var total = 0 as FullRangeInt
+	var i = 1 as FullRangeInt
 	while i <= 5 'outer'
-		var j = 1
+		var j = 1 as FullRangeInt
 		while j <= i 'inner'
 			total = total + 1
 			j = j + 1
@@ -497,8 +497,8 @@ function double(x Integer) returns Integer
 end 'double'
 
 function main() returns ExitCode
-	var sum = 0
-	var i = 0
+	var sum = 0 as Integer
+	var i = 0 as Integer
 	while i < 5 'loop'
 		sum = sum + double(i)
 		i = i + 1
@@ -594,13 +594,13 @@ function identity(x Integer) returns Integer
 end 'identity'
 
 function main() returns ExitCode
-	var a = 1
+	var a = 1 as Integer
 	let b = 2
-	var c = 3
+	var c = 3 as Integer
 	let d = 4
-	var e = 5
+	var e = 5 as Integer
 	let f = 6
-	var i = 0
+	var i = 0 as Integer
 	while i < 3 'loop'
 		a = a + identity(b)
 		c = c + identity(d)
@@ -632,10 +632,10 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let sentinel = 100
-	var total = 0
-	var i = 0
+	var total = 0 as FullRangeInt
+	var i = 0 as FullRangeInt
 	while i < 3 'outer'
-		var j = 0
+		var j = 0 as FullRangeInt
 		while j < 3 'inner'
 			if i == j 'diag'
 				total = total + 1
@@ -653,9 +653,9 @@ end 'main'
 <!-- test: int-fibonacci -->
 ```maxon
 function main() returns ExitCode
-	var a = 0
-	var b = 1
-	var i = 0
+	var a = 0 as FullRangeInt
+	var b = 1 as FullRangeInt
+	var i = 0 as FullRangeInt
 	while i < 13 'loop'
 		let temp = a + b
 		a = b
@@ -719,7 +719,7 @@ end 'getInt'
 function main() returns ExitCode
 	let f = 3.14
 	let x = getInt()
-	return trunc(f) + x
+	return trunc(f) as Integer + x
 end 'main'
 ```
 ```exitcode
@@ -791,9 +791,9 @@ end 'main'
 <!-- test: int-multi-var-branch-merge -->
 ```maxon
 function main() returns ExitCode
-	var x = 0
-	var y = 0
-	var z = 0
+	var x = 0 as FullRangeInt
+	var y = 0 as FullRangeInt
+	var z = 0 as FullRangeInt
 	if 1 < 2 'branch'
 		x = 10
 		y = 20
@@ -829,7 +829,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let x = 2
-	var result = 0
+	var result = 0 as FullRangeInt
 	match x 'process'
 		1 then result = 100
 		2 then result = 200
@@ -861,7 +861,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let x = 1
-	var result = 0
+	var result = 0 as FullRangeInt
 	match x 'cascade'
 		1 then result = result + 10 and fallthrough
 		2 then result = result + 20 and fallthrough
@@ -932,7 +932,7 @@ end 'double'
 
 function main() returns ExitCode
 	let x = 2
-	var result = 0
+	var result = 0 as Integer
 	match x 'process'
 		1 then result = double(10)
 		2 then result = double(20)
@@ -981,7 +981,7 @@ function mayFail() returns Integer throws MyError
 end 'mayFail'
 
 function main() returns ExitCode
-	var result = 0
+	var result = 0 as Integer
 	try mayFail() otherwise 'err'
 		result = 42
 	end 'err'
@@ -1096,10 +1096,10 @@ similar functions that mutate many locals across nested control flow.
 <!-- test: phi-merge-split-multi-anchor -->
 ```maxon
 function main() returns ExitCode
-	var a = 0
-	var b = 0
-	var c = 0
-	var d = 0
+	var a = 0 as FullRangeInt
+	var b = 0 as FullRangeInt
+	var c = 0 as FullRangeInt
+	var d = 0 as FullRangeInt
 	if 1 < 2 'g1'
 		a = 1
 		b = 2

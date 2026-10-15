@@ -268,7 +268,7 @@ function main() returns ExitCode
 		return 2
 	end 'searchFail'
 
-	var fileCount = 0
+	var fileCount = 0 as Count
 	while (try dir.dir.next() otherwise return 3) != 0 'loop'
 		fileCount = fileCount + 1
 	end 'loop'
@@ -303,7 +303,7 @@ sync worker (Win32 ERROR_FILE_NOT_FOUND=2 / ERROR_PATH_NOT_FOUND=3, POSIX ENOENT
 
 ```maxon
 function main() returns ExitCode
-	var result = 0
+	var result = 0 as ExitCode
 	try __ManagedDirectory.openSearch("nonexistent_phaseB_search_xyz/*".toByteArray().managed) otherwise (e) 'h'
 		match e 'k'
 			notFound then result = 42
@@ -392,7 +392,7 @@ function main() returns ExitCode
 	try writeFile("{dirPath}/beta.txt") otherwise return 2
 
 	var dir = try __ManagedDirectory.openSearch("{dirPath}/*.txt".toByteArray().managed) otherwise return 3
-	var count = 0
+	var count = 0 as ExitCode
 	while (try dir.next() otherwise return 4) != 0 'loop'
 		count = count + 1
 	end 'loop'
@@ -452,7 +452,7 @@ function main() returns ExitCode
 	try writeFile("{dirPath}/only.txt") otherwise return 2
 
 	var dir = try __ManagedDirectory.openSearch("{dirPath}/*.txt".toByteArray().managed) otherwise return 3
-	var found = 0
+	var found = 0 as Count
 	while (try dir.next() otherwise return 4) != 0 'loop'
 		let name = String.init(dir.filename())
 		if name == "only.txt" 'isTheFile'
@@ -587,7 +587,7 @@ more handles live.
 
 ```maxon
 function main() returns ExitCode
-	var i = 0
+	var i = 0 as Count
 	while i < 200 'loop'
 		var dir = try __ManagedDirectory.openSearch("./*".toByteArray().managed) otherwise return 1
 		_ = try dir.next() otherwise return 2
@@ -671,8 +671,8 @@ function main() returns ExitCode
 	try writeFile("{dirPath}/plain.txt") otherwise return 2
 
 	var dir = try __ManagedDirectory.openSearch("{dirPath}/*".toByteArray().managed) otherwise return 3
-	var seen = 0
-	var dots = 0
+	var seen = 0 as ExitCode
+	var dots = 0 as Count
 	while (try dir.next() otherwise return 4) != 0 'loop'
 		let name = String.init(dir.filename())
 		if name == ".gitignore" 'hidden'

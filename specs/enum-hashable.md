@@ -283,7 +283,7 @@ enum Color
 end 'Color'
 
 function main() returns ExitCode
-	var m = [Color.red: 10, Color.green: 20, Color.blue: 30]
+	var m = [Color.red: 10 as Count, Color.green: 20 as Count, Color.blue: 30 as Count]
 	let redVal = try m.get(Color.red) otherwise 0
 	m.upsert(Color.red, value: redVal + 1)
 	let result = try m.get(Color.red) otherwise 0

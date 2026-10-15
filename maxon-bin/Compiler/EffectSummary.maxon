@@ -133,31 +133,54 @@ function joinOrigins(a ValueOriginCode, b ValueOriginCode) returns ValueOriginCo
 	return OriginUnknown
 end 'joinOrigins'
 
-type MergeEdges
+module type MergeEdges
 	var phis as ValueIdArray
 	var incomings as ValueIdArray
 
-	static function create() returns MergeEdges
+	module static function create() returns MergeEdges
 		return Self{phis: ValueIdArray.create(), incomings: ValueIdArray.create()}
 	end 'create'
 
-	function note(phi ValueId, incoming ValueId)
+	module function note(phi ValueId, incoming ValueId)
 		self.phis.push(phi)
 		self.incomings.push(incoming)
 	end 'note'
 
-	function count() returns ElementIndex
+	module function count() returns ElementIndex
 		return self.phis.count()
 	end 'count'
 
-	function phiAt(index ElementIndex) returns ValueId
+	module function phiAt(index ElementIndex) returns ValueId
 		return try self.phis.get(index) otherwise panic("MergeEdges.phiAt: {index} is below count()")
 	end 'phiAt'
 
-	function incomingAt(index ElementIndex) returns ValueId
+	module function incomingAt(index ElementIndex) returns ValueId
 		return try self.incomings.get(index) otherwise panic("MergeEdges.incomingAt: {index} is below count()")
 	end 'incomingAt'
 end 'MergeEdges'
+
+module function noteMergeEdges(module MaxonModule, func IrFunction, into MergeEdges)
+	var positions = OptionalElementIndexColumn.absent(func.nextBlockId)
+
+	for position in 0 upto func.blockRefs.count() 'indexBlocks'
+		let block = try module.blocks.get(try func.blockRefs.get(position) otherwise panic("noteMergeEdges: blockRefs.get OOB at {position}")) otherwise panic("noteMergeEdges: blockRef at {position} not in module.blocks")
+		positions.set(block.id, value: position)
+	end 'indexBlocks'
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("noteMergeEdges: blockRef from func.blockRefs not in module.blocks")
+
+		for edge in block.branchEdges 'eachEdge'
+			let targetPosition = try positions.get(edge.targetBlockId) otherwise panic("noteMergeEdges: branch edge names block {edge.targetBlockId}, which '{String.from(func.name)}' does not hold")
+			let target = try module.blocks.get(try func.blockRefs.get(targetPosition) otherwise panic("noteMergeEdges: blockRefs.get OOB at {targetPosition}")) otherwise panic("noteMergeEdges: blockRef at {targetPosition} not in module.blocks")
+
+			for index in 0 upto edge.argIds.count() 'eachBlockArg'
+				let phi = (try target.blockArgs.get(index) otherwise panic("noteMergeEdges: block {target.id} takes fewer arguments than the edge passes")).valueId
+				into.note(phi, incoming: try edge.argIds.get(index) otherwise panic("noteMergeEdges: argIds.get OOB at {index}"))
+			end 'eachBlockArg'
+		end 'eachEdge'
+	end 'eachBlock'
+end 'noteMergeEdges'
 
 type CalleeFacts
 	let funcIndexByName as FuncIndexByName
@@ -351,7 +374,9 @@ type ValueOrigins
 			try isMerge.set(self.merges.phiAt(index), value: true) otherwise panic("ValueOrigins.settleUndefined: phi {self.merges.phiAt(index)} is past the {self.codes.count()} values")
 		end 'eachMerge'
 
-		for value in 0 upto self.codes.count() 'eachValue'
+		for valueIndex in 0 upto self.codes.count() 'eachValue'
+			let value = valueIndex as ValueId
+
 			if self.raw(value) == OriginUnvisited and not (try isMerge.get(value) otherwise panic("ValueOrigins.settleUndefined: isMerge.get OOB at {value}")) 'definedByNoOp'
 				_ = self.settle(value, after: OriginUnknown)
 			end 'definedByNoOp'
@@ -359,30 +384,15 @@ type ValueOrigins
 	end 'settleUndefined'
 
 	function collectDefinitions(module MaxonModule, func IrFunction)
-		var positions = OptionalElementIndexColumn.absent(func.nextBlockId)
-
-		for position in 0 upto func.blockRefs.count() 'indexBlocks'
-			let block = try module.blocks.get(try func.blockRefs.get(position) otherwise panic("ValueOrigins.collectDefinitions: blockRefs.get OOB at {position}")) otherwise panic("ValueOrigins.collectDefinitions: blockRef at {position} not in module.blocks")
-			positions.set(block.id, value: position)
-		end 'indexBlocks'
-
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("ValueOrigins.collectDefinitions: blockRef from func.blockRefs not in module.blocks")
 
 			for opIdx in block.bodyOps() 'eachOp'
 				self.noteDefinition(try module.ops.get(opIdx) otherwise panic("ValueOrigins.collectDefinitions: opIdx {opIdx} not in module.ops"))
 			end 'eachOp'
-
-			for edge in block.branchEdges 'eachEdge'
-				let targetPosition = try positions.get(edge.targetBlockId) otherwise panic("ValueOrigins.collectDefinitions: branch edge names block {edge.targetBlockId}, which '{String.from(func.name)}' does not hold")
-				let target = try module.blocks.get(try func.blockRefs.get(targetPosition) otherwise panic("ValueOrigins.collectDefinitions: blockRefs.get OOB at {targetPosition}")) otherwise panic("ValueOrigins.collectDefinitions: blockRef at {targetPosition} not in module.blocks")
-
-				for index in 0 upto edge.argIds.count() 'eachBlockArg'
-					let phi = (try target.blockArgs.get(index) otherwise panic("ValueOrigins.collectDefinitions: block {target.id} takes fewer arguments than the edge passes")).valueId
-					self.merges.note(phi, incoming: try edge.argIds.get(index) otherwise panic("ValueOrigins.collectDefinitions: argIds.get OOB at {index}"))
-				end 'eachBlockArg'
-			end 'eachEdge'
 		end 'eachBlock'
+
+		noteMergeEdges(module, func: func, into: self.merges)
 	end 'collectDefinitions'
 
 	function noteDefinition(op MaxonOp)
@@ -755,7 +765,9 @@ type ValueOrigins
 	end 'joinContainment'
 
 	function convertDeep()
-		for value in 0 upto self.codes.count() 'eachValue'
+		for valueIndex in 0 upto self.codes.count() 'eachValue'
+			let value = valueIndex as ValueId
+
 			if self.raw(value) != OriginLocal 'notMintedHere'
 				continue
 			end 'notMintedHere'
@@ -1393,8 +1405,8 @@ type EffectSummaryBuilder
 			call(result, callee, args, argLabels, _, _, argDefaultSlots, _) then self.taintCall(origins, func: func, result: result, callee: callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots)
 			tryCall(result, _, callee, args, argLabels, _, _, argDefaultSlots, _) then self.taintCall(origins, func: func, result: result, callee: callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots)
 			indirectCall then self.taintIndirectCall(origins, op: op)
-			witnessDispatch(_, args, _, _, _, _, _) then self.taintArguments(origins, args: args)
-			witnessTryDispatch(_, _, args, _, _, _, _) then self.taintArguments(origins, args: args)
+			witnessDispatch(_, args, _, _, _, _, _, _) then self.taintArguments(origins, args: args)
+			witnessTryDispatch(_, _, args, _, _, _, _, _) then self.taintArguments(origins, args: args)
 			holdValue(result, held, _, _, _) then self.taintHeldAlias(origins, result: result, held: held)
 			literal or
 			ret or
@@ -1439,7 +1451,7 @@ type EffectSummaryBuilder
 
 	function taintIndirectCall(origins ValueOrigins, op MaxonOp)
 		match op 'indirect'
-			indirectCall(_, _, args) then self.taintArguments(origins, args: args)
+			indirectCall(_, _, args, _) then self.taintArguments(origins, args: args)
 			default panic("EffectSummaryBuilder.taintIndirectCall: handed an op that is not an indirect call")
 		end 'indirect'
 	end 'taintIndirectCall'
@@ -1711,8 +1723,8 @@ type EffectSummaryBuilder
 			tryCall(result, _, callee, args, argLabels, _, _, argDefaultSlots, _) then self.walkCall(node, func: func, result: result, callee: callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots)
 			storeIndirect(addr, _, value, _) then self.noteStore(node, addr: addr, value: value, func: func)
 			indirectCall then self.walkIndirectCall(node, func: func, op: op)
-			witnessDispatch(_, args, _, methodIndex, interfaceDeclIndex, _, _) then self.walkDispatch(node, func: func, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex)
-			witnessTryDispatch(_, _, args, _, methodIndex, interfaceDeclIndex, _) then self.walkDispatch(node, func: func, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex)
+			witnessDispatch(_, args, _, _, methodIndex, interfaceDeclIndex, _, _) then self.walkDispatch(node, func: func, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex)
+			witnessTryDispatch(_, _, args, _, _, methodIndex, interfaceDeclIndex, _) then self.walkDispatch(node, func: func, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex)
 			asyncCall or
 			await or
 			tryAwait or
@@ -1852,7 +1864,7 @@ type EffectSummaryBuilder
 
 	function walkIndirectCall(node ElementIndex, func IrFunction, op MaxonOp)
 		match op 'indirect'
-			indirectCall(_, callee, args) then self.callThroughValue(node, func: func, callee: callee, args: args)
+			indirectCall(_, callee, args, _) then self.callThroughValue(node, func: func, callee: callee, args: args)
 			default panic("EffectSummaryBuilder.walkIndirectCall: handed an op that is not an indirect call")
 		end 'indirect'
 	end 'walkIndirectCall'
@@ -1870,7 +1882,7 @@ type EffectSummaryBuilder
 			return
 		end 'aClosureTakesItsRecord'
 
-		if targetParamCount + FunctionRecordArgCount != args.count() 'anotherShape'
+		if targetParamCount != userArityOfIndirectCall(args) 'anotherShape'
 			self.markHard(node)
 			return
 		end 'anotherShape'

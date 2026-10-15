@@ -1,0 +1,21 @@
+let CaseDirName = "declaration-limit-payloads"
+let Refusal = "more than 65535 payload fields"
+
+test 'a union case that declares 65,536 payload fields is refused'
+	try requireDeclarationRefused(CaseDirName, source: unionPayloadsSource(), refusal: Refusal)
+end 'a union case that declares 65,536 payload fields is refused'
+
+function unionPayloadsSource() returns String
+	var text = "{DeclarationPrelude}union Big\n\twide("
+
+	for i in 0 upto DeclaredMemberCount 'eachPayload'
+		if i > 0 'separator'
+			text.append(", ")
+		end 'separator'
+
+		text.append("p{i} Count")
+	end 'eachPayload'
+
+	text.append(")\n\tnarrow\nend 'Big'\n\n{DeclarationMain}")
+	return text
+end 'unionPayloadsSource'

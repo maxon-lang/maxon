@@ -567,8 +567,8 @@ public type Subprocess
 		__Builtins.subprocessReleaseHandle(handle)
 
 		let statusKind = try ResultStatusKind.fromRawValue(statusKindRaw) otherwise panic("Subprocess.runConfiguration: runtime returned unexpected statusKind raw={statusKindRaw}")
-		let status = try terminationStatusFromKind(statusKind, statusCode: statusCode, durationMs: durationMs, stdout: stdout, stderr: stderr)
-		return CollectedOutput.create(status, stdout: stdout, stderr: stderr, pid: pid, durationMs: durationMs)
+		let status = try terminationStatusFromKind(statusKind, statusCode: statusCode as ExitInt, durationMs: durationMs, stdout: stdout, stderr: stderr)
+		return CollectedOutput.create(status, stdout: stdout, stderr: stderr, pid: pid as Pid, durationMs: durationMs)
 	end 'runConfiguration'
 
 	/// Spawn detached. Uses the same 14-arg layout as `subprocessSpawn` with
@@ -586,7 +586,7 @@ public type Subprocess
 			throw spawnFailure(operands.executablePath)
 		end 'spawnFailed'
 
-		return pid
+		return pid as Pid
 	end 'runDetachedConfiguration'
 end 'Subprocess'
 
@@ -1216,7 +1216,7 @@ public type StreamingSubprocess
 			return ExitPoll.running
 		end 'gone'
 
-		return exitPollOf(__Builtins.subprocessPollExit(handle))
+		return exitPollOf(__Builtins.subprocessPollExit(handle) as ExitAnswer)
 	end 'pollExit'
 
 	/// Has the child ended, and how? `pollExit`'s answer, naming the signal that killed a child on Linux or
@@ -1229,7 +1229,7 @@ public type StreamingSubprocess
 	end 'pollTermination'
 
 	function terminationAfterExit(code ExitInt) returns TerminationStatus
-		return match exitPollOf(__Builtins.subprocessExitSignal(handle)) 'signal'
+		return match exitPollOf(__Builtins.subprocessExitSignal(handle) as ExitAnswer) 'signal'
 			running panic("StreamingSubprocess.pollTermination: the child answered that it had exited and then that it was running")
 			exited(signal) gives terminationWithSignal(code, signal: signal)
 		end 'signal'
@@ -1326,7 +1326,7 @@ end 'LinePoll'
 /// empty pipe is zero — which is the one place the two are still apart, before `stripTrailingCR` makes
 /// them the same string.
 function bufferedLineIn(raw __ManagedMemory) returns LinePoll
-	if raw.length() < lineReaderShortestAnswer 'nothingBuffered'
+	if (raw.length() as ByteLimit) < lineReaderShortestAnswer 'nothingBuffered'
 		return LinePoll.none
 	end 'nothingBuffered'
 
@@ -1354,7 +1354,7 @@ let lineReaderShortestAnswer = 1 as ByteLimit
 function readLineResultToString(handle StreamingHandle, raw __ManagedMemory, stream StdioStream) returns String throws SubprocessError
 	let line = try finishRead(handle, raw: raw, wanted: lineReaderShortestAnswer, stream: stream)
 
-	if line.length() < lineReaderShortestAnswer 'theStreamEnded'
+	if (line.length() as ByteLimit) < lineReaderShortestAnswer 'theStreamEnded'
 		throw SubprocessError.endOfStream
 	end 'theStreamEnded'
 
@@ -1367,7 +1367,7 @@ end 'readLineResultToString'
 /// end-state is what separates them. The reason is composed here rather than read out of
 /// `lastErrorMessage()`, which is process-global and may belong to an earlier call.
 function finishRead(handle StreamingHandle, raw __ManagedMemory, wanted ByteLimit, stream StdioStream) returns __ManagedMemory throws SubprocessError
-	if raw.length() >= wanted 'whole'
+	if (raw.length() as ByteLimit) >= wanted 'whole'
 		return raw
 	end 'whole'
 

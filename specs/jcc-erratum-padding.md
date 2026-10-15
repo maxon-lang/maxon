@@ -48,8 +48,8 @@ exit code is the loop's answer; the rendered Target IR shows the loop's shape.
 typealias Rounds = int(0 to 1000000)
 
 function spin(rounds Rounds) returns Rounds
-	var acc = 0
-	var i = 0
+	var acc = 0 as Rounds
+	var i = 0 as Rounds
 
 	while i < rounds 'spin'
 		acc = acc + i

@@ -1431,7 +1431,7 @@ function main() returns ExitCode
 	let count = 4
 	var promises = SubPArray.create()
 
-	var i = 0
+	var i = 0 as FullRangeInt
 	while i < count 'spawn'
 		var argv = StringArray.create()
 		#if os(Windows)
@@ -1443,7 +1443,7 @@ function main() returns ExitCode
 		i = i + 1
 	end 'spawn'
 
-	var j = 0
+	var j = 0 as FullRangeInt
 	for p in promises 'drain'
 		let r = try await p otherwise return 2
 		if not r.succeeded() 'check-success'

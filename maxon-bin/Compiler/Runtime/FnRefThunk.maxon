@@ -7,19 +7,165 @@
 // trailing word. A LIFTED CLOSURE reads its captures out of the record (`envSlotOffset`); a plain
 // function's value is an immortal `.rdata` record with no captures (`registerFunctionRecord`).
 //
-// ⭐ **WHY A WRAPPER, AND WHY ONLY FOR PLAIN FUNCTIONS.** A plain named function `triple(n)` does
+// ⭐ **WHY A WRAPPER.** A plain named function `triple(n)` does
 // not take the trailing record, and it cannot simply gain the parameter: its DIRECT calls
 // `triple(10)` must stay `(userargs) -> R` (on wasm a direct `call`'s arity is checked too). So its
 // record's code word names a thunk `__fnref_triple(n, record)` that ignores the record and forwards
 // to `triple`. On wasm the `call_indirect` functype is SIGNATURE-derived, so the table element's
 // own ARITY must match exactly; on register targets the extra arg would be harmless, but ONE thunk
 // keeps a single cross-target lowering. The thunk is synthesized once per referenced plain
-// function, not per reference.
+// function, not per reference. A lifted closure gets one too where its arity's by-reference convention
+// passes a cell (`FunctionValueConventions.adaptsAClosure`), and at a cell position the target takes by
+// value a thunk forwards the cell's occupant.
 //
 // ⚠ **AN INTERFACE-TYPED PARAMETER CANNOT CROSS THE THUNK.** Its WITNESS word has no slot in an
 // indirect call, which carries one word per argument, so the thunk would have nothing to forward.
 // Such a target is refused where the value is taken
 // (`SemanticCheck.requireFunctionValueTargetTakesNoWitness`).
+
+typealias ConventionMaskMap = Map with (ByteArray, ParamPositionMask)
+typealias ConventionArityMap = Map with (ByteArray, ParamCount)
+typealias CellLoadTypeMap = Map with (ByteArray, StdTypeArray)
+
+export type FunctionValueConventions
+	var maskByArity as ParamPositionMaskArray
+	var arityNoted as BoolArray
+	var arityOfBody as ConventionArityMap
+	var ownByName as ConventionMaskMap
+	var loadTypes as CellLoadTypeMap
+	var settled as bool
+	var takesAnyCell as bool
+
+	export static function none() returns FunctionValueConventions
+		return Self{maskByArity: ParamPositionMaskArray.create(), arityNoted: BoolArray.create(), arityOfBody: ConventionArityMap.create(), ownByName: ConventionMaskMap.create(), loadTypes: CellLoadTypeMap.create(), settled: false, takesAnyCell: false}
+	end 'none'
+
+	export function settle()
+		self.settled = true
+	end 'settle'
+
+	export function noteArity(arity ParamCount, mask ParamPositionMask)
+		while self.arityNoted.count() <= arity 'growTheTable'
+			self.maskByArity.push(NoParamPositions)
+			self.arityNoted.push(false)
+		end 'growTheTable'
+
+		try self.maskByArity.set(arity, value: mask) otherwise panic("FunctionValueConventions.noteArity: maskByArity.set OOB at {arity}")
+		try self.arityNoted.set(arity, value: true) otherwise panic("FunctionValueConventions.noteArity: arityNoted.set OOB at {arity}")
+
+		if mask != NoParamPositions 'aCellIsPassed'
+			self.takesAnyCell = true
+		end 'aCellIsPassed'
+	end 'noteArity'
+
+	export function arityIsNoted(arity ParamCount) returns bool
+		return arity < self.arityNoted.count() and (try self.arityNoted.get(arity) otherwise panic("FunctionValueConventions.arityIsNoted: arityNoted.get OOB at {arity}"))
+	end 'arityIsNoted'
+
+	export function maskAtArity(arity ParamCount) returns ParamPositionMask
+		if not self.settled 'nothingIsPassedByReference'
+			return NoParamPositions
+		end 'nothingIsPassedByReference'
+
+		if not self.arityIsNoted(arity) 'noConventionWasSettled'
+			panic("FunctionValueConventions.maskAtArity: no by-reference convention was settled for function values of arity {arity} — `buildFunctionValueConventions` notes the arity of every function-value body and of every indirect call")
+		end 'noConventionWasSettled'
+
+		return try self.maskByArity.get(arity) otherwise panic("FunctionValueConventions.maskAtArity: maskByArity.get OOB at {arity}")
+	end 'maskAtArity'
+
+	export function noteBody(name ByteArray, arity ParamCount, own ParamPositionMask)
+		if (own and not self.maskAtArity(arity)) != NoParamPositions 'aWriteTheConventionDoesNotPass'
+			panic("FunctionValueConventions.noteBody: '{String.from(name)}' takes a position by reference that no function value of arity {arity} passes as a cell — the arity's convention is every by-reference position of every free function of that arity")
+		end 'aWriteTheConventionDoesNotPass'
+
+		self.arityOfBody.upsert(name, value: arity)
+		self.ownByName.upsert(name, value: own)
+	end 'noteBody'
+
+	export function noteCellLoads(name ByteArray, types StdTypeArray)
+		self.loadTypes.upsert(name, value: types)
+	end 'noteCellLoads'
+
+	export function arityOf(name ByteArray) returns ParamCount
+		return try self.arityOfBody.get(name) otherwise panic("FunctionValueConventions.arityOf: '{String.from(name)}' is no function-value body this program noted")
+	end 'arityOf'
+
+	export function ownMaskOf(name ByteArray) returns ParamPositionMask
+		return try self.ownByName.get(name) otherwise panic("FunctionValueConventions.ownMaskOf: '{String.from(name)}' is no function-value body this program noted")
+	end 'ownMaskOf'
+
+	function cellOccupantTypeAt(name ByteArray, arity ParamCount, position ParamCount) returns StdType throws AbsentError
+		if not maskHasParam(self.maskAtArity(arity), param: position) or maskHasParam(self.ownMaskOf(name), param: position) 'noCellToRead'
+			throw AbsentError.absent
+		end 'noCellToRead'
+
+		let types = try self.loadTypes.get(name) otherwise panic("FunctionValueConventions.cellOccupantTypeAt: '{String.from(name)}' reads the cell at position {position} and was given no cell load types — the semantic pass records them for every body that reads one")
+		return try types.get(position) otherwise panic("FunctionValueConventions.cellOccupantTypeAt: no cell load type at {position} for '{String.from(name)}'")
+	end 'cellOccupantTypeAt'
+
+	export function isEmpty() returns bool
+		return not self.takesAnyCell
+	end 'isEmpty'
+
+	export function adaptsAClosure(name ByteArray) returns bool
+		if not self.settled or not isLiftedClosureName(name) or not self.arityOfBody.contains(name) 'noAdapterIsOwed'
+			return false
+		end 'noAdapterIsOwed'
+
+		return self.maskAtArity(self.arityOf(name)) != NoParamPositions
+	end 'adaptsAClosure'
+end 'FunctionValueConventions'
+
+function wordAtCellPosition(declared MaxonType, isCell bool) returns MaxonType
+	return MaxonType.integer if isCell else declared
+end 'wordAtCellPosition'
+
+export function cellPositionsAsWords(declared MaxonTypeArray, byReference ParamPositionMask) returns MaxonTypeArray
+	if byReference == NoParamPositions 'everyPositionIsAValue'
+		return declared
+	end 'everyPositionIsAValue'
+
+	var words = MaxonTypeArray.create()
+
+	for i in 0 upto declared.count() 'eachPosition'
+		words.push(wordAtCellPosition(try declared.get(i) otherwise panic("cellPositionsAsWords: declared.get OOB at {i}"), isCell: maskHasParam(byReference, param: i as ParamCount)))
+	end 'eachPosition'
+
+	return words
+end 'cellPositionsAsWords'
+
+export function appendCellOccupantLoads(module StdModule, block IrBlock, ids ValueMinter, conventions FunctionValueConventions, target ByteArray, arity ParamCount, args ValueIdArray) returns ValueIdArray
+	if conventions.maskAtArity(arity) == NoParamPositions 'everyArgumentIsAValue'
+		return args
+	end 'everyArgumentIsAValue'
+
+	var occupants = ValueIdArray.create()
+
+	for i in 0 upto args.count() 'eachArg'
+		let arg = try args.get(i) otherwise panic("appendCellOccupantLoads: args.get OOB at {i}")
+
+		if let loadType = try conventions.cellOccupantTypeAt(target, arity: arity, position: i as ParamCount) 'readTheCell'
+			let occupant = ids.mint()
+			module.appendOp(block, op: cellOccupantLoad(occupant, address: arg, valueType: loadType))
+			occupants.push(occupant)
+			continue
+		end 'readTheCell'
+
+		occupants.push(arg)
+	end 'eachArg'
+
+	return occupants
+end 'appendCellOccupantLoads'
+
+function cellOccupantLoad(occupant ValueId, address ValueId, valueType StdType) returns StdOp
+	return StdOp.loadIndirect(occupant, addrId: address, offset: ParameterCellValueOffset, valueType: valueType)
+end 'cellOccupantLoad'
+
+export function cellOccupantStdType(signatures ProgramSignatures, declared MaxonType, typeNames TypeNameInterner, readerFilePath FilePath) returns StdType
+	let stored = slotStorageType(signatures, declared: declared, typeNames: typeNames, readerFilePath: readerFilePath)
+	return maxonTypeToStdType(MaxonType.integer if maxonTypeTag(stored) == ValueTypeTag.exitCode else stored)
+end 'cellOccupantStdType'
 
 // A set of symbol names, for O(1) dedup while collecting thunk targets in source order.
 export typealias FnRefThunkSet = Set with ByteArray
@@ -64,6 +210,10 @@ export let FunctionRecordCodeOffset = 0 as ByteOffset
 // the trailing one through (`LowerMaxonToStd.crossFloatDomainArgs`).
 export let FunctionRecordArgCount = 1 as ParamCount
 
+export function userArityOfIndirectCall(args ValueIdArray) returns ParamCount
+	return args.count() - FunctionRecordArgCount
+end 'userArityOfIndirectCall'
+
 export let FunctionRecordCaptureBase = 8 as ByteOffset
 
 let EnvSlotBytes = 8 as ByteOffset
@@ -71,6 +221,14 @@ let EnvSlotBytes = 8 as ByteOffset
 export function envSlotOffset(slot ElementIndex) returns ByteOffset
 	return FunctionRecordCaptureBase + (slot * EnvSlotBytes) as ByteOffset
 end 'envSlotOffset'
+
+export function envSlotAtOffset(offset ByteOffset) returns ElementIndex throws AbsentError
+	if offset < FunctionRecordCaptureBase 'beforeTheCaptures'
+		throw AbsentError.absent
+	end 'beforeTheCaptures'
+
+	return (offset - FunctionRecordCaptureBase) / EnvSlotBytes
+end 'envSlotAtOffset'
 
 let FunctionRecordLabelPrefix = "__fnrec_"
 
@@ -85,9 +243,9 @@ end 'isFunctionRecordLabel'
 // Registered under its own label, never the byte-deduped door: every function record's bytes are
 // the same zero seed and its code word is a relocation, so deduping by bytes would hand every
 // function value one record.
-export function registerFunctionRecord(globalData GlobalDataTable, funcName ByteArray, funcSignatures FuncSignatureMap, debugStream bool) returns String
+export function registerFunctionRecord(globalData GlobalDataTable, funcName ByteArray, funcSignatures FuncSignatureMap, conventions FunctionValueConventions, debugStream bool) returns String
 	let label = registerImmortalRecordLabeled(globalData, label: functionRecordLabel(funcName), record: functionRecordSeedBytes(), kind: RdataPayloadKind.functionRecord, debugStream: debugStream)
-	let code = fnRefThunkName(funcName) if functionValueNeedsFnRefThunk(funcName, funcSignatures: funcSignatures) else funcName
+	let code = fnRefThunkName(funcName) if functionValueRecordNamesAThunk(funcName, funcSignatures: funcSignatures, conventions: conventions) else funcName
 	globalData.recordFuncAbs64InRdata(code, rdataLabel: label, offsetInLabel: FunctionRecordCodeOffset)
 	return label
 end 'registerFunctionRecord'
@@ -99,9 +257,10 @@ function functionRecordSeedBytes() returns ByteArray
 end 'functionRecordSeedBytes'
 
 // ⭐⭐ **DOES A VALUE USE OF `funcName` NEED THE UNIFORM-ABI THUNK?** ONE fact, read by the sites that must
-// not disagree about it: `registerFunctionRecord`, which NAMES the code word a function value's
-// record holds, `LowerMaxonToStd.argsTheTargetTakes`, which drops the trailing record from a direct
-// call to the target, and `noteFnRefTarget` below, which decides whether anything is there to name.
+// not disagree about it: `LowerMaxonToStd.argsTheTargetTakes`, which drops the trailing record from a
+// direct call to the target, and — through `functionValueRecordNamesAThunk`, which adds the adapted
+// closures — `registerFunctionRecord`, which NAMES the code word a function value's record holds, and
+// `noteFnRefTarget` below, which decides whether anything is there to name.
 //
 // ⚠ **A DISAGREEMENT IS A COMPILE ERROR AT NO SITE**, which is why the test cannot be written out twice:
 // say-no here and say-yes there and the program holds a code word naming a thunk nobody
@@ -111,7 +270,8 @@ end 'functionRecordSeedBytes'
 // lands in a register the callee never reads — and only a wasm `call_indirect`, which type-checks
 // the funcref against the table slot's functype, reports it at all.
 //
-// A LIFTED CLOSURE already takes its own trailing record, so it IS the uniform shape and needs no bridge.
+// A LIFTED CLOSURE already takes its own trailing record, so it IS the uniform shape and needs no bridge
+// for the record.
 // A COMPILER-EMITTED symbol is invoked through a bare `callIndirect(ptr)` in the drop walk rather than the
 // closure ABI (an array element destructor stamped into `element_destroy@40`), so it needs none
 // either — and "compiler-emitted" is the REGISTRY's answer, never the `__` prefix, because
@@ -121,14 +281,22 @@ export function functionValueNeedsFnRefThunk(funcName ByteArray, funcSignatures 
 		return false
 	end 'alreadyRecordShaped'
 
-	return not isSignaturelessCompilerCallee(funcName, funcSignatures: funcSignatures)
+	return isFunctionValueBodyName(funcName, funcSignatures: funcSignatures)
 end 'functionValueNeedsFnRefThunk'
 
+export function isFunctionValueBodyName(name ByteArray, funcSignatures FuncSignatureMap) returns bool
+	return not isSignaturelessCompilerCallee(name, funcSignatures: funcSignatures) and not isClosureEnvDropName(name)
+end 'isFunctionValueBodyName'
+
+function functionValueRecordNamesAThunk(funcName ByteArray, funcSignatures FuncSignatureMap, conventions FunctionValueConventions) returns bool
+	return functionValueNeedsFnRefThunk(funcName, funcSignatures: funcSignatures) or conventions.adaptsAClosure(funcName)
+end 'functionValueRecordNamesAThunk'
+
 // Collect every function referenced as a value (`functionRef`) that needs a `__fnref_` thunk, in first-seen source
-// order, deduped — WHICH ones is `functionValueNeedsFnRefThunk`'s answer above and is not restated here. Read
+// order, deduped — WHICH ones is `noteFnRefTarget`'s answer below and is not restated here. Read
 // post-pipeline by `installFnRefThunks`; the walk mirrors `StringRuntime.scanRuntimeUsage`'s — one linear pass
 // over the Maxon ops. `funcSignatures` rides along for that one predicate.
-export function collectFnRefThunkTargets(module MaxonModule, funcSignatures FuncSignatureMap) returns NameRoster
+export function collectFnRefThunkTargets(module MaxonModule, funcSignatures FuncSignatureMap, conventions FunctionValueConventions) returns NameRoster
 	var seen = FnRefThunkSet.create()
 	var targets = NameRoster.create()
 
@@ -138,7 +306,7 @@ export function collectFnRefThunkTargets(module MaxonModule, funcSignatures Func
 
 			for opIdx in block.bodyOps() 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("collectFnRefThunkTargets: opIdx {opIdx} not in module.ops")
-				noteIfFunctionRef(op, seen: seen, targets: targets, funcSignatures: funcSignatures)
+				noteIfFunctionRef(op, seen: seen, targets: targets, funcSignatures: funcSignatures, conventions: conventions)
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
@@ -149,7 +317,7 @@ end 'collectFnRefThunkTargets'
 // Record a `functionRef` op's PLAIN target for thunking. It RANGES over the whole `MaxonOp` union so a
 // an op added later FAILS TO COMPILE here rather than being silently ignored:
 // `call to panicAbort` is every op before `functionRef`, `indirectCall` the one after it.
-function noteIfFunctionRef(op MaxonOp, seen FnRefThunkSet, targets NameRoster, funcSignatures FuncSignatureMap)
+function noteIfFunctionRef(op MaxonOp, seen FnRefThunkSet, targets NameRoster, funcSignatures FuncSignatureMap, conventions FunctionValueConventions)
 	match op 'op'
 		call or
 		literal or
@@ -168,7 +336,7 @@ function noteIfFunctionRef(op MaxonOp, seen FnRefThunkSet, targets NameRoster, f
 		throwError or
 		propagateError or
 		panicAbort then break
-		functionRef(_, funcName, form) then noteFnRefTarget(funcName, form: form, seen: seen, targets: targets, funcSignatures: funcSignatures)
+		functionRef(_, funcName, form) then noteFnRefTarget(funcName, form: form, seen: seen, targets: targets, funcSignatures: funcSignatures, conventions: conventions)
 		indirectCall then break
 
 		// An async spawn takes the DIRECT function's address in lowering (not a function value through
@@ -367,11 +535,11 @@ end 'checkedCallMarksOf'
 
 function uncheckedCallPathOf(op MaxonOp, marks ValueMarkColumn) returns CallPath
 	return match op 'op'
-		indirectCall(result, _, args) gives CallPath.none if valueIsMarked(marks, value: result) else CallPath.indirect(args.count() as ParamCount - FunctionRecordArgCount)
+		indirectCall(result, _, args, _) gives CallPath.none if valueIsMarked(marks, value: result) else CallPath.indirect(userArityOfIndirectCall(args))
 		asyncCall(result, callee, _, _, _, _, _) gives CallPath.none if valueIsMarked(marks, value: result) else CallPath.named(callee)
 		serviceSend(result, callee, _, _) gives CallPath.none if valueIsMarked(marks, value: result) else CallPath.named(callee)
-		witnessDispatch(result, _, _, methodIndex, interfaceDeclIndex, _, _) gives CallPath.none if valueIsMarked(marks, value: result) else CallPath.witness(interfaceDeclIndex, methodIndex: methodIndex)
-		witnessTryDispatch(result, _, _, _, methodIndex, interfaceDeclIndex, _) gives CallPath.none if valueIsMarked(marks, value: result) else CallPath.witness(interfaceDeclIndex, methodIndex: methodIndex)
+		witnessDispatch(result, _, _, _, methodIndex, interfaceDeclIndex, _, _) gives CallPath.none if valueIsMarked(marks, value: result) else CallPath.witness(interfaceDeclIndex, methodIndex: methodIndex)
+		witnessTryDispatch(result, _, _, _, _, methodIndex, interfaceDeclIndex, _) gives CallPath.none if valueIsMarked(marks, value: result) else CallPath.witness(interfaceDeclIndex, methodIndex: methodIndex)
 		call(result, callee, _, _, _, _, _, _) gives CallPath.tableSend if callee.equals(MboxInterfaceSendName) and not valueIsMarked(marks, value: result) else CallPath.none
 		literal or
 		ret or
@@ -409,16 +577,15 @@ function uncheckedCallPathOf(op MaxonOp, marks ValueMarkColumn) returns CallPath
 	end 'op'
 end 'uncheckedCallPathOf'
 
-// A target that needs the thunk (`functionValueNeedsFnRefThunk` — the one place that rule lives) joins the
-// ordered thunk list the first time it is seen. A `__` name that IS in `funcSignatures` reaches
+// A function value whose record names a thunk (`functionValueRecordNamesAThunk`), or a code address taken
+// of an adapted closure, joins the ordered thunk list the first time it is seen. A `__` name that IS in `funcSignatures` reaches
 // `synthesizeFnRefThunk` from here and finds the signature that routine panics without.
-function noteFnRefTarget(funcName ByteArray, form FunctionRefForm, seen FnRefThunkSet, targets NameRoster, funcSignatures FuncSignatureMap)
-	match form 'form'
-		codeAddress then return
-		functionValue then break
-	end 'form'
+function noteFnRefTarget(funcName ByteArray, form FunctionRefForm, seen FnRefThunkSet, targets NameRoster, funcSignatures FuncSignatureMap, conventions FunctionValueConventions)
+	if form == FunctionRefForm.codeAddress and not conventions.adaptsAClosure(funcName) 'notAnAdaptedClosure'
+		return
+	end 'notAnAdaptedClosure'
 
-	if not functionValueNeedsFnRefThunk(funcName, funcSignatures: funcSignatures) 'noThunk'
+	if form == FunctionRefForm.functionValue and not functionValueRecordNamesAThunk(funcName, funcSignatures: funcSignatures, conventions: conventions) 'noThunk'
 		return
 	end 'noThunk'
 
@@ -462,6 +629,9 @@ function synthesizeFnRefThunk(module StdModule, project Project, targetName Byte
 	let userParamCount = sig.paramCount()
 	let thunkParamCount = userParamCount + FunctionRecordArgCount
 	let targetReturn = maxonReturnTypeToStdReturnType(ret)
+	let conventions = project.functionValueConventions
+	let byReference = conventions.maskAtArity(userParamCount)
+	let forwardsRecord = isLiftedClosureName(targetName)
 
 	// ⭐⭐ **EACH FORWARDED USER PARAMETER IS DECLARED THROUGH `maxonTypeToStdType` — THE SAME COLLAPSE THE CALL
 	// SITE'S ABI MASK ASKS, AND THAT IDENTITY IS THE POINT.** A `callIndirect`'s per-argument register file
@@ -483,10 +653,14 @@ function synthesizeFnRefThunk(module StdModule, project Project, targetName Byte
 	// struct/String/function/type-parameter is an i64 pointer or opaque word by its own arm there —
 	// and panics only on the `named`/`unresolved` residues TypeResolution is required to have
 	// eliminated.)
+	//
+	// A position its arity's convention passes as a cell is an address in the thunk's signature, an
+	// i64, whatever the declared type. A target that takes it by value reads the cell the address names
+	// and forwards the occupant; one that takes it by reference forwards the address itself.
 	var paramTypes = StdTypeArray.create()
 
-	for i in 0 upto userParamCount 'eachUserParamType'
-		paramTypes.push(maxonTypeToStdType(try sig.paramTypes.get(i) otherwise panic("synthesizeFnRefThunk: sig.paramTypes.get OOB at {i} for '{String.from(targetName)}'")))
+	for word in cellPositionsAsWords(sig.paramTypes, byReference: byReference) 'eachUserParamType'
+		paramTypes.push(maxonTypeToStdType(word))
 	end 'eachUserParamType'
 
 	paramTypes.push(StdType.i64)
@@ -503,11 +677,17 @@ function synthesizeFnRefThunk(module StdModule, project Project, targetName Byte
 	emitTypedParams(module, block: entry, paramTypes: paramTypes)
 
 	var values = ValueMinter.create(thunkParamCount)
-	var forwardArgs = ValueIdArray.create()
+	var userArgs = ValueIdArray.create()
 
 	for i in 0 upto userParamCount 'eachArg'
-		forwardArgs.push(valueIdAtParamPosition(i))
+		userArgs.push(valueIdAtParamPosition(i))
 	end 'eachArg'
+
+	var forwardArgs = appendCellOccupantLoads(module, block: entry, ids: values, conventions: conventions, target: targetName, arity: userParamCount, args: userArgs)
+
+	if forwardsRecord 'aLiftedClosureTakesItsRecord'
+		forwardArgs.push(valueIdAtParamPosition(userParamCount))
+	end 'aLiftedClosureTakesItsRecord'
 
 	let callResult = values.mint()
 	module.appendOp(entry, op: StdOp.call(callResult, callee: targetName, args: forwardArgs))

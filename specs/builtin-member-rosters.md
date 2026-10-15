@@ -43,7 +43,7 @@ reaches the refusal this case is about.
 ```maxon
 function main() returns ExitCode
 	let s = "hi"
-	var n = 0
+	var n = 0 as ExitCode
 	for c in s 'eachCharacter'
 		n = n + c.isUpperCase()
 	end 'eachCharacter'

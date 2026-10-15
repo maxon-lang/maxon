@@ -442,15 +442,15 @@ end 'MmTag'
 
 // The wire index of a fixed roster tag — the ordinal, named once so no call site spells `.ordinal` at a
 // place where the reader would have to know that the ordinal IS the index.
-export function mmTagIndex(tag MmTag) returns ParsedInt
-	return tag.ordinal as ParsedInt
+export function mmTagIndex(tag MmTag) returns FullRangeInt
+	return tag.ordinal
 end 'mmTagIndex'
 
 // ============================================================================
 // The tag table's FORMAT — the roster, the blob, and the one door a user name comes through.
 // ============================================================================
 
-export typealias DebugStreamNameIndexMap = Map with (String, ParsedInt)
+export typealias DebugStreamNameIndexMap = Map with (String, FullRangeInt)
 
 // ⭐⭐ **ONE TABLE KIND, TWO INSTANCES — `MXDS_TAGS` AND `MXDS_STRS`.** Both answer the same question for
 // the same wire width (a name ⇒ a u16 the monitor resolves back), differ only in WHICH names they hold, and
@@ -480,16 +480,16 @@ export type DebugStreamNameTable
 		var byName = DebugStreamNameIndexMap.create()
 
 		for name in seed 'seedIndex'
-			byName.upsert(name, value: byName.count() as ParsedInt)
+			byName.upsert(name, value: byName.count() as FullRangeInt)
 		end 'seedIndex'
 
 		return Self{names: seed, byName: byName}
 	end 'create'
 
 	// The wire index for `name`, minting one on first sight.
-	export function intern(name String) returns ParsedInt
+	export function intern(name String) returns FullRangeInt
 		return try self.byName.get(name) otherwise 'fresh'
-			let minted = self.names.count() as ParsedInt
+			let minted = self.names.count() as FullRangeInt
 			self.byName.upsert(name, value: minted)
 			self.names.push(name)
 			return minted
@@ -557,7 +557,7 @@ end 'debugStreamNameBlob'
 //
 // The name arrives as bytes because that is the form every caller already holds and an untraced build
 // discards it unread: a `String` parameter would materialise one per allocation site for nothing.
-export function userTagIndex(globalData GlobalDataTable, name ByteArray, debugStream bool) returns ParsedInt
+export function userTagIndex(globalData GlobalDataTable, name ByteArray, debugStream bool) returns FullRangeInt
 	if not debugStream 'untracedBuild'
 		return mmTagIndex(MmTag.Untagged)
 	end 'untracedBuild'
@@ -947,7 +947,7 @@ end 'emitRingSlotAddr'
 
 // `value << shift` — one field of a packed word, positioned. Four sites pack a field into an entry header
 // or an mm payload and every one of them is this.
-function emitShiftedField(module StdModule, block IrBlock, value ValueId, shift ParsedInt, ids ValueMinter) returns ValueId
+function emitShiftedField(module StdModule, block IrBlock, value ValueId, shift FullRangeInt, ids ValueMinter) returns ValueId
 	let amount = emitConst(module, block: block, value: shift, ids: ids)
 	return emitBin(module, block: block, a: value, b: amount, opcode: StdBinOpcode.shl, ids: ids)
 end 'emitShiftedField'
@@ -1291,7 +1291,7 @@ end 'emitStoreLogIdentity'
 // `value & mask` — one field of a packed word, narrowed to its wire width. `emitShiftedField`'s sibling,
 // and read by BOTH families: five sites narrow a field before positioning it (the mm entry's tag index and
 // the four log fields), and every one of them is this.
-function emitMaskedField(module StdModule, block IrBlock, value ValueId, mask ParsedInt, ids ValueMinter) returns ValueId
+function emitMaskedField(module StdModule, block IrBlock, value ValueId, mask FullRangeInt, ids ValueMinter) returns ValueId
 	let maskConst = emitConst(module, block: block, value: mask, ids: ids)
 	return emitBin(module, block: block, a: value, b: maskConst, opcode: StdBinOpcode.bitAnd, ids: ids)
 end 'emitMaskedField'
@@ -1471,7 +1471,7 @@ function buildDsEmitLogText(module StdModule, usesGt bool)
 	let fields = emitPackedLogFields(module, block: write, category: category, level: level, u16Field: length, unitId: unitId, ids: ids)
 	module.appendOp(write, op: StdOp.storeIndirect(entryPtr, offset: DsLogOffFields, valueId: fields, valueType: StdType.i64))
 
-	let textOffset = emitConst(module, block: write, value: DsLogOffText as ParsedInt, ids: ids)
+	let textOffset = emitConst(module, block: write, value: DsLogOffText as FullRangeInt, ids: ids)
 	let textBase = emitBin(module, block: write, a: entryPtr, b: textOffset, opcode: StdBinOpcode.add, ids: ids)
 
 	// ⚠ **AN EMPTY MESSAGE HAS NO TAIL, AND WITHOUT THIS TEST THE PAD STORE WOULD LAND ON THE FIELDS WORD.**
@@ -1521,17 +1521,17 @@ end 'buildDsEmitLogText'
 //
 // Each SPLITS `block` — the caller continues in the block it returns, exactly as `emitPackedElementZero`
 // (`ManagedMemoryRuntime`) does.
-export function emitMmEvent(module StdModule, func IrFunction, block IrBlock, eventType ParsedInt, packedId ValueId, value ValueId, ids ValueMinter) returns IrBlock
+export function emitMmEvent(module StdModule, func IrFunction, block IrBlock, eventType FullRangeInt, packedId ValueId, value ValueId, ids ValueMinter) returns IrBlock
 	return emitEventCallIfAttached(module, func: func, block: block, callee: DsEmitMmName, eventType: eventType, payload: twoArgs(packedId, second: value), ids: ids)
 end 'emitMmEvent'
 
-export function emitSchedEvent(module StdModule, func IrFunction, block IrBlock, eventType ParsedInt, traceId ValueId, ids ValueMinter) returns IrBlock
+export function emitSchedEvent(module StdModule, func IrFunction, block IrBlock, eventType FullRangeInt, traceId ValueId, ids ValueMinter) returns IrBlock
 	return emitEventCallIfAttached(module, func: func, block: block, callee: DsEmitSchedName, eventType: eventType, payload: argsOf(traceId), ids: ids)
 end 'emitSchedEvent'
 
 // `callee(eventType, payload...)` when a monitor is attached. The event type is minted inside the attached
 // arm, so a detached run pays the load and the branch and nothing else.
-function emitEventCallIfAttached(module StdModule, func IrFunction, block IrBlock, callee ByteArray, eventType ParsedInt, payload ValueIdArray, ids ValueMinter) returns IrBlock
+function emitEventCallIfAttached(module StdModule, func IrFunction, block IrBlock, callee ByteArray, eventType FullRangeInt, payload ValueIdArray, ids ValueMinter) returns IrBlock
 	var emit = module.addBlock(func, label: b"dsEmit", heat: BlockHeat.normal)
 	let resume = module.addBlock(func, label: b"dsResume", heat: BlockHeat.normal)
 

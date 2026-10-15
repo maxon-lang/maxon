@@ -221,7 +221,7 @@ func @readPastTheDeadline {
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.callDirect __ml_port
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#15
+    x64.jcc equal, __il_cont#13
   tryerr#16:
     x64.leaRegRdata rcx, [rip + __str_blob_22]  ; "panic at TcpListener.maxon:31: TcpListener.port: this listener is closed, so it holds no bound port to report\x0a"
     x64.callDirect mrt_panic
@@ -235,12 +235,6 @@ func @readPastTheDeadline {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#15:
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic#18
-  __rc_chk:
-    x64.cmpRegImm32 r8, 65535
-    x64.jcc greater, __rc_panic#18
   __il_cont#13:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r8
@@ -294,7 +288,7 @@ func @readPastTheDeadline {
     x64.jcc notEqual, matchdefault
   matcharm:
     x64.movRegImm32 r12, 1
-    x64.jmp __il_body#23
+    x64.jmp __il_body#20
   matchdefault:
     x64.leaRegRdata rcx, [rip + __str_blob_14]  ; "panic at netpoll-socket.a-read-deadline-fires.test:23: unreachable: nothing was sent, so only the read deadline can end this recv\x0a"
     x64.callDirect mrt_panic
@@ -311,13 +305,13 @@ func @readPastTheDeadline {
   tryok#6:
     x64.movRegReg rcx, r8
     x64.callDirect __str_decref
-  __il_body#23:
+  __il_body#20:
     x64.callDirect Clock.nowMs
     x64.cmpRegReg r8, r13
     x64.jcc aboveEqual, ifcont
   clockSkew:
     x64.movRegImm32 r13, 0
-    x64.jmp __il_body#28
+    x64.jmp __il_body#25
   ifcont:
     x64.movRegReg rax, r8
     x64.subRegReg rax, r8, r13
@@ -329,13 +323,13 @@ func @readPastTheDeadline {
     x64.andRegReg r8, r8, rax
     x64.orRegReg rcx, rcx, r8
     x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __rc_panic#27
+    x64.jcc less, __rc_panic
   __rc_ok:
     x64.movRegReg r13, rax
-  __il_body#28:
+  __il_body#25:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.callDirect __ms_close
-  __il_cont#21:
+  __il_cont#18:
     x64.leaRegRdata rax, [rip + __str_rec_15]  ; "timedOut="
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot8, rcx
@@ -416,10 +410,10 @@ func @readPastTheDeadline {
     x64.callDirect __mm_decref
     x64.movRegReg rcx, r15
     x64.callDirect __mm_decref
-  __il_body#29:
+  __il_body#26:
     x64.loadRegSlot rcx, slot2
     x64.callDirect __write_stdout
-  __il_cont#20:
+  __il_cont#17:
     x64.loadRegSlot rcx, slot2
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
@@ -435,21 +429,8 @@ func @readPastTheDeadline {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic#18:
-    x64.leaRegRdata rcx, [rip + __str_blob_41]  ; "panic at TcpListener.maxon:34: Range check failed: value outside typealias 'NetworkPort'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.movRegImm32 r10, 0
-    x64.epilogue 104
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic#27:
-    x64.leaRegRdata rcx, [rip + __str_blob_34]  ; "panic at Clock.maxon:52: Range check failed: value outside typealias 'DurationMs'\x0a"
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_33]  ; "panic at Clock.maxon:52: Range check failed: value outside typealias 'DurationMs'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
@@ -748,7 +729,7 @@ func @readPastTheDeadline {
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.callDirect __ml_port
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#15
+    x64.jcc equal, __il_cont#13
   tryerr#16:
     x64.leaRegRdata rcx, [rip + __str_blob_22]  ; "panic at TcpListener.maxon:31: TcpListener.port: this listener is closed, so it holds no bound port to report\x0a"
     x64.callDirect mrt_panic
@@ -762,12 +743,6 @@ func @readPastTheDeadline {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#15:
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic#18
-  __rc_chk:
-    x64.cmpRegImm32 r8, 65535
-    x64.jcc greater, __rc_panic#18
   __il_cont#13:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r8
@@ -821,7 +796,7 @@ func @readPastTheDeadline {
     x64.jcc notEqual, matchdefault
   matcharm:
     x64.movRegImm32 r12, 1
-    x64.jmp __il_body#23
+    x64.jmp __il_body#20
   matchdefault:
     x64.leaRegRdata rcx, [rip + __str_blob_14]  ; "panic at netpoll-socket.a-read-deadline-fires.test:23: unreachable: nothing was sent, so only the read deadline can end this recv\x0a"
     x64.callDirect mrt_panic
@@ -838,13 +813,13 @@ func @readPastTheDeadline {
   tryok#6:
     x64.movRegReg rcx, r8
     x64.callDirect __str_decref
-  __il_body#23:
+  __il_body#20:
     x64.callDirect Clock.nowMs
     x64.cmpRegReg r8, r13
     x64.jcc aboveEqual, ifcont
   clockSkew:
     x64.movRegImm32 r13, 0
-    x64.jmp __il_body#28
+    x64.jmp __il_body#25
   ifcont:
     x64.movRegReg rax, r8
     x64.subRegReg rax, r8, r13
@@ -856,13 +831,13 @@ func @readPastTheDeadline {
     x64.andRegReg r8, r8, rax
     x64.orRegReg rcx, rcx, r8
     x64.cmpRegImm32 rcx, 0
-    x64.jcc less, __rc_panic#27
+    x64.jcc less, __rc_panic
   __rc_ok:
     x64.movRegReg r13, rax
-  __il_body#28:
+  __il_body#25:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.callDirect __ms_close
-  __il_cont#21:
+  __il_cont#18:
     x64.leaRegRdata rax, [rip + __str_rec_15]  ; "timedOut="
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot8, rcx
@@ -943,10 +918,10 @@ func @readPastTheDeadline {
     x64.callDirect __mm_decref
     x64.movRegReg rcx, r15
     x64.callDirect __mm_decref
-  __il_body#29:
+  __il_body#26:
     x64.loadRegSlot rcx, slot2
     x64.callDirect __write_stdout
-  __il_cont#20:
+  __il_cont#17:
     x64.loadRegSlot rcx, slot2
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
@@ -962,21 +937,8 @@ func @readPastTheDeadline {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rc_panic#18:
-    x64.leaRegRdata rcx, [rip + __str_blob_41]  ; "panic at TcpListener.maxon:34: Range check failed: value outside typealias 'NetworkPort'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.movRegImm32 r10, 0
-    x64.epilogue 104
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic#27:
-    x64.leaRegRdata rcx, [rip + __str_blob_34]  ; "panic at Clock.maxon:52: Range check failed: value outside typealias 'DurationMs'\x0a"
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_33]  ; "panic at Clock.maxon:52: Range check failed: value outside typealias 'DurationMs'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
@@ -1269,7 +1231,7 @@ func @readPastTheDeadline {
     arm64.bl __ml_port
     arm64.movRegReg x1, x0
     arm64.cmp x9, 0
-    arm64.b.eq tryok#15
+    arm64.b.eq __il_cont#13
   tryerr#16:
     arm64.leaRdata x0, __str_blob_22  ; "panic at TcpListener.maxon:31: TcpListener.port: this listener is closed, so it holds no bound port to report\x0a"
     arm64.bl mrt_panic
@@ -1287,13 +1249,6 @@ func @readPastTheDeadline {
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
     arm64.ret
-  tryok#15:
-    arm64.cmp x1, 0
-    arm64.b.lt __rc_panic#18
-  __rc_chk:
-    arm64.movImm x16, 65535
-    arm64.cmp x1, x16
-    arm64.b.gt __rc_panic#18
   __il_cont#13:
     arm64.movRegReg x0, x19
     arm64.bl TcpClient.connect
@@ -1354,7 +1309,7 @@ func @readPastTheDeadline {
     arm64.b.ne matchdefault
   matcharm:
     arm64.movImm x20, 1
-    arm64.b __il_body#23
+    arm64.b __il_body#20
   matchdefault:
     arm64.leaRdata x0, __str_blob_14  ; "panic at netpoll-socket.a-read-deadline-fires.test:23: unreachable: nothing was sent, so only the read deadline can end this recv\x0a"
     arm64.bl mrt_panic
@@ -1374,13 +1329,13 @@ func @readPastTheDeadline {
     arm64.ret
   tryok#6:
     arm64.bl __str_decref
-  __il_body#23:
+  __il_body#20:
     arm64.bl Clock.nowMs
     arm64.cmp x0, x21
     arm64.b.hs ifcont
   clockSkew:
     arm64.movImm x21, 0
-    arm64.b __il_body#28
+    arm64.b __il_body#25
   ifcont:
     arm64.sub x22, x0, x21
     arm64.movImm x16, 18446744073709551615
@@ -1392,13 +1347,13 @@ func @readPastTheDeadline {
     arm64.and x0, x0, x22
     arm64.orr x0, x1, x0
     arm64.cmp x0, 0
-    arm64.b.lt __rc_panic#27
+    arm64.b.lt __rc_panic
   __rc_ok:
     arm64.movRegReg x21, x22
-  __il_body#28:
+  __il_body#25:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.bl __ms_close
-  __il_cont#21:
+  __il_cont#18:
     arm64.leaRdata x0, __str_rec_15  ; "timedOut="
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
@@ -1475,10 +1430,10 @@ func @readPastTheDeadline {
     arm64.bl __mm_decref
     arm64.movRegReg x0, x26
     arm64.bl __mm_decref
-  __il_body#29:
+  __il_body#26:
     arm64.loadRegSlot x0, slot2
     arm64.bl __write_stdout
-  __il_cont#20:
+  __il_cont#17:
     arm64.loadRegSlot x0, slot2
     arm64.bl __str_decref
     arm64.movImm x19, 0
@@ -1498,25 +1453,8 @@ func @readPastTheDeadline {
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
     arm64.ret
-  __rc_panic#18:
-    arm64.leaRdata x0, __str_blob_41  ; "panic at TcpListener.maxon:34: Range check failed: value outside typealias 'NetworkPort'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.movImm x9, 0
-    arm64.loadRegSlot x19, slot4
-    arm64.loadRegSlot x20, slot5
-    arm64.loadRegSlot x21, slot6
-    arm64.loadRegSlot x22, slot7
-    arm64.loadRegSlot x23, slot8
-    arm64.loadRegSlot x24, slot9
-    arm64.loadRegSlot x25, slot10
-    arm64.loadRegSlot x26, slot11
-    arm64.loadRegSlot x27, slot12
-    arm64.loadRegSlot x28, slot13
-    arm64.epilogue 128
-    arm64.ret
-  __rc_panic#27:
-    arm64.leaRdata x0, __str_blob_34  ; "panic at Clock.maxon:52: Range check failed: value outside typealias 'DurationMs'\x0a"
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_33  ; "panic at Clock.maxon:52: Range check failed: value outside typealias 'DurationMs'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.movImm x9, 0
@@ -1818,7 +1756,7 @@ func @readPastTheDeadline {
     arm64.bl __ml_port
     arm64.movRegReg x1, x0
     arm64.cmp x9, 0
-    arm64.b.eq tryok#15
+    arm64.b.eq __il_cont#13
   tryerr#16:
     arm64.leaRdata x0, __str_blob_22  ; "panic at TcpListener.maxon:31: TcpListener.port: this listener is closed, so it holds no bound port to report\x0a"
     arm64.bl mrt_panic
@@ -1836,13 +1774,6 @@ func @readPastTheDeadline {
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
     arm64.ret
-  tryok#15:
-    arm64.cmp x1, 0
-    arm64.b.lt __rc_panic#18
-  __rc_chk:
-    arm64.movImm x16, 65535
-    arm64.cmp x1, x16
-    arm64.b.gt __rc_panic#18
   __il_cont#13:
     arm64.movRegReg x0, x19
     arm64.bl TcpClient.connect
@@ -1903,7 +1834,7 @@ func @readPastTheDeadline {
     arm64.b.ne matchdefault
   matcharm:
     arm64.movImm x20, 1
-    arm64.b __il_body#23
+    arm64.b __il_body#20
   matchdefault:
     arm64.leaRdata x0, __str_blob_14  ; "panic at netpoll-socket.a-read-deadline-fires.test:23: unreachable: nothing was sent, so only the read deadline can end this recv\x0a"
     arm64.bl mrt_panic
@@ -1923,13 +1854,13 @@ func @readPastTheDeadline {
     arm64.ret
   tryok#6:
     arm64.bl __str_decref
-  __il_body#23:
+  __il_body#20:
     arm64.bl Clock.nowMs
     arm64.cmp x0, x21
     arm64.b.hs ifcont
   clockSkew:
     arm64.movImm x21, 0
-    arm64.b __il_body#28
+    arm64.b __il_body#25
   ifcont:
     arm64.sub x22, x0, x21
     arm64.movImm x16, 18446744073709551615
@@ -1941,13 +1872,13 @@ func @readPastTheDeadline {
     arm64.and x0, x0, x22
     arm64.orr x0, x1, x0
     arm64.cmp x0, 0
-    arm64.b.lt __rc_panic#27
+    arm64.b.lt __rc_panic
   __rc_ok:
     arm64.movRegReg x21, x22
-  __il_body#28:
+  __il_body#25:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.bl __ms_close
-  __il_cont#21:
+  __il_cont#18:
     arm64.leaRdata x0, __str_rec_15  ; "timedOut="
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x22, [x0 + 8]
@@ -2024,10 +1955,10 @@ func @readPastTheDeadline {
     arm64.bl __mm_decref
     arm64.movRegReg x0, x26
     arm64.bl __mm_decref
-  __il_body#29:
+  __il_body#26:
     arm64.loadRegSlot x0, slot2
     arm64.bl __write_stdout
-  __il_cont#20:
+  __il_cont#17:
     arm64.loadRegSlot x0, slot2
     arm64.bl __str_decref
     arm64.movImm x19, 0
@@ -2047,25 +1978,8 @@ func @readPastTheDeadline {
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
     arm64.ret
-  __rc_panic#18:
-    arm64.leaRdata x0, __str_blob_41  ; "panic at TcpListener.maxon:34: Range check failed: value outside typealias 'NetworkPort'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.movImm x9, 0
-    arm64.loadRegSlot x19, slot4
-    arm64.loadRegSlot x20, slot5
-    arm64.loadRegSlot x21, slot6
-    arm64.loadRegSlot x22, slot7
-    arm64.loadRegSlot x23, slot8
-    arm64.loadRegSlot x24, slot9
-    arm64.loadRegSlot x25, slot10
-    arm64.loadRegSlot x26, slot11
-    arm64.loadRegSlot x27, slot12
-    arm64.loadRegSlot x28, slot13
-    arm64.epilogue 128
-    arm64.ret
-  __rc_panic#27:
-    arm64.leaRdata x0, __str_blob_34  ; "panic at Clock.maxon:52: Range check failed: value outside typealias 'DurationMs'\x0a"
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_33  ; "panic at Clock.maxon:52: Range check failed: value outside typealias 'DurationMs'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.movImm x9, 0
@@ -2267,8 +2181,8 @@ function main() returns ExitCode
 	try client.setWriteDeadline(1) otherwise return 1
 	sleep(100)
 
-	var reported = 0
-	var timeouts = 0
+	var reported = 0 as BytePos
+	var timeouts = 0 as Count
 
 	while reported == 0 'sending'
 		if let sent = try client.send("xyz") 'sent'
@@ -2421,7 +2335,7 @@ func @main {
     x64.callDirect __ml_port
     x64.storeSlotReg slot24, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#32
+    x64.jcc equal, __il_cont#30
   tryerr#33:
     x64.leaRegRdata rcx, [rip + __str_blob_29]  ; "panic at TcpListener.maxon:31: TcpListener.port: this listener is closed, so it holds no bound port to report\x0a"
     x64.callDirect mrt_panic
@@ -2434,12 +2348,6 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#32:
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 r8, 65535
-    x64.jcc greater, __rc_panic
   __il_cont#30:
     x64.loadRegBaseDisp.word64 r13, [r12 + 0]
     x64.loadRegBaseDisp.word64 r12, [r12 + 8]
@@ -2506,9 +2414,9 @@ func @main {
     x64.jmp exitdrop#11
   tryok#9:
     x64.movRegImm32 rcx, 100
-  __il_body#38:
+  __il_body#35:
     x64.callDirect __gt_sleep
-  __il_cont#37:
+  __il_cont#34:
     x64.movRegImm32 r13, 0
     x64.movRegImm32 r14, 0
     x64.jmp whilehdr#12
@@ -2545,7 +2453,7 @@ func @main {
     x64.storeSlotReg slot11, r14
     x64.cmpRegImm32 r13, 0
     x64.jcc equal, sending
-    x64.jmp __il_body#40
+    x64.jmp __il_body#37
   matchdefault:
     x64.leaRegRdata rcx, [rip + __str_blob_19]  ; "panic at netpoll-socket.a-send-the-kernel-finished-is-not-sent-again-past-its-deadline.test:20: unreachable: a send with room in its buffer ends in its bytes or"...
     x64.callDirect mrt_panic
@@ -2558,10 +2466,10 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __il_body#40:
+  __il_body#37:
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.callDirect __ms_close
-  __il_cont#39:
+  __il_cont#36:
     x64.leaRegRdata rax, [rip + __str_rec_18]  ; ""
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
@@ -2648,25 +2556,25 @@ func @main {
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot22, rcx
     x64.loadRegBaseDisp.word64 rbx, [rax + 8]
-    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.storeSlotReg slot20, r8
     x64.loadRegSlot rcx, slot13
     x64.movRegReg rdx, r8
-    x64.callDirect __int_to_string
+    x64.callDirect __uint_to_string
     x64.movRegReg r12, r8
     x64.leaRegRdata rax, [rip + __str_rec_22]  ; " timeouts="
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot18, rcx
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
-    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.storeSlotReg slot5, r8
     x64.loadRegSlot rcx, slot11
     x64.movRegReg rdx, r8
-    x64.callDirect __int_to_string
+    x64.callDirect __uint_to_string
     x64.movRegReg r15, r8
     x64.leaRegRdata rax, [rip + __str_rec_23]  ; " heard="
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
@@ -2744,10 +2652,10 @@ func @main {
     x64.callDirect __mm_decref
     x64.loadRegSlot rcx, slot5
     x64.callDirect __mm_decref
-  __il_body#42:
+  __il_body#39:
     x64.loadRegSlot rcx, slot14
     x64.callDirect __write_stdout
-  __il_cont#41:
+  __il_cont#38:
     x64.loadRegSlot rcx, slot14
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
@@ -2764,18 +2672,6 @@ func @main {
     x64.callDirect __destruct_TcpListener
   exitterminal:
     x64.movRegReg r8, rbx
-    x64.epilogue 232
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_47]  ; "panic at TcpListener.maxon:34: Range check failed: value outside typealias 'NetworkPort'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
     x64.epilogue 232
     x64.popReg r15
     x64.popReg r14
@@ -3231,7 +3127,7 @@ func @main {
     x64.callDirect __ml_port
     x64.storeSlotReg slot24, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#32
+    x64.jcc equal, __il_cont#30
   tryerr#33:
     x64.leaRegRdata rcx, [rip + __str_blob_29]  ; "panic at TcpListener.maxon:31: TcpListener.port: this listener is closed, so it holds no bound port to report\x0a"
     x64.callDirect mrt_panic
@@ -3244,12 +3140,6 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok#32:
-    x64.cmpRegImm32 r8, 0
-    x64.jcc less, __rc_panic
-  __rc_chk:
-    x64.cmpRegImm32 r8, 65535
-    x64.jcc greater, __rc_panic
   __il_cont#30:
     x64.loadRegBaseDisp.word64 r13, [r12 + 0]
     x64.loadRegBaseDisp.word64 r12, [r12 + 8]
@@ -3316,9 +3206,9 @@ func @main {
     x64.jmp exitdrop#11
   tryok#9:
     x64.movRegImm32 rcx, 100
-  __il_body#38:
+  __il_body#35:
     x64.callDirect __gt_sleep
-  __il_cont#37:
+  __il_cont#34:
     x64.movRegImm32 r13, 0
     x64.movRegImm32 r14, 0
     x64.jmp whilehdr#12
@@ -3355,7 +3245,7 @@ func @main {
     x64.storeSlotReg slot11, r14
     x64.cmpRegImm32 r13, 0
     x64.jcc equal, sending
-    x64.jmp __il_body#40
+    x64.jmp __il_body#37
   matchdefault:
     x64.leaRegRdata rcx, [rip + __str_blob_19]  ; "panic at netpoll-socket.a-send-the-kernel-finished-is-not-sent-again-past-its-deadline.test:20: unreachable: a send with room in its buffer ends in its bytes or"...
     x64.callDirect mrt_panic
@@ -3368,10 +3258,10 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __il_body#40:
+  __il_body#37:
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.callDirect __ms_close
-  __il_cont#39:
+  __il_cont#36:
     x64.leaRegRdata rax, [rip + __str_rec_18]  ; ""
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
@@ -3458,25 +3348,25 @@ func @main {
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot22, rcx
     x64.loadRegBaseDisp.word64 rbx, [rax + 8]
-    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.storeSlotReg slot20, r8
     x64.loadRegSlot rcx, slot13
     x64.movRegReg rdx, r8
-    x64.callDirect __int_to_string
+    x64.callDirect __uint_to_string
     x64.movRegReg r12, r8
     x64.leaRegRdata rax, [rip + __str_rec_22]  ; " timeouts="
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot18, rcx
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
-    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.storeSlotReg slot5, r8
     x64.loadRegSlot rcx, slot11
     x64.movRegReg rdx, r8
-    x64.callDirect __int_to_string
+    x64.callDirect __uint_to_string
     x64.movRegReg r15, r8
     x64.leaRegRdata rax, [rip + __str_rec_23]  ; " heard="
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
@@ -3554,10 +3444,10 @@ func @main {
     x64.callDirect __mm_decref
     x64.loadRegSlot rcx, slot5
     x64.callDirect __mm_decref
-  __il_body#42:
+  __il_body#39:
     x64.loadRegSlot rcx, slot14
     x64.callDirect __write_stdout
-  __il_cont#41:
+  __il_cont#38:
     x64.loadRegSlot rcx, slot14
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
@@ -3574,18 +3464,6 @@ func @main {
     x64.callDirect __destruct_TcpListener
   exitterminal:
     x64.movRegReg r8, rbx
-    x64.epilogue 232
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_47]  ; "panic at TcpListener.maxon:34: Range check failed: value outside typealias 'NetworkPort'\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
     x64.epilogue 232
     x64.popReg r15
     x64.popReg r14
@@ -3897,7 +3775,7 @@ func @main {
     arm64.bl __ml_port
     arm64.movRegReg x21, x0
     arm64.cmp x9, 0
-    arm64.b.eq tryok#32
+    arm64.b.eq __il_cont#30
   tryerr#33:
     arm64.leaRdata x0, __str_blob_29  ; "panic at TcpListener.maxon:31: TcpListener.port: this listener is closed, so it holds no bound port to report\x0a"
     arm64.bl mrt_panic
@@ -3914,13 +3792,6 @@ func @main {
     arm64.loadRegSlot x28, slot23
     arm64.epilogue 208
     arm64.ret
-  tryok#32:
-    arm64.cmp x21, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.movImm x16, 65535
-    arm64.cmp x21, x16
-    arm64.b.gt __rc_panic
   __il_cont#30:
     arm64.loadRegBaseDisp.word64 x22, [x20 + 0]
     arm64.loadRegBaseDisp.word64 x20, [x20 + 8]
@@ -3986,9 +3857,9 @@ func @main {
     arm64.b exitdrop#11
   tryok#9:
     arm64.movImm x0, 100
-  __il_body#38:
+  __il_body#35:
     arm64.bl __gt_sleep
-  __il_cont#37:
+  __il_cont#34:
     arm64.movImm x21, 0
     arm64.movImm x22, 0
     arm64.b whilehdr#12
@@ -4025,7 +3896,7 @@ func @main {
     arm64.storeSlotReg slot11, x22
     arm64.cmp x21, 0
     arm64.b.eq sending
-    arm64.b __il_body#40
+    arm64.b __il_body#37
   matchdefault:
     arm64.leaRdata x0, __str_blob_19  ; "panic at netpoll-socket.a-send-the-kernel-finished-is-not-sent-again-past-its-deadline.test:20: unreachable: a send with room in its buffer ends in its bytes or"...
     arm64.bl mrt_panic
@@ -4042,10 +3913,10 @@ func @main {
     arm64.loadRegSlot x28, slot23
     arm64.epilogue 208
     arm64.ret
-  __il_body#40:
+  __il_body#37:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.bl __ms_close
-  __il_cont#39:
+  __il_cont#36:
     arm64.leaRdata x0, __str_rec_18  ; ""
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
@@ -4124,24 +3995,24 @@ func @main {
     arm64.leaRdata x0, __str_rec_21  ; "reported="
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
-    arm64.movImm x0, 21
+    arm64.movImm x0, 20
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x21, x0
     arm64.loadRegSlot x0, slot13
     arm64.movRegReg x1, x21
-    arm64.bl __int_to_string
+    arm64.bl __uint_to_string
     arm64.movRegReg x23, x0
     arm64.leaRdata x0, __str_rec_22  ; " timeouts="
     arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
-    arm64.movImm x0, 21
+    arm64.movImm x0, 20
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x26, x0
     arm64.loadRegSlot x0, slot11
     arm64.movRegReg x1, x26
-    arm64.bl __int_to_string
+    arm64.bl __uint_to_string
     arm64.movRegReg x27, x0
     arm64.leaRdata x0, __str_rec_23  ; " heard="
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
@@ -4217,10 +4088,10 @@ func @main {
     arm64.bl __mm_decref
     arm64.movRegReg x0, x26
     arm64.bl __mm_decref
-  __il_body#42:
+  __il_body#39:
     arm64.loadRegSlot x0, slot5
     arm64.bl __write_stdout
-  __il_cont#41:
+  __il_cont#38:
     arm64.loadRegSlot x0, slot5
     arm64.bl __str_decref
     arm64.movImm x19, 0
@@ -4237,22 +4108,6 @@ func @main {
     arm64.bl __destruct_TcpListener
   exitterminal:
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot14
-    arm64.loadRegSlot x20, slot15
-    arm64.loadRegSlot x21, slot16
-    arm64.loadRegSlot x22, slot17
-    arm64.loadRegSlot x23, slot18
-    arm64.loadRegSlot x24, slot19
-    arm64.loadRegSlot x25, slot20
-    arm64.loadRegSlot x26, slot21
-    arm64.loadRegSlot x27, slot22
-    arm64.loadRegSlot x28, slot23
-    arm64.epilogue 208
-    arm64.ret
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_47  ; "panic at TcpListener.maxon:34: Range check failed: value outside typealias 'NetworkPort'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot14
     arm64.loadRegSlot x20, slot15
     arm64.loadRegSlot x21, slot16
@@ -4563,7 +4418,7 @@ func @main {
     arm64.bl __ml_port
     arm64.movRegReg x21, x0
     arm64.cmp x9, 0
-    arm64.b.eq tryok#32
+    arm64.b.eq __il_cont#30
   tryerr#33:
     arm64.leaRdata x0, __str_blob_29  ; "panic at TcpListener.maxon:31: TcpListener.port: this listener is closed, so it holds no bound port to report\x0a"
     arm64.bl mrt_panic
@@ -4580,13 +4435,6 @@ func @main {
     arm64.loadRegSlot x28, slot23
     arm64.epilogue 208
     arm64.ret
-  tryok#32:
-    arm64.cmp x21, 0
-    arm64.b.lt __rc_panic
-  __rc_chk:
-    arm64.movImm x16, 65535
-    arm64.cmp x21, x16
-    arm64.b.gt __rc_panic
   __il_cont#30:
     arm64.loadRegBaseDisp.word64 x22, [x20 + 0]
     arm64.loadRegBaseDisp.word64 x20, [x20 + 8]
@@ -4652,9 +4500,9 @@ func @main {
     arm64.b exitdrop#11
   tryok#9:
     arm64.movImm x0, 100
-  __il_body#38:
+  __il_body#35:
     arm64.bl __gt_sleep
-  __il_cont#37:
+  __il_cont#34:
     arm64.movImm x21, 0
     arm64.movImm x22, 0
     arm64.b whilehdr#12
@@ -4691,7 +4539,7 @@ func @main {
     arm64.storeSlotReg slot11, x22
     arm64.cmp x21, 0
     arm64.b.eq sending
-    arm64.b __il_body#40
+    arm64.b __il_body#37
   matchdefault:
     arm64.leaRdata x0, __str_blob_19  ; "panic at netpoll-socket.a-send-the-kernel-finished-is-not-sent-again-past-its-deadline.test:20: unreachable: a send with room in its buffer ends in its bytes or"...
     arm64.bl mrt_panic
@@ -4708,10 +4556,10 @@ func @main {
     arm64.loadRegSlot x28, slot23
     arm64.epilogue 208
     arm64.ret
-  __il_body#40:
+  __il_body#37:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.bl __ms_close
-  __il_cont#39:
+  __il_cont#36:
     arm64.leaRdata x0, __str_rec_18  ; ""
     arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x21, [x0 + 8]
@@ -4790,24 +4638,24 @@ func @main {
     arm64.leaRdata x0, __str_rec_21  ; "reported="
     arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
-    arm64.movImm x0, 21
+    arm64.movImm x0, 20
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x21, x0
     arm64.loadRegSlot x0, slot13
     arm64.movRegReg x1, x21
-    arm64.bl __int_to_string
+    arm64.bl __uint_to_string
     arm64.movRegReg x23, x0
     arm64.leaRdata x0, __str_rec_22  ; " timeouts="
     arm64.loadRegBaseDisp.word64 x24, [x0 + 0]
     arm64.loadRegBaseDisp.word64 x25, [x0 + 8]
-    arm64.movImm x0, 21
+    arm64.movImm x0, 20
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x26, x0
     arm64.loadRegSlot x0, slot11
     arm64.movRegReg x1, x26
-    arm64.bl __int_to_string
+    arm64.bl __uint_to_string
     arm64.movRegReg x27, x0
     arm64.leaRdata x0, __str_rec_23  ; " heard="
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
@@ -4883,10 +4731,10 @@ func @main {
     arm64.bl __mm_decref
     arm64.movRegReg x0, x26
     arm64.bl __mm_decref
-  __il_body#42:
+  __il_body#39:
     arm64.loadRegSlot x0, slot5
     arm64.bl __write_stdout
-  __il_cont#41:
+  __il_cont#38:
     arm64.loadRegSlot x0, slot5
     arm64.bl __str_decref
     arm64.movImm x19, 0
@@ -4903,22 +4751,6 @@ func @main {
     arm64.bl __destruct_TcpListener
   exitterminal:
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot14
-    arm64.loadRegSlot x20, slot15
-    arm64.loadRegSlot x21, slot16
-    arm64.loadRegSlot x22, slot17
-    arm64.loadRegSlot x23, slot18
-    arm64.loadRegSlot x24, slot19
-    arm64.loadRegSlot x25, slot20
-    arm64.loadRegSlot x26, slot21
-    arm64.loadRegSlot x27, slot22
-    arm64.loadRegSlot x28, slot23
-    arm64.epilogue 208
-    arm64.ret
-  __rc_panic:
-    arm64.leaRdata x0, __str_blob_47  ; "panic at TcpListener.maxon:34: Range check failed: value outside typealias 'NetworkPort'\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
     arm64.loadRegSlot x19, slot14
     arm64.loadRegSlot x20, slot15
     arm64.loadRegSlot x21, slot16

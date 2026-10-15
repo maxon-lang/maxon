@@ -73,7 +73,7 @@ function main() returns ExitCode
 	list.append(Entry.create(1, value: 100))
 	list.append(Entry.create(2, value: 200))
 	list.append(Entry.create(3, value: 300))
-	var sum = 0
+	var sum = 0 as Integer
 	for item in list 'loop'
 		sum = sum + item.value
 	end 'loop'

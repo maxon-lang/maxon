@@ -266,13 +266,13 @@ function dbl(x Integer) returns Integer
 end 'dbl'
 
 function main() returns ExitCode
-	var sum = 0
-	var i = 1
+	var sum = 0 as Integer
+	var i = 1 as Integer
 	while i <= 4 'loop'
 		sum = sum + dbl(i)
 		i = i + 1
 	end 'loop'
-	return sum
+	return sum as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -969,7 +969,7 @@ A `var` passed to the unknown member may be written by it, so it is not reported
 ```maxon
 function main() returns ExitCode
 	let c = frobnicate(2)
-	var n = 1
+	var n = 1 as Count
 	_ = c.bump(n)
 	return 0
 end 'main'

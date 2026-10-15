@@ -74,19 +74,19 @@ end 'RangeCheckEdge'
 // `createInRange` the one check whose satisfied predicate means IN range (see `RangeCheckEdge`).
 type RangeBoundCheck
 	export var pred as StdCmpPred
-	export var bound as ParsedInt
+	export var bound as FullRangeInt
 	export var onTrue as RangeCheckEdge
 	export var unsigned as bool
 
-	static function create(pred StdCmpPred, bound ParsedInt) returns RangeBoundCheck
+	static function create(pred StdCmpPred, bound FullRangeInt) returns RangeBoundCheck
 		return Self{pred: pred, bound: bound, onTrue: RangeCheckEdge.panic, unsigned: false}
 	end 'create'
 
-	static function createUnsigned(pred StdCmpPred, bound ParsedInt) returns RangeBoundCheck
+	static function createUnsigned(pred StdCmpPred, bound FullRangeInt) returns RangeBoundCheck
 		return Self{pred: pred, bound: bound, onTrue: RangeCheckEdge.panic, unsigned: true}
 	end 'createUnsigned'
 
-	static function createInRange(pred StdCmpPred, bound ParsedInt) returns RangeBoundCheck
+	static function createInRange(pred StdCmpPred, bound FullRangeInt) returns RangeBoundCheck
 		return Self{pred: pred, bound: bound, onTrue: RangeCheckEdge.inRange, unsigned: false}
 	end 'createInRange'
 end 'RangeBoundCheck'
@@ -217,7 +217,7 @@ export function insertRangeChecks(project Project, module StdModule)
 		compilerLogger(CompilerLogGroup.ir).debug("insertRangeChecks: {module.funcCount()} function(s)")
 	end 'debugging'
 
-	let waivers = EntryGuardWaivers.derive(project, module: module)
+	var waivers = EntryGuardWaivers.derive(project, module: module)
 	var spellings = DeclarationQualifierMemo.create()
 
 	// An INDEX loop: the function's position is the key its minted ids are filed under
@@ -350,6 +350,7 @@ type RangeCheckEmitter
 		self.unsignedMaxLiterals = checks.unsignedMaxLiterals
 		self.borrowOperands = checks.borrowOperands
 		self.collectConsts()
+		self.checkLiteralUses(checks)
 
 		// A site's `stdOpPos` is `lowerMaxonToStd`'s answer rather than the parser's (see `RangeSiteWalk`),
 		// and 0 is a legitimate one — so the promise is checked HERE, once per function, rather than
@@ -431,8 +432,78 @@ type RangeCheckEmitter
 		match site.target 'target'
 			alias(alias) then self.guardSiteAgainst(site, alias: alias, filePath: filePath)
 			callArgument(callResult, argIndex, label, sourceMayBeNegative) then self.guardCallArgument(site, callResult: callResult, argIndex: argIndex, label: label, sourceMayBeNegative: sourceMayBeNegative, filePath: filePath)
+			literalUse then break
 		end 'target'
 	end 'processSite'
+
+	function checkLiteralUses(checks FunctionRangeChecks)
+		var literalSites = RangeCheckSiteArray.create()
+
+		for site in checks.sites 'eachSite'
+			if siteIsALiteralUse(site) 'aLiteralUse'
+				literalSites.push(site)
+			end 'aLiteralUse'
+		end 'eachSite'
+
+		if literalSites.isEmpty() 'noLiteralUse'
+			return
+		end 'noLiteralUse'
+
+		var scratch = RangeScratch.create(StdPassTally.create())
+
+		for site in literalSites 'eachLiteralSite'
+			scratch.addProbe(site.value, block: site.block)
+		end 'eachLiteralSite'
+
+		probeIntervals(self.module, func: self.func, scratch: scratch)
+
+		for ordinal in 0 upto literalSites.count() 'eachProbe'
+			let site = try literalSites.get(ordinal) otherwise panic("checkLiteralUses: literalSites.get OOB at {ordinal}")
+			let reached = scratch.probeWasReached(ordinal)
+			let low = scratch.probeLow(ordinal) if reached else i64.min
+			let high = scratch.probeHigh(ordinal) if reached else i64.max
+
+			match site.target 'target'
+				literalUse(alias) then self.checkLiteralUseAgainst(checks, site: site, alias: alias, low: low, high: high)
+				alias or
+				callArgument then panic("checkLiteralUses: a site that is not a literal use was filed with the literal uses")
+			end 'target'
+		end 'eachProbe'
+	end 'checkLiteralUses'
+
+	function checkLiteralUseAgainst(checks FunctionRangeChecks, site RangeCheckSite, alias RangedTypeAlias, low FullRangeInt, high FullRangeInt)
+		if aliasIsFloat(alias) 'aFloatTarget'
+			self.reportFloatLiteralUseOutside(checks, site: site, alias: alias)
+			return
+		end 'aFloatTarget'
+
+		self.reportLiteralUseOutside(site, alias: alias, bounds: provedWithin(checks, value: site.value, low: low, high: high), filePath: checks.filePath)
+	end 'checkLiteralUseAgainst'
+
+	function reportFloatLiteralUseOutside(checks FunctionRangeChecks, site RangeCheckSite, alias RangedTypeAlias)
+		let proven = try provenFloatRangeOf(checks.provenFloatRanges, value: site.value) otherwise return
+		let lowFits = literalInRange(proven.low, low: alias.low, high: alias.high, isFloat: true, writtenNegative: false, writtenAboveSignedMax: false)
+		let highFits = literalInRange(proven.high, low: alias.low, high: alias.high, isFloat: true, writtenNegative: false, writtenAboveSignedMax: false)
+
+		if lowFits and highFits 'nothingOutside'
+			return
+		end 'nothingOutside'
+
+		let offending = proven.low if not lowFits else proven.high
+		reportPositioned(self.project, code: ErrorCode.typeMismatch, message: literalOutOfRangeMessage(offending, aliasName: aliasSpelledForReader(self.project, alias: alias, readerFilePath: checks.filePath, memo: self.spellings), low: alias.low, high: alias.high, isFloat: true, writtenNegative: false, domain: alias.domain), line: site.line, column: site.column, filePath: checks.filePath)
+	end 'reportFloatLiteralUseOutside'
+
+	function reportLiteralUseOutside(site RangeCheckSite, alias RangedTypeAlias, bounds ProvenIntRange, filePath FilePath)
+		let low = bounds.low
+		let high = bounds.high
+
+		if low > high or (low == i64.min and high == i64.max) or rangeCoversIntBounds(alias, low: low, high: high) 'nothingOutside'
+			return
+		end 'nothingOutside'
+
+		let offending = low if low < alias.low else high
+		reportPositioned(self.project, code: ErrorCode.typeMismatch, message: literalOutOfRangeMessage(offending, aliasName: aliasSpelledForReader(self.project, alias: alias, readerFilePath: filePath, memo: self.spellings), low: alias.low, high: alias.high, isFloat: false, writtenNegative: offending < 0, domain: alias.domain), line: site.line, column: site.column, filePath: filePath)
+	end 'reportLiteralUseOutside'
 
 	function guardSiteAgainst(site RangeCheckSite, alias RangedTypeAlias, filePath FilePath)
 		match self.guardVerdict(site.value, alias: alias, guard: RangeCheckGuard.runtime, line: site.line, column: site.column, filePath: filePath) 'verdict'
@@ -1132,7 +1203,8 @@ type RangeCheckEmitter
 			return
 		end 'noRuntimeGuardEmitted'
 
-		for blockId in 0 upto self.guardChainTail.count() 'eachBlockId'
+		for blockIndex in 0 upto self.guardChainTail.count() 'eachBlockId'
+			let blockId = blockIndex as BlockId
 			let tailRef = try self.guardChainTail.get(blockId) otherwise panic("materializeChainTails: guardChainTail has no row for block id {blockId}, which is inside the column's own width")
 
 			if tailRef == 0 'notInThisFunction'
@@ -1548,7 +1620,7 @@ type RangeCheckEmitter
 		end 'fold'
 	end 'recordUnsignedFold'
 
-	function recordConst(resultId ValueId, value ParsedInt, valueType StdType)
+	function recordConst(resultId ValueId, value FullRangeInt, valueType StdType)
 		if stdTypeIsFloat(valueType) 'float'
 			self.floatConsts.upsert(resultId, value: value)
 			return
@@ -1680,7 +1752,7 @@ end 'rangedParamValue'
 // The i64 the sign check compares against: a value `< 0` (signed) has bit 63 set, which for the
 // unsigned-max upper shape proves it is a huge unsigned the range ADMITS. Named so the sign
 // boundary is not a bare `0` sitting beside the range's own bounds.
-let SignBoundary = 0 as ParsedInt
+let SignBoundary = 0 as FullRangeInt
 
 // The bound checks a `[low, high]` range needs, in cascade order. See TypeRules'
 // `rangeNeedsLowerCheck` / `rangeNeedsUpperCheck`.
@@ -1688,7 +1760,7 @@ let SignBoundary = 0 as ParsedInt
 // ⚠ **IT IS EMPTY ONLY FOR A RANGE UNBOUNDED ON BOTH SIDES, WHICH IS `rangeIsFull`'s CASE AND IS ELIDED
 // BEFORE THIS.** A WHOLLY NEGATIVE range's upper is a real bound and is not elided — see
 // `rangeNeedsUpperCheck`'s header for the two uncatchable `#DE`s eliding it reaches.
-function boundChecks(low ParsedInt, high ParsedInt, isFloat bool) returns RangeBoundCheckArray
+function boundChecks(low FullRangeInt, high FullRangeInt, isFloat bool) returns RangeBoundCheckArray
 	var checks = RangeBoundCheckArray.create()
 
 	// ⭐ THE UNSIGNED-MAX UPPER SHAPE — `int(N to u64.max)` over a non-negative low bound. Signed
@@ -2116,10 +2188,30 @@ let sharedNoCallArgumentSites = RangeCheckSiteArray.create()
 
 function indexCallArgumentSite(recorded RecordedCallArguments, site RangeCheckSite)
 	match site.target 'target'
-		alias then return
+		alias or
+		literalUse then return
 		callArgument(callResult, _, _, _) then appendCallArgumentSite(recorded, callResult: callResult, site: site)
 	end 'target'
 end 'indexCallArgumentSite'
+
+function provedWithin(checks FunctionRangeChecks, value ValueId, low FullRangeInt, high FullRangeInt) returns ProvenIntRange
+	let analysed = ProvenIntRange.create(low, high: high)
+	let proven = try provenIntRangeOf(checks.provenValueRanges, value: value) otherwise return analysed
+
+	if proven.low > proven.high 'anUnsignedPattern'
+		return analysed
+	end 'anUnsignedPattern'
+
+	return ProvenIntRange.create(low if low > proven.low else proven.low, high: high if high < proven.high else proven.high)
+end 'provedWithin'
+
+function siteIsALiteralUse(site RangeCheckSite) returns bool
+	return match site.target 'target'
+		literalUse gives true
+		alias or
+		callArgument gives false
+	end 'target'
+end 'siteIsALiteralUse'
 
 function appendCallArgumentSite(recorded RecordedCallArguments, callResult ValueId, site RangeCheckSite)
 	var sites = try recorded.get(callResult) otherwise RangeCheckSiteArray.create()
@@ -2139,7 +2231,8 @@ end 'callRecordedSlot'
 
 function siteRecordsSlot(project Project, callee ByteArray, site RangeCheckSite, slot ParamCount) returns bool
 	return match site.target 'target'
-		alias gives false
+		alias or
+		literalUse gives false
 		callArgument(_, argIndex, label, _) gives calleeParamSlot(project, callee: callee, argIndex: argIndex, label: label) == slot
 	end 'target'
 end 'siteRecordsSlot'

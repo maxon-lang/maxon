@@ -153,6 +153,60 @@ end 'main'
 0
 ```
 
+<!-- test: int.hash.negative -->
+A negative `int` hashes to a value inside `HashValue`'s range like any other.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	let minusOne = -1 as Integer
+	let minusFive = -5 as Integer
+	let wideNegative = -0x100000005 as Integer
+	print("{minusOne.hash()} {minusFive.hash()} {wideNegative.hash()}\n")
+	return 0
+end 'main'
+```
+```stdout
+4294967295 4294967291 2654435764
+```
+
+<!-- test: int.hash.map-keyed-by-packed-words -->
+A `Map` whose keys differ only in their high word keeps every key reachable, and `contains` finds each one.
+```maxon
+typealias Key = int(0 to u64.max)
+typealias Tally = int(0 to 1000000)
+typealias Table = Map with (Key, Tally)
+
+function main() returns ExitCode
+	var table = Table.create()
+
+	for i in 0 upto 4096 'eachKey'
+		table.upsert(((i as Key) shl 32) or 2, value: i as Tally)
+	end 'eachKey'
+
+	var found = 0 as Tally
+
+	for i in 0 upto 4096 'eachRead'
+		if table.contains(((i as Key) shl 32) or 2) 'present'
+			found = found + 1
+		end 'present'
+	end 'eachRead'
+
+	if found != 4096 'allFound'
+		return 1
+	end 'allFound'
+
+	if table.count() != 4096 'allKept'
+		return 2
+	end 'allKept'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: float.hash.nonzero -->
 ```maxon
 function main() returns ExitCode

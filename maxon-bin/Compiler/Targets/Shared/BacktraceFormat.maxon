@@ -263,7 +263,7 @@ export function assertInlineTableStrides()
 
 	let rangeStride = (1 shl InlineRangeStrideShiftEight) + (1 shl InlineRangeStrideShiftFour)
 
-	if rangeStride != InlineRangeEntryBytes or (InlineRangeStrideBytes as ParsedInt) != InlineRangeEntryBytes 'rangeStrideDrift'
+	if rangeStride != InlineRangeEntryBytes or (InlineRangeStrideBytes as FullRangeInt) != InlineRangeEntryBytes 'rangeStrideDrift'
 		panic("assertInlineTableStrides: a walker sizes the range array by {rangeStride} bytes per entry and steps by {InlineRangeStrideBytes} but `buildInlineFrameTableBytes` writes {InlineRangeEntryBytes} — the range scan would read past the table")
 	end 'rangeStrideDrift'
 end 'assertInlineTableStrides'
@@ -378,12 +378,12 @@ export function buildInlineFrameTableBytes(tables InlineFrameTables, spellings S
 	assertInlineTableStrides()
 	var table = ByteArray.create()
 	var names = ByteArray.create()
-	let namesStart = (InlineTableOffSites as ParsedInt) + InlineSiteEntryBytes * tables.sites.count() as ParsedInt + InlineRangeEntryBytes * tables.ranges.count() as ParsedInt
+	let namesStart = (InlineTableOffSites as FullRangeInt) + InlineSiteEntryBytes * tables.sites.count() as FullRangeInt + InlineRangeEntryBytes * tables.ranges.count() as FullRangeInt
 	writeDword(table, value: tables.sites.count() as MachineWord)
 	writeDword(table, value: tables.ranges.count() as MachineWord)
 
 	for site in tables.sites 'eachSite'
-		writeDword(table, value: (namesStart + names.count() as ParsedInt) as MachineWord)
+		writeDword(table, value: (namesStart + names.count() as FullRangeInt) as MachineWord)
 		writeDword(table, value: inlineParentWord(site.parent))
 		names.append(authorSpelledName(site.calleeName, spellings: spellings))
 		names.push(0)
@@ -402,7 +402,7 @@ export function buildInlineFrameTableBytes(tables InlineFrameTables, spellings S
 		writeDword(table, value: range.site as MachineWord)
 	end 'eachRange'
 
-	if table.count() as ParsedInt != namesStart 'headerWidth'
+	if table.count() as FullRangeInt != namesStart 'headerWidth'
 		panic("buildInlineFrameTableBytes: wrote {table.count()} header bytes where the declared entry widths give {namesStart} — the emitted columns and the widths the walkers stride by have drifted")
 	end 'headerWidth'
 

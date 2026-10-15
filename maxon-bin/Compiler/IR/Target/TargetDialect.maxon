@@ -139,7 +139,7 @@ end 'TargetVReg'
 // registry"). Binding it to `n` presents the constructor a plain integer, which is also why every
 // x64 physical-vreg site routes through here rather than spelling the cast inline.
 export function x64PhysReg(reg X64Register) returns TargetVReg
-	let n = reg.rawValue
+	let n = reg.rawValue as RegNum
 	return TargetVReg.physical(n)
 end 'x64PhysReg'
 
@@ -1533,14 +1533,14 @@ export union TargetOp
 	//
 	// x64 scratch = rax (0x1) | rcx (0x2) | rdx (0x4) | rdi (0x80) = 0x87. A union-backing literal cannot
 	// reference a named `let`, so the mask is inline (guarded — see `assertEncoderScratchMasks`).
-	x64MemFill(fillByte ParsedInt) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, implicitUses: 0, implicitDefs: 0x87}
+	x64MemFill(fillByte FullRangeInt) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, implicitUses: 0, implicitDefs: 0x87}
 
 	// arm64 scratch = x0 (0x1) | x1 (0x2) | x2 (0x4) | x3 (0x8) = 0xF — the first four AAPCS64 argument
 	// registers, which is what the isel's pre-moves already use for a syscall's arguments. Deliberately NOT
 	// x16/x17: `Arm64Backend` records that x16 is straddled by isel-minted producer/consumer pairs, leaving
 	// only x17 safe at the encoder tier — and this ladder needs FOUR registers, not one. Inline for the same
 	// union-literal reason (guarded by `assertEncoderScratchMasks`).
-	arm64MemFill(fillByte ParsedInt) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, implicitUses: 0, implicitDefs: 0xF}
+	arm64MemFill(fillByte FullRangeInt) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, implicitUses: 0, implicitDefs: 0xF}
 
 	// --- The ATOMICS, one shape per ISA ---
 	//

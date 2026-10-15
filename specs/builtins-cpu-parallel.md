@@ -204,7 +204,7 @@ that lane sits inside the same window, and the register-capture defects this cas
 function main() returns ExitCode
 	let cpus = __Builtins.cpuCount()
 	let windowsCeiling = 4096
-	var score = 0
+	var score = 0 as Count
 	if cpus >= 1 'atLeastOne'
 		score = score + 1
 	end 'atLeastOne'
@@ -228,7 +228,7 @@ function main() returns ExitCode
 	let first = __Builtins.cpuCount()
 	let second = __Builtins.cpuCount()
 	let third = __Builtins.cpuCount()
-	var score = 0
+	var score = 0 as Count
 	if first == second 'firstPair'
 		score = score + 1
 	end 'firstPair'
@@ -281,7 +281,7 @@ function main() returns ExitCode
 	let cpus = __Builtins.cpuCount()
 	__Builtins.subprocessResultRelease(r)
 	__Builtins.subprocessReleaseHandle(h)
-	var score = 0
+	var score = 0 as Count
 	if childSaysOne == (cpus == 1) 'readingsAgreeAboutOne'
 		score = score + 5
 	end 'readingsAgreeAboutOne'
@@ -362,7 +362,7 @@ case would go red. That ordering hazard is the reason the slot carries its 1 fro
 ```maxon
 function main() returns ExitCode
 	let workers = __Builtins.schedMaxActiveWorkers()
-	var score = 0
+	var score = 0 as Count
 	if workers >= 1 'contractFloor'
 		score = score + 1
 	end 'contractFloor'
@@ -414,7 +414,7 @@ function main() returns ExitCode
 	if workers == 1 or monitorActions > 0 'singleMUnlessTheMonitorActed'
 		score = score + 2
 	end 'singleMUnlessTheMonitorActed'
-	return score as ExitCode
+	return score
 end 'main'
 ```
 ```exitcode

@@ -69,8 +69,8 @@ typealias Tick = int(0 to 1000)
 
 function coloured(seed Tick) returns Tick
 	var carry = seed
-	var step = 1
-	var rounds = 0
+	var step = 1 as Tick
+	var rounds = 0 as Tick
 	while rounds < 3 'mix'
 		carry = (carry + step) mod 97
 		step = step + rounds
@@ -98,7 +98,7 @@ function spilled(seed Tick) returns Tick
 	let r = seed + 15
 	let t = seed + 16
 	var carry = seed
-	var rounds = 0
+	var rounds = 0 as Tick
 	while rounds < 4 'grind'
 		carry = (carry + rounds) mod 89
 		rounds = rounds + 1
@@ -131,7 +131,7 @@ debugger would be asked about is the merged one.
 typealias Tick = int(0 to 1000)
 
 function pick(flag bool, lo Tick, hi Tick) returns Tick
-	var chosen = 0
+	var chosen = 0 as Tick
 	if flag 'takeHigh'
 		chosen = hi + 1
 	end 'takeHigh' else 'takeLow'
@@ -174,8 +174,8 @@ type Accum uses T
 
 	function fold(bump Tick) returns Tick
 		var total = bump
-		var step = 1
-		var rounds = 0
+		var step = 1 as Tick
+		var rounds = 0 as Tick
 		while rounds < 3 'roll'
 			total = (total + step) mod 91
 			step = step + rounds

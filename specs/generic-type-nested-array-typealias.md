@@ -1818,7 +1818,7 @@ end 'Container'
 typealias StringContainer = Container with String
 
 function main() returns ExitCode
-	var kept = 0
+	var kept = 0 as Count
 	for i in 0 upto 200 'loop'
 		var sc = StringContainer.create()
 		sc.addMaybe("a heap-allocated element numbered {i}", flag: false)
@@ -1866,7 +1866,7 @@ end 'Holder'
 typealias StringHolder = Holder with String
 
 function main() returns ExitCode
-	var kept = 0
+	var kept = 0 as Count
 	for i in 0 upto 200 'loop'
 		let h = StringHolder.ofMaybe("a heap-allocated element numbered {i}", flag: false)
 		kept = kept + h.count()
@@ -2069,7 +2069,7 @@ end 'Container'
 typealias StringContainer = Container with String
 
 function main() returns ExitCode
-	var seed = 0
+	var seed = 0 as Count
 	while seed < 3 'grow'
 		seed = seed + 1
 	end 'grow'
@@ -2129,7 +2129,7 @@ end 'Holder'
 typealias StringHolder = Holder with String
 
 function main() returns ExitCode
-	var seed = 0
+	var seed = 0 as Count
 	while seed < 3 'grow'
 		seed = seed + 1
 	end 'grow'
@@ -2176,7 +2176,7 @@ end 'Holder'
 typealias StringHolder = Holder with String
 
 function main() returns ExitCode
-	var seed = 0
+	var seed = 0 as Count
 	while seed < 3 'grow'
 		seed = seed + 1
 	end 'grow'
@@ -2675,7 +2675,7 @@ end 'Container'
 typealias StringContainer = Container with String
 
 function main() returns ExitCode
-	var seed = 0
+	var seed = 0 as Count
 	while seed < 3 'grow'
 		seed = seed + 1
 	end 'grow'
@@ -2733,7 +2733,7 @@ end 'Vault'
 typealias StringVault = Vault with String
 
 function main() returns ExitCode
-	var seed = 0
+	var seed = 0 as Count
 	while seed < 3 'grow'
 		seed = seed + 1
 	end 'grow'
@@ -2977,7 +2977,7 @@ end 'Container'
 typealias StringContainer = Container with String
 
 function main() returns ExitCode
-	var seed = 0
+	var seed = 0 as Count
 
 	while seed < 3 'grow'
 		seed = seed + 1

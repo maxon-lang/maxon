@@ -520,7 +520,7 @@ end 'slabArenaGranuleWasSeenFree'
 // is already clear for every granule of an arena nothing has scavenged.
 function slabArenaMarkGranuleSeenFree(wordAddr ArenaWord, bitPos BitmapBitPosition, seen bool)
 	let word = __Raw.loadWord(wordAddr as MachineWord, offset: ArenaSeenFreeBitmapOffset) as ArenaWord
-	let bit = 1 shl bitPos
+	let bit = (1 shl bitPos) as ArenaWord
 
 	if seen 'raise'
 		__Raw.storeWord(wordAddr as MachineWord, offset: ArenaSeenFreeBitmapOffset, value: (word or bit) as MachineWord)
@@ -631,7 +631,7 @@ function slabArenaMarkChunkRun(arenaBase ArenaWord, firstChunk ArenaWord, pastCh
 	while chunk < pastChunk 'bits'
 		let wordAddr = slabArenaBitmapWordAddr(arenaBase, bitIndex: chunk)
 		let word = __Raw.loadWord(wordAddr as MachineWord, offset: ArenaBitmapOffset) as ArenaWord
-		let bit = 1 shl ((chunk and BitmapBitsPerWordMask) as BitmapBitPosition)
+		let bit = (1 shl ((chunk and BitmapBitsPerWordMask) as BitmapBitPosition)) as ArenaWord
 
 		let updated = match mode 'polarity'
 			claim gives word and (bit xor AllOnesWord)

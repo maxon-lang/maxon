@@ -15,6 +15,8 @@
 // `tests/fmt/` is the authority for every layout decision here: its expectations pin this emitter's
 // output byte for byte, so a divergence is a failure of this file rather than an improvement.
 
+typealias GroupDepth = int(0 to u64.max)
+
 // How wide one indent level is when it is spent on SPACES — LSP's `tabSize`. Bounded because the
 // emitter writes this many characters per level on every indented line: no editor offers an indent
 // wider than this, so a request beyond it is a client fault rather than a preference.
@@ -221,7 +223,7 @@ type SourceLines
 		var i = 0 as ByteOffset
 
 		while i < bytes.count() as ByteOffset 'eachByte'
-			let b = try bytes.get(i as ElementIndex) otherwise panic("SourceLines.of: index {i} below the {bytes.count()}-byte source")
+			let b = try bytes.get(i) otherwise panic("SourceLines.of: index {i} below the {bytes.count()}-byte source")
 
 			if b == AsciiByte.lf 'endOfLine'
 				starts.push(lineStart)
@@ -1643,7 +1645,7 @@ type FormatState
 	// scanning to EOF; `specs/lexer-parser-robustness.md` carries such cases and they are tiny.
 	function closerIsOnAnotherLine(index ElementIndex, tok Token) returns bool
 		let closing = TokenKind.rightBracket if tok.kind == TokenKind.leftBracket else TokenKind.rightBrace
-		var depth = 1
+		var depth = 1 as GroupDepth
 		var at = index + 1
 
 		while at < tokens.count() and depth > 0 'scan'

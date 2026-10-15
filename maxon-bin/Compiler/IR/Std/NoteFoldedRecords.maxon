@@ -4,16 +4,16 @@ typealias FoldedOwnerColumn = OptionalIndexColumn with FoldedOwnerSlot
 let MaxPhiResolutionSteps = 8
 
 let FoldedRecordWordBytes = 8 as ByteOffset
-let SmallestFoldedRecordWord = i32.min as ParsedInt
-let LargestFoldedRecordWord = i32.max as ParsedInt
+let SmallestFoldedRecordWord = i32.min as FullRangeInt
+let LargestFoldedRecordWord = i32.max as FullRangeInt
 
 type FoldedFieldWrite
 	export var owner as FoldedOwnerSlot
 	export var recordValue as ValueId
 	export var offset as ByteOffset
-	export var word as ParsedInt
+	export var word as FullRangeInt
 
-	static function create(owner FoldedOwnerSlot, recordValue ValueId, offset ByteOffset, word ParsedInt) returns FoldedFieldWrite
+	static function create(owner FoldedOwnerSlot, recordValue ValueId, offset ByteOffset, word FullRangeInt) returns FoldedFieldWrite
 		return Self{owner: owner, recordValue: recordValue, offset: offset, word: word}
 	end 'create'
 end 'FoldedFieldWrite'
@@ -119,7 +119,7 @@ end 'carriedBlockArgValues'
 // builds it, and this pass reads the sets from outside that loop.
 function resolveThroughPhis(carried CarriedValues, value ValueId, argBound ValueId) returns ValueId
 	var at = value
-	var steps = 0
+	var steps = 0 as Count
 
 	while steps < MaxPhiResolutionSteps 'walk'
 		if at >= argBound or not carried.isTrivial(at) 'notATrivialBlockArg'
@@ -218,7 +218,7 @@ function publishOneFoldedRecord(func IrFunction, writes FoldedFieldWriteArray, r
 		return
 	end 'aFieldTheCompilerCannotState'
 
-	var words = ParsedIntArray.create()
+	var words = FullRangeIntArray.create()
 	words.reserve(past - first)
 	var at = first
 

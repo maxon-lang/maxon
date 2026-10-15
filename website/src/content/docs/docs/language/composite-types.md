@@ -534,9 +534,9 @@ end 'main'
   (`Node with (Pair with T)` inside `Node`) has no finite set of instances, and is **E2015**.
 - Wrong argument count is **E2056**; a bare `int` argument is **E2061**; a type argument to a non-generic
   type is **E2055**.
-- A `float` type argument, bare or through a ranged float alias such as `Real`, is **E2062**
-  (`Box with Real`). The element of an `Array` or a `Vector` is the exception, because it is stored
-  inline in a buffer: `Array with Real` and `Vector with 2 Real` compile, and there a bare `float` is
+- A `float` type argument, bare or through a ranged float alias such as `FullRangeFloat`, is **E2062**
+  (`Box with FullRangeFloat`). The element of an `Array` or a `Vector` is the exception, because it is stored
+  inline in a buffer: `Array with FullRangeFloat` and `Vector with 2 FullRangeFloat` compile, and there a bare `float` is
   **E2061**.
 
 Inside `type Outer uses T`, another generic type written without `with` arguments binds by parameter NAME:
@@ -871,8 +871,8 @@ let (first, _) = makePair(1, b: 2)
 A tuple pattern on the left of `=` assigns to existing `var`s, and may declare new names in the same pattern:
 
 ```maxon
-var p = 0
-var q = 0
+var p = 0 as Amount
+var q = 0 as Amount
 (p, q) = makePair(1, b: 2)       // both existing
 (p, let r) = makePair(3, b: 4)   // p existing, r newly declared
 (q, _) = makePair(5, b: 6)       // discard the second element
@@ -888,7 +888,7 @@ A `for` loop over tuples can destructure each one — a `Map` yields `(key, valu
 
 ```maxon
 let ages = ["ada": 36, "alan": 41]
-var total = 0
+var total = 0 as Count
 for (_, age) in ages 'loop'
 	total = total + age
 end 'loop'

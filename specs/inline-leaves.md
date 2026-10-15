@@ -131,8 +131,8 @@ end 'maskContains'
 
 function main() returns ExitCode
 	let mask = 5 as RegMask
-	var count = 0
-	var i = 0
+	var count = 0 as Count
+	var i = 0 as Count
 	while i < 8 'each'
 		if maskContains(mask, regNum: i as RegNum) 'set'
 			count = count + 1
@@ -147,26 +147,24 @@ end 'main'
 ```
 
 <!-- test: the-inlined-guard-still-panics-with-the-callees-frame -->
-⭐ **THE PANIC RULE'S GATE.** `clampPct` is a leaf whose entry guard panics, and the argument is
-COMPUTED from a loop counter so the compile-time half cannot fold it — and carries no typealias, so it
-reaches `Percent` with no cast and the guard that refuses it is the CALLEE's own. The inlined guard
+⭐ **THE PANIC RULE'S GATE.** `clampPct` is a leaf whose entry guard panics, and the argument is the sum of
+two `Percent`s — a value the compile-time half cannot fold, which wears `Percent` without proving it and
+so reaches the parameter with no cast, crossing no door on the way: the guard that refuses it is the
+CALLEE's own. The inlined guard
 refuses the value from a panic block copied into `main`, and the block's inline site is what prints
 `in clampPct` above `in main` — which is why this stderr is byte-identical to what the same program
 prints with the pass disabled.
 
 ```maxon
-typealias Percent = int(0 to 100)
+typealias Percent = int(1 to 100)
 
 function clampPct(x Percent) returns Percent
 	return x
 end 'clampPct'
 
 function main() returns ExitCode
-	var last = 0
-	for i in 1 to 1 'once'
-		last = clampPct(i * 101)
-	end 'once'
-	return last as ExitCode
+	let low = (CommandLine.args().count() + 59) as Percent
+	return clampPct(low + low) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -273,7 +271,7 @@ carry — and its `retVoid` becomes a bare branch.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-var total = 0
+var total = 0 as Integer
 
 function bump(n Integer)
 	total = total + n
@@ -500,7 +498,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function total(a IntArray) returns Integer
-	var t = 0
+	var t = 0 as Integer
 	for v in a 'each'
 		t = t + v
 	end 'each'
@@ -524,10 +522,8 @@ by the access `inlineManagedPrimitives` has already expanded into this loop — 
 value that pass wrote, in a block it shaped. The guard still refuses it, the copied panic block still
 carries `clampPct` as its inline site, and the trace still names `clampPct` above `main`.
 
-The array is a LITERAL because its element must carry no alias: a `Percent`-typed store is guarded at
-every write, so no element of an `Array with Percent` can be out of `Percent`'s range, and an element of
-any other alias cannot reach `clampPct` without a cast. A literal's element is unnamed, decays into the
-`Percent` slot with no cast, and the only guard it meets is the callee's.
+The argument is an element added to itself: the element is a `Percent`, and `v + v` wears `Percent` without
+proving it, so the only guard it meets is the callee's.
 
 ```maxon
 typealias Percent = int(0 to 100)
@@ -537,10 +533,10 @@ function clampPct(x Percent) returns Percent
 end 'clampPct'
 
 function main() returns ExitCode
-	let a = [101]
-	var last = 0
+	let a = [60 as Percent, 50 as Percent]
+	var last = 0 as Percent
 	for v in a 'each'
-		last = clampPct(v)
+		last = clampPct(v + v)
 	end 'each'
 	return last as ExitCode
 end 'main'
@@ -556,6 +552,28 @@ Stack trace:
   in mrt_start
 ```
 
+<!-- test: error.an-inlined-element-of-a-let-literal-outside-the-callee-range-is-refused -->
+The element of a `let` literal is checked at each use like the literal it was written as, whichever way the loop over it is expanded: `101` reaches `clampPct`'s `Percent` slot and is refused where it is written.
+```maxon
+typealias Percent = int(0 to 100)
+
+function clampPct(x Percent) returns Percent
+	return x
+end 'clampPct'
+
+function main() returns ExitCode
+	let a = [101]
+	var last = 0 as Percent
+	for v in a 'each'
+		last = clampPct(v)
+	end 'each'
+	return last as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:12:10: Value 101 is outside the range of 'Percent' (int(0 to 100))
+```
+
 <!-- test: a-loop-whose-element-access-keeps-a-slow-arm-is-not-a-leaf -->
 ⛔ **THE CONTROL, AND IT IS THE SAME SOURCE AS `a-whole-loop-over-an-array-becomes-a-leaf` WITH ONE
 TYPE CHANGED.** A `Byte` element is stamped 1, and the element-access plan for a byte stamp is `runtimeFork` — both
@@ -568,9 +586,9 @@ typealias Integer = int(i64.min to i64.max)
 typealias Bytes = Array with Byte
 
 function totalBytes(b Bytes) returns Integer
-	var t = 0
+	var t = 0 as Integer
 	for v in b 'each'
-		t = t + v
+		t = t + (v as Integer)
 	end 'each'
 	return t
 end 'totalBytes'

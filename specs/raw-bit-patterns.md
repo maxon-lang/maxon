@@ -810,10 +810,10 @@ Stack trace:
   in mrt_start
 ```
 
-<!-- test: a-signed-counter-argument-to-an-unsigned-quantity-parameter-panics -->
+<!-- test: a-signed-counter-argument-to-an-unsigned-quantity-parameter-is-refused -->
 ### A signed source still meets the underflow check, at the CALL
-A counter over a signed interval is a signed value with no alias, so it reaches a `Count` parameter
-without a cast, and the call is where its sign is known.
+A counter between two literal bounds is a signed value with no alias, so it reaches a `Count` parameter
+without a cast, and the call checks its whole interval at compile time.
 ```maxon
 typealias Count = int(0 to u64.max)
 
@@ -828,18 +828,12 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```exitcode
-1
-```
-```stderr
-panic at a-signed-counter-argument-to-an-unsigned-quantity-parameter-panics.test:10: Range check failed: value outside typealias 'Count'
-Stack trace:
-  in main
-  in mrt_start
+```maxoncstderr
+error E3005: <fragment>:10:11: Value -2 is outside the range of 'Count' (int(0 to 18446744073709551615))
 ```
 
-<!-- test: a-signed-counter-through-a-function-value-to-an-unsigned-quantity-parameter-panics -->
-### …and at a call through a FUNCTION VALUE, where the call site guards it
+<!-- test: a-signed-counter-through-a-function-value-to-an-unsigned-quantity-parameter-is-refused -->
+### …and at a call through a FUNCTION VALUE, where the call site checks it
 A call through a function value checks its argument at the call, where the argument's domain is known, so
 the entry of the callee takes no sign test that would refuse a large unsigned word.
 ```maxon
@@ -858,18 +852,39 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
+```maxoncstderr
+error E3005: <fragment>:12:12: Value -2 is outside the range of 'Count' (int(0 to 18446744073709551615))
+```
+
+<!-- test: a-count-difference-through-a-function-value-panics-at-the-call -->
+### …and the run-time twin: the call site checks a difference it cannot evaluate
+The `Count` difference is unknown to the compiler, so the call through a function value checks it at the call, where the argument's domain is known, before the callee's entry takes a sign test that would refuse a large unsigned word.
+```maxon
+typealias Count = int(0 to u64.max)
+
+function show(c Count) returns Count
+	return c
+end 'show'
+
+function main() returns ExitCode
+	let f = show
+	let n = CommandLine.args().count() as Count
+	print("{f(n - 2)}\n")
+	return 0
+end 'main'
+```
 ```exitcode
 1
 ```
 ```stderr
-panic at a-signed-counter-through-a-function-value-to-an-unsigned-quantity-parameter-panics.test:12: Range check failed: value outside typealias 'Count'
+panic at a-count-difference-through-a-function-value-panics-at-the-call.test:11: Range check failed: value outside typealias 'Count'
 Stack trace:
   in main
   in mrt_start
 ```
 
 <!-- test: a-narrower-unsigned-topped-parameter-still-refuses-below-its-floor -->
-### A narrower unsigned-topped range keeps its entry guard
+### A narrower unsigned-topped range still refuses below its floor
 ```maxon
 typealias AboveTen = int(10 to u64.max)
 
@@ -886,14 +901,31 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
+```maxoncstderr
+error E3005: <fragment>:12:11: Value 5 is outside the range of 'AboveTen' (int(10 to 18446744073709551615))
+```
+
+<!-- test: a-narrower-unsigned-topped-parameter-keeps-its-entry-guard -->
+### A narrower unsigned-topped range keeps its entry guard for a value that wears it without proving it
+`a - a` is a difference of `AboveTen`s, so it wears the alias and proves nothing about it; here it is `0`, below the floor. No cast stands at the call, so the guard that refuses it is `show`'s own, at its entry.
+```maxon
+typealias AboveTen = int(10 to u64.max)
+
+function show(c AboveTen) returns AboveTen
+	return c
+end 'show'
+
+function main() returns ExitCode
+	let a = (CommandLine.args().count() + 9) as AboveTen
+	print("{show(a - a)}\n")
+	return 0
+end 'main'
+```
 ```exitcode
 1
 ```
-```stdout
-18446744073709551615
-```
 ```stderr
-panic at a-narrower-unsigned-topped-parameter-still-refuses-below-its-floor.test:4: Range check failed: value outside typealias 'AboveTen'
+panic at a-narrower-unsigned-topped-parameter-keeps-its-entry-guard.test:4: Range check failed: value outside typealias 'AboveTen'
 Stack trace:
   in show
   in main
@@ -962,8 +994,8 @@ Stack trace:
   in mrt_start
 ```
 
-<!-- test: a-signed-counter-through-an-interface-to-an-unsigned-quantity-parameter-panics -->
-### …and at a call through an INTERFACE, where the call site guards it
+<!-- test: a-signed-counter-through-an-interface-to-an-unsigned-quantity-parameter-is-refused -->
+### …and at a call through an INTERFACE, where the call site checks it
 ```maxon
 typealias Count = int(0 to u64.max)
 
@@ -996,19 +1028,57 @@ function main() returns ExitCode
 	return drive(Plain.create())
 end 'main'
 ```
+```maxoncstderr
+error E3005: <fragment>:24:13: Value -2 is outside the range of 'Count' (int(0 to 18446744073709551615))
+```
+
+<!-- test: a-count-difference-through-an-interface-panics-at-the-call -->
+### …and the run-time twin: the call through an interface checks a difference it cannot evaluate
+```maxon
+typealias Count = int(0 to u64.max)
+
+interface Shower
+	function show(c Count) returns Count
+end 'Shower'
+
+type Plain
+	export var tag as Count
+
+	static function create() returns Plain
+		return Self{tag: 0}
+	end 'create'
+end 'Plain'
+
+extension Plain implements Shower
+	function show(c Count) returns Count
+		return c + self.tag
+	end 'show'
+end 'Plain'
+
+function drive(s Shower) returns ExitCode
+	let n = CommandLine.args().count() as Count
+	print("{s.show(n - 2)}\n")
+	return 0
+end 'drive'
+
+function main() returns ExitCode
+	return drive(Plain.create())
+end 'main'
+```
 ```exitcode
 1
 ```
 ```stderr
-panic at a-signed-counter-through-an-interface-to-an-unsigned-quantity-parameter-panics.test:24: Range check failed: value outside typealias 'Count'
+panic at a-count-difference-through-an-interface-panics-at-the-call.test:24: Range check failed: value outside typealias 'Count'
 Stack trace:
   in drive
   in main
   in mrt_start
 ```
 
-<!-- test: a-signed-counter-into-an-async-unsigned-quantity-parameter-panics -->
-### …and at an `async` call, where the call site guards it
+<!-- test: a-signed-counter-into-an-async-unsigned-quantity-parameter-is-refused -->
+<!-- unsupported-targets: wasm32-wasi -->
+### …and at an `async` call, where the call site checks it
 ```maxon
 typealias Count = int(0 to u64.max)
 typealias Integer = int(i64.min to i64.max)
@@ -1026,14 +1096,8 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```exitcode
-1
-```
-```stderr
-panic at a-signed-counter-into-an-async-unsigned-quantity-parameter-panics.test:12: Range check failed: value outside typealias 'Count'
-Stack trace:
-  in main
-  in mrt_start
+```maxoncstderr
+error E3005: <fragment>:12:17: Value -2 is outside the range of 'Count' (int(0 to 18446744073709551615))
 ```
 
 <!-- test: a-signed-counter-through-an-associated-type-to-an-unsigned-quantity-parameter-panics -->
@@ -1258,8 +1322,8 @@ function main() returns ExitCode
 	let b = (u64.max xor 1) as Count
 	let c = (u64.max as Count) / 1
 	let d = (0xcbf29ce484222325 as Count) * 1
-	let e = ((0x8000000000000000 as Count) or 1) as Count
-	let h = ((0xcbf29ce484222325 as Count) xor 5) as Count
+	let e = (0x8000000000000000 as Count) or 1
+	let h = (0xcbf29ce484222325 as Count) xor 5
 	print("{a} {b} {c}\n")
 	print("{d} {e} {h}\n")
 	return 0

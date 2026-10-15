@@ -661,7 +661,7 @@ function streamAHead(listener TcpListener) returns String
 
 	line.append("\r\n")
 	let field = line.build()
-	var sent = 0
+	var sent = 0 as Count
 
 	while sent < MostLines 'stream'
 		_ = try conn.send(field) otherwise break

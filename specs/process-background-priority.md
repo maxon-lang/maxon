@@ -119,7 +119,7 @@ function main() returns ExitCode
 	let belowNormalPriorityClass = 16384
 	let normalPriorityClass = 32
 	let priority = Process.enterBackgroundPriority()
-	var score = 0
+	var score = 0 as Count
 	if priority == belowNormalPriorityClass 'isBelowNormal'
 		score = score + 1
 	end 'isBelowNormal'
@@ -143,7 +143,7 @@ function main() returns ExitCode
 	let belowNormalPriorityClass = 16384
 	let first = Process.enterBackgroundPriority()
 	let second = Process.enterBackgroundPriority()
-	var score = 0
+	var score = 0 as Count
 	if first == second 'agree'
 		score = score + 1
 	end 'agree'
@@ -170,7 +170,7 @@ function main() returns ExitCode
 	let backgroundNiceValue = 10
 	let normalNiceValue = 0
 	let priority = Process.enterBackgroundPriority()
-	var score = 0
+	var score = 0 as Count
 	if priority == backgroundNiceValue 'isBackground'
 		score = score + 1
 	end 'isBackground'
@@ -195,7 +195,7 @@ function main() returns ExitCode
 	let backgroundNiceValue = 10
 	let first = Process.enterBackgroundPriority()
 	let second = Process.enterBackgroundPriority()
-	var score = 0
+	var score = 0 as Count
 	if first == second 'agree'
 		score = score + 1
 	end 'agree'

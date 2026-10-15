@@ -253,7 +253,7 @@ a parameter, not which layout answers it.
 typealias HitCount = int(0 to u64.max)
 
 function countIn(s String, chars CharacterSet) returns HitCount
-	var seen = 0
+	var seen = 0 as HitCount
 	for c in s 'scan'
 		if chars.contains(c) 'hit'
 			seen = seen + 1

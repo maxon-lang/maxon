@@ -165,7 +165,7 @@ fi
   echo -e "\t\treturn Self{ item: item }"
   echo -e "\tend 'create'"
   echo -e "\tfunction run() returns LadderInt"
-  echo -e "\t\tvar acc = 0"
+  echo -e "\t\tvar acc = 0 as LadderInt"
   m=0
   while [ "$m" -lt "$METHODS" ]; do
     printf '\t\tacc = acc + self.item.m%05d(%s)\n' "$m" "$ARG_LIST"
@@ -184,7 +184,7 @@ fi
   echo ""
 
   echo "function main() returns ExitCode"
-  echo -e "\tvar total = 0"
+  echo -e "\tvar total = 0 as LadderInt"
   i=0
   while [ "$i" -lt "$CONFORMERS" ]; do
     printf '\tlet p%06d = P%06d.create(1)\n' "$i" "$i"

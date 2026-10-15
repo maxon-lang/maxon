@@ -107,7 +107,7 @@ export let GtOffStackGuard = 0x50
 // tells the request from an overflow by this exact value and yields (`__gt_preempt`). There is no request field
 // beside it: the guard word IS the request. A guard that may not park withdraws it instead (`guardSiteMayPark`).
 // EXPORTED for both lanes' guards and `__gt_guard_tripped`, and for the monitor.
-export let GtStackGuardPreempt = -1314 as ParsedInt
+export let GtStackGuardPreempt = -1314 as FullRangeInt
 
 // The dual-register ERROR FLAG the trampoline captures from R10 when a THROWING async thunk returns:
 // 0 = success, non-zero = threw (a scalar error's `ordinal + ErrorFlagOrdinalBias`, or a boxed
@@ -351,7 +351,7 @@ let GtOffCpuOffset = GtOffThreadAllocBytes + PointerFieldBytes
 // ⭐⭐ **1 FOR `main`'s THREAD, 0 FOR EVERY OTHER.** Stamped by `__gt_spawn_main`; read by `__gt_runner_done`,
 // because `main`'s completion is what ends the main machine's first loop (`SchedRuntime.SchedPhase`).
 let GtOffIsMainThread = GtOffCpuOffset + PointerFieldBytes
-let GtMainThreadMark = 1 as ParsedInt
+let GtMainThreadMark = 1 as FullRangeInt
 
 // ⭐⭐⭐ **1 WHILE SOME MACHINE OWNS THIS STRAND — its owner token is in a run queue, or a machine is running
 // the strand — and 0 otherwise.** Meaningful only on a green thread. Written only under `__sched_lock`: set by
@@ -365,8 +365,8 @@ let GtMainThreadMark = 1 as ParsedInt
 // member of a strand can therefore be run by a second machine while one is running any of them, and the owner
 // is never readied onto a run queue while one of its coroutines executes elsewhere.
 let GtOffStrandHolder = GtOffIsMainThread + PointerFieldBytes
-let StrandFree = 0 as ParsedInt
-let StrandHeld = 1 as ParsedInt
+let StrandFree = 0 as FullRangeInt
+let StrandHeld = 1 as FullRangeInt
 
 // ⭐⭐ **HOW MANY PARTIES STILL NEED THIS GREEN THREAD's STRUCT AS A STRAND HEAD**: the owner's own execution,
 // each coroutine it created that has not yet finished, and the strand hold. A coroutine can outlive its
@@ -383,8 +383,8 @@ let GtOffAwaiter = GtOffStrandRefs + PointerFieldBytes
 // ⭐ **ON AN awaitAny WAITER: 1 once a completer has readied it, 0 while it is still registered** — Go's
 // `selectDone`, so K slots completing ready the waiter once. `__sched_lock` guards it.
 let GtOffSelectDone = GtOffAwaiter + PointerFieldBytes
-let SelectPending = 0 as ParsedInt
-let SelectReadied = 1 as ParsedInt
+let SelectPending = 0 as FullRangeInt
+let SelectReadied = 1 as FullRangeInt
 
 // ⭐⭐ **THE GLOBAL RUN QUEUE's LINK.** The global queue holds owner tokens, and an owner can be in its own
 // strand queue (through `GtOffNext`) while its token waits in the global queue, so the two lists cannot share
@@ -425,15 +425,15 @@ export let GtOffReplyWitness = GtOffStrandResume + PointerFieldBytes
 
 let GtOffRenounced = GtOffReplyWitness + PointerFieldBytes
 
-let GtPromiseHeld = 0 as ParsedInt
-let GtPromiseGivenUp = 1 as ParsedInt
+let GtPromiseHeld = 0 as FullRangeInt
+let GtPromiseGivenUp = 1 as FullRangeInt
 
-let GtRestraintArmed = 1 as ParsedInt
+let GtRestraintArmed = 1 as FullRangeInt
 
 export let GtOffHold = GtOffRenounced + PointerFieldBytes
 
-export let GtHoldReleased = 0 as ParsedInt
-export let GtHoldRequested = 1 as ParsedInt
+export let GtHoldReleased = 0 as FullRangeInt
+export let GtHoldRequested = 1 as FullRangeInt
 
 let GtOffPinnedM = GtOffHold + PointerFieldBytes
 
@@ -527,16 +527,16 @@ end 'emitGtBranchOnPollerPark'
 
 // The `arg` a park that needs none carries — a yield and a preemption — so the site says so rather than
 // passing whatever happened to be in a register.
-let GtParkArgUnused = 0 as ParsedInt
+let GtParkArgUnused = 0 as FullRangeInt
 
 // ⭐ **THE LOW BIT OF `GtOffAwaiter` MARKS AN awaitAny WAITER.** GT structs are word-aligned, so the bit is free.
-let AwaitAnyTag = 1 as ParsedInt
+let AwaitAnyTag = 1 as FullRangeInt
 
 // ⭐ **THE TWO HALF-TICKETS.** Distinct so `xadd`'s prior value names WHO was already there, and powers of
 // two so the sum is unambiguous: 0 = neither, 1 = the consumer alone, 2 = the runner alone, 3 = both (and
 // the struct is gone). See `GtOffTeardown` for the protocol and `emitGtTeardownArrive` for the one emitter.
-let GtTeardownConsumerTicket = 1 as ParsedInt
-let GtTeardownRunnerTicket = 2 as ParsedInt
+let GtTeardownConsumerTicket = 1 as FullRangeInt
+let GtTeardownRunnerTicket = 2 as FullRangeInt
 
 // --- GT status ---
 // `ready` (a fresh record's zero, and what `__gt_ready_locked` stores), `completed` (set by the trampoline,
@@ -566,15 +566,15 @@ export let GtStatusWaiting = 3
 // is a floor and not a ceiling. It is small on purpose: the guard fires within a couple of frames of a thread's
 // entry, so `__gt_morestack` is exercised by ordinary programs rather than only by a contrived recursion. The
 // syscall shim moves every kernel call off this stack onto the M's system stack, which is what lets it be tiny.
-let GtMinStackBytes = 0x800 as ParsedInt
+let GtMinStackBytes = 0x800 as FullRangeInt
 
 // ⭐⭐ **THE SMALLEST SEED — Go's `fixedStack`: `GtMinStackBytes` plus the OS's own reservation, rounded up to a
 // power of two.** A seed no taller than `gtStackGuardHeight` would grow on the first guarded frame of every
 // spawn; this one gives the OS its reservation and Maxon its floor. It is what `__gt_spawn` commits until the
 // first adaptive-seed window closes (`GtSeedBytesLabel`), and no shrink goes below it.
-function gtSeedStackBytes(target Target) returns ParsedInt
+function gtSeedStackBytes(target Target) returns FullRangeInt
 	let wanted = GtMinStackBytes + gtStackSystemBytes(target)
-	return roundUpToPowerOfTwo(wanted as BytePos) as ParsedInt
+	return roundUpToPowerOfTwo(wanted as BytePos)
 end 'gtSeedStackBytes'
 
 // ⭐⭐ **THE LARGEST STACK A GREEN THREAD MAY GROW TO — Go's `maxstacksize`, a gigabyte on 64-bit.**
@@ -587,14 +587,14 @@ export let GtMaxStackBytes = 0x40000000
 // ⭐⭐ **HOW LONG A STACK's SIZE MUST STAND BEFORE A PARK MAY HALVE IT.** Go shrinks once per garbage collection
 // (`shrinkstack`); this runtime has no collector, so a second of wall time is the cycle. It bounds a thread's
 // shrink copies to one a second whatever its parks do.
-let GtStackResizeWindowNs = 1000000000 as ParsedInt
+let GtStackResizeWindowNs = 1000000000 as FullRangeInt
 
 // ⭐⭐ **HOW MANY FINISHED STACKS ONE ADAPTIVE-SEED WINDOW AVERAGES.** Go recomputes `startingStackSize` once per
 // garbage collection, over the stacks that cycle scanned; here a window closes at the finish that makes the count
 // a multiple of this, so the seed follows finished threads whether or not the program ever arms a timer, and
 // `__sched_lock` is taken for it once per window rather than once per finish. A power of two, so the test is a
 // mask.
-let GtSeedWindowShift = 6 as ParsedInt
+let GtSeedWindowShift = 6 as FullRangeInt
 let GtSeedWindowMask = (1 shl GtSeedWindowShift) - 1
 
 // ⭐ **THE LARGEST SEED THE ADAPTIVE START MAY CHOOSE.** Go caps `startingStackSize` only at
@@ -602,13 +602,13 @@ let GtSeedWindowMask = (1 shl GtSeedWindowShift) - 1
 // at the spawn, before the thread has used a byte, and the cap is also the stack pool's largest
 // class (`requireStackPoolGeometry`). 64 KiB spares the average deep thread its first growths while
 // ten thousand concurrent threads commit 640 MB at most.
-let GtSeedMaxBytes = 0x10000 as ParsedInt
+let GtSeedMaxBytes = 0x10000 as FullRangeInt
 
 // `GtOffStackMarks`' two bits. `resized`: the size was chosen since the thread last parked — set by the spawn and by
 // every grow, cleared by the park that stamps the time. `grew`: `__gt_morestack` has run for this thread — set by
 // every grow and never cleared.
-let GtStackMarkResized = 1 as ParsedInt
-let GtStackMarkGrew = 2 as ParsedInt
+let GtStackMarkResized = 1 as FullRangeInt
+let GtStackMarkGrew = 2 as FullRangeInt
 
 // What a grow stores: both marks. EXPORTED for the morestack chunks.
 export let GtStackMarksOfAGrow = GtStackMarkResized or GtStackMarkGrew
@@ -667,7 +667,7 @@ end 'x64FaultFrameHome'
 // ⭐⭐ **THE STACK THE OS ITSELF WRITES BELOW A GREEN THREAD's STACK POINTER — Go's `stackSystem`.** Where a
 // fault's frame lands on the faulting stack, the room for it is reserved under the guard word, as Go reserves
 // it on Windows; everywhere else nothing is.
-function gtStackSystemBytes(target Target) returns ParsedInt
+function gtStackSystemBytes(target Target) returns FullRangeInt
 	return match gtFaultFrameHome(target) 'home'
 		faultingStack gives GtWindowsExceptionDispatchBytes
 		signalStack gives 0
@@ -681,13 +681,13 @@ end 'gtStackSystemBytes'
 // too little room ends the process with the fault's own status (0xC0000005) instead of the runtime's report.
 // Measured on an AVX2 host: 0xA50 (2640) bytes from the thunk's frame up, plus the diagnostic chain that rides
 // the margin (`X64Runtime.UnguardedDiagnosticChainBytes`).
-let WindowsPageBytes = 0x1000 as ParsedInt
+let WindowsPageBytes = 0x1000 as FullRangeInt
 let GtWindowsExceptionDispatchBytes = WindowsPageBytes * 2
-let WindowsContextRecordBytes = 1232 as ParsedInt
-let WindowsContextExtensionBytes = 256 as ParsedInt
-let WindowsWidestXStateBytes = 2688 as ParsedInt
-let WindowsExceptionRecordBytes = 152 as ParsedInt
-let WindowsDispatcherFramesBytes = 512 as ParsedInt
+let WindowsContextRecordBytes = 1232 as FullRangeInt
+let WindowsContextExtensionBytes = 256 as FullRangeInt
+let WindowsWidestXStateBytes = 2688 as FullRangeInt
+let WindowsExceptionRecordBytes = 152 as FullRangeInt
+let WindowsDispatcherFramesBytes = 512 as FullRangeInt
 let WindowsWidestDispatchBytes = WindowsContextRecordBytes + WindowsContextExtensionBytes + WindowsWidestXStateBytes + WindowsExceptionRecordBytes + WindowsDispatcherFramesBytes
 
 function requireWindowsDispatchFitsItsReserve(target Target)
@@ -717,14 +717,14 @@ function systemStackGuardOf(target Target) returns SystemStackGuard
 	end 'home'
 end 'systemStackGuardOf'
 
-function gtSystemStackFaultingBytes(target Target) returns ParsedInt
+function gtSystemStackFaultingBytes(target Target) returns FullRangeInt
 	return match systemStackGuardOf(target) 'guard'
 		pageGuardWithHeadroom gives WindowsSystemStackGuardPageBytes
 		noAccessPage gives gtSystemStackGuardRegionBytes(target)
 	end 'guard'
 end 'gtSystemStackFaultingBytes'
 
-export function gtSystemStackGuardRegionBytes(target Target) returns ParsedInt
+export function gtSystemStackGuardRegionBytes(target Target) returns FullRangeInt
 	return match target.cpu 'cpu'
 		x64 gives x64SystemStackGuardRegionBytes(target.os)
 		arm64 gives arm64SystemStackGuardRegionBytes(target.os)
@@ -732,7 +732,7 @@ export function gtSystemStackGuardRegionBytes(target Target) returns ParsedInt
 	end 'cpu'
 end 'gtSystemStackGuardRegionBytes'
 
-function x64SystemStackGuardRegionBytes(os Os) returns ParsedInt
+function x64SystemStackGuardRegionBytes(os Os) returns FullRangeInt
 	return match os 'os'
 		windows gives WindowsSystemStackGuardRegionBytes
 		linux gives X64LinuxSystemStackGuardRegionBytes
@@ -741,7 +741,7 @@ function x64SystemStackGuardRegionBytes(os Os) returns ParsedInt
 	end 'os'
 end 'x64SystemStackGuardRegionBytes'
 
-function arm64SystemStackGuardRegionBytes(os Os) returns ParsedInt
+function arm64SystemStackGuardRegionBytes(os Os) returns FullRangeInt
 	return match os 'os'
 		macos gives Arm64MacosSystemStackGuardRegionBytes
 		linux gives Arm64LinuxSystemStackGuardRegionBytes
@@ -751,17 +751,17 @@ function arm64SystemStackGuardRegionBytes(os Os) returns ParsedInt
 end 'arm64SystemStackGuardRegionBytes'
 
 let WindowsSystemStackHeadroomBytes = GtWindowsExceptionDispatchBytes * 2
-let WindowsSystemStackGuardPageBytes = 0x1000 as ParsedInt
+let WindowsSystemStackGuardPageBytes = 0x1000 as FullRangeInt
 let WindowsSystemStackGuardRegionBytes = WindowsSystemStackHeadroomBytes + WindowsSystemStackGuardPageBytes
-let X64LinuxSystemStackGuardRegionBytes = 0x1000 as ParsedInt
-let Arm64MacosSystemStackGuardRegionBytes = 0x4000 as ParsedInt
-let Arm64LinuxSystemStackGuardRegionBytes = 0x10000 as ParsedInt
+let X64LinuxSystemStackGuardRegionBytes = 0x1000 as FullRangeInt
+let Arm64MacosSystemStackGuardRegionBytes = 0x4000 as FullRangeInt
+let Arm64LinuxSystemStackGuardRegionBytes = 0x10000 as FullRangeInt
 
 // ⭐⭐ **HOW FAR ABOVE A GREEN THREAD's STACK BASE ITS GUARD WORD SITS — Go's `stackGuard`.** Maxon's margin
 // for the frames that free-ride between checkpoints, plus the OS's reservation below them. `__gt_spawn` and
 // `__gt_stack_relocate` place the guard word here, the grower sizes a new stack so the frame that asked still
 // clears it, and a shrink leaves room for it; they must read one height, so it is spelled once.
-export function gtStackGuardHeight(target Target) returns ParsedInt
+export function gtStackGuardHeight(target Target) returns FullRangeInt
 	return gtStackGuardMargin(target) + gtStackSystemBytes(target)
 end 'gtStackGuardHeight'
 
@@ -791,7 +791,7 @@ end 'gtStackGuardHeight'
 // grower EARLIER, never later. The one thing arm64 adds is the guard's own saved-x30 cell, and that is added to
 // the PROJECTION explicitly (`Arm64GtRuntime.Arm64GuardSaveBytes`) rather than folded into this number, so the
 // two ISAs' guards stay readable against each other.
-export function gtStackGuardMargin(target Target) returns ParsedInt
+export function gtStackGuardMargin(target Target) returns FullRangeInt
 	return match target.cpu 'cpu'
 		x64 or
 		arm64 gives GtStackGuardMarginBytes
@@ -799,7 +799,7 @@ export function gtStackGuardMargin(target Target) returns ParsedInt
 	end 'cpu'
 end 'gtStackGuardMargin'
 
-let GtStackGuardMarginBytes = 0x3A0 as ParsedInt
+let GtStackGuardMarginBytes = 0x3A0 as FullRangeInt
 
 // ⭐⭐⭐ **HOW MUCH ROOM AN ASYNCHRONOUS STOP DEMANDS BELOW THE INTERRUPTED STACK POINTER.** A stop lands at an
 // arbitrary instruction rather than at a prologue, so nothing has projected the trampoline's frame against
@@ -825,13 +825,13 @@ let GtStackGuardMarginBytes = 0x3A0 as ParsedInt
 // function, whose entry already proved `sp >= stackBase + gtStackGuardHeight + margin` — comfortably above
 // this. The floor exists for the case that argument stops covering: it is read where the stop is decided,
 // not where the guard is.
-export function gtAsyncPreemptFloor(target Target) returns ParsedInt
+export function gtAsyncPreemptFloor(target Target) returns FullRangeInt
 	return gtAsyncPreemptMargin(target) + gtStackSystemBytes(target)
 end 'gtAsyncPreemptFloor'
 
 // What the trampoline and its park actually spend below the interrupted stack pointer — the term
 // `PreemptionDepth.requireAsyncPreemptionFitsItsMargin` proves against.
-export function gtAsyncPreemptMargin(target Target) returns ParsedInt
+export function gtAsyncPreemptMargin(target Target) returns FullRangeInt
 	return match target.cpu 'cpu'
 		x64 or
 		arm64 gives GtAsyncPreemptMarginBytes
@@ -842,7 +842,7 @@ end 'gtAsyncPreemptMargin'
 // 0x400 (1024 B). MEASURED on x64-windows: the trampoline's own frame is 312 bytes and everything
 // `__gt_async_preempt_park` reaches adds 272, so 584 of it is spent and the rest is headroom the certificate
 // re-proves on every build.
-let GtAsyncPreemptMarginBytes = 0x400 as ParsedInt
+let GtAsyncPreemptMarginBytes = 0x400 as FullRangeInt
 
 // The SYSTEM (scratch) stack a green thread's kernel calls run on: a 64 KB region
 // committed once PER M by `emitSchedBecomeM`, its TOP held in `M->systemStackSP`. The syscall shim switches
@@ -872,7 +872,7 @@ export let GtSystemStackSize = 0x10000
 // switch-in — so EACH backend CHECKS this against its OWN callee-saved lists at chunk-build time
 // (`X64GtRuntime.assertGtFrameConsistent`, `Arm64GtRuntime.assertArm64GtFrameConsistent`). Add a callee-saved
 // register to either file without moving its number and the next async compile panics rather than miscompiling.
-export function gtInitialFrameBytes(target Target) returns ParsedInt
+export function gtInitialFrameBytes(target Target) returns FullRangeInt
 	return match target.cpu 'cpu'
 		x64 gives X64GtInitialFrameBytes
 		arm64 gives Arm64GtInitialFrameBytes
@@ -880,8 +880,8 @@ export function gtInitialFrameBytes(target Target) returns ParsedInt
 	end 'cpu'
 end 'gtInitialFrameBytes'
 
-let X64GtInitialFrameBytes = 128 as ParsedInt  // 5 GPR words + 10 XMM words + the return-address word
-let Arm64GtInitialFrameBytes = 160 as ParsedInt  // 5 GPR pairs + 4 SIMD pairs + the x29/x30 frame record
+let X64GtInitialFrameBytes = 128 as FullRangeInt  // 5 GPR words + 10 XMM words + the return-address word
+let Arm64GtInitialFrameBytes = 160 as FullRangeInt  // 5 GPR pairs + 4 SIMD pairs + the x29/x30 frame record
 
 // The argument buffer holds MaxAsyncArgs i64 slots. The trampoline loads ALL of them into the GPR
 // argument registers unconditionally (a callee reads only the slots it declares; the rest are the
@@ -937,9 +937,9 @@ let TimerHeapBytes = TimerHeapCapacity * TimerEntrySize
 // alone takes whichever entry it meets first and leaves the other behind to fire at a record its owner has
 // moved on from. The key is the PAIR `(gt, tag)`, which is unique: a thread holds at most one wait of each
 // kind.
-let TimerTagSleep = 0 as ParsedInt
-let TimerTagReadDeadline = 1 as ParsedInt
-let TimerTagWriteDeadline = 2 as ParsedInt
+let TimerTagSleep = 0 as FullRangeInt
+let TimerTagReadDeadline = 1 as FullRangeInt
+let TimerTagWriteDeadline = 2 as FullRangeInt
 
 // A netpoll park's direction (`NetpollModeRead`/`NetpollModeWrite`) as the tag its deadline entry carries.
 // EXPORTED for `NetpollRuntime`, which arms an entry at the park and removes it whenever the wait ends.
@@ -950,7 +950,7 @@ end 'emitTimerTagOfNetpollMode'
 // What `__gt_timer_when` holds while the store is empty: a deadline no clock reading reaches, so *"is the
 // earliest deadline past?"* is one compare that answers no. EXPORTED for the scheduler's owed-poller test
 // (`SchedRuntime.emitSchedPollerOwed`), which asks whether any timer is pending.
-export let TimerWhenEmpty = 0x7FFFFFFFFFFFFFFF as ParsedInt
+export let TimerWhenEmpty = 0x7FFFFFFFFFFFFFFF as FullRangeInt
 
 // --- Win32 wait / process constants ---
 // `WAIT_OBJECT_0` (0) is what `WaitForSingleObject` returns for a SIGNALED handle (an exited child); the
@@ -1007,7 +1007,7 @@ export let ProcInfoTreeAssignedOffset = 0x28
 // `SpawnFailedPreparationOffset`, where the launch failure already reads it. One write of fewer than
 // `PIPE_BUF` bytes arrives whole, so the parent's one read sees all of it or none.
 export let SpawnChildReportOffset = ProcInfoDwProcessIdOffset
-export let SpawnChildReportBytes = SpawnFailedPreparationOffset + (MachineWordBytes as ParsedInt) - SpawnChildReportOffset
+export let SpawnChildReportBytes = SpawnFailedPreparationOffset + (MachineWordBytes as FullRangeInt) - SpawnChildReportOffset
 
 // The last-error word carries the OS code in its low 32 bits and the `SpawnPreparation` above them, so the code
 // a message renders is unchanged by the step it came from.
@@ -1055,7 +1055,7 @@ let RunProcessSpawnFailedCaseName = b"spawnFailed"
 // encoding a source `throw E.case` uses (`LowerMaxonToStd.lowerThrowError`), so the `otherwise (e)` decode
 // (`e = flag - bias`, `parseOtherwiseBlock`) needs no third copy of the bias. `0` is reserved by the bias for
 // "no error in flight".
-let RunProcessSpawnFailedOrdinal = 0 as ParsedInt
+let RunProcessSpawnFailedOrdinal = 0 as FullRangeInt
 
 // The R10 error-flag VALUE the throw emits and a successful `runProcess` clears — the ordinal biased by the
 // one `ErrorFlagOrdinalBias` (never a second literal, so the runtime encode cannot drift from the parser decode),
@@ -1196,8 +1196,8 @@ export let GtReadyLockedName = b"__gt_ready_locked"
 
 // What `__gt_ready_locked` answers. Named because every waker compares against them and a bare literal at each
 // end would be one fact written twice.
-let WakeDebtOwed = 1 as ParsedInt
-export let WakeDebtNone = 0 as ParsedInt
+let WakeDebtOwed = 1 as FullRangeInt
+export let WakeDebtNone = 0 as FullRangeInt
 
 // ⭐⭐ **THE GLOBAL FIFO's TWO DOORS**, linked through `GtOffRunqNext`. The global queue holds owner tokens: a
 // full ring's overflow, a publish by an OS thread with no processor, and a yielding strand. Both require the
@@ -1534,9 +1534,9 @@ let GtTraceTagPrefix = "__at_tag_"
 // a pointer. A raw blob has no such indirection: `rdataAddr` IS the address of the bytes.
 export type GtTraceTag
 	export let label as ByteArray
-	export let length as ParsedInt
+	export let length as FullRangeInt
 
-	export static function create(label ByteArray, length ParsedInt) returns GtTraceTag
+	export static function create(label ByteArray, length FullRangeInt) returns GtTraceTag
 		return Self{label: label, length: length}
 	end 'create'
 end 'GtTraceTag'
@@ -1615,7 +1615,7 @@ end 'GtTracing'
 
 // One tag's bytes, interned in `.rdata` and deduped by content like every other rdata constant.
 function registerGtTraceTag(globalData GlobalDataTable, text ByteArray) returns GtTraceTag
-	return GtTraceTag.create(globalData.registerRdataConstant(GtTraceTagPrefix, bytes: text, kind: RdataPayloadKind.traceTag).toByteArray(), length: text.count() as ParsedInt)
+	return GtTraceTag.create(globalData.registerRdataConstant(GtTraceTagPrefix, bytes: text, kind: RdataPayloadKind.traceTag).toByteArray(), length: text.count() as FullRangeInt)
 end 'registerGtTraceTag'
 
 // ⭐ The operation suffixes in `GtIoOperation` ORDINAL ORDER, because the walk IS `allCases` — the enum's
@@ -1761,8 +1761,8 @@ let GtSeedCountSeenLabel = b"__gt_seed_count_seen"
 // the word's SEED, `GtCpuClockKept` exactly where the program reads `__Builtins.threadCpuTicks()`. Nothing
 // writes it after the image is loaded.
 let GtKeepsCpuClockLabel = b"__gt_keeps_cpu_clock"
-let GtCpuClockUnkept = 0 as ParsedInt
-let GtCpuClockKept = 1 as ParsedInt
+let GtCpuClockUnkept = 0 as FullRangeInt
+let GtCpuClockKept = 1 as FullRangeInt
 
 // The timer store: the live entry COUNT and the base address of the `__slab_alloc`'d heap region (both 0
 // until `__gt_init` allocates the region and seeds the base). The count is read under the lock, by the store's
@@ -1879,10 +1879,10 @@ let ErrorBrokenPipe = 109
 // two ends of stream are the child's write end gone (`STATUS_PIPE_BROKEN`) and the last byte already delivered
 // (`STATUS_END_OF_FILE`); a socket transfer tells a request its cancel reached (`STATUS_CANCELLED`) from one the
 // kernel finished first.
-export let NtStatusSuccess = 0 as ParsedInt
-export let NtStatusCancelled = 0xC0000120 as ParsedInt
-let NtStatusPipeBroken = 0xC000014B as ParsedInt
-let NtStatusEndOfFile = 0xC0000011 as ParsedInt
+export let NtStatusSuccess = 0 as FullRangeInt
+export let NtStatusCancelled = 0xC0000120 as FullRangeInt
+let NtStatusPipeBroken = 0xC000014B as FullRangeInt
+let NtStatusEndOfFile = 0xC0000011 as FullRangeInt
 
 // ⭐ **`__gt_subp_yield_read`'s ANSWER FOR A READ THAT FAILED**, against the 0 that means a clean end of
 // stream. It rides the byte count rather than an out-parameter because every caller already branches on
@@ -1908,9 +1908,9 @@ let PipeNameHexDigits = 16
 let WideCharBytes = 2
 let PipeNameTrailingNulBytes = 2
 let HexRadix = 16
-let HexDigitZero = 48 as ParsedInt  // '0'
-let HexDigitLetterA = 97 as ParsedInt
-let HexAlphaThreshold = 10 as ParsedInt
+let HexDigitZero = 48 as FullRangeInt  // '0'
+let HexDigitLetterA = 97 as FullRangeInt
+let HexAlphaThreshold = 10 as FullRangeInt
 let HexDigitLetterBase = HexDigitLetterA - HexAlphaThreshold
 let NibbleBits = 4
 let TopNibbleShift = 60  // (PipeNameHexDigits - 1) * NibbleBits — the highest nibble of a 64-bit value
@@ -3029,7 +3029,7 @@ end 'emitGtFifoSweepDropped'
 // ⚠ **THE RECLAIM RUNS WITH `__sched_lock` RELEASED AT BOTH CALLERS**, and the POP is what makes that safe: a
 // GT taken off a queue is unreachable by anyone else.
 export union GtHandOffAnswer
-	giveTheProcessor(answer ParsedInt)
+	giveTheProcessor(answer FullRangeInt)
 	giveUpTheStrand(strandOwner ValueId)
 end 'GtHandOffAnswer'
 
@@ -3052,13 +3052,13 @@ export function emitGtTombstoneHandback(module StdModule, func IrFunction, candi
 	module.setTerminator(reclaim, op: StdOp.branch(retry.id))
 end 'emitGtTombstoneHandback'
 
-let GtRestrainedRefusePauseUs = 200 as ParsedInt
+let GtRestrainedRefusePauseUs = 200 as FullRangeInt
 
-export let GtProcessorHandedOff = -1 as ParsedInt
+export let GtProcessorHandedOff = -1 as FullRangeInt
 
-let GtAllGSeedSlots = 64 as ParsedInt
+let GtAllGSeedSlots = 64 as FullRangeInt
 
-let GtAllGSlotBytes = 8 as ParsedInt
+let GtAllGSlotBytes = 8 as FullRangeInt
 
 function emitGtStartLockedOwner(module StdModule, func IrFunction, startLocked IrBlock, owner ValueId, found ValueId, declined IrBlock, handOff GtHandOffAnswer, ids ValueMinter)
 	match handOff 'shape'
@@ -3067,7 +3067,7 @@ function emitGtStartLockedOwner(module StdModule, func IrFunction, startLocked I
 	end 'shape'
 end 'emitGtStartLockedOwner'
 
-function emitGtGiveTheProcessorToTheLockedOwner(module StdModule, func IrFunction, startLocked IrBlock, owner ValueId, found ValueId, declined IrBlock, answer ParsedInt, ids ValueMinter)
+function emitGtGiveTheProcessorToTheLockedOwner(module StdModule, func IrFunction, startLocked IrBlock, owner ValueId, found ValueId, declined IrBlock, answer FullRangeInt, ids ValueMinter)
 	var gave = module.addBlock(func, label: b"tshslmgave", heat: BlockHeat.cold)
 
 	emitSchedStartLockedMachine(module, func: func, cur: startLocked, owner: owner, strand: found, gave: gave, declined: declined, ids: ids)
@@ -3148,7 +3148,7 @@ function emitGtHandOffWake(module StdModule, func IrFunction, wakeOwner IrBlock,
 	end 'shape'
 end 'emitGtHandOffWake'
 
-function emitGtHandOffToOwnersMachine(module StdModule, func IrFunction, wakeOwner IrBlock, owner ValueId, backOff IrBlock, retry IrBlock, answer ParsedInt, ids ValueMinter) returns IrBlock
+function emitGtHandOffToOwnersMachine(module StdModule, func IrFunction, wakeOwner IrBlock, owner ValueId, backOff IrBlock, retry IrBlock, answer FullRangeInt, ids ValueMinter) returns IrBlock
 	var gave = module.addBlock(func, label: b"tshgave", heat: BlockHeat.cold)
 
 	emitSchedHandProcessorToOwner(module, func: func, cur: wakeOwner, owner: owner, handedOff: gave, kept: backOff, ids: ids)
@@ -3196,7 +3196,7 @@ function buildGtCurrentMachine(module StdModule)
 	var haveMachine = module.addBlock(func, label: b"curmmachine", heat: BlockHeat.normal)
 	var noMachine = module.addBlock(func, label: b"curmnone", heat: BlockHeat.normal)
 
-	let m = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: noMachine, bailValues: ParsedIntArray.create(), ids: ids)
+	let m = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: noMachine, bailValues: FullRangeIntArray.create(), ids: ids)
 	module.setTerminator(haveMachine, op: StdOp.ret(m))
 
 	emitConstReturn(module, block: noMachine, value: 0, ids: ids)
@@ -3225,7 +3225,7 @@ function buildGtPinMachine(module StdModule)
 	var haveThread = module.addBlock(func, label: b"pinthread", heat: BlockHeat.normal)
 	var refused = module.addBlock(func, label: b"pinrefused", heat: BlockHeat.normal)
 
-	let m = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: refused, bailValues: ParsedIntArray.create(), ids: ids)
+	let m = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: refused, bailValues: FullRangeIntArray.create(), ids: ids)
 	let running = emitLoadField(module, block: haveMachine, record: m, offset: MOffCurrentGt, ids: ids)
 	let noThread = emitCmp(module, block: haveMachine, a: running, b: emitConst(module, block: haveMachine, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(haveMachine, op: StdOp.condBranch(noThread, thenBlockId: refused.id, elseBlockId: haveThread.id))
@@ -3264,7 +3264,7 @@ function buildGtUnpinMachine(module StdModule)
 	var keepOne = module.addBlock(func, label: b"unpinkeepone", heat: BlockHeat.normal)
 	var doneBlock = module.addBlock(func, label: b"unpindone", heat: BlockHeat.normal)
 
-	let m = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: doneBlock, bailValues: ParsedIntArray.create(), ids: ids)
+	let m = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: doneBlock, bailValues: FullRangeIntArray.create(), ids: ids)
 	let running = emitLoadField(module, block: haveMachine, record: m, offset: MOffCurrentGt, ids: ids)
 	let noThread = emitCmp(module, block: haveMachine, a: running, b: emitConst(module, block: haveMachine, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(haveMachine, op: StdOp.condBranch(noThread, thenBlockId: doneBlock.id, elseBlockId: haveThread.id))
@@ -4608,7 +4608,7 @@ end 'emitGtReleaserCall'
 // reads `gt.status` and then `gt.threw`/`gt.result` while a completion on another M moves `status` in
 // between (`Runtime/AsyncReleaser.maxon`'s multi-M item 2): the drop reads neither word — the SECOND party
 // does, after completion.
-function emitGtTeardownArrive(module StdModule, block IrBlock, ids ValueMinter, gt ValueId, ticket ParsedInt, otherTicket ParsedInt) returns ValueId
+function emitGtTeardownArrive(module StdModule, block IrBlock, ids ValueMinter, gt ValueId, ticket FullRangeInt, otherTicket FullRangeInt) returns ValueId
 	let wordAddr = emitFieldAddr(module, block: block, record: gt, offset: GtOffTeardown, ids: ids)
 	let step = emitConst(module, block: block, value: ticket, ids: ids)
 	let prior = ids.mint()
@@ -4619,7 +4619,7 @@ end 'emitGtTeardownArrive'
 
 // Arrive with `ticket` and, as the second party, reclaim — the whole of every party's arrival. Terminates `cur`
 // and answers the block to continue in, where the struct may already belong to the next spawn.
-function emitGtArriveAndReclaimIfSecond(module StdModule, func IrFunction, cur IrBlock, gt ValueId, ticket ParsedInt, otherTicket ParsedInt, ids ValueMinter) returns IrBlock
+function emitGtArriveAndReclaimIfSecond(module StdModule, func IrFunction, cur IrBlock, gt ValueId, ticket FullRangeInt, otherTicket FullRangeInt, ids ValueMinter) returns IrBlock
 	var reclaim = module.addBlock(func, label: b"teardownreclaim", heat: BlockHeat.normal)
 	let arrived = module.addBlock(func, label: b"teardownarrived", heat: BlockHeat.normal)
 
@@ -4808,7 +4808,7 @@ end 'emitGtIsGreenThread'
 // ⚠ The scheduler's dropped-thread askers do NOT come through here: `emitGtIsDropped` reads the TEARDOWN
 // word, which is a different question about a different field, and folding the two would put a status
 // offset behind a name that no longer names one.
-module function emitGtStatusEquals(module StdModule, block IrBlock, status ValueId, want ParsedInt, ids ValueMinter) returns ValueId
+module function emitGtStatusEquals(module StdModule, block IrBlock, status ValueId, want FullRangeInt, ids ValueMinter) returns ValueId
 	let wantConst = emitConst(module, block: block, value: want, ids: ids)
 	return emitCmp(module, block: block, a: status, b: wantConst, pred: StdCmpPred.eq, ids: ids)
 end 'emitGtStatusEquals'
@@ -4952,7 +4952,7 @@ function collectCompletedWordDefs(access StdAccessOperands, completedConsts Valu
 	end 'k'
 end 'collectCompletedWordDefs'
 
-function pushIfCompletedConst(completedConsts ValueIdArray, resultId ValueId, value ParsedInt)
+function pushIfCompletedConst(completedConsts ValueIdArray, resultId ValueId, value FullRangeInt)
 	if value == GtStatusCompleted 'meansCompleted'
 		completedConsts.push(resultId)
 	end 'meansCompleted'
@@ -5399,7 +5399,7 @@ function buildGtPromiseDrop(module StdModule)
 	module.setTerminator(readParked, op: StdOp.condBranch(stillReading, thenBlockId: readCancel.id, elseBlockId: readMovedOn.id))
 
 	let readHandle = emitLoadField(module, block: readCancel, record: gt, offset: GtOffIoHandle, ids: ids)
-	let readOvl = emitBin(module, block: readCancel, a: gt, b: emitConst(module, block: readCancel, value: GtOffOverlapped as ParsedInt, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let readOvl = emitBin(module, block: readCancel, a: gt, b: emitConst(module, block: readCancel, value: GtOffOverlapped as FullRangeInt, ids: ids), opcode: StdBinOpcode.add, ids: ids)
 	module.appendOp(readCancel, op: StdOp.osCancelIo(readHandle, ovlId: readOvl))
 	emitSchedLockLeave(module, block: readCancel, ids: ids)
 	module.setTerminator(readCancel, op: StdOp.branch(queuedArm.id))
@@ -5836,7 +5836,7 @@ end 'emitGtParkOnDeadline'
 // terminates `cur`; the CALLER terminates `cont`. EXPORTED because `MailboxRuntime.buildMboxRecv` parks too, and
 // must come through this door rather than write its own — a second spelling would be a park registered before
 // its registers were saved.
-export function emitGtPark(module StdModule, ids ValueMinter, cur IrBlock, kind ParsedInt, arg ValueId, cont IrBlock)
+export function emitGtPark(module StdModule, ids ValueMinter, cur IrBlock, kind FullRangeInt, arg ValueId, cont IrBlock)
 	module.appendOp(cur, op: StdOp.call(ids.mint(), callee: GtParkName, args: twoArgs(emitConst(module, block: cur, value: kind, ids: ids), second: arg)))
 	module.setTerminator(cur, op: StdOp.branch(cont.id))
 end 'emitGtPark'
@@ -6381,16 +6381,16 @@ function buildGtStackShrink(module StdModule, target Target)
 end 'buildGtStackShrink'
 
 let GtStackPoolLabel = b"__gt_stack_pool"
-let GtStackPoolMinShift = 11 as ParsedInt
-let GtStackPoolMaxShift = 16 as ParsedInt
+let GtStackPoolMinShift = 11 as FullRangeInt
+let GtStackPoolMaxShift = 16 as FullRangeInt
 let GtStackPoolClassCount = GtStackPoolMaxShift - GtStackPoolMinShift + 1
 let GtStackPoolMaxBytes = 1 shl GtStackPoolMaxShift
-let GtStackPoolChunkBytes = 0x100000 as ParsedInt
-let GtStackPoolWordBytes = 8 as ParsedInt
+let GtStackPoolChunkBytes = 0x100000 as FullRangeInt
+let GtStackPoolWordBytes = 8 as FullRangeInt
 let GtStackPoolCursorOffset = (GtStackPoolClassCount * GtStackPoolWordBytes) as ByteOffset
 let GtStackPoolLimitOffset = (GtStackPoolClassCount * GtStackPoolWordBytes + GtStackPoolWordBytes) as ByteOffset
 let GtStackPoolLockOffset = (GtStackPoolClassCount * GtStackPoolWordBytes + 2 * GtStackPoolWordBytes) as ByteOffset
-let GtStackPoolHeaderBytes = 0x1000 as ParsedInt
+let GtStackPoolHeaderBytes = 0x1000 as FullRangeInt
 
 function requireStackPoolGeometry()
 	if (1 shl GtStackPoolMinShift) != GtMinStackBytes 'minDrifted'
@@ -6401,8 +6401,8 @@ function requireStackPoolGeometry()
 		panic("requireStackPoolGeometry: the pool's largest class is {GtStackPoolMaxBytes} bytes but the adaptive seed may reach {GtSeedMaxBytes} — a seed above the pool would take the unpooled road on every spawn")
 	end 'maxDrifted'
 
-	if (GtStackPoolLockOffset as ParsedInt) + OsLockBytes > GtStackPoolHeaderBytes 'headerTooSmall'
-		panic("requireStackPoolGeometry: the pool header needs {(GtStackPoolLockOffset as ParsedInt) + OsLockBytes} bytes but is laid in {GtStackPoolHeaderBytes}")
+	if (GtStackPoolLockOffset as FullRangeInt) + OsLockBytes > GtStackPoolHeaderBytes 'headerTooSmall'
+		panic("requireStackPoolGeometry: the pool header needs {(GtStackPoolLockOffset as FullRangeInt) + OsLockBytes} bytes but is laid in {GtStackPoolHeaderBytes}")
 	end 'headerTooSmall'
 
 	if GtStackPoolChunkBytes < GtStackPoolMaxBytes 'chunkTooSmall'
@@ -6584,7 +6584,7 @@ end 'buildGtSystemStackAlloc'
 function requireProbeStrideFitsTheSystemStackGuard(target Target)
 	let faulting = gtSystemStackFaultingBytes(target)
 
-	if (StackProbeStrideBytes as ParsedInt) > faulting 'strideSkipsTheGuard'
+	if (StackProbeStrideBytes as FullRangeInt) > faulting 'strideSkipsTheGuard'
 		panic("requireProbeStrideFitsTheSystemStackGuard: the stack probe touches one byte per {StackProbeStrideBytes} but the part of {targetToString(target)}'s system-stack guard region that faults is {faulting} bytes — a frame could step over it between two touches and write below it without a fault")
 	end 'strideSkipsTheGuard'
 end 'requireProbeStrideFitsTheSystemStackGuard'
@@ -6640,14 +6640,14 @@ function buildPageGuardedSystemStackBody(module StdModule, func IrFunction, entr
 end 'buildPageGuardedSystemStackBody'
 
 // 1 when `marks`, a `GtOffStackMarks` word, carries `mark`.
-function emitGtHasStackMark(module StdModule, block IrBlock, marks ValueId, mark ParsedInt, ids ValueMinter) returns ValueId
+function emitGtHasStackMark(module StdModule, block IrBlock, marks ValueId, mark FullRangeInt, ids ValueMinter) returns ValueId
 	let bit = emitBin(module, block: block, a: marks, b: emitConst(module, block: block, value: mark, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
 	return emitCmp(module, block: block, a: bit, b: emitConst(module, block: block, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
 end 'emitGtHasStackMark'
 
 // `size shr 2` and `size shr 1` — a quarter and a half of a power-of-two stack.
-let GtStackQuarterShift = 2 as ParsedInt
-let GtStackHalfShift = 1 as ParsedInt
+let GtStackQuarterShift = 2 as FullRangeInt
+let GtStackHalfShift = 1 as FullRangeInt
 
 // ⭐⭐⭐ **`__gt_seed_adapt()` — Go's `gcComputeStartingStackSize`: ONCE A WINDOW, THE SEED BECOMES THE AVERAGE
 // STACK THAT THE THREADS WHICH FINISHED IN IT NEEDED.** Its one caller is `__gt_runner_done`, at the finish that
@@ -6791,7 +6791,7 @@ function emitGtTraceLine(module StdModule, block IrBlock, tag GtTraceTag, gtId V
 	end 'suffix'
 
 	let suffixLength = match suffix 'suffixLength'
-		none gives 0 as ParsedInt
+		none gives 0 as FullRangeInt
 		tagged(suffixTag) gives suffixTag.length
 	end 'suffixLength'
 
@@ -6853,7 +6853,7 @@ end 'emitCurrentGtTraceLine'
 //
 // ⚠ **`__gt_preempt` EMITS NONE**: its call tree rides the guard margin (`buildGtPreempt`), and a ring
 // write is a lock and a call deeper.
-function emitSchedEventOf(module StdModule, func IrFunction, block IrBlock, eventType ParsedInt, gt ValueId, ids ValueMinter) returns IrBlock
+function emitSchedEventOf(module StdModule, func IrFunction, block IrBlock, eventType FullRangeInt, gt ValueId, ids ValueMinter) returns IrBlock
 	if not module.debugStream 'untracedBuild'
 		return block
 	end 'untracedBuild'
@@ -6864,7 +6864,7 @@ end 'emitSchedEventOf'
 
 // The same event about the CURRENT green thread, read at the point of the event for `emitCurrentGtTraceId`'s
 // reason: a park's two events sit either side of a context switch.
-function emitCurrentGtSchedEvent(module StdModule, func IrFunction, block IrBlock, eventType ParsedInt, ids ValueMinter) returns IrBlock
+function emitCurrentGtSchedEvent(module StdModule, func IrFunction, block IrBlock, eventType FullRangeInt, ids ValueMinter) returns IrBlock
 	if not module.debugStream 'untracedBuild'
 		return block
 	end 'untracedBuild'
@@ -7298,9 +7298,9 @@ end 'buildGtProcessRun'
 // Store the LOW byte of wide char `wcharIndex` in `bufPtr` to `asciiCode` (the high byte stays the slab-zero, so a
 // wide char with an ASCII low byte results). The pipe-name buffer is freshly slab-zeroed, so only the non-zero low
 // bytes are written and the wide NUL after the last digit is automatic.
-function emitStoreWideCharLowByte(module StdModule, block IrBlock, ids ValueMinter, bufPtr ValueId, wcharIndex PipeWcharIndex, asciiCode ParsedInt)
+function emitStoreWideCharLowByte(module StdModule, block IrBlock, ids ValueMinter, bufPtr ValueId, wcharIndex PipeWcharIndex, asciiCode FullRangeInt)
 	let offConst = ids.mint()
-	module.appendOp(block, op: StdOp.const(offConst, value: (wcharIndex * WideCharBytes) as ParsedInt, valueType: StdType.i64))
+	module.appendOp(block, op: StdOp.const(offConst, value: (wcharIndex * WideCharBytes) as FullRangeInt, valueType: StdType.i64))
 	let slotAddr = ids.mint()
 	module.appendOp(block, op: StdOp.binOp(slotAddr, lhs: bufPtr, rhs: offConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
 	let chConst = ids.mint()
@@ -7327,7 +7327,7 @@ function buildPipeName(module StdModule, func IrFunction, ids ValueMinter, start
 	let pid = ids.mint()
 	module.appendOp(startBlock, op: StdOp.osGetPid(pid))
 	let pidShiftConst = ids.mint()
-	module.appendOp(startBlock, op: StdOp.const(pidShiftConst, value: PidShiftBits as ParsedInt, valueType: StdType.i64))
+	module.appendOp(startBlock, op: StdOp.const(pidShiftConst, value: PidShiftBits as FullRangeInt, valueType: StdType.i64))
 	let pidHi = ids.mint()
 	module.appendOp(startBlock, op: StdOp.binOp(pidHi, lhs: pid, rhs: pidShiftConst, opcode: StdBinOpcode.shl, operandType: StdType.i64))
 	let seqMaskConst = ids.mint()
@@ -7358,24 +7358,24 @@ function buildPipeName(module StdModule, func IrFunction, ids ValueMinter, start
 	let i = ids.mint()
 	hexHdr.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
 	let hexCountConst = ids.mint()
-	module.appendOp(hexHdr, op: StdOp.const(hexCountConst, value: PipeNameHexDigits as ParsedInt, valueType: StdType.i64))
+	module.appendOp(hexHdr, op: StdOp.const(hexCountConst, value: PipeNameHexDigits as FullRangeInt, valueType: StdType.i64))
 	let atEnd = ids.mint()
 	module.appendOp(hexHdr, op: StdOp.cmp(atEnd, lhs: i, rhs: hexCountConst, pred: StdCmpPred.ge, operandType: StdType.i64))
 	module.setTerminator(hexHdr, op: StdOp.condBranch(atEnd, thenBlockId: cont.id, elseBlockId: hexBody.id))
 
 	// hexBody(i): nibble = (uniquifier >>logical (60 - i*4)) & 0xF ; digit vs letter?
 	let nibbleBitsConst = ids.mint()
-	module.appendOp(hexBody, op: StdOp.const(nibbleBitsConst, value: NibbleBits as ParsedInt, valueType: StdType.i64))
+	module.appendOp(hexBody, op: StdOp.const(nibbleBitsConst, value: NibbleBits as FullRangeInt, valueType: StdType.i64))
 	let iShift = ids.mint()
 	module.appendOp(hexBody, op: StdOp.binOp(iShift, lhs: i, rhs: nibbleBitsConst, opcode: StdBinOpcode.mul, operandType: StdType.i64))
 	let topShiftConst = ids.mint()
-	module.appendOp(hexBody, op: StdOp.const(topShiftConst, value: TopNibbleShift as ParsedInt, valueType: StdType.i64))
+	module.appendOp(hexBody, op: StdOp.const(topShiftConst, value: TopNibbleShift as FullRangeInt, valueType: StdType.i64))
 	let shift = ids.mint()
 	module.appendOp(hexBody, op: StdOp.binOp(shift, lhs: topShiftConst, rhs: iShift, opcode: StdBinOpcode.sub, operandType: StdType.i64))
 	let shifted = ids.mint()
 	module.appendOp(hexBody, op: StdOp.binOp(shifted, lhs: uniquifier, rhs: shift, opcode: StdBinOpcode.shrLogical, operandType: StdType.i64))
 	let maskConst = ids.mint()
-	module.appendOp(hexBody, op: StdOp.const(maskConst, value: NibbleMask as ParsedInt, valueType: StdType.i64))
+	module.appendOp(hexBody, op: StdOp.const(maskConst, value: NibbleMask as FullRangeInt, valueType: StdType.i64))
 	let nibble = ids.mint()
 	module.appendOp(hexBody, op: StdOp.binOp(nibble, lhs: shifted, rhs: maskConst, opcode: StdBinOpcode.bitAnd, operandType: StdType.i64))
 	let alphaThreshold = ids.mint()
@@ -7414,11 +7414,11 @@ function buildPipeName(module StdModule, func IrFunction, ids ValueMinter, start
 	let ch = ids.mint()
 	storeArm.blockArgs.push(IrBlockArg.create(ch, argType: StdType.i64))
 	let prefixWcharsConst = ids.mint()
-	module.appendOp(storeArm, op: StdOp.const(prefixWcharsConst, value: PipeNamePrefixWchars as ParsedInt, valueType: StdType.i64))
+	module.appendOp(storeArm, op: StdOp.const(prefixWcharsConst, value: PipeNamePrefixWchars as FullRangeInt, valueType: StdType.i64))
 	let wcharIdx = ids.mint()
 	module.appendOp(storeArm, op: StdOp.binOp(wcharIdx, lhs: prefixWcharsConst, rhs: i, opcode: StdBinOpcode.add, operandType: StdType.i64))
 	let wideBytesConst = ids.mint()
-	module.appendOp(storeArm, op: StdOp.const(wideBytesConst, value: WideCharBytes as ParsedInt, valueType: StdType.i64))
+	module.appendOp(storeArm, op: StdOp.const(wideBytesConst, value: WideCharBytes as FullRangeInt, valueType: StdType.i64))
 	let byteOff = ids.mint()
 	module.appendOp(storeArm, op: StdOp.binOp(byteOff, lhs: wcharIdx, rhs: wideBytesConst, opcode: StdBinOpcode.mul, operandType: StdType.i64))
 	let slotAddr = ids.mint()
@@ -7471,7 +7471,7 @@ function buildGtIoRead(module StdModule, commandShape SubprocessCommandShape)
 	let saPtr = emitSubpSecurityAttributes(module, block: afterName, ids: ids)
 
 	let slotsSizeConst = ids.mint()
-	module.appendOp(afterName, op: StdOp.const(slotsSizeConst, value: SubpPipeScratchBytes as ParsedInt, valueType: StdType.i64))
+	module.appendOp(afterName, op: StdOp.const(slotsSizeConst, value: SubpPipeScratchBytes as FullRangeInt, valueType: StdType.i64))
 	let scratch = ids.mint()
 	module.appendOp(afterName, op: StdOp.call(scratch, callee: SlabAllocName, args: argsOf(slotsSizeConst)))
 	var pipeFail = module.addBlock(func, label: b"pipefail", heat: BlockHeat.normal)
@@ -7494,7 +7494,7 @@ function buildGtIoRead(module StdModule, commandShape SubprocessCommandShape)
 	let cmdlineLen = ids.mint()
 	module.appendOp(afterName, op: StdOp.loadIndirect(cmdlineLen, addrId: strPtr, offset: StringLengthOffset, valueType: StdType.i64))
 	let cmBufNulConst = ids.mint()
-	module.appendOp(afterName, op: StdOp.const(cmBufNulConst, value: TrailingNulBytes as ParsedInt, valueType: StdType.i64))
+	module.appendOp(afterName, op: StdOp.const(cmBufNulConst, value: TrailingNulBytes as FullRangeInt, valueType: StdType.i64))
 	let cmBufSize = ids.mint()
 	module.appendOp(afterName, op: StdOp.binOp(cmBufSize, lhs: cmdlineLen, rhs: cmBufNulConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
 	let cmBuf = ids.mint()
@@ -7513,7 +7513,7 @@ function buildGtIoRead(module StdModule, commandShape SubprocessCommandShape)
 	module.appendOp(afterCopy, op: StdOp.storeIndirect(startupPtr, offset: StartupInfoHStdOutputOffset, valueId: writeEnd, valueType: StdType.i64))
 	module.appendOp(afterCopy, op: StdOp.storeIndirect(startupPtr, offset: StartupInfoHStdErrorOffset, valueId: writeEnd, valueType: StdType.i64))
 	let procInfoSizeConst = ids.mint()
-	module.appendOp(afterCopy, op: StdOp.const(procInfoSizeConst, value: ProcInfoSize as ParsedInt, valueType: StdType.i64))
+	module.appendOp(afterCopy, op: StdOp.const(procInfoSizeConst, value: ProcInfoSize as FullRangeInt, valueType: StdType.i64))
 	let procInfoPtr = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.call(procInfoPtr, callee: SlabAllocName, args: argsOf(procInfoSizeConst)))
 
@@ -7561,17 +7561,17 @@ function buildGtIoRead(module StdModule, commandShape SubprocessCommandShape)
 	// the park and is freed below on every road out, the renounced one included — a dropped reader resumes and
 	// unwinds, so no second party ever has to reach it.
 	let scratchSizeConst = ids.mint()
-	module.appendOp(spawnOk, op: StdOp.const(scratchSizeConst, value: IoReadScratchBytes as ParsedInt, valueType: StdType.i64))
+	module.appendOp(spawnOk, op: StdOp.const(scratchSizeConst, value: IoReadScratchBytes as FullRangeInt, valueType: StdType.i64))
 	let scratch = ids.mint()
 	module.appendOp(spawnOk, op: StdOp.call(scratch, callee: SlabAllocName, args: argsOf(scratchSizeConst)))
 	let readBufOffConst = ids.mint()
-	module.appendOp(spawnOk, op: StdOp.const(readBufOffConst, value: IoReadBufferOffset as ParsedInt, valueType: StdType.i64))
+	module.appendOp(spawnOk, op: StdOp.const(readBufOffConst, value: IoReadBufferOffset as FullRangeInt, valueType: StdType.i64))
 	let readBuf = ids.mint()
 	module.appendOp(spawnOk, op: StdOp.binOp(readBuf, lhs: scratch, rhs: readBufOffConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
 	let readBufSizeConst = ids.mint()
-	module.appendOp(spawnOk, op: StdOp.const(readBufSizeConst, value: IoReadBufferBytes as ParsedInt, valueType: StdType.i64))
+	module.appendOp(spawnOk, op: StdOp.const(readBufSizeConst, value: IoReadBufferBytes as FullRangeInt, valueType: StdType.i64))
 	let bytesOutPtr = ids.mint()
-	module.appendOp(spawnOk, op: StdOp.binOp(bytesOutPtr, lhs: scratch, rhs: emitConst(module, block: spawnOk, value: IoReadBytesOutOffset as ParsedInt, ids: ids), opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(spawnOk, op: StdOp.binOp(bytesOutPtr, lhs: scratch, rhs: emitConst(module, block: spawnOk, value: IoReadBytesOutOffset as FullRangeInt, ids: ids), opcode: StdBinOpcode.add, operandType: StdType.i64))
 
 	// The yielding read — the shared `__gt_subp_yield_read`, which owns the park/resume road the streaming
 	// reader also uses. It returns the byte count, 0 at a clean end of stream and `SubpReadFailedCount` on a
@@ -7652,9 +7652,9 @@ let SubpSlotInUse = 0
 // spawn has set the slot up, and back to free at the release or a failed spawn. A claimed slot is
 // one no other scan may take; only a live one passes `emitSubpRequireHandle`, so a stale handle
 // cannot reach a slot a re-spawn is still setting up.
-let SubpSlotFree = 0 as ParsedInt
-let SubpSlotClaimed = 1 as ParsedInt
-let SubpSlotLive = 2 as ParsedInt
+let SubpSlotFree = 0 as FullRangeInt
+let SubpSlotClaimed = 1 as FullRangeInt
+let SubpSlotLive = 2 as FullRangeInt
 export let SubpSlotHProcess = 8
 export let SubpSlotStdinWrite = 16
 
@@ -7714,7 +7714,7 @@ export let SubpSlotWaitStartMs = 168 as ByteOffset
 //
 // ⚠ Negative is the unarmed spelling because `osTickCountMs` is non-negative on every lane.
 export let SubpSlotStdinFeedAt = 176 as ByteOffset
-let SubpStdinFeedUnarmed = -1 as ParsedInt
+let SubpStdinFeedUnarmed = -1 as FullRangeInt
 
 // What a deadline's kill is aimed at, and it always names something terminate-able: the child's job object
 // where the lane has one, the child's own process handle where it has not (a POSIX wait object, whose pid is
@@ -7728,10 +7728,10 @@ export let SubpSlotStdinRemaining = 200 as ByteOffset
 // its way out; `closing` is the one closer, which stores `idle` once the end is closed and zeroed.
 // So the end is closed exactly once, and never under a write.
 let SubpSlotStdinState = 208 as ByteOffset
-export let SubpStdinIdle = 0 as ParsedInt
-export let SubpStdinPushing = 1 as ParsedInt
-let SubpStdinCloseRequested = 2 as ParsedInt
-let SubpStdinClosing = 3 as ParsedInt
+export let SubpStdinIdle = 0 as FullRangeInt
+export let SubpStdinPushing = 1 as FullRangeInt
+let SubpStdinCloseRequested = 2 as FullRangeInt
+let SubpStdinClosing = 3 as FullRangeInt
 
 // The tree object this slot OWNS and must close at release, which is zero exactly when
 // `SubpSlotProcessTree` is the process handle the release already closes. Two words rather than
@@ -7747,9 +7747,9 @@ let SubpSlotOwnedTreeObject = 192 as ByteOffset
 // `RuntimeAbort.subpCollectSlotReleased`. The spawn's claim stores `free`, so a reused slot is collectable
 // again.
 let SubpSlotCollector = 216 as ByteOffset
-let SubpCollectorFree = 0 as ParsedInt
-export let SubpCollectorHeld = 1 as ParsedInt
-let SubpCollectorReleased = 2 as ParsedInt
+let SubpCollectorFree = 0 as FullRangeInt
+export let SubpCollectorHeld = 1 as FullRangeInt
+let SubpCollectorReleased = 2 as FullRangeInt
 export let SubpStreamReadEnd = 0
 let SubpStreamBufPtr = 8
 let SubpStreamBufCap = 16
@@ -7775,8 +7775,8 @@ let SubpPipeScratchBytes = 24
 
 // The SECOND and THIRD of those words. Named because `scratch + 8` at a pipe creation says nothing about which
 // end of the pipe is being read back out of it.
-let SubpPipeScratchSecondWord = 8 as ParsedInt
-let SubpPipeScratchSilencedWord = 16 as ParsedInt
+let SubpPipeScratchSecondWord = 8 as FullRangeInt
+let SubpPipeScratchSilencedWord = 16 as FullRangeInt
 
 // The 3 CHILD-side pipe ends are parked in a slab region across pipe creation so they do not occupy registers across
 // the (register-hungry) pipe-name-formatting loops — the "keep values off the working set" discipline a hand-built
@@ -7814,7 +7814,7 @@ let SubpOwnedStdinOff = 24
 let SubpOwnedStdoutOff = 32
 let SubpOwnedStderrOff = 40
 let SubpNewlineByte = 10
-export let SubpWaitInfinite = 0xFFFFFFFF as ParsedInt
+export let SubpWaitInfinite = 0xFFFFFFFF as FullRangeInt
 
 export let SubpYieldReadName = b"__gt_subp_yield_read"
 export let SubpSpawnName = b"__gt_subp_spawn"
@@ -7897,7 +7897,7 @@ end 'emitSubpRecordSpawnError'
 
 // Publish a code the runtime chose itself, for a refusal no OS call made. Without it the caller would read
 // whatever an earlier failure left in the word.
-function emitSubpStoreLastError(module StdModule, block IrBlock, code ParsedInt, ids ValueMinter)
+function emitSubpStoreLastError(module StdModule, block IrBlock, code FullRangeInt, ids ValueMinter)
 	emitSubpStoreLastErrorWord(module, block: block, word: emitConst(module, block: block, value: code, ids: ids), ids: ids)
 end 'emitSubpStoreLastError'
 
@@ -7910,7 +7910,7 @@ end 'emitSubpStoreLastErrorWord'
 // slot = __subp_table's region + slotIdx * SubpSlotBytes. `table` is the already-loaded region base; `slotIdx` is a
 // decoded index, never a caller's handle.
 function emitSubpSlotAddr(module StdModule, block IrBlock, ids ValueMinter, table ValueId, slotIdx ValueId) returns ValueId
-	let strideConst = emitConst(module, block: block, value: SubpSlotBytes as ParsedInt, ids: ids)
+	let strideConst = emitConst(module, block: block, value: SubpSlotBytes as FullRangeInt, ids: ids)
 	let off = emitBin(module, block: block, a: slotIdx, b: strideConst, opcode: StdBinOpcode.mul, ids: ids)
 	return emitBin(module, block: block, a: table, b: off, opcode: StdBinOpcode.add, ids: ids)
 end 'emitSubpSlotAddr'
@@ -7980,7 +7980,7 @@ end 'emitSubpRequireHandle'
 // Take `slot`'s collect interlock (`SubpSlotCollector`) from `free` to `replacement`, or stop: a taken word is a
 // collect still holding the slot or a release that already took it. EXPORTED for the collect, which takes
 // `held`; the release takes `released`. Terminates `cur` and answers the block where the word is this caller's.
-export function emitSubpRequireCollectorTaken(module StdModule, func IrFunction, cur IrBlock, slot ValueId, replacement ParsedInt, ids ValueMinter) returns IrBlock
+export function emitSubpRequireCollectorTaken(module StdModule, func IrFunction, cur IrBlock, slot ValueId, replacement FullRangeInt, ids ValueMinter) returns IrBlock
 	let taken = module.addBlock(func, label: b"subpcolltaken", heat: BlockHeat.normal)
 	var contended = module.addBlock(func, label: b"subpcollheld", heat: BlockHeat.normal)
 
@@ -7999,7 +7999,7 @@ export function emitSubpCollectorFree(module StdModule, block IrBlock, slot Valu
 	emitStoreField(module, block: block, record: slot, offset: SubpSlotCollector, value: emitConst(module, block: block, value: SubpCollectorFree, ids: ids))
 end 'emitSubpCollectorFree'
 
-export function emitSubpStdinTransition(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, slot ValueId, expected ParsedInt, replacement ParsedInt, whenLost IrBlock) returns IrBlock
+export function emitSubpStdinTransition(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, slot ValueId, expected FullRangeInt, replacement FullRangeInt, whenLost IrBlock) returns IrBlock
 	let won = module.addBlock(func, label: b"stdinwon", heat: BlockHeat.normal)
 
 	let stateAddr = emitFieldAddr(module, block: cur, record: slot, offset: SubpSlotStdinState, ids: ids)
@@ -8013,12 +8013,12 @@ end 'emitSubpStdinTransition'
 
 // A release store: a guard or a scan that reads the new state also sees every store the slot was
 // given before it, which a plain store does not promise on arm64.
-function emitSubpPublishSlotState(module StdModule, block IrBlock, slot ValueId, value ParsedInt, ids ValueMinter)
+function emitSubpPublishSlotState(module StdModule, block IrBlock, slot ValueId, value FullRangeInt, ids ValueMinter)
 	let inUseAddr = emitFieldAddr(module, block: block, record: slot, offset: SubpSlotInUse as ByteOffset, ids: ids)
 	module.appendOp(block, op: StdOp.storeRelease(inUseAddr, offset: 0, valueId: emitConst(module, block: block, value: value, ids: ids), valueType: StdType.i64))
 end 'emitSubpPublishSlotState'
 
-function emitSubpStoreStdinState(module StdModule, block IrBlock, slot ValueId, value ParsedInt, ids ValueMinter)
+function emitSubpStoreStdinState(module StdModule, block IrBlock, slot ValueId, value FullRangeInt, ids ValueMinter)
 	let stateAddr = emitFieldAddr(module, block: block, record: slot, offset: SubpSlotStdinState, ids: ids)
 	module.appendOp(block, op: StdOp.storeRelease(stateAddr, offset: 0, valueId: emitConst(module, block: block, value: value, ids: ids), valueType: StdType.i64))
 end 'emitSubpStoreStdinState'
@@ -8041,7 +8041,7 @@ end 'emitSubpSlotOf'
 // The shift between a handle's slot index and its generation (`SubpHandleSlotSpan`), shared by the spawn's
 // encode and the entries' decode so the two cannot disagree.
 function emitSubpHandleGenerationShift(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
-	return emitConst(module, block: block, value: log2OfPowerOfTwo(SubpHandleSlotSpan as MachineWord) as ParsedInt, ids: ids)
+	return emitConst(module, block: block, value: log2OfPowerOfTwo(SubpHandleSlotSpan as MachineWord) as FullRangeInt, ids: ids)
 end 'emitSubpHandleGenerationShift'
 
 // The handle a slot claimed at generation `generation` names: `generation * SubpHandleSlotSpan + slotIdx`.
@@ -8053,7 +8053,7 @@ end 'emitSubpPackHandle'
 // The slot index a handle packs. Always within `[0, SubpMaxHandles)`, so the address it yields is inside the
 // table for ANY integer — which is why the entry guard must still refuse a negative handle by sign.
 function emitSubpHandleSlotIndex(module StdModule, block IrBlock, ids ValueMinter, handle ValueId) returns ValueId
-	let mask = emitConst(module, block: block, value: SubpHandleSlotIndexMask as ParsedInt, ids: ids)
+	let mask = emitConst(module, block: block, value: SubpHandleSlotIndexMask as FullRangeInt, ids: ids)
 	return emitBin(module, block: block, a: handle, b: mask, opcode: StdBinOpcode.bitAnd, ids: ids)
 end 'emitSubpHandleSlotIndex'
 
@@ -8065,7 +8065,7 @@ end 'emitSubpHandleGeneration'
 // If `record[fieldOffset]` is 0 (a per-slot buffer never allocated on a FRESH slot), `__slab_alloc(size)` it and
 // store the pointer (and `size` into `capField`); else reuse the buffer persisted from a prior use. Returns the
 // continuation block. This is the per-HANDLE reuse that bounds a spawn/read/release loop's memory.
-function emitEnsureSlotBuffer(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, record ValueId, fieldOffset ByteOffset, size ParsedInt, capField ByteOffset) returns IrBlock
+function emitEnsureSlotBuffer(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, record ValueId, fieldOffset ByteOffset, size FullRangeInt, capField ByteOffset) returns IrBlock
 	var doAlloc = module.addBlock(func, label: b"subpalloc", heat: BlockHeat.normal)
 	let cont = module.addBlock(func, label: b"subpallocd", heat: BlockHeat.normal)
 	let existing = emitLoadField(module, block: cur, record: record, offset: fieldOffset, ids: ids)
@@ -8129,7 +8129,7 @@ function buildSubpYieldRead(module StdModule, target Target)
 
 	let zeroConst = emitConst(module, block: entry, value: 0, ids: ids)
 	let selfGt = emitLoadCurrentGt(module, block: entry, ids: ids)
-	let ovlOffConst = emitConst(module, block: entry, value: GtOffOverlapped as ParsedInt, ids: ids)
+	let ovlOffConst = emitConst(module, block: entry, value: GtOffOverlapped as FullRangeInt, ids: ids)
 	let ovlPtr = emitBin(module, block: entry, a: selfGt, b: ovlOffConst, opcode: StdBinOpcode.add, ids: ids)
 	module.appendOp(entry, op: StdOp.storeIndirect(ovlPtr, offset: 0, valueId: zeroConst, valueType: StdType.i64))
 	module.appendOp(entry, op: StdOp.storeIndirect(ovlPtr, offset: 8, valueId: zeroConst, valueType: StdType.i64))
@@ -8170,7 +8170,7 @@ function buildSubpYieldRead(module StdModule, target Target)
 
 	let err = ids.mint()
 	module.appendOp(checkErr, op: StdOp.osLastError(err))
-	let pendingConst = emitConst(module, block: checkErr, value: ErrorIoPending as ParsedInt, ids: ids)
+	let pendingConst = emitConst(module, block: checkErr, value: ErrorIoPending as FullRangeInt, ids: ids)
 	let isPending = emitCmp(module, block: checkErr, a: err, b: pendingConst, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(checkErr, op: StdOp.condBranch(isPending, thenBlockId: pending.id, elseBlockId: classifyErr.id))
 
@@ -8188,7 +8188,7 @@ function buildSubpYieldRead(module StdModule, target Target)
 	// closed its stdout is the ONE way a `ReadFile` on a live pipe fails in normal operation, so
 	// `ERROR_BROKEN_PIPE` is 0 bytes. Answering an invalid handle or an aborted operation with that same 0
 	// would make `stdlib/Subprocess.maxon` hand a caller a short answer as though the child had finished.
-	let brokenConst = emitConst(module, block: classifyErr, value: ErrorBrokenPipe as ParsedInt, ids: ids)
+	let brokenConst = emitConst(module, block: classifyErr, value: ErrorBrokenPipe as FullRangeInt, ids: ids)
 	let isBroken = emitCmp(module, block: classifyErr, a: err, b: brokenConst, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(classifyErr, op: StdOp.condBranch(isBroken, thenBlockId: cleanEof.id, elseBlockId: readFailed.id))
 
@@ -8294,7 +8294,7 @@ end 'buildSubpStrFromBytes'
 
 // The cap-free twin of `emitEnsureSlotBuffer` — for the `bytesOut` out-param slot, a fixed 8 bytes with no grow, so
 // there is no capacity slot to write. Alloc-if-zero then reuse across the handle's life.
-function emitEnsureSlotPtr(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, record ValueId, fieldOffset ByteOffset, size ParsedInt) returns IrBlock
+function emitEnsureSlotPtr(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, record ValueId, fieldOffset ByteOffset, size FullRangeInt) returns IrBlock
 	var doAlloc = module.addBlock(func, label: b"subpptr", heat: BlockHeat.normal)
 	let cont = module.addBlock(func, label: b"subpptrd", heat: BlockHeat.normal)
 	let existing = emitLoadField(module, block: cur, record: record, offset: fieldOffset, ids: ids)
@@ -8314,7 +8314,7 @@ end 'emitEnsureSlotPtr'
 // `buildPipeName` formats a unique `\\.\pipe\<hex>` name into. Spelled once for the probe read and the three
 // streaming pipes rather than repeating the size arithmetic at each site.
 function emitSubpAllocPipeName(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
-	let nameSize = emitConst(module, block: block, value: ((PipeNamePrefixWchars + PipeNameHexDigits) * WideCharBytes + PipeNameTrailingNulBytes) as ParsedInt, ids: ids)
+	let nameSize = emitConst(module, block: block, value: ((PipeNamePrefixWchars + PipeNameHexDigits) * WideCharBytes + PipeNameTrailingNulBytes) as FullRangeInt, ids: ids)
 	let nameBuf = ids.mint()
 	module.appendOp(block, op: StdOp.call(nameBuf, callee: SlabAllocName, args: argsOf(nameSize)))
 	return nameBuf
@@ -8351,23 +8351,23 @@ enum SubpPipeDirection
 	towardChild
 end 'SubpPipeDirection'
 
-let SubpPipeServerInboundMode = 0x40080001 as ParsedInt
-let SubpPipeServerOutboundMode = 0x00080002 as ParsedInt
-let SubpPipeClientWriteAccess = 0x40000000 as ParsedInt
-let SubpPipeClientReadAccess = 0x80000000 as ParsedInt
+let SubpPipeServerInboundMode = 0x40080001 as FullRangeInt
+let SubpPipeServerOutboundMode = 0x00080002 as FullRangeInt
+let SubpPipeClientWriteAccess = 0x40000000 as FullRangeInt
+let SubpPipeClientReadAccess = 0x80000000 as FullRangeInt
 
 function subpPipesAreNamed(module StdModule) returns bool
 	return hostTextIsWide(module)
 end 'subpPipesAreNamed'
 
-function subpPipeServerMode(direction SubpPipeDirection) returns ParsedInt
+function subpPipeServerMode(direction SubpPipeDirection) returns FullRangeInt
 	return match direction 'd'
 		towardParent gives SubpPipeServerInboundMode
 		towardChild gives SubpPipeServerOutboundMode
 	end 'd'
 end 'subpPipeServerMode'
 
-function subpPipeClientAccess(direction SubpPipeDirection) returns ParsedInt
+function subpPipeClientAccess(direction SubpPipeDirection) returns FullRangeInt
 	return match direction 'd'
 		towardParent gives SubpPipeClientWriteAccess
 		towardChild gives SubpPipeClientReadAccess
@@ -8388,12 +8388,12 @@ function subpPipeClientWord(direction SubpPipeDirection) returns ByteOffset
 	end 'd'
 end 'subpPipeClientWord'
 
-function subpStartupInfoBytes(module StdModule) returns ParsedInt
+function subpStartupInfoBytes(module StdModule) returns FullRangeInt
 	if subpPipesAreNamed(module) 'extended'
-		return StartupInfoExSize as ParsedInt
+		return StartupInfoExSize
 	end 'extended'
 
-	return StartupInfoSize as ParsedInt
+	return StartupInfoSize
 end 'subpStartupInfoBytes'
 
 function emitSubpAppendListedHandle(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, region ValueId, handle ValueId, firstSeen ValueId, secondSeen ValueId) returns IrBlock
@@ -8428,7 +8428,7 @@ function emitSubpAllocStartupInfo(module StdModule, block IrBlock, ids ValueMint
 	let startupPtr = ids.mint()
 	module.appendOp(block, op: StdOp.call(startupPtr, callee: SlabAllocName, args: argsOf(emitConst(module, block: block, value: recordBytes, ids: ids))))
 	module.appendOp(block, op: StdOp.storeIndirect(startupPtr, offset: StartupInfoCbOffset, valueId: emitConst(module, block: block, value: startupBytes, ids: ids), valueType: StdType.i64))
-	module.appendOp(block, op: StdOp.storeIndirect(startupPtr, offset: StartupInfoDwFlagsOffset, valueId: emitConst(module, block: block, value: StartfUseStdHandles as ParsedInt, ids: ids), valueType: StdType.i64))
+	module.appendOp(block, op: StdOp.storeIndirect(startupPtr, offset: StartupInfoDwFlagsOffset, valueId: emitConst(module, block: block, value: StartfUseStdHandles as FullRangeInt, ids: ids), valueType: StdType.i64))
 	return startupPtr
 end 'emitSubpAllocStartupInfo'
 
@@ -8619,12 +8619,12 @@ end 'emitSubpCreateReadPipe'
 // Fill a fresh SECURITY_ATTRIBUTES (nLength + bInheritHandle=TRUE) into a slab region and return its pointer — the
 // inheritable SA every child-facing pipe end is created with, spelled once for every spawn that creates a pipe.
 function emitSubpSecurityAttributes(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
-	let saSizeConst = emitConst(module, block: block, value: SecurityAttributesSize as ParsedInt, ids: ids)
+	let saSizeConst = emitConst(module, block: block, value: SecurityAttributesSize as FullRangeInt, ids: ids)
 	let saPtr = ids.mint()
 	module.appendOp(block, op: StdOp.call(saPtr, callee: SlabAllocName, args: argsOf(saSizeConst)))
-	let saLenConst = emitConst(module, block: block, value: SecurityAttributesSize as ParsedInt, ids: ids)
+	let saLenConst = emitConst(module, block: block, value: SecurityAttributesSize as FullRangeInt, ids: ids)
 	module.appendOp(block, op: StdOp.storeIndirect(saPtr, offset: SecurityAttributesNLengthOffset, valueId: saLenConst, valueType: StdType.i64))
-	let saInheritConst = emitConst(module, block: block, value: SecurityAttributesInheritable as ParsedInt, ids: ids)
+	let saInheritConst = emitConst(module, block: block, value: SecurityAttributesInheritable as FullRangeInt, ids: ids)
 	module.appendOp(block, op: StdOp.storeIndirect(saPtr, offset: SecurityAttributesBInheritOffset, valueId: saInheritConst, valueType: StdType.i64))
 	return saPtr
 end 'emitSubpSecurityAttributes'
@@ -8669,7 +8669,7 @@ export let SubpReqEnv = 96 as ByteOffset
 let SubpReqWideCmdline = 104 as ByteOffset
 let SubpReqWideCwd = 112 as ByteOffset
 let SubpReqWideEnv = 120 as ByteOffset
-let SubpReqBytes = 128 as ParsedInt
+let SubpReqBytes = 128 as FullRangeInt
 
 // ⭐ **THE STDIO KIND DISCRIMINATORS, WHICH ARE `stdlib/Subprocess.maxon`'s OWN ENUM VALUES.** `StdinKind`
 // (`none`/`inherit`/`bytes`/`file`) and `OutputKind` (`discard`/`inherit`/`collect`/`file`) are declared there
@@ -8680,10 +8680,10 @@ let SubpReqBytes = 128 as ParsedInt
 // thing on either side of a child, which is what lets `emitSubpNonPipeChildHandle` serve all three streams
 // with one body. `0` differs only in name (`none` reads the NUL device, `discard` writes it — the same open),
 // and `2` is the one genuinely per-direction value (`bytes` feeds a pipe, `collect` drains one).
-let SubpStdioInherit = 1 as ParsedInt
-let SubpStdioFile = 3 as ParsedInt
-let SubpStdinBytes = 2 as ParsedInt
-export let SubpOutCollect = 2 as ParsedInt
+let SubpStdioInherit = 1 as FullRangeInt
+let SubpStdioFile = 3 as FullRangeInt
+let SubpStdinBytes = 2 as FullRangeInt
+export let SubpOutCollect = 2 as FullRangeInt
 
 // ⭐⭐ **`hold` — A STDIN PIPE THE PARENT OPENS AND NEVER WRITES TO, SO THE CHILD'S READ BLOCKS IN THE KERNEL
 // INSTEAD OF SEEING EOF.** `StreamingSubprocess` wants exactly that (a pipe with no payload preloaded), and so
@@ -8694,13 +8694,13 @@ export let SubpOutCollect = 2 as ParsedInt
 // declaration says *"the number is 4 because that is the value the compiler's runtime already decodes"* — so the two
 // were one fact under two names, and the name that survives is the one the language spells. Renaming it is
 // what stops the next reader from concluding that `hold` is unimplemented here because no constant says so.
-export let SubpStdinHold = 4 as ParsedInt
+export let SubpStdinHold = 4 as FullRangeInt
 
 // ⭐⭐ **`delayed` — `hold`'s PIPE, THEN `bytes`'s PAYLOAD, fed `SubpStdinDelayedFeedMs` after the child's first
 // stdout byte.** A kind that falls through to the non-pipe arm below opens the NULL DEVICE, so the child reads
 // an instant EOF where it must block and then get the data — which silently turns
 // `specs/sched-syscall-handoff.md`'s ordering cases into programs with nothing to block on.
-let SubpStdinDelayed = 5 as ParsedInt
+let SubpStdinDelayed = 5 as FullRangeInt
 
 // ⭐⭐ **WHICH STDIN KINDS WANT A PARENT↔CHILD PIPE — STATED ONCE.** A chain of equality tests per kind
 // ending in *"everything else gets the null device"* gives a kind added to the stdlib and not to the chain
@@ -8728,7 +8728,7 @@ end 'emitSubpStdinKindQueuesPayload'
 
 // `kind == value` as a 0/1 word — the comparison the two sets above are each an OR of, spelled once so the
 // two of them state their MEMBERSHIP and nothing else.
-function emitSubpKindIs(module StdModule, block IrBlock, kind ValueId, value ParsedInt, ids ValueMinter) returns ValueId
+function emitSubpKindIs(module StdModule, block IrBlock, kind ValueId, value FullRangeInt, ids ValueMinter) returns ValueId
 	return emitCmp(module, block: block, a: kind, b: emitConst(module, block: block, value: value, ids: ids), pred: StdCmpPred.eq, ids: ids)
 end 'emitSubpKindIs'
 
@@ -8788,7 +8788,7 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	module.setTerminator(entry, op: StdOp.condBranch(tableNull, thenBlockId: allocTbl.id, elseBlockId: haveTbl.id))
 
 	// allocTbl: lazily create the zero-filled slot region (slab zeroing seeds every slot's inUse=0 and null buffers).
-	let tblSize = emitConst(module, block: allocTbl, value: (SubpMaxHandles * SubpSlotBytes) as ParsedInt, ids: ids)
+	let tblSize = emitConst(module, block: allocTbl, value: (SubpMaxHandles * SubpSlotBytes) as FullRangeInt, ids: ids)
 	let newTable = ids.mint()
 	module.appendOp(allocTbl, op: StdOp.call(newTable, callee: SlabAllocName, args: argsOf(tblSize)))
 	let tableAddr2 = ids.mint()
@@ -8807,7 +8807,7 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	// slotHdr(i): out of slots → -1; else check slot i.
 	let slotIdx = ids.mint()
 	slotHdr.blockArgs.push(IrBlockArg.create(slotIdx, argType: StdType.i64))
-	let maxConst = emitConst(module, block: slotHdr, value: SubpMaxHandles as ParsedInt, ids: ids)
+	let maxConst = emitConst(module, block: slotHdr, value: SubpMaxHandles as FullRangeInt, ids: ids)
 	let atMax = emitCmp(module, block: slotHdr, a: slotIdx, b: maxConst, pred: StdCmpPred.ge, ids: ids)
 	module.setTerminator(slotHdr, op: StdOp.condBranch(atMax, thenBlockId: noSlot.id, elseBlockId: slotCheck.id))
 
@@ -8844,7 +8844,7 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	let nextGeneration = emitBin(module, block: gotSlot, a: claimedGeneration, b: generationStep, opcode: StdBinOpcode.add, ids: ids)
 	emitStoreField(module, block: gotSlot, record: probeSlot, offset: SubpSlotGeneration, value: nextGeneration)
 	let saPtr = emitSubpSecurityAttributes(module, block: gotSlot, ids: ids)
-	let childScratchSizeConst = emitConst(module, block: gotSlot, value: SubpChildScratchBytes as ParsedInt, ids: ids)
+	let childScratchSizeConst = emitConst(module, block: gotSlot, value: SubpChildScratchBytes as FullRangeInt, ids: ids)
 	let childScratch = ids.mint()
 	module.appendOp(gotSlot, op: StdOp.call(childScratch, callee: SlabAllocName, args: argsOf(childScratchSizeConst)))
 	let nulName = emitLiteralCString(module, block: gotSlot, ids: ids, text: subpNullDeviceName(commandShape))
@@ -8890,7 +8890,7 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	module.appendOp(afterStderr, op: StdOp.storeIndirect(startupPtr, offset: StartupInfoHStdOutputOffset, valueId: hStdOut, valueType: StdType.i64))
 	let hStdErr = emitLoadField(module, block: afterStderr, record: childScratch, offset: SubpChildStderrWriteOff, ids: ids)
 	module.appendOp(afterStderr, op: StdOp.storeIndirect(startupPtr, offset: StartupInfoHStdErrorOffset, valueId: hStdErr, valueType: StdType.i64))
-	let procInfoSizeConst = emitConst(module, block: afterStderr, value: ProcInfoSize as ParsedInt, ids: ids)
+	let procInfoSizeConst = emitConst(module, block: afterStderr, value: ProcInfoSize as FullRangeInt, ids: ids)
 	let procInfoPtr = ids.mint()
 	module.appendOp(afterStderr, op: StdOp.call(procInfoPtr, callee: SlabAllocName, args: argsOf(procInfoSizeConst)))
 	emitSubpWideRequestStep(module, block: afterStderr, req: req, step: SubpWideRequestStep.widen, ids: ids)
@@ -8963,18 +8963,18 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	// Both streams start `open`. Written from the declaration rather than left to the slab's zero, because a
 	// SLOT IS REUSED: the previous occupant's latched state would otherwise still be sitting here.
 	let openState = emitConst(module, block: spawnOk, value: streamState.tagOfCase(SubprocessStreamOpenCaseName), ids: ids)
-	let stdoutBaseConst = emitConst(module, block: spawnOk, value: SubpStdoutBase as ParsedInt, ids: ids)
+	let stdoutBaseConst = emitConst(module, block: spawnOk, value: SubpStdoutBase as FullRangeInt, ids: ids)
 	let stdoutStream = emitBin(module, block: spawnOk, a: slot, b: stdoutBaseConst, opcode: StdBinOpcode.add, ids: ids)
 	emitStoreField(module, block: spawnOk, record: stdoutStream, offset: SubpStreamBufLen, value: zeroB)
 	emitStoreField(module, block: spawnOk, record: stdoutStream, offset: SubpStreamStateWord, value: openState)
-	let stderrBaseConst = emitConst(module, block: spawnOk, value: SubpStderrBase as ParsedInt, ids: ids)
+	let stderrBaseConst = emitConst(module, block: spawnOk, value: SubpStderrBase as FullRangeInt, ids: ids)
 	let stderrStream = emitBin(module, block: spawnOk, a: slot, b: stderrBaseConst, opcode: StdBinOpcode.add, ids: ids)
 	emitStoreField(module, block: spawnOk, record: stderrStream, offset: SubpStreamBufLen, value: zeroB)
 	emitStoreField(module, block: spawnOk, record: stderrStream, offset: SubpStreamStateWord, value: openState)
-	var afterStdoutBuf = emitEnsureSlotBuffer(module, func: func, ids: ids, cur: spawnOk, record: stdoutStream, fieldOffset: SubpStreamBufPtr, size: SubpInitialLineBufBytes as ParsedInt, capField: SubpStreamBufCap)
-	var afterStderrBuf = emitEnsureSlotBuffer(module, func: func, ids: ids, cur: afterStdoutBuf, record: stderrStream, fieldOffset: SubpStreamBufPtr, size: SubpInitialLineBufBytes as ParsedInt, capField: SubpStreamBufCap)
-	var afterWriteBuf = emitEnsureSlotBuffer(module, func: func, ids: ids, cur: afterStderrBuf, record: slot, fieldOffset: SubpSlotWriteBuf, size: SubpInitialLineBufBytes as ParsedInt, capField: SubpSlotWriteCap)
-	var afterBytesOut = emitEnsureSlotPtr(module, func: func, ids: ids, cur: afterWriteBuf, record: slot, fieldOffset: SubpSlotBytesOut, size: SubpBytesOutBytes as ParsedInt)
+	var afterStdoutBuf = emitEnsureSlotBuffer(module, func: func, ids: ids, cur: spawnOk, record: stdoutStream, fieldOffset: SubpStreamBufPtr, size: SubpInitialLineBufBytes as FullRangeInt, capField: SubpStreamBufCap)
+	var afterStderrBuf = emitEnsureSlotBuffer(module, func: func, ids: ids, cur: afterStdoutBuf, record: stderrStream, fieldOffset: SubpStreamBufPtr, size: SubpInitialLineBufBytes as FullRangeInt, capField: SubpStreamBufCap)
+	var afterWriteBuf = emitEnsureSlotBuffer(module, func: func, ids: ids, cur: afterStderrBuf, record: slot, fieldOffset: SubpSlotWriteBuf, size: SubpInitialLineBufBytes as FullRangeInt, capField: SubpSlotWriteCap)
+	var afterBytesOut = emitEnsureSlotPtr(module, func: func, ids: ids, cur: afterWriteBuf, record: slot, fieldOffset: SubpSlotBytesOut, size: SubpBytesOutBytes as FullRangeInt)
 
 	// ⭐ This is the point the slot becomes a live HANDLE: `SubpSlotLive` is published after every
 	// set-up store above, so a guard that finds it sees them all. The handle packs the generation
@@ -9045,7 +9045,7 @@ end 'subpNullDeviceName'
 // that difference is a correctness obligation, not bookkeeping: an INHERITED handle belongs to the OS, and
 // closing it would close the PARENT's own stdout. The inherit arm therefore passes 0 as the owned half, and
 // `CloseHandle(0)` is the no-op that makes the close path uniform.
-function emitSubpNonPipeChildHandle(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, kind ValueId, data ValueId, nulName ValueId, childScratch ValueId, stdSelector ParsedInt, forWrite bool, join IrBlock, whenFailed IrBlock)
+function emitSubpNonPipeChildHandle(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, kind ValueId, data ValueId, nulName ValueId, childScratch ValueId, stdSelector FullRangeInt, forWrite bool, join IrBlock, whenFailed IrBlock)
 	var stdArm = module.addBlock(func, label: b"sstd", heat: BlockHeat.normal)
 	var pathPick = module.addBlock(func, label: b"spath", heat: BlockHeat.normal)
 	var fileArm = module.addBlock(func, label: b"sfile", heat: BlockHeat.normal)
@@ -9189,7 +9189,7 @@ function emitSubpStdinSetup(module StdModule, func IrFunction, ids ValueMinter, 
 	let name = emitSubpAllocPipeName(module, block: pipeArm, ids: ids)
 	buildPipeName(module, func: func, ids: ids, startBlock: pipeArm, bufPtr: name, cont: pipeMake)
 
-	let scratchSizeConst = emitConst(module, block: pipeMake, value: SubpPipeScratchBytes as ParsedInt, ids: ids)
+	let scratchSizeConst = emitConst(module, block: pipeMake, value: SubpPipeScratchBytes as FullRangeInt, ids: ids)
 	let scratch = ids.mint()
 	module.appendOp(pipeMake, op: StdOp.call(scratch, callee: SlabAllocName, args: argsOf(scratchSizeConst)))
 	let eight = emitConst(module, block: pipeMake, value: SubpPipeScratchSecondWord, ids: ids)
@@ -9225,7 +9225,7 @@ end 'emitSubpStdinSetup'
 // Called twice — for stdout and for stderr — with the request field offsets, the slot's stream sub-block base
 // and the parent's own standard-handle selector as its only differences, because those ARE the only differences
 // (`GtRuntime`'s slot layout makes the two stream sub-blocks identical five-word records for this reason).
-function emitSubpOutputSetup(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, req ValueId, table ValueId, slotIdx ValueId, saPtr ValueId, childScratch ValueId, nulName ValueId, kindOffset ByteOffset, dataOffset ByteOffset, limitOffset ByteOffset, streamBase ByteOffset, slotLimitOffset ByteOffset, childOffset ByteOffset, ownedOffset ByteOffset, stdSelector ParsedInt, whenFailed IrBlock) returns IrBlock
+function emitSubpOutputSetup(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, req ValueId, table ValueId, slotIdx ValueId, saPtr ValueId, childScratch ValueId, nulName ValueId, kindOffset ByteOffset, dataOffset ByteOffset, limitOffset ByteOffset, streamBase ByteOffset, slotLimitOffset ByteOffset, childOffset ByteOffset, ownedOffset ByteOffset, stdSelector FullRangeInt, whenFailed IrBlock) returns IrBlock
 	var pipeArm = module.addBlock(func, label: b"soutpipe", heat: BlockHeat.normal)
 	var pipeMake = module.addBlock(func, label: b"soutpmake", heat: BlockHeat.normal)
 	var nonPipe = module.addBlock(func, label: b"soutother", heat: BlockHeat.normal)
@@ -9237,7 +9237,7 @@ function emitSubpOutputSetup(module StdModule, func IrFunction, ids ValueMinter,
 	let limit = emitLoadField(module, block: cur, record: req, offset: limitOffset, ids: ids)
 	let slot = emitSubpSlotAddr(module, block: cur, ids: ids, table: table, slotIdx: slotIdx)
 	emitStoreField(module, block: cur, record: slot, offset: slotLimitOffset, value: limit)
-	let streamBaseConst = emitConst(module, block: cur, value: streamBase as ParsedInt, ids: ids)
+	let streamBaseConst = emitConst(module, block: cur, value: streamBase as FullRangeInt, ids: ids)
 	let stream = emitBin(module, block: cur, a: slot, b: streamBaseConst, opcode: StdBinOpcode.add, ids: ids)
 	let zero = emitConst(module, block: cur, value: 0, ids: ids)
 
@@ -9250,13 +9250,13 @@ function emitSubpOutputSetup(module StdModule, func IrFunction, ids ValueMinter,
 	let name = emitSubpAllocPipeName(module, block: pipeArm, ids: ids)
 	buildPipeName(module, func: func, ids: ids, startBlock: pipeArm, bufPtr: name, cont: pipeMake)
 
-	let scratchSizeConst = emitConst(module, block: pipeMake, value: SubpPipeScratchBytes as ParsedInt, ids: ids)
+	let scratchSizeConst = emitConst(module, block: pipeMake, value: SubpPipeScratchBytes as FullRangeInt, ids: ids)
 	let scratch = ids.mint()
 	module.appendOp(pipeMake, op: StdOp.call(scratch, callee: SlabAllocName, args: argsOf(scratchSizeConst)))
 	pipeMake = emitSubpCreateReadPipe(module, func: func, ids: ids, cur: pipeMake, namePtr: name, saPtr: saPtr, scratch: scratch, whenFailed: whenFailed)
 	let parentRead = emitLoadField(module, block: pipeMake, record: scratch, offset: 0, ids: ids)
 	let slotP = emitSubpSlotAddr(module, block: pipeMake, ids: ids, table: table, slotIdx: slotIdx)
-	let streamBaseConstP = emitConst(module, block: pipeMake, value: streamBase as ParsedInt, ids: ids)
+	let streamBaseConstP = emitConst(module, block: pipeMake, value: streamBase as FullRangeInt, ids: ids)
 	let streamP = emitBin(module, block: pipeMake, a: slotP, b: streamBaseConstP, opcode: StdBinOpcode.add, ids: ids)
 	emitStoreField(module, block: pipeMake, record: streamP, offset: SubpStreamReadEnd, value: parentRead)
 	module.appendOp(pipeMake, op: StdOp.call(ids.mint(), callee: NetpollPipeOpenName, args: argsOf(parentRead)))
@@ -9301,7 +9301,7 @@ function buildSubpSpawn(module StdModule, commandShape SubprocessCommandShape)
 	let cmdStrPtr = 0 as ValueId
 	let cmdBuffer = emitLoadField(module, block: entry, record: cmdStrPtr, offset: StringBufferOffset, ids: ids)
 	let cmdLen = emitLoadField(module, block: entry, record: cmdStrPtr, offset: StringLengthOffset, ids: ids)
-	let nulBytes = emitConst(module, block: entry, value: TrailingNulBytes as ParsedInt, ids: ids)
+	let nulBytes = emitConst(module, block: entry, value: TrailingNulBytes as FullRangeInt, ids: ids)
 	let cmBufSize = emitBin(module, block: entry, a: cmdLen, b: nulBytes, opcode: StdBinOpcode.add, ids: ids)
 	let cmBuf = ids.mint()
 	module.appendOp(entry, op: StdOp.call(cmBuf, callee: SlabAllocName, args: argsOf(cmBufSize)))
@@ -9522,7 +9522,7 @@ function emitSubpClosePipeEnd(module StdModule, block IrBlock, ids ValueMinter, 
 end 'emitSubpClosePipeEnd'
 
 function emitSubpCloseStreamReadEnd(module StdModule, block IrBlock, ids ValueMinter, slot ValueId, streamBase ByteOffset)
-	let base = emitConst(module, block: block, value: streamBase as ParsedInt, ids: ids)
+	let base = emitConst(module, block: block, value: streamBase as FullRangeInt, ids: ids)
 	let stream = emitBin(module, block: block, a: slot, b: base, opcode: StdBinOpcode.add, ids: ids)
 	emitSubpClosePipeEnd(module, block: block, ids: ids, record: stream, offset: SubpStreamReadEnd as ByteOffset)
 end 'emitSubpCloseStreamReadEnd'
@@ -9578,7 +9578,7 @@ function emitSubpTopUpStream(module StdModule, func IrFunction, ids ValueMinter,
 	// cur: ensure room for one more chunk past the current length.
 	let bufLenC = emitLoadField(module, block: cur, record: streamPtr, offset: SubpStreamBufLen, ids: ids)
 	let bufCapC = emitLoadField(module, block: cur, record: streamPtr, offset: SubpStreamBufCap, ids: ids)
-	let chunkConst = emitConst(module, block: cur, value: SubpReadChunkBytes as ParsedInt, ids: ids)
+	let chunkConst = emitConst(module, block: cur, value: SubpReadChunkBytes as FullRangeInt, ids: ids)
 	let needed = emitBin(module, block: cur, a: bufLenC, b: chunkConst, opcode: StdBinOpcode.add, ids: ids)
 	let tooSmall = emitCmp(module, block: cur, a: needed, b: bufCapC, pred: StdCmpPred.gt, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(tooSmall, thenBlockId: doGrow.id, elseBlockId: doRead.id))
@@ -9600,7 +9600,7 @@ function emitSubpTopUpStream(module StdModule, func IrFunction, ids ValueMinter,
 	let bufPtrD = emitLoadField(module, block: doRead, record: streamPtr, offset: SubpStreamBufPtr, ids: ids)
 	let bufLenD = emitLoadField(module, block: doRead, record: streamPtr, offset: SubpStreamBufLen, ids: ids)
 	let readDst = emitBin(module, block: doRead, a: bufPtrD, b: bufLenD, opcode: StdBinOpcode.add, ids: ids)
-	let chunkConst2 = emitConst(module, block: doRead, value: SubpReadChunkBytes as ParsedInt, ids: ids)
+	let chunkConst2 = emitConst(module, block: doRead, value: SubpReadChunkBytes as FullRangeInt, ids: ids)
 
 	// The read pipe is TABLE-owned, so a promise dropped mid-read leaves it open for the next read on this
 	// handle and `subpRelease` is its sole closer.
@@ -9734,7 +9734,7 @@ function buildSubpReadLine(module StdModule, name ByteArray, streamBase ByteOffs
 
 	var live = emitSubpRequireHandle(module, func: func, ids: ids, cur: entry, handle: handle, whenBad: badHandle)
 	let slot = emitSubpSlotOf(module, block: live, ids: ids, handle: handle)
-	let streamBaseConst = emitConst(module, block: live, value: streamBase as ParsedInt, ids: ids)
+	let streamBaseConst = emitConst(module, block: live, value: streamBase as FullRangeInt, ids: ids)
 	let streamPtr = emitBin(module, block: live, a: slot, b: streamBaseConst, opcode: StdBinOpcode.add, ids: ids)
 	let readEnd = emitLoadField(module, block: live, record: streamPtr, offset: SubpStreamReadEnd, ids: ids)
 	let bytesOutPtr = emitLoadField(module, block: live, record: slot, offset: SubpSlotBytesOut, ids: ids)
@@ -9753,7 +9753,7 @@ function buildSubpReadLine(module StdModule, name ByteArray, streamBase ByteOffs
 	let byteAddr = emitBin(module, block: scanCheck, a: bufPtrC, b: i, opcode: StdBinOpcode.add, ids: ids)
 	let scanByte = ids.mint()
 	module.appendOp(scanCheck, op: StdOp.loadIndirect(scanByte, addrId: byteAddr, offset: 0, valueType: StdType.u8))
-	let nlConst = emitConst(module, block: scanCheck, value: SubpNewlineByte as ParsedInt, ids: ids)
+	let nlConst = emitConst(module, block: scanCheck, value: SubpNewlineByte as FullRangeInt, ids: ids)
 	let isNl = emitCmp(module, block: scanCheck, a: scanByte, b: nlConst, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(scanCheck, op: StdOp.condBranch(isNl, thenBlockId: found.id, elseBlockId: scanInc.id))
 
@@ -9873,7 +9873,7 @@ function buildSubpReadExact(module StdModule, streamState EnumLayout)
 
 	var live = emitSubpRequireHandle(module, func: func, ids: ids, cur: handleCheck, handle: handle, whenBad: refused)
 	let slot = emitSubpSlotOf(module, block: live, ids: ids, handle: handle)
-	let streamBaseConst = emitConst(module, block: live, value: SubpStdoutBase as ParsedInt, ids: ids)
+	let streamBaseConst = emitConst(module, block: live, value: SubpStdoutBase as FullRangeInt, ids: ids)
 	let streamPtr = emitBin(module, block: live, a: slot, b: streamBaseConst, opcode: StdBinOpcode.add, ids: ids)
 	let readEnd = emitLoadField(module, block: live, record: streamPtr, offset: SubpStreamReadEnd, ids: ids)
 	let bytesOutPtr = emitLoadField(module, block: live, record: slot, offset: SubpSlotBytesOut, ids: ids)
@@ -9938,7 +9938,7 @@ function buildSubpStreamStateQuery(module StdModule, name ByteArray, streamBase 
 
 	var good = emitSubpRequireHandle(module, func: func, ids: ids, cur: entry, handle: handle, whenBad: bad)
 	let slot = emitSubpSlotOf(module, block: good, ids: ids, handle: handle)
-	let baseConst = emitConst(module, block: good, value: streamBase as ParsedInt, ids: ids)
+	let baseConst = emitConst(module, block: good, value: streamBase as FullRangeInt, ids: ids)
 	let streamPtr = emitBin(module, block: good, a: slot, b: baseConst, opcode: StdBinOpcode.add, ids: ids)
 	let state = emitLoadField(module, block: good, record: streamPtr, offset: SubpStreamStateWord, ids: ids)
 	module.setTerminator(good, op: StdOp.ret(state))
@@ -9997,7 +9997,7 @@ function buildSubpWriteLine(module StdModule)
 	let wcopy = ids.mint()
 	module.appendOp(doWrite, op: StdOp.call(wcopy, callee: StrCopyName, args: threeArgs(writeBuf, second: strBuf, third: strLen)))
 	let nlAddr = emitBin(module, block: doWrite, a: writeBuf, b: strLen, opcode: StdBinOpcode.add, ids: ids)
-	let nlByte = emitConst(module, block: doWrite, value: SubpNewlineByte as ParsedInt, ids: ids)
+	let nlByte = emitConst(module, block: doWrite, value: SubpNewlineByte as FullRangeInt, ids: ids)
 	module.appendOp(doWrite, op: StdOp.storeIndirect(nlAddr, offset: 0, valueId: nlByte, valueType: StdType.u8))
 	let bytesOutW = emitLoadField(module, block: doWrite, record: slot, offset: SubpSlotBytesOut, ids: ids)
 	let writeOk = ids.mint()

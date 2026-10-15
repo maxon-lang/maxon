@@ -1,0 +1,21 @@
+let CaseDirName = "declaration-limit-tuple"
+let Refusal = "more than 65535 tuple elements"
+
+test 'a tuple type of 65,536 elements is refused'
+	try requireDeclarationRefused(CaseDirName, source: tupleElementsSource(), refusal: Refusal)
+end 'a tuple type of 65,536 elements is refused'
+
+function tupleElementsSource() returns String
+	var text = "{DeclarationPrelude}typealias Wide = ("
+
+	for i in 0 upto DeclaredMemberCount 'eachElement'
+		if i > 0 'separator'
+			text.append(", ")
+		end 'separator'
+
+		text.append("Count")
+	end 'eachElement'
+
+	text.append(")\n\n{DeclarationMain}")
+	return text
+end 'tupleElementsSource'

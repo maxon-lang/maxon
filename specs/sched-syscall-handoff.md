@@ -170,7 +170,7 @@ end 'Sentinel'
 function main() returns ExitCode
 	var readers = ReaderHandleArray.create()
 
-	var i = 0
+	var i = 0 as Integer
 	while i < readerCount 'spawnEach'
 		readers.push(spawn Reader.create(i))
 		i = i + 1
@@ -182,19 +182,19 @@ function main() returns ExitCode
 	// than eight reads one after another, and it is the whole difference between this program and one
 	// that could never see the subject.
 	var replies = ReplyPromiseArray.create()
-	var k = 0
+	var k = 0 as Integer
 	while k < readerCount 'sendEach'
-		let r = try readers.get(k) otherwise panic("readers.get OOB at {k} — the loop is bounded by the count the pushes above filled")
+		let r = try readers.get(k as ElementIndex) otherwise panic("readers.get OOB at {k} — the loop is bounded by the count the pushes above filled")
 		replies.push(r.roundTrip())
 		k = k + 1
 	end 'sendEach'
 
 	let tailReply = last.ping()
 
-	var aggregate = 0
-	var n = 0
+	var aggregate = 0 as Integer
+	var n = 0 as Integer
 	while n < readerCount 'collect'
-		let p = try replies.get(n) otherwise panic("replies.get OOB at {n} — the loop is bounded by the count the pushes above filled")
+		let p = try replies.get(n as ElementIndex) otherwise panic("replies.get OOB at {n} — the loop is bounded by the count the pushes above filled")
 		aggregate = aggregate + (try await p otherwise 0)
 		n = n + 1
 	end 'collect'
@@ -273,7 +273,7 @@ end 'Sentinel'
 function main() returns ExitCode
 	var runners = RunnerHandleArray.create()
 
-	var i = 0
+	var i = 0 as Integer
 	while i < runnerCount 'spawnEach'
 		runners.push(spawn Runner.create(i))
 		i = i + 1
@@ -282,19 +282,19 @@ function main() returns ExitCode
 	let last = spawn Sentinel.create()
 
 	var replies = ReplyPromiseArray.create()
-	var k = 0
+	var k = 0 as Integer
 	while k < runnerCount 'sendEach'
-		let r = try runners.get(k) otherwise panic("runners.get OOB at {k} — the loop is bounded by the count the pushes above filled")
+		let r = try runners.get(k as ElementIndex) otherwise panic("runners.get OOB at {k} — the loop is bounded by the count the pushes above filled")
 		replies.push(r.child())
 		k = k + 1
 	end 'sendEach'
 
 	let tailReply = last.ping()
 
-	var aggregate = 0
-	var n = 0
+	var aggregate = 0 as Integer
+	var n = 0 as Integer
 	while n < runnerCount 'collect'
-		let p = try replies.get(n) otherwise panic("replies.get OOB at {n} — the loop is bounded by the count the pushes above filled")
+		let p = try replies.get(n as ElementIndex) otherwise panic("replies.get OOB at {n} — the loop is bounded by the count the pushes above filled")
 		aggregate = aggregate + (try await p otherwise 0)
 		n = n + 1
 	end 'collect'
@@ -872,7 +872,7 @@ type Spinner
 
 	export function spin(ms Integer) returns Integer
 		let start = Clock.nowMs()
-		var turns = 0
+		var turns = 0 as Integer
 		while (Clock.elapsedMs(start) as Integer) < ms 'spin'
 			turns = turns + 1
 		end 'spin'

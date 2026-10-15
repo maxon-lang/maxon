@@ -44,8 +44,8 @@ end 'Box'
 typealias StrBox = Box with String
 
 function main() returns ExitCode
-	var total = 0
-	var i = 0
+	var total = 0 as ExitCode
+	var i = 0 as Integer
 	while i < 50 'loop'
 		let s = "hello!"
 		let b = StrBox.create(2, item: s)
@@ -81,8 +81,8 @@ end 'Box'
 typealias StrBox = Box with String
 
 function main() returns ExitCode
-	var total = 0
-	var i = 0
+	var total = 0 as ExitCode
+	var i = 0 as Integer
 	while i < 50 'loop'
 		let s = "hello!"
 		let b = StrBox.create(2, item: s)
@@ -118,8 +118,8 @@ end 'Box'
 typealias StrBox = Box with String
 
 function main() returns ExitCode
-	var total = 0
-	var i = 0
+	var total = 0 as ExitCode
+	var i = 0 as Integer
 	while i < 50 'loop'
 		let s = "hello!"
 		let b = StrBox.create(2, item: s)

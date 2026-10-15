@@ -477,7 +477,7 @@ function narrow(x Small) returns Small
 end 'narrow'
 
 function main() returns ExitCode
-	var last = 0
+	var last = 0 as Small
 	for i in 1000 to 1000 'once'
 		last = narrow(i / 3)
 	end 'once'

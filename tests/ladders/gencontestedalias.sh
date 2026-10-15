@@ -23,9 +23,9 @@ rm -f "$OUT"/*.maxon
 rm -rf "$OUT"/ns*
 
 cat > "$OUT/a_prelude.maxon" <<'PRELUDE'
-export typealias LadderInt = int(i64.min to i64.max)
+module typealias LadderInt = int(i64.min to i64.max)
 
-export function rcOpaque(a LadderInt) returns LadderInt
+module function rcOpaque(a LadderInt) returns LadderInt
 	if a > 100 'big'
 		return a - 100
 	end 'big'
@@ -40,7 +40,7 @@ done
 
 {
 	for ((i = 0; i < N; i++)); do
-		echo "export function rcCast$i(a LadderInt) returns LadderInt"
+		echo "module function rcCast$i(a LadderInt) returns LadderInt"
 		echo "	let c = (rcOpaque(a + $i) and 255) as ns$i.RcScore"
 		echo "	return c as LadderInt"
 		echo "end 'rcCast$i'"
@@ -49,7 +49,7 @@ done
 
 {
 	echo "function main() returns ExitCode"
-	echo "	var acc = 0"
+	echo "	var acc = 0 as LadderInt"
 	for ((i = 0; i < N; i++)); do
 		echo "	acc = acc + rcCast$i(7)"
 	done

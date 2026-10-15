@@ -58,7 +58,7 @@ the only evidence that the initializer ran at all.
 typealias Count = int(0 to u64.max)
 
 type Counter
-	static var initCount = 0
+	static var initCount = 0 as Count
 	static var cached = Counter.createInstance()
 	export var id as Count
 
@@ -95,7 +95,7 @@ makes that a rule rather than a coincidence of one scope.
 typealias Count = int(0 to u64.max)
 
 type Counter
-	static var initCount = 0
+	static var initCount = 0 as Count
 	export var id as Count
 
 	static function createInstance() returns Counter
@@ -169,7 +169,7 @@ second run would show here as `2` even though every access answers with the same
 typealias Count = int(0 to u64.max)
 
 type Once
-	static var runs = 0
+	static var runs = 0 as Count
 	static var value = Once.build()
 	export var n as Count
 
@@ -214,7 +214,7 @@ depend on how the program goes on to use the slot.
 typealias Count = int(0 to u64.max)
 
 type Slot
-	static var runs = 0
+	static var runs = 0 as Count
 	static var value = Slot.build()
 	export var n as Count
 
@@ -263,7 +263,7 @@ with the assigned value and the run count stays at 1.
 typealias Count = int(0 to u64.max)
 
 type Reassigned
-	static var runs = 0
+	static var runs = 0 as Count
 	static var value = Reassigned.build()
 	export var n as Count
 

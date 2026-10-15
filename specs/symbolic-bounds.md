@@ -57,7 +57,7 @@ typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
 function total(a WordArray) returns Word
-	var t = 0
+	var t = 0 as Word
 	for i in 0 upto a.count() 'sum'
 		t = t + (try a.get(i) otherwise panic("total: i < a.count()"))
 	end 'sum'
@@ -96,7 +96,7 @@ typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
 function flips(p WordArray) returns Word
-	var count = 1
+	var count = 1 as Word
 	var first = try p.get(0) otherwise panic("flips: p is not empty")
 
 	while (try p.get(first as ElementIndex) otherwise panic("flips: first is an element, so an index into p")) > 0 'flip'
@@ -104,13 +104,13 @@ function flips(p WordArray) returns Word
 		try p.set(first as ElementIndex, value: first) otherwise panic("flips: first < p.count()")
 
 		if first > 2 'reverseMiddle'
-			var low = 1
+			var low = 1 as Word
 			var high = first - 1
 
 			while low < high 'swap'
-				let atLow = try p.get(low) otherwise panic("flips: low < high < first < p.count()")
+				let atLow = try p.get(low as ElementIndex) otherwise panic("flips: low < high < first < p.count()")
 				let atHigh = try p.get(high as ElementIndex) otherwise panic("flips: high < first < p.count()")
-				try p.set(low, value: atHigh) otherwise panic("flips: low is in range")
+				try p.set(low as ElementIndex, value: atHigh) otherwise panic("flips: low is in range")
 				try p.set(high as ElementIndex, value: atLow) otherwise panic("flips: high is in range")
 				low = low + 1
 				high = high - 1
@@ -159,8 +159,8 @@ not three.
 typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
-function double(a WordArray, n Word) returns Word
-	var t = 0
+function double(a WordArray, n Count) returns Word
+	var t = 0 as Word
 	for i in 0 upto n 'each'
 		let v = try a.get(i) otherwise panic("double: i < n <= a.count()")
 		try a.set(i, value: v * 2) otherwise panic("double: i < n <= a.count()")
@@ -191,8 +191,8 @@ stay, the four indices past the end take the fallback, and the sum says so.
 typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
-function walk(a WordArray, n Word) returns Word
-	var t = 0
+function walk(a WordArray, n Count) returns Word
+	var t = 0 as Word
 	for i in 0 upto n 'each'
 		t = t + (try a.get(i) otherwise 99)
 	end 'each'
@@ -223,7 +223,7 @@ typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
 function overrun(a WordArray) returns Word
-	var t = 0
+	var t = 0 as Word
 	for i in 0 to a.count() 'each'
 		t = t + (try a.get(i) otherwise 1000)
 	end 'each'
@@ -292,7 +292,7 @@ typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
 function growAndSum(a WordArray) returns Word
-	var t = 0
+	var t = 0 as Word
 	for i in 0 upto a.count() 'each'
 		a.push(i)
 		t = t + (try a.get(i) otherwise 1000)
@@ -329,7 +329,7 @@ typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
 function nextSum(a WordArray) returns Word
-	var t = 0
+	var t = 0 as Word
 	for i in 0 upto a.count() 'each'
 		let j = i + 1
 		t = t + (try a.get(j) otherwise 1000)

@@ -141,9 +141,9 @@ type CovSummary
 end 'CovSummary'
 
 function summarize(report CovReport) returns CovSummary
-	var covered = 0
-	var instrumented = 0
-	var eliminated = 0
+	var covered = 0 as CovTally
+	var instrumented = 0 as CovTally
+	var eliminated = 0 as CovTally
 
 	for file in report.files 'eachFile'
 		for line in file.lines 'eachLine'
@@ -153,8 +153,8 @@ function summarize(report CovReport) returns CovSummary
 		end 'eachLine'
 	end 'eachFile'
 
-	var taken = 0
-	var armsInstrumented = 0
+	var taken = 0 as CovTally
+	var armsInstrumented = 0 as CovTally
 
 	for branch in report.branches 'eachBranch'
 		for arm in branch.arms 'eachArm'
@@ -498,11 +498,11 @@ function renderAnnotatedSource(file CovFile, source StringArray) returns String
 	end 'eachLine'
 
 	var out = ""
-	var lineNumber = 0
+	var lineNumber = 0 as CovLineNumber
 
 	for text in source 'eachSourceLine'
 		lineNumber = lineNumber + 1
-		let mark = try markerOfLine.get(lineNumber as CovLineNumber) otherwise ""
+		let mark = try markerOfLine.get(lineNumber) otherwise ""
 		out.append("{padLeft(mark, width: CountColumnWidth)} {ColumnSeparator}{padLeft("{lineNumber}", width: LineNumberColumnWidth)}{ColumnSeparator} {text}{LineFeed}")
 	end 'eachSourceLine'
 

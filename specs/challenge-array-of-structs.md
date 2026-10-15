@@ -130,7 +130,7 @@ function main() returns ExitCode
 	tasks.push(Task.create(Status.active))
 	tasks.push(Task.create(Status.done))
 
-	var activeCount = 0
+	var activeCount = 0 as ExitCode
 	for task in tasks 'loop'
 		match task.status 'check'
 			active then activeCount = activeCount + 1

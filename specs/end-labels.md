@@ -247,7 +247,7 @@ error E2008: <fragment>:16:1: Mismatched end label: expected 'Box', got 'Bag'
 <!-- test: error.an-if-end-label-names-another-block -->
 ```maxon
 function main() returns ExitCode
-	var total = 0
+	var total = 0 as ExitCode
 
 	if total == 0 'empty'
 		total = 1
@@ -263,7 +263,7 @@ error E2008: <fragment>:7:2: Mismatched end label: expected 'empty', got 'full'
 <!-- test: error.an-else-end-label-names-another-block -->
 ```maxon
 function main() returns ExitCode
-	var total = 0
+	var total = 0 as ExitCode
 
 	if total == 1 'one'
 		total = 2
@@ -281,7 +281,7 @@ error E2008: <fragment>:9:2: Mismatched end label: expected 'other', got 'one'
 <!-- test: error.a-while-end-label-names-another-block -->
 ```maxon
 function main() returns ExitCode
-	var total = 0
+	var total = 0 as ExitCode
 
 	while total < 3 'grow'
 		total = total + 1
@@ -297,7 +297,7 @@ error E2008: <fragment>:7:2: Mismatched end label: expected 'grow', got 'shrink'
 <!-- test: error.a-for-end-label-names-another-block -->
 ```maxon
 function main() returns ExitCode
-	var total = 0
+	var total = 0 as ExitCode
 
 	for i in 0 upto 3 'eachStep'
 		total = total + i

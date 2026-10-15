@@ -442,6 +442,14 @@ function measureScaleLadder(args MaxonArgs, corpusRoot FilePath, treeLock LockHo
 		return brokenRun("the checkout's library sources could not be walked", detail: scaleErrorText(error))
 	end 'noLibraryWalk'
 
+	let warmRung = try ladder.get(0) otherwise panic("measureScaleLadder: generateCorpus yields at least one rung")
+	print("scale-test: warming the library cache with one unmeasured compile of rung {warmRung.index}\n")
+	treeLock.touch()
+
+	_ = try compileRung(compilerExe, root: corpusRoot, rung: warmRung) otherwise (error) 'warmFailed'
+		return brokenRun("the cache-warming compile of rung {warmRung.index} did not deliver a rung to measure", detail: scaleErrorText(error))
+	end 'warmFailed'
+
 	printRungHeader()
 	var results = RungResultArray.create()
 

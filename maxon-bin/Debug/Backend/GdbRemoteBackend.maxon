@@ -586,7 +586,7 @@ export type GdbRemoteBackend
 	end 'stopReplyDescribesEveryStoppedThread'
 
 	function queuedFromStopInfo(hex String)
-		match gdbHexBytesOf(hex) 'read'
+		match hexBytesOf(hex) 'read'
 			notHex then return
 			bytes(raw) then self.queuedFromStopInfoText(String.from(raw))
 		end 'read'
@@ -1059,7 +1059,7 @@ export type GdbRemoteBackend
 
 	function drainedToTheEnd()
 		var gone = false
-		var read = 0
+		var read = 0 as Count
 
 		while not gone and read < GdbEndingRepliesRead 'eachReply'
 			match self.answerWithin(GdbBorrowedStopMs) 'seen'
@@ -1532,7 +1532,7 @@ end 'gdbSlotSet'
 // ⛔ **A REGISTER ARRIVES AS ITS RAW BYTES, WHICH ON THIS CPU ARE LEAST SIGNIFICANT FIRST**, so the digits
 // a reply spells are not the digits of the number: the pairs are read as memory and reassembled.
 function gdbRegisterHexRead(payload String) returns GdbRegisterRead
-	match gdbHexBytesOf(payload) 'read'
+	match hexBytesOf(payload) 'read'
 		notHex then return GdbRegisterRead.unreadable
 		bytes(raw) then return gdbRegisterValueIn(raw)
 	end 'read'
@@ -1550,7 +1550,7 @@ function gdbRegisterValueIn(raw ByteArray) returns GdbRegisterRead
 end 'gdbRegisterValueIn'
 
 function gdbMemoryOf(payload String, bytes BackendByteCount) returns BackendMemoryRead
-	match gdbHexBytesOf(payload) 'read'
+	match hexBytesOf(payload) 'read'
 		notHex then return BackendMemoryRead.unreadable
 		bytes(raw) then return gdbWholeWindow(raw, asked: bytes)
 	end 'read'
@@ -1792,7 +1792,7 @@ end 'gdbSlideOf'
 	function gdbSlotOfIndex(name String, prefix String, count BackendRegisterNumber, base BackendRegisterNumber) returns GdbSlotChoice
 		let index = try int.fromString(name.replaceFirst(prefix, with: "")) otherwise return GdbSlotChoice.none
 
-		if index < 0 or index >= (count as ParsedInt) 'notOneThisFileHolds'
+		if index < 0 or index >= (count as FullRangeInt) 'notOneThisFileHolds'
 			return GdbSlotChoice.none
 		end 'notOneThisFileHolds'
 

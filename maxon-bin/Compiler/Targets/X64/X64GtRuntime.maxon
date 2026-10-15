@@ -227,7 +227,7 @@ function buildGtContextSwitchChunk(target Target) returns FunctionCodeChunk
 
 	for k in 0 upto calleeSavedXmmOrder.count() 'saveXmm'
 		let reg = try calleeSavedXmmOrder.get(k) otherwise panic("buildGtContextSwitchChunk: save index derived from count is in range")
-		encodeMovsdBaseDispReg(code, base: X64Register.rsp, disp: (k * XmmSaveSlotBytes) as Imm32, srcReg: reg)
+		encodeMovsdBaseDispReg(code, base: X64Register.rsp, disp: ((k as StackSize) * XmmSaveSlotBytes) as Imm32, srcReg: reg)
 	end 'saveXmm'
 
 	// from->sp = rsp ; from->fp = rbp.
@@ -265,7 +265,7 @@ function buildGtContextSwitchChunk(target Target) returns FunctionCodeChunk
 	// its own word rather than a stack position); only the GPR pops below are LIFO.
 	for k in 0 upto calleeSavedXmmOrder.count() 'restoreXmm'
 		let reg = try calleeSavedXmmOrder.get(k) otherwise panic("buildGtContextSwitchChunk: restore index derived from count is in range")
-		encodeMovsdRegBaseDisp(code, destReg: reg, base: X64Register.rsp, disp: (k * XmmSaveSlotBytes) as Imm32)
+		encodeMovsdRegBaseDisp(code, destReg: reg, base: X64Register.rsp, disp: ((k as StackSize) * XmmSaveSlotBytes) as Imm32)
 	end 'restoreXmm'
 
 	encodeEpilogue(code, stackSize: gtXmmSaveAreaBytes())
@@ -1044,7 +1044,7 @@ end 'emitGtGatedIatCall'
 // written only by the thread that IS this machine, and the only other party READS it while that thread is
 // SUSPENDED (or, on a POSIX lane, from a handler running on the thread itself) — so there is no interleaving
 // for a lock prefix to prevent, and these are hand-assembled bytes no pass can reorder.
-function emitShimLockDepthStep(code ByteArray, m X64Register, delta ParsedInt)
+function emitShimLockDepthStep(code ByteArray, m X64Register, delta FullRangeInt)
 	encodeGrp1BaseDispImm32(code, ext: Grp1ExtAdd, base: m, disp: MOffLocks as Imm32, imm: delta as Imm32)
 end 'emitShimLockDepthStep'
 
@@ -1151,7 +1151,7 @@ function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRe
 		// cannot address a different slot than the store did. The source adds only `ShimPushedWordBytes`,
 		// because the GT-frame anchor sits one pushed word below the GT rsp; that is a property of THIS shim's
 		// prologue and not of the arg layout, which is why it is the one term added here rather than folded in.
-		let dstDisp = win64OutgoingArgDisp(k)
+		let dstDisp = win64OutgoingArgDisp(k as MachineWord)
 		let srcDisp = (ShimPushedWordBytes + (dstDisp as StackSize)) as Imm32
 		encodeLoadRegBaseDisp(code, destReg: ShimGtReg, base: ShimGtRspReg, disp: srcDisp, wide: true)
 		encodeStoreBaseDispReg(code, base: X64Register.rsp, disp: dstDisp, srcReg: ShimGtReg, wide: true)
@@ -1690,11 +1690,11 @@ end 'emitGtRelocateChainWalk'
 // The largest frame whose projection `frameBytes + margin` still fits the guard's `sub` immediate,
 // so `widestStackGuardBytes` measures the longest guard any function carries; a larger frame fails
 // the `Imm32` cast.
-export function x64WidestGuardedFrame(margin ParsedInt) returns StackSize
+export function x64WidestGuardedFrame(margin FullRangeInt) returns StackSize
 	return (LargestGuardProjection - margin) as StackSize
 end 'x64WidestGuardedFrame'
 
-let LargestGuardProjection = i32.max as ParsedInt
+let LargestGuardProjection = i32.max as FullRangeInt
 
 // The prologue stack guard. `X64Backend` emits it before `push rbp` in the entry block of a
 // green-thread module's function that reserves a frame and is not exempt
@@ -1713,7 +1713,7 @@ let LargestGuardProjection = i32.max as ParsedInt
 // request before its compare and calls `__gt_morestack` itself, with no jump back, because the
 // grower makes the frame fit in one call. A request `__sysmon` stores after the withdrawal reaches
 // the grower, which leaves it in place when the frame fits.
-export function emitGtStackGuard(code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, frameBytes StackSize, margin ParsedInt, site GtGuardSite, target Target)
+export function emitGtStackGuard(code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, frameBytes StackSize, margin FullRangeInt, site GtGuardSite, target Target)
 	var guardFixups = ChunkRel32FixupArray.create()
 	var guardLabels = BlockOffsetTable.create()
 	let guardTop = code.count()

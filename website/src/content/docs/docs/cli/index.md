@@ -788,7 +788,8 @@ with every option each command reads listed under it, `--log=` aside (see [Loggi
 option several commands accept (such as `--target=`) is listed under each. Commands are listed alphabetically.
 
 `maxon help <command>` prints one entry. A word that names no command is refused with exit 1 and the
-command list. `help` takes no options.
+command list, and a second word after the command (`maxon help build run`) is refused with exit 1 as an
+unexpected extra argument, named on stderr. `help` takes no options.
 
 ## Logging
 

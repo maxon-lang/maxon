@@ -59,10 +59,10 @@ function main() returns ExitCode
 	if a.managed.elementSize() != -2 'notPacked'
 		return 99
 	end 'notPacked'
-	var sum = 0
-	var i = 0
+	var sum = 0 as ExitCode
+	var i = 0 as ElementIndex
 	while i < 5 'read'
-		sum = sum + (try a.get(i) otherwise 0)
+		sum = sum + ((try a.get(i) otherwise 0) as ExitCode)
 		i = i + 1
 	end 'read'
 	return sum
@@ -199,7 +199,7 @@ typealias QArray = Array with Q
 
 function main() returns ExitCode
 	var a = QArray.create()
-	var i = 0
+	var i = 0 as ElementIndex
 	while i < 40 'fill'
 		a.push((i mod 4) as Q)
 		i = i + 1

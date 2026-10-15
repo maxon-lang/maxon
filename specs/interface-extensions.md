@@ -306,7 +306,7 @@ function main() returns ExitCode
 	let nums = [1, 2, 3, 4, 5]
 	let doubled = nums.map(function(x Integer) gives x * 2)
 
-	var sum = 0
+	var sum = 0 as Integer
 	for n in doubled 'loop'
 		sum = sum + n
 	end 'loop'
@@ -328,7 +328,7 @@ function main() returns ExitCode
 	let s = Set from [10, 20, 30]
 	let mapped = s.map(function(x Integer) gives x + 1)
 
-	var sum = 0
+	var sum = 0 as Integer
 	for n in mapped 'loop'
 		sum = sum + n
 	end 'loop'
@@ -346,7 +346,7 @@ end 'main'
 function main() returns ExitCode
 	let m = ["a": 1, "b": 2, "c": 3]
 
-	var sum = 0
+	var sum = 0 as FullRangeInt
 	for pair in m 'loop'
 		sum = sum + pair.1 * 10
 	end 'loop'
@@ -365,7 +365,7 @@ function main() returns ExitCode
 	let m = ["a": 1, "b": 2, "c": 3]
 	let mapped = m.map(function(p) gives p)
 
-	var sum = 0
+	var sum = 0 as FullRangeInt
 	for pair in mapped 'loop'
 		sum = sum + pair.1
 	end 'loop'

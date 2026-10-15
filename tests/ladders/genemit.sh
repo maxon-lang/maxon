@@ -42,7 +42,11 @@ F="$1"; S="$2"; I="$3"; OUT="$4"
   f=0
   while [ "$f" -lt "$F" ]; do
     echo "function emitUnit${f}(seed Acc) returns Acc"
-    echo -e "\tvar acc = seed + ${f}"
+    if [ $(( S + I )) -gt 0 ]; then
+      echo -e "\tvar acc = seed + ${f}"
+    else
+      echo -e "\tlet acc = seed + ${f}"
+    fi
 
     i=0
     while [ "$i" -lt "$I" ]; do

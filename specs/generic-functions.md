@@ -65,9 +65,7 @@ function larger(a T, b T) uses T returns T where T is Comparable
 end 'larger'
 
 function main() returns ExitCode
-	let x = larger(3, b: 7)
-	let y = larger(10, b: 2)
-	print("{x} {y}\n")
+	print("{larger(3, b: 7)} {larger(10, b: 2)}\n")
 	return 0
 end 'main'
 ```
@@ -1053,9 +1051,7 @@ function larger(a T, b T) uses T returns T where T is Comparable
 end 'larger'
 
 export function runA()
-	let x = larger(3, b: 7)
-	let y = larger(10, b: 2)
-	print("a {x} {y}\n")
+	print("a {larger(3, b: 7)} {larger(10, b: 2)}\n")
 end 'runA'
 
 // --- file: b/util.maxon

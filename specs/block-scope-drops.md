@@ -43,7 +43,7 @@ function build(x Integer) returns String
 end 'build'
 
 function main() returns ExitCode
-	var i = 0
+	var i = 0 as Integer
 	while i < 3 'loop'
 		let s = build(i)
 		print(s)
@@ -96,7 +96,7 @@ function build(x Integer) returns String
 end 'build'
 
 function main() returns ExitCode
-	var i = 0
+	var i = 0 as Integer
 	while i < 100 'loop'
 		let s = build(i)
 		print(s)
@@ -126,7 +126,7 @@ function build(x Integer) returns String
 end 'build'
 
 function main() returns ExitCode
-	var i = 0
+	var i = 0 as Integer
 	while i < 3 'loop'
 		i = i + 1
 		let s = build(i)
@@ -154,7 +154,7 @@ function build(x Integer) returns String
 end 'build'
 
 function main() returns ExitCode
-	var i = 0
+	var i = 0 as Integer
 	while i < 4 'loop'
 		let a = build(i)
 		print(a)
@@ -224,7 +224,7 @@ function build(x Integer) returns String
 end 'build'
 
 function firstHit(n Integer) returns String
-	var i = 0
+	var i = 0 as Integer
 	while i < n 'loop'
 		let cand = build(i)
 		if i == 2 'hit'
@@ -261,8 +261,8 @@ type Box
 end 'Box'
 
 function main() returns ExitCode
-	var i = 0
-	var seen = 0
+	var i = 0 as Integer
+	var seen = 0 as Integer
 	while i < 3 'loop'
 		if i < 2 'b'
 			let b = Box.create(i)
@@ -299,7 +299,7 @@ typealias ByteArray = Array with Byte
 function fill(sink ByteArray)
 	var scratch = ByteArray.create()
 	scratch.push('x')
-	var i = 0
+	var i = 0 as Count
 	while i < 3 'each'
 		sink.push('y')
 		i = i + 1

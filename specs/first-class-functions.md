@@ -819,7 +819,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:33:21: argument type mismatch for 'f': expected 'fn(type parameter) returns type parameter', got 'fn(int) returns int'
+error E3005: <fragment>:33:21: argument type mismatch for 'f': expected 'fn(type parameter) returns type parameter', got 'fn(Integer) returns Integer'
 ```
 
 <!-- test: first-class-function.alias-over-a-type-parameter-returning-a-MANAGED-element -->
@@ -1114,7 +1114,7 @@ statement-position call path sends a function-typed local's name to the same ind
 expression position uses; treated as a direct callee it would be E3004 ("call to undefined function"). The side effect (two increments of a module
 `var`) proves the call actually RAN, not merely that it compiled — a no-op would return 0.
 ```maxon
-var sideEffect = 0
+var sideEffect = 0 as FullRangeInt
 
 function bump()
 	sideEffect = sideEffect + 7
@@ -1182,7 +1182,7 @@ effect. The statement dispatcher parses `h.op` as a field load and applies the t
 indirect-call lowering. The side effect (two
 increments of a module `var`) proves the call RAN — a no-op would return 0.
 ```maxon
-var sideEffect = 0
+var sideEffect = 0 as FullRangeInt
 
 typealias Task = function()
 
@@ -1245,8 +1245,8 @@ A struct with TWO function-typed fields, each called at statement position. Each
 its OWN field — `p.first` runs `bumpA` (+10) and `p.second` runs `bumpB` (+4) — so the total is 14 only when
 the two field loads are not confused.
 ```maxon
-var effA = 0
-var effB = 0
+var effA = 0 as FullRangeInt
+var effB = 0 as FullRangeInt
 
 typealias Task = function()
 
@@ -1283,7 +1283,7 @@ The receiver of a field call may itself be reached through a field CHAIN. `o.inn
 to the function-typed field and applies the trailing call for effect — the statement-position twin of the
 value-position `o.inner.op(21)`. The side effect (two increments) proves it ran.
 ```maxon
-var sideEffect = 0
+var sideEffect = 0 as FullRangeInt
 
 typealias Task = function()
 
@@ -1324,7 +1324,7 @@ yields the `bump` function and the trailing `()` calls it — the statement-posi
 `pick()(21)`, and the chaining `parsePostfix` already does in expression position. The side effect (two
 increments) proves both hops ran.
 ```maxon
-var sideEffect = 0
+var sideEffect = 0 as FullRangeInt
 
 typealias Task = function()
 
@@ -1412,7 +1412,7 @@ The control: a real instance METHOD called at statement position stays a DIRECT 
 routed through the indirect-call path. `c.tick()` is a method on `Counter`, not a function-typed field,
 so it dispatches as a method. Two calls (+3 each) prove it ran.
 ```maxon
-var sideEffect = 0
+var sideEffect = 0 as FullRangeInt
 
 typealias Ticks = int(i64.min to i64.max)
 
@@ -1597,7 +1597,7 @@ a capturing closure may be stored there (`closure-capture.module-level-function-
 
 typealias Integer = int(i64.min to i64.max)
 
-var handler = 0
+var handler = 0 as Integer
 
 function main() returns ExitCode
 	let bump = 20
@@ -1622,7 +1622,7 @@ end 'double'
 function main() returns ExitCode
 	let bump = 20
 	let ops = [double, function(n Integer) gives n + bump]
-	var total = 0
+	var total = 0 as Integer
 
 	for op in ops 'each'
 		total = total + op(11)
@@ -2185,7 +2185,7 @@ function dbl(n Integer) returns Integer
 	return n * 2
 end 'dbl'
 
-var handler = 0
+var handler = 0 as Integer
 
 function main() returns ExitCode
 	let bump = 20
@@ -2725,7 +2725,7 @@ typealias Integer = int(i64.min to i64.max)
 function main() returns ExitCode
 	let bump = 20
 	var f = function(n Integer) gives n + bump
-	var i = 0
+	var i = 0 as Integer
 	while i < 2 'loop'
 		f = function(n Integer) gives n * bump
 		i = i + 1
@@ -2800,7 +2800,7 @@ function main() returns ExitCode
 	let bump = 20
 	var a = OpArray.create()
 	a.push(function(n Integer) gives n + bump)
-	var total = 0
+	var total = 0 as Integer
 
 	for op in a 'each'
 		total = total + op(22)
@@ -2973,7 +2973,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3009: <fragment>:12:17: function type mismatch in cast: expected 'fn(float) returns float', got 'fn(float) returns int'
+error E3009: <fragment>:12:17: function type mismatch in cast: expected 'fn(Real) returns Real', got 'fn(Real) returns Integer'
 ```
 
 <!-- test: first-class-function.error.cast-param-type-mismatch -->
@@ -2996,7 +2996,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3009: <fragment>:12:19: function type mismatch in cast: expected 'fn(float) returns float', got 'fn(int) returns float'
+error E3009: <fragment>:12:19: function type mismatch in cast: expected 'fn(Real) returns Real', got 'fn(Integer) returns Real'
 ```
 
 <!-- test: first-class-function.error.cast-arity-mismatch -->
@@ -3017,7 +3017,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3009: <fragment>:11:14: function type mismatch in cast: expected 'fn(int, int) returns int', got 'fn(int) returns int'
+error E3009: <fragment>:11:14: function type mismatch in cast: expected 'fn(Integer, Integer) returns Integer', got 'fn(Integer) returns Integer'
 ```
 
 <!-- test: first-class-function.error.wrong-signature-into-function-param -->
@@ -3043,7 +3043,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:16:10: argument type mismatch for 'f': expected 'fn(float) returns float', got 'fn(float) returns int'
+error E3005: <fragment>:16:10: argument type mismatch for 'f': expected 'fn(Real) returns Real', got 'fn(Real) returns Integer'
 ```
 
 <!-- test: first-class-function.error.wrong-signature-returned -->
@@ -3068,7 +3068,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:11:2: function type mismatch in return: expected 'fn(int) returns int', got 'fn(int, int) returns int'
+error E3005: <fragment>:11:2: function type mismatch in return: expected 'fn(Integer) returns Integer', got 'fn(Integer, Integer) returns Integer'
 ```
 
 <!-- test: first-class-function.error.wrong-signature-into-union-payload -->
@@ -3105,7 +3105,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:23:19: function type mismatch storing into union payload 'f': expected 'fn(int) returns int', got 'fn(int, int) returns int'
+error E3005: <fragment>:23:19: function type mismatch storing into union payload 'f': expected 'fn(Integer) returns Integer', got 'fn(Integer, Integer) returns Integer'
 ```
 
 <!-- test: first-class-function.error.different-enum-param-into-function-param -->
@@ -3277,7 +3277,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3009: <fragment>:17:15: function type mismatch in cast: expected 'fn(Color) returns Color', got 'fn(int) returns int'
+error E3009: <fragment>:17:15: function type mismatch in cast: expected 'fn(Color) returns Color', got 'fn(Integer) returns Integer'
 ```
 
 <!-- test: first-class-function.matching-enum-shape-agrees-across-doors -->
@@ -3521,7 +3521,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:18:9: argument type mismatch for '_': expected 'fn(InnerA) returns int', got 'fn(InnerB) returns int'
+error E3005: <fragment>:18:9: argument type mismatch for '_': expected 'fn(InnerA) returns Integer', got 'fn(InnerB) returns Integer'
 ```
 
 <!-- test: first-class-function.error.indirect-call-too-few-args -->
@@ -4276,7 +4276,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:31:9: argument type mismatch for 'f': expected 'fn(int) returns FieldArray', got 'fn(int) returns SmallArray'
+error E3005: <fragment>:31:9: argument type mismatch for 'f': expected 'fn(Integer) returns FieldArray', got 'fn(Integer) returns SmallArray'
 ```
 
 <!-- test: first-class-function.error.generic-instance-returned-through-alias-refuses-a-different-instance-either-order -->
@@ -4324,7 +4324,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:31:9: argument type mismatch for 'f': expected 'fn(int) returns FieldArray', got 'fn(int) returns SmallArray'
+error E3005: <fragment>:31:9: argument type mismatch for 'f': expected 'fn(Integer) returns FieldArray', got 'fn(Integer) returns SmallArray'
 ```
 
 <!-- test: first-class-function.generic-instance-returned-through-an-extension-body-alias-is-identified-by-type-not-by-intern-order -->
@@ -4438,7 +4438,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:35:11: argument type mismatch for 'f': expected 'fn(int) returns FieldArray', got 'fn(int) returns SmallArray'
+error E3005: <fragment>:35:11: argument type mismatch for 'f': expected 'fn(Integer) returns FieldArray', got 'fn(Integer) returns SmallArray'
 ```
 
 <!-- test: first-class-function.an-inner-function-alias-naming-self-offers-the-instance-to-an-untyped-closure -->
@@ -4903,4 +4903,28 @@ end 'main'
 ```
 ```maxoncstderr
 error E3005: <fragment>:10:27: Value 50 is outside the range of 'Small' (int(0 to 9))
+```
+
+<!-- test: error.a-function-value-called-with-three-hundred-arguments-is-an-arity-error -->
+A call through a function-typed parameter that writes three hundred arguments is refused as an arity mismatch, the same as one that writes two, rather than overflowing the table that tracks which argument position forwards to which parameter.
+
+```maxon
+typealias Count = int(0 to 1000)
+typealias Op = function(Count) returns Count
+
+function h(g Op, p Count) returns Count
+	return g(p, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+end 'h'
+
+function twice(x Count) returns Count
+	return (x + x) and 255
+end 'twice'
+
+function main() returns ExitCode
+	print("{h(twice, p: 3)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3036: <fragment>:6:10: 'Op' expects 1 argument(s) but 300 were provided
 ```

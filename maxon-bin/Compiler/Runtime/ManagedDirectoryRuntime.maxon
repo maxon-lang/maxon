@@ -39,7 +39,7 @@
 // single `_block` field, and the corpus never reads it — direct construction is refused (E3072) so the
 // pointer cannot be forged, and every read is the runtime's own through this offset.
 export let ManagedDirectoryBlockOffset = 0 as ByteOffset
-export let ManagedDirectoryBoxBytes = 8 as ParsedInt
+export let ManagedDirectoryBoxBytes = 8 as FullRangeInt
 
 // ⭐⭐ **THE FIND BLOCK'S LAYOUT:**
 //
@@ -73,39 +73,39 @@ let FindBlockHandleOffset = 0 as ByteOffset
 let FindBlockFindDataOffset = 8 as ByteOffset
 
 // The pending flag's own width — see above for why it is a word.
-let FindBlockPendingBytes = 8 as ParsedInt
-let FindBlockPendingOffset = ((FindBlockFindDataOffset as ParsedInt) + FindDataBytes) as ByteOffset
-let FindBlockBytes = (FindBlockPendingOffset as ParsedInt) + FindBlockPendingBytes
+let FindBlockPendingBytes = 8 as FullRangeInt
+let FindBlockPendingOffset = FindBlockFindDataOffset + (FindDataBytes as ByteOffset)
+let FindBlockBytes = (FindBlockPendingOffset as FullRangeInt) + FindBlockPendingBytes
 
 // The pending flag's two values. Named rather than spelled `1`/`0` at four sites: the flag reads as a
 // direction ("consume in place" vs "fetch") and a bare literal at a branch says neither.
-let FindEntryPending = 1 as ParsedInt
-let FindEntryConsumed = 0 as ParsedInt
+let FindEntryPending = 1 as FullRangeInt
+let FindEntryConsumed = 0 as FullRangeInt
 
 // The handle value a CLOSED block carries — `ManagedFileClosedHandle`'s twin, and zero for its reason: the
 // find block is allocated zeroed, so a block whose `FindFirstFileW` never ran and one that has been closed
 // carry the same value and ONE guard covers both. A search handle the OS actually returns is never 0
 // (`FindFirstFileW` reports failure as `INVALID_HANDLE_VALUE`, which is -1).
-let ManagedDirectoryClosedHandle = 0 as ParsedInt
+let ManagedDirectoryClosedHandle = 0 as FullRangeInt
 
 // `next()`'s two answers, per `specs/managed-directory.md`: "returns non-zero if one was found or 0 when the
 // iteration is complete". EOF is a plain 0 RETURN and never a throw, so only a real OS error reaches
 // `nextFailed`.
-let DirectoryEntryFound = 1 as ParsedInt
-let DirectoryIterationComplete = 0 as ParsedInt
+let DirectoryEntryFound = 1 as FullRangeInt
+let DirectoryIterationComplete = 0 as FullRangeInt
 
 // ASCII `.` — the leading byte of the `.` / `..` pseudo-entries. **The dot filtering lives in the RUNTIME,
 // not the stdlib**: the spec states it as the method's contract ("The runtime owns all dot-filtering, so
 // `filename()` never returns `.` or `..`").
 // ⚠ **EXPORTED FOR THE POSIX LANE** — `Arm64DarwinRuntime` spells the CURRENT DIRECTORY `"."` when a
 // search pattern carries no `/`, which is the same character this filter tests for.
-export let DotByte = 0x2E as ParsedInt
+export let DotByte = 0x2E as FullRangeInt
 
 // The NUL that ends a cstring — what ends `cFileName`, what tells `.` from `.x` and `..` from `..x`, what
 // `emitCStringLength` walks to, and what `CommandLineRuntime` terminates each scanned argument with.
 // EXPORTED once that fourth reader arrived rather than re-spelled `0` beside it: a `0` at a byte compare
 // says nothing about whether it means "end of string" or "the number zero".
-export let NulByte = 0 as ParsedInt
+export let NulByte = 0 as FullRangeInt
 
 // `ERROR_NO_MORE_FILES` — the ONE `GetLastError` reading that makes a FALSE from `FindNextFileW` an ordinary
 // end of iteration rather than a failure. Everything else is a real error and throws `nextFailed`.
@@ -113,7 +113,7 @@ export let NulByte = 0 as ParsedInt
 // failing with this code; `readdir` reports it by answering NULL with `errno` UNCHANGED, so a POSIX lane
 // has to synthesize the number — `Arm64DarwinRuntime.buildArm64DarwinLastErrorChunk` maps a cleared
 // `errno` onto exactly this, and reads it from here rather than transcribing it.
-export let ErrorNoMoreFiles = 18 as ParsedInt
+export let ErrorNoMoreFiles = 18 as FullRangeInt
 
 // `ERROR_DIR_NOT_EMPTY` — what `RemoveDirectoryW` answers for a directory that still holds an
 // entry, and the one reading that makes `delete` refuse with `deleteNotEmpty` rather than with its
@@ -125,19 +125,19 @@ export let ErrorNoMoreFiles = 18 as ParsedInt
 // the two OSes number differently (`LinuxErrno.directoryNotEmpty`,
 // `DarwinErrno.directoryNotEmpty`), so each lane's errno translator maps its own number onto this
 // code rather than transcribing it.
-export let ErrorDirNotEmpty = 145 as ParsedInt
+export let ErrorDirNotEmpty = 145 as FullRangeInt
 
 // `INVALID_FILE_ATTRIBUTES` — what `GetFileAttributesW` answers for a path that names nothing. The
 // answer arrives zero-extended, so it is the full DWORD and not -1. Exported because a POSIX lane's
 // `stat` failure must be reported as it (`Arm64DarwinRuntime.buildArm64DarwinFileAttributesChunk`).
-export let InvalidFileAttributes = 0xFFFFFFFF as ParsedInt
+export let InvalidFileAttributes = 0xFFFFFFFF as FullRangeInt
 
 // `MAX_PATH`, the first buffer `emitGrowingPathFill` offers. It fits every path a program is
 // normally installed at, so the common case is one call and one allocation; a larger start would
 // cost twice the allocation on every ordinary path to save one doubling on a long one.
-export let MaxPathBytes = 260 as ParsedInt
+export let MaxPathBytes = 260 as FullRangeInt
 
-let PathGrowthShift = 1 as ParsedInt
+let PathGrowthShift = 1 as FullRangeInt
 
 // ⭐ **THE `__ManagedDirectoryError` ORDINALS, AS ERROR FLAGS (`ordinal + ErrorFlagOrdinalBias`)** — the
 // `ManagedFileRuntime` discipline, and the ordinals are positional facts about the case order of the
@@ -152,16 +152,16 @@ let PathGrowthShift = 1 as ParsedInt
 // ordinals after it depend on its slot) and deliberately unreachable — which is why its ORDINAL is here even
 // though its flag is not, and why `claimManagedDirectoryOrdinals` states it as `neverThrown` rather than
 // leaving a gap a corpus reorder could move in silence.
-let ManagedDirectoryNotFoundOrdinal = 0 as ParsedInt
-let ManagedDirectoryAccessDeniedOrdinal = 1 as ParsedInt
-let ManagedDirectoryOpenSearchFailedOrdinal = 2 as ParsedInt
-let ManagedDirectoryNextFailedOrdinal = 3 as ParsedInt
-let ManagedDirectoryIteratorInvalidOrdinal = 4 as ParsedInt
-let ManagedDirectoryCreateFailedOrdinal = 5 as ParsedInt
-let ManagedDirectoryCurrentPathFailedOrdinal = 6 as ParsedInt
-let ManagedDirectoryClosedOrdinal = 7 as ParsedInt
-let ManagedDirectoryDeleteFailedOrdinal = 8 as ParsedInt
-let ManagedDirectoryDeleteNotEmptyOrdinal = 9 as ParsedInt
+let ManagedDirectoryNotFoundOrdinal = 0 as FullRangeInt
+let ManagedDirectoryAccessDeniedOrdinal = 1 as FullRangeInt
+let ManagedDirectoryOpenSearchFailedOrdinal = 2 as FullRangeInt
+let ManagedDirectoryNextFailedOrdinal = 3 as FullRangeInt
+let ManagedDirectoryIteratorInvalidOrdinal = 4 as FullRangeInt
+let ManagedDirectoryCreateFailedOrdinal = 5 as FullRangeInt
+let ManagedDirectoryCurrentPathFailedOrdinal = 6 as FullRangeInt
+let ManagedDirectoryClosedOrdinal = 7 as FullRangeInt
+let ManagedDirectoryDeleteFailedOrdinal = 8 as FullRangeInt
+let ManagedDirectoryDeleteNotEmptyOrdinal = 9 as FullRangeInt
 let ManagedDirectoryNotFoundFlag = ManagedDirectoryNotFoundOrdinal + ErrorFlagOrdinalBias
 let ManagedDirectoryAccessDeniedFlag = ManagedDirectoryAccessDeniedOrdinal + ErrorFlagOrdinalBias
 let ManagedDirectoryOpenSearchFailedFlag = ManagedDirectoryOpenSearchFailedOrdinal + ErrorFlagOrdinalBias
@@ -260,7 +260,7 @@ end 'managedDirectoryThrows'
 // `__ManagedFileError`'s do, but they are named here rather than inherited, so that coincidence is a fact
 // this file states about its own enum instead of a silent dependency on another one's. Only the
 // catch-all differs per operation.
-function emitDirectoryErrnoClassifiedThrow(module StdModule, func IrFunction, block IrBlock, err ValueId, fallbackFlag ParsedInt, ids ValueMinter)
+function emitDirectoryErrnoClassifiedThrow(module StdModule, func IrFunction, block IrBlock, err ValueId, fallbackFlag FullRangeInt, ids ValueMinter)
 	emitErrnoClassifiedThrow(module, func: func, block: block, err: err, notFoundFlag: ManagedDirectoryNotFoundFlag, deniedFlag: ManagedDirectoryAccessDeniedFlag, fallbackFlag: fallbackFlag, ids: ids)
 end 'emitDirectoryErrnoClassifiedThrow'
 
@@ -271,14 +271,14 @@ end 'emitLoadFindBlock'
 
 // The address of the find block's `WIN32_FIND_DATAW`, which is what every Win32 find call is handed.
 function emitFindDataAddr(module StdModule, block IrBlock, findBlock ValueId, ids ValueMinter) returns ValueId
-	let offset = emitConst(module, block: block, value: FindBlockFindDataOffset as ParsedInt, ids: ids)
+	let offset = emitConst(module, block: block, value: FindBlockFindDataOffset as FullRangeInt, ids: ids)
 	return emitBin(module, block: block, a: findBlock, b: offset, opcode: StdBinOpcode.add, ids: ids)
 end 'emitFindDataAddr'
 
 // The address of `cFileName` inside the find block — the record's offset plus the field's, so the two
 // numbers are added in ONE place rather than pre-summed into a third constant that could disagree with them.
 function emitFileNameAddr(module StdModule, block IrBlock, findBlock ValueId, ids ValueMinter) returns ValueId
-	let offset = emitConst(module, block: block, value: (FindBlockFindDataOffset + FindDataFileNameOffset) as ParsedInt, ids: ids)
+	let offset = emitConst(module, block: block, value: (FindBlockFindDataOffset + FindDataFileNameOffset) as FullRangeInt, ids: ids)
 	return emitBin(module, block: block, a: findBlock, b: offset, opcode: StdBinOpcode.add, ids: ids)
 end 'emitFileNameAddr'
 

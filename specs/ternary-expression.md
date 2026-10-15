@@ -288,8 +288,8 @@ parsed, and must NOT count the ternary's `if`/`else` as block openers — they o
 no `end`, so counting them over-runs the loop's extent and trips the drift guard.
 ```maxon
 function main() returns ExitCode
-	var total = 0
-	var i = 0
+	var total = 0 as FullRangeInt
+	var i = 0 as FullRangeInt
 	while i < 3 'l'
 		let x = 5 if i > 0 else 9
 		total = total + x
@@ -306,7 +306,7 @@ end 'main'
 The same token-scan hazard for an `if` body rather than a loop body.
 ```maxon
 function main() returns ExitCode
-	var total = 0
+	var total = 0 as FullRangeInt
 	let c = true
 	if c 'g'
 		let x = 5 if c else 9
@@ -340,7 +340,7 @@ end 'main'
 A ternary inside a `while` CONDITION.
 ```maxon
 function main() returns ExitCode
-	var i = 0
+	var i = 0 as FullRangeInt
 	let lim = true
 	while i < (3 if lim else 1) 'l'
 		i = i + 1
@@ -476,7 +476,7 @@ function splice(lst IdxList, anchor Idx, after bool)
 		for posIdx in 0 upto lst.count() 'eachOpRef'
 			let ref = try lst.get(posIdx) otherwise panic("oob")
 			if ref == anchor 'foundAnchor'
-				insertPos = posIdx
+				insertPos = posIdx as Idx
 				break
 			end 'foundAnchor'
 		end 'eachOpRef'
@@ -941,8 +941,8 @@ moves nothing. Three iterations, one of them taking the fresh arm.
 ```maxon
 function main() returns ExitCode
 	let base = "base {1} padded out long enough to be a real heap allocation"
-	var i = 0
-	var total = 0
+	var i = 0 as FullRangeInt
+	var total = 0 as BytePos
 	while i < 3 'l'
 		let pick = i > 0
 		let chosen = base if pick else "alt {2} padded out long enough to be a real heap allocation"
@@ -1105,7 +1105,7 @@ end 'main'
 <!-- test: ternary-expression.elision.false-arm-not-evaluated -->
 ### The false arm is not evaluated when the condition is true
 ```maxon
-var sideEffectCount = 0
+var sideEffectCount = 0 as Integer
 
 function track(result Integer) returns Integer
 	sideEffectCount = sideEffectCount + 1
@@ -1129,7 +1129,7 @@ end 'main'
 <!-- test: ternary-expression.elision.true-arm-not-evaluated -->
 ### The true arm is not evaluated when the condition is false
 ```maxon
-var sideEffectCount = 0
+var sideEffectCount = 0 as Integer
 
 function track(result Integer) returns Integer
 	sideEffectCount = sideEffectCount + 1
@@ -1154,7 +1154,7 @@ end 'main'
 ### The selected arm IS evaluated — exactly once, not zero times and not twice
 The counterpart direction: elision must not become elimination.
 ```maxon
-var sideEffectCount = 0
+var sideEffectCount = 0 as Integer
 
 function track(result Integer) returns Integer
 	sideEffectCount = sideEffectCount + 1
@@ -1178,7 +1178,7 @@ end 'main'
 <!-- test: ternary-expression.elision.chained-evaluates-only-the-winner -->
 ### In a chain, every arm but the winner is skipped
 ```maxon
-var sideEffectCount = 0
+var sideEffectCount = 0 as Integer
 
 function track(result Integer) returns Integer
 	sideEffectCount = sideEffectCount + 1
@@ -1203,7 +1203,7 @@ end 'main'
 <!-- test: ternary-expression.elision.condition-always-evaluated -->
 ### The condition itself is always evaluated, exactly once
 ```maxon
-var sideEffectCount = 0
+var sideEffectCount = 0 as FullRangeInt
 
 function pick() returns bool
 	sideEffectCount = sideEffectCount + 1

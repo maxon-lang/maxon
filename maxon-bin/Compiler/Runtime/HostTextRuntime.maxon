@@ -20,16 +20,16 @@ let NarrowAsciiName = b"__wt_narrow_ascii"
 let TextLengthName = b"__wt_text_length"
 let BlockExtentName = b"__wt_block_extent"
 
-let Utf8UnitBytes = 1 as ParsedInt
-let Utf16UnitBytes = 2 as ParsedInt
-let MeasureOnly = 0 as ParsedInt
-let SurrogateBase = 0x10000 as ParsedInt
-let SurrogateUnitMask = 0x3FF as ParsedInt
-let HighSurrogateFloor = 0xD800 as ParsedInt
-let LowSurrogateFloor = 0xDC00 as ParsedInt
-let SurrogatePayloadBits = 10 as ParsedInt
-let ByteValueMask = 0xFF as ParsedInt
-let ByteValueBits = 8 as ParsedInt
+let Utf8UnitBytes = 1 as FullRangeInt
+let Utf16UnitBytes = 2 as FullRangeInt
+let MeasureOnly = 0 as FullRangeInt
+let SurrogateBase = 0x10000 as FullRangeInt
+let SurrogateUnitMask = 0x3FF as FullRangeInt
+let HighSurrogateFloor = 0xD800 as FullRangeInt
+let LowSurrogateFloor = 0xDC00 as FullRangeInt
+let SurrogatePayloadBits = 10 as FullRangeInt
+let ByteValueMask = 0xFF as FullRangeInt
+let ByteValueBits = 8 as FullRangeInt
 
 export function hostTextIsWide(module StdModule) returns bool
 	return module.hostText == HostTextEncoding.utf16
@@ -68,7 +68,7 @@ function utf16CStringBytes(text String) returns ByteArray
 	var bytes = ByteArray.create()
 
 	for codepoint in text.codepoints() 'eachCodepoint'
-		let value = codepoint as ParsedInt
+		let value = codepoint as FullRangeInt
 
 		if value < SurrogateBase 'basic'
 			appendUtf16Unit(bytes, unit: value)
@@ -85,7 +85,7 @@ function utf16CStringBytes(text String) returns ByteArray
 	return bytes
 end 'utf16CStringBytes'
 
-function appendUtf16Unit(bytes ByteArray, unit ParsedInt)
+function appendUtf16Unit(bytes ByteArray, unit FullRangeInt)
 	bytes.push((unit and ByteValueMask) as Byte)
 	bytes.push(((unit shr ByteValueBits) and ByteValueMask) as Byte)
 end 'appendUtf16Unit'
@@ -97,7 +97,7 @@ export function emitLiteralHostString(module StdModule, block IrBlock, ids Value
 
 	let units = utf16CStringBytes(String.from(text))
 
-	return emitLiteralInSlab(module, block: block, ids: ids, text: units, byteCount: units.count() as ParsedInt)
+	return emitLiteralInSlab(module, block: block, ids: ids, text: units, byteCount: units.count() as FullRangeInt)
 end 'emitLiteralHostString'
 
 export enum TextAllocation
@@ -215,7 +215,7 @@ export function emitTextToManaged(module StdModule, func IrFunction, cur IrBlock
 	return emitUnitsToManaged(module, block: cur, host: cstr, units: units, record: record, ids: ids)
 end 'emitTextToManaged'
 
-function textUnitBytes(encoding HostTextEncoding) returns ParsedInt
+function textUnitBytes(encoding HostTextEncoding) returns FullRangeInt
 	return match encoding 'width'
 		utf8 gives Utf8UnitBytes
 		utf16 gives Utf16UnitBytes

@@ -130,7 +130,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function sum(items IntArray = [10, 20, 12]) returns Integer
-	var total = 0
+	var total = 0 as Integer
 	for item in items 'loop'
 		total = total + item
 	end 'loop'
@@ -151,7 +151,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function sum(items IntArray = [10, 20, 12]) returns Integer
-	var total = 0
+	var total = 0 as Integer
 	for item in items 'loop'
 		total = total + item
 	end 'loop'

@@ -81,7 +81,7 @@ export function promoteArgsNeedingAWritableRecord(project Project, module MaxonM
 	end 'alreadyRefused'
 
 	for i in 0 upto module.functions.count() 'eachFunc'
-		let func = try module.functions.get(i) otherwise panic("promoteArgsNeedingAWritableRecord: module.functions.get OOB at {i}")
+		var func = try module.functions.get(i) otherwise panic("promoteArgsNeedingAWritableRecord: module.functions.get OOB at {i}")
 
 		// The same reachability gate `scanRuntimeUsage` and `lowerMaxonToStd` apply: a stdlib body no back
 		// end will receive is not worth rewriting, and an op inserted into one would sit in front of a scan
@@ -450,7 +450,7 @@ function promoteArgsOf(project Project, module MaxonModule, opIdx ElementIndex, 
 
 	for i in 0 upto args.count() 'eachArg'
 		let argId = try args.get(i) otherwise panic("promoteArgsOf: args.get OOB at {i}")
-		let promotion = promotionAtWrittenPosition(sig, mask: mask, argIndex: i, argId: argId, argLabels: argLabels, provenance: provenance)
+		let promotion = promotionAtWrittenPosition(sig, mask: mask, argIndex: i as ParamCount, argId: argId, argLabels: argLabels, provenance: provenance)
 
 		if promotion == WritableRecordPromotion.none 'keepArgument'
 			promotedArgs.push(argId)
@@ -482,7 +482,7 @@ function promoteArgsOf(project Project, module MaxonModule, opIdx ElementIndex, 
 	end 'eachPromotion'
 
 	let original = try module.ops.get(opIdx) otherwise panic("promoteArgsOf: module.ops.get OOB at {opIdx}")
-	let rewritten = withRewrittenArgs(original, args: promotedArgs, argImmutableNames: callArgImmutableNamesOf(original))
+	let rewritten = withRewrittenArgs(original, args: promotedArgs, argImmutableNames: callArgImmutableNamesOf(original).clone())
 	try module.ops.set(opIdx, value: rewritten) otherwise panic("promoteArgsOf: module.ops.set OOB at {opIdx}")
 	newRefs.push(opIdx)
 
@@ -497,7 +497,7 @@ end 'promoteArgsOf'
 // whole argument list first — one question, two askers, so the cheap gate cannot drift from what it gates.
 function anyArgNeedsAWritableRecord(sig FuncSignature, mask ParamPositionMask, args ValueIdArray, argLabels NameRoster, provenance ArgProvenance) returns bool
 	for i in 0 upto args.count() 'eachArg'
-		if promotionAtWrittenPosition(sig, mask: mask, argIndex: i, argId: try args.get(i) otherwise panic("anyArgNeedsAWritableRecord: args.get OOB at {i}"), argLabels: argLabels, provenance: provenance) != WritableRecordPromotion.none 'needsOne'
+		if promotionAtWrittenPosition(sig, mask: mask, argIndex: i as ParamCount, argId: try args.get(i) otherwise panic("anyArgNeedsAWritableRecord: args.get OOB at {i}"), argLabels: argLabels, provenance: provenance) != WritableRecordPromotion.none 'needsOne'
 			return true
 		end 'needsOne'
 	end 'eachArg'

@@ -35,8 +35,8 @@ The matching cached stdlib init function body never gets pulled into the user bi
 
 <!-- test: unused-static-var-dropped -->
 ```maxon
-var unused = 99
-var used = 42
+var unused = 99 as ExitCode
+var used = 42 as ExitCode
 
 function main() returns ExitCode
 	return used - 42
@@ -60,8 +60,8 @@ end 'main'
 
 <!-- test: write-only-var-kept -->
 ```maxon
-var writeOnly = 0
-var verifier = 17
+var writeOnly = 0 as ExitCode
+var verifier = 17 as ExitCode
 
 function main() returns ExitCode
 	writeOnly = 99

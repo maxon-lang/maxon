@@ -85,7 +85,7 @@ By default, only the matching case executes. Use `and fallthrough` to continue t
 ```maxon
 function main() returns ExitCode
 	let role = 1
-	var permissions = 0
+	var permissions = 0 as ExitCode
 	match role 'auth'
 		1 then permissions = permissions + 100 and fallthrough
 		2 then permissions = permissions + 10 and fallthrough
@@ -303,7 +303,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let x = 1
-	var result = 0
+	var result = 0 as ExitCode
 	match x 'check'
 		1 then result = result + 10 and fallthrough
 		2 then result = result + 20
@@ -320,7 +320,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let x = 1
-	var result = 0
+	var result = 0 as ExitCode
 	match x 'cascade'
 		1 then result = result + 10 and fallthrough
 		2 then result = result + 20 and fallthrough
@@ -338,7 +338,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let x = 3
-	var result = 0
+	var result = 0 as ExitCode
 	match x 'check'
 		1 then result = 10
 		2 then result = 20
@@ -381,7 +381,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let x = 2
-	var result = 0
+	var result = 0 as ExitCode
 	match x 'process'
 		1 then result = 100
 		2 then result = 120
@@ -405,13 +405,13 @@ end 'double'
 
 function main() returns ExitCode
 	let x = 2
-	var result = 0
+	var result = 0 as Integer
 	match x 'process'
 		1 then result = double(10)
 		2 then result = double(20)
 		default then result = 0
 	end 'process'
-	return result
+	return result as ExitCode
 end 'main'
 ```
 ```exitcode

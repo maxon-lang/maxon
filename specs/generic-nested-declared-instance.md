@@ -344,7 +344,7 @@ type Bag uses Element implements Iterable with (Int, BIter)
 	end 'createIterator'
 
 	function walk() returns Int
-		var total = 0
+		var total = 0 as Int
 		for x in self 'loop'
 			total = total + x
 		end 'loop'

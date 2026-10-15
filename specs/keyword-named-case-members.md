@@ -156,8 +156,8 @@ function tagOf(k Kw) returns Integer
 end 'tagOf'
 
 function main() returns ExitCode
-	var n = 0
-	var acc = 0
+	var n = 0 as Integer
+	var acc = 0 as Integer
 	while n < tagOf(Kw.end) 'spin'
 		acc = acc + 10
 		n = n + 1
@@ -187,7 +187,7 @@ function tagOf(k Kw) returns Integer
 end 'tagOf'
 
 function main() returns ExitCode
-	var acc = 0
+	var acc = 0 as Integer
 	for i in 0 upto tagOf(Kw.end) 'each'
 		acc = acc + 10 + i
 	end 'each'
@@ -291,8 +291,8 @@ enum Kw
 end 'Kw'
 
 function main() returns ExitCode
-	var acc = 0
-	var i = 0
+	var acc = 0 as Count
+	var i = 0 as Count
 	while Kw.end == Kw.end 'spin'
 		if Kw.end == Kw.end 'inner'
 			acc = acc + 21
@@ -325,7 +325,7 @@ end 'Kw'
 
 function main() returns ExitCode
 	let k = Kw.alpha
-	var i = 0
+	var i = 0 as Count
 	while k == Kw.otherwise 'loop'
 		i = i + 1
 	end 'loop'
@@ -350,8 +350,8 @@ enum Kw
 end 'Kw'
 
 function main() returns ExitCode
-	var acc = 0
-	var i = 0
+	var acc = 0 as Count
+	var i = 0 as Count
 	while i < 2 'spin'
 		let x = 1 if i == 0 or Kw.end == Kw.end else 2
 		acc = acc + x
@@ -429,7 +429,7 @@ function tagOf(k Kw) returns Integer
 end 'tagOf'
 
 function main() returns ExitCode
-	var acc = 0
+	var acc = 0 as Integer
 	for i in 0 upto tagOf(Kw.for) 'each'
 		acc = acc + 10 + i
 	end 'each'
@@ -466,7 +466,7 @@ function tagOf(k Kw) returns Integer
 end 'tagOf'
 
 function main() returns ExitCode
-	var sum = 0
+	var sum = 0 as Integer
 	if tagOf(Kw.if) == 1 'guard'
 		sum = tagOf(Kw.if) + tagOf(Kw.else) + tagOf(Kw.end) + tagOf(Kw.while) + tagOf(Kw.match) + tagOf(Kw.for) + tagOf(Kw.otherwise)
 	end 'guard'
@@ -495,8 +495,8 @@ function tagOf(k Kw) returns Integer
 end 'tagOf'
 
 function main() returns ExitCode
-	var total = 0
-	var i = 0
+	var total = 0 as Integer
+	var i = 0 as Integer
 	while i < tagOf(Kw.end) 'outer'
 		if tagOf(Kw.end) == 2 'inner'
 			total = total + 21
@@ -709,8 +709,8 @@ function tagOf(k Kw) returns Num
 end 'tagOf'
 
 function main() returns ExitCode
-	var sum = 0
-	var i = 0
+	var sum = 0 as Num
+	var i = 0 as Count
 	while i < 2 'spin'
 		sum = sum + tagOf(Kw.if(1)) + tagOf(Kw.else(2)) + tagOf(Kw.end(4)) + tagOf(Kw.while(8))
 		i = i + 1
@@ -742,8 +742,8 @@ function tagOf(k Kw) returns Num
 end 'tagOf'
 
 function main() returns ExitCode
-	var acc = 0
-	var i = 0
+	var acc = 0 as Num
+	var i = 0 as Count
 	while i < 2 'spin'
 		if tagOf(Kw.end(20, b: 1)) == 21 'ok'
 			acc = acc + 21
@@ -760,8 +760,8 @@ end 'main'
 <!-- test: a-parenthesized-condition-with-or-past-the-group -->
 ```maxon
 function main() returns ExitCode
-	var i = 0
-	var acc = 0
+	var i = 0 as Count
+	var acc = 0 as Count
 	while ((i < 2) or (i < 0)) or false 'spin'
 		if ((i == 0) or (i == 1)) and true 'inner'
 			acc = acc + 21
@@ -786,7 +786,7 @@ enum Kw
 	omega
 end 'Kw'
 
-var counter = 10
+var counter = 10 as Integer
 
 function tagOf(k Kw) returns Integer
 	match k 'm'
@@ -798,7 +798,7 @@ end 'tagOf'
 
 function shadowing() returns Integer
 	let a = tagOf(Kw.end)
-	var counter = 100
+	var counter = 100 as Integer
 	counter = counter + 1
 	return a + counter
 end 'shadowing'

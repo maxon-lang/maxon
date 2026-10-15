@@ -102,7 +102,12 @@ end 'handle'
 All produce `bool`. Numbers, `bool` and `Character` support every comparison; `String` supports only `==`
 and `!=`. Comparing two records with `==` calls the type's `equals` method (see
 [Equality and Copying](/docs/language/composite-types/#equality-and-copying)); unions cannot be compared
-(**E3066**). Values of different types never compare (**E3005**).
+(**E3066**). Comparing values of different types is **E3005**, two brands of one instance included.
+
+`==` and `!=` call `equals`, and `<`, `<=`, `>` and `>=` call `compare`. A method of either name that takes
+one operand besides its receiver may not write that operand or its receiver, directly or through a
+function it calls (**E3187**, reported at the method). Operands are only read, so a `let`, a
+`var`, a field or an expression compares alike.
 
 ## Reference Identity Operators
 
@@ -160,7 +165,7 @@ Integer `and`/`or` always evaluate both sides.
 `-` does not chain: write `-(-x)`, since `--x` is a syntax error. `not not x` is allowed.
 
 On a float, `-x` flips the sign bit (IEEE-754 negation), so `-0.0` is a distinct value and `-(0.0)` prints
-`-0.0`. Negating a signed integer alias keeps the alias; negating an unsigned alias gives an unaliased value.
+`-0.0`. Negating an integer alias keeps the alias only where its range is closed under negation; otherwise the result is an unaliased signed value.
 
 ## Conditional Expression
 
@@ -185,7 +190,7 @@ iterated (see [For Loop](/docs/language/statements/#for-loop)).
 
 ## `sizeof` and `countof`
 
-Both take a **type** and produce a compile-time integer.
+Both take a **type** and produce a compile-time `Count`.
 
 - `sizeof(T)` is the size of a value of type `T` in bytes: `sizeof(int)` and `sizeof(float)` are `8`,
   `sizeof(bool)` is `1`, and a record type is the size of its fields — except an
@@ -242,8 +247,9 @@ end 'main'
 
 **Sizing an array.** `create()` makes an empty array; `push(value)` appends; `reserve(n)` grows capacity
 without changing `count()`. `resize(n)` changes the length and fills new slots with zero, so it is available
-only for elements stored inline — integers, floats, `bool`, payload-free enums. For an array of records,
-strings or other managed values, `resize` is **E3106**; grow with `push` or `growFilled(n, value:)` and shrink
+only for elements stored inline — integers, floats, `bool`, payload-free enums — whose type admits zero. For an
+array of records, strings or other managed values, or of an alias whose range excludes 0 (`int(1 to 100)`),
+`resize` is **E3106**; grow with `push` or `growFilled(n, value:)` and shrink
 with `truncate(n)`:
 
 ```maxon

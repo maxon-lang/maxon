@@ -387,12 +387,14 @@ end 'main'
 42
 ```
 
-### Per-instance Idx decays when reassigned into a plain int var
+### A per-instance Idx does not take another alias's var
 
-The decay is not special to `return` — a per-instance `Idx` assigned into a plain `int` variable decays
-just the same, as it does when passed to a plain-int parameter.
+A per-instance `Idx` keeps its own identity at a store, as it does at a return and at a call: it does not
+decay into a variable of another alias.
 
-<!-- test: reassign-decays-to-plain -->
+<!-- test: error.reassign-is-refused-by-the-vars-own-alias -->
+Every `var` names its alias, so an instance's member alias does not decay into a plain binding: an
+`IW.Idx` stored into an `Integer` var is refused at the store.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -415,7 +417,7 @@ typealias IW = Wrapper with Integer
 
 function main() returns ExitCode
 	let w = IW.create(1, tag: 7)
-	var n = 0
+	var n = 0 as Integer
 	n = w.getTag()
 	if n == 7 'ok'
 		return 0
@@ -423,8 +425,8 @@ function main() returns ExitCode
 	return 1
 end 'main'
 ```
-```exitcode
-0
+```maxoncstderr
+error E3005: <fragment>:24:2: cannot assign a value of type 'IW.Idx' to variable 'n', which holds 'Integer'
 ```
 
 ## A nested typealias is a MEMBER of its type, and every `extension` over that type may spell it
@@ -853,7 +855,7 @@ function makeBag() returns Bag
 end 'makeBag'
 
 function sumOf(b Bag) returns Num
-	var total = 0
+	var total = 0 as Num
 	for n in b 'each'
 		total = total + n
 	end 'each'

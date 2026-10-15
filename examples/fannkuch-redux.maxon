@@ -55,7 +55,7 @@ function initialPermutation(current IntArray, count IntArray, temp IntArray, fac
 	try count.set(0, value: 0) otherwise panic("initialPermutation: n >= 1")
 
 	for i in 0 upto n 'identity'
-		try current.set(i, value: i) otherwise panic("initialPermutation: i < n = current.count()")
+		try current.set(i as ElementIndex, value: i) otherwise panic("initialPermutation: i < n = current.count()")
 	end 'identity'
 
 	var remaining = firstIndex
@@ -67,7 +67,7 @@ function initialPermutation(current IntArray, count IntArray, temp IntArray, fac
 		remaining = try (remaining mod factorialOfI) otherwise panic("initialPermutation: a factorial is never 0")
 		try count.set(i as ElementIndex, value: d) otherwise panic("initialPermutation: i < n = count.count()")
 
-		for j in 0 upto n 'copy'
+		for j in 0 upto (n as ElementIndex) 'copy'
 			let element = try current.get(j) otherwise panic("initialPermutation: j < n = current.count()")
 			try temp.set(j, value: element) otherwise panic("initialPermutation: j < n = temp.count()")
 		end 'copy'
@@ -75,7 +75,7 @@ function initialPermutation(current IntArray, count IntArray, temp IntArray, fac
 		for j in 0 to i 'rotate'
 			let source = j + d if j + d <= i else j + d - i - 1
 			let rotated = try temp.get(source as ElementIndex) otherwise panic("initialPermutation: d <= i and j <= i, so 0 <= source <= i < n")
-			try current.set(j, value: rotated) otherwise panic("initialPermutation: j <= i < n")
+			try current.set(j as ElementIndex, value: rotated) otherwise panic("initialPermutation: j <= i < n")
 		end 'rotate'
 
 		i = i - 1
@@ -85,12 +85,12 @@ end 'initialPermutation'
 // Flips that sort current. temp is the caller's scratch, so no permutation allocates; its
 // element 0 is never read, exactly as in C.
 function flipCount(current IntArray, temp IntArray, n Integer) returns Integer
-	for i in 1 upto n 'copy'
+	for i in 1 upto (n as ElementIndex) 'copy'
 		let element = try current.get(i) otherwise panic("flipCount: i < n = current.count()")
 		try temp.set(i, value: element) otherwise panic("flipCount: i < n = temp.count()")
 	end 'copy'
 
-	var flips = 1
+	var flips = 1 as Integer
 	var firstValue = try current.get(0) otherwise panic("flipCount: n >= 1")
 
 	while (try temp.get(firstValue as ElementIndex) otherwise panic("flipCount: firstValue is a permutation element, so it is < n")) > 0 'flip'
@@ -98,13 +98,13 @@ function flipCount(current IntArray, temp IntArray, n Integer) returns Integer
 		try temp.set(firstValue as ElementIndex, value: firstValue) otherwise panic("flipCount: firstValue < n")
 
 		if firstValue > 2 'reverseMiddle'
-			var low = 1
+			var low = 1 as Integer
 			var high = firstValue - 1
 
 			while low < high 'reverse'
-				let atLow = try temp.get(low) otherwise panic("flipCount: low < high < firstValue < n")
+				let atLow = try temp.get(low as ElementIndex) otherwise panic("flipCount: low < high < firstValue < n")
 				let atHigh = try temp.get(high as ElementIndex) otherwise panic("flipCount: high < firstValue < n")
-				try temp.set(low, value: atHigh) otherwise panic("flipCount: low < n")
+				try temp.set(low as ElementIndex, value: atHigh) otherwise panic("flipCount: low < n")
 				try temp.set(high as ElementIndex, value: atLow) otherwise panic("flipCount: high < n")
 				low = low + 1
 				high = high - 1
@@ -126,12 +126,12 @@ function advancePermutation(current IntArray, count IntArray)
 	try current.set(1, value: atZero) otherwise panic("advancePermutation: n >= 2")
 	try current.set(0, value: firstValue) otherwise panic("advancePermutation: n >= 1")
 
-	var i = 1
+	var i = 1 as ElementIndex
 	let firstDigit = try count.get(i) otherwise panic("advancePermutation: 1 < n = count.count()")
 	var carried = firstDigit + 1
 	try count.set(i, value: carried) otherwise panic("advancePermutation: 1 < n")
 
-	while carried > i 'carry'
+	while carried > (i as Integer) 'carry'
 		try count.set(i, value: 0) otherwise panic("advancePermutation: i < n")
 		i = i + 1
 
@@ -163,8 +163,8 @@ function main() returns ExitCode
 	try fact.set(0, value: 1) otherwise panic("main: fact holds n + 1 >= 1 slots")
 
 	for i in 1 to n 'factorials'
-		let previous = try fact.get(i - 1) otherwise panic("main: i - 1 <= n < fact.count()")
-		try fact.set(i, value: i * previous) otherwise panic("main: i <= n < fact.count()")
+		let previous = try fact.get((i - 1) as ElementIndex) otherwise panic("main: i - 1 <= n < fact.count()")
+		try fact.set(i as ElementIndex, value: i * previous) otherwise panic("main: i <= n < fact.count()")
 	end 'factorials'
 
 	let permutationCount = try fact.get(n as ElementIndex) otherwise panic("main: n < fact.count()")
@@ -180,8 +180,8 @@ function main() returns ExitCode
 
 	initialPermutation(current, count: count, temp: temp, fact: fact, n: n, firstIndex: 0)
 
-	var maxFlips = 0
-	var checksum = 0
+	var maxFlips = 0 as Integer
+	var checksum = 0 as Integer
 
 	for index in 0 to lastIndex 'permutations'
 		if (try current.get(0) otherwise panic("main: n >= 1")) > 0 'unsorted'

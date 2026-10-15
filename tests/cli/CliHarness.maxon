@@ -722,7 +722,7 @@ end 'collectFiles'
 // ⭐ **WHAT A REPORT SAYS IT REMOVED, read as the first run of digits in it.** A case comparing the
 // clear's answer against what was on disk asks the number and never the wording around it.
 export function reportedTally(report String) returns ReportedTally throws ReportReadingError
-	var value = 0
+	var value = 0 as ReportedTally
 	var seen = false
 
 	for byte in report.bytes() 'eachByte'
@@ -734,7 +734,7 @@ export function reportedTally(report String) returns ReportedTally throws Report
 			continue
 		end 'notADigit'
 
-		value = value * DecimalBase + (byte) - (AsciiZero)
+		value = value * DecimalBase + ((byte - AsciiZero) as ReportedTally)
 		seen = true
 	end 'eachByte'
 
@@ -1649,7 +1649,7 @@ end 'viewsEntryIn'
 function entryNumberAt(image ByteArray, start ElementIndex) returns EntryNumberRead
 	var value = 0 as EntryNumber
 	var at = start
-	var shift = 0
+	var shift = 0 as Count
 
 	for _ in 0 upto VarintMostBytes 'eachByte'
 		let byte = try image.get(at) otherwise panic("CliHarness: the gate could not run - a number in the entry at {start} runs off its end.")
@@ -2075,3 +2075,22 @@ type ErrorPathDropsGrowLinearly implements OutsideCheckoutCase
 		try Expect.isTrue(secondGrowth * LinearGrowthDenominator < firstGrowth * LinearGrowthNumerator, message: "a function of {SmallBindings}, {MediumBindings} and {LargeBindings} owned bindings, each followed by {description}, compiled to {small}, {medium} and {large} bytes of code: the second doubling added {secondGrowth} bytes against the first's {firstGrowth}, at least {LinearGrowthNumerator}/{LinearGrowthDenominator} times as many. The error-path code grows faster than the bindings - every exit drops every binding in scope inline rather than joining one shared cascade of drops.")
 	end 'requireHeldIn'
 end 'ErrorPathDropsGrowLinearly'
+
+export let DeclaredMemberCount = 65536
+export let DeclarationPrelude = "typealias Count = int(0 to 1000)\n\n"
+export let DeclarationMain = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
+
+let DeclarationStem = "declaration"
+let DeclarationSourceExtension = ".maxon"
+let CompilerPanicPhrase = "panic at"
+
+export function requireDeclarationRefused(caseDirName String, source String, refusal String) throws TestFailure
+	let dir = freshCaseDir(caseDirName)
+	let sourcePath = dir.join("{DeclarationStem}{DeclarationSourceExtension}")
+	writeStagedFile(sourcePath, content: source)
+	let run = runDriver([BuildCommandWord, sourcePath.toString(), "{OutputOptionPrefix}{dir.join(DeclarationStem).toString()}"])
+
+	try Expect.equal(run.exitCode(), expected: 1, message: "a declaration of {DeclaredMemberCount} members ({caseDirName}) was not refused. It said: {run.stdout}{run.stderr}")
+	try Expect.isFalse(run.stderr.contains(CompilerPanicPhrase), message: "a declaration of {DeclaredMemberCount} members ({caseDirName}) panicked the compiler. It said: {run.stderr}")
+	try Expect.contains(run.stderr, needle: refusal, message: "a declaration of {DeclaredMemberCount} members ({caseDirName}) is not refused as `{refusal}`. It said: {run.stderr}")
+end 'requireDeclarationRefused'

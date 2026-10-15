@@ -77,12 +77,12 @@ let JumpTableLabelPrefix = "__jumptable_"
 let FloatConstantLabelPrefix = "__fconst_"
 
 // A float constant's IEEE bit pattern to the label minted for it — see `registerFloatConstant`.
-export typealias FloatConstantLabelMap = Map with (ParsedInt, String)
+export typealias FloatConstantLabelMap = Map with (FullRangeInt, String)
 
 // The label a float island is registered under. Exported because an isel running on a pool worker spells
 // the label into its load op itself and registers the island through the main thread afterwards
 // (`RdataRequestLog`): one formula, so the op and the table cannot name the island differently.
-export function floatConstantLabel(bits ParsedInt) returns String
+export function floatConstantLabel(bits FullRangeInt) returns String
 	return "{FloatConstantLabelPrefix}{scalarConstantText(bits, isFloat: true)}"
 end 'floatConstantLabel'
 
@@ -419,13 +419,13 @@ export typealias ReferencedGlobalLabelSet = Set with ByteArray
 export type DataSectionEntry
 	export var label as String
 	export var valueType as StdType
-	export var value as ParsedInt
+	export var value as FullRangeInt
 	export var reach as DataReach
 	export var offset as ByteOffset
 
 	export var sharing as MultiMSharing
 
-	export static function create(label String, valueType StdType, value ParsedInt, reach DataReach, sharing MultiMSharing = MultiMSharing.unclassified) returns DataSectionEntry
+	export static function create(label String, valueType StdType, value FullRangeInt, reach DataReach, sharing MultiMSharing = MultiMSharing.unclassified) returns DataSectionEntry
 		return Self{label: label, valueType: valueType, value: value, reach: reach, offset: 0, sharing: sharing}
 	end 'create'
 end 'DataSectionEntry'
@@ -741,7 +741,7 @@ export type GlobalDataTable
 	// That is the cost of the wrong reading it removes, and it does not grow: the change is +0.148% of the
 	// whole compile at rung 0 DECAYING to +0.046% at rung 5, its delta growing ×1.12…×1.68 per doubling
 	// (below ×2 ⇒ sublinear), with CPU −0.7%…−3.3% and `codeBytes` IDENTICAL at all six rungs.
-	export function registerFloatConstant(bits ParsedInt) returns String
+	export function registerFloatConstant(bits FullRangeInt) returns String
 		return try self.floatConstantLabels.get(bits) otherwise 'firstSighting'
 			let label = floatConstantLabel(bits)
 			self.floatConstantLabels.upsert(bits, value: label)
@@ -1076,7 +1076,7 @@ export type GlobalDataTable
 
 			offset = naturallyAlignedSlotOffset(offset, valueType: entry.valueType)
 			entry.offset = offset
-			self.dataIndex.upsert(entry.label, value: i)
+			self.dataIndex.upsert(entry.label, value: i as MachineWord)
 			offset = offset + (stdTypeStorageBytes(entry.valueType) as ByteOffset)
 		end 'each'
 
@@ -1273,7 +1273,7 @@ end 'paddedTo'
 // of code that decides what those bytes are. A second renderer here would be this project's signature bug —
 // one fact written twice — with the two free to disagree about what `3.14` is.
 
-export function scalarImage(value ParsedInt, byteCount BytePos) returns ByteArray
+export function scalarImage(value FullRangeInt, byteCount BytePos) returns ByteArray
 	var bytes = ByteArray.create()
 	appendLittleEndianScalar(bytes, value: value, byteCount: byteCount)
 	return bytes

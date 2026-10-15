@@ -203,7 +203,7 @@ function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Alloc
 		// source.
 		for pos in 0 upto bodyCount 'eachOp'
 			let opIdx = try bodyOps.get(pos) otherwise panic("colorAndDropSelfMoves: bodyOps.get OOB")
-			let atSeq = seq + pos
+			let atSeq = (seq + pos) as OpSeq
 			let uncolored = try module.ops.get(opIdx) otherwise panic("colorAndDropSelfMoves: opIdx not in module.ops")
 			let colored = colorTargetOp(uncolored, alloc: alloc)
 			try module.ops.set(opIdx, value: colored) otherwise panic("colorAndDropSelfMoves: ops.set OOB")
@@ -817,7 +817,7 @@ function splitCriticalEdgesInFunc(module TargetModule, funcIdx ElementIndex, tar
 	var sites = InlineSiteRefArray.create()
 
 	for predLocal in 0 upto topo.numBlocks 'eachPred'
-		if topo.succ.degree(predLocal) <= 1 'singleSucc'
+		if topo.succ.degree(predLocal as CsrIndex) <= 1 'singleSucc'
 			continue
 		end 'singleSucc'
 

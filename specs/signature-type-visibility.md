@@ -902,7 +902,7 @@ end 'widen'
 // --- file: app/main.maxon
 function main() returns ExitCode
 	let s = "hi"
-	var n = 0
+	var n = 0 as ExitCode
 
 	for b in s.bytes() 'each'
 		n = n + (b as ExitCode)
@@ -927,7 +927,7 @@ export typealias Tally = int(0 to 1000)
 export typealias ByteArray = Array with Tally
 
 export function widest(xs ByteArray) returns Tally
-	var top = 0
+	var top = 0 as Tally
 
 	for x in xs 'each'
 		top = x if x > top else top

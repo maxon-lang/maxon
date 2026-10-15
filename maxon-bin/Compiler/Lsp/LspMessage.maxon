@@ -146,7 +146,7 @@ module function readRequestId(doc JsonDoc) returns LspRequestId
 	let node = doc.get(idNode)
 
 	return match node.kind 'idShape'
-		jsonNumber gives LspRequestId.number(trunc(node.numberValue))
+		jsonNumber gives LspRequestId.number(trunc(node.numberValue) as LspIdNumber)
 		jsonString gives LspRequestId.text(node.stringValue)
 		jsonNull or
 		jsonBool or
@@ -177,7 +177,7 @@ module function writeLspError(writer LspStdoutWriter.handle, id LspRequestId, co
 	var doc = JsonDoc.create()
 
 	var error = LspJsonObject.create(doc)
-	error.put(JsonRpcErrorCodeKey, value: JsonNode.numberNode(code.rawValue))
+	error.put(JsonRpcErrorCodeKey, value: JsonNode.numberNode(code.rawValue as JsonFloat))
 	error.put(JsonRpcErrorMessageKey, value: JsonNode.stringNode(message))
 
 	writeLspResponse(writer, doc: doc, id: id, memberKey: JsonRpcErrorKey, payload: error.finish())

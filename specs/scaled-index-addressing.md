@@ -94,7 +94,7 @@ typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
 function total(a WordArray) returns Word
-	var t = 0
+	var t = 0 as Word
 	for v in a 'loop'
 		t = t + v
 	end 'loop'
@@ -129,7 +129,7 @@ typealias WordArray = Array with Word
 
 function fill(a WordArray, n Word)
 	for i in 0 upto n 'each'
-		try a.set(i, value: i * 3 + 1) otherwise panic("set: index out of range")
+		try a.set(i as ElementIndex, value: i * 3 + 1) otherwise panic("set: index out of range")
 	end 'each'
 end 'fill'
 
@@ -139,7 +139,7 @@ function main() returns ExitCode
 		a.push(0)
 	end 'seed'
 	fill(a, n: 5)
-	var seen = 0
+	var seen = 0 as Word
 	for i in 0 upto 5 'check'
 		seen = seen + (try a.get(i) otherwise panic("get: index out of range"))
 	end 'check'
@@ -186,7 +186,7 @@ function sharedScaling(base Word, i Word) returns Word
 end 'sharedScaling'
 
 function main() returns ExitCode
-	var seed = 0
+	var seed = 0 as Word
 	for i in 0 upto 4 'feed'
 		seed = seed + scaledAddress(i, i: i + 1) + sharedScaling(i, i: i + 2)
 	end 'feed'
@@ -223,9 +223,9 @@ typealias Byte = int(0 to 255)
 typealias Total = int(0 to u64.max)
 
 function sumBytes(b ByteArray) returns Total
-	var t = 0
+	var t = 0 as Total
 	for v in b 'loop'
-		t = t + v
+		t = t + v as Total
 	end 'loop'
 	return t
 end 'sumBytes'
@@ -259,7 +259,7 @@ typealias Real = float(f64.min to f64.max)
 typealias RealArray = Array with Real
 
 function total(a RealArray) returns Real
-	var t = 0.0
+	var t = 0.0 as Real
 	for v in a 'loop'
 		t = t + v
 	end 'loop'

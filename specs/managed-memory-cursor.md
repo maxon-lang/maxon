@@ -282,14 +282,14 @@ typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var refusals = 0
+	var refusals = 0 as Count
 	for _ in 0 upto 100 'many'
 		var arr = ByteArray.create()
 		let cursor = try arr.managed.createCursor() otherwise 'empty'
 			refusals = refusals + 1
 			continue
 		end 'empty'
-		refusals = refusals + cursor.current()
+		refusals = refusals + (cursor.current() as Count)
 	end 'many'
 	return refusals as ExitCode
 end 'main'
@@ -366,7 +366,7 @@ end 'makeBuffer'
 
 function main() returns ExitCode
 	let cursor = try makeBuffer().managed.createCursor() otherwise return 99
-	var churn = 0
+	var churn = 0 as Count
 	for _ in 0 upto 500 'churn'
 		var scratch = ByteArray.create()
 		scratch.push(200)
@@ -562,12 +562,12 @@ function main() returns ExitCode
 	arr.push(20)
 	arr.push(30)
 	var it = try ByteIter.create(arr.managed) otherwise return 99
-	var total = 0
-	total = total + it.current()
+	var total = 0 as Count
+	total = total + (it.current() as Count)
 	try it.advance() otherwise return 98
-	total = total + it.current()
+	total = total + (it.current() as Count)
 	try it.advance() otherwise return 97
-	total = total + it.current()
+	total = total + (it.current() as Count)
 	return ((total as Integer) + it.index()) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -636,10 +636,10 @@ function main() returns ExitCode
 	var arr = ByteArray.create()
 	arr.push(1)
 	arr.push(2)
-	var total = 0
+	var total = 0 as Count
 	for _ in 0 upto 200 'many'
 		let cursor = try arr.managed.createCursor() otherwise return 99
-		total = total + cursor.current()
+		total = total + (cursor.current() as Count)
 	end 'many'
 	return (total / 200) as ExitCode
 end 'main'

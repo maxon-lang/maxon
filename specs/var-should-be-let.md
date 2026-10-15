@@ -40,7 +40,7 @@ refused while that name is live. `clone()` gives the mutable side its own record
 ```maxon
 
 function main() returns ExitCode
-	var x = 10
+	var x = 10 as FullRangeInt
 	return x
 end 'main'
 ```
@@ -52,7 +52,7 @@ error E3077: specs/var-should-be-let/var-never-reassigned.maxon:4:6: variable 'x
 ```maxon
 
 function main() returns ExitCode
-	var x = 10
+	var x = 10 as FullRangeInt
 	x = 20
 	return x
 end 'main'
@@ -77,7 +77,7 @@ end 'main'
 ```maxon
 
 function main() returns ExitCode
-	var x = 0
+	var x = 0 as FullRangeInt
 	if x == 0 'check'
 		x = 42
 	end 'check'
@@ -92,8 +92,8 @@ end 'main'
 ```maxon
 
 function main() returns ExitCode
-	var x = 1
-	var y = 2
+	var x = 1 as FullRangeInt
+	var y = 2 as FullRangeInt
 	return x + y
 end 'main'
 ```
@@ -105,7 +105,7 @@ error E3077: specs/var-should-be-let/multiple-var-first-reported.maxon:4:6: vari
 ```maxon
 
 function main() returns ExitCode
-	let x = 10
+	let x = 10 as FullRangeInt
 	var y = x
 	y = 20
 	return y
@@ -250,7 +250,7 @@ end 'main'
 ```maxon
 
 function main() returns ExitCode
-	var x = 10
+	var x = 10 as FullRangeInt
 	x = 20
 	var y = x
 	y = 30
@@ -265,7 +265,7 @@ end 'main'
 ```maxon
 
 function main() returns ExitCode
-	var x = 10
+	var x = 10 as FullRangeInt
 	return 0
 end 'main'
 ```
@@ -1544,7 +1544,7 @@ end 'fill'
 
 function main() returns ExitCode
 	var bags = makeBags()
-	var total = 0
+	var total = 0 as Count
 
 	for bag in bags 'eachBag'
 		fill(bag)
@@ -1588,7 +1588,7 @@ end 'fill'
 
 function main() returns ExitCode
 	let bags = makeBags()
-	var total = 0
+	var total = 0 as Count
 
 	for bag in bags 'eachBag'
 		fill(bag)

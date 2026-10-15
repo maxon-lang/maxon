@@ -39,17 +39,19 @@ The loop's step on `hits` is one read, one add and one write of the same word, w
 between. `7` steps of one.
 
 ```maxon
-var hits = 0
+typealias Word = int(i64.min to i64.max)
+
+var hits = 0 as Word
 
 function main() returns ExitCode
-	var n = 0
+	var n = 0 as Count
 
 	while n < 7 'loop'
 		hits = hits + 1
 		n = n + 1
 	end 'loop'
 
-	return hits
+	return hits as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -63,9 +65,11 @@ hi` is true, so the answer is `40 + 1`. One instruction at the write would set t
 the compare and its branch, describing `0 + 1` — not less — and the program would return 7.
 
 ```maxon
-var lo = 0
-var hi = 0
-var hits = 0
+typealias Word = int(i64.min to i64.max)
+
+var lo = 0 as Word
+var hi = 0 as Word
+var hits = 0 as Word
 
 function main() returns ExitCode
 	lo = 1
@@ -75,7 +79,7 @@ function main() returns ExitCode
 	hits = next
 
 	if less 'less'
-		return 40 + hits
+		return (40 + hits) as ExitCode
 	end 'less'
 
 	return 7
@@ -91,14 +95,16 @@ The word is read again after the sum is computed and before it is written back, 
 the second read see `4` and return 44.
 
 ```maxon
-var hits = 0
+typealias Word = int(i64.min to i64.max)
+
+var hits = 0 as Word
 
 function main() returns ExitCode
 	hits = 3
 	let next = hits + 1
 	let seen = hits
 	hits = next
-	return seen * 10 + hits
+	return (seen * 10 + hits) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -110,13 +116,15 @@ end 'main'
 in place at the final write would add to the `100` and return 101.
 
 ```maxon
-var slot = 5
+typealias Word = int(i64.min to i64.max)
+
+var slot = 5 as Word
 
 function main() returns ExitCode
 	let seen = slot
 	slot = 100
 	slot = seen + 1
-	return slot
+	return slot as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -128,9 +136,11 @@ The intervening write is inside a call. `reset` recurses, so it stays a call rat
 spliced into `main` as a plain store. `5 + 1`, not `100 + 1`.
 
 ```maxon
+typealias Word = int(i64.min to i64.max)
+
 typealias Depth = int(0 to 3)
 
-var slot = 5
+var slot = 5 as Word
 
 function reset(depth Depth)
 	if depth > 0 'deeper'
@@ -145,7 +155,7 @@ function main() returns ExitCode
 	let seen = slot
 	reset(3)
 	slot = seen + 1
-	return slot
+	return slot as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -156,12 +166,14 @@ end 'main'
 The value read is needed after the write, so it must be in a register: `20 + 21`.
 
 ```maxon
-var total = 20
+typealias Word = int(i64.min to i64.max)
+
+var total = 20 as Word
 
 function main() returns ExitCode
 	let before = total
 	total = before + 1
-	return before + total
+	return (before + total) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -172,12 +184,14 @@ end 'main'
 The sum is needed after the write, so it must be in a register: `21 * 2 - 21`.
 
 ```maxon
-var total = 20
+typealias Word = int(i64.min to i64.max)
+
+var total = 20 as Word
 
 function main() returns ExitCode
 	let after = total + 1
 	total = after
-	return after * 2 - total
+	return (after * 2 - total) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -188,11 +202,13 @@ end 'main'
 `12 + 10` in one instruction. Any other operation of the group returns 2, 8, 14 or 6.
 
 ```maxon
-var slot = 12
+typealias Word = int(i64.min to i64.max)
+
+var slot = 12 as Word
 
 function main() returns ExitCode
 	slot = slot + 10
-	return slot
+	return slot as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -204,13 +220,15 @@ end 'main'
 8, 14 or 6; an instruction written in the load direction leaves the word at 12.
 
 ```maxon
-var slot = 12
-var operand = 0
+typealias Word = int(i64.min to i64.max)
+
+var slot = 12 as Word
+var operand = 0 as Word
 
 function main() returns ExitCode
 	operand = 10
 	slot = slot + operand
-	return slot
+	return slot as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -221,11 +239,13 @@ end 'main'
 `12 - 10`. Any other operation of the group returns 22, 8, 14 or 6.
 
 ```maxon
-var slot = 12
+typealias Word = int(i64.min to i64.max)
+
+var slot = 12 as Word
 
 function main() returns ExitCode
 	slot = slot - 10
-	return slot
+	return slot as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -237,13 +257,15 @@ end 'main'
 direction leaves 12.
 
 ```maxon
-var slot = 12
-var operand = 0
+typealias Word = int(i64.min to i64.max)
+
+var slot = 12 as Word
+var operand = 0 as Word
 
 function main() returns ExitCode
 	operand = 10
 	slot = slot - operand
-	return slot
+	return slot as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -254,11 +276,13 @@ end 'main'
 `12 and 10`. Any other operation of the group returns 22, 2, 14 or 6.
 
 ```maxon
-var slot = 12
+typealias Word = int(i64.min to i64.max)
+
+var slot = 12 as Word
 
 function main() returns ExitCode
 	slot = slot and 10
-	return slot
+	return slot as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -270,13 +294,15 @@ end 'main'
 direction leaves 12.
 
 ```maxon
-var slot = 12
-var operand = 0
+typealias Word = int(i64.min to i64.max)
+
+var slot = 12 as Word
+var operand = 0 as Word
 
 function main() returns ExitCode
 	operand = 10
 	slot = slot and operand
-	return slot
+	return slot as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -287,11 +313,13 @@ end 'main'
 `12 or 10`. Any other operation of the group returns 22, 2, 8 or 6.
 
 ```maxon
-var slot = 12
+typealias Word = int(i64.min to i64.max)
+
+var slot = 12 as Word
 
 function main() returns ExitCode
 	slot = slot or 10
-	return slot
+	return slot as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -303,13 +331,15 @@ end 'main'
 direction leaves 12.
 
 ```maxon
-var slot = 12
-var operand = 0
+typealias Word = int(i64.min to i64.max)
+
+var slot = 12 as Word
+var operand = 0 as Word
 
 function main() returns ExitCode
 	operand = 10
 	slot = slot or operand
-	return slot
+	return slot as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -320,11 +350,13 @@ end 'main'
 `12 xor 10`. Any other operation of the group returns 22, 2, 8 or 14.
 
 ```maxon
-var slot = 12
+typealias Word = int(i64.min to i64.max)
+
+var slot = 12 as Word
 
 function main() returns ExitCode
 	slot = slot xor 10
-	return slot
+	return slot as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -336,13 +368,15 @@ end 'main'
 direction leaves 12.
 
 ```maxon
-var slot = 12
-var operand = 0
+typealias Word = int(i64.min to i64.max)
+
+var slot = 12 as Word
+var operand = 0 as Word
 
 function main() returns ExitCode
 	operand = 10
 	slot = slot xor operand
-	return slot
+	return slot as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -354,13 +388,15 @@ end 'main'
 instruction: `10 + 4`. Adding the word to itself instead of the operand would return 8.
 
 ```maxon
-var hits = 4
-var operand = 0
+typealias Word = int(i64.min to i64.max)
+
+var hits = 4 as Word
+var operand = 0 as Word
 
 function main() returns ExitCode
 	operand = 10
 	hits = operand + hits
-	return hits
+	return hits as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -371,11 +407,13 @@ end 'main'
 `1 + hits` is `hits + 1`, one instruction: `4 + 1`.
 
 ```maxon
-var hits = 4
+typealias Word = int(i64.min to i64.max)
+
+var hits = 4 as Word
 
 function main() returns ExitCode
 	hits = 1 + hits
-	return hits
+	return hits as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -387,11 +425,13 @@ end 'main'
 code, and the program would fail its range check instead.
 
 ```maxon
-var slot = 3
+typealias Word = int(i64.min to i64.max)
+
+var slot = 3 as Word
 
 function main() returns ExitCode
 	slot = 10 - slot
-	return slot
+	return slot as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -403,13 +443,15 @@ end 'main'
 return `5 + 1`.
 
 ```maxon
-var a = 5
-var b = 0
+typealias Word = int(i64.min to i64.max)
+
+var a = 5 as Word
+var b = 0 as Word
 
 function main() returns ExitCode
 	b = 20
 	a = b + 1
-	return a
+	return a as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -422,13 +464,15 @@ address fold takes the sum as one `lea` and emits no multiply of its own. A step
 write as well would add a product nothing computed. `5 + 3 * 8`.
 
 ```maxon
-var slot = 5
-var operand = 0
+typealias Word = int(i64.min to i64.max)
+
+var slot = 5 as Word
+var operand = 0 as Word
 
 function main() returns ExitCode
 	operand = 3
 	slot = slot + operand * 8
-	return slot
+	return slot as ExitCode
 end 'main'
 ```
 ```exitcode

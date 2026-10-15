@@ -48,7 +48,7 @@ The shape the row was opened for. In `copyTail`'s versioned fast copy each bound
 typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
-function copyTail(source WordArray, scratch WordArray, n Word)
+function copyTail(source WordArray, scratch WordArray, n Count)
 	for i in 1 upto n 'copy'
 		let element = try source.get(i) otherwise panic("copyTail: i < n = source.count()")
 		try scratch.set(i, value: element) otherwise panic("copyTail: i < n = scratch.count()")
@@ -63,7 +63,7 @@ function main() returns ExitCode
 		scratch.push(0)
 	end 'seed'
 	copyTail(source, scratch: scratch, n: 6)
-	var total = 0
+	var total = 0 as Word
 	for v in scratch 'sum'
 		total = total + v
 	end 'sum'
@@ -81,8 +81,8 @@ handler's value joins the sum on the hot path.
 typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
-function clampedSum(a WordArray, n Word) returns Word
-	var t = 0
+function clampedSum(a WordArray, n Count) returns Word
+	var t = 0 as Word
 	for i in 0 upto n 'each'
 		t = t + (try a.get(i) otherwise 7)
 	end 'each'
@@ -109,9 +109,9 @@ typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
 function grid(a WordArray, rows Word, width Word) returns Word
-	var t = 0
+	var t = 0 as Word
 	for r in 0 upto rows 'row'
-		var line = 0
+		var line = 0 as Word
 		for c in 0 upto width 'col'
 			line = line + (try a.get((r * width + c) as ElementIndex) otherwise 100)
 		end 'col'
@@ -139,7 +139,7 @@ typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
 function walkDown(a WordArray, start Word) returns Word
-	var t = 0
+	var t = 0 as Word
 	var i = start
 	while i > -2 'down'
 		t = t + (try a.get(i as ElementIndex) otherwise 0)
@@ -173,8 +173,8 @@ Control. The sixth index is past the end, so the sunk `otherwise panic` handler 
 typealias Word = int(i64.min to i64.max)
 typealias WordArray = Array with Word
 
-function total(a WordArray, n Word) returns Word
-	var t = 0
+function total(a WordArray, n Count) returns Word
+	var t = 0 as Word
 	for i in 0 upto n 'each'
 		t = t + (try a.get(i) otherwise panic("total: index {i} is past the end"))
 	end 'each'

@@ -418,7 +418,7 @@ module function interpolatedLiteralLastFragment(tokens TokenArray, first Element
 	var last = first
 
 	while tokenKindAt(tokens, index: last + 1) == TokenKind.stringInterpStart 'eachHole'
-		var depth = 0
+		var depth = 0 as InterpolationDepth
 		var at = last + 1
 
 		while true 'toTheHoleEnd'
@@ -492,6 +492,8 @@ export type Token
 end 'Token'
 
 typealias InterpolationDepth = int(0 to u64.max)
+
+export typealias NestingDepth = int(i64.min to i64.max)
 
 export enum CommentSpanKind
 	line
@@ -1025,7 +1027,7 @@ type Lexer
 	// --- Action dispatch helpers ---
 
 	function handleEmit2(dfaState DfaState, startLine LineNumber, startCol ColumnNumber) throws CursorError
-		emitFixedToken(dfaState.rawValue, tokens: tokens, line: startLine, column: startCol)
+		emitFixedToken(dfaState.rawValue as DfaStateIndex, tokens: tokens, line: startLine, column: startCol)
 		try advance() otherwise 'eof'
 			// Two-char token completed at the source's last byte — clean
 			// completion, not a truncated token.
@@ -1114,7 +1116,7 @@ type Lexer
 			state = try transitionTable.get(state * CharClass.COUNT + nextClass) otherwise panic("Lexer: transitionTable lookup failed from state {state} for charClass {nextClass}")
 		end 'live'
 
-		let action = try actionTable.get(state.rawValue) otherwise panic("Lexer: actionTable lookup failed for state {state}")
+		let action = try actionTable.get(state.rawValue as ElementIndex) otherwise panic("Lexer: actionTable lookup failed for state {state}")
 		try dispatchAction(action, dfaState: state, startLine: startLine, startCol: startCol, startByte: startByte, lastChar: atEnd)
 		return atEnd
 	end 'stepDfa'
@@ -1124,7 +1126,7 @@ type Lexer
 			skip then return
 			skipCr then column = column - 1
 			newline then tokens.push(Token.create(TokenKind.newline, line: startLine, column: startCol))
-			emit then emitFixedToken(dfaState.rawValue, tokens: tokens, line: startLine, column: startCol)
+			emit then emitFixedToken(dfaState.rawValue as DfaStateIndex, tokens: tokens, line: startLine, column: startCol)
 			emit2 then try handleEmit2(dfaState, startLine: startLine, startCol: startCol)
 			enterStrSq then try scanSingleQuoteString(startLine, startCol: startCol)
 			enterStrDq then try scanDoubleQuoteString(startLine, startCol: startCol)
@@ -1390,11 +1392,11 @@ type Lexer
 	// `"{["a": 1].count()}"` at the MAP literal's colon.
 	function scanInterp(openLine LineNumber, openCol ColumnNumber) throws CursorError
 		interpolationDepth = interpolationDepth + 1
-		var depth = 1
+		var depth = 1 as InterpolationDepth
 
 		// Parens and brackets the interpolation body has left open. Braces are `depth`'s, since
 		// they also decide where the body ENDS; these only decide whether a `:` is the body's own.
-		var groupDepth = 0
+		var groupDepth = 0 as InterpolationDepth
 
 		// Cursor position right after the opening `{` — used on failure to
 		// scan the consumed body for `"`. We can't track this via a flag set
@@ -1557,7 +1559,7 @@ type Lexer
 		let stop = cursorByte()
 
 		while i < stop 'scan'
-			let b = try bytes.get(i as ElementIndex) otherwise return false
+			let b = try bytes.get(i) otherwise return false
 
 			if b == AsciiByte.dquote 'hit'
 				return true
@@ -1742,7 +1744,7 @@ type Lexer
 			atEof = true
 		end 'includeDecLast'
 
-		let numBytes = try bytes.slice(numStart, endIndex: endOfs as ElementIndex) otherwise panic("Lexer: number-slice invariant violated")
+		let numBytes = try bytes.slice(numStart, endIndex: endOfs) otherwise panic("Lexer: number-slice invariant violated")
 
 		if isFloat 'emitFloat'
 			emitWithSource(TokenKind.floatLiteral, value: numBytes, startLine: startLine, startCol: startCol, startByte: numStart, endByte: endOfs)
@@ -1832,7 +1834,7 @@ type Lexer
 			atEof = true
 		end 'includeLastByte'
 
-		let identBytes = try bytes.slice(startPos, endIndex: identEnd as ElementIndex) otherwise panic("Lexer: identifier-slice invariant violated")
+		let identBytes = try bytes.slice(startPos, endIndex: identEnd) otherwise panic("Lexer: identifier-slice invariant violated")
 		let kind = keywords.classify(identBytes)
 		emitWithSource(kind, value: identBytes, startLine: startLine, startCol: startCol, startByte: startPos, endByte: identEnd)
 
@@ -1881,7 +1883,7 @@ type Lexer
 			nameEnd = nameEnd + 1
 		end 'includeLastByte'
 
-		let nameBytes = try bytes.slice(nameStart, endIndex: nameEnd as ElementIndex) otherwise panic("Lexer.scanDirective: invariant violated")
+		let nameBytes = try bytes.slice(nameStart, endIndex: nameEnd) otherwise panic("Lexer.scanDirective: invariant violated")
 		let name = String.from(nameBytes)
 		let kind = classifyDirective(name)
 
@@ -1894,7 +1896,7 @@ type Lexer
 			throw CursorError.exhausted
 		end 'unknown'
 
-		let fullSpanBytes = try bytes.slice(hashStart, endIndex: nameEnd as ElementIndex) otherwise panic("Lexer.scanDirective: span slice invariant violated")
+		let fullSpanBytes = try bytes.slice(hashStart, endIndex: nameEnd) otherwise panic("Lexer.scanDirective: span slice invariant violated")
 		emitWithSource(kind, value: fullSpanBytes, startLine: startLine, startCol: startCol, startByte: hashStart, endByte: nameEnd)
 
 		if atEof 'directiveDone'

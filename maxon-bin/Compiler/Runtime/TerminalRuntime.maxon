@@ -91,13 +91,10 @@ let DumbTermName = "dumb"
 let DumbTermLength = 4
 
 // `dumb` as one little-endian 32-bit word: 'd'=0x64 at the low byte through 'b'=0x62 at the high one.
-let DumbTermWordLittleEndian = 0x626D7564 as ParsedInt
+let DumbTermWordLittleEndian = 0x626D7564 as FullRangeInt
 
 // Bit 5 — the ONE bit ASCII case differs in — applied to each byte as it is read.
-let AsciiCaseFoldMaskByte = 0x20 as ParsedInt
-
-// How far each successive byte is shifted as the little-endian word is reassembled.
-let BitsPerByte = 8
+let AsciiCaseFoldMaskByte = 0x20 as FullRangeInt
 
 // `GetFileType`'s "this handle is a character device" answer — a console, a serial port, a terminal. The
 // three it is tested against are `FILE_TYPE_UNKNOWN` (0), `FILE_TYPE_DISK` (1, a redirect to a file) and
@@ -107,13 +104,13 @@ let BitsPerByte = 8
 // enumeration on Windows and nothing else does, so a lane whose terminal test is `isatty` translates its own
 // answer into these two (`Arm64PosixRuntime.arm64EmitFileTypeFromStatus`), exactly as that surface
 // translates an errno into `ErrorFileNotFound`. One declaration, and every producer reads it.
-export let FileTypeChar = 0x0002 as ParsedInt
+export let FileTypeChar = 0x0002 as FullRangeInt
 
 // ⚠ **THE `false` ANSWER IS `FILE_TYPE_DISK` AND NOT `FILE_TYPE_UNKNOWN`.** `FILE_TYPE_UNKNOWN` is Win32's
 // spelling of *"the query itself failed"*; a descriptor that is not a terminal has been REDIRECTED, which is
 // what a disk file is. The comparison below only asks whether the word equals `FileTypeChar`, so both would
 // answer the predicate identically — the distinction is what a reader of the emitted code is told.
-export let FileTypeDisk = 0x0001 as ParsedInt
+export let FileTypeDisk = 0x0001 as FullRangeInt
 
 // ⭐ **THE PROBE BUFFER: `dumb` plus its terminator, and not one byte more.** `GetEnvironmentVariableW`
 // answers the chars it COPIED when the value fits and the size it NEEDS (including the terminator) when
@@ -222,7 +219,7 @@ function buildTerminalStdoutWantsColor(module StdModule, func IrFunction, entry 
 			continue
 		end 'theLowByte'
 
-		let shiftBy = emitConst(module, block: compareDumb, value: (position * BitsPerByte) as ParsedInt, ids: ids)
+		let shiftBy = emitConst(module, block: compareDumb, value: (position as FullRangeInt) * BitsPerByte, ids: ids)
 		let placed = emitBin(module, block: compareDumb, a: folded, b: shiftBy, opcode: StdBinOpcode.shl, ids: ids)
 		termWord = emitBin(module, block: compareDumb, a: termWord, b: placed, opcode: StdBinOpcode.bitOr, ids: ids)
 	end 'eachTermByte'

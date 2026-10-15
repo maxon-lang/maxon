@@ -105,7 +105,7 @@ typealias IntArray = Array with Integer
 
 function main() returns ExitCode
 	var arr = IntArray.create()
-	var i = 0
+	var i = 0 as Integer
 	while i < 10 'loop'
 		arr.push(i)
 		i = i + 1
@@ -157,7 +157,7 @@ end 'main'
 function main() returns ExitCode
 	var s = ""
 	let a = "a"
-	var i = 0
+	var i = 0 as Count
 	while i < 5 'loop'
 		s.append(a)
 		i = i + 1

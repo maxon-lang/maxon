@@ -231,7 +231,7 @@ type Value implements Parsable
 end 'Value'
 
 function main() returns ExitCode
-	var result = 0
+	var result = 0 as Integer
 
 	// First call succeeds - handler not executed
 	let v = try Value.fromString("hello") otherwise Value.create(0)
@@ -690,4 +690,96 @@ end 'main'
 ```
 ```maxoncstderr
 error E3057: <fragment>:3:14: throwing function requires try: 'int.fromString'
+```
+
+<!-- test: error.int-from-string-is-a-full-range-int -->
+`int.fromString` returns a `FullRangeInt`, which a parameter of another alias refuses.
+```maxon
+typealias Score = int(0 to u64.max)
+
+function show(v Score)
+	print("{v}\n")
+end 'show'
+
+function main() returns ExitCode
+	show(try int.fromString("5") otherwise 0)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:9:2: argument type mismatch for 'v': expected 'Score', got 'FullRangeInt'
+```
+
+<!-- test: parsable.int-fromstring-refuses-a-value-past-the-int-range -->
+A digit string whose value does not fit a 64-bit `int` is not a number: it is refused instead of wrapping around to a small one, and both ends of the range still read.
+
+```maxon
+function show(text String)
+	let n = try int.fromString(text) otherwise 'refused'
+		print("{text}: refused\n")
+		return
+	end 'refused'
+
+	print("{text}: {n}\n")
+end 'show'
+
+function main() returns ExitCode
+	show("9223372036854775807")
+	show("-9223372036854775808")
+	show("9223372036854775808")
+	show("-9223372036854775809")
+	show("18446744073709551637")
+	show("99999999999999999999999")
+	return 0
+end 'main'
+```
+```stdout
+9223372036854775807: 9223372036854775807
+-9223372036854775808: -9223372036854775808
+9223372036854775808: refused
+-9223372036854775809: refused
+18446744073709551637: refused
+99999999999999999999999: refused
+```
+```exitcode
+0
+```
+
+<!-- test: parsable.int-fromstring-refuses-a-second-or-a-trailing-minus -->
+`int.fromString` takes one optional leading `-` and then digits; a second minus, a minus after a digit, and a lone minus are all refused rather than read as a number.
+
+```maxon
+function show(text String)
+	let n = try int.fromString(text) otherwise 'refused'
+		print("{text}: refused\n")
+		return
+	end 'refused'
+
+	print("{text}: {n}\n")
+end 'show'
+
+function main() returns ExitCode
+	show("-5")
+	show("--5")
+	show("---5")
+	show("-5-")
+	show("5-")
+	show("5-5")
+	show("-")
+	show("")
+	return 0
+end 'main'
+```
+```stdout
+-5: -5
+--5: refused
+---5: refused
+-5-: refused
+5-: refused
+5-5: refused
+-: refused
+: refused
+```
+```exitcode
+0
 ```

@@ -148,19 +148,19 @@ export type RegAllocMemory
 	end 'create'
 
 	export function addPhase(phase RegAllocPhase, delta PhaseDelta)
-		self.columns.add(phase.ordinal, delta: delta)
+		self.columns.add(phase.ordinal as PhaseIndex, delta: delta)
 	end 'addPhase'
 
 	export function allocsOf(phase RegAllocPhase) returns AllocCount
-		return self.columns.allocsAt(phase.ordinal)
+		return self.columns.allocsAt(phase.ordinal as PhaseIndex)
 	end 'allocsOf'
 
 	export function freesOf(phase RegAllocPhase) returns AllocCount
-		return self.columns.freesAt(phase.ordinal)
+		return self.columns.freesAt(phase.ordinal as PhaseIndex)
 	end 'freesOf'
 
 	export function bytesOf(phase RegAllocPhase) returns HeapByteCount
-		return self.columns.bytesAt(phase.ordinal)
+		return self.columns.bytesAt(phase.ordinal as PhaseIndex)
 	end 'bytesOf'
 
 	export function deltaOf(phase RegAllocPhase) returns PhaseDelta
@@ -585,15 +585,15 @@ export type CompileMemory
 	end 'create'
 
 	export function addPhase(phase CompilePhase, delta PhaseDelta)
-		self.columns.add(phase.ordinal, delta: delta)
+		self.columns.add(phase.ordinal as PhaseIndex, delta: delta)
 	end 'addPhase'
 
 	export function recordResidency(phase CompilePhase, reading PhaseResidency)
-		self.residency.raiseTo(phase.ordinal, reading: reading)
+		self.residency.raiseTo(phase.ordinal as PhaseIndex, reading: reading)
 	end 'recordResidency'
 
 	export function residencyOf(phase CompilePhase) returns PhaseResidency
-		return self.residency.at(phase.ordinal)
+		return self.residency.at(phase.ordinal as PhaseIndex)
 	end 'residencyOf'
 
 	export function enableTagCensus()
@@ -601,7 +601,7 @@ export type CompileMemory
 	end 'enableTagCensus'
 
 	export function recordTagCensus(phase CompilePhase)
-		self.tagCensus.takeAt(phase.ordinal)
+		self.tagCensus.takeAt(phase.ordinal as PhaseIndex)
 	end 'recordTagCensus'
 
 	export function enableAllocTally()
@@ -609,13 +609,13 @@ export type CompileMemory
 	end 'enableAllocTally'
 
 	export function recordAllocTally(phase CompilePhase)
-		self.allocTally.takeAt(phase.ordinal)
+		self.allocTally.takeAt(phase.ordinal as PhaseIndex)
 	end 'recordAllocTally'
 
 	export function deltaOf(phase CompilePhase) returns PhaseDelta
-		let allocs = self.columns.allocsAt(phase.ordinal)
-		let frees = self.columns.freesAt(phase.ordinal)
-		return PhaseDelta.create(0, cpuTicks: 0, allocs: allocs, frees: frees, bytes: self.columns.bytesAt(phase.ordinal))
+		let allocs = self.columns.allocsAt(phase.ordinal as PhaseIndex)
+		let frees = self.columns.freesAt(phase.ordinal as PhaseIndex)
+		return PhaseDelta.create(0, cpuTicks: 0, allocs: allocs, frees: frees, bytes: self.columns.bytesAt(phase.ordinal as PhaseIndex))
 	end 'deltaOf'
 
 	// What the DISJOINT phases claimed between them. `poolRows` is the timing table's mask
@@ -788,11 +788,11 @@ function tagCensusReport(memory CompileMemory, peakLivePhase CompilePhase) retur
 		msg.append("{MemRowIndent}this binary carries no interned-name table, so every bucket is shown as `tag=<n>` — the same table `maxon monitor` reads to name a traced allocation\n")
 	end 'noNameTable'
 
-	let peakSampled = census.buckets.sampledAt(peakLivePhase.ordinal)
+	let peakSampled = census.buckets.sampledAt(peakLivePhase.ordinal as PhaseIndex)
 	var peakRows = TagCensusRowArray.create()
 
 	if peakSampled 'rankThePeakOnce'
-		peakRows = tagRowsRanked(census.buckets, index: peakLivePhase.ordinal, wholeTable: true, style: style)
+		peakRows = tagRowsRanked(census.buckets, index: peakLivePhase.ordinal as PhaseIndex, wholeTable: true, style: style)
 	end 'rankThePeakOnce'
 
 	msg.append(tagPhaseTopLines(census.buckets, style: style, peakPhase: peakLivePhase, peakRows: peakRows, peakRanked: peakSampled))
@@ -804,14 +804,14 @@ function tagCensusReport(memory CompileMemory, peakLivePhase CompilePhase) retur
 
 	msg.append("{MemRowIndent}the whole table at {peakLivePhase.name}, the peak-LIVE phase\n")
 	msg.append(tagTableBlock(peakRows, style: style, names: names, columnTitle: tagCensusColumnTitle(census.buckets.mode), countTitle: TagCensusLiveColumnTitle))
-	msg.append(tagCensusOwnRowText(census, index: peakLivePhase.ordinal, bucket: SlabCensusImplausibleBucket, names: names))
-	msg.append(tagCensusOwnRowText(census, index: peakLivePhase.ordinal, bucket: SlabCensusOverflowBucket, names: names))
+	msg.append(tagCensusOwnRowText(census, index: peakLivePhase.ordinal as PhaseIndex, bucket: SlabCensusImplausibleBucket, names: names))
+	msg.append(tagCensusOwnRowText(census, index: peakLivePhase.ordinal as PhaseIndex, bucket: SlabCensusOverflowBucket, names: names))
 	msg.append(horizontalRule(TagCensusRuleWidth))
 
 	let committed = memory.residencyOf(peakLivePhase).committedBytes
 	msg.append("{MemRowIndent}os-direct: no row above counts a mapping the slab did not serve — committed {committed} bytes at this phase INCLUDES the OS-direct road's live mappings and the allocator's own overhead\n")
-	msg.append("{MemRowIndent}{census.rawLiveSlotsAt(peakLivePhase.ordinal)} live slots carry no box header — the rows above attribute each of them by whatever its first word holds, so they land in {TagCensusUnattributableLabel} or in a tag bucket that is not theirs\n")
-	msg.append("{MemRowIndent}{tagCensusSelfCheck(census.buckets.totalBytesAt(peakLivePhase.ordinal), tallyBytes: census.tallyBytesAt(peakLivePhase.ordinal), liveBytes: census.liveBytesAt(peakLivePhase.ordinal))}\n")
+	msg.append("{MemRowIndent}{census.rawLiveSlotsAt(peakLivePhase.ordinal as PhaseIndex)} live slots carry no box header — the rows above attribute each of them by whatever its first word holds, so they land in {TagCensusUnattributableLabel} or in a tag bucket that is not theirs\n")
+	msg.append("{MemRowIndent}{tagCensusSelfCheck(census.buckets.totalBytesAt(peakLivePhase.ordinal as PhaseIndex), tallyBytes: census.tallyBytesAt(peakLivePhase.ordinal as PhaseIndex), liveBytes: census.liveBytesAt(peakLivePhase.ordinal as PhaseIndex))}\n")
 	return msg.build()
 end 'tagCensusReport'
 
@@ -836,11 +836,11 @@ function allocTallyReport(memory CompileMemory) returns String
 	var bucketed = 0 as AllocCount
 
 	for phase in CompilePhase.allCases 'findThePeak'
-		if not tally.buckets.sampledAt(phase.ordinal) 'neverSampled'
+		if not tally.buckets.sampledAt(phase.ordinal as PhaseIndex) 'neverSampled'
 			continue
 		end 'neverSampled'
 
-		let allocs = tally.buckets.totalCountAt(phase.ordinal)
+		let allocs = tally.buckets.totalCountAt(phase.ordinal as PhaseIndex)
 		bucketed = bucketed + allocs
 
 		if allocs > peakAllocs 'highest'
@@ -853,7 +853,7 @@ function allocTallyReport(memory CompileMemory) returns String
 	var peakRows = TagCensusRowArray.create()
 
 	if peakRanked 'rankThePeakOnce'
-		peakRows = tagRowsRanked(tally.buckets, index: peakPhase.ordinal, wholeTable: true, style: style)
+		peakRows = tagRowsRanked(tally.buckets, index: peakPhase.ordinal as PhaseIndex, wholeTable: true, style: style)
 	end 'rankThePeakOnce'
 
 	msg.append(tagPhaseTopLines(tally.buckets, style: style, peakPhase: peakPhase, peakRows: peakRows, peakRanked: peakRanked))
@@ -1044,7 +1044,7 @@ function tagPhaseTopLines(columns TagBucketColumns, style TagRowStyle, peakPhase
 	var msg = StringBuilder.create()
 
 	for phase in CompilePhase.allCases 'eachPhase'
-		if not columns.sampledAt(phase.ordinal) 'neverSampled'
+		if not columns.sampledAt(phase.ordinal as PhaseIndex) 'neverSampled'
 			continue
 		end 'neverSampled'
 
@@ -1053,7 +1053,7 @@ function tagPhaseTopLines(columns TagBucketColumns, style TagRowStyle, peakPhase
 		if phase == peakPhase and peakRanked 'thePeakIsAlreadyRanked'
 			line = tagTopLine(peakRows, style: style, names: names)
 		end 'thePeakIsAlreadyRanked' else 'rankedForTheLineAlone'
-			line = tagTopLine(tagRowsRanked(columns, index: phase.ordinal, wholeTable: false, style: style), style: style, names: names)
+			line = tagTopLine(tagRowsRanked(columns, index: phase.ordinal as PhaseIndex, wholeTable: false, style: style), style: style, names: names)
 		end 'rankedForTheLineAlone'
 
 		msg.append("{MemRowIndent}{phase.name}: {line}\n")

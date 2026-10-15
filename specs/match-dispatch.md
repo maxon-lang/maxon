@@ -812,7 +812,7 @@ function main() returns ExitCode
 	if scalar(100000) == 999 'i'
 		n = n + 1
 	end 'i'
-	return n as ExitCode
+	return n
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -855,7 +855,7 @@ function main() returns ExitCode
 	if classify(2) == 0 'f'
 		n = n + 1
 	end 'f'
-	return n as ExitCode
+	return n
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -1027,7 +1027,7 @@ function main() returns ExitCode
 	if bucket(-1) == 0 'g'
 		n = n + 1
 	end 'g'
-	return n as ExitCode
+	return n
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```

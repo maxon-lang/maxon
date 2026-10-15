@@ -71,7 +71,7 @@ N="$1"; SHAPE="$2"; OUT="$3"
         i=$(( i + 1 ))
       done
       echo "function main() returns ExitCode"
-      echo -e "\tvar acc = 1"
+      echo -e "\tvar acc = 1 as LadderInt"
       i=0
       while [ "$i" -lt "$N" ]; do
         echo -e "\tacc = acc + f${i}(acc)"

@@ -116,7 +116,7 @@ end 'Lex'
 
 function run() returns Integer throws IterErr
 	var lex = try Lex.create()
-	var sum = 0
+	var sum = 0 as Integer
 	for _ in 0 upto 40 'loop'
 		let a = try lex.consumeExpecting(1)
 		sum = sum + a.line

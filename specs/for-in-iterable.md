@@ -89,7 +89,7 @@ function main() returns ExitCode
 	a.push(20)
 	a.push(30)
 	let s = IntSeq.create(a)
-	var sum = 0
+	var sum = 0 as Integer
 	for v in s 'each'
 		sum = sum + v
 	end 'each'
@@ -144,7 +144,7 @@ type IntSeq
 end 'IntSeq'
 
 function total(s IntSeq) returns Integer
-	var sum = 7
+	var sum = 7 as Integer
 	for v in s 'each'
 		sum = sum + v
 	end 'each'
@@ -213,7 +213,7 @@ type IntSeq
 end 'IntSeq'
 
 function firstOver(s IntSeq, floor Integer) returns Integer
-	var found = 0
+	var found = 0 as Integer
 	for v in s 'each'
 		if v > floor 'hit'
 			found = v
@@ -289,7 +289,7 @@ end 'Countable'
 
 function main() returns ExitCode
 	let c = Countable.create(4)
-	var sum = 0
+	var sum = 0 as Integer
 	for v in c 'each'
 		sum = sum + v
 	end 'each'
@@ -341,7 +341,7 @@ function main() returns ExitCode
 	var it = Resumable.create(a)
 	try it.advance() otherwise panic("advance")
 	try it.advance() otherwise panic("advance")
-	var sum = 0
+	var sum = 0 as Integer
 	for v in it 'each'
 		sum = sum + v
 	end 'each'
@@ -398,7 +398,7 @@ end 'Countable'
 
 function main() returns ExitCode
 	let c = Countable.create(4)
-	var sum = 0
+	var sum = 0 as Integer
 	for v in c 'each'
 		sum = sum + v
 	end 'each'

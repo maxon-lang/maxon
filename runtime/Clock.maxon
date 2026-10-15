@@ -37,8 +37,8 @@ let WallClockScratchBytes = 8
 // The whole FILETIME the host wrote, and the calendar seconds and nanoseconds it scales to. Neither can be negative, and
 // the unguarded-door rule `runtime/Word.maxon` carries is what says an `int` may spell that here.
 //
-// ⚠ **THE NAME IS `EpochSeconds` AND NOT `UnixSeconds`, WHICH IS WHAT `stdlib/Clock.maxon` PUBLISHES FOR
-// THE SAME RANGE.** A second declaration of that name would CONTEST the stdlib's in the by-name alias
+// ⚠ **THE NAME IS `EpochSeconds` AND NOT `UnixSeconds`, WHICH IS THE NAME `stdlib/Clock.maxon`
+// PUBLISHES.** A second declaration of that name would CONTEST the stdlib's in the by-name alias
 // registry, which resolves last-wins for a reader that declares neither — so the duplicate would decide
 // what `UnixSeconds` means in files that have nothing to do with this tier.
 typealias FileTimeTicks = int(0 to u64.max)
@@ -60,7 +60,7 @@ end '__clock_now_unix_ns'
 // `SetWaitableTimer` deadline is an absolute FILETIME, and a deadline counted on any other epoch or
 // scale arms the timer at a moment it does not name.
 module function __clock_now_filetime() returns FileTimeTicks
-	let ticksAddr = __Raw.scratch(WallClockScratchBytes)
+	let ticksAddr = __Raw.scratch(WallClockScratchBytes) as MachineWord
 	__Raw.osReadWallClock(ticksAddr)
 	return __Raw.loadWord(ticksAddr, offset: 0) as FileTimeTicks
 end '__clock_now_filetime'

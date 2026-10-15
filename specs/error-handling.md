@@ -345,7 +345,7 @@ function mayFail() returns Integer throws MyError
 end 'mayFail'
 
 function main() returns ExitCode
-	var result = 0
+	var result = 0 as Integer
 	try mayFail() otherwise 'err'
 		result = 42
 	end 'err'
@@ -377,7 +377,7 @@ function mayFail(shouldFail bool) returns Integer throws MyError
 end 'mayFail'
 
 function main() returns ExitCode
-	var result = 0
+	var result = 0 as Integer
 	try mayFail(false) otherwise 'err'
 		result = 42
 	end 'err'
@@ -406,7 +406,7 @@ function mayFail() returns Integer throws MyError
 end 'mayFail'
 
 function main() returns ExitCode
-	var caught = 0
+	var caught = 0 as Integer
 	try mayFail() otherwise (e) 'handler'
 		match e 'kind'
 			failed then caught = 42
@@ -884,7 +884,7 @@ function mayFail() returns Integer throws MyError
 end 'mayFail'
 
 function main() returns ExitCode
-	var result = 0
+	var result = 0 as Integer
 	try mayFail() otherwise (e) 'handler'
 		match e 'check'
 			failed then result = 42
@@ -923,7 +923,7 @@ function mayFail(code Integer) returns Integer throws MyError
 end 'mayFail'
 
 function main() returns ExitCode
-	var result = 0
+	var result = 0 as Integer
 	try mayFail(2) otherwise (e) 'handler'
 		match e 'check'
 			failed then result = 10
@@ -959,7 +959,7 @@ function mayFail(shouldFail bool) returns Integer throws MyError
 end 'mayFail'
 
 function main() returns ExitCode
-	var result = 0
+	var result = 0 as Integer
 	try mayFail(false) otherwise (e) 'handler'
 		match e 'kind'
 			failed then result = 99
@@ -991,7 +991,7 @@ function mayFail() returns Integer throws MyError
 end 'mayFail'
 
 function main() returns ExitCode
-	var result = 0
+	var result = 0 as Integer
 	try mayFail() otherwise (e) 'handler'
 		match e 'check'
 			notFound(code) then result = code
@@ -1024,7 +1024,7 @@ function mayFail() returns Integer throws MyError
 end 'mayFail'
 
 function main() returns ExitCode
-	var result = 0
+	var result = 0 as Integer
 	try mayFail() otherwise (e) 'handler'
 		match e 'check'
 			notFound(code) then result = code
@@ -1066,7 +1066,7 @@ end 'risky'
 
 // --- file: main.maxon
 function main() returns ExitCode
-	var result = 0
+	var result = 0 as Code
 	try risky(9) otherwise (e) 'handler'
 		match e 'check'
 			bad(code) then result = code
@@ -1098,7 +1098,7 @@ file's interner: a declaration-order union-layout prescan.
 // Seeding every file's `throws` clause before any body is parsed keeps `e` typed
 // as `Woe`.
 function main() returns ExitCode
-	var result = 0
+	var result = 0 as Code
 	try risky(9) otherwise (e) 'handler'
 		match e 'check'
 			tooBig(by) then result = by
@@ -1138,7 +1138,7 @@ wrong number. This pins the managed backward path the scalar case above cannot.
 ```maxon
 // --- file: app.maxon
 function main() returns ExitCode
-	var result = 0
+	var result = 0 as BytePos
 	try risky(9) otherwise (e) 'handler'
 		match e 'check'
 			bad(msg) then result = msg.byteLength()
@@ -1177,7 +1177,7 @@ family that `classifyUnionPayload` panics on without the doors.
 ```maxon
 // --- file: app.maxon
 function main() returns ExitCode
-	var result = 0
+	var result = 0 as Code
 	try risky(9) otherwise (e) 'handler'
 		match e 'check'
 			bad(p) then result = p.mass
@@ -1238,7 +1238,7 @@ end 'Decoy2'
 
 function main() returns ExitCode
 	let w = Woe.bad(Payload.create(7))
-	var result = 0
+	var result = 0 as Code
 	match w 'check'
 		bad(p) then result = p.mass
 		ok then result = 1
@@ -1294,7 +1294,7 @@ function mayFailSimple() returns Integer throws SimpleError
 end 'mayFailSimple'
 
 function main() returns ExitCode
-	var result = 0
+	var result = 0 as Integer
 	try mayFailAssoc() otherwise (e) 'handler1'
 		match e 'check1'
 			withCode(code) then result = result + code
@@ -1672,7 +1672,7 @@ function mayFail() returns Integer throws MyError
 end 'mayFail'
 
 function main() returns ExitCode
-	var total = 0
+	var total = 0 as Integer
 	while true 'loop'
 		let v = try mayFail() otherwise break
 		total = total + v
@@ -1705,8 +1705,8 @@ function mayFail() returns Integer throws MyError
 end 'mayFail'
 
 function main() returns ExitCode
-	var total = 0
-	var iter = 0
+	var total = 0 as Integer
+	var iter = 0 as Integer
 	while iter < 4 'loop'
 		iter = iter + 1
 		let v = try mayFail() otherwise continue
@@ -2804,7 +2804,7 @@ function mayFail() returns Integer throws MyError
 end 'mayFail'
 
 function main() returns ExitCode
-	var result = 0
+	var result = 0 as Integer
 	try mayFail() otherwise 'recover'
 		result = 42
 	end 'handler'

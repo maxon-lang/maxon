@@ -307,14 +307,14 @@ end 'divisionByZeroThrows'
 // `x == 0` compare already produces. That coincidence is what makes the expansion branchless: the divisor
 // test IS the error flag, with no `select` and no second constant. It is also FRAGILE in the one way a
 // derived value can be, so `emitDivisorZeroFlag` asserts it rather than assuming it (see there).
-let DivisionByZeroOrdinal = 0 as ParsedInt
+let DivisionByZeroOrdinal = 0 as FullRangeInt
 export let DivisionByZeroFlag = DivisionByZeroOrdinal + ErrorFlagOrdinalBias
 
 // The `const` payload the divisor is tested against, in BOTH domains: the integer 0 and the IEEE-754 pattern
 // for `+0.0` are the same 64 bits, so one constant serves the integer and the float arm of the expansion and
 // neither has to spell a bare literal. (`-0.0` is a DIFFERENT pattern and is caught anyway — the float arm
 // compares as f64, and IEEE-754 makes the two zeros equal.)
-export let DivisorZeroPattern = 0 as ParsedInt
+export let DivisorZeroPattern = 0 as FullRangeInt
 
 // ⭐ **THE OTHER DIVISOR `idiv` CANNOT SURVIVE** — the divisor at which the quotient overflows, which
 // is `-1` and only `-1`: `i64.min / -1` is `i64.max + 1`. It is ONE constant read by two tiers, which is the
@@ -326,12 +326,12 @@ export let DivisorZeroPattern = 0 as ParsedInt
 // ⚠ It is the same 64 bits as `TypeRules.UnsignedFullUpperPattern` and is NOT that constant. That one means
 // "the `u64.max` bound as it rides in a signed field"; this one means "the divisor that overflows". Two
 // facts, one bit pattern — and `rangeExcludesNegativeOne` has to tell them apart to be correct at all.
-export let OverflowingDivisorPattern = -1 as ParsedInt
+export let OverflowingDivisorPattern = -1 as FullRangeInt
 
 // The dividend of that pair. The parser's proof (`TypeRules.rangeExcludesIntMin`), the quotient guard's
 // comparand (`Parser.emitQuotientOverflowGuard`) and the folder's refusal read this one constant, for the
 // divisor's reason.
-export let OverflowingDividendPattern = i64.min as ParsedInt
+export let OverflowingDividendPattern = i64.min as FullRangeInt
 
 // ⭐ **THE ORDINAL DRIFT GUARD (7b), FOR THE FIFTH FAMILY.** The enum's case ORDER is this family's wire
 // format and `DivisionByZeroOrdinal` above is a transcription of it, so the two are asserted to agree on

@@ -248,7 +248,7 @@ error E3005: <fragment>:4:5: 'if' requires a bool condition, got 'int'
 <!-- test: int-as-while-condition -->
 ```maxon
 function main() returns ExitCode
-	var n = 4
+	var n = 4 as Count
 	while n 'loop'
 		n = n - 1
 	end 'loop'
@@ -289,7 +289,7 @@ which is `implicit-type-conversion.md`'s `no-bool-to-int` defeated by adding one
 <!-- test: assign-bool-to-int-var -->
 ```maxon
 function main() returns ExitCode
-	var x = 5
+	var x = 5 as Count
 	x = true
 	return 0
 end 'main'
@@ -313,7 +313,7 @@ error E3005: <fragment>:4:2: cannot assign a value of type 'int' to variable 'fl
 <!-- test: laundered-bool-into-arithmetic -->
 ```maxon
 function main() returns ExitCode
-	var x = 5
+	var x = 5 as ExitCode
 	if true 'b'
 		x = false
 	end 'b'
@@ -328,7 +328,7 @@ error E3005: <fragment>:5:3: cannot assign a value of type 'bool' to variable 'x
 ```maxon
 function main() returns ExitCode
 	var flag = true
-	var n = 0
+	var n = 0 as ExitCode
 
 	if flag 'b'
 		flag = 7
@@ -347,8 +347,8 @@ error E3005: <fragment>:7:3: cannot assign a value of type 'int' to variable 'fl
 <!-- test: laundered-bool-through-loop-phi -->
 ```maxon
 function main() returns ExitCode
-	var x = 0
-	var i = 0
+	var x = 0 as ExitCode
+	var i = 0 as Count
 
 	while i < 3 'loop'
 		x = true
@@ -371,7 +371,7 @@ function takeInt(n Integer) returns Integer
 end 'takeInt'
 
 function main() returns ExitCode
-	var x = 5
+	var x = 5 as Integer
 	if true 'b'
 		x = false
 	end 'b'
@@ -391,7 +391,7 @@ var takes any int. Only a change of CLASS is refused. This returns 1.
 ```maxon
 function main() returns ExitCode
 	var flag = true
-	var n = 5
+	var n = 5 as ExitCode
 
 	if n > 0 'pos'
 		flag = false

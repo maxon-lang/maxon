@@ -265,13 +265,13 @@ function lineNumberAfter(text String, marker String) returns FixtureLineNumber
 		cursor = try text.indexAfter(cursor) otherwise return 0
 	end 'eachMarkerGrapheme'
 
-	var value = 0
+	var value = 0 as FixtureLineNumber
 	var seenADigit = false
 
 	for c in text.slice(cursor, endIndex: text.endIndex()) 'eachCharacter'
 		if Ascii.isDigit(c) 'aDigit'
 			match hexDigitOf(c) 'digit'
-				value(digit) then value = value * DecimalBase + digit
+				value(digit) then value = value * DecimalBase + (digit as FixtureLineNumber)
 				notAHexDigit then panic("sidecar-dump.test: '{c}' passed Ascii.isDigit, so it is a hex digit too")
 			end 'digit'
 
@@ -294,7 +294,7 @@ end 'lineNumberAfter'
 // The 1-based line of the staged source that starts with `prefix`. It refuses loudly: every prefix asked
 // for here was built from a name this process read out of that very file moments ago.
 function sourceLineStartingWith(staged FilePath, prefix String, what String) returns FixtureLineNumber
-	var number = 0
+	var number = 0 as FixtureLineNumber
 
 	for line in linesOfStagedSource(staged.join(StagedProgramFileName)) 'eachLine'
 		number = number + 1

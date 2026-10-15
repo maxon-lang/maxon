@@ -233,8 +233,8 @@ function grade(n Integer) returns Grade
 end 'grade'
 
 function main() returns ExitCode
-	var total = 0
-	var i = 0
+	var total = 0 as Integer
+	var i = 0 as Integer
 	while i < 3 'count'
 		total = total + Ops.while(i)
 		i = i + 1
@@ -281,8 +281,8 @@ at the declared name's own position.
 typealias Integer = int(i64.min to i64.max)
 
 function weigh(while Integer, for Integer, match Integer, from Integer, to Integer) returns Integer
-	var acc = 0
-	var k = 0
+	var acc = 0 as Integer
+	var k = 0 as Integer
 	while k < 3 'spin'
 		acc = acc + from
 		k = k + 1
@@ -296,7 +296,7 @@ function weigh(while Integer, for Integer, match Integer, from Integer, to Integ
 end 'weigh'
 
 function main() returns ExitCode
-	var total = 0
+	var total = 0 as Integer
 	for i in 1 upto 4 'walk'
 		total = total + weigh(i, for: 3, match: 4, from: 2, to: 8)
 	end 'walk'
@@ -436,7 +436,7 @@ type Ops
 end 'Ops'
 
 function main() returns ExitCode
-	var i = 0
+	var i = 0 as Integer
 	while Ops.otherwise(i) 'loop'
 		i = i + 1
 	end 'loop'
@@ -580,7 +580,7 @@ function twosComplementDistance(to Integer, from Integer) returns Integer
 end 'twosComplementDistance'
 
 function span(to Integer, from Integer) returns Integer
-	var acc = 0
+	var acc = 0 as Integer
 	var k = from
 	while to > k 'spin'
 		acc = acc + 1

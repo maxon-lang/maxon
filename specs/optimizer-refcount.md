@@ -98,7 +98,7 @@ function names_total(arr StringArray) returns Integer
 end 'names_total'
 
 function row_total(arr IntArray) returns Integer
-	var sum = 0
+	var sum = 0 as Integer
 	for v in arr 'iter'
 		sum = sum + v
 	end 'iter'
@@ -106,7 +106,7 @@ function row_total(arr IntArray) returns Integer
 end 'row_total'
 
 function matrix_total(m Matrix) returns Integer
-	var sum = 0
+	var sum = 0 as Integer
 	for row in m 'iter'
 		sum = sum + row_total(row)
 	end 'iter'
@@ -114,7 +114,7 @@ function matrix_total(m Matrix) returns Integer
 end 'matrix_total'
 
 function points_x_sum(pts PointArray) returns Integer
-	var sum = 0
+	var sum = 0 as Integer
 	for p in pts 'iter'
 		sum = sum + p.x
 	end 'iter'
@@ -122,7 +122,7 @@ function points_x_sum(pts PointArray) returns Integer
 end 'points_x_sum'
 
 function main() returns ExitCode
-	var total = 0
+	var total = 0 as Integer
 
 	// --- section 1: struct literal + alias ---
 	var a = Point.create(1, y: 2)
@@ -250,7 +250,7 @@ end 'Box'
 function main() returns ExitCode
 	@heap let a = Box.create(7)
 	@heap let c = Box.create(11)
-	var total = 0
+	var total = 0 as Integer
 	if true 'outer'
 		let b = a
 		let d = c
@@ -291,7 +291,7 @@ end 'Tag'
 function main() returns ExitCode
 	@heap let a = Box.create(42)
 	let tag = Tag.first
-	var total = 0
+	var total = 0 as Integer
 	if true 'inner'
 		let b = a
 		match tag 'branch'
@@ -329,7 +329,7 @@ end 'Tag'
 function main() returns ExitCode
 	@heap let x = Box.create(7)
 	let tag = Tag.b
-	var total = 0
+	var total = 0 as Integer
 	if true 'inner'
 		let alias = x
 		match tag 'three'
@@ -381,7 +381,7 @@ end 'inspect'
 
 function main() returns ExitCode
 	@heap let a = Box.create(42)
-	var total = 0
+	var total = 0 as Integer
 	if true 'inner'
 		let b = a
 		let n = try inspect(b) otherwise 0
@@ -468,7 +468,7 @@ end 'pair'
 
 function main() returns ExitCode
 	@heap let primary = pair()
-	var total = 0
+	var total = 0 as Integer
 	if true 'inner'
 		let alias = primary
 		let n = try peek(alias) otherwise 0
@@ -509,7 +509,7 @@ end 'peek'
 
 function main() returns ExitCode
 	@heap let boxed = Box.create(7)
-	var total = 0
+	var total = 0 as Integer
 	for _ in 0 upto 3 'loop'
 		let alias = boxed
 		let n = try peek(alias) otherwise 0

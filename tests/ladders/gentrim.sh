@@ -65,7 +65,7 @@
 #              prices both. ⭐ **`loop-trim` vs `loop-trim-shared` IS THE A/B THAT ISOLATES THE PER-CALL
 #              `CharacterSet`**: identical programs but for whether the set is built inside the loop or
 #              hoisted out of it, so their difference is exactly what a predefined set costs per call.
-#              `loop-charset` prices that construction with no trim attached at all.
+#              `loop-charset` is `loop-trim` with that construction written out before the trim.
 #
 # ⚠ **THE SEEDS ARE REAL KNOBS, because they pick the path through BOTH `__gr_end` AND `__ucd_cat`**, and
 # those two forks are not the same fork:
@@ -82,10 +82,9 @@
 # through the UCD table**, and the `data-*` bodies (letters) miss the explicit set AND the mask — i.e.
 # they pay the FULL `__cs_contains` both ways. That is the expensive direction on purpose.
 #
-# ⚠ **THE SETUP IS `s.append(s)`, NOT AN APPEND LOOP** — `genstring.sh`'s reason, unchanged:
-# `__str_append` reallocates to the EXACT required length on every grow, so building an N-byte string by
-# N appends copies O(N²) bytes and would swamp every reading below with a quadratic that is not the one
-# being measured. Self-append doubles the length per step.
+# ⚠ **THE SETUP IS `s.append(s)`, NOT AN APPEND LOOP** — `genstring.sh`'s reason: self-append doubles
+# the length per step, so the subject reaches its final length in `<n>` steps and the setup cost stays
+# off the timed region whatever the string growth policy is.
 #
 # Usage: gentrim.sh <n> <mode> <out>
 #   sites-trim | sites-trim-shared | sites-charset | sites-control          (<n> = CALL SITES)
@@ -227,22 +226,15 @@ trim_method_for_mode() {
 
 emit_prelude() {
 	echo "// trim ladder: $N, mode $MODE — see tests/ladders/gentrim.sh"
-
-	if [ "$FAMILY" != "loop" ]; then
-		echo "typealias Int = int(i64.min to i64.max)"
-	fi
-
-	echo "typealias ExitCode = int(0 to 255)"
+	echo "typealias Int = int(i64.min to i64.max)"
 	echo ""
 }
 
 # The self-append doubler, shared by every run family. O(final length) in total.
 emit_grown() {
-	echo "// Self-append doubling: O(final length) in total, because __str_append reallocates to the EXACT"
-	echo "// required length and a chunk-at-a-time loop would therefore be quadratic in the setup alone."
 	echo "function grown(seed String, doublings Int) returns String"
 	echo -e "\tvar s = seed"
-	echo -e "\tvar d = 0"
+	echo -e "\tvar d = 0 as Int"
 	echo -e "\twhile d < doublings 'dbl'"
 	echo -e "\t\ts.append(s)"
 	echo -e "\t\td = d + 1"
@@ -276,7 +268,7 @@ emit_sites_program() {
 	f=0
 	while [ "$f" -lt "$FNS" ]; do
 		echo "function fn${f}(${SITE_PARAMS}) returns Int"
-		echo -e "\tvar total = 0"
+		echo -e "\tvar total = 0 as Int"
 		if [ "$MODE" = "sites-trim-shared" ]; then
 			# ONE set per function, so the per-SITE cost is the trim call alone and the preset construction
 			# is amortized. Against `sites-trim` at the same site count this isolates, in the COMPILE
@@ -290,18 +282,18 @@ emit_sites_program() {
 				# A no-argument trim: the parser builds the default preset — a `Set with Character`, SEVEN
 				# minted `Character` literals and a `__cs_make` box — INLINE at every one of these sites.
 				echo -e "\tlet t${n} = s.trim()"
-				echo -e "\ttotal = total + t${n}.byteLength()"
+				echo -e "\ttotal = total + (t${n}.byteLength() as Int)"
 				;;
 			sites-trim-shared)
 				echo -e "\tlet t${n} = s.trim(cs)"
-				echo -e "\ttotal = total + t${n}.byteLength()"
+				echo -e "\ttotal = total + (t${n}.byteLength() as Int)"
 				;;
 			sites-charset)
 				# The set construction with no trim attached — `parseCharacterSetStaticCall`'s eleven-row
 				# table walk, `emitCharacterMemberSet`'s seven literals, and the box.
 				echo -e "\tlet c${n} = CharacterSet.whitespacesAndNewlines()"
 				echo -e "\tlet m${n} = p.trim(c${n})"
-				echo -e "\ttotal = total + m${n}.byteLength()"
+				echo -e "\ttotal = total + (m${n}.byteLength() as Int)"
 				;;
 			sites-control)
 				# THE CONTROL: the P1.2 String surface and NOT ONE `CharacterSet`, trim or Character. Same
@@ -309,7 +301,7 @@ emit_sites_program() {
 				# tax slice D levies on a program that does not use it.
 				echo -e "\tvar acc${n} = p"
 				echo -e "\tacc${n}.append(s)"
-				echo -e "\ttotal = total + acc${n}.byteLength()"
+				echo -e "\ttotal = total + (acc${n}.byteLength() as Int)"
 				;;
 			esac
 			n=$(( n + 1 ))
@@ -321,7 +313,7 @@ emit_sites_program() {
 	done
 
 	echo "function main() returns ExitCode"
-	echo -e "\tvar sum = 0"
+	echo -e "\tvar sum = 0 as Int"
 	f=0
 	while [ "$f" -lt "$FNS" ]; do
 		echo -e "\tsum = sum + fn${f}(${SITE_ARGS})"
@@ -337,17 +329,17 @@ emit_data_program() {
 	emit_grown
 
 	echo "function main() returns ExitCode"
-	echo -e "\tvar total = 0"
+	echo -e "\tvar total = 0 as Int"
 	echo -e "\tlet subject = grown(\"$(seed_for_mode "$MODE")\", doublings: $N)"
 	echo -e "\tlet units = subject.byteLength()"
 	echo -e "\tlet t0 = Clock.nowNanos()"
-	echo -e "\tvar r = 0"
+	echo -e "\tvar r = 0 as Int"
 	echo -e "\twhile r < $REPS 'rep'"
 	# ⭐ The whole question. `__str_trim` walks CLUSTERS from byte 0 to the end, minting a `Character`
 	# through `__char_at` at each and probing the set with `__cs_contains`. If anything re-derived a
 	# cluster start — or if `__gr_end` scanned from 0 rather than from `pos` — this reads ×4 per doubling.
 	echo -e "\t\tlet cut = subject.${METHOD}()"
-	echo -e "\t\ttotal = total + cut.byteLength()"
+	echo -e "\t\ttotal = total + (cut.byteLength() as Int)"
 	echo -e "\t\tr = r + 1"
 	echo -e "\tend 'rep'"
 	echo -e "\tlet t1 = Clock.nowNanos()"
@@ -361,7 +353,7 @@ emit_edge_program() {
 	emit_grown
 
 	echo "function main() returns ExitCode"
-	echo -e "\tvar total = 0"
+	echo -e "\tvar total = 0 as Int"
 	# The PAD doubles and the BODY does not, so `units` is the trimmed run and the unmatched body is a
 	# constant. That is the axis `data-*` cannot separate: there the body doubles and the pad is empty.
 	if [ "$MODE" = "edge-prefix" ]; then
@@ -376,10 +368,10 @@ emit_edge_program() {
 	fi
 	echo -e "\tlet subject = built"
 	echo -e "\tlet t0 = Clock.nowNanos()"
-	echo -e "\tvar r = 0"
+	echo -e "\tvar r = 0 as Int"
 	echo -e "\twhile r < $REPS 'rep'"
 	echo -e "\t\tlet cut = subject.trim()"
-	echo -e "\t\ttotal = total + cut.byteLength()"
+	echo -e "\t\ttotal = total + (cut.byteLength() as Int)"
 	echo -e "\t\tr = r + 1"
 	echo -e "\tend 'rep'"
 	echo -e "\tlet t1 = Clock.nowNanos()"
@@ -392,9 +384,9 @@ emit_loop_program() {
 	emit_prelude
 
 	echo "function main() returns ExitCode"
-	echo -e "\tvar total = 0"
+	echo -e "\tvar total = 0 as Int"
 	echo -e "\tlet subject = \"  alpha  \""
-	echo -e "\tlet trips = $(( 1 << N ))"
+	echo -e "\tlet trips = $(( 1 << N )) as Int"
 	echo -e "\tlet units = trips"
 	if [ "$MODE" = "loop-trim-shared" ]; then
 		# HOISTED: one predefined set for the whole loop. Against `loop-trim` — identical but for this one
@@ -402,7 +394,7 @@ emit_loop_program() {
 		echo -e "\tlet cs = CharacterSet.whitespacesAndNewlines()"
 	fi
 	echo -e "\tlet t0 = Clock.nowNanos()"
-	echo -e "\tvar i = 0"
+	echo -e "\tvar i = 0 as Int"
 	echo -e "\twhile i < trips 'trip'"
 	case "$MODE" in
 	loop-trim)
@@ -410,25 +402,24 @@ emit_loop_program() {
 		# seven owned `Character` members and a box) AND the trim's own owned result. The slab never gives
 		# either back.
 		echo -e "\t\tlet cut = subject.trim()"
-		echo -e "\t\ttotal = total + cut.byteLength()"
+		echo -e "\t\ttotal = total + (cut.byteLength() as Int)"
 		;;
 	loop-trim-shared)
 		echo -e "\t\tlet cut = subject.trim(cs)"
-		echo -e "\t\ttotal = total + cut.byteLength()"
+		echo -e "\t\ttotal = total + (cut.byteLength() as Int)"
 		;;
 	loop-charset)
-		# The set construction ALONE — no trim, no owned result String. This isolates the per-call cost
-		# of building a preset rather than reusing one.
+		# `loop-trim` with the default set built explicitly: the two spellings must read one cost.
 		echo -e "\t\tlet c = CharacterSet.whitespacesAndNewlines()"
 		echo -e "\t\tlet cut = subject.trim(c)"
-		echo -e "\t\ttotal = total + cut.byteLength()"
+		echo -e "\t\ttotal = total + (cut.byteLength() as Int)"
 		;;
 	loop-control)
 		# THE CONTROL: a per-trip owned String from machinery this rung did not touch, so the slab's own
 		# per-trip growth is separated from anything slice D added.
 		echo -e "\t\tvar acc = subject"
 		echo -e "\t\tacc.append(subject)"
-		echo -e "\t\ttotal = total + acc.byteLength()"
+		echo -e "\t\ttotal = total + (acc.byteLength() as Int)"
 		;;
 	esac
 	echo -e "\t\ti = i + 1"

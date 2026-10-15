@@ -508,7 +508,7 @@ function classify(m Marker, seed Idx) returns Idx
 		other gives 0
 	end 'm'
 
-	var i = 0
+	var i = 0 as Idx
 	while i < 2 'bump'
 		total = total + 1
 		i = i + 1

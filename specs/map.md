@@ -183,7 +183,7 @@ end 'main'
 <!-- test: insert.new -->
 ```maxon
 function main() returns ExitCode
-	var m = [1: 10, 2: 20]
+	var m = [1 as Count: 10 as Count, 2 as Count: 20 as Count]
 	try m.insert(3, value: 30) otherwise ignore
 	return m.count()
 end 'main'
@@ -195,7 +195,7 @@ end 'main'
 <!-- test: upsert.update -->
 ```maxon
 function main() returns ExitCode
-	var m = [1: 10, 2: 20]
+	var m = [1 as Count: 10 as Count, 2 as Count: 20 as Count]
 	m.upsert(1, value: 100)
 	let result = try m.get(1) otherwise 0
 	return result
@@ -208,7 +208,7 @@ end 'main'
 <!-- test: insert.then-contains -->
 ```maxon
 function main() returns ExitCode
-	var m = [10: 1]
+	var m = [10 as Count: 1 as Count]
 	try m.insert(20, value: 2) otherwise ignore
 	if m.contains(20) 'check'
 		return 1
@@ -223,7 +223,7 @@ end 'main'
 <!-- test: remove.existing -->
 ```maxon
 function main() returns ExitCode
-	var m = [1: 10, 2: 20, 3: 30]
+	var m = [1 as Count: 10 as Count, 2 as Count: 20 as Count, 3 as Count: 30 as Count]
 	let removed = m.remove(2)
 	if removed 'check'
 		return m.count()
@@ -238,7 +238,7 @@ end 'main'
 <!-- test: remove.nonexistent -->
 ```maxon
 function main() returns ExitCode
-	var m = [1: 10, 2: 20]
+	var m = [1 as Count: 10 as Count, 2 as Count: 20 as Count]
 	let removed = m.remove(99)
 	if removed 'check'
 		return 1
@@ -253,7 +253,7 @@ end 'main'
 <!-- test: remove.then-contains -->
 ```maxon
 function main() returns ExitCode
-	var m = [1: 10, 2: 20, 3: 30]
+	var m = [1 as Count: 10 as Count, 2 as Count: 20 as Count, 3 as Count: 30 as Count]
 	_ = m.remove(2)
 	if m.contains(2) 'check'
 		return 1
@@ -268,7 +268,7 @@ end 'main'
 <!-- test: empty-map.from-syntax -->
 ```maxon
 function main() returns ExitCode
-	var m = [0: 0]
+	var m = [0 as Count: 0 as Count]
 	_ = m.remove(0)
 	try m.insert(1, value: 100) otherwise ignore
 	let result = try m.get(1) otherwise 0
@@ -306,7 +306,7 @@ end 'main'
 <!-- test: remove-reinsert -->
 ```maxon
 function main() returns ExitCode
-	var m = [1: 10, 2: 20, 3: 30]
+	var m = [1 as Count: 10 as Count, 2 as Count: 20 as Count, 3 as Count: 30 as Count]
 	_ = m.remove(2)
 	try m.insert(2, value: 99) otherwise ignore
 	let result = try m.get(2) otherwise 0
@@ -385,7 +385,7 @@ end 'main'
 <!-- test: string-keys-upsert-update -->
 ```maxon
 function main() returns ExitCode
-	var m = ["x": 10]
+	var m = ["x": 10 as Count]
 	m.upsert("x", value: 99)
 	let result = try m.get("x") otherwise 0
 	return result
@@ -398,7 +398,7 @@ end 'main'
 <!-- test: string-keys-remove -->
 ```maxon
 function main() returns ExitCode
-	var m = ["alpha": 1, "beta": 2, "gamma": 3]
+	var m = ["alpha": 1 as Count, "beta": 2 as Count, "gamma": 3 as Count]
 	_ = m.remove("beta")
 	if m.contains("beta") 'check'
 		return 1
@@ -460,7 +460,7 @@ end 'main'
 <!-- test: insert.duplicate-throws -->
 ```maxon
 function main() returns ExitCode
-	var m = [1: 10, 2: 20]
+	var m = [1 as Count: 10 as Count, 2 as Count: 20 as Count]
 	try m.insert(1, value: 99) otherwise 'err'
 		return 42
 	end 'err'
@@ -474,7 +474,7 @@ end 'main'
 <!-- test: insert.duplicate-error-binding -->
 ```maxon
 function main() returns ExitCode
-	var m = [1: 10]
+	var m = [1 as Count: 10 as Count]
 	try m.insert(1, value: 99) otherwise (e) 'err'
 		match e 'check'
 			keyAlreadyExists then return 1
@@ -491,7 +491,7 @@ end 'main'
 <!-- test: insert.duplicate-does-not-update -->
 ```maxon
 function main() returns ExitCode
-	var m = [1: 10]
+	var m = [1 as Count: 10 as Count]
 	try m.insert(1, value: 99) otherwise ignore
 	let result = try m.get(1) otherwise 0
 	return result
@@ -504,7 +504,7 @@ end 'main'
 <!-- test: upsert.new-key -->
 ```maxon
 function main() returns ExitCode
-	var m = [1: 10]
+	var m = [1 as Count: 10 as Count]
 	m.upsert(2, value: 20)
 	return m.count()
 end 'main'
@@ -516,7 +516,7 @@ end 'main'
 <!-- test: upsert.existing-key -->
 ```maxon
 function main() returns ExitCode
-	var m = [1: 10, 2: 20]
+	var m = [1 as Count: 10 as Count, 2 as Count: 20 as Count]
 	m.upsert(1, value: 100)
 	let result = try m.get(1) otherwise 0
 	return result
@@ -529,7 +529,7 @@ end 'main'
 <!-- test: upsert.then-contains -->
 ```maxon
 function main() returns ExitCode
-	var m = [10: 1]
+	var m = [10 as Count: 1 as Count]
 	m.upsert(20, value: 2)
 	if m.contains(20) 'check'
 		return 1
@@ -544,7 +544,7 @@ end 'main'
 <!-- test: upsert.preserves-count -->
 ```maxon
 function main() returns ExitCode
-	var m = [1: 10, 2: 20]
+	var m = [1 as Count: 10 as Count, 2 as Count: 20 as Count]
 	m.upsert(1, value: 100)
 	return m.count()
 end 'main'
@@ -590,7 +590,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntMap = Map with (Integer, Integer)
 
 function innerSum(m IntMap) returns Integer
-	var total = 0
+	var total = 0 as Integer
 	for (_, v) in m 'inner'
 		total = total + v
 	end 'inner'
@@ -599,7 +599,7 @@ end 'innerSum'
 
 function main() returns ExitCode
 	let m = [1: 1, 2: 2, 3: 3]
-	var outerTotal = 0
+	var outerTotal = 0 as Integer
 	for (_, v) in m 'outer'
 		outerTotal = outerTotal + v + innerSum(m)
 	end 'outer'
@@ -771,7 +771,7 @@ function main() returns ExitCode
 	for i in 0 upto 40 'fill'
 		m.upsert(Point.create(i, y: i * 3), value: "value number {i}, long enough to escape any small-string envelope")
 	end 'fill'
-	var seen = 0
+	var seen = 0 as Count
 	for i in 0 upto 40 'read'
 		if (try m.get(Point.create(i, y: i * 3)) otherwise "").equals("value number {i}, long enough to escape any small-string envelope") 'hit'
 			seen = seen + 1
@@ -1155,7 +1155,7 @@ function main() returns ExitCode
 	m.upsert(3, value: 30)
 
 	var it = try m.createIterator() otherwise panic("a three-entry map has an occupied first slot")
-	var total = 0
+	var total = 0 as Val
 	var more = true
 	while more 'walk'
 		let entry = it.current()
@@ -1203,7 +1203,7 @@ typealias ValMap = Map with (Val, Val)
 
 function main() returns ExitCode
 	let never = ValMap.create()
-	var trips = 0
+	var trips = 0 as Val
 	for (_, v) in never 'neverPopulated'
 		trips = trips + 1 + v
 	end 'neverPopulated'
@@ -1253,7 +1253,7 @@ var m = [b"alpha": "one", b"beta": "two"]
 
 function main() returns ExitCode
 	var churn = ByteArray.create()
-	var i = 0
+	var i = 0 as Count
 	while i < 64 'allocate'
 		churn.push(65)
 		i = i + 1
@@ -1466,4 +1466,427 @@ end 'main'
 ```
 ```exitcode
 7
+```
+
+<!-- test: a-let-map-value-read-is-range-known -->
+A `let` map literal is a constant, so a value read from it carries the range of the values written, and fits an alias that admits them.
+```maxon
+typealias Small = int(0 to 100)
+
+function take(v Small) returns Small
+	return v
+end 'take'
+
+function main() returns ExitCode
+	let m = [1: 10, 2: 40]
+	let v = try m.get(2) otherwise 0
+	print("{take(v)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+40
+```
+
+<!-- test: error.a-let-map-value-read-outside-a-narrower-alias -->
+The range a `let` map's values carry is checked at the use, and the reachable extreme is named.
+```maxon
+typealias Small = int(0 to 100)
+
+function take(v Small) returns Small
+	return v
+end 'take'
+
+function main() returns ExitCode
+	let m = [1: 10, 2: 400]
+	let v = try m.get(1) otherwise 0
+	let w = take(v)
+	return w as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:11:10: Value 400 is outside the range of 'Small' (int(0 to 100))
+```
+
+<!-- test: a-let-map-for-in-keys-and-values-are-range-known -->
+Both columns of a `let` map literal keep their range through a destructuring `for … in`.
+```maxon
+typealias Small = int(0 to 100)
+
+function take(v Small) returns Small
+	return v
+end 'take'
+
+function main() returns ExitCode
+	let m = [7: 40]
+	for (k, v) in m 'each'
+		print("{take(k)} {take(v)}\n")
+	end 'each'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7 40
+```
+
+<!-- test: error.a-let-map-for-in-key-outside-a-narrower-alias -->
+A key read through `for … in` is checked against the alias it is handed to.
+```maxon
+typealias Small = int(0 to 100)
+
+function take(v Small) returns Small
+	return v
+end 'take'
+
+function main() returns ExitCode
+	let m = [700: 40]
+	for (k, v) in m 'each'
+		print("{take(k)} {take(v)}\n")
+	end 'each'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:11:11: Value 700 is outside the range of 'Small' (int(0 to 100))
+```
+
+<!-- test: error.a-let-map-mutation-is-refused -->
+A `let` map literal is immutable, so a write through it reaches the immutable-binding refusal.
+```maxon
+function main() returns ExitCode
+	let m = [1: 10]
+	m.upsert(2, value: 20)
+	return m.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:4:4: cannot pass 'm', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+```
+
+<!-- test: a-top-level-let-map-read-is-range-known -->
+A top-level `let` map literal is a constant too, so a value read from it carries the range of the values written.
+```maxon
+typealias Small = int(0 to 100)
+
+let TABLE = [1: 10, 2: 40]
+
+function take(v Small) returns Small
+	return v
+end 'take'
+
+function main() returns ExitCode
+	let v = try TABLE.get(2) otherwise 0
+	print("{take(v)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+40
+```
+
+<!-- test: error.a-top-level-let-map-read-outside-a-narrower-alias -->
+The range a top-level `let` map's values carry is checked at the use, and the reachable extreme is named.
+```maxon
+typealias Small = int(0 to 100)
+
+let TABLE = [1: 10, 2: 400]
+
+function take(v Small) returns Small
+	return v
+end 'take'
+
+function main() returns ExitCode
+	let v = try TABLE.get(1) otherwise 0
+	let w = take(v)
+	return w as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:12:10: Value 400 is outside the range of 'Small' (int(0 to 100))
+```
+
+<!-- test: error.a-top-level-let-map-mutation-is-refused -->
+A top-level `let` map literal is immutable, so a write through its name is refused.
+```maxon
+let TABLE = [1: 10]
+
+function main() returns ExitCode
+	TABLE.upsert(2, value: 20)
+	return TABLE.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:5:8: cannot pass 'TABLE', which is read-only (a module-level `let`), to a function that writes parameter 'self' (in main); pass a clone()
+```
+
+<!-- test: error.a-let-map-passed-to-a-mutating-parameter-is-refused -->
+A `let` map literal handed to a parameter its callee writes is refused at the call, so no callee can change what the literal's range was read from.
+```maxon
+typealias CountMap = Map with (Count, Count)
+
+function pokeIn(m CountMap)
+	m.upsert(2, value: 20)
+end 'pokeIn'
+
+function main() returns ExitCode
+	let m = [1 as Count: 10 as Count]
+	pokeIn(m)
+	return m.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:10:2: cannot pass 'm', which is read-only (a `let` binding), to a function that writes parameter 'm' (in main); pass a clone()
+```
+
+<!-- test: a-let-map-read-after-a-reading-call-keeps-its-range -->
+A call that only reads the map cannot change the literal, so the range read after it still holds.
+```maxon
+typealias Small = int(0 to 100)
+
+function take(v Small) returns Small
+	return v
+end 'take'
+
+function main() returns ExitCode
+	let m = [1: 10, 2: 40]
+	let known = m.contains(2)
+	let v = try m.get(2) otherwise 0
+	print("{known} {take(v)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+true 40
+```
+
+<!-- test: error.a-let-map-read-after-a-reading-call-outside-a-narrower-alias -->
+The same map with an out-of-range value: the column survives the reading call, so the read is refused at compile time.
+```maxon
+typealias Small = int(0 to 100)
+
+function take(v Small) returns Small
+	return v
+end 'take'
+
+function main() returns ExitCode
+	let m = [1: 10, 2: 400]
+	let known = m.contains(2)
+	let v = try m.get(2) otherwise 0
+	print("{known} {take(v)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:12:18: Value 400 is outside the range of 'Small' (int(0 to 100))
+```
+
+<!-- test: error.an-unnamed-argument-aliasing-a-let-map-is-refused -->
+A `let` map literal is an immutable ROOT: an argument that names no binding but returns the very same record
+(`pass(m)`) reaches the same refusal `grow(m)` does, so no spelling of the argument can write what the range
+column was read from.
+```maxon
+typealias CountMap = Map with (Count, Count)
+
+function pass(m CountMap) returns CountMap
+	return m
+end 'pass'
+
+function grow(m CountMap)
+	m.upsert(2, value: 20)
+end 'grow'
+
+function main() returns ExitCode
+	let m = [1 as Count: 10 as Count]
+	grow(pass(m))
+	return m.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:14:2: cannot pass 'm', which is read-only (a `let` binding), to a function that writes parameter 'm' (in main); pass a clone()
+```
+
+<!-- test: error.an-unnamed-receiver-aliasing-a-let-map-is-refused -->
+The receiver spelling of the same route: a call whose receiver is an expression that returns the `let` map's own
+record is a write through the `let`.
+```maxon
+typealias CountMap = Map with (Count, Count)
+
+function pass(m CountMap) returns CountMap
+	return m
+end 'pass'
+
+function main() returns ExitCode
+	let m = [1 as Count: 10 as Count]
+	pass(m).upsert(2, value: 20)
+	return m.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:10:10: cannot pass 'm', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+```
+
+<!-- test: error.a-closure-capturing-a-let-map-cannot-write-it -->
+A closure that captures a `let` map and writes it through its receiver is refused at the write, so the captured
+record keeps the values its range column was read from.
+```maxon
+function main() returns ExitCode
+	let m = [1 as Count: 10 as Count]
+	let f = function() gives m.remove(1)
+	if f() 'removed'
+		return 1
+	end 'removed'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:4:29: cannot pass 'm', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main$closure_0); pass a clone()
+```
+
+<!-- test: error.a-let-map-stored-in-a-var-struct-field-cannot-be-written-through-it -->
+A `let` map literal stored into a field of a `var` record is still the immutable record: a write through that
+field is refused, so the range column read from the `let` stays true.
+```maxon
+typealias CountMap = Map with (Count, Count)
+
+type Holder
+	export var m as CountMap
+
+	static function create(m CountMap) returns Self
+		return Self{m: m}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let m = [1 as Count: 10 as Count]
+	var h = Holder.create(m)
+	h.m.upsert(2, value: 20)
+	return m.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:15:6: cannot pass 'm', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+```
+
+<!-- test: error.a-let-map-handed-to-a-function-value-that-writes-it-is-refused -->
+A function value has no callee to summarise, but a `let` map literal is a constant its range columns were read from: handing it to an indirect call is refused, because nothing may write it.
+```maxon
+typealias CountMap = Map with (Count, Count)
+
+function grow(m CountMap)
+	m.upsert(2, value: 20)
+end 'grow'
+
+function main() returns ExitCode
+	let m = [1 as Count: 10 as Count]
+	let f = grow
+	f(m)
+	return m.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:11:3: cannot pass 'm', which is read-only (a `let` binding), to a function that writes parameter 'm' (in main); pass a clone()
+```
+
+<!-- test: error.a-let-map-of-bare-numbers-handed-to-a-function-value-is-refused -->
+The same for a map of bare numbers, whose columns are what let a read skip the guard.
+```maxon
+typealias Small = int(0 to 100)
+typealias SmallMap = Map with (Small, Small)
+
+function grow(m SmallMap)
+	m.upsert(2, value: 20)
+end 'grow'
+
+function take(v Small) returns Small
+	return v
+end 'take'
+
+function main() returns ExitCode
+	let m = [1: 10]
+	let f = grow
+	f(m)
+	return take(try m.get(1) otherwise 0) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:16:3: argument type mismatch for 1: expected 'SmallMap', got 'Map with (int, int)'
+error E3159: <fragment>:16:3: cannot pass 'm', which is read-only (a `let` binding), to a function that writes parameter 'm' (in main); pass a clone()
+```
+
+<!-- test: error.a-closure-handing-a-captured-let-map-to-a-function-value-is-refused -->
+A `let` map literal captured by a closure is still the constant its range columns were read from: the closure may not hand it to a function value, which may write it.
+```maxon
+typealias CountMap = Map with (Count, Count)
+
+function grow(m CountMap) returns Count
+	m.upsert(2, value: 20)
+	return m.count()
+end 'grow'
+
+function main() returns ExitCode
+	let m = [1 as Count: 10 as Count]
+	let f = grow
+	let g = function() gives f(m)
+	return g() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:12:28: cannot pass 'm', which is read-only (a `let` binding), to a function that writes parameter 'm' (in main$closure_0); pass a clone()
+```
+
+<!-- test: a-closure-capturing-a-var-map-may-hand-it-to-a-function-value -->
+A `var` map is writable, so the same closure is accepted.
+```maxon
+typealias CountMap = Map with (Count, Count)
+
+function grow(m CountMap) returns Count
+	m.upsert(2, value: 20)
+	return m.count()
+end 'grow'
+
+function main() returns ExitCode
+	var m = [1 as Count: 10 as Count]
+	let f = grow
+	let g = function() gives f(m)
+	return g() as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: error.a-map-literal-mixing-a-negative-and-a-value-above-i64-max-in-its-keys-is-refused -->
+Each column of a map literal has one integer type.
+```maxon
+function main() returns ExitCode
+	let m = [-1: 10, u64.max: 20]
+	return m.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:3:19: no common integer type for -1 and 18446744073709551615: cast the elements to an alias
+```
+
+<!-- test: error.a-map-literal-mixing-a-negative-and-a-value-above-i64-max-in-its-values-is-refused -->
+The value column is held to the same rule.
+```maxon
+function main() returns ExitCode
+	let m = [1: -1, 2: u64.max]
+	return m.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:3:21: no common integer type for -1 and 18446744073709551615: cast the elements to an alias
 ```

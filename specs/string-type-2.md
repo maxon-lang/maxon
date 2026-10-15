@@ -118,10 +118,10 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let s = "ABCDEFGHIJKLMNOP"  // 16 bytes, triggers heap
-	var sum = 0
+	var sum = 0 as Count
 	// Iterate over bytes directly to test heap string iteration
 	for b in s.bytes() 'loop'
-		sum = sum + b
+		sum = sum + b as Count
 	end 'loop'
 	print("{sum}\n")  // 65+66+...+80 = 1160
 	return 0
@@ -139,11 +139,11 @@ Iterating the same string twice yields the same count both times.
 ```maxon
 function main() returns ExitCode
 	let s = "Hello"
-	var count1 = 0
+	var count1 = 0 as FullRangeInt
 	for _ in s 'loop1'
 		count1 = count1 + 1
 	end 'loop1'
-	var count2 = 0
+	var count2 = 0 as FullRangeInt
 	for _ in s 'loop2'
 		count2 = count2 + 1
 	end 'loop2'
@@ -161,7 +161,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let s = "ABCDEFGHIJKLMNOPQR"  // 18 bytes, heap allocated
-	var count = 0
+	var count = 0 as FullRangeInt
 	for b in s.bytes() 'loop'
 		// Use b to avoid unused variable warning
 		if b > 0 'use'
@@ -224,7 +224,7 @@ The final value is released at scope exit. Uses efficient O(n) interpolation.
 function main() returns ExitCode
 	var s = ""
 	let x = "x"
-	var i = 0
+	var i = 0 as FullRangeInt
 	while i < 3 'loop'
 		s = "{s}{x}"
 		i = i + 1
@@ -389,7 +389,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let s = "a🎉b"
-	var count = 0
+	var count = 0 as FullRangeInt
 	for c in s 'loop'
 		print("{c}")  // Use c to avoid unused warning
 		count = count + 1
@@ -411,7 +411,7 @@ a🎉b
 ```maxon
 function main() returns ExitCode
 	let s = "🇺🇸🇬🇧"  // Two flag emojis
-	var count = 0
+	var count = 0 as FullRangeInt
 	for c in s 'loop'
 		print("{c}")  // Use c to avoid unused warning
 		count = count + 1
@@ -433,7 +433,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let s = "👨‍👩‍👧"  // Family emoji (1 grapheme)
-	var count = 0
+	var count = 0 as FullRangeInt
 	for c in s 'loop'
 		print("{c}")  // Use c to avoid unused warning
 		count = count + 1
@@ -682,7 +682,7 @@ Append in a loop builds the string efficiently with amortized O(1) per append.
 ```maxon
 function main() returns ExitCode
 	var s = ""
-	var i = 0
+	var i = 0 as FullRangeInt
 	while i < 5 'loop'
 		s.append("{i}")
 		i = i + 1
@@ -724,7 +724,7 @@ equivalent to `s.append("...")`.
 ```maxon
 function main() returns ExitCode
 	var s = ""
-	var i = 0
+	var i = 0 as FullRangeInt
 	while i < 5 'loop'
 		s = "{s}{i},"
 		i = i + 1

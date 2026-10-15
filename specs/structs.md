@@ -333,7 +333,7 @@ end 'Settings'
 
 function main() returns ExitCode
 	let s = Settings.create()
-	return s.maxRetries + trunc(s.timeout)
+	return s.maxRetries + trunc(s.timeout) as Retries
 end 'main'
 typealias Retries = int(0 to u64.max)
 typealias Seconds = float(f64.min to f64.max)
@@ -695,7 +695,7 @@ end 'Tally'
 
 function main() returns ExitCode
 	let t = Tally.create(3)
-	var sum = 0
+	var sum = 0 as Integer
 	for _ in 0 upto 14 'trip'
 		let handle = t.itself()
 		sum = sum + handle.n + (handle.label.count() as Integer)

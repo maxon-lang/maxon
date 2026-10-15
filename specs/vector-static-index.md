@@ -79,15 +79,15 @@ typealias Vec4 = Vector with 4 Int
 
 function main() returns ExitCode
 	var v = Vec4.create()
-	var i = 0
+	var i = 0 as Int
 	while i < 4 'fill'
-		try v.set(i, value: i * 11) otherwise panic("test invariant: set OOB")
+		try v.set(i as ElementIndex, value: i * 11) otherwise panic("test invariant: set OOB")
 		i = i + 1
 	end 'fill'
-	var total = 0
-	var r = 2
+	var total = 0 as Int
+	var r = 2 as Int
 	while r < 3 'read'
-		total = total + (try v.get(r) otherwise 0)
+		total = total + (try v.get(r as ElementIndex) otherwise 0)
 		r = r + 1
 	end 'read'
 	return total
@@ -122,12 +122,12 @@ typealias Vec3 = Vector with 3 Int
 
 function main() returns ExitCode
 	var v = Vec3.create()
-	var i = 0
+	var i = 0 as Int
 	while i < 3 'fill'
-		try v.set(i, value: 4) otherwise panic("test invariant: set OOB")
+		try v.set(i as ElementIndex, value: 4) otherwise panic("test invariant: set OOB")
 		i = i + 1
 	end 'fill'
-	var total = 0
+	var total = 0 as Int
 	for elem in v 'sum'
 		total = total + elem
 	end 'sum'
@@ -413,7 +413,7 @@ function main() returns ExitCode
 	let b8 = try v.get(8) otherwise false
 	let b15 = try v.get(15) otherwise false
 	let b1 = try v.get(1) otherwise true
-	var count = 0
+	var count = 0 as FullRangeInt
 	if b0 'zero'
 		count = count + 1
 	end 'zero'

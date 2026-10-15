@@ -299,7 +299,8 @@ typealias Integer = int(i64.min to i64.max)
 error E2015: <fragment>:2:6: Unsupported: a declaration of the type name 'Codepoint', which the compiler owns — its one meaning comes from the compiler itself or from the stdlib module that declares it, and the compiler has no namespace to tell a user declaration of the name apart from that one
 ```
 
-⚠ **THE TWO RANGE-GUARD CASES BELOW RUN ON EVERY TARGET AND PIN BOTH HALVES OF THE ANSWER.** A range
+⚠ **THE RANGE-GUARD CASE `codepoint-range-panic-names-the-alias` BELOW RUNS ON EVERY TARGET AND PINS BOTH
+HALVES OF THE ANSWER.** A range
 violation EXITS 1 on every target — that is the guard FIRING — and every target has a panic runtime that
 prints the message and the backtrace. wasm32-wasi has no saved-frame-pointer chain, so every function
 records itself on a frame stack in linear memory, and its panic runtime writes the message, walks that
@@ -314,40 +315,34 @@ message is pinned everywhere as well.
 without a panic runtime exits 1 with empty stderr for the identical program over a USER-declared
 `typealias Percent = int(0 to 100)`, touching neither stdlib nor `Codepoint`. The guard is
 target-neutral and wasm's panic runtime prints the same message and trace as the native ones, so every
-lane answers these cases.
+lane answers it.
 
-<!-- test: stdlib-range-panic-names-the-alias -->
-### A REACHABLE stdlib function still gets its range guard, and the panic names the alias
-`insertRangeChecks` skips a stdlib function no path from `main` reaches — that skip is what keeps
-stdlib from renumbering `.rdata` for functions nobody calls. It must not be one word wider than
-that: a function the program DOES call keeps every guard it declared. `utf16LeadSurrogate` returns
-through the ranged `CodeUnit16`, and a codepoint far past the supplementary plane overflows it.
-
-`7` is what an UNGUARDED build returns — the out-of-range lead surrogate, 1031794, is comfortably past
-`u16.max` — so the exit code tells a fired guard from a silent wrong answer, and the message says which
-guard fired. Unrestricted, for the reason stated at the head of this group.
-
-⚠ **THE CODEPOINT ARRIVES THROUGH A LOOP COUNTER, AND IT HAS TO.** `utf16LeadSurrogate(1000000000)` is
-the compile-time E3005 `range-check-panic.md` promises at every position ("a literal argument never
-reaches a runtime check because it never builds"). The subject
-here is the RUNTIME guard on the reachable stdlib function, so the codepoint must be a value no constant
-folds to — and one carrying no typealias, since an alias-typed value reaches `Codepoint` only through an
-`as`, whose guard would fire at the call site instead of at the callee's door. A counted loop's variable
-is both.
-
-⭐⭐ **THE MESSAGE NAMES THE VIOLATION THAT ACTUALLY HAPPENS.**
-`utf16LeadSurrogate(codepoint Codepoint) returns CodeUnit16` is handed `1,000,000,000`. That is outside
-`Codepoint` (`int(0 to 1114111)`) on the way IN, and the argument is a call result nothing folds, so the
-entry guard refuses it at `utf16.maxon:49`, naming `Codepoint` — the premise the caller actually broke,
-before `codepoint - 65536` underflows on a value the type said could not occur. An argument door that
-owed only the compile-time half would let the value run the whole body and be caught on the way OUT by
-the `return`'s guard, naming `CodeUnit16` at `utf16.maxon:51` — the consequence in place of the cause.
+<!-- test: error.a-literal-counter-past-a-stdlib-parameters-alias-is-refused -->
+### A loop counter between two literals is refused at a stdlib parameter its range overruns, naming the alias
+A counter whose bounds are both literals is plain, and its range `[start, end]` is checked at each use
+the way a literal is. `utf16LeadSurrogate(codepoint Codepoint)` is handed a counter that is
+`1,000,000,000`, outside `Codepoint` (`int(0 to 1114111)`), so the call is the compile-time E3005 and
+the message names the parameter's alias.
 ```maxon
 function main() returns ExitCode
-	var lead = 0
+	var lead = 0 as CodeUnit16
 	for i in 1000000000 to 1000000000 'once'
 		lead = utf16LeadSurrogate(i)
 	end 'once'
+	return 7 if lead > 65535 else 9
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:5:10: Value 1000000000 is outside the range of 'Codepoint' (int(0 to 1114111))
+```
+
+<!-- test: stdlib-range-panic-names-the-alias -->
+### A REACHABLE stdlib function still gets its range guard, and the panic names the alias
+The run-time twin of the refusal above. `utf16LeadSurrogate` is called, so it keeps every guard it declared; its codepoint is the SUM of two `Codepoint`s, which wears the alias without proving it, so the check that refuses it is the callee's own entry guard, naming `Codepoint` rather than the `CodeUnit16` the `return` would name after the body had run on a value its type said could not occur.
+```maxon
+function main() returns ExitCode
+	let near = (CommandLine.args().count() + 1114109) as Codepoint
+	let lead = utf16LeadSurrogate(near + near)
 	return 7 if lead > 65535 else 9
 end 'main'
 ```
@@ -416,8 +411,8 @@ well-formed-3byte len=3 count=1 cps=[20013,] utf16=[20013,]
 ### `Codepoint` is a RANGE and not merely an erasure, and the panic names it
 `Codepoint` is `int(0 to 1114111)` in `stdlib/Character.maxon`, a module the compiler cannot load — so the
 compiler declares the alias for itself rather than answering only "it erases to `integer`". Without the
-range, this sibling of the case above was silent where that one panics: `utf16DecodeSurrogates` on two
-non-surrogates computed **-56613888** and handed it back as a `Codepoint`, whose declared range starts
+range, this call would be silent: `utf16DecodeSurrogates` on two
+non-surrogates computes **-56613888** and hands it back as a `Codepoint`, whose declared range starts
 at 0. One stdlib module, one kind of precondition violation, and it must not matter which alias the
 compiler happened to get from a registry and which it synthesized.
 

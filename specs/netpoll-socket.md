@@ -79,7 +79,7 @@ enum Attempt implements Error
 end 'Attempt'
 
 function echoRounds(listener TcpListener) returns Tally
-	var served = 0
+	var served = 0 as Tally
 
 	while served < rounds 'serving'
 		let conn = try listener.accept() otherwise return served
@@ -148,7 +148,7 @@ function attemptOver(listener TcpListener) returns (Tally, bool) throws Attempt
 end 'attemptOver'
 
 function main() returns ExitCode
-	var tries = 0
+	var tries = 0 as Tally
 
 	while tries < attemptCap 'attempts'
 		tries = tries + 1
@@ -191,7 +191,7 @@ typealias Tally = int(0 to u64.max)
 let rounds = 5
 
 function echoRounds(listener TcpListener) returns Tally
-	var served = 0
+	var served = 0 as Tally
 
 	while served < rounds 'serving'
 		let conn = try listener.accept() otherwise return served
@@ -274,7 +274,7 @@ typealias Tally = int(0 to u64.max)
 let readers = 2
 
 function echoRounds(listener TcpListener) returns Tally
-	var served = 0
+	var served = 0 as Tally
 
 	while served < readers 'serving'
 		let conn = try listener.accept() otherwise return served
@@ -366,7 +366,7 @@ function main() returns ExitCode
 	sleep(100)
 
 	var heard = ""
-	var timeouts = 0
+	var timeouts = 0 as Count
 	var open = true
 
 	while open 'reading'
@@ -419,7 +419,7 @@ function main() returns ExitCode
 	try client.setWriteDeadline(WriteDeadlineMs) otherwise return 1
 
 	let chunk = oneChunk()
-	var chunks = 0
+	var chunks = 0 as Count
 	var fired = false
 
 	while chunks < MostChunks and not fired 'sending'
@@ -553,7 +553,7 @@ reads `1`.
 ```maxon
 let settleTurns = 1000
 
-var parkedFrom = 0
+var parkedFrom = 0 as SchedulerEventCount
 
 function parkedInRecv() returns bool
 	if parkedFrom == 0 'notYet'
@@ -578,7 +578,7 @@ function main() returns ExitCode
 	let reader = async stall(listener)
 
 	var parked = parkedInRecv()
-	var turns = 0
+	var turns = 0 as Count
 
 	while turns < settleTurns and not parked 'untilParkedInRecv'
 		sleep(1)
@@ -681,7 +681,7 @@ typealias ReadOutcome = int(0 to 3)
 
 // Nothing on the far side can ever write, so this read parks and stays parked until the owner closes under it.
 function readUntilClosed(client TcpClient) returns ReadOutcome
-	var code = 0
+	var code = 0 as ReadOutcome
 
 	try client.recv(1024) otherwise (e) 'readErr'
 		match e 'which'
@@ -767,7 +767,7 @@ typealias Answered = int(0 to 1)
 
 // Nothing is ever sent on this connection, so this read parks and is still parked when the owner closes.
 function readNothing(client TcpClient) returns ReadOutcome
-	var code = 0
+	var code = 0 as ReadOutcome
 
 	try client.recv(1024) otherwise (e) 'readErr'
 		match e 'which'
@@ -782,7 +782,7 @@ function readNothing(client TcpClient) returns ReadOutcome
 end 'readNothing'
 
 function echoUntilAnswered(listener TcpListener) returns Answered
-	var answered = 0
+	var answered = 0 as Answered
 
 	while answered == 0 'serving'
 		let conn = try listener.accept() otherwise return 0
@@ -857,7 +857,7 @@ on the direction word; the owner's own read then arrives second, every time.
 typealias ReadOutcome = int(0 to 3)
 
 function readNothing(client TcpClient) returns ReadOutcome
-	var code = 0
+	var code = 0 as ReadOutcome
 
 	try client.recv(1024) otherwise (e) 'readErr'
 		match e 'which'
@@ -930,12 +930,13 @@ picks.
 cancelled reader's resume erases it, and `main` waits for ever — the runner reports the case TIMED OUT.
 ```maxon
 typealias ReadOutcome = int(0 to 3)
+typealias Phase = int(0 to 1)
 
 // 0 until `main` is about to issue its own read.
-var phase = 0
+var phase = 0 as Phase
 
 function readOutcome(client TcpClient) returns ReadOutcome
-	var code = 0
+	var code = 0 as ReadOutcome
 
 	try client.recv(1024) otherwise (e) 'readErr'
 		match e 'which'
@@ -1119,7 +1120,7 @@ function serveBoth(listener TcpListener) returns Served
 	let earlier = try listener.accept() otherwise return 0
 	let later = try listener.accept() otherwise return 0
 
-	var served = 0
+	var served = 0 as Served
 
 	let fromEarlier = try earlier.recv(1024) otherwise return served
 	_ = try earlier.send(fromEarlier) otherwise return served
@@ -1230,7 +1231,7 @@ closed listener at its own entry and fail there, which reads the same at the end
 typealias AcceptOutcome = int(0 to 3)
 
 function acceptUntilClosed(listener TcpListener) returns AcceptOutcome
-	var code = 0
+	var code = 0 as AcceptOutcome
 
 	try listener.accept() otherwise (e) 'acceptErr'
 		match e 'which'
@@ -1337,7 +1338,7 @@ on the direction word; the owner's own accept then arrives second, every time.
 typealias AcceptOutcome = int(0 to 1)
 
 function acceptNobody(listener TcpListener) returns AcceptOutcome
-	var code = 0
+	var code = 0 as AcceptOutcome
 
 	try listener.accept() otherwise (e) 'acceptErr'
 		match e 'which'

@@ -100,10 +100,10 @@ module function __slab_os_direct_free(ptr MachineWord)
 	let base = (ptr as SlabWord) - OsDirectPrefixBytes
 
 	if __Raw.loadWord(base as MachineWord, offset: OsDirectMagicOffset) == OsDirectMagic 'ours'
-		let total = __Raw.loadWord(base as MachineWord, offset: OsDirectTotalBytesOffset)
+		let total = __Raw.loadWord(base as MachineWord, offset: OsDirectTotalBytesOffset) as SlabWord
 
 		__Raw.osFreePages(base as MachineWord, size: total)
-		slabStepOsDirectBytes(-(total as SlabWord))
+		slabStepOsDirectBytes(-total)
 
 		return
 	end 'ours'
@@ -260,8 +260,8 @@ let SlabClassGeomSlotMask = 0xFFFFFFFF
 // probe's COLD arm, so the uncommitted case is the one that arrives here; a guard-first shape would put the
 // taken branch on it. `__slab_os_direct_free` above makes the same argument the other way round.
 module function __slab_state_base() returns MachineWord
-	let stateAddr = __Raw.slabStateAddr()
-	let current = __Raw.loadWord(stateAddr, offset: 0)
+	let stateAddr = __Raw.slabStateAddr() as MachineWord
+	let current = __Raw.loadWord(stateAddr, offset: 0) as MachineWord
 
 	if (current as SlabWord) == SlabStateUncommitted 'commit'
 		let base = __slab_arena_alloc_chunks(SlabStateChunks as SlabWord) as SlabWord
@@ -310,7 +310,7 @@ module function __slab_meta_alloc() returns MachineWord
 	// POP FIRST, AND THE BUMP IS THE ARM THAT FALLS THROUGH. The list is tested first because a recycled
 	// header is warm and costs one load; the layout is the other way round because the bump path is what runs
 	// while the metadata slab is still growing, which is every program that never scavenges.
-	let listHead = __Raw.loadWord(state, offset: SlabStateMetaFreeOffset)
+	let listHead = __Raw.loadWord(state, offset: SlabStateMetaFreeOffset) as MachineWord
 
 	if (listHead as SlabWord) == 0 'bump'
 		let cursor = __Raw.loadWord(state, offset: SlabStateMetaBumpOffset) as SlabWord

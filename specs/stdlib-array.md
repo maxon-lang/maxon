@@ -326,7 +326,7 @@ function main() returns ExitCode
 	arr.push(20)
 	arr.push(30)
 
-	var sum = 0
+	var sum = 0 as Int
 	for item in arr 'loop'
 		sum = sum + item
 	end 'loop'
@@ -355,12 +355,12 @@ function main() returns ExitCode
 	arr.push(20)
 	arr.push(30)
 
-	var sum1 = 0
+	var sum1 = 0 as Int
 	for item in arr 'loop1'
 		sum1 = sum1 + item
 	end 'loop1'
 
-	var sum2 = 0
+	var sum2 = 0 as Int
 	for item in arr 'loop2'
 		sum2 = sum2 + item
 	end 'loop2'
@@ -383,7 +383,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function innerSum(arr IntArray) returns Int
-	var total = 0
+	var total = 0 as Int
 	for item in arr 'inner'
 		total = total + item
 	end 'inner'
@@ -396,7 +396,7 @@ function main() returns ExitCode
 	arr.push(2)
 	arr.push(3)
 
-	var outerTotal = 0
+	var outerTotal = 0 as Int
 	for item in arr 'outer'
 		outerTotal = outerTotal + item + innerSum(arr)
 	end 'outer'
@@ -581,9 +581,9 @@ function main() returns ExitCode
 	var pushLadder = ""
 	var insertLadder = ""
 	var fillLadder = ""
-	var lastPush = 0
-	var lastInsert = 0
-	var lastFill = 0
+	var lastPush = 0 as ReportedCapacity
+	var lastInsert = 0 as ReportedCapacity
+	var lastFill = 0 as ReportedCapacity
 
 	for i in 0 upto 1300 'grow'
 		pushed.push(i)
@@ -791,7 +791,7 @@ function main() returns ExitCode
 	arr.push(2)
 	arr.push(3)
 
-	var sum = 0
+	var sum = 0 as Int
 	for n in arr 'loop'
 		sum = sum + n
 	end 'loop'
@@ -1174,7 +1174,7 @@ function main() returns ExitCode
 	arr.push(40)
 	arr.push(50)
 
-	var sum = 0
+	var sum = 0 as Int
 	while arr.count() > 0 'drain'
 		let elem = try arr.remove(0) otherwise 'err'
 			return 99

@@ -269,7 +269,7 @@ Hello, World!
 
 <!-- test: print-multiple-literals-and-global -->
 ```maxon
-var total = 0
+var total = 0 as Integer
 
 function bump(n Integer) returns Integer
 	total = total + n
@@ -445,7 +445,7 @@ member borrows its needle. Both are the CORPUS's bodies, so the drops are the on
 own — a loop is what makes a missing one exit 101.
 ```maxon
 function main() returns ExitCode
-	var hits = 0
+	var hits = 0 as FullRangeInt
 	for i in 0 upto 200 'each'
 		let s = "hello world {i}"
 		if s.contains('o') 'ch'

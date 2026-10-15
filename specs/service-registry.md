@@ -665,7 +665,7 @@ line 3 (3)
 A module-level `var` no message reaches is legal in a program that spawns (`green-thread-globals.md`, E3143):
 `Caller.call` sends through `Greeter.handle` and never reaches `bookKeeping`, so `ledger` is `main`'s alone.
 ```maxon
-var ledger = 0
+var ledger = 0 as Integer
 
 typealias Step = function(Integer) returns Integer
 
@@ -1289,20 +1289,20 @@ A fire-and-forget message takes a `float` argument. A reply cell carries one int
 awaited answer is the average in hundredths.
 ```maxon
 type Averager
-	var total as Real
+	var total as FullRangeFloat
 	var count as Integer
 
 	static function create() returns Self
 		return Self{total: 0.0, count: 0}
 	end 'create'
 
-	export function take(celsius Real)
+	export function take(celsius FullRangeFloat)
 		self.total = self.total + celsius
 		self.count = self.count + 1
 	end 'take'
 
 	export function averageHundredths() returns Integer
-		let average = try (self.total / (self.count as Real)) otherwise 0.0
+		let average = try (self.total / (self.count as FullRangeFloat)) otherwise 0.0
 		return trunc(average * 100.0)
 	end 'averageHundredths'
 end 'Averager'
@@ -2520,7 +2520,7 @@ type Summer
 	end 'create'
 
 	export function total() returns Integer
-		var sum = 0
+		var sum = 0 as Integer
 		for score in self.cell.current().scores 'eachScore'
 			sum = sum + score
 		end 'eachScore'

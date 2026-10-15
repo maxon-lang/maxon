@@ -388,7 +388,7 @@ end 'startAndStopAService'
 
 function main() returns ExitCode
 	startAndStopAService()
-	var i = 0
+	var i = 0 as Integer
 
 	while i < 2000 'settle'
 		Scheduler.yield()

@@ -74,8 +74,8 @@ mandatory, because an `imul x, x` in place would destroy `x`.
 into `product`'s register (`imulRegReg r8, r8, rcx`) — NO copy in the loop body.
 ```maxon
 function main() returns ExitCode
-	var product = 1
-	var i = 5
+	var product = 1 as FullRangeInt
+	var i = 5 as FullRangeInt
 	while i > 1 'loop'
 		product = product * i
 		i = i - 1
@@ -92,8 +92,8 @@ end 'main'
 `acc`'s register (`subRegReg` with dest == lhs) — NO copy in the loop body.
 ```maxon
 function main() returns ExitCode
-	var acc = 100
-	var i = 1
+	var acc = 100 as FullRangeInt
+	var i = 1 as FullRangeInt
 	while i < 5 'loop'
 		acc = acc - i
 		i = i + 1
@@ -113,8 +113,8 @@ legitimately needs a reuse copy. The loop runs `b = 20 - b` three times from `b 
 ```maxon
 function main() returns ExitCode
 	let a = 20
-	var b = 5
-	var i = 0
+	var b = 5 as FullRangeInt
+	var i = 0 as FullRangeInt
 	while i < 3 'loop'
 		b = a - b
 		i = i + 1
@@ -242,7 +242,7 @@ constant) folds the whole chain to `mov rax, 707` — no `neg` is emitted and th
 checks a constant. Neither the parser's constant domain nor the fold pass looks through memory, so a
 load of a global keeps the three `neg`s, and the reuse copy this case exists to pin, on every lane.
 ```maxon
-var seed = 0
+var seed = 0 as Integer
 
 function negs(p Integer) returns Integer
 	let x = p + 7
@@ -294,7 +294,7 @@ function loopReuse(p Integer) returns Integer
 	let k11 = p + 11
 	let a = p + 20
 	var b = p + 5
-	var i = 0
+	var i = 0 as Integer
 	while i < 3 'loop'
 		b = a - b
 		i = i + 1

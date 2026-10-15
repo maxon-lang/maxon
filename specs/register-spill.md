@@ -227,8 +227,8 @@ function idleAcrossLoop(p Integer) returns Integer
 	let k13 = p + 13
 	let k14 = p + 14
 	let k15 = p + 15
-	var sum = 0
-	var i = 0
+	var sum = 0 as Integer
+	var i = 0 as Integer
 	while i < 4 'loop'
 		sum = sum + i
 		i = i + 1
@@ -693,7 +693,7 @@ function loopDivisor(p Integer) returns Integer
 	var a4 = p + 4
 	var a5 = p + 5
 	var a6 = p + 6
-	var i = 0
+	var i = 0 as Integer
 	while i mod c < 3 'loop'
 		a1 = a1 + leaf(i)
 		a2 = a2 + a1
@@ -756,7 +756,7 @@ function edgeAnchor(p Integer, q Integer) returns Integer
 	let a6 = p + 6
 	let a7 = p + 7
 	let a8 = p + 8
-	var m = 0
+	var m = 0 as Integer
 	if p > 0 'br'
 		m = t
 	end 'br'
@@ -824,7 +824,7 @@ function pick(k Integer) returns Integer
 	let v4 = k + 44
 	let v5 = k + 55
 	let v6 = k + 66
-	var out = 0
+	var out = 0 as Integer
 	if k == 1 'b1'
 		let t = sink(1)
 		out = v1 + t
@@ -904,8 +904,8 @@ function invariantsAcrossCall(p Integer) returns Integer
 	let a4 = p + 4
 	let a5 = p + 5
 	let a6 = p + 6
-	var acc = 0
-	var i = 0
+	var acc = 0 as Integer
+	var i = 0 as Integer
 	while i < 3 'loop'
 		let pre = acc + a1 + a2 + a3 + a4 + a5 + a6
 		let r = sink(i)
@@ -951,8 +951,8 @@ function loopConst(p Integer) returns Integer
 	let a3 = p + 3
 	let a4 = p + 4
 	let a5 = p + 5
-	var acc = 0
-	var i = 0
+	var acc = 0 as Integer
+	var i = 0 as Integer
 	while i < 3 'loop'
 		let pre = acc + a1 + a2 + a3 + a4 + a5
 		let d1 = c - i
@@ -1000,11 +1000,11 @@ end 'work'
 function main() returns ExitCode
 	let a = 1.5
 	let b = 2.5
-	var acc = 0
+	var acc = 0 as Integer
 	acc = work(acc)
-	acc = acc + trunc(a) + trunc(b)
+	acc = acc + (trunc(a) + trunc(b)) as Integer
 	acc = work(acc)
-	acc = acc + trunc(a) + trunc(b)
+	acc = acc + (trunc(a) + trunc(b)) as Integer
 	return acc
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -1030,15 +1030,15 @@ end 'work'
 function main() returns ExitCode
 	let a = 1.5
 	let b = 2.5
-	var acc = 0
+	var acc = 0 as Integer
 	acc = work(acc)
-	acc = acc + trunc(a) + trunc(b)
+	acc = acc + (trunc(a) + trunc(b)) as Integer
 	acc = work(acc)
-	acc = acc + trunc(a) + trunc(b)
+	acc = acc + (trunc(a) + trunc(b)) as Integer
 	acc = work(acc)
-	acc = acc + trunc(a) + trunc(b)
+	acc = acc + (trunc(a) + trunc(b)) as Integer
 	acc = work(acc)
-	acc = acc + trunc(a) + trunc(b)
+	acc = acc + (trunc(a) + trunc(b)) as Integer
 	return acc
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -1078,13 +1078,13 @@ end 'work'
 function main() returns ExitCode
 	let a = 1.5
 	let b = 2.5
-	var s = 0.0
-	var acc = 0
+	var s = 0.0 as FullRangeFloat
+	var acc = 0 as Integer
 	acc = work(acc)
 	s = s + a * b
 	acc = work(acc)
 	s = s + a * b
-	return trunc(s) + acc
+	return trunc(s) as Integer + acc
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -1117,7 +1117,7 @@ function probe(k Num) returns Num
 	let f2 = 3.625
 	var acc = k
 	acc = work(acc)
-	acc = acc + trunc(f2 * f0 * 64.0)
+	acc = acc + trunc(f2 * f0 * 64.0) as Num
 	return acc
 end 'probe'
 
@@ -1165,8 +1165,8 @@ function pressure(k Num) returns Num
 	let m = 12.0
 	var acc = k
 	acc = bump(acc)
-	acc = acc + trunc(a) + trunc(b) + trunc(c) + trunc(d) + trunc(e) + trunc(f)
-	acc = acc + trunc(g) + trunc(h) + trunc(i) + trunc(j) + trunc(l) + trunc(m)
+	acc = acc + (trunc(a) + trunc(b) + trunc(c) + trunc(d) + trunc(e) + trunc(f)) as Num
+	acc = acc + (trunc(g) + trunc(h) + trunc(i) + trunc(j) + trunc(l) + trunc(m)) as Num
 	return acc
 end 'pressure'
 
@@ -1210,8 +1210,8 @@ function pressure(k Integer) returns Integer
 	let j = 10.0
 	var acc = k
 	acc = bump(acc)
-	acc = acc + trunc(a) + trunc(b) + trunc(c) + trunc(d) + trunc(e)
-	acc = acc + trunc(f) + trunc(g) + trunc(h) + trunc(i) + trunc(j)
+	acc = acc + (trunc(a) + trunc(b) + trunc(c) + trunc(d) + trunc(e)) as Integer
+	acc = acc + (trunc(f) + trunc(g) + trunc(h) + trunc(i) + trunc(j)) as Integer
 	return acc
 end 'pressure'
 
@@ -1253,14 +1253,14 @@ function inner(k Integer) returns Integer
 	let p = 2.0
 	var acc = k
 	acc = leaf(acc)
-	return acc + trunc(p)
+	return acc + trunc(p) as Integer
 end 'inner'
 
 function outer(k Integer) returns Integer
 	let a = 42.5
 	var acc = k
 	acc = inner(acc)
-	return acc + trunc(a)
+	return acc + trunc(a) as Integer
 end 'outer'
 
 function main() returns ExitCode

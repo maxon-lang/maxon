@@ -210,7 +210,7 @@ typealias IntArray = Array with Int
 
 function main() returns ExitCode
 	var arr = IntArray.create()
-	var i = 0
+	var i = 0 as Int
 	while i < 100 'fill'
 		arr.push(i)
 		i = i + 1
@@ -510,7 +510,7 @@ typealias IntArray = Array with Int
 
 function main() returns ExitCode
 	var a = IntArray.create()
-	var i = 0
+	var i = 0 as Count
 	while i < 8 'fill'
 		a.push(77)
 		i = i + 1
@@ -518,8 +518,8 @@ function main() returns ExitCode
 	a.clear()
 	a.resize(8)
 
-	var stale = 0
-	var j = 0
+	var stale = 0 as Count
+	var j = 0 as Count
 	while j < 8 'read'
 		let v = try a.get(j) otherwise -1
 		print("{v}\n")
@@ -566,7 +566,7 @@ function main() returns ExitCode
 	a.clear()
 	try a.managed.setLength(4) otherwise panic("setLength: clear() keeps the capacity the four pushes bought")
 
-	var empties = 0
+	var empties = 0 as Count
 	for j in 0 upto 4 'read'
 		let v = try a.get(j) otherwise ""
 		if v.count() == 0 'empty'
@@ -596,7 +596,7 @@ function main() returns ExitCode
 	a.truncate(1)
 	try a.managed.setLength(3) otherwise panic("setLength: truncate keeps the capacity the three pushes bought")
 
-	var empties = 0
+	var empties = 0 as Count
 	for j in 1 upto 3 'read'
 		let v = try a.get(j) otherwise ""
 		if v.count() == 0 'empty'
@@ -657,7 +657,7 @@ function main() returns ExitCode
 	let removed = try a.remove(0) otherwise -1
 	a.resize(3)
 
-	var i = 0
+	var i = 0 as Count
 	while i < 3 'read'
 		let v = try a.get(i) otherwise -1
 		print("{v}\n")
@@ -689,8 +689,8 @@ function main() returns ExitCode
 	b.clear()
 	b.resize(3)
 
-	var stale = 0
-	var i = 0
+	var stale = 0 as Count
+	var i = 0 as Count
 	while i < 3 'read'
 		let v = try b.get(i) otherwise true
 		print("{v}\n")
@@ -730,7 +730,7 @@ the `default panic` says which.
 <!-- tier: stdlib -->
 ```maxon
 function main() returns ExitCode
-	var seen = 0
+	var seen = 0 as Count
 	try __ManagedMemory.create(4, 0) otherwise (e) 'zeroElementSize'
 		match e 'k'
 			invalidAllocation then seen = seen + 1
@@ -826,7 +826,7 @@ function main() returns ExitCode
 	try sub.managed.setLength(1) otherwise panic("setLength: a detached view publishes its live length")
 	try sub.managed.setByte(0, 99) otherwise panic("setByte: offset 0 of a detached 8-byte slot")
 	let parent = try arr.get(0) otherwise panic("get: index 0 of a length-3 array")
-	return (sub.managed.length() + parent) as ExitCode
+	return ((sub.managed.length() as Int) + parent) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -1050,7 +1050,7 @@ buffer is exactly that shape). The negative index is a separate compare — `Std
 is FALSE and an at-or-over test alone reads it as in range.
 ```maxon
 function main() returns ExitCode
-	var seen = 0
+	var seen = 0 as Count
 	var mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
 	let cap = mm.capacity()
 	try mm.set(cap - 1, value: 7) otherwise return 2
@@ -1202,7 +1202,7 @@ restage, publish again — which is what pins the destroy walk's per-slot NULL G
 `idx < length` gate: a shrink destroys AND zeroes, so the restage sees a null and releases nothing.
 ```maxon
 function main() returns ExitCode
-	var total = 0
+	var total = 0 as FullRangeInt
 	var mm = try __ManagedMemory.create(4, elementSize: 8) otherwise return 1
 	try mm.setLength(1) otherwise return 2
 	try mm.set(1, value: 5) otherwise return 3
@@ -1287,7 +1287,7 @@ function main() returns ExitCode
 	try sub.managed.set(1, value: 99) otherwise return 1
 	try sub.managed.set(2, value: 99) otherwise 'pastTheDetachedCapacity'
 		let parent = try arr.get(1) otherwise panic("get: index 1 of a length-3 array")
-		return (sub.managed.length() + parent) as ExitCode
+		return ((sub.managed.length() as Int) + parent) as ExitCode
 	end 'pastTheDetachedCapacity'
 	return 5
 end 'main'
@@ -1323,7 +1323,7 @@ half where an element still gets allocated before the refusal.
 typealias StrArray = Array with String
 
 function main() returns ExitCode
-	var refused = 0
+	var refused = 0 as Count
 	var xs = StrArray.create()
 	xs.push("a published string, long enough to require an allocation")
 	try xs.set(99, value: "a string the array setter refuses, long enough to allocate") otherwise 'arraySurface'
@@ -1511,7 +1511,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var total = 0
+	var total = 0 as Byte
 	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(2) otherwise return 2
 	try mm.setByte(3, value: 65) otherwise return 3
@@ -1613,7 +1613,7 @@ capacity (a byte buffer's slab slack can exceed the requested count, which would
 throw), and the byte buffer is where a `setByte`/`byteAt` pair addresses a whole element.
 ```maxon
 function main() returns ExitCode
-	var total = 0
+	var total = 0 as Count
 	var words = try __ManagedMemory.create(2, elementSize: 8) otherwise return 1
 	try words.setLength(2) otherwise return 2
 	try words.set(0, value: 11) otherwise return 3
@@ -1622,9 +1622,9 @@ function main() returns ExitCode
 	if words.capacity() != 8 'grownExactly'
 		return 6
 	end 'grownExactly'
-	total = total + (try words.get(0) otherwise return 7)
+	total = total + ((try words.get(0) otherwise return 7) as Count)
 	let part = try words.slice(1, 2) otherwise return 8
-	total = total + (try part.get(0) otherwise return 9)
+	total = total + ((try part.get(0) otherwise return 9) as Count)
 	total = total + part.length()
 	var more = try __ManagedMemory.create(1, elementSize: 8) otherwise return 10
 	try more.setLength(1) otherwise return 11
@@ -1636,7 +1636,7 @@ function main() returns ExitCode
 	var bytes = try __ManagedMemory.create(4, elementSize: 1) otherwise return 14
 	try bytes.setLength(2) otherwise return 15
 	try bytes.setByte(1, value: 5) otherwise return 16
-	total = total + (try bytes.byteAt(1) otherwise return 17)
+	total = total + ((try bytes.byteAt(1) otherwise return 17) as Count)
 	return total as ExitCode
 end 'main'
 ```
@@ -1758,7 +1758,7 @@ function main() returns ExitCode
 	try mm.setLength(3) otherwise return 2
 	try mm.setByte(0, 7) otherwise return 3
 	let gone = try mm.remove(0) otherwise return 4
-	return gone + mm.length()
+	return ((gone as Count) + mm.length()) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -2163,7 +2163,7 @@ end 'Holder'
 
 function main() returns ExitCode
 	let h = Holder.create("hello".toByteArray())
-	return (h.buf.length() + h.size()) as ExitCode
+	return ((h.buf.length() as Integer) + h.size()) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -2683,8 +2683,8 @@ function main() returns ExitCode
 	arr.push(1 as Byte)
 	arr.push(2 as Byte)
 	let m = arr.managed
-	var total = m.length() + bufLength(arr.managed) + bufferOf(arr).length() + (arr.count() as Integer)
-	var i = 0
+	var total = (m.length() as Integer) + bufLength(arr.managed) + (bufferOf(arr).length() as Integer) + (arr.count() as Integer)
+	var i = 0 as Count
 	while i < 4 'round'
 		total = total + bufLength(arr.managed)
 		i = i + 1
@@ -2783,7 +2783,7 @@ function main() returns ExitCode
 	var a = ByteArray.create()
 	a.push(1 as Byte)
 	a.push(2 as Byte)
-	var total = 0
+	var total = 0 as Integer
 
 	if bufLength(a.managed) > 1 'big'
 		total = total + 1
@@ -2794,7 +2794,7 @@ function main() returns ExitCode
 	end 'spin'
 
 	for b in a.managed 'each'
-		total = total + b
+		total = total + (b as Integer)
 	end 'each'
 
 	a = "xyz".toByteArray()
@@ -2935,7 +2935,7 @@ function main() returns ExitCode
 	var a = BufArray.create()
 	a.push("hello".toByteArray())
 	a.push("ab".toByteArray())
-	var total = 0
+	var total = 0 as Count
 	for m in a 'each'
 		total = total + m.length()
 	end 'each'
@@ -3224,7 +3224,7 @@ end 'Holder'
 function main() returns ExitCode
 	let h = Holder.create()
 	let m = try h.bufs.get(0) otherwise return 1
-	return (m.length() + seed(BufArray.create())) as ExitCode
+	return ((m.length() as Int) + seed(BufArray.create())) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -3253,7 +3253,7 @@ end 'Holder'
 function main() returns ExitCode
 	let h = Holder.create()
 	let m = try h.bufs.get(0) otherwise return 1
-	return (m.length() + seed(BufArray.create())) as ExitCode
+	return ((m.length() as Int) + seed(BufArray.create())) as ExitCode
 end 'main'
 
 // --- file: alias.maxon
@@ -3705,7 +3705,7 @@ function main() returns ExitCode
 	a.push("hello".toByteArray())
 	let h = Held.bufs(a)
 	match h 'k'
-		bufs(x) then return ((try x.get(0) otherwise return 1).length() + seed(BufArray.create())) as ExitCode
+		bufs(x) then return (((try x.get(0) otherwise return 1).length() as Int) + seed(BufArray.create())) as ExitCode
 		nothing then return 0
 	end 'k'
 end 'main'
@@ -3733,7 +3733,7 @@ function main() returns ExitCode
 	a.push("hello".toByteArray())
 	let h = Held.bufs(a)
 	match h 'k'
-		bufs(x) then return ((try x.get(0) otherwise return 1).length() + seed(BufArray.create())) as ExitCode
+		bufs(x) then return (((try x.get(0) otherwise return 1).length() as Int) + seed(BufArray.create())) as ExitCode
 		nothing then return 0
 	end 'k'
 end 'main'
@@ -3801,7 +3801,7 @@ end 'Holder'
 
 function main() returns ExitCode
 	let h = Holder.create("hello".toByteArray() as ByteBuffer)
-	return (h.buf.length() + h.size()) as ExitCode
+	return ((h.buf.length() as Int) + h.size()) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -4011,7 +4011,7 @@ end 'Holder'
 
 function main() returns ExitCode
 	let h = Holder.create("hello".toByteArray() as Holder.Mem)
-	return (h.buf.length() + h.size()) as ExitCode
+	return ((h.buf.length() as Int) + h.size()) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -4047,7 +4047,7 @@ end 'Holder'
 
 function main() returns ExitCode
 	let h = Holder.create("hello".toByteArray() as ByteBuffer)
-	return (h.buf.length() + seed("hi".toByteArray() as ByteBuffer)) as ExitCode
+	return ((h.buf.length() as Int) + seed("hi".toByteArray() as ByteBuffer)) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -4074,7 +4074,7 @@ end 'Holder'
 
 function main() returns ExitCode
 	let h = Holder.create("hello".toByteArray() as ByteBuffer)
-	return (h.buf.length() + seed("hi".toByteArray() as ByteBuffer)) as ExitCode
+	return ((h.buf.length() as Int) + seed("hi".toByteArray() as ByteBuffer)) as ExitCode
 end 'main'
 
 // --- file: alias.maxon

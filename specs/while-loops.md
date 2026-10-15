@@ -36,7 +36,7 @@ boolean condition (`while true`) is accepted too.
 <!-- test: while-loops.zero-iterations -->
 ```maxon
 function main() returns ExitCode
-	var x = 10
+	var x = 10 as FullRangeInt
 	while x < 5 'loop'
 		x = x + 1
 	end 'loop'
@@ -50,8 +50,8 @@ end 'main'
 <!-- test: while-loops.continue -->
 ```maxon
 function main() returns ExitCode
-	var sum = 0
-	var i = 0
+	var sum = 0 as FullRangeInt
+	var i = 0 as FullRangeInt
 	while i < 5 'loop'
 		i = i + 1
 		if i == 3 'skip'
@@ -73,11 +73,11 @@ only after the first loop's exit, so nothing from one is live in the other. `i0`
 `i1` counts to 3, so `3 + 3 = 6`.
 ```maxon
 function big(n Integer) returns Integer
-	var i0 = 0
+	var i0 = 0 as Integer
 	while i0 < n 'L0'
 		i0 = i0 + 1
 	end 'L0'
-	var i1 = 0
+	var i1 = 0 as Integer
 	while i1 < n 'L1'
 		i1 = i1 + 1
 	end 'L1'
@@ -117,17 +117,17 @@ function work(x Integer) returns Integer
 end 'work'
 
 function big(n Integer) returns Integer
-	var total = 0
-	var a = 1
-	var i0 = 0
+	var total = 0 as Integer
+	var a = 1 as Integer
+	var i0 = 0 as Integer
 	while i0 < n 'L0'
 		let r = work(i0)
 		a = a + r
 		i0 = i0 + 1
 	end 'L0'
 	total = total + a
-	var b = 1
-	var i1 = 0
+	var b = 1 as Integer
+	var i1 = 0 as Integer
 	while i1 < n 'L1'
 		let s = work(i1)
 		b = b + s
@@ -176,14 +176,14 @@ function work(x Integer) returns Integer
 end 'work'
 
 function big(n Integer) returns Integer
-	var total = 0
-	var a0 = 1
-	var a1 = 2
-	var a2 = 3
-	var a3 = 4
-	var a4 = 5
-	var a5 = 6
-	var i0 = 0
+	var total = 0 as Integer
+	var a0 = 1 as Integer
+	var a1 = 2 as Integer
+	var a2 = 3 as Integer
+	var a3 = 4 as Integer
+	var a4 = 5 as Integer
+	var a5 = 6 as Integer
+	var i0 = 0 as Integer
 	while i0 < n 'L0'
 		let r = work(i0)
 		a0 = a0 + r
@@ -195,13 +195,13 @@ function big(n Integer) returns Integer
 		i0 = i0 + 1
 	end 'L0'
 	total = total + a0 + a1 + a2 + a3 + a4 + a5
-	var b0 = 1
-	var b1 = 2
-	var b2 = 3
-	var b3 = 4
-	var b4 = 5
-	var b5 = 6
-	var i1 = 0
+	var b0 = 1 as Integer
+	var b1 = 2 as Integer
+	var b2 = 3 as Integer
+	var b3 = 4 as Integer
+	var b4 = 5 as Integer
+	var b5 = 6 as Integer
+	var i1 = 0 as Integer
 	while i1 < n 'L1'
 		let s = work(i1)
 		b0 = b0 + s
@@ -229,7 +229,7 @@ typealias Integer = int(i64.min to i64.max)
 <!-- test: while-loops.break -->
 ```maxon
 function main() returns ExitCode
-	var x = 5
+	var x = 5 as FullRangeInt
 	while true 'loop'
 		x = x + 2
 		if x == 11 'check'
@@ -247,8 +247,8 @@ end 'main'
 <!-- test: while-loops.basic -->
 ```maxon
 function main() returns ExitCode
-	var x = 5
-	var i = 3
+	var x = 5 as FullRangeInt
+	var i = 3 as FullRangeInt
 	while i > 0 'loop'
 		x = x + 2
 		i = i - 1
@@ -280,8 +280,8 @@ patch it; **minting eagerly, before the body is parsed, is what makes every snap
 `x` becomes 2 on the iteration `i == 1` and must STAY 2 through `i == 2`.
 ```maxon
 function main() returns ExitCode
-	var x = 1
-	var i = 0
+	var x = 1 as FullRangeInt
+	var i = 0 as FullRangeInt
 	while i < 3 'l'
 		if i == 1 'b'
 			x = 2
@@ -305,10 +305,10 @@ once minting is eager, a read needs no phi to be correct.)
 `limit` is 6, so the loop runs 6 times adding 6 each: `acc = 36`.
 ```maxon
 function main() returns ExitCode
-	var limit = 0
+	var limit = 0 as FullRangeInt
 	limit = 6
-	var i = 0
-	var acc = 0
+	var i = 0 as FullRangeInt
+	var acc = 0 as FullRangeInt
 	while i < limit 'l'
 		acc = acc + limit
 		i = i + 1
@@ -334,11 +334,11 @@ the loop is what keeps it a `var` at all: a `var` nothing ever assigns is E3077,
 be a `var` to be given the surplus phi at all.)
 ```maxon
 function main() returns ExitCode
-	var t = 0
+	var t = 0 as FullRangeInt
 	t = 100
-	var i = 0
+	var i = 0 as FullRangeInt
 	while i < 3 'l'
-		var t = 0
+		var t = 0 as FullRangeInt
 		t = i + 1
 		i = i + t
 	end 'l'
@@ -352,7 +352,7 @@ end 'main'
 <!-- test: while-loops.loop-carried-var-narrower-than-its-update -->
 **A loop-carried var whose declared width differs from a value assigned into it — a wasm codegen
 regression test.** `r` is seeded from an `ExitCode` value (a narrow ranged int) but is then assigned
-the plain-`int` counter `i` inside the loop. int→int width changes carry NO IR conversion op (the
+the loop counter `i` inside the loop. int→int width changes carry NO IR conversion op (the
 value just flows), so `r`'s header phi and the `i` an edge assigns it end up different WIDTHS. The
 register backends never notice — every value sits in a 64-bit register — but wasm's typed locals do:
 the phi-edge copy must coerce, exactly as a `return` or a call argument does. Without the coercion the
@@ -365,10 +365,8 @@ end 'firstExit'
 
 function pick() returns ExitCode
 	var r = firstExit()
-	var i = 0
-	while i < 3 'lp'
+	for i in 0 upto 3 'lp'
 		r = i
-		i = i + 1
 	end 'lp'
 	return r
 end 'pick'
@@ -385,10 +383,10 @@ end 'main'
 <!-- test: nested-control -->
 ```maxon
 function main() returns ExitCode
-	var result = 0
-	var i = 0
+	var result = 0 as FullRangeInt
+	var i = 0 as FullRangeInt
 	while i < 3 'outer'
-		var j = 0
+		var j = 0 as FullRangeInt
 		while j < 3 'inner'
 			if (i + j) mod 2 == 0 'even'
 				result = result + 1
@@ -424,7 +422,7 @@ enum Pair
 end 'Pair'
 
 function liveCount(both bool) returns SlotTally
-	var n = 0
+	var n = 0 as SlotTally
 	for c in Pair.allCases 'walk'
 		if c == Pair.first or both 'live'
 			n = n + 1
@@ -434,11 +432,11 @@ function liveCount(both bool) returns SlotTally
 end 'liveCount'
 
 function main() returns ExitCode
-	let scaled = 20 * (liveCount(false) + 1)
-	let seed = 100 + scaled
+	let scaled = 2 * (liveCount(false) + 1)
+	let seed = 10 + scaled
 
-	var guard = 0
-	var pass = 0
+	var guard = 0 as SlotTally
+	var pass = 0 as SlotTally
 	while pass < 2 'passes'
 		var running = seed
 		for c in Pair.allCases 'inner'
@@ -451,13 +449,13 @@ function main() returns ExitCode
 		// SILENTLY: if it is ever non-zero this case says 98 instead of quietly computing the right
 		// answer. (Measured: exactly one variable in the whole bootstrap suite has this store/load
 		// width pair, and it is this one.)
-		if running != 141 'paddingLeakedIn'
+		if running != 15 'paddingLeakedIn'
 			return 98
 		end 'paddingLeakedIn'
 
-		guard = guard + running
+		guard = guard + 1
 		pass = pass + 1
-		if guard > 2000 'runaway'
+		if guard > 10 'runaway'
 			return 99
 		end 'runaway'
 	end 'passes'
@@ -473,7 +471,7 @@ end 'main'
 A label written after `end` must repeat the loop's opening label.
 ```maxon
 function main() returns ExitCode
-	var i = 0
+	var i = 0 as FullRangeInt
 	while i < 3 'count'
 		i = i + 1
 	end 'loop'

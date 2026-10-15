@@ -124,8 +124,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function divLoop(n Integer) returns Integer
-	var sum = 0
-	var i = 1
+	var sum = 0 as Integer
+	var i = 1 as Integer
 	while i <= n 'loop'
 		sum = sum + trunc(try (50 / i) otherwise panic("divLoop: i was 0"))
 		i = i + 1

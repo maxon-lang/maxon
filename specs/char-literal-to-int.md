@@ -146,7 +146,7 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-	var count = 0
+	var count = 0 as ExitCode
 	for cp in "a-b-c".codepoints() 'chars'
 		if cp == '-' 'dash'
 			count = count + 1
@@ -202,4 +202,22 @@ end 'main'
 ```
 ```stdout
 a=50 b=114 c=51 pad=01
+```
+
+<!-- test: error.a-codepoint-is-a-codepoint -->
+A character literal used in integer arithmetic produces a `Codepoint`, which a parameter of another alias refuses.
+```maxon
+typealias Score = int(0 to u64.max)
+
+function show(v Score)
+	print("{v}\n")
+end 'show'
+
+function main() returns ExitCode
+	show('a' + 1)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:9:2: argument type mismatch for 'v': expected 'Score', got 'Codepoint'
 ```

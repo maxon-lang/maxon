@@ -312,8 +312,8 @@ end 'clonedStringRecord'
 // ⚠ **THE BOX IS NOT ENROLLED AS AN OWNED TEMPORARY**, for the reason `SynthesizedFunction.emitBoxAlloc`
 // states: `__module_init` has no statement to hang a drop on, and this record is stored straight into a
 // `.data` slot whose owner releases it through `__maxon_global_cleanup`.
-function builtUnionCaseBox(fn SynthesizedFunction, tag ParsedInt, payloadSlotOffsets ByteOffsetArray, boxSize ByteOffset, valueType MaxonType, site SynthesizedSite) returns ValueId
-	let box = fn.emitBoxAlloc(boxSize as ParsedInt, resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), site: site)
+function builtUnionCaseBox(fn SynthesizedFunction, tag FullRangeInt, payloadSlotOffsets ByteOffsetArray, boxSize ByteOffset, valueType MaxonType, site SynthesizedSite) returns ValueId
+	let box = fn.emitBoxAlloc(boxSize as FullRangeInt, resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), site: site)
 	fn.emit(MaxonOp.storeIndirect(box, offset: UnionTagOffset, value: fn.emitTypedLiteral(tag, valueType: MaxonType.integer, site: site), valueType: MaxonType.integer), site: site)
 
 	for offset in payloadSlotOffsets 'zeroFill'
@@ -327,7 +327,7 @@ end 'builtUnionCaseBox'
 // record the slot must hold. The stride and the element count ride the description rather than being
 // re-derived here — a `b"…"` fixes them from its bytes, an `[…]` from the instance it was typed by, and
 // neither is a fact this function could re-ask without picking one of the two to be authoritative.
-function ownedConstArrayRecord(fn SynthesizedFunction, elementSize ElementStride, elementCount ParsedInt, bytes ByteArray, valueType MaxonType, site SynthesizedSite) returns ValueId
+function ownedConstArrayRecord(fn SynthesizedFunction, elementSize ElementStride, elementCount FullRangeInt, bytes ByteArray, valueType MaxonType, site SynthesizedSite) returns ValueId
 	let record = fn.mintOfType(valueType)
 	fn.emit(MaxonOp.constArrayLiteral(record, elementSize: elementSize, elementCount: elementCount, bytes: bytes), site: site)
 	return record
@@ -365,7 +365,7 @@ function builtContainerRecord(fn SynthesizedFunction, create ContainerCreateCall
 	// declared `Set`. `ProgramSignatures.containerCreateCall` is where "which container is this?" is already
 	// decided, so it answers this too rather than a second test living in the synthesis.
 	if elements.count() > 0 'hasElements'
-		let add = elementAddCallee(create, count: elements.count() as ParsedInt)
+		let add = elementAddCallee(create, count: elements.count() as FullRangeInt)
 
 		for element in elements 'eachElement'
 			_ = fn.emitPositionalCall(add, args: pairArgs(record, second: elementRecordOf(fn, element: element, site: site)), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, site: site)
@@ -405,7 +405,7 @@ function builtMapLiteralRecord(fn SynthesizedFunction, create ContainerCreateCal
 	let record = bornContainerRecord(fn, create: create, valueType: valueType, site: site)
 
 	if entries.count() > 0 'hasPairs'
-		let add = keyedElementAddCallee(create, count: entries.count() as ParsedInt)
+		let add = keyedElementAddCallee(create, count: entries.count() as FullRangeInt)
 
 		for entry in entries 'eachPair'
 			emitMapEntryUpsert(fn, add: add, record: record, entry: entry, calls: calls, site: site)
@@ -429,15 +429,19 @@ function builtArrayLiteralRecord(fn SynthesizedFunction, create ContainerCreateC
 	let record = bornContainerRecord(fn, create: create, valueType: valueType, site: site)
 
 	if elements.count() > 0 'hasElements'
-		let add = elementAddCallee(create, count: elements.count() as ParsedInt)
+		let add = elementAddCallee(create, count: elements.count() as FullRangeInt)
 
 		for element in elements 'eachElement'
-			_ = fn.emitPositionalCall(add, args: pairArgs(record, second: materializedValue(fn, value: element.value, valueType: element.valueType, calls: calls, site: site)), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, site: site)
+			_ = fn.emitPositionalCall(add, args: pairArgs(record, second: materializedValue(fn, value: element.value, valueType: elementWordType(element.valueType), calls: calls, site: site)), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, site: site)
 		end 'eachElement'
 	end 'hasElements'
 
 	return record
 end 'builtArrayLiteralRecord'
+
+function elementWordType(elementType MaxonType) returns MaxonType
+	return MaxonType.integer if maxonTypeTag(elementType) == ValueTypeTag.float else elementType
+end 'elementWordType'
 
 // ⭐ **ONE PAIR INTO THE MAP.** The key is materialized before the value — a body's left-to-right order — and
 // each half is released after the call only if the CALL kept nothing, through the very `dropBorrowedArguments`
@@ -469,7 +473,7 @@ end 'emitMapEntryUpsert'
 // description that arrives holding elements and naming no callee is an INVARIANT BREAK, never a case: it
 // means an initializer form was opened without teaching the router what its container adds through, and
 // dropping the elements silently is the wrong answer to that.
-function elementAddCallee(create ContainerCreateCall, count ParsedInt) returns ByteArray
+function elementAddCallee(create ContainerCreateCall, count FullRangeInt) returns ByteArray
 	return match create.elementAdd 'add'
 		push(callee) gives callee
 		unsupported panic("ModuleInit.elementAddCallee: `{String.from(create.callee)}` was handed {count} element(s) and `ProgramSignatures.containerCreateCall` names no add callee for it — a top-level form is producing elements for a container the router does not know how to fill")
@@ -484,7 +488,7 @@ end 'elementAddCallee'
 
 // The KEYED twin of the callee lookup above — asked only when there IS a pair, for its reason, and refusing
 // the one-column arms for the mirror of it: a pair cannot be handed to an add that takes a single value.
-function keyedElementAddCallee(create ContainerCreateCall, count ParsedInt) returns ByteArray
+function keyedElementAddCallee(create ContainerCreateCall, count FullRangeInt) returns ByteArray
 	return match create.elementAdd 'add'
 		upsert(callee) gives callee
 		push or
@@ -578,7 +582,7 @@ end 'calledFactoryRecord'
 // `emitStructLiteral` also stores in and deliberately not the order the literal was written
 // (`ConstFactoryCall.construct`).
 function builtStructBox(fn SynthesizedFunction, sizeBytes ByteOffset, fields GlobalStructFieldArray, calls GlobalInitCallArray, valueType MaxonType, site SynthesizedSite) returns ValueId
-	let box = fn.emitBoxAlloc(sizeBytes as ParsedInt, resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), site: site)
+	let box = fn.emitBoxAlloc(sizeBytes as FullRangeInt, resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), site: site)
 
 	for field in fields 'eachField'
 		let value = materializedValue(fn, value: field.value, valueType: field.valueType, calls: calls, site: site)
@@ -655,7 +659,8 @@ end 'literalStorageType'
 // borrowed String literal at a body's `push`, reached through the same `__str_clone`.
 function elementRecordOf(fn SynthesizedFunction, element ConstArrayElement, site SynthesizedSite) returns ValueId
 	return match element 'element'
-		integer(payload) gives fn.emitTypedLiteral(payload, valueType: MaxonType.integer, site: site)
+		integer or
+		unsignedInteger gives fn.emitTypedLiteral(constArrayElementScalar(element), valueType: MaxonType.integer, site: site)
 		string(bytes) gives clonedStringRecord(fn, bytes: bytes, valueType: MaxonType.string, site: site)
 
 		// A Character element is the String arm at a different TAG, which is the whole of the difference in
@@ -1009,7 +1014,7 @@ export type SynthesizedFunction
 	// WAY OR THE OTHER — and this compiler's own lexer is written that way.** Minting at the op's `integer`
 	// gave **`E3005 argument type mismatch for 'kind': expected 'TokenKind', got 'int'`**, once per keyword;
 	// carrying `named` onto the op instead panicked the lowering. Both are the same missing distinction.
-	export function emitTypedLiteral(value ParsedInt, valueType MaxonType, site SynthesizedSite) returns ValueId
+	export function emitTypedLiteral(value FullRangeInt, valueType MaxonType, site SynthesizedSite) returns ValueId
 		let result = self.mintOfType(valueType)
 		self.emit(MaxonOp.literal(result, value: value, valueType: literalStorageType(valueType)), site: site)
 		return result
@@ -1025,7 +1030,7 @@ export type SynthesizedFunction
 	// this returns is stored straight into a `.data` slot (or into an enclosing box), whose owner then drops it
 	// through `__maxon_global_cleanup` or through a destructor cascade. That difference is why the two are
 	// twins rather than one function on a shared carrier.
-	function emitBoxAlloc(sizeBytes ParsedInt, resultTag ValueTypeTag, resultNameId TypeNameId, site SynthesizedSite) returns ValueId
+	function emitBoxAlloc(sizeBytes FullRangeInt, resultTag ValueTypeTag, resultNameId TypeNameId, site SynthesizedSite) returns ValueId
 		var allocArgs = ValueIdArray.create()
 		allocArgs.push(self.emitTypedLiteral(sizeBytes, valueType: MaxonType.integer, site: site))
 		allocArgs.push(self.emitTypedLiteral(TrivialDestructor, valueType: MaxonType.integer, site: site))

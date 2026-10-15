@@ -15,7 +15,7 @@ either bound is therefore an ordinary write: it cannot change how many times the
 and the loop must not refuse it.
 
 ```text
-var n = 0
+var n = 0 as Count
 for i in n upto 3 'l'      // runs 3 times whatever the body does to `n`
     n = n + 1
 end 'l'
@@ -33,13 +33,13 @@ forms are pinned together here because they are two halves of one parser.
 The START bound's variable is writable in the body — it was snapshotted into the preheader.
 ```maxon
 function main() returns ExitCode
-	var n = 0
-	var total = 0
+	var n = 0 as Count
+	var total = 0 as Count
 	for i in n upto 3 'l'
 		n = n + 1
 		total = total + i
 	end 'l'
-	return total
+	return total as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -51,13 +51,13 @@ The END bound's variable is writable too, and the loop still runs the snapshotte
 times rather than chasing the growing bound.
 ```maxon
 function main() returns ExitCode
-	var n = 3
-	var total = 0
+	var n = 3 as Count
+	var total = 0 as Count
 	for i in 0 upto n 'l'
 		n = n + 1
 		total = total + i
 	end 'l'
-	return total
+	return total as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -68,13 +68,13 @@ end 'main'
 The same for `to`, whose upper bound is inclusive.
 ```maxon
 function main() returns ExitCode
-	var n = 1
-	var total = 0
+	var n = 1 as Count
+	var total = 0 as Count
 	for i in n to 3 'l'
 		n = n + 1
 		total = total + i
 	end 'l'
-	return total
+	return total as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -86,8 +86,8 @@ The write is not merely permitted, it happens: `n` is 1 at the loop's start (so 
 1, 2, 3) and 31 after three trips.
 ```maxon
 function main() returns ExitCode
-	var n = 1
-	var total = 0
+	var n = 1 as Count
+	var total = 0 as Count
 	for i in n upto 4 'l'
 		n = n + 10
 		total = total + i

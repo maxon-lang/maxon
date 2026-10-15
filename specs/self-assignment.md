@@ -40,7 +40,7 @@ error E3067: specs/self-assignment/docs-example-2.maxon:3:2: expected a function
 ```maxon
 
 function main() returns ExitCode
-	var x = 10
+	var x = 10 as FullRangeInt
 	x = x
 	return 0
 end 'main'
@@ -53,7 +53,7 @@ error E3067: specs/self-assignment/self-assignment.basic.maxon:5:2: self-assignm
 ```maxon
 
 function main() returns ExitCode
-	var x = 10
+	var x = 10 as FullRangeInt
 	let y = 20
 	x = y
 	return x
@@ -67,7 +67,7 @@ end 'main'
 ```maxon
 
 function main() returns ExitCode
-	var x = 10
+	var x = 10 as FullRangeInt
 	x = x + 1
 	return x
 end 'main'

@@ -7,6 +7,9 @@ N="$1"; KIND="$2"; OUT="$3"
 {
   echo "// ladder: $N cross-call ${KIND}s"
   echo "typealias LadderInt = int(i64.min to i64.max)"
+  if [ "$KIND" = "float" ]; then
+    echo "typealias LadderFloat = float(f64.min to f64.max)"
+  fi
   echo "function scaleOpaque(a LadderInt) returns LadderInt"
   echo -e "\tif a > 100 'big'"
   echo -e "\t\treturn a - 100"
@@ -15,8 +18,8 @@ N="$1"; KIND="$2"; OUT="$3"
   echo "end 'scaleOpaque'"
   echo ""
   echo "function scaleSeed() returns LadderInt"
-  echo -e "\tvar acc = 1"
-  echo -e "\tvar i = 0"
+  echo -e "\tvar acc = 1 as LadderInt"
+  echo -e "\tvar i = 0 as LadderInt"
   echo -e "\twhile i < 4 'seedLoop'"
   echo -e "\t\tacc = acc + i * 3"
   echo -e "\t\ti = i + 1"
@@ -27,17 +30,17 @@ N="$1"; KIND="$2"; OUT="$3"
   echo "function driver() returns LadderInt"
   echo -e "\tlet s = scaleSeed()"
   if [ "$KIND" = "float" ]; then
-    echo -e "\tvar total = 0.0"
+    echo -e "\tvar total = 0.0 as LadderFloat"
   else
-    echo -e "\tvar total = 0"
+    echo -e "\tvar total = 0 as LadderInt"
   fi
   i=0
   while [ "$i" -lt "$N" ]; do
     d=$(( i % 9 + 1 ))
     if [ "$KIND" = "float" ]; then
-      echo -e "\tlet f$i = s + $d.25"
+      echo -e "\tlet f$i = (s as LadderFloat) + $d.25"
       echo -e "\tlet k$i = scaleOpaque($i)"
-      echo -e "\ttotal = total + f$i + (k$i + 0.5)"
+      echo -e "\ttotal = total + f$i + ((k$i as LadderFloat) + 0.5)"
     else
       echo -e "\tlet f$i = s + $d"
       echo -e "\tlet k$i = scaleOpaque($i)"

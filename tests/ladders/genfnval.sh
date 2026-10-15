@@ -135,7 +135,7 @@ done
       # in `main` is a function value meeting a function-typed place (the ARGUMENT door,
       # `SemanticCheck.checkOneArgType`'s `functionArg` arm).
       printf 'function u%06d(g Op%06d) returns Integer\n' "$i" "$i"
-      printf '\tvar acc = 0\n'
+      printf '\tvar acc = 0 as Integer\n'
       s=0
       while [ "$s" -lt "$SITES" ]; do
         printf '\tacc = acc + g(%s)\n' "$ARG_LIST"
@@ -168,7 +168,7 @@ done
   done
 
   echo "function main() returns ExitCode"
-  echo -e "\tvar total = 0"
+  echo -e "\tvar total = 0 as Integer"
   i=0
   while [ "$i" -lt "$ALIASES" ]; do
     if [ "$MODE" = "indirect" ]; then

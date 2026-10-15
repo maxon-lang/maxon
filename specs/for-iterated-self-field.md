@@ -367,7 +367,7 @@ type Bag
 	end 'create'
 
 	function sum() returns Int
-		var total = 0
+		var total = 0 as Int
 		for it in self.items 'scan'
 			seen = seen + 1
 			total = total + it
@@ -403,12 +403,12 @@ type Bag
 	end 'create'
 
 	function sumThenClear() returns Int
-		var total = 0
+		var total = 0 as Int
 		for it in items 'scan'
 			total = total + it
 		end 'scan'
 		items.clear()
-		return total + items.count()
+		return total + items.count() as Int
 	end 'sumThenClear'
 end 'Bag'
 

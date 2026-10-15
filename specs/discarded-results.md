@@ -617,7 +617,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function removeFirst(arr IntArray, value Integer) returns bool
-	var i = 0
+	var i = 0 as ElementIndex
 	while i < arr.count() 'scan'
 		let cur = try arr.get(i) otherwise panic("oob")
 		if cur == value 'hit'
@@ -1683,7 +1683,7 @@ type Recorder
 end 'Recorder'
 
 function main() returns ExitCode
-	let recorder = Recorder.create()
+	var recorder = Recorder.create()
 	_ = try recorder.firstRecorded() otherwise return 1
 
 	if recorder.recorded() != 3 'wrong'
@@ -1695,6 +1695,63 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: error.a-let-whose-method-hands-a-closure-writing-its-captured-self-is-refused -->
+The same program with the recorder bound by `let`: the closure writes the receiver it captured, so the call is refused.
+```maxon
+typealias Position = int(0 to 1000)
+typealias PositionTest = function(Position) returns bool
+typealias PositionArray = Array with Position
+
+enum SearchError implements Error
+	absent
+end 'SearchError'
+
+function firstWhere(limit Position, test PositionTest) returns Position throws SearchError
+	for i in 0 upto limit 'each'
+		if test(i) 'hit'
+			return i
+		end 'hit'
+	end 'each'
+
+	throw SearchError.absent
+end 'firstWhere'
+
+type Recorder
+	var seen as PositionArray
+
+	static function create() returns Recorder
+		return Recorder{seen: PositionArray.create()}
+	end 'create'
+
+	function record(position Position) returns bool
+		self.seen.push(position)
+		return position > 1
+	end 'record'
+
+	function firstRecorded() returns Position throws SearchError
+		return try firstWhere(100, test: function(i) gives self.record(i))
+	end 'firstRecorded'
+
+	function recorded() returns Position
+		return self.seen.count() as Position
+	end 'recorded'
+end 'Recorder'
+
+function main() returns ExitCode
+	let recorder = Recorder.create()
+	_ = try recorder.firstRecorded() otherwise return 1
+
+	if recorder.recorded() != 3 'wrong'
+		return 2
+	end 'wrong'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:43:19: cannot pass 'recorder', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
 ```
 
 <!-- test: a-search-through-a-closure-of-unknown-origin-keeps-its-result-droppable -->
