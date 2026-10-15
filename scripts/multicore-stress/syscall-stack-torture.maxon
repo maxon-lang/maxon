@@ -94,7 +94,7 @@ type StackProbe
 	// services would interleave with the sends; one long message per service
 	// puts twelve green threads into the kernel and leaves them there.
 	export function churn(count Integer)
-		var k = 0
+		var k = 0 as Integer
 
 		while k < count 'each'
 			// `FindFirstFileW` through the shim. The answer is deterministic
@@ -132,7 +132,7 @@ end 'StackProbe'
 function main() returns ExitCode
 	var probes = ProbeHandleArray.create()
 
-	var i = 0
+	var i = 0 as Integer
 
 	while i < serviceCount 'spawnEach'
 		probes.push(spawn StackProbe.create())
@@ -146,7 +146,7 @@ function main() returns ExitCode
 	i = 0
 
 	while i < serviceCount 'kick'
-		let probe = try probes.get(i) otherwise panic("syscall-stack-torture: probes.get OOB at {i} — the loop is bounded by the count the pushes above filled")
+		let probe = try probes.get(i as ElementIndex) otherwise panic("syscall-stack-torture: probes.get OOB at {i} — the loop is bounded by the count the pushes above filled")
 		probe.identify(i)
 		probe.churn(rounds)
 		i = i + 1
@@ -160,12 +160,12 @@ function main() returns ExitCode
 	// The aggregate: an order-independent sum of twelve deterministic checksums,
 	// so a difference between two processor counts is a handler that ran twice,
 	// not at all, or on top of another one's stack.
-	var total = 0
+	var total = 0 as Integer
 
 	i = 0
 
 	while i < serviceCount 'collect'
-		let probe = try probes.get(i) otherwise panic("syscall-stack-torture: probes.get OOB at {i} in the collect loop")
+		let probe = try probes.get(i as ElementIndex) otherwise panic("syscall-stack-torture: probes.get OOB at {i} in the collect loop")
 		total = total + (try await probe.total() otherwise panic("syscall-stack-torture: service {i} did not answer — a shut-down service cannot be the reason, since this frame still holds its handle"))
 		i = i + 1
 	end 'collect'

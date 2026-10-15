@@ -40,6 +40,73 @@ spawns_green_threads() {
 # green thread reaching a worker.
 MONITOR_WITNESS_PROGRAMS="${MONITOR_WITNESS_PROGRAMS:-steal-torture drop-running-torture park-torture alloc-torture remote-free-torture refcount-torture service-torture service-fanin-torture syscall-stack-torture}"
 
+# ⭐⭐ PROGRAMS THAT MUST NOT COMPILE, AND THE CODE EACH MUST BE REFUSED WITH.
+# `refcount-torture.maxon` has twelve tasks read ONE module-level heap `String` — the
+# shape its own header's 96-run table is about — and handing one box to two SERVICES is
+# a compile-time refusal, because a send is a MOVE and the second one asks this frame
+# to give up a reference the first one already took. That refusal is a fact about the
+# transfer rule with nowhere else to live: no run can assert it, so a driver
+# asserts the BUILD, and it asserts the CODE rather than merely "it failed" — a build
+# that fails for an unrelated reason (a typo, a renamed builtin) would otherwise pass
+# this check for ever.
+#
+# Each entry is `<program>:<code>`, because the code is a property of the PROGRAM
+# and not of the list: two must-not-compile programs can be refused by two different
+# rules, and one global code would silently accept the wrong one for the second.
+REFUSED_PROGRAMS="${REFUSED_PROGRAMS:-refcount-service-refused:E3102}"
+
+# Built by no driver, and kept out of `REFUSED_PROGRAMS`: `bootstrap-otherwise-binding-hang.maxon`'s
+# header bars it from every suite, and the code it is refused with is incidental to what it pins.
+REPRODUCER_PROGRAMS="${REPRODUCER_PROGRAMS:-bootstrap-otherwise-binding-hang}"
+
+WORKER_ARRIVAL_PRELUDE=worker-arrival
+MONITOR_WITNESS_PRELUDE=monitor-witness
+PRELUDE_SOURCES="$WORKER_ARRIVAL_PRELUDE $MONITOR_WITNESS_PRELUDE"
+
+refused_program_names() {
+	local entry
+	for entry in $REFUSED_PROGRAMS; do
+		printf '%s ' "${entry%%:*}"
+	done
+}
+
+torture_programs() {
+	local src name
+	for src in "$MULTICORE_HERE"/*.maxon; do
+		if [ ! -e "$src" ]; then
+			continue
+		fi
+
+		name="$(basename "$src" .maxon)"
+		if list_has "$PRELUDE_SOURCES" "$name" || list_has "$REPRODUCER_PROGRAMS" "$name" || list_has "$(refused_program_names)" "$name"; then
+			continue
+		fi
+		printf '%s\n' "$name"
+	done
+}
+
+FAILED=0
+pass() { echo "  PASS: $1"; }
+bad() { echo "  FAIL: $1"; FAILED=1; }
+
+require_compiler() {
+	if [ ! -x "$MAXON" ]; then
+		echo "FAIL: no compiler binary at $MAXON (build it, or set MAXON=)"
+		exit 1
+	fi
+}
+
+finish_checks() {
+	echo
+	if [ "$FAILED" = 0 ]; then
+		echo "ALL CHECKS PASSED"
+		exit 0
+	else
+		echo "ONE OR MORE CHECKS FAILED"
+		exit 1
+	fi
+}
+
 # ⚠ A PRELUDE GOES ONLY TO PROGRAMS THAT CALL IT. `RuntimeUsage.scanRuntimeUsage` filters only
 # unreachable STDLIB functions, so an uncalled prelude would still install the scheduler queries into
 # every binary here — changing programs whose readings are dated.
@@ -53,14 +120,25 @@ build_program() {
 	# and each is compiled in exactly where it is called.
 	local preludes=""
 	if spawns_green_threads "$prog"; then
-		preludes="$preludes $MULTICORE_HERE/worker-arrival.maxon"
+		preludes="$preludes $MULTICORE_HERE/$WORKER_ARRIVAL_PRELUDE.maxon"
 	fi
 	if list_has "$MONITOR_WITNESS_PROGRAMS" "$prog"; then
-		preludes="$preludes $MULTICORE_HERE/monitor-witness.maxon"
+		preludes="$preludes $MULTICORE_HERE/$MONITOR_WITNESS_PRELUDE.maxon"
 	fi
 
 	# shellcheck disable=SC2086
 	"$MAXON" build "$@" "$MULTICORE_HERE/$prog.maxon" $preludes --output="$out"
+}
+
+build_or_report() {
+	local prog="$1" out="$2" log="$3"
+	shift 3
+
+	if ! build_program "$prog" "$out" "$@" >"$log" 2>&1; then
+		bad "$prog did not build"
+		cat "$log"
+		return 1
+	fi
 }
 
 # One field off a program's stdout, or "-" when the program does not print it. Each program prints a

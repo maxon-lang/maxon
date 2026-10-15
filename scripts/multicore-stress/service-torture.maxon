@@ -94,7 +94,7 @@ end 'Sink'
 function main() returns ExitCode
 	var sinks = SinkHandleArray.create()
 
-	var i = 0
+	var i = 0 as Integer
 
 	while i < sinkCount 'spawnEach'
 		sinks.push(spawn Sink.create())
@@ -104,19 +104,19 @@ function main() returns ExitCode
 	// The sender's own deterministic tally — an order-independent function of the
 	// inputs, so a difference between two processor counts is a send that ran
 	// twice or not at all rather than a scheduling artefact.
-	var total = 0
+	var total = 0 as Integer
 
-	var r = 0
+	var r = 0 as Integer
 
 	while r < rounds 'eachRound'
-		var k = 0
+		var k = 0 as ElementIndex
 
 		while k < sinkCount 'eachSink'
 			// ⚠ INTERPOLATION, not a literal: an immortal `.rdata` record takes
 			// `__str_retain`'s COPY arm and never touches a refcount, so a literal
 			// would make the co-own sabotage unobservable. This allocates.
 			let payload = "msg {r}:{k}"
-			total = total + payload.byteLength()
+			total = total + (payload.byteLength() as Integer)
 
 			// The element is BORROWED — a send reads the mailbox out of the handle box
 			// and never takes the handle itself, so nothing here transfers a handle.

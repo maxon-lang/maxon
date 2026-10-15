@@ -21,6 +21,7 @@ inside a checkout: it locates `stdlib/` relative to itself.
 | `pin-matrix.sh` | is an `async` frame pinned to its green thread — `workers=1`, `steals=0` at every `MAXON_MAX_PROCS` and at the default wherever the system monitor never stepped in (`monitor=0`) — while a SPAWNED one reaches a worker M? |
 | `refcount-race.sh` | does a contended refcount word survive, and can the pin be removed to break it? |
 | `awaitany-index-race.sh` | does a machine with nothing runnable OBSERVE a promise another M answered, or wait out its timer instead — read as the SELECT LATENCY, in the exit code |
+| `compile-all.sh` | does every program here still compile, and are the must-not-compile entries (`REFUSED_PROGRAMS` in `lib.sh`) still refused with their declared codes? Runs in CI on every lane |
 
 ```
 bash scripts/multicore-stress/validate.sh              # REPS=N, default 15
@@ -124,8 +125,8 @@ family a program is in decides what its rows mean**, so it is the first column h
   awaits its coroutine. ⚠ **NO DRIVER RUNS IT.**
 - **`refcount-service-refused.maxon`** — a **MUST-NOT-COMPILE** entry: `refcount-torture` written
   against services. A send is a MOVE, so the first send takes the shared `String` away from `main`
-  and the second asks `main` to give up a reference it no longer holds. `pin-matrix.sh` asserts the
-  build fails **with E3102 specifically** — a must-not-compile program that fails for the wrong
+  and the second asks `main` to give up a reference it no longer holds. `compile-all.sh` asserts the
+  build fails **with E3102 as its only error** — a must-not-compile program that fails for the wrong
   reason asserts nothing.
 
 ### `async` — one M unless the system monitor starts another
@@ -163,7 +164,7 @@ COVERS A CROSS-P FREE**, and none should be read as doing so.
 
 - **`bootstrap-otherwise-binding-hang.maxon`** — an **INVALID-MAXON REPRODUCER**, marked *do not add
   it to any suite*. No `async`, no `spawn`, no concurrency: it pins error RECOVERY inside a method
-  body, where `otherwise (e)` in the single-expression form must answer `E2010` in under a second.
+  body, where `otherwise (e)` in the single-expression form must be refused in under a second.
   ⚠ It is parser work sitting in a scheduler harness and has no business here.
 
 ## The knob

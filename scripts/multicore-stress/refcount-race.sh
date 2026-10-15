@@ -43,21 +43,14 @@ PROCS_LIST="${PROCS_LIST:-1 2 4 12}"
 # `*.exe` under `temp/` recursively.
 WORK="$HERE/.refcount-race"
 
-if [ ! -x "$MAXON" ]; then
-	echo "FAIL: no the compiler binary at $MAXON (build it, or set MAXON=)"
-	exit 1
-fi
+require_compiler
 
 mkdir -p "$WORK"
 echo "compiler: $MAXON"
 echo "reps:     $REPS per processor count"
 echo
 
-if ! build_program refcount-torture "$WORK/refcount-torture" >"$WORK/build.log" 2>&1; then
-	echo "FAIL: refcount-torture did not build"
-	cat "$WORK/build.log"
-	exit 1
-fi
+build_or_report refcount-torture "$WORK/refcount-torture" "$WORK/build.log" || exit 1
 
 printf '%6s %8s %9s %9s %7s %14s\n' procs exit42 exit101 exit139 other aggregate
 printf '%6s %8s %9s %9s %7s %14s\n' ----- ------ ------- ------- ----- ---------

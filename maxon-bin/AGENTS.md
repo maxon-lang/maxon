@@ -286,6 +286,7 @@ facts worth knowing before you get there:
   `tests/emitted-runtime` and `tests/cli` — plus `tests/debug`,
   `tests/dap` and `tests/mcp` on every native lane, each through its own host's debug backend, and `/land`'s battery runs `fmt`, `spec-harness`,
   `ladders`, `examples` and `emitted-runtime` beside the suite and the self-compile. Every other corpus runs only when someone names it.
+  Both also run `scripts/multicore-stress/compile-all.sh`, which builds every torture program in that directory.
 - ⛔ **EXPECTATIONS ARE GENERATED, NEVER HAND-WRITTEN** — e.g. `python
   tests/fmt/generate-expectations.py` runs the compiler and records its real answers, so a corpus
   pins what the tool DOES rather than what its author expected. Re-run the generator after changing

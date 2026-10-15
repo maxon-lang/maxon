@@ -39,7 +39,7 @@ let ParkedSleepMs = 10000 as Milliseconds
 let JoinedSleepMs = 5 as Milliseconds
 
 // Long enough for a batch's services to finish tearing down before the next batch.
-let SettleMs = 20 as Milliseconds
+let SettleMs = 20
 
 let BatchSize = 20 as Integer
 let MinBatches = 5 as Integer
@@ -49,7 +49,7 @@ let MinBatches = 5 as Integer
 let RecordsPerService = 3 as Integer
 
 // A processor's free list holds fewer than 64 records.
-let ListSlack = 63 as Integer
+let ListSlack = 63
 
 type Probe
 	export var started as bool
@@ -93,7 +93,7 @@ end 'Worker'
 // shuts every service down.
 function batch(joined bool, base Integer) returns Integer
 	var hs = WorkerHandleArray.create()
-	var k = 0
+	var k = 0 as Integer
 
 	while k < BatchSize 'spawnEach'
 		hs.push(spawn Worker.create())
@@ -101,10 +101,10 @@ function batch(joined bool, base Integer) returns Integer
 	end 'spawnEach'
 
 	var replies = ReplyPromiseArray.create()
-	var j = 0
+	var j = 0 as Integer
 
 	while j < BatchSize 'sendEach'
-		let h = try hs.get(j) otherwise panic("hs.get OOB at {j} — bounded by the pushes above")
+		let h = try hs.get(j as ElementIndex) otherwise panic("hs.get OOB at {j} — bounded by the pushes above")
 
 		if joined 'control'
 			replies.push(h.joinIt(base + j))
@@ -115,11 +115,11 @@ function batch(joined bool, base Integer) returns Integer
 		j = j + 1
 	end 'sendEach'
 
-	var sum = 0
-	var n = 0
+	var sum = 0 as Integer
+	var n = 0 as Integer
 
 	while n < BatchSize 'collect'
-		let p = try replies.get(n) otherwise panic("replies.get OOB at {n} — bounded by the pushes above")
+		let p = try replies.get(n as ElementIndex) otherwise panic("replies.get OOB at {n} — bounded by the pushes above")
 		sum = sum + (try await p otherwise 0)
 		n = n + 1
 	end 'collect'
@@ -128,8 +128,8 @@ function batch(joined bool, base Integer) returns Integer
 end 'batch'
 
 function phase(joined bool, batches Integer) returns Integer
-	var sum = 0
-	var b = 0
+	var sum = 0 as Integer
+	var b = 0 as Integer
 
 	while b < batches 'eachBatch'
 		sum = sum + batch(joined, base: b * BatchSize)
@@ -141,10 +141,10 @@ function phase(joined bool, batches Integer) returns Integer
 end 'phase'
 
 function main() returns ExitCode
-	let bound = 1 + 2 * RecordsPerService * BatchSize + ListSlack * ((Scheduler.processorCount() as SchedulerEventCount) - 1)
+	let bound = (1 + 2 * RecordsPerService * BatchSize) as SchedulerEventCount + ListSlack * ((Scheduler.processorCount() as SchedulerEventCount) - 1)
 	var batches = MinBatches
 
-	while batches * BatchSize < 2 * bound 'enoughToDiscriminate'
+	while (batches * BatchSize) as SchedulerEventCount < 2 * bound 'enoughToDiscriminate'
 		batches = batches + 1
 	end 'enoughToDiscriminate'
 

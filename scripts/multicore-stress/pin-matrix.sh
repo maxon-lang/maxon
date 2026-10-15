@@ -41,7 +41,6 @@
 #      it: its blocking calls are RETAKEN, and a retake's `__sched_handoffp` starts a
 #      machine on the processor it took. The assertion block below carries the
 #      enumeration that makes `monitor=0` the exact condition.
-#   5. Every program in `REFUSED_PROGRAMS` FAILS TO BUILD, with the code named.
 #
 # ⭐⭐ ASSERTION 4 IS WHAT THIS SCRIPT EXISTS FOR.
 # Were every `async f(...)` published as a GT to the SCHEDULER, at N >= 2 a
@@ -182,12 +181,10 @@
 # to be HANDED the box, and a send is a MOVE, so a second hand-over asks the sending
 # frame to give up a reference the first already took.
 # `refcount-service-refused.maxon` is that program, and it is in
-# `REFUSED_PROGRAMS` rather than `PROGRAMS`: the driver asserts the BUILD FAILS and
-# fails with **E3102** specifically — `use of moved value`, which is sharper than the
-# transferability refusal E3138 because the first send did not merely threaten a
-# second owner, it TOOK the reference. The refusal is a fact about the move that no
-# RUN can assert, so it lives beside the program it mirrors. The CODE is checked
-# because a must-not-compile program that fails for the wrong reason asserts nothing.
+# `REFUSED_PROGRAMS` (`lib.sh`) rather than `PROGRAMS`: `compile-all.sh` asserts the
+# BUILD FAILS with **E3102** as its only error — `use of moved value`, which is sharper
+# than the transferability refusal E3138 because the first send did not merely
+# threaten a second owner, it TOOK the reference.
 #
 # ⭐⭐ service-fanin-torture IS THE MAILBOX'S OTHER SIDE. `service-torture` is ONE
 # sender and twelve mailboxes; this is twelve SENDER SERVICES and one, so the
@@ -328,32 +325,10 @@ PROGRAMS="${PROGRAMS:-steal-torture drop-running-torture park-torture alloc-tort
 # The programs whose `leaked=` is their assertion (3).
 LEAK_READING_PROGRAMS="${LEAK_READING_PROGRAMS:-drop-running-torture}"
 
-# ⭐⭐ PROGRAMS THAT MUST NOT COMPILE, AND THE CODE EACH MUST BE REFUSED WITH.
-# `refcount-torture.maxon` has twelve tasks read ONE module-level heap `String` — the
-# shape its own header's 96-run table is about — and handing one box to two SERVICES is
-# a compile-time refusal, because a send is a MOVE and the second one asks this frame
-# to give up a reference the first one already took. That refusal is a fact about the
-# transfer rule with nowhere else to live: no run can assert it, so this driver
-# asserts the BUILD, and it asserts the CODE rather than merely "it failed" — a build
-# that fails for an unrelated reason (a typo, a renamed builtin) would otherwise pass
-# this check for ever.
-#
-# Each entry is `<program>:<code>`, because the code is a property of the PROGRAM
-# and not of the list: two must-not-compile programs can be refused by two different
-# rules, and one global code would silently accept the wrong one for the second.
-REFUSED_PROGRAMS="${REFUSED_PROGRAMS:-refcount-service-refused:E3102}"
-
 LEAK_EXIT=101
 SEGV_EXIT=139
 
-FAILED=0
-pass() { echo "  PASS: $1"; }
-bad()  { echo "  FAIL: $1"; FAILED=1; }
-
-if [ ! -x "$MAXON" ]; then
-	echo "FAIL: no the compiler binary at $MAXON (build it, or set MAXON=)"
-	exit 1
-fi
+require_compiler
 
 mkdir -p "$WORK"
 echo "compiler: $MAXON"
@@ -366,35 +341,9 @@ echo
 # measure a stale one it forgot to overwrite.
 # ----------------------------------------------------------------------------
 for prog in $PROGRAMS; do
-	if ! build_program "$prog" "$WORK/$prog" >"$WORK/$prog.build.log" 2>&1; then
-		echo "FAIL: $prog did not build"
-		cat "$WORK/$prog.build.log"
-		exit 1
-	fi
+	build_or_report "$prog" "$WORK/$prog" "$WORK/$prog.build.log" || exit 1
 done
 echo "built: $PROGRAMS"
-
-# The other half of the compile step: the programs whose whole content is that they
-# DO NOT build. Asserted here rather than in a spec case because what they mirror is
-# a torture program, and a reader comparing the two has to find them side by side.
-for entry in $REFUSED_PROGRAMS; do
-	prog="${entry%%:*}"
-	code="${entry##*:}"
-
-	if "$MAXON" build "$HERE/$prog.maxon" --output="$WORK/$prog" >"$WORK/$prog.build.log" 2>&1; then
-		bad "$prog COMPILED — it must be refused with $code; the rule it mirrors has stopped covering the shape it was written for"
-		continue
-	fi
-
-	if ! grep -q "$code" "$WORK/$prog.build.log"; then
-		bad "$prog was refused, but not with $code — a build that fails for an unrelated reason asserts nothing"
-		head -3 "$WORK/$prog.build.log"
-		continue
-	fi
-
-	pass "$prog refused with $code"
-done
-echo "refused: $REFUSED_PROGRAMS"
 echo
 
 printf '%-24s %7s %14s %9s %9s %8s %6s %8s %10s\n' program procs aggregate workers steals monitor exit leaked workerwait
@@ -506,11 +455,4 @@ for prog in $PROGRAMS; do
 	done
 done
 
-echo
-if [ "$FAILED" = 0 ]; then
-	echo "ALL CHECKS PASSED"
-	exit 0
-else
-	echo "ONE OR MORE CHECKS FAILED"
-	exit 1
-fi
+finish_checks

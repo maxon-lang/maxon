@@ -68,6 +68,7 @@ on:
       - 'scripts/fetch-vendor.sh'
       - 'scripts/fixpoint.sh'
       - 'scripts/lib/**'
+      - 'scripts/multicore-stress/**'
       - 'scripts/library-cache/**'
       - 'scripts/seed-shim/**'
       - '!.github/**'
@@ -182,6 +183,13 @@ jobs:
       - name: Examples corpus
         if: steps.seed.outputs.seeded == 'yes'
         run: ./maxon-bin/.maxon/maxon test tests/examples
+
+      # The one step with a timeout: a compile that hangs would otherwise run to the job's six-hour
+      # default and end cancelled, not failed.
+      - name: Multicore stress programs compile
+        if: steps.seed.outputs.seeded == 'yes'
+        timeout-minutes: 10
+        run: bash scripts/multicore-stress/compile-all.sh
 
       - name: Build manifest corpus
         if: steps.seed.outputs.seeded == 'yes'

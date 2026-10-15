@@ -71,10 +71,7 @@ DECODE_FAILURE_EXIT=60
 # measurement gets lost.
 WORK="$HERE/.awaitany-race"
 
-if [ ! -x "$MAXON" ]; then
-	echo "FAIL: no the compiler binary at $MAXON (build it, or set MAXON=)"
-	exit 1
-fi
+require_compiler
 
 mkdir -p "$WORK"
 echo "compiler:  $MAXON"
@@ -83,11 +80,7 @@ echo "late when: worst select latency > ${LATE_MS} ms"
 echo "gate:      procs $GATED_PROCS (other rows are recorded, not asserted)"
 echo
 
-if ! build_program awaitany-index-torture "$WORK/awaitany-index-torture" >"$WORK/build.log" 2>&1; then
-	echo "FAIL: awaitany-index-torture did not build"
-	cat "$WORK/build.log"
-	exit 1
-fi
+build_or_report awaitany-index-torture "$WORK/awaitany-index-torture" "$WORK/build.log" || exit 1
 
 : >"$WORK/runs.log"
 

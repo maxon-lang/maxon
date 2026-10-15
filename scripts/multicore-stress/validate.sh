@@ -45,35 +45,23 @@ FLOOR_MAX=0
 
 LEAK_EXIT=101   # the runtime's leak-check gate exit code
 
-FAILED=0
-pass() { echo "  PASS: $1"; }
-bad()  { echo "  FAIL: $1"; FAILED=1; }
 hdr()  { echo; echo "== $1 =="; }
 
 # ----------------------------------------------------------------------------
 # Compile. Each program picks up the prelude it calls through `build_program`: the
 # service programs the worker-arrival one, `alloc-torture` the monitor witness.
 # ----------------------------------------------------------------------------
+require_compiler
+
 mkdir -p "$WORK"
 rm -f "$WORK"/*torture"$MAXON_EXE_EXT" "$WORK"/*-ds"$MAXON_EXE_EXT" "$WORK"/*.mxdbg
 
 echo "compiler: $MAXON"
 
-build_or_die() {
-	local prog="$1" out="$2"
-	shift 2
-
-	if ! build_program "$prog" "$out" "$@" >"$WORK/build.log" 2>&1; then
-		echo "FAIL: $prog did not build"
-		cat "$WORK/build.log"
-		exit 1
-	fi
-}
-
-build_or_die "$ALLOC" "$WORK/$ALLOC"
-build_or_die "$ALLOC" "$WORK/$ALLOC-ds" --debugstream
-build_or_die "$SERVICE" "$WORK/$SERVICE"
-build_or_die "$FANIN" "$WORK/$FANIN"
+build_or_report "$ALLOC" "$WORK/$ALLOC" "$WORK/build.log" || exit 1
+build_or_report "$ALLOC" "$WORK/$ALLOC-ds" "$WORK/build.log" --debugstream || exit 1
+build_or_report "$SERVICE" "$WORK/$SERVICE" "$WORK/build.log" || exit 1
+build_or_report "$FANIN" "$WORK/$FANIN" "$WORK/build.log" || exit 1
 echo "built:    $ALLOC (plain + --debugstream), $SERVICE, $FANIN"
 
 BIN_ALLOC="$WORK/$ALLOC$MAXON_EXE_EXT"
@@ -277,11 +265,4 @@ check_remote_free "$BIN_SERVICE" "$SERVICE"
 check_remote_free "$BIN_FANIN" "$FANIN"
 
 # ----------------------------------------------------------------------------
-echo
-if [ "$FAILED" = 0 ]; then
-	echo "ALL CHECKS PASSED"
-	exit 0
-else
-	echo "ONE OR MORE CHECKS FAILED"
-	exit 1
-fi
+finish_checks

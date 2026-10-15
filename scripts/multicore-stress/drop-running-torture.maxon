@@ -42,6 +42,7 @@
 typealias Integer = int(i64.min to i64.max)
 typealias TaskPromise = Promise with Integer
 typealias HeldTasks = Array with TaskPromise
+typealias RoundTally = int(0 to u64.max)
 
 // The fewest spawn-delay-drop rounds that are MEASURED, and how many run before them.
 // The warm-up rounds are not decoration: a worker M is CREATED on demand by
@@ -93,11 +94,11 @@ let mixModulus = 7
 // Counts the tasks that actually EXECUTED. Several Ms increment this one non-atomic
 // word, so it UNDERCOUNTS and is an approximate reading; `steals` below is the exact
 // one. The ASSERTION is `leaked`.
-var started = 0
+var started = 0 as Integer
 
 function spin(work Integer, seed Integer) returns Integer
-	var acc = 0
-	var j = 0
+	var acc = 0 as Integer
+	var j = 0 as Integer
 
 	while j < work 'spin'
 		acc = acc + ((seed + j) mod mixModulus)
@@ -128,7 +129,7 @@ end 'settle'
 // whole spin to take and start.
 function spawnDelayDrop(round Integer) returns Integer
 	var held = HeldTasks.create()
-	var k = 0
+	var k = 0 as Integer
 
 	while k < spawnsPerRound 'spawnEach'
 		held.push(async dropped(round + k))
@@ -141,8 +142,8 @@ end 'spawnDelayDrop'
 // Await enough work that every started task has completed. Each await DRIVES the
 // scheduler, so the queued tombstones are reclaimed here too.
 function drain() returns Integer
-	var acc = 0
-	var round = 0
+	var acc = 0 as Integer
+	var round = 0 as Integer
 
 	while round < settleRounds 'settlePhase'
 		acc = acc + await async settle(settleWork)
@@ -155,8 +156,8 @@ end 'drain'
 function main() returns ExitCode
 	// Warm-up: `warmRounds` spawn-delay-drop rounds, so every worker M this box will use
 	// has been created and has reached its loop before the measured rounds.
-	var sink = 0
-	var w = 0
+	var sink = 0 as Integer
+	var w = 0 as Integer
 
 	while w < warmRounds 'warm'
 		sink = sink + spawnDelayDrop(w)
@@ -166,10 +167,10 @@ function main() returns ExitCode
 	sink = sink + drain()
 
 	let bound = peakLive + listSlack * ((Scheduler.processorCount() as SchedulerEventCount) - 1)
-	var i = 0
+	var i = 0 as RoundTally
 
-	while i < measuredRounds or i < 2 * bound 'measured'
-		sink = sink + spawnDelayDrop(i)
+	while i < measuredRounds or i < 2 * (bound as RoundTally) 'measured'
+		sink = sink + spawnDelayDrop(i as Integer)
 		i = i + 1
 	end 'measured'
 

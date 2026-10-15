@@ -125,9 +125,9 @@ function main() returns ExitCode
 	let slow = spawn Slow.create()
 	let quick = spawn Quick.create()
 
-	var worstMs = 0
+	var worstMs = 0 as Milliseconds
 	var sawWrongIndex = false
-	var r = 0
+	var r = 0 as RoundTally
 
 	while r < rounds 'eachRound'
 		var ps = ReplyPromiseArray.create()
@@ -136,7 +136,7 @@ function main() returns ExitCode
 
 		let started = Clock.nowNanos()
 		let ready = ps.awaitAny()
-		let waitedMs = Clock.elapsedNanos(started) / nanosPerMilli
+		let waitedMs = (Clock.elapsedNanos(started) / nanosPerMilli) as Milliseconds
 
 		// The two verdicts are tracked SEPARATELY — see the header for the exit
 		// code that conflated them and what it cost.
@@ -151,7 +151,7 @@ function main() returns ExitCode
 		// ⚠ BOTH REPLIES ARE DRAINED. `awaitAny` retires nothing, so the loser is
 		// still in the array and still owned — dropping it un-awaited is the exit
 		// gate's 75, which would mask this program's own reading.
-		var sum = 0
+		var sum = 0 as Integer
 
 		for p in ps 'drainboth'
 			sum = sum + (try await p otherwise 0)
