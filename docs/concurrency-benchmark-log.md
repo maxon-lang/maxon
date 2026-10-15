@@ -12,9 +12,14 @@ at 1.0.
   datapoint, and a row that moved the wrong way is a reading to explain.
 - **Rows rot.** Re-measure before planning from one; an A/B is two arms in ONE session, interleaved,
   never a before/after across a source change.
-- **Only rows from one host compare.** `host` is `windows` (Maxon x64-windows against Go for Windows) or
-  `wsl` (Maxon built `--target=x64-linux`, Go built in WSL, both run inside WSL); the machine is the
-  same, the schedulers and allocators are not.
+- **Only rows from one host compare.** `host` is one of:
+  - `windows`: Maxon x64-windows against Go for Windows;
+  - `wsl`: Maxon built `--target=x64-linux`, Go built in WSL, both run inside WSL;
+  - `macos`: arm64-macos natively on the Mac;
+  - `orb`: Maxon built `--target=arm64-linux` on the Mac, run with Go inside an OrbStack arm64 Linux machine;
+  - `linux`: a native Linux host.
+
+  Rows from two hosts on the same machine still differ in scheduler and allocator.
 - `docs/optimization-log.md` is the compile-time axis and is never touched by this tool.
 
 Columns: `P` is the processor count, `MAXON_MAX_PROCS=P` against `GOMAXPROCS=P`, and a trailing `*`

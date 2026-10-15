@@ -114,15 +114,29 @@ the arguments it used.
 python scripts/bench-concurrency.py                        # every workload, the slot compiler, 5 runs
 python scripts/bench-concurrency.py --runs 3 --filter ping-pong --filter fan-in
 python scripts/bench-concurrency.py --ref <pre-change-sha> --note "..."   # A/B: control compiler vs slot
-python scripts/bench-concurrency.py --host wsl             # the x64-linux lane, inside WSL
+python scripts/bench-concurrency.py --host wsl             # the x64-linux lane, inside WSL (Windows host)
+python scripts/bench-concurrency.py --host orb             # the arm64-linux lane, inside OrbStack (macOS host)
 python scripts/bench-concurrency.py --json                 # also out/<host>/last-run.json
 ```
 
-- **Go is located** through `MAXON_GO`, then `go` on `PATH`, then `C:\Program Files\Go\bin\go.exe`
-  (`~/.local/go/bin/go` inside WSL). A `MAXON_GO` that names no executable is refused, never skipped
-  over. Go builds land in `out/<host>/go/`, cached by a hash of the program's sources, `internal/` and
-  `go.mod`, the `go version` line, the target settings `go env` reports (`GOOS`, `GOARCH`, `GOAMD64`,
-  `GOEXPERIMENT`, `CGO_ENABLED`) and the build flags.
+The script runs on Python 3.9 or newer and needs only the standard library.
+
+| Lane | Run | Maxon target | Go | `host` in the log |
+|---|---|---|---|---|
+| x64-windows | `python scripts/bench-concurrency.py` on Windows | `x64-windows` | Windows `amd64` | `windows` |
+| x64-linux | `--host wsl` on Windows | `x64-linux`, cross-built by the Windows compiler | built and run inside WSL | `wsl` |
+| arm64-macos | `python3 scripts/bench-concurrency.py` on a Mac | `arm64-macos`, built by the Mac's compiler | macOS `arm64` | `macos` |
+| arm64-linux | `python3 scripts/bench-concurrency.py --host orb` on a Mac | `arm64-linux`, cross-built by the Mac's compiler | built and run inside an OrbStack machine | `orb` |
+| Linux host | `python3 scripts/bench-concurrency.py` on Linux | the host's own target, built by the host's compiler | Linux | `linux` |
+
+- **Go is located** through `MAXON_GO`, then `go` on `PATH`, then `C:\Program Files\Go\bin\go.exe` on
+  Windows or `~/.local/go/bin/go` everywhere else (inside WSL and inside an OrbStack machine included).
+  A `MAXON_GO` that names no executable is refused, never skipped over. `--host wsl` hands `MAXON_GO`
+  to the script it runs inside WSL, so it must name a path valid there; `--host orb` does not hand it on,
+  because a Mac `MAXON_GO` names a macOS binary, and the machine finds its own Go on its `PATH` or at
+  `~/.local/go/bin/go`. Go builds land in `out/<host>/go/`, cached by a hash of the program's sources,
+  `internal/` and `go.mod`, the `go version` line, the target settings `go env` reports (`GOOS`,
+  `GOARCH`, `GOAMD64`, `GOEXPERIMENT`, `CGO_ENABLED`) and the build flags.
 - **Maxon is built once per arm** into `out/<host>/maxon/<arm>/`: `slot` (the compiler in
   `maxon-bin/.maxon`), `--ref <sha>` (a compiler built from that commit in a cached worktree by
   `scripts/bench_common.py`, which every bench harness shares), or `--compiler <path> --label <name>`.
@@ -137,17 +151,37 @@ python scripts/bench-concurrency.py --json                 # also out/<host>/las
   order each round. It reports wall time, CPU time (user + kernel) and peak working set per arm as a
   median with its spread (max - min over the median), and the Maxon/Go ratio of the medians.
   - On Windows, CPU is `GetProcessTimes` and the peak is the process's `PeakWorkingSetSize`.
-  - On Linux, CPU is the `wait4` rusage and the peak is `/usr/bin/time`'s `%M`. `ru_maxrss` of the
+  - On Linux, CPU is the `wait4` rusage and the peak is GNU `/usr/bin/time`'s `%M`. `ru_maxrss` of the
     Python child itself would carry the parent's resident size across the exec as a floor.
+  - On macOS, CPU is the `wait4` rusage and the peak is the `maximum resident set size` line of
+    `/usr/bin/time -l`, which reports bytes. macOS has no `waitid`, so the harness waits for the child's
+    exit with a kqueue `NOTE_EXIT` event, which leaves the child unreaped as `waitid` with `WNOWAIT` does.
+    The CPU count is the logical core count, efficiency cores included (4 performance and 4 efficiency on
+    an Apple M3), so `P = N` runs some threads on the slower cores in both languages.
 - **`--host wsl`** (Windows only). The Windows compiler cross-builds the Maxon programs with
   `--target=x64-linux`; then the same script re-runs itself inside WSL Ubuntu, where it builds the Go
   programs with the Linux toolchain, stages every binary in `~/.cache/maxon-bench-concurrency` (a
   native filesystem, not `/mnt/c`) and measures there. Rows from the two hosts do not compare with each
   other.
+- **`--host orb`** (macOS only). The Mac's compiler cross-builds the Maxon programs with
+  `--target=arm64-linux`; then the same script re-runs itself inside the OrbStack Linux machine named by
+  `--orb-machine` (default `ubuntu`), reaching the checkout through the machine's `/mnt/mac` mount. There
+  it builds the Go programs with the machine's Go, stages every binary in
+  `~/.cache/maxon-bench-concurrency` (the machine's own filesystem, not the mount) and measures with GNU
+  `/usr/bin/time`. The harness refuses, before building anything, when `orb` is not on `PATH`, the machine
+  does not exist, the machine is not arm64, or `/usr/bin/time` is missing in it. Setting the machine up:
+  ```
+  orb create ubuntu ubuntu                                        # an arm64 machine on an Apple Silicon Mac
+  orb -m ubuntu sudo apt-get install -y time                      # GNU time
+  # Go for linux-arm64 from go.dev/dl, unpacked to ~/.local/go inside the machine
+  ```
+  The machine shares OrbStack's virtual machine with the others, so its CPU count is the VM's, not the
+  Mac's, and its rows compare with no other lane's.
 - **`--note "..."`** appends one row per workload and `P` for each Maxon arm to
   `docs/concurrency-benchmark-log.md`; the file is only ever appended to, by the tool.
 - **Exit codes:** 0 a completed measurement; 1 a verification failure; 2 a build failure (a build step
-  that times out included), no Go toolchain, or no `/usr/bin/time` on Linux; 3 usage.
+  that times out included), no Go toolchain, no `/usr/bin/time` on Linux or macOS, or an unusable
+  OrbStack machine; 3 usage (`--host orb` away from macOS and `--host wsl` away from Windows included).
 
 Nothing else heavy should run while it measures: the interleaving cancels drift, not contention.
 

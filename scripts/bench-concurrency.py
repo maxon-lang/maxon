@@ -6,6 +6,7 @@ import json
 import os
 import platform
 import re
+import select
 import shutil
 import signal
 import subprocess
@@ -13,6 +14,7 @@ import sys
 import tempfile
 import threading
 import time
+import typing
 
 import bench_common
 
@@ -21,20 +23,28 @@ VerificationFailure = bench_common.VerificationFailure
 UsageFailure = bench_common.UsageFailure
 
 IS_WINDOWS = bench_common.IS_WINDOWS
+IS_MACOS = sys.platform == "darwin"
 
 BENCH_DIR = os.path.join(bench_common.REPO, "bench", "concurrency")
 DEFAULT_OUT_DIR = os.path.join(BENCH_DIR, "out")
 LOG_PATH = os.path.join(bench_common.REPO, "docs", "concurrency-benchmark-log.md")
 
+HOST_NATIVE = "native"
 HOST_WINDOWS = "windows"
+HOST_MACOS = "macos"
+HOST_LINUX = "linux"
 HOST_WSL = "wsl"
+HOST_ORB = "orb"
 WSL_DISTRO = "Ubuntu"
-WSL_TARGET = "x64-linux"
-WSL_STAGE_DIR = os.path.join(".cache", "maxon-bench-concurrency")
+ORB_DEFAULT_MACHINE = "ubuntu"
+ORB_MAC_MOUNT = "/mnt/mac"
+ORB_ARCHITECTURE = "aarch64"
+GUEST_STAGE_DIR = os.path.join(".cache", "maxon-bench-concurrency")
 CONTEXT_FILE = "context.json"
 
-GNU_TIME = "/usr/bin/time"
+TIME_PROGRAM = "/usr/bin/time"
 WSL_LAUNCHER = "wsl.exe"
+ORB_LAUNCHER = "orb"
 GO_ARM = "go"
 GO_PATH_VARIABLE = "MAXON_GO"
 GO_PROCESSORS_VARIABLE = "GOMAXPROCS"
@@ -48,6 +58,7 @@ GO_SOURCE_DIRS = ("internal",)
 GO_MODULE_FILE = "go.mod"
 GO_MAIN_FILE = "main.go"
 SINGLE_PROCESSOR = 1
+MACOS_PEAK_PATTERN = re.compile(r"^\s*(\d+)\s+maximum resident set size\s*$", re.MULTILINE)
 
 BYTES_PER_MIB = 1024 * 1024
 KIB = 1024
@@ -55,10 +66,23 @@ WINDOWS_FILETIME_TICKS_PER_MS = 10000.0
 
 
 @dataclasses.dataclass(frozen=True)
+class Guest:
+    outer_host: str
+    target: str
+    forwards_go_path: bool
+
+
+GUESTS = {
+    HOST_WSL: Guest(HOST_WINDOWS, "x64-linux", True),
+    HOST_ORB: Guest(HOST_MACOS, "arm64-linux", False),
+}
+
+
+@dataclasses.dataclass(frozen=True)
 class Workload:
     name: str
     arguments: tuple
-    go_processors: int | None = None
+    go_processors: typing.Optional[int] = None
 
     def go_processors_at(self, processors):
         return processors if self.go_processors is None else self.go_processors
@@ -160,23 +184,59 @@ def measure_windows(command, env, cwd):
                   proc.returncode, decode(stdout), decode(stderr), timed_out)
 
 
-def read_peak_kib(path):
-    with open(path, encoding="utf-8") as fh:
-        lines = fh.read().split()
-    if not lines or not lines[-1].isdigit():
-        raise BuildFailure(f"{GNU_TIME} wrote no peak resident size to {path}")
-    return int(lines[-1])
+def native_host():
+    if IS_WINDOWS:
+        return HOST_WINDOWS
+    if IS_MACOS:
+        return HOST_MACOS
+    if sys.platform == "linux":
+        return HOST_LINUX
+    raise UsageFailure(f"peak memory is read from the process counters on Windows and from {TIME_PROGRAM} on Linux and macOS; "
+                       f"{sys.platform} has neither")
+
+
+def read_peak_bytes(path):
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        text = fh.read()
+    if IS_MACOS:
+        found = MACOS_PEAK_PATTERN.findall(text)
+        if not found:
+            raise BuildFailure(f"{TIME_PROGRAM} wrote no 'maximum resident set size' line to {path}:\n{text}")
+        return int(found[-1])
+    tokens = text.split()
+    if not tokens or not tokens[-1].isdigit():
+        raise BuildFailure(f"{TIME_PROGRAM} wrote no peak resident size to {path}")
+    return int(tokens[-1]) * KIB
+
+
+def time_wrapper(peak_path):
+    if IS_MACOS:
+        return [TIME_PROGRAM, "-l", "-o", peak_path]
+    return [TIME_PROGRAM, "-f", "%M", "-o", peak_path]
 
 
 def require_instruments():
-    if IS_WINDOWS:
+    host = native_host()
+    if host == HOST_WINDOWS:
         return
-    if sys.platform != "linux":
-        raise UsageFailure(f"peak memory is read from {GNU_TIME} on Linux and from the process counters on Windows; "
-                           f"{sys.platform} has neither")
-    if not os.access(GNU_TIME, os.X_OK):
-        raise BuildFailure(f"{GNU_TIME} is missing; it reads each run's peak resident size. Install GNU time "
-                           "(`sudo apt install time` on Ubuntu)")
+    if not os.access(TIME_PROGRAM, os.X_OK):
+        hint = "macOS ships it; the install is damaged" if host == HOST_MACOS else "Install GNU time (`sudo apt install time` on Ubuntu)"
+        raise BuildFailure(f"{TIME_PROGRAM} is missing; it reads each run's peak resident size. {hint}")
+
+
+def wait_without_reaping(pid):
+    # WNOWAIT, or a kqueue exit event where macOS has no waitid, leaves the child unreaped until the
+    # timer is settled, so `expire` can never signal a reused pid or process group.
+    if not IS_MACOS:
+        os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT)
+        return
+    queue = select.kqueue()
+    try:
+        watch = select.kevent(pid, filter=select.KQ_FILTER_PROC, flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
+                              fflags=select.KQ_NOTE_EXIT)
+        queue.control([watch], 1, None)
+    finally:
+        queue.close()
 
 
 def measure_posix(command, env, cwd):
@@ -186,9 +246,9 @@ def measure_posix(command, env, cwd):
     with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err, tempfile.TemporaryDirectory() as scratch:
         peak_path = os.path.join(scratch, "peak")
         start = time.perf_counter()
-        # The peak comes from GNU time: wait4's ru_maxrss would carry this Python parent's resident
+        # The peak comes from /usr/bin/time: wait4's ru_maxrss would carry this Python parent's resident
         # size across the exec as a floor.
-        proc = subprocess.Popen([GNU_TIME, "-f", "%M", "-o", peak_path] + command, cwd=cwd, env=env,
+        proc = subprocess.Popen(time_wrapper(peak_path) + command, cwd=cwd, env=env,
                                 stdout=out, stderr=err, start_new_session=True)
 
         def expire():
@@ -201,9 +261,7 @@ def measure_posix(command, env, cwd):
         timer = threading.Timer(bench_common.RUN_TIMEOUT_S, expire)
         timer.start()
         try:
-            # WNOWAIT leaves the child unreaped until the timer is settled, so `expire` can never
-            # signal a reused pid or process group.
-            os.waitid(os.P_PID, proc.pid, os.WEXITED | os.WNOWAIT)
+            wait_without_reaping(proc.pid)
             wall_ms = (time.perf_counter() - start) * bench_common.MILLIS
         except BaseException:
             # The child has its own session, so Ctrl-C never reaches it.
@@ -219,9 +277,9 @@ def measure_posix(command, env, cwd):
         out.seek(0)
         err.seek(0)
         stdout, stderr = out.read(), err.read()
-        peak_kib = 0 if timed_out else read_peak_kib(peak_path)
+        peak_bytes = 0 if timed_out else read_peak_bytes(peak_path)
     cpu_ms = (usage.ru_utime + usage.ru_stime) * bench_common.MILLIS
-    return Sample(wall_ms, cpu_ms, peak_kib * KIB / BYTES_PER_MIB, proc.returncode,
+    return Sample(wall_ms, cpu_ms, peak_bytes / BYTES_PER_MIB, proc.returncode,
                   decode(stdout), decode(stderr), timed_out)
 
 
@@ -300,7 +358,7 @@ def build_maxon_arm(planned, workloads, host_out_dir, ref_build_args, host, ref_
     compiler = bench_common.arm_compiler(planned, ref_out_dir, ref_build_args)
 
     arm_dir = maxon_arm_dir(host_out_dir, label)
-    target_args = [f"--target={WSL_TARGET}"] if host == HOST_WSL else []
+    target_args = [f"--target={GUESTS[host].target}"] if host in GUESTS else []
     executables = {workload.name: bench_common.compile_in_arm(compiler, label, arm_dir, os.path.join(BENCH_DIR, f"{workload.name}.maxon"),
                                                         workload.name, build_args=target_args,
                                                         exe_suffix=maxon_executable_suffix(host))
@@ -435,14 +493,22 @@ def check_log_file():
         raise UsageFailure(f"{os.path.relpath(LOG_PATH, bench_common.REPO)} is missing; --note appends to it and never creates it")
 
 
-def describe_host(host):
+def guest_label(host, args):
     if host == HOST_WSL:
-        return f"wsl ({WSL_DISTRO}) {platform.release()}, {cpu_count()} cpus, maxon built for {WSL_TARGET}"
+        return f"wsl ({WSL_DISTRO})"
+    if host == HOST_ORB:
+        return f"orb ({args.orb_machine})"
+    raise ValueError(f"{host} is not a guest host")
+
+
+def describe_host(host, args):
+    if host in GUESTS:
+        return f"{guest_label(host, args)} {platform.release()}, {cpu_count()} cpus, maxon built for {GUESTS[host].target}"
     return f"{host} {platform.platform()}, {cpu_count()} cpus"
 
 
 def print_session(context, host, go, go_version, workloads, arms, args):
-    print(f"bench-concurrency  {context['today']}  head {context['head']}{'*' if context['dirty'] else ''}  host {describe_host(host)}  "
+    print(f"bench-concurrency  {context['today']}  head {context['head']}{'*' if context['dirty'] else ''}  host {describe_host(host, args)}  "
           f"runs={args.runs}  warmup={args.warmup}")
     print(f"  go: {go}  [{go_version}]")
     for arm in arms:
@@ -500,7 +566,7 @@ def run_session(args, workloads, host, context, arms, go):
     host_out_dir = host_out_dir_of(out_dir, host)
     os.makedirs(host_out_dir, exist_ok=True)
     go_version, go_executables = build_go_programs(go, workloads, host_out_dir)
-    stage_root = os.path.join(os.path.expanduser("~"), WSL_STAGE_DIR) if host == HOST_WSL else None
+    stage_root = os.path.join(os.path.expanduser("~"), GUEST_STAGE_DIR) if host in GUESTS else None
     contenders = make_contenders(go_executables, arms, workloads, host, host_out_dir, stage_root)
 
     print_session(context, host, go, go_version, workloads, arms, args)
@@ -526,14 +592,54 @@ def read_context(host_out_dir):
         return json.load(fh)
 
 
-def wsl_path(windows_path):
-    translated = bench_common.run([WSL_LAUNCHER, "-d", WSL_DISTRO, "--", "wslpath", "-a", windows_path.replace("\\", "/")])
-    if translated.returncode != 0:
-        raise BuildFailure(f"wslpath failed for {windows_path}:\n{translated.stderr}")
-    return translated.stdout.strip()
+def guest_launcher(host, args):
+    if host == HOST_WSL:
+        return [WSL_LAUNCHER, "-d", WSL_DISTRO, "--"]
+    if host == HOST_ORB:
+        return [ORB_LAUNCHER, "-m", args.orb_machine]
+    raise ValueError(f"{host} is not a guest host")
 
 
-def forwarded_arguments(args):
+def guest_path(host, args, host_path):
+    if host == HOST_WSL:
+        translated = bench_common.run(guest_launcher(host, args) + ["wslpath", "-a", host_path.replace("\\", "/")])
+        if translated.returncode != 0:
+            raise BuildFailure(f"wslpath failed for {host_path}:\n{translated.stderr}")
+        return translated.stdout.strip()
+    if host == HOST_ORB:
+        return ORB_MAC_MOUNT + host_path
+    raise ValueError(f"{host} is not a guest host")
+
+
+def require_wsl(args):
+    if shutil.which(WSL_LAUNCHER) is None:
+        raise BuildFailure(f"--host wsl needs {WSL_LAUNCHER} on PATH and the {WSL_DISTRO} distribution installed")
+
+
+def require_orb(args):
+    if shutil.which(ORB_LAUNCHER) is None:
+        raise BuildFailure(f"--host orb needs the OrbStack `{ORB_LAUNCHER}` command on PATH")
+    listed = bench_common.run([ORB_LAUNCHER, "list", "-q"])
+    if listed.returncode != 0:
+        raise BuildFailure(f"`{ORB_LAUNCHER} list -q` failed (is OrbStack running?):\n{listed.stderr}")
+    machines = listed.stdout.split()
+    if args.orb_machine not in machines:
+        raise BuildFailure(f"OrbStack has no machine named {args.orb_machine!r} (it has {machines}); create one with "
+                           f"`{ORB_LAUNCHER} create ubuntu {args.orb_machine}` or name another with --orb-machine")
+    launcher = guest_launcher(HOST_ORB, args)
+    architecture = bench_common.run(launcher + ["uname", "-m"])
+    if architecture.returncode != 0 or architecture.stdout.strip() != ORB_ARCHITECTURE:
+        raise BuildFailure(f"OrbStack machine {args.orb_machine!r} reports {architecture.stdout.strip() or architecture.stderr.strip()!r}, "
+                           f"not {ORB_ARCHITECTURE}; --host orb measures arm64-linux, so it needs an arm64 machine")
+    if bench_common.run(launcher + ["test", "-x", TIME_PROGRAM]).returncode != 0:
+        raise BuildFailure(f"{TIME_PROGRAM} is missing inside OrbStack machine {args.orb_machine!r}; it reads each run's peak "
+                           f"resident size. Install GNU time there (`{ORB_LAUNCHER} -m {args.orb_machine} sudo apt-get install -y time`)")
+
+
+GUEST_REQUIREMENTS = {HOST_WSL: require_wsl, HOST_ORB: require_orb}
+
+
+def forwarded_arguments(args, host):
     forwarded = ["--runs", str(args.runs), "--warmup", str(args.warmup)]
     for name in args.filter:
         forwarded += ["--filter", name]
@@ -541,28 +647,31 @@ def forwarded_arguments(args):
         forwarded.append("--json")
     if args.note:
         forwarded += ["--note", args.note]
+    if host == HOST_ORB:
+        forwarded += ["--orb-machine", args.orb_machine]
     return forwarded
 
 
-def run_outer_wsl(args, workloads, context, planned_arms):
-    if shutil.which(WSL_LAUNCHER) is None:
-        raise BuildFailure(f"--host wsl needs {WSL_LAUNCHER} on PATH and the {WSL_DISTRO} distribution installed")
+def run_outer_guest(args, workloads, context, planned_arms, host):
+    GUEST_REQUIREMENTS[host](args)
     out_dir = os.path.abspath(args.out_dir)
-    host_out_dir = host_out_dir_of(out_dir, HOST_WSL)
+    host_out_dir = host_out_dir_of(out_dir, host)
     os.makedirs(host_out_dir, exist_ok=True)
-    arms = [build_maxon_arm(planned, workloads, host_out_dir, args.ref_build_args.split(), HOST_WSL, out_dir)
+    arms = [build_maxon_arm(planned, workloads, host_out_dir, args.ref_build_args.split(), host, out_dir)
             for planned in planned_arms]
     with open(os.path.join(host_out_dir, CONTEXT_FILE), "w", encoding="utf-8") as fh:
         json.dump({"context": context, "arms": arms}, fh, indent=2)
-    environment = [f"{GO_PATH_VARIABLE}={os.environ[GO_PATH_VARIABLE]}"] if GO_PATH_VARIABLE in os.environ else []
-    command = [WSL_LAUNCHER, "-d", WSL_DISTRO, "--", "env"] + environment + [
-        "python3", wsl_path(os.path.abspath(__file__)), "--inside-wsl", "--out-dir", wsl_path(out_dir)] + forwarded_arguments(args)
+    forward_go = GUESTS[host].forwards_go_path and GO_PATH_VARIABLE in os.environ
+    environment = [f"{GO_PATH_VARIABLE}={os.environ[GO_PATH_VARIABLE]}"] if forward_go else []
+    command = guest_launcher(host, args) + ["env"] + environment + [
+        "python3", guest_path(host, args, os.path.abspath(__file__)), "--inside", host,
+        "--out-dir", guest_path(host, args, out_dir)] + forwarded_arguments(args, host)
     return subprocess.run(command).returncode
 
 
 def run_native(args, workloads, context, planned_arms):
     out_dir = os.path.abspath(args.out_dir)
-    host = HOST_WINDOWS if IS_WINDOWS else sys.platform
+    host = native_host()
     go = locate_go()
     host_out_dir = host_out_dir_of(out_dir, host)
     os.makedirs(host_out_dir, exist_ok=True)
@@ -572,9 +681,9 @@ def run_native(args, workloads, context, planned_arms):
     return bench_common.EXIT_OK
 
 
-def run_inside_wsl(args, workloads):
-    stored = read_context(host_out_dir_of(os.path.abspath(args.out_dir), HOST_WSL))
-    run_session(args, workloads, HOST_WSL, stored["context"], stored["arms"], locate_go())
+def run_inside_guest(args, workloads):
+    stored = read_context(host_out_dir_of(os.path.abspath(args.out_dir), args.inside))
+    run_session(args, workloads, args.inside, stored["context"], stored["arms"], locate_go())
     return bench_common.EXIT_OK
 
 
@@ -590,21 +699,26 @@ def parse_arguments():
                                              "whatever the ratio is.")
     bench_common.add_arm_arguments(ap)
     ap.add_argument("--filter", action="append", default=[], help="only workloads whose name contains this (repeatable)")
-    ap.add_argument("--host", choices=("native", "wsl"), default="native",
-                    help="wsl: build maxon for x64-linux, build go and run both inside WSL (Windows only)")
+    ap.add_argument("--host", choices=(HOST_NATIVE, HOST_WSL, HOST_ORB), default=HOST_NATIVE,
+                    help="wsl: build maxon for x64-linux, build go and run both inside WSL (Windows only); "
+                         "orb: build maxon for arm64-linux, build go and run both inside an OrbStack Linux machine (macOS only)")
+    ap.add_argument("--orb-machine", default=ORB_DEFAULT_MACHINE,
+                    help=f"the OrbStack machine --host orb measures in (default {ORB_DEFAULT_MACHINE}); it must be arm64")
     ap.add_argument("--out-dir", default=DEFAULT_OUT_DIR)
     ap.add_argument("--json", action="store_true", help="also write <out-dir>/<host>/last-run.json")
     ap.add_argument("--note", default="", help="append one log row per workload and processor count with this note")
-    ap.add_argument("--inside-wsl", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--inside", choices=sorted(GUESTS), default=None, help=argparse.SUPPRESS)
     return ap.parse_args()
 
 
 def validate(args):
-    if args.host == HOST_WSL and not IS_WINDOWS and not args.inside_wsl:
-        raise UsageFailure("--host wsl is for a Windows host; run the script directly on Linux")
+    if args.host in GUESTS and not args.inside:
+        outer = GUESTS[args.host].outer_host
+        if native_host() != outer:
+            raise UsageFailure(f"--host {args.host} is for a {outer} host; run the script directly here")
     if args.note:
         check_log_file()
-    if not args.inside_wsl:
+    if not args.inside:
         bench_common.check_arm_arguments(args)
 
 
@@ -612,14 +726,16 @@ def main():
     args = parse_arguments()
     try:
         validate(args)
-        require_instruments()
+        outer_guest = args.host in GUESTS and not args.inside
+        if not outer_guest:
+            require_instruments()
         workloads = select_workloads(args.filter)
-        if args.inside_wsl:
-            return run_inside_wsl(args, workloads)
+        if args.inside:
+            return run_inside_guest(args, workloads)
         context = build_context()
         planned_arms = bench_common.plan_arms(args, reserved_labels=(GO_ARM,))
-        if args.host == HOST_WSL:
-            return run_outer_wsl(args, workloads, context, planned_arms)
+        if outer_guest:
+            return run_outer_guest(args, workloads, context, planned_arms, args.host)
         return run_native(args, workloads, context, planned_arms)
     except (UsageFailure, BuildFailure, VerificationFailure) as e:
         return bench_common.report_failure(e)
