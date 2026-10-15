@@ -180,9 +180,9 @@ row from it, not from this prose. `pin-matrix.sh` agrees by construction: its `e
 `min(N, HOST_CPUS)` and its `default` row is `HOST_CPUS` itself.
 
 ⭐ **THE CROSS-P FREE COUNT IS A LANGUAGE SURFACE, NOT AN ENVIRONMENT DUMP.**
-`HeapStats.slab().remoteFrees` sums a per-P word credited at every remote push, so a program
-reads its own number; `specs/slab-sharding.md` asserts on it from inside a case, and check 4 below
-asserts it across processor counts.
+`HeapStats.slab().remoteFrees` sums a per-P word credited at every free onto a span another
+processor holds cached, so a program reads its own number; `specs/slab-sharding.md` asserts on it
+from inside a case, and check 4 below asserts it across processor counts.
 
 ## The four checks
 
@@ -211,14 +211,11 @@ asserts it across processor counts.
 
 ## Notes / findings
 
-- **The single-P `remoteFrees` floor is a per-program fact and must be measured, never inherited.**
-  Both service programs read exactly **0** at `MAXON_MAX_PROCS=1`, 10 runs each (2026-09-09,
-  16-processor box), because neither does any IO and so neither starts a P-less OS thread whose frees
-  would take the remote arm. At 2 and above the smallest reading was **72,016**
-  (`service-fanin-torture` at 2), with `service-torture` at ~240,000 throughout.
-  ⚠ `alloc-torture` reads a floor of **1**: a free by a party that does not hold the slab's owning P
-  takes the remote arm whatever the processor count. That is a constant of THAT program's shape,
-  not of the counter, and a program doing IO would read a small non-zero floor honestly.
+- **Every program reads `remoteFrees` of exactly 0 at `MAXON_MAX_PROCS=1`, by construction.** A free
+  is credited only when another processor holds its span cached. A free onto a span no processor
+  caches, and a free by a thread holding no P, take the remote arm uncredited.
+- **`REMOTE_MIN` sits an order of magnitude under the smallest unclamped reading**, which is
+  `service-fanin-torture`'s and falls as the processor count rises.
 - **A real intermittent multi-core crash was found and fixed here.** The torture program surfaced a
   ~2.5% (worker-count-correlated) `NULL`-pointer crash in `__gt_enqueue` (`gt->next`, offset `0x38`),
   always on the path `main → __gt_spawn → __gt_enqueue`. Root cause: x86 `__gt_spawn` passed `gt` to

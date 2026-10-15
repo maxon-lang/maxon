@@ -878,7 +878,7 @@ let POffStealCount = POffSchedTick + PointerSlotBytes
 // steps it, and a reader that wants it exact reads it after its work has finished, which is when it is.
 let POffRetakeCount = POffStealCount + PointerSlotBytes
 
-// ⭐⭐⭐ **HOW MANY SLOTS THIS PROCESSOR HAS QUEUED AGAINST A SPAN IT DOES NOT HOLD CACHED — the
+// ⭐⭐⭐ **HOW MANY SLOTS THIS PROCESSOR HAS FREED ONTO A SPAN ANOTHER PROCESSOR HOLDS CACHED — the
 // reading `__Builtins.slabRemoteFreeCount()` sums, and the ONE way a program can observe that the
 // cross-processor free road was TAKEN rather than merely built.** `multicore-stress/service-torture` and
 // `multicore-stress/service-fanin-torture` push thousands of heap boxes across machines in each direction, and
@@ -891,11 +891,10 @@ let POffRetakeCount = POffStealCount + PointerSlotBytes
 // state. It sits beside the two counters above because it is the same shape asked of the same array, which
 // is why all three are summed by ONE parameterised body (`buildSchedPerProcSum`).
 //
-// ⛔⛔ **IT IS CREDITED TO THE FREEING P, BECAUSE THE SPAN HAS NO OWNING P TO CREDIT.** The queue belongs to
-// the SPAN (`SlabRuntime.MspanRemoteHeadOffset`), and a span reaches the remote road precisely when no
-// processor holds it cached — so there is no target side to step. What this counts is therefore frees
-// PERFORMED across processors rather than frees received; the total is the same whenever both parties have
-// a P.
+// ⛔⛔ **IT IS CREDITED TO THE FREEING P.** The queue belongs to the SPAN
+// (`SlabRuntime.MspanRemoteHeadOffset`), and a free onto a span no processor caches takes the same road
+// uncredited, because it crosses no processor. What this counts is therefore frees PERFORMED across
+// processors rather than frees received; the total is the same whenever both parties have a P.
 //
 // ⚠ **A FREER THAT HOLDS NO P IS NOT COUNTED, AND THE GAP IS DELIBERATE.**
 // `SlabRuntime.emitSlabResolveShard` answers `MspanOwningPNone` before `__sched_init_procs` has run, on an

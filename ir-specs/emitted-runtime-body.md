@@ -1799,7 +1799,7 @@ func @__slab_free {
     x64.movRegImm32 rdx, 0
     x64.leaRegRegImm32 rsi, rax, 152152
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, critsplit#42
+    x64.jcc equal, critsplit#43
   shard#13:
     x64.mov rdi, gs:[rcx]
     x64.cmpRegImm32 rdi, 0
@@ -1819,7 +1819,7 @@ func @__slab_free {
     x64.loadRegBaseDisp.word64 rdx, [rdi + 32]
     x64.cmpRegImm32 rdx, 255
     x64.jcc less, shard#12
-  critsplit#44:
+  critsplit#45:
     x64.movRegReg rdx, rdi
   shard#8:
     x64.movRegImm32 rax, 1
@@ -1831,7 +1831,7 @@ func @__slab_free {
     x64.leaRegRegImm32 rax, rax, 139912
     x64.leaRegRegReg rax, rax, rdx
     x64.jmp shard#7
-  critsplit#42:
+  critsplit#43:
     x64.movRegReg rax, rsi
     x64.movRegReg rdi, rdx
   shard#7:
@@ -1866,22 +1866,25 @@ func @__slab_free {
     x64.cmpRegImm32 rax, -2
     x64.jcc equal, parked
   remote:
-    x64.movRegImm32 rax, 1
-    x64.leaRegRegImm32 rcx, r12, 64
-    x64.lock add [rcx], rax
+    x64.movRegImm32 rcx, 1
+    x64.leaRegRegImm32 rsi, r12, 64
+    x64.lock add [rsi], rcx
     x64.cmpRegImm32 rdx, 0
-    x64.setccReg equal, rax
-    x64.leaRegRegImm32 rcx, r12, 56
-    x64.cmpRegImm32 rax, 0
+    x64.setccReg equal, rcx
+    x64.leaRegRegImm32 rsi, r12, 56
+    x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, rpush
+  rcacher:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, rpush
   rcredit:
     x64.movRegImm32 rax, 1
-    x64.leaRegRegImm32 rdx, rdx, 152
-    x64.lock add [rdx], rax
+    x64.leaRegRegImm32 rcx, rdx, 152
+    x64.lock add [rcx], rax
   rpush:
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rsi + 0]
     x64.storeBaseDispReg.word64 [rbx + 0], rax
-    x64.lock cmpxchg [rcx], rbx
+    x64.lock cmpxchg [rsi], rbx
     x64.setccReg equal, rax
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, rpush
@@ -2464,7 +2467,7 @@ func @__slab_free {
     x64.movRegImm32 rdx, 0
     x64.leaRegRegImm32 rsi, rax, 152152
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, critsplit#42
+    x64.jcc equal, critsplit#43
   shard#13:
     x64.mov rdi, gs:[rcx]
     x64.cmpRegImm32 rdi, 0
@@ -2484,7 +2487,7 @@ func @__slab_free {
     x64.loadRegBaseDisp.word64 rdx, [rdi + 32]
     x64.cmpRegImm32 rdx, 255
     x64.jcc less, shard#12
-  critsplit#44:
+  critsplit#45:
     x64.movRegReg rdx, rdi
   shard#8:
     x64.movRegImm32 rax, 1
@@ -2496,7 +2499,7 @@ func @__slab_free {
     x64.leaRegRegImm32 rax, rax, 139912
     x64.leaRegRegReg rax, rax, rdx
     x64.jmp shard#7
-  critsplit#42:
+  critsplit#43:
     x64.movRegReg rax, rsi
     x64.movRegReg rdi, rdx
   shard#7:
@@ -2531,22 +2534,25 @@ func @__slab_free {
     x64.cmpRegImm32 rax, -2
     x64.jcc equal, parked
   remote:
-    x64.movRegImm32 rax, 1
-    x64.leaRegRegImm32 rcx, r12, 64
-    x64.lock add [rcx], rax
+    x64.movRegImm32 rcx, 1
+    x64.leaRegRegImm32 rsi, r12, 64
+    x64.lock add [rsi], rcx
     x64.cmpRegImm32 rdx, 0
-    x64.setccReg equal, rax
-    x64.leaRegRegImm32 rcx, r12, 56
-    x64.cmpRegImm32 rax, 0
+    x64.setccReg equal, rcx
+    x64.leaRegRegImm32 rsi, r12, 56
+    x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, rpush
+  rcacher:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, rpush
   rcredit:
     x64.movRegImm32 rax, 1
-    x64.leaRegRegImm32 rdx, rdx, 152
-    x64.lock add [rdx], rax
+    x64.leaRegRegImm32 rcx, rdx, 152
+    x64.lock add [rcx], rax
   rpush:
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rax, [rsi + 0]
     x64.storeBaseDispReg.word64 [rbx + 0], rax
-    x64.lock cmpxchg [rcx], rbx
+    x64.lock cmpxchg [rsi], rbx
     x64.setccReg equal, rax
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, rpush
@@ -3136,7 +3142,7 @@ func @__slab_free {
     arm64.movImm x2, 0
     arm64.add x3, x0, 152152
     arm64.cmp x1, 0
-    arm64.b.eq critsplit#42
+    arm64.b.eq critsplit#43
   shard#13:
     arm64.arm64ThreadPointer x16, darwinMaskedReadOnly
     arm64.add x16, x16, x1
@@ -3163,7 +3169,7 @@ func @__slab_free {
     arm64.loadRegBaseDisp.word64 x2, [x4 + 32]
     arm64.cmp x2, 255
     arm64.b.lt shard#12
-  critsplit#44:
+  critsplit#45:
     arm64.movRegReg x2, x4
   shard#8:
     arm64.movImm x0, 1
@@ -3176,7 +3182,7 @@ func @__slab_free {
     arm64.add x0, x0, 139912
     arm64.add x0, x0, x2
     arm64.b shard#7
-  critsplit#42:
+  critsplit#43:
     arm64.movRegReg x0, x3
     arm64.movRegReg x4, x2
   shard#7:
@@ -3215,21 +3221,24 @@ func @__slab_free {
     arm64.cmp x0, -2
     arm64.b.eq parked
   remote:
-    arm64.movImm x0, 1
-    arm64.add x1, x20, 64
-    arm64.arm64AtomicRmw.add x0, [x1], x0
+    arm64.movImm x1, 1
+    arm64.add x3, x20, 64
+    arm64.arm64AtomicRmw.add x1, [x3], x1
     arm64.cmp x2, 0
-    arm64.cset x0, eq
-    arm64.add x1, x20, 56
-    arm64.cbnz x0, rpush
+    arm64.cset x1, eq
+    arm64.add x3, x20, 56
+    arm64.cbnz x1, rpush
+  rcacher:
+    arm64.cmp x0, 0
+    arm64.b.lt rpush
   rcredit:
     arm64.movImm x0, 1
-    arm64.add x2, x2, 152
-    arm64.arm64AtomicRmw.add x0, [x2], x0
+    arm64.add x1, x2, 152
+    arm64.arm64AtomicRmw.add x0, [x1], x0
   rpush:
-    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x3 + 0]
     arm64.storeBaseDispReg.word64 [x19 + 0], x0
-    arm64.arm64AtomicCas x0, [x1], x0, x19
+    arm64.arm64AtomicCas x0, [x3], x0, x19
     arm64.cmp x0, 0
     arm64.b.eq rpush
   rpushed:
@@ -3834,7 +3843,7 @@ func @__slab_free {
     arm64.movImm x2, 0
     arm64.add x3, x0, 152152
     arm64.cmp x1, 0
-    arm64.b.eq critsplit#42
+    arm64.b.eq critsplit#43
   shard#13:
     arm64.arm64ThreadPointer x16, linuxWritable
     arm64.add x16, x16, x1
@@ -3861,7 +3870,7 @@ func @__slab_free {
     arm64.loadRegBaseDisp.word64 x2, [x4 + 32]
     arm64.cmp x2, 255
     arm64.b.lt shard#12
-  critsplit#44:
+  critsplit#45:
     arm64.movRegReg x2, x4
   shard#8:
     arm64.movImm x0, 1
@@ -3874,7 +3883,7 @@ func @__slab_free {
     arm64.add x0, x0, 139912
     arm64.add x0, x0, x2
     arm64.b shard#7
-  critsplit#42:
+  critsplit#43:
     arm64.movRegReg x0, x3
     arm64.movRegReg x4, x2
   shard#7:
@@ -3913,21 +3922,24 @@ func @__slab_free {
     arm64.cmp x0, -2
     arm64.b.eq parked
   remote:
-    arm64.movImm x0, 1
-    arm64.add x1, x20, 64
-    arm64.arm64AtomicRmw.add x0, [x1], x0
+    arm64.movImm x1, 1
+    arm64.add x3, x20, 64
+    arm64.arm64AtomicRmw.add x1, [x3], x1
     arm64.cmp x2, 0
-    arm64.cset x0, eq
-    arm64.add x1, x20, 56
-    arm64.cbnz x0, rpush
+    arm64.cset x1, eq
+    arm64.add x3, x20, 56
+    arm64.cbnz x1, rpush
+  rcacher:
+    arm64.cmp x0, 0
+    arm64.b.lt rpush
   rcredit:
     arm64.movImm x0, 1
-    arm64.add x2, x2, 152
-    arm64.arm64AtomicRmw.add x0, [x2], x0
+    arm64.add x1, x2, 152
+    arm64.arm64AtomicRmw.add x0, [x1], x0
   rpush:
-    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.loadRegBaseDisp.word64 x0, [x3 + 0]
     arm64.storeBaseDispReg.word64 [x19 + 0], x0
-    arm64.arm64AtomicCas x0, [x1], x0, x19
+    arm64.arm64AtomicCas x0, [x3], x0, x19
     arm64.cmp x0, 0
     arm64.b.eq rpush
   rpushed:

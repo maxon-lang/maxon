@@ -564,3 +564,59 @@ delivered=320 remote=0
 ```exitcode
 0
 ```
+
+<!-- test: slab-sharding.a-sole-processors-frees-onto-an-uncached-span-are-not-remote -->
+<!-- procs: 1 -->
+Twenty thousand strings fill spans the one processor gives back to the shared list, so most of them are freed onto a span no processor caches; those frees are local too.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Counted = int(0 to 1000000)
+typealias StringBox = Array with String
+
+type Sink
+	var seen as Integer
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function take(s String) returns Integer
+		self.seen = self.seen + (s.count() as Integer)
+
+		return 1
+	end 'take'
+end 'Sink'
+
+function holdThenDrop(n Counted) returns Integer
+	var held = StringBox.create()
+	var i = 0 as Integer
+	while i < (n as Integer) 'fill'
+		held.push("payload-{i}")
+		i = i + 1
+	end 'fill'
+
+	let before = HeapStats.slab().remoteFrees as Integer
+	print("held={held.count()} remote-before-drop={before}\n")
+
+	return before
+end 'holdThenDrop'
+
+function main() returns ExitCode
+	let sink = spawn Sink.create()
+	let first = try await sink.take("warm") otherwise 0
+	print("first={first} remote-start={HeapStats.slab().remoteFrees}\n")
+
+	let before = holdThenDrop(20000)
+	print("remote-after-drop={HeapStats.slab().remoteFrees} before={before}\n")
+
+	return 0
+end 'main'
+```
+```stdout
+first=1 remote-start=0
+held=20000 remote-before-drop=0
+remote-after-drop=0 before=0
+```
+```exitcode
+0
+```

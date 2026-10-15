@@ -32,15 +32,10 @@ FANIN=service-fanin-torture
 # and re-exercises the multi-M spawn path, whose crash class is worker-count correlated.
 REPS="${REPS:-15}"
 
-# ⭐ MEASURED, NOT INHERITED (2026-09-09, 16-processor x64-windows box, 10 runs per cell). At
-# MAXON_MAX_PROCS=1 both service programs read `remoteFrees` of exactly 0, 10 of 10 — neither does any
-# IO, so neither starts a P-less OS thread whose frees would take the remote arm. At 2 and above the
-# smallest reading was 72,016 (`service-fanin-torture` at 2); `service-torture` read ~240,000
-# throughout. The bar sits an order of magnitude under the smallest real reading.
-#
-# ⚠ A PROGRAM THAT DOES IO WOULD READ A SMALL NON-ZERO FLOOR HONESTLY, so adding one here means
-# re-measuring this pair rather than loosening them.
-REMOTE_MIN=5000
+# At MAXON_MAX_PROCS=1 `remoteFrees` is 0 by construction: a free is credited only when another
+# processor holds its span cached. REMOTE_MIN sits an order of magnitude under the smallest unclamped
+# reading, `service-fanin-torture`'s, which falls as the processor count rises.
+REMOTE_MIN=300
 FLOOR_MAX=0
 
 LEAK_EXIT=101   # the runtime's leak-check gate exit code
@@ -229,8 +224,9 @@ fi
 hdr "Check 4: cross-P remote frees"
 
 # `HeapStats.slab().remoteFrees` sums one per-P word over `__sched_procs`, credited at every
-# remote push. A record allocated on the M that built it and released on whichever M ran its receiver
-# is exactly that push, so a service program reads its own cross-P traffic.
+# free onto a span another processor holds cached. A record allocated on the M that built it and
+# released on whichever M ran its receiver is exactly that push, so a service program reads its own
+# cross-P traffic.
 check_remote_free() {
 	local binary="$1" label="$2" unclamped serial procs
 

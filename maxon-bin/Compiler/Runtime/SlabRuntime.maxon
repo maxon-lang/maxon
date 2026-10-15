@@ -447,8 +447,8 @@ export let SlabRuntimeTierFileName = "SlabRuntime.maxon"
 // still needs every layer under it.
 export let SlabScavengeName = b"__slab_scavenge"
 
-// `__slab_remote_free_count() -> i64` — how many slots have been queued onto a span this processor does not
-// hold cached, summed over every P. `__Builtins.slabRemoteFreeCount()` lowers straight to it, and it is the
+// `__slab_remote_free_count() -> i64` — how many slots have been freed onto a span another processor holds
+// cached, summed over every P. `__Builtins.slabRemoteFreeCount()` lowers straight to it, and it is the
 // only way a program can observe that the cross-processor free road was TAKEN: a regression routing every
 // free down the local arm keeps the suite green otherwise.
 //
@@ -1605,13 +1605,16 @@ end 'emitSlabRowDisjoint'
 // (`TargetOp.arm64AtomicCas`) is a store-release. `StdOp.atomicCas` answers the SUCCESS BOOLEAN and not the
 // prior value, and a loop written for the other convention spins forever on its first success.
 //
-// `myP` is credited rather than the span's owner, because an uncached span has no owning processor to credit.
+// `myP` is credited only when `owner` is a P. A negative `owner` (`MspanStatePartial` on this road) is a span
+// no processor caches: its free takes this push because only a CAS may write its list, but it crosses no
+// processor. The test is `owner < 0` rather than one sentinel, so a sentinel added later is not credited.
 // What `__slab_remote_free_count` reports is therefore frees PERFORMED across processors, and a freer that
 // holds no P at all is not counted — a reading of 0 does not mean the road was never taken. The credit is
 // emitted in `cur` rather than inside `retry`, because a contended push runs the loop body several times for
 // one free and a credit in there would count CAS attempts.
-function emitSlabRemotePush(module StdModule, func IrFunction, cur IrBlock, span ValueId, slot ValueId, myP ValueId, ids ValueMinter) returns IrBlock
+function emitSlabRemotePush(module StdModule, func IrFunction, cur IrBlock, span ValueId, slot ValueId, owner ValueId, myP ValueId, ids ValueMinter) returns IrBlock
 	var retry = module.addBlock(func, label: b"rpush", heat: BlockHeat.normal)
+	var cacherAsked = module.addBlock(func, label: b"rcacher", heat: BlockHeat.normal)
 	var credited = module.addBlock(func, label: b"rcredit", heat: BlockHeat.normal)
 	let done = module.addBlock(func, label: b"rpushed", heat: BlockHeat.normal)
 
@@ -1623,7 +1626,10 @@ function emitSlabRemotePush(module StdModule, func IrFunction, cur IrBlock, span
 	let noProc = emitConst(module, block: cur, value: MspanOwningPNone, ids: ids)
 	let holdsNoProc = emitCmp(module, block: cur, a: myP, b: noProc, pred: StdCmpPred.eq, ids: ids)
 	let headAddr = emitFieldAddr(module, block: cur, record: span, offset: MspanRemoteHeadOffset, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(holdsNoProc, thenBlockId: retry.id, elseBlockId: credited.id))
+	module.setTerminator(cur, op: StdOp.condBranch(holdsNoProc, thenBlockId: retry.id, elseBlockId: cacherAsked.id))
+
+	let nobodyCaches = emitIsNegative(module, block: cacherAsked, value: owner, ids: ids)
+	module.setTerminator(cacherAsked, op: StdOp.condBranch(nobodyCaches, thenBlockId: retry.id, elseBlockId: credited.id))
 
 	let credit = emitConst(module, block: credited, value: OneMore, ids: ids)
 	_ = emitFieldAccumulate(module, block: credited, record: myP, offset: POffRemoteFreeCount, delta: credit, multiM: true, ids: ids)
@@ -2883,7 +2889,7 @@ function buildSlabFree(module StdModule, model MachineModel)
 	var locallyPushed = emitSlabFreeToSpan(module, func: func, cur: local, slot: ptr, span: span, ids: ids, label: b"push")
 	module.setTerminator(locallyPushed, op: StdOp.retVoid)
 
-	var pushed = emitSlabRemotePush(module, func: func, cur: remote, span: span, slot: ptr, myP: myP, ids: ids)
+	var pushed = emitSlabRemotePush(module, func: func, cur: remote, span: span, slot: ptr, owner: owner, myP: myP, ids: ids)
 	module.setTerminator(pushed, op: StdOp.retVoid)
 
 	// ⚠ **NO LOCK** — see `buildSlabOsDirectArm`: the OS-direct tier keeps its length in the mapping's own
