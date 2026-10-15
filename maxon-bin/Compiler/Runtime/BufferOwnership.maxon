@@ -135,13 +135,13 @@ export let InlineBufferCapacity = -3 as NotOwnedBufferCapacity
 // through the residual it shares with the other two immortal-blob provenances. `__str_retain`'s
 // copy-immortal arm moved from `RdataBufferCapacity` to this value for the same reason the record test did:
 // it is the RECORD's writability that decides, not the blob's.
-let ImmortalRecordCapacity = -4 as NotOwnedBufferCapacity
+let ImmortalRecordCapacity = -4
 
 // `parent@32` when the record owes NOTHING: an owner (its debt is its own `buffer@0`), a byte-string or
 // String literal over an immortal `.rdata` blob, a String whose bytes are inline, or an array that never
 // allocated a buffer at all. It is an ORDINARY answer, not an error case, which is why every release
 // step is null-guarded.
-let NoOwedAllocation = 0 as FullRangeInt
+let NoOwedAllocation = 0
 
 // `buffer@0` when an immortal record names NO blob — a module-level EMPTY `Array with T`, whose `length@8`
 // is 0 so no reader ever strides off the slot. It is the same null a `__managed_create` record is born
@@ -361,7 +361,7 @@ end 'emitBufferNotOwned'
 
 // The smallest `capacity@16` an OWNED buffer publishes; every `NotOwnedBufferCapacity` sentinel lies
 // below it.
-let LowestOwnedCapacity = 0 as FullRangeInt
+let LowestOwnedCapacity = 0
 
 // The record an `emitBufferNotOwned` compare tests, read back off the compare: `cmpImm lt
 // [record + capacity@16], LowestOwnedCapacity` once `foldConstOperands` has moved the constant into the
@@ -803,8 +803,8 @@ export function buildMmCowDetach(module StdModule)
 	var baseJoin = module.addBlock(func, label: b"basejoin", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let record = 0 as ValueId
-	let askElements = 1 as ValueId
+	let record = 0
+	let askElements = 1
 
 	// entry: read the allocation this record owes a release to BEFORE anything is republished — the answer is
 	// derived from the very `capacity`/`buffer`/`parent` fields the publish below overwrites.

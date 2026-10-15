@@ -663,7 +663,7 @@ end 'buildArm64LinuxReadLinkChunk'
 // `sysconf`'s own failure spelling and is what `runtime/CpuParallel.maxon`'s `__cpu_count` signed `< 1 ⇒ 1`
 // clamp already reads — see `lowerOsCpuCount` for why the clamp must stay in exactly one place.
 function buildArm64LinuxCpuCountChunk() returns FunctionCodeChunk
-	let SlotMask = 0 as StackSize
+	let SlotMask = 0
 	var asm = Arm64RuntimeAsm.beginFunction(runtimeFrameSlots(LinuxCpuSetBytes))
 
 	let count = asm.newLabel()
@@ -845,7 +845,7 @@ end 'buildArm64LinuxTransferChunk'
 // memory as a stated guarantee — and `emitWin32BoolOutcome` reads the word on both paths.
 function buildArm64LinuxFileSizeChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
 	let SlotOutPtr = 0 as StackSize
-	let SlotStat = 1 as StackSize
+	let SlotStat = 1
 	var asm = Arm64RuntimeAsm.beginFunction(1 + runtimeFrameSlots(arm64LinuxStatLayout().bytes))
 
 	let measured = asm.newLabel()
@@ -922,7 +922,7 @@ end 'buildArm64LinuxPathOpChunk'
 function buildArm64LinuxFileRenameChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
 	let SlotNewPath = 0 as StackSize
 	let SlotDirFd = 1 as StackSize
-	let SlotPrefix = 2 as StackSize
+	let SlotPrefix = 2
 	var asm = Arm64RuntimeAsm.beginFunction(2 + runtimeFrameSlots(MaxPathBytes))
 
 	let renamed = asm.newLabel()
@@ -976,7 +976,7 @@ end 'buildArm64LinuxFileRenameChunk'
 // and the shared mask derivation, which is what keeps `__md_exists`'s answer and the DIRECTORY bit `__mf_stat`
 // publishes derived from ONE reading of `st_mode`.
 function buildArm64LinuxFileAttributesChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
-	let SlotStat = 0 as StackSize
+	let SlotStat = 0
 	var asm = Arm64RuntimeAsm.beginFunction(runtimeFrameSlots(arm64LinuxStatLayout().bytes))
 
 	let described = asm.newLabel()
@@ -1252,7 +1252,7 @@ function buildArm64LinuxDirFindNextChunk(errnoHome LinuxErrnoHome) returns Funct
 	let SlotSearch = 0 as StackSize
 	let SlotFindData = 1 as StackSize
 	let SlotName = 2 as StackSize
-	let SlotStat = 3 as StackSize
+	let SlotStat = 3
 	var asm = Arm64RuntimeAsm.beginFunction(3 + runtimeFrameSlots(arm64LinuxStatLayout().bytes))
 
 	let nextEntry = asm.newLabel()
@@ -1355,7 +1355,7 @@ function buildArm64LinuxDirFindFirstChunk(errnoHome LinuxErrnoHome) returns Func
 	let SlotFindData = 1 as StackSize
 	let SlotGlob = 2 as StackSize
 	let SlotSearch = 3 as StackSize
-	let SlotStat = 4 as StackSize
+	let SlotStat = 4
 	var asm = Arm64RuntimeAsm.beginFunction(4 + runtimeFrameSlots(arm64LinuxStatLayout().bytes))
 
 	let walk = asm.newLabel()
@@ -1628,8 +1628,8 @@ end 'buildArm64LinuxMonotonicClockChunk'
 // condition after every step, so a short sleep costs one extra lap; a restart loop here would be a second,
 // weaker copy of that test.
 function buildArm64LinuxSleepChunk(name ByteArray, unit PosixTimeUnit) returns FunctionCodeChunk
-	let SlotTsSec = 0 as StackSize
-	let SlotTsNsec = 1 as StackSize
+	let SlotTsSec = 0
+	let SlotTsNsec = 1
 	var asm = Arm64RuntimeAsm.beginFunction(2)
 
 	arm64PosixToTimespec(asm, amount: Arm64Register.x0, unit: unit, secSlot: SlotTsSec, nsecSlot: SlotTsNsec)
@@ -1924,8 +1924,8 @@ function buildArm64LinuxWaitOneChunk(globalData GlobalDataTable) returns Functio
 	let SlotSignal = 0 as StackSize
 	let SlotTimeout = 1 as StackSize
 	let SlotResult = 2 as StackSize
-	let SlotTsSec = 3 as StackSize
-	let SlotTsNsec = 4 as StackSize
+	let SlotTsSec = 3
+	let SlotTsNsec = 4
 	let SlotObj = 5 as StackSize
 	var asm = Arm64RuntimeAsm.beginFunction(6)
 
@@ -2269,7 +2269,7 @@ end 'buildArm64LinuxTlsSetChunk'
 // filled and every one of them is discarded — only the STATUS is the answer — but the buffer must be real
 // memory the call may scribble on, which is what a chunk has and an inline `svc` does not.
 function buildArm64LinuxHandleFileTypeChunk() returns FunctionCodeChunk
-	let SlotTermios = 0 as StackSize
+	let SlotTermios = 0
 	var asm = Arm64RuntimeAsm.beginFunction(runtimeFrameSlots(LinuxTermiosBytes))
 
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: LinuxIoctlTcGets as MachineWord)
@@ -2418,7 +2418,7 @@ function buildArm64LinuxSpawnChunk(errnoHome LinuxErrnoHome) returns FunctionCod
 	let SlotProcInfo = 4 as StackSize
 	let SlotPid = 5 as StackSize
 	let SlotHandle = 6 as StackSize
-	let SlotStatusFds = 7 as StackSize
+	let SlotStatusFds = 7
 	let SlotStatusRead = 8 as StackSize
 	let SlotStatusWrite = 9 as StackSize
 	let SlotStatusWord = 10 as StackSize
@@ -2762,7 +2762,7 @@ end 'arm64LinuxEmitShmUnlinkPath'
 // open gets.
 function buildArm64LinuxShmOpenChunk() returns FunctionCodeChunk
 	let SlotBufPtr = 0 as StackSize
-	let SlotPath = 1 as StackSize
+	let SlotPath = 1
 	var asm = Arm64RuntimeAsm.beginFunction(1 + runtimeFrameSlots(MaxPathBytes))
 
 	let absent = asm.newLabel()
@@ -2790,7 +2790,7 @@ end 'buildArm64LinuxShmOpenChunk'
 // descriptor and every mapping until its NAME is removed, so the consumer's teardown ends here. It is a chunk
 // on this lane and a bare import on the Darwin one only because the name has to become a path first.
 function buildArm64LinuxShmUnlinkChunk() returns FunctionCodeChunk
-	let SlotPath = 0 as StackSize
+	let SlotPath = 0
 	var asm = Arm64RuntimeAsm.beginFunction(runtimeFrameSlots(MaxPathBytes))
 
 	arm64LinuxEmitShmPath(asm, pathSlot: SlotPath)
@@ -2874,8 +2874,8 @@ function buildArm64LinuxAwaitTraceeChunk(errnoHome LinuxErrnoHome) returns Funct
 	let SlotStatusOut = 0 as StackSize
 	let SlotBudget = 1 as StackSize
 	let SlotPid = 2 as StackSize
-	let SlotTsSec = 3 as StackSize
-	let SlotTsNsec = 4 as StackSize
+	let SlotTsSec = 3
+	let SlotTsNsec = 4
 	var asm = Arm64RuntimeAsm.beginFunction(5)
 
 	let poll = asm.newLabel()

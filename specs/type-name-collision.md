@@ -2313,9 +2313,7 @@ clean compile, no diagnostic.**
 typealias Widget = int(0 to 5)
 
 module function fromA() returns ExitCode
-	let w = 3 as Widget
-
-	return w as ExitCode
+	return (3 as Widget) as ExitCode
 end 'fromA'
 
 // --- file: lib/b.maxon
@@ -2360,9 +2358,7 @@ name would bind an integer to a two-slot destructuring.
 typealias Pair = int(0 to 5)
 
 module function fromA() returns ExitCode
-	let n = 4 as Pair
-
-	return n as ExitCode
+	return (4 as Pair) as ExitCode
 end 'fromA'
 
 // --- file: lib/b.maxon
@@ -2468,9 +2464,7 @@ still `named` at the crossing erases them too, **even when the reader and the de
 typealias Level = int(0 to 5)
 
 module function fromA() returns ExitCode
-	let n = 3 as Level
-
-	return n as ExitCode
+	return (3 as Level) as ExitCode
 end 'fromA'
 
 // --- file: lib/b.maxon
@@ -2509,9 +2503,7 @@ returns a value that depends on the payload rather than merely compiling.
 typealias Container = int(0 to 5)
 
 module function fromA() returns ExitCode
-	let n = 2 as Container
-
-	return n as ExitCode
+	return (2 as Container) as ExitCode
 end 'fromA'
 
 // --- file: lib/b.maxon
@@ -2844,14 +2836,12 @@ export typealias Integer = int(0 to 1000)
 export typealias Integer = int(0 to 1000)
 
 export function pickB() returns ExitCode
-	let v = 2 as beta.Integer
-	return v as ExitCode
+	return (2 as beta.Integer) as ExitCode
 end 'pickB'
 
 // --- file: main.maxon
 function main() returns ExitCode
-	let a = 40 as alpha.Integer
-	return (a as ExitCode) + pickB()
+	return ((40 as alpha.Integer) as ExitCode) + pickB()
 end 'main'
 ```
 ```maxoncstderr
@@ -2867,8 +2857,7 @@ file and earns E3092.
 export typealias Score = int(0 to 100)
 
 export function grade() returns ExitCode
-	let s = 7 as ranks.Score
-	return s as ExitCode
+	return (7 as ranks.Score) as ExitCode
 end 'grade'
 
 // --- file: kinds/score.maxon
@@ -2908,6 +2897,10 @@ export type Count
 end 'Count'
 
 // --- file: app/main.maxon
+function ceiling() returns lib.Count
+	return 900
+end 'ceiling'
+
 type Tally
 	var x as lib.Count
 
@@ -2916,7 +2909,7 @@ type Tally
 	end 'create'
 
 	function raise() returns bool
-		let limit = 900 as lib.Count
+		let limit = ceiling()
 		self.x = limit
 		return self.x == limit
 	end 'raise'
@@ -3113,8 +3106,12 @@ export type Wrapper
 end 'Wrapper'
 
 // --- file: main.maxon
+function seed() returns Wrapper.Idx
+	return 7
+end 'seed'
+
 function main() returns ExitCode
-	let i = 7 as Wrapper.Idx
+	let i = seed()
 	return Wrapper.make().at(i)
 end 'main'
 ```
@@ -3254,8 +3251,7 @@ function main() returns ExitCode
 	let v = try await h.divide(10, by: 2) otherwise return 70
 	print("{v}\n")
 
-	let refused = 3 as calc.Fault
-	let w = try await h.divide(1, by: 0) otherwise return refused as ExitCode
+	let w = try await h.divide(1, by: 0) otherwise return (3 as calc.Fault) as ExitCode
 	return w as ExitCode
 end 'main'
 ```

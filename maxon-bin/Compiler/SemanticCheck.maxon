@@ -126,6 +126,9 @@ module function semanticCheck(project Project, module MaxonModule, signatures Pr
 	checkArgumentOverlaps(project, module: module, funcNames: funcNames)
 	try requireStillWanted(project)
 
+	try checkUnneededLetCasts(project, module: module)
+	try requireStillWanted(project)
+
 	// E3100: a green thread awaited more than once on a single flow path.
 	checkLinearAwait(project, module: module)
 
@@ -5863,9 +5866,9 @@ end 'substrateEntryOutranks'
 // meaning is in their sequence.
 typealias SubstrateEntryRank = int(0 to 2)
 
-let RawMachineOperationRank = 0 as SubstrateEntryRank
-let RuntimeEntryRank = 1 as SubstrateEntryRank
-let ProcessSpawnRank = 2 as SubstrateEntryRank
+let RawMachineOperationRank = 0
+let RuntimeEntryRank = 1
+let ProcessSpawnRank = 2
 
 function substrateEntryRank(entry ByteArray) returns SubstrateEntryRank
 	if isSubprocessRuntimeCallee(entry) 'processSpawn'
@@ -6158,7 +6161,7 @@ function namesAComparisonMethod(name ByteArray) returns bool
 	end 'q'
 end 'namesAComparisonMethod'
 
-let ComparisonMethodParamCount = 2 as ParamCount
+let ComparisonMethodParamCount = 2
 
 function checkReadOnlyArgToKeepingParam(project Project, func IrFunction, callee ByteArray, sig FuncSignature, args ValueIdArray, argLabels NameRoster, argImmutableNames WriteBlameArray, argDefaultSlots ParamCountArray, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, callRange SourceRange, filePath FilePath)
 	if argImmutableNames.count() == 0 'noArgumentIsBlamed'

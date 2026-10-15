@@ -54,15 +54,15 @@ end 'NetpollEntryLayout'
 // `OVERLAPPED_ENTRY` is `lpCompletionKey, lpOverlapped, Internal, dwNumberOfBytesTransferred` (32 bytes). The
 // last three are read only by the pipe-read arm of the decode: a child's exit is posted by hand and carries
 // none of them.
-let CompletionEntryBytes = 32 as ByteOffset
-let CompletionEntryKeyOffset = 0 as ByteOffset
-let CompletionEntryOverlappedOffset = 8 as ByteOffset
-let CompletionEntryStatusOffset = 16 as ByteOffset
-let CompletionEntryTransferredOffset = 24 as ByteOffset
-let EpollPackedEntryBytes = 12 as ByteOffset
-let EpollPackedDataOffset = 4 as ByteOffset
-let EpollAlignedEntryBytes = 16 as ByteOffset
-let EpollAlignedDataOffset = 8 as ByteOffset
+let CompletionEntryBytes = 32
+let CompletionEntryKeyOffset = 0
+let CompletionEntryOverlappedOffset = 8
+let CompletionEntryStatusOffset = 16
+let CompletionEntryTransferredOffset = 24
+let EpollPackedEntryBytes = 12
+let EpollPackedDataOffset = 4
+let EpollAlignedEntryBytes = 16
+let EpollAlignedDataOffset = 8
 
 function netpollEntryLayout(target Target) returns NetpollEntryLayout
 	return match netpollShape(target) 'shape'
@@ -81,7 +81,7 @@ function epollEntryLayout(cpu CpuArch) returns NetpollEntryLayout
 end 'epollEntryLayout'
 
 // How many entries one wait may answer — Go's batch on Windows and kqueue.
-let NetpollBatchEntries = 64 as FullRangeInt
+let NetpollBatchEntries = 64
 
 // `__np_poll`'s frame: the scratch word (the Windows entry count, the epoll drain buffer) in slot 0, then the
 // batch. It lives on the polling machine's OS-thread stack, which has room for it; no green thread polls.
@@ -126,8 +126,8 @@ export function netpollRuntimeGlobals() returns DataSectionEntryArray
 	return out
 end 'netpollRuntimeGlobals'
 
-let WakeSigClear = 0 as FullRangeInt
-let WakeSigRaised = 1 as FullRangeInt
+let WakeSigClear = 0
+let WakeSigRaised = 1
 
 // ==========================================================================
 // Entry points
@@ -226,7 +226,7 @@ let NetpollFailVerbText = b"netpoll: verb "
 let NetpollFailSubjectText = b" on "
 let NetpollFailAnswerText = b" refused by the host, which answered "
 let NetpollFailEndText = b"\n"
-let NetpollFailDigitsBytes = 24 as StackSize
+let NetpollFailDigitsBytes = 24
 let NetpollFailDigitsSlot = 0 as SpillSlot
 
 // `__np_fail(verb, answer)` — see `NetpollFailName`.
@@ -237,9 +237,9 @@ function buildNetpollFail(module StdModule)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
-	let verb = 0 as ValueId
-	let subject = 1 as ValueId
-	let answer = 2 as ValueId
+	let verb = 0
+	let subject = 1
+	let answer = 2
 
 	func.stackSize = NetpollFailDigitsBytes
 	let digits = ids.mint()
@@ -404,7 +404,7 @@ function buildNetpollPoll(module StdModule, target Target)
 	var otherSource = module.addBlock(func, label: b"npother", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let timeoutMs = 0 as ValueId
+	let timeoutMs = 0
 
 	// The scratch word starts at zero: `GetQueuedCompletionStatusEx` writes a 32-bit count into its low half.
 	let scratch = ids.mint()
@@ -496,7 +496,7 @@ function emitNetpollDecodeCompletion(module StdModule, func IrFunction, cur IrBl
 end 'emitNetpollDecodeCompletion'
 
 // An NTSTATUS is 32 bits in a word that is 64 — see `emitNetpollDecodeCompletion`.
-let NetpollStatusMask = 4294967295 as FullRangeInt
+let NetpollStatusMask = 4294967295
 
 // ⭐⭐ **AN ENTRY THAT NAMES A SOURCE — a SOCKET or a CHILD on a POSIX lane, a CHILD or a pipe read on the
 // completion-port one.** Every shape carries the same two facts (which source, and in which directions), each
@@ -673,12 +673,12 @@ end 'emitNetpollDrain'
 
 // ⭐ **THE RECORD.** `rg`/`wg` are Go's per-direction state words and `rd`/`wd` their deadlines; each pair is
 // laid out so a DIRECTION is an index rather than a branch (`emitPdDirectionAddr`).
-let PdSlotBytes = 8 as FullRangeInt
-let PdOffFd = 0 as ByteOffset
-let PdOffRg = 8 as ByteOffset
-let PdOffWg = 16 as ByteOffset
-let PdOffRd = 24 as ByteOffset
-let PdOffWd = 32 as ByteOffset
+let PdSlotBytes = 8
+let PdOffFd = 0
+let PdOffRg = 8
+let PdOffWg = 16
+let PdOffRd = 24
+let PdOffWd = 32
 
 // ⭐⭐ **DID THE LAST OPERATION ON THIS DESCRIPTOR END IN ITS DEADLINE? — the durable fact behind
 // `__ManagedSocket.timedOut()`, and Go's `net.Error.Timeout()` in one word.** It is NOT a direction word's
@@ -690,7 +690,7 @@ let PdOffWd = 32 as ByteOffset
 // matching `PdOffGen` against the generation the begin answered). The late exit that stores it runs after a
 // park of the thread's own, and by the time the thread resumes the descriptor may have been closed, reused and
 // opened onto the same record — whose new owner would then read a deadline it never set.
-let PdOffTimedOut = 40 as ByteOffset
+let PdOffTimedOut = 40
 
 // ⭐⭐ **WHICH LIFE OF THIS RECORD A PARKED THREAD BELONGS TO.** A record OUTLIVES the socket it was opened
 // for: the release resets its words but the table slot goes on naming it, so `__np_pd_open` on a recycled
@@ -705,24 +705,24 @@ let PdOffTimedOut = 40 as ByteOffset
 // deadline mark (`__np_pd_mark_timed_out`). `__np_pd_expire` and `__np_pd_drop` need no stamp: each already
 // asks whether the direction word still names ITS OWN thread, which is the same question asked of the only
 // record they can act on.
-let PdOffGen = 48 as ByteOffset
+let PdOffGen = 48
 
 // ⭐ **THE FREE-LIST LINK FOR A SOURCE KEY NOBODY HOLDS, AND ONLY THE COMPLETION-PORT LANE EVER WRITES IT.** A
 // POSIX lane draws a source key from the kernel's own descriptor table, which recycles it; Windows has no
 // descriptor to draw — for a child, and for each overlapped read in flight — so `__np_src_key_alloc` allocates
 // one and this word is where a released key waits for the next holder. It holds `key + 1`, so a zero is the end
 // of the list rather than key zero.
-let PdOffNextFreeKey = 56 as ByteOffset
-let PdBytes = 64 as FullRangeInt
+let PdOffNextFreeKey = 56
+let PdBytes = 64
 
 // The values a direction word holds that are not a green thread. The first three are Go's `pdNil`, `pdReady`
 // and `pdWait`: nothing, a readiness nobody has consumed, and a wait that is marked but not published
 // (`__np_pd_commit`) — or, on a group member, held for a group wait that has ended (see `PdWoken`). A parked
 // thread's record address is a heap pointer, so a word above `PdExpired`, the largest of them, is a published
 // waiter (`emitPdIsWaiter`).
-let PdNil = 0 as FullRangeInt
-let PdReady = 1 as FullRangeInt
-let PdWait = 2 as FullRangeInt
+let PdNil = 0
+let PdReady = 1
+let PdWait = 2
 
 // ⛔⛔ **A WAIT HOLDS ITS DIRECTION UNTIL ITS OWN THREAD RESUMES, NOT UNTIL SOMETHING READIES IT.** Whatever ends
 // a wait readies the thread and leaves the verdict on the word — `PdWoken` for readiness, `PdExpired` for a
@@ -736,8 +736,8 @@ let PdWait = 2 as FullRangeInt
 // is its answer — a renounced reader must not issue its call again on a descriptor nobody wants — while a
 // group member the wait did not fire on is held as `PdWait`, so a readiness landing on it before the group
 // resumes becomes `PdWoken` and is reported: the collect drain's child source reports exactly once.
-let PdWoken = 3 as FullRangeInt
-let PdExpired = 4 as FullRangeInt
+let PdWoken = 3
+let PdExpired = 4
 
 // The two directions, as the index the pairs above are addressed by. EXPORTED because the socket band names
 // the direction of every wait it makes.
@@ -761,8 +761,8 @@ export let NetpollWaitStale = 2 as FullRangeInt
 // The record table: how many indices the first allocation covers, and one pointer per slot. 64 covers a POSIX
 // process's whole ordinary descriptor range; a Windows SOCKET is a handle value rather than a low dense index
 // and its record sits at twice it (`emitNetpollDescriptorIndex`), so a program that opens one grows the table.
-let PdTableSeedSlots = 64 as FullRangeInt
-let PdTableSlotBytes = 8 as FullRangeInt
+let PdTableSeedSlots = 64
+let PdTableSlotBytes = 8
 
 // The table's base and how many slots it has. Both move inside ONE hold of `__sched_lock`, which is what
 // `MultiMSharing.underSchedLock` states: what is indivisible here is the PAIR, and no atomic can make a pair
@@ -1043,7 +1043,7 @@ function buildNetpollPdSlot(module StdModule)
 	var missing = module.addBlock(func, label: b"npslotnone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let fd = 0 as ValueId
+	let fd = 0
 
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 	let cap = emitLoadGlobalWord(module, block: entry, label: NetpollPdCapLabel, ids: ids)
@@ -1079,7 +1079,7 @@ function buildNetpollPdAdopt(module StdModule)
 	var doneBlock = module.addBlock(func, label: b"npopendone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let fd = 0 as ValueId
+	let fd = 0
 
 	// ⛔⛔ **THE TABLE'S ONE WRITER BOUNDS ITS INDEX AT BOTH ENDS, WHERE THE GROW ONLY EVER BOUNDS THE TOP.**
 	// `table + 8 * fd` is signed, so a value that is not a source addresses the words BEFORE the table and the
@@ -1172,8 +1172,8 @@ function buildNetpollPdOpen(module StdModule, target Target)
 	var doneBlock = module.addBlock(func, label: b"npopendone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let source = 0 as ValueId
-	let fd = 1 as ValueId
+	let source = 0
+	let fd = 1
 
 	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: NetpollPdAdoptName, args: argsOf(source)))
 	let poller = emitLoadGlobalWord(module, block: entry, label: NetpollPollerLabel, ids: ids)
@@ -1250,7 +1250,7 @@ function buildNetpollPdRelease(module StdModule)
 	var doneBlock = module.addBlock(func, label: b"npreldone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let fd = 0 as ValueId
+	let fd = 0
 
 	emitSchedLockEnter(module, block: entry, ids: ids)
 	let pd = emitNetpollPdLookup(module, block: entry, fd: fd, ids: ids)
@@ -1305,9 +1305,9 @@ function buildNetpollPdDeadline(module StdModule)
 	var doneBlock = module.addBlock(func, label: b"npdldone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
-	let fd = 0 as ValueId
-	let mode = 1 as ValueId
-	let ms = 2 as ValueId
+	let fd = 0
+	let mode = 1
+	let ms = 2
 
 	emitSchedLockEnter(module, block: entry, ids: ids)
 	let pd = emitNetpollPdLookup(module, block: entry, fd: fd, ids: ids)
@@ -1425,9 +1425,9 @@ function buildNetpollPdWait(module StdModule)
 	var readyExit = module.addBlock(func, label: b"npwok", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
-	let fd = 0 as ValueId
-	let mode = 1 as ValueId
-	let gen = 2 as ValueId
+	let fd = 0
+	let mode = 1
+	let gen = 2
 
 	emitSchedLockEnter(module, block: entry, ids: ids)
 	let pd = emitNetpollPdLookupOrAbort(module, func: func, cur: entry, fd: fd, known: look, ids: ids)
@@ -1494,7 +1494,7 @@ function buildNetpollPdCommit(module StdModule)
 	var parked = module.addBlock(func, label: b"npcparked", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let gt = 0 as ValueId
+	let gt = 0
 
 	emitNetpollBranchOnGroupPark(module, block: entry, gt: gt, several: groupArm, one: single, ids: ids)
 	emitNetpollCommitGroup(module, func: func, cur: groupArm, gt: gt, resumeNow: resumeNow, parked: parked, ids: ids)
@@ -1541,7 +1541,7 @@ function buildNetpollPdExpire(module StdModule)
 	var fire = module.addBlock(func, label: b"npxfire", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let gt = 0 as ValueId
+	let gt = 0
 
 	// ⭐ **A GROUP'S DEADLINE ENDS THE WHOLE WAIT AND MARKS NOTHING**, where a single source's marks the
 	// direction it expired on: the caller of a multi-source wait re-reads every source anyway, so there is no
@@ -1591,7 +1591,7 @@ function buildNetpollPdDrop(module StdModule)
 	var doneBlock = module.addBlock(func, label: b"npddone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let gt = 0 as ValueId
+	let gt = 0
 
 	// A GROUP is taken off every one of its members, and its deadline is the GROUP's rather than a direction's.
 	emitNetpollBranchOnGroupPark(module, block: entry, gt: gt, several: groupArm, one: single, ids: ids)
@@ -1635,8 +1635,8 @@ function buildNetpollPdReadyOne(module StdModule)
 	var readied = module.addBlock(func, label: b"nprreadied", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let pd = 0 as ValueId
-	let mode = 1 as ValueId
+	let pd = 0
+	let mode = 1
 
 	let gpp = emitPdDirectionAddr(module, block: entry, pd: pd, base: PdOffRg, mode: mode, ids: ids)
 	let state = emitLoadField(module, block: entry, record: gpp, offset: 0, ids: ids)
@@ -1741,9 +1741,9 @@ function buildNetpollPdWake(module StdModule, target Target)
 	var doneBlock = module.addBlock(func, label: b"npwkdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
-	let fd = 0 as ValueId
-	let readReady = 1 as ValueId
-	let writeReady = 2 as ValueId
+	let fd = 0
+	let readReady = 1
+	let writeReady = 2
 
 	emitSchedLockEnter(module, block: entry, ids: ids)
 	let source = emitNetpollWakeIndex(module, block: entry, shape: netpollShape(target), key: fd, ids: ids)
@@ -1804,7 +1804,7 @@ function buildNetpollPdOpBegin(module StdModule)
 	var known = module.addBlock(func, label: b"npobknown", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let fd = 0 as ValueId
+	let fd = 0
 
 	emitSchedLockEnter(module, block: entry, ids: ids)
 	let pd = emitNetpollPdLookupOrAbort(module, func: func, cur: entry, fd: fd, known: known, ids: ids)
@@ -1827,8 +1827,8 @@ function buildNetpollPdMarkTimedOut(module StdModule)
 	var doneBlock = module.addBlock(func, label: b"npmtdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let fd = 0 as ValueId
-	let gen = 1 as ValueId
+	let fd = 0
+	let gen = 1
 
 	emitSchedLockEnter(module, block: entry, ids: ids)
 	let pd = emitNetpollPdLookupOrAbort(module, func: func, cur: entry, fd: fd, known: known, ids: ids)
@@ -1855,7 +1855,7 @@ function buildNetpollPdTimedOut(module StdModule)
 	var answer = module.addBlock(func, label: b"nptoanswer", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let fd = 0 as ValueId
+	let fd = 0
 
 	emitSchedLockEnter(module, block: entry, ids: ids)
 	let pd = emitNetpollPdLookup(module, block: entry, fd: fd, ids: ids)
@@ -1921,7 +1921,7 @@ export let NetpollChildCloseName = b"__np_child_close"
 
 // What a POSIX lane's arm answers on success. Its close takes the SOURCE back rather than a token, so the
 // value only has to be distinguishable from the 0 that means refused.
-let NetpollChildArmed = 1 as FullRangeInt
+let NetpollChildArmed = 1
 
 // The completion-port lane's source-key allocator: the head of the free list (a key + 1, so 0 is "empty") and
 // the lowest key never yet handed out. Its holders are a parked child and an overlapped read in flight.
@@ -1944,8 +1944,8 @@ let NetpollSourceKeyHighLabel = b"__np_src_key_high"
 // ⚠ **32 BITS EACH IS NOT A COMPROMISE HERE.** An index is a dense allocator's counter and a generation is a
 // per-record close count; neither approaches 2^32 in a process, and the break token is decoded BEFORE any
 // key is split, so no stamped key can be mistaken for it.
-let NetpollKeyGenShift = 32 as FullRangeInt
-let NetpollKeyIndexMask = 4294967295 as FullRangeInt
+let NetpollKeyGenShift = 32
+let NetpollKeyIndexMask = 4294967295
 
 // `__np_src_key_alloc() -> key` / `__np_src_key_release(key)` — the completion-port lane's stand-in for a
 // descriptor table. `__sched_lock` is taken here, because the PAIR of words is what must move indivisibly.
@@ -2012,7 +2012,7 @@ function buildNetpollChildOpen(module StdModule, target Target)
 	var adopt = module.addBlock(func, label: b"npchadopt", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let childHandle = 0 as ValueId
+	let childHandle = 0
 
 	let source = ids.mint()
 	adopt.blockArgs.push(IrBlockArg.create(source, argType: StdType.i64))
@@ -2070,8 +2070,8 @@ function buildNetpollChildArm(module StdModule, target Target)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let source = 0 as ValueId
-	let childHandle = 1 as ValueId
+	let source = 0
+	let childHandle = 1
 
 	let poller = emitLoadGlobalWord(module, block: entry, label: NetpollPollerLabel, ids: ids)
 
@@ -2138,8 +2138,8 @@ function buildNetpollChildClose(module StdModule, target Target)
 	var doneBlock = module.addBlock(func, label: b"npchdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let source = 0 as ValueId
-	let token = 1 as ValueId
+	let source = 0
+	let token = 1
 
 	// ⛔⛔ **THE ORDER IS THE SHAPE'S, AND EACH HAS ITS OWN REASON FOR ITS OWN.**
 	match netpollShape(target) 'give'
@@ -2305,7 +2305,7 @@ function buildNetpollSourceKeyRelease(module StdModule)
 	var known = module.addBlock(func, label: b"npkrknown", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let key = 0 as ValueId
+	let key = 0
 
 	// Every key handed here was adopted, and an adoption carves the record — so no record means a caller
 	// released a key it never opened.
@@ -2371,7 +2371,7 @@ function buildNetpollOpClose(module StdModule)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let source = 0 as ValueId
+	let source = 0
 
 	emitStoreField(module, block: entry, record: emitLoadCurrentGt(module, block: entry, ids: ids), offset: GtOffIoSource, value: emitConst(module, block: entry, value: 0, ids: ids))
 	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: NetpollPdReleaseName, args: argsOf(source)))
@@ -2392,7 +2392,7 @@ function buildNetpollOpWake(module StdModule)
 	var doneBlock = module.addBlock(func, label: b"npowdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let gt = 0 as ValueId
+	let gt = 0
 
 	emitSchedLockEnter(module, block: entry, ids: ids)
 	let key = emitLoadField(module, block: entry, record: gt, offset: GtOffIoSource, ids: ids)
@@ -2432,9 +2432,9 @@ function buildNetpollOpAim(module StdModule)
 	var known = module.addBlock(func, label: b"npoaknown", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
-	let source = 0 as ValueId
-	let mode = 1 as ValueId
-	let handle = 2 as ValueId
+	let source = 0
+	let mode = 1
+	let handle = 2
 
 	// An operation aimed at a record nobody opened would complete into a packet the decode drops, and the thread
 	// would wait for a wake that cannot come.
@@ -2540,7 +2540,7 @@ function buildNetpollChildFired(module StdModule)
 	var posted = module.addBlock(func, label: b"npcfposted", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let source = 0 as ValueId
+	let source = 0
 
 	let poller = emitLoadGlobalWord(module, block: entry, label: NetpollPollerLabel, ids: ids)
 	let answer = emitNetpoll(module, block: entry, verb: NetpollVerb.postChildExit, operands: twoArgs(poller, second: source), ids: ids)
@@ -2583,7 +2583,7 @@ function buildNetpollPipeOpen(module StdModule, target Target)
 	var doneBlock = module.addBlock(func, label: b"nppipedone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let fd = 0 as ValueId
+	let fd = 0
 
 	// A stream with no pipe carries a 0 read end (`PosixRuntime.PosixNoPipeDescriptor`), which is the one
 	// descriptor number this runtime uses as an absence.
@@ -2632,7 +2632,7 @@ function buildNetpollPipeClose(module StdModule, target Target)
 	var doneBlock = module.addBlock(func, label: b"nppipecldone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let fd = 0 as ValueId
+	let fd = 0
 
 	emitNetpollBranchOnPipe(module, block: entry, fd: fd, present: havePipe, absent: doneBlock, ids: ids)
 
@@ -2694,10 +2694,10 @@ end 'emitNetpollBranchOnPipe'
 // `stale` is `__np_pd_wait_any`'s third answer: 1 when it refused the group because a member's record had left
 // the life the caller began its operation in (`GroupSlotGen`), 0 on every other road. It is the caller's to
 // read after a 0, which an expired or renounced wait also answers.
-let GroupOffCount = 0 as ByteOffset
-let GroupOffDeadline = 8 as ByteOffset
-let GroupOffFired = 16 as ByteOffset
-let GroupOffStale = 24 as ByteOffset
+let GroupOffCount = 0
+let GroupOffDeadline = 8
+let GroupOffFired = 16
+let GroupOffStale = 24
 let GroupOffArgs = 32 as ByteOffset
 
 // The most members a group may hold: `__np_pd_wait_any` answers one bit per member in a 64-bit word. EXPORTED
@@ -2717,8 +2717,8 @@ export let NetpollGroupMaxMembers = 64 as FullRangeInt
 // thread into the new owner's direction word (`emitPdMarkStands`). `subpRelease` is a public builtin,
 // `__np_pipe_close` reaches `__np_pd_release`, and co-ownership of a handle under a parked operation is what the
 // socket band documents as ordinary, so the stamp must predate the gap.
-let GroupSlotArg = 0 as ByteOffset
-let GroupSlotGen = 8 as ByteOffset
+let GroupSlotArg = 0
+let GroupSlotGen = 8
 let GroupSlotBytes = 16 as FullRangeInt
 
 // The deadline a multi-source wait armed, or 0 for one that armed none — read off the group its park note
@@ -2894,7 +2894,7 @@ function buildNetpollPdWaitAny(module StdModule)
 	var doneBlock = module.addBlock(func, label: b"npgadone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let group = 0 as ValueId
+	let group = 0
 
 	emitSchedLockEnter(module, block: entry, ids: ids)
 	let count = emitLoadField(module, block: entry, record: group, offset: GroupOffCount, ids: ids)
@@ -2967,7 +2967,7 @@ function buildNetpollGroupUnhook(module StdModule)
 	var doneBlock = module.addBlock(func, label: b"npgudone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let gt = 0 as ValueId
+	let gt = 0
 
 	let group = emitLoadField(module, block: entry, record: gt, offset: GtOffParkArg, ids: ids)
 	let count = emitLoadField(module, block: entry, record: group, offset: GroupOffCount, ids: ids)

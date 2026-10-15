@@ -712,8 +712,12 @@ export type Wrapper
 	end 'at'
 end 'Wrapper'
 
+function seed() returns Idx
+	return 2
+end 'seed'
+
 export function base() returns ExitCode
-	let n = 2 as Idx
+	let n = seed()
 	return n as ExitCode
 end 'base'
 
@@ -1083,8 +1087,12 @@ module typealias Idx = int(0 to 9)
 export typealias Cb = function(Idx) returns ExitCode
 
 // --- file: a/more.maxon
+function first() returns Idx
+	return 1
+end 'first'
+
 export function seed() returns ExitCode
-	let i = 1 as Idx
+	let i = first()
 	return i as ExitCode
 end 'seed'
 
@@ -1092,8 +1100,7 @@ end 'seed'
 typealias Idx = int(0 to 3)
 
 module function f(cb Cb) returns ExitCode
-	let k = 2 as Idx
-	return cb(7) + (k as ExitCode)
+	return cb(7) + ((2 as Idx) as ExitCode)
 end 'f'
 
 // --- file: b/run.maxon

@@ -167,8 +167,12 @@ Stack trace:
 typealias Half = bits(32)
 typealias Word = bits(64)
 
+function seed() returns Half
+	return 0xDEADBEEF
+end 'seed'
+
 function main() returns ExitCode
-	let h = 0xDEADBEEF as Half
+	let h = seed()
 	print("{h as Word}\n")
 	return 0
 end 'main'

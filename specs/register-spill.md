@@ -1602,14 +1602,14 @@ function eight(a Wide, b Wide, c Wide, d Wide, e Wide, f Wide, g Wide, h Wide) r
 end 'eight'
 
 function install(p Wide) returns Wide
-	let c0 = 5000000000 as Wide
-	let c1 = 5000007919 as Wide
-	let c2 = 5000015838 as Wide
-	let c3 = 5000023757 as Wide
-	let c4 = 5000031676 as Wide
-	let c5 = 5000039595 as Wide
-	let c6 = 5000047514 as Wide
-	let c7 = 5000055433 as Wide
+	let c0 = 5000000000
+	let c1 = 5000007919
+	let c2 = 5000015838
+	let c3 = 5000023757
+	let c4 = 5000031676
+	let c5 = 5000039595
+	let c6 = 5000047514
+	let c7 = 5000055433
 	var total = opaque(p)
 	total = total + eight(c0, b: c1, c: c2, d: c3, e: c4, f: c5, g: c6, h: c7)
 	total = total + opaque(total)

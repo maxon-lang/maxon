@@ -222,6 +222,232 @@ export type LiteralCast
 	// @generated library-cache end
 end 'LiteralCast'
 
+export union LetCastConstant
+	unknown
+	integer(value FullRangeInt)
+	real(bits FullRangeInt)
+end 'LetCastConstant'
+
+// @generated library-cache begin
+function cacheWriteLetCastConstant(writer LibraryCacheWriter, value LetCastConstant)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		unknown then break
+		integer(a0) then cacheWriteLetCastConstantInteger(writer, a0: a0)
+		real(a0) then cacheWriteLetCastConstantReal(writer, a0: a0)
+	end 'payload'
+end 'cacheWriteLetCastConstant'
+
+function cacheWriteLetCastConstantInteger(writer LibraryCacheWriter, a0 FullRangeInt)
+	writer.signed(a0 as CacheSigned)
+end 'cacheWriteLetCastConstantInteger'
+
+function cacheWriteLetCastConstantReal(writer LibraryCacheWriter, a0 FullRangeInt)
+	writer.signed(a0 as CacheSigned)
+end 'cacheWriteLetCastConstantReal'
+
+function cacheReadLetCastConstant(reader LibraryCacheReader) returns LetCastConstant throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives LetCastConstant.unknown
+		1 gives try cacheReadLetCastConstantInteger(reader)
+		2 gives try cacheReadLetCastConstantReal(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadLetCastConstant'
+
+function cacheReadLetCastConstantInteger(reader LibraryCacheReader) returns LetCastConstant throws LibraryCacheDamage
+	let a0 = (try reader.signed()) as FullRangeInt
+
+	return LetCastConstant.integer(a0)
+end 'cacheReadLetCastConstantInteger'
+
+function cacheReadLetCastConstantReal(reader LibraryCacheReader) returns LetCastConstant throws LibraryCacheDamage
+	let a0 = (try reader.signed()) as FullRangeInt
+
+	return LetCastConstant.real(a0)
+end 'cacheReadLetCastConstantReal'
+
+// @generated library-cache end
+
+// `wholeFile` covers every function's lines, so a scope left unstamped only counts more mentions and
+// keeps the cast.
+export union LetCastScope
+	wholeFile
+	lines(first LineNumber, last LineNumber)
+end 'LetCastScope'
+
+// @generated library-cache begin
+function cacheWriteLetCastScope(writer LibraryCacheWriter, value LetCastScope)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		wholeFile then break
+		lines(a0, a1) then cacheWriteLetCastScopeLines(writer, a0: a0, a1: a1)
+	end 'payload'
+end 'cacheWriteLetCastScope'
+
+function cacheWriteLetCastScopeLines(writer LibraryCacheWriter, a0 LineNumber, a1 LineNumber)
+	writer.unsigned(a0 as CacheUnsigned)
+	writer.unsigned(a1 as CacheUnsigned)
+end 'cacheWriteLetCastScopeLines'
+
+function cacheReadLetCastScope(reader LibraryCacheReader) returns LetCastScope throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives LetCastScope.wholeFile
+		1 gives try cacheReadLetCastScopeLines(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadLetCastScope'
+
+function cacheReadLetCastScopeLines(reader LibraryCacheReader) returns LetCastScope throws LibraryCacheDamage
+	let a0 = (try reader.unsigned()) as LineNumber
+	let a1 = (try reader.unsigned()) as LineNumber
+
+	return LetCastScope.lines(a0, last: a1)
+end 'cacheReadLetCastScopeLines'
+
+// @generated library-cache end
+
+export type LetCastSubject
+	export let cast as LiteralCast
+	export let name as ByteArray
+	export let declFile as FilePath
+	export var scope as LetCastScope
+	export let constant as LetCastConstant
+
+	export static function create(cast LiteralCast, name ByteArray, declFile FilePath, scope LetCastScope, constant LetCastConstant) returns LetCastSubject
+		return Self{cast: cast, name: name, declFile: declFile, scope: scope, constant: constant}
+	end 'create'
+
+	export function identity() returns String
+		return "{self.declFile.toString()}:{self.cast.asRange.startByte}"
+	end 'identity'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		self.cast.cacheWrite(writer)
+		writer.bytes(self.name)
+		writer.text(self.declFile.toString())
+		cacheWriteLetCastScope(writer, value: self.scope)
+		cacheWriteLetCastConstant(writer, value: self.constant)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns LetCastSubject throws LibraryCacheDamage
+		let f_cast = try LiteralCast.cacheRead(reader)
+		let f_name = try reader.bytes()
+		let f_declFile = try reader.path()
+		let f_scope = try cacheReadLetCastScope(reader)
+		let f_constant = try cacheReadLetCastConstant(reader)
+
+		return Self{cast: f_cast, name: f_name, declFile: f_declFile, scope: f_scope, constant: f_constant}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize40
+		return sizeof(LetCastSubject) as CacheSize40
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
+end 'LetCastSubject'
+
+export type LetCastRead
+	export let subject as LetCastSubject
+	export let site as ByteOffset
+	export var claimed as bool
+
+	export static function create(subject LetCastSubject, site ByteOffset) returns LetCastRead
+		return Self{subject: subject, site: site, claimed: false}
+	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		self.subject.cacheWrite(writer)
+		writer.unsigned(self.site as CacheUnsigned)
+		writer.flag(self.claimed)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns LetCastRead throws LibraryCacheDamage
+		let f_subject = try LetCastSubject.cacheRead(reader)
+		let f_site = (try reader.unsigned()) as ByteOffset
+		let f_claimed = try reader.flag()
+
+		return Self{subject: f_subject, site: f_site, claimed: f_claimed}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize24
+		return sizeof(LetCastRead) as CacheSize24
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
+end 'LetCastRead'
+
+export typealias LetCastReadArray = Array with LetCastRead
+
+// @generated library-cache begin
+function cacheWriteLetCastReadArray(writer LibraryCacheWriter, value LetCastReadArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteLetCastReadArray'
+
+function cacheReadLetCastReadArray(reader LibraryCacheReader) returns LetCastReadArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = LetCastReadArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try LetCastRead.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadLetCastReadArray'
+
+// @generated library-cache end
+
+export union LetCastDeclaration
+	none
+	declared(subject LetCastSubject)
+end 'LetCastDeclaration'
+
+// @generated library-cache begin
+export function cacheWriteLetCastDeclaration(writer LibraryCacheWriter, value LetCastDeclaration)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		none then break
+		declared(a0) then cacheWriteLetCastDeclarationDeclared(writer, a0: a0)
+	end 'payload'
+end 'cacheWriteLetCastDeclaration'
+
+function cacheWriteLetCastDeclarationDeclared(writer LibraryCacheWriter, a0 LetCastSubject)
+	a0.cacheWrite(writer)
+end 'cacheWriteLetCastDeclarationDeclared'
+
+export function cacheReadLetCastDeclaration(reader LibraryCacheReader) returns LetCastDeclaration throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives LetCastDeclaration.none
+		1 gives try cacheReadLetCastDeclarationDeclared(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadLetCastDeclaration'
+
+function cacheReadLetCastDeclarationDeclared(reader LibraryCacheReader) returns LetCastDeclaration throws LibraryCacheDamage
+	let a0 = try LetCastSubject.cacheRead(reader)
+
+	return LetCastDeclaration.declared(a0)
+end 'cacheReadLetCastDeclarationDeclared'
+
+// @generated library-cache end
+
 export typealias LiteralCastMap = Map with (ValueId, LiteralCast)
 
 // @generated library-cache begin
@@ -2569,9 +2795,11 @@ export type FunctionPlaceholders
 
 	export var noLiteralCastArguments as LiteralCastMap
 
+	export var noLetCastReads as LetCastReadArray
+
 	export static function create() returns FunctionPlaceholders
 		let provenance = ProvenanceColumns.create()
-		return Self{provenance: provenance, noSites: ProvenanceSites.create(provenance), noFiledProvenance: FiledProvenance.none, paramGuards: RangeCheckParamGuardArray.create(), inlineSites: InlineSiteArray.create(), mintedSole: BoolArray.create(), noArgumentOverlaps: ArgumentOverlapSiteArray.create(), noLiteralCastArguments: LiteralCastMap.create()}
+		return Self{provenance: provenance, noSites: ProvenanceSites.create(provenance), noFiledProvenance: FiledProvenance.none, paramGuards: RangeCheckParamGuardArray.create(), inlineSites: InlineSiteArray.create(), mintedSole: BoolArray.create(), noArgumentOverlaps: ArgumentOverlapSiteArray.create(), noLiteralCastArguments: LiteralCastMap.create(), noLetCastReads: LetCastReadArray.create()}
 	end 'create'
 end 'FunctionPlaceholders'
 
@@ -3019,6 +3247,8 @@ export type IrFunction
 	// first E3186 site; a push into the placeholder would file that site on every function sharing it.
 	export var argumentOverlaps as ArgumentOverlapSiteArray
 
+	export var letCastReads as LetCastReadArray
+
 	// ⭐⭐ **THE ENTRY CASCADES `InsertRangeChecks` EMITTED FOR THIS FUNCTION'S NARROWED PARAMETERS** —
 	// see `RangeCheckParamGuard`. EMPTY until that pass runs, and empty afterwards for every function with no
 	// narrowed parameter; it therefore survives `shallowCopy`/`relocateFunction` as the shared empty by
@@ -3139,6 +3369,7 @@ export type IrFunction
 			bodySplicedAway: false,
 			usesValueTupleReturn: false,
 			argumentOverlaps: placeholders.noArgumentOverlaps,
+			letCastReads: placeholders.noLetCastReads,
 			paramGuards: placeholders.paramGuards,
 			inlineSites: placeholders.inlineSites,
 			debugLocals: DebugLocalDeclArray.create(),
@@ -3222,6 +3453,7 @@ export type IrFunction
 			bodySplicedAway: false,
 			usesValueTupleReturn: false,
 			argumentOverlaps: ArgumentOverlapSiteArray.create(),
+			letCastReads: LetCastReadArray.create(),
 			paramGuards: RangeCheckParamGuardArray.create(),
 			inlineSites: InlineSiteArray.create(),
 			debugLocals: DebugLocalDeclArray.create(),
@@ -3296,6 +3528,7 @@ export type IrFunction
 			bodySplicedAway: src.bodySplicedAway,
 			usesValueTupleReturn: src.usesValueTupleReturn,
 			argumentOverlaps: src.argumentOverlaps,
+			letCastReads: src.letCastReads,
 			// NOT carried, and it cannot need to be: every copy of a function is made at or before the
 			// lowering (`relocateFunction` is `IrModule.merge`'s), and this column is filled by
 			// `InsertRangeChecks`, which runs after the last of them. A copy that carried it would carry
@@ -3564,6 +3797,7 @@ export type IrFunction
 		self.valueExistentialInstances = ValueExistentialInstanceMap.create()
 		self.valueCallInstances = ValueCallInstanceMap.create()
 		self.literalCastArguments = LiteralCastMap.create()
+		self.letCastReads = LetCastReadArray.create()
 		self.deferredArgumentBindings = DeferredArgumentBindingArray.create()
 		self.conditionalOps = ConditionalOpArray.create()
 		self.conditionalRefusals = ConditionalRefusalArray.create()
@@ -3631,6 +3865,7 @@ export type IrFunction
 		writer.flag(self.usesValueTupleReturn)
 		writer.unsigned(self.reassignedParamMask as CacheUnsigned)
 		cacheWriteArgumentOverlapSiteArray(writer, value: self.argumentOverlaps)
+		cacheWriteLetCastReadArray(writer, value: self.letCastReads)
 		cacheWriteRangeCheckParamGuardArray(writer, value: self.paramGuards)
 		cacheWriteInlineSiteArray(writer, value: self.inlineSites)
 		cacheWriteDebugLocalDeclArray(writer, value: self.debugLocals)
@@ -3692,6 +3927,7 @@ export type IrFunction
 		let f_usesValueTupleReturn = try reader.flag()
 		let f_reassignedParamMask = (try reader.unsigned()) as ParamPositionMask
 		let f_argumentOverlaps = try cacheReadArgumentOverlapSiteArray(reader)
+		let f_letCastReads = try cacheReadLetCastReadArray(reader)
 		let f_paramGuards = try cacheReadRangeCheckParamGuardArray(reader)
 		let f_inlineSites = try cacheReadInlineSiteArray(reader)
 		let f_debugLocals = try cacheReadDebugLocalDeclArray(reader)
@@ -3699,11 +3935,11 @@ export type IrFunction
 		let f_debugLocalLocations = try cacheReadDebugValueLocationArray(reader)
 		let f_debugLocalRanges = try cacheReadDebugValueRangeArray(reader)
 
-		return Self{name: f_name, visibility: f_visibility, sourceFilePath: f_sourceFilePath, paramCount: f_paramCount, blockRefs: f_blockRefs, nextBlockId: f_nextBlockId, nameLine: f_nameLine, nameColumn: f_nameColumn, closeLine: f_closeLine, closeColumn: f_closeColumn, needsGreenThreadStackGuard: f_needsGreenThreadStackGuard, keepsItsOwnFrame: f_keepsItsOwnFrame, pinsItsThread: f_pinsItsThread, mustBeSplicedAtEverySite: f_mustBeSplicedAtEverySite, closureLayout: f_closureLayout, closureFixedElementCount: f_closureFixedElementCount, closureEnvFields: f_closureEnvFields, closureStoreSites: f_closureStoreSites, maxonReturnType: f_maxonReturnType, maxonParamTypes: f_maxonParamTypes, valueTags: f_valueTags, valueNameIds: f_valueNameIds, valueBrandIds: f_valueBrandIds, valueMintedSole: f_valueMintedSole, filedProvenance: f_filedProvenance, valueColumnsArePrivate: f_valueColumnsArePrivate, valueWitnessIds: f_valueWitnessIds, valueExistentialInstances: f_valueExistentialInstances, valueCallInstances: f_valueCallInstances, literalCastArguments: f_literalCastArguments, deferredArgumentBindings: f_deferredArgumentBindings, conditionalOps: f_conditionalOps, conditionalRefusals: f_conditionalRefusals, existentialFieldStores: f_existentialFieldStores, throwsTypeName: f_throwsTypeName, scope: f_scope, returnType: f_returnType, paramTypes: f_paramTypes, varSlotCount: f_varSlotCount, stackSize: f_stackSize, outgoingArgSize: f_outgoingArgSize, closureSubCounter: f_closureSubCounter, writtenParamMask: f_writtenParamMask, writesThroughParamMask: f_writesThroughParamMask, brandOriginValues: f_brandOriginValues, brandOriginKeys: f_brandOriginKeys, writesModuleStorage: f_writesModuleStorage, bodyWasSkippedAsUnreached: f_bodyWasSkippedAsUnreached, bodySplicedAway: f_bodySplicedAway, usesValueTupleReturn: f_usesValueTupleReturn, reassignedParamMask: f_reassignedParamMask, argumentOverlaps: f_argumentOverlaps, paramGuards: f_paramGuards, inlineSites: f_inlineSites, debugLocals: f_debugLocals, ownsItsDebugLocals: f_ownsItsDebugLocals, debugLocalLocations: f_debugLocalLocations, debugLocalRanges: f_debugLocalRanges}
+		return Self{name: f_name, visibility: f_visibility, sourceFilePath: f_sourceFilePath, paramCount: f_paramCount, blockRefs: f_blockRefs, nextBlockId: f_nextBlockId, nameLine: f_nameLine, nameColumn: f_nameColumn, closeLine: f_closeLine, closeColumn: f_closeColumn, needsGreenThreadStackGuard: f_needsGreenThreadStackGuard, keepsItsOwnFrame: f_keepsItsOwnFrame, pinsItsThread: f_pinsItsThread, mustBeSplicedAtEverySite: f_mustBeSplicedAtEverySite, closureLayout: f_closureLayout, closureFixedElementCount: f_closureFixedElementCount, closureEnvFields: f_closureEnvFields, closureStoreSites: f_closureStoreSites, maxonReturnType: f_maxonReturnType, maxonParamTypes: f_maxonParamTypes, valueTags: f_valueTags, valueNameIds: f_valueNameIds, valueBrandIds: f_valueBrandIds, valueMintedSole: f_valueMintedSole, filedProvenance: f_filedProvenance, valueColumnsArePrivate: f_valueColumnsArePrivate, valueWitnessIds: f_valueWitnessIds, valueExistentialInstances: f_valueExistentialInstances, valueCallInstances: f_valueCallInstances, literalCastArguments: f_literalCastArguments, deferredArgumentBindings: f_deferredArgumentBindings, conditionalOps: f_conditionalOps, conditionalRefusals: f_conditionalRefusals, existentialFieldStores: f_existentialFieldStores, throwsTypeName: f_throwsTypeName, scope: f_scope, returnType: f_returnType, paramTypes: f_paramTypes, varSlotCount: f_varSlotCount, stackSize: f_stackSize, outgoingArgSize: f_outgoingArgSize, closureSubCounter: f_closureSubCounter, writtenParamMask: f_writtenParamMask, writesThroughParamMask: f_writesThroughParamMask, brandOriginValues: f_brandOriginValues, brandOriginKeys: f_brandOriginKeys, writesModuleStorage: f_writesModuleStorage, bodyWasSkippedAsUnreached: f_bodyWasSkippedAsUnreached, bodySplicedAway: f_bodySplicedAway, usesValueTupleReturn: f_usesValueTupleReturn, reassignedParamMask: f_reassignedParamMask, argumentOverlaps: f_argumentOverlaps, letCastReads: f_letCastReads, paramGuards: f_paramGuards, inlineSites: f_inlineSites, debugLocals: f_debugLocals, ownsItsDebugLocals: f_ownsItsDebugLocals, debugLocalLocations: f_debugLocalLocations, debugLocalRanges: f_debugLocalRanges}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize464
-		return sizeof(IrFunction) as CacheSize464
+	static function cacheLayoutBytes() returns CacheSize472
+		return sizeof(IrFunction) as CacheSize472
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end

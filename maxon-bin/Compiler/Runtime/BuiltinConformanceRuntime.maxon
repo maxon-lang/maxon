@@ -111,7 +111,7 @@ let IntHashHighHalfMultiplier = 0x9E3779B1
 let NegativeZeroBits = i64.min as FullRangeInt
 
 // What `-0.0` hashes to: `+0.0`'s fold, which is zero because every bit of `+0.0` is.
-let ZeroFloatHash = 0 as FullRangeInt
+let ZeroFloatHash = 0
 
 // djb2 over `String`'s bytes: `h = Djb2Seed`, then `h = h * Djb2Multiplier + b` per byte. The two magic
 // numbers of the algorithm, named rather than bare so the loop reads as djb2. `""` -> `5381`, `"abc"` ->
@@ -502,7 +502,7 @@ function buildIntHash(module StdModule, name ByteArray)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
-	let receiver = 0 as ValueId
+	let receiver = 0
 
 	returnLow32Masked(module, block: entry, value: emitIntHashTerm(module, block: entry, value: receiver, ids: ids), ids: ids)
 
@@ -568,7 +568,7 @@ function buildFloatHash(module StdModule, name ByteArray)
 	var join = module.addBlock(func, label: b"hashed", heat: BlockHeat.normal)
 
 	emitTypedParams(module, block: entry, paramTypes: func.paramTypes)
-	let receiver = 0 as ValueId
+	let receiver = 0
 
 	let bits = emitUnary(module, block: entry, operand: receiver, opcode: StdUnaryOpcode.bitcastF64ToI64, operandType: StdType.f64, ids: ids)
 	let hashed = emitFloatHashInto(module, func: func, entry: entry, bits: bits, join: join, ids: ids)
@@ -680,8 +680,8 @@ function buildBuiltinEquals(module StdModule, name ByteArray, operandType StdTyp
 	var notEqualBlock = module.addBlock(func, label: b"notEqual", heat: BlockHeat.normal)
 
 	emitTypedParams(module, block: entry, paramTypes: func.paramTypes)
-	let receiver = 0 as ValueId
-	let other = 1 as ValueId
+	let receiver = 0
+	let other = 1
 
 	let isEqual = emitCmp(module, block: entry, a: receiver, b: other, pred: StdCmpPred.eq, ids: ids, operandType: operandType)
 	module.setTerminator(entry, op: StdOp.condBranch(isEqual, thenBlockId: equalBlock.id, elseBlockId: notEqualBlock.id))
@@ -764,8 +764,8 @@ function buildOrderingCompare(module StdModule, name ByteArray, operandType StdT
 	var equalBlock = module.addBlock(func, label: b"equal", heat: BlockHeat.normal)
 
 	emitTypedParams(module, block: entry, paramTypes: func.paramTypes)
-	let receiver = 0 as ValueId
-	let other = 1 as ValueId
+	let receiver = 0
+	let other = 1
 
 	emitOrderedCascade(module, head: entry, a: receiver, b: other, operandType: operandType, ordering: ordering, lessBlock: lessBlock, notLessBlock: notLessBlock, greaterBlock: greaterBlock, equalBlock: equalBlock, ids: ids)
 
@@ -804,8 +804,8 @@ function buildFloatCompare(module StdModule, name ByteArray, ordering EnumLayout
 	var equalBlock = module.addBlock(func, label: b"equal", heat: BlockHeat.normal)
 
 	emitTypedParams(module, block: entry, paramTypes: func.paramTypes)
-	let receiver = 0 as ValueId
-	let other = 1 as ValueId
+	let receiver = 0
+	let other = 1
 
 	// The NaN preamble settles two of the three answers before any ordered comparison is meaningful, and
 	// branches STRAIGHT INTO the cascade's own verdict blocks rather than minting a second `ret` of a tag
@@ -877,8 +877,8 @@ export function buildByteRecordCompare(module StdModule, name ByteArray, orderin
 	var equalBlock = module.addBlock(func, label: b"equal", heat: BlockHeat.normal)
 
 	emitTypedParams(module, block: entry, paramTypes: func.paramTypes)
-	let receiver = 0 as ValueId
-	let other = 1 as ValueId
+	let receiver = 0
+	let other = 1
 
 	// Every field the whole body reads is loaded ONCE in `entry`, which dominates every block below — the
 	// two lengths are read again at the length tie, so re-loading them there would be a second read of a
@@ -945,7 +945,7 @@ function buildStrHash(module StdModule, name ByteArray)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let strPtr = 0 as ValueId
+	let strPtr = 0
 
 	// entry: load `buffer@0`/`length@8`, then the shared djb2 walk over those bytes.
 	let buffer = emitLoadField(module, block: entry, record: strPtr, offset: StringBufferOffset, ids: ids)

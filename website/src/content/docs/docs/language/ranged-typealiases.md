@@ -63,10 +63,13 @@ function takesYear(y Year) returns Year
 	return y
 end 'takesYear'
 
+function yearOfAge(a Age) returns Year
+	// return takesYear(a)            // E3005: argument type mismatch for 'y': expected 'Year', got 'Age'
+	return takesYear(a as Year)       // the cast converts
+end 'yearOfAge'
+
 function main() returns ExitCode
-	let a = 30 as Age
-	// takesYear(a)                   // E3005: argument type mismatch for 'y': expected 'Year', got 'Age'
-	print("{takesYear(a as Year)}\n") // the cast converts
+	print("{yearOfAge(30)}\n")        // 30
 	return 0
 end 'main'
 ```
@@ -169,9 +172,13 @@ A cast to a different alias of the same name converts and is legal: this file's 
 parameter declared with another file's `Item = int(0 to 255)`, or an alias nested in a type or extension
 body at a place declared with a file-scope one.
 
+A literal cast in an unannotated `let` (`let p = 8080 as Port`) is **E3010** when every use of the `let`
+takes the plain constant the same way (`unneeded cast: the literal 8080 already fits every use of 'p'`):
+`let p = 8080` already fits each use. A `public`, `export` or `module` `let` keeps its cast, and so does one a closure captures.
+
 A literal cast is how a type is fixed where nothing declares one, and there it is legal: an unannotated
-`let`/`var` (`let p = 8080 as Port`), a field default whose type the cast gives (`var port = 8080 as Port`),
-an array-literal element, an argument or field of a generic type parameter, an operator operand, and a value
+`var` (`var p = 8080 as Port`), a `let` some use of which needs the alias, a field default whose type the
+cast gives (`var port = 8080 as Port`), an array-literal element, an argument or field of a generic type parameter, an operator operand, and a value
 joined by `if`/`else`, `gives` or `otherwise`. At an overloaded
 call, the unneeded literal casts of one call are reported together, and only when removing all of them
 still selects the same overload — a cast that decides which overload runs is needed.
@@ -205,7 +212,7 @@ function main() returns ExitCode
 	let bumped = a + 1           // Score: the literal adopts the alias
 	let mixed = a + (m as Score) // cast one side
 	// let bad = a + m           // E3005: 'Score' and 'Meters' are different typealiases
-	print("{sum} {bumped} {mixed}\n")
+	print("{sum} {bumped} {mixed} {m}\n")
 	return 0
 end 'main'
 ```

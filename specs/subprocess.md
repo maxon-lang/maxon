@@ -1498,8 +1498,8 @@ typealias SubP = Promise with (CollectedOutput, SubprocessError)
 typealias SubPArray = Array with SubP
 typealias ChildTally = int(0 to 4)
 
-let ChildCount = 4 as ChildTally
-let SpreadAllowanceInFirstCompletions = 2 as DurationMs
+let ChildCount = 4
+let SpreadAllowanceInFirstCompletions = 2
 
 function sleepArgs() returns StringArray
 	var argv = StringArray.create()

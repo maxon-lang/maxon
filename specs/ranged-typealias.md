@@ -1792,8 +1792,7 @@ API, so user code must be able to name them in an `as` cast — `5 as ElementInd
 resolves rather than being refused as a typealias that is not exported.
 ```maxon
 function main() returns ExitCode
-	let n = 5 as ElementIndex
-	return n as ExitCode
+	return (5 as ElementIndex) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -2121,7 +2120,9 @@ typealias SmallByte = int(0 to 10)
 let GOOD = 7 as SmallByte
 
 function main() returns ExitCode
-	return GOOD as ExitCode
+	var value = GOOD
+	value = value + 0
+	return value as ExitCode
 end 'main'
 ```
 ```exitcode

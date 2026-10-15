@@ -565,7 +565,7 @@ export let MSyscallStolen = 2 as FullRangeInt
 
 // The two state bits together. A word whose state bits are ALL ZERO is a machine running ordinary Maxon code,
 // which is the arena's zero and therefore already right for a machine before its first shimmed call.
-let MSyscallStateMask = 3 as FullRangeInt
+let MSyscallStateMask = 3
 
 // One generation — the first bit above the state bits, so adding it steps the generation and leaves the state
 // alone, which is the property `MSyscallEnterDelta` is built out of.
@@ -684,7 +684,7 @@ let MOffLockedPark = MOffLockedGt + PointerSlotBytes
 
 let MOffLockedStrand = MOffLockedPark + PointerSlotBytes
 
-let MLockedParkWaiting = 1 as FullRangeInt
+let MLockedParkWaiting = 1
 
 export let MOffOsThreadUniqueId = MOffLockedStrand + PointerSlotBytes
 
@@ -728,8 +728,8 @@ let MStructSize = ((MOffOsThreadUniqueId + PointerSlotBytes) as FullRangeInt)
 // ⚠ NEITHER IS EXPORTED: *"does this ring hold anything?"* is asked through `emitSchedAnyRunnable` and
 // `__sched_any_work`, because where the ring keeps its counters and what makes it empty belong to the file
 // that owns the P.
-let POffRunqHead = 0x00 as ByteOffset
-let POffRunqTail = 0x08 as ByteOffset
+let POffRunqHead = 0x00
+let POffRunqTail = 0x08
 let POffReservedLocalQueueLen = 0x10 as ByteOffset
 
 // ⭐⭐ **A RESERVED `currentGt` SLOT — the running green thread lives on the M (`MOffCurrentGt`).** A global
@@ -751,7 +751,7 @@ export let POffId = 0x20 as ByteOffset
 // The xorshift state a work-stealing P picks its victim with — its first reader arrived with the stealing
 // rounds in `__sched_find_runnable`. Seeded to `id + 1` at init, because a zero xorshift state is a FIXED
 // POINT: a P seeded 0 would draw 0 for ever and always try to steal from P[0].
-let POffRng = 0x28 as ByteOffset
+let POffRng = 0x28
 
 // ⭐⭐ **A RESERVED PARK-FLAG SLOT, AND NOTHING HERE HAS A TWIN OF IT.** It would be one half of a Dekker
 // pair: 1 meaning *"this M has published that it is about to block on `wakeEvent`"*,
@@ -803,9 +803,9 @@ let POffReservedOsThreadHandle = 0x40 as ByteOffset
 // the same two doors, in the same
 // critical section, which is the shape `MOffSpinning` and `__sched_nmspinning` already have: a per-party bit
 // beside a collective structure, with one door for the pair.
-let POffStatus = 0x48 as ByteOffset
-let PStatusUnused = 0 as FullRangeInt
-let PStatusActive = 1 as FullRangeInt
+let POffStatus = 0x48
+let PStatusUnused = 0
+let PStatusActive = 1
 
 // Reserved: part of the portable header, and nothing reads or writes it.
 let POffReservedPendingWaiter = 0x50 as ByteOffset
@@ -825,14 +825,14 @@ let POffReservedPendingWaiter = 0x50 as ByteOffset
 // ⚠ **ONLY THE OWNING MACHINE FILLS IT AND EITHER SIDE MAY EMPTY IT, SO EVERY ACCESS IS A CAS.**
 // `__sched_runq_put` stores, `__sched_runq_next` and a thief's last steal round each take by compare-and-swap,
 // and exactly one of the two can win a given thread.
-let POffRunnext = 0x58 as ByteOffset
+let POffRunnext = 0x58
 
 // ⭐ **THIS P's GT-RECORD FREE LIST — Go's `p.gFree`, a LIFO threaded through `GtRuntime.GtOffNext`.**
 // `__gt_free_put` pushes a reclaimed record here and `__gt_free_get` pops one for the next spawn. Plain loads
 // and stores: only the M holding this P touches either word, and neither door contains a bracketed kernel
 // call, so a retake cannot move the P out from under one.
 let POffFreeListHead = 0x60 as ByteOffset
-let POffFreeListLen = 0x68 as ByteOffset
+let POffFreeListLen = 0x68
 
 // ⭐⭐ **A RESERVED SYSCALL-STACK SLOT — the scratch stack lives on the M (`MOffSystemStackSP`), AND THIS
 // SLOT IS THE WHOLE ARGUMENT FOR THAT.** A per-P scratch stack is only as sound as *"an M can only reach its
@@ -1085,11 +1085,11 @@ let StealRunNextRound = StealRounds - 1
 // pause gives the victim's machine time to reach its own scheduler and run the thread itself, rather than
 // having it thrashed to another processor. Go's own margin: a channel hand-off is ~50 ns, so 3 µs overshoots
 // by ~50×.
-let StealRunNextBackoffUs = 3 as FullRangeInt
+let StealRunNextBackoffUs = 3
 
 // Whether the thread `__sched_find_runnable` hands back carries the running slice on with it (`POffRunnext`).
-let SchedSliceInherited = 1 as FullRangeInt
-let SchedSliceFresh = 0 as FullRangeInt
+let SchedSliceInherited = 1
+let SchedSliceFresh = 0
 
 // ⭐ **THE MOST GREEN THREADS ONE GRAB TAKES OFF THE GLOBAL QUEUE — half a ring, Go's first term
 // (`proc.go:3492`, `globrunqgetbatch(int32(len(pp.runq)) / 2)`).** The grab is `min(this, size,
@@ -1102,12 +1102,12 @@ let GlobalBatchMax = RunqHalfSlots
 // takes `__sched_lock`, pushes, and moves records to the global list until the local one is back at the low
 // mark; a get that finds the local list empty moves up to the low mark back. The gap between the two is what keeps a spawn/reclaim rhythm near either mark from taking
 // `__sched_lock` on every record.
-let GtFreeLocalHigh = 64 as FullRangeInt
-let GtFreeLocalLow = 32 as FullRangeInt
+let GtFreeLocalHigh = 64
+let GtFreeLocalLow = 32
 
 // ⭐ **ONE SCHEDULER-ARENA CHUNK: 64 KiB, Windows' allocation granularity**, so no reservation strands address
 // space, and a whole multiple of every lane's page. A tail too short for the next carve is never carved.
-let SchedArenaChunkBytes = 65536 as FullRangeInt
+let SchedArenaChunkBytes = 65536
 
 // ==========================================================================
 // The `.data` slots
@@ -1172,7 +1172,7 @@ let SchedMcountLabel = b"__sched_mcount"
 // machine is an OS thread with its own 64 KB syscall stack and event, and none is ever reclaimed, so a
 // runaway spawn arm would otherwise exhaust the address space and fail somewhere unrelated. Reaching it aborts
 // with `RuntimeAbort.schedulerThreadExhaustion`, which is Go's `throw("thread exhaustion")`.
-let SchedMaxMachines = 10000 as FullRangeInt
+let SchedMaxMachines = 10000
 
 // ⭐⭐⭐ **THE IDLE-M LIST — Go's `sched.midle`, doubly linked through `MOffIdleNext`/`MOffIdlePrev`.** An M
 // with nothing to run puts itself here and blocks on its own `MOffParkEvent`; a `startm` takes one off and
@@ -1380,13 +1380,13 @@ let SchedForcePreemptNs = 10 * 1000 * 1000 as FullRangeInt
 // in a row have retaken nothing, capped at 10 ms.** A short first interval notices a blocking call soon after
 // it starts; the back-off keeps a process that is not blocking from paying a thread wake every 20 µs. The
 // sleep is `NetpollVerb.sleepOnTimer`, the one wait fine enough for the floor on every lane.
-let SysmonMinSleepUs = 20 as FullRangeInt
+let SysmonMinSleepUs = 20
 let SysmonMaxSleepUs = 10 * 1000 as FullRangeInt
 
 // How many consecutive laps that retook nothing start the back-off. Go's 50, and the same reasoning: a process
 // that has not blocked in fifty laps is one whose next block can afford to be noticed a little later. Any
 // retake snaps the interval straight back to `SysmonMinSleepUs`.
-let SysmonIdlePollsBeforeBackoff = 50 as FullRangeInt
+let SysmonIdlePollsBeforeBackoff = 50
 
 // ⭐ **HOW LONG THE POLLER MAY GO UNPOLLED BEFORE THE MONITOR LOOKS ITSELF — Go's 10 ms.** While every machine
 // is busy nobody waits in the poller, so an event there would wait for a machine to go idle; the monitor takes
@@ -1562,7 +1562,7 @@ export let SchedPreemptContextLabel = b"__sched_preempt_context"
 
 // A page. An x64 `CONTEXT` is 1232 bytes and `osAllocPages` has no finer unit, so the reservation is stated
 // as what it actually takes rather than as a struct size the Std tier has no other use for.
-let SchedPreemptContextBytes = 0x1000 as FullRangeInt
+let SchedPreemptContextBytes = 0x1000
 
 // ⭐⭐ **`__gt_preempt_self_register(m)` — WHAT A NEW MACHINE RECORDS ABOUT ITS OWN THREAD SO THE MONITOR CAN
 // STOP IT.** A hand-assembled chunk per lane, because what it records is the host's: on x64-windows the
@@ -2190,7 +2190,7 @@ let PreemptEnvOnValue = b"on"
 // The first scratch one `GetEnvironmentVariableW` of a scheduler setting gets. A switch value that fills
 // it is not a switch value, so `emitResolvePreemptSwitch` refuses it; a processor count may carry any
 // number of leading zeros, so `emitResolveMaxProcs` reads a longer one again at the size the OS reports.
-let SchedEnvValueBufBytes = 32 as FullRangeInt
+let SchedEnvValueBufBytes = 32
 
 // ⭐⭐ **THE BASE OF THIS OS THREAD'S PER-THREAD SLOT ARRAY — the one number that turns `tlsAlloc`'s answer
 // into the byte offset `tlsSlotLoad` reads at.** `__sched_init_procs` computes `index * 8 + base` once and
@@ -2235,7 +2235,7 @@ function noTlsSlotArray(os Os) returns FullRangeInt
 end 'noTlsSlotArray'
 
 let WindowsTebTlsSlotsOffset = 0x1480 as FullRangeInt
-let WindowsTebTlsSlotCount = 64 as FullRangeInt
+let WindowsTebTlsSlotCount = 64
 let DarwinTsdArrayBase = 0 as FullRangeInt
 
 function emitRequireAddressableTlsSlot(module StdModule, func IrFunction, cur IrBlock, tlsIndex ValueId, target Target, ids ValueMinter) returns IrBlock
@@ -3162,7 +3162,7 @@ end 'emitSchedAdoptProc'
 // The floor a processor count never answers below, spelled here because this is the only Std builder that
 // clamps one. `runtime/CpuParallel.maxon` states the same number for the entry point a program reads: no
 // name crosses the tier boundary.
-let MinimumProcessorCount = 1 as FullRangeInt
+let MinimumProcessorCount = 1
 
 // The counts `MAXON_MAX_PROCS` is honoured at; `emitParseRequestedProcessorCount` ignores any other
 // value. The spec harness and `debug_start` refuse a count outside it, which would be dropped silently.
@@ -3467,7 +3467,7 @@ function emitSchedRunqIs(module StdModule, block IrBlock, p ValueId, pred StdCmp
 end 'emitSchedRunqIs'
 
 // `__sched_runq_empty`'s YES, which every caller reaches through `emitSchedRunqIs` and none spells itself.
-let SchedRunqIsEmpty = 1 as FullRangeInt
+let SchedRunqIsEmpty = 1
 
 // ⭐⭐ **DOES THIS PROCESSOR'S RUN QUEUE OR THE GLOBAL QUEUE HOLD A TOKEN RIGHT NOW?** Asked by a machine whose
 // own poll may have readied something (`widlefire`, choosing between searching again and parking), and by
@@ -3687,7 +3687,7 @@ function buildSchedRunqGet(module StdModule)
 	var emptyBlock = module.addBlock(func, label: b"rgempty", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let p = 0 as ValueId
+	let p = 0
 	module.setTerminator(entry, op: StdOp.branch(loopHdr.id))
 
 	let head = emitLoadAcquireField(module, block: loopHdr, record: p, offset: POffRunqHead, ids: ids)
@@ -3728,7 +3728,7 @@ function buildSchedRunqNext(module StdModule)
 	var emptyBlock = module.addBlock(func, label: b"rnempty", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let p = 0 as ValueId
+	let p = 0
 
 	let next = emitLoadAcquireField(module, block: entry, record: p, offset: POffRunnext, ids: ids)
 	let noNext = emitCmp(module, block: entry, a: next, b: emitConst(module, block: entry, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
@@ -3768,7 +3768,7 @@ function buildSchedRunqEmpty(module StdModule)
 	var settled = module.addBlock(func, label: b"resettled", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let p = 0 as ValueId
+	let p = 0
 	module.setTerminator(entry, op: StdOp.branch(loopHdr.id))
 
 	let head = emitLoadAcquireField(module, block: loopHdr, record: p, offset: POffRunqHead, ids: ids)
@@ -3808,7 +3808,7 @@ function buildSchedDrainRunq(module StdModule)
 	var doneBlock = module.addBlock(func, label: b"drdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let p = 0 as ValueId
+	let p = 0
 
 	let draining = ids.mint()
 	moveIt.blockArgs.push(IrBlockArg.create(draining, argType: StdType.i64))
@@ -3878,9 +3878,9 @@ function buildSchedSteal(module StdModule)
 	var failBlock = module.addBlock(func, label: b"sfail", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
-	let p = 0 as ValueId
-	let victim = 1 as ValueId
-	let stealRunNext = 2 as ValueId
+	let p = 0
+	let victim = 1
+	let stealRunNext = 2
 
 	// Our own tail, read once: nobody else writes it, and the copy addresses slots relative to it.
 	let ourTail = emitLoadAcquireField(module, block: entry, record: p, offset: POffRunqTail, ids: ids)
@@ -4887,7 +4887,7 @@ function buildSchedFindRunnable(module StdModule)
 	candidate.blockArgs.push(IrBlockArg.create(inherited, argType: StdType.i64))
 
 	emitParams(module, block: entry, count: 1)
-	let spinner = 0 as ValueId
+	let spinner = 0
 	let p = emitLoadCurrentP(module, block: entry, ids: ids)
 
 	// The schedule counter. Stepped once per CALL rather than once per thread handed back, so the retry a
@@ -5210,8 +5210,8 @@ end 'buildSchedAnyWork'
 
 // What `__sched_any_work` answers. Named because its two callers compare against one of them, and a bare
 // literal at each end would be the answer written three times.
-let SchedWorkFound = 1 as FullRangeInt
-let SchedNoWorkFound = 0 as FullRangeInt
+let SchedWorkFound = 1
+let SchedNoWorkFound = 0
 
 // ==========================================================================
 // `__sched_sweep_dropped`
@@ -5334,7 +5334,7 @@ function buildGtFreePut(module StdModule)
 	var haveMachine = module.addBlock(func, label: b"gfmachine", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let gt = 0 as ValueId
+	let gt = 0
 
 	let p = emitLoadCurrentPOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, haveProc: local, noProc: globalOnly, ids: ids)
 
@@ -5487,7 +5487,7 @@ function buildSchedArenaCarve(module StdModule)
 	var carved = module.addBlock(func, label: b"arenacarved", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let bytes = 0 as ValueId
+	let bytes = 0
 
 	let cursor = emitLoadGlobalWord(module, block: entry, label: SchedArenaCursorLabel, ids: ids)
 	let limit = emitLoadGlobalWord(module, block: entry, label: SchedArenaLimitLabel, ids: ids)
@@ -5714,8 +5714,8 @@ function buildSchedStartM(module StdModule, target Target)
 	var spawnFailedDrained = module.addBlock(func, label: b"smfaileddrained", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let handedProc = 0 as ValueId
-	let credit = 1 as ValueId
+	let handedProc = 0
+	let credit = 1
 
 	emitSchedLockEnter(module, block: entry, ids: ids)
 
@@ -6129,7 +6129,7 @@ function buildSchedCheckdead(module StdModule)
 	var doneBlock = module.addBlock(func, label: b"cddone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let m = 0 as ValueId
+	let m = 0
 
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 	let running = emitSchedMachinesRunning(module, block: entry, ids: ids)
@@ -7087,7 +7087,7 @@ function buildSchedWakeNetpoller(module StdModule)
 	var doneBlock = module.addBlock(func, label: b"wnpdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let when = 0 as ValueId
+	let when = 0
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 
 	let lastPoll = emitLoadAcquireGlobalWord(module, block: entry, label: SchedLastPollLabel, ids: ids)
@@ -7194,7 +7194,7 @@ function buildSchedHandoffP(module StdModule)
 	var spinStart = module.addBlock(func, label: b"hopspinstart", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let p = 0 as ValueId
+	let p = 0
 
 	// Arm 1 — this processor's own ring, or the global queue, holds a green thread. Both reads are unlocked,
 	// which is `emitSchedAnyRunnable`'s stated exception: they pick an arm, and both arms are correct whatever
@@ -7317,8 +7317,8 @@ function buildSchedRetake(module StdModule)
 	var doneBlock = module.addBlock(func, label: b"rtdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let now = 0 as ValueId
-	let preemptOff = 1 as ValueId
+	let now = 0
+	let preemptOff = 1
 
 	// ⚠ Both words are read unlocked, which `sealedBeforeWorkers` allows only because the monitor cannot start
 	// during bring-up: `__sched_init_procs` publishes the count and builds the array inside `__gt_init`, and
@@ -7515,7 +7515,7 @@ function buildSchedPreemptOne(module StdModule, target Target)
 	var doneBlock = module.addBlock(func, label: b"podone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let m = 0 as ValueId
+	let m = 0
 
 	let withdrawn = emitLoadGlobalWord(module, block: entry, label: SchedAsyncPreemptOffLabel, ids: ids)
 	let asleep = emitCmp(module, block: entry, a: withdrawn, b: emitConst(module, block: entry, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
@@ -7593,9 +7593,9 @@ function buildGtPreemptSafe(module StdModule, target Target)
 	var notSafe = module.addBlock(func, label: b"psnotsafe", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
-	let m = 0 as ValueId
-	let pc = 1 as ValueId
-	let sp = 2 as ValueId
+	let m = 0
+	let pc = 1
+	let sp = 2
 
 	let gt = emitLoadField(module, block: entry, record: m, offset: MOffCurrentGt, ids: ids)
 	let noThread = emitCmp(module, block: entry, a: gt, b: emitConst(module, block: entry, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
@@ -7864,7 +7864,7 @@ function buildSysmon(module StdModule, target Target)
 	// (`emitSchedSysmonStart`): 1 for `off`. The rest of the monitor's state is the block args below plus what
 	// it reads out of the roster.
 	emitParams(module, block: entry, count: 1)
-	let preemptOff = 0 as ValueId
+	let preemptOff = 0
 
 	// Its sleep's timer and its deep sleep's event, both its own.
 	let timer = ids.mint()
@@ -7998,7 +7998,7 @@ function emitSchedMinWord(module StdModule, block IrBlock, a ValueId, b ValueId,
 end 'emitSchedMinWord'
 
 // A signed word's sign, shifted down to fill it.
-let WordSignShift = 63 as FullRangeInt
+let WordSignShift = 63
 
 // ==========================================================================
 // `__sched_enter_syscall` / `__sched_exit_syscall`

@@ -38,7 +38,7 @@ export let ManagedFileBoxBytes = 8 as FullRangeInt
 //
 // ⚠ It is `0`, not Win32's `INVALID_HANDLE_VALUE` (-1), and the distinction is deliberate: a box is
 // allocated zeroed, so an unopened box and a closed box carry the same value and one guard covers both.
-let ManagedFileClosedHandle = 0 as FullRangeInt
+let ManagedFileClosedHandle = 0
 
 // ⭐⭐ **A HANDLE SLOT HOLDS `handle + 1`, AND THAT BIAS IS WHAT LETS A ZEROED BOX MEAN "CLOSED" ON A
 // PLATFORM WHOSE HANDLES START AT ZERO.**
@@ -59,7 +59,7 @@ let ManagedFileClosedHandle = 0 as FullRangeInt
 // encoding through the same guard (`emitLiveHandleOrClosedThrow`), because the defect is the same one:
 // `opendir` answers NULL on failure and never -1, so a directory family testing 0 for "closed" is reading
 // the same word two ways. One encoding, one guard, two families.
-let HandleSlotBias = 1 as FullRangeInt
+let HandleSlotBias = 1
 
 // Store an OS handle into a handle slot — `emitLiveHandleOrClosedThrow`'s inverse, and the only writer of
 // the biased encoding above.
@@ -123,8 +123,8 @@ let ManagedFileStatFailedOrdinal = 7 as FullRangeInt
 // the runtime's own; a corpus program never forges one, so a caller reaching either guard has a compiler
 // defect and not a recoverable failure. The two positions are transcribed regardless, because they are what
 // puts `closed` at 10; left out, they are a gap a corpus reorder can move in silence.
-let ManagedFileInvalidStatBufferOrdinal = 8 as FullRangeInt
-let ManagedFileInvalidStatIndexOrdinal = 9 as FullRangeInt
+let ManagedFileInvalidStatBufferOrdinal = 8
+let ManagedFileInvalidStatIndexOrdinal = 9
 let ManagedFileClosedOrdinal = 10 as FullRangeInt
 let ManagedFileAlreadyExistsOrdinal = 11 as FullRangeInt
 let ManagedFileBusyOrdinal = 12 as FullRangeInt
@@ -164,7 +164,7 @@ export let FindDataCreationTimeOffset = 4 as ByteOffset
 export let FindDataLastAccessTimeOffset = 12 as ByteOffset
 export let FindDataLastWriteTimeOffset = 20 as ByteOffset
 export let FindDataSizeHighOffset = 28 as ByteOffset
-let FindDataSizeLowOffset = 32 as ByteOffset
+let FindDataSizeLowOffset = 32
 
 // `cFileName` — a NUL-terminated `WCHAR[MAX_PATH]` at the record's tail, into which a POSIX fill
 // writes a UTF-8 name. Read only by `__ManagedDirectory`
@@ -192,20 +192,20 @@ export let FileAttributeNormal = 0x80 as FullRangeInt
 let StatBufferFields = 6 as FullRangeInt
 let StatFieldBytes = 8 as FullRangeInt
 let StatBufferBytes = StatBufferFields * StatFieldBytes
-let StatSizeOffset = 0 as ByteOffset
-let StatModifiedOffset = 8 as ByteOffset
-let StatCreatedOffset = 16 as ByteOffset
-let StatAccessedOffset = 24 as ByteOffset
-let StatIsDirectoryOffset = 32 as ByteOffset
-let StatIsReadOnlyOffset = 40 as ByteOffset
+let StatSizeOffset = 0
+let StatModifiedOffset = 8
+let StatCreatedOffset = 16
+let StatAccessedOffset = 24
+let StatIsDirectoryOffset = 32
+let StatIsReadOnlyOffset = 40
 
 // FILETIME counts 100 ns intervals since 1601-01-01 UTC; Unix time counts seconds since 1970-01-01. The
 // delta is the number of 100 ns intervals between those two epochs.
-let FileTimeUnixEpochDelta = 116444736000000000 as FullRangeInt
-let FileTimeTicksPerSecond = 10000000 as FullRangeInt
+let FileTimeUnixEpochDelta = 116444736000000000
+let FileTimeTicksPerSecond = 10000000
 
 // `nFileSizeHigh`/`nFileSizeLow` are two DWORDs; the size is `(high << 32) | low`.
-let FileSizeHighShift = 32 as FullRangeInt
+let FileSizeHighShift = 32
 
 // ⚠ The Std tier has no 4-byte memory access, so a DWORD is read as a word and masked.
 // `accessWidthFor` carries `byte` and `word64` and panics for everything between, because a narrow
@@ -237,7 +237,7 @@ export let Win32True = 1 as FullRangeInt
 // comment: the zeroing is the allocator's stated guarantee, not a local accident), so the upper four bytes
 // are 0 and the word IS the DWORD. Masking here would be the caller re-establishing a guarantee the
 // allocator already makes — the precise habit `MmRuntime` warns against.
-let Win32OutWordBytes = 8 as FullRangeInt
+let Win32OutWordBytes = 8
 
 // Where the OUT-PARAMETER's answer sits inside that word: at the front of it, because the word IS the answer.
 // ⭐ Named rather than spelled `0 as ByteOffset` at each read — three files reach `emitWin32OutWord`'s block
@@ -636,7 +636,7 @@ function buildManagedFileOpen(module StdModule, name ByteArray, mode ManagedFile
 	var opened = module.addBlock(func, label: b"mfok", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let pathRec = 0 as ValueId
+	let pathRec = 0
 
 	let scratch = emitPathToText(module, func: func, cur: entry, join: afterCopy, pathRec: pathRec, encoding: module.hostText, ids: ids)
 
@@ -742,7 +742,7 @@ function buildManagedFileDestruct(module StdModule)
 	var drop = module.addBlock(func, label: b"drop", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let box = 0 as ValueId
+	let box = 0
 
 	emitRefcountCheckToLastOwner(module, func: func, entry: entry, lower: lower, record: box, lastOwner: drop, ids: ids)
 
@@ -767,7 +767,7 @@ function buildManagedFileSize(module StdModule)
 	var ok = module.addBlock(func, label: b"mfok", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let box = 0 as ValueId
+	let box = 0
 	let handle = emitOpenHandleOrThrow(module, func: func, entry: entry, join: doSize, box: box, ids: ids)
 
 	let out = emitWin32OutWord(module, block: doSize, ids: ids)
@@ -819,8 +819,8 @@ function buildManagedFileRead(module StdModule, name ByteArray, placement Manage
 	var ok = module.addBlock(func, label: b"mfok", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
-	let box = 0 as ValueId
-	let arrRec = 1 as ValueId
+	let box = 0
+	let arrRec = 1
 	let size = 2 as ValueId
 	let handle = emitOpenHandleOrThrow(module, func: func, entry: entry, join: checkLow, box: box, ids: ids)
 
@@ -920,8 +920,8 @@ function buildManagedFileWrite(module StdModule)
 	var ok = module.addBlock(func, label: b"mfok", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let box = 0 as ValueId
-	let arrRec = 1 as ValueId
+	let box = 0
+	let arrRec = 1
 	let handle = emitOpenHandleOrThrow(module, func: func, entry: entry, join: doWrite, box: box, ids: ids)
 
 	let buffer = emitLoadField(module, block: doWrite, record: arrRec, offset: ManagedRecordBufferOffset, ids: ids)
@@ -954,7 +954,7 @@ function buildManagedFileExists(module StdModule)
 	var isFile = module.addBlock(func, label: b"mffile", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let pathRec = 0 as ValueId
+	let pathRec = 0
 
 	let scratch = emitPathToText(module, func: func, cur: entry, join: afterCopy, pathRec: pathRec, encoding: module.hostText, ids: ids)
 	let dataSize = emitConst(module, block: afterCopy, value: FindDataBytes, ids: ids)
@@ -1070,7 +1070,7 @@ function emitOptionalSecondPath(module StdModule, func IrFunction, cur IrBlock, 
 
 	// Parameter 1 — the SECOND path. `emitParams` numbers a function's parameters from 0, so the id IS the
 	// index and needs no cast.
-	let newPathRec = 1 as ValueId
+	let newPathRec = 1
 	return emitPathToText(module, func: func, cur: cur, join: join, pathRec: newPathRec, encoding: module.hostText, ids: ids)
 end 'emitOptionalSecondPath'
 
@@ -1089,7 +1089,7 @@ function buildManagedFileStat(module StdModule)
 	var pack = module.addBlock(func, label: b"mfpack", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let pathRec = 0 as ValueId
+	let pathRec = 0
 
 	let scratch = emitPathToText(module, func: func, cur: entry, join: afterCopy, pathRec: pathRec, encoding: module.hostText, ids: ids)
 	let dataSize = emitConst(module, block: afterCopy, value: FindDataBytes, ids: ids)
@@ -1207,8 +1207,8 @@ function buildManagedFileStatField(module StdModule)
 	var load = module.addBlock(func, label: b"mfload", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let buffer = 0 as ValueId
-	let index = 1 as ValueId
+	let buffer = 0
+	let index = 1
 
 	let nullConst = emitConst(module, block: entry, value: 0, ids: ids)
 	let isNull = emitCmp(module, block: entry, a: buffer, b: nullConst, pred: StdCmpPred.eq, ids: ids)
@@ -1249,7 +1249,7 @@ function buildManagedFileStatFree(module StdModule)
 	var release = module.addBlock(func, label: b"mfrel", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let buffer = 0 as ValueId
+	let buffer = 0
 
 	let nullConst = emitConst(module, block: entry, value: 0, ids: ids)
 	let isNull = emitCmp(module, block: entry, a: buffer, b: nullConst, pred: StdCmpPred.eq, ids: ids)

@@ -1154,9 +1154,13 @@ type Holder
 	end 'count'
 end 'Holder'
 
+function seed() returns beta.Integer
+	return 3
+end 'seed'
+
 function main() returns ExitCode
 	let holder = Holder.create()
-	let narrow = 3 as beta.Integer
+	let narrow = seed()
 	print("{holder.count()}")
 	return (holder.first() as ExitCode) + (narrow as ExitCode)
 end 'main'

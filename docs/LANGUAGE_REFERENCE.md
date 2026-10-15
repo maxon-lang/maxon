@@ -592,7 +592,7 @@ function main() returns ExitCode
 	let wide = b as Integer      // widening: no run-time check
 	let r = wide as Real         // integer to float
 	let back = wide as Byte      // narrowing: checked at run time
-	print("{wide} {r} {back}\n") // 200 200.0 200
+	print("{b} {wide} {r} {back}\n") // 200 200 200.0 200
 	return 0
 end 'main'
 ```
@@ -608,6 +608,7 @@ end 'main'
 | `bool` ↔ number, `String` → number, struct ↔ anything | **E3009** |
 | a value to the type it already has (`b as Byte` when `b` is a `Byte`; a struct, enum, union, `bool` or `String` to itself) | **E3010** `unneeded cast` |
 | a literal to the alias its destination declares (`open(8080 as Port)` for a `Port` parameter) | **E3010** `unneeded cast: the literal 8080 already fits in 'Port'` — see [Construction](#construction) |
+| a literal in an unannotated `let` every use of which takes the plain constant (`let p = 8080 as Port`, read only as a `Port` argument) | **E3010** `unneeded cast: the literal 8080 already fits every use of 'p'` |
 | one container instance to a different one | **E3131**, unless the elements are same-named declarations of one layout, which re-brands the container |
 
 #### Floats to Integers
@@ -715,10 +716,13 @@ function takesYear(y Year) returns Year
 	return y
 end 'takesYear'
 
+function yearOfAge(a Age) returns Year
+	// return takesYear(a)            // E3005: argument type mismatch for 'y': expected 'Year', got 'Age'
+	return takesYear(a as Year)       // the cast converts
+end 'yearOfAge'
+
 function main() returns ExitCode
-	let a = 30 as Age
-	// takesYear(a)                   // E3005: argument type mismatch for 'y': expected 'Year', got 'Age'
-	print("{takesYear(a as Year)}\n") // the cast converts
+	print("{yearOfAge(30)}\n")        // 30
 	return 0
 end 'main'
 ```
@@ -821,9 +825,13 @@ A cast to a different alias of the same name converts and is legal: this file's 
 parameter declared with another file's `Item = int(0 to 255)`, or an alias nested in a type or extension
 body at a place declared with a file-scope one.
 
+A literal cast in an unannotated `let` (`let p = 8080 as Port`) is **E3010** when every use of the `let`
+takes the plain constant the same way (`unneeded cast: the literal 8080 already fits every use of 'p'`):
+`let p = 8080` already fits each use. A `public`, `export` or `module` `let` keeps its cast, and so does one a closure captures.
+
 A literal cast is how a type is fixed where nothing declares one, and there it is legal: an unannotated
-`let`/`var` (`let p = 8080 as Port`), a field default whose type the cast gives (`var port = 8080 as Port`),
-an array-literal element, an argument or field of a generic type parameter, an operator operand, and a value
+`var` (`var p = 8080 as Port`), a `let` some use of which needs the alias, a field default whose type the
+cast gives (`var port = 8080 as Port`), an array-literal element, an argument or field of a generic type parameter, an operator operand, and a value
 joined by `if`/`else`, `gives` or `otherwise`. At an overloaded
 call, the unneeded literal casts of one call are reported together, and only when removing all of them
 still selects the same overload — a cast that decides which overload runs is needed.
@@ -857,7 +865,7 @@ function main() returns ExitCode
 	let bumped = a + 1           // Score: the literal adopts the alias
 	let mixed = a + (m as Score) // cast one side
 	// let bad = a + m           // E3005: 'Score' and 'Meters' are different typealiases
-	print("{sum} {bumped} {mixed}\n")
+	print("{sum} {bumped} {mixed} {m}\n")
 	return 0
 end 'main'
 ```
@@ -1216,7 +1224,7 @@ typealias Byte = int(0 to u8.max)
 type Limits
 	static let MAX_COUNT = 1000
 	static let SEPARATOR = 61 as Byte
-	static var used = 2
+	static var used = 2 as Byte
 end 'Limits'
 
 function main() returns ExitCode
@@ -2633,7 +2641,9 @@ A `let` bound to a bare number, to arithmetic over bare numbers or to a literal 
 at each use. A `let` computed from such constants or from a loop counter between two literal bounds carries
 the range its value can have, and each use is checked against it the same way, for integers and floats
 alike. A `let` of a number whose range the compiler cannot know (`let w = 1 shl k`) is **E2004**; write
-`let w = (1 shl k) as Width`.
+`let w = (1 shl k) as Width`. A literal cast (`let port = 8080 as Port`) makes the `let` a value of the
+alias; when every use of it would take the plain constant the same way, the cast is **E3010** (see
+[Construction](#construction)).
 
 ```maxon
 typealias Port = int(0 to 65535)

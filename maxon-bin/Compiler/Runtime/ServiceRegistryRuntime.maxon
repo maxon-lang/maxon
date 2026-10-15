@@ -10,26 +10,26 @@
 // it in.
 let SharedValueCellCurrentOffset = 0x00 as ByteOffset
 let SharedValueCellChainOffset = 0x08 as ByteOffset
-let SharedValueCellRefsOffset = 0x10 as ByteOffset
-let SharedValueCellDropOffset = 0x18 as ByteOffset
-let SharedValueCellRetainOffset = 0x20 as ByteOffset
-let SharedValueCellBytes = 0x28 as FullRangeInt
+let SharedValueCellRefsOffset = 0x10
+let SharedValueCellDropOffset = 0x18
+let SharedValueCellRetainOffset = 0x20
+let SharedValueCellBytes = 0x28
 
-let SharedValueChainNextOffset = 0x00 as ByteOffset
-let SharedValueChainValueOffset = 0x08 as ByteOffset
-let SharedValueChainNodeBytes = 0x10 as FullRangeInt
+let SharedValueChainNextOffset = 0x00
+let SharedValueChainValueOffset = 0x08
+let SharedValueChainNodeBytes = 0x10
 
 let SharedValueHolderCellOffset = 0x00 as ByteOffset
-let SharedValueBoxBytes = 8 as FullRangeInt
+let SharedValueBoxBytes = 8
 
-let SharedValueInitialRefs = 1 as FullRangeInt
-let SharedValueRefUp = 1 as FullRangeInt
-let SharedValueRefDown = -1 as FullRangeInt
-let SharedValueLastRef = 1 as FullRangeInt
-let ReleasedHolder = 0 as FullRangeInt
+let SharedValueInitialRefs = 1
+let SharedValueRefUp = 1
+let SharedValueRefDown = -1
+let SharedValueLastRef = 1
+let ReleasedHolder = 0
 export let NoRuntimeFunction = 0 as FullRangeInt
-let PublishedAnswer = 1 as FullRangeInt
-let DeclinedAnswer = 0 as FullRangeInt
+let PublishedAnswer = 1
+let DeclinedAnswer = 0
 
 let SharedValueRuntimePrefix = b"__shv_"
 let SharedValueNewName = b"__shv_new"
@@ -213,8 +213,8 @@ function buildSharedValueNew(module StdModule)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 3)
 	let value = 0 as ValueId
-	let dropFn = 1 as ValueId
-	let retainFn = 2 as ValueId
+	let dropFn = 1
+	let retainFn = 2
 
 	let cell = ids.mint()
 	module.appendOp(entry, op: StdOp.call(cell, callee: SlabAllocName, args: argsOf(emitConst(module, block: entry, value: SharedValueCellBytes, ids: ids))))
@@ -245,7 +245,7 @@ function buildSharedValueCurrent(module StdModule, released ByteArray)
 	var ids = ValueMinter.create(1)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
-	let holder = 0 as ValueId
+	let holder = 0
 
 	let cell = emitHolderCell(module, block: entry, holder: holder, ids: ids)
 	var live = emitHeldOrPanic(module, func: func, block: entry, held: cell, released: released, holdsSchedLock: false, ids: ids)
@@ -265,8 +265,8 @@ function buildSharedValuePublish(module StdModule, released ByteArray)
 	var retry = module.addBlock(func, label: b"shvpublishretry", heat: BlockHeat.normal)
 	var swapped = module.addBlock(func, label: b"shvpublished", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
-	let holder = 0 as ValueId
-	let value = 1 as ValueId
+	let holder = 0
+	let value = 1
 
 	let cell = emitHolderCell(module, block: entry, holder: holder, ids: ids)
 	var live = emitHeldOrPanic(module, func: func, block: entry, held: cell, released: released, holdsSchedLock: false, ids: ids)
@@ -290,9 +290,9 @@ function buildSharedValueReplace(module StdModule, released ByteArray)
 	var swapped = module.addBlock(func, label: b"shvreplaced", heat: BlockHeat.normal)
 	var declined = module.addBlock(func, label: b"shvdeclined", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 3)
-	let holder = 0 as ValueId
-	let value = 1 as ValueId
-	let old = 2 as ValueId
+	let holder = 0
+	let value = 1
+	let old = 2
 
 	let cell = emitHolderCell(module, block: entry, holder: holder, ids: ids)
 	var live = emitHeldOrPanic(module, func: func, block: entry, held: cell, released: released, holdsSchedLock: false, ids: ids)
@@ -337,7 +337,7 @@ function buildSharedValueReleaseCell(module StdModule)
 	var freeCell = module.addBlock(func, label: b"shvfreecell", heat: BlockHeat.normal)
 	var done = module.addBlock(func, label: b"shvreleased", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
-	let cell = 0 as ValueId
+	let cell = 0
 
 	let prior = emitRefStep(module, block: entry, cell: cell, delta: SharedValueRefDown, ids: ids)
 	let wasLast = emitCmp(module, block: entry, a: prior, b: emitConst(module, block: entry, value: SharedValueLastRef, ids: ids), pred: StdCmpPred.eq, ids: ids)
@@ -390,7 +390,7 @@ function buildSharedValueBoxClone(module StdModule)
 	var ids = ValueMinter.create(1)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
-	let box = 0 as ValueId
+	let box = 0
 
 	let cell = emitLoadField(module, block: entry, record: box, offset: SharedValueHolderCellOffset, ids: ids)
 	_ = emitRefStep(module, block: entry, cell: cell, delta: SharedValueRefUp, ids: ids)
@@ -417,7 +417,7 @@ function buildSharedValueBoxDrop(module StdModule)
 	var ids = ValueMinter.create(1)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
-	let box = 0 as ValueId
+	let box = 0
 
 	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: SharedValueReleaseCellName, args: argsOf(emitLoadField(module, block: entry, record: box, offset: SharedValueHolderCellOffset, ids: ids))))
 	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: MmDecrefName, args: argsOf(box)))
@@ -435,7 +435,7 @@ function buildRegistryServiceCurrent(module StdModule, released ByteArray)
 	var ids = ValueMinter.create(1)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
-	let slot = 0 as ValueId
+	let slot = 0
 
 	let held = emitLockedSlotHandle(module, block: entry, slot: slot, ids: ids)
 	var live = emitHeldOrPanic(module, func: func, block: entry, held: held, released: released, holdsSchedLock: true, ids: ids)
@@ -452,8 +452,8 @@ function buildRegistryServiceRegister(module StdModule, released ByteArray)
 	var ids = ValueMinter.create(2)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
-	let slot = 0 as ValueId
-	let handle = 1 as ValueId
+	let slot = 0
+	let handle = 1
 
 	let replaced = emitLockedSlotHandle(module, block: entry, slot: slot, ids: ids)
 	var live = emitHeldOrPanic(module, func: func, block: entry, held: replaced, released: released, holdsSchedLock: true, ids: ids)
@@ -484,7 +484,7 @@ function buildRegistryServiceRelease(module StdModule)
 	var dropIt = module.addBlock(func, label: b"regdrop", heat: BlockHeat.normal)
 	var done = module.addBlock(func, label: b"regreleasedone", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
-	let slot = 0 as ValueId
+	let slot = 0
 
 	let held = emitLockedSlotHandle(module, block: entry, slot: slot, ids: ids)
 	emitStoreField(module, block: entry, record: slot, offset: SharedValueHolderCellOffset, value: emitConst(module, block: entry, value: ReleasedHolder, ids: ids))
@@ -507,9 +507,9 @@ function buildRegistryServiceReplace(module StdModule, released ByteArray)
 	var swap = module.addBlock(func, label: b"regswap", heat: BlockHeat.normal)
 	var decline = module.addBlock(func, label: b"regdecline", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 3)
-	let slot = 0 as ValueId
-	let handle = 1 as ValueId
-	let expected = 2 as ValueId
+	let slot = 0
+	let handle = 1
+	let expected = 2
 
 	let held = emitLockedSlotHandle(module, block: entry, slot: slot, ids: ids)
 	var live = emitHeldOrPanic(module, func: func, block: entry, held: held, released: released, holdsSchedLock: true, ids: ids)

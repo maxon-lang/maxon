@@ -69,7 +69,7 @@ export let ManagedDirectoryBoxBytes = 8 as FullRangeInt
 // the size in one place and this block silently UNDER-ALLOCATES, at which point the kernel writes the tail
 // of the find record straight over the pending flag on every `FindNextFileW` — a wrong answer with no
 // compile error and no failing test. `FindDataBytes` is exported for exactly this reader.
-let FindBlockHandleOffset = 0 as ByteOffset
+let FindBlockHandleOffset = 0
 let FindBlockFindDataOffset = 8 as ByteOffset
 
 // The pending flag's own width — see above for why it is a word.
@@ -79,20 +79,20 @@ let FindBlockBytes = (FindBlockPendingOffset as FullRangeInt) + FindBlockPending
 
 // The pending flag's two values. Named rather than spelled `1`/`0` at four sites: the flag reads as a
 // direction ("consume in place" vs "fetch") and a bare literal at a branch says neither.
-let FindEntryPending = 1 as FullRangeInt
-let FindEntryConsumed = 0 as FullRangeInt
+let FindEntryPending = 1
+let FindEntryConsumed = 0
 
 // The handle value a CLOSED block carries — `ManagedFileClosedHandle`'s twin, and zero for its reason: the
 // find block is allocated zeroed, so a block whose `FindFirstFileW` never ran and one that has been closed
 // carry the same value and ONE guard covers both. A search handle the OS actually returns is never 0
 // (`FindFirstFileW` reports failure as `INVALID_HANDLE_VALUE`, which is -1).
-let ManagedDirectoryClosedHandle = 0 as FullRangeInt
+let ManagedDirectoryClosedHandle = 0
 
 // `next()`'s two answers, per `specs/managed-directory.md`: "returns non-zero if one was found or 0 when the
 // iteration is complete". EOF is a plain 0 RETURN and never a throw, so only a real OS error reaches
 // `nextFailed`.
-let DirectoryEntryFound = 1 as FullRangeInt
-let DirectoryIterationComplete = 0 as FullRangeInt
+let DirectoryEntryFound = 1
+let DirectoryIterationComplete = 0
 
 // ASCII `.` — the leading byte of the `.` / `..` pseudo-entries. **The dot filtering lives in the RUNTIME,
 // not the stdlib**: the spec states it as the method's contract ("The runtime owns all dot-filtering, so
@@ -137,7 +137,7 @@ export let InvalidFileAttributes = 0xFFFFFFFF as FullRangeInt
 // cost twice the allocation on every ordinary path to save one doubling on a long one.
 export let MaxPathBytes = 260 as FullRangeInt
 
-let PathGrowthShift = 1 as FullRangeInt
+let PathGrowthShift = 1
 
 // ⭐ **THE `__ManagedDirectoryError` ORDINALS, AS ERROR FLAGS (`ordinal + ErrorFlagOrdinalBias`)** — the
 // `ManagedFileRuntime` discipline, and the ordinals are positional facts about the case order of the
@@ -156,7 +156,7 @@ let ManagedDirectoryNotFoundOrdinal = 0 as FullRangeInt
 let ManagedDirectoryAccessDeniedOrdinal = 1 as FullRangeInt
 let ManagedDirectoryOpenSearchFailedOrdinal = 2 as FullRangeInt
 let ManagedDirectoryNextFailedOrdinal = 3 as FullRangeInt
-let ManagedDirectoryIteratorInvalidOrdinal = 4 as FullRangeInt
+let ManagedDirectoryIteratorInvalidOrdinal = 4
 let ManagedDirectoryCreateFailedOrdinal = 5 as FullRangeInt
 let ManagedDirectoryCurrentPathFailedOrdinal = 6 as FullRangeInt
 let ManagedDirectoryClosedOrdinal = 7 as FullRangeInt
@@ -386,7 +386,7 @@ function buildManagedDirectoryOpenSearch(module StdModule)
 	var opened = module.addBlock(func, label: b"mdok", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let pathRec = 0 as ValueId
+	let pathRec = 0
 
 	let scratch = emitPathToText(module, func: func, cur: entry, join: afterCopy, pathRec: pathRec, encoding: module.hostText, ids: ids)
 	let blockSize = emitConst(module, block: afterCopy, value: FindBlockBytes, ids: ids)
@@ -454,7 +454,7 @@ function buildManagedDirectoryNext(module StdModule)
 	var found = module.addBlock(func, label: b"mdfound", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let box = 0 as ValueId
+	let box = 0
 	let findBlock = emitLoadFindBlock(module, block: entry, box: box, ids: ids)
 
 	// ⚠ **THE `closed` GUARD PREVENTS A CRASH AS WELL AS A WRONG ANSWER.** Without it `next()` on a closed
@@ -547,7 +547,7 @@ function buildManagedDirectoryFilename(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
-	let box = 0 as ValueId
+	let box = 0
 
 	let findBlock = emitLoadFindBlock(module, block: entry, box: box, ids: ids)
 	let name = emitFileNameAddr(module, block: entry, findBlock: findBlock, ids: ids)
@@ -581,7 +581,7 @@ function buildManagedDirectoryClose(module StdModule)
 	var done = module.addBlock(func, label: b"mddone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let box = 0 as ValueId
+	let box = 0
 
 	let findBlock = emitLoadFindBlock(module, block: entry, box: box, ids: ids)
 	let slot = emitLoadField(module, block: entry, record: findBlock, offset: FindBlockHandleOffset, ids: ids)
@@ -629,7 +629,7 @@ function buildManagedDirectoryDestruct(module StdModule)
 	var drop = module.addBlock(func, label: b"drop", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let box = 0 as ValueId
+	let box = 0
 
 	emitRefcountCheckToLastOwner(module, func: func, entry: entry, lower: lower, record: box, lastOwner: drop, ids: ids)
 
@@ -663,7 +663,7 @@ function buildManagedDirectoryExists(module StdModule)
 	var notDir = module.addBlock(func, label: b"mdnotdir", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let pathRec = 0 as ValueId
+	let pathRec = 0
 
 	let scratch = emitPathToText(module, func: func, cur: entry, join: afterCopy, pathRec: pathRec, encoding: module.hostText, ids: ids)
 	let attrs = ids.mint()
@@ -710,7 +710,7 @@ function buildManagedDirectoryCreate(module StdModule)
 	var ok = module.addBlock(func, label: b"mdok", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let pathRec = 0 as ValueId
+	let pathRec = 0
 
 	let scratch = emitPathToText(module, func: func, cur: entry, join: afterCopy, pathRec: pathRec, encoding: module.hostText, ids: ids)
 	let verdict = ids.mint()
@@ -749,7 +749,7 @@ function buildManagedDirectoryDelete(module StdModule)
 	var ok = module.addBlock(func, label: b"mdok", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let pathRec = 0 as ValueId
+	let pathRec = 0
 
 	let scratch = emitPathToText(module, func: func, cur: entry, join: afterCopy, pathRec: pathRec, encoding: module.hostText, ids: ids)
 	let verdict = ids.mint()

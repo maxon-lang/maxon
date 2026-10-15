@@ -45,27 +45,27 @@
 // it as fast as a peer fills it. 128 is the conventional server figure; `SOMAXCONN` is deliberately not used,
 // because it is 0x7FFFFFFF on Winsock and a kernel-capped 4096 on Linux — one name for two very different
 // requests.
-let ListenBacklog = 128 as FullRangeInt
+let ListenBacklog = 128
 
 // ⭐ **THE SCRATCH `getsockname` FILLS, AND WHY IT IS BIGGER THAN THE ADDRESS.** The call writes a
 // `sockaddr_in` AND reads back an in-out `socklen_t`, so one block carries both: the address at 0, and the
 // length — seeded with the address's own size — one word past it. This tier has no narrow store, so the
 // 32-bit length is written as the low half of that word (`emitStoreDwordPair`).
-let ListenerNameAddressOffset = 0 as ByteOffset
-let ListenerNameLengthOffset = 16 as ByteOffset
-let ListenerNameScratchBytes = 24 as FullRangeInt
+let ListenerNameAddressOffset = 0
+let ListenerNameLengthOffset = 16
+let ListenerNameScratchBytes = 24
 
 // `sin_port` is at byte 2 on every platform this compiler targets, and big-endian there. Linux and
 // Windows open the record with a 16-bit `sin_family`; the BSDs open it with a one-byte `sin_len`
 // and put `sin_family` in byte 1 (`ManagedSocketRuntime.sockaddrFamilyHalfword`), and both layouts
 // put the port in bytes 2 and 3. So the read side needs no per-platform fork, which is why these
 // are constants rather than a shape function.
-let SinPortHighOffset = 2 as ByteOffset
-let SinPortLowOffset = 3 as ByteOffset
+let SinPortHighOffset = 2
+let SinPortLowOffset = 3
 
 // A byte's worth of shift as a MULTIPLIER, so the big-endian halfword is composed rather than loaded: this
 // tier has no 16-bit load, and a bare 256 at a field position says nothing about which byte it places.
-let SinPortHighScale = 256 as FullRangeInt
+let SinPortHighScale = 256
 
 // ⭐ **THE `__ManagedListenerError` ORDINALS, AS ERROR FLAGS (`ordinal + ErrorFlagOrdinalBias`)** — the
 // `ManagedSocketRuntime` discipline, and the ordinals are positional facts about the case order of the enum
@@ -170,8 +170,8 @@ function buildManagedListenerBind(module StdModule, target Target)
 	var bound = module.addBlock(func, label: b"mlbound", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let hostRec = 0 as ValueId
-	let port = 1 as ValueId
+	let hostRec = 0
+	let port = 1
 
 	// UTF-8 on every host; see `ManagedSocketRuntime.emitResolveThroughAddrInfo`.
 	let host = emitPathToText(module, func: func, cur: entry, join: init, pathRec: hostRec, encoding: HostTextEncoding.utf8, ids: ids)
@@ -241,7 +241,7 @@ function buildManagedListenerPort(module StdModule)
 	var answered = module.addBlock(func, label: b"mlname", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let box = 0 as ValueId
+	let box = 0
 	let socket = emitLiveListenerOrThrow(module, func: func, entry: entry, join: ask, box: box, ids: ids)
 
 	let scratch = emitRawAlloc(module, block: ask, byteCount: emitConst(module, block: ask, value: ListenerNameScratchBytes, ids: ids), ids: ids)
@@ -288,7 +288,7 @@ function buildManagedListenerAccept(module StdModule, target Target)
 	var retriable = module.addBlock(func, label: b"mlacceptretry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let box = 0 as ValueId
+	let box = 0
 	let listener = emitLiveListenerOrThrow(module, func: func, entry: entry, join: ready, box: box, ids: ids)
 
 	// Both shapes wait on the listener's own poll record, which makes two acceptors one waiter too

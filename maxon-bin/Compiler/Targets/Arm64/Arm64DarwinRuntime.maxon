@@ -67,8 +67,8 @@ let DarwinMonotonicTicksPerSecond = 1000000000
 // `nanosleep(const struct timespec *req, struct timespec *rem)`. Darwin's `timespec` is two 64-bit words —
 // `tv_sec` then `tv_nsec` — which is exactly two of this assembler's 8-byte frame slots, side by side and
 // in that order, so `&slot0` IS a `struct timespec *`.
-let DarwinTimespecSecSlot = 0 as StackSize
-let DarwinTimespecNsecSlot = 1 as StackSize
+let DarwinTimespecSecSlot = 0
+let DarwinTimespecNsecSlot = 1
 
 // `char* realpath(const char* path, char* resolved)` — a NULL `resolved` makes it `malloc` a buffer of
 // exactly the right size, which is the ONLY safe spelling here: the alternative writes up to POSIX's
@@ -226,7 +226,7 @@ function buildArm64DarwinThreadCpuChunk() returns FunctionCodeChunk
 end 'buildArm64DarwinThreadCpuChunk'
 
 // The chunk's one local: the out-pointer across the clock call.
-let DarwinThreadCpuSlots = 1 as StackSize
+let DarwinThreadCpuSlots = 1
 
 // ==========================================================================
 // mrt_host_sleep_ms(x0 = milliseconds), mrt_host_netpoll_sleep(x0 = microseconds)
@@ -715,8 +715,8 @@ function buildArm64DarwinWaitOneChunk(globalData GlobalDataTable) returns Functi
 	let SlotObj = 0 as StackSize
 	let SlotTimeout = 1 as StackSize
 	let SlotResult = 2 as StackSize
-	let SlotTsSec = 3 as StackSize
-	let SlotTsNsec = 4 as StackSize
+	let SlotTsSec = 3
+	let SlotTsNsec = 4
 	var asm = Arm64RuntimeAsm.beginFunction(5)
 
 	let isObject = asm.newLabel()
@@ -917,7 +917,7 @@ end 'buildArm64DarwinWaitCloseChunk'
 function buildArm64DarwinLockInitChunk() returns FunctionCodeChunk
 	assertDarwinLockFits()
 	let SlotRegion = 0 as StackSize
-	let SlotAttr = 1 as StackSize
+	let SlotAttr = 1
 	var asm = Arm64RuntimeAsm.beginFunction(SlotAttr + darwinMutexattrSlots())
 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotRegion)
@@ -1124,8 +1124,8 @@ let DarwinDefaultGlobFlags = 0
 // answered by one `stat` and has exactly one entry, which `FindFirstFileW` has already reported — so the
 // object it hands back has no directory to walk and the first `FindNextFileW` must report end-of-iteration
 // rather than call `readdir(NULL)`.
-let DarwinSearchDirOffset = 0x00 as MachineWord
-let DarwinSearchPatternOffset = 0x08 as MachineWord
+let DarwinSearchDirOffset = 0x00
+let DarwinSearchPatternOffset = 0x08
 let DarwinSearchBytes = 16
 
 // `malloc` refusing is a `panic` here for `mrt_host_wait_new`'s reason: the alternative is a store through
@@ -1312,7 +1312,7 @@ end 'buildArm64DarwinTransferChunk'
 // ZEROED memory as a stated guarantee — and `emitWin32BoolOutcome` reads the word on both paths.
 function buildArm64DarwinFileSizeChunk() returns FunctionCodeChunk
 	let SlotOutPtr = 0 as StackSize
-	let SlotStat = 1 as StackSize
+	let SlotStat = 1
 	var asm = Arm64RuntimeAsm.beginFunction(1 + runtimeFrameSlots(darwinStatLayout().bytes))
 
 	let measured = asm.newLabel()
@@ -1561,7 +1561,7 @@ end 'buildArm64DarwinDupCStringChunk'
 // `stat` and the shared mask derivation, which is what keeps `__md_exists`'s answer and the DIRECTORY bit
 // `__mf_stat` publishes derived from ONE reading of `st_mode`.
 function buildArm64DarwinFileAttributesChunk() returns FunctionCodeChunk
-	let SlotStat = 0 as StackSize
+	let SlotStat = 0
 	var asm = Arm64RuntimeAsm.beginFunction(runtimeFrameSlots(darwinStatLayout().bytes))
 
 	let described = asm.newLabel()
@@ -1658,7 +1658,7 @@ function buildArm64DarwinDirFindNextChunk() returns FunctionCodeChunk
 	let SlotSearch = 0 as StackSize
 	let SlotFindData = 1 as StackSize
 	let SlotEntry = 2 as StackSize
-	let SlotStat = 3 as StackSize
+	let SlotStat = 3
 	var asm = Arm64RuntimeAsm.beginFunction(3 + runtimeFrameSlots(darwinStatLayout().bytes))
 
 	let nextEntry = asm.newLabel()
@@ -1742,7 +1742,7 @@ function buildArm64DarwinDirFindFirstChunk(globalData GlobalDataTable) returns F
 	let SlotPatternCopy = 5 as StackSize
 	let SlotSearch = 6 as StackSize
 	let SlotSavedErrno = 7 as StackSize
-	let SlotStat = 8 as StackSize
+	let SlotStat = 8
 	var asm = Arm64RuntimeAsm.beginFunction(8 + runtimeFrameSlots(darwinStatLayout().bytes))
 
 	let walk = asm.newLabel()
@@ -1987,9 +1987,9 @@ function buildArm64DarwinSpawnChunk() returns FunctionCodeChunk
 	let SlotFlags = 2 as StackSize
 	let SlotStartup = 3 as StackSize
 	let SlotProcInfo = 4 as StackSize
-	let SlotFileActions = 5 as StackSize
-	let SlotAttributes = 6 as StackSize
-	let SlotPid = 7 as StackSize
+	let SlotFileActions = 5
+	let SlotAttributes = 6
+	let SlotPid = 7
 	let SlotEnviron = 8 as StackSize
 	let SlotStatus = 9 as StackSize
 	let SlotEnv = 10 as StackSize
@@ -2507,7 +2507,7 @@ end 'buildArm64DarwinNetpollOpenChunk'
 // negative` fires it with `NOTE_TRIGGER`. `queue` names the register the kqueue arrives in.
 function buildArm64DarwinNetpollUserEventChunk(name ByteArray, flags MachineWord, fflags MachineWord, queue Arm64Register, answersQueue bool) returns FunctionCodeChunk
 	let SlotQueue = 0 as StackSize
-	let SlotEvent = 1 as StackSize
+	let SlotEvent = 1
 	let eventSlots = runtimeFrameSlots(DarwinKeventBytes)
 	var asm = Arm64RuntimeAsm.beginFunction(1 + eventSlots)
 
@@ -2559,8 +2559,8 @@ function buildArm64DarwinNetpollWaitChunk() returns FunctionCodeChunk
 	let SlotQueue = 0 as StackSize
 	let SlotEntries = 1 as StackSize
 	let SlotCapacity = 2 as StackSize
-	let SlotTsSec = 3 as StackSize
-	let SlotTsNsec = 4 as StackSize
+	let SlotTsSec = 3
+	let SlotTsNsec = 4
 	let SlotTimeoutPtr = 5 as StackSize
 	var asm = Arm64RuntimeAsm.beginFunction(6)
 
@@ -2612,7 +2612,7 @@ let DarwinKeventFailed = 0xFFFFFFFFFFFFFFFF as MachineWord
 function buildArm64DarwinNetpollArmChunk() returns FunctionCodeChunk
 	let SlotQueue = 0 as StackSize
 	let SlotFd = 1 as StackSize
-	let SlotEvents = 2 as StackSize
+	let SlotEvents = 2
 	let eventSlots = runtimeFrameSlots(DarwinKeventBytes * DarwinSocketChanges)
 	var asm = Arm64RuntimeAsm.beginFunction(2 + eventSlots)
 
@@ -2647,8 +2647,8 @@ end 'buildArm64DarwinNetpollArmChunk'
 function buildArm64DarwinNetpollChildOpenChunk() returns FunctionCodeChunk
 	let SlotQueue = 0 as StackSize
 	let SlotPid = 1 as StackSize
-	let SlotErrno = 2 as StackSize
-	let SlotEvent = 3 as StackSize
+	let SlotErrno = 2
+	let SlotEvent = 3
 	let eventSlots = runtimeFrameSlots(DarwinKeventBytes)
 	var asm = Arm64RuntimeAsm.beginFunction(3 + eventSlots)
 
@@ -2701,7 +2701,7 @@ end 'buildArm64DarwinNetpollChildOpenChunk'
 function buildArm64DarwinNetpollArmChildChunk() returns FunctionCodeChunk
 	let SlotQueue = 0 as StackSize
 	let SlotFd = 1 as StackSize
-	let SlotEvent = 2 as StackSize
+	let SlotEvent = 2
 	let eventSlots = runtimeFrameSlots(DarwinKeventBytes)
 	var asm = Arm64RuntimeAsm.beginFunction(2 + eventSlots)
 
@@ -2776,7 +2776,7 @@ end 'arm64DarwinEmitSocketFilter'
 // a chunk with a frame and not an isel sequence.
 function buildArm64DarwinSocketBirthChunk() returns FunctionCodeChunk
 	let SlotFd = 0 as StackSize
-	let SlotErrno = 1 as StackSize
+	let SlotErrno = 1
 	var asm = Arm64RuntimeAsm.beginVariadicCallerFunction(2)
 
 	let noSocket = asm.newLabel()

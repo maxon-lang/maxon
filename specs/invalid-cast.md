@@ -119,8 +119,12 @@ function isPositive(r Ratio) returns bool
 	return r > 0.0
 end 'isPositive'
 
+function seed() returns Big
+	return 42
+end 'seed'
+
 function main() returns ExitCode
-	let big = 42 as Big
+	let big = seed()
 	let small = big as Small
 	let r = 42 as Ratio
 	if isPositive(r) 'ok'

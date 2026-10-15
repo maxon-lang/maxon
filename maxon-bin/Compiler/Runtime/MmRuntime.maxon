@@ -66,7 +66,7 @@ let HeaderSizeOffset = 8 as ByteOffset
 // `emitIsSharedAllocation`), never by respelling `ptr - HeaderBytes + HeaderRefcountOffset`. That is what
 // makes "where the refcount lives" one fact rather than one per caller: a header that grew a field would
 // be a change to `emitHeaderBase` and nothing else, and a caller that got it wrong could not compile.
-let HeaderRefcountOffset = 16 as ByteOffset
+let HeaderRefcountOffset = 16
 let HeaderBytes = 24
 
 // ⭐⭐ **THE `--debugstream` PREFIX WORD — `(alloc_id << 16 | tag_index)`, AND IT SITS *BELOW* THE HEADER
@@ -110,7 +110,7 @@ end 'boxPrefixBytes'
 // ⚠ **THE VALUE'S PROPERTIES ARE WHAT MATTER.** 2^62 is positive, far from 0, far from
 // wrapping and unreachable by a real count — a program cannot hold 2^62 owners of one box — so no
 // arithmetic on a live refcount arrives at it and no pointer-shaped guard mistakes it for an address.
-let MmImmortalRefcount = 4611686018427387904 as FullRangeInt  // 0x4000_0000_0000_0000 = 2^62
+let MmImmortalRefcount = 4611686018427387904  // 0x4000_0000_0000_0000 = 2^62
 
 // ⭐⭐ **THE MARK A SHARED RECORD'S COUNT CARRIES — the word is `mark + owners - 1` from the share
 // on.** A share walk adds it once, on the sharing green thread at the walk's first meeting of the
@@ -121,14 +121,14 @@ let MmImmortalRefcount = 4611686018427387904 as FullRangeInt  // 0x4000_0000_000
 // last owner leaves is below it too, the compare being signed — and a shared count stays below
 // `MmImmortalRefcount`, because no program holds 2^61 owners of one box. So ONE signed compare tells a
 // counted box from the other two, and the counted box is the common one.
-let MmSharedRefcountMark = 2305843009213693952 as FullRangeInt  // 0x2000_0000_0000_0000 = 2^61
+let MmSharedRefcountMark = 2305843009213693952  // 0x2000_0000_0000_0000 = 2^61
 
 // A header field is one machine word: the three offsets above are eight apart because of it, and the
 // DebugStream prefix word below them is the same width.
-let HeaderSlotBytes = 8 as BytePos
+let HeaderSlotBytes = 8
 
 // The packed id of a box that was never allocated.
-let NoAllocationId = 0 as FullRangeInt
+let NoAllocationId = 0
 
 // ⭐⭐ **THE SYNTHETIC ALLOCATION HEADER AN IMAGE RECORD IS REGISTERED BEHIND** — the bytes that sit in
 // `.rdata` immediately before the record, so that `ptr - HeaderBytes` reaches a header saying "immortal"
@@ -277,10 +277,10 @@ export let MmCounterRawAllocBytesName = b"__mm_counter_raw_alloc_bytes"
 export let MmCounterAllocTotalByTagName = b"__mm_counter_alloc_total_by_tag"
 export let MmCounterAllocBytesByTagName = b"__mm_counter_alloc_bytes_by_tag"
 
-let AllocTallyReaderArity = 1 as ParamCount
-let AllocTallyBucketParamPosition = 0 as ParamCount
-let AllocTallyLowestBucket = 0 as FullRangeInt
-let MachineWordSignShift = 63 as FullRangeInt
+let AllocTallyReaderArity = 1
+let AllocTallyBucketParamPosition = 0
+let AllocTallyLowestBucket = 0
+let MachineWordSignShift = 63
 
 // ⭐⭐⭐ **THE THREE PER-THREAD COLUMNS — allocations, frees and bytes asked of ONE GREEN THREAD.** Every
 // process-wide figure counts every thread's traffic, so a bracket opened inside a pool worker would count
@@ -975,7 +975,7 @@ end 'emitAlignUp'
 // ⭐ **ONE MACHINE-WORD SLOT — the stride every WORD-INDEXED buffer in the runtime uses.** The element
 // buffer of any `Array` whose element is a managed POINTER or a machine-word int addresses slot `i`
 // at `base + i·8`.
-let WordSlotBytes = 8 as FullRangeInt
+let WordSlotBytes = 8
 
 // The byte address of word slot `index` in a parallel buffer — `base + index · WordSlotBytes`.
 //
@@ -1348,9 +1348,9 @@ export function buildStrCopy(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 3)
-	let dest = 0 as ValueId
-	let src = 1 as ValueId
-	let len = 2 as ValueId
+	let dest = 0
+	let src = 1
+	let len = 2
 
 	var done = emitForwardCopy(module, func: func, cur: entry, dest: dest, src: src, byteCount: len, ids: ids)
 	module.setTerminator(done, op: StdOp.retVoid)
@@ -1562,7 +1562,7 @@ function buildMmAlloc(module StdModule, model MachineModel)
 	emitParams(module, block: block, count: paramCount)
 	let size = 0 as ValueId
 	let destructor = 1 as ValueId
-	let tagIndex = 2 as ValueId
+	let tagIndex = 2
 
 	let headerConst = ids.mint()
 	module.appendOp(block, op: StdOp.const(headerConst, value: boxPrefixBytes(debugStream), valueType: StdType.i64))
@@ -1773,7 +1773,7 @@ function buildMmIncref(module StdModule)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var immortal = module.addBlock(func, label: b"immortal", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
-	let ptr = 0 as ValueId
+	let ptr = 0
 
 	var owned = emitOneMoreOwner(module, func: func, entry: entry, ptr: ptr, immortal: immortal, ids: ids)
 	module.setTerminator(immortal, op: StdOp.retVoid)
@@ -1918,9 +1918,9 @@ end 'buildMmBoxWalk'
 // visits` for a container's per-element entry: `visits` is the visit table (`WalkVisitTable`), answered back
 // because a meeting may create or grow it. Over one record, `(box)`: one record meets nothing twice.
 export let WalkBoxParam = 0 as ValueId
-let WalkVisitsParam = 1 as ValueId
-let WalkElementWalkParam = 2 as ValueId
-let SingleValueEntryParamCount = 1 as ParamCount
+let WalkVisitsParam = 1
+let WalkElementWalkParam = 2
+let SingleValueEntryParamCount = 1
 let WalkParamCount = 2 as ParamCount
 let ElementWalkParamCount = 3 as ParamCount
 
@@ -2241,7 +2241,7 @@ function buildMmShareBuffer(module StdModule)
 	var counted = module.addBlock(func, label: b"counted", heat: BlockHeat.normal)
 	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
-	let buffer = 0 as ValueId
+	let buffer = 0
 
 	let count = emitLoadRefcount(module, block: entry, ptr: buffer, ids: ids)
 	let isCounted = emitIsCountedWord(module, block: entry, word: count.word, ids: ids)
@@ -2487,7 +2487,7 @@ function buildMmIsNull(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
-	let ptr = 0 as ValueId
+	let ptr = 0
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 	let isNull = emitCmp(module, block: entry, a: ptr, b: zero, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(entry, op: StdOp.ret(isNull))
@@ -2507,7 +2507,7 @@ function buildMmDecref(module StdModule)
 	var lower = module.addBlock(func, label: b"lower", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let ptr = 0 as ValueId
+	let ptr = 0
 
 	emitRefcountCheckToLastOwner(module, func: func, entry: entry, lower: lower, record: ptr, lastOwner: release, ids: ids)
 
@@ -2532,7 +2532,7 @@ function buildMmRelease(module StdModule)
 	var free = module.addBlock(func, label: b"free", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let ptr = 0 as ValueId
+	let ptr = 0
 
 	let header = emitHeaderBase(module, block: entry, ptr: ptr, ids: ids)
 	let destructor = emitLoadField(module, block: entry, record: header, offset: HeaderDestructorOffset, ids: ids)
@@ -4354,7 +4354,7 @@ function synthesizeElementRecordCloner(module StdModule, id GenericInstanceId, s
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
-	let src = 0 as ValueId
+	let src = 0
 
 	let newBox = emitCloneCall(module, block: entry, oldPtr: src, strategy: signatures.elementRecordFieldCascadeStrategy(id, action: CascadeAction.clone), ids: ids)
 	module.setTerminator(entry, op: StdOp.ret(newBox))
@@ -4389,7 +4389,7 @@ function emitFieldCascadeCloner(module StdModule, symbolName ByteArray, boxSize 
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
-	let src = 0 as ValueId
+	let src = 0
 
 	let size = emitConst(module, block: entry, value: boxSize as FullRangeInt, ids: ids)
 	let zeroDtor = emitConst(module, block: entry, value: TrivialDestructor, ids: ids)
@@ -4514,7 +4514,7 @@ function synthesizeUnionCloner(module StdModule, layout EnumLayout, project Proj
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
-	let src = 0 as ValueId
+	let src = 0
 
 	let size = emitConst(module, block: entry, value: layout.boxSizeBytes() as FullRangeInt, ids: ids)
 	let zeroDtor = emitConst(module, block: entry, value: TrivialDestructor, ids: ids)

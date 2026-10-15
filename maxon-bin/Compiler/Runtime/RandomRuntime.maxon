@@ -1,7 +1,7 @@
 export let RandomFillName = b"__rand_fill"
 
 // `getentropy` refuses a request over 256 bytes, so every target fills in pieces no larger.
-let RandomFillPieceBytes = 256 as FullRangeInt
+let RandomFillPieceBytes = 256
 
 function buildRandomFill(module StdModule)
 	var func = IrFunction.createFromStd(RandomFillName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
@@ -20,7 +20,7 @@ function buildRandomFill(module StdModule)
 	var done = module.addBlock(func, label: b"rfdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let arrRec = 0 as ValueId
+	let arrRec = 0
 
 	emitRefuseNonOwnedFillTarget(module, block: entry, record: arrRec, refuse: notOwned, fill: measure, ids: ids)
 	emitRuntimeAbort(module, func: func, block: notOwned, abort: RuntimeAbort.randomFillTargetNotOwned, ids: ids)

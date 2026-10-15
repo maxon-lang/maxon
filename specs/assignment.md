@@ -492,9 +492,13 @@ A `Byte` reaches an `Integer` variable through `as`, and the cast MINTS an `Inte
 typealias Byte = int(0 to u8.max)
 typealias Integer = int(i64.min to i64.max)
 
+function seed() returns Byte
+	return 7
+end 'seed'
+
 function main() returns ExitCode
 	var i = 0 as Integer
-	let b = 7 as Byte
+	let b = seed()
 	i = b as Integer
 	return i as ExitCode
 end 'main'

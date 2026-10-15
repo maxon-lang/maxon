@@ -112,12 +112,12 @@ let WordBytes = 8 as ByteOffset
 // — but the `.rdata` line is shared by every span of every class, so it is the same cache line for the whole
 // program where per-span copies are not. Which of those dominates is a measurement nobody here has taken;
 // what IS certain is that two numbers that cannot disagree stand where three that could would.
-let MspanBaseAddrOffset = 0 as ByteOffset
-let MspanFreeListOffset = 8 as ByteOffset
-let MspanFreeCountOffset = 16 as ByteOffset
-let MspanNextSpanOffset = 24 as ByteOffset
-let MspanClassIdxOffset = 32 as ByteOffset
-let MspanBumpNextOffset = 40 as ByteOffset
+let MspanBaseAddrOffset = 0
+let MspanFreeListOffset = 8
+let MspanFreeCountOffset = 16
+let MspanNextSpanOffset = 24
+let MspanClassIdxOffset = 32
+let MspanBumpNextOffset = 40
 
 // Who owns this span: a P pointer, or one of the negative states below.
 //
@@ -137,7 +137,7 @@ let MspanOwningPOffset = 48 as ByteOffset
 // The span carries this rather than the P, so a span can move between processors without stranding the
 // frees queued against it. A per-P queue is drained only by that P, so a worker that goes idle holds every
 // slot the main thread later frees into its spans.
-let MspanRemoteHeadOffset = 56 as ByteOffset
+let MspanRemoteHeadOffset = 56
 
 // How many slots are on that list. `free_count` cannot answer, because only the caching processor writes
 // it and a queued slot arrived from a thread that was not it — so a census reading `total - free_count`
@@ -373,7 +373,7 @@ end 'SlabTrafficEvent'
 // The value the state `.data` word holds until the region is committed. Named rather than left a bare 0
 // because `emitSlabStateBase`'s probe TESTS it while `runtime/SlabRuntime.maxon` both tests and CLEARS it,
 // and a literal at each site is a chance for one to stop meaning the same thing as the others.
-let SlabStateUncommitted = 0 as FullRangeInt
+let SlabStateUncommitted = 0
 
 // ⭐ **THE ADDRESS A CALL MUST STEP `__slab_lock`'s DEPTH DOWN AT, OR THIS — *"I hold no lock"*.** The
 // sole-writer arm never takes the lock, so carrying a separate flag beside the address would be two values
@@ -1782,7 +1782,7 @@ function buildSlabRoundedSize(module StdModule)
 	var small = module.addBlock(func, label: b"small", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let size = 0 as ValueId
+	let size = 0
 
 	emitSlabSizeRouting(module, block: entry, size: size, osDirect: osDirect, small: small, ids: ids)
 
@@ -1846,9 +1846,9 @@ function buildSlabRefill(module StdModule, model MachineModel)
 	var install = module.addBlock(func, label: b"install", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
-	let classIdx = 0 as ValueId
+	let classIdx = 0
 	let myP = 1 as ValueId
-	let mcacheRow = 2 as ValueId
+	let mcacheRow = 2
 
 	let state = ids.mint()
 	module.appendOp(entry, op: StdOp.call(state, callee: SlabStateName, args: ValueIdArray.create()))
@@ -2272,7 +2272,7 @@ function emitSlabLockedDoorEntry(module StdModule, func IrFunction, entry IrBloc
 	var moved = module.addBlock(func, label: b"moved", heat: BlockHeat.cold)
 
 	emitParams(module, block: entry, count: 2)
-	let span = 1 as ValueId
+	let span = 1
 
 	let owner = emitLoadAcquireField(module, block: entry, record: span, offset: MspanOwningPOffset, ids: ids)
 	let wanted = emitConst(module, block: entry, value: ownerExpected, ids: ids)
@@ -2311,8 +2311,8 @@ function buildSlabFreeToFull(module StdModule)
 
 	emitSlabLockedDoorEntry(module, func: func, entry: entry, handled: exhausted, ownerExpected: MspanStateFull, ids: ids)
 
-	let slot = 0 as ValueId
-	let span = 1 as ValueId
+	let slot = 0
+	let span = 1
 
 	let state = emitSlabStateCommitted(module, block: exhausted, ids: ids)
 	let classIdx = emitLoadField(module, block: exhausted, record: span, offset: MspanClassIdxOffset, ids: ids)
@@ -2347,8 +2347,8 @@ function buildSlabFreeToRaw(module StdModule)
 
 	emitSlabLockedDoorEntry(module, func: func, entry: entry, handled: onRawRow, ownerExpected: MspanOwningPNone, ids: ids)
 
-	let slot = 0 as ValueId
-	let span = 1 as ValueId
+	let slot = 0
+	let span = 1
 
 	module.appendOp(onRawRow, op: StdOp.call(ids.mint(), callee: SlabFreeToSpanName, args: twoArgs(slot, second: span)))
 
@@ -2379,7 +2379,7 @@ function buildSlabSpanDestroy(module StdModule)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let span = 0 as ValueId
+	let span = 0
 
 	let classIdx = emitLoadField(module, block: entry, record: span, offset: MspanClassIdxOffset, ids: ids)
 	let geom = emitClassGeometry(module, block: entry, classIdx: classIdx, ids: ids)
@@ -2551,7 +2551,7 @@ union SlabCensusArgument
 	forwarded
 end 'SlabCensusArgument'
 
-let SlabCensusForwardedParamPosition = 0 as ParamCount
+let SlabCensusForwardedParamPosition = 0
 
 function buildSlabCensusEntry(module StdModule, name ByteArray, callee ByteArray, argument SlabCensusArgument, model MachineModel)
 	let paramCount = match argument 'arity'
@@ -2636,8 +2636,8 @@ function buildSlabFreeToSpan(module StdModule)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let slot = 0 as ValueId
-	let span = 1 as ValueId
+	let slot = 0
+	let span = 1
 
 	var done = emitSlabFreeToSpan(module, func: func, cur: entry, slot: slot, span: span, ids: ids, label: b"push")
 	module.setTerminator(done, op: StdOp.retVoid)
@@ -2673,7 +2673,7 @@ function buildSlabCollectRemote(module StdModule)
 	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let span = 0 as ValueId
+	let span = 0
 
 	let headAddr = emitFieldAddr(module, block: entry, record: span, offset: MspanRemoteHeadOffset, ids: ids)
 	module.setTerminator(entry, op: StdOp.branch(swap.id))
@@ -2761,7 +2761,7 @@ function buildSlabFree(module StdModule, model MachineModel)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let ptr = 0 as ValueId
+	let ptr = 0
 
 	let span = ids.mint()
 	var mapped = emitSlabArenaMapGet(module, func: func, cur: entry, ptr: ptr, spanId: span, ids: ids, label: b"map")
@@ -2906,7 +2906,7 @@ function buildSlabFreeOversize(module StdModule, model MachineModel)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let ptr = 0 as ValueId
+	let ptr = 0
 
 	let osState = emitSlabStateCommitted(module, block: entry, ids: ids)
 	var osArms = emitSlabResolveShard(module, func: func, cur: entry, state: osState, model: model, need: SlabShardNeed.creditsOnly, traffic: ThreadTraffic.free, ids: ids, label: b"shard", heat: BlockHeat.cold)

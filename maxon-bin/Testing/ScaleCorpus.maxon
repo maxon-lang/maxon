@@ -214,16 +214,16 @@ typealias KnobIndex = int(0 to 1048575) implements ElementIndex
 
 // The realistic codebase shape: many small functions. Each is a few ops — a couple of arithmetic
 // ops and a branch — which is what most real functions are.
-let FunctionsBase = 16 as KnobSize
+let FunctionsBase = 16
 
 // Real source FILES, not one big one: this is what exercises `load`, `merge`, and the query spine,
 // none of which a single-file corpus would touch at all. The `manyFunctions` above are distributed
 // across them, so functions-per-file stays constant as both double.
-let FilesBase = 4 as KnobSize
+let FilesBase = 4
 
 // ONE function, N sequential `if`s. The 3,200-`if` headline shape: at rung 5
 // this is exactly 100 << 5 = 3,200.
-let LongIfsBase = 100 as KnobSize
+let LongIfsBase = 100
 
 // ONE function, a huge BLOCK count. Each `if`/`else` contributes three blocks (then, else,
 // continuation), so this is ~3x its knob: at rung 5, 200 << 5 = 6,400 if/elses = ~19,200 blocks —
@@ -231,11 +231,11 @@ let LongIfsBase = 100 as KnobSize
 // a rule. It is
 // separate from `longFunction` because that one grows OPS in a mostly-straight line and this one
 // grows the CFG.
-let DeepBlocksBase = 200 as KnobSize
+let DeepBlocksBase = 200
 
 // N chained calls, each caller holding values live ACROSS its call — so this is the cross-call
 // spill bracket knob, not merely a call-depth knob.
-let CallChainBase = 8 as KnobSize
+let CallChainBase = 8
 
 // ONE function, N pressured loops. Its base is the smallest of the six because its cost can overtake
 // everything else as the ladder climbs.
@@ -252,7 +252,7 @@ let CallChainBase = 8 as KnobSize
 // ordinary code, and this knob is what
 // makes the O(V×B) SSA-construction cost visible and what will catch the next thing that inflates
 // the block-arg id space. If it bends again, MEASURE which phase; do not read this comment.
-let PressuredLoopsBase = 2 as KnobSize
+let PressuredLoopsBase = 2
 
 // ⭐⭐ ONE function, N straight-line groups, each one the shape that makes the **COLORER** — not the
 // splitter — run out of registers, so that `SplitDriver.repairAtExhaustion` runs on this ladder at all.
@@ -287,7 +287,7 @@ let PressuredLoopsBase = 2 as KnobSize
 // worth however many groups there are — `pressuredLoops`' rule. So repairs are Θ(groups) against a
 // function of size Θ(groups), which is exactly the reading this ladder is for: ×2 per doubling is the
 // BATCHED repair loop, ×4 would be a per-repair re-colour.
-let ConfinedDefsBase = 2 as KnobSize
+let ConfinedDefsBase = 2
 
 // ONE function, ONE chain of loops NESTED to depth N — distinct from `pressuredLoops`, which grows
 // loop COUNT at depth 1. Depth is what the loop-phi token pre-scan climbs: `parseWhileStatement`
@@ -312,7 +312,7 @@ let ConfinedDefsBase = 2 as KnobSize
 // live across every enclosing loop and trip E5001 at depth ~14). Base 2 reaches depth 64 at rung 5 —
 // realistic in shape (real code nests loops to depth 3), super-realistic in magnitude, exactly as
 // `longFunction`'s 3,200 ifs are.
-let LoopNestBase = 2 as KnobSize
+let LoopNestBase = 2
 
 // ONE function, N float ARITHMETIC/COMPARE groups — the float twin of `longFunction`.
 //
@@ -327,7 +327,7 @@ let LoopNestBase = 2 as KnobSize
 // `argType` to `i64` while that field IS the phi's REGISTER FILE. The commonest float
 // idiom there is, and both the suite and this ladder were blind to it. This knob generates float
 // phis by construction, so that class of bug cannot hide here again.
-let FloatOpsBase = 64 as KnobSize
+let FloatOpsBase = 64
 
 // ONE function, N loops, each holding `floatsLivePerSpillLoop()` floats live ACROSS a call — the most
 // expensive thing a float does on this target, and a shape no GPR knob can stand in for.
@@ -338,7 +338,7 @@ let FloatOpsBase = 64 as KnobSize
 // `calleeSavedMask` so the next move of that line retunes it instead of blinding it.
 // It is forced spilling rather than E5001: the amended Rule 2 permits a spill whose placement is
 // forced by a call bracket.
-let FloatSpillLoopsBase = 2 as KnobSize
+let FloatSpillLoopsBase = 2
 
 // The bounded set of float accumulators `scaleFloats` mutates — four, against an XMM file of
 // `RegisterFileSize - FirstXmmRegisterNumber`. Small on purpose: the straight-line
@@ -379,7 +379,7 @@ let WorkingFloatsPerFunction = 4 as KnobSize
 // knobs have different pools AND different accumulator counts, so their knees are in different
 // places and neither slack derives from the other. Re-derive this one from the sweep above, never by
 // copying the GPR figure.
-let FloatSpillHeadroom = 2 as KnobSize
+let FloatSpillHeadroom = 2
 
 // How many floats each spill loop holds live across its call: the callee-saved XMM half's width plus
 // `FloatSpillHeadroom`. A FUNCTION rather than a `let` only because a global initializer may not call
@@ -421,7 +421,7 @@ end 'confinedCrossCallDefs'
 //
 // ⚠ BASE >= 2. The two seed constants are literals and every other derives from the two below it (see
 // `globalConstsSource`), so a base below two would emit more constants than the knob claims to.
-let GlobalConstsBase = 32 as KnobSize
+let GlobalConstsBase = 32
 
 // Keeps the constant DAG's values bounded — see `globalConstsSource`. The DAG is Fibonacci-shaped, so
 // without a modulus its values would leave i64 many times over by the top rung's thousandth term. Any
@@ -437,7 +437,7 @@ let GlobalConstModulus = 1000
 // and loads through an impure op. A change to the data-section layout moves this knob and cannot move
 // that one. Two knobs that a future change must be free to move independently are not one knob — the
 // rule `floatSpill` states against `pressuredLoops`.
-let GlobalVarsBase = 32 as KnobSize
+let GlobalVarsBase = 32
 
 // The value each global `var` is seeded with, cycled so the `.data` image is not one repeated byte
 // pattern. A top-level `var`'s initializer MUST be a constant expression (E2045 otherwise), so this is
@@ -459,7 +459,7 @@ let GlobalVarSeedModulus = 7
 // phase at all. What DOES prove the runtime is installed is the leak gate: a struct in a block exits
 // 101, which is unreachable unless `__mm_leak_check` was linked in. This knob's real cost lands in
 // `lowerMaxonToStd`, `isel`, `regalloc` and `encode`, where the work actually is.
-let StructTypesBase = 8 as KnobSize
+let StructTypesBase = 8
 
 // ONE file, M `create` sites over a BOUNDED set of types — the PER-SITE cost: an `__mm_alloc` call, a
 // field store per field, and the release the value's death forces.
@@ -468,7 +468,7 @@ let StructTypesBase = 8 as KnobSize
 // this one grows how many times a type is BUILT. A change to field WRITES moves this one and not
 // that one; a change to the layout descriptor moves that one and not this one. Same rule as
 // `globalVars` above, and as `floatSpill` against `pressuredLoops`.
-let StructAllocsBase = 32 as KnobSize
+let StructAllocsBase = 32
 
 // The bounded set of types `scaleStructAllocs` rotates over. CONSTANT on purpose: were the alloc knob
 // to grow its own types it would BE `structTypes`, the two would move together for ever, and the
@@ -483,7 +483,7 @@ let AllocStructTypeCount = 4 as KnobSize
 // an obvious zero: a corpus FULL of `/` where every one is a FLOAT `/` measures a
 // different Std op entirely (`binOp(div)` — no fixed registers, no trap, a different register file).
 // Counting the operator would have said "covered"; only counting its TYPE says otherwise.
-let IntDivideBase = 32 as KnobSize
+let IntDivideBase = 32
 
 // ⭐ **THE CHECKED-DIVIDE knob — the OTHER divide shape the language has.** A divisor the
 // compiler cannot prove non-zero makes `/` and `mod` THROWING, and the shape that lowers to is
@@ -495,7 +495,7 @@ let IntDivideBase = 32 as KnobSize
 // so the two move independently". Folding it into the divide knob would make one row the sum of two
 // exponents, and a bend in it unattributable. Half the divide base, because each group here costs
 // three blocks where a bare one costs none, and the ladder DOUBLES both.
-let CheckedDivideBase = 16 as KnobSize
+let CheckedDivideBase = 16
 
 // Masks the opaque seed into a divisor whose value is in 1..8: `(acc and DivisorMask) + 1`.
 //
@@ -587,7 +587,7 @@ let ScaleDividendAlias = "ScaleDividend"
 // blocks per group; a guarded ranged `return` costs FIVE — the `if`'s then-block and continuation, plus
 // the guard's `__rc_ok`, `__rc_panic` and the one `__rc_chk` a two-bound cascade threads between them —
 // and the ladder doubles all of them.
-let RangedReturnSitesBase = 8 as KnobSize
+let RangedReturnSitesBase = 8
 
 // How many SCOPE-FILLER locals a long generated function carries — the V DIMENSION, and it DOUBLES.
 //
@@ -622,7 +622,7 @@ let RangedReturnSitesBase = 8 as KnobSize
 //     the two columns above by construction. FIXED 2026-07-28 by inverting the lookup (a name -> position
 //     index on the parser); the ratios now read x1.89 x1.92 x2.00 x2.06 x1.98. This knob is the guard
 //     on all three: a future O(V)-per-branch cost shows up here in whichever column can see it.
-let LocalsPerFunctionBase = 128 as KnobSize
+let LocalsPerFunctionBase = 128
 
 // The BOUNDED set of accumulators the generated branches actually MUTATE — the "assigned" set, held
 // apart from the "in-scope" set above so the two dimensions stay distinct.
@@ -1023,7 +1023,7 @@ end 'neutralizeText'
 // grows how many `match` SITES dispatch over a fixed set of them. A change to enum declaration or tag
 // layout moves this column and not that one; a change to the dispatch STRATEGY moves that one and not
 // this one. Two knobs that a future change must be free to move independently are not one knob.
-let EnumTypesBase = 4 as KnobSize
+let EnumTypesBase = 4
 
 // How many cases each generated enum declares.
 //
@@ -1040,7 +1040,7 @@ let EnumCasesPerType = 4 as KnobSize
 // ⚠ IT ROTATES OVER ALL THREE DISPATCH STRATEGIES, because a corpus that generated only one would
 // measure a third of the lowering — the mistake `IntDivideBase` records for `idiv` (the corpus was full
 // of `/` and every one was a FLOAT `/`). See `matchSitesSource` for which shape provokes which.
-let MatchSitesBase = 16 as KnobSize
+let MatchSitesBase = 16
 
 // The three site SHAPES `matchSitesSource` rotates over: statement-form dense (jump table),
 // expression-form range-folded (linear chain), expression-form sparse (binary search).
@@ -1061,7 +1061,7 @@ let MatchSparseCaseStride = 100
 // `byteLength()` is the way OUT of the String domain, exactly as `trunc` is for floats: it is what makes
 // the group's result flow back into `acc` and therefore load-bearing, so no future DCE pass may take the
 // String dimension away again.
-let StringOpsBase = 8 as KnobSize
+let StringOpsBase = 8
 
 // ===========================================================================================
 // THE FOUR KNOBS FOR THE REST OF `String`'S MEMBER SURFACE
@@ -1088,7 +1088,7 @@ let StringOpsBase = 8 as KnobSize
 // The seven BYTE/ASCII members, plus `replaceFirst` (which is `replace`'s emitter with
 // one flag). No Unicode character database, no grapheme segmentation, no `StringIndex`: `startsWith`,
 // `endsWith`, `contains`, `toLower`, `toUpper`, `replace`, `replaceFirst`, `split`.
-let StringSearchOpsBase = 8 as KnobSize
+let StringSearchOpsBase = 8
 
 // The `StringIndex` family: the two ends (`startIndex`/`endIndex`), the two THROWING searches
 // (`findFirst`/`findLast`), the third throwing method (`indexAfter`), both `slice` overloads and the
@@ -1101,7 +1101,7 @@ let StringSearchOpsBase = 8 as KnobSize
 // in 4.78s at the top rung against 2.23s for the search family and 0.94s for the materializers — four `try`
 // forks per group buy BLOCKS where those two buy ops. (Each figure is a standalone `build` of that one rung-5
 // file net of a 147 ms compiler startup, measured on this tree; the ladder compiles them together.)
-let StringIndexOpsBase = 4 as KnobSize
+let StringIndexOpsBase = 4
 
 // The three trims, over BOTH argument forms: the default `CharacterSet` (built by the compiler
 // when the call presents none) and an explicit one. They are one runtime graph and two flags, so what
@@ -1137,7 +1137,7 @@ let StringIndexOpsBase = 4 as KnobSize
 // holds 32 groups — 96 whitespace-set sites and 96 explicit ones — and this file alone still costs 2.53s
 // there, the most of the four, against 0.94s for the materializer knob at EIGHT times the base. (Standalone
 // rung-5 `build` times net of a 147 ms startup, measured on this tree.)
-let StringTrimOpsBase = 1 as KnobSize
+let StringTrimOpsBase = 1
 
 // Slices B and E — the MATERIALIZERS and the two leftovers: `count()` (the UAX #29 grapheme walk),
 // `bytes()`, `toByteArray()`, `codepoints()`, `utf16()`, `isEmpty()` and `clone()`.
@@ -1146,7 +1146,7 @@ let StringTrimOpsBase = 1 as KnobSize
 // counts a materializer answers are EQUAL on ASCII text, so an ASCII corpus cannot tell `count()` from
 // `codepoints().count()` from `bytes().count()` and a materializer answering with its neighbour's walk
 // would measure and witness identically. See `ViewSegmentText`.
-let StringViewOpsBase = 8 as KnobSize
+let StringViewOpsBase = 8
 
 // ONE file, M `Character` operation groups — the per-SITE cost of the OTHER byte record.
 //
@@ -1164,7 +1164,7 @@ let StringViewOpsBase = 8 as KnobSize
 // lowers to a `__char_cmp` call plus an `Ordering` verdict where `s < t` is a diagnostic. A change to
 // `buildByteRecordCompare`, to the character `match` compare chain or to `retypeCharLiteralAsCodepoint`
 // moves this column and leaves the String one flat.
-let CharOpsBase = 8 as KnobSize
+let CharOpsBase = 8
 
 // ONE file, N types each owning a `String` field, each built once and dropped at scope exit — the
 // PER-TYPE cost of the SYNTHESIZED destructor cascade (`__destruct_<T>`, which frees the field).
@@ -1172,7 +1172,7 @@ let CharOpsBase = 8 as KnobSize
 // ⚠ NOT `stringOps` WITH A STRUCT AROUND IT. That knob grows how many times String CODE runs; this one
 // grows how many distinct `__destruct_<T>` bodies the compiler must SYNTHESIZE and root. A change to
 // `installStructDestructors` moves this column and not that one.
-let ManagedStructTypesBase = 4 as KnobSize
+let ManagedStructTypesBase = 4
 
 // ONE file, M TRIVIAL-element `Array` operation groups — `create`/`reserve`/`push`/`get`/`count`, plus
 // the O(1) COW trio `slice`/`clone`/`append`, over a ranged-int element alias.
@@ -1180,7 +1180,7 @@ let ManagedStructTypesBase = 4 as KnobSize
 // The COW trio is not decoration: `.slice` and `.clone` refcount the BUFFER rather than the record, and
 // `.append` is what forces a detach. A corpus with only `push`/`get` measures the growth path and none
 // of the sharing path.
-let ArrayOpsBase = 8 as KnobSize
+let ArrayOpsBase = 8
 
 // ONE file, M CONCRETE-MANAGED-element `Array` operation groups — `Array with String` and
 // `Array with <struct owning a String>`: the element-destructor threading, and the RETAIN a `get` of a
@@ -1191,7 +1191,7 @@ let ArrayOpsBase = 8 as KnobSize
 // to that threading moves this column while leaving the trivial one flat. (OPAQUE-`T` managed elements —
 // the descriptor-gated `funcAbs64InRdata` path — are x64-only and deliberately absent; see this
 // section's header.)
-let ManagedArrayOpsBase = 4 as KnobSize
+let ManagedArrayOpsBase = 4
 
 // ONE file, N generic BASE declarations, alternating `uses T` and `uses A, B`, each instantiated once —
 // the PER-BASE cost: the type-parameter registry and the ONE shared method body per base that
@@ -1202,7 +1202,7 @@ let ManagedArrayOpsBase = 4 as KnobSize
 // INSTANTIATIONS, which is where the layout descriptors are. This one grows the bases, which is where
 // the shared bodies are. A change to generic-body compilation moves this column; a change to
 // `ensureLayoutDescriptor` moves that one.
-let GenericBasesBase = 4 as KnobSize
+let GenericBasesBase = 4
 
 // The two ARITY shapes `genericBasesSource` alternates over: `uses T` and `uses A, B`.
 //
@@ -1222,7 +1222,7 @@ let GenericBaseArityShapeCount = 2 as KnobSize
 // construction, which is precisely this file's founding defect in miniature. So instance `i` gets its
 // own argument: a ranged int alias whose RANGE is unique to `i` (a generic's ranged element type is part
 // of its type), or a struct unique to `i` that owns a `String`.
-let GenericInstancesBase = 8 as KnobSize
+let GenericInstancesBase = 8
 
 // The two type-argument shapes `genericInstancesSource` rotates over: a TRIVIAL ranged int (borrowed
 // into the box) and a MANAGED struct owning a String (moved in, and dropped through the instance's own
@@ -1252,7 +1252,7 @@ let GenericInstanceArgShapeCount = 2 as KnobSize
 // borrowed `String` at a HAND-OFF is RETAINED instead (`retainBorrowedByteRecord` → `__str_retain`, one
 // call), so the two spellings do not differ in that way — the second spelling is kept because a
 // byte-record instantiation and an aggregate one still take different descriptor arms.
-let TryCoOwnSitesBase = 8 as KnobSize
+let TryCoOwnSitesBase = 8
 
 // The two managed spellings `tryCoOwnSource` rotates over — see the note above. Named for
 // `GenericInstanceArgShapeCount`'s reason: the count and the branches that realize it are one fact, so
@@ -1269,7 +1269,7 @@ let TryCoOwnSpellingCount = 2 as KnobSize
 // `InterfacesPerFile` CONSTANT and letting the file count double is what keeps that scan bounded while
 // the conformance count still climbs. (This corpus emits no `where` clause, so the scan has zero sites
 // today; the shape is kept honest for a knob that adds one.)
-let InterfaceTypesBase = 4 as KnobSize
+let InterfaceTypesBase = 4
 
 // How many interfaces (and their conforming types) go in ONE generated file — see `InterfaceTypesBase`.
 let InterfacesPerFile = 4 as KnobSize
@@ -1280,7 +1280,7 @@ let InterfacesPerFile = 4 as KnobSize
 //
 // ⚠ NOT `interfaceTypes` WITH A DIFFERENT NUMBER: a change to conformance CHECKING moves that column,
 // a change to how an interface method CALL lowers moves this one.
-let IfaceDispatchBase = 8 as KnobSize
+let IfaceDispatchBase = 8
 
 // The bounded set of conforming types `ifaceDispatchSource` rotates its call sites over. CONSTANT for
 // the reason `AllocStructTypeCount` is: were the dispatch knob to grow its own conformances it would BE
@@ -1318,7 +1318,7 @@ let IfaceDispatchTypeCount = 4 as KnobSize
 // index must hold mirrors for; the qualified REFERENCE count rides along with it (one consumer group
 // per module) rather than getting a second knob, because a reference cannot exist without a namespace
 // to name and the two would then double in lockstep anyway — which is one knob wearing two names.
-let NamespacedModulesBase = 4 as KnobSize
+let NamespacedModulesBase = 4
 
 // The subdirectory a module's SECOND file sits in, giving it the MULTI-SEGMENT namespace `ns{m}.inner`.
 //
@@ -3826,8 +3826,8 @@ end 'matchSitesSource'
 
 // The two pickers this knob's sites dispatch on, by the salt each was emitted with — read back here so
 // every shape below knows which ordinal reaches its arms.
-let MatchDenseSalt = 2 as KnobIndex
-let MatchSparseSalt = 5 as KnobIndex
+let MatchDenseSalt = 2
+let MatchSparseSalt = 5
 
 // SHAPE 0 — a STATEMENT match whose arms assign: dense contiguous ordinals, so a jump table.
 function matchDenseStatementSite(index KnobIndex) returns String

@@ -98,9 +98,9 @@ export let StringInterpOverheadBytes = (StringRecordBytes as FullRangeInt) + 1
 // `singleByteGraphemes@48` — 1 iff every byte is < 128 AND no byte is a CR (a compile-time scan). An empty
 // string satisfies it vacuously. The high-bit threshold and the two flag values are named rather than bare
 // so the scan reads as the property it computes.
-let AsciiHighBit = 128 as Byte
-let SingleByteGraphemesTrue = 1 as FullRangeInt
-let SingleByteGraphemesFalse = 0 as FullRangeInt
+let AsciiHighBit = 128
+let SingleByteGraphemesTrue = 1
+let SingleByteGraphemesFalse = 0
 
 // ⚠ **U+000D, AND THIS IS THE THIRD STATEMENT OF THE BYTE — the corpus already carries two, WITH a measured
 // reason, and this one has the same shape of reason.** `stdlib/helpers/string/grapheme.maxon:38` is the
@@ -160,14 +160,14 @@ let UIntToStringScratchBytes = 20 as FullRangeInt
 //
 // ⚠ None is `export`ed: `AsciiLowerA` here is the byte `a` of "false" and nothing else, and the file that
 // owns the only reader owns the only name.
-let AsciiLowerT = 116 as FullRangeInt
-let AsciiLowerR = 114 as FullRangeInt
-let AsciiLowerU = 117 as FullRangeInt
-let AsciiLowerE = 101 as FullRangeInt
-let AsciiLowerF = 102 as FullRangeInt
-let AsciiLowerA = 97 as FullRangeInt
-let AsciiLowerL = 108 as FullRangeInt
-let AsciiLowerS = 115 as FullRangeInt
+let AsciiLowerT = 116
+let AsciiLowerR = 114
+let AsciiLowerU = 117
+let AsciiLowerE = 101
+let AsciiLowerF = 102
+let AsciiLowerA = 97
+let AsciiLowerL = 108
+let AsciiLowerS = 115
 let BoolTrueLength = 4 as FullRangeInt
 let BoolFalseLength = 5 as FullRangeInt
 
@@ -750,8 +750,8 @@ export function buildStrEq(module StdModule, name ByteArray)
 	var allMatch = module.addBlock(func, label: b"allMatch", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let a = 0 as ValueId
-	let b = 1 as ValueId
+	let a = 0
+	let b = 1
 
 	// entry: lengths differ ⇒ not equal; else fall into the byte loop.
 	let aLen = emitLoadField(module, block: entry, record: a, offset: StringLengthOffset, ids: ids)
@@ -1052,7 +1052,7 @@ function buildBoolToString(module StdModule)
 
 	emitParams(module, block: entry, count: 2)
 	let value = 0 as ValueId
-	let dest = 1 as ValueId
+	let dest = 1
 
 	let zeroConst = ids.mint()
 	module.appendOp(entry, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
@@ -1126,7 +1126,7 @@ function buildStrDecref(module StdModule)
 	var freeRec = module.addBlock(func, label: b"freeRec", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let record = 0 as ValueId
+	let record = 0
 
 	// entry: is this record countable at all? An immortal `.rdata` record is left untouched — the header's
 	// argument, and `ManagedMemoryRuntime.__managed_decref`'s arm spelled off the same one test.
@@ -1230,7 +1230,7 @@ function buildStrClone(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
-	let src = 0 as ValueId
+	let src = 0
 
 	// A clone PRESERVES the source's `singleByteGraphemes` classification (the bytes are copied verbatim), unlike a
 	// raw-bytes construction which cannot know it.
@@ -1261,7 +1261,7 @@ function buildStrRetain(module StdModule)
 	var join = module.addBlock(func, label: b"owned", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let record = 0 as ValueId
+	let record = 0
 
 	let isImmortal = emitRecordIsImmortal(module, block: entry, record: record, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(isImmortal, thenBlockId: copyImmortal.id, elseBlockId: coOwn.id))
@@ -1296,7 +1296,7 @@ function buildStrUnshare(module StdModule)
 	var join = module.addBlock(func, label: b"owned", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let record = 0 as ValueId
+	let record = 0
 
 	let isShared = emitIsSharedAllocation(module, block: entry, ptr: record, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(isShared, thenBlockId: copyShared.id, elseBlockId: keepSole.id))
@@ -1346,7 +1346,7 @@ function buildStrFromBytes(module StdModule)
 	var build = module.addBlock(func, label: b"build", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let arr = 0 as ValueId
+	let arr = 0
 
 	let len = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
 	let buf = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
@@ -1411,8 +1411,8 @@ function buildStrOfBuffer(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
-	let src = 0 as ValueId
-	let singleByteGraphemes = 1 as ValueId
+	let src = 0
+	let singleByteGraphemes = 1
 
 	let len = emitLoadField(module, block: entry, record: src, offset: ManagedRecordLengthOffset, ids: ids)
 	let buf = emitLoadField(module, block: entry, record: src, offset: ManagedRecordBufferOffset, ids: ids)
@@ -1453,7 +1453,7 @@ function buildMmToCString(module StdModule)
 	var terminateInPlace = module.addBlock(func, label: b"nulwrite", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let src = 0 as ValueId
+	let src = 0
 
 	let len = emitLoadField(module, block: entry, record: src, offset: ManagedRecordLengthOffset, ids: ids)
 	let buf = emitLoadField(module, block: entry, record: src, offset: ManagedRecordBufferOffset, ids: ids)
@@ -1499,7 +1499,7 @@ function buildMmFromCString(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
-	let cstr = 0 as ValueId
+	let cstr = 0
 
 	let record = ids.mint()
 	var built = emitCStringToManaged(module, func: func, cur: entry, cstr: cstr, record: record, ids: ids)

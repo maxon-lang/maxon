@@ -139,8 +139,12 @@ function toFloat(b Byte) returns Float
 	return b + 0.0
 end 'toFloat'
 
+function seed() returns Byte
+	return 50
+end 'seed'
+
 function main() returns ExitCode
-	let b = 50 as Byte
+	let b = seed()
 	let f = toFloat(b)
 	return trunc(f)
 end 'main'
@@ -203,8 +207,12 @@ function toFloat(b Byte) returns Float
 	return b + 0.0
 end 'toFloat'
 
+function seed() returns Byte
+	return 25
+end 'seed'
+
 function main() returns ExitCode
-	let b = 25 as Byte
+	let b = seed()
 	let f = toFloat(b)
 	return trunc(f)
 end 'main'
@@ -344,10 +352,13 @@ error E3009: specs/type-casting/error.byte-to-bool.maxon:7:12: Cannot cast from 
 A cast whose target names the value's OWN alias is rejected: it converts nothing.
 So is a numeric literal cast to exactly the type its destination already declares — a call
 argument's parameter, a `return`'s declared result, a struct-literal field or a stored field:
-the literal is checked against that type without the cast. A literal cast stays legal where
-nothing declares the type — an untyped `let`/`var`, an operand, an array-literal element, a
-join of `gives`/`if`-`else`/`otherwise` arms, a generic `T` slot — and where the cast decides
-which overload a call selects.
+the literal is checked against that type without the cast. So is a literal cast in an untyped
+`let` when every use of the `let` would take the constant it otherwise holds the same way; a
+`public`, `export` or `module` `let` keeps its cast, and so does one a closure captures.
+A literal cast stays legal where nothing declares the type — an untyped `var`, an operand, an
+array-literal element, a join of `gives`/`if`-`else`/`otherwise` arms, a generic `T` slot, a
+`let` some use of which needs the alias — and where the cast decides which overload a call
+selects.
 A cast naming a DIFFERENT alias is real work whichever way the two ranges run — it
 re-declares the value's type and carries the target's range check — so it compiles.
 
@@ -678,6 +689,215 @@ error E3010: <fragment>:12:16: unneeded cast: the literal 1 already fits in 'Nib
 error E3010: <fragment>:12:29: unneeded cast: the literal 2 already fits in 'Nib'
 ```
 
+<!-- test: error.unneeded.literal-let-every-use-takes-the-constant -->
+A literal cast in an untyped `let` converts nothing when the constant the `let` would otherwise be serves every use the same way.
+```maxon
+typealias Real = float(0.0 to 100.0)
+
+function half(x Real) returns Real
+	return x / 2.0
+end 'half'
+
+function main() returns ExitCode
+	let level = 2.5 as Real
+	if half(level) == 1.25 'halved'
+		return 0
+	end 'halved'
+	return 1
+end 'main'
+```
+```maxoncstderr
+error E3010: <fragment>:9:18: unneeded cast: the literal 2.5 already fits every use of 'level'
+```
+
+<!-- test: error.unneeded.literal-top-level-let-every-use-takes-the-constant -->
+```maxon
+typealias Score = int(0 to 100)
+
+let passMark = 50 as Score
+
+function bonus(score Score) returns Score
+	return score + 1
+end 'bonus'
+
+function main() returns ExitCode
+	if bonus(passMark) > passMark 'raised'
+		return 0
+	end 'raised'
+	return 1
+end 'main'
+```
+```maxoncstderr
+error E3010: <fragment>:4:19: unneeded cast: the literal 50 already fits every use of 'passMark'
+```
+
+<!-- test: error.unneeded.literal-let-to-a-full-range-alias-used-as-an-operand -->
+An operand use takes the constant too: the product of two constants is a constant, checked where it lands.
+```maxon
+let solarMass = 39.478417604357432 as FullRangeFloat
+
+function weigh(mass FullRangeFloat) returns FullRangeFloat
+	return mass
+end 'weigh'
+
+function main() returns ExitCode
+	let jupiter = weigh(9.54791938424326609e-04 * solarMass)
+	let sun = weigh(solarMass)
+	if jupiter < sun 'lighter'
+		return 0
+	end 'lighter'
+	return 1
+end 'main'
+```
+```maxoncstderr
+error E3010: <fragment>:2:36: unneeded cast: the literal 39.478417604357432 already fits every use of 'solarMass'
+```
+
+<!-- test: a-literal-let-cast-that-a-var-starts-from-is-not-unneeded -->
+A `var` starts from a value of an alias, so a `let` it starts from needs its cast.
+```maxon
+typealias Count = int(0 to 1000)
+
+function main() returns ExitCode
+	let start = 3 as Count
+	var n = start
+	n = n + start
+	if n == 6 'six'
+		return 0
+	end 'six'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: a-literal-let-cast-that-picks-the-overload-is-not-unneeded -->
+```maxon
+typealias Small = int(0 to 9)
+typealias Integer = int(i64.min to i64.max)
+
+function pick(x Small) returns ExitCode
+	if x > 0 'positive'
+		return 1
+	end 'positive'
+	return 3
+end 'pick'
+
+function pick(x Integer) returns ExitCode
+	if x > 0 'positive'
+		return 2
+	end 'positive'
+	return 4
+end 'pick'
+
+function main() returns ExitCode
+	let choice = 3 as Small
+	return pick(choice)
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: a-literal-let-cast-read-by-a-name-with-a-generic-declaration-is-not-unneeded -->
+Without the cast the constant would bind the generic `settle`, which returns nothing, so the cast decides the declaration.
+```maxon
+typealias Count = int(0 to 1000)
+
+function settle(dest T, src T) uses T
+	dest = src
+end 'settle'
+
+function settle(dest Count, src Count) returns Count
+	return dest + src
+end 'settle'
+
+function main() returns ExitCode
+	var left = 1 as Count
+	let right = 2 as Count
+	print("{settle(left, src: right)}\n")
+	left = 3
+	return 0
+end 'main'
+```
+```stdout
+3
+```
+
+<!-- test: error.unneeded.literal-top-level-let-to-a-qualified-alias -->
+A qualified cast target names the same declaration as its bare spelling, at file scope as in a body.
+```maxon
+function twice(value Byte) returns Byte
+	return value * 2
+end 'twice'
+
+let seed = 5 as stdlib.Byte
+
+function main() returns ExitCode
+	return twice(seed)
+end 'main'
+```
+```maxoncstderr
+error E3010: <fragment>:6:14: unneeded cast: the literal 5 already fits every use of 'seed'
+```
+
+<!-- test: error.unneeded.literal-let-cast-again-to-another-alias -->
+A cast of the `let` to another alias converts the constant just as well.
+```maxon
+typealias Small = int(0 to 9)
+
+function main() returns ExitCode
+	let k = 3 as Small
+	return k as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3010: <fragment>:5:12: unneeded cast: the literal 3 already fits every use of 'k'
+```
+
+<!-- test: error.unneeded.literal-let-beside-a-partner-of-its-alias -->
+An operand beside a value of the same alias takes the constant as that alias.
+```maxon
+typealias Count = int(0 to 100)
+
+function main() returns ExitCode
+	var total = 4 as Count
+	let step = 3 as Count
+	total = total + step
+	if total == 7 'seven'
+		return 0
+	end 'seven'
+	return 1
+end 'main'
+```
+```maxoncstderr
+error E3010: <fragment>:6:15: unneeded cast: the literal 3 already fits every use of 'step'
+```
+
+<!-- test: a-literal-let-cast-whose-derived-value-outgrows-its-destination-is-not-unneeded -->
+The constant product 120 does not fit `Score`, so without the cast the argument would be refused at compile time instead of checked where it runs.
+```maxon
+typealias Score = int(0 to 100)
+
+function show(score Score) returns Score
+	return score
+end 'show'
+
+function main() returns ExitCode
+	let half = 60 as Score
+	if CommandLine.args().count() > 5 'many'
+		if show(half * 2) > 0 'shown'
+			return 1
+		end 'shown'
+	end 'many'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: distinct-nested-aliases-with-one-member-name-are-not-unneeded -->
 Two inner aliases that share a member name are still two aliases, so a cast from one to the other is real work.
 ```maxon
@@ -920,8 +1140,7 @@ parameter through an explicit conversion, which is not unneeded either.
 typealias Codepoint = int(0 to 200)
 
 function main() returns ExitCode
-	let c = 32 as Codepoint
-	if Unicode.isWhitespace(c as stdlib.Codepoint) 'space'
+	if Unicode.isWhitespace((32 as Codepoint) as stdlib.Codepoint) 'space'
 		return 5
 	end 'space'
 	return 1
@@ -996,8 +1215,12 @@ function asInteger(x Integer) returns Integer
 	return x
 end 'asInteger'
 
+function seed() returns Byte
+	return 42
+end 'seed'
+
 function main() returns ExitCode
-	let b = 42 as Byte
+	let b = seed()
 	let i = b as Integer
 	return asInteger(i)
 end 'main'
@@ -1436,8 +1659,12 @@ two types and not E3010. Lose this and every `as` in the corpus would be refused
 typealias Wide = int(0 to u64.max)
 typealias Narrow = int(0 to 63)
 
+function seed() returns Wide
+	return 5
+end 'seed'
+
 function main() returns ExitCode
-	let w = 5 as Wide
+	let w = seed()
 	let n = w as Narrow
 	let back = n as Wide
 	print("n={n} back={back}")

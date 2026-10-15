@@ -464,7 +464,9 @@ end 'widen'
 let PAD = 7 as ColumnWidth
 
 function main() returns ExitCode
-	return widen(PAD)
+	var width = PAD
+	width = widen(width)
+	return width
 end 'main'
 ```
 ```exitcode

@@ -59,7 +59,7 @@ let GtSwitchTibScratchReg = X64Register.rax
 // once here.
 module let TibStackBaseDisp = 0x08 as Imm32  // NT_TIB.StackBase  — gs:[0x08]
 module let TibStackLimitDisp = 0x10 as Imm32  // NT_TIB.StackLimit — gs:[0x10]
-let TebDeallocationStackDisp = 0x1478 as Imm32
+let TebDeallocationStackDisp = 0x1478
 
 // The NT_TIB stack bounds are a PAIR (base, limit); these two helpers spell that two-word structure ONCE for
 // the three sites that move it — the context switch's save + load, and the shim's after-call restore (which is
@@ -404,8 +404,8 @@ let ShimTibScratchReg = X64Register.rcx  // post-call TIB-restore scratch; dead 
 // The shim's own forward-branch targets, resolved by `resolveChunkRel32Fixups` against a shim-LOCAL fixup list
 // and offset map — the same machinery the panic runtime's assembler uses, scoped here so the ids are looked up
 // only in the shim's own map and never collide with the enclosing function's block ids.
-let ShimDirectLabel = 0 as BlockId
-let ShimDoneLabel = 1 as BlockId
+let ShimDirectLabel = 0
+let ShimDoneLabel = 1
 
 // ⭐⭐ **`mDest` = THE M THIS OS THREAD IS, BRANCHING TO `bail` IF THERE ISN'T ONE — the hand-assembled twin
 // of `SchedRuntime.emitLoadCurrentM`, and the ONE spelling every Target-tier reader shares.** The syscall
@@ -1284,21 +1284,21 @@ let MorestackFerrySkipBytes = StackWordBytes as Imm32
 
 // The walk's own forward/backward branch targets, resolved against a WALK-LOCAL fixup list + offset map (the same
 // machinery the shim and the block assembler use), scoped so the ids never collide with anything else.
-let WalkHeadLabel = 0 as BlockId
-let WalkDoneLabel = 1 as BlockId
+let WalkHeadLabel = 0
+let WalkDoneLabel = 1
 
 // The guard's forward targets — its `skip` jumps, and past `mrt_panic`'s withdrawal of a request — in a
 // GUARD-LOCAL map, which never collides with the enclosing function's block ids (the guard resolves against its
 // own map before the function's blocks emit).
-let GuardSkipLabel = 0 as BlockId
-let GuardCompareLabel = 1 as BlockId
+let GuardSkipLabel = 0
+let GuardCompareLabel = 1
 
 // A rebase's single forward skip target, in its OWN local map resolved at the end of each rebase — distinct from
 // the walk's labels so the two scopes never read as one.
-let RebaseSkipLabel = 0 as BlockId
+let RebaseSkipLabel = 0
 
 // `__gt_guard_tripped`'s one forward target, the jump to the grower, in the chunk's own map.
-let TrippedGrowLabel = 0 as BlockId
+let TrippedGrowLabel = 0
 
 // The registers `__gt_morestack`'s body holds its persistent values in — all callee-saved, so the page call and
 // `__gt_stack_relocate` preserve them, and all among `morestackSavedGprs`, so the guarded function gets back
@@ -1315,11 +1315,11 @@ let GtMorestackProjectedRspReg = X64Register.r8
 
 // The growth loop's and the two refusals' targets, in the chunk's own GROW-LOCAL map: the refusals are placed
 // after the `ret`, so this map is resolved last, after every other local map has been.
-let GrowDoubleLabel = 0 as BlockId
-let GrowExhaustedLabel = 1 as BlockId
-let GrowRefusedLabel = 2 as BlockId
-let GrowFitsLabel = 3 as BlockId
-let GrowRestoreBoundsLabel = 4 as BlockId
+let GrowDoubleLabel = 0
+let GrowExhaustedLabel = 1
+let GrowRefusedLabel = 2
+let GrowFitsLabel = 3
+let GrowRestoreBoundsLabel = 4
 
 // The string-copy opcodes `__gt_stack_relocate`'s memcpy uses — `cld` (clear DF, so `movsb` ascends), then the
 // `rep movsb` pair (F3 prefix + A4). Nothing else in the compiler emits a string op, so they live here rather than in the
@@ -1893,13 +1893,13 @@ function assertAsyncPreemptGprOrder()
 end 'assertAsyncPreemptGprOrder'
 
 // The chunk-local labels of the two Windows chunks.
-let PreemptGiveBackLabel = 0 as BlockId
-let PreemptUnlockLabel = 1 as BlockId
-let PreemptResumeLabel = 2 as BlockId
-let PreemptDoneLabel = 3 as BlockId
-let PreemptNoMachineLabel = 4 as BlockId
-let ExitProcessSpinLabel = 0 as BlockId
-let ExitProcessClaimedLabel = 1 as BlockId
+let PreemptGiveBackLabel = 0
+let PreemptUnlockLabel = 1
+let PreemptResumeLabel = 2
+let PreemptDoneLabel = 3
+let PreemptNoMachineLabel = 4
+let ExitProcessSpinLabel = 0
+let ExitProcessClaimedLabel = 1
 
 // ⭐⭐ **THE INJECTION, WRITTEN ONCE FOR BOTH WAYS A STOP IS DELIVERED.** `sp -= 8; [sp] = pc;
 // pc = __gt_async_preempt`, applied to a SAVED register file — a Windows `CONTEXT` the monitor read out of a

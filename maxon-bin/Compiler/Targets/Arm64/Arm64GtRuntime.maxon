@@ -505,8 +505,8 @@ let Arm64MoreSpReg = Arm64Register.x13
 
 // The system-stack frame. Slot 0 is the ferried GT stack pointer; the saved register block follows it. The
 // two are separated so the ferried word can be read without addressing off a register the restores overwrite.
-let Arm64MorestackEntrySpSlot = 0 as MachineWord
-let Arm64MorestackSaveBase = 16 as MachineWord
+let Arm64MorestackEntrySpSlot = 0
+let Arm64MorestackSaveBase = 16
 
 typealias Arm64RegisterArray = Array with Arm64Register
 
@@ -789,7 +789,7 @@ function emitArm64GtGuardWordRestore(asm Arm64RuntimeAsm, gt Arm64Register, scra
 end 'emitArm64GtGuardWordRestore'
 
 // `__gt_stack_relocate` keeps nothing in its frame but the record.
-let NoRelocateSlots = 0 as StackSize
+let NoRelocateSlots = 0
 
 // `reg += offset` IFF `reg` points inside the OLD stack `[old_base, old_top)`. The one statement of that test, for
 // the switch record's word, `gt.fp` and each interior chain link — a second copy is where one of them would come
@@ -851,7 +851,7 @@ end 'emitArm64RelocateChainWalk'
 // ⚠ It is added to the PROJECTION as well as opened on the cold path, so the guard fires while there is
 // still room for the cell it is about to open. A projection that ignored it would let a green thread whose
 // remaining stack is exactly the frame walk one cell past its own guard word.
-let Arm64GuardSaveBytes = 16 as StackSize
+let Arm64GuardSaveBytes = 16
 
 // The registers the guard works in: caller-saved, non-argument, and outside every value live at a function
 // ENTRY (only x0..x7 and d0..d7 are). `__gt_morestack`'s entry contract names the first two, which is why
@@ -991,7 +991,7 @@ end 'buildArm64GtPreemptArm'
 
 // A libSystem call on a green thread leaves the thread's own stack untouched: the door moves SP to the machine's
 // system stack before it stores anything (`buildArm64DarwinLibcCallChunk`).
-let Arm64ImportCallGtStackBytes = 0 as StackSize
+let Arm64ImportCallGtStackBytes = 0
 
 // ⭐ The M alone, where the caller has already PROVEN it exists and therefore has no branch to take. Not a
 // weaker version of `emitArm64LoadCurrentMOrBail` but a different PRECONDITION, and its one caller states
@@ -1346,7 +1346,7 @@ end 'emitArm64AsyncPreemptGprs'
 // the main thread and by `SchedRuntime.emitSchedWorkerBirth` for a worker.
 function buildArm64PreemptSelfRegisterChunk(os Os) returns FunctionCodeChunk
 	let SlotMachine = 0 as StackSize
-	let SlotUniqueId = 1 as StackSize
+	let SlotUniqueId = 1
 	var asm = Arm64RuntimeAsm.beginFunction(2)
 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotMachine)

@@ -116,7 +116,7 @@ let SubpFailure = -1
 // environment pair sits PAST the flags rather than before them, because the streaming contract carries no
 // stdio triples between the working directory and it — `Parser.SubprocessStreamingSpawnEnvSlot` is the
 // caller's half of the same statement.
-let SubpStreamSpawnParamCount = 6 as ParamCount
+let SubpStreamSpawnParamCount = 6
 
 // `subprocessWaitExit`'s SECOND failure answer: the deadline fired. `waitWithTimeout` maps it to
 // `SubprocessError.timeout` and maps -1 to `ioFailed`, so the two must stay distinct.
@@ -124,27 +124,27 @@ let SubpTimedOutRc = -2
 
 // The `ResultStatusKind` discriminator `stdlib/Subprocess.maxon` decodes. Its raw values are declared THERE
 // and travel across the builtin boundary unchanged, exactly as the stdio kinds do.
-let SubpStatusExited = 0 as FullRangeInt
-let SubpStatusSignalled = 1 as FullRangeInt
-let SubpStatusTimedOut = 2 as FullRangeInt
+let SubpStatusExited = 0
+let SubpStatusSignalled = 1
+let SubpStatusTimedOut = 2
 export let SubpNoExitSignal = 0 as FullRangeInt
 
 let SubprocessStdlibFileName = "Subprocess.maxon"
 
 // The exit code a child is TERMINATED with when its deadline fires. Any non-zero value would do; 1 is what a
 // killed process conventionally reports.
-let SubpKilledExitCode = 1 as FullRangeInt
+let SubpKilledExitCode = 1
 
 // `WaitForSingleObject`'s two answers this file distinguishes: the object became signalled, or the timeout
 // elapsed. Named because a bare `0`/`0x102` at a compare says nothing about which.
-let WaitObjectSignalled = 0 as FullRangeInt
-let WaitTimedOut = 0x102 as FullRangeInt
+let WaitObjectSignalled = 0
+let WaitTimedOut = 0x102
 
 // The `dwCreationFlags` bits `stdlib/Subprocess.maxon`'s `SpawnFlag` surface maps onto. The SURFACE
 // values (bit 0 hide window, bit 1 new process group, bit 2 detach, bit 3 traced) are the corpus's; these
 // are Win32's, and the translation between them lives in one place (`emitSubpCreationFlags`).
-let CreateNoWindow = 0x08000000 as FullRangeInt
-let CreateNewProcessGroup = 0x00000200 as FullRangeInt
+let CreateNoWindow = 0x08000000
+let CreateNewProcessGroup = 0x00000200
 export let DetachedProcess = 0x00000008 as FullRangeInt
 
 // `DEBUG_ONLY_THIS_PROCESS` — the child reports its debug events to this process and its own children are
@@ -152,28 +152,28 @@ export let DetachedProcess = 0x00000008 as FullRangeInt
 export let DebugOnlyThisProcess = 0x00000002 as FullRangeInt
 
 // The surface bitfield's own four bits, as the shifts that extract them.
-let SpawnFlagHideWindowShift = 0 as FullRangeInt
-let SpawnFlagNewGroupShift = 1 as FullRangeInt
-let SpawnFlagDetachShift = 2 as FullRangeInt
-let SpawnFlagTracedShift = 3 as FullRangeInt
+let SpawnFlagHideWindowShift = 0
+let SpawnFlagNewGroupShift = 1
+let SpawnFlagDetachShift = 2
+let SpawnFlagTracedShift = 3
 
 // How long the collect loop sleeps when a pass moved no bytes and the child is still running, on the lane
 // whose pipes ride a completion port and have no poll descriptor to suspend on. It is a GREEN sleep
 // (`__gt_sleep`), so the whole scheduler runs while it waits. One millisecond is the smallest value a Win32
 // timer resolves at all.
-let SubpPollMs = 1 as FullRangeInt
-let SubpNoWaitMs = 0 as FullRangeInt
+let SubpPollMs = 1
+let SubpNoWaitMs = 0
 
 // ⭐ **HOW LONG `delayed` HOLDS THE PIPE AFTER THE CHILD'S FIRST STDOUT BYTE BEFORE FEEDING IT.** Fixed rather
 // than a spawn argument because the spawn contract carries a `limit` slot for stdout and stderr and NONE for
 // stdin — a caller-chosen delay is a change to the builtin's arity. One harness drives every lane through
 // this one marker, so the number is the same everywhere.
-let SubpStdinDelayedFeedMs = 1000 as FullRangeInt
+let SubpStdinDelayedFeedMs = 1000
 
 // The initial size of each collected stream's buffer, and the growth policy. It doubles past what a pass
 // needs, exactly as the streaming line buffer does, so a child producing N bytes costs O(log N) reallocations.
-let SubpCollectInitialBytes = 4096 as FullRangeInt
-let SubpGrowthFactor = 2 as FullRangeInt
+let SubpCollectInitialBytes = 4096
+let SubpGrowthFactor = 2
 
 // ⭐ **THE `waitCollect` LOOP'S STATE, IN MEMORY.** See this file's header for why none of it is a block
 // argument. `progress` counts the bytes a pass moved: a pass that moved none and did not find the run
@@ -181,42 +181,42 @@ let SubpGrowthFactor = 2 as FullRangeInt
 // ⚠ There is no `slot` field: the slot ADDRESS is recomputed from the handle wherever it is needed
 // (`emitSubpSlotOf`) rather than cached, because a cached pointer is a live value across the drain loop and
 // this file's header is about not having those.
-let WcHandle = 0 as ByteOffset
-let WcStdinBlocked = 8 as ByteOffset
-let WcDeadline = 16 as ByteOffset  // absolute tick-count deadline; 0 means "wait forever"
-let WcStartMs = 24 as ByteOffset
-let WcOutBuf = 32 as ByteOffset
-let WcOutLen = 40 as ByteOffset
-let WcOutCap = 48 as ByteOffset
-let WcOutDone = 56 as ByteOffset
-let WcErrBuf = 64 as ByteOffset
-let WcErrLen = 72 as ByteOffset
-let WcErrCap = 80 as ByteOffset
-let WcErrDone = 88 as ByteOffset
-let WcStatus = 96 as ByteOffset
-let WcProgress = 104 as ByteOffset
-let WcAvail = 112 as ByteOffset  // PeekNamedPipe's out-word
-let WcBytesOut = 120 as ByteOffset  // the yielding read's out-word
+let WcHandle = 0
+let WcStdinBlocked = 8
+let WcDeadline = 16  // absolute tick-count deadline; 0 means "wait forever"
+let WcStartMs = 24
+let WcOutBuf = 32
+let WcOutLen = 40
+let WcOutCap = 48
+let WcOutDone = 56
+let WcErrBuf = 64
+let WcErrLen = 72
+let WcErrCap = 80
+let WcErrDone = 88
+let WcStatus = 96
+let WcProgress = 104
+let WcAvail = 112  // PeekNamedPipe's out-word
+let WcBytesOut = 120  // the yielding read's out-word
 
 // ⭐ **THE CHILD'S POLL SOURCE AND ITS REGISTRATION TOKEN** (`NetpollRuntime`'s child band), opened for the
 // length of this wait so the drain has something to suspend on when neither pipe has bytes. They are 0 on a
 // lane whose pipes ride a completion port, where the drain yields instead.
-let WcChildSource = 128 as ByteOffset
-let WcChildToken = 136 as ByteOffset
+let WcChildSource = 128
+let WcChildToken = 136
 
 // ⭐ **WHETHER THIS WAIT HAS LEARNED THAT THE CHILD EXITED, AND THE CHILD'S BIT IN THE GROUP'S ANSWER.** Set
 // by every road that learns it — the reap before any source is opened, the open's `-ESRCH`, and the child
 // source reported ready by `__np_pd_wait_any` — and read by the exit check, which then reaps rather than
 // polls. The child is a group member exactly while it is clear, so a set flag is also why no source is
 // waited on for it. The bit is 0 on a pass whose group holds no child.
-let WcChildExited = 144 as ByteOffset
-let WcChildMemberBit = 152 as ByteOffset
+let WcChildExited = 144
+let WcChildMemberBit = 152
 
-let WcStdinBackoffMs = 160 as ByteOffset
+let WcStdinBackoffMs = 160
 
 // The wait's own group record, and the member counter that fills it. It lives in this scratch rather than in a
 // frame for this file's stated reason: the drain's state is memory, never a block argument.
-let WcGroupCount = 168 as ByteOffset
+let WcGroupCount = 168
 let WcGroup = 176 as ByteOffset
 
 // How many sources one collect wait can hold: stdout, stderr, the child and the stdin write end.
@@ -226,11 +226,11 @@ let WcGroupMembers = 4 as FullRangeInt
 // blocked pass. A PIPE_NOWAIT handle reports no readiness to wait on, and an overlapped write end
 // would take the synchronous writes `__gt_subp_write_all` and `__gt_subp_write_line` make from
 // under them.
-let SubpStdinBackoffGrowth = 2 as FullRangeInt
+let SubpStdinBackoffGrowth = 2
 
-let SubpStdinBackoffFloorMs = 1 as FullRangeInt
+let SubpStdinBackoffFloorMs = 1
 
-let SubpStdinMaxBackoffMs = 16 as FullRangeInt
+let SubpStdinMaxBackoffMs = 16
 let WcBytes = (WcGroup as FullRangeInt) + NetpollGroupHeaderBytes + WcGroupMembers * NetpollGroupSlotBytes
 
 // ⭐ **THE RESULT STRUCT `subprocessWaitCollect` ANSWERS A POINTER TO**, and the six `subprocessResult*`
@@ -240,56 +240,56 @@ let WcBytes = (WcGroup as FullRangeInt) + NetpollGroupHeaderBytes + WcGroupMembe
 // that forgets `subprocessResultRelease` exits 101, which is exactly the discipline this API's `release`
 // contract asks for. A slab region carries no header and no count, and a forgotten release of one is
 // silent.
-let ResStatus = 0 as ByteOffset
-let ResCode = 8 as ByteOffset
-let ResDuration = 16 as ByteOffset
-let ResOutBuf = 24 as ByteOffset
-let ResOutLen = 32 as ByteOffset
-let ResErrBuf = 40 as ByteOffset
-let ResErrLen = 48 as ByteOffset
-let ResBytes = 56 as FullRangeInt
+let ResStatus = 0
+let ResCode = 8
+let ResDuration = 16
+let ResOutBuf = 24
+let ResOutLen = 32
+let ResErrBuf = 40
+let ResErrLen = 48
+let ResBytes = 56
 
 // ⭐ **THE COMMAND-LINE BUILDER'S STATE, IN MEMORY** — this file's header again. `needsQuote` and `scanStart`
 // are per-ARGUMENT and live across the inner scan, which is exactly what a block argument could not carry
 // without threading it through every block of both loops.
-let ClArgvBuf = 0 as ByteOffset
-let ClArgc = 8 as ByteOffset
-let ClOut = 16 as ByteOffset
-let ClOutLen = 24 as ByteOffset
-let ClPos = 32 as ByteOffset  // read cursor into the argv blob
-let ClArg = 40 as ByteOffset  // which argument is being emitted
-let ClScanStart = 48 as ByteOffset
-let ClNeedsQuote = 56 as ByteOffset
-let ClSawByte = 64 as ByteOffset
-let ClBytes = 72 as FullRangeInt
+let ClArgvBuf = 0
+let ClArgc = 8
+let ClOut = 16
+let ClOutLen = 24
+let ClPos = 32  // read cursor into the argv blob
+let ClArg = 40  // which argument is being emitted
+let ClScanStart = 48
+let ClNeedsQuote = 56
+let ClSawByte = 64
+let ClBytes = 72
 
 // The bytes the quoting rule reacts to, and the two it writes.
-let SpaceByte = 32 as FullRangeInt
-let TabByte = 9 as FullRangeInt
-let QuoteByte = 34 as FullRangeInt
-let BackslashByte = 92 as FullRangeInt
+let SpaceByte = 32
+let TabByte = 9
+let QuoteByte = 34
+let BackslashByte = 92
 
 // ⭐ **THE WORST-CASE COMMAND LINE, PER BYTE AND PER ARGUMENT.** Every source byte becomes at most TWO output
 // bytes (a `"` inside a quoted argument is written `\"`), and every argument costs at most three more: a
 // separating space and its two surrounding quotes. Plus one terminator for the whole line. Sizing the buffer
 // from that bound up front is what lets the builder be a SINGLE pass with no growth logic — and the bound is
 // tight enough that the over-allocation is a few bytes per argument.
-let ClBytesPerSourceByte = 2 as FullRangeInt
-let ClBytesPerArg = 3 as FullRangeInt
+let ClBytesPerSourceByte = 2
+let ClBytesPerArg = 3
 
 // ⭐ **THE ENVIRONMENT WALK'S STATE, IN MEMORY** — this file's header again: a hand-built runtime function's
 // values are span-less, so loop state lives in a slab record rather than in block arguments.
 //
 // `EnvCursor` walks the block entry by entry, `EnvRemaining` counts the requested index down to zero, and
 // `EnvBlock` holds the snapshot's base so both exits can release it.
-let EnvCursor = 0 as ByteOffset
-let EnvRemaining = 8 as ByteOffset
-let EnvBlock = 16 as ByteOffset
-let EnvWalkBytes = 24 as FullRangeInt
+let EnvCursor = 0
+let EnvRemaining = 8
+let EnvBlock = 16
+let EnvWalkBytes = 24
 
 // One `char *` in the `EnvironmentSnapshotShape.pointerVector` table. Both lanes that answer that shape are
 // 64-bit; the day a 32-bit one does, this is the one place it is written down.
-let EnvPointerStride = 8 as FullRangeInt
+let EnvPointerStride = 8
 
 // ⭐ **THE `envInherit` SLOT'S VALUE MEANING "the child inherits this process's environment".**
 // `stdlib/Subprocess.maxon`'s `EnvSource.parent` decides it; this is that number read back, named rather
@@ -299,35 +299,35 @@ let EnvPointerStride = 8 as FullRangeInt
 // produces and differ only on the direction an unrecognised one fails in: "non-zero" fails toward INHERIT
 // — a child silently given the parent's environment while its caller was told it had another, which is the
 // failure `StdDialect`'s `osProcessSpawn` note says the design exists to prevent.
-let EnvSourceParent = 1 as FullRangeInt
+let EnvSourceParent = 1
 
-let RpName = 0 as ByteOffset
-let RpNameLen = 8 as ByteOffset
-let RpPath = 16 as ByteOffset  // the PATH value, NUL-terminated
-let RpExts = 24 as ByteOffset  // the PATHEXT value, NUL-terminated
-let RpDirStart = 32 as ByteOffset  // cursor into PATH
-let RpDirLen = 40 as ByteOffset
-let RpSearchesCwd = 48 as ByteOffset
-let RpExtStart = 56 as ByteOffset
-let RpExtLen = 64 as ByteOffset
-let RpExtIsHead = 72 as ByteOffset  // 1 while the name is tried with no extension added
-let RpCand = 80 as ByteOffset  // the candidate path buffer, reused across every combination
-let RpCandLen = 88 as ByteOffset
-let RpTryAsGiven = 96 as ByteOffset
-let RpNameScan = 104 as ByteOffset
-let RpDirPtr = 112 as ByteOffset
-let RpRungAt = 120 as ByteOffset
-let RpRungCount = 128 as ByteOffset
-let RpRungBytes = 136 as ByteOffset
-let RpNameHasPath = 144 as ByteOffset
-let RpExeDir = 152 as ByteOffset
-let RpExeDirLen = 160 as ByteOffset
-let RpSystemDir = 168 as ByteOffset
-let RpSystemDirLen = 176 as ByteOffset
-let RpWindowsDir = 184 as ByteOffset
-let RpWindowsDirLen = 192 as ByteOffset
-let RpLegacySystemDir = 200 as ByteOffset
-let RpLegacySystemDirLen = 208 as ByteOffset
+let RpName = 0
+let RpNameLen = 8
+let RpPath = 16  // the PATH value, NUL-terminated
+let RpExts = 24  // the PATHEXT value, NUL-terminated
+let RpDirStart = 32  // cursor into PATH
+let RpDirLen = 40
+let RpSearchesCwd = 48
+let RpExtStart = 56
+let RpExtLen = 64
+let RpExtIsHead = 72  // 1 while the name is tried with no extension added
+let RpCand = 80  // the candidate path buffer, reused across every combination
+let RpCandLen = 88
+let RpTryAsGiven = 96
+let RpNameScan = 104
+let RpDirPtr = 112
+let RpRungAt = 120
+let RpRungCount = 128
+let RpRungBytes = 136
+let RpNameHasPath = 144
+let RpExeDir = 152
+let RpExeDirLen = 160
+let RpSystemDir = 168
+let RpSystemDirLen = 176
+let RpWindowsDir = 184
+let RpWindowsDirLen = 192
+let RpLegacySystemDir = 200
+let RpLegacySystemDirLen = 208
 
 // `emitSubpWindowsSearchRungs` pushes at most five rungs; a sixth would overwrite `RpRungLens`.
 let SearchRungsMax = 5 as FullRangeInt
@@ -343,10 +343,10 @@ let PathVarName = b"PATH"
 let PathExtVarName = b"PATHEXT"
 let NoCurrentDirectorySearchVarName = b"NoDefaultCurrentDirectoryInExePath"
 let LegacySystemSubdirectory = b"System"
-let ExtensionDotByte = 46 as FullRangeInt
-let DriveColonByte = 58 as FullRangeInt
-let DriveColonIndex = 1 as FullRangeInt
-let DriveSpecBytes = 2 as FullRangeInt
+let ExtensionDotByte = 46
+let DriveColonByte = 58
+let DriveColonIndex = 1
+let DriveSpecBytes = 2
 let WindowsPathListSeparatorByte = 59 as FullRangeInt  // ';'
 let WindowsDirSeparatorByte = 92 as FullRangeInt  // '\'
 let PosixPathListSeparatorByte = 58 as FullRangeInt  // ':'
@@ -362,7 +362,7 @@ let PathExtDefault = b".COM;.EXE;.BAT;.CMD"
 
 // The first guess at an environment variable's size. `PATH` is routinely longer than this, and
 // `emitSubpReadEnvInto` then retries at exactly the size Win32 names.
-let EnvFirstGuessBytes = 512 as FullRangeInt
+let EnvFirstGuessBytes = 512
 
 // The prefix `subprocessLastErrorMessage()` puts in front of the error number `osLastError` answers. That
 // number is in Win32's vocabulary on every lane (`buildSubpLastError` says why), so the prefix names the
@@ -370,7 +370,7 @@ let EnvFirstGuessBytes = 512 as FullRangeInt
 let SubpErrorPrefix = b"os error "
 
 // The widest decimal an i64 can render to, plus its terminator — the scratch `__int_to_string` writes into.
-let DecimalDigitsMax = 24 as Count
+let DecimalDigitsMax = 24
 
 // A fresh slab scratch record of `size` bytes, zero-filled by the allocator's contract. The one place this
 // file's walks allocate their state, and each walk gives it back on every road out of its function.
@@ -568,7 +568,7 @@ function buildSubpShellCommand(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
-	let linePtr = 0 as ValueId
+	let linePtr = 0
 
 	let slotBytes = (ShellArgvSlots * PointerFieldBytes) as ByteOffset
 	let flagOffset = slotBytes + ((ShellPathBytes.count() + TrailingNulBytes) as ByteOffset)
@@ -615,8 +615,8 @@ function buildSubpArgvVector(module StdModule)
 	var finish = module.addBlock(func, label: b"avfinish", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let argvRec = 0 as ValueId
-	let argc = 1 as ValueId
+	let argvRec = 0
+	let argc = 1
 
 	// The same in-memory loop state every walk in this file keeps — see the file header for why none of it is
 	// a block argument.
@@ -676,12 +676,12 @@ function buildSubpArgvVector(module StdModule)
 end 'buildSubpArgvVector'
 
 // The vector builder's state, in memory — the file header's rule, one walk further on.
-let AvArgvBuf = 0 as ByteOffset
-let AvArgc = 8 as ByteOffset
-let AvVec = 16 as ByteOffset
-let AvPos = 24 as ByteOffset  // read cursor into the argv blob
-let AvArg = 32 as ByteOffset  // which argument is being recorded
-let AvBytes = 40 as FullRangeInt
+let AvArgvBuf = 0
+let AvArgc = 8
+let AvVec = 16
+let AvPos = 24  // read cursor into the argv blob
+let AvArg = 32  // which argument is being recorded
+let AvBytes = 40
 
 // ⭐ `__gt_subp_env_vector(envRec) -> envp` under `SpawnEnvironmentShape.pointerVector` — the environment
 // BLOCK turned into a NULL-terminated pointer vector, with NO copying.
@@ -713,7 +713,7 @@ function buildSubpEnvVector(module StdModule)
 	var finish = module.addBlock(func, label: b"evfinish", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let envRec = 0 as ValueId
+	let envRec = 0
 
 	// The same in-memory loop state every walk in this file keeps — see the file header for why none of it is
 	// a block argument.
@@ -793,11 +793,11 @@ function buildSubpEnvVector(module StdModule)
 end 'buildSubpEnvVector'
 
 // The environment vector builder's state, in memory — the file header's rule, one walk further on.
-let EvBuf = 0 as ByteOffset
-let EvVec = 8 as ByteOffset  // unset until the counting pass ends, which is what tells the two passes apart
-let EvPos = 16 as ByteOffset  // read cursor into the environment block
-let EvEntry = 24 as ByteOffset
-let EvBytes = 32 as FullRangeInt
+let EvBuf = 0
+let EvVec = 8  // unset until the counting pass ends, which is what tells the two passes apart
+let EvPos = 16  // read cursor into the environment block
+let EvEntry = 24
+let EvBytes = 32
 
 // ⭐ `__gt_subp_argv_cmdline(argvRec, argc) -> cmdlineBuf` — join an argv blob into ONE mutable
 // NUL-terminated Windows command line.
@@ -836,8 +836,8 @@ function buildSubpArgvCmdline(module StdModule)
 	var finish = module.addBlock(func, label: b"clfinish", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let argvRec = 0 as ValueId
-	let argc = 1 as ValueId
+	let argvRec = 0
+	let argc = 1
 
 	let state = emitSubpScratch(module, block: entry, ids: ids, size: ClBytes)
 	let argvBuf = emitLoadField(module, block: entry, record: argvRec, offset: ManagedRecordBufferOffset, ids: ids)
@@ -1116,20 +1116,20 @@ function buildSubpAttachedSpawn(module StdModule, shape SpawnEnvironmentShape)
 	var build = module.addBlock(func, label: b"subpbuild", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: SubprocessSpawnParamCount)
-	let argv = 0 as ValueId
-	let argc = 1 as ValueId
-	let cwd = 2 as ValueId
-	let env = 3 as ValueId
-	let envInherit = 4 as ValueId
-	let stdinKind = 5 as ValueId
-	let stdinData = 6 as ValueId
-	let outKind = 7 as ValueId
-	let outData = 8 as ValueId
-	let outLimit = 9 as ValueId
-	let errKind = 10 as ValueId
-	let errData = 11 as ValueId
-	let errLimit = 12 as ValueId
-	let surfaceFlags = 13 as ValueId
+	let argv = 0
+	let argc = 1
+	let cwd = 2
+	let env = 3
+	let envInherit = 4
+	let stdinKind = 5
+	let stdinData = 6
+	let outKind = 7
+	let outData = 8
+	let outLimit = 9
+	let errKind = 10
+	let errData = 11
+	let errLimit = 12
+	let surfaceFlags = 13
 
 	let req = emitSubpArgvRequest(module, func: func, ids: ids, entry: entry, build: build, argv: argv, argc: argc, env: env, envInherit: envInherit, shape: shape)
 	emitStoreField(module, block: build, record: req, offset: SubpReqStdinKind, value: stdinKind)
@@ -1255,12 +1255,12 @@ function buildSubpStreamSpawn(module StdModule, shape SpawnEnvironmentShape)
 	var build = module.addBlock(func, label: b"subpbuild", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: SubpStreamSpawnParamCount)
-	let argv = 0 as ValueId
-	let argc = 1 as ValueId
-	let cwd = 2 as ValueId
-	let surfaceFlags = 3 as ValueId
-	let env = 4 as ValueId
-	let envInherit = 5 as ValueId
+	let argv = 0
+	let argc = 1
+	let cwd = 2
+	let surfaceFlags = 3
+	let env = 4
+	let envInherit = 5
 
 	let req = emitSubpArgvRequest(module, func: func, ids: ids, entry: entry, build: build, argv: argv, argc: argc, env: env, envInherit: envInherit, shape: shape)
 	let stdinPipe = emitConst(module, block: build, value: SubpStdinHold, ids: ids)
@@ -1283,7 +1283,7 @@ function buildSubpGetPid(module StdModule)
 	var bad = module.addBlock(func, label: b"subpbad", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let handle = 0 as ValueId
+	let handle = 0
 
 	let failure = emitConst(module, block: bad, value: SubpFailure, ids: ids)
 	module.setTerminator(bad, op: StdOp.ret(failure))
@@ -1326,7 +1326,7 @@ function buildSubpWriteStdin(module StdModule, name ByteArray, extent SubpPayloa
 	var wrote = module.addBlock(func, label: b"subpwok", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: paramCount)
-	let handle = 0 as ValueId
+	let handle = 0
 	let data = 1 as ValueId
 
 	let failure = emitConst(module, block: bad, value: SubpFailure, ids: ids)
@@ -1371,9 +1371,9 @@ function buildSubpQueueStdin(module StdModule)
 	var queued = module.addBlock(func, label: b"subpqok", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
-	let handle = 0 as ValueId
-	let data = 1 as ValueId
-	let length = 2 as ValueId
+	let handle = 0
+	let data = 1
+	let length = 2
 
 	let failure = emitConst(module, block: bad, value: SubpFailure, ids: ids)
 	module.setTerminator(bad, op: StdOp.ret(failure))
@@ -1437,8 +1437,8 @@ function buildSubpReadBytes(module StdModule, name ByteArray, readerName ByteArr
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let handle = 0 as ValueId
-	let maxBytes = 1 as ValueId
+	let handle = 0
+	let maxBytes = 1
 
 	let line = ids.mint()
 	module.appendOp(entry, op: StdOp.call(line, callee: readerName, args: twoArgs(handle, second: maxBytes)))
@@ -1502,8 +1502,8 @@ function buildSubpWaitExit(module StdModule)
 	var exited = module.addBlock(func, label: b"subpwexit", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let handle = 0 as ValueId
-	let timeoutMs = 1 as ValueId
+	let handle = 0
+	let timeoutMs = 1
 
 	let failure = emitConst(module, block: bad, value: SubpFailure, ids: ids)
 	module.setTerminator(bad, op: StdOp.ret(failure))
@@ -1592,7 +1592,7 @@ function buildSubpExitPoll(module StdModule, tail SubpExitTail)
 	var exited = module.addBlock(func, label: b"subppodone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let handle = 0 as ValueId
+	let handle = 0
 
 	let failure = emitConst(module, block: bad, value: SubpFailure, ids: ids)
 	module.setTerminator(bad, op: StdOp.ret(failure))
@@ -1681,8 +1681,8 @@ function buildSubpWaitCollect(module StdModule, target Target)
 	var reap = module.addBlock(func, label: b"wcreap", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let handle = 0 as ValueId
-	let timeoutMs = 1 as ValueId
+	let handle = 0
+	let timeoutMs = 1
 
 	let failure = emitConst(module, block: bad, value: SubpFailure, ids: ids)
 	module.setTerminator(bad, op: StdOp.ret(failure))
@@ -2515,7 +2515,7 @@ end 'emitSubpKeepWithinLimit'
 //
 // A live result is a heap address, so `<= 0` is the whole test: it catches the `-1` `waitCollect` answers on
 // failure and the `0` an uninitialized slot would hold.
-let SubpResultNullValue = 0 as FullRangeInt
+let SubpResultNullValue = 0
 
 // Terminate `cur` on a result pointer that names no struct, and return the block where it does. The three
 // builders below share it for the reason `emitSubpRequireHandle` is shared: one test, one place.
@@ -2536,7 +2536,7 @@ function buildSubpResultWordReader(module StdModule, name ByteArray, offset Byte
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var noStruct = module.addBlock(func, label: b"resnull", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
-	let result = 0 as ValueId
+	let result = 0
 
 	let nullAnswer = emitConst(module, block: noStruct, value: SubpResultNullValue, ids: ids)
 	module.setTerminator(noStruct, op: StdOp.ret(nullAnswer))
@@ -2558,7 +2558,7 @@ function buildSubpResultBufferReader(module StdModule, name ByteArray, bufOffset
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var noStruct = module.addBlock(func, label: b"resnull", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
-	let result = 0 as ValueId
+	let result = 0
 
 	// An EMPTY owned buffer, never a null — `__mm_decref` dereferences the record header, so a null would
 	// move the fault to the caller's scope exit rather than remove it.
@@ -2586,7 +2586,7 @@ function buildSubpResultRelease(module StdModule)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var noStruct = module.addBlock(func, label: b"resnull", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
-	let result = 0 as ValueId
+	let result = 0
 
 	// Nothing to give back. ⚠ This is the arm where an unguarded pointer was worst: it would have handed
 	// three garbage words to `__mm_free`, which poisons the payload a header it does not own describes.
@@ -2704,7 +2704,7 @@ end 'emitSubpEmptyManaged'
 
 // The one byte `__gt_subp_env_entry`'s unreadable answer holds: a NUL, which no cstring entry can contain.
 // `stdlib/Process.maxon`'s `EnvironmentUnreadableByte` is the reader's half of the same statement.
-let SubpEnvUnreadableByte = 0 as FullRangeInt
+let SubpEnvUnreadableByte = 0
 
 // `__gt_subp_env_entry`'s answer when the host handed over no environment: an owned one-byte record holding
 // `SubpEnvUnreadableByte`.
@@ -2762,7 +2762,7 @@ function buildSubpEnvEntryFromVector(module StdModule)
 	var noVector = module.addBlock(func, label: b"subpenvfail", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let index = 0 as ValueId
+	let index = 0
 
 	let vector = ids.mint()
 	module.appendOp(entry, op: StdOp.osEnvBlock(vector))
@@ -2810,7 +2810,7 @@ function buildSubpEnvEntryFromBlock(module StdModule)
 	var pastEnd = module.addBlock(func, label: b"subpenvend", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let index = 0 as ValueId
+	let index = 0
 
 	let block = ids.mint()
 	module.appendOp(entry, op: StdOp.osEnvBlock(block))
@@ -2912,7 +2912,7 @@ function buildSubpResolvePath(module StdModule, shape PathSearchShape)
 	var miss = module.addBlock(func, label: b"rpmiss", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let name = 0 as ValueId
+	let name = 0
 
 	let state = emitSubpScratch(module, block: entry, ids: ids, size: RpBytes)
 	emitStoreField(module, block: entry, record: state, offset: RpName, value: name)
@@ -3118,7 +3118,7 @@ let EmptyPathFallback = b""
 // Room for the separator between a directory and the name, and for the candidate's terminator, on
 // top of the lengths the buffer is sized from. Four rather than two so a future separator or suffix
 // cannot make the bound tight without anyone noticing.
-let CandidateSlackBytes = 4 as FullRangeInt
+let CandidateSlackBytes = 4
 
 // Read an environment variable into a fresh NUL-terminated slab buffer, falling back to a literal
 // when it is unset. `GetEnvironmentVariableW` answers the size it needs when the buffer is too

@@ -67,14 +67,14 @@ export let Utf8TwoByteCeiling = 2048 as FullRangeInt
 export let Utf8ThreeByteCeiling = 65536 as FullRangeInt
 export let Utf8ContinuationFloor = 0x80 as FullRangeInt
 
-let Utf8OneByteLength = 1 as FullRangeInt
+let Utf8OneByteLength = 1
 
 // The other three widths of the SAME ladder, named for `Utf8OneByteLength`'s reason: the encoder
 // (`buildCharFromCodepoint`) allocates a record of exactly the width its arm took, and "3" spelled bare
 // beside `Utf8ThreeByteHighShift` would be the one number in the group that had to be re-derived to read.
-let Utf8TwoByteLength = 2 as FullRangeInt
-let Utf8ThreeByteLength = 3 as FullRangeInt
-let Utf8FourByteLength = 4 as FullRangeInt
+let Utf8TwoByteLength = 2
+let Utf8ThreeByteLength = 3
+let Utf8FourByteLength = 4
 
 // ⭐ **`GraphemeState` PACKED INTO ONE MACHINE WORD**, because a Std runtime function returns exactly one
 // value and the state has two fields, `riCount` and `inEmojiSeq` (`grapheme.maxon`'s `GraphemeStateBits`
@@ -238,9 +238,9 @@ function buildCharAt(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 3)
-	let record = 0 as ValueId
-	let startPos = 1 as ValueId
-	let endPos = 2 as ValueId
+	let record = 0
+	let startPos = 1
+	let endPos = 2
 
 	let buf = emitLoadField(module, block: entry, record: record, offset: StringBufferOffset, ids: ids)
 	let singleByteGraphemes = emitLoadField(module, block: entry, record: record, offset: StringSingleByteGraphemesOffset, ids: ids)
@@ -286,7 +286,7 @@ function buildCharFromCodepoint(module StdModule)
 	var fourByte = module.addBlock(func, label: b"four", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let cp = 0 as ValueId
+	let cp = 0
 
 	emitUtf8WidthFork(module, block: entry, cp: cp, ceiling: Utf8OneByteCeiling, narrow: oneByte, wider: wide, ids: ids)
 	emitUtf8WidthFork(module, block: wide, cp: cp, ceiling: Utf8TwoByteCeiling, narrow: twoByte, wider: three, ids: ids)
@@ -426,7 +426,7 @@ function buildCharAscii(module StdModule)
 	var notAscii = module.addBlock(func, label: b"notascii", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let record = 0 as ValueId
+	let record = 0
 
 	let len = emitLoadField(module, block: entry, record: record, offset: StringLengthOffset, ids: ids)
 	let oneByte = emitConst(module, block: entry, value: Utf8OneByteLength, ids: ids)
@@ -471,8 +471,8 @@ function buildStrToBytes(module StdModule)
 	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let record = 0 as ValueId
-	let arr = 1 as ValueId
+	let record = 0
+	let arr = 1
 
 	let len = emitLoadField(module, block: entry, record: record, offset: StringLengthOffset, ids: ids)
 	let buf = emitLoadField(module, block: entry, record: record, offset: StringBufferOffset, ids: ids)

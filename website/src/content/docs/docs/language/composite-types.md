@@ -160,7 +160,7 @@ typealias Byte = int(0 to u8.max)
 type Limits
 	static let MAX_COUNT = 1000
 	static let SEPARATOR = 61 as Byte
-	static var used = 2
+	static var used = 2 as Byte
 end 'Limits'
 
 function main() returns ExitCode

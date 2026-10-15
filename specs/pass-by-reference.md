@@ -2920,7 +2920,7 @@ typealias CountPicker = Picker with Count
 
 function main() returns ExitCode
 	let picker = CountPicker.create(1)
-	let eight = 8 as Count
+	let eight = 8
 	print("{picker.pick(bump, count: eight)}\n")
 	return 0
 end 'main'

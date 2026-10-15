@@ -716,8 +716,8 @@ end 'x64LinuxEmitSecondsToFileTime'
 // plausible time. (MEASURED as exactly that: `clock.wall-clock-is-a-calendar-time` failed with a calendar
 // built from the nanoseconds half.) The arm64 twin CAN index by slot because its frame grows the other way;
 // this one derives every field from the base, so the direction is stated once.
-let X64LinuxTimespecFirstSlot = 1 as StackSize
-let X64LinuxTimespecSecOffset = 0 as Imm32
+let X64LinuxTimespecFirstSlot = 1
+let X64LinuxTimespecSecOffset = 0
 let X64LinuxTimespecNsecOffset = SpillSlotBytes as Imm32
 
 // `clock_gettime(clockId, &ts)` with the `timespec` in this chunk's own frame — the call every clock chunk
@@ -769,7 +769,7 @@ end 'x64LinuxEmitTimespecToNanos'
 // intermediate would buy nothing (`1e9 / 100` IS `1e7`, so the answer is identical) and would overflow a
 // 64-bit word some five centuries sooner than the FILETIME it is on its way to.
 function buildX64LinuxWallClockChunk() returns FunctionCodeChunk
-	let SlotOutPtr = 0 as StackSize
+	let SlotOutPtr = 0
 	var asm = X64RuntimeAsm.beginFunction(LinuxClockChunkSlots)
 
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotOutPtr), srcReg: X64Register.rcx, wide: true)
@@ -802,7 +802,7 @@ end 'buildX64LinuxWallClockChunk'
 // contract rather than this chunk's omission: `__thread_cpu_ticks` promises only that two readings may be
 // SUBTRACTED, and scaling here to look like Windows would be a guess wearing a unit's name.
 function buildX64LinuxThreadCpuChunk() returns FunctionCodeChunk
-	let SlotOutPtr = 0 as StackSize
+	let SlotOutPtr = 0
 	var asm = X64RuntimeAsm.beginFunction(LinuxClockChunkSlots)
 
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotOutPtr), srcReg: X64Register.rcx, wide: true)
@@ -838,8 +838,8 @@ end 'buildX64LinuxThreadCpuChunk'
 //     store at `n == bufLen` is a one-byte overrun of a buffer the caller is about to throw away.
 //   * otherwise ⇒ terminate at `buf[n]` and answer `n`.
 function buildX64LinuxReadLinkChunk(link ByteArray, name ByteArray) returns FunctionCodeChunk
-	let SlotBufPtr = 0 as StackSize
-	let SlotBufLen = 1 as StackSize
+	let SlotBufPtr = 0
+	let SlotBufLen = 1
 	var asm = X64RuntimeAsm.beginFunction(2)
 
 	let unavailable = asm.newLabel()
@@ -875,8 +875,8 @@ function buildX64LinuxReadLinkChunk(link ByteArray, name ByteArray) returns Func
 end 'buildX64LinuxReadLinkChunk'
 
 function buildX64LinuxRandomFillChunk() returns FunctionCodeChunk
-	let SlotCursor = 0 as StackSize
-	let SlotRemaining = 1 as StackSize
+	let SlotCursor = 0
+	let SlotRemaining = 1
 	var asm = X64RuntimeAsm.beginFunction(2)
 
 	let issue = asm.newLabel()
@@ -933,7 +933,7 @@ end 'buildX64LinuxRandomFillChunk'
 // `sysconf`'s own failure spelling and what `runtime/CpuParallel.maxon`'s `__cpu_count` signed `< 1 ⇒ 1`
 // clamp already reads — the clamp must stay in exactly one place.
 function buildX64LinuxCpuCountChunk() returns FunctionCodeChunk
-	let SlotMask = 0 as StackSize
+	let SlotMask = 0
 	var asm = X64RuntimeAsm.beginFunction(runtimeFrameSlots(LinuxCpuSetBytes))
 
 	let count = asm.newLabel()
@@ -1122,9 +1122,9 @@ end 'buildX64LinuxAttrsFromModeChunk'
 // correctly is `(low << 32) | high` — a 64-bit rotate of the size by 32. x86-64 permits the unaligned
 // store outright, where AArch64's twin has to route it through a scratch register.
 function buildX64LinuxFillFindDataChunk(layout PosixStatLayout) returns FunctionCodeChunk
-	let SlotFindData = 0 as StackSize
-	let SlotStat = 1 as StackSize
-	let SlotName = 2 as StackSize
+	let SlotFindData = 0
+	let SlotStat = 1
+	let SlotName = 2
 	var asm = X64RuntimeAsm.beginFunction(3)
 
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFindData), srcReg: X64Register.rcx, wide: true)
@@ -1159,7 +1159,7 @@ function buildX64LinuxFillFindDataChunk(layout PosixStatLayout) returns Function
 end 'buildX64LinuxFillFindDataChunk'
 
 // How far a 64-bit size rotates to swap its halves — `nFileSizeHigh` precedes `nFileSizeLow` in the record.
-let X64SizeHalfShift = 32 as ShiftCount
+let X64SizeHalfShift = 32
 
 // One `struct stat` timestamp into one `WIN32_FIND_DATAW` FILETIME field.
 function x64LinuxFillFindDataTime(asm X64RuntimeAsm, statSlot StackSize, findSlot StackSize, statOffset Imm32, findOffset Imm32)
@@ -1207,10 +1207,10 @@ end 'buildX64LinuxFileOpenChunk'
 //
 // ⚠ **ONE BUILDER, TWO CHUNKS**: read and write differ in a syscall number and in nothing else.
 function buildX64LinuxTransferChunk(name ByteArray, syscallNumber MachineWord, errnoHome LinuxErrnoHome) returns FunctionCodeChunk
-	let SlotOutPtr = 0 as StackSize
-	let SlotFd = 1 as StackSize
-	let SlotBuf = 2 as StackSize
-	let SlotLen = 3 as StackSize
+	let SlotOutPtr = 0
+	let SlotFd = 1
+	let SlotBuf = 2
+	let SlotLen = 3
 	var asm = X64RuntimeAsm.beginFunction(4)
 
 	let issue = asm.newLabel()
@@ -1265,8 +1265,8 @@ end 'buildX64LinuxTransferChunk'
 // scratch word comes from `ManagedFileRuntime.emitWin32OutWord`, i.e. from `__mm_alloc`, which hands out
 // ZEROED memory as a stated guarantee — and `emitWin32BoolOutcome` reads the word on both paths.
 function buildX64LinuxFileSizeChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
-	let SlotOutPtr = 0 as StackSize
-	let SlotStat = 1 as StackSize
+	let SlotOutPtr = 0
+	let SlotStat = 1
 	let statSlots = runtimeFrameSlots(x64LinuxStatLayout().bytes)
 	var asm = X64RuntimeAsm.beginFunction(1 + statSlots)
 	let statDisp = x64LinuxBufferDisp(asm, firstSlot: SlotStat, slotCount: statSlots)
@@ -1338,9 +1338,9 @@ end 'buildX64LinuxPathOpChunk'
 // `osLastError` the Std tier emits immediately after this call, and a `fsync` that failed would be blamed
 // for a rename that succeeded.
 function buildX64LinuxFileRenameChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
-	let SlotNewPath = 0 as StackSize
-	let SlotDirFd = 1 as StackSize
-	let SlotPrefix = 2 as StackSize
+	let SlotNewPath = 0
+	let SlotDirFd = 1
+	let SlotPrefix = 2
 	let prefixSlots = runtimeFrameSlots(MaxPathBytes)
 	var asm = X64RuntimeAsm.beginFunction(2 + prefixSlots)
 	let prefixDisp = x64LinuxBufferDisp(asm, firstSlot: SlotPrefix, slotCount: prefixSlots)
@@ -1398,7 +1398,7 @@ end 'buildX64LinuxFileRenameChunk'
 // `stat` and the shared mask derivation, which is what keeps `__md_exists`'s answer and the DIRECTORY bit
 // `__mf_stat` publishes derived from ONE reading of `st_mode`.
 function buildX64LinuxFileAttributesChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
-	let SlotStat = 0 as StackSize
+	let SlotStat = 0
 	let statSlots = runtimeFrameSlots(x64LinuxStatLayout().bytes)
 	var asm = X64RuntimeAsm.beginFunction(statSlots)
 	let statDisp = x64LinuxBufferDisp(asm, firstSlot: SlotStat, slotCount: statSlots)
@@ -1439,7 +1439,7 @@ end 'buildX64LinuxFileAttributesChunk'
 // that fitted. Reporting "too small" for a real failure would spin that loop forever, and reporting
 // a failure for a too-small buffer would throw on a long path.
 function buildX64LinuxDirCurrentPathChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
-	let SlotBufLen = 0 as StackSize
+	let SlotBufLen = 0
 	var asm = X64RuntimeAsm.beginFunction(1)
 
 	let refused = asm.newLabel()
@@ -1584,9 +1584,9 @@ end 'buildX64LinuxGlobMatchChunk'
 // path that fails to open — it can NAME A DIFFERENT DIRECTORY THAT EXISTS, and the walk would then list
 // the wrong one and report success.
 function buildX64LinuxDirPrefixChunk() returns FunctionCodeChunk
-	let SlotPath = 0 as StackSize
-	let SlotDest = 1 as StackSize
-	let SlotLength = 2 as StackSize
+	let SlotPath = 0
+	let SlotDest = 1
+	let SlotLength = 2
 	var asm = X64RuntimeAsm.beginFunction(3)
 
 	let currentDirectory = asm.newLabel()
@@ -1665,10 +1665,10 @@ end 'buildX64LinuxDirPrefixChunk'
 // real directory entry that Win32 reports; skipping it would silently shorten a listing, and
 // reading a buffer the call did not fill would report the previous entry's size and timestamps.
 function buildX64LinuxDirFindNextChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
-	let SlotSearch = 0 as StackSize
-	let SlotFindData = 1 as StackSize
-	let SlotName = 2 as StackSize
-	let SlotStat = 3 as StackSize
+	let SlotSearch = 0
+	let SlotFindData = 1
+	let SlotName = 2
+	let SlotStat = 3
 	let statSlots = runtimeFrameSlots(x64LinuxStatLayout().bytes)
 	var asm = X64RuntimeAsm.beginFunction(3 + statSlots)
 	let statDisp = x64LinuxBufferDisp(asm, firstSlot: SlotStat, slotCount: statSlots)
@@ -1762,11 +1762,11 @@ end 'buildX64LinuxDirFindNextChunk'
 // `getdents64` failed keeps its own errno instead, so a real IO error is not reported as a missing
 // file.
 function buildX64LinuxDirFindFirstChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
-	let SlotPattern = 0 as StackSize
-	let SlotFindData = 1 as StackSize
-	let SlotGlob = 2 as StackSize
-	let SlotSearch = 3 as StackSize
-	let SlotStat = 4 as StackSize
+	let SlotPattern = 0
+	let SlotFindData = 1
+	let SlotGlob = 2
+	let SlotSearch = 3
+	let SlotStat = 4
 	let statSlots = runtimeFrameSlots(x64LinuxStatLayout().bytes)
 	var asm = X64RuntimeAsm.beginFunction(4 + statSlots)
 	let statDisp = x64LinuxBufferDisp(asm, firstSlot: SlotStat, slotCount: statSlots)
@@ -1910,7 +1910,7 @@ end 'x64LinuxEmitAllocateSearch'
 // ⚠ **NEITHER SYSCALL STASHES.** `find_first`'s empty-match path reads the errno word AFTER calling this,
 // and a `close` that failed would overwrite the reason it is about to publish.
 function buildX64LinuxDirFindCloseChunk() returns FunctionCodeChunk
-	let SlotSearch = 0 as StackSize
+	let SlotSearch = 0
 	var asm = X64RuntimeAsm.beginFunction(1)
 
 	let unmap = asm.newLabel()
@@ -1941,7 +1941,7 @@ end 'buildX64LinuxDirFindCloseChunk'
 // call may scribble on, which is what a chunk has and an inline `syscall` does not. The two words the
 // caller compares against are `TerminalRuntime`'s, exactly as the errno map above answers in Win32's codes.
 function buildX64LinuxHandleFileTypeChunk() returns FunctionCodeChunk
-	let SlotTermios = 0 as StackSize
+	let SlotTermios = 0
 	var asm = X64RuntimeAsm.beginFunction(runtimeFrameSlots(LinuxTermiosBytes))
 
 	let terminal = asm.newLabel()
@@ -1981,12 +1981,12 @@ end 'buildX64LinuxHandleFileTypeChunk'
 // allocates exactly the answer and the value fits. `arm64PosixEmitEnvValueCopy` states the measurement that
 // made this a rule. An unset variable answers the `PosixEnvUnset` the walk seeded, with no arm of its own.
 function buildX64LinuxEnvReadChunk() returns FunctionCodeChunk
-	let SlotBufPtr = 0 as StackSize
-	let SlotBufLen = 1 as StackSize
-	let SlotValue = 2 as StackSize
-	let SlotWritten = 3 as StackSize
-	let SlotCursor = 4 as StackSize
-	let SlotName = 5 as StackSize
+	let SlotBufPtr = 0
+	let SlotBufLen = 1
+	let SlotValue = 2
+	let SlotWritten = 3
+	let SlotCursor = 4
+	let SlotName = 5
 	var asm = X64RuntimeAsm.beginFunction(6)
 
 	let scan = asm.newLabel()
@@ -2223,8 +2223,8 @@ end 'x64LinuxEmitPanicConstant'
 // ⚠ `CLOCK_MONOTONIC` is the id whose SEMANTICS match Darwin's `CLOCK_UPTIME_RAW`, not the one whose name
 // does — see `LinuxClockMonotonic`.
 function buildX64LinuxMonotonicClockChunk() returns FunctionCodeChunk
-	let SlotTicksPtr = 0 as StackSize
-	let SlotFreqPtr = 3 as StackSize
+	let SlotTicksPtr = 0
+	let SlotFreqPtr = 3
 	var asm = X64RuntimeAsm.beginFunction(1 + LinuxTimespecSlots + 1)
 
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTicksPtr), srcReg: X64Register.rcx, wide: true)
@@ -2258,7 +2258,7 @@ end 'buildX64LinuxMonotonicClockChunk'
 // ⚠ **A SIGNAL CAN CUT IT SHORT (EINTR) AND THIS DOES NOT RESTART IT.** Both callers re-test their own
 // condition after every step, so a short sleep costs one extra lap.
 function buildX64LinuxSleepChunk(name ByteArray, unit PosixTimeUnit) returns FunctionCodeChunk
-	let SlotTimespec = 0 as StackSize
+	let SlotTimespec = 0
 	var asm = X64RuntimeAsm.beginFunction(LinuxTimespecSlots)
 
 	x64LinuxEmitToTimespec(asm, amount: X64Register.rcx, unit: unit, firstSlot: SlotTimespec)
@@ -2310,7 +2310,7 @@ end 'x64LinuxEmitToTimespec'
 // ⚠ **A FAILED `mmap` IS A PANIC, NOT A SILENT NULL.** Scheduler bring-up cannot continue without its wake
 // events, and the alternative is a store through a negative errno several instructions later.
 function buildX64LinuxWaitNewChunk() returns FunctionCodeChunk
-	let SlotKind = 0 as StackSize
+	let SlotKind = 0
 	var asm = X64RuntimeAsm.beginFunction(1)
 
 	let mapped = asm.newLabel()
@@ -2370,13 +2370,13 @@ end 'buildX64LinuxWaitNewChunk'
 // an exiting thread cannot unmap the stack it is standing on, and the one joiner runs on the way out of the
 // process. Every FAILURE arm does release what it took.
 function buildX64LinuxThreadCreateChunk() returns FunctionCodeChunk
-	let SlotEntry = 0 as StackSize
-	let SlotArg = 1 as StackSize
-	let SlotObj = 2 as StackSize
-	let SlotJoin = 3 as StackSize
-	let SlotRegion = 4 as StackSize
-	let SlotStack = 5 as StackSize
-	let SlotTls = 6 as StackSize
+	let SlotEntry = 0
+	let SlotArg = 1
+	let SlotObj = 2
+	let SlotJoin = 3
+	let SlotRegion = 4
+	let SlotStack = 5
+	let SlotTls = 6
 	var asm = X64RuntimeAsm.beginFunction(7)
 
 	let stackMapped = asm.newLabel()
@@ -2490,7 +2490,7 @@ end 'buildX64LinuxThreadCreateChunk'
 // ⚠ **x86-64 IS TOTAL STORE ORDER AND `lock cmpxchg` IS A FULL BARRIER**, so the release ordering the arm64
 // twin buys with `STLXR` is free here and nothing extra is emitted.
 function buildX64LinuxEventSetChunk() returns FunctionCodeChunk
-	let SlotSignal = 0 as StackSize
+	let SlotSignal = 0
 	var asm = X64RuntimeAsm.beginFunction(1)
 
 	x64LinuxEmitUntagHandle(asm, reg: X64Register.rcx)
@@ -2527,11 +2527,11 @@ end 'buildX64LinuxEventSetChunk'
 // ⛔ **A DESCRIPTOR IS NOT WAITABLE, AND SAYING SO LOUDLY IS THE POINT.** Dereferencing one for a kind field
 // would be a wild load; answering `WAIT_TIMEOUT` would be a caller spinning on a handle nothing can signal.
 function buildX64LinuxWaitOneChunk() returns FunctionCodeChunk
-	let SlotSignal = 0 as StackSize
-	let SlotTimeout = 1 as StackSize
-	let SlotResult = 2 as StackSize
-	let SlotTimespec = 3 as StackSize
-	let SlotObj = 5 as StackSize
+	let SlotSignal = 0
+	let SlotTimeout = 1
+	let SlotResult = 2
+	let SlotTimespec = 3
+	let SlotObj = 5
 	var asm = X64RuntimeAsm.beginFunction(3 + LinuxTimespecSlots + 1)
 
 	let isObject = asm.newLabel()
@@ -2648,7 +2648,7 @@ end 'buildX64LinuxWaitOneChunk'
 // ⚠ **A CHILD IS REAPED FIRST.** Without a non-blocking `wait4` an exited child that nobody waited on stays
 // a zombie for the parent's whole life, which a spawn/release loop turns into one per iteration.
 function buildX64LinuxWaitCloseChunk() returns FunctionCodeChunk
-	let SlotObj = 0 as StackSize
+	let SlotObj = 0
 	var asm = X64RuntimeAsm.beginFunction(1)
 
 	let releaseObject = asm.newLabel()
@@ -2708,8 +2708,8 @@ end 'buildX64LinuxLockInitChunk'
 // kernel is entered only when the word is already held. The owner token is one load through FS of the
 // block's self slot (`linuxTlsSelfSlotIndex`).
 function buildX64LinuxLockEnterChunk() returns FunctionCodeChunk
-	let SlotRegion = 0 as StackSize
-	let SlotToken = 1 as StackSize
+	let SlotRegion = 0
+	let SlotToken = 1
 	var asm = X64RuntimeAsm.beginFunction(2)
 
 	let acquire = asm.newLabel()
@@ -2756,7 +2756,7 @@ end 'buildX64LinuxLockEnterChunk'
 // `LeaveCriticalSection` — `LinuxMutexReleaseStep`'s decrement, spelled here as a `lock xadd` of -1 so the
 // displaced word arrives in a register and the wake decision costs no second atomic.
 function buildX64LinuxLockLeaveChunk() returns FunctionCodeChunk
-	let SlotRegion = 0 as StackSize
+	let SlotRegion = 0
 	var asm = X64RuntimeAsm.beginFunction(1)
 
 	let release = asm.newLabel()
@@ -2890,8 +2890,8 @@ let X64LinuxTlsPublishFailedMessage = b"panic: the runtime could not publish the
 // GUARANTEE STRUCTURAL.** The conversion is DERIVED from the frequency that chunk reports rather than
 // assuming the 1e9 every lane happens to answer today.
 function buildX64LinuxTickMsChunk() returns FunctionCodeChunk
-	let SlotTicks = 0 as StackSize
-	let SlotFreq = 1 as StackSize
+	let SlotTicks = 0
+	let SlotFreq = 1
 	var asm = X64RuntimeAsm.beginFunction(2)
 
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotTicks))
@@ -2927,9 +2927,9 @@ end 'buildX64LinuxTickMsChunk'
 // and stashes its errno so the spawn that gives up reports why. A pipe cannot answer descriptor 0
 // in a process that still holds its standard streams.
 function buildX64LinuxPipeChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
-	let SlotReadOut = 0 as StackSize
-	let SlotWriteOut = 1 as StackSize
-	let SlotFds = 2 as StackSize
+	let SlotReadOut = 0
+	let SlotWriteOut = 1
+	let SlotFds = 2
 	var asm = X64RuntimeAsm.beginFunction(3)
 
 	let created = asm.newLabel()
@@ -2974,9 +2974,9 @@ end 'buildX64LinuxPipeChunk'
 // for ever" — the exact INVERSE of `poll`'s 0. A zeroed `timespec` in two frame slots is the no-wait request,
 // and using the same call on both lanes keeps one shape rather than two.
 function buildX64LinuxPipePeekChunk() returns FunctionCodeChunk
-	let SlotAvailOut = 0 as StackSize
-	let SlotPollfd = 1 as StackSize
-	let SlotTimespec = 2 as StackSize
+	let SlotAvailOut = 0
+	let SlotPollfd = 1
+	let SlotTimespec = 2
 	var asm = X64RuntimeAsm.beginFunction(2 + LinuxTimespecSlots)
 
 	let notReady = asm.newLabel()
@@ -3047,9 +3047,9 @@ end 'buildX64LinuxPipePeekChunk'
 // ⚠ A killed child keeps the code the kill named only when its status says SIGKILL; see
 // `PosixSignalExitCodeBase`.
 function buildX64LinuxProcReapChunk() returns FunctionCodeChunk
-	let SlotObj = 0 as StackSize
-	let SlotBlocking = 1 as StackSize
-	let SlotStatus = 2 as StackSize
+	let SlotObj = 0
+	let SlotBlocking = 1
+	let SlotStatus = 2
 	var asm = X64RuntimeAsm.beginFunction(3)
 
 	let alreadySignalled = asm.newLabel()
@@ -3153,9 +3153,9 @@ end 'buildX64LinuxProcReapChunk'
 //
 // ⚠ **IT CONTAINS NO OS CALL AT ALL** — two calls and a compare — which is why the arm64 pair share one body.
 function buildX64LinuxProcAwaitChunk() returns FunctionCodeChunk
-	let SlotObj = 0 as StackSize
-	let SlotTimeout = 1 as StackSize
-	let SlotDeadline = 2 as StackSize
+	let SlotObj = 0
+	let SlotTimeout = 1
+	let SlotDeadline = 2
 	var asm = X64RuntimeAsm.beginFunction(3)
 
 	let bounded = asm.newLabel()
@@ -3219,8 +3219,8 @@ end 'buildX64LinuxProcAwaitChunk'
 // ⚠ **A REAP THAT CANNOT HAPPEN LEAVES THE CACHED STATUS UNTOUCHED**, which is 0 for a handle whose child
 // some other path already took. Answering the last known status beats inventing one.
 function buildX64LinuxProcExitCodeChunk() returns FunctionCodeChunk
-	let SlotCodeOut = 0 as StackSize
-	let SlotObj = 1 as StackSize
+	let SlotCodeOut = 0
+	let SlotObj = 1
 	var asm = X64RuntimeAsm.beginFunction(2)
 
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCodeOut), srcReg: X64Register.rdx, wide: true)
@@ -3234,7 +3234,7 @@ end 'buildX64LinuxProcExitCodeChunk'
 // `mrt_host_proc_exit_signal(rcx = handle) -> rax = signal | 0` — the signal the reap recorded, 0 for a child
 // no signal ended.
 function buildX64LinuxProcExitSignalChunk() returns FunctionCodeChunk
-	let SlotObj = 0 as StackSize
+	let SlotObj = 0
 	var asm = X64RuntimeAsm.beginFunction(1)
 
 	x64LinuxEmitReapedField(asm, objSlot: SlotObj, field: PosixWaitOffChildSignal)
@@ -3270,8 +3270,8 @@ end 'x64LinuxEmitReapedField'
 // group, so a record whose pid was never filled would kill this process and every sibling in its
 // group.
 function buildX64LinuxProcTerminateChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
-	let SlotObj = 0 as StackSize
-	let SlotCode = 1 as StackSize
+	let SlotObj = 0
+	let SlotCode = 1
 	var asm = X64RuntimeAsm.beginFunction(2)
 	let noChild = asm.newLabel()
 	let delivered = asm.newLabel()
@@ -3338,10 +3338,10 @@ function buildX64LinuxTraceRequestChunk(errnoHome LinuxErrnoHome) returns Functi
 end 'buildX64LinuxTraceRequestChunk'
 
 function buildX64LinuxTraceeReadChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
-	let SlotPid = 0 as StackSize
-	let SlotBytes = 1 as StackSize
-	let SlotOut = 2 as StackSize
-	let SlotLocalIov = 3 as StackSize
+	let SlotPid = 0
+	let SlotBytes = 1
+	let SlotOut = 2
+	let SlotLocalIov = 3
 	let SlotRemoteIov = SlotLocalIov + LinuxIovecSlots
 	var asm = X64RuntimeAsm.beginFunction(SlotRemoteIov + LinuxIovecSlots)
 
@@ -3387,10 +3387,10 @@ function buildX64LinuxTraceeReadChunk(errnoHome LinuxErrnoHome) returns Function
 end 'buildX64LinuxTraceeReadChunk'
 
 function buildX64LinuxAwaitTraceeChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
-	let SlotStatusOut = 0 as StackSize
-	let SlotBudget = 1 as StackSize
-	let SlotPid = 2 as StackSize
-	let SlotTimespec = 3 as StackSize
+	let SlotStatusOut = 0
+	let SlotBudget = 1
+	let SlotPid = 2
+	let SlotTimespec = 3
 	var asm = X64RuntimeAsm.beginFunction(SlotTimespec + LinuxTimespecSlots)
 
 	let poll = asm.newLabel()
@@ -3507,20 +3507,20 @@ end 'buildX64LinuxProcessSignalChunk'
 // ⚠ The three descriptors `dup3` installs are the only ones that survive the `execve`: everything else the
 // runtime opens is close-on-exec, and `LinuxOpenCloseOnExec` owns that rule.
 function buildX64LinuxSpawnChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
-	let SlotArgv = 0 as StackSize
-	let SlotCwd = 1 as StackSize
-	let SlotFlags = 2 as StackSize
-	let SlotStartup = 3 as StackSize
-	let SlotProcInfo = 4 as StackSize
-	let SlotPid = 5 as StackSize
-	let SlotHandle = 6 as StackSize
-	let SlotStatusFds = 7 as StackSize
-	let SlotStatusRead = 8 as StackSize
-	let SlotStatusWrite = 9 as StackSize
-	let SlotStatusWord = 10 as StackSize
-	let SlotStatusCount = 11 as StackSize
-	let SlotEnv = 12 as StackSize
-	let SlotCwdFd = 13 as StackSize
+	let SlotArgv = 0
+	let SlotCwd = 1
+	let SlotFlags = 2
+	let SlotStartup = 3
+	let SlotProcInfo = 4
+	let SlotPid = 5
+	let SlotHandle = 6
+	let SlotStatusFds = 7
+	let SlotStatusRead = 8
+	let SlotStatusWrite = 9
+	let SlotStatusWord = 10
+	let SlotStatusCount = 11
+	let SlotEnv = 12
+	let SlotCwdFd = 13
 	var asm = X64RuntimeAsm.beginFunction(14)
 
 	let cwdReady = asm.newLabel()
@@ -3851,9 +3851,9 @@ function x64LinuxEmitShmUnlinkPath(asm X64RuntimeAsm, pathDisp Imm32)
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallUnlinkat)
 end 'x64LinuxEmitShmUnlinkPath'
 
-let X64ShmSlotBytes = 0 as StackSize
-let X64ShmSlotFd = 1 as StackSize
-let X64ShmSlotPath = 2 as StackSize
+let X64ShmSlotBytes = 0
+let X64ShmSlotFd = 1
+let X64ShmSlotPath = 2
 
 function buildX64LinuxShmCreateChunk() returns FunctionCodeChunk
 	var asm = x64LinuxShmBegin()
@@ -3992,8 +3992,8 @@ end 'x64LinuxEmitShmCloseFd'
 // An unset variable answers a zero count, which is "no monitor is listening" — the same answer a refused
 // open gets.
 function buildX64LinuxShmOpenChunk() returns FunctionCodeChunk
-	let SlotBufPtr = 0 as StackSize
-	let SlotPath = 1 as StackSize
+	let SlotBufPtr = 0
+	let SlotPath = 1
 	let pathSlots = runtimeFrameSlots(MaxPathBytes)
 	var asm = X64RuntimeAsm.beginFunction(1 + pathSlots)
 	let pathDisp = x64LinuxBufferDisp(asm, firstSlot: SlotPath, slotCount: pathSlots)
@@ -4025,7 +4025,7 @@ end 'buildX64LinuxShmOpenChunk'
 // every descriptor and every mapping until its NAME is removed, so the consumer's teardown ends here. It is
 // a chunk on this lane and a bare import on the Darwin one only because the name has to become a path first.
 function buildX64LinuxShmUnlinkChunk() returns FunctionCodeChunk
-	let SlotPath = 0 as StackSize
+	let SlotPath = 0
 	let pathSlots = runtimeFrameSlots(MaxPathBytes)
 	var asm = X64RuntimeAsm.beginFunction(pathSlots)
 	let pathDisp = x64LinuxBufferDisp(asm, firstSlot: SlotPath, slotCount: pathSlots)
@@ -4056,8 +4056,8 @@ end 'buildX64LinuxShmUnlinkChunk'
 // no user process an address out of the kernel half. A test for zero would be wrong either way — a failed
 // mapping is negative, never NULL.
 function buildX64LinuxShmMapChunk() returns FunctionCodeChunk
-	let SlotFd = 0 as StackSize
-	let SlotBytes = 1 as StackSize
+	let SlotFd = 0
+	let SlotBytes = 1
 	var asm = X64RuntimeAsm.beginFunction(2)
 
 	let refused = asm.newLabel()
@@ -4380,10 +4380,10 @@ end 'buildX64LinuxNetpollOpenChunk'
 // ⚠ **x86-64's `struct epoll_event` IS PACKED** — a 32-bit `events` then the 64-bit `data` at byte 4 — so the
 // record is two quadword stores, the second overlapping the first's upper half.
 function buildX64LinuxNetpollOpenBreakChunk() returns FunctionCodeChunk
-	let SlotPoller = 0 as StackSize
-	let SlotEventfd = 1 as StackSize
-	let SlotEvent = 2 as StackSize
-	let eventSlots = 2 as StackSize
+	let SlotPoller = 0
+	let SlotEventfd = 1
+	let SlotEvent = 2
+	let eventSlots = 2
 	var asm = X64RuntimeAsm.beginFunction(2 + eventSlots)
 
 	let failed = asm.newLabel()
@@ -4424,8 +4424,8 @@ let LinuxEpollPackedDataOffset = 4
 // ⚠ The record is two quadword stores, the second overlapping the first's upper half — x86-64's
 // `struct epoll_event` is PACKED, exactly as `buildX64LinuxNetpollOpenBreakChunk` writes the break's.
 function buildX64LinuxNetpollArmChunk(name ByteArray, events MachineWord) returns FunctionCodeChunk
-	let SlotEvent = 0 as StackSize
-	let eventSlots = 2 as StackSize
+	let SlotEvent = 0
+	let eventSlots = 2
 	var asm = X64RuntimeAsm.beginFunction(eventSlots)
 
 	let eventDisp = x64LinuxBufferDisp(asm, firstSlot: SlotEvent, slotCount: eventSlots)
@@ -4517,7 +4517,7 @@ end 'buildX64LinuxNetpollWaitChunk'
 // rdx = eventfd)` writes one, and `mrt_host_netpoll_drain_break(rcx = eventfd)` reads the counter back to zero.
 // `descriptor` names the argument register the eventfd arrives in. Each answers the syscall's own result.
 function buildX64LinuxNetpollCounterChunk(name ByteArray, syscallNumber MachineWord, descriptor X64Register) returns FunctionCodeChunk
-	let SlotCounter = 0 as StackSize
+	let SlotCounter = 0
 	var asm = X64RuntimeAsm.beginFunction(1)
 
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: descriptor, wide: true)

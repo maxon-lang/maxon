@@ -352,14 +352,14 @@ let ArrayErrorEmptySlotFlag = ArrayErrorEmptySlotOrdinal + ErrorFlagOrdinalBias
 // ×2.0 at the threshold toward ×5, and a phase whose bytes are LINEAR in the program reads ABOVE ×2.00 per
 // doubling while it climbs. A reading of ×2.1 on a linear phase is the EXPECTED cost of this policy, not a
 // quadratic; it saturates at 5, but the ladder's six rungs sit inside the transition.
-let GrowthThreshold = 256 as FullRangeInt
-let MinimumCapacity = 4 as FullRangeInt
+let GrowthThreshold = 256
+let MinimumCapacity = 4
 
 // The easing step is `capacity + (capacity + 3·GrowthThreshold)/4`. The `3` and the `4` are named (and
 // the `3·GrowthThreshold` addend is derived from `GrowthThreshold` in the IR, not written as a second
 // literal 768) so the formula reads as the policy and no fact is written twice.
-let EaseNumeratorScale = 3 as FullRangeInt
-let EaseDivisor = 4 as FullRangeInt
+let EaseNumeratorScale = 3
+let EaseDivisor = 4
 
 // The runtime entry points. `__`-prefixed (`isCompilerInternalCallee` routes their calls past the
 // user-function checks — no file declares them, so no E3004, no signature slotting) and `__managed_`-
@@ -681,7 +681,7 @@ export let ManagedCursorDecrefName = b"__managed_cursor_decref"
 // promise read through a cursor came out of (`Parser.emitArrayCursorSlot`), and the SIZE because
 // `ProgramSignatures.genericInstanceBoxSize` has to answer how big a cursor's box is.
 export let CursorSourceOffset = 0 as ByteOffset
-let CursorPositionOffset = 8 as ByteOffset
+let CursorPositionOffset = 8
 export let CursorRecordBytes = 16 as FullRangeInt
 
 // ⭐⭐ **`__managed_mem_set` — THE BUFFER'S ELEMENT WRITE, BOUNDED BY CAPACITY.**
@@ -769,8 +769,8 @@ export let ManagedFillName = b"__managed_fill"
 // are transcribed because they are what puts `invalidLength` at 3 — left out, they would be a gap a
 // corpus reorder could move in silence.
 let MemoryIndexOutOfBoundsOrdinal = 0 as FullRangeInt
-let MemoryEmptySlotOrdinal = 1 as FullRangeInt
-let MemorySliceOutOfBoundsOrdinal = 2 as FullRangeInt
+let MemoryEmptySlotOrdinal = 1
+let MemorySliceOutOfBoundsOrdinal = 2
 let MemoryInvalidLengthOrdinal = 3 as FullRangeInt
 let MemoryInvalidCapacityOrdinal = 4 as FullRangeInt
 
@@ -1458,7 +1458,7 @@ module function buildRecordGatedAction(module StdModule, symbolName ByteArray, w
 
 	emitParams(module, block: entry, count: paramCount)
 	let record = 0 as ValueId
-	let value = 1 as ValueId
+	let value = 1
 
 	let word = ids.mint()
 	module.appendOp(entry, op: StdOp.loadIndirect(word, addrId: record, offset: wordOffset, valueType: StdType.i64))
@@ -1476,7 +1476,7 @@ module function buildRecordGatedAction(module StdModule, symbolName ByteArray, w
 end 'buildRecordGatedAction'
 
 // The visit table a `walkThroughWord` entry is handed, after the record and the value.
-let RecordGatedVisitsParam = 2 as ValueId
+let RecordGatedVisitsParam = 2
 
 // The DESTROY tail: `callIndirect` the word on `value` for its effect, then fall into the shared VOID exit —
 // so the inert path and the taken path leave through one `retVoid`.
@@ -2084,7 +2084,7 @@ end 'checkManagedGeometry'
 // width mask and is WRONG at the top of the range: `1 << 64` is undefined, and on x64 the shift count is
 // masked to 6 bits so it yields `1`, making a machine-word element's mask ZERO. `-1 >>logical (64 - bits)`
 // is correct for every width from 1 to 64 and needs no special case.
-let AllBitsSet = -1 as FullRangeInt
+let AllBitsSet = -1
 
 // ⭐ **THE BIT WIDTH OF ONE ELEMENT, FROM EITHER LADDER, BRANCHLESS** — `-es` when the stamp is negative,
 // `es · 8` when it is positive. It is the join that lets every derivation below be one formula: a byte
@@ -2567,12 +2567,12 @@ function buildManagedMoveElems(module StdModule)
 	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 6)
-	let destBuffer = 0 as ValueId
-	let destIndex = 1 as ValueId
-	let srcBuffer = 2 as ValueId
-	let srcIndex = 3 as ValueId
-	let count = 4 as ValueId
-	let es = 5 as ValueId
+	let destBuffer = 0
+	let destIndex = 1
+	let srcBuffer = 2
+	let srcIndex = 3
+	let count = 4
+	let es = 5
 
 	// ⭐⭐ **THE DIRECTION IS DECIDED ONCE, ABOVE THE PACKED/BYTE SPLIT, AND BOTH ARMS READ THE ONE ANSWER.**
 	// Asking it twice — over ELEMENT INDICES in the packed arm (which has no addresses to compare) and over
@@ -2683,10 +2683,10 @@ function buildManagedZeroElems(module StdModule)
 	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 4)
-	let buffer = 0 as ValueId
-	let start = 1 as ValueId
-	let count = 2 as ValueId
-	let es = 3 as ValueId
+	let buffer = 0
+	let start = 1
+	let count = 2
+	let es = 3
 
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 	let isPacked = emitCmp(module, block: entry, a: es, b: zero, pred: StdCmpPred.lt, ids: ids)
@@ -3446,7 +3446,7 @@ function buildManagedCowDetach(module StdModule)
 	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let arr = 0 as ValueId
+	let arr = 0
 
 	// entry — ARM 1: a buffer that is not this record's must be replaced before any write. Asked FIRST, so
 	// the header read below is only ever reached on a pointer that HAS a header (see the ordering note).
@@ -3504,8 +3504,8 @@ function buildManagedGrownCap(module StdModule)
 	var easeDone = module.addBlock(func, label: b"eased", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let current = 0 as ValueId
-	let required = 1 as ValueId
+	let current = 0
+	let required = 1
 
 	// entry: an ask that outruns doubling is taken at face value.
 	let doubled = emitBin(module, block: entry, a: current, b: current, opcode: StdBinOpcode.add, ids: ids)
@@ -3570,8 +3570,8 @@ function buildManagedGrow(module StdModule)
 	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let arr = 0 as ValueId
-	let required = 1 as ValueId
+	let arr = 0
+	let required = 1
 
 	// ⭐ **DETACH FIRST, UNCONDITIONALLY, AHEAD OF THE EARLY-OUT.** Every mutator that reaches the buffer
 	// through a grow (`push`/`reserve`/`resize`/`insert`/`append`) is gated by THIS call, so it must not
@@ -3669,8 +3669,8 @@ function buildManagedCreate(module StdModule)
 	var ok = module.addBlock(func, label: b"ok", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let elementSize = 0 as ValueId
-	let elementDestroy = 1 as ValueId
+	let elementSize = 0
+	let elementDestroy = 1
 
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 	let isZeroSize = emitCmp(module, block: entry, a: elementSize, b: zero, pred: StdCmpPred.eq, ids: ids)
@@ -3698,8 +3698,8 @@ function buildManagedPush(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
-	let arr = 0 as ValueId
-	let value = 1 as ValueId
+	let arr = 0
+	let value = 1
 
 	let length = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
 	let one = emitConst(module, block: entry, value: 1, ids: ids)
@@ -3729,8 +3729,8 @@ function buildManagedGet(module StdModule, greenThreads bool)
 	var load = module.addBlock(func, label: b"load", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let arr = 0 as ValueId
-	let index = 1 as ValueId
+	let arr = 0
+	let index = 1
 
 	let length = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
 	let outOfRange = emitIndexOutOfRange(module, block: entry, index: index, length: length, ids: ids)
@@ -3766,8 +3766,8 @@ function buildManagedGetUnchecked(module StdModule)
 	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let arr = 0 as ValueId
-	let index = 1 as ValueId
+	let arr = 0
+	let index = 1
 
 	let buffer = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
 	let es = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
@@ -3786,9 +3786,9 @@ function buildManagedVacate(module StdModule)
 	var consumedTwice = module.addBlock(func, label: b"vacated", heat: BlockHeat.cold)
 	var empty = module.addBlock(func, label: b"empty", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 3)
-	let arr = 0 as ValueId
-	let index = 1 as ValueId
-	let read = 2 as ValueId
+	let arr = 0
+	let index = 1
+	let read = 2
 
 	let buffer = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
 	let elementSize = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
@@ -3832,9 +3832,9 @@ function buildManagedSet(module StdModule)
 	var store = module.addBlock(func, label: b"store", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
-	let arr = 0 as ValueId
-	let index = 1 as ValueId
-	let value = 2 as ValueId
+	let arr = 0
+	let index = 1
+	let value = 2
 
 	let length = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
 	let outOfRange = emitIndexOutOfRange(module, block: entry, index: index, length: length, ids: ids)
@@ -3945,8 +3945,8 @@ function buildManagedSlotUnfilled(module StdModule, greenThreads bool)
 	var unfilled = module.addBlock(func, label: b"slotunfilled", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let arr = 0 as ValueId
-	let value = 1 as ValueId
+	let arr = 0
+	let value = 1
 
 	let dtor = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordElementDestroyOffset, ids: ids)
 	let slotMustBeFilled = emitSlotMustBeFilled(module, block: entry, destroy: dtor, ids: ids, greenThreads: greenThreads)
@@ -3988,8 +3988,8 @@ function buildManagedReserve(module StdModule)
 	var ids = ValueMinter.create(2)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
-	let arr = 0 as ValueId
-	let n = 1 as ValueId
+	let arr = 0
+	let n = 1
 	let grown = ids.mint()
 	module.appendOp(entry, op: StdOp.call(grown, callee: ManagedGrowName, args: twoArgs(arr, second: n)))
 	module.setTerminator(entry, op: StdOp.retVoid)
@@ -4018,8 +4018,8 @@ function buildManagedResize(module StdModule)
 	var setLen = module.addBlock(func, label: b"setlen", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let arr = 0 as ValueId
-	let n = 1 as ValueId
+	let arr = 0
+	let n = 1
 
 	// entry: a negative length can never be published (see the note above).
 	let negative = emitIsNegative(module, block: entry, value: n, ids: ids)
@@ -4061,7 +4061,7 @@ function buildManagedFirst(module StdModule, greenThreads bool)
 	var load = module.addBlock(func, label: b"load", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let arr = 0 as ValueId
+	let arr = 0
 
 	let length = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
@@ -4086,7 +4086,7 @@ function buildManagedClear(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
-	let arr = 0 as ValueId
+	let arr = 0
 
 	// Detach BEFORE the buffer pointer is loaded (`__managed_cow_detach` trap 1). `clear` cannot throw, and an
 	// EMPTY literal detaches here too, into a zero-byte private buffer (trap 2).
@@ -4119,8 +4119,8 @@ function buildManagedRemove(module StdModule)
 	var remove = module.addBlock(func, label: b"remove", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let arr = 0 as ValueId
-	let index = 1 as ValueId
+	let arr = 0
+	let index = 1
 
 	let length = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
 	let outOfRange = emitIndexOutOfRange(module, block: entry, index: index, length: length, ids: ids)
@@ -4182,9 +4182,9 @@ function buildManagedSlice(module StdModule)
 	var ret = module.addBlock(func, label: b"ret", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
-	let arr = 0 as ValueId
-	let start = 1 as ValueId
-	let endIndex = 2 as ValueId
+	let arr = 0
+	let start = 1
+	let endIndex = 2
 
 	let violated = emitSliceRangeViolated(module, block: entry, arr: arr, start: start, endIndex: endIndex, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(violated, thenBlockId: oob.id, elseBlockId: view.id))
@@ -4210,7 +4210,7 @@ function buildManagedClone(module StdModule)
 	var ret = module.addBlock(func, label: b"ret", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let arr = 0 as ValueId
+	let arr = 0
 
 	let length = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
 	let start = emitConst(module, block: entry, value: 0, ids: ids)
@@ -4262,7 +4262,7 @@ function buildManagedIncref(module StdModule)
 	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let arr = 0 as ValueId
+	let arr = 0
 
 	let isImmortal = emitRecordIsImmortal(module, block: entry, record: arr, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(isImmortal, thenBlockId: done.id, elseBlockId: countable.id))
@@ -4305,8 +4305,8 @@ function buildManagedAppend(module StdModule)
 	var append = module.addBlock(func, label: b"append", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let dest = 0 as ValueId
-	let src = 1 as ValueId
+	let dest = 0
+	let src = 1
 
 	// entry: the two records must stride by the same element size (see THE ELEMENT-SIZE SEAM above).
 	let destEs = emitLoadField(module, block: entry, record: dest, offset: ManagedRecordElementSizeOffset, ids: ids)
@@ -4390,7 +4390,7 @@ function buildArrayHash(module StdModule, name ByteArray, element ArrayHashEleme
 	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let arr = 0 as ValueId
+	let arr = 0
 
 	let buffer = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
 	let count = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
@@ -4441,8 +4441,8 @@ function buildArrayEquals(module StdModule, name ByteArray)
 	var allMatch = module.addBlock(func, label: b"allMatch", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let a = 0 as ValueId
-	let b = 1 as ValueId
+	let a = 0
+	let b = 1
 
 	// entry: element counts differ ⇒ not equal; else fall into the byte loop.
 	let aLen = emitLoadField(module, block: entry, record: a, offset: ManagedRecordLengthOffset, ids: ids)
@@ -4528,8 +4528,8 @@ function buildManagedMemCreate(module StdModule)
 	var build = module.addBlock(func, label: b"build", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let count = 0 as ValueId
-	let elementSize = 1 as ValueId
+	let count = 0
+	let elementSize = 1
 
 	let one = emitConst(module, block: entry, value: 1, ids: ids)
 	let sizeTooSmall = emitCmp(module, block: entry, a: elementSize, b: one, pred: StdCmpPred.lt, ids: ids)
@@ -4587,8 +4587,8 @@ function buildManagedSetLength(module StdModule)
 	var setLen = module.addBlock(func, label: b"setlen", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let arr = 0 as ValueId
-	let n = 1 as ValueId
+	let arr = 0
+	let n = 1
 
 	let negative = emitIsNegative(module, block: entry, value: n, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(negative, thenBlockId: bad.id, elseBlockId: checkHigh.id))
@@ -4638,8 +4638,8 @@ function buildManagedSetByte(module StdModule)
 	var store = module.addBlock(func, label: b"store", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
-	let arr = 0 as ValueId
-	let byteOffset = 1 as ValueId
+	let arr = 0
+	let byteOffset = 1
 	let value = 2 as ValueId
 
 	emitBufferAccessGuard(module, func: func, block: entry, checkHigh: checkHigh, bad: bad, ok: store, arr: arr, offset: byteOffset, isWrite: true, addressesBytes: true, ids: ids)
@@ -4669,8 +4669,8 @@ function buildManagedByteAt(module StdModule)
 	var load = module.addBlock(func, label: b"load", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let arr = 0 as ValueId
-	let byteOffset = 1 as ValueId
+	let arr = 0
+	let byteOffset = 1
 
 	emitBufferAccessGuard(module, func: func, block: entry, checkHigh: checkHigh, bad: bad, ok: load, arr: arr, offset: byteOffset, isWrite: false, addressesBytes: true, ids: ids)
 	emitMemoryThrow(module, block: bad, flag: MemoryInvalidByteRangeFlag, ids: ids)
@@ -4814,9 +4814,9 @@ function buildManagedMemSet(module StdModule)
 	var store = module.addBlock(func, label: b"store", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
-	let arr = 0 as ValueId
-	let index = 1 as ValueId
-	let value = 2 as ValueId
+	let arr = 0
+	let index = 1
+	let value = 2
 
 	emitBufferAccessGuard(module, func: func, block: entry, checkHigh: checkHigh, bad: bad, ok: store, arr: arr, offset: index, isWrite: true, addressesBytes: false, ids: ids)
 
@@ -4882,10 +4882,10 @@ function buildManagedFill(module StdModule)
 	var applied = module.addBlock(func, label: b"applied", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 4)
-	let arr = 0 as ValueId
-	let start = 1 as ValueId
-	let count = 2 as ValueId
-	let value = 3 as ValueId
+	let arr = 0
+	let start = 1
+	let count = 2
+	let value = 3
 
 	let startIsNegative = emitIsNegative(module, block: entry, value: start, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(startIsNegative, thenBlockId: bad.id, elseBlockId: checkCount.id))
@@ -4993,8 +4993,8 @@ function buildManagedMemGrow(module StdModule)
 	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let arr = 0 as ValueId
-	let newCapacity = 1 as ValueId
+	let arr = 0
+	let newCapacity = 1
 
 	emitCowDetach(module, block: entry, arr: arr, ids: ids)
 	let capacity = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordCapacityOffset, ids: ids)
@@ -5045,9 +5045,9 @@ function buildManagedMemSwap(module StdModule)
 	var done = module.addBlock(func, label: b"swdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
-	let arr = 0 as ValueId
-	let i = 1 as ValueId
-	let j = 2 as ValueId
+	let arr = 0
+	let i = 1
+	let j = 2
 
 	let length = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
 	let iBad = emitIndexOutOfRange(module, block: entry, index: i, length: length, ids: ids)
@@ -5100,9 +5100,9 @@ function buildManagedMemShiftRight(module StdModule)
 	var move = module.addBlock(func, label: b"srmove", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
-	let arr = 0 as ValueId
-	let index = 1 as ValueId
-	let count = 2 as ValueId
+	let arr = 0
+	let index = 1
+	let count = 2
 
 	let negativeArgument = emitShiftArgumentIsNegative(module, block: entry, index: index, count: count, floor: 0, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(negativeArgument, thenBlockId: bad.id, elseBlockId: checkRange.id))
@@ -5155,9 +5155,9 @@ function buildManagedMemShiftLeft(module StdModule)
 	var move = module.addBlock(func, label: b"slmove", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
-	let arr = 0 as ValueId
-	let index = 1 as ValueId
-	let count = 2 as ValueId
+	let arr = 0
+	let index = 1
+	let count = 2
 
 	let belowFloor = emitShiftArgumentIsNegative(module, block: entry, index: index, count: count, floor: 1, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(belowFloor, thenBlockId: bad.id, elseBlockId: checkRange.id))
@@ -5230,7 +5230,7 @@ function buildManagedCursorCreate(module StdModule)
 	var build = module.addBlock(func, label: b"curbuild", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let arr = 0 as ValueId
+	let arr = 0
 
 	let length = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
@@ -5305,7 +5305,7 @@ function buildManagedCursorDecref(module StdModule)
 	var release = module.addBlock(func, label: b"release", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let cursor = 0 as ValueId
+	let cursor = 0
 
 	emitRefcountCheckToLastOwner(module, func: func, entry: entry, lower: lower, record: cursor, lastOwner: release, ids: ids)
 
@@ -5324,7 +5324,7 @@ function buildManagedCursorIndex(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
-	let cursor = 0 as ValueId
+	let cursor = 0
 
 	let position = emitLoadField(module, block: entry, record: cursor, offset: CursorPositionOffset, ids: ids)
 	module.setTerminator(entry, op: StdOp.ret(position))
@@ -5351,8 +5351,8 @@ function buildManagedCursorCurrent(module StdModule, greenThreads bool, pastEnd 
 	var ret = module.addBlock(func, label: b"curret", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let cursor = 0 as ValueId
-	let site = 1 as ValueId
+	let cursor = 0
+	let site = 1
 
 	let position = emitLoadField(module, block: entry, record: cursor, offset: CursorPositionOffset, ids: ids)
 	let outOfRange = emitCursorPositionOutOfRange(module, block: entry, cursor: cursor, position: position, ids: ids)
@@ -5394,7 +5394,7 @@ export function emitSlotMustBeFilled(module StdModule, block IrBlock, destroy Va
 end 'emitSlotMustBeFilled'
 
 let CursorPastEndPanicText = b"panic: index out of range: the cursor's position is past the end of its array\n"
-let CursorPanicLineBytes = 96 as FullRangeInt
+let CursorPanicLineBytes = 96
 let EmptySlotMessagePrefixName = "EmptySlotMessagePrefix"
 let EmptySlotMessageSuffixName = "EmptySlotMessageSuffix"
 export let EmptySlotMessageStdlibFileName = "Builtins.maxon"
@@ -5456,8 +5456,8 @@ function buildManagedCursorPeek(module StdModule)
 	var ret = module.addBlock(func, label: b"pkret", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let cursor = 0 as ValueId
-	let ahead = 1 as ValueId
+	let cursor = 0
+	let ahead = 1
 
 	let position = emitLoadField(module, block: entry, record: cursor, offset: CursorPositionOffset, ids: ids)
 	let target = emitBin(module, block: entry, a: position, b: ahead, opcode: StdBinOpcode.add, ids: ids)
@@ -5504,7 +5504,7 @@ function buildManagedCursorNavigator(module StdModule, name ByteArray, step Curs
 	var move = module.addBlock(func, label: b"navmove", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: paramCount)
-	let cursor = 0 as ValueId
+	let cursor = 0
 
 	var target = 1 as ValueId
 
@@ -5601,7 +5601,7 @@ function buildManagedDecref(module StdModule)
 	var freeRec = module.addBlock(func, label: b"freerec", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let record = 0 as ValueId
+	let record = 0
 
 	let isImmortal = emitRecordIsImmortal(module, block: entry, record: record, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(isImmortal, thenBlockId: immortal.id, elseBlockId: countable.id))
@@ -5751,8 +5751,8 @@ function buildManagedCloneManaged(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
-	let arr = 0 as ValueId
-	let cloneFn = 1 as ValueId
+	let arr = 0
+	let cloneFn = 1
 
 	let es = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
 	let dtor = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordElementDestroyOffset, ids: ids)
@@ -5888,10 +5888,10 @@ function buildManagedSliceManaged(module StdModule)
 	var doSlice = module.addBlock(func, label: b"slice", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 4)
-	let arr = 0 as ValueId
-	let start = 1 as ValueId
-	let endIndex = 2 as ValueId
-	let cloneFn = 3 as ValueId
+	let arr = 0
+	let start = 1
+	let endIndex = 2
+	let cloneFn = 3
 
 	let violated = emitSliceRangeViolated(module, block: entry, arr: arr, start: start, endIndex: endIndex, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(violated, thenBlockId: oob.id, elseBlockId: doSlice.id))
@@ -5930,9 +5930,9 @@ function buildManagedAppendManaged(module StdModule)
 	var append = module.addBlock(func, label: b"append", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
-	let dest = 0 as ValueId
-	let src = 1 as ValueId
-	let cloneFn = 2 as ValueId
+	let dest = 0
+	let src = 1
+	let cloneFn = 2
 
 	let destEs = emitLoadField(module, block: entry, record: dest, offset: ManagedRecordElementSizeOffset, ids: ids)
 	let srcEs = emitLoadField(module, block: entry, record: src, offset: ManagedRecordElementSizeOffset, ids: ids)
@@ -5996,10 +5996,10 @@ function buildManagedSliceOpaque(module StdModule)
 	var join = module.addBlock(func, label: b"join", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 4)
-	let arr = 0 as ValueId
-	let start = 1 as ValueId
-	let endIndex = 2 as ValueId
-	let descriptor = 3 as ValueId
+	let arr = 0
+	let start = 1
+	let endIndex = 2
+	let descriptor = 3
 
 	let copyFn = emitCopyFuncBranch(module, entry: entry, descriptor: descriptor, trivialId: trivial.id, managedId: managed.id, ids: ids)
 
@@ -6037,9 +6037,9 @@ function buildManagedAppendOpaque(module StdModule)
 	var join = module.addBlock(func, label: b"join", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
-	let dest = 0 as ValueId
-	let src = 1 as ValueId
-	let descriptor = 2 as ValueId
+	let dest = 0
+	let src = 1
+	let descriptor = 2
 
 	let copyFn = emitCopyFuncBranch(module, entry: entry, descriptor: descriptor, trivialId: trivial.id, managedId: managed.id, ids: ids)
 

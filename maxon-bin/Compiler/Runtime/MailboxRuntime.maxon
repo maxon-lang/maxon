@@ -37,28 +37,28 @@
 // single instant. The two COUNTS are `lock xadd` instead, for the reason `MultiMSharing.atomicStep` names:
 // each is one word whose transaction is exactly its own increment, and a handle clone on a hot path should
 // not queue behind the scheduler.
-let MboxOffHead = 0x00 as ByteOffset
-let MboxOffTail = 0x08 as ByteOffset
+let MboxOffHead = 0x00
+let MboxOffTail = 0x08
 
 // ⚠ **NAMED `parkedGt` AND NOT `waiter`, BECAUSE `GtOffWaiter` IS A DIFFERENT FACT ABOUT THE SAME THREAD.**
 // A GT's `waiter` is the scheduler context that switched it in — who to context-switch back to. This is the
 // green thread parked in `__mbox_recv` on THIS mailbox, i.e. who to make `ready` when an envelope arrives.
 // Two fields called `waiter` in one wake sequence is exactly the confusion that writes a status into the
 // wrong struct.
-let MboxOffParkedGt = 0x10 as ByteOffset
+let MboxOffParkedGt = 0x10
 
 // Non-zero once the mailbox has been closed — by the last handle drop, or by the loop on its way out after a
 // `__shutdown` pill. A send to a closed mailbox ABANDONS its request rather than queueing it, and a receive
 // on a closed EMPTY one answers 0, which is how the loop learns to exit.
-let MboxOffClosed = 0x18 as ByteOffset
+let MboxOffClosed = 0x18
 
-let MboxOffHandles = 0x20 as ByteOffset
-let MboxOffRefs = 0x28 as ByteOffset
+let MboxOffHandles = 0x20
+let MboxOffRefs = 0x28
 
 // The request union's DROP CASCADE, as an address. It is what makes a closed mailbox's queue droppable at
 // all: an envelope holds a `<T>.request` box whose live variant only the cascade knows the payload types of.
 // A closure-based mailbox could not know what to free, which is why the request is a synthesized union.
-let MboxOffAbandonFn = 0x30 as ByteOffset
+let MboxOffAbandonFn = 0x30
 
 // ⭐⭐ **THE `__shutdown` PILL'S REPLY CELL, PARKED HERE UNTIL THE SERVICE HAS FINISHED, OR 0.** It is
 // what makes `await h.shutdown()` a real DRAINED rendezvous rather than a "the pill was dequeued" one: the
@@ -74,29 +74,29 @@ let MboxOffAbandonFn = 0x30 as ByteOffset
 // (`ServiceLoop`) while the site that reads it is `__mbox_service_exit` here — the two files must spell one
 // number, which is `GtParkKind`'s rule read from the other end.
 export let MboxOffShutdownReply = 0x38 as ByteOffset
-let MboxStructSize = 0x40 as FullRangeInt
+let MboxStructSize = 0x40
 
 // An envelope: the intrusive link and the request box. 16 bytes out of the slab, freed the moment its box is
 // handed to the loop — the queue costs one small allocation per message and nothing while it is empty.
-let EnvOffNext = 0x00 as ByteOffset
-let EnvOffBox = 0x08 as ByteOffset
-let EnvStructSize = 16 as FullRangeInt
+let EnvOffNext = 0x00
+let EnvOffBox = 0x08
+let EnvStructSize = 16
 
 // The two counts' initial values, named because they are a PAIR and their difference is the whole lifetime
 // rule: one handle names the mailbox, and the loop is the second thing that keeps it alive.
-let MboxInitialHandles = 1 as FullRangeInt
-let MboxInitialRefs = 2 as FullRangeInt
+let MboxInitialHandles = 1
+let MboxInitialRefs = 2
 
 // A count step, as the `lock xadd` operand. `xadd` answers the PRIOR value, so "I was the last" is
 // `prior == 1` — read off the displaced value rather than from a re-read, which is the same discipline
 // `MmRuntime.emitRefcountCheckToLastOwner` states for a decref.
-let MboxCountUp = 1 as FullRangeInt
-let MboxCountDown = -1 as FullRangeInt
-let MboxLastOwner = 1 as FullRangeInt
+let MboxCountUp = 1
+let MboxCountDown = -1
+let MboxLastOwner = 1
 
 // The value stored into `closed`. Any non-zero would do; the constant is what stops a reader spelling `1`
 // and a writer spelling something else.
-let MboxIsClosed = 1 as FullRangeInt
+let MboxIsClosed = 1
 
 // --- Entry points ---
 
@@ -194,7 +194,7 @@ export let MboxInterfaceSendName = b"__mbox_iface_send"
 let MboxInterfaceConversionPrefix = b"__mbox_iface_from."
 let MboxInterfaceStubPrefix = b"__mbox_iface_stub."
 let MboxInterfaceTablePrefix = b"__mbox_iface_table."
-let MboxInterfaceSlotBytes = 8 as FullRangeInt
+let MboxInterfaceSlotBytes = 8
 
 export function isInterfaceHandleRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: MboxInterfaceRuntimePrefix)
@@ -226,7 +226,7 @@ function buildMboxInterfaceCloneBox(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
-	let handleBox = 0 as ValueId
+	let handleBox = 0
 
 	let mbox = emitLoadField(module, block: entry, record: handleBox, offset: ServiceHandleMailboxOffset, ids: ids)
 	let table = emitLoadField(module, block: entry, record: handleBox, offset: InterfaceHandleTableOffset, ids: ids)
@@ -260,9 +260,9 @@ function buildMboxInterfaceSend(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 3)
-	let handleBox = 0 as ValueId
-	let slotOffset = 1 as ValueId
-	let request = 2 as ValueId
+	let handleBox = 0
+	let slotOffset = 1
+	let request = 2
 
 	let mbox = emitLoadField(module, block: entry, record: handleBox, offset: ServiceHandleMailboxOffset, ids: ids)
 	let table = emitLoadField(module, block: entry, record: handleBox, offset: InterfaceHandleTableOffset, ids: ids)
@@ -316,7 +316,7 @@ function buildInterfaceHandleConversion(module StdModule, globalData GlobalDataT
 	var ids = ValueMinter.create(1)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
-	let serviceHandle = 0 as ValueId
+	let serviceHandle = 0
 
 	let mbox = emitLoadField(module, block: entry, record: serviceHandle, offset: ServiceHandleMailboxOffset, ids: ids)
 	let table = ids.mint()
@@ -330,8 +330,8 @@ function buildInterfaceSendStub(module StdModule, name ByteArray, serviceTag Ful
 	var ids = ValueMinter.create(2)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
-	let mbox = 0 as ValueId
-	let request = 1 as ValueId
+	let mbox = 0
+	let request = 1
 
 	emitStoreField(module, block: entry, record: request, offset: UnionTagOffset, value: emitConst(module, block: entry, value: serviceTag, ids: ids))
 	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: MboxSendName, args: twoArgs(mbox, second: request)))
@@ -408,9 +408,9 @@ function buildSvcSpawn(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 3)
-	let loopPtr = 0 as ValueId
-	let state = 1 as ValueId
-	let abandonPtr = 2 as ValueId
+	let loopPtr = 0
+	let state = 1
+	let abandonPtr = 2
 
 	// `__slab_alloc` ZEROES, so head/tail/parkedGt/closed are already their correct initial state and only
 	// the three words a zero would be wrong for are stored.
@@ -450,8 +450,8 @@ function buildMboxSend(module StdModule)
 	var doneBlock = module.addBlock(func, label: b"senddone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let mbox = 0 as ValueId
-	let box = 1 as ValueId
+	let mbox = 0
+	let box = 1
 
 	emitSchedLockEnter(module, block: entry, ids: ids)
 	let closed = emitLoadField(module, block: entry, record: mbox, offset: MboxOffClosed, ids: ids)
@@ -516,7 +516,7 @@ function buildMboxRecv(module StdModule)
 	var park = module.addBlock(func, label: b"recvpark", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let mbox = 0 as ValueId
+	let mbox = 0
 	module.setTerminator(entry, op: StdOp.branch(attempt.id))
 
 	emitSchedLockEnter(module, block: attempt, ids: ids)
@@ -573,7 +573,7 @@ function buildMboxClose(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
-	let mbox = 0 as ValueId
+	let mbox = 0
 
 	emitSchedLockEnter(module, block: entry, ids: ids)
 	emitStoreField(module, block: entry, record: mbox, offset: MboxOffClosed, value: emitConst(module, block: entry, value: MboxIsClosed, ids: ids))
@@ -594,7 +594,7 @@ function buildMboxHandleCloneBox(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
-	let handleBox = 0 as ValueId
+	let handleBox = 0
 
 	let mbox = emitLoadField(module, block: entry, record: handleBox, offset: ServiceHandleMailboxOffset, ids: ids)
 	_ = emitMboxCountStep(module, block: entry, mbox: mbox, offset: MboxOffHandles, delta: MboxCountUp, ids: ids)
@@ -668,7 +668,7 @@ function buildMboxHandleDropBox(module StdModule)
 	var doneBlock = module.addBlock(func, label: b"dropdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let handleBox = 0 as ValueId
+	let handleBox = 0
 
 	let mbox = emitLoadField(module, block: entry, record: handleBox, offset: ServiceHandleMailboxOffset, ids: ids)
 	let priorHandles = emitMboxCountStep(module, block: entry, mbox: mbox, offset: MboxOffHandles, delta: MboxCountDown, ids: ids)
@@ -723,7 +723,7 @@ function buildMboxServiceExit(module StdModule)
 	var ownerDone = module.addBlock(func, label: b"exitownerdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let mbox = 0 as ValueId
+	let mbox = 0
 	let selfGt = emitLoadCurrentGt(module, block: entry, ids: ids)
 
 	// ⭐⭐ **THE PILL'S REPLY IS READ BEFORE THE MAILBOX CAN BE FREED, AND ANSWERED AFTER.** The load has
@@ -760,8 +760,8 @@ function buildMboxAbandon(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
-	let mbox = 0 as ValueId
-	let box = 1 as ValueId
+	let mbox = 0
+	let box = 1
 
 	let abandonFn = emitLoadField(module, block: entry, record: mbox, offset: MboxOffAbandonFn, ids: ids)
 	module.appendOp(entry, op: StdOp.callIndirect(ids.mint(), calleeReg: abandonFn, resultType: StdReturnType.void, argFloatMask: 0, args: argsOf(box)))

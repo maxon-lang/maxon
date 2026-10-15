@@ -98,11 +98,11 @@ typealias InlineSiteIndexArray = Array with ElementIndex
 // wrong import. Appending costs only the ONE derived offset (`WasmImportCount`), which every defined
 // function's index already goes through.
 let WasmImportCount = 5 as Wasm32Index
-let ExitImportFuncIdx = 0 as Wasm32Index
+let ExitImportFuncIdx = 0
 let GetStdoutImportFuncIdx = 1 as Wasm32Index
-let BlockingWriteFlushImportFuncIdx = 2 as Wasm32Index
+let BlockingWriteFlushImportFuncIdx = 2
 let GetStderrImportFuncIdx = 3 as Wasm32Index
-let GetRandomU64ImportFuncIdx = 4 as Wasm32Index
+let GetRandomU64ImportFuncIdx = 4
 
 // ⭐ The wasm half of `StdLoweringShared.posixStreamFd` — which `wasi:cli` accessor hands over the
 // output-stream a write targets. Exhaustive over `OsOutputStream` for that door's reason: a third
@@ -119,7 +119,7 @@ end 'wasmStreamAccessorImportFuncIdx'
 // (1024) and within page 0, so it never overlaps real data. The write result is ignored
 // (fire-and-forget), so the area is written but never read — 256 leaves ample room to the
 // data base.
-let WasmRetAreaBase = 256 as Imm32
+let WasmRetAreaBase = 256
 
 // `blocking-write-and-flush(handle, ptr, len, retArea)` takes four i32 params — the stream handle,
 // the contents pointer, the contents length, and the canonical-ABI return area.
@@ -129,24 +129,24 @@ let WasmWriteFlushParamCount = 4
 // a NULL GUARD — no global's address is ever 0 — keeping any future
 // null/None sentinel distinct from real data. 8-aligned (1024 = 128·8), so every word64 global
 // slot lands naturally aligned; the exact value is otherwise free. A `globalAddr` resolves to `base + the global's `.data` offset`.
-let WasmDataBaseOffset = 1024 as Wasm32Index
+let WasmDataBaseOffset = 1024
 
 // A wasm linear-memory page is 64 KiB. The memory's declared minimum must cover every image up to
 // the end of the last (`base + size`); the page size is a power of two, so rounding up is a shift,
 // not a divide (a divide would desugar to a throwing checked-division call).
 let WasmPageSizeLog2 = 16
-let WasmPageSizeMask = 0xFFFF as BytePos
+let WasmPageSizeMask = 0xFFFF
 
 // `memory.grow` returns the previous page count, or this sentinel — -1 as an i32, which
 // `emitOsAllocPages` sign-extends to -1 in i64 — on OOM. The allocator lowering tests for it and
 // traps.
-let WasmMemoryGrowOom = -1 as FullRangeInt
+let WasmMemoryGrowOom = -1
 
 // The atomic word's memarg offset. An atomic names the address it operates on and nothing else:
 // unlike `loadIndirect`/`storeIndirect`, whose Std op carries a field displacement, `StdOp.atomicCas` and
 // `StdOp.atomicRmw` have no offset field at all, so the memarg is always zero. Named rather than a bare 0
 // so the reason it can never be anything else is stated where the instruction is written.
-let WasmAtomicWordOffset = 0 as Wasm32Index
+let WasmAtomicWordOffset = 0
 
 // The minimum page count a memory must declare to hold a `.data` image ending at `base +
 // dataSize`, rounded up to whole 64 KiB pages. `base` is a positive constant, so the count is
@@ -159,7 +159,7 @@ end 'wasmMemoryMinPages'
 
 // The `run` result value pushed after `call $exit`: `exit-with-code` never returns, so this
 // i32 is unreachable, but the validator requires the `(result i32)` on the stack at the end.
-let RunOkResult = 0 as Imm32
+let RunOkResult = 0
 
 // The Preview2 import and the component export names — the exact interface identifiers the
 // golden component skeleton was built and run against (CONTRACT §5).
@@ -190,11 +190,11 @@ let WasiRandomModuleName = b"wasi:random/random@0.2.6"
 let WasiGetRandomU64FieldName = b"get-random-u64"
 let WasmRandomWordBytes = 8 as FullRangeInt
 let WasmRandomByteStep = 1 as FullRangeInt
-let WasmRandomFillNothingFilled = 0 as FullRangeInt
-let WasmRandomFillSucceeded = 0 as FullRangeInt
-let WasmRandomFillStoreOffset = 0 as Wasm32Index
-let WasmRandomFillLoopDepth = 0 as Wasm32Index
-let WasmRandomFillExitDepth = 1 as Wasm32Index
+let WasmRandomFillNothingFilled = 0
+let WasmRandomFillSucceeded = 0
+let WasmRandomFillStoreOffset = 0
+let WasmRandomFillLoopDepth = 0
+let WasmRandomFillExitDepth = 1
 
 enum WasmRandomFillUnit
 	word
@@ -214,7 +214,7 @@ let WasiGetRandomU64DebugName = b"get_random_u64"
 // The `.rdata` image (String-literal records + blobs) is laid in linear memory immediately
 // after the `.data` image, rounded up to 8 so every 8-byte record field lands naturally
 // aligned. The base is otherwise free.
-let WasmRdataAlignment = 8 as BytePos
+let WasmRdataAlignment = 8
 
 // ==========================================================================
 // Seam 2 — the whole-module entry (the ONLY external symbol)
@@ -522,19 +522,19 @@ end 'wasmFirstInlinePosition'
 
 // `mrt_panic`'s locals. Local 0 is its one parameter (identity-local model: a wasm function's params
 // occupy the first local indices), local 1 the scan cursor, the rest the frame walk's.
-let WasmPanicMsgPtrLocal = 0 as Wasm32Index
-let WasmPanicCursorLocal = 1 as Wasm32Index
-let WasmPanicDepthLocal = 2 as Wasm32Index
-let WasmPanicFrameLocal = 3 as Wasm32Index
-let WasmPanicLineEntryLocal = 4 as Wasm32Index
+let WasmPanicMsgPtrLocal = 0
+let WasmPanicCursorLocal = 1
+let WasmPanicDepthLocal = 2
+let WasmPanicFrameLocal = 3
+let WasmPanicLineEntryLocal = 4
 let WasmPanicDeclaredLocalCount = 4
 
 // The two branch depths inside the NUL scan, relative to the innermost `loop`: 0 re-enters the loop,
 // 1 exits the `block` that wraps it. Named because a wasm branch depth is a bare integer that no
 // validator can tell from any other, and swapping these two makes the scan an infinite loop.
-let WasmPanicScanContinueDepth = 0 as Wasm32Index
-let WasmPanicScanBreakDepth = 1 as Wasm32Index
-let WasmPanicWalkBreakFromIfDepth = 2 as Wasm32Index
+let WasmPanicScanContinueDepth = 0
+let WasmPanicScanBreakDepth = 1
+let WasmPanicWalkBreakFromIfDepth = 2
 
 function emitStderrWriteOfConstant(body WasmBody, address Imm32, length Imm32)
 	body.call(GetStderrImportFuncIdx)
@@ -631,13 +631,13 @@ function emitFramePop(body WasmBody, frames WasmFrameStack, savedDepthLocal Wasm
 	body.i32Store(WasmFrameWordDisplacement)
 end 'emitFramePop'
 
-let WasmFrameWordDisplacement = 0 as Wasm32Index
+let WasmFrameWordDisplacement = 0
 let WasmFrameInitialDepth = 0
 let WasmFrameSlotShift = 2
 let WasmFrameSlotBytes = 1 shl WasmFrameSlotShift
 let WasmFrameLineEntryColumnShift = 1
 let WasmFrameLineEntryShift = WasmFrameSlotShift + WasmFrameLineEntryColumnShift
-let WasmFrameLineAddressColumn = 0 as Wasm32Index
+let WasmFrameLineAddressColumn = 0
 let WasmFrameLineLengthColumn = WasmFrameSlotBytes as Wasm32Index
 
 // The panic trace's record, in a region above `.rdata`. The ring has
@@ -810,7 +810,7 @@ function appendRunEntry(builder WasmModuleBuilder, module StdModule, funcNames F
 	return addedIdx
 end 'appendRunEntry'
 
-let WasmRunSavedDepthLocal = 0 as Wasm32Index
+let WasmRunSavedDepthLocal = 0
 
 // ⭐ **FILL EVERY EAGER managed global's `.data` SLOT BEFORE `main`** — a `static`
 // member's is filled on first access instead (see `ModuleInit`) — the sibling of the

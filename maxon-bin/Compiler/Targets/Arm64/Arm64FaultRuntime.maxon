@@ -35,7 +35,7 @@
 //
 // Slots: 0.. = the output buffer. Nothing is live across the one call, which is the last instruction.
 function buildArm64WriteHexChunk() returns FunctionCodeChunk
-	let SlotBuffer = 0 as StackSize
+	let SlotBuffer = 0
 	let bufferSlots = alignUpStack(HexBufferBytes, alignment: SpillSlotBytes) / SpillSlotBytes
 	var asm = Arm64RuntimeAsm.beginFunction(bufferSlots)
 
@@ -172,7 +172,7 @@ export let DarwinUcontextOffMcontext = 0x30 as MachineWord
 // first, then `__fp`, `__lr`, `__sp` and `__pc`. MEASURED by a C probe over the real headers: 0xF8, 0x100,
 // 0x108, 0x110. EXPORTED for the preemption handler, which rewrites three of them
 // (`Arm64GtRuntime.buildArm64PreemptHandlerChunk`).
-let DarwinMcontextOffSsFp = 0xF8 as MachineWord
+let DarwinMcontextOffSsFp = 0xF8
 export let DarwinMcontextOffSsLr = 0x100 as MachineWord
 export let DarwinMcontextOffSsSp = 0x108 as MachineWord
 export let DarwinMcontextOffSsPc = 0x110 as MachineWord
@@ -189,15 +189,15 @@ export let DarwinMcontextOffSsPc = 0x110 as MachineWord
 //
 // MEASURED on the lane, by a C probe over the real headers: `sizeof(struct sigaction)` is 16,
 // `offsetof(sa_mask)` 8 and `offsetof(sa_flags)` 12.
-let DarwinSigactionOffHandler = 0x00 as MachineWord
-let DarwinSigactionOffMask = 0x08 as MachineWord
-let DarwinSigactionOffFlags = 0x0C as MachineWord
+let DarwinSigactionOffHandler = 0x00
+let DarwinSigactionOffMask = 0x08
+let DarwinSigactionOffFlags = 0x0C
 let DarwinSigactionBytes = 16 as StackSize
 
 // `stack_t`: `ss_sp` (8), `ss_size` (8), `ss_flags` (a C `int`).
-let DarwinSigstackOffSp = 0x00 as MachineWord
-let DarwinSigstackOffSize = 0x08 as MachineWord
-let DarwinSigstackOffFlags = 0x10 as MachineWord
+let DarwinSigstackOffSp = 0x00
+let DarwinSigstackOffSize = 0x08
+let DarwinSigstackOffFlags = 0x10
 
 // `SA_SIGINFO` gives the handler its third argument (the ucontext), which is the only thing that carries
 // the faulting PC. `SA_ONSTACK` switches the kernel to the thread's `__signal_stack_install` stack.
@@ -210,9 +210,9 @@ let DarwinSaRestart = 0x02 as MachineWord
 // The three signals a hardware fault arrives as. `SIGSEGV` is an unmapped address and `SIGBUS` a mapped
 // one the access is illegal for (an alignment fault, a mapping shorter than the file behind it); both
 // mean the same thing to a Maxon program, so both classify by the fault address alone.
-let DarwinSignalBus = 10 as Imm32
-let DarwinSignalSegv = 11 as Imm32
-let DarwinSignalFpe = 8 as Imm32
+let DarwinSignalBus = 10
+let DarwinSignalSegv = 11
+let DarwinSignalFpe = 8
 
 // ⭐ SIGURG — what an asynchronous preemption is delivered as, and **16 on Darwin where it is 23 on Linux**.
 // Go's choice, for its reason: the default disposition is to ignore it and no program in this tree has a
@@ -220,11 +220,11 @@ let DarwinSignalFpe = 8 as Imm32
 export let DarwinSignalUrg = 16 as Imm32
 
 // The `oldact`/`oss` out-parameter, declined: neither install reads back a previous disposition.
-let PosixDeclinePrevious = 0 as MachineWord
+let PosixDeclinePrevious = 0
 
 // `siginfo_t.si_addr` — six C `int`s (`si_signo`, `si_errno`, `si_code`, `si_pid`, `si_uid`, `si_status`),
 // then the pointer. For SIGSEGV and SIGBUS it is the address the access faulted on.
-let DarwinSiginfoOffAddr = 0x18 as MachineWord
+let DarwinSiginfoOffAddr = 0x18
 
 // Where the register file lies relative to the ucontext a handler is handed: behind a pointer stored at an
 // offset in it (Darwin), or inline in it, with the register offsets measured from the ucontext (Linux).
@@ -361,7 +361,7 @@ end 'buildArm64FaultHandlerChunk'
 //
 // Slots: 0..2 = the `stack_t`.
 function buildArm64SignalStackInstallChunk(os Os) returns FunctionCodeChunk
-	let SlotSigstack = 0 as StackSize
+	let SlotSigstack = 0
 	var asm = Arm64RuntimeAsm.beginFunction(Arm64SigstackBytes / SpillSlotBytes)
 
 	let done = asm.newLabel()
@@ -488,7 +488,7 @@ end 'arm64SigstackLayout'
 //
 // Slots: 0..2 = the `struct sigaction`.
 function buildArm64DarwinRuntimeInitChunk(usesGt bool, target Target) returns FunctionCodeChunk
-	let SlotSigaction = 0 as StackSize
+	let SlotSigaction = 0
 	var asm = Arm64RuntimeAsm.beginFunction(DarwinSigactionBytes / SpillSlotBytes)
 
 	arm64EmitProgramStartedMark(asm)
@@ -555,7 +555,7 @@ end 'arm64EmitDarwinSigactionCall'
 // The `struct sigaction` is the kernel's (`LinuxSigactionOffHandler` owns the layout), in zeroed slots
 // ascending from slot 0, so `&act` is slot 0's address.
 function buildArm64LinuxRuntimeInitChunk(usesGt bool, carriesHostLock bool, target Target) returns FunctionCodeChunk
-	let SlotSigaction = 0 as StackSize
+	let SlotSigaction = 0
 	var asm = Arm64RuntimeAsm.beginFunction(LinuxSigactionSlots)
 
 	arm64EmitProgramStartedMark(asm)

@@ -457,13 +457,15 @@ function takesBlock(b BlockId) returns BlockId
 	return b
 end 'takesBlock'
 
-function main() returns ExitCode
-	let block = 3 as BlockId
-	let offset = 4 as ElementIndex
+function report(block BlockId, offset ElementIndex)
 	let a = takesBlock(block + offset)
 	let b = takesBlock(offset + block)
 	let c = takesBlock(block + 1)
 	print("{a} {b} {c}")
+end 'report'
+
+function main() returns ExitCode
+	report(3, offset: 4)
 	return 0
 end 'main'
 ```
@@ -2050,8 +2052,12 @@ function takesNarrow(n Narrow) returns Narrow
 	return n
 end 'takesNarrow'
 
+function seed() returns Narrow
+	return 5
+end 'seed'
+
 function main() returns ExitCode
-	let n = 5 as Narrow
+	let n = seed()
 	let w = n as Wide
 	let back = w as Narrow
 	print("{takesWide(w)} {takesNarrow(back)}")
@@ -2241,8 +2247,12 @@ A `Byte` fits `ExitCode` on every target, so the cast `main` owes is not E3010 a
 ```maxon
 typealias Byte = int(0 to u8.max)
 
+function seed() returns Byte
+	return 7
+end 'seed'
+
 function main() returns ExitCode
-	let b = 7 as Byte
+	let b = seed()
 	return b as ExitCode
 end 'main'
 ```

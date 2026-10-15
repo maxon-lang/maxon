@@ -95,10 +95,13 @@ export typealias Score = int(0 to 100)
 export typealias Score = int(0 to 10)
 
 // --- file: app/main.maxon
+function seed() returns api.Score
+	return 50
+end 'seed'
+
 function main() returns ExitCode
-	let wide = 50 as api.Score
-	let narrow = 5 as legacy.Score
-	return (wide + (narrow as api.Score)) as ExitCode
+	let wide = seed()
+	return (wide + ((5 as legacy.Score) as api.Score)) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -145,7 +148,7 @@ end 'Byte'
 typealias WideByte = int(0 to 1000)
 
 function main() returns ExitCode
-	let wide = 300 as WideByte
+	let wide = 300
 	let narrow = 300 as stdlib.Byte
 	return (wide - (narrow as WideByte)) as ExitCode + a.Byte.make().v
 end 'main'
@@ -233,7 +236,7 @@ end 'helper'
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	let s = 5 as lib.from.Score
+	let s = 5
 	return ((lib.from.helper() as lib.from.Score) + s) as ExitCode
 end 'main'
 ```
@@ -2004,13 +2007,16 @@ end 'main'
 same type a library value carries, and the bare spelling in the same file names the same declaration
 (70 + 108 - 100 + 2).
 ```maxon
+function seed() returns stdlib.Codepoint
+	return 70
+end 'seed'
+
 function main() returns ExitCode
-	let c = 70 as stdlib.Codepoint
-	let i = 2 as stdlib.ElementIndex
+	let c = seed()
 	let p = 3 as stdlib.BytePos
 	let bytes = "hello".toByteArray()
 	let b = try bytes.get(p) otherwise 0
-	return (c + (b as Codepoint) - 100 + (i as Codepoint)) as ExitCode
+	return (c + (b as Codepoint) - 100 + ((2 as stdlib.ElementIndex) as Codepoint)) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -2111,10 +2117,14 @@ function take(p export.Point) returns ExitCode
 	return p.x as ExitCode
 end 'take'
 
+function seed() returns export.Integer
+	return 500
+end 'seed'
+
 function main() returns ExitCode
 	let f = export.pick
 	export.shout()
-	let b = 500 as export.Byte
+	let b = seed() as export.Byte
 	return take(export.Point.make()) + (export.pick() as ExitCode) + (f() as ExitCode) + (widen(b) as ExitCode)
 end 'main'
 ```
@@ -2213,8 +2223,12 @@ function take(f a.Foo) returns ExitCode
 	return f.v
 end 'take'
 
+function seed() returns LocalFoo
+	return 3
+end 'seed'
+
 function main() returns ExitCode
-	let local = 3 as LocalFoo
+	let local = seed()
 	return take(a.Foo.make()) + (local as ExitCode)
 end 'main'
 ```
@@ -2242,8 +2256,12 @@ function take(f export.Foo) returns ExitCode
 	return f.v
 end 'take'
 
+function seed() returns LocalFoo
+	return 3
+end 'seed'
+
 function main() returns ExitCode
-	let local = 3 as LocalFoo
+	let local = seed()
 	return take(export.Foo.make()) + (local as ExitCode)
 end 'main'
 ```
@@ -2330,8 +2348,12 @@ function scaled(by ExitCode, api ExitCode) returns ExitCode
 	return by + api
 end 'scaled'
 
+function seed() returns LocalScore
+	return 4
+end 'seed'
+
 function main() returns ExitCode
-	let local = 4 as LocalScore
+	let local = seed()
 	let base = scaled(1, api: 2)
 	return base + api.Score.make().v + (local as ExitCode)
 end 'main'
@@ -2433,7 +2455,7 @@ end 'rank'
 typealias LocalColor = int(0 to 10)
 
 function main() returns ExitCode
-	let local = 3 as LocalColor
+	let local = 3
 	let c = a.pick()
 	return ((((c.rawValue - 38) as LocalColor) + local) as ExitCode) + a.rank(c) - 41
 end 'main'
@@ -2466,8 +2488,12 @@ function measure(s a.Shape) returns ExitCode
 	end 'kind'
 end 'measure'
 
+function seed() returns LocalShape
+	return 2
+end 'seed'
+
 function main() returns ExitCode
-	let local = 2 as LocalShape
+	let local = seed()
 	return measure(a.longest()) + measure(a.Shape.dot) + (local as ExitCode)
 end 'main'
 ```
@@ -2487,8 +2513,12 @@ export function bump(v Small) returns Small
 end 'bump'
 
 // --- file: app/main.maxon
+function seed() returns aaa.Small
+	return 5
+end 'seed'
+
 function main() returns ExitCode
-	let x = 5 as aaa.Small
+	let x = seed()
 	return (aaa.bump(3) + x) as ExitCode
 end 'main'
 ```
@@ -2515,8 +2545,12 @@ end 'mix'
 module typealias Score = int(0 to 10)
 
 // --- file: b/t.maxon
+function seed() returns b.Score
+	return 3
+end 'seed'
+
 export function tally() returns ExitCode
-	let z = 3 as b.Score
+	let z = seed()
 	return z as ExitCode
 end 'tally'
 
@@ -2531,7 +2565,7 @@ end 'main'
 
 <!-- test: an-authors-enum-beside-the-librarys-element-index-leaves-the-alias-one-type -->
 `ElementIndex` is the library's typealias, and an author's directory declares an enum of that name. The
-alias keeps one identity: `xs.count()` returns it and `3 as stdlib.ElementIndex` names it, so the two add,
+alias keeps one identity: `xs.count()` returns it and `stdlib.ElementIndex` names it, so the two add,
 while `a.ElementIndex` reaches the enum.
 ```maxon
 // --- file: a/e.maxon
@@ -2549,7 +2583,7 @@ function main() returns ExitCode
 	let xs = [1, 2]
 	let b = a.pick(false)
 	let c = a.ElementIndex.above
-	let q = 3 as stdlib.ElementIndex
+	let q = 3
 	return (((b.rawValue + c.rawValue + 1) as stdlib.ElementIndex) + xs.count() + q) as ExitCode
 end 'main'
 ```
@@ -2571,9 +2605,13 @@ type BytePos
 	end 'make'
 end 'BytePos'
 
+function origin() returns stdlib.BytePos
+	return 1
+end 'origin'
+
 function main() returns ExitCode
 	let s = "abc"
-	let start = 1 as stdlib.BytePos
+	let start = origin()
 	let stop = findGraphemeEnd(s, startPos: start)
 	let back = findGraphemeStart(s, beforePos: stop)
 	return (stop + back) as ExitCode + BytePos.make(4).v

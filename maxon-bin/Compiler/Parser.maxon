@@ -215,7 +215,7 @@ union ElementStoreDestination
 	rootedAt(root VarInfo, anchor Token)
 end 'ElementStoreDestination'
 
-let SoleHandedOffPosition = 0 as ElementIndex
+let SoleHandedOffPosition = 0
 
 function captureCarriesAWitnessSlot(tag ValueTypeTag) returns bool
 	return tag == ValueTypeTag.interfaceRef
@@ -254,7 +254,7 @@ end 'typeSpellingSeparates'
 
 typealias EnvSlotIndexArray = Array with EnvSlotIndex
 
-let ClosureEnvDropParamCount = 1 as ParamCount
+let ClosureEnvDropParamCount = 1
 let ClosureEnvDropParamName = b"__env"
 let ClosureEnvDropSuffix = "$drop"
 
@@ -2567,14 +2567,14 @@ end 'capturedCopyMutatingCallMessage'
 //
 // ⚠ It is the offset from a TAG to an ordinal, and says nothing about where that tag was found — the
 // accessor answers that first, and a BOXED union's tag is a load rather than the value (see there).
-let EnumOrdinalTagOffset = 0 as FullRangeInt
+let EnumOrdinalTagOffset = 0
 
 // ⭐ **THE ORDINAL OF THE FIRST DECLARED CASE, AND THE SEED OF THE TAG→CONSTANT SUM** — a DIFFERENT fact
 // from the offset above, which is why it is a second constant and not a second use of the first. The sum
 // `Σᵢ constantᵢ × (tag == tagᵢ)` (`Parser.emitEnumCaseConstantSelect`) accumulates onto a zero, and for the
 // `declarationIndex` column that zero doubles as case 0's own term (see `firstSummedCaseIndex`), which is
 // what this constant names rather than leaving a bare `0` a reader has to reconstruct.
-let FirstCaseOrdinal = 0 as FullRangeInt
+let FirstCaseOrdinal = 0
 
 // The first case the tag→constant sum emits a TERM for, for the ONE column whose first term is provably
 // zero — the same quantity as `FirstCaseOrdinal + 1`, and spelled separately rather than computed because
@@ -3068,24 +3068,24 @@ typealias ScanSignalMask = bits(32)
 typealias ScanSignal = int(0 to 31)
 
 let NoScanSignals = 0 as ScanSignalMask
-let ScanSignalDirect = 0 as ScanSignal
-let ScanSignalReadsFixedElementCount = 1 as ScanSignal
-let ScanSignalHasControlFlow = 2 as ScanSignal
-let ScanSignalHasContainerMoveOut = 3 as ScanSignal
-let ScanSignalReassignsOpaqueField = 4 as ScanSignal
-let ScanSignalHasArrayCopy = 5 as ScanSignal
-let ScanSignalConstructsSelfLiteral = 6 as ScanSignal
-let ScanSignalBuildsRecord = 7 as ScanSignal
-let ScanSignalAdoptsOpaqueCallResult = 8 as ScanSignal
-let ScanSignalForwardsToATypeParamFeed = 9 as ScanSignal
-let ScanSignalStoresContainerElement = 10 as ScanSignal
-let ScanSignalWalksReceiverAsACursor = 11 as ScanSignal
-let ScanSignalFeedsAResolvedInstanceParameter = 12 as ScanSignal
-let ScanSignalBuildsRecordOtherThanSelf = 13 as ScanSignal
-let ScanSignalClosureHandsBackAName = 14 as ScanSignal
-let ScanSignalReadsAnOpaqueFieldValue = 15 as ScanSignal
-let ScanSignalIteratesAnIndexedSource = 16 as ScanSignal
-let ScanSignalDispatchesThroughTheType = 17 as ScanSignal
+let ScanSignalDirect = 0
+let ScanSignalReadsFixedElementCount = 1
+let ScanSignalHasControlFlow = 2
+let ScanSignalHasContainerMoveOut = 3
+let ScanSignalReassignsOpaqueField = 4
+let ScanSignalHasArrayCopy = 5
+let ScanSignalConstructsSelfLiteral = 6
+let ScanSignalBuildsRecord = 7
+let ScanSignalAdoptsOpaqueCallResult = 8
+let ScanSignalForwardsToATypeParamFeed = 9
+let ScanSignalStoresContainerElement = 10
+let ScanSignalWalksReceiverAsACursor = 11
+let ScanSignalFeedsAResolvedInstanceParameter = 12
+let ScanSignalBuildsRecordOtherThanSelf = 13
+let ScanSignalClosureHandsBackAName = 14
+let ScanSignalReadsAnOpaqueFieldValue = 15
+let ScanSignalIteratesAnIndexedSource = 16
+let ScanSignalDispatchesThroughTheType = 17
 
 // Is `signal`'s bit set? The read half of the pair.
 function maskHasSignal(mask ScanSignalMask, signal ScanSignal) returns bool
@@ -3120,8 +3120,8 @@ let sharedEmptyRequirementSlots = CollectedInterfaceMethodArray.create()
 // token the sweep stands on** (`Parser.promiseConsumeDoorParamAt`). The qualifier is the token that would
 // make the receiver a member rather than a bare name, and being the further of the two it is the index
 // floor that keeps both reads inside the token array.
-let PromiseCancelReceiverBack = 2 as ElementIndex
-let PromiseCancelQualifierBack = 3 as ElementIndex
+let PromiseCancelReceiverBack = 2
+let PromiseCancelQualifierBack = 3
 
 // ⭐ THE ONE "the sweep did not read this parameter's type" value, shared — see `Parser.sweptParamTypeAt`.
 // A payload-free `MaxonType` case is still a heap object in Maxon, and this is pushed once per parameter of
@@ -3285,11 +3285,12 @@ let noValueDeclaredAliases = ValueDeclaredAliasTable.unwritten
 // `f(x)` would report the binding's cast at the call.
 type LiteralCastSpan
 	export let cast as LiteralCast
+	export let constant as LetCastConstant
 	let first as ElementIndex
 	let pastEnd as ElementIndex
 
-	static function create(cast LiteralCast, first ElementIndex, pastEnd ElementIndex) returns LiteralCastSpan
-		return Self{cast: cast, first: first, pastEnd: pastEnd}
+	static function create(cast LiteralCast, constant LetCastConstant, first ElementIndex, pastEnd ElementIndex) returns LiteralCastSpan
+		return Self{cast: cast, constant: constant, first: first, pastEnd: pastEnd}
 	end 'create'
 
 	function covers(expressionFirst ElementIndex, expressionPastEnd ElementIndex) returns bool
@@ -3312,6 +3313,273 @@ union LiteralCastArgumentTable
 end 'LiteralCastArgumentTable'
 
 let noLiteralCastArguments = LiteralCastArgumentTable.unwritten
+
+typealias LetCastReadIndexArray = Array with ElementIndex
+typealias LetCastSubjectMap = Map with (ValueId, LetCastSubject)
+typealias LetCastSiteMap = Map with (ByteOffset, ElementIndex)
+
+union LetCastRoster
+	none
+	single(read ElementIndex)
+	joined(join ElementIndex)
+end 'LetCastRoster'
+
+function rosterIsEmpty(roster LetCastRoster) returns bool
+	return match roster 'kind'
+		none gives true
+		single or
+		joined gives false
+	end 'kind'
+end 'rosterIsEmpty'
+
+function rangesInclude(ranges RangedTypeAliasArray, alias RangedTypeAlias) returns bool
+	for known in ranges 'eachKnown'
+		if known.hasSameRangeAs(alias) 'theSameRange'
+			return true
+		end 'theSameRange'
+	end 'eachKnown'
+
+	return false
+end 'rangesInclude'
+
+// Append-only, and flattened by `LetCastState.readsIn` with an explicit stack: a join copies no read
+// list, which keeps a long constant chain linear.
+type LetCastJoin
+	export let left as LetCastRoster
+	export let right as LetCastRoster
+	export let ranges as RangedTypeAliasArray
+
+	static function create(left LetCastRoster, right LetCastRoster, ranges RangedTypeAliasArray) returns LetCastJoin
+		return Self{left: left, right: right, ranges: ranges}
+	end 'create'
+end 'LetCastJoin'
+
+typealias LetCastJoinArray = Array with LetCastJoin
+
+type LetCastDerivation
+	export let reads as LetCastRoster
+	export let first as ElementIndex
+	export let pastEnd as ElementIndex
+	export let constant as LetCastConstant
+
+	static function create(reads LetCastRoster, first ElementIndex, pastEnd ElementIndex, constant LetCastConstant) returns LetCastDerivation
+		return Self{reads: reads, first: first, pastEnd: pastEnd, constant: constant}
+	end 'create'
+end 'LetCastDerivation'
+
+typealias LetCastDerivationMap = Map with (ValueId, LetCastDerivation)
+
+type LetCastState
+	export var bindings as LetCastSubjectMap
+	export var reads as LetCastReadArray
+	export var sites as LetCastSiteMap
+	export var derived as LetCastDerivationMap
+	export var joins as LetCastJoinArray
+
+	static function create() returns LetCastState
+		return Self{bindings: LetCastSubjectMap.create(), reads: LetCastReadArray.create(), sites: LetCastSiteMap.create(), derived: LetCastDerivationMap.create(), joins: LetCastJoinArray.create()}
+	end 'create'
+
+	function readAt(index ElementIndex) returns LetCastRead
+		return try self.reads.get(index) otherwise panic("LetCastState.readAt: reads.get OOB at {index} — an index is filed beside the read it names")
+	end 'readAt'
+
+	function joinAt(index ElementIndex) returns LetCastJoin
+		return try self.joins.get(index) otherwise panic("LetCastState.joinAt: joins.get OOB at {index} — a roster names only a join this state minted")
+	end 'joinAt'
+
+	function claim(index ElementIndex)
+		var read = self.readAt(index)
+		read.claimed = true
+	end 'claim'
+
+	function stampScope(scope LetCastScope)
+		for (value, _) in self.bindings 'eachBinding'
+			var subject = try self.bindings.get(value) otherwise panic("LetCastState.stampScope: bindings.get missed v{value}, a key the loop just read")
+			subject.scope = scope
+		end 'eachBinding'
+	end 'stampScope'
+
+	function rangesOf(roster LetCastRoster) returns RangedTypeAliasArray
+		match roster 'kind'
+			none then return RangedTypeAliasArray.create()
+			single(index) then return [self.readAt(index).subject.cast.target]
+			joined(index) then return self.joinAt(index).ranges
+		end 'kind'
+	end 'rangesOf'
+
+	function join(left LetCastRoster, right LetCastRoster) returns LetCastRoster
+		if rosterIsEmpty(left) 'onlyTheRight'
+			return right
+		end 'onlyTheRight'
+
+		if rosterIsEmpty(right) 'onlyTheLeft'
+			return left
+		end 'onlyTheLeft'
+
+		var ranges = RangedTypeAliasArray.create()
+		ranges.append(self.rangesOf(left))
+
+		for alias in self.rangesOf(right) 'eachRightRange'
+			if not rangesInclude(ranges, alias: alias) 'aNewRange'
+				ranges.push(alias.clone())
+			end 'aNewRange'
+		end 'eachRightRange'
+
+		self.joins.push(LetCastJoin.create(left, right: right, ranges: ranges))
+		return LetCastRoster.joined(self.joins.count() - 1)
+	end 'join'
+
+	function readsIn(roster LetCastRoster) returns LetCastReadIndexArray
+		var found = LetCastReadIndexArray.create()
+		var pendingJoins = LetCastReadIndexArray.create()
+		self.fileRoster(roster, found: found, pendingJoins: pendingJoins)
+
+		while not pendingJoins.isEmpty() 'eachJoin'
+			let next = try pendingJoins.pop() otherwise panic("LetCastState.readsIn: pop on the join stack the loop condition found non-empty")
+			let join = self.joinAt(next)
+			self.fileRoster(join.right, found: found, pendingJoins: pendingJoins)
+			self.fileRoster(join.left, found: found, pendingJoins: pendingJoins)
+		end 'eachJoin'
+
+		return found
+	end 'readsIn'
+
+	function fileRoster(roster LetCastRoster, found LetCastReadIndexArray, pendingJoins LetCastReadIndexArray)
+		match roster 'kind'
+			none then break
+			single(index) then found.push(index)
+			joined(index) then pendingJoins.push(index)
+		end 'kind'
+	end 'fileRoster'
+end 'LetCastState'
+
+union LetCastTracking
+	none
+	tracking(state LetCastState)
+end 'LetCastTracking'
+
+let noLetCasts = LetCastTracking.none
+
+union ConstLetCastRecord
+	none
+	recorded(first ElementIndex, pastEnd ElementIndex, cast LiteralCast, constant LetCastConstant)
+end 'ConstLetCastRecord'
+
+function constantOfFoldedValue(value ConstValue) returns LetCastConstant
+	if value.aboveSignedMax 'mayExceedTheSignedTop'
+		return LetCastConstant.unknown
+	end 'mayExceedTheSignedTop'
+
+	if tagIsFloat(value.tag) 'aFloat'
+		return LetCastConstant.real(value.payload)
+	end 'aFloat'
+
+	return LetCastConstant.integer(value.payload)
+end 'constantOfFoldedValue'
+
+// A cast spanning less than the whole initializer is not tracked, exactly as `registerLetCast` refuses
+// one in a body.
+function constLetCastWhole(decl TopLevelDecl, first ElementIndex, pastEnd ElementIndex, cast LiteralCast, constant LetCastConstant) returns LetCastDeclaration
+	if first != decl.initStart or pastEnd != decl.initEnd or not letCastTracksAConstant(cast, constant: constant) 'notTheWholeInitializer'
+		return LetCastDeclaration.none
+	end 'notTheWholeInitializer'
+
+	return LetCastDeclaration.declared(LetCastSubject.create(cast, name: decl.name, declFile: decl.declFilePath, scope: LetCastScope.wholeFile, constant: constant))
+end 'constLetCastWhole'
+
+union LetCastClaimRule
+	everyRead
+	readsRepeating(destination RangedTypeAlias)
+	readsNamingAnotherThan(target RangedTypeAlias)
+
+	function claims(cast LiteralCast) returns bool
+		return match self 'rule'
+			everyRead gives true
+			readsRepeating(destination) gives cast.repeats(destination)
+			readsNamingAnotherThan(target) gives not cast.repeats(target)
+		end 'rule'
+	end 'claims'
+end 'LetCastClaimRule'
+
+function letCastTracksAConstant(cast LiteralCast, constant LetCastConstant) returns bool
+	if tagIsFloat(cast.literalTag) != aliasIsFloat(cast.target) 'aDomainConversion'
+		return false
+	end 'aDomainConversion'
+
+	return match constant 'kind'
+		unknown gives false
+		integer or
+		real gives true
+	end 'kind'
+end 'letCastTracksAConstant'
+
+// Operands within ±(2^31 - 1) keep `+`, `-` and `*` from wrapping, so a folded value is exact.
+let LetCastIntegerOperandLimit = 2147483647
+
+function integerWithinOperandLimit(value FullRangeInt) returns bool
+	return value >= 0 - LetCastIntegerOperandLimit and value <= LetCastIntegerOperandLimit
+end 'integerWithinOperandLimit'
+
+function foldLetCastConstants(op MaxonBinOp, lhs LetCastConstant, rhs LetCastConstant) returns LetCastConstant
+	match lhs 'left'
+		integer(a) then return foldIntegerWithConstant(op, a: a, rhs: rhs)
+		real(a) then return foldRealWithConstant(op, a: a, rhs: rhs)
+		unknown then return LetCastConstant.unknown
+	end 'left'
+end 'foldLetCastConstants'
+
+function foldIntegerWithConstant(op MaxonBinOp, a FullRangeInt, rhs LetCastConstant) returns LetCastConstant
+	match rhs 'right'
+		integer(b) then return foldIntegerConstants(op, a: a, b: b)
+		real or
+		unknown then return LetCastConstant.unknown
+	end 'right'
+end 'foldIntegerWithConstant'
+
+function foldIntegerConstants(op MaxonBinOp, a FullRangeInt, b FullRangeInt) returns LetCastConstant
+	if not integerWithinOperandLimit(a) or not integerWithinOperandLimit(b) 'couldWrap'
+		return LetCastConstant.unknown
+	end 'couldWrap'
+
+	match foldIntBinOp(op, lhs: a, rhs: b) 'folded'
+		folded(value) then return LetCastConstant.integer(value)
+		notFoldable then return LetCastConstant.unknown
+	end 'folded'
+end 'foldIntegerConstants'
+
+function foldRealWithConstant(op MaxonBinOp, a FullRangeInt, rhs LetCastConstant) returns LetCastConstant
+	match rhs 'right'
+		real(b) then return foldRealConstants(op, a: a, b: b)
+		integer or
+		unknown then return LetCastConstant.unknown
+	end 'right'
+end 'foldRealWithConstant'
+
+function foldRealConstants(op MaxonBinOp, a FullRangeInt, b FullRangeInt) returns LetCastConstant
+	match foldFloatBinOp(op, lhs: a, rhs: b) 'folded'
+		folded(bits) then return LetCastConstant.real(bits)
+		notFoldable then return LetCastConstant.unknown
+	end 'folded'
+end 'foldRealConstants'
+
+function letCastConstantFits(constant LetCastConstant, alias RangedTypeAlias) returns bool
+	return match constant 'kind'
+		integer(value) gives not aliasIsFloat(alias) and literalInRange(value, low: alias.low, high: alias.high, isFloat: false, writtenNegative: value < 0, writtenAboveSignedMax: false)
+		real(bits) gives aliasIsFloat(alias) and literalInRange(bits, low: alias.low, high: alias.high, isFloat: true, writtenNegative: false, writtenAboveSignedMax: false)
+		unknown gives false
+	end 'kind'
+end 'letCastConstantFits'
+
+function constantFitsEveryRange(constant LetCastConstant, ranges RangedTypeAliasArray) returns bool
+	for alias in ranges 'eachRange'
+		if not letCastConstantFits(constant, alias: alias) 'outgrowsItsOwnAlias'
+			return false
+		end 'outgrowsItsOwnAlias'
+	end 'eachRange'
+
+	return true
+end 'constantFitsEveryRange'
 
 // The op index of each character literal's `stringLiteral`, filed as it is emitted so the retype to a
 // codepoint is an O(1) read rather than `ValueOriginTable`'s linear scan.
@@ -4611,12 +4879,12 @@ end 'namespaceShadowsTheReceiver'
 // How many arguments an unparenthesized `implements I with …` clause takes when THIS FILE cannot
 // see `I`'s declaration — see `interfaceUsesArity`, which is where the choice is argued. Named
 // because it is a deliberate default, not an incidental literal.
-let UnresolvableInterfaceUsesArity = 1 as ElementIndex
+let UnresolvableInterfaceUsesArity = 1
 
 // The one `uses` arity at which a parenthesized `with (…)` list is read as a single TUPLE argument rather
 // than as a list of bindings — see `parenthesizedWithBindsOneTuple`, which is where the choice is
 // argued. Named because it is the arity the rule TURNS ON, not an incidental comparison against one.
-let SingleAssociatedType = 1 as ElementIndex
+let SingleAssociatedType = 1
 
 // ⭐ **HOW MANY ASSOCIATED TYPES A CONFORMANCE `with` CLAUSE BINDS FOR ONE INTERFACE — WHEN THE PROGRAM
 // SAYS.** A union rather than a count carrying a default, because the two readers of that number
@@ -5506,7 +5774,7 @@ let FunctionAliasParamBoundary = 1 as HashDigest
 
 // Every unsigned type's lower bound. One constant, not four: `u8.min` and `u64.min`
 // are the same zero, and a per-type spelling would only invite them to drift apart.
-let UnsignedMinBound = 0 as FullRangeInt
+let UnsignedMinBound = 0
 let I8MinBound = i8.min as FullRangeInt
 let I8MaxBound = i8.max as FullRangeInt
 let I16MinBound = i16.min as FullRangeInt
@@ -5665,7 +5933,7 @@ end 'callerLocationNamed'
 // How far past a `.` a member's ARGUMENT LIST begins: the member name, then its `(`. Named because the
 // offset is a claim about the grammar (`recv . name ( args )`) rather than a step count — see
 // `noteMethodCallMutabilityUses`, its one reader.
-let MethodArgListOffset = 2 as ElementIndex
+let MethodArgListOffset = 2
 
 // Add `item` to a `", "`-separated list — the separator every list a diagnostic spells out uses (E2026's
 // uncovered-case list, E3081's discard list, E3016's overload-set list), spelled ONCE so two messages
@@ -5690,7 +5958,7 @@ end 'nascentSelfSlotName'
 
 // `Parser.nascentWriteReaches` asks about a whole block rather than a prefix of one. A position no write can
 // hold, so the two questions need no second parameter to tell them apart.
-let NascentWholeBlock = 0 as ElementIndex
+let NascentWholeBlock = 0
 
 // `'x', 'y'` (or `x, y` with an empty `quote`) — one renderer, so every diagnostic spells a list of names
 // the same way.
@@ -5796,12 +6064,12 @@ end 'discardBindingList'
 // target accepts any chain at all, a bare name (zero hops) included.
 typealias FieldHopCount = int(0 to u64.max)
 
-let ChainMethodMinHops = 2 as FieldHopCount
+let ChainMethodMinHops = 2
 
 // A field STORE needs one hop and no more (`p.x = 1`, `o.inner.x = 1`) — the zero-hop `x = 1` is a
 // BINDING assignment, which `assignsAt` owns and `fieldAssignsAt` must not claim.
-let FieldStoreMinHops = 1 as FieldHopCount
-let AnyFieldHops = 0 as FieldHopCount
+let FieldStoreMinHops = 1
+let AnyFieldHops = 0
 
 // The label of the placeholder block a Parser holds before it has parsed a function. It
 // belongs to no function and is registered in no module; `parseFunction` replaces it
@@ -5913,13 +6181,13 @@ end 'qualifiedMethodName'
 // (`aStaticCallClaimsDottedChain`), while a longer chain has none, because `declaredMethodName` joins one
 // type name to one method name and neither may hold a ".". Named rather than written as a bare `1` beside
 // `TokensPerQualifierSegment`'s `2`, where it would read as arithmetic instead of as a rule.
-let MethodQualifierDots = 1 as ElementIndex
+let MethodQualifierDots = 1
 
 // The two tokens one qualifier segment costs — the `.` and the identifier after it. Named because the
 // dotted-chain walk indexes by it three times (the length probe, the assemble, and the `(` lookahead that
 // terminates them both), and a bare `2` beside `MethodQualifierDots`' `1` would be two unrelated quantities
 // wearing bare literals.
-let TokensPerQualifierSegment = 2 as ElementIndex
+let TokensPerQualifierSegment = 2
 
 // What a directory-qualified chain stands as: the callee of a call, whose `(` follows it, or a function value.
 enum QualifiedChainUse
@@ -6573,7 +6841,7 @@ let OneArgumentIsJustTheContainer = 1
 
 // The slot `first()` reads. It names no index ARGUMENT, but it names a slot as surely as `get(0)` does, so
 // a promise read through it is a nameable move rather than a refusal — see `notePromiseElementRead`.
-let FirstElementIndex = 0 as FullRangeInt
+let FirstElementIndex = 0
 
 // The slot a promise element was read out of: the record `__managed_vacate` empties and the index into it.
 type PromiseSlot
@@ -7481,9 +7749,9 @@ end 'InfixPrecedenceError'
 // integers, logical on bools — and `and`/`or` are additionally SHORT-CIRCUIT when their
 // left operand is a bool, which makes them control flow rather than ops (see
 // Parser.emitShortCircuit). Their precedence does not depend on which reading applies.
-let OrPrecedence = 1 as InfixPrecedence
-let XorPrecedence = 2 as InfixPrecedence
-let AndPrecedence = 3 as InfixPrecedence
+let OrPrecedence = 1
+let XorPrecedence = 2
+let AndPrecedence = 3
 
 // Comparison `==`/`!=`/`<`/`>`/`<=`/`>=`. Binds tighter than the word operators, so
 // `a > 0 and b > 0` groups as `(a > 0) and (b > 0)` — the reading that makes a
@@ -7493,18 +7761,18 @@ let AndPrecedence = 3 as InfixPrecedence
 // the level the operator's RESULT wants: `is` yields a bool, so it must bind tighter than `and`/`or`/`xor`
 // for `a is b and c is d` to group as `(a is b) and (c is d)`, and it has no reading at all against an
 // operand a `+` or a `*` could produce. It is NOT a `comparisonOperator`, though — see `identityOperator`.
-let ComparisonPrecedence = 4 as InfixPrecedence
+let ComparisonPrecedence = 4
 
 // Shift `shl`/`shr`. Binds TIGHTER than comparison (`1 shl 3 > 5` is `(1 shl 3) > 5`)
 // and LOOSER than additive (`a shl 1 + 2` is `a shl (1 + 2)`).
-let ShiftPrecedence = 5 as InfixPrecedence
+let ShiftPrecedence = 5
 
 // Additive `+`/`-`.
-let AdditivePrecedence = 6 as InfixPrecedence
+let AdditivePrecedence = 6
 
 // Multiplicative `*`/`/`/`mod` — the tightest binary level, so `10 + 5 * 2` groups as
 // `10 + (5 * 2)` = 20.
-let MultiplicativePrecedence = 7 as InfixPrecedence
+let MultiplicativePrecedence = 7
 
 // The precedence of a binary-operator token. It throws `notAnInfixOperator` for any token
 // that does not begin a binary operation in the grammar.
@@ -7843,12 +8111,12 @@ let TruncBuiltinName = b"trunc"
 // the check and the message's `expected`), and a bare `1` there would be a magic value in the more
 // literal sense: the number that says what these builtins ARE. (`print`/`__Builtins.sleep`/`__Builtins.runProcess`
 // keep their own, because each has its own emit and its own operand rule.)
-let NumericBuiltinArity = 1 as ParamCount
+let NumericBuiltinArity = 1
 
 // The ARITY-2 twin, for `min` (`specs/min.md`) — a second constant rather than a second literal, for
 // the identical reason. `requireBuiltinArity` states both, so the two arities differ by their
 // argument and by nothing else.
-let BinaryNumericBuiltinArity = 2 as ParamCount
+let BinaryNumericBuiltinArity = 2
 
 // **THE `String` BUILTIN TYPE'S NAME IS `StringConformerName`**. Recognized SYNTACTICALLY in
 // `parseTypeReference` — like `Self`, a pure token test with no registry — so `function f(s String)` tags
@@ -7906,7 +8174,7 @@ let BuiltinsRunProcessName = b"__Builtins.runProcess"
 
 // `__Builtins.runProcess` takes exactly one STRING argument — the command line — and returns an INTEGER (the
 // child's exit code), so unlike `__Builtins.sleep` its result IS usable in value position.
-let RunProcessArity = 1 as ParamCount
+let RunProcessArity = 1
 
 // ⭐⭐ **`__Builtins.parallelBoundary()` — THE CPU-PARALLEL CHECKPOINT, AND THE ONE INTRINSIC HERE
 // WHOSE RUNTIME ENTRY DOES NOTHING.** It marks a hand-written CPU-BOUND function as a deliberate
@@ -7938,7 +8206,7 @@ let ParallelBoundaryName = b"__parallel_boundary"
 // here beside the intrinsic for `SleepIntrinsicArity`'s reason, and as its own constant rather than a
 // borrowed `YieldIntrinsicArity` for `CurrentProcessIdArity`'s: the number is a fact about THIS intrinsic's
 // contract, and the two only happen to agree.
-let ParallelBoundaryArity = 0 as ParamCount
+let ParallelBoundaryArity = 0
 
 // ⭐⭐ **`__Builtins.forceSegfault()` — THE DELIBERATE ACCESS VIOLATION, AND THE ONLY INTRINSIC WHOSE
 // POINT IS TO CRASH.** The emitted runtime carries a fault handler that turns a hardware trap into
@@ -7953,7 +8221,7 @@ let BuiltinsForceSegfaultName = b"__Builtins.forceSegfault"
 // `__Builtins.forceSegfault` takes NOTHING and returns void — there is no knob on a crash. Its own constant
 // rather than a borrowed `ParallelBoundaryArity` for `CurrentProcessIdArity`'s reason: the number is a fact
 // about THIS intrinsic's contract, and the two only happen to agree.
-let ForceSegfaultArity = 0 as ParamCount
+let ForceSegfaultArity = 0
 
 // ⭐⭐ **THE OTHER TWO MEMBERS OF THE CPU-PARALLEL FAMILY — THE QUERIES, WHERE THE MARKER ABOVE IS A
 // STATEMENT.** Both take no arguments and answer an `int`. Their one caller in this tree is
@@ -7972,8 +8240,8 @@ let BuiltinsSchedMaxActiveWorkersName = b"__Builtins.schedMaxActiveWorkers"
 // Both take NOTHING. Stated here beside the intrinsics for `SleepIntrinsicArity`'s reason, and as two
 // constants rather than one shared zero for `CurrentProcessIdArity`'s: the number is a fact about each
 // intrinsic's own contract, and these two only happen to agree.
-let CpuCountArity = 0 as ParamCount
-let SchedMaxActiveWorkersArity = 0 as ParamCount
+let CpuCountArity = 0
+let SchedMaxActiveWorkersArity = 0
 
 // ⭐⭐ **`__Builtins.enterBackgroundPriority()` — THE ONLY INTRINSIC THAT CHANGES THE PROCESS RATHER THAN
 // REPORTING ON IT.** Everything in the band above asks a question; this one answers a question it first
@@ -8006,11 +8274,11 @@ let BuiltinsStdoutWantsAnsiColorName = b"__Builtins.stdoutWantsAnsiColor"
 
 // It takes NOTHING. Its own constant rather than sharing one, for `CurrentProcessIdArity`'s rule: the
 // number is a fact about THIS intrinsic's contract, not about its neighbours'.
-let StdoutWantsAnsiColorArity = 0 as ParamCount
+let StdoutWantsAnsiColorArity = 0
 
 // It takes NOTHING. Its own constant rather than sharing one, for `CurrentProcessIdArity`'s rule: the
 // number is a fact about THIS intrinsic's contract, not about its neighbours'.
-let EnterBackgroundPriorityArity = 0 as ParamCount
+let EnterBackgroundPriorityArity = 0
 
 // ⭐⭐ **`__Builtins.schedStealCount()` — THE THIRD SCHEDULER QUERY, and the only way a program can
 // observe that WORK STEALING happened.** It answers the sum of every processor's steal counter, which is 0
@@ -8025,7 +8293,7 @@ let BuiltinsSchedStealCountName = b"__Builtins.schedStealCount"
 
 // It takes NOTHING. Its own constant rather than `SchedMaxActiveWorkersArity` for `CurrentProcessIdArity`'s
 // rule: the number is a fact about THIS intrinsic's contract, and the two only happen to agree.
-let SchedStealCountArity = 0 as ParamCount
+let SchedStealCountArity = 0
 
 // ⭐⭐ **`__Builtins.schedRetakeCount()` — THE FIFTH SCHEDULER QUERY, and the only way a program can
 // observe that a PROCESSOR HANDOFF happened.** It answers the sum of every processor's retake counter, which
@@ -8041,7 +8309,7 @@ let SchedStealCountArity = 0 as ParamCount
 let BuiltinsSchedRetakeCountName = b"__Builtins.schedRetakeCount"
 
 // It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
-let SchedRetakeCountArity = 0 as ParamCount
+let SchedRetakeCountArity = 0
 
 // ⭐⭐ **`__Builtins.schedGtRecycleCount()` — how many green-thread records a free list served instead of the
 // record arena.** It answers the sum of every processor's recycle counter, so a program can observe that a
@@ -8051,7 +8319,7 @@ let SchedRetakeCountArity = 0 as ParamCount
 let BuiltinsSchedGtRecycleCountName = b"__Builtins.schedGtRecycleCount"
 
 // It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
-let SchedGtRecycleCountArity = 0 as ParamCount
+let SchedGtRecycleCountArity = 0
 
 // ⭐⭐ **`__Builtins.schedPreemptCount()` — how many preemption requests green threads have honoured.** It answers
 // the sum of every processor's preemption counter, so a program can observe that a thread which ran too long
@@ -8061,7 +8329,7 @@ let SchedGtRecycleCountArity = 0 as ParamCount
 let BuiltinsSchedPreemptCountName = b"__Builtins.schedPreemptCount"
 
 // It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
-let SchedPreemptCountArity = 0 as ParamCount
+let SchedPreemptCountArity = 0
 
 // ⭐⭐ **`__Builtins.schedSliceCount()` — how many TIME SLICES the scheduler has started.** It answers the sum
 // of every processor's schedule counter, which steps once per schedule that did NOT inherit the running slice
@@ -8073,12 +8341,12 @@ let SchedPreemptCountArity = 0 as ParamCount
 let BuiltinsSchedSliceCountName = b"__Builtins.schedSliceCount"
 
 // It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
-let SchedSliceCountArity = 0 as ParamCount
+let SchedSliceCountArity = 0
 
 // `__Builtins.gtQuiesce()` — see `GtRuntime.buildGtQuiesce`. Only the spec harness's generated
 // batch entry and the specs spell it.
 let BuiltinsGtQuiesceName = b"__Builtins.gtQuiesce"
-let GtQuiesceArity = 0 as ParamCount
+let GtQuiesceArity = 0
 
 // ⭐⭐ **`__Builtins.schedNetpollBlockCount()` — how many times a green thread has suspended on the NETWORK
 // POLLER waiting for a socket to become ready.** It is the witness that a socket wait really left the
@@ -8089,7 +8357,7 @@ let GtQuiesceArity = 0 as ParamCount
 let BuiltinsSchedNetpollBlockCountName = b"__Builtins.schedNetpollBlockCount"
 
 // It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
-let SchedNetpollBlockCountArity = 0 as ParamCount
+let SchedNetpollBlockCountArity = 0
 
 // ⭐⭐ **`__Builtins.schedSyscallCount()` — how many BRACKETED kernel calls have been entered by a machine holding
 // a processor.** A bracketed call is one `__sysmon` may retake the processor out of, so a window asserting that
@@ -8100,7 +8368,7 @@ let SchedNetpollBlockCountArity = 0 as ParamCount
 let BuiltinsSchedSyscallCountName = b"__Builtins.schedSyscallCount"
 
 // It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
-let SchedSyscallCountArity = 0 as ParamCount
+let SchedSyscallCountArity = 0
 
 // ⭐⭐ **`__Builtins.schedGlobalPushCount()` — how many green threads have ever been pushed onto the GLOBAL
 // run queue.** Every producer counts: a full ring's overflow batch, a yield, a preemption, and a publish by a
@@ -8111,7 +8379,7 @@ let SchedSyscallCountArity = 0 as ParamCount
 let BuiltinsSchedGlobalPushCountName = b"__Builtins.schedGlobalPushCount"
 
 // It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
-let SchedGlobalPushCountArity = 0 as ParamCount
+let SchedGlobalPushCountArity = 0
 
 // ⭐⭐ **`__Builtins.schedTimerScanStepCount()` — how many timer-heap entries the cancel scan has INSPECTED.**
 // It reports a COST rather than an event, which is what no other member of this family can do: disarming a
@@ -8122,7 +8390,7 @@ let SchedGlobalPushCountArity = 0 as ParamCount
 let BuiltinsSchedTimerScanStepCountName = b"__Builtins.schedTimerScanStepCount"
 
 // It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
-let SchedTimerScanStepCountArity = 0 as ParamCount
+let SchedTimerScanStepCountArity = 0
 
 // ⭐⭐ **`__Builtins.schedTimerStartCount()` — how many machines the system monitor has started for an overdue
 // timer.** With `schedPreemptCount()` and `schedRetakeCount()` it is everything the monitor does that can put a
@@ -8132,7 +8400,7 @@ let SchedTimerScanStepCountArity = 0 as ParamCount
 let BuiltinsSchedTimerStartCountName = b"__Builtins.schedTimerStartCount"
 
 // It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
-let SchedTimerStartCountArity = 0 as ParamCount
+let SchedTimerStartCountArity = 0
 
 // ⭐⭐ **`__Builtins.schedIdleProcessorCount()` — how many processors sit idle with no machine, Go's
 // `sched.npidle`.** A live count rather than an outcome: it is what the spinner cap reads, and a program reads
@@ -8142,7 +8410,7 @@ let SchedTimerStartCountArity = 0 as ParamCount
 let BuiltinsSchedIdleProcessorCountName = b"__Builtins.schedIdleProcessorCount"
 
 // It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
-let SchedIdleProcessorCountArity = 0 as ParamCount
+let SchedIdleProcessorCountArity = 0
 
 // ⭐⭐ **`__Builtins.schedGtRecordsCarved()` — how many green-thread records the scheduler's record arena has
 // ever carved.** A program that reclaims every thread it finishes with keeps it bounded however many rounds it
@@ -8152,7 +8420,7 @@ let SchedIdleProcessorCountArity = 0 as ParamCount
 let BuiltinsSchedGtRecordsCarvedName = b"__Builtins.schedGtRecordsCarved"
 
 // It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
-let SchedGtRecordsCarvedArity = 0 as ParamCount
+let SchedGtRecordsCarvedArity = 0
 
 // ⭐⭐ **`__Builtins.schedParkWakeCount()` — how many times a machine's blocking wait has returned, for any
 // reason.** An idle program keeps it near zero: a machine with nothing to do blocks until there is something,
@@ -8161,7 +8429,7 @@ let SchedGtRecordsCarvedArity = 0 as ParamCount
 let BuiltinsSchedParkWakeCountName = b"__Builtins.schedParkWakeCount"
 
 // It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
-let SchedParkWakeCountArity = 0 as ParamCount
+let SchedParkWakeCountArity = 0
 
 // ⭐⭐ **`__Builtins.gtStackBytes()` — the calling green thread's current stack size in bytes.** It is how a
 // program observes that a stack grew, was given back at a park, and what a new thread starts with. The surface is
@@ -8170,7 +8438,7 @@ let SchedParkWakeCountArity = 0 as ParamCount
 let BuiltinsGtStackBytesName = b"__Builtins.gtStackBytes"
 
 // It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
-let GtStackBytesArity = 0 as ParamCount
+let GtStackBytesArity = 0
 
 // ⭐⭐ **`__Builtins.slabRemoteFreeCount()` — THE ALLOCATOR'S ONE OUTCOME QUERY, and the only way a program
 // can observe that a box was freed on a machine other than the one that allocated it.** It answers the sum of
@@ -8189,7 +8457,7 @@ let GtStackBytesArity = 0 as ParamCount
 let BuiltinsSlabRemoteFreeCountName = b"__Builtins.slabRemoteFreeCount"
 
 // It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
-let SlabRemoteFreeCountArity = 0 as ParamCount
+let SlabRemoteFreeCountArity = 0
 
 // The five allocator census figures. Unlike the twelve traffic counters below, which are cumulative, these
 // are LEVELS — what the heap holds at the instant they are asked. `SlabRuntime.SlabLiveBytesName` owns what
@@ -8201,13 +8469,13 @@ let BuiltinsSlabParkedBytesName = b"__Builtins.slabParkedBytes"
 let BuiltinsSlabCommittedBytesName = b"__Builtins.slabCommittedBytes"
 
 // One constant for the five, for `MmCounterArity`'s reason: the shape is the fact.
-let SlabCensusArity = 0 as ParamCount
+let SlabCensusArity = 0
 
 let BuiltinsSlabCensusTallyName = b"__Builtins.slabCensusTally"
 let BuiltinsSlabCensusBucketCountName = b"__Builtins.slabCensusBucketCount"
 let BuiltinsSlabCensusBucketBytesName = b"__Builtins.slabCensusBucketBytes"
 
-let SlabCensusTallyArity = 1 as ParamCount
+let SlabCensusTallyArity = 1
 
 // ⭐⭐ **`__Builtins.schedProcessorCount()` — THE FOURTH SCHEDULER QUERY, AND THE ONLY ONE WHOSE ANSWER IS
 // NOT AN OUTCOME.** It reports how many Ps `MAXON_MAX_PROCS` resolved to — `min(requested, cpuCount())`,
@@ -8226,7 +8494,7 @@ let SlabCensusTallyArity = 1 as ParamCount
 let BuiltinsSchedProcessorCountName = b"__Builtins.schedProcessorCount"
 
 // It takes NOTHING. Its own constant, for `CurrentProcessIdArity`'s rule.
-let SchedProcessorCountArity = 0 as ParamCount
+let SchedProcessorCountArity = 0
 
 // ⭐⭐ **THE SIX MEMORY-TRAFFIC COUNTERS — the allocator's figures PER LAYER.** All six take no arguments and
 // answer an `int`: TWO LAYERS × (cumulative, live) PLUS TWO BYTE VOLUMES. The layers NEST in the allocator —
@@ -8247,7 +8515,7 @@ let BuiltinsMmRawAllocBytesName = b"__Builtins.mmRawAllocBytes"
 let BuiltinsMmAllocTotalByTagName = b"__Builtins.mmAllocTotalByTag"
 let BuiltinsMmAllocBytesByTagName = b"__Builtins.mmAllocBytesByTag"
 
-let MmAllocByTagArity = 1 as ParamCount
+let MmAllocByTagArity = 1
 
 // ⭐⭐ **THE THREE PER-THREAD COLUMNS — allocations, frees and bytes of ONE GREEN THREAD**, both layers
 // summed. A process-wide figure counts every thread's traffic, so a bracket opened inside a pool worker
@@ -8279,7 +8547,7 @@ let BuiltinsScavengeMemoryName = b"__Builtins.scavengeMemory"
 
 // It takes NOTHING. Its own constant rather than the counters' shared one for `CurrentProcessIdArity`'s
 // rule: the number is a fact about this intrinsic's contract, which is unrelated to theirs.
-let ScavengeMemoryArity = 0 as ParamCount
+let ScavengeMemoryArity = 0
 
 // ⭐⭐ **`__Builtins.threadCpuTicks()` — THE FOURTH CLOCK, AND THE ONLY ONE THAT IS NOT A CLOCK.**
 // The three in `builtins-clock.md` measure WALL time, so a phase timed with any of them reports the
@@ -8294,8 +8562,8 @@ let BuiltinsThreadCpuTicksName = b"__Builtins.threadCpuTicks"
 // they are twelve spellings of one question asked of twelve figures, exactly as `SubprocessOneArgArity`'s
 // family is one shape shared by many names — and its own for the clock, whose contract is unrelated to
 // theirs (`CurrentProcessIdArity`'s rule, which is why these are two constants and not one).
-let MmCounterArity = 0 as ParamCount
-let ThreadCpuTicksArity = 0 as ParamCount
+let MmCounterArity = 0
+let ThreadCpuTicksArity = 0
 
 // ⭐⭐ **`__Builtins.tickCountMs()` — MILLISECONDS SINCE THE MACHINE BOOTED, AND IT EXISTS FOR ONE
 // CONSUMER: THE DEBUGSTREAM WIRE FORMAT.** The producer stamps every ring entry with
@@ -8310,7 +8578,7 @@ let BuiltinsTickCountMsName = b"__Builtins.tickCountMs"
 
 // It takes NOTHING. Its own constant rather than either clock's above, on `CurrentProcessIdArity`'s rule:
 // the number is a fact about THIS intrinsic's contract, which is unrelated to theirs.
-let TickCountMsArity = 0 as ParamCount
+let TickCountMsArity = 0
 
 // **THE `spawnReadLine` BUILTIN** (the IOCP overlapped-read PROBE). A TEMPORARY probe
 // surface (not the final async-subprocess-stdio API): like
@@ -8322,7 +8590,7 @@ let TickCountMsArity = 0 as ParamCount
 let SpawnReadLineBuiltinName = b"spawnReadLine"
 
 // `spawnReadLine` takes exactly one STRING argument (the command line) and returns an INTEGER (the bytes read).
-let SpawnReadLineArity = 1 as ParamCount
+let SpawnReadLineArity = 1
 
 // **THE STREAMING SUBPROCESS BUILTINS** — the real long-lived-child API `StreamingSubprocess`
 // wants, exposed as bare-name compiler builtins (like `spawnReadLine`) because the compiler cannot yet compile the stdlib
@@ -8340,10 +8608,10 @@ let SubpWaitBuiltinName = b"subpWait"
 let SubpReleaseBuiltinName = b"subpRelease"
 
 // Arities: spawn/read/close/wait/release take one argument; writeLine takes two (handle, line).
-let SubpSpawnArity = 1 as ParamCount
-let SubpReadArity = 1 as ParamCount
-let SubpWriteArity = 2 as ParamCount
-let SubpHandleArity = 1 as ParamCount
+let SubpSpawnArity = 1
+let SubpReadArity = 1
+let SubpWriteArity = 2
+let SubpHandleArity = 1
 
 // **THE ARITY-1 FLOAT MATH INTRINSICS** — `specs/{floor,ceil,round,sqrt,abs}.md`. Builtins for the
 // same reason `trunc` is: each lowers to ONE instruction on every target — `abs` to a
@@ -8747,17 +9015,17 @@ let DebugStreamTextCallee = b"__DebugStream.text"
 // Each member's arity, named for `SleepIntrinsicArity`'s reason: an intrinsic has no signature for
 // SemanticCheck's ordinary arity check to read, so the count IS the declaration and it belongs beside the
 // name it declares.
-let DebugStreamEnabledArity = 0 as ParamCount
+let DebugStreamEnabledArity = 0
 
 // `phaseBegin(nameId, unitId)` / `phaseEnd(nameId, unitId)` — the same two, which is why they share a
 // constant as they share an entry point.
-let DebugStreamPhaseArity = 2 as ParamCount
+let DebugStreamPhaseArity = 2
 
 // `event(nameId, category, level, unitId, arg0, arg1)`.
-let DebugStreamEventArity = 6 as ParamCount
+let DebugStreamEventArity = 6
 
 // `text(category, level, unitId, message)`.
-let DebugStreamTextArity = 4 as ParamCount
+let DebugStreamTextArity = 4
 
 // ⭐ **IS THIS CALLEE A MEMBER OF THE `__DebugStream` TYPE?** THE one test, with the same two askers
 // `isBuiltinsIntrinsicCallee` has and the same obligation not to disagree: the member table in
@@ -9010,22 +9278,22 @@ end 'streamingSpawnSlotClass'
 // `floatToBits(x)` takes exactly one FLOAT and `bitsToFloat(b)` exactly one INTEGER. Stated here beside
 // the intrinsics for `CommandLineArgArity`'s reason — an intrinsic has no signature for SemanticCheck's
 // ordinary arity check to read.
-let FloatToBitsArity = 1 as ParamCount
-let BitsToFloatArity = 1 as ParamCount
+let FloatToBitsArity = 1
+let BitsToFloatArity = 1
 
 // `commandLineCount()` takes nothing; `commandLineArg(index)` takes exactly one INTEGER. Stated here beside
 // the intrinsics for `SleepIntrinsicArity`'s reason — an intrinsic has no signature for SemanticCheck's
 // ordinary arity check to read, because no file declares it.
-let CommandLineCountArity = 0 as ParamCount
-let CommandLineArgArity = 1 as ParamCount
+let CommandLineCountArity = 0
+let CommandLineArgArity = 1
 
 // `readStdin(maxBytes)` takes exactly one INTEGER byte budget; `executablePath()` takes nothing. Stated here
 // beside the intrinsics for `CommandLineArgArity`'s reason — an intrinsic has no signature for SemanticCheck's
 // ordinary arity check to read, because no file declares it.
-let ReadStdinArity = 1 as ParamCount
-let ExecutablePathArity = 0 as ParamCount
-let ProcessNamespaceArity = 0 as ParamCount
-let FillRandomArity = 1 as ParamCount
+let ReadStdinArity = 1
+let ExecutablePathArity = 0
+let ProcessNamespaceArity = 0
+let FillRandomArity = 1
 
 // `currentProcessId()` takes nothing. Stated here beside the two above for `CommandLineArgArity`'s reason —
 // an intrinsic has no signature for SemanticCheck's ordinary arity check to read, because no file declares
@@ -9037,16 +9305,16 @@ let FillRandomArity = 1 as ParamCount
 // family's *"a sixth constant equal to an existing one would be a second name for one fact"* is the
 // opposite case and does not reach here: there, a few SHAPES are shared across the whole band by contract, so
 // the shape is the fact.)
-let CurrentProcessIdArity = 0 as ParamCount
-let ProcessIsAliveArity = 1 as ParamCount
+let CurrentProcessIdArity = 0
+let ProcessIsAliveArity = 1
 
 // `gtIsComplete(gt)` takes exactly one machine word — the green-thread handle. Stated here for
 // `CommandLineArgArity`'s reason, and as its own constant for `CurrentProcessIdArity`'s.
-let GtIsCompleteArity = 1 as ParamCount
+let GtIsCompleteArity = 1
 
 // `awaitAny(promises)` takes exactly one array of promises. Its own constant beside its sibling's for
 // `CurrentProcessIdArity`'s reason: the number is a fact about THIS intrinsic's contract.
-let AwaitAnyArity = 1 as ParamCount
+let AwaitAnyArity = 1
 
 // What `__Builtins.awaitAny` will accept, as the `builtinOperandType` sentence renders it — *"'…' requires
 // a {required}, but its argument is {got}"*. Named rather than written at the throw for
@@ -9057,7 +9325,7 @@ let PromiseArrayRequirement = "promise array — an `Array` whose element type i
 // two: it is a single fact about a single shape, and the two names are the same intrinsic on two streams.
 // Stated here for `CommandLineArgArity`'s reason — an intrinsic has no signature for SemanticCheck's
 // ordinary arity check to read, because no file declares it.
-let StreamWriteArity = 1 as ParamCount
+let StreamWriteArity = 1
 
 // ⭐ **THE ARGUMENT SHAPES THE SUBPROCESS INTRINSICS FALL INTO.** Stated here for `CommandLineArgArity`'s
 // reason — an intrinsic has no signature for SemanticCheck's ordinary arity check to read, because no file
@@ -9065,22 +9333,22 @@ let StreamWriteArity = 1 as ParamCount
 // get wrong: the handle ops take one, the timed ops two, the counted stdin ops three, the
 // last-error read none, a spawn fourteen and a streaming spawn six. A further constant equal to an
 // existing one would be a second name for one fact.
-let SubprocessOneArgArity = 1 as ParamCount
-let SubprocessTwoArgArity = 2 as ParamCount
-let SubprocessThreeArgArity = 3 as ParamCount
-let SubprocessNoArgArity = 0 as ParamCount
+let SubprocessOneArgArity = 1
+let SubprocessTwoArgArity = 2
+let SubprocessThreeArgArity = 3
+let SubprocessNoArgArity = 0
 
 // The fourteen-argument spawn contract, in order: `argv_mm, argc, cwd_cstr, env_mm, envInherit,
 // stdinKind, stdinData_cstr, stdoutKind, stdoutData_cstr, stdoutLimit, stderrKind, stderrData_cstr,
 // stderrLimit, flags`. `subprocessDetach` takes the identical fourteen and differs only in what it
 // answers (a pid rather than a handle); the runtime gates the detached path on `flags` bit 2.
-let SubprocessSpawnArity = 14 as ParamCount
+let SubprocessSpawnArity = 14
 
 // `subprocessSpawnStreaming(argv_mm, argc, cwd_cstr, flags, env_mm, envInherit)` — the streaming spawn
 // takes no stdio triples because all three of its streams are pipes by definition, and it takes the
 // environment pair the attached contract carries at 3/4 because a monitor has to TELL its child something
 // before the child's first instruction runs.
-let SubprocessStreamingSpawnArity = 6 as ParamCount
+let SubprocessStreamingSpawnArity = 6
 
 // The two POSITIONS in the spawn contract that carry a `__ManagedMemory` rather than a scalar — the argv
 // blob and the environment block. Named because `spawnSlotClass` reads them as indices, and an index into a
@@ -9108,33 +9376,33 @@ let SubprocessSpawnStderrDataSlot = 11
 // `CommandLineArgArity`'s reason — an intrinsic has no signature for SemanticCheck's ordinary arity check
 // to read. They are the shared-memory family's own numbers rather than the subprocess band's above: the
 // two contracts are independent, and sharing a constant would let a change to one silently move the other.
-let SharedMemoryTwoArgArity = 2 as ParamCount
-let SharedMemoryThreeArgArity = 3 as ParamCount
+let SharedMemoryTwoArgArity = 2
+let SharedMemoryThreeArgArity = 3
 
 // The teardown takes the handle, the view base, the mapping's length and the published name — three
 // steps on a POSIX lane where Win32 needs two (`SharedMemoryRuntime.buildSharedMemoryClose`).
-let SharedMemoryFourArgArity = 4 as ParamCount
+let SharedMemoryFourArgArity = 4
 
 // ⭐ **THE FIVE ARGUMENT COUNTS THE SIXTEEN SAMPLING INTRINSICS FALL INTO.** Stated here for
 // `SharedMemoryTwoArgArity`'s reason — an intrinsic has no signature for SemanticCheck's ordinary arity
 // check to read — and as this family's OWN numbers, so a change to one contract cannot silently move
 // another's. Every argument of every one of them is a machine word: a handle, a pid, a scratch address, a
 // byte offset or a byte count.
-let ProfileNoArgArity = 0 as ParamCount
-let ProfileOneArgArity = 1 as ParamCount
-let ProfileTwoArgArity = 2 as ParamCount
-let ProfileThreeArgArity = 3 as ParamCount
+let ProfileNoArgArity = 0
+let ProfileOneArgArity = 1
+let ProfileTwoArgArity = 2
+let ProfileThreeArgArity = 3
 
 // The suspended window's whole contract: the process, the thread, the three caller-owned scratch records
 // and the window's capacity (`ProfileRuntime.buildProfileSample`).
-let ProfileSampleArity = 6 as ParamCount
+let ProfileSampleArity = 6
 
-let DebugHostNoArgArity = 0 as ParamCount
-let DebugHostOneArgArity = 1 as ParamCount
-let DebugHostTwoArgArity = 2 as ParamCount
-let DebugHostThreeArgArity = 3 as ParamCount
-let DebugHostFourArgArity = 4 as ParamCount
-let DebugHostFiveArgArity = 5 as ParamCount
+let DebugHostNoArgArity = 0
+let DebugHostOneArgArity = 1
+let DebugHostTwoArgArity = 2
+let DebugHostThreeArgArity = 3
+let DebugHostFourArgArity = 4
+let DebugHostFiveArgArity = 5
 
 // ⭐ **IS THIS CALLEE A MEMBER OF THE `__Builtins` TYPE?** THE one test, and it has two askers that
 // must never disagree: the intrinsic table in `parseCallNamed` (which dispatches on it) and the
@@ -9228,7 +9496,7 @@ function argLabelRuleForCallee(callee ByteArray, shadowedByADeclaration bool) re
 end 'argLabelRuleForCallee'
 
 // Every clock intrinsic reads a clock and takes nothing.
-let ClockIntrinsicArity = 0 as ParamCount
+let ClockIntrinsicArity = 0
 
 // `__Builtins.sleep` takes exactly one INTEGER argument — the duration in milliseconds (per
 // `specs/sleep.md`) — and returns void.
@@ -9238,12 +9506,12 @@ let ClockIntrinsicArity = 0 as ParamCount
 // SemanticCheck against its signature exactly like every other call's. An intrinsic has no signature for
 // that check to read — no file declares it — which is the whole reason this constant exists, and why it
 // belongs here beside the intrinsic table rather than up with the bare-name builtins.
-let SleepIntrinsicArity = 1 as ParamCount
+let SleepIntrinsicArity = 1
 
 // `__Builtins.yield` takes NOTHING and returns void — `Scheduler.yield()` has no knob to turn. Stated here for
 // `SleepIntrinsicArity`'s reason: an intrinsic has no signature for SemanticCheck's ordinary arity check to
 // read, because no file declares it.
-let YieldIntrinsicArity = 0 as ParamCount
+let YieldIntrinsicArity = 0
 
 // The scale between the two MONOTONIC readings — `currentTimeMs()` IS `currentTimeNanos() / 1e6`. Named
 // here because this is the only place it is applied; the wall clock's own two scale constants live with
@@ -9439,8 +9707,8 @@ function calleeMintIsDefaultHelper(mint CalleeMint) returns bool
 	return mint == CalleeMint.paramDefaultHelper or mint == CalleeMint.fieldDefaultHelper
 end 'calleeMintIsDefaultHelper'
 
-let MaxDeclaredMembers = 65535 as ElementIndex
-let MaxEnumBackingEntries = 65536 as ElementIndex
+let MaxDeclaredMembers = 65535
+let MaxEnumBackingEntries = 65536
 
 function requireMemberCount(count ElementIndex, limit ElementIndex, members String, anchor Token) throws SourceParseError
 	if count <= limit 'withinTheLimit'
@@ -10032,11 +10300,11 @@ export let CreateMethod = b"create"
 // The five tokens of `<Type> . create ( )`, as offsets from the region's start
 // (`Parser.defaultRegionIsABareCreate`). Named rather than written as literals at the probe: the last of
 // them is the region-LENGTH test, where a bare 5 reads as an unrelated number.
-let BareCreateDotOffset = 1 as ElementIndex
-let BareCreateNameOffset = 2 as ElementIndex
-let BareCreateOpenParenOffset = 3 as ElementIndex
-let BareCreateCloseParenOffset = 4 as ElementIndex
-let BareCreateTokenCount = 5 as ElementIndex
+let BareCreateDotOffset = 1
+let BareCreateNameOffset = 2
+let BareCreateOpenParenOffset = 3
+let BareCreateCloseParenOffset = 4
+let BareCreateTokenCount = 5
 
 type FieldTypeSpelling
 	export let fieldType as MaxonType
@@ -11609,15 +11877,15 @@ end 'byteSlice'
 // The ASCII bytes the escape decoder produces and recognizes. Named rather than spelled as
 // bare numbers or as `'\\'` character literals — the parser cannot bootstrap its own
 // character-literal syntax to define the table that decodes it.
-let Backslash = 92 as Byte
-let SingleQuote = 39 as Byte
-let DoubleQuote = 34 as Byte
-let LeftBrace = 123 as Byte
-let RightBrace = 125 as Byte
-let LowerN = 110 as Byte
-let LowerT = 116 as Byte
-let LowerR = 114 as Byte
-let DigitZero = 48 as Byte
+let Backslash = 92
+let SingleQuote = 39
+let DoubleQuote = 34
+let LeftBrace = 123
+let RightBrace = 125
+let LowerN = 110
+let LowerT = 116
+let LowerR = 114
+let DigitZero = 48
 let NewlineByte = 10 as Byte
 let TabByte = 9 as Byte
 let CarriageReturnByte = 13 as Byte
@@ -11633,19 +11901,19 @@ let NulByte = 0 as Byte
 
 // The high-bit threshold: a source byte `< AsciiCeiling` is a bare ASCII byte; `>= AsciiCeiling` opens a
 // multi-byte UTF-8 sequence. A byte-string codepoint must fit in `[0, ByteCodepointMax]` (Latin-1).
-let AsciiCeiling = 128 as Byte
-let ByteCodepointMax = 255 as FullRangeInt
+let AsciiCeiling = 128
+let ByteCodepointMax = 255
 
 // The low byte of a codepoint (its Latin-1 encoding for a valid one; a harmless recovery value otherwise).
 let ByteMask = 255 as FullRangeInt
-let LowerX = 120 as Byte
-let LowerU = 117 as Byte
+let LowerX = 120
+let LowerU = 117
 
 // A hex nibble is 4 bits; `\xNN` = `\` `x` + 2 hex digits (4 bytes), `\uNNNN` = `\` `u` + 4 hex digits (6).
 let HexNibbleBits = 4 as FullRangeInt
-let HexEscapeDigits = 2 as ByteOffset
-let UniEscapeDigits = 4 as ByteOffset
-let EscapeMarkerBytes = 2 as ByteOffset
+let HexEscapeDigits = 2
+let UniEscapeDigits = 4
+let EscapeMarkerBytes = 2
 
 // The noun each digit escape goes by in its E1004 diagnostic — the canonical corpus pins both
 // (`specs/hex-escape.md:147`, `specs/unicode-escape.md:151`).
@@ -12009,7 +12277,7 @@ type BlockMark
 	end 'create'
 end 'BlockMark'
 
-let FunctionEntryBlockId = 0 as BlockId
+let FunctionEntryBlockId = 0
 
 let DropCascadeNodeLabel = b"exitdrop"
 let SkipTestNodeLabel = b"exitskip"
@@ -12020,7 +12288,7 @@ let ExitTerminalLabel = b"exitterminal"
 // that carries lanes, it enters the flagged chain, where each rank down to the handed-off one
 // compares itself with the skip rank the exit carries. The bound trades nodes per exit against a
 // compare per rank at run time.
-let ExplicitExclusionDepth = 3 as ElementIndex
+let ExplicitExclusionDepth = 3
 
 enum ExitKind
 	propagate
@@ -12140,7 +12408,7 @@ end 'ReleaseShape'
 
 typealias OwnedBindingPositionArray = Array with ElementIndex
 
-let LaneNodeValueBucket = 0 as ValueId
+let LaneNodeValueBucket = 0
 
 // Every node at or above a lane carries one phi per lane below it, so lanes cost nodes × lanes; capping
 // them keeps that linear, and an owner rebound past the cap is baked into its node instead.
@@ -15921,7 +16189,7 @@ let StringIndexAccessorArgCount = 1 as ElementIndex
 // because the pair is what the fold's range test reads and one of them being a position is the point.
 let LiteralStartBytePos = 0 as FullRangeInt
 
-let EmptyInterpolationLength = 0 as FullRangeInt
+let EmptyInterpolationLength = 0
 
 // ⭐ **THE BYTES BEHIND A VALUE THE COMPILER MINTED FROM A STRING LITERAL, OR THE ABSENCE OF THEM.** A union
 // rather than a `ByteArray` plus a companion `bool`, and rather than an empty `ByteArray` standing for
@@ -16206,7 +16474,7 @@ typealias PayloadBindingArray = Array with PayloadBinding
 // compare-and-branch pairs, cheaper than the compare-per-level a search spends before it reaches a
 // leaf; past that the search's logarithmic depth wins. A jump-TABLE tier above a density threshold
 // is not emitted here: it needs an `.rdata` table and an indirect jump.
-let MinIntervalsForDispatch = 4 as ElementIndex
+let MinIntervalsForDispatch = 4
 
 // ⭐ **THE DENSE-TABLE DENSITY HEURISTIC — the three caps that decide a jump TABLE is worth its
 // `.rdata` slots over a binary search.**
@@ -16222,9 +16490,9 @@ let MinIntervalsForDispatch = 4 as ElementIndex
 //   • `MinTableDensity{Numerator,Denominator}` — the covered slots must be at least 2/5 (0.4) of the span,
 //     or the search — whose cost follows the interval COUNT, not the span — wins.
 let MaxTableSpanSlots = 4096 as FullRangeInt
-let MaxTableSlotsPerInterval = 32 as FullRangeInt
-let MinTableDensityNumerator = 2 as FullRangeInt
-let MinTableDensityDenominator = 5 as FullRangeInt
+let MaxTableSlotsPerInterval = 32
+let MinTableDensityNumerator = 2
+let MinTableDensityDenominator = 5
 
 // ⭐ **ONE NORMALIZED DISPATCH KEY — a closed value interval `[lo, hi]` and the arm body it
 // selects.** A `match` over an integer-like scrutinee (an enum/union tag, a scalar
@@ -16523,7 +16791,7 @@ end 'markBoundHead'
 
 typealias MemberHopCount = int(0 to u32.max)
 
-let HopsToCallOnAField = 2 as MemberHopCount
+let HopsToCallOnAField = 2
 
 // A name a `return` hands back, and what `Parser.everyReturnedLocalHoldsAFreshRecord`'s walk has learned of
 // it: whether its one binding has been met, and whether the walk is still inside that binding's scope.
@@ -16818,10 +17086,10 @@ typealias FormatFieldWidth = int(0 to u32.max)
 // still convert a value with bit 63 set.
 typealias FormatHalfRadix = int(1 to 8)
 
-let DecimalHalfRadix = 5 as FormatHalfRadix
-let HexHalfRadix = 8 as FormatHalfRadix
-let OctalHalfRadix = 4 as FormatHalfRadix
-let BinaryHalfRadix = 1 as FormatHalfRadix
+let DecimalHalfRadix = 5
+let HexHalfRadix = 8
+let OctalHalfRadix = 4
+let BinaryHalfRadix = 1
 
 // ⭐⭐ **DECLARED AT `FormatFieldWidth`, WHICH IS WHAT MAKES THE PAIR ABOVE CHECKED RATHER THAN
 // MERELY ADJACENT.** `InterpFormatSpec.number` tests its accumulator against this and then narrows
@@ -16922,7 +17190,7 @@ let EmptySlotMessageName = b"__emptySlotMessage"
 let EmptySlotMessageIndexLabel = b"index"
 let EmptySlotPanicBlockLabel = b"emptyslot"
 let FilledSlotBlockLabel = b"slotfilled"
-let EmptySlotWord = 0 as FullRangeInt
+let EmptySlotWord = 0
 
 // The two blocks `emitQuotientOverflowGuard` splits a signed quotient across.
 let QuotientOverflowPanicBlockLabel = b"divovf"
@@ -17620,6 +17888,7 @@ type FunctionBodyState
 
 	export var literalCasts as LiteralCastTable
 	export var literalCastArguments as LiteralCastArgumentTable
+	export var letCasts as LetCastTracking
 	export var scratchCellFills as ScratchCellFillTable
 	export var argumentStorage as ValueMarkColumn
 	export var deferredArgumentBindings as DeferredArgumentBindingColumn
@@ -18234,6 +18503,7 @@ type FunctionBodyState
 			valueDeclaredAlias: noValueDeclaredAliases,
 			literalCasts: noLiteralCasts,
 			literalCastArguments: noLiteralCastArguments,
+			letCasts: noLetCasts,
 			scratchCellFills: noScratchCellFills,
 			argumentStorage: noValueMarks,
 			deferredArgumentBindings: DeferredArgumentBindingColumn.unwritten,
@@ -18702,6 +18972,8 @@ export type Parser
 	let instrumentsCoverage as bool
 
 	let foldsAConstantInitializer as bool
+
+	var constLetCast = ConstLetCastRecord.none
 
 	// ⭐⭐ **THE `match` CONSTRUCTS CURRENTLY BEING PARSED, INNERMOST LAST — two scalar columns, pushed in
 	// lockstep.** An arm's coverage point needs TWO positions: its OWN, so the line listing counts the arm's
@@ -34521,6 +34793,7 @@ export type Parser
 		try self.consumeBlockEnd(nameTok.value, labelIsRequired: isTest)
 
 		self.publishExistentialInstances(func)
+		self.stampLetCastScopes(nameTok.line, lastLine: self.tokenAt(self.pos - 1).line)
 		self.fileDeferredProvenance(func)
 		self.publishDebugLocals(func)
 		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramNames, paramTypes: paramTypes, paramTypeStarts: paramTypeStarts), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: self.paramExistentialSitesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnExistentialSites: self.returnExistentialSitesOf(returnType, returnTypeStart: returnTypeStart), extensionConstraints: self.enclosingExtensionConstraints, writtenTypeNames: signatureTypeNames, selfSpelledParams: self.selfSpelledParamsOf(paramNames, paramTypeStarts: paramTypeStarts)), returnType: returnType, nameLine: nameTok.line, nameColumn: nameTok.column, sourceFilePath: self.filePath, synthesized: false, role: self.declarationRoleOf(nameTok))
@@ -38517,6 +38790,10 @@ export type Parser
 		try self.declareInitializedBinding(func, nameTok: nameTok, value: value, sourceName: sourceName, sourceReadsAField: sourceReadsAField, mutable: mutable)
 		self.noteBodyBindingDeclared(nameTok, mutable: mutable)
 		self.noteImmutableBinding(func, nameTok: nameTok, mutable: mutable, borrowsIt: borrowsIt)
+
+		if not mutable 'aConstantCandidate'
+			self.registerLetCast(nameTok, initializer: value, first: rhsStart)
+		end 'aConstantCandidate'
 	end 'parseBinding'
 
 	function recordVarBirthSite(value ValueId, anchor Token)
@@ -41931,6 +42208,11 @@ export type Parser
 		match self.bodyState.literalCastArguments 'function'
 			unwritten then break
 			entries(confirmed) then func.literalCastArguments = confirmed
+		end 'function'
+
+		match self.bodyState.letCasts 'function'
+			none then break
+			tracking(state) then func.letCastReads = state.reads
 		end 'function'
 
 		func.existentialFieldStores = self.bodyState.existentialFieldStores
@@ -62015,6 +62297,11 @@ export type Parser
 
 			if comparisonOperator(opTok.kind) 'comparison'
 				left = try self.emitCompare(leftValue, rhs: rightValue, op: infixCmpOp(opTok.kind), opTok: opTok)
+
+				if self.trackedLetCasts() 'someLetIsACast'
+					self.settleLetCastComparison(leftValue, lhsFirst: leftStart, lhsPast: opIndex, rhs: rightValue, rhsFirst: rhsStart, rhsPast: rhsEnd)
+				end 'someLetIsACast'
+
 				continue
 			end 'comparison'
 
@@ -62040,6 +62327,10 @@ export type Parser
 			end 'isDivision'
 
 			left = try self.emitBinOp(leftValue, rhs: rightValue, op: op, opTok: opTok)
+
+			if self.trackedLetCasts() 'someLetIsACast'
+				self.settleLetCastArithmetic(left, op: op, lhs: leftValue, lhsFirst: leftStart, lhsPast: opIndex, rhs: rightValue, rhsFirst: rhsStart, rhsPast: rhsEnd)
+			end 'someLetIsACast'
 		end 'climb'
 
 		return left
@@ -62559,6 +62850,8 @@ export type Parser
 		// which is this parse's own temporary and is bound to no name, so the answer is false from then on.
 		var currentIsBareLocal = self.rhsWasBareLocalReference(operandStart)
 		var currentIsALiteral = self.spansANumericLiteral(operandStart)
+		let castLetReads = self.letCastReadsOfOperand(current, first: operandStart, pastEnd: self.pos) if self.trackedLetCasts() else LetCastRoster.none
+		var castReadsAwait = not rosterIsEmpty(castLetReads)
 
 		while self.at(TokenKind.as) 'cast'
 			let asTok = try self.consume(TokenKind.as)
@@ -62576,13 +62869,20 @@ export type Parser
 			// Asked of the literal before the cast: the cast's result denotes the target alias itself, so it
 			// would admit an out-of-range literal too.
 			let admittingAlias = self.aliasAdmittingLiteral(current, targetType: targetType) if currentIsALiteral else self.anchors.undeclaredAlias
+			let admittingLetCast = self.aliasAdmittingLiteral(current, targetType: targetType) if castReadsAwait else self.anchors.undeclaredAlias
+			let literalConstant = self.foldedConstantOf(current) if currentIsALiteral else LetCastConstant.unknown
 			current = try self.applyCast(current, targetType: targetType, asTok: asTok, targetTok: targetTok, sourceIsBareLocal: currentIsBareLocal)
 			currentIsBareLocal = false
 			currentIsALiteral = false
 
+			if castReadsAwait 'aCastConstantRead'
+				self.claimLetCastsThroughACast(castLetReads, admitted: admittingLetCast)
+				castReadsAwait = false
+			end 'aCastConstantRead'
+
 			match admittingAlias 'aLiteralTheTargetAlreadyAdmits'
 				undeclared then break
-				declared(alias) then self.recordLiteralCast(current, alias: alias, first: operandStart, asTok: asTok)
+				declared(alias) then self.recordLiteralCast(current, alias: alias, first: operandStart, asTok: asTok, constant: literalConstant)
 			end 'aLiteralTheTargetAlreadyAdmits'
 		end 'cast'
 
@@ -62626,13 +62926,32 @@ export type Parser
 		return aliasIsFloat(alias) and self.constIsKnown(literal) and literalInRange(self.foldLiteralToFloatBits(literal), low: alias.low, high: alias.high, isFloat: true, writtenNegative: false, writtenAboveSignedMax: false)
 	end 'integerLiteralWidensInto'
 
-	function recordLiteralCast(result ValueId, alias RangedTypeAlias, first ElementIndex, asTok Token)
+	function literalCastOver(first ElementIndex, alias RangedTypeAlias, asTok Token) returns LiteralCast
 		let literalAt = self.literalPastItsSign(first)
 		let literalTok = self.tokenAt(literalAt)
 		let literalTag = ValueTypeTag.float if literalTok.kind == TokenKind.floatLiteral else ValueTypeTag.integer
-		let cast = LiteralCast.create(literalTok.value, negative: literalAt != first, target: alias.clone(), asRange: SourceRange.ofToken(asTok), literalTag: literalTag)
+		return LiteralCast.create(literalTok.value, negative: literalAt != first, target: alias.clone(), asRange: SourceRange.ofToken(asTok), literalTag: literalTag)
+	end 'literalCastOver'
+
+	function foldedConstantOf(value ValueId) returns LetCastConstant
+		if self.valueConvertsAsUnsigned(value) 'mayExceedTheSignedTop'
+			return LetCastConstant.unknown
+		end 'mayExceedTheSignedTop'
+
+		if self.constIsKnown(value) 'anInteger'
+			return LetCastConstant.integer(self.constOf(value))
+		end 'anInteger'
+
+		if self.floatConstIsKnown(value) 'aFloat'
+			return LetCastConstant.real(self.floatConstBitsOf(value))
+		end 'aFloat'
+
+		return LetCastConstant.unknown
+	end 'foldedConstantOf'
+
+	function recordLiteralCast(result ValueId, alias RangedTypeAlias, first ElementIndex, asTok Token, constant LetCastConstant)
 		var recorded = self.literalCastsForWrite()
-		recorded.upsert(result, value: LiteralCastSpan.create(cast, first: first, pastEnd: self.pos))
+		recorded.upsert(result, value: LiteralCastSpan.create(self.literalCastOver(first, alias: alias, asTok: asTok), constant: constant, first: first, pastEnd: self.pos))
 	end 'recordLiteralCast'
 
 	function recordedLiteralCast(value ValueId) returns LiteralCastSpan throws MapError
@@ -62642,25 +62961,25 @@ export type Parser
 		end 'function'
 	end 'recordedLiteralCast'
 
-	function literalCastSpanning(value ValueId, first ElementIndex) returns LiteralCast throws MapError
+	function literalCastSpanning(value ValueId, first ElementIndex) returns LiteralCastSpan throws MapError
 		let span = try self.recordedLiteralCast(value)
 
 		if not span.covers(first, expressionPastEnd: self.pos) 'aDifferentExpression'
 			throw MapError.keyNotFound
 		end 'aDifferentExpression'
 
-		return span.cast
+		return span
 	end 'literalCastSpanning'
 
 	function reportUnneededLiteralCastAt(value ValueId, first ElementIndex, declared MaxonType)
-		let cast = try self.literalCastSpanning(value, first: first) otherwise return
 		let destination = try self.rangeCheckedAliasOf(declared) otherwise return
-		self.reportUnneededLiteralCast(cast, destination: destination)
+		self.reportUnneededLiteralCastInto(value, first: first, destination: destination)
 	end 'reportUnneededLiteralCastAt'
 
 	function reportUnneededLiteralCastInto(value ValueId, first ElementIndex, destination RangedTypeAlias)
-		let cast = try self.literalCastSpanning(value, first: first) otherwise return
-		self.reportUnneededLiteralCast(cast, destination: destination)
+		self.claimLetCastReads(value, first: first, destination: destination)
+		let span = try self.literalCastSpanning(value, first: first) otherwise return
+		self.reportUnneededLiteralCast(span.cast, destination: destination)
 	end 'reportUnneededLiteralCastInto'
 
 	function reportUnneededLiteralCast(cast LiteralCast, destination RangedTypeAlias)
@@ -62672,7 +62991,8 @@ export type Parser
 	end 'reportUnneededLiteralCast'
 
 	function noteLiteralCastArgument(value ValueId, passed ValueId, first ElementIndex)
-		let cast = try self.literalCastSpanning(value, first: first) otherwise return
+		let span = try self.literalCastSpanning(value, first: first) otherwise return
+		let cast = span.cast
 		var confirmed = self.literalCastArgumentsForWrite()
 		confirmed.upsert(passed, value: cast)
 	end 'noteLiteralCastArgument'
@@ -62686,6 +63006,268 @@ export type Parser
 		var confirmed = self.literalCastArgumentsForWrite()
 		moveLiteralCastEntry(confirmed, from: value, to: to)
 	end 'moveLiteralCastArgument'
+
+	function stampLetCastScopes(firstLine LineNumber, lastLine LineNumber)
+		match self.bodyState.letCasts 'tracking'
+			none then return
+			tracking(state) then state.stampScope(LetCastScope.lines(firstLine, last: lastLine))
+		end 'tracking'
+	end 'stampLetCastScopes'
+
+	function trackedLetCasts() returns bool
+		return match self.bodyState.letCasts 'tracking'
+			none gives false
+			tracking gives true
+		end 'tracking'
+	end 'trackedLetCasts'
+
+	function letCastState() returns LetCastState
+		return match self.bodyState.letCasts 'tracking'
+			tracking(state) gives state
+			none panic("letCastState: no literal-cast `let` is tracked in this body — callers ask `trackedLetCasts` first")
+		end 'tracking'
+	end 'letCastState'
+
+	function letCastStateForWrite() returns LetCastState
+		match self.bodyState.letCasts 'tracking'
+			tracking(state) then return state
+			none then break
+		end 'tracking'
+
+		let fresh = LetCastState.create()
+		self.bodyState.letCasts = LetCastTracking.tracking(fresh)
+		return fresh
+	end 'letCastStateForWrite'
+
+	function registerLetCast(nameTok Token, initializer ValueId, first ElementIndex)
+		let span = try self.literalCastSpanning(initializer, first: first) otherwise return
+
+		if not letCastTracksAConstant(span.cast, constant: span.constant) 'aConstantThatConvertsOrExceedsTheSignedTop'
+			return
+		end 'aConstantThatConvertsOrExceedsTheSignedTop'
+
+		let binding = self.bodyState.scope.getInfo(nameTok.value)
+
+		if binding.isCellBinding or binding.isSelfField 'readsThroughMemory'
+			return
+		end 'readsThroughMemory'
+
+		var state = self.letCastStateForWrite()
+		state.bindings.upsert(binding.boundValue, value: LetCastSubject.create(span.cast, name: nameTok.value, declFile: self.filePath, scope: LetCastScope.wholeFile, constant: span.constant))
+	end 'registerLetCast'
+
+	function noteLocalLetCastRead(binding VarInfo, nameTok Token)
+		if binding.mutable 'aVar'
+			return
+		end 'aVar'
+
+		let state = self.letCastState()
+		let subject = try state.bindings.get(binding.boundValue) otherwise return
+		self.noteLetCastRead(subject, nameTok: nameTok, claimable: true)
+	end 'noteLocalLetCastRead'
+
+	function noteCapturedLetCastRead(binding VarInfo, frame ElementIndex, nameTok Token)
+		if binding.mutable 'aVar'
+			return
+		end 'aVar'
+
+		match self.capturedFrame(frame).body.letCasts 'enclosing'
+			none then return
+			tracking(enclosing) then self.noteCapturedSubject(enclosing, value: binding.boundValue, nameTok: nameTok)
+		end 'enclosing'
+	end 'noteCapturedLetCastRead'
+
+	function noteCapturedSubject(enclosing LetCastState, value ValueId, nameTok Token)
+		let subject = try enclosing.bindings.get(value) otherwise return
+		self.noteLetCastRead(subject, nameTok: nameTok, claimable: false)
+	end 'noteCapturedSubject'
+
+	function noteModuleLetCastRead(tok Token, typeName ByteArray)
+		if typeName.isEmpty() 'anUncastConstant'
+			return
+		end 'anUncastConstant'
+
+		match self.signatures.letCastDeclarationOf(tok.value, readerFilePath: self.filePath) 'declaration'
+			none then return
+			declared(subject) then self.noteLetCastRead(subject, nameTok: tok, claimable: true)
+		end 'declaration'
+	end 'noteModuleLetCastRead'
+
+	function noteLetCastRead(subject LetCastSubject, nameTok Token, claimable bool)
+		var state = self.letCastStateForWrite()
+		let findable = claimable and nameTok.endByte > nameTok.startByte
+
+		if findable and state.sites.contains(nameTok.startByte) 'alreadyNoted'
+			return
+		end 'alreadyNoted'
+
+		if findable 'aSiteAClaimCanFind'
+			state.sites.upsert(nameTok.startByte, value: state.reads.count())
+		end 'aSiteAClaimCanFind'
+
+		state.reads.push(LetCastRead.create(subject, site: nameTok.startByte))
+	end 'noteLetCastRead'
+
+	function claimLetCastReads(value ValueId, first ElementIndex, destination RangedTypeAlias)
+		if not self.trackedLetCasts() 'nothingTracked'
+			return
+		end 'nothingTracked'
+
+		let reads = self.letCastReadsOfOperand(value, first: first, pastEnd: self.pos)
+
+		if rosterIsEmpty(reads) or not self.readsFitDestination(value, first: first, destination: destination) 'nothingTheConstantServes'
+			return
+		end 'nothingTheConstantServes'
+
+		self.claimLetCastReadsBy(reads, rule: LetCastClaimRule.readsRepeating(destination))
+	end 'claimLetCastReads'
+
+	function claimLetCastArgument(target CallArgTarget, column ParamCount, label ByteArray, value ValueId, first ElementIndex)
+		if not self.trackedLetCasts() 'nothingTracked'
+			return
+		end 'nothingTracked'
+
+		let callee = try target.calleeName() otherwise return
+		let declaration = try self.signatures.soleCandidateOf(callee) otherwise return
+
+		match self.signatures.declaredAliasAtArgument(declaration, argIndex: column, label: label) 'parameter'
+			undeclared then return
+			declared(alias) then self.claimLetCastReads(value, first: first, destination: alias)
+		end 'parameter'
+	end 'claimLetCastArgument'
+
+	function claimLetCastReadsBy(reads LetCastRoster, rule LetCastClaimRule)
+		var state = self.letCastState()
+
+		for index in state.readsIn(reads) 'eachRead'
+			if rule.claims(state.readAt(index).subject.cast) 'theRuleServesIt'
+				state.claim(index)
+			end 'theRuleServesIt'
+		end 'eachRead'
+	end 'claimLetCastReadsBy'
+
+	function letCastReadsOfOperand(value ValueId, first ElementIndex, pastEnd ElementIndex) returns LetCastRoster
+		let state = self.letCastState()
+
+		if pastEnd == first + 1 'aSingleToken'
+			let tok = self.tokenAt(first)
+
+			if tok.kind != TokenKind.identifier 'notAName'
+				return LetCastRoster.none
+			end 'notAName'
+
+			let index = try state.sites.get(tok.startByte) otherwise return LetCastRoster.none
+			return LetCastRoster.single(index)
+		end 'aSingleToken'
+
+		if let derivation = try state.derived.get(value) 'aDerivedConstant'
+			if derivation.first == first and derivation.pastEnd == pastEnd 'wholeExpression'
+				return derivation.reads
+			end 'wholeExpression'
+		end 'aDerivedConstant'
+
+		return LetCastRoster.none
+	end 'letCastReadsOfOperand'
+
+	function valueIsAPlainConstant(value ValueId) returns bool
+		return self.valueIsAPlainNumber(value) and (self.constIsKnown(value) or self.floatConstIsKnown(value))
+	end 'valueIsAPlainConstant'
+
+	function settleLetCastComparison(lhs ValueId, lhsFirst ElementIndex, lhsPast ElementIndex, rhs ValueId, rhsFirst ElementIndex, rhsPast ElementIndex)
+		let leftReads = self.letCastReadsOfOperand(lhs, first: lhsFirst, pastEnd: lhsPast)
+		let rightReads = self.letCastReadsOfOperand(rhs, first: rhsFirst, pastEnd: rhsPast)
+		self.claimBesideATypedPartner(leftReads, tracked: lhs, partner: rhs, partnerReads: rightReads)
+		self.claimBesideATypedPartner(rightReads, tracked: rhs, partner: lhs, partnerReads: leftReads)
+	end 'settleLetCastComparison'
+
+	function settleLetCastArithmetic(result ValueId, op MaxonBinOp, lhs ValueId, lhsFirst ElementIndex, lhsPast ElementIndex, rhs ValueId, rhsFirst ElementIndex, rhsPast ElementIndex)
+		if op != MaxonBinOp.add and op != MaxonBinOp.sub and op != MaxonBinOp.mul 'anOperatorTheConstantFolds'
+			return
+		end 'anOperatorTheConstantFolds'
+
+		let leftReads = self.letCastReadsOfOperand(lhs, first: lhsFirst, pastEnd: lhsPast)
+		let rightReads = self.letCastReadsOfOperand(rhs, first: rhsFirst, pastEnd: rhsPast)
+		let leftIsConstant = not rosterIsEmpty(leftReads) or self.valueIsAPlainConstant(lhs)
+		let rightIsConstant = not rosterIsEmpty(rightReads) or self.valueIsAPlainConstant(rhs)
+
+		if leftIsConstant and rightIsConstant 'aConstantExpression'
+			let folded = foldLetCastConstants(op, lhs: self.operandLetCastConstant(lhs, reads: leftReads), rhs: self.operandLetCastConstant(rhs, reads: rightReads))
+			self.deriveLetCastConstant(result, reads: leftReads, alsoReads: rightReads, first: lhsFirst, pastEnd: rhsPast, constant: folded)
+			return
+		end 'aConstantExpression'
+
+		self.claimBesideATypedPartner(leftReads, tracked: lhs, partner: rhs, partnerReads: rightReads)
+		self.claimBesideATypedPartner(rightReads, tracked: rhs, partner: lhs, partnerReads: leftReads)
+	end 'settleLetCastArithmetic'
+
+	function operandLetCastConstant(operand ValueId, reads LetCastRoster) returns LetCastConstant
+		let state = self.letCastState()
+
+		if let derivation = try state.derived.get(operand) 'aDerivedOperand'
+			if not rosterIsEmpty(reads) 'itsWholeExpression'
+				return derivation.constant
+			end 'itsWholeExpression'
+		end 'aDerivedOperand'
+
+		match reads 'roster'
+			single(index) then return state.readAt(index).subject.constant
+			joined then panic("operandLetCastConstant: a joined roster is only ever a derivation's, and the operand has none")
+			none then break
+		end 'roster'
+
+		return self.foldedConstantOf(operand)
+	end 'operandLetCastConstant'
+
+	function deriveLetCastConstant(result ValueId, reads LetCastRoster, alsoReads LetCastRoster, first ElementIndex, pastEnd ElementIndex, constant LetCastConstant)
+		if rosterIsEmpty(reads) and rosterIsEmpty(alsoReads) 'nothingTracked'
+			return
+		end 'nothingTracked'
+
+		var state = self.letCastState()
+		let joined = state.join(reads, right: alsoReads)
+		let kept = constant if constantFitsEveryRange(constant, ranges: state.rangesOf(joined)) else LetCastConstant.unknown
+		state.derived.upsert(result, value: LetCastDerivation.create(joined, first: first, pastEnd: pastEnd, constant: kept))
+	end 'deriveLetCastConstant'
+
+	function derivedConstantIsUnproven(value ValueId) returns bool
+		let derivation = try self.letCastState().derived.get(value) otherwise return false
+
+		return match derivation.constant 'kind'
+			unknown gives true
+			integer or
+			real gives false
+		end 'kind'
+	end 'derivedConstantIsUnproven'
+
+	function readsFitDestination(value ValueId, first ElementIndex, destination RangedTypeAlias) returns bool
+		if self.pos == first + 1 'aSingleRead'
+			return true
+		end 'aSingleRead'
+
+		let derivation = try self.letCastState().derived.get(value) otherwise return false
+		return letCastConstantFits(derivation.constant, alias: destination)
+	end 'readsFitDestination'
+
+	function claimBesideATypedPartner(reads LetCastRoster, tracked ValueId, partner ValueId, partnerReads LetCastRoster)
+		if rosterIsEmpty(reads) or not rosterIsEmpty(partnerReads) or self.valueIsAPlainConstant(partner) or self.derivedConstantIsUnproven(tracked) 'noTypedPartner'
+			return
+		end 'noTypedPartner'
+
+		let identity = self.operandAliasName(partner)
+
+		if identity.isEmpty() or not identity.equals(self.operandAliasName(tracked)) 'aDifferentType'
+			return
+		end 'aDifferentType'
+
+		self.claimLetCastReadsBy(reads, rule: LetCastClaimRule.everyRead)
+	end 'claimBesideATypedPartner'
+
+	function claimLetCastsThroughACast(reads LetCastRoster, admitted DeclaredAlias)
+		match admitted 'target'
+			undeclared then return
+			declared(alias) then self.claimLetCastReadsBy(reads, rule: LetCastClaimRule.readsNamingAnotherThan(alias))
+		end 'target'
+	end 'claimLetCastsThroughACast'
 
 	// ⭐⭐ **REFUSE A BARE TYPE NAME MORE THAN ONE VISIBLE DECLARATION COULD MEAN — E3063.**
 	//
@@ -87398,6 +87980,11 @@ export type Parser
 		// it of the whole function instead of of one moment (see `VarInfo.referenced`). Written before the move
 		// guard for the reason the block above is.
 		self.markBindingReferenced(binding)
+
+		if self.trackedLetCasts() 'someLetIsACast'
+			self.noteLocalLetCastRead(binding, nameTok: nameTok)
+		end 'someLetIsACast'
+
 		try self.requireUnmovedAtUse(binding, nameTok: nameTok)
 	end 'requireBindingLive'
 
@@ -88924,6 +89511,7 @@ export type Parser
 		// list at the restore, exactly as the oracle re-adds `captures` to `_referencedVars`. The bit above
 		// excuses THIS binding; the re-push is what excuses another binding of the same name.
 		self.markBindingReferenced(binding)
+		self.noteCapturedLetCastRead(binding, frame: frame, nameTok: anchor)
 
 		// ⭐⭐ **A SELF-FIELD ALIAS IS NOT A CAPTURABLE BINDING — IT HOLDS NO VALUE, AND `boundValue` 0 IS THE
 		// RECEIVER.** `createSelfField` leaves `boundValue` 0 because a read of the alias is a `loadIndirect`
@@ -89074,7 +89662,7 @@ export type Parser
 	// refuses. It publishes its name for the same reason a `let` local does.
 	function topLevelBindingReference(func IrFunction, tok Token, site CellArgumentToken) returns ValueId throws SourceParseError
 		match self.signatures.constantValueOf(tok.value, readerFilePath: self.filePath) 'constant'
-			found(payload, tag, typeName) then return self.recordImmutableConstantRead(tok, value: self.emitFoldedConstant(payload, tag: tag, typeName: typeName, range: SourceRange.ofToken(tok)))
+			found(payload, tag, typeName) then return self.readFoldedConstant(tok, payload: payload, tag: tag, typeName: typeName)
 			foundManaged(bytes, kind) then return self.recordImmutableConstantRead(tok, value: try self.emitManagedConstant(bytes, kind: kind, range: SourceRange.ofToken(tok)))
 			foundImageRecord(image) then return self.recordImmutableConstantRead(tok, value: self.emitImageRecordRead(image, range: SourceRange.ofToken(tok)))
 			foundImageBox(nodes, root, typeName, tag) then return self.recordImmutableConstantRead(tok, value: self.emitImageBoxRead(nodes, root: root, typeName: typeName, tag: tag, range: SourceRange.ofToken(tok)))
@@ -89087,6 +89675,11 @@ export type Parser
 	// Publish a top-level constant read's blame name and hand the value straight back —
 	// `recordGlobalReadValue`'s shape, for its reason: the two arms above differ only in how the value is
 	// materialized, and a `let` is immutable in both.
+	function readFoldedConstant(tok Token, payload FullRangeInt, tag ValueTypeTag, typeName ByteArray) returns ValueId
+		self.noteModuleLetCastRead(tok, typeName: typeName)
+		return self.recordImmutableConstantRead(tok, value: self.emitFoldedConstant(payload, tag: tag, typeName: typeName, range: SourceRange.ofToken(tok)))
+	end 'readFoldedConstant'
+
 	// ⭐⭐ **MATERIALIZE A FOLDED CONSTANT AT A USE — and an ENUM CASE takes the door the BODY spelling takes.**
 	// `Reg.rdx` written in a body goes through `emitEnumTagLiteral`, which mints a value TAGGED `named(Reg)`
 	// while the op it emits carries `integer`; that split is the whole shape of a payload-free enum in this
@@ -90481,6 +91074,7 @@ export type Parser
 
 	function publishLiftedBody(lifted IrFunction, returnType MaxonReturnType, signature FuncSignature, anchor Token, synthesized bool)
 		self.publishExistentialInstances(lifted)
+		self.stampLetCastScopes(anchor.line, lastLine: self.tokenAt(self.pos - 1).line)
 		self.publishDebugLocals(lifted)
 		self.artifact.recordFuncSignature(lifted.name, signature: signature, returnType: returnType, nameLine: anchor.line, nameColumn: anchor.column, sourceFilePath: self.filePath, synthesized: synthesized, role: FunctionDeclarationRole.ordinary)
 		self.commitRangeChecks(lifted.name)
@@ -93093,9 +93687,11 @@ export type Parser
 	//
 	// All three verdicts a body cast gets are asked here, through the body path's own deciders, so the
 	// two spellings agree. E3010 (`requireConstCastIsNeeded`) needs the alias the constant already
-	// carries, and a literal carries none, so `5 as Tally` stays legal.
+	// carries, and a literal carries none, so a literal cast is recorded (`noteConstLiteralCast`) for
+	// `checkUnneededLetCasts` to judge against every use of the `let`.
 	function applyConstCast(value ConstValue) returns ConstValue throws ConstEvalError
 		let asTok = self.current()
+		let asIndex = self.pos
 		try self.consumeConstToken(TokenKind.as)
 
 		// ⭐⭐ **THE RANGED-TYPEALIAS RULE'S SECOND CAST DOOR.** This walk is a SEPARATE token scan — a
@@ -93120,12 +93716,45 @@ export type Parser
 			try self.requireConstCastTargetKind(value, targetTok: targetTok, asTok: asTok)
 			try self.requireConstCastIsNeeded(value, targetTok: targetTok, asTok: asTok)
 			try self.checkConstCastRange(value, targetTok: targetTok, asTok: asTok)
+			self.noteConstLiteralCast(value, targetTok: targetTok, asTok: asTok, asIndex: asIndex)
 			return self.constCastedTo(value, targetTok: targetTok)
 		end 'targetType'
 
 		let tok = self.current()
 		throw ConstEvalError.defective(SourceParseError.nonConstantInitializer("cast target", leftover: String.from(tok.value), line: tok.line, column: tok.column))
 	end 'applyConstCast'
+
+	function noteConstLiteralCast(value ConstValue, targetTok Token, asTok Token, asIndex ElementIndex)
+		if targetTok.kind != TokenKind.identifier or not value.typeName.isEmpty() or not typeClassAdmits(TypeClass.numeric, tag: value.tag) 'notAnUncastNumber'
+			return
+		end 'notAnUncastNumber'
+
+		let literalAt = asIndex - 1
+		let literalKind = self.kindAt(literalAt)
+
+		if literalKind != TokenKind.intLiteral and literalKind != TokenKind.floatLiteral 'notALiteralOperand'
+			return
+		end 'notALiteralOperand'
+
+		let first = literalAt - 1 if self.kindAt(literalAt - 1) == TokenKind.minus else literalAt
+
+		match self.signatures.declaredAliasOfSpelling(targetTok.value, readerFilePath: self.filePath) 'target'
+			undeclared then return
+			declared(alias) then self.constLetCast = ConstLetCastRecord.recorded(first, pastEnd: self.pos, cast: self.literalCastOver(first, alias: alias, asTok: asTok), constant: constantOfFoldedValue(value))
+		end 'target'
+	end 'noteConstLiteralCast'
+
+	// A `public`, `export` or `module` `let`'s type is API surface, so only a file-private one is tracked.
+	export function recordedConstLetCast(decl TopLevelDecl) returns LetCastDeclaration
+		if decl.mutable or decl.scope.isType() or decl.visibility != Visibility.file 'notAFilePrivateLet'
+			return LetCastDeclaration.none
+		end 'notAFilePrivateLet'
+
+		return match self.constLetCast 'record'
+			none gives LetCastDeclaration.none
+			recorded(first, pastEnd, cast, constant) gives constLetCastWhole(decl, first: first, pastEnd: pastEnd, cast: cast, constant: constant.clone())
+		end 'record'
+	end 'recordedConstLetCast'
 
 	function requireConstCastIsNeeded(value ConstValue, targetTok Token, asTok Token) throws ConstEvalError
 		if targetTok.kind != TokenKind.identifier or value.typeName.isEmpty() or not typeClassAdmits(TypeClass.numeric, tag: value.tag) 'noAliasToRepeat'
@@ -96140,6 +96769,7 @@ export type Parser
 				// well-formed until that diagnostic is reported, exactly as every other recovery here does).
 				let passed = value if readsAPlace else try self.byRefArgumentValue(value, byRefPosition: byRefPosition, handedTheCell: handedTheCell, target: target, argIndex: argIndex, label: label, anchor: valueTok)
 				self.noteLiteralCastArgument(value, passed: passed, first: valueStart)
+				self.claimLetCastArgument(target, column: column, label: label, value: value, first: valueStart)
 
 				self.noteArgumentMayWriteItsBinding(valueTok, valueStart: valueStart)
 

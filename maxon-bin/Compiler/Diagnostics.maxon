@@ -781,15 +781,23 @@ export function reportAtFunctionName(project Project, func IrFunction, code Erro
 end 'reportAtFunctionName'
 
 module function unneededAliasCastMessage(sourceName ByteArray, targetName ByteArray) returns String
-	return unneededCastMessage("'{sourceSpelledAliasText(sourceName)}'", targetName: targetName)
+	return unneededCastMessage("'{sourceSpelledAliasText(sourceName)}'", fits: unneededCastTarget(targetName))
 end 'unneededAliasCastMessage'
 
 module function unneededLiteralCastMessage(cast LiteralCast) returns String
-	return unneededCastMessage("the literal {cast.spelledText()}", targetName: cast.target.name)
+	return unneededCastMessage("the literal {cast.spelledText()}", fits: unneededCastTarget(cast.target.name))
 end 'unneededLiteralCastMessage'
 
-function unneededCastMessage(repeated String, targetName ByteArray) returns String
-	return "unneeded cast: {repeated} already fits in '{sourceSpelledAliasText(targetName)}'"
+module function unneededLetCastMessage(cast LiteralCast, name ByteArray) returns String
+	return unneededCastMessage("the literal {cast.spelledText()}", fits: "every use of '{String.from(name)}'")
+end 'unneededLetCastMessage'
+
+function unneededCastTarget(targetName ByteArray) returns String
+	return "in '{sourceSpelledAliasText(targetName)}'"
+end 'unneededCastTarget'
+
+function unneededCastMessage(repeated String, fits String) returns String
+	return "unneeded cast: {repeated} already fits {fits}"
 end 'unneededCastMessage'
 
 // ⭐⭐ **THE SAME FUNNEL FOR A DIAGNOSTIC THAT CARRIES A SECOND SITE — the note producer that is not a BLAME

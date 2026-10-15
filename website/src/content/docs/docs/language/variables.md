@@ -33,7 +33,9 @@ A `let` bound to a bare number, to arithmetic over bare numbers or to a literal 
 at each use. A `let` computed from such constants or from a loop counter between two literal bounds carries
 the range its value can have, and each use is checked against it the same way, for integers and floats
 alike. A `let` of a number whose range the compiler cannot know (`let w = 1 shl k`) is **E2004**; write
-`let w = (1 shl k) as Width`.
+`let w = (1 shl k) as Width`. A literal cast (`let port = 8080 as Port`) makes the `let` a value of the
+alias; when every use of it would take the plain constant the same way, the cast is **E3010** (see
+[Construction](/docs/language/ranged-typealiases/#construction)).
 
 ```maxon
 typealias Port = int(0 to 65535)

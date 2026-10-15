@@ -223,7 +223,7 @@ let SockaddrFamilyByteScale = 256
 
 // `sizeof(WSADATA)` on Win64. `WSAStartup` fills it and nothing here reads it back — it is a scratch buffer
 // the API demands, freed the moment the call returns.
-let WsaDataBytes = 408 as FullRangeInt
+let WsaDataBytes = 408
 
 // ⭐ **WINSOCK MUST BE INITIALIZED BEFORE ANY OTHER ws2_32 ENTRY POINT ANSWERS**, so every builder that opens
 // a socket opens with this. Terminates `block`: `ready` when Winsock is started, `notReady` when the startup
@@ -261,8 +261,8 @@ end 'emitWinsockStartup'
 // The once-per-process startup's `.data` word: `WinsockNotStarted` in the image, `WinsockStarted` after the
 // first successful `WSAStartup`.
 let WinsockStartedLabel = b"__ms_wsa_started"
-let WinsockNotStarted = 0 as FullRangeInt
-let WinsockStarted = 1 as FullRangeInt
+let WinsockNotStarted = 0
+let WinsockStarted = 1
 
 // This family's one `.data` word, laid out where a surviving body names it (`DataReach.walked`).
 // `lastWriterWins`: every writer stores the same `WinsockStarted` — `emitWinsockStartup` argues the race.
@@ -281,13 +281,13 @@ end 'managedSocketRuntimeGlobals'
 //   [32 .. 39]  ai_addr         [40 .. 47]  ai_next
 //
 // ⚠ `ai_addr` at 32 (0x20) is the one offset that is READ rather than written.
-let AddrInfoBytes = 48 as FullRangeInt
+let AddrInfoBytes = 48
 
 // The two WORDS this file writes into `hints`, named for the DWORD PAIR each one carries — `emitStoreDwordPair`
 // composes two 32-bit fields into one 64-bit store, so an offset here names a word and not a field.
-let AddrInfoFlagsFamilyOffset = 0 as ByteOffset
-let AddrInfoSocktypeProtocolOffset = 8 as ByteOffset
-let AddrInfoAddrOffset = 32 as ByteOffset
+let AddrInfoFlagsFamilyOffset = 0
+let AddrInfoSocktypeProtocolOffset = 8
+let AddrInfoAddrOffset = 32
 
 // ⭐ **`struct sockaddr_in` — 16 bytes, and every field is NARROWER THAN A WORD.**
 //
@@ -296,7 +296,7 @@ let AddrInfoAddrOffset = 32 as ByteOffset
 //
 // The two READ offsets are used against the address `getaddrinfo` handed back; the WRITE goes through
 // `emitSockaddrInWord`, which packs the first three into one store for the reason stated there.
-let SockaddrAddrOffset = 4 as ByteOffset
+let SockaddrAddrOffset = 4
 
 // The single word `emitSockaddrInWord` packs `sin_family`, `sin_port` and `sin_addr` into — the whole of the
 // WRITE side of this struct, which is why there is one offset here and not three.
@@ -308,8 +308,8 @@ export let SockaddrFamilyPortAddrOffset = 0 as ByteOffset
 // field is written by composing it into the 64-bit word that contains it, and these are the two multipliers
 // that place a field at byte 2 and at byte 4 of that word. Named rather than spelled `65536`/`4294967296` at
 // five sites: a bare power of two at a shift says nothing about which field offset it encodes.
-let ByteTwoScale = 65536 as FullRangeInt
-let ByteFourScale = 4294967296 as FullRangeInt
+let ByteTwoScale = 65536
+let ByteFourScale = 4294967296
 
 // ⚠ **THE TEST-NET-1 SENTINEL, SHORT-CIRCUITED HERE RATHER THAN ATTEMPTED.** `192.0.2.1` is RFC 5737's
 // documentation range: it is guaranteed to route nowhere, so a real `connect` to it does not get refused
@@ -319,7 +319,7 @@ let ByteFourScale = 4294967296 as FullRangeInt
 //
 // The value is the address AS `sin_addr` HOLDS IT — network byte order, so `192.0.2.1` reads `0x010200C0`
 // little-endian-first. It is compared against the resolved `sin_addr` word, never against a dotted string.
-let TestNet1NetOrder = 0x010200C0 as FullRangeInt
+let TestNet1NetOrder = 0x010200C0
 
 // The three "the call succeeded" readings. `WSAStartup` and `getaddrinfo` answer a plain int where 0 is
 // success (`getaddrinfo` returns an EAI_* code otherwise), and `connect` answers 0 or `SOCKET_ERROR`.
@@ -345,7 +345,7 @@ let ManagedSocketResolveFailedOrdinal = 1 as FullRangeInt
 let ManagedSocketConnectFailedOrdinal = 2 as FullRangeInt
 let ManagedSocketSendFailedOrdinal = 3 as FullRangeInt
 let ManagedSocketRecvFailedOrdinal = 4 as FullRangeInt
-let ManagedSocketConnectionClosedOrdinal = 5 as FullRangeInt
+let ManagedSocketConnectionClosedOrdinal = 5
 let ManagedSocketClosedOrdinal = 6 as FullRangeInt
 let ManagedSocketTimedOutOrdinal = 7 as FullRangeInt
 let ManagedSocketBufferOutOfBoundsFlag = ManagedSocketBufferOutOfBoundsOrdinal + ErrorFlagOrdinalBias
@@ -769,9 +769,9 @@ function buildManagedSocketTcpConnect(module StdModule, target Target)
 	var connected = module.addBlock(func, label: b"msok", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
-	let hostRec = 0 as ValueId
-	let port = 1 as ValueId
-	let deadlineMs = 2 as ValueId
+	let hostRec = 0
+	let port = 1
+	let deadlineMs = 2
 
 	// The host arrives as a `__ManagedMemory` record whose buffer carries NO terminator, and the scratch
 	// is this function's to release. It stays UTF-8 on every host; `emitResolveThroughAddrInfo` says why.
@@ -1040,9 +1040,9 @@ end 'emitHandshakeRefused'
 
 // `getsockopt(SO_ERROR)`'s scratch: a 32-bit value at 0 and the 32-bit `socklen_t` at 4, seeded with the
 // value's own size because the call reads that length before it writes.
-let SocketOptionValueOffset = 0 as ByteOffset
-let SocketOptionValueBytes = 4 as FullRangeInt
-let SocketOptionScratchBytes = 8 as FullRangeInt
+let SocketOptionValueOffset = 0
+let SocketOptionValueBytes = 4
+let SocketOptionScratchBytes = 8
 
 // `__ms_send_from(box, arrRec, offset, length) -> (bytesSent, flag)` — send `length` bytes starting at
 // `offset` in the managed buffer.
@@ -1077,10 +1077,10 @@ function buildManagedSocketSendFrom(module StdModule, target Target)
 	var ok = module.addBlock(func, label: b"msdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 4)
-	let box = 0 as ValueId
-	let arrRec = 1 as ValueId
-	let offset = 2 as ValueId
-	let length = 3 as ValueId
+	let box = 0
+	let arrRec = 1
+	let offset = 2
+	let length = 3
 	let socket = emitLiveSocketOrThrow(module, func: func, entry: entry, join: checkOffset, box: box, ids: ids)
 
 	// ⚠⚠ **BOTH OPERANDS ARE TESTED SEPARATELY, AND THE ONE-TEST SHORTCUT IS A MEASURABLY WRONG GUARD.** The
@@ -1170,8 +1170,8 @@ function buildManagedSocketRecv(module StdModule, target Target)
 	var ok = module.addBlock(func, label: b"msdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let box = 0 as ValueId
-	let arrRec = 1 as ValueId
+	let box = 0
+	let arrRec = 1
 	let socket = emitLiveSocketOrThrow(module, func: func, entry: entry, join: checkCap, box: box, ids: ids)
 
 	// ⚠⚠ **A NON-OWNED BUFFER IS REFUSED BEFORE THE KERNEL EVER SEES IT, AND THIS IS A WRITE SO THE TEST IS
@@ -1431,10 +1431,10 @@ end 'emitSocketWsaLength'
 
 // The block one overlapped transfer hands the kernel: a single `WSABUF` (a 32-bit length in the first word's
 // low half, the buffer in the second) and the flags word `WSARecv` reads before it writes.
-let WsaBufLengthOffset = 0 as ByteOffset
-let WsaBufPointerOffset = 8 as ByteOffset
-let WsaTransferFlagsOffset = 16 as ByteOffset
-let WsaTransferScratchBytes = 24 as FullRangeInt
+let WsaBufLengthOffset = 0
+let WsaBufPointerOffset = 8
+let WsaTransferFlagsOffset = 16
+let WsaTransferScratchBytes = 24
 
 // `WSABUF.len` is a `ULONG`.
 let WsaBufMaxBytes = 4294967295
@@ -1458,7 +1458,7 @@ function buildManagedSocketClose(module StdModule, target Target)
 	var done = module.addBlock(func, label: b"msdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let box = 0 as ValueId
+	let box = 0
 
 	let slot = emitLoadField(module, block: entry, record: box, offset: ManagedSocketHandleOffset, ids: ids)
 	let closedConst = emitConst(module, block: entry, value: ManagedSocketClosedHandle, ids: ids)
@@ -1491,7 +1491,7 @@ function buildManagedSocketShutdownWrite(module StdModule)
 	var refused = module.addBlock(func, label: b"msshutno", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let box = 0 as ValueId
+	let box = 0
 	let socket = emitLiveSocketOrThrow(module, func: func, entry: entry, join: shut, box: box, ids: ids)
 
 	let unused = emitConst(module, block: shut, value: 0, ids: ids)
@@ -1520,8 +1520,8 @@ function buildManagedSocketSetDeadline(module StdModule, name ByteArray, mode Fu
 	var arm = module.addBlock(func, label: b"msarmdl", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let box = 0 as ValueId
-	let ms = 1 as ValueId
+	let box = 0
+	let ms = 1
 	let socket = emitLiveSocketOrThrow(module, func: func, entry: entry, join: arm, box: box, ids: ids)
 
 	let pollKey = emitNetpollDescriptorIndex(module, block: arm, target: target, fd: socket, ids: ids)
@@ -1545,7 +1545,7 @@ function buildManagedSocketTimedOut(module StdModule, target Target)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let box = 0 as ValueId
+	let box = 0
 
 	emitManagedSocketTimedOutAnswer(module, func: func, entry: entry, box: box, target: target, ids: ids)
 	module.functions.push(func)
@@ -1588,7 +1588,7 @@ function buildManagedSocketDestruct(module StdModule)
 	var drop = module.addBlock(func, label: b"drop", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let box = 0 as ValueId
+	let box = 0
 
 	emitRefcountCheckToLastOwner(module, func: func, entry: entry, lower: lower, record: box, lastOwner: drop, ids: ids)
 
@@ -1718,7 +1718,7 @@ end 'isManagedSocketRuntimeCallee'
 // The answer both the parser and the whole resolver give when there is no address. -1 is not a possible
 // `sin_addr` word: it would be 255.255.255.255, the limited broadcast address, which is not a connect
 // target — so the sentinel costs no legal answer.
-let ResolveNoAddress = -1 as FullRangeInt
+let ResolveNoAddress = -1
 
 // The resolver's entry point and the helpers it is built out of; `__ms_ipv4` alone serves the `getaddrinfo`
 // shape too. All are `__ms_`-prefixed, which is what puts them inside `isManagedSocketRuntimeCallee` — the
@@ -1746,13 +1746,13 @@ let ResolveNameserverKeyword = b"nameserver"
 // One buffer serves both files, one read fills it, and a file longer than this is TRUNCATED — so a host
 // defined past 8 KiB of `/etc/hosts` is not found. Both files are conventionally a few hundred bytes; a
 // growing read loop would be a second allocator's worth of code for a case neither file reaches.
-let ResolveTextBytes = 8192 as FullRangeInt
+let ResolveTextBytes = 8192
 
 // The scratch a DNS exchange is built and read in. It bounds the QUERY (a name is at most 255 bytes, so a
 // query is at most 273) and the RESPONSE, which a server may legally make far larger — an answer section
 // precedes the authority and additional sections, so an `A` record is inside this window for every response
 // a stub resolver receives in practice, and a longer one is parsed as far as it arrived.
-let DnsMessageBytes = 4096 as FullRangeInt
+let DnsMessageBytes = 4096
 
 // The bytes this file's scanners test. Named because a bare 0x2E in a compare says nothing.
 let ResolveDotByte = 0x2E
@@ -1812,11 +1812,11 @@ let DnsAddressRdLength = 4
 // which is why they are two higher than RFC 1035's own numbering.
 let DnsLengthHighOffset = 0 as ByteOffset
 let DnsLengthLowOffset = 1 as ByteOffset
-let DnsIdHighOffset = 2 as ByteOffset
-let DnsIdLowOffset = 3 as ByteOffset
-let DnsFlagsHighOffset = 4 as ByteOffset
-let DnsQdCountLowOffset = 7 as ByteOffset
-let DnsRcodeByteOffset = 5 as ByteOffset
+let DnsIdHighOffset = 2
+let DnsIdLowOffset = 3
+let DnsFlagsHighOffset = 4
+let DnsQdCountLowOffset = 7
+let DnsRcodeByteOffset = 5
 let DnsAnCountHighIndex = 8
 let DnsQuestionStart = DnsTcpLengthPrefixBytes + DnsHeaderBytes
 
@@ -1896,9 +1896,9 @@ function buildManagedSocketSpan(module StdModule, name ByteArray, skipBlanks boo
 	var done = module.addBlock(func, label: b"msspdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
-	let buf = 0 as ValueId
-	let start = 1 as ValueId
-	let limit = 2 as ValueId
+	let buf = 0
+	let start = 1
+	let limit = 2
 
 	let onBlank = step.id if skipBlanks else done.id
 	let offBlank = done.id if skipBlanks else step.id
@@ -1944,9 +1944,9 @@ function buildManagedSocketEol(module StdModule)
 	var done = module.addBlock(func, label: b"mseoldone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
-	let buf = 0 as ValueId
-	let start = 1 as ValueId
-	let limit = 2 as ValueId
+	let buf = 0
+	let start = 1
+	let limit = 2
 
 	let pos = ids.mint()
 	module.setTerminator(entry, op: StdOp.branch(header.id))
@@ -2013,8 +2013,8 @@ function buildManagedSocketIpv4(module StdModule)
 	var failed = module.addBlock(func, label: b"msipbad", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let buf = 0 as ValueId
-	let len = 1 as ValueId
+	let buf = 0
+	let len = 1
 
 	let pos = ids.mint()
 	let address = ids.mint()
@@ -2231,10 +2231,10 @@ function buildManagedSocketHosts(module StdModule)
 	var notFound = module.addBlock(func, label: b"mshno", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 4)
-	let host = 0 as ValueId
-	let hostLen = 1 as ValueId
-	let buf = 2 as ValueId
-	let cap = 3 as ValueId
+	let host = 0
+	let hostLen = 1
+	let buf = 2
+	let cap = 3
 
 	let linePos = ids.mint()
 	let lineEnd = ids.mint()
@@ -2310,8 +2310,8 @@ function buildManagedSocketNameserver(module StdModule)
 	var notFound = module.addBlock(func, label: b"msnno", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let buf = 0 as ValueId
-	let cap = 1 as ValueId
+	let buf = 0
+	let cap = 1
 
 	let keyword = emitOwnedCString(module, block: entry, text: ResolveNameserverKeyword, ids: ids)
 	let keywordLength = emitConst(module, block: entry, value: ResolveNameserverKeyword.count() as FullRangeInt, ids: ids)
@@ -2365,9 +2365,9 @@ function buildManagedSocketDnsSkip(module StdModule)
 	var truncated = module.addBlock(func, label: b"msdnt", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
-	let buf = 0 as ValueId
-	let start = 1 as ValueId
-	let limit = 2 as ValueId
+	let buf = 0
+	let start = 1
+	let limit = 2
 
 	let pos = ids.mint()
 	module.setTerminator(entry, op: StdOp.branch(header.id))
@@ -2471,9 +2471,9 @@ function buildManagedSocketDns(module StdModule, target Target)
 	var failed = module.addBlock(func, label: b"msdno", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
-	let host = 0 as ValueId
-	let hostLen = 1 as ValueId
-	let server = 2 as ValueId
+	let host = 0
+	let hostLen = 1
+	let server = 2
 
 	// A name longer than a DNS name may be, and the empty name, are refused before anything is allocated.
 	let nameMax = emitConst(module, block: entry, value: DnsMaxNameBytes, ids: ids)
@@ -2798,8 +2798,8 @@ function buildManagedSocketResolve(module StdModule)
 	var noAnswer = module.addBlock(func, label: b"msrno", heat: BlockHeat.normal)
 
 	emitParams(module, block: hostsStep, count: 2)
-	let host = 0 as ValueId
-	let hostLength = 1 as ValueId
+	let host = 0
+	let hostLength = 1
 
 	let capacity = emitConst(module, block: hostsStep, value: ResolveTextBytes, ids: ids)
 	let text = emitRawAlloc(module, block: hostsStep, byteCount: capacity, ids: ids)

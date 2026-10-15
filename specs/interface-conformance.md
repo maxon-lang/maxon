@@ -510,9 +510,13 @@ type Widget implements Processor
 	end 'create'
 end 'Widget'
 
+function seed() returns B
+	return 7
+end 'seed'
+
 function main() returns ExitCode
 	var w = Widget.create()
-	let b = 7 as B
+	let b = seed()
 	return w.process(b as A)
 end 'main'
 ```

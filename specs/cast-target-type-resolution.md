@@ -176,8 +176,7 @@ renamed) this test would produce the next test's output and FAIL. Do not delete 
 half; it is what makes the positive half mean something.
 ```maxon
 function main() returns ExitCode
-	let n = 5 as Milliseconds
-	return n as ExitCode
+	return (5 as Milliseconds) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -189,8 +188,7 @@ The negative half of the pair above: `Millisecond` (singular) is not declared an
 program is otherwise character-for-character the same.
 ```maxon
 function main() returns ExitCode
-	let n = 5 as Millisecond
-	return n as ExitCode
+	return (5 as Millisecond) as ExitCode
 end 'main'
 ```
 ```maxoncstderr

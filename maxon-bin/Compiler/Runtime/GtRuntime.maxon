@@ -351,7 +351,7 @@ let GtOffCpuOffset = GtOffThreadAllocBytes + PointerFieldBytes
 // ⭐⭐ **1 FOR `main`'s THREAD, 0 FOR EVERY OTHER.** Stamped by `__gt_spawn_main`; read by `__gt_runner_done`,
 // because `main`'s completion is what ends the main machine's first loop (`SchedRuntime.SchedPhase`).
 let GtOffIsMainThread = GtOffCpuOffset + PointerFieldBytes
-let GtMainThreadMark = 1 as FullRangeInt
+let GtMainThreadMark = 1
 
 // ⭐⭐⭐ **1 WHILE SOME MACHINE OWNS THIS STRAND — its owner token is in a run queue, or a machine is running
 // the strand — and 0 otherwise.** Meaningful only on a green thread. Written only under `__sched_lock`: set by
@@ -365,8 +365,8 @@ let GtMainThreadMark = 1 as FullRangeInt
 // member of a strand can therefore be run by a second machine while one is running any of them, and the owner
 // is never readied onto a run queue while one of its coroutines executes elsewhere.
 let GtOffStrandHolder = GtOffIsMainThread + PointerFieldBytes
-let StrandFree = 0 as FullRangeInt
-let StrandHeld = 1 as FullRangeInt
+let StrandFree = 0
+let StrandHeld = 1
 
 // ⭐⭐ **HOW MANY PARTIES STILL NEED THIS GREEN THREAD's STRUCT AS A STRAND HEAD**: the owner's own execution,
 // each coroutine it created that has not yet finished, and the strand hold. A coroutine can outlive its
@@ -383,8 +383,8 @@ let GtOffAwaiter = GtOffStrandRefs + PointerFieldBytes
 // ⭐ **ON AN awaitAny WAITER: 1 once a completer has readied it, 0 while it is still registered** — Go's
 // `selectDone`, so K slots completing ready the waiter once. `__sched_lock` guards it.
 let GtOffSelectDone = GtOffAwaiter + PointerFieldBytes
-let SelectPending = 0 as FullRangeInt
-let SelectReadied = 1 as FullRangeInt
+let SelectPending = 0
+let SelectReadied = 1
 
 // ⭐⭐ **THE GLOBAL RUN QUEUE's LINK.** The global queue holds owner tokens, and an owner can be in its own
 // strand queue (through `GtOffNext`) while its token waits in the global queue, so the two lists cannot share
@@ -425,10 +425,10 @@ export let GtOffReplyWitness = GtOffStrandResume + PointerFieldBytes
 
 let GtOffRenounced = GtOffReplyWitness + PointerFieldBytes
 
-let GtPromiseHeld = 0 as FullRangeInt
-let GtPromiseGivenUp = 1 as FullRangeInt
+let GtPromiseHeld = 0
+let GtPromiseGivenUp = 1
 
-let GtRestraintArmed = 1 as FullRangeInt
+let GtRestraintArmed = 1
 
 export let GtOffHold = GtOffRenounced + PointerFieldBytes
 
@@ -527,16 +527,16 @@ end 'emitGtBranchOnPollerPark'
 
 // The `arg` a park that needs none carries — a yield and a preemption — so the site says so rather than
 // passing whatever happened to be in a register.
-let GtParkArgUnused = 0 as FullRangeInt
+let GtParkArgUnused = 0
 
 // ⭐ **THE LOW BIT OF `GtOffAwaiter` MARKS AN awaitAny WAITER.** GT structs are word-aligned, so the bit is free.
-let AwaitAnyTag = 1 as FullRangeInt
+let AwaitAnyTag = 1
 
 // ⭐ **THE TWO HALF-TICKETS.** Distinct so `xadd`'s prior value names WHO was already there, and powers of
 // two so the sum is unambiguous: 0 = neither, 1 = the consumer alone, 2 = the runner alone, 3 = both (and
 // the struct is gone). See `GtOffTeardown` for the protocol and `emitGtTeardownArrive` for the one emitter.
-let GtTeardownConsumerTicket = 1 as FullRangeInt
-let GtTeardownRunnerTicket = 2 as FullRangeInt
+let GtTeardownConsumerTicket = 1
+let GtTeardownRunnerTicket = 2
 
 // --- GT status ---
 // `ready` (a fresh record's zero, and what `__gt_ready_locked` stores), `completed` (set by the trampoline,
@@ -587,7 +587,7 @@ export let GtMaxStackBytes = 0x40000000
 // ⭐⭐ **HOW LONG A STACK's SIZE MUST STAND BEFORE A PARK MAY HALVE IT.** Go shrinks once per garbage collection
 // (`shrinkstack`); this runtime has no collector, so a second of wall time is the cycle. It bounds a thread's
 // shrink copies to one a second whatever its parks do.
-let GtStackResizeWindowNs = 1000000000 as FullRangeInt
+let GtStackResizeWindowNs = 1000000000
 
 // ⭐⭐ **HOW MANY FINISHED STACKS ONE ADAPTIVE-SEED WINDOW AVERAGES.** Go recomputes `startingStackSize` once per
 // garbage collection, over the stacks that cycle scanned; here a window closes at the finish that makes the count
@@ -937,8 +937,8 @@ let TimerHeapBytes = TimerHeapCapacity * TimerEntrySize
 // alone takes whichever entry it meets first and leaves the other behind to fire at a record its owner has
 // moved on from. The key is the PAIR `(gt, tag)`, which is unique: a thread holds at most one wait of each
 // kind.
-let TimerTagSleep = 0 as FullRangeInt
-let TimerTagReadDeadline = 1 as FullRangeInt
+let TimerTagSleep = 0
+let TimerTagReadDeadline = 1
 let TimerTagWriteDeadline = 2 as FullRangeInt
 
 // A netpoll park's direction (`NetpollModeRead`/`NetpollModeWrite`) as the tag its deadline entry carries.
@@ -1196,7 +1196,7 @@ export let GtReadyLockedName = b"__gt_ready_locked"
 
 // What `__gt_ready_locked` answers. Named because every waker compares against them and a bare literal at each
 // end would be one fact written twice.
-let WakeDebtOwed = 1 as FullRangeInt
+let WakeDebtOwed = 1
 export let WakeDebtNone = 0 as FullRangeInt
 
 // ⭐⭐ **THE GLOBAL FIFO's TWO DOORS**, linked through `GtOffRunqNext`. The global queue holds owner tokens: a
@@ -1818,14 +1818,14 @@ let GtTraceCounterLabel = b"__gt_trace_counter"
 // and the register allocator's spiller then starts above the region (`SplitDriver.create`).
 //
 // 24 bytes covers the widest i64 (`-9223372036854775808`, 20 characters) with room to spare.
-let GtTraceDigitsBytes = 24 as StackSize
+let GtTraceDigitsBytes = 24
 let GtTraceDigitsSlot = 0 as SpillSlot
 
 // `__gt_now_ns`'s two frame slots — the words `osReadClock` hands to QueryPerformanceCounter and
 // QueryPerformanceFrequency and reads straight back.
 let GtClockTicksSlot = 0 as SpillSlot
 let GtClockFreqSlot = 1 as SpillSlot
-let GtClockScratchBytes = 16 as StackSize
+let GtClockScratchBytes = 16
 
 // ⭐⭐ **THE ONE-SHOT READ'S ACROSS-THE-PARK SCRATCH — ONE REGION, TWO USES.** `__gt_io_read` needs a read
 // buffer big enough for one line of child stdout (the probe reads `cmd /c echo hello`, ~7 bytes) AND an
@@ -1837,7 +1837,7 @@ let GtClockScratchBytes = 16 as StackSize
 // would push the request into the next class up and waste most of the difference; taking it OUT of 4096
 // leaves the request exact and costs the buffer eight bytes it does not need.
 let IoReadScratchBytes = 4096
-let IoReadBytesOutOffset = 0 as ByteOffset
+let IoReadBytesOutOffset = 0
 let IoReadBytesOutBytes = 8
 let IoReadBufferOffset = IoReadBytesOutBytes
 let IoReadBufferBytes = IoReadScratchBytes - IoReadBytesOutBytes
@@ -1881,8 +1881,8 @@ let ErrorBrokenPipe = 109
 // kernel finished first.
 export let NtStatusSuccess = 0 as FullRangeInt
 export let NtStatusCancelled = 0xC0000120 as FullRangeInt
-let NtStatusPipeBroken = 0xC000014B as FullRangeInt
-let NtStatusEndOfFile = 0xC0000011 as FullRangeInt
+let NtStatusPipeBroken = 0xC000014B
+let NtStatusEndOfFile = 0xC0000011
 
 // ⭐ **`__gt_subp_yield_read`'s ANSWER FOR A READ THAT FAILED**, against the 0 that means a clean end of
 // stream. It rides the byte count rather than an out-parameter because every caller already branches on
@@ -2775,7 +2775,7 @@ function buildGtReady(module StdModule)
 	var doneBlock = module.addBlock(func, label: b"readydone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let gt = 0 as ValueId
+	let gt = 0
 
 	emitSchedLockEnter(module, block: entry, ids: ids)
 	let debt = emitGtReadyLocked(module, block: entry, gt: gt, ids: ids)
@@ -2814,7 +2814,7 @@ function buildGtReadyLocked(module StdModule)
 	var publish = module.addBlock(func, label: b"readypublish", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let gt = 0 as ValueId
+	let gt = 0
 
 	emitStoreField(module, block: entry, record: gt, offset: GtOffStatus, value: emitConst(module, block: entry, value: GtStatusReady, ids: ids))
 	let owner = emitLoadField(module, block: entry, record: gt, offset: GtOffOwner, ids: ids)
@@ -3052,13 +3052,13 @@ export function emitGtTombstoneHandback(module StdModule, func IrFunction, candi
 	module.setTerminator(reclaim, op: StdOp.branch(retry.id))
 end 'emitGtTombstoneHandback'
 
-let GtRestrainedRefusePauseUs = 200 as FullRangeInt
+let GtRestrainedRefusePauseUs = 200
 
 export let GtProcessorHandedOff = -1 as FullRangeInt
 
-let GtAllGSeedSlots = 64 as FullRangeInt
+let GtAllGSeedSlots = 64
 
-let GtAllGSlotBytes = 8 as FullRangeInt
+let GtAllGSlotBytes = 8
 
 function emitGtStartLockedOwner(module StdModule, func IrFunction, startLocked IrBlock, owner ValueId, found ValueId, declined IrBlock, handOff GtHandOffAnswer, ids ValueMinter)
 	match handOff 'shape'
@@ -3397,7 +3397,7 @@ function buildGtCoroEnqueue(module StdModule)
 	var emptyBlock = module.addBlock(func, label: b"empty", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let g = 0 as ValueId
+	let g = 0
 
 	// `entry` dominates both arms, so the owner is read once here and the ends name it throughout.
 	let owner = emitLoadField(module, block: entry, record: g, offset: GtOffOwner, ids: ids)
@@ -3763,9 +3763,9 @@ function buildGtTimerAdd(module StdModule)
 	var doAdd = module.addBlock(func, label: b"doadd", heat: BlockHeat.normal)
 	var doneBlock = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 3)
-	let gt = 0 as ValueId
-	let deadline = 1 as ValueId
-	let tag = 2 as ValueId
+	let gt = 0
+	let deadline = 1
+	let tag = 2
 
 	// ⛔⛔ **THE WHOLE INSERT RUNS UNDER THE RUN-QUEUE LOCK, AND THE GROW IS WHY IT MUST BE THE WHOLE OF
 	// IT RATHER THAN THE COUNT ALONE.** The store is five `.data` words plus a heap region, and a full store
@@ -3922,7 +3922,7 @@ function buildGtTimerCheck(module StdModule)
 	var doneBlock = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let now = 0 as ValueId
+	let now = 0
 
 	// The walk MUTATES the store (each pop removes an entry and sifts what is left), so it runs under the
 	// run-queue lock for `__gt_timer_add`'s stated reason, and every ready rides that critical section.
@@ -4075,7 +4075,7 @@ function buildGtAnyCompleted(module StdModule)
 	var notFound = module.addBlock(func, label: b"notfound", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let record = 0 as ValueId
+	let record = 0
 
 	// The buffer and the live length are read ONCE per scan, in a block that dominates the walk: nothing this
 	// function calls runs a green thread, so the array cannot change during it.
@@ -4222,7 +4222,7 @@ function buildGtAwaitAny(module StdModule)
 	var withdrawn = module.addBlock(func, label: b"anywithdrawn", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let record = 0 as ValueId
+	let record = 0
 	module.setTerminator(entry, op: StdOp.branch(scan.id))
 
 	let index = emitAnyCompletedIndex(module, block: scan, record: record, ids: ids)
@@ -4366,7 +4366,7 @@ function buildGtRunMain(module StdModule, target Target)
 	var unfinished = module.addBlock(func, label: b"mainunfinished", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let mainEntry = 0 as ValueId
+	let mainEntry = 0
 
 	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: GtInitName, args: ValueIdArray.create()))
 	let mainGt = ids.mint()
@@ -4503,7 +4503,7 @@ function buildGtReplyWitness(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
-	let cell = 0 as ValueId
+	let cell = 0
 
 	let witness = emitLoadField(module, block: entry, record: cell, offset: GtOffReplyWitness, ids: ids)
 	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: GtOwnerDoneName, args: argsOf(cell)))
@@ -4651,7 +4651,7 @@ function buildGtReclaim(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
-	let gt = 0 as ValueId
+	let gt = 0
 
 	var putBlock = emitGtReleaserCall(module, func: func, ids: ids, startBlock: entry, gt: gt, resultDisposition: AsyncResultDisposition.ownedByThisDrop)
 	module.appendOp(putBlock, op: StdOp.call(ids.mint(), callee: GtFreePutName, args: argsOf(gt)))
@@ -4699,7 +4699,7 @@ function buildGtOwnerDone(module StdModule)
 	var arrive = module.addBlock(func, label: b"ownerarrive", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let gt = 0 as ValueId
+	let gt = 0
 
 	let debit = emitConst(module, block: entry, value: OneFewer, ids: ids)
 	let prior = emitGlobalAccumulate(module, block: entry, label: GtLiveCountLabel, delta: debit, multiM: true, ids: ids)
@@ -5048,8 +5048,8 @@ function buildGtPromiseFieldRelease(module StdModule)
 	var dropIt = module.addBlock(func, label: b"dropheld", heat: BlockHeat.normal)
 	var done = module.addBlock(func, label: b"released", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
-	let box = 0 as ValueId
-	let offset = 1 as ValueId
+	let box = 0
+	let offset = 1
 
 	let slot = emitBin(module, block: entry, a: box, b: offset, opcode: StdBinOpcode.add, ids: ids)
 	let held = emitLoadField(module, block: entry, record: slot, offset: 0, ids: ids)
@@ -5075,9 +5075,9 @@ function buildGtPromiseFieldVacate(module StdModule)
 	var consumedTwice = module.addBlock(func, label: b"vacated", heat: BlockHeat.cold)
 	var empty = module.addBlock(func, label: b"empty", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 3)
-	let box = 0 as ValueId
-	let offset = 1 as ValueId
-	let read = 2 as ValueId
+	let box = 0
+	let offset = 1
+	let read = 2
 
 	let slot = emitBin(module, block: entry, a: box, b: offset, opcode: StdBinOpcode.add, ids: ids)
 
@@ -5113,7 +5113,7 @@ function buildGtIsComplete(module StdModule)
 	var vacated = module.addBlock(func, label: b"vacated", heat: BlockHeat.cold)
 	var peek = module.addBlock(func, label: b"peek", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
-	let gt = 0 as ValueId
+	let gt = 0
 
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 	let namesNoThread = emitCmp(module, block: entry, a: gt, b: zero, pred: StdCmpPred.eq, ids: ids)
@@ -5164,7 +5164,7 @@ function buildGtCellAlloc(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
-	let releaser = 0 as ValueId
+	let releaser = 0
 
 	let cell = ids.mint()
 	module.appendOp(entry, op: StdOp.call(cell, callee: GtFreeGetName, args: ValueIdArray.create()))
@@ -5190,9 +5190,9 @@ function buildGtCellComplete(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 3)
-	let cell = 0 as ValueId
-	let result = 1 as ValueId
-	let threw = 2 as ValueId
+	let cell = 0
+	let result = 1
+	let threw = 2
 
 	emitStoreField(module, block: entry, record: cell, offset: GtOffResult, value: result)
 	emitStoreField(module, block: entry, record: cell, offset: GtOffThrew, value: threw)
@@ -5291,7 +5291,7 @@ function buildGtPromiseDrop(module StdModule)
 	var dropDone = module.addBlock(func, label: b"dropdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let gt = 0 as ValueId
+	let gt = 0
 
 	// entry: a REPLY CELL → the consumer's half alone (see the ⭐⭐⭐ block above; it is `waiting` for its whole
 	// life and must never be freed here). Otherwise `waiting` → deregister, anything else → the shared
@@ -5569,7 +5569,7 @@ function buildGtRunnerDone(module StdModule, target Target)
 	var coroUnref = module.addBlock(func, label: b"runnercorounref", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let gt = 0 as ValueId
+	let gt = 0
 
 	let stackBase = emitLoadField(module, block: entry, record: gt, offset: GtOffStackBase, ids: ids)
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
@@ -5858,8 +5858,8 @@ function buildGtPark(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
-	let kind = 0 as ValueId
-	let arg = 1 as ValueId
+	let kind = 0
+	let arg = 1
 
 	let selfGt = emitLoadCurrentGt(module, block: entry, ids: ids)
 	emitStoreField(module, block: entry, record: selfGt, offset: GtOffParkKind, value: kind)
@@ -5962,7 +5962,7 @@ function buildGtRegisterPark(module StdModule)
 	var doneBlock = module.addBlock(func, label: b"parkdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let gt = 0 as ValueId
+	let gt = 0
 
 	let debt = ids.mint()
 	unlockAndPay.blockArgs.push(IrBlockArg.create(debt, argType: StdType.i64))
@@ -6196,7 +6196,7 @@ function buildGtRunStrand(module StdModule, target Target)
 	var handedOffProc = module.addBlock(func, label: b"strandhandedoff", heat: BlockHeat.cold)
 
 	emitParams(module, block: entry, count: 2)
-	let m = 0 as ValueId
+	let m = 0
 	let owner = 1 as ValueId
 	let schedulerContext = emitFieldAddr(module, block: entry, record: m, offset: MOffSchedulerContext, ids: ids)
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
@@ -6335,7 +6335,7 @@ function buildGtStackShrink(module StdModule, target Target)
 	var keep = module.addBlock(func, label: b"shrinkkeep", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let gt = 0 as ValueId
+	let gt = 0
 
 	let size = emitLoadField(module, block: entry, record: gt, offset: GtOffStackSize, ids: ids)
 	let top = emitBin(module, block: entry, a: emitLoadField(module, block: entry, record: gt, offset: GtOffStackBase, ids: ids), b: size, opcode: StdBinOpcode.add, ids: ids)
@@ -6571,7 +6571,7 @@ function buildGtSystemStackAlloc(module StdModule, target Target)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let size = 0 as ValueId
+	let size = 0
 
 	match systemStackGuardOf(target) 'guard'
 		pageGuardWithHeadroom then buildPageGuardedSystemStackBody(module, func: func, entry: entry, size: size, target: target, ids: ids)
@@ -6646,8 +6646,8 @@ function emitGtHasStackMark(module StdModule, block IrBlock, marks ValueId, mark
 end 'emitGtHasStackMark'
 
 // `size shr 2` and `size shr 1` — a quarter and a half of a power-of-two stack.
-let GtStackQuarterShift = 2 as FullRangeInt
-let GtStackHalfShift = 1 as FullRangeInt
+let GtStackQuarterShift = 2
+let GtStackHalfShift = 1
 
 // ⭐⭐⭐ **`__gt_seed_adapt()` — Go's `gcComputeStartingStackSize`: ONCE A WINDOW, THE SEED BECOMES THE AVERAGE
 // STACK THAT THE THREADS WHICH FINISHED IN IT NEEDED.** Its one caller is `__gt_runner_done`, at the finish that
@@ -6736,7 +6736,7 @@ function buildGtTraceEmit(module StdModule, tags GtTraceTags)
 	emitParams(module, block: entry, count: GtTraceEmitArity as ParamCount)
 	let tagPtr = 0 as ValueId
 	let tagLen = 1 as ValueId
-	let value = 2 as ValueId
+	let value = 2
 	let suffixPtr = 3 as ValueId
 	let suffixLen = 4 as ValueId
 
@@ -6903,8 +6903,8 @@ function buildGtIoPark(module StdModule)
 		emitParams(module, block: entry, count: paramCount)
 	end 'readSuffixParams'
 
-	let suffixAddr = 0 as ValueId
-	let suffixLen = 1 as ValueId
+	let suffixAddr = 0
+	let suffixLen = 1
 
 	// ⛔⛔ **A YIELD NEEDS A GREEN THREAD TO YIELD *FROM*, AND THIS ENTRY IS REACHED WITHOUT ONE.** A dropped
 	// promise's managed ARGUMENTS are released by `__gt_release_<callee>` inside `__gt_reclaim`, which the
@@ -7119,7 +7119,7 @@ function buildGtPreempt(module StdModule, target Target)
 	var resumed = module.addBlock(func, label: b"preemptresumed", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let gt = 0 as ValueId
+	let gt = 0
 
 	emitGtRestoreStackGuard(module, block: entry, gt: gt, target: target, ids: ids)
 	let locksHeld = emitLoadField(module, block: entry, record: emitSchedLockDepthAddr(module, block: entry, ids: ids), offset: 0, ids: ids)
@@ -7652,9 +7652,9 @@ let SubpSlotInUse = 0
 // spawn has set the slot up, and back to free at the release or a failed spawn. A claimed slot is
 // one no other scan may take; only a live one passes `emitSubpRequireHandle`, so a stale handle
 // cannot reach a slot a re-spawn is still setting up.
-let SubpSlotFree = 0 as FullRangeInt
-let SubpSlotClaimed = 1 as FullRangeInt
-let SubpSlotLive = 2 as FullRangeInt
+let SubpSlotFree = 0
+let SubpSlotClaimed = 1
+let SubpSlotLive = 2
 export let SubpSlotHProcess = 8
 export let SubpSlotStdinWrite = 16
 
@@ -7714,7 +7714,7 @@ export let SubpSlotWaitStartMs = 168 as ByteOffset
 //
 // ⚠ Negative is the unarmed spelling because `osTickCountMs` is non-negative on every lane.
 export let SubpSlotStdinFeedAt = 176 as ByteOffset
-let SubpStdinFeedUnarmed = -1 as FullRangeInt
+let SubpStdinFeedUnarmed = -1
 
 // What a deadline's kill is aimed at, and it always names something terminate-able: the child's job object
 // where the lane has one, the child's own process handle where it has not (a POSIX wait object, whose pid is
@@ -7727,16 +7727,16 @@ export let SubpSlotStdinRemaining = 200 as ByteOffset
 // chunk; `closeRequested` is a close that found a push in flight, which the pusher carries out on
 // its way out; `closing` is the one closer, which stores `idle` once the end is closed and zeroed.
 // So the end is closed exactly once, and never under a write.
-let SubpSlotStdinState = 208 as ByteOffset
+let SubpSlotStdinState = 208
 export let SubpStdinIdle = 0 as FullRangeInt
 export let SubpStdinPushing = 1 as FullRangeInt
-let SubpStdinCloseRequested = 2 as FullRangeInt
-let SubpStdinClosing = 3 as FullRangeInt
+let SubpStdinCloseRequested = 2
+let SubpStdinClosing = 3
 
 // The tree object this slot OWNS and must close at release, which is zero exactly when
 // `SubpSlotProcessTree` is the process handle the release already closes. Two words rather than
 // one, so the release cannot double-close.
-let SubpSlotOwnedTreeObject = 192 as ByteOffset
+let SubpSlotOwnedTreeObject = 192
 
 // ⛔⛔ **THE COLLECT INTERLOCK — the one word a collect and a release contend for, and the last word of the
 // slot.** Nothing else serialises `__gt_subp_wait_collect` against `__gt_subp_release`: the release closes the
@@ -7746,10 +7746,10 @@ let SubpSlotOwnedTreeObject = 192 as ByteOffset
 // takes `free -> released` for good, and either party finding the word taken stops at
 // `RuntimeAbort.subpCollectSlotReleased`. The spawn's claim stores `free`, so a reused slot is collectable
 // again.
-let SubpSlotCollector = 216 as ByteOffset
-let SubpCollectorFree = 0 as FullRangeInt
+let SubpSlotCollector = 216
+let SubpCollectorFree = 0
 export let SubpCollectorHeld = 1 as FullRangeInt
-let SubpCollectorReleased = 2 as FullRangeInt
+let SubpCollectorReleased = 2
 export let SubpStreamReadEnd = 0
 let SubpStreamBufPtr = 8
 let SubpStreamBufCap = 16
@@ -7775,8 +7775,8 @@ let SubpPipeScratchBytes = 24
 
 // The SECOND and THIRD of those words. Named because `scratch + 8` at a pipe creation says nothing about which
 // end of the pipe is being read back out of it.
-let SubpPipeScratchSecondWord = 8 as FullRangeInt
-let SubpPipeScratchSilencedWord = 16 as FullRangeInt
+let SubpPipeScratchSecondWord = 8
+let SubpPipeScratchSilencedWord = 16
 
 // The 3 CHILD-side pipe ends are parked in a slab region across pipe creation so they do not occupy registers across
 // the (register-hungry) pipe-name-formatting loops — the "keep values off the working set" discipline a hand-built
@@ -8280,8 +8280,8 @@ function buildSubpStrFromBytes(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
-	let srcBuf = 0 as ValueId
-	let srcLen = 1 as ValueId
+	let srcBuf = 0
+	let srcLen = 1
 
 	// `singleByteGraphemes@48` is 0 — child output is arbitrary bytes, and `not-ascii` is always the safe classification.
 	// The record layout is built by the ONE shared encoder `__str_clone` also uses, so the two can never diverge.
@@ -8666,10 +8666,10 @@ export let SubpReqEnv = 96 as ByteOffset
 // is wide. `__gt_subp_widen_request` fills them just before the spawn, and
 // `__gt_subp_free_wide_request` releases them on both the launch-failure and the success exit, after
 // the spawn's error is recorded.
-let SubpReqWideCmdline = 104 as ByteOffset
-let SubpReqWideCwd = 112 as ByteOffset
-let SubpReqWideEnv = 120 as ByteOffset
-let SubpReqBytes = 128 as FullRangeInt
+let SubpReqWideCmdline = 104
+let SubpReqWideCwd = 112
+let SubpReqWideEnv = 120
+let SubpReqBytes = 128
 
 // ⭐ **THE STDIO KIND DISCRIMINATORS, WHICH ARE `stdlib/Subprocess.maxon`'s OWN ENUM VALUES.** `StdinKind`
 // (`none`/`inherit`/`bytes`/`file`) and `OutputKind` (`discard`/`inherit`/`collect`/`file`) are declared there
@@ -8680,9 +8680,9 @@ let SubpReqBytes = 128 as FullRangeInt
 // thing on either side of a child, which is what lets `emitSubpNonPipeChildHandle` serve all three streams
 // with one body. `0` differs only in name (`none` reads the NUL device, `discard` writes it — the same open),
 // and `2` is the one genuinely per-direction value (`bytes` feeds a pipe, `collect` drains one).
-let SubpStdioInherit = 1 as FullRangeInt
-let SubpStdioFile = 3 as FullRangeInt
-let SubpStdinBytes = 2 as FullRangeInt
+let SubpStdioInherit = 1
+let SubpStdioFile = 3
+let SubpStdinBytes = 2
 export let SubpOutCollect = 2 as FullRangeInt
 
 // ⭐⭐ **`hold` — A STDIN PIPE THE PARENT OPENS AND NEVER WRITES TO, SO THE CHILD'S READ BLOCKS IN THE KERNEL
@@ -8700,7 +8700,7 @@ export let SubpStdinHold = 4 as FullRangeInt
 // stdout byte.** A kind that falls through to the non-pipe arm below opens the NULL DEVICE, so the child reads
 // an instant EOF where it must block and then get the data — which silently turns
 // `specs/sched-syscall-handoff.md`'s ordering cases into programs with nothing to block on.
-let SubpStdinDelayed = 5 as FullRangeInt
+let SubpStdinDelayed = 5
 
 // ⭐⭐ **WHICH STDIN KINDS WANT A PARENT↔CHILD PIPE — STATED ONCE.** A chain of equality tests per kind
 // ending in *"everything else gets the null device"* gives a kind added to the stdlib and not to the chain
@@ -8770,7 +8770,7 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	var gotSlot = module.addBlock(func, label: b"gotslot", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let req = 0 as ValueId
+	let req = 0
 	let negOne = emitConst(module, block: entry, value: -1, ids: ids)
 
 	// ⭐⭐ **THE LAZY CREATION RUNS UNDER THE RUN-QUEUE LOCK, AND ONLY THE CREATION DOES.** Test-then-
@@ -9298,7 +9298,7 @@ function buildSubpSpawn(module StdModule, commandShape SubprocessCommandShape)
 	var afterCopy = module.addBlock(func, label: b"aftercopy", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let cmdStrPtr = 0 as ValueId
+	let cmdStrPtr = 0
 	let cmdBuffer = emitLoadField(module, block: entry, record: cmdStrPtr, offset: StringBufferOffset, ids: ids)
 	let cmdLen = emitLoadField(module, block: entry, record: cmdStrPtr, offset: StringLengthOffset, ids: ids)
 	let nulBytes = emitConst(module, block: entry, value: TrailingNulBytes as FullRangeInt, ids: ids)
@@ -9388,7 +9388,7 @@ function buildSubpWideRequestStep(module StdModule, step SubpWideRequestStep)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let req = 0 as ValueId
+	let req = 0
 
 	var afterCommand = emitSubpWideOperandStep(module, func: func, cur: entry, req: req, source: SubpReqCmdline, wide: SubpReqWideCmdline, extent: Utf8Extent.cstring, step: step, ids: ids)
 	var afterCwd = emitSubpWideOperandStep(module, func: func, cur: afterCommand, req: req, source: SubpReqCwd, wide: SubpReqWideCwd, extent: Utf8Extent.cstring, step: step, ids: ids)
@@ -9717,8 +9717,8 @@ function buildSubpReadLine(module StdModule, name ByteArray, streamBase ByteOffs
 	// differently-spelled one at the boundary. The bare-name `subpReadLine(h)` builtin passes
 	// `SubpMaxLineBytes`.
 	emitParams(module, block: entry, count: 2)
-	let handle = 0 as ValueId
-	let maxLineBytes = 1 as ValueId
+	let handle = 0
+	let maxLineBytes = 1
 
 	// ⭐ **THE HANDLE GUARD, AT THE ENTRY POINT.** See `emitSubpRequireHandle` for why it is here rather than
 	// at a wrapper, and for the grep that keeps the roster of these openings complete.
@@ -9850,8 +9850,8 @@ function buildSubpReadExact(module StdModule, streamState EnumLayout)
 	var refused = module.addBlock(func, label: b"exactrefused", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let handle = 0 as ValueId
-	let want = 1 as ValueId
+	let handle = 0
+	let want = 1
 
 	// The ONE refusal, shared by both guards below: an empty OWNED String, no slot state touched. A handle
 	// naming no live child reads as EOF, which is what `buildSubpReadLine` answers it, and an OWNED String
@@ -9931,7 +9931,7 @@ function buildSubpStreamStateQuery(module StdModule, name ByteArray, streamBase 
 	var bad = module.addBlock(func, label: b"statenochild", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let handle = 0 as ValueId
+	let handle = 0
 
 	let noSuchChild = emitConst(module, block: bad, value: streamState.tagOfCase(SubprocessStreamNoSuchChildCaseName), ids: ids)
 	module.setTerminator(bad, op: StdOp.ret(noSuchChild))
@@ -9962,8 +9962,8 @@ function buildSubpWriteLine(module StdModule)
 	var badHandle = module.addBlock(func, label: b"badhandle", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let handle = 0 as ValueId
-	let strPtr = 1 as ValueId
+	let handle = 0
+	let strPtr = 1
 
 	// ⭐ **THE HANDLE GUARD, AT THE ENTRY POINT.** See `emitSubpRequireHandle` for why it is here rather than
 	// at a wrapper, and for the grep that keeps the roster of these openings complete.
@@ -10028,7 +10028,7 @@ function buildSubpCloseStdin(module StdModule)
 	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let handle = 0 as ValueId
+	let handle = 0
 
 	// ⭐ **THE HANDLE GUARD, AT THE ENTRY POINT.** See `emitSubpRequireHandle` for why it is here rather than
 	// at a wrapper, and for the grep that keeps the roster of these openings complete.
@@ -10072,7 +10072,7 @@ function buildSubpWait(module StdModule)
 	var badHandle = module.addBlock(func, label: b"badhandle", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let handle = 0 as ValueId
+	let handle = 0
 
 	// The handle guard is at the entry point; see `emitSubpRequireHandle` for why, and for the grep
 	// that keeps the roster of these openings complete. A handle naming no live child answers -1,
@@ -10106,7 +10106,7 @@ function buildSubpRelease(module StdModule)
 	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let handle = 0 as ValueId
+	let handle = 0
 
 	// ⭐ **THE HANDLE GUARD, AT THE ENTRY POINT.** See `emitSubpRequireHandle` for why it is here rather than
 	// at a wrapper, and for the grep that keeps the roster of these openings complete.

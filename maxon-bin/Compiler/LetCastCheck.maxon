@@ -1,0 +1,138 @@
+typealias LetCastIndexMap = Map with (String, ElementIndex)
+typealias ReadSiteSet = Set with ByteOffset
+typealias MentionLinesMap = Map with (ByteArray, LineNumberArray)
+typealias MentionIndexMap = Map with (String, MentionLinesMap)
+
+type LetCastVerdict
+	export let subject as LetCastSubject
+	export var everyReadClaimed as bool
+	export var sites as ReadSiteSet
+
+	static function create(subject LetCastSubject) returns LetCastVerdict
+		return Self{subject: subject, everyReadClaimed: true, sites: ReadSiteSet.create()}
+	end 'create'
+
+	function note(read LetCastRead, readerFile FilePath)
+		// Mentions are counted in the declaring file alone, so a read from any other file keeps the cast.
+		let inTheDeclaringFile = readerFile.toString() == self.subject.declFile.toString()
+		self.everyReadClaimed = self.everyReadClaimed and read.claimed and inTheDeclaringFile
+		self.sites.insert(read.site)
+	end 'note'
+end 'LetCastVerdict'
+
+typealias LetCastVerdictArray = Array with LetCastVerdict
+
+module function checkUnneededLetCasts(project Project, module MaxonModule) throws CompileError
+	var index = LetCastIndexMap.create()
+	var verdicts = LetCastVerdictArray.create()
+
+	for func in module.functions 'eachFunc'
+		for read in func.letCastReads 'eachRead'
+			let identity = read.subject.identity()
+
+			if let position = try index.get(identity) 'aKnownCast'
+				var known = try verdicts.get(position) otherwise panic("checkUnneededLetCasts: verdicts.get OOB at {position} — the index is filed beside the verdict it names")
+				known.note(read, readerFile: func.sourceFilePath)
+				continue
+			end 'aKnownCast'
+
+			var fresh = LetCastVerdict.create(read.subject)
+			fresh.note(read, readerFile: func.sourceFilePath)
+			index.upsert(identity, value: verdicts.count())
+			verdicts.push(fresh)
+		end 'eachRead'
+	end 'eachFunc'
+
+	var mentions = MentionIndexMap.create()
+
+	for verdict in verdicts 'eachCast'
+		if not verdict.everyReadClaimed 'aReadNeedsTheAlias'
+			continue
+		end 'aReadNeedsTheAlias'
+
+		if not (try everyMentionIsARead(project, verdict: verdict, mentions: mentions)) 'aMentionTheParserNeverSaw'
+			continue
+		end 'aMentionTheParserNeverSaw'
+
+		let subject = verdict.subject
+		reportPositioned(project, code: ErrorCode.semanticUnneededCast, message: unneededLetCastMessage(subject.cast, name: subject.name), line: subject.cast.asRange.line, column: subject.cast.asRange.column, filePath: subject.declFile)
+	end 'eachCast'
+end 'checkUnneededLetCasts'
+
+// A use the parser never recorded is still a mention: another initializer, a typealias bound,
+// `#if`-disabled code, an uninstantiated template or a shadowing binding keeps the cast.
+function everyMentionIsARead(project Project, verdict LetCastVerdict, mentions MentionIndexMap) returns bool throws CompileError
+	let subject = verdict.subject
+	let inFile = try mentionIndexOf(project, file: subject.declFile, mentions: mentions)
+	let lines = try inFile.get(subject.name) otherwise LineNumberArray.create()
+	return mentionsWithin(lines, scope: subject.scope) == verdict.sites.count()
+end 'everyMentionIsARead'
+
+function mentionIndexOf(project Project, file FilePath, mentions MentionIndexMap) returns MentionLinesMap throws CompileError
+	let key = file.toString()
+
+	if let known = try mentions.get(key) 'aKnownFile'
+		return known
+	end 'aKnownFile'
+
+	let tokens = try queryTokens(project, path: file)
+	var built = MentionLinesMap.create()
+
+	for (iter, tok) in tokens.withIterator() 'eachToken'
+		if tok.kind != TokenKind.identifier or not isANameRead(tokens, position: iter.index()) 'notAMention'
+			continue
+		end 'notAMention'
+
+		var lines = try built.get(tok.value) otherwise LineNumberArray.create()
+		lines.push(tok.line)
+		built.upsert(tok.value, value: lines)
+	end 'eachToken'
+
+	mentions.upsert(key, value: built)
+	return built
+end 'mentionIndexOf'
+
+function isANameRead(tokens TokenArray, position ElementIndex) returns bool
+	if position > 0 'aTokenBefore'
+		let before = (try tokens.get(position - 1) otherwise panic("isANameRead: tokens.get OOB at {position - 1} below a position inside the stream")).kind
+
+		if before == TokenKind.dot or before == TokenKind.let or before == TokenKind.var 'notAReadOfTheBinding'
+			return false
+		end 'notAReadOfTheBinding'
+	end 'aTokenBefore'
+
+	if position + 1 < tokens.count() 'aTokenAfter'
+		let after = (try tokens.get(position + 1) otherwise panic("isANameRead: tokens.get OOB at {position + 1} below the stream's count")).kind
+
+		if after == TokenKind.colon 'anArgumentLabel'
+			return false
+		end 'anArgumentLabel'
+	end 'aTokenAfter'
+
+	return true
+end 'isANameRead'
+
+function mentionsWithin(mentioned LineNumberArray, scope LetCastScope) returns Count
+	return match scope 'scope'
+		wholeFile gives mentioned.count()
+		lines(first, last) gives linesAtMost(mentioned, limit: last) - (0 if first == 0 else linesAtMost(mentioned, limit: first - 1))
+	end 'scope'
+end 'mentionsWithin'
+
+function linesAtMost(lines LineNumberArray, limit LineNumber) returns Count
+	var low = 0 as Count
+	var high = lines.count()
+
+	while low < high 'search'
+		let middle = low + ((high - low) shr 1)
+		let line = try lines.get(middle) otherwise panic("linesAtMost: lines.get OOB at {middle} inside the search window")
+
+		if line <= limit 'inside'
+			low = middle + 1
+		end 'inside' else 'outside'
+			high = middle
+		end 'outside'
+	end 'search'
+
+	return low
+end 'linesAtMost'

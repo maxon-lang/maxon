@@ -245,7 +245,7 @@ function main() returns ExitCode
 	let wide = b as Integer      // widening: no run-time check
 	let r = wide as Real         // integer to float
 	let back = wide as Byte      // narrowing: checked at run time
-	print("{wide} {r} {back}\n") // 200 200.0 200
+	print("{b} {wide} {r} {back}\n") // 200 200 200.0 200
 	return 0
 end 'main'
 ```
@@ -261,6 +261,7 @@ end 'main'
 | `bool` ↔ number, `String` → number, struct ↔ anything | **E3009** |
 | a value to the type it already has (`b as Byte` when `b` is a `Byte`; a struct, enum, union, `bool` or `String` to itself) | **E3010** `unneeded cast` |
 | a literal to the alias its destination declares (`open(8080 as Port)` for a `Port` parameter) | **E3010** `unneeded cast: the literal 8080 already fits in 'Port'` — see [Construction](/docs/language/ranged-typealiases/#construction) |
+| a literal in an unannotated `let` every use of which takes the plain constant (`let p = 8080 as Port`, read only as a `Port` argument) | **E3010** `unneeded cast: the literal 8080 already fits every use of 'p'` |
 | one container instance to a different one | **E3131**, unless the elements are same-named declarations of one layout, which re-brands the container |
 
 ### Floats to Integers

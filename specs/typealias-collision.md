@@ -75,9 +75,8 @@ export typealias Score = int(0 to 80)
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	let a = 50 as api.Score
-	let b = 60 as legacy.Score
-	return (a + (b as api.Score)) as ExitCode
+	let a = 50
+	return (a + ((60 as legacy.Score) as api.Score)) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -96,9 +95,8 @@ export typealias Score = int(0 to 100)
 
 // --- file: app/main.maxon
 function main() returns ExitCode
-	let a = 10 as lib.fmt.Score
-	let b = 65 as legacy.Score
-	return ((a as legacy.Score) + b) as ExitCode
+	let b = 65
+	return (((10 as lib.fmt.Score) as legacy.Score) + b) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -343,8 +341,7 @@ function seven() returns ExitCode
 end 'seven'
 
 function main() returns ExitCode
-	let a = 35 as api.Score
-	return (a as ExitCode) + run(seven)
+	return ((35 as api.Score) as ExitCode) + run(seven)
 end 'main'
 ```
 ```exitcode
@@ -401,8 +398,7 @@ function main() returns ExitCode
 	var bytes = b"hi"
 	let h = try bytes.get(0) otherwise 0
 	let f = 0.5 as legacy.Byte
-	let seven = 7 as stdlib.Byte
-	return (h - seven + (1 if f > 0.25 else 0)) as ExitCode
+	return (h - (7 as stdlib.Byte) + (1 if f > 0.25 else 0)) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -551,8 +547,7 @@ end 'valueOf'
 
 function main() returns ExitCode
 	let p = lib.FullRangeInt.create(7)
-	let n = 5 as stdlib.FullRangeInt
-	return valueOf(p) + (n as ExitCode)
+	return valueOf(p) + ((5 as stdlib.FullRangeInt) as ExitCode)
 end 'main'
 ```
 ```exitcode

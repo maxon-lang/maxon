@@ -172,20 +172,20 @@ end 'enumBackingLiteralDiscriminator'
 // moves the hash rather than being absorbed by the first. Its own discriminator for `DeclShapeStruct`'s
 // reason: the list is a distinct fact from the case or field list beside it. The KIND it hangs off is
 // already in the hash (`DeclShapeEnum` / `DeclShapeStruct`), so one discriminator serves both.
-let DeclShapeDeclaredConformance = 55 as HashDigest
+let DeclShapeDeclaredConformance = 55
 
 // One `with <TypeArg>` an `implements` clause BINDS (conditional extensions). ⚠ It needs a discriminator of
 // its OWN, and sharing the one above would be a live collision rather than a tidiness point:
 // `implements A, B` and `implements A with B` are two different declarations that both offer the byte
 // sequences `A` then `B` to this mixer, and they decide different things (which extensions apply, versus
 // what the extended interface's associated type is bound to).
-let DeclShapeConformanceBinding = 72 as HashDigest
+let DeclShapeConformanceBinding = 72
 let DeclShapeModuleDirectory = 128 as HashDigest
 let DeclShapeFileBoundary = 129 as HashDigest
 let AuthorChainSalt = 130 as HashDigest
 let LibraryChainSalt = 131 as HashDigest
 let DeclShapeTypeNameTable = 132 as HashDigest
-let DeclShapeDefaultDeclaration = 133 as HashDigest
+let DeclShapeDefaultDeclaration = 133
 
 // Which hash chain a signature event feeds. `libraryHash` (library and whole chains) keys a shared
 // library parse, and `hash` (all three) keys a project's parse memo: the whole-program hash moves
@@ -540,19 +540,19 @@ let DeclShapeThrows = 27 as HashDigest
 // same reason: a callee that gains or loses divergence changes whether a bare call to it ENDS ITS CALLER'S
 // BLOCK, so a caller's parse memo must move when the callee's body stops (or starts) being able to return.
 // Only a proved-diverging declaration is recorded, so every ordinary function costs no hash movement.
-let DeclShapeDiverges = 107 as HashDigest
+let DeclShapeDiverges = 107
 
 // A function that can only ever THROW — `DeclShapeDiverges`' second way out, and its own tag for
 // the identical reason: a callee that gains or loses the property changes whether a PROPAGATING `try`
 // statement on it ENDS ITS CALLER'S BLOCK, so a caller's parse memo must move with it. Only a proved
 // always-throwing declaration is recorded, so every ordinary function costs no hash movement.
-let DeclShapeAlwaysThrows = 108 as HashDigest
+let DeclShapeAlwaysThrows = 108
 
 // ⭐ A function whose every `return` hands back a FRESH RECORD — the two above's third sibling, and its
 // own tag for their reason one fact over: a callee that gains or loses the property changes whether a SEND may
 // MOVE its result to another green thread, so a caller's parse memo must move with it. Only a proved
 // fresh-returning declaration is recorded, so every ordinary function costs no hash movement.
-let DeclShapeReturnsFreshRecord = 109 as HashDigest
+let DeclShapeReturnsFreshRecord = 109
 
 // The shape a CONDITIONAL fresh-return claim mixes, and its own rather than `DeclShapeReturnsFreshRecord`'s:
 // a body that stops building its record and starts forwarding to a callee is a different program, and a memo
@@ -561,24 +561,24 @@ let DeclShapeFreshReturnForward = 113 as HashDigest
 
 // The four `FreshReturnForward` spellings, as distinct marks: one call written two ways can reach two
 // different declarations.
-let FreshForwardUnqualifiedShape = 120 as HashDigest
+let FreshForwardUnqualifiedShape = 120
 let FreshForwardSelfReceiverShape = 121 as HashDigest
 let FreshForwardSelfTypeShape = 122 as HashDigest
-let FreshForwardNamedTypeShape = 123 as HashDigest
+let FreshForwardNamedTypeShape = 123
 
 // ⭐ A static factory whose whole body is `return Self{p: p, …}` over its own parameters — the four
 // above's sibling, and its own tag for their reason one fact over: a callee that gains or loses the property
 // changes whether a top-level `let X = T.create(…)` FOLDS to a construction and is therefore imaged, so a
 // caller's parse memo must move with it.
-let DeclShapeConstructsFromParams = 114 as HashDigest
+let DeclShapeConstructsFromParams = 114
 
-let DeclShapeReturnsReceiverField = 135 as HashDigest
+let DeclShapeReturnsReceiverField = 135
 
 let DeclShapeAliasImplements = 126 as HashDigest
 
 let DeclShapeTupleAlias = 127 as HashDigest
 
-let OperandAliasSetSeparator = 124 as NameSeparatorByte
+let OperandAliasSetSeparator = 124
 
 // ⭐ A declared RETURN TYPE's pre-erasure SPELLING — the `DeclaredSurface` word `mixDeclaration`
 // folds in beside the return type. It is the one declaration fact `mixReturnType` structurally cannot carry:
@@ -1525,7 +1525,7 @@ let sharedEmptyImmortalBoxColumns = ImmortalBoxColumnArray.create()
 // The `element_size@24` an imaged struct BOX carries, which is none: a box is not a `__ManagedMemory`
 // record and has no elements to stride over. Named rather than a bare 0 because 0 IS a live stride in the
 // other direction — `__managed_create` aborts on one (`RuntimeAbort.arrayElementSizeZero`).
-let NoImmortalBoxStride = 0 as ElementStride
+let NoImmortalBoxStride = 0
 
 // ⭐⭐ **WHAT ONE SLOT OF AN EMPTY DECLARED CONTAINER'S BOX HOLDS.** Its own union rather than a bool
 // because the two admitted answers are laid down by different mechanisms and at different tiers: a scalar's
@@ -1987,7 +1987,7 @@ enum InitializerShape
 	runsCode
 end 'InitializerShape'
 
-let ContainerCreateInitializerTokenCount = 5 as ElementIndex
+let ContainerCreateInitializerTokenCount = 5
 
 function initializerTokenAt(tokens TokenArray, decl TopLevelDecl, offset ElementIndex) returns Token
 	return try tokens.get(decl.initStart + offset) otherwise panic("initializerTokenAt: initializer token {decl.initStart + offset} of '{String.from(decl.name)}' is not below the declaring file's {tokens.count()} tokens")
@@ -2422,7 +2422,7 @@ end 'managedLiteralRecord'
 // The value a managed global's `.data` slot holds BEFORE `__module_init` runs: a null pointer. Named
 // rather than a bare 0 because it is a CLAIM — "no record exists yet" — and it is the one state the
 // cleanup's unconditional decref relies on never being observed (see `ModuleInit`).
-let ManagedGlobalInitialSlot = 0 as FullRangeInt
+let ManagedGlobalInitialSlot = 0
 
 // A top-level `let` OR `var`, as the declaration sweep found it: WHAT it is called, WHETHER it is
 // mutable, WHERE it was written, and the TOKEN RANGE of its initializer — read, never evaluated on
@@ -2566,6 +2566,8 @@ export type TopLevelDecl
 	// qualifier, which would be a lossy key used as an identity.
 	export var scope as EnclosingTypeScope
 
+	export var letCast as LetCastDeclaration
+
 	export static function create(name ByteArray, mutable bool, visibility Visibility, declFilePath FilePath, initStart ElementIndex, initEnd ElementIndex, initRange SourceRange, nameLine LineNumber, nameColumn ColumnNumber, scope EnclosingTypeScope, declaredByTheCorpus bool) returns TopLevelDecl
 		return Self{
 			storageKey: fileScopedDeclKey(name, declFilePath: declFilePath) if visibility == Visibility.file else name,
@@ -2583,7 +2585,8 @@ export type TopLevelDecl
 			outcome: TopLevelConstant.pending,
 			defined: DefinedInitializer.written,
 			dataLabel: DataSlotLabel.unlabelled,
-			scope: scope
+			scope: scope,
+			letCast: LetCastDeclaration.none
 		}
 	end 'create'
 
@@ -2605,6 +2608,7 @@ export type TopLevelDecl
 		cacheWriteDataSlotLabel(writer, value: self.dataLabel)
 		writer.flag(self.declaredByTheCorpus)
 		cacheWriteEnclosingTypeScope(writer, value: self.scope)
+		cacheWriteLetCastDeclaration(writer, value: self.letCast)
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns TopLevelDecl throws LibraryCacheDamage
@@ -2624,12 +2628,13 @@ export type TopLevelDecl
 		let f_dataLabel = try cacheReadDataSlotLabel(reader)
 		let f_declaredByTheCorpus = try reader.flag()
 		let f_scope = try cacheReadEnclosingTypeScope(reader)
+		let f_letCast = try cacheReadLetCastDeclaration(reader)
 
-		return Self{storageKey: f_storageKey, name: f_name, mutable: f_mutable, hasStorage: f_hasStorage, visibility: f_visibility, declFilePath: f_declFilePath, initStart: f_initStart, initEnd: f_initEnd, initRange: f_initRange, nameLine: f_nameLine, nameColumn: f_nameColumn, outcome: f_outcome, defined: f_defined, dataLabel: f_dataLabel, declaredByTheCorpus: f_declaredByTheCorpus, scope: f_scope}
+		return Self{storageKey: f_storageKey, name: f_name, mutable: f_mutable, hasStorage: f_hasStorage, visibility: f_visibility, declFilePath: f_declFilePath, initStart: f_initStart, initEnd: f_initEnd, initRange: f_initRange, nameLine: f_nameLine, nameColumn: f_nameColumn, outcome: f_outcome, defined: f_defined, dataLabel: f_dataLabel, declaredByTheCorpus: f_declaredByTheCorpus, scope: f_scope, letCast: f_letCast}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize128
-		return sizeof(TopLevelDecl) as CacheSize128
+	static function cacheLayoutBytes() returns CacheSize136
+		return sizeof(TopLevelDecl) as CacheSize136
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -9008,7 +9013,7 @@ export let ListBuiltinBaseName = b"List"
 export let ManagedListBuiltinBaseName = b"__ManagedList"
 
 // The single type parameter `__ManagedList` declares — the `List` twin, and the same one-word element slot.
-let ManagedListTypeParamCount = 1 as FieldIndex
+let ManagedListTypeParamCount = 1
 
 // ⭐⭐ **`__ManagedListNode with Element` — A HANDLE ON ONE NODE, AND THE ONE TYPE IN the compiler NO SOURCE CAN
 // CONSTRUCT.** Only an insertion mints a value of it (`__ManagedList.insertFirst`/`insertLast`).
@@ -9044,7 +9049,7 @@ export let ManagedListNodeBuiltinBaseName = b"__ManagedListNode"
 // every one-argument door (`containerElementType`, `containerElementIsManaged`, `elementAccessorResultType`)
 // serves a node handle unchanged — which is exactly how `value()` is emitted through the SAME element
 // accessor a `get` is.
-let ManagedListNodeTypeParamCount = 1 as FieldIndex
+let ManagedListNodeTypeParamCount = 1
 
 // ⭐⭐ **`__ManagedMemoryCursor with Element` — A NAVIGABLE POSITION INSIDE A BUFFER, AND THE SECOND TYPE NO
 // SOURCE CAN CONSTRUCT.** Only `__ManagedMemory.createCursor()` mints one. `stdlib/Array.maxon:485-531`'s
@@ -9070,7 +9075,7 @@ export let ManagedMemoryCursorBuiltinBaseName = b"__ManagedMemoryCursor"
 // The single type parameter a cursor carries — the same one-element arity every other one-argument door
 // (`containerElementType`, `containerElementIsManaged`, `elementAccessorResultType`) already serves, which is
 // how `current()` is emitted through the SAME element accessor an `Array`'s `get` is.
-let ManagedMemoryCursorTypeParamCount = 1 as FieldIndex
+let ManagedMemoryCursorTypeParamCount = 1
 
 // ⭐⭐ **THE FIFTH COMPILER-OWNED CONTAINER: `Vector with <N> <Element>`, A FIXED-SIZE ARRAY.**
 // `stdlib/Vector.maxon` declares one, and the compiler synthesizes its own instead.
@@ -9432,10 +9437,10 @@ export enum ArrayBitwiseKind
 	floatHashOnly
 end 'ArrayBitwiseKind'
 
-let EightBitElementBytes = 1 as ElementStride
-let SixteenBitElementBytes = 2 as ElementStride
-let ThirtyTwoBitElementBytes = 4 as ElementStride
-let SixtyFourBitElementBytes = 8 as ElementStride
+let EightBitElementBytes = 1
+let SixteenBitElementBytes = 2
+let ThirtyTwoBitElementBytes = 4
+let SixtyFourBitElementBytes = 8
 
 enum ArrayElementClass
 	notBitwise
@@ -9822,7 +9827,7 @@ export let SurfaceBitElementIsBuffer = 2 as DeclaredSurfaceNode
 // `Parser.emitContainerElementAccessor`, whose callers are `Array`, `List`, `Vector` and the array cursor —
 // containers whose argument 0 IS their element. A derivation that narrowed itself to `Array` would make the
 // derived answer disagree with the RECORDED one for the same declaration, which is worse than the overreach.
-let BufferSurfaceArgPosition = 0 as ElementIndex
+let BufferSurfaceArgPosition = 0
 
 // Everything above the two flag bits is the node's SLOT COUNT. THE one speller of the shift, shared by the
 // builder (`Parser.declaredSurfaceAt`) and the readers below, so the two cannot come to disagree about where
@@ -10192,8 +10197,8 @@ export let MapUpsertValueLabel = b"value"
 // deliberately NOT `HashTableKeyArgPosition`/`MapValueArgPosition`: those two number `Map with (K, V)`'s TYPE
 // arguments, and a reader that used them here would be off by the receiver and would ask about the wrong
 // parameter's consume bit — silently, because 0 and 1 are both valid positions.
-let MapKeyUpsertArgIndex = 1 as ParamCount
-let MapValueUpsertArgIndex = 2 as ParamCount
+let MapKeyUpsertArgIndex = 1
+let MapValueUpsertArgIndex = 2
 
 // ⚠ **`byteAt` JOINED THIS BLOCK WHEN `String.byteAt` WAS BUILT, AND IT WAS SPELLED
 // `ManagedMemoryByteAtMethod` ONE SURFACE ABOVE UNTIL THEN.** It belongs here for the same reason `set`,
@@ -10286,13 +10291,13 @@ export let ManagedMemoryValueParamName = b"value"
 
 // ⭐ **THE MACHINE-WORD ELEMENT WIDTH A `__ManagedMemory.create(count, 8)` NAMES** — the
 // second and last of the two widths the compiler can give a buffer an element TYPE for, `ByteStringElementSize`
-// being the first. It is `LayoutDescriptor.MachineWordBytes` in the type a PARSED source constant arrives
-// as, spelled here for the reason `ManagedArrayElementBytes` is spelled in this file: a `ByteOffset` and a
-// `FullRangeInt` are distinct types, and the comparison happens on the parsed side.
+// being the first. It is `LayoutDescriptor.MachineWordBytes`, spelled here for the reason
+// `ManagedArrayElementBytes` is spelled in this file: a `ByteOffset` and a `FullRangeInt` are distinct
+// types, and the comparison happens on the parsed side.
 // ⇒ Read by `managedMemoryInstanceForElementSize` (which width maps to which instance) and by
 // `managedMemoryElementSizeIsTypeable` (which widths are admitted at all), so those two answer about ONE
 // set of widths rather than two lists that can drift.
-let ManagedMemoryWordElementSize = 8 as FullRangeInt
+let ManagedMemoryWordElementSize = 8
 
 // ⭐ **THE ERROR A `__ManagedMemory` MEMBER THROWS** — `stdlib/Builtins.maxon:151-160`, and NOT
 // `ArrayError`: `invalidLength` and `invalidByteRange` name conditions `ArrayError` has no case for, so a
@@ -10441,7 +10446,7 @@ end 'isBuiltinManagedTypeName'
 // writes it — `__ManagedFile{_handle: 0}` is E3072 (`managed-file.error-direct-construction`) precisely
 // so the handle cannot be forged — and the runtime reaches it through `ManagedFileHandleOffset`.
 let ManagedFileHandleFieldName = b"_handle"
-let ManagedFileHandleFieldIndex = 0 as FieldIndex
+let ManagedFileHandleFieldIndex = 0
 
 // ⭐ **THE COMPILER-OWNED `__ManagedDirectory` TYPE** — an 8-byte box holding one pointer to a
 // separately allocated FIND BLOCK (the search handle, the `WIN32_FIND_DATAW` the OS refills, and the
@@ -10530,7 +10535,7 @@ export let ManagedSocketTypeName = b"__ManagedSocket"
 // Its one field, per the spec’s "Type Structure". No corpus file writes it — `__ManagedSocket{_handle: 0}`
 // is E3072 (`managed-socket.error-direct-construction`) precisely so the handle cannot be forged.
 let ManagedSocketHandleFieldName = b"_handle"
-let ManagedSocketHandleFieldIndex = 0 as FieldIndex
+let ManagedSocketHandleFieldIndex = 0
 
 // The `__ManagedSocket` methods a PEER connection uses: one static and seven instance methods. A
 // name outside the whole set — these plus the server side's three below — is refused by name at its
@@ -10636,8 +10641,8 @@ export let ManagedSocketNoDeadlineMs = 0
 export let ManagedPagesTypeName = b"__ManagedPages"
 let ManagedPagesBaseFieldName = b"_base"
 let ManagedPagesBytesFieldName = b"_bytes"
-let ManagedPagesBaseFieldIndex = 0 as FieldIndex
-let ManagedPagesBytesFieldIndex = 1 as FieldIndex
+let ManagedPagesBaseFieldIndex = 0
+let ManagedPagesBytesFieldIndex = 1
 export let ManagedPagesReserveMethod = b"reserve"
 export let ManagedPagesBaseMethod = b"base"
 export let ManagedPagesBytesMethod = b"bytes"
@@ -10647,7 +10652,7 @@ export let ManagedPagesBytesParamName = b"bytes"
 
 export let ManagedHandleTypeName = b"__ManagedHandle"
 let ManagedHandleWordFieldName = b"_handle"
-let ManagedHandleWordFieldIndex = 0 as FieldIndex
+let ManagedHandleWordFieldIndex = 0
 export let ManagedHandleTimerMethod = b"timer"
 export let ManagedHandleAdoptMethod = b"adopting"
 export let ManagedHandleWordParamName = b"handle"
@@ -10718,7 +10723,7 @@ module let CharacterNotAsciiCaseName = b"notAscii"
 // it — `__ManagedDirectory{_block: 0}` is E3072 (`managed-directory.error-direct-construction`) precisely so
 // the block pointer cannot be forged — and the runtime reaches it through `ManagedDirectoryBlockOffset`.
 let ManagedDirectoryBlockFieldName = b"_block"
-let ManagedDirectoryBlockFieldIndex = 0 as FieldIndex
+let ManagedDirectoryBlockFieldIndex = 0
 
 // The alias for a `CharacterSet`'s member set — `typealias CharSet = Set with Character`, which
 // `stdlib/CharacterSet.maxon:19` declares and the corpus spells (`specs/unicode-category.md:121`). The
@@ -24219,6 +24224,8 @@ export type ProgramSignatures
 			return self.recordFailure(decl, error: err)
 		end 'noValue'
 
+		decl.letCast = parser.recordedConstLetCast(decl)
+
 		match folded 'kind'
 			direct(value) then return self.settleFoldedValue(decl, value: value)
 
@@ -25386,6 +25393,13 @@ export type ProgramSignatures
 		self.noteCrossFileConstantRead(index, name: name, readerFilePath: readerFilePath)
 		return self.resolvedValueOf(index)
 	end 'notedConstantValue'
+
+	export function letCastDeclarationOf(name ByteArray, readerFilePath FilePath) returns LetCastDeclaration
+		match self.constantDeclFor(name, readerFilePath: readerFilePath) 'lookup'
+			found(index) then return self.declAt(index).letCast
+			notFound then return LetCastDeclaration.none
+		end 'lookup'
+	end 'letCastDeclarationOf'
 
 	function noteCrossFileConstantRead(index ElementIndex, name ByteArray, readerFilePath FilePath)
 		let decl = self.declAt(index)
@@ -28382,6 +28396,14 @@ export type ProgramSignatures
 
 		return try declarations.get(0) otherwise panic("ProgramSignatures.singleDeclarationOf: get(0) on the one-element array the line above tested for")
 	end 'singleDeclarationOf'
+
+	export function soleCandidateOf(callee ByteArray) returns OverloadedDecl throws MapError
+		if self.isGenericFunctionKey(callee) 'aGenericDeclarationCompetes'
+			throw MapError.keyNotFound
+		end 'aGenericDeclarationCompetes'
+
+		return try self.singleDeclarationOf(callee)
+	end 'soleCandidateOf'
 
 	export function declaredParamAliasAt(decl OverloadedDecl, position ParamCount) returns DeclaredAlias
 		let declared = try decl.paramTypes.get(position) otherwise return DeclaredAlias.undeclared

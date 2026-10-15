@@ -120,13 +120,13 @@ let RegionQueryFailed = 0
 // `ReadProcessMemory`'s out-param. Three words, because the graph has no block arguments to carry them —
 // every failure edge converges on ONE resume block, and a value that crossed those edges would need a
 // parameter on it.
-let SampleScratchBytes = 24 as StackSize
+let SampleScratchBytes = 24
 let SampleResultSlot = 0 as SpillSlot
 let SampleWantSlot = 1 as SpillSlot
 let SampleReadSlot = 2 as SpillSlot
 
 // The single-word frames the three out-param entries need.
-let OneWordScratchBytes = 8 as StackSize
+let OneWordScratchBytes = 8
 let OutWordSlot = 0 as SpillSlot
 
 // ⭐ **DOES THIS CALLEE SAMPLE ANOTHER THREAD?** The `__prof_`-only test, read by `scanRuntimeUsage` and by
@@ -167,7 +167,7 @@ function buildProfileOpenTarget(module StdModule)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let pid = 0 as ValueId
+	let pid = 0
 
 	let access = emitConst(module, block: entry, value: ProcessSampleAccess, ids: ids)
 	let noInherit = emitConst(module, block: entry, value: 0, ids: ids)
@@ -196,8 +196,8 @@ function buildProfileNextThread(module StdModule)
 	var ended = module.addBlock(func, label: b"pfnthend", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let proc = 0 as ValueId
-	let cursor = 1 as ValueId
+	let proc = 0
+	let cursor = 1
 
 	func.stackSize = OneWordScratchBytes
 	let outPtr = ids.mint()
@@ -231,7 +231,7 @@ function buildProfileThreadId(module StdModule)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let handle = 0 as ValueId
+	let handle = 0
 
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 	let id = emitHostSample(module, block: entry, service: HostProcessCall.threadId, a0: handle, a1: zero, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
@@ -306,12 +306,12 @@ function buildProfileSample(module StdModule, layout HostContextLayout)
 	var answer = module.addBlock(func, label: b"pfsret", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 6)
-	let proc = 0 as ValueId
+	let proc = 0
 	let thread = 1 as ValueId
-	let ctxPtr = 2 as ValueId
-	let mbiPtr = 3 as ValueId
-	let windowPtr = 4 as ValueId
-	let windowCap = 5 as ValueId
+	let ctxPtr = 2
+	let mbiPtr = 3
+	let windowPtr = 4
+	let windowCap = 5
 
 	func.stackSize = SampleScratchBytes
 	let resultPtr = ids.mint()
@@ -438,7 +438,7 @@ function buildProfileTimerWait(module StdModule)
 
 	emitParams(module, block: entry, count: 2)
 	let timer = 0 as ValueId
-	let dueTime = 1 as ValueId
+	let dueTime = 1
 
 	func.stackSize = OneWordScratchBytes
 	let duePtr = ids.mint()
@@ -478,7 +478,7 @@ function buildProfileModuleSnapshot(module StdModule)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let pid = 0 as ValueId
+	let pid = 0
 
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 	let flags = emitConst(module, block: entry, value: ModuleSnapshotFlags, ids: ids)
@@ -498,8 +498,8 @@ function buildProfileModuleFirst(module StdModule)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let snapshot = 0 as ValueId
-	let entryPtr = 1 as ValueId
+	let snapshot = 0
+	let entryPtr = 1
 
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 	let found = emitHostSample(module, block: entry, service: HostProcessCall.moduleFirst, a0: snapshot, a1: entryPtr, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
@@ -517,8 +517,8 @@ function buildProfileModuleNext(module StdModule)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let snapshot = 0 as ValueId
-	let entryPtr = 1 as ValueId
+	let snapshot = 0
+	let entryPtr = 1
 
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 	let found = emitHostSample(module, block: entry, service: HostProcessCall.moduleNext, a0: snapshot, a1: entryPtr, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
@@ -580,7 +580,7 @@ function buildProfilePagesRelease(module StdModule)
 	var done = module.addBlock(func, label: b"pfpdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let box = 0 as ValueId
+	let box = 0
 
 	let base = emitLoadField(module, block: entry, record: box, offset: ManagedPagesBaseOffset, ids: ids)
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
@@ -606,7 +606,7 @@ function buildProfileBoxDestruct(module StdModule, name ByteArray, release ByteA
 	var drop = module.addBlock(func, label: b"drop", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let box = 0 as ValueId
+	let box = 0
 
 	emitRefcountCheckToLastOwner(module, func: func, entry: entry, lower: lower, record: box, lastOwner: drop, ids: ids)
 
@@ -624,7 +624,7 @@ function buildProfileBoxWordGetter(module StdModule, name ByteArray, offset Byte
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let box = 0 as ValueId
+	let box = 0
 
 	let word = emitLoadField(module, block: entry, record: box, offset: offset, ids: ids)
 	module.setTerminator(entry, op: StdOp.ret(word))
@@ -639,7 +639,7 @@ function buildProfileHandleAdopt(module StdModule)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let handle = 0 as ValueId
+	let handle = 0
 
 	let boxBytes = emitConst(module, block: entry, value: ManagedHandleBoxBytes, ids: ids)
 	let box = emitRawAlloc(module, block: entry, byteCount: boxBytes, ids: ids)
@@ -671,7 +671,7 @@ function buildProfileHandleRelease(module StdModule)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let box = 0 as ValueId
+	let box = 0
 
 	let handle = emitLoadField(module, block: entry, record: box, offset: ManagedHandleWordOffset, ids: ids)
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
@@ -694,8 +694,8 @@ function buildProfileReadWord(module StdModule)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let base = 0 as ValueId
-	let offset = 1 as ValueId
+	let base = 0
+	let offset = 1
 
 	let addr = emitBin(module, block: entry, a: base, b: offset, opcode: StdBinOpcode.add, ids: ids)
 	let word = ids.mint()
@@ -712,8 +712,8 @@ function buildProfileWriteWord(module StdModule)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
-	let base = 0 as ValueId
-	let offset = 1 as ValueId
+	let base = 0
+	let offset = 1
 	let value = 2 as ValueId
 
 	let addr = emitBin(module, block: entry, a: base, b: offset, opcode: StdBinOpcode.add, ids: ids)

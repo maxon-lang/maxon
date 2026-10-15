@@ -1576,12 +1576,16 @@ function settle(dest Count, src Count) returns Count
 	return dest + src
 end 'settle'
 
+function seed() returns Count
+	return 2
+end 'seed'
+
 function main() returns ExitCode
 	var target = "target"
 	let source = "source"
 	settle(target, src: source)
 	var left = 1 as Count
-	let right = 2 as Count
+	let right = seed()
 	print("{target} {settle(left, src: right)}\n")
 	left = 3
 	return 0

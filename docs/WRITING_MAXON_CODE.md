@@ -422,8 +422,9 @@ _ = sideEffect()     // discard (RHS MUST be a function call)
 ```
 
 A `let` of a bare number, literal arithmetic or a literal container is a constant that fits any alias its
-value fits, checked at each use. A `var` — local, top-level or `static` — starts from a value of an alias:
-cast the number (`var total = 0 as Count`, `var size = (16 * 1024) as ByteCount`) or give an array literal a
+value fits, checked at each use. Cast the literal of a `let` (`let limit = 10 as Count`) only where some use
+needs the alias: when every use would take the plain constant the same way, the cast is **E3010**. A `var`
+— local, top-level or `static` — starts from a value of an alias: cast the number (`var total = 0 as Count`, `var size = (16 * 1024) as ByteCount`) or give an array literal a
 typed head (`TallyArray from [1, 2]`). A `for` counter takes the alias of its non-literal bound
 (`for i in 0 upto xs.count()` counts in `Count`) and is immutable in the body.
 
@@ -486,7 +487,8 @@ exported signature may not name a less visible typealias (**E3167**) — see [Vi
 anywhere else is an error, however public the fields are — external callers go through a static factory, so
 invariants have a single construction point. The same restriction covers ranged typealiases: `Port{8080}` at
 a call site is E3076; write the bare literal at a `Port`-typed destination (a cast there is **E3010**), and
-`8080 as Port` where nothing declares the type, such as an unannotated `let`.
+`8080 as Port` where nothing declares the type, such as an unannotated `var` or a `let` some use of which
+needs the alias.
 
 ### Enums
 
@@ -580,7 +582,7 @@ export typealias ScoreMap = Map with (String, Score)
 
 ```maxon
 typealias Port = int(0 to 65535)
-let p = 8080 as Port        // cast a value into the ranged type
+let p = 8080 as Port        // a Port; E3010 when every use of p would take the bare 8080
 let bad = 70000 as Port     // E3005: the literal is outside the range
 connect(host, port: 443)    // a bare literal takes the parameter's declared type
 // connect(host, port: 443 as Port)   // E3010: the parameter already declares 'Port'
@@ -998,7 +1000,10 @@ ranged typealias. `bool` is unranged and stays bare.
 A cast to the type the value already has (`x as Integer` when `x` is already an `Integer`, `flag as bool`,
 a struct, enum, union or `String` to itself) is **E3010 "unneeded cast"**: it converts nothing. So is a literal cast to the alias its destination already declares —
 a call argument, a `return`, a struct-literal field or a field store (`open(8080 as Port)` for a `Port`
-parameter, `return 0 as ExitCode` from `main`): write the bare literal there.
+parameter, `return 0 as ExitCode` from `main`): write the bare literal there. So is a literal cast in an
+unannotated `let` every use of which takes the plain constant the same way (`let limit = 10 as Count`, read
+only where a `Count` is declared): write `let limit = 10`. A `public`, `export` or `module` `let` keeps its
+cast, and so does one a closure captures.
 
 ---
 

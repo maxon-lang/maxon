@@ -130,7 +130,7 @@ function maskContains(mask RegMask, regNum RegNum) returns bool
 end 'maskContains'
 
 function main() returns ExitCode
-	let mask = 5 as RegMask
+	let mask = 5
 	var count = 0 as Count
 	var i = 0 as Count
 	while i < 8 'each'

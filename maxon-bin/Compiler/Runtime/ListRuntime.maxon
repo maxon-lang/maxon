@@ -62,10 +62,10 @@
 //
 // A fresh record comes ZEROED from `__mm_alloc` (head 0, tail 0, count 0), so `__list_create` writes only the
 // destructor stamp — the same zeroing contract `__managed_create` relies on.
-let ListHeadOffset = 0 as ByteOffset
-let ListTailOffset = 8 as ByteOffset
-let ListCountOffset = 16 as ByteOffset
-let ListElementDropOffset = 24 as ByteOffset
+let ListHeadOffset = 0
+let ListTailOffset = 8
+let ListCountOffset = 16
+let ListElementDropOffset = 24
 export let ListRecordBytes = 32 as BytePos
 
 // --- The 40-byte node ---
@@ -94,9 +94,9 @@ export let ListRecordBytes = 32 as BytePos
 // the word inline. It is therefore NOT `arrayElementSize`, which byte-PACKS a narrow element
 // because an array's slots are contiguous — a node's is not, so packing would buy nothing and would
 // make the store and the load two different widths to keep in step.
-let ListNextOffset = 0 as ByteOffset
-let ListPrevOffset = 8 as ByteOffset
-let ListValueOffset = 16 as ByteOffset
+let ListNextOffset = 0
+let ListPrevOffset = 8
+let ListValueOffset = 16
 
 // ⭐⭐ **`element_drop@24` — THE NODE CARRIES ITS OWN ELEMENT DESTRUCTOR, AND IT IS THE ONE SITE THAT OWNS
 // THE ELEMENT DROP.** A refcounted node can outlive the chain that linked it, so *"the list's teardown
@@ -127,8 +127,8 @@ let ListValueOffset = 16 as ByteOffset
 // unlink of every node, so the zeroing is the same line rather than a second rule, and after a
 // chain dies every node it held reads
 // `owner == 0` — never a pointer into a freed record.
-let ListElementDropSlotOffset = 24 as ByteOffset
-let ListOwnerOffset = 32 as ByteOffset
+let ListElementDropSlotOffset = 24
+let ListOwnerOffset = 32
 
 // Exported because `genericInstanceBoxSize` answers a `__ManagedListNode with T` with it — a handle IS
 // the node, so that door must not restate the number.
@@ -482,7 +482,7 @@ function buildListCreate(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
-	let elementDrop = 0 as ValueId
+	let elementDrop = 0
 
 	let recordSize = emitConst(module, block: entry, value: ListRecordBytes as FullRangeInt, ids: ids)
 	let recordDtor = emitConst(module, block: entry, value: TrivialDestructor, ids: ids)
@@ -512,8 +512,8 @@ function buildListNodeAlloc(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
-	let list = 0 as ValueId
-	let value = 1 as ValueId
+	let list = 0
+	let value = 1
 
 	let nodeSize = emitConst(module, block: entry, value: ListNodeBytes, ids: ids)
 	let nodeDtor = emitConst(module, block: entry, value: TrivialDestructor, ids: ids)
@@ -539,8 +539,8 @@ function buildListNodeAt(module StdModule)
 	var found = module.addBlock(func, label: b"found", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let list = 0 as ValueId
-	let index = 1 as ValueId
+	let list = 0
+	let index = 1
 
 	let head = emitLoadField(module, block: entry, record: list, offset: ListHeadOffset, ids: ids)
 	let firstOrdinal = emitConst(module, block: entry, value: 0, ids: ids)
@@ -574,7 +574,7 @@ function buildListCount(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
-	let list = 0 as ValueId
+	let list = 0
 
 	module.setTerminator(entry, op: StdOp.ret(emitLoadField(module, block: entry, record: list, offset: ListCountOffset, ids: ids)))
 
@@ -596,7 +596,7 @@ function buildListIsEmpty(module StdModule)
 	var populated = module.addBlock(func, label: b"populated", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let list = 0 as ValueId
+	let list = 0
 
 	let count = emitLoadField(module, block: entry, record: list, offset: ListCountOffset, ids: ids)
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
@@ -741,8 +741,8 @@ function buildListEndInsert(module StdModule, name ByteArray, nearEnd ByteOffset
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
-	let list = 0 as ValueId
-	let value = 1 as ValueId
+	let list = 0
+	let value = 1
 
 	let node = ids.mint()
 	module.appendOp(entry, op: StdOp.call(node, callee: ListNodeAllocName, args: twoArgs(list, second: value)))
@@ -789,9 +789,9 @@ function buildListInteriorInsert(module StdModule, name ByteArray, forward ByteO
 	var publish = module.addBlock(func, label: b"publish", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
-	let list = 0 as ValueId
-	let target = 1 as ValueId
-	let value = 2 as ValueId
+	let list = 0
+	let target = 1
+	let value = 2
 
 	let owner = emitLoadField(module, block: entry, record: target, offset: ListOwnerOffset, ids: ids)
 	let ownedByUs = emitCmp(module, block: entry, a: owner, b: list, pred: StdCmpPred.eq, ids: ids)
@@ -873,9 +873,9 @@ function buildListInsert(module StdModule)
 	var linked = module.addBlock(func, label: b"linked", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 3)
-	let list = 0 as ValueId
-	let index = 1 as ValueId
-	let value = 2 as ValueId
+	let list = 0
+	let index = 1
+	let value = 2
 
 	let count = emitLoadField(module, block: entry, record: list, offset: ListCountOffset, ids: ids)
 	let outOfRange = emitBoundaryPositionOutOfRange(module, block: entry, position: index, length: count, ids: ids)
@@ -1022,8 +1022,8 @@ function buildListUnlinkNode(module StdModule, name ByteArray, movesElementOut b
 	var alreadyDetached = module.addBlock(func, label: b"detached", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let list = 0 as ValueId
-	let node = 1 as ValueId
+	let list = 0
+	let node = 1
 
 	// Both reads happen BEFORE anything is released, and they dominate every arm below — the discipline
 	// `buildListDecref`'s walk states: a link is never read out of memory already released.
@@ -1124,8 +1124,8 @@ function buildListReinsert(module StdModule, name ByteArray, nearEnd ByteOffset,
 	var link = module.addBlock(func, label: b"link", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 2)
-	let list = 0 as ValueId
-	let node = 1 as ValueId
+	let list = 0
+	let node = 1
 
 	let owner = emitLoadField(module, block: entry, record: node, offset: ListOwnerOffset, ids: ids)
 	let detached = emitConst(module, block: entry, value: 0, ids: ids)
@@ -1178,8 +1178,8 @@ function buildListNodeSetValue(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
-	let node = 0 as ValueId
-	let value = 1 as ValueId
+	let node = 0
+	let value = 1
 
 	var stored = emitDropNodeElement(module, func: func, cur: entry, node: node, ids: ids)
 	emitStoreField(module, block: stored, record: node, offset: ListValueOffset, value: value)
@@ -1210,7 +1210,7 @@ function buildListCheckedNavigator(module StdModule, name ByteArray, offset Byte
 	var found = module.addBlock(func, label: b"found", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let record = 0 as ValueId
+	let record = 0
 
 	let node = emitLoadField(module, block: entry, record: record, offset: offset, ids: ids)
 	let chainEnd = emitConst(module, block: entry, value: 0, ids: ids)
@@ -1268,7 +1268,7 @@ function buildListClear(module StdModule)
 	var emptied = module.addBlock(func, label: b"emptied", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let record = 0 as ValueId
+	let record = 0
 
 	let firstNode = emitLoadField(module, block: entry, record: record, offset: ListHeadOffset, ids: ids)
 	module.setTerminator(entry, op: StdOp.branch(walk.id))
@@ -1316,7 +1316,7 @@ function buildListEndAccessor(module StdModule, name ByteArray, endOffset ByteOf
 	var load = module.addBlock(func, label: b"load", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let list = 0 as ValueId
+	let list = 0
 
 	let node = emitLoadField(module, block: entry, record: list, offset: endOffset, ids: ids)
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
@@ -1370,8 +1370,8 @@ function buildListGet(module StdModule)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var found = module.addBlock(func, label: b"found", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
-	let list = 0 as ValueId
-	let index = 1 as ValueId
+	let list = 0
+	let index = 1
 
 	let node = emitListCheckedNodeAt(module, func: func, entry: entry, found: found, list: list, index: index, ids: ids)
 	emitOkReturn(module, block: found, value: emitLoadField(module, block: found, record: node, offset: ListValueOffset, ids: ids), ids: ids)
@@ -1397,8 +1397,8 @@ function buildListRemoveAt(module StdModule)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var found = module.addBlock(func, label: b"found", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
-	let list = 0 as ValueId
-	let index = 1 as ValueId
+	let list = 0
+	let index = 1
 
 	let node = emitListCheckedNodeAt(module, func: func, entry: entry, found: found, list: list, index: index, ids: ids)
 	let value = ids.mint()
@@ -1452,7 +1452,7 @@ function buildListEndRemove(module StdModule, name ByteArray, nearEnd ByteOffset
 	var release = module.addBlock(func, label: b"release", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let list = 0 as ValueId
+	let list = 0
 
 	let node = emitLoadField(module, block: entry, record: list, offset: nearEnd, ids: ids)
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
@@ -1512,7 +1512,7 @@ function buildListFieldRead(module StdModule, name ByteArray, offset ByteOffset)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
-	let record = 0 as ValueId
+	let record = 0
 
 	module.setTerminator(entry, op: StdOp.ret(emitLoadField(module, block: entry, record: record, offset: offset, ids: ids)))
 
@@ -1559,7 +1559,7 @@ function buildListNodeValue(module StdModule)
 	var held = module.addBlock(func, label: b"held", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let node = 0 as ValueId
+	let node = 0
 
 	let value = emitLoadField(module, block: entry, record: node, offset: ListValueOffset, ids: ids)
 	let empty = emitConst(module, block: entry, value: 0, ids: ids)
@@ -1606,7 +1606,7 @@ function buildListNodeDecref(module StdModule)
 	var release = module.addBlock(func, label: b"release", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let node = 0 as ValueId
+	let node = 0
 
 	emitRefcountCheckToLastOwner(module, func: func, entry: entry, lower: lower, record: node, lastOwner: release, ids: ids)
 
@@ -1673,7 +1673,7 @@ function buildListFrom(module StdModule)
 	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let arr = 0 as ValueId
+	let arr = 0
 
 	let elemDrop = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordElementDestroyOffset, ids: ids)
 	let list = ids.mint()
@@ -1738,8 +1738,8 @@ function buildListClone(module StdModule, name ByteArray, clonesElements bool)
 	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: paramTypes.count() as ParamCount)
-	let list = 0 as ValueId
-	let cloneFn = 1 as ValueId
+	let list = 0
+	let cloneFn = 1
 
 	let elemDrop = emitLoadField(module, block: entry, record: list, offset: ListElementDropOffset, ids: ids)
 	let copy = ids.mint()
@@ -1900,7 +1900,7 @@ function buildListDecref(module StdModule)
 	var release = module.addBlock(func, label: b"release", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let record = 0 as ValueId
+	let record = 0
 
 	emitRefcountCheckToLastOwner(module, func: func, entry: entry, lower: lower, record: record, lastOwner: release, ids: ids)
 
