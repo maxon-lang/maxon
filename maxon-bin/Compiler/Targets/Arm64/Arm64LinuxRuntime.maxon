@@ -23,9 +23,9 @@
 //   • **THERE IS NO `errno`.** A `svc` answers `-errno` in x0 and nothing stores it anywhere. `osLastError`
 //     is a SEPARATE op emitted after the failing one (`ManagedFileRuntime.emitWin32BoolOutcome` states that
 //     ordering), so every chunk here STASHES the reason where `mrt_host_last_error` reads it back —
-//     this OS thread's own slot when it has one and a `.data` word (`LinuxErrnoLabel`) before it does,
-//     which `arm64LinuxEmitErrnoAddr` decides at every site. That pair is this lane's `*__error()`, and it
-//     is per-thread for the same reason Darwin's is.
+//     this OS thread's own slot in a program with the host lock and a `.data` word (`LinuxErrnoLabel`)
+//     in one without, which `arm64LinuxEmitErrnoAddr` decides per program. That pair is this lane's
+//     `*__error()`, and it is per-thread for the same reason Darwin's is.
 //   • **THERE IS NO `fnmatch`.** `FindFirstFileW`'s glob is matched by `mrt_linux_glob_match`, written out
 //     below. It is the one place the Darwin surface's shape could not be reused even in outline.
 //   • **THERE IS NO `malloc`.** The search object `osFileFindFirst` hands back is ONE `mmap`'d page holding
@@ -312,23 +312,20 @@ let Arm64LinuxOpenDirectoryFlags = 0o40000
 // immediately after the call that failed, so the reason must survive from one to the other; a `svc` reports
 // it in x0 and keeps no copy. libc solves this with thread-local storage, and so does this lane — the
 // difference is only that the storage is the scheduler's own slot block rather than a `__thread` the linker
-// laid out, plus the `.data` word below for a thread that has no block.
+// laid out, plus the `.data` word below for a program without the host lock.
 //
 // ⭐⭐⭐ **THE WORD IS PER-M BECAUSE THIS LANE HAS A REAL `clone`.** With two Ms making syscalls at once, a
 // `-errno` stashed by one and read by `mrt_host_last_error` on the other is a WRONG `FileError` — a silent
 // wrong answer, not a crash, on a lane where nothing would notice.
 //
 // ⇒ **`arm64LinuxEmitErrnoAddr` IS THE ADDRESS EVERY READER AND EVERY WRITER GOES THROUGH**, and it answers
-// this OS thread's own slot whenever the thread has one. This `.data` word is what is left: the storage for
-// a thread with no slot block, which is the one thread of a program without the host lock.
+// this OS thread's own slot in a program with the host lock. This `.data` word is the storage of a program
+// without it, which has the one thread.
 //
 // ⇒ **AND ITS SHARING CLASS IS `sealedBeforeWorkers`, TRUE BY CONSTRUCTION:** a program that starts a worker
-// carries the host lock, so every one of its threads has a block from its first instruction and none writes
-// here.
+// carries the host lock, so it does not lay this word out.
 
-// The `.data` slot this lane lays out. Gated on the FACILITIES that stash into it rather than on the target
-// alone: a Linux program that touches no file, no directory and no standard input never writes the word, so
-// it does not carry it.
+// The `.data` slot this lane lays out, on `linuxCarriesErrnoDataWord`.
 //
 // ⚠ **NO `os` TEST INSIDE THE `usage` TEST — the target is asked FIRST**, because the answer really does
 // depend on both and this is the one place that pair is stated (`commandLineRuntimeGlobals`' arrangement).
@@ -339,9 +336,9 @@ export function arm64LinuxRuntimeGlobals(usage RuntimeUsage, target Target) retu
 		return out
 	end 'notThisLane'
 
-	if not linuxTouchesErrnoWord(usage) 'noHostSurface'
+	if not linuxCarriesErrnoDataWord(usage) 'noDataWord'
 		return out
-	end 'noHostSurface'
+	end 'noDataWord'
 
 	pushRuntimeGlobal(out, label: LinuxErrnoLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.declared)
 	return out
@@ -395,57 +392,53 @@ let Arm64LinuxTimespecNsecSlot = 2 as StackSize
 // ⭐⭐ **THE ADDRESS OF *THIS OS THREAD's* errno WORD — the one door every stash and the one read go
 // through.** `TPIDR_EL0` is this lane's per-OS-thread slot block, and SLOT 0 of it is this word: the
 // scheduler's own keys start at `LinuxTlsFirstKey`, so slot 0 is never handed out and is RESERVED rather than
-// merely unused. A thread with no block — the one thread of a program without the host lock — falls back to
-// the process-wide `.data` word, which is sound because it is the only thread there is.
+// merely unused. A program without the host lock uses the process-wide `.data` word instead, which is sound
+// because it has the one thread.
 // `__gt_context_switch` also moves the per-thread word in and out of each green thread
-// (`GtRuntime.GtOffLastError`), through `arm64LinuxEmitBranchIfThreadHasErrnoSlot`, and carries
-// nothing on a thread with no block.
+// (`GtRuntime.GtOffLastError`), through `arm64LinuxEmitSlotBlockBase`.
 //
 // ⚠ **NO INSTRUCTION HERE TOUCHES THE FLAGS**, which is load-bearing: `arm64LinuxEmitStashIfFailed` branches
-// on a `cmp` taken BEFORE the stash and `arm64LinuxEmitFailureSentinel` reads one after it. `mrs`, `cbnz`,
+// on a `cmp` taken BEFORE the stash and `arm64LinuxEmitFailureSentinel` reads one after it. `mrs`,
 // `adrp` and the `add` of an `adrp`/`add` pair all leave NZCV alone.
-function arm64LinuxEmitErrnoAddr(asm Arm64RuntimeAsm, dest Arm64Register)
-	let perThread = asm.newLabel()
-
-	arm64LinuxEmitBranchIfThreadHasErrnoSlot(asm, dest: dest, present: perThread)
-	arm64EmitDataAddr(asm, dest: dest, label: LinuxErrnoLabel)
-
-	asm.placeLabel(perThread)
+function arm64LinuxEmitErrnoAddr(asm Arm64RuntimeAsm, dest Arm64Register, errnoHome LinuxErrnoHome)
+	match errnoHome 'home'
+		slotBlock then arm64LinuxEmitSlotBlockBase(asm, dest: dest)
+		dataWord then arm64EmitDataAddr(asm, dest: dest, label: LinuxErrnoLabel)
+	end 'home'
 end 'arm64LinuxEmitErrnoAddr'
 
-module function arm64LinuxEmitBranchIfThreadHasErrnoSlot(asm Arm64RuntimeAsm, dest Arm64Register, present BlockId)
+module function arm64LinuxEmitSlotBlockBase(asm Arm64RuntimeAsm, dest Arm64Register)
 	arm64EmitThreadPointer(asm.code, dest: arm64RuntimeReg(dest), source: Arm64ThreadPointerSource.linuxWritable)
-	arm64EmitCbnzTo(asm, reg: dest, label: present)
-end 'arm64LinuxEmitBranchIfThreadHasErrnoSlot'
+end 'arm64LinuxEmitSlotBlockBase'
 
 // x0 holds a FAILED syscall's `-errno`. Stash the POSITIVE errno where `mrt_host_last_error` reads it, and
 // leave that positive value in x9 for a caller that must also test it (`mrt_host_dir_current_path` does).
 // x0 is untouched, so the caller still has the kernel's own answer.
-function arm64LinuxEmitStashErrno(asm Arm64RuntimeAsm)
+function arm64LinuxEmitStashErrno(asm Arm64RuntimeAsm, errnoHome LinuxErrnoHome)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x9, value: 0)
 	arm64EmitSubRuntimeReg(asm, dest: Arm64Register.x9, lhs: Arm64Register.x9, rhs: Arm64Register.x0)
-	arm64LinuxEmitErrnoAddr(asm, dest: Arm64Register.x16)
+	arm64LinuxEmitErrnoAddr(asm, dest: Arm64Register.x16, errnoHome: errnoHome)
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x9, base: Arm64Register.x16, byteOffset: 0)
 end 'arm64LinuxEmitStashErrno'
 
 // Publish a KNOWN errno rather than one a syscall just answered — the walk's clear before each step
 // (`PosixErrno.cleared`, which is how end-of-iteration reaches `ERROR_NO_MORE_FILES`), and the two
 // places a reason has to be invented because no call failed.
-module function arm64LinuxEmitPublishErrno(asm Arm64RuntimeAsm, value FullRangeInt)
+module function arm64LinuxEmitPublishErrno(asm Arm64RuntimeAsm, value FullRangeInt, errnoHome LinuxErrnoHome)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x9, value: value as MachineWord)
-	arm64LinuxEmitErrnoAddr(asm, dest: Arm64Register.x16)
+	arm64LinuxEmitErrnoAddr(asm, dest: Arm64Register.x16, errnoHome: errnoHome)
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x9, base: Arm64Register.x16, byteOffset: 0)
 end 'arm64LinuxEmitPublishErrno'
 
 // ⭐ **THE TAIL OF EVERY SYSCALL IN THIS FILE: a negative answer is a failure, and the reason goes in the
 // word.** x0 is left exactly as the kernel wrote it, so a caller that wants a count, a descriptor or a
 // sentinel decides that for itself immediately after.
-export function arm64LinuxEmitStashIfFailed(asm Arm64RuntimeAsm)
+export function arm64LinuxEmitStashIfFailed(asm Arm64RuntimeAsm, errnoHome LinuxErrnoHome)
 	let succeeded = asm.newLabel()
 
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: succeeded)
-	arm64LinuxEmitStashErrno(asm)
+	arm64LinuxEmitStashErrno(asm, errnoHome: errnoHome)
 
 	asm.placeLabel(succeeded)
 end 'arm64LinuxEmitStashIfFailed'
@@ -453,8 +446,8 @@ end 'arm64LinuxEmitStashIfFailed'
 // The syscall's `0`/`-errno` status becoming the Win32 BOOL the Std tier tests, with the reason stashed on
 // the way. NO narrowing: a `svc` answers a full 64-bit word, so a second opinion about its upper half would
 // be `emitWidenedCallResult`'s note in reverse.
-function arm64LinuxEmitWin32BoolFromSyscall(asm Arm64RuntimeAsm)
-	arm64LinuxEmitStashIfFailed(asm)
+function arm64LinuxEmitWin32BoolFromSyscall(asm Arm64RuntimeAsm, errnoHome LinuxErrnoHome)
+	arm64LinuxEmitStashIfFailed(asm, errnoHome: errnoHome)
 	arm64EmitWin32BoolFromZeroStatus(asm)
 end 'arm64LinuxEmitWin32BoolFromSyscall'
 
@@ -723,10 +716,10 @@ end 'buildArm64LinuxCpuCountChunk'
 
 // `GetLastError()` on a lane with no `errno`: read the word every chunk here stashes into, and hand it to the
 // shared translator. The MAPPING is `Arm64PosixRuntime.arm64EmitErrnoToWin32`'s and has no lane in it.
-function buildArm64LinuxLastErrorChunk() returns FunctionCodeChunk
+function buildArm64LinuxLastErrorChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginFunction(0)
 
-	arm64LinuxEmitErrnoAddr(asm, dest: Arm64Register.x16)
+	arm64LinuxEmitErrnoAddr(asm, dest: Arm64Register.x16, errnoHome: errnoHome)
 	arm64EmitLoadWord64At(asm, dest: Arm64Register.x0, base: Arm64Register.x16, byteOffset: 0)
 	arm64EmitErrnoToWin32(asm, wouldBlock: LinuxErrno.wouldBlock.rawValue, dirNotEmpty: LinuxErrno.directoryNotEmpty.rawValue)
 
@@ -757,7 +750,7 @@ end 'arm64LinuxEmitSyscallRestartingOnEintr'
 //
 // ⚠ The arguments shuffle up one, and each move must run before the register it reads is overwritten: they go
 // from the top down and `AT_FDCWD` lands last, in the x0 the path has just vacated.
-function buildArm64LinuxFileOpenChunk() returns FunctionCodeChunk
+function buildArm64LinuxFileOpenChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginFunction(0)
 
 	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x3, src: Arm64Register.x2)
@@ -768,7 +761,7 @@ function buildArm64LinuxFileOpenChunk() returns FunctionCodeChunk
 	arm64EmitRuntimeRrr(asm, opcode: Arm64OpOrr, dest: Arm64Register.x2, lhs: Arm64Register.x2, rhs: Arm64Register.x16)
 	arm64LinuxEmitSyscallRestartingOnEintr(asm, number: Arm64LinuxSyscallOpenat)
 
-	arm64LinuxEmitStashIfFailed(asm)
+	arm64LinuxEmitStashIfFailed(asm, errnoHome: errnoHome)
 	arm64LinuxEmitFailureSentinel(asm, sentinel: PosixInvalidHandle)
 
 	return asm.finishFunction(HostFileOpenName)
@@ -792,7 +785,7 @@ end 'buildArm64LinuxFileOpenChunk'
 // argument order, not in the verdict, not in the out-param — so writing them twice would be one transfer
 // sequence with two chances to disagree about which register holds the length. (`Arm64DarwinRuntime`'s
 // `buildArm64DarwinTransferChunk` is the same argument on the other lane.)
-function buildArm64LinuxTransferChunk(name ByteArray, syscallNumber MachineWord) returns FunctionCodeChunk
+function buildArm64LinuxTransferChunk(name ByteArray, syscallNumber MachineWord, errnoHome LinuxErrnoHome) returns FunctionCodeChunk
 	let SlotOutPtr = 0 as StackSize
 	let SlotFd = 1 as StackSize
 	let SlotBuf = 2 as StackSize
@@ -824,7 +817,7 @@ function buildArm64LinuxTransferChunk(name ByteArray, syscallNumber MachineWord)
 	// interrupted attempt that then succeeds would otherwise leave `EINTR` in the last-error word behind a
 	// TRUE answer, and `subprocessLastErrorMessage()` would name it.
 	arm64PosixEmitSyscallBranchIfEintr(asm, whenInterrupted: issue)
-	arm64LinuxEmitStashIfFailed(asm)
+	arm64LinuxEmitStashIfFailed(asm, errnoHome: errnoHome)
 
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotOutPtr)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
@@ -850,7 +843,7 @@ end 'buildArm64LinuxTransferChunk'
 // ⚠ **NOTHING IS WRITTEN THROUGH THE POINTER ON FAILURE, AND THE CALLER ALREADY RELIES ON THAT.** The scratch
 // word comes from `ManagedFileRuntime.emitWin32OutWord`, i.e. from `__mm_alloc`, which hands out ZEROED
 // memory as a stated guarantee — and `emitWin32BoolOutcome` reads the word on both paths.
-function buildArm64LinuxFileSizeChunk() returns FunctionCodeChunk
+function buildArm64LinuxFileSizeChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
 	let SlotOutPtr = 0 as StackSize
 	let SlotStat = 1 as StackSize
 	var asm = Arm64RuntimeAsm.beginFunction(1 + runtimeFrameSlots(arm64LinuxStatLayout().bytes))
@@ -861,7 +854,7 @@ function buildArm64LinuxFileSizeChunk() returns FunctionCodeChunk
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotOutPtr)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotStat)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallFstat)
-	arm64LinuxEmitStashIfFailed(asm)
+	arm64LinuxEmitStashIfFailed(asm, errnoHome: errnoHome)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: measured)
 
@@ -894,14 +887,14 @@ end 'buildArm64LinuxFileSizeChunk'
 // The Win32 directory create carries no permissions at all (a new directory inherits its parent's ACL), so
 // the POSIX side hands the widest mask over and lets the process umask narrow it, which is the closest thing
 // to "inherit" POSIX has (`PosixDirectoryMode`).
-function buildArm64LinuxPathOpChunk(name ByteArray, syscallNumber MachineWord, thirdArgument MachineWord) returns FunctionCodeChunk
+function buildArm64LinuxPathOpChunk(name ByteArray, syscallNumber MachineWord, thirdArgument MachineWord, errnoHome LinuxErrnoHome) returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginFunction(0)
 
 	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x1, src: Arm64Register.x0)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: thirdArgument)
 	arm64LinuxEmitAtFdCwd(asm, dest: Arm64Register.x0)
 	arm64EmitSyscall(asm.code, number: syscallNumber)
-	arm64LinuxEmitWin32BoolFromSyscall(asm)
+	arm64LinuxEmitWin32BoolFromSyscall(asm, errnoHome: errnoHome)
 
 	return asm.finishFunction(name)
 end 'buildArm64LinuxPathOpChunk'
@@ -926,7 +919,7 @@ end 'buildArm64LinuxPathOpChunk'
 // `osLastError` the Std tier emits immediately after this call, and a `fsync` that failed would be blamed for
 // a rename that succeeded. The three syscalls in the durability step therefore go through `arm64EmitSyscall`
 // directly rather than through `arm64LinuxEmitStashIfFailed`.
-function buildArm64LinuxFileRenameChunk() returns FunctionCodeChunk
+function buildArm64LinuxFileRenameChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
 	let SlotNewPath = 0 as StackSize
 	let SlotDirFd = 1 as StackSize
 	let SlotPrefix = 2 as StackSize
@@ -942,7 +935,7 @@ function buildArm64LinuxFileRenameChunk() returns FunctionCodeChunk
 	arm64LinuxEmitAtFdCwd(asm, dest: Arm64Register.x0)
 	arm64LinuxEmitAtFdCwd(asm, dest: Arm64Register.x2)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallRenameat)
-	arm64LinuxEmitStashIfFailed(asm)
+	arm64LinuxEmitStashIfFailed(asm, errnoHome: errnoHome)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: renamed)
 
@@ -982,7 +975,7 @@ end 'buildArm64LinuxFileRenameChunk'
 // `GetFileAttributesW` — the mask, or `INVALID_FILE_ATTRIBUTES` for a path that names nothing. It is a `stat`
 // and the shared mask derivation, which is what keeps `__md_exists`'s answer and the DIRECTORY bit `__mf_stat`
 // publishes derived from ONE reading of `st_mode`.
-function buildArm64LinuxFileAttributesChunk() returns FunctionCodeChunk
+function buildArm64LinuxFileAttributesChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
 	let SlotStat = 0 as StackSize
 	var asm = Arm64RuntimeAsm.beginFunction(runtimeFrameSlots(arm64LinuxStatLayout().bytes))
 
@@ -991,7 +984,7 @@ function buildArm64LinuxFileAttributesChunk() returns FunctionCodeChunk
 
 	arm64LinuxEmitAtFdCwd(asm, dest: Arm64Register.x9)
 	arm64LinuxEmitFstatat(asm, dirFd: Arm64Register.x9, pathReg: Arm64Register.x0, statSlot: SlotStat)
-	arm64LinuxEmitStashIfFailed(asm)
+	arm64LinuxEmitStashIfFailed(asm, errnoHome: errnoHome)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: described)
 
@@ -1023,7 +1016,7 @@ end 'buildArm64LinuxFileAttributesChunk'
 // ⛔ **REPORTING "TOO SMALL" FOR A REAL FAILURE WOULD SPIN THE CALLER'S DOUBLING LOOP FOREVER**, and reporting
 // a failure for a too-small buffer would throw on a long path. That is why this reads the errno rather than
 // answering one thing for both.
-function buildArm64LinuxDirCurrentPathChunk() returns FunctionCodeChunk
+function buildArm64LinuxDirCurrentPathChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
 	let SlotBufLen = 0 as StackSize
 	var asm = Arm64RuntimeAsm.beginFunction(1)
 
@@ -1042,7 +1035,7 @@ function buildArm64LinuxDirCurrentPathChunk() returns FunctionCodeChunk
 	// `arm64LinuxEmitStashErrno` leaves the POSITIVE errno in x9, which is exactly the value the `ERANGE`
 	// test needs — so the reason is published and classified from one negation.
 	asm.placeLabel(refused)
-	arm64LinuxEmitStashErrno(asm)
+	arm64LinuxEmitStashErrno(asm, errnoHome: errnoHome)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x9, imm: PosixErrno.resultTooLarge.rawValue as Imm32)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: tooSmall)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
@@ -1255,7 +1248,7 @@ end 'buildArm64LinuxDirPrefixChunk'
 // ⚠ **`fstatat`'s VERDICT IS DELIBERATELY DISCARDED AND THE BUFFER IS ZEROED FIRST.** A dangling symbolic link
 // is a real directory entry that Win32 reports; skipping it would silently shorten a listing, and reading a
 // stat buffer the call did not fill would report the PREVIOUS entry's size and timestamps for it.
-function buildArm64LinuxDirFindNextChunk() returns FunctionCodeChunk
+function buildArm64LinuxDirFindNextChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
 	let SlotSearch = 0 as StackSize
 	let SlotFindData = 1 as StackSize
 	let SlotName = 2 as StackSize
@@ -1271,7 +1264,7 @@ function buildArm64LinuxDirFindNextChunk() returns FunctionCodeChunk
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x1, slot: SlotFindData)
 
 	asm.placeLabel(nextEntry)
-	arm64LinuxEmitPublishErrno(asm, value: PosixErrno.cleared.rawValue)
+	arm64LinuxEmitPublishErrno(asm, value: PosixErrno.cleared.rawValue, errnoHome: errnoHome)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x10, slot: SlotSearch)
 	arm64EmitLoadWord64At(asm, dest: Arm64Register.x11, base: Arm64Register.x10, byteOffset: LinuxSearchDirFdOffset as MachineWord)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x11, imm: 0)
@@ -1287,7 +1280,7 @@ function buildArm64LinuxDirFindNextChunk() returns FunctionCodeChunk
 	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x1, base: Arm64Register.x10, imm: LinuxSearchEntriesOffset)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: LinuxSearchEntriesBytes as MachineWord)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallGetdents64)
-	arm64LinuxEmitStashIfFailed(asm)
+	arm64LinuxEmitStashIfFailed(asm, errnoHome: errnoHome)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.le, label: exhausted)
 
@@ -1357,7 +1350,7 @@ end 'buildArm64LinuxDirFindNextChunk'
 // here is a `close` and a `munmap`, and NEITHER stashes: only a failure that a caller will be told about goes
 // in the word. Darwin's teardown runs `free`, which is allocator code that can move `errno`, which is why
 // that lane captures the reason first.
-function buildArm64LinuxDirFindFirstChunk() returns FunctionCodeChunk
+function buildArm64LinuxDirFindFirstChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
 	let SlotPattern = 0 as StackSize
 	let SlotFindData = 1 as StackSize
 	let SlotGlob = 2 as StackSize
@@ -1385,10 +1378,10 @@ function buildArm64LinuxDirFindFirstChunk() returns FunctionCodeChunk
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x14, slot: SlotPattern)
 	arm64LinuxEmitAtFdCwd(asm, dest: Arm64Register.x9)
 	arm64LinuxEmitFstatat(asm, dirFd: Arm64Register.x9, pathReg: Arm64Register.x14, statSlot: SlotStat)
-	arm64LinuxEmitStashIfFailed(asm)
+	arm64LinuxEmitStashIfFailed(asm, errnoHome: errnoHome)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: refused)
-	arm64LinuxEmitAllocateSearch(asm, searchSlot: SlotSearch)
+	arm64LinuxEmitAllocateSearch(asm, searchSlot: SlotSearch, errnoHome: errnoHome)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: refused)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotFindData)
 	arm64EmitSlotAddr(asm, dest: Arm64Register.x1, slot: SlotStat)
@@ -1400,7 +1393,7 @@ function buildArm64LinuxDirFindFirstChunk() returns FunctionCodeChunk
 	// A glob: the page comes FIRST, because it is also where the directory prefix is built — this lane has no
 	// `malloc` to borrow a scratch buffer from.
 	asm.placeLabel(walk)
-	arm64LinuxEmitAllocateSearch(asm, searchSlot: SlotSearch)
+	arm64LinuxEmitAllocateSearch(asm, searchSlot: SlotSearch, errnoHome: errnoHome)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: refused)
 
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotPattern)
@@ -1415,7 +1408,7 @@ function buildArm64LinuxDirFindFirstChunk() returns FunctionCodeChunk
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: PosixNoFileMode as MachineWord)
 	arm64LinuxEmitAtFdCwd(asm, dest: Arm64Register.x0)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallOpenat)
-	arm64LinuxEmitStashIfFailed(asm)
+	arm64LinuxEmitStashIfFailed(asm, errnoHome: errnoHome)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lt, label: releaseAndRefuse)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x10, slot: SlotSearch)
@@ -1431,16 +1424,16 @@ function buildArm64LinuxDirFindFirstChunk() returns FunctionCodeChunk
 	arm64EmitCbnzTo(asm, reg: Arm64Register.x0, label: matched)
 
 	// Nothing matched. An exhausted walk left the word CLEAR; a failed one left its own reason there.
-	arm64LinuxEmitErrnoAddr(asm, dest: Arm64Register.x16)
+	arm64LinuxEmitErrnoAddr(asm, dest: Arm64Register.x16, errnoHome: errnoHome)
 	arm64EmitLoadWord64At(asm, dest: Arm64Register.x9, base: Arm64Register.x16, byteOffset: 0)
 	arm64EmitCbnzTo(asm, reg: Arm64Register.x9, label: publishReason)
-	arm64LinuxEmitPublishErrno(asm, value: PosixErrno.noSuchFileOrDirectory.rawValue)
+	arm64LinuxEmitPublishErrno(asm, value: PosixErrno.noSuchFileOrDirectory.rawValue, errnoHome: errnoHome)
 
 	asm.placeLabel(publishReason)
 	arm64EmitBranchTo(asm, label: releaseAndRefuse)
 
 	asm.placeLabel(nameTooLong)
-	arm64LinuxEmitPublishErrno(asm, value: LinuxErrno.nameTooLong.rawValue)
+	arm64LinuxEmitPublishErrno(asm, value: LinuxErrno.nameTooLong.rawValue, errnoHome: errnoHome)
 
 	asm.placeLabel(releaseAndRefuse)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: SlotSearch)
@@ -1466,7 +1459,7 @@ end 'buildArm64LinuxDirFindFirstChunk'
 // ⚠ **A REFUSED `mmap` ANSWERS A SMALL NEGATIVE, NOT NULL**, so the test is a sign test and the answer is
 // normalised to 0 for the `cbz` every caller writes. The reason is stashed, because a caller is about to be
 // told this failed.
-function arm64LinuxEmitAllocateSearch(asm Arm64RuntimeAsm, searchSlot StackSize)
+function arm64LinuxEmitAllocateSearch(asm Arm64RuntimeAsm, searchSlot StackSize, errnoHome LinuxErrnoHome)
 	let mapped = asm.newLabel()
 	let recorded = asm.newLabel()
 
@@ -1477,7 +1470,7 @@ function arm64LinuxEmitAllocateSearch(asm Arm64RuntimeAsm, searchSlot StackSize)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: MmapAnonFd)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x5, value: MmapNoOffset)
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallMmap)
-	arm64LinuxEmitStashIfFailed(asm)
+	arm64LinuxEmitStashIfFailed(asm, errnoHome: errnoHome)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.gt, label: mapped)
 
@@ -2253,28 +2246,10 @@ end 'buildArm64LinuxMainThreadBlockChunk'
 // mrt_linux_tls_set(x0 = key, x1 = value)
 // ==========================================================================
 
-// `TlsSetValue(key, value)` — `pthread_setspecific` on the other lane, and there ONE import call with no
-// chunk at all. It is a chunk here because it owes an assertion that lane does not: `pthread_setspecific`
-// works on any thread, while this store needs a BLOCK, and a thread without one has `TPIDR_EL0` = 0.
-//
-// ⛔ **A NULL THREAD POINTER IS A PANIC, NOT A STORE THROUGH ZERO.** Every thread that reaches this call has
-// a block — the main thread from `mrt_linux_main_thread_block`, a worker M from the `CLONE_SETTLS` in
-// `mrt_host_thread_create` — so this is the check that keeps that true rather than assumed, and it names the
-// gap instead of writing `key * 8` bytes into the null page. ⚠ It is exactly the check that would have fired
-// had the worker M's `clone` been written without `CLONE_SETTLS`: `__sched_worker_loop`'s first act is the
-// `tlsSetValue` that adopts its P.
-let LinuxTlsNoBlockMessage = b"panic: an OS thread asked to write a scheduler slot without ever having been given a slot block -- on arm64-linux `TPIDR_EL0` is the block base, set by `mrt_linux_main_thread_block` for the main thread and by `CLONE_SETTLS` for every other\n"
-
-function buildArm64LinuxTlsSetChunk(globalData GlobalDataTable) returns FunctionCodeChunk
+function buildArm64LinuxTlsSetChunk() returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginFunction(0)
 
-	let haveBlock = asm.newLabel()
-
-	arm64EmitThreadPointer(asm.code, dest: arm64RuntimeReg(Arm64Register.x2), source: Arm64ThreadPointerSource.linuxWritable)
-	arm64EmitCbnzTo(asm, reg: Arm64Register.x2, label: haveBlock)
-	arm64EmitPanicConstant(asm, globalData: globalData, bytes: LinuxTlsNoBlockMessage)
-
-	asm.placeLabel(haveBlock)
+	arm64LinuxEmitSlotBlockBase(asm, dest: Arm64Register.x2)
 	arm64EmitLslImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x0), rn: arm64RuntimeReg(Arm64Register.x0), sh: LinuxTlsKeyScaleBits)
 	arm64EmitAddRuntimeReg(asm, dest: Arm64Register.x2, lhs: Arm64Register.x2, rhs: Arm64Register.x0)
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x2, byteOffset: 0)
@@ -2435,7 +2410,7 @@ end 'buildArm64LinuxEnvReadChunk'
 //
 // ⚠ The three descriptors `dup3` installs are the only ones that survive the `execve`: everything else the
 // runtime opens is close-on-exec, and `LinuxOpenCloseOnExec` owns that rule.
-function buildArm64LinuxSpawnChunk() returns FunctionCodeChunk
+function buildArm64LinuxSpawnChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
 	let SlotArgv = 0 as StackSize
 	let SlotCwd = 1 as StackSize
 	let SlotFlags = 2 as StackSize
@@ -2568,7 +2543,7 @@ function buildArm64LinuxSpawnChunk() returns FunctionCodeChunk
 	// spawnFailed: x0 holds the `-errno` of whichever call failed. Publish it where `mrt_host_last_error`
 	// reads it and leave a ZERO `hProcess`, which is the Std tier's own spawn-failure test.
 	asm.placeLabel(spawnFailed)
-	arm64LinuxEmitStashErrno(asm)
+	arm64LinuxEmitStashErrno(asm, errnoHome: errnoHome)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: 0)
 	arm64EmitBranchTo(asm, label: published)
@@ -2752,8 +2727,8 @@ function buildArm64LinuxShmPathChunk(globalData GlobalDataTable) returns Functio
 	return asm.finishFunction(LinuxShmPathName)
 end 'buildArm64LinuxShmPathChunk'
 
-function arm64LinuxShmHost() returns PosixShmHost
-	return PosixShmHost.create(PosixShmNaming.devShmPath, exclusiveCreateFlags: LinuxShmCreateFlags, stat: arm64LinuxStatLayout(), ftruncate: PosixHostCall.syscall(Arm64LinuxSyscallFtruncate), fstat: PosixHostCall.syscall(Arm64LinuxSyscallFstat), close: PosixHostCall.syscall(Arm64LinuxSyscallClose))
+function arm64LinuxShmHost(errnoHome LinuxErrnoHome) returns PosixShmHost
+	return PosixShmHost.create(PosixShmNaming.devShmPath, exclusiveCreateFlags: LinuxShmCreateFlags, stat: arm64LinuxStatLayout(), ftruncate: PosixHostCall.syscall(Arm64LinuxSyscallFtruncate, errnoHome: errnoHome), fstat: PosixHostCall.syscall(Arm64LinuxSyscallFstat, errnoHome: errnoHome), close: PosixHostCall.syscall(Arm64LinuxSyscallClose, errnoHome: errnoHome))
 end 'arm64LinuxShmHost'
 
 module function arm64LinuxEmitShmPath(asm Arm64RuntimeAsm, pathSlot StackSize)
@@ -2841,16 +2816,16 @@ end 'buildArm64LinuxShmUnlinkChunk'
 // THE PROCESS-TRACE BAND
 // ==========================================================================
 
-function buildArm64LinuxTraceRequestChunk() returns FunctionCodeChunk
+function buildArm64LinuxTraceRequestChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginFunction(0)
 
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallPtrace)
-	arm64LinuxEmitWin32BoolFromSyscall(asm)
+	arm64LinuxEmitWin32BoolFromSyscall(asm, errnoHome: errnoHome)
 
 	return asm.finishFunction(HostTraceRequestName)
 end 'buildArm64LinuxTraceRequestChunk'
 
-function buildArm64LinuxTraceeReadChunk() returns FunctionCodeChunk
+function buildArm64LinuxTraceeReadChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
 	let SlotBytes = 0 as StackSize
 	let SlotOut = 1 as StackSize
 	let SlotLocalIov = 2 as StackSize
@@ -2885,7 +2860,7 @@ function buildArm64LinuxTraceeReadChunk() returns FunctionCodeChunk
 	arm64EmitBranchTo(asm, label: answered)
 
 	asm.placeLabel(shortRead)
-	arm64LinuxEmitStashErrno(asm)
+	arm64LinuxEmitStashErrno(asm, errnoHome: errnoHome)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotOut)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: 0)
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x2, base: Arm64Register.x1, byteOffset: 0)
@@ -2895,7 +2870,7 @@ function buildArm64LinuxTraceeReadChunk() returns FunctionCodeChunk
 	return asm.finishFunction(HostTraceeReadName)
 end 'buildArm64LinuxTraceeReadChunk'
 
-function buildArm64LinuxAwaitTraceeChunk() returns FunctionCodeChunk
+function buildArm64LinuxAwaitTraceeChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
 	let SlotStatusOut = 0 as StackSize
 	let SlotBudget = 1 as StackSize
 	let SlotPid = 2 as StackSize
@@ -2949,27 +2924,27 @@ function buildArm64LinuxAwaitTraceeChunk() returns FunctionCodeChunk
 	arm64EmitBranchTo(asm, label: poll)
 
 	asm.placeLabel(waitFailed)
-	arm64LinuxEmitStashErrno(asm)
+	arm64LinuxEmitStashErrno(asm, errnoHome: errnoHome)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
 
 	asm.placeLabel(answered)
 	return asm.finishFunction(HostAwaitTraceeName)
 end 'buildArm64LinuxAwaitTraceeChunk'
 
-function buildArm64LinuxThreadSignalChunk() returns FunctionCodeChunk
+function buildArm64LinuxThreadSignalChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginFunction(0)
 
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallTgkill)
-	arm64LinuxEmitWin32BoolFromSyscall(asm)
+	arm64LinuxEmitWin32BoolFromSyscall(asm, errnoHome: errnoHome)
 
 	return asm.finishFunction(HostThreadSignalName)
 end 'buildArm64LinuxThreadSignalChunk'
 
-function buildArm64LinuxProcessSignalChunk() returns FunctionCodeChunk
+function buildArm64LinuxProcessSignalChunk(errnoHome LinuxErrnoHome) returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginFunction(0)
 
 	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallKill)
-	arm64LinuxEmitWin32BoolFromSyscall(asm)
+	arm64LinuxEmitWin32BoolFromSyscall(asm, errnoHome: errnoHome)
 
 	return asm.finishFunction(HostProcessSignalName)
 end 'buildArm64LinuxProcessSignalChunk'
@@ -3017,6 +2992,7 @@ end 'buildArm64LinuxRandomFillChunk'
 export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usage RuntimeUsage, globalData GlobalDataTable)
 	assertLinuxSearchGeometry()
 
+	let errnoHome = linuxErrnoHome(usage)
 	let usesFilesystem = usage.usesManagedFile or usage.usesManagedDirectory
 
 	// ⭐ **FOUR CHUNKS ON FOUR INDEPENDENT GATES, EACH THE Std TIER'S OWN.** `usesWallClock` says the
@@ -3065,15 +3041,15 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 	end 'terminalDetection'
 
 	if usage.usesProcessDebug 'processTrace'
-		chunks.push(buildArm64LinuxTraceRequestChunk())
-		chunks.push(buildArm64LinuxTraceeReadChunk())
-		chunks.push(buildArm64LinuxAwaitTraceeChunk())
-		chunks.push(buildArm64LinuxThreadSignalChunk())
-		chunks.push(buildArm64LinuxProcessSignalChunk())
+		chunks.push(buildArm64LinuxTraceRequestChunk(errnoHome))
+		chunks.push(buildArm64LinuxTraceeReadChunk(errnoHome))
+		chunks.push(buildArm64LinuxAwaitTraceeChunk(errnoHome))
+		chunks.push(buildArm64LinuxThreadSignalChunk(errnoHome))
+		chunks.push(buildArm64LinuxProcessSignalChunk(errnoHome))
 	end 'processTrace'
 
 	if usage.usesProcessLiveness 'processLiveness'
-		chunks.push(buildArm64PosixProcProbeChunk(PosixHostCall.syscall(Arm64LinuxSyscallKill)))
+		chunks.push(buildArm64PosixProcProbeChunk(PosixHostCall.syscall(Arm64LinuxSyscallKill, errnoHome: errnoHome)))
 	end 'processLiveness'
 
 	if linuxReadsEnvironment(usage) 'envRead'
@@ -3081,7 +3057,7 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 	end 'envRead'
 
 	if posixUsesHostObjects(usage) 'hostObjects'
-		chunks.push(buildArm64PosixProcReapChunk(PosixHostCall.syscall(Arm64LinuxSyscallWait4)))
+		chunks.push(buildArm64PosixProcReapChunk(PosixHostCall.syscall(Arm64LinuxSyscallWait4, errnoHome: errnoHome)))
 		chunks.push(buildArm64LinuxWaitCloseChunk())
 	end 'hostObjects'
 
@@ -3108,7 +3084,7 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 		chunks.push(buildArm64LinuxWaitOneChunk(globalData))
 		chunks.push(buildArm64LinuxThreadCreateChunk(globalData))
 		chunks.push(buildArm64LinuxTlsAllocChunk(globalData))
-		chunks.push(buildArm64LinuxTlsSetChunk(globalData))
+		chunks.push(buildArm64LinuxTlsSetChunk())
 
 		// ⭐⭐ **THE CHILD-PROCESS CORE RIDES `usesGt`, NOT A SUBPROCESS BIT, BECAUSE `installGtRuntime` BUILDS
 		// `__gt_process_run` UNCONDITIONALLY.** Every green-thread program statically contains a spawn, a
@@ -3116,7 +3092,7 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 		// so a narrower gate here is a `bl` to a symbol nothing laid out, which is a link failure rather than a
 		// diagnostic.
 		chunks.push(buildArm64PosixProcAwaitChunk())
-		chunks.push(buildArm64LinuxSpawnChunk())
+		chunks.push(buildArm64LinuxSpawnChunk(errnoHome))
 		chunks.push(buildArm64PosixProcExitCodeChunk())
 		chunks.push(buildArm64PosixProcExitSignalChunk())
 
@@ -3139,10 +3115,10 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 	// program that spawns a child WITHOUT reading from it pays for none of them. `osPipePeek` and
 	// `osProcessTerminate` have producers only inside that band.
 	if usage.usesChildPipes 'childPipes'
-		chunks.push(buildArm64PosixPipeChunk(PosixHostCall.syscall(Arm64LinuxSyscallPipe2), flags: LinuxOpenCloseOnExec))
+		chunks.push(buildArm64PosixPipeChunk(PosixHostCall.syscall(Arm64LinuxSyscallPipe2, errnoHome: errnoHome), flags: LinuxOpenCloseOnExec))
 		chunks.push(buildArm64LinuxNetpollArmPipeChunk())
 		chunks.push(buildArm64PosixPipePeekChunk(PosixPollCall.ppollSyscall(Arm64LinuxSyscallPpoll, sigsetBytes: LinuxSigsetBytes)))
-		chunks.push(buildArm64PosixProcTerminateChunk(PosixHostCall.syscall(Arm64LinuxSyscallKill)))
+		chunks.push(buildArm64PosixProcTerminateChunk(PosixHostCall.syscall(Arm64LinuxSyscallKill, errnoHome: errnoHome)))
 	end 'childPipes'
 
 	if posixReadsMonotonicClock(usage) 'clocks'
@@ -3154,11 +3130,11 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 	// `/dev/shm` path itself and unpublishes through a body of its own.
 	if posixUsesNamedSection(usage) 'namedSection'
 		chunks.push(buildArm64LinuxShmPathChunk(globalData))
-		chunks.push(buildArm64PosixShmCreateChunk(arm64LinuxShmHost()))
-		chunks.push(buildArm64PosixShmAdoptChunk(arm64LinuxShmHost()))
+		chunks.push(buildArm64PosixShmCreateChunk(arm64LinuxShmHost(errnoHome)))
+		chunks.push(buildArm64PosixShmAdoptChunk(arm64LinuxShmHost(errnoHome)))
 		chunks.push(buildArm64LinuxShmOpenChunk())
-		chunks.push(buildArm64PosixShmMapChunk(PosixHostCall.syscall(Arm64LinuxSyscallMmap)))
-		chunks.push(buildArm64PosixShmUnmapChunk(PosixHostCall.syscall(Arm64LinuxSyscallMunmap)))
+		chunks.push(buildArm64PosixShmMapChunk(PosixHostCall.syscall(Arm64LinuxSyscallMmap, errnoHome: errnoHome)))
+		chunks.push(buildArm64PosixShmUnmapChunk(PosixHostCall.syscall(Arm64LinuxSyscallMunmap, errnoHome: errnoHome)))
 		chunks.push(buildArm64LinuxShmUnlinkChunk())
 	end 'namedSection'
 
@@ -3166,7 +3142,7 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 	// a failed read with it and every spawn failure publishes through it — and that widening lives inside
 	// `linuxUsesHostSurface`, beside the `.data` word the same bodies stash into.
 	if linuxUsesHostSurface(usage) 'lastError'
-		chunks.push(buildArm64LinuxLastErrorChunk())
+		chunks.push(buildArm64LinuxLastErrorChunk(errnoHome))
 	end 'lastError'
 
 	if usesFilesystem 'filesystem'
@@ -3175,26 +3151,26 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 		chunks.push(buildArm64PosixFillFindDataChunk(arm64LinuxStatLayout()))
 		chunks.push(buildArm64LinuxGlobMatchChunk())
 		chunks.push(buildArm64LinuxDirPrefixChunk())
-		chunks.push(buildArm64LinuxDirFindFirstChunk())
-		chunks.push(buildArm64LinuxDirFindNextChunk())
+		chunks.push(buildArm64LinuxDirFindFirstChunk(errnoHome))
+		chunks.push(buildArm64LinuxDirFindNextChunk(errnoHome))
 		chunks.push(buildArm64LinuxDirFindCloseChunk())
 	end 'filesystem'
 
 	// The open's gate is `PosixRuntime.posixOpensFiles`, which owns the list of its producers.
 	if posixOpensFiles(usage) 'fileOpen'
-		chunks.push(buildArm64LinuxFileOpenChunk())
+		chunks.push(buildArm64LinuxFileOpenChunk(errnoHome))
 	end 'fileOpen'
 
 	if usage.usesManagedFile 'managedFile'
-		chunks.push(buildArm64LinuxFileSizeChunk())
-		chunks.push(buildArm64LinuxPathOpChunk(HostFileDeleteName, syscallNumber: Arm64LinuxSyscallUnlinkat, thirdArgument: LinuxUnlinkFileFlags))
-		chunks.push(buildArm64LinuxFileRenameChunk())
+		chunks.push(buildArm64LinuxFileSizeChunk(errnoHome))
+		chunks.push(buildArm64LinuxPathOpChunk(HostFileDeleteName, syscallNumber: Arm64LinuxSyscallUnlinkat, thirdArgument: LinuxUnlinkFileFlags, errnoHome: errnoHome))
+		chunks.push(buildArm64LinuxFileRenameChunk(errnoHome))
 	end 'managedFile'
 
 	// ⚠ `__gt_subp_write_all` and the collect loop's stdin push emit `StdOp.osWriteFile` on the child's
 	// stdin pipe, so the write half rides the same union its read twin does.
 	if usage.usesManagedFile or usage.usesChildPipes 'managedFileWrite'
-		chunks.push(buildArm64LinuxTransferChunk(HostWriteFileName, syscallNumber: Arm64LinuxSyscallWrite))
+		chunks.push(buildArm64LinuxTransferChunk(HostWriteFileName, syscallNumber: Arm64LinuxSyscallWrite, errnoHome: errnoHome))
 	end 'managedFileWrite'
 
 	// ⚠ **THE READ CHUNK RIDES A UNION BECAUSE `StdOp.osReadFile` HAS THREE PRODUCERS.** `__mf_read`,
@@ -3203,13 +3179,13 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 	// program branching to a symbol nothing emitted, and pushing it under each bit would lay the same symbol
 	// out more than once.
 	if linuxReadsFiles(usage) 'transferIn'
-		chunks.push(buildArm64LinuxTransferChunk(HostReadFileName, syscallNumber: Arm64LinuxSyscallRead))
+		chunks.push(buildArm64LinuxTransferChunk(HostReadFileName, syscallNumber: Arm64LinuxSyscallRead, errnoHome: errnoHome))
 	end 'transferIn'
 
 	if usage.usesManagedDirectory 'managedDirectory'
-		chunks.push(buildArm64LinuxPathOpChunk(HostDirCreateName, syscallNumber: Arm64LinuxSyscallMkdirat, thirdArgument: PosixDirectoryMode as MachineWord))
-		chunks.push(buildArm64LinuxPathOpChunk(HostDirRemoveName, syscallNumber: Arm64LinuxSyscallUnlinkat, thirdArgument: LinuxRemoveDirectoryFlags))
-		chunks.push(buildArm64LinuxDirCurrentPathChunk())
+		chunks.push(buildArm64LinuxPathOpChunk(HostDirCreateName, syscallNumber: Arm64LinuxSyscallMkdirat, thirdArgument: PosixDirectoryMode as MachineWord, errnoHome: errnoHome))
+		chunks.push(buildArm64LinuxPathOpChunk(HostDirRemoveName, syscallNumber: Arm64LinuxSyscallUnlinkat, thirdArgument: LinuxRemoveDirectoryFlags, errnoHome: errnoHome))
+		chunks.push(buildArm64LinuxDirCurrentPathChunk(errnoHome))
 	end 'managedDirectory'
 
 	// The mode→attribute-mask decoder is called by BOTH `mrt_host_fill_find_data` (the cluster above) and
@@ -3222,7 +3198,7 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 	// `__gt_subp_resolve_path` walks `PATH` testing each candidate with `StdOp.osFileAttributes`, so the
 	// executable lookup needs this chunk with no `Directory` call anywhere in the program.
 	if usage.usesManagedDirectory or usage.usesChildPipes 'fileAttributes'
-		chunks.push(buildArm64LinuxFileAttributesChunk())
+		chunks.push(buildArm64LinuxFileAttributesChunk(errnoHome))
 	end 'fileAttributes'
 end 'appendArm64LinuxRuntimeChunks'
 

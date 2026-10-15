@@ -135,15 +135,13 @@ data {
   __mrt_envp@488 = i64 0
   __mrt_signal_stack_bytes@496 = i64 0
   __mrt_tls_next_key@504 = i64 0
-  __mrt_errno@512 = i64 0
-  __mrt_tls_ready@520 = i64 0
-  __io_pipe_seq@528 = i64 0
-  __subp_table@536 = i64 0
-  __subp_last_error@544 = i64 0
-  __slab_arena_list@552 = i64 0
-  __slab_arena_map_l1@560 = i64 0
-  __slab_state@568 = i64 0
-  __mrt_program_started@576 = i8 0
+  __io_pipe_seq@512 = i64 0
+  __subp_table@520 = i64 0
+  __subp_last_error@528 = i64 0
+  __slab_arena_list@536 = i64 0
+  __slab_arena_map_l1@544 = i64 0
+  __slab_state@552 = i64 0
+  __mrt_program_started@560 = i8 0
 }
 
 func @main {
@@ -1720,17 +1718,16 @@ data {
   __sched_sysmon_event@464 = i64 0
   __sched_sysmon_wait@472 = i64 0
   __sched_timer_starts@480 = i64 0
-  __mrt_errno@488 = i64 0
-  __mrt_envp@496 = i64 0
-  __mrt_signal_stack_bytes@504 = i64 0
-  __mrt_tls_next_key@512 = i64 0
-  __io_pipe_seq@520 = i64 0
-  __subp_table@528 = i64 0
-  __subp_last_error@536 = i64 0
-  __slab_arena_list@544 = i64 0
-  __slab_arena_map_l1@552 = i64 0
-  __slab_state@560 = i64 0
-  __mrt_program_started@568 = i8 0
+  __mrt_envp@488 = i64 0
+  __mrt_signal_stack_bytes@496 = i64 0
+  __mrt_tls_next_key@504 = i64 0
+  __io_pipe_seq@512 = i64 0
+  __subp_table@520 = i64 0
+  __subp_last_error@528 = i64 0
+  __slab_arena_list@536 = i64 0
+  __slab_arena_map_l1@544 = i64 0
+  __slab_state@552 = i64 0
+  __mrt_program_started@560 = i8 0
 }
 
 func @main {

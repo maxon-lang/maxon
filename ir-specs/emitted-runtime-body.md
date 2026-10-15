@@ -5524,12 +5524,10 @@ data {
   __mrt_envp@488 = i64 0
   __mrt_signal_stack_bytes@496 = i64 0
   __mrt_tls_next_key@504 = i64 0
-  __mrt_errno@512 = i64 0
-  __mrt_tls_ready@520 = i64 0
-  __slab_arena_list@528 = i64 0
-  __slab_arena_map_l1@536 = i64 0
-  __slab_state@544 = i64 0
-  __mrt_program_started@552 = i8 0
+  __slab_arena_list@512 = i64 0
+  __slab_arena_map_l1@520 = i64 0
+  __slab_state@528 = i64 0
+  __mrt_program_started@536 = i8 0
 }
 
 func @deepRecurse {

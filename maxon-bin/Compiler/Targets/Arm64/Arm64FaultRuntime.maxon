@@ -618,7 +618,7 @@ end 'arm64EmitLinuxSigactionCall'
 // ⛔ **THE INSTALL IS A `match` PER OS.** Each lane's install reads its own struct layout and reaches the
 // kernel its own way, and an arm that inherited the other's would be a `sigaction` GOT call in an ELF image
 // or a raw `svc` in a Mach-O one.
-export function appendArm64FaultRuntimeChunks(chunks FunctionCodeChunkArray, globalData GlobalDataTable, usesGt bool, carriesHostLock bool, target Target)
+export function appendArm64FaultRuntimeChunks(chunks FunctionCodeChunkArray, globalData GlobalDataTable, usesGt bool, carriesHostLock bool, errnoHome LinuxErrnoHome, target Target)
 	match target.os 'installLane'
 		macos then chunks.push(buildArm64DarwinRuntimeInitChunk(usesGt, target: target))
 		linux then chunks.push(buildArm64LinuxRuntimeInitChunk(usesGt, carriesHostLock: carriesHostLock, target: target))
@@ -626,7 +626,7 @@ export function appendArm64FaultRuntimeChunks(chunks FunctionCodeChunkArray, glo
 		wasi then panic("appendArm64FaultRuntimeChunks: `wasm32-wasi` is not an arm64 lane — a WASI component takes a wasm trap, not a signal")
 	end 'installLane'
 
-	chunks.push(buildArm64CheckStdFdsChunk(globalData, os: target.os))
+	chunks.push(buildArm64CheckStdFdsChunk(globalData, os: target.os, errnoHome: errnoHome))
 	chunks.push(buildArm64SignalStackInstallChunk(target.os))
 
 	if target.os == Os.linux 'sizedFromTheAuxiliaryVector'
@@ -642,10 +642,10 @@ export function appendArm64FaultRuntimeChunks(chunks FunctionCodeChunkArray, glo
 	end 'greenThreads'
 end 'appendArm64FaultRuntimeChunks'
 
-function buildArm64CheckStdFdsChunk(globalData GlobalDataTable, os Os) returns FunctionCodeChunk
+function buildArm64CheckStdFdsChunk(globalData GlobalDataTable, os Os, errnoHome LinuxErrnoHome) returns FunctionCodeChunk
 	match os 'lane'
 		macos then return buildArm64PosixCheckStdFdsChunk(globalData, os: os, fcntl: PosixHostCall.importCall(OsImportSlot.fcntl), open: PosixHostCall.importCall(OsImportSlot.open))
-		linux then return buildArm64PosixCheckStdFdsChunk(globalData, os: os, fcntl: PosixHostCall.syscall(Arm64LinuxSyscallFcntl as MachineWord), open: PosixHostCall.syscall(Arm64LinuxSyscallOpenat as MachineWord))
+		linux then return buildArm64PosixCheckStdFdsChunk(globalData, os: os, fcntl: PosixHostCall.syscall(Arm64LinuxSyscallFcntl as MachineWord, errnoHome: errnoHome), open: PosixHostCall.syscall(Arm64LinuxSyscallOpenat as MachineWord, errnoHome: errnoHome))
 		windows then panic("buildArm64CheckStdFdsChunk: there is no arm64-Windows lane in this compiler")
 		wasi then panic("buildArm64CheckStdFdsChunk: `wasm32-wasi` is not an arm64 lane and has no standard descriptors to check")
 	end 'lane'

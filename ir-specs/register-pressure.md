@@ -7409,12 +7409,10 @@ data {
   __mrt_envp@480 = i64 0
   __mrt_signal_stack_bytes@488 = i64 0
   __mrt_tls_next_key@496 = i64 0
-  __mrt_errno@504 = i64 0
-  __mrt_tls_ready@512 = i64 0
-  __slab_arena_list@520 = i64 0
-  __slab_arena_map_l1@528 = i64 0
-  __slab_state@536 = i64 0
-  __mrt_program_started@544 = i8 0
+  __slab_arena_list@504 = i64 0
+  __slab_arena_map_l1@512 = i64 0
+  __slab_state@520 = i64 0
+  __mrt_program_started@528 = i8 0
 }
 
 func @main {

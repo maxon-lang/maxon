@@ -526,13 +526,13 @@ export union PosixHostCall
 
 	// A raw `svc #0` — the arm64-Linux route, where a static image links no libc and the AArch64 syscall
 	// table is the only door.
-	syscall(number MachineWord)
+	syscall(number MachineWord, errnoHome LinuxErrnoHome)
 end 'PosixHostCall'
 
 function arm64PosixEmitHostCall(asm Arm64RuntimeAsm, call PosixHostCall)
 	match call 'route'
 		importCall(slot) then arm64DarwinCallImportAnswering(asm, slot: slot)
-		syscall(number) then arm64EmitSyscall(asm.code, number: number)
+		syscall(number, _) then arm64EmitSyscall(asm.code, number: number)
 	end 'route'
 end 'arm64PosixEmitHostCall'
 
@@ -551,14 +551,14 @@ end 'arm64PosixEmitErrnoAnswer'
 function arm64PosixEmitStashFailure(asm Arm64RuntimeAsm, call PosixHostCall)
 	match call 'route'
 		importCall then break
-		syscall then arm64LinuxEmitStashIfFailed(asm)
+		syscall(_, errnoHome) then arm64LinuxEmitStashIfFailed(asm, errnoHome: errnoHome)
 	end 'route'
 end 'arm64PosixEmitStashFailure'
 
 function arm64PosixEmitPublishErrno(asm Arm64RuntimeAsm, call PosixHostCall, value FullRangeInt)
 	match call 'route'
 		importCall then arm64DarwinEmitPublishAndStashErrno(asm, value: value)
-		syscall then arm64LinuxEmitPublishErrno(asm, value: value)
+		syscall(_, errnoHome) then arm64LinuxEmitPublishErrno(asm, value: value, errnoHome: errnoHome)
 	end 'route'
 end 'arm64PosixEmitPublishErrno'
 

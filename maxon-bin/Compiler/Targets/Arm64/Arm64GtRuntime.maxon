@@ -169,20 +169,12 @@ function emitArm64GtCarryLastError(asm Arm64RuntimeAsm, gtReg Arm64Register, os 
 end 'emitArm64GtCarryLastError'
 
 function emitArm64GtCopyThreadLastError(asm Arm64RuntimeAsm, gtReg Arm64Register, direction GtLastErrorDirection)
-	let noSlot = asm.newLabel()
-	let slotHeld = asm.newLabel()
-
-	arm64LinuxEmitBranchIfThreadHasErrnoSlot(asm, dest: Arm64GtErrnoSlotReg, present: slotHeld)
-	arm64EmitBranchTo(asm, label: noSlot)
-
-	asm.placeLabel(slotHeld)
+	arm64LinuxEmitSlotBlockBase(asm, dest: Arm64GtErrnoSlotReg)
 
 	match direction 'direction'
 		intoGt then emitArm64GtMoveWord(asm, fromBase: Arm64GtErrnoSlotReg, fromOffset: Arm64GtAddressedWord, toBase: gtReg, toOffset: GtOffLastError)
 		fromGt then emitArm64GtMoveWord(asm, fromBase: gtReg, fromOffset: GtOffLastError, toBase: Arm64GtErrnoSlotReg, toOffset: Arm64GtAddressedWord)
 	end 'direction'
-
-	asm.placeLabel(noSlot)
 end 'emitArm64GtCopyThreadLastError'
 
 let Arm64GtAddressedWord = 0

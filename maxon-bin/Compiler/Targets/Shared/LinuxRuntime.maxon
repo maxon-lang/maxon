@@ -127,12 +127,11 @@ export let LinuxSoError = 4
 export let LinuxSockNonBlock = 0x800
 export let LinuxSockCloexec = 0x80000
 
-// ⭐ **THE `.data` WORD EACH LANE'S HOST SURFACE STASHES A FAILED SYSCALL'S REASON INTO.**
-// `StdOp.osLastError` is a SEPARATE op emitted immediately after the call that failed, so the reason must
-// survive from one to the other; a syscall reports it in the return register and keeps no copy, and a raw
-// static image links no libc to hold one. The LABEL is one name because exactly one lane's runtime reaches
-// any image; what sits behind it is the lane's own choice — a process-wide word where there is one thread,
-// a per-OS-thread scheduler slot where a real `clone` can make more.
+// ⭐ **THE `.data` WORD A PROGRAM WITHOUT THE HOST LOCK STASHES A FAILED SYSCALL'S REASON INTO**
+// (`LinuxErrnoHome.dataWord`). `StdOp.osLastError` is a SEPARATE op emitted immediately after the call that
+// failed, so the reason must survive from one to the other; a syscall reports it in the return register and
+// keeps no copy, and a raw static image links no libc to hold one. The LABEL is one name because exactly
+// one lane's runtime reaches any image.
 export let LinuxErrnoLabel = b"__mrt_errno"
 
 // ⭐ **WHO READS THE errno WORD — the union of the facilities that emit `StdOp.osLastError`, and therefore
@@ -142,19 +141,16 @@ export function linuxUsesHostSurface(usage RuntimeUsage) returns bool
 	return usage.usesManagedFile or usage.usesManagedDirectory or usage.usesConsoleStdin or usage.usesChildPipes
 end 'linuxUsesHostSurface'
 
-// ⭐⭐ **WHO TOUCHES IT AT ALL — the readers above, PLUS the bodies that only ever STASH.** DERIVED from its
-// own subset rather than restated, so the `.data` layout cannot come apart from the chunk list.
+// ⭐⭐ **WHO TOUCHES errno AT ALL — the readers above, PLUS the bodies that only ever STASH.** DERIVED from
+// its own subset rather than restated, so the `.data` layout cannot come apart from the chunk list.
 //
 // ⛔ **THE STASH-ONLY PRODUCER IS THE SPAWN, AND IT RIDES `usesGt`.** `installGtRuntime` builds
 // `__gt_process_run` unconditionally, so `mrt_host_spawn` — whose failure arm stashes an errno — is laid out
-// in every green-thread program, including one that reads no pipe and opens no file. MEASURED: a
-// `runProcess("exit 3")` that discards its child's output sets `usesGt` and NOTHING else, and gating the word
-// on the reader union alone answered `GlobalDataTable.dataSectionOffsetOf: no .data slot is labelled
-// '__mrt_errno'` at BACKEND time — a panic and not a diagnostic.
+// in every green-thread program, including one that reads no pipe and opens no file.
 //
 // ⛔ **THE TRACE BAND IS A THIRD STASH-ONLY PRODUCER.** `usesProcessDebug` lays out the `ptrace`, tracee-read,
 // await and signal chunks, and each ends in the syscall tail that stashes a failed call's reason, so a program
-// that only drives a `ProcessTrace` carries the word.
+// that only drives a `ProcessTrace` touches errno.
 //
 // ⚠ **BOTH LINUX LANES ASK THESE TWO, AND NEITHER OWNS THEM.** The question is about `RuntimeUsage` and
 // names no instruction set; a second copy beside one assembler is a facility added to one lane's gate and
@@ -162,9 +158,30 @@ end 'linuxUsesHostSurface'
 // ⚠ **THE SOCKET BAND IS A SECOND STASH-ONLY PRODUCER**, for the reason `PosixRuntime.posixOpensFiles`
 // states: its resolver opens `/etc/hosts` through `mrt_host_file_open`, whose failure arm stashes an errno
 // nothing in a socket program will ever read back.
-export function linuxTouchesErrnoWord(usage RuntimeUsage) returns bool
+function linuxTouchesErrnoWord(usage RuntimeUsage) returns bool
 	return linuxUsesHostSurface(usage) or usage.usesGt or usage.usesManagedSocket or usage.usesProcessDebug
 end 'linuxTouchesErrnoWord'
+
+// Where errno lives, fixed per program at emit time. A program carrying the host lock gives every OS thread
+// its slot block before the thread runs any Maxon code — `mrt_linux_main_thread_block` is first in
+// `mrt_runtime_init`, and every other thread starts with `CLONE_SETTLS` — so slot 0 of that block holds it.
+// A program without the lock starts no second thread (`usesGt` implies the lock), so the `.data` word is
+// its errno. ⚠ A thread started without the lock would share that word with the main thread, and one
+// thread's failure would be reported as the other's.
+export enum LinuxErrnoHome
+	slotBlock
+	dataWord
+end 'LinuxErrnoHome'
+
+export function linuxErrnoHome(usage RuntimeUsage) returns LinuxErrnoHome
+	return LinuxErrnoHome.slotBlock if posixUsesHostLock(usage) else LinuxErrnoHome.dataWord
+end 'linuxErrnoHome'
+
+// The gate both lanes lay `LinuxErrnoLabel` out on. A `dataWord` access with no slot behind the label is a
+// panic at backend time, not a diagnostic.
+export function linuxCarriesErrnoDataWord(usage RuntimeUsage) returns bool
+	return linuxTouchesErrnoWord(usage) and linuxErrnoHome(usage) == LinuxErrnoHome.dataWord
+end 'linuxCarriesErrnoDataWord'
 
 // The read chunk's gate — every opener `PosixRuntime.posixOpensFiles` names, plus standard input, which is
 // a descriptor this surface reads without ever opening one. Derived from its subset so the two cannot come
@@ -555,9 +572,8 @@ export let LinuxMutexReleaseStep = 0xFFFFFFFFFFFFFFFF as MachineWord
 // hands it over with `CLONE_SETTLS`.
 //
 // ⚠ **THE TWO ARCHES READ IT AT VERY DIFFERENT PRICE.** `TPIDR_EL0` is an ordinary register; the FS base
-// needs `arch_prctl(ARCH_GET_FS)`, a SYSCALL — which is why the x64 lane answers *"does this thread have a
-// block?"* from a process-wide `.data` flag instead (`X64LinuxRuntime.x64LinuxEmitStoreErrno` carries why
-// that is sound and not an approximation).
+// needs `arch_prctl(ARCH_GET_FS)`, a SYSCALL — which is why the x64 lane reaches the block only through the
+// segment override.
 //
 // ⚠ **KEY 0 IS NEVER HANDED OUT, EXACTLY AS ON DARWIN, AND FOR THE SAME REASON.** The Std tier publishes
 // `key * 8 + tlsSlotArrayBase(target)` and every reader treats a ZERO offset as *"`__sched_init_procs` has

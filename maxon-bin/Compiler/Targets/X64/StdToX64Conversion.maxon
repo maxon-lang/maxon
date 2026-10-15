@@ -4759,9 +4759,6 @@ export type StdToX64Lowering
 
 	// Lower `tlsSetValue(index, value)` to `TlsSetValue(index, value)` — args rcx/rdx, the BOOL result ignored.
 	function lowerTlsSetValue(indexId ValueId, valueId ValueId, dstBlock IrBlock)
-		// On Linux a chunk rather than an inline `mov fs:[key*8], value`, because the store owes an
-		// assertion the Win32 import does not: it needs a slot block, and a thread that has none would
-		// write into the null page (`buildX64LinuxTlsSetChunk`).
 		self.emitHostCall(dstBlock, callee: self.hostCalleeOn(IatSlot.TlsSetValue, chunk: LinuxTlsSetName), args: twoArgs(indexId, second: valueId))
 	end 'lowerTlsSetValue'
 
