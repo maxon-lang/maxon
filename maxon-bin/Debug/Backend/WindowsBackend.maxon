@@ -10,6 +10,9 @@ let ExceptionCodeSingleStep = 0x80000004
 let DetachDrainBudgetMs = 2000
 let DetachDrainSliceMs = 50
 
+let Win64GprCount = 16
+let Win64XmmCount = 16
+
 type BackendThreadEntry
 	export let id as BackendThreadId
 	export let handle as DebugHandle
@@ -34,7 +37,7 @@ end 'BackendProcessHandle'
 function registerFileOf(context RegisterBlock) returns DebugRegisterFile throws DebuggeeError
 	var file = DebugRegisterFile.create()
 
-	for slot in 0 upto BackendGprSlots 'eachGeneralRegister'
+	for slot in 0 upto Win64GprCount 'eachGeneralRegister'
 		file.setValue(slot as BackendRegisterNumber, value: (try context.gpr(slot as Win64GprIndex)) as BackendWord)
 	end 'eachGeneralRegister'
 
@@ -489,7 +492,7 @@ export type WindowsBackend
 	function vectorsFilled(handle DebugHandle, into DebugRegisterFile)
 		let context = try self.port.readContext(handle) otherwise return
 
-		for lane in 0 upto BackendVectorSlots 'eachVectorRegister'
+		for lane in 0 upto Win64XmmCount 'eachVectorRegister'
 			let word = try context.xmmLane(lane as Win64XmmIndex) otherwise panic("WindowsBackend.vectorsFilled: xmmLane refused lane {lane} of a context readContext just produced — the sixteen XMM lanes sit at constant offsets inside the fixed-length CONTEXT")
 			into.setValue((BackendGprSlots + lane) as BackendRegisterNumber, value: word as BackendWord)
 		end 'eachVectorRegister'
