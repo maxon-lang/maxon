@@ -16,7 +16,10 @@ a performance-motivated fork as duplication until proven otherwise — if it mus
 owes a reason why the two cannot be one, and its absence is the finding.
 
 **Fix what you find even if it is pre-existing** — the goal is that quality improves continuously, and
-AGENTS.md is explicit that you do not care whether an issue predates the change.
+AGENTS.md is explicit that you do not care whether an issue predates the change. ⚠ **Under `/land`,
+WHO fixes it depends on whether it is related to the change** (`/land` §10): a related finding you fix
+in this diff; an unrelated one — pre-existing, and outside what the change wrote or changed — you
+REPORT, and the caller lands it in its own `/land` right after this one.
 
 **Do not chase green.** Your job is **QUALITY and LATENT BUGS**, not re-running the suite — iterate on
 `--filter` while you work.
@@ -58,7 +61,9 @@ formatting.
 
 ## 3. ⭐ ELIMINATE DUPLICATED CODE — the top priority, by user directive
 
-It applies to pre-existing duplication in the files touched, not just new code.
+It applies to pre-existing duplication in the files touched, not just new code. Under `/land`,
+duplication the new code takes part in is fixed in this diff; pre-existing duplication it does not take
+part in is reported, for the follow-up ledger (`/land` §10).
 
 **Hunt the dangerous kind: logic duplicated across a boundary, where nothing MAKES the copies agree.**
 They agree today; a clause added to one and not the other does not read as a bug at either site. This is
@@ -143,9 +148,9 @@ that summarizes **the change**, not what happened during the review.
 - If you find something real but genuinely OUTSIDE this change — a **compiler bug this change does
   not own**, a **distinct feature**, or a **measured-linear perf debt** — **say so and leave
   it for your caller to triage**, rather than smuggling it in OR deferring it on your own authority.
-  It goes in your REPORT — naming the defect, its file:line and how it was seen — and the caller FIXES
-  it, in this change or its own commit; standalone, fix it yourself in a separate commit. ⛔ It is never
-  filed to `todo.md`. ⚠ **"Too big to ride
+  It goes in your REPORT — naming the defect, its file:line, how it was seen and a program that
+  reproduces it — and the caller FIXES it, in its own `/land` right after this one (`/land` §10);
+  standalone, fix it yourself in a separate commit. ⛔ It is never filed to `todo.md`. ⚠ **"Too big to ride
   along" is NOT the same as "a wrong answer in the files I just reviewed"** — that one you fix, exactly
   like a leak. Do not let this bullet become an escape hatch for a defect the change owns.
 

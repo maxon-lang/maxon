@@ -1,4 +1,5 @@
-You do not care if an issue is pre-existing. Just debug and fix it.
+You do not care if an issue is pre-existing. Just debug and fix it. One found while a change is in
+progress, and not related to it, is noted and landed right after that change (`/land` §10).
 
 Do not use "cmd /c" to run commands
 

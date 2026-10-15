@@ -175,7 +175,9 @@ feeding a gate that is going to run anyway beats a run nobody can attribute.
 4. **The DIAGNOSIS you already have** — symptoms, exit codes, stderr, the call sites you read, the
    hypotheses you already refuted. Making an agent re-derive this is the one waste delegation exists to
    prevent.
-5. **Its STOP RULE**: stop when your filter is green; the full suite is the coordinator's.
+5. **Its STOP RULE**: stop when your filter is green; the full suite is the coordinator's. **A defect you
+   find that is NOT RELATED to this change (the test is §10's) you do not fix** — you name it in your
+   report: what is wrong, `file:line`, how you saw it, and a program that reproduces it.
 6. **The gate table above**, in one line: which runs are yours, which are not.
 7. **"No manual tests"** — no sabotage, no hand-run probe or scratch program to confirm anything. A
    check worth running goes into the set as a case; anything else is not run (the box below).
@@ -367,7 +369,9 @@ missing or something changed after it.
 - ⛔ **Never turn a case green by narrowing what it tests** — not the spec text, not the filter, not a
   marker. A green suite that tests nothing is the most expensive lie a test runner can tell.
 - **A defect ANYONE finds on the way is FIXED, not filed** — a wrong answer as much as a leak, whether or
-  not the suite is green over it. **And the reproduction that found it becomes a case in the set.** A
+  not the suite is green over it. **When it is RELATED to this change it is fixed NOW, and the
+  reproduction that found it becomes a case in the set; when it is not, it goes on the FOLLOW-UP LEDGER
+  and is landed right after this change (§10)** — fixed all the same, without slowing this one. A
   hand-run check is never evidence — it is unrepeatable, unreviewable, and invisible to the wasm lane a
   spec case reaches for free — so none is run to verify anything (the NO MANUAL TESTS box).
 - **When the set is green, re-run §1's count check yourself**, then stop editing for correctness. An
@@ -410,9 +414,12 @@ situation:
 - **Say this is a `/land` change** — the diff is uncommitted in the main checkout, there is no worktree
   and no branch, and the battery is YOURS, minutes later. The skill's steps 6–7 (gates, commit) are
   standalone-only and it must skip them.
-- **Anything it leaves for triage arrives in its REPORT, and you decide it here**: a defect this change
-  owns is fixed now; a real finding outside it is fixed too — in this change, or in its own commit
-  landed right after this one. ⛔ **Never a `todo.md` bullet**: a filed defect is a deferred one
+- **Tell it that a finding NOT RELATED to this change (§10's test) is REPORTED, not fixed** — the
+  skill's "fix what you find even if it is pre-existing" is satisfied by the follow-up /land, not by
+  this diff.
+- **Anything it leaves for triage arrives in its REPORT, and you decide it here**, by §10's test: a
+  related defect is fixed now; an unrelated one goes on the follow-up ledger and gets its own `/land`
+  right after this one. ⛔ **Never a `todo.md` bullet**: a filed defect is a deferred one
   (AGENTS.md, "No skipped work").
 - ⛔ **COMMENTS ARE NOT ITS CONCERN** — the tree it reads has none by design and §6 writes them all,
   minutes later. Do not brief one in: this file's own warning applies, and a specific instruction in
@@ -563,7 +570,41 @@ not the tree you would push: **rebase and RE-RUN §8** before pushing again.
 > cross lane that missed it.
 
 Then report in a few lines: the change, the cases that went red → green, each gate's number, and
-anything skipped with the reason — including the lanes only CI runs.
+anything skipped with the reason — including the lanes only CI runs. **Then go straight to §10** — that
+report is not the end of the task while the ledger has an entry.
+
+## 10. The follow-up ledger — unrelated defects land AFTER the change, every one
+
+**Every defect found during the change gets fixed. Only the ones the change does not need wait — and they
+wait for the push, not longer.**
+
+> ### ⭐ RELATED — fixed now, in this change
+> - the acceptance set, or a gate in §8, **cannot go green** without it — including a red you did not
+>   cause, which still gets its own commit before yours (§8);
+> - it is in code **this change wrote or changed** — a defect the diff introduced or carries, a
+>   duplication the new code takes part in, a superlinearity in the new code.
+>
+> **Everything else is UNRELATED** — a pre-existing defect in a file you touched but not in what you
+> changed, a reviewer's finding elsewhere, pre-existing duplication the new code does not take part in,
+> a missed diagnostic you happened to see. ⚠ "It is in a file I am editing anyway" does not make it
+> related; "it blocks a case" does.
+
+**The ledger is a file OUTSIDE the checkout** — under `/plan-and-land`, the plan file's §10; otherwise
+`C:\Users\Eric\.claude\plans\<slug>-followups.md`. In the checkout it would be dirt for §0 or be swept into
+§9's commit. An entry is written **the moment the finding arrives**, from whoever reported it: what is
+wrong, `file:line`, how it was seen, and **a program that reproduces it** — that program is the seed of
+the follow-up's red set.
+
+**After the push, run `/land` on each entry in turn**, in ledger order, one commit each, each a full
+`/land` with its own red set and battery. Strike each entry with its sha as it lands. A follow-up's own
+unrelated findings are appended to the **same** ledger. An entry whose red will not go red was fixed on
+the way — strike it with the sha that fixed it.
+
+- ⛔ **The task is done when the ledger is EMPTY, not when the first push lands.** Do not stop to
+  report between follow-ups; one report at the end names every sha.
+- ⛔ **The ledger is not `todo.md` and not a memory note** — it is a work queue this session drains.
+- **An entry that needs a design ruling is a question** to the user, asked when its turn comes — never
+  a skipped entry.
 
 ## ⛔ HALT AND ASK
 
