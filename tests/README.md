@@ -1227,10 +1227,9 @@ what makes the absences a reading rather than a search that found nothing.
 is the other reason each case demands a presence beside its absences: the acquire COUNT in the steal
 case, and an acquire ahead of the first slab call in the other.
 
-⚠ **THIS CORPUS RUNS BY NAME ALONE**: `ci.yml` runs `spec-test`, `tests/lsp`, `tests/fmt`, `tests/spec-harness`, `tests/ladders`, `tests/examples`, `tests/build-manifest` and — once `vendor/` is staged —
-`tests/cli` on every lane, and `tests/debug`, `tests/dap` and `tests/mcp` on every lane
-`BackendChoice.backendForHost` serves, which is all four of them. This gate is one a `/land` battery or a
-contributor runs by name — `maxon test tests/emitted-runtime`.
+⚠ **`ci.yml` RUNS THIS CORPUS ON EVERY LANE**, and `/land`'s battery runs it beside the other tree
+corpora. The arm64 cases cross-build with `--target=`, so every host reads the same Target IR; the two
+pinned-machine cases build and run for the host, so each lane's own scheduler is what they test.
 
 It applies rule 1's `.fixture` half only (no `dot-` names) and rule 4 (every child runs in a staging
 directory under `temp/emitted-runtime/`, named for the CASE, because `maxon test` runs files

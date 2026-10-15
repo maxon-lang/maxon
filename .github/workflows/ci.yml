@@ -60,6 +60,7 @@ on:
       - 'tests/cli/**'
       - 'tests/build-manifest/**'
       - 'tests/examples/**'
+      - 'tests/emitted-runtime/**'
       - '!scripts/**'
       - 'scripts/fetch-seed.sh'
       - 'scripts/seed-tag'
@@ -165,7 +166,7 @@ jobs:
         if: steps.seed.outputs.seeded == 'yes'
         run: ./maxon-bin/.maxon/maxon test tests/lsp
 
-      # These three are tree-level gates `spec-test` does not run.
+      # These are tree-level gates `spec-test` does not run.
       - name: Formatter corpus
         if: steps.seed.outputs.seeded == 'yes'
         run: ./maxon-bin/.maxon/maxon test tests/fmt
@@ -185,6 +186,10 @@ jobs:
       - name: Build manifest corpus
         if: steps.seed.outputs.seeded == 'yes'
         run: ./maxon-bin/.maxon/maxon test tests/build-manifest
+
+      - name: Emitted runtime corpus
+        if: steps.seed.outputs.seeded == 'yes'
+        run: ./maxon-bin/.maxon/maxon test tests/emitted-runtime
 
       # ⭐ THE ONLY DEBUGGER CODE CI RUNS. `spec-test` covers the language; the debugger's driver, its
       # DAP server and its MCP tools are exercised by these three corpora and by nothing else, so a lane

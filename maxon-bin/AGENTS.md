@@ -282,10 +282,10 @@ facts worth knowing before you get there:
   ```
   ./maxon-bin/.maxon/maxon.exe test tests/test-command
   ```
-  ⚠ **CI runs seven of them on every lane** — `tests/lsp`, `tests/fmt`, `tests/spec-harness`, `tests/ladders`, `tests/examples`, `tests/build-manifest` and
-  `tests/cli` — plus `tests/debug`,
+  ⚠ **CI runs eight of them on every lane** — `tests/lsp`, `tests/fmt`, `tests/spec-harness`, `tests/ladders`, `tests/examples`, `tests/build-manifest`,
+  `tests/emitted-runtime` and `tests/cli` — plus `tests/debug`,
   `tests/dap` and `tests/mcp` on every native lane, each through its own host's debug backend, and `/land`'s battery runs `fmt`, `spec-harness`,
-  `ladders` and `examples` beside the suite and the self-compile. Every other corpus runs only when someone names it.
+  `ladders`, `examples` and `emitted-runtime` beside the suite and the self-compile. Every other corpus runs only when someone names it.
 - ⛔ **EXPECTATIONS ARE GENERATED, NEVER HAND-WRITTEN** — e.g. `python
   tests/fmt/generate-expectations.py` runs the compiler and records its real answers, so a corpus
   pins what the tool DOES rather than what its author expected. Re-run the generator after changing
