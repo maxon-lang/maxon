@@ -971,7 +971,7 @@ end 'each'
 - Every wait PARKS: the waiter gives its machine back to the scheduler and whoever completes the wait readies it. A coroutine hands over at `await` points, `sleep` calls, `Scheduler.yield()` and I/O, never in between
 - A green thread that has held its processor for 10 ms is preempted at its next function entry and may resume on another OS thread
 - Reference counting is plain, not atomic — a green thread and its coroutines are one strand, and at most one machine runs a strand's members at a time
-- Growable stacks, `main` included (2KB initial, 8KB on x64-Windows; doubles until the frame fits, up to 1GB)
+- Growable stacks, `main` included: a thread starts on 2 KiB, or 16 KiB on x64-Windows, whose fault frames land on the faulting stack. After every 64 finished threads, the starting size becomes the smallest power of two from that floor up to 64 KiB that holds the average stack those threads needed. A stack doubles until the frame fits, up to 1 GiB
 - Throwing async functions require `try await` (not plain `await`), except inside a `try` block or a `test` body
 - `async` target must yield (contain I/O or `await` points)
 - `async` arguments are SHARED with the coroutine, as with an ordinary call: the coroutine runs on the caller's green thread, so a local `let` or `var` passed to `async` stays readable by the caller, and a parameter the coroutine reassigns gets storage the coroutine owns. A service send is the call that moves a mutable value

@@ -9,7 +9,8 @@ category: concurrency
 
 ## Documentation
 
-A green thread starts on a tiny **2 KB** stack and grows it ON DEMAND: every function's prologue projects its
+A green thread starts on a tiny seed stack — **2 KiB**, or 16 KiB on x64-windows, whose fault frames land on
+the faulting stack — and grows it ON DEMAND: every function's prologue projects its
 frame against a per-thread stack guard, and when the frame would overflow, it calls the runtime grower
 `__gt_morestack`, which allocates a stack twice the size, COPIES the old stack onto it, and **walks the
 saved-frame-pointer chain** fixing every interior pointer by the relocation offset — so the thread continues on
@@ -35,7 +36,7 @@ Growth is transparent: a value live across the growth (a parameter, a partial su
 relocation as before, because the copy preserves the bytes and the chain walk fixes the pointers. Growth also
 composes with the mid-body yield — a thread that `sleep`s, resumes, and THEN recurses deep grows on its resumed
 stack — and with completion — a thread whose grown stack is released on completion leaves the next spawn a fresh
-2 KB seed.
+seed.
 
 **Targets — the green-thread substrate gate; see `async-scheduler.md`'s *Targets* section for the one
 statement of it.** `__gt_morestack` is hand-written x64 assembly and relocates a stack obtained from

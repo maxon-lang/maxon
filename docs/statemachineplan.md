@@ -35,7 +35,7 @@ type *cannot* express:
 In many languages `async` *is* a compiler-synthesized state machine, so "add an
 FSM" feels like reusing that transform. **Maxon's async does not lower to a
 state machine** — it's stackful green threads on a GMP scheduler
-(`__gt_spawn` / `__gt_await`, growable 2KB stacks). There is no suspend/resume
+(`__gt_spawn` / `__gt_await`, growable stacks). There is no suspend/resume
 state-machine pass to reuse. This construct is a *static-checking* feature over
 `union` + `match`, not a new runtime.
 
