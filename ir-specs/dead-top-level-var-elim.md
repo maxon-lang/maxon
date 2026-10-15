@@ -372,9 +372,6 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.leaRegRegImm32 rax, rax, 8
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.movRegReg r8, rax
-  tryok:
-    x64.movRegReg rax, r8
   trycont:
     x64.leaRegGlobal rcx, __data_probe
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
@@ -394,7 +391,9 @@ func @main {
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
-    x64.jmp tryok
+  critsplit:
+    x64.movRegReg rax, r8
+    x64.jmp trycont
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at dead-global-dropped-beside-a-live-managed-one.test:7: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
@@ -436,9 +435,6 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.leaRegRegImm32 rax, rax, 8
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.movRegReg r8, rax
-  tryok:
-    x64.movRegReg rax, r8
   trycont:
     x64.leaRegGlobal rcx, __data_probe
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
@@ -457,7 +453,9 @@ func @main {
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
-    x64.jmp tryok
+  critsplit:
+    x64.movRegReg rax, r8
+    x64.jmp trycont
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at dead-global-dropped-beside-a-live-managed-one.test:7: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic

@@ -2517,10 +2517,7 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect TcpClient.send
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, ifelse#16
-  sent:
-    x64.movRegReg rax, r14
-    x64.jmp ifcont#22
+    x64.jcc equal, sent
   ifelse#16:
     x64.leaRegRegImm32 rax, r10, -1
     x64.cmpRegImm32 rax, 5
@@ -2533,6 +2530,10 @@ func @main {
     x64.callDirect TcpClient.setWriteDeadline
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#21
+    x64.jmp tryok#20
+  sent:
+    x64.movRegReg rax, r14
+    x64.jmp ifcont#22
   tryok#20:
     x64.movRegReg r8, r13
     x64.movRegReg rax, r14
@@ -3326,10 +3327,7 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect TcpClient.send
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, ifelse#16
-  sent:
-    x64.movRegReg rax, r14
-    x64.jmp ifcont#22
+    x64.jcc equal, sent
   ifelse#16:
     x64.leaRegRegImm32 rax, r10, -1
     x64.cmpRegImm32 rax, 5
@@ -3342,6 +3340,10 @@ func @main {
     x64.callDirect TcpClient.setWriteDeadline
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#21
+    x64.jmp tryok#20
+  sent:
+    x64.movRegReg rax, r14
+    x64.jmp ifcont#22
   tryok#20:
     x64.movRegReg r8, r13
     x64.movRegReg rax, r14
@@ -3995,10 +3997,7 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl TcpClient.send
     arm64.cmp x9, 0
-    arm64.b.ne ifelse#16
-  sent:
-    arm64.movRegReg x1, x22
-    arm64.b ifcont#22
+    arm64.b.eq sent
   ifelse#16:
     arm64.sub x0, x9, 1
     arm64.cmp x0, 5
@@ -4011,6 +4010,10 @@ func @main {
     arm64.bl TcpClient.setWriteDeadline
     arm64.cmp x9, 0
     arm64.b.ne tryerr#21
+    arm64.b tryok#20
+  sent:
+    arm64.movRegReg x1, x22
+    arm64.b ifcont#22
   tryok#20:
     arm64.movRegReg x0, x21
     arm64.movRegReg x1, x22
@@ -4660,10 +4663,7 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl TcpClient.send
     arm64.cmp x9, 0
-    arm64.b.ne ifelse#16
-  sent:
-    arm64.movRegReg x1, x22
-    arm64.b ifcont#22
+    arm64.b.eq sent
   ifelse#16:
     arm64.sub x0, x9, 1
     arm64.cmp x0, 5
@@ -4676,6 +4676,10 @@ func @main {
     arm64.bl TcpClient.setWriteDeadline
     arm64.cmp x9, 0
     arm64.b.ne tryerr#21
+    arm64.b tryok#20
+  sent:
+    arm64.movRegReg x1, x22
+    arm64.b ifcont#22
   tryok#20:
     arm64.movRegReg x0, x21
     arm64.movRegReg x1, x22

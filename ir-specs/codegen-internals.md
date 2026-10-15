@@ -2622,7 +2622,26 @@ func @main {
     x64.movRegReg rax, r8
     x64.loadRegSlot r8, slot0
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#1
+    x64.jcc notEqual, tryerr#2
+    x64.jmp tryok#1
+  __im_slow#27:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r8
+    x64.callDirect __managed_set
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#4
+    x64.jmp tryok#3
+  __im_slow#33:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r8
+    x64.callDirect __managed_set
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#6
+    x64.jmp __im_load#40
   tryerr#2:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at rdata-cow-multiple-mutations.test:4: test invariant: set OOB\x0a"
     x64.callDirect mrt_panic
@@ -2631,14 +2650,6 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __im_slow#27:
-    x64.storeSlotReg slot0, r8
-    x64.movRegReg rcx, r8
-    x64.callDirect __managed_set
-    x64.movRegReg rax, r8
-    x64.loadRegSlot r8, slot0
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#3
   tryerr#4:
     x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at rdata-cow-multiple-mutations.test:5: test invariant: set OOB\x0a"
     x64.callDirect mrt_panic
@@ -2647,14 +2658,6 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __im_slow#33:
-    x64.storeSlotReg slot0, r8
-    x64.movRegReg rcx, r8
-    x64.callDirect __managed_set
-    x64.movRegReg rax, r8
-    x64.loadRegSlot r8, slot0
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, __im_load#40
   tryerr#6:
     x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at rdata-cow-multiple-mutations.test:6: test invariant: set OOB\x0a"
     x64.callDirect mrt_panic
@@ -2780,7 +2783,26 @@ func @main {
     x64.movRegReg rax, r8
     x64.loadRegSlot r8, slot0
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#1
+    x64.jcc notEqual, tryerr#2
+    x64.jmp tryok#1
+  __im_slow#27:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r8
+    x64.callDirect __managed_set
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#4
+    x64.jmp tryok#3
+  __im_slow#33:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r8
+    x64.callDirect __managed_set
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#6
+    x64.jmp __im_load#40
   tryerr#2:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at rdata-cow-multiple-mutations.test:4: test invariant: set OOB\x0a"
     x64.callDirect mrt_panic
@@ -2789,14 +2811,6 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __im_slow#27:
-    x64.storeSlotReg slot0, r8
-    x64.movRegReg rcx, r8
-    x64.callDirect __managed_set
-    x64.movRegReg rax, r8
-    x64.loadRegSlot r8, slot0
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#3
   tryerr#4:
     x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at rdata-cow-multiple-mutations.test:5: test invariant: set OOB\x0a"
     x64.callDirect mrt_panic
@@ -2805,14 +2819,6 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __im_slow#33:
-    x64.storeSlotReg slot0, r8
-    x64.movRegReg rcx, r8
-    x64.callDirect __managed_set
-    x64.movRegReg rax, r8
-    x64.loadRegSlot r8, slot0
-    x64.cmpRegImm32 r10, 0
-    x64.jcc equal, __im_load#40
   tryerr#6:
     x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at rdata-cow-multiple-mutations.test:6: test invariant: set OOB\x0a"
     x64.callDirect mrt_panic
@@ -2931,7 +2937,24 @@ func @main {
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.cmp x9, 0
-    arm64.b.eq tryok#1
+    arm64.b.ne tryerr#2
+    arm64.b tryok#1
+  __im_slow#27:
+    arm64.storeSlotReg slot0, x0
+    arm64.bl __managed_set
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#4
+    arm64.b tryok#3
+  __im_slow#33:
+    arm64.storeSlotReg slot0, x0
+    arm64.bl __managed_set
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#6
+    arm64.b __im_load#40
   tryerr#2:
     arm64.leaRdata x0, __str_blob_1  ; "panic at rdata-cow-multiple-mutations.test:4: test invariant: set OOB\x0a"
     arm64.bl mrt_panic
@@ -2939,13 +2962,6 @@ func @main {
     arm64.loadRegSlot x19, slot1
     arm64.epilogue 32
     arm64.ret
-  __im_slow#27:
-    arm64.storeSlotReg slot0, x0
-    arm64.bl __managed_set
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.cmp x9, 0
-    arm64.b.eq tryok#3
   tryerr#4:
     arm64.leaRdata x0, __str_blob_2  ; "panic at rdata-cow-multiple-mutations.test:5: test invariant: set OOB\x0a"
     arm64.bl mrt_panic
@@ -2953,13 +2969,6 @@ func @main {
     arm64.loadRegSlot x19, slot1
     arm64.epilogue 32
     arm64.ret
-  __im_slow#33:
-    arm64.storeSlotReg slot0, x0
-    arm64.bl __managed_set
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.cmp x9, 0
-    arm64.b.eq __im_load#40
   tryerr#6:
     arm64.leaRdata x0, __str_blob_3  ; "panic at rdata-cow-multiple-mutations.test:6: test invariant: set OOB\x0a"
     arm64.bl mrt_panic
@@ -3078,7 +3087,24 @@ func @main {
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.cmp x9, 0
-    arm64.b.eq tryok#1
+    arm64.b.ne tryerr#2
+    arm64.b tryok#1
+  __im_slow#27:
+    arm64.storeSlotReg slot0, x0
+    arm64.bl __managed_set
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#4
+    arm64.b tryok#3
+  __im_slow#33:
+    arm64.storeSlotReg slot0, x0
+    arm64.bl __managed_set
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#6
+    arm64.b __im_load#40
   tryerr#2:
     arm64.leaRdata x0, __str_blob_1  ; "panic at rdata-cow-multiple-mutations.test:4: test invariant: set OOB\x0a"
     arm64.bl mrt_panic
@@ -3086,13 +3112,6 @@ func @main {
     arm64.loadRegSlot x19, slot1
     arm64.epilogue 32
     arm64.ret
-  __im_slow#27:
-    arm64.storeSlotReg slot0, x0
-    arm64.bl __managed_set
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.cmp x9, 0
-    arm64.b.eq tryok#3
   tryerr#4:
     arm64.leaRdata x0, __str_blob_2  ; "panic at rdata-cow-multiple-mutations.test:5: test invariant: set OOB\x0a"
     arm64.bl mrt_panic
@@ -3100,13 +3119,6 @@ func @main {
     arm64.loadRegSlot x19, slot1
     arm64.epilogue 32
     arm64.ret
-  __im_slow#33:
-    arm64.storeSlotReg slot0, x0
-    arm64.bl __managed_set
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.cmp x9, 0
-    arm64.b.eq __im_load#40
   tryerr#6:
     arm64.leaRdata x0, __str_blob_3  ; "panic at rdata-cow-multiple-mutations.test:6: test invariant: set OOB\x0a"
     arm64.bl mrt_panic
@@ -3166,6 +3178,7 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.leaRegRegImm32 rax, rax, 8
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
+  tryok:
     x64.movRegReg r8, rax
   trycont:
     x64.cmpRegImm32 r8, 0
@@ -3182,7 +3195,9 @@ func @main {
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
-    x64.jmp trycont
+  critsplit:
+    x64.movRegReg rax, r8
+    x64.jmp tryok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at rdata-global-let-array-uses-rdata.test:5: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
@@ -3219,6 +3234,7 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.leaRegRegImm32 rax, rax, 8
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
+  tryok:
     x64.movRegReg r8, rax
   trycont:
     x64.cmpRegImm32 r8, 0
@@ -3234,7 +3250,9 @@ func @main {
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
-    x64.jmp trycont
+  critsplit:
+    x64.movRegReg rax, r8
+    x64.jmp tryok
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at rdata-global-let-array-uses-rdata.test:5: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
@@ -3392,7 +3410,7 @@ func @main {
     x64.jcc notEqual, __im_slow#10
   __im_store:
     x64.storeBaseDispReg.word64 [rsi + 0], rax
-  tryok:
+  tryok#1:
     x64.leaRegGlobal rax, __data_globalArr
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.movRegImm32 rdx, 0
@@ -3406,6 +3424,7 @@ func @main {
   __im_load:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
+  tryok#3:
     x64.movRegReg r8, rax
   trycont:
     x64.cmpRegImm32 r8, 0
@@ -3421,7 +3440,15 @@ func @main {
   __im_slow#10:
     x64.callDirect __managed_set
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
+    x64.jcc notEqual, tryerr#2
+    x64.jmp tryok#1
+  __im_slow#16:
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#4
+  critsplit:
+    x64.movRegReg rax, r8
+    x64.jmp tryok#3
   tryerr#2:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at rdata-global-var-array-cow.test:5: test invariant: set OOB\x0a"
     x64.callDirect mrt_panic
@@ -3429,11 +3456,6 @@ func @main {
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  __im_slow#16:
-    x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#4
-    x64.jmp trycont
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at rdata-global-var-array-cow.test:6: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
@@ -3482,7 +3504,7 @@ func @main {
     x64.jcc notEqual, __im_slow#10
   __im_store:
     x64.storeBaseDispReg.word64 [rsi + 0], rax
-  tryok:
+  tryok#1:
     x64.leaRegGlobal rax, __data_globalArr
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.movRegImm32 rdx, 0
@@ -3496,6 +3518,7 @@ func @main {
   __im_load:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
+  tryok#3:
     x64.movRegReg r8, rax
   trycont:
     x64.cmpRegImm32 r8, 0
@@ -3510,7 +3533,15 @@ func @main {
   __im_slow#10:
     x64.callDirect __managed_set
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok
+    x64.jcc notEqual, tryerr#2
+    x64.jmp tryok#1
+  __im_slow#16:
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#4
+  critsplit:
+    x64.movRegReg rax, r8
+    x64.jmp tryok#3
   tryerr#2:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at rdata-global-var-array-cow.test:5: test invariant: set OOB\x0a"
     x64.callDirect mrt_panic
@@ -3518,11 +3549,6 @@ func @main {
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  __im_slow#16:
-    x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#4
-    x64.jmp trycont
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at rdata-global-var-array-cow.test:6: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
@@ -3593,18 +3619,19 @@ func @main {
   __im_slow#10:
     arm64.bl __managed_set
     arm64.cmp x9, 0
-    arm64.b.eq tryok
+    arm64.b.ne tryerr#2
+    arm64.b tryok
+  __im_slow#16:
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#4
+    arm64.b trycont
   tryerr#2:
     arm64.leaRdata x0, __str_blob_1  ; "panic at rdata-global-var-array-cow.test:5: test invariant: set OOB\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret
-  __im_slow#16:
-    arm64.bl __managed_get
-    arm64.cmp x9, 0
-    arm64.b.ne tryerr#4
-    arm64.b trycont
   __rc_panic:
     arm64.leaRdata x0, __str_blob_3  ; "panic at rdata-global-var-array-cow.test:6: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
@@ -3676,18 +3703,19 @@ func @main {
   __im_slow#10:
     arm64.bl __managed_set
     arm64.cmp x9, 0
-    arm64.b.eq tryok
+    arm64.b.ne tryerr#2
+    arm64.b tryok
+  __im_slow#16:
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#4
+    arm64.b trycont
   tryerr#2:
     arm64.leaRdata x0, __str_blob_1  ; "panic at rdata-global-var-array-cow.test:5: test invariant: set OOB\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret
-  __im_slow#16:
-    arm64.bl __managed_get
-    arm64.cmp x9, 0
-    arm64.b.ne tryerr#4
-    arm64.b trycont
   __rc_panic:
     arm64.leaRdata x0, __str_blob_3  ; "panic at rdata-global-var-array-cow.test:6: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
@@ -3772,6 +3800,7 @@ func @main {
   __im_load:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
+  tryok:
     x64.movRegReg r8, rax
   __il_cont:
     x64.cmpRegImm32 r8, 0
@@ -3787,7 +3816,15 @@ func @main {
   __im_slow#7:
     x64.callDirect __managed_set
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, __il_body
+    x64.jcc notEqual, tryerr#2
+    x64.jmp __il_body
+  __im_slow#18:
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#15
+  critsplit:
+    x64.movRegReg rax, r8
+    x64.jmp tryok
   tryerr#2:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at rdata-global-var-array-cow-preserves-original.test:11: test invariant: set OOB\x0a"
     x64.callDirect mrt_panic
@@ -3795,11 +3832,6 @@ func @main {
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  __im_slow#18:
-    x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#15
-    x64.jmp __il_cont
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at rdata-global-var-array-cow-preserves-original.test:12: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
@@ -3862,6 +3894,7 @@ func @main {
   __im_load:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
+  tryok:
     x64.movRegReg r8, rax
   __il_cont:
     x64.cmpRegImm32 r8, 0
@@ -3876,7 +3909,15 @@ func @main {
   __im_slow#7:
     x64.callDirect __managed_set
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, __il_body
+    x64.jcc notEqual, tryerr#2
+    x64.jmp __il_body
+  __im_slow#18:
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#15
+  critsplit:
+    x64.movRegReg rax, r8
+    x64.jmp tryok
   tryerr#2:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at rdata-global-var-array-cow-preserves-original.test:11: test invariant: set OOB\x0a"
     x64.callDirect mrt_panic
@@ -3884,11 +3925,6 @@ func @main {
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  __im_slow#18:
-    x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#15
-    x64.jmp __il_cont
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at rdata-global-var-array-cow-preserves-original.test:12: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
@@ -3959,18 +3995,19 @@ func @main {
   __im_slow#7:
     arm64.bl __managed_set
     arm64.cmp x9, 0
-    arm64.b.eq __il_body
+    arm64.b.ne tryerr#2
+    arm64.b __il_body
+  __im_slow#18:
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#15
+    arm64.b __il_cont
   tryerr#2:
     arm64.leaRdata x0, __str_blob_1  ; "panic at rdata-global-var-array-cow-preserves-original.test:11: test invariant: set OOB\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret
-  __im_slow#18:
-    arm64.bl __managed_get
-    arm64.cmp x9, 0
-    arm64.b.ne tryerr#15
-    arm64.b __il_cont
   __rc_panic:
     arm64.leaRdata x0, __str_blob_3  ; "panic at rdata-global-var-array-cow-preserves-original.test:12: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
@@ -4042,18 +4079,19 @@ func @main {
   __im_slow#7:
     arm64.bl __managed_set
     arm64.cmp x9, 0
-    arm64.b.eq __il_body
+    arm64.b.ne tryerr#2
+    arm64.b __il_body
+  __im_slow#18:
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#15
+    arm64.b __il_cont
   tryerr#2:
     arm64.leaRdata x0, __str_blob_1  ; "panic at rdata-global-var-array-cow-preserves-original.test:11: test invariant: set OOB\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.epilogue 16
     arm64.ret
-  __im_slow#18:
-    arm64.bl __managed_get
-    arm64.cmp x9, 0
-    arm64.b.ne tryerr#15
-    arm64.b __il_cont
   __rc_panic:
     arm64.leaRdata x0, __str_blob_3  ; "panic at rdata-global-var-array-cow-preserves-original.test:12: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

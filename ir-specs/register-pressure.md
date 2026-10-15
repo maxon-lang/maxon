@@ -3876,9 +3876,8 @@ func @main {
   __im_load#10:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
-    x64.movRegReg r8, rax
   tryok#1:
-    x64.movRegReg r12, r8
+    x64.movRegReg r12, rax
   trycont:
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
@@ -3902,19 +3901,8 @@ func @main {
     x64.movRegReg rdx, r13
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit
-  tryerr#17:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at reuse-def-confined-by-a-later-call.test:16: get\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 64
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  critsplit:
+    x64.jcc notEqual, tryerr#17
+  critsplit#69:
     x64.movRegReg r14, r8
     x64.jmp __il_body#49
   __im_slow#37:
@@ -3923,18 +3911,8 @@ func @main {
     x64.movRegReg rax, rsi
     x64.callDirect __managed_set
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#20
-  tryerr#21:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at reuse-def-confined-by-a-later-call.test:17: set\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 64
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jcc notEqual, tryerr#21
+    x64.jmp tryok#20
   __im_slow#43:
     x64.storeSlotReg slot0, rdx
     x64.movRegReg rcx, rbx
@@ -3954,7 +3932,38 @@ func @main {
     x64.loadRegSlot rcx, slot2
     x64.loadRegSlot rdx, slot0
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#55
+    x64.jcc notEqual, tryerr#26
+    x64.jmp tryok#55
+  __im_slow#9:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#2
+  critsplit#68:
+    x64.movRegReg rax, r8
+    x64.jmp tryok#1
+  tryerr#17:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at reuse-def-confined-by-a-later-call.test:16: get\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 64
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#21:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at reuse-def-confined-by-a-later-call.test:17: set\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 64
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   tryerr#26:
     x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at reuse-def-confined-by-a-later-call.test:24: clear\x0a"
     x64.callDirect mrt_panic
@@ -3966,12 +3975,6 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __im_slow#9:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#2
-    x64.jmp tryok#1
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_10]  ; "panic at reuse-def-confined-by-a-later-call.test:34: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
@@ -4134,9 +4137,8 @@ func @main {
   __im_load#10:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
-    x64.movRegReg r8, rax
   tryok#1:
-    x64.movRegReg r12, r8
+    x64.movRegReg r12, rax
   trycont:
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
@@ -4159,19 +4161,8 @@ func @main {
     x64.movRegReg rdx, r13
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, critsplit
-  tryerr#17:
-    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at reuse-def-confined-by-a-later-call.test:16: get\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 64
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  critsplit:
+    x64.jcc notEqual, tryerr#17
+  critsplit#69:
     x64.movRegReg r14, r8
     x64.jmp __il_body#49
   __im_slow#37:
@@ -4180,18 +4171,8 @@ func @main {
     x64.movRegReg rax, rsi
     x64.callDirect __managed_set
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#20
-  tryerr#21:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at reuse-def-confined-by-a-later-call.test:17: set\x0a"
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 64
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jcc notEqual, tryerr#21
+    x64.jmp tryok#20
   __im_slow#43:
     x64.storeSlotReg slot0, rdx
     x64.movRegReg rcx, rbx
@@ -4211,7 +4192,38 @@ func @main {
     x64.loadRegSlot rcx, slot2
     x64.loadRegSlot rdx, slot0
     x64.cmpRegImm32 r10, 0
-    x64.jcc equal, tryok#55
+    x64.jcc notEqual, tryerr#26
+    x64.jmp tryok#55
+  __im_slow#9:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#2
+  critsplit#68:
+    x64.movRegReg rax, r8
+    x64.jmp tryok#1
+  tryerr#17:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]  ; "panic at reuse-def-confined-by-a-later-call.test:16: get\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 64
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryerr#21:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]  ; "panic at reuse-def-confined-by-a-later-call.test:17: set\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 64
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   tryerr#26:
     x64.leaRegRdata rcx, [rip + __str_blob_5]  ; "panic at reuse-def-confined-by-a-later-call.test:24: clear\x0a"
     x64.callDirect mrt_panic
@@ -4223,12 +4235,6 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __im_slow#9:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr#2
-    x64.jmp tryok#1
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_10]  ; "panic at reuse-def-confined-by-a-later-call.test:34: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
@@ -4409,17 +4415,7 @@ func @main {
     arm64.movRegReg x1, x21
     arm64.bl __managed_get
     arm64.cmp x9, 0
-    arm64.b.eq critsplit
-  tryerr#17:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at reuse-def-confined-by-a-later-call.test:16: get\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.loadRegSlot x21, slot5
-    arm64.loadRegSlot x22, slot6
-    arm64.epilogue 80
-    arm64.ret
+    arm64.b.ne tryerr#17
   critsplit:
     arm64.movRegReg x22, x0
     arm64.b __il_body#49
@@ -4431,17 +4427,8 @@ func @main {
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.cmp x9, 0
-    arm64.b.eq tryok#20
-  tryerr#21:
-    arm64.leaRdata x0, __str_blob_4  ; "panic at reuse-def-confined-by-a-later-call.test:17: set\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.loadRegSlot x21, slot5
-    arm64.loadRegSlot x22, slot6
-    arm64.epilogue 80
-    arm64.ret
+    arm64.b.ne tryerr#21
+    arm64.b tryok#20
   __im_slow#43:
     arm64.storeSlotReg slot1, x1
     arm64.movRegReg x0, x19
@@ -4462,7 +4449,34 @@ func @main {
     arm64.loadRegSlot x1, slot1
     arm64.loadRegSlot x2, slot2
     arm64.cmp x9, 0
-    arm64.b.eq tryok#55
+    arm64.b.ne tryerr#26
+    arm64.b tryok#55
+  __im_slow#9:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#2
+    arm64.b tryok#1
+  tryerr#17:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at reuse-def-confined-by-a-later-call.test:16: get\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot3
+    arm64.loadRegSlot x20, slot4
+    arm64.loadRegSlot x21, slot5
+    arm64.loadRegSlot x22, slot6
+    arm64.epilogue 80
+    arm64.ret
+  tryerr#21:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at reuse-def-confined-by-a-later-call.test:17: set\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot3
+    arm64.loadRegSlot x20, slot4
+    arm64.loadRegSlot x21, slot5
+    arm64.loadRegSlot x22, slot6
+    arm64.epilogue 80
+    arm64.ret
   tryerr#26:
     arm64.leaRdata x0, __str_blob_5  ; "panic at reuse-def-confined-by-a-later-call.test:24: clear\x0a"
     arm64.bl mrt_panic
@@ -4473,12 +4487,6 @@ func @main {
     arm64.loadRegSlot x22, slot6
     arm64.epilogue 80
     arm64.ret
-  __im_slow#9:
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_get
-    arm64.cmp x9, 0
-    arm64.b.ne tryerr#2
-    arm64.b tryok#1
   __rc_panic:
     arm64.leaRdata x0, __str_blob_10  ; "panic at reuse-def-confined-by-a-later-call.test:34: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
@@ -4660,17 +4668,7 @@ func @main {
     arm64.movRegReg x1, x21
     arm64.bl __managed_get
     arm64.cmp x9, 0
-    arm64.b.eq critsplit
-  tryerr#17:
-    arm64.leaRdata x0, __str_blob_2  ; "panic at reuse-def-confined-by-a-later-call.test:16: get\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.loadRegSlot x21, slot5
-    arm64.loadRegSlot x22, slot6
-    arm64.epilogue 80
-    arm64.ret
+    arm64.b.ne tryerr#17
   critsplit:
     arm64.movRegReg x22, x0
     arm64.b __il_body#49
@@ -4682,17 +4680,8 @@ func @main {
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x0, slot0
     arm64.cmp x9, 0
-    arm64.b.eq tryok#20
-  tryerr#21:
-    arm64.leaRdata x0, __str_blob_4  ; "panic at reuse-def-confined-by-a-later-call.test:17: set\x0a"
-    arm64.bl mrt_panic
-    arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot3
-    arm64.loadRegSlot x20, slot4
-    arm64.loadRegSlot x21, slot5
-    arm64.loadRegSlot x22, slot6
-    arm64.epilogue 80
-    arm64.ret
+    arm64.b.ne tryerr#21
+    arm64.b tryok#20
   __im_slow#43:
     arm64.storeSlotReg slot1, x1
     arm64.movRegReg x0, x19
@@ -4713,7 +4702,34 @@ func @main {
     arm64.loadRegSlot x1, slot1
     arm64.loadRegSlot x2, slot2
     arm64.cmp x9, 0
-    arm64.b.eq tryok#55
+    arm64.b.ne tryerr#26
+    arm64.b tryok#55
+  __im_slow#9:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_get
+    arm64.cmp x9, 0
+    arm64.b.ne tryerr#2
+    arm64.b tryok#1
+  tryerr#17:
+    arm64.leaRdata x0, __str_blob_2  ; "panic at reuse-def-confined-by-a-later-call.test:16: get\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot3
+    arm64.loadRegSlot x20, slot4
+    arm64.loadRegSlot x21, slot5
+    arm64.loadRegSlot x22, slot6
+    arm64.epilogue 80
+    arm64.ret
+  tryerr#21:
+    arm64.leaRdata x0, __str_blob_4  ; "panic at reuse-def-confined-by-a-later-call.test:17: set\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot3
+    arm64.loadRegSlot x20, slot4
+    arm64.loadRegSlot x21, slot5
+    arm64.loadRegSlot x22, slot6
+    arm64.epilogue 80
+    arm64.ret
   tryerr#26:
     arm64.leaRdata x0, __str_blob_5  ; "panic at reuse-def-confined-by-a-later-call.test:24: clear\x0a"
     arm64.bl mrt_panic
@@ -4724,12 +4740,6 @@ func @main {
     arm64.loadRegSlot x22, slot6
     arm64.epilogue 80
     arm64.ret
-  __im_slow#9:
-    arm64.movRegReg x0, x19
-    arm64.bl __managed_get
-    arm64.cmp x9, 0
-    arm64.b.ne tryerr#2
-    arm64.b tryok#1
   __rc_panic:
     arm64.leaRdata x0, __str_blob_10  ; "panic at reuse-def-confined-by-a-later-call.test:34: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic

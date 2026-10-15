@@ -273,9 +273,8 @@ func @main {
   __im_load:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
-    x64.movRegReg r8, rax
   tryok#1:
-    x64.movRegReg r12, r8
+    x64.movRegReg r12, rax
   trycont:
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
@@ -300,6 +299,8 @@ func @main {
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#2
+  critsplit:
+    x64.movRegReg rax, r8
     x64.jmp tryok#1
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at the-emitted-runtime-is-folded-too.test:5: Range check failed: value outside typealias 'ExitCode'\x0a"
@@ -808,9 +809,8 @@ func @main {
   __im_load:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseIndexScale.word64 rax, [rax + rdx*8 + 0]
-    x64.movRegReg r8, rax
   tryok#1:
-    x64.movRegReg r12, r8
+    x64.movRegReg r12, rax
   trycont:
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
@@ -834,6 +834,8 @@ func @main {
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#2
+  critsplit:
+    x64.movRegReg rax, r8
     x64.jmp tryok#1
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_11]  ; "panic at the-emitted-runtime-is-folded-too.test:5: Range check failed: value outside typealias 'ExitCode'\x0a"

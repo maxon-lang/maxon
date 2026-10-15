@@ -17,7 +17,9 @@ per module and hands each function, longest first, to whichever pool worker free
 (`MAXON_MAX_PROCS=1` gives a pool of one). The worker selects instructions, splits critical edges so every
 phi copy has an edge block to land in, and runs `allocateFunctionCore` (`RegisterAllocator.maxon`):
 
-1. lay the blocks out in reverse postorder, so layout order is a dominance order;
+1. lay the blocks out in reverse postorder, so layout order is a dominance order, with cold dead ends after
+   every other block and each empty critical-edge block just before its target, so a long-lived value's live
+   range spans few layout runs;
 2. [liveness](#liveness);
 3. [splitting](#splitting), which either relieves every over-pool point or refuses with E5001;
 4. [colouring](#colouring);
@@ -121,8 +123,9 @@ value it walks backward from every use to the def (`solveLivenessSsa`). Because 
 re-marks only the victim and the values it created, over the blocks the split touched. A block where a value
 is defined or read holds it in an explicit per-block list; a stretch of blocks it is live straight through is
 one *run* (`LiveRuns`), counted per class by `LiveCover`. In a function of 48 blocks or more, a walk that
-reaches a chain of blocks between a block and its immediate dominator, entered only from inside and all
-leading forward to that block, marks the whole chain in one step (`DomSkip`).
+reaches a block it has not otherwise touched marks in one step the stretch of blocks below it that all lead
+forward to it and whose predecessors all lie below it (`DomSkip.coverFloor`), then resumes from the
+predecessors entering that stretch from below.
 
 Alongside the live sets it records a `UseIndex` (each value's def and using ops, with edge uses to phis
 recorded at the branch), per-op and peak pressure per class, each value's `forbidden` mask (the clobbers of

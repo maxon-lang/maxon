@@ -1,23 +1,19 @@
 let SkipMinBlocks = 48 as ElementIndex
 let SkipMinSpan = 4 as ElementIndex
+export let EntryBlockLocal = 0 as ElementIndex
 
-// Lets a liveness walk mark a value live over a whole chain of blocks in one step (`coversUpTo`).
-// The interval from block `b` up to its immediate dominator `a` is CLEAN when `b` has no retreating
-// predecessor and every block strictly between them is entered only from inside `[a, b)` and
-// reaches `b` by forward edges: a value live into `b` and not defined inside is then live through
-// every block between and out of `a`. `edge[b]` is the top of the chain of clean intervals above
-// `b` — `b` itself when its own is not clean — so one step covers `(edge[b], b]`. Block indices are
-// assumed to be a layout in which every reachable block has an earlier predecessor; a CFG that
-// breaks that disables the skip.
+// Lets a liveness walk mark a value live over a stretch of blocks in one step (`coversUpTo`). Block
+// indices are assumed to be a layout in which every reachable block has an earlier predecessor; a
+// CFG that breaks that disables the skip.
 export type DomSkip
 	export var enabled as bool
 	var idom as CfgIndexArray
-	var edge as CfgIndexArray
 	var pre as CfgIndexArray
 	var size as CfgIndexArray
+	export var bounds as LayoutBounds
 
 	export static function disabled() returns DomSkip
-		return Self{enabled: false, idom: CfgIndexArray.create(), edge: CfgIndexArray.create(), pre: CfgIndexArray.create(), size: CfgIndexArray.create()}
+		return Self{enabled: false, idom: CfgIndexArray.create(), pre: CfgIndexArray.create(), size: CfgIndexArray.create(), bounds: LayoutBounds.none()}
 	end 'disabled'
 
 	export static function build(topo FuncTopology, force bool) returns DomSkip
@@ -71,19 +67,7 @@ export type DomSkip
 			end 'eachBlock'
 		end 'untilStable'
 
-		var edge = CfgIndexArray.create()
-		edge.refill(n, value: 0)
-		var bounds = IntervalBounds.build(topo)
-
-		for b in 1 upto n 'eachEdge'
-			let a = try idom.get(b) otherwise panic("DomSkip.build: idom.get OOB")
-
-			if intervalIsClean(topo, bounds: bounds, a: a, b: b) 'cleanBundle'
-				try edge.set(b, value: try edge.get(a) otherwise panic("DomSkip.build: edge.get OOB")) otherwise panic("DomSkip.build: edge.set OOB")
-			end 'cleanBundle' else 'ownBundle'
-				try edge.set(b, value: b) otherwise panic("DomSkip.build: edge.set OOB")
-			end 'ownBundle'
-		end 'eachEdge'
+		let bounds = LayoutBounds.build(topo)
 
 		var size = CfgIndexArray.create()
 		size.refill(n, value: 1)
@@ -108,16 +92,29 @@ export type DomSkip
 			try cursor.set(b, value: at + 1) otherwise panic("DomSkip.build: cursor.set OOB")
 		end 'eachPreorder'
 
-		return Self{enabled: true, idom: idom, edge: edge, pre: pre, size: size}
+		return Self{enabled: true, idom: idom, pre: pre, size: size, bounds: bounds}
 	end 'build'
 
-	export function edgeOf(b ElementIndex) returns ElementIndex
-		return try self.edge.get(b) otherwise panic("DomSkip.edgeOf: block {b} out of range")
-	end 'edgeOf'
+	// Every block of `(floor, b]` reaches `b` by forward edges and has no predecessor at or beyond
+	// `b`, so a value live into an untouched `b` is live into all of them, and a def inside that
+	// dominates `b` truncates the span. Every predecessor entering the span from outside then lies at
+	// or below `floor`, which is the only place `coversUpTo` looks; a retreating predecessor of `b`
+	// would not, so it refuses.
+	export function coverFloor(b ElementIndex) returns (bool, ElementIndex)
+		if b < SkipMinSpan or self.bounds.hasRetreatingPred(b) 'nothingToCover'
+			return (false, b)
+		end 'nothingToCover'
 
-	export function coversEnough(b ElementIndex) returns bool
-		return b - self.edgeOf(b) >= SkipMinSpan
-	end 'coversEnough'
+		let stranded = try self.bounds.lastStrandedBelow(b) otherwise EntryBlockLocal
+		let enteredFromBeyond = try self.bounds.lastEnteredFromBeyondBelow(b) otherwise EntryBlockLocal
+		let limit = stranded if stranded > enteredFromBeyond else enteredFromBeyond
+
+		if b - limit < SkipMinSpan 'tooShortToPay'
+			return (false, b)
+		end 'tooShortToPay'
+
+		return (true, limit)
+	end 'coverFloor'
 
 	export function dominates(x ElementIndex, y ElementIndex) returns bool
 		let preX = try self.pre.get(x) otherwise panic("DomSkip.dominates: block {x} out of range")
@@ -143,51 +140,31 @@ function intersectDominators(idom CfgIndexArray, a ElementIndex, b ElementIndex)
 	return left
 end 'intersectDominators'
 
-function intervalIsClean(topo FuncTopology, bounds IntervalBounds, a ElementIndex, b ElementIndex) returns bool
-	let ownDeg = topo.pred.degree(b as CsrIndex)
-
-	for k in 0 upto ownDeg 'eachOwnPred'
-		if topo.pred.neighbour(b as CsrIndex, k: k) >= b 'aRetreatingEdge'
-			return false
-		end 'aRetreatingEdge'
-	end 'eachOwnPred'
-
-	return bounds.confines(a, b: b)
-end 'intervalIsClean'
-
-// Answers the interior half of `intervalIsClean` as three range queries over `(a, b)`: every
-// predecessor is at least `a`, every predecessor is below `b`, and every block's nearest forward
-// successor is at most `b`. The last is "reaches `b` by forward edges": by descending induction from
-// `b`, a block `y` of the interval reaches `b` exactly when it has a forward successor in `(y, b]`.
-type IntervalBounds
+export type LayoutBounds
 	var leafBase as ElementIndex
-	var lowestPred as CfgIndexArray
 	var highestPred as CfgIndexArray
 	var nearestForwardSucc as CfgIndexArray
-	var nodes as CfgIndexArray
+	export var enteringPreds as PredLevels
 
-	static function build(topo FuncTopology) returns IntervalBounds
+	static function none() returns LayoutBounds
+		return Self{leafBase: 1, highestPred: CfgIndexArray.create(), nearestForwardSucc: CfgIndexArray.create(), enteringPreds: PredLevels.none()}
+	end 'none'
+
+	static function build(topo FuncTopology) returns LayoutBounds
 		let n = topo.numBlocks
 		let leafBase = roundUpToPowerOfTwo(n as BytePos)
-		var lowestPred = CfgIndexArray.create()
-		lowestPred.refill(leafBase + leafBase, value: n)
 		var highestPred = CfgIndexArray.create()
 		highestPred.refill(leafBase + leafBase, value: 0)
 		var nearestForwardSucc = CfgIndexArray.create()
 		nearestForwardSucc.refill(leafBase + leafBase, value: 0)
 
 		for y in 0 upto n 'eachBlock'
-			var lowest = n
 			var highest = 0 as ElementIndex
 			var nearest = n
 			let predDeg = topo.pred.degree(y as CsrIndex)
 
 			for k in 0 upto predDeg 'eachPred'
 				let q = topo.pred.neighbour(y as CsrIndex, k: k)
-
-				if q < lowest 'lower'
-					lowest = q
-				end 'lower'
 
 				if q > highest 'higher'
 					highest = q
@@ -204,47 +181,213 @@ type IntervalBounds
 				end 'nearer'
 			end 'eachSucc'
 
-			try lowestPred.set(leafBase + y, value: lowest) otherwise panic("IntervalBounds.build: lowestPred.set OOB at block {y}")
-			try highestPred.set(leafBase + y, value: highest) otherwise panic("IntervalBounds.build: highestPred.set OOB at block {y}")
-			try nearestForwardSucc.set(leafBase + y, value: nearest) otherwise panic("IntervalBounds.build: nearestForwardSucc.set OOB at block {y}")
+			try highestPred.set(leafBase + y, value: highest) otherwise panic("LayoutBounds.build: highestPred.set OOB at block {y}")
+			try nearestForwardSucc.set(leafBase + y, value: nearest) otherwise panic("LayoutBounds.build: nearestForwardSucc.set OOB at block {y}")
 		end 'eachBlock'
 
-		for ri in 1 upto leafBase 'eachNode'
-			let node = leafBase - ri
-			let left = node + node
-			let right = left + 1
-			let lowestLeft = try lowestPred.get(left) otherwise panic("IntervalBounds.build: lowestPred.get OOB at {left}")
-			let lowestRight = try lowestPred.get(right) otherwise panic("IntervalBounds.build: lowestPred.get OOB at {right}")
-			let highestLeft = try highestPred.get(left) otherwise panic("IntervalBounds.build: highestPred.get OOB at {left}")
-			let highestRight = try highestPred.get(right) otherwise panic("IntervalBounds.build: highestPred.get OOB at {right}")
-			let nearestLeft = try nearestForwardSucc.get(left) otherwise panic("IntervalBounds.build: nearestForwardSucc.get OOB at {left}")
-			let nearestRight = try nearestForwardSucc.get(right) otherwise panic("IntervalBounds.build: nearestForwardSucc.get OOB at {right}")
-			try lowestPred.set(node, value: lowestLeft if lowestLeft < lowestRight else lowestRight) otherwise panic("IntervalBounds.build: lowestPred.set OOB at {node}")
-			try highestPred.set(node, value: highestLeft if highestLeft > highestRight else highestRight) otherwise panic("IntervalBounds.build: highestPred.set OOB at {node}")
-			try nearestForwardSucc.set(node, value: nearestLeft if nearestLeft > nearestRight else nearestRight) otherwise panic("IntervalBounds.build: nearestForwardSucc.set OOB at {node}")
-		end 'eachNode'
-
-		return Self{leafBase: leafBase, lowestPred: lowestPred, highestPred: highestPred, nearestForwardSucc: nearestForwardSucc, nodes: CfgIndexArray.create()}
+		foldMaxUp(highestPred, leafBase: leafBase)
+		foldMaxUp(nearestForwardSucc, leafBase: leafBase)
+		return Self{leafBase: leafBase, highestPred: highestPred, nearestForwardSucc: nearestForwardSucc, enteringPreds: PredLevels.build(topo, leafBase: leafBase)}
 	end 'build'
 
-	function confines(a ElementIndex, b ElementIndex) returns bool
-		var covering = self.nodes
-		collectCoveringNodes(self.leafBase, lo: a + 1, hi: b - 1, out: covering)
+	function hasRetreatingPred(b ElementIndex) returns bool
+		return (try self.highestPred.get(self.leafBase + b) otherwise panic("LayoutBounds.hasRetreatingPred: highestPred.get OOB at block {b}")) >= b
+	end 'hasRetreatingPred'
 
-		for node in covering 'eachCoveringNode'
-			if (try self.lowestPred.get(node) otherwise panic("IntervalBounds.confines: lowestPred.get OOB at {node}")) < a 'enteredFromBefore'
-				return false
-			end 'enteredFromBefore'
+	export function lastStrandedBelow(b ElementIndex) returns ElementIndex throws NoBlockExceeds
+		return try lastExceedingBelow(self.nearestForwardSucc, leafBase: self.leafBase, below: b, bound: b)
+	end 'lastStrandedBelow'
 
-			if (try self.highestPred.get(node) otherwise panic("IntervalBounds.confines: highestPred.get OOB at {node}")) >= b 'enteredFromBeyond'
-				return false
-			end 'enteredFromBeyond'
+	function lastEnteredFromBeyondBelow(b ElementIndex) returns ElementIndex throws NoBlockExceeds
+		return try lastExceedingBelow(self.highestPred, leafBase: self.leafBase, below: b, bound: b - 1)
+	end 'lastEnteredFromBeyondBelow'
+end 'LayoutBounds'
 
-			if (try self.nearestForwardSucc.get(node) otherwise panic("IntervalBounds.confines: nearestForwardSucc.get OOB at {node}")) > b 'strandedInside'
-				return false
-			end 'strandedInside'
-		end 'eachCoveringNode'
+export type PredLevels
+	var blockStart as CfgIndexArray
+	var sorted as CfgIndexArray
+	var edgeCount as ElementIndex
 
-		return true
-	end 'confines'
-end 'IntervalBounds'
+	static function none() returns PredLevels
+		return Self{blockStart: CfgIndexArray.create(), sorted: CfgIndexArray.create(), edgeCount: 0}
+	end 'none'
+
+	// Each block's predecessor list is a leaf of the merge-sort tree as it stands, so it must already
+	// be ascending, which `permuteTopology` guarantees.
+	static function build(topo FuncTopology, leafBase ElementIndex) returns PredLevels
+		let n = topo.numBlocks
+		let edgeCount = topo.pred.list.count()
+		var levelCount = 1 as ElementIndex
+		var width = 1 as ElementIndex
+
+		while width < leafBase 'eachLevel'
+			width = width + width
+			levelCount = levelCount + 1
+		end 'eachLevel'
+
+		var blockStart = CfgIndexArray.create()
+		blockStart.refill(leafBase + 1, value: edgeCount)
+
+		for z in 0 upto n 'eachBlockStart'
+			try blockStart.set(z, value: try topo.pred.start.get(z) otherwise panic("PredLevels.build: pred.start.get OOB at block {z}")) otherwise panic("PredLevels.build: blockStart.set OOB at block {z}")
+		end 'eachBlockStart'
+
+		var sorted = CfgIndexArray.create()
+		sorted.refill(levelCount * edgeCount, value: 0)
+
+		for z in 0 upto n 'eachBlock'
+			let degree = topo.pred.degree(z as CsrIndex)
+
+			for k in 0 upto degree 'eachPred'
+				let p = topo.pred.neighbour(z as CsrIndex, k: k)
+				let at = (try blockStart.get(z) otherwise panic("PredLevels.build: blockStart.get OOB at block {z}")) + k
+
+				if k > 0 and p < topo.pred.neighbour(z as CsrIndex, k: k - 1) 'unsorted'
+					panic("PredLevels.build: the predecessors of block {z} are not in ascending order")
+				end 'unsorted'
+
+				try sorted.set(at, value: p) otherwise panic("PredLevels.build: sorted.set OOB at {at}")
+			end 'eachPred'
+		end 'eachBlock'
+
+		var childWidth = 1 as ElementIndex
+
+		for level in 0 upto levelCount - 1 'eachMerge'
+			var first = 0 as ElementIndex
+
+			while first < n 'eachParent'
+				let lowStart = try blockStart.get(first) otherwise panic("PredLevels.build: blockStart.get OOB at {first}")
+				let midStart = try blockStart.get(first + childWidth) otherwise panic("PredLevels.build: blockStart.get OOB at {first + childWidth}")
+				let highStart = try blockStart.get(first + childWidth + childWidth) otherwise panic("PredLevels.build: blockStart.get OOB at {first + childWidth + childWidth}")
+				mergeAscending(sorted, from: level * edgeCount, to: (level + 1) * edgeCount, low: lowStart, mid: midStart, high: highStart)
+				first = first + childWidth + childWidth
+			end 'eachParent'
+
+			childWidth = childWidth + childWidth
+		end 'eachMerge'
+
+		return Self{blockStart: blockStart, sorted: sorted, edgeCount: edgeCount}
+	end 'build'
+
+	export function largestAtMost(lo ElementIndex, hi ElementIndex, bound ElementIndex) returns (bool, ElementIndex)
+		var found = false
+		var best = 0 as ElementIndex
+		var left = lo
+		var right = hi + 1
+		var level = 0 as ElementIndex
+		var width = 1 as ElementIndex
+
+		while left < right 'eachLevel'
+			if left mod 2 == 1 'leftIsARightChild'
+				(found, best) = self.considerNode(found, best: best, level: level, node: left, width: width, bound: bound)
+				left = left + 1
+			end 'leftIsARightChild'
+
+			if right mod 2 == 1 'rightIsARightChild'
+				right = right - 1
+				(found, best) = self.considerNode(found, best: best, level: level, node: right, width: width, bound: bound)
+			end 'rightIsARightChild'
+
+			left = left / 2
+			right = right / 2
+			level = level + 1
+			width = width + width
+		end 'eachLevel'
+
+		return (found, best)
+	end 'largestAtMost'
+
+	function considerNode(found bool, best ElementIndex, level ElementIndex, node ElementIndex, width ElementIndex, bound ElementIndex) returns (bool, ElementIndex)
+		let base = level * self.edgeCount
+		var low = try self.blockStart.get(node * width) otherwise panic("PredLevels.considerNode: blockStart.get OOB at {node * width}")
+		let segmentStart = low
+		var high = try self.blockStart.get((node + 1) * width) otherwise panic("PredLevels.considerNode: blockStart.get OOB at {(node + 1) * width}")
+
+		while low < high 'bisect'
+			let mid = low + (high - low) / 2
+
+			if (try self.sorted.get(base + mid) otherwise panic("PredLevels.considerNode: sorted.get OOB at {base + mid}")) <= bound 'rightHalf'
+				low = mid + 1
+			end 'rightHalf' else 'leftHalf'
+				high = mid
+			end 'leftHalf'
+		end 'bisect'
+
+		if low == segmentStart 'nothingAtMost'
+			return (found, best)
+		end 'nothingAtMost'
+
+		let candidate = try self.sorted.get(base + low - 1) otherwise panic("PredLevels.considerNode: sorted.get OOB at {base + low - 1}")
+
+		if found and candidate <= best 'notBetter'
+			return (found, best)
+		end 'notBetter'
+
+		return (true, candidate)
+	end 'considerNode'
+end 'PredLevels'
+
+function mergeAscending(sorted CfgIndexArray, from ElementIndex, to ElementIndex, low ElementIndex, mid ElementIndex, high ElementIndex)
+	var left = low
+	var right = mid
+	var out = low
+
+	while out < high 'eachOutput'
+		var takeLeft = right >= high
+
+		if left < mid and right < high 'bothRemain'
+			takeLeft = (try sorted.get(from + left) otherwise panic("mergeAscending: sorted.get OOB at {from + left}")) <= (try sorted.get(from + right) otherwise panic("mergeAscending: sorted.get OOB at {from + right}"))
+		end 'bothRemain'
+
+		if takeLeft 'fromTheLeft'
+			try sorted.set(to + out, value: try sorted.get(from + left) otherwise panic("mergeAscending: sorted.get OOB at {from + left}")) otherwise panic("mergeAscending: sorted.set OOB at {to + out}")
+			left = left + 1
+		end 'fromTheLeft' else 'fromTheRight'
+			try sorted.set(to + out, value: try sorted.get(from + right) otherwise panic("mergeAscending: sorted.get OOB at {from + right}")) otherwise panic("mergeAscending: sorted.set OOB at {to + out}")
+			right = right + 1
+		end 'fromTheRight'
+
+		out = out + 1
+	end 'eachOutput'
+end 'mergeAscending'
+
+function foldMaxUp(tree CfgIndexArray, leafBase ElementIndex)
+	for ri in 1 upto leafBase 'eachNode'
+		let node = leafBase - ri
+		let left = try tree.get(node + node) otherwise panic("foldMaxUp: tree.get OOB at {node + node}")
+		let right = try tree.get(node + node + 1) otherwise panic("foldMaxUp: tree.get OOB at {node + node + 1}")
+		try tree.set(node, value: left if left > right else right) otherwise panic("foldMaxUp: tree.set OOB at {node}")
+	end 'eachNode'
+end 'foldMaxUp'
+
+export enum NoBlockExceeds implements Error
+	noneExceeds
+end 'NoBlockExceeds'
+
+function lastExceedingBelow(tree CfgIndexArray, leafBase ElementIndex, below ElementIndex, bound ElementIndex) returns ElementIndex throws NoBlockExceeds
+	var x = leafBase + below
+
+	while x > 1 'climb'
+		if x mod 2 == 1 'aRightChild'
+			var sibling = x - 1
+
+			if (try tree.get(sibling) otherwise panic("lastExceedingBelow: tree.get OOB at {sibling}")) > bound 'itHoldsOne'
+				while sibling < leafBase 'descend'
+					let right = sibling + sibling + 1
+
+					if (try tree.get(right) otherwise panic("lastExceedingBelow: tree.get OOB at {right}")) > bound 'inTheRightHalf'
+						sibling = right
+					end 'inTheRightHalf' else 'inTheLeftHalf'
+						sibling = sibling + sibling
+					end 'inTheLeftHalf'
+				end 'descend'
+
+				return sibling - leafBase
+			end 'itHoldsOne'
+		end 'aRightChild'
+
+		x = x / 2
+	end 'climb'
+
+	throw NoBlockExceeds.noneExceeds
+end 'lastExceedingBelow'

@@ -1852,3 +1852,29 @@ Measured on `tests/ladders/genownedexits.sh <N> reassign` and `<N> box` at N = 5
 | `reassign`, total compile | panicked after 618 s (`did not converge after 65536 splits`) | 3 s |
 | `box`, total compile | 52 s | 3.7 s |
 | `box`, executable | 5.76 MB | 662 KB |
+
+### Result — 2026-10-14, cold exits and edge blocks stop fragmenting live ranges
+
+Register-allocator liveness and splitting grew super-linearly on functions with many exits. The layout
+interleaved cold panic blocks and critical-edge trampolines between hot blocks, which cut every long-lived
+value's live range into Θ(n) layout runs.
+
+The layout now places the cold blocks that reach no hot block after every other block, and each empty
+critical-edge block immediately before its target, each partition in reverse postorder. The liveness skip
+covers the stretch below a block that all leads forward to it, found with two max-segment-tree descents, and
+resumes from the predecessors entering it, found by a merge-sort tree over the predecessor lists.
+
+Measured on `tests/ladders/genownedexits.sh <N> box|fresh|lanes` and `tests/ladders/genreturns.sh <N>`,
+splitting / liveness ms at N = 4000:
+
+| | before | after |
+|---|---|---|
+| `box` | 40672 / 31227 | 9335 / 684 |
+| `fresh` | 31516 / 15555 | 17224 / 511 |
+| `lanes` | 95098 / 14562 | 76143 / 1325 |
+| returns ladder | 5821 / 4844 | 5672 / 330 |
+| per doubling, every ladder | | ×1.65–2.16 |
+
+Over the 9 programs whose code changed, instructions grow 0.17%, and edge blocks placed before their target
+add about 2% copies by changing the coalescing order. The runtime benchmarks are unchanged and the
+self-compile is 0.45% slower.

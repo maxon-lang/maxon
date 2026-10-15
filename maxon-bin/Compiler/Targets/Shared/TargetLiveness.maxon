@@ -1312,9 +1312,14 @@ end 'assertClassColumnCovers'
 // Successors are walked in REVERSE add-order. `collectBlockSuccessorIds` adds the `then`
 // (=loop body / if-then) edge before the `else` (=loop exit / if-continuation) edge, and
 // exploring the else edge FIRST lands a structured loop's exit AFTER its whole body in the
-// resulting RPO — which is exactly the property the splitter's sequence needs. For a single
-// loop, an `if`, or straight-line code this RPO already equals the parser's block order, so
-// those functions (every current spec) are UNCHANGED; only genuinely nested CFGs reorder.
+// resulting RPO — which is exactly the property the splitter's sequence needs.
+//
+// Cold dead ends (`coldDeadEndBlocks`) follow every other block, and a critical-edge block with no
+// body ops sits immediately before its target (`edgeBlocksBeforeTheirTarget`), each partition in
+// RPO. Placed between hot blocks, either cuts every value live across it into separate layout runs,
+// and liveness and splitting grow super-linearly with the runs on a function with many exits. Both
+// keep the order topological: a dead end reaches only other dead ends, and an edge block's
+// predecessor precedes its target, which has two or more predecessors and so is never itself moved.
 //
 // Unreachable blocks — a parser `dead` continuation with no predecessor — are not reached by
 // the DFS, so they are appended in their original relative order to preserve them (they still
@@ -1323,8 +1328,7 @@ end 'assertClassColumnCovers'
 //
 // RETURNS the reordered topology, which the splitter then completes into its `FuncCfg` — the
 // only pass between the two is nothing, so the skeleton this built is still exactly the
-// function's. Throwing it away meant the very next thing the allocator did was re-derive the
-// same graph from the IR, for a graph already in hand.
+// function's.
 export function reorderFuncBlocksRpo(module TargetModule, func IrFunction) returns FuncTopology
 	let topo = buildFuncTopology(module, func: func)
 
@@ -1338,30 +1342,152 @@ export function reorderFuncBlocksRpo(module TargetModule, func IrFunction) retur
 	postorder.reserve(topo.numBlocks)
 	rpoDfs(topo, root: 0, visited: visited, postorder: postorder)
 
-	// `oldByNew[i]` — the OLD local index of the block that lands at NEW local index `i`. Built
-	// in lockstep with `newRefs`, so it IS the permutation the block list just underwent, and
-	// `permuteTopology` re-indexes the skeleton by it rather than rebuilding it.
-	var oldByNew = CfgIndexArray.create()
-	oldByNew.reserve(topo.numBlocks)
-	var newRefs = BlockRefArray.create()
-	newRefs.reserve(topo.numBlocks)
+	var layout = BlockLayout.create(topo)
+	let sunk = coldDeadEndBlocks(module, topo: topo)
+	let riders = edgeBlocksBeforeTheirTarget(module, topo: topo, postorder: postorder)
 
-	for ri in 0 upto postorder.count() 'reverse'
-		let local = try postorder.get(postorder.count() - 1 - ri) otherwise panic("reorderFuncBlocksRpo: postorder.get OOB")
-		oldByNew.push(local)
-		newRefs.push(try topo.blockRefByLocal.get(local) otherwise panic("reorderFuncBlocksRpo: blockRefByLocal.get OOB"))
-	end 'reverse'
+	for pass in 0 upto 2 'eachPartition'
+		let sunkPass = pass == 1
+
+		for ri in 0 upto postorder.count() 'reverse'
+			let local = try postorder.get(postorder.count() - 1 - ri) otherwise panic("reorderFuncBlocksRpo: postorder.get OOB")
+
+			if (try sunk.get(local) otherwise panic("reorderFuncBlocksRpo: sunk.get OOB")) == sunkPass and not riders.isRider(local) 'inThisPartition'
+				riders.placeRidersOf(local, layout: layout)
+				layout.place(local)
+			end 'inThisPartition'
+		end 'reverse'
+	end 'eachPartition'
 
 	for i in 0 upto topo.numBlocks 'appendUnreachable'
 		if not (try visited.get(i) otherwise panic("reorderFuncBlocksRpo: visited.get OOB")) 'unreached'
-			oldByNew.push(i)
-			newRefs.push(try topo.blockRefByLocal.get(i) otherwise panic("reorderFuncBlocksRpo: blockRefByLocal.get OOB (unreachable)"))
+			layout.place(i)
 		end 'unreached'
 	end 'appendUnreachable'
 
-	func.blockRefs = newRefs
-	return permuteTopology(topo, oldByNew: oldByNew)
+	return layout.install(func)
 end 'reorderFuncBlocksRpo'
+
+type BlockLayout
+	var topo as FuncTopology
+
+	// `oldByNew[i]` — the OLD local index of the block that lands at NEW local index `i`. Built
+	// in lockstep with `newRefs`, so it IS the permutation the block list undergoes, and
+	// `permuteTopology` re-indexes the skeleton by it rather than rebuilding it.
+	var oldByNew as CfgIndexArray
+	var newRefs as BlockRefArray
+
+	static function create(topo FuncTopology) returns BlockLayout
+		var oldByNew = CfgIndexArray.create()
+		oldByNew.reserve(topo.numBlocks)
+		var newRefs = BlockRefArray.create()
+		newRefs.reserve(topo.numBlocks)
+		return Self{topo: topo, oldByNew: oldByNew, newRefs: newRefs}
+	end 'create'
+
+	function place(local ElementIndex)
+		self.oldByNew.push(local)
+		self.newRefs.push(try self.topo.blockRefByLocal.get(local) otherwise panic("BlockLayout.place: blockRefByLocal.get OOB at {local}"))
+	end 'place'
+
+	function install(into IrFunction) returns FuncTopology
+		into.blockRefs = self.newRefs
+		return permuteTopology(self.topo, oldByNew: self.oldByNew)
+	end 'install'
+end 'BlockLayout'
+
+type EdgeRiders
+	var rider as BoolArray
+	var ridersOf as CsrGraph
+
+	static function of(rider BoolArray, ridersOf CsrGraph) returns EdgeRiders
+		return Self{rider: rider, ridersOf: ridersOf}
+	end 'of'
+
+	function isRider(local ElementIndex) returns bool
+		return try self.rider.get(local) otherwise panic("EdgeRiders.isRider: block {local} out of range")
+	end 'isRider'
+
+	function placeRidersOf(target ElementIndex, layout BlockLayout)
+		for k in 0 upto self.ridersOf.degree(target as CsrIndex) 'eachRider'
+			layout.place(self.ridersOf.neighbour(target as CsrIndex, k: k))
+		end 'eachRider'
+	end 'placeRidersOf'
+end 'EdgeRiders'
+
+function coldDeadEndBlocks(module TargetModule, topo FuncTopology) returns BoolArray
+	var sunk = BoolArray.create()
+	sunk.resize(topo.numBlocks)
+	var anyCold = false
+
+	for b in 1 upto topo.numBlocks 'eachBlock'
+		let block = blockAt(module, topo: topo, local: b)
+
+		if block.heat == BlockHeat.cold 'coldCandidate'
+			try sunk.set(b, value: true) otherwise panic("coldDeadEndBlocks: sunk.set OOB")
+			anyCold = true
+		end 'coldCandidate'
+	end 'eachBlock'
+
+	if not anyCold 'nothingToSink'
+		return sunk
+	end 'nothingToSink'
+
+	var pending = CfgIndexArray.create()
+
+	for kept in 0 upto topo.numBlocks 'eachKept'
+		if not (try sunk.get(kept) otherwise panic("coldDeadEndBlocks: sunk.get OOB")) 'staysInPlace'
+			unsinkPredecessors(topo, block: kept, sunk: sunk, pending: pending)
+		end 'staysInPlace'
+	end 'eachKept'
+
+	while pending.count() > 0 'propagate'
+		unsinkPredecessors(topo, block: try pending.pop() otherwise panic("coldDeadEndBlocks: pending.pop on non-empty failed"), sunk: sunk, pending: pending)
+	end 'propagate'
+
+	return sunk
+end 'coldDeadEndBlocks'
+
+function unsinkPredecessors(topo FuncTopology, block ElementIndex, sunk BoolArray, pending CfgIndexArray)
+	for k in 0 upto topo.pred.degree(block as CsrIndex) 'eachPred'
+		let p = topo.pred.neighbour(block as CsrIndex, k: k)
+
+		if (try sunk.get(p) otherwise panic("unsinkPredecessors: sunk.get OOB")) 'leadsToKept'
+			try sunk.set(p, value: false) otherwise panic("unsinkPredecessors: sunk.set OOB")
+			pending.push(p)
+		end 'leadsToKept'
+	end 'eachPred'
+end 'unsinkPredecessors'
+
+function edgeBlocksBeforeTheirTarget(module TargetModule, topo FuncTopology, postorder CfgIndexArray) returns EdgeRiders
+	var rank = CfgIndexArray.create()
+	rank.refill(topo.numBlocks, value: 0)
+
+	for ri in 0 upto postorder.count() 'eachRanked'
+		try rank.set(try postorder.get(postorder.count() - 1 - ri) otherwise panic("edgeBlocksBeforeTheirTarget: postorder.get OOB"), value: ri) otherwise panic("edgeBlocksBeforeTheirTarget: rank.set OOB")
+	end 'eachRanked'
+
+	var rider = BoolArray.create()
+	rider.resize(topo.numBlocks)
+	var targets = CsrColumn.create()
+	var riders = CsrColumn.create()
+
+	for ri in 0 upto postorder.count() 'eachBlock'
+		let local = try postorder.get(postorder.count() - 1 - ri) otherwise panic("edgeBlocksBeforeTheirTarget: postorder.get OOB")
+
+		if local != 0 and topo.pred.degree(local as CsrIndex) == 1 and topo.succ.degree(local as CsrIndex) == 1 'oneInOneOut'
+			let target = topo.succ.neighbour(local as CsrIndex, k: 0)
+
+			if topo.succ.degree(topo.pred.neighbour(local as CsrIndex, k: 0)) > 1 and topo.pred.degree(target) > 1 and (try rank.get(target) otherwise panic("edgeBlocksBeforeTheirTarget: rank.get OOB")) > ri and blockAt(module, topo: topo, local: local).bodyOpCount() == 0 'criticalEdgeBlock'
+				try rider.set(local, value: true) otherwise panic("edgeBlocksBeforeTheirTarget: rider.set OOB")
+				targets.push(target)
+				riders.push(local)
+			end 'criticalEdgeBlock'
+		end 'oneInOneOut'
+	end 'eachBlock'
+
+	return EdgeRiders.of(rider, ridersOf: buildCsr(targets, to: riders, nodeCount: topo.numBlocks as CsrIndex))
+end 'edgeBlocksBeforeTheirTarget'
 
 // Re-index a topology whose blocks were REORDERED — not added to, not removed. It is the same
 // graph under a new dense numbering, so nothing has to be re-read from the IR: `oldByNew[i]`
@@ -1569,7 +1695,7 @@ end 'buildFuncTopology'
 
 // Complete a topology into the CFG the ALLOCATOR consumes, by adding the three analyses only it
 // needs: the function's value-space size (an operand scan of every op), the per-block loop nesting
-// depth (a DFS plus a BFS per natural loop), and the skippable dominator chains (`DomSkip`).
+// depth (a DFS plus a BFS per natural loop), and the liveness skip (`DomSkip`).
 // `forceSkip` builds those even below `DomSkip`'s size threshold, so verify mode checks the
 // skipping walk on every function.
 //
@@ -3735,6 +3861,79 @@ export type BlockSet
 	end 'sortAscending'
 end 'BlockSet'
 
+type BlockHeap
+	var items as CfgIndexArray
+
+	static function create() returns BlockHeap
+		return Self{items: CfgIndexArray.create()}
+	end 'create'
+
+	function clear()
+		self.items.clear()
+	end 'clear'
+
+	function count() returns Count
+		return self.items.count()
+	end 'count'
+
+	function push(blockLocal ElementIndex)
+		self.items.push(blockLocal)
+		var child = self.items.count() - 1
+
+		while child > 0 'siftUp'
+			let parent = (child - 1) / 2
+			let parentBlock = try self.items.get(parent) otherwise panic("BlockHeap.push: items.get OOB at {parent}")
+
+			if parentBlock >= blockLocal 'inOrder'
+				break
+			end 'inOrder'
+
+			try self.items.set(child, value: parentBlock) otherwise panic("BlockHeap.push: items.set OOB at {child}")
+			try self.items.set(parent, value: blockLocal) otherwise panic("BlockHeap.push: items.set OOB at {parent}")
+			child = parent
+		end 'siftUp'
+	end 'push'
+
+	function pop() returns ElementIndex
+		let highest = try self.items.get(0) otherwise panic("BlockHeap.pop: the heap is empty")
+		let last = try self.items.pop() otherwise panic("BlockHeap.pop: items.pop on a non-empty heap failed")
+		let remaining = self.items.count()
+
+		if remaining == 0 'wasTheLast'
+			return highest
+		end 'wasTheLast'
+
+		var hole = 0 as ElementIndex
+
+		while true 'siftDown'
+			let left = hole + hole + 1
+
+			if left >= remaining 'noChildren'
+				break
+			end 'noChildren'
+
+			var larger = left
+			let right = left + 1
+
+			if right < remaining and (try self.items.get(right) otherwise panic("BlockHeap.pop: items.get OOB at {right}")) > (try self.items.get(left) otherwise panic("BlockHeap.pop: items.get OOB at {left}")) 'rightIsLarger'
+				larger = right
+			end 'rightIsLarger'
+
+			let largerBlock = try self.items.get(larger) otherwise panic("BlockHeap.pop: items.get OOB at {larger}")
+
+			if largerBlock <= last 'inOrder'
+				break
+			end 'inOrder'
+
+			try self.items.set(hole, value: largerBlock) otherwise panic("BlockHeap.pop: items.set OOB at {hole}")
+			hole = larger
+		end 'siftDown'
+
+		try self.items.set(hole, value: last) otherwise panic("BlockHeap.pop: items.set OOB at {hole}")
+		return highest
+	end 'pop'
+end 'BlockHeap'
+
 // The memo ONE liveness walk needs — "is `v` already marked live-in to (respectively live-out of)
 // block B on THIS walk?".
 //
@@ -3753,7 +3952,7 @@ export type LivenessMarkScratch
 	var liveOutStamp as VersionStampColumn
 	var touchStamp as VersionStampColumn
 	var generation as VersionStamp
-	var worklist as CfgIndexArray
+	var worklist as BlockHeap
 	var inVisited as CfgIndexArray
 	var outVisited as CfgIndexArray
 	var transparent as DenseColumn
@@ -3767,9 +3966,12 @@ export type LivenessMarkScratch
 	var pieces as DenseColumn
 	var cuts as CfgIndexArray
 	var cutCursor as ElementIndex
+	var coveredStamp as VersionStampColumn
+	var coveredBase as ElementIndex
+	var coveredNodes as CfgIndexArray
 
 	export static function create() returns LivenessMarkScratch
-		return Self{liveInStamp: VersionStampColumn.create(), liveOutStamp: VersionStampColumn.create(), touchStamp: VersionStampColumn.create(), generation: 0, worklist: CfgIndexArray.create(), inVisited: CfgIndexArray.create(), outVisited: CfgIndexArray.create(), transparent: DenseColumn.create(), sortBuf: DenseColumn.create(), expandRuns: false, candStamp: VersionStampColumn.create(), candidates: DenseColumn.create(), intervals: DenseColumn.create(), mergedLo: CfgIndexArray.create(), mergedHi: CfgIndexArray.create(), pieces: DenseColumn.create(), cuts: CfgIndexArray.create(), cutCursor: 0}
+		return Self{liveInStamp: VersionStampColumn.create(), liveOutStamp: VersionStampColumn.create(), touchStamp: VersionStampColumn.create(), generation: 0, worklist: BlockHeap.create(), inVisited: CfgIndexArray.create(), outVisited: CfgIndexArray.create(), transparent: DenseColumn.create(), sortBuf: DenseColumn.create(), expandRuns: false, candStamp: VersionStampColumn.create(), candidates: DenseColumn.create(), intervals: DenseColumn.create(), mergedLo: CfgIndexArray.create(), mergedHi: CfgIndexArray.create(), pieces: DenseColumn.create(), cuts: CfgIndexArray.create(), cutCursor: 0, coveredStamp: VersionStampColumn.create(), coveredBase: 1, coveredNodes: CfgIndexArray.create()}
 	end 'create'
 
 	export function begin(numBlocks ElementIndex)
@@ -3777,8 +3979,33 @@ export type LivenessMarkScratch
 		self.liveOutStamp.refill(numBlocks, value: 0)
 		self.touchStamp.refill(numBlocks, value: 0)
 		self.candStamp.refill(numBlocks, value: 0)
+		self.coveredBase = roundUpToPowerOfTwo(numBlocks as BytePos)
+		self.coveredStamp.refill(self.coveredBase + self.coveredBase, value: 0)
 		self.generation = 0
 	end 'begin'
+
+	function markCovered(lo ElementIndex, hi ElementIndex, gen VersionStamp)
+		var covering = self.coveredNodes
+		collectCoveringNodes(self.coveredBase, lo: lo, hi: hi, out: covering)
+
+		for node in covering 'eachCoveringNode'
+			try self.coveredStamp.set(node, value: gen) otherwise panic("LivenessMarkScratch.markCovered: coveredStamp.set OOB at {node}")
+		end 'eachCoveringNode'
+	end 'markCovered'
+
+	function isCovered(b ElementIndex, gen VersionStamp) returns bool
+		var node = self.coveredBase + b
+
+		while node >= 1 'towardTheRoot'
+			if (try self.coveredStamp.get(node) otherwise panic("LivenessMarkScratch.isCovered: coveredStamp.get OOB at {node}")) == gen 'covered'
+				return true
+			end 'covered'
+
+			node = node / 2
+		end 'towardTheRoot'
+
+		return false
+	end 'isCovered'
 
 	export function expandTransparent(on bool)
 		self.expandRuns = on
@@ -3792,8 +4019,9 @@ export type LivenessMarkScratch
 	//
 	// A block the value is live straight through, neither defined nor read there, becomes part of a
 	// RUN (`LiveSets.runs`) rather than an explicit entry; `expandTransparent` adds those blocks to
-	// `touched` too. A skipping walk (`DomSkip`, on a value with no range yet) covers a clean
-	// dominator chain in one step.
+	// `touched` too. A skipping walk (`DomSkip`, on a value with no range yet) covers a stretch of
+	// blocks in one step. Its worklist pops the highest block first and a cover reaches only below the
+	// block it starts from, so a covered block is skipped rather than walked again.
 	export function walkValue(cfg FuncCfg, index UseIndex, v ValueId, class RegClass, live LiveSets, adding bool, touched BlockSet) returns EventCount
 		let topo = cfg.topo
 		self.generation = self.generation + 1
@@ -3838,7 +4066,7 @@ export type LivenessMarkScratch
 		var markSteps = 0 as EventCount
 
 		while pending.count() > 0 'walkUp'
-			let b = try pending.pop() otherwise panic("LivenessMarkScratch.walkValue: pending.pop on non-empty failed")
+			let b = pending.pop()
 			markSteps = markSteps + 1
 
 			if defBlock == b 'reachedDef'
@@ -3851,7 +4079,11 @@ export type LivenessMarkScratch
 				continue
 			end 'alreadyWalked'
 
-			if skipping and (try self.touchStamp.get(b) otherwise panic("LivenessMarkScratch.walkValue: touchStamp.get OOB")) != gen and cfg.skip.coversEnough(b) and self.coversUpTo(cfg, b: b, defBlock: defBlock, pending: pending, gen: gen) 'bulk'
+			if skipping and self.isCovered(b, gen: gen) 'coveredByAnEarlierStep'
+				continue
+			end 'coveredByAnEarlierStep'
+
+			if skipping and (try self.touchStamp.get(b) otherwise panic("LivenessMarkScratch.walkValue: touchStamp.get OOB")) != gen and self.coversUpTo(cfg, b: b, defBlock: defBlock, pending: pending, gen: gen) 'bulk'
 				continue
 			end 'bulk'
 
@@ -3900,26 +4132,55 @@ export type LivenessMarkScratch
 		self.candidates.push(b)
 	end 'noteCandidate'
 
-	// `b` is live-in, reads nothing of the value, and heads a clean chain up to `edgeOf(b)`
-	// (`DomSkip`), so the value is live into every block of `(top, b]` and out of `top`, which the
-	// walk resumes from. `top` is the chain's top, or the def when it lies inside and dominates `b`; a
-	// def inside that does not dominate `b` refuses the step.
-	function coversUpTo(cfg FuncCfg, b ElementIndex, defBlock ElementIndex, pending CfgIndexArray, gen VersionStamp) returns bool
-		let edge = cfg.skip.edgeOf(b)
-		var top = edge
+	// `b` is live-in and reads nothing of the value, so the value is live into every block of
+	// `(bottom, b]` (`DomSkip.coverFloor`) and out of every predecessor entering it from below, which
+	// the walk resumes from. `bottom` is the floor, or the def when it lies inside and dominates `b`;
+	// a def inside that does not dominate `b` refuses the step.
+	function coversUpTo(cfg FuncCfg, b ElementIndex, defBlock ElementIndex, pending BlockHeap, gen VersionStamp) returns bool
+		let (coverable, outside) = cfg.skip.coverFloor(b)
 
-		if defBlock > edge and defBlock < b 'defInsideTheRegion'
-			if not cfg.skip.dominates(defBlock, y: b) 'notADominator'
-				return false
-			end 'notADominator'
+		if not coverable 'nothingToCover'
+			return false
+		end 'nothingToCover'
 
-			top = defBlock
-		end 'defInsideTheRegion'
+		let defInsideTheRegion = defBlock > outside and defBlock < b
 
-		self.intervals.push(spanOf(top + 1, hi: b))
+		if defInsideTheRegion and not cfg.skip.dominates(defBlock, y: b) 'notADominator'
+			return false
+		end 'notADominator'
+
+		let bottom = defBlock if defInsideTheRegion else outside
+		self.markCovered(bottom + 1, hi: b, gen: gen)
+		self.intervals.push(spanOf(bottom + 1, hi: b))
 		try self.liveInStamp.set(b, value: gen) otherwise panic("LivenessMarkScratch.coversUpTo: liveInStamp.set OOB")
-		self.visitLiveOut(gen, blockLocal: top)
-		pending.push(top)
+
+		if defInsideTheRegion 'resumeAtTheDef'
+			self.visitLiveOut(gen, blockLocal: defBlock)
+			pending.push(defBlock)
+			return true
+		end 'resumeAtTheDef'
+
+		var upTo = bottom
+
+		while true 'eachEnteringPred'
+			let (entered, enteringPred) = cfg.skip.bounds.enteringPreds.largestAtMost(bottom + 1, hi: b, bound: upTo)
+
+			if not entered 'noneLeft'
+				break
+			end 'noneLeft'
+
+			self.visitLiveOut(gen, blockLocal: enteringPred)
+			pending.push(enteringPred)
+
+			if enteringPred == EntryBlockLocal 'reachedTheEntry'
+				break
+			end 'reachedTheEntry'
+
+			// Every block above the stranded one reaches `enteringPred` by forward edges, so the walk
+			// from `enteringPred` already reaches it; with none stranded, it reaches every block below.
+			upTo = try cfg.skip.bounds.lastStrandedBelow(enteringPred) otherwise break
+		end 'eachEnteringPred'
+
 		return true
 	end 'coversUpTo'
 

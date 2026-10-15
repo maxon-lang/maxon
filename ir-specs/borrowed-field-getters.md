@@ -239,7 +239,7 @@ func @main {
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#22
-  critsplit:
+  critsplit#56:
     x64.movRegReg rax, r8
   __il_body#46:
     x64.cmpRegImm32 rax, 0
@@ -261,7 +261,7 @@ func @main {
   __il_cont#15:
     x64.movRegImm32 rcx, 1
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, scmerge
+    x64.jcc notEqual, critsplit#55
   __il_body#34:
     x64.loadRegBaseDisp.byte rax, [r14 + 16]
     x64.cmpRegImm32 rax, 0
@@ -273,11 +273,13 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [r14 + 0]
   __il_cont#33:
     x64.loadRegBaseDisp.byte rax, [rax + 16]
-    x64.movRegReg rcx, rax
+    x64.jmp scmerge
+  critsplit#55:
+    x64.movRegReg rax, rcx
   scmerge:
-    x64.movRegImm32 rax, 1
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, __il_cont#6
+    x64.movRegImm32 rcx, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, critsplit#54
   __il_body#38:
     x64.loadRegBaseDisp.byte rax, [r14 + 16]
     x64.cmpRegImm32 rax, 0
@@ -292,6 +294,9 @@ func @main {
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.cmpRegImm32 rax, 3
     x64.setccReg above, rax
+    x64.jmp __il_cont#6
+  critsplit#54:
+    x64.movRegReg rax, rcx
   __il_cont#6:
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, ifcont#3

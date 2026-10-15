@@ -1432,7 +1432,7 @@ func @__mm_alloc {
     x64.loadRegBaseDisp.word64 rcx, [rax + 24]
     x64.leaRegRegImm32 rdx, rax, 152152
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, shard#2
+    x64.jcc equal, critsplit
   shard#8:
     x64.mov rcx, gs:[rcx]
     x64.cmpRegImm32 rcx, 0
@@ -1456,10 +1456,12 @@ func @__mm_alloc {
     x64.imulRegRegImm32 rcx, rcx, 48
     x64.leaRegRegImm32 rax, rax, 139912
     x64.leaRegRegReg rax, rax, rcx
-    x64.movRegReg rdx, rax
+    x64.jmp shard#2
+  critsplit:
+    x64.movRegReg rax, rdx
   shard#2:
-    x64.aluBaseDispImm32.add [rdx + 8], 1
-    x64.aluBaseDispReg.add [rdx + 16], rbx
+    x64.aluBaseDispImm32.add [rax + 8], 1
+    x64.aluBaseDispReg.add [rax + 16], rbx
   counted:
     x64.leaRegRegImm32 r8, r8, 24
     x64.epilogue 32
@@ -1479,7 +1481,7 @@ func @__mm_free {
     x64.loadRegBaseDisp.word64 rdx, [rax + 24]
     x64.leaRegRegImm32 rsi, rax, 152152
     x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, shard#2
+    x64.jcc equal, critsplit
   shard#8:
     x64.mov rdx, gs:[rdx]
     x64.cmpRegImm32 rdx, 0
@@ -1500,9 +1502,11 @@ func @__mm_free {
     x64.imulRegRegImm32 rdx, rdx, 48
     x64.leaRegRegImm32 rax, rax, 139912
     x64.leaRegRegReg rax, rax, rdx
-    x64.movRegReg rsi, rax
+    x64.jmp shard#2
+  critsplit:
+    x64.movRegReg rax, rsi
   shard#2:
-    x64.aluBaseDispImm32.add [rsi + 0], 1
+    x64.aluBaseDispImm32.add [rax + 0], 1
   counted:
     x64.leaRegRegImm32 rsi, rcx, -24
     x64.loadRegBaseDisp.word64 rax, [rsi + 8]
@@ -1525,7 +1529,8 @@ func @__slab_alloc {
     x64.pushReg r12
     x64.pushReg r13
     x64.pushReg r14
-    x64.prologue 80
+    x64.pushReg r15
+    x64.prologue 72
     x64.cmpRegImm32 rcx, 32768
     x64.jcc greater, osdirect
   small:
@@ -1553,57 +1558,56 @@ func @__slab_alloc {
     x64.movRegReg r8, rax
   state#6:
     x64.loadRegBaseDisp.word64 rax, [r8 + 24]
-    x64.movRegImm32 rdx, 0
-    x64.leaRegRegImm32 rsi, r8, 152152
-    x64.leaRegRegImm32 r12, r8, 138720
+    x64.movRegImm32 r12, 0
+    x64.leaRegRegImm32 rdx, r8, 152152
+    x64.leaRegRegImm32 r13, r8, 138720
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, shard#13
-  critsplit#32:
-    x64.movRegReg rax, r12
-    x64.jmp shard#7
+    x64.jcc equal, critsplit#32
   shard#13:
     x64.mov rax, gs:[rax]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, shard#9
   shard#10:
-    x64.leaRegRegImm32 r13, r8, 32
-    x64.movRegReg r14, r13
-    x64.movRegReg r13, rdx
+    x64.leaRegRegImm32 r14, r8, 32
     x64.jmp shard#8
   shard#9:
-    x64.loadRegBaseDisp.word64 rdi, [rax + 8]
-    x64.cmpRegImm32 rdi, 0
+    x64.loadRegBaseDisp.word64 rsi, [rax + 8]
+    x64.cmpRegImm32 rsi, 0
     x64.jcc equal, shard#15
   shard#14:
-    x64.loadRegBaseDisp.word64 rdi, [rdi + 264]
-    x64.aluBaseDispImm32.add [rdi + 312], 1
-    x64.aluBaseDispReg.add [rdi + 328], rcx
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 264]
+    x64.aluBaseDispImm32.add [rsi + 312], 1
+    x64.aluBaseDispReg.add [rsi + 328], rcx
   shard#15:
-    x64.loadRegBaseDisp.word64 r13, [rax + 0]
-    x64.cmpRegImm32 r13, 0
-    x64.setccReg equal, rdi
-    x64.leaRegRegImm32 r14, rax, 592
-    x64.cmpRegImm32 rdi, 0
-    x64.jcc equal, shard#11
-  critsplit#35:
-    x64.movRegReg r13, rdx
-    x64.jmp shard#8
+    x64.loadRegBaseDisp.word64 r14, [rax + 0]
+    x64.cmpRegImm32 r14, 0
+    x64.setccReg equal, rsi
+    x64.leaRegRegImm32 r15, rax, 592
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, critsplit#35
   shard#11:
-    x64.loadRegBaseDisp.word64 rax, [r13 + 32]
+    x64.loadRegBaseDisp.word64 rax, [r14 + 32]
     x64.cmpRegImm32 rax, 255
-    x64.jcc less, shard#12
+    x64.jcc greaterEqual, critsplit#34
+    x64.jmp shard#12
+  critsplit#35:
+    x64.movRegReg r14, r15
+    x64.jmp shard#8
+  critsplit#34:
+    x64.movRegReg r12, r14
+    x64.movRegReg r14, r15
   shard#8:
     x64.movRegImm32 rax, 1
-    x64.leaRegRegImm32 rdx, rsi, 24
-    x64.lock add [rdx], rax
-    x64.leaRegRegImm32 rax, rsi, 40
+    x64.leaRegRegImm32 rsi, rdx, 24
+    x64.lock add [rsi], rax
+    x64.leaRegRegImm32 rax, rdx, 40
     x64.lock add [rax], rcx
     x64.movRegImm32 rax, 1
     x64.lock add [r14], rax
     x64.leaRegRegImm32 rcx, r8, 40
     x64.iatCall 21
-    x64.movRegReg rdx, r13
-    x64.movRegReg rax, r12
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
     x64.movRegReg rsi, r14
     x64.jmp routed
   shard#12:
@@ -1612,12 +1616,18 @@ func @__slab_alloc {
     x64.leaRegRegReg rdx, rsi, rdx
     x64.imulRegRegImm32 rax, rax, 544
     x64.leaRegRegReg rax, r8, rax
-    x64.movRegReg rsi, rdx
-    x64.movRegReg rdx, r13
+    x64.movRegReg rsi, rax
+    x64.movRegReg rax, r14
+    x64.jmp shard#7
+  critsplit#32:
+    x64.movRegReg rax, r12
+    x64.movRegReg rsi, r13
   shard#7:
     x64.movRegImm32 r8, 0
-    x64.aluBaseDispImm32.add [rsi + 24], 1
-    x64.aluBaseDispReg.add [rsi + 40], rcx
+    x64.aluBaseDispImm32.add [rdx + 24], 1
+    x64.aluBaseDispReg.add [rdx + 40], rcx
+    x64.movRegReg rdx, rax
+    x64.movRegReg rax, rsi
     x64.movRegReg rsi, r8
   routed:
     x64.leaRegRegImm32 rcx, rax, 648
@@ -1679,16 +1689,8 @@ func @__slab_alloc {
     x64.jcc notEqual, release
   handback:
     x64.movRegReg r8, rax
-    x64.epilogue 80
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  osdirect:
-    x64.callDirect __slab_alloc_oversize
-    x64.epilogue 80
+    x64.epilogue 72
+    x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -1711,13 +1713,24 @@ func @__slab_alloc {
     x64.loadRegSlot rdi, slot2
     x64.loadRegSlot r8, slot3
     x64.jmp pop#18
+  osdirect:
+    x64.callDirect __slab_alloc_oversize
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   pop#22:
     x64.leaRegRdata rcx, [rip + __abort_msg_86]  ; "fatal error: runtime abort 86 (slabSpanExhaustedPastItsEnd)\x0a"
     x64.movRegImm32 rdx, 60
     x64.movRegImm32 rax, 86
     x64.callDirect __rt_abort
     x64.movRegImm32 r8, 0
-    x64.epilogue 80
+    x64.epilogue 72
+    x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -1736,7 +1749,8 @@ func @__slab_alloc {
     x64.movRegImm rcx, 18446744073709551615
     x64.lock add [rsi], rcx
     x64.movRegReg r8, rax
-    x64.epilogue 80
+    x64.epilogue 72
+    x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -1789,7 +1803,7 @@ func @__slab_free {
     x64.movRegImm32 rdx, 0
     x64.leaRegRegImm32 rsi, rax, 152152
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, shard#7
+    x64.jcc equal, critsplit#42
   shard#13:
     x64.mov rdi, gs:[rcx]
     x64.cmpRegImm32 rdi, 0
@@ -1809,7 +1823,7 @@ func @__slab_free {
     x64.loadRegBaseDisp.word64 rdx, [rdi + 32]
     x64.cmpRegImm32 rdx, 255
     x64.jcc less, shard#12
-  critsplit:
+  critsplit#44:
     x64.movRegReg rdx, rdi
   shard#8:
     x64.movRegImm32 rax, 1
@@ -1820,10 +1834,13 @@ func @__slab_free {
     x64.imulRegRegImm32 rdx, rdx, 48
     x64.leaRegRegImm32 rax, rax, 139912
     x64.leaRegRegReg rax, rax, rdx
-    x64.movRegReg rsi, rax
-    x64.movRegReg rdx, rdi
+    x64.jmp shard#7
+  critsplit#42:
+    x64.movRegReg rax, rsi
+    x64.movRegReg rdi, rdx
   shard#7:
-    x64.aluBaseDispImm32.add [rsi + 32], 1
+    x64.aluBaseDispImm32.add [rax + 32], 1
+    x64.movRegReg rdx, rdi
   routed:
     x64.loadRegBaseDisp.word64 rax, [r12 + 48]
     x64.cmpRegImm32 rax, 0
@@ -1878,15 +1895,6 @@ func @__slab_free {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  osdirect:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __slab_free_oversize
-    x64.movRegReg rax, r8
-    x64.epilogue 80
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
   rawlocked#18:
     x64.leaRegGlobal rax, __slab_state
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -1932,12 +1940,7 @@ func @__slab_free {
     x64.lock add [rsi], rax
     x64.cmpRegImm32 r8, 0
     x64.jcc equal, routed
-  rawdone:
-    x64.epilogue 80
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jmp rawdone
   uncached:
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, relistplain
@@ -1996,6 +1999,22 @@ func @__slab_free {
   relistdone:
     x64.cmpRegImm32 r8, 0
     x64.jcc equal, routed
+    x64.jmp relistret
+  osdirect:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __slab_free_oversize
+    x64.movRegReg rax, r8
+    x64.epilogue 80
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  rawdone:
+    x64.epilogue 80
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   relistret:
     x64.epilogue 80
     x64.popReg r12
@@ -2084,7 +2103,7 @@ func @__mm_alloc {
     x64.loadRegBaseDisp.word64 rcx, [rax + 24]
     x64.leaRegRegImm32 rdx, rax, 152152
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, shard#2
+    x64.jcc equal, critsplit
   shard#8:
     x64.mov rcx, gs:[rcx]
     x64.cmpRegImm32 rcx, 0
@@ -2108,10 +2127,12 @@ func @__mm_alloc {
     x64.imulRegRegImm32 rcx, rcx, 48
     x64.leaRegRegImm32 rax, rax, 139912
     x64.leaRegRegReg rax, rax, rcx
-    x64.movRegReg rdx, rax
+    x64.jmp shard#2
+  critsplit:
+    x64.movRegReg rax, rdx
   shard#2:
-    x64.aluBaseDispImm32.add [rdx + 8], 1
-    x64.aluBaseDispReg.add [rdx + 16], rbx
+    x64.aluBaseDispImm32.add [rax + 8], 1
+    x64.aluBaseDispReg.add [rax + 16], rbx
   counted:
     x64.leaRegRegImm32 r8, r8, 24
     x64.epilogue 32
@@ -2131,7 +2152,7 @@ func @__mm_free {
     x64.loadRegBaseDisp.word64 rdx, [rax + 24]
     x64.leaRegRegImm32 rsi, rax, 152152
     x64.cmpRegImm32 rdx, 0
-    x64.jcc equal, shard#2
+    x64.jcc equal, critsplit
   shard#8:
     x64.mov rdx, gs:[rdx]
     x64.cmpRegImm32 rdx, 0
@@ -2152,9 +2173,11 @@ func @__mm_free {
     x64.imulRegRegImm32 rdx, rdx, 48
     x64.leaRegRegImm32 rax, rax, 139912
     x64.leaRegRegReg rax, rax, rdx
-    x64.movRegReg rsi, rax
+    x64.jmp shard#2
+  critsplit:
+    x64.movRegReg rax, rsi
   shard#2:
-    x64.aluBaseDispImm32.add [rsi + 0], 1
+    x64.aluBaseDispImm32.add [rax + 0], 1
   counted:
     x64.leaRegRegImm32 rsi, rcx, -24
     x64.loadRegBaseDisp.word64 rax, [rsi + 8]
@@ -2177,7 +2200,8 @@ func @__slab_alloc {
     x64.pushReg r12
     x64.pushReg r13
     x64.pushReg r14
-    x64.prologue 80
+    x64.pushReg r15
+    x64.prologue 72
     x64.cmpRegImm32 rcx, 32768
     x64.jcc greater, osdirect
   small:
@@ -2205,57 +2229,56 @@ func @__slab_alloc {
     x64.movRegReg r8, rax
   state#6:
     x64.loadRegBaseDisp.word64 rax, [r8 + 24]
-    x64.movRegImm32 rdx, 0
-    x64.leaRegRegImm32 rsi, r8, 152152
-    x64.leaRegRegImm32 r12, r8, 138720
+    x64.movRegImm32 r12, 0
+    x64.leaRegRegImm32 rdx, r8, 152152
+    x64.leaRegRegImm32 r13, r8, 138720
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, shard#13
-  critsplit#32:
-    x64.movRegReg rax, r12
-    x64.jmp shard#7
+    x64.jcc equal, critsplit#32
   shard#13:
     x64.mov rax, gs:[rax]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, shard#9
   shard#10:
-    x64.leaRegRegImm32 r13, r8, 32
-    x64.movRegReg r14, r13
-    x64.movRegReg r13, rdx
+    x64.leaRegRegImm32 r14, r8, 32
     x64.jmp shard#8
   shard#9:
-    x64.loadRegBaseDisp.word64 rdi, [rax + 8]
-    x64.cmpRegImm32 rdi, 0
+    x64.loadRegBaseDisp.word64 rsi, [rax + 8]
+    x64.cmpRegImm32 rsi, 0
     x64.jcc equal, shard#15
   shard#14:
-    x64.loadRegBaseDisp.word64 rdi, [rdi + 264]
-    x64.aluBaseDispImm32.add [rdi + 312], 1
-    x64.aluBaseDispReg.add [rdi + 328], rcx
+    x64.loadRegBaseDisp.word64 rsi, [rsi + 264]
+    x64.aluBaseDispImm32.add [rsi + 312], 1
+    x64.aluBaseDispReg.add [rsi + 328], rcx
   shard#15:
-    x64.loadRegBaseDisp.word64 r13, [rax + 0]
-    x64.cmpRegImm32 r13, 0
-    x64.setccReg equal, rdi
-    x64.leaRegRegImm32 r14, rax, 592
-    x64.cmpRegImm32 rdi, 0
-    x64.jcc equal, shard#11
-  critsplit#35:
-    x64.movRegReg r13, rdx
-    x64.jmp shard#8
+    x64.loadRegBaseDisp.word64 r14, [rax + 0]
+    x64.cmpRegImm32 r14, 0
+    x64.setccReg equal, rsi
+    x64.leaRegRegImm32 r15, rax, 592
+    x64.cmpRegImm32 rsi, 0
+    x64.jcc notEqual, critsplit#35
   shard#11:
-    x64.loadRegBaseDisp.word64 rax, [r13 + 32]
+    x64.loadRegBaseDisp.word64 rax, [r14 + 32]
     x64.cmpRegImm32 rax, 255
-    x64.jcc less, shard#12
+    x64.jcc greaterEqual, critsplit#34
+    x64.jmp shard#12
+  critsplit#35:
+    x64.movRegReg r14, r15
+    x64.jmp shard#8
+  critsplit#34:
+    x64.movRegReg r12, r14
+    x64.movRegReg r14, r15
   shard#8:
     x64.movRegImm32 rax, 1
-    x64.leaRegRegImm32 rdx, rsi, 24
-    x64.lock add [rdx], rax
-    x64.leaRegRegImm32 rax, rsi, 40
+    x64.leaRegRegImm32 rsi, rdx, 24
+    x64.lock add [rsi], rax
+    x64.leaRegRegImm32 rax, rdx, 40
     x64.lock add [rax], rcx
     x64.movRegImm32 rax, 1
     x64.lock add [r14], rax
     x64.leaRegRegImm32 rcx, r8, 40
     x64.callDirect mrt_linux_lock_enter
-    x64.movRegReg rdx, r13
-    x64.movRegReg rax, r12
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
     x64.movRegReg rsi, r14
     x64.jmp routed
   shard#12:
@@ -2264,12 +2287,18 @@ func @__slab_alloc {
     x64.leaRegRegReg rdx, rsi, rdx
     x64.imulRegRegImm32 rax, rax, 544
     x64.leaRegRegReg rax, r8, rax
-    x64.movRegReg rsi, rdx
-    x64.movRegReg rdx, r13
+    x64.movRegReg rsi, rax
+    x64.movRegReg rax, r14
+    x64.jmp shard#7
+  critsplit#32:
+    x64.movRegReg rax, r12
+    x64.movRegReg rsi, r13
   shard#7:
     x64.movRegImm32 r8, 0
-    x64.aluBaseDispImm32.add [rsi + 24], 1
-    x64.aluBaseDispReg.add [rsi + 40], rcx
+    x64.aluBaseDispImm32.add [rdx + 24], 1
+    x64.aluBaseDispReg.add [rdx + 40], rcx
+    x64.movRegReg rdx, rax
+    x64.movRegReg rax, rsi
     x64.movRegReg rsi, r8
   routed:
     x64.leaRegRegImm32 rcx, rax, 648
@@ -2331,16 +2360,8 @@ func @__slab_alloc {
     x64.jcc notEqual, release
   handback:
     x64.movRegReg r8, rax
-    x64.epilogue 80
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  osdirect:
-    x64.callDirect __slab_alloc_oversize
-    x64.epilogue 80
+    x64.epilogue 72
+    x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -2363,13 +2384,24 @@ func @__slab_alloc {
     x64.loadRegSlot rdi, slot2
     x64.loadRegSlot r8, slot3
     x64.jmp pop#18
+  osdirect:
+    x64.callDirect __slab_alloc_oversize
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   pop#22:
     x64.leaRegRdata rcx, [rip + __abort_msg_86]  ; "fatal error: runtime abort 86 (slabSpanExhaustedPastItsEnd)\x0a"
     x64.movRegImm32 rdx, 60
     x64.movRegImm32 rax, 86
     x64.callDirect __rt_abort
     x64.movRegImm32 r8, 0
-    x64.epilogue 80
+    x64.epilogue 72
+    x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -2388,7 +2420,8 @@ func @__slab_alloc {
     x64.movRegImm rcx, 18446744073709551615
     x64.lock add [rsi], rcx
     x64.movRegReg r8, rax
-    x64.epilogue 80
+    x64.epilogue 72
+    x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -2441,7 +2474,7 @@ func @__slab_free {
     x64.movRegImm32 rdx, 0
     x64.leaRegRegImm32 rsi, rax, 152152
     x64.cmpRegImm32 rcx, 0
-    x64.jcc equal, shard#7
+    x64.jcc equal, critsplit#42
   shard#13:
     x64.mov rdi, gs:[rcx]
     x64.cmpRegImm32 rdi, 0
@@ -2461,7 +2494,7 @@ func @__slab_free {
     x64.loadRegBaseDisp.word64 rdx, [rdi + 32]
     x64.cmpRegImm32 rdx, 255
     x64.jcc less, shard#12
-  critsplit:
+  critsplit#44:
     x64.movRegReg rdx, rdi
   shard#8:
     x64.movRegImm32 rax, 1
@@ -2472,10 +2505,13 @@ func @__slab_free {
     x64.imulRegRegImm32 rdx, rdx, 48
     x64.leaRegRegImm32 rax, rax, 139912
     x64.leaRegRegReg rax, rax, rdx
-    x64.movRegReg rsi, rax
-    x64.movRegReg rdx, rdi
+    x64.jmp shard#7
+  critsplit#42:
+    x64.movRegReg rax, rsi
+    x64.movRegReg rdi, rdx
   shard#7:
-    x64.aluBaseDispImm32.add [rsi + 32], 1
+    x64.aluBaseDispImm32.add [rax + 32], 1
+    x64.movRegReg rdx, rdi
   routed:
     x64.loadRegBaseDisp.word64 rax, [r12 + 48]
     x64.cmpRegImm32 rax, 0
@@ -2530,15 +2566,6 @@ func @__slab_free {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  osdirect:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __slab_free_oversize
-    x64.movRegReg rax, r8
-    x64.epilogue 80
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
   rawlocked#18:
     x64.leaRegGlobal rax, __slab_state
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
@@ -2584,12 +2611,7 @@ func @__slab_free {
     x64.lock add [rsi], rax
     x64.cmpRegImm32 r8, 0
     x64.jcc equal, routed
-  rawdone:
-    x64.epilogue 80
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
+    x64.jmp rawdone
   uncached:
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, relistplain
@@ -2648,6 +2670,22 @@ func @__slab_free {
   relistdone:
     x64.cmpRegImm32 r8, 0
     x64.jcc equal, routed
+    x64.jmp relistret
+  osdirect:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __slab_free_oversize
+    x64.movRegReg rax, r8
+    x64.epilogue 80
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  rawdone:
+    x64.epilogue 80
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   relistret:
     x64.epilogue 80
     x64.popReg r12
@@ -2728,7 +2766,7 @@ func @__mm_alloc {
     arm64.loadRegBaseDisp.word64 x2, [x1 + 24]
     arm64.add x3, x1, 152152
     arm64.cmp x2, 0
-    arm64.b.eq shard#2
+    arm64.b.eq critsplit
   shard#8:
     arm64.arm64ThreadPointer x16, darwinMaskedReadOnly
     arm64.add x16, x16, x2
@@ -2758,14 +2796,16 @@ func @__mm_alloc {
     arm64.mul x2, x2, x16
     arm64.add x1, x1, 139912
     arm64.add x1, x1, x2
-    arm64.movRegReg x3, x1
+    arm64.b shard#2
+  critsplit:
+    arm64.movRegReg x1, x3
   shard#2:
-    arm64.loadRegBaseDisp.word64 x1, [x3 + 8]
-    arm64.add x1, x1, 1
-    arm64.storeBaseDispReg.word64 [x3 + 8], x1
-    arm64.loadRegBaseDisp.word64 x1, [x3 + 16]
-    arm64.add x1, x1, x19
-    arm64.storeBaseDispReg.word64 [x3 + 16], x1
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 8]
+    arm64.add x2, x2, 1
+    arm64.storeBaseDispReg.word64 [x1 + 8], x2
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 16]
+    arm64.add x2, x2, x19
+    arm64.storeBaseDispReg.word64 [x1 + 16], x2
   counted:
     arm64.add x0, x0, 24
     arm64.loadRegSlot x19, slot0
@@ -2782,7 +2822,7 @@ func @__mm_free {
     arm64.loadRegBaseDisp.word64 x2, [x1 + 24]
     arm64.add x3, x1, 152152
     arm64.cmp x2, 0
-    arm64.b.eq shard#2
+    arm64.b.eq critsplit
   shard#8:
     arm64.arm64ThreadPointer x16, darwinMaskedReadOnly
     arm64.add x16, x16, x2
@@ -2809,11 +2849,13 @@ func @__mm_free {
     arm64.mul x2, x2, x16
     arm64.add x1, x1, 139912
     arm64.add x1, x1, x2
-    arm64.movRegReg x3, x1
+    arm64.b shard#2
+  critsplit:
+    arm64.movRegReg x1, x3
   shard#2:
-    arm64.loadRegBaseDisp.word64 x1, [x3 + 0]
-    arm64.add x1, x1, 1
-    arm64.storeBaseDispReg.word64 [x3 + 0], x1
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
+    arm64.add x2, x2, 1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x2
   counted:
     arm64.sub x4, x0, 24
     arm64.loadRegBaseDisp.word64 x1, [x4 + 8]
@@ -2827,7 +2869,8 @@ func @__mm_free {
 
 func @__slab_alloc {
   entry:
-    arm64.prologue 80
+    arm64.prologue 96
+    arm64.storeSlotReg slot8, x23
     arm64.storeSlotReg slot7, x22
     arm64.storeSlotReg slot6, x21
     arm64.storeSlotReg slot5, x20
@@ -2857,14 +2900,11 @@ func @__slab_alloc {
     arm64.b.eq state#5
   state#6:
     arm64.loadRegBaseDisp.word64 x2, [x1 + 24]
-    arm64.movImm x3, 0
-    arm64.add x4, x1, 152152
-    arm64.add x20, x1, 138720
+    arm64.movImm x20, 0
+    arm64.add x3, x1, 152152
+    arm64.add x21, x1, 138720
     arm64.cmp x2, 0
-    arm64.b.ne shard#13
-  critsplit#32:
-    arm64.movRegReg x1, x20
-    arm64.b shard#7
+    arm64.b.eq critsplit#32
   shard#13:
     arm64.arm64ThreadPointer x16, darwinMaskedReadOnly
     arm64.add x16, x16, x2
@@ -2875,47 +2915,49 @@ func @__slab_alloc {
     arm64.cmp x2, 0
     arm64.b.ne shard#9
   shard#10:
-    arm64.add x21, x1, 32
-    arm64.movRegReg x22, x21
-    arm64.movRegReg x21, x3
+    arm64.add x22, x1, 32
     arm64.b shard#8
   shard#9:
-    arm64.loadRegBaseDisp.word64 x5, [x2 + 8]
-    arm64.cmp x5, 0
+    arm64.loadRegBaseDisp.word64 x4, [x2 + 8]
+    arm64.cmp x4, 0
     arm64.b.eq shard#15
   shard#14:
-    arm64.loadRegBaseDisp.word64 x5, [x5 + 264]
-    arm64.loadRegBaseDisp.word64 x6, [x5 + 312]
-    arm64.add x6, x6, 1
-    arm64.storeBaseDispReg.word64 [x5 + 312], x6
-    arm64.loadRegBaseDisp.word64 x6, [x5 + 328]
-    arm64.add x6, x6, x0
-    arm64.storeBaseDispReg.word64 [x5 + 328], x6
+    arm64.loadRegBaseDisp.word64 x4, [x4 + 264]
+    arm64.loadRegBaseDisp.word64 x5, [x4 + 312]
+    arm64.add x5, x5, 1
+    arm64.storeBaseDispReg.word64 [x4 + 312], x5
+    arm64.loadRegBaseDisp.word64 x5, [x4 + 328]
+    arm64.add x5, x5, x0
+    arm64.storeBaseDispReg.word64 [x4 + 328], x5
   shard#15:
-    arm64.loadRegBaseDisp.word64 x21, [x2 + 0]
-    arm64.cmp x21, 0
-    arm64.cset x5, eq
-    arm64.add x22, x2, 592
-    arm64.cbz x5, shard#11
-  critsplit#35:
-    arm64.movRegReg x21, x3
-    arm64.b shard#8
+    arm64.loadRegBaseDisp.word64 x22, [x2 + 0]
+    arm64.cmp x22, 0
+    arm64.cset x4, eq
+    arm64.add x23, x2, 592
+    arm64.cbnz x4, critsplit#35
   shard#11:
-    arm64.loadRegBaseDisp.word64 x2, [x21 + 32]
+    arm64.loadRegBaseDisp.word64 x2, [x22 + 32]
     arm64.cmp x2, 255
-    arm64.b.lt shard#12
+    arm64.b.ge critsplit#34
+    arm64.b shard#12
+  critsplit#35:
+    arm64.movRegReg x22, x23
+    arm64.b shard#8
+  critsplit#34:
+    arm64.movRegReg x20, x22
+    arm64.movRegReg x22, x23
   shard#8:
     arm64.movImm x2, 1
-    arm64.add x3, x4, 24
-    arm64.arm64AtomicRmw.add x2, [x3], x2
-    arm64.add x2, x4, 40
+    arm64.add x4, x3, 24
+    arm64.arm64AtomicRmw.add x2, [x4], x2
+    arm64.add x2, x3, 40
     arm64.arm64AtomicRmw.add x0, [x2], x0
     arm64.movImm x0, 1
     arm64.arm64AtomicRmw.add x0, [x22], x0
     arm64.add x0, x1, 40
     arm64.importCall 18
-    arm64.movRegReg x1, x21
-    arm64.movRegReg x2, x20
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
     arm64.movRegReg x4, x22
     arm64.b routed
   shard#12:
@@ -2926,19 +2968,20 @@ func @__slab_alloc {
     arm64.movImm x16, 544
     arm64.mul x2, x2, x16
     arm64.add x1, x1, x2
-    arm64.movRegReg x4, x3
-    arm64.movRegReg x3, x21
-  shard#7:
-    arm64.movImm x5, 0
-    arm64.loadRegBaseDisp.word64 x2, [x4 + 24]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x4 + 24], x2
-    arm64.loadRegBaseDisp.word64 x2, [x4 + 40]
-    arm64.add x0, x2, x0
-    arm64.storeBaseDispReg.word64 [x4 + 40], x0
     arm64.movRegReg x2, x1
-    arm64.movRegReg x1, x3
-    arm64.movRegReg x4, x5
+    arm64.movRegReg x1, x22
+    arm64.b shard#7
+  critsplit#32:
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+  shard#7:
+    arm64.movImm x4, 0
+    arm64.loadRegBaseDisp.word64 x5, [x3 + 24]
+    arm64.add x5, x5, 1
+    arm64.storeBaseDispReg.word64 [x3 + 24], x5
+    arm64.loadRegBaseDisp.word64 x5, [x3 + 40]
+    arm64.add x0, x5, x0
+    arm64.storeBaseDispReg.word64 [x3 + 40], x0
   routed:
     arm64.add x0, x2, 648
     arm64.lsl x3, x19, 3
@@ -3003,15 +3046,8 @@ func @__slab_alloc {
     arm64.loadRegSlot x20, slot5
     arm64.loadRegSlot x21, slot6
     arm64.loadRegSlot x22, slot7
-    arm64.epilogue 80
-    arm64.ret
-  osdirect:
-    arm64.bl __slab_alloc_oversize
-    arm64.loadRegSlot x19, slot4
-    arm64.loadRegSlot x20, slot5
-    arm64.loadRegSlot x21, slot6
-    arm64.loadRegSlot x22, slot7
-    arm64.epilogue 80
+    arm64.loadRegSlot x23, slot8
+    arm64.epilogue 96
     arm64.ret
   state#5:
     arm64.storeSlotReg slot0, x0
@@ -3030,6 +3066,15 @@ func @__slab_alloc {
     arm64.loadRegSlot x5, slot3
     arm64.movRegReg x6, x0
     arm64.b pop#18
+  osdirect:
+    arm64.bl __slab_alloc_oversize
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.epilogue 96
+    arm64.ret
   pop#22:
     arm64.leaRdata x0, __abort_msg_86  ; "fatal error: runtime abort 86 (slabSpanExhaustedPastItsEnd)\x0a"
     arm64.movImm x1, 60
@@ -3040,7 +3085,8 @@ func @__slab_alloc {
     arm64.loadRegSlot x20, slot5
     arm64.loadRegSlot x21, slot6
     arm64.loadRegSlot x22, slot7
-    arm64.epilogue 80
+    arm64.loadRegSlot x23, slot8
+    arm64.epilogue 96
     arm64.ret
   release:
     arm64.leaGlobal x1, __slab_state
@@ -3058,7 +3104,8 @@ func @__slab_alloc {
     arm64.loadRegSlot x20, slot5
     arm64.loadRegSlot x21, slot6
     arm64.loadRegSlot x22, slot7
-    arm64.epilogue 80
+    arm64.loadRegSlot x23, slot8
+    arm64.epilogue 96
     arm64.ret
 }
 
@@ -3101,7 +3148,7 @@ func @__slab_free {
     arm64.movImm x2, 0
     arm64.add x3, x0, 152152
     arm64.cmp x1, 0
-    arm64.b.eq shard#7
+    arm64.b.eq critsplit#42
   shard#13:
     arm64.arm64ThreadPointer x16, darwinMaskedReadOnly
     arm64.add x16, x16, x1
@@ -3128,7 +3175,7 @@ func @__slab_free {
     arm64.loadRegBaseDisp.word64 x2, [x4 + 32]
     arm64.cmp x2, 255
     arm64.b.lt shard#12
-  critsplit:
+  critsplit#44:
     arm64.movRegReg x2, x4
   shard#8:
     arm64.movImm x0, 1
@@ -3140,12 +3187,15 @@ func @__slab_free {
     arm64.mul x2, x2, x16
     arm64.add x0, x0, 139912
     arm64.add x0, x0, x2
-    arm64.movRegReg x3, x0
-    arm64.movRegReg x2, x4
+    arm64.b shard#7
+  critsplit#42:
+    arm64.movRegReg x0, x3
+    arm64.movRegReg x4, x2
   shard#7:
-    arm64.loadRegBaseDisp.word64 x0, [x3 + 32]
-    arm64.add x0, x0, 1
-    arm64.storeBaseDispReg.word64 [x3 + 32], x0
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 32]
+    arm64.add x2, x2, 1
+    arm64.storeBaseDispReg.word64 [x0 + 32], x2
+    arm64.movRegReg x2, x4
   routed:
     arm64.add x16, x20, 48
     arm64.ldar.word64 x0, [x16]
@@ -3195,14 +3245,6 @@ func @__slab_free {
     arm64.cmp x0, 0
     arm64.b.eq rpush
   rpushed:
-    arm64.loadRegSlot x19, slot5
-    arm64.loadRegSlot x20, slot6
-    arm64.epilogue 80
-    arm64.ret
-  osdirect:
-    arm64.movRegReg x0, x19
-    arm64.bl __slab_free_oversize
-    arm64.movRegReg x1, x0
     arm64.loadRegSlot x19, slot5
     arm64.loadRegSlot x20, slot6
     arm64.epilogue 80
@@ -3257,11 +3299,7 @@ func @__slab_free {
     arm64.arm64AtomicRmw.add x0, [x3], x0
     arm64.cmp x4, 0
     arm64.b.eq routed
-  rawdone:
-    arm64.loadRegSlot x19, slot5
-    arm64.loadRegSlot x20, slot6
-    arm64.epilogue 80
-    arm64.ret
+    arm64.b rawdone
   uncached:
     arm64.cmp x1, 0
     arm64.b.eq relistplain
@@ -3326,6 +3364,20 @@ func @__slab_free {
   relistdone:
     arm64.cmp x4, 0
     arm64.b.eq routed
+    arm64.b relistret
+  osdirect:
+    arm64.movRegReg x0, x19
+    arm64.bl __slab_free_oversize
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.epilogue 80
+    arm64.ret
+  rawdone:
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.epilogue 80
+    arm64.ret
   relistret:
     arm64.loadRegSlot x19, slot5
     arm64.loadRegSlot x20, slot6
@@ -3406,7 +3458,7 @@ func @__mm_alloc {
     arm64.loadRegBaseDisp.word64 x2, [x1 + 24]
     arm64.add x3, x1, 152152
     arm64.cmp x2, 0
-    arm64.b.eq shard#2
+    arm64.b.eq critsplit
   shard#8:
     arm64.arm64ThreadPointer x16, linuxWritable
     arm64.add x16, x16, x2
@@ -3436,14 +3488,16 @@ func @__mm_alloc {
     arm64.mul x2, x2, x16
     arm64.add x1, x1, 139912
     arm64.add x1, x1, x2
-    arm64.movRegReg x3, x1
+    arm64.b shard#2
+  critsplit:
+    arm64.movRegReg x1, x3
   shard#2:
-    arm64.loadRegBaseDisp.word64 x1, [x3 + 8]
-    arm64.add x1, x1, 1
-    arm64.storeBaseDispReg.word64 [x3 + 8], x1
-    arm64.loadRegBaseDisp.word64 x1, [x3 + 16]
-    arm64.add x1, x1, x19
-    arm64.storeBaseDispReg.word64 [x3 + 16], x1
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 8]
+    arm64.add x2, x2, 1
+    arm64.storeBaseDispReg.word64 [x1 + 8], x2
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 16]
+    arm64.add x2, x2, x19
+    arm64.storeBaseDispReg.word64 [x1 + 16], x2
   counted:
     arm64.add x0, x0, 24
     arm64.loadRegSlot x19, slot0
@@ -3460,7 +3514,7 @@ func @__mm_free {
     arm64.loadRegBaseDisp.word64 x2, [x1 + 24]
     arm64.add x3, x1, 152152
     arm64.cmp x2, 0
-    arm64.b.eq shard#2
+    arm64.b.eq critsplit
   shard#8:
     arm64.arm64ThreadPointer x16, linuxWritable
     arm64.add x16, x16, x2
@@ -3487,11 +3541,13 @@ func @__mm_free {
     arm64.mul x2, x2, x16
     arm64.add x1, x1, 139912
     arm64.add x1, x1, x2
-    arm64.movRegReg x3, x1
+    arm64.b shard#2
+  critsplit:
+    arm64.movRegReg x1, x3
   shard#2:
-    arm64.loadRegBaseDisp.word64 x1, [x3 + 0]
-    arm64.add x1, x1, 1
-    arm64.storeBaseDispReg.word64 [x3 + 0], x1
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
+    arm64.add x2, x2, 1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x2
   counted:
     arm64.sub x4, x0, 24
     arm64.loadRegBaseDisp.word64 x1, [x4 + 8]
@@ -3505,7 +3561,8 @@ func @__mm_free {
 
 func @__slab_alloc {
   entry:
-    arm64.prologue 80
+    arm64.prologue 96
+    arm64.storeSlotReg slot8, x23
     arm64.storeSlotReg slot7, x22
     arm64.storeSlotReg slot6, x21
     arm64.storeSlotReg slot5, x20
@@ -3535,14 +3592,11 @@ func @__slab_alloc {
     arm64.b.eq state#5
   state#6:
     arm64.loadRegBaseDisp.word64 x2, [x1 + 24]
-    arm64.movImm x3, 0
-    arm64.add x4, x1, 152152
-    arm64.add x20, x1, 138720
+    arm64.movImm x20, 0
+    arm64.add x3, x1, 152152
+    arm64.add x21, x1, 138720
     arm64.cmp x2, 0
-    arm64.b.ne shard#13
-  critsplit#32:
-    arm64.movRegReg x1, x20
-    arm64.b shard#7
+    arm64.b.eq critsplit#32
   shard#13:
     arm64.arm64ThreadPointer x16, linuxWritable
     arm64.add x16, x16, x2
@@ -3553,47 +3607,49 @@ func @__slab_alloc {
     arm64.cmp x2, 0
     arm64.b.ne shard#9
   shard#10:
-    arm64.add x21, x1, 32
-    arm64.movRegReg x22, x21
-    arm64.movRegReg x21, x3
+    arm64.add x22, x1, 32
     arm64.b shard#8
   shard#9:
-    arm64.loadRegBaseDisp.word64 x5, [x2 + 8]
-    arm64.cmp x5, 0
+    arm64.loadRegBaseDisp.word64 x4, [x2 + 8]
+    arm64.cmp x4, 0
     arm64.b.eq shard#15
   shard#14:
-    arm64.loadRegBaseDisp.word64 x5, [x5 + 264]
-    arm64.loadRegBaseDisp.word64 x6, [x5 + 312]
-    arm64.add x6, x6, 1
-    arm64.storeBaseDispReg.word64 [x5 + 312], x6
-    arm64.loadRegBaseDisp.word64 x6, [x5 + 328]
-    arm64.add x6, x6, x0
-    arm64.storeBaseDispReg.word64 [x5 + 328], x6
+    arm64.loadRegBaseDisp.word64 x4, [x4 + 264]
+    arm64.loadRegBaseDisp.word64 x5, [x4 + 312]
+    arm64.add x5, x5, 1
+    arm64.storeBaseDispReg.word64 [x4 + 312], x5
+    arm64.loadRegBaseDisp.word64 x5, [x4 + 328]
+    arm64.add x5, x5, x0
+    arm64.storeBaseDispReg.word64 [x4 + 328], x5
   shard#15:
-    arm64.loadRegBaseDisp.word64 x21, [x2 + 0]
-    arm64.cmp x21, 0
-    arm64.cset x5, eq
-    arm64.add x22, x2, 592
-    arm64.cbz x5, shard#11
-  critsplit#35:
-    arm64.movRegReg x21, x3
-    arm64.b shard#8
+    arm64.loadRegBaseDisp.word64 x22, [x2 + 0]
+    arm64.cmp x22, 0
+    arm64.cset x4, eq
+    arm64.add x23, x2, 592
+    arm64.cbnz x4, critsplit#35
   shard#11:
-    arm64.loadRegBaseDisp.word64 x2, [x21 + 32]
+    arm64.loadRegBaseDisp.word64 x2, [x22 + 32]
     arm64.cmp x2, 255
-    arm64.b.lt shard#12
+    arm64.b.ge critsplit#34
+    arm64.b shard#12
+  critsplit#35:
+    arm64.movRegReg x22, x23
+    arm64.b shard#8
+  critsplit#34:
+    arm64.movRegReg x20, x22
+    arm64.movRegReg x22, x23
   shard#8:
     arm64.movImm x2, 1
-    arm64.add x3, x4, 24
-    arm64.arm64AtomicRmw.add x2, [x3], x2
-    arm64.add x2, x4, 40
+    arm64.add x4, x3, 24
+    arm64.arm64AtomicRmw.add x2, [x4], x2
+    arm64.add x2, x3, 40
     arm64.arm64AtomicRmw.add x0, [x2], x0
     arm64.movImm x0, 1
     arm64.arm64AtomicRmw.add x0, [x22], x0
     arm64.add x0, x1, 40
     arm64.bl mrt_linux_lock_enter
-    arm64.movRegReg x1, x21
-    arm64.movRegReg x2, x20
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
     arm64.movRegReg x4, x22
     arm64.b routed
   shard#12:
@@ -3604,19 +3660,20 @@ func @__slab_alloc {
     arm64.movImm x16, 544
     arm64.mul x2, x2, x16
     arm64.add x1, x1, x2
-    arm64.movRegReg x4, x3
-    arm64.movRegReg x3, x21
-  shard#7:
-    arm64.movImm x5, 0
-    arm64.loadRegBaseDisp.word64 x2, [x4 + 24]
-    arm64.add x2, x2, 1
-    arm64.storeBaseDispReg.word64 [x4 + 24], x2
-    arm64.loadRegBaseDisp.word64 x2, [x4 + 40]
-    arm64.add x0, x2, x0
-    arm64.storeBaseDispReg.word64 [x4 + 40], x0
     arm64.movRegReg x2, x1
-    arm64.movRegReg x1, x3
-    arm64.movRegReg x4, x5
+    arm64.movRegReg x1, x22
+    arm64.b shard#7
+  critsplit#32:
+    arm64.movRegReg x1, x20
+    arm64.movRegReg x2, x21
+  shard#7:
+    arm64.movImm x4, 0
+    arm64.loadRegBaseDisp.word64 x5, [x3 + 24]
+    arm64.add x5, x5, 1
+    arm64.storeBaseDispReg.word64 [x3 + 24], x5
+    arm64.loadRegBaseDisp.word64 x5, [x3 + 40]
+    arm64.add x0, x5, x0
+    arm64.storeBaseDispReg.word64 [x3 + 40], x0
   routed:
     arm64.add x0, x2, 648
     arm64.lsl x3, x19, 3
@@ -3681,15 +3738,8 @@ func @__slab_alloc {
     arm64.loadRegSlot x20, slot5
     arm64.loadRegSlot x21, slot6
     arm64.loadRegSlot x22, slot7
-    arm64.epilogue 80
-    arm64.ret
-  osdirect:
-    arm64.bl __slab_alloc_oversize
-    arm64.loadRegSlot x19, slot4
-    arm64.loadRegSlot x20, slot5
-    arm64.loadRegSlot x21, slot6
-    arm64.loadRegSlot x22, slot7
-    arm64.epilogue 80
+    arm64.loadRegSlot x23, slot8
+    arm64.epilogue 96
     arm64.ret
   state#5:
     arm64.storeSlotReg slot0, x0
@@ -3708,6 +3758,15 @@ func @__slab_alloc {
     arm64.loadRegSlot x5, slot3
     arm64.movRegReg x6, x0
     arm64.b pop#18
+  osdirect:
+    arm64.bl __slab_alloc_oversize
+    arm64.loadRegSlot x19, slot4
+    arm64.loadRegSlot x20, slot5
+    arm64.loadRegSlot x21, slot6
+    arm64.loadRegSlot x22, slot7
+    arm64.loadRegSlot x23, slot8
+    arm64.epilogue 96
+    arm64.ret
   pop#22:
     arm64.leaRdata x0, __abort_msg_86  ; "fatal error: runtime abort 86 (slabSpanExhaustedPastItsEnd)\x0a"
     arm64.movImm x1, 60
@@ -3718,7 +3777,8 @@ func @__slab_alloc {
     arm64.loadRegSlot x20, slot5
     arm64.loadRegSlot x21, slot6
     arm64.loadRegSlot x22, slot7
-    arm64.epilogue 80
+    arm64.loadRegSlot x23, slot8
+    arm64.epilogue 96
     arm64.ret
   release:
     arm64.leaGlobal x1, __slab_state
@@ -3736,7 +3796,8 @@ func @__slab_alloc {
     arm64.loadRegSlot x20, slot5
     arm64.loadRegSlot x21, slot6
     arm64.loadRegSlot x22, slot7
-    arm64.epilogue 80
+    arm64.loadRegSlot x23, slot8
+    arm64.epilogue 96
     arm64.ret
 }
 
@@ -3779,7 +3840,7 @@ func @__slab_free {
     arm64.movImm x2, 0
     arm64.add x3, x0, 152152
     arm64.cmp x1, 0
-    arm64.b.eq shard#7
+    arm64.b.eq critsplit#42
   shard#13:
     arm64.arm64ThreadPointer x16, linuxWritable
     arm64.add x16, x16, x1
@@ -3806,7 +3867,7 @@ func @__slab_free {
     arm64.loadRegBaseDisp.word64 x2, [x4 + 32]
     arm64.cmp x2, 255
     arm64.b.lt shard#12
-  critsplit:
+  critsplit#44:
     arm64.movRegReg x2, x4
   shard#8:
     arm64.movImm x0, 1
@@ -3818,12 +3879,15 @@ func @__slab_free {
     arm64.mul x2, x2, x16
     arm64.add x0, x0, 139912
     arm64.add x0, x0, x2
-    arm64.movRegReg x3, x0
-    arm64.movRegReg x2, x4
+    arm64.b shard#7
+  critsplit#42:
+    arm64.movRegReg x0, x3
+    arm64.movRegReg x4, x2
   shard#7:
-    arm64.loadRegBaseDisp.word64 x0, [x3 + 32]
-    arm64.add x0, x0, 1
-    arm64.storeBaseDispReg.word64 [x3 + 32], x0
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 32]
+    arm64.add x2, x2, 1
+    arm64.storeBaseDispReg.word64 [x0 + 32], x2
+    arm64.movRegReg x2, x4
   routed:
     arm64.add x16, x20, 48
     arm64.ldar.word64 x0, [x16]
@@ -3873,14 +3937,6 @@ func @__slab_free {
     arm64.cmp x0, 0
     arm64.b.eq rpush
   rpushed:
-    arm64.loadRegSlot x19, slot5
-    arm64.loadRegSlot x20, slot6
-    arm64.epilogue 80
-    arm64.ret
-  osdirect:
-    arm64.movRegReg x0, x19
-    arm64.bl __slab_free_oversize
-    arm64.movRegReg x1, x0
     arm64.loadRegSlot x19, slot5
     arm64.loadRegSlot x20, slot6
     arm64.epilogue 80
@@ -3935,11 +3991,7 @@ func @__slab_free {
     arm64.arm64AtomicRmw.add x0, [x3], x0
     arm64.cmp x4, 0
     arm64.b.eq routed
-  rawdone:
-    arm64.loadRegSlot x19, slot5
-    arm64.loadRegSlot x20, slot6
-    arm64.epilogue 80
-    arm64.ret
+    arm64.b rawdone
   uncached:
     arm64.cmp x1, 0
     arm64.b.eq relistplain
@@ -4004,6 +4056,20 @@ func @__slab_free {
   relistdone:
     arm64.cmp x4, 0
     arm64.b.eq routed
+    arm64.b relistret
+  osdirect:
+    arm64.movRegReg x0, x19
+    arm64.bl __slab_free_oversize
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.epilogue 80
+    arm64.ret
+  rawdone:
+    arm64.loadRegSlot x19, slot5
+    arm64.loadRegSlot x20, slot6
+    arm64.epilogue 80
+    arm64.ret
   relistret:
     arm64.loadRegSlot x19, slot5
     arm64.loadRegSlot x20, slot6
@@ -5694,7 +5760,7 @@ func @String.trim {
     x64.loadRegBaseDisp.word64 r14, [rbx + 8]
   __il_cont#147:
     x64.cmpRegReg r13, r14
-    x64.jcc aboveEqual, __il_cont#31
+    x64.jcc aboveEqual, atEnd
   ifcont#34:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
@@ -5801,9 +5867,6 @@ func @String.trim {
   ifelse#56:
     x64.leaRegRegImm32 r13, r13, 1
     x64.jmp __il_cont#31
-  ifelse#58:
-    x64.movRegReg r13, rdx
-    x64.jmp __il_cont#31
   ifcont#60:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
@@ -5894,13 +5957,15 @@ func @String.trim {
   scmerge#81:
     x64.movRegImm32 rcx, 1
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, scmerge#83
+    x64.jcc notEqual, critsplit#158
   orrhs#82:
     x64.cmpRegImm32 r8, 2
     x64.setccReg equal, rax
-    x64.movRegReg rcx, rax
+    x64.jmp scmerge#83
+  critsplit#158:
+    x64.movRegReg rax, rcx
   scmerge#83:
-    x64.cmpRegImm32 rcx, 0
+    x64.cmpRegImm32 rax, 0
     x64.jcc equal, ifcont#85
   gb5:
     x64.movRegImm32 rax, 1
@@ -5918,18 +5983,23 @@ func @String.trim {
   scmerge#88:
     x64.movRegImm32 rcx, 1
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, scmerge#90
+    x64.jcc notEqual, critsplit#160
   orrhs#89:
     x64.cmpRegImm32 r8, 12
     x64.setccReg equal, rax
-    x64.movRegReg rcx, rax
+    x64.jmp scmerge#90
+  critsplit#160:
+    x64.movRegReg rax, rcx
   scmerge#90:
-    x64.movRegImm32 rax, 1
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, scmerge#92
+    x64.movRegImm32 rcx, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, critsplit#161
   orrhs#91:
     x64.cmpRegImm32 r8, 13
     x64.setccReg equal, rax
+    x64.jmp scmerge#92
+  critsplit#161:
+    x64.movRegReg rax, rcx
   scmerge#92:
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, ifcont#95
@@ -6051,10 +6121,7 @@ func @String.trim {
     x64.movRegImm32 rax, 1
   __il_cont#68:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#65
-  breakFound:
-    x64.loadRegSlot r13, slot3
-    x64.jmp __il_cont#31
+    x64.jcc notEqual, breakFound
   ifcont#65:
     x64.loadRegSlot rax, slot4
     x64.loadRegSlot rdx, slot5
@@ -6074,6 +6141,16 @@ func @String.trim {
     x64.storeSlotReg slot3, rdx
     x64.cmpRegReg rdx, r14
     x64.jcc below, scan#62
+    x64.jmp whileexit#63
+  atEnd:
+    x64.loadRegSlot r13, slot2
+    x64.jmp __il_cont#31
+  ifelse#58:
+    x64.movRegReg r13, rdx
+    x64.jmp __il_cont#31
+  breakFound:
+    x64.loadRegSlot r13, slot3
+    x64.jmp __il_cont#31
   whileexit#63:
     x64.loadRegSlot r13, slot3
   __il_cont#31:
@@ -6380,7 +6457,7 @@ func @String.trim {
     x64.loadRegBaseDisp.word64 r14, [rbx + 8]
   __il_cont#147:
     x64.cmpRegReg r13, r14
-    x64.jcc aboveEqual, __il_cont#31
+    x64.jcc aboveEqual, atEnd
   ifcont#34:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
@@ -6487,9 +6564,6 @@ func @String.trim {
   ifelse#56:
     x64.leaRegRegImm32 r13, r13, 1
     x64.jmp __il_cont#31
-  ifelse#58:
-    x64.movRegReg r13, rdx
-    x64.jmp __il_cont#31
   ifcont#60:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
@@ -6580,13 +6654,15 @@ func @String.trim {
   scmerge#81:
     x64.movRegImm32 rcx, 1
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, scmerge#83
+    x64.jcc notEqual, critsplit#158
   orrhs#82:
     x64.cmpRegImm32 r8, 2
     x64.setccReg equal, rax
-    x64.movRegReg rcx, rax
+    x64.jmp scmerge#83
+  critsplit#158:
+    x64.movRegReg rax, rcx
   scmerge#83:
-    x64.cmpRegImm32 rcx, 0
+    x64.cmpRegImm32 rax, 0
     x64.jcc equal, ifcont#85
   gb5:
     x64.movRegImm32 rax, 1
@@ -6604,18 +6680,23 @@ func @String.trim {
   scmerge#88:
     x64.movRegImm32 rcx, 1
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, scmerge#90
+    x64.jcc notEqual, critsplit#160
   orrhs#89:
     x64.cmpRegImm32 r8, 12
     x64.setccReg equal, rax
-    x64.movRegReg rcx, rax
+    x64.jmp scmerge#90
+  critsplit#160:
+    x64.movRegReg rax, rcx
   scmerge#90:
-    x64.movRegImm32 rax, 1
-    x64.cmpRegImm32 rcx, 0
-    x64.jcc notEqual, scmerge#92
+    x64.movRegImm32 rcx, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, critsplit#161
   orrhs#91:
     x64.cmpRegImm32 r8, 13
     x64.setccReg equal, rax
+    x64.jmp scmerge#92
+  critsplit#161:
+    x64.movRegReg rax, rcx
   scmerge#92:
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, ifcont#95
@@ -6737,10 +6818,7 @@ func @String.trim {
     x64.movRegImm32 rax, 1
   __il_cont#68:
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, ifcont#65
-  breakFound:
-    x64.loadRegSlot r13, slot3
-    x64.jmp __il_cont#31
+    x64.jcc notEqual, breakFound
   ifcont#65:
     x64.loadRegSlot rax, slot4
     x64.loadRegSlot rdx, slot5
@@ -6760,6 +6838,16 @@ func @String.trim {
     x64.storeSlotReg slot3, rdx
     x64.cmpRegReg rdx, r14
     x64.jcc below, scan#62
+    x64.jmp whileexit#63
+  atEnd:
+    x64.loadRegSlot r13, slot2
+    x64.jmp __il_cont#31
+  ifelse#58:
+    x64.movRegReg r13, rdx
+    x64.jmp __il_cont#31
+  breakFound:
+    x64.loadRegSlot r13, slot3
+    x64.jmp __il_cont#31
   whileexit#63:
     x64.loadRegSlot r13, slot3
   __il_cont#31:
@@ -7067,10 +7155,7 @@ func @String.trim {
     arm64.loadRegBaseDisp.word64 x23, [x19 + 8]
   __il_cont#147:
     arm64.cmp x22, x23
-    arm64.b.lo ifcont#34
-  atEnd:
-    arm64.movRegReg x23, x22
-    arm64.b __il_cont#31
+    arm64.b.hs atEnd
   ifcont#34:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x22
@@ -7171,12 +7256,12 @@ func @String.trim {
     arm64.cset x1, ne
   scmerge#51:
     arm64.movImm x2, 0
-    arm64.cbz x1, critsplit
+    arm64.cbz x1, critsplit#154
   andrhs#52:
     arm64.cmp x0, 8
     arm64.cset x0, ne
     arm64.b scmerge#53
-  critsplit:
+  critsplit#154:
     arm64.movRegReg x0, x2
   scmerge#53:
     arm64.cbz x0, ifcont#60
@@ -7185,9 +7270,6 @@ func @String.trim {
     arm64.b __il_cont#31
   ifelse#56:
     arm64.add x23, x22, 1
-    arm64.b __il_cont#31
-  ifelse#58:
-    arm64.movRegReg x23, x1
     arm64.b __il_cont#31
   ifcont#60:
     arm64.movRegReg x0, x19
@@ -7275,13 +7357,15 @@ func @String.trim {
     arm64.cset x0, eq
   scmerge#81:
     arm64.movImm x1, 1
-    arm64.cbnz x0, scmerge#83
+    arm64.cbnz x0, critsplit#158
   orrhs#82:
     arm64.cmp x28, 2
     arm64.cset x0, eq
-    arm64.movRegReg x1, x0
+    arm64.b scmerge#83
+  critsplit#158:
+    arm64.movRegReg x0, x1
   scmerge#83:
-    arm64.cbz x1, ifcont#85
+    arm64.cbz x0, ifcont#85
   gb5:
     arm64.movImm x0, 1
     arm64.b __il_cont#68
@@ -7297,17 +7381,22 @@ func @String.trim {
     arm64.cset x0, eq
   scmerge#88:
     arm64.movImm x1, 1
-    arm64.cbnz x0, scmerge#90
+    arm64.cbnz x0, critsplit#160
   orrhs#89:
     arm64.cmp x28, 12
     arm64.cset x0, eq
-    arm64.movRegReg x1, x0
+    arm64.b scmerge#90
+  critsplit#160:
+    arm64.movRegReg x0, x1
   scmerge#90:
-    arm64.movImm x0, 1
-    arm64.cbnz x1, scmerge#92
+    arm64.movImm x1, 1
+    arm64.cbnz x0, critsplit#161
   orrhs#91:
     arm64.cmp x28, 13
     arm64.cset x0, eq
+    arm64.b scmerge#92
+  critsplit#161:
+    arm64.movRegReg x0, x1
   scmerge#92:
     arm64.cbz x0, ifcont#95
   gb6_inner:
@@ -7413,10 +7502,7 @@ func @String.trim {
   ifcont#129:
     arm64.movImm x0, 1
   __il_cont#68:
-    arm64.cbz x0, ifcont#65
-  breakFound:
-    arm64.movRegReg x23, x25
-    arm64.b __il_cont#31
+    arm64.cbnz x0, breakFound
   ifcont#65:
     arm64.movRegReg x0, x24
     arm64.movRegReg x1, x28
@@ -7431,6 +7517,16 @@ func @String.trim {
   whilehdr#61:
     arm64.cmp x25, x23
     arm64.b.lo scan#62
+    arm64.b whileexit#63
+  atEnd:
+    arm64.movRegReg x23, x22
+    arm64.b __il_cont#31
+  ifelse#58:
+    arm64.movRegReg x23, x1
+    arm64.b __il_cont#31
+  breakFound:
+    arm64.movRegReg x23, x25
+    arm64.b __il_cont#31
   whileexit#63:
     arm64.movRegReg x23, x25
   __il_cont#31:
@@ -7767,10 +7863,7 @@ func @String.trim {
     arm64.loadRegBaseDisp.word64 x23, [x19 + 8]
   __il_cont#147:
     arm64.cmp x22, x23
-    arm64.b.lo ifcont#34
-  atEnd:
-    arm64.movRegReg x23, x22
-    arm64.b __il_cont#31
+    arm64.b.hs atEnd
   ifcont#34:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x22
@@ -7871,12 +7964,12 @@ func @String.trim {
     arm64.cset x1, ne
   scmerge#51:
     arm64.movImm x2, 0
-    arm64.cbz x1, critsplit
+    arm64.cbz x1, critsplit#154
   andrhs#52:
     arm64.cmp x0, 8
     arm64.cset x0, ne
     arm64.b scmerge#53
-  critsplit:
+  critsplit#154:
     arm64.movRegReg x0, x2
   scmerge#53:
     arm64.cbz x0, ifcont#60
@@ -7885,9 +7978,6 @@ func @String.trim {
     arm64.b __il_cont#31
   ifelse#56:
     arm64.add x23, x22, 1
-    arm64.b __il_cont#31
-  ifelse#58:
-    arm64.movRegReg x23, x1
     arm64.b __il_cont#31
   ifcont#60:
     arm64.movRegReg x0, x19
@@ -7975,13 +8065,15 @@ func @String.trim {
     arm64.cset x0, eq
   scmerge#81:
     arm64.movImm x1, 1
-    arm64.cbnz x0, scmerge#83
+    arm64.cbnz x0, critsplit#158
   orrhs#82:
     arm64.cmp x28, 2
     arm64.cset x0, eq
-    arm64.movRegReg x1, x0
+    arm64.b scmerge#83
+  critsplit#158:
+    arm64.movRegReg x0, x1
   scmerge#83:
-    arm64.cbz x1, ifcont#85
+    arm64.cbz x0, ifcont#85
   gb5:
     arm64.movImm x0, 1
     arm64.b __il_cont#68
@@ -7997,17 +8089,22 @@ func @String.trim {
     arm64.cset x0, eq
   scmerge#88:
     arm64.movImm x1, 1
-    arm64.cbnz x0, scmerge#90
+    arm64.cbnz x0, critsplit#160
   orrhs#89:
     arm64.cmp x28, 12
     arm64.cset x0, eq
-    arm64.movRegReg x1, x0
+    arm64.b scmerge#90
+  critsplit#160:
+    arm64.movRegReg x0, x1
   scmerge#90:
-    arm64.movImm x0, 1
-    arm64.cbnz x1, scmerge#92
+    arm64.movImm x1, 1
+    arm64.cbnz x0, critsplit#161
   orrhs#91:
     arm64.cmp x28, 13
     arm64.cset x0, eq
+    arm64.b scmerge#92
+  critsplit#161:
+    arm64.movRegReg x0, x1
   scmerge#92:
     arm64.cbz x0, ifcont#95
   gb6_inner:
@@ -8113,10 +8210,7 @@ func @String.trim {
   ifcont#129:
     arm64.movImm x0, 1
   __il_cont#68:
-    arm64.cbz x0, ifcont#65
-  breakFound:
-    arm64.movRegReg x23, x25
-    arm64.b __il_cont#31
+    arm64.cbnz x0, breakFound
   ifcont#65:
     arm64.movRegReg x0, x24
     arm64.movRegReg x1, x28
@@ -8131,6 +8225,16 @@ func @String.trim {
   whilehdr#61:
     arm64.cmp x25, x23
     arm64.b.lo scan#62
+    arm64.b whileexit#63
+  atEnd:
+    arm64.movRegReg x23, x22
+    arm64.b __il_cont#31
+  ifelse#58:
+    arm64.movRegReg x23, x1
+    arm64.b __il_cont#31
+  breakFound:
+    arm64.movRegReg x23, x25
+    arm64.b __il_cont#31
   whileexit#63:
     arm64.movRegReg x23, x25
   __il_cont#31:
