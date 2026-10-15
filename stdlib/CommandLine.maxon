@@ -15,6 +15,26 @@ public type CommandLine
 		return result
 	end 'args'
 
+	/// The non-negative integer at argument `position` (0 is the program), or `otherwise` when the
+	/// command line has no such argument.
+	/// Throws ParseError.invalidFormat for a present argument that is not a non-negative integer.
+	public static function readOptionalIntArgument(position Count, otherwise Count) returns Count throws ParseError
+		let arguments = args()
+
+		if arguments.count() <= position 'absent'
+			return otherwise
+		end 'absent'
+
+		let raw = try arguments.get(position) otherwise panic("CommandLine.readOptionalIntArgument: count() > position, so the index is live")
+		let value = try int.fromString(raw)
+
+		if value < 0 'negative'
+			throw ParseError.invalidFormat
+		end 'negative'
+
+		return value as Count
+	end 'readOptionalIntArgument'
+
 	/// Extract the value from a "--key=value" argument string.
 	/// Returns EVERYTHING after the first "=" sign, including any further "=".
 	/// Throws StringError.notFound if "=" is not present.

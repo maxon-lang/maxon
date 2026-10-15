@@ -1,5 +1,4 @@
-typealias Tally = int(0 to u64.max)
-typealias IncrementedPromise = Promise with (Tally, ServiceError)
+typealias IncrementedPromise = Promise with (Count, ServiceError)
 typealias IncrementedPromiseArray = Array with IncrementedPromise
 
 let incrementerCount = 64
@@ -7,7 +6,7 @@ let defaultPerIncrementer = 100000
 let usageExit = 2
 
 type Counter
-	var count as Tally
+	var count as Count
 
 	static function create() returns Self
 		return Self{count: 0}
@@ -17,7 +16,7 @@ type Counter
 		self.count = self.count + 1
 	end 'inc'
 
-	export function read() returns Tally
+	export function read() returns Count
 		return self.count
 	end 'read'
 end 'Counter'
@@ -29,7 +28,7 @@ type Incrementer
 		return Self{counter: counter}
 	end 'create'
 
-	export function increment(perIncrementer Tally) returns Tally
+	export function increment(perIncrementer Count) returns Count
 		for _ in 0 upto perIncrementer 'eachIncrement'
 			self.counter.inc()
 		end 'eachIncrement'
@@ -38,25 +37,8 @@ type Incrementer
 	end 'increment'
 end 'Incrementer'
 
-function sizeArgument(position Count, fallback Tally) returns Tally throws ParseError
-	let args = CommandLine.args()
-
-	if args.count() <= position 'absent'
-		return fallback
-	end 'absent'
-
-	let raw = try args.get(position) otherwise panic("sizeArgument: count() > position, so the index is live")
-	let value = try int.fromString(raw)
-
-	if value < 0 'negative'
-		throw ParseError.invalidFormat
-	end 'negative'
-
-	return value as Tally
-end 'sizeArgument'
-
 function main() returns ExitCode
-	let perIncrementer = try sizeArgument(1, fallback: defaultPerIncrementer) otherwise 'badArgument'
+	let perIncrementer = try CommandLine.readOptionalIntArgument(1, otherwise: defaultPerIncrementer) otherwise 'badArgument'
 		printError("shared-counter: argument 1 is not a non-negative integer\n")
 		return usageExit
 	end 'badArgument'

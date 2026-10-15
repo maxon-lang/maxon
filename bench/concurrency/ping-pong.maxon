@@ -1,5 +1,3 @@
-typealias Tally = int(0 to u64.max)
-
 let defaultRoundTrips = 1000000
 let usageExit = 2
 
@@ -8,36 +6,19 @@ type Partner
 		return Self{}
 	end 'create'
 
-	export function ping(round Tally) returns Tally
+	export function ping(round Count) returns Count
 		return round + 1
 	end 'ping'
 end 'Partner'
 
-function sizeArgument(position Count, fallback Tally) returns Tally throws ParseError
-	let args = CommandLine.args()
-
-	if args.count() <= position 'absent'
-		return fallback
-	end 'absent'
-
-	let raw = try args.get(position) otherwise panic("sizeArgument: count() > position, so the index is live")
-	let value = try int.fromString(raw)
-
-	if value < 0 'negative'
-		throw ParseError.invalidFormat
-	end 'negative'
-
-	return value as Tally
-end 'sizeArgument'
-
 function main() returns ExitCode
-	let roundTrips = try sizeArgument(1, fallback: defaultRoundTrips) otherwise 'badArgument'
+	let roundTrips = try CommandLine.readOptionalIntArgument(1, otherwise: defaultRoundTrips) otherwise 'badArgument'
 		printError("ping-pong: argument 1 is not a non-negative integer\n")
 		return usageExit
 	end 'badArgument'
 
 	let partner = spawn Partner.create()
-	var sum = 0 as Tally
+	var sum = 0 as Count
 
 	for round in 0 upto roundTrips 'eachRound'
 		let reply = try await partner.ping(round) otherwise panic("ping-pong: the partner stopped before it answered")

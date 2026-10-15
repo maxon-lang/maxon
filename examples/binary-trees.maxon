@@ -55,14 +55,7 @@ let usageExit = 2
 // argv[1], or defaultN when there is none. A malformed or out-of-range argument is refused so a
 // typo cannot read as a check.
 function problemSize() returns Depth throws ParseError
-	let args = CommandLine.args()
-
-	if args.count() < 2 'noArgument'
-		return defaultN
-	end 'noArgument'
-
-	let raw = try args.get(1) otherwise panic("problemSize: count() >= 2, so index 1 is live")
-	let n = try int.fromString(raw)
+	let n = try CommandLine.readOptionalIntArgument(1, otherwise: defaultN)
 
 	if n < smallestDepth or n > largestN 'outOfRange'
 		throw ParseError.invalidFormat

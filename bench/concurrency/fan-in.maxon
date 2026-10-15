@@ -1,6 +1,5 @@
-typealias Tally = int(0 to u64.max)
 typealias ProducerIndex = int(0 to 63)
-typealias SentPromise = Promise with (Tally, ServiceError)
+typealias SentPromise = Promise with (Count, ServiceError)
 typealias SentPromiseArray = Array with SentPromise
 
 let producerCount = 64
@@ -8,17 +7,17 @@ let defaultPerProducer = 100000
 let usageExit = 2
 
 type Sink
-	var total as Tally
+	var total as Count
 
 	static function create() returns Self
 		return Self{total: 0}
 	end 'create'
 
-	export function receive(value Tally)
+	export function receive(value Count)
 		self.total = self.total + value
 	end 'receive'
 
-	export function received() returns Tally
+	export function received() returns Count
 		return self.total
 	end 'received'
 end 'Sink'
@@ -31,8 +30,8 @@ type Producer
 		return Self{index: index, sink: sink}
 	end 'create'
 
-	export function produce(perProducer Tally) returns Tally
-		let base = (self.index as Tally) * perProducer
+	export function produce(perProducer Count) returns Count
+		let base = (self.index as Count) * perProducer
 
 		for offset in 0 upto perProducer 'eachValue'
 			self.sink.receive(base + offset)
@@ -42,25 +41,8 @@ type Producer
 	end 'produce'
 end 'Producer'
 
-function sizeArgument(position Count, fallback Tally) returns Tally throws ParseError
-	let args = CommandLine.args()
-
-	if args.count() <= position 'absent'
-		return fallback
-	end 'absent'
-
-	let raw = try args.get(position) otherwise panic("sizeArgument: count() > position, so the index is live")
-	let value = try int.fromString(raw)
-
-	if value < 0 'negative'
-		throw ParseError.invalidFormat
-	end 'negative'
-
-	return value as Tally
-end 'sizeArgument'
-
 function main() returns ExitCode
-	let perProducer = try sizeArgument(1, fallback: defaultPerProducer) otherwise 'badArgument'
+	let perProducer = try CommandLine.readOptionalIntArgument(1, otherwise: defaultPerProducer) otherwise 'badArgument'
 		printError("fan-in: argument 1 is not a non-negative integer\n")
 		return usageExit
 	end 'badArgument'

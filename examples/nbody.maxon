@@ -33,20 +33,7 @@ let usageExit = 2
 // argv[1], or defaultSteps when there is none. A malformed or negative argument is refused so a
 // typo cannot read as an energy.
 function requestedSteps() returns Integer throws ParseError
-	let args = CommandLine.args()
-
-	if args.count() < 2 'noArgument'
-		return defaultSteps
-	end 'noArgument'
-
-	let raw = try args.get(1) otherwise panic("requestedSteps: count() >= 2, so index 1 is live")
-	let n = try int.fromString(raw)
-
-	if n < fewestSteps 'negative'
-		throw ParseError.invalidFormat
-	end 'negative'
-
-	return n
+	return try CommandLine.readOptionalIntArgument(1, otherwise: defaultSteps)
 end 'requestedSteps'
 
 type Planet

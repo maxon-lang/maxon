@@ -1,6 +1,5 @@
-typealias Tally = int(0 to u64.max)
 typealias Word = bits(64)
-typealias KernelPromise = Promise with (Tally, ServiceError)
+typealias KernelPromise = Promise with (Count, ServiceError)
 typealias KernelPromiseArray = Array with KernelPromise
 typealias WorkerArray = Array with Worker.handle
 
@@ -12,7 +11,7 @@ let xorshiftLeftSecond = 17
 let resultShift = 32
 let usageExit = 2
 
-function kernel(task Tally, iterations Tally) returns Tally
+function kernel(task Count, iterations Count) returns Count
 	var x = (task + 1) as Word
 
 	for _ in 0 upto iterations 'eachIteration'
@@ -21,7 +20,7 @@ function kernel(task Tally, iterations Tally) returns Tally
 		x = x xor (x shl xorshiftLeftSecond)
 	end 'eachIteration'
 
-	return (x shr resultShift) as Tally
+	return (x shr resultShift) as Count
 end 'kernel'
 
 type Worker
@@ -29,40 +28,23 @@ type Worker
 		return Self{}
 	end 'create'
 
-	export function run(task Tally, iterations Tally) returns Tally
+	export function run(task Count, iterations Count) returns Count
 		return kernel(task, iterations: iterations)
 	end 'run'
 end 'Worker'
 
-function sizeArgument(position Count, fallback Tally) returns Tally throws ParseError
-	let args = CommandLine.args()
-
-	if args.count() <= position 'absent'
-		return fallback
-	end 'absent'
-
-	let raw = try args.get(position) otherwise panic("sizeArgument: count() > position, so the index is live")
-	let value = try int.fromString(raw)
-
-	if value < 0 'negative'
-		throw ParseError.invalidFormat
-	end 'negative'
-
-	return value as Tally
-end 'sizeArgument'
-
 function main() returns ExitCode
-	let taskCount = try sizeArgument(1, fallback: defaultTaskCount) otherwise 'badTaskCount'
+	let taskCount = try CommandLine.readOptionalIntArgument(1, otherwise: defaultTaskCount) otherwise 'badTaskCount'
 		printError("worker-pool: argument 1 is not a non-negative integer\n")
 		return usageExit
 	end 'badTaskCount'
 
-	let iterations = try sizeArgument(2, fallback: defaultIterations) otherwise 'badIterations'
+	let iterations = try CommandLine.readOptionalIntArgument(2, otherwise: defaultIterations) otherwise 'badIterations'
 		printError("worker-pool: argument 2 is not a non-negative integer\n")
 		return usageExit
 	end 'badIterations'
 
-	let workerCount = Scheduler.processorCount() as Tally
+	let workerCount = Scheduler.processorCount() as Count
 	var workers = WorkerArray.create()
 
 	for _ in 0 upto workerCount 'spawnWorkers'
@@ -70,7 +52,7 @@ function main() returns ExitCode
 	end 'spawnWorkers'
 
 	var results = KernelPromiseArray.create()
-	results.reserve(taskCount as Count)
+	results.reserve(taskCount)
 
 	for task in 0 upto taskCount 'sendTasks'
 		let slot = try (task mod workerCount) otherwise panic("worker-pool: the processor count is at least 1")
@@ -78,7 +60,7 @@ function main() returns ExitCode
 		results.push(worker.run(task, iterations: iterations))
 	end 'sendTasks'
 
-	var sum = 0 as Tally
+	var sum = 0 as Count
 
 	for result in results 'awaitResults'
 		sum = sum + (try await result otherwise panic("worker-pool: a worker stopped before it answered"))

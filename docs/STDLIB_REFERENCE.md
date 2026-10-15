@@ -1387,6 +1387,7 @@ Given `one\r\ntwo\nthree` on stdin, it prints `[one]`, `[two]`, `[three]`, `3 li
 | `CommandLine.args()` | `StringArray` | — | Every argument, the program path first. A fresh array each call. |
 | `CommandLine.optionValue(arg String)` | `String` | `StringError.notFound` | Everything after the first `=` of `--key=value`, later `=` included. |
 | `CommandLine.getOptionValue(name String)` | `String` | `StringError.notFound` | The value of the first `--name=value` argument. |
+| `CommandLine.readOptionalIntArgument(position Count, otherwise Count)` | `Count` | `ParseError.invalidFormat` | The non-negative integer in the argument at `position` (0 is the program path, 1 the first argument after it), or `otherwise` when there is no argument at `position`. An argument present but not a non-negative integer, or beyond `i64.max`, throws. |
 
 ```maxon
 function main() returns ExitCode
@@ -1399,6 +1400,17 @@ end 'main'
 ```
 
 Run as `program --mode=fast`, it prints `2 fast a=b`.
+
+```maxon
+function main() returns ExitCode
+	let rounds = try CommandLine.readOptionalIntArgument(1, otherwise: 1000) otherwise return 2
+	print("{rounds} rounds
+")
+	return 0
+end 'main'
+```
+
+Run as `program 50` it prints `50 rounds`, run bare it prints `1000 rounds`, and run as `program -3` or `program many` it returns 2.
 
 ## Log
 

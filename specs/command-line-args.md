@@ -296,3 +296,123 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: optional-int-argument-present -->
+<!-- Args: 42 -->
+```maxon
+function main() returns ExitCode
+	let n = try CommandLine.readOptionalIntArgument(1, otherwise: 1000) otherwise return 3
+	print("{n}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+42
+```
+
+<!-- test: optional-int-argument-absent -->
+```maxon
+function main() returns ExitCode
+	let n = try CommandLine.readOptionalIntArgument(1, otherwise: 1000) otherwise return 3
+	print("{n}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1000
+```
+
+<!-- test: optional-int-argument-zero-is-a-count -->
+<!-- Args: 0 -->
+```maxon
+function main() returns ExitCode
+	let n = try CommandLine.readOptionalIntArgument(1, otherwise: 1000) otherwise return 3
+	print("{n}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0
+```
+
+<!-- test: optional-int-argument-negative-throws -->
+<!-- Args: -5 -->
+```maxon
+function main() returns ExitCode
+	try CommandLine.readOptionalIntArgument(1, otherwise: 1000) otherwise (e) 'bad'
+		match e 'kind'
+			invalidFormat then print("invalidFormat\n")
+		end 'kind'
+		return 0
+	end 'bad'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+invalidFormat
+```
+
+<!-- test: optional-int-argument-non-numeric-throws -->
+<!-- Args: twelve -->
+```maxon
+function main() returns ExitCode
+	try CommandLine.readOptionalIntArgument(1, otherwise: 1000) otherwise (e) 'bad'
+		match e 'kind'
+			invalidFormat then print("invalidFormat\n")
+		end 'kind'
+		return 0
+	end 'bad'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+invalidFormat
+```
+
+<!-- test: optional-int-argument-position-beyond-the-arguments -->
+<!-- Args: 7 -->
+```maxon
+function main() returns ExitCode
+	let n = try CommandLine.readOptionalIntArgument(2, otherwise: 1000) otherwise return 3
+	print("{n}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1000
+```
+
+<!-- test: optional-int-argument-reads-the-requested-position -->
+<!-- Args: 7 9 -->
+```maxon
+function main() returns ExitCode
+	let first = try CommandLine.readOptionalIntArgument(1, otherwise: 1000) otherwise return 3
+	let second = try CommandLine.readOptionalIntArgument(2, otherwise: 1000) otherwise return 3
+	print("{first} {second}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7 9
+```

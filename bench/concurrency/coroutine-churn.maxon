@@ -1,46 +1,28 @@
-typealias Tally = int(0 to u64.max)
-typealias TallyPromise = Promise with Tally
-typealias TallyPromiseArray = Array with TallyPromise
+typealias CountPromise = Promise with Count
+typealias CountPromiseArray = Array with CountPromise
 
 let defaultCoroutineCount = 100000
 let usageExit = 2
 
-function yieldOnce(value Tally) returns Tally
+function yieldOnce(value Count) returns Count
 	Scheduler.yield()
 	return value
 end 'yieldOnce'
 
-function sizeArgument(position Count, fallback Tally) returns Tally throws ParseError
-	let args = CommandLine.args()
-
-	if args.count() <= position 'absent'
-		return fallback
-	end 'absent'
-
-	let raw = try args.get(position) otherwise panic("sizeArgument: count() > position, so the index is live")
-	let value = try int.fromString(raw)
-
-	if value < 0 'negative'
-		throw ParseError.invalidFormat
-	end 'negative'
-
-	return value as Tally
-end 'sizeArgument'
-
 function main() returns ExitCode
-	let coroutineCount = try sizeArgument(1, fallback: defaultCoroutineCount) otherwise 'badArgument'
+	let coroutineCount = try CommandLine.readOptionalIntArgument(1, otherwise: defaultCoroutineCount) otherwise 'badArgument'
 		printError("coroutine-churn: argument 1 is not a non-negative integer\n")
 		return usageExit
 	end 'badArgument'
 
-	var coroutines = TallyPromiseArray.create()
-	coroutines.reserve(coroutineCount as Count)
+	var coroutines = CountPromiseArray.create()
+	coroutines.reserve(coroutineCount)
 
 	for index in 0 upto coroutineCount 'startCoroutines'
 		coroutines.push(async yieldOnce(index))
 	end 'startCoroutines'
 
-	var sum = 0 as Tally
+	var sum = 0 as Count
 
 	for coroutine in coroutines 'awaitCoroutines'
 		sum = sum + await coroutine

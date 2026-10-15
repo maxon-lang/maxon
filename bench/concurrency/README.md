@@ -83,8 +83,9 @@ is NOT bent to dodge a runtime cost, because the cost is what the instrument exi
 - **The kernel uses `bits(64)`.** `or` and `xor` give a signed `int` (see `specs/bitwise-operators.md`),
   so the Maxon kernel casts each `xor` back `as Word` to keep the following `shr` a zero-filling shift.
   Without the casts the shift sign-fills and the answer is wrong from the seventh round of task 0.
-- **Each program carries its own argument reader.** `maxon build <file>` compiles that file alone, so
-  seven small `sizeArgument` functions repeat where Go shares `internal/argv`.
+- **Each program reads its sizes with `CommandLine.readOptionalIntArgument`.** `maxon build <file>` compiles that file alone,
+  and the stdlib's `CommandLine.readOptionalIntArgument(position, otherwise:)` is the argument reader the programs share, as
+  the Go programs share `internal/argv`.
 
 ## Sizes
 
