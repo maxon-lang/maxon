@@ -214,6 +214,7 @@ let ProcessSynchronizeAccess = 0x00100000
 let Win32NullHandle = 0
 let DoNotInheritHandles = 0
 let WaitIsNotAlertable = 0
+let WindowsLockSpinCount = 4000
 
 let InheritHandlesTrue = 1  // CreateProcessW bInheritHandles=TRUE (the child inherits the pipe write end)
 
@@ -1174,6 +1175,7 @@ export type StdToX64Lowering
 			osLockInit or
 			osLockEnter or
 			osLockLeave or
+			osLockDestroy or
 			osLastError or
 			osCancelIo or
 			osGetPid or
@@ -1501,9 +1503,10 @@ export type StdToX64Lowering
 			osPipeCreate(_, _, _, readPtrId, writePtrId, _) then self.lowerOsPipeCreate(readPtrId, writePtrId: writePtrId, dstBlock: dstBlock)
 			osEventCreate(resultId) then self.lowerOsEventCreate(resultId, dstBlock: dstBlock)
 			osThreadCreate(resultId, entryPtrId, argId) then self.lowerOsThreadCreate(resultId, entryPtrId: entryPtrId, argId: argId, dstBlock: dstBlock)
-			osLockInit(lockPtrId) then self.lowerOsLockOp(lockPtrId, importSlot: IatSlot.InitializeCriticalSection, chunk: HostLockInitName, dstBlock: dstBlock)
+			osLockInit(lockPtrId) then self.lowerOsLockInit(lockPtrId, dstBlock: dstBlock)
 			osLockEnter(lockPtrId) then self.lowerOsLockOp(lockPtrId, importSlot: IatSlot.EnterCriticalSection, chunk: LinuxLockEnterName, dstBlock: dstBlock)
 			osLockLeave(lockPtrId) then self.lowerOsLockOp(lockPtrId, importSlot: IatSlot.LeaveCriticalSection, chunk: LinuxLockLeaveName, dstBlock: dstBlock)
+			osLockDestroy(lockPtrId) then self.lowerOsLockDestroy(lockPtrId, dstBlock: dstBlock)
 			osReadOverlapped(resultId, handleId, bufId, capId, bytesOutPtrId, ovlId) then self.lowerOsReadOverlapped(resultId, handleId: handleId, bufId: bufId, capId: capId, bytesOutPtrId: bytesOutPtrId, ovlId: ovlId, dstBlock: dstBlock)
 			osLastError(resultId) then self.lowerOsLastError(resultId, dstBlock: dstBlock)
 			osProcessSpawnInherit(cmdlinePtrId, cwdPtrId, creationFlagsId, startupPtrId, procInfoPtrId, envPtrId) then self.lowerOsProcessSpawn(cmdlinePtrId, cwdPtrId: cwdPtrId, creationFlagsId: creationFlagsId, startupPtrId: startupPtrId, procInfoPtrId: procInfoPtrId, envPtrId: envPtrId, inheritHandles: true, dstBlock: dstBlock)
@@ -1662,6 +1665,7 @@ export type StdToX64Lowering
 			osLockInit or
 			osLockEnter or
 			osLockLeave or
+			osLockDestroy or
 			osReadOverlapped or
 			osLastError or
 			osProcessSpawnInherit or
@@ -3406,8 +3410,8 @@ export type StdToX64Lowering
 		end 'eachArg'
 	end 'emitHostArgMoves'
 
-	// The three lock ops differ only in their destination. The region the Std tier allocated is the
-	// lock (offset 0), so there is no field address to compute.
+	// `osLockEnter` and `osLockLeave` differ only in their destination. The region the Std tier allocated
+	// is the lock (offset 0), so there is no field address to compute.
 	//
 	// Windows reaches an import and Linux a chunk: there the region is a `CRITICAL_SECTION` the OS
 	// owns, here it is three words and a `futex` protocol with a loop in it. Both must be recursive by
@@ -3415,6 +3419,26 @@ export type StdToX64Lowering
 	function lowerOsLockOp(lockPtrId ValueId, importSlot IatSlot, chunk ByteArray, dstBlock IrBlock)
 		self.emitHostCall(dstBlock, callee: self.hostCalleeOn(importSlot, chunk: chunk), args: argsOf(lockPtrId))
 	end 'lowerOsLockOp'
+
+	function lowerOsLockInit(lockPtrId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsLockInitWin64(lockPtrId, dstBlock: dstBlock)
+			syscall then self.emitHostCall(dstBlock, callee: HostCallee.chunk(HostLockInitName), args: argsOf(lockPtrId))
+		end 'route'
+	end 'lowerOsLockInit'
+
+	function lowerOsLockDestroy(lockPtrId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.emitHostCall(dstBlock, callee: HostCallee.import(IatSlot.DeleteCriticalSection), args: argsOf(lockPtrId))
+			syscall then break
+		end 'route'
+	end 'lowerOsLockDestroy'
+
+	function lowerOsLockInitWin64(lockPtrId ValueId, dstBlock IrBlock)
+		self.emitHostArgMoves(dstBlock, args: argsOf(lockPtrId))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(hostChunkArgRegisterAt(1)), value: WindowsLockSpinCount))
+		self.targetModule.appendOp(dstBlock, op: hostCallOp(HostCallee.import(IatSlot.InitializeCriticalSectionAndSpinCount)))
+	end 'lowerOsLockInitWin64'
 
 	// `osEventCreate(result)` on the syscall route ⇒ `mrt_host_wait_new(kind: event)`. The KIND is an
 	// immediate rather than an operand — the op names no kind because Windows's `CreateEventA` has no such
@@ -5258,6 +5282,7 @@ export type StdToX64Lowering
 			osLockInit or
 			osLockEnter or
 			osLockLeave or
+			osLockDestroy or
 			osReadOverlapped or
 			osLastError or
 			osProcessSpawnInherit or
@@ -5510,6 +5535,7 @@ export type StdToX64Lowering
 			osLockInit or
 			osLockEnter or
 			osLockLeave or
+			osLockDestroy or
 			osReadOverlapped or
 			osLastError or
 			osProcessSpawnInherit or

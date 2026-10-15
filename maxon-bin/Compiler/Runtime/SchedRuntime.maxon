@@ -1878,10 +1878,9 @@ export let GtFreePutName = b"__gt_free_put"
 // no lock order; and it runs once per chunk. A refused chunk aborts through `__slab_assert_os_alloc` with the
 // lock still held, which `osExit` does not need released.
 //
-// ⛔ **A RECYCLED RECORD IS ZEROED OVER THE WHOLE `GtStructSize` BEFORE IT IS HANDED OUT**, which is the
-// contract a freshly carved record already carries: every "no releaser", "never ran", "no teardown ticket" and
-// "empty coroutine queue" reading in `GtRuntime` is the record's zero, so a recycled one that kept its
-// previous tenant's words would release that tenant's arguments and answer that tenant's questions.
+// ⚠ A recycled record is handed out holding its previous tenant's words, so each taker initialises
+// what it reads: `__gt_spawn` zeroes the whole record and `__gt_cell_alloc` stores every word a
+// cell is read through. A taker that skipped this would release the previous tenant's arguments.
 export let GtFreeGetName = b"__gt_free_get"
 
 // ⭐⭐ `__sched_arena_carve(bytes) -> address` — the scheduler's uncounted arena, which GT records and machines are
@@ -2515,7 +2514,7 @@ end 'emitSchedLockLeave'
 // same word through `emitStepLockDepthAt`: a thread holding the ALLOCATOR's slow-path lock is as
 // unstoppable as one holding `__sched_lock`, and two mechanisms writing one word through two spellings is
 // the shape this file's header refuses.
-function emitSchedStepLockDepth(module StdModule, block IrBlock, delta FullRangeInt, ids ValueMinter)
+export function emitSchedStepLockDepth(module StdModule, block IrBlock, delta FullRangeInt, ids ValueMinter)
 	emitStepLockDepthAt(module, block: block, depthAddr: emitSchedLockDepthAddr(module, block: block, ids: ids), delta: delta, ids: ids)
 end 'emitSchedStepLockDepth'
 
@@ -4360,6 +4359,7 @@ function recordRunqTaintOfOp(func IrFunction, op StdOp, taint RunqRingTaint) ret
 		osLockInit or
 		osLockEnter or
 		osLockLeave or
+		osLockDestroy or
 		osReadOverlapped or
 		osLastError or
 		osProcessSpawnInherit or
@@ -5455,8 +5455,6 @@ function buildGtFreeGet(module StdModule)
 
 	let record = ids.mint()
 	recycle.blockArgs.push(IrBlockArg.create(record, argType: StdType.i64))
-	let recordBytes = emitConst(module, block: recycle, value: GtStructSize, ids: ids)
-	module.appendOp(recycle, op: StdOp.memFill(record, byteCountId: recordBytes, value: 0))
 	module.setTerminator(recycle, op: StdOp.ret(record))
 
 	// A fresh record: carved under the hold every list above was consulted in.

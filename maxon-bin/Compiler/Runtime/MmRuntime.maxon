@@ -1219,15 +1219,15 @@ export let AsciiNineDigit = 0x39 as FullRangeInt
 
 // ⭐⭐ **THE BYTES AN OS LOCK NEEDS — the region a caller allocates and `osLockInit` initializes IN PLACE.**
 // ⚠ Declared once because getting it wrong is not a compile error: the OS writes its struct into whatever it
-// is handed, so an under-allocated region corrupts whatever the allocator put after it. Three runtime
-// families allocate one (the scheduler's run-queue lock, the DebugStream ring's, and the slab's own state
-// header, whose layout is computed from this number).
+// is handed, so an under-allocated region corrupts whatever the allocator put after it. Every
+// runtime lock region is this size, and the slab's own state header and a service mailbox compute
+// their layouts from it.
 //
 // ⭐ **IT IS THE MAXIMUM OVER THE TARGETS THIS COMPILER SERVES, NOT A PER-TARGET ANSWER, AND THAT IS
 // DELIBERATE.** A Win64 `CRITICAL_SECTION` is 40 bytes; a Darwin `pthread_mutex_t` is 64 (MEASURED on
 // this host). Making the number target-dependent would make `SlabRuntime.SlabStateMcentralOffset` — a
 // top-level `let` deriving a STRUCT LAYOUT from it — target-dependent too, which is a layout fork paid for by
-// every allocation in the program to save 24 bytes on ONE lock per family. So there is one number, sized for
+// every allocation in the program to save 24 bytes per lock. So there is one number, sized for
 // the widest lock, and each backend ASSERTS that its own primitive fits (`Arm64DarwinRuntime`'s
 // `assertDarwinLockFits`) rather than trusting this comment.
 export let OsLockBytes = 64 as FullRangeInt

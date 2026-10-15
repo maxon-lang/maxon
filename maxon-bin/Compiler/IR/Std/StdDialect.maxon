@@ -1785,7 +1785,8 @@ export union StdOp
 	// the publish doors' green arms wake or spawn, and every M is minted through this op.
 	osThreadCreate(resultId ValueId, entryPtrId ValueId, argId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
 
-	// `osLockInit(lockPtr)` = `InitializeCriticalSection(lockPtr)`. One VALUE operand (the CRITICAL_SECTION region), no result.
+	// `osLockInit(lockPtr)` = `InitializeCriticalSectionAndSpinCount(lockPtr, WindowsLockSpinCount)`.
+	// One VALUE operand (the CRITICAL_SECTION region), no result.
 	osLockInit(lockPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
 
 	// `osLockEnter(lockPtr)` = `EnterCriticalSection(lockPtr)` — the run-queue guard's acquire. One VALUE
@@ -1794,6 +1795,12 @@ export union StdOp
 
 	// `osLockLeave(lockPtr)` = `LeaveCriticalSection(lockPtr)`. One VALUE operand, no result.
 	osLockLeave(lockPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
+
+	// `osLockDestroy(lockPtr)` = `DeleteCriticalSection(lockPtr)`, owed before a lock region is freed: a
+	// contended section owns a lazily created wait event that leaks otherwise, and one carrying DebugInfo
+	// corrupts the process lock list once its bytes are reused. `pthread_mutex_destroy` on macOS; nothing
+	// on Linux, whose futex lock is three plain words. One VALUE operand, no result.
+	osLockDestroy(lockPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
 
 	// `osReadOverlapped(handle, buf, cap, bytesOutPtr, ovl)` = `ReadFile(handle, buf, cap, bytesOutPtr, ovl)` — issue the
 	// overlapped read. FIVE args (`ovl` is the 5th, a stack arg); DEFINES the BOOL result (captured from RAX): nonzero =
@@ -3166,6 +3173,7 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 		osLockInit or
 		osLockEnter or
 		osLockLeave or
+		osLockDestroy or
 
 		// ⛔ The waits are the scheduler waiting for its own work: an idle machine's park and
 		// `__sched_syscall_regain`'s wait go through them holding no processor, so there is none for
@@ -3391,6 +3399,7 @@ export function stdOpLabelKindOf(op StdOp) returns StdOpLabelKind
 		osLockInit or
 		osLockEnter or
 		osLockLeave or
+		osLockDestroy or
 		osReadOverlapped or
 		osLastError or
 		osProcessSpawnInherit or
@@ -3830,6 +3839,7 @@ export function classifyArithOperands(op StdOp, operands StdArithOperands)
 		osLockInit or
 		osLockEnter or
 		osLockLeave or
+		osLockDestroy or
 		osReadOverlapped or
 		osLastError or
 		osProcessSpawnInherit or
@@ -4080,6 +4090,7 @@ export function classifyAccessOperands(op StdOp, access StdAccessOperands)
 		osLockInit or
 		osLockEnter or
 		osLockLeave or
+		osLockDestroy or
 		osReadOverlapped or
 		osLastError or
 		osProcessSpawnInherit or
@@ -4399,6 +4410,7 @@ module function classifyCallOperands(op StdOp, call StdCallOperands)
 		osLockInit or
 		osLockEnter or
 		osLockLeave or
+		osLockDestroy or
 		osReadOverlapped or
 		osLastError or
 		osProcessSpawnInherit or
@@ -4938,6 +4950,7 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osLockInit(condId) then referenced.insert(condId)
 		osLockEnter(condId) then referenced.insert(condId)
 		osLockLeave(condId) then referenced.insert(condId)
+		osLockDestroy(condId) then referenced.insert(condId)
 		osReadWallClock(condId) then referenced.insert(condId)
 		osEnvBlockFree(condId) then referenced.insert(condId)
 		osUnpublishNamedSegment(condId) then referenced.insert(condId)
@@ -5197,6 +5210,7 @@ module function stdOpDefinedValue(op StdOp, def StdDefinedValues)
 		osLockInit or
 		osLockEnter or
 		osLockLeave or
+		osLockDestroy or
 		osProcessSpawnInherit or
 		osCancelIo or
 		osPipeCreateOutbound or
@@ -5376,6 +5390,7 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osLockInit(lockPtr) gives StdOp.osLockInit(remappedValue(lockPtr, subst: subst))
 		osLockEnter(lockPtr) gives StdOp.osLockEnter(remappedValue(lockPtr, subst: subst))
 		osLockLeave(lockPtr) gives StdOp.osLockLeave(remappedValue(lockPtr, subst: subst))
+		osLockDestroy(lockPtr) gives StdOp.osLockDestroy(remappedValue(lockPtr, subst: subst))
 		osReadOverlapped(resultId, handle, buf, cap, bytesOutPtr, ovl) gives StdOp.osReadOverlapped(resultId, handleId: remappedValue(handle, subst: subst), bufId: remappedValue(buf, subst: subst), capId: remappedValue(cap, subst: subst), bytesOutPtrId: remappedValue(bytesOutPtr, subst: subst), ovlId: remappedValue(ovl, subst: subst))
 		osProcessSpawnInherit(cmdlinePtr, cwdPtr, creationFlags, startupPtr, procInfoPtr, envPtr) gives StdOp.osProcessSpawnInherit(remappedValue(cmdlinePtr, subst: subst), cwdPtrId: remappedValue(cwdPtr, subst: subst), creationFlagsId: remappedValue(creationFlags, subst: subst), startupPtrId: remappedValue(startupPtr, subst: subst), procInfoPtrId: remappedValue(procInfoPtr, subst: subst), envPtrId: remappedValue(envPtr, subst: subst))
 		osCancelIo(handle, ovl) gives StdOp.osCancelIo(remappedValue(handle, subst: subst), ovlId: remappedValue(ovl, subst: subst))
@@ -5683,6 +5698,7 @@ function cloneStdOp(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray, 
 		osLockInit or
 		osLockEnter or
 		osLockLeave or
+		osLockDestroy or
 		osReadOverlapped or
 		osLastError or
 		osProcessSpawnInherit or
@@ -6235,6 +6251,7 @@ module function collectStdBlockSuccessorIds(module StdModule, block IrBlock, out
 		osLockInit or
 		osLockEnter or
 		osLockLeave or
+		osLockDestroy or
 		osReadOverlapped or
 		osLastError or
 		osProcessSpawnInherit or
@@ -6438,6 +6455,7 @@ module function classifyBranch(op StdOp, out StdBranchOperands)
 		osLockInit or
 		osLockEnter or
 		osLockLeave or
+		osLockDestroy or
 		osReadOverlapped or
 		osLastError or
 		osProcessSpawnInherit or

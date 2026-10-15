@@ -175,6 +175,7 @@ let Arm64LinuxSyscallFsync = 82
 // ⚠ `mprotect` is here rather than beside `mmap` because its one caller is `mrt_host_thread_create`, which
 // lays a PROT_NONE guard page under each worker M's stack.
 let Arm64LinuxSyscallFutex = 98
+let Arm64LinuxSyscallSchedYield = 124
 let Arm64LinuxSyscallClockNanosleep = 115
 
 // The scheduler's poller. AArch64 has no `epoll_wait`, only `epoll_pwait` with a null signal mask.
@@ -1575,6 +1576,18 @@ function arm64LinuxEmitCasImm(asm Arm64RuntimeAsm, dest Arm64Register, addrSlot 
 	arm64EmitAtomicCas(asm.code, dest: arm64RuntimeReg(dest), addrReg: arm64RuntimeReg(Arm64Register.x0), expectedReg: arm64RuntimeReg(Arm64Register.x1), replacementReg: arm64RuntimeReg(Arm64Register.x2))
 end 'arm64LinuxEmitCasImm'
 
+function arm64LinuxEmitTryAcquire(asm Arm64RuntimeAsm, addrSlot StackSize, owned BlockId)
+	arm64LinuxEmitCasImm(asm, dest: Arm64Register.x5, addrSlot: addrSlot, expected: LinuxMutexFree, replacement: LinuxMutexHeld)
+	arm64EmitCbnzTo(asm, reg: Arm64Register.x5, label: owned)
+end 'arm64LinuxEmitTryAcquire'
+
+function arm64LinuxEmitNextSpinRound(asm Arm64RuntimeAsm, roundsSlot StackSize, again BlockId)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x4, slot: roundsSlot)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x4, base: Arm64Register.x4, imm: -1)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x4, slot: roundsSlot)
+	arm64EmitCbnzTo(asm, reg: Arm64Register.x4, label: again)
+end 'arm64LinuxEmitNextSpinRound'
+
 // ==========================================================================
 // mrt_host_monotonic_clock(x0 = ticksPtr, x1 = freqPtr)
 // ==========================================================================
@@ -2102,19 +2115,22 @@ function buildArm64LinuxLockInitChunk() returns FunctionCodeChunk
 	return asm.finishFunction(HostLockInitName)
 end 'buildArm64LinuxLockInitChunk'
 
-// `EnterCriticalSection`, running `LinuxMutexHeldContended`'s three-compare-and-swap acquire protocol.
+// `EnterCriticalSection`: a bounded spin (`LinuxLockActiveSpinRounds`), then
+// `LinuxMutexHeldContended`'s three-compare-and-swap acquire protocol.
 //
 // ⭐ **THE UNCONTENDED PATH IS ONE `cas` AND NO SYSCALL, WHICH IS THE WHOLE POINT OF A FUTEX.** The kernel is
-// entered only when the word is already held; on this lane, where the high-water mark of active worker Ms is
-// ONE (`specs/builtins-cpu-parallel.md` pins it), the contended path is unreachable and is written for
-// correctness rather than for use. The owner token is `TPIDR_EL0` itself, this thread's slot block
-// address.
+// entered only when the word is already held. The owner token is `TPIDR_EL0` itself, this thread's
+// slot block address.
 function buildArm64LinuxLockEnterChunk() returns FunctionCodeChunk
 	let SlotRegion = 0 as StackSize
 	let SlotToken = 1 as StackSize
-	var asm = Arm64RuntimeAsm.beginFunction(2)
+	let SlotSpinRounds = 2 as StackSize
+	var asm = Arm64RuntimeAsm.beginFunction(3)
 
 	let acquire = asm.newLabel()
+	let activeRound = asm.newLabel()
+	let pauseLoop = asm.newLabel()
+	let passiveRound = asm.newLabel()
 	let contend = asm.newLabel()
 	let owned = asm.newLabel()
 	let done = asm.newLabel()
@@ -2134,8 +2150,28 @@ function buildArm64LinuxLockEnterChunk() returns FunctionCodeChunk
 
 	// The futex word is at offset 0 of the region, so the region pointer IS its address.
 	asm.placeLabel(acquire)
-	arm64LinuxEmitCasImm(asm, dest: Arm64Register.x5, addrSlot: SlotRegion, expected: LinuxMutexFree, replacement: LinuxMutexHeld)
-	arm64EmitCbnzTo(asm, reg: Arm64Register.x5, label: owned)
+	arm64LinuxEmitTryAcquire(asm, addrSlot: SlotRegion, owned: owned)
+
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: LinuxLockActiveSpinRounds)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x4, slot: SlotSpinRounds)
+
+	asm.placeLabel(activeRound)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: LinuxLockActiveSpinPauses)
+
+	asm.placeLabel(pauseLoop)
+	arm64EmitYield(asm.code)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x3, base: Arm64Register.x3, imm: -1)
+	arm64EmitCbnzTo(asm, reg: Arm64Register.x3, label: pauseLoop)
+	arm64LinuxEmitTryAcquire(asm, addrSlot: SlotRegion, owned: owned)
+	arm64LinuxEmitNextSpinRound(asm, roundsSlot: SlotSpinRounds, again: activeRound)
+
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: LinuxLockPassiveSpinRounds)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x4, slot: SlotSpinRounds)
+
+	asm.placeLabel(passiveRound)
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallSchedYield)
+	arm64LinuxEmitTryAcquire(asm, addrSlot: SlotRegion, owned: owned)
+	arm64LinuxEmitNextSpinRound(asm, roundsSlot: SlotSpinRounds, again: passiveRound)
 
 	asm.placeLabel(contend)
 	arm64LinuxEmitCasImm(asm, dest: Arm64Register.x5, addrSlot: SlotRegion, expected: LinuxMutexFree, replacement: LinuxMutexHeldContended)

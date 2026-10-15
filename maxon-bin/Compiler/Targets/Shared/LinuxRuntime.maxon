@@ -551,6 +551,14 @@ export let LinuxMutexFree = 0
 export let LinuxMutexHeld = 1
 export let LinuxMutexHeldContended = 2
 
+// A held lock is retried after each of `LinuxLockActiveSpinRounds` bursts of spin hints, then after
+// each of `LinuxLockPassiveSpinRounds` `sched_yield`s, before the waiter runs the protocol above. A
+// runtime lock is held briefly, so the spin usually takes it without the futex sleep and the wake
+// the release would owe.
+export let LinuxLockActiveSpinRounds = 4 as MachineWord
+export let LinuxLockActiveSpinPauses = 30 as MachineWord
+export let LinuxLockPassiveSpinRounds = 1 as MachineWord
+
 // The depth an outermost acquire records, and the value `atomicRmw`'s DISPLACED word carries when the
 // release was the last one and nobody was asleep.
 export let LinuxMutexFirstEntry = 1

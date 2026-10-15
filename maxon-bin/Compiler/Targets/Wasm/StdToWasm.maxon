@@ -1005,6 +1005,7 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 		osLockInit or
 		osLockEnter or
 		osLockLeave or
+		osLockDestroy or
 		osPipeCreate or
 		osEventCreate or
 		osThreadCreate or
@@ -1640,6 +1641,7 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		osLockInit or
 		osLockEnter or
 		osLockLeave or
+		osLockDestroy or
 		osPipeCreate or
 		osEventCreate or
 		osThreadCreate or
@@ -1986,6 +1988,7 @@ type WasmFuncEmitter
 			witnessTryCall then panic("emitStraightLineTerminator: a `witnessTryCall` is a value-producing body op, never a terminator")
 			osLockInit or
 			osLockEnter or
+			osLockDestroy or
 			osLockLeave then panic("emitStraightLineTerminator: an `osLock*` op is a body op, never a terminator")
 			osPipeCreate or
 			osEventCreate or
@@ -2164,6 +2167,7 @@ type WasmFuncEmitter
 			witnessTryCall then panic("emitDispatcherTerminator: a `witnessTryCall` is a value-producing body op, never a terminator")
 			osLockInit or
 			osLockEnter or
+			osLockDestroy or
 			osLockLeave then panic("emitDispatcherTerminator: an `osLock*` op is a body op, never a terminator")
 			osPipeCreate or
 			osEventCreate or
@@ -2332,6 +2336,7 @@ type WasmFuncEmitter
 			osDecommitPages or
 			osLockInit or
 			osLockEnter or
+			osLockDestroy or
 			osLockLeave then break
 
 			// One `memory.fill` is this lane's whole size ladder. See `emitMemFill`.
@@ -4023,6 +4028,7 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 		osFreePages then panic("decideDispatcher: a host call (a panic, a clock read, a process, handle, wait or page op) is a body op, never a terminator")
 		osLockInit or
 		osLockEnter or
+		osLockDestroy or
 		osLockLeave then panic("decideDispatcher: an `osLock*` op is a body op, never a terminator")
 		osPipeCreate or
 		osEventCreate or

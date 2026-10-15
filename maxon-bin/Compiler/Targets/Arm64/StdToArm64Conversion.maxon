@@ -642,6 +642,7 @@ export type StdToArm64Lowering
 			osLockInit or
 			osLockEnter or
 			osLockLeave or
+			osLockDestroy or
 			osReadOverlapped or
 			osLastError or
 			osProcessSpawnInherit or
@@ -902,6 +903,7 @@ export type StdToArm64Lowering
 			osLockInit(lockPtrId) then self.lowerOsLockInit(lockPtrId, dstRef: dstRef)
 			osLockEnter(lockPtrId) then self.lowerOsLockImport(lockPtrId, importSlot: OsImportSlot.pthreadMutexLock, chunk: LinuxLockEnterName, dstRef: dstRef)
 			osLockLeave(lockPtrId) then self.lowerOsLockImport(lockPtrId, importSlot: OsImportSlot.pthreadMutexUnlock, chunk: LinuxLockLeaveName, dstRef: dstRef)
+			osLockDestroy(lockPtrId) then self.lowerOsLockDestroy(lockPtrId, dstRef: dstRef)
 
 			// An "overlapped" read on this lane is a plain `read` and its overlapped operand is dead: the op
 			// answers true with the count in `bytesOutPtr` if the read completed synchronously, false with
@@ -1165,6 +1167,7 @@ export type StdToArm64Lowering
 			osLockInit or
 			osLockEnter or
 			osLockLeave or
+			osLockDestroy or
 			osReadOverlapped or
 			osLastError or
 			osProcessSpawnInherit or
@@ -2973,6 +2976,13 @@ export type StdToArm64Lowering
 	function lowerOsLockInit(lockPtrId ValueId, dstRef ElementIndex)
 		self.emitHostCall(dstRef, callee: Arm64HostCallee.chunk(HostLockInitName), args: argsOf(lockPtrId))
 	end 'lowerOsLockInit'
+
+	function lowerOsLockDestroy(lockPtrId ValueId, dstRef ElementIndex)
+		match arm64OsCallKind(self.target.os) 'route'
+			importCall then self.emitHostCall(dstRef, callee: Arm64HostCallee.import(OsImportSlot.pthreadMutexDestroy), args: argsOf(lockPtrId))
+			syscall then break
+		end 'route'
+	end 'lowerOsLockDestroy'
 
 	// ⭐ `osLockEnter`/`osLockLeave` — the region the Std tier allocated IS the lock (offset 0), so there is
 	// no field address to compute at either site. One emitter for both, because they differ only in which

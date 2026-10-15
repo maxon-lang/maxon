@@ -2841,7 +2841,7 @@ func @__ms_send_from {
     x64.movRegReg rdx, r12
     x64.movRegImm32 r8, 1
     x64.movRegImm32 r9, 0
-    x64.iatCall 114
+    x64.iatCall 115
     x64.shlRegImm8 rax, rax, 32
     x64.movRegReg rbx, rax
     x64.sarRegImm8 rbx, rax, 32

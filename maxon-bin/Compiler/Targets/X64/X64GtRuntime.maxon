@@ -550,9 +550,10 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 		DeleteProcThreadAttributeList or  // 1: lpAttributeList
 		CreateEventA or  // 4: lpEventAttributes, bManualReset, bInitialState, lpName
 		SetEvent or  // 1: hEvent
-		InitializeCriticalSection or  // 1: lpCriticalSection
+		InitializeCriticalSectionAndSpinCount or  // 2: lpCriticalSection, dwSpinCount
 		EnterCriticalSection or  // 1: lpCriticalSection
 		LeaveCriticalSection or  // 1: lpCriticalSection
+		DeleteCriticalSection or  // 1: lpCriticalSection
 		GetLastError or  // 0
 		GetCurrentProcessId or  // 0
 		CancelIoEx or  // 2: hFile, lpOverlapped
@@ -668,10 +669,10 @@ end 'gtShimStackArgWordsOf'
 // `blocking` import may never be called with `__sched_lock` held. Bracketing one that runs under
 // the lock deadlocks the whole scheduler: `EnterCriticalSection` is reached from `__mbox_send`,
 // `__mbox_recv`, `__gt_timer_add` and `__slab_lock` on every allocation, so a machine blocked on
-// `__sched_lock` would have its P handed off by `__sysmon`, then wait in `__sched_syscall_regain`
-// for a processor while holding the lock, for ever. Every scheduler-internal call made under that
-// lock is therefore `schedulerBound` here, which makes the requirement checkable by reading this
-// one table.
+// one of those locks would have its P handed off by `__sysmon`, then wait in
+// `__sched_syscall_regain` for a processor while holding the lock, for ever. Every
+// scheduler-internal call made under that lock is therefore `schedulerBound` here, which makes the
+// requirement checkable by reading this one table.
 //
 // Total over `IatSlot` with no `default` arm: a `default gives schedulerBound` would let a new
 // blocking import silently keep costing its processor.
@@ -781,8 +782,9 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 
 		// The lock pair is the header's deadlock; it must stay `schedulerBound`.
 		EnterCriticalSection or
+		DeleteCriticalSection or
 		LeaveCriticalSection or
-		InitializeCriticalSection or
+		InitializeCriticalSectionAndSpinCount or
 
 		// The scheduler waiting for its own work: an idle machine's park and
 		// `__sched_syscall_regain`'s wait hold no processor for `__sysmon` to take.
@@ -1864,10 +1866,6 @@ let OpcodeXadd2ndByte = 0xC1
 let OpcodePushfq = 0x9C
 let OpcodePopfq = 0x9D
 
-// `pause` — the spin hint in `__gt_exit_process`'s wait for the monitor's window to close.
-let OpcodePauseRepPrefix = 0xF3
-let OpcodePauseNop = 0x90
-
 // ⭐⭐ **EVERY GENERAL REGISTER THE TRAMPOLINE SPILLS — all of them but rsp and rbp.** The stop lands at an
 // arbitrary instruction, so every one of these may hold a live value of the interrupted function; rsp is
 // restored by the frame arithmetic and rbp by the `push` that opens it.
@@ -2230,8 +2228,7 @@ function buildExitProcessGateChunk() returns FunctionCodeChunk
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: ExitProcessClaimedLabel)
 	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: ExitProcessClaimedLabel)
-	asm.code.push(OpcodePauseRepPrefix)
-	asm.code.push(OpcodePauseNop)
+	encodeX64Pause(asm.code)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: ExitProcessSpinLabel)
 
 	asm.placeLabel(ExitProcessClaimedLabel)

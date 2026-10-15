@@ -385,10 +385,17 @@ end 'main'
 a plausible `0` hides. `__gt_init` takes the scheduler's tables from `__slab_alloc` before `main` runs, and
 `main` itself runs on a green thread, so by its first line the columns already count that scaffolding and
 are not 0. The first window then spawns a service and awaits one message: `__svc_spawn` takes the
-service's MAILBOX (64 bytes) straight from `__slab_alloc` (`MailboxRuntime.maxon`) with no box header, so
-the raw columns rise and the tracked ones do not. The third assertion separates the byte column from the
-count column: the mailbox is many bytes wide, so the two deltas cannot be equal unless one of the two
+service's MAILBOX straight from `__slab_alloc` (`MailboxRuntime.maxon`) with no box header, so the raw
+columns rise and the tracked ones do not. The third assertion separates the byte column from the count
+column: the mailbox is many bytes wide, so the two deltas cannot be equal unless one of the two
 intrinsics is wired to the other's slot.
+
+⭐ **THE MAILBOX IS ONE REGION OF 128 BYTES: ITS 64-BYTE RECORD AND ITS OWN HOST LOCK.** A mailbox's head,
+tail, closed flag and parked receiver are guarded by a lock of the mailbox's own, not by `__sched_lock`, so
+the region `__svc_spawn` cuts holds the record and, behind it, the `OsLockBytes` (64) the host lock is
+initialised into. The fifth assertion pins the first window at exactly that: one raw region, 128 bytes. A
+mailbox still guarded by the scheduler's lock reads 64; a lock cut as a region of its own reads two
+regions.
 
 ⭐ **A MESSAGE TAKES NO RAW REGION, AND THE SECOND WINDOW IS WHERE THAT IS SAID.** The mailbox's queue is
 intrusive: the request box the send hands over carries the queue's link itself, so `__mbox_send` cuts
@@ -424,6 +431,9 @@ type Counter
 	end 'next'
 end 'Counter'
 
+let mailboxRecordBytes = 64
+let hostLockBytes = 64
+
 function main() returns ExitCode
 	let before = __Builtins.mmRawAllocTotal()
 	let bytesBefore = __Builtins.mmRawAllocBytes()
@@ -447,11 +457,14 @@ function main() returns ExitCode
 	if afterSecond == after and bytesAfterSecond == bytesAfter 'aMessageTakesNoRawRegion'
 		score = score + 4
 	end 'aMessageTakesNoRawRegion'
+	if after - before == 1 and bytesAfter - bytesBefore == mailboxRecordBytes + hostLockBytes 'theMailboxCarriesItsOwnLock'
+		score = score + 5
+	end 'theMailboxCarriesItsOwnLock'
 	return score as ExitCode
 end 'main'
 ```
 ```exitcode
-12
+17
 ```
 
 <!-- test: builtins-mm-counters.raw-live-falls-below-raw-total -->

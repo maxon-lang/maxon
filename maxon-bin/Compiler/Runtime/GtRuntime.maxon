@@ -181,8 +181,8 @@ export let GtOffIoSource = 0xA0
 // OPTIMIZATION.** Without it, a spawn of a releaser-free callee would INHERIT the previous tenant's releaser
 // and release that tenant's arguments out of stale argument slots — a wild free rather than a leak. The zero
 // is what makes "no releaser" the default state of every GT rather than a state the spawn must remember to
-// restore, and `__gt_free_get` (`SchedRuntime.GtFreeGetName`) is what supplies it on both of its arms: a
-// freshly carved record is zero, and a recycled one is zeroed over its whole `GtStructSize`.
+// restore, and `__gt_spawn` is what supplies it: it zeroes the whole `GtStructSize` of the record
+// `__gt_free_get` hands it.
 //
 // It sits at 0xB0, at the head of the inline argument region, so every field of the portable layout
 // (0x00–0xA8) stays exactly where it is.
@@ -1714,8 +1714,8 @@ let GtRunQueueTailLabel = b"__gt_run_queue_tail"
 //
 // ⭐⭐ **THE RECORD IS THE OPPOSITE: TYPE-STABLE, RECYCLED THROUGH FREE LISTS AND NEVER FREED.** It is carved
 // from the scheduler's record arena, `__gt_reclaim` hands it to `__gt_free_put` and `__gt_spawn` takes one from
-// `__gt_free_get` (`SchedRuntime.GtFreePutName` and `GtFreeGetName` carry why), which zeroes a recycled record
-// over its whole `GtStructSize` before handing it out.
+// `__gt_free_get` (`SchedRuntime.GtFreePutName` and `GtFreeGetName` carry why); a spawn zeroes the record over
+// its whole `GtStructSize` and a reply cell writes the words it reads.
 //
 // ⭐ **RECLAIM AT THE AWAITER, NOT AT COMPLETION.** A GT can complete long before anybody awaits it, and its
 // struct still holds its result for a live, un-awaited promise. Reclaiming at completion would put that struct
@@ -2485,7 +2485,7 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 
 	// ⭐ **THE MAILBOX RIDES `usesGt` EXACTLY AS THE SCHEDULER DOES, AND FOR THE SAME REASON: there is no
 	// program that wants one without the other.** `__svc_spawn` calls `__gt_spawn_green` and every mailbox
-	// wake goes through `__gt_ready_locked`; a program that never spawns a service loses every mailbox
+	// wake goes through `__gt_ready`; a program that never spawns a service loses every mailbox
 	// function to `DeadFunctionElimination`, whose only edge into them is the `funcAddr`/`call` pair
 	// `LowerMaxonToStd.lowerServiceSpawn` emits.
 	installMailboxRuntime(module)
@@ -2588,10 +2588,9 @@ function buildGtSpawn(module StdModule, kind GtSpawnKind, tracing GtTracing, tar
 	emitParams(module, block: initBlock, count: 1)
 	let funcPtr = 0 as ValueId
 
-	// Zeroed over the whole `GtStructSize` on both of `__gt_free_get`'s arms, so `status` is `ready`, every
-	// pointer field is null and there is nothing here to clear.
 	let gt = ids.mint()
 	module.appendOp(initBlock, op: StdOp.call(gt, callee: GtFreeGetName, args: ValueIdArray.create()))
+	module.appendOp(initBlock, op: StdOp.memFill(gt, byteCountId: emitConst(module, block: initBlock, value: GtStructSize, ids: ids), value: 0))
 
 	// gt.argBuf = gt + GtOffArgInline — a SELF-POINTER into this struct's own inline arg region.
 	// The trampoline reads `gt.argBuf` as a pointer and loads the slots from there, so pointing it at the inline
@@ -5179,7 +5178,7 @@ end 'emitGtIsReplyCell'
 // cell is and why it is a `Promise`.
 //
 // ⚠ **IT IS NOT `__gt_spawn`, AND THE THREE DIFFERENCES ARE EACH LOAD-BEARING**: no STACK is committed
-// (nothing runs on it), no `funcPtr` is stored
+// (nothing runs on it), `funcPtr` is stored as zero
 // (that zero IS the discriminator), and it is never PUBLISHED to a queue — `__gt_spawn` takes `__sched_lock`
 // to publish, and a cell nobody schedules must not be discoverable by a scheduler at all.
 //
@@ -5203,6 +5202,19 @@ function buildGtCellAlloc(module StdModule)
 
 	let cell = ids.mint()
 	module.appendOp(entry, op: StdOp.call(cell, callee: GtFreeGetName, args: ValueIdArray.create()))
+
+	let cleared = emitConst(module, block: entry, value: 0, ids: ids)
+
+	emitStoreField(module, block: entry, record: cell, offset: GtOffStackBase, value: cleared)
+	emitStoreField(module, block: entry, record: cell, offset: GtOffFuncPtr, value: cleared)
+	emitStoreField(module, block: entry, record: cell, offset: GtOffResult, value: cleared)
+	emitStoreField(module, block: entry, record: cell, offset: GtOffThrew, value: cleared)
+	emitStoreField(module, block: entry, record: cell, offset: GtOffTraceId, value: cleared)
+	emitStoreField(module, block: entry, record: cell, offset: GtOffTeardown, value: cleared)
+	emitStoreField(module, block: entry, record: cell, offset: GtOffIsMainThread, value: cleared)
+	emitStoreField(module, block: entry, record: cell, offset: GtOffAwaiter, value: cleared)
+	emitStoreField(module, block: entry, record: cell, offset: GtOffReplyWitness, value: cleared)
+	emitStoreField(module, block: entry, record: cell, offset: GtOffRenounced, value: cleared)
 
 	let waitingStatus = emitConst(module, block: entry, value: GtStatusWaiting, ids: ids)
 	emitStoreField(module, block: entry, record: cell, offset: GtOffStatus, value: waitingStatus)

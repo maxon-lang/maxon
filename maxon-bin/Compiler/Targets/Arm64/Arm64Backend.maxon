@@ -374,6 +374,8 @@ let Arm64OpBrk = 0xD4200000
 // syscalls and routes every OS primitive through a libSystem GOT import instead.
 let Arm64OpSvc = 0xD4000001
 
+let Arm64OpYield = 0xD503203F
+
 // x8 — where the AArch64 Linux syscall ABI reads the syscall number from. It is inside the
 // caller-saved half `arm64Syscall`'s call clobber declares, so writing it here forbids nothing.
 let Arm64SyscallNumberReg = 8
@@ -2273,6 +2275,10 @@ export function arm64EmitSyscall(code ByteArray, number MachineWord)
 	arm64EmitMovImm(code, rd: Arm64SyscallNumberReg, value: number)
 	emitArm64Insn(code, insn: Arm64OpSvc)
 end 'arm64EmitSyscall'
+
+export function arm64EmitYield(code ByteArray)
+	emitArm64Insn(code, insn: Arm64OpYield)
+end 'arm64EmitYield'
 
 // RET — return through x30. Exported for the hand-assembled runtime chunks; a MODULE function's
 // return is the `arm64Ret` TargetOp, encoded from the same word.

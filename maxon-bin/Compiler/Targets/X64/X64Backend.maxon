@@ -219,6 +219,9 @@ export let OpcodeInt3 = 0xCC
 // ModR/M, no REX and no operands. The number goes in eax (loaded by the shared `encodeMovRegImm32`).
 let OpcodeSyscallSecondByte = 0x05
 
+let OpcodePauseRepPrefix = 0xF3
+let OpcodePauseNop = 0x90
+
 // --- Atomics and the thread-identity read ---
 //
 // `LOCK` (F0) is an instruction PREFIX, not an opcode: it makes the read-modify-write memory operation
@@ -2054,6 +2057,11 @@ export function encodeX64Syscall(code ByteArray, number MachineWord)
 	code.push(TwoByteOpcodeEscape)
 	code.push(OpcodeSyscallSecondByte)
 end 'encodeX64Syscall'
+
+export function encodeX64Pause(code ByteArray)
+	code.push(OpcodePauseRepPrefix)
+	code.push(OpcodePauseNop)
+end 'encodeX64Pause'
 
 // Resolve a colored operand to its physical register. A virtual reg here is an
 // allocator bug (register allocation must run before emission).

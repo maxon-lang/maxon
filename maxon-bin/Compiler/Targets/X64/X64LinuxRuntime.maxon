@@ -162,6 +162,7 @@ let X64LinuxSyscallIoctl = 16
 let X64LinuxSyscallArchPrctl = 158
 let X64LinuxSyscallClone = 56
 let X64LinuxSyscallFutex = 202
+let X64LinuxSyscallSchedYield = 24
 let X64LinuxSyscallMprotect = 10
 let X64LinuxSyscallClockNanosleep = 230
 let X64LinuxSyscallExit = 60
@@ -2180,6 +2181,18 @@ function x64LinuxEmitCasImm(asm X64RuntimeAsm, addrSlot StackSize, expected Mach
 	encodeLockedRmwBaseDispReg(asm.code, twoByteEscape: true, opcode: OpcodeCmpxchgRmReg, base: X64Register.rdi, disp: 0, reg: X64Register.rcx)
 end 'x64LinuxEmitCasImm'
 
+function x64LinuxEmitTryAcquire(asm X64RuntimeAsm, addrSlot StackSize, owned BlockId)
+	x64LinuxEmitCasImm(asm, addrSlot: addrSlot, expected: LinuxMutexFree, replacement: LinuxMutexHeld)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: owned)
+end 'x64LinuxEmitTryAcquire'
+
+function x64LinuxEmitNextSpinRound(asm X64RuntimeAsm, roundsSlot StackSize, again BlockId)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(roundsSlot), wide: true)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: X64Register.rax, imm: 1)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(roundsSlot), srcReg: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: again)
+end 'x64LinuxEmitNextSpinRound'
+
 // `dest = handle >> 48` — the kind field, for the two ops that dispatch on it.
 function x64LinuxEmitHandleKind(asm X64RuntimeAsm, dest X64Register, handle X64Register)
 	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: dest, src: handle, wide: true)
@@ -2702,7 +2715,8 @@ function buildX64LinuxLockInitChunk() returns FunctionCodeChunk
 	return asm.finishFunction(HostLockInitName)
 end 'buildX64LinuxLockInitChunk'
 
-// `EnterCriticalSection`, running `LinuxMutexHeldContended`'s three-compare-and-swap acquire protocol.
+// `EnterCriticalSection`: a bounded spin (`LinuxLockActiveSpinRounds`), then
+// `LinuxMutexHeldContended`'s three-compare-and-swap acquire protocol.
 //
 // ⭐ **THE UNCONTENDED PATH IS ONE `lock cmpxchg` AND NO SYSCALL, WHICH IS THE WHOLE POINT OF A FUTEX.** The
 // kernel is entered only when the word is already held. The owner token is one load through FS of the
@@ -2710,9 +2724,13 @@ end 'buildX64LinuxLockInitChunk'
 function buildX64LinuxLockEnterChunk() returns FunctionCodeChunk
 	let SlotRegion = 0
 	let SlotToken = 1
-	var asm = X64RuntimeAsm.beginFunction(2)
+	let SlotSpinRounds = 2
+	var asm = X64RuntimeAsm.beginFunction(3)
 
 	let acquire = asm.newLabel()
+	let activeRound = asm.newLabel()
+	let pauseLoop = asm.newLabel()
+	let passiveRound = asm.newLabel()
 	let contend = asm.newLabel()
 	let owned = asm.newLabel()
 	let done = asm.newLabel()
@@ -2732,8 +2750,28 @@ function buildX64LinuxLockEnterChunk() returns FunctionCodeChunk
 
 	// The futex word is at offset 0 of the region, so the region pointer IS its address.
 	asm.placeLabel(acquire)
-	x64LinuxEmitCasImm(asm, addrSlot: SlotRegion, expected: LinuxMutexFree, replacement: LinuxMutexHeld)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: owned)
+	x64LinuxEmitTryAcquire(asm, addrSlot: SlotRegion, owned: owned)
+
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: LinuxLockActiveSpinRounds)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSpinRounds), srcReg: X64Register.rax, wide: true)
+
+	asm.placeLabel(activeRound)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: LinuxLockActiveSpinPauses)
+
+	asm.placeLabel(pauseLoop)
+	encodeX64Pause(asm.code)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: X64Register.rdx, imm: 1)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: pauseLoop)
+	x64LinuxEmitTryAcquire(asm, addrSlot: SlotRegion, owned: owned)
+	x64LinuxEmitNextSpinRound(asm, roundsSlot: SlotSpinRounds, again: activeRound)
+
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: LinuxLockPassiveSpinRounds)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSpinRounds), srcReg: X64Register.rax, wide: true)
+
+	asm.placeLabel(passiveRound)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallSchedYield)
+	x64LinuxEmitTryAcquire(asm, addrSlot: SlotRegion, owned: owned)
+	x64LinuxEmitNextSpinRound(asm, roundsSlot: SlotSpinRounds, again: passiveRound)
 
 	asm.placeLabel(contend)
 	x64LinuxEmitCasImm(asm, addrSlot: SlotRegion, expected: LinuxMutexFree, replacement: LinuxMutexHeldContended)

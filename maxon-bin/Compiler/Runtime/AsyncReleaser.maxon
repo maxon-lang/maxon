@@ -243,8 +243,9 @@ end 'serviceReplyNeedsReleaser'
 //
 //   • **NO ARGUMENT SLOTS.** A message's arguments were moved into the request BOX at the send and are
 //     released by `<T>.__loop` (consumed by the handler, or dropped slot by slot beside it) — the GT
-//     struct's inline argument region is untouched and stays at the slab's zero. Deriving them from the
-//     message's parameters, as the async plan does, would name offsets nothing ever wrote.
+//     struct's inline argument region is never written for a cell and may hold a previous
+//     tenant's words. Deriving them from the message's parameters, as the async plan does, would
+//     release those.
 //   • **NO ERROR SLOT.** A reply's `threw` word carries the FUSED ORDINAL of a scalar dispatch line, never a
 //     box: `ServiceCompanions.uncarriableReplyErrorNoun` refuses a message whose `throws` names a
 //     payload-carrying union at the `spawn` (E3140), precisely so this word can never be a pointer.
@@ -750,9 +751,9 @@ end 'synthesizeReleaser'
 // exit was, so on a throw it holds whatever the throwing path left there — releasing it would be a wild free.
 // That is why the success release sits under `threw == 0` rather than beside the error release.
 //
-// A GT that never RAN has both words zero (`__gt_free_get` hands out a zeroed record on both of its arms), so
-// every guard below falls through to `done` for it — which is the correct answer and the reason no `status`
-// test is needed here.
+// A GT that never RAN has both words zero (`__gt_spawn` zeroes the record and a reply cell stores
+// both), so every guard below falls through to `done` for it — which is the correct answer and the
+// reason no `status` test is needed here.
 function emitResultOrErrorRelease(module StdModule, func IrFunction, ids ValueMinter, start IrBlock, done IrBlock, gt ValueId, plan AsyncReleasePlan)
 	if not plan.calleeThrows 'nonThrowing'
 		module.setTerminator(emitSlotReleases(module, func: func, ids: ids, cur: start, gt: gt, slots: plan.resultSlots), op: StdOp.branch(done.id))
