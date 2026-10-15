@@ -21,48 +21,40 @@ Arms:
                                 bench/fannkuch/out/ref-<sha>/tree, seeded from .bootstrap/maxon.exe.
                                 A control arm for an A/B is `--ref <pre-change-sha>`.
 
-Every arm compiles the SAME source with its own compiler (and its own checkout's stdlib), into its
-own directory, so two arms never share a .ir or a cache.
+A label names an arm's output directory AND its timing list, so labels are compared
+case-insensitively, a duplicate is refused before anything is built, and `C` is reserved for the C
+arm. Every arm compiles the SAME source with its own compiler (and its own checkout's stdlib), into
+its own directory, so two arms never share a .ir or a cache.
 
 Exit codes: 0 ok; 1 a verification failure (no log row is written); 2 a build failure; 3 usage.
 """
 import argparse
 import datetime
-import hashlib
 import importlib.util
 import json
 import os
 import shutil
-import statistics
-import subprocess
 import sys
 import time
 
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-IS_WINDOWS = os.name == "nt"
-EXE = ".exe" if IS_WINDOWS else ""
+import bench_common
+
 SIDECAR_SUFFIX = ".mxdbg"
-SLOT_COMPILER = os.path.join(REPO, "maxon-bin", ".maxon", "maxon" + EXE)
-SEED_COMPILER = os.path.join(REPO, ".bootstrap", "maxon" + EXE)
-DEFAULT_SOURCE = os.path.join(REPO, "examples", "fannkuch-redux.maxon")
-DEFAULT_C_SOURCE = os.path.join(REPO, "bench", "fannkuch", "fannkuchredux.gcc-5.c")
-DEFAULT_OUT_DIR = os.path.join(REPO, "bench", "fannkuch", "out")
-LOG_PATH = os.path.join(REPO, "docs", "fannkuch-benchmark-log.md")
-CENSUS_SCRIPT = os.path.join(REPO, "scripts", "emitted-code-count.py")
+DEFAULT_SOURCE = os.path.join(bench_common.REPO, "examples", "fannkuch-redux.maxon")
+DEFAULT_C_SOURCE = os.path.join(bench_common.REPO, "bench", "fannkuch", "fannkuchredux.gcc-5.c")
+DEFAULT_OUT_DIR = os.path.join(bench_common.REPO, "bench", "fannkuch", "out")
+LOG_PATH = os.path.join(bench_common.REPO, "docs", "fannkuch-benchmark-log.md")
+CENSUS_SCRIPT = os.path.join(bench_common.REPO, "scripts", "emitted-code-count.py")
 WINDOWS_CLANG = r"C:\Program Files\LLVM\bin\clang.exe"
 # Single-threaded on purpose: without -fopenmp the pragma is a comment and the blocks run in sequence.
 CLANG_FLAGS = ["-O3", "-march=native", "-Wall", "-Wno-unknown-pragmas"]
-# The seed predates the manifest's named targets, so it compiles `maxon-bin/` as a plain program and
-# has to be told the output stem — the same command `.github/workflows/ci.yml` runs on a fresh checkout.
-SEED_BUILD_ARGS = "build maxon-bin --output=maxon-bin/.maxon/maxon"
-LEAK_EXIT_CODE = 101
+C_LABEL = "C"
+SOURCE_STEM = "fannkuch-redux"
 # The self-compile band: a change that makes the compiler compile ITSELF this much slower than the
 # control does is a HALT for the user (ruling 2026-09-08), whatever it bought the benchmark. The
 # threshold sits above the ±3% build-to-build layout noise docs/emitted-code-roadmap.md records.
 SELF_COMPILE_HALT_FRACTION = 0.05
 SELF_COMPILE_SOURCE = "maxon-bin"
-BUILD_TIMEOUT_S = 1200
-RUN_TIMEOUT_S = 1800
 
 # (checksum, pancake count) per n. The pancake count is the Maxon program's exit code.
 EXPECTED = {7: (228, 16), 10: (73196, 38), 11: (556355, 51), 12: (3968050, 65)}
@@ -98,43 +90,6 @@ census of the Maxon binary (`scripts/emitted-code-count.py`); `arm` names the co
 """
 
 
-class BuildFailure(Exception):
-    pass
-
-
-class VerificationFailure(Exception):
-    pass
-
-
-def run(cmd, cwd=None, timeout=BUILD_TIMEOUT_S):
-    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
-
-
-def git(root, *args):
-    r = run(["git", "-C", root] + list(args))
-    if r.returncode != 0:
-        raise BuildFailure(f"git {' '.join(args)} in {root} failed:\n{r.stderr}")
-    return r.stdout.strip()
-
-
-def checkout_root_of(path):
-    """The git checkout containing `path`, or None. A worktree's .git is a file, not a directory."""
-    d = os.path.dirname(os.path.abspath(path))
-    while True:
-        if os.path.exists(os.path.join(d, ".git")):
-            return d
-        parent = os.path.dirname(d)
-        if parent == d:
-            return None
-        d = parent
-
-
-def tree_identity(root):
-    head = git(root, "rev-parse", "--short", "HEAD")
-    dirty = git(root, "status", "--porcelain") != ""
-    return head, dirty
-
-
 def load_census():
     spec = importlib.util.spec_from_file_location("emitted_code_count", CENSUS_SCRIPT)
     module = importlib.util.module_from_spec(spec)
@@ -142,19 +97,14 @@ def load_census():
     return module.count
 
 
-def sha256_of(path):
-    with open(path, "rb") as fh:
-        return hashlib.sha256(fh.read()).hexdigest()
-
-
 def find_clang(override):
     if override:
         return override
-    if IS_WINDOWS and os.path.exists(WINDOWS_CLANG):
+    if bench_common.IS_WINDOWS and os.path.exists(WINDOWS_CLANG):
         return WINDOWS_CLANG
     found = shutil.which("clang")
     if not found:
-        raise BuildFailure("no clang found; pass --clang <path>")
+        raise bench_common.BuildFailure("no clang found; pass --clang <path>")
     return found
 
 
@@ -162,77 +112,33 @@ def build_c_reference(clang, c_source, out_dir):
     """Build the C arm, cached on the source bytes, the clang version and the flags."""
     c_dir = os.path.join(out_dir, "c")
     os.makedirs(c_dir, exist_ok=True)
-    exe = os.path.join(c_dir, "fannkuchredux" + EXE)
+    exe = os.path.join(c_dir, "fannkuchredux" + bench_common.EXE)
     stamp_path = os.path.join(c_dir, "fannkuchredux.stamp.json")
-    version = run([clang, "--version"])
+    version = bench_common.run([clang, "--version"])
     if version.returncode != 0:
-        raise BuildFailure(f"{clang} --version failed:\n{version.stderr}")
+        raise bench_common.BuildFailure(f"{clang} --version failed:\n{version.stderr}")
     clang_line = version.stdout.splitlines()[0].strip()
-    stamp = {"source_sha256": sha256_of(c_source), "clang": clang_line, "flags": CLANG_FLAGS}
+    stamp = {"source_sha256": bench_common.sha256_of(c_source), "clang": clang_line, "flags": CLANG_FLAGS}
     if os.path.exists(exe) and os.path.exists(stamp_path):
         with open(stamp_path, encoding="utf-8") as fh:
             if json.load(fh) == stamp:
                 return exe, clang_line, True
-    r = run([clang] + CLANG_FLAGS + ["-o", exe, c_source], cwd=c_dir)
+    r = bench_common.run([clang] + CLANG_FLAGS + ["-o", exe, c_source], cwd=c_dir)
     if r.returncode != 0 or not os.path.exists(exe):
-        raise BuildFailure(f"clang failed (exit {r.returncode}):\n{r.stdout}\n{r.stderr}")
+        raise bench_common.BuildFailure(f"clang failed (exit {r.returncode}):\n{r.stdout}\n{r.stderr}")
     with open(stamp_path, "w", encoding="utf-8") as fh:
         json.dump(stamp, fh, indent=2)
     return exe, clang_line, False
 
 
-def build_compiler_from_ref(ref, out_dir, build_args):
-    """A compiler built from a git ref in its own worktree, seeded from .bootstrap. Cached by sha."""
-    sha = git(REPO, "rev-parse", "--short", ref)
-    tree = os.path.join(out_dir, f"ref-{sha}", "tree")
-    compiler = os.path.join(tree, "maxon-bin", ".maxon", "maxon" + EXE)
-    if os.path.exists(compiler):
-        return sha, compiler
-    if not os.path.exists(SEED_COMPILER):
-        raise BuildFailure(f"no seed compiler at {SEED_COMPILER}; a ref build needs one")
-    if os.path.exists(tree):
-        # A tree without a compiler is a build that failed halfway; start it over.
-        run(["git", "-C", REPO, "worktree", "remove", "--force", tree])
-        shutil.rmtree(tree, ignore_errors=True)
-    os.makedirs(os.path.dirname(tree), exist_ok=True)
-    git(REPO, "worktree", "add", "--detach", tree, sha)
-    seed = os.path.join(tree, ".bootstrap", "maxon" + EXE)
-    os.makedirs(os.path.dirname(seed), exist_ok=True)
-    shutil.copy2(SEED_COMPILER, seed)
-    print(f"building a compiler from {ref} ({sha}) in {tree} ...", flush=True)
-    r = run([seed] + build_args, cwd=tree)
-    if r.returncode != 0 or not os.path.exists(compiler):
-        raise BuildFailure(f"building {ref} failed (exit {r.returncode}):\n{r.stdout}\n{r.stderr}")
-    return sha, compiler
-
-
-def compiler_identity(compiler):
-    root = checkout_root_of(compiler)
-    identity = {"compiler": os.path.abspath(compiler),
-                "bytes": os.path.getsize(compiler),
-                "mtime": datetime.datetime.fromtimestamp(os.path.getmtime(compiler)).isoformat(timespec="seconds")}
-    if root:
-        head, dirty = tree_identity(root)
-        identity["checkout"] = root
-        identity["head"] = head
-        identity["dirty"] = dirty
-    return identity
-
-
 def build_maxon_arm(label, compiler, source, out_dir):
     """Compile the example with `compiler` into out/<label>/ and return the exe, the .ir and sizes."""
-    arm_dir = os.path.join(out_dir, label)
-    os.makedirs(arm_dir, exist_ok=True)
-    src = os.path.join(arm_dir, "fannkuch-redux.maxon")
-    shutil.copyfile(source, src)
-    r = run([compiler, "build", "fannkuch-redux.maxon", "--emit-ir"], cwd=arm_dir)
-    exe = os.path.join(arm_dir, "fannkuch-redux" + EXE)
-    ir = os.path.join(arm_dir, "fannkuch-redux.ir")
-    if r.returncode != 0 or not os.path.exists(exe) or not os.path.exists(ir):
-        raise BuildFailure(f"{compiler} build failed for arm {label} (exit {r.returncode}):\n{r.stdout}\n{r.stderr}")
-    return {"label": label, "dir": arm_dir, "exe": exe, "ir": ir,
-            "exe_bytes": os.path.getsize(exe), "identity": compiler_identity(compiler),
-            "compiler": compiler}
+    arm = bench_common.build_arm(label, compiler, out_dir, source, SOURCE_STEM, build_args=["--emit-ir"])
+    ir = os.path.join(arm["dir"], SOURCE_STEM + ".ir")
+    if not os.path.exists(ir):
+        raise bench_common.BuildFailure(f"{compiler} wrote no {os.path.basename(ir)} for arm {label} although --emit-ir was given")
+    arm["ir"] = ir
+    return arm
 
 
 def expected_output(n, checksum, flips):
@@ -241,33 +147,25 @@ def expected_output(n, checksum, flips):
 
 def verify(arm_name, n, result, expect, is_c):
     """Refuse a run whose output or exit code is wrong. `expect` is (checksum, flips)."""
-    stdout = result.stdout.replace("\r\n", "\n")
     checksum, flips = expect
-    if stdout != expected_output(n, checksum, flips):
-        raise VerificationFailure(f"{arm_name}: wrong output at n={n}:\n{stdout!r}\nexpected {expected_output(n, checksum, flips)!r}\nstderr: {result.stderr[:2000]}")
-    wanted_exit = 0 if is_c else flips
-    if result.returncode == LEAK_EXIT_CODE and not is_c:
-        raise VerificationFailure(f"{arm_name}: LEAK - exit {LEAK_EXIT_CODE} at n={n}")
-    if result.returncode != wanted_exit:
-        raise VerificationFailure(f"{arm_name}: exit {result.returncode} at n={n}, expected {wanted_exit}\nstderr: {result.stderr[:2000]}")
+    where = f"n={n}"
+    bench_common.verify_exit(arm_name, where, result, expected_exit=0 if is_c else flips, leak_checked=not is_c)
+    bench_common.verify_output(arm_name, where, result, expected_output(n, checksum, flips))
 
 
 def parse_output(stdout):
     lines = stdout.replace("\r\n", "\n").split("\n")
-    checksum = int(lines[0])
-    flips = int(lines[1].rsplit("=", 1)[1])
+    try:
+        checksum = int(lines[0])
+        flips = int(lines[1].rsplit("=", 1)[1])
+    except (ValueError, IndexError):
+        raise bench_common.VerificationFailure(f"{C_LABEL} printed {stdout!r}, not a checksum line and a Pfannkuchen line") from None
     return checksum, flips
-
-
-def timed_run(exe, n, cwd):
-    start = time.perf_counter()
-    result = run([exe, str(n)], cwd=cwd, timeout=RUN_TIMEOUT_S)
-    return (time.perf_counter() - start) * 1000.0, result
 
 
 def profile_arm(arm, n, hz):
     """`maxon profile run` with the arm's own compiler; the report is saved beside the binary."""
-    r = run([arm["compiler"], "profile", "run", arm["exe"], str(n)], cwd=arm["dir"], timeout=RUN_TIMEOUT_S)
+    r = bench_common.run([arm["compiler"], "profile", "run", arm["exe"], str(n)], cwd=arm["dir"], timeout=bench_common.RUN_TIMEOUT_S)
     path = os.path.join(arm["dir"], f"profile-n{n}.txt")
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(r.stdout)
@@ -280,15 +178,15 @@ def time_self_compile(arm):
     stem = os.path.join(arm["dir"], "selfcompile", "maxon")
     os.makedirs(os.path.dirname(stem), exist_ok=True)
     # A build that finds its output up to date compiles nothing, and the timing would measure that.
-    for leftover in (stem + EXE, stem + EXE + SIDECAR_SUFFIX):
+    for leftover in (stem + bench_common.EXE, stem + bench_common.EXE + SIDECAR_SUFFIX):
         if os.path.exists(leftover):
             os.remove(leftover)
     start = time.perf_counter()
-    r = run([arm["compiler"], "build", SELF_COMPILE_SOURCE, f"--output={stem}"], cwd=REPO)
-    ms = (time.perf_counter() - start) * 1000.0
-    if r.returncode != 0 or not os.path.exists(stem + EXE):
-        raise BuildFailure(f"self-compile with {arm['label']} failed (exit {r.returncode}):\n{r.stdout[-3000:]}\n{r.stderr[-3000:]}")
-    return ms, os.path.getsize(stem + EXE)
+    r = bench_common.run([arm["compiler"], "build", SELF_COMPILE_SOURCE, f"--output={stem}"], cwd=bench_common.REPO)
+    ms = (time.perf_counter() - start) * bench_common.MILLIS
+    if r.returncode != 0 or not os.path.exists(stem + bench_common.EXE):
+        raise bench_common.BuildFailure(f"self-compile with {arm['label']} failed (exit {r.returncode}):\n{r.stdout[-3000:]}\n{r.stderr[-3000:]}")
+    return ms, os.path.getsize(stem + bench_common.EXE)
 
 
 def hot_functions_section(report):
@@ -309,25 +207,13 @@ def append_log_row(row):
     if not os.path.exists(LOG_PATH):
         with open(LOG_PATH, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(LOG_HEADER)
-    with open(LOG_PATH, "a", encoding="utf-8", newline="\n") as fh:
-        fh.write("| " + " | ".join(row) + " |\n")
-
-
-def fmt_ms(value):
-    return f"{value:,.0f}"
+    bench_common.append_table_row(LOG_PATH, row)
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--n", type=int, default=11)
-    ap.add_argument("--runs", type=int, default=5, help="timed runs per arm (default 5)")
-    ap.add_argument("--warmup", type=int, default=1, help="untimed runs per binary first (default 1)")
-    ap.add_argument("--compiler", action="append", default=[], help="a compiler binary as an arm (repeatable)")
-    ap.add_argument("--label", action="append", default=[], help="label for the matching --compiler")
-    ap.add_argument("--ref", action="append", default=[], help="a git ref to build a compiler from, as an arm")
-    ap.add_argument("--ref-build-args", default=SEED_BUILD_ARGS,
-                    help="what the seed runs in a ref's worktree (default: the CI seed build command)")
-    ap.add_argument("--no-slot", action="store_true", help="do not add the slot compiler as an arm")
+    bench_common.add_arm_arguments(ap)
     ap.add_argument("--no-c", action="store_true", help="skip the C reference")
     ap.add_argument("--profile", action="store_true", help="profile each Maxon arm with `maxon profile run`")
     ap.add_argument("--profile-n", type=int, default=None, help="n for the profile run (default --n)")
@@ -342,107 +228,66 @@ def main():
     ap.add_argument("--json", action="store_true", help="also write <out-dir>/last-run.json")
     args = ap.parse_args()
 
-    if args.label and len(args.label) != len(args.compiler):
-        print("usage: --label must be given once per --compiler", file=sys.stderr)
-        return 3
-    if args.runs < 1:
-        print("usage: --runs must be at least 1", file=sys.stderr)
-        return 3
-    if args.no_c and args.n not in EXPECTED:
-        print(f"usage: n={args.n} has no expected output and --no-c removes the oracle", file=sys.stderr)
-        return 3
-    if args.runs < 3:
-        print(f"warning: {args.runs} run(s) per arm cannot show the spread; use 3 or more for a row", file=sys.stderr)
-
     out_dir = os.path.abspath(args.out_dir)
-    os.makedirs(out_dir, exist_ok=True)
-    census = load_census()
-    head, dirty = tree_identity(REPO)
-    today = datetime.date.today().isoformat()
-
     try:
+        bench_common.check_arm_arguments(args)
+        if args.no_c and args.n not in EXPECTED:
+            raise bench_common.UsageFailure(f"n={args.n} has no expected output and --no-c removes the oracle")
+
+        os.makedirs(out_dir, exist_ok=True)
+        census = load_census()
+        head, dirty = bench_common.tree_identity(bench_common.REPO)
+        today = datetime.date.today().isoformat()
+
         # Ref arms first: an A/B's control is the pre-change ref, and the self-compile band is
         # measured against the FIRST arm.
-        arms = []
-        for ref in args.ref:
-            sha, compiler = build_compiler_from_ref(ref, out_dir, args.ref_build_args.split())
-            arms.append((f"ref@{sha}", compiler))
-        for i, compiler in enumerate(args.compiler):
-            label = args.label[i] if args.label else f"compiler{i + 1}"
-            arms.append((label, os.path.abspath(compiler)))
-        if not args.no_slot:
-            if not os.path.exists(SLOT_COMPILER):
-                raise BuildFailure(f"the slot compiler is missing at {SLOT_COMPILER}; build it or pass --no-slot")
-            arms.append(("slot", SLOT_COMPILER))
-        if not arms and args.no_c:
-            print("usage: nothing to run", file=sys.stderr)
-            return 3
+        plan = bench_common.plan_arms(args, allow_no_arms=not args.no_c, reserved_labels=(C_LABEL,))
 
         c_exe = clang_line = None
         if not args.no_c:
             clang = find_clang(args.clang)
             c_exe, clang_line, cached = build_c_reference(clang, args.c_source, out_dir)
 
-        maxon_arms = [build_maxon_arm(label, compiler, args.source, out_dir) for label, compiler in arms]
-    except BuildFailure as e:
-        print(f"BUILD FAILURE: {e}", file=sys.stderr)
-        return 2
+        maxon_arms = [build_maxon_arm(arm["label"], bench_common.arm_compiler(arm, out_dir, args.ref_build_args.split()), args.source, out_dir)
+                      for arm in plan]
+    except (bench_common.UsageFailure, bench_common.BuildFailure) as e:
+        return bench_common.report_failure(e)
 
     print(f"bench-fannkuch  {today}  head {head}{'*' if dirty else ''}  n={args.n}  runs={args.runs}  warmup={args.warmup}")
     if c_exe:
         print(f"  C: {clang_line}  {' '.join(CLANG_FLAGS)}  (no -fopenmp)")
     for arm in maxon_arms:
-        ident = arm["identity"]
-        tree = f"{ident['head']}{'*' if ident['dirty'] else ''}" if "head" in ident else "no checkout"
-        print(f"  {arm['label']}: {ident['compiler']}  [{tree}, {ident['bytes']:,} B, {ident['mtime']}]  exe {arm['exe_bytes']:,} B")
+        print(f"  {arm['label']}: {bench_common.describe_identity(arm['identity'])}  exe {arm['exe_bytes']:,} B")
 
     # Runnable arms: the C reference first, then every Maxon arm. Each round runs every arm once,
     # alternating direction so neither drift nor a fixed order can manufacture a sign.
     runnables = []
     if c_exe:
-        runnables.append({"name": "C", "exe": c_exe, "dir": os.path.dirname(c_exe), "is_c": True})
+        runnables.append({"name": C_LABEL, "exe": c_exe, "dir": os.path.dirname(c_exe), "is_c": True})
     for arm in maxon_arms:
         runnables.append({"name": arm["label"], "exe": arm["exe"], "dir": arm["dir"], "is_c": False, "arm": arm})
 
     expect = EXPECTED.get(args.n)
-    times = {r["name"]: [] for r in runnables}
+
+    def measure_one(r):
+        nonlocal expect
+        ms, result = bench_common.timed_run(r["exe"], args.n, r["dir"])
+        if expect is None:
+            if not r["is_c"]:
+                raise bench_common.VerificationFailure(f"n={args.n} is not in the expected table and the C run has not produced its oracle yet")
+            expect = parse_output(result.stdout)
+        verify(r["name"], args.n, result, expect, r["is_c"])
+        return ms
+
     try:
-        for r in runnables:
-            for _ in range(args.warmup):
-                _, result = timed_run(r["exe"], args.n, r["dir"])
-                if expect is None:
-                    if not r["is_c"]:
-                        raise VerificationFailure(f"n={args.n} is not in the expected table and the C run has not produced its oracle yet")
-                    expect = parse_output(result.stdout)
-                verify(r["name"], args.n, result, expect, r["is_c"])
-        for round_index in range(args.runs):
-            order = runnables if round_index % 2 == 0 else list(reversed(runnables))
-            for r in order:
-                ms, result = timed_run(r["exe"], args.n, r["dir"])
-                verify(r["name"], args.n, result, expect, r["is_c"])
-                times[r["name"]].append(ms)
-    except VerificationFailure as e:
-        print(f"VERIFICATION FAILURE: {e}", file=sys.stderr)
-        return 1
-    except subprocess.TimeoutExpired as e:
-        print(f"VERIFICATION FAILURE: {e}", file=sys.stderr)
-        return 1
+        times = bench_common.interleave(runnables, lambda r: r["name"], args.warmup, args.runs, measure_one)
+    except bench_common.VerificationFailure as e:
+        return bench_common.report_failure(e)
 
-    stats = {}
-    for name, ms in times.items():
-        stats[name] = {"min": min(ms), "median": statistics.median(ms), "max": max(ms), "runs": ms}
-    c_stats = stats.get("C")
+    stats = {name: bench_common.summarize(ms) for name, ms in times.items()}
+    c_stats = stats.get(C_LABEL)
 
-    print()
-    print(f"  {'arm':<16} {'min ms':>10} {'median ms':>10} {'max ms':>10} {'ratio(med)':>11} {'ratio(min)':>11}  verified")
-    for r in runnables:
-        s = stats[r["name"]]
-        if c_stats and not r["is_c"]:
-            ratio_med = f"{s['median'] / c_stats['median']:.2f}"
-            ratio_min = f"{s['min'] / c_stats['min']:.2f}"
-        else:
-            ratio_med = ratio_min = "-"
-        print(f"  {r['name']:<16} {fmt_ms(s['min']):>10} {fmt_ms(s['median']):>10} {fmt_ms(s['max']):>10} {ratio_med:>11} {ratio_min:>11}  yes")
+    bench_common.print_timing_table([(r["name"], stats[r["name"]], None if r["is_c"] else c_stats) for r in runnables])
 
     censuses = {}
     print()
@@ -463,20 +308,19 @@ def main():
         for arm in maxon_arms:
             try:
                 ms, size = time_self_compile(arm)
-            except BuildFailure as e:
-                print(f"BUILD FAILURE: {e}", file=sys.stderr)
-                return 2
+            except bench_common.BuildFailure as e:
+                return bench_common.report_failure(e)
             self_compiles[arm["label"]] = {"ms": ms, "bytes": size}
             if control_ms is None:
                 control_ms = ms
-                print(f"  {arm['label']:<16} {fmt_ms(ms):>10} ms   {size:,} B   (control)")
+                print(f"  {arm['label']:<16} {bench_common.fmt_ms(ms):>10} ms   {size:,} B   (control)")
             else:
                 delta = ms / control_ms - 1.0
                 verdict = ""
                 if delta > SELF_COMPILE_HALT_FRACTION:
                     verdict = f"   HALT: +{delta * 100:.1f}% over the control's self-compile (band {SELF_COMPILE_HALT_FRACTION * 100:.0f}%)"
                     halted = True
-                print(f"  {arm['label']:<16} {fmt_ms(ms):>10} ms   {size:,} B   {delta * 100:+.1f}%{verdict}")
+                print(f"  {arm['label']:<16} {bench_common.fmt_ms(ms):>10} ms   {size:,} B   {delta * 100:+.1f}%{verdict}")
 
     profiles = {}
     if args.profile:
@@ -493,21 +337,21 @@ def main():
         for arm in maxon_arms:
             s = stats[arm["label"]]
             print()
-            print(f"VERDICT n=12 [{arm['label']}]: Maxon median {fmt_ms(s['median'])} ms vs C median {fmt_ms(c_stats['median'])} ms - ratio {s['median'] / c_stats['median']:.2f}")
+            print(f"VERDICT n=12 [{arm['label']}]: Maxon median {bench_common.fmt_ms(s['median'])} ms vs C median {bench_common.fmt_ms(c_stats['median'])} ms - ratio {s['median'] / c_stats['median']:.2f}")
 
     if args.note:
         for arm in maxon_arms:
             s = stats[arm["label"]]
-            c_cell = f"{fmt_ms(c_stats['min'])} / {fmt_ms(c_stats['median'])}" if c_stats else "-"
+            c_cell = f"{bench_common.fmt_ms(c_stats['min'])} / {bench_common.fmt_ms(c_stats['median'])}" if c_stats else "-"
             ratio = f"{s['median'] / c_stats['median']:.2f}" if c_stats else "-"
             note = args.note.replace("|", "/")
             if arm["label"] in self_compiles:
-                note = f"{note}; self-compile {fmt_ms(self_compiles[arm['label']]['ms'])} ms"
+                note = f"{note}; self-compile {bench_common.fmt_ms(self_compiles[arm['label']]['ms'])} ms"
             append_log_row([today, head, "dirty" if dirty else "clean", str(args.n), str(args.runs), c_cell,
-                            f"{fmt_ms(s['min'])} / {fmt_ms(s['median'])}", ratio, f"{arm['exe_bytes']:,}",
+                            f"{bench_common.fmt_ms(s['min'])} / {bench_common.fmt_ms(s['median'])}", ratio, f"{arm['exe_bytes']:,}",
                             str(censuses[arm["label"]]["ops"]), arm["label"], note])
         print()
-        print(f"  {len(maxon_arms)} row(s) appended to {os.path.relpath(LOG_PATH, REPO)}")
+        print(f"  {len(maxon_arms)} row(s) appended to {os.path.relpath(LOG_PATH, bench_common.REPO)}")
 
     if args.json:
         payload = {"date": today, "head": head, "dirty": dirty, "n": args.n, "runs": args.runs,
@@ -520,7 +364,7 @@ def main():
     if halted:
         print()
         print("HALT: the change slows the compiler's own self-compile beyond the band; stop and ask before landing it.")
-    return 0
+    return bench_common.EXIT_OK
 
 
 if __name__ == "__main__":

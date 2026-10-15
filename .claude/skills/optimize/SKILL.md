@@ -127,11 +127,12 @@ allocates for and the seed's does not. Building one is blocked on a separate def
 for N≥2 reports the compiler nondeterministic, and the REPEAT is what is nondeterministic — state carried
 from one compile to the next inside one process. Fix that first or the ratio table cannot be trusted.
 
-⚠ **The one two-compiler harness is `scripts/bench-fannkuch.py`**, which the `fannkuch-iterate` skill
-drives. Against `--ref <sha>` it reports, per arm, fannkuch's wall time, the executable's bytes, the
-emitted-code census and (`--self-compile`) the self-compile time. Each ref is a git worktree under
-`bench/fannkuch/out/ref-<sha>/tree/`, built by ONE seed build — a C1 carrying the seed's runtime, not a
-like-for-like control until it is rebuilt with itself.
+⚠ **The two-compiler harnesses are `scripts/bench-fannkuch.py`, `scripts/bench-binary-trees.py` and
+`scripts/bench-concurrency.py`**, which share `--ref <sha>` through `scripts/bench_common.py`.
+`bench-fannkuch.py`, which the `fannkuch-iterate` skill drives, reports per arm fannkuch's wall time, the
+executable's bytes, the emitted-code census and (`--self-compile`) the self-compile time. Each ref is a
+git worktree at the harness's `<out-dir>/ref-<sha>/tree/`, built by ONE seed build — a C1 carrying
+the seed's runtime, not a like-for-like control until it is rebuilt with itself.
 
 ⚠ **Measure on an IDLE machine, and measure the instrument before the subject.** This project has had a
 dominant cost hide in the *wrong timing bucket* four separate times. Load can MASK a bug, not just

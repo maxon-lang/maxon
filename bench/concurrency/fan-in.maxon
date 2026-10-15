@@ -1,0 +1,85 @@
+typealias Tally = int(0 to u64.max)
+typealias ProducerIndex = int(0 to 63)
+typealias SentPromise = Promise with (Tally, ServiceError)
+typealias SentPromiseArray = Array with SentPromise
+
+let producerCount = 64
+let defaultPerProducer = 100000
+let usageExit = 2
+
+type Sink
+	var total as Tally
+
+	static function create() returns Self
+		return Self{total: 0}
+	end 'create'
+
+	export function receive(value Tally)
+		self.total = self.total + value
+	end 'receive'
+
+	export function received() returns Tally
+		return self.total
+	end 'received'
+end 'Sink'
+
+type Producer
+	var index as ProducerIndex
+	var sink as Sink.handle
+
+	static function create(index ProducerIndex, sink Sink.handle) returns Self
+		return Self{index: index, sink: sink}
+	end 'create'
+
+	export function produce(perProducer Tally) returns Tally
+		let base = (self.index as Tally) * perProducer
+
+		for offset in 0 upto perProducer 'eachValue'
+			self.sink.receive(base + offset)
+		end 'eachValue'
+
+		return perProducer
+	end 'produce'
+end 'Producer'
+
+function sizeArgument(position Count, fallback Tally) returns Tally throws ParseError
+	let args = CommandLine.args()
+
+	if args.count() <= position 'absent'
+		return fallback
+	end 'absent'
+
+	let raw = try args.get(position) otherwise panic("sizeArgument: count() > position, so the index is live")
+	let value = try int.fromString(raw)
+
+	if value < 0 'negative'
+		throw ParseError.invalidFormat
+	end 'negative'
+
+	return value as Tally
+end 'sizeArgument'
+
+function main() returns ExitCode
+	let perProducer = try sizeArgument(1, fallback: defaultPerProducer) otherwise 'badArgument'
+		printError("fan-in: argument 1 is not a non-negative integer\n")
+		return usageExit
+	end 'badArgument'
+
+	let sink = spawn Sink.create()
+	var sent = SentPromiseArray.create()
+
+	for index in 0 upto producerCount 'spawnProducers'
+		let producer = spawn Producer.create(index as ProducerIndex, sink: sink.clone())
+		sent.push(producer.produce(perProducer))
+	end 'spawnProducers'
+
+	// A producer replies only after its last send, and the sink's mailbox is FIFO, so once every reply
+	// is in, every value is queued ahead of the read below.
+	for completion in sent 'awaitProducers'
+		_ = try await completion otherwise panic("fan-in: a producer stopped before it finished")
+	end 'awaitProducers'
+
+	let total = try await sink.received() otherwise panic("fan-in: the sink stopped before it answered")
+	print("fan-in {total}\n")
+	return 0
+end 'main'

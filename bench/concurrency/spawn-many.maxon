@@ -1,0 +1,59 @@
+typealias Tally = int(0 to u64.max)
+typealias DoubledPromise = Promise with (Tally, ServiceError)
+typealias DoubledPromiseArray = Array with DoubledPromise
+
+let defaultThreadCount = 100000
+let usageExit = 2
+
+type Doubler
+	var index as Tally
+
+	static function create(index Tally) returns Self
+		return Self{index: index}
+	end 'create'
+
+	export function doubled() returns Tally
+		return self.index * 2
+	end 'doubled'
+end 'Doubler'
+
+function sizeArgument(position Count, fallback Tally) returns Tally throws ParseError
+	let args = CommandLine.args()
+
+	if args.count() <= position 'absent'
+		return fallback
+	end 'absent'
+
+	let raw = try args.get(position) otherwise panic("sizeArgument: count() > position, so the index is live")
+	let value = try int.fromString(raw)
+
+	if value < 0 'negative'
+		throw ParseError.invalidFormat
+	end 'negative'
+
+	return value as Tally
+end 'sizeArgument'
+
+function main() returns ExitCode
+	let threadCount = try sizeArgument(1, fallback: defaultThreadCount) otherwise 'badArgument'
+		printError("spawn-many: argument 1 is not a non-negative integer\n")
+		return usageExit
+	end 'badArgument'
+
+	var replies = DoubledPromiseArray.create()
+	replies.reserve(threadCount as Count)
+
+	for index in 0 upto threadCount 'spawnDoublers'
+		let doubler = spawn Doubler.create(index)
+		replies.push(doubler.doubled())
+	end 'spawnDoublers'
+
+	var sum = 0 as Tally
+
+	for reply in replies 'awaitDoublers'
+		sum = sum + (try await reply otherwise panic("spawn-many: a service stopped before it answered"))
+	end 'awaitDoublers'
+
+	print("spawn-many {sum}\n")
+	return 0
+end 'main'

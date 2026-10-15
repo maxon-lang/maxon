@@ -1,0 +1,81 @@
+typealias Tally = int(0 to u64.max)
+typealias IncrementedPromise = Promise with (Tally, ServiceError)
+typealias IncrementedPromiseArray = Array with IncrementedPromise
+
+let incrementerCount = 64
+let defaultPerIncrementer = 100000
+let usageExit = 2
+
+type Counter
+	var count as Tally
+
+	static function create() returns Self
+		return Self{count: 0}
+	end 'create'
+
+	export function inc()
+		self.count = self.count + 1
+	end 'inc'
+
+	export function read() returns Tally
+		return self.count
+	end 'read'
+end 'Counter'
+
+type Incrementer
+	var counter as Counter.handle
+
+	static function create(counter Counter.handle) returns Self
+		return Self{counter: counter}
+	end 'create'
+
+	export function increment(perIncrementer Tally) returns Tally
+		for _ in 0 upto perIncrementer 'eachIncrement'
+			self.counter.inc()
+		end 'eachIncrement'
+
+		return perIncrementer
+	end 'increment'
+end 'Incrementer'
+
+function sizeArgument(position Count, fallback Tally) returns Tally throws ParseError
+	let args = CommandLine.args()
+
+	if args.count() <= position 'absent'
+		return fallback
+	end 'absent'
+
+	let raw = try args.get(position) otherwise panic("sizeArgument: count() > position, so the index is live")
+	let value = try int.fromString(raw)
+
+	if value < 0 'negative'
+		throw ParseError.invalidFormat
+	end 'negative'
+
+	return value as Tally
+end 'sizeArgument'
+
+function main() returns ExitCode
+	let perIncrementer = try sizeArgument(1, fallback: defaultPerIncrementer) otherwise 'badArgument'
+		printError("shared-counter: argument 1 is not a non-negative integer\n")
+		return usageExit
+	end 'badArgument'
+
+	let counter = spawn Counter.create()
+	var finished = IncrementedPromiseArray.create()
+
+	for _ in 0 upto incrementerCount 'spawnIncrementers'
+		let incrementer = spawn Incrementer.create(counter.clone())
+		finished.push(incrementer.increment(perIncrementer))
+	end 'spawnIncrementers'
+
+	// An incrementer replies only after its last `inc()`, and the counter's mailbox is FIFO, so once
+	// every reply is in, every increment is queued ahead of the read below.
+	for completion in finished 'awaitIncrementers'
+		_ = try await completion otherwise panic("shared-counter: an incrementer stopped before it finished")
+	end 'awaitIncrementers'
+
+	let count = try await counter.read() otherwise panic("shared-counter: the counter stopped before it answered")
+	print("shared-counter {count}\n")
+	return 0
+end 'main'

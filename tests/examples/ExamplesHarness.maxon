@@ -1,15 +1,16 @@
-// ExamplesHarness.maxon — the shared half every case under `tests/examples/` reaches for: building one
-// program from `examples/`, or one complete program a document shows, with the compiler under test, and
-// running what it built.
+// ExamplesHarness.maxon — the shared half every case under `tests/examples/` reaches for: building
+// one program from `examples/` or `bench/concurrency/`, or one complete program a document shows,
+// with the compiler under test, and running what it built.
 //
 // ⭐ **EVERY EXPECTATION IS EXTERNAL**: a reference output someone else published, or the behaviour the
 // program's own source documents. An answer captured from this compiler would agree with whatever it does.
 //
 // ⛔ **THE EXAMPLES ARE BUILT WHERE THEY SIT, NEVER COPIED**, because the gate is about the files a reader
-// runs. Only the OUTPUT is staged, into a directory named for the example under `temp/examples/`:
-// `maxon test` runs files concurrently, and `--output=` is what keeps a build out of the tree lock. A
-// document's program has no file of its own, so it is cut out of the document as it stands and written
-// into its staging directory, and built there.
+// runs. Only the OUTPUT is staged, into `temp/examples/<source spelling>/`: `maxon test` runs files
+// concurrently, and `--output=` is what keeps a build out of the tree lock. The whole spelling names
+// the directory because two programs can share a stem, and two builds in one directory overwrite
+// each other. A document's program has no file of its own, so it is cut out of the document as it
+// stands and written into its staging directory, and built there.
 //
 // ⛔ **A DOCUMENT PROGRAM IS NAMED BY A MARKER, AND A MARKER MUST SELECT EXACTLY ONE BLOCK** — the gate
 // could not run otherwise. A marker that quietly selected nothing, or the first of two, would let an edit
@@ -31,6 +32,11 @@ let TestedCompilerStem = "maxon-bin/.maxon/maxon"
 
 let ExamplesDirName = "examples"
 let StagingRootDirName = "temp/examples"
+
+let ConcurrencyBenchmarkDirName = "bench/concurrency"
+let ProcessorCountVariable = "MAXON_MAX_PROCS"
+let ConcurrencyBenchmarkProcessorCounts = ["1", "4"]
+let ConcurrencyBenchmarkExitCode = 0
 
 let BuildCommandName = "build"
 let OutputOptionPrefix = "--output="
@@ -70,26 +76,37 @@ export type ExampleRun
 	end 'create'
 end 'ExampleRun'
 
-// Build `examples/<example>` — a file or a project directory — with the compiler under test. The previous
-// run's files go first, so an executable a failed build left behind cannot answer for this one.
-export function requireExampleBuild(example String) throws TestFailure
-	let source = examplePath(example)
-	let stem = exampleStem(example)
-	clearStagedFiles(stagingDir(stem))
+// Build `<directory>/<example>` — a file or a project directory — with the compiler under test. The
+// previous run's files go first, so an executable a failed build left behind cannot answer for this
+// one.
+export function requireExampleBuild(example String, directory String = ExamplesDirName) throws TestFailure
+	let source = examplePath(example, directory: directory)
+	let staging = exampleStagingDir(example, directory: directory)
+	clearStagedFiles(staging)
 
-	try requireBuild(source, stem: stem, spelling: exampleSpelling(example))
+	try requireBuild(source, staging: staging, stem: exampleStem(example), spelling: exampleSpelling(example, directory: directory))
 end 'requireExampleBuild'
 
 // Run what `requireExampleBuild` produced, with `arguments` as its command line.
-export function runBuiltExample(example String, arguments StringArray = StringArray.create()) returns ExampleRun
-	return runBuilt(exampleStem(example), spelling: exampleSpelling(example), arguments: arguments)
+export function runBuiltExample(example String, arguments StringArray = StringArray.create(), directory String = ExamplesDirName, environment EnvMap = EnvMap.create()) returns ExampleRun
+	return runBuilt(exampleStagingDir(example, directory: directory), stem: exampleStem(example), spelling: exampleSpelling(example, directory: directory), arguments: arguments, environment: environment)
 end 'runBuiltExample'
+
+export function requireConcurrencyBenchmarkAnswer(workload String, arguments StringArray, stdout String) throws TestFailure
+	let program = "{workload}{MaxonSourceSuffix}"
+	try requireExampleBuild(program, directory: ConcurrencyBenchmarkDirName)
+
+	for processors in ConcurrencyBenchmarkProcessorCounts 'eachProcessorCount'
+		let run = runBuiltExample(program, arguments: arguments, directory: ConcurrencyBenchmarkDirName, environment: [ProcessorCountVariable: processors])
+		try requireAnswer(run, stdout: stdout, exitCode: ConcurrencyBenchmarkExitCode)
+	end 'eachProcessorCount'
+end 'requireConcurrencyBenchmarkAnswer'
 
 // Write `content` at `relativePath` inside `example`'s staging directory, which is the working directory
 // `runBuiltExample` gives the program — so a case hands its fixture to the program by relative path.
 // Called after `requireExampleBuild`, which clears what a previous run staged.
-export function stageExampleFile(example String, relativePath String, content String) returns FilePath
-	let staged = stagingDir(exampleStem(example)).join(relativePath)
+export function stageExampleFile(example String, relativePath String, content String, directory String = ExamplesDirName) returns FilePath
+	let staged = exampleStagingDir(example, directory: directory).join(relativePath)
 	let parent = try staged.parent() otherwise panic("examples tests: the gate could not run — '{relativePath}' names no file under a staging directory.")
 
 	if not Directory.create(parent) 'couldNotCreate'
@@ -113,21 +130,21 @@ end 'runExample'
 export function runDocumentProgram(document String, marker String, name String) returns ExampleRun throws TestFailure
 	let program = documentProgram(document, marker: marker)
 
-	let staged = stagingDir(name)
+	let staged = stagingDir("{document}{PathSeparator}{name}")
 	clearStagedFiles(staged)
 
 	let source = staged.join("{name}{MaxonSourceSuffix}")
 	try File.writeText(source, content: program) otherwise panic("examples tests: the gate could not run — could not stage {document}'s program at {source.toString()}.")
 
 	let spelling = "{document} ({name})"
-	try requireBuild(source, stem: name, spelling: spelling)
+	try requireBuild(source, staging: staged, stem: name, spelling: spelling)
 
-	return runBuilt(name, spelling: spelling, arguments: StringArray.create())
+	return runBuilt(staged, stem: name, spelling: spelling, arguments: StringArray.create(), environment: EnvMap.create())
 end 'runDocumentProgram'
 
-// Build `source` into `stem`'s staging directory; `spelling` is how every report names the program.
-function requireBuild(source FilePath, stem String, spelling String) throws TestFailure
-	let output = builtExecutable(stem)
+// Build `source` into `staging` as `stem`; `spelling` is how every report names the program.
+function requireBuild(source FilePath, staging FilePath, stem String, spelling String) throws TestFailure
+	let output = builtExecutable(staging, stem: stem)
 
 	var arguments = StringArray.create()
 	arguments.push(BuildCommandName)
@@ -136,7 +153,7 @@ function requireBuild(source FilePath, stem String, spelling String) throws Test
 
 	var config = Configuration.create(Executable.path(testedCompilerPath()))
 	config.arguments = arguments
-	config.workingDirectory = stagingDir(stem)
+	config.workingDirectory = staging
 
 	let build = try config.run() otherwise (e) 'spawnFailed'
 		panic("examples tests: the gate could not run — could not spawn the compiler to build {source.toString()} ({e.displayReason()}).")
@@ -148,18 +165,25 @@ function requireBuild(source FilePath, stem String, spelling String) throws Test
 end 'requireBuild'
 
 // Run what `requireBuild` produced for `stem`, with `arguments` as its command line.
-function runBuilt(stem String, spelling String, arguments StringArray) returns ExampleRun
-	let executable = builtExecutable(stem)
+function runBuilt(staging FilePath, stem String, spelling String, arguments StringArray, environment EnvMap) returns ExampleRun
+	let executable = builtExecutable(staging, stem: stem)
 
 	var config = Configuration.create(Executable.path(executable))
 	config.arguments = arguments
-	config.workingDirectory = stagingDir(stem)
+	config.workingDirectory = staging
+	config.environment = Environment.inheritUpdating(environment)
 
 	let run = try config.run() otherwise (e) 'spawnFailed'
 		panic("examples tests: the gate could not run — could not spawn {executable.toString()} ({e.displayReason()}).")
 	end 'spawnFailed'
 
-	var commandLine = spelling.clone()
+	var commandLine = ""
+
+	for (name, value) in environment 'eachVariable'
+		commandLine.append("{name}={value} ")
+	end 'eachVariable'
+
+	commandLine.append(spelling)
 
 	for argument in arguments 'eachArgument'
 		commandLine.append(" {argument}")
@@ -277,14 +301,14 @@ export function requireAnswer(run ExampleRun, stdout String, exitCode ExampleExi
 	try Expect.equal(run.exitCode, expected: exitCode, message: "`{run.commandLine}` printed its known answer and exited {run.exitCode}. It wrote to stderr: {run.stderr}")
 end 'requireAnswer'
 
-// `examples/<example>`, which is also how every report names it.
-function exampleSpelling(example String) returns String
-	return "{ExamplesDirName}{PathSeparator}{example}"
+// `<directory>/<example>`, which is also how every report names it.
+function exampleSpelling(example String, directory String) returns String
+	return "{directory}{PathSeparator}{example}"
 end 'exampleSpelling'
 
 // The example's source, absolute because it is handed to a child.
-function examplePath(example String) returns FilePath
-	let spelled = exampleSpelling(example)
+function examplePath(example String, directory String) returns FilePath
+	let spelled = exampleSpelling(example, directory: directory)
 	let path = try FilePath.from(spelled) otherwise panic("examples tests: the gate could not run — '{spelled}' is not a spellable path")
 
 	if not File.exists(path) and not Directory.isDirectory(path) 'notThere'
@@ -294,19 +318,23 @@ function examplePath(example String) returns FilePath
 	return path.resolve(Directory.currentPath())
 end 'examplePath'
 
-// An example's name without its source suffix, which names both its staging directory and its executable.
+// An example's name without its source suffix, which names its executable.
 function exampleStem(example String) returns String
 	return example.replace(MaxonSourceSuffix, with: "")
 end 'exampleStem'
 
-function builtExecutable(stem String) returns FilePath
-	return stagingDir(stem).join("{stem}{executableSuffix()}")
+function builtExecutable(staging FilePath, stem String) returns FilePath
+	return staging.join("{stem}{executableSuffix()}")
 end 'builtExecutable'
+
+function exampleStagingDir(example String, directory String) returns FilePath
+	return stagingDir(exampleSpelling(example, directory: directory))
+end 'exampleStagingDir'
 
 // A program's own staging directory, created with its missing ancestors so a fresh checkout without
 // `temp/` is not a failure.
-function stagingDir(stem String) returns FilePath
-	let spelled = "{StagingRootDirName}{PathSeparator}{stem}"
+function stagingDir(source String) returns FilePath
+	let spelled = "{StagingRootDirName}{PathSeparator}{source}"
 	let path = try FilePath.from(spelled) otherwise panic("examples tests: the gate could not run — '{spelled}' is not a spellable path")
 
 	if not Directory.create(path) 'couldNotCreate'

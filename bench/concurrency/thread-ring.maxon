@@ -1,0 +1,123 @@
+typealias Tally = int(0 to u64.max)
+typealias RingLabel = int(1 to 503)
+typealias RingSlot = int(0 to 502) implements ElementIndex
+
+let defaultPasses = 1000
+let ringSize = 503
+let usageExit = 2
+
+enum ReporterError implements Error
+	notReported
+end 'ReporterError'
+
+union Holder
+	unreported
+	reported(label RingLabel)
+end 'Holder'
+
+type Reporter
+	var holder as Holder
+
+	static function create() returns Self
+		return Self{holder: Holder.unreported}
+	end 'create'
+
+	export function report(label RingLabel)
+		self.holder = Holder.reported(label)
+	end 'report'
+
+	export function whoHolds() returns RingLabel throws ReporterError
+		match self.holder 'held'
+			reported(label) then return label
+			unreported then throw ReporterError.notReported
+		end 'held'
+	end 'whoHolds'
+end 'Reporter'
+
+union Successor
+	unlinked
+	linked(next RingNode.handle)
+end 'Successor'
+
+type RingNode
+	var label as RingLabel
+	var successor as Successor
+	var reporter as Reporter.handle
+
+	static function create(label RingLabel, reporter Reporter.handle) returns Self
+		return Self{label: label, successor: Successor.unlinked, reporter: reporter}
+	end 'create'
+
+	export function link(next RingNode.handle)
+		self.successor = Successor.linked(next)
+	end 'link'
+
+	export function pass(remaining Tally)
+		if remaining == 0 'holdsZero'
+			self.reporter.report(self.label)
+			return
+		end 'holdsZero'
+
+		match self.successor 'forward'
+			linked(next) then next.pass(remaining - 1)
+			unlinked then panic("RingNode.pass: the ring was never linked")
+		end 'forward'
+	end 'pass'
+end 'RingNode'
+
+typealias RingNodeArray = Array with RingNode.handle
+
+function sizeArgument(position Count, fallback Tally) returns Tally throws ParseError
+	let args = CommandLine.args()
+
+	if args.count() <= position 'absent'
+		return fallback
+	end 'absent'
+
+	let raw = try args.get(position) otherwise panic("sizeArgument: count() > position, so the index is live")
+	let value = try int.fromString(raw)
+
+	if value < 0 'negative'
+		throw ParseError.invalidFormat
+	end 'negative'
+
+	return value as Tally
+end 'sizeArgument'
+
+function ringNodeAt(nodes RingNodeArray, slot RingSlot) returns RingNode.handle
+	return try nodes.get(slot) otherwise panic("ringNodeAt: every slot lies inside the ring")
+end 'ringNodeAt'
+
+function main() returns ExitCode
+	let passes = try sizeArgument(1, fallback: defaultPasses) otherwise 'badArgument'
+		printError("thread-ring: argument 1 is not a non-negative integer\n")
+		return usageExit
+	end 'badArgument'
+
+	let reporter = spawn Reporter.create()
+	var nodes = RingNodeArray.create()
+
+	for slot in 0 upto ringSize 'spawnNodes'
+		nodes.push(spawn RingNode.create((slot + 1) as RingLabel, reporter: reporter.clone()))
+	end 'spawnNodes'
+
+	for slot in 0 upto ringSize 'linkNodes'
+		let following = ((slot + 1) mod ringSize) as RingSlot
+		ringNodeAt(nodes, slot: slot as RingSlot).link(ringNodeAt(nodes, slot: following).clone())
+	end 'linkNodes'
+
+	ringNodeAt(nodes, slot: 0).pass(passes)
+
+	// The holder at zero reports fire-and-forget, because a node awaiting its successor in a cycle is
+	// E3139; only an idle ring guarantees the report has landed.
+	_ = Scheduler.quiesce()
+	let holder = try await reporter.whoHolds() otherwise panic("thread-ring: the token never reached zero")
+
+	// The ring's handles form a cycle that keeps every node alive until it is shut down.
+	for node in nodes 'shutDown'
+		node.shutdown()
+	end 'shutDown'
+
+	print("thread-ring {holder}\n")
+	return 0
+end 'main'
