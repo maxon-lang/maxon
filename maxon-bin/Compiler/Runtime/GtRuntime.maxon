@@ -1213,9 +1213,9 @@ export let GtDequeueName = b"__gt_dequeue"
 // `__gt_coro_enqueue(gt)` appends `gt` to `gt.owner`'s strand queue and `__gt_coro_dequeue(owner)` pops its
 // head; both require the CALLER to hold `__sched_lock`.
 //
-// `__gt_strand_next(owner)` is the strand runner's CONSUME door — lock, pop and tombstone refusal — and it is
-// where the strand is given up when its queue is empty. `__gt_coro_sweep_dropped(owner)` reclaims the
-// tombstones at the queue's front.
+// `__gt_strand_next(owner, parked)` is the strand runner's CONSUME door — lock, the parked member's
+// registration, pop and tombstone refusal — and it is where the strand is given up when its queue
+// is empty. `__gt_coro_sweep_dropped(owner)` reclaims the tombstones at the queue's front.
 let GtCoroEnqueueName = b"__gt_coro_enqueue"
 let GtCoroDequeueName = b"__gt_coro_dequeue"
 let GtStrandNextName = b"__gt_strand_next"
@@ -1652,10 +1652,12 @@ export let GtTimerAddName = b"__gt_timer_add"
 // none of it: the machine that fired is about to look for work itself.
 export let GtTimerCheckName = b"__gt_timer_check"
 
-// ⭐⭐⭐ **`__gt_register_park(gt)` — THE SECOND HALF OF EVERY PARK, AND THE ONE PLACE A PARKED THREAD IS
-// MADE DISCOVERABLE.** It reads the note `__gt_park` left on the GT (`GtOffParkKind`/`GtOffParkArg`) and puts
-// the thread on the store that will wake it. Its one caller is the strand runner, after `__gt_context_switch`
-// has returned — so the parking thread's registers are provably saved and any M may take it.
+// ⭐⭐⭐ **`__gt_register_park(gt) -> wake debt` — THE SECOND HALF OF EVERY PARK, AND THE ONE PLACE A
+// PARKED THREAD IS MADE DISCOVERABLE.** It reads the note `__gt_park` left on the GT
+// (`GtOffParkKind`/`GtOffParkArg`) and puts the thread on the store that will wake it. Its one
+// caller is `__gt_strand_next`, inside the `__sched_lock` hold that also pops the strand's next
+// member, after `__gt_context_switch` has returned — so the parking thread's registers are provably
+// saved and any M may take it.
 let GtRegisterParkName = b"__gt_register_park"
 
 // `__gt_process_run` is the front-end target for `runProcess(cmd)`.
@@ -3423,9 +3425,15 @@ function buildGtCoroDequeue(module StdModule)
 	module.functions.push(func)
 end 'buildGtCoroDequeue'
 
-// ⭐⭐⭐ **`__gt_strand_next(owner) -> gt | 0` — WHAT THIS STRAND RUNS NEXT, OR 0 HAVING GIVEN THE STRAND UP.**
-// The strand runner's consume door: the lock, the member a preemption stopped (`GtOffStrandResume`) or else the
-// pop, and the tombstone refusal `emitGtTombstoneHandback` shares with `__sched_find_runnable`.
+// ⭐⭐⭐ **`__gt_strand_next(owner, parked) -> gt | 0` — WHAT THIS STRAND RUNS NEXT, OR 0 HAVING GIVEN
+// THE STRAND UP.** The strand runner's consume door: the lock, the member a preemption stopped
+// (`GtOffStrandResume`) or else the pop, and the tombstone refusal `emitGtTombstoneHandback` shares
+// with `__sched_find_runnable`.
+//
+// `parked` is the member that has just parked, or 0. Its `__gt_register_park` runs in the same hold
+// as the pop, so a strand turn takes `__sched_lock` once, and the wake debt the registration
+// answers is paid after the release on every road out. A tombstone retry re-enters at `snpop` and
+// registers nothing again.
 //
 // ⭐⭐⭐ **AN EMPTY QUEUE RELEASES THE STRAND IN THE SAME CRITICAL SECTION THAT FOUND IT EMPTY** — the other
 // half of `GtOffStrandHolder`'s argument: a member readied before this section is in the queue it just
@@ -3433,36 +3441,53 @@ end 'buildGtCoroDequeue'
 // dropped after the release (`emitGtStrandUnref`), which may reclaim `owner` — so the caller touches `owner`
 // no more once this answers 0.
 function buildGtStrandNext(module StdModule)
-	var func = IrFunction.createFromStd(GtStrandNextName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	var func = IrFunction.createFromStd(GtStrandNextName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
+	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var first = module.addBlock(func, label: b"snfirst", heat: BlockHeat.normal)
+	var registerPark = module.addBlock(func, label: b"snregister", heat: BlockHeat.normal)
 	var pop = module.addBlock(func, label: b"snpop", heat: BlockHeat.normal)
+	var take = module.addBlock(func, label: b"sntake", heat: BlockHeat.normal)
 	var resume = module.addBlock(func, label: b"snresume", heat: BlockHeat.normal)
 	var dequeue = module.addBlock(func, label: b"sndequeue", heat: BlockHeat.normal)
 	var release = module.addBlock(func, label: b"snrelease", heat: BlockHeat.normal)
 	var gotOne = module.addBlock(func, label: b"sngot", heat: BlockHeat.normal)
 	var candidate = module.addBlock(func, label: b"sncandidate", heat: BlockHeat.normal)
 
-	emitParams(module, block: entry, count: 1)
+	emitParams(module, block: entry, count: 2)
 	let owner = 0 as ValueId
-	module.setTerminator(entry, op: StdOp.branch(pop.id))
+	let parked = 1
+	module.setTerminator(entry, op: StdOp.branch(first.id))
 
-	// The popped member reaches `candidate` as its single block arg — `pop` is the retry target, so the
-	// answer cannot be a value minted in a block that no longer dominates it.
 	let found = ids.mint()
 	candidate.blockArgs.push(IrBlockArg.create(found, argType: StdType.i64))
 
-	// A member a preemption stopped goes first, ahead of the queue (`GtOffStrandResume`).
+	let owed = ids.mint()
+	take.blockArgs.push(IrBlockArg.create(owed, argType: StdType.i64))
+
+	emitSchedLockEnter(module, block: first, ids: ids)
+	let nothingParked = emitCmp(module, block: first, a: parked, b: emitConst(module, block: first, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let noDebt = emitConst(module, block: first, value: WakeDebtNone, ids: ids)
+	module.setTerminator(first, op: StdOp.condBranch(nothingParked, thenBlockId: take.id, elseBlockId: registerPark.id))
+	first.branchEdges.push(BranchEdge.create(take.id, argIds: argsOf(noDebt)))
+
+	let registered = ids.mint()
+	module.appendOp(registerPark, op: StdOp.call(registered, callee: GtRegisterParkName, args: argsOf(parked)))
+	emitBranchWithDebt(module, from: registerPark, to: take, debt: registered)
+
 	emitSchedLockEnter(module, block: pop, ids: ids)
-	let resumed = emitLoadField(module, block: pop, record: owner, offset: GtOffStrandResume, ids: ids)
-	let noResume = emitCmp(module, block: pop, a: resumed, b: emitConst(module, block: pop, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(pop, op: StdOp.condBranch(noResume, thenBlockId: dequeue.id, elseBlockId: resume.id))
+	emitBranchWithDebt(module, from: pop, to: take, debt: emitConst(module, block: pop, value: WakeDebtNone, ids: ids))
+
+	let resumed = emitLoadField(module, block: take, record: owner, offset: GtOffStrandResume, ids: ids)
+	let noResume = emitCmp(module, block: take, a: resumed, b: emitConst(module, block: take, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(take, op: StdOp.condBranch(noResume, thenBlockId: dequeue.id, elseBlockId: resume.id))
 
 	emitStoreField(module, block: resume, record: owner, offset: GtOffStrandResume, value: emitConst(module, block: resume, value: 0, ids: ids))
 	emitSchedLockLeave(module, block: resume, ids: ids)
-	module.setTerminator(resume, op: StdOp.branch(candidate.id))
-	resume.branchEdges.push(BranchEdge.create(candidate.id, argIds: argsOf(resumed)))
+	var resumePaid = emitGtPayDebtAfterRelease(module, func: func, cur: resume, owed: owed, label: b"snresume", ids: ids)
+	module.setTerminator(resumePaid, op: StdOp.branch(candidate.id))
+	resumePaid.branchEdges.push(BranchEdge.create(candidate.id, argIds: argsOf(resumed)))
 
 	let popped = ids.mint()
 	module.appendOp(dequeue, op: StdOp.call(popped, callee: GtCoroDequeueName, args: argsOf(owner)))
@@ -3471,17 +3496,27 @@ function buildGtStrandNext(module StdModule)
 
 	emitStoreField(module, block: release, record: owner, offset: GtOffStrandHolder, value: emitConst(module, block: release, value: StrandFree, ids: ids))
 	emitSchedLockLeave(module, block: release, ids: ids)
-	var unreffed = emitGtStrandUnref(module, func: func, cur: release, owner: owner, ids: ids)
+	var releasePaid = emitGtPayDebtAfterRelease(module, func: func, cur: release, owed: owed, label: b"snrelease", ids: ids)
+	var unreffed = emitGtStrandUnref(module, func: func, cur: releasePaid, owner: owner, ids: ids)
 	emitConstReturn(module, block: unreffed, value: 0, ids: ids)
 
 	emitSchedLockLeave(module, block: gotOne, ids: ids)
-	module.setTerminator(gotOne, op: StdOp.branch(candidate.id))
-	gotOne.branchEdges.push(BranchEdge.create(candidate.id, argIds: argsOf(popped)))
+	var gotPaid = emitGtPayDebtAfterRelease(module, func: func, cur: gotOne, owed: owed, label: b"sngot", ids: ids)
+	module.setTerminator(gotPaid, op: StdOp.branch(candidate.id))
+	gotPaid.branchEdges.push(BranchEdge.create(candidate.id, argIds: argsOf(popped)))
 
 	emitGtTombstoneHandback(module, func: func, candidate: candidate, found: found, retry: pop, requeue: GtCoroEnqueueName, handOff: GtHandOffAnswer.giveUpTheStrand(owner), ids: ids)
 
 	module.functions.push(func)
 end 'buildGtStrandNext'
+
+function emitGtPayDebtAfterRelease(module StdModule, func IrFunction, cur IrBlock, owed ValueId, label ByteArray, ids ValueMinter) returns IrBlock
+	var payWake = module.addBlock(func, label: bytesWithSuffix(b"wake", suffix: label), heat: BlockHeat.normal)
+	let paid = module.addBlock(func, label: bytesWithSuffix(b"paid", suffix: label), heat: BlockHeat.normal)
+
+	emitSchedWakeIfOwed(module, cur: cur, owed: owed, wake: payWake, cont: paid, ids: ids)
+	return paid
+end 'emitGtPayDebtAfterRelease'
 
 // ⭐⭐ **DROP ONE OF `owner`'s STRAND REFERENCES (`GtOffStrandRefs`), AND ARRIVE AS ITS RUNNER IF IT WAS THE
 // LAST.** It terminates `cur` and answers the block to continue in, where `owner` may already be on a free
@@ -5902,9 +5937,9 @@ export function emitLoadCurrentGtCpuOffset(module StdModule, block IrBlock, ids 
 	return emitLoadField(module, block: block, record: emitLoadCurrentGt(module, block: block, ids: ids), offset: GtOffCpuOffset, ids: ids)
 end 'emitLoadCurrentGtCpuOffset'
 
-// ⭐⭐⭐ **`__gt_register_park(gt)` — PUT A PARKED THREAD ON THE STORE THAT WILL WAKE IT.** The note
-// `__gt_park` left says which store and with what; this dispatches on it. See `GtRegisterParkName` for its one
-// caller and when it runs.
+// ⭐⭐⭐ **`__gt_register_park(gt) -> wake debt` — PUT A PARKED THREAD ON THE STORE THAT WILL WAKE
+// IT.** The note `__gt_park` left says which store and with what; this dispatches on it. See
+// `GtRegisterParkName` for its one caller and when it runs.
 //
 // ⛔⛔ **EACH ARM'S LOCK DISCIPLINE IS ITS OWN AND THEY ARE NOT INTERCHANGEABLE.**
 //
@@ -5913,7 +5948,7 @@ end 'emitLoadCurrentGtCpuOffset'
 //     store leaves `waiting` on a thread that is already queued — and `__gt_promise_drop`'s re-read of the
 //     status under the lock then reads that as *"still parked, I am its sole owner"* and frees a queued
 //     thread. `__gt_timer_add` takes the lock itself, recursively. A deadline earlier than every other now
-//     pending owes the poller a look (`SchedRuntime.__sched_wake_netpoller`), after the release.
+//     pending owes the poller a look (`SchedRuntime.__sched_wake_netpoller`), inside the hold.
 //   • **netpoll** — `NetpollRuntime.__np_pd_commit` under the lock, which may UNDO the park for the mailbox
 //     arm's reason: readiness that landed between the mark and the commit was recorded by a party that found
 //     nobody published, so the thread is readied rather than left waiting for a wake already delivered. A
@@ -5925,20 +5960,20 @@ end 'emitLoadCurrentGtCpuOffset'
 //   • **awaitAny** — the same over every slot: re-scan under the lock and ready at once if any slot has
 //     completed, else register on every slot with `GtOffSelectDone` cleared.
 //
-// The timer arm leaves by its own release, because it may owe the poller a look; every other arm that takes
-// the lock leaves through `unlockAndPay`, carrying the wake debt its ready answered or none.
+// The caller holds `__sched_lock` on entry and still holds it on return. Every arm answers the wake
+// debt its ready owes, or none, and the caller pays it after its release.
 function buildGtRegisterPark(module StdModule)
-	var func = IrFunction.createFromStd(GtRegisterParkName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	var func = IrFunction.createFromStd(GtRegisterParkName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var timerArm = module.addBlock(func, label: b"parktimer", heat: BlockHeat.normal)
 	var timerWake = module.addBlock(func, label: b"parktimerwake", heat: BlockHeat.normal)
+	var timerPaid = module.addBlock(func, label: b"parktimerpaid", heat: BlockHeat.normal)
 	var notTimer = module.addBlock(func, label: b"notparktimer", heat: BlockHeat.normal)
 	var netpollArm = module.addBlock(func, label: b"parknetpoll", heat: BlockHeat.normal)
 	var netpollWake = module.addBlock(func, label: b"parknetpollwake", heat: BlockHeat.normal)
 	var netpollPaid = module.addBlock(func, label: b"parknetpollpaid", heat: BlockHeat.normal)
-	var netpollPayM = module.addBlock(func, label: b"parknetpollpaym", heat: BlockHeat.normal)
 	var notNetpoll = module.addBlock(func, label: b"notparknetpoll", heat: BlockHeat.normal)
 	var mailboxArm = module.addBlock(func, label: b"parkmailbox", heat: BlockHeat.normal)
 	var notMailbox = module.addBlock(func, label: b"notparkmailbox", heat: BlockHeat.normal)
@@ -5956,8 +5991,6 @@ function buildGtRegisterPark(module StdModule)
 	var quiesceUndo = module.addBlock(func, label: b"parkquiesceundo", heat: BlockHeat.normal)
 	var quiesceTake = module.addBlock(func, label: b"parkquiescetake", heat: BlockHeat.normal)
 	var resumeNow = module.addBlock(func, label: b"parkresumenow", heat: BlockHeat.normal)
-	var unlockAndPay = module.addBlock(func, label: b"parkunlock", heat: BlockHeat.normal)
-	var payWake = module.addBlock(func, label: b"parkwake", heat: BlockHeat.normal)
 	var unknownArm = module.addBlock(func, label: b"parkunknown", heat: BlockHeat.normal)
 	var doneBlock = module.addBlock(func, label: b"parkdone", heat: BlockHeat.normal)
 
@@ -5965,7 +5998,7 @@ function buildGtRegisterPark(module StdModule)
 	let gt = 0
 
 	let debt = ids.mint()
-	unlockAndPay.blockArgs.push(IrBlockArg.create(debt, argType: StdType.i64))
+	doneBlock.blockArgs.push(IrBlockArg.create(debt, argType: StdType.i64))
 
 	let kind = emitLoadField(module, block: entry, record: gt, offset: GtOffParkKind, ids: ids)
 	let arg = emitLoadField(module, block: entry, record: gt, offset: GtOffParkArg, ids: ids)
@@ -5977,14 +6010,13 @@ function buildGtRegisterPark(module StdModule)
 
 	// Go's `maybeAdd`: `when < wakeTime`, read against the root before the add, is what makes this the deadline
 	// the scheduler waits for next. An empty store publishes `TimerWhenEmpty`, which every deadline precedes.
-	emitSchedLockEnter(module, block: timerArm, ids: ids)
 	emitStoreField(module, block: timerArm, record: gt, offset: GtOffStatus, value: waitingConst)
 	let rootBefore = emitGtLoadTimerWhen(module, block: timerArm, ids: ids)
 	module.appendOp(timerArm, op: StdOp.call(ids.mint(), callee: GtTimerAddName, args: threeArgs(gt, second: arg, third: emitConst(module, block: timerArm, value: TimerTagSleep, ids: ids))))
-	emitSchedLockLeave(module, block: timerArm, ids: ids)
 	let becameRoot = emitCmp(module, block: timerArm, a: arg, b: rootBefore, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(timerArm, op: StdOp.condBranch(becameRoot, thenBlockId: timerWake.id, elseBlockId: doneBlock.id))
-	emitGtWakeNetpoller(module, block: timerWake, when: arg, cont: doneBlock, ids: ids)
+	module.setTerminator(timerArm, op: StdOp.condBranch(becameRoot, thenBlockId: timerWake.id, elseBlockId: timerPaid.id))
+	emitGtWakeNetpoller(module, block: timerWake, when: arg, cont: timerPaid, ids: ids)
+	emitBranchWithDebt(module, from: timerPaid, to: doneBlock, debt: noDebt)
 
 	emitGtBranchOnPollerPark(module, block: notTimer, kind: kind, onPoller: netpollArm, elsewhere: notNetpoll, ids: ids)
 
@@ -5997,41 +6029,38 @@ function buildGtRegisterPark(module StdModule)
 	// ⚠ **ONE SOURCE AND SEVERAL TAKE THE SAME ARM**, because the difference is entirely in how the park note's
 	// argument is read — which is `__np_pd_commit`'s own question, asked once where the note is decoded rather
 	// than twice here and there.
-	emitSchedLockEnter(module, block: netpollArm, ids: ids)
 	let rootBeforeCommit = emitGtLoadTimerWhen(module, block: netpollArm, ids: ids)
 	let commitDebt = ids.mint()
 	module.appendOp(netpollArm, op: StdOp.call(commitDebt, callee: NetpollPdCommitName, args: argsOf(gt)))
 	let rootAfterCommit = emitGtLoadTimerWhen(module, block: netpollArm, ids: ids)
-	emitSchedLockLeave(module, block: netpollArm, ids: ids)
 	let becameEarliest = emitCmp(module, block: netpollArm, a: rootAfterCommit, b: rootBeforeCommit, pred: StdCmpPred.lt, ids: ids)
 	module.setTerminator(netpollArm, op: StdOp.condBranch(becameEarliest, thenBlockId: netpollWake.id, elseBlockId: netpollPaid.id))
 	emitGtWakeNetpoller(module, block: netpollWake, when: rootAfterCommit, cont: netpollPaid, ids: ids)
-	emitSchedWakeIfOwed(module, cur: netpollPaid, owed: commitDebt, wake: netpollPayM, cont: doneBlock, ids: ids)
+	emitBranchWithDebt(module, from: netpollPaid, to: doneBlock, debt: commitDebt)
 
 	let mailboxKind = emitConst(module, block: notNetpoll, value: GtParkKind.mailbox.rawValue, ids: ids)
 	let isMailbox = emitCmp(module, block: notNetpoll, a: kind, b: mailboxKind, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(notNetpoll, op: StdOp.condBranch(isMailbox, thenBlockId: mailboxArm.id, elseBlockId: notMailbox.id))
 
-	// ⭐⭐ **THE MAILBOX PARK MAY DECLINE TO PARK AT ALL.** The registration is `MailboxRuntime`'s — the mailbox's
-	// fields are that file's — and it answers a WAKE DEBT because it may UNDO the park: an envelope that
-	// arrived between `__mbox_recv`'s release and this registration was sent by a thread that found nobody
-	// parked, so the thread is readied rather than left waiting for a wake that has already happened.
-	emitSchedLockEnter(module, block: mailboxArm, ids: ids)
-	emitMboxRegisterPark(module, func: func, cur: mailboxArm, gt: gt, mbox: arg, cont: unlockAndPay, ids: ids)
+	// ⭐⭐ **THE MAILBOX PARK MAY DECLINE TO PARK AT ALL.** The registration is `MailboxRuntime`'s — the
+	// mailbox's fields are that file's — and it answers a WAKE DEBT because it may UNDO the park: a
+	// request that arrived between `__mbox_recv`'s release and this registration was sent by a thread
+	// that found nobody parked, so the thread is readied rather than left waiting for a wake that has
+	// already happened.
+	emitMboxRegisterPark(module, func: func, cur: mailboxArm, gt: gt, mbox: arg, cont: doneBlock, ids: ids)
 
 	let awaitKind = emitConst(module, block: notMailbox, value: GtParkKind.awaitPromise.rawValue, ids: ids)
 	let isAwait = emitCmp(module, block: notMailbox, a: kind, b: awaitKind, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(notMailbox, op: StdOp.condBranch(isAwait, thenBlockId: awaitArm.id, elseBlockId: notAwait.id))
 
 	// await: `arg` is the awaited GT. ACQUIRE — it may have completed on another M.
-	emitSchedLockEnter(module, block: awaitArm, ids: ids)
 	let awaitedStatus = emitGtLoadPublishedStatus(module, block: awaitArm, gt: arg, ids: ids)
 	let awaitedDone = emitGtStatusEquals(module, block: awaitArm, status: awaitedStatus, want: GtStatusCompleted, ids: ids)
 	module.setTerminator(awaitArm, op: StdOp.condBranch(awaitedDone, thenBlockId: resumeNow.id, elseBlockId: awaitRegister.id))
 
 	emitGtClaimAwaiter(module, func: func, cur: awaitRegister, promise: arg, awaiter: gt, cont: awaitTake, ids: ids)
 	emitStoreField(module, block: awaitTake, record: gt, offset: GtOffStatus, value: waitingConst)
-	emitBranchWithDebt(module, from: awaitTake, to: unlockAndPay, debt: noDebt)
+	emitBranchWithDebt(module, from: awaitTake, to: doneBlock, debt: noDebt)
 
 	let awaitAnyKind = emitConst(module, block: notAwait, value: GtParkKind.awaitAny.rawValue, ids: ids)
 	let isAwaitAny = emitCmp(module, block: notAwait, a: kind, b: awaitAnyKind, pred: StdCmpPred.eq, ids: ids)
@@ -6041,7 +6070,6 @@ function buildGtRegisterPark(module StdModule)
 	let isQuiesce = emitCmp(module, block: notAwaitAny, a: kind, b: quiesceKind, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(notAwaitAny, op: StdOp.condBranch(isQuiesce, thenBlockId: quiesceArm.id, elseBlockId: unknownArm.id))
 
-	emitSchedLockEnter(module, block: quiesceArm, ids: ids)
 	let waiterBefore = emitLoadAcquireGlobalWord(module, block: quiesceArm, label: GtQuiesceWaiterLabel, ids: ids)
 	let waiterTaken = emitCmp(module, block: quiesceArm, a: waiterBefore, b: emitConst(module, block: quiesceArm, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(quiesceArm, op: StdOp.condBranch(waiterTaken, thenBlockId: quiesceTaken.id, elseBlockId: quiesceRegister.id))
@@ -6061,10 +6089,9 @@ function buildGtRegisterPark(module StdModule)
 	module.setTerminator(quiesceUndo, op: StdOp.branch(resumeNow.id))
 
 	emitStoreField(module, block: quiesceTake, record: gt, offset: GtOffStatus, value: waitingConst)
-	emitBranchWithDebt(module, from: quiesceTake, to: unlockAndPay, debt: noDebt)
+	emitBranchWithDebt(module, from: quiesceTake, to: doneBlock, debt: noDebt)
 
 	// awaitAny: `arg` is the promise array's record.
-	emitSchedLockEnter(module, block: awaitAnyArm, ids: ids)
 	let completedSlot = emitAnyCompletedIndex(module, block: awaitAnyArm, record: arg, ids: ids)
 	let anyDone = emitCmp(module, block: awaitAnyArm, a: completedSlot, b: emitConst(module, block: awaitAnyArm, value: NoCompletedPromise, ids: ids), pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(awaitAnyArm, op: StdOp.condBranch(anyDone, thenBlockId: resumeNow.id, elseBlockId: awaitAnyRegister.id))
@@ -6072,23 +6099,21 @@ function buildGtRegisterPark(module StdModule)
 	emitStoreField(module, block: awaitAnyRegister, record: gt, offset: GtOffSelectDone, value: emitConst(module, block: awaitAnyRegister, value: SelectPending, ids: ids))
 	emitGtAwaitAnySlotWalk(module, func: func, cur: awaitAnyRegister, record: arg, g: gt, act: AwaitAnySlotAct.register, cont: awaitAnyRegistered, ids: ids)
 	emitStoreField(module, block: awaitAnyRegistered, record: gt, offset: GtOffStatus, value: waitingConst)
-	emitBranchWithDebt(module, from: awaitAnyRegistered, to: unlockAndPay, debt: noDebt)
+	emitBranchWithDebt(module, from: awaitAnyRegistered, to: doneBlock, debt: noDebt)
 
 	// resumeNow (holding the lock): what the thread waits for has already happened, so it is readied at once.
-	emitBranchWithDebt(module, from: resumeNow, to: unlockAndPay, debt: emitGtReadyLocked(module, block: resumeNow, gt: gt, ids: ids))
-
-	emitSchedLockLeave(module, block: unlockAndPay, ids: ids)
-	emitSchedWakeIfOwed(module, cur: unlockAndPay, owed: debt, wake: payWake, cont: doneBlock, ids: ids)
+	emitBranchWithDebt(module, from: resumeNow, to: doneBlock, debt: emitGtReadyLocked(module, block: resumeNow, gt: gt, ids: ids))
 
 	// ⛔ **A KIND NOTHING WRITES — a compiler bug.** A yield never reaches here (the strand runner places it),
 	// and falling through silently would leave a thread suspended on no store at all.
 	emitRuntimeAbort(module, func: func, block: unknownArm, abort: RuntimeAbort.schedulerUnknownParkKind, ids: ids)
 
-	module.setTerminator(doneBlock, op: StdOp.retVoid)
+	module.setTerminator(doneBlock, op: StdOp.ret(debt))
 	module.functions.push(func)
 end 'buildGtRegisterPark'
 
-// Call `__sched_wake_netpoller(when)` in `block` — `__sched_lock` released — and continue at `cont`.
+// Call `__sched_wake_netpoller(when)` in `block`, inside `__gt_register_park`'s hold, and continue
+// at `cont`.
 function emitGtWakeNetpoller(module StdModule, block IrBlock, when ValueId, cont IrBlock, ids ValueMinter)
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: SchedWakeNetpollerName, args: argsOf(when)))
 	module.setTerminator(block, op: StdOp.branch(cont.id))
@@ -6201,10 +6226,13 @@ function buildGtRunStrand(module StdModule, target Target)
 	let schedulerContext = emitFieldAddr(module, block: entry, record: m, offset: MOffSchedulerContext, ids: ids)
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 	module.setTerminator(entry, op: StdOp.branch(next.id))
+	entry.branchEdges.push(BranchEdge.create(next.id, argIds: argsOf(zero)))
+	let nothingParked = ids.mint()
+	next.blockArgs.push(IrBlockArg.create(nothingParked, argType: StdType.i64))
 
 	// `owner` is not touched again once this answers 0 — the release may have reclaimed it.
 	let member = ids.mint()
-	module.appendOp(next, op: StdOp.call(member, callee: GtStrandNextName, args: argsOf(owner)))
+	module.appendOp(next, op: StdOp.call(member, callee: GtStrandNextName, args: twoArgs(owner, second: nothingParked)))
 	let strandEmpty = emitCmp(module, block: next, a: member, b: zero, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(next, op: StdOp.condBranch(strandEmpty, thenBlockId: released.id, elseBlockId: sortMember.id))
 	emitConstReturn(module, block: released, value: 0, ids: ids)
@@ -6231,6 +6259,7 @@ function buildGtRunStrand(module StdModule, target Target)
 
 	module.appendOp(reapMember, op: StdOp.call(ids.mint(), callee: GtRunnerDoneName, args: argsOf(member)))
 	module.setTerminator(reapMember, op: StdOp.branch(next.id))
+	reapMember.branchEdges.push(BranchEdge.create(next.id, argIds: argsOf(zero)))
 
 	// ⭐⭐ **THE ONE DOOR EVERY PARK PASSES WHILE THE THREAD IS STOPPED AND REACHABLE BY NOBODY ELSE** — its
 	// registers are saved and it is on no store and no queue yet — so it is where a stack may move
@@ -6260,8 +6289,8 @@ function buildGtRunStrand(module StdModule, target Target)
 	let isPreempt = emitCmp(module, block: notYield, a: kind, b: emitConst(module, block: notYield, value: GtParkKind.preempt.rawValue, ids: ids), pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(notYield, op: StdOp.condBranch(isPreempt, thenBlockId: preempted.id, elseBlockId: register.id))
 
-	module.appendOp(register, op: StdOp.call(ids.mint(), callee: GtRegisterParkName, args: argsOf(member)))
 	module.setTerminator(register, op: StdOp.branch(next.id))
+	register.branchEdges.push(BranchEdge.create(next.id, argIds: argsOf(member)))
 
 	emitGtPollStores(module, func: func, cur: yielded, cont: pollStores, ids: ids)
 	let pollDebt = ids.mint()
@@ -6277,6 +6306,7 @@ function buildGtRunStrand(module StdModule, target Target)
 
 	emitSchedLockLeave(module, block: behindSiblings, ids: ids)
 	module.setTerminator(behindSiblings, op: StdOp.branch(next.id))
+	behindSiblings.branchEdges.push(BranchEdge.create(next.id, argIds: argsOf(zero)))
 
 	emitSchedLockEnter(module, block: preempted, ids: ids)
 	emitStoreField(module, block: preempted, record: owner, offset: GtOffStrandResume, value: member)

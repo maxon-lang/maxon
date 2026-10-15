@@ -541,8 +541,7 @@ func @__np_pd_mark_timed_out {
     x64.andRegReg rcx, rcx, rdx
     x64.andRegReg rsi, rsi, rax
     x64.orRegReg rcx, rcx, rsi
-    x64.movRegImm32 rax, 1
-    x64.lock add [rcx], rax
+    x64.aluBaseDispImm32.add [rcx + 0], 1
     x64.leaRegGlobal rax, __sched_lock
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.iatCall 21
@@ -579,8 +578,7 @@ func @__np_pd_mark_timed_out {
     x64.andRegReg rcx, rcx, rdx
     x64.andRegReg rsi, rsi, rax
     x64.orRegReg rcx, rcx, rsi
-    x64.movRegImm rax, 18446744073709551615
-    x64.lock add [rcx], rax
+    x64.aluBaseDispImm32.add [rcx + 0], -1
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
@@ -1047,8 +1045,7 @@ func @__np_pd_mark_timed_out {
     x64.andRegReg rcx, rcx, rdx
     x64.andRegReg rsi, rsi, rax
     x64.orRegReg rcx, rcx, rsi
-    x64.movRegImm32 rax, 1
-    x64.lock add [rcx], rax
+    x64.aluBaseDispImm32.add [rcx + 0], 1
     x64.leaRegGlobal rax, __sched_lock
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.callDirect mrt_linux_lock_enter
@@ -1085,8 +1082,7 @@ func @__np_pd_mark_timed_out {
     x64.andRegReg rcx, rcx, rdx
     x64.andRegReg rsi, rsi, rax
     x64.orRegReg rcx, rcx, rsi
-    x64.movRegImm rax, 18446744073709551615
-    x64.lock add [rcx], rax
+    x64.aluBaseDispImm32.add [rcx + 0], -1
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
@@ -1565,8 +1561,9 @@ func @__np_pd_mark_timed_out {
     arm64.and x1, x1, x2
     arm64.and x0, x3, x0
     arm64.orr x0, x1, x0
-    arm64.movImm x1, 1
-    arm64.arm64AtomicRmw.add x0, [x0], x1
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.add x1, x1, 1
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
     arm64.leaGlobal x0, __sched_lock
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.importCall 18
@@ -1608,8 +1605,9 @@ func @__np_pd_mark_timed_out {
     arm64.and x2, x2, x3
     arm64.and x1, x4, x1
     arm64.orr x1, x2, x1
-    arm64.movImm x2, 18446744073709551615
-    arm64.arm64AtomicRmw.add x1, [x1], x2
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
+    arm64.add x2, x2, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x2
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
@@ -2089,8 +2087,9 @@ func @__np_pd_mark_timed_out {
     arm64.and x1, x1, x2
     arm64.and x0, x3, x0
     arm64.orr x0, x1, x0
-    arm64.movImm x1, 1
-    arm64.arm64AtomicRmw.add x0, [x0], x1
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.add x1, x1, 1
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
     arm64.leaGlobal x0, __sched_lock
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.bl mrt_linux_lock_enter
@@ -2132,8 +2131,9 @@ func @__np_pd_mark_timed_out {
     arm64.and x2, x2, x3
     arm64.and x1, x4, x1
     arm64.orr x1, x2, x1
-    arm64.movImm x2, 18446744073709551615
-    arm64.arm64AtomicRmw.add x1, [x1], x2
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
+    arm64.add x2, x2, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x2
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32

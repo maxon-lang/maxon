@@ -72304,7 +72304,7 @@ export type Parser
 			// suite**, blaming the author for an argument they did not write and the compiler minted. Both
 			// sides of this slot are the compiler's, which is what makes skipping it honest rather than a
 			// hole. `moveMessagePayloads` skips the same slot for its own reason, through the same predicate.
-			if fieldIsTheServiceReplySlot(field) or fieldIsAServiceWitnessHalf(field) 'theCompilersOwnSlot'
+			if fieldIsTheServiceReplySlot(field) or fieldIsAServiceWitnessHalf(field) or fieldIsTheServiceLink(field) 'theCompilersOwnSlot'
 				continue
 			end 'theCompilersOwnSlot'
 
@@ -72337,7 +72337,7 @@ export type Parser
 		for i in 0 upto payloads.count() 'storeEach'
 			let field = try payloads.get(i) otherwise panic("emitEnumBox: payloads.get OOB at {i} on a list walked to its own count")
 
-			if fieldIsAServiceWitnessHalf(field) 'storedWithItsValue'
+			if fieldIsAServiceWitnessHalf(field) or fieldIsTheServiceLink(field) 'storedWithItsValue'
 				continue
 			end 'storedWithItsValue'
 
@@ -72415,7 +72415,7 @@ export type Parser
 		for i in 0 upto payloads.count() 'eachAuthored'
 			let field = try payloads.get(i) otherwise panic("moveMessagePayloads: payloads.get OOB at {i} — the loop is bounded by that same count")
 
-			if not fieldIsTheServiceReplySlot(field) and not fieldIsAServiceWitnessHalf(field) 'theAuthorsArgument'
+			if not fieldIsTheServiceReplySlot(field) and not fieldIsAServiceWitnessHalf(field) and not fieldIsTheServiceLink(field) 'theAuthorsArgument'
 				authored.push(HandedOffArgument.create(i, value: try args.get(i) otherwise panic("moveMessagePayloads: args.get OOB at {i} — the caller sized the columns to the variant's payload count"), anchor: self.tokenAt(try argAnchors.get(i) otherwise panic("moveMessagePayloads: argAnchors.get OOB at {i} — filled in lockstep with the args")), door: ThreadHandOffDoor.message(serviceSendArgumentBlame(serviceTypeName, methodName: caseTok.value, paramName: field.name))))
 			end 'theAuthorsArgument'
 		end 'eachAuthored'
@@ -75537,7 +75537,7 @@ export type Parser
 			let slot = position.index()
 			let given = try filled.get(slot) otherwise panic("widenMessageArgsToInterfaceHandles: filled.get OOB at {slot} — the columns are sized to the variant's payload count")
 
-			if not given or fieldIsTheServiceReplySlot(field) or fieldIsAServiceWitnessHalf(field) 'noArgumentHere'
+			if not given or fieldIsTheServiceReplySlot(field) or fieldIsAServiceWitnessHalf(field) or fieldIsTheServiceLink(field) 'noArgumentHere'
 				continue
 			end 'noArgumentHere'
 
@@ -75611,14 +75611,14 @@ export type Parser
 	function seedMessageSlots(payloads PayloadFieldArray, anchor ElementIndex, slotValues ValueIdArray, filled BoolArray, bareLocal BoolArray, slotAnchors TokenIndexArray)
 		for field in payloads 'eachSlot'
 			slotValues.push(0)
-			filled.push(fieldIsAServiceWitnessHalf(field))
+			filled.push(fieldIsAServiceWitnessHalf(field) or fieldIsTheServiceLink(field))
 			bareLocal.push(false)
 			slotAnchors.push(anchor)
 		end 'eachSlot'
 	end 'seedMessageSlots'
 
 	// ⭐ **THE ENQUEUE ITSELF — the mailbox out of the handle, and the op.** Written once because BOTH doors
-	// that put an envelope in a mailbox reach it: an author's message and the compiler's `__shutdown` pill.
+	// that put a request in a mailbox reach it: an author's message and the compiler's `__shutdown` pill.
 	// They differ in which variant they build and in nothing else, and a second copy of these three lines is a
 	// second chance to load the mailbox from the wrong offset.
 	//
@@ -101691,7 +101691,7 @@ export type Parser
 			let slot = position.index()
 			let given = try filled.get(slot) otherwise panic("serviceArgumentsAreChecked: filled.get OOB at {slot} — the columns are sized to the variant's payload count")
 
-			if not given or fieldIsTheServiceReplySlot(field) or fieldIsAServiceWitnessHalf(field) 'noArgumentHere'
+			if not given or fieldIsTheServiceReplySlot(field) or fieldIsAServiceWitnessHalf(field) or fieldIsTheServiceLink(field) 'noArgumentHere'
 				continue
 			end 'noArgumentHere'
 

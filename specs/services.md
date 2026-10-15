@@ -1083,7 +1083,7 @@ acc=3
 <!-- test: a-send-after-shutdown-is-dropped-cleanly -->
 ⭐⭐ **THE CASE THAT REACHES THE ABANDON PATH, AND IT REACHES IT BY EITHER OF TWO ROADS.** The second `keep`
 is sent after the poison pill, so the loop never runs its handler — and which road drops its `String` is a
-race this case deliberately does not resolve: if the send wins, the envelope is queued behind the pill and
+race this case deliberately does not resolve: if the send wins, the request is queued behind the pill and
 the loop's exit drain abandons it; if the loop wins, the mailbox is already closed and `__mbox_send` abandons
 it inline. **Both roads must print exactly the same thing and leak exactly nothing**, which is the property
 worth pinning — the drop of a sent payload nobody will ever handle.
@@ -4801,7 +4801,7 @@ sender still reads tree 4 with 4 leaves
 <!-- test: borrow.the-sender-releases-first-and-the-service-frees-the-graph -->
 <!-- procs: 1 -->
 <!-- preempt: off -->
-`sendAndReturn` sends its graph and returns while the message is still queued, so the envelope is the
+`sendAndReturn` sends its graph and returns while the message is still queued, so the request box is the
 graph's last owner and the service's release is the one that frees it — a release that never comes is
 exit 101. The two pins make *still queued* the premise rather than luck: on one processor that `main` is
 never preempted from, nothing runs on the service until `main` parks at its await.

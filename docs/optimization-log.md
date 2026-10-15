@@ -1143,6 +1143,37 @@ no `scale-test` numbers for it.**
 
   The full matrix, P=12 and CPU and memory included, is in `docs/concurrency-benchmark-log.md`.
 
+**2026-10-15 — FEWER LOCKED OPERATIONS AND ALLOCATIONS PER MESSAGE. A RUNTIME row.**
+
+The profile at f561e2d8c measured, per ping-pong round trip:
+- 12 `__sched_lock` pairs, each with 2 locked `MOffLocks` depth steps, which alone were 15–21% of user time;
+- a 16 B envelope allocated and freed per send.
+
+Four changes, landed as one:
+1. The depth word has one writer, so it is stepped with a plain RMW.
+2. The mailbox links request boxes through their own leading `__next` slot, so it no longer allocates an envelope.
+3. Parkers follow Go's order: release the P, fence, then re-scan every queue. That lets a waker skip `__sched_startm` with no lock when no P is idle.
+4. One `__sched_lock` hold both registers a park and pops the next strand member.
+
+The measurement: `scripts/bench-concurrency.py --ref f561e2d8c --runs 3`, interleaved, on both lanes. Maxon/Go wall ratio, control → this change:
+
+| workload | P | x64-windows | x64-linux (WSL2) |
+|---|---|---|---|
+| ping-pong | 1 | 1.99 → 1.29 | 1.56 → 1.01 |
+| ping-pong | 12 | 2.01 → 1.61 | 1.49 → 1.19 |
+| thread-ring | 1 | 3.76 → 2.55 | 2.75 → 1.94 |
+| thread-ring | 12 | 1.08 → 0.87 | 0.91 → 0.75 |
+| fan-in | 1 | 4.21 → 2.78 | 3.88 → 2.39 |
+| fan-in | 12 | 3.07 → 2.27 | 3.82 → 2.30 |
+| shared-counter | 1 | 14.34 → 9.47 | 13.35 → 8.61 |
+| shared-counter | 12 | 10.85 → 8.28 | 6.79 → 4.05 |
+| coroutine-churn | 1 | 2.55 → 2.56 | 1.46 → 1.24 |
+| spawn-many | 1 | 4.63 → 4.46 | 3.14 → 2.82 |
+| spawn-many | 12 | 7.66 → 7.18 | 8.80 → **9.62** |
+| worker-pool | 1 | 1.00 → 1.00 | 1.00 → 1.00 |
+
+spawn-many at P=12 on Linux REGRESSED by 9% (436 → 476 ms). Every parker now pays an O(P) re-scan, where before only spinners did, and spawn-many parks most often per unit of work. That is a reading, not a profile; the spawn round reads it.
+
 ## Bugs this uncovered
 
 Removing the dummy exposed a leak it had been half-hiding, and the leak in turn exposed a hole in the

@@ -88,7 +88,7 @@ can say whether a header-free BUFFER leaked:
   destructor, so this layer covers the header-carrying records (a struct, a String record, an
   array's outer handle) and the header-free buffers behind them alike.
 - **RAW.** Beneath the boxes sits `__slab_alloc`, whose direct callers are the scheduler's tables (its
-  machines, processors, lock and park stores), the service mailboxes and their message envelopes, the
+  machines, processors, lock and park stores), the service mailboxes, the
   subprocess scratch buffers and the DebugStream ring. A green thread is not among them: its STACK comes
   from `osAllocPages`, and its RECORD from the scheduler's own record arena, which is carved from
   `osAllocPages` chunks — scaffolding like the stack, invisible to both layers. The slab's callers are
@@ -118,8 +118,8 @@ is exactly what the process-wide totals answer (`process-totals-are-the-six-summ
 
 They read two columns. `mmRawAllocTotal` is cumulative and only ever rises; `mmRawAllocLive` rises with
 each slab request and FALLS at `__slab_free`. A `__slab_alloc` caller that frees its region moves the
-live column back: the subprocess runner's and the read probe's per-call scratch, and a service's mailbox
-envelopes, each freed the moment its message is delivered. A green-thread record is never credited at
+live column back: the subprocess runner's and the read probe's per-call scratch, and a service's
+mailbox, freed by whichever of its handle and its service lets go last. A green-thread record is never credited at
 all: it comes from the scheduler's record arena, not the slab, and is recycled through the scheduler's
 own free lists (`runtime-scratch-reclaim.md`'s `spawn-await-loop-is-bounded`). `__mm_alloc`'s boxes move
 both raw columns and both tracked columns by the same amount, so the reader's subtraction leaves the
@@ -384,21 +384,29 @@ end 'main'
 **THE CASE THAT SAYS THE RAW COLUMNS ARE MAINTAINED AT ALL**, which is the hazard a column reading
 a plausible `0` hides. `__gt_init` takes the scheduler's tables from `__slab_alloc` before `main` runs, and
 `main` itself runs on a green thread, so by its first line the columns already count that scaffolding and
-are not 0. The window then spawns a service and awaits one message: `__svc_spawn` takes the service's
-MAILBOX (64 bytes) and `__mbox_send` takes the message's ENVELOPE (16 bytes), both straight from
-`__slab_alloc` (`MailboxRuntime.maxon`) with no box header, so the raw columns rise and the tracked ones
-do not. The third assertion separates the byte column
-from the count column: every region the window takes is many bytes wide, so the two deltas cannot be equal
-unless one of the two intrinsics is wired to the other's slot.
+are not 0. The first window then spawns a service and awaits one message: `__svc_spawn` takes the
+service's MAILBOX (64 bytes) straight from `__slab_alloc` (`MailboxRuntime.maxon`) with no box header, so
+the raw columns rise and the tracked ones do not. The third assertion separates the byte column from the
+count column: the mailbox is many bytes wide, so the two deltas cannot be equal unless one of the two
+intrinsics is wired to the other's slot.
+
+⭐ **A MESSAGE TAKES NO RAW REGION, AND THE SECOND WINDOW IS WHERE THAT IS SAID.** The mailbox's queue is
+intrusive: the request box the send hands over carries the queue's link itself, so `__mbox_send` cuts
+nothing from the slab and `__mbox_recv` hands nothing back. The request box and the reply cell are the
+message's whole cost, and neither is raw — the box is a tracked allocation with a header, the cell a
+green-thread record from the scheduler's arena. So a second message to the SAME service, once its
+mailbox exists, moves NEITHER raw column. A queue that wrapped each request in an envelope of its own
+would move both, by one region per message.
 
 ⚠ **THE WITNESS IS A SERVICE AND NOT AN `async` SPAWN**, because a green thread moves neither column: its
 record comes from the scheduler's record arena and its stack from `osAllocPages` (see *The two LAYERS*
-above). An `async` spawn and await in this window would read `after == before`.
+above). An `async` spawn and await in the first window would read `after == before`.
 
-✅ **THE CASE DISCRIMINATES.** With the raw columns' maintenance removed from `__slab_alloc`, this case exits
-**2** against 8 — both delta halves go RED, and so does the first, because a column nothing maintains
-reads 0 at `main`'s first line — and `raw-live-falls-below-raw-total` exits **6** against 7, while every
-tracked-layer case stays GREEN.
+✅ **THE HALVES FAIL FOR DIFFERENT REASONS.** With the raw columns' maintenance removed from
+`__slab_alloc`, the first three assertions go RED — a column nothing maintains reads 0 at `main`'s first
+line and moves in neither window — while the second window's equality holds vacuously; that is why
+`theServiceAllocatedRaw` stays beside it. A queue that allocates per message keeps the first three GREEN and
+fails only the fourth.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -423,7 +431,10 @@ function main() returns ExitCode
 	let a = try await c.next(1) otherwise 0
 	let after = __Builtins.mmRawAllocTotal()
 	let bytesAfter = __Builtins.mmRawAllocBytes()
-	var score = a
+	let b = try await c.next(a) otherwise 0
+	let afterSecond = __Builtins.mmRawAllocTotal()
+	let bytesAfterSecond = __Builtins.mmRawAllocBytes()
+	var score = b - 1
 	if before > 0 'theSchedulerIsInstalledBeforeMain'
 		score = score + 1
 	end 'theSchedulerIsInstalledBeforeMain'
@@ -433,33 +444,43 @@ function main() returns ExitCode
 	if bytesAfter - bytesBefore > after - before 'bytesAreBytesNotACount'
 		score = score + 3
 	end 'bytesAreBytesNotACount'
+	if afterSecond == after and bytesAfterSecond == bytesAfter 'aMessageTakesNoRawRegion'
+		score = score + 4
+	end 'aMessageTakesNoRawRegion'
 	return score as ExitCode
 end 'main'
 ```
 ```exitcode
-8
+12
 ```
 
 <!-- test: builtins-mm-counters.raw-live-falls-below-raw-total -->
 <!-- tier: stdlib -->
 **THE CASE THAT PINS THE RAW COLUMNS AS TWO NUMBERS: A COUNTED CALLER FREES, SO `live` FALLS BELOW
-`total`.** The caller is a service's MAILBOX. `__mbox_send` cuts one envelope per message from
-`__slab_alloc`, and `__mbox_recv` hands it back through `__slab_free` the moment it pops the message,
-before the handler runs — so once the reply has been awaited, the one envelope this program sent is
-credited to `total` and debited from `live`. Every other raw region the program touches — the
-scheduler's tables, the P and M structs, the mailbox itself — is still held when the counters are read,
-so the envelope is the only debit, and a runtime whose free door did not debit the live column would read
-`live == total`. Mailboxes run on every lane with green threads,
-so the case needs no Windows-only scratch.
+`total`.** The caller is a service's MAILBOX, the one raw region a service owns. `__svc_spawn` cuts it
+from `__slab_alloc`, and whichever of its two owners lets go LAST hands it back through `__slab_free`:
+the handle, dropped when `serveOnce` returns, closes the mailbox, and the service's green thread, waking
+to a closed and drained queue, runs `__mbox_service_exit` and frees it. So the window around `serveOnce`
+and the wait after it credits `total` by exactly ONE region and leaves `live` where it started. A
+runtime whose free door did not debit the live column would leave `live` one above.
 
-It is asserted only where there is something to compare — after the send, so the count is non-zero —
-because `0 < 0` is false and `0 == 0` was true, and neither says anything about a runtime that
-maintains no raw counter at all.
+⭐ **EXACTLY ONE, BECAUSE A MESSAGE TAKES NO RAW REGION.** The awaited `next` is a real message, and the
+mailbox's queue is intrusive — the request box carries the link — so the send cuts nothing from the slab.
+A queue that wrapped each request in an envelope of its own would credit `total` once more per message
+and free it again on the pop, so `live` would still come back and only the count would tell.
 
-✅ **THE CASE DISCRIMINATES.** With `__slab_free` not debiting the live column this program reads
-`live == total` and answers **3**; with the debit it reads `live == total - 1` at every processor count.
-⚠ With the raw columns' maintenance removed entirely, the `total > 0` half
-fails instead, so the two halves fail for opposite reasons and neither can carry the case alone.
+⚠ **THE WAIT IS A BOUNDED YIELD LOOP, NOT A FIXED NUMBER OF YIELDS**, because the free runs on the
+SERVICE's green thread after the handle drop has made it ready, and on a multi-processor run another
+machine may be the one to run it. At one processor the first yield runs it. The budget is what keeps a
+runtime that never frees the mailbox a red case rather than a hang.
+
+It is asserted only where there is something to compare — the window credited something, so the count
+moved — because `0 == 0` says nothing about a runtime that maintains no raw counter at all.
+
+✅ **THE HALVES FAIL FOR OPPOSITE REASONS.** With `__slab_free` not debiting the live column, `live`
+never comes back and the wait runs out its budget; with the raw columns' maintenance removed entirely,
+`live == liveBefore` holds vacuously and `total > totalBefore` fails instead. Neither can carry the case
+alone.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -477,23 +498,40 @@ type Counter
 	end 'next'
 end 'Counter'
 
-function main() returns ExitCode
+let yieldBudget = 10000
+
+function serveOnce() returns Integer
 	let c = spawn Counter.create()
-	let a = try await c.next(1) otherwise 0
+
+	return try await c.next(1) otherwise 0
+end 'serveOnce'
+
+function main() returns ExitCode
+	let totalBefore = __Builtins.mmRawAllocTotal()
+	let liveBefore = __Builtins.mmRawAllocLive()
+	let a = serveOnce()
+	var yields = 0 as Integer
+	while __Builtins.mmRawAllocLive() != liveBefore and yields < yieldBudget 'letTheServiceExit'
+		__Builtins.yield()
+		yields = yields + 1
+	end 'letTheServiceExit'
 	let total = __Builtins.mmRawAllocTotal()
 	let live = __Builtins.mmRawAllocLive()
 	var score = a
-	if total > 0 'somethingToCompare'
+	if total > totalBefore 'somethingToCompare'
 		score = score + 1
 	end 'somethingToCompare'
-	if live < total 'theDeliveredEnvelopeWentBack'
+	if live == liveBefore 'theMailboxWentBack'
 		score = score + 4
-	end 'theDeliveredEnvelopeWentBack'
+	end 'theMailboxWentBack'
+	if total - totalBefore == 1 'oneRawRegionPerServiceAndNonePerMessage'
+		score = score + 8
+	end 'oneRawRegionPerServiceAndNonePerMessage'
 	return score as ExitCode
 end 'main'
 ```
 ```exitcode
-7
+15
 ```
 
 <!-- test: builtins-mm-counters.all-six-run-on-wasm -->
