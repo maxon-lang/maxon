@@ -34,6 +34,7 @@ import importlib.util
 import json
 import os
 import shutil
+import subprocess
 import sys
 import time
 
@@ -165,7 +166,13 @@ def parse_output(stdout):
 
 def profile_arm(arm, n, hz):
     """`maxon profile run` with the arm's own compiler; the report is saved beside the binary."""
-    r = bench_common.run([arm["compiler"], "profile", "run", arm["exe"], str(n)], cwd=arm["dir"], timeout=bench_common.RUN_TIMEOUT_S)
+    cmd = [arm["compiler"], "profile", "run", f"--rate={hz}", arm["exe"], str(n)]
+    try:
+        r = bench_common.run(cmd, cwd=arm["dir"], timeout=bench_common.RUN_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        raise bench_common.VerificationFailure(f"profile of {arm['label']} at n={n} timed out after {bench_common.RUN_TIMEOUT_S} s") from None
+    if r.returncode != 0:
+        raise bench_common.VerificationFailure(f"profile of {arm['label']} at n={n} failed (exit {r.returncode}):\n{r.stdout[-3000:]}\n{r.stderr[-3000:]}")
     path = os.path.join(arm["dir"], f"profile-n{n}.txt")
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(r.stdout)
@@ -182,7 +189,10 @@ def time_self_compile(arm):
         if os.path.exists(leftover):
             os.remove(leftover)
     start = time.perf_counter()
-    r = bench_common.run([arm["compiler"], "build", SELF_COMPILE_SOURCE, f"--output={stem}"], cwd=bench_common.REPO)
+    try:
+        r = bench_common.run([arm["compiler"], "build", SELF_COMPILE_SOURCE, f"--output={stem}"], cwd=bench_common.REPO)
+    except subprocess.TimeoutExpired:
+        raise bench_common.BuildFailure(f"self-compile with {arm['label']} timed out after {bench_common.BUILD_TIMEOUT_S} s") from None
     ms = (time.perf_counter() - start) * bench_common.MILLIS
     if r.returncode != 0 or not os.path.exists(stem + bench_common.EXE):
         raise bench_common.BuildFailure(f"self-compile with {arm['label']} failed (exit {r.returncode}):\n{r.stdout[-3000:]}\n{r.stderr[-3000:]}")
@@ -326,7 +336,10 @@ def main():
     if args.profile:
         profile_n = args.profile_n if args.profile_n is not None else args.n
         for arm in maxon_arms:
-            path, report = profile_arm(arm, profile_n, args.profile_hz)
+            try:
+                path, report = profile_arm(arm, profile_n, args.profile_hz)
+            except bench_common.VerificationFailure as e:
+                return bench_common.report_failure(e)
             profiles[arm["label"]] = path
             print()
             print(f"  profile of {arm['label']} at n={profile_n} -> {path}")
