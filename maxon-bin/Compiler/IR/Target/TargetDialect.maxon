@@ -1597,28 +1597,9 @@ export union TargetOp
 	// refcount update runs everywhere. `lock add` reads two registers and writes none.
 	x64LockAdd(addrReg TargetVReg, srcReg TargetVReg) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, implicitUses: 0, implicitDefs: 0}
 
-	// `mov dest, gs:[0x30]` (`65 REX.W 8B /r`, ModRM mod=00 rm=100 + SIB 0x25 + disp32) — the Win64 TEB
-	// SELF-POINTER, i.e. `NtCurrentTeb()`. Per-OS-thread-stable and never NULL, which is exactly
-	// `StdOp.currentThreadToken`'s contract; the OS establishes it before the thread's first instruction,
-	// so it needs no runtime setup and works before any scheduler exists.
-	//
-	// ⚠ **THE `gs:[reg]` FORM'S rbp/r13 TRAP DOES NOT APPLY HERE, AND THE DIFFERENCE IS THE ADDRESSING
-	// MODE.** In `gs:[reg]`, ModRM.rm=101 with mod=00 means RIP-RELATIVE rather than "[rbp]". This op
-	// uses the ABSOLUTE form instead — a SIB with no base and no index — so the destination lives
-	// in ModRM.**reg**, where every register including rbp and r13 encodes normally. Choosing the absolute
-	// form is what removes the trap rather than guarding it.
-	//
-	// `isMemory: true` (it loads from the TEB), `isStore: false`, `isCall: false` — one plain def, no use.
-	x64TebSelfPointer(dest TargetVReg) = TargetOpMeta{isMemory: true, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
-
 	// `mov dest, gs:[base]` (`65 REX.W 8B /r`) — a load from the GS segment at a RUNTIME byte offset, which is
 	// how `StdOp.tlsSlotLoad` reads this OS thread's TLS slot in two loads and no call: the caller loads the
 	// precomputed `index * 8 + 0x1480` into `base` and this dereferences it.
-	//
-	// ⭐ **IT IS THE SIBLING `x64TebSelfPointer` DECLINES TO BE, AND THE SPLIT IS THE ADDRESSING MODE.** That
-	// op reads ONE fixed offset and therefore takes the ABSOLUTE form; this one indexes by a register and
-	// therefore cannot. Sharing an op would mean an operand that is sometimes a register and sometimes a
-	// constant, which is two instructions wearing one name.
 	//
 	// ⚠ **THE rbp/r13 TRAP IS REAL FOR THIS FORM AND IS ALREADY CLOSED BY THE ENCODER.** `[rbp]`/`[r13]` with
 	// mod=00 means RIP-relative, so a naive encoder would read a constant out of the code stream instead of
@@ -1671,15 +1652,10 @@ export union TargetOp
 	// with the current CPU
 	// number masked out of its low three bits. Linux's is a bare `MRS dest, TPIDR_EL0`.
 	//
-	// ⚠ **THE OPERAND IS NOT DECORATION AND THIS BLOCK USED TO SAY "arm64-macOS ONLY".** That was true while
-	// the Linux lane had nobody to write a thread pointer; L4 gave it one — a static image links no libc, so
-	// `TPIDR_EL0` is free and `mrt_host_tls_alloc` publishes this thread's slot block in it. The two arms name
-	// DIFFERENT REGISTERS with different masking rules, so which one an op means has to travel WITH the op:
-	// the encoder has no target to ask (`emitArm64TargetOp` takes none, deliberately).
-	//
-	// ⚠ **`currentThreadToken` STILL DOES NOT USE THIS OP ON LINUX.** A thread identity must be non-zero on
-	// every thread, and `TPIDR_EL0` is zero on one that never asked the scheduler for a slot — that lane takes
-	// `gettid` instead, which `StdOp.currentThreadToken` carries in full.
+	// ⚠ **THE OPERAND IS NOT DECORATION.** A static Linux image links no libc, so `TPIDR_EL0` is free and the
+	// runtime publishes each thread's slot block in it. The two arms name DIFFERENT REGISTERS with different
+	// masking rules, so which one an op means has to travel WITH the op: the encoder has no target to ask
+	// (`emitArm64TargetOp` takes none, deliberately).
 	//
 	// One plain def and no use; it needs no scratch, because every instruction reads and writes `dest`
 	// alone. `isMemory: false` — a system-register read touches no memory.

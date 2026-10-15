@@ -1355,10 +1355,10 @@ function emitWalkStackBounds(asm X64RuntimeAsm, usesGt bool, os Os, lowSlot Stac
 
 	// Each arm leaves the stack's top in r8, or branches to `windowed`.
 	if x64OsProbesStackBounds(os) 'threadBounds'
-		encodeMovRegGsAbs(asm.code, dest: X64Register.r8, disp: TibStackLimitDisp, wide: true)
+		encodeMovRegSegAbs(asm.code, dest: X64Register.r8, disp: TibStackLimitDisp, wide: true, segment: TibSegment)
 		encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rdx, src: X64Register.r8, wide: true)
 		encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.below, targetBlockId: windowed)
-		encodeMovRegGsAbs(asm.code, dest: X64Register.r8, disp: TibStackBaseDisp, wide: true)
+		encodeMovRegSegAbs(asm.code, dest: X64Register.r8, disp: TibStackBaseDisp, wide: true, segment: TibSegment)
 		encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rdx, src: X64Register.r8, wide: true)
 		encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.aboveEqual, targetBlockId: windowed)
 	end 'threadBounds' else if usesGt 'greenThreadBounds'
@@ -1471,7 +1471,7 @@ function emitSystemStackGuardFaultArm(asm X64RuntimeAsm, codeReg X64Register, gu
 
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rcx, disp: ExcPtrsOffExceptionRecord, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rdx, disp: ExcRecOffFaultAddress, wide: true)
-	encodeMovRegGsAbs(asm.code, dest: X64Register.r8, disp: TibStackLimitDisp, wide: true)
+	encodeMovRegSegAbs(asm.code, dest: X64Register.r8, disp: TibStackLimitDisp, wide: true, segment: TibSegment)
 	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rdx, src: X64Register.r8, wide: true)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.aboveEqual, targetBlockId: next)
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: X64Register.r8, imm: guardRegionBytes as Imm32)
@@ -1946,11 +1946,16 @@ end 'buildLinuxSignalStackSizeChunk'
 //
 // Each later install rewrites only the handler: the flags, the restorer and the mask are the same for every
 // signal.
-function buildLinuxRuntimeInitChunk(usesGt bool, target Target) returns FunctionCodeChunk
+function buildLinuxRuntimeInitChunk(usesGt bool, carriesHostLock bool, target Target) returns FunctionCodeChunk
 	let SlotSigaction = 0 as StackSize
 	var asm = X64RuntimeAsm.beginFunction(LinuxSigactionSlots)
 
 	emitProgramStartedMark(asm)
+
+	if carriesHostLock 'ownsABlock'
+		encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: LinuxMainThreadBlockName)
+	end 'ownsABlock'
+
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: PosixCheckStdFdsName)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: LinuxSignalStackSizeName)
 	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: SignalStackInstallName)
@@ -2008,12 +2013,12 @@ end 'emitLinuxSigactionCall'
 // (`x64OsCallKind`) — it is not re-stated as a literal inside each lane appender. This is the only place
 // in the x64 backend that holds a `Target` at the moment the chunk set is chosen, so it is the only place
 // that can answer without repeating itself; the lane appenders receive the answer and pass it on.
-export function appendX64RuntimeChunks(chunks FunctionCodeChunkArray, target Target, dumpCoverage bool, usesGt bool, context HostContextLayout)
+export function appendX64RuntimeChunks(chunks FunctionCodeChunkArray, target Target, dumpCoverage bool, usesGt bool, carriesHostLock bool, context HostContextLayout)
 	let exitRoute = x64OsCallKind(target.os)
 
 	match target.os 'os'
 		windows then appendX64WindowsRuntimeChunks(chunks, exitRoute: exitRoute, dumpCoverage: dumpCoverage, usesGt: usesGt, target: target, context: context)
-		linux then appendX64LinuxRuntimeChunks(chunks, exitRoute: exitRoute, dumpCoverage: dumpCoverage, usesGt: usesGt, target: target)
+		linux then appendX64LinuxRuntimeChunks(chunks, exitRoute: exitRoute, dumpCoverage: dumpCoverage, usesGt: usesGt, carriesHostLock: carriesHostLock, target: target)
 		macos or
 		wasi then panic("appendX64RuntimeChunks: no x64 fault runtime for {targetToString(target)} — this is appended only for windows/linux")
 	end 'os'
@@ -2197,8 +2202,8 @@ end 'appendX64WindowsHostSurfaceChunks'
 //
 // ⚠ Every OS call in this half is a raw `syscall` instruction, which runs on whatever stack it is on and asks
 // the scheduler nothing; `usesGt` reaches here for `mrt_panic`'s stack guard alone.
-function appendX64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, exitRoute X64OsCallKind, dumpCoverage bool, usesGt bool, target Target)
-	chunks.push(buildLinuxRuntimeInitChunk(usesGt, target: target))
+function appendX64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, exitRoute X64OsCallKind, dumpCoverage bool, usesGt bool, carriesHostLock bool, target Target)
+	chunks.push(buildLinuxRuntimeInitChunk(usesGt, carriesHostLock: carriesHostLock, target: target))
 	chunks.push(buildX64LinuxCheckStdFdsChunk())
 	chunks.push(buildLinuxSignalStackInstallChunk())
 	chunks.push(buildLinuxSignalStackSizeChunk())

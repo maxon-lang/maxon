@@ -530,10 +530,6 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		// exists for (see `x64AtomicAdd`).
 		x64LockAdd(addrReg, srcReg) then pushCmpOperands(buf, lhs: addrReg, rhs: srcReg)
 
-		// The two thread-identity reads: ONE plain def, no use. Their input is the OS thread they run on — a
-		// segment-relative address on Windows and a system register on Darwin, neither of which is an operand.
-		x64TebSelfPointer(dest) then pushDef(buf, vreg: dest)
-
 		// The GS-relative slot read: one register READ (the byte offset it indexes by) and one PLAIN def, which
 		// is `loadRegBaseDisp`'s shape exactly — same helper, same reason (the base dies here, so the def may
 		// land in its register).

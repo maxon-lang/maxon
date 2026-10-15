@@ -179,9 +179,8 @@ let Arm64OpMrsTpidrro = 0xD53BD060
 // OUTRIGHT.** The three words differ from the pair above only in `op2` (2 rather than 3) and, for the
 // write, in the L bit (0xD53 ⇒ 0xD51). ⚠ **NOTHING ELSE ON THAT LANE TOUCHES THE REGISTER, WHICH IS WHY
 // IT IS THE SCHEDULER'S**: a static image links no libc, so this is the one per-OS-thread word the
-// scheduler may define for itself, and `mrt_host_tls_alloc` does
-// (`Arm64LinuxRuntime`). `StdOp.currentThreadToken` still takes `gettid` there rather than this register: an
-// identity must be non-zero on EVERY thread, including one that never asked the scheduler for a slot.
+// scheduler may define for itself, and the runtime does — `mrt_linux_main_thread_block` for the main thread,
+// `CLONE_SETTLS` for every other (`Arm64LinuxRuntime`).
 let Arm64OpMrsTpidr = 0xD53BD040
 let Arm64OpMsrTpidr = 0xD51BD040
 
@@ -1796,7 +1795,6 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffse
 		x64LockCmpxchg or
 		x64LockXadd or
 		x64LockAdd or
-		x64TebSelfPointer or
 		x64GsLoadRegBase then panic("emitArm64TargetOp: an x64-only atomic or TEB read reached the arm64 encoder — arm64's atomics are `arm64AtomicCas`/`arm64AtomicRmw` and its thread token is `arm64ThreadPointer`")
 
 		// The scaled-index band. The ADDRESS op is per-ISA (x64 spells `+` as a `lea`, arm64 as an
@@ -2180,7 +2178,7 @@ end 'arm64EmitCovInc'
 //     READ-ONLY register at the current thread's TSD base and packs the CPU number into its low three bits,
 //     so the read shifts them out. Measured on this host: `tsd[key] == (TPIDRRO_EL0 & ~7) + key*8`.
 //   • **Linux — `TPIDR_EL0`, UNMASKED.** The kernel writes NEITHER register for a static image with no libc,
-//     so the writable one is free and `mrt_host_tls_alloc` makes it this thread's TLS block base
+//     so the writable one is free and the runtime makes it this thread's TLS block base
 //     (`Arm64LinuxRuntime`). Nothing packs anything into it, so masking would clear three real address bits.
 //
 // It needs no scratch at all: every instruction reads and writes `dest`, so there is no operand for a
@@ -2204,7 +2202,8 @@ function arm64EmitDarwinThreadPointer(code ByteArray, dest MachineWord)
 end 'arm64EmitDarwinThreadPointer'
 
 // `MSR TPIDR_EL0, Xn` — POINT this OS thread's writable thread pointer at `src`. Linux's alone, and it has
-// exactly one writer: `mrt_host_tls_alloc`, which maps this thread's slot block and publishes its base here.
+// exactly one writer: `mrt_linux_main_thread_block`, which maps the main thread's slot block and publishes
+// its base here. A worker's arrives through `CLONE_SETTLS`.
 // There is deliberately no Darwin twin — `TPIDRRO_EL0` is read-only at EL0 and libSystem owns what it holds.
 export function arm64EmitSetThreadPointer(code ByteArray, src MachineWord)
 	emitArm64Insn(code, insn: Arm64OpMsrTpidr or src)
@@ -3027,7 +3026,7 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 	// every chunk in it calls that runtime's walker, frame printer and stderr writer BY NAME — order
 	// among runtime chunks is inert (they all fall inside `[mrt_start, __symtable)`, the only range the
 	// text guard tests), so this is about reading order rather than about layout.
-	appendArm64FaultRuntimeChunks(chunks, globalData: globalData, usesGt: usage.usesGt, target: target)
+	appendArm64FaultRuntimeChunks(chunks, globalData: globalData, usesGt: usage.usesGt, carriesHostLock: posixUsesHostLock(usage), target: target)
 
 	// The HOST SURFACE — the sequences behind the `os*` ops. EXACTLY ONE lane's chunks are appended, which
 	// is what lets both build under the shared `mrt_host_*` names (`Arm64PosixRuntime`'s header): macOS's

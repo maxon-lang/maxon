@@ -148,11 +148,6 @@ let WasmMemoryGrowOom = -1 as FullRangeInt
 // so the reason it can never be anything else is stated where the instruction is written.
 let WasmAtomicWordOffset = 0 as Wasm32Index
 
-// The token `currentThreadToken` answers on a lane with exactly one thread. It is `1` because the op's
-// contract is "per-OS-thread stable and NON-ZERO"; the value is otherwise arbitrary, and that is precisely
-// why it is named rather than spelled as a bare literal at the emitter.
-let WasmSingleThreadToken = 1 as FullRangeInt
-
 // The minimum page count a memory must declare to hold a `.data` image ending at `base +
 // dataSize`, rounded up to whole 64 KiB pages. `base` is a positive constant, so the count is
 // always at least one — the WASI `run` skeleton requires a memory export whether or not the
@@ -1068,7 +1063,6 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 		osReservePages or
 		atomicCas or
 		atomicRmw or
-		currentThreadToken or
 		tlsAlloc or
 		tlsSetValue or
 		tlsSlotLoad or
@@ -1620,7 +1614,6 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		osReservePages(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		atomicCas(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		atomicRmw(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
-		currentThreadToken(resultId) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		tlsAlloc(resultId) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		tlsSlotLoad(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		osEnterBackgroundPriority(resultId) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
@@ -2053,8 +2046,7 @@ type WasmFuncEmitter
 			osReservePages then panic("emitStraightLineTerminator: a page reserve or commit is a body op, never a terminator")
 			memFill then panic("emitStraightLineTerminator: a `memFill` is a body op, never a terminator")
 			atomicCas or
-			atomicRmw or
-			currentThreadToken then panic("emitStraightLineTerminator: an atomic or a thread-token read is a body op, never a terminator")
+			atomicRmw then panic("emitStraightLineTerminator: an atomic is a body op, never a terminator")
 			tlsAlloc or
 			tlsSetValue or
 			tlsSlotLoad or
@@ -2232,8 +2224,7 @@ type WasmFuncEmitter
 			osReservePages then panic("emitDispatcherTerminator: a page reserve or commit is a body op, never a terminator")
 			memFill then panic("emitDispatcherTerminator: a `memFill` is a body op, never a terminator")
 			atomicCas or
-			atomicRmw or
-			currentThreadToken then panic("emitDispatcherTerminator: an atomic or a thread-token read is a body op, never a terminator")
+			atomicRmw then panic("emitDispatcherTerminator: an atomic is a body op, never a terminator")
 			tlsAlloc or
 			tlsSetValue or
 			tlsSlotLoad or
@@ -2461,15 +2452,13 @@ type WasmFuncEmitter
 			osCpuCount then panic("emitBodyOp: `osCpuCount` has no wasm32-wasi lowering — WASI reports no processor count, and SemanticCheck refuses such a program at its own source span (E3104)")
 			osThreadCpuTicks then panic("emitBodyOp: `osThreadCpuTicks` has no wasm32-wasi lowering — WASI exposes no per-thread CPU clock, and SemanticCheck refuses such a program at its own source span (E3104)")
 
-			// The atomics and the per-thread identity word — all three lower, and NONE is a stub.
+			// Both atomics lower, and NEITHER is a stub.
 			atomicCas(resultId, addrId, expectedId, replacementId) then self.emitAtomicCas(resultId, addrId: addrId, expectedId: expectedId, replacementId: replacementId)
 			atomicRmw(resultId, addrId, operandId, opcode) then self.emitAtomicRmw(resultId, addrId: addrId, operandId: operandId, opcode: opcode)
-			currentThreadToken(resultId) then self.emitCurrentThreadToken(resultId)
 
 			// A WASI component has ONE thread by construction, so per-OS-thread storage answers a question the
-			// lane cannot ask, and there is no event object to signal. That is the same reason `currentThreadToken`
-			// answers a constant here rather than reading anything — but a constant is the RIGHT answer for an
-			// identity and a WRONG one for storage, which would silently hand every reader the same slot.
+			// lane cannot ask, and there is no event object to signal. A constant would silently hand every reader
+			// the same slot.
 			tlsAlloc or
 			tlsSetValue or
 			tlsSlotLoad or
@@ -2506,7 +2495,7 @@ type WasmFuncEmitter
 	end 'emitBodyOp'
 
 	// ----------------------------------------------------------------------
-	// The atomics and the thread token, on a lane with exactly ONE thread
+	// The atomics, on a lane with exactly ONE thread
 	// ----------------------------------------------------------------------
 	//
 	// ⭐⭐ **A PLAIN LOAD/COMPARE/STORE IS THE CORRECT LOWERING HERE, NOT A STUB, AND THE REASON IS
@@ -2516,7 +2505,7 @@ type WasmFuncEmitter
 	// property "no other thread sees a torn intermediate state"; with no other thread, an ordinary load and
 	// store already has it, and the `atomics` proposal's `i64.atomic.rmw.*` would encode a guarantee that
 	// costs a fence to buy something nothing can contend for. ⇒ if this lane ever gains real threads, THESE
-	// are the three emitters that must change, and the change is a real one — do not read the plain
+	// are the two emitters that must change, and the change is a real one — do not read the plain
 	// instructions as an oversight already made.
 	//
 	// `atomicCas(result, addr, expected, replacement)` → load, compare, and store only on a match.
@@ -2555,18 +2544,6 @@ type WasmFuncEmitter
 
 		self.body.i64Store(WasmAtomicWordOffset)
 	end 'emitAtomicRmw'
-
-	// `currentThreadToken(result)` → the constant 1.
-	//
-	// ⭐ **THE CONSTANT SATISFIES THE WHOLE CONTRACT, WHICH IS WHY IT IS AN ANSWER AND NOT A PLACEHOLDER.**
-	// The op promises a value that is per-OS-thread stable and NON-ZERO (`StdOp.currentThreadToken`); with
-	// exactly one thread, a fixed non-zero word is stable across every call and distinct from every other
-	// thread's token vacuously. A caller comparing two tokens for identity gets the right answer, and a
-	// caller testing "is this lock owned" gets the right answer.
-	function emitCurrentThreadToken(resultId ValueId)
-		self.body.i64Const(WasmSingleThreadToken)
-		self.body.localSet(resultId as Wasm32Index)
-	end 'emitCurrentThreadToken'
 
 	function emitConst(resultId ValueId, value FullRangeInt, valueType StdType)
 		if stdTypeIsFloat(valueType) 'float'
@@ -4106,8 +4083,7 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 		osReservePages then panic("decideDispatcher: a page reserve or commit is a body op, never a terminator")
 		memFill then panic("decideDispatcher: a `memFill` is a body op, never a terminator")
 		atomicCas or
-		atomicRmw or
-		currentThreadToken then panic("decideDispatcher: an atomic or a thread-token read is a body op, never a terminator")
+		atomicRmw then panic("decideDispatcher: an atomic is a body op, never a terminator")
 		tlsAlloc or
 		tlsSetValue or
 		tlsSlotLoad or

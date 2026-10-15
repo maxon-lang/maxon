@@ -554,11 +554,16 @@ end 'arm64EmitDarwinSigactionCall'
 //
 // The `struct sigaction` is the kernel's (`LinuxSigactionOffHandler` owns the layout), in zeroed slots
 // ascending from slot 0, so `&act` is slot 0's address.
-function buildArm64LinuxRuntimeInitChunk(usesGt bool, target Target) returns FunctionCodeChunk
+function buildArm64LinuxRuntimeInitChunk(usesGt bool, carriesHostLock bool, target Target) returns FunctionCodeChunk
 	let SlotSigaction = 0 as StackSize
 	var asm = Arm64RuntimeAsm.beginFunction(LinuxSigactionSlots)
 
 	arm64EmitProgramStartedMark(asm)
+
+	if carriesHostLock 'ownsABlock'
+		arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: LinuxMainThreadBlockName)
+	end 'ownsABlock'
+
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: PosixCheckStdFdsName)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: LinuxSignalStackSizeName)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: SignalStackInstallName)
@@ -613,10 +618,10 @@ end 'arm64EmitLinuxSigactionCall'
 // ⛔ **THE INSTALL IS A `match` PER OS.** Each lane's install reads its own struct layout and reaches the
 // kernel its own way, and an arm that inherited the other's would be a `sigaction` GOT call in an ELF image
 // or a raw `svc` in a Mach-O one.
-export function appendArm64FaultRuntimeChunks(chunks FunctionCodeChunkArray, globalData GlobalDataTable, usesGt bool, target Target)
+export function appendArm64FaultRuntimeChunks(chunks FunctionCodeChunkArray, globalData GlobalDataTable, usesGt bool, carriesHostLock bool, target Target)
 	match target.os 'installLane'
 		macos then chunks.push(buildArm64DarwinRuntimeInitChunk(usesGt, target: target))
-		linux then chunks.push(buildArm64LinuxRuntimeInitChunk(usesGt, target: target))
+		linux then chunks.push(buildArm64LinuxRuntimeInitChunk(usesGt, carriesHostLock: carriesHostLock, target: target))
 		windows then panic("appendArm64FaultRuntimeChunks: there is no arm64-Windows lane in this compiler — `Target` admits the pair only through `arm64OsCallKind`'s two OSes")
 		wasi then panic("appendArm64FaultRuntimeChunks: `wasm32-wasi` is not an arm64 lane — a WASI component takes a wasm trap, not a signal")
 	end 'installLane'

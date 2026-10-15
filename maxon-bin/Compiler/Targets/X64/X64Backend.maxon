@@ -95,7 +95,7 @@ let SibNoIndexField = 4
 
 // SIB base field 101 with mod=00 means "NO base register — a disp32-only absolute address" (the same bit
 // pattern as rbp/r13's low-3, which is exactly why an rbp/r13 base is forced to mod=01 above). Used by
-// `encodeMovGsAbsReg` for the segment-relative `gs:[disp32]` TIB writes.
+// `encodeSegAbsModRm` for the segment-relative `seg:[disp32]` forms.
 let SibBaseDisp32Field = 5
 
 // A base register whose low-3-bits are 101 (rbp / r13): with mod=00 the ModR/M or SIB
@@ -240,11 +240,6 @@ export let OpcodeXaddRmReg = 0xC1  // xadd r/m64, r64 (0F C1 /r) — reg field =
 // `StdOp.atomicCas`/`atomicRmw` have no field-offset operand, unlike `loadIndirect`/`storeIndirect` — so
 // this is the only value it can take, and it is named rather than a bare 0 so that stays visible.
 let AtomicWordDisp = 0 as Imm32
-
-// The TEB self-pointer's offset within the Win64 TEB — `NtCurrentTeb()` reads `gs:[0x30]`. The pointer is
-// established by the OS before a thread's first instruction and is never null, which is what makes it a
-// legal answer to `StdOp.currentThreadToken`. Exported because `TargetPrinter` prints it.
-export let WindowsTebSelfPointerOffset = 0x30
 
 module let WindowsTebLastErrorOffset = 0x68 as Imm32
 
@@ -437,11 +432,13 @@ let SsePrefixScalarDoubleByte = 0xF2
 let SsePrefixPackedDoubleByte = 0x66
 
 // The two segment-override legacy prefixes. On Win64 `gs:` addresses the Thread Information Block, whose
-// StackBase/StackLimit the GT syscall shim repoints for a kernel call (see `encodeMovGsAbsReg`); under SysV
+// StackBase/StackLimit the GT syscall shim repoints for a kernel call (see `encodeMovSegAbsReg`); under SysV
 // `fs:` addresses the thread pointer, which on the Linux lane is the scheduler's own slot block. Like the SSE
 // mandatory prefixes each precedes the REX byte.
 let GsSegmentPrefix = 0x65
 let FsSegmentPrefix = 0x64
+
+module let TibSegment = X64ThreadPointerSegment.gs
 
 // The prefix byte a segment choice becomes — the ONE map, so a lane that picks a segment cannot also pick a
 // byte and have the two disagree. `X64ThreadPointerSegment` is `X64LinuxRuntime`'s, beside `x64OsCallKind`,
@@ -1980,37 +1977,33 @@ export function encodeImportAnswerWidth(code ByteArray, slot IatSlot)
 	end 'width'
 end 'encodeImportAnswerWidth'
 
-// `mov gs:[disp32], srcReg` — a store to an ABSOLUTE address in the GS segment, 64-bit when `wide`. On Win64 GS
+// `mov seg:[disp32], srcReg` — a store to an ABSOLUTE address in `segment`, 64-bit when `wide`. On Win64 GS
 // points at the Thread Information Block, so this writes NT_TIB.StackBase (disp 0x08) or StackLimit (disp
 // 0x10) — the GT syscall shim's TIB repoint — or, 32-bit, the TEB's DWORD `LastErrorValue`, where a 64-bit
-// store would overwrite the field after it. Encoding: the GS prefix, REX.W when wide (+REX.R for an r8-r15
-// source), `89 /r`, a ModR/M
-// of mod=00 reg=src rm=100 (a SIB follows), a SIB of scale=1 index=none base=disp32, then the disp32. It cannot
-// ride `encodeStoreBaseDispReg` (which addresses `[base + disp]`, a register base): the `[disp32]` no-base form
-// needs the SIB with base=101, and the segment override has no home in that encoder. `emitRex`'s `rmField` is
-// `rax` so REX.B stays clear — in this SIB form the base is a disp32, not a register, so REX.B must not be set.
-export function encodeMovGsAbsReg(code ByteArray, disp Imm32, srcReg X64Register, wide bool)
-	code.push(GsSegmentPrefix)
-	emitRex(code, wide: wide, regField: srcReg, rmField: X64Register.rax)
-	code.push(OpcodeMovRmReg)
-	code.push(ModRmMod00 or (regLow3(srcReg) shl 3) or ModRmRmSibFollows)
-	code.push(sibByte(MemoryIndexScale.byOne, indexBits: SibNoIndexField, baseBits: SibBaseDisp32Field))
-	writeImm32Signed(code, value: disp)
-end 'encodeMovGsAbsReg'
+// store would overwrite the field after it.
+export function encodeMovSegAbsReg(code ByteArray, disp Imm32, srcReg X64Register, wide bool, segment X64ThreadPointerSegment)
+	encodeSegAbsModRm(code, opcode: OpcodeMovRmReg, regField: srcReg, disp: disp, wide: wide, segment: segment)
+end 'encodeMovSegAbsReg'
 
-// `mov destReg, gs:[disp32]` — a LOAD from an absolute GS-segment address, 64-bit when `wide`, the read twin
-// of `encodeMovGsAbsReg`. The GT context switch reads the current NT_TIB StackBase/StackLimit through it to save
-// them into the suspending GT before repointing the TIB at the resumed GT's stack, so the TIB always describes
-// the stack actually executing. Same addressing form as the store (only the direction opcode differs, `89`→
-// `8B`); `emitRex`'s `rmField` is `rax` so REX.B stays clear for the SIB disp32-base with no register base.
-export function encodeMovRegGsAbs(code ByteArray, dest X64Register, disp Imm32, wide bool)
-	code.push(GsSegmentPrefix)
-	emitRex(code, wide: wide, regField: dest, rmField: X64Register.rax)
-	code.push(OpcodeMovRegRm)
-	code.push(ModRmMod00 or (regLow3(dest) shl 3) or ModRmRmSibFollows)
+// `mov destReg, seg:[disp32]` — a LOAD from an absolute address in `segment`, 64-bit when `wide`, the read
+// twin of `encodeMovSegAbsReg`. The GT context switch reads the current NT_TIB StackBase/StackLimit through it
+// to save them into the suspending GT before repointing the TIB at the resumed GT's stack, so the TIB always
+// describes the stack actually executing.
+export function encodeMovRegSegAbs(code ByteArray, dest X64Register, disp Imm32, wide bool, segment X64ThreadPointerSegment)
+	encodeSegAbsModRm(code, opcode: OpcodeMovRegRm, regField: dest, disp: disp, wide: wide, segment: segment)
+end 'encodeMovRegSegAbs'
+
+// The `[disp32]` no-base form cannot ride `encodeModRmBaseDisp` (which addresses `[base + disp]`, a register
+// base): it needs the SIB with base=101, and the segment override has no home in that encoder. `rmField` is
+// `rax` so REX.B stays clear — in this SIB form the base is a disp32, not a register.
+function encodeSegAbsModRm(code ByteArray, opcode MachineWord, regField X64Register, disp Imm32, wide bool, segment X64ThreadPointerSegment)
+	code.push(segmentPrefixByte(segment))
+	emitRex(code, wide: wide, regField: regField, rmField: X64Register.rax)
+	code.push(opcode)
+	code.push(ModRmMod00 or (regLow3(regField) shl 3) or ModRmRmSibFollows)
 	code.push(sibByte(MemoryIndexScale.byOne, indexBits: SibNoIndexField, baseBits: SibBaseDisp32Field))
 	writeImm32Signed(code, value: disp)
-end 'encodeMovRegGsAbs'
+end 'encodeSegAbsModRm'
 
 // `mov destReg, seg:[baseReg]` (64-bit) — a LOAD from a segment-relative address held in a REGISTER, which
 // is what makes a TLS slot readable in two loads and no call: the caller has the precomputed
@@ -2036,9 +2029,9 @@ export function encodeMovRegSegBase(code ByteArray, dest X64Register, base X64Re
 	encodeModRmBaseDisp(code, twoByteEscape: false, opcode: OpcodeMovRegRm, regField: dest, base: base, disp: 0, wide: true)
 end 'encodeMovRegSegBase'
 
-// `mov seg:[baseReg], srcReg` (64-bit) — the STORE twin of `encodeMovRegSegBase`, and the only way to WRITE a
-// per-OS-thread slot on x86-64: FS base is not addressable in user mode, so a slot has an address only inside
-// an instruction that carries the override. `mrt_linux_tls_set` and this lane's errno stash are its callers.
+// `mov seg:[baseReg], srcReg` (64-bit) — the STORE twin of `encodeMovRegSegBase`, which WRITES a per-OS-thread
+// slot at an offset known only at run time: FS base is not addressable in user mode, so a slot has an address
+// only inside an instruction that carries the override. `mrt_linux_tls_set` is its caller.
 //
 // It delegates its ModR/M for `encodeMovRegSegBase`'s reason — the `[rbp]`/`[r13]` RIP-relative trap — and
 // emits the segment prefix before the REX byte, which REX's "last prefix" rule requires.
@@ -2386,17 +2379,13 @@ function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArra
 		x64LockXadd(dest, _, addrReg) then encodeLockedRmwBaseDispReg(code, twoByteEscape: true, opcode: OpcodeXaddRmReg, base: resolveGpr(addrReg), disp: AtomicWordDisp, reg: resolveGpr(dest))
 		x64LockAdd(addrReg, srcReg) then encodeLockedRmwBaseDispReg(code, twoByteEscape: false, opcode: OpcodeAddRmReg, base: resolveGpr(addrReg), disp: AtomicWordDisp, reg: resolveGpr(srcReg))
 
-		// The TEB self-pointer read IS `encodeMovRegGsAbs` at the self-pointer's offset — the SAME absolute
-		// GS form the GT context switch reads NT_TIB StackBase/StackLimit through, so the segment-addressing
-		// bytes (prefix, REX, the no-base SIB) are stated once rather than a second time here.
-		x64TebSelfPointer(dest) then encodeMovRegGsAbs(code, dest: resolveGpr(dest), disp: WindowsTebSelfPointerOffset, wide: true)
 		x64GsLoadRegBase(dest, base) then encodeMovRegSegBase(code, dest: resolveGpr(dest), base: resolveGpr(base), segment: threadPointerSegment)
 
 		// The arm64 atomics never reach this encoder (`buildBackend` dispatches on `target.cpu`), exactly as
 		// the arm64 `fmov` pair above does not — x64's own atomics are the three locked forms one line up.
 		arm64AtomicCas or
 		arm64AtomicRmw or
-		arm64ThreadPointer then panic("emitX64TargetOp: an arm64-only atomic or thread-pointer read reached the x64 encoder — x64's atomics are `x64LockCmpxchg`/`x64LockXadd`/`x64LockAdd` and its thread token is `x64TebSelfPointer`")
+		arm64ThreadPointer then panic("emitX64TargetOp: an arm64-only atomic or thread-pointer read reached the x64 encoder — x64's atomics are `x64LockCmpxchg`/`x64LockXadd`/`x64LockAdd`")
 
 		// --- The scaled-index band ---
 		//
@@ -2671,7 +2660,6 @@ function branchWindowRoleOf(op TargetOp) returns BranchWindowRole
 		x64LockCmpxchg or
 		x64LockXadd or
 		x64LockAdd or
-		x64TebSelfPointer or
 		x64GsLoadRegBase or
 		arm64AtomicCas or
 		arm64AtomicRmw or

@@ -2623,9 +2623,9 @@ export union StdOp
 	osGuardPages(resultId ValueId, addrId ValueId, sizeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 	osReservePages(resultId ValueId, sizeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 
-	// --- The ATOMICS and the PER-THREAD IDENTITY the multi-M scheduler is built on ---
+	// --- The ATOMICS the multi-M scheduler is built on ---
 	//
-	// All three carry `category: system`, placing them logically in the system band independent of
+	// Both carry `category: system`, placing them logically in the system band independent of
 	// this tail position.
 	//
 	// ⭐⭐ **NO FENCE OP IS NEEDED FOR THE TREIBER-STACK USE, AND THAT IS A PROPERTY OF THESE THREE
@@ -2690,47 +2690,13 @@ export union StdOp
 	// nothing the compiler emits has a sub-word counter; the day one does, the width is a field appended here.
 	atomicRmw(resultId ValueId, addrId ValueId, operandId ValueId, opcode StdAtomicRmwOpcode) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: false, clobbersFlags: true, isCmp: false}
 
-	// **`currentThreadToken(result)`** — a per-OS-thread-stable, **NON-ZERO** identity word. Two live
-	// consumers are already visible for it and they are the reason it is ONE op rather than each site's own
-	// inline sequence: a recursive lock's OWNER field, read in both `__slab_lock_acquire` and
-	// `__slab_lock_release`, and the future P-id the sharded allocator indexes its mcache by.
-	//
-	// ⭐ **NON-ZERO IS PART OF THE CONTRACT, NOT AN OBSERVATION.** Both consumers use 0 as "no owner", so a
-	// lane that could answer 0 would make a free lock read as owned by whoever asked. Every lowering below
-	// therefore either reads a word the OS guarantees non-null (a TEB/TCB self-pointer, a masked thread
-	// pointer) or asks the kernel for a thread id, which is never 0.
-	//
-	// ⚠ **`isPure: false`, AND IT IS THE `loadIndirect` ARGUMENT VERBATIM.** The token is constant for the
-	// lifetime of an OS THREAD, which makes "pure" look right and is exactly the trap: under a work-
-	// stealing multi-M scheduler a green thread may be resumed on a DIFFERENT M mid-function, so a token
-	// read hoisted out of a loop would pin a stale M for ever — a silent wrong answer in the one place this
-	// op exists to serve. Purity is "may this op be moved?", and the answer is no.
-	//
-	// `isCall: true` because two of the five lanes lower it to a SYSCALL (see below); a Std-tier fact must
-	// hold on every lane, and the conservative union is the only honest value. `isMemory: true` — the
-	// non-syscall lanes read the TEB/TCB. `isStore: false`: it observes identity, it publishes nothing.
-	//
-	// ⚠⚠ **THE TWO LINUX LANES DO NOT USE A THREAD-POINTER REGISTER, AND THAT IS FORCED BY the compiler's OWN ABI
-	// RATHER THAN CHOSEN.** The obvious lowerings — `mov dest, fs:[0]` on x64-linux and `MRS TPIDR_EL0` on
-	// arm64-linux — read a base that **libc sets up**, and the compiler's Linux lanes are raw-syscall static
-	// binaries with no libc (`TargetDialect`'s `x64Syscall`: *"x64-linux is raw-syscall + static ELF"*).
-	// The kernel leaves FS base and TPIDR_EL0 at **zero** for a fresh process, so `fs:[0]` dereferences
-	// address 0 (a SIGSEGV) and `TPIDR_EL0` reads 0 (which violates the non-zero contract above). Both lanes
-	// therefore ask the kernel: `gettid`, which is per-thread stable, never 0, needs no TLS setup and works
-	// identically before and after the scheduler exists. It costs a syscall, and that price is named where
-	// it is paid (`lowerCurrentThreadToken` in each backend): the day the multi-M runtime owns thread
-	// CREATION on Linux it can set the thread-pointer register itself, and these two lowerings collapse to
-	// one instruction each.
-	currentThreadToken(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: false, isCall: true, clobbersFlags: true, isCmp: false}
-
 	// ⭐⭐ **THE FOUR MULTI-M OPS — THREE FOR PER-OS-THREAD STORAGE, ONE FOR THE WAKE.** All four carry
 	// `category: system`, placing them logically in the system band independent of this tail position.
 	//
-	// ⭐ **WHY TLS AND NOT `currentThreadToken` + A TABLE.** The token above answers *"which OS thread am
-	// I?"*; these answer *"what did THIS OS thread put here?"* — and the scheduler needs the second on the
-	// hottest path it has (every syscall shim entry reads the current P). A token would have to be a KEY
-	// into a table somebody searches; a TLS slot IS the storage, reached in two loads with no compare and
-	// no search.
+	// ⭐ **WHY TLS AND NOT A THREAD TOKEN + A TABLE.** A token answers *"which OS thread am I?"*; these
+	// answer *"what did THIS OS thread put here?"* — and the scheduler needs the second on the hottest path it
+	// has (every syscall shim entry reads the current P). A token would have to be a KEY into a table
+	// somebody searches; a TLS slot IS the storage, reached in two loads with no compare and no search.
 
 	// **`tlsAlloc(result) -> slot index`** = `TlsAlloc()`. Called ONCE, from `__gt_init`, before any thread
 	// but the main one exists. The index it answers is turned into a TEB byte offset ONCE and published;
@@ -2752,8 +2718,8 @@ export union StdOp
 	// and this sits under every syscall shim entry and every current-GT read in the scheduler.
 	//
 	// ⚠ **`isCall: false` AND `isPure: false`.** It reaches no OS and clobbers no argument register, so it
-	// is not a call; and it must not be hoisted, for `currentThreadToken`'s reason one step stronger — a
-	// green thread resumed on a DIFFERENT M would keep the old M's P for ever. What carries that is the
+	// is not a call; and it must not be hoisted — a green thread resumed on a DIFFERENT M would keep the old
+	// M's P for ever. What carries that is the
 	// two rosters every mover asks first: `classifyArithOperands` answers `neither` and
 	// `classifyLoadOperands` `notALoad`, so CSE, LICM and the unswitcher's invariance test each decline
 	// the read before purity is even reached. A COPY left where it was written is a different question,
@@ -3177,7 +3143,6 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 		memFill or
 		atomicCas or
 		atomicRmw or
-		currentThreadToken or
 		loadAcquire or
 		storeRelease or
 
@@ -3485,7 +3450,6 @@ export function stdOpLabelKindOf(op StdOp) returns StdOpLabelKind
 		osReservePages or
 		atomicCas or
 		atomicRmw or
-		currentThreadToken or
 		tlsAlloc or
 		tlsSetValue or
 		tlsSlotLoad or
@@ -3922,7 +3886,6 @@ export function classifyArithOperands(op StdOp, operands StdArithOperands)
 		osReservePages or
 		atomicCas or
 		atomicRmw or
-		currentThreadToken or
 		tlsAlloc or
 		tlsSetValue or
 		tlsSlotLoad or
@@ -4171,7 +4134,6 @@ export function classifyAccessOperands(op StdOp, access StdAccessOperands)
 		osGuardPages or
 		osCommitPages or
 		osReservePages or
-		currentThreadToken or
 		tlsAlloc or
 		tlsSetValue or
 		tlsSlotLoad or
@@ -4493,7 +4455,6 @@ module function classifyCallOperands(op StdOp, call StdCallOperands)
 		osReservePages or
 		atomicCas or
 		atomicRmw or
-		currentThreadToken or
 		tlsAlloc or
 		tlsSetValue or
 		tlsSlotLoad or
@@ -4912,7 +4873,6 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osTickCountMs or
 		osSocketCreate or
 		osCpuCount or
-		currentThreadToken or
 		tlsAlloc or
 		osEnterBackgroundPriority then break
 		binOp(_, lhs, rhs, _, _) then insertUsePair(referenced, a: lhs, b: rhs)
@@ -5215,7 +5175,6 @@ module function stdOpDefinedValue(op StdOp, def StdDefinedValues)
 		osReservePages(resultId, _) then def.recordOne(resultId)
 		atomicCas(resultId, _, _, _) then def.recordOne(resultId)
 		atomicRmw(resultId, _, _, _) then def.recordOne(resultId)
-		currentThreadToken(resultId) then def.recordOne(resultId)
 		tlsAlloc(resultId) then def.recordOne(resultId)
 		tlsSlotLoad(resultId, _) then def.recordOne(resultId)
 		osEnterBackgroundPriority(resultId) then def.recordOne(resultId)
@@ -5353,7 +5312,6 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osEnvBlock or
 		osSocketCreate or
 		osCpuCount or
-		currentThreadToken or
 		tlsAlloc or
 		osEnterBackgroundPriority gives op
 		binOp(resultId, lhs, rhs, opcode, operandType) gives StdOp.binOp(resultId, lhs: remappedValue(lhs, subst: subst), rhs: remappedValue(rhs, subst: subst), opcode: opcode, operandType: operandType)
@@ -5776,7 +5734,6 @@ function cloneStdOp(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray, 
 		osGuardPages or
 		osCommitPages or
 		osReservePages or
-		currentThreadToken or
 		tlsAlloc or
 		tlsSetValue or
 		osSetEvent or
@@ -6334,7 +6291,6 @@ module function collectStdBlockSuccessorIds(module StdModule, block IrBlock, out
 		osReservePages or
 		atomicCas or
 		atomicRmw or
-		currentThreadToken or
 		tlsAlloc or
 		tlsSetValue or
 		tlsSlotLoad or
@@ -6538,7 +6494,6 @@ module function classifyBranch(op StdOp, out StdBranchOperands)
 		osReservePages or
 		atomicCas or
 		atomicRmw or
-		currentThreadToken or
 		tlsAlloc or
 		tlsSetValue or
 		tlsSlotLoad or

@@ -66,21 +66,21 @@ let TebDeallocationStackDisp = 0x1478 as Imm32
 // exactly a load). `scratch` shuttles each word (`gtReg` and `scratch` must differ); neither helper touches any
 // other register.
 function emitSaveTibIntoGt(code ByteArray, gtReg X64Register, scratch X64Register)
-	encodeMovRegGsAbs(code, dest: scratch, disp: TibStackBaseDisp, wide: true)
+	encodeMovRegSegAbs(code, dest: scratch, disp: TibStackBaseDisp, wide: true, segment: TibSegment)
 	encodeStoreBaseDispReg(code, base: gtReg, disp: GtOffTibStackBase as Imm32, srcReg: scratch, wide: true)
-	encodeMovRegGsAbs(code, dest: scratch, disp: TibStackLimitDisp, wide: true)
+	encodeMovRegSegAbs(code, dest: scratch, disp: TibStackLimitDisp, wide: true, segment: TibSegment)
 	encodeStoreBaseDispReg(code, base: gtReg, disp: GtOffTibStackLimit as Imm32, srcReg: scratch, wide: true)
-	encodeMovRegGsAbs(code, dest: scratch, disp: TebDeallocationStackDisp, wide: true)
+	encodeMovRegSegAbs(code, dest: scratch, disp: TebDeallocationStackDisp, wide: true, segment: TibSegment)
 	encodeStoreBaseDispReg(code, base: gtReg, disp: GtOffTibDeallocation as Imm32, srcReg: scratch, wide: true)
 end 'emitSaveTibIntoGt'
 
 function emitLoadTibFromGt(code ByteArray, gtReg X64Register, scratch X64Register)
 	encodeLoadRegBaseDisp(code, destReg: scratch, base: gtReg, disp: GtOffTibStackBase as Imm32, wide: true)
-	encodeMovGsAbsReg(code, disp: TibStackBaseDisp, srcReg: scratch, wide: true)
+	encodeMovSegAbsReg(code, disp: TibStackBaseDisp, srcReg: scratch, wide: true, segment: TibSegment)
 	encodeLoadRegBaseDisp(code, destReg: scratch, base: gtReg, disp: GtOffTibStackLimit as Imm32, wide: true)
-	encodeMovGsAbsReg(code, disp: TibStackLimitDisp, srcReg: scratch, wide: true)
+	encodeMovSegAbsReg(code, disp: TibStackLimitDisp, srcReg: scratch, wide: true, segment: TibSegment)
 	encodeLoadRegBaseDisp(code, destReg: scratch, base: gtReg, disp: GtOffTibDeallocation as Imm32, wide: true)
-	encodeMovGsAbsReg(code, disp: TebDeallocationStackDisp, srcReg: scratch, wide: true)
+	encodeMovSegAbsReg(code, disp: TebDeallocationStackDisp, srcReg: scratch, wide: true, segment: TibSegment)
 end 'emitLoadTibFromGt'
 
 function emitX64CarryLastError(code ByteArray, gtReg X64Register, os Os, direction GtLastErrorDirection)
@@ -111,19 +111,17 @@ end 'emitX64RawLastError'
 
 function emitWindowsRawLastError(code ByteArray, direction GtLastErrorDirection)
 	match direction 'direction'
-		intoGt then encodeMovRegGsAbs(code, dest: GtSwitchTibScratchReg, disp: WindowsTebLastErrorOffset, wide: false)
-		fromGt then encodeMovGsAbsReg(code, disp: WindowsTebLastErrorOffset, srcReg: GtSwitchTibScratchReg, wide: false)
+		intoGt then encodeMovRegSegAbs(code, dest: GtSwitchTibScratchReg, disp: WindowsTebLastErrorOffset, wide: false, segment: TibSegment)
+		fromGt then encodeMovSegAbsReg(code, disp: WindowsTebLastErrorOffset, srcReg: GtSwitchTibScratchReg, wide: false, segment: TibSegment)
 	end 'direction'
 end 'emitWindowsRawLastError'
 
 function emitLinuxRawLastError(code ByteArray, direction GtLastErrorDirection)
 	match direction 'direction'
-		intoGt then x64LinuxEmitReadThreadErrnoSlot(code, dest: GtSwitchTibScratchReg, base: GtSwitchErrnoBaseReg)
-		fromGt then x64LinuxEmitWriteThreadErrnoSlot(code, base: GtSwitchErrnoBaseReg, srcReg: GtSwitchTibScratchReg)
+		intoGt then x64LinuxEmitReadThreadSlot(code, dest: GtSwitchTibScratchReg, slotOffset: X64LinuxErrnoSlotOffset)
+		fromGt then x64LinuxEmitWriteThreadSlot(code, srcReg: GtSwitchTibScratchReg, slotOffset: X64LinuxErrnoSlotOffset)
 	end 'direction'
 end 'emitLinuxRawLastError'
-
-let GtSwitchErrnoBaseReg = X64Register.r11
 
 // ⭐⭐⭐ **DOES THIS OS PROBE A PER-THREAD STACK-BOUNDS PAIR ON A KERNEL CALL?** Windows does: `NT_TIB`'s
 // `StackBase`/`StackLimit` are read by the kernel on entry and a call made with RSP outside them FAULTS, which
@@ -151,10 +149,10 @@ end 'x64OsProbesStackBounds'
 // where an edit to one could silently repoint one stack differently from the other. `topReg` is DESTROYED (it
 // becomes `top - size`); both callers hold `top` in a register they are otherwise done with.
 function emitRepointTibToSystemStack(code ByteArray, topReg X64Register)
-	encodeMovGsAbsReg(code, disp: TibStackBaseDisp, srcReg: topReg, wide: true)
+	encodeMovSegAbsReg(code, disp: TibStackBaseDisp, srcReg: topReg, wide: true, segment: TibSegment)
 	encodeGrp1RegImm32(code, ext: Grp1ExtSub, reg: topReg, imm: GtSystemStackSize as Imm32)
-	encodeMovGsAbsReg(code, disp: TibStackLimitDisp, srcReg: topReg, wide: true)
-	encodeMovGsAbsReg(code, disp: TebDeallocationStackDisp, srcReg: topReg, wide: true)
+	encodeMovSegAbsReg(code, disp: TibStackLimitDisp, srcReg: topReg, wide: true, segment: TibSegment)
+	encodeMovSegAbsReg(code, disp: TebDeallocationStackDisp, srcReg: topReg, wide: true, segment: TibSegment)
 end 'emitRepointTibToSystemStack'
 
 // The scratch registers the trampoline holds across the straight-line body: r12 = the GT (callee-saved, so it
@@ -473,9 +471,9 @@ end 'emitLoadCurrentMOrBail'
 //
 // ⭐ **IT IS ALSO UNREACHABLE, WHICH IS WHY THE ABSENCE IS AN ARGUMENT AND NOT A GAP.** Only two kinds of OS
 // thread run Maxon code on this lane and both have a block:
-//   * the MAIN thread, which gets one from `mrt_host_tls_alloc` inside `__sched_init_procs` — the same
-//     bring-up that publishes the offset word the FIRST test above reads, so "before the block exists" and
-//     "before the offset exists" are the same instant and that test already covers it;
+//   * the MAIN thread, which gets one from `mrt_linux_main_thread_block` as `mrt_runtime_init`'s first call —
+//     before `__sched_init_procs` publishes the offset word the FIRST test above reads, so every instant
+//     before the block exists is one that test already covers;
 //   * a WORKER M, which gets one through `CLONE_SETTLS` before it executes an instruction.
 // There is no third on this lane, where the system monitor is the only OS thread that never becomes an M —
 // which is exactly the thread the Windows arm's second null test exists for.

@@ -698,7 +698,6 @@ export type StdToArm64Lowering
 			osReservePages or
 			atomicCas or
 			atomicRmw or
-			currentThreadToken or
 			tlsAlloc or
 			tlsSetValue or
 			tlsSlotLoad or
@@ -1074,12 +1073,9 @@ export type StdToArm64Lowering
 			// call and an isel cannot hold it there (`Arm64DarwinRuntime`'s header carries the argument).
 			osThreadCpuTicks(_, outPtrId) then self.lowerOsThreadCpuTicks(outPtrId, dstRef: dstRef)
 
-			// The atomics and the per-thread identity word. Neither atomic is OS-routed — LDAXR/STLXR are ISA
-			// facts — while the token IS, because only one of the two OSes here has a thread-pointer register a raw
-			// static binary may read (see `lowerCurrentThreadToken`).
+			// Neither atomic is OS-routed — LDAXR/STLXR are ISA facts.
 			atomicCas(resultId, addrId, expectedId, replacementId) then self.lowerAtomicCas(resultId, addrId: addrId, expectedId: expectedId, replacementId: replacementId, dstRef: dstRef)
 			atomicRmw(resultId, addrId, operandId, opcode) then self.lowerAtomicRmw(resultId, addrId: addrId, operandId: operandId, opcode: opcode, dstRef: dstRef)
-			currentThreadToken(resultId) then self.lowerCurrentThreadToken(resultId, dstRef: dstRef)
 
 			// The slot read needs no call at all: Darwin's TSD array is at the masked thread pointer, so
 			// `pthread_getspecific(key)` is a base-plus-index load (`lowerTlsSlotLoad`).
@@ -1229,11 +1225,10 @@ export type StdToArm64Lowering
 			osReservePages then panic("StdToArm64Lowering: a page reserve or commit appeared as a block terminator (lowering bug — both are value-producing body ops, like the page allocation above)")
 			memFill then panic("StdToArm64Lowering: a `memFill` op appeared as a block terminator (lowering bug — a byte fill is a body op; its size dispatch branches INSIDE one macro-op's encoder, never between IR blocks)")
 
-			// All three are value-producing body ops. The CAS/RMW retry loop branches, but inside one macro-op's
+			// Both are value-producing body ops. The CAS/RMW retry loop branches, but inside one macro-op's
 			// encoder — never between IR blocks, exactly as the fill ladder above.
 			atomicCas or
-			atomicRmw or
-			currentThreadToken then panic("StdToArm64Lowering: an atomic or a thread-token read appeared as a block terminator (lowering bug — all three are value-producing body ops)")
+			atomicRmw then panic("StdToArm64Lowering: an atomic appeared as a block terminator (lowering bug — both are value-producing body ops)")
 
 			// None of the four terminates a block; two produce a value and two are void side effects.
 			tlsAlloc or
@@ -2789,7 +2784,7 @@ export type StdToArm64Lowering
 	end 'lowerTlsAlloc'
 
 	// An import on macOS and a chunk on Linux: `pthread_setspecific` works on any thread, while the
-	// Linux store needs a slot block, and a thread that never called `mrt_host_tls_alloc` has
+	// Linux store needs a slot block, and a thread without one has
 	// `TPIDR_EL0` = 0 — an assertion that needs a branch, so it needs a body
 	// (`Arm64LinuxRuntime.buildArm64LinuxTlsSetChunk`).
 	//
@@ -2991,28 +2986,6 @@ export type StdToArm64Lowering
 	function lowerOsLockImport(lockPtrId ValueId, importSlot OsImportSlot, chunk ByteArray, dstRef ElementIndex)
 		self.emitHostCall(dstRef, callee: self.hostCalleeOn(importSlot, linux: Arm64LinuxRoute.chunk(chunk)), args: argsOf(lockPtrId))
 	end 'lowerOsLockImport'
-
-	// Lower `currentThreadToken(result)` — the one member of this family with a genuine OS split on
-	// arm64, so it is routed through the same `arm64OsCallKind` door `mmapAnonPrivateFlags` and
-	// `madviseDecommitAdvice` already use rather than through a second `match os`.
-	//
-	// macOS: the masked thread pointer, `MRS TPIDRRO_EL0` + `LSR #3` + `LSL #3`, which needs no pthread
-	// key, no TSD dereference and no NULL-owner edge case.
-	// Linux: the `gettid` syscall. ⚠ `TPIDRRO_EL0` is NOT the answer there — the read-only thread ID
-	// register reads 0 unless something has written it, and the compiler's Linux lane is a raw static binary with
-	// no libc to do so. `StdOp.currentThreadToken` carries that argument in full.
-	function lowerCurrentThreadToken(resultId ValueId, dstRef ElementIndex)
-		match arm64OsCallKind(self.target.os) 'route'
-			importCall then self.emit(dstRef, op: TargetOp.arm64ThreadPointer(TargetVReg.virtual(resultId), source: Arm64ThreadPointerSource.darwinMaskedReadOnly))
-			syscall then self.lowerCurrentThreadTokenLinux(resultId, dstRef: dstRef)
-		end 'route'
-	end 'lowerCurrentThreadToken'
-
-	// It names the syscall directly rather than asking `hostCalleeOn`: this arm is already the Linux
-	// one, and there is no macOS import to name — the macOS answer is a register read, not a call.
-	function lowerCurrentThreadTokenLinux(resultId ValueId, dstRef ElementIndex)
-		self.lowerHostValue(resultId, callee: Arm64HostCallee.syscall(Arm64LinuxSyscallGettid), args: ValueIdArray.create(), dstRef: dstRef)
-	end 'lowerCurrentThreadTokenLinux'
 end 'StdToArm64Lowering'
 
 union Arm64HostCallee

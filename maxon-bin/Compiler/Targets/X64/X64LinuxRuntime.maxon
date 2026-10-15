@@ -61,8 +61,9 @@ export enum X64ThreadPointerSegment
 	// Windows: GS is the TIB.
 	gs
 
-	// Linux: FS is the SysV thread pointer, which on this lane is the scheduler's own slot block
-	// (`mrt_host_tls_alloc` maps it and `arch_prctl` publishes it — nothing else on a static image reads FS).
+	// Linux: FS is the SysV thread pointer, which on this lane is the runtime's own slot block
+	// (`mrt_linux_main_thread_block` publishes the main thread's with `arch_prctl`, `CLONE_SETTLS` a worker's —
+	// nothing else on a static image reads FS).
 	fs
 end 'X64ThreadPointerSegment'
 
@@ -105,11 +106,9 @@ export let X64LinuxSyscallExitGroup = 231
 export let X64LinuxSyscallMunmap = 11
 export let X64LinuxSyscallMadvise = 28
 
-// The per-thread identity word. `gettid` answers the calling thread's kernel thread id, which is
-// per-thread stable and never 0, i.e. exactly `StdOp.currentThreadToken`'s contract. It is asked instead of
-// reading `fs:[0]` because the compiler's Linux lane is a raw static binary with no libc, so nothing has set FS base
-// and that load would dereference address 0 — the op's own header carries the full argument. 186 on x86-64,
-// 178 on AArch64 (`Arm64Runtime`'s twin), which is exactly why these numbers wear the arch prefix.
+// `gettid` answers the kernel thread id `tgkill` addresses a preemption signal by
+// (`__gt_preempt_self_register`). 186 on x86-64, 178 on AArch64 (`Arm64Runtime`'s twin), which is exactly why
+// these numbers wear the arch prefix.
 export let X64LinuxSyscallGettid = 186
 
 // --- The clocks, the identity, the machine query and the green-thread floor ---
@@ -167,14 +166,12 @@ let X64LinuxSyscallMprotect = 10
 let X64LinuxSyscallClockNanosleep = 230
 let X64LinuxSyscallExit = 60
 
-// ⛔⛔⛔ **`arch_prctl`'s TWO SUBFUNCTIONS, AND THE WHOLE OF WHY x86-64 NEEDS A CALL WHERE AArch64 NEEDS
-// NONE.** `TPIDR_EL0` is an ordinary system register an `msr` writes; FS base is not addressable in user
-// mode at all without `FSGSBASE`, so the only way to publish this OS thread's slot block is this syscall —
-// and the only way to READ it back is `ARCH_GET_FS`, which writes through a pointer rather than answering in
-// a register. Both are spent exclusively in `mrt_host_tls_alloc`, which runs once per OS thread at bring-up;
-// every HOT read of the block goes through the segment override instead and enters no kernel.
+// ⛔⛔⛔ **`arch_prctl(ARCH_SET_FS)`, AND THE WHOLE OF WHY x86-64 NEEDS A CALL WHERE AArch64 NEEDS NONE.**
+// `TPIDR_EL0` is an ordinary system register an `msr` writes; FS base is not addressable in user mode at all
+// without `FSGSBASE`, so the only way to publish the main thread's slot block is this syscall, spent once in
+// `mrt_linux_main_thread_block`. Every HOT read of the block goes through the segment override instead and
+// enters no kernel.
 let X64LinuxArchSetFs = 0x1002
-let X64LinuxArchGetFs = 0x1003
 
 // --- The child-process band ---
 let X64LinuxSyscallPipe2 = 293
@@ -393,19 +390,20 @@ end 'x64LinuxRuntimeGlobals'
 // ⭐⭐ **THE WORD THAT SAYS WHETHER PER-OS-THREAD SLOT BLOCKS EXIST YET — an x86-64-only need, and its
 // absence on the other lane is the measure of what a readable thread pointer buys.** arm64 answers the same
 // question with one free `cbz` on `TPIDR_EL0`; here the equivalent load would go through FS with base 0,
-// which is a wild read of the null page rather than a test. `mrt_host_tls_alloc` raises it on the first call
-// of the process and nothing lowers it, which is why `sealedBeforeWorkers` is the honest class: the raise
-// happens during `__sched_init_procs`, before any second thread can exist.
+// which is a wild read of the null page rather than a test. `mrt_linux_main_thread_block` raises it as
+// `mrt_runtime_init`'s first call and nothing lowers it, which is why `sealedBeforeWorkers` is the honest
+// class: no second thread can exist yet.
 //
-// ⚠ It is laid out on the same gate the errno word is, because it is only ever read to decide WHERE that
-// word lives. A program with no scheduler carries it holding 0 for the whole run, which is the answer.
+// ⚠ It is laid out on the same gate the errno word is, because it is read to decide WHERE that word lives.
+// A program without the host lock maps no block and starts no thread, so it carries the flag holding 0 for
+// the whole run, which is the answer.
 let X64LinuxTlsReadyLabel = b"__mrt_tls_ready"
 
 // SLOT 0 of a per-OS-thread block is that thread's `errno`. It is not merely the first unissued key: the
 // scheduler's own keys start at `LinuxTlsFirstKey` so that a slot offset of 0 keeps meaning *"the scheduler
 // has not started"* to every current-P reader, and the word that offset addresses is therefore free for this.
 // Both Linux lanes reserve it the same way.
-let X64LinuxErrnoSlotOffset = 0
+module let X64LinuxErrnoSlotOffset = 0
 
 // ==========================================================================
 // struct stat (x86-64)
@@ -471,14 +469,13 @@ end 'x64LinuxEmitPublishErrno'
 // override. The branch is therefore around the whole access rather than around the address computation.
 //
 // ⚠ **THE PREDICATE IS PROCESS-WIDE AND THAT IS SOUND RATHER THAN APPROXIMATE.** Every OS thread that runs
-// code on this lane has a slot block: the MAIN thread gets one from `mrt_host_tls_alloc` inside
-// `__sched_init_procs`, and every thread `mrt_host_thread_create` starts — a worker M or `__sysmon` — gets
-// one through `CLONE_SETTLS` before it executes an instruction. `ioCompletionShape(linux)` is
-// `inlineCompletion`, so nothing else is started at all.
-// ⇒ once ANY thread has a block, EVERY thread has one, and the only window in which the flag reads 0 is the
-// one before `__sched_init_procs` — where this process is single-threaded and the `.data` word is exactly
-// right. The flag cannot be replaced by a load through FS: with FS base 0 that load is a wild read of the
-// null page, which is the fault the test exists to prevent.
+// code in a program that carries the host lock has a slot block: the MAIN thread gets one from
+// `mrt_linux_main_thread_block` as `mrt_runtime_init`'s first call, and every thread `mrt_host_thread_create`
+// starts — a worker M or `__sysmon` — gets one through `CLONE_SETTLS` before it executes an instruction.
+// `ioCompletionShape(linux)` is `inlineCompletion`, so nothing else is started at all.
+// ⇒ the flag reads 0 only in a program without the host lock, which starts no second thread, so the `.data`
+// word is exactly right there. The flag cannot be replaced by a load through FS: with FS base 0 that load is
+// a wild read of the null page, which is the fault the test exists to prevent.
 //
 // ⚠ It clobbers rdi and the flags. rax is untouched, which is the contract every caller in this file rests
 // on — `x64LinuxEmitStashIfFailed` takes its own `cmp` before the stash and every consumer re-compares after.
@@ -492,7 +489,7 @@ function x64LinuxEmitStoreErrno(asm X64RuntimeAsm, valueReg X64Register)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: stored)
 
 	asm.placeLabel(perThread)
-	x64LinuxEmitWriteThreadErrnoSlot(asm.code, base: X64Register.rdi, srcReg: valueReg)
+	x64LinuxEmitWriteThreadSlot(asm.code, srcReg: valueReg, slotOffset: X64LinuxErrnoSlotOffset)
 
 	asm.placeLabel(stored)
 end 'x64LinuxEmitStoreErrno'
@@ -509,20 +506,18 @@ function x64LinuxEmitLoadErrno(asm X64RuntimeAsm, destReg X64Register)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: loaded)
 
 	asm.placeLabel(perThread)
-	x64LinuxEmitReadThreadErrnoSlot(asm.code, dest: destReg, base: destReg)
+	x64LinuxEmitReadThreadSlot(asm.code, dest: destReg, slotOffset: X64LinuxErrnoSlotOffset)
 
 	asm.placeLabel(loaded)
 end 'x64LinuxEmitLoadErrno'
 
-module function x64LinuxEmitReadThreadErrnoSlot(code ByteArray, dest X64Register, base X64Register)
-	encodeMovRegImm32(code, dest: base, value: X64LinuxErrnoSlotOffset)
-	encodeMovRegSegBase(code, dest: dest, base: base, segment: x64ThreadPointerSegment(Os.linux))
-end 'x64LinuxEmitReadThreadErrnoSlot'
+module function x64LinuxEmitReadThreadSlot(code ByteArray, dest X64Register, slotOffset FullRangeInt)
+	encodeMovRegSegAbs(code, dest: dest, disp: slotOffset as Imm32, wide: true, segment: x64ThreadPointerSegment(Os.linux))
+end 'x64LinuxEmitReadThreadSlot'
 
-module function x64LinuxEmitWriteThreadErrnoSlot(code ByteArray, base X64Register, srcReg X64Register)
-	encodeMovRegImm32(code, dest: base, value: X64LinuxErrnoSlotOffset)
-	encodeMovSegBaseReg(code, base: base, srcReg: srcReg, segment: x64ThreadPointerSegment(Os.linux))
-end 'x64LinuxEmitWriteThreadErrnoSlot'
+module function x64LinuxEmitWriteThreadSlot(code ByteArray, srcReg X64Register, slotOffset FullRangeInt)
+	encodeMovSegAbsReg(code, disp: slotOffset as Imm32, srcReg: srcReg, wide: true, segment: x64ThreadPointerSegment(Os.linux))
+end 'x64LinuxEmitWriteThreadSlot'
 
 // `scratch = __mrt_tls_ready ; if (scratch) goto whenReady` — the shared head of the two above.
 function x64LinuxEmitTestTlsReady(asm X64RuntimeAsm, scratch X64Register, whenReady BlockId)
@@ -2486,6 +2481,7 @@ function buildX64LinuxThreadCreateChunk() returns FunctionCodeChunk
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: releaseStack)
 
 	asm.placeLabel(tlsMapped)
+	x64LinuxEmitStoreBlockSelfAddress(asm.code, block: X64Register.rax)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTls), srcReg: X64Register.rax, wide: true)
 
 	// The waitable handle, and the join word inside it, published RUNNING before the thread can clear it.
@@ -2767,10 +2763,11 @@ end 'buildX64LinuxLockInitChunk'
 // `EnterCriticalSection`, running `LinuxMutexHeldContended`'s three-compare-and-swap acquire protocol.
 //
 // ⭐ **THE UNCONTENDED PATH IS ONE `lock cmpxchg` AND NO SYSCALL, WHICH IS THE WHOLE POINT OF A FUTEX.** The
-// kernel is entered only when the word is already held.
+// kernel is entered only when the word is already held. The owner token is one load through FS of the
+// block's self slot (`linuxTlsSelfSlotIndex`).
 function buildX64LinuxLockEnterChunk() returns FunctionCodeChunk
 	let SlotRegion = 0 as StackSize
-	let SlotTid = 1 as StackSize
+	let SlotToken = 1 as StackSize
 	var asm = X64RuntimeAsm.beginFunction(2)
 
 	let acquire = asm.newLabel()
@@ -2779,8 +2776,8 @@ function buildX64LinuxLockEnterChunk() returns FunctionCodeChunk
 	let done = asm.newLabel()
 
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRegion), srcReg: X64Register.rcx, wide: true)
-	encodeX64Syscall(asm.code, number: X64LinuxSyscallGettid)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTid), srcReg: X64Register.rax, wide: true)
+	x64LinuxEmitReadThreadSlot(asm.code, dest: X64Register.rax, slotOffset: linuxTlsSelfSlotOffset())
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotToken), srcReg: X64Register.rax, wide: true)
 
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotRegion), wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rcx, disp: LinuxLockOffOwner as Imm32, wide: true)
@@ -2805,7 +2802,7 @@ function buildX64LinuxLockEnterChunk() returns FunctionCodeChunk
 
 	asm.placeLabel(owned)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotRegion), wide: true)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotTid), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotToken), wide: true)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: LinuxLockOffOwner as Imm32, srcReg: X64Register.rdx, wide: true)
 	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: LinuxMutexFirstEntry)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: LinuxLockOffDepth as Imm32, srcReg: X64Register.rdx, wide: true)
@@ -2856,15 +2853,7 @@ end 'buildX64LinuxLockLeaveChunk'
 // mrt_host_tls_alloc() -> rax = the per-OS-thread slot key
 // ==========================================================================
 
-// `TlsAlloc()` — reserve one per-OS-thread slot and answer its index. On the first call from a given OS
-// thread it also MAPS that thread's slot block and publishes its base in FS, because on this lane there is
-// no libc to have done so.
-//
-// ⛔⛔ **THE "DOES THIS THREAD HAVE A BLOCK?" TEST IS A SYSCALL HERE AND ONE `cbz` ON THE OTHER LANE, AND
-// THAT IS THE WHOLE COST OF AN UNREADABLE THREAD POINTER.** `arch_prctl(ARCH_GET_FS, &out)` writes the base
-// through a pointer rather than answering in a register, so the test needs this chunk's frame. It is
-// affordable exactly because this is bring-up: `__sched_init_procs` is the only caller and it runs once per
-// key. Every HOT read of the block goes through the segment override and enters no kernel at all.
+// `TlsAlloc()` — reserve one per-OS-thread slot and answer its index.
 //
 // ⚠ **THE KEY COUNTER IS PROCESS-WIDE WHILE THE BLOCK IS PER-THREAD**, which is `pthread_key_create`'s own
 // arrangement: a key names the same offset in every thread's block. Its `sealedBeforeWorkers` class is what
@@ -2874,58 +2863,14 @@ end 'buildX64LinuxLockLeaveChunk'
 // as "the scheduler has not started" — a scheduler that silently never runs, with no crash to find it by.
 // The counter pre-increments so the first key is 1; this is the check that says so out loud.
 function buildX64LinuxTlsAllocChunk() returns FunctionCodeChunk
-	let SlotFsBase = 0 as StackSize
-	var asm = X64RuntimeAsm.beginFunction(1)
+	var asm = X64RuntimeAsm.beginFunction(0)
 
-	let mapped = asm.newLabel()
-	let published = asm.newLabel()
-	let haveBlock = asm.newLabel()
 	let keyOk = asm.newLabel()
 
-	// ⚠ **THE SLOT IS ZEROED BEFORE THE READ BECAUSE `beginFunction` DOES NOT ZERO THE FRAME.** `arch_prctl`
-	// writes it only on success, so a refused GET would otherwise leave the test reading stack garbage — and a
-	// non-zero garbage word says "this thread already has a block" and skips the mapping. Zero routes a failed
-	// GET to the map path, which is the answer a thread with no readable FS base needs.
-	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 0)
-	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFsBase), srcReg: X64Register.rax, wide: true)
-
-	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: X64LinuxArchGetFs)
-	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotFsBase))
-	encodeX64Syscall(asm.code, number: X64LinuxSyscallArchPrctl)
-	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotFsBase), wide: true)
-	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: haveBlock)
-
-	encodeX64MmapAnon(asm.code, length: X64MapLength.fixed(LinuxHostObjectPageBytes))
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: mapped)
-	x64LinuxEmitPanicConstant(asm, bytes: LinuxTlsMapFailedMessage)
-
-	asm.placeLabel(mapped)
-	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rsi, src: X64Register.rax, wide: true)
-	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: X64LinuxArchSetFs)
-	encodeX64Syscall(asm.code, number: X64LinuxSyscallArchPrctl)
-
-	// ⛔ **A REFUSED `ARCH_SET_FS` IS A PANIC, AND IT MUST BE CAUGHT BEFORE THE FLAG GOES UP.** The flag says
-	// "every thread's slot block is reachable through FS"; raised over a base of 0 it sends every later errno
-	// stash through the null page — precisely the fault the flag exists to prevent, and a SIGSEGV a long way
-	// from its cause. This runs once per OS thread at bring-up, so the check costs nothing that matters.
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: published)
-	x64LinuxEmitPanicConstant(asm, bytes: X64LinuxTlsPublishFailedMessage)
-
-	asm.placeLabel(published)
-
-	// ⭐ RAISE THE PROCESS-WIDE FLAG the errno access reads (`x64LinuxEmitStoreErrno` carries why a per-thread
-	// test is unaffordable there and why a process-wide one is sound). It is raised AFTER FS is published, so
-	// no reader can be sent to a block that does not exist yet.
-	emitStoreGlobalImm(asm, label: X64LinuxTlsReadyLabel, value: X64LinuxTlsBlocksAreLive, width: X64AccessWidth.word64, through: X64Register.rdi)
-
-	asm.placeLabel(haveBlock)
 	encodeLeaRegGlobal(asm.code, rdataRelocs: asm.rdataRelocs, dest: X64Register.rdi, label: LinuxTlsNextKeyLabel)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rdi, disp: 0, wide: true)
 	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAdd, reg: X64Register.rax, imm: LinuxTlsFirstKey as Imm32)
-	emitCmpRegImm(asm, reg: X64Register.rax, imm: linuxTlsSlotCount() as Imm32)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: linuxTlsSelfSlotIndex() as Imm32)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.below, targetBlockId: keyOk)
 	x64LinuxEmitPanicConstant(asm, bytes: LinuxTlsExhaustedMessage)
 
@@ -2934,8 +2879,47 @@ function buildX64LinuxTlsAllocChunk() returns FunctionCodeChunk
 	return asm.finishFunction(HostTlsAllocName)
 end 'buildX64LinuxTlsAllocChunk'
 
-// What `mrt_host_tls_alloc` raises the flag to. A bare 1 at the one site that writes it says nothing about
-// which of this file's several 1s it is.
+function buildX64LinuxMainThreadBlockChunk(raisesTlsReady bool) returns FunctionCodeChunk
+	var asm = X64RuntimeAsm.beginFunction(0)
+
+	let mapped = asm.newLabel()
+	let published = asm.newLabel()
+
+	encodeX64MmapAnon(asm.code, length: X64MapLength.fixed(LinuxHostObjectPageBytes))
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: mapped)
+	x64LinuxEmitPanicConstant(asm, bytes: LinuxTlsMapFailedMessage)
+
+	asm.placeLabel(mapped)
+	x64LinuxEmitStoreBlockSelfAddress(asm.code, block: X64Register.rax)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rsi, src: X64Register.rax, wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: X64LinuxArchSetFs)
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallArchPrctl)
+
+	// Checked before the flag goes up: raised over an FS base of 0, the flag sends every errno access through
+	// the null page, a SIGSEGV a long way from its cause.
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: published)
+	x64LinuxEmitPanicConstant(asm, bytes: X64LinuxTlsPublishFailedMessage)
+
+	asm.placeLabel(published)
+
+	if raisesTlsReady 'raiseFlag'
+		emitStoreGlobalImm(asm, label: X64LinuxTlsReadyLabel, value: X64LinuxTlsBlocksAreLive, width: X64AccessWidth.word64, through: X64Register.rdi)
+	end 'raiseFlag'
+
+	return asm.finishFunction(LinuxMainThreadBlockName)
+end 'buildX64LinuxMainThreadBlockChunk'
+
+// Stored before the block is published (`ARCH_SET_FS`, or the `clone` that hands it over with `CLONE_SETTLS`
+// and may run the worker at once): a token of 0 matches a free lock's empty owner word, so the recursive
+// path would enter the lock without taking it.
+function x64LinuxEmitStoreBlockSelfAddress(code ByteArray, block X64Register)
+	encodeStoreBaseDispReg(code, base: block, disp: linuxTlsSelfSlotOffset() as Imm32, srcReg: block, wide: true)
+end 'x64LinuxEmitStoreBlockSelfAddress'
+
+// What `mrt_linux_main_thread_block` raises the flag to. A bare 1 at the one site that writes it says
+// nothing about which of this file's several 1s it is.
 let X64LinuxTlsBlocksAreLive = 1
 
 // ==========================================================================
@@ -2947,10 +2931,10 @@ let X64LinuxTlsBlocksAreLive = 1
 // BLOCK, and a thread that has none would write `key * 8` bytes into the null page.
 //
 // ⛔ **A MISSING BLOCK IS A PANIC, NOT A STORE THROUGH ZERO.** Every thread that reaches this call has one —
-// the main thread from `mrt_host_tls_alloc`, a worker M from the `CLONE_SETTLS` in `mrt_host_thread_create` —
-// so this is the check that keeps that true rather than assumed. It reads the same process-wide flag the
-// errno access does, for that helper's stated reason: on x86-64 the per-thread question costs a syscall, and
-// the process-wide one is exactly as strong for the two kinds of thread this lane has.
+// the main thread from `mrt_linux_main_thread_block`, a worker M from the `CLONE_SETTLS` in
+// `mrt_host_thread_create` — so this is the check that keeps that true rather than assumed. It reads the same
+// process-wide flag the errno access does, for that helper's stated reason: on x86-64 the per-thread question
+// costs a syscall, and the process-wide one is exactly as strong for the two kinds of thread this lane has.
 function buildX64LinuxTlsSetChunk() returns FunctionCodeChunk
 	var asm = X64RuntimeAsm.beginFunction(0)
 
@@ -2966,9 +2950,9 @@ function buildX64LinuxTlsSetChunk() returns FunctionCodeChunk
 	return asm.finishFunction(LinuxTlsSetName)
 end 'buildX64LinuxTlsSetChunk'
 
-let X64LinuxTlsPublishFailedMessage = b"panic: the green-thread scheduler could not publish this OS thread's slot block (arch_prctl(ARCH_SET_FS) failed)\n"
+let X64LinuxTlsPublishFailedMessage = b"panic: the runtime could not publish the main thread's slot block (arch_prctl(ARCH_SET_FS) failed)\n"
 
-let X64LinuxTlsNoBlockMessage = b"panic: an OS thread asked to write a scheduler slot before any slot block existed -- on x64-linux the FS base is the block base and only mrt_host_tls_alloc sets it\n"
+let X64LinuxTlsNoBlockMessage = b"panic: an OS thread asked to write a scheduler slot before any slot block existed -- on x64-linux the FS base is the block base, set by mrt_linux_main_thread_block for the main thread and by CLONE_SETTLS for every other\n"
 
 // ==========================================================================
 // THE CHILD-PROCESS BAND
@@ -4327,6 +4311,7 @@ export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, u
 		chunks.push(buildX64LinuxLockInitChunk())
 		chunks.push(buildX64LinuxLockEnterChunk())
 		chunks.push(buildX64LinuxLockLeaveChunk())
+		chunks.push(buildX64LinuxMainThreadBlockChunk(linuxTouchesErrnoWord(usage)))
 	end 'hostLock'
 
 	// ⭐ **THE GREEN-THREAD FLOOR, ON ONE BIT.** `usesGt` is the bit `installGtRuntime` itself was gated

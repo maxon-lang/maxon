@@ -85,11 +85,9 @@ export let Arm64LinuxSyscallExitGroup = 94
 export let Arm64LinuxSyscallMunmap = 215
 export let Arm64LinuxSyscallMadvise = 233
 
-// The per-thread identity word. `gettid` answers the calling thread's kernel thread id: per-thread
-// stable and never 0, which is exactly `StdOp.currentThreadToken`'s contract. It is asked instead of reading
-// `TPIDR_EL0` because the compiler's Linux lane is a raw static binary with no libc, so nothing has written that
-// register and it reads 0 — the op's own header carries the full argument. 178 on AArch64, 186 on x86-64
-// (`X64LinuxRuntime`'s twin), which is exactly why these numbers wear the arch prefix.
+// `gettid` answers the kernel thread id `tgkill` addresses a preemption signal by
+// (`__gt_preempt_self_register`). 178 on AArch64, 186 on x86-64 (`X64LinuxRuntime`'s twin), which is exactly
+// why these numbers wear the arch prefix.
 export let Arm64LinuxSyscallGettid = 178
 
 // ⭐⭐ **ASYNCHRONOUS PREEMPTION'S THREE, AND THE `ucontext` THE KERNEL SAVES A STOPPED THREAD'S FILE INTO.**
@@ -316,23 +314,17 @@ let Arm64LinuxOpenDirectoryFlags = 0o40000
 // difference is only that the storage is the scheduler's own slot block rather than a `__thread` the linker
 // laid out, plus the `.data` word below for a thread that has no block.
 //
-// ⭐⭐⭐ **THE WORD WENT PER-M THE DAY THIS LANE GREW A REAL `clone`, WHICH IS THE DAY ITS OWN NOTE SAID IT
-// WOULD HAVE TO.** That note read: *"THE OBLIGATION IS THEREFORE RE-POINTED, NOT DISCHARGED: the day this
-// lane starts an OS THREAD, this slot must go per-M … that day is the day `osThreadCreate` grows a real
-// `clone`, and the abort there is what will announce it."* The abort announced it, and this is the fix
-// rather than a third re-pointing: with two Ms making syscalls at once, a `-errno` stashed by one and read
-// by `mrt_host_last_error` on the other is a WRONG `FileError` — a silent wrong answer, not a crash, on a
-// lane where nothing would notice.
+// ⭐⭐⭐ **THE WORD IS PER-M BECAUSE THIS LANE HAS A REAL `clone`.** With two Ms making syscalls at once, a
+// `-errno` stashed by one and read by `mrt_host_last_error` on the other is a WRONG `FileError` — a silent
+// wrong answer, not a crash, on a lane where nothing would notice.
 //
 // ⇒ **`arm64LinuxEmitErrnoAddr` IS THE ADDRESS EVERY READER AND EVERY WRITER GOES THROUGH**, and it answers
 // this OS thread's own slot whenever the thread has one. This `.data` word is what is left: the storage for
-// a thread that has never asked the scheduler for a slot block, which is every thread of a program with no
-// green threads in it, and the main thread of a green-threaded one up to `__sched_init_procs`.
+// a thread with no slot block, which is the one thread of a program without the host lock.
 //
-// ⇒ **AND ITS SHARING CLASS FOLLOWS THE FIX.** It was `lastWriterWins` — one word whose contract never said
-// which writer wins — and it is `sealedBeforeWorkers` now, which is stronger and is true by construction:
-// once `mrt_host_tls_alloc` has published a block for a thread, that thread never writes here again, and
-// `__sched_init_procs` (which allocates the scheduler's key) is the same bring-up no worker M can race.
+// ⇒ **AND ITS SHARING CLASS IS `sealedBeforeWorkers`, TRUE BY CONSTRUCTION:** a program that starts a worker
+// carries the host lock, so every one of its threads has a block from its first instruction and none writes
+// here.
 
 // The `.data` slot this lane lays out. Gated on the FACILITIES that stash into it rather than on the target
 // alone: a Linux program that touches no file, no directory and no standard input never writes the word, so
@@ -401,11 +393,10 @@ let Arm64LinuxTimespecNsecSlot = 2 as StackSize
 // ==========================================================================
 
 // ⭐⭐ **THE ADDRESS OF *THIS OS THREAD's* errno WORD — the one door every stash and the one read go
-// through.** `TPIDR_EL0` is this lane's per-OS-thread slot block (`mrt_host_tls_alloc`), and SLOT 0 of it is
-// this word: the scheduler's own keys start at `LinuxTlsFirstKey`, so slot 0 was already never handed out
-// and is now RESERVED rather than merely unused. A thread that has no block yet — every thread of a program
-// with no scheduler, and the main thread before `__sched_init_procs` — falls back to the process-wide
-// `.data` word, which is sound because at that moment it is the only thread there is.
+// through.** `TPIDR_EL0` is this lane's per-OS-thread slot block, and SLOT 0 of it is this word: the
+// scheduler's own keys start at `LinuxTlsFirstKey`, so slot 0 is never handed out and is RESERVED rather than
+// merely unused. A thread with no block — the one thread of a program without the host lock — falls back to
+// the process-wide `.data` word, which is sound because it is the only thread there is.
 // `__gt_context_switch` also moves the per-thread word in and out of each green thread
 // (`GtRuntime.GtOffLastError`), through `arm64LinuxEmitBranchIfThreadHasErrnoSlot`, and carries
 // nothing on a thread with no block.
@@ -1545,9 +1536,9 @@ end 'buildArm64LinuxDirFindCloseChunk'
 // opaque struct from every object below.
 //
 // ⚠ **AND ONE THING IT HAS THAT DARWIN DOES NOT NEED: A WRITABLE THREAD POINTER.** `pthread_getspecific` is
-// a base-plus-index load off a TSD array libSystem maintains; here there is nothing to maintain one, so
-// `mrt_host_tls_alloc` maps a page and publishes it in `TPIDR_EL0` — a register nothing else on a static
-// image touches. `Arm64Backend.arm64EmitThreadPointer` carries the two-register split.
+// a base-plus-index load off a TSD array libSystem maintains; here there is nothing to maintain one, so the
+// runtime maps a page per thread and publishes it in `TPIDR_EL0` — a register nothing else on a static image
+// touches. `Arm64Backend.arm64EmitThreadPointer` carries the two-register split.
 
 // `futex(uaddr, op, val, timeout, uaddr2, val3)` — the one call shape all four users below marshal, with the
 // address taken from a frame slot because every caller has just clobbered the register it arrived in.
@@ -2123,10 +2114,11 @@ end 'buildArm64LinuxLockInitChunk'
 // ⭐ **THE UNCONTENDED PATH IS ONE `cas` AND NO SYSCALL, WHICH IS THE WHOLE POINT OF A FUTEX.** The kernel is
 // entered only when the word is already held; on this lane, where the high-water mark of active worker Ms is
 // ONE (`specs/builtins-cpu-parallel.md` pins it), the contended path is unreachable and is written for
-// correctness rather than for use.
+// correctness rather than for use. The owner token is `TPIDR_EL0` itself, this thread's slot block
+// address.
 function buildArm64LinuxLockEnterChunk() returns FunctionCodeChunk
 	let SlotRegion = 0 as StackSize
-	let SlotTid = 1 as StackSize
+	let SlotToken = 1 as StackSize
 	var asm = Arm64RuntimeAsm.beginFunction(2)
 
 	let acquire = asm.newLabel()
@@ -2135,8 +2127,8 @@ function buildArm64LinuxLockEnterChunk() returns FunctionCodeChunk
 	let done = asm.newLabel()
 
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotRegion)
-	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallGettid)
-	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotTid)
+	arm64EmitThreadPointer(asm.code, dest: arm64RuntimeReg(Arm64Register.x0), source: Arm64ThreadPointerSource.linuxWritable)
+	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotToken)
 
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotRegion)
 	arm64EmitLoadWord64At(asm, dest: Arm64Register.x2, base: Arm64Register.x1, byteOffset: LinuxLockOffOwner)
@@ -2161,7 +2153,7 @@ function buildArm64LinuxLockEnterChunk() returns FunctionCodeChunk
 
 	asm.placeLabel(owned)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotRegion)
-	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotTid)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x2, slot: SlotToken)
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x2, base: Arm64Register.x1, byteOffset: LinuxLockOffOwner)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: LinuxMutexFirstEntry)
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x2, base: Arm64Register.x1, byteOffset: LinuxLockOffDepth)
@@ -2213,9 +2205,7 @@ end 'buildArm64LinuxLockLeaveChunk'
 // mrt_host_tls_alloc() -> x0 = the per-OS-thread slot key
 // ==========================================================================
 
-// `TlsAlloc()` — reserve one per-OS-thread slot and answer its index. On the first call from a given OS
-// thread it also MAPS that thread's slot block and publishes its base in `TPIDR_EL0`, because on this lane
-// there is no libc to have done so (see `LinuxHostObjectPageBytes`).
+// `TlsAlloc()` — reserve one per-OS-thread slot and answer its index.
 //
 // ⚠ **THE KEY COUNTER IS PROCESS-WIDE WHILE THE BLOCK IS PER-THREAD**, and that is the same arrangement
 // `pthread_key_create` has: a key names the same offset in every thread's block. Its `sealedBeforeWorkers`
@@ -2229,25 +2219,12 @@ end 'buildArm64LinuxLockLeaveChunk'
 function buildArm64LinuxTlsAllocChunk(globalData GlobalDataTable) returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginFunction(0)
 
-	let mapped = asm.newLabel()
-	let haveBlock = asm.newLabel()
 	let keyOk = asm.newLabel()
 
-	arm64EmitThreadPointer(asm.code, dest: arm64RuntimeReg(Arm64Register.x0), source: Arm64ThreadPointerSource.linuxWritable)
-	arm64EmitCbnzTo(asm, reg: Arm64Register.x0, label: haveBlock)
-	arm64LinuxEmitMapAnon(asm, byteSize: LinuxHostObjectPageBytes as MachineWord)
-	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: mapped)
-	arm64EmitPanicConstant(asm, globalData: globalData, bytes: LinuxTlsMapFailedMessage)
-
-	asm.placeLabel(mapped)
-	arm64EmitSetThreadPointer(asm.code, src: arm64RuntimeReg(Arm64Register.x0))
-
-	asm.placeLabel(haveBlock)
 	arm64EmitDataAddr(asm, dest: Arm64Register.x16, label: LinuxTlsNextKeyLabel)
 	arm64EmitLoadWord64At(asm, dest: Arm64Register.x1, base: Arm64Register.x16, byteOffset: 0)
 	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x1, base: Arm64Register.x1, imm: LinuxTlsFirstKey as Imm32)
-	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x1, imm: linuxTlsSlotCount() as Imm32)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x1, imm: linuxTlsSelfSlotIndex() as Imm32)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lo, label: keyOk)
 	arm64EmitPanicConstant(asm, globalData: globalData, bytes: LinuxTlsExhaustedMessage)
 
@@ -2257,22 +2234,36 @@ function buildArm64LinuxTlsAllocChunk(globalData GlobalDataTable) returns Functi
 	return asm.finishFunction(HostTlsAllocName)
 end 'buildArm64LinuxTlsAllocChunk'
 
+function buildArm64LinuxMainThreadBlockChunk(globalData GlobalDataTable) returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginFunction(0)
+
+	let mapped = asm.newLabel()
+
+	arm64LinuxEmitMapAnon(asm, byteSize: LinuxHostObjectPageBytes as MachineWord)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: 0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ge, label: mapped)
+	arm64EmitPanicConstant(asm, globalData: globalData, bytes: LinuxTlsMapFailedMessage)
+
+	asm.placeLabel(mapped)
+	arm64EmitSetThreadPointer(asm.code, src: arm64RuntimeReg(Arm64Register.x0))
+	return asm.finishFunction(LinuxMainThreadBlockName)
+end 'buildArm64LinuxMainThreadBlockChunk'
+
 // ==========================================================================
 // mrt_linux_tls_set(x0 = key, x1 = value)
 // ==========================================================================
 
 // `TlsSetValue(key, value)` — `pthread_setspecific` on the other lane, and there ONE import call with no
 // chunk at all. It is a chunk here because it owes an assertion that lane does not: `pthread_setspecific`
-// works on any thread, while this store needs a BLOCK, and a thread that never called `mrt_host_tls_alloc`
-// has `TPIDR_EL0` = 0.
+// works on any thread, while this store needs a BLOCK, and a thread without one has `TPIDR_EL0` = 0.
 //
 // ⛔ **A NULL THREAD POINTER IS A PANIC, NOT A STORE THROUGH ZERO.** Every thread that reaches this call has
-// a block — the main thread from `mrt_host_tls_alloc`, a worker M from the `CLONE_SETTLS` in
+// a block — the main thread from `mrt_linux_main_thread_block`, a worker M from the `CLONE_SETTLS` in
 // `mrt_host_thread_create` — so this is the check that keeps that true rather than assumed, and it names the
 // gap instead of writing `key * 8` bytes into the null page. ⚠ It is exactly the check that would have fired
 // had the worker M's `clone` been written without `CLONE_SETTLS`: `__sched_worker_loop`'s first act is the
 // `tlsSetValue` that adopts its P.
-let LinuxTlsNoBlockMessage = b"panic: an OS thread asked to write a scheduler slot without ever having been given a slot block -- on arm64-linux `TPIDR_EL0` is the block base and only `mrt_host_tls_alloc` sets it\n"
+let LinuxTlsNoBlockMessage = b"panic: an OS thread asked to write a scheduler slot without ever having been given a slot block -- on arm64-linux `TPIDR_EL0` is the block base, set by `mrt_linux_main_thread_block` for the main thread and by `CLONE_SETTLS` for every other\n"
 
 function buildArm64LinuxTlsSetChunk(globalData GlobalDataTable) returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginFunction(0)
@@ -3101,6 +3092,7 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 		chunks.push(buildArm64LinuxLockInitChunk())
 		chunks.push(buildArm64LinuxLockEnterChunk())
 		chunks.push(buildArm64LinuxLockLeaveChunk())
+		chunks.push(buildArm64LinuxMainThreadBlockChunk(globalData))
 	end 'hostLock'
 
 	// ⭐ **THE GREEN-THREAD FLOOR, ON ONE BIT.** `usesGt` is the bit `installGtRuntime` itself was gated on,

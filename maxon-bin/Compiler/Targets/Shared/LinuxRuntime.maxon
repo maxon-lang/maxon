@@ -500,11 +500,13 @@ export let LinuxHostObjectPageBytes = 4096
 // here, and a raw futex is not re-entrant — the owner and the depth beside it are what make it so.
 //
 // The three words: a futex at offset 0 (0 = free, 1 = held with no waiter, 2 = held and someone is asleep on
-// it), the owning thread's `gettid`, and how many times that owner has taken it.
+// it), the owning thread's token (the address of its slot block), and how many times that owner has taken
+// it.
 //
 // ⚠ **THE OWNER WORD IS READ WITHOUT SYNCHRONISATION AND THAT IS SOUND**, for a reason that does not
-// generalise: the only value a thread can act on is ITS OWN tid, and no other thread can write that there —
-// a non-owner reads 0 or somebody else's tid, and both send it to the acquire path.
+// generalise: the only value a thread can act on is ITS OWN token, and no other thread can write that there —
+// a non-owner reads 0 or somebody else's token, and both send it to the acquire path. Slot blocks are
+// process-lifetime, so no live thread's token is ever another thread's.
 //
 // ⚠ **THE REGION IS NOT ZEROED BY ANYONE ELSE, SO `osLockInit` WRITES ALL THREE WORDS.** Its allocator is the
 // slab, whose pages come from `mmap` and ARE zero on first use — but a region reused after a free is not, and
@@ -548,8 +550,9 @@ export let LinuxMutexReleaseStep = 0xFFFFFFFFFFFFFFFF as MachineWord
 // ⭐⭐ **THE PER-OS-THREAD SLOT BLOCK, WHOSE BASE IS THE ARCH's OWN THREAD POINTER** — `TPIDR_EL0` on AArch64,
 // the FS base on x86-64. A static image links no libc, so there is no `pthread_getspecific` to call and no
 // TSD array to index — and by the same token NOTHING ELSE READS OR WRITES THE WRITABLE THREAD POINTER, which
-// makes it free for the scheduler to define. One page per OS thread, `mmap`'d by `mrt_host_tls_alloc` the
-// first time that thread asks for a slot.
+// makes it free for the runtime to define. One process-lifetime page per OS thread:
+// `mrt_linux_main_thread_block` maps the main thread's, and `mrt_host_thread_create` maps each worker's and
+// hands it over with `CLONE_SETTLS`.
 //
 // ⚠ **THE TWO ARCHES READ IT AT VERY DIFFERENT PRICE.** `TPIDR_EL0` is an ordinary register; the FS base
 // needs `arch_prctl(ARCH_GET_FS)`, a SYSCALL — which is why the x64 lane answers *"does this thread have a
@@ -564,9 +567,25 @@ export let LinuxMutexReleaseStep = 0xFFFFFFFFFFFFFFFF as MachineWord
 
 // How many keys one block holds — DERIVED from the page and the slot width, and a FUNCTION rather than a
 // `let` for `runtimeFrameSlots`' language reason: a global initializer folds `/` as a float.
-export function linuxTlsSlotCount() returns FullRangeInt
+function linuxTlsSlotCount() returns FullRangeInt
 	return LinuxHostObjectPageBytes / SpillSlotBytes
 end 'linuxTlsSlotCount'
+
+// The slot holding the block's own address, which x86-64 reads as the host lock's owner token because it
+// cannot read its FS base as a value without `FSGSBASE`. Both lanes stop issuing keys below it, so a key can
+// never overwrite it.
+export function linuxTlsSelfSlotIndex() returns FullRangeInt
+	return linuxTlsSlotCount() - 1
+end 'linuxTlsSelfSlotIndex'
+
+export function linuxTlsSelfSlotOffset() returns FullRangeInt
+	return linuxTlsSelfSlotIndex() * (SpillSlotBytes as FullRangeInt)
+end 'linuxTlsSelfSlotOffset'
+
+// Called first in `mrt_runtime_init` in every program that carries the host lock (`posixUsesHostLock`): the
+// lock reads its owner token from the block, and the slab and `__ds_init` enter it before
+// `__sched_init_procs` runs.
+export let LinuxMainThreadBlockName = b"mrt_linux_main_thread_block"
 
 // The first key handed out, and the reason the counter pre-increments — see the block above.
 //
@@ -650,10 +669,9 @@ export let LinuxVmReadNoFlags = 0
 //     uniquifier and `mrt_host_proc_*` both read it), and the entry stub's `exit_group` at the end of `main`
 //     ends the whole program rather than leaving parked Ms behind.
 //   • `CLONE_SETTLS` — the new M's thread pointer (`TPIDR_EL0` on AArch64, the FS base on x86-64) = the slot
-//     block this chunk maps for it. On both lanes the thread pointer IS the per-OS-thread slot base
-//     (`mrt_host_tls_alloc`), and `__sched_worker_loop`'s very first
-//     act is `tlsSetValue(index, p)` through it — so an M cloned without this would panic in
-//     `mrt_linux_tls_set` before it adopted its P.
+//     block this chunk maps for it. On both lanes the thread pointer IS the per-OS-thread slot base, and
+//     `__sched_worker_loop`'s very first act is `tlsSetValue(index, p)` through it — so an M cloned
+//     without this would panic in `mrt_linux_tls_set` before it adopted its P.
 //   • `CLONE_CHILD_CLEARTID` — the kernel zeroes `PosixWaitOffThread` and wakes it when the thread ends,
 //     which IS the join `__sched_stop_workers` performs. See `LinuxFutexWaitShared` for the wake's flavour.
 //
@@ -749,7 +767,7 @@ export function assertLinuxLockFits()
 	end 'tooSmall'
 end 'assertLinuxLockFits'
 
-export let LinuxTlsMapFailedMessage = b"panic: the green-thread scheduler could not map this OS thread's slot block (mmap failed)\n"
+export let LinuxTlsMapFailedMessage = b"panic: the runtime could not map the main thread's slot block (mmap failed)\n"
 export let LinuxTlsExhaustedMessage = b"panic: the green-thread scheduler asked for more per-OS-thread slots than one page holds\n"
 
 // A key scales to a byte offset by the slot width — `key * 8`, spelled as a shift because that is the same

@@ -1136,7 +1136,6 @@ export type StdToX64Lowering
 			osReservePages or
 			atomicCas or
 			atomicRmw or
-			currentThreadToken or
 			tlsAlloc or
 			tlsSetValue or
 			tlsSlotLoad or
@@ -1577,12 +1576,9 @@ export type StdToX64Lowering
 			osGuardPages(resultId, addrId, sizeId) then self.lowerOsGuardPages(resultId, addrId: addrId, sizeId: sizeId, dstBlock: dstBlock)
 			osReservePages(resultId, sizeId) then self.lowerOsReservePages(resultId, sizeId: sizeId, dstBlock: dstBlock)
 
-			// The atomics and the per-thread identity word. Neither atomic is OS-routed — a `lock` prefix is
-			// the ISA's, not the platform's — while the token IS, because only one of the two OSes here has a
-			// thread-pointer register a raw static binary may read (see `lowerCurrentThreadToken`).
+			// Neither atomic is OS-routed — a `lock` prefix is the ISA's, not the platform's.
 			atomicCas(resultId, addrId, expectedId, replacementId) then self.lowerAtomicCas(resultId, addrId: addrId, expectedId: expectedId, replacementId: replacementId, dstBlock: dstBlock)
 			atomicRmw(resultId, addrId, operandId, opcode) then self.lowerAtomicRmw(resultId, addrId: addrId, operandId: operandId, opcode: opcode, dstBlock: dstBlock)
-			currentThreadToken(resultId) then self.lowerCurrentThreadToken(resultId, dstBlock: dstBlock)
 
 			// The multi-M substrate. Three route through `x64OsCallKind` like every other Win32 lowering here;
 			// the `gs:` slot read is an ISA fact with no OS call in it, so it takes no route — see each lowering.
@@ -1714,11 +1710,10 @@ export type StdToX64Lowering
 			osCommitPages or
 			osReservePages then panic("StdToX64Lowering: a page reserve or commit appeared as a block terminator (lowering bug — both are value-producing body ops, like the page allocation above)")
 
-			// All three are value-producing body ops. The arm64 CAS/RMW retry loop BRANCHES, but it does so
+			// Both are value-producing body ops. The arm64 CAS/RMW retry loop BRANCHES, but it does so
 			// inside one macro-op's encoder, never between IR blocks — the same division `memFill` states above.
 			atomicCas or
-			atomicRmw or
-			currentThreadToken then panic("StdToX64Lowering: an atomic or a thread-token read appeared as a block terminator (lowering bug — all three are value-producing body ops)")
+			atomicRmw then panic("StdToX64Lowering: an atomic appeared as a block terminator (lowering bug — both are value-producing body ops)")
 			tlsAlloc or
 			tlsSetValue or
 			tlsSlotLoad or
@@ -3307,27 +3302,6 @@ export type StdToX64Lowering
 
 		self.targetModule.appendOp(dstBlock, op: insn)
 	end 'lowerAtomicRmw'
-
-	// Lower `currentThreadToken(result)` — the one member of this family with a genuine OS split, so it
-	// is routed through the same `x64OsCallKind` door every OS-dependent lowering in this file uses.
-	//
-	// Windows: `mov result, gs:[0x30]`, the TEB self-pointer. One instruction, no call, no setup.
-	// Linux: the `gettid` syscall, whose answer lands in RAX like every other syscall's — see
-	// `StdOp.currentThreadToken` for why a raw static Linux binary cannot read `fs:[0]` instead, and
-	// `X64LinuxSyscallGettid` for the number.
-	function lowerCurrentThreadToken(resultId ValueId, dstBlock IrBlock)
-		match x64OsCallKind(self.target.os) 'route'
-			importCall then self.targetModule.appendOp(dstBlock, op: TargetOp.x64TebSelfPointer(TargetVReg.virtual(resultId)))
-			syscall then self.lowerCurrentThreadTokenLinux(resultId, dstBlock: dstBlock)
-		end 'route'
-	end 'lowerCurrentThreadToken'
-
-	// `gettid()` — a ZERO-argument syscall, so there is nothing to marshal; only the answer is captured out
-	// of RAX, exactly as `lowerOsAllocPages` captures `mmap`'s.
-	function lowerCurrentThreadTokenLinux(resultId ValueId, dstBlock IrBlock)
-		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(X64LinuxSyscallGettid))
-		self.emitCaptureRax(dstBlock, into: TargetVReg.virtual(resultId))
-	end 'lowerCurrentThreadTokenLinux'
 
 	// Lower `osWaitHandle`/`osWaitChild(handle, timeoutMs)` to a wait on the handle, capturing its
 	// answer: the collect drain's exit test polls with `timeoutMs = 0` and tests `== WAIT_OBJECT_0`.
@@ -5342,7 +5316,6 @@ export type StdToX64Lowering
 			osReservePages or
 			atomicCas or
 			atomicRmw or
-			currentThreadToken or
 			tlsAlloc or
 			tlsSetValue or
 			tlsSlotLoad or
@@ -5597,8 +5570,7 @@ export type StdToX64Lowering
 			osReservePages panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a page reserve or commit, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			memFill panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a `memFill`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			atomicCas or
-			atomicRmw or
-			currentThreadToken panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an atomic or a thread-token read, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			atomicRmw panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an atomic, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			tlsAlloc or
 			tlsSetValue or
 			tlsSlotLoad or

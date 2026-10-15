@@ -5623,6 +5623,167 @@ chunk @__gt_morestack {
 }
 ```
 
+<!-- test: linux-lock-enter-makes-no-kernel-call-uncontended -->
+<!-- unsupported-targets: x64-windows, arm64-macos -->
+**THE UNCONTENDED HOST-LOCK ENTER MAKES NO KERNEL CALL.** `mrt_linux_lock_enter` is hand-assembled bytes,
+so this chunk pin is its only gate. The owner token it compares and stores is the address of the calling
+thread's own thread-pointer block, read in one instruction: x64 loads the block's self-address slot,
+`mov rax, fs:[4088]`, and arm64 reads `mrs x0, tpidr_el0`. The chunk's only `syscall` / `svc` is the futex
+wait on the contended path — x64 `b8 ca 00 00 00 0f 05`, arm64 `48 0c 80 d2 01 00 00 d4`. Any other kernel
+call in these bytes is a per-enter cost every lock round trip pays.
+
+The program pushes one element and spawns nothing, so it runs no scheduler: the lock still reads its token
+from the main thread's block, which every Linux thread owns from process start.
+
+```maxon
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function main() returns ExitCode
+	var buf = ByteArray.create()
+	buf.push(1)
+	return buf.count() as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+```RequiredRuntime
+mrt_linux_lock_enter
+```
+
+```TargetIr:x64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.loadRegBaseDisp.word64 r12, [rbx + 8]
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at linux-lock-enter-makes-no-kernel-call-uncontended.test:8: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+chunk @mrt_linux_lock_enter {
+    0000: 55 48 89 e5 48 83 ec 30 48 89 4d f8 64 48 8b 04
+    0010: 25 f8 0f 00 00 48 89 45 f0 48 8b 4d f8 48 8b 51
+    0020: 08 48 39 c2 0f 85 14 00 00 00 48 8b 51 10 48 81
+    0030: c2 01 00 00 00 48 89 51 10 e9 86 00 00 00 48 8b
+    0040: 7d f8 b8 00 00 00 00 b9 01 00 00 00 f0 48 0f b1
+    0050: 0f 0f 84 58 00 00 00 48 8b 7d f8 b8 00 00 00 00
+    0060: b9 02 00 00 00 f0 48 0f b1 0f 0f 84 3f 00 00 00
+    0070: 48 8b 7d f8 b8 01 00 00 00 b9 02 00 00 00 f0 48
+    0080: 0f b1 0f 48 8b 7d f8 be 80 00 00 00 ba 02 00 00
+    0090: 00 41 ba 00 00 00 00 41 b8 00 00 00 00 41 b9 00
+    00a0: 00 00 00 b8 ca 00 00 00 0f 05 e9 a8 ff ff ff 48
+    00b0: 8b 4d f8 48 8b 55 f0 48 89 51 08 ba 01 00 00 00
+    00c0: 48 89 51 10 48 83 c4 30 5d c3
+}
+```
+
+```TargetIr:arm64-linux
+data {
+  __mrt_envp@0 = i64 0
+  __mrt_signal_stack_bytes@8 = i64 0
+  __slab_arena_list@16 = i64 0
+  __slab_arena_map_l1@24 = i64 0
+  __slab_state@32 = i64 0
+  __mrt_program_started@40 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.bl __managed_create
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 1
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_push
+    arm64.loadRegBaseDisp.word64 x20, [x19 + 8]
+    arm64.cmp x20, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x20, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x19
+    arm64.bl __managed_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at linux-lock-enter-makes-no-kernel-call-uncontended.test:8: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+chunk @mrt_linux_lock_enter {
+    0000: fd 7b be a9 fd 03 00 91 a0 0b 00 f9 40 d0 3b d5
+    0010: a0 0f 00 f9 a1 0b 40 f9 22 04 40 f9 5f 00 00 eb
+    0020: a1 00 00 54 23 08 40 f9 63 04 00 91 23 08 00 f9
+    0030: 2c 00 00 14 a0 0b 40 f9 e1 03 1f aa 22 00 80 d2
+    0040: 10 fc 5f c8 1f 02 01 eb 61 00 00 54 02 fc 11 c8
+    0050: 91 ff ff b5 e5 17 9f 9a a5 03 00 b5 a0 0b 40 f9
+    0060: e1 03 1f aa 42 00 80 d2 10 fc 5f c8 1f 02 01 eb
+    0070: 61 00 00 54 02 fc 11 c8 91 ff ff b5 e5 17 9f 9a
+    0080: 65 02 00 b5 a0 0b 40 f9 21 00 80 d2 42 00 80 d2
+    0090: 10 fc 5f c8 1f 02 01 eb 61 00 00 54 02 fc 11 c8
+    00a0: 91 ff ff b5 e5 17 9f 9a a0 0b 40 f9 01 10 80 d2
+    00b0: 42 00 80 d2 e3 03 1f aa e4 03 1f aa e5 03 1f aa
+    00c0: 48 0c 80 d2 01 00 00 d4 e5 ff ff 17 a1 0b 40 f9
+    00d0: a2 0f 40 f9 22 04 00 f9 22 00 80 d2 22 08 00 f9
+    00e0: fd 7b c2 a8 c0 03 5f d6
+}
+```
+
 <!-- test: a-library-body-named-into-the-golden -->
 The LIBRARY half of the same block. `String.trim` is `stdlib/String.maxon`'s own code — withheld
 from every rendering by default, exactly as `mrt_start` is — and this is the route that puts one

@@ -1118,6 +1118,31 @@ preferred was still worth taking after the mixer landed, and not instead of it. 
 arm64-macos, **1586/0** wasm32-wasi, **1589/0** arm64-linux, C# bootstrap **3104/3104**, all exit 0;
 `--workers=1` byte-identical to `--workers=12`.
 
+**2026-10-15 — THE LINUX HOST LOCK READS ITS OWNER FROM THE THREAD BLOCK. This is a RUNTIME row: there are
+no `scale-test` numbers for it.**
+- **What the lock did.** `mrt_linux_lock_enter` asked the kernel for `gettid` on every enter, to learn its
+  recursive owner identity. strace showed 12.25 calls per ping-pong round trip; perf put 85.7% of user samples
+  in that one chunk, almost all on the instruction after the `syscall`. That is about 520 ns per call under
+  WSL2.
+- **What it does now.** Every Linux thread that can enter the lock owns its thread-pointer block from
+  process start. The owner token is that block's own address: one `mov rax, fs:[4088]` on x64, `mrs
+  tpidr_el0` on arm64.
+- **The measurement.** `scripts/bench-concurrency.py --host wsl --ref 9cb941b80 --runs 3`, interleaved
+  against a control built from the pre-change commit, x64-linux lane under WSL2 Ubuntu, 12 CPUs, Go 1.27.0.
+  Wall time in ms, with the Maxon/Go ratio in brackets:
+
+  | workload | P | control | this change |
+  |---|---|---|---|
+  | thread-ring | 1 | 12,242 (33.93) | 978 (2.71) |
+  | ping-pong | 1 | 6,983 (19.17) | 569 (1.56) |
+  | fan-in | 1 | 8,108 (29.69) | 971 (3.56) |
+  | spawn-many | 1 | 2,776 (16.80) | 514 (3.11) |
+  | coroutine-churn | 1 | 1,396 (5.46) | 375 (1.47) |
+  | shared-counter | 1 | 16,077 (103.31) | 1,978 (12.71) |
+  | worker-pool | 1 | 2,145 (1.01) | 2,128 (1.00), the control: no lock on its path |
+
+  The full matrix, P=12 and CPU and memory included, is in `docs/concurrency-benchmark-log.md`.
+
 ## Bugs this uncovered
 
 Removing the dummy exposed a leak it had been half-hiding, and the leak in turn exposed a hole in the
