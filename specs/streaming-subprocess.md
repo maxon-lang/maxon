@@ -344,8 +344,8 @@ end 'main'
 <!-- test: streaming-subprocess.spawned-reader -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 The read runs inside an `async` coroutine rather than in `main`, so its resume is a cross-thread ready of a
-coroutine: the machine draining the poller readies the reader onto `main`'s strand queue under
-`__sched_lock`, and the machine that takes the strand switches back into it.
+coroutine: the machine draining the poller readies the reader onto `main`'s strand queue under that
+strand's own lock, and the machine that takes the strand switches back into it.
 The reader returns the line's byte length (7); `main` awaits it.
 ```maxon
 function reader() returns Integer

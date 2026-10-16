@@ -8,13 +8,14 @@
 //     new green thread. it allows a function to yield the current green thread while waiting for a blocking
 //     operation."* A coroutine is owned by the green thread that called it (`GtOffOwner`).
 //
-// A green thread and its coroutines are one STRAND. Every wait parks the waiter onto its machine's scheduler
-// context (`__gt_park`, Go's `gopark`) and whoever completes the wait readies it (`__gt_ready_locked`, Go's
-// `ready`); no wait ever runs another green thread on the waiter's stack. What a run queue holds is the
-// strand's OWNER, as a token; the machine that pops it becomes the strand's one executor (`GtOffStrandHolder`)
-// and runs the owner and its coroutines from the strand queue (`__gt_run_strand`) until the strand has
-// nothing runnable. So at most one machine runs any member of a strand at a time, and every hand-over between
-// machines goes through `__sched_lock` or the compare-and-swap that claims the strand.
+// A green thread and its coroutines are one STRAND. Every wait parks the waiter onto its machine's
+// scheduler context (`__gt_park`, Go's `gopark`) and whoever completes the wait readies it
+// (`__gt_ready_locked`, Go's `ready`); no wait ever runs another green thread on the waiter's
+// stack. What a run queue holds is the strand's OWNER, as a token; the machine that pops it becomes
+// the strand's one executor (`GtOffStrandHolder`) and runs the owner and its coroutines from the
+// strand queue (`__gt_run_strand`) until the strand has nothing runnable. So at most one machine
+// runs any member of a strand at a time, and every hand-over between machines goes through the
+// strand's holder word, which a compare-and-swap claims and an atomic decrement gives up.
 //
 // ⇒ **every refcount read-modify-write on a COUNTED box happens on the machine running that box's strand, one
 // machine at a time**; a box a share walk marked shared steps atomically instead.
@@ -177,12 +178,12 @@ export let GtOffIoSource = 0xA0
 // argument stores, read by `__gt_await`/`__gt_try_await` (result CONSUMED) and by `__gt_promise_drop`
 // (result NOT consumed) — see `emitGtReleaserCall` for why those two differ and what each failure mode costs.
 //
-// ⚠⚠ **IT DEPENDS ON A SPAWNED STRUCT ARRIVING ZEROED, AND THAT IS A CORRECTNESS TRAP RATHER THAN AN
-// OPTIMIZATION.** Without it, a spawn of a releaser-free callee would INHERIT the previous tenant's releaser
-// and release that tenant's arguments out of stale argument slots — a wild free rather than a leak. The zero
-// is what makes "no releaser" the default state of every GT rather than a state the spawn must remember to
-// restore, and `__gt_spawn` is what supplies it: it zeroes the whole `GtStructSize` of the record
-// `__gt_free_get` hands it.
+// ⚠⚠ **IT DEPENDS ON A SPAWNED STRUCT ARRIVING ZEROED, AND THAT IS A CORRECTNESS TRAP RATHER THAN
+// AN OPTIMIZATION.** Without it, a spawn of a releaser-free callee would INHERIT the previous
+// tenant's releaser and release that tenant's arguments out of stale argument slots — a wild free
+// rather than a leak. The zero is what makes "no releaser" the default state of every GT rather
+// than a state the spawn must remember to restore, and `__gt_spawn` is what supplies it: it zeroes
+// every field of the record `__gt_free_get` hands it, up to the record lock (`GtOffRecordLock`).
 //
 // It sits at 0xB0, at the head of the inline argument region, so every field of the portable layout
 // (0x00–0xA8) stays exactly where it is.
@@ -287,10 +288,11 @@ export let PointerFieldBytes = 8
 // EXPORTED because `SchedRuntime.emitSchedBecomeM` stamps the scheduler context's self-ownership.
 export let GtOffOwner = GtOffTeardown + GtTeardownBytes
 
-// ⭐⭐ **THE STRAND QUEUE — the members of this green thread's strand that are runnable, an intrusive FIFO
-// through `GtOffNext`.** Meaningful only on a green thread. A readied coroutine and a yielder join the back; the
-// owner readied from a wait joins the FRONT, so a strand runs its owner first when the owner is ready.
-// `__sched_lock` guards both ends.
+// ⭐⭐ **THE STRAND QUEUE — the members of this green thread's strand that are runnable, an intrusive
+// FIFO through `GtOffNext`.** Meaningful only on a green thread. A readied coroutine and a yielder
+// join the back; the owner readied from a wait joins the FRONT, so a strand runs its owner first
+// when the owner is ready. The owner's record lock (`GtOffRecordLock`) guards both ends. The head
+// is stored with a release, because `__gt_strand_next` reads it with an acquire and no lock.
 let GtOffCoroHead = GtOffOwner + PointerFieldBytes
 let GtOffCoroTail = GtOffCoroHead + PointerFieldBytes
 
@@ -333,9 +335,10 @@ export let GtOffParkGen = GtOffParkArg + PointerFieldBytes
 // measures the same quantity. Frees are a column of their own rather than a live count: a green thread does not
 // own the boxes it allocated, so a per-thread live count would mean nothing.
 //
-// ⚠ **THEY ARE STEPPED WITHOUT A LOCK AND WITHOUT AN ATOMIC, and the ownership model is what makes that
-// sound**: a strand runs on at most one M at a time, and hands over between machines under `__sched_lock`,
-// so the one party that can step these words is the one thread they belong to — and it only ever adds.
+// ⚠ **THEY ARE STEPPED WITHOUT A LOCK AND WITHOUT AN ATOMIC, and the ownership model is what makes
+// that sound**: a strand runs on at most one M at a time, and hands over between machines only
+// through its holder word (`GtOffStrandHolder`), so the one party that can step these words is the
+// one thread they belong to — and it only ever adds.
 //
 // EXPORTED because the allocator steps them and their readers are built in `MmRuntime`'s counter family,
 // which is where a caller looks for a memory column.
@@ -357,24 +360,26 @@ let GtOffCpuOffset = GtOffThreadAllocBytes + PointerFieldBytes
 let GtOffIsMainThread = GtOffCpuOffset + PointerFieldBytes
 let GtMainThreadMark = 1
 
-// ⭐⭐⭐ **1 WHILE SOME MACHINE OWNS THIS STRAND — its owner token is in a run queue, or a machine is running
-// the strand — and 0 otherwise.** Meaningful only on a green thread. Every claim is a 0 → 1 CAS
-// (`emitGtStrandClaimLost`), whose winner publishes the token: `__gt_ready_locked` claims under `__sched_lock`,
-// and the parked-service ready (`emitGtReadyParkedService`) with no lock. `__gt_strand_next` releases it under
-// the lock, when the strand queue is empty, with a store-release, so a claimer that reads 0 sees every store of
-// the hold that released it.
+// ⭐⭐⭐ **1 WHILE SOME MACHINE OWNS THIS STRAND — its owner token is in a run queue, or a machine is
+// running the strand — and 0 otherwise.** Meaningful only on a green thread. Every claim is a 0 → 1
+// CAS (`emitGtStrandClaimLost`) made with no lock, by `__gt_ready_locked` and by the parked-service
+// ready (`emitGtReadyParkedService`), and its winner publishes the token. A spawned green thread is
+// born held: `__gt_ready` stores 1 before the record is published. `__gt_strand_next` releases it
+// with an atomic decrement when the strand queue is empty, then re-reads the queue and re-claims it
+// if a member arrived.
 //
-// ⭐⭐⭐ **THIS WORD IS WHAT KEEPS A STRAND ON ONE MACHINE.** The token is published only by the readier whose
-// CAS wins, and this reads 0 only after the executing machine found the strand queue empty under
-// `__sched_lock` and gave the strand up. So a readier either loses and leaves the member on the strand queue
-// for the machine that holds the strand — which re-checks the queue under the lock before it can let go; the
-// lock-free readier does it through `__gt_ready` — or wins, at a moment when no machine is running any member,
-// and becomes the one publisher of the one token. No member of a strand can therefore be run by a second
-// machine while one is running any of them, and the owner is never readied onto a run queue while one of its
-// coroutines executes elsewhere.
+// ⭐⭐⭐ **THIS WORD IS WHAT KEEPS A STRAND ON ONE MACHINE.** The token is published only by the
+// readier whose CAS wins, and this reads 0 only after the executing machine found the strand queue
+// empty and gave the strand up. So a readier either loses and leaves the member on the strand queue
+// for the machine that holds the strand — whose release re-reads the queue after it lets go
+// (`buildGtReadyLocked`) — or wins, at a moment when no machine is running any member, and becomes
+// the one publisher of the one token. No member of a strand can therefore be run by a second
+// machine while one is running any of them, and the owner is never readied onto a run queue while
+// one of its coroutines executes elsewhere.
 let GtOffStrandHolder = GtOffIsMainThread + PointerFieldBytes
 let StrandFree = 0
 let StrandHeld = 1
+let StrandRefsOwnerAndHold = 2
 
 // ⭐⭐ **HOW MANY PARTIES STILL NEED THIS GREEN THREAD's STRUCT AS A STRAND HEAD**: the owner's own execution,
 // each coroutine it created that has not yet finished, and the strand hold. A coroutine can outlive its
@@ -383,13 +388,15 @@ let StrandHeld = 1
 // taken on whatever thread readies a member, a machine draining the poller included.
 let GtOffStrandRefs = GtOffStrandHolder + PointerFieldBytes
 
-// ⭐⭐ **THE GT PARKED WAITING FOR THIS ONE TO COMPLETE, OR 0.** Written under `__sched_lock` by the await and
-// awaitAny registrations, taken under it by `__gt_runner_done`. An awaitAny registration stores its thread
-// with `AwaitAnyTag` set, so the completer knows to ask `GtOffSelectDone` before readying it.
+// ⭐⭐ **THE GT PARKED WAITING FOR THIS ONE TO COMPLETE, OR 0.** Written under this GT's record lock
+// (`GtOffRecordLock`) by the await and awaitAny registrations, taken under it by
+// `__gt_runner_done`. An awaitAny registration stores its thread with `AwaitAnyTag` set, so the
+// completer knows to ask `GtOffSelectDone` before readying it.
 let GtOffAwaiter = GtOffStrandRefs + PointerFieldBytes
 
-// ⭐ **ON AN awaitAny WAITER: 1 once a completer has readied it, 0 while it is still registered** — Go's
-// `selectDone`, so K slots completing ready the waiter once. `__sched_lock` guards it.
+// ⭐ **ON AN awaitAny WAITER: 1 once a completer has readied it, 0 while it is still registered** —
+// Go's `selectDone`, so K slots completing ready the waiter once. A completer claims it by CAS,
+// because K completers hold K different record locks.
 let GtOffSelectDone = GtOffAwaiter + PointerFieldBytes
 let SelectPending = 0
 let SelectReadied = 1
@@ -416,15 +423,15 @@ let GtOffStackResizedAt = GtOffStackMarks + PointerFieldBytes
 // needed to grow.
 let GtOffStackHighWater = GtOffStackResizedAt + PointerFieldBytes
 
-// ⭐⭐ **ON A STRAND's OWNER: THE MEMBER THE STRAND RUNS NEXT — OR 0** — a member a preemption stopped, or the
-// owner a lock-free ready published. A coroutine gives up its green thread only where it waits (`async` is a
-// coroutine, not a thread), so a preemption may take the member's processor but never its turn:
-// `__gt_strand_next` answers this slot before the owner or any sibling in the queue, whatever was readied
-// meanwhile. Written by the strand runner's preempt arm, under `__sched_lock` on the machine holding the
-// strand, and by the claimer that wins a Free strand in `emitGtReadyParkedService`, with no lock: Free means
-// this slot is empty, and that claimer is its one writer until a machine takes the token, so it can hold a
-// service no machine has taken yet. Taken by `__gt_strand_next` under the lock; it is empty whenever a member
-// runs, because the taking is what starts one.
+// ⭐⭐ **ON A STRAND's OWNER: THE MEMBER THE STRAND RUNS NEXT — OR 0** — a member a preemption
+// stopped, or the owner a winning claim published. A coroutine gives up its green thread only where
+// it waits (`async` is a coroutine, not a thread), so a preemption may take the member's processor
+// but never its turn: `__gt_strand_next` answers this slot before the owner or any sibling in the
+// queue, whatever was readied meanwhile. Written only by the strand's holder, with no lock: the
+// strand runner's preempt arm, a claimer that wins a Free strand (`emitGtPublishClaimedOwner`) —
+// Free means this slot is empty, and that claimer is its one writer until a machine takes the token
+// — and `__gt_ready` for a green thread not yet published. Taken by `__gt_strand_next`; it is empty
+// whenever a member runs, because the taking is what starts one.
 let GtOffStrandResume = GtOffStackHighWater + PointerFieldBytes
 
 // ⭐ **ON A REPLY CELL ANSWERING WITH A VALUE HELD AT AN INTERFACE TYPE: THE VALUE'S WITNESS HALF.** A cell
@@ -462,23 +469,29 @@ export enum GtLastErrorDirection
 	fromGt
 end 'GtLastErrorDirection'
 
-// The GT struct's size: the 0xC8 header, the inline argument region, then every field above. Must be a
-// multiple of 8.
+// ⭐⭐ **THE RECORD LOCK — LAST IN THE STRUCT, BECAUSE `__gt_spawn` ZEROES EVERY FIELD BELOW IT AND
+// NONE OF IT.** It is initialized once, when the arena carves the record (`__gt_free_get`), and
+// stays live across every reuse; a field placed after it would escape the spawn's zeroing. On a
+// green thread it is the strand lock over the strand queue (`GtOffCoroHead`). On a coroutine or a
+// reply cell it is the promise lock, where await, awaitAny and the completer meet over
+// `GtOffAwaiter` — Go's `hchan.lock`. The two roles never fall on one record. EXPORTED because
+// `SchedRuntime`'s carve initializes it.
 //
-// Growth is append-only, which is why nothing already placed ever moves: every field of the
-// portable layout (0x00–0xA8) and every offset a hand-assembled chunk spells is below 0xC8, and
-// `SchedRuntime`'s M fields after the inline GT are each derived from the one before, so a growth
-// walks them all along correctly.
+// ⚠ This line is the one a growth must restate: a new field goes before the lock, and this offset
+// names the last field rather than following it. A field added without re-deriving it shares the
+// lock's bytes and escapes the spawn's zeroing, and nothing refuses it.
+export let GtOffRecordLock = GtOffLastError + PointerFieldBytes
+
+// The GT struct's size: the 0xC8 header, the inline argument region, then every field above, the
+// record lock last. Must be a multiple of 8.
 //
-// ⚠ This line is the one number a growth must restate, because it names the last field rather
-// than following it. A field appended without re-deriving the size sits one slot past the record,
-// and nothing refuses it: a store through that offset writes the first word of the next object in
-// the scheduler arena — an M's `MOffCurrentP` when the neighbour is an M — and it surfaces as a
-// nil-pointer panic in `__sched_runq_next`, intermittently, in programs that never touch the new
-// field at all.
+// Growth inserts before the record lock, which is why nothing else already placed ever moves: every
+// field of the portable layout (0x00–0xA8) and every offset a hand-assembled chunk spells is below
+// 0xC8, and `SchedRuntime`'s M fields after the inline GT are each derived from the one before, so
+// a growth walks them all along correctly.
 //
 // EXPORTED because `SchedRuntime`'s M struct embeds a whole GT inline as its scheduler context.
-export let GtStructSize = GtOffLastError + PointerFieldBytes
+export let GtStructSize = GtOffRecordLock + OsLockBytes
 
 // ⭐⭐ **THE PARK KINDS — what the strand runner dispatches on after the switch.** Each names the STORE
 // `__gt_register_park` puts the thread on; a yield and a preemption register nothing and are placed back on
@@ -602,11 +615,11 @@ export let GtMaxStackBytes = 0x40000000
 // shrink copies to one a second whatever its parks do.
 let GtStackResizeWindowNs = 1000000000
 
-// ⭐⭐ **HOW MANY FINISHED STACKS ONE ADAPTIVE-SEED WINDOW AVERAGES.** Go recomputes `startingStackSize` once per
-// garbage collection, over the stacks that cycle scanned; here a window closes at the finish that makes the count
-// a multiple of this, so the seed follows finished threads whether or not the program ever arms a timer, and
-// `__sched_lock` is taken for it once per window rather than once per finish. A power of two, so the test is a
-// mask.
+// ⭐⭐ **HOW MANY FINISHED STACKS ONE ADAPTIVE-SEED WINDOW AVERAGES.** Go recomputes
+// `startingStackSize` once per garbage collection, over the stacks that cycle scanned; here a
+// window closes at the finish that makes the count a multiple of this, so the seed follows finished
+// threads whether or not the program ever arms a timer, and the adapt runs once per window rather
+// than once per finish. A power of two, so the test is a mask.
 let GtSeedWindowShift = 6 as FullRangeInt
 let GtSeedWindowMask = (1 shl GtSeedWindowShift) - 1
 
@@ -1195,14 +1208,16 @@ export let GtRunMainName = b"__gt_run_main"
 // the thread while the spawner is still storing its arguments, which reads as arguments silently lost.
 export let GtReadyName = b"__gt_ready"
 
-// ⭐⭐⭐ **`__gt_ready_locked(gt) -> wakeDebt` — THE WAKE DOOR, Go's `ready`.** The caller holds
-// `__sched_lock`. It marks `gt` `ready`, puts it on its strand queue — the FRONT for a strand's owner, which a
-// strand runs first, the back for a coroutine — and, if no machine owns the strand, claims it and publishes the
-// owner's token to this processor's ring (the global queue on an OS thread with none). It answers
-// `WakeDebtOwed` exactly when it published a token: the caller then owes `__sched_wake_or_spawn` AFTER its own
-// release (`SchedRuntime.emitSchedWakeIfOwed`), because a wake inside a critical section has no StoreLoad fence
-// and a nested leave of this recursive lock releases nothing. A mailbox-parked service comes here only when
-// its strand is held, and is otherwise readied with no lock (`emitGtReadyParkedService`).
+// ⭐⭐⭐ **`__gt_ready_locked(gt) -> wakeDebt` — THE WAKE DOOR, Go's `ready`.** It moves `gt` from
+// `waiting` to `ready` by CAS and, if no machine owns the strand, claims it and publishes the
+// owner's token to this processor's ring (the global queue on an OS thread with none). Otherwise
+// `gt` goes onto its strand queue under the owner's record lock — the FRONT for a strand's owner,
+// which a strand runs first, the back for a coroutine. It answers `WakeDebtOwed` exactly when it
+// published a token: a caller holding a lock then owes `__sched_wake_or_spawn` AFTER its release
+// (`SchedRuntime.emitSchedWakeIfOwed`), because a wake inside a critical section has no StoreLoad
+// fence and a nested leave of a recursive lock releases nothing. A mailbox-parked service comes
+// here only when its strand is held, and is otherwise readied with no lock
+// (`emitGtReadyParkedService`).
 //
 // EXPORTED for its callers in `MailboxRuntime` and for the root that keeps it alive for the hand-assembled
 // chunks that name it (`DeadFunctionElimination.seedRoots`).
@@ -1222,12 +1237,13 @@ export let GtEnqueueName = b"__gt_enqueue"
 // arms.
 export let GtDequeueName = b"__gt_dequeue"
 
-// ⭐⭐⭐ **THE STRAND QUEUE's DOORS — the per-green-thread counterparts of the global FIFO's.** They differ from
-// their global twins only in where the ends live (the OWNER's struct) and which link they thread (`GtOffNext`).
-// `__gt_coro_enqueue(gt)` appends `gt` to `gt.owner`'s strand queue and `__gt_coro_dequeue(owner)` pops its
-// head; both require the CALLER to hold `__sched_lock`.
+// ⭐⭐⭐ **THE STRAND QUEUE's DOORS — the per-green-thread counterparts of the global FIFO's.** They
+// differ from their global twins only in where the ends live (the OWNER's struct) and which link
+// they thread (`GtOffNext`). `__gt_coro_enqueue(gt)` appends `gt` to `gt.owner`'s strand queue and
+// `__gt_coro_dequeue(owner)` pops its head; both require the CALLER to hold the owner's record lock
+// (`GtOffRecordLock`).
 //
-// `__gt_strand_next(owner, parked)` is the strand runner's CONSUME door — lock, the parked member's
+// `__gt_strand_next(owner, parked)` is the strand runner's CONSUME door — the parked member's
 // registration, pop and tombstone refusal — and it is where the strand is given up when its queue
 // is empty. `__gt_coro_sweep_dropped(owner)` reclaims the tombstones at the queue's front.
 let GtCoroEnqueueName = b"__gt_coro_enqueue"
@@ -1376,6 +1392,9 @@ export let GtAwaitAnyName = b"__gt_await_any"
 // `__gt_any_completed(record) -> index` — the scan `__gt_await_any` and its registration both answer from.
 // See `buildGtAnyCompleted` for why it answers `NoCompletedPromise` rather than 0 when nothing has finished.
 let GtAnyCompletedName = b"__gt_any_completed"
+
+let GtAnyLockName = b"__gt_any_lock"
+let GtAnyUnlockName = b"__gt_any_unlock"
 
 // ⭐⭐ **`__gt_drain_at_exit(code) -> code` — RUN THE SCHEDULER OUT AND JOIN THE WORKER Ms, ON THE WAY TO
 // `ExitProcess`.** The entry stub calls it between `__gt_run_main` and the leak gate, in the exit-code
@@ -1667,11 +1686,11 @@ export let GtTimerAddName = b"__gt_timer_add"
 export let GtTimerCheckName = b"__gt_timer_check"
 
 // ⭐⭐⭐ **`__gt_register_park(gt) -> wake debt` — THE SECOND HALF OF EVERY PARK BUT A MAILBOX'S
-// (`GtParkKind.mailbox`), AND WHERE SUCH A THREAD IS MADE DISCOVERABLE.** It reads the note `__gt_park` left on the GT
-// (`GtOffParkKind`/`GtOffParkArg`) and puts the thread on the store that will wake it. Its one
-// caller is `__gt_strand_next`, inside the `__sched_lock` hold that also pops the strand's next
-// member, after `__gt_context_switch` has returned — so the parking thread's registers are provably
-// saved and any M may take it.
+// (`GtParkKind.mailbox`), AND WHERE SUCH A THREAD IS MADE DISCOVERABLE.** It reads the note
+// `__gt_park` left on the GT (`GtOffParkKind`/`GtOffParkArg`) and puts the thread on the store that
+// will wake it. Its one caller is `__gt_strand_next`, before it takes the strand's next member and
+// after `__gt_context_switch` has returned — so the parking thread's registers are provably saved
+// and any M may take it.
 let GtRegisterParkName = b"__gt_register_park"
 
 // `__gt_process_run` is the front-end target for `runProcess(cmd)`.
@@ -1704,6 +1723,7 @@ let GtRunQueueHeadLabel = b"__gt_run_queue_head"
 export let GtAllGLabel = b"__gt_allg"
 export let GtAllGLenLabel = b"__gt_allglen"
 let GtAllGCapLabel = b"__gt_allgcap"
+export let GtAllGLockLabel = b"__gt_allg_lock"
 
 // ⚠ **A COUNT, NOT A FLAG.** Two green threads of one process can each hold a pin at once — a DAP session
 // and an MCP session in the same compiler — so the hand-off gate is armed while any of them stands and dark
@@ -1726,10 +1746,11 @@ let GtRunQueueTailLabel = b"__gt_run_queue_tail"
 // the OLD stack when a grow or a shrink moves the thread, and `__gt_runner_done` frees the finished
 // thread's stack.
 //
-// ⭐⭐ **THE RECORD IS THE OPPOSITE: TYPE-STABLE, RECYCLED THROUGH FREE LISTS AND NEVER FREED.** It is carved
-// from the scheduler's record arena, `__gt_reclaim` hands it to `__gt_free_put` and `__gt_spawn` takes one from
-// `__gt_free_get` (`SchedRuntime.GtFreePutName` and `GtFreeGetName` carry why); a spawn zeroes the record over
-// its whole `GtStructSize` and a reply cell writes the words it reads.
+// ⭐⭐ **THE RECORD IS THE OPPOSITE: TYPE-STABLE, RECYCLED THROUGH FREE LISTS AND NEVER FREED.** It
+// is carved from the scheduler's record arena, `__gt_reclaim` hands it to `__gt_free_put` and
+// `__gt_spawn` takes one from `__gt_free_get` (`SchedRuntime.GtFreePutName` and `GtFreeGetName`
+// carry why); a spawn zeroes the record over every field below its record lock and a reply cell
+// writes the words it reads.
 //
 // ⭐ **RECLAIM AT THE AWAITER, NOT AT COMPLETION.** A GT can complete long before anybody awaits it, and its
 // struct still holds its result for a live, un-awaited promise. Reclaiming at completion would put that struct
@@ -1753,12 +1774,13 @@ export let GtQuiesceName = b"__gt_quiesce"
 export let GtQuiesceWaiterLabel = b"__gt_quiesce_waiter"
 export let GtQuiesceStuckLabel = b"__gt_quiesce_stuck"
 
-// ⭐⭐ **THE ADAPTIVE SEED — Go's `startingStackSize`.** What `__gt_spawn` commits for a new thread's stack: the
-// smallest power of two in [`gtSeedStackBytes`, `GtSeedMaxBytes`] that holds the average stack the threads that
-// finished in the last window needed (`__gt_seed_adapt`, `GtSeedWindowShift`). Starting at the average
-// costs at most twice the space an oracle would, and a thread that needs more still grows.
-// `MultiMSharing.lastWriterWins`: the adapt writes it under `__sched_lock` and a spawn reads it without, and every
-// value a spawn can read is a seed some window chose.
+// ⭐⭐ **THE ADAPTIVE SEED — Go's `startingStackSize`.** What `__gt_spawn` commits for a new thread's
+// stack: the smallest power of two in [`gtSeedStackBytes`, `GtSeedMaxBytes`] that holds the average
+// stack the threads that finished in the last window needed (`__gt_seed_adapt`,
+// `GtSeedWindowShift`). Starting at the average costs at most twice the space an oracle would, and
+// a thread that needs more still grows. `MultiMSharing.lastWriterWins`: the adapt writes it under
+// `__gt_seed_guard` and a spawn reads it without, and every value a spawn can read is a seed some
+// window chose.
 let GtSeedBytesLabel = b"__gt_seed_bytes"
 
 // The stack every finished thread needed (`__gt_runner_done`'s sample), and how many there were, since the process
@@ -1768,9 +1790,11 @@ let GtSeedBytesLabel = b"__gt_seed_bytes"
 let GtStackBytesSumLabel = b"__gt_stack_bytes_sum"
 let GtStackBytesCountLabel = b"__gt_stack_bytes_count"
 
-// The two counters as the last recompute read them. `__sched_lock`'s, which `__gt_seed_adapt`'s caller holds.
+// The two counters as the last recompute read them, touched only inside `__gt_seed_guard`'s claim
+// (`__gt_seed_adapt`).
 let GtSeedSumSeenLabel = b"__gt_seed_sum_seen"
 let GtSeedCountSeenLabel = b"__gt_seed_count_seen"
+let GtSeedGuardLabel = b"__gt_seed_guard"
 
 // ⭐⭐ **WHETHER A PARK KEEPS THE GREEN THREAD's CPU CLOCK (`GtOffCpuOffset`).** A RUN-TIME word rather than a
 // build-time fork of `__gt_park`, so the park's body is one function of nothing; the program's answer rides
@@ -2319,9 +2343,12 @@ export function gtRuntimeGlobals(usage RuntimeUsage, target Target) returns Data
 		return out
 	end 'noGreenThreadStack'
 
+	// The roster's three words are written under `__gt_allg_lock`; the base and the length are also
+	// read without it.
 	pushRuntimeGlobal(out, label: GtAllGLabel, sharing: MultiMSharing.publishedFromTheLock, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: GtAllGLenLabel, sharing: MultiMSharing.publishedFromTheLock, reach: DataReach.walked)
-	pushRuntimeGlobal(out, label: GtAllGCapLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: GtAllGCapLabel, sharing: MultiMSharing.underOwnLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: GtAllGLockLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: GtHoldEpochLabel, sharing: MultiMSharing.lastWriterWins, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: GtRunQueueHeadLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: GtRunQueueTailLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
@@ -2346,8 +2373,9 @@ export function gtRuntimeGlobals(usage RuntimeUsage, target Target) returns Data
 	pushRuntimeGlobal(out, label: GtSeedBytesLabel, sharing: MultiMSharing.lastWriterWins, reach: DataReach.walked, seed: gtSeedStackBytes(target))
 	pushRuntimeGlobal(out, label: GtStackBytesSumLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: GtStackBytesCountLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.walked)
-	pushRuntimeGlobal(out, label: GtSeedSumSeenLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
-	pushRuntimeGlobal(out, label: GtSeedCountSeenLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: GtSeedSumSeenLabel, sharing: MultiMSharing.underOwnLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: GtSeedCountSeenLabel, sharing: MultiMSharing.underOwnLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: GtSeedGuardLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: GtKeepsCpuClockLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked, seed: GtCpuClockKept if usage.usesThreadCpuTicks else GtCpuClockUnkept)
 	pushRuntimeGlobal(out, label: GtStackPoolLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
 	return out
@@ -2452,6 +2480,8 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	buildGtTimerAdd(module)
 	buildGtTimerCheck(module)
 	buildGtAnyCompleted(module)
+	buildGtAnyLock(module)
+	buildGtAnyUnlock(module)
 	buildGtAwaitAny(module)
 	buildGtDrainAtExit(module, releasesRegistry: releasesRegistry, releasesGlobals: releasesGlobals)
 	buildGtQuiesce(module)
@@ -2604,7 +2634,7 @@ function buildGtSpawn(module StdModule, kind GtSpawnKind, tracing GtTracing, tar
 
 	let gt = ids.mint()
 	module.appendOp(initBlock, op: StdOp.call(gt, callee: GtFreeGetName, args: ValueIdArray.create()))
-	module.appendOp(initBlock, op: StdOp.memFill(gt, byteCountId: emitConst(module, block: initBlock, value: GtStructSize, ids: ids), value: 0))
+	module.appendOp(initBlock, op: StdOp.memFill(gt, byteCountId: emitConst(module, block: initBlock, value: GtOffRecordLock, ids: ids), value: 0))
 
 	// gt.argBuf = gt + GtOffArgInline — a SELF-POINTER into this struct's own inline arg region.
 	// The trampoline reads `gt.argBuf` as a pointer and loads the slots from there, so pointing it at the inline
@@ -2630,13 +2660,15 @@ function buildGtSpawn(module StdModule, kind GtSpawnKind, tracing GtTracing, tar
 
 	emitStoreField(module, block: initBlock, record: gt, offset: GtOffOwner, value: owner)
 
-	// The strand's reference for this thread's execution (`GtOffStrandRefs`): a coroutine adds one to its
-	// owner's count, a green thread's own count starts at one.
+	// The strand's reference for this thread's execution (`GtOffStrandRefs`): a coroutine adds one to
+	// its owner's count. A green thread's own count starts at two, because `__gt_ready` hands it the
+	// strand hold without the token publish that counts one (`emitGtStrandTokenPublish`); `main`'s
+	// starts at one.
 	let oneRef = emitConst(module, block: initBlock, value: OneMore, ids: ids)
 
 	match kind 'strandRef'
 		coroutine then _ = emitFieldAccumulate(module, block: initBlock, record: owner, offset: GtOffStrandRefs, delta: oneRef, multiM: true, ids: ids)
-		greenThread or
+		greenThread then emitStoreField(module, block: initBlock, record: gt, offset: GtOffStrandRefs, value: emitConst(module, block: initBlock, value: StrandRefsOwnerAndHold, ids: ids))
 		mainThread then emitStoreField(module, block: initBlock, record: gt, offset: GtOffStrandRefs, value: oneRef)
 	end 'strandRef'
 
@@ -2777,32 +2809,39 @@ function emitGtSeedX64ReturnWord(module StdModule, block IrBlock, gt ValueId, st
 	emitStoreField(module, block: block, record: retSlotAddr, offset: 0, value: trampAddr)
 end 'emitGtSeedX64ReturnWord'
 
-// `__gt_ready(gt)` — make a spawned GT discoverable. See `GtReadyName` for why this is not the tail of
-// `__gt_spawn`. Which queue is the GT's own question, answered by `__gt_ready_locked`: a coroutine joins its
-// owner's strand queue, where the strand's machine finds it, and a green thread heads a new strand whose token
-// goes to this processor's `runnext` slot.
+// `__gt_ready(gt)` — make a spawned GT discoverable. See `GtReadyName` for why this is not the tail
+// of `__gt_spawn`. A coroutine is readied through `__gt_ready_locked` and joins its owner's strand.
+// A green thread heads a new strand whose token goes to this processor's `runnext` slot, and is
+// born holding it: no other thread can reach the record yet, so its holder and resume words take
+// plain stores, which the run queue put's release publishes.
 function buildGtReady(module StdModule)
 	var func = IrFunction.createFromStd(GtReadyName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var greenArm = module.addBlock(func, label: b"readygreen", heat: BlockHeat.normal)
+	var coroArm = module.addBlock(func, label: b"readycoro", heat: BlockHeat.normal)
 	var wake = module.addBlock(func, label: b"readywake", heat: BlockHeat.normal)
 	var doneBlock = module.addBlock(func, label: b"readydone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let gt = 0
 
-	emitSchedLockEnter(module, block: entry, ids: ids)
-	let debt = emitGtReadyLocked(module, block: entry, gt: gt, ids: ids)
-	emitSchedLockLeave(module, block: entry, ids: ids)
-	emitSchedWakeIfOwed(module, cur: entry, owed: debt, wake: wake, cont: doneBlock, ids: ids)
+	let isGreen = emitGtIsGreenThread(module, block: entry, gt: gt, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(isGreen, thenBlockId: greenArm.id, elseBlockId: coroArm.id))
+
+	emitStoreField(module, block: greenArm, record: gt, offset: GtOffStrandHolder, value: emitConst(module, block: greenArm, value: StrandHeld, ids: ids))
+	emitStoreField(module, block: greenArm, record: gt, offset: GtOffStrandResume, value: gt)
+	emitSchedRunqPut(module, block: greenArm, gt: gt, ids: ids)
+	module.setTerminator(greenArm, op: StdOp.branch(wake.id))
+
+	let debt = emitGtReadyLocked(module, block: coroArm, gt: gt, ids: ids)
+	emitSchedWakeIfOwed(module, cur: coroArm, owed: debt, wake: wake, cont: doneBlock, ids: ids)
 	module.setTerminator(doneBlock, op: StdOp.retVoid)
 
 	module.functions.push(func)
 end 'buildGtReady'
 
-// Call `__gt_ready_locked(gt)` and answer its wake debt. The caller holds `__sched_lock`, and the name of the
-// callee carries that requirement to every site.
 export function emitGtReadyLocked(module StdModule, block IrBlock, gt ValueId, ids ValueMinter) returns ValueId
 	let debt = ids.mint()
 	module.appendOp(block, op: StdOp.call(debt, callee: GtReadyLockedName, args: argsOf(gt)))
@@ -2814,16 +2853,22 @@ end 'emitGtReadyLocked'
 // ⭐ **THE OWNER GOES TO THE FRONT OF ITS STRAND QUEUE AND A COROUTINE TO THE BACK.** A readied owner is what
 // its strand was waiting on; a coroutine joins behind whatever its strand already has runnable.
 //
-// ⭐⭐ **THE CLAIM AND THE PUBLISH HAPPEN IN THE CALLER's CRITICAL SECTION**, and so does the strand runner's
-// release (`__gt_strand_next`): the member is on the strand queue before either this call or the releaser
-// can look at the holder word, so the releaser cannot give the strand up past it. The lock does not exclude
-// the lock-free claimer (`emitGtReadyParkedService`); the claim being a CAS does, so the two cannot both win.
+// ⭐⭐ **PUSH, THEN CLAIM — ONE HALF OF A DEKKER PAIR WITH `__gt_strand_next`'s RELEASE.** The member
+// is on the strand queue before this side's CAS on the holder word; the releaser decrements that
+// word and then re-reads the queue head with an acquire, re-claiming by CAS if it is not empty.
+// Each side makes a locked read-modify-write on the holder before it reads the other's half, so
+// either this claim finds the strand free or the releaser finds the member, and no strand is given
+// up past a queued member. The claim being a CAS is what makes two claimers unable to both win. An
+// owner whose first claim wins is not queued at all: it becomes the strand's resume member
+// (`GtOffStrandResume`).
 function buildGtReadyLocked(module StdModule)
 	var func = IrFunction.createFromStd(GtReadyLockedName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var ownerArm = module.addBlock(func, label: b"readyowner", heat: BlockHeat.normal)
+	var ownerWon = module.addBlock(func, label: b"readyownerwon", heat: BlockHeat.normal)
+	var ownerQueue = module.addBlock(func, label: b"readyownerqueue", heat: BlockHeat.normal)
 	var coroArm = module.addBlock(func, label: b"readycoro", heat: BlockHeat.normal)
 	var claim = module.addBlock(func, label: b"readyclaim", heat: BlockHeat.normal)
 	var alreadyHeld = module.addBlock(func, label: b"readyheld", heat: BlockHeat.normal)
@@ -2832,18 +2877,27 @@ function buildGtReadyLocked(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let gt = 0
 
-	emitStoreField(module, block: entry, record: gt, offset: GtOffStatus, value: emitConst(module, block: entry, value: GtStatus.ready.rawValue, ids: ids))
+	_ = emitGtCasStatus(module, block: entry, gt: gt, from: GtStatus.waiting, to: GtStatus.ready, ids: ids)
 	let owner = emitLoadField(module, block: entry, record: gt, offset: GtOffOwner, ids: ids)
-	let isOwner = emitGtIsGreenThread(module, block: entry, gt: gt, ids: ids)
+	let isOwner = emitCmp(module, block: entry, a: owner, b: gt, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(isOwner, thenBlockId: ownerArm.id, elseBlockId: coroArm.id))
 
-	var ownerQueued = emitGtFifoPushFront(module, func: func, cur: ownerArm, ends: GtQueueEnds.ownerFields(owner), g: gt, ids: ids)
+	let ownerHeld = emitGtStrandClaimLost(module, block: ownerArm, owner: owner, ids: ids)
+	module.setTerminator(ownerArm, op: StdOp.condBranch(ownerHeld, thenBlockId: ownerQueue.id, elseBlockId: ownerWon.id))
+
+	emitGtPublishClaimedOwner(module, block: ownerWon, owner: owner, ids: ids)
+	emitConstReturn(module, block: ownerWon, value: WakeDebtOwed, ids: ids)
+
+	emitGtRecordLockEnter(module, block: ownerQueue, record: owner, ids: ids)
+	var ownerQueued = emitGtFifoPushFront(module, func: func, cur: ownerQueue, ends: GtQueueEnds.ownerFields(owner), g: gt, ids: ids)
 	module.setTerminator(ownerQueued, op: StdOp.branch(claim.id))
 
+	emitGtRecordLockEnter(module, block: coroArm, record: owner, ids: ids)
 	module.appendOp(coroArm, op: StdOp.call(ids.mint(), callee: GtCoroEnqueueName, args: argsOf(gt)))
 	module.setTerminator(coroArm, op: StdOp.branch(claim.id))
 
 	let heldByAnother = emitGtStrandClaimLost(module, block: claim, owner: owner, ids: ids)
+	emitGtRecordLockLeave(module, block: claim, record: owner, ids: ids)
 	module.setTerminator(claim, op: StdOp.condBranch(heldByAnother, thenBlockId: alreadyHeld.id, elseBlockId: publish.id))
 
 	emitConstReturn(module, block: alreadyHeld, value: WakeDebtNone, ids: ids)
@@ -2854,10 +2908,20 @@ function buildGtReadyLocked(module StdModule)
 	module.functions.push(func)
 end 'buildGtReadyLocked'
 
+function emitGtCasStatus(module StdModule, block IrBlock, gt ValueId, from GtStatus, to GtStatus, ids ValueMinter) returns ValueId
+	return emitCasField(module, block: block, record: gt, offset: GtOffStatus as ByteOffset, expected: emitConst(module, block: block, value: from.rawValue, ids: ids), replacement: emitConst(module, block: block, value: to.rawValue, ids: ids), ids: ids)
+end 'emitGtCasStatus'
+
+function emitGtRecordLockEnter(module StdModule, block IrBlock, record ValueId, ids ValueMinter)
+	emitLockEnterAt(module, block: block, lock: emitFieldAddr(module, block: block, record: record, offset: GtOffRecordLock as ByteOffset, ids: ids), ids: ids)
+end 'emitGtRecordLockEnter'
+
+function emitGtRecordLockLeave(module StdModule, block IrBlock, record ValueId, ids ValueMinter)
+	emitLockLeaveAt(module, block: block, lock: emitFieldAddr(module, block: block, record: record, offset: GtOffRecordLock as ByteOffset, ids: ids), ids: ids)
+end 'emitGtRecordLockLeave'
+
 function emitGtStrandClaimLost(module StdModule, block IrBlock, owner ValueId, ids ValueMinter) returns ValueId
-	let holderAddr = emitFieldAddr(module, block: block, record: owner, offset: GtOffStrandHolder, ids: ids)
-	let won = ids.mint()
-	module.appendOp(block, op: StdOp.atomicCas(won, addrId: holderAddr, expectedId: emitConst(module, block: block, value: StrandFree, ids: ids), replacementId: emitConst(module, block: block, value: StrandHeld, ids: ids)))
+	let won = emitCasField(module, block: block, record: owner, offset: GtOffStrandHolder as ByteOffset, expected: emitConst(module, block: block, value: StrandFree, ids: ids), replacement: emitConst(module, block: block, value: StrandHeld, ids: ids), ids: ids)
 	return emitCasLost(module, block: block, result: won, ids: ids)
 end 'emitGtStrandClaimLost'
 
@@ -2866,24 +2930,29 @@ function emitGtStrandTokenPublish(module StdModule, block IrBlock, owner ValueId
 	emitSchedRunqPut(module, block: block, gt: owner, ids: ids)
 end 'emitGtStrandTokenPublish'
 
-// `service` must be a green thread's own record, its strand's owner: a mailbox park happens only on a
-// service's own green thread, so no owner is loaded. A coroutine here would claim a holder word nothing reads
-// and publish itself as a token.
+function emitGtPublishClaimedOwner(module StdModule, block IrBlock, owner ValueId, ids ValueMinter)
+	emitStoreField(module, block: block, record: owner, offset: GtOffStrandResume, value: owner)
+	emitGtStrandTokenPublish(module, block: block, owner: owner, ids: ids)
+end 'emitGtPublishClaimedOwner'
+
+// `service` must be a green thread's own record, its strand's owner: a mailbox park happens only on
+// a service's own green thread, so no owner is loaded. A coroutine here would claim a holder word
+// nothing reads and publish itself as a token.
 export function emitGtReadyParkedService(module StdModule, func IrFunction, cur IrBlock, service ValueId, cont IrBlock, ids ValueMinter)
 	var lockFree = module.addBlock(func, label: b"readyservicefree", heat: BlockHeat.normal)
 	var locked = module.addBlock(func, label: b"readyservicelocked", heat: BlockHeat.normal)
+	var lockedWake = module.addBlock(func, label: b"readyservicewake", heat: BlockHeat.normal)
 
 	let heldByAnother = emitGtStrandClaimLost(module, block: cur, owner: service, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(heldByAnother, thenBlockId: locked.id, elseBlockId: lockFree.id))
 
 	emitStoreField(module, block: lockFree, record: service, offset: GtOffStatus, value: emitConst(module, block: lockFree, value: GtStatus.ready.rawValue, ids: ids))
-	emitStoreField(module, block: lockFree, record: service, offset: GtOffStrandResume, value: service)
-	emitGtStrandTokenPublish(module, block: lockFree, owner: service, ids: ids)
+	emitGtPublishClaimedOwner(module, block: lockFree, owner: service, ids: ids)
 	emitSchedWakeAnIdleM(module, block: lockFree, ids: ids)
 	module.setTerminator(lockFree, op: StdOp.branch(cont.id))
 
-	module.appendOp(locked, op: StdOp.call(ids.mint(), callee: GtReadyName, args: argsOf(service)))
-	module.setTerminator(locked, op: StdOp.branch(cont.id))
+	let debt = emitGtReadyLocked(module, block: locked, gt: service, ids: ids)
+	emitSchedWakeIfOwed(module, cur: locked, owed: debt, wake: lockedWake, cont: cont, ids: ids)
 end 'emitGtReadyParkedService'
 
 // ⭐⭐⭐ **WHERE ONE INTRUSIVE FIFO'S TWO ENDS LIVE AND WHICH LINK IT THREADS — the only things the global run
@@ -2923,7 +2992,7 @@ end 'emitQueueLoadHead'
 function emitQueueStoreHead(module StdModule, block IrBlock, ends GtQueueEnds, value ValueId, ids ValueMinter)
 	match ends 'ends'
 		globalLabels then emitStoreGlobalWord(module, block: block, label: GtRunQueueHeadLabel, value: value, ids: ids)
-		ownerFields(owner) then emitStoreField(module, block: block, record: owner, offset: GtOffCoroHead, value: value)
+		ownerFields(owner) then module.appendOp(block, op: StdOp.storeRelease(owner, offset: GtOffCoroHead, valueId: value, valueType: StdType.i64))
 	end 'ends'
 end 'emitQueueStoreHead'
 
@@ -2941,16 +3010,30 @@ function emitQueueStoreTail(module StdModule, block IrBlock, ends GtQueueEnds, v
 	end 'ends'
 end 'emitQueueStoreTail'
 
-// The runtime function that pops this queue's head, called with whatever it needs to NAME the queue — the
-// global one is a `.data` pair and takes no argument, an owner's is the owner. Its result is discarded: the
-// one caller (`emitGtFifoSweepDropped`) already holds the head it is about to free, and under `__sched_lock`
-// the pop and the peek name the same GT.
+// The runtime function that pops this queue's head, called with whatever it needs to NAME the queue
+// — the global one is a `.data` pair and takes no argument, an owner's is the owner. Its result is
+// discarded: the one caller (`emitGtFifoSweepDropped`) already holds the head it is about to free,
+// and under the queue's lock (`emitQueueLockEnter`) the pop and the peek name the same GT.
 function emitQueuePopCall(module StdModule, block IrBlock, ends GtQueueEnds, ids ValueMinter)
 	match ends 'ends'
 		globalLabels then module.appendOp(block, op: StdOp.call(ids.mint(), callee: GtDequeueName, args: ValueIdArray.create()))
 		ownerFields(owner) then module.appendOp(block, op: StdOp.call(ids.mint(), callee: GtCoroDequeueName, args: argsOf(owner)))
 	end 'ends'
 end 'emitQueuePopCall'
+
+function emitQueueLockEnter(module StdModule, block IrBlock, ends GtQueueEnds, ids ValueMinter)
+	match ends 'ends'
+		globalLabels then emitSchedLockEnter(module, block: block, ids: ids)
+		ownerFields(owner) then emitGtRecordLockEnter(module, block: block, record: owner, ids: ids)
+	end 'ends'
+end 'emitQueueLockEnter'
+
+function emitQueueLockLeave(module StdModule, block IrBlock, ends GtQueueEnds, ids ValueMinter)
+	match ends 'ends'
+		globalLabels then emitSchedLockLeave(module, block: block, ids: ids)
+		ownerFields(owner) then emitGtRecordLockLeave(module, block: block, record: owner, ids: ids)
+	end 'ends'
+end 'emitQueueLockLeave'
 
 // ⭐⭐ **APPEND `g` AT THE TAIL — the ONE body `__gt_enqueue` and `__gt_coro_enqueue` are.** The caller owns
 // the three blocks and the ends; both arms return, because an append has nothing to do afterwards.
@@ -3034,7 +3117,7 @@ export function emitGtFifoSweepDropped(module StdModule, func IrFunction, cur Ir
 
 	module.setTerminator(cur, op: StdOp.branch(loopHdr.id))
 
-	emitSchedLockEnter(module, block: loopHdr, ids: ids)
+	emitQueueLockEnter(module, block: loopHdr, ends: ends, ids: ids)
 	let head = emitQueueLoadHead(module, block: loopHdr, ends: ends, ids: ids)
 	emitBranchOnCompare(module, block: loopHdr, value: head, pred: StdCmpPred.eq, against: 0, whenTrue: leaveEmpty, whenFalse: peek, ids: ids)
 
@@ -3043,15 +3126,15 @@ export function emitGtFifoSweepDropped(module StdModule, func IrFunction, cur Ir
 
 	// The pop is the claim and it comes FIRST, so nothing can reach the GT once the lock is released.
 	emitQueuePopCall(module, block: free, ends: ends, ids: ids)
-	emitSchedLockLeave(module, block: free, ids: ids)
+	emitQueueLockLeave(module, block: free, ends: ends, ids: ids)
 	module.appendOp(free, op: StdOp.call(ids.mint(), callee: GtRunnerDoneName, args: argsOf(head)))
 	module.setTerminator(free, op: StdOp.branch(loopHdr.id))
 
 	// The two ways out both release. They are two blocks rather than one because they are reached from two
 	// different tests and a merge block would need a block argument to carry nothing.
-	emitSchedLockLeave(module, block: leaveEmpty, ids: ids)
+	emitQueueLockLeave(module, block: leaveEmpty, ends: ends, ids: ids)
 	module.setTerminator(leaveEmpty, op: StdOp.branch(cont.id))
-	emitSchedLockLeave(module, block: leaveLive, ids: ids)
+	emitQueueLockLeave(module, block: leaveLive, ends: ends, ids: ids)
 	module.setTerminator(leaveLive, op: StdOp.branch(cont.id))
 end 'emitGtFifoSweepDropped'
 
@@ -3065,8 +3148,8 @@ end 'emitGtFifoSweepDropped'
 // reclaimed thread costs no second FAIRNESS TICK; a strand queue has no tiers to be fair between, so
 // `__gt_strand_next` retries at the top of its own pop.
 //
-// ⚠ **THE RECLAIM RUNS WITH `__sched_lock` RELEASED AT BOTH CALLERS**, and the POP is what makes that safe: a
-// GT taken off a queue is unreachable by anyone else.
+// ⚠ **THE RECLAIM RUNS WITH THE QUEUE's LOCK RELEASED AT BOTH CALLERS**, and the POP is what makes
+// that safe: a GT taken off a queue is unreachable by anyone else.
 export union GtHandOffAnswer
 	giveTheProcessor(answer FullRangeInt)
 	giveUpTheStrand(strandOwner ValueId)
@@ -3155,7 +3238,12 @@ function emitGtHandOffGate(module StdModule, func IrFunction, hand IrBlock, foun
 	emitGtStartLockedOwner(module, func: func, startLocked: startLocked, owner: pinned, found: found, declined: putItBack, handOff: handOff, ids: ids)
 
 	let owner = emitLoadField(module, block: putItBack, record: found, offset: GtOffPinnedM, ids: ids)
-	module.appendOp(putItBack, op: StdOp.call(ids.mint(), callee: requeue, args: argsOf(found)))
+
+	match handOff 'requeueUnder'
+		giveTheProcessor then module.appendOp(putItBack, op: StdOp.call(ids.mint(), callee: requeue, args: argsOf(found)))
+		giveUpTheStrand(strandOwner) then emitGtRequeueUnderStrandLock(module, block: putItBack, strandOwner: strandOwner, requeue: requeue, found: found, ids: ids)
+	end 'requeueUnder'
+
 	emitBranchOnCompare(module, block: putItBack, value: owner, pred: StdCmpPred.eq, against: 0, whenTrue: noOwner, whenFalse: wakeOwner, ids: ids)
 
 	emitSchedLockLeave(module, block: noOwner, ids: ids)
@@ -3172,6 +3260,12 @@ function emitGtHandOffGate(module StdModule, func IrFunction, hand IrBlock, foun
 
 	module.setTerminator(handOver, op: StdOp.ret(found))
 end 'emitGtHandOffGate'
+
+function emitGtRequeueUnderStrandLock(module StdModule, block IrBlock, strandOwner ValueId, requeue ByteArray, found ValueId, ids ValueMinter)
+	emitGtRecordLockEnter(module, block: block, record: strandOwner, ids: ids)
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: requeue, args: argsOf(found)))
+	emitGtRecordLockLeave(module, block: block, record: strandOwner, ids: ids)
+end 'emitGtRequeueUnderStrandLock'
 
 function emitGtHandOffWake(module StdModule, func IrFunction, wakeOwner IrBlock, owner ValueId, backOff IrBlock, retry IrBlock, handOff GtHandOffAnswer, ids ValueMinter) returns IrBlock
 	return match handOff 'shape'
@@ -3323,6 +3417,7 @@ export function emitGtAllGAppend(module StdModule, func IrFunction, cur IrBlock,
 	var store = module.addBlock(func, label: b"allgstore", heat: BlockHeat.normal)
 	var done = module.addBlock(func, label: b"allgdone", heat: BlockHeat.normal)
 
+	emitLockWordEnter(module, block: cur, label: GtAllGLockLabel, ids: ids)
 	let len = emitLoadAcquireGlobalWord(module, block: cur, label: GtAllGLenLabel, ids: ids)
 	let cap = emitLoadGlobalWord(module, block: cur, label: GtAllGCapLabel, ids: ids)
 	emitBranchOnCompareValues(module, block: cur, a: len, pred: StdCmpPred.ge, b: cap, whenTrue: grow, whenFalse: store, ids: ids)
@@ -3364,6 +3459,7 @@ export function emitGtAllGAppend(module StdModule, func IrFunction, cur IrBlock,
 	emitStoreReleaseGlobalWord(module, block: store, label: GtAllGLenLabel, value: grown, ids: ids)
 	module.setTerminator(store, op: StdOp.branch(done.id))
 
+	emitLockWordLeave(module, block: done, label: GtAllGLockLabel, ids: ids)
 	return done
 end 'emitGtAllGAppend'
 
@@ -3407,8 +3503,8 @@ function buildGtDequeue(module StdModule)
 	module.functions.push(func)
 end 'buildGtDequeue'
 
-// `__gt_coro_enqueue(gt)` — append `gt` to its owner's strand queue. `__gt_enqueue`'s body off the owner's
-// struct. The caller holds `__sched_lock`.
+// `__gt_coro_enqueue(gt)` — append `gt` to its owner's strand queue. `__gt_enqueue`'s body off the
+// owner's struct. The caller holds the owner's record lock.
 //
 // ⚠ **THE OWNER IS READ OFF THE GT AND NOT FROM TLS**, because a waker may be an OS thread with no M — a
 // machine draining the poller with no processor — and the GT it recovered knows which strand it belongs to.
@@ -3430,8 +3526,9 @@ function buildGtCoroEnqueue(module StdModule)
 	module.functions.push(func)
 end 'buildGtCoroEnqueue'
 
-// `__gt_coro_dequeue(owner) -> gt | 0` — pop the head of `owner`'s strand queue, clearing the tail when the
-// queue empties. `__gt_dequeue`'s body, off the owner struct. The caller holds `__sched_lock`.
+// `__gt_coro_dequeue(owner) -> gt | 0` — pop the head of `owner`'s strand queue, clearing the tail
+// when the queue empties. `__gt_dequeue`'s body, off the owner struct. The caller holds the owner's
+// record lock.
 function buildGtCoroDequeue(module StdModule)
 	var func = IrFunction.createFromStd(GtCoroDequeueName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
@@ -3448,19 +3545,20 @@ function buildGtCoroDequeue(module StdModule)
 end 'buildGtCoroDequeue'
 
 // ⭐⭐⭐ **`__gt_strand_next(owner, parked) -> gt | 0` — WHAT THIS STRAND RUNS NEXT, OR 0 HAVING GIVEN
-// THE STRAND UP.** The strand runner's consume door: the lock, the resume slot (`GtOffStrandResume`) or else
+// THE STRAND UP.** The strand runner's consume door: the resume slot (`GtOffStrandResume`) or else
 // the pop, and the tombstone refusal `emitGtTombstoneHandback` shares with `__sched_find_runnable`.
 //
 // `parked` is the member that has just parked, or 0, which is also what a mailbox park passes once
-// `__gt_run_strand` has committed it. Its `__gt_register_park` runs in the same hold as the pop, so a
-// strand turn takes `__sched_lock` once, and the wake debt the registration answers is paid after the
-// release on every road out. A tombstone retry re-enters at `snpop` and registers nothing again.
+// `__gt_run_strand` has committed it. Its `__gt_register_park` runs before the pop, and the wake
+// debt the registration answers is paid with no lock held on every road out. A tombstone retry
+// re-enters at `snpop` and registers nothing again.
 //
-// ⭐⭐⭐ **AN EMPTY QUEUE RELEASES THE STRAND IN THE SAME CRITICAL SECTION THAT FOUND IT EMPTY** — the other
-// half of `GtOffStrandHolder`'s argument: a member readied before this section is in the queue it just
-// popped, and one readied after finds the holder word 0 and publishes a token. The strand hold's reference is
-// dropped after the release (`emitGtStrandUnref`), which may reclaim `owner` — so the caller touches `owner`
-// no more once this answers 0.
+// ⭐⭐⭐ **AN EMPTY QUEUE RELEASES THE STRAND AND THEN LOOKS AGAIN** — the other half of
+// `buildGtReadyLocked`'s Dekker pair: a member pushed before the decrement is seen by the acquire
+// re-read and the strand re-claimed, and one pushed after finds the holder word 0 and publishes a
+// token. The strand hold's reference is dropped only once the strand is given up
+// (`emitGtStrandUnref`), which may reclaim `owner` — so the caller touches `owner` no more once
+// this answers 0.
 function buildGtStrandNext(module StdModule)
 	var func = IrFunction.createFromStd(GtStrandNextName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
@@ -3471,8 +3569,13 @@ function buildGtStrandNext(module StdModule)
 	var pop = module.addBlock(func, label: b"snpop", heat: BlockHeat.normal)
 	var take = module.addBlock(func, label: b"sntake", heat: BlockHeat.normal)
 	var resume = module.addBlock(func, label: b"snresume", heat: BlockHeat.normal)
+	var peek = module.addBlock(func, label: b"snpeek", heat: BlockHeat.normal)
 	var dequeue = module.addBlock(func, label: b"sndequeue", heat: BlockHeat.normal)
+	var dequeued = module.addBlock(func, label: b"sndequeued", heat: BlockHeat.normal)
 	var release = module.addBlock(func, label: b"snrelease", heat: BlockHeat.normal)
+	var recheck = module.addBlock(func, label: b"snrecheck", heat: BlockHeat.normal)
+	var reclaim = module.addBlock(func, label: b"snreclaim", heat: BlockHeat.normal)
+	var gaveUp = module.addBlock(func, label: b"sngaveup", heat: BlockHeat.normal)
 	var gotOne = module.addBlock(func, label: b"sngot", heat: BlockHeat.normal)
 	var candidate = module.addBlock(func, label: b"sncandidate", heat: BlockHeat.normal)
 
@@ -3487,7 +3590,6 @@ function buildGtStrandNext(module StdModule)
 	let owed = ids.mint()
 	take.blockArgs.push(IrBlockArg.create(owed, argType: StdType.i64))
 
-	emitSchedLockEnter(module, block: first, ids: ids)
 	let nothingParked = emitCompareWithConstant(module, block: first, value: parked, pred: StdCmpPred.eq, against: 0, ids: ids)
 	let noDebt = emitConst(module, block: first, value: WakeDebtNone, ids: ids)
 	module.setTerminator(first, op: StdOp.condBranch(nothingParked, thenBlockId: take.id, elseBlockId: registerPark.id))
@@ -3497,29 +3599,38 @@ function buildGtStrandNext(module StdModule)
 	module.appendOp(registerPark, op: StdOp.call(registered, callee: GtRegisterParkName, args: argsOf(parked)))
 	emitBranchWithDebt(module, from: registerPark, to: take, debt: registered)
 
-	emitSchedLockEnter(module, block: pop, ids: ids)
 	emitBranchWithDebt(module, from: pop, to: take, debt: emitConst(module, block: pop, value: WakeDebtNone, ids: ids))
 
 	let resumed = emitLoadField(module, block: take, record: owner, offset: GtOffStrandResume, ids: ids)
-	emitBranchOnCompare(module, block: take, value: resumed, pred: StdCmpPred.eq, against: 0, whenTrue: dequeue, whenFalse: resume, ids: ids)
+	emitBranchOnCompare(module, block: take, value: resumed, pred: StdCmpPred.eq, against: 0, whenTrue: peek, whenFalse: resume, ids: ids)
 
 	emitStoreField(module, block: resume, record: owner, offset: GtOffStrandResume, value: emitConst(module, block: resume, value: 0, ids: ids))
-	emitSchedLockLeave(module, block: resume, ids: ids)
 	var resumePaid = emitGtPayDebtAfterRelease(module, func: func, cur: resume, owed: owed, label: b"snresume", ids: ids)
 	module.setTerminator(resumePaid, op: StdOp.branch(candidate.id))
 	resumePaid.branchEdges.push(BranchEdge.create(candidate.id, argIds: argsOf(resumed)))
 
+	let queued = emitLoadAcquireField(module, block: peek, record: owner, offset: GtOffCoroHead, ids: ids)
+	emitBranchOnCompare(module, block: peek, value: queued, pred: StdCmpPred.eq, against: 0, whenTrue: release, whenFalse: dequeue, ids: ids)
+
+	emitGtRecordLockEnter(module, block: dequeue, record: owner, ids: ids)
 	let popped = ids.mint()
 	module.appendOp(dequeue, op: StdOp.call(popped, callee: GtCoroDequeueName, args: argsOf(owner)))
-	emitBranchOnCompare(module, block: dequeue, value: popped, pred: StdCmpPred.eq, against: 0, whenTrue: release, whenFalse: gotOne, ids: ids)
+	emitGtRecordLockLeave(module, block: dequeue, record: owner, ids: ids)
+	emitBranchOnCompare(module, block: dequeue, value: popped, pred: StdCmpPred.eq, against: 0, whenTrue: dequeued, whenFalse: gotOne, ids: ids)
+	emitBranchWithDebt(module, from: dequeued, to: take, debt: owed)
 
-	module.appendOp(release, op: StdOp.storeRelease(owner, offset: GtOffStrandHolder, valueId: emitConst(module, block: release, value: StrandFree, ids: ids), valueType: StdType.i64))
-	emitSchedLockLeave(module, block: release, ids: ids)
-	var releasePaid = emitGtPayDebtAfterRelease(module, func: func, cur: release, owed: owed, label: b"snrelease", ids: ids)
-	var unreffed = emitGtStrandUnref(module, func: func, cur: releasePaid, owner: owner, ids: ids)
+	_ = emitFieldAccumulate(module, block: release, record: owner, offset: GtOffStrandHolder, delta: emitConst(module, block: release, value: OneFewer, ids: ids), multiM: true, ids: ids)
+	let requeued = emitLoadAcquireField(module, block: release, record: owner, offset: GtOffCoroHead, ids: ids)
+	emitBranchOnCompare(module, block: release, value: requeued, pred: StdCmpPred.eq, against: 0, whenTrue: gaveUp, whenFalse: recheck, ids: ids)
+
+	let reclaimLost = emitGtStrandClaimLost(module, block: recheck, owner: owner, ids: ids)
+	module.setTerminator(recheck, op: StdOp.condBranch(reclaimLost, thenBlockId: gaveUp.id, elseBlockId: reclaim.id))
+	emitBranchWithDebt(module, from: reclaim, to: take, debt: owed)
+
+	var gaveUpPaid = emitGtPayDebtAfterRelease(module, func: func, cur: gaveUp, owed: owed, label: b"snrelease", ids: ids)
+	var unreffed = emitGtStrandUnref(module, func: func, cur: gaveUpPaid, owner: owner, ids: ids)
 	emitConstReturn(module, block: unreffed, value: 0, ids: ids)
 
-	emitSchedLockLeave(module, block: gotOne, ids: ids)
 	var gotPaid = emitGtPayDebtAfterRelease(module, func: func, cur: gotOne, owed: owed, label: b"sngot", ids: ids)
 	module.setTerminator(gotPaid, op: StdOp.branch(candidate.id))
 	gotPaid.branchEdges.push(BranchEdge.create(candidate.id, argIds: argsOf(popped)))
@@ -3731,9 +3842,10 @@ end 'emitTimerSiftUp'
 // Restore the heap DOWNWARDS from `startIndex` over the first `count` entries, then branch to `cont`: while
 // the earlier of the two children comes before the entry, exchange and follow it down. O(log n) exchanges.
 //
-// The caller has just placed an entry at `startIndex` that may be too LATE for where it sits — the last live
-// entry moved over the hole a pop or a remove opened.
-function emitTimerSiftDown(module StdModule, func IrFunction, ids ValueMinter, startBlock IrBlock, heapBase ValueId, count ValueId, startIndex ValueId, cont IrBlock)
+// The caller has just placed an entry at `startIndex` that may be too LATE for where it sits — the
+// last live entry moved over the hole a timer pop or remove opened, or a heap sort's build or
+// extraction step (`__gt_any_lock`).
+function emitHeapSiftDown(module StdModule, func IrFunction, ids ValueMinter, startBlock IrBlock, heap SiftHeap, count ValueId, startIndex ValueId, cont IrBlock)
 	var hdr = module.addBlock(func, label: b"siftdownhdr", heat: BlockHeat.normal)
 	var haveLeft = module.addBlock(func, label: b"siftdownhaveleft", heat: BlockHeat.normal)
 	var chooseChild = module.addBlock(func, label: b"siftdownchoose", heat: BlockHeat.normal)
@@ -3760,11 +3872,11 @@ function emitTimerSiftDown(module StdModule, func IrFunction, ids ValueMinter, s
 
 	// chooseChild: both children exist, so the candidate is whichever comes first — and the tie rule decides
 	// when their deadlines match, which is what keeps two same-deadline entries in arming order.
-	let leftAddr = emitTimerEntryAddr(module, block: chooseChild, ids: ids, heapBase: heapBase, index: left)
-	let rightAddr = emitTimerEntryAddr(module, block: chooseChild, ids: ids, heapBase: heapBase, index: right)
-	let leftEntry = emitTimerEntryLoad(module, block: chooseChild, ids: ids, addr: leftAddr)
-	let rightEntry = emitTimerEntryLoad(module, block: chooseChild, ids: ids, addr: rightAddr)
-	let rightWins = emitTimerEntryBefore(module, block: chooseChild, ids: ids, a: rightEntry, b: leftEntry)
+	let leftAddr = emitSiftEntryAddr(module, block: chooseChild, ids: ids, heap: heap, index: left)
+	let rightAddr = emitSiftEntryAddr(module, block: chooseChild, ids: ids, heap: heap, index: right)
+	let leftEntry = emitSiftEntryLoad(module, block: chooseChild, ids: ids, heap: heap, addr: leftAddr)
+	let rightEntry = emitSiftEntryLoad(module, block: chooseChild, ids: ids, heap: heap, addr: rightAddr)
+	let rightWins = emitSiftEntryBefore(module, block: chooseChild, ids: ids, heap: heap, a: rightEntry, b: leftEntry)
 	module.setTerminator(chooseChild, op: StdOp.condBranch(rightWins, thenBlockId: takeRight.id, elseBlockId: takeLeft.id))
 
 	// takeLeft / takeRight: two blocks rather than one two-armed edge, because a block carries ONE argument
@@ -3777,19 +3889,71 @@ function emitTimerSiftDown(module StdModule, func IrFunction, ids ValueMinter, s
 	// compare(child): the heap property holds here as soon as the entry comes before its earliest child.
 	let child = ids.mint()
 	compare.blockArgs.push(IrBlockArg.create(child, argType: StdType.i64))
-	let childAddr = emitTimerEntryAddr(module, block: compare, ids: ids, heapBase: heapBase, index: child)
-	let parentAddr = emitTimerEntryAddr(module, block: compare, ids: ids, heapBase: heapBase, index: i)
-	let childEntry = emitTimerEntryLoad(module, block: compare, ids: ids, addr: childAddr)
-	let parentEntry = emitTimerEntryLoad(module, block: compare, ids: ids, addr: parentAddr)
-	let childWins = emitTimerEntryBefore(module, block: compare, ids: ids, a: childEntry, b: parentEntry)
+	let childAddr = emitSiftEntryAddr(module, block: compare, ids: ids, heap: heap, index: child)
+	let parentAddr = emitSiftEntryAddr(module, block: compare, ids: ids, heap: heap, index: i)
+	let childEntry = emitSiftEntryLoad(module, block: compare, ids: ids, heap: heap, addr: childAddr)
+	let parentEntry = emitSiftEntryLoad(module, block: compare, ids: ids, heap: heap, addr: parentAddr)
+	let childWins = emitSiftEntryBefore(module, block: compare, ids: ids, heap: heap, a: childEntry, b: parentEntry)
 	module.setTerminator(compare, op: StdOp.condBranch(childWins, thenBlockId: exchange.id, elseBlockId: cont.id))
 
 	// exchange: both entries are already in registers, so the swap is four stores and no reload.
-	emitTimerEntryStore(module, block: exchange, addr: parentAddr, entry: childEntry)
-	emitTimerEntryStore(module, block: exchange, addr: childAddr, entry: parentEntry)
+	emitSiftEntryStore(module, block: exchange, addr: parentAddr, entry: childEntry)
+	emitSiftEntryStore(module, block: exchange, addr: childAddr, entry: parentEntry)
 	module.setTerminator(exchange, op: StdOp.branch(hdr.id))
 	exchange.branchEdges.push(BranchEdge.create(hdr.id, argIds: argsOf(child)))
-end 'emitTimerSiftDown'
+end 'emitHeapSiftDown'
+
+union SiftHeap
+	timerEntries(heapBase ValueId)
+	addressWords(base ValueId)
+end 'SiftHeap'
+
+union SiftEntry
+	timer(entry TimerEntry)
+	word(value ValueId)
+end 'SiftEntry'
+
+function emitSiftEntryAddr(module StdModule, block IrBlock, ids ValueMinter, heap SiftHeap, index ValueId) returns ValueId
+	return match heap 'heap'
+		timerEntries(heapBase) gives emitTimerEntryAddr(module, block: block, ids: ids, heapBase: heapBase, index: index)
+		addressWords(base) gives emitWordSlotAddr(module, block: block, base: base, index: index, ids: ids)
+	end 'heap'
+end 'emitSiftEntryAddr'
+
+function emitSiftEntryLoad(module StdModule, block IrBlock, ids ValueMinter, heap SiftHeap, addr ValueId) returns SiftEntry
+	return match heap 'heap'
+		timerEntries gives SiftEntry.timer(emitTimerEntryLoad(module, block: block, ids: ids, addr: addr))
+		addressWords gives SiftEntry.word(emitLoadField(module, block: block, record: addr, offset: 0, ids: ids))
+	end 'heap'
+end 'emitSiftEntryLoad'
+
+function emitSiftEntryStore(module StdModule, block IrBlock, addr ValueId, entry SiftEntry)
+	match entry 'entry'
+		timer(held) then emitTimerEntryStore(module, block: block, addr: addr, entry: held)
+		word(held) then emitStoreField(module, block: block, record: addr, offset: 0, value: held)
+	end 'entry'
+end 'emitSiftEntryStore'
+
+function emitSiftEntryBefore(module StdModule, block IrBlock, ids ValueMinter, heap SiftHeap, a SiftEntry, b SiftEntry) returns ValueId
+	return match heap 'heap'
+		timerEntries gives emitTimerEntryBefore(module, block: block, ids: ids, a: siftTimerOf(a), b: siftTimerOf(b))
+		addressWords gives emitCmp(module, block: block, a: siftWordOf(a), b: siftWordOf(b), pred: StdCmpPred.gt, ids: ids)
+	end 'heap'
+end 'emitSiftEntryBefore'
+
+function siftTimerOf(entry SiftEntry) returns TimerEntry
+	match entry 'entry'
+		timer(held) then return held
+		word then panic("siftTimerOf: a timer heap was handed a word entry")
+	end 'entry'
+end 'siftTimerOf'
+
+function siftWordOf(entry SiftEntry) returns ValueId
+	match entry 'entry'
+		word(held) then return held
+		timer then panic("siftWordOf: an address-word heap was handed a timer entry")
+	end 'entry'
+end 'siftWordOf'
 
 // `__gt_timer_add(gt, deadline)` — insert a parked GT's entry into the timer MIN-HEAP: stamp it with the arm
 // sequence (`__gt_timer_seq`, the tiebreaker the store's header explains), append it at `heap[count]`,
@@ -4005,7 +4169,7 @@ function buildGtTimerCheck(module StdModule)
 	let lastAddr = emitTimerEntryAddr(module, block: moveLast, ids: ids, heapBase: heapBase, index: newCount)
 	let last = emitTimerEntryLoad(module, block: moveLast, ids: ids, addr: lastAddr)
 	emitTimerEntryStore(module, block: moveLast, addr: heapBase, entry: last)
-	emitTimerSiftDown(module, func: func, ids: ids, startBlock: moveLast, heapBase: heapBase, count: newCount, startIndex: zeroConst, cont: fire)
+	emitHeapSiftDown(module, func: func, ids: ids, startBlock: moveLast, heap: SiftHeap.timerEntries(heapBase), count: newCount, startIndex: zeroConst, cont: fire)
 
 	// fire: end the popped wait. The order these happen in IS the order the threads resume in, which is what
 	// makes the pop-min above observable at all.
@@ -4086,10 +4250,11 @@ let NoCompletedPromise = -1
 // apart; that assertion is what keeps this constant honest.
 export let PromiseSlotBytes = PointerFieldBytes
 
-// ⭐⭐⭐ **`__gt_any_completed(record) -> index | NoCompletedPromise` — THE `awaitAny` SCAN.** It walks
-// `[0, length)` of the caller's `__ManagedMemory` record and answers the FIRST slot whose GT has reached
-// `completed`. `__gt_await_any` asks it before it parks and after every wake, and the registration asks it
-// under `__sched_lock`, which is what closes the window between the first scan and the registration.
+// ⭐⭐⭐ **`__gt_any_completed(record) -> index | NoCompletedPromise` — THE `awaitAny` SCAN.** It
+// walks `[0, length)` of the caller's `__ManagedMemory` record and answers the FIRST slot whose GT
+// has reached `completed`. `__gt_await_any` asks it before it parks and after every wake, and the
+// registration asks it under every slot's record lock (`__gt_any_lock`), which is what closes the
+// window between the first scan and the registration.
 //
 // ⚠ **THE STATUS READ IS AN ACQUIRE** (`emitGtLoadPublishedStatus`): both writers publish `completed` with a
 // release after the two answer words, so a scanner on another M that sees `completed` also sees the result.
@@ -4162,6 +4327,145 @@ function buildGtAnyCompleted(module StdModule)
 	module.functions.push(func)
 end 'buildGtAnyCompleted'
 
+function emitIndexStep(module StdModule, block IrBlock, index ValueId, delta FullRangeInt, ids ValueMinter) returns ValueId
+	return emitBin(module, block: block, a: index, b: emitConst(module, block: block, value: delta, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+end 'emitIndexStep'
+
+// `__gt_any_lock(record) -> scratch` — take the record lock of every promise in `record`, in
+// ascending address order, as Go's `sellock`: two awaitAny calls over overlapping promises take
+// their common locks in one order and cannot deadlock. The addresses are heap-sorted in a slab
+// scratch of `length + 1` words whose word 0 is the count; `__gt_any_unlock(scratch)` releases them
+// in reverse and frees it.
+function buildGtAnyLock(module StdModule)
+	var func = IrFunction.createFromStd(GtAnyLockName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var gatherHdr = module.addBlock(func, label: b"anylockgatherhdr", heat: BlockHeat.normal)
+	var gatherBody = module.addBlock(func, label: b"anylockgatherbody", heat: BlockHeat.normal)
+	var gatherKeep = module.addBlock(func, label: b"anylockgatherkeep", heat: BlockHeat.normal)
+	var gatherSkip = module.addBlock(func, label: b"anylockgatherskip", heat: BlockHeat.normal)
+	var gathered = module.addBlock(func, label: b"anylockgathered", heat: BlockHeat.normal)
+	var buildHdr = module.addBlock(func, label: b"anylockbuildhdr", heat: BlockHeat.normal)
+	var buildBody = module.addBlock(func, label: b"anylockbuildbody", heat: BlockHeat.normal)
+	var buildStep = module.addBlock(func, label: b"anylockbuildstep", heat: BlockHeat.normal)
+	var sortHdr = module.addBlock(func, label: b"anylocksorthdr", heat: BlockHeat.normal)
+	var sortBody = module.addBlock(func, label: b"anylocksortbody", heat: BlockHeat.normal)
+	var sortStep = module.addBlock(func, label: b"anylocksortstep", heat: BlockHeat.normal)
+	var sorted = module.addBlock(func, label: b"anylocksorted", heat: BlockHeat.normal)
+	var lockHdr = module.addBlock(func, label: b"anylocklockhdr", heat: BlockHeat.normal)
+	var lockBody = module.addBlock(func, label: b"anylocklockbody", heat: BlockHeat.normal)
+	var locked = module.addBlock(func, label: b"anylocklocked", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let record = 0
+
+	let buffer = emitLoadField(module, block: entry, record: record, offset: ManagedRecordBufferOffset, ids: ids)
+	let length = emitLoadField(module, block: entry, record: record, offset: ManagedRecordLengthOffset, ids: ids)
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	let scratchBytes = emitBin(module, block: entry, a: emitIndexStep(module, block: entry, index: length, delta: OneMore, ids: ids), b: emitConst(module, block: entry, value: PointerFieldBytes, ids: ids), opcode: StdBinOpcode.mul, ids: ids)
+	let scratch = ids.mint()
+	module.appendOp(entry, op: StdOp.call(scratch, callee: SlabAllocName, args: argsOf(scratchBytes)))
+	module.setTerminator(entry, op: StdOp.branch(gatherHdr.id))
+	entry.branchEdges.push(BranchEdge.create(gatherHdr.id, argIds: twoArgs(zero, second: zero)))
+
+	let i = ids.mint()
+	let n = ids.mint()
+	gatherHdr.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
+	gatherHdr.blockArgs.push(IrBlockArg.create(n, argType: StdType.i64))
+	emitBranchOnCompareValues(module, block: gatherHdr, a: i, pred: StdCmpPred.ge, b: length, whenTrue: gathered, whenFalse: gatherBody, ids: ids)
+
+	let slotAddr = emitSlotAddr(module, block: gatherBody, buffer: buffer, index: i, elementSize: emitConst(module, block: gatherBody, value: PromiseSlotBytes, ids: ids), ids: ids)
+	let promise = emitLoadField(module, block: gatherBody, record: slotAddr, offset: 0, ids: ids)
+	emitBranchOnCompare(module, block: gatherBody, value: promise, pred: StdCmpPred.eq, against: 0, whenTrue: gatherSkip, whenFalse: gatherKeep, ids: ids)
+
+	let kept = emitIndexStep(module, block: gatherKeep, index: n, delta: OneMore, ids: ids)
+	emitStoreField(module, block: gatherKeep, record: emitWordSlotAddr(module, block: gatherKeep, base: scratch, index: kept, ids: ids), offset: 0, value: promise)
+	module.setTerminator(gatherKeep, op: StdOp.branch(gatherHdr.id))
+	gatherKeep.branchEdges.push(BranchEdge.create(gatherHdr.id, argIds: twoArgs(emitIndexStep(module, block: gatherKeep, index: i, delta: OneMore, ids: ids), second: kept)))
+
+	module.setTerminator(gatherSkip, op: StdOp.branch(gatherHdr.id))
+	gatherSkip.branchEdges.push(BranchEdge.create(gatherHdr.id, argIds: twoArgs(emitIndexStep(module, block: gatherSkip, index: i, delta: OneMore, ids: ids), second: n)))
+
+	emitStoreField(module, block: gathered, record: scratch, offset: 0, value: n)
+	let words = emitWordSlotAddr(module, block: gathered, base: scratch, index: emitConst(module, block: gathered, value: 1, ids: ids), ids: ids)
+	let half = emitBin(module, block: gathered, a: n, b: emitConst(module, block: gathered, value: 1, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
+	module.setTerminator(gathered, op: StdOp.branch(buildHdr.id))
+	gathered.branchEdges.push(BranchEdge.create(buildHdr.id, argIds: argsOf(half)))
+
+	let pending = ids.mint()
+	buildHdr.blockArgs.push(IrBlockArg.create(pending, argType: StdType.i64))
+	emitBranchOnCompare(module, block: buildHdr, value: pending, pred: StdCmpPred.eq, against: 0, whenTrue: sortHdr, whenFalse: buildBody, ids: ids)
+	buildHdr.branchEdges.push(BranchEdge.create(sortHdr.id, argIds: argsOf(n)))
+
+	let root = emitIndexStep(module, block: buildBody, index: pending, delta: OneFewer, ids: ids)
+	emitHeapSiftDown(module, func: func, ids: ids, startBlock: buildBody, heap: SiftHeap.addressWords(words), count: n, startIndex: root, cont: buildStep)
+	module.setTerminator(buildStep, op: StdOp.branch(buildHdr.id))
+	buildStep.branchEdges.push(BranchEdge.create(buildHdr.id, argIds: argsOf(root)))
+
+	let unsorted = ids.mint()
+	sortHdr.blockArgs.push(IrBlockArg.create(unsorted, argType: StdType.i64))
+	emitBranchOnCompare(module, block: sortHdr, value: unsorted, pred: StdCmpPred.le, against: 1, whenTrue: sorted, whenFalse: sortBody, ids: ids)
+
+	let last = emitIndexStep(module, block: sortBody, index: unsorted, delta: OneFewer, ids: ids)
+	let rootAddr = emitWordSlotAddr(module, block: sortBody, base: words, index: zero, ids: ids)
+	let lastAddr = emitWordSlotAddr(module, block: sortBody, base: words, index: last, ids: ids)
+	let largest = emitLoadField(module, block: sortBody, record: rootAddr, offset: 0, ids: ids)
+	let displaced = emitLoadField(module, block: sortBody, record: lastAddr, offset: 0, ids: ids)
+	emitStoreField(module, block: sortBody, record: rootAddr, offset: 0, value: displaced)
+	emitStoreField(module, block: sortBody, record: lastAddr, offset: 0, value: largest)
+	emitHeapSiftDown(module, func: func, ids: ids, startBlock: sortBody, heap: SiftHeap.addressWords(words), count: last, startIndex: zero, cont: sortStep)
+	module.setTerminator(sortStep, op: StdOp.branch(sortHdr.id))
+	sortStep.branchEdges.push(BranchEdge.create(sortHdr.id, argIds: argsOf(last)))
+
+	module.setTerminator(sorted, op: StdOp.branch(lockHdr.id))
+	sorted.branchEdges.push(BranchEdge.create(lockHdr.id, argIds: argsOf(zero)))
+
+	let index = ids.mint()
+	lockHdr.blockArgs.push(IrBlockArg.create(index, argType: StdType.i64))
+	emitBranchOnCompareValues(module, block: lockHdr, a: index, pred: StdCmpPred.ge, b: n, whenTrue: locked, whenFalse: lockBody, ids: ids)
+
+	let ordered = emitWordSlotLoad(module, block: lockBody, base: words, index: index, ids: ids)
+	emitGtRecordLockEnter(module, block: lockBody, record: ordered, ids: ids)
+	module.setTerminator(lockBody, op: StdOp.branch(lockHdr.id))
+	lockBody.branchEdges.push(BranchEdge.create(lockHdr.id, argIds: argsOf(emitIndexStep(module, block: lockBody, index: index, delta: OneMore, ids: ids))))
+
+	module.setTerminator(locked, op: StdOp.ret(scratch))
+	module.functions.push(func)
+end 'buildGtAnyLock'
+
+function buildGtAnyUnlock(module StdModule)
+	var func = IrFunction.createFromStd(GtAnyUnlockName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var unlockHdr = module.addBlock(func, label: b"anyunlockhdr", heat: BlockHeat.normal)
+	var unlockBody = module.addBlock(func, label: b"anyunlockbody", heat: BlockHeat.normal)
+	var unlocked = module.addBlock(func, label: b"anyunlocked", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let scratch = 0
+
+	let n = emitLoadField(module, block: entry, record: scratch, offset: 0, ids: ids)
+	let words = emitWordSlotAddr(module, block: entry, base: scratch, index: emitConst(module, block: entry, value: 1, ids: ids), ids: ids)
+	module.setTerminator(entry, op: StdOp.branch(unlockHdr.id))
+	entry.branchEdges.push(BranchEdge.create(unlockHdr.id, argIds: argsOf(n)))
+
+	let remaining = ids.mint()
+	unlockHdr.blockArgs.push(IrBlockArg.create(remaining, argType: StdType.i64))
+	emitBranchOnCompare(module, block: unlockHdr, value: remaining, pred: StdCmpPred.eq, against: 0, whenTrue: unlocked, whenFalse: unlockBody, ids: ids)
+
+	let index = emitIndexStep(module, block: unlockBody, index: remaining, delta: OneFewer, ids: ids)
+	let ordered = emitWordSlotLoad(module, block: unlockBody, base: words, index: index, ids: ids)
+	emitGtRecordLockLeave(module, block: unlockBody, record: ordered, ids: ids)
+	module.setTerminator(unlockBody, op: StdOp.branch(unlockHdr.id))
+	unlockBody.branchEdges.push(BranchEdge.create(unlockHdr.id, argIds: argsOf(index)))
+
+	emitSlabFree(module, block: unlocked, ptr: scratch, ids: ids)
+	module.setTerminator(unlocked, op: StdOp.retVoid)
+	module.functions.push(func)
+end 'buildGtAnyUnlock'
+
 // Ask the scan which slot has completed, into a fresh value.
 function emitAnyCompletedIndex(module StdModule, block IrBlock, record ValueId, ids ValueMinter) returns ValueId
 	let index = ids.mint()
@@ -4178,9 +4482,9 @@ enum AwaitAnySlotAct
 	withdraw
 end 'AwaitAnySlotAct'
 
-// ⭐⭐ **WALK EVERY PROMISE IN `record`, TAKING OR GIVING BACK ITS AWAITER WORD FOR `g`.** `__sched_lock`
-// held. It terminates `cur` and continues at `cont`. A `0` slot holds no promise and is skipped, for
-// `__gt_any_completed`'s reason.
+// ⭐⭐ **WALK EVERY PROMISE IN `record`, TAKING OR GIVING BACK ITS AWAITER WORD FOR `g`.** Every
+// slot's record lock held (`__gt_any_lock`). It terminates `cur` and continues at `cont`. A `0`
+// slot holds no promise and is skipped, for `__gt_any_completed`'s reason.
 function emitGtAwaitAnySlotWalk(module StdModule, func IrFunction, cur IrBlock, record ValueId, g ValueId, act AwaitAnySlotAct, cont IrBlock, ids ValueMinter)
 	var hdr = module.addBlock(func, label: b"anywalkhdr", heat: BlockHeat.normal)
 	var body = module.addBlock(func, label: b"anywalkbody", heat: BlockHeat.normal)
@@ -4212,10 +4516,10 @@ function emitGtAwaitAnySlotWalk(module StdModule, func IrFunction, cur IrBlock, 
 	next.branchEdges.push(BranchEdge.create(hdr.id, argIds: argsOf(step)))
 end 'emitGtAwaitAnySlotWalk'
 
-// ⭐⭐ **MAKE `awaiter` THE ONE GT `promise` READIES ON COMPLETION — both registrations' claim.** `__sched_lock`
-// held. A promise holds one awaiter and moves whole, so a word already taken is a second waiter on one
-// promise, which the front end cannot produce: the abort names it rather than overwrite the first, whose
-// wake would then be lost. Terminates `cur` into `cont`.
+// ⭐⭐ **MAKE `awaiter` THE ONE GT `promise` READIES ON COMPLETION — both registrations' claim.**
+// `promise`'s record lock held. A promise holds one awaiter and moves whole, so a word already
+// taken is a second waiter on one promise, which the front end cannot produce: the abort names it
+// rather than overwrite the first, whose wake would then be lost. Terminates `cur` into `cont`.
 function emitGtClaimAwaiter(module StdModule, func IrFunction, cur IrBlock, promise ValueId, awaiter ValueId, cont IrBlock, ids ValueMinter)
 	var take = module.addBlock(func, label: b"claimawaitertake", heat: BlockHeat.normal)
 	var twice = module.addBlock(func, label: b"claimawaitertwice", heat: BlockHeat.normal)
@@ -4266,12 +4570,13 @@ function buildGtAwaitAny(module StdModule)
 
 	emitGtPark(module, ids: ids, cur: park, kind: GtParkKind.awaitAny.rawValue, arg: record, cont: withdraw)
 
-	// Withdrawn under the lock every registration and every completer's hand-over take, so no slot is left
-	// naming this thread once the scan below can answer.
+	// Withdrawn under the slot locks every registration and every completer's hand-over take, so no
+	// slot is left naming this thread once the scan below can answer.
 	let selecting = emitLoadCurrentGt(module, block: withdraw, ids: ids)
-	emitSchedLockEnter(module, block: withdraw, ids: ids)
+	let lockedSlots = ids.mint()
+	module.appendOp(withdraw, op: StdOp.call(lockedSlots, callee: GtAnyLockName, args: argsOf(record)))
 	emitGtAwaitAnySlotWalk(module, func: func, cur: withdraw, record: record, g: selecting, act: AwaitAnySlotAct.withdraw, cont: withdrawn, ids: ids)
-	emitSchedLockLeave(module, block: withdrawn, ids: ids)
+	module.appendOp(withdrawn, op: StdOp.call(ids.mint(), callee: GtAnyUnlockName, args: argsOf(lockedSlots)))
 	module.setTerminator(withdrawn, op: StdOp.branch(scan.id))
 
 	module.functions.push(func)
@@ -4402,9 +4707,7 @@ function buildGtRunMain(module StdModule, target Target)
 	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: GtInitName, args: ValueIdArray.create()))
 	let mainGt = ids.mint()
 	module.appendOp(entry, op: StdOp.call(mainGt, callee: GtSpawnMainName, args: argsOf(mainEntry)))
-	emitSchedLockEnter(module, block: entry, ids: ids)
 	_ = emitGtReadyLocked(module, block: entry, gt: mainGt, ids: ids)
-	emitSchedLockLeave(module, block: entry, ids: ids)
 	emitSchedSysmonStart(module, func: func, cur: entry, cont: running, target: target, ids: ids)
 	emitSchedMainLoop(module, block: running, until: SchedMainLoopUntil.mainCompleted, ids: ids)
 
@@ -4446,9 +4749,10 @@ end 'emitAwaitTraceLines'
 // ONLY in the exit terminator (a plain `ret` vs the dual-register `errorReturn` for `try await`).
 // `__gt_try_await_holding` is the throwing one leaving its arrival to `__gt_reply_witness` (`arrival`).
 //
-// ⭐ **THE WAIT IS A LOOP ON THE STATUS**, so a wake that finds the promise still pending parks again rather
-// than reading a result nobody wrote. The registration (`__gt_register_park`'s await arm) re-reads the status
-// under `__sched_lock` and resumes at once if the promise completed after this read.
+// ⭐ **THE WAIT IS A LOOP ON THE STATUS**, so a wake that finds the promise still pending parks
+// again rather than reading a result nobody wrote. The registration (`__gt_register_park`'s await
+// arm) re-reads the status under the promise's record lock and resumes at once if the promise
+// completed after this read.
 function buildGtAwait(module StdModule, name ByteArray, throwing bool, arrival GtAwaitArrival, tracing GtTracing)
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
@@ -4604,8 +4908,7 @@ function emitGtReleaserCall(module StdModule, func IrFunction, ids ValueMinter, 
 
 	let releaserAddr = emitFieldAddr(module, block: claim, record: gt, offset: GtOffReleaser, ids: ids)
 	let cleared = emitConst(module, block: claim, value: 0, ids: ids)
-	let won = ids.mint()
-	module.appendOp(claim, op: StdOp.atomicCas(won, addrId: releaserAddr, expectedId: releaser, replacementId: cleared))
+	let won = emitCasAt(module, block: claim, addr: releaserAddr, expected: releaser, replacement: cleared, ids: ids)
 	emitBranchOnCasLost(module, block: claim, result: won, lost: cont, won: release, ids: ids)
 
 	let consumedFlag = emitConst(module, block: release, value: asyncResultConsumedFlag(resultDisposition), ids: ids)
@@ -4715,8 +5018,6 @@ function buildGtOwnerDone(module StdModule)
 	var lastOwned = module.addBlock(func, label: b"ownerlastlive", heat: BlockHeat.normal)
 	var wakeQuiescer = module.addBlock(func, label: b"ownerwakequiescer", heat: BlockHeat.normal)
 	var claimQuiescer = module.addBlock(func, label: b"ownerclaimquiescer", heat: BlockHeat.normal)
-	var quiescerGone = module.addBlock(func, label: b"ownerquiescergone", heat: BlockHeat.normal)
-	var releaseQuiescer = module.addBlock(func, label: b"ownerreleasequiescer", heat: BlockHeat.normal)
 	var payQuiescer = module.addBlock(func, label: b"ownerpayquiescer", heat: BlockHeat.normal)
 	var afterQuiescer = module.addBlock(func, label: b"ownerafterquiescer", heat: BlockHeat.normal)
 	var signalDrain = module.addBlock(func, label: b"ownersignaldrain", heat: BlockHeat.normal)
@@ -4733,19 +5034,11 @@ function buildGtOwnerDone(module StdModule)
 	let waiting = emitLoadAcquireGlobalWord(module, block: lastOwned, label: GtQuiesceWaiterLabel, ids: ids)
 	emitBranchOnCompare(module, block: lastOwned, value: waiting, pred: StdCmpPred.ne, against: 0, whenTrue: wakeQuiescer, whenFalse: afterQuiescer, ids: ids)
 
-	let quiescerDebt = ids.mint()
-	releaseQuiescer.blockArgs.push(IrBlockArg.create(quiescerDebt, argType: StdType.i64))
-	emitSchedLockEnter(module, block: wakeQuiescer, ids: ids)
-	let held = emitLoadAcquireGlobalWord(module, block: wakeQuiescer, label: GtQuiesceWaiterLabel, ids: ids)
-	emitBranchOnCompare(module, block: wakeQuiescer, value: held, pred: StdCmpPred.ne, against: 0, whenTrue: claimQuiescer, whenFalse: quiescerGone, ids: ids)
+	let claimed = emitCasGlobalWord(module, block: wakeQuiescer, label: GtQuiesceWaiterLabel, expected: waiting, replacement: emitConst(module, block: wakeQuiescer, value: 0, ids: ids), ids: ids)
+	emitBranchOnCasLost(module, block: wakeQuiescer, result: claimed, lost: afterQuiescer, won: claimQuiescer, ids: ids)
 
-	let vacate = emitBin(module, block: claimQuiescer, a: emitConst(module, block: claimQuiescer, value: 0, ids: ids), b: held, opcode: StdBinOpcode.sub, ids: ids)
-	_ = emitGlobalAccumulate(module, block: claimQuiescer, label: GtQuiesceWaiterLabel, delta: vacate, multiM: true, ids: ids)
-	emitBranchWithDebt(module, from: claimQuiescer, to: releaseQuiescer, debt: emitGtReadyLocked(module, block: claimQuiescer, gt: held, ids: ids))
-	emitBranchWithDebt(module, from: quiescerGone, to: releaseQuiescer, debt: emitConst(module, block: quiescerGone, value: WakeDebtNone, ids: ids))
-
-	emitSchedLockLeave(module, block: releaseQuiescer, ids: ids)
-	emitSchedWakeIfOwed(module, cur: releaseQuiescer, owed: quiescerDebt, wake: payQuiescer, cont: afterQuiescer, ids: ids)
+	let quiescerDebt = emitGtReadyLocked(module, block: claimQuiescer, gt: waiting, ids: ids)
+	emitSchedWakeIfOwed(module, cur: claimQuiescer, owed: quiescerDebt, wake: payQuiescer, cont: afterQuiescer, ids: ids)
 
 	let draining = emitSchedMainHasCompleted(module, block: afterQuiescer, ids: ids)
 	module.setTerminator(afterQuiescer, op: StdOp.condBranch(draining, thenBlockId: signalDrain.id, elseBlockId: arrive.id))
@@ -4872,10 +5165,10 @@ end 'emitGtPublishCompleted'
 // ⚠ **NOT `emitLoadField`.** That helper is the runtime's generic field read and must stay generic; the
 // status word is not a generic field, and a caller who reaches for the generic door gets a plain load.
 //
-// ⚠ **NEITHER OF THE PAIR IS EXPORTED, AND THE SELF-COMPILE IS WHAT SAYS SO** (E3092): every Std-tier
-// access to a green thread's status word is in THIS FILE. `MailboxRuntime` writes the word too, but only
-// the `ready`/`waiting` transitions, which are published under `__sched_lock` and are a different question
-// — see the `completed` note above for why the two are not one rule.
+// ⚠ **NEITHER OF THE PAIR IS EXPORTED, AND THE SELF-COMPILE IS WHAT SAYS SO** (E3092): every
+// Std-tier access to a green thread's status word is in THIS FILE. `MailboxRuntime` writes the word
+// too, but only a mailbox park's `waiting`, made under the mailbox lock, which is a different
+// question — see the `completed` note above for why the two are not one rule.
 function emitGtLoadPublishedStatus(module StdModule, block IrBlock, gt ValueId, ids ValueMinter) returns ValueId
 	return emitLoadAcquireField(module, block: block, record: gt, offset: GtOffStatus, ids: ids)
 end 'emitGtLoadPublishedStatus'
@@ -5153,10 +5446,10 @@ end 'emitGtIsReplyCell'
 // ⭐⭐ **`__gt_cell_alloc(releaser) -> cell` — MINT A REPLY CELL.** See `GtCellAllocName` for what a
 // cell is and why it is a `Promise`.
 //
-// ⚠ **IT IS NOT `__gt_spawn`, AND THE THREE DIFFERENCES ARE EACH LOAD-BEARING**: no STACK is committed
-// (nothing runs on it), `funcPtr` is stored as zero
-// (that zero IS the discriminator), and it is never PUBLISHED to a queue — `__gt_spawn` takes `__sched_lock`
-// to publish, and a cell nobody schedules must not be discoverable by a scheduler at all.
+// ⚠ **IT IS NOT `__gt_spawn`, AND THE THREE DIFFERENCES ARE EACH LOAD-BEARING**: no STACK is
+// committed (nothing runs on it), `funcPtr` is stored as zero (that zero IS the discriminator), and
+// it is never PUBLISHED to a queue — a spawned GT is published by `__gt_ready`, and a cell nobody
+// schedules must not be discoverable by a scheduler at all.
 //
 // ⭐ **THE STATUS IS `waiting` AND THE OWNER IS THE AWAITER'S GREEN THREAD.** `waiting` is what
 // `__gt_is_complete` and the awaits read as *"not yet"*; the owner is copied off the
@@ -5543,11 +5836,12 @@ end 'bytesWithSuffix'
 //   • `__gt_cell_complete`, the replier's half for a reply cell that never runs.
 //   • `__gt_promise_drop`'s `soleOwner` arm, once it has taken a PARKED thread out of every store.
 //
-// ⭐⭐⭐ **THE AWAITER IS TAKEN UNDER `__sched_lock`, THE LOCK ITS REGISTRATION HOLDS.** The completer published
-// `completed` before this call and the registration re-reads the status under the lock before it stores
-// itself (`__gt_register_park`'s await arm), so either the registration sees `completed` and resumes at once,
-// or this read sees the registration and readies it — never neither. An awaitAny registration carries
-// `AwaitAnyTag`, and `GtOffSelectDone` makes K completing slots ready it once (Go's `selectDone`).
+// ⭐⭐⭐ **THE AWAITER IS TAKEN UNDER THIS GT's RECORD LOCK, THE LOCK ITS REGISTRATION HOLDS.** The
+// completer published `completed` before this call and the registration re-reads the status under
+// the lock before it stores itself (`__gt_register_park`'s await arm), so either the registration
+// sees `completed` and resumes at once, or this read sees the registration and readies it — never
+// neither. An awaitAny registration carries `AwaitAnyTag`, and `GtOffSelectDone` makes K completing
+// slots ready it once (Go's `selectDone`).
 //
 // ⛔⛔ **EVERY READ OF THE STRUCT PRECEDES THE ARRIVAL.** The stack's length comes out of `gt.stackSize`, and
 // the owner, the kind and the main mark are read up front, because the instant the runner ticket lands the
@@ -5564,6 +5858,7 @@ function buildGtRunnerDone(module StdModule, target Target)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var handAwaiter = module.addBlock(func, label: b"runnerawaiter", heat: BlockHeat.normal)
+	var noAwaiter = module.addBlock(func, label: b"runnernoawaiter", heat: BlockHeat.normal)
 	var haveAwaiter = module.addBlock(func, label: b"runnerhaveawaiter", heat: BlockHeat.normal)
 	var plainAwaiter = module.addBlock(func, label: b"runnerplainawaiter", heat: BlockHeat.normal)
 	var selectAwaiter = module.addBlock(func, label: b"runnerselectawaiter", heat: BlockHeat.normal)
@@ -5602,27 +5897,28 @@ function buildGtRunnerDone(module StdModule, target Target)
 	let debt = ids.mint()
 	payWake.blockArgs.push(IrBlockArg.create(debt, argType: StdType.i64))
 
-	emitSchedLockEnter(module, block: handAwaiter, ids: ids)
+	emitGtRecordLockEnter(module, block: handAwaiter, record: gt, ids: ids)
 	let awaiter = emitLoadField(module, block: handAwaiter, record: gt, offset: GtOffAwaiter, ids: ids)
-	let noDebt = emitConst(module, block: handAwaiter, value: WakeDebtNone, ids: ids)
-	emitBranchOnCompareValues(module, block: handAwaiter, a: awaiter, pred: StdCmpPred.eq, b: zero, whenTrue: payWake, whenFalse: haveAwaiter, ids: ids)
-	handAwaiter.branchEdges.push(BranchEdge.create(payWake.id, argIds: argsOf(noDebt)))
+	emitBranchOnCompareValues(module, block: handAwaiter, a: awaiter, pred: StdCmpPred.eq, b: zero, whenTrue: noAwaiter, whenFalse: haveAwaiter, ids: ids)
+
+	emitGtRecordLockLeave(module, block: noAwaiter, record: gt, ids: ids)
+	module.setTerminator(noAwaiter, op: StdOp.branch(stackCheck.id))
 
 	emitStoreField(module, block: haveAwaiter, record: gt, offset: GtOffAwaiter, value: zero)
 	let tag = emitConst(module, block: haveAwaiter, value: AwaitAnyTag, ids: ids)
 	let tagBit = emitBin(module, block: haveAwaiter, a: awaiter, b: tag, opcode: StdBinOpcode.bitAnd, ids: ids)
 	emitBranchOnCompareValues(module, block: haveAwaiter, a: tagBit, pred: StdCmpPred.ne, b: zero, whenTrue: selectAwaiter, whenFalse: plainAwaiter, ids: ids)
 
+	emitGtRecordLockLeave(module, block: plainAwaiter, record: gt, ids: ids)
 	emitBranchWithDebt(module, from: plainAwaiter, to: payWake, debt: emitGtReadyLocked(module, block: plainAwaiter, gt: awaiter, ids: ids))
 
 	let selecting = emitBin(module, block: selectAwaiter, a: awaiter, b: tag, opcode: StdBinOpcode.sub, ids: ids)
-	emitBranchOnCompare(module, block: selectAwaiter, value: emitLoadField(module, block: selectAwaiter, record: selecting, offset: GtOffSelectDone, ids: ids), pred: StdCmpPred.ne, against: SelectPending, whenTrue: payWake, whenFalse: claimSelect, ids: ids)
-	selectAwaiter.branchEdges.push(BranchEdge.create(payWake.id, argIds: argsOf(noDebt)))
+	let selectClaim = emitCasField(module, block: selectAwaiter, record: selecting, offset: GtOffSelectDone as ByteOffset, expected: emitConst(module, block: selectAwaiter, value: SelectPending, ids: ids), replacement: emitConst(module, block: selectAwaiter, value: SelectReadied, ids: ids), ids: ids)
+	emitGtRecordLockLeave(module, block: selectAwaiter, record: gt, ids: ids)
+	emitBranchOnCasLost(module, block: selectAwaiter, result: selectClaim, lost: stackCheck, won: claimSelect, ids: ids)
 
-	emitStoreField(module, block: claimSelect, record: selecting, offset: GtOffSelectDone, value: emitConst(module, block: claimSelect, value: SelectReadied, ids: ids))
 	emitBranchWithDebt(module, from: claimSelect, to: payWake, debt: emitGtReadyLocked(module, block: claimSelect, gt: selecting, ids: ids))
 
-	emitSchedLockLeave(module, block: payWake, ids: ids)
 	emitSchedWakeIfOwed(module, cur: payWake, owed: debt, wake: wake, cont: stackCheck, ids: ids)
 
 	// ⚠ The null guard is not defensive: a reply cell never had a stack and carries `stackBase == 0`.
@@ -5657,9 +5953,7 @@ function buildGtRunnerDone(module StdModule, target Target)
 	let intoWindow = emitBin(module, block: sampled, a: finished, b: emitConst(module, block: sampled, value: GtSeedWindowMask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
 	emitBranchOnCompareValues(module, block: sampled, a: intoWindow, pred: StdCmpPred.ne, b: zero, whenTrue: freeStack, whenFalse: closeSeedWindow, ids: ids)
 
-	emitSchedLockEnter(module, block: closeSeedWindow, ids: ids)
 	module.appendOp(closeSeedWindow, op: StdOp.call(ids.mint(), callee: GtSeedAdaptName, args: ValueIdArray.create()))
-	emitSchedLockLeave(module, block: closeSeedWindow, ids: ids)
 	module.setTerminator(closeSeedWindow, op: StdOp.branch(freeStack.id))
 
 	module.appendOp(freeStack, op: StdOp.call(ids.mint(), callee: GtStackFreeName, args: twoArgs(stackBase, second: stackSize)))
@@ -5778,7 +6072,7 @@ export function emitGtTimerStoreRemove(module StdModule, func IrFunction, ids Va
 	module.setTerminator(parentCmp, op: StdOp.condBranch(goesUp, thenBlockId: siftUpStart.id, elseBlockId: siftDownStart.id))
 
 	emitTimerSiftUp(module, func: func, ids: ids, startBlock: siftUpStart, heapBase: heapBase, startIndex: i, cont: republish)
-	emitTimerSiftDown(module, func: func, ids: ids, startBlock: siftDownStart, heapBase: heapBase, count: newCount, startIndex: i, cont: republish)
+	emitHeapSiftDown(module, func: func, ids: ids, startBlock: siftDownStart, heap: SiftHeap.timerEntries(heapBase), count: newCount, startIndex: i, cont: republish)
 
 	// Every road that removed an entry may have moved the root.
 	var published = emitGtPublishTimerWhen(module, func: func, cur: republish, heapBase: heapBase, count: newCount, ids: ids)
@@ -5915,24 +6209,31 @@ end 'emitLoadCurrentGtCpuOffset'
 //
 // ⛔⛔ **EACH ARM'S LOCK DISCIPLINE IS ITS OWN AND THEY ARE NOT INTERCHANGEABLE.**
 //
-//   • **timer** — the `waiting` store and the `__gt_timer_add` MUST be inside ONE critical section. Split,
-//     another M's `__gt_timer_check` can fire the entry and ready the thread BETWEEN them, after which this
-//     store leaves `waiting` on a thread that is already queued — and `__gt_promise_drop`'s re-read of the
-//     status under the lock then reads that as *"still parked, I am its sole owner"* and frees a queued
-//     thread. `__gt_timer_add` takes the lock itself, recursively. A deadline earlier than every other now
-//     pending owes the poller a look (`SchedRuntime.__sched_wake_netpoller`), inside the hold.
-//   • **netpoll** — `NetpollRuntime.__np_pd_commit` under the lock, which may UNDO the park: readiness that
-//     landed between the mark and the commit was recorded by a party that found nobody published, so the
-//     thread is readied rather than left waiting for a wake already delivered. A socket deadline armed here
-//     owes the poller a look, exactly as the timer arm's does.
-//   • **await** — under the lock, re-read the awaited GT's status: `completed` means it finished after the
-//     await's own read, so the thread is readied at once (Go's `unlockf` answering false); otherwise the
-//     thread becomes that GT's awaiter and `waiting`. `__gt_runner_done` takes the awaiter under the same lock.
-//   • **awaitAny** — the same over every slot: re-scan under the lock and ready at once if any slot has
-//     completed, else register on every slot with `GtOffSelectDone` cleared.
+//   • **timer** — the `waiting` store and the `__gt_timer_add` MUST be inside ONE `__sched_lock`
+//     hold. Split, another M's `__gt_timer_check` can fire the entry and ready the thread BETWEEN
+//     them, after which this store leaves `waiting` on a thread that is already queued — and
+//     `__gt_promise_drop`'s re-read of the status under the lock then reads that as *"still parked,
+//     I am its sole owner"* and frees a queued thread. `__gt_timer_add` takes the lock itself,
+//     recursively. A deadline earlier than every other now pending owes the poller a look
+//     (`SchedRuntime.__sched_wake_netpoller`), inside the hold.
+//   • **netpoll** — `NetpollRuntime.__np_pd_commit` under `__sched_lock`, which may UNDO the park:
+//     readiness that landed between the mark and the commit was recorded by a party that found
+//     nobody published, so the thread is readied rather than left waiting for a wake already
+//     delivered. A socket deadline armed here owes the poller a look, exactly as the timer arm's
+//     does.
+//   • **await** — under the awaited GT's record lock, re-read its status: `completed` means it
+//     finished after the await's own read, so the thread is readied at once (Go's `unlockf`
+//     answering false); otherwise the thread becomes that GT's awaiter and `waiting`.
+//     `__gt_runner_done` takes the awaiter under the same lock.
+//   • **awaitAny** — the same over every slot: re-scan under every slot's record lock
+//     (`__gt_any_lock`) and ready at once if any slot has completed, else register on every slot
+//     with `GtOffSelectDone` cleared.
+//   • **quiesce** — no lock: `__gt_quiesce_waiter` is claimed by CAS, here and by `__gt_owner_done`
+//     and `__sched_checkdead`, so exactly one of them readies the thread. `waiting` is stored
+//     before the registration, because a claimer may ready the thread the moment it is registered.
 //
-// The caller holds `__sched_lock` on entry and still holds it on return. Every arm answers the wake
-// debt its ready owes, or none, and the caller pays it after its release.
+// Every arm releases its lock before it answers the wake debt its ready owes, or none, and the
+// caller pays it.
 function buildGtRegisterPark(module StdModule)
 	var func = IrFunction.createFromStd(GtRegisterParkName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
@@ -5949,6 +6250,8 @@ function buildGtRegisterPark(module StdModule)
 	var awaitArm = module.addBlock(func, label: b"parkawait", heat: BlockHeat.normal)
 	var awaitRegister = module.addBlock(func, label: b"parkawaitregister", heat: BlockHeat.normal)
 	var awaitTake = module.addBlock(func, label: b"parkawaittake", heat: BlockHeat.normal)
+	var awaitCompleted = module.addBlock(func, label: b"parkawaitcompleted", heat: BlockHeat.normal)
+	var awaitAnyCompleted = module.addBlock(func, label: b"parkawaitanycompleted", heat: BlockHeat.normal)
 	var notAwait = module.addBlock(func, label: b"notparkawait", heat: BlockHeat.normal)
 	var awaitAnyArm = module.addBlock(func, label: b"parkawaitany", heat: BlockHeat.normal)
 	var awaitAnyRegister = module.addBlock(func, label: b"parkawaitanyregister", heat: BlockHeat.normal)
@@ -5977,11 +6280,13 @@ function buildGtRegisterPark(module StdModule)
 
 	// Go's `maybeAdd`: `when < wakeTime`, read against the root before the add, is what makes this the deadline
 	// the scheduler waits for next. An empty store publishes `TimerWhenEmpty`, which every deadline precedes.
+	emitSchedLockEnter(module, block: timerArm, ids: ids)
 	emitStoreField(module, block: timerArm, record: gt, offset: GtOffStatus, value: waitingConst)
 	let rootBefore = emitGtLoadTimerWhen(module, block: timerArm, ids: ids)
 	module.appendOp(timerArm, op: StdOp.call(ids.mint(), callee: GtTimerAddName, args: threeArgs(gt, second: arg, third: emitConst(module, block: timerArm, value: TimerTagSleep, ids: ids))))
 	emitBranchOnCompareValues(module, block: timerArm, a: arg, pred: StdCmpPred.lt, b: rootBefore, whenTrue: timerWake, whenFalse: timerPaid, ids: ids)
 	emitGtWakeNetpoller(module, block: timerWake, when: arg, cont: timerPaid, ids: ids)
+	emitSchedLockLeave(module, block: timerPaid, ids: ids)
 	emitBranchWithDebt(module, from: timerPaid, to: doneBlock, debt: noDebt)
 
 	emitGtBranchOnPollerPark(module, block: notTimer, kind: kind, onPoller: netpollArm, elsewhere: notNetpoll, ids: ids)
@@ -5995,58 +6300,69 @@ function buildGtRegisterPark(module StdModule)
 	// ⚠ **ONE SOURCE AND SEVERAL TAKE THE SAME ARM**, because the difference is entirely in how the park note's
 	// argument is read — which is `__np_pd_commit`'s own question, asked once where the note is decoded rather
 	// than twice here and there.
+	emitSchedLockEnter(module, block: netpollArm, ids: ids)
 	let rootBeforeCommit = emitGtLoadTimerWhen(module, block: netpollArm, ids: ids)
 	let commitDebt = ids.mint()
 	module.appendOp(netpollArm, op: StdOp.call(commitDebt, callee: NetpollPdCommitName, args: argsOf(gt)))
 	let rootAfterCommit = emitGtLoadTimerWhen(module, block: netpollArm, ids: ids)
 	emitBranchOnCompareValues(module, block: netpollArm, a: rootAfterCommit, pred: StdCmpPred.lt, b: rootBeforeCommit, whenTrue: netpollWake, whenFalse: netpollPaid, ids: ids)
 	emitGtWakeNetpoller(module, block: netpollWake, when: rootAfterCommit, cont: netpollPaid, ids: ids)
+	emitSchedLockLeave(module, block: netpollPaid, ids: ids)
 	emitBranchWithDebt(module, from: netpollPaid, to: doneBlock, debt: commitDebt)
 
 	emitBranchOnCompare(module, block: notNetpoll, value: kind, pred: StdCmpPred.eq, against: GtParkKind.awaitPromise.rawValue, whenTrue: awaitArm, whenFalse: notAwait, ids: ids)
 
 	// await: `arg` is the awaited GT. ACQUIRE — it may have completed on another M.
+	emitGtRecordLockEnter(module, block: awaitArm, record: arg, ids: ids)
 	let awaitedStatus = emitGtLoadPublishedStatus(module, block: awaitArm, gt: arg, ids: ids)
 	let awaitedDone = emitGtStatusEquals(module, block: awaitArm, status: awaitedStatus, want: GtStatus.completed, ids: ids)
-	module.setTerminator(awaitArm, op: StdOp.condBranch(awaitedDone, thenBlockId: resumeNow.id, elseBlockId: awaitRegister.id))
+	module.setTerminator(awaitArm, op: StdOp.condBranch(awaitedDone, thenBlockId: awaitCompleted.id, elseBlockId: awaitRegister.id))
+
+	emitGtRecordLockLeave(module, block: awaitCompleted, record: arg, ids: ids)
+	module.setTerminator(awaitCompleted, op: StdOp.branch(resumeNow.id))
 
 	emitGtClaimAwaiter(module, func: func, cur: awaitRegister, promise: arg, awaiter: gt, cont: awaitTake, ids: ids)
 	emitStoreField(module, block: awaitTake, record: gt, offset: GtOffStatus, value: waitingConst)
+	emitGtRecordLockLeave(module, block: awaitTake, record: arg, ids: ids)
 	emitBranchWithDebt(module, from: awaitTake, to: doneBlock, debt: noDebt)
 
 	emitBranchOnCompare(module, block: notAwait, value: kind, pred: StdCmpPred.eq, against: GtParkKind.awaitAny.rawValue, whenTrue: awaitAnyArm, whenFalse: notAwaitAny, ids: ids)
 
 	emitBranchOnCompare(module, block: notAwaitAny, value: kind, pred: StdCmpPred.eq, against: GtParkKind.quiesce.rawValue, whenTrue: quiesceArm, whenFalse: unknownArm, ids: ids)
 
-	let waiterBefore = emitLoadAcquireGlobalWord(module, block: quiesceArm, label: GtQuiesceWaiterLabel, ids: ids)
-	emitBranchOnCompare(module, block: quiesceArm, value: waiterBefore, pred: StdCmpPred.ne, against: 0, whenTrue: quiesceTaken, whenFalse: quiesceRegister, ids: ids)
-	emitRuntimeAbort(module, func: func, block: quiesceTaken, abort: RuntimeAbort.schedulerQuiesceWaiterTaken, ids: ids)
-
 	// ⚠ One half of a Dekker pair with `__gt_owner_done`: each side makes a locked RMW on its own
 	// word, then an acquire load of the other's (StoreLoad on x64, release then acquire on arm64).
 	// Weaken either and the last debit and this registration can each miss the other, leaving the
 	// waiter parked with nothing live.
-	_ = emitGlobalAccumulate(module, block: quiesceRegister, label: GtQuiesceWaiterLabel, delta: gt, multiM: true, ids: ids)
+	emitStoreField(module, block: quiesceArm, record: gt, offset: GtOffStatus, value: waitingConst)
+	let registered = emitCasGlobalWord(module, block: quiesceArm, label: GtQuiesceWaiterLabel, expected: emitConst(module, block: quiesceArm, value: 0, ids: ids), replacement: gt, ids: ids)
+	emitBranchOnCasLost(module, block: quiesceArm, result: registered, lost: quiesceTaken, won: quiesceRegister, ids: ids)
+	emitRuntimeAbort(module, func: func, block: quiesceTaken, abort: RuntimeAbort.schedulerQuiesceWaiterTaken, ids: ids)
+
 	let ownedNow = emitLoadAcquireGlobalWord(module, block: quiesceRegister, label: GtLiveCountLabel, ids: ids)
 	emitBranchOnCompare(module, block: quiesceRegister, value: ownedNow, pred: StdCmpPred.eq, against: 0, whenTrue: quiesceUndo, whenFalse: quiesceTake, ids: ids)
 
-	let unregister = emitBin(module, block: quiesceUndo, a: emitConst(module, block: quiesceUndo, value: 0, ids: ids), b: gt, opcode: StdBinOpcode.sub, ids: ids)
-	_ = emitGlobalAccumulate(module, block: quiesceUndo, label: GtQuiesceWaiterLabel, delta: unregister, multiM: true, ids: ids)
-	module.setTerminator(quiesceUndo, op: StdOp.branch(resumeNow.id))
+	let withdrawn = emitCasGlobalWord(module, block: quiesceUndo, label: GtQuiesceWaiterLabel, expected: gt, replacement: emitConst(module, block: quiesceUndo, value: 0, ids: ids), ids: ids)
+	emitBranchOnCasLost(module, block: quiesceUndo, result: withdrawn, lost: quiesceTake, won: resumeNow, ids: ids)
 
-	emitStoreField(module, block: quiesceTake, record: gt, offset: GtOffStatus, value: waitingConst)
 	emitBranchWithDebt(module, from: quiesceTake, to: doneBlock, debt: noDebt)
 
 	// awaitAny: `arg` is the promise array's record.
+	let lockedSlots = ids.mint()
+	module.appendOp(awaitAnyArm, op: StdOp.call(lockedSlots, callee: GtAnyLockName, args: argsOf(arg)))
 	let completedSlot = emitAnyCompletedIndex(module, block: awaitAnyArm, record: arg, ids: ids)
-	emitBranchOnCompare(module, block: awaitAnyArm, value: completedSlot, pred: StdCmpPred.ne, against: NoCompletedPromise, whenTrue: resumeNow, whenFalse: awaitAnyRegister, ids: ids)
+	emitBranchOnCompare(module, block: awaitAnyArm, value: completedSlot, pred: StdCmpPred.ne, against: NoCompletedPromise, whenTrue: awaitAnyCompleted, whenFalse: awaitAnyRegister, ids: ids)
+
+	module.appendOp(awaitAnyCompleted, op: StdOp.call(ids.mint(), callee: GtAnyUnlockName, args: argsOf(lockedSlots)))
+	module.setTerminator(awaitAnyCompleted, op: StdOp.branch(resumeNow.id))
 
 	emitStoreField(module, block: awaitAnyRegister, record: gt, offset: GtOffSelectDone, value: emitConst(module, block: awaitAnyRegister, value: SelectPending, ids: ids))
 	emitGtAwaitAnySlotWalk(module, func: func, cur: awaitAnyRegister, record: arg, g: gt, act: AwaitAnySlotAct.register, cont: awaitAnyRegistered, ids: ids)
 	emitStoreField(module, block: awaitAnyRegistered, record: gt, offset: GtOffStatus, value: waitingConst)
+	module.appendOp(awaitAnyRegistered, op: StdOp.call(ids.mint(), callee: GtAnyUnlockName, args: argsOf(lockedSlots)))
 	emitBranchWithDebt(module, from: awaitAnyRegistered, to: doneBlock, debt: noDebt)
 
-	// resumeNow (holding the lock): what the thread waits for has already happened, so it is readied at once.
+	// resumeNow: what the thread waits for has already happened, so it is readied at once.
 	emitBranchWithDebt(module, from: resumeNow, to: doneBlock, debt: emitGtReadyLocked(module, block: resumeNow, gt: gt, ids: ids))
 
 	// ⛔ **A KIND NOTHING WRITES — a compiler bug.** A yield never reaches here (the strand runner places it),
@@ -6250,22 +6566,22 @@ function buildGtRunStrand(module StdModule, target Target)
 	emitSchedWakeIfOwed(module, cur: pollStores, owed: pollDebt, wake: pollWake, cont: place, ids: ids)
 
 	// The yielder stays `ready`: it is runnable, merely not running.
-	emitSchedLockEnter(module, block: place, ids: ids)
+	emitGtRecordLockEnter(module, block: place, record: owner, ids: ids)
 	let head = emitQueueLoadHead(module, block: place, ends: GtQueueEnds.ownerFields(owner), ids: ids)
 	let nothingElse = emitCmp(module, block: place, a: head, b: zero, pred: StdCmpPred.eq, ids: ids)
 	module.appendOp(place, op: StdOp.call(ids.mint(), callee: GtCoroEnqueueName, args: argsOf(member)))
+	emitGtRecordLockLeave(module, block: place, record: owner, ids: ids)
 	module.setTerminator(place, op: StdOp.condBranch(nothingElse, thenBlockId: behindEveryone.id, elseBlockId: behindSiblings.id))
 
-	emitSchedLockLeave(module, block: behindSiblings, ids: ids)
 	module.setTerminator(behindSiblings, op: StdOp.branch(next.id))
 	behindSiblings.branchEdges.push(BranchEdge.create(next.id, argIds: argsOf(zero)))
 
-	emitSchedLockEnter(module, block: preempted, ids: ids)
 	emitStoreField(module, block: preempted, record: owner, offset: GtOffStrandResume, value: member)
 	module.setTerminator(preempted, op: StdOp.branch(behindEveryone.id))
 
 	// A token put on the global queue owes a wake once the lock is released, as Go's `goschedImpl` wakes a machine
 	// after its global put: this machine searches next, but another may be idle with nobody to tell it.
+	emitSchedLockEnter(module, block: behindEveryone, ids: ids)
 	module.appendOp(behindEveryone, op: StdOp.call(ids.mint(), callee: GtEnqueueName, args: argsOf(owner)))
 	emitSchedLockLeave(module, block: behindEveryone, ids: ids)
 	emitSchedWakeAnIdleM(module, block: behindEveryone, ids: ids)
@@ -6623,17 +6939,21 @@ end 'emitGtHasStackMark'
 let GtStackQuarterShift = 2
 let GtStackHalfShift = 1
 
-// ⭐⭐⭐ **`__gt_seed_adapt()` — Go's `gcComputeStartingStackSize`: ONCE A WINDOW, THE SEED BECOMES THE AVERAGE
-// STACK THAT THE THREADS WHICH FINISHED IN IT NEEDED.** Its one caller is `__gt_runner_done`, at the finish that
-// closes a window (`GtSeedWindowShift`), holding `__sched_lock`.
+// ⭐⭐⭐ **`__gt_seed_adapt()` — Go's `gcComputeStartingStackSize`: ONCE A WINDOW, THE SEED BECOMES
+// THE AVERAGE STACK THAT THE THREADS WHICH FINISHED IN IT NEEDED.** Its one caller is
+// `__gt_runner_done`, at the finish that closes a window (`GtSeedWindowShift`). The body runs under
+// `__gt_seed_guard`, claimed by CAS; a closer that finds it taken does nothing, and its window's
+// samples fall to the next adapt, which reads every window as a difference from what the last one
+// saw.
 //
 // The seed is the smallest power of two in [`gtSeedStackBytes`, `GtSeedMaxBytes`] whose product with the
 // window's count covers the window's sum — `round2(sum / count)`, clamped, with no division.
 //
-// ⚠ **THE TWO COUNTERS ARE READ AS TWO WORDS**, and a finisher on another machine may have stepped one and not yet
-// the other, so one window can carry a sample's size and the next its count. And two closing finishers may reach
-// the lock in either order, so the later window's closer can arrive to find every sample taken: it keeps the seed
-// the other chose rather than dividing by nothing.
+// ⚠ **THE TWO COUNTERS ARE READ AS TWO WORDS**, and a finisher on another machine may have stepped
+// one and not yet the other, so one window can carry a sample's size and the next its count. And
+// two closing finishers may claim the guard in either order, so the later window's closer can
+// arrive to find every sample taken: it keeps the seed the other chose rather than dividing by
+// nothing.
 function buildGtSeedAdapt(module StdModule, target Target)
 	if GtSeedMaxBytes < gtSeedStackBytes(target) 'ceilingBelowFloor'
 		panic("buildGtSeedAdapt: GtSeedMaxBytes ({GtSeedMaxBytes}) is below this target's seed floor ({gtSeedStackBytes(target)}) — the adaptive seed would have no size to choose")
@@ -6643,20 +6963,25 @@ function buildGtSeedAdapt(module StdModule, target Target)
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var claimed = module.addBlock(func, label: b"seedclaimed", heat: BlockHeat.normal)
 	var grow = module.addBlock(func, label: b"seedgrow", heat: BlockHeat.normal)
 	var fits = module.addBlock(func, label: b"seedfits", heat: BlockHeat.normal)
 	var publish = module.addBlock(func, label: b"seedpublish", heat: BlockHeat.normal)
+	var finished = module.addBlock(func, label: b"seedfinished", heat: BlockHeat.normal)
 	var doneBlock = module.addBlock(func, label: b"seeddone", heat: BlockHeat.normal)
 
-	let sum = emitLoadGlobalWord(module, block: entry, label: GtStackBytesSumLabel, ids: ids)
-	let count = emitLoadGlobalWord(module, block: entry, label: GtStackBytesCountLabel, ids: ids)
-	let windowSum = emitBin(module, block: entry, a: sum, b: emitLoadGlobalWord(module, block: entry, label: GtSeedSumSeenLabel, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
-	let windowCount = emitBin(module, block: entry, a: count, b: emitLoadGlobalWord(module, block: entry, label: GtSeedCountSeenLabel, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
-	emitStoreGlobalWord(module, block: entry, label: GtSeedSumSeenLabel, value: sum, ids: ids)
-	emitStoreGlobalWord(module, block: entry, label: GtSeedCountSeenLabel, value: count, ids: ids)
-	let floorSeed = emitConst(module, block: entry, value: gtSeedStackBytes(target), ids: ids)
-	emitBranchOnCompare(module, block: entry, value: windowCount, pred: StdCmpPred.le, against: 0, whenTrue: doneBlock, whenFalse: grow, ids: ids)
-	entry.branchEdges.push(BranchEdge.create(grow.id, argIds: argsOf(floorSeed)))
+	let guardClaimed = emitCasGlobalWord(module, block: entry, label: GtSeedGuardLabel, expected: emitConst(module, block: entry, value: 0, ids: ids), replacement: emitConst(module, block: entry, value: 1, ids: ids), ids: ids)
+	emitBranchOnCasLost(module, block: entry, result: guardClaimed, lost: doneBlock, won: claimed, ids: ids)
+
+	let sum = emitLoadGlobalWord(module, block: claimed, label: GtStackBytesSumLabel, ids: ids)
+	let count = emitLoadGlobalWord(module, block: claimed, label: GtStackBytesCountLabel, ids: ids)
+	let windowSum = emitBin(module, block: claimed, a: sum, b: emitLoadGlobalWord(module, block: claimed, label: GtSeedSumSeenLabel, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+	let windowCount = emitBin(module, block: claimed, a: count, b: emitLoadGlobalWord(module, block: claimed, label: GtSeedCountSeenLabel, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+	emitStoreGlobalWord(module, block: claimed, label: GtSeedSumSeenLabel, value: sum, ids: ids)
+	emitStoreGlobalWord(module, block: claimed, label: GtSeedCountSeenLabel, value: count, ids: ids)
+	let floorSeed = emitConst(module, block: claimed, value: gtSeedStackBytes(target), ids: ids)
+	emitBranchOnCompare(module, block: claimed, value: windowCount, pred: StdCmpPred.le, against: 0, whenTrue: finished, whenFalse: grow, ids: ids)
+	claimed.branchEdges.push(BranchEdge.create(grow.id, argIds: argsOf(floorSeed)))
 
 	// grow(seed): stop at the ceiling, or at the first size that holds the window's average.
 	let seed = ids.mint()
@@ -6674,7 +6999,10 @@ function buildGtSeedAdapt(module StdModule, target Target)
 	let chosen = ids.mint()
 	publish.blockArgs.push(IrBlockArg.create(chosen, argType: StdType.i64))
 	emitStoreGlobalWord(module, block: publish, label: GtSeedBytesLabel, value: chosen, ids: ids)
-	module.setTerminator(publish, op: StdOp.retVoid)
+	module.setTerminator(publish, op: StdOp.branch(finished.id))
+
+	_ = emitGlobalAccumulate(module, block: finished, label: GtSeedGuardLabel, delta: emitConst(module, block: finished, value: OneFewer, ids: ids), multiM: true, ids: ids)
+	module.setTerminator(finished, op: StdOp.retVoid)
 
 	module.setTerminator(doneBlock, op: StdOp.retVoid)
 	module.functions.push(func)
@@ -7578,13 +7906,15 @@ end 'buildGtIoRead'
 // Generalizes the one-shot `__gt_io_read` probe into a handle-table API. A `__subp_table` (.data) slot points at a
 // slab region of `SubpMaxHandles` fixed slots (0 until the first spawn lazily allocs it); a HANDLE packs a slot
 // index with the slot's generation (`SubpHandleSlotSpan`).
-// ⛔ **THE TABLE IS NOT MAIN-THREAD-ONLY.** A WORKER M runs green threads and a green thread is what spawns,
-// so two things need a discipline and have one: the lazy CREATION of the region takes `__sched_lock` (a
-// test-then-allocate-then-store that two Ms would both win, losing a whole table and every handle given out of
-// it), and a SLOT is claimed by `CAS(inUse, 0 -> claimed)` at the scan rather than by a test whose write
-// landed after `CreateProcessW`. Everything INSIDE a claimed slot stays lock-free and GT-local, which is 1a's
-// the rule and is what the claim makes true. A slot's OS handles are closed at release; its reusable buffers PERSIST across
-// release+respawn (a spawn reuses a free slot's buffers), so a spawn/read/release loop is memory-bounded.
+// ⛔ **THE TABLE IS NOT MAIN-THREAD-ONLY.** A WORKER M runs green threads and a green thread is what
+// spawns, so two things need a discipline and have one: the lazy CREATION of the region is
+// published by `CAS(table, 0 -> region)`, whose loser frees its region and takes the winner's (a
+// test-then-allocate-then-store is one two Ms would both win, losing a whole table and every handle
+// given out of it), and a SLOT is claimed by `CAS(inUse, 0 -> claimed)` at the scan rather than by
+// a test whose write landed after `CreateProcessW`. Everything INSIDE a claimed slot stays
+// lock-free and GT-local, which is 1a's the rule and is what the claim makes true. A slot's OS
+// handles are closed at release; its reusable buffers PERSIST across release+respawn (a spawn
+// reuses a free slot's buffers), so a spawn/read/release loop is memory-bounded.
 //
 // ⚠⚠ **THAT PERSISTENCE IS NOT A WORKAROUND FOR A MISSING FREE; IT RESTS ON WHAT RELEASE DOES NOT DO.**
 // **`__gt_subp_release` does NOT cancel or drain a parked overlapped read.** It closes the pipe handles and
@@ -7824,9 +8154,9 @@ end 'isSubprocessRuntimeCallee'
 export function subpRuntimeGlobals() returns DataSectionEntryArray
 	var out = DataSectionEntryArray.create()
 
-	// The table POINTER is created once, under `__sched_lock`, and never republished or freed — so every later
-	// read of it is a read of a sealed word, and the per-SLOT claim is the CAS in `buildSubpSpawnCore`.
-	pushRuntimeGlobal(out, label: SubpTableLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
+	// The table POINTER is published once, by a CAS from 0, read with an acquire, and never
+	// republished or freed; the per-SLOT claim is the CAS in `buildSubpSpawnCore`.
+	pushRuntimeGlobal(out, label: SubpTableLabel, sharing: MultiMSharing.publishedAtomically, reach: DataReach.walked)
 
 	// ⚠ **THE ONE SLOT WHOSE *USEFULNESS* DEGRADES UNDER MULTI-M WHERE ITS SAFETY DOES NOT, AND THAT
 	// DISTINCTION IS THE WHOLE OF WHY IT IS CLASSIFIED RATHER THAN FIXED.** It is one aligned machine word
@@ -7920,9 +8250,7 @@ export function emitSubpRequireHandle(module StdModule, func IrFunction, ids Val
 	// The table itself may never have been allocated — a program whose first subprocess call is a `wait` on a
 	// handle it invented. A null table is "no handle is live", not a null dereference.
 	var tableLive = module.addBlock(func, label: b"subphtbl", heat: BlockHeat.normal)
-	let tableAddr = ids.mint()
-	module.appendOp(liveCheck, op: StdOp.globalAddr(tableAddr, label: SubpTableLabel))
-	let table = emitLoadField(module, block: liveCheck, record: tableAddr, offset: 0, ids: ids)
+	let table = emitLoadAcquireGlobalWord(module, block: liveCheck, label: SubpTableLabel, ids: ids)
 	emitBranchOnCompare(module, block: liveCheck, value: table, pred: StdCmpPred.eq, against: 0, whenTrue: whenBad, whenFalse: tableLive, ids: ids)
 
 	let slot = emitSubpSlotOf(module, block: tableLive, ids: ids, handle: handle)
@@ -7945,9 +8273,7 @@ export function emitSubpRequireCollectorTaken(module StdModule, func IrFunction,
 	let taken = module.addBlock(func, label: b"subpcolltaken", heat: BlockHeat.normal)
 	var contended = module.addBlock(func, label: b"subpcollheld", heat: BlockHeat.normal)
 
-	let wordAddr = emitFieldAddr(module, block: cur, record: slot, offset: SubpSlotCollector, ids: ids)
-	let won = ids.mint()
-	module.appendOp(cur, op: StdOp.atomicCas(won, addrId: wordAddr, expectedId: emitConst(module, block: cur, value: SubpCollectorFree, ids: ids), replacementId: emitConst(module, block: cur, value: replacement, ids: ids)))
+	let won = emitCasField(module, block: cur, record: slot, offset: SubpSlotCollector, expected: emitConst(module, block: cur, value: SubpCollectorFree, ids: ids), replacement: emitConst(module, block: cur, value: replacement, ids: ids), ids: ids)
 	emitBranchOnCasLost(module, block: cur, result: won, lost: contended, won: taken, ids: ids)
 	emitRuntimeAbort(module, func: func, block: contended, abort: RuntimeAbort.subpCollectSlotReleased, ids: ids)
 
@@ -7962,9 +8288,7 @@ end 'emitSubpCollectorFree'
 export function emitSubpStdinTransition(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, slot ValueId, expected FullRangeInt, replacement FullRangeInt, whenLost IrBlock) returns IrBlock
 	let won = module.addBlock(func, label: b"stdinwon", heat: BlockHeat.normal)
 
-	let stateAddr = emitFieldAddr(module, block: cur, record: slot, offset: SubpSlotStdinState, ids: ids)
-	let answer = ids.mint()
-	module.appendOp(cur, op: StdOp.atomicCas(answer, addrId: stateAddr, expectedId: emitConst(module, block: cur, value: expected, ids: ids), replacementId: emitConst(module, block: cur, value: replacement, ids: ids)))
+	let answer = emitCasField(module, block: cur, record: slot, offset: SubpSlotStdinState, expected: emitConst(module, block: cur, value: expected, ids: ids), replacement: emitConst(module, block: cur, value: replacement, ids: ids), ids: ids)
 	emitBranchOnCasLost(module, block: cur, result: answer, lost: whenLost, won: won, ids: ids)
 
 	return won
@@ -7991,9 +8315,7 @@ end 'emitSubpStoreStdinQueue'
 // freshly recomputed in `block` rather than threaded, because a pointer threaded across a loop is a live
 // register across that loop, which is the pressure discipline this whole runtime is built around.
 export function emitSubpSlotOf(module StdModule, block IrBlock, ids ValueMinter, handle ValueId) returns ValueId
-	let tableAddr = ids.mint()
-	module.appendOp(block, op: StdOp.globalAddr(tableAddr, label: SubpTableLabel))
-	let table = emitLoadField(module, block: block, record: tableAddr, offset: 0, ids: ids)
+	let table = emitLoadAcquireGlobalWord(module, block: block, label: SubpTableLabel, ids: ids)
 	return emitSubpSlotAddr(module, block: block, ids: ids, table: table, slotIdx: emitSubpHandleSlotIndex(module, block: block, ids: ids, handle: handle))
 end 'emitSubpSlotOf'
 
@@ -8697,6 +9019,7 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var allocTbl = module.addBlock(func, label: b"alloctbl", heat: BlockHeat.normal)
+	var dropTbl = module.addBlock(func, label: b"droptbl", heat: BlockHeat.normal)
 	var haveTbl = module.addBlock(func, label: b"havetbl", heat: BlockHeat.normal)
 	var slotHdr = module.addBlock(func, label: b"slothdr", heat: BlockHeat.normal)
 	var slotCheck = module.addBlock(func, label: b"slotcheck", heat: BlockHeat.normal)
@@ -8708,33 +9031,21 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	let req = 0
 	let negOne = emitConst(module, block: entry, value: -1, ids: ids)
 
-	// ⭐⭐ **THE LAZY CREATION RUNS UNDER THE RUN-QUEUE LOCK, AND ONLY THE CREATION DOES.** Test-then-
-	// allocate-then-store is a read-modify-write: two Ms both observing the null word would both
-	// `__slab_alloc` a 64-slot region and one of the two would be lost, along with every handle a caller had
-	// already been given out of it. The lock is released the moment the pointer is published — the SCAN below
-	// claims its slot with a CAS instead, because a claim is held across `CreateProcessW` and a global lock
-	// held for that long would stall every other M for the length of a process spawn.
-	emitSchedLockEnter(module, block: entry, ids: ids)
-	let tableAddr = ids.mint()
-	module.appendOp(entry, op: StdOp.globalAddr(tableAddr, label: SubpTableLabel))
-	let tableInit = emitLoadField(module, block: entry, record: tableAddr, offset: 0, ids: ids)
+	let tableInit = emitLoadAcquireGlobalWord(module, block: entry, label: SubpTableLabel, ids: ids)
 	let zeroE = emitConst(module, block: entry, value: 0, ids: ids)
 	emitBranchOnCompare(module, block: entry, value: tableInit, pred: StdCmpPred.eq, against: 0, whenTrue: allocTbl, whenFalse: haveTbl, ids: ids)
 
-	// allocTbl: lazily create the zero-filled slot region (slab zeroing seeds every slot's inUse=0 and null buffers).
+	// The slab zeroes the region, which is every slot's free state: `inUse` 0 and null buffers.
 	let tblSize = emitConst(module, block: allocTbl, value: (SubpMaxHandles * SubpSlotBytes) as FullRangeInt, ids: ids)
 	let newTable = ids.mint()
 	module.appendOp(allocTbl, op: StdOp.call(newTable, callee: SlabAllocName, args: argsOf(tblSize)))
-	let tableAddr2 = ids.mint()
-	module.appendOp(allocTbl, op: StdOp.globalAddr(tableAddr2, label: SubpTableLabel))
-	emitStoreField(module, block: allocTbl, record: tableAddr2, offset: 0, value: newTable)
-	module.setTerminator(allocTbl, op: StdOp.branch(haveTbl.id))
+	let tablePublished = emitCasGlobalWord(module, block: allocTbl, label: SubpTableLabel, expected: zeroE, replacement: newTable, ids: ids)
+	emitBranchOnCasLost(module, block: allocTbl, result: tablePublished, lost: dropTbl, won: haveTbl, ids: ids)
 
-	// haveTbl: reload the table pointer (valid on both paths), release the lock, and scan for a free slot.
-	let tableAddr3 = ids.mint()
-	module.appendOp(haveTbl, op: StdOp.globalAddr(tableAddr3, label: SubpTableLabel))
-	let table = emitLoadField(module, block: haveTbl, record: tableAddr3, offset: 0, ids: ids)
-	emitSchedLockLeave(module, block: haveTbl, ids: ids)
+	emitSlabFree(module, block: dropTbl, ptr: newTable, ids: ids)
+	module.setTerminator(dropTbl, op: StdOp.branch(haveTbl.id))
+
+	let table = emitLoadAcquireGlobalWord(module, block: haveTbl, label: SubpTableLabel, ids: ids)
 	module.setTerminator(haveTbl, op: StdOp.branch(slotHdr.id))
 	haveTbl.branchEdges.push(BranchEdge.create(slotHdr.id, argIds: argsOf(zeroE)))
 
@@ -8750,10 +9061,8 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	// (`SchedRuntime.POffStatus`'s shape, one table over), and the one path out of here that produces no handle
 	// gives the claim back.
 	let probeSlot = emitSubpSlotAddr(module, block: slotCheck, ids: ids, table: table, slotIdx: slotIdx)
-	let inUseAddr = emitFieldAddr(module, block: slotCheck, record: probeSlot, offset: SubpSlotInUse as ByteOffset, ids: ids)
 	let claimedValue = emitConst(module, block: slotCheck, value: SubpSlotClaimed, ids: ids)
-	let wonSlot = ids.mint()
-	module.appendOp(slotCheck, op: StdOp.atomicCas(wonSlot, addrId: inUseAddr, expectedId: emitConst(module, block: slotCheck, value: SubpSlotFree, ids: ids), replacementId: claimedValue))
+	let wonSlot = emitCasField(module, block: slotCheck, record: probeSlot, offset: SubpSlotInUse as ByteOffset, expected: emitConst(module, block: slotCheck, value: SubpSlotFree, ids: ids), replacement: claimedValue, ids: ids)
 	emitBranchOnCasLost(module, block: slotCheck, result: wonSlot, lost: slotNext, won: gotSlot, ids: ids)
 
 	let oneS = emitConst(module, block: slotNext, value: 1, ids: ids)

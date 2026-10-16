@@ -66,33 +66,41 @@ type no `throws` clause can name, and its reply may not be stored at all — bot
 
 `__gt_await_any` scans the array first (`__gt_any_completed`) and returns at once if some element has
 already completed, having parked on nothing. Otherwise it parks the caller like every other wait, and the
-registration (`__gt_register_park`'s awaitAny arm) runs on the far side of the switch, under
-`__sched_lock`: it scans again, readies the caller at once if a slot completed in between, and otherwise
-stores the caller as the awaiter of every slot — tagged (`AwaitAnyTag`), with its `selectDone` word
-cleared. That is Go's `selectgo`, one registration per case.
+registration (`__gt_register_park`'s awaitAny arm) runs on the far side of the switch, holding every
+slot's own promise lock: it scans again, readies the caller at once if a slot completed in between, and
+otherwise stores the caller as the awaiter of every slot — tagged (`AwaitAnyTag`), with its `selectDone`
+word cleared. That is Go's `selectgo`, one registration per case, made under every case's lock at once.
 
-Whichever slot completes first takes the tagged awaiter in `__gt_runner_done`, under the same lock, sets
-`selectDone` and readies the caller through `__gt_ready_locked`; a second slot completing before the caller
-runs finds `selectDone` already set and readies nothing. On waking, the caller clears every slot's awaiter
-word that still names it — under the lock again — and scans. So no slot keeps a registration once
-`awaitAny` has returned, and a later plain `await` of any element finds the word clear.
+A completing slot takes the awaiter word in `__gt_runner_done` under that slot's own lock. Finding the
+tagged awaiter, it claims the select with a compare-and-swap of `selectDone` from pending to readied, and
+the one that wins readies the caller through `__gt_ready_locked` after leaving the lock. A second slot
+completing before the caller runs loses that compare-and-swap and readies nothing, so two slots completing
+at once on two processors, each holding only its own lock, ready the caller exactly once. On waking, the
+caller takes every slot's lock again, clears each awaiter word that still names it, and scans. So no slot
+keeps a registration once `awaitAny` has returned, and a later plain `await` of any element finds the word
+clear.
 
 ⚠ **A SLOT HOLDS ONE AWAITER.** The registration refuses a slot whose awaiter word is already taken
 (`schedulerPromiseAwaitedTwice`) rather than overwrite it, because the overwritten waiter would never be
 woken. The front end cannot produce that shape.
 
-### K registrations, and still ONE lock
+### K registrations, K locks, taken in address order
 
-Go orders channel locks by address so a K-way wait can hold them all. That is wrong here: both platform
-locks are **recursive on the wrong identity** (a Win32 `CRITICAL_SECTION` is recursive per OS THREAD) while
-several green threads share one — so a green thread parking while holding one would let a
-different green thread on the same M take the recursive path straight into the critical section. Not a
-deadlock; silent FIFO corruption.
+Each promise's awaiter word is guarded by a lock word in the record it names, the lock a plain `await` and
+the completer meet under (Go's `hchan.lock`). A K-way wait must hold all K at once, so the registration and
+the withdrawal gather the array's non-zero slots, sort them by address, and lock them in ascending order,
+releasing them in the reverse order (`__gt_any_lock`, `__gt_any_unlock`) — Go's `sellock`. Every multi-lock
+holder takes the locks in that one order, and a completer only ever holds its own one, so no two holders can
+each wait on a lock the other has: no deadlock, whatever the array's order and however many selects share a
+promise. Sorting by address rather than by slot index is what makes the order one order across arrays.
 
-So the K registrations take no per-promise lock: every awaiter word is guarded by the ONE scheduler lock.
-The registration, the completer's hand-over and the withdrawal each take it and release it with no switch
-in between — the registration on a machine's scheduler context after the park's switch, the other two in
-straight-line code — so no green thread ever holds it across a park.
+⚠ **NO GREEN THREAD HOLDS A PROMISE LOCK ACROSS A PARK.** Both platform locks are **recursive on the wrong
+identity** (a Win32 `CRITICAL_SECTION` is recursive per OS THREAD) while several green threads share one —
+so a green thread parking while holding one would let a different green thread on the same M take the
+recursive path straight into the critical section. Not a deadlock; silent corruption. So the
+registration, the completer's hand-over and the withdrawal each take their locks and release them with no
+switch in between — the registration on a machine's scheduler context after the park's switch, the other
+two in straight-line code.
 
 ### What the scan reads, and the one thing the caller owes it
 
@@ -190,7 +198,7 @@ program — so at the moment of the call nothing else is runnable, no timer is p
 parked. The scan at the top of `__gt_await_any` finds slot 0 `completed` and returns `0` without parking.
 
 ⚠ The exit code cannot tell that road from the one behind it: were the scan skipped, the registration's own
-scan under `__sched_lock` would find the same slot and ready the caller at once. What this case pins is the
+scan under the slots' promise locks would find the same slot and ready the caller at once. What this case pins is the
 answer — the completed slot is named, and its promise is still awaitable afterwards.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -494,6 +502,306 @@ function main() returns ExitCode
 	_ = await winner
 	return 0
 end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: await-any.replies-racing-the-registration-across-many-rounds -->
+<!-- procs: 4 -->
+⭐⭐ **A SELECT WHOSE SLOTS COMPLETE ON OTHER PROCESSORS WHILE IT REGISTERS.** Each round sends one message to
+each of four services and selects over the four replies. At four processors the services answer on their
+own machines, so a reply can complete before `awaitAny`'s scan, between the scan and the registration, or
+after the registration, and several can complete at once. Every one of those orders must give the same
+answers. The slot `awaitAny` names has completed. Exactly one completer readies the selector, and a second
+one finds the select already claimed and readies nothing. When the selector wakes it withdraws from every
+slot, so each reply is then awaited once, by the plain `await`, with no registration left on it. A reply that
+readied the selector twice, or a registration left behind on a slot, aborts the program
+(`schedulerPromiseAwaitedTwice`) or loses a reply, and the sum comes out short.
+
+✅ **IT IS A CONTROL: ANY SOUND AWAITER PROTOCOL PASSES IT, AND IT HOLDS THIS ONE TO ITS ANSWERS.** Each
+promise has a lock of its own, and the registrant and the completer meet under it. The selector's
+`selectDone` is claimed by a compare-and-swap, and a select takes its slots' locks in address order, so no
+lock any two slots share is taken at all. `replies-racing-the-registration-at-one-processor` is its twin at
+one processor, where every reply completes after the registration.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias ReplyPromise = Promise with (Integer, ServiceError)
+typealias ReplyPromiseArray = Array with ReplyPromise
+typealias EchoHandleArray = Array with Echo.handle
+
+let rounds = 300
+let services = 4
+
+type Echo
+	var served as Integer
+
+	static function create() returns Self
+		return Self{served: 0}
+	end 'create'
+
+	export function value(v Integer) returns Integer
+		self.served = self.served + 1
+		return v
+	end 'value'
+end 'Echo'
+
+function main() returns ExitCode
+	var echoes = EchoHandleArray.create()
+	for _ in 0 upto services 'spawnEach'
+		echoes.push(spawn Echo.create())
+	end 'spawnEach'
+
+	var sum = 0 as Integer
+	var completedPicks = 0 as Integer
+	for r in 0 upto rounds 'eachRound'
+		var replies = ReplyPromiseArray.create()
+		for (slot, echo) in echoes.withIterator() 'sendEach'
+			replies.push(echo.value((r as Integer) * services + (slot.index() as Integer)))
+		end 'sendEach'
+
+		let ready = replies.awaitAny()
+
+		for (slot, p) in replies.withIterator() 'drain'
+			if slot.index() == ready and p.isComplete() 'theNamedSlotHadCompleted'
+				completedPicks = completedPicks + 1
+			end 'theNamedSlotHadCompleted'
+
+			sum = sum + (try await p otherwise 0)
+		end 'drain'
+	end 'eachRound'
+
+	print("picks={completedPicks} sum={sum}\n")
+	return 0
+end 'main'
+```
+```stdout
+picks=300 sum=719400
+```
+```exitcode
+0
+```
+
+<!-- test: await-any.replies-racing-the-registration-at-one-processor -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+**THE ONE-PROCESSOR TWIN OF `replies-racing-the-registration-across-many-rounds`.** With one processor the
+services run only once `main` has parked in `awaitAny`. So every reply completes after the registration, and
+the completer always finds the tagged awaiter. The `preempt: off` marker is what keeps that order: without it
+the system monitor could take the processor from `main` between two sends and run a service before the
+select. That road must give the same answers as the racing one. Like its twin, it is a control.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias ReplyPromise = Promise with (Integer, ServiceError)
+typealias ReplyPromiseArray = Array with ReplyPromise
+typealias EchoHandleArray = Array with Echo.handle
+
+let rounds = 300
+let services = 4
+
+type Echo
+	var served as Integer
+
+	static function create() returns Self
+		return Self{served: 0}
+	end 'create'
+
+	export function value(v Integer) returns Integer
+		self.served = self.served + 1
+		return v
+	end 'value'
+end 'Echo'
+
+function main() returns ExitCode
+	var echoes = EchoHandleArray.create()
+	for _ in 0 upto services 'spawnEach'
+		echoes.push(spawn Echo.create())
+	end 'spawnEach'
+
+	var sum = 0 as Integer
+	var completedPicks = 0 as Integer
+	for r in 0 upto rounds 'eachRound'
+		var replies = ReplyPromiseArray.create()
+		for (slot, echo) in echoes.withIterator() 'sendEach'
+			replies.push(echo.value((r as Integer) * services + (slot.index() as Integer)))
+		end 'sendEach'
+
+		let ready = replies.awaitAny()
+
+		for (slot, p) in replies.withIterator() 'drain'
+			if slot.index() == ready and p.isComplete() 'theNamedSlotHadCompleted'
+				completedPicks = completedPicks + 1
+			end 'theNamedSlotHadCompleted'
+
+			sum = sum + (try await p otherwise 0)
+		end 'drain'
+	end 'eachRound'
+
+	print("picks={completedPicks} sum={sum}\n")
+	return 0
+end 'main'
+```
+```stdout
+picks=300 sum=719400
+```
+```exitcode
+0
+```
+
+<!-- test: await-any.sixteen-replies-completing-out-of-order-across-many-rounds -->
+<!-- procs: 4 -->
+⭐⭐ **A SELECT OVER SIXTEEN SLOTS LOCKS ALL SIXTEEN IN ONE ADDRESS ORDER, WHATEVER ORDER THE ARRAY HOLDS
+THEM IN.** Each round sends one message to each of sixteen services and selects over the sixteen replies.
+Every handler yields a different number of times before it answers, and the numbers rotate from round to
+round, so the replies complete in a different scrambled order each round, and at four processors several
+complete at once while the selector registers or withdraws. The reply records come from the green-thread
+free lists, so after the first round the array's order need not be the records' address order. The registration
+and the withdrawal each sort the sixteen records by address and lock them in that order, and every
+completer holds its own record's lock alone, so no two parties can each hold a lock the other waits on. A
+lock order taken from the array, or a sort that loses or repeats a slot past the first few, deadlocks the
+program (the case times out), leaves a registration on a slot (`schedulerPromiseAwaitedTwice`), or loses a
+reply, and the line comes out wrong.
+
+✅ **IT IS A CONTROL: ANY SOUND MULTI-LOCK SELECT PASSES IT, AND IT HOLDS THIS ONE TO ITS ANSWERS.** The
+four-slot cases above sort four records; this one sorts sixteen, past every small-array shortcut a sort
+could take. The slot `awaitAny` names has completed every round, and every reply is awaited once, so the
+answer is fixed: 400 completed picks and the sum of every value sent, `6400 * 6399 / 2`.
+`sixteen-replies-completing-out-of-order-at-one-processor` is its twin at one processor.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias ReplyPromise = Promise with (Integer, ServiceError)
+typealias ReplyPromiseArray = Array with ReplyPromise
+typealias EchoHandleArray = Array with Echo.handle
+
+let rounds = 400
+let services = 16
+let slotStride = 7
+let roundStride = 5
+
+type Echo
+	var served as Integer
+
+	static function create() returns Self
+		return Self{served: 0}
+	end 'create'
+
+	export function value(v Integer, spins Integer) returns Integer
+		for _ in 0 upto spins 'dawdle'
+			Scheduler.yield()
+		end 'dawdle'
+
+		self.served = self.served + 1
+		return v
+	end 'value'
+end 'Echo'
+
+function main() returns ExitCode
+	var echoes = EchoHandleArray.create()
+	for _ in 0 upto services 'spawnEach'
+		echoes.push(spawn Echo.create())
+	end 'spawnEach'
+
+	var sum = 0 as Integer
+	var completedPicks = 0 as Integer
+	for r in 0 upto rounds 'eachRound'
+		var replies = ReplyPromiseArray.create()
+		for (slot, echo) in echoes.withIterator() 'sendEach'
+			let s = slot.index() as Integer
+			let spins = (s * slotStride + (r as Integer) * roundStride) mod services
+			replies.push(echo.value((r as Integer) * services + s, spins: spins))
+		end 'sendEach'
+
+		let ready = replies.awaitAny()
+
+		for (slot, p) in replies.withIterator() 'drain'
+			if slot.index() == ready and p.isComplete() 'theNamedSlotHadCompleted'
+				completedPicks = completedPicks + 1
+			end 'theNamedSlotHadCompleted'
+
+			sum = sum + (try await p otherwise 0)
+		end 'drain'
+	end 'eachRound'
+
+	print("picks={completedPicks} sum={sum}\n")
+	return 0
+end 'main'
+```
+```stdout
+picks=400 sum=20476800
+```
+```exitcode
+0
+```
+
+<!-- test: await-any.sixteen-replies-completing-out-of-order-at-one-processor -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+**THE ONE-PROCESSOR TWIN OF `sixteen-replies-completing-out-of-order-across-many-rounds`.** With one
+processor and `preempt: off` the services run only once `main` has parked in `awaitAny`, and they take
+turns, so the replies complete one at a time in the order their yield counts give: the round's scrambled
+order, every completion after the registration. The sixteen-way registration and withdrawal, and the lock
+order they share, must give the same answers as on the racing road. Like its twin, it is a control.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias ReplyPromise = Promise with (Integer, ServiceError)
+typealias ReplyPromiseArray = Array with ReplyPromise
+typealias EchoHandleArray = Array with Echo.handle
+
+let rounds = 400
+let services = 16
+let slotStride = 7
+let roundStride = 5
+
+type Echo
+	var served as Integer
+
+	static function create() returns Self
+		return Self{served: 0}
+	end 'create'
+
+	export function value(v Integer, spins Integer) returns Integer
+		for _ in 0 upto spins 'dawdle'
+			Scheduler.yield()
+		end 'dawdle'
+
+		self.served = self.served + 1
+		return v
+	end 'value'
+end 'Echo'
+
+function main() returns ExitCode
+	var echoes = EchoHandleArray.create()
+	for _ in 0 upto services 'spawnEach'
+		echoes.push(spawn Echo.create())
+	end 'spawnEach'
+
+	var sum = 0 as Integer
+	var completedPicks = 0 as Integer
+	for r in 0 upto rounds 'eachRound'
+		var replies = ReplyPromiseArray.create()
+		for (slot, echo) in echoes.withIterator() 'sendEach'
+			let s = slot.index() as Integer
+			let spins = (s * slotStride + (r as Integer) * roundStride) mod services
+			replies.push(echo.value((r as Integer) * services + s, spins: spins))
+		end 'sendEach'
+
+		let ready = replies.awaitAny()
+
+		for (slot, p) in replies.withIterator() 'drain'
+			if slot.index() == ready and p.isComplete() 'theNamedSlotHadCompleted'
+				completedPicks = completedPicks + 1
+			end 'theNamedSlotHadCompleted'
+
+			sum = sum + (try await p otherwise 0)
+		end 'drain'
+	end 'eachRound'
+
+	print("picks={completedPicks} sum={sum}\n")
+	return 0
+end 'main'
+```
+```stdout
+picks=400 sum=20476800
 ```
 ```exitcode
 0

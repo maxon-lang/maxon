@@ -163,3 +163,186 @@ fatal error: runtime abort 123 (schedulerQuiesceWaiterTaken)
 ```exitcode
 123
 ```
+
+<!-- test: builtins-gt-quiesce.races-coroutine-completion-across-many-rounds -->
+<!-- tier: stdlib -->
+<!-- unsupported-targets: wasm32-wasi -->
+<!-- procs: 4 -->
+⭐⭐ **A WAIT THAT REGISTERS WHILE THE LAST GREEN THREADS' COROUTINES ARE STILL COMPLETING.** Each round spawns
+three services and sends each one `work`, then `linger`, then the shutdown. Both messages run three
+coroutines on the worker's strand, two that yield and one that sleeps for 1 ms, and sum their answers.
+`main` awaits the three `work` replies and then waits at once. So at four processors the `linger`
+coroutines complete and the workers exit on other machines while `main` is checking the live count,
+registering as the waiter, or already parked. The worker whose exit takes the live count to zero claims the
+waiter word and readies `main`. Exactly one party may claim it, whichever order the registration and the
+last exit come in. A wake lost there leaves `main` parked until the deadlock check answers a count that is
+not zero, or hangs the round. A claim made twice readies `main` twice. A `linger` that lost a coroutine
+prints its round.
+
+The replies are awaited before the wait because a reply nobody has awaited holds its slot in the live count.
+A wait made over one would end only at the deadlock check, which answers the count of unawaited replies.
+
+✅ **IT IS A CONTROL: ANY SOUND WAKE PROTOCOL PASSES IT, AND IT HOLDS THIS ONE TO ITS ANSWERS.** The waker
+claims the waiter word by a compare-and-swap. That and the registration's own atomic steps on the same word
+decide between the two without a lock.
+`races-coroutine-completion-at-one-processor` is its twin at one processor, where the registration and the
+last exit never overlap.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias ReplyPromise = Promise with (Integer, ServiceError)
+typealias ReplyPromiseArray = Array with ReplyPromise
+
+let rounds = 100
+let workersPerRound = 3
+
+function yieldingPart(v Integer) returns Integer
+	Scheduler.yield()
+	return v
+end 'yieldingPart'
+
+function sleepingPart(v Integer) returns Integer
+	sleep(1)
+	return v
+end 'sleepingPart'
+
+function coroutineSum(v Integer) returns Integer
+	let a = async yieldingPart(v)
+	let b = async sleepingPart(v)
+	let c = async yieldingPart(1)
+	return (await a) + (await b) + (await c)
+end 'coroutineSum'
+
+type Worker
+	var answered as Integer
+
+	static function create() returns Self
+		return Self{answered: 0}
+	end 'create'
+
+	export function work(v Integer) returns Integer
+		self.answered = self.answered + 1
+		return coroutineSum(v)
+	end 'work'
+
+	export function linger(v Integer)
+		if coroutineSum(v) != 2 * v + 1 'lostACoroutine'
+			print("round {v} lost a coroutine\n")
+		end 'lostACoroutine'
+	end 'linger'
+end 'Worker'
+
+function main() returns ExitCode
+	var outstanding = 0 as Integer
+	var sum = 0 as Integer
+
+	for r in 0 upto rounds 'eachRound'
+		var replies = ReplyPromiseArray.create()
+
+		for _ in 0 upto workersPerRound 'spawnEach'
+			var worker = spawn Worker.create()
+			replies.push(worker.work(r))
+			worker.linger(r)
+			worker.shutdown()
+		end 'spawnEach'
+
+		for p in replies 'collect'
+			sum = sum + (try await p otherwise 0)
+		end 'collect'
+
+		outstanding = outstanding + (__Builtins.gtQuiesce() as Integer)
+	end 'eachRound'
+
+	print("outstanding={outstanding} sum={sum}\n")
+	return 0
+end 'main'
+```
+```stdout
+outstanding=0 sum=30000
+```
+```exitcode
+0
+```
+
+<!-- test: builtins-gt-quiesce.races-coroutine-completion-at-one-processor -->
+<!-- tier: stdlib -->
+<!-- unsupported-targets: wasm32-wasi -->
+<!-- procs: 1 -->
+**THE ONE-PROCESSOR TWIN OF `races-coroutine-completion-across-many-rounds`.** With one processor nothing
+runs beside `main`, so the wait's registration and the last worker's exit never overlap. Each round either
+finds the live count already at zero, or registers first and is readied by the last exit. Those orders must
+give the same answers as the racing ones. Like its twin, it is a control.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias ReplyPromise = Promise with (Integer, ServiceError)
+typealias ReplyPromiseArray = Array with ReplyPromise
+
+let rounds = 100
+let workersPerRound = 3
+
+function yieldingPart(v Integer) returns Integer
+	Scheduler.yield()
+	return v
+end 'yieldingPart'
+
+function sleepingPart(v Integer) returns Integer
+	sleep(1)
+	return v
+end 'sleepingPart'
+
+function coroutineSum(v Integer) returns Integer
+	let a = async yieldingPart(v)
+	let b = async sleepingPart(v)
+	let c = async yieldingPart(1)
+	return (await a) + (await b) + (await c)
+end 'coroutineSum'
+
+type Worker
+	var answered as Integer
+
+	static function create() returns Self
+		return Self{answered: 0}
+	end 'create'
+
+	export function work(v Integer) returns Integer
+		self.answered = self.answered + 1
+		return coroutineSum(v)
+	end 'work'
+
+	export function linger(v Integer)
+		if coroutineSum(v) != 2 * v + 1 'lostACoroutine'
+			print("round {v} lost a coroutine\n")
+		end 'lostACoroutine'
+	end 'linger'
+end 'Worker'
+
+function main() returns ExitCode
+	var outstanding = 0 as Integer
+	var sum = 0 as Integer
+
+	for r in 0 upto rounds 'eachRound'
+		var replies = ReplyPromiseArray.create()
+
+		for _ in 0 upto workersPerRound 'spawnEach'
+			var worker = spawn Worker.create()
+			replies.push(worker.work(r))
+			worker.linger(r)
+			worker.shutdown()
+		end 'spawnEach'
+
+		for p in replies 'collect'
+			sum = sum + (try await p otherwise 0)
+		end 'collect'
+
+		outstanding = outstanding + (__Builtins.gtQuiesce() as Integer)
+	end 'eachRound'
+
+	print("outstanding={outstanding} sum={sum}\n")
+	return 0
+end 'main'
+```
+```stdout
+outstanding=0 sum=30000
+```
+```exitcode
+0
+```

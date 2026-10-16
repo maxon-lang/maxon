@@ -2,9 +2,9 @@
 // compiler global, so the two share the `__shv_*` entries: a read is an acquire load and a retain
 // with no lock, the cost of reading a module `let`, and a published value is share-marked before a
 // release store or CAS makes it visible. A service slot (`__reg_service_*`) is read and written
-// under `__sched_lock`, so a lookup takes its share of the mailbox before a concurrent register can
-// drop the handle it read; an emitted line pays I/O anyway. Nothing allocates and no handle is
-// dropped while that lock is held.
+// under the registry's own lock (`RegistryLockLabel`), so a lookup takes its share of the mailbox
+// before a concurrent register can drop the handle it read; an emitted line pays I/O anyway.
+// Nothing allocates and no handle is dropped while that lock is held.
 //
 // A conditional publish or register that declines drops the value it was handed: the caller moved
 // it in.
@@ -27,6 +27,7 @@ let SharedValueRefUp = 1
 let SharedValueRefDown = -1
 let SharedValueLastRef = 1
 let ReleasedHolder = 0
+export let RegistryLockLabel = b"__maxon_registry_lock"
 export let NoRuntimeFunction = 0 as FullRangeInt
 let PublishedAnswer = 1
 let DeclinedAnswer = 0
@@ -97,13 +98,13 @@ function releasedRegistryPanicLabel(globalData GlobalDataTable) returns ByteArra
 	return registerPanicLabel(globalData, message: RegistryReleasedMessage)
 end 'releasedRegistryPanicLabel'
 
-function emitHeldOrPanic(module StdModule, func IrFunction, block IrBlock, held ValueId, released ByteArray, holdsSchedLock bool, ids ValueMinter) returns IrBlock
+function emitHeldOrPanic(module StdModule, func IrFunction, block IrBlock, held ValueId, released ByteArray, holdsRegistryLock bool, ids ValueMinter) returns IrBlock
 	var releasedBlock = module.addBlock(func, label: b"regreleased", heat: BlockHeat.cold)
 	let live = module.addBlock(func, label: b"reglive", heat: BlockHeat.normal)
 	emitBranchOnCompare(module, block: block, value: held, pred: StdCmpPred.eq, against: ReleasedHolder, whenTrue: releasedBlock, whenFalse: live, ids: ids)
 
-	if holdsSchedLock 'leaveTheLockFirst'
-		emitSchedLockLeave(module, block: releasedBlock, ids: ids)
+	if holdsRegistryLock 'leaveTheLockFirst'
+		emitLockWordLeave(module, block: releasedBlock, label: RegistryLockLabel, ids: ids)
 	end 'leaveTheLockFirst'
 
 	module.appendOp(releasedBlock, op: StdOp.osPanic(released))
@@ -161,12 +162,6 @@ function emitRetainedIfPresent(module StdModule, func IrFunction, block IrBlock,
 	return after
 end 'emitRetainedIfPresent'
 
-function emitCasSucceeded(module StdModule, block IrBlock, addr ValueId, expected ValueId, replacement ValueId, ids ValueMinter) returns ValueId
-	let swapped = ids.mint()
-	module.appendOp(block, op: StdOp.atomicCas(swapped, addrId: addr, expectedId: expected, replacementId: replacement))
-	return emitCompareWithConstant(module, block: block, value: swapped, pred: StdCmpPred.eq, against: AtomicCasSucceeded, ids: ids)
-end 'emitCasSucceeded'
-
 function emitRefStep(module StdModule, block IrBlock, cell ValueId, delta FullRangeInt, ids ValueMinter) returns ValueId
 	let addr = emitFieldAddr(module, block: block, record: cell, offset: SharedValueCellRefsOffset, ids: ids)
 	let prior = ids.mint()
@@ -194,8 +189,8 @@ function emitChainReplaced(module StdModule, func IrFunction, block IrBlock, cel
 	let head = ids.mint()
 	module.appendOp(retry, op: StdOp.loadAcquire(head, addrId: cell, offset: SharedValueCellChainOffset, valueType: StdType.i64))
 	emitStoreField(module, block: retry, record: node, offset: SharedValueChainNextOffset, value: head)
-	let linked = emitCasSucceeded(module, block: retry, addr: chainAddr, expected: head, replacement: node, ids: ids)
-	module.setTerminator(retry, op: StdOp.condBranch(linked, thenBlockId: chained.id, elseBlockId: retry.id))
+	let linked = emitCasAt(module, block: retry, addr: chainAddr, expected: head, replacement: node, ids: ids)
+	emitBranchOnCasLost(module, block: retry, result: linked, lost: retry, won: chained, ids: ids)
 
 	return chained
 end 'emitChainReplaced'
@@ -241,7 +236,7 @@ function buildSharedValueCurrent(module StdModule, released ByteArray)
 	let holder = 0
 
 	let cell = emitHolderCell(module, block: entry, holder: holder, ids: ids)
-	var live = emitHeldOrPanic(module, func: func, block: entry, held: cell, released: released, holdsSchedLock: false, ids: ids)
+	var live = emitHeldOrPanic(module, func: func, block: entry, held: cell, released: released, holdsRegistryLock: false, ids: ids)
 	let value = ids.mint()
 	module.appendOp(live, op: StdOp.loadAcquire(value, addrId: cell, offset: SharedValueCellCurrentOffset, valueType: StdType.i64))
 	let retainFn = emitLoadField(module, block: live, record: cell, offset: SharedValueCellRetainOffset, ids: ids)
@@ -262,14 +257,14 @@ function buildSharedValuePublish(module StdModule, released ByteArray)
 	let value = 1
 
 	let cell = emitHolderCell(module, block: entry, holder: holder, ids: ids)
-	var live = emitHeldOrPanic(module, func: func, block: entry, held: cell, released: released, holdsSchedLock: false, ids: ids)
+	var live = emitHeldOrPanic(module, func: func, block: entry, held: cell, released: released, holdsRegistryLock: false, ids: ids)
 	let currentAddr = emitFieldAddr(module, block: live, record: cell, offset: SharedValueCellCurrentOffset, ids: ids)
 	module.setTerminator(live, op: StdOp.branch(retry.id))
 
 	let old = ids.mint()
 	module.appendOp(retry, op: StdOp.loadAcquire(old, addrId: cell, offset: SharedValueCellCurrentOffset, valueType: StdType.i64))
-	let published = emitCasSucceeded(module, block: retry, addr: currentAddr, expected: old, replacement: value, ids: ids)
-	module.setTerminator(retry, op: StdOp.condBranch(published, thenBlockId: swapped.id, elseBlockId: retry.id))
+	let published = emitCasAt(module, block: retry, addr: currentAddr, expected: old, replacement: value, ids: ids)
+	emitBranchOnCasLost(module, block: retry, result: published, lost: retry, won: swapped, ids: ids)
 
 	var chained = emitChainReplaced(module, func: func, block: swapped, cell: cell, replaced: old, ids: ids)
 	module.setTerminator(chained, op: StdOp.retVoid)
@@ -288,10 +283,10 @@ function buildSharedValueReplace(module StdModule, released ByteArray)
 	let old = 2
 
 	let cell = emitHolderCell(module, block: entry, holder: holder, ids: ids)
-	var live = emitHeldOrPanic(module, func: func, block: entry, held: cell, released: released, holdsSchedLock: false, ids: ids)
+	var live = emitHeldOrPanic(module, func: func, block: entry, held: cell, released: released, holdsRegistryLock: false, ids: ids)
 	let currentAddr = emitFieldAddr(module, block: live, record: cell, offset: SharedValueCellCurrentOffset, ids: ids)
-	let published = emitCasSucceeded(module, block: live, addr: currentAddr, expected: old, replacement: value, ids: ids)
-	module.setTerminator(live, op: StdOp.condBranch(published, thenBlockId: swapped.id, elseBlockId: declined.id))
+	let published = emitCasAt(module, block: live, addr: currentAddr, expected: old, replacement: value, ids: ids)
+	emitBranchOnCasLost(module, block: live, result: published, lost: declined, won: swapped, ids: ids)
 
 	var chained = emitChainReplaced(module, func: func, block: swapped, cell: cell, replaced: old, ids: ids)
 	module.setTerminator(chained, op: StdOp.ret(emitConst(module, block: chained, value: PublishedAnswer, ids: ids)))
@@ -416,7 +411,7 @@ function buildSharedValueBoxDrop(module StdModule)
 end 'buildSharedValueBoxDrop'
 
 function emitLockedSlotHandle(module StdModule, block IrBlock, slot ValueId, ids ValueMinter) returns ValueId
-	emitSchedLockEnter(module, block: block, ids: ids)
+	emitLockWordEnter(module, block: block, label: RegistryLockLabel, ids: ids)
 	return emitLoadField(module, block: block, record: slot, offset: SharedValueHolderCellOffset, ids: ids)
 end 'emitLockedSlotHandle'
 
@@ -428,11 +423,11 @@ function buildRegistryServiceCurrent(module StdModule, released ByteArray)
 	let slot = 0
 
 	let held = emitLockedSlotHandle(module, block: entry, slot: slot, ids: ids)
-	var live = emitHeldOrPanic(module, func: func, block: entry, held: held, released: released, holdsSchedLock: true, ids: ids)
+	var live = emitHeldOrPanic(module, func: func, block: entry, held: held, released: released, holdsRegistryLock: true, ids: ids)
 	let mbox = emitLoadField(module, block: live, record: held, offset: ServiceHandleMailboxOffset, ids: ids)
 	let table = emitLoadField(module, block: live, record: held, offset: InterfaceHandleTableOffset, ids: ids)
 	emitMailboxShareTaken(module, block: live, mbox: mbox, ids: ids)
-	emitSchedLockLeave(module, block: live, ids: ids)
+	emitLockWordLeave(module, block: live, label: RegistryLockLabel, ids: ids)
 	module.setTerminator(live, op: StdOp.ret(emitInterfaceHandleBoxHolding(module, block: live, mbox: mbox, table: table, ids: ids)))
 	module.functions.push(func)
 end 'buildRegistryServiceCurrent'
@@ -446,9 +441,9 @@ function buildRegistryServiceRegister(module StdModule, released ByteArray)
 	let handle = 1
 
 	let replaced = emitLockedSlotHandle(module, block: entry, slot: slot, ids: ids)
-	var live = emitHeldOrPanic(module, func: func, block: entry, held: replaced, released: released, holdsSchedLock: true, ids: ids)
+	var live = emitHeldOrPanic(module, func: func, block: entry, held: replaced, released: released, holdsRegistryLock: true, ids: ids)
 	emitStoreField(module, block: live, record: slot, offset: SharedValueHolderCellOffset, value: handle)
-	emitSchedLockLeave(module, block: live, ids: ids)
+	emitLockWordLeave(module, block: live, label: RegistryLockLabel, ids: ids)
 	module.appendOp(live, op: StdOp.call(ids.mint(), callee: MboxHandleDropBoxName, args: argsOf(replaced)))
 	module.setTerminator(live, op: StdOp.retVoid)
 	module.functions.push(func)
@@ -460,9 +455,9 @@ function buildRegistryServiceInstall(module StdModule)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
 
-	emitSchedLockEnter(module, block: entry, ids: ids)
+	emitLockWordEnter(module, block: entry, label: RegistryLockLabel, ids: ids)
 	emitStoreField(module, block: entry, record: 0, offset: SharedValueHolderCellOffset, value: 1)
-	emitSchedLockLeave(module, block: entry, ids: ids)
+	emitLockWordLeave(module, block: entry, label: RegistryLockLabel, ids: ids)
 	module.setTerminator(entry, op: StdOp.retVoid)
 	module.functions.push(func)
 end 'buildRegistryServiceInstall'
@@ -478,7 +473,7 @@ function buildRegistryServiceRelease(module StdModule)
 
 	let held = emitLockedSlotHandle(module, block: entry, slot: slot, ids: ids)
 	emitStoreField(module, block: entry, record: slot, offset: SharedValueHolderCellOffset, value: emitConst(module, block: entry, value: ReleasedHolder, ids: ids))
-	emitSchedLockLeave(module, block: entry, ids: ids)
+	emitLockWordLeave(module, block: entry, label: RegistryLockLabel, ids: ids)
 	emitBranchOnCompare(module, block: entry, value: held, pred: StdCmpPred.eq, against: ReleasedHolder, whenTrue: done, whenFalse: dropIt, ids: ids)
 
 	module.appendOp(dropIt, op: StdOp.call(ids.mint(), callee: MboxHandleDropBoxName, args: argsOf(held)))
@@ -501,17 +496,17 @@ function buildRegistryServiceReplace(module StdModule, released ByteArray)
 	let expected = 2
 
 	let held = emitLockedSlotHandle(module, block: entry, slot: slot, ids: ids)
-	var live = emitHeldOrPanic(module, func: func, block: entry, held: held, released: released, holdsSchedLock: true, ids: ids)
+	var live = emitHeldOrPanic(module, func: func, block: entry, held: held, released: released, holdsRegistryLock: true, ids: ids)
 	emitBranchOnCompareValues(module, block: live, a: emitLoadField(module, block: live, record: held, offset: ServiceHandleMailboxOffset, ids: ids), pred: StdCmpPred.eq, b: emitLoadField(module, block: live, record: expected, offset: ServiceHandleMailboxOffset, ids: ids), whenTrue: compareTable, whenFalse: decline, ids: ids)
 
 	emitBranchOnCompareValues(module, block: compareTable, a: emitLoadField(module, block: compareTable, record: held, offset: InterfaceHandleTableOffset, ids: ids), pred: StdCmpPred.eq, b: emitLoadField(module, block: compareTable, record: expected, offset: InterfaceHandleTableOffset, ids: ids), whenTrue: swap, whenFalse: decline, ids: ids)
 
 	emitStoreField(module, block: swap, record: slot, offset: SharedValueHolderCellOffset, value: handle)
-	emitSchedLockLeave(module, block: swap, ids: ids)
+	emitLockWordLeave(module, block: swap, label: RegistryLockLabel, ids: ids)
 	module.appendOp(swap, op: StdOp.call(ids.mint(), callee: MboxHandleDropBoxName, args: argsOf(held)))
 	module.setTerminator(swap, op: StdOp.ret(emitConst(module, block: swap, value: PublishedAnswer, ids: ids)))
 
-	emitSchedLockLeave(module, block: decline, ids: ids)
+	emitLockWordLeave(module, block: decline, label: RegistryLockLabel, ids: ids)
 	module.appendOp(decline, op: StdOp.call(ids.mint(), callee: MboxHandleDropBoxName, args: argsOf(handle)))
 	module.setTerminator(decline, op: StdOp.ret(emitConst(module, block: decline, value: DeclinedAnswer, ids: ids)))
 	module.functions.push(func)

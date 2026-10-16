@@ -527,8 +527,9 @@ rather than in milliseconds because what a turn costs is the host's timer resolu
 case's subject.
 
 ⚠ **`procs: 1` IS LOAD-BEARING HERE, AND NOT ONLY FOR DETERMINISM.** `parkedFrom` is written by the
-coroutine and read by `main`, and one processor is what makes those two never run at once: a handoff goes
-through the scheduler's lock, so the write is published before the read can see the thread that made it. At
+coroutine and read by `main`, and one processor is what makes those two never run at once: every handoff
+between them is a switch on the one machine's OS thread, so the write is published before the read can see
+the thread that made it. At
 more than one processor the same two lines would be an unsynchronised word shared by two machines.
 
 ⚠ **THE LISTENER IS THE PEER, AND IT NEVER ACCEPTS.** The kernel completes the handshake into the backlog, so

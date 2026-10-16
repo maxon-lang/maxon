@@ -93,7 +93,7 @@ end 'main'
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 The read runs inside an `async` coroutine rather than in `main`, so the poller readies a member
 that is not its strand's owner: `__gt_ready_locked` appends it to the back of `main`'s strand queue under
-`__sched_lock` and — `main` being parked on its await, so no machine holds the strand — publishes the
+that strand's own lock and — `main` being parked on its await, so no machine holds the strand — publishes the
 strand's token, and the machine that pops it switches back into the reader. `top-level` takes the owner's
 arm of the same door; this case takes the coroutine's.
 ```maxon

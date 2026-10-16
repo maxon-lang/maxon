@@ -8,16 +8,17 @@
 //
 // ⭐⭐⭐ **THE INVARIANT THIS FILE EXISTS TO STATE, AND IT IS WRITTEN DOWN HERE ONCE.**
 //
-// > **A COROUTINE — what this runtime calls a GT that `async` created — belongs to the STRAND of the green
-// > thread that created it. A run queue holds a strand's owner as a token, never a coroutine, and the one
-// > machine that holds the token runs every member of the strand (`GtRuntime.GtOffStrandHolder`); a strand
-// > moves between machines only through `__sched_lock` or the compare-and-swap that claims it. Therefore every refcount read-modify-write on a
-// > COUNTED box happens on the machine running that box's strand, one machine at a time, and steps plain
-// > (`MmRuntime.emitAdjustRefcount`); the one exception is a box a share walk marked SHARED, whose
-// > count steps atomically. The cross-thread writers that remain — machines publishing, popping and
-// > stealing tokens, and a machine draining the poller re-readying a parked GT — touch queues,
-// > status words, counters and claims, every one of which states its `MultiMSharing` class; none
-// > touches a refcount.**
+// > **A COROUTINE — what this runtime calls a GT that `async` created — belongs to the STRAND of
+// > the green thread that created it. A run queue holds a strand's owner as a token, never a
+// > coroutine, and the one machine that holds the token runs every member of the strand
+// > (`GtRuntime.GtOffStrandHolder`); a strand moves between machines only through its holder word,
+// > which a compare-and-swap claims and an atomic decrement releases. Therefore every refcount
+// > read-modify-write on a COUNTED box happens on the machine running that box's strand, one
+// > machine at a time, and steps plain (`MmRuntime.emitAdjustRefcount`); the one exception is a box
+// > a share walk marked SHARED, whose count steps atomically. The cross-thread writers that remain
+// > — machines publishing, popping and stealing tokens, and a machine draining the poller
+// > re-readying a parked GT — touch queues, status words, counters and claims, every one of which
+// > states its `MultiMSharing` class; none touches a refcount.**
 //
 // ⭐ **THE LAST CLAUSE IS MEASURED, NOT ASSERTED, AND IT HAD TO BE — the plain refcount rests on it.** An
 // emitted program creates an OS thread at **two** `osThreadCreate` sites: `__sched_startm`'s worker M and
@@ -91,7 +92,8 @@
 //      allocation.
 //   5. **THE ASYNC RELEASER's CLAIM** is a CAS (`GtRuntime.emitGtReleaserCall`), the one item on the list
 //      whose failure would be a DOUBLE FREE rather than a lost count.
-//   6. **THE SUBPROCESS HANDLE TABLE** — its lazy creation under the lock, its per-slot claim by CAS.
+//   6. **THE SUBPROCESS HANDLE TABLE** — its lazy creation published by CAS, its per-slot claim by
+//      CAS.
 //
 // ⭐⭐ **THE ALLOCATOR IS SHARDED PER P.** Each processor owns its own mcache row and is the sole writer of
 // every span cached there, every span carries the P that owns it, a free by a P that does not own the span
@@ -174,11 +176,11 @@ export enum MultiMSharing
 	// `__sched_wake_poller`'s peek (`wppeek`), which chooses whether to take the lock and look for a parked
 	// machine, and whose stale "empty" that function argues.
 	//
-	// ⭐ **FOUR MORE READ A WORD TO REPORT IT RATHER THAN TO PICK AN ARM**: `__sched_idle_processor_count`
-	// answers `__sched_npidle`, `__sched_gt_records_carved` answers `__gt_records_carved`,
-	// `__sched_timer_start_count` answers `__sched_timer_starts` and `__sched_global_push_count` answers
-	// `__sched_global_pushes`. One aligned word each, so every answer is a count some locked writer really
-	// stored; a caller that wants the idle count settled polls it, as `specs/sched-processor.md` does.
+	// ⭐ **THREE MORE READ A WORD TO REPORT IT RATHER THAN TO PICK AN ARM**:
+	// `__sched_idle_processor_count` answers `__sched_npidle`, `__sched_timer_start_count` answers
+	// `__sched_timer_starts` and `__sched_global_push_count` answers `__sched_global_pushes`. One
+	// aligned word each, so every answer is a count some locked writer really stored; a caller that
+	// wants the idle count settled polls it, as `specs/sched-processor.md` does.
 	//
 	// ⭐⭐ **AND TWO WALK `__sched_allm` UNLOCKED, WHOSE ARGUMENT IS A DIFFERENT ONE**: `__sched_stop_workers`'s join
 	// walk and `__sched_park_wake_count`. They are WALKS, and a stale answer is not what makes them safe: the list
@@ -188,9 +190,20 @@ export enum MultiMSharing
 	// A further site is not covered by any of this: it needs its own argument at its own line, or the lock.
 	underSchedLock
 
-	// Mutated only inside `__sched_lock`, and read on OS threads that hold no lock in common with the writer
-	// — so for those readers the lock orders nothing, and the ordering has to travel on the accesses
-	// themselves: every store a release, every load an acquire.
+	// `underSchedLock`'s discipline under another lock or claim, named at the slot. Its one
+	// unlocked read reports rather than picks an arm: `__sched_gt_records_carved` answers
+	// `__gt_records_carved`, one aligned word some locked writer really stored.
+	underOwnLock
+
+	// Stored with a release or claimed by a compare-and-swap, with no lock, and every load an acquire,
+	// so any thread may read or claim it. `assertPublishedWordAccessIsOrdered` checks it as it checks
+	// `publishedFromTheLock`.
+	publishedAtomically
+
+	// Mutated only inside a lock — `__sched_lock`, or the one named at the slot — and read on OS
+	// threads that hold no lock in common with the writer — so for those readers the lock orders
+	// nothing, and the ordering has to travel on the accesses themselves: every store a release, every
+	// load an acquire.
 	//
 	// ⚠ **ARMv8 ORDERS NOTHING AROUND A PLAIN STORE, AND THE COST IS A WRONG ANSWER RATHER THAN A CRASH.**
 	// `__gt_runner_done` moves `__sched_phase` to say `main` completed; a reader served that store from a
@@ -251,11 +264,13 @@ export function pushRuntimeGlobal(out DataSectionEntryArray, label ByteArray, sh
 	match sharing 'classified'
 		atomicStep or
 		underSchedLock or
+		underOwnLock or
+		publishedAtomically or
 		publishedFromTheLock or
 		sealedBeforeWorkers or
 		monotoneApproximation or
 		lastWriterWins then break
-		unclassified then panic("pushRuntimeGlobal: '{String.from(label)}' is laid out with no multi-M sharing class. A `.data` word is reachable from every OS thread by construction, so it needs one of: atomicStep (every mutation is an atomicRmw/atomicCas wherever a second M can exist), underSchedLock (every read and write inside `__sched_lock`), publishedFromTheLock (mutated only inside `__sched_lock`, every store a release and every load an acquire, so any thread may read it without the lock), sealedBeforeWorkers (written only during bring-up, which no worker M can race), monotoneApproximation (a plain RMW whose lost update is bounded and self-correcting), or lastWriterWins (one word whose contract never said which writer wins). Argue the choice at the site. See MultiMSharing.")
+		unclassified then panic("pushRuntimeGlobal: '{String.from(label)}' is laid out with no multi-M sharing class. A `.data` word is reachable from every OS thread by construction, so it needs one of: atomicStep (every mutation is an atomicRmw/atomicCas wherever a second M can exist), underSchedLock (every read and write inside `__sched_lock`), underOwnLock (every read and write inside the lock or claim that guards the datum, named at the slot), publishedAtomically (stored with a release and claimed by a compare-and-swap, every load an acquire, so any thread may read or claim it without a lock), publishedFromTheLock (mutated only inside a lock, every store a release and every load an acquire, so any thread may read it without the lock), sealedBeforeWorkers (written only during bring-up, which no worker M can race), monotoneApproximation (a plain RMW whose lost update is bounded and self-correcting), or lastWriterWins (one word whose contract never said which writer wins). Argue the choice at the site. See MultiMSharing.")
 	end 'classified'
 
 	out.push(DataSectionEntry.create(String.from(label), valueType: valueType, value: seed, reach: reach, sharing: sharing))
@@ -1237,23 +1252,25 @@ export let SchedGlobalPushesLabel = b"__sched_global_pushes"
 // `underSchedLock`: every site that scans holds the lock, and the one read is an enumerated unlocked read.
 export let SchedTimerScanStepsLabel = b"__sched_timer_scan_steps"
 
-// The global GT-record free list — Go's `sched.gFree`: what a P sheds past `GtFreeLocalHigh`, what a P-less
-// thread puts and gets, and what an empty local list refills from.
+// The global GT-record free list — Go's `sched.gFree`: what a P sheds past `GtFreeLocalHigh`, what
+// a P-less thread puts and gets, and what an empty local list refills from. Under
+// `__gt_gfree_lock`.
 let SchedGtFreeHeadLabel = b"__gt_gfree_head"
 
-// ⭐⭐ **THE SCHEDULER ARENA's CARVE CURSOR AND THE END OF ITS CURRENT CHUNK** (`__sched_arena_carve`). Both 0
-// until the first carve, which finds no room and maps the first chunk. `underSchedLock`: the carve is their only
-// reader and writer, and its callers hold the lock.
+// ⭐⭐ **THE SCHEDULER ARENA's CARVE CURSOR AND THE END OF ITS CURRENT CHUNK**
+// (`__sched_arena_carve`). Both 0 until the first carve, which finds no room and maps the first
+// chunk. `underOwnLock`: the carve is their only reader and writer, and it holds `__gt_gfree_lock`.
 let SchedArenaCursorLabel = b"__sched_arena_cursor"
 let SchedArenaLimitLabel = b"__sched_arena_limit"
 
-// ⭐⭐ **HOW MANY RECORDS THE ARENA HAS EVER CARVED — what `__Builtins.schedGtRecordsCarved()` answers.**
-// Stepped by the carve alone, under `__sched_lock`. A program that reclaims every record it finishes with
-// keeps it within its peak live population plus what the other processors' lists can hold
-// (`GtFreePutName`), however many rounds it runs; one that strands a record per round grows it with the
-// rounds. That makes it the leak witness `__gt_live_count` cannot be for a record whose consumer has already
-// debited that count, and `__Builtins.schedGtRecycleCount()` cannot be above one processor, where a spawn
-// may carve while a reclaimed record waits on another processor's list.
+// ⭐⭐ **HOW MANY RECORDS THE ARENA HAS EVER CARVED — what `__Builtins.schedGtRecordsCarved()`
+// answers.** Stepped beside the carve alone, under `__gt_gfree_lock`. A program that reclaims every
+// record it finishes with keeps it within its peak live population plus what the other processors'
+// lists can hold (`GtFreePutName`), however many rounds it runs; one that strands a record per
+// round grows it with the rounds. That makes it the leak witness `__gt_live_count` cannot be for a
+// record whose consumer has already debited that count, and `__Builtins.schedGtRecycleCount()`
+// cannot be above one processor, where a spawn may carve while a reclaimed record waits on another
+// processor's list.
 let GtRecordsCarvedLabel = b"__gt_records_carved"
 
 // ⭐ **HOW MANY Ps EXIST — the bound every scan walks, and the ceiling on live Ms.** TWO words
@@ -1408,10 +1425,12 @@ let SchedSysmonWaitLabel = b"__sched_sysmon_wait"
 // which of the three did it. `underSchedLock`: stepped inside the hold the arm decides in.
 let SchedTimerStartsLabel = b"__sched_timer_starts"
 
-// ⭐⭐⭐ **WHEN THE POLLER LAST RETURNED, OR 0 WHILE A MACHINE IS BLOCKED IN IT — Go's `sched.lastpoll`.** The
-// idle tail claims the poller by finding this non-zero and storing 0; the machine that claimed it stores the
-// clock when its wait ends. So *"is anybody polling?"* is one load, and at most one machine blocks in the
-// poller at a time. Seeded with the clock at bring-up, because 0 would read as *"somebody is polling"*.
+// ⭐⭐⭐ **WHEN THE POLLER LAST RETURNED, OR 0 WHILE A MACHINE IS BLOCKED IN IT — Go's
+// `sched.lastpoll`.** The idle tail claims the poller by a CAS from the non-zero value it read to
+// 0, and `__sysmon` claims a stale poll by a CAS from it to the clock, outside `__sched_lock`; the
+// machine that claimed it stores the clock when its wait ends. So *"is anybody polling?"* is one
+// load, and at most one machine blocks in the poller at a time. Seeded with the clock at bring-up,
+// because 0 would read as *"somebody is polling"*.
 let SchedLastPollLabel = b"__sched_lastpoll"
 
 // ⭐⭐ **THE DEADLINE THE BLOCKED POLLER WILL WAKE AT — Go's `sched.pollUntil`**, published with the claim and
@@ -1523,15 +1542,23 @@ export function targetPreemptDelivery(target Target) returns PreemptDelivery
 	end 'os'
 end 'targetPreemptDelivery'
 
-// ⭐ **THE ONE LOCK OVER THE RUN QUEUE — a `.data` word holding a slab-allocated CRITICAL_SECTION.** It is
-// allocated by `__gt_init` for EVERY green-thread program and taken at every head/tail mutation, because a
-// worker M is a cross-thread mutator of the queue.
+// ⭐ **`__sched_lock` — Go's `sched.lock`: a `.data` word holding a slab-allocated
+// CRITICAL_SECTION.** It is allocated by `__gt_init` for EVERY green-thread program. It guards the
+// global run queue and its counts, the idle processor and machine lists, the machine roster, the
+// regain list and the process phase, and with them the timer store and the poll-descriptor band.
+// Every other shared structure has its own lock or claim: a GT record's
+// (`GtRuntime.GtOffRecordLock`), `__gt_gfree_lock`, `__gt_allg_lock`, the registry's, a mailbox's,
+// and the CAS claims argued at their words.
 //
-// ⚠ **ONE LOCK RATHER THAN TWO, AND THAT IS A DEADLOCK ARGUMENT.** It also guards the poll-descriptor band and
-// the timer store. Two locks would have to be held together wherever a readiness readies a thread, and two
-// locks held together have an ORDER that every file touching them would have to remember. A CRITICAL_SECTION
-// is recursive, so one lock covering all of it has no order to get wrong.
+// ⚠ **ONE LOCK OVER THE QUEUE, THE TIMERS AND THE POLLER, AND THAT IS A DEADLOCK ARGUMENT.**
+// Separate locks would have to be held together wherever a readiness readies a thread, and two
+// locks held together have an ORDER that every file touching them would have to remember. A
+// CRITICAL_SECTION is recursive, so one lock covering all of it has no order to get wrong. A record
+// lock is taken inside it — a ready from the timer store or the poller, the hand-off gate's requeue
+// — and no record lock is held while it is taken.
 export let SchedLockLabel = b"__sched_lock"
+
+let GtFreeLockLabel = b"__gt_gfree_lock"
 
 // ⭐ **WHERE A THREAD WITH NO MACHINE KEEPS ITS LOCK DEPTH** — see `emitSchedLockDepthAddr`. The monitor takes
 // `__sched_lock` and is not a machine; it runs no green thread, so the number it leaves here is read by nobody
@@ -1843,27 +1870,29 @@ export let SchedGtStackBytesName = b"__sched_gt_stack_bytes"
 // `gtIsComplete` over a promise already awaited (`GtRuntime.GtAnyCompletedName`) — lands in a GT record and
 // never in memory that has been given to something else.
 //
-// It pushes onto the current P's list; the push that would bring it to `GtFreeLocalHigh` is made under
-// `__sched_lock`, which then moves records to the global list until `GtFreeLocalLow` remain. An OS thread with
-// no M, or an M holding no P, has no list of its own and pushes straight onto the global one.
+// It pushes onto the current P's list; the push that would bring it to `GtFreeLocalHigh` is made
+// under `__gt_gfree_lock`, which then moves records to the global list until `GtFreeLocalLow`
+// remain. An OS thread with no M, or an M holding no P, has no list of its own and pushes straight
+// onto the global one.
 //
 // ⚠ **A PROCESSOR's LIST IS STRANDED WHILE THE PROCESSOR IS IDLE.** Nothing drains a P parked on
-// `__sched_pidle`, so up to `GtFreeLocalHigh - 1` records per processor wait there until a machine takes that
-// P again, and a spawn elsewhere carves fresh ones meanwhile. A carve holds `__sched_lock`, so it never sees a
-// list at `GtFreeLocalHigh`: the records a process ever carves are bounded by its peak count of records on no
-// list — live threads and cells, and records mid-reclaim — plus `GtFreeLocalHigh - 1` per processor.
+// `__sched_pidle`, so up to `GtFreeLocalHigh - 1` records per processor wait there until a machine
+// takes that P again, and a spawn elsewhere carves fresh ones meanwhile. A carve holds
+// `__gt_gfree_lock`, so it never sees a list at `GtFreeLocalHigh`: the records a process ever
+// carves are bounded by its peak count of records on no list — live threads and cells, and records
+// mid-reclaim — plus `GtFreeLocalHigh - 1` per processor.
 //
-// ⚠ **IT TAKES `__sched_lock` ONLY TO SHED OR ON THE P-LESS ROAD, AND CALLS NOTHING WHILE HOLDING IT**, so it
-// adds no lock order: `__gt_reclaim` is never reached with that lock held (`GtRuntime.GtRunnerDoneName`), and
-// the hold covers list links only.
+// ⚠ **IT TAKES `__gt_gfree_lock` ONLY TO SHED OR ON THE P-LESS ROAD, AND CALLS NOTHING WHILE
+// HOLDING IT**, so it adds no lock order: the hold covers list links only.
 export let GtFreePutName = b"__gt_free_put"
 
-// ⭐⭐⭐ **`__gt_free_get() -> gt` — Go's `gfget` plus `malg`'s allocation: the ONE door a GT record is taken
-// through**, by `__gt_spawn` and `__gt_cell_alloc` alike. It pops the current P's list, refilling up to
-// `GtFreeLocalLow` from the global list when the local one is empty; a thread holding no P pops the global
-// list. When every list it may consult is empty it carves a fresh record from the scheduler's arena
-// (`__sched_arena_carve`) inside the same hold of `__sched_lock`, which is why no record allocation and no reuse
-// moves the allocator's raw columns: whether a spawn reuses a record or carves one depends on timing.
+// ⭐⭐⭐ **`__gt_free_get() -> gt` — Go's `gfget` plus `malg`'s allocation: the ONE door a GT record
+// is taken through**, by `__gt_spawn` and `__gt_cell_alloc` alike. It pops the current P's list,
+// refilling up to `GtFreeLocalLow` from the global list when the local one is empty; a thread
+// holding no P pops the global list. When every list it may consult is empty it carves a fresh
+// record from the scheduler's arena (`__sched_arena_carve`) inside the same hold of
+// `__gt_gfree_lock`, which is why no record allocation and no reuse moves the allocator's raw
+// columns: whether a spawn reuses a record or carves one depends on timing.
 //
 // ⭐ **ONE CARVE CURSOR UNDER THE LOCK, NOT A CHUNK PER P.** A carve happens only when the record population
 // grows, so carves are bounded by `GtFreePutName`'s bound and a spawn from a warm list takes no lock at all; Go's
@@ -1873,14 +1902,17 @@ export let GtFreePutName = b"__gt_free_put"
 // ⚠ **THE LOCK IS TAKEN UNGUARDED.** Every caller runs after `__gt_init` has allocated it — `__gt_run_main`
 // spawns `main` after it, and every other spawn and every cell is made by a green thread.
 //
-// ⚠ **THE CARVE's `osAllocPages` RUNS UNDER `__sched_lock`**, as `__sched_startm`'s `osThreadCreate` does: a
-// `schedulerBound` page call is never bracketed, so no retake can intervene; it takes no runtime lock, so it adds
-// no lock order; and it runs once per chunk. A refused chunk aborts through `__slab_assert_os_alloc` with the
-// lock still held, which `osExit` does not need released.
+// ⚠ **THE CARVE's `osAllocPages` RUNS UNDER `__gt_gfree_lock`**, as `__sched_startm`'s
+// `osThreadCreate` runs under `__sched_lock`: a `schedulerBound` page call is never bracketed, so
+// no retake can intervene; it takes no runtime lock, so it adds no lock order; and it runs once per
+// chunk. A refused chunk aborts through `__slab_assert_os_alloc` with the lock still held, which
+// `osExit` does not need released. The carve's `__gt_allg` append takes `__gt_allg_lock` inside
+// this hold.
 //
 // ⚠ A recycled record is handed out holding its previous tenant's words, so each taker initialises
-// what it reads: `__gt_spawn` zeroes the whole record and `__gt_cell_alloc` stores every word a
-// cell is read through. A taker that skipped this would release the previous tenant's arguments.
+// what it reads: `__gt_spawn` zeroes every field below the record lock and `__gt_cell_alloc` stores
+// every word a cell is read through. A taker that skipped this would release the previous tenant's
+// arguments.
 export let GtFreeGetName = b"__gt_free_get"
 
 // ⭐⭐ `__sched_arena_carve(bytes) -> address` — the scheduler's uncounted arena, which GT records and machines are
@@ -2300,11 +2332,14 @@ export function schedRuntimeGlobals(usage RuntimeUsage, target Target) returns D
 	pushRuntimeGlobal(out, label: SchedMidleLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: SchedPidleLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
 
-	// A fourth intrusive head, for the same reason, and the record arena's three words beside it.
-	pushRuntimeGlobal(out, label: SchedGtFreeHeadLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
-	pushRuntimeGlobal(out, label: SchedArenaCursorLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
-	pushRuntimeGlobal(out, label: SchedArenaLimitLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
-	pushRuntimeGlobal(out, label: GtRecordsCarvedLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
+	// A fourth intrusive head, for the same reason, and the record arena's three words beside it, all
+	// under `__gt_gfree_lock`. The lock words are written once, by `__sched_init_procs`.
+	pushRuntimeGlobal(out, label: SchedGtFreeHeadLabel, sharing: MultiMSharing.underOwnLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: SchedArenaCursorLabel, sharing: MultiMSharing.underOwnLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: SchedArenaLimitLabel, sharing: MultiMSharing.underOwnLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: GtRecordsCarvedLabel, sharing: MultiMSharing.underOwnLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: GtFreeLockLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: RegistryLockLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
 
 	// The three counts kept beside those structures, each stepped only inside the doors that mutate its
 	// structure and therefore under the same lock. `__sched_npidle`'s unlocked reads are enumerated
@@ -2323,8 +2358,8 @@ export function schedRuntimeGlobals(usage RuntimeUsage, target Target) returns D
 
 	// The poller's claim and deadline, the machines waiting to regain a processor, and the poller itself.
 	// Each word's own declaration argues its class.
-	pushRuntimeGlobal(out, label: SchedLastPollLabel, sharing: MultiMSharing.publishedFromTheLock, reach: DataReach.walked)
-	pushRuntimeGlobal(out, label: SchedPollUntilLabel, sharing: MultiMSharing.publishedFromTheLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: SchedLastPollLabel, sharing: MultiMSharing.publishedAtomically, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: SchedPollUntilLabel, sharing: MultiMSharing.publishedAtomically, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: SchedRegainHeadLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
 
 	for entry in netpollRuntimeGlobals() 'poller'
@@ -2342,7 +2377,7 @@ export function schedRuntimeGlobals(usage RuntimeUsage, target Target) returns D
 	// its own declaration for why that makes it `lastWriterWins` rather than sealed.
 	pushRuntimeGlobal(out, label: SchedShutdownFlagLabel, sharing: MultiMSharing.lastWriterWins, reach: DataReach.walked)
 
-	// The lock is `__sched_init_procs`'s like the three above; the IOCP completion loop's chunk takes it.
+	// The lock is `__sched_init_procs`'s like the three above.
 	if usage.usesGt 'lockReadByTheChunks'
 		pushRuntimeGlobal(out, label: SchedLockLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.declared)
 	end 'lockReadByTheChunks'
@@ -2486,22 +2521,45 @@ function emitSchedWakeMachine(module StdModule, block IrBlock, m ValueId, ids Va
 	module.appendOp(block, op: StdOp.osSetEvent(emitLoadField(module, block: block, record: m, offset: MOffParkEvent, ids: ids)))
 end 'emitSchedWakeMachine'
 
-// Take / release the one run-queue lock, stepping this machine's lock depth around it so an asynchronous
-// stop can refuse a thread that holds it (`MOffLocks`). Both are spelled here so `GtRuntime`'s four mutation
-// sites and this file's reach the same word the same way.
+function emitAllocRuntimeLock(module StdModule, block IrBlock, label ByteArray, ids ValueMinter)
+	let lockBytes = emitConst(module, block: block, value: OsLockBytes, ids: ids)
+	let lock = ids.mint()
+	module.appendOp(block, op: StdOp.call(lock, callee: SlabAllocName, args: argsOf(lockBytes)))
+	module.appendOp(block, op: StdOp.osLockInit(lock))
+	emitStoreGlobalWord(module, block: block, label: label, value: lock, ids: ids)
+end 'emitAllocRuntimeLock'
+
+// Take / release a runtime lock, stepping this machine's lock depth around it so an asynchronous
+// stop can refuse a thread that holds one (`MOffLocks`).
 //
-// ⛔ **THE ORDER IS NOT FREE.** The depth goes UP before the acquire and DOWN after the release, so the
-// window in which this machine reads as lock-free is always a window in which it really is. The other order
-// would leave an instant holding the lock with a zero count, which is exactly the instant a stop would wedge
-// every other machine.
-export function emitSchedLockEnter(module StdModule, block IrBlock, ids ValueMinter)
+// ⛔ **THE ORDER IS NOT FREE.** The depth goes UP before the acquire and DOWN after the release, so
+// the window in which this machine reads as lock-free is always a window in which it really is. The
+// other order would leave an instant holding the lock with a zero count, which is exactly the
+// instant a stop would wedge every other machine.
+export function emitLockEnterAt(module StdModule, block IrBlock, lock ValueId, ids ValueMinter)
 	emitSchedStepLockDepth(module, block: block, delta: OneMore, ids: ids)
-	module.appendOp(block, op: StdOp.osLockEnter(emitLoadGlobalWord(module, block: block, label: SchedLockLabel, ids: ids)))
+	module.appendOp(block, op: StdOp.osLockEnter(lock))
+end 'emitLockEnterAt'
+
+export function emitLockLeaveAt(module StdModule, block IrBlock, lock ValueId, ids ValueMinter)
+	module.appendOp(block, op: StdOp.osLockLeave(lock))
+	emitSchedStepLockDepth(module, block: block, delta: OneFewer, ids: ids)
+end 'emitLockLeaveAt'
+
+export function emitLockWordEnter(module StdModule, block IrBlock, label ByteArray, ids ValueMinter)
+	emitLockEnterAt(module, block: block, lock: emitLoadGlobalWord(module, block: block, label: label, ids: ids), ids: ids)
+end 'emitLockWordEnter'
+
+export function emitLockWordLeave(module StdModule, block IrBlock, label ByteArray, ids ValueMinter)
+	emitLockLeaveAt(module, block: block, lock: emitLoadGlobalWord(module, block: block, label: label, ids: ids), ids: ids)
+end 'emitLockWordLeave'
+
+export function emitSchedLockEnter(module StdModule, block IrBlock, ids ValueMinter)
+	emitLockWordEnter(module, block: block, label: SchedLockLabel, ids: ids)
 end 'emitSchedLockEnter'
 
 export function emitSchedLockLeave(module StdModule, block IrBlock, ids ValueMinter)
-	module.appendOp(block, op: StdOp.osLockLeave(emitLoadGlobalWord(module, block: block, label: SchedLockLabel, ids: ids)))
-	emitSchedStepLockDepth(module, block: block, delta: OneFewer, ids: ids)
+	emitLockWordLeave(module, block: block, label: SchedLockLabel, ids: ids)
 end 'emitSchedLockLeave'
 
 // ⭐⭐ **STEP THE CALLING MACHINE'S RUNTIME-LOCK DEPTH — `MOffLocks`.** The allocator's lock pair steps the
@@ -2622,10 +2680,12 @@ function emitSchedListTakeHead(module StdModule, cur IrBlock, got IrBlock, none 
 	return node
 end 'emitSchedListTakeHead'
 
-// ⭐⭐ **STEP A COUNT KEPT BESIDE A LOCKED STRUCTURE — `__sched_npidle`, `__sched_mcount`, `__sched_runq_size`
-// and `__gt_records_carved` — or a locked decision, `__sched_timer_starts`.** A plain load/add/store, because
-// every writer holds `__sched_lock`; each count is stepped only inside the doors that mutate its structure or
-// make its decision, so the two cannot drift apart. The prior value has no reader.
+// ⭐⭐ **STEP A COUNT KEPT BESIDE A LOCKED STRUCTURE — `__sched_npidle`, `__sched_mcount`,
+// `__sched_runq_size` and `__gt_records_carved` — or a locked decision, `__sched_timer_starts`.** A
+// plain load/add/store, because every writer holds the structure's lock — `__gt_gfree_lock` for
+// `__gt_records_carved`, `__sched_lock` for the rest; each count is stepped only inside the doors
+// that mutate its structure or make its decision, so the two cannot drift apart. The prior value
+// has no reader.
 export function emitSchedStepLockedCount(module StdModule, block IrBlock, label ByteArray, delta FullRangeInt, ids ValueMinter)
 	_ = emitGlobalAccumulate(module, block: block, label: label, delta: emitConst(module, block: block, value: delta, ids: ids), multiM: false, ids: ids)
 end 'emitSchedStepLockedCount'
@@ -2915,11 +2975,10 @@ function buildSchedInitProcs(module StdModule, target Target)
 
 	// The run-queue CRITICAL_SECTION, in a slab region whose pointer the `.data` word holds. Its lifetime is
 	// the process's, exactly as the completion port's and the wake events' are — see `SchedLockLabel`.
-	let lockBytes = emitConst(module, block: settled, value: OsLockBytes, ids: ids)
-	let lock = ids.mint()
-	module.appendOp(settled, op: StdOp.call(lock, callee: SlabAllocName, args: argsOf(lockBytes)))
-	module.appendOp(settled, op: StdOp.osLockInit(lock))
-	emitStoreGlobalWord(module, block: settled, label: SchedLockLabel, value: lock, ids: ids)
+	emitAllocRuntimeLock(module, block: settled, label: SchedLockLabel, ids: ids)
+	emitAllocRuntimeLock(module, block: settled, label: GtFreeLockLabel, ids: ids)
+	emitAllocRuntimeLock(module, block: settled, label: GtAllGLockLabel, ids: ids)
+	emitAllocRuntimeLock(module, block: settled, label: RegistryLockLabel, ids: ids)
 
 	// The `P*` array. `__slab_alloc` zeroes it, so a slot the loop has not reached yet reads as a null P
 	// rather than as garbage — which matters only until the loop fills every one, and costs nothing.
@@ -3401,6 +3460,23 @@ module function emitCasLost(module StdModule, block IrBlock, result ValueId, ids
 	return emitCompareWithConstant(module, block: block, value: result, pred: StdCmpPred.eq, against: AtomicCasFailed, ids: ids)
 end 'emitCasLost'
 
+module function emitCasAt(module StdModule, block IrBlock, addr ValueId, expected ValueId, replacement ValueId, ids ValueMinter) returns ValueId
+	let result = ids.mint()
+	module.appendOp(block, op: StdOp.atomicCas(result, addrId: addr, expectedId: expected, replacementId: replacement))
+	return result
+end 'emitCasAt'
+
+module function emitCasGlobalWord(module StdModule, block IrBlock, label ByteArray, expected ValueId, replacement ValueId, ids ValueMinter) returns ValueId
+	let addr = ids.mint()
+	module.appendOp(block, op: StdOp.globalAddr(addr, label: label))
+	return emitCasAt(module, block: block, addr: addr, expected: expected, replacement: replacement, ids: ids)
+end 'emitCasGlobalWord'
+
+module function emitCasField(module StdModule, block IrBlock, record ValueId, offset ByteOffset, expected ValueId, replacement ValueId, ids ValueMinter) returns ValueId
+	let addr = emitFieldAddr(module, block: block, record: record, offset: offset, ids: ids)
+	return emitCasAt(module, block: block, addr: addr, expected: expected, replacement: replacement, ids: ids)
+end 'emitCasField'
+
 module function emitBranchOnCasLost(module StdModule, block IrBlock, result ValueId, lost IrBlock, won IrBlock, ids ValueMinter)
 	let lostFlag = emitCasLost(module, block: block, result: result, ids: ids)
 
@@ -3508,7 +3584,7 @@ function buildSchedRunqPut(module StdModule)
 	var moveDone = module.addBlock(func, label: b"rqmovedone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let gt = 0 as ValueId
+	let gt = 0
 
 	// Whatever reaches the RING — the thread the slot displaced, and itself again after a lost overflow CAS.
 	let pushGt = ids.mint()
@@ -3520,11 +3596,11 @@ function buildSchedRunqPut(module StdModule)
 	// of the three reasons put it there.
 	let p = emitLoadCurrentPOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, haveProc: slotPut, noProc: globalOnly, ids: ids)
 
-	// globalOnly: this OS thread owns no P, so it has no ring to push — the global queue is where a thread
-	// belongs when nobody owns it yet, and it is exactly what `__sched_find_runnable`'s batch grab is for. The
-	// lock is taken HERE rather than owed by the caller: `emitGtReadyParkedService` reaches this holding no
-	// lock, and a CRITICAL_SECTION is recursive, so a `__gt_ready_locked` caller, which already holds it, pays
-	// two counted ops and nothing else.
+	// globalOnly: this OS thread owns no P, so it has no ring to push — the global queue is where a
+	// thread belongs when nobody owns it yet, and it is exactly what `__sched_find_runnable`'s batch
+	// grab is for. The lock is taken HERE rather than owed by the caller: most publishers reach this
+	// holding no lock, and a CRITICAL_SECTION is recursive, so one that already holds it — a ready
+	// from the timer store or the poller — pays two counted ops and nothing else.
 	emitSchedLockEnter(module, block: globalOnly, ids: ids)
 	emitSchedEnqueueLocked(module, block: globalOnly, gt: gt, ids: ids)
 	emitSchedLockLeave(module, block: globalOnly, ids: ids)
@@ -3536,10 +3612,8 @@ function buildSchedRunqPut(module StdModule)
 	// exchange re-reads, which is Go's `goto retryNext`.
 	let oldNext = emitLoadAcquireField(module, block: slotPut, record: p, offset: POffRunnext, ids: ids)
 	let slotAddr = emitFieldAddr(module, block: slotPut, record: p, offset: POffRunnext, ids: ids)
-	let exchanged = ids.mint()
-	module.appendOp(slotPut, op: StdOp.atomicCas(exchanged, addrId: slotAddr, expectedId: oldNext, replacementId: gt))
-	let lostSlot = emitCasLost(module, block: slotPut, result: exchanged, ids: ids)
-	module.setTerminator(slotPut, op: StdOp.condBranch(lostSlot, thenBlockId: slotPut.id, elseBlockId: slotKick.id))
+	let exchanged = emitCasAt(module, block: slotPut, addr: slotAddr, expected: oldNext, replacement: gt, ids: ids)
+	emitBranchOnCasLost(module, block: slotPut, result: exchanged, lost: slotPut, won: slotKick, ids: ids)
 
 	// slotKick: an empty slot is the whole put; otherwise the thread it held takes the ring path below.
 	emitBranchOnCompare(module, block: slotKick, value: oldNext, pred: StdCmpPred.eq, against: 0, whenTrue: slotOnly, whenFalse: retry, ids: ids)
@@ -3568,8 +3642,7 @@ function buildSchedRunqPut(module StdModule)
 	let batchCount = emitConst(module, block: claim, value: RunqHalfSlots, ids: ids)
 	let claimedHead = emitBin(module, block: claim, a: head, b: batchCount, opcode: StdBinOpcode.add, ids: ids)
 	let headAddr = emitFieldAddr(module, block: claim, record: p, offset: POffRunqHead, ids: ids)
-	let claimed = ids.mint()
-	module.appendOp(claim, op: StdOp.atomicCas(claimed, addrId: headAddr, expectedId: head, replacementId: claimedHead))
+	let claimed = emitCasAt(module, block: claim, addr: headAddr, expected: head, replacement: claimedHead, ids: ids)
 	let lostClaim = emitCasLost(module, block: claim, result: claimed, ids: ids)
 	let moveIndex = ids.mint()
 	moveHdr.blockArgs.push(IrBlockArg.create(moveIndex, argType: StdType.i64))
@@ -3664,10 +3737,8 @@ function buildSchedRunqGet(module StdModule)
 	let headAddr = emitFieldAddr(module, block: take, record: p, offset: POffRunqHead, ids: ids)
 	let oneSlot = emitConst(module, block: take, value: 1, ids: ids)
 	let nextHead = emitBin(module, block: take, a: head, b: oneSlot, opcode: StdBinOpcode.add, ids: ids)
-	let won = ids.mint()
-	module.appendOp(take, op: StdOp.atomicCas(won, addrId: headAddr, expectedId: head, replacementId: nextHead))
-	let lost = emitCasLost(module, block: take, result: won, ids: ids)
-	module.setTerminator(take, op: StdOp.condBranch(lost, thenBlockId: loopHdr.id, elseBlockId: took.id))
+	let won = emitCasAt(module, block: take, addr: headAddr, expected: head, replacement: nextHead, ids: ids)
+	emitBranchOnCasLost(module, block: take, result: won, lost: loopHdr, won: took, ids: ids)
 
 	// `take` is `took`'s only predecessor, so `g` is in scope with no block argument — the dominance argument
 	// every branching emitter in this runtime makes for itself.
@@ -3699,10 +3770,8 @@ function buildSchedRunqNext(module StdModule)
 	emitBranchOnCompare(module, block: entry, value: next, pred: StdCmpPred.eq, against: 0, whenTrue: emptyBlock, whenFalse: take, ids: ids)
 
 	let slotAddr = emitFieldAddr(module, block: take, record: p, offset: POffRunnext, ids: ids)
-	let taken = ids.mint()
-	module.appendOp(take, op: StdOp.atomicCas(taken, addrId: slotAddr, expectedId: next, replacementId: emitConst(module, block: take, value: 0, ids: ids)))
-	let lost = emitCasLost(module, block: take, result: taken, ids: ids)
-	module.setTerminator(take, op: StdOp.condBranch(lost, thenBlockId: emptyBlock.id, elseBlockId: took.id))
+	let taken = emitCasAt(module, block: take, addr: slotAddr, expected: next, replacement: emitConst(module, block: take, value: 0, ids: ids), ids: ids)
+	emitBranchOnCasLost(module, block: take, result: taken, lost: emptyBlock, won: took, ids: ids)
 
 	module.setTerminator(took, op: StdOp.ret(next))
 	emitConstReturn(module, block: emptyBlock, value: 0, ids: ids)
@@ -3880,10 +3949,8 @@ function buildSchedSteal(module StdModule)
 	// A lost CAS means somebody else emptied the slot while we paused, and Go's `continue` re-reads the ring:
 	// the victim's machine may have published there in the same window.
 	let vNextAddr = emitFieldAddr(module, block: slotTake, record: victim, offset: POffRunnext, ids: ids)
-	let tookSlot = ids.mint()
-	module.appendOp(slotTake, op: StdOp.atomicCas(tookSlot, addrId: vNextAddr, expectedId: vNext, replacementId: emitConst(module, block: slotTake, value: 0, ids: ids)))
-	let lostSlot = emitCasLost(module, block: slotTake, result: tookSlot, ids: ids)
-	module.setTerminator(slotTake, op: StdOp.condBranch(lostSlot, thenBlockId: grabHdr.id, elseBlockId: slotTook.id))
+	let tookSlot = emitCasAt(module, block: slotTake, addr: vNextAddr, expected: vNext, replacement: emitConst(module, block: slotTake, value: 0, ids: ids), ids: ids)
+	emitBranchOnCasLost(module, block: slotTake, result: tookSlot, lost: grabHdr, won: slotTook, ids: ids)
 
 	module.setTerminator(slotTook, op: StdOp.ret(vNext))
 
@@ -3913,10 +3980,8 @@ function buildSchedSteal(module StdModule)
 	// another thief) consumed some of what we read, so everything above is discarded and re-read.
 	let vHeadAddr = emitFieldAddr(module, block: commit, record: victim, offset: POffRunqHead, ids: ids)
 	let newVHead = emitBin(module, block: commit, a: vHead, b: grabCount, opcode: StdBinOpcode.add, ids: ids)
-	let grabbed = ids.mint()
-	module.appendOp(commit, op: StdOp.atomicCas(grabbed, addrId: vHeadAddr, expectedId: vHead, replacementId: newVHead))
-	let lostGrab = emitCasLost(module, block: commit, result: grabbed, ids: ids)
-	module.setTerminator(commit, op: StdOp.condBranch(lostGrab, thenBlockId: grabHdr.id, elseBlockId: publish.id))
+	let grabbed = emitCasAt(module, block: commit, addr: vHeadAddr, expected: vHead, replacement: newVHead, ids: ids)
+	emitBranchOnCasLost(module, block: commit, result: grabbed, lost: grabHdr, won: publish, ids: ids)
 
 	// publish: the LAST of the grabbed threads is the answer and is NOT published — this M runs it now — so
 	// the tail advances by one fewer than we took. Taking the last rather than the first leaves the ones that
@@ -4555,9 +4620,11 @@ end 'publishedFromTheLockLabels'
 
 function entryIsPublishedFromTheLock(entry DataSectionEntry) returns bool
 	return match entry.sharing 'classified'
-		publishedFromTheLock gives true
+		publishedFromTheLock or
+		publishedAtomically gives true
 		atomicStep or
 		underSchedLock or
+		underOwnLock or
 		sealedBeforeWorkers or
 		monotoneApproximation or
 		lastWriterWins or
@@ -5280,7 +5347,7 @@ function buildGtFreePut(module StdModule)
 
 	// One acquire, on the edge that runs once: the lock COUNTS, so an acquire in the loop header would be
 	// taken once per record against the one release at `gfpsheddone`.
-	emitSchedLockEnter(module, block: shed, ids: ids)
+	emitLockWordEnter(module, block: shed, label: GtFreeLockLabel, ids: ids)
 	emitGtFreeLocalPush(module, block: shed, p: p, gt: gt, ids: ids)
 	module.setTerminator(shed, op: StdOp.branch(shedHdr.id))
 
@@ -5291,12 +5358,12 @@ function buildGtFreePut(module StdModule)
 	emitSchedListPush(module, block: shedBody, head: SchedListHead.lockedWord(SchedGtFreeHeadLabel), linkOffset: GtOffNext, node: moving, ids: ids)
 	module.setTerminator(shedBody, op: StdOp.branch(shedHdr.id))
 
-	emitSchedLockLeave(module, block: shedDone, ids: ids)
+	emitLockWordLeave(module, block: shedDone, label: GtFreeLockLabel, ids: ids)
 	module.setTerminator(shedDone, op: StdOp.branch(doneBlock.id))
 
-	emitSchedLockEnter(module, block: globalOnly, ids: ids)
+	emitLockWordEnter(module, block: globalOnly, label: GtFreeLockLabel, ids: ids)
 	emitSchedListPush(module, block: globalOnly, head: SchedListHead.lockedWord(SchedGtFreeHeadLabel), linkOffset: GtOffNext, node: gt, ids: ids)
-	emitSchedLockLeave(module, block: globalOnly, ids: ids)
+	emitLockWordLeave(module, block: globalOnly, label: GtFreeLockLabel, ids: ids)
 	module.setTerminator(globalOnly, op: StdOp.branch(doneBlock.id))
 
 	module.setTerminator(doneBlock, op: StdOp.retVoid)
@@ -5332,7 +5399,7 @@ function buildGtFreeGet(module StdModule)
 
 	// No unlocked peek at the global head goes in front of this acquire: an empty global list sends the get to
 	// the carve, which needs the lock anyway.
-	emitSchedLockEnter(module, block: refill, ids: ids)
+	emitLockWordEnter(module, block: refill, label: GtFreeLockLabel, ids: ids)
 	let noneMoved = emitConst(module, block: refill, value: 0, ids: ids)
 	let moved = ids.mint()
 	refillHdr.blockArgs.push(IrBlockArg.create(moved, argType: StdType.i64))
@@ -5352,7 +5419,7 @@ function buildGtFreeGet(module StdModule)
 	let refilledLen = emitLoadField(module, block: refillDone, record: p, offset: POffFreeListLen, ids: ids)
 	emitBranchOnCompare(module, block: refillDone, value: refilledLen, pred: StdCmpPred.eq, against: 0, whenTrue: carve, whenFalse: refilled, ids: ids)
 
-	emitSchedLockLeave(module, block: refilled, ids: ids)
+	emitLockWordLeave(module, block: refilled, label: GtFreeLockLabel, ids: ids)
 	module.setTerminator(refilled, op: StdOp.branch(localPop.id))
 
 	let reused = emitGtFreeLocalPop(module, block: localPop, p: p, ids: ids)
@@ -5362,9 +5429,9 @@ function buildGtFreeGet(module StdModule)
 
 	// A thread holding no processor is served from the global list all the same, and counted nowhere:
 	// `POffGtRecycleCount` needs a processor to hold the count.
-	emitSchedLockEnter(module, block: noProc, ids: ids)
+	emitLockWordEnter(module, block: noProc, label: GtFreeLockLabel, ids: ids)
 	let taken = emitSchedListTakeHead(module, cur: noProc, got: globalPop, none: carve, head: SchedListHead.lockedWord(SchedGtFreeHeadLabel), linkOffset: GtOffNext, ids: ids)
-	emitSchedLockLeave(module, block: globalPop, ids: ids)
+	emitLockWordLeave(module, block: globalPop, label: GtFreeLockLabel, ids: ids)
 	module.setTerminator(globalPop, op: StdOp.branch(recycle.id))
 	globalPop.branchEdges.push(BranchEdge.create(recycle.id, argIds: argsOf(taken)))
 
@@ -5375,18 +5442,22 @@ function buildGtFreeGet(module StdModule)
 	// A fresh record: carved under the hold every list above was consulted in.
 	let carved = ids.mint()
 	module.appendOp(carve, op: StdOp.call(carved, callee: SchedArenaCarveName, args: argsOf(emitConst(module, block: carve, value: GtStructSize, ids: ids))))
+	module.appendOp(carve, op: StdOp.osLockInit(emitFieldAddr(module, block: carve, record: carved, offset: GtOffRecordLock as ByteOffset, ids: ids)))
 	emitSchedStepLockedCount(module, block: carve, label: GtRecordsCarvedLabel, delta: OneMore, ids: ids)
 	var registered = emitGtAllGAppend(module, func: func, cur: carve, gt: carved, ids: ids)
-	emitSchedLockLeave(module, block: registered, ids: ids)
+	emitLockWordLeave(module, block: registered, label: GtFreeLockLabel, ids: ids)
 	module.setTerminator(registered, op: StdOp.ret(carved))
 
 	module.functions.push(func)
 end 'buildGtFreeGet'
 
-// ⭐⭐ **`__sched_arena_carve(bytes) -> address` — CARVE `bytes` FROM THE SCHEDULER's ARENA.** The caller holds
-// `__sched_lock`. The carve is the `bytes` at `__sched_arena_cursor`; when the current chunk has no room for them,
-// a new chunk of `SchedArenaChunkBytes` is mapped and the old one's tail is abandoned. A chunk's pages arrive
-// zeroed and nothing is carved twice or ever returned, so a carve needs no `memFill` and is never freed.
+// ⭐⭐ **`__sched_arena_carve(bytes) -> address` — CARVE `bytes` FROM THE SCHEDULER's ARENA.** It
+// takes `__gt_gfree_lock` itself, recursively inside `__gt_free_get`'s hold, so a machine's carve
+// (`emitSchedAllocM`, under `__sched_lock`) and a record's share one cursor. The carve is the
+// `bytes` at `__sched_arena_cursor`; when the current chunk has no room for them, a new chunk of
+// `SchedArenaChunkBytes` is mapped and the old one's tail is abandoned. A chunk's pages arrive
+// zeroed and nothing is carved twice or ever returned, so a carve needs no `memFill` and is never
+// freed.
 //
 // ⭐⭐ **THE ARENA IS SCHEDULER SCAFFOLDING, LIKE THE STACKS, AND IS NEVER THE COUNTED SLAB.** It holds the GT
 // records (`__gt_free_get`) and the machines (`emitSchedAllocM`), whose creation both depend on timing — which
@@ -5408,6 +5479,7 @@ function buildSchedArenaCarve(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let bytes = 0
 
+	emitLockWordEnter(module, block: entry, label: GtFreeLockLabel, ids: ids)
 	let cursor = emitLoadGlobalWord(module, block: entry, label: SchedArenaCursorLabel, ids: ids)
 	let limit = emitLoadGlobalWord(module, block: entry, label: SchedArenaLimitLabel, ids: ids)
 	let pastCarve = emitBin(module, block: entry, a: cursor, b: bytes, opcode: StdBinOpcode.add, ids: ids)
@@ -5429,6 +5501,7 @@ function buildSchedArenaCarve(module StdModule)
 	carved.blockArgs.push(IrBlockArg.create(address, argType: StdType.i64))
 	carved.blockArgs.push(IrBlockArg.create(nextCursor, argType: StdType.i64))
 	emitStoreGlobalWord(module, block: carved, label: SchedArenaCursorLabel, value: nextCursor, ids: ids)
+	emitLockWordLeave(module, block: carved, label: GtFreeLockLabel, ids: ids)
 	module.setTerminator(carved, op: StdOp.ret(address))
 
 	module.functions.push(func)
@@ -6020,6 +6093,7 @@ function buildSchedCheckdead(module StdModule)
 	var nothingPending = module.addBlock(func, label: b"cdnothing", heat: BlockHeat.normal)
 	var mainNeverFinishes = module.addBlock(func, label: b"cdmainstuck", heat: BlockHeat.normal)
 	var quiescerGivesUp = module.addBlock(func, label: b"cdquiesce", heat: BlockHeat.normal)
+	var quiescerClaimed = module.addBlock(func, label: b"cdquiesceclaimed", heat: BlockHeat.normal)
 	var notMainRunning = module.addBlock(func, label: b"cdnotmain", heat: BlockHeat.normal)
 	var deadlocked = module.addBlock(func, label: b"cddeadlock", heat: BlockHeat.normal)
 	var stuck = module.addBlock(func, label: b"cdstuck", heat: BlockHeat.normal)
@@ -6044,12 +6118,13 @@ function buildSchedCheckdead(module StdModule)
 	let quiescer = emitLoadAcquireGlobalWord(module, block: mainNeverFinishes, label: GtQuiesceWaiterLabel, ids: ids)
 	emitBranchOnCompare(module, block: mainNeverFinishes, value: quiescer, pred: StdCmpPred.ne, against: 0, whenTrue: quiescerGivesUp, whenFalse: deadlocked, ids: ids)
 
-	let vacated = emitBin(module, block: quiescerGivesUp, a: emitConst(module, block: quiescerGivesUp, value: 0, ids: ids), b: quiescer, opcode: StdBinOpcode.sub, ids: ids)
-	_ = emitGlobalAccumulate(module, block: quiescerGivesUp, label: GtQuiesceWaiterLabel, delta: vacated, multiM: true, ids: ids)
-	_ = emitGlobalAccumulate(module, block: quiescerGivesUp, label: GtQuiesceStuckLabel, delta: emitConst(module, block: quiescerGivesUp, value: OneMore, ids: ids), multiM: true, ids: ids)
-	_ = emitGtReadyLocked(module, block: quiescerGivesUp, gt: quiescer, ids: ids)
-	module.appendOp(quiescerGivesUp, op: StdOp.osSetEvent(emitLoadField(module, block: quiescerGivesUp, record: m, offset: MOffParkEvent, ids: ids)))
-	module.setTerminator(quiescerGivesUp, op: StdOp.branch(doneBlock.id))
+	let claimedWaiter = emitCasGlobalWord(module, block: quiescerGivesUp, label: GtQuiesceWaiterLabel, expected: quiescer, replacement: emitConst(module, block: quiescerGivesUp, value: 0, ids: ids), ids: ids)
+	emitBranchOnCasLost(module, block: quiescerGivesUp, result: claimedWaiter, lost: doneBlock, won: quiescerClaimed, ids: ids)
+
+	_ = emitGlobalAccumulate(module, block: quiescerClaimed, label: GtQuiesceStuckLabel, delta: emitConst(module, block: quiescerClaimed, value: OneMore, ids: ids), multiM: true, ids: ids)
+	_ = emitGtReadyLocked(module, block: quiescerClaimed, gt: quiescer, ids: ids)
+	module.appendOp(quiescerClaimed, op: StdOp.osSetEvent(emitLoadField(module, block: quiescerClaimed, record: m, offset: MOffParkEvent, ids: ids)))
+	module.setTerminator(quiescerClaimed, op: StdOp.branch(doneBlock.id))
 
 	emitRuntimeAbort(module, func: func, block: deadlocked, abort: RuntimeAbort.schedulerDeadlock, ids: ids)
 
@@ -6121,6 +6196,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	var parkStopTest = module.addBlock(func, label: b"wstoptest", heat: BlockHeat.normal)
 	var idleTail = module.addBlock(func, label: b"wtail", heat: BlockHeat.normal)
 	var claimPoller = module.addBlock(func, label: b"wclaim", heat: BlockHeat.normal)
+	var claimSwap = module.addBlock(func, label: b"wclaimswap", heat: BlockHeat.normal)
 	var pollDeadline = module.addBlock(func, label: b"wpolldeadline", heat: BlockHeat.normal)
 	var pollWait = module.addBlock(func, label: b"wpoll", heat: BlockHeat.normal)
 	var polled = module.addBlock(func, label: b"wpolled", heat: BlockHeat.normal)
@@ -6358,12 +6434,13 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	// ⭐⭐⭐ THE IDLE TAIL — Go's `findRunnable` tail (`proc.go:3748-3811`)
 	// ==================================================================================================
 	//
-	// ⭐⭐ **ONE MACHINE WAITS FOR THE EARLIEST DEADLINE; EVERY OTHER IDLE MACHINE WAITS FOR A WAKER.** With a
-	// timer or a poll source pending and nobody polling, this machine claims the poller (`__sched_lastpoll` → 0),
-	// publishes the deadline it will wake at and blocks in `__np_poll` holding no processor — it is not on
-	// `__sched_midle`, so `__sched_checkdead` counts it running, which it is. Otherwise it parks with no timeout:
-	// a deadline armed earlier than the poller's breaks the poller (`__sched_wake_netpoller`), and the poller is
-	// the one machine the clock needs.
+	// ⭐⭐ **ONE MACHINE WAITS FOR THE EARLIEST DEADLINE; EVERY OTHER IDLE MACHINE WAITS FOR A WAKER.**
+	// With a timer or a poll source pending and nobody polling, this machine claims the poller
+	// (`__sched_lastpoll` → 0, by CAS, because `__sysmon` claims the same word outside the lock),
+	// publishes the deadline it will wake at and blocks in `__np_poll` holding no processor — it is
+	// not on `__sched_midle`, so `__sched_checkdead` counts it running, which it is. Otherwise it
+	// parks with no timeout: a deadline armed earlier than the poller's breaks the poller
+	// (`__sched_wake_netpoller`), and the poller is the one machine the clock needs.
 	//
 	// ⚠ **THE CLAIM IS MADE IN THE SAME HOLD AS THE FINAL LOOK AND THE EXIT TEST**, so a timer added after it is
 	// seen by the adder's `__sched_wake_netpoller` (which reads the claim), and one added before it is in the
@@ -6372,13 +6449,15 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	module.setTerminator(idleTail, op: StdOp.condBranch(storesPending, thenBlockId: claimPoller.id, elseBlockId: parkJoin.id))
 
 	let lastPoll = emitLoadAcquireGlobalWord(module, block: claimPoller, label: SchedLastPollLabel, ids: ids)
-	emitBranchOnCompare(module, block: claimPoller, value: lastPoll, pred: StdCmpPred.eq, against: 0, whenTrue: breakCheck, whenFalse: pollDeadline, ids: ids)
+	emitBranchOnCompare(module, block: claimPoller, value: lastPoll, pred: StdCmpPred.eq, against: 0, whenTrue: breakCheck, whenFalse: claimSwap, ids: ids)
+
+	let claimed = emitCasGlobalWord(module, block: claimSwap, label: SchedLastPollLabel, expected: lastPoll, replacement: emitConst(module, block: claimSwap, value: 0, ids: ids), ids: ids)
+	emitBranchOnCasLost(module, block: claimSwap, result: claimed, lost: claimPoller, won: pollDeadline, ids: ids)
 
 	// This machine is the poller. The deadline arrives as `wpolldeadline`'s own block argument once it is known.
 	let deadline = ids.mint()
 	var publishDeadline = module.addBlock(func, label: b"wpollpublish", heat: BlockHeat.normal)
 	publishDeadline.blockArgs.push(IrBlockArg.create(deadline, argType: StdType.i64))
-	emitStoreReleaseGlobalWord(module, block: pollDeadline, label: SchedLastPollLabel, value: emitConst(module, block: pollDeadline, value: 0, ids: ids), ids: ids)
 	emitSchedPollDeadline(module, cur: pollDeadline, cont: publishDeadline, ids: ids)
 
 	emitStoreReleaseGlobalWord(module, block: publishDeadline, label: SchedPollUntilLabel, value: deadline, ids: ids)
@@ -6788,8 +6867,7 @@ function emitSchedSpinningTransition(module StdModule, block IrBlock, m ValueId,
 	let spinningAddr = emitFieldAddr(module, block: block, record: m, offset: MOffSpinning, ids: ids)
 	let expected = emitConst(module, block: block, value: MSpinningHeld if releasing else MSpinningFree, ids: ids)
 	let replacement = emitConst(module, block: block, value: MSpinningFree if releasing else MSpinningHeld, ids: ids)
-	let won = ids.mint()
-	module.appendOp(block, op: StdOp.atomicCas(won, addrId: spinningAddr, expectedId: expected, replacementId: replacement))
+	let won = emitCasAt(module, block: block, addr: spinningAddr, expected: expected, replacement: replacement, ids: ids)
 
 	// An M that wins counts itself in (+1) or out (-1). A waker that wins has handed its reservation on and
 	// owes nothing (0); one that LOSES found the M already counted, so its reservation is surplus (-1).
@@ -6920,8 +6998,7 @@ end 'buildSchedWakeOrSpawn'
 function emitSchedReserveSpinner(module StdModule, cur IrBlock, won IrBlock, lost IrBlock, ids ValueMinter)
 	let spinningAddr = ids.mint()
 	module.appendOp(cur, op: StdOp.globalAddr(spinningAddr, label: SchedSpinningLabel))
-	let reserved = ids.mint()
-	module.appendOp(cur, op: StdOp.atomicCas(reserved, addrId: spinningAddr, expectedId: emitConst(module, block: cur, value: 0, ids: ids), replacementId: emitConst(module, block: cur, value: 1, ids: ids)))
+	let reserved = emitCasAt(module, block: cur, addr: spinningAddr, expected: emitConst(module, block: cur, value: 0, ids: ids), replacement: emitConst(module, block: cur, value: 1, ids: ids), ids: ids)
 	emitBranchOnCasLost(module, block: cur, result: reserved, lost: lost, won: won, ids: ids)
 end 'emitSchedReserveSpinner'
 
@@ -7312,17 +7389,15 @@ function buildSchedRetake(module StdModule)
 	let stateAddr = emitFieldAddr(module, block: claimIt, record: machine, offset: MOffSyscallState, ids: ids)
 	let markStolen = emitConst(module, block: claimIt, value: MSyscallStolen, ids: ids)
 	let toStolen = emitBin(module, block: claimIt, a: stateNow, b: markStolen, opcode: StdBinOpcode.add, ids: ids)
-	let claimed = ids.mint()
-	module.appendOp(claimIt, op: StdOp.atomicCas(claimed, addrId: stateAddr, expectedId: stateNow, replacementId: toStolen))
-	let lostClaim = emitCasLost(module, block: claimIt, result: claimed, ids: ids)
-	module.setTerminator(claimIt, op: StdOp.condBranch(lostClaim, thenBlockId: nextProc.id, elseBlockId: tookIt.id))
+	let claimed = emitCasAt(module, block: claimIt, addr: stateAddr, expected: stateNow, replacement: toStolen, ids: ids)
+	emitBranchOnCasLost(module, block: claimIt, result: claimed, lost: nextProc, won: tookIt, ids: ids)
 	claimIt.branchEdges.push(BranchEdge.create(nextProc.id, argIds: argsOf(taken)))
 
 	// The second CAS, whose ANSWER IS DELIBERATELY DISCARDED — `MOffSyscallState`'s header carries why both
 	// outcomes are correct and why a plain store here would be a wrong answer rather than a slower one.
 	let procAddr = emitFieldAddr(module, block: tookIt, record: machine, offset: MOffCurrentP, ids: ids)
 	let releasedProc = emitConst(module, block: tookIt, value: 0, ids: ids)
-	module.appendOp(tookIt, op: StdOp.atomicCas(ids.mint(), addrId: procAddr, expectedId: proc, replacementId: releasedProc))
+	_ = emitCasAt(module, block: tookIt, addr: procAddr, expected: proc, replacement: releasedProc, ids: ids)
 
 	// The processor is the thief's now, and names no machine until the handoff gives it one.
 	emitStoreField(module, block: tookIt, record: proc, offset: POffM, value: releasedProc)
@@ -7689,7 +7764,6 @@ function buildSysmon(module StdModule, target Target)
 	var afterNap = module.addBlock(func, label: b"smonafternap", heat: BlockHeat.normal)
 	var claimPoll = module.addBlock(func, label: b"smonclaimpoll", heat: BlockHeat.normal)
 	var stalePoll = module.addBlock(func, label: b"smonpoll", heat: BlockHeat.normal)
-	var notStale = module.addBlock(func, label: b"smonpolltaken", heat: BlockHeat.normal)
 	var timerArm = module.addBlock(func, label: b"smontimer", heat: BlockHeat.normal)
 	var timerOverdue = module.addBlock(func, label: b"smontimeroverdue", heat: BlockHeat.normal)
 	var timerStart = module.addBlock(func, label: b"smontimerstart", heat: BlockHeat.normal)
@@ -7748,24 +7822,19 @@ function buildSysmon(module StdModule, target Target)
 	emitSchedLockLeave(module, block: awake, ids: ids)
 	module.setTerminator(awake, op: StdOp.branch(afterNap.id))
 
-	// ⭐ **THE STALE POLL — Go's *"poll network if not polled for more than 10ms"*.** The unlocked peek picks
-	// whether to take the lock; the claim under it is what decides, so a blocking poller that claimed meanwhile
-	// is never looked past. The look is non-blocking, so it takes nothing that belongs to a blocking poller.
+	// ⭐ **THE STALE POLL — Go's *"poll network if not polled for more than 10ms"*.** The peek picks
+	// whether to claim; the claim is a CAS from the peeked value to the clock, so a blocking poller
+	// that claimed meanwhile is never looked past. The look is non-blocking, so it takes nothing that
+	// belongs to a blocking poller.
 	let now = emitGtNowNs(module, block: afterNap, ids: ids)
 	let peeked = emitLoadAcquireGlobalWord(module, block: afterNap, label: SchedLastPollLabel, ids: ids)
 	module.setTerminator(afterNap, op: StdOp.condBranch(emitSchedPollIsStale(module, block: afterNap, lastPoll: peeked, now: now, ids: ids), thenBlockId: claimPoll.id, elseBlockId: timerArm.id))
 
-	emitSchedLockEnter(module, block: claimPoll, ids: ids)
-	let lastPoll = emitLoadAcquireGlobalWord(module, block: claimPoll, label: SchedLastPollLabel, ids: ids)
-	module.setTerminator(claimPoll, op: StdOp.condBranch(emitSchedPollIsStale(module, block: claimPoll, lastPoll: lastPoll, now: now, ids: ids), thenBlockId: stalePoll.id, elseBlockId: notStale.id))
+	let claimedPoll = emitCasGlobalWord(module, block: claimPoll, label: SchedLastPollLabel, expected: peeked, replacement: now, ids: ids)
+	emitBranchOnCasLost(module, block: claimPoll, result: claimedPoll, lost: timerArm, won: stalePoll, ids: ids)
 
-	emitStoreReleaseGlobalWord(module, block: stalePoll, label: SchedLastPollLabel, value: now, ids: ids)
-	emitSchedLockLeave(module, block: stalePoll, ids: ids)
 	module.appendOp(stalePoll, op: StdOp.call(ids.mint(), callee: NetpollPollName, args: argsOf(emitConst(module, block: stalePoll, value: 0, ids: ids))))
 	module.setTerminator(stalePoll, op: StdOp.branch(timerArm.id))
-
-	emitSchedLockLeave(module, block: notStale, ids: ids)
-	module.setTerminator(notStale, op: StdOp.branch(timerArm.id))
 
 	// ⭐ **AN OVERDUE TIMER WITH AN IDLE PROCESSOR AND NOBODY IN THE POLLER — Go's `startm` for `timeSleepUntil() <
 	// now`.** Every machine is running, so none will fire the timer before its next schedule; a machine started on

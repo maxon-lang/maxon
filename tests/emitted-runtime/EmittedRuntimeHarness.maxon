@@ -29,6 +29,7 @@ export let PlainLoadPrefix = "arm64.loadRegBaseDisp.word64 "
 export let PlainStorePrefix = "arm64.storeBaseDispReg.word64 "
 export let AcquireLoadMnemonic = "arm64.ldar.word64"
 export let ReleaseStoreMnemonic = "arm64.stlr.word64"
+let AtomicClaimMnemonic = "arm64.arm64AtomicCas"
 export let RegisterMovePrefix = "arm64.movRegReg "
 export let GlobalAddressPrefix = "arm64.leaGlobal "
 export let ArgumentSeparator = ", "
@@ -59,6 +60,7 @@ export enum RegisterUse
 	plainStore
 	acquireLoad
 	releaseStore
+	atomicClaim
 	otherAccess
 	copiedOut
 	untouched
@@ -93,12 +95,18 @@ export type WordAccesses
 			plainStore then self.plainStores.push(line)
 			acquireLoad then self.acquires = self.acquires + 1
 			releaseStore then self.releases = self.releases + 1
+			atomicClaim then self.claimAccess()
 
 			otherAccess or
 			copiedOut or
-			untouched then panic("emitted-runtime tests: the gate could not run — on {target}, `{functionName}` reaches {word} through `{register}` with `{line}`, which is none of the four shapes this case can read: `{PlainStorePrefix.trim()}`, `{PlainLoadPrefix.trim()}`, `{ReleaseStoreMnemonic}` or `{AcquireLoadMnemonic}` through that register. An access this case cannot classify would satisfy every absence demand by being none of them.")
+			untouched then panic("emitted-runtime tests: the gate could not run — on {target}, `{functionName}` reaches {word} through `{register}` with `{line}`, which is none of the five shapes this case can read: `{PlainStorePrefix.trim()}`, `{PlainLoadPrefix.trim()}`, `{ReleaseStoreMnemonic}`, `{AcquireLoadMnemonic}` or `{AtomicClaimMnemonic}` through that register. An access this case cannot classify would satisfy every absence demand by being none of them.")
 		end 'use'
 	end 'record'
+
+	function claimAccess()
+		self.acquires = self.acquires + 1
+		self.releases = self.releases + 1
+	end 'claimAccess'
 end 'WordAccesses'
 
 export function stagedProgram(caseLabel String, fixture String = SpawnFixtureName) returns FilePath
@@ -279,6 +287,10 @@ function registerUseIn(text String, register String) returns RegisterUse
 	if text.startsWith(ReleaseStoreMnemonic) 'aReleaseStore'
 		return RegisterUse.releaseStore
 	end 'aReleaseStore'
+
+	if text.startsWith(AtomicClaimMnemonic) 'anAtomicClaim'
+		return RegisterUse.atomicClaim
+	end 'anAtomicClaim'
 
 	return RegisterUse.otherAccess
 end 'registerUseIn'

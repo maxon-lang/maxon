@@ -9047,9 +9047,9 @@ end 'main'
 DELIVERED, AND THE SERVICE RUNS ON THAT STRAND.** A service and the coroutines it starts are one strand, and
 one machine at a time runs it: whoever claims the strand's holder publishes its token, and while it is held
 a readied member goes onto the strand queue for the holding machine to find. A send that finds its service
-parked readies it. When the strand is free that ready may claim the strand and publish it with no
-scheduler lock; when the strand is held, as here, the claim fails and the send takes the locked road,
-which pushes the service onto the front of its strand queue. This case is the second shape.
+parked readies it. When the strand is free that ready may claim the strand and publish it with no lock;
+when the strand is held, as here, the claim fails and the send takes the locked road, which pushes the
+service onto the front of its strand queue under the strand's own lock. This case is the second shape.
 
 `start` leaves `async work(self.probe)` in the service's state and replies, so the service parks on its
 empty mailbox and its strand runs `work` next. `work` yields until `finish` has run, and a yielding strand
@@ -9064,7 +9064,7 @@ or queue the service where its holding strand never looks. The first runs the se
 coroutine — two members of one strand at once. The second loses the wake: `finish` never runs, `work`
 yields for ever, and the case times out.
 
-✅ **A SOUNDNESS CONTROL, GREEN WHEN EVERY READY TAKES THE SCHEDULER LOCK**, because then the locked road is
+✅ **A SOUNDNESS CONTROL, GREEN WHEN EVERY READY TAKES THE STRAND LOCK**, because then the locked road is
 the only road. It pins that a ready road which claims the strand without that lock still falls back to the
 locked road on a held strand. Which road a ready took is not observable from the program: both deliver the
 message, and the answer is the same. What makes this the held-strand road is the shape — `work` cannot

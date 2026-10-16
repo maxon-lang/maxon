@@ -20,9 +20,11 @@ and the whole of the scheduler a Maxon program can reach follows from that one s
 | **a green thread** | a unit the P/M scheduler may hand to any OS thread. `main` is one — `__gt_run_main` runs it as an ordinary green thread — and **`spawn` is the producer of every other** (a spawned SERVICE is a green thread). A green thread's owner is ITSELF, which is what closes the chain above. |
 
 ⇒ **only one green thread can hold references to a box at a time, and that is a language guarantee
-rather than a thread count.** A strand runs on at most one machine at a time and moves between machines
-only through `__sched_lock`, so every refcount read-modify-write on a box happens on the machine running
-that box's strand, one machine at a time.
+rather than a thread count.** A strand runs on at most one machine at a time: a machine runs it only after
+winning its holder word by compare-and-swap, and it moves between machines only as its owner's token, whose
+publish to a run queue is a release and whose pop is an acquire. So every refcount read-modify-write on a
+box happens on the machine running that box's strand, one machine at a time, and sees every write the
+previous machine made.
 
 **The strand queue** is an intrusive FIFO through `GtOffNext`, with its two ends on the owning green
 thread's own struct, holding whichever members of the strand are runnable. A run queue never holds a
@@ -30,16 +32,21 @@ member: it holds the strand's OWNER as a token, and the machine that pops the to
 one executor (`GtOffStrandHolder`) and runs members off this queue (`__gt_run_strand`) until it is empty.
 A readied coroutine joins the back and a readied owner the FRONT, so a strand runs its owner first when
 the owner is ready. `__gt_coro_enqueue` appends and `__gt_strand_next` is the one place the strand runner
-asks what runs next. `__sched_lock` covers every access, because whoever completes a wait readies the
-waiter onto this queue — another machine firing a timer, answering a reply, or draining the poller for a
-finished pipe read.
+asks what runs next. The strand's own lock, a word in the owner's struct, covers every access to the
+queue, because whoever completes a wait readies the waiter onto it — another machine firing a timer,
+answering a reply, or draining the poller for a finished pipe read. No other strand's traffic, and none of
+the scheduler's, meets that lock.
 
 ⚠ **THE TWO DOORS DIFFER IN WHO TAKES THAT LOCK, AND A READER WHO GETS IT BACKWARDS WRITES A RACE.**
-`__gt_strand_next` takes it around its own dequeue and, finding the queue empty, gives the strand up in the
-same critical section. `__gt_coro_enqueue` does **not** — it REQUIRES the caller to hold it, because its
-callers already do: `__gt_ready_locked`, the one door every waker readies through, and the strand runner
-placing a yielder. `osLockEnter` is a Win32 CRITICAL_SECTION and therefore RECURSIVE, so calling it
-without the lock produces no diagnostic anywhere — only a queue two OS threads can be inside at once.
+`__gt_strand_next` takes it around its own dequeue, and only when an acquire load of the queue head has
+found a member. Finding the queue empty, it gives the strand up with no lock: it frees the holder word with
+an atomic add, then re-reads the head with an acquire load and claims the strand back by compare-and-swap
+if a member arrived in between. A readier pushes and then claims, so the two sides form a Dekker pair and a
+member is never left on a free strand. `__gt_coro_enqueue` does **not** take the lock — it REQUIRES the
+caller to hold it, because its callers already do: `__gt_ready_locked`, the one door every waker readies a
+coroutine through, and the strand runner placing a yielder. `osLockEnter` is a Win32 CRITICAL_SECTION and
+therefore RECURSIVE, so calling it without the lock produces no diagnostic anywhere — only a queue two OS
+threads can be inside at once.
 
 **A yield goes to the TAIL**, which is the whole content of *"let someone else have a turn"*. The
 other choice lets a thousand yields from one green thread leave a sibling that has never run still
@@ -760,6 +767,172 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```stdout
 r=5 steals=0
+```
+```exitcode
+0
+```
+
+<!-- test: sched-runqueue.a-timer-readies-a-coroutine-while-its-sibling-runs -->
+<!-- procs: 4 -->
+⭐⭐ **A STRAND WITH COROUTINES IS READIED FROM OUTSIDE WHILE ONE OF ITS MEMBERS RUNS.** `Hub` is a service,
+so a green thread, and each `round` runs three coroutines on its strand. `napper` parks on a 1 ms timer.
+`spinner` runs meanwhile and yields every 64 steps, and each yield polls the stores, which can fire the
+timer and ready `napper` onto the strand queue while the strand is held. At four processors another machine
+can fire it too. Meanwhile `main` sends `poke` to the owner, which usually lands while the owner is
+running or parked on an `await` and only enqueues the message. The next round's send finds the owner
+parked on its mailbox and readies it. Every one of those readies meets the strand runner's pops and its yield placements on the same
+strand queue, resume slot and holder word. A ready lost there hangs the round. A member run twice, or run on
+two machines at once, gives a wrong total. The answer is fixed: every round adds `r`, the spinner's sum and
+1, and every poke is counted once.
+
+✅ **IT IS A CONTROL: ANY SOUND STRAND PROTOCOL PASSES IT, AND IT HOLDS THIS ONE TO ITS ANSWERS.** A strand
+that has coroutines guards its queue with a lock of its own. A readier pushes and then claims the holder
+word by compare-and-swap under that lock. The releaser takes no lock: it finds the queue empty, frees the
+holder with an atomic add, and re-reads the queue head with an acquire load, claiming the strand back if a
+member arrived. A yielder is placed under the strand lock, and takes `__sched_lock` only to put the
+strand's token on the global queue. `a-timer-readies-a-coroutine-while-its-sibling-runs-at-one-processor` is its twin at one
+processor.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+let rounds = 40
+let spinSteps = 2000
+let yieldEvery = 64
+
+function napper(v Integer) returns Integer
+	sleep(1)
+	return v
+end 'napper'
+
+function spinner(steps Integer) returns Integer
+	var acc = 0 as Integer
+	for i in 0 upto steps 'spin'
+		acc = acc + i
+
+		if i mod yieldEvery == 0 'turn'
+			Scheduler.yield()
+		end 'turn'
+	end 'spin'
+
+	return acc
+end 'spinner'
+
+type Hub
+	var pokes as Integer
+
+	static function create() returns Self
+		return Self{pokes: 0}
+	end 'create'
+
+	export function round(r Integer) returns Integer
+		let a = async napper(r)
+		let b = async spinner(spinSteps)
+		let c = async napper(1)
+		return (await a) + (await b) + (await c)
+	end 'round'
+
+	export function poke()
+		self.pokes = self.pokes + 1
+	end 'poke'
+
+	export function pokeCount() returns Integer
+		return self.pokes
+	end 'pokeCount'
+end 'Hub'
+
+function main() returns ExitCode
+	let hub = spawn Hub.create()
+	var total = 0 as Integer
+
+	for r in 0 upto rounds 'eachRound'
+		let reply = hub.round(r)
+		hub.poke()
+		total = total + (try await reply otherwise 0)
+	end 'eachRound'
+
+	let pokes = try await hub.pokeCount() otherwise 0
+	print("total={total} pokes={pokes}\n")
+	return 0
+end 'main'
+```
+```stdout
+total=79960820 pokes=40
+```
+```exitcode
+0
+```
+
+<!-- test: sched-runqueue.a-timer-readies-a-coroutine-while-its-sibling-runs-at-one-processor -->
+<!-- procs: 1 -->
+**THE ONE-PROCESSOR TWIN OF `a-timer-readies-a-coroutine-while-its-sibling-runs`.** With one processor
+`main` and `Hub` take turns on it, and the spinner's yields are where the strand most often finds the timer
+due. The readies arrive in fewer orders than at four processors, and they must give the same answer. Like
+its twin, it is a control.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+let rounds = 40
+let spinSteps = 2000
+let yieldEvery = 64
+
+function napper(v Integer) returns Integer
+	sleep(1)
+	return v
+end 'napper'
+
+function spinner(steps Integer) returns Integer
+	var acc = 0 as Integer
+	for i in 0 upto steps 'spin'
+		acc = acc + i
+
+		if i mod yieldEvery == 0 'turn'
+			Scheduler.yield()
+		end 'turn'
+	end 'spin'
+
+	return acc
+end 'spinner'
+
+type Hub
+	var pokes as Integer
+
+	static function create() returns Self
+		return Self{pokes: 0}
+	end 'create'
+
+	export function round(r Integer) returns Integer
+		let a = async napper(r)
+		let b = async spinner(spinSteps)
+		let c = async napper(1)
+		return (await a) + (await b) + (await c)
+	end 'round'
+
+	export function poke()
+		self.pokes = self.pokes + 1
+	end 'poke'
+
+	export function pokeCount() returns Integer
+		return self.pokes
+	end 'pokeCount'
+end 'Hub'
+
+function main() returns ExitCode
+	let hub = spawn Hub.create()
+	var total = 0 as Integer
+
+	for r in 0 upto rounds 'eachRound'
+		let reply = hub.round(r)
+		hub.poke()
+		total = total + (try await reply otherwise 0)
+	end 'eachRound'
+
+	let pokes = try await hub.pokeCount() otherwise 0
+	print("total={total} pokes={pokes}\n")
+	return 0
+end 'main'
+```
+```stdout
+total=79960820 pokes=40
 ```
 ```exitcode
 0
