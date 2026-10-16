@@ -87,7 +87,7 @@ party adds its own half-ticket to it exactly once:
 | Party | Who that is | What it does first | Ticket |
 |---|---|---|---|
 | the **consumer** | the promise's owner: `await`, `try await`, or `__gt_promise_drop` (and the `cancel` that routes through it) | takes the result, or renounces it; gives back the thread's slot in `__gt_live_count` | 1 |
-| the **runner** | whoever finishes with the thread's EXECUTION: the strand runner whose context switch came back from a `completed` thread, the scheduler party that takes a tombstone off a queue, or a dropper that has deregistered a PARKED thread from every store | frees the seed stack | 2 |
+| the **runner** | whoever finishes with the thread's EXECUTION: the strand runner whose context switch came back from a `completed` thread, the scheduler party that takes a tombstone off a queue, or a dropper that has deregistered a PARKED thread from every store | samples the stack the thread needed, and returns it to the stack pool unless it is the current seed size | 2 |
 
 **The party whose add hands back the OTHER ticket is SECOND, and the second party performs the
 teardown** — the releaser call and the struct free. Neither side has to know what the other is doing,

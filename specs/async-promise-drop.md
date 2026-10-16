@@ -28,17 +28,18 @@ per spawn, one down per await-reclaim AND per drop-reclaim) and the one OS-exit 
 A leak (or an over-reclaim) reports `RuntimeAbort.greenThreadLeak` (75), distinct from the heap gate's 101.
 
 `__gt_promise_drop` branches on the thread's state: a `completed` thread (which may have run while its owner
-was parked on a DIFFERENT await) has already had its stack freed, so only its struct is reclaimed; a `ready`
-(never-run) thread is renounced where it sits in its strand's queue, and whoever pops it reclaims it and frees
-its seed stack instead of running it; a `waiting` (parked) thread is taken off whatever would have woken it —
+was parked on a DIFFERENT await) has finished with its stack, which its runner returned to the stack pool when
+it is not the current seed size and which the reclaimed record keeps for the next spawn when it is; a `ready`
+(never-run) thread is renounced where it sits in its strand's queue, and whoever pops it reclaims it, seed
+stack and struct together, instead of running it; a `waiting` (parked) thread is taken off whatever would have woken it —
 its timer entry, or the poll descriptor a socket or a child made it a waiter on — and READIED, so it resumes,
 runs its body out and is reclaimed by its runner like a queued thread. A Windows overlapped read the kernel is
 still serving is not taken off the poller: the drop cancels the operation with `CancelIoEx`, and the thread is
 readied by that operation's own completion.
 
 **Targets — the green-thread substrate gate; see `async-scheduler.md`'s *Targets* section for the one
-statement of it.** Dropping a promise reaps a green-thread struct and releases its stack through
-`osFreePages`/`VirtualFree`, which every native lane provides; a WASI component is refused by E3104,
+statement of it.** Dropping a promise reaps a green-thread struct and its stack, which come from
+`osAllocPages`/`VirtualAlloc` and go back to `osFreePages`/`VirtualFree`, which every native lane provides; a WASI component is refused by E3104,
 which is why the cases here carry no `unsupported-targets` marker for it. A case marked for one lane
 family is marked because its CHILD COMMAND is a shell's or `cmd`'s, never because the drop is.
 
@@ -83,7 +84,7 @@ typealias Integer = int(i64.min to i64.max)
 
 <!-- test: async-promise-drop.completed-sibling-drop-no-leak -->
 A sibling promise that COMPLETES while another is awaited, and is then dropped — its struct is reclaimed
-WITHOUT double-freeing the stack (the runner freed it at completion). While `main` is parked on `await b` its
+WITHOUT freeing the stack twice (the stack travels with the record, which is reclaimed once). While `main` is parked on `await b` its
 strand runs `a` and `b` FIFO, so `a` has completed by the time `main` resumes; the peek answers `1` for it, and
 `a` is dropped at scope exit. `20 + 1 = 21`: the awaited sibling's result is intact, and the live count balances
 to zero.

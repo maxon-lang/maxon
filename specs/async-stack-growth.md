@@ -9,7 +9,7 @@ category: concurrency
 
 ## Documentation
 
-A green thread starts on a tiny seed stack — **2 KiB**, or 16 KiB on x64-windows, whose fault frames land on
+A green thread starts on a tiny seed stack — **2 KiB**, or 8 KiB on x64-windows, whose fault frames land on
 the faulting stack — and grows it ON DEMAND: every function's prologue projects its
 frame against a per-thread stack guard, and when the frame would overflow, it calls the runtime grower
 `__gt_morestack`, which allocates a stack twice the size, COPIES the old stack onto it, and **walks the
@@ -45,7 +45,7 @@ statement of it.** `__gt_morestack` is hand-written x64 assembly and relocates a
 ## Tests
 
 <!-- test: async-stack-growth.deep-recursion -->
-`async deepRecurse(200)` recurses ~200 frames deep — far past the 2 KB seed stack, forcing several
+`async deepRecurse(200)` recurses ~200 frames deep — far past the seed stack, forcing several
 grow-and-relocate rounds — and the awaited sum is exact, proving the relocated stack carried every frame's
 partial result correctly.
 ```maxon
@@ -124,7 +124,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-stack-growth.grow-then-complete-then-respawn -->
-A thread grows, completes (its grown stack is released), then a SECOND thread spawns on a fresh 2 KB seed and
+A thread grows, completes (its grown stack is released), then a SECOND thread spawns on a fresh seed and
 grows in turn — proving free-on-complete leaves no corruption for the next spawn. Both awaited sums are exact.
 ```maxon
 
@@ -151,7 +151,7 @@ typealias Integer = int(i64.min to i64.max)
 
 <!-- test: async-stack-growth.a-frame-larger-than-two-doublings-grows-until-it-fits -->
 **ONE FRAME CAN NEED MORE THAN ONE DOUBLING, AND THE GROWER KEEPS DOUBLING UNTIL IT FITS.** `wide` holds a
-thousand call results live across one more call, so its frame is about 8 KB — four times the 2 KB seed. Go's
+thousand call results live across one more call, so its frame is about 8 KB — four times the 2 KB seed, and the whole 8 KiB seed on x64-windows. Go's
 `newstack` doubles until the requested frame fits (`vendor/go/src/runtime/stack.go`); a grower that doubles
 once and returns leaves the frame hanging below the new stack's base, and the first spill below it lands in
 memory the thread does not own. The answer is a checksum over every value, so a spill written anywhere but

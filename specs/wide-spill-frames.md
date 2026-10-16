@@ -8924,7 +8924,7 @@ end 'main'
 
 <!-- test: a-walking-frame-on-a-green-threads-stack -->
 `wide` reserves the SAME 4104-byte frame as the case above and opens it on a GREEN THREAD's stack rather
-than the process's: 64 spawns in turn, each on a fresh 2 KB seed the grower has to enlarge before the frame
+than the process's: 64 spawns in turn, each on a seed stack the grower has to enlarge before the frame
 clears the guard word, each answering `138591`. The room below that frame base is the guard margin and
 nothing else, so a walk that overshot the base by the frame's 4088-byte remainder would write off the
 bottom of the stack and SIGSEGV.

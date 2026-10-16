@@ -1666,9 +1666,8 @@ export union StdOp
 	//
 	// `osFreePages(addr, size)` RELEASES the `size`-byte page region an earlier `osAllocPages` committed at `addr`
 	// — the free twin the bump heap (which never frees) never needed, but the green-thread scheduler does: a
-	// completed GT's stack (possibly GROWN by the morestack, so of a size only the runtime knows) is released here,
-	// on `__gt_runner_done`'s completion path, so a spawn/await loop stays bounded without the fixed-size free-list
-	// a fixed-size free list would need. TWO VALUE operands, no result — the mirror of `osExit`/`osCloseHandle`.
+	// stack above the pool's largest class (GROWN by the morestack, so of a size only the runtime knows) is
+	// released here by `__gt_stack_free`. TWO VALUE operands, no result — the mirror of `osExit`/`osCloseHandle`.
 	//
 	// ⚠⚠ **THE SIZE OPERAND IS WHAT MAKES THIS OP LOWERABLE ON THE THREE POSIX LANES AT ALL.** The base alone
 	// would do for Windows — `VirtualFree(addr, 0, MEM_RELEASE)` releases the whole reservation from its base.
