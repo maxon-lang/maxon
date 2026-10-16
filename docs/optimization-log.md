@@ -1222,6 +1222,23 @@ The thread-ring and ping-pong regression is gone on x64-windows and arm64-linux.
 **About 4–5% stays at P=1 on x64-linux and arm64-macos.** Inferred, not profiled: a service's park now also
 takes its mailbox lock, inside the strand turn's `__sched_lock` hold, for the re-check and publish of `parkedGt`.
 
+**2026-10-16 — THE RECEIVER HOLDS ITS MAILBOX LOCK ACROSS THE PARK, AND A SEND HANDS ITS REQUEST STRAIGHT TO A
+PARKED RECEIVER (a69e38248), as Go's `chanparkcommit` and `sendDirect` do. A RUNTIME row, four lanes,
+against 7346b44c7, the tree before bb5d6fd54.** It reads R5, R5b and R5c together.
+
+| workload | P | x64-windows | x64-linux | arm64-macos | arm64-linux |
+|---|---|---|---|---|---|
+| ping-pong | 1 | 1.30 → 1.13 | 1.01 → **0.97** | 1.54 → 1.46 | 1.27 → 1.21 |
+| ping-pong | N | 1.59 → 1.43 | 1.18 → 1.11 | 2.59 → 2.38 | 1.45 → 1.37 |
+| thread-ring | 1 | 2.57 → 2.12 | 1.96 → 1.77 | see the log | see the log |
+| thread-ring | N | 0.87 → 0.76 | 0.74 → 0.67 | 1.17 → **0.94** | 1.54 → 1.48 |
+| fan-in | N | 2.27 → 2.00 | 2.25 → 1.87 | 1.50 → 1.47 | 2.44 → 2.29 |
+| spawn-many | N | 7.02 → 4.52 | 9.62 → 5.60 | 10.07 → 7.28 | 1.79 → 1.86 |
+| shared-counter | N | 8.07 → 7.28 | 3.96 → 3.26 | 1.34 → 1.29 | 1.53 → 1.51 |
+| worker-pool | 1 | 1.00 → 1.00 | 1.00 → 1.00 | 1.00 → 1.00 | 1.00 → 1.00 |
+
+The R5 regression is gone on every lane. ping-pong on x64-linux and thread-ring on macOS now run faster than Go.
+
 ## Bugs this uncovered
 
 Removing the dummy exposed a leak it had been half-hiding, and the leak in turn exposed a hole in the
