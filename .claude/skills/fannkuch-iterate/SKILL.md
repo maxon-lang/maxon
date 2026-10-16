@@ -80,10 +80,9 @@ A candidate that names no shape is not a candidate.
 so that is `PRE=$(git rev-parse --short HEAD)`. A `PRE` taken before the rebase is a control missing
 every commit the rebase brought in.
 
-The harness builds the control once, from the seed, in its own git worktree under
-`bench/fannkuch/out/ref-$PRE/tree/`, and reuses it by sha. That seed build is a C1 carrying the seed's
-runtime, so bring it to its own fixed point before the A/B: run the harness once so it exists, then in
-that tree `./maxon-bin/.maxon/maxon.exe run build`.
+The harness builds the control once, in its own git worktree under `bench/fannkuch/out/ref-$PRE/tree/`,
+with that tree's own `scripts/fetch-seed.sh` and `scripts/build-from-seed.sh` — seed → `C1` → `C2`, so
+the control is at its own fixed point — and reuses it by sha.
 
 ```
 python scripts/bench-fannkuch.py --n 11 --runs 5 --ref $PRE --self-compile --note "<candidate>: <mechanism>; census <col> a->b; predicted <shape>; both arms at their own fixed point"

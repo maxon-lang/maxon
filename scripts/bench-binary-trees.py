@@ -17,7 +17,8 @@ Usage:
 Arms:
   --compiler PATH [--label L]   a compiler binary; default arm is the slot compiler, labelled "slot"
   --ref REF                     a compiler BUILT FROM a git ref, in a cached worktree under
-                                <out-dir>/ref-<sha>/tree, seeded from .bootstrap/maxon.exe.
+                                <out-dir>/ref-<sha>/tree, by that tree's own
+                                scripts/fetch-seed.sh and scripts/build-from-seed.sh.
 
 A label names an arm's output directory AND its timing list, so two arms may not share one, compared
 case-insensitively - a duplicate is refused before anything is built, because two arms writing one
@@ -111,7 +112,7 @@ def main():
         os.makedirs(out_dir, exist_ok=True)
         head, dirty = bench_common.tree_identity(bench_common.REPO)
         today = datetime.date.today().isoformat()
-        maxon_arms = [bench_common.build_arm(arm["label"], bench_common.arm_compiler(arm, out_dir, args.ref_build_args.split()),
+        maxon_arms = [bench_common.build_arm(arm["label"], bench_common.arm_compiler(arm, out_dir),
                                              out_dir, args.source, SOURCE_STEM)
                       for arm in plan]
     except (UsageFailure, BuildFailure) as e:

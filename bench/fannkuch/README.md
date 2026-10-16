@@ -66,7 +66,8 @@ read), runs every binary interleaved after one warm-up, verifies stdout and the 
 per arm with the ratio against C, the emitted-code census of each Maxon binary, and with `--profile`
 the `maxon profile run` hot-function table. `--note` appends a row per Maxon arm to
 `docs/fannkuch-benchmark-log.md`. `--ref <sha>` builds a compiler from that commit in a cached
-worktree under `out/ref-<sha>/`, seeded from `.bootstrap/`, which is how a control arm is made.
+worktree under `out/ref-<sha>/` with that worktree's own `scripts/fetch-seed.sh` and
+`scripts/build-from-seed.sh` (seed → `C1` → `C2`, as CI builds it), which is how a control arm is made.
 
 `out/` is gitignored. The `/fannkuch-iterate` skill is the procedure that drives one round.
 

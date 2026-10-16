@@ -11,10 +11,8 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 IS_WINDOWS = os.name == "nt"
 EXE = ".exe" if IS_WINDOWS else ""
 SLOT_COMPILER = os.path.join(REPO, "maxon-bin", ".maxon", "maxon" + EXE)
-SEED_COMPILER = os.path.join(REPO, ".bootstrap", "maxon" + EXE)
-# The seed predates the manifest's named targets, so it compiles `maxon-bin/` as a plain program and
-# has to be told the output stem — the same command `.github/workflows/ci.yml` runs on a fresh checkout.
-SEED_BUILD_ARGS = "build maxon-bin --output=maxon-bin/.maxon/maxon"
+SEED_FETCH_SCRIPT = "scripts/fetch-seed.sh"
+SEED_BUILD_SCRIPT = "scripts/build-from-seed.sh"
 SLOT_LABEL = "slot"
 LEAK_EXIT_CODE = 101
 EXIT_OK = 0
@@ -24,7 +22,9 @@ EXIT_USAGE = 3
 SPREAD_PERCENT = 100.0
 MILLIS = 1000.0
 BUILD_TIMEOUT_S = 1200
+REF_BUILD_TIMEOUT_S = 3600
 RUN_TIMEOUT_S = 1800
+GIT_EXEC_PATH_DEPTH = 3
 
 
 class BuildFailure(Exception):
@@ -44,9 +44,9 @@ def add_arm_arguments(ap):
     ap.add_argument("--warmup", type=int, default=1, help="untimed runs per binary first (default 1)")
     ap.add_argument("--compiler", action="append", default=[], help="a compiler binary as an arm (repeatable)")
     ap.add_argument("--label", action="append", default=[], help="label for the matching --compiler")
-    ap.add_argument("--ref", action="append", default=[], help="a git ref to build a compiler from, as an arm")
-    ap.add_argument("--ref-build-args", default=SEED_BUILD_ARGS,
-                    help="what the seed runs in a ref's worktree (default: the CI seed build command)")
+    ap.add_argument("--ref", action="append", default=[],
+                    help=f"a git ref to build a compiler from, as an arm: its worktree's own {SEED_FETCH_SCRIPT} "
+                         f"and {SEED_BUILD_SCRIPT}, as CI builds it")
     ap.add_argument("--no-slot", action="store_true", help="do not add the slot compiler as an arm")
 
 
@@ -95,10 +95,9 @@ def plan_arms(args, allow_no_arms=False, reserved_labels=()):
     return plan
 
 
-def arm_compiler(planned, out_dir, build_args):
+def arm_compiler(planned, out_dir):
     if planned["compiler"] is None:
-        _, compiler = build_compiler_from_ref(planned["sha"], out_dir, build_args)
-        return compiler
+        return build_compiler_from_ref(planned["sha"], out_dir)
     if not os.path.exists(planned["compiler"]):
         raise BuildFailure(f"arm {planned['label']} has no compiler at {planned['compiler']}; build it or drop the arm")
     return planned["compiler"]
@@ -227,29 +226,50 @@ def sha256_of(path):
         return hashlib.sha256(fh.read()).hexdigest()
 
 
-def build_compiler_from_ref(ref, out_dir, build_args):
-    """A compiler built from a git ref in its own worktree, seeded from .bootstrap. Cached by sha."""
+def posix_shell():
+    """Git for Windows' bash on Windows, where `bash` on PATH may be System32's WSL launcher."""
+    if not IS_WINDOWS:
+        shell = shutil.which("bash")
+        if shell is None:
+            raise BuildFailure(f"no bash on PATH; a ref build runs the ref's {SEED_BUILD_SCRIPT}")
+        return shell
+    git_root = os.path.normpath(git(REPO, "--exec-path"))
+    for _ in range(GIT_EXEC_PATH_DEPTH):
+        git_root = os.path.dirname(git_root)
+    shell = os.path.join(git_root, "bin", "bash.exe")
+    if not os.path.exists(shell):
+        raise BuildFailure(f"no Git for Windows bash at {shell}; a ref build runs the ref's {SEED_BUILD_SCRIPT}")
+    return shell
+
+
+def run_tree_script(shell, tree, script):
+    if not os.path.exists(os.path.join(tree, script)):
+        raise BuildFailure(f"{tree} has no {script}; a ref is built the way CI builds it, by its own scripts")
+    r = run([shell, script], cwd=tree, timeout=REF_BUILD_TIMEOUT_S)
+    if r.returncode != 0:
+        raise BuildFailure(f"{script} failed in {tree} (exit {r.returncode}):\n{r.stdout}\n{r.stderr}")
+
+
+def build_compiler_from_ref(ref, out_dir):
+    """A compiler built from a git ref in its own worktree by that ref's own seed scripts. Cached by sha."""
     sha = git(REPO, "rev-parse", "--short", ref)
     tree = os.path.join(out_dir, f"ref-{sha}", "tree")
     compiler = os.path.join(tree, "maxon-bin", ".maxon", "maxon" + EXE)
     if os.path.exists(compiler):
-        return sha, compiler
-    if not os.path.exists(SEED_COMPILER):
-        raise BuildFailure(f"no seed compiler at {SEED_COMPILER}; a ref build needs one")
+        return compiler
+    shell = posix_shell()
     if os.path.exists(tree):
         # A tree without a compiler is a build that failed halfway; start it over.
         run(["git", "-C", REPO, "worktree", "remove", "--force", tree])
         shutil.rmtree(tree, ignore_errors=True)
     os.makedirs(os.path.dirname(tree), exist_ok=True)
     git(REPO, "worktree", "add", "--detach", tree, sha)
-    seed = os.path.join(tree, ".bootstrap", "maxon" + EXE)
-    os.makedirs(os.path.dirname(seed), exist_ok=True)
-    shutil.copy2(SEED_COMPILER, seed)
     print(f"building a compiler from {ref} ({sha}) in {tree} ...", flush=True)
-    r = run([seed] + build_args, cwd=tree)
-    if r.returncode != 0 or not os.path.exists(compiler):
-        raise BuildFailure(f"building {ref} failed (exit {r.returncode}):\n{r.stdout}\n{r.stderr}")
-    return sha, compiler
+    for script in (SEED_FETCH_SCRIPT, SEED_BUILD_SCRIPT):
+        run_tree_script(shell, tree, script)
+    if not os.path.exists(compiler):
+        raise BuildFailure(f"{SEED_BUILD_SCRIPT} in {tree} exited 0 and left no compiler at {compiler}")
+    return compiler
 
 
 def compiler_identity(compiler):

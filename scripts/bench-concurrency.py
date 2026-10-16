@@ -353,9 +353,9 @@ def maxon_executable_suffix(host):
     return bench_common.EXE if host == HOST_WINDOWS else ""
 
 
-def build_maxon_arm(planned, workloads, host_out_dir, ref_build_args, host, ref_out_dir):
+def build_maxon_arm(planned, workloads, host_out_dir, host, ref_out_dir):
     label = planned["label"]
-    compiler = bench_common.arm_compiler(planned, ref_out_dir, ref_build_args)
+    compiler = bench_common.arm_compiler(planned, ref_out_dir)
 
     arm_dir = maxon_arm_dir(host_out_dir, label)
     target_args = [f"--target={GUESTS[host].target}"] if host in GUESTS else []
@@ -652,13 +652,16 @@ def forwarded_arguments(args, host):
     return forwarded
 
 
+def build_maxon_arms(planned_arms, workloads, out_dir, host):
+    host_out_dir = host_out_dir_of(out_dir, host)
+    os.makedirs(host_out_dir, exist_ok=True)
+    return host_out_dir, [build_maxon_arm(planned, workloads, host_out_dir, host, out_dir) for planned in planned_arms]
+
+
 def run_outer_guest(args, workloads, context, planned_arms, host):
     GUEST_REQUIREMENTS[host](args)
     out_dir = os.path.abspath(args.out_dir)
-    host_out_dir = host_out_dir_of(out_dir, host)
-    os.makedirs(host_out_dir, exist_ok=True)
-    arms = [build_maxon_arm(planned, workloads, host_out_dir, args.ref_build_args.split(), host, out_dir)
-            for planned in planned_arms]
+    host_out_dir, arms = build_maxon_arms(planned_arms, workloads, out_dir, host)
     with open(os.path.join(host_out_dir, CONTEXT_FILE), "w", encoding="utf-8") as fh:
         json.dump({"context": context, "arms": arms}, fh, indent=2)
     forward_go = GUESTS[host].forwards_go_path and GO_PATH_VARIABLE in os.environ
@@ -673,10 +676,7 @@ def run_native(args, workloads, context, planned_arms):
     out_dir = os.path.abspath(args.out_dir)
     host = native_host()
     go = locate_go()
-    host_out_dir = host_out_dir_of(out_dir, host)
-    os.makedirs(host_out_dir, exist_ok=True)
-    arms = [build_maxon_arm(planned, workloads, host_out_dir, args.ref_build_args.split(), host, out_dir)
-            for planned in planned_arms]
+    _, arms = build_maxon_arms(planned_arms, workloads, out_dir, host)
     run_session(args, workloads, host, context, arms, go)
     return bench_common.EXIT_OK
 

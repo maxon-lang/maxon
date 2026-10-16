@@ -131,8 +131,9 @@ from one compile to the next inside one process. Fix that first or the ratio tab
 `scripts/bench-concurrency.py`**, which share `--ref <sha>` through `scripts/bench_common.py`.
 `bench-fannkuch.py`, which the `fannkuch-iterate` skill drives, reports per arm fannkuch's wall time, the
 executable's bytes, the emitted-code census and (`--self-compile`) the self-compile time. Each ref is a
-git worktree at the harness's `<out-dir>/ref-<sha>/tree/`, built by ONE seed build — a C1 carrying
-the seed's runtime, not a like-for-like control until it is rebuilt with itself.
+git worktree at the harness's `<out-dir>/ref-<sha>/tree/`, built by that tree's own
+`scripts/fetch-seed.sh` and `scripts/build-from-seed.sh` — seed → `C1` → `C2`, as CI builds it, so the
+control carries its own runtime.
 
 ⚠ **Measure on an IDLE machine, and measure the instrument before the subject.** This project has had a
 dominant cost hide in the *wrong timing bucket* four separate times. Load can MASK a bug, not just

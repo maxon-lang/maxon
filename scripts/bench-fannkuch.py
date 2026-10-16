@@ -18,7 +18,8 @@ Usage:
 Arms:
   --compiler PATH [--label L]   a compiler binary; default arm is the slot compiler, labelled "slot"
   --ref REF                     a compiler BUILT FROM a git ref, in a cached worktree under
-                                bench/fannkuch/out/ref-<sha>/tree, seeded from .bootstrap/maxon.exe.
+                                bench/fannkuch/out/ref-<sha>/tree, by that tree's own
+                                scripts/fetch-seed.sh and scripts/build-from-seed.sh.
                                 A control arm for an A/B is `--ref <pre-change-sha>`.
 
 A label names an arm's output directory AND its timing list, so labels are compared
@@ -258,7 +259,7 @@ def main():
             clang = find_clang(args.clang)
             c_exe, clang_line, cached = build_c_reference(clang, args.c_source, out_dir)
 
-        maxon_arms = [build_maxon_arm(arm["label"], bench_common.arm_compiler(arm, out_dir, args.ref_build_args.split()), args.source, out_dir)
+        maxon_arms = [build_maxon_arm(arm["label"], bench_common.arm_compiler(arm, out_dir), args.source, out_dir)
                       for arm in plan]
     except (bench_common.UsageFailure, bench_common.BuildFailure) as e:
         return bench_common.report_failure(e)
