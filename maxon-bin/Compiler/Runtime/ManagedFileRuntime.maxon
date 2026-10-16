@@ -832,8 +832,7 @@ function buildManagedFileRead(module StdModule, name ByteArray, placement Manage
 		afterLength(length) gives emitBin(module, block: checkCap, a: length, b: size, opcode: StdBinOpcode.add, ids: ids)
 	end 'start'
 
-	let overCapacity = emitCmp(module, block: checkCap, a: readEnd, b: byteCapacity, pred: StdCmpPred.gt, ids: ids)
-	module.setTerminator(checkCap, op: StdOp.condBranch(overCapacity, thenBlockId: tooBig.id, elseBlockId: doRead.id))
+	emitBranchOnCompareValues(module, block: checkCap, a: readEnd, pred: StdCmpPred.gt, b: byteCapacity, whenTrue: tooBig, whenFalse: doRead, ids: ids)
 
 	emitErrorReturn(module, block: tooBig, flag: ManagedFileReadFailedFlag, ids: ids)
 

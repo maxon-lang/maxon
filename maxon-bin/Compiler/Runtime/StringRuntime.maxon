@@ -688,8 +688,7 @@ function buildStreamWrite(module StdModule, name ByteArray, stream OsOutputStrea
 
 	let done = ids.mint()
 	header.blockArgs.push(IrBlockArg.create(done, argType: StdType.i64))
-	let allWritten = emitCmp(module, block: header, a: done, b: length, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(header, op: StdOp.condBranch(allWritten, thenBlockId: finished.id, elseBlockId: lap.id))
+	emitBranchOnCompareValues(module, block: header, a: done, pred: StdCmpPred.ge, b: length, whenTrue: finished, whenFalse: lap, ids: ids)
 
 	let cursor = emitBin(module, block: lap, a: buffer, b: done, opcode: StdBinOpcode.add, ids: ids)
 	let remaining = emitBin(module, block: lap, a: length, b: done, opcode: StdBinOpcode.sub, ids: ids)
@@ -754,8 +753,7 @@ export function buildStrEq(module StdModule, name ByteArray)
 	// entry: lengths differ ⇒ not equal; else fall into the byte loop.
 	let aLen = emitLoadField(module, block: entry, record: a, offset: StringLengthOffset, ids: ids)
 	let bLen = emitLoadField(module, block: entry, record: b, offset: StringLengthOffset, ids: ids)
-	let lenEq = emitCmp(module, block: entry, a: aLen, b: bLen, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(lenEq, thenBlockId: lenMatch.id, elseBlockId: notEqual.id))
+	emitBranchOnCompareValues(module, block: entry, a: aLen, pred: StdCmpPred.eq, b: bLen, whenTrue: lenMatch, whenFalse: notEqual, ids: ids)
 
 	// lenMatch: the buffers, then the shared byte loop over `aLen` bytes of each.
 	let aBuf = emitLoadField(module, block: lenMatch, record: a, offset: StringBufferOffset, ids: ids)
@@ -797,16 +795,14 @@ export function emitByteRangeCompareLoop(module StdModule, func IrFunction, cur 
 	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
 	cur.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(zero)))
 
-	let atEnd = emitCmp(module, block: header, a: i, b: len, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: allMatch.id, elseBlockId: body.id))
+	emitBranchOnCompareValues(module, block: header, a: i, pred: StdCmpPred.ge, b: len, whenTrue: allMatch, whenFalse: body, ids: ids)
 
 	// The compare is the LAST flag writer before the branch, so it fuses to a `jcc`.
 	let aByte = emitLoadByteIndexed(module, block: body, base: aBuf, index: i, ids: ids)
 	let bByte = emitLoadByteIndexed(module, block: body, base: bBuf, index: i, ids: ids)
 	let one = emitConst(module, block: body, value: 1, ids: ids)
 	let iNext = emitBin(module, block: body, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
-	let byteEq = emitCmp(module, block: body, a: aByte, b: bByte, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(body, op: StdOp.condBranch(byteEq, thenBlockId: header.id, elseBlockId: notEqual.id))
+	emitBranchOnCompareValues(module, block: body, a: aByte, pred: StdCmpPred.eq, b: bByte, whenTrue: header, whenFalse: notEqual, ids: ids)
 	body.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
 end 'emitByteRangeCompareLoop'
 
@@ -1368,8 +1364,7 @@ function buildStrFromBytes(module StdModule)
 	let one = emitConst(module, block: entry, value: 1, ids: ids)
 	entry.branchEdges.push(BranchEdge.create(scan.id, argIds: twoArgs(zero, second: one)))
 
-	let scanned = emitCmp(module, block: scan, a: i, b: len, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(scan, op: StdOp.condBranch(scanned, thenBlockId: build.id, elseBlockId: scanBody.id))
+	emitBranchOnCompareValues(module, block: scan, a: i, pred: StdCmpPred.ge, b: len, whenTrue: build, whenFalse: scanBody, ids: ids)
 
 	let raw = emitLoadByteIndexed(module, block: scanBody, base: buf, index: i, ids: ids)
 	let isLow = emitCompareWithConstant(module, block: scanBody, value: raw, pred: StdCmpPred.lt, against: AsciiHighBit as FullRangeInt, ids: ids)

@@ -1257,10 +1257,16 @@ export function emitCompareWithConstant(module StdModule, block IrBlock, value V
 	return emitCmp(module, block: block, a: value, b: constant, pred: pred, ids: ids)
 end 'emitCompareWithConstant'
 
-export function emitBranchOnCompare(module StdModule, block IrBlock, value ValueId, pred StdCmpPred, against FullRangeInt, whenTrue IrBlock, whenFalse IrBlock, ids ValueMinter)
-	let holds = emitCompareWithConstant(module, block: block, value: value, pred: pred, against: against, ids: ids)
+export function emitBranchOnCompareValues(module StdModule, block IrBlock, a ValueId, pred StdCmpPred, b ValueId, whenTrue IrBlock, whenFalse IrBlock, ids ValueMinter, operandType StdType = StdType.i64)
+	let holds = emitCmp(module, block: block, a: a, b: b, pred: pred, ids: ids, operandType: operandType)
 
 	module.setTerminator(block, op: StdOp.condBranch(holds, thenBlockId: whenTrue.id, elseBlockId: whenFalse.id))
+end 'emitBranchOnCompareValues'
+
+export function emitBranchOnCompare(module StdModule, block IrBlock, value ValueId, pred StdCmpPred, against FullRangeInt, whenTrue IrBlock, whenFalse IrBlock, ids ValueMinter)
+	let constant = emitConst(module, block: block, value: against, ids: ids)
+
+	emitBranchOnCompareValues(module, block: block, a: value, pred: pred, b: constant, whenTrue: whenTrue, whenFalse: whenFalse, ids: ids)
 end 'emitBranchOnCompare'
 
 // ⭐⭐ **THE TWO EXITS OF EVERY THROWING RUNTIME FUNCTION, ONE HOME.** A throwing runtime body ends in the
@@ -1436,8 +1442,7 @@ export function openCountedLoop(module StdModule, func IrFunction, cur IrBlock, 
 	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
 	cur.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(from)))
 
-	let atEnd = emitCmp(module, block: header, a: i, b: to, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
+	emitBranchOnCompareValues(module, block: header, a: i, pred: StdCmpPred.ge, b: to, whenTrue: done, whenFalse: body, ids: ids)
 
 	return CountedLoop.create(header, body: body, done: done, index: i)
 end 'openCountedLoop'

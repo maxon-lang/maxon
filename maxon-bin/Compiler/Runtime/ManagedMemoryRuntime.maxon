@@ -2581,8 +2581,7 @@ function buildManagedMoveElems(module StdModule)
 	let fromTheTop = ids.mint()
 	direction.blockArgs.push(IrBlockArg.create(fromTheTop, argType: StdType.i64))
 
-	let sameBuffer = emitCmp(module, block: entry, a: destBuffer, b: srcBuffer, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(sameBuffer, thenBlockId: sameBuf.id, elseBlockId: otherBuf.id))
+	emitBranchOnCompareValues(module, block: entry, a: destBuffer, pred: StdCmpPred.eq, b: srcBuffer, whenTrue: sameBuf, whenFalse: otherBuf, ids: ids)
 
 	let overlapsUpward = emitCmp(module, block: sameBuf, a: destIndex, b: srcIndex, pred: StdCmpPred.gt, ids: ids)
 	module.setTerminator(sameBuf, op: StdOp.branch(direction.id))
@@ -2597,8 +2596,7 @@ function buildManagedMoveElems(module StdModule)
 	emitBranchOnCompare(module, block: direction, value: es, pred: StdCmpPred.lt, against: 0, whenTrue: packedArm, whenFalse: byteArm, ids: ids)
 
 	// packedArm: one field at a time, from whichever end the shared answer names.
-	let packedGoesDown = emitCmp(module, block: packedArm, a: fromTheTop, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(packedArm, op: StdOp.condBranch(packedGoesDown, thenBlockId: packedBottom.id, elseBlockId: packedTop.id))
+	emitBranchOnCompareValues(module, block: packedArm, a: fromTheTop, pred: StdCmpPred.eq, b: zero, whenTrue: packedBottom, whenFalse: packedTop, ids: ids)
 
 	var afterTop = emitPackedElementMove(module, func: func, cur: packedTop, destBuffer: destBuffer, destIndex: destIndex, srcBuffer: srcBuffer, srcIndex: srcIndex, count: count, es: es, fromTheTop: true, ids: ids)
 	module.setTerminator(afterTop, op: StdOp.branch(done.id))
@@ -2610,8 +2608,7 @@ function buildManagedMoveElems(module StdModule)
 	let destAddr = emitSlotAddr(module, block: byteArm, buffer: destBuffer, index: destIndex, elementSize: es, ids: ids)
 	let srcAddr = emitSlotAddr(module, block: byteArm, buffer: srcBuffer, index: srcIndex, elementSize: es, ids: ids)
 	let byteCount = emitElementByteLen(module, block: byteArm, count: count, es: es, ids: ids)
-	let byteGoesDown = emitCmp(module, block: byteArm, a: fromTheTop, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(byteArm, op: StdOp.condBranch(byteGoesDown, thenBlockId: byteBottom.id, elseBlockId: byteTop.id))
+	emitBranchOnCompareValues(module, block: byteArm, a: fromTheTop, pred: StdCmpPred.eq, b: zero, whenTrue: byteBottom, whenFalse: byteTop, ids: ids)
 
 	var afterByteTop = emitBackwardCopy(module, func: func, cur: byteTop, dest: destAddr, src: srcAddr, byteCount: byteCount, ids: ids)
 	module.setTerminator(afterByteTop, op: StdOp.branch(done.id))
@@ -3480,8 +3477,7 @@ function buildManagedGrownCap(module StdModule)
 
 	// entry: an ask that outruns doubling is taken at face value.
 	let doubled = emitBin(module, block: entry, a: current, b: current, opcode: StdBinOpcode.add, ids: ids)
-	let overDouble = emitCmp(module, block: entry, a: required, b: doubled, pred: StdCmpPred.gt, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(overDouble, thenBlockId: takeAsk.id, elseBlockId: checkSmall.id))
+	emitBranchOnCompareValues(module, block: entry, a: required, pred: StdCmpPred.gt, b: doubled, whenTrue: takeAsk, whenFalse: checkSmall, ids: ids)
 
 	emitAtLeastMinimumReturn(module, func: func, block: takeAsk, value: required, ids: ids)
 
@@ -3495,8 +3491,7 @@ function buildManagedGrownCap(module StdModule)
 	let cap = ids.mint()
 	easeHeader.blockArgs.push(IrBlockArg.create(cap, argType: StdType.i64))
 	easeInit.branchEdges.push(BranchEdge.create(easeHeader.id, argIds: argsOf(current)))
-	let needMore = emitCmp(module, block: easeHeader, a: cap, b: required, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(easeHeader, op: StdOp.condBranch(needMore, thenBlockId: easeBody.id, elseBlockId: easeDone.id))
+	emitBranchOnCompareValues(module, block: easeHeader, a: cap, pred: StdCmpPred.lt, b: required, whenTrue: easeBody, whenFalse: easeDone, ids: ids)
 
 	let threshConst = emitConst(module, block: easeBody, value: GrowthThreshold, ids: ids)
 	let scaleConst = emitConst(module, block: easeBody, value: EaseNumeratorScale, ids: ids)
@@ -3549,8 +3544,7 @@ function buildManagedGrow(module StdModule)
 
 	// entry: already big enough ⇒ nothing to do.
 	let capacity = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordCapacityOffset, ids: ids)
-	let enough = emitCmp(module, block: entry, a: capacity, b: required, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(enough, thenBlockId: done.id, elseBlockId: grow.id))
+	emitBranchOnCompareValues(module, block: entry, a: capacity, pred: StdCmpPred.ge, b: required, whenTrue: done, whenFalse: grow, ids: ids)
 
 	// grow: pick the new capacity by the growth POLICY, then reallocate to it. An overflowing byte count
 	// ABORTS here, because a `required` that big can only come from the compiler's own growth arithmetic —
@@ -3595,8 +3589,7 @@ function emitReallocateToCapacity(module StdModule, func IrFunction, cur IrBlock
 	let newBytes = emitBitsToBytes(module, block: cur, totalBits: newBits, ids: ids)
 	let roundTrip = ids.mint()
 	module.appendOp(cur, op: StdOp.div(roundTrip, lhs: newBits, rhs: bits, signedness: IntegerSignedness.signed))
-	let overflowed = emitCmp(module, block: cur, a: roundTrip, b: newCap, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(overflowed, thenBlockId: onByteOverflow.id, elseBlockId: alloc.id))
+	emitBranchOnCompareValues(module, block: cur, a: roundTrip, pred: StdCmpPred.ne, b: newCap, whenTrue: onByteOverflow, whenFalse: alloc, ids: ids)
 
 	// alloc: allocate the new buffer and copy the live bytes forward. A fresh `__mm_alloc` is zeroed and only
 	// `length·es` bytes are copied in, so the new `[length, newCap)` slots read zero — the capacity-slot
@@ -3991,8 +3984,7 @@ function buildManagedResize(module StdModule)
 	let grown = ids.mint()
 	module.appendOp(resize, op: StdOp.call(grown, callee: ManagedGrowName, args: twoArgs(arr, second: n)))
 	let oldLen = emitLoadField(module, block: resize, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
-	let shrink = emitCmp(module, block: resize, a: n, b: oldLen, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(resize, op: StdOp.condBranch(shrink, thenBlockId: doZero.id, elseBlockId: setLen.id))
+	emitBranchOnCompareValues(module, block: resize, a: n, pred: StdCmpPred.lt, b: oldLen, whenTrue: doZero, whenFalse: setLen, ids: ids)
 
 	let es = emitLoadField(module, block: doZero, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
 	let buffer = emitLoadField(module, block: doZero, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
@@ -4269,8 +4261,7 @@ function buildManagedAppend(module StdModule)
 	// entry: the two records must stride by the same element size (see THE ELEMENT-SIZE SEAM above).
 	let destEs = emitLoadField(module, block: entry, record: dest, offset: ManagedRecordElementSizeOffset, ids: ids)
 	let srcEs = emitLoadField(module, block: entry, record: src, offset: ManagedRecordElementSizeOffset, ids: ids)
-	let esDiffers = emitCmp(module, block: entry, a: destEs, b: srcEs, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(esDiffers, thenBlockId: mismatch.id, elseBlockId: append.id))
+	emitBranchOnCompareValues(module, block: entry, a: destEs, pred: StdCmpPred.ne, b: srcEs, whenTrue: mismatch, whenFalse: append, ids: ids)
 
 	// mismatch: abort — an incoherent cross-stride blit must never proceed.
 	emitRuntimeAbort(module, func: func, block: mismatch, abort: RuntimeAbort.arrayAppendElementSizeMismatch, ids: ids)
@@ -4363,8 +4354,7 @@ function buildArrayHash(module StdModule, name ByteArray, element ArrayHashEleme
 	module.setTerminator(entry, op: StdOp.branch(header.id))
 	entry.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(iSeed, second: hSeed)))
 
-	let atEnd = emitCmp(module, block: header, a: i, b: count, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
+	emitBranchOnCompareValues(module, block: header, a: i, pred: StdCmpPred.ge, b: count, whenTrue: done, whenFalse: body, ids: ids)
 
 	let loaded = emitLoadElemAt(module, func: func, cur: body, exit: fold, buffer: buffer, index: i, es: es, ids: ids)
 
@@ -4405,8 +4395,7 @@ function buildArrayEquals(module StdModule, name ByteArray)
 	// entry: element counts differ ⇒ not equal; else fall into the byte loop.
 	let aLen = emitLoadField(module, block: entry, record: a, offset: ManagedRecordLengthOffset, ids: ids)
 	let bLen = emitLoadField(module, block: entry, record: b, offset: ManagedRecordLengthOffset, ids: ids)
-	let lenEq = emitCmp(module, block: entry, a: aLen, b: bLen, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(lenEq, thenBlockId: lenMatch.id, elseBlockId: notEqual.id))
+	emitBranchOnCompareValues(module, block: entry, a: aLen, pred: StdCmpPred.eq, b: bLen, whenTrue: lenMatch, whenFalse: notEqual, ids: ids)
 
 	// lenMatch: the two buffers over the receiver's own content extent, then the shared byte loop.
 	let aBuf = emitLoadField(module, block: lenMatch, record: a, offset: ManagedRecordBufferOffset, ids: ids)
@@ -4555,8 +4544,7 @@ function buildManagedSetLength(module StdModule)
 	emitMemoryThrow(module, block: bad, flag: MemoryInvalidLengthFlag, ids: ids)
 
 	let oldLen = emitLoadField(module, block: pick, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
-	let shrink = emitCmp(module, block: pick, a: n, b: oldLen, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(pick, op: StdOp.condBranch(shrink, thenBlockId: doZero.id, elseBlockId: setLen.id))
+	emitBranchOnCompareValues(module, block: pick, a: n, pred: StdCmpPred.lt, b: oldLen, whenTrue: doZero, whenFalse: setLen, ids: ids)
 
 	// The SHRINK path is `__managed_resize`'s verbatim, through the same two shared helpers: destroy the managed
 	// elements that leave the live range (inert for the byte element `__ManagedMemory` binds to, and correct
@@ -4733,8 +4721,7 @@ function emitBufferAccessGuard(module StdModule, func IrFunction, block IrBlock,
 		limit = emitElementByteLen(module, block: checkHigh, count: declaredLimit, es: es, ids: ids)
 	end 'byteAddressed'
 
-	let pastEnd = emitCmp(module, block: checkHigh, a: offset, b: limit, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(checkHigh, op: StdOp.condBranch(pastEnd, thenBlockId: bad.id, elseBlockId: ok.id))
+	emitBranchOnCompareValues(module, block: checkHigh, a: offset, pred: StdCmpPred.ge, b: limit, whenTrue: bad, whenFalse: ok, ids: ids)
 end 'emitBufferAccessGuard'
 
 // ⭐ `__managed_mem_set(arr, index, value) -> (_, flag)` — the buffer's CAPACITY-bounded element write, throwing
@@ -4950,8 +4937,7 @@ function buildManagedMemGrow(module StdModule)
 
 	emitCowDetach(module, block: entry, arr: arr, ids: ids)
 	let capacity = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordCapacityOffset, ids: ids)
-	let shrinking = emitCmp(module, block: entry, a: newCapacity, b: capacity, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(shrinking, thenBlockId: bad.id, elseBlockId: grow.id))
+	emitBranchOnCompareValues(module, block: entry, a: newCapacity, pred: StdCmpPred.lt, b: capacity, whenTrue: bad, whenFalse: grow, ids: ids)
 
 	// An overflowing byte count is `invalidCapacity` too — it is the SAME complaint about the same argument
 	// (a capacity this record cannot hold), and it is a program error rather than a compiler bug, which is
@@ -5009,8 +4995,7 @@ function buildManagedMemSwap(module StdModule)
 
 	emitMemoryThrow(module, block: oob, flag: MemoryIndexOutOfBoundsFlag, ids: ids)
 
-	let same = emitCmp(module, block: checkSame, a: i, b: j, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(checkSame, op: StdOp.condBranch(same, thenBlockId: done.id, elseBlockId: exchange.id))
+	emitBranchOnCompareValues(module, block: checkSame, a: i, pred: StdCmpPred.eq, b: j, whenTrue: done, whenFalse: exchange, ids: ids)
 
 	// Detach BEFORE the buffer pointer is loaded (`__managed_cow_detach` trap 1), and after both checks, so a
 	// refused or trivial swap allocates nothing.
@@ -5627,8 +5612,7 @@ export function emitElementRange(module StdModule, func IrFunction, cur IrBlock,
 	var entering = argsOf(zero)
 	entering.append(carried)
 	cur.branchEdges.push(BranchEdge.create(header.id, argIds: entering))
-	let atEnd = emitCmp(module, block: header, a: i, b: count, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
+	emitBranchOnCompareValues(module, block: header, a: i, pred: StdCmpPred.ge, b: count, whenTrue: done, whenFalse: body, ids: ids)
 
 	let slot = emitSlotAddr(module, block: body, buffer: base, index: i, elementSize: elementSize, ids: ids)
 	let elem = ids.mint()
@@ -5880,8 +5864,7 @@ function buildManagedAppendManaged(module StdModule)
 
 	let destEs = emitLoadField(module, block: entry, record: dest, offset: ManagedRecordElementSizeOffset, ids: ids)
 	let srcEs = emitLoadField(module, block: entry, record: src, offset: ManagedRecordElementSizeOffset, ids: ids)
-	let esDiffers = emitCmp(module, block: entry, a: destEs, b: srcEs, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(esDiffers, thenBlockId: mismatch.id, elseBlockId: append.id))
+	emitBranchOnCompareValues(module, block: entry, a: destEs, pred: StdCmpPred.ne, b: srcEs, whenTrue: mismatch, whenFalse: append, ids: ids)
 
 	emitRuntimeAbort(module, func: func, block: mismatch, abort: RuntimeAbort.arrayAppendElementSizeMismatch, ids: ids)
 

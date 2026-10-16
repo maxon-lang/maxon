@@ -494,8 +494,7 @@ function buildManagedDirectoryNext(module StdModule)
 	let zeroIndex = emitConst(module, block: dotCheck, value: 0, ids: ids)
 	let byte0 = emitHostUnit(module, block: dotCheck, base: name, unitIndex: zeroIndex, ids: ids)
 	let dotConst = emitConst(module, block: dotCheck, value: DotByte, ids: ids)
-	let leadingDot = emitCmp(module, block: dotCheck, a: byte0, b: dotConst, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(dotCheck, op: StdOp.condBranch(leadingDot, thenBlockId: dot1.id, elseBlockId: found.id))
+	emitBranchOnCompareValues(module, block: dotCheck, a: byte0, pred: StdCmpPred.eq, b: dotConst, whenTrue: dot1, whenFalse: found, ids: ids)
 
 	let oneIndex = emitConst(module, block: dot1, value: 1, ids: ids)
 	let byte1 = emitHostUnit(module, block: dot1, base: name, unitIndex: oneIndex, ids: ids)
@@ -504,9 +503,8 @@ function buildManagedDirectoryNext(module StdModule)
 	// A bare `.` is skipped; anything else with a leading dot needs byte2 to decide.
 	module.setTerminator(dot1, op: StdOp.condBranch(isSingleDot, thenBlockId: fetch.id, elseBlockId: dot2.id))
 
-	let secondDot = emitCmp(module, block: dot2, a: byte1, b: dotConst, pred: StdCmpPred.eq, ids: ids)
 	var dot3 = module.addBlock(func, label: b"mddot3", heat: BlockHeat.normal)
-	module.setTerminator(dot2, op: StdOp.condBranch(secondDot, thenBlockId: dot3.id, elseBlockId: found.id))
+	emitBranchOnCompareValues(module, block: dot2, a: byte1, pred: StdCmpPred.eq, b: dotConst, whenTrue: dot3, whenFalse: found, ids: ids)
 
 	let twoIndex = emitConst(module, block: dot3, value: 2, ids: ids)
 	let byte2 = emitHostUnit(module, block: dot3, base: name, unitIndex: twoIndex, ids: ids)
@@ -788,8 +786,7 @@ end 'buildManagedDirectoryCurrentPath'
 function emitFilledBufferVerdict(module StdModule, block IrBlock, check IrBlock, written ValueId, capacity ValueId, whenRefused IrBlock, whenFits IrBlock, whenTooSmall IrBlock, ids ValueMinter)
 	emitBranchOnCompare(module, block: block, value: written, pred: StdCmpPred.eq, against: 0, whenTrue: whenRefused, whenFalse: check, ids: ids)
 
-	let fits = emitCmp(module, block: check, a: written, b: capacity, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(check, op: StdOp.condBranch(fits, thenBlockId: whenFits.id, elseBlockId: whenTooSmall.id))
+	emitBranchOnCompareValues(module, block: check, a: written, pred: StdCmpPred.lt, b: capacity, whenTrue: whenFits, whenFalse: whenTooSmall, ids: ids)
 end 'emitFilledBufferVerdict'
 
 export union PathFill

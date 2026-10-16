@@ -553,8 +553,7 @@ function buildListNodeAt(module StdModule)
 	header.blockArgs.push(IrBlockArg.create(node, argType: StdType.i64))
 	let ordinal = ids.mint()
 	header.blockArgs.push(IrBlockArg.create(ordinal, argType: StdType.i64))
-	let atTarget = emitCmp(module, block: header, a: ordinal, b: index, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(header, op: StdOp.condBranch(atTarget, thenBlockId: found.id, elseBlockId: advance.id))
+	emitBranchOnCompareValues(module, block: header, a: ordinal, pred: StdCmpPred.eq, b: index, whenTrue: found, whenFalse: advance, ids: ids)
 
 	let next = emitLoadField(module, block: advance, record: node, offset: ListNextOffset, ids: ids)
 	let one = emitConst(module, block: advance, value: 1, ids: ids)
@@ -790,8 +789,7 @@ function buildListInteriorInsert(module StdModule, name ByteArray, forward ByteO
 	let value = 2
 
 	let owner = emitLoadField(module, block: entry, record: target, offset: ListOwnerOffset, ids: ids)
-	let ownedByUs = emitCmp(module, block: entry, a: owner, b: list, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(ownedByUs, thenBlockId: link.id, elseBlockId: foreignChain.id))
+	emitBranchOnCompareValues(module, block: entry, a: owner, pred: StdCmpPred.eq, b: list, whenTrue: link, whenFalse: foreignChain, ids: ids)
 
 	emitRuntimeAbort(module, func: func, block: foreignChain, abort: RuntimeAbort.managedListNodeNotInThisChain, ids: ids)
 
@@ -898,8 +896,7 @@ function buildListInsert(module StdModule)
 	module.appendOp(atFront, op: StdOp.call(prepended, callee: ListPrependName, args: twoArgs(list, second: value)))
 	module.setTerminator(atFront, op: StdOp.branch(linked.id))
 
-	let isBack = emitCmp(module, block: afterFront, a: index, b: count, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(afterFront, op: StdOp.condBranch(isBack, thenBlockId: atBack.id, elseBlockId: interior.id))
+	emitBranchOnCompareValues(module, block: afterFront, a: index, pred: StdCmpPred.eq, b: count, whenTrue: atBack, whenFalse: interior, ids: ids)
 
 	let appended = ids.mint()
 	module.appendOp(atBack, op: StdOp.call(appended, callee: ListAppendName, args: twoArgs(list, second: value)))
@@ -1039,8 +1036,7 @@ function buildListUnlinkNode(module StdModule, name ByteArray, movesElementOut b
 	// of another chain's links. MEASURED while this asked only `owner != 0`: `b.remove(nodeOfA)` left a live
 	// `b` reading `count = -1` and the run ended **139** on a `String` element — and it read as a plain wrong
 	// answer, exit 0, on the `int` twin. The field already held everything the correct test needs.
-	let ownedByUs = emitCmp(module, block: ours, a: owner, b: list, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(ours, op: StdOp.condBranch(ownedByUs, thenBlockId: unlink.id, elseBlockId: foreignChain.id))
+	emitBranchOnCompareValues(module, block: ours, a: owner, pred: StdCmpPred.eq, b: list, whenTrue: unlink, whenFalse: foreignChain, ids: ids)
 
 	// ⚖ **THE ABORT DECIDES NOTHING ABOUT WHAT THE PROGRAM MEANT — it stops the corruption and says which
 	// situation it is** (`RuntimeAbort.managedListNodeNotInThisChain` carries the reasoning and the open
@@ -1653,8 +1649,7 @@ function buildListFrom(module StdModule)
 
 	let i = ids.mint()
 	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	let atEnd = emitCmp(module, block: header, a: i, b: count, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
+	emitBranchOnCompareValues(module, block: header, a: i, pred: StdCmpPred.ge, b: count, whenTrue: done, whenFalse: body, ids: ids)
 
 	// The move-out clear is CONDITIONAL, and `emitMovedOutSlotClear` states the reason in
 	// full: on a trivial element the null does nothing, and the source buffer may be immortal `.rdata`.

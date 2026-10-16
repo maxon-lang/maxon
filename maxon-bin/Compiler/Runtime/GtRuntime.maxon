@@ -2993,8 +2993,7 @@ function emitGtFifoPop(module StdModule, entry IrBlock, popBlock IrBlock, clearT
 	// head = head.next; if the new head is null the queue has drained → clear the tail too.
 	let next = emitLoadField(module, block: popBlock, record: head, offset: emitQueueLinkOffset(ends), ids: ids)
 	emitQueueStoreHead(module, block: popBlock, ends: ends, value: next, ids: ids)
-	let nextNull = emitCmp(module, block: popBlock, a: next, b: zeroConst, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(popBlock, op: StdOp.condBranch(nextNull, thenBlockId: clearTail.id, elseBlockId: doneBlock.id))
+	emitBranchOnCompareValues(module, block: popBlock, a: next, pred: StdCmpPred.eq, b: zeroConst, whenTrue: clearTail, whenFalse: doneBlock, ids: ids)
 
 	emitQueueStoreTail(module, block: clearTail, ends: ends, value: zeroConst, ids: ids)
 	module.setTerminator(clearTail, op: StdOp.branch(doneBlock.id))
@@ -3143,8 +3142,7 @@ function emitGtHandOffGate(module StdModule, func IrFunction, hand IrBlock, foun
 	emitBranchOnCompare(module, block: checkPin, value: pinned, pred: StdCmpPred.eq, against: 0, whenTrue: handOver, whenFalse: comparePin, ids: ids)
 
 	let here = emitLoadCurrentM(module, block: comparePin, ids: ids)
-	let ours = emitCmp(module, block: comparePin, a: pinned, b: here, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(comparePin, op: StdOp.condBranch(ours, thenBlockId: handOver.id, elseBlockId: startLocked.id))
+	emitBranchOnCompareValues(module, block: comparePin, a: pinned, pred: StdCmpPred.eq, b: here, whenTrue: handOver, whenFalse: startLocked, ids: ids)
 
 	emitSchedLockEnter(module, block: startLocked, ids: ids)
 	emitGtStartLockedOwner(module, func: func, startLocked: startLocked, owner: pinned, found: found, declined: putItBack, handOff: handOff, ids: ids)
@@ -3320,8 +3318,7 @@ export function emitGtAllGAppend(module StdModule, func IrFunction, cur IrBlock,
 
 	let len = emitLoadAcquireGlobalWord(module, block: cur, label: GtAllGLenLabel, ids: ids)
 	let cap = emitLoadGlobalWord(module, block: cur, label: GtAllGCapLabel, ids: ids)
-	let noRoom = emitCmp(module, block: cur, a: len, b: cap, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(noRoom, thenBlockId: grow.id, elseBlockId: store.id))
+	emitBranchOnCompareValues(module, block: cur, a: len, pred: StdCmpPred.ge, b: cap, whenTrue: grow, whenFalse: store, ids: ids)
 
 	let copied = ids.mint()
 	copyHead.blockArgs.push(IrBlockArg.create(copied, argType: StdType.i64))
@@ -3335,8 +3332,7 @@ export function emitGtAllGAppend(module StdModule, func IrFunction, cur IrBlock,
 	emitBranchOnCompare(module, block: grow, value: fresh, pred: StdCmpPred.eq, against: 0, whenTrue: done, whenFalse: copyHead, ids: ids)
 	grow.branchEdges.push(BranchEdge.create(copyHead.id, argIds: argsOf(emitConst(module, block: grow, value: 0, ids: ids))))
 
-	let allCopied = emitCmp(module, block: copyHead, a: copied, b: len, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(copyHead, op: StdOp.condBranch(allCopied, thenBlockId: publish.id, elseBlockId: copyBody.id))
+	emitBranchOnCompareValues(module, block: copyHead, a: copied, pred: StdCmpPred.ge, b: len, whenTrue: publish, whenFalse: copyBody, ids: ids)
 
 	let copyOffset = emitBin(module, block: copyBody, a: copied, b: emitConst(module, block: copyBody, value: GtAllGSlotBytes, ids: ids), opcode: StdBinOpcode.mul, ids: ids)
 	let staleSlot = emitBin(module, block: copyBody, a: stale, b: copyOffset, opcode: StdBinOpcode.add, ids: ids)
@@ -3748,14 +3744,12 @@ function emitTimerSiftDown(module StdModule, func IrFunction, ids ValueMinter, s
 	let oneConst = emitConst(module, block: hdr, value: 1, ids: ids)
 	let twoI = emitBin(module, block: hdr, a: i, b: i, opcode: StdBinOpcode.add, ids: ids)
 	let left = emitBin(module, block: hdr, a: twoI, b: oneConst, opcode: StdBinOpcode.add, ids: ids)
-	let isLeaf = emitCmp(module, block: hdr, a: left, b: count, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(hdr, op: StdOp.condBranch(isLeaf, thenBlockId: cont.id, elseBlockId: haveLeft.id))
+	emitBranchOnCompareValues(module, block: hdr, a: left, pred: StdCmpPred.ge, b: count, whenTrue: cont, whenFalse: haveLeft, ids: ids)
 
 	// haveLeft: right = left + 1. Past the live region and the left child is the only candidate.
 	let rightOne = emitConst(module, block: haveLeft, value: 1, ids: ids)
 	let right = emitBin(module, block: haveLeft, a: left, b: rightOne, opcode: StdBinOpcode.add, ids: ids)
-	let noRight = emitCmp(module, block: haveLeft, a: right, b: count, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(haveLeft, op: StdOp.condBranch(noRight, thenBlockId: takeLeft.id, elseBlockId: chooseChild.id))
+	emitBranchOnCompareValues(module, block: haveLeft, a: right, pred: StdCmpPred.ge, b: count, whenTrue: takeLeft, whenFalse: chooseChild, ids: ids)
 
 	// chooseChild: both children exist, so the candidate is whichever comes first — and the tie rule decides
 	// when their deadlines match, which is what keeps two same-deadline entries in arming order.
@@ -3930,8 +3924,7 @@ export function emitGtBranchOnTimerDue(module StdModule, func IrFunction, cur Ir
 	emitBranchOnCompare(module, block: cur, value: when, pred: StdCmpPred.eq, against: TimerWhenEmpty, whenTrue: notDue, whenFalse: ask, ids: ids)
 
 	let now = emitGtNowNs(module, block: ask, ids: ids)
-	let reached = emitCmp(module, block: ask, a: when, b: now, pred: StdCmpPred.le, ids: ids)
-	module.setTerminator(ask, op: StdOp.condBranch(reached, thenBlockId: due.id, elseBlockId: notDue.id))
+	emitBranchOnCompareValues(module, block: ask, a: when, pred: StdCmpPred.le, b: now, whenTrue: due, whenFalse: notDue, ids: ids)
 
 	if notDueArgs.count() > 0 'handTheArgsOn'
 		cur.branchEdges.push(BranchEdge.create(notDue.id, argIds: notDueArgs))
@@ -3986,22 +3979,19 @@ function buildGtTimerCheck(module StdModule)
 	loopHdr.blockArgs.push(IrBlockArg.create(count, argType: StdType.i64))
 	loopHdr.blockArgs.push(IrBlockArg.create(owesWake, argType: StdType.i64))
 	entry.branchEdges.push(BranchEdge.create(loopHdr.id, argIds: twoArgs(count0, second: zeroConst)))
-	let isEmpty = emitCmp(module, block: loopHdr, a: count, b: zeroConst, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(loopHdr, op: StdOp.condBranch(isEmpty, thenBlockId: doneBlock.id, elseBlockId: checkDue.id))
+	emitBranchOnCompareValues(module, block: loopHdr, a: count, pred: StdCmpPred.eq, b: zeroConst, whenTrue: doneBlock, whenFalse: checkDue, ids: ids)
 
 	// checkDue: the root is the earliest `(deadline, seq)` in the store, so a root that is not due ends the
 	// walk — nothing below it can be due either. Index 0 sits at offset 0, so the base IS its address.
 	let rootDeadline = emitLoadField(module, block: checkDue, record: heapBase, offset: TimerOffDeadline, ids: ids)
-	let isDue = emitCmp(module, block: checkDue, a: rootDeadline, b: now, pred: StdCmpPred.le, ids: ids)
-	module.setTerminator(checkDue, op: StdOp.condBranch(isDue, thenBlockId: popRoot.id, elseBlockId: doneBlock.id))
+	emitBranchOnCompareValues(module, block: checkDue, a: rootDeadline, pred: StdCmpPred.le, b: now, whenTrue: popRoot, whenFalse: doneBlock, ids: ids)
 
 	// popRoot: take the root's entry and shrink the live region by one. When it WAS the last entry there is
 	// nothing to move over the hole and nothing to sift.
 	let root = emitTimerEntryLoad(module, block: popRoot, ids: ids, addr: heapBase)
 	let oneConst = emitConst(module, block: popRoot, value: 1, ids: ids)
 	let newCount = emitBin(module, block: popRoot, a: count, b: oneConst, opcode: StdBinOpcode.sub, ids: ids)
-	let heapNowEmpty = emitCmp(module, block: popRoot, a: newCount, b: zeroConst, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(popRoot, op: StdOp.condBranch(heapNowEmpty, thenBlockId: fire.id, elseBlockId: moveLast.id))
+	emitBranchOnCompareValues(module, block: popRoot, a: newCount, pred: StdCmpPred.eq, b: zeroConst, whenTrue: fire, whenFalse: moveLast, ids: ids)
 
 	// moveLast: the last live entry fills the root's hole and sifts down to its place — the standard pop. The
 	// sift chain runs to `fire`, so the GT is readied only once the store is a heap again.
@@ -4133,8 +4123,7 @@ function buildGtAnyCompleted(module StdModule)
 	// scanHdr(i): past the last live slot → nothing has completed; else inspect slot i.
 	let i = ids.mint()
 	scanHdr.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	let atEnd = emitCmp(module, block: scanHdr, a: i, b: length, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(scanHdr, op: StdOp.condBranch(atEnd, thenBlockId: notFound.id, elseBlockId: scanBody.id))
+	emitBranchOnCompareValues(module, block: scanHdr, a: i, pred: StdCmpPred.ge, b: length, whenTrue: notFound, whenFalse: scanBody, ids: ids)
 
 	// scanBody: gt = buffer[i]. An empty slot holds 0 and is skipped — see this function's header.
 	//
@@ -4145,8 +4134,7 @@ function buildGtAnyCompleted(module StdModule)
 	let slotBytes = emitConst(module, block: scanBody, value: PromiseSlotBytes, ids: ids)
 	let slotAddr = emitSlotAddr(module, block: scanBody, buffer: buffer, index: i, elementSize: slotBytes, ids: ids)
 	let gt = emitLoadField(module, block: scanBody, record: slotAddr, offset: 0, ids: ids)
-	let emptySlot = emitCmp(module, block: scanBody, a: gt, b: zeroConst, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(scanBody, op: StdOp.condBranch(emptySlot, thenBlockId: advance.id, elseBlockId: checkStatus.id))
+	emitBranchOnCompareValues(module, block: scanBody, a: gt, pred: StdCmpPred.eq, b: zeroConst, whenTrue: advance, whenFalse: checkStatus, ids: ids)
 
 	// checkStatus: the one word this whole primitive turns on. ACQUIRE — the thread that completed it may
 	// be on another M (`emitGtLoadPublishedStatus`).
@@ -4201,13 +4189,11 @@ function emitGtAwaitAnySlotWalk(module StdModule, func IrFunction, cur IrBlock, 
 
 	let i = ids.mint()
 	hdr.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	let walked = emitCmp(module, block: hdr, a: i, b: length, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(hdr, op: StdOp.condBranch(walked, thenBlockId: cont.id, elseBlockId: body.id))
+	emitBranchOnCompareValues(module, block: hdr, a: i, pred: StdCmpPred.ge, b: length, whenTrue: cont, whenFalse: body, ids: ids)
 
 	let slotAddr = emitSlotAddr(module, block: body, buffer: buffer, index: i, elementSize: emitConst(module, block: body, value: PromiseSlotBytes, ids: ids), ids: ids)
 	let slotGt = emitLoadField(module, block: body, record: slotAddr, offset: 0, ids: ids)
-	let emptySlot = emitCmp(module, block: body, a: slotGt, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(body, op: StdOp.condBranch(emptySlot, thenBlockId: next.id, elseBlockId: slotAct.id))
+	emitBranchOnCompareValues(module, block: body, a: slotGt, pred: StdCmpPred.eq, b: zero, whenTrue: next, whenFalse: slotAct, ids: ids)
 
 	match act 'slotAction'
 		register then emitGtClaimAwaiter(module, func: func, cur: slotAct, promise: slotGt, awaiter: tagged, cont: next, ids: ids)
@@ -4241,8 +4227,7 @@ function emitGtAwaitAnyWithdrawSlot(module StdModule, func IrFunction, cur IrBlo
 	var clear = module.addBlock(func, label: b"anywithdrawclear", heat: BlockHeat.normal)
 
 	let awaiter = emitLoadField(module, block: cur, record: slotGt, offset: GtOffAwaiter, ids: ids)
-	let ours = emitCmp(module, block: cur, a: awaiter, b: tagged, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(ours, thenBlockId: clear.id, elseBlockId: cont.id))
+	emitBranchOnCompareValues(module, block: cur, a: awaiter, pred: StdCmpPred.eq, b: tagged, whenTrue: clear, whenFalse: cont, ids: ids)
 
 	emitStoreField(module, block: clear, record: slotGt, offset: GtOffAwaiter, value: emitConst(module, block: clear, value: 0, ids: ids))
 	module.setTerminator(clear, op: StdOp.branch(cont.id))
@@ -5614,21 +5599,18 @@ function buildGtRunnerDone(module StdModule, target Target)
 	emitSchedLockEnter(module, block: handAwaiter, ids: ids)
 	let awaiter = emitLoadField(module, block: handAwaiter, record: gt, offset: GtOffAwaiter, ids: ids)
 	let noDebt = emitConst(module, block: handAwaiter, value: WakeDebtNone, ids: ids)
-	let nobody = emitCmp(module, block: handAwaiter, a: awaiter, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(handAwaiter, op: StdOp.condBranch(nobody, thenBlockId: payWake.id, elseBlockId: haveAwaiter.id))
+	emitBranchOnCompareValues(module, block: handAwaiter, a: awaiter, pred: StdCmpPred.eq, b: zero, whenTrue: payWake, whenFalse: haveAwaiter, ids: ids)
 	handAwaiter.branchEdges.push(BranchEdge.create(payWake.id, argIds: argsOf(noDebt)))
 
 	emitStoreField(module, block: haveAwaiter, record: gt, offset: GtOffAwaiter, value: zero)
 	let tag = emitConst(module, block: haveAwaiter, value: AwaitAnyTag, ids: ids)
 	let tagBit = emitBin(module, block: haveAwaiter, a: awaiter, b: tag, opcode: StdBinOpcode.bitAnd, ids: ids)
-	let isSelect = emitCmp(module, block: haveAwaiter, a: tagBit, b: zero, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(haveAwaiter, op: StdOp.condBranch(isSelect, thenBlockId: selectAwaiter.id, elseBlockId: plainAwaiter.id))
+	emitBranchOnCompareValues(module, block: haveAwaiter, a: tagBit, pred: StdCmpPred.ne, b: zero, whenTrue: selectAwaiter, whenFalse: plainAwaiter, ids: ids)
 
 	emitBranchWithDebt(module, from: plainAwaiter, to: payWake, debt: emitGtReadyLocked(module, block: plainAwaiter, gt: awaiter, ids: ids))
 
 	let selecting = emitBin(module, block: selectAwaiter, a: awaiter, b: tag, opcode: StdBinOpcode.sub, ids: ids)
-	let alreadyReadied = emitCompareWithConstant(module, block: selectAwaiter, value: emitLoadField(module, block: selectAwaiter, record: selecting, offset: GtOffSelectDone, ids: ids), pred: StdCmpPred.ne, against: SelectPending, ids: ids)
-	module.setTerminator(selectAwaiter, op: StdOp.condBranch(alreadyReadied, thenBlockId: payWake.id, elseBlockId: claimSelect.id))
+	emitBranchOnCompare(module, block: selectAwaiter, value: emitLoadField(module, block: selectAwaiter, record: selecting, offset: GtOffSelectDone, ids: ids), pred: StdCmpPred.ne, against: SelectPending, whenTrue: payWake, whenFalse: claimSelect, ids: ids)
 	selectAwaiter.branchEdges.push(BranchEdge.create(payWake.id, argIds: argsOf(noDebt)))
 
 	emitStoreField(module, block: claimSelect, record: selecting, offset: GtOffSelectDone, value: emitConst(module, block: claimSelect, value: SelectReadied, ids: ids))
@@ -5667,8 +5649,7 @@ function buildGtRunnerDone(module StdModule, target Target)
 	let finishedBefore = emitGlobalAccumulate(module, block: sampled, label: GtStackBytesCountLabel, delta: oneStack, multiM: true, ids: ids)
 	let finished = emitBin(module, block: sampled, a: finishedBefore, b: oneStack, opcode: StdBinOpcode.add, ids: ids)
 	let intoWindow = emitBin(module, block: sampled, a: finished, b: emitConst(module, block: sampled, value: GtSeedWindowMask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
-	let windowOpen = emitCmp(module, block: sampled, a: intoWindow, b: zero, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(sampled, op: StdOp.condBranch(windowOpen, thenBlockId: freeStack.id, elseBlockId: closeSeedWindow.id))
+	emitBranchOnCompareValues(module, block: sampled, a: intoWindow, pred: StdCmpPred.ne, b: zero, whenTrue: freeStack, whenFalse: closeSeedWindow, ids: ids)
 
 	emitSchedLockEnter(module, block: closeSeedWindow, ids: ids)
 	module.appendOp(closeSeedWindow, op: StdOp.call(ids.mint(), callee: GtSeedAdaptName, args: ValueIdArray.create()))
@@ -5742,8 +5723,7 @@ export function emitGtTimerStoreRemove(module StdModule, func IrFunction, ids Va
 	// scanHdr(i): if i >= count → cont; else inspect entry i.
 	let i = ids.mint()
 	scanHdr.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	let atEnd = emitCmp(module, block: scanHdr, a: i, b: count, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(scanHdr, op: StdOp.condBranch(atEnd, thenBlockId: cont.id, elseBlockId: scanBody.id))
+	emitBranchOnCompareValues(module, block: scanHdr, a: i, pred: StdCmpPred.ge, b: count, whenTrue: cont, whenFalse: scanBody, ids: ids)
 
 	// scanBody: both halves of the key are compared, and the AND is branch-free for
 	// `emitTimerEntryBefore`'s reason — a comparison's value lives in the 0/1 domain on every lane.
@@ -5770,8 +5750,7 @@ export function emitGtTimerStoreRemove(module StdModule, func IrFunction, ids Va
 	let oneRem = emitConst(module, block: removeAt, value: 1, ids: ids)
 	let newCount = emitBin(module, block: removeAt, a: count, b: oneRem, opcode: StdBinOpcode.sub, ids: ids)
 	module.appendOp(removeAt, op: StdOp.storeIndirect(countAddr, offset: 0, valueId: newCount, valueType: StdType.i64))
-	let removedLast = emitCmp(module, block: removeAt, a: i, b: newCount, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(removeAt, op: StdOp.condBranch(removedLast, thenBlockId: republish.id, elseBlockId: fillHole.id))
+	emitBranchOnCompareValues(module, block: removeAt, a: i, pred: StdCmpPred.ge, b: newCount, whenTrue: republish, whenFalse: fillHole, ids: ids)
 
 	// fillHole: the last live entry fills slot i. At the ROOT there is no parent to compare against, so down
 	// is the only direction it can move.
@@ -5779,8 +5758,7 @@ export function emitGtTimerStoreRemove(module StdModule, func IrFunction, ids Va
 	let moved = emitTimerEntryLoad(module, block: fillHole, ids: ids, addr: lastAddr)
 	let holeAddr = emitTimerEntryAddr(module, block: fillHole, ids: ids, heapBase: heapBase, index: i)
 	emitTimerEntryStore(module, block: fillHole, addr: holeAddr, entry: moved)
-	let atRoot = emitCmp(module, block: fillHole, a: i, b: zeroConst, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(fillHole, op: StdOp.condBranch(atRoot, thenBlockId: siftDownStart.id, elseBlockId: parentCmp.id))
+	emitBranchOnCompareValues(module, block: fillHole, a: i, pred: StdCmpPred.eq, b: zeroConst, whenTrue: siftDownStart, whenFalse: parentCmp, ids: ids)
 
 	// parentCmp: parent = (i - 1) >> 1 — `i >= 1` on this edge, so the numerator is non-negative and the
 	// logical shift is the halving. The moved entry goes UP iff it beats that parent; otherwise its ancestors
@@ -5902,8 +5880,7 @@ function emitGtSwitchAway(module StdModule, func IrFunction, cur IrBlock, selfGt
 	var clockKept = module.addBlock(func, label: b"parkclock", heat: BlockHeat.normal)
 	var switchOnly = module.addBlock(func, label: b"parknoclock", heat: BlockHeat.normal)
 
-	let keeps = emitCompareWithConstant(module, block: cur, value: emitLoadGlobalWord(module, block: cur, label: GtKeepsCpuClockLabel, ids: ids), pred: StdCmpPred.ne, against: GtCpuClockUnkept, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(keeps, thenBlockId: clockKept.id, elseBlockId: switchOnly.id))
+	emitBranchOnCompare(module, block: cur, value: emitLoadGlobalWord(module, block: cur, label: GtKeepsCpuClockLabel, ids: ids), pred: StdCmpPred.ne, against: GtCpuClockUnkept, whenTrue: clockKept, whenFalse: switchOnly, ids: ids)
 
 	module.appendOp(switchOnly, op: StdOp.call(ids.mint(), callee: GtContextSwitchName, args: twoArgs(selfGt, second: to)))
 	module.setTerminator(switchOnly, op: StdOp.retVoid)
@@ -5999,8 +5976,7 @@ function buildGtRegisterPark(module StdModule)
 	emitStoreField(module, block: timerArm, record: gt, offset: GtOffStatus, value: waitingConst)
 	let rootBefore = emitGtLoadTimerWhen(module, block: timerArm, ids: ids)
 	module.appendOp(timerArm, op: StdOp.call(ids.mint(), callee: GtTimerAddName, args: threeArgs(gt, second: arg, third: emitConst(module, block: timerArm, value: TimerTagSleep, ids: ids))))
-	let becameRoot = emitCmp(module, block: timerArm, a: arg, b: rootBefore, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(timerArm, op: StdOp.condBranch(becameRoot, thenBlockId: timerWake.id, elseBlockId: timerPaid.id))
+	emitBranchOnCompareValues(module, block: timerArm, a: arg, pred: StdCmpPred.lt, b: rootBefore, whenTrue: timerWake, whenFalse: timerPaid, ids: ids)
 	emitGtWakeNetpoller(module, block: timerWake, when: arg, cont: timerPaid, ids: ids)
 	emitBranchWithDebt(module, from: timerPaid, to: doneBlock, debt: noDebt)
 
@@ -6019,8 +5995,7 @@ function buildGtRegisterPark(module StdModule)
 	let commitDebt = ids.mint()
 	module.appendOp(netpollArm, op: StdOp.call(commitDebt, callee: NetpollPdCommitName, args: argsOf(gt)))
 	let rootAfterCommit = emitGtLoadTimerWhen(module, block: netpollArm, ids: ids)
-	let becameEarliest = emitCmp(module, block: netpollArm, a: rootAfterCommit, b: rootBeforeCommit, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(netpollArm, op: StdOp.condBranch(becameEarliest, thenBlockId: netpollWake.id, elseBlockId: netpollPaid.id))
+	emitBranchOnCompareValues(module, block: netpollArm, a: rootAfterCommit, pred: StdCmpPred.lt, b: rootBeforeCommit, whenTrue: netpollWake, whenFalse: netpollPaid, ids: ids)
 	emitGtWakeNetpoller(module, block: netpollWake, when: rootAfterCommit, cont: netpollPaid, ids: ids)
 	emitBranchWithDebt(module, from: netpollPaid, to: doneBlock, debt: commitDebt)
 
@@ -6208,8 +6183,7 @@ function buildGtRunStrand(module StdModule, target Target)
 	// `owner` is not touched again once this answers 0 — the release may have reclaimed it.
 	let member = ids.mint()
 	module.appendOp(next, op: StdOp.call(member, callee: GtStrandNextName, args: twoArgs(owner, second: nothingParked)))
-	let strandEmpty = emitCmp(module, block: next, a: member, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(next, op: StdOp.condBranch(strandEmpty, thenBlockId: released.id, elseBlockId: sortMember.id))
+	emitBranchOnCompareValues(module, block: next, a: member, pred: StdCmpPred.eq, b: zero, whenTrue: released, whenFalse: sortMember, ids: ids)
 	emitConstReturn(module, block: released, value: 0, ids: ids)
 
 	emitBranchOnCompare(module, block: sortMember, value: member, pred: StdCmpPred.eq, against: GtProcessorHandedOff, whenTrue: handedOffProc, whenFalse: run, ids: ids)
@@ -6225,8 +6199,7 @@ function buildGtRunStrand(module StdModule, target Target)
 	module.setTerminator(run, op: StdOp.condBranch(completed, thenBlockId: finished.id, elseBlockId: parked.id))
 
 	let lockedHere = emitLoadField(module, block: finished, record: m, offset: MOffLockedGt, ids: ids)
-	let ranItsPinnedThread = emitCmp(module, block: finished, a: lockedHere, b: member, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(finished, op: StdOp.condBranch(ranItsPinnedThread, thenBlockId: dropPin.id, elseBlockId: reapMember.id))
+	emitBranchOnCompareValues(module, block: finished, a: lockedHere, pred: StdCmpPred.eq, b: member, whenTrue: dropPin, whenFalse: reapMember, ids: ids)
 
 	emitGtReleasePin(module, block: dropPin, gt: member, m: m, ids: ids)
 	module.setTerminator(dropPin, op: StdOp.branch(reapMember.id))
@@ -6342,8 +6315,7 @@ function buildGtStackShrink(module StdModule, target Target)
 	let size = emitLoadField(module, block: entry, record: gt, offset: GtOffStackSize, ids: ids)
 	let top = emitBin(module, block: entry, a: emitLoadField(module, block: entry, record: gt, offset: GtOffStackBase, ids: ids), b: size, opcode: StdBinOpcode.add, ids: ids)
 	let used = emitBin(module, block: entry, a: top, b: emitLoadField(module, block: entry, record: gt, offset: GtOffSp, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
-	let isDeeper = emitCmp(module, block: entry, a: used, b: emitLoadField(module, block: entry, record: gt, offset: GtOffStackHighWater, ids: ids), pred: StdCmpPred.gt, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(isDeeper, thenBlockId: deeper.id, elseBlockId: marks.id))
+	emitBranchOnCompareValues(module, block: entry, a: used, pred: StdCmpPred.gt, b: emitLoadField(module, block: entry, record: gt, offset: GtOffStackHighWater, ids: ids), whenTrue: deeper, whenFalse: marks, ids: ids)
 
 	emitStoreField(module, block: deeper, record: gt, offset: GtOffStackHighWater, value: used)
 	module.setTerminator(deeper, op: StdOp.branch(marks.id))
@@ -6360,8 +6332,7 @@ function buildGtStackShrink(module StdModule, target Target)
 	let slack = emitConst(module, block: measure, value: gtStackGuardHeight(target) + gtStackGuardMargin(target), ids: ids)
 	let needed = emitBin(module, block: measure, a: used, b: slack, opcode: StdBinOpcode.add, ids: ids)
 	let quarter = emitBin(module, block: measure, a: size, b: emitConst(module, block: measure, value: GtStackQuarterShift, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
-	let tooFull = emitCmp(module, block: measure, a: needed, b: quarter, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(measure, op: StdOp.condBranch(tooFull, thenBlockId: keep.id, elseBlockId: window.id))
+	emitBranchOnCompareValues(module, block: measure, a: needed, pred: StdCmpPred.ge, b: quarter, whenTrue: keep, whenFalse: window, ids: ids)
 
 	let now = emitGtNowNs(module, block: window, ids: ids)
 	let age = emitBin(module, block: window, a: now, b: emitLoadField(module, block: window, record: gt, offset: GtOffStackResizedAt, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
@@ -6430,8 +6401,7 @@ function emitGtStackClassOf(module StdModule, func IrFunction, cur IrBlock, foun
 	let shift = ids.mint()
 	header.blockArgs.push(IrBlockArg.create(shift, argType: StdType.i64))
 	let bytes = emitBin(module, block: header, a: emitConst(module, block: header, value: 1, ids: ids), b: shift, opcode: StdBinOpcode.shl, ids: ids)
-	let holds = emitCmp(module, block: header, a: bytes, b: size, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(header, op: StdOp.condBranch(holds, thenBlockId: found.id, elseBlockId: step.id))
+	emitBranchOnCompareValues(module, block: header, a: bytes, pred: StdCmpPred.ge, b: size, whenTrue: found, whenFalse: step, ids: ids)
 
 	let nextShift = emitBin(module, block: step, a: shift, b: emitConst(module, block: step, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids)
 	module.setTerminator(step, op: StdOp.branch(header.id))
@@ -6500,8 +6470,7 @@ function buildGtStackAlloc(module StdModule)
 	let cursor = emitLoadField(module, block: carve, record: pool, offset: GtStackPoolCursorOffset, ids: ids)
 	let limit = emitLoadField(module, block: carve, record: pool, offset: GtStackPoolLimitOffset, ids: ids)
 	let pastCarve = emitBin(module, block: carve, a: cursor, b: sized.bytes, opcode: StdBinOpcode.add, ids: ids)
-	let fits = emitCmp(module, block: carve, a: pastCarve, b: limit, pred: StdCmpPred.le, ids: ids)
-	module.setTerminator(carve, op: StdOp.condBranch(fits, thenBlockId: carved.id, elseBlockId: newChunk.id))
+	emitBranchOnCompareValues(module, block: carve, a: pastCarve, pred: StdCmpPred.le, b: limit, whenTrue: carved, whenFalse: newChunk, ids: ids)
 	carve.branchEdges.push(BranchEdge.create(carved.id, argIds: twoArgs(cursor, second: pastCarve)))
 
 	let chunkBytes = emitConst(module, block: newChunk, value: GtStackPoolChunkBytes, ids: ids)
@@ -7957,8 +7926,7 @@ export function emitSubpRequireHandle(module StdModule, func IrFunction, ids Val
 
 	let slotGeneration = emitLoadField(module, block: sameGeneration, record: slot, offset: SubpSlotGeneration, ids: ids)
 	let handleGeneration = emitSubpHandleGeneration(module, block: sameGeneration, ids: ids, handle: handle)
-	let stale = emitCmp(module, block: sameGeneration, a: slotGeneration, b: handleGeneration, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(sameGeneration, op: StdOp.condBranch(stale, thenBlockId: whenBad.id, elseBlockId: good.id))
+	emitBranchOnCompareValues(module, block: sameGeneration, a: slotGeneration, pred: StdCmpPred.ne, b: handleGeneration, whenTrue: whenBad, whenFalse: good, ids: ids)
 
 	return good
 end 'emitSubpRequireHandle'
@@ -9247,8 +9215,7 @@ function buildSubpSpawn(module StdModule, commandShape SubprocessCommandShape)
 
 	let ci = ids.mint()
 	copyHdr.blockArgs.push(IrBlockArg.create(ci, argType: StdType.i64))
-	let atCopyEnd = emitCmp(module, block: copyHdr, a: ci, b: cmdLen, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(copyHdr, op: StdOp.condBranch(atCopyEnd, thenBlockId: afterCopy.id, elseBlockId: copyBody.id))
+	emitBranchOnCompareValues(module, block: copyHdr, a: ci, pred: StdCmpPred.ge, b: cmdLen, whenTrue: afterCopy, whenFalse: copyBody, ids: ids)
 
 	let srcAddr = emitBin(module, block: copyBody, a: cmdBuffer, b: ci, opcode: StdBinOpcode.add, ids: ids)
 	let srcByte = ids.mint()
@@ -9512,8 +9479,7 @@ function emitSubpTopUpStream(module StdModule, func IrFunction, ids ValueMinter,
 	let bufCapC = emitLoadField(module, block: cur, record: streamPtr, offset: SubpStreamBufCap, ids: ids)
 	let chunkConst = emitConst(module, block: cur, value: SubpReadChunkBytes as FullRangeInt, ids: ids)
 	let needed = emitBin(module, block: cur, a: bufLenC, b: chunkConst, opcode: StdBinOpcode.add, ids: ids)
-	let tooSmall = emitCmp(module, block: cur, a: needed, b: bufCapC, pred: StdCmpPred.gt, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(tooSmall, thenBlockId: doGrow.id, elseBlockId: doRead.id))
+	emitBranchOnCompareValues(module, block: cur, a: needed, pred: StdCmpPred.gt, b: bufCapC, whenTrue: doGrow, whenFalse: doRead, ids: ids)
 
 	// doGrow: newCap = needed*2 ; copy the buffered bytes into the fresh buffer (PRESERVE) ; update ptr + cap.
 	let twoConst = emitConst(module, block: doGrow, value: 2, ids: ids)
@@ -9540,8 +9506,7 @@ function emitSubpTopUpStream(module StdModule, func IrFunction, ids ValueMinter,
 	let nRead = ids.mint()
 	module.appendOp(doRead, op: StdOp.call(nRead, callee: SubpYieldReadName, args: fourArgs(readEnd, second: readDst, third: chunkConst2, fourth: bytesOutPtr)))
 	let genOnResume = emitLoadField(module, block: doRead, record: streamPtr, offset: genOffFromStream, ids: ids)
-	let slotReused = emitCmp(module, block: doRead, a: genOnResume, b: genAtPark, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(doRead, op: StdOp.condBranch(slotReused, thenBlockId: whenStale.id, elseBlockId: readDone.id))
+	emitBranchOnCompareValues(module, block: doRead, a: genOnResume, pred: StdCmpPred.ne, b: genAtPark, whenTrue: whenStale, whenFalse: readDone, ids: ids)
 
 	// readDone: the slot is still ours. A failed read must publish NOTHING — added to `bufLen` its negative
 	// count would drive the length past the bytes the buffer holds, and every later reader of this stream
@@ -9670,8 +9635,7 @@ function buildSubpReadLine(module StdModule, name ByteArray, streamBase ByteOffs
 	let i = ids.mint()
 	scanHdr.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
 	let bufLenH = emitLoadField(module, block: scanHdr, record: streamPtr, offset: SubpStreamBufLen, ids: ids)
-	let atEnd = emitCmp(module, block: scanHdr, a: i, b: bufLenH, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(scanHdr, op: StdOp.condBranch(atEnd, thenBlockId: noNewline.id, elseBlockId: scanCheck.id))
+	emitBranchOnCompareValues(module, block: scanHdr, a: i, pred: StdCmpPred.ge, b: bufLenH, whenTrue: noNewline, whenFalse: scanCheck, ids: ids)
 
 	let bufPtrC = emitLoadField(module, block: scanCheck, record: streamPtr, offset: SubpStreamBufPtr, ids: ids)
 	let byteAddr = emitBin(module, block: scanCheck, a: bufPtrC, b: i, opcode: StdBinOpcode.add, ids: ids)
@@ -9800,8 +9764,7 @@ function buildSubpReadExact(module StdModule, streamState EnumLayout)
 	// wantCheck: enough buffered → hand back exactly `want`. `want == 0` satisfies this on the first pass,
 	// which is what makes a zero-byte request cost no system call.
 	let bufLenW = emitLoadField(module, block: wantCheck, record: streamPtr, offset: SubpStreamBufLen, ids: ids)
-	let haveEnough = emitCmp(module, block: wantCheck, a: bufLenW, b: want, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(wantCheck, op: StdOp.condBranch(haveEnough, thenBlockId: takeWant.id, elseBlockId: eofCheck.id))
+	emitBranchOnCompareValues(module, block: wantCheck, a: bufLenW, pred: StdCmpPred.ge, b: want, whenTrue: takeWant, whenFalse: eofCheck, ids: ids)
 
 	let resultWant = emitSubpTakeFromStream(module, block: takeWant, ids: ids, streamPtr: streamPtr, takeLen: want)
 	module.setTerminator(takeWant, op: StdOp.ret(resultWant))
@@ -9897,8 +9860,7 @@ function buildSubpWriteLine(module StdModule)
 	module.setTerminator(live, op: StdOp.branch(growCheck.id))
 
 	let writeCap = emitLoadField(module, block: growCheck, record: slot, offset: SubpSlotWriteCap, ids: ids)
-	let tooSmall = emitCmp(module, block: growCheck, a: needed, b: writeCap, pred: StdCmpPred.gt, ids: ids)
-	module.setTerminator(growCheck, op: StdOp.condBranch(tooSmall, thenBlockId: doGrow.id, elseBlockId: doWrite.id))
+	emitBranchOnCompareValues(module, block: growCheck, a: needed, pred: StdCmpPred.gt, b: writeCap, whenTrue: doGrow, whenFalse: doWrite, ids: ids)
 
 	let twoConst = emitConst(module, block: doGrow, value: 2, ids: ids)
 	let newCap = emitBin(module, block: doGrow, a: needed, b: twoConst, opcode: StdBinOpcode.mul, ids: ids)

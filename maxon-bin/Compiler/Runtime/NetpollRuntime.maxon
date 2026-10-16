@@ -422,8 +422,7 @@ function buildNetpollPoll(module StdModule, target Target)
 	module.setTerminator(counted, op: StdOp.branch(entryHdr.id))
 	counted.branchEdges.push(BranchEdge.create(entryHdr.id, argIds: argsOf(firstIndex)))
 
-	let walked = emitCmp(module, block: entryHdr, a: index, b: count, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(entryHdr, op: StdOp.condBranch(walked, thenBlockId: doneBlock.id, elseBlockId: entryBody.id))
+	emitBranchOnCompareValues(module, block: entryHdr, a: index, pred: StdCmpPred.ge, b: count, whenTrue: doneBlock, whenFalse: entryBody, ids: ids)
 
 	let stride = emitConst(module, block: entryBody, value: layout.entryBytes as FullRangeInt, ids: ids)
 	let entryAddr = emitBin(module, block: entryBody, a: entries, b: emitBin(module, block: entryBody, a: index, b: stride, opcode: StdBinOpcode.mul, ids: ids), opcode: StdBinOpcode.add, ids: ids)
@@ -937,8 +936,7 @@ function emitNetpollSettleHold(module StdModule, func IrFunction, cur IrBlock, g
 
 	emitBranchOnCompare(module, block: notWoken, value: held, pred: StdCmpPred.eq, against: ended, whenTrue: unwoken, whenFalse: notEnded, ids: ids)
 
-	let isSelf = emitCmp(module, block: notEnded, a: held, b: emitLoadCurrentGt(module, block: notEnded, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(notEnded, op: StdOp.condBranch(isSelf, thenBlockId: stillPublished.id, elseBlockId: lost.id))
+	emitBranchOnCompareValues(module, block: notEnded, a: held, pred: StdCmpPred.eq, b: emitLoadCurrentGt(module, block: notEnded, ids: ids), whenTrue: stillPublished, whenFalse: lost, ids: ids)
 	emitRuntimeAbort(module, func: func, block: stillPublished, abort: RuntimeAbort.netpollUnhookMissed, ids: ids)
 	emitRuntimeAbort(module, func: func, block: lost, abort: RuntimeAbort.netpollHoldLost, ids: ids)
 end 'emitNetpollSettleHold'
@@ -1070,8 +1068,7 @@ function buildNetpollPdAdopt(module StdModule)
 
 	emitSchedLockEnter(module, block: indexed, ids: ids)
 	let capBefore = emitLoadGlobalWord(module, block: indexed, label: NetpollPdCapLabel, ids: ids)
-	let tooSmall = emitCmp(module, block: indexed, a: fd, b: capBefore, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(indexed, op: StdOp.condBranch(tooSmall, thenBlockId: growPick.id, elseBlockId: haveSlot.id))
+	emitBranchOnCompareValues(module, block: indexed, a: fd, pred: StdCmpPred.ge, b: capBefore, whenTrue: growPick, whenFalse: haveSlot, ids: ids)
 
 	// Where the doubling starts: the seed for a table that does not exist yet, the current capacity otherwise.
 	emitBranchOnCompare(module, block: growPick, value: capBefore, pred: StdCmpPred.eq, against: 0, whenTrue: growSeed, whenFalse: growHdr, ids: ids)
@@ -1086,8 +1083,7 @@ function buildNetpollPdAdopt(module StdModule)
 	// untouched.
 	let candidate = ids.mint()
 	growHdr.blockArgs.push(IrBlockArg.create(candidate, argType: StdType.i64))
-	let fits = emitCmp(module, block: growHdr, a: candidate, b: fd, pred: StdCmpPred.gt, ids: ids)
-	module.setTerminator(growHdr, op: StdOp.condBranch(fits, thenBlockId: growDo.id, elseBlockId: growNext.id))
+	emitBranchOnCompareValues(module, block: growHdr, a: candidate, pred: StdCmpPred.gt, b: fd, whenTrue: growDo, whenFalse: growNext, ids: ids)
 
 	let doubled = emitBin(module, block: growNext, a: candidate, b: emitConst(module, block: growNext, value: 2, ids: ids), opcode: StdBinOpcode.mul, ids: ids)
 	module.setTerminator(growNext, op: StdOp.branch(growHdr.id))
@@ -1413,8 +1409,7 @@ function buildNetpollPdWait(module StdModule)
 	// A deadline already past ends the wait before it begins — the alternative is a park whose timer entry the
 	// next walk fires immediately, which is the same answer for more work.
 	let now = emitGtNowNs(module, block: askClock, ids: ids)
-	let expired = emitCmp(module, block: askClock, a: deadline, b: now, pred: StdCmpPred.le, ids: ids)
-	module.setTerminator(askClock, op: StdOp.condBranch(expired, thenBlockId: lateExit.id, elseBlockId: park.id))
+	emitBranchOnCompareValues(module, block: askClock, a: deadline, pred: StdCmpPred.le, b: now, whenTrue: lateExit, whenFalse: park, ids: ids)
 
 	let parkArg = emitNetpollParkArg(module, block: park, fd: fd, mode: mode, ids: ids)
 	emitStoreField(module, block: park, record: gpp, offset: 0, value: emitConst(module, block: park, value: PdWait, ids: ids))
@@ -1523,8 +1518,7 @@ function buildNetpollPdExpire(module StdModule)
 	let parkedOn = emitNetpollParkedDirection(module, func: func, cur: single, gt: gt, known: look, ids: ids)
 	let gpp = parkedOn.gpp
 	let state = emitLoadField(module, block: look, record: gpp, offset: 0, ids: ids)
-	let ours = emitCmp(module, block: look, a: state, b: gt, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(look, op: StdOp.condBranch(ours, thenBlockId: fire.id, elseBlockId: gone.id))
+	emitBranchOnCompareValues(module, block: look, a: state, pred: StdCmpPred.eq, b: gt, whenTrue: fire, whenFalse: gone, ids: ids)
 	emitConstReturn(module, block: gone, value: WakeDebtNone, ids: ids)
 
 	emitNetpollUnhookExpired(module, block: fire, gpp: gpp, ids: ids)
@@ -1571,8 +1565,7 @@ function buildNetpollPdDrop(module StdModule)
 	let deadline = emitPdDeadline(module, block: look, pd: parkedOn.pd, mode: parkedOn.mode, ids: ids)
 	let gpp = parkedOn.gpp
 	let state = emitLoadField(module, block: look, record: gpp, offset: 0, ids: ids)
-	let ours = emitCmp(module, block: look, a: state, b: gt, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(look, op: StdOp.condBranch(ours, thenBlockId: unhook.id, elseBlockId: disarm.id))
+	emitBranchOnCompareValues(module, block: look, a: state, pred: StdCmpPred.eq, b: gt, whenTrue: unhook, whenFalse: disarm, ids: ids)
 
 	emitNetpollUnhookExpired(module, block: unhook, gpp: gpp, ids: ids)
 	module.setTerminator(unhook, op: StdOp.branch(disarm.id))
@@ -1724,8 +1717,7 @@ function buildNetpollPdWake(module StdModule, target Target)
 
 	emitNetpollWakeGenerationGate(module, block: current, shape: netpollShape(target), key: fd, pd: pd, live: known, stale: doneBlock, noDebt: noDebt, ids: ids)
 
-	let wantsRead = emitCmp(module, block: known, a: readReady, b: zero, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(known, op: StdOp.condBranch(wantsRead, thenBlockId: doRead.id, elseBlockId: afterRead.id))
+	emitBranchOnCompareValues(module, block: known, a: readReady, pred: StdCmpPred.ne, b: zero, whenTrue: doRead, whenFalse: afterRead, ids: ids)
 	known.branchEdges.push(BranchEdge.create(afterRead.id, argIds: argsOf(noDebt)))
 
 	let readDebt = ids.mint()
@@ -1735,8 +1727,7 @@ function buildNetpollPdWake(module StdModule, target Target)
 
 	let debtSoFar = ids.mint()
 	afterRead.blockArgs.push(IrBlockArg.create(debtSoFar, argType: StdType.i64))
-	let wantsWrite = emitCmp(module, block: afterRead, a: writeReady, b: zero, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(afterRead, op: StdOp.condBranch(wantsWrite, thenBlockId: doWrite.id, elseBlockId: afterWrite.id))
+	emitBranchOnCompareValues(module, block: afterRead, a: writeReady, pred: StdCmpPred.ne, b: zero, whenTrue: doWrite, whenFalse: afterWrite, ids: ids)
 	afterRead.branchEdges.push(BranchEdge.create(afterWrite.id, argIds: argsOf(debtSoFar)))
 
 	let writeDebt = ids.mint()
@@ -2771,8 +2762,7 @@ function emitNetpollGroupWalk(module StdModule, func IrFunction, pre IrBlock, hd
 
 	let index = ids.mint()
 	hdr.blockArgs.push(IrBlockArg.create(index, argType: StdType.i64))
-	let atEnd = emitCmp(module, block: hdr, a: index, b: count, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(hdr, op: StdOp.condBranch(atEnd, thenBlockId: exhausted.id, elseBlockId: body.id))
+	emitBranchOnCompareValues(module, block: hdr, a: index, pred: StdCmpPred.ge, b: count, whenTrue: exhausted, whenFalse: body, ids: ids)
 
 	let slot = emitNetpollGroupSlotAddr(module, block: body, group: group, index: index, ids: ids)
 	let arg = emitLoadField(module, block: body, record: slot, offset: GroupSlotArg, ids: ids)
@@ -2930,8 +2920,7 @@ function buildNetpollGroupUnhook(module StdModule)
 	let walk = emitNetpollGroupWalk(module, func: func, pre: entry, hdr: walkHdr, body: walkBody, act: walkAct, exhausted: doneBlock, group: group, count: count, ids: ids)
 
 	let state = emitLoadField(module, block: walkAct, record: walk.member.gpp, offset: 0, ids: ids)
-	let stillOurs = emitCmp(module, block: walkAct, a: state, b: gt, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(walkAct, op: StdOp.condBranch(stillOurs, thenBlockId: unhook.id, elseBlockId: walkNext.id))
+	emitBranchOnCompareValues(module, block: walkAct, a: state, pred: StdCmpPred.eq, b: gt, whenTrue: unhook, whenFalse: walkNext, ids: ids)
 
 	emitStoreField(module, block: unhook, record: walk.member.gpp, offset: 0, value: emitConst(module, block: unhook, value: PdWait, ids: ids))
 	emitNetpollStepWaiters(module, block: unhook, delta: -1, ids: ids)

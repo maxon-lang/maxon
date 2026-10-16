@@ -871,8 +871,7 @@ function buildDsInit(module StdModule, envNameLabel ByteArray)
 	let ourVersion = emitConst(module, block: checkVersion, value: DsSchemaVersion, ids: ids)
 	module.appendOp(checkVersion, op: StdOp.storeIndirect(base, offset: DsOffProducerVersion, valueId: ourVersion, valueType: StdType.i64))
 	let monitorVersion = emitLoadField(module, block: checkVersion, record: base, offset: DsOffVersion, ids: ids)
-	let versionOk = emitCmp(module, block: checkVersion, a: monitorVersion, b: ourVersion, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(checkVersion, op: StdOp.condBranch(versionOk, thenBlockId: attach.id, elseBlockId: dark.id))
+	emitBranchOnCompareValues(module, block: checkVersion, a: monitorVersion, pred: StdCmpPred.eq, b: ourVersion, whenTrue: attach, whenFalse: dark, ids: ids)
 
 	let bufSize = emitLoadField(module, block: attach, record: base, offset: DsOffBufferSize, ids: ids)
 	emitStoreGlobalWord(module, block: attach, label: DsBufSizeLabel, value: bufSize, ids: ids)
@@ -978,8 +977,7 @@ function emitSpaceCheck(module StdModule, block IrBlock, base ValueId, entrySize
 	let used = emitUsedBytes(module, block: block, base: base, ids: ids)
 	let needed = emitBin(module, block: block, a: used, b: entrySize, opcode: StdBinOpcode.add, ids: ids)
 	let bufSize = emitLoadGlobalWord(module, block: block, label: DsBufSizeLabel, ids: ids)
-	let roomy = emitCmp(module, block: block, a: needed, b: bufSize, pred: StdCmpPred.le, ids: ids)
-	module.setTerminator(block, op: StdOp.condBranch(roomy, thenBlockId: fits.id, elseBlockId: dropped.id))
+	emitBranchOnCompareValues(module, block: block, a: needed, pred: StdCmpPred.le, b: bufSize, whenTrue: fits, whenFalse: dropped, ids: ids)
 end 'emitSpaceCheck'
 
 // ============================================================================
@@ -1025,8 +1023,7 @@ function buildDsReserve(module StdModule)
 	// that is about to be dropped still pushed the high-water mark to where it is.
 	let used = emitUsedBytes(module, block: entry, base: base, ids: ids)
 	let peak = emitLoadField(module, block: entry, record: base, offset: DsOffPeakUsed, ids: ids)
-	let higher = emitCmp(module, block: entry, a: used, b: peak, pred: StdCmpPred.gt, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(higher, thenBlockId: raisePeak.id, elseBlockId: checkSpace.id))
+	emitBranchOnCompareValues(module, block: entry, a: used, pred: StdCmpPred.gt, b: peak, whenTrue: raisePeak, whenFalse: checkSpace, ids: ids)
 
 	module.appendOp(raisePeak, op: StdOp.storeIndirect(base, offset: DsOffPeakUsed, valueId: used, valueType: StdType.i64))
 	module.setTerminator(raisePeak, op: StdOp.branch(checkSpace.id))
@@ -1038,8 +1035,7 @@ function buildDsReserve(module StdModule)
 	let bufSize = emitLoadGlobalWord(module, block: checkWrap, label: DsBufSizeLabel, ids: ids)
 	let pos = emitRingPos(module, block: checkWrap, base: base, ids: ids)
 	let posEnd = emitBin(module, block: checkWrap, a: pos, b: entrySize, opcode: StdBinOpcode.add, ids: ids)
-	let noWrap = emitCmp(module, block: checkWrap, a: posEnd, b: bufSize, pred: StdCmpPred.le, ids: ids)
-	module.setTerminator(checkWrap, op: StdOp.condBranch(noWrap, thenBlockId: place.id, elseBlockId: pad.id))
+	emitBranchOnCompareValues(module, block: checkWrap, a: posEnd, pred: StdCmpPred.le, b: bufSize, whenTrue: place, whenFalse: pad, ids: ids)
 
 	// ⭐ THE PADDING ENTRY IS BORN COMMITTED — see `DsPaddingHeaderTypeAndFlags`. Its size is the distance
 	// to the end of the ring, so the entry after it starts at ring offset 0.

@@ -477,8 +477,7 @@ function buildStrToBytes(module StdModule)
 
 	// `>=` against the BYTE length, not `>`: the cursor is the index about to be read, so equality with the
 	// length is already one past the last byte.
-	let atEnd = emitCmp(module, block: header, a: i, b: len, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
+	emitBranchOnCompareValues(module, block: header, a: i, pred: StdCmpPred.ge, b: len, whenTrue: done, whenFalse: body, ids: ids)
 	module.setTerminator(done, op: StdOp.retVoid)
 
 	let raw = emitLoadByteIndexed(module, block: body, base: buf, index: i, ids: ids)

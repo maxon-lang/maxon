@@ -361,8 +361,7 @@ function emitMboxWakeAndUnlock(module StdModule, func IrFunction, cur IrBlock, m
 	let noneParked = emitConst(module, block: cur, value: 0, ids: ids)
 	emitStoreField(module, block: cur, record: mbox, offset: MboxOffParkedGt, value: noneParked)
 	emitMboxLockLeave(module, block: cur, mbox: mbox, ids: ids)
-	let nobodyWaiting = emitCompareWithConstant(module, block: cur, value: parked, pred: StdCmpPred.eq, against: 0, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(nobodyWaiting, thenBlockId: cont.id, elseBlockId: wakeParked.id))
+	emitBranchOnCompare(module, block: cur, value: parked, pred: StdCmpPred.eq, against: 0, whenTrue: cont, whenFalse: wakeParked, ids: ids)
 
 	emitGtReadyParkedService(module, func: func, cur: wakeParked, service: parked, cont: cont, ids: ids)
 	return cont
@@ -501,8 +500,7 @@ function buildMboxRecv(module StdModule)
 
 	let next = emitLoadField(module, block: pop, record: head, offset: ServiceLinkOffset, ids: ids)
 	emitStoreField(module, block: pop, record: mbox, offset: MboxOffHead, value: next)
-	let lastRequest = emitCmp(module, block: pop, a: next, b: noRequest, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(pop, op: StdOp.condBranch(lastRequest, thenBlockId: clearTail.id, elseBlockId: popped.id))
+	emitBranchOnCompareValues(module, block: pop, a: next, pred: StdCmpPred.eq, b: noRequest, whenTrue: clearTail, whenFalse: popped, ids: ids)
 
 	emitStoreField(module, block: clearTail, record: mbox, offset: MboxOffTail, value: noRequest)
 	module.setTerminator(clearTail, op: StdOp.branch(popped.id))

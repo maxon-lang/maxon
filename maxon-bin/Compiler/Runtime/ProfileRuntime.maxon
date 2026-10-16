@@ -350,11 +350,9 @@ function buildProfileSample(module StdModule, layout HostContextLayout)
 	let regionEnd = emitBin(module, block: measureWindow, a: regionBase, b: regionSize, opcode: StdBinOpcode.add, ids: ids)
 	let available = emitBin(module, block: measureWindow, a: regionEnd, b: stackPointer, opcode: StdBinOpcode.sub, ids: ids)
 	emitStoreField(module, block: measureWindow, record: wantPtr, offset: 0, value: available)
-	let aboveTheStackPointer = emitCmp(module, block: measureWindow, a: regionEnd, b: stackPointer, pred: StdCmpPred.gt, ids: ids, operandType: StdType.u64)
-	module.setTerminator(measureWindow, op: StdOp.condBranch(aboveTheStackPointer, thenBlockId: capWindow.id, elseBlockId: resume.id))
+	emitBranchOnCompareValues(module, block: measureWindow, a: regionEnd, pred: StdCmpPred.gt, b: stackPointer, whenTrue: capWindow, whenFalse: resume, ids: ids, operandType: StdType.u64)
 
-	let overTheWindow = emitCmp(module, block: capWindow, a: available, b: windowCap, pred: StdCmpPred.gt, ids: ids, operandType: StdType.u64)
-	module.setTerminator(capWindow, op: StdOp.condBranch(overTheWindow, thenBlockId: capped.id, elseBlockId: copyStack.id))
+	emitBranchOnCompareValues(module, block: capWindow, a: available, pred: StdCmpPred.gt, b: windowCap, whenTrue: capped, whenFalse: copyStack, ids: ids, operandType: StdType.u64)
 
 	emitStoreField(module, block: capped, record: wantPtr, offset: 0, value: windowCap)
 	module.setTerminator(capped, op: StdOp.branch(copyStack.id))

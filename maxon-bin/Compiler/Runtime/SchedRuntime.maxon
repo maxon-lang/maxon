@@ -2695,8 +2695,7 @@ function emitSchedPidleGetLocked(module StdModule, func IrFunction, cur IrBlock,
 
 	if wakesMonitor 'monitorMayBeAsleep'
 		var wakeMonitor = module.addBlock(func, label: b"pidlegetsysmon", heat: BlockHeat.normal)
-		let asleep = emitCompareWithConstant(module, block: taken, value: emitLoadGlobalWord(module, block: taken, label: SchedSysmonWaitLabel, ids: ids), pred: StdCmpPred.ne, against: 0, ids: ids)
-		module.setTerminator(taken, op: StdOp.condBranch(asleep, thenBlockId: wakeMonitor.id, elseBlockId: got.id))
+		emitBranchOnCompare(module, block: taken, value: emitLoadGlobalWord(module, block: taken, label: SchedSysmonWaitLabel, ids: ids), pred: StdCmpPred.ne, against: 0, whenTrue: wakeMonitor, whenFalse: got, ids: ids)
 
 		emitStoreGlobalWord(module, block: wakeMonitor, label: SchedSysmonWaitLabel, value: emitConst(module, block: wakeMonitor, value: 0, ids: ids), ids: ids)
 		module.appendOp(wakeMonitor, op: StdOp.osSetEvent(emitLoadGlobalWord(module, block: wakeMonitor, label: SchedSysmonEventLabel, ids: ids)))
@@ -2940,8 +2939,7 @@ function buildSchedInitProcs(module StdModule, target Target)
 
 	// The bound is `settled`'s block arg rather than a re-read of `__sched_num_procs`: `settled`
 	// dominates this header, and only this function writes the word.
-	let built = emitCmp(module, block: loopHdr, a: iterId, b: numProcs, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(loopHdr, op: StdOp.condBranch(built, thenBlockId: adopt.id, elseBlockId: loopBody.id))
+	emitBranchOnCompareValues(module, block: loopHdr, a: iterId, pred: StdCmpPred.ge, b: numProcs, whenTrue: adopt, whenFalse: loopBody, ids: ids)
 
 	// P[i] = a fresh zeroed struct, plus the four fields a zero would be wrong for.
 	let structBytes = emitConst(module, block: loopBody, value: PStructSize, ids: ids)
@@ -3193,16 +3191,14 @@ function emitResolveMaxProcs(module StdModule, func IrFunction, cur IrBlock, set
 	let read = emitReadSchedEnvValue(module, block: cpuKnown, name: MaxProcsEnvName, capacity: firstCapacity, ids: ids)
 	let valueBuf = ids.mint()
 	parseStart.blockArgs.push(IrBlockArg.create(valueBuf, argType: StdType.i64))
-	let tooLong = emitCmp(module, block: cpuKnown, a: read.written, b: read.capacity, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(cpuKnown, op: StdOp.condBranch(tooLong, thenBlockId: reread.id, elseBlockId: parseStart.id))
+	emitBranchOnCompareValues(module, block: cpuKnown, a: read.written, pred: StdCmpPred.ge, b: read.capacity, whenTrue: reread, whenFalse: parseStart, ids: ids)
 	cpuKnown.branchEdges.push(BranchEdge.create(parseStart.id, argIds: argsOf(read.buf)))
 
 	// A too-small read answers the size the value needs, terminator included, so one re-read at that size
 	// fits unless the environment changed in between.
 	emitSlabFree(module, block: reread, ptr: read.buf, ids: ids)
 	let fullRead = emitReadSchedEnvValue(module, block: reread, name: MaxProcsEnvName, capacity: read.written, ids: ids)
-	let fits = emitCmp(module, block: reread, a: fullRead.written, b: fullRead.capacity, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(reread, op: StdOp.condBranch(fits, thenBlockId: parseStart.id, elseBlockId: unfit.id))
+	emitBranchOnCompareValues(module, block: reread, a: fullRead.written, pred: StdCmpPred.lt, b: fullRead.capacity, whenTrue: parseStart, whenFalse: unfit, ids: ids)
 	reread.branchEdges.push(BranchEdge.create(parseStart.id, argIds: argsOf(fullRead.buf)))
 
 	emitSlabFree(module, block: unfit, ptr: fullRead.buf, ids: ids)
@@ -3290,8 +3286,7 @@ function emitResolvePreemptSwitch(module StdModule, func IrFunction, cur IrBlock
 	let isOff = emitCStringEqualsLiteral(module, block: cur, cstr: read.buf, literal: PreemptEnvOffValue, ids: ids)
 	let isOn = emitCStringEqualsLiteral(module, block: cur, cstr: read.buf, literal: PreemptEnvOnValue, ids: ids)
 	emitSlabFree(module, block: cur, ptr: read.buf, ids: ids)
-	let tooLong = emitCmp(module, block: cur, a: read.written, b: read.capacity, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(tooLong, thenBlockId: unreadable.id, elseBlockId: lengthOk.id))
+	emitBranchOnCompareValues(module, block: cur, a: read.written, pred: StdCmpPred.ge, b: read.capacity, whenTrue: unreadable, whenFalse: lengthOk, ids: ids)
 
 	let zero = emitConst(module, block: lengthOk, value: 0, ids: ids)
 	emitBranchOnCompare(module, block: lengthOk, value: read.written, pred: StdCmpPred.eq, against: 0, whenTrue: settled, whenFalse: isSet, ids: ids)
@@ -3596,8 +3591,7 @@ function buildSchedRunqPut(module StdModule)
 	module.setTerminator(moveLock, op: StdOp.branch(moveHdr.id))
 	moveLock.branchEdges.push(BranchEdge.create(moveHdr.id, argIds: argsOf(moveStart)))
 
-	let moved = emitCmp(module, block: moveHdr, a: moveIndex, b: batchCount, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(moveHdr, op: StdOp.condBranch(moved, thenBlockId: moveDone.id, elseBlockId: moveBody.id))
+	emitBranchOnCompareValues(module, block: moveHdr, a: moveIndex, pred: StdCmpPred.ge, b: batchCount, whenTrue: moveDone, whenFalse: moveBody, ids: ids)
 
 	// ⛔⛔ **A TOMBSTONE IN THE BATCH MOVES LIKE A LIVE THREAD, AND THAT IS NOT A SIMPLIFICATION.** Asking
 	// `emitGtIsDropped` of every slot and calling `__gt_runner_done` on the ones that answered would make that
@@ -3664,8 +3658,7 @@ function buildSchedRunqGet(module StdModule)
 
 	let head = emitLoadAcquireField(module, block: loopHdr, record: p, offset: POffRunqHead, ids: ids)
 	let tail = emitLoadAcquireField(module, block: loopHdr, record: p, offset: POffRunqTail, ids: ids)
-	let empty = emitCmp(module, block: loopHdr, a: head, b: tail, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(loopHdr, op: StdOp.condBranch(empty, thenBlockId: emptyBlock.id, elseBlockId: take.id))
+	emitBranchOnCompareValues(module, block: loopHdr, a: head, pred: StdCmpPred.eq, b: tail, whenTrue: emptyBlock, whenFalse: take, ids: ids)
 
 	let g = emitLoadField(module, block: take, record: emitRunqSlotAddr(module, block: take, p: p, counter: head, ids: ids), offset: 0, ids: ids)
 	let headAddr = emitFieldAddr(module, block: take, record: p, offset: POffRunqHead, ids: ids)
@@ -3746,8 +3739,7 @@ function buildSchedRunqEmpty(module StdModule)
 	let tail = emitLoadAcquireField(module, block: loopHdr, record: p, offset: POffRunqTail, ids: ids)
 	let next = emitLoadAcquireField(module, block: loopHdr, record: p, offset: POffRunnext, ids: ids)
 	let tailAgain = emitLoadAcquireField(module, block: loopHdr, record: p, offset: POffRunqTail, ids: ids)
-	let tailMoved = emitCmp(module, block: loopHdr, a: tailAgain, b: tail, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(loopHdr, op: StdOp.condBranch(tailMoved, thenBlockId: loopHdr.id, elseBlockId: settled.id))
+	emitBranchOnCompareValues(module, block: loopHdr, a: tailAgain, pred: StdCmpPred.ne, b: tail, whenTrue: loopHdr, whenFalse: settled, ids: ids)
 
 	let ringEmpty = emitCmp(module, block: settled, a: head, b: tail, pred: StdCmpPred.eq, ids: ids)
 	let slotEmpty = emitCompareWithConstant(module, block: settled, value: next, pred: StdCmpPred.eq, against: 0, ids: ids)
@@ -3880,8 +3872,7 @@ function buildSchedSteal(module StdModule)
 	// shape this exists for is a thread that readies a peer into the slot and blocks an instant later: without
 	// the pause a thief takes the peer in that window and the pair is thrashed between processors for as long
 	// as it bounces. A victim NO machine holds cannot be about to run it, so there is nothing to wait for.
-	let victimRunning = emitCompareWithConstant(module, block: slotBusy, value: emitLoadField(module, block: slotBusy, record: victim, offset: POffStatus, ids: ids), pred: StdCmpPred.eq, against: PStatusActive, ids: ids)
-	module.setTerminator(slotBusy, op: StdOp.condBranch(victimRunning, thenBlockId: slotBackoff.id, elseBlockId: slotTake.id))
+	emitBranchOnCompare(module, block: slotBusy, value: emitLoadField(module, block: slotBusy, record: victim, offset: POffStatus, ids: ids), pred: StdCmpPred.eq, against: PStatusActive, whenTrue: slotBackoff, whenFalse: slotTake, ids: ids)
 
 	_ = emitNetpoll(module, block: slotBackoff, verb: NetpollVerb.shortSleep, operands: argsOf(emitConst(module, block: slotBackoff, value: StealRunNextBackoffUs, ids: ids)), ids: ids)
 	module.setTerminator(slotBackoff, op: StdOp.branch(slotTake.id))
@@ -3903,8 +3894,7 @@ function buildSchedSteal(module StdModule)
 	module.setTerminator(sized, op: StdOp.condBranch(inconsistent, thenBlockId: grabHdr.id, elseBlockId: copyHdr.id))
 	sized.branchEdges.push(BranchEdge.create(copyHdr.id, argIds: argsOf(copyStart)))
 
-	let copied = emitCmp(module, block: copyHdr, a: copyIndex, b: grabCount, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(copyHdr, op: StdOp.condBranch(copied, thenBlockId: commit.id, elseBlockId: copyBody.id))
+	emitBranchOnCompareValues(module, block: copyHdr, a: copyIndex, pred: StdCmpPred.ge, b: grabCount, whenTrue: commit, whenFalse: copyBody, ids: ids)
 
 	// The slot read is PLAIN, and that is the pair working rather than a hole in it: it follows the acquire of
 	// the victim's head and tail, which is what makes the slot store those counters announce visible, and
@@ -4963,8 +4953,7 @@ function buildSchedFindRunnable(module StdModule)
 	batchSized.branchEdges.push(BranchEdge.create(batchPublish.id, argIds: argsOf(batchSizedZero)))
 	batchSized.branchEdges.push(BranchEdge.create(batchHdr.id, argIds: argsOf(batchSizedZero)))
 
-	let batchFull = emitCmp(module, block: batchHdr, a: batchCount, b: batchCap, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(batchHdr, op: StdOp.condBranch(batchFull, thenBlockId: batchPublish.id, elseBlockId: batchTake.id))
+	emitBranchOnCompareValues(module, block: batchHdr, a: batchCount, pred: StdCmpPred.ge, b: batchCap, whenTrue: batchPublish, whenFalse: batchTake, ids: ids)
 	batchHdr.branchEdges.push(BranchEdge.create(batchPublish.id, argIds: argsOf(batchCount)))
 
 	let batchGt = ids.mint()
@@ -5002,8 +4991,7 @@ function buildSchedFindRunnable(module StdModule)
 	//
 	// `spinGate` dominates the two blocks that enter the rounds, so one first-round index serves both.
 	let firstRound = emitConst(module, block: spinGate, value: 0, ids: ids)
-	let alreadySpinning = emitCompareWithConstant(module, block: spinGate, value: emitLoadField(module, block: spinGate, record: spinner, offset: MOffSpinning, ids: ids), pred: StdCmpPred.eq, against: MSpinningHeld, ids: ids)
-	module.setTerminator(spinGate, op: StdOp.condBranch(alreadySpinning, thenBlockId: roundHdr.id, elseBlockId: spinCap.id))
+	emitBranchOnCompare(module, block: spinGate, value: emitLoadField(module, block: spinGate, record: spinner, offset: MOffSpinning, ids: ids), pred: StdCmpPred.eq, against: MSpinningHeld, whenTrue: roundHdr, whenFalse: spinCap, ids: ids)
 	spinGate.branchEdges.push(BranchEdge.create(roundHdr.id, argIds: argsOf(firstRound)))
 
 	// The unlocked read of `__sched_npidle` that `MultiMSharing.underSchedLock` enumerates, beside the plain load
@@ -5035,13 +5023,11 @@ function buildSchedFindRunnable(module StdModule)
 	roundHdr.branchEdges.push(BranchEdge.create(candidate.id, argIds: twoArgs(giveUp, second: freshSlice)))
 	roundHdr.branchEdges.push(BranchEdge.create(victimHdr.id, argIds: argsOf(giveUp)))
 
-	let victimsDone = emitCmp(module, block: victimHdr, a: victimIndex, b: numProcs, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(victimHdr, op: StdOp.condBranch(victimsDone, thenBlockId: roundNext.id, elseBlockId: victimTest.id))
+	emitBranchOnCompareValues(module, block: victimHdr, a: victimIndex, pred: StdCmpPred.ge, b: numProcs, whenTrue: roundNext, whenFalse: victimTest, ids: ids)
 
 	let victimSlot = emitUnsignedMod(module, block: victimTest, a: emitBin(module, block: victimTest, a: victimStart, b: victimIndex, opcode: StdBinOpcode.add, ids: ids), b: numProcs, ids: ids)
 	let victim = emitLoadProc(module, block: victimTest, index: victimSlot, ids: ids)
-	let isSelf = emitCmp(module, block: victimTest, a: victim, b: p, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(victimTest, op: StdOp.condBranch(isSelf, thenBlockId: victimNext.id, elseBlockId: victimActive.id))
+	emitBranchOnCompareValues(module, block: victimTest, a: victim, pred: StdCmpPred.eq, b: p, whenTrue: victimNext, whenFalse: victimActive, ids: ids)
 
 	// A P no M has claimed has an empty ring by construction, and reading it would be a load for nothing.
 	let victimStatus = emitLoadField(module, block: victimActive, record: victim, offset: POffStatus, ids: ids)
@@ -5134,8 +5120,7 @@ function buildSchedAnyWork(module StdModule)
 	module.setTerminator(entry, op: StdOp.condBranch(globalHasWork, thenBlockId: found.id, elseBlockId: loopHdr.id))
 	entry.branchEdges.push(BranchEdge.create(loopHdr.id, argIds: argsOf(firstProc)))
 
-	let walked = emitCmp(module, block: loopHdr, a: index, b: numProcs, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(loopHdr, op: StdOp.condBranch(walked, thenBlockId: none.id, elseBlockId: loopBody.id))
+	emitBranchOnCompareValues(module, block: loopHdr, a: index, pred: StdCmpPred.ge, b: numProcs, whenTrue: none, whenFalse: loopBody, ids: ids)
 
 	let p = emitLoadProc(module, block: loopBody, index: index, ids: ids)
 	let status = emitLoadField(module, block: loopBody, record: p, offset: POffStatus, ids: ids)
@@ -5426,8 +5411,7 @@ function buildSchedArenaCarve(module StdModule)
 	let cursor = emitLoadGlobalWord(module, block: entry, label: SchedArenaCursorLabel, ids: ids)
 	let limit = emitLoadGlobalWord(module, block: entry, label: SchedArenaLimitLabel, ids: ids)
 	let pastCarve = emitBin(module, block: entry, a: cursor, b: bytes, opcode: StdBinOpcode.add, ids: ids)
-	let fits = emitCmp(module, block: entry, a: pastCarve, b: limit, pred: StdCmpPred.le, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(fits, thenBlockId: carved.id, elseBlockId: newChunk.id))
+	emitBranchOnCompareValues(module, block: entry, a: pastCarve, pred: StdCmpPred.le, b: limit, whenTrue: carved, whenFalse: newChunk, ids: ids)
 	entry.branchEdges.push(BranchEdge.create(carved.id, argIds: twoArgs(cursor, second: pastCarve)))
 
 	let chunkBytes = emitConst(module, block: newChunk, value: SchedArenaChunkBytes, ids: ids)
@@ -5497,8 +5481,7 @@ function buildSchedPerProcSum(module StdModule, name ByteArray, offset ByteOffse
 	// `__sched_num_procs` is 0 until `__sched_init_procs` has run, which answers 0 for a program that asks
 	// before its first `async` — the truthful answer, and the reason the walk needs no separate null test on
 	// `__sched_procs`.
-	let walked = emitCmp(module, block: loopHdr, a: index, b: numProcs, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(loopHdr, op: StdOp.condBranch(walked, thenBlockId: doneBlock.id, elseBlockId: loopBody.id))
+	emitBranchOnCompareValues(module, block: loopHdr, a: index, pred: StdCmpPred.ge, b: numProcs, whenTrue: doneBlock, whenFalse: loopBody, ids: ids)
 
 	let countedHere = emitLoadField(module, block: loopBody, record: emitLoadProc(module, block: loopBody, index: index, ids: ids), offset: offset, ids: ids)
 	let runningTotal = emitBin(module, block: loopBody, a: total, b: countedHere, opcode: StdBinOpcode.add, ids: ids)
@@ -6401,8 +6384,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	emitStoreReleaseGlobalWord(module, block: publishDeadline, label: SchedPollUntilLabel, value: deadline, ids: ids)
 	emitSchedLockLeave(module, block: publishDeadline, ids: ids)
 	let pollStart = emitGtNowNs(module, block: publishDeadline, ids: ids)
-	let alreadyDue = emitCmp(module, block: publishDeadline, a: deadline, b: pollStart, pred: StdCmpPred.le, ids: ids)
-	module.setTerminator(publishDeadline, op: StdOp.condBranch(alreadyDue, thenBlockId: polled.id, elseBlockId: pollWait.id))
+	emitBranchOnCompareValues(module, block: publishDeadline, a: deadline, pred: StdCmpPred.le, b: pollStart, whenTrue: polled, whenFalse: pollWait, ids: ids)
 
 	// ⭐ **THE ONE BLOCKING WAIT OF AN IDLE PROCESS**, rounded UP to the millisecond so it cannot end short of the
 	// deadline and cost a second wait for the remainder, and capped at `PollerMaxWaitMs`.
@@ -6842,8 +6824,7 @@ function emitSchedRaiseHighWater(module StdModule, func IrFunction, cur IrBlock,
 	var raise = module.addBlock(func, label: b"whiwater", heat: BlockHeat.normal)
 
 	let mark = emitLoadGlobalWord(module, block: cur, label: SchedMaxActiveWorkersLabel, ids: ids)
-	let higher = emitCmp(module, block: cur, a: live, b: mark, pred: StdCmpPred.gt, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(higher, thenBlockId: raise.id, elseBlockId: cont.id))
+	emitBranchOnCompareValues(module, block: cur, a: live, pred: StdCmpPred.gt, b: mark, whenTrue: raise, whenFalse: cont, ids: ids)
 	emitStoreGlobalWord(module, block: raise, label: SchedMaxActiveWorkersLabel, value: live, ids: ids)
 	module.setTerminator(raise, op: StdOp.branch(cont.id))
 end 'emitSchedRaiseHighWater'
@@ -7216,8 +7197,7 @@ function buildSchedRetake(module StdModule)
 
 	emitConstReturn(module, block: switchedOff, value: 0, ids: ids)
 
-	let walked = emitCmp(module, block: loopHdr, a: index, b: numProcs, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(loopHdr, op: StdOp.condBranch(walked, thenBlockId: doneBlock.id, elseBlockId: askProc.id))
+	emitBranchOnCompareValues(module, block: loopHdr, a: index, pred: StdCmpPred.ge, b: numProcs, whenTrue: doneBlock, whenFalse: askProc, ids: ids)
 
 	// Every arm below that declines carries the running count through this block arg. Only `rttook` supplies a
 	// different one, which is what makes the count a fact about what this pass DID rather than about how far it
@@ -7235,8 +7215,7 @@ function buildSchedRetake(module StdModule)
 	// tick is one this processor really had, so it can only delay a request by a lap.
 	let tick = emitLoadField(module, block: haveMachine, record: proc, offset: POffSchedTick, ids: ids)
 	let tickSeen = emitLoadField(module, block: haveMachine, record: proc, offset: POffSysmonTick, ids: ids)
-	let tickMoved = emitCmp(module, block: haveMachine, a: tick, b: tickSeen, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(haveMachine, op: StdOp.condBranch(tickMoved, thenBlockId: noteTick.id, elseBlockId: sameStrand.id))
+	emitBranchOnCompareValues(module, block: haveMachine, a: tick, pred: StdCmpPred.ne, b: tickSeen, whenTrue: noteTick, whenFalse: sameStrand, ids: ids)
 
 	// The syscall arm's one block argument: 1 when this pass has just asked the processor's thread to yield.
 	let sysRetake = ids.mint()
@@ -7314,8 +7293,7 @@ function buildSchedRetake(module StdModule)
 	// machine inside a call touches `MOffCurrentP` at neither of its two writers (`emitSchedAdoptProc`,
 	// `emitSchedReleaseProcLocked`), both of which run outside one.
 	let heldProc = emitLoadField(module, block: oldEnough, record: machine, offset: MOffCurrentP, ids: ids)
-	let elsewhere = emitCmp(module, block: oldEnough, a: heldProc, b: proc, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(oldEnough, op: StdOp.condBranch(elsewhere, thenBlockId: nextProc.id, elseBlockId: claimIt.id))
+	emitBranchOnCompareValues(module, block: oldEnough, a: heldProc, pred: StdCmpPred.ne, b: proc, whenTrue: nextProc, whenFalse: claimIt, ids: ids)
 	oldEnough.branchEdges.push(BranchEdge.create(nextProc.id, argIds: argsOf(taken)))
 
 	// ⭐⭐⭐ **THE LINEARIZATION POINT, AND IT CAS-es THE EXACT WORD THIS PASS MEASURED.** `stateNow` carries
@@ -7487,12 +7465,10 @@ function buildGtPreemptSafe(module StdModule, target Target)
 	emitBranchOnCompare(module, block: unlocked, value: depth, pred: StdCmpPred.ne, against: 0, whenTrue: notSafe, whenFalse: aboveFloor, ids: ids)
 
 	let floor = emitBin(module, block: aboveFloor, a: stackBase, b: emitConst(module, block: aboveFloor, value: gtAsyncPreemptFloor(target), ids: ids), opcode: StdBinOpcode.add, ids: ids)
-	let tooLow = emitCmp(module, block: aboveFloor, a: sp, b: floor, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(aboveFloor, op: StdOp.condBranch(tooLow, thenBlockId: notSafe.id, elseBlockId: inStack.id))
+	emitBranchOnCompareValues(module, block: aboveFloor, a: sp, pred: StdCmpPred.lt, b: floor, whenTrue: notSafe, whenFalse: inStack, ids: ids)
 
 	let top = emitBin(module, block: inStack, a: stackBase, b: emitLoadField(module, block: inStack, record: gt, offset: GtOffStackSize, ids: ids), opcode: StdBinOpcode.add, ids: ids)
-	let offTheStack = emitCmp(module, block: inStack, a: sp, b: top, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(inStack, op: StdOp.condBranch(offTheStack, thenBlockId: notSafe.id, elseBlockId: inText.id))
+	emitBranchOnCompareValues(module, block: inStack, a: sp, pred: StdCmpPred.ge, b: top, whenTrue: notSafe, whenFalse: inText, ids: ids)
 
 	// `__symtable` closes `.text` and `mrt_start` opens it, so the pair bounds the code exactly — the same
 	// two addresses every backtrace walk bounds itself by.
@@ -7756,8 +7732,7 @@ function buildSysmon(module StdModule, target Target)
 	_ = emitNetpoll(module, block: nap, verb: NetpollVerb.sleepOnTimer, operands: twoArgs(delayUs, second: timer), ids: ids)
 	emitSchedLockEnter(module, block: nap, ids: ids)
 	let idleProcs = emitLoadGlobalWord(module, block: nap, label: SchedNpidleLabel, ids: ids)
-	let allIdle = emitCmp(module, block: nap, a: idleProcs, b: emitLoadGlobalWord(module, block: nap, label: SchedNumProcsLabel, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(nap, op: StdOp.condBranch(allIdle, thenBlockId: deepSleep.id, elseBlockId: awake.id))
+	emitBranchOnCompareValues(module, block: nap, a: idleProcs, pred: StdCmpPred.eq, b: emitLoadGlobalWord(module, block: nap, label: SchedNumProcsLabel, ids: ids), whenTrue: deepSleep, whenFalse: awake, ids: ids)
 
 	// The flag goes up inside the lock `pidleget` reads it under, so a processor taken after this hold finds it
 	// raised and signals, and one taken before it is visible in the count this hold just read. The event is
@@ -8147,8 +8122,7 @@ function emitSchedRegainUnlinkLocked(module StdModule, func IrFunction, cur IrBl
 	var cleared = module.addBlock(func, label: b"rgnunlinkclear", heat: BlockHeat.normal)
 
 	let head = emitLoadGlobalWord(module, block: cur, label: SchedRegainHeadLabel, ids: ids)
-	let isHead = emitCmp(module, block: cur, a: head, b: m, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(isHead, thenBlockId: unlinkHead.id, elseBlockId: walkHdr.id))
+	emitBranchOnCompareValues(module, block: cur, a: head, pred: StdCmpPred.eq, b: m, whenTrue: unlinkHead, whenFalse: walkHdr, ids: ids)
 	cur.branchEdges.push(BranchEdge.create(walkHdr.id, argIds: argsOf(head)))
 
 	let after = emitLoadField(module, block: unlinkHead, record: m, offset: MOffRegainNext, ids: ids)
@@ -8162,8 +8136,7 @@ function emitSchedRegainUnlinkLocked(module StdModule, func IrFunction, cur IrBl
 	emitRuntimeAbort(module, func: func, block: lost, abort: RuntimeAbort.schedulerRegainWaiterLost, ids: ids)
 
 	let next = emitLoadField(module, block: walkStep, record: prev, offset: MOffRegainNext, ids: ids)
-	let found = emitCmp(module, block: walkStep, a: next, b: m, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(walkStep, op: StdOp.condBranch(found, thenBlockId: unlinkInner.id, elseBlockId: walkHdr.id))
+	emitBranchOnCompareValues(module, block: walkStep, a: next, pred: StdCmpPred.eq, b: m, whenTrue: unlinkInner, whenFalse: walkHdr, ids: ids)
 	walkStep.branchEdges.push(BranchEdge.create(walkHdr.id, argIds: argsOf(next)))
 
 	emitStoreField(module, block: unlinkInner, record: prev, offset: MOffRegainNext, value: emitLoadField(module, block: unlinkInner, record: m, offset: MOffRegainNext, ids: ids))

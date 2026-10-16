@@ -546,8 +546,7 @@ export function emitRouteOnVouchedTerminatorSlot(module StdModule, func IrFuncti
 	var checkInline = module.addBlock(func, label: b"vouchinline", heat: BlockHeat.normal)
 	var checkImmortal = module.addBlock(func, label: b"vouchimmortal", heat: BlockHeat.normal)
 
-	let hasSpareSlot = emitCmp(module, block: cur, a: capacity, b: length, pred: StdCmpPred.gt, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(hasSpareSlot, thenBlockId: vouched.id, elseBlockId: checkRdata.id))
+	emitBranchOnCompareValues(module, block: cur, a: capacity, pred: StdCmpPred.gt, b: length, whenTrue: vouched, whenFalse: checkRdata, ids: ids)
 
 	emitRouteOnCapacitySentinel(module, block: checkRdata, capacity: capacity, sentinel: RdataBufferCapacity, whenIt: vouched, otherwise: checkInline, ids: ids)
 	emitRouteOnCapacitySentinel(module, block: checkInline, capacity: capacity, sentinel: InlineBufferCapacity, whenIt: vouched, otherwise: checkImmortal, ids: ids)

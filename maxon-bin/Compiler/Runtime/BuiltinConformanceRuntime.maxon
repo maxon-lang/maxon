@@ -684,8 +684,7 @@ function buildBuiltinEquals(module StdModule, name ByteArray, operandType StdTyp
 	let receiver = 0
 	let other = 1
 
-	let isEqual = emitCmp(module, block: entry, a: receiver, b: other, pred: StdCmpPred.eq, ids: ids, operandType: operandType)
-	module.setTerminator(entry, op: StdOp.condBranch(isEqual, thenBlockId: equalBlock.id, elseBlockId: notEqualBlock.id))
+	emitBranchOnCompareValues(module, block: entry, a: receiver, pred: StdCmpPred.eq, b: other, whenTrue: equalBlock, whenFalse: notEqualBlock, ids: ids, operandType: operandType)
 
 	emitConstReturn(module, block: equalBlock, value: PredicateTrue, ids: ids)
 	emitConstReturn(module, block: notEqualBlock, value: PredicateFalse, ids: ids)
@@ -696,8 +695,7 @@ end 'buildBuiltinEquals'
 // One `a <pred> b` test terminating `block` into two successors — the fused `cmp`+`jcc` every compare impl
 // is built out of. Its result is read ONLY by the branch, so the backend materializes no register for it.
 function emitOrderingTest(module StdModule, block IrBlock, a ValueId, b ValueId, pred StdCmpPred, operandType StdType, thenBlock IrBlock, elseBlock IrBlock, ids ValueMinter)
-	let verdict = emitCmp(module, block: block, a: a, b: b, pred: pred, ids: ids, operandType: operandType)
-	module.setTerminator(block, op: StdOp.condBranch(verdict, thenBlockId: thenBlock.id, elseBlockId: elseBlock.id))
+	emitBranchOnCompareValues(module, block: block, a: a, pred: pred, b: b, whenTrue: thenBlock, whenFalse: elseBlock, ids: ids, operandType: operandType)
 end 'emitOrderingTest'
 
 // ⭐ A block that RETURNS one `Ordering` case's tag — the exit every compare impl's verdict paths land on.
@@ -1014,8 +1012,7 @@ function emitDjb2HashOverByteRange(module StdModule, func IrFunction, cur IrBloc
 	cur.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(iSeed, second: hSeed)))
 
 	// header: `i >= len` ⇒ every byte folded in ⇒ out to `done`; else fold `buffer[i]`.
-	let atEnd = emitCmp(module, block: header, a: i, b: len, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
+	emitBranchOnCompareValues(module, block: header, a: i, pred: StdCmpPred.ge, b: len, whenTrue: done, whenFalse: body, ids: ids)
 
 	// body: `h = h * 33 + buffer[i]`; `i = i + 1`; back-edge. `i`/`h` are the header phis (header dominates
 	// body), so they are read directly.

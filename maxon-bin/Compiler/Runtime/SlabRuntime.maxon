@@ -1868,8 +1868,7 @@ function buildSlabRefill(module StdModule, model MachineModel)
 	// registration per page and a memzero, to arrive at what was just thrown away. Reclamation belongs to
 	// the spans nobody is about to use, which is `__slab_scavenge`'s walk and the only road to it.
 	let partial = emitLoadField(module, block: popPartial, record: mcentralSlot, offset: 0, ids: ids)
-	let noPartial = emitCmp(module, block: popPartial, a: partial, b: none, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(popPartial, op: StdOp.condBranch(noPartial, thenBlockId: grow.id, elseBlockId: takePartial.id))
+	emitBranchOnCompareValues(module, block: popPartial, a: partial, pred: StdCmpPred.eq, b: none, whenTrue: grow, whenFalse: takePartial, ids: ids)
 
 	let following = emitLoadField(module, block: takePartial, record: partial, offset: MspanNextSpanOffset, ids: ids)
 	emitStoreField(module, block: takePartial, record: mcentralSlot, offset: 0, value: following)
@@ -2014,8 +2013,7 @@ function emitSlabAllocClass(module StdModule, func IrFunction, cur IrBlock, clas
 	//
 	// ⭐ **IT IS ALSO WHERE TWO OS THREADS SHARING ONE mcache ROW SURFACE**: both pop the same span's
 	// cursor and one runs past the end — exit 86 here rather than a fault somewhere downstream.
-	let exhausted = emitCmp(module, block: virgin, a: bumpNext, b: bumpEnd, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(virgin, op: StdOp.condBranch(exhausted, thenBlockId: pastEnd.id, elseBlockId: handOut.id))
+	emitBranchOnCompareValues(module, block: virgin, a: bumpNext, pred: StdCmpPred.ge, b: bumpEnd, whenTrue: pastEnd, whenFalse: handOut, ids: ids)
 
 	emitRuntimeAbort(module, func: func, block: pastEnd, abort: RuntimeAbort.slabSpanExhaustedPastItsEnd, ids: ids)
 
@@ -2084,8 +2082,7 @@ function emitSlabProbe(module StdModule, func IrFunction, cur IrBlock, mcacheSlo
 	emitBranchOnCompare(module, block: depleted, value: freeCount, pred: StdCmpPred.eq, against: 0, whenTrue: miss, whenFalse: owned, ids: ids)
 
 	let owner = emitLoadAcquireField(module, block: owned, record: cached, offset: MspanOwningPOffset, ids: ids)
-	let mine = emitCmp(module, block: owned, a: owner, b: myP, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(owned, op: StdOp.condBranch(mine, thenBlockId: hit.id, elseBlockId: miss.id))
+	emitBranchOnCompareValues(module, block: owned, a: owner, pred: StdCmpPred.eq, b: myP, whenTrue: hit, whenFalse: miss, ids: ids)
 	owned.branchEdges.push(BranchEdge.create(hit.id, argIds: argsOf(cached)))
 end 'emitSlabProbe'
 
@@ -2502,8 +2499,7 @@ function buildSlabScavenge(module StdModule, model MachineModel)
 	let spanGeom = emitClassGeometry(module, block: spanBody, classIdx: classIdx, ids: ids)
 	let spanSlots = emitGeomTotalSlots(module, block: spanBody, geom: spanGeom, ids: ids)
 	let spanFree = emitLoadField(module, block: spanBody, record: span, offset: MspanFreeCountOffset, ids: ids)
-	let idle = emitCmp(module, block: spanBody, a: spanFree, b: spanSlots, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(spanBody, op: StdOp.condBranch(idle, thenBlockId: destroy.id, elseBlockId: keepSpan.id))
+	emitBranchOnCompareValues(module, block: spanBody, a: spanFree, pred: StdCmpPred.eq, b: spanSlots, whenTrue: destroy, whenFalse: keepSpan, ids: ids)
 
 	// A span still holding live slots goes back on the rebuilt list, still `Partial`.
 	emitStoreField(module, block: keepSpan, record: span, offset: MspanNextSpanOffset, value: kept)
@@ -2800,8 +2796,7 @@ function buildSlabFree(module StdModule, model MachineModel)
 	// THE COMMON ONE IN EVERY OTHER.** The two sentinels below it are a state a span is in once per cycle,
 	// and `Freed` is a program error; putting either ahead of the ownership test would pay a compare on
 	// every free to reach a case almost no free takes.
-	let isMine = emitCmp(module, block: notRaw, a: owner, b: myP, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(notRaw, op: StdOp.condBranch(isMine, thenBlockId: local.id, elseBlockId: mine.id))
+	emitBranchOnCompareValues(module, block: notRaw, a: owner, pred: StdCmpPred.eq, b: myP, whenTrue: local, whenFalse: mine, ids: ids)
 
 	emitBranchOnCompare(module, block: mine, value: owner, pred: StdCmpPred.eq, against: SpanOwnerState.full.rawValue, whenTrue: uncached, whenFalse: notDead, ids: ids)
 

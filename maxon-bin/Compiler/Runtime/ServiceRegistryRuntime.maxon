@@ -502,11 +502,9 @@ function buildRegistryServiceReplace(module StdModule, released ByteArray)
 
 	let held = emitLockedSlotHandle(module, block: entry, slot: slot, ids: ids)
 	var live = emitHeldOrPanic(module, func: func, block: entry, held: held, released: released, holdsSchedLock: true, ids: ids)
-	let sameMailbox = emitCmp(module, block: live, a: emitLoadField(module, block: live, record: held, offset: ServiceHandleMailboxOffset, ids: ids), b: emitLoadField(module, block: live, record: expected, offset: ServiceHandleMailboxOffset, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(live, op: StdOp.condBranch(sameMailbox, thenBlockId: compareTable.id, elseBlockId: decline.id))
+	emitBranchOnCompareValues(module, block: live, a: emitLoadField(module, block: live, record: held, offset: ServiceHandleMailboxOffset, ids: ids), pred: StdCmpPred.eq, b: emitLoadField(module, block: live, record: expected, offset: ServiceHandleMailboxOffset, ids: ids), whenTrue: compareTable, whenFalse: decline, ids: ids)
 
-	let sameTable = emitCmp(module, block: compareTable, a: emitLoadField(module, block: compareTable, record: held, offset: InterfaceHandleTableOffset, ids: ids), b: emitLoadField(module, block: compareTable, record: expected, offset: InterfaceHandleTableOffset, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(compareTable, op: StdOp.condBranch(sameTable, thenBlockId: swap.id, elseBlockId: decline.id))
+	emitBranchOnCompareValues(module, block: compareTable, a: emitLoadField(module, block: compareTable, record: held, offset: InterfaceHandleTableOffset, ids: ids), pred: StdCmpPred.eq, b: emitLoadField(module, block: compareTable, record: expected, offset: InterfaceHandleTableOffset, ids: ids), whenTrue: swap, whenFalse: decline, ids: ids)
 
 	emitStoreField(module, block: swap, record: slot, offset: SharedValueHolderCellOffset, value: handle)
 	emitSchedLockLeave(module, block: swap, ids: ids)
