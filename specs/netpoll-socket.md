@@ -1616,7 +1616,7 @@ reset=true served greeted=true
 ```maxon
 typealias HeldCount = int(0 to 256)
 
-let HeldLimit = 256 as HeldCount
+let HeldLimit = 256
 let DescriptorLimit = "ulimit -n 64 && exec \"$0\" child"
 let RanOut = "ran-out"
 

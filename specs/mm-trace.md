@@ -699,7 +699,7 @@ typealias Integer = int(i64.min to i64.max)
 mm_alloc Counter #1 size=8
 mm_alloc Counter.handle #2 size=8
 mm_alloc tag=0 #3 size=8
-mm_alloc Counter.request #4 size=16
+mm_alloc Counter.request #4 size=24
 mm_decref tag=0 #3 rc=0
 mm_free tag=0 #3
 mm_decref Counter.handle #2 rc=0
