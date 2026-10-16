@@ -1275,6 +1275,31 @@ The contended single-mailbox workloads gain most on x64-windows and arm64-macos:
 shared-counter 35% and 22%. coroutine-churn gains 4%, 22% and 7% on x64-windows, arm64-macos and arm64-linux and holds on x64-linux. On arm64-linux, fan-in and shared-counter
 at `P = N` regressed 16% and 17%, with CPU 4.39 → 4.65 and 1.96 → 2.32.
 
+**2026-10-16 — THE RUNTIME LOCK IS GO'S EXACTLY: GO 1.27'S arm64 procyield, Xchg8 FAST PATHS ON GO'S KEY LAYOUT,
+LSE ATOMICS ON arm64, AND A LINUX EVENT THAT WAKES ONLY AN ANNOUNCED SLEEPER (144b354df, R7b). A RUNTIME row,
+four lanes, against 971e5932d.**
+
+| workload | P | x64-windows | x64-linux | arm64-macos | arm64-linux |
+|---|---|---|---|---|---|
+| ping-pong | 1 | 0.84 → 0.83 | 0.83 → 0.82 | 1.10 → 1.07 | 1.12 → 1.11 |
+| ping-pong | N | 1.10 → 1.09 | 0.95 → 0.95 | 1.34 → 1.27 | 1.28 → 1.29 |
+| thread-ring | N | 0.54 → 0.54 | 0.58 → 0.58 | 0.58 → 0.54 | 1.44 → 1.41 |
+| spawn-many | N | 3.74 → 3.71 | 5.00 → 4.70 | 5.09 → 4.47 | 1.59 → **1.81** |
+| fan-in | 1 | 1.65 → **1.70** | 1.98 → **2.05** | 1.45 → 1.28 | 1.38 → 1.26 |
+| fan-in | N | 1.35 → **0.79** | 1.70 → 1.25 | 1.17 → **0.52** | 2.73 → 1.10 |
+| shared-counter | 1 | 5.67 → 5.73 | 6.94 → **7.20** | 9.94 → 8.74 | 10.37 → 9.42 |
+| shared-counter | N | 4.63 → 2.71 | 3.11 → 2.28 | 0.99 → **0.43** | 1.73 → **0.69** |
+| coroutine-churn | 1 | 2.61 → 2.62 | 1.32 → **1.38** | 0.63 → **0.68** | 0.57 → **0.60** |
+| worker-pool | 1 | 1.00 → 1.00 | 1.00 → 1.00 | 1.00 → 1.00 | 0.99 → 1.02 |
+
+The contended single-mailbox workloads at `P = N` gain on every lane: fan-in falls 41%, 26%, 56% and 60% on
+x64-windows, x64-linux, arm64-macos and arm64-linux, and shared-counter 42%, 27%, 57% and 60%. fan-in now runs
+faster than Go on x64-windows and arm64-macos, and shared-counter on both arm64 lanes. CPU follows wall: fan-in
+2.44 → 0.99 and 3.49 → 2.29 on the x64 lanes, 5.38 → 0.99 on arm64-linux. The arm64-linux regression R7 change 1
+left at `P = N` is gone. coroutine-churn at `P = 1` regressed 5%, 8% and 5% on x64-linux, arm64-macos and
+arm64-linux and holds on x64-windows. fan-in at `P = 1` regressed 3% on both x64 lanes while it gained 9–12% on
+arm64. spawn-many at `P = N` on arm64-linux regressed 14%, with CPU 1.97 → 1.70.
+
 ## Bugs this uncovered
 
 Removing the dummy exposed a leak it had been half-hiding, and the leak in turn exposed a hole in the

@@ -787,3 +787,59 @@ metric (wall, CPU = user + kernel, peak working set); `arm` names the compiler (
 | 2026-10-16 | 355305c2c | dirty | orb | shared-counter | 200000 | 1 | 3 | 33 | 309 | 9.42 | 9.48 | 292.57 | slot | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
 | 2026-10-16 | 355305c2c | dirty | orb | shared-counter | 200000 | 7 | 3 | 453 | 782 | 1.73 | 2.34 | 222.36 | ref@971e5932d | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
 | 2026-10-16 | 355305c2c | dirty | orb | shared-counter | 200000 | 7 | 3 | 453 | 312 | 0.69 | 0.41 | 203.64 | slot | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | windows | thread-ring | 3000000 | 1 | 3 | 340 | 565 | 1.66 | 1.64 | 0.86 | ref@971e5932d | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | windows | thread-ring | 3000000 | 1 | 3 | 340 | 556 | 1.63 | 1.59 | 0.86 | slot | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | windows | thread-ring | 3000000 | 12 | 3 | 1,570 | 853 | 0.54 | 0.10 | 0.80 | ref@971e5932d | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | windows | thread-ring | 3000000 | 12 | 3 | 1,570 | 855 | 0.54 | 0.09 | 0.80 | slot | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | windows | ping-pong | 1000000 | 1 | 3 | 360 | 302 | 0.84 | 0.83 | 0.70 | ref@971e5932d | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | windows | ping-pong | 1000000 | 1 | 3 | 360 | 300 | 0.83 | 0.87 | 0.70 | slot | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | windows | ping-pong | 1000000 | 12 | 3 | 483 | 529 | 1.10 | 1.12 | 0.70 | ref@971e5932d | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | windows | ping-pong | 1000000 | 12 | 3 | 483 | 528 | 1.09 | 1.10 | 0.69 | slot | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | windows | fan-in | 100000 | 1 | 3 | 275 | 453 | 1.65 | 1.61 | 49.86 | ref@971e5932d | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | windows | fan-in | 100000 | 1 | 3 | 275 | 468 | 1.70 | 1.67 | 50.23 | slot | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | windows | fan-in | 100000 | 12 | 3 | 967 | 1,301 | 1.35 | 2.44 | 42.10 | ref@971e5932d | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | windows | fan-in | 100000 | 12 | 3 | 967 | 764 | 0.79 | 0.99 | 42.02 | slot | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | windows | worker-pool | 6000 250000 | 1 | 3 | 2,121 | 2,121 | 1.00 | 0.99 | 1.29 | ref@971e5932d | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | windows | worker-pool | 6000 250000 | 1 | 3 | 2,121 | 2,118 | 1.00 | 1.00 | 1.29 | slot | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | windows | worker-pool | 6000 250000 | 12 | 3 | 198 | 212 | 1.07 | 1.04 | 1.13 | ref@971e5932d | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | windows | worker-pool | 6000 250000 | 12 | 3 | 198 | 209 | 1.05 | 1.06 | 1.13 | slot | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | windows | spawn-many | 200000 | 1 | 3 | 249 | 1,032 | 4.14 | 3.94 | 6.59 | ref@971e5932d | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | windows | spawn-many | 200000 | 1 | 3 | 249 | 1,018 | 4.09 | 4.06 | 6.59 | slot | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | windows | spawn-many | 200000 | 12 | 3 | 57 | 211 | 3.74 | 3.58 | 6.39 | ref@971e5932d | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | windows | spawn-many | 200000 | 12 | 3 | 57 | 210 | 3.71 | 3.08 | 6.38 | slot | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | windows | coroutine-churn | 200000 | 1 | 3 | 344 | 899 | 2.61 | 2.64 | 4.47 | ref@971e5932d | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | windows | coroutine-churn | 200000 | 1 | 3 | 344 | 902 | 2.62 | 2.64 | 4.47 | slot | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | windows | coroutine-churn | 200000 | 12* | 3 | 344 | 914 | 2.66 | 2.55 | 4.38 | ref@971e5932d | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | windows | coroutine-churn | 200000 | 12* | 3 | 344 | 898 | 2.61 | 2.64 | 4.38 | slot | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | windows | shared-counter | 200000 | 1 | 3 | 162 | 920 | 5.67 | 5.80 | 99.19 | ref@971e5932d | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | windows | shared-counter | 200000 | 1 | 3 | 162 | 931 | 5.73 | 5.80 | 100.10 | slot | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | windows | shared-counter | 200000 | 12 | 3 | 573 | 2,653 | 4.63 | 4.84 | 82.23 | ref@971e5932d | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | windows | shared-counter | 200000 | 12 | 3 | 573 | 1,551 | 2.71 | 2.06 | 82.37 | slot | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | wsl | thread-ring | 3000000 | 1 | 3 | 356 | 557 | 1.57 | 1.57 | 1.32 | ref@971e5932d | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | wsl | thread-ring | 3000000 | 1 | 3 | 356 | 551 | 1.55 | 1.55 | 1.32 | slot | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | wsl | thread-ring | 3000000 | 12 | 3 | 1,037 | 605 | 0.58 | 0.21 | 1.07 | ref@971e5932d | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | wsl | thread-ring | 3000000 | 12 | 3 | 1,037 | 606 | 0.58 | 0.21 | 1.11 | slot | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | wsl | ping-pong | 1000000 | 1 | 3 | 364 | 303 | 0.83 | 0.83 | 0.21 | ref@971e5932d | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | wsl | ping-pong | 1000000 | 1 | 3 | 364 | 299 | 0.82 | 0.82 | 0.21 | slot | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | wsl | ping-pong | 1000000 | 12 | 3 | 359 | 343 | 0.95 | 0.96 | 0.19 | ref@971e5932d | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | wsl | ping-pong | 1000000 | 12 | 3 | 359 | 342 | 0.95 | 0.95 | 0.25 | slot | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | wsl | fan-in | 100000 | 1 | 3 | 273 | 541 | 1.98 | 1.97 | 148.81 | ref@971e5932d | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | wsl | fan-in | 100000 | 1 | 3 | 273 | 559 | 2.05 | 2.04 | 148.62 | slot | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | wsl | fan-in | 100000 | 12 | 3 | 669 | 1,136 | 1.70 | 3.49 | 130.06 | ref@971e5932d | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | wsl | fan-in | 100000 | 12 | 3 | 669 | 837 | 1.25 | 2.29 | 130.41 | slot | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | wsl | worker-pool | 6000 250000 | 1 | 3 | 2,131 | 2,130 | 1.00 | 1.00 | 2.00 | ref@971e5932d | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | wsl | worker-pool | 6000 250000 | 1 | 3 | 2,131 | 2,139 | 1.00 | 1.00 | 2.00 | slot | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | wsl | worker-pool | 6000 250000 | 12 | 3 | 192 | 210 | 1.10 | 1.05 | 1.82 | ref@971e5932d | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | wsl | worker-pool | 6000 250000 | 12 | 3 | 192 | 221 | 1.15 | 1.06 | 1.82 | slot | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | wsl | spawn-many | 200000 | 1 | 3 | 171 | 490 | 2.87 | 2.90 | 5.69 | ref@971e5932d | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | wsl | spawn-many | 200000 | 1 | 3 | 171 | 472 | 2.76 | 2.78 | 5.69 | slot | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | wsl | spawn-many | 200000 | 12 | 3 | 50 | 252 | 5.00 | 5.97 | 10.42 | ref@971e5932d | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | wsl | spawn-many | 200000 | 12 | 3 | 50 | 236 | 4.70 | 5.39 | 10.43 | slot | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | wsl | coroutine-churn | 200000 | 1 | 3 | 251 | 331 | 1.32 | 1.32 | 2.75 | ref@971e5932d | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | wsl | coroutine-churn | 200000 | 1 | 3 | 251 | 348 | 1.38 | 1.38 | 2.75 | slot | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | wsl | coroutine-churn | 200000 | 12* | 3 | 250 | 339 | 1.36 | 1.36 | 2.73 | ref@971e5932d | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | wsl | coroutine-churn | 200000 | 12* | 3 | 250 | 333 | 1.33 | 1.34 | 2.73 | slot | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | wsl | shared-counter | 200000 | 1 | 3 | 155 | 1,073 | 6.94 | 6.97 | 297.50 | ref@971e5932d | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | wsl | shared-counter | 200000 | 1 | 3 | 155 | 1,113 | 7.20 | 7.22 | 297.56 | slot | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | wsl | shared-counter | 200000 | 12 | 3 | 725 | 2,258 | 3.11 | 3.19 | 243.17 | ref@971e5932d | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
+| 2026-10-16 | e574e973a | dirty | wsl | shared-counter | 200000 | 12 | 3 | 725 | 1,656 | 2.28 | 2.09 | 247.56 | slot | R7b: Go-exact lock (procyield, Xchg8, LSE, event word) |
