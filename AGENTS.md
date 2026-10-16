@@ -3,8 +3,8 @@ progress, and not related to it, is noted and landed right after that change (`/
 
 Do not use "cmd /c" to run commands
 
-Do not use heredocs. Write a file with the file-writing tool, and pass prose to a command from a file
-(`git commit -F <path>`) rather than inline. A heredoc breaks on the punctuation real prose contains.
+Do not use heredocs or here-strings (a hook refuses them): write the text with the file-writing tool and
+pass the file (`git commit -F <path>`).
 
 There are no time constraints. Complexity doesn't matter. If you are fixing an issue then fix it properly. No workarounds.
 
