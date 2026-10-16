@@ -156,7 +156,7 @@ feeding a gate that is going to run anyway beats a run nobody can attribute.
 >   also the spec harness — runs the new runtime. `maxon run build` does the second build itself, and
 >   prints why; `MAXON_SECOND_STAGE=1` on that `run build` stops it at one.
 > - **A run already done on the same binary and tree is READ, not repeated.** Agents write every build
->   and run to a file under `temp/` and report its path and exit code; you read that file. Re-run only
+>   and run to a file in their scratchpad directory and report its path and exit code; you read that file. Re-run only
 >   when something it depended on has changed since.
 > - **Every edit comes before the expensive runs, never beside them.** An edit to a compiled-in source
 >   after a run started invalidates that run. So the battery starts only once no agent can still edit:
@@ -181,7 +181,8 @@ feeding a gate that is going to run anyway beats a run nobody can attribute.
 6. **The gate table above**, in one line: which runs are yours, which are not.
 7. **"No manual tests"** — no sabotage, no hand-run probe or scratch program to confirm anything. A
    check worth running goes into the set as a case; anything else is not run (the box below).
-8. **"Write every build and run to a file under `temp/`, and report each one's path and exit code"** —
+8. **"Write every build and run to a file in your scratchpad directory, and report each one's path and
+   exit code"** —
    including your LAST build, and whether you edited a compiled-in source after it. That report is what
    lets the coordinator read your work instead of repeating it.
 
@@ -511,7 +512,7 @@ during changes; a battery run before the rebase measured a tree that no longer e
 | **Build** exit 0 | **Only if stale** — §6 built last, so this is stale only if the rebase moved a compiled-in source. A current binary is not rebuilt: the SELF-COMPILE below is the one build of it the battery runs. The exception is emitted runtime: when the slot was built with `MAXON_SECOND_STAGE=1` since the change, run `maxon run build` again now, without it, before the suite rows — it builds twice |
 | **Full `run_spec_test`** | **`failed: 0`**, and no exit **101**. The gate is zero failures *including every pre-existing test*, never a total |
 | **`run_spec_test target=wasm32-wasi`** | `failed: 0`. Default battery, not an extra (user ruling, 2026-08-29) |
-| **SELF-COMPILE** — `./maxon-bin/.maxon/maxon build maxon-bin --output=temp/land-selfcompile --rebuild` | exit 0 and its last stdout line is `Compiled -> <path>`: `--rebuild` is what makes the build compile rather than report an earlier compile up to date, about a minute. Output discarded; only the exit code and that line matter |
+| **SELF-COMPILE** — `./maxon-bin/.maxon/maxon build maxon-bin --output=temp/land/selfcompile --rebuild` | exit 0 and its last stdout line is `Compiled -> <path>`: `--rebuild` is what makes the build compile rather than report an earlier compile up to date, about a minute. Output discarded; only the exit code and that line matter |
 | **The tree corpora** — `./maxon-bin/.maxon/maxon test` on `tests/fmt`, `tests/spec-harness`, `tests/ladders`, `tests/examples` and `tests/emitted-runtime` | each `0 fail`, and read each count. These are the formatter's engine corpus, the spec harness's own refusals and gates, the ladder index, every program under `examples/` plus the snippets the website teaches, compiled and run against their known answers, and the acquire/release ordering gates on the scheduler words the emitted runtime shares between threads — tree-level gates `spec-test` does not run. CI runs all five on every lane |
 | **The multicore stress programs** — `bash scripts/multicore-stress/compile-all.sh` | exit 0 and `ALL CHECKS PASSED`: every torture program under `scripts/multicore-stress/` builds, and each `REFUSED_PROGRAMS` entry is refused with its declared code as its only error. CI runs it on every lane |
 | **Documentation** — `node website/scripts/sync-docs.mjs --check` | exit 0 — §6 regenerated the pages but ran no check, so this is where they are gated. And for a user-visible change, each doc-coverage gate its surface owns (`./maxon-bin/.maxon/maxon test tests/cli --filter=reference-documents`, `tests/mcp --filter=reference-documents`, `tests/docs`): `0 fail`. A change with nothing user-visible states that instead. ⚠ A red here after a new diagnostic means §6 did not write the registry doc comment |
@@ -557,6 +558,8 @@ measure** — a number nobody took looks exactly like one that was.
 ```bash
 git push origin main
 ```
+
+Once the push is accepted, delete `temp/land/` and every other `temp/` directory this change created.
 
 ⛔ **A REJECTED PUSH IS NOT A RETRY.** Someone landed while you were running, so the tree you tested is
 not the tree you would push: **rebase and RE-RUN §8** before pushing again.

@@ -390,9 +390,9 @@ Two things precede the build. Both cost seconds, and both catch what a build can
 2. **Mechanical code-identity proof.** ⚠ The baseline is NOT `HEAD` — the file already differs from it.
    Snapshot every file in scope before the pass, then compare the two stripped of comments:
    ```
-   sed 's://.*::; s/[[:space:]]*$//' <snapshot> | grep -v '^$' > temp/doc-a
-   sed 's://.*::; s/[[:space:]]*$//' <file>     | grep -v '^$' > temp/doc-b
-   diff temp/doc-a temp/doc-b        # MUST be empty
+   sed 's://.*::; s/[[:space:]]*$//' <snapshot> | grep -v '^$' > <scratchpad>/doc-a
+   sed 's://.*::; s/[[:space:]]*$//' <file>     | grep -v '^$' > <scratchpad>/doc-b
+   diff <scratchpad>/doc-a <scratchpad>/doc-b        # MUST be empty
    ```
    ⚠ **The `grep -v '^$'` is load-bearing** — stripping a comment-only line leaves a blank one, so a
    correct DELETE would otherwise show in the diff and force you to explain away a failure you should

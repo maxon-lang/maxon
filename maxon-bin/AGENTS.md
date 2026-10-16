@@ -331,9 +331,8 @@ across code. What it cannot see is stated on `contentChange`. Run it with `maxon
 ## ⚠ Running a suite by hand: REDIRECT IT TO A FILE. Never pipe through `head`/`tail`/`grep`.
 
 ```
-mkdir -p temp
-./maxon-bin/.maxon/maxon.exe spec-test > temp/spec.log 2>&1; echo "exit=$?"
-grep -n '^FAIL' temp/spec.log
+./maxon-bin/.maxon/maxon.exe spec-test > <scratchpad>/spec.log 2>&1; echo "exit=$?"
+grep -n '^FAIL' <scratchpad>/spec.log
 ```
 
 Then **read the file** at each hit for the full reason. **A pipe decides what to keep before you know
@@ -343,7 +342,8 @@ stderr, so the marker line is a headline, not the evidence.
 
 Do not assume the console is small: **the runner prints one line per test (thousands of them) and only
 then the summary**, with failures wherever those tests fall in declaration order — `tail` shows PASS lines
-while the reason sits thousands of lines above. `temp/` is gitignored. The MCP tools need none of this.
+while the reason sits thousands of lines above. `<scratchpad>` is the scratchpad directory your system
+prompt names (root `AGENTS.md`). The MCP tools need none of this.
 
 ⚠ **THE SUITE RUNS EVERY TEST BINARY WITH CWD `temp/`**, so that directory is shared with anything
 else you put there. Stage a binary you must keep somewhere else.

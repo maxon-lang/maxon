@@ -6,6 +6,14 @@ Do not use "cmd /c" to run commands
 Do not use heredocs or here-strings (a hook refuses them): write the text with the file-writing tool and
 pass the file (`git commit -F <path>`).
 
+**Nothing an agent makes for itself goes in the workspace.** Logs, a file's backup before an edit, diffs,
+commit messages and notes go in the scratchpad directory your system prompt names, which is outside the
+repository; without one, in a directory of your own under the system temp directory. **The exception is
+a compiler binary**, and a project staged for one: `stdlib/` is found by walking up from the executable,
+so it must sit inside the tree. It goes under `temp/<task>/` — one directory per task, never a loose
+file at the top of `temp/` — and that directory is deleted when the task is finished. A SessionStart
+hook deletes any `temp/` entry untouched for three days.
+
 There are no time constraints. Complexity doesn't matter. If you are fixing an issue then fix it properly. No workarounds.
 
 ## Where the rules live
