@@ -232,10 +232,10 @@ export enum RuntimeAbort
 	schedulerDeadlock = 92
 
 	// `__gt_register_park`: the park note carries a kind it does not register. `GtRuntime`'s
-	// `GtParkKind.timer` / `GtParkKind.netpoll` / `GtParkKind.netpollAny` / `GtParkKind.mailbox` /
+	// `GtParkKind.timer` / `GtParkKind.netpoll` / `GtParkKind.netpollAny` /
 	// `GtParkKind.awaitPromise` / `GtParkKind.awaitAny` / `GtParkKind.quiesce` are the kinds it
-	// registers, and `GtParkKind.yielded` and `GtParkKind.preempt` are placed by the strand runner and
-	// never reach it — so any other value is a COMPILER bug rather than a program's, and it is silent
+	// registers, and `GtParkKind.yielded` and `GtParkKind.preempt` are placed and `GtParkKind.mailbox`
+	// committed by the strand runner and never reach it — so any other value is a COMPILER bug rather than a program's, and it is silent
 	// without this: the thread would be suspended having been registered on NO store at all, which is
 	// a hang three functions away from its cause. It is a separate code from `schedulerDeadlock`
 	// above, this registry's founding rule: a runtime that cannot register a park and a scheduler that
@@ -248,8 +248,8 @@ export enum RuntimeAbort
 	// ⛔⛔ `__gt_promise_drop`: a PROMISE named a green thread parked in `__mbox_recv`. Its `waiting` road
 	// deregisters the timer, process and in-flight-read stores and there is nothing anywhere that clears
 	// `mbox.parkedGt` but the waker's own store, so falling through it would free a thread the mailbox still
-	// points at — after which the next `__mbox_send` writes `ready` into freed memory and publishes a freed
-	// GT. It is a COMPILER bug rather than a program's: a service's reply cell is a promise but runs
+	// points at — after which the next `__mbox_send` writes its request into freed memory and publishes a
+	// freed GT. It is a COMPILER bug rather than a program's: a service's reply cell is a promise but runs
 	// nothing (`funcPtr == 0`), and `__mbox_recv`'s only callers are inside `<T>.__loop`, whose green
 	// thread no promise names — `buildGtPromiseDrop` re-derives that at the site.
 	//

@@ -299,17 +299,21 @@ let GtOffCoroTail = GtOffCoroHead + PointerFieldBytes
 // finished saving its registers: between the registration and that save it is discoverable *while still
 // executing on its own stack*, so a second M can fire its timer and resume it onto a stale SP — two Ms on one
 // stack. So `__gt_park` writes what the thread wants here and switches; the strand runner reads the note on
-// the far side of the switch (`__gt_run_strand`) and registers the park through `__gt_register_park`.
+// the far side of the switch (`__gt_run_strand`) and registers the park through `__gt_register_park`, or
+// commits a mailbox park itself (`GtParkKind.mailbox`).
 //
-// ⚠ A NOTE, NOT A STATE: it is read only by the strand runner right after the switch it describes, so it is
-// never cleared. `__gt_promise_drop` also reads the kind of a thread it found `waiting`, which is the kind the
-// thread parked with.
+// ⚠ The kind is A NOTE, NOT A STATE: it is read only by the strand runner right after the switch it
+// describes, so it is never cleared. `__gt_promise_drop` also reads the kind of a thread it found `waiting`,
+// which is the kind the thread parked with.
 //
 // EXPORTED because `NetpollRuntime` reads it to tell a park on ONE source from a park on several: the two
 // carry different things in `GtOffParkArg`, and only the kind says which.
 export let GtOffParkKind = GtOffCoroTail + PointerFieldBytes
 
 // EXPORTED because `NetpollRuntime` reads a netpoll park's `(fd, mode)` note out of it.
+//
+// A mailbox park's argument is also its handoff slot: the park commit empties it, a send stores the request
+// it hands the parked receiver, and the receiver reads it when it resumes (`MailboxRuntime.buildMboxRecv`).
 export let GtOffParkArg = GtOffParkKind + PointerFieldBytes
 
 // ⭐⭐ **WHICH LIFE OF ITS POLL RECORD A NETPOLL PARK BELONGS TO** (`NetpollRuntime.PdOffGen`). A netpoll
@@ -491,7 +495,10 @@ export enum GtParkKind
 	// ⚠ **2 AND 3 ARE RESERVED, NOT FREE** — a park kind travels in a green thread's own record, so a number is
 	// spent once allocated and a new kind takes the next one past the highest.
 
-	// `__mbox_recv`: the argument is the mailbox.
+	// `__mbox_recv`: the argument is the mailbox. `__gt_run_strand` commits this park itself
+	// (`MailboxRuntime.emitMboxParkCommit`), so `__gt_register_park` never sees it. The receiver is
+	// published as `parkedGt` before its registers are saved, which is sound only because it holds the
+	// mailbox lock across the switch and every waker must take that lock first.
 	mailbox = 4
 
 	// `__gt_await` / `__gt_try_await`: the argument is the awaited GT.
@@ -1231,9 +1238,9 @@ let GtCoroSweepDroppedName = b"__gt_coro_sweep_dropped"
 // ⭐⭐⭐ **`__gt_run_strand(m, owner)` — RUN A STRAND ON THIS MACHINE UNTIL IT HAS NOTHING RUNNABLE, OR HANDS
 // ITSELF TO THE GLOBAL QUEUE.** Go's `execute` plus `park_m`/`goexit0`/`goyield_m`, looped over the strand
 // queue: switch into the next member, and on the way back dispatch on what it did — completed (the runner's
-// half of its teardown), parked (register it on its store), or yielded or preempted (place it). Called by the
-// scheduler loop (`SchedRuntime.buildSchedLoop`) on the machine that popped `owner`'s token, which owns the
-// strand for the whole call.
+// half of its teardown), parked (commit a mailbox park, or register any other on its store), or yielded or
+// preempted (place it). Called by the scheduler loop (`SchedRuntime.buildSchedLoop`) on the machine that
+// popped `owner`'s token, which owns the strand for the whole call.
 export let GtRunStrandName = b"__gt_run_strand"
 
 export let GtAwaitName = b"__gt_await"
@@ -1659,8 +1666,8 @@ export let GtTimerAddName = b"__gt_timer_add"
 // none of it: the machine that fired is about to look for work itself.
 export let GtTimerCheckName = b"__gt_timer_check"
 
-// ⭐⭐⭐ **`__gt_register_park(gt) -> wake debt` — THE SECOND HALF OF EVERY PARK, AND THE ONE PLACE A
-// PARKED THREAD IS MADE DISCOVERABLE.** It reads the note `__gt_park` left on the GT
+// ⭐⭐⭐ **`__gt_register_park(gt) -> wake debt` — THE SECOND HALF OF EVERY PARK BUT A MAILBOX'S
+// (`GtParkKind.mailbox`), AND WHERE SUCH A THREAD IS MADE DISCOVERABLE.** It reads the note `__gt_park` left on the GT
 // (`GtOffParkKind`/`GtOffParkArg`) and puts the thread on the store that will wake it. Its one
 // caller is `__gt_strand_next`, inside the `__sched_lock` hold that also pops the strand's next
 // member, after `__gt_context_switch` has returned — so the parking thread's registers are provably
@@ -3444,10 +3451,10 @@ end 'buildGtCoroDequeue'
 // THE STRAND UP.** The strand runner's consume door: the lock, the resume slot (`GtOffStrandResume`) or else
 // the pop, and the tombstone refusal `emitGtTombstoneHandback` shares with `__sched_find_runnable`.
 //
-// `parked` is the member that has just parked, or 0. Its `__gt_register_park` runs in the same hold
-// as the pop, so a strand turn takes `__sched_lock` once, and the wake debt the registration
-// answers is paid after the release on every road out. A tombstone retry re-enters at `snpop` and
-// registers nothing again.
+// `parked` is the member that has just parked, or 0, which is also what a mailbox park passes once
+// `__gt_run_strand` has committed it. Its `__gt_register_park` runs in the same hold as the pop, so a
+// strand turn takes `__sched_lock` once, and the wake debt the registration answers is paid after the
+// release on every road out. A tombstone retry re-enters at `snpop` and registers nothing again.
 //
 // ⭐⭐⭐ **AN EMPTY QUEUE RELEASES THE STRAND IN THE SAME CRITICAL SECTION THAT FOUND IT EMPTY** — the other
 // half of `GtOffStrandHolder`'s argument: a member readied before this section is in the queue it just
@@ -5329,13 +5336,12 @@ function buildGtPromiseDrop(module StdModule)
 	// waiting arm: the park kind decides which store has to be emptied before the thread can be given up.
 	//
 	// ⛔⛔⛔ **THE MAILBOX PARK KIND IS ANSWERED HERE, AND THE ANSWER IS AN ABORT.**
-	// `__gt_register_park` registers a park on the TIMER, on the POLLER or on a MAILBOX
-	// (`MailboxRuntime.emitMboxRegisterPark`, which stores the GT into `mbox.parkedGt`). The road below empties
-	// the timer and poller stores, and NOTHING anywhere clears `mbox.parkedGt` but the waker's own store — so a
-	// mailbox-parked GT falling through it would miss both scans, re-read `waiting`, take `soleOwner`, and free
-	// the stack (and possibly the struct) while `mbox.parkedGt` still pointed at it. The next `__mbox_send` /
-	// `__mbox_close` would then store `ready` into freed memory and publish a freed GT: a cross-green-thread
-	// use-after-free.
+	// A park is registered on the TIMER or the POLLER by `__gt_register_park`, or on a MAILBOX by
+	// `__mbox_recv`, which stores the GT into `mbox.parkedGt`. The road below empties the timer and poller
+	// stores, and NOTHING anywhere clears `mbox.parkedGt` but the waker's own store — so a mailbox-parked GT
+	// falling through it would miss both scans, re-read `waiting`, take `soleOwner`, and free the stack (and
+	// possibly the struct) while `mbox.parkedGt` still pointed at it. The next `__mbox_send` / `__mbox_close`
+	// would then store into freed memory and publish a freed GT: a cross-green-thread use-after-free.
 	//
 	// ⭐⭐ **IT IS AN ABORT RATHER THAN A THIRD DEREGISTRATION BECAUSE NOTHING IN THE LANGUAGE CAN REACH IT.**
 	// `__mbox_recv` — the ONE producer of a mailbox park — has exactly two callers, both inside the synthesized
@@ -5836,8 +5842,8 @@ end 'emitGtParkOnDeadline'
 
 // ⭐⭐⭐ **PARK THE RUNNING GT: `__gt_park(kind, arg)`, then continue at `cont` once it runs again.** It
 // terminates `cur`; the CALLER terminates `cont`. EXPORTED because `MailboxRuntime.buildMboxRecv` parks too, and
-// must come through this door rather than write its own — a second spelling would be a park registered before
-// its registers were saved.
+// must come through this door rather than write its own — a second spelling would skip the note
+// `__gt_run_strand` reads to commit the park after the switch.
 export function emitGtPark(module StdModule, ids ValueMinter, cur IrBlock, kind FullRangeInt, arg ValueId, cont IrBlock)
 	module.appendOp(cur, op: StdOp.call(ids.mint(), callee: GtParkName, args: twoArgs(emitConst(module, block: cur, value: kind, ids: ids), second: arg)))
 	module.setTerminator(cur, op: StdOp.branch(cont.id))
@@ -5848,7 +5854,8 @@ end 'emitGtPark'
 // ⛔⛔ **A PARKING THREAD MAY NOT BE DISCOVERABLE WHILE IT IS STILL EXECUTING ON ITS OWN STACK.** Registered on
 // the store that will wake it before `__gt_context_switch` has saved its registers, another M could fire its
 // deadline and resume it onto the SP saved at its PREVIOUS suspension: two Ms on one stack. So this writes
-// only the NOTE and switches; the strand runner registers the park once the switch has come back.
+// only the NOTE and switches; the strand runner registers the park once the switch has come back. A mailbox
+// receiver is published earlier, behind a lock it holds across the switch (`GtParkKind.mailbox`).
 //
 // ⭐⭐ **THE STATUS STAYS `ready` ACROSS THE SWITCH, AND THAT IS WHAT MAKES THE WINDOW SAFE.** A `ready` GT on
 // no queue and in no store can be moved by nobody but the machine that switched it in, whose strand runner is
@@ -5914,11 +5921,10 @@ end 'emitLoadCurrentGtCpuOffset'
 //     status under the lock then reads that as *"still parked, I am its sole owner"* and frees a queued
 //     thread. `__gt_timer_add` takes the lock itself, recursively. A deadline earlier than every other now
 //     pending owes the poller a look (`SchedRuntime.__sched_wake_netpoller`), inside the hold.
-//   • **netpoll** — `NetpollRuntime.__np_pd_commit` under the lock, which may UNDO the park for the mailbox
-//     arm's reason: readiness that landed between the mark and the commit was recorded by a party that found
-//     nobody published, so the thread is readied rather than left waiting for a wake already delivered. A
-//     socket deadline armed here owes the poller a look, exactly as the timer arm's does.
-//   • **mailbox** — `MailboxRuntime.emitMboxRegisterPark`, which may UNDO the park.
+//   • **netpoll** — `NetpollRuntime.__np_pd_commit` under the lock, which may UNDO the park: readiness that
+//     landed between the mark and the commit was recorded by a party that found nobody published, so the
+//     thread is readied rather than left waiting for a wake already delivered. A socket deadline armed here
+//     owes the poller a look, exactly as the timer arm's does.
 //   • **await** — under the lock, re-read the awaited GT's status: `completed` means it finished after the
 //     await's own read, so the thread is readied at once (Go's `unlockf` answering false); otherwise the
 //     thread becomes that GT's awaiter and `waiting`. `__gt_runner_done` takes the awaiter under the same lock.
@@ -5940,8 +5946,6 @@ function buildGtRegisterPark(module StdModule)
 	var netpollWake = module.addBlock(func, label: b"parknetpollwake", heat: BlockHeat.normal)
 	var netpollPaid = module.addBlock(func, label: b"parknetpollpaid", heat: BlockHeat.normal)
 	var notNetpoll = module.addBlock(func, label: b"notparknetpoll", heat: BlockHeat.normal)
-	var mailboxArm = module.addBlock(func, label: b"parkmailbox", heat: BlockHeat.normal)
-	var notMailbox = module.addBlock(func, label: b"notparkmailbox", heat: BlockHeat.normal)
 	var awaitArm = module.addBlock(func, label: b"parkawait", heat: BlockHeat.normal)
 	var awaitRegister = module.addBlock(func, label: b"parkawaitregister", heat: BlockHeat.normal)
 	var awaitTake = module.addBlock(func, label: b"parkawaittake", heat: BlockHeat.normal)
@@ -5999,16 +6003,7 @@ function buildGtRegisterPark(module StdModule)
 	emitGtWakeNetpoller(module, block: netpollWake, when: rootAfterCommit, cont: netpollPaid, ids: ids)
 	emitBranchWithDebt(module, from: netpollPaid, to: doneBlock, debt: commitDebt)
 
-	emitBranchOnCompare(module, block: notNetpoll, value: kind, pred: StdCmpPred.eq, against: GtParkKind.mailbox.rawValue, whenTrue: mailboxArm, whenFalse: notMailbox, ids: ids)
-
-	// ⭐⭐ **THE MAILBOX PARK MAY DECLINE TO PARK AT ALL.** The registration is `MailboxRuntime`'s — the
-	// mailbox's fields are that file's — and it answers a WAKE DEBT because it may UNDO the park: a
-	// request that arrived between `__mbox_recv`'s release and this registration was sent by a thread
-	// that found nobody parked, so the thread is readied rather than left waiting for a wake that has
-	// already happened.
-	emitMboxRegisterPark(module, func: func, cur: mailboxArm, gt: gt, mbox: arg, cont: doneBlock, ids: ids)
-
-	emitBranchOnCompare(module, block: notMailbox, value: kind, pred: StdCmpPred.eq, against: GtParkKind.awaitPromise.rawValue, whenTrue: awaitArm, whenFalse: notAwait, ids: ids)
+	emitBranchOnCompare(module, block: notNetpoll, value: kind, pred: StdCmpPred.eq, against: GtParkKind.awaitPromise.rawValue, whenTrue: awaitArm, whenFalse: notAwait, ids: ids)
 
 	// await: `arg` is the awaited GT. ACQUIRE — it may have completed on another M.
 	let awaitedStatus = emitGtLoadPublishedStatus(module, block: awaitArm, gt: arg, ids: ids)
@@ -6070,8 +6065,8 @@ function emitGtWakeNetpoller(module StdModule, block IrBlock, when ValueId, cont
 end 'emitGtWakeNetpoller'
 
 // Terminate `from` into `to`, handing it `debt` as its one block argument — a wake debt travelling to the
-// release that pays it. EXPORTED for `MailboxRuntime.emitMboxRegisterPark`, whose roads reach this file's.
-export function emitBranchWithDebt(module StdModule, from IrBlock, to IrBlock, debt ValueId)
+// release that pays it.
+function emitBranchWithDebt(module StdModule, from IrBlock, to IrBlock, debt ValueId)
 	module.setTerminator(from, op: StdOp.branch(to.id))
 	from.branchEdges.push(BranchEdge.create(to.id, argIds: argsOf(debt)))
 end 'emitBranchWithDebt'
@@ -6159,6 +6154,8 @@ function buildGtRunStrand(module StdModule, target Target)
 	var dispatch = module.addBlock(func, label: b"stranddispatch", heat: BlockHeat.normal)
 	var register = module.addBlock(func, label: b"strandregister", heat: BlockHeat.normal)
 	var notYield = module.addBlock(func, label: b"strandnotyield", heat: BlockHeat.normal)
+	var notPreempt = module.addBlock(func, label: b"strandnotpreempt", heat: BlockHeat.normal)
+	var mailboxCommit = module.addBlock(func, label: b"strandmailboxcommit", heat: BlockHeat.normal)
 	var yielded = module.addBlock(func, label: b"strandyield", heat: BlockHeat.normal)
 	var preempted = module.addBlock(func, label: b"strandpreempted", heat: BlockHeat.normal)
 	var pollStores = module.addBlock(func, label: b"strandpoll", heat: BlockHeat.normal)
@@ -6209,7 +6206,8 @@ function buildGtRunStrand(module StdModule, target Target)
 	reapMember.branchEdges.push(BranchEdge.create(next.id, argIds: argsOf(zero)))
 
 	// ⭐⭐ **THE ONE DOOR EVERY PARK PASSES WHILE THE THREAD IS STOPPED AND REACHABLE BY NOBODY ELSE** — its
-	// registers are saved and it is on no store and no queue yet — so it is where a stack may move
+	// registers are saved and it is on no store and no queue yet, or, as a mailbox receiver, on one no waker
+	// can reach until the commit below leaves the mailbox lock — so it is where a stack may move
 	// (`__gt_stack_shrink`). A stack at the floor has nothing to give back, and that load and compare is all a
 	// park of one pays.
 	// ⛔⛔ **A THREAD THAT DID NOT ASK TO STOP KEEPS ITS STACK WHERE IT IS — Go's rule, and the reason is what
@@ -6232,7 +6230,16 @@ function buildGtRunStrand(module StdModule, target Target)
 	let kind = emitLoadField(module, block: dispatch, record: member, offset: GtOffParkKind, ids: ids)
 	emitBranchOnCompare(module, block: dispatch, value: kind, pred: StdCmpPred.eq, against: GtParkKind.yielded.rawValue, whenTrue: yielded, whenFalse: notYield, ids: ids)
 
-	emitBranchOnCompare(module, block: notYield, value: kind, pred: StdCmpPred.eq, against: GtParkKind.preempt.rawValue, whenTrue: preempted, whenFalse: register, ids: ids)
+	emitBranchOnCompare(module, block: notYield, value: kind, pred: StdCmpPred.eq, against: GtParkKind.preempt.rawValue, whenTrue: preempted, whenFalse: notPreempt, ids: ids)
+
+	emitBranchOnCompare(module, block: notPreempt, value: kind, pred: StdCmpPred.eq, against: GtParkKind.mailbox.rawValue, whenTrue: mailboxCommit, whenFalse: register, ids: ids)
+
+	// After the shrink, never before: once the commit leaves the mailbox lock a send can ready the member on
+	// another M, and a shrink then would relocate a stack that is running. The commit also runs before
+	// `__gt_strand_next`, so this OS thread runs no other green thread while the receive's hold is open.
+	emitMboxParkCommit(module, block: mailboxCommit, gt: member, mbox: emitLoadField(module, block: mailboxCommit, record: member, offset: GtOffParkArg, ids: ids), ids: ids)
+	module.setTerminator(mailboxCommit, op: StdOp.branch(next.id))
+	mailboxCommit.branchEdges.push(BranchEdge.create(next.id, argIds: argsOf(zero)))
 
 	module.setTerminator(register, op: StdOp.branch(next.id))
 	register.branchEdges.push(BranchEdge.create(next.id, argIds: argsOf(member)))
