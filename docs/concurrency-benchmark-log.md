@@ -899,3 +899,59 @@ metric (wall, CPU = user + kernel, peak working set); `arm` names the compiler (
 | 2026-10-16 | 8ae57740b | dirty | orb | shared-counter | 200000 | 1 | 3 | 33 | 311 | 9.47 | 9.50 | 293.14 | slot | R7 change 2: Go coroutine path (kept stacks, per-P stack cache and seed stats, lazy trace id) |
 | 2026-10-16 | 8ae57740b | dirty | orb | shared-counter | 200000 | 7 | 3 | 446 | 317 | 0.71 | 0.44 | 227.19 | ref@144b354df | R7 change 2: Go coroutine path (kept stacks, per-P stack cache and seed stats, lazy trace id) |
 | 2026-10-16 | 8ae57740b | dirty | orb | shared-counter | 200000 | 7 | 3 | 446 | 316 | 0.71 | 0.44 | 227.13 | slot | R7 change 2: Go coroutine path (kept stacks, per-P stack cache and seed stats, lazy trace id) |
+| 2026-10-16 | beea4edf0 | clean | macos | thread-ring | 3000000 | 1 | 3 | 156 | 295 | 1.89 | 1.90 | 0.80 | ref@144b354df | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | clean | macos | thread-ring | 3000000 | 1 | 3 | 156 | 297 | 1.90 | 1.91 | 1.14 | slot | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | clean | macos | thread-ring | 3000000 | 8 | 3 | 717 | 370 | 0.52 | 0.19 | 1.04 | ref@144b354df | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | clean | macos | thread-ring | 3000000 | 8 | 3 | 717 | 365 | 0.51 | 0.19 | 1.03 | slot | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | clean | macos | ping-pong | 1000000 | 1 | 3 | 181 | 191 | 1.05 | 1.05 | 0.61 | ref@144b354df | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | clean | macos | ping-pong | 1000000 | 1 | 3 | 181 | 193 | 1.07 | 1.07 | 0.60 | slot | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | clean | macos | ping-pong | 1000000 | 8 | 3 | 207 | 257 | 1.24 | 1.22 | 0.59 | ref@144b354df | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | clean | macos | ping-pong | 1000000 | 8 | 3 | 207 | 259 | 1.25 | 1.21 | 0.59 | slot | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | clean | macos | fan-in | 100000 | 1 | 3 | 130 | 170 | 1.31 | 1.30 | 81.36 | ref@144b354df | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | clean | macos | fan-in | 100000 | 1 | 3 | 130 | 169 | 1.31 | 1.27 | 81.38 | slot | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | clean | macos | fan-in | 100000 | 8 | 3 | 464 | 239 | 0.52 | 0.37 | 56.49 | ref@144b354df | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | clean | macos | fan-in | 100000 | 8 | 3 | 464 | 240 | 0.52 | 0.39 | 57.47 | slot | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | clean | macos | worker-pool | 6000 250000 | 1 | 3 | 2,389 | 2,389 | 1.00 | 1.00 | 1.54 | ref@144b354df | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | clean | macos | worker-pool | 6000 250000 | 1 | 3 | 2,389 | 2,389 | 1.00 | 1.00 | 1.54 | slot | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | clean | macos | worker-pool | 6000 250000 | 8 | 3 | 443 | 454 | 1.03 | 1.00 | 1.32 | ref@144b354df | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | clean | macos | worker-pool | 6000 250000 | 8 | 3 | 443 | 463 | 1.04 | 1.00 | 1.34 | slot | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | clean | macos | spawn-many | 200000 | 1 | 3 | 108 | 144 | 1.33 | 1.35 | 2.82 | ref@144b354df | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | clean | macos | spawn-many | 200000 | 1 | 3 | 108 | 140 | 1.29 | 1.26 | 2.82 | slot | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | clean | macos | spawn-many | 200000 | 8 | 3 | 30 | 134 | 4.46 | 4.72 | 8.96 | ref@144b354df | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | clean | macos | spawn-many | 200000 | 8 | 3 | 30 | 114 | 3.81 | 3.87 | 9.04 | slot | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | clean | macos | coroutine-churn | 200000 | 1 | 3 | 198 | 131 | 0.66 | 0.64 | 1.47 | ref@144b354df | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | clean | macos | coroutine-churn | 200000 | 1 | 3 | 198 | 134 | 0.68 | 0.68 | 1.47 | slot | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | clean | macos | coroutine-churn | 200000 | 8* | 3 | 175 | 131 | 0.75 | 0.72 | 1.47 | ref@144b354df | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | clean | macos | coroutine-churn | 200000 | 8* | 3 | 175 | 134 | 0.77 | 0.74 | 1.47 | slot | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | clean | macos | shared-counter | 200000 | 1 | 3 | 36 | 319 | 8.80 | 8.84 | 161.42 | ref@144b354df | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | clean | macos | shared-counter | 200000 | 1 | 3 | 36 | 321 | 8.86 | 8.86 | 161.42 | slot | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | clean | macos | shared-counter | 200000 | 8 | 3 | 1,081 | 453 | 0.42 | 0.19 | 116.40 | ref@144b354df | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | clean | macos | shared-counter | 200000 | 8 | 3 | 1,081 | 453 | 0.42 | 0.20 | 116.20 | slot | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | dirty | orb | thread-ring | 3000000 | 1 | 3 | 155 | 313 | 2.01 | 2.01 | 0.71 | ref@144b354df | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | dirty | orb | thread-ring | 3000000 | 1 | 3 | 155 | 309 | 1.99 | 1.99 | 1.21 | slot | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | dirty | orb | thread-ring | 3000000 | 7 | 3 | 208 | 321 | 1.55 | 1.03 | 0.68 | ref@144b354df | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | dirty | orb | thread-ring | 3000000 | 7 | 3 | 208 | 321 | 1.55 | 1.03 | 1.02 | slot | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | dirty | orb | ping-pong | 1000000 | 1 | 3 | 180 | 200 | 1.11 | 1.11 | 0.26 | ref@144b354df | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | dirty | orb | ping-pong | 1000000 | 1 | 3 | 180 | 201 | 1.11 | 1.11 | 0.33 | slot | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | dirty | orb | ping-pong | 1000000 | 7 | 3 | 159 | 202 | 1.27 | 1.27 | 0.25 | ref@144b354df | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | dirty | orb | ping-pong | 1000000 | 7 | 3 | 159 | 202 | 1.27 | 1.26 | 0.31 | slot | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | dirty | orb | fan-in | 100000 | 1 | 3 | 123 | 156 | 1.26 | 1.26 | 140.19 | ref@144b354df | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | dirty | orb | fan-in | 100000 | 1 | 3 | 123 | 156 | 1.27 | 1.26 | 140.19 | slot | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | dirty | orb | fan-in | 100000 | 7 | 3 | 138 | 158 | 1.14 | 1.07 | 116.48 | ref@144b354df | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | dirty | orb | fan-in | 100000 | 7 | 3 | 138 | 158 | 1.14 | 1.06 | 121.89 | slot | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | dirty | orb | worker-pool | 6000 250000 | 1 | 3 | 2,268 | 2,401 | 1.06 | 1.06 | 2.01 | ref@144b354df | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | dirty | orb | worker-pool | 6000 250000 | 1 | 3 | 2,268 | 2,406 | 1.06 | 1.06 | 2.02 | slot | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | dirty | orb | worker-pool | 6000 250000 | 7 | 3 | 452 | 509 | 1.13 | 0.95 | 1.70 | ref@144b354df | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | dirty | orb | worker-pool | 6000 250000 | 7 | 3 | 452 | 515 | 1.14 | 0.90 | 1.74 | slot | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | dirty | orb | spawn-many | 200000 | 1 | 3 | 111 | 140 | 1.26 | 1.26 | 3.63 | ref@144b354df | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | dirty | orb | spawn-many | 200000 | 1 | 3 | 111 | 139 | 1.25 | 1.25 | 3.63 | slot | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | dirty | orb | spawn-many | 200000 | 7 | 3 | 54 | 92 | 1.70 | 1.42 | 2.42 | ref@144b354df | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | dirty | orb | spawn-many | 200000 | 7 | 3 | 54 | 81 | 1.49 | 1.51 | 2.40 | slot | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | dirty | orb | coroutine-churn | 200000 | 1 | 3 | 177 | 124 | 0.70 | 0.70 | 1.68 | ref@144b354df | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | dirty | orb | coroutine-churn | 200000 | 1 | 3 | 177 | 128 | 0.72 | 0.72 | 1.68 | slot | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | dirty | orb | coroutine-churn | 200000 | 7* | 3 | 170 | 121 | 0.71 | 0.71 | 1.63 | ref@144b354df | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | dirty | orb | coroutine-churn | 200000 | 7* | 3 | 170 | 126 | 0.74 | 0.74 | 1.63 | slot | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | dirty | orb | shared-counter | 200000 | 1 | 3 | 33 | 311 | 9.48 | 9.53 | 291.43 | ref@144b354df | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | dirty | orb | shared-counter | 200000 | 1 | 3 | 33 | 310 | 9.43 | 9.49 | 291.43 | slot | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | dirty | orb | shared-counter | 200000 | 7 | 3 | 375 | 318 | 0.85 | 0.60 | 213.25 | ref@144b354df | R7 change 2: Go coroutine path (beea4edf0) |
+| 2026-10-16 | beea4edf0 | dirty | orb | shared-counter | 200000 | 7 | 3 | 375 | 320 | 0.85 | 0.62 | 207.66 | slot | R7 change 2: Go coroutine path (beea4edf0) |
