@@ -102,17 +102,17 @@ end 'emitX64RestoreLastErrorFromGt'
 
 function emitX64RawLastError(code ByteArray, os Os, direction GtLastErrorDirection)
 	match os 'os'
-		windows then emitWindowsRawLastError(code, direction: direction)
+		windows then emitWindowsRawLastError(code, direction: direction, scratch: GtSwitchTibScratchReg)
 		linux then emitLinuxRawLastError(code, direction: direction)
 		macos then panic("emitX64RawLastError: there is no x64-macOS backend — `buildBackend` dispatches macOS to the arm64 backend")
 		wasi then panic("emitX64RawLastError: wasm32-wasi is not an x64 target — a WASI component has no OS-thread last error")
 	end 'os'
 end 'emitX64RawLastError'
 
-function emitWindowsRawLastError(code ByteArray, direction GtLastErrorDirection)
+function emitWindowsRawLastError(code ByteArray, direction GtLastErrorDirection, scratch X64Register)
 	match direction 'direction'
-		intoGt then encodeMovRegSegAbs(code, dest: GtSwitchTibScratchReg, disp: WindowsTebLastErrorOffset, wide: false, segment: TibSegment)
-		fromGt then encodeMovSegAbsReg(code, disp: WindowsTebLastErrorOffset, srcReg: GtSwitchTibScratchReg, wide: false, segment: TibSegment)
+		intoGt then encodeMovRegSegAbs(code, dest: scratch, disp: WindowsTebLastErrorOffset, wide: false, segment: TibSegment)
+		fromGt then encodeMovSegAbsReg(code, disp: WindowsTebLastErrorOffset, srcReg: scratch, wide: false, segment: TibSegment)
 	end 'direction'
 end 'emitWindowsRawLastError'
 
@@ -961,7 +961,11 @@ end 'emitGtEnterSyscall'
 // ⚠ **`rax` IS THE KERNEL'S RESULT AND SURVIVES BOTH ROADS.** The exchange deliberately uses rcx; the slow
 // path parks the result in its own frame across the call.
 //
-// ⚠ **THE 0x30 FRAME IS 0x20 OF WIN64 SHADOW SPACE PLUS ONE SAVED WORD, ROUNDED TO KEEP RSP 16-ALIGNED AT THE
+// ⚠ **SO DOES THE TEB'S LAST ERROR.** `osLastError` reads it with a later `GetLastError`, and regain can make
+// this M's lock event (`CreateEventA` zeroes it), so `ERROR_NO_MORE_FILES` would read back as success. Go
+// captures it before `exitsyscall` for the same reason.
+//
+// ⚠ **THE 0x30 FRAME IS 0x20 OF WIN64 SHADOW SPACE PLUS TWO SAVED WORDS, ROUNDED TO KEEP RSP 16-ALIGNED AT THE
 // `call`** — the compiler's frame invariant at every call site, which the shim's own entry comment states and which
 // the `sub` here must not break.
 function emitGtExitSyscall(code ByteArray, rdataRelocs RdataRelocationArray, callFixups CallFixupArray, fixups ChunkRel32FixupArray)
@@ -979,22 +983,30 @@ function emitGtExitSyscall(code ByteArray, rdataRelocs RdataRelocationArray, cal
 
 	encodePrologue(code, stackSize: exitSyscallSlowFrameBytes(), probeScratchIsFree: false)
 	encodeStoreBaseDispReg(code, base: X64Register.rsp, disp: ExitSyscallSavedResultDisp, srcReg: X64Register.rax, wide: true)
+	emitWindowsRawLastError(code, direction: GtLastErrorDirection.intoGt, scratch: ShimTibScratchReg)
+	encodeStoreBaseDispReg(code, base: X64Register.rsp, disp: ExitSyscallSavedLastErrorDisp, srcReg: ShimTibScratchReg, wide: true)
 	encodeCallDirect(code, callFixups: callFixups, targetName: SchedSyscallRegainName)
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rsp, disp: ExitSyscallSavedResultDisp, wide: true)
+	encodeLoadRegBaseDisp(code, destReg: ShimTibScratchReg, base: X64Register.rsp, disp: ExitSyscallSavedLastErrorDisp, wide: true)
+	emitWindowsRawLastError(code, direction: GtLastErrorDirection.fromGt, scratch: ShimTibScratchReg)
 	encodeEpilogue(code, stackSize: exitSyscallSlowFrameBytes())
 end 'emitGtExitSyscall'
 
-// The slow path's own frame: Win64 shadow space plus one word for the kernel's result, rounded up to the
-// stack alignment so RSP is 16-aligned at the `call`. Derived from the three constants that decide it rather
+// The slow path's own frame: Win64 shadow space plus a word each for the kernel's result and the last
+// error, rounded up to the stack alignment so RSP is 16-aligned at the `call`. Derived from the three constants that decide it rather
 // than written as `0x30`, for the reason the shim's `frameSize` is derived from its two — and a FUNCTION
 // rather than a `let` because a global initializer may not call one (E2045).
 function exitSyscallSlowFrameBytes() returns StackSize
-	return alignUpStack(ShadowSpaceBytes + SpillSlotBytes, alignment: StackFrameAlignment)
+	return alignUpStack(ShadowSpaceBytes + (ExitSyscallSlowFrameSlots * SpillSlotBytes), alignment: StackFrameAlignment)
 end 'exitSyscallSlowFrameBytes'
 
 // Where in that frame the result waits — immediately above the shadow space, which is the first byte the
 // callee may not touch.
 let ExitSyscallSavedResultDisp = ShadowSpaceBytes as Imm32
+
+let ExitSyscallSavedLastErrorDisp = (ShadowSpaceBytes + SpillSlotBytes) as Imm32
+
+let ExitSyscallSlowFrameSlots = 2
 
 // Branch to `bail` unless `addr` lies inside `gt`'s own stack, `[stackBase, stackBase + stackSize)`; a `stackBase`
 // of 0 bails too. Past both bails `scratch` holds the stack's top and `gt` its size.

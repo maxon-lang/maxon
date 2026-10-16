@@ -55029,3 +55029,475 @@ func @__gt_runner_done {
     arm64.b __rl_cont#57
 }
 ```
+
+<!-- test: a-windows-blocking-import-carries-the-last-error-across-a-lost-processor -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
+**ON WINDOWS, A BLOCKING IMPORT'S LAST ERROR SURVIVES THE SCHEDULER'S SLOW EXIT, AS GO's SYSCALL PATH CAPTURES IT
+BEFORE `exitsyscall`.** A caller reads the error of a failed import with a separate `GetLastError` call
+right after the import returns. When `__sysmon` took the machine's processor during the import, the shim's
+exit calls `__sched_syscall_regain`, whose lock road may create the machine's first lock event
+(`CreateEventA`) and so rewrite the thread's `LastErrorValue`. The slow exit therefore reads the TEB's
+`LastErrorValue` (`gs:[0x68]`) into a frame slot beside the saved result before the call, and writes it back
+after the call.
+
+`mrt_write_stream` is the witness because its raw-byte road calls `WriteFile`, a `blocking` import, through
+the shim, so the shim's exit is emitted inside this one chunk. What the bytes show is a `mov ecx, gs:[0x68]`
+and a store to `[rsp + 0x28]` ahead of the `call`, and a load from `[rsp + 0x28]` and a `mov gs:[0x68], ecx`
+after it, around the `rax` result's own `[rsp + 0x20]` store and reload. A slow exit with neither is the one
+that lets a failed `FindNextFileW`'s `ERROR_NO_MORE_FILES` read as 0. The posix lanes keep their error in a
+word only the runtime's own failure arms write, which the regain road never reaches, so the case has no
+subject there.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Counter
+	var calls as Integer
+
+	static function create() returns Self
+		return Self{calls: 0}
+	end 'create'
+
+	export function next(n Integer) returns Integer
+		self.calls = self.calls + 1
+
+		return n + 1
+	end 'next'
+end 'Counter'
+
+function main() returns ExitCode
+	let c = spawn Counter.create()
+	let a = try await c.next(1) otherwise 0
+
+	print("done\n")
+
+	return a as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+```stdout
+done
+```
+```RequiredRuntime
+mrt_write_stream
+```
+```TargetIr:x64-windows
+data {
+  __gt_allg@0 = i64 0
+  __gt_allglen@8 = i64 0
+  __gt_allgcap@16 = i64 0
+  __gt_allg_lock@24 = i64 0
+  __gt_hold_epoch@32 = i64 0
+  __gt_run_queue_head@40 = i64 0
+  __gt_run_queue_tail@48 = i64 0
+  __gt_timer_count@56 = i64 0
+  __gt_timer_heap_base@64 = i64 0
+  __gt_timer_capacity@72 = i64 0
+  __gt_timer_seq@80 = i64 0
+  __gt_timer_when@88 = i64 9223372036854775807
+  __gt_live_count@96 = i64 0
+  __gt_quiesce_waiter@104 = i64 0
+  __gt_quiesce_stuck@112 = i64 0
+  __gt_seed_bytes@120 = i64 8192
+  __gt_seed_sum_seen@128 = i64 0
+  __gt_seed_count_seen@136 = i64 0
+  __gt_seed_guard@144 = i64 0
+  __gt_keeps_cpu_clock@152 = i64 0
+  __gt_stack_pool@160 = i64 0
+  __sched_active_workers@168 = i64 1
+  __sched_max_active_workers@176 = i64 1
+  __sched_tls_index@184 = i64 0
+  __sched_tls_teb_offset@192 = i64 0
+  __sched_procs@200 = i64 0
+  __sched_allm@208 = i64 0
+  __sched_async_preempt_off@216 = i64 0
+  __sched_midle@224 = i64 0
+  __sched_pidle@232 = i64 0
+  __gt_gfree_head@240 = i64 0
+  __gt_gfree_nostack_head@248 = i64 0
+  __sched_arena_cursor@256 = i64 0
+  __sched_arena_limit@264 = i64 0
+  __gt_records_carved@272 = i64 0
+  __gt_gfree_lock@280 = i64 0
+  __gt_gfree_lock_owner@288 = i64 0
+  __gt_gfree_lock_depth@296 = i64 0
+  __sched_npidle@304 = i64 0
+  __sched_runq_size@312 = i64 0
+  __sched_global_pushes@320 = i64 0
+  __sched_timer_scan_steps@328 = i64 0
+  __sched_mcount@336 = i64 0
+  __sched_nmidle@344 = i64 0
+  __sched_main_m@352 = i64 0
+  __sched_phase@360 = i64 0
+  __sched_lastpoll@368 = i64 0
+  __sched_poll_until@376 = i64 0
+  __sched_regain_head@384 = i64 0
+  __np_poller@392 = i64 0
+  __np_break@400 = i64 0
+  __np_wake_sig@408 = i64 0
+  __np_pd_table@416 = i64 0
+  __np_pd_cap@424 = i64 0
+  __np_waiters@432 = i64 0
+  __sched_num_procs@440 = i64 0
+  __sched_ncpu@448 = i64 0
+  __sched_shutdown_flag@456 = i64 0
+  __sched_lock@464 = i64 0
+  __sched_lock_owner@472 = i64 0
+  __sched_lock_depth@480 = i64 0
+  __sched_lock_depth_sink@488 = i64 0
+  __sched_nmspinning@496 = i64 0
+  __sched_needspinning@504 = i64 0
+  __sched_sysmon_event@512 = i64 0
+  __sched_sysmon_wait@520 = i64 0
+  __sched_timer_starts@528 = i64 0
+  __sched_preempt_ext_lock@536 = i64 0
+  __sched_preempt_context@544 = i64 0
+  __slab_arena_list@552 = i64 0
+  __slab_arena_map_l1@560 = i64 0
+  __slab_state@568 = i64 0
+  __mrt_console_probe_stdin@576 = i8 0
+  __mrt_console_probe_stdout@577 = i8 0
+  __mrt_console_probe_stderr@578 = i8 0
+  __mrt_program_started@579 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+  __il_body#9:
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+  __il_cont#8:
+    x64.leaRegFunc rcx, [rip + Counter.__loop]
+    x64.leaRegFunc rax, [rip + Counter.__abandon]
+    x64.movRegReg rdx, r8
+    x64.callDirect __svc_spawn
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.movRegImm32 rbx, 1
+    x64.movRegImm32 rcx, 0
+    x64.callDirect __gt_cell_alloc
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rcx, 32
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.storeBaseDispReg.word64 [r8 + 16], rbx
+    x64.storeBaseDispReg.word64 [r8 + 24], r13
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.movRegReg rdx, r8
+    x64.callDirect __mbox_send
+    x64.movRegReg rcx, r13
+    x64.callDirect __gt_try_await
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 rbx, 0
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rbx, r8
+  trycont:
+    x64.leaRegRdata rcx, [rip + __str_rec_1]  ; "done\x0a"
+  __il_body#11:
+    x64.callDirect __write_stdout
+  __il_cont#10:
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rbx, rax
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mbox_handle_drop_box
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-windows-blocking-import-carries-the-last-error-across-a-lost-processor.test:24: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Counter.__loop {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+  serve:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mbox_recv
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, stopping
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_6
+  __shutdown:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 16]
+    x64.storeBaseDispReg.word64 [r12 + 56], rax
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+  stopping:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mbox_close
+  drain:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mbox_recv
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, abandon
+  finished:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __mbox_service_exit
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  abandon:
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __mbox_abandon
+    x64.jmp drain
+  next:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 16]
+    x64.loadRegBaseDisp.word64 r13, [r8 + 24]
+  __il_body:
+    x64.aluBaseDispImm32.add [rbx + 0], 1
+    x64.leaRegRegImm32 r14, rax, 1
+  __il_cont:
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.movRegImm32 rax, 0
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r14
+    x64.callDirect __gt_cell_complete
+    x64.jmp serve
+}
+
+func @Counter.__abandon {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=next] @__jumptable_7
+  __shutdown:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 1
+    x64.callDirect __gt_cell_complete
+    x64.jmp abandondrop
+  next:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 24]
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 1
+    x64.callDirect __gt_cell_complete
+  abandondrop:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, r8
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+chunk @mrt_write_stream {
+    0000: 55 48 89 e5 48 81 ec c0 00 00 00 48 89 4d f8 48
+    0010: 89 55 e8 4c 89 45 e0 48 31 c0 48 89 45 d8 49 81
+    0020: f8 00 00 00 00 0f 84 b0 09 00 00 48 8b 4d f8 48
+    0030: 8d 05 00 00 00 00 48 8b 00 48 85 c0 0f 84 dc 00
+    0040: 00 00 65 48 8b 00 48 85 c0 0f 84 cf 00 00 00 4c
+    0050: 8b 58 08 4d 85 db 0f 84 c2 00 00 00 49 8b 43 18
+    0060: 48 85 c0 0f 84 b5 00 00 00 48 39 c4 0f 82 ac 00
+    0070: 00 00 4d 8b 5b 20 4c 01 d8 48 39 c4 0f 83 9c 00
+    0080: 00 00 e8 00 00 00 00 41 52 49 89 e2 48 8b 60 10
+    0090: 48 81 80 68 02 00 00 ff ff ff ff 48 89 e0 41 52
+    00a0: 48 83 ec 28 65 48 89 04 25 08 00 00 00 48 81 e8
+    00b0: 00 00 01 00 65 48 89 04 25 10 00 00 00 65 48 89
+    00c0: 04 25 78 14 00 00 ff 15 00 00 00 00 4c 8d 1d 00
+    00d0: 00 00 00 4d 8b 1b 65 4d 8b 1b 4d 8b 5b 08 49 8b
+    00e0: 8b 90 00 00 00 65 48 89 0c 25 08 00 00 00 49 8b
+    00f0: 8b 98 00 00 00 65 48 89 0c 25 10 00 00 00 49 8b
+    0100: 8b c8 00 00 00 65 48 89 0c 25 78 14 00 00 48 83
+    0110: c4 28 41 5a 4c 89 d4 41 5a e9 06 00 00 00 ff 15
+    0120: 00 00 00 00 48 89 45 f0 48 8b 45 f8 41 bb f6 ff
+    0130: ff ff 49 29 c3 4c 8d 15 00 00 00 00 4f 8d 14 1a
+    0140: 49 0f b6 02 48 81 f8 00 00 00 00 0f 85 34 01 00
+    0150: 00 48 8b 4d f0 48 8d 55 b8 48 8d 05 00 00 00 00
+    0160: 48 8b 00 48 85 c0 0f 84 dc 00 00 00 65 48 8b 00
+    0170: 48 85 c0 0f 84 cf 00 00 00 4c 8b 58 08 4d 85 db
+    0180: 0f 84 c2 00 00 00 49 8b 43 18 48 85 c0 0f 84 b5
+    0190: 00 00 00 48 39 c4 0f 82 ac 00 00 00 4d 8b 5b 20
+    01a0: 4c 01 d8 48 39 c4 0f 83 9c 00 00 00 e8 00 00 00
+    01b0: 00 41 52 49 89 e2 48 8b 60 10 48 81 80 68 02 00
+    01c0: 00 ff ff ff ff 48 89 e0 41 52 48 83 ec 28 65 48
+    01d0: 89 04 25 08 00 00 00 48 81 e8 00 00 01 00 65 48
+    01e0: 89 04 25 10 00 00 00 65 48 89 04 25 78 14 00 00
+    01f0: ff 15 00 00 00 00 4c 8d 1d 00 00 00 00 4d 8b 1b
+    0200: 65 4d 8b 1b 4d 8b 5b 08 49 8b 8b 90 00 00 00 65
+    0210: 48 89 0c 25 08 00 00 00 49 8b 8b 98 00 00 00 65
+    0220: 48 89 0c 25 10 00 00 00 49 8b 8b c8 00 00 00 65
+    0230: 48 89 0c 25 78 14 00 00 48 83 c4 28 41 5a 4c 89
+    0240: d4 41 5a e9 06 00 00 00 ff 15 00 00 00 00 48 63
+    0250: c0 41 b8 02 00 00 00 48 81 f8 00 00 00 00 0f 84
+    0260: 06 00 00 00 41 b8 01 00 00 00 48 8b 45 f8 41 bb
+    0270: f6 ff ff ff 49 29 c3 4c 8d 15 00 00 00 00 4f 8d
+    0280: 14 1a 45 88 02 49 0f b6 02 48 81 f8 01 00 00 00
+    0290: 0f 85 94 05 00 00 48 8b 45 e0 4c 8b 5d d8 4c 29
+    02a0: d8 48 81 f8 00 00 00 00 0f 8e 73 05 00 00 48 81
+    02b0: f8 20 00 00 00 0f 86 4e 00 00 00 b8 20 00 00 00
+    02c0: 48 31 c9 48 81 f9 03 00 00 00 0f 83 39 00 00 00
+    02d0: 4c 8b 5d e8 4c 8b 4d d8 4d 01 cb 49 01 c3 4d 0f
+    02e0: b6 0b 49 81 e1 c0 00 00 00 49 81 f9 80 00 00 00
+    02f0: 0f 85 13 00 00 00 48 81 e8 01 00 00 00 48 81 c1
+    0300: 01 00 00 00 e9 ba ff ff ff 48 89 45 d0 48 8d 85
+    0310: 78 ff ff ff 48 89 44 24 20 b8 20 00 00 00 48 89
+    0320: 44 24 28 b9 e9 fd 00 00 ba 00 00 00 00 4c 8b 45
+    0330: e8 4c 8b 5d d8 4d 01 d8 4c 8b 4d d0 48 8d 05 00
+    0340: 00 00 00 48 8b 00 48 85 c0 0f 84 ee 00 00 00 65
+    0350: 48 8b 00 48 85 c0 0f 84 e1 00 00 00 4c 8b 58 08
+    0360: 4d 85 db 0f 84 d4 00 00 00 49 8b 43 18 48 85 c0
+    0370: 0f 84 c7 00 00 00 48 39 c4 0f 82 be 00 00 00 4d
+    0380: 8b 5b 20 4c 01 d8 48 39 c4 0f 83 ae 00 00 00 e8
+    0390: 00 00 00 00 41 52 49 89 e2 48 8b 60 10 48 81 80
+    03a0: 68 02 00 00 ff ff ff ff 48 89 e0 41 52 48 83 ec
+    03b0: 38 4d 8b 5a 28 4c 89 5c 24 20 4d 8b 5a 30 4c 89
+    03c0: 5c 24 28 65 48 89 04 25 08 00 00 00 48 81 e8 00
+    03d0: 00 01 00 65 48 89 04 25 10 00 00 00 65 48 89 04
+    03e0: 25 78 14 00 00 ff 15 00 00 00 00 4c 8d 1d 00 00
+    03f0: 00 00 4d 8b 1b 65 4d 8b 1b 4d 8b 5b 08 49 8b 8b
+    0400: 90 00 00 00 65 48 89 0c 25 08 00 00 00 49 8b 8b
+    0410: 98 00 00 00 65 48 89 0c 25 10 00 00 00 49 8b 8b
+    0420: c8 00 00 00 65 48 89 0c 25 78 14 00 00 48 83 c4
+    0430: 38 41 5a 4c 89 d4 41 5a e9 06 00 00 00 ff 15 00
+    0440: 00 00 00 48 63 c0 48 81 f8 00 00 00 00 0f 84 11
+    0450: 02 00 00 48 89 45 c8 48 31 c0 48 89 45 c0 48 8b
+    0460: 45 c8 4c 8b 5d c0 4c 29 d8 48 81 f8 00 00 00 00
+    0470: 0f 8e da 01 00 00 49 89 c0 48 8b 4d f0 48 8d 95
+    0480: 78 ff ff ff 4a 8d 14 5a 48 31 c0 48 89 45 b8 48
+    0490: 89 44 24 20 4c 8d 4d b8 48 8d 05 00 00 00 00 48
+    04a0: 8b 00 48 85 c0 0f 84 6e 01 00 00 65 48 8b 00 48
+    04b0: 85 c0 0f 84 61 01 00 00 4c 8b 58 08 4d 85 db 0f
+    04c0: 84 54 01 00 00 49 8b 43 18 48 85 c0 0f 84 47 01
+    04d0: 00 00 48 39 c4 0f 82 3e 01 00 00 4d 8b 5b 20 4c
+    04e0: 01 d8 48 39 c4 0f 83 2e 01 00 00 e8 00 00 00 00
+    04f0: 41 52 49 89 e2 48 8b 60 10 48 81 80 68 02 00 00
+    0500: ff ff ff ff 48 89 e0 41 52 48 83 ec 38 4d 8b 5a
+    0510: 28 4c 89 5c 24 20 65 48 89 04 25 08 00 00 00 48
+    0520: 81 e8 00 00 01 00 65 48 89 04 25 10 00 00 00 65
+    0530: 48 89 04 25 78 14 00 00 48 8d 05 00 00 00 00 48
+    0540: 8b 00 65 48 8b 00 4c 8b 18 49 81 83 e0 00 00 00
+    0550: 01 00 00 00 41 bb 05 00 00 00 f0 4c 01 98 38 02
+    0560: 00 00 ff 15 00 00 00 00 4c 8d 1d 00 00 00 00 4d
+    0570: 8b 1b 65 4d 8b 1b 4d 8b 5b 08 49 8b 8b 90 00 00
+    0580: 00 65 48 89 0c 25 08 00 00 00 49 8b 8b 98 00 00
+    0590: 00 65 48 89 0c 25 10 00 00 00 49 8b 8b c8 00 00
+    05a0: 00 65 48 89 0c 25 78 14 00 00 48 83 c4 38 41 5a
+    05b0: 4c 89 d4 41 5a 4c 8d 1d 00 00 00 00 4d 8b 1b 65
+    05c0: 4d 8b 1b 48 b9 ff ff ff ff ff ff ff ff f0 49 0f
+    05d0: c1 8b 38 02 00 00 48 81 e1 02 00 00 00 0f 84 3c
+    05e0: 00 00 00 48 83 ec 30 48 89 44 24 20 65 8b 0c 25
+    05f0: 68 00 00 00 48 89 4c 24 28 e8 00 00 00 00 48 8b
+    0600: 44 24 20 48 8b 4c 24 28 65 89 0c 25 68 00 00 00
+    0610: 48 83 c4 30 e9 06 00 00 00 ff 15 00 00 00 00 48
+    0620: 63 c0 48 81 f8 00 00 00 00 0f 84 35 00 00 00 48
+    0630: 8b 45 b8 48 81 f8 00 00 00 00 0f 84 24 00 00 00
+    0640: 4c 8b 5d c0 49 01 c3 4c 89 5d c0 e9 0e fe ff ff
+    0650: 48 8b 45 d8 4c 8b 5d d0 4c 01 d8 48 89 45 d8 e9
+    0660: 32 fc ff ff 48 31 c0 48 89 45 b8 48 89 44 24 20
+    0670: 48 8b 4d f0 4c 8b 5d d8 48 8b 55 e8 4c 01 da 4c
+    0680: 8b 45 e0 4d 29 d8 4c 8d 4d b8 48 8d 05 00 00 00
+    0690: 00 48 8b 00 48 85 c0 0f 84 6e 01 00 00 65 48 8b
+    06a0: 00 48 85 c0 0f 84 61 01 00 00 4c 8b 58 08 4d 85
+    06b0: db 0f 84 54 01 00 00 49 8b 43 18 48 85 c0 0f 84
+    06c0: 47 01 00 00 48 39 c4 0f 82 3e 01 00 00 4d 8b 5b
+    06d0: 20 4c 01 d8 48 39 c4 0f 83 2e 01 00 00 e8 00 00
+    06e0: 00 00 41 52 49 89 e2 48 8b 60 10 48 81 80 68 02
+    06f0: 00 00 ff ff ff ff 48 89 e0 41 52 48 83 ec 38 4d
+    0700: 8b 5a 28 4c 89 5c 24 20 65 48 89 04 25 08 00 00
+    0710: 00 48 81 e8 00 00 01 00 65 48 89 04 25 10 00 00
+    0720: 00 65 48 89 04 25 78 14 00 00 48 8d 05 00 00 00
+    0730: 00 48 8b 00 65 48 8b 00 4c 8b 18 49 81 83 e0 00
+    0740: 00 00 01 00 00 00 41 bb 05 00 00 00 f0 4c 01 98
+    0750: 38 02 00 00 ff 15 00 00 00 00 4c 8d 1d 00 00 00
+    0760: 00 4d 8b 1b 65 4d 8b 1b 4d 8b 5b 08 49 8b 8b 90
+    0770: 00 00 00 65 48 89 0c 25 08 00 00 00 49 8b 8b 98
+    0780: 00 00 00 65 48 89 0c 25 10 00 00 00 49 8b 8b c8
+    0790: 00 00 00 65 48 89 0c 25 78 14 00 00 48 83 c4 38
+    07a0: 41 5a 4c 89 d4 41 5a 4c 8d 1d 00 00 00 00 4d 8b
+    07b0: 1b 65 4d 8b 1b 48 b9 ff ff ff ff ff ff ff ff f0
+    07c0: 49 0f c1 8b 38 02 00 00 48 81 e1 02 00 00 00 0f
+    07d0: 84 3c 00 00 00 48 83 ec 30 48 89 44 24 20 65 8b
+    07e0: 0c 25 68 00 00 00 48 89 4c 24 28 e8 00 00 00 00
+    07f0: 48 8b 44 24 20 48 8b 4c 24 28 65 89 0c 25 68 00
+    0800: 00 00 48 83 c4 30 e9 06 00 00 00 ff 15 00 00 00
+    0810: 00 48 8b 45 d8 4c 8b 5d b8 4c 01 d8 e9 ba 01 00
+    0820: 00 48 8b 45 e0 e9 b1 01 00 00 48 31 c0 48 89 45
+    0830: b8 48 89 44 24 20 48 8b 4d f0 4c 8b 5d d8 48 8b
+    0840: 55 e8 4c 01 da 4c 8b 45 e0 4d 29 d8 4c 8d 4d b8
+    0850: 48 8d 05 00 00 00 00 48 8b 00 48 85 c0 0f 84 6e
+    0860: 01 00 00 65 48 8b 00 48 85 c0 0f 84 61 01 00 00
+    0870: 4c 8b 58 08 4d 85 db 0f 84 54 01 00 00 49 8b 43
+    0880: 18 48 85 c0 0f 84 47 01 00 00 48 39 c4 0f 82 3e
+    0890: 01 00 00 4d 8b 5b 20 4c 01 d8 48 39 c4 0f 83 2e
+    08a0: 01 00 00 e8 00 00 00 00 41 52 49 89 e2 48 8b 60
+    08b0: 10 48 81 80 68 02 00 00 ff ff ff ff 48 89 e0 41
+    08c0: 52 48 83 ec 38 4d 8b 5a 28 4c 89 5c 24 20 65 48
+    08d0: 89 04 25 08 00 00 00 48 81 e8 00 00 01 00 65 48
+    08e0: 89 04 25 10 00 00 00 65 48 89 04 25 78 14 00 00
+    08f0: 48 8d 05 00 00 00 00 48 8b 00 65 48 8b 00 4c 8b
+    0900: 18 49 81 83 e0 00 00 00 01 00 00 00 41 bb 05 00
+    0910: 00 00 f0 4c 01 98 38 02 00 00 ff 15 00 00 00 00
+    0920: 4c 8d 1d 00 00 00 00 4d 8b 1b 65 4d 8b 1b 4d 8b
+    0930: 5b 08 49 8b 8b 90 00 00 00 65 48 89 0c 25 08 00
+    0940: 00 00 49 8b 8b 98 00 00 00 65 48 89 0c 25 10 00
+    0950: 00 00 49 8b 8b c8 00 00 00 65 48 89 0c 25 78 14
+    0960: 00 00 48 83 c4 38 41 5a 4c 89 d4 41 5a 4c 8d 1d
+    0970: 00 00 00 00 4d 8b 1b 65 4d 8b 1b 48 b9 ff ff ff
+    0980: ff ff ff ff ff f0 49 0f c1 8b 38 02 00 00 48 81
+    0990: e1 02 00 00 00 0f 84 3c 00 00 00 48 83 ec 30 48
+    09a0: 89 44 24 20 65 8b 0c 25 68 00 00 00 48 89 4c 24
+    09b0: 28 e8 00 00 00 00 48 8b 44 24 20 48 8b 4c 24 28
+    09c0: 65 89 0c 25 68 00 00 00 48 83 c4 30 e9 06 00 00
+    09d0: 00 ff 15 00 00 00 00 48 8b 45 b8 48 81 c4 c0 00
+    09e0: 00 00 5d c3
+}
+```
