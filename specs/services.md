@@ -9041,6 +9041,146 @@ end 'main'
 2
 ```
 
+<!-- test: a-service-readied-while-its-own-coroutine-holds-the-strand -->
+<!-- procs: 1 -->
+⭐⭐ **A SEND TO A SERVICE PARKED ON ITS MAILBOX, WHILE A COROUTINE OF ITS OWN STILL HOLDS ITS STRAND, IS
+DELIVERED, AND THE SERVICE RUNS ON THAT STRAND.** A service and the coroutines it starts are one strand, and
+one machine at a time runs it: whoever claims the strand's holder publishes its token, and while it is held
+a readied member goes onto the strand queue for the holding machine to find. A send that finds its service
+parked readies it. When the strand is free that ready may claim the strand and publish it with no
+scheduler lock; when the strand is held, as here, the claim fails and the send takes the locked road,
+which pushes the service onto the front of its strand queue. This case is the second shape.
+
+`start` leaves `async work(self.probe)` in the service's state and replies, so the service parks on its
+empty mailbox and its strand runs `work` next. `work` yields until `finish` has run, and a yielding strand
+keeps its holder: the strand goes to the global queue's tail with `work` in it, and it is never given up.
+So whenever `main`'s `finish` arrives, the service is parked on its mailbox and the strand is held by `work`
+— on one processor `main` runs only once the service has parked and `work` has yielded the machine. The
+send must therefore leave the service where the holding strand finds it: `finish` sets `arrived`, `work`
+sees it at its next turn and returns 5, and `finish` answers it, so the program answers `1 + 5`.
+
+⛔ **A READY THAT PUBLISHED THE SERVICE WHILE `work` HOLDS THE STRAND** would hand one strand to two machines,
+or queue the service where its holding strand never looks. The first runs the service beside its own
+coroutine — two members of one strand at once. The second loses the wake: `finish` never runs, `work`
+yields for ever, and the case times out.
+
+✅ **A SOUNDNESS CONTROL, GREEN WHEN EVERY READY TAKES THE SCHEDULER LOCK**, because then the locked road is
+the only road. It pins that a ready road which claims the strand without that lock still falls back to the
+locked road on a held strand. Which road a ready took is not observable from the program: both deliver the
+message, and the answer is the same. What makes this the held-strand road is the shape — `work` cannot
+return before `finish` has run, so the strand is held at the send.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+type Probe
+	export var arrived as bool
+
+	static function create() returns Self
+		return Self{arrived: false}
+	end 'create'
+end 'Probe'
+
+function work(probe Probe) returns Integer
+	while not probe.arrived 'spin'
+		Scheduler.yield()
+	end 'spin'
+
+	return 5
+end 'work'
+
+type Svc
+	var pending as IntPromiseArray
+	var probe as Probe
+
+	static function create() returns Self
+		return Self{pending: IntPromiseArray.create(), probe: Probe.create()}
+	end 'create'
+
+	export function start() returns Integer
+		self.pending.push(async work(self.probe))
+		return 1
+	end 'start'
+
+	export function finish() returns Integer
+		self.probe.arrived = true
+		let p = try self.pending.pop() otherwise return 0
+		return await p
+	end 'finish'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	let a = try await h.start() otherwise 0
+	sleep(1)
+	let b = try await h.finish() otherwise 0
+	return (a + b) as ExitCode
+end 'main'
+```
+```exitcode
+6
+```
+
+<!-- test: a-service-readied-while-its-own-coroutine-holds-the-strand.on-four-processors -->
+<!-- procs: 4 -->
+The same program on four processors, where `main` and the strand run on different machines, so the send
+and the strand's yields race. `main` sleeps before it sends so that the service has parked by then; were the
+message to arrive first, the service would find it without parking, and the answer would be the same. A
+ready that published the service beside its running coroutine runs two members of one strand at once here.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntPromise = Promise with Integer
+typealias IntPromiseArray = Array with IntPromise
+
+type Probe
+	export var arrived as bool
+
+	static function create() returns Self
+		return Self{arrived: false}
+	end 'create'
+end 'Probe'
+
+function work(probe Probe) returns Integer
+	while not probe.arrived 'spin'
+		Scheduler.yield()
+	end 'spin'
+
+	return 5
+end 'work'
+
+type Svc
+	var pending as IntPromiseArray
+	var probe as Probe
+
+	static function create() returns Self
+		return Self{pending: IntPromiseArray.create(), probe: Probe.create()}
+	end 'create'
+
+	export function start() returns Integer
+		self.pending.push(async work(self.probe))
+		return 1
+	end 'start'
+
+	export function finish() returns Integer
+		self.probe.arrived = true
+		let p = try self.pending.pop() otherwise return 0
+		return await p
+	end 'finish'
+end 'Svc'
+
+function main() returns ExitCode
+	let h = spawn Svc.create()
+	let a = try await h.start() otherwise 0
+	sleep(1)
+	let b = try await h.finish() otherwise 0
+	return (a + b) as ExitCode
+end 'main'
+```
+```exitcode
+6
+```
+
 <!-- test: main-is-never-run-on-top-of-a-service-it-awaits -->
 <!-- procs: 1 -->
 ⛔⛔ **NOTHING RUNS ON TOP OF A PARKED GREEN THREAD, SO `main` MAY WAKE WHILE THE SERVICE IT AWAITS IS

@@ -14,7 +14,7 @@
 // strand's OWNER, as a token; the machine that pops it becomes the strand's one executor (`GtOffStrandHolder`)
 // and runs the owner and its coroutines from the strand queue (`__gt_run_strand`) until the strand has
 // nothing runnable. So at most one machine runs any member of a strand at a time, and every hand-over between
-// machines goes through `__sched_lock`.
+// machines goes through `__sched_lock` or the compare-and-swap that claims the strand.
 //
 // ⇒ **every refcount read-modify-write on a COUNTED box happens on the machine running that box's strand, one
 // machine at a time**; a box a share walk marked shared steps atomically instead.
@@ -354,16 +354,20 @@ let GtOffIsMainThread = GtOffCpuOffset + PointerFieldBytes
 let GtMainThreadMark = 1
 
 // ⭐⭐⭐ **1 WHILE SOME MACHINE OWNS THIS STRAND — its owner token is in a run queue, or a machine is running
-// the strand — and 0 otherwise.** Meaningful only on a green thread. Written only under `__sched_lock`: set by
-// `__gt_ready_locked` as it publishes the token, cleared by `__gt_strand_next` when the strand queue is empty.
+// the strand — and 0 otherwise.** Meaningful only on a green thread. Every claim is a 0 → 1 CAS
+// (`emitGtStrandClaimLost`), whose winner publishes the token: `__gt_ready_locked` claims under `__sched_lock`,
+// and the parked-service ready (`emitGtReadyParkedService`) with no lock. `__gt_strand_next` releases it under
+// the lock, when the strand queue is empty, with a store-release, so a claimer that reads 0 sees every store of
+// the hold that released it.
 //
-// ⭐⭐⭐ **THIS WORD IS WHAT KEEPS A STRAND ON ONE MACHINE.** A member is readied only onto its strand queue, and
-// the token is published only when this reads 0; it reads 0 only after the executing machine found the strand
-// queue empty under the same lock and gave the strand up. So a readier either sees 1 and leaves the member for
-// the machine that holds the strand — which re-checks the queue under the lock before it can let go — or sees
-// 0, at a moment when no machine is running any member, and becomes the one publisher of the one token. No
-// member of a strand can therefore be run by a second machine while one is running any of them, and the owner
-// is never readied onto a run queue while one of its coroutines executes elsewhere.
+// ⭐⭐⭐ **THIS WORD IS WHAT KEEPS A STRAND ON ONE MACHINE.** The token is published only by the readier whose
+// CAS wins, and this reads 0 only after the executing machine found the strand queue empty under
+// `__sched_lock` and gave the strand up. So a readier either loses and leaves the member on the strand queue
+// for the machine that holds the strand — which re-checks the queue under the lock before it can let go; the
+// lock-free readier does it through `__gt_ready` — or wins, at a moment when no machine is running any member,
+// and becomes the one publisher of the one token. No member of a strand can therefore be run by a second
+// machine while one is running any of them, and the owner is never readied onto a run queue while one of its
+// coroutines executes elsewhere.
 let GtOffStrandHolder = GtOffIsMainThread + PointerFieldBytes
 let StrandFree = 0
 let StrandHeld = 1
@@ -408,12 +412,15 @@ let GtOffStackResizedAt = GtOffStackMarks + PointerFieldBytes
 // needed to grow.
 let GtOffStackHighWater = GtOffStackResizedAt + PointerFieldBytes
 
-// ⭐⭐ **ON A STRAND's OWNER: THE MEMBER A PREEMPTION STOPPED, WHICH THE STRAND RUNS NEXT — OR 0.** A coroutine
-// gives up its green thread only where it waits (`async` is a coroutine, not a thread), so a preemption may take
-// the member's processor but never its turn: `__gt_strand_next` answers this slot before the owner or any
-// sibling in the queue, whatever was readied meanwhile. Written by the strand runner's preempt arm and taken by
-// `__gt_strand_next`, both under `__sched_lock` and on the machine holding the strand; it is empty whenever a
-// member runs, because the taking is what starts one.
+// ⭐⭐ **ON A STRAND's OWNER: THE MEMBER THE STRAND RUNS NEXT — OR 0** — a member a preemption stopped, or the
+// owner a lock-free ready published. A coroutine gives up its green thread only where it waits (`async` is a
+// coroutine, not a thread), so a preemption may take the member's processor but never its turn:
+// `__gt_strand_next` answers this slot before the owner or any sibling in the queue, whatever was readied
+// meanwhile. Written by the strand runner's preempt arm, under `__sched_lock` on the machine holding the
+// strand, and by the claimer that wins a Free strand in `emitGtReadyParkedService`, with no lock: Free means
+// this slot is empty, and that claimer is its one writer until a machine takes the token, so it can hold a
+// service no machine has taken yet. Taken by `__gt_strand_next` under the lock; it is empty whenever a member
+// runs, because the taking is what starts one.
 let GtOffStrandResume = GtOffStackHighWater + PointerFieldBytes
 
 // ⭐ **ON A REPLY CELL ANSWERING WITH A VALUE HELD AT AN INTERFACE TYPE: THE VALUE'S WITNESS HALF.** A cell
@@ -1182,13 +1189,14 @@ export let GtRunMainName = b"__gt_run_main"
 // the thread while the spawner is still storing its arguments, which reads as arguments silently lost.
 export let GtReadyName = b"__gt_ready"
 
-// ⭐⭐⭐ **`__gt_ready_locked(gt) -> wakeDebt` — THE ONE WAKE DOOR, Go's `ready`.** The caller holds
+// ⭐⭐⭐ **`__gt_ready_locked(gt) -> wakeDebt` — THE WAKE DOOR, Go's `ready`.** The caller holds
 // `__sched_lock`. It marks `gt` `ready`, puts it on its strand queue — the FRONT for a strand's owner, which a
 // strand runs first, the back for a coroutine — and, if no machine owns the strand, claims it and publishes the
 // owner's token to this processor's ring (the global queue on an OS thread with none). It answers
 // `WakeDebtOwed` exactly when it published a token: the caller then owes `__sched_wake_or_spawn` AFTER its own
 // release (`SchedRuntime.emitSchedWakeIfOwed`), because a wake inside a critical section has no StoreLoad fence
-// and a nested leave of this recursive lock releases nothing.
+// and a nested leave of this recursive lock releases nothing. A mailbox-parked service comes here only when
+// its strand is held, and is otherwise readied with no lock (`emitGtReadyParkedService`).
 //
 // EXPORTED for its callers in `MailboxRuntime` and for the root that keeps it alive for the hand-assembled
 // chunks that name it (`DeadFunctionElimination.seedRoots`).
@@ -2801,8 +2809,9 @@ end 'emitGtReadyLocked'
 // its strand was waiting on; a coroutine joins behind whatever its strand already has runnable.
 //
 // ⭐⭐ **THE CLAIM AND THE PUBLISH HAPPEN IN THE CALLER's CRITICAL SECTION**, and so does the strand runner's
-// release (`__gt_strand_next`), which is what makes `GtOffStrandHolder`'s exclusivity argument hold: the
-// member is on the strand queue before either this call or the releaser can look at the holder word.
+// release (`__gt_strand_next`): the member is on the strand queue before either this call or the releaser
+// can look at the holder word, so the releaser cannot give the strand up past it. The lock does not exclude
+// the lock-free claimer (`emitGtReadyParkedService`); the claim being a CAS does, so the two cannot both win.
 function buildGtReadyLocked(module StdModule)
 	var func = IrFunction.createFromStd(GtReadyLockedName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
@@ -2828,19 +2837,48 @@ function buildGtReadyLocked(module StdModule)
 	module.appendOp(coroArm, op: StdOp.call(ids.mint(), callee: GtCoroEnqueueName, args: argsOf(gt)))
 	module.setTerminator(coroArm, op: StdOp.branch(claim.id))
 
-	let holder = emitLoadField(module, block: claim, record: owner, offset: GtOffStrandHolder, ids: ids)
-	let held = emitCmp(module, block: claim, a: holder, b: emitConst(module, block: claim, value: StrandFree, ids: ids), pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(claim, op: StdOp.condBranch(held, thenBlockId: alreadyHeld.id, elseBlockId: publish.id))
+	let heldByAnother = emitGtStrandClaimLost(module, block: claim, owner: owner, ids: ids)
+	module.setTerminator(claim, op: StdOp.condBranch(heldByAnother, thenBlockId: alreadyHeld.id, elseBlockId: publish.id))
 
 	emitConstReturn(module, block: alreadyHeld, value: WakeDebtNone, ids: ids)
 
-	emitStoreField(module, block: publish, record: owner, offset: GtOffStrandHolder, value: emitConst(module, block: publish, value: StrandHeld, ids: ids))
-	_ = emitFieldAccumulate(module, block: publish, record: owner, offset: GtOffStrandRefs, delta: emitConst(module, block: publish, value: OneMore, ids: ids), multiM: true, ids: ids)
-	emitSchedRunqPut(module, block: publish, gt: owner, ids: ids)
+	emitGtStrandTokenPublish(module, block: publish, owner: owner, ids: ids)
 	emitConstReturn(module, block: publish, value: WakeDebtOwed, ids: ids)
 
 	module.functions.push(func)
 end 'buildGtReadyLocked'
+
+function emitGtStrandClaimLost(module StdModule, block IrBlock, owner ValueId, ids ValueMinter) returns ValueId
+	let holderAddr = emitFieldAddr(module, block: block, record: owner, offset: GtOffStrandHolder, ids: ids)
+	let won = ids.mint()
+	module.appendOp(block, op: StdOp.atomicCas(won, addrId: holderAddr, expectedId: emitConst(module, block: block, value: StrandFree, ids: ids), replacementId: emitConst(module, block: block, value: StrandHeld, ids: ids)))
+	return emitCasLost(module, block: block, result: won, ids: ids)
+end 'emitGtStrandClaimLost'
+
+function emitGtStrandTokenPublish(module StdModule, block IrBlock, owner ValueId, ids ValueMinter)
+	_ = emitFieldAccumulate(module, block: block, record: owner, offset: GtOffStrandRefs, delta: emitConst(module, block: block, value: OneMore, ids: ids), multiM: true, ids: ids)
+	emitSchedRunqPut(module, block: block, gt: owner, ids: ids)
+end 'emitGtStrandTokenPublish'
+
+// `service` must be a green thread's own record, its strand's owner: a mailbox park happens only on a
+// service's own green thread, so no owner is loaded. A coroutine here would claim a holder word nothing reads
+// and publish itself as a token.
+export function emitGtReadyParkedService(module StdModule, func IrFunction, cur IrBlock, service ValueId, cont IrBlock, ids ValueMinter)
+	var lockFree = module.addBlock(func, label: b"readyservicefree", heat: BlockHeat.normal)
+	var locked = module.addBlock(func, label: b"readyservicelocked", heat: BlockHeat.normal)
+
+	let heldByAnother = emitGtStrandClaimLost(module, block: cur, owner: service, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(heldByAnother, thenBlockId: locked.id, elseBlockId: lockFree.id))
+
+	emitStoreField(module, block: lockFree, record: service, offset: GtOffStatus, value: emitConst(module, block: lockFree, value: GtStatusReady, ids: ids))
+	emitStoreField(module, block: lockFree, record: service, offset: GtOffStrandResume, value: service)
+	emitGtStrandTokenPublish(module, block: lockFree, owner: service, ids: ids)
+	emitSchedWakeAnIdleM(module, block: lockFree, ids: ids)
+	module.setTerminator(lockFree, op: StdOp.branch(cont.id))
+
+	module.appendOp(locked, op: StdOp.call(ids.mint(), callee: GtReadyName, args: argsOf(service)))
+	module.setTerminator(locked, op: StdOp.branch(cont.id))
+end 'emitGtReadyParkedService'
 
 // ⭐⭐⭐ **WHERE ONE INTRUSIVE FIFO'S TWO ENDS LIVE AND WHICH LINK IT THREADS — the only things the global run
 // queue and a strand queue differ in, and therefore the only things the emitters below take.**
@@ -3425,9 +3463,8 @@ function buildGtCoroDequeue(module StdModule)
 end 'buildGtCoroDequeue'
 
 // ⭐⭐⭐ **`__gt_strand_next(owner, parked) -> gt | 0` — WHAT THIS STRAND RUNS NEXT, OR 0 HAVING GIVEN
-// THE STRAND UP.** The strand runner's consume door: the lock, the member a preemption stopped
-// (`GtOffStrandResume`) or else the pop, and the tombstone refusal `emitGtTombstoneHandback` shares
-// with `__sched_find_runnable`.
+// THE STRAND UP.** The strand runner's consume door: the lock, the resume slot (`GtOffStrandResume`) or else
+// the pop, and the tombstone refusal `emitGtTombstoneHandback` shares with `__sched_find_runnable`.
 //
 // `parked` is the member that has just parked, or 0. Its `__gt_register_park` runs in the same hold
 // as the pop, so a strand turn takes `__sched_lock` once, and the wake debt the registration
@@ -3493,7 +3530,7 @@ function buildGtStrandNext(module StdModule)
 	let queueEmpty = emitCmp(module, block: dequeue, a: popped, b: emitConst(module, block: dequeue, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(dequeue, op: StdOp.condBranch(queueEmpty, thenBlockId: release.id, elseBlockId: gotOne.id))
 
-	emitStoreField(module, block: release, record: owner, offset: GtOffStrandHolder, value: emitConst(module, block: release, value: StrandFree, ids: ids))
+	module.appendOp(release, op: StdOp.storeRelease(owner, offset: GtOffStrandHolder, valueId: emitConst(module, block: release, value: StrandFree, ids: ids), valueType: StdType.i64))
 	emitSchedLockLeave(module, block: release, ids: ids)
 	var releasePaid = emitGtPayDebtAfterRelease(module, func: func, cur: release, owed: owed, label: b"snrelease", ids: ids)
 	var unreffed = emitGtStrandUnref(module, func: func, cur: releasePaid, owner: owner, ids: ids)
@@ -4613,8 +4650,7 @@ function emitGtReleaserCall(module StdModule, func IrFunction, ids ValueMinter, 
 	let cleared = emitConst(module, block: claim, value: 0, ids: ids)
 	let won = ids.mint()
 	module.appendOp(claim, op: StdOp.atomicCas(won, addrId: releaserAddr, expectedId: releaser, replacementId: cleared))
-	let lost = emitConst(module, block: claim, value: AtomicCasFailed, ids: ids)
-	let lostTheClaim = emitCmp(module, block: claim, a: won, b: lost, pred: StdCmpPred.eq, ids: ids)
+	let lostTheClaim = emitCasLost(module, block: claim, result: won, ids: ids)
 	module.setTerminator(claim, op: StdOp.condBranch(lostTheClaim, thenBlockId: cont.id, elseBlockId: release.id))
 
 	let consumedFlag = emitConst(module, block: release, value: asyncResultConsumedFlag(resultDisposition), ids: ids)
@@ -8029,7 +8065,7 @@ export function emitSubpRequireCollectorTaken(module StdModule, func IrFunction,
 	let wordAddr = emitFieldAddr(module, block: cur, record: slot, offset: SubpSlotCollector, ids: ids)
 	let won = ids.mint()
 	module.appendOp(cur, op: StdOp.atomicCas(won, addrId: wordAddr, expectedId: emitConst(module, block: cur, value: SubpCollectorFree, ids: ids), replacementId: emitConst(module, block: cur, value: replacement, ids: ids)))
-	let lost = emitCmp(module, block: cur, a: won, b: emitConst(module, block: cur, value: AtomicCasFailed, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let lost = emitCasLost(module, block: cur, result: won, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(lost, thenBlockId: contended.id, elseBlockId: taken.id))
 	emitRuntimeAbort(module, func: func, block: contended, abort: RuntimeAbort.subpCollectSlotReleased, ids: ids)
 
@@ -8047,7 +8083,7 @@ export function emitSubpStdinTransition(module StdModule, func IrFunction, ids V
 	let stateAddr = emitFieldAddr(module, block: cur, record: slot, offset: SubpSlotStdinState, ids: ids)
 	let answer = ids.mint()
 	module.appendOp(cur, op: StdOp.atomicCas(answer, addrId: stateAddr, expectedId: emitConst(module, block: cur, value: expected, ids: ids), replacementId: emitConst(module, block: cur, value: replacement, ids: ids)))
-	let lost = emitCmp(module, block: cur, a: answer, b: emitConst(module, block: cur, value: AtomicCasFailed, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let lost = emitCasLost(module, block: cur, result: answer, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(lost, thenBlockId: whenLost.id, elseBlockId: won.id))
 
 	return won
@@ -8864,8 +8900,7 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	let claimedValue = emitConst(module, block: slotCheck, value: SubpSlotClaimed, ids: ids)
 	let wonSlot = ids.mint()
 	module.appendOp(slotCheck, op: StdOp.atomicCas(wonSlot, addrId: inUseAddr, expectedId: emitConst(module, block: slotCheck, value: SubpSlotFree, ids: ids), replacementId: claimedValue))
-	let lostSlot = emitConst(module, block: slotCheck, value: AtomicCasFailed, ids: ids)
-	let takenByAnother = emitCmp(module, block: slotCheck, a: wonSlot, b: lostSlot, pred: StdCmpPred.eq, ids: ids)
+	let takenByAnother = emitCasLost(module, block: slotCheck, result: wonSlot, ids: ids)
 	module.setTerminator(slotCheck, op: StdOp.condBranch(takenByAnother, thenBlockId: slotNext.id, elseBlockId: gotSlot.id))
 
 	let oneS = emitConst(module, block: slotNext, value: 1, ids: ids)

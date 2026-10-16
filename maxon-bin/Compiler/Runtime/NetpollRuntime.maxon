@@ -348,7 +348,7 @@ function buildNetpollBreak(module StdModule, target Target)
 	var doneBlock = module.addBlock(func, label: b"npdone", heat: BlockHeat.normal)
 
 	let won = emitNetpollClaimWakeSig(module, block: entry, expected: WakeSigClear, replacement: WakeSigRaised, ids: ids)
-	let inFlight = emitCasLostFlag(module, block: entry, result: won, ids: ids)
+	let inFlight = emitCasLost(module, block: entry, result: won, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(inFlight, thenBlockId: doneBlock.id, elseBlockId: raise.id))
 
 	emitNetpollRaise(module, func: func, cur: raise, shape: netpollShape(target), cont: raised, ids: ids)
@@ -366,11 +366,6 @@ function emitNetpollClaimWakeSig(module StdModule, block IrBlock, expected FullR
 	module.appendOp(block, op: StdOp.atomicCas(won, addrId: addr, expectedId: emitConst(module, block: block, value: expected, ids: ids), replacementId: emitConst(module, block: block, value: replacement, ids: ids)))
 	return won
 end 'emitNetpollClaimWakeSig'
-
-// 1 when a CAS answered `AtomicCasFailed`.
-function emitCasLostFlag(module StdModule, block IrBlock, result ValueId, ids ValueMinter) returns ValueId
-	return emitCmp(module, block: block, a: result, b: emitConst(module, block: block, value: AtomicCasFailed, ids: ids), pred: StdCmpPred.eq, ids: ids)
-end 'emitCasLostFlag'
 
 // Send one break to the poller, whatever `__np_wake_sig` says — the caller has settled that. Terminates `cur`
 // and continues at `cont`.
@@ -622,7 +617,7 @@ function emitNetpollConsumeBreak(module StdModule, func IrFunction, cur IrBlock,
 	end 'take'
 
 	let won = emitNetpollClaimWakeSig(module, block: cleared, expected: WakeSigRaised, replacement: WakeSigClear, ids: ids)
-	module.setTerminator(cleared, op: StdOp.condBranch(emitCasLostFlag(module, block: cleared, result: won, ids: ids), thenBlockId: lostCount.id, elseBlockId: cont.id))
+	module.setTerminator(cleared, op: StdOp.condBranch(emitCasLost(module, block: cleared, result: won, ids: ids), thenBlockId: lostCount.id, elseBlockId: cont.id))
 	emitRuntimeAbort(module, func: func, block: lostCount, abort: RuntimeAbort.netpollFailed, ids: ids)
 
 	// A non-blocking poll passes the break on.

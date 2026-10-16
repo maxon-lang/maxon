@@ -11,7 +11,7 @@
 // > **A COROUTINE — what this runtime calls a GT that `async` created — belongs to the STRAND of the green
 // > thread that created it. A run queue holds a strand's owner as a token, never a coroutine, and the one
 // > machine that holds the token runs every member of the strand (`GtRuntime.GtOffStrandHolder`); a strand
-// > moves between machines only through `__sched_lock`. Therefore every refcount read-modify-write on a
+// > moves between machines only through `__sched_lock` or the compare-and-swap that claims it. Therefore every refcount read-modify-write on a
 // > COUNTED box happens on the machine running that box's strand, one machine at a time, and steps plain
 // > (`MmRuntime.emitAdjustRefcount`); the one exception is a box a share walk marked SHARED, whose
 // > count steps atomically. The cross-thread writers that remain — machines publishing, popping and
@@ -2678,6 +2678,7 @@ function emitSchedPidlePutLocked(module StdModule, func IrFunction, cur IrBlock,
 
 	emitStoreField(module, block: idleIt, record: p, offset: POffStatus, value: emitConst(module, block: idleIt, value: PStatusUnused, ids: ids))
 	emitSchedListPush(module, block: idleIt, head: SchedListHead.lockedWord(SchedPidleLabel), linkOffset: POffPidleNext, node: p, ids: ids)
+
 	// Locked though `__sched_lock` is held: see `SchedNpidleLabel`.
 	_ = emitGlobalAccumulate(module, block: idleIt, label: SchedNpidleLabel, delta: emitConst(module, block: idleIt, value: OneMore, ids: ids), multiM: true, ids: ids)
 	module.setTerminator(idleIt, op: StdOp.branch(placed.id))
@@ -2858,8 +2859,7 @@ end 'emitSchedWakeAnIdleM'
 
 // ⭐ **PUT A STRAND TOKEN IN THIS PROCESSOR'S `runnext` SLOT, WITHOUT THE WAKE.** It requires no lock state of
 // its caller: the put takes no lock, and an overflow's recursive entry into `__sched_lock` is safe (see
-// `buildSchedRunqPut`). EXPORTED for `GtRuntime.__gt_ready_locked`, which publishes a token under the lock and
-// answers the wake as a debt.
+// `buildSchedRunqPut`). EXPORTED for `GtRuntime.emitGtStrandTokenPublish`, whose callers pay the wake.
 export function emitSchedRunqPut(module StdModule, block IrBlock, gt ValueId, ids ValueMinter)
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: SchedRunqPutName, args: argsOf(gt)))
 end 'emitSchedRunqPut'
@@ -3432,9 +3432,9 @@ function emitRunqPublishTail(module StdModule, block IrBlock, p ValueId, delta V
 	module.appendOp(block, op: StdOp.atomicRmw(ids.mint(), addrId: tailAddr, operandId: delta, opcode: StdAtomicRmwOpcode.add))
 end 'emitRunqPublishTail'
 
-// `1` if this CAS lost. Every CAS in this file reads it the same way, and `AtomicCasFailed` is the
-// contract's own spelling of the answer (`StdDialect`), not a literal 0 restated at each.
-function emitCasLost(module StdModule, block IrBlock, result ValueId, ids ValueMinter) returns ValueId
+// `1` if this CAS lost. `AtomicCasFailed` is the contract's own spelling of the answer (`StdDialect`), not a
+// literal 0 restated at each CAS.
+export function emitCasLost(module StdModule, block IrBlock, result ValueId, ids ValueMinter) returns ValueId
 	let failed = emitConst(module, block: block, value: AtomicCasFailed, ids: ids)
 	return emitCmp(module, block: block, a: result, b: failed, pred: StdCmpPred.eq, ids: ids)
 end 'emitCasLost'
@@ -3494,8 +3494,8 @@ end 'emitSchedAnyRunnable'
 // full ring goes. The thread the slot held is kicked to the ring TAIL, which is Go's `runqput(…, false)` for it.
 //
 // ⭐⭐ **EVERY CALLER WANTS THE SLOT, WHICH IS WHY THERE IS NO `next` ARGUMENT TO CHOOSE WITH.** This is the one
-// ring-push door and `__gt_ready_locked` is its one caller — Go's `ready` and `newproc`, both of which pass
-// `next: true`. Go's three `next: false` producers write the ring DIRECTLY here and never pass through this
+// ring-push door and the strand-token publish (`GtRuntime.emitGtStrandTokenPublish`) is its one caller — Go's
+// `ready` and `newproc`, both of which pass `next: true`. Go's three `next: false` producers write the ring DIRECTLY here and never pass through this
 // function: the overflow batch below, `__sched_find_runnable`'s global batch, and `__sched_steal`'s copy.
 //
 // ⚠ **GO'S `!haveSysmon` REFUSAL HAS NO SUBJECT HERE.** It disables the slot on a platform with no monitor to
@@ -3555,9 +3555,9 @@ function buildSchedRunqPut(module StdModule)
 
 	// globalOnly: this OS thread owns no P, so it has no ring to push — the global queue is where a thread
 	// belongs when nobody owns it yet, and it is exactly what `__sched_find_runnable`'s batch grab is for. The
-	// lock is taken HERE rather than owed by the caller: a CRITICAL_SECTION is recursive, so the one caller
-	// that already holds it (every `__gt_ready_locked` caller) pays two counted ops
-	// and nothing else — against a precondition no site could check.
+	// lock is taken HERE rather than owed by the caller: `emitGtReadyParkedService` reaches this holding no
+	// lock, and a CRITICAL_SECTION is recursive, so a `__gt_ready_locked` caller, which already holds it, pays
+	// two counted ops and nothing else.
 	emitSchedLockEnter(module, block: globalOnly, ids: ids)
 	emitSchedEnqueueLocked(module, block: globalOnly, gt: gt, ids: ids)
 	emitSchedLockLeave(module, block: globalOnly, ids: ids)
@@ -6974,13 +6974,15 @@ end 'emitSchedRaiseHighWater'
 // park/unpark round trip that is almost every publish. `SchedSpinningLabel` and the `idletest`
 // block carry the readings that justify it.
 //
-// ⚠⚠ **THE QUEUE PUBLISH MUST BE VISIBLE BEFORE THE COUNT IS READ, AND BOTH ARMS CARRY THE FENCE THAT MAKES
-// IT SO.** Otherwise a publisher can skip a wake on the strength of a spinner whose search preceded its
+// ⚠⚠ **THE QUEUE PUBLISH MUST BE VISIBLE BEFORE THE COUNT IS READ, AND EVERY ARM CARRIES THE FENCE THAT
+// MAKES IT SO.** Otherwise a publisher can skip a wake on the strength of a spinner whose search preceded its
 // publish. The GLOBAL TAIL's fence is the caller's
 // `LeaveCriticalSection`; the LOCAL RING's is `emitRunqPublishTail`'s `lock xadd`, whose LOCK prefix is the
 // StoreLoad barrier — that function states it at the instruction and forbids the "optimisation" back to a
-// plain store, and this is the reader it protects. ⚠ A caller that already HELD the lock and pushed to the
-// ring inside it has neither: the `lock xadd` is what covers it, which is why `__gt_timer_check` and
+// plain store, and this is the reader it protects. The `runnext` slot's is `__sched_runq_put`'s exchange,
+// which a publish with no lock ends on (`GtRuntime.emitGtReadyParkedService`): `lock cmpxchg` on x64, and
+// on arm64 its `stlxr`, which the acquire reads below cannot pass. ⚠ A caller that already HELD the lock
+// and pushed to the ring inside it has neither: the `lock xadd` is what covers it, which is why `__gt_timer_check` and
 // the poller's readiness walk may publish inside their walk and wake once after it.
 //
 // ⭐ **AND `__sched_startm` TAKES `__sched_lock` WHILE THIS FUNCTION DOES NOT.** The park is one critical
@@ -7018,8 +7020,8 @@ function buildSchedWakeOrSpawn(module StdModule)
 	// wakes takes it over through `MOffSpinning`, and every other road gives it back inside that call.
 	//
 	// ⛔ **THE READ IS AN ACQUIRE, BECAUSE IT IS THE PUBLISHER'S HALF OF THE DEKKER PAIR.** The publish before
-	// it ends in a locked read-modify-write — the ring tail (`emitRunqPublishTail`) or the release of
-	// `__sched_lock` — and on arm64 a plain load may be satisfied before that store-release exclusive is
+	// it ends in a locked read-modify-write — the ring tail (`emitRunqPublishTail`), the `runnext` exchange
+	// or the release of `__sched_lock` — and on arm64 a plain load may be satisfied before that store-release exclusive is
 	// visible, while an acquire may not. A stale count read EARLY is a wake skipped for a spinner that has
 	// already re-checked: work stranded. x86's `lock` prefix orders the plain load already, and the acquire
 	// costs it nothing.

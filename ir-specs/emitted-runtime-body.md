@@ -9110,6 +9110,24 @@ one enter and one leave of its mailbox's lock on its append road, and one leave 
 locked step in this pin — `x64.lock add` on an x64 lane, an atomic add on an arm64 lane — is the
 per-message cost this case exists to keep out.
 
+**A SEND TO A PARKED RECEIVER READIES IT WITHOUT `__sched_lock`, AS GO's `goready` DOES.** Once the mailbox
+lock is left, the send holds the service it took from the mailbox's parked slot, and readies it on one of
+two roads:
+
+- **The lock-free road.** The send claims the service's strand with a compare-and-swap of its strand
+  holder from free to held. A free holder means the strand queue is empty, its resume slot is 0 and no
+  member of the strand runs, so the winner is the strand's one publisher and needs no lock: it stores the
+  service's status `ready`, stores the service into the strand's resume slot (which the strand's next turn
+  takes before anything else, so the owner still runs first), steps the strand's reference count, puts
+  the owner's token on its processor's run queue with `__sched_runq_put`, and pays the wake with
+  `__sched_wake_or_spawn`. Nothing on this road enters `__sched_lock`.
+- **The locked fallback.** A failed claim means the strand is held: a coroutine of the service is queued
+  or running. The send then calls the locked `__gt_ready`, which pushes the service onto the front of its
+  strand queue for the machine holding the strand to find.
+
+A `__sched_lock` enter between the strand claim and the run-queue put — or a parked road with no claim,
+going straight to `__gt_ready` — is the second lock per wake this case exists to keep out.
+
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -9460,8 +9478,27 @@ func @__mbox_send {
     x64.cmpRegImm32 r12, 0
     x64.jcc equal, senddone
   sendwakeparked:
+    x64.leaRegRegImm32 rcx, r12, 352
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rdx, 1
+    x64.lock cmpxchg [rcx], rdx
+    x64.setccReg equal, rax
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, readyservicefree
+  readyservicelocked:
     x64.movRegReg rcx, r12
     x64.callDirect __gt_ready
+    x64.jmp senddone
+  readyservicefree:
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r12 + 16], rax
+    x64.storeBaseDispReg.word64 [r12 + 416], r12
+    x64.movRegImm32 rax, 1
+    x64.leaRegRegImm32 rcx, r12, 360
+    x64.lock add [rcx], rax
+    x64.movRegReg rcx, r12
+    x64.callDirect __sched_runq_put
+    x64.callDirect __sched_wake_or_spawn
     x64.jmp senddone
   sendclosed:
     x64.leaRegRegImm32 rcx, rbx, 64
@@ -9813,8 +9850,27 @@ func @__mbox_send {
     x64.cmpRegImm32 r12, 0
     x64.jcc equal, senddone
   sendwakeparked:
+    x64.leaRegRegImm32 rcx, r12, 352
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rdx, 1
+    x64.lock cmpxchg [rcx], rdx
+    x64.setccReg equal, rax
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, readyservicefree
+  readyservicelocked:
     x64.movRegReg rcx, r12
     x64.callDirect __gt_ready
+    x64.jmp senddone
+  readyservicefree:
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r12 + 16], rax
+    x64.storeBaseDispReg.word64 [r12 + 416], r12
+    x64.movRegImm32 rax, 1
+    x64.leaRegRegImm32 rcx, r12, 360
+    x64.lock add [rcx], rax
+    x64.movRegReg rcx, r12
+    x64.callDirect __sched_runq_put
+    x64.callDirect __sched_wake_or_spawn
     x64.jmp senddone
   sendclosed:
     x64.leaRegRegImm32 rcx, rbx, 64
@@ -10165,8 +10221,26 @@ func @__mbox_send {
     arm64.cmp x20, 0
     arm64.b.eq senddone
   sendwakeparked:
+    arm64.add x0, x20, 352
+    arm64.movImm x1, 0
+    arm64.movImm x2, 1
+    arm64.arm64AtomicCas x0, [x0], x1, x2
+    arm64.cmp x0, 0
+    arm64.b.ne readyservicefree
+  readyservicelocked:
     arm64.movRegReg x0, x20
     arm64.bl __gt_ready
+    arm64.b senddone
+  readyservicefree:
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x20 + 16], x0
+    arm64.storeBaseDispReg.word64 [x20 + 416], x20
+    arm64.movImm x0, 1
+    arm64.add x1, x20, 360
+    arm64.arm64AtomicRmw.add x0, [x1], x0
+    arm64.movRegReg x0, x20
+    arm64.bl __sched_runq_put
+    arm64.bl __sched_wake_or_spawn
     arm64.b senddone
   sendclosed:
     arm64.add x0, x19, 64
@@ -10526,8 +10600,26 @@ func @__mbox_send {
     arm64.cmp x20, 0
     arm64.b.eq senddone
   sendwakeparked:
+    arm64.add x0, x20, 352
+    arm64.movImm x1, 0
+    arm64.movImm x2, 1
+    arm64.arm64AtomicCas x0, [x0], x1, x2
+    arm64.cmp x0, 0
+    arm64.b.ne readyservicefree
+  readyservicelocked:
     arm64.movRegReg x0, x20
     arm64.bl __gt_ready
+    arm64.b senddone
+  readyservicefree:
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x20 + 16], x0
+    arm64.storeBaseDispReg.word64 [x20 + 416], x20
+    arm64.movImm x0, 1
+    arm64.add x1, x20, 360
+    arm64.arm64AtomicRmw.add x0, [x1], x0
+    arm64.movRegReg x0, x20
+    arm64.bl __sched_runq_put
+    arm64.bl __sched_wake_or_spawn
     arm64.b senddone
   sendclosed:
     arm64.add x0, x19, 64
@@ -10564,6 +10656,1197 @@ func @__mbox_send {
   senddone:
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+```
+
+<!-- test: a-locked-ready-claims-the-strand-holder-with-a-cas -->
+**EVERY CLAIM OF A STRAND's HOLDER IS A COMPARE-AND-SWAP, SO A LOCK-FREE CLAIMER AND A LOCKED ONE NEVER BOTH
+WIN.** A strand's holder word says whether some machine owns the strand: free, or held while its owner's
+token is in a run queue or a machine runs one of its members. Whoever turns it from free to held becomes the
+strand's one publisher. A send to a parked service claims it with no lock held, and `__gt_ready_locked`
+claims it under `__sched_lock` — and the lock does not exclude the first claimer, so the locked claim is the
+same compare-and-swap. The release is still a plain store under the lock: only the holder releases, and no
+claim can win against it, because a claim needs the word free.
+
+What this pin shows is `__gt_ready_locked`'s claim road: after the readied thread is queued on its strand,
+one atomic compare-and-swap of the owner's holder word from free to held, whose success publishes the
+token and whose failure answers no wake debt. A plain load of the holder followed by a plain store of held
+is the window in which a lock-free claimer wins too, and two machines run one strand.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Counter
+	var calls as Integer
+
+	static function create() returns Self
+		return Self{calls: 0}
+	end 'create'
+
+	export function next(n Integer) returns Integer
+		self.calls = self.calls + 1
+
+		return n + 1
+	end 'next'
+end 'Counter'
+
+function main() returns ExitCode
+	let c = spawn Counter.create()
+	let a = try await c.next(1) otherwise 0
+
+	return a as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+```RequiredRuntime
+__gt_ready_locked
+```
+```TargetIr:x64-windows
+data {
+  __gt_allg@0 = i64 0
+  __gt_allglen@8 = i64 0
+  __gt_allgcap@16 = i64 0
+  __gt_hold_epoch@24 = i64 0
+  __gt_run_queue_head@32 = i64 0
+  __gt_run_queue_tail@40 = i64 0
+  __gt_timer_count@48 = i64 0
+  __gt_timer_heap_base@56 = i64 0
+  __gt_timer_capacity@64 = i64 0
+  __gt_timer_seq@72 = i64 0
+  __gt_timer_when@80 = i64 9223372036854775807
+  __gt_trace_counter@88 = i64 0
+  __gt_live_count@96 = i64 0
+  __gt_quiesce_waiter@104 = i64 0
+  __gt_quiesce_stuck@112 = i64 0
+  __gt_seed_bytes@120 = i64 16384
+  __gt_stack_bytes_sum@128 = i64 0
+  __gt_stack_bytes_count@136 = i64 0
+  __gt_seed_sum_seen@144 = i64 0
+  __gt_seed_count_seen@152 = i64 0
+  __gt_keeps_cpu_clock@160 = i64 0
+  __gt_stack_pool@168 = i64 0
+  __sched_active_workers@176 = i64 1
+  __sched_max_active_workers@184 = i64 1
+  __sched_tls_index@192 = i64 0
+  __sched_tls_teb_offset@200 = i64 0
+  __sched_procs@208 = i64 0
+  __sched_allm@216 = i64 0
+  __sched_async_preempt_off@224 = i64 0
+  __sched_midle@232 = i64 0
+  __sched_pidle@240 = i64 0
+  __gt_gfree_head@248 = i64 0
+  __sched_arena_cursor@256 = i64 0
+  __sched_arena_limit@264 = i64 0
+  __gt_records_carved@272 = i64 0
+  __sched_npidle@280 = i64 0
+  __sched_runq_size@288 = i64 0
+  __sched_global_pushes@296 = i64 0
+  __sched_timer_scan_steps@304 = i64 0
+  __sched_mcount@312 = i64 0
+  __sched_nmidle@320 = i64 0
+  __sched_main_m@328 = i64 0
+  __sched_phase@336 = i64 0
+  __sched_lastpoll@344 = i64 0
+  __sched_poll_until@352 = i64 0
+  __sched_regain_head@360 = i64 0
+  __np_poller@368 = i64 0
+  __np_break@376 = i64 0
+  __np_wake_sig@384 = i64 0
+  __np_pd_table@392 = i64 0
+  __np_pd_cap@400 = i64 0
+  __np_waiters@408 = i64 0
+  __sched_num_procs@416 = i64 0
+  __sched_shutdown_flag@424 = i64 0
+  __sched_lock@432 = i64 0
+  __sched_lock_depth_sink@440 = i64 0
+  __sched_nmspinning@448 = i64 0
+  __sched_needspinning@456 = i64 0
+  __sched_sysmon_event@464 = i64 0
+  __sched_sysmon_wait@472 = i64 0
+  __sched_timer_starts@480 = i64 0
+  __sched_preempt_ext_lock@488 = i64 0
+  __sched_preempt_context@496 = i64 0
+  __slab_arena_list@504 = i64 0
+  __slab_arena_map_l1@512 = i64 0
+  __slab_state@520 = i64 0
+  __mrt_console_probe_stdin@528 = i8 0
+  __mrt_console_probe_stdout@529 = i8 0
+  __mrt_console_probe_stderr@530 = i8 0
+  __mrt_program_started@531 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+  __il_body:
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+  __il_cont:
+    x64.leaRegFunc rcx, [rip + Counter.__loop]
+    x64.leaRegFunc rax, [rip + Counter.__abandon]
+    x64.movRegReg rdx, r8
+    x64.callDirect __svc_spawn
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.movRegImm32 rbx, 1
+    x64.movRegImm32 rcx, 0
+    x64.callDirect __gt_cell_alloc
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rcx, 32
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.storeBaseDispReg.word64 [r8 + 16], rbx
+    x64.storeBaseDispReg.word64 [r8 + 24], r13
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.movRegReg rdx, r8
+    x64.callDirect __mbox_send
+    x64.movRegReg rcx, r13
+    x64.callDirect __gt_try_await
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 rbx, 0
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rbx, r8
+  trycont:
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg rbx, rax
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mbox_handle_drop_box
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-locked-ready-claims-the-strand-holder-with-a-cas.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Counter.__loop {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+  serve:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mbox_recv
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, stopping
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
+  __shutdown:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 16]
+    x64.storeBaseDispReg.word64 [r12 + 56], rax
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+  stopping:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mbox_close
+  drain:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mbox_recv
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, abandon
+  finished:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __mbox_service_exit
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  abandon:
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __mbox_abandon
+    x64.jmp drain
+  next:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 16]
+    x64.loadRegBaseDisp.word64 r13, [r8 + 24]
+  __il_body:
+    x64.aluBaseDispImm32.add [rbx + 0], 1
+    x64.leaRegRegImm32 r14, rax, 1
+  __il_cont:
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.movRegImm32 rax, 0
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r14
+    x64.callDirect __gt_cell_complete
+    x64.jmp serve
+}
+
+func @Counter.__abandon {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=next] @__jumptable_5
+  __shutdown:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 1
+    x64.callDirect __gt_cell_complete
+    x64.jmp abandondrop
+  next:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 24]
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 1
+    x64.callDirect __gt_cell_complete
+  abandondrop:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, r8
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @__gt_ready_locked {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [rcx + 16], rax
+    x64.loadRegBaseDisp.word64 rbx, [rcx + 264]
+    x64.loadRegBaseDisp.word64 rax, [rcx + 264]
+    x64.cmpRegReg rax, rcx
+    x64.jcc notEqual, readycoro
+  readyowner:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 272]
+    x64.storeBaseDispReg.word64 [rcx + 56], rax
+    x64.storeBaseDispReg.word64 [rbx + 272], rcx
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, readyclaim
+  pushfronttail:
+    x64.storeBaseDispReg.word64 [rbx + 280], rcx
+    x64.jmp readyclaim
+  readycoro:
+    x64.callDirect __gt_coro_enqueue
+  readyclaim:
+    x64.leaRegRegImm32 rcx, rbx, 352
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rdx, 1
+    x64.lock cmpxchg [rcx], rdx
+    x64.setccReg equal, rax
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, readypublish
+  readyheld:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  readypublish:
+    x64.movRegImm32 rax, 1
+    x64.leaRegRegImm32 rcx, rbx, 360
+    x64.lock add [rcx], rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect __sched_runq_put
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:x64-linux
+data {
+  __gt_allg@0 = i64 0
+  __gt_allglen@8 = i64 0
+  __gt_allgcap@16 = i64 0
+  __gt_hold_epoch@24 = i64 0
+  __gt_run_queue_head@32 = i64 0
+  __gt_run_queue_tail@40 = i64 0
+  __gt_timer_count@48 = i64 0
+  __gt_timer_heap_base@56 = i64 0
+  __gt_timer_capacity@64 = i64 0
+  __gt_timer_seq@72 = i64 0
+  __gt_timer_when@80 = i64 9223372036854775807
+  __gt_trace_counter@88 = i64 0
+  __gt_live_count@96 = i64 0
+  __gt_quiesce_waiter@104 = i64 0
+  __gt_quiesce_stuck@112 = i64 0
+  __gt_seed_bytes@120 = i64 2048
+  __gt_stack_bytes_sum@128 = i64 0
+  __gt_stack_bytes_count@136 = i64 0
+  __gt_seed_sum_seen@144 = i64 0
+  __gt_seed_count_seen@152 = i64 0
+  __gt_keeps_cpu_clock@160 = i64 0
+  __gt_stack_pool@168 = i64 0
+  __sched_active_workers@176 = i64 1
+  __sched_max_active_workers@184 = i64 1
+  __sched_tls_index@192 = i64 0
+  __sched_tls_teb_offset@200 = i64 0
+  __sched_procs@208 = i64 0
+  __sched_allm@216 = i64 0
+  __sched_async_preempt_off@224 = i64 0
+  __sched_midle@232 = i64 0
+  __sched_pidle@240 = i64 0
+  __gt_gfree_head@248 = i64 0
+  __sched_arena_cursor@256 = i64 0
+  __sched_arena_limit@264 = i64 0
+  __gt_records_carved@272 = i64 0
+  __sched_npidle@280 = i64 0
+  __sched_runq_size@288 = i64 0
+  __sched_global_pushes@296 = i64 0
+  __sched_timer_scan_steps@304 = i64 0
+  __sched_mcount@312 = i64 0
+  __sched_nmidle@320 = i64 0
+  __sched_main_m@328 = i64 0
+  __sched_phase@336 = i64 0
+  __sched_lastpoll@344 = i64 0
+  __sched_poll_until@352 = i64 0
+  __sched_regain_head@360 = i64 0
+  __np_poller@368 = i64 0
+  __np_break@376 = i64 0
+  __np_wake_sig@384 = i64 0
+  __np_pd_table@392 = i64 0
+  __np_pd_cap@400 = i64 0
+  __np_waiters@408 = i64 0
+  __sched_num_procs@416 = i64 0
+  __sched_shutdown_flag@424 = i64 0
+  __sched_lock@432 = i64 0
+  __sched_lock_depth_sink@440 = i64 0
+  __sched_nmspinning@448 = i64 0
+  __sched_needspinning@456 = i64 0
+  __sched_sysmon_event@464 = i64 0
+  __sched_sysmon_wait@472 = i64 0
+  __sched_timer_starts@480 = i64 0
+  __mrt_envp@488 = i64 0
+  __mrt_signal_stack_bytes@496 = i64 0
+  __mrt_tls_next_key@504 = i64 0
+  __slab_arena_list@512 = i64 0
+  __slab_arena_map_l1@520 = i64 0
+  __slab_state@528 = i64 0
+  __mrt_program_started@536 = i8 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+  __il_body:
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+  __il_cont:
+    x64.leaRegFunc rcx, [rip + Counter.__loop]
+    x64.leaRegFunc rax, [rip + Counter.__abandon]
+    x64.movRegReg rdx, r8
+    x64.callDirect __svc_spawn
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.movRegImm32 rbx, 1
+    x64.movRegImm32 rcx, 0
+    x64.callDirect __gt_cell_alloc
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rcx, 32
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.storeBaseDispReg.word64 [r8 + 16], rbx
+    x64.storeBaseDispReg.word64 [r8 + 24], r13
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.movRegReg rdx, r8
+    x64.callDirect __mbox_send
+    x64.movRegReg rcx, r13
+    x64.callDirect __gt_try_await
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, tryok
+  tryerr:
+    x64.movRegImm32 rbx, 0
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rbx, r8
+  trycont:
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+  __rc_chk:
+    x64.cmpRegImm32 rbx, 255
+    x64.jcc greater, __rc_panic
+  __rc_ok:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mbox_handle_drop_box
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-locked-ready-claims-the-strand-holder-with-a-cas.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Counter.__loop {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+  serve:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mbox_recv
+    x64.cmpRegImm32 r8, 0
+    x64.jcc equal, stopping
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
+  __shutdown:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 16]
+    x64.storeBaseDispReg.word64 [r12 + 56], rax
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+  stopping:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mbox_close
+  drain:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mbox_recv
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, abandon
+  finished:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __mbox_service_exit
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  abandon:
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r8
+    x64.callDirect __mbox_abandon
+    x64.jmp drain
+  next:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 16]
+    x64.loadRegBaseDisp.word64 r13, [r8 + 24]
+  __il_body:
+    x64.aluBaseDispImm32.add [rbx + 0], 1
+    x64.leaRegRegImm32 r14, rax, 1
+  __il_cont:
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.movRegImm32 rax, 0
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r14
+    x64.callDirect __gt_cell_complete
+    x64.jmp serve
+}
+
+func @Counter.__abandon {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=next] @__jumptable_5
+  __shutdown:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 1
+    x64.callDirect __gt_cell_complete
+    x64.jmp abandondrop
+  next:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 24]
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 1
+    x64.callDirect __gt_cell_complete
+  abandondrop:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, r8
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @__gt_ready_locked {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [rcx + 16], rax
+    x64.loadRegBaseDisp.word64 rbx, [rcx + 264]
+    x64.loadRegBaseDisp.word64 rax, [rcx + 264]
+    x64.cmpRegReg rax, rcx
+    x64.jcc notEqual, readycoro
+  readyowner:
+    x64.loadRegBaseDisp.word64 rax, [rbx + 272]
+    x64.storeBaseDispReg.word64 [rcx + 56], rax
+    x64.storeBaseDispReg.word64 [rbx + 272], rcx
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, readyclaim
+  pushfronttail:
+    x64.storeBaseDispReg.word64 [rbx + 280], rcx
+    x64.jmp readyclaim
+  readycoro:
+    x64.callDirect __gt_coro_enqueue
+  readyclaim:
+    x64.leaRegRegImm32 rcx, rbx, 352
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rdx, 1
+    x64.lock cmpxchg [rcx], rdx
+    x64.setccReg equal, rax
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, readypublish
+  readyheld:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  readypublish:
+    x64.movRegImm32 rax, 1
+    x64.leaRegRegImm32 rcx, rbx, 360
+    x64.lock add [rcx], rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect __sched_runq_put
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+```
+```TargetIr:arm64-macos
+data {
+  __gt_allg@0 = i64 0
+  __gt_allglen@8 = i64 0
+  __gt_allgcap@16 = i64 0
+  __gt_hold_epoch@24 = i64 0
+  __gt_run_queue_head@32 = i64 0
+  __gt_run_queue_tail@40 = i64 0
+  __gt_timer_count@48 = i64 0
+  __gt_timer_heap_base@56 = i64 0
+  __gt_timer_capacity@64 = i64 0
+  __gt_timer_seq@72 = i64 0
+  __gt_timer_when@80 = i64 9223372036854775807
+  __gt_trace_counter@88 = i64 0
+  __gt_live_count@96 = i64 0
+  __gt_quiesce_waiter@104 = i64 0
+  __gt_quiesce_stuck@112 = i64 0
+  __gt_seed_bytes@120 = i64 2048
+  __gt_stack_bytes_sum@128 = i64 0
+  __gt_stack_bytes_count@136 = i64 0
+  __gt_seed_sum_seen@144 = i64 0
+  __gt_seed_count_seen@152 = i64 0
+  __gt_keeps_cpu_clock@160 = i64 0
+  __gt_stack_pool@168 = i64 0
+  __sched_active_workers@176 = i64 1
+  __sched_max_active_workers@184 = i64 1
+  __sched_tls_index@192 = i64 0
+  __sched_tls_teb_offset@200 = i64 0
+  __sched_procs@208 = i64 0
+  __sched_allm@216 = i64 0
+  __sched_async_preempt_off@224 = i64 0
+  __sched_midle@232 = i64 0
+  __sched_pidle@240 = i64 0
+  __gt_gfree_head@248 = i64 0
+  __sched_arena_cursor@256 = i64 0
+  __sched_arena_limit@264 = i64 0
+  __gt_records_carved@272 = i64 0
+  __sched_npidle@280 = i64 0
+  __sched_runq_size@288 = i64 0
+  __sched_global_pushes@296 = i64 0
+  __sched_timer_scan_steps@304 = i64 0
+  __sched_mcount@312 = i64 0
+  __sched_nmidle@320 = i64 0
+  __sched_main_m@328 = i64 0
+  __sched_phase@336 = i64 0
+  __sched_lastpoll@344 = i64 0
+  __sched_poll_until@352 = i64 0
+  __sched_regain_head@360 = i64 0
+  __np_poller@368 = i64 0
+  __np_break@376 = i64 0
+  __np_wake_sig@384 = i64 0
+  __np_pd_table@392 = i64 0
+  __np_pd_cap@400 = i64 0
+  __np_waiters@408 = i64 0
+  __sched_num_procs@416 = i64 0
+  __sched_shutdown_flag@424 = i64 0
+  __sched_lock@432 = i64 0
+  __sched_lock_depth_sink@440 = i64 0
+  __sched_nmspinning@448 = i64 0
+  __sched_needspinning@456 = i64 0
+  __sched_sysmon_event@464 = i64 0
+  __sched_sysmon_wait@472 = i64 0
+  __sched_timer_starts@480 = i64 0
+  __slab_arena_list@488 = i64 0
+  __slab_arena_map_l1@496 = i64 0
+  __slab_state@504 = i64 0
+  __mrt_program_started@512 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+  __il_body:
+    arm64.movImm x19, 0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+  __il_cont:
+    arm64.leaFuncAddr x0, Counter.__loop
+    arm64.leaFuncAddr x2, Counter.__abandon
+    arm64.bl __svc_spawn
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+    arm64.movImm x19, 1
+    arm64.movImm x0, 0
+    arm64.bl __gt_cell_alloc
+    arm64.movRegReg x21, x0
+    arm64.movImm x0, 32
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.storeBaseDispReg.word64 [x1 + 16], x19
+    arm64.storeBaseDispReg.word64 [x1 + 24], x21
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.bl __mbox_send
+    arm64.movRegReg x0, x21
+    arm64.bl __gt_try_await
+    arm64.cmp x9, 0
+    arm64.b.eq tryok
+  tryerr:
+    arm64.movImm x19, 0
+    arm64.b trycont
+  tryok:
+    arm64.movRegReg x19, x0
+  trycont:
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x20
+    arm64.bl __mbox_handle_drop_box
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-locked-ready-claims-the-strand-holder-with-a-cas.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @Counter.__loop {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+  serve:
+    arm64.movRegReg x0, x20
+    arm64.bl __mbox_recv
+    arm64.cmp x0, 0
+    arm64.b.eq stopping
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
+  __shutdown:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
+    arm64.storeBaseDispReg.word64 [x20 + 56], x1
+    arm64.bl __mm_decref
+  stopping:
+    arm64.movRegReg x0, x20
+    arm64.bl __mbox_close
+  drain:
+    arm64.movRegReg x0, x20
+    arm64.bl __mbox_recv
+    arm64.movRegReg x1, x0
+    arm64.cmp x1, 0
+    arm64.b.ne abandon
+  finished:
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __mbox_service_exit
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  abandon:
+    arm64.movRegReg x0, x20
+    arm64.bl __mbox_abandon
+    arm64.b drain
+  next:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 24]
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
+    arm64.add x2, x2, 1
+    arm64.storeBaseDispReg.word64 [x19 + 0], x2
+    arm64.add x22, x1, 1
+  __il_cont:
+    arm64.bl __mm_decref
+    arm64.movImm x2, 0
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x22
+    arm64.bl __gt_cell_complete
+    arm64.b serve
+}
+
+func @Counter.__abandon {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=next] @__jumptable_5
+  __shutdown:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.movImm x1, 0
+    arm64.movImm x2, 1
+    arm64.bl __gt_cell_complete
+    arm64.b abandondrop
+  next:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
+    arm64.movImm x1, 0
+    arm64.movImm x2, 1
+    arm64.bl __gt_cell_complete
+  abandondrop:
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @__gt_ready_locked {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 16], x1
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 264]
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 264]
+    arm64.cmp x1, x0
+    arm64.b.ne readycoro
+  readyowner:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 272]
+    arm64.storeBaseDispReg.word64 [x0 + 56], x1
+    arm64.storeBaseDispReg.word64 [x19 + 272], x0
+    arm64.cmp x1, 0
+    arm64.b.ne readyclaim
+  pushfronttail:
+    arm64.storeBaseDispReg.word64 [x19 + 280], x0
+    arm64.b readyclaim
+  readycoro:
+    arm64.bl __gt_coro_enqueue
+  readyclaim:
+    arm64.add x0, x19, 352
+    arm64.movImm x1, 0
+    arm64.movImm x2, 1
+    arm64.arm64AtomicCas x0, [x0], x1, x2
+    arm64.cmp x0, 0
+    arm64.b.ne readypublish
+  readyheld:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  readypublish:
+    arm64.movImm x0, 1
+    arm64.add x1, x19, 360
+    arm64.arm64AtomicRmw.add x0, [x1], x0
+    arm64.movRegReg x0, x19
+    arm64.bl __sched_runq_put
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+```
+```TargetIr:arm64-linux
+data {
+  __gt_allg@0 = i64 0
+  __gt_allglen@8 = i64 0
+  __gt_allgcap@16 = i64 0
+  __gt_hold_epoch@24 = i64 0
+  __gt_run_queue_head@32 = i64 0
+  __gt_run_queue_tail@40 = i64 0
+  __gt_timer_count@48 = i64 0
+  __gt_timer_heap_base@56 = i64 0
+  __gt_timer_capacity@64 = i64 0
+  __gt_timer_seq@72 = i64 0
+  __gt_timer_when@80 = i64 9223372036854775807
+  __gt_trace_counter@88 = i64 0
+  __gt_live_count@96 = i64 0
+  __gt_quiesce_waiter@104 = i64 0
+  __gt_quiesce_stuck@112 = i64 0
+  __gt_seed_bytes@120 = i64 2048
+  __gt_stack_bytes_sum@128 = i64 0
+  __gt_stack_bytes_count@136 = i64 0
+  __gt_seed_sum_seen@144 = i64 0
+  __gt_seed_count_seen@152 = i64 0
+  __gt_keeps_cpu_clock@160 = i64 0
+  __gt_stack_pool@168 = i64 0
+  __sched_active_workers@176 = i64 1
+  __sched_max_active_workers@184 = i64 1
+  __sched_tls_index@192 = i64 0
+  __sched_tls_teb_offset@200 = i64 0
+  __sched_procs@208 = i64 0
+  __sched_allm@216 = i64 0
+  __sched_async_preempt_off@224 = i64 0
+  __sched_midle@232 = i64 0
+  __sched_pidle@240 = i64 0
+  __gt_gfree_head@248 = i64 0
+  __sched_arena_cursor@256 = i64 0
+  __sched_arena_limit@264 = i64 0
+  __gt_records_carved@272 = i64 0
+  __sched_npidle@280 = i64 0
+  __sched_runq_size@288 = i64 0
+  __sched_global_pushes@296 = i64 0
+  __sched_timer_scan_steps@304 = i64 0
+  __sched_mcount@312 = i64 0
+  __sched_nmidle@320 = i64 0
+  __sched_main_m@328 = i64 0
+  __sched_phase@336 = i64 0
+  __sched_lastpoll@344 = i64 0
+  __sched_poll_until@352 = i64 0
+  __sched_regain_head@360 = i64 0
+  __np_poller@368 = i64 0
+  __np_break@376 = i64 0
+  __np_wake_sig@384 = i64 0
+  __np_pd_table@392 = i64 0
+  __np_pd_cap@400 = i64 0
+  __np_waiters@408 = i64 0
+  __sched_num_procs@416 = i64 0
+  __sched_shutdown_flag@424 = i64 0
+  __sched_lock@432 = i64 0
+  __sched_lock_depth_sink@440 = i64 0
+  __sched_nmspinning@448 = i64 0
+  __sched_needspinning@456 = i64 0
+  __sched_sysmon_event@464 = i64 0
+  __sched_sysmon_wait@472 = i64 0
+  __sched_timer_starts@480 = i64 0
+  __mrt_envp@488 = i64 0
+  __mrt_signal_stack_bytes@496 = i64 0
+  __mrt_tls_next_key@504 = i64 0
+  __slab_arena_list@512 = i64 0
+  __slab_arena_map_l1@520 = i64 0
+  __slab_state@528 = i64 0
+  __mrt_program_started@536 = i8 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+  __il_body:
+    arm64.movImm x19, 0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+  __il_cont:
+    arm64.leaFuncAddr x0, Counter.__loop
+    arm64.leaFuncAddr x2, Counter.__abandon
+    arm64.bl __svc_spawn
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x19
+    arm64.movImm x19, 1
+    arm64.movImm x0, 0
+    arm64.bl __gt_cell_alloc
+    arm64.movRegReg x21, x0
+    arm64.movImm x0, 32
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.movImm x0, 1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.storeBaseDispReg.word64 [x1 + 16], x19
+    arm64.storeBaseDispReg.word64 [x1 + 24], x21
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.bl __mbox_send
+    arm64.movRegReg x0, x21
+    arm64.bl __gt_try_await
+    arm64.cmp x9, 0
+    arm64.b.eq tryok
+  tryerr:
+    arm64.movImm x19, 0
+    arm64.b trycont
+  tryok:
+    arm64.movRegReg x19, x0
+  trycont:
+    arm64.cmp x19, 0
+    arm64.b.lt __rc_panic
+  __rc_chk:
+    arm64.cmp x19, 255
+    arm64.b.gt __rc_panic
+  __rc_ok:
+    arm64.movRegReg x0, x20
+    arm64.bl __mbox_handle_drop_box
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+  __rc_panic:
+    arm64.leaRdata x0, __str_blob_1  ; "panic at a-locked-ready-claims-the-strand-holder-with-a-cas.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
+    arm64.bl mrt_panic
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @Counter.__loop {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+  serve:
+    arm64.movRegReg x0, x20
+    arm64.bl __mbox_recv
+    arm64.cmp x0, 0
+    arm64.b.eq stopping
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
+  __shutdown:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
+    arm64.storeBaseDispReg.word64 [x20 + 56], x1
+    arm64.bl __mm_decref
+  stopping:
+    arm64.movRegReg x0, x20
+    arm64.bl __mbox_close
+  drain:
+    arm64.movRegReg x0, x20
+    arm64.bl __mbox_recv
+    arm64.movRegReg x1, x0
+    arm64.cmp x1, 0
+    arm64.b.ne abandon
+  finished:
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.bl __mbox_service_exit
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+  abandon:
+    arm64.movRegReg x0, x20
+    arm64.bl __mbox_abandon
+    arm64.b drain
+  next:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
+    arm64.loadRegBaseDisp.word64 x21, [x0 + 24]
+  __il_body:
+    arm64.loadRegBaseDisp.word64 x2, [x19 + 0]
+    arm64.add x2, x2, 1
+    arm64.storeBaseDispReg.word64 [x19 + 0], x2
+    arm64.add x22, x1, 1
+  __il_cont:
+    arm64.bl __mm_decref
+    arm64.movImm x2, 0
+    arm64.movRegReg x0, x21
+    arm64.movRegReg x1, x22
+    arm64.bl __gt_cell_complete
+    arm64.b serve
+}
+
+func @Counter.__abandon {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
+    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=next] @__jumptable_5
+  __shutdown:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.movImm x1, 0
+    arm64.movImm x2, 1
+    arm64.bl __gt_cell_complete
+    arm64.b abandondrop
+  next:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
+    arm64.movImm x1, 0
+    arm64.movImm x2, 1
+    arm64.bl __gt_cell_complete
+  abandondrop:
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @__gt_ready_locked {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x0 + 16], x1
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 264]
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 264]
+    arm64.cmp x1, x0
+    arm64.b.ne readycoro
+  readyowner:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 272]
+    arm64.storeBaseDispReg.word64 [x0 + 56], x1
+    arm64.storeBaseDispReg.word64 [x19 + 272], x0
+    arm64.cmp x1, 0
+    arm64.b.ne readyclaim
+  pushfronttail:
+    arm64.storeBaseDispReg.word64 [x19 + 280], x0
+    arm64.b readyclaim
+  readycoro:
+    arm64.bl __gt_coro_enqueue
+  readyclaim:
+    arm64.add x0, x19, 352
+    arm64.movImm x1, 0
+    arm64.movImm x2, 1
+    arm64.arm64AtomicCas x0, [x0], x1, x2
+    arm64.cmp x0, 0
+    arm64.b.ne readypublish
+  readyheld:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  readypublish:
+    arm64.movImm x0, 1
+    arm64.add x1, x19, 360
+    arm64.arm64AtomicRmw.add x0, [x1], x0
+    arm64.movRegReg x0, x19
+    arm64.bl __sched_runq_put
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
     arm64.ret
 }
@@ -19374,7 +20657,8 @@ func @__gt_strand_next {
     arm64.b.ne sngot
   snrelease:
     arm64.movImm x0, 0
-    arm64.storeBaseDispReg.word64 [x19 + 352], x0
+    arm64.add x16, x19, 352
+    arm64.stlr.word64 [x16], x0
     arm64.leaGlobal x0, __sched_lock
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.importCall 19
@@ -20919,7 +22203,8 @@ func @__gt_strand_next {
     arm64.b.ne sngot
   snrelease:
     arm64.movImm x0, 0
-    arm64.storeBaseDispReg.word64 [x19 + 352], x0
+    arm64.add x16, x19, 352
+    arm64.stlr.word64 [x16], x0
     arm64.leaGlobal x0, __sched_lock
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.bl mrt_linux_lock_leave

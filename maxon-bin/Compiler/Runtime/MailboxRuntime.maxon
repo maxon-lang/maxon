@@ -364,8 +364,7 @@ function emitMboxWakeAndUnlock(module StdModule, func IrFunction, cur IrBlock, m
 	let nobodyWaiting = emitCmp(module, block: cur, a: parked, b: noneParked, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(nobodyWaiting, thenBlockId: cont.id, elseBlockId: wakeParked.id))
 
-	module.appendOp(wakeParked, op: StdOp.call(ids.mint(), callee: GtReadyName, args: argsOf(parked)))
-	module.setTerminator(wakeParked, op: StdOp.branch(cont.id))
+	emitGtReadyParkedService(module, func: func, cur: wakeParked, service: parked, cont: cont, ids: ids)
 	return cont
 end 'emitMboxWakeAndUnlock'
 
