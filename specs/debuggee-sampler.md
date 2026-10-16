@@ -276,7 +276,7 @@ Stack trace:
   in mrt_start
 ```
 ```Stderr:arm64-linux
-panic at Debuggee.maxon:97: ScratchPages: offset 816 was asked of pages that are not held — a caller used them before reserving them or after releasing them
+panic at Debuggee.maxon:98: ScratchPages: offset 816 was asked of pages that are not held — a caller used them before reserving them or after releasing them
 Stack trace:
   in ScratchPages.requireWordInside
   in ScratchPages.heldBase
@@ -286,7 +286,7 @@ Stack trace:
   in mrt_start
 ```
 ```Stderr:arm64-macos
-panic at Debuggee.maxon:97: ScratchPages: offset 816 was asked of pages that are not held — a caller used them before reserving them or after releasing them
+panic at Debuggee.maxon:98: ScratchPages: offset 816 was asked of pages that are not held — a caller used them before reserving them or after releasing them
 Stack trace:
   in ScratchPages.requireWordInside
   in ScratchPages.heldBase
