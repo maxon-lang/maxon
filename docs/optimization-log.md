@@ -1204,6 +1204,24 @@ N is 12 on x64, 8 on macOS and 7 on arm64-linux. Every cell is read from the row
 every message. Go pays one, because `goready` takes no lock at all. The next change makes a service's ready
 lock-free.
 
+**2026-10-16 — A PARKED SERVICE IS READIED WITHOUT THE SCHEDULER LOCK (03577b04c). A RUNTIME row, measured on
+four lanes against 7346b44c7, the tree before bb5d6fd54.** It reads R5 and R5b together, against the regression R5
+introduced. `scripts/bench-concurrency.py --ref 7346b44c7 --runs 3`. Maxon/Go wall ratio, control → this tree:
+
+| workload | P | x64-windows | x64-linux | arm64-macos | arm64-linux |
+|---|---|---|---|---|---|
+| thread-ring | N | 0.90 → 0.92 | 0.74 → 0.77 | 1.18 → 1.08 | 1.67 → 1.72 |
+| ping-pong | 1 | 1.30 → 1.29 | 1.03 → **1.08** | 1.54 → **1.61** | 1.28 → 1.27 |
+| ping-pong | N | 1.62 → 1.64 | 1.18 → 1.21 | 2.57 → 2.55 | 1.47 → 1.47 |
+| fan-in | N | 2.17 → 2.01 | 2.18 → 1.86 | 1.60 → 1.55 | 2.31 → 2.03 |
+| spawn-many | N | 6.77 → 4.21 | 9.57 → 5.43 | 14.42 → 10.56 | 1.98 → 2.09 |
+| shared-counter | N | 8.27 → 7.08 | 3.91 → 3.33 | 1.30 → 1.27 | 1.57 → 1.46 |
+
+The thread-ring and ping-pong regression is gone on x64-windows and arm64-linux.
+
+**About 4–5% stays at P=1 on x64-linux and arm64-macos.** Inferred, not profiled: a service's park now also
+takes its mailbox lock, inside the strand turn's `__sched_lock` hold, for the re-check and publish of `parkedGt`.
+
 ## Bugs this uncovered
 
 Removing the dummy exposed a leak it had been half-hiding, and the leak in turn exposed a hole in the
