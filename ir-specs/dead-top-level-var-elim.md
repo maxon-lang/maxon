@@ -139,7 +139,8 @@ data {
   __data_used@0 = i64 42
   __mrt_envp@8 = i64 0
   __mrt_signal_stack_bytes@16 = i64 0
-  __mrt_program_started@24 = i8 0
+  __mrt_hwcap_atomics@24 = i64 0
+  __mrt_program_started@32 = i8 0
 }
 
 func @main {
@@ -288,7 +289,8 @@ data {
   __data_live@0 = i64 7
   __mrt_envp@8 = i64 0
   __mrt_signal_stack_bytes@16 = i64 0
-  __mrt_program_started@24 = i8 0
+  __mrt_hwcap_atomics@24 = i64 0
+  __mrt_program_started@32 = i8 0
 }
 
 func @main {
@@ -525,10 +527,11 @@ data {
   __data_probe@8 = i64 4
   __mrt_envp@16 = i64 0
   __mrt_signal_stack_bytes@24 = i64 0
-  __slab_arena_list@32 = i64 0
-  __slab_arena_map_l1@40 = i64 0
-  __slab_state@48 = i64 0
-  __mrt_program_started@56 = i8 0
+  __mrt_hwcap_atomics@32 = i64 0
+  __slab_arena_list@40 = i64 0
+  __slab_arena_map_l1@48 = i64 0
+  __slab_state@56 = i64 0
+  __mrt_program_started@64 = i8 0
 }
 
 func @main {
@@ -714,7 +717,8 @@ data {
   __data_live@8 = i64 5
   __mrt_envp@16 = i64 0
   __mrt_signal_stack_bytes@24 = i64 0
-  __mrt_program_started@32 = i8 0
+  __mrt_hwcap_atomics@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @main {
@@ -870,7 +874,8 @@ data {
   __data_live@0 = i64 7
   __mrt_envp@8 = i64 0
   __mrt_signal_stack_bytes@16 = i64 0
-  __mrt_program_started@24 = i8 0
+  __mrt_hwcap_atomics@24 = i64 0
+  __mrt_program_started@32 = i8 0
 }
 
 func @main {

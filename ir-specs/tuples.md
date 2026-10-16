@@ -921,10 +921,11 @@ func @main {
 data {
   __mrt_envp@0 = i64 0
   __mrt_signal_stack_bytes@8 = i64 0
-  __slab_arena_list@16 = i64 0
-  __slab_arena_map_l1@24 = i64 0
-  __slab_state@32 = i64 0
-  __mrt_program_started@40 = i8 0
+  __mrt_hwcap_atomics@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_program_started@48 = i8 0
 }
 
 func @pair {
@@ -2494,10 +2495,11 @@ func @main {
 data {
   __mrt_envp@0 = i64 0
   __mrt_signal_stack_bytes@8 = i64 0
-  __slab_arena_list@16 = i64 0
-  __slab_arena_map_l1@24 = i64 0
-  __slab_state@32 = i64 0
-  __mrt_program_started@40 = i8 0
+  __mrt_hwcap_atomics@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_program_started@48 = i8 0
 }
 
 func @pair {
@@ -3824,10 +3826,11 @@ func @main {
 data {
   __mrt_envp@0 = i64 0
   __mrt_signal_stack_bytes@8 = i64 0
-  __slab_arena_list@16 = i64 0
-  __slab_arena_map_l1@24 = i64 0
-  __slab_state@32 = i64 0
-  __mrt_program_started@40 = i8 0
+  __mrt_hwcap_atomics@16 = i64 0
+  __slab_arena_list@24 = i64 0
+  __slab_arena_map_l1@32 = i64 0
+  __slab_state@40 = i64 0
+  __mrt_program_started@48 = i8 0
 }
 
 func @wrap {

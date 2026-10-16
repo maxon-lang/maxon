@@ -2080,11 +2080,12 @@ end 'buildX64LinuxEnvReadChunk'
 // THE GREEN-THREAD FLOOR'S HOST OBJECTS
 // ==========================================================================
 //
-// ⭐⭐⭐ **THE x86-64 TWIN OF `Arm64LinuxRuntime`'s GREEN-THREAD AND CHILD-PROCESS BANDS, AGAINST THE SAME KERNEL AND THE SAME
-// PROTOCOL.** Every number these bodies read — the wait object's six fields, the handle tag, the futex
-// operations, the clone flags, a worker M's stack geometry, `poll`'s bits and the wait-status decode — is
-// `Targets/Shared/{Posix,Linux}Runtime`'s and is READ from there. What is genuinely x86-64's is the syscall
-// table, the register ABI, `cmpxchg`/`xadd` in place of an LL/SC pair, and the two facts below.
+// ⭐⭐⭐ **THE x86-64 TWIN OF `Arm64LinuxRuntime`'s GREEN-THREAD AND CHILD-PROCESS BANDS, AGAINST THE
+// SAME KERNEL AND THE SAME PROTOCOL.** Every number these bodies read — the wait object's six
+// fields, the handle tag, the futex operations, the clone flags, a worker M's stack geometry,
+// `poll`'s bits and the wait-status decode — is `Targets/Shared/{Posix,Linux}Runtime`'s and is READ
+// from there. What is genuinely x86-64's is the syscall table, the register ABI,
+// `cmpxchg`/`xadd`/`xchg` in place of arm64's atomic sequences, and the two facts below.
 //
 // ⛔⛔ **FACT ONE: `clone`'s LAST TWO ARGUMENTS ARE `(ctid, tls)` HERE AND `(tls, ctid)` ON AArch64.** Both
 // are NULL for a child process, so the disagreement cannot bite in the spawn; both are LIVE in
@@ -2167,10 +2168,11 @@ function x64LinuxEmitFutex(asm X64RuntimeAsm, addrSlot StackSize, operation Mach
 	encodeX64Syscall(asm.code, number: X64LinuxSyscallFutex)
 end 'x64LinuxEmitFutex'
 
-// ⭐⭐ **`lock cmpxchg [addrSlot], replacement` AGAINST `expected` — AND IT LEAVES ITS ANSWER IN THE FLAGS
-// RATHER THAN IN A REGISTER, WHICH IS THE ONE PLACE THIS LANE'S SHAPE IS BETTER THAN THE arm64 TWIN'S.**
-// That one builds a 0/1 out of an LL/SC pair because AArch64 has no flag-setting atomic; `cmpxchg` sets ZF
-// iff the store landed, so every caller here branches on it directly and no boolean is ever materialised.
+// ⭐⭐ **`lock cmpxchg [addrSlot], replacement` AGAINST `expected` — AND IT LEAVES ITS ANSWER IN THE
+// FLAGS RATHER THAN IN A REGISTER, WHICH IS THE ONE PLACE THIS LANE'S SHAPE IS BETTER THAN THE
+// arm64 TWIN'S.** That one builds a 0/1 because AArch64 has no flag-setting atomic; `cmpxchg` sets
+// ZF iff the store landed, so every caller here branches on it directly and no boolean is ever
+// materialised.
 //
 // ⚠ It clobbers rax (the comparand, and on failure the word it observed), rcx and rdi. No caller below holds
 // anything in one across it.
@@ -2180,6 +2182,12 @@ function x64LinuxEmitCasImm(asm X64RuntimeAsm, addrSlot StackSize, expected Mach
 	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: replacement)
 	encodeLockedRmwBaseDispReg(asm.code, twoByteEscape: true, opcode: OpcodeCmpxchgRmReg, base: X64Register.rdi, disp: 0, reg: X64Register.rcx)
 end 'x64LinuxEmitCasImm'
+
+function x64LinuxEmitExchangeByteImm(asm X64RuntimeAsm, addrSlot StackSize, value MachineWord)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdi, base: X64Register.rbp, disp: asm.slotDisp(addrSlot), wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: value)
+	encodeXchgByteBaseDispReg(asm.code, base: X64Register.rdi, disp: 0, reg: X64Register.rcx)
+end 'x64LinuxEmitExchangeByteImm'
 
 function x64LinuxEmitTryAcquire(asm X64RuntimeAsm, addrSlot StackSize, owned BlockId)
 	x64LinuxEmitCasImm(asm, addrSlot: addrSlot, expected: LinuxMutexFree, replacement: LinuxMutexHeld)
@@ -2510,21 +2518,29 @@ end 'buildX64LinuxThreadCreateChunk'
 // mrt_host_event_set(rcx = object)
 // ==========================================================================
 
-// `SetEvent` — `PosixWaitSignalled`'s publish-and-wake, spelled here as a `lock cmpxchg` and a `FUTEX_WAKE`.
+// `SetEvent` — `PosixWaitSignalled`'s publish, spelled here as an `xchg` of the low byte, and a
+// `FUTEX_WAKE` only when it displaces `LinuxEventSleeping` (see there for the one-waiter rule this
+// rests on).
 //
-// ⚠ **x86-64 IS TOTAL STORE ORDER AND `lock cmpxchg` IS A FULL BARRIER**, so the release ordering the arm64
-// twin buys with `STLXR` is free here and nothing extra is emitted.
+// ⚠ **x86-64 IS TOTAL STORE ORDER AND AN `xchg` WITH MEMORY IS A LOCKED FULL BARRIER**, so the
+// release ordering the arm64 twin buys with `SWPALB`/`STLXRB` is free here and nothing extra is
+// emitted.
 function buildX64LinuxEventSetChunk() returns FunctionCodeChunk
 	let SlotSignal = 0
 	var asm = X64RuntimeAsm.beginFunction(1)
+
+	let nobodySleeps = asm.newLabel()
 
 	x64LinuxEmitUntagHandle(asm, reg: X64Register.rcx)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rcx, base: X64Register.rcx, disp: PosixWaitOffSignal as Imm32)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSignal), srcReg: X64Register.rcx, wide: true)
 
-	x64LinuxEmitCasImm(asm, addrSlot: SlotSignal, expected: PosixWaitNotSignalled, replacement: PosixWaitSignalled)
+	x64LinuxEmitExchangeByteImm(asm, addrSlot: SlotSignal, value: PosixWaitSignalled)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtCmp, reg: X64Register.rcx, imm: LinuxEventSleeping)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: nobodySleeps)
 	x64LinuxEmitFutex(asm, addrSlot: SlotSignal, operation: LinuxFutexWakePrivate, value: LinuxFutexWakeOne, timespecFirstSlot: SlotSignal, hasTimeout: false)
 
+	asm.placeLabel(nobodySleeps)
 	return asm.finishFunction(HostEventSetName)
 end 'buildX64LinuxEventSetChunk'
 
@@ -2639,14 +2655,17 @@ function buildX64LinuxWaitOneChunk() returns FunctionCodeChunk
 
 	// Unbounded: sleep while the word is still unsignalled, then re-test. That IS the `while (!signalled)`
 	// loop the primitive requires — a futex return is advisory, and re-testing is the only sound response.
-	x64LinuxEmitFutex(asm, addrSlot: SlotSignal, operation: LinuxFutexWaitPrivate, value: PosixWaitNotSignalled, timespecFirstSlot: SlotTimespec, hasTimeout: false)
+	x64LinuxEmitCasImm(asm, addrSlot: SlotSignal, expected: PosixWaitNotSignalled, replacement: LinuxEventSleeping)
+	x64LinuxEmitFutex(asm, addrSlot: SlotSignal, operation: LinuxFutexWaitPrivate, value: LinuxEventSleeping, timespecFirstSlot: SlotTimespec, hasTimeout: false)
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: testSignal)
 
 	// waitTimed: ONE bounded wait, then a single re-test — the caller owns the deadline, and re-arming here
 	// would silently double a timeout that expired spuriously.
 	asm.placeLabel(waitTimed)
+	x64LinuxEmitCasImm(asm, addrSlot: SlotSignal, expected: PosixWaitNotSignalled, replacement: LinuxEventSleeping)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotTimeout), wide: true)
 	x64LinuxEmitToTimespec(asm, amount: X64Register.rax, unit: PosixTimeUnit.milliseconds, firstSlot: SlotTimespec)
-	x64LinuxEmitFutex(asm, addrSlot: SlotSignal, operation: LinuxFutexWaitPrivate, value: PosixWaitNotSignalled, timespecFirstSlot: SlotTimespec, hasTimeout: true)
+	x64LinuxEmitFutex(asm, addrSlot: SlotSignal, operation: LinuxFutexWaitPrivate, value: LinuxEventSleeping, timespecFirstSlot: SlotTimespec, hasTimeout: true)
 	x64LinuxEmitCasImm(asm, addrSlot: SlotSignal, expected: PosixWaitSignalled, replacement: PosixWaitNotSignalled)
 	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: finish)
 
@@ -2740,7 +2759,6 @@ function buildX64LinuxLockEnterChunk() returns FunctionCodeChunk
 
 	let acquire = asm.newLabel()
 	let activeRound = asm.newLabel()
-	let pauseLoop = asm.newLabel()
 	let passiveRound = asm.newLabel()
 	let contend = asm.newLabel()
 	let owned = asm.newLabel()
@@ -2768,11 +2786,7 @@ function buildX64LinuxLockEnterChunk() returns FunctionCodeChunk
 
 	asm.placeLabel(activeRound)
 	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: LinuxLockActiveSpinPauses)
-
-	asm.placeLabel(pauseLoop)
-	encodeX64Pause(asm.code)
-	encodeGrp1RegImm32(asm.code, ext: Grp1ExtSub, reg: X64Register.rdx, imm: 1)
-	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: pauseLoop)
+	encodeX64Procyield(asm.code, count: X64Register.rdx)
 	x64LinuxEmitTryAcquire(asm, addrSlot: SlotRegion, owned: owned)
 	x64LinuxEmitNextSpinRound(asm, roundsSlot: SlotSpinRounds, again: activeRound)
 

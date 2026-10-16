@@ -1403,7 +1403,7 @@ function buildArm64PreemptMachineChunk(os Os) returns FunctionCodeChunk
 	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x1, base: Arm64Register.x0, imm: MOffSignalPending as Imm32)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: PreemptClaimFree)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: PreemptClaimHeld)
-	arm64EmitAtomicCas(asm.code, dest: arm64RuntimeReg(Arm64Register.x4), addrReg: arm64RuntimeReg(Arm64Register.x1), expectedReg: arm64RuntimeReg(Arm64Register.x2), replacementReg: arm64RuntimeReg(Arm64Register.x3))
+	arm64EmitAtomic(asm.code, rdataRelocs: asm.rdataRelocs, atomics: arm64AtomicsModeOf(os), op: Arm64AtomicOp.compareAndSwap(arm64RuntimeReg(Arm64Register.x4), addrReg: arm64RuntimeReg(Arm64Register.x1), expectedReg: arm64RuntimeReg(Arm64Register.x2), replacementReg: arm64RuntimeReg(Arm64Register.x3)))
 	arm64EmitCbzTo(asm, reg: Arm64Register.x4, label: done)
 
 	// A machine that has not adopted its thread yet has no identity to address, and keeps the cooperative

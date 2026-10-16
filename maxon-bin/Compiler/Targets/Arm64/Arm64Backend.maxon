@@ -140,15 +140,25 @@ let Arm64MsubRaShift = 10
 // The two are also the ORDERING: `LDAXR` is load-ACQUIRE and `STLXR` is store-RELEASE, which is what lets
 // `StdOp.atomicCas` promise a Treiber-stack publish needs no separate fence.
 //
-// `LDAXR Xt, [Xn]` — 64-bit, no offset form.
-let Arm64OpLdaxr = 0xC85FFC00
+// `LDAXRB Wt, [Xn]`, no offset form; `Arm64OrderedSize64` OR'd in makes it `LDAXR Xt, [Xn]`.
+let Arm64OpLdaxrB = 0x085FFC00
 
-// `STLXR Ws, Xt, [Xn]` — the STATUS register `Ws` sits in the Rs field at bit 16 (0 = stored, 1 = failed).
+// `STLXRB Ws, Wt, [Xn]`, or `STLXR Ws, Xt, [Xn]` with `Arm64OrderedSize64` — the STATUS register
+// `Ws` sits in the Rs field at bit 16 (0 = stored, 1 = failed).
 // ⚠ `Ws` must differ from BOTH `Xt` and `Xn`; sharing them is CONSTRAINED UNPREDICTABLE. The two encoders
 // below hold that by construction — the status is always x17 and the other two are x16 or an allocatable
 // register, and x17 is in neither pool.
-let Arm64OpStlxr = 0xC800FC00
+let Arm64OpStlxrB = 0x0800FC00
 let Arm64StlxrRsShift = 16
+
+let Arm64OpCasal = 0xC8E0FC00
+let Arm64OpLdaddal = 0xF8E00000
+let Arm64OpSwpalB = 0x38E08000
+
+let Arm64OpIsb = 0xD5033FDF
+let Arm64OpMrsCntvct = 0xD53BE040
+let Arm64OpMrsCntfrq = 0xD53BE000
+let Arm64ShiftTypeLsr = 0x400000
 
 // ⭐⭐ **`LDAR` / `STLR`: THE SAME ORDERING WITHOUT THE RESERVATION.** They are the exclusive pair
 // above with the exclusive part removed: `o2` set (the acquire/release bit), `Rs` and `Rt2` fixed at the
@@ -373,8 +383,6 @@ let Arm64OpBrk = 0xD4200000
 // number from x8), baked into this fully-formed word. NEVER emitted for macOS, which forbids raw
 // syscalls and routes every OS primitive through a libSystem GOT import instead.
 let Arm64OpSvc = 0xD4000001
-
-let Arm64OpYield = 0xD503203F
 
 // x8 — where the AArch64 Linux syscall ABI reads the syscall number from. It is inside the
 // caller-saved half `arm64Syscall`'s call clobber declares, so writing it here forbids nothing.
@@ -1589,7 +1597,7 @@ end 'arm64RelInstructions'
 // x64-only arms panic (the x64 encoder owns them — `buildBackend` dispatches on `target.cpu`), and the
 // SHARED arms arm64 reuses (`movRegReg`, the spill/reload and base+disp forms, `xchgRegReg`) are encoded
 // here.
-function emitArm64TargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, iatRelocs RelocationArray, funcAdrpRelocs Arm64FuncAdrpRelocArray, branchFixups Arm64BlockBranchFixupArray, jumpTables JumpTablePendingArray, greenThreads bool)
+function emitArm64TargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, iatRelocs RelocationArray, funcAdrpRelocs Arm64FuncAdrpRelocArray, branchFixups Arm64BlockBranchFixupArray, jumpTables JumpTablePendingArray, greenThreads bool, atomics Arm64AtomicsMode)
 	match op 'emit'
 		// --- x64-only control/frame band ---
 		prologue or
@@ -1787,16 +1795,17 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffse
 		arm64MemFill(fillByte) then arm64EmitMemFill(code, fillByte: fillByte)
 		x64MemFill then panic("emitArm64TargetOp: an x64 fill ladder reached the arm64 encoder — the x64 backend encodes `x64MemFill`")
 
-		// The two LL/SC retry loops and the masked thread-pointer read. Each expands to a self-contained
-		// instruction sequence with locally patched branches — see `arm64EmitAtomicCas`.
-		arm64AtomicCas(dest, addrReg, expectedReg, replacementReg) then arm64EmitAtomicCas(code, dest: arm64GprField(dest), addrReg: arm64GprField(addrReg), expectedReg: arm64GprField(expectedReg), replacementReg: arm64GprField(replacementReg))
-		arm64AtomicRmw(dest, addrReg, operandReg, opcode) then arm64EmitAtomicRmw(code, dest: arm64GprField(dest), addrReg: arm64GprField(addrReg), operandReg: arm64GprField(operandReg), opcode: opcode)
+		// The two atomics and the masked thread-pointer read. Each expands to a self-contained
+		// instruction sequence with locally patched branches — see `arm64EmitAtomic`.
+		arm64AtomicCas(dest, addrReg, expectedReg, replacementReg) then arm64EmitAtomic(code, rdataRelocs: rdataRelocs, atomics: atomics, op: Arm64AtomicOp.compareAndSwap(arm64GprField(dest), addrReg: arm64GprField(addrReg), expectedReg: arm64GprField(expectedReg), replacementReg: arm64GprField(replacementReg)))
+		arm64AtomicRmw(dest, addrReg, operandReg, opcode) then arm64EmitAtomic(code, rdataRelocs: rdataRelocs, atomics: atomics, op: Arm64AtomicOp.readModifyWrite(arm64GprField(dest), addrReg: arm64GprField(addrReg), operandReg: arm64GprField(operandReg), opcode: opcode))
 		arm64ThreadPointer(dest, source) then arm64EmitThreadPointer(code, dest: arm64GprField(dest), source: source)
 
 		// x64's atomics never reach the arm64 encoder, exactly as its fill ladder and jump table do not.
 		x64LockCmpxchg or
 		x64LockXadd or
 		x64LockAdd or
+		x64XchgByte or
 		x64GsLoadRegBase then panic("emitArm64TargetOp: an x64-only atomic or TEB read reached the arm64 encoder — arm64's atomics are `arm64AtomicCas`/`arm64AtomicRmw` and its thread token is `arm64ThreadPointer`")
 
 		// The scaled-index band. The ADDRESS op is per-ISA (x64 spells `+` as a `lea`, arm64 as an
@@ -1819,7 +1828,7 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffse
 		// `SMULH`/`UMULH Xd, Xn, Xm`. The same three-register emitter as `MUL`, because on AArch64 all
 		// three differ only in opcode-word fields.
 		arm64Mulh(dest, lhs, rhs, signedness) then emitArm64Rrr(code, opcode: Arm64OpSmulh if signedness == IntegerSignedness.signed else Arm64OpUmulh, rd: arm64GprField(dest), rn: arm64GprField(lhs), rm: arm64GprField(rhs))
-		covInc(pointId) then arm64EmitCovInc(code, rdataRelocs: rdataRelocs, covOffsets: covOffsets, pointId: pointId)
+		covInc(pointId) then arm64EmitCovInc(code, rdataRelocs: rdataRelocs, covOffsets: covOffsets, pointId: pointId, atomics: atomics)
 
 		// AArch64 is load/store: no ALU instruction takes a memory destination, so its isel never selects one.
 		x64AluBaseDispReg or
@@ -2016,15 +2025,15 @@ function arm64EmitSlotAddress(code ByteArray, destReg TargetVReg, slot SpillSlot
 end 'arm64EmitSlotAddress'
 
 // ==========================================================================
-// The LL/SC atomics, and the Darwin thread pointer
+// The atomics, and the Darwin thread pointer
 // ==========================================================================
 //
-// ⭐⭐ **THE TWO SEQUENCES SHARE ONE SAFETY ARGUMENT, AND IT IS ABOUT WHEN `Xd` IS WRITTEN.** A late def
-// may be coloured onto the register of a use that DIES at the op (`allocateDef`'s `dyingRegs`), so `Xd`
-// can legitimately BE `Xaddr` or an operand register. Both loops re-read every operand on every retry, so
-// each encoder keeps its whole working state in x16/x17 and touches `Xd` EXACTLY ONCE, at the end, after
-// the last read of every operand. `TargetDialect.arm64AtomicCas` states this as the op's contract; these
-// are the two encoders that must honour it.
+// ⭐⭐ **EVERY SEQUENCE SHARES ONE SAFETY ARGUMENT, AND IT IS ABOUT WHEN `Xd` IS WRITTEN.** A late
+// def may be coloured onto the register of a use that DIES at the op (`allocateDef`'s `dyingRegs`),
+// so `Xd` can legitimately BE `Xaddr` or an operand register. The LL/SC loops re-read every operand
+// on every retry, so each encoder keeps its whole working state in x16/x17 and touches `Xd` EXACTLY
+// ONCE, at the end, after the last read of every operand. `TargetDialect.arm64AtomicCas` states
+// this as the op's contract; every sequence `arm64EmitAtomic` selects must honour it.
 //
 // ⭐ **x16 AND x17, AND x16 IS SAFE HERE FOR `arm64EmitJumpTable`'s REASON.** `StdToArm64Conversion`'s
 // `Arm64Scratch` header gives the rule: x16 is unsafe only where something SPLICES a write to it between
@@ -2050,32 +2059,26 @@ let Arm64CovAddrPartner = 1
 // One execution is one count.
 let CovCounterStep = 1
 
-// `LDAXR x16, [Xn]` — the head of both loops.
-function arm64EmitLdaxr(code ByteArray, rn MachineWord)
-	emitArm64Insn(code, insn: Arm64OpLdaxr or (rn shl Arm64RnShift) or Arm64AtomicValue)
+// `LDAXR x16, [Xn]` (or `LDAXRB w16, [Xn]`) — the head of every loop.
+function arm64EmitLdaxr(code ByteArray, rn MachineWord, width X64AccessWidth)
+	let sized = match width 'w'
+		byte gives Arm64OpLdaxrB
+		word64 gives Arm64OpLdaxrB or Arm64OrderedSize64
+	end 'w'
+
+	emitArm64Insn(code, insn: sized or (rn shl Arm64RnShift) or Arm64AtomicValue)
 end 'arm64EmitLdaxr'
 
-// `STLXR w17, Xt, [Xn]` — the tail of both loops, status into x17.
-function arm64EmitStlxr(code ByteArray, rt MachineWord, rn MachineWord)
-	emitArm64Insn(code, insn: Arm64OpStlxr or (Arm64AtomicStatus shl Arm64StlxrRsShift) or (rn shl Arm64RnShift) or rt)
+// `STLXR w17, Xt, [Xn]` (or `STLXRB w17, Wt, [Xn]`) — the tail of every loop, status into x17.
+function arm64EmitStlxr(code ByteArray, rt MachineWord, rn MachineWord, width X64AccessWidth)
+	let sized = match width 'w'
+		byte gives Arm64OpStlxrB
+		word64 gives Arm64OpStlxrB or Arm64OrderedSize64
+	end 'w'
+
+	emitArm64Insn(code, insn: sized or (Arm64AtomicStatus shl Arm64StlxrRsShift) or (rn shl Arm64RnShift) or rt)
 end 'arm64EmitStlxr'
 
-// `arm64AtomicCas(dest, addr, expected, replacement)`:
-//
-//   loop:  LDAXR x16, [Xaddr]        ; x16 = the observed word, load-acquire exclusive
-//          CMP   x16, Xexpected      ; sets the flags the closing CSET reads
-//          B.NE  exit                ; mismatch — leave the flags NE and bail without storing
-//          STLXR w17, Xrepl, [Xaddr] ; store-release exclusive; w17 = 0 iff it landed
-//          CBNZ  x17, loop           ; reservation lost — observe again
-//   exit:  CSET  Xd, EQ              ; 1 on the stored path, 0 on the mismatch path
-//
-// ⭐ **THE CSET READS THE `CMP`'s FLAGS ON BOTH PATHS, AND THAT IS WHY THERE IS NO SECOND COMPARE.**
-// Neither `STLXR` nor `CBNZ` writes NZCV, so the flags at `exit` are still the last `CMP`'s: EQ when the
-// loop fell through (matched, and the store landed) and NE when the `B.NE` was taken. That is the
-// whole reason the success boolean costs one instruction rather than a re-load and a re-compare.
-//
-// ⚠ **A RETRY RE-READS `Xexpected`, NOT x16.** The comparand must be the caller's value on every trip —
-// re-comparing against the last observation would make the loop succeed against whatever it just saw.
 // ⭐ **ONE `LDAR`/`STLR`, WIDTH-DISPATCHED.** The two opcodes differ only in the L bit, and the two
 // widths only in the `size` field, so ONE emitter carries both axes rather than four hand-written words
 // that could come to disagree about the fixed 0b11111 fields.
@@ -2093,18 +2096,43 @@ export function arm64EmitOrderedAccess(code ByteArray, byteOpcode MachineWord, r
 	emitArm64Insn(code, insn: sized or (rn shl Arm64RnShift) or rt)
 end 'arm64EmitOrderedAccess'
 
-export function arm64EmitAtomicCas(code ByteArray, dest MachineWord, addrReg MachineWord, expectedReg MachineWord, replacementReg MachineWord)
+// `arm64AtomicCas(dest, addr, expected, replacement)`:
+//
+//   loop:  LDAXR x16, [Xaddr]        ; x16 = the observed word, load-acquire exclusive
+//          CMP   x16, Xexpected      ; sets the flags the closing CSET reads
+//          B.NE  exit                ; mismatch — leave the flags NE and bail without storing
+//          STLXR w17, Xrepl, [Xaddr] ; store-release exclusive; w17 = 0 iff it landed
+//          CBNZ  x17, loop           ; reservation lost — observe again
+//   exit:  CSET  Xd, EQ              ; 1 on the stored path, 0 on the mismatch path
+//
+// ⭐ **THE CSET READS THE `CMP`'s FLAGS ON BOTH PATHS, AND THAT IS WHY THERE IS NO SECOND COMPARE.**
+// Neither `STLXR` nor `CBNZ` writes NZCV, so the flags at `exit` are still the last `CMP`'s: EQ when the
+// loop fell through (matched, and the store landed) and NE when the `B.NE` was taken. That is the
+// whole reason the success boolean costs one instruction rather than a re-load and a re-compare.
+//
+// ⚠ **A RETRY RE-READS `Xexpected`, NOT x16.** The comparand must be the caller's value on every trip —
+// re-comparing against the last observation would make the loop succeed against whatever it just saw.
+function arm64EmitCasLlsc(code ByteArray, dest MachineWord, addrReg MachineWord, expectedReg MachineWord, replacementReg MachineWord)
 	let loopTop = code.count()
-	arm64EmitLdaxr(code, rn: addrReg)
+	arm64EmitLdaxr(code, rn: addrReg, width: X64AccessWidth.word64)
 	arm64EmitCmpReg(code, rn: Arm64AtomicValue, rm: expectedReg)
 	let toExit = arm64EmitLocalCondBranch(code, cond: Arm64CondCode.ne)
-	arm64EmitStlxr(code, rt: replacementReg, rn: addrReg)
+	arm64EmitStlxr(code, rt: replacementReg, rn: addrReg, width: X64AccessWidth.word64)
 	arm64PatchBranch19(code, codeOffset: arm64EmitLocalCbnz(code, reg: Arm64AtomicStatus), targetOffset: loopTop as CodeOffset)
 	arm64PatchBranch19(code, codeOffset: toExit, targetOffset: codeHere(code))
 	arm64EmitCset(code, rd: dest, cond: Arm64CondCode.eq)
-end 'arm64EmitAtomicCas'
+end 'arm64EmitCasLlsc'
 
-// `arm64AtomicRmw(dest, addr, operand, opcode)`:
+// `CASAL` overwrites its comparand register with the word it observed, so the comparand goes
+// through x16: `Xexpected` may still be live after the op.
+function arm64EmitCasLse(code ByteArray, dest MachineWord, addrReg MachineWord, expectedReg MachineWord, replacementReg MachineWord)
+	arm64EmitMovGpr(code, rd: Arm64AtomicValue, rn: expectedReg)
+	emitArm64Rrr(code, opcode: Arm64OpCasal, rd: replacementReg, rn: addrReg, rm: Arm64AtomicValue)
+	arm64EmitCmpReg(code, rn: Arm64AtomicValue, rm: expectedReg)
+	arm64EmitCset(code, rd: dest, cond: Arm64CondCode.eq)
+end 'arm64EmitCasLse'
+
+// `arm64AtomicRmw(dest, addr, operand, add)`:
 //
 //   loop:  LDAXR x16, [Xaddr]        ; x16 = the prior word
 //          ADD   x16, x16, Xoperand  ; x16 = the new word
@@ -2118,21 +2146,80 @@ end 'arm64EmitAtomicCas'
 // across the store, and the prior one is one `SUB` away: two scratches, a real reservation loop, x18
 // untouched.
 //
-// ⚠ The inverse is chosen by the opcode and MUST stay its true inverse — an appended `xchg` or `and` has
-// no inverse at all and needs a different sequence (keep the prior value in `Xd` and the new one in x16),
-// which is exactly what the exhaustive match here forces the next author to confront.
-export function arm64EmitAtomicRmw(code ByteArray, dest MachineWord, addrReg MachineWord, operandReg MachineWord, opcode StdAtomicRmwOpcode)
-	let (applyOpcode, inverseOpcode) = match opcode 'op'
-		add gives (Arm64OpAdd, Arm64OpSub)
+// ⚠ The `SUB` MUST stay the true inverse of the `ADD`. An operation with no inverse needs another
+// sequence, as `exchangeByte` has in `arm64EmitExchangeByteLlsc`.
+function arm64EmitAddLlsc(code ByteArray, dest MachineWord, addrReg MachineWord, operandReg MachineWord)
+	let loopTop = code.count()
+	arm64EmitLdaxr(code, rn: addrReg, width: X64AccessWidth.word64)
+	emitArm64Rrr(code, opcode: Arm64OpAdd, rd: Arm64AtomicValue, rn: Arm64AtomicValue, rm: operandReg)
+	arm64EmitStlxr(code, rt: Arm64AtomicValue, rn: addrReg, width: X64AccessWidth.word64)
+	arm64PatchBranch19(code, codeOffset: arm64EmitLocalCbnz(code, reg: Arm64AtomicStatus), targetOffset: loopTop as CodeOffset)
+	emitArm64Rrr(code, opcode: Arm64OpSub, rd: dest, rn: Arm64AtomicValue, rm: operandReg)
+end 'arm64EmitAddLlsc'
+
+function arm64EmitExchangeByteLlsc(code ByteArray, dest MachineWord, addrReg MachineWord, operandReg MachineWord)
+	let loopTop = code.count()
+	arm64EmitLdaxr(code, rn: addrReg, width: X64AccessWidth.byte)
+	arm64EmitStlxr(code, rt: operandReg, rn: addrReg, width: X64AccessWidth.byte)
+	arm64PatchBranch19(code, codeOffset: arm64EmitLocalCbnz(code, reg: Arm64AtomicStatus), targetOffset: loopTop as CodeOffset)
+	arm64EmitMovGpr(code, rd: dest, rn: Arm64AtomicValue)
+end 'arm64EmitExchangeByteLlsc'
+
+function arm64EmitRmwLlsc(code ByteArray, dest MachineWord, addrReg MachineWord, operandReg MachineWord, opcode StdAtomicRmwOpcode)
+	match opcode 'op'
+		add then arm64EmitAddLlsc(code, dest: dest, addrReg: addrReg, operandReg: operandReg)
+		exchangeByte then arm64EmitExchangeByteLlsc(code, dest: dest, addrReg: addrReg, operandReg: operandReg)
+	end 'op'
+end 'arm64EmitRmwLlsc'
+
+function arm64EmitRmwLse(code ByteArray, dest MachineWord, addrReg MachineWord, operandReg MachineWord, opcode StdAtomicRmwOpcode)
+	let lseOpcode = match opcode 'op'
+		add gives Arm64OpLdaddal
+		exchangeByte gives Arm64OpSwpalB
 	end 'op'
 
-	let loopTop = code.count()
-	arm64EmitLdaxr(code, rn: addrReg)
-	emitArm64Rrr(code, opcode: applyOpcode, rd: Arm64AtomicValue, rn: Arm64AtomicValue, rm: operandReg)
-	arm64EmitStlxr(code, rt: Arm64AtomicValue, rn: addrReg)
-	arm64PatchBranch19(code, codeOffset: arm64EmitLocalCbnz(code, reg: Arm64AtomicStatus), targetOffset: loopTop as CodeOffset)
-	emitArm64Rrr(code, opcode: inverseOpcode, rd: dest, rn: Arm64AtomicValue, rm: operandReg)
-end 'arm64EmitAtomicRmw'
+	emitArm64Rrr(code, opcode: lseOpcode, rd: dest, rn: addrReg, rm: operandReg)
+end 'arm64EmitRmwLse'
+
+export union Arm64AtomicOp
+	compareAndSwap(dest MachineWord, addrReg MachineWord, expectedReg MachineWord, replacementReg MachineWord)
+	readModifyWrite(dest MachineWord, addrReg MachineWord, operandReg MachineWord, opcode StdAtomicRmwOpcode)
+	counterIncrement(addrReg MachineWord)
+end 'Arm64AtomicOp'
+
+function arm64EmitAtomicLlsc(code ByteArray, op Arm64AtomicOp)
+	match op 'op'
+		compareAndSwap(dest, addrReg, expectedReg, replacementReg) then arm64EmitCasLlsc(code, dest: dest, addrReg: addrReg, expectedReg: expectedReg, replacementReg: replacementReg)
+		readModifyWrite(dest, addrReg, operandReg, opcode) then arm64EmitRmwLlsc(code, dest: dest, addrReg: addrReg, operandReg: operandReg, opcode: opcode)
+		counterIncrement(addrReg) then arm64EmitCounterIncrementLlsc(code, addrReg: addrReg)
+	end 'op'
+end 'arm64EmitAtomicLlsc'
+
+function arm64EmitAtomicLse(code ByteArray, op Arm64AtomicOp)
+	match op 'op'
+		compareAndSwap(dest, addrReg, expectedReg, replacementReg) then arm64EmitCasLse(code, dest: dest, addrReg: addrReg, expectedReg: expectedReg, replacementReg: replacementReg)
+		readModifyWrite(dest, addrReg, operandReg, opcode) then arm64EmitRmwLse(code, dest: dest, addrReg: addrReg, operandReg: operandReg, opcode: opcode)
+		counterIncrement(addrReg) then arm64EmitCounterIncrementLse(code, addrReg: addrReg)
+	end 'op'
+end 'arm64EmitAtomicLse'
+
+function arm64EmitAtomicHwcapChecked(code ByteArray, rdataRelocs RdataRelocationArray, op Arm64AtomicOp)
+	arm64EmitAdrpAddPair(code, rdataRelocs: rdataRelocs, dest: Arm64AtomicValue, label: LinuxHwcapAtomicsLabel, adrpKind: RdataRelocKind.dataSectionArm64Adrp, pageOffKind: RdataRelocKind.dataSectionArm64PageOff)
+	arm64EmitScaledMem(code, opcode: Arm64OpLdrB, rt: Arm64AtomicValue, baseReg: Arm64AtomicValue, byteOffset: 0, scale: Arm64ByteAccessScale)
+	let toLlsc = arm64EmitLocalCbz(code, reg: Arm64AtomicValue)
+	arm64EmitAtomicLse(code, op: op)
+	let toDone = arm64EmitLocalBranch(code)
+	arm64PatchBranch19(code, codeOffset: toLlsc, targetOffset: codeHere(code))
+	arm64EmitAtomicLlsc(code, op: op)
+	arm64PatchBranch26(code, codeOffset: toDone, targetOffset: codeHere(code))
+end 'arm64EmitAtomicHwcapChecked'
+
+export function arm64EmitAtomic(code ByteArray, rdataRelocs RdataRelocationArray, atomics Arm64AtomicsMode, op Arm64AtomicOp)
+	match atomics 'mode'
+		lse then arm64EmitAtomicLse(code, op: op)
+		hwcapChecked then arm64EmitAtomicHwcapChecked(code, rdataRelocs: rdataRelocs, op: op)
+	end 'mode'
+end 'arm64EmitAtomic'
 
 // ⛔⛔ **THE COUNTER'S ADDRESS IS BORROWED FROM THE STACK, BECAUSE ARMv8.0 HAS ONLY TWO RESERVED
 // SCRATCHES AND AN LL/SC INCREMENT NEEDS THREE REGISTERS.** The loop wants the ADDRESS live across the
@@ -2156,21 +2243,30 @@ end 'arm64EmitAtomicRmw'
 //         STLXR w17, x16, [x0]
 //         CBNZ  x17, loop
 //   LDP   x0, x1, [sp], #16
-function arm64EmitCovInc(code ByteArray, rdataRelocs RdataRelocationArray, covOffsets CovPointOffsetArray, pointId CovPointId)
+//
+// With LSE (`arm64EmitAtomic`) the loop is `MOV x16, #1` and `LDADDAL x16, x16, [x0]`.
+function arm64EmitCovInc(code ByteArray, rdataRelocs RdataRelocationArray, covOffsets CovPointOffsetArray, pointId CovPointId, atomics Arm64AtomicsMode)
 	// Recorded where the SEQUENCE starts, on the x64 encoder's contract: the sidecar names the address the
 	// counter's code begins at, and a point absent from this channel is ELIMINATED.
 	covOffsets.push(CovPointOffset.create(codeHere(code), pointId: pointId))
 	arm64EmitPushPairGpr(code, rt1: Arm64CovAddr, rt2: Arm64CovAddrPartner)
 	arm64EmitAdrpAddPair(code, rdataRelocs: rdataRelocs, dest: Arm64CovAddr, label: CoverageImageGlobal.toByteArray(), adrpKind: RdataRelocKind.dataSectionArm64Adrp, pageOffKind: RdataRelocKind.dataSectionArm64PageOff, addend: covCounterOffset(pointId as MxcovPointIndex) as ByteOffset)
-
-	let loopTop = code.count()
-	arm64EmitLdaxr(code, rn: Arm64CovAddr)
-	arm64EmitAddSubImm12(code, opcode: Arm64OpAddImm, rd: Arm64AtomicValue, rn: Arm64AtomicValue, imm12: CovCounterStep, shiftHi: false)
-	arm64EmitStlxr(code, rt: Arm64AtomicValue, rn: Arm64CovAddr)
-	arm64PatchBranch19(code, codeOffset: arm64EmitLocalCbnz(code, reg: Arm64AtomicStatus), targetOffset: loopTop as CodeOffset)
-
+	arm64EmitAtomic(code, rdataRelocs: rdataRelocs, atomics: atomics, op: Arm64AtomicOp.counterIncrement(Arm64CovAddr))
 	arm64EmitPopPairGpr(code, rt1: Arm64CovAddr, rt2: Arm64CovAddrPartner)
 end 'arm64EmitCovInc'
+
+function arm64EmitCounterIncrementLlsc(code ByteArray, addrReg MachineWord)
+	let loopTop = code.count()
+	arm64EmitLdaxr(code, rn: addrReg, width: X64AccessWidth.word64)
+	arm64EmitAddSubImm12(code, opcode: Arm64OpAddImm, rd: Arm64AtomicValue, rn: Arm64AtomicValue, imm12: CovCounterStep, shiftHi: false)
+	arm64EmitStlxr(code, rt: Arm64AtomicValue, rn: addrReg, width: X64AccessWidth.word64)
+	arm64PatchBranch19(code, codeOffset: arm64EmitLocalCbnz(code, reg: Arm64AtomicStatus), targetOffset: loopTop as CodeOffset)
+end 'arm64EmitCounterIncrementLlsc'
+
+function arm64EmitCounterIncrementLse(code ByteArray, addrReg MachineWord)
+	arm64EmitMovImm(code, rd: Arm64AtomicValue, value: CovCounterStep)
+	emitArm64Rrr(code, opcode: Arm64OpLdaddal, rd: Arm64AtomicValue, rn: addrReg, rm: Arm64AtomicValue)
+end 'arm64EmitCounterIncrementLse'
 
 // ⭐⭐ **THIS OS THREAD'S PER-THREAD BASE — AND WHICH REGISTER HOLDS IT IS A PER-OS FACT.**
 // The two arms are not two spellings of one read; they name two different system registers, for two
@@ -2276,9 +2372,21 @@ export function arm64EmitSyscall(code ByteArray, number MachineWord)
 	emitArm64Insn(code, insn: Arm64OpSvc)
 end 'arm64EmitSyscall'
 
-export function arm64EmitYield(code ByteArray)
-	emitArm64Insn(code, insn: Arm64OpYield)
-end 'arm64EmitYield'
+export function arm64EmitIsb(code ByteArray)
+	emitArm64Insn(code, insn: Arm64OpIsb)
+end 'arm64EmitIsb'
+
+export function arm64EmitReadCounterFrequency(code ByteArray, rt MachineWord)
+	emitArm64Insn(code, insn: Arm64OpMrsCntfrq or rt)
+end 'arm64EmitReadCounterFrequency'
+
+export function arm64EmitReadVirtualCounter(code ByteArray, rt MachineWord)
+	emitArm64Insn(code, insn: Arm64OpMrsCntvct or rt)
+end 'arm64EmitReadVirtualCounter'
+
+export function arm64EmitAddLsrReg(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord, amount ShiftCount)
+	emitArm64Rrr(code, opcode: ((Arm64OpAdd or Arm64ShiftTypeLsr or (amount shl Arm64ShiftedRegAmountShift)) as MachineWord), rd: rd, rn: rn, rm: rm)
+end 'arm64EmitAddLsrReg'
 
 // RET — return through x30. Exported for the hand-assembled runtime chunks; a MODULE function's
 // return is the `arm64Ret` TargetOp, encoded from the same word.
@@ -2652,6 +2760,7 @@ export function emitArm64FunctionChunk(module TargetModule, func IrFunction, fra
 
 	// Where this chunk's coverage counters land — the x64 backend's channel, filled the same way.
 	var covOffsets = CovPointOffsetArray.create()
+	let atomics = arm64AtomicsModeOf(target.os)
 
 	// The code range of every run of blocks under one inline site — x64's channel, read off the block loop.
 	var inlineRanges = InlineRangeBuilder.create()
@@ -2682,7 +2791,7 @@ export function emitArm64FunctionChunk(module TargetModule, func IrFunction, fra
 
 			let opStart = code.count()
 			let op = try module.ops.get(opIdx) otherwise panic("emitArm64FunctionChunk: opIdx {opIdx} not in module.ops")
-			emitArm64TargetOp(op, code: code, covOffsets: covOffsets, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, funcAdrpRelocs: funcAdrpRelocs, branchFixups: branchFixups, jumpTables: jumpTables, greenThreads: greenThreads)
+			emitArm64TargetOp(op, code: code, covOffsets: covOffsets, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, funcAdrpRelocs: funcAdrpRelocs, branchFixups: branchFixups, jumpTables: jumpTables, greenThreads: greenThreads, atomics: atomics)
 			runOffsets.note(opIdx, codeStart: opStart as CodeOffset, codeEnd: codeHere(code))
 		end 'eachOp'
 
@@ -2693,7 +2802,7 @@ export function emitArm64FunctionChunk(module TargetModule, func IrFunction, fra
 
 			let termStart = code.count()
 			let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("emitArm64FunctionChunk: terminator not in module.ops")
-			emitArm64TargetOp(termOp, code: code, covOffsets: covOffsets, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, funcAdrpRelocs: funcAdrpRelocs, branchFixups: branchFixups, jumpTables: jumpTables, greenThreads: greenThreads)
+			emitArm64TargetOp(termOp, code: code, covOffsets: covOffsets, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, funcAdrpRelocs: funcAdrpRelocs, branchFixups: branchFixups, jumpTables: jumpTables, greenThreads: greenThreads, atomics: atomics)
 			runOffsets.note(block.terminatorIndex(), codeStart: termStart as CodeOffset, codeEnd: codeHere(code))
 		end 'hasTerm'
 

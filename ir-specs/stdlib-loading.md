@@ -176,7 +176,8 @@ func @main {
 data {
   __mrt_envp@0 = i64 0
   __mrt_signal_stack_bytes@8 = i64 0
-  __mrt_program_started@16 = i8 0
+  __mrt_hwcap_atomics@16 = i64 0
+  __mrt_program_started@24 = i8 0
 }
 
 func @main {

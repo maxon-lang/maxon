@@ -278,11 +278,11 @@ export let Arm64LinuxSyscallShutdown = 210
 // five and a WORKER M's THREAD two — the kind and the `CLONE_CHILD_CLEARTID` join word at
 // `PosixWaitOffThread`, which is the slot Darwin fills with a `pthread_t` for the same purpose.
 //
-// ⚠ **THE SIGNAL WORD IS A 64-BIT SLOT AND THE KERNEL READS ITS LOW 4 BYTES.** A futex is a `u32`; AArch64
-// is little-endian, so the low half of an 8-byte aligned word IS that `u32` at the same address. Keeping the
-// slot 64 bits lets the publish and the take go through `arm64EmitAtomicCas`, this backend's ONE LL/SC pair,
-// instead of a second 32-bit spelling of it — and the value only ever holds 0 or 1, so no bit the kernel
-// cannot see is ever set.
+// ⚠ **THE SIGNAL WORD IS A 64-BIT SLOT AND THE KERNEL READS ITS LOW 4 BYTES.** A futex is a `u32`;
+// AArch64 is little-endian, so the low half of an 8-byte aligned word IS that `u32` at the same
+// address. Keeping the slot 64 bits lets the take and a waiter's announcement go through the 64-bit
+// compare-and-swap instead of a second 32-bit spelling of it, and the publish exchanges the low
+// byte — and the value only ever holds 0, 1 or 2, so no bit the kernel cannot see is ever set.
 //
 // ⚠ **`mmap` RATHER THAN A `malloc` THIS LANE DOES NOT HAVE**, and rather than the slab, for the Darwin
 // twin's reason: the slab is Std-tier and reachable only through a `bl` the Std reachability walk cannot
@@ -1561,20 +1561,26 @@ function arm64LinuxEmitFutexTimeout(asm Arm64RuntimeAsm, timeoutSlot StackSize, 
 	end 'untimed'
 end 'arm64LinuxEmitFutexTimeout'
 
-// `dest = CAS(*addrReg, expected, replacement)` as a BOOLEAN — 1 if the store landed. The runtime-asm
-// spelling of the encoder's LL/SC pair, so a chunk here reads in `Arm64Register`s like everything else
-// around it.
+// `dest = CAS(*addrReg, expected, replacement)` as a BOOLEAN — 1 if the store landed. The
+// runtime-asm spelling of the encoder's compare-and-swap, so a chunk here reads in `Arm64Register`s
+// like everything else around it.
 //
 // ⚠ **IT CLOBBERS x16 AND x17**, which are this file's address scratch and the encoder's LL/SC status
 // register. No caller below holds anything in either across one.
-// `dest = CAS(*[addrSlot], expected, replacement)` with both operands as literals — the three call sites
+// `dest = CAS(*[addrSlot], expected, replacement)` with both operands as literals — the call sites
 // below differ only in those two numbers.
 function arm64LinuxEmitCasImm(asm Arm64RuntimeAsm, dest Arm64Register, addrSlot StackSize, expected MachineWord, replacement MachineWord)
 	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: addrSlot)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: expected)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: replacement)
-	arm64EmitAtomicCas(asm.code, dest: arm64RuntimeReg(dest), addrReg: arm64RuntimeReg(Arm64Register.x0), expectedReg: arm64RuntimeReg(Arm64Register.x1), replacementReg: arm64RuntimeReg(Arm64Register.x2))
+	arm64EmitAtomic(asm.code, rdataRelocs: asm.rdataRelocs, atomics: arm64AtomicsModeOf(Os.linux), op: Arm64AtomicOp.compareAndSwap(arm64RuntimeReg(dest), addrReg: arm64RuntimeReg(Arm64Register.x0), expectedReg: arm64RuntimeReg(Arm64Register.x1), replacementReg: arm64RuntimeReg(Arm64Register.x2)))
 end 'arm64LinuxEmitCasImm'
+
+function arm64LinuxEmitExchangeByteImm(asm Arm64RuntimeAsm, dest Arm64Register, addrSlot StackSize, value MachineWord)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x0, slot: addrSlot)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: value)
+	arm64EmitAtomic(asm.code, rdataRelocs: asm.rdataRelocs, atomics: arm64AtomicsModeOf(Os.linux), op: Arm64AtomicOp.readModifyWrite(arm64RuntimeReg(dest), addrReg: arm64RuntimeReg(Arm64Register.x0), operandReg: arm64RuntimeReg(Arm64Register.x1), opcode: StdAtomicRmwOpcode.exchangeByte))
+end 'arm64LinuxEmitExchangeByteImm'
 
 function arm64LinuxEmitTryAcquire(asm Arm64RuntimeAsm, addrSlot StackSize, owned BlockId)
 	arm64LinuxEmitCasImm(asm, dest: Arm64Register.x5, addrSlot: addrSlot, expected: LinuxMutexFree, replacement: LinuxMutexHeld)
@@ -1880,21 +1886,28 @@ end 'buildArm64LinuxThreadCreateChunk'
 // mrt_host_event_set(x0 = object)
 // ==========================================================================
 
-// `SetEvent` — `PosixWaitSignalled`'s publish-and-wake, spelled here as a `cas` and a `FUTEX_WAKE`.
+// `SetEvent` — `PosixWaitSignalled`'s publish, spelled here as a byte exchange, and a `FUTEX_WAKE`
+// only when it displaces `LinuxEventSleeping` (see there for the one-waiter rule this rests on).
 //
-// ⚠ **THE `cas` IS ALSO WHERE THE RELEASE ORDERING COMES FROM.** `STLXR` is what a waiter's acquiring take
-// pairs with on a weakly-ordered ISA; a plain `str` would need a barrier beside it.
+// ⚠ **THE EXCHANGE IS ALSO WHERE THE RELEASE ORDERING COMES FROM.** `SWPALB`/`STLXRB` is what a
+// waiter's acquiring take pairs with on a weakly-ordered ISA; a plain `strb` would need a barrier
+// beside it.
 function buildArm64LinuxEventSetChunk() returns FunctionCodeChunk
 	let SlotSignal = 0 as StackSize
 	var asm = Arm64RuntimeAsm.beginFunction(1)
+
+	let nobodySleeps = asm.newLabel()
 
 	arm64PosixUntagHandle(asm, reg: Arm64Register.x0)
 	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x0, base: Arm64Register.x0, imm: PosixWaitOffSignal as Imm32)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x0, slot: SlotSignal)
 
-	arm64LinuxEmitCasImm(asm, dest: Arm64Register.x3, addrSlot: SlotSignal, expected: PosixWaitNotSignalled, replacement: PosixWaitSignalled)
+	arm64LinuxEmitExchangeByteImm(asm, dest: Arm64Register.x3, addrSlot: SlotSignal, value: PosixWaitSignalled)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x3, imm: LinuxEventSleeping as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: nobodySleeps)
 	arm64LinuxEmitFutex(asm, addrSlot: SlotSignal, operation: LinuxFutexWakePrivate, value: LinuxFutexWakeOne, timeoutSlot: SlotSignal, hasTimeout: false)
 
+	asm.placeLabel(nobodySleeps)
 	return asm.finishFunction(HostEventSetName)
 end 'buildArm64LinuxEventSetChunk'
 
@@ -2022,14 +2035,17 @@ function buildArm64LinuxWaitOneChunk(globalData GlobalDataTable) returns Functio
 	// Unbounded: sleep while the word is still unsignalled, then re-test. That IS the `while (!signalled)`
 	// loop the primitive requires — a futex return is advisory (`EAGAIN`, `EINTR`), and re-testing is the
 	// only sound response to one.
-	arm64LinuxEmitFutex(asm, addrSlot: SlotSignal, operation: LinuxFutexWaitPrivate, value: PosixWaitNotSignalled, timeoutSlot: SlotTsSec, hasTimeout: false)
+	arm64LinuxEmitCasImm(asm, dest: Arm64Register.x3, addrSlot: SlotSignal, expected: PosixWaitNotSignalled, replacement: LinuxEventSleeping)
+	arm64LinuxEmitFutex(asm, addrSlot: SlotSignal, operation: LinuxFutexWaitPrivate, value: LinuxEventSleeping, timeoutSlot: SlotTsSec, hasTimeout: false)
 	arm64EmitBranchTo(asm, label: testSignal)
 
 	// waitTimed: ONE bounded wait, then a single re-test — the Darwin twin's shape, and for its reason: the
 	// caller owns the deadline and re-arming here would silently double a timeout that expired spuriously.
 	asm.placeLabel(waitTimed)
+	arm64LinuxEmitCasImm(asm, dest: Arm64Register.x3, addrSlot: SlotSignal, expected: PosixWaitNotSignalled, replacement: LinuxEventSleeping)
+	arm64EmitLoadSlot(asm, reg: Arm64Register.x1, slot: SlotTimeout)
 	arm64PosixToTimespec(asm, amount: Arm64Register.x1, unit: PosixTimeUnit.milliseconds, secSlot: SlotTsSec, nsecSlot: SlotTsNsec)
-	arm64LinuxEmitFutex(asm, addrSlot: SlotSignal, operation: LinuxFutexWaitPrivate, value: PosixWaitNotSignalled, timeoutSlot: SlotTsSec, hasTimeout: true)
+	arm64LinuxEmitFutex(asm, addrSlot: SlotSignal, operation: LinuxFutexWaitPrivate, value: LinuxEventSleeping, timeoutSlot: SlotTsSec, hasTimeout: true)
 	arm64LinuxEmitCasImm(asm, dest: Arm64Register.x3, addrSlot: SlotSignal, expected: PosixWaitSignalled, replacement: PosixWaitNotSignalled)
 	arm64EmitCbzTo(asm, reg: Arm64Register.x3, label: finish)
 
@@ -2140,7 +2156,6 @@ function buildArm64LinuxLockEnterChunk() returns FunctionCodeChunk
 
 	let acquire = asm.newLabel()
 	let activeRound = asm.newLabel()
-	let pauseLoop = asm.newLabel()
 	let passiveRound = asm.newLabel()
 	let contend = asm.newLabel()
 	let owned = asm.newLabel()
@@ -2166,13 +2181,11 @@ function buildArm64LinuxLockEnterChunk() returns FunctionCodeChunk
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x4, value: LinuxLockActiveSpinRounds)
 	arm64EmitStoreSlot(asm, reg: Arm64Register.x4, slot: SlotSpinRounds)
 
+	// Inlined rather than a `bl mrt_host_spin_pause`: this lock is emitted without `usesGt`, and that
+	// chunk only with it.
 	asm.placeLabel(activeRound)
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x3, value: LinuxLockActiveSpinPauses)
-
-	asm.placeLabel(pauseLoop)
-	arm64EmitYield(asm.code)
-	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x3, base: Arm64Register.x3, imm: -1)
-	arm64EmitCbnzTo(asm, reg: Arm64Register.x3, label: pauseLoop)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: LinuxLockActiveSpinPauses)
+	arm64EmitProcyield(asm)
 	arm64LinuxEmitTryAcquire(asm, addrSlot: SlotRegion, owned: owned)
 	arm64LinuxEmitNextSpinRound(asm, roundsSlot: SlotSpinRounds, again: activeRound)
 
@@ -2226,7 +2239,7 @@ function buildArm64LinuxLockLeaveChunk() returns FunctionCodeChunk
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: LinuxLockOffOwner)
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: LinuxLockOffDepth)
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x2, value: LinuxMutexReleaseStep)
-	arm64EmitAtomicRmw(asm.code, dest: arm64RuntimeReg(Arm64Register.x3), addrReg: arm64RuntimeReg(Arm64Register.x0), operandReg: arm64RuntimeReg(Arm64Register.x2), opcode: StdAtomicRmwOpcode.add)
+	arm64EmitAtomic(asm.code, rdataRelocs: asm.rdataRelocs, atomics: arm64AtomicsModeOf(Os.linux), op: Arm64AtomicOp.readModifyWrite(arm64RuntimeReg(Arm64Register.x3), addrReg: arm64RuntimeReg(Arm64Register.x0), operandReg: arm64RuntimeReg(Arm64Register.x2), opcode: StdAtomicRmwOpcode.add))
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x3, imm: LinuxMutexHeld)
 	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: wake)
 	arm64EmitBranchTo(asm, label: done)

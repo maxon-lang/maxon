@@ -804,7 +804,7 @@ end 'assertArm64CallClobbers'
 
 // ⭐⭐ **EVERY MACRO-OP WHOSE ENCODER WRITES FIXED REGISTERS, AGAINST THE `implicitDefs` LITERAL THAT
 // IS WHAT KEEPS A LIVE VALUE OUT OF THEM.** Five families answer here — the jump tables (r10/r11 on
-// x64, x16/x17 on arm64), the byte-fill ladders (rax/rcx/rdx/rdi, x0..x3), the arm64 LL/SC atomics
+// x64, x16/x17 on arm64), the byte-fill ladders (rax/rcx/rdx/rdi, x0..x3), the arm64 atomics
 // (x16/x17), the x64 f64 negate's mask register (xmm5) and the x64 unsigned int → f64 sequence
 // (r11) — and they share ONE guard because they share one hazard, stated once: the inline
 // `TargetOpMeta` literal is what `forbidOperandsFromImplicit` and the liveness clobber census read,
@@ -841,7 +841,7 @@ function assertArm64EncoderScratchMasks()
 	assertEncoderScratchMask(TargetOp.arm64JumpTable(TargetVReg.virtual(0), defaultTarget: 0, caseTargets: BlockIdArray.create(), tableLabel: b""), name: "arm64JumpTable", expected: ipPair, hazard: "the biased index could be colored onto a register the jump-table encoder clobbers")
 	assertEncoderScratchMask(TargetOp.arm64MemFill(0), name: "arm64MemFill", expected: arm64MemFillScratchMask(), hazard: "a value live across the fill could be colored onto a register the ladder clobbers")
 
-	// Both LL/SC loops keep their observed value in x16 and their store status in x17 — the SAME IP pair
+	// Both atomics keep their working value in x16 and their store status in x17 — the SAME IP pair
 	// the jump table uses, which is why one `let` serves all three.
 	assertEncoderScratchMask(TargetOp.arm64AtomicCas(TargetVReg.virtual(0), addrReg: TargetVReg.virtual(0), expectedReg: TargetVReg.virtual(0), replacementReg: TargetVReg.virtual(0)), name: "arm64AtomicCas", expected: ipPair, hazard: "an operand of the retry loop could be colored onto a register the loop clobbers before its last read")
 	assertEncoderScratchMask(TargetOp.arm64AtomicRmw(TargetVReg.virtual(0), addrReg: TargetVReg.virtual(0), operandReg: TargetVReg.virtual(0), opcode: StdAtomicRmwOpcode.add), name: "arm64AtomicRmw", expected: ipPair, hazard: "an operand of the retry loop could be colored onto a register the loop clobbers before its last read")
@@ -2086,6 +2086,7 @@ function collectOpHints(op TargetOp, hints ColorHints)
 		x64LockCmpxchg or
 		x64LockXadd or
 		x64LockAdd or
+		x64XchgByte or
 		x64GsLoadRegBase or
 		arm64AtomicCas or
 		arm64AtomicRmw or
@@ -3114,6 +3115,7 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		x64LockCmpxchg(addrReg, srcReg) then return TargetOp.x64LockCmpxchg(colorVRegWith(addrReg, alloc: alloc), srcReg: colorVRegWith(srcReg, alloc: alloc))
 		x64LockXadd(dest, src, addrReg) then return TargetOp.x64LockXadd(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc), addrReg: colorVRegWith(addrReg, alloc: alloc))
 		x64LockAdd(addrReg, srcReg) then return TargetOp.x64LockAdd(colorVRegWith(addrReg, alloc: alloc), srcReg: colorVRegWith(srcReg, alloc: alloc))
+		x64XchgByte(dest, src, addrReg) then return TargetOp.x64XchgByte(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc), addrReg: colorVRegWith(addrReg, alloc: alloc))
 		x64GsLoadRegBase(dest, base) then return TargetOp.x64GsLoadRegBase(colorVRegWith(dest, alloc: alloc), base: colorVRegWith(base, alloc: alloc))
 		arm64AtomicCas(dest, addrReg, expectedReg, replacementReg) then return TargetOp.arm64AtomicCas(colorVRegWith(dest, alloc: alloc), addrReg: colorVRegWith(addrReg, alloc: alloc), expectedReg: colorVRegWith(expectedReg, alloc: alloc), replacementReg: colorVRegWith(replacementReg, alloc: alloc))
 		arm64AtomicRmw(dest, addrReg, operandReg, opcode) then return TargetOp.arm64AtomicRmw(colorVRegWith(dest, alloc: alloc), addrReg: colorVRegWith(addrReg, alloc: alloc), operandReg: colorVRegWith(operandReg, alloc: alloc), opcode: opcode)

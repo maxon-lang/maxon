@@ -429,11 +429,12 @@ data {
   __sched_timer_starts@536 = i64 0
   __mrt_envp@544 = i64 0
   __mrt_signal_stack_bytes@552 = i64 0
-  __mrt_tls_next_key@560 = i64 0
-  __slab_arena_list@568 = i64 0
-  __slab_arena_map_l1@576 = i64 0
-  __slab_state@584 = i64 0
-  __mrt_program_started@592 = i8 0
+  __mrt_hwcap_atomics@560 = i64 0
+  __mrt_tls_next_key@568 = i64 0
+  __slab_arena_list@576 = i64 0
+  __slab_arena_map_l1@584 = i64 0
+  __slab_state@592 = i64 0
+  __mrt_program_started@600 = i8 0
 }
 
 func @main {

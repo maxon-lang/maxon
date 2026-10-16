@@ -525,6 +525,7 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		// `dest` must land in `src`'s register — a reuse-def over operand 0, with the allocator supplying the
 		// copy only when `src` outlives the op. Same model as `subRegReg`/`negReg`.
 		x64LockXadd(dest, src, addrReg) then pushReuseBinOperands(buf, dest: dest, lhs: src, rhs: addrReg)
+		x64XchgByte(dest, src, addrReg) then pushReuseBinOperands(buf, dest: dest, lhs: src, rhs: addrReg)
 
 		// `lock add` is the discarding form: two reads, NO def at all — which is the whole register saving it
 		// exists for (see `x64AtomicAdd`).
@@ -536,10 +537,10 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		x64GsLoadRegBase(dest, base) then pushDefFromUse(buf, dest: dest, src: base)
 		arm64ThreadPointer(dest, _) then pushDef(buf, vreg: dest)
 
-		// The arm64 LL/SC macro-ops: every operand stays VIRTUAL (the loop reads them wherever they were
-		// coloured) and the result is a PLAIN def, never a reuse — see `TargetDialect.arm64AtomicCas` for why
-		// the encoders must write that def LAST, which is what makes a plain def safe when it aliases a dying
-		// use's register.
+		// The arm64 atomic macro-ops: every operand stays VIRTUAL (the sequence reads them wherever they
+		// were coloured) and the result is a PLAIN def, never a reuse — see
+		// `TargetDialect.arm64AtomicCas` for why the encoders must write that def LAST, which is what
+		// makes a plain def safe when it aliases a dying use's register.
 		arm64AtomicCas(dest, addrReg, expectedReg, replacementReg) then pushDefThreeUse(buf, dest: dest, a: addrReg, b: expectedReg, c: replacementReg)
 		arm64AtomicRmw(dest, addrReg, operandReg, _) then pushDefTwoUse(buf, dest: dest, a: addrReg, b: operandReg)
 

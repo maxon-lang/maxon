@@ -196,6 +196,7 @@ let OpcodeGrp1Imm32 = 0x81  // group-1 ALU, r/m, imm32
 let OpcodeGrp2Imm8 = 0xC1  // group-2 SHIFT, r/m, imm8 (a COUNT — never sign-extended)
 let OpcodeGrp2Cl = 0xD3  // group-2 SHIFT, r/m, cl — the count is IMPLICIT, in CL
 let OpcodeGrp3 = 0xF7  // group-3 unary ALU (TEST/NOT/NEG/MUL/IMUL/DIV/IDIV by /ext)
+let OpcodeXchgRm8Reg8 = 0x86
 let OpcodeMovzxRegRm8 = 0xB6  // movzx r, r/m8 (two-byte 0F B6 /r; reg field = dest)
 let OpcodeMovsxd = 0x63  // movsxd r64, r/m32 (REX.W 63 /r; reg field = dest) — the jump table's signed i32 load
 let OpcodeCqo = 0x99  // cqo: sign-extend RAX into RDX:RAX (REX.W 99), no ModR/M
@@ -1288,6 +1289,11 @@ export function encodeStoreBaseDispReg8(code ByteArray, base X64Register, disp I
 	encodeModRmBaseDisp(code, twoByteEscape: false, opcode: OpcodeMovRm8Reg8, regField: srcReg, base: base, disp: disp, wide: false, forceRex: true, index: index, indexScale: indexScale)
 end 'encodeStoreBaseDispReg8'
 
+export function encodeXchgByteBaseDispReg(code ByteArray, base X64Register, disp Imm32, reg X64Register)
+	encodeModRmBaseDisp(code, twoByteEscape: false, opcode: OpcodeXchgRm8Reg8, regField: reg, base: base, disp: disp, wide: false, forceRex: true)
+	encodeModRmDirect(code, twoByteEscape: true, opcode: OpcodeMovzxRegRm8, regField: reg, rmField: reg, wide: true)
+end 'encodeXchgByteBaseDispReg'
+
 // `movzx destReg, byte [base + disp]` — load one byte, zero-extended to 64 bits (REX.W
 // 0F B6 /r). The panic runtime's `strlen` reads a C string a byte at a time through this;
 // zero-extension is what makes the `cmp dest, 0` NUL test correct for a high byte.
@@ -1373,7 +1379,7 @@ end 'encodeJcc'
 // needs no fixup, because it is not a BLOCK: the stack probe's page walk and the fill ladder's store loop
 // are each emitted as a unit, so the encoder is still holding its own loop label. `what` names the caller,
 // so an out-of-reach displacement accuses the instruction that actually overflowed.
-module function encodeJccBackward(code ByteArray, cond X64CondCode, targetOffset CodeOffset, what PatchSite)
+function encodeJccBackward(code ByteArray, cond X64CondCode, targetOffset CodeOffset, what PatchSite)
 	patchChunkRel32(code, codeOffset: encodeJccPlaceholder(code, cond: cond), targetOffset: targetOffset, what: what)
 end 'encodeJccBackward'
 
@@ -2063,6 +2069,20 @@ export function encodeX64Pause(code ByteArray)
 	code.push(OpcodePauseNop)
 end 'encodeX64Pause'
 
+// A zero count returns at once, where the `sub` would wrap it and spin 2^64 times. The `test` is
+// 64-bit because the `sub` is, so both read the same count.
+module function encodeX64Procyield(code ByteArray, count X64Register)
+	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: count, src: count, wide: true)
+
+	let toDone = encodeJccPlaceholder(code, cond: X64CondCode.equal)
+	let again = codeHere(code)
+
+	encodeX64Pause(code)
+	encodeGrp1RegImm32(code, ext: Grp1ExtSub, reg: count, imm: 1)
+	encodeJccBackward(code, cond: X64CondCode.notEqual, targetOffset: again, what: PatchSite.x64SpinLoopRel32)
+	patchLocalForwardBranch(code, dispOffset: toDone, what: PatchSite.x64SpinLoopRel32)
+end 'encodeX64Procyield'
+
 // Resolve a colored operand to its physical register. A virtual reg here is an
 // allocator bug (register allocation must run before emission).
 //
@@ -2377,7 +2397,7 @@ function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArra
 		// a spill can never disagree about where slot `k` is.
 		leaRegSlot(destReg, slot) then encodeLeaRegRegImm32(code, dest: resolveGpr(destReg), base: X64Register.rsp, disp: slotDisplacement(spillBaseDisp, slot: slot))
 
-		// The three locked memory forms and the TEB read. The CAS's comparand is NOT an operand here:
+		// The four locked memory forms and the TEB read. The CAS's comparand is NOT an operand here:
 		// x86 pins it to RAX, and the isel's `movRegReg rax, expected` put it there (see
 		// `TargetDialect.x64LockCmpxchg`'s implicit pair).
 		x64LockCmpxchg(addrReg, srcReg) then encodeLockedRmwBaseDispReg(code, twoByteEscape: true, opcode: OpcodeCmpxchgRmReg, base: resolveGpr(addrReg), disp: AtomicWordDisp, reg: resolveGpr(srcReg))
@@ -2386,14 +2406,15 @@ function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArra
 		// which the reuse-def has already put in `src`'s register.
 		x64LockXadd(dest, _, addrReg) then encodeLockedRmwBaseDispReg(code, twoByteEscape: true, opcode: OpcodeXaddRmReg, base: resolveGpr(addrReg), disp: AtomicWordDisp, reg: resolveGpr(dest))
 		x64LockAdd(addrReg, srcReg) then encodeLockedRmwBaseDispReg(code, twoByteEscape: false, opcode: OpcodeAddRmReg, base: resolveGpr(addrReg), disp: AtomicWordDisp, reg: resolveGpr(srcReg))
+		x64XchgByte(dest, _, addrReg) then encodeXchgByteBaseDispReg(code, base: resolveGpr(addrReg), disp: AtomicWordDisp, reg: resolveGpr(dest))
 
 		x64GsLoadRegBase(dest, base) then encodeMovRegSegBase(code, dest: resolveGpr(dest), base: resolveGpr(base), segment: threadPointerSegment)
 
 		// The arm64 atomics never reach this encoder (`buildBackend` dispatches on `target.cpu`), exactly as
-		// the arm64 `fmov` pair above does not — x64's own atomics are the three locked forms one line up.
+		// the arm64 `fmov` pair above does not — x64's own atomics are the four locked forms above.
 		arm64AtomicCas or
 		arm64AtomicRmw or
-		arm64ThreadPointer then panic("emitX64TargetOp: an arm64-only atomic or thread-pointer read reached the x64 encoder — x64's atomics are `x64LockCmpxchg`/`x64LockXadd`/`x64LockAdd`")
+		arm64ThreadPointer then panic("emitX64TargetOp: an arm64-only atomic or thread-pointer read reached the x64 encoder — x64's atomics are `x64LockCmpxchg`/`x64LockXadd`/`x64LockAdd`/`x64XchgByte`")
 
 		// --- The scaled-index band ---
 		//
@@ -2668,6 +2689,7 @@ function branchWindowRoleOf(op TargetOp) returns BranchWindowRole
 		x64LockCmpxchg or
 		x64LockXadd or
 		x64LockAdd or
+		x64XchgByte or
 		x64GsLoadRegBase or
 		arm64AtomicCas or
 		arm64AtomicRmw or

@@ -44,6 +44,25 @@ export function arm64OsCallKind(os Os) returns Arm64OsCallKind
 	end 'os'
 end 'arm64OsCallKind'
 
+// Every arm64 part macOS runs on has ARMv8.1 LSE; arm64-linux also runs on ARMv8.0 parts, where the
+// LSE encodings are undefined instructions. So a Linux atomic tests `__mrt_hwcap_atomics`, which
+// `mrt_linux_hwcap_probe` sets at init, and falls back to an LL/SC loop. The flag reads 0 until the
+// probe runs and the loop is correct on every part, so an atomic that runs before the probe is
+// correct too.
+export enum Arm64AtomicsMode
+	lse
+	hwcapChecked
+end 'Arm64AtomicsMode'
+
+export function arm64AtomicsModeOf(os Os) returns Arm64AtomicsMode
+	return match os 'os'
+		macos gives Arm64AtomicsMode.lse
+		linux gives Arm64AtomicsMode.hwcapChecked
+		windows panic("arm64AtomicsModeOf: there is no arm64-windows backend — `buildBackend` dispatches arm64 to this backend only for macos/linux")
+		wasi panic("arm64AtomicsModeOf: wasm32-wasi is not an arm64 target — the wasm backend lowers its atomics on its own")
+	end 'os'
+end 'arm64AtomicsModeOf'
+
 // ⭐⭐ **WHICH SYSTEM REGISTER HOLDS THIS OS THREAD'S PER-THREAD BASE.** The second per-OS question this
 // backend asks, and it is DELIBERATELY NOT `arm64OsCallKind` re-read: that one answers *how this backend
 // reaches the kernel*, this one answers *which register the kernel left the thread pointer in*. The two

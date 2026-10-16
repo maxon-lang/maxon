@@ -1032,18 +1032,45 @@ export function buildArm64PosixProcReapChunk(wait PosixHostCall) returns Functio
 end 'buildArm64PosixProcReapChunk'
 
 // ==========================================================================
-// mrt_host_spin_pause(x0 = pauses)
+// mrt_host_spin_pause(x0 = nanoseconds)
 // ==========================================================================
+
+let SpinPauseFirstIsbNanos = 18
+let SpinPauseNanosScaleShift = 30
+let SpinPauseNanosFractionShift = 4
+
+// The opening `ISB` is charged 18 ns of the delay in `x0`; the rest becomes `CNTVCT` ticks as
+// `(ns + ns/16) * CNTFRQ >> 30`, which is `ns * CNTFRQ / 1e9` about 1% short.
+module function arm64EmitProcyield(asm Arm64RuntimeAsm)
+	let delay = asm.newLabel()
+	let done = asm.newLabel()
+
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: done)
+	arm64EmitIsb(asm.code)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x0, imm: SpinPauseFirstIsbNanos as Imm32)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ls, label: done)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x0, base: Arm64Register.x0, imm: (0 - SpinPauseFirstIsbNanos) as Imm32)
+	arm64EmitReadCounterFrequency(asm.code, rt: arm64RuntimeReg(Arm64Register.x1))
+	arm64EmitAddLsrReg(asm.code, rd: arm64RuntimeReg(Arm64Register.x0), rn: arm64RuntimeReg(Arm64Register.x0), rm: arm64RuntimeReg(Arm64Register.x0), amount: SpinPauseNanosFractionShift)
+	arm64EmitRuntimeRrr(asm, opcode: Arm64OpMul, dest: Arm64Register.x0, lhs: Arm64Register.x1, rhs: Arm64Register.x0)
+	arm64EmitLsrImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x0), rn: arm64RuntimeReg(Arm64Register.x0), sh: SpinPauseNanosScaleShift)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x0, label: done)
+	arm64EmitReadVirtualCounter(asm.code, rt: arm64RuntimeReg(Arm64Register.x2))
+
+	asm.placeLabel(delay)
+	arm64EmitIsb(asm.code)
+	arm64EmitReadVirtualCounter(asm.code, rt: arm64RuntimeReg(Arm64Register.x1))
+	arm64EmitSubRuntimeReg(asm, dest: Arm64Register.x1, lhs: Arm64Register.x1, rhs: Arm64Register.x2)
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x1, rhs: Arm64Register.x0)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lo, label: delay)
+
+	asm.placeLabel(done)
+end 'arm64EmitProcyield'
 
 export function buildArm64PosixSpinPauseChunk() returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginFunction(0)
 
-	let again = asm.newLabel()
-
-	asm.placeLabel(again)
-	arm64EmitYield(asm.code)
-	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x0, base: Arm64Register.x0, imm: -1)
-	arm64EmitCbnzTo(asm, reg: Arm64Register.x0, label: again)
+	arm64EmitProcyield(asm)
 
 	return asm.finishFunction(HostSpinPauseName)
 end 'buildArm64PosixSpinPauseChunk'

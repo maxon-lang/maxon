@@ -409,13 +409,11 @@ function arm64EmitSignalStackBytes(asm Arm64RuntimeAsm, dest Arm64Register, os O
 	end 'lane'
 end 'arm64EmitSignalStackBytes'
 
-// mrt_linux_signal_stack_size — the arm64 twin of `X64Runtime.buildLinuxSignalStackSizeChunk`.
-function buildArm64LinuxSignalStackSizeChunk() returns FunctionCodeChunk
-	var asm = Arm64RuntimeAsm.beginFunction(0)
+// At `matched`, x9 addresses the auxiliary entry of `wantedType`; branching to `next` resumes the
+// walk.
+function arm64EmitAuxiliaryEntryWalk(asm Arm64RuntimeAsm, wantedType Imm32, matched BlockId, next BlockId, exhausted BlockId)
 	let eachEnvironmentEntry = asm.newLabel()
 	let eachAuxiliaryEntry = asm.newLabel()
-	let nextAuxiliaryEntry = asm.newLabel()
-	let sized = asm.newLabel()
 
 	arm64EmitLoadDataWord(asm, dest: Arm64Register.x9, label: LinuxEnvpLabel)
 
@@ -424,22 +422,34 @@ function buildArm64LinuxSignalStackSizeChunk() returns FunctionCodeChunk
 	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x9, base: Arm64Register.x9, imm: LinuxVectorEntryBytes as Imm32)
 	arm64EmitCbnzTo(asm, reg: Arm64Register.x10, label: eachEnvironmentEntry)
 
-	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x11, value: Arm64SignalFrameFloorBytes)
-
 	asm.placeLabel(eachAuxiliaryEntry)
 	arm64EmitLoadWord64At(asm, dest: Arm64Register.x10, base: Arm64Register.x9, byteOffset: 0)
 	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x10, imm: LinuxAuxVectorEnd as Imm32)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: sized)
-	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x10, imm: LinuxAuxMinSignalStackSize as Imm32)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ne, label: nextAuxiliaryEntry)
-	arm64EmitLoadWord64At(asm, dest: Arm64Register.x12, base: Arm64Register.x9, byteOffset: LinuxAuxValueOffset)
-	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x12, rhs: Arm64Register.x11)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ls, label: nextAuxiliaryEntry)
-	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x11, src: Arm64Register.x12)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: exhausted)
+	arm64EmitCmpRuntimeImm(asm, reg: Arm64Register.x10, imm: wantedType)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.eq, label: matched)
 
-	asm.placeLabel(nextAuxiliaryEntry)
+	asm.placeLabel(next)
 	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x9, base: Arm64Register.x9, imm: LinuxAuxEntryBytes as Imm32)
 	arm64EmitBranchTo(asm, label: eachAuxiliaryEntry)
+end 'arm64EmitAuxiliaryEntryWalk'
+
+// mrt_linux_signal_stack_size — the arm64 twin of `X64Runtime.buildLinuxSignalStackSizeChunk`.
+function buildArm64LinuxSignalStackSizeChunk() returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginFunction(0)
+	let matched = asm.newLabel()
+	let next = asm.newLabel()
+	let sized = asm.newLabel()
+
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x11, value: Arm64SignalFrameFloorBytes)
+	arm64EmitAuxiliaryEntryWalk(asm, wantedType: LinuxAuxMinSignalStackSize as Imm32, matched: matched, next: next, exhausted: sized)
+
+	asm.placeLabel(matched)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x12, base: Arm64Register.x9, byteOffset: LinuxAuxValueOffset)
+	arm64EmitCmpRuntimeReg(asm, lhs: Arm64Register.x12, rhs: Arm64Register.x11)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.ls, label: next)
+	arm64EmitMovRuntimeReg(asm, dest: Arm64Register.x11, src: Arm64Register.x12)
+	arm64EmitBranchTo(asm, label: next)
 
 	asm.placeLabel(sized)
 	arm64EmitLslImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x11), rn: arm64RuntimeReg(Arm64Register.x11), sh: SignalStackKernelFramesShift)
@@ -450,6 +460,26 @@ function buildArm64LinuxSignalStackSizeChunk() returns FunctionCodeChunk
 
 	return asm.finishFunction(LinuxSignalStackSizeName)
 end 'buildArm64LinuxSignalStackSizeChunk'
+
+function buildArm64LinuxHwcapProbeChunk() returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginFunction(0)
+	let found = asm.newLabel()
+	let next = asm.newLabel()
+	let probed = asm.newLabel()
+
+	arm64EmitAuxiliaryEntryWalk(asm, wantedType: LinuxAuxHwcap as Imm32, matched: found, next: next, exhausted: probed)
+
+	asm.placeLabel(found)
+	arm64EmitLoadWord64At(asm, dest: Arm64Register.x12, base: Arm64Register.x9, byteOffset: LinuxAuxValueOffset)
+	arm64EmitLsrImm(asm.code, rd: arm64RuntimeReg(Arm64Register.x12), rn: arm64RuntimeReg(Arm64Register.x12), sh: LinuxHwcapAtomicsShift)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x11, value: 1)
+	arm64EmitRuntimeRrr(asm, opcode: Arm64OpAnd, dest: Arm64Register.x12, lhs: Arm64Register.x12, rhs: Arm64Register.x11)
+	arm64EmitDataAddr(asm, dest: Arm64Register.x13, label: LinuxHwcapAtomicsLabel)
+	arm64EmitStoreWord64At(asm, src: Arm64Register.x12, base: Arm64Register.x13, byteOffset: 0)
+
+	asm.placeLabel(probed)
+	return asm.finishFunction(LinuxHwcapProbeName)
+end 'buildArm64LinuxHwcapProbeChunk'
 
 // `stack_t` is 24 bytes on both lanes and orders its three fields differently — Darwin puts the SIZE second
 // and the flags last, Linux the other way round. One `struct`, two layouts, so each field is asked for.
@@ -565,6 +595,7 @@ function buildArm64LinuxRuntimeInitChunk(usesGt bool, carriesHostLock bool, targ
 	end 'ownsABlock'
 
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: PosixCheckStdFdsName)
+	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: LinuxHwcapProbeName)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: LinuxSignalStackSizeName)
 	arm64EmitBranchLink(asm.code, callFixups: asm.callFixups, targetName: SignalStackInstallName)
 
@@ -631,6 +662,7 @@ export function appendArm64FaultRuntimeChunks(chunks FunctionCodeChunkArray, glo
 
 	if target.os == Os.linux 'sizedFromTheAuxiliaryVector'
 		chunks.push(buildArm64LinuxSignalStackSizeChunk())
+		chunks.push(buildArm64LinuxHwcapProbeChunk())
 	end 'sizedFromTheAuxiliaryVector'
 
 	chunks.push(buildArm64FaultHandlerChunk(globalData, os: target.os))

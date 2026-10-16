@@ -1545,21 +1545,15 @@ export union TargetOp
 	// --- The ATOMICS, one shape per ISA ---
 	//
 	//
-	// ⭐⭐ **x64 SPELLS EACH ATOMIC AS ONE INSTRUCTION AND arm64 AS A RETRY LOOP, SO THE TWO ISAs GET
-	// DIFFERENT OP SHAPES RATHER THAN ONE SHARED SHAPE WITH TWO ENCODERS.** A `lock cmpxchg` is a single
-	// x86 instruction whose comparand is the fixed accumulator, so it is modelled the way `divideReg` is:
-	// an ordinary op with an implicit RAX read and write. ARMv8.0 has no such instruction — the atomic is
-	// an `LDAXR`/`STLXR` reservation loop that RETRIES on contention — so its arm64 form is a macro-op
-	// whose branches live INSIDE the encoder, exactly as `arm64JumpTable` and `arm64MemFill` already do,
-	// and for the identical reason: the Std→Target lowerings cannot create blocks (there is no `addBlock`
-	// in either isel).
-	//
-	// ⛔ **ARMv8.1 LSE (`CAS`, `LDADD`) WOULD MAKE BOTH ARM ARMS ONE INSTRUCTION AND IS DELIBERATELY NOT
-	// USED.** LSE is an ARMv8.1-A extension: Apple Silicon has it, but arm64-linux runs on ARMv8.0 parts
-	// (Cortex-A72 and friends), where those encodings are undefined instructions. The compiler emits ONE arm64
-	// instruction stream per OS and has no CPU-feature dimension to select on, so the baseline is what may
-	// be emitted. If a feature axis ever arrives, these two
-	// encoders are where LSE goes in.
+	// ⭐⭐ **x64 SPELLS EACH ATOMIC AS ONE INSTRUCTION AND arm64 AS A MACRO-OP, SO THE TWO ISAs GET
+	// DIFFERENT OP SHAPES RATHER THAN ONE SHARED SHAPE WITH TWO ENCODERS.** A `lock cmpxchg` is a
+	// single x86 instruction whose comparand is the fixed accumulator, so it is modelled the way
+	// `divideReg` is: an ordinary op with an implicit RAX read and write. ARMv8.0 has no such
+	// instruction — the atomic is an `LDAXR`/`STLXR` reservation loop that RETRIES on contention — and
+	// arm64-linux cannot assume ARMv8.1's single-instruction LSE forms, so its arm64 form is a
+	// macro-op whose branches live INSIDE the encoder, exactly as `arm64JumpTable` and `arm64MemFill`
+	// already do, and for the identical reason: the Std→Target lowerings cannot create blocks (there
+	// is no `addBlock` in either isel). `arm64AtomicsModeOf` decides which sequence each OS gets.
 
 	// `lock cmpxchg [addrReg], srcReg` (`F0 REX.W 0F B1 /r`) — compare RAX against the word at `addrReg`;
 	// on a match store `srcReg` and set ZF, otherwise load the observed word into RAX and clear ZF.
@@ -1597,6 +1591,10 @@ export union TargetOp
 	// refcount update runs everywhere. `lock add` reads two registers and writes none.
 	x64LockAdd(addrReg TargetVReg, srcReg TargetVReg) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, implicitUses: 0, implicitDefs: 0}
 
+	// `xchg [addrReg], dest8` (`86 /r`, locked without a prefix) then `movzx dest, dest8`: the prior
+	// byte, zero-extended, in `dest`. A reuse-def over `src`, as `x64LockXadd` is.
+	x64XchgByte(dest TargetVReg, src TargetVReg, addrReg TargetVReg) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, implicitUses: 0, implicitDefs: 0}
+
 	// `mov dest, gs:[base]` (`65 REX.W 8B /r`) — a load from the GS segment at a RUNTIME byte offset, which is
 	// how `StdOp.tlsSlotLoad` reads this OS thread's TLS slot in two loads and no call: the caller loads the
 	// precomputed `index * 8 + 0x1480` into `base` and this dereferences it.
@@ -1611,17 +1609,18 @@ export union TargetOp
 	// def — `base` is dead after the load, so the def may legitimately reuse its register.
 	x64GsLoadRegBase(dest TargetVReg, base TargetVReg) = TargetOpMeta{isMemory: true, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 
-	// The arm64 compare-and-swap, an `LDAXR`/`CMP`/`B.NE`/`STLXR`/`CBNZ` retry loop followed by a `CSET`,
-	// emitted as ONE macro-op for the reason stated at the head of this block. Three value USES and one
-	// plain def; the def is written by the closing `CSET` only, i.e. AFTER every operand's last read.
+	// The arm64 compare-and-swap, a `CASAL` and a `CMP`, or an `LDAXR`/`CMP`/`B.NE`/`STLXR`/`CBNZ`
+	// retry loop, either followed by a `CSET`, emitted as ONE macro-op for the reason stated at the
+	// head of this block. Three value USES and one plain def; the def is written by the closing `CSET`
+	// only, i.e. AFTER every operand's last read.
 	//
-	// ⭐⭐ **"THE DEF IS WRITTEN LAST" IS A CORRECTNESS REQUIREMENT, NOT AN INCIDENTAL PROPERTY.** A late
-	// def MAY be coloured onto the register of a use that dies at this op (`allocateDef`'s `dyingRegs`,
-	// documented at `TargetLiveness.addOpTransientPressure`), so `dest` can legitimately BE `addrReg`. The
-	// loop re-reads the address on every retry, so an encoder that wrote `dest` before the last `STLXR`
-	// would corrupt its own address the moment the reservation was lost — a miscompile that appears only
-	// under contention. Both encoders below therefore keep every scratch value in x16/x17 and touch `dest`
-	// once, at the end.
+	// ⭐⭐ **"THE DEF IS WRITTEN LAST" IS A CORRECTNESS REQUIREMENT, NOT AN INCIDENTAL PROPERTY.** A
+	// late def MAY be coloured onto the register of a use that dies at this op (`allocateDef`'s
+	// `dyingRegs`, documented at `TargetLiveness.addOpTransientPressure`), so `dest` can legitimately
+	// BE `addrReg`. The loop re-reads the address on every retry, so an encoder that wrote `dest`
+	// before the last `STLXR` would corrupt its own address the moment the reservation was lost — a
+	// miscompile that appears only under contention. Every sequence `arm64EmitAtomic` emits therefore
+	// keeps its scratch values in x16/x17 and touches `dest` once, at the end.
 	//
 	// ⭐ **x16 AND x17, AND x16 IS SAFE HERE FOR THE REASON `arm64JumpTable` IS.** `StdToArm64Conversion`'s
 	// `Arm64Scratch` header states the rule: an x16 clobber is unsafe only when something SPLICES it
@@ -1637,14 +1636,15 @@ export union TargetOp
 	// its own.
 	arm64AtomicCas(dest TargetVReg, addrReg TargetVReg, expectedReg TargetVReg, replacementReg TargetVReg) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, implicitUses: 0, implicitDefs: 0x30000}
 
-	// The arm64 read-modify-write, an `LDAXR`/`<op>`/`STLXR`/`CBNZ` retry loop that recovers the PRIOR
-	// value into `dest` with one inverse operation after the loop. Two value uses, one plain def written
+	// The arm64 read-modify-write, an `LDADDAL` or `SWPALB`, or an `LDAXR`/`<op>`/`STLXR`/`CBNZ` retry
+	// loop that leaves the PRIOR value in `dest` after the loop. Two value uses, one plain def written
 	// last — see the CAS above for why that ordering is load-bearing, and for the x16/x17 argument.
 	//
 	// ⛔ The loop needs only TWO scratch registers, x16/x17. x18 is the RESERVED PLATFORM REGISTER on
-	// arm64-macos: clobbering it corrupts thread state and silently corrupts the heap. A third
-	// scratch is not needed at all — the loop keeps only the RUNNING value in x16 and recovers the
-	// prior one afterwards by applying the operation's INVERSE (`SUB` for `add`).
+	// arm64-macos: clobbering it corrupts thread state and silently corrupts the heap. A third scratch
+	// is not needed at all — the `add` loop keeps only the RUNNING value in x16 and recovers the prior
+	// one afterwards by applying the INVERSE (`SUB`), and the `exchangeByte` loop stores its operand
+	// unchanged, so x16 holds the prior byte throughout.
 	arm64AtomicRmw(dest TargetVReg, addrReg TargetVReg, operandReg TargetVReg, opcode StdAtomicRmwOpcode) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, implicitUses: 0, implicitDefs: 0x30000}
 
 	// **THIS OS THREAD'S PER-THREAD BASE, read out of the system register `source` names.** Darwin's arm is
@@ -1805,9 +1805,10 @@ export union TargetOp
 	//
 	// ⭐⭐ **ONE SHARED ARM FOR BOTH ISAs, NOT AN `x64CovInc`/`arm64CovInc` PAIR — because it names NO
 	// REGISTER on either.** x64 emits `lock inc qword [rip + __cov_image + covCounterOffset(pointId)]`;
-	// arm64 emits an `adrp`/`add` into the reserved x16/x17 scratches plus an LL/SC increment loop. Neither
-	// form takes an operand, so the operand model, liveness, the splitter and SSA destruction each get ONE
-	// `or`-folded arm rather than two, and no allocation decision anywhere depends on this op.
+	// arm64 emits an `adrp`/`add` and an atomic increment through a stack-borrowed x0 and the reserved
+	// x16/x17 scratches (`arm64EmitCovInc`). Neither form takes an operand, so the operand model,
+	// liveness, the splitter and SSA destruction each get ONE `or`-folded arm rather than two, and no
+	// allocation decision anywhere depends on this op.
 	//
 	// ⛔⛔ **`implicitDefs: 0`, AND THAT IS FORCED RATHER THAN CHOSEN.** `RegNum` is ONE 0-63 space shared by
 	// both ISAs, in which 16/17 are x64's `xmm0`/`xmm1` — so declaring arm64's x16/x17 here would forbid

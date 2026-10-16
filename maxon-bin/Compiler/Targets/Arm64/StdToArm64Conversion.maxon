@@ -2753,13 +2753,13 @@ export type StdToArm64Lowering
 
 	// Lower `atomicCas`/`atomicRmw` — ONE macro-op each, operands left VIRTUAL. Unlike every OS
 	// primitive above, and unlike `lowerMemFill`'s pre-moves into fixed registers, there is nothing to
-	// marshal: the LL/SC loop reads its three (or two) operands wherever the allocator put them and keeps
-	// its own working state in the x16/x17 IP scratch pair, which is outside the allocatable pool. The
-	// retry BRANCHES live inside the encoder's byte sequence — the Std→Target lowerings cannot create
-	// blocks — exactly as `arm64JumpTable` and `arm64MemFill` already do.
+	// marshal: the encoder's sequence reads its three (or two) operands wherever the allocator put
+	// them and keeps its own working state in the x16/x17 IP scratch pair, which is outside the
+	// allocatable pool. The BRANCHES live inside the encoder's byte sequence — the Std→Target
+	// lowerings cannot create blocks — exactly as `arm64JumpTable` and `arm64MemFill` already do.
 	//
-	// ⚠ Not routed through `arm64OsCallKind`, for `lowerMemFill`'s reason: an atomic is an ISA fact, and
-	// LDAXR/STLXR are the same instructions on macOS and Linux.
+	// ⚠ Not routed through `arm64OsCallKind`: the encoder picks the per-OS sequence
+	// (`arm64AtomicsModeOf`), so the lowering is the same on macOS and Linux.
 	function lowerAtomicCas(resultId ValueId, addrId ValueId, expectedId ValueId, replacementId ValueId, dstRef ElementIndex)
 		self.emit(dstRef, op: TargetOp.arm64AtomicCas(TargetVReg.virtual(resultId), addrReg: TargetVReg.virtual(addrId), expectedReg: TargetVReg.virtual(expectedId), replacementReg: TargetVReg.virtual(replacementId)))
 	end 'lowerAtomicCas'

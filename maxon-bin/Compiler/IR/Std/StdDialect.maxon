@@ -746,22 +746,24 @@ export enum StdCmpPred
 	ge
 end 'StdCmpPred'
 
-// The read-modify-write operation `StdOp.atomicRmw` performs on the word it names. One member
-// today, and the enum exists rather than a family of `atomic*` VARIANTS because of the rule the StdOp
-// header states: a family sharing one operand shape AND one metadata profile is an OPCODE FIELD, not a
-// variant. Splitting it into `atomicInc`/`atomicDec`/`atomicXadd` variants would pay in every
-// backend's match — `atomicInc(addr)` IS `atomicRmw(_, addr, +1, add)` — and would buy only a
-// shorter x86 encoding and `lock dec`'s ZF, neither of which is vocabulary. (The encoding half is
-// recovered at the x64 isel — see `lowerAtomicRmw` there; the ZF half has no reader, because the
-// decref path branches on a value it loads rather than on flags.)
+// The read-modify-write operation `StdOp.atomicRmw` performs at the address it names: `add` on the
+// 64-bit word, `exchangeByte` on its first byte. The enum exists rather than a family of `atomic*`
+// VARIANTS because of the rule the StdOp header states: a family sharing one operand shape AND one
+// metadata profile is an OPCODE FIELD, not a variant. Splitting it into `atomicInc`/`atomicDec`/
+// `atomicXadd` variants would pay in every backend's match — `atomicInc(addr)` IS
+// `atomicRmw(_, addr, +1, add)` — and would buy only a shorter x86 encoding and `lock dec`'s ZF,
+// neither of which is vocabulary. (The encoding half is recovered at the x64 isel — see
+// `lowerAtomicRmw` there; the ZF half has no reader, because the decref path branches on a value it
+// loads rather than on flags.)
 //
-// ⭐ **A LATER MEMBER APPENDS HERE, AND THAT IS THE WHOLE POINT OF THE FIELD.** `and`/`or`/`xchg` all
-// share `add`'s operand shape and its metadata, so each is one member plus one arm in each of the three
-// backends — never a fourth `StdOp` variant, and never a new tier boundary to thread. Every backend
-// matches this enum exhaustively, so an appended member is a COMPILE error in each of them rather than a
-// silently wrong lowering.
+// ⭐ **A LATER MEMBER APPENDS HERE, AND THAT IS THE WHOLE POINT OF THE FIELD.** `and`/`or` and a
+// word exchange share `add`'s operand shape and its metadata, so each is one member plus one arm in
+// each of the three backends — never a fourth `StdOp` variant, and never a new tier boundary to
+// thread. Every backend matches this enum exhaustively, so an appended member is a COMPILE error in
+// each of them rather than a silently wrong lowering.
 export enum StdAtomicRmwOpcode
 	add
+	exchangeByte
 end 'StdAtomicRmwOpcode'
 
 // The two values `StdOp.atomicCas` answers with — the SUCCESS BOOLEAN convention stated as code rather
@@ -1008,9 +1010,8 @@ export enum NetpollVerb
 	// of this thread's quantum (`SwitchToThread`) and the operand is unread.
 	shortSleep
 
-	// `(pauses) -> nothing`. Spin the calling CPU through `pauses` spin hints (`pause`, `yield`)
-	// without entering the kernel. ⚠ The loop decrements before it tests, so a count of 0 spins 2^64
-	// times.
+	// `(pauses) -> nothing`. Spin the calling CPU without entering the kernel: `pauses` counts `pause`
+	// instructions on x64 and is a delay in nanoseconds on arm64 (`arm64EmitProcyield`).
 	spinPause
 
 	// `() -> nothing`. Give up the rest of the calling OS thread's quantum (`sched_yield`,
@@ -2686,7 +2687,7 @@ export union StdOp
 	// EXTRA reload on both.
 	atomicCas(resultId ValueId, addrId ValueId, expectedId ValueId, replacementId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: false, clobbersFlags: true, isCmp: false}
 
-	// **`atomicRmw(result, addr, operand, opcode)`** — an atomic read-modify-write of the word at `addr`.
+	// **`atomicRmw(result, addr, operand, opcode)`** — an atomic read-modify-write at `addr`.
 	// ⚠ **`result` IS THE PRIOR VALUE**, the opposite convention to `atomicCas` above and the one every RMW
 	// instruction on both ISAs already answers in (`lock xadd` leaves the prior value in its register
 	// operand; an LL/SC loop has it in hand). A caller wanting the NEW value applies the operation again to
@@ -2694,9 +2695,8 @@ export union StdOp
 	// recover it at all when the operand is not invertible. See `StdAtomicRmwOpcode` for why the operation
 	// is a FIELD and not three variants.
 	//
-	// There is no `operandType`: an atomic is 64-bit ONLY at this tier. A narrower one is a different
-	// instruction on both ISAs (`lock xadd DWORD`, `LDAXR W`) and a different alignment obligation, and
-	// nothing the compiler emits has a sub-word counter; the day one does, the width is a field appended here.
+	// There is no `operandType`: the opcode fixes the width. `add` is 64-bit, and `exchangeByte` is
+	// 8-bit with its prior byte zero-extended into `result`.
 	atomicRmw(resultId ValueId, addrId ValueId, operandId ValueId, opcode StdAtomicRmwOpcode) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: false, clobbersFlags: true, isCmp: false}
 
 	// ⭐⭐ **THE FOUR MULTI-M OPS — THREE FOR PER-OS-THREAD STORAGE, ONE FOR THE WAKE.** All four carry

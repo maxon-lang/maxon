@@ -7925,10 +7925,11 @@ let WordSignShift = 63
 // ⭐⭐⭐ **`entersyscall` — *"this machine is about to be unreachable; its processor may be taken."***
 //
 // ⭐⭐ **ONE `atomicRmw add` DOES BOTH HALVES, BECAUSE THE GENERATION AND THE STATE SHARE A WORD.**
-// `MSyscallEnterDelta` steps the generation AND sets the in-call bit in a single indivisible step, so there
-// is no interval in which a new call is announced without its generation or the other way round — see
-// `MOffSyscallState` for the ABA a two-word cut of this carries. On arm64 the step lowers to LL/SC, which
-// supplies the acquire/release that word's own ordering note asks for.
+// `MSyscallEnterDelta` steps the generation AND sets the in-call bit in a single indivisible step,
+// so there is no interval in which a new call is announced without its generation or the other way
+// round — see `MOffSyscallState` for the ABA a two-word cut of this carries. On arm64 the step
+// lowers to `LDADDAL` or an `LDAXR`/`STLXR` loop, either of which supplies the acquire/release that
+// word's own ordering note asks for.
 //
 // ⛔⛔ **THE GUARD IS *"AN M EXISTS"*, WHICH IS A DELIBERATE DIVERGENCE FROM THE x64 SHIM'S GUARD.** That one
 // additionally requires a green thread with a non-zero `stackBase`, because what it is guarding is the STACK

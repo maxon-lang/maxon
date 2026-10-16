@@ -203,6 +203,11 @@ export let LinuxEnvpLabel = b"__mrt_envp"
 export let LinuxSignalStackBytesLabel = b"__mrt_signal_stack_bytes"
 export let LinuxSignalStackSizeName = b"mrt_linux_signal_stack_size"
 
+export let LinuxHwcapAtomicsLabel = b"__mrt_hwcap_atomics"
+export let LinuxHwcapProbeName = b"mrt_linux_hwcap_probe"
+export let LinuxAuxHwcap = 16
+export let LinuxHwcapAtomicsShift = 8 as ShiftCount
+
 // The auxiliary vector follows `envp`'s NULL terminator: 16-byte (type, value) pairs ending at type 0.
 export let LinuxAuxVectorEnd = 0
 export let LinuxAuxMinSignalStackSize = 51
@@ -280,6 +285,11 @@ export function linuxEntryVectorGlobals(target Target) returns DataSectionEntryA
 
 	pushRuntimeGlobal(out, label: LinuxEnvpLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.declared)
 	pushRuntimeGlobal(out, label: LinuxSignalStackBytesLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.declared)
+
+	if target.cpu == CpuArch.arm64 'carriesLse'
+		pushRuntimeGlobal(out, label: LinuxHwcapAtomicsLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.declared)
+	end 'carriesLse'
+
 	return out
 end 'linuxEntryVectorGlobals'
 
@@ -485,6 +495,13 @@ export let LinuxFutexWaitShared = 0
 // and the mutex below hands the lock to one successor.
 export let LinuxFutexWakeOne = 1
 
+// The event signal word's third state: a waiter has announced itself, by a compare-and-swap from
+// `PosixWaitNotSignalled`, and is asleep or about to be. `mrt_host_event_set` issues `FUTEX_WAKE`
+// only when its exchange displaces this.
+// ⚠ This requires ONE waiter per event, and nothing enforces it: a second concurrent waiter can
+// sleep through the set meant for it, because a set wakes one sleeper and leaves no 2 behind.
+export let LinuxEventSleeping = 2
+
 // A NULL `struct timespec *` — `FUTEX_WAIT` with no timeout, i.e. wait until woken.
 export let LinuxFutexNoTimeout = 0
 
@@ -493,14 +510,16 @@ export let LinuxFutexNoTimeout = 0
 // holding a stale value is how a future requeue-shaped operation would silently pick it up.
 export let LinuxFutexUnusedArg = 0
 
-// ⭐⭐ **THE VALUE A `FUTEX_WAIT` EXPECTS, AND WHY IT IS THE UNSIGNALLED STATE RATHER THAN THE SIGNALLED ONE.**
-// `FUTEX_WAIT(uaddr, val)` sleeps only while `*uaddr == val`, and returns `-EAGAIN` immediately otherwise.
-// So the caller passes the state it is waiting to LEAVE: an event waiter passes `PosixWaitNotSignalled`, and
-// a signal that lands between its own test and this call makes the syscall return at once rather than sleep
-// through it. That is the whole lost-wakeup argument, and it is the kernel's rather than this file's.
+// ⭐⭐ **THE VALUE A `FUTEX_WAIT` EXPECTS, AND WHY IT IS NEVER THE SIGNALLED STATE.**
+// `FUTEX_WAIT(uaddr, val)` sleeps only while `*uaddr == val`, and returns `-EAGAIN` immediately
+// otherwise. So the caller passes the state it is waiting to LEAVE: an event waiter passes
+// `LinuxEventSleeping`, and a signal that lands between its own test and this call makes the
+// syscall return at once rather than sleep through it. That is the whole lost-wakeup argument, and
+// it is the kernel's rather than this file's.
 //
-// ⚠ The two values themselves are `Targets/Shared/PosixRuntime`'s, because the WORD is: the signal field
-// sits at the same offset on every POSIX lane and a shared body (`mrt_host_proc_reap`) publishes into it.
+// ⚠ `PosixWaitNotSignalled` and `PosixWaitSignalled` are `Targets/Shared/PosixRuntime`'s, because
+// the WORD is: the signal field sits at the same offset on every POSIX lane and a shared body
+// (`mrt_host_proc_reap`) publishes into it.
 
 // ⭐ **ONE PAGE, AND IT IS THE SAME PAGE FOR BOTH HOST OBJECTS THIS FILE MAPS** — a wait object and an OS
 // thread's slot block. Named once because `mmap`'s granularity is what decides it, not either object's
@@ -552,7 +571,7 @@ export let LinuxMutexHeldContended = 2
 // A held lock is retried after each of `LinuxLockActiveSpinRounds` bursts of spin hints, then after
 // each of `LinuxLockPassiveSpinRounds` `sched_yield`s, before the waiter runs the protocol above.
 // An OS lock is held briefly, so the spin usually takes it without the futex sleep and the wake the
-// release would owe.
+// release would owe. `LinuxLockActiveSpinPauses` is in `NetpollVerb.spinPause`'s per-ISA unit.
 export let LinuxLockActiveSpinRounds = 4 as MachineWord
 export let LinuxLockActiveSpinPauses = 30 as MachineWord
 export let LinuxLockPassiveSpinRounds = 1 as MachineWord

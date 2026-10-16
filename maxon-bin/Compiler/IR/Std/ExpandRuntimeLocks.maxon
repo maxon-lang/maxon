@@ -119,36 +119,33 @@ type RuntimeLockExpander
 		match site.mark 'mark'
 			enterRecursive then self.openEnterRecursive(head, cont: cont, lock: site.lock)
 			leaveRecursive then self.openLeaveRecursive(head, cont: cont, lock: site.lock)
-			enterExclusive then self.openExclusive(head, cont: cont, lock: site.lock, callee: RtLockAcquireName, expected: RtLockFree, replacement: RtLockHeld)
-			leaveExclusive then self.openExclusive(head, cont: cont, lock: site.lock, callee: RtLockReleaseName, expected: RtLockHeld, replacement: RtLockFree)
-			enterPool then self.openExclusive(head, cont: cont, lock: site.lock, callee: RtLockPoolAcquireName, expected: RtLockFree, replacement: RtLockHeld)
-			leavePool then self.openExclusive(head, cont: cont, lock: site.lock, callee: RtLockPoolReleaseName, expected: RtLockHeld, replacement: RtLockFree)
+			enterExclusive then self.openByteExchange(head, cont: cont, lock: site.lock, callee: RtLockAcquireName, stores: RtLockHeld, displacing: RtLockFree, taken: cont)
+			leaveExclusive then self.openByteExchange(head, cont: cont, lock: site.lock, callee: RtLockReleaseName, stores: RtLockFree, displacing: RtLockHeld, taken: cont)
+			enterPool then self.openByteExchange(head, cont: cont, lock: site.lock, callee: RtLockPoolAcquireName, stores: RtLockHeld, displacing: RtLockFree, taken: cont)
+			leavePool then self.openByteExchange(head, cont: cont, lock: site.lock, callee: RtLockPoolReleaseName, stores: RtLockFree, displacing: RtLockHeld, taken: cont)
 		end 'mark'
 
 		return contRef
 	end 'expand'
 
-	function openExclusive(head IrBlock, cont IrBlock, lock ValueId, callee ByteArray, expected FullRangeInt, replacement FullRangeInt)
-		let slow = self.slowArm(head, cont: cont, callee: callee, lock: lock)
-		let won = self.cas(head, lock: lock, expected: expected, replacement: replacement)
-		self.module.setTerminator(head, op: StdOp.condBranch(won, thenBlockId: cont.id, elseBlockId: slow.id))
-	end 'openExclusive'
+	function openByteExchange(block IrBlock, cont IrBlock, lock ValueId, callee ByteArray, stores FullRangeInt, displacing FullRangeInt, taken IrBlock)
+		let prior = self.exchangeByte(block, lock: lock, value: stores)
+		let slow = self.slowArm(block, cont: cont, callee: callee, lock: lock, prior: prior)
+		emitBranchOnCompare(self.module, block: block, value: prior, pred: StdCmpPred.eq, against: displacing, whenTrue: taken, whenFalse: slow, ids: self.valueIds())
+	end 'openByteExchange'
 
 	function openEnterRecursive(head IrBlock, cont IrBlock, lock ValueId)
-		let slow = self.slowArm(head, cont: cont, callee: RtLockEnterSlowName, lock: lock)
 		var owned = self.module.addBlock(self.func, label: ExpandedLockOwnedLabel, heat: BlockHeat.normal, inlineSite: head.inlineSite)
 
 		let token = self.valueIds().mint()
 		self.module.appendOp(head, op: StdOp.osThreadToken(token))
-		let won = self.cas(head, lock: lock, expected: RtLockFree, replacement: RtLockHeld)
-		self.module.setTerminator(head, op: StdOp.condBranch(won, thenBlockId: owned.id, elseBlockId: slow.id))
+		self.openByteExchange(head, cont: cont, lock: lock, callee: RtLockEnterSlowName, stores: RtLockHeld, displacing: RtLockFree, taken: owned)
 
 		emitStoreField(self.module, block: owned, record: lock, offset: RtLockOffOwner, value: token)
 		self.module.setTerminator(owned, op: StdOp.branch(cont.id))
 	end 'openEnterRecursive'
 
 	function openLeaveRecursive(head IrBlock, cont IrBlock, lock ValueId)
-		let slow = self.slowArm(head, cont: cont, callee: RtLockReleaseName, lock: lock)
 		var nested = self.module.addBlock(self.func, label: ExpandedLockNestedLabel, heat: BlockHeat.normal, inlineSite: head.inlineSite)
 		var outermost = self.module.addBlock(self.func, label: ExpandedLockOutermostLabel, heat: BlockHeat.normal, inlineSite: head.inlineSite)
 		var ids = self.valueIds()
@@ -159,26 +156,24 @@ type RuntimeLockExpander
 		emitStoreField(self.module, block: nested, record: lock, offset: RtLockOffDepth, value: emitBin(self.module, block: nested, a: depth, b: emitConst(self.module, block: nested, value: OneFewer, ids: ids), opcode: StdBinOpcode.add, ids: ids))
 		self.module.setTerminator(nested, op: StdOp.branch(cont.id))
 
-		// The owner is cleared before the releasing compare-and-swap, never after: once the key is free
+		// The owner is cleared before the releasing exchange, never after: once the key is free
 		// another thread may claim the lock, and a later clear would erase its claim.
 		emitStoreField(self.module, block: outermost, record: lock, offset: RtLockOffOwner, value: emitConst(self.module, block: outermost, value: 0, ids: ids))
-		let won = self.cas(outermost, lock: lock, expected: RtLockHeld, replacement: RtLockFree)
-		self.module.setTerminator(outermost, op: StdOp.condBranch(won, thenBlockId: cont.id, elseBlockId: slow.id))
+		self.openByteExchange(outermost, cont: cont, lock: lock, callee: RtLockReleaseName, stores: RtLockFree, displacing: RtLockHeld, taken: cont)
 	end 'openLeaveRecursive'
 
-	function slowArm(head IrBlock, cont IrBlock, callee ByteArray, lock ValueId) returns IrBlock
+	function slowArm(head IrBlock, cont IrBlock, callee ByteArray, lock ValueId, prior ValueId) returns IrBlock
 		var slow = self.module.addBlock(self.func, label: ExpandedLockSlowLabel, heat: BlockHeat.cold, inlineSite: head.inlineSite)
-		self.module.appendOp(slow, op: StdOp.call(self.valueIds().mint(), callee: callee, args: argsOf(lock)))
+		self.module.appendOp(slow, op: StdOp.call(self.valueIds().mint(), callee: callee, args: twoArgs(lock, second: prior)))
 		self.module.setTerminator(slow, op: StdOp.branch(cont.id))
 		return slow
 	end 'slowArm'
 
-	function cas(block IrBlock, lock ValueId, expected FullRangeInt, replacement FullRangeInt) returns ValueId
+	function exchangeByte(block IrBlock, lock ValueId, value FullRangeInt) returns ValueId
 		var ids = self.valueIds()
-		let result = ids.mint()
-		self.module.appendOp(block, op: StdOp.atomicCas(result, addrId: lock, expectedId: emitConst(self.module, block: block, value: expected, ids: ids), replacementId: emitConst(self.module, block: block, value: replacement, ids: ids)))
-		return result
-	end 'cas'
+
+		return emitRtLockExchangeByte(self.module, block: block, lock: lock, value: emitConst(self.module, block: block, value: value, ids: ids), ids: ids)
+	end 'exchangeByte'
 
 	function blockAt(blockRef ElementIndex) returns IrBlock
 		return try self.module.blocks.get(blockRef) otherwise panic("RuntimeLockExpander: blockRef {blockRef} of '{String.from(self.func.name)}' is not in module.blocks")

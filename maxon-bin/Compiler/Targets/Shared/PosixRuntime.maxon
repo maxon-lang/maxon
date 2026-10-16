@@ -582,19 +582,16 @@ export let PosixWaitOffChildKilled = 0x28 as MachineWord
 export let PosixWaitOffChildSignal = 0x30 as MachineWord
 export let PosixWaitPrefixBytes = 0x38 as MachineWord
 
-// The two states of the signal word above. They are HERE rather than once per lane because the field is
-// shared and `mrt_host_proc_reap` — a shared body — publishes into it; each lane's own event protocol reads
-// the same two values through its own primitive (a condvar predicate on Darwin, a `FUTEX_WAIT` comparand on
-// Linux).
+// The two states of the signal word above. They are HERE rather than once per lane because the
+// field is shared and `mrt_host_proc_reap` — a shared body — publishes into it; each lane's own
+// event protocol reads the same two values through its own primitive (a condvar predicate on
+// Darwin, a futex word on Linux, which adds `LinuxEventSleeping`).
 //
-// ⭐⭐ **TWO STATES AND NOT A COUNT, BECAUSE `SetEvent` IS AN AUTO-RESET EVENT'S CONTRACT.** `mrt_host_event_set`
-// publishes with a COMPARE-AND-SWAP whose verdict is discarded, which is correct rather than a missed signal:
-// it can fail only when the word is already signalled, and `SetEvent` on an already-signalled auto-reset
-// event is a documented no-op. A counting increment would release TWO waiters for two signals — a worker M
-// woken for work another M has already taken.
-//
-// ⚠ **THE WAKE HAPPENS WHETHER OR NOT THE PUBLISH LANDED.** A waiter that observed the signalled state and is
-// about to sleep is refused by its own primitive's compare; one already asleep is woken by the wake.
+// ⭐⭐ **TWO STATES AND NOT A COUNT, BECAUSE `SetEvent` IS AN AUTO-RESET EVENT'S CONTRACT.**
+// `mrt_host_event_set` stores the signalled state whatever the word held, which is correct rather
+// than a missed signal: an already-signalled word stays signalled, and `SetEvent` on an
+// already-signalled auto-reset event is a documented no-op. A counting increment would release TWO
+// waiters for two signals — a worker M woken for work another M has already taken.
 export let PosixWaitNotSignalled = 0
 export let PosixWaitSignalled = 1
 

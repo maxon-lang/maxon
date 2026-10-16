@@ -2369,10 +2369,7 @@ end 'buildLinuxPreemptHandlerChunk'
 function buildGtSpinPauseChunk() returns FunctionCodeChunk
 	var code = ByteArray.create()
 
-	let loopTop = code.count()
-	encodeX64Pause(code)
-	encodeGrp1RegImm32(code, ext: Grp1ExtSub, reg: X64Register.rcx, imm: 1)
-	encodeJccBackward(code, cond: X64CondCode.notEqual, targetOffset: loopTop as CodeOffset, what: PatchSite.x64SpinLoopRel32)
+	encodeX64Procyield(code, count: X64Register.rcx)
 	code.push(OpcodeRet)
 
 	var chunk = FunctionCodeChunk.createWith(HostSpinPauseName, code: code, callFixups: CallFixupArray.create(), rdataRelocs: RdataRelocationArray.create(), iatRelocs: RelocationArray.create())

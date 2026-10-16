@@ -114,7 +114,8 @@ data {
   __data_flag@0 = i1 1
   __mrt_envp@8 = i64 0
   __mrt_signal_stack_bytes@16 = i64 0
-  __mrt_program_started@24 = i8 0
+  __mrt_hwcap_atomics@24 = i64 0
+  __mrt_program_started@32 = i8 0
 }
 
 func @main {
@@ -257,7 +258,8 @@ data {
   __data_counter@0 = i64 42
   __mrt_envp@8 = i64 0
   __mrt_signal_stack_bytes@16 = i64 0
-  __mrt_program_started@24 = i8 0
+  __mrt_hwcap_atomics@24 = i64 0
+  __mrt_program_started@32 = i8 0
 }
 
 func @main {
@@ -390,7 +392,8 @@ data {
   __data_pi@0 = f64 3.14
   __mrt_envp@8 = i64 0
   __mrt_signal_stack_bytes@16 = i64 0
-  __mrt_program_started@24 = i8 0
+  __mrt_hwcap_atomics@24 = i64 0
+  __mrt_program_started@32 = i8 0
 }
 
 func @main {
@@ -519,7 +522,8 @@ data {
   __data_pi@0 = f64 3.14
   __mrt_envp@8 = i64 0
   __mrt_signal_stack_bytes@16 = i64 0
-  __mrt_program_started@24 = i8 0
+  __mrt_hwcap_atomics@24 = i64 0
+  __mrt_program_started@32 = i8 0
 }
 
 func @main {
@@ -701,7 +705,8 @@ data {
   __data_flag@8 = i1 0
   __mrt_envp@16 = i64 0
   __mrt_signal_stack_bytes@24 = i64 0
-  __mrt_program_started@32 = i8 0
+  __mrt_hwcap_atomics@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @main {
@@ -895,7 +900,8 @@ data {
   __data_flag@8 = i1 1
   __mrt_envp@16 = i64 0
   __mrt_signal_stack_bytes@24 = i64 0
-  __mrt_program_started@32 = i8 0
+  __mrt_hwcap_atomics@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @main {
@@ -1089,7 +1095,8 @@ data {
   __data_flag@8 = i1 1
   __mrt_envp@16 = i64 0
   __mrt_signal_stack_bytes@24 = i64 0
-  __mrt_program_started@32 = i8 0
+  __mrt_hwcap_atomics@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @main {
@@ -1302,7 +1309,8 @@ data {
   __data_c@2 = i1 1
   __mrt_envp@8 = i64 0
   __mrt_signal_stack_bytes@16 = i64 0
-  __mrt_program_started@24 = i8 0
+  __mrt_hwcap_atomics@24 = i64 0
+  __mrt_program_started@32 = i8 0
 }
 
 func @main {
@@ -1530,7 +1538,8 @@ data {
   __data_flag@16 = i1 1
   __mrt_envp@24 = i64 0
   __mrt_signal_stack_bytes@32 = i64 0
-  __mrt_program_started@40 = i8 0
+  __mrt_hwcap_atomics@40 = i64 0
+  __mrt_program_started@48 = i8 0
 }
 
 func @main {
@@ -1745,7 +1754,8 @@ data {
   __sched_max_active_workers@8 = i64 1
   __mrt_envp@16 = i64 0
   __mrt_signal_stack_bytes@24 = i64 0
-  __mrt_program_started@32 = i8 0
+  __mrt_hwcap_atomics@32 = i64 0
+  __mrt_program_started@40 = i8 0
 }
 
 func @main {

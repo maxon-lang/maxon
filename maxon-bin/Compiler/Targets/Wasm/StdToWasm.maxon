@@ -2532,23 +2532,36 @@ type WasmFuncEmitter
 		self.body.endOp()
 	end 'emitAtomicCas'
 
-	// `atomicRmw(result, addr, operand, opcode)` → `result = *addr` then `*addr = result <op> operand`.
-	// `result` is the PRIOR value, so it is captured BEFORE the update and then re-read as the update's
-	// left operand — which is also why this needs no scratch local of its own.
 	function emitAtomicRmw(resultId ValueId, addrId ValueId, operandId ValueId, opcode StdAtomicRmwOpcode)
+		match opcode 'op'
+			add then self.emitAtomicAddWord(resultId, addrId: addrId, operandId: operandId)
+			exchangeByte then self.emitAtomicExchangeByte(resultId, addrId: addrId, operandId: operandId)
+		end 'op'
+	end 'emitAtomicRmw'
+
+	// `atomicRmw(result, addr, operand, add)` → `result = *addr` then `*addr = result + operand`.
+	// `result` is the PRIOR value, so it is captured BEFORE the update and then re-read as the
+	// update's left operand — which is also why this needs no scratch local of its own.
+	function emitAtomicAddWord(resultId ValueId, addrId ValueId, operandId ValueId)
 		self.pushOperandAt(addrId, targetVt: WasmValType.i32)
 		self.body.i64Load(WasmAtomicWordOffset)
 		self.body.localSet(resultId as Wasm32Index)
 		self.pushOperandAt(addrId, targetVt: WasmValType.i32)
 		self.body.localGet(resultId as Wasm32Index)
 		self.pushOperandAt(operandId, targetVt: WasmValType.i64)
-
-		match opcode 'op'
-			add then self.body.i64Add()
-		end 'op'
-
+		self.body.i64Add()
 		self.body.i64Store(WasmAtomicWordOffset)
-	end 'emitAtomicRmw'
+	end 'emitAtomicAddWord'
+
+	function emitAtomicExchangeByte(resultId ValueId, addrId ValueId, operandId ValueId)
+		self.pushOperandAt(addrId, targetVt: WasmValType.i32)
+		self.body.i32Load8U(WasmAtomicWordOffset)
+		self.body.i64ExtendI32U()
+		self.body.localSet(resultId as Wasm32Index)
+		self.pushOperandAt(addrId, targetVt: WasmValType.i32)
+		self.pushOperandAt(operandId, targetVt: WasmValType.i32)
+		self.body.i32Store8(WasmAtomicWordOffset)
+	end 'emitAtomicExchangeByte'
 
 	function emitConst(resultId ValueId, value FullRangeInt, valueType StdType)
 		if stdTypeIsFloat(valueType) 'float'
