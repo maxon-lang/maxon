@@ -367,10 +367,10 @@ Notes on particular rows:
   check.
 - **`osLockInit`/`osLockEnter`/`osLockLeave`** need `HostFacility.hostMutex`, true on all five lanes. On
   wasm32-wasi each lowers to nothing, because a component has one thread; a threaded wasm lane would need
-  real bodies. On the three POSIX lanes the `mrt_host_lock_*` chunks ride
-  `PosixRuntime.posixUsesHostLock` (`usesGt`, `usesDebugStream` or `usesHeap`), kept apart from
-  `posixUsesHostObjects` so a single-threaded program that allocates does not carry the child reaper.
-  ⚠ A chunk gate narrower than the producers of its op is a link failure, not a diagnostic.
+  real bodies. On the three POSIX lanes the lock chunks ride `RuntimeUsage.usesRawOsLock`, which every
+  `__Raw.osLock*` call sets; the runtime's own locks are the words `Compiler/Runtime/RuntimeLock.maxon`
+  builds. ⚠ A chunk gate narrower than the producers of its op is a link failure, not a
+  diagnostic.
 - **The page rows** need `HostFacility.pageMemory`, true on all five lanes. On wasm32-wasi `memory.grow`
   is the whole API: a reserve is an allocation and a decommit or free emits nothing.
   `targetProvidesFacility` states wasm32-wasi as its own block. `osCommitPages` destroys the range's
@@ -391,7 +391,7 @@ Notes on particular rows:
   `schedAllMachinesAddr`, `schedPreemptExtLockAddr` or `schedLockAddr`, so nothing exercises their parsing,
   lowering or facility route.
 - No spec case covers `reserveRawScratchSlot`'s refusals.
-- `osLockEnter`, `osLockLeave` and `atomicCas` are spelled by no reached tier body; spec probe bodies that
+- `osLockInit`, `osLockEnter`, `osLockLeave` and `atomicCas` are spelled by no reached tier body; spec probe bodies that
   spell them are unreached, so dead-function elimination drops them before instruction selection and no
   lane's isel is exercised from the tier. A probe case proves only the parser and the Maxon-to-Std lowering.
 - `scratch` has no wasm lowering and no facility row to refuse it (above).

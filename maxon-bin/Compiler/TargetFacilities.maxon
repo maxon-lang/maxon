@@ -140,14 +140,16 @@ export enum HostFacility
 	// a distinction the machine does not have, not a gap — see `StdOp.osReservePages`.
 	pageMemory
 
-	// ⭐ **AN OS MUTUAL-EXCLUSION LOCK over a region the caller owns (`StdOp.osLockInit`, `osLockEnter`,
-	// `osLockLeave`, `osLockDestroy`).** Its own facility rather than a corner of `greenThreads`: the object
-	// is a bare host primitive with no scheduler in it, and a lane can serve one without the other.
+	// ⭐ **AN OS MUTUAL-EXCLUSION LOCK over a region the caller owns (`StdOp.osLockInit`,
+	// `osLockEnter`, `osLockLeave`).** Its own facility rather than a corner of `greenThreads`: the
+	// object is a bare host primitive with no scheduler in it, and a lane can serve one without the
+	// other.
 	//
-	// ⭐⭐ **wasm32-wasi PROVIDES IT VACUOUSLY, AND THAT IS AN ANSWER RATHER THAN A HOST OBJECT.** A WASI
-	// component has one thread, so there is no second party to exclude — exclusion is already total, and the
-	// honest lowering of all four ops is ZERO INSTRUCTIONS. Each has its own arm in `StdToWasm.emitBodyOp`
-	// emitting nothing, which is what a `true` promises, exactly as `pageMemory`'s row states for its five.
+	// ⭐⭐ **wasm32-wasi PROVIDES IT VACUOUSLY, AND THAT IS AN ANSWER RATHER THAN A HOST OBJECT.** A
+	// WASI component has one thread, so there is no second party to exclude — exclusion is already
+	// total, and the honest lowering of all three ops is ZERO INSTRUCTIONS. Each has its own arm in
+	// `StdToWasm.emitBodyOp` emitting nothing, which is what a `true` promises, exactly as
+	// `pageMemory`'s row states for its five.
 	//
 	// ⛔ **A wasm LANE WITH THREADS FALSIFIES THAT AND OWES A REAL LOWERING FIRST.** The emptiness follows
 	// from the machine having one thread and from nothing else; a threaded component needs real bodies,
@@ -590,8 +592,8 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 
 	if target.cpu == CpuArch.arm64 and target.os == Os.macos 'darwinArm64'
 		return match facility 'f'
-			// ⚠ `hostMutex` is `true` because the lock chunk's gate, `PosixRuntime.posixUsesHostLock`,
-			// covers every producer of the three ops, the allocator's included. A narrower gate is a `bl` to
+			// ⚠ `hostMutex` is `true` because the lock chunk's gate, `RuntimeUsage.usesRawOsLock`, is set
+			// by every `__Raw.osLock*` call, the three ops' only producer. A narrower gate is a `bl` to
 			// a symbol the image never laid out: a link failure rather than a diagnostic. `uptimeClock`
 			// rests on the same kind of union: `mrt_host_tick_ms` is gated on all three of its producers
 			// (`appendArm64DarwinRuntimeChunks`), so a program that reads the uptime and spawns nothing
@@ -671,7 +673,7 @@ export function targetProvidesFacility(target Target, facility HostFacility) ret
 			// `20 - 10` is 10.
 			//
 			// `hostMutex` and `uptimeClock` are `true` for the arm64-macOS row's reason: their chunks' gates
-			// cover every producer (`PosixRuntime.posixUsesHostLock`, and the union of `mrt_host_tick_ms`'s
+			// cover every producer (`RuntimeUsage.usesRawOsLock`, and the union of `mrt_host_tick_ms`'s
 			// three producers).
 			//
 			// ⚠ `managedSocket` resolves names in Std IR (`SocketResolveShape.builtinResolver`), and a

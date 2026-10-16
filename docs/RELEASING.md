@@ -66,7 +66,8 @@ tree.
 than a way of shipping a hobbled compiler: the seed accepts the compiler's own parser arm, runtime
 installer and name constants, so `C1` knows the builtin and compiles the unshimmed tree.
 
-There are five things a patch may withdraw or rewrite. One is a `stdlib/` or `runtime/` declaration the seed refuses
+Six of the things a patch may withdraw or rewrite are these; `scripts/seed-shim/README.md` lists every case.
+One is a `stdlib/` or `runtime/` declaration the seed refuses
 outright; only `C1`'s own copy of that function is then stubbed, and nothing in a build calls it. Another
 is a CALL SITE in the compiler's own source — the compiler is a Maxon program too, so it can call
 an intrinsic this tree adds and the seed refuses it there with E3004 rather than at the declaration.
@@ -92,6 +93,10 @@ and after the comments of the change have been written.
 The fifth is the LIBRARY linked into `C1`: a `stdlib/` body that names a type or an intrinsic the seed does not
 know is rewritten to calls it does, for the first build only. Only `C1`'s own behaviour is weaker, because the
 restore runs before `C1` builds `C2` against the unshimmed library.
+
+The sixth is the RUNTIME TIER's GEOMETRY: the seed pins the layout `runtime/SlabRuntime.maxon` restates and emits
+the allocator lock it was built with, so a tree that changes either has its tier written back to the seed's
+geometry for the first build, and `C1` builds `C2` from the tree's.
 
 ⛔ **Delete a patch when the pin moves to a seed that accepts what it withdraws.** It is inert from that
 moment — the plain build succeeds and the directory is never read — and a patch left to rot no longer

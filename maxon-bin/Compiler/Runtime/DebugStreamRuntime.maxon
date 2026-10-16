@@ -666,9 +666,8 @@ let DsBufSizeLabel = b"__ds_buf_size"
 let DsBufMaskLabel = b"__ds_buf_mask"
 let DsStartTsLabel = b"__ds_start_ts"
 
-// A POINTER to the slab-allocated CRITICAL_SECTION, exactly as `SchedRuntime`'s `__sched_lock` is a pointer to
-// its own: `InitializeCriticalSection` needs a valid region to initialize in place, and a `.data` slot is
-// one machine word.
+// The ring's lock: an exclusive runtime lock (`RuntimeLock`), free at `.data` zero, so nothing
+// initialises it.
 let DsLockLabel = b"__ds_lock"
 
 // The monotonic allocation id `__mm_alloc` stamps into each box header. Starts at 0 and pre-increments,
@@ -704,17 +703,10 @@ function dsAllocTallyImage() returns ByteArray
 	return image
 end 'dsAllocTallyImage'
 
-// The bytes `__ds_init` asks `__slab_alloc` for: the CRITICAL_SECTION (5 words, matching `GtRuntime`'s
-// own reading of the structure) and the scratch buffer `GetEnvironmentVariableW` writes the segment name into.
-//
-// ⚠⚠ **THEY ARE NOT THE SAME KIND OF ONE-SHOT:**
-//
-//   • the CRITICAL_SECTION is LIVE for the whole process, because every event site enters and leaves it until
-//     `__ds_shutdown` and there is no later moment at which nothing can be emitting. Never freeing it is not a
-//     leak, it is its lifetime — the same reading `__sched_lock`'s region has.
-//   • the ENV BUFFER is dead the instant `OpenFileMappingW` has resolved the name into a handle, which happens
-//     inside `__ds_init`'s own entry block. It is freed there.
-// The monitor names its segments `maxon_ds_<pid>_<8 hex>`; 512 characters is two orders of magnitude of head
+// The scratch buffer `__ds_init` asks `__slab_alloc` for, which `GetEnvironmentVariableW` writes
+// the segment name into. It is dead the instant `OpenFileMappingW` has resolved the name into a
+// handle, which happens inside `__ds_init`'s own entry block, and it is freed there. The monitor
+// names its segments `maxon_ds_<pid>_<8 hex>`; 512 characters is two orders of magnitude of head
 // room and one slab bump.
 let DsEnvBufferBytes = 512
 
@@ -725,14 +717,14 @@ let DsEnvBufferBytes = 512
 export function debugStreamRuntimeGlobals() returns DataSectionEntryArray
 	var out = DataSectionEntryArray.create()
 
-	// The first five are written by `__ds_init` alone, which the ENTRY STUB runs before `main` and therefore
-	// before any green thread, let alone any worker M. The ring itself is not among them: it lives in shared
-	// MEMORY and is guarded by the CRITICAL_SECTION `__ds_lock` points at.
+	// The first four are written by `__ds_init` alone, which the ENTRY STUB runs before `main` and
+	// therefore before any green thread, let alone any worker M. The ring itself is not among them: it
+	// lives in shared MEMORY and is guarded by `__ds_lock`.
 	pushRuntimeGlobal(out, label: DsBaseLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: DsBufSizeLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: DsBufMaskLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: DsStartTsLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
-	pushRuntimeGlobal(out, label: DsLockLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: DsLockLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: DsAllocIdLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.walked)
 	return out
 end 'debugStreamRuntimeGlobals'
@@ -790,7 +782,7 @@ export function installDebugStreamRuntime(module StdModule, globalData GlobalDat
 
 	buildDsInit(module, envNameLabel: envNameLabel.toByteArray())
 	buildDsShutdown(module)
-	buildDsReserve(module)
+	buildDsReserve(module, usesGt: usesGt)
 	buildDsCommit(module)
 	buildDsEmitMm(module)
 	buildDsEmitSched(module)
@@ -832,18 +824,9 @@ function buildDsInit(module StdModule, envNameLabel ByteArray)
 	var attach = module.addBlock(func, label: b"attach", heat: BlockHeat.normal)
 	var dark = module.addBlock(func, label: b"dark", heat: BlockHeat.normal)
 
-	// The two scratch regions. `__slab_alloc` hands back ZEROED memory (the allocator's zeroing contract),
+	// The scratch region. `__slab_alloc` hands back ZEROED memory (the allocator's zeroing contract),
 	// which is what lets the env lookup below need no "was it set?" branch: an absent variable leaves the
-	// buffer naming the EMPTY string, and `OpenFileMappingW("")` fails exactly as a missing segment does. The
-	// lock outlives this function; the env buffer does not — see `OsLockBytes`.
-	let lockSize = emitConst(module, block: entry, value: OsLockBytes, ids: ids)
-	let lock = ids.mint()
-	module.appendOp(entry, op: StdOp.call(lock, callee: SlabAllocName, args: argsOf(lockSize)))
-	module.appendOp(entry, op: StdOp.osLockInit(lock))
-	let lockAddr = ids.mint()
-	module.appendOp(entry, op: StdOp.globalAddr(lockAddr, label: DsLockLabel))
-	module.appendOp(entry, op: StdOp.storeIndirect(lockAddr, offset: 0, valueId: lock, valueType: StdType.i64))
-
+	// buffer naming the EMPTY string, and `OpenFileMappingW("")` fails exactly as a missing segment does.
 	let envBufSize = emitConst(module, block: entry, value: DsEnvBufferBytes, ids: ids)
 	let envBuf = ids.mint()
 	module.appendOp(entry, op: StdOp.call(envBuf, callee: SlabAllocName, args: argsOf(emitByteCountOfUnits(module, block: entry, units: envBufSize, encoding: module.hostText, ids: ids))))
@@ -980,6 +963,21 @@ function emitSpaceCheck(module StdModule, block IrBlock, base ValueId, entrySize
 	emitBranchOnCompareValues(module, block: block, a: needed, pred: StdCmpPred.le, b: bufSize, whenTrue: fits, whenFalse: dropped, ids: ids)
 end 'emitSpaceCheck'
 
+// Under the scheduler the ring lock steps the machine's lock depth (`MOffLocks`) like every runtime
+// lock, so an asynchronous stop refuses a producer holding it. A program without one has no machine
+// to step.
+function emitDsLockStep(module StdModule, block IrBlock, lock ValueId, entering bool, usesGt bool, ids ValueMinter)
+	if usesGt 'scheduled'
+		if entering 'enter'
+			emitLockEnterAt(module, block: block, lock: lock, kind: RuntimeLockKind.exclusive, ids: ids)
+		end 'enter' else 'leave'
+			emitLockLeaveAt(module, block: block, lock: lock, kind: RuntimeLockKind.exclusive, ids: ids)
+		end 'leave'
+	end 'scheduled' else 'unscheduled'
+		emitRuntimeLockMark(module, block: block, lock: lock, mark: runtimeLockMarkOf(RuntimeLockKind.exclusive, entering: entering), ids: ids)
+	end 'unscheduled'
+end 'emitDsLockStep'
+
 // ============================================================================
 // `__ds_reserve(eventType, entrySize) -> entry pointer, or 0 when the ring is full`
 // ============================================================================
@@ -998,7 +996,7 @@ end 'emitSpaceCheck'
 // is not a workaround for the Std tier having no block arguments — it is CORRECT, for the reason their
 // absence is survivable here: the whole function runs under the ring lock, so the header word cannot
 // change underneath it, and a re-read and a thread are the same value by construction.
-function buildDsReserve(module StdModule)
+function buildDsReserve(module StdModule, usesGt bool)
 	var func = IrFunction.createFromStd(DsReserveName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
 
@@ -1016,8 +1014,9 @@ function buildDsReserve(module StdModule)
 	let entrySize = 1
 
 	let base = emitLoadGlobalWord(module, block: entry, label: DsBaseLabel, ids: ids)
-	let lock = emitLoadGlobalWord(module, block: entry, label: DsLockLabel, ids: ids)
-	module.appendOp(entry, op: StdOp.osLockEnter(lock))
+	let lock = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(lock, label: DsLockLabel))
+	emitDsLockStep(module, block: entry, lock: lock, entering: true, usesGt: usesGt, ids: ids)
 
 	// PEAK first, because it is a fact about how full the ring GOT rather than about this entry: an event
 	// that is about to be dropped still pushed the high-water mark to where it is.
@@ -1076,14 +1075,14 @@ function buildDsReserve(module StdModule)
 
 	emitPublishCursor(module, block: place, base: base, cursor: placeCursor, advance: entrySize, ids: ids)
 	emitBumpSegmentCounter(module, block: place, base: base, offset: DsOffTotalEvents, ids: ids)
-	module.appendOp(place, op: StdOp.osLockLeave(lock))
+	emitDsLockStep(module, block: place, lock: lock, entering: false, usesGt: usesGt, ids: ids)
 	module.setTerminator(place, op: StdOp.ret(dataPtr))
 
 	// DROPPED. Both space checks reach here, and both reach it HOLDING the lock — which is why the release
 	// follows from the CONTROL PATH rather than from a re-derived test. Getting this wrong is not a
 	// lost event but a HANG: every later producer waits on a lock nobody released.
 	emitBumpSegmentCounter(module, block: full, base: base, offset: DsOffDroppedEvents, ids: ids)
-	module.appendOp(full, op: StdOp.osLockLeave(lock))
+	emitDsLockStep(module, block: full, lock: lock, entering: false, usesGt: usesGt, ids: ids)
 	emitConstReturn(module, block: full, value: 0, ids: ids)
 
 	module.functions.push(func)

@@ -1,0 +1,190 @@
+let ExpandedLockContLabel = b"__rl_cont"
+let ExpandedLockSlowLabel = b"__rl_slow"
+let ExpandedLockOwnedLabel = b"__rl_owned"
+let ExpandedLockNestedLabel = b"__rl_nested"
+let ExpandedLockOutermostLabel = b"__rl_outermost"
+
+typealias RuntimeLockSiteByOp = Map with (ElementIndex, RuntimeLockSite)
+
+export function expandRuntimeLocks(module StdModule, firstFuncIndex ElementIndex, target Target)
+	if module.runtimeLockSites.count() == 0 'noSites'
+		return
+	end 'noSites'
+
+	let sites = runtimeLockSiteMap(module)
+
+	// ⚠ A WASI component has one thread, so a lock has nothing to exclude and its marks are dropped. A
+	// threaded wasm lane makes that a silent race; see `HostFacility.hostMutex`.
+	let dropOnly = target.os == Os.wasi
+
+	for funcIndex in firstFuncIndex upto module.functions.count() 'eachFunc'
+		let func = try module.functions.get(funcIndex) otherwise panic("expandRuntimeLocks: functions.get OOB at {funcIndex}")
+		var expander = RuntimeLockExpander.create(module, func: func, sites: sites, dropOnly: dropOnly)
+		expander.run()
+	end 'eachFunc'
+end 'expandRuntimeLocks'
+
+function runtimeLockSiteMap(module StdModule) returns RuntimeLockSiteByOp
+	var sites = RuntimeLockSiteByOp.create()
+
+	for site in module.runtimeLockSites 'eachSite'
+		sites.upsert(site.opIndex, value: site)
+	end 'eachSite'
+
+	return sites
+end 'runtimeLockSiteMap'
+
+type RuntimeLockExpander
+	var module as StdModule
+	var func as IrFunction
+	let sites as RuntimeLockSiteByOp
+	let dropOnly as bool
+	var minted as ValueMinter
+	var seeded as bool
+
+	static function create(module StdModule, func IrFunction, sites RuntimeLockSiteByOp, dropOnly bool) returns RuntimeLockExpander
+		return Self{module: module, func: func, sites: sites, dropOnly: dropOnly, minted: ValueMinter.create(0), seeded: false}
+	end 'create'
+
+	function valueIds() returns ValueMinter
+		if self.seeded 'already'
+			return self.minted
+		end 'already'
+
+		self.minted = ValueMinter.resuming(nextFreeValueId(self.module, func: self.func))
+		self.seeded = true
+		return self.minted
+	end 'valueIds'
+
+	function run()
+		let originalBlockCount = self.func.blockRefs.count()
+
+		for i in 0 upto originalBlockCount 'eachBlock'
+			let blockRef = try self.func.blockRefs.get(i) otherwise panic("RuntimeLockExpander.run: blockRefs.get OOB at {i} despite the snapshot bound")
+
+			if self.dropOnly 'dropping'
+				self.dropMarksFrom(blockRef)
+			end 'dropping' else 'expanding'
+				self.expandChainFrom(blockRef)
+			end 'expanding'
+		end 'eachBlock'
+	end 'run'
+
+	function dropMarksFrom(blockRef ElementIndex)
+		var block = self.blockAt(blockRef)
+		var kept = OpIndexArray.create()
+		var dropped = false
+
+		for pos in 0 upto block.bodyOpCount() 'eachOp'
+			let opIdx = self.opIndexAt(blockRef, pos: pos)
+
+			if self.sites.contains(opIdx) 'aMark'
+				dropped = true
+			end 'aMark' else 'ordinary'
+				kept.push(opIdx)
+			end 'ordinary'
+		end 'eachOp'
+
+		if dropped 'rewrite'
+			block.replaceBodyOps(kept)
+		end 'rewrite'
+	end 'dropMarksFrom'
+
+	function expandChainFrom(blockRef ElementIndex)
+		var current = blockRef
+		var pos = 0 as ElementIndex
+
+		while pos < self.blockAt(current).bodyOpCount() 'eachOp'
+			let opIdx = self.opIndexAt(current, pos: pos)
+
+			if not self.sites.contains(opIdx) 'ordinary'
+				pos = pos + 1
+				continue
+			end 'ordinary'
+
+			let site = try self.sites.get(opIdx) otherwise panic("RuntimeLockExpander.expandChainFrom: sites.get missed op {opIdx} after contains")
+			current = self.expand(current, pos: pos, site: site)
+			pos = 0
+		end 'eachOp'
+	end 'expandChainFrom'
+
+	function expand(blockRef ElementIndex, pos ElementIndex, site RuntimeLockSite) returns ElementIndex
+		_ = self.valueIds()
+
+		var head = self.blockAt(blockRef)
+		var cont = splitBlockInPlace(self.module, func: self.func, head: head, position: pos + 1, label: ExpandedLockContLabel)
+		head.truncateBodyOps(pos)
+		let contRef = registeredBlockRef(self.module, func: self.func, block: cont)
+
+		match site.mark 'mark'
+			enterRecursive then self.openEnterRecursive(head, cont: cont, lock: site.lock)
+			leaveRecursive then self.openLeaveRecursive(head, cont: cont, lock: site.lock)
+			enterExclusive then self.openExclusive(head, cont: cont, lock: site.lock, callee: RtLockAcquireName, expected: RtLockFree, replacement: RtLockHeld)
+			leaveExclusive then self.openExclusive(head, cont: cont, lock: site.lock, callee: RtLockReleaseName, expected: RtLockHeld, replacement: RtLockFree)
+			enterPool then self.openExclusive(head, cont: cont, lock: site.lock, callee: RtLockPoolAcquireName, expected: RtLockFree, replacement: RtLockHeld)
+			leavePool then self.openExclusive(head, cont: cont, lock: site.lock, callee: RtLockPoolReleaseName, expected: RtLockHeld, replacement: RtLockFree)
+		end 'mark'
+
+		return contRef
+	end 'expand'
+
+	function openExclusive(head IrBlock, cont IrBlock, lock ValueId, callee ByteArray, expected FullRangeInt, replacement FullRangeInt)
+		let slow = self.slowArm(head, cont: cont, callee: callee, lock: lock)
+		let won = self.cas(head, lock: lock, expected: expected, replacement: replacement)
+		self.module.setTerminator(head, op: StdOp.condBranch(won, thenBlockId: cont.id, elseBlockId: slow.id))
+	end 'openExclusive'
+
+	function openEnterRecursive(head IrBlock, cont IrBlock, lock ValueId)
+		let slow = self.slowArm(head, cont: cont, callee: RtLockEnterSlowName, lock: lock)
+		var owned = self.module.addBlock(self.func, label: ExpandedLockOwnedLabel, heat: BlockHeat.normal, inlineSite: head.inlineSite)
+
+		let token = self.valueIds().mint()
+		self.module.appendOp(head, op: StdOp.osThreadToken(token))
+		let won = self.cas(head, lock: lock, expected: RtLockFree, replacement: RtLockHeld)
+		self.module.setTerminator(head, op: StdOp.condBranch(won, thenBlockId: owned.id, elseBlockId: slow.id))
+
+		emitStoreField(self.module, block: owned, record: lock, offset: RtLockOffOwner, value: token)
+		self.module.setTerminator(owned, op: StdOp.branch(cont.id))
+	end 'openEnterRecursive'
+
+	function openLeaveRecursive(head IrBlock, cont IrBlock, lock ValueId)
+		let slow = self.slowArm(head, cont: cont, callee: RtLockReleaseName, lock: lock)
+		var nested = self.module.addBlock(self.func, label: ExpandedLockNestedLabel, heat: BlockHeat.normal, inlineSite: head.inlineSite)
+		var outermost = self.module.addBlock(self.func, label: ExpandedLockOutermostLabel, heat: BlockHeat.normal, inlineSite: head.inlineSite)
+		var ids = self.valueIds()
+
+		let depth = emitLoadField(self.module, block: head, record: lock, offset: RtLockOffDepth, ids: ids)
+		emitBranchOnCompare(self.module, block: head, value: depth, pred: StdCmpPred.eq, against: 0, whenTrue: outermost, whenFalse: nested, ids: ids)
+
+		emitStoreField(self.module, block: nested, record: lock, offset: RtLockOffDepth, value: emitBin(self.module, block: nested, a: depth, b: emitConst(self.module, block: nested, value: OneFewer, ids: ids), opcode: StdBinOpcode.add, ids: ids))
+		self.module.setTerminator(nested, op: StdOp.branch(cont.id))
+
+		// The owner is cleared before the releasing compare-and-swap, never after: once the key is free
+		// another thread may claim the lock, and a later clear would erase its claim.
+		emitStoreField(self.module, block: outermost, record: lock, offset: RtLockOffOwner, value: emitConst(self.module, block: outermost, value: 0, ids: ids))
+		let won = self.cas(outermost, lock: lock, expected: RtLockHeld, replacement: RtLockFree)
+		self.module.setTerminator(outermost, op: StdOp.condBranch(won, thenBlockId: cont.id, elseBlockId: slow.id))
+	end 'openLeaveRecursive'
+
+	function slowArm(head IrBlock, cont IrBlock, callee ByteArray, lock ValueId) returns IrBlock
+		var slow = self.module.addBlock(self.func, label: ExpandedLockSlowLabel, heat: BlockHeat.cold, inlineSite: head.inlineSite)
+		self.module.appendOp(slow, op: StdOp.call(self.valueIds().mint(), callee: callee, args: argsOf(lock)))
+		self.module.setTerminator(slow, op: StdOp.branch(cont.id))
+		return slow
+	end 'slowArm'
+
+	function cas(block IrBlock, lock ValueId, expected FullRangeInt, replacement FullRangeInt) returns ValueId
+		var ids = self.valueIds()
+		let result = ids.mint()
+		self.module.appendOp(block, op: StdOp.atomicCas(result, addrId: lock, expectedId: emitConst(self.module, block: block, value: expected, ids: ids), replacementId: emitConst(self.module, block: block, value: replacement, ids: ids)))
+		return result
+	end 'cas'
+
+	function blockAt(blockRef ElementIndex) returns IrBlock
+		return try self.module.blocks.get(blockRef) otherwise panic("RuntimeLockExpander: blockRef {blockRef} of '{String.from(self.func.name)}' is not in module.blocks")
+	end 'blockAt'
+
+	function opIndexAt(blockRef ElementIndex, pos ElementIndex) returns ElementIndex
+		return try self.blockAt(blockRef).bodyOpAt(pos) otherwise panic("RuntimeLockExpander: block {blockRef} of '{String.from(self.func.name)}' has no op at position {pos}")
+	end 'opIndexAt'
+end 'RuntimeLockExpander'

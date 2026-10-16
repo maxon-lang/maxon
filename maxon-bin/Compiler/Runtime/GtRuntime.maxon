@@ -470,17 +470,17 @@ export enum GtLastErrorDirection
 end 'GtLastErrorDirection'
 
 // ⭐⭐ **THE RECORD LOCK — LAST IN THE STRUCT, BECAUSE `__gt_spawn` ZEROES EVERY FIELD BELOW IT AND
-// NONE OF IT.** It is initialized once, when the arena carves the record (`__gt_free_get`), and
-// stays live across every reuse; a field placed after it would escape the spawn's zeroing. On a
-// green thread it is the strand lock over the strand queue (`GtOffCoroHead`). On a coroutine or a
-// reply cell it is the promise lock, where await, awaitAny and the completer meet over
-// `GtOffAwaiter` — Go's `hchan.lock`. The two roles never fall on one record. EXPORTED because
-// `SchedRuntime`'s carve initializes it.
+// NONE OF IT.** It is a recursive runtime lock (`RuntimeLock`), free in the zeroed pages the arena
+// carves the record from (`__gt_free_get`), and stays live across every reuse; a field placed after
+// it would escape the spawn's zeroing. On a green thread it is the strand lock over the strand
+// queue (`GtOffCoroHead`). On a coroutine or a reply cell it is the promise lock, where await,
+// awaitAny and the completer meet over `GtOffAwaiter` — Go's `hchan.lock`. The two roles never fall
+// on one record.
 //
 // ⚠ This line is the one a growth must restate: a new field goes before the lock, and this offset
 // names the last field rather than following it. A field added without re-deriving it shares the
 // lock's bytes and escapes the spawn's zeroing, and nothing refuses it.
-export let GtOffRecordLock = GtOffLastError + PointerFieldBytes
+let GtOffRecordLock = GtOffLastError + PointerFieldBytes
 
 // The GT struct's size: the 0xC8 header, the inline argument region, then every field above, the
 // record lock last. Must be a multiple of 8.
@@ -491,7 +491,7 @@ export let GtOffRecordLock = GtOffLastError + PointerFieldBytes
 // a growth walks them all along correctly.
 //
 // EXPORTED because `SchedRuntime`'s M struct embeds a whole GT inline as its scheduler context.
-export let GtStructSize = GtOffRecordLock + OsLockBytes
+export let GtStructSize = GtOffRecordLock + RecursiveLockBytes
 
 // ⭐⭐ **THE PARK KINDS — what the strand runner dispatches on after the switch.** Each names the STORE
 // `__gt_register_park` puts the thread on; a yield and a preemption register nothing and are placed back on
@@ -1295,11 +1295,11 @@ export let GtPromiseFieldVacateName = b"__gt_promise_field_vacate"
 // `__gt_cell_complete`, and `__gt_promise_drop`'s waiting arm once it has deregistered a parked thread from
 // every store. EXPORTED for the two in `SchedRuntime`.
 //
-// ⛔⛔⛔ **IT IS NEVER CALLED WITH `__sched_lock` HELD.** `__sched_lock` is RECURSIVE: a nested
-// `LeaveCriticalSection` decrements the count and RELEASES NOTHING, silently. This call takes the lock itself
-// to hand the awaiter over, and it reaches `__gt_reclaim` and through it the per-callee RELEASER, which can
-// reach `__gt_promise_drop`, whose arms take and release the lock themselves. Under an outer lock a release
-// there is a no-op, and the party it was released for blocks on `EnterCriticalSection` for ever.
+// ⛔⛔⛔ **IT IS NEVER CALLED WITH `__sched_lock` HELD.** `__sched_lock` is RECURSIVE: a nested leave
+// decrements the depth and RELEASES NOTHING, silently. This call takes the lock itself to hand the
+// awaiter over, and it reaches `__gt_reclaim` and through it the per-callee RELEASER, which can
+// reach `__gt_promise_drop`, whose arms take and release the lock themselves. Under an outer lock a
+// release there is a no-op, and the party it was released for blocks on its acquire for ever.
 //
 // **`__gt_owner_done(gt)` — THE CONSUMER's half: the promise is finished with.** It gives back the thread's
 // slot in `__gt_live_count` and adds the consumer ticket; if the runner was already there it performs the
@@ -1723,7 +1723,7 @@ let GtRunQueueHeadLabel = b"__gt_run_queue_head"
 export let GtAllGLabel = b"__gt_allg"
 export let GtAllGLenLabel = b"__gt_allglen"
 let GtAllGCapLabel = b"__gt_allgcap"
-export let GtAllGLockLabel = b"__gt_allg_lock"
+let GtAllGLockLabel = b"__gt_allg_lock"
 
 // ⚠ **A COUNT, NOT A FLAG.** Two green threads of one process can each hold a pin at once — a DAP session
 // and an MCP session in the same compiler — so the hand-off gate is armed while any of them stands and dark
@@ -2348,7 +2348,7 @@ export function gtRuntimeGlobals(usage RuntimeUsage, target Target) returns Data
 	pushRuntimeGlobal(out, label: GtAllGLabel, sharing: MultiMSharing.publishedFromTheLock, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: GtAllGLenLabel, sharing: MultiMSharing.publishedFromTheLock, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: GtAllGCapLabel, sharing: MultiMSharing.underOwnLock, reach: DataReach.walked)
-	pushRuntimeGlobal(out, label: GtAllGLockLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: GtAllGLockLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: GtHoldEpochLabel, sharing: MultiMSharing.lastWriterWins, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: GtRunQueueHeadLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: GtRunQueueTailLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
@@ -2580,7 +2580,6 @@ function buildGtInit(module StdModule)
 	module.appendOp(entry, op: StdOp.osAllocPages(poolRaw, sizeId: emitConst(module, block: entry, value: GtStackPoolHeaderBytes, ids: ids)))
 	let pool = ids.mint()
 	module.appendOp(entry, op: StdOp.call(pool, callee: SlabAssertOsAllocName, args: argsOf(poolRaw)))
-	module.appendOp(entry, op: StdOp.osLockInit(emitFieldAddr(module, block: entry, record: pool, offset: GtStackPoolLockOffset, ids: ids)))
 	emitStoreGlobalWord(module, block: entry, label: GtStackPoolLabel, value: pool, ids: ids)
 
 	module.setTerminator(entry, op: StdOp.retVoid)
@@ -2913,11 +2912,11 @@ function emitGtCasStatus(module StdModule, block IrBlock, gt ValueId, from GtSta
 end 'emitGtCasStatus'
 
 function emitGtRecordLockEnter(module StdModule, block IrBlock, record ValueId, ids ValueMinter)
-	emitLockEnterAt(module, block: block, lock: emitFieldAddr(module, block: block, record: record, offset: GtOffRecordLock as ByteOffset, ids: ids), ids: ids)
+	emitLockEnterAt(module, block: block, lock: emitFieldAddr(module, block: block, record: record, offset: GtOffRecordLock as ByteOffset, ids: ids), kind: RuntimeLockKind.recursive, ids: ids)
 end 'emitGtRecordLockEnter'
 
 function emitGtRecordLockLeave(module StdModule, block IrBlock, record ValueId, ids ValueMinter)
-	emitLockLeaveAt(module, block: block, lock: emitFieldAddr(module, block: block, record: record, offset: GtOffRecordLock as ByteOffset, ids: ids), ids: ids)
+	emitLockLeaveAt(module, block: block, lock: emitFieldAddr(module, block: block, record: record, offset: GtOffRecordLock as ByteOffset, ids: ids), kind: RuntimeLockKind.recursive, ids: ids)
 end 'emitGtRecordLockLeave'
 
 function emitGtStrandClaimLost(module StdModule, block IrBlock, owner ValueId, ids ValueMinter) returns ValueId
@@ -3417,7 +3416,7 @@ export function emitGtAllGAppend(module StdModule, func IrFunction, cur IrBlock,
 	var store = module.addBlock(func, label: b"allgstore", heat: BlockHeat.normal)
 	var done = module.addBlock(func, label: b"allgdone", heat: BlockHeat.normal)
 
-	emitLockWordEnter(module, block: cur, label: GtAllGLockLabel, ids: ids)
+	emitLockWordEnter(module, block: cur, label: GtAllGLockLabel, kind: RuntimeLockKind.exclusive, ids: ids)
 	let len = emitLoadAcquireGlobalWord(module, block: cur, label: GtAllGLenLabel, ids: ids)
 	let cap = emitLoadGlobalWord(module, block: cur, label: GtAllGCapLabel, ids: ids)
 	emitBranchOnCompareValues(module, block: cur, a: len, pred: StdCmpPred.ge, b: cap, whenTrue: grow, whenFalse: store, ids: ids)
@@ -3459,7 +3458,7 @@ export function emitGtAllGAppend(module StdModule, func IrFunction, cur IrBlock,
 	emitStoreReleaseGlobalWord(module, block: store, label: GtAllGLenLabel, value: grown, ids: ids)
 	module.setTerminator(store, op: StdOp.branch(done.id))
 
-	emitLockWordLeave(module, block: done, label: GtAllGLockLabel, ids: ids)
+	emitLockWordLeave(module, block: done, label: GtAllGLockLabel, kind: RuntimeLockKind.exclusive, ids: ids)
 	return done
 end 'emitGtAllGAppend'
 
@@ -6696,8 +6695,8 @@ function requireStackPoolGeometry()
 		panic("requireStackPoolGeometry: the pool's largest class is {GtStackPoolMaxBytes} bytes but the adaptive seed may reach {GtSeedMaxBytes} — a seed above the pool would take the unpooled road on every spawn")
 	end 'maxDrifted'
 
-	if (GtStackPoolLockOffset as FullRangeInt) + OsLockBytes > GtStackPoolHeaderBytes 'headerTooSmall'
-		panic("requireStackPoolGeometry: the pool header needs {(GtStackPoolLockOffset as FullRangeInt) + OsLockBytes} bytes but is laid in {GtStackPoolHeaderBytes}")
+	if (GtStackPoolLockOffset as FullRangeInt) + ExclusiveLockBytes > GtStackPoolHeaderBytes 'headerTooSmall'
+		panic("requireStackPoolGeometry: the pool header needs {(GtStackPoolLockOffset as FullRangeInt) + ExclusiveLockBytes} bytes but is laid in {GtStackPoolHeaderBytes}")
 	end 'headerTooSmall'
 
 	if GtStackPoolChunkBytes < GtStackPoolMaxBytes 'chunkTooSmall'
@@ -6737,9 +6736,9 @@ function emitGtStackPoolLock(module StdModule, block IrBlock, pool ValueId, held
 	let lock = emitFieldAddr(module, block: block, record: pool, offset: GtStackPoolLockOffset, ids: ids)
 
 	if held 'enter'
-		module.appendOp(block, op: StdOp.osLockEnter(lock))
+		emitLockEnterAt(module, block: block, lock: lock, kind: RuntimeLockKind.pool, ids: ids)
 	end 'enter' else 'leave'
-		module.appendOp(block, op: StdOp.osLockLeave(lock))
+		emitLockLeaveAt(module, block: block, lock: lock, kind: RuntimeLockKind.pool, ids: ids)
 	end 'leave'
 end 'emitGtStackPoolLock'
 

@@ -86,40 +86,44 @@ data {
   __sched_arena_limit@272 = i64 0
   __gt_records_carved@280 = i64 0
   __gt_gfree_lock@288 = i64 0
-  __maxon_registry_lock@296 = i64 0
-  __sched_npidle@304 = i64 0
-  __sched_runq_size@312 = i64 0
-  __sched_global_pushes@320 = i64 0
-  __sched_timer_scan_steps@328 = i64 0
-  __sched_mcount@336 = i64 0
-  __sched_nmidle@344 = i64 0
-  __sched_main_m@352 = i64 0
-  __sched_phase@360 = i64 0
-  __sched_lastpoll@368 = i64 0
-  __sched_poll_until@376 = i64 0
-  __sched_regain_head@384 = i64 0
-  __np_poller@392 = i64 0
-  __np_break@400 = i64 0
-  __np_wake_sig@408 = i64 0
-  __np_pd_table@416 = i64 0
-  __np_pd_cap@424 = i64 0
-  __np_waiters@432 = i64 0
-  __sched_num_procs@440 = i64 0
-  __sched_shutdown_flag@448 = i64 0
-  __sched_lock@456 = i64 0
-  __sched_lock_depth_sink@464 = i64 0
-  __sched_nmspinning@472 = i64 0
-  __sched_needspinning@480 = i64 0
-  __sched_sysmon_event@488 = i64 0
-  __sched_sysmon_wait@496 = i64 0
-  __sched_timer_starts@504 = i64 0
-  __mrt_envp@512 = i64 0
-  __mrt_signal_stack_bytes@520 = i64 0
-  __mrt_tls_next_key@528 = i64 0
-  __slab_arena_list@536 = i64 0
-  __slab_arena_map_l1@544 = i64 0
-  __slab_state@552 = i64 0
-  __mrt_program_started@560 = i8 0
+  __gt_gfree_lock_owner@296 = i64 0
+  __gt_gfree_lock_depth@304 = i64 0
+  __sched_npidle@312 = i64 0
+  __sched_runq_size@320 = i64 0
+  __sched_global_pushes@328 = i64 0
+  __sched_timer_scan_steps@336 = i64 0
+  __sched_mcount@344 = i64 0
+  __sched_nmidle@352 = i64 0
+  __sched_main_m@360 = i64 0
+  __sched_phase@368 = i64 0
+  __sched_lastpoll@376 = i64 0
+  __sched_poll_until@384 = i64 0
+  __sched_regain_head@392 = i64 0
+  __np_poller@400 = i64 0
+  __np_break@408 = i64 0
+  __np_wake_sig@416 = i64 0
+  __np_pd_table@424 = i64 0
+  __np_pd_cap@432 = i64 0
+  __np_waiters@440 = i64 0
+  __sched_num_procs@448 = i64 0
+  __sched_ncpu@456 = i64 0
+  __sched_shutdown_flag@464 = i64 0
+  __sched_lock@472 = i64 0
+  __sched_lock_owner@480 = i64 0
+  __sched_lock_depth@488 = i64 0
+  __sched_lock_depth_sink@496 = i64 0
+  __sched_nmspinning@504 = i64 0
+  __sched_needspinning@512 = i64 0
+  __sched_sysmon_event@520 = i64 0
+  __sched_sysmon_wait@528 = i64 0
+  __sched_timer_starts@536 = i64 0
+  __mrt_envp@544 = i64 0
+  __mrt_signal_stack_bytes@552 = i64 0
+  __mrt_tls_next_key@560 = i64 0
+  __slab_arena_list@568 = i64 0
+  __slab_arena_map_l1@576 = i64 0
+  __slab_state@584 = i64 0
+  __mrt_program_started@592 = i8 0
 }
 
 func @main {
@@ -178,7 +182,7 @@ func @__np_child_open {
     x64.cmpRegImm32 r12, 0
     x64.jcc greaterEqual, npchadopt
   npfailed:
-    x64.movRegImm32 rcx, 9
+    x64.movRegImm32 rcx, 11
     x64.movRegReg rdx, rbx
     x64.movRegReg rax, r12
     x64.callDirect __np_fail
@@ -243,37 +247,41 @@ data {
   __sched_arena_limit@272 = i64 0
   __gt_records_carved@280 = i64 0
   __gt_gfree_lock@288 = i64 0
-  __maxon_registry_lock@296 = i64 0
-  __sched_npidle@304 = i64 0
-  __sched_runq_size@312 = i64 0
-  __sched_global_pushes@320 = i64 0
-  __sched_timer_scan_steps@328 = i64 0
-  __sched_mcount@336 = i64 0
-  __sched_nmidle@344 = i64 0
-  __sched_main_m@352 = i64 0
-  __sched_phase@360 = i64 0
-  __sched_lastpoll@368 = i64 0
-  __sched_poll_until@376 = i64 0
-  __sched_regain_head@384 = i64 0
-  __np_poller@392 = i64 0
-  __np_break@400 = i64 0
-  __np_wake_sig@408 = i64 0
-  __np_pd_table@416 = i64 0
-  __np_pd_cap@424 = i64 0
-  __np_waiters@432 = i64 0
-  __sched_num_procs@440 = i64 0
-  __sched_shutdown_flag@448 = i64 0
-  __sched_lock@456 = i64 0
-  __sched_lock_depth_sink@464 = i64 0
-  __sched_nmspinning@472 = i64 0
-  __sched_needspinning@480 = i64 0
-  __sched_sysmon_event@488 = i64 0
-  __sched_sysmon_wait@496 = i64 0
-  __sched_timer_starts@504 = i64 0
-  __slab_arena_list@512 = i64 0
-  __slab_arena_map_l1@520 = i64 0
-  __slab_state@528 = i64 0
-  __mrt_program_started@536 = i8 0
+  __gt_gfree_lock_owner@296 = i64 0
+  __gt_gfree_lock_depth@304 = i64 0
+  __sched_npidle@312 = i64 0
+  __sched_runq_size@320 = i64 0
+  __sched_global_pushes@328 = i64 0
+  __sched_timer_scan_steps@336 = i64 0
+  __sched_mcount@344 = i64 0
+  __sched_nmidle@352 = i64 0
+  __sched_main_m@360 = i64 0
+  __sched_phase@368 = i64 0
+  __sched_lastpoll@376 = i64 0
+  __sched_poll_until@384 = i64 0
+  __sched_regain_head@392 = i64 0
+  __np_poller@400 = i64 0
+  __np_break@408 = i64 0
+  __np_wake_sig@416 = i64 0
+  __np_pd_table@424 = i64 0
+  __np_pd_cap@432 = i64 0
+  __np_waiters@440 = i64 0
+  __sched_num_procs@448 = i64 0
+  __sched_ncpu@456 = i64 0
+  __sched_shutdown_flag@464 = i64 0
+  __sched_lock@472 = i64 0
+  __sched_lock_owner@480 = i64 0
+  __sched_lock_depth@488 = i64 0
+  __sched_lock_depth_sink@496 = i64 0
+  __sched_nmspinning@504 = i64 0
+  __sched_needspinning@512 = i64 0
+  __sched_sysmon_event@520 = i64 0
+  __sched_sysmon_wait@528 = i64 0
+  __sched_timer_starts@536 = i64 0
+  __slab_arena_list@544 = i64 0
+  __slab_arena_map_l1@552 = i64 0
+  __slab_state@560 = i64 0
+  __mrt_program_started@568 = i8 0
 }
 
 func @main {
@@ -325,7 +333,7 @@ func @__np_child_open {
     arm64.cmp x20, 0
     arm64.b.ge npchadopt
   npfailed:
-    arm64.movImm x0, 9
+    arm64.movImm x0, 11
     arm64.movRegReg x1, x19
     arm64.movRegReg x2, x20
     arm64.bl __np_fail
@@ -388,40 +396,44 @@ data {
   __sched_arena_limit@272 = i64 0
   __gt_records_carved@280 = i64 0
   __gt_gfree_lock@288 = i64 0
-  __maxon_registry_lock@296 = i64 0
-  __sched_npidle@304 = i64 0
-  __sched_runq_size@312 = i64 0
-  __sched_global_pushes@320 = i64 0
-  __sched_timer_scan_steps@328 = i64 0
-  __sched_mcount@336 = i64 0
-  __sched_nmidle@344 = i64 0
-  __sched_main_m@352 = i64 0
-  __sched_phase@360 = i64 0
-  __sched_lastpoll@368 = i64 0
-  __sched_poll_until@376 = i64 0
-  __sched_regain_head@384 = i64 0
-  __np_poller@392 = i64 0
-  __np_break@400 = i64 0
-  __np_wake_sig@408 = i64 0
-  __np_pd_table@416 = i64 0
-  __np_pd_cap@424 = i64 0
-  __np_waiters@432 = i64 0
-  __sched_num_procs@440 = i64 0
-  __sched_shutdown_flag@448 = i64 0
-  __sched_lock@456 = i64 0
-  __sched_lock_depth_sink@464 = i64 0
-  __sched_nmspinning@472 = i64 0
-  __sched_needspinning@480 = i64 0
-  __sched_sysmon_event@488 = i64 0
-  __sched_sysmon_wait@496 = i64 0
-  __sched_timer_starts@504 = i64 0
-  __mrt_envp@512 = i64 0
-  __mrt_signal_stack_bytes@520 = i64 0
-  __mrt_tls_next_key@528 = i64 0
-  __slab_arena_list@536 = i64 0
-  __slab_arena_map_l1@544 = i64 0
-  __slab_state@552 = i64 0
-  __mrt_program_started@560 = i8 0
+  __gt_gfree_lock_owner@296 = i64 0
+  __gt_gfree_lock_depth@304 = i64 0
+  __sched_npidle@312 = i64 0
+  __sched_runq_size@320 = i64 0
+  __sched_global_pushes@328 = i64 0
+  __sched_timer_scan_steps@336 = i64 0
+  __sched_mcount@344 = i64 0
+  __sched_nmidle@352 = i64 0
+  __sched_main_m@360 = i64 0
+  __sched_phase@368 = i64 0
+  __sched_lastpoll@376 = i64 0
+  __sched_poll_until@384 = i64 0
+  __sched_regain_head@392 = i64 0
+  __np_poller@400 = i64 0
+  __np_break@408 = i64 0
+  __np_wake_sig@416 = i64 0
+  __np_pd_table@424 = i64 0
+  __np_pd_cap@432 = i64 0
+  __np_waiters@440 = i64 0
+  __sched_num_procs@448 = i64 0
+  __sched_ncpu@456 = i64 0
+  __sched_shutdown_flag@464 = i64 0
+  __sched_lock@472 = i64 0
+  __sched_lock_owner@480 = i64 0
+  __sched_lock_depth@488 = i64 0
+  __sched_lock_depth_sink@496 = i64 0
+  __sched_nmspinning@504 = i64 0
+  __sched_needspinning@512 = i64 0
+  __sched_sysmon_event@520 = i64 0
+  __sched_sysmon_wait@528 = i64 0
+  __sched_timer_starts@536 = i64 0
+  __mrt_envp@544 = i64 0
+  __mrt_signal_stack_bytes@552 = i64 0
+  __mrt_tls_next_key@560 = i64 0
+  __slab_arena_list@568 = i64 0
+  __slab_arena_map_l1@576 = i64 0
+  __slab_state@584 = i64 0
+  __mrt_program_started@592 = i8 0
 }
 
 func @main {
@@ -473,7 +485,7 @@ func @__np_child_open {
     arm64.cmp x20, 0
     arm64.b.ge npchadopt
   npfailed:
-    arm64.movImm x0, 9
+    arm64.movImm x0, 11
     arm64.movRegReg x1, x19
     arm64.movRegReg x2, x20
     arm64.bl __np_fail

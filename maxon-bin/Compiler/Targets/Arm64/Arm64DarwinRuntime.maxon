@@ -229,6 +229,18 @@ end 'buildArm64DarwinThreadCpuChunk'
 let DarwinThreadCpuSlots = 1
 
 // ==========================================================================
+// mrt_host_thread_yield()
+// ==========================================================================
+
+function buildArm64DarwinThreadYieldChunk() returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginFunction(0)
+
+	arm64DarwinCallImport(asm, slot: OsImportSlot.schedYield)
+
+	return asm.finishFunction(HostThreadYieldName)
+end 'buildArm64DarwinThreadYieldChunk'
+
+// ==========================================================================
 // mrt_host_sleep_ms(x0 = milliseconds), mrt_host_netpoll_sleep(x0 = microseconds)
 // ==========================================================================
 
@@ -524,17 +536,6 @@ let DarwinDefaultAttributes = 0
 // `pthread_join(thread, NULL)` — a NULL `void**` discards the thread's exit value, which this scheduler
 // never reads: a worker M's return is the loop ending, not a result.
 let DarwinDiscardThreadResult = 0
-
-// ⭐ **THE LOCK REGION THE Std TIER ALLOCATES MUST HOLD A DARWIN MUTEX.** `osLockInit`'s caller slab-allocates
-// `OsLockBytes` and hands the pointer over; `pthread_mutex_init` writes its struct into whatever it is given.
-// The Std constant is sized for the widest lock across the targets this compiler serves and says so, but a
-// COMMENT cannot keep that true — so this is the check, at chunk-build time, on the lane that would be
-// corrupted.
-function assertDarwinLockFits()
-	if OsLockBytes < DarwinPthreadMutexBytes 'tooSmall'
-		panic("Arm64DarwinRuntime: `OsLockBytes` is {OsLockBytes} but a Darwin `pthread_mutex_t` is {DarwinPthreadMutexBytes} bytes — `osLockInit` would initialise a mutex into a region {DarwinPthreadMutexBytes - OsLockBytes} bytes too small and corrupt whatever the allocator placed after it, with no diagnostic anywhere")
-	end 'tooSmall'
-end 'assertDarwinLockFits'
 
 // `add Xd, Xn, #<field offset>` — the address of a sub-struct inside a wait object, which every pthread call
 // below takes rather than the object itself. Spelled once because the mutex and the condvar are addressed
@@ -902,20 +903,16 @@ end 'buildArm64DarwinWaitCloseChunk'
 
 // `InitializeCriticalSection` — initialise a mutex into the region the caller allocated.
 //
-// ⛔⛔ **IT MUST BE RECURSIVE, AND THAT WAS MEASURED AS A HANG RATHER THAN READ OUT OF A MANUAL.** A Win32
-// `CRITICAL_SECTION` is re-entrant by its owning thread — `SchedRuntime`'s own header relies on it in so many
-// words (*"a nested `LeaveCriticalSection` releases nothing"*) — while `pthread_mutex_init(m, NULL)` gives
-// `PTHREAD_MUTEX_DEFAULT`, i.e. `NORMAL`, whose SECOND lock by the owning thread DEADLOCKS. The first
-// arm64-macOS `async` build hung in `__slab_refill` → `_pthread_mutex_firstfit_lock_wait`, on the slab's own
-// lock taken twice down one call chain. So the region is initialised `PTHREAD_MUTEX_RECURSIVE`, which is what
-// the op has always meant.
+// ⛔⛔ **IT MUST BE RECURSIVE.** A Win32 `CRITICAL_SECTION` is re-entrant by its owning thread, and
+// `__Raw.osLockEnter` means the same on every lane, while `pthread_mutex_init(m, NULL)` gives
+// `PTHREAD_MUTEX_DEFAULT`, i.e. `NORMAL`, whose SECOND lock by the owning thread DEADLOCKS. So the
+// region is initialised `PTHREAD_MUTEX_RECURSIVE`.
 //
 // ⚠ **THE ATTRIBUTE OBJECT IS A FRAME LOCAL AND IS DESTROYED**, which is what makes this a chunk rather than
 // the inline sequence it otherwise looks like: `pthread_mutexattr_t` is 16 bytes (MEASURED on this host), so
 // it needs frame slots, and the region pointer has to outlive three calls to reach the `pthread_mutex_init`
 // at the end. Only a frame holds both.
 function buildArm64DarwinLockInitChunk() returns FunctionCodeChunk
-	assertDarwinLockFits()
 	let SlotRegion = 0 as StackSize
 	let SlotAttr = 1
 	var asm = Arm64RuntimeAsm.beginFunction(SlotAttr + darwinMutexattrSlots())
@@ -2329,17 +2326,17 @@ export function appendArm64DarwinRuntimeChunks(chunks FunctionCodeChunkArray, us
 
 	// ⚠ **THE LOCK IS ONE `pthread_mutex_t` HERE, SO ONLY THE INIT NEEDS A CHUNK** — the enter and the leave
 	// lower to bare import calls, which is why this lane's lock band is one chunk where a Linux lane's is three.
-	// It rides a gate of its own because its producer set is not the host-object band's: the allocator's
-	// slow-path lock reaches it in every allocating program.
-	if posixUsesHostLock(usage) 'hostLock'
+	if usage.usesRawOsLock 'rawOsLock'
 		chunks.push(buildArm64DarwinLockInitChunk())
-	end 'hostLock'
+	end 'rawOsLock'
 
 	// The thread sleep and the poller ride `usesGt`: the bounded child wait steps on the sleep and
 	// `__sched_init_procs` opens the poller, both installed unconditionally by `installGtRuntime`. Splitting
 	// them here would be a second reachability analysis that could disagree with the real one.
 	if usage.usesGt 'schedulerClocks'
 		chunks.push(buildArm64DarwinSleepChunk(HostSleepMsName, unit: PosixTimeUnit.milliseconds))
+		chunks.push(buildArm64PosixSpinPauseChunk())
+		chunks.push(buildArm64DarwinThreadYieldChunk())
 		chunks.push(buildArm64DarwinNetpollOpenChunk())
 		chunks.push(buildArm64DarwinNetpollUserEventChunk(HostNetpollOpenBreakName, flags: DarwinEvAdd + DarwinEvClear, fflags: 0, queue: Arm64Register.x0, answersQueue: true))
 		chunks.push(buildArm64DarwinNetpollWaitChunk())

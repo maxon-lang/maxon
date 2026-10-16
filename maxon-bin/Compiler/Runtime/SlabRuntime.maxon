@@ -311,19 +311,9 @@ let SlabStateLockDepthSinkOffset = SlabStateSchedulerOffset + WordBytes
 // ⭐⭐ **THE GLOBAL SLOW-PATH LOCK LIVES *HERE*, IN THE STATE REGION, AND NOT IN A `.data` WORD —
 // WHICH IS A `TargetIr`-PIN ARGUMENT, NOT A TIDINESS ONE.** Every `TargetIr` pin renders the whole
 // `data { … }` table with each label's byte OFFSET, so one new `.data` word shifts every label
-// after it and re-mints **every heap program's pin**. A CRITICAL_SECTION reached through the
-// pointer `__slab_state` already holds costs the image nothing and the pins nothing.
-//
-// ⚠ **IT IS INITIALISED INSIDE `__slab_state_base`'s COMMIT ARM, WHICH IS THE ONE PLACE THAT PROVABLY RUNS
-// BEFORE A SECOND THREAD EXISTS.** `__gt_init` allocates the scheduler's own lock and its P array through
-// `__slab_alloc` before `__sched_init_procs` publishes a TLS slot, so the region — and this lock — are
-// committed by the main thread while it is still the only one.
-//
-// `OsLockBytes` is the MAXIMUM over the targets this compiler serves (64, a Darwin `pthread_mutex_t`)
-// rather than any one target's own lock size, and `MmRuntime.OsLockBytes` carries why: making it
-// target-dependent would fork THIS offset, a struct layout every allocation in the program is addressed
-// through, to save 24 bytes per lock. On wasm the lock ops lower to nothing
-// (`HostFacility.hostMutex`), so the bytes are reserved and never touched.
+// after it and re-mints **every heap program's pin**. A recursive lock word inside the region
+// `__slab_state` already points at costs the image nothing and the pins nothing, and the region's
+// zeroing is what makes it a free lock.
 //
 // ⛔⛔ **THE LOCK ORDER IS `__sched_lock` → `__slab_lock`, AND IT HOLDS BECAUSE THIS SIDE NEVER TAKES THE
 // OTHER ONE.** The scheduler allocates while holding its run-queue lock (`__gt_spawn`, `__gt_init`), so that
@@ -332,7 +322,8 @@ let SlabStateLockDepthSinkOffset = SlabStateSchedulerOffset + WordBytes
 // makes the allocator call into `GtRuntime` while holding this lock introduces a deadlock**, which is why
 // the direction is written down here rather than left to be re-derived.
 let SlabStateLockOffset = SlabStateLockDepthSinkOffset + WordBytes
-let SlabStateMcentralOffset = SlabStateLockOffset + (OsLockBytes as ByteOffset)
+let SlabStateLockBytes = RecursiveLockBytes
+let SlabStateMcentralOffset = SlabStateLockOffset + (SlabStateLockBytes as ByteOffset)
 
 // ⭐⭐ **THE TRAFFIC COLUMNS — six per mcache row, past the mcache.** A row's columns have the row's
 // writer: the P whose id clamps to it steps them with a plain add, and the raw row — every P-less thread
@@ -618,8 +609,8 @@ end 'installSlabRuntime'
 
 // The one `.data` slot the object layer owns. `runtime/SlabRuntime.maxon`'s `__slab_state_base` is its only
 // reader, so it is laid out exactly where that body survives (`DataReach.walked`). Its one write is the
-// process's first allocation, which precedes any scheduler (that body's `osLockInit` argument), so it is
-// sealed before a worker M can exist.
+// process's first allocation, which precedes any scheduler, so it is sealed before a worker M can
+// exist.
 export function slabRuntimeGlobals() returns DataSectionEntryArray
 	var out = DataSectionEntryArray.create()
 	pushRuntimeGlobal(out, label: SlabStateLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
@@ -724,7 +715,7 @@ function slabTierPins() returns TierGeometryPinArray
 	out.push(TierGeometryPin.create("the scheduler word", here: SlabStateSchedulerOffset as FullRangeInt, named: "SlabStateSchedulerOffset"))
 	out.push(TierGeometryPin.create("the lock-depth sink", here: SlabStateLockDepthSinkOffset as FullRangeInt, named: "SlabStateLockDepthSinkOffset"))
 	out.push(TierGeometryPin.create("the slow-path lock", here: SlabStateLockOffset as FullRangeInt, named: "SlabStateLockOffset"))
-	out.push(TierGeometryPin.create("an OS lock's width", here: OsLockBytes, named: "OsLockBytes"))
+	out.push(TierGeometryPin.create("the slow-path lock's width", here: SlabStateLockBytes, named: "SlabStateLockBytes"))
 
 	out.push(TierGeometryPin.create("the size-class count", here: slabClassCount() as FullRangeInt, named: "SlabClassCount"))
 	out.push(TierGeometryPin.create("the shard count", here: SlabMaxShards, named: "SlabMaxShards"))
@@ -1376,17 +1367,17 @@ function emitSlabLockAddr(module StdModule, block IrBlock, state ValueId, ids Va
 	return emitBin(module, block: block, a: state, b: offset, opcode: StdBinOpcode.add, ids: ids)
 end 'emitSlabLockAddr'
 
-// The allocator's slow path is as unstoppable as the scheduler's critical sections: a thread stopped
-// holding this lock would carry it into a park and never release it. Same word, same order as
-// `SchedRuntime.emitSchedLockEnter` — up before the acquire, down after the release. On wasm the lock ops
-// lower to nothing (`HostFacility.hostMutex`) and the depth step lands on the sink.
+// The allocator's slow path is as unstoppable as the scheduler's critical sections: a thread
+// stopped holding this lock would carry it into a park and never release it. Same word, same order
+// as `SchedRuntime.emitSchedLockEnter` — up before the acquire, down after the release. On wasm the
+// lock marks are dropped (`expandRuntimeLocks`) and the depth step lands on the sink.
 function emitSlabLockEnter(module StdModule, block IrBlock, state ValueId, depthAddr ValueId, ids ValueMinter)
 	emitStepLockDepthAt(module, block: block, depthAddr: depthAddr, delta: OneMore, ids: ids)
-	module.appendOp(block, op: StdOp.osLockEnter(emitSlabLockAddr(module, block: block, state: state, ids: ids)))
+	emitRuntimeLockMark(module, block: block, lock: emitSlabLockAddr(module, block: block, state: state, ids: ids), mark: RuntimeLockMark.enterRecursive, ids: ids)
 end 'emitSlabLockEnter'
 
 function emitSlabLockLeave(module StdModule, block IrBlock, state ValueId, depthAddr ValueId, ids ValueMinter)
-	module.appendOp(block, op: StdOp.osLockLeave(emitSlabLockAddr(module, block: block, state: state, ids: ids)))
+	emitRuntimeLockMark(module, block: block, lock: emitSlabLockAddr(module, block: block, state: state, ids: ids), mark: RuntimeLockMark.leaveRecursive, ids: ids)
 	emitStepLockDepthAt(module, block: block, depthAddr: depthAddr, delta: OneFewer, ids: ids)
 end 'emitSlabLockLeave'
 
@@ -1648,7 +1639,7 @@ end 'emitSlabRemotePush'
 // ⭐ **THE HOT ARM IS FOUR OPS AND THE COLD ONE IS A CALL, WHICH IS THE WHOLE OF WHY THIS IS NOT A SECOND
 // COPY OF THE BODY.** The region is committed by the FIRST allocation a process makes and never released,
 // so every subsequent allocation and every free reads a non-zero word and is done. Reproducing the commit
-// here — the arena request, the `memFill`, the `osLockInit`, the publishing store, in the order that
+// here — the arena request, the `memFill`, the publishing store, in the order that
 // publishes LAST — would be that sequence written twice, and it is the sequence whose ORDER is the
 // argument. So the cold arm calls `__slab_state_base`, whose body is `runtime/SlabRuntime.maxon` source; it
 // re-reads the word and commits it, and that second read costs one load on the once-per-process path.

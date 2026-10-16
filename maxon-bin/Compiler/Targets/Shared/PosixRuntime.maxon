@@ -125,16 +125,15 @@ export function posixOpensFiles(usage RuntimeUsage) returns bool
 	return usage.usesManagedFile or usage.usesChildPipes or usage.usesManagedSocket
 end 'posixOpensFiles'
 
-// ⭐⭐ **WHO EMITS `StdOp.osLockInit`/`osLockEnter`/`osLockLeave` — the union every POSIX lane lays its lock
-// chunks on.** Three independent producers: the scheduler's run-queue lock (`SchedRuntime`), the DebugStream
-// ring's guard (`DebugStreamRuntime.buildDsInit`), and — the widest — the allocator's slow-path lock, which
-// `runtime/SlabRuntime.maxon`'s `__slab_state_base` initialises on the first allocation any program makes.
-// That last one is tier SOURCE: it is compiled once and spells the op unconditionally, so the bit that
-// answers for it is the bit `SlabRuntime.installSlabRuntime` reads to mint a call into the file at all.
+// ⭐⭐ **WHO TAKES A RUNTIME LOCK — the programs whose main thread maps its Linux slot block first in
+// `mrt_runtime_init`**, because a recursive lock's owner token (`StdOp.osThreadToken`) is read from
+// that block. Three independent producers: the scheduler's locks (`SchedRuntime`), the DebugStream
+// ring's guard (`DebugStreamRuntime.buildDsReserve`), and — the widest — the allocator's slow-path
+// lock (`SlabRuntime.emitSlabLockEnter`), taken in every program that allocates.
 //
-// ⚠ **A GATE NARROWER THAN THE PRODUCER SET IS A LINK FAILURE, NOT A DIAGNOSTIC** — MEASURED one facility
-// over as `arm64ResolveCallFixups: bl to unknown function 'mrt_host_env_read'`, and `HostFacility.hostMutex`
-// is `true` on these lanes only while this union covers every producer.
+// ⚠ **A GATE NARROWER THAN THE PRODUCER SET READS THE TOKEN THROUGH A THREAD POINTER NOTHING SET**
+// — a fault on x64-linux, and on arm64-linux a token of 0, which matches a free lock's empty owner
+// word.
 //
 // ⚠ **ALL THREE POSIX LANES ASK IT AND NONE OWNS IT**, for `posixUsesHostObjects`' reason.
 export function posixUsesHostLock(usage RuntimeUsage) returns bool
@@ -827,6 +826,8 @@ export let HostNetpollWaitName = b"mrt_host_netpoll_wait"
 export let HostNetpollRaiseBreakName = b"mrt_host_netpoll_raise_break"
 export let HostNetpollDrainBreakName = b"mrt_host_netpoll_drain_break"
 export let HostNetpollSleepName = b"mrt_host_netpoll_sleep"
+export let HostSpinPauseName = b"mrt_host_spin_pause"
+export let HostThreadYieldName = b"mrt_host_thread_yield"
 
 // The socket registration — `NetpollVerb.armSource`. One chunk on each POSIX lane: an `epoll_ctl` add on the
 // two Linux ones, a two-element `kevent` changelist on macOS.
@@ -1013,6 +1014,8 @@ export function posixNetpollChunk(verb NetpollVerb) returns ByteArray
 		drainBreak gives HostNetpollDrainBreakName
 		sleepOnTimer or
 		shortSleep gives HostNetpollSleepName
+		spinPause gives HostSpinPauseName
+		yieldThread gives HostThreadYieldName
 		armSource gives HostNetpollArmSourceName
 		openChildSource gives HostNetpollChildOpenName
 		armChildSource gives HostNetpollArmChildName
@@ -1033,11 +1036,13 @@ end 'posixNetpollChunk'
 // `wait`'s fifth (the Windows count out-param) and `sleepOnTimer`'s second (the Windows timer) are unread here.
 export function posixNetpollOperandCount(verb NetpollVerb) returns ParamCount
 	return match verb 'v'
-		openPoller gives 0
+		openPoller or
+		yieldThread gives 0
 		openBreak or
 		drainBreak or
 		sleepOnTimer or
 		shortSleep or
+		spinPause or
 		openChildSource or
 		closeChildSource or
 		armPipeSource gives 1

@@ -104,7 +104,7 @@ function emitHeldOrPanic(module StdModule, func IrFunction, block IrBlock, held 
 	emitBranchOnCompare(module, block: block, value: held, pred: StdCmpPred.eq, against: ReleasedHolder, whenTrue: releasedBlock, whenFalse: live, ids: ids)
 
 	if holdsRegistryLock 'leaveTheLockFirst'
-		emitLockWordLeave(module, block: releasedBlock, label: RegistryLockLabel, ids: ids)
+		emitLockWordLeave(module, block: releasedBlock, label: RegistryLockLabel, kind: RuntimeLockKind.exclusive, ids: ids)
 	end 'leaveTheLockFirst'
 
 	module.appendOp(releasedBlock, op: StdOp.osPanic(released))
@@ -411,7 +411,7 @@ function buildSharedValueBoxDrop(module StdModule)
 end 'buildSharedValueBoxDrop'
 
 function emitLockedSlotHandle(module StdModule, block IrBlock, slot ValueId, ids ValueMinter) returns ValueId
-	emitLockWordEnter(module, block: block, label: RegistryLockLabel, ids: ids)
+	emitLockWordEnter(module, block: block, label: RegistryLockLabel, kind: RuntimeLockKind.exclusive, ids: ids)
 	return emitLoadField(module, block: block, record: slot, offset: SharedValueHolderCellOffset, ids: ids)
 end 'emitLockedSlotHandle'
 
@@ -427,7 +427,7 @@ function buildRegistryServiceCurrent(module StdModule, released ByteArray)
 	let mbox = emitLoadField(module, block: live, record: held, offset: ServiceHandleMailboxOffset, ids: ids)
 	let table = emitLoadField(module, block: live, record: held, offset: InterfaceHandleTableOffset, ids: ids)
 	emitMailboxShareTaken(module, block: live, mbox: mbox, ids: ids)
-	emitLockWordLeave(module, block: live, label: RegistryLockLabel, ids: ids)
+	emitLockWordLeave(module, block: live, label: RegistryLockLabel, kind: RuntimeLockKind.exclusive, ids: ids)
 	module.setTerminator(live, op: StdOp.ret(emitInterfaceHandleBoxHolding(module, block: live, mbox: mbox, table: table, ids: ids)))
 	module.functions.push(func)
 end 'buildRegistryServiceCurrent'
@@ -443,7 +443,7 @@ function buildRegistryServiceRegister(module StdModule, released ByteArray)
 	let replaced = emitLockedSlotHandle(module, block: entry, slot: slot, ids: ids)
 	var live = emitHeldOrPanic(module, func: func, block: entry, held: replaced, released: released, holdsRegistryLock: true, ids: ids)
 	emitStoreField(module, block: live, record: slot, offset: SharedValueHolderCellOffset, value: handle)
-	emitLockWordLeave(module, block: live, label: RegistryLockLabel, ids: ids)
+	emitLockWordLeave(module, block: live, label: RegistryLockLabel, kind: RuntimeLockKind.exclusive, ids: ids)
 	module.appendOp(live, op: StdOp.call(ids.mint(), callee: MboxHandleDropBoxName, args: argsOf(replaced)))
 	module.setTerminator(live, op: StdOp.retVoid)
 	module.functions.push(func)
@@ -455,9 +455,9 @@ function buildRegistryServiceInstall(module StdModule)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 2)
 
-	emitLockWordEnter(module, block: entry, label: RegistryLockLabel, ids: ids)
+	emitLockWordEnter(module, block: entry, label: RegistryLockLabel, kind: RuntimeLockKind.exclusive, ids: ids)
 	emitStoreField(module, block: entry, record: 0, offset: SharedValueHolderCellOffset, value: 1)
-	emitLockWordLeave(module, block: entry, label: RegistryLockLabel, ids: ids)
+	emitLockWordLeave(module, block: entry, label: RegistryLockLabel, kind: RuntimeLockKind.exclusive, ids: ids)
 	module.setTerminator(entry, op: StdOp.retVoid)
 	module.functions.push(func)
 end 'buildRegistryServiceInstall'
@@ -473,7 +473,7 @@ function buildRegistryServiceRelease(module StdModule)
 
 	let held = emitLockedSlotHandle(module, block: entry, slot: slot, ids: ids)
 	emitStoreField(module, block: entry, record: slot, offset: SharedValueHolderCellOffset, value: emitConst(module, block: entry, value: ReleasedHolder, ids: ids))
-	emitLockWordLeave(module, block: entry, label: RegistryLockLabel, ids: ids)
+	emitLockWordLeave(module, block: entry, label: RegistryLockLabel, kind: RuntimeLockKind.exclusive, ids: ids)
 	emitBranchOnCompare(module, block: entry, value: held, pred: StdCmpPred.eq, against: ReleasedHolder, whenTrue: done, whenFalse: dropIt, ids: ids)
 
 	module.appendOp(dropIt, op: StdOp.call(ids.mint(), callee: MboxHandleDropBoxName, args: argsOf(held)))
@@ -502,11 +502,11 @@ function buildRegistryServiceReplace(module StdModule, released ByteArray)
 	emitBranchOnCompareValues(module, block: compareTable, a: emitLoadField(module, block: compareTable, record: held, offset: InterfaceHandleTableOffset, ids: ids), pred: StdCmpPred.eq, b: emitLoadField(module, block: compareTable, record: expected, offset: InterfaceHandleTableOffset, ids: ids), whenTrue: swap, whenFalse: decline, ids: ids)
 
 	emitStoreField(module, block: swap, record: slot, offset: SharedValueHolderCellOffset, value: handle)
-	emitLockWordLeave(module, block: swap, label: RegistryLockLabel, ids: ids)
+	emitLockWordLeave(module, block: swap, label: RegistryLockLabel, kind: RuntimeLockKind.exclusive, ids: ids)
 	module.appendOp(swap, op: StdOp.call(ids.mint(), callee: MboxHandleDropBoxName, args: argsOf(held)))
 	module.setTerminator(swap, op: StdOp.ret(emitConst(module, block: swap, value: PublishedAnswer, ids: ids)))
 
-	emitLockWordLeave(module, block: decline, label: RegistryLockLabel, ids: ids)
+	emitLockWordLeave(module, block: decline, label: RegistryLockLabel, kind: RuntimeLockKind.exclusive, ids: ids)
 	module.appendOp(decline, op: StdOp.call(ids.mint(), callee: MboxHandleDropBoxName, args: argsOf(handle)))
 	module.setTerminator(decline, op: StdOp.ret(emitConst(module, block: decline, value: DeclinedAnswer, ids: ids)))
 	module.functions.push(func)

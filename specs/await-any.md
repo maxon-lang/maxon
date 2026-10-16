@@ -94,11 +94,11 @@ holder takes the locks in that one order, and a completer only ever holds its ow
 each wait on a lock the other has: no deadlock, whatever the array's order and however many selects share a
 promise. Sorting by address rather than by slot index is what makes the order one order across arrays.
 
-⚠ **NO GREEN THREAD HOLDS A PROMISE LOCK ACROSS A PARK.** Both platform locks are **recursive on the wrong
-identity** (a Win32 `CRITICAL_SECTION` is recursive per OS THREAD) while several green threads share one —
-so a green thread parking while holding one would let a different green thread on the same M take the
-recursive path straight into the critical section. Not a deadlock; silent corruption. So the
-registration, the completer's hand-over and the withdrawal each take their locks and release them with no
+⚠ **NO GREEN THREAD HOLDS A PROMISE LOCK ACROSS A PARK.** A promise lock is **recursive on the wrong
+identity** (its owner token is the OS THREAD's own block) while several green threads share one —
+so a green thread parking while holding one would let a different green thread on the same M find its
+own token in the owner slot, step the depth, and enter the hold the parked thread is still inside. Not a
+deadlock; silent corruption. So the registration, the completer's hand-over and the withdrawal each take their locks and release them with no
 switch in between — the registration on a machine's scheduler context after the park's switch, the other
 two in straight-line code.
 

@@ -1008,6 +1008,15 @@ export enum NetpollVerb
 	// of this thread's quantum (`SwitchToThread`) and the operand is unread.
 	shortSleep
 
+	// `(pauses) -> nothing`. Spin the calling CPU through `pauses` spin hints (`pause`, `yield`)
+	// without entering the kernel. ⚠ The loop decrements before it tests, so a count of 0 spins 2^64
+	// times.
+	spinPause
+
+	// `() -> nothing`. Give up the rest of the calling OS thread's quantum (`sched_yield`,
+	// `SwitchToThread`). The green thread on it is not parked and keeps its M.
+	yieldThread
+
 	// ⭐⭐ **`(poller, fd) -> the host's raw answer`. REGISTER A SOCKET WITH THE POLLER, IN BOTH DIRECTIONS AT
 	// ONCE.** An `epoll_ctl(EPOLL_CTL_ADD)` whose `epoll_data` is the descriptor itself, a two-element `kevent`
 	// changelist adding `EVFILT_READ` and `EVFILT_WRITE` `EV_CLEAR`, or a `CreateIoCompletionPort` joining the
@@ -1789,18 +1798,11 @@ export union StdOp
 	// One VALUE operand (the CRITICAL_SECTION region), no result.
 	osLockInit(lockPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
 
-	// `osLockEnter(lockPtr)` = `EnterCriticalSection(lockPtr)` — the run-queue guard's acquire. One VALUE
-	// operand, no result.
+	// `osLockEnter(lockPtr)` = `EnterCriticalSection(lockPtr)`. One VALUE operand, no result.
 	osLockEnter(lockPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
 
 	// `osLockLeave(lockPtr)` = `LeaveCriticalSection(lockPtr)`. One VALUE operand, no result.
 	osLockLeave(lockPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
-
-	// `osLockDestroy(lockPtr)` = `DeleteCriticalSection(lockPtr)`, owed before a lock region is freed: a
-	// contended section owns a lazily created wait event that leaks otherwise, and one carrying DebugInfo
-	// corrupts the process lock list once its bytes are reused. `pthread_mutex_destroy` on macOS; nothing
-	// on Linux, whose futex lock is three plain words. One VALUE operand, no result.
-	osLockDestroy(lockPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
 
 	// `osReadOverlapped(handle, buf, cap, bytesOutPtr, ovl)` = `ReadFile(handle, buf, cap, bytesOutPtr, ovl)` — issue the
 	// overlapped read. FIVE args (`ovl` is the 5th, a stack arg); DEFINES the BOOL result (captured from RAX): nonzero =
@@ -2747,6 +2749,12 @@ export union StdOp
 	// read the gate's flags instead of the compare's.
 	tlsSlotLoad(resultId ValueId, tebOffsetId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: false, isCall: false, clobbersFlags: true, isCmp: false}
 
+	// `osThreadToken() -> word`, nonzero and unique to the calling OS thread while it lives: the TEB's
+	// self pointer on Windows, the slot block's self word on x64-linux, the thread pointer on arm64. A
+	// recursive runtime lock's owner word holds it. Not pure, for `tlsSlotLoad`'s reason: a green
+	// thread resumed on another M must read that M's token.
+	osThreadToken(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
+
 	// **`osSetEvent(handle)`** = `SetEvent(handle)` — signal an auto-reset event. The wake half of the
 	// worker park's Dekker pair, and the twin of the `osWaitHandle` a parked worker blocks in.
 	//
@@ -3173,11 +3181,11 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 		osLockInit or
 		osLockEnter or
 		osLockLeave or
-		osLockDestroy or
 
 		// ⛔ The waits are the scheduler waiting for its own work: an idle machine's park and
 		// `__sched_syscall_regain`'s wait go through them holding no processor, so there is none for
-		// `__sysmon` to take.
+		// `__sysmon` to take. A runtime lock's contended sleep is one too, and the slab lock sleeps
+		// there with `__sched_lock` held.
 		osWaitHandle or
 
 		// ⛔ The poller is the scheduler waiting for its own work too: its blocking `wait` is made by a
@@ -3258,6 +3266,7 @@ export function stdOpSyscallClassOf(op StdOp) returns SyscallClass
 		tlsAlloc or
 		tlsSetValue or
 		tlsSlotLoad or
+		osThreadToken or
 
 		// The unmap tears a mapping down and the unpublish removes a directory entry; neither waits on
 		// anything, which is `osCloseHandle`'s position.
@@ -3399,7 +3408,6 @@ export function stdOpLabelKindOf(op StdOp) returns StdOpLabelKind
 		osLockInit or
 		osLockEnter or
 		osLockLeave or
-		osLockDestroy or
 		osReadOverlapped or
 		osLastError or
 		osProcessSpawnInherit or
@@ -3462,6 +3470,7 @@ export function stdOpLabelKindOf(op StdOp) returns StdOpLabelKind
 		tlsAlloc or
 		tlsSetValue or
 		tlsSlotLoad or
+		osThreadToken or
 		osSetEvent or
 		osEnterBackgroundPriority or
 		osFileOpenWriteExecutable or
@@ -3839,7 +3848,6 @@ export function classifyArithOperands(op StdOp, operands StdArithOperands)
 		osLockInit or
 		osLockEnter or
 		osLockLeave or
-		osLockDestroy or
 		osReadOverlapped or
 		osLastError or
 		osProcessSpawnInherit or
@@ -3899,6 +3907,7 @@ export function classifyArithOperands(op StdOp, operands StdArithOperands)
 		tlsAlloc or
 		tlsSetValue or
 		tlsSlotLoad or
+		osThreadToken or
 		osSetEvent or
 		osEnterBackgroundPriority or
 		osFileOpenWriteExecutable or
@@ -4090,7 +4099,6 @@ export function classifyAccessOperands(op StdOp, access StdAccessOperands)
 		osLockInit or
 		osLockEnter or
 		osLockLeave or
-		osLockDestroy or
 		osReadOverlapped or
 		osLastError or
 		osProcessSpawnInherit or
@@ -4148,6 +4156,7 @@ export function classifyAccessOperands(op StdOp, access StdAccessOperands)
 		tlsAlloc or
 		tlsSetValue or
 		tlsSlotLoad or
+		osThreadToken or
 		osSetEvent or
 		osEnterBackgroundPriority or
 		osFileOpenWriteExecutable or
@@ -4410,7 +4419,6 @@ module function classifyCallOperands(op StdOp, call StdCallOperands)
 		osLockInit or
 		osLockEnter or
 		osLockLeave or
-		osLockDestroy or
 		osReadOverlapped or
 		osLastError or
 		osProcessSpawnInherit or
@@ -4470,6 +4478,7 @@ module function classifyCallOperands(op StdOp, call StdCallOperands)
 		tlsAlloc or
 		tlsSetValue or
 		tlsSlotLoad or
+		osThreadToken or
 		osSetEvent or
 		osEnterBackgroundPriority or
 		osFileOpenWriteExecutable or
@@ -4886,6 +4895,7 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osSocketCreate or
 		osCpuCount or
 		tlsAlloc or
+		osThreadToken or
 		osEnterBackgroundPriority then break
 		binOp(_, lhs, rhs, _, _) then insertUsePair(referenced, a: lhs, b: rhs)
 		cmp(_, lhs, rhs, _, _) then insertUsePair(referenced, a: lhs, b: rhs)
@@ -4950,7 +4960,6 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osLockInit(condId) then referenced.insert(condId)
 		osLockEnter(condId) then referenced.insert(condId)
 		osLockLeave(condId) then referenced.insert(condId)
-		osLockDestroy(condId) then referenced.insert(condId)
 		osReadWallClock(condId) then referenced.insert(condId)
 		osEnvBlockFree(condId) then referenced.insert(condId)
 		osUnpublishNamedSegment(condId) then referenced.insert(condId)
@@ -5190,6 +5199,7 @@ module function stdOpDefinedValue(op StdOp, def StdDefinedValues)
 		atomicRmw(resultId, _, _, _) then def.recordOne(resultId)
 		tlsAlloc(resultId) then def.recordOne(resultId)
 		tlsSlotLoad(resultId, _) then def.recordOne(resultId)
+		osThreadToken(resultId) then def.recordOne(resultId)
 		osEnterBackgroundPriority(resultId) then def.recordOne(resultId)
 		loadAcquire(resultId, _, _, _) then def.recordOne(resultId)
 		condBranch or
@@ -5210,7 +5220,6 @@ module function stdOpDefinedValue(op StdOp, def StdDefinedValues)
 		osLockInit or
 		osLockEnter or
 		osLockLeave or
-		osLockDestroy or
 		osProcessSpawnInherit or
 		osCancelIo or
 		osPipeCreateOutbound or
@@ -5327,6 +5336,7 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osSocketCreate or
 		osCpuCount or
 		tlsAlloc or
+		osThreadToken or
 		osEnterBackgroundPriority gives op
 		binOp(resultId, lhs, rhs, opcode, operandType) gives StdOp.binOp(resultId, lhs: remappedValue(lhs, subst: subst), rhs: remappedValue(rhs, subst: subst), opcode: opcode, operandType: operandType)
 		unaryOp(resultId, operand, opcode, operandType) gives StdOp.unaryOp(resultId, operand: remappedValue(operand, subst: subst), opcode: opcode, operandType: operandType)
@@ -5390,7 +5400,6 @@ function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osLockInit(lockPtr) gives StdOp.osLockInit(remappedValue(lockPtr, subst: subst))
 		osLockEnter(lockPtr) gives StdOp.osLockEnter(remappedValue(lockPtr, subst: subst))
 		osLockLeave(lockPtr) gives StdOp.osLockLeave(remappedValue(lockPtr, subst: subst))
-		osLockDestroy(lockPtr) gives StdOp.osLockDestroy(remappedValue(lockPtr, subst: subst))
 		osReadOverlapped(resultId, handle, buf, cap, bytesOutPtr, ovl) gives StdOp.osReadOverlapped(resultId, handleId: remappedValue(handle, subst: subst), bufId: remappedValue(buf, subst: subst), capId: remappedValue(cap, subst: subst), bytesOutPtrId: remappedValue(bytesOutPtr, subst: subst), ovlId: remappedValue(ovl, subst: subst))
 		osProcessSpawnInherit(cmdlinePtr, cwdPtr, creationFlags, startupPtr, procInfoPtr, envPtr) gives StdOp.osProcessSpawnInherit(remappedValue(cmdlinePtr, subst: subst), cwdPtrId: remappedValue(cwdPtr, subst: subst), creationFlagsId: remappedValue(creationFlags, subst: subst), startupPtrId: remappedValue(startupPtr, subst: subst), procInfoPtrId: remappedValue(procInfoPtr, subst: subst), envPtrId: remappedValue(envPtr, subst: subst))
 		osCancelIo(handle, ovl) gives StdOp.osCancelIo(remappedValue(handle, subst: subst), ovlId: remappedValue(ovl, subst: subst))
@@ -5698,7 +5707,6 @@ function cloneStdOp(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray, 
 		osLockInit or
 		osLockEnter or
 		osLockLeave or
-		osLockDestroy or
 		osReadOverlapped or
 		osLastError or
 		osProcessSpawnInherit or
@@ -5784,6 +5792,7 @@ function cloneStdOp(op StdOp, valueSubst ValueIdArray, blockSubst BlockIdArray, 
 		atomicCas(resultId, addr, expected, replacement) gives StdOp.atomicCas(clonedValue(resultId, subst: valueSubst), addrId: remappedValue(addr, subst: valueSubst), expectedId: remappedValue(expected, subst: valueSubst), replacementId: remappedValue(replacement, subst: valueSubst))
 		atomicRmw(resultId, addr, operand, opcode) gives StdOp.atomicRmw(clonedValue(resultId, subst: valueSubst), addrId: remappedValue(addr, subst: valueSubst), operandId: remappedValue(operand, subst: valueSubst), opcode: opcode)
 		tlsSlotLoad(resultId, tebOffsetId) gives StdOp.tlsSlotLoad(clonedValue(resultId, subst: valueSubst), tebOffsetId: remappedValue(tebOffsetId, subst: valueSubst))
+		osThreadToken(resultId) gives StdOp.osThreadToken(clonedValue(resultId, subst: valueSubst))
 		loadAcquire(resultId, addrId, offset, valueType) gives StdOp.loadAcquire(clonedValue(resultId, subst: valueSubst), addrId: remappedValue(addrId, subst: valueSubst), offset: offset, valueType: valueType)
 		storeRelease(addrId, offset, valueId, valueType) gives StdOp.storeRelease(remappedValue(addrId, subst: valueSubst), offset: offset, valueId: remappedValue(valueId, subst: valueSubst), valueType: valueType)
 	end 'r'
@@ -6251,7 +6260,6 @@ module function collectStdBlockSuccessorIds(module StdModule, block IrBlock, out
 		osLockInit or
 		osLockEnter or
 		osLockLeave or
-		osLockDestroy or
 		osReadOverlapped or
 		osLastError or
 		osProcessSpawnInherit or
@@ -6311,6 +6319,7 @@ module function collectStdBlockSuccessorIds(module StdModule, block IrBlock, out
 		tlsAlloc or
 		tlsSetValue or
 		tlsSlotLoad or
+		osThreadToken or
 		osSetEvent or
 		osEnterBackgroundPriority or
 		osFileOpenWriteExecutable or
@@ -6455,7 +6464,6 @@ module function classifyBranch(op StdOp, out StdBranchOperands)
 		osLockInit or
 		osLockEnter or
 		osLockLeave or
-		osLockDestroy or
 		osReadOverlapped or
 		osLastError or
 		osProcessSpawnInherit or
@@ -6515,6 +6523,7 @@ module function classifyBranch(op StdOp, out StdBranchOperands)
 		tlsAlloc or
 		tlsSetValue or
 		tlsSlotLoad or
+		osThreadToken or
 		osSetEvent or
 		osEnterBackgroundPriority or
 		osFileOpenWriteExecutable or

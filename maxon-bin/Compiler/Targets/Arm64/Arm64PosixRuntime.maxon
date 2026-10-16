@@ -1032,6 +1032,23 @@ export function buildArm64PosixProcReapChunk(wait PosixHostCall) returns Functio
 end 'buildArm64PosixProcReapChunk'
 
 // ==========================================================================
+// mrt_host_spin_pause(x0 = pauses)
+// ==========================================================================
+
+export function buildArm64PosixSpinPauseChunk() returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginFunction(0)
+
+	let again = asm.newLabel()
+
+	asm.placeLabel(again)
+	arm64EmitYield(asm.code)
+	arm64EmitAddRuntimeImm(asm, dest: Arm64Register.x0, base: Arm64Register.x0, imm: -1)
+	arm64EmitCbnzTo(asm, reg: Arm64Register.x0, label: again)
+
+	return asm.finishFunction(HostSpinPauseName)
+end 'buildArm64PosixSpinPauseChunk'
+
+// ==========================================================================
 // mrt_host_proc_await(x0 = object, x1 = timeoutMs) -> x0 = WAIT_OBJECT_0 | WAIT_TIMEOUT
 // ==========================================================================
 

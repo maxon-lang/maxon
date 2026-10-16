@@ -1,0 +1,566 @@
+// A runtime lock is Go's `lock_spinbit.go` mutex, and `buildRtLockAcquire` and `buildRtLockRelease`
+// are its `lock2` and `unlock2`. The key word is zero when free: bit 0 is held, bit 1 a spinner,
+// bit 2 the sleeper stack locked, and the bits above them the M at the stack's head.
+//
+// The one deviation from Go is the recursive kind, which adds an owner token and a depth beside the
+// key: the runtime takes `__sched_lock`, `__gt_gfree_lock`, a GT record's lock and the slab lock
+// nested on one OS thread, and an exclusive word taken twice there waits for ever.
+let RtLockOffKey = 0
+export let RtLockOffOwner = 8 as ByteOffset
+export let RtLockOffDepth = 16 as ByteOffset
+export let RecursiveLockBytes = 24 as FullRangeInt
+export let ExclusiveLockBytes = 8 as FullRangeInt
+
+export let RtLockHeld = 1 as FullRangeInt
+let RtLockSpinning = 2
+let RtLockStackLocked = 4
+let RtLockHeldOrSpinning = 3
+let RtLockFlagMask = 7
+let RtLockSleeperShift = 3
+let RtLockClearHeld = -2
+let RtLockClearSpinning = -3
+export let RtLockFree = 0 as FullRangeInt
+
+let RtLockActiveSpinCount = 4
+let RtLockActiveSpinPauses = 30
+let RtLockPassiveSpinCount = 1
+let RtLockMultiProcessorFloor = 1
+let RtLockTailWakeShift = 60
+let RtLockRandMultiplier = 0x5851F42D4C957F2D
+
+export let RtLockAcquireName = b"__rtlock_acquire"
+export let RtLockReleaseName = b"__rtlock_release"
+export let RtLockEnterSlowName = b"__rtlock_enter_slow"
+export let RtLockPoolAcquireName = b"__rtlock_pool_acquire"
+export let RtLockPoolReleaseName = b"__rtlock_pool_release"
+
+export enum RuntimeLockKind
+	recursive
+	exclusive
+	pool
+end 'RuntimeLockKind'
+
+export enum RuntimeLockMark
+	enterRecursive
+	leaveRecursive
+	enterExclusive
+	leaveExclusive
+	enterPool
+	leavePool
+end 'RuntimeLockMark'
+
+export type RuntimeLockSite
+	export let opIndex as ElementIndex
+	export let mark as RuntimeLockMark
+	export let lock as ValueId
+
+	static function create(opIndex ElementIndex, mark RuntimeLockMark, lock ValueId) returns RuntimeLockSite
+		return Self{opIndex: opIndex, mark: mark, lock: lock}
+	end 'create'
+end 'RuntimeLockSite'
+
+export typealias RuntimeLockSiteArray = Array with RuntimeLockSite
+
+export function runtimeLockMarkOf(kind RuntimeLockKind, entering bool) returns RuntimeLockMark
+	return match kind 'kind'
+		recursive gives RuntimeLockMark.enterRecursive if entering else RuntimeLockMark.leaveRecursive
+		exclusive gives RuntimeLockMark.enterExclusive if entering else RuntimeLockMark.leaveExclusive
+		pool gives RuntimeLockMark.enterPool if entering else RuntimeLockMark.leavePool
+	end 'kind'
+end 'runtimeLockMarkOf'
+
+function runtimeLockMarkerName(mark RuntimeLockMark) returns ByteArray
+	return match mark 'mark'
+		enterRecursive gives b"__rtlock_enter"
+		leaveRecursive gives b"__rtlock_leave"
+		enterExclusive gives b"__rtlock_enter_exclusive"
+		leaveExclusive gives b"__rtlock_leave_exclusive"
+		enterPool gives b"__rtlock_enter_pool"
+		leavePool gives b"__rtlock_leave_pool"
+	end 'mark'
+end 'runtimeLockMarkerName'
+
+// A mark is a call to a function no one defines; `expandRuntimeLocks` replaces it with the inline
+// fast path and finds it by the op index recorded here, so the call must be the next op appended.
+export function emitRuntimeLockMark(module StdModule, block IrBlock, lock ValueId, mark RuntimeLockMark, ids ValueMinter)
+	module.runtimeLockSites.push(RuntimeLockSite.create(module.opCount(), mark: mark, lock: lock))
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: runtimeLockMarkerName(mark), args: argsOf(lock)))
+end 'emitRuntimeLockMark'
+
+function runtimeLockWordLabel(label ByteArray, suffix ByteArray) returns ByteArray
+	var named = label.clone()
+	named.append(suffix)
+	return named
+end 'runtimeLockWordLabel'
+
+export function pushRecursiveRuntimeLock(out DataSectionEntryArray, label ByteArray)
+	pushRuntimeGlobal(out, label: label, sharing: MultiMSharing.atomicStep, reach: DataReach.declared)
+	pushRuntimeGlobal(out, label: runtimeLockWordLabel(label, suffix: b"_owner"), sharing: MultiMSharing.lastWriterWins, reach: DataReach.declared)
+	pushRuntimeGlobal(out, label: runtimeLockWordLabel(label, suffix: b"_depth"), sharing: MultiMSharing.underOwnLock, reach: DataReach.declared)
+end 'pushRecursiveRuntimeLock'
+
+export function requireRecursiveRuntimeLockIsContiguous(globalData GlobalDataTable, label ByteArray)
+	let key = globalData.dataSectionOffsetOf(String.from(label))
+	let owner = globalData.dataSectionOffsetOf(String.from(runtimeLockWordLabel(label, suffix: b"_owner")))
+	let depth = globalData.dataSectionOffsetOf(String.from(runtimeLockWordLabel(label, suffix: b"_depth")))
+
+	if owner != key + RtLockOffOwner or depth != key + RtLockOffDepth 'scattered'
+		panic("requireRecursiveRuntimeLockIsContiguous: '{String.from(label)}' is laid out at {key} with its owner word at {owner} and its depth word at {depth}, but the lock protocol addresses them at +{RtLockOffOwner} and +{RtLockOffDepth} from the key")
+	end 'scattered'
+end 'requireRecursiveRuntimeLockIsContiguous'
+
+export function installRuntimeLockRuntime(module StdModule, usesGt bool, target Target)
+	if target.os == Os.wasi 'noThreads'
+		return
+	end 'noThreads'
+
+	if usesGt 'contended'
+		for kind in RuntimeLockKind.allCases 'eachKind'
+			buildRtLockAcquire(module, kind: kind)
+
+			if kind != RuntimeLockKind.recursive 'ownRelease'
+				buildRtLockRelease(module, kind: kind)
+			end 'ownRelease'
+		end 'eachKind'
+	end 'contended' else 'oneThread'
+		// Without the scheduler the program has one OS thread, so a lost compare-and-swap can only be a
+		// lock taken twice or released free, and it aborts (125) rather than waiting for ever.
+		buildRtLockSolo(module, name: RtLockAcquireName, expected: RtLockFree, replacement: RtLockHeld)
+		buildRtLockSolo(module, name: RtLockReleaseName, expected: RtLockHeld, replacement: RtLockFree)
+		buildRtLockEnterSlow(module)
+	end 'oneThread'
+end 'installRuntimeLockRuntime'
+
+// `pool` is `exclusive` without the stack guard and the pin: the stack pool's lock is taken by
+// `__gt_stack_alloc` and `__gt_stack_free`, unguarded bodies whose chains `UnguardedChains`
+// measures.
+function rtLockSlowPathIsGuarded(kind RuntimeLockKind) returns bool
+	return match kind 'kind'
+		recursive or
+		exclusive gives true
+		pool gives false
+	end 'kind'
+end 'rtLockSlowPathIsGuarded'
+
+function rtLockAcquireName(kind RuntimeLockKind) returns ByteArray
+	return match kind 'kind'
+		recursive gives RtLockEnterSlowName
+		exclusive gives RtLockAcquireName
+		pool gives RtLockPoolAcquireName
+	end 'kind'
+end 'rtLockAcquireName'
+
+function rtLockReleaseName(kind RuntimeLockKind) returns ByteArray
+	return match kind 'kind'
+		recursive or
+		exclusive gives RtLockReleaseName
+		pool gives RtLockPoolReleaseName
+	end 'kind'
+end 'rtLockReleaseName'
+
+function buildRtLockSolo(module StdModule, name ByteArray, expected FullRangeInt, replacement FullRangeInt)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var swapped = module.addBlock(func, label: b"rlSwapped", heat: BlockHeat.normal)
+	var misuse = module.addBlock(func, label: b"rlMisuse", heat: BlockHeat.cold)
+
+	emitParams(module, block: entry, count: 1)
+	let lock = 0
+
+	let won = emitCasAt(module, block: entry, addr: lock, expected: emitConst(module, block: entry, value: expected, ids: ids), replacement: emitConst(module, block: entry, value: replacement, ids: ids), ids: ids)
+	emitBranchOnCompare(module, block: entry, value: won, pred: StdCmpPred.ne, against: AtomicCasFailed, whenTrue: swapped, whenFalse: misuse, ids: ids)
+
+	module.setTerminator(swapped, op: StdOp.retVoid)
+
+	emitRuntimeAbort(module, func: func, block: misuse, abort: RuntimeAbort.runtimeLockMisused, ids: ids)
+
+	module.functions.push(func)
+end 'buildRtLockSolo'
+
+// The owner word is read without synchronisation, which is sound because the only value a thread
+// acts on is its own token, and no other thread writes that there.
+function emitRtLockNestedEnter(module StdModule, entry IrBlock, lock ValueId, nested IrBlock, otherwise IrBlock, ids ValueMinter) returns ValueId
+	let token = ids.mint()
+	module.appendOp(entry, op: StdOp.osThreadToken(token))
+	let owner = emitLoadField(module, block: entry, record: lock, offset: RtLockOffOwner, ids: ids)
+	emitBranchOnCompareValues(module, block: entry, a: owner, pred: StdCmpPred.eq, b: token, whenTrue: nested, whenFalse: otherwise, ids: ids)
+
+	let depth = emitLoadField(module, block: nested, record: lock, offset: RtLockOffDepth, ids: ids)
+	emitStoreField(module, block: nested, record: lock, offset: RtLockOffDepth, value: emitBin(module, block: nested, a: depth, b: emitConst(module, block: nested, value: OneMore, ids: ids), opcode: StdBinOpcode.add, ids: ids))
+	module.setTerminator(nested, op: StdOp.retVoid)
+
+	return token
+end 'emitRtLockNestedEnter'
+
+function buildRtLockEnterSlow(module StdModule)
+	var func = IrFunction.createFromStd(RtLockEnterSlowName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var nested = module.addBlock(func, label: b"rlNested", heat: BlockHeat.normal)
+	var fresh = module.addBlock(func, label: b"rlFresh", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let lock = 0
+
+	let token = emitRtLockNestedEnter(module, entry: entry, lock: lock, nested: nested, otherwise: fresh, ids: ids)
+
+	module.appendOp(fresh, op: StdOp.call(ids.mint(), callee: RtLockAcquireName, args: argsOf(lock)))
+	emitStoreField(module, block: fresh, record: lock, offset: RtLockOffOwner, value: token)
+	module.setTerminator(fresh, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildRtLockEnterSlow'
+
+function emitRtLockIsSchedLock(module StdModule, block IrBlock, lock ValueId, ids ValueMinter) returns ValueId
+	let schedLock = ids.mint()
+	module.appendOp(block, op: StdOp.globalAddr(schedLock, label: SchedLockLabel))
+	return emitCmp(module, block: block, a: lock, b: schedLock, pred: StdCmpPred.eq, ids: ids)
+end 'emitRtLockIsSchedLock'
+
+function emitRtLockEdge(module StdModule, from IrBlock, to IrBlock, args ValueIdArray)
+	var source = from
+	module.setTerminator(source, op: StdOp.branch(to.id))
+	source.branchEdges.push(BranchEdge.create(to.id, argIds: args))
+end 'emitRtLockEdge'
+
+function emitRtLockCasEdge(module StdModule, block IrBlock, lock ValueId, expected ValueId, replacement ValueId, won IrBlock, lost IrBlock, lostArgs ValueIdArray, ids ValueMinter)
+	var source = block
+	let result = emitCasAt(module, block: source, addr: lock, expected: expected, replacement: replacement, ids: ids)
+	emitBranchOnCasLost(module, block: source, result: result, lost: lost, won: won, ids: ids)
+
+	if lostArgs.count() > 0 'carriesArguments'
+		source.branchEdges.push(BranchEdge.create(lost.id, argIds: lostArgs))
+	end 'carriesArguments'
+end 'emitRtLockCasEdge'
+
+function buildRtLockAcquire(module StdModule, kind RuntimeLockKind)
+	var func = IrFunction.createFromStd(rtLockAcquireName(kind), returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: rtLockSlowPathIsGuarded(kind), pinsItsThread: rtLockSlowPathIsGuarded(kind))
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var top = module.addBlock(func, label: b"rlTop", heat: BlockHeat.normal)
+	var free = module.addBlock(func, label: b"rlFree", heat: BlockHeat.normal)
+	var freeSpinner = module.addBlock(func, label: b"rlFreeSpinner", heat: BlockHeat.normal)
+	var freePlain = module.addBlock(func, label: b"rlFreePlain", heat: BlockHeat.normal)
+	var busy = module.addBlock(func, label: b"rlBusy", heat: BlockHeat.normal)
+	var mayJoin = module.addBlock(func, label: b"rlMayJoin", heat: BlockHeat.normal)
+	var join = module.addBlock(func, label: b"rlJoin", heat: BlockHeat.normal)
+	var joined = module.addBlock(func, label: b"rlJoined", heat: BlockHeat.normal)
+	var joinLost = module.addBlock(func, label: b"rlJoinLost", heat: BlockHeat.normal)
+	var decide = module.addBlock(func, label: b"rlDecide", heat: BlockHeat.normal)
+	var spinPhase = module.addBlock(func, label: b"rlSpinPhase", heat: BlockHeat.normal)
+	var active = module.addBlock(func, label: b"rlActive", heat: BlockHeat.normal)
+	var passiveCheck = module.addBlock(func, label: b"rlPassiveCheck", heat: BlockHeat.normal)
+	var passive = module.addBlock(func, label: b"rlPassive", heat: BlockHeat.normal)
+	var sleep = module.addBlock(func, label: b"rlSleep", heat: BlockHeat.normal)
+	var haveOffset = module.addBlock(func, label: b"rlOffset", heat: BlockHeat.normal)
+	var haveMachine = module.addBlock(func, label: b"rlMachine", heat: BlockHeat.normal)
+	var noMachine = module.addBlock(func, label: b"rlNoMachine", heat: BlockHeat.normal)
+	var makeSema = module.addBlock(func, label: b"rlMakeSema", heat: BlockHeat.normal)
+	var storeSema = module.addBlock(func, label: b"rlStoreSema", heat: BlockHeat.normal)
+	var semaRefused = module.addBlock(func, label: b"rlSemaRefused", heat: BlockHeat.cold)
+	var push = module.addBlock(func, label: b"rlPush", heat: BlockHeat.normal)
+	var slept = module.addBlock(func, label: b"rlSlept", heat: BlockHeat.normal)
+	var pushLost = module.addBlock(func, label: b"rlPushLost", heat: BlockHeat.normal)
+	var again = module.addBlock(func, label: b"rlAgain", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"rlDone", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let lock = 0
+
+	var begin = module.addBlock(func, label: b"rlBegin", heat: BlockHeat.normal)
+
+	if kind == RuntimeLockKind.recursive 'ownerCheck'
+		var nested = module.addBlock(func, label: b"rlNested", heat: BlockHeat.normal)
+
+		_ = emitRtLockNestedEnter(module, entry: entry, lock: lock, nested: nested, otherwise: begin, ids: ids)
+	end 'ownerCheck' else 'noOwner'
+		emitRtLockEdge(module, from: entry, to: begin, args: ValueIdArray.create())
+	end 'noOwner'
+
+	let i = ids.mint()
+	let we = ids.mint()
+	let tail = ids.mint()
+	let v = ids.mint()
+	top.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
+	top.blockArgs.push(IrBlockArg.create(we, argType: StdType.i64))
+	top.blockArgs.push(IrBlockArg.create(tail, argType: StdType.i64))
+	top.blockArgs.push(IrBlockArg.create(v, argType: StdType.i64))
+
+	let none = emitConst(module, block: begin, value: 0, ids: ids)
+	let firstView = emitLoadField(module, block: begin, record: lock, offset: RtLockOffKey, ids: ids)
+	emitRtLockEdge(module, from: begin, to: top, args: fourArgs(none, second: none, third: none, fourth: firstView))
+
+	let heldBit = emitBin(module, block: top, a: v, b: emitConst(module, block: top, value: RtLockHeld, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
+	emitBranchOnCompare(module, block: top, value: heldBit, pred: StdCmpPred.eq, against: 0, whenTrue: free, whenFalse: busy, ids: ids)
+
+	emitBranchOnCompare(module, block: free, value: we, pred: StdCmpPred.ne, against: 0, whenTrue: freeSpinner, whenFalse: freePlain, ids: ids)
+
+	let spinnerRetired = emitBin(module, block: freeSpinner, a: v, b: emitConst(module, block: freeSpinner, value: RtLockClearSpinning, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
+	let spinnerTakes = emitBin(module, block: freeSpinner, a: spinnerRetired, b: emitConst(module, block: freeSpinner, value: RtLockHeld, ids: ids), opcode: StdBinOpcode.bitOr, ids: ids)
+	emitRtLockCasEdge(module, block: freeSpinner, lock: lock, expected: v, replacement: spinnerTakes, won: done, lost: again, lostArgs: threeArgs(i, second: we, third: tail), ids: ids)
+
+	let plainTakes = emitBin(module, block: freePlain, a: v, b: emitConst(module, block: freePlain, value: RtLockHeld, ids: ids), opcode: StdBinOpcode.bitOr, ids: ids)
+	emitRtLockCasEdge(module, block: freePlain, lock: lock, expected: v, replacement: plainTakes, won: done, lost: again, lostArgs: threeArgs(i, second: we, third: tail), ids: ids)
+
+	let weDecide = ids.mint()
+	let vDecide = ids.mint()
+	decide.blockArgs.push(IrBlockArg.create(weDecide, argType: StdType.i64))
+	decide.blockArgs.push(IrBlockArg.create(vDecide, argType: StdType.i64))
+
+	module.setTerminator(busy, op: StdOp.condBranch(emitCompareWithConstant(module, block: busy, value: we, pred: StdCmpPred.eq, against: 0, ids: ids), thenBlockId: mayJoin.id, elseBlockId: decide.id))
+	busy.branchEdges.push(BranchEdge.create(decide.id, argIds: twoArgs(we, second: v)))
+
+	let spinnerBit = emitBin(module, block: mayJoin, a: v, b: emitConst(module, block: mayJoin, value: RtLockSpinning, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
+	let notJoining = emitConst(module, block: mayJoin, value: 0, ids: ids)
+	module.setTerminator(mayJoin, op: StdOp.condBranch(emitCompareWithConstant(module, block: mayJoin, value: spinnerBit, pred: StdCmpPred.eq, against: 0, ids: ids), thenBlockId: join.id, elseBlockId: decide.id))
+	mayJoin.branchEdges.push(BranchEdge.create(decide.id, argIds: twoArgs(notJoining, second: v)))
+
+	let spinning = emitBin(module, block: join, a: v, b: emitConst(module, block: join, value: RtLockSpinning, ids: ids), opcode: StdBinOpcode.bitOr, ids: ids)
+	emitRtLockCasEdge(module, block: join, lock: lock, expected: v, replacement: spinning, won: joined, lost: joinLost, lostArgs: ValueIdArray.create(), ids: ids)
+
+	emitRtLockEdge(module, from: joined, to: decide, args: twoArgs(emitConst(module, block: joined, value: 1, ids: ids), second: spinning))
+	emitRtLockEdge(module, from: joinLost, to: decide, args: twoArgs(emitConst(module, block: joinLost, value: 0, ids: ids), second: v))
+
+	// `__sched_lock` always spins before it sleeps, and its release always wakes a sleeper: Go's
+	// `mutexPreferLowLatency`.
+	let isSchedLock = emitRtLockIsSchedLock(module, block: decide, lock: lock, ids: ids)
+	let eager = emitBin(module, block: decide, a: weDecide, b: tail, opcode: StdBinOpcode.bitOr, ids: ids)
+	let wantsToSpin = emitBin(module, block: decide, a: eager, b: isSchedLock, opcode: StdBinOpcode.bitOr, ids: ids)
+	emitBranchOnCompare(module, block: decide, value: wantsToSpin, pred: StdCmpPred.ne, against: 0, whenTrue: spinPhase, whenFalse: sleep, ids: ids)
+
+	let cpus = emitLoadGlobalWord(module, block: spinPhase, label: SchedNcpuLabel, ids: ids)
+	let multiProcessor = emitCompareWithConstant(module, block: spinPhase, value: cpus, pred: StdCmpPred.gt, against: RtLockMultiProcessorFloor, ids: ids)
+	let activeLimit = emitBin(module, block: spinPhase, a: multiProcessor, b: emitConst(module, block: spinPhase, value: RtLockActiveSpinCount, ids: ids), opcode: StdBinOpcode.mul, ids: ids)
+	emitBranchOnCompareValues(module, block: spinPhase, a: i, pred: StdCmpPred.lt, b: activeLimit, whenTrue: active, whenFalse: passiveCheck, ids: ids)
+
+	_ = emitNetpoll(module, block: active, verb: NetpollVerb.spinPause, operands: argsOf(emitConst(module, block: active, value: RtLockActiveSpinPauses, ids: ids)), ids: ids)
+	emitRtLockEdge(module, from: active, to: again, args: threeArgs(i, second: weDecide, third: tail))
+
+	let passiveLimit = emitBin(module, block: passiveCheck, a: activeLimit, b: emitConst(module, block: passiveCheck, value: RtLockPassiveSpinCount, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	emitBranchOnCompareValues(module, block: passiveCheck, a: i, pred: StdCmpPred.lt, b: passiveLimit, whenTrue: passive, whenFalse: sleep, ids: ids)
+
+	_ = emitNetpoll(module, block: passive, verb: NetpollVerb.yieldThread, operands: ValueIdArray.create(), ids: ids)
+	emitRtLockEdge(module, from: passive, to: again, args: threeArgs(i, second: weDecide, third: tail))
+
+	// A thread with no M, such as `__sysmon`, has no semaphore to sleep on, so it yields and retries
+	// until the lock comes free.
+	let m = emitLoadCurrentMOrBail(module, cur: sleep, haveOffset: haveOffset, haveMachine: haveMachine, bail: noMachine, bailValues: FullRangeIntArray.create(), ids: ids)
+
+	_ = emitNetpoll(module, block: noMachine, verb: NetpollVerb.yieldThread, operands: ValueIdArray.create(), ids: ids)
+	emitRtLockEdge(module, from: noMachine, to: again, args: threeArgs(i, second: weDecide, third: tail))
+
+	let existing = emitLoadField(module, block: haveMachine, record: m, offset: MOffLockSema, ids: ids)
+	emitBranchOnCompare(module, block: haveMachine, value: existing, pred: StdCmpPred.eq, against: 0, whenTrue: makeSema, whenFalse: push, ids: ids)
+
+	let created = ids.mint()
+	module.appendOp(makeSema, op: StdOp.osEventCreate(created))
+	emitBranchOnCompare(module, block: makeSema, value: created, pred: StdCmpPred.eq, against: 0, whenTrue: semaRefused, whenFalse: storeSema, ids: ids)
+
+	emitStoreField(module, block: storeSema, record: m, offset: MOffLockSema, value: created)
+	module.setTerminator(storeSema, op: StdOp.branch(push.id))
+
+	emitRuntimeAbort(module, func: func, block: semaRefused, abort: RuntimeAbort.runtimeLockSemaphoreRefused, ids: ids)
+
+	let olderHead = emitBin(module, block: push, a: vDecide, b: emitConst(module, block: push, value: RtLockSleeperShift, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
+	emitStoreField(module, block: push, record: m, offset: MOffLockWaitNext, value: olderHead)
+	let selfHead = emitBin(module, block: push, a: m, b: emitConst(module, block: push, value: RtLockSleeperShift, ids: ids), opcode: StdBinOpcode.shl, ids: ids)
+	let keptFlags = emitBin(module, block: push, a: vDecide, b: emitConst(module, block: push, value: RtLockFlagMask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
+	let pushed = emitBin(module, block: push, a: selfHead, b: keptFlags, opcode: StdBinOpcode.bitOr, ids: ids)
+	let retiringBit = emitBin(module, block: push, a: weDecide, b: emitConst(module, block: push, value: RtLockSpinning, ids: ids), opcode: StdBinOpcode.mul, ids: ids)
+	let retiringMask = emitBin(module, block: push, a: emitConst(module, block: push, value: -1, ids: ids), b: retiringBit, opcode: StdBinOpcode.sub, ids: ids)
+	let published = emitBin(module, block: push, a: pushed, b: retiringMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	emitRtLockCasEdge(module, block: push, lock: lock, expected: vDecide, replacement: published, won: slept, lost: pushLost, lostArgs: ValueIdArray.create(), ids: ids)
+
+	let sema = emitLoadField(module, block: slept, record: m, offset: MOffLockSema, ids: ids)
+	module.appendOp(slept, op: StdOp.osWaitHandle(ids.mint(), handleId: sema, timeoutMsId: emitConst(module, block: slept, value: WaitInfinite, ids: ids)))
+	let nextSleeper = emitLoadField(module, block: slept, record: m, offset: MOffLockWaitNext, ids: ids)
+	let wasAtTail = emitCompareWithConstant(module, block: slept, value: nextSleeper, pred: StdCmpPred.eq, against: 0, ids: ids)
+	let noRound = emitConst(module, block: slept, value: 0, ids: ids)
+	emitStoreField(module, block: slept, record: m, offset: MOffLockWaitNext, value: noRound)
+	emitRtLockEdge(module, from: slept, to: again, args: threeArgs(noRound, second: noRound, third: wasAtTail))
+
+	emitStoreField(module, block: pushLost, record: m, offset: MOffLockWaitNext, value: emitConst(module, block: pushLost, value: 0, ids: ids))
+	emitRtLockEdge(module, from: pushLost, to: again, args: threeArgs(i, second: weDecide, third: tail))
+
+	let againRound = ids.mint()
+	let againWe = ids.mint()
+	let againTail = ids.mint()
+	again.blockArgs.push(IrBlockArg.create(againRound, argType: StdType.i64))
+	again.blockArgs.push(IrBlockArg.create(againWe, argType: StdType.i64))
+	again.blockArgs.push(IrBlockArg.create(againTail, argType: StdType.i64))
+	let nextI = emitBin(module, block: again, a: againRound, b: emitConst(module, block: again, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	let reread = emitLoadField(module, block: again, record: lock, offset: RtLockOffKey, ids: ids)
+	emitRtLockEdge(module, from: again, to: top, args: fourArgs(nextI, second: againWe, third: againTail, fourth: reread))
+
+	if kind == RuntimeLockKind.recursive 'ownerClaim'
+		let claimant = ids.mint()
+		module.appendOp(done, op: StdOp.osThreadToken(claimant))
+		emitStoreField(module, block: done, record: lock, offset: RtLockOffOwner, value: claimant)
+	end 'ownerClaim'
+
+	module.setTerminator(done, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildRtLockAcquire'
+
+function buildRtLockRelease(module StdModule, kind RuntimeLockKind)
+	if kind == RuntimeLockKind.recursive 'sharesTheExclusiveRelease'
+		panic("buildRtLockRelease: a recursive lock's slow release is the exclusive release, which is built under its own kind")
+	end 'sharesTheExclusiveRelease'
+
+	var func = IrFunction.createFromStd(rtLockReleaseName(kind), returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: rtLockSlowPathIsGuarded(kind), pinsItsThread: rtLockSlowPathIsGuarded(kind))
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var haveOffset = module.addBlock(func, label: b"rlOffset", heat: BlockHeat.normal)
+	var haveMachine = module.addBlock(func, label: b"rlMachine", heat: BlockHeat.normal)
+	var noMachine = module.addBlock(func, label: b"rlNoMachine", heat: BlockHeat.normal)
+	var prep = module.addBlock(func, label: b"rlPrep", heat: BlockHeat.normal)
+	var clear = module.addBlock(func, label: b"rlClear", heat: BlockHeat.normal)
+	var misuse = module.addBlock(func, label: b"rlMisuse", heat: BlockHeat.cold)
+	var attempt = module.addBlock(func, label: b"rlAttempt", heat: BlockHeat.normal)
+	var clearAgain = module.addBlock(func, label: b"rlClearAgain", heat: BlockHeat.normal)
+	var released = module.addBlock(func, label: b"rlReleased", heat: BlockHeat.normal)
+	var scan = module.addBlock(func, label: b"rlScan", heat: BlockHeat.normal)
+	var scanLocked = module.addBlock(func, label: b"rlScanLocked", heat: BlockHeat.normal)
+	var grab = module.addBlock(func, label: b"rlGrab", heat: BlockHeat.normal)
+	var scanAgain = module.addBlock(func, label: b"rlScanAgain", heat: BlockHeat.normal)
+	var pop = module.addBlock(func, label: b"rlPop", heat: BlockHeat.normal)
+	var haveCommit = module.addBlock(func, label: b"rlHaveCommit", heat: BlockHeat.normal)
+	var choose = module.addBlock(func, label: b"rlChoose", heat: BlockHeat.normal)
+	var plain = module.addBlock(func, label: b"rlPlain", heat: BlockHeat.normal)
+	var walk = module.addBlock(func, label: b"rlWalk", heat: BlockHeat.normal)
+	var walkLoop = module.addBlock(func, label: b"rlWalkLoop", heat: BlockHeat.normal)
+	var walkStep = module.addBlock(func, label: b"rlWalkStep", heat: BlockHeat.normal)
+	var walked = module.addBlock(func, label: b"rlWalked", heat: BlockHeat.normal)
+	var takeHead = module.addBlock(func, label: b"rlTakeHead", heat: BlockHeat.normal)
+	var commit = module.addBlock(func, label: b"rlCommit", heat: BlockHeat.normal)
+	var finalize = module.addBlock(func, label: b"rlFinalize", heat: BlockHeat.normal)
+	var settled = module.addBlock(func, label: b"rlSettled", heat: BlockHeat.normal)
+	var lostPop = module.addBlock(func, label: b"rlLostPop", heat: BlockHeat.normal)
+	var wake = module.addBlock(func, label: b"rlWake", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"rlDone", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let lock = 0
+
+	let anti = ids.mint()
+	prep.blockArgs.push(IrBlockArg.create(anti, argType: StdType.i64))
+
+	let m = emitLoadCurrentMOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, bail: noMachine, bailValues: FullRangeIntArray.create(), ids: ids)
+
+	let draw = emitBin(module, block: haveMachine, a: emitLoadField(module, block: haveMachine, record: m, offset: MOffLockRand, ids: ids), b: emitConst(module, block: haveMachine, value: OneMore, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: haveMachine, record: m, offset: MOffLockRand, value: draw)
+	let mixed = emitBin(module, block: haveMachine, a: draw, b: emitConst(module, block: haveMachine, value: RtLockRandMultiplier, ids: ids), opcode: StdBinOpcode.mul, ids: ids)
+	let tailDraw = emitBin(module, block: haveMachine, a: mixed, b: emitConst(module, block: haveMachine, value: RtLockTailWakeShift, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
+	emitRtLockEdge(module, from: haveMachine, to: prep, args: argsOf(emitCompareWithConstant(module, block: haveMachine, value: tailDraw, pred: StdCmpPred.eq, against: 0, ids: ids)))
+
+	emitRtLockEdge(module, from: noMachine, to: prep, args: argsOf(emitConst(module, block: noMachine, value: 0, ids: ids)))
+
+	let firstView = emitLoadField(module, block: prep, record: lock, offset: RtLockOffKey, ids: ids)
+	let clearView = ids.mint()
+	clear.blockArgs.push(IrBlockArg.create(clearView, argType: StdType.i64))
+	emitRtLockEdge(module, from: prep, to: clear, args: argsOf(firstView))
+
+	let heldBit = emitBin(module, block: clear, a: clearView, b: emitConst(module, block: clear, value: RtLockHeld, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
+	emitBranchOnCompare(module, block: clear, value: heldBit, pred: StdCmpPred.eq, against: 0, whenTrue: misuse, whenFalse: attempt, ids: ids)
+
+	emitRuntimeAbort(module, func: func, block: misuse, abort: RuntimeAbort.runtimeLockMisused, ids: ids)
+
+	let cleared = emitBin(module, block: attempt, a: clearView, b: emitConst(module, block: attempt, value: RtLockClearHeld, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
+	emitRtLockCasEdge(module, block: attempt, lock: lock, expected: clearView, replacement: cleared, won: released, lost: clearAgain, lostArgs: ValueIdArray.create(), ids: ids)
+
+	emitRtLockEdge(module, from: clearAgain, to: clear, args: argsOf(emitLoadField(module, block: clearAgain, record: lock, offset: RtLockOffKey, ids: ids)))
+
+	let afterView = emitLoadField(module, block: released, record: lock, offset: RtLockOffKey, ids: ids)
+	let afterSpinBit = emitBin(module, block: released, a: afterView, b: emitConst(module, block: released, value: RtLockSpinning, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
+	let nobodySpins = emitCompareWithConstant(module, block: released, value: afterSpinBit, pred: StdCmpPred.eq, against: 0, ids: ids)
+	let afterIsSched = emitRtLockIsSchedLock(module, block: released, lock: lock, ids: ids)
+	let nobodyOrSched = emitBin(module, block: released, a: nobodySpins, b: afterIsSched, opcode: StdBinOpcode.bitOr, ids: ids)
+	let mustLook = emitBin(module, block: released, a: nobodyOrSched, b: anti, opcode: StdBinOpcode.bitOr, ids: ids)
+	emitBranchOnCompare(module, block: released, value: mustLook, pred: StdCmpPred.ne, against: 0, whenTrue: scan, whenFalse: done, ids: ids)
+	released.branchEdges.push(BranchEdge.create(scan.id, argIds: argsOf(afterView)))
+
+	let scanView = ids.mint()
+	scan.blockArgs.push(IrBlockArg.create(scanView, argType: StdType.i64))
+	let scanHead = emitBin(module, block: scan, a: scanView, b: emitConst(module, block: scan, value: RtLockSleeperShift, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
+	emitBranchOnCompare(module, block: scan, value: scanHead, pred: StdCmpPred.eq, against: 0, whenTrue: done, whenFalse: scanLocked, ids: ids)
+
+	let stackBit = emitBin(module, block: scanLocked, a: scanView, b: emitConst(module, block: scanLocked, value: RtLockStackLocked, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
+	emitBranchOnCompare(module, block: scanLocked, value: stackBit, pred: StdCmpPred.eq, against: 0, whenTrue: grab, whenFalse: done, ids: ids)
+
+	let stackTaken = emitBin(module, block: grab, a: scanView, b: emitConst(module, block: grab, value: RtLockStackLocked, ids: ids), opcode: StdBinOpcode.bitOr, ids: ids)
+	let grabResult = emitCasAt(module, block: grab, addr: lock, expected: scanView, replacement: stackTaken, ids: ids)
+	emitBranchOnCasLost(module, block: grab, result: grabResult, lost: scanAgain, won: pop, ids: ids)
+	grab.branchEdges.push(BranchEdge.create(pop.id, argIds: twoArgs(stackTaken, second: emitConst(module, block: grab, value: 0, ids: ids))))
+
+	emitRtLockEdge(module, from: scanAgain, to: scan, args: argsOf(emitLoadField(module, block: scanAgain, record: lock, offset: RtLockOffKey, ids: ids)))
+
+	let popView = ids.mint()
+	let committed = ids.mint()
+	pop.blockArgs.push(IrBlockArg.create(popView, argType: StdType.i64))
+	pop.blockArgs.push(IrBlockArg.create(committed, argType: StdType.i64))
+	let headM = emitBin(module, block: pop, a: popView, b: emitConst(module, block: pop, value: RtLockSleeperShift, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
+	let keptFlags = emitBin(module, block: pop, a: popView, b: emitConst(module, block: pop, value: RtLockHeldOrSpinning, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
+	emitBranchOnCompare(module, block: pop, value: committed, pred: StdCmpPred.ne, against: 0, whenTrue: haveCommit, whenFalse: choose, ids: ids)
+
+	let finalWake = ids.mint()
+	let finalCommitted = ids.mint()
+	finalize.blockArgs.push(IrBlockArg.create(finalWake, argType: StdType.i64))
+	finalize.blockArgs.push(IrBlockArg.create(finalCommitted, argType: StdType.i64))
+
+	emitRtLockEdge(module, from: haveCommit, to: finalize, args: twoArgs(committed, second: committed))
+
+	let popSpinBit = emitBin(module, block: choose, a: popView, b: emitConst(module, block: choose, value: RtLockSpinning, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
+	let popNobodySpins = emitCompareWithConstant(module, block: choose, value: popSpinBit, pred: StdCmpPred.eq, against: 0, ids: ids)
+	let popIsSched = emitRtLockIsSchedLock(module, block: choose, lock: lock, ids: ids)
+	let wakesHead = emitBin(module, block: choose, a: popNobodySpins, b: popIsSched, opcode: StdBinOpcode.bitOr, ids: ids)
+	let headCandidate = emitBin(module, block: choose, a: headM, b: wakesHead, opcode: StdBinOpcode.mul, ids: ids)
+	emitBranchOnCompare(module, block: choose, value: anti, pred: StdCmpPred.ne, against: 0, whenTrue: walk, whenFalse: plain, ids: ids)
+
+	emitRtLockEdge(module, from: plain, to: finalize, args: twoArgs(headCandidate, second: emitConst(module, block: plain, value: 0, ids: ids)))
+
+	let walker = ids.mint()
+	let walkerPrev = ids.mint()
+	walkLoop.blockArgs.push(IrBlockArg.create(walker, argType: StdType.i64))
+	walkLoop.blockArgs.push(IrBlockArg.create(walkerPrev, argType: StdType.i64))
+	emitRtLockEdge(module, from: walk, to: walkLoop, args: twoArgs(headM, second: headM))
+
+	let walkerNext = emitLoadField(module, block: walkLoop, record: walker, offset: MOffLockWaitNext, ids: ids)
+	emitBranchOnCompare(module, block: walkLoop, value: walkerNext, pred: StdCmpPred.eq, against: 0, whenTrue: walked, whenFalse: walkStep, ids: ids)
+
+	emitRtLockEdge(module, from: walkStep, to: walkLoop, args: twoArgs(walkerNext, second: walker))
+
+	emitBranchOnCompareValues(module, block: walked, a: walker, pred: StdCmpPred.eq, b: headM, whenTrue: takeHead, whenFalse: commit, ids: ids)
+
+	emitRtLockEdge(module, from: takeHead, to: finalize, args: twoArgs(headM, second: emitConst(module, block: takeHead, value: 0, ids: ids)))
+
+	// The tail is unlinked before the compare-and-swap that pops it, so it is committed: a lost swap
+	// retries with it (`finalCommitted`), because a second walk would no longer find it.
+	emitStoreField(module, block: commit, record: walkerPrev, offset: MOffLockWaitNext, value: emitConst(module, block: commit, value: 0, ids: ids))
+	emitRtLockEdge(module, from: commit, to: finalize, args: twoArgs(walker, second: walker))
+
+	let isHead = emitCmp(module, block: finalize, a: finalWake, b: headM, pred: StdCmpPred.eq, ids: ids)
+	let followingHead = emitLoadField(module, block: finalize, record: headM, offset: MOffLockWaitNext, ids: ids)
+	let headStep = emitBin(module, block: finalize, a: followingHead, b: headM, opcode: StdBinOpcode.sub, ids: ids)
+	let headShift = emitBin(module, block: finalize, a: headStep, b: isHead, opcode: StdBinOpcode.mul, ids: ids)
+	let newHead = emitBin(module, block: finalize, a: headM, b: headShift, opcode: StdBinOpcode.add, ids: ids)
+	let shiftedHead = emitBin(module, block: finalize, a: newHead, b: emitConst(module, block: finalize, value: RtLockSleeperShift, ids: ids), opcode: StdBinOpcode.shl, ids: ids)
+	let popped = emitBin(module, block: finalize, a: shiftedHead, b: keptFlags, opcode: StdBinOpcode.bitOr, ids: ids)
+	emitRtLockCasEdge(module, block: finalize, lock: lock, expected: popView, replacement: popped, won: settled, lost: lostPop, lostArgs: ValueIdArray.create(), ids: ids)
+
+	emitBranchOnCompare(module, block: settled, value: finalWake, pred: StdCmpPred.ne, against: 0, whenTrue: wake, whenFalse: done, ids: ids)
+
+	emitRtLockEdge(module, from: lostPop, to: pop, args: twoArgs(emitLoadField(module, block: lostPop, record: lock, offset: RtLockOffKey, ids: ids), second: finalCommitted))
+
+	module.appendOp(wake, op: StdOp.osSetEvent(emitLoadField(module, block: wake, record: finalWake, offset: MOffLockSema, ids: ids)))
+	module.setTerminator(wake, op: StdOp.branch(done.id))
+
+	module.setTerminator(done, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildRtLockRelease'

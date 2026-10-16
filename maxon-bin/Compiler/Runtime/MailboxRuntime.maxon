@@ -19,10 +19,10 @@
 // reason.
 //
 // ⚠ THE RECEIVE PARK CARRIES THE MAILBOX LOCK ACROSS `__gt_context_switch`. `__mbox_recv` publishes
-// itself as `parkedGt` and parks holding the lock, and `__gt_run_strand` leaves it in the park commit
-// (`emitMboxParkCommit`) on the same OS thread, before that thread runs any other green thread. The host
-// lock is recursive per OS thread, so a green thread run there while the hold was still open would enter
-// it unopposed and corrupt the queue silently.
+// itself as `parkedGt` and parks holding the lock, and `__gt_run_strand` leaves it in the park
+// commit (`emitMboxParkCommit`) on the same OS thread, before that thread runs any other green
+// thread. The lock is exclusive, so a green thread run there while the hold was still open would
+// wait for ever on a holder that cannot run.
 //
 // head, tail, parkedGt and closed are read and written only under the mailbox lock, because
 // `__mbox_recv`'s decision to park rests on "empty, open and nobody parked" being one instant
@@ -72,7 +72,7 @@ export let MboxOffShutdownReply = 0x38 as ByteOffset
 // lock while this one is held — a ready runs after the leave, and the closed road leaves before the drop
 // cascade — so a path that took this lock under the stack-pool lock would deadlock against that shrink.
 let MboxOffLock = 0x40 as ByteOffset
-let MboxRegionBytes = (MboxOffLock as FullRangeInt) + OsLockBytes
+let MboxRegionBytes = (MboxOffLock as FullRangeInt) + ExclusiveLockBytes
 
 // The two counts' initial values, named because they are a PAIR and their difference is the whole lifetime
 // rule: one handle names the mailbox, and the loop is the second thing that keeps it alive.
@@ -334,19 +334,12 @@ function buildInterfaceSendStub(module StdModule, name ByteArray, serviceTag Ful
 end 'buildInterfaceSendStub'
 
 function emitMboxLockEnter(module StdModule, block IrBlock, mbox ValueId, ids ValueMinter)
-	emitSchedStepLockDepth(module, block: block, delta: OneMore, ids: ids)
-	module.appendOp(block, op: StdOp.osLockEnter(emitFieldAddr(module, block: block, record: mbox, offset: MboxOffLock, ids: ids)))
+	emitLockEnterAt(module, block: block, lock: emitFieldAddr(module, block: block, record: mbox, offset: MboxOffLock, ids: ids), kind: RuntimeLockKind.exclusive, ids: ids)
 end 'emitMboxLockEnter'
 
 function emitMboxLockLeave(module StdModule, block IrBlock, mbox ValueId, ids ValueMinter)
-	module.appendOp(block, op: StdOp.osLockLeave(emitFieldAddr(module, block: block, record: mbox, offset: MboxOffLock, ids: ids)))
-	emitSchedStepLockDepth(module, block: block, delta: OneFewer, ids: ids)
+	emitLockLeaveAt(module, block: block, lock: emitFieldAddr(module, block: block, record: mbox, offset: MboxOffLock, ids: ids), kind: RuntimeLockKind.exclusive, ids: ids)
 end 'emitMboxLockLeave'
-
-function emitMboxFree(module StdModule, block IrBlock, mbox ValueId, ids ValueMinter)
-	module.appendOp(block, op: StdOp.osLockDestroy(emitFieldAddr(module, block: block, record: mbox, offset: MboxOffLock, ids: ids)))
-	emitSlabFree(module, block: block, ptr: mbox, ids: ids)
-end 'emitMboxFree'
 
 function emitMboxHandoffToParked(module StdModule, func IrFunction, cur IrBlock, mbox ValueId, handed ValueId, noReceiver IrBlock, handoff IrBlock, cont IrBlock, ids ValueMinter)
 	let parked = emitLoadField(module, block: cur, record: mbox, offset: MboxOffParkedGt, ids: ids)
@@ -391,7 +384,6 @@ function buildSvcSpawn(module StdModule)
 	let mboxBytes = emitConst(module, block: entry, value: MboxRegionBytes, ids: ids)
 	let mbox = ids.mint()
 	module.appendOp(entry, op: StdOp.call(mbox, callee: SlabAllocName, args: argsOf(mboxBytes)))
-	module.appendOp(entry, op: StdOp.osLockInit(emitFieldAddr(module, block: entry, record: mbox, offset: MboxOffLock, ids: ids)))
 	emitStoreField(module, block: entry, record: mbox, offset: MboxOffHandles, value: emitConst(module, block: entry, value: MboxInitialHandles, ids: ids))
 	emitStoreField(module, block: entry, record: mbox, offset: MboxOffRefs, value: emitConst(module, block: entry, value: MboxInitialRefs, ids: ids))
 	emitStoreField(module, block: entry, record: mbox, offset: MboxOffAbandonFn, value: abandonPtr)
@@ -660,7 +652,7 @@ function buildMboxHandleDropBox(module StdModule)
 	let wasLastRef = emitMboxWasLastOwner(module, block: releaseRef, prior: priorRefs, ids: ids)
 	module.setTerminator(releaseRef, op: StdOp.condBranch(wasLastRef, thenBlockId: freeMbox.id, elseBlockId: doneBlock.id))
 
-	emitMboxFree(module, block: freeMbox, mbox: mbox, ids: ids)
+	emitSlabFree(module, block: freeMbox, ptr: mbox, ids: ids)
 	module.setTerminator(freeMbox, op: StdOp.branch(doneBlock.id))
 
 	// The handle BOX itself is an ordinary managed record with a trivial destructor, so it goes back through
@@ -713,7 +705,7 @@ function buildMboxServiceExit(module StdModule)
 	let wasLastRef = emitMboxWasLastOwner(module, block: entry, prior: priorRefs, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(wasLastRef, thenBlockId: freeMbox.id, elseBlockId: doneBlock.id))
 
-	emitMboxFree(module, block: freeMbox, mbox: mbox, ids: ids)
+	emitSlabFree(module, block: freeMbox, ptr: mbox, ids: ids)
 	module.setTerminator(freeMbox, op: StdOp.branch(doneBlock.id))
 
 	// A service stopped by its LAST HANDLE DROP never received a pill, so the slot is the slab's zero and

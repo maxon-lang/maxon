@@ -509,12 +509,10 @@ export let LinuxHostObjectPageBytes = 4096
 
 // ⭐⭐ **THE RECURSIVE FUTEX MUTEX `osLockInit` BUILDS INTO THE CALLER'S REGION.**
 //
-// ⛔ **RECURSIVE IS NOT OPTIONAL, AND A NON-RECURSIVE ONE MEASURED AS A HANG ON THE OTHER LANE.** A Win32
-// `CRITICAL_SECTION` is re-entrant by its owning thread and `SchedRuntime` relies on it in so many words
-// (*"a nested `LeaveCriticalSection` releases nothing"*); the first arm64-macOS `async` build hung in
-// `__slab_refill` on a NORMAL pthread mutex taken twice down one call chain
-// (`Arm64DarwinRuntime.buildArm64DarwinLockInitChunk` records it). So the same op must mean the same thing
-// here, and a raw futex is not re-entrant — the owner and the depth beside it are what make it so.
+// ⛔ **RECURSIVE IS NOT OPTIONAL.** A Win32 `CRITICAL_SECTION` is re-entrant by its owning thread,
+// and `__Raw.osLockEnter` means the same on every lane
+// (`Arm64DarwinRuntime.buildArm64DarwinLockInitChunk`). A raw futex is not re-entrant — the owner
+// and the depth beside it are what make it so.
 //
 // The three words: a futex at offset 0 (0 = free, 1 = held with no waiter, 2 = held and someone is asleep on
 // it), the owning thread's token (the address of its slot block), and how many times that owner has taken
@@ -529,8 +527,8 @@ export let LinuxHostObjectPageBytes = 4096
 // slab, whose pages come from `mmap` and ARE zero on first use — but a region reused after a free is not, and
 // relying on the difference is exactly the kind of "works today" this compiler's assertions exist to refuse.
 //
-// ⚠ **A NESTED LEAVE DECREMENTS THE DEPTH AND RELEASES NOTHING**, which is the property `SchedRuntime`'s
-// header names in so many words: only the outermost leave touches the futex word.
+// ⚠ **A NESTED LEAVE DECREMENTS THE DEPTH AND RELEASES NOTHING**: only the outermost leave touches
+// the futex word.
 export let LinuxLockOffFutex = 0x00 as MachineWord
 export let LinuxLockOffOwner = 0x08 as MachineWord
 export let LinuxLockOffDepth = 0x10 as MachineWord
@@ -552,9 +550,9 @@ export let LinuxMutexHeld = 1
 export let LinuxMutexHeldContended = 2
 
 // A held lock is retried after each of `LinuxLockActiveSpinRounds` bursts of spin hints, then after
-// each of `LinuxLockPassiveSpinRounds` `sched_yield`s, before the waiter runs the protocol above. A
-// runtime lock is held briefly, so the spin usually takes it without the futex sleep and the wake
-// the release would owe.
+// each of `LinuxLockPassiveSpinRounds` `sched_yield`s, before the waiter runs the protocol above.
+// An OS lock is held briefly, so the spin usually takes it without the futex sleep and the wake the
+// release would owe.
 export let LinuxLockActiveSpinRounds = 4 as MachineWord
 export let LinuxLockActiveSpinPauses = 30 as MachineWord
 export let LinuxLockPassiveSpinRounds = 1 as MachineWord
@@ -606,9 +604,9 @@ export function linuxTlsSelfSlotOffset() returns FullRangeInt
 	return linuxTlsSelfSlotIndex() * (SpillSlotBytes as FullRangeInt)
 end 'linuxTlsSelfSlotOffset'
 
-// Called first in `mrt_runtime_init` in every program that carries the host lock (`posixUsesHostLock`): the
-// lock reads its owner token from the block, and the slab and `__ds_init` enter it before
-// `__sched_init_procs` runs.
+// Called first in `mrt_runtime_init` in every program that takes a runtime lock
+// (`posixUsesHostLock`): a recursive lock reads its owner token from the block, and the slab takes
+// its lock before `__sched_init_procs` runs.
 export let LinuxMainThreadBlockName = b"mrt_linux_main_thread_block"
 
 // The first key handed out, and the reason the counter pre-increments — see the block above.
@@ -777,19 +775,6 @@ export let LinuxWorkerSeedArgOffset = 8 as MachineWord
 export let LinuxNoThreadStarted = 0
 
 export let LinuxWaitOnDescriptorMessage = b"panic: WaitForSingleObject was reached with a DESCRIPTOR or a null handle, where only a wake event, a worker M or a child process is waitable\n"
-
-// ⭐ **THE LOCK REGION THE Std TIER ALLOCATES MUST HOLD THIS LANE'S MUTEX.** `osLockInit`'s caller
-// slab-allocates `OsLockBytes` and hands the pointer over; the three words below are written into whatever
-// it is given. The Std constant is sized for the widest lock across the targets this compiler serves and
-// says so, but a COMMENT cannot keep that true — so this is the check, at chunk-build time, on the lane that
-// would be corrupted.
-export function assertLinuxLockFits()
-	let needed = (LinuxLockOffDepth as FullRangeInt) + (SpillSlotBytes as FullRangeInt)
-
-	if OsLockBytes < needed 'tooSmall'
-		panic("LinuxRuntime: `OsLockBytes` is {OsLockBytes} but this lane's recursive futex mutex needs {needed} bytes — `osLockInit` would write the owner and depth words past the region the allocator gave it and corrupt whatever it placed after, with no diagnostic anywhere")
-	end 'tooSmall'
-end 'assertLinuxLockFits'
 
 export let LinuxTlsMapFailedMessage = b"panic: the runtime could not map the main thread's slot block (mmap failed)\n"
 export let LinuxTlsExhaustedMessage = b"panic: the green-thread scheduler asked for more per-OS-thread slots than one page holds\n"

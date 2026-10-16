@@ -1815,6 +1815,14 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 		installDebugStreamRuntime(pipeline.stdModule, globalData: project.globalData, usesGt: usage.usesGt)
 	end 'installDebugStream'
 
+	// Below every installer that emits a lock mark, and above the Std optimizer: a mark is found by
+	// its op index, so one emitted later or copied by a pass stays a call to a function that does not
+	// exist.
+	if pipeline.stdModule.runtimeLockSites.count() > 0 'runtimeLocks'
+		installRuntimeLockRuntime(pipeline.stdModule, usesGt: usage.usesGt, target: project.target)
+		expandRuntimeLocks(pipeline.stdModule, firstFuncIndex: firstEmittedFuncIndex, target: project.target)
+	end 'runtimeLocks'
+
 	var dataSection = dataSectionRoster(userGlobals, usage: usage, target: project.target)
 	assertPublishedWordAccessIsOrdered(pipeline.stdModule, entries: dataSection, firstFuncIndex: firstEmittedFuncIndex)
 

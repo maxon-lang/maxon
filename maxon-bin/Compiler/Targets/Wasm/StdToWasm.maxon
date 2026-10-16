@@ -1005,7 +1005,6 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 		osLockInit or
 		osLockEnter or
 		osLockLeave or
-		osLockDestroy or
 		osPipeCreate or
 		osEventCreate or
 		osThreadCreate or
@@ -1067,6 +1066,7 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 		tlsAlloc or
 		tlsSetValue or
 		tlsSlotLoad or
+		osThreadToken or
 		osSetEvent or
 		osEnterBackgroundPriority or
 		osFileOpenWriteExecutable or
@@ -1617,6 +1617,7 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		atomicRmw(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		tlsAlloc(resultId) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		tlsSlotLoad(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		osThreadToken(resultId) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		osEnterBackgroundPriority(resultId) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		osRandomFill(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 
@@ -1641,7 +1642,6 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		osLockInit or
 		osLockEnter or
 		osLockLeave or
-		osLockDestroy or
 		osPipeCreate or
 		osEventCreate or
 		osThreadCreate or
@@ -1988,7 +1988,6 @@ type WasmFuncEmitter
 			witnessTryCall then panic("emitStraightLineTerminator: a `witnessTryCall` is a value-producing body op, never a terminator")
 			osLockInit or
 			osLockEnter or
-			osLockDestroy or
 			osLockLeave then panic("emitStraightLineTerminator: an `osLock*` op is a body op, never a terminator")
 			osPipeCreate or
 			osEventCreate or
@@ -2053,6 +2052,7 @@ type WasmFuncEmitter
 			tlsAlloc or
 			tlsSetValue or
 			tlsSlotLoad or
+			osThreadToken or
 			osSetEvent or
 			osEnterBackgroundPriority then panic("emitStraightLineTerminator: a TLS op, an event signal or the priority door is a body op, never a terminator")
 			osEnvBlock or
@@ -2167,7 +2167,6 @@ type WasmFuncEmitter
 			witnessTryCall then panic("emitDispatcherTerminator: a `witnessTryCall` is a value-producing body op, never a terminator")
 			osLockInit or
 			osLockEnter or
-			osLockDestroy or
 			osLockLeave then panic("emitDispatcherTerminator: an `osLock*` op is a body op, never a terminator")
 			osPipeCreate or
 			osEventCreate or
@@ -2232,6 +2231,7 @@ type WasmFuncEmitter
 			tlsAlloc or
 			tlsSetValue or
 			tlsSlotLoad or
+			osThreadToken or
 			osSetEvent or
 			osEnterBackgroundPriority then panic("emitDispatcherTerminator: a TLS op, an event signal or the priority door is a body op, never a terminator")
 			osEnvBlock or
@@ -2336,7 +2336,6 @@ type WasmFuncEmitter
 			osDecommitPages or
 			osLockInit or
 			osLockEnter or
-			osLockDestroy or
 			osLockLeave then break
 
 			// One `memory.fill` is this lane's whole size ladder. See `emitMemFill`.
@@ -2467,6 +2466,7 @@ type WasmFuncEmitter
 			tlsAlloc or
 			tlsSetValue or
 			tlsSlotLoad or
+			osThreadToken or
 			osSetEvent then panic("emitBodyOp: the per-OS-thread storage ops and the event signal have no wasm32-wasi lowering — a WASI component has one thread and no kernel event object")
 
 			// ⚠ ITS OWN ARM, and its refusal is STRONGER than "not yet" — the shape `process-id.md` records for
@@ -4028,7 +4028,6 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 		osFreePages then panic("decideDispatcher: a host call (a panic, a clock read, a process, handle, wait or page op) is a body op, never a terminator")
 		osLockInit or
 		osLockEnter or
-		osLockDestroy or
 		osLockLeave then panic("decideDispatcher: an `osLock*` op is a body op, never a terminator")
 		osPipeCreate or
 		osEventCreate or
@@ -4093,6 +4092,7 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 		tlsAlloc or
 		tlsSetValue or
 		tlsSlotLoad or
+		osThreadToken or
 		osSetEvent or
 		osEnterBackgroundPriority then panic("decideDispatcher: a TLS op, an event signal or the priority door is a body op, never a terminator")
 		osEnvBlock or

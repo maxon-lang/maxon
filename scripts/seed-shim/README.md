@@ -109,6 +109,15 @@ from 2^63 up as a signed one, so a `C1` it builds derives wrong division constan
 `C2`. It is hand-written, and like the second case it withdraws behaviour in one function and leaves every table
 standing.
 
+⭐ **A RUNTIME-TIER GEOMETRY THE SEED'S PINS REFUSE IS THE EIGHTH CASE.** The seed checks the geometry
+`runtime/SlabRuntime.maxon` restates against its own (`checkSlabRuntimeGeometry`), and its allocator emits the
+slow-path lock it was built with, so a tree that changes the lock's width or how the lock is initialised is
+refused in the first build. `0008-withdraw-the-slab-lock-geometry-from-the-first-build.patch` writes the tier back
+to the seed's geometry and lock initialisation for that build only, so the tier `C1` carries matches the
+allocator the seed emits into it; the restore runs first, and `C1` builds `C2` from the tree's geometry. It is
+`git diff HEAD -R` of the tier file, regenerated after every edit to that file, and the freeze that pins a seed
+built from the tree makes it dead.
+
 ⛔ **Delete a patch once the pinned seed accepts what it withdraws.** `scripts/freeze-seed.sh` makes that seed from the tree,
 so the patches a freeze makes dead are all of them: the directory holds none while the pin is current. A patch is dead
 from that moment — the plain build succeeds and nothing here is read — and a patch that no longer

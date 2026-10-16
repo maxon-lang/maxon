@@ -525,6 +525,11 @@ export type RuntimeUsage
 
 	export var usesProcessDebug as bool
 
+	// A `__Raw.osLock*` call, the only producer of the `StdOp.osLock*` ops and the gate every POSIX
+	// lane lays its OS lock chunks on. A new producer that leaves it unset is a call to a chunk
+	// nothing laid out.
+	export var usesRawOsLock as bool
+
 	// ⭐⭐ **DOES A FILESYSTEM OR SOCKET ENTRY POINT PARK BEFORE ITS KERNEL CALL ON THIS TARGET?** It is an
 	// INPUT to the scan rather than one of its findings — the target decides it, not the program — and it is
 	// carried on this record because the arms that read it are three levels down inside `recordCallUsage`,
@@ -543,7 +548,7 @@ export type RuntimeUsage
 	export var neededInterfaceConversions = InterfaceConversionNameSet.create()
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesChildPipes: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesCloneExistential: false, usesCloneUncloneable: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesMmOwn: false, usesMmOwnDeep: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrUnshare: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededShareWalks: ShareWalkSet.create(), usesShareWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesManagedListener: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessNamespace: false, usesEntropy: false, usesBackgroundPriority: false, usesProcessLiveness: false, usesTerminalDetection: false, usesCpuCount: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSharedMemory: false, usesProcessSampling: false, usesDebugStream: false, usesCoverage: false, usesProcessDebug: false, parksOnIo: true}
+		return Self{usesHeap: false, usesGt: false, usesChildPipes: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesCloneExistential: false, usesCloneUncloneable: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesMmOwn: false, usesMmOwnDeep: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrUnshare: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesMmFromCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededSoleWalks: SoleWalkSet.create(), usesSoleWalk: false, neededShareWalks: ShareWalkSet.create(), usesShareWalk: false, neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesManagedSocket: false, usesManagedListener: false, usesCommandLine: false, usesConsoleStdin: false, usesExecutablePath: false, usesProcessNamespace: false, usesEntropy: false, usesBackgroundPriority: false, usesProcessLiveness: false, usesTerminalDetection: false, usesCpuCount: false, usesThreadCpuTicks: false, usesUptimeClock: false, usesDebugStreamLog: false, usesSharedMemory: false, usesProcessSampling: false, usesDebugStream: false, usesCoverage: false, usesProcessDebug: false, usesRawOsLock: false, parksOnIo: true}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -577,6 +582,12 @@ export function scanRuntimeUsage(module MaxonModule, libraryFacts LibraryFacts, 
 
 	return usage
 end 'scanRuntimeUsage'
+
+function recordRawIntrinsicUsage(intrinsic RawIntrinsic, usage RuntimeUsage)
+	if intrinsic == RawIntrinsic.osLockInit or intrinsic == RawIntrinsic.osLockEnter or intrinsic == RawIntrinsic.osLockLeave 'osLock'
+		usage.usesRawOsLock = true
+	end 'osLock'
+end 'recordRawIntrinsicUsage'
 
 function classifyRuntimeCall(op MaxonOp, usage RuntimeUsage, funcSignatures FuncSignatureMap)
 	match op 'op'
@@ -612,12 +623,12 @@ function classifyRuntimeCall(op MaxonOp, usage RuntimeUsage, funcSignatures Func
 		errorFlagEncode or
 		immortalStructRecord or
 		covPoint or
-		rawIntrinsic or
 		existentialWitness or
 		holdValue or
 		holdEnd then break
 
 		tryCall(_, _, callee, _, _, _, _, _, _) then recordCallUsage(callee, usage: usage)
+		rawIntrinsic(_, intrinsic, _, _) then recordRawIntrinsicUsage(intrinsic, usage: usage)
 
 		// A `functionRef` naming a user function is a bare `lea`, but one naming a compiler-emitted
 		// callee is an array element destructor's address stamped into `element_destroy@40`, and must

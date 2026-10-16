@@ -2257,6 +2257,18 @@ function buildX64LinuxMonotonicClockChunk() returns FunctionCodeChunk
 end 'buildX64LinuxMonotonicClockChunk'
 
 // ==========================================================================
+// mrt_host_thread_yield()
+// ==========================================================================
+
+function buildX64LinuxThreadYieldChunk() returns FunctionCodeChunk
+	var asm = X64RuntimeAsm.beginFunction(0)
+
+	encodeX64Syscall(asm.code, number: X64LinuxSyscallSchedYield)
+
+	return asm.finishFunction(HostThreadYieldName)
+end 'buildX64LinuxThreadYieldChunk'
+
+// ==========================================================================
 // mrt_host_sleep_ms(rcx = milliseconds), mrt_host_netpoll_sleep(rcx = microseconds)
 // ==========================================================================
 
@@ -2706,7 +2718,6 @@ end 'buildX64LinuxWaitCloseChunk'
 function buildX64LinuxLockInitChunk() returns FunctionCodeChunk
 	var asm = X64RuntimeAsm.beginFunction(0)
 
-	assertLinuxLockFits()
 	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: LinuxMutexFree)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: LinuxLockOffFutex as Imm32, srcReg: X64Register.rax, wide: true)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rcx, disp: LinuxLockOffOwner as Imm32, srcReg: X64Register.rax, wide: true)
@@ -4257,15 +4268,20 @@ export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, u
 		chunks.push(buildX64LinuxWaitCloseChunk())
 	end 'hostObjects'
 
-	// ⚠ **THE LOCK IS A FUTEX WORD, SO ITS ENTER AND LEAVE NEED BODIES** — three chunks here where the Darwin
-	// lane's `pthread_mutex_t` leaves it one. They ride a gate of their own because their producer set is not
-	// the band's: the allocator's slow-path lock reaches them in every allocating program.
+	// The main thread's slot block rides the runtime-lock gate, not the band's: a recursive lock reads
+	// its owner token from the block, and the allocator's slow-path lock does so in every allocating
+	// program.
 	if posixUsesHostLock(usage) 'hostLock'
+		chunks.push(buildX64LinuxMainThreadBlockChunk())
+	end 'hostLock'
+
+	// ⚠ **THE OS LOCK IS A FUTEX WORD, SO ITS ENTER AND LEAVE NEED BODIES** — three chunks here where
+	// the Darwin lane's `pthread_mutex_t` leaves it one.
+	if usage.usesRawOsLock 'rawOsLock'
 		chunks.push(buildX64LinuxLockInitChunk())
 		chunks.push(buildX64LinuxLockEnterChunk())
 		chunks.push(buildX64LinuxLockLeaveChunk())
-		chunks.push(buildX64LinuxMainThreadBlockChunk())
-	end 'hostLock'
+	end 'rawOsLock'
 
 	// ⭐ **THE GREEN-THREAD FLOOR, ON ONE BIT.** `usesGt` is the bit `installGtRuntime` itself was gated
 	// on, so every body that can `call` one of these is built under exactly the same condition — one bit, two
@@ -4275,6 +4291,7 @@ export function appendX64LinuxHostSurfaceChunks(chunks FunctionCodeChunkArray, u
 	// installs together.
 	if usage.usesGt 'greenThreadFloor'
 		chunks.push(buildX64LinuxSleepChunk(HostSleepMsName, unit: PosixTimeUnit.milliseconds))
+		chunks.push(buildX64LinuxThreadYieldChunk())
 		chunks.push(buildX64LinuxWaitNewChunk())
 		chunks.push(buildX64LinuxEventSetChunk())
 		chunks.push(buildX64LinuxWaitOneChunk())

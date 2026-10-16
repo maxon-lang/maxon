@@ -642,7 +642,6 @@ export type StdToArm64Lowering
 			osLockInit or
 			osLockEnter or
 			osLockLeave or
-			osLockDestroy or
 			osReadOverlapped or
 			osLastError or
 			osProcessSpawnInherit or
@@ -702,6 +701,7 @@ export type StdToArm64Lowering
 			tlsAlloc or
 			tlsSetValue or
 			tlsSlotLoad or
+			osThreadToken or
 			osSetEvent or
 			osEnterBackgroundPriority or
 			osFileOpenWriteExecutable or
@@ -903,7 +903,6 @@ export type StdToArm64Lowering
 			osLockInit(lockPtrId) then self.lowerOsLockInit(lockPtrId, dstRef: dstRef)
 			osLockEnter(lockPtrId) then self.lowerOsLockImport(lockPtrId, importSlot: OsImportSlot.pthreadMutexLock, chunk: LinuxLockEnterName, dstRef: dstRef)
 			osLockLeave(lockPtrId) then self.lowerOsLockImport(lockPtrId, importSlot: OsImportSlot.pthreadMutexUnlock, chunk: LinuxLockLeaveName, dstRef: dstRef)
-			osLockDestroy(lockPtrId) then self.lowerOsLockDestroy(lockPtrId, dstRef: dstRef)
 
 			// An "overlapped" read on this lane is a plain `read` and its overlapped operand is dead: the op
 			// answers true with the count in `bytesOutPtr` if the read completed synchronously, false with
@@ -1084,6 +1083,7 @@ export type StdToArm64Lowering
 			tlsAlloc(resultId) then self.lowerTlsAlloc(resultId, dstRef: dstRef)
 			tlsSetValue(indexId, valueId) then self.lowerTlsSetValue(indexId, valueId: valueId, dstRef: dstRef)
 			tlsSlotLoad(resultId, tebOffsetId) then self.lowerTlsSlotLoad(resultId, tebOffsetId: tebOffsetId, dstRef: dstRef)
+			osThreadToken(resultId) then self.emit(dstRef, op: TargetOp.arm64ThreadPointer(TargetVReg.virtual(resultId), source: arm64ThreadPointerSource(self.target.os)))
 			osSetEvent(handleId) then self.lowerOsSetEvent(handleId, dstRef: dstRef)
 
 			// Thread inheritance is owed on Linux, which scopes nice to the thread, and not on Darwin, which
@@ -1167,7 +1167,6 @@ export type StdToArm64Lowering
 			osLockInit or
 			osLockEnter or
 			osLockLeave or
-			osLockDestroy or
 			osReadOverlapped or
 			osLastError or
 			osProcessSpawnInherit or
@@ -1237,6 +1236,7 @@ export type StdToArm64Lowering
 			tlsAlloc or
 			tlsSetValue or
 			tlsSlotLoad or
+			osThreadToken or
 			osSetEvent then panic("StdToArm64Lowering: a TLS op or an event signal appeared as a block terminator (lowering bug — neither is a terminator)")
 			osEnterBackgroundPriority then panic("StdToArm64Lowering: an `osEnterBackgroundPriority` op appeared as a block terminator (lowering bug — the priority door is a value-producing body op)")
 			osFileOpenCreateNew or
@@ -2888,7 +2888,9 @@ export type StdToArm64Lowering
 			armChildSource or
 			closeChildSource or
 			armPipeSource or
-			shortSleep then self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(posixNetpollChunk(verb)), args: posixNetpollChunkArgs(verb, operands: operands), dstRef: dstRef)
+			shortSleep or
+			spinPause or
+			yieldThread then self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(posixNetpollChunk(verb)), args: posixNetpollChunkArgs(verb, operands: operands), dstRef: dstRef)
 			postChildExit then panic("lowerOsNetpoll: `postChildExit` forwards a child's exit to a completion port, and both of this CPU's lanes make a child's source readable on its own — `NetpollRuntime` emits it only under `NetpollShape.completionPort`")
 			openPipeServer or
 			openPipeClient or
@@ -2971,18 +2973,9 @@ export type StdToArm64Lowering
 		self.lowerHostValue(resultId, callee: Arm64HostCallee.chunk(HostEnvReadName), args: threeArgs(namePtrId, second: bufPtrId, third: bufLenId), dstRef: dstRef)
 	end 'lowerOsEnvRead'
 
-	// `osLockInit(region)` ⇒ `mrt_host_lock_init`, a chunk so the "does a Darwin mutex fit `OsLockBytes`?"
-	// assertion has a build-time home on the path it protects.
 	function lowerOsLockInit(lockPtrId ValueId, dstRef ElementIndex)
 		self.emitHostCall(dstRef, callee: Arm64HostCallee.chunk(HostLockInitName), args: argsOf(lockPtrId))
 	end 'lowerOsLockInit'
-
-	function lowerOsLockDestroy(lockPtrId ValueId, dstRef ElementIndex)
-		match arm64OsCallKind(self.target.os) 'route'
-			importCall then self.emitHostCall(dstRef, callee: Arm64HostCallee.import(OsImportSlot.pthreadMutexDestroy), args: argsOf(lockPtrId))
-			syscall then break
-		end 'route'
-	end 'lowerOsLockDestroy'
 
 	// ⭐ `osLockEnter`/`osLockLeave` — the region the Std tier allocated IS the lock (offset 0), so there is
 	// no field address to compute at either site. One emitter for both, because they differ only in which

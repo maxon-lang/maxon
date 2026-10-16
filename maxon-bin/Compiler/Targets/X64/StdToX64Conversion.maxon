@@ -215,6 +215,7 @@ let Win32NullHandle = 0
 let DoNotInheritHandles = 0
 let WaitIsNotAlertable = 0
 let WindowsLockSpinCount = 4000
+let X64WindowsTebSelfOffset = 0x30
 
 let InheritHandlesTrue = 1  // CreateProcessW bInheritHandles=TRUE (the child inherits the pipe write end)
 
@@ -1140,6 +1141,7 @@ export type StdToX64Lowering
 			tlsAlloc or
 			tlsSetValue or
 			tlsSlotLoad or
+			osThreadToken or
 			osSetEvent or
 			osEnterBackgroundPriority or
 			const or
@@ -1175,7 +1177,6 @@ export type StdToX64Lowering
 			osLockInit or
 			osLockEnter or
 			osLockLeave or
-			osLockDestroy or
 			osLastError or
 			osCancelIo or
 			osGetPid or
@@ -1506,7 +1507,6 @@ export type StdToX64Lowering
 			osLockInit(lockPtrId) then self.lowerOsLockInit(lockPtrId, dstBlock: dstBlock)
 			osLockEnter(lockPtrId) then self.lowerOsLockOp(lockPtrId, importSlot: IatSlot.EnterCriticalSection, chunk: LinuxLockEnterName, dstBlock: dstBlock)
 			osLockLeave(lockPtrId) then self.lowerOsLockOp(lockPtrId, importSlot: IatSlot.LeaveCriticalSection, chunk: LinuxLockLeaveName, dstBlock: dstBlock)
-			osLockDestroy(lockPtrId) then self.lowerOsLockDestroy(lockPtrId, dstBlock: dstBlock)
 			osReadOverlapped(resultId, handleId, bufId, capId, bytesOutPtrId, ovlId) then self.lowerOsReadOverlapped(resultId, handleId: handleId, bufId: bufId, capId: capId, bytesOutPtrId: bytesOutPtrId, ovlId: ovlId, dstBlock: dstBlock)
 			osLastError(resultId) then self.lowerOsLastError(resultId, dstBlock: dstBlock)
 			osProcessSpawnInherit(cmdlinePtrId, cwdPtrId, creationFlagsId, startupPtrId, procInfoPtrId, envPtrId) then self.lowerOsProcessSpawn(cmdlinePtrId, cwdPtrId: cwdPtrId, creationFlagsId: creationFlagsId, startupPtrId: startupPtrId, procInfoPtrId: procInfoPtrId, envPtrId: envPtrId, inheritHandles: true, dstBlock: dstBlock)
@@ -1588,6 +1588,7 @@ export type StdToX64Lowering
 			tlsAlloc(resultId) then self.lowerTlsAlloc(resultId, dstBlock: dstBlock)
 			tlsSetValue(indexId, valueId) then self.lowerTlsSetValue(indexId, valueId: valueId, dstBlock: dstBlock)
 			tlsSlotLoad(resultId, tebOffsetId) then self.lowerTlsSlotLoad(resultId, tebOffsetId: tebOffsetId, dstBlock: dstBlock)
+			osThreadToken(resultId) then self.lowerOsThreadToken(resultId, dstBlock: dstBlock)
 			osSetEvent(handleId) then self.lowerOsSetEvent(handleId, dstBlock: dstBlock)
 			osEnterBackgroundPriority(resultId) then self.lowerOsEnterBackgroundPriority(resultId, dstBlock: dstBlock)
 		end 'lower'
@@ -1665,7 +1666,6 @@ export type StdToX64Lowering
 			osLockInit or
 			osLockEnter or
 			osLockLeave or
-			osLockDestroy or
 			osReadOverlapped or
 			osLastError or
 			osProcessSpawnInherit or
@@ -1721,6 +1721,7 @@ export type StdToX64Lowering
 			tlsAlloc or
 			tlsSetValue or
 			tlsSlotLoad or
+			osThreadToken or
 			osSetEvent or
 			osEnterBackgroundPriority then panic("StdToX64Lowering: a TLS op, an event signal or the priority door appeared as a block terminator (lowering bug — none of them is a terminator)")
 			osEnvBlock or
@@ -3427,13 +3428,6 @@ export type StdToX64Lowering
 		end 'route'
 	end 'lowerOsLockInit'
 
-	function lowerOsLockDestroy(lockPtrId ValueId, dstBlock IrBlock)
-		match x64OsCallKind(self.target.os) 'route'
-			importCall then self.emitHostCall(dstBlock, callee: HostCallee.import(IatSlot.DeleteCriticalSection), args: argsOf(lockPtrId))
-			syscall then break
-		end 'route'
-	end 'lowerOsLockDestroy'
-
 	function lowerOsLockInitWin64(lockPtrId ValueId, dstBlock IrBlock)
 		self.emitHostArgMoves(dstBlock, args: argsOf(lockPtrId))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(hostChunkArgRegisterAt(1)), value: WindowsLockSpinCount))
@@ -4077,7 +4071,9 @@ export type StdToX64Lowering
 			armChildSource or
 			closeChildSource or
 			armPipeSource or
-			shortSleep then self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.chunk(posixNetpollChunk(verb)), args: posixNetpollChunkArgs(verb, operands: operands), dstBlock: dstBlock)
+			shortSleep or
+			spinPause or
+			yieldThread then self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.chunk(posixNetpollChunk(verb)), args: posixNetpollChunkArgs(verb, operands: operands), dstBlock: dstBlock)
 			postChildExit then panic("lowerOsNetpollLinux: `postChildExit` forwards a child's exit to a completion port, and this lane's `pidfd` becomes readable on its own — `NetpollRuntime` emits it only under `NetpollShape.completionPort`")
 			openPipeServer or
 			openPipeClient or
@@ -4114,7 +4110,9 @@ export type StdToX64Lowering
 
 			// `SwitchToThread()` — the microseconds are unread here, for `NetpollVerb.shortSleep`'s reason: a
 			// waitable timer quantised to the system tick would turn a 3 µs back-off into a millisecond one.
-			shortSleep then self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.SwitchToThread, into: TargetVReg.virtual(resultId))
+			shortSleep or
+			yieldThread then self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.SwitchToThread, into: TargetVReg.virtual(resultId))
+			spinPause then self.lowerHostValue(TargetVReg.virtual(resultId), callee: HostCallee.chunk(HostSpinPauseName), args: argsOf(netpollOperand(operands, index: 0)), dstBlock: dstBlock)
 		end 'v'
 	end 'lowerOsNetpollWin64'
 
@@ -4803,6 +4801,17 @@ export type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.x64GsLoadRegBase(TargetVReg.virtual(resultId), base: TargetVReg.virtual(tebOffsetId)))
 	end 'lowerTlsSlotLoad'
 
+	function lowerOsThreadToken(resultId ValueId, dstBlock IrBlock)
+		let selfSlot = match x64OsCallKind(self.target.os) 'route'
+			importCall gives X64WindowsTebSelfOffset
+			syscall gives linuxTlsSelfSlotOffset()
+		end 'route'
+
+		let slot = self.mintVirtual()
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(slot, value: selfSlot as MachineWord))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.x64GsLoadRegBase(TargetVReg.virtual(resultId), base: slot))
+	end 'lowerOsThreadToken'
+
 	// Lower `osSetEvent(handle)` to `SetEvent(handle)` — one register argument, the BOOL result ignored.
 	function lowerOsSetEvent(handleId ValueId, dstBlock IrBlock)
 		self.emitHostCall(dstBlock, callee: self.hostCalleeOn(IatSlot.SetEvent, chunk: HostEventSetName), args: argsOf(handleId))
@@ -5282,7 +5291,6 @@ export type StdToX64Lowering
 			osLockInit or
 			osLockEnter or
 			osLockLeave or
-			osLockDestroy or
 			osReadOverlapped or
 			osLastError or
 			osProcessSpawnInherit or
@@ -5341,6 +5349,7 @@ export type StdToX64Lowering
 			tlsAlloc or
 			tlsSetValue or
 			tlsSlotLoad or
+			osThreadToken or
 			osSetEvent or
 			osEnterBackgroundPriority or
 			osFileOpenWriteExecutable or
@@ -5535,7 +5544,6 @@ export type StdToX64Lowering
 			osLockInit or
 			osLockEnter or
 			osLockLeave or
-			osLockDestroy or
 			osReadOverlapped or
 			osLastError or
 			osProcessSpawnInherit or
@@ -5597,6 +5605,7 @@ export type StdToX64Lowering
 			tlsAlloc or
 			tlsSetValue or
 			tlsSlotLoad or
+			osThreadToken or
 			osSetEvent or
 			osEnterBackgroundPriority panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a TLS op, an event signal or the priority door, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osEnvBlock or

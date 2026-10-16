@@ -390,12 +390,13 @@ columns rise and the tracked ones do not. The third assertion separates the byte
 column: the mailbox is many bytes wide, so the two deltas cannot be equal unless one of the two
 intrinsics is wired to the other's slot.
 
-⭐ **THE MAILBOX IS ONE REGION OF 128 BYTES: ITS 64-BYTE RECORD AND ITS OWN HOST LOCK.** A mailbox's head,
-tail, closed flag and parked receiver are guarded by a lock of the mailbox's own, not by `__sched_lock`, so
-the region `__svc_spawn` cuts holds the record and, behind it, the `OsLockBytes` (64) the host lock is
-initialised into. The fifth assertion pins the first window at exactly that: one raw region, 128 bytes. A
-mailbox still guarded by the scheduler's lock reads 64; a lock cut as a region of its own reads two
-regions.
+⭐ **THE MAILBOX IS ONE REGION OF 72 BYTES: ITS 64-BYTE RECORD AND ITS OWN 8-BYTE LOCK WORD.** A mailbox's
+head, tail, closed flag and parked receiver are guarded by a lock of the mailbox's own, not by
+`__sched_lock`, so the region `__svc_spawn` cuts holds the record and, behind it, the lock word — a
+runtime lock is one zeroed word, so the slab's zeroing is its whole initialisation. The byte column counts
+the size requested, not the slab class it lands in, so the fifth assertion pins the first window at
+exactly that: one raw region, 72 bytes. A mailbox still guarded by the scheduler's lock reads 64; a lock
+cut as a region of its own reads two regions.
 
 ⭐ **A MESSAGE TAKES NO RAW REGION, AND THE SECOND WINDOW IS WHERE THAT IS SAID.** The mailbox's queue is
 intrusive: the request box the send hands over carries the queue's link itself, so `__mbox_send` cuts
@@ -432,7 +433,7 @@ type Counter
 end 'Counter'
 
 let mailboxRecordBytes = 64
-let hostLockBytes = 64
+let lockWordBytes = 8
 
 function main() returns ExitCode
 	let before = __Builtins.mmRawAllocTotal()
@@ -457,7 +458,7 @@ function main() returns ExitCode
 	if afterSecond == after and bytesAfterSecond == bytesAfter 'aMessageTakesNoRawRegion'
 		score = score + 4
 	end 'aMessageTakesNoRawRegion'
-	if after - before == 1 and bytesAfter - bytesBefore == mailboxRecordBytes + hostLockBytes 'theMailboxCarriesItsOwnLock'
+	if after - before == 1 and bytesAfter - bytesBefore == mailboxRecordBytes + lockWordBytes 'theMailboxCarriesItsOwnLock'
 		score = score + 5
 	end 'theMailboxCarriesItsOwnLock'
 	return score as ExitCode

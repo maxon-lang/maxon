@@ -452,6 +452,16 @@ export enum RuntimeAbort
 	// first allocation committed it; reading on would dereference the uncommitted sentinel.
 	slabStateReadBeforeCommit = 124
 
+	// `__rtlock_release` / `__rtlock_pool_release`: a runtime lock released while free; or, in a
+	// program without the scheduler, `__rtlock_acquire` found the lock held. Such a program has one OS
+	// thread, so a held lock there is one taken twice, and waiting would never end.
+	runtimeLockMisused = 125
+
+	// `__rtlock_acquire` and its siblings: the host refused the event a machine's first contended
+	// sleep on a runtime lock creates (`osEventCreate` answered 0), so the machine has nothing to
+	// sleep on.
+	runtimeLockSemaphoreRefused = 126
+
 	// ⚠ **108 IS VACANT, NOT REUSABLE.** The fault it would name — `__np_pd_open` / `__np_pd_release` finding
 	// a green thread still PUBLISHED on a direction word of the record they are about to reset — is not a
 	// fault: it rests on the false claim that no two green threads can name one socket box, where a co-owning

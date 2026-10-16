@@ -135,14 +135,12 @@ export enum OsImportSlot
 	pthreadJoin
 	getenv
 
-	// ⭐⭐ **THE THREE ATTRIBUTE CALLS EXIST BECAUSE A WIN32 `CRITICAL_SECTION` IS RECURSIVE AND A DEFAULT
-	// POSIX MUTEX IS NOT — MEASURED, as a HANG.** `osLockInit`'s Std-tier callers take the same lock nested
-	// (`SchedRuntime`'s own header records it: *"a nested `LeaveCriticalSection` releases nothing"*), which
+	// ⭐⭐ **THE THREE ATTRIBUTE CALLS EXIST BECAUSE A WIN32 `CRITICAL_SECTION` IS RECURSIVE AND A
+	// DEFAULT POSIX MUTEX IS NOT.** `__Raw.osLockEnter` may take the same lock nested, which
 	// `EnterCriticalSection` permits by definition. A `pthread_mutex_init(m, NULL)` mutex is
-	// `PTHREAD_MUTEX_DEFAULT` = `PTHREAD_MUTEX_NORMAL`, whose second lock by the owning thread DEADLOCKS: the
-	// first arm64-macOS `async` build hung in `__slab_refill` → `_pthread_mutex_firstfit_lock_wait` on the
-	// slab's own re-entered lock. So the region `osLockInit` initialises is built with
-	// `PTHREAD_MUTEX_RECURSIVE`, and these are the calls that say so.
+	// `PTHREAD_MUTEX_DEFAULT` = `PTHREAD_MUTEX_NORMAL`, whose second lock by the owning thread
+	// DEADLOCKS. So the region `osLockInit` initialises is built with `PTHREAD_MUTEX_RECURSIVE`, and
+	// these are the calls that say so.
 	//
 	// ⚠ **THE WAIT OBJECT'S OWN MUTEX IS DELIBERATELY *NOT* RECURSIVE**, and the difference is not tidiness:
 	// `pthread_cond_wait` on a recursively-held mutex releases ONE level, so a condvar paired with a recursive
@@ -362,6 +360,7 @@ export enum OsImportSlot
 	pthreadThreadidNp
 	sysctlbyname
 	getentropy
+	schedYield
 end 'OsImportSlot'
 
 // The import slot index a call site records and the writer patches against. One accessor
@@ -401,6 +400,7 @@ export function osImportAnswerOf(slot OsImportSlot) returns ImportAnswer
 		getpriority or
 		sysctlbyname or
 		getentropy or
+		schedYield or
 		pthreadKeyCreate or
 		pthreadSetspecific or
 		pthreadMutexInit or

@@ -703,10 +703,18 @@ let MLockedParkWaiting = 1
 
 export let MOffOsThreadUniqueId = MOffLockedStrand + PointerSlotBytes
 
-// The three head scalars, the inline GT, the idle tail, the syscall bracket's three, the idle back-link, the
-// wake count, the regain link, asynchronous preemption's four and the pinned thread's three. Derived, never
-// written down as a number, for `PStructSize`'s reason.
-let MStructSize = ((MOffOsThreadUniqueId + PointerSlotBytes) as FullRangeInt)
+// A runtime lock's sleeper (`RuntimeLock`): the next M on the lock word's sleeper stack, the
+// semaphore this M sleeps on, created on its first contended sleep, and the state of the release's
+// tail-wake draw.
+export let MOffLockWaitNext = MOffOsThreadUniqueId + PointerSlotBytes
+export let MOffLockSema = MOffLockWaitNext + PointerSlotBytes
+export let MOffLockRand = MOffLockSema + PointerSlotBytes
+
+// The three head scalars, the inline GT, the idle tail, the syscall bracket's three, the idle
+// back-link, the wake count, the regain link, asynchronous preemption's four, the pinned thread's
+// three and the lock sleeper's three. Derived, never written down as a number, for `PStructSize`'s
+// reason.
+let MStructSize = ((MOffLockRand + PointerSlotBytes) as FullRangeInt)
 
 // ==========================================================================
 // The ProcContext (P) struct
@@ -1285,6 +1293,10 @@ let GtRecordsCarvedLabel = b"__gt_records_carved"
 // reading the resolution itself. `runtime/CpuParallel.maxon` owns the query's body.
 export let SchedNumProcsLabel = b"__sched_num_procs"
 
+// The host's CPU count before `MAXON_MAX_PROCS` applies — Go's `ncpu`. A runtime lock spins only
+// while it exceeds 1, so a program capped at one processor on a multicore host still spins.
+export let SchedNcpuLabel = b"__sched_ncpu"
+
 // ⭐⭐ **HOW MANY MACHINES ARE ON `__sched_midle` — Go's `sched.nmidle`.** Stepped by the list's two doors
 // (`emitSchedMidlePutLocked`, `emitSchedMidleUnlinkLocked`), so it is the list's length by construction;
 // `__sched_checkdead` subtracts it from `__sched_mcount`.
@@ -1542,8 +1554,8 @@ export function targetPreemptDelivery(target Target) returns PreemptDelivery
 	end 'os'
 end 'targetPreemptDelivery'
 
-// ⭐ **`__sched_lock` — Go's `sched.lock`: a `.data` word holding a slab-allocated
-// CRITICAL_SECTION.** It is allocated by `__gt_init` for EVERY green-thread program. It guards the
+// ⭐ **`__sched_lock` — Go's `sched.lock`: a recursive runtime lock (`RuntimeLock`) laid out in
+// `.data`** for EVERY green-thread program. It guards the
 // global run queue and its counts, the idle processor and machine lists, the machine roster, the
 // regain list and the process phase, and with them the timer store and the poll-descriptor band.
 // Every other shared structure has its own lock or claim: a GT record's
@@ -1552,13 +1564,13 @@ end 'targetPreemptDelivery'
 //
 // ⚠ **ONE LOCK OVER THE QUEUE, THE TIMERS AND THE POLLER, AND THAT IS A DEADLOCK ARGUMENT.**
 // Separate locks would have to be held together wherever a readiness readies a thread, and two
-// locks held together have an ORDER that every file touching them would have to remember. A
-// CRITICAL_SECTION is recursive, so one lock covering all of it has no order to get wrong. A record
+// locks held together have an ORDER that every file touching them would have to remember. The
+// lock is recursive, so one lock covering all of it has no order to get wrong. A record
 // lock is taken inside it — a ready from the timer store or the poller, the hand-off gate's requeue
 // — and no record lock is held while it is taken.
 export let SchedLockLabel = b"__sched_lock"
 
-let GtFreeLockLabel = b"__gt_gfree_lock"
+export let GtFreeLockLabel = b"__gt_gfree_lock"
 
 // ⭐ **WHERE A THREAD WITH NO MACHINE KEEPS ITS LOCK DEPTH** — see `emitSchedLockDepthAddr`. The monitor takes
 // `__sched_lock` and is not a machine; it runs no green thread, so the number it leaves here is read by nobody
@@ -2333,13 +2345,17 @@ export function schedRuntimeGlobals(usage RuntimeUsage, target Target) returns D
 	pushRuntimeGlobal(out, label: SchedPidleLabel, sharing: MultiMSharing.underSchedLock, reach: DataReach.walked)
 
 	// A fourth intrusive head, for the same reason, and the record arena's three words beside it, all
-	// under `__gt_gfree_lock`. The lock words are written once, by `__sched_init_procs`.
+	// under `__gt_gfree_lock`.
 	pushRuntimeGlobal(out, label: SchedGtFreeHeadLabel, sharing: MultiMSharing.underOwnLock, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: SchedArenaCursorLabel, sharing: MultiMSharing.underOwnLock, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: SchedArenaLimitLabel, sharing: MultiMSharing.underOwnLock, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: GtRecordsCarvedLabel, sharing: MultiMSharing.underOwnLock, reach: DataReach.walked)
-	pushRuntimeGlobal(out, label: GtFreeLockLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
-	pushRuntimeGlobal(out, label: RegistryLockLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
+
+	if usage.usesGt 'recordFreeListLock'
+		pushRecursiveRuntimeLock(out, label: GtFreeLockLabel)
+	end 'recordFreeListLock'
+
+	pushRuntimeGlobal(out, label: RegistryLockLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.walked)
 
 	// The three counts kept beside those structures, each stepped only inside the doors that mutate its
 	// structure and therefore under the same lock. `__sched_npidle`'s unlocked reads are enumerated
@@ -2372,15 +2388,15 @@ export function schedRuntimeGlobals(usage RuntimeUsage, target Target) returns D
 	// ⚠ It is pushed HERE, between the array it measures and the teardown flag, because the layout order is
 	// the `.data` order: moving it would re-lay every green-thread program's section to say nothing new.
 	pushRuntimeGlobal(out, label: SchedNumProcsLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: SchedNcpuLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.walked)
 
 	// ⚠ `__sched_shutdown_flag`'s one writer is the teardown and therefore runs AFTER the workers — see
 	// its own declaration for why that makes it `lastWriterWins` rather than sealed.
 	pushRuntimeGlobal(out, label: SchedShutdownFlagLabel, sharing: MultiMSharing.lastWriterWins, reach: DataReach.walked)
 
-	// The lock is `__sched_init_procs`'s like the three above.
-	if usage.usesGt 'lockReadByTheChunks'
-		pushRuntimeGlobal(out, label: SchedLockLabel, sharing: MultiMSharing.sealedBeforeWorkers, reach: DataReach.declared)
-	end 'lockReadByTheChunks'
+	if usage.usesGt 'schedLock'
+		pushRecursiveRuntimeLock(out, label: SchedLockLabel)
+	end 'schedLock'
 
 	pushRuntimeGlobal(out, label: SchedLockDepthSinkLabel, sharing: MultiMSharing.lastWriterWins, reach: DataReach.walked)
 
@@ -2521,14 +2537,6 @@ function emitSchedWakeMachine(module StdModule, block IrBlock, m ValueId, ids Va
 	module.appendOp(block, op: StdOp.osSetEvent(emitLoadField(module, block: block, record: m, offset: MOffParkEvent, ids: ids)))
 end 'emitSchedWakeMachine'
 
-function emitAllocRuntimeLock(module StdModule, block IrBlock, label ByteArray, ids ValueMinter)
-	let lockBytes = emitConst(module, block: block, value: OsLockBytes, ids: ids)
-	let lock = ids.mint()
-	module.appendOp(block, op: StdOp.call(lock, callee: SlabAllocName, args: argsOf(lockBytes)))
-	module.appendOp(block, op: StdOp.osLockInit(lock))
-	emitStoreGlobalWord(module, block: block, label: label, value: lock, ids: ids)
-end 'emitAllocRuntimeLock'
-
 // Take / release a runtime lock, stepping this machine's lock depth around it so an asynchronous
 // stop can refuse a thread that holds one (`MOffLocks`).
 //
@@ -2536,37 +2544,43 @@ end 'emitAllocRuntimeLock'
 // the window in which this machine reads as lock-free is always a window in which it really is. The
 // other order would leave an instant holding the lock with a zero count, which is exactly the
 // instant a stop would wedge every other machine.
-export function emitLockEnterAt(module StdModule, block IrBlock, lock ValueId, ids ValueMinter)
+export function emitLockEnterAt(module StdModule, block IrBlock, lock ValueId, kind RuntimeLockKind, ids ValueMinter)
 	emitSchedStepLockDepth(module, block: block, delta: OneMore, ids: ids)
-	module.appendOp(block, op: StdOp.osLockEnter(lock))
+	emitRuntimeLockMark(module, block: block, lock: lock, mark: runtimeLockMarkOf(kind, entering: true), ids: ids)
 end 'emitLockEnterAt'
 
-export function emitLockLeaveAt(module StdModule, block IrBlock, lock ValueId, ids ValueMinter)
-	module.appendOp(block, op: StdOp.osLockLeave(lock))
+export function emitLockLeaveAt(module StdModule, block IrBlock, lock ValueId, kind RuntimeLockKind, ids ValueMinter)
+	emitRuntimeLockMark(module, block: block, lock: lock, mark: runtimeLockMarkOf(kind, entering: false), ids: ids)
 	emitSchedStepLockDepth(module, block: block, delta: OneFewer, ids: ids)
 end 'emitLockLeaveAt'
 
-export function emitLockWordEnter(module StdModule, block IrBlock, label ByteArray, ids ValueMinter)
-	emitLockEnterAt(module, block: block, lock: emitLoadGlobalWord(module, block: block, label: label, ids: ids), ids: ids)
+function emitGlobalLockAddr(module StdModule, block IrBlock, label ByteArray, ids ValueMinter) returns ValueId
+	let lock = ids.mint()
+	module.appendOp(block, op: StdOp.globalAddr(lock, label: label))
+	return lock
+end 'emitGlobalLockAddr'
+
+export function emitLockWordEnter(module StdModule, block IrBlock, label ByteArray, kind RuntimeLockKind, ids ValueMinter)
+	emitLockEnterAt(module, block: block, lock: emitGlobalLockAddr(module, block: block, label: label, ids: ids), kind: kind, ids: ids)
 end 'emitLockWordEnter'
 
-export function emitLockWordLeave(module StdModule, block IrBlock, label ByteArray, ids ValueMinter)
-	emitLockLeaveAt(module, block: block, lock: emitLoadGlobalWord(module, block: block, label: label, ids: ids), ids: ids)
+export function emitLockWordLeave(module StdModule, block IrBlock, label ByteArray, kind RuntimeLockKind, ids ValueMinter)
+	emitLockLeaveAt(module, block: block, lock: emitGlobalLockAddr(module, block: block, label: label, ids: ids), kind: kind, ids: ids)
 end 'emitLockWordLeave'
 
 export function emitSchedLockEnter(module StdModule, block IrBlock, ids ValueMinter)
-	emitLockWordEnter(module, block: block, label: SchedLockLabel, ids: ids)
+	emitLockWordEnter(module, block: block, label: SchedLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
 end 'emitSchedLockEnter'
 
 export function emitSchedLockLeave(module StdModule, block IrBlock, ids ValueMinter)
-	emitLockWordLeave(module, block: block, label: SchedLockLabel, ids: ids)
+	emitLockWordLeave(module, block: block, label: SchedLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
 end 'emitSchedLockLeave'
 
 // ⭐⭐ **STEP THE CALLING MACHINE'S RUNTIME-LOCK DEPTH — `MOffLocks`.** The allocator's lock pair steps the
 // same word through `emitStepLockDepthAt`: a thread holding the ALLOCATOR's slow-path lock is as
 // unstoppable as one holding `__sched_lock`, and two mechanisms writing one word through two spellings is
 // the shape this file's header refuses.
-export function emitSchedStepLockDepth(module StdModule, block IrBlock, delta FullRangeInt, ids ValueMinter)
+function emitSchedStepLockDepth(module StdModule, block IrBlock, delta FullRangeInt, ids ValueMinter)
 	emitStepLockDepthAt(module, block: block, depthAddr: emitSchedLockDepthAddr(module, block: block, ids: ids), delta: delta, ids: ids)
 end 'emitSchedStepLockDepth'
 
@@ -2619,15 +2633,16 @@ end 'emitSchedLockDepthAddr'
 // doubly linked, because two of its removals are from the middle, and has its own doors below under the same
 // clearing rule.
 //
-// ⛔⛔ **WHAT SERIALIZES A LIST IS ITS HEAD's CASE, AND EVERY CALL SITE SPELLS IT** (`SchedListHead`): a `.data`
-// head is `lockedWord`, touched only under `__sched_lock`. ⚠ **ONE SITE BREAKS THAT AND IS NAMED HERE:
-// `__sched_init_procs`'s BUILD LOOP**, which puts every processor but P[0] on `__sched_pidle` with no lock and
-// argues its own exemption at the site on `sealedBeforeWorkers` grounds — bring-up is single-threaded BY
-// CONSTRUCTION, because that loop is what builds the array a worker could ever be spawned onto. It is stated
-// here as well as there because a rule with a silent exception is a rule the next reader will not trust. Go
-// asserts it (`assertLockHeld(&sched.lock)` at `mput`, `mget`, `pidleput` and `pidleget`); the compiler has no
-// such assert to emit, and `osLockEnter` is a RECURSIVE CRITICAL_SECTION, so getting it wrong produces no
-// diagnostic anywhere — only a list that loses a node.
+// ⛔⛔ **WHAT SERIALIZES A LIST IS ITS HEAD's CASE, AND EVERY CALL SITE SPELLS IT**
+// (`SchedListHead`): a `.data` head is `lockedWord`, touched only under `__sched_lock`. ⚠ **ONE
+// SITE BREAKS THAT AND IS NAMED HERE: `__sched_init_procs`'s BUILD LOOP**, which puts every
+// processor but P[0] on `__sched_pidle` with no lock and argues its own exemption at the site on
+// `sealedBeforeWorkers` grounds — bring-up is single-threaded BY CONSTRUCTION, because that loop is
+// what builds the array a worker could ever be spawned onto. It is stated here as well as there
+// because a rule with a silent exception is a rule the next reader will not trust. Go asserts it
+// (`assertLockHeld(&sched.lock)` at `mput`, `mget`, `pidleput` and `pidleget`); the compiler has no
+// such assert to emit, and `__sched_lock` is RECURSIVE, so getting it wrong produces no diagnostic
+// anywhere — only a list that loses a node.
 
 // Where a LIFO's head word lives, which is also what serializes it.
 union SchedListHead
@@ -2877,8 +2892,9 @@ end 'emitSchedMidleUnlinkLocked'
 // `GtRuntime.__gt_ready_locked` answered; `wake` and `cont` are the caller's blocks, so each keeps its own
 // block order. Two properties, and neither is optional:
 //
-//   • **AFTER the release**, because `LeaveCriticalSection` is the StoreLoad fence
-//     `buildSchedWakeOrSpawn`'s `idleFlag` scan depends on, and a nested leave releases nothing.
+//   • **AFTER the release**, because the outermost release's compare-and-swap is the StoreLoad
+//     fence `buildSchedWakeOrSpawn`'s `idleFlag` scan depends on, and a nested leave releases
+//     nothing.
 //   • **ONLY IF OWED**, because an unconditional wake in a coroutine-only program would find no idle M and
 //     then START one on a free P — an OS thread that idles for the life of the process, which is exactly the
 //     `workers` reading `multicore-stress/pin-matrix.sh` pins at 1.
@@ -2972,13 +2988,6 @@ function buildSchedInitProcs(module StdModule, target Target)
 	emitResolveMaxProcs(module, func: func, cur: slotHeld, settled: settled, ids: ids)
 
 	emitStoreGlobalWord(module, block: settled, label: SchedNumProcsLabel, value: numProcs, ids: ids)
-
-	// The run-queue CRITICAL_SECTION, in a slab region whose pointer the `.data` word holds. Its lifetime is
-	// the process's, exactly as the completion port's and the wake events' are — see `SchedLockLabel`.
-	emitAllocRuntimeLock(module, block: settled, label: SchedLockLabel, ids: ids)
-	emitAllocRuntimeLock(module, block: settled, label: GtFreeLockLabel, ids: ids)
-	emitAllocRuntimeLock(module, block: settled, label: GtAllGLockLabel, ids: ids)
-	emitAllocRuntimeLock(module, block: settled, label: RegistryLockLabel, ids: ids)
 
 	// The `P*` array. `__slab_alloc` zeroes it, so a slot the loop has not reached yet reads as a null P
 	// rather than as garbage — which matters only until the loop fills every one, and costs nothing.
@@ -3245,6 +3254,8 @@ function emitResolveMaxProcs(module StdModule, func IrFunction, cur IrBlock, set
 	let flooredCpus = emitConst(module, block: cpuFloor, value: MinimumProcessorCount, ids: ids)
 	module.setTerminator(cpuFloor, op: StdOp.branch(cpuKnown.id))
 	cpuFloor.branchEdges.push(BranchEdge.create(cpuKnown.id, argIds: argsOf(flooredCpus)))
+
+	emitStoreGlobalWord(module, block: cpuKnown, label: SchedNcpuLabel, value: liveCpus, ids: ids)
 
 	let firstCapacity = emitConst(module, block: cpuKnown, value: SchedEnvValueBufBytes, ids: ids)
 	let read = emitReadSchedEnvValue(module, block: cpuKnown, name: MaxProcsEnvName, capacity: firstCapacity, ids: ids)
@@ -3599,7 +3610,7 @@ function buildSchedRunqPut(module StdModule)
 	// globalOnly: this OS thread owns no P, so it has no ring to push — the global queue is where a
 	// thread belongs when nobody owns it yet, and it is exactly what `__sched_find_runnable`'s batch
 	// grab is for. The lock is taken HERE rather than owed by the caller: most publishers reach this
-	// holding no lock, and a CRITICAL_SECTION is recursive, so one that already holds it — a ready
+	// holding no lock, and `__sched_lock` is recursive, so one that already holds it — a ready
 	// from the timer store or the poller — pays two counted ops and nothing else.
 	emitSchedLockEnter(module, block: globalOnly, ids: ids)
 	emitSchedEnqueueLocked(module, block: globalOnly, gt: gt, ids: ids)
@@ -3649,11 +3660,12 @@ function buildSchedRunqPut(module StdModule)
 	module.setTerminator(claim, op: StdOp.condBranch(lostClaim, thenBlockId: retry.id, elseBlockId: moveLock.id))
 	claim.branchEdges.push(BranchEdge.create(retry.id, argIds: argsOf(pushGt)))
 
-	// ⛔⛔ **THE ACQUIRE GETS A BLOCK OF ITS OWN, AND BOTH NEIGHBOURS WOULD BE A HANG.** `osLockEnter` is a
-	// Win32 CRITICAL_SECTION, so it COUNTS: an acquire in the loop header below would recurse it 128 times
-	// against the one release at `moveDone`, and an acquire in `claim` would be taken again on every lost-CAS
-	// retry. Both leave the lock held for the process's life, and neither is a fault — the failure is a hang in
-	// the next thread to want the global queue. One acquire, on the one edge that runs exactly once.
+	// ⛔⛔ **THE ACQUIRE GETS A BLOCK OF ITS OWN, AND BOTH NEIGHBOURS WOULD BE A HANG.** `__sched_lock`
+	// is recursive, so it COUNTS: an acquire in the loop header below would recurse it 128 times
+	// against the one release at `moveDone`, and an acquire in `claim` would be taken again on every
+	// lost-CAS retry. Both leave the lock held for the process's life, and neither is a fault — the
+	// failure is a hang in the next thread to want the global queue. One acquire, on the one edge that
+	// runs exactly once.
 	//
 	// ⚠ **A CALLER THAT ALREADY HOLDS THE LOCK REACHES HERE, AND THAT IS SAFE**, because the same recursion
 	// counts a nested pair correctly. What such a caller must not rely on is this leave being the StoreLoad
@@ -3666,12 +3678,12 @@ function buildSchedRunqPut(module StdModule)
 
 	emitBranchOnCompareValues(module, block: moveHdr, a: moveIndex, pred: StdCmpPred.ge, b: batchCount, whenTrue: moveDone, whenFalse: moveBody, ids: ids)
 
-	// ⛔⛔ **A TOMBSTONE IN THE BATCH MOVES LIKE A LIVE THREAD, AND THAT IS NOT A SIMPLIFICATION.** Asking
-	// `emitGtIsDropped` of every slot and calling `__gt_runner_done` on the ones that answered would make that
-	// call **while holding `__sched_lock`**, which is the one thing it may never be made under: it reaches
-	// `__gt_reclaim`'s releaser, and a releaser that reaches `__gt_promise_drop` spin-waits with a release
-	// that a recursive CRITICAL_SECTION turns into a no-op. See `GtRuntime.GtRunnerDoneName`, where the rule
-	// is written down.
+	// ⛔⛔ **A TOMBSTONE IN THE BATCH MOVES LIKE A LIVE THREAD, AND THAT IS NOT A SIMPLIFICATION.**
+	// Asking `emitGtIsDropped` of every slot and calling `__gt_runner_done` on the ones that answered
+	// would make that call **while holding `__sched_lock`**, which is the one thing it may never be
+	// made under: it reaches `__gt_reclaim`'s releaser, and a releaser that reaches
+	// `__gt_promise_drop` spin-waits with a release that a recursive lock turns into a no-op. See
+	// `GtRuntime.GtRunnerDoneName`, where the rule is written down.
 	//
 	// ⚠ **NOTHING IS LEAKED BY MOVING ONE.** A tombstone on the global queue is refused and reclaimed by
 	// whoever pops it — `emitGtTombstoneHandback`, reached from `__sched_find_runnable` with the lock RELEASED,
@@ -4375,7 +4387,6 @@ function recordRunqTaintOfOp(func IrFunction, op StdOp, taint RunqRingTaint) ret
 		osLockInit or
 		osLockEnter or
 		osLockLeave or
-		osLockDestroy or
 		osReadOverlapped or
 		osLastError or
 		osProcessSpawnInherit or
@@ -4453,6 +4464,7 @@ function recordRunqTaintOfOp(func IrFunction, op StdOp, taint RunqRingTaint) ret
 		osNetpoll or
 		osPathQuery or
 		osSocketOverlapped or
+		osThreadToken or
 		osSocketServe then return false
 		binOpImm(resultId, lhs, imm, opcode, _) then return recordImmediateAddressTaint(taint, resultId: resultId, lhs: lhs, imm: imm, opcode: opcode)
 		ret(retValId) then return recordReturnTaint(taint, funcName: func.name, retValId: retValId)
@@ -5347,7 +5359,7 @@ function buildGtFreePut(module StdModule)
 
 	// One acquire, on the edge that runs once: the lock COUNTS, so an acquire in the loop header would be
 	// taken once per record against the one release at `gfpsheddone`.
-	emitLockWordEnter(module, block: shed, label: GtFreeLockLabel, ids: ids)
+	emitLockWordEnter(module, block: shed, label: GtFreeLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
 	emitGtFreeLocalPush(module, block: shed, p: p, gt: gt, ids: ids)
 	module.setTerminator(shed, op: StdOp.branch(shedHdr.id))
 
@@ -5358,12 +5370,12 @@ function buildGtFreePut(module StdModule)
 	emitSchedListPush(module, block: shedBody, head: SchedListHead.lockedWord(SchedGtFreeHeadLabel), linkOffset: GtOffNext, node: moving, ids: ids)
 	module.setTerminator(shedBody, op: StdOp.branch(shedHdr.id))
 
-	emitLockWordLeave(module, block: shedDone, label: GtFreeLockLabel, ids: ids)
+	emitLockWordLeave(module, block: shedDone, label: GtFreeLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
 	module.setTerminator(shedDone, op: StdOp.branch(doneBlock.id))
 
-	emitLockWordEnter(module, block: globalOnly, label: GtFreeLockLabel, ids: ids)
+	emitLockWordEnter(module, block: globalOnly, label: GtFreeLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
 	emitSchedListPush(module, block: globalOnly, head: SchedListHead.lockedWord(SchedGtFreeHeadLabel), linkOffset: GtOffNext, node: gt, ids: ids)
-	emitLockWordLeave(module, block: globalOnly, label: GtFreeLockLabel, ids: ids)
+	emitLockWordLeave(module, block: globalOnly, label: GtFreeLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
 	module.setTerminator(globalOnly, op: StdOp.branch(doneBlock.id))
 
 	module.setTerminator(doneBlock, op: StdOp.retVoid)
@@ -5399,7 +5411,7 @@ function buildGtFreeGet(module StdModule)
 
 	// No unlocked peek at the global head goes in front of this acquire: an empty global list sends the get to
 	// the carve, which needs the lock anyway.
-	emitLockWordEnter(module, block: refill, label: GtFreeLockLabel, ids: ids)
+	emitLockWordEnter(module, block: refill, label: GtFreeLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
 	let noneMoved = emitConst(module, block: refill, value: 0, ids: ids)
 	let moved = ids.mint()
 	refillHdr.blockArgs.push(IrBlockArg.create(moved, argType: StdType.i64))
@@ -5419,7 +5431,7 @@ function buildGtFreeGet(module StdModule)
 	let refilledLen = emitLoadField(module, block: refillDone, record: p, offset: POffFreeListLen, ids: ids)
 	emitBranchOnCompare(module, block: refillDone, value: refilledLen, pred: StdCmpPred.eq, against: 0, whenTrue: carve, whenFalse: refilled, ids: ids)
 
-	emitLockWordLeave(module, block: refilled, label: GtFreeLockLabel, ids: ids)
+	emitLockWordLeave(module, block: refilled, label: GtFreeLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
 	module.setTerminator(refilled, op: StdOp.branch(localPop.id))
 
 	let reused = emitGtFreeLocalPop(module, block: localPop, p: p, ids: ids)
@@ -5429,9 +5441,9 @@ function buildGtFreeGet(module StdModule)
 
 	// A thread holding no processor is served from the global list all the same, and counted nowhere:
 	// `POffGtRecycleCount` needs a processor to hold the count.
-	emitLockWordEnter(module, block: noProc, label: GtFreeLockLabel, ids: ids)
+	emitLockWordEnter(module, block: noProc, label: GtFreeLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
 	let taken = emitSchedListTakeHead(module, cur: noProc, got: globalPop, none: carve, head: SchedListHead.lockedWord(SchedGtFreeHeadLabel), linkOffset: GtOffNext, ids: ids)
-	emitLockWordLeave(module, block: globalPop, label: GtFreeLockLabel, ids: ids)
+	emitLockWordLeave(module, block: globalPop, label: GtFreeLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
 	module.setTerminator(globalPop, op: StdOp.branch(recycle.id))
 	globalPop.branchEdges.push(BranchEdge.create(recycle.id, argIds: argsOf(taken)))
 
@@ -5442,10 +5454,9 @@ function buildGtFreeGet(module StdModule)
 	// A fresh record: carved under the hold every list above was consulted in.
 	let carved = ids.mint()
 	module.appendOp(carve, op: StdOp.call(carved, callee: SchedArenaCarveName, args: argsOf(emitConst(module, block: carve, value: GtStructSize, ids: ids))))
-	module.appendOp(carve, op: StdOp.osLockInit(emitFieldAddr(module, block: carve, record: carved, offset: GtOffRecordLock as ByteOffset, ids: ids)))
 	emitSchedStepLockedCount(module, block: carve, label: GtRecordsCarvedLabel, delta: OneMore, ids: ids)
 	var registered = emitGtAllGAppend(module, func: func, cur: carve, gt: carved, ids: ids)
-	emitLockWordLeave(module, block: registered, label: GtFreeLockLabel, ids: ids)
+	emitLockWordLeave(module, block: registered, label: GtFreeLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
 	module.setTerminator(registered, op: StdOp.ret(carved))
 
 	module.functions.push(func)
@@ -5479,7 +5490,7 @@ function buildSchedArenaCarve(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let bytes = 0
 
-	emitLockWordEnter(module, block: entry, label: GtFreeLockLabel, ids: ids)
+	emitLockWordEnter(module, block: entry, label: GtFreeLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
 	let cursor = emitLoadGlobalWord(module, block: entry, label: SchedArenaCursorLabel, ids: ids)
 	let limit = emitLoadGlobalWord(module, block: entry, label: SchedArenaLimitLabel, ids: ids)
 	let pastCarve = emitBin(module, block: entry, a: cursor, b: bytes, opcode: StdBinOpcode.add, ids: ids)
@@ -5501,7 +5512,7 @@ function buildSchedArenaCarve(module StdModule)
 	carved.blockArgs.push(IrBlockArg.create(address, argType: StdType.i64))
 	carved.blockArgs.push(IrBlockArg.create(nextCursor, argType: StdType.i64))
 	emitStoreGlobalWord(module, block: carved, label: SchedArenaCursorLabel, value: nextCursor, ids: ids)
-	emitLockWordLeave(module, block: carved, label: GtFreeLockLabel, ids: ids)
+	emitLockWordLeave(module, block: carved, label: GtFreeLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
 	module.setTerminator(carved, op: StdOp.ret(address))
 
 	module.functions.push(func)
@@ -6927,16 +6938,17 @@ end 'emitSchedRaiseHighWater'
 // park/unpark round trip that is almost every publish. `SchedSpinningLabel` and the `idletest`
 // block carry the readings that justify it.
 //
-// ⚠⚠ **THE QUEUE PUBLISH MUST BE VISIBLE BEFORE THE COUNT IS READ, AND EVERY ARM CARRIES THE FENCE THAT
-// MAKES IT SO.** Otherwise a publisher can skip a wake on the strength of a spinner whose search preceded its
-// publish. The GLOBAL TAIL's fence is the caller's
-// `LeaveCriticalSection`; the LOCAL RING's is `emitRunqPublishTail`'s `lock xadd`, whose LOCK prefix is the
-// StoreLoad barrier — that function states it at the instruction and forbids the "optimisation" back to a
-// plain store, and this is the reader it protects. The `runnext` slot's is `__sched_runq_put`'s exchange,
-// which a publish with no lock ends on (`GtRuntime.emitGtReadyParkedService`): `lock cmpxchg` on x64, and
-// on arm64 its `stlxr`, which the acquire reads below cannot pass. ⚠ A caller that already HELD the lock
-// and pushed to the ring inside it has neither: the `lock xadd` is what covers it, which is why `__gt_timer_check` and
-// the poller's readiness walk may publish inside their walk and wake once after it.
+// ⚠⚠ **THE QUEUE PUBLISH MUST BE VISIBLE BEFORE THE COUNT IS READ, AND EVERY ARM CARRIES THE FENCE
+// THAT MAKES IT SO.** Otherwise a publisher can skip a wake on the strength of a spinner whose
+// search preceded its publish. The GLOBAL TAIL's fence is the caller's release of `__sched_lock`, a
+// compare-and-swap; the LOCAL RING's is `emitRunqPublishTail`'s `lock xadd`, whose LOCK prefix is
+// the StoreLoad barrier — that function states it at the instruction and forbids the "optimisation"
+// back to a plain store, and this is the reader it protects. The `runnext` slot's is
+// `__sched_runq_put`'s exchange, which a publish with no lock ends on
+// (`GtRuntime.emitGtReadyParkedService`): `lock cmpxchg` on x64, and on arm64 its `stlxr`, which
+// the acquire reads below cannot pass. ⚠ A caller that already HELD the lock and pushed to the ring
+// inside it has neither: the `lock xadd` is what covers it, which is why `__gt_timer_check` and the
+// poller's readiness walk may publish inside their walk and wake once after it.
 //
 // ⭐ **AND `__sched_startm` TAKES `__sched_lock` WHILE THIS FUNCTION DOES NOT.** The park is one critical
 // section (`buildSchedLoop`), so there is no fence to preserve by staying outside a lock, and the O(1) idle

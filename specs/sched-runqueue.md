@@ -44,8 +44,8 @@ an atomic add, then re-reads the head with an acquire load and claims the strand
 if a member arrived in between. A readier pushes and then claims, so the two sides form a Dekker pair and a
 member is never left on a free strand. `__gt_coro_enqueue` does **not** take the lock — it REQUIRES the
 caller to hold it, because its callers already do: `__gt_ready_locked`, the one door every waker readies a
-coroutine through, and the strand runner placing a yielder. `osLockEnter` is a Win32 CRITICAL_SECTION and
-therefore RECURSIVE, so calling it without the lock produces no diagnostic anywhere — only a queue two OS
+coroutine through, and the strand runner placing a yielder. A runtime lock is RECURSIVE on its owner
+thread, so calling it without the lock produces no diagnostic anywhere — only a queue two OS
 threads can be inside at once.
 
 **A yield goes to the TAIL**, which is the whole content of *"let someone else have a turn"*. The

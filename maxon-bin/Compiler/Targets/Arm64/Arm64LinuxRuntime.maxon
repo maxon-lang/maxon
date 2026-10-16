@@ -2097,6 +2097,18 @@ function buildArm64LinuxWaitCloseChunk() returns FunctionCodeChunk
 end 'buildArm64LinuxWaitCloseChunk'
 
 // ==========================================================================
+// mrt_host_thread_yield()
+// ==========================================================================
+
+function buildArm64LinuxThreadYieldChunk() returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginFunction(0)
+
+	arm64EmitSyscall(asm.code, number: Arm64LinuxSyscallSchedYield)
+
+	return asm.finishFunction(HostThreadYieldName)
+end 'buildArm64LinuxThreadYieldChunk'
+
+// ==========================================================================
 // mrt_host_lock_init(x0 = region) / mrt_linux_lock_enter / mrt_linux_lock_leave
 // ==========================================================================
 
@@ -2106,7 +2118,6 @@ end 'buildArm64LinuxWaitCloseChunk'
 function buildArm64LinuxLockInitChunk() returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginFunction(0)
 
-	assertLinuxLockFits()
 	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x1, value: LinuxMutexFree)
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: LinuxLockOffFutex)
 	arm64EmitStoreWord64At(asm, src: Arm64Register.x1, base: Arm64Register.x0, byteOffset: LinuxLockOffOwner)
@@ -3097,15 +3108,20 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 		chunks.push(buildArm64LinuxWaitCloseChunk())
 	end 'hostObjects'
 
-	// ⚠ **THE LOCK IS A FUTEX WORD, SO ITS ENTER AND LEAVE NEED BODIES** — three chunks here where the Darwin
-	// lane's `pthread_mutex_t` leaves it one. They ride a gate of their own because their producer set is not
-	// the band's: the allocator's slow-path lock reaches them in every allocating program.
+	// The main thread's slot block rides the runtime-lock gate, not the band's: a recursive lock reads
+	// its owner token from the block, and the allocator's slow-path lock does so in every allocating
+	// program.
 	if posixUsesHostLock(usage) 'hostLock'
+		chunks.push(buildArm64LinuxMainThreadBlockChunk(globalData))
+	end 'hostLock'
+
+	// ⚠ **THE OS LOCK IS A FUTEX WORD, SO ITS ENTER AND LEAVE NEED BODIES** — three chunks here where
+	// the Darwin lane's `pthread_mutex_t` leaves it one.
+	if usage.usesRawOsLock 'rawOsLock'
 		chunks.push(buildArm64LinuxLockInitChunk())
 		chunks.push(buildArm64LinuxLockEnterChunk())
 		chunks.push(buildArm64LinuxLockLeaveChunk())
-		chunks.push(buildArm64LinuxMainThreadBlockChunk(globalData))
-	end 'hostLock'
+	end 'rawOsLock'
 
 	// ⭐ **THE GREEN-THREAD FLOOR, ON ONE BIT.** `usesGt` is the bit `installGtRuntime` itself was gated on,
 	// so every body that can `bl` one of these is built under exactly the same condition — one bit, two
@@ -3115,6 +3131,8 @@ export function appendArm64LinuxRuntimeChunks(chunks FunctionCodeChunkArray, usa
 	// program always installs together.
 	if usage.usesGt 'greenThreadFloor'
 		chunks.push(buildArm64LinuxSleepChunk(HostSleepMsName, unit: PosixTimeUnit.milliseconds))
+		chunks.push(buildArm64PosixSpinPauseChunk())
+		chunks.push(buildArm64LinuxThreadYieldChunk())
 		chunks.push(buildArm64LinuxWaitNewChunk(globalData))
 		chunks.push(buildArm64LinuxEventSetChunk())
 		chunks.push(buildArm64LinuxWaitOneChunk(globalData))

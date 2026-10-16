@@ -376,12 +376,13 @@ end 'buildGtTrampolineChunk'
 // region while a frame is live in it. The region is the M's and not the P's because `handoffp` can take an
 // M's P while it is inside a kernel call. `multicore-stress/syscall-stack-torture.maxon` pins it.
 //
-// ⭐ RE-ENTRY DOES HAPPEN NOW, AND IT IS SAFE FOR A STATED REASON RATHER THAN BY ABSENCE. A kernel call is a
-// LEAF that never re-enters guarded Maxon code, so the call itself cannot nest — but `exitsyscall`'s slow
-// path calls `__sched_syscall_regain`, which takes `__sched_lock` through a shimmed `EnterCriticalSection`.
-// That is a second entry on the same thread, and it is safe because the slow path runs on the GT STACK: the
-// unwind above has already restored RSP off the system stack, so the inner entry re-reads `systemStackSP`
-// with nothing of the outer call live above it.
+// ⭐ RE-ENTRY DOES HAPPEN NOW, AND IT IS SAFE FOR A STATED REASON RATHER THAN BY ABSENCE. A kernel
+// call is a LEAF that never re-enters guarded Maxon code, so the call itself cannot nest — but
+// `exitsyscall`'s slow path calls `__sched_syscall_regain`, which takes `__sched_lock`, and a
+// contended acquire sleeps in a shimmed `WaitForSingleObject`. That is a second entry on the same
+// thread, and it is safe because the slow path runs on the GT STACK: the unwind above has already
+// restored RSP off the system stack, so the inner entry re-reads `systemStackSP` with nothing of
+// the outer call live above it.
 
 // A pushed 64-bit register is 8 bytes. The shim pushes two such words (the caller's r10 on the GT stack, then
 // the saved GT rsp on the system stack). This is BOTH the offset from `r10` — which points at the first pushed
@@ -553,7 +554,6 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 		InitializeCriticalSectionAndSpinCount or  // 2: lpCriticalSection, dwSpinCount
 		EnterCriticalSection or  // 1: lpCriticalSection
 		LeaveCriticalSection or  // 1: lpCriticalSection
-		DeleteCriticalSection or  // 1: lpCriticalSection
 		GetLastError or  // 0
 		GetCurrentProcessId or  // 0
 		CancelIoEx or  // 2: hFile, lpOverlapped
@@ -667,12 +667,12 @@ end 'gtShimStackArgWordsOf'
 
 // `blocking` means the call can wait an unbounded time on something outside the scheduler, and a
 // `blocking` import may never be called with `__sched_lock` held. Bracketing one that runs under
-// the lock deadlocks the whole scheduler: `EnterCriticalSection` is reached from `__mbox_send`,
-// `__mbox_recv`, `__gt_timer_add` and `__slab_lock` on every allocation, so a machine blocked on
-// one of those locks would have its P handed off by `__sysmon`, then wait in
-// `__sched_syscall_regain` for a processor while holding the lock, for ever. Every
-// scheduler-internal call made under that lock is therefore `schedulerBound` here, which makes the
-// requirement checkable by reading this one table.
+// the lock deadlocks the whole scheduler: a runtime lock's contended acquire sleeps in
+// `WaitForSingleObject`, and it is reached from `__mbox_send`, `__mbox_recv`, `__gt_timer_add` and
+// `__slab_lock` on every allocation, so a machine blocked on one of those locks would have its P
+// handed off by `__sysmon`, then wait in `__sched_syscall_regain` for a processor while holding the
+// lock, for ever. Every scheduler-internal call made under that lock is therefore `schedulerBound`
+// here, which makes the requirement checkable by reading this one table.
 //
 // Total over `IatSlot` with no `default` arm: a `default gives schedulerBound` would let a new
 // blocking import silently keep costing its processor.
@@ -780,14 +780,15 @@ function gtShimSyscallClassOf(slot IatSlot) returns SyscallClass
 		getsockname or
 		shutdown or
 
-		// The lock pair is the header's deadlock; it must stay `schedulerBound`.
+		// The raw OS lock pair (`__Raw.osLock*`) waits on a holder exactly as a runtime lock does; it
+		// must stay `schedulerBound`.
 		EnterCriticalSection or
-		DeleteCriticalSection or
 		LeaveCriticalSection or
 		InitializeCriticalSectionAndSpinCount or
 
 		// The scheduler waiting for its own work: an idle machine's park and
-		// `__sched_syscall_regain`'s wait hold no processor for `__sysmon` to take.
+		// `__sched_syscall_regain`'s wait hold no processor for `__sysmon` to take. A runtime lock's
+		// contended sleep is the header's deadlock.
 		WaitForSingleObject or
 
 		// Process teardown, memory, events, handles and the clocks: bounded and short, every one.
@@ -2361,10 +2362,29 @@ function buildLinuxPreemptHandlerChunk() returns FunctionCodeChunk
 	return asm.finishFunction(PreemptHandlerName)
 end 'buildLinuxPreemptHandlerChunk'
 
+// ==========================================================================
+// mrt_host_spin_pause(rcx = pauses), on both x64 lanes
+// ==========================================================================
+
+function buildGtSpinPauseChunk() returns FunctionCodeChunk
+	var code = ByteArray.create()
+
+	let loopTop = code.count()
+	encodeX64Pause(code)
+	encodeGrp1RegImm32(code, ext: Grp1ExtSub, reg: X64Register.rcx, imm: 1)
+	encodeJccBackward(code, cond: X64CondCode.notEqual, targetOffset: loopTop as CodeOffset, what: PatchSite.x64SpinLoopRel32)
+	code.push(OpcodeRet)
+
+	var chunk = FunctionCodeChunk.createWith(HostSpinPauseName, code: code, callFixups: CallFixupArray.create(), rdataRelocs: RdataRelocationArray.create(), iatRelocs: RelocationArray.create())
+	chunk.spendsCallerStack(StackWordBytes as StackSize, checks: false)
+	return chunk
+end 'buildGtSpinPauseChunk'
+
 // Append the hand-assembled GT chunks — called by BackendDispatch when the module spawns a green thread, alongside
 // `appendX64RuntimeChunks` for the panic runtime. They lay out above user code like every other runtime chunk, so
 // `mrt_start` stays at `.text` offset 0.
 export function appendX64GtRuntimeChunks(chunks FunctionCodeChunkArray, target Target, context HostContextLayout)
+	chunks.push(buildGtSpinPauseChunk())
 	chunks.push(buildGtContextSwitchChunk(target))
 	chunks.push(buildGtTrampolineChunk())
 	chunks.push(buildGtGuardTrippedChunk())
