@@ -1300,6 +1300,43 @@ left at `P = N` is gone. coroutine-churn at `P = 1` regressed 5%, 8% and 5% on x
 arm64-linux and holds on x64-windows. fan-in at `P = 1` regressed 3% on both x64 lanes while it gained 9–12% on
 arm64. spawn-many at `P = N` on arm64-linux regressed 14%, with CPU 1.97 → 1.70.
 
+**2026-10-16 — A COROUTINE'S RECORD KEEPS ITS SEED STACK, SMALL STACKS COME FROM A PER-P CACHE HANDED OUT
+ASCENDING, `__gt_free_get` GIVES A SPAWN ITS STACK, AND EACH SEED-WINDOW CLOSE FREES THE GLOBAL FREE LIST'S STACKS
+(beea4edf0 + c550796db, R7 change 2 + R7e): GO'S COROUTINE PATH. A RUNTIME row, four lanes, against 144b354df.**
+
+| workload | P | x64-windows | x64-linux | arm64-macos | arm64-linux |
+|---|---|---|---|---|---|
+| ping-pong | 1 | 0.84 → 0.85 | 0.82 → 0.83 | 1.05 → 1.07 | 1.11 → 1.12 |
+| ping-pong | N | 1.06 → 1.08 | 0.95 → 0.95 | 1.24 → 1.25 | 1.27 → 1.26 |
+| thread-ring | 1 | 1.63 → 1.64 | 1.52 → 1.55 | 1.89 → 1.94 | 2.01 → 2.00 |
+| thread-ring | N | 0.60 → 0.61 | 0.56 → 0.57 | 0.52 → 0.52 | 1.55 → 1.41 |
+| spawn-many | 1 | 4.04 → 2.28 | 2.68 → 2.70 | 1.33 → 1.35 | 1.26 → 1.29 |
+| spawn-many | N | 3.74 → 3.45 | 4.87 → 4.32 | 4.46 → 3.68 | 1.70 → 1.35 |
+| fan-in | 1 | 1.69 → 1.70 | 2.04 → 2.03 | 1.31 → 1.26 | 1.26 → 1.26 |
+| fan-in | N | 0.79 → 0.79 | 1.32 → 1.32 | 0.52 → 0.52 | 1.14 → 1.12 |
+| shared-counter | 1 | 5.78 → 5.79 | 7.28 → 7.18 | 8.80 → 8.91 | 9.48 → 9.47 |
+| shared-counter | N | 2.74 → 2.74 | 2.31 → 2.33 | 0.42 → 0.43 | 0.85 → 0.69 |
+| coroutine-churn | 1 | 2.62 → 1.34 | 1.34 → 1.27 | 0.66 → 0.63 | 0.70 → 0.67 |
+| worker-pool | 1 | 1.00 → 1.00 | 1.00 → 1.00 | 1.00 → 1.00 | 1.06 → 1.06 |
+
+The x64 columns are one session each, `--ref 144b354df --runs 3`, note "R7 change 2 + R7e: Go coroutine path
+(c550796db)". The arm64 columns join two sessions: the left figure is the 144b354df arm of the "R7 change 2: Go
+coroutine path (beea4edf0)" session, the right is the slot arm of the "R7e: …" session against beea4edf0. Rows
+rot between sessions: arm64-linux shared-counter at `P = N` read 0.69 on BOTH arms of the R7e session, so its move
+is session drift, not this change.
+
+coroutine-churn halves on x64-windows, 2.62 → 1.34, and gains 4–5% on every other lane. spawn-many at `P = N` gains
+8%, 11%, 17% and 21%; at `P = 1` it falls 44% on x64-windows and holds on the other lanes. Peak memory: thread-ring
+at `P = 1` went 0.80 → 1.14 on arm64-macos and 0.71 → 1.21 on arm64-linux at beea4edf0, and c550796db brings it to
+0.85 and 0.79; it holds on x64 (0.86 → 0.87, 1.32 → 1.32). Every other workload's memory ratio holds on x64.
+
+**spawn-many at `P = 1` against beea4edf0, `--filter spawn-many --runs 5`** (note "R7e spawn-many check: c550796db
+against beea4edf0"): arm64's 5–8% regression (1.25 → 1.35 on arm64-macos, 1.23 → 1.29 on arm64-linux) is not on
+x64. x64-windows reads 2.31 → 2.34, inside its ±5% spread. x64-linux reads 5.43 → 2.76: at beea4edf0 every run of
+spawn-many at `P = 1` peaks at 1,401 MiB and takes 0.8–1.0 s, against 620 MiB and ~470 ms at both 144b354df and
+c550796db. A `--runs 9` rerun shows the same; c550796db is bimodal there, with 7 of 9 runs at 620 MiB and
+465–527 ms, and 2 at 1,006 MiB and 621–716 ms.
+
 ## Bugs this uncovered
 
 Removing the dummy exposed a leak it had been half-hiding, and the leak in turn exposed a hole in the

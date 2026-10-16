@@ -1011,3 +1011,67 @@ metric (wall, CPU = user + kernel, peak working set); `arm` names the compiler (
 | 2026-10-16 | ac3867b23 | dirty | orb | shared-counter | 200000 | 1 | 3 | 33 | 309 | 9.47 | 9.50 | 292.00 | slot | R7e: ascending stack cache, gfget gives the stack, window close frees global stacks |
 | 2026-10-16 | ac3867b23 | dirty | orb | shared-counter | 200000 | 7 | 3 | 457 | 315 | 0.69 | 0.43 | 208.46 | ref@beea4edf0 | R7e: ascending stack cache, gfget gives the stack, window close frees global stacks |
 | 2026-10-16 | ac3867b23 | dirty | orb | shared-counter | 200000 | 7 | 3 | 457 | 314 | 0.69 | 0.43 | 203.95 | slot | R7e: ascending stack cache, gfget gives the stack, window close frees global stacks |
+| 2026-10-16 | 651dbc48f | clean | windows | thread-ring | 3000000 | 1 | 3 | 342 | 557 | 1.63 | 1.59 | 0.86 | ref@144b354df | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | clean | windows | thread-ring | 3000000 | 1 | 3 | 342 | 559 | 1.64 | 1.64 | 0.87 | slot | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | clean | windows | thread-ring | 3000000 | 12 | 3 | 1,441 | 864 | 0.60 | 0.10 | 0.80 | ref@144b354df | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | clean | windows | thread-ring | 3000000 | 12 | 3 | 1,441 | 880 | 0.61 | 0.10 | 0.79 | slot | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | clean | windows | ping-pong | 1000000 | 1 | 3 | 362 | 303 | 0.84 | 0.86 | 0.70 | ref@144b354df | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | clean | windows | ping-pong | 1000000 | 1 | 3 | 362 | 308 | 0.85 | 0.86 | 0.70 | slot | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | clean | windows | ping-pong | 1000000 | 12 | 3 | 494 | 521 | 1.06 | 1.11 | 0.69 | ref@144b354df | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | clean | windows | ping-pong | 1000000 | 12 | 3 | 494 | 534 | 1.08 | 1.11 | 0.68 | slot | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | clean | windows | fan-in | 100000 | 1 | 3 | 276 | 468 | 1.69 | 1.76 | 49.44 | ref@144b354df | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | clean | windows | fan-in | 100000 | 1 | 3 | 276 | 469 | 1.70 | 1.71 | 49.44 | slot | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | clean | windows | fan-in | 100000 | 12 | 3 | 980 | 774 | 0.79 | 1.01 | 41.64 | ref@144b354df | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | clean | windows | fan-in | 100000 | 12 | 3 | 980 | 770 | 0.79 | 1.07 | 41.57 | slot | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | clean | windows | worker-pool | 6000 250000 | 1 | 3 | 2,126 | 2,126 | 1.00 | 1.01 | 1.29 | ref@144b354df | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | clean | windows | worker-pool | 6000 250000 | 1 | 3 | 2,126 | 2,126 | 1.00 | 1.01 | 1.29 | slot | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | clean | windows | worker-pool | 6000 250000 | 12 | 3 | 210 | 228 | 1.08 | 0.98 | 1.15 | ref@144b354df | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | clean | windows | worker-pool | 6000 250000 | 12 | 3 | 210 | 220 | 1.05 | 0.99 | 1.16 | slot | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | clean | windows | spawn-many | 200000 | 1 | 3 | 253 | 1,022 | 4.04 | 4.06 | 6.65 | ref@144b354df | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | clean | windows | spawn-many | 200000 | 1 | 3 | 253 | 578 | 2.28 | 2.31 | 6.65 | slot | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | clean | windows | spawn-many | 200000 | 12 | 3 | 56 | 210 | 3.74 | 4.56 | 6.51 | ref@144b354df | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | clean | windows | spawn-many | 200000 | 12 | 3 | 56 | 193 | 3.45 | 3.56 | 6.69 | slot | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | clean | windows | coroutine-churn | 200000 | 1 | 3 | 349 | 914 | 2.62 | 2.64 | 4.48 | ref@144b354df | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | clean | windows | coroutine-churn | 200000 | 1 | 3 | 349 | 467 | 1.34 | 1.32 | 4.48 | slot | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | clean | windows | coroutine-churn | 200000 | 12* | 3 | 352 | 911 | 2.59 | 2.52 | 4.32 | ref@144b354df | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | clean | windows | coroutine-churn | 200000 | 12* | 3 | 352 | 470 | 1.34 | 1.30 | 4.32 | slot | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | clean | windows | shared-counter | 200000 | 1 | 3 | 161 | 929 | 5.78 | 5.90 | 99.33 | ref@144b354df | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | clean | windows | shared-counter | 200000 | 1 | 3 | 161 | 931 | 5.79 | 6.00 | 100.31 | slot | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | clean | windows | shared-counter | 200000 | 12 | 3 | 559 | 1,535 | 2.74 | 2.12 | 81.63 | ref@144b354df | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | clean | windows | shared-counter | 200000 | 12 | 3 | 559 | 1,532 | 2.74 | 2.19 | 81.50 | slot | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | dirty | wsl | thread-ring | 3000000 | 1 | 3 | 360 | 547 | 1.52 | 1.52 | 1.32 | ref@144b354df | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | dirty | wsl | thread-ring | 3000000 | 1 | 3 | 360 | 557 | 1.55 | 1.55 | 1.32 | slot | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | dirty | wsl | thread-ring | 3000000 | 12 | 3 | 1,068 | 602 | 0.56 | 0.21 | 1.15 | ref@144b354df | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | dirty | wsl | thread-ring | 3000000 | 12 | 3 | 1,068 | 612 | 0.57 | 0.21 | 1.19 | slot | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | dirty | wsl | ping-pong | 1000000 | 1 | 3 | 367 | 303 | 0.82 | 0.82 | 0.21 | ref@144b354df | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | dirty | wsl | ping-pong | 1000000 | 1 | 3 | 367 | 305 | 0.83 | 0.83 | 0.21 | slot | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | dirty | wsl | ping-pong | 1000000 | 12 | 3 | 358 | 342 | 0.95 | 0.94 | 0.19 | ref@144b354df | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | dirty | wsl | ping-pong | 1000000 | 12 | 3 | 358 | 339 | 0.95 | 0.94 | 0.25 | slot | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | dirty | wsl | fan-in | 100000 | 1 | 3 | 274 | 559 | 2.04 | 2.04 | 148.88 | ref@144b354df | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | dirty | wsl | fan-in | 100000 | 1 | 3 | 274 | 556 | 2.03 | 2.03 | 148.75 | slot | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | dirty | wsl | fan-in | 100000 | 12 | 3 | 634 | 837 | 1.32 | 2.41 | 123.56 | ref@144b354df | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | dirty | wsl | fan-in | 100000 | 12 | 3 | 634 | 835 | 1.32 | 2.38 | 123.67 | slot | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | dirty | wsl | worker-pool | 6000 250000 | 1 | 3 | 2,135 | 2,130 | 1.00 | 1.00 | 2.00 | ref@144b354df | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | dirty | wsl | worker-pool | 6000 250000 | 1 | 3 | 2,135 | 2,134 | 1.00 | 1.00 | 2.07 | slot | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | dirty | wsl | worker-pool | 6000 250000 | 12 | 3 | 211 | 225 | 1.06 | 1.05 | 1.82 | ref@144b354df | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | dirty | wsl | worker-pool | 6000 250000 | 12 | 3 | 211 | 228 | 1.08 | 1.02 | 1.88 | slot | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | dirty | wsl | spawn-many | 200000 | 1 | 3 | 177 | 475 | 2.68 | 2.73 | 5.70 | ref@144b354df | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | dirty | wsl | spawn-many | 200000 | 1 | 3 | 177 | 478 | 2.70 | 2.74 | 5.70 | slot | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | dirty | wsl | spawn-many | 200000 | 12 | 3 | 50 | 242 | 4.87 | 5.60 | 10.52 | ref@144b354df | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | dirty | wsl | spawn-many | 200000 | 12 | 3 | 50 | 215 | 4.32 | 4.65 | 10.68 | slot | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | dirty | wsl | coroutine-churn | 200000 | 1 | 3 | 260 | 348 | 1.34 | 1.34 | 2.73 | ref@144b354df | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | dirty | wsl | coroutine-churn | 200000 | 1 | 3 | 260 | 330 | 1.27 | 1.27 | 2.73 | slot | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | dirty | wsl | coroutine-churn | 200000 | 12* | 3 | 282 | 376 | 1.33 | 1.33 | 2.70 | ref@144b354df | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | dirty | wsl | coroutine-churn | 200000 | 12* | 3 | 282 | 331 | 1.18 | 1.18 | 2.70 | slot | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | dirty | wsl | shared-counter | 200000 | 1 | 3 | 155 | 1,127 | 7.28 | 7.27 | 297.44 | ref@144b354df | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | dirty | wsl | shared-counter | 200000 | 1 | 3 | 155 | 1,111 | 7.18 | 7.20 | 297.50 | slot | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | dirty | wsl | shared-counter | 200000 | 12 | 3 | 717 | 1,660 | 2.31 | 2.02 | 248.44 | ref@144b354df | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | dirty | wsl | shared-counter | 200000 | 12 | 3 | 717 | 1,674 | 2.33 | 2.16 | 246.83 | slot | R7 change 2 + R7e: Go coroutine path (c550796db) |
+| 2026-10-16 | 651dbc48f | dirty | windows | spawn-many | 200000 | 1 | 5 | 247 | 572 | 2.31 | 2.25 | 6.68 | ref@beea4edf0 | R7e spawn-many check: c550796db against beea4edf0 |
+| 2026-10-16 | 651dbc48f | dirty | windows | spawn-many | 200000 | 1 | 5 | 247 | 579 | 2.34 | 2.31 | 6.68 | slot | R7e spawn-many check: c550796db against beea4edf0 |
+| 2026-10-16 | 651dbc48f | dirty | windows | spawn-many | 200000 | 12 | 5 | 57 | 193 | 3.36 | 3.67 | 6.44 | ref@beea4edf0 | R7e spawn-many check: c550796db against beea4edf0 |
+| 2026-10-16 | 651dbc48f | dirty | windows | spawn-many | 200000 | 12 | 5 | 57 | 194 | 3.38 | 4.00 | 6.44 | slot | R7e spawn-many check: c550796db against beea4edf0 |
+| 2026-10-16 | 651dbc48f | dirty | wsl | spawn-many | 200000 | 1 | 5 | 169 | 918 | 5.43 | 5.51 | 13.09 | ref@beea4edf0 | R7e spawn-many check: c550796db against beea4edf0 |
+| 2026-10-16 | 651dbc48f | dirty | wsl | spawn-many | 200000 | 1 | 5 | 169 | 467 | 2.76 | 2.79 | 5.80 | slot | R7e spawn-many check: c550796db against beea4edf0 |
+| 2026-10-16 | 651dbc48f | dirty | wsl | spawn-many | 200000 | 12 | 5 | 51 | 235 | 4.63 | 4.85 | 10.54 | ref@beea4edf0 | R7e spawn-many check: c550796db against beea4edf0 |
+| 2026-10-16 | 651dbc48f | dirty | wsl | spawn-many | 200000 | 12 | 5 | 51 | 231 | 4.56 | 4.79 | 10.53 | slot | R7e spawn-many check: c550796db against beea4edf0 |
