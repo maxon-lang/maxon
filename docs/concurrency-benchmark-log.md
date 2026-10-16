@@ -1075,3 +1075,7 @@ metric (wall, CPU = user + kernel, peak working set); `arm` names the compiler (
 | 2026-10-16 | 651dbc48f | dirty | wsl | spawn-many | 200000 | 1 | 5 | 169 | 467 | 2.76 | 2.79 | 5.80 | slot | R7e spawn-many check: c550796db against beea4edf0 |
 | 2026-10-16 | 651dbc48f | dirty | wsl | spawn-many | 200000 | 12 | 5 | 51 | 235 | 4.63 | 4.85 | 10.54 | ref@beea4edf0 | R7e spawn-many check: c550796db against beea4edf0 |
 | 2026-10-16 | 651dbc48f | dirty | wsl | spawn-many | 200000 | 12 | 5 | 51 | 231 | 4.56 | 4.79 | 10.53 | slot | R7e spawn-many check: c550796db against beea4edf0 |
+| 2026-10-16 | d914f3bc4 | dirty | windows | shared-counter | 200000 | 1 | 3 | 557 | 982 | 1.76 | 1.72 | 98.34 | slot | shared-counter oracle is the channel-actor equivalent (cap 1024) |
+| 2026-10-16 | d914f3bc4 | dirty | windows | shared-counter | 200000 | 12 | 3 | 2,032 | 1,583 | 0.78 | 0.89 | 82.75 | slot | shared-counter oracle is the channel-actor equivalent (cap 1024) |
+| 2026-10-16 | d914f3bc4 | dirty | wsl | shared-counter | 200000 | 1 | 3 | 568 | 1,169 | 2.06 | 2.05 | 297.38 | slot | shared-counter oracle is the channel-actor equivalent (cap 1024) |
+| 2026-10-16 | d914f3bc4 | dirty | wsl | shared-counter | 200000 | 12 | 3 | 1,514 | 1,718 | 1.14 | 1.65 | 252.56 | slot | shared-counter oracle is the channel-actor equivalent (cap 1024) |

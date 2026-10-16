@@ -2,51 +2,67 @@ package main
 
 import (
 	"fmt"
-	"sync"
 
 	"maxon.dev/bench/concurrency/internal/argv"
 )
 
 const (
-	incrementerCount      = 64
-	defaultPerIncrementer = 100000
+	incrementerCount       = 64
+	defaultPerIncrementer  = 100000
+	mailboxChannelCapacity = 1024
 )
 
-type counter struct {
-	mu    sync.Mutex
-	count int
+type operation int
+
+const (
+	incrementOperation operation = iota
+	readOperation
+)
+
+type message struct {
+	operation operation
+	reply     chan<- int
 }
 
-func (c *counter) inc() {
-	c.mu.Lock()
-	c.count++
-	c.mu.Unlock()
-}
-
-func (c *counter) read() int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.count
-}
-
-func increment(c *counter, perIncrementer int, wg *sync.WaitGroup) {
-	defer wg.Done()
-
-	for j := 0; j < perIncrementer; j++ {
-		c.inc()
+func count(mailbox <-chan message) {
+	total := 0
+	for m := range mailbox {
+		switch m.operation {
+		case incrementOperation:
+			total++
+		case readOperation:
+			m.reply <- total
+		default:
+			panic(fmt.Sprintf("shared-counter: unknown operation %d", m.operation))
+		}
 	}
+}
+
+func increment(mailbox chan<- message, perIncrementer int, done chan<- int) {
+	for j := 0; j < perIncrementer; j++ {
+		mailbox <- message{operation: incrementOperation}
+	}
+	done <- perIncrementer
 }
 
 func main() {
 	perIncrementer := argv.Size(1, defaultPerIncrementer)
 
-	var c counter
-	var wg sync.WaitGroup
-	wg.Add(incrementerCount)
-	for i := 0; i < incrementerCount; i++ {
-		go increment(&c, perIncrementer, &wg)
-	}
-	wg.Wait()
+	mailbox := make(chan message, mailboxChannelCapacity)
+	go count(mailbox)
 
-	fmt.Println("shared-counter", c.read())
+	finished := make([]chan int, incrementerCount)
+	for i := range finished {
+		finished[i] = make(chan int, 1)
+		go increment(mailbox, perIncrementer, finished[i])
+	}
+
+	for _, done := range finished {
+		<-done
+	}
+
+	reply := make(chan int)
+	mailbox <- message{operation: readOperation, reply: reply}
+	fmt.Println("shared-counter", <-reply)
+	close(mailbox)
 }

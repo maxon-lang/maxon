@@ -42,7 +42,7 @@ definition.
 | worker-pool | `T K` (4096 250000) | the sum of the xorshift kernel's results over `T` tasks | `GOMAXPROCS` workers range over a buffered job channel and write a buffered result channel | `Scheduler.processorCount()` `Worker` services; task `t` goes to worker `t mod count`; every reply is awaited and summed | parallel scaling |
 | spawn-many | `S` (100000) | the sum of `i*2` over `S` threads | `S` goroutines write into a slice behind a `WaitGroup` | `S` `Doubler` services, one reply method each, all awaited and summed | spawn cost, the stack pool, peak memory |
 | coroutine-churn | `N` (100000) | the sum of `i` over `N` coroutines that each yield once | `N` goroutines, each `runtime.Gosched()` once, at `GOMAXPROCS=1` | `N` `async` calls, each `Scheduler.yield()` once; all awaited | `async` spawn, park, await, with no parallelism |
-| shared-counter | `M` (100000) | the number of increments, `64*M` | 64 goroutines lock a `sync.Mutex`-guarded counter `M` times each | 64 `Incrementer` services send `M` fire-and-forget `inc()` to one `Counter` service; then one awaited `read()` | the idiomatic guarded state in each language |
+| shared-counter | `M` (100000) | the number of increments, `64*M` | 64 incrementer goroutines send `M` increments each to one counter goroutine that owns the count, on a channel of capacity 1024; each incrementer signals its own `done` channel; then one read request carrying a reply channel | 64 `Incrementer` services send `M` fire-and-forget `inc()` to one `Counter` service; each incrementer answers a completion reply; then one awaited `read()` | state owned by one thread, one mailbox under contention |
 
 The worker-pool kernel, identical in both languages:
 
@@ -59,10 +59,10 @@ is NOT bent to dodge a runtime cost, because the cost is what the instrument exi
 
 - **A service is not a goroutine, and a message is not a channel send.** Maxon's tool for a thread of
   its own is a service, and the only way to talk to it is a message handled one at a time from a FIFO
-  mailbox. The mailbox is unbounded, where the Go channels in fan-in and worker-pool are bounded or
-  pre-sized.
+  mailbox. The mailbox is unbounded, where the Go channels in fan-in, shared-counter and worker-pool are
+  bounded or pre-sized.
 - **fan-in and shared-counter** let senders run ahead of an unbounded mailbox, where Go's senders block
-  on a full channel or wait on the mutex. Maxon's peak memory includes the whole backlog of envelopes,
+  on a full channel of capacity 1024. Maxon's peak memory includes the whole backlog of envelopes,
   and the backlog's effect on wall time can go either way, so a wall ratio there reads as a direction
   only alongside the memory ratio.
 - **spawn-many** pays a message and a reply round trip per Maxon service, where each goroutine writes
@@ -78,8 +78,9 @@ is NOT bent to dodge a runtime cost, because the cost is what the instrument exi
 - **coroutine-churn** compares against Go at `GOMAXPROCS=1` at every processor count. Maxon coroutines
   share one strand and never run in parallel; a Go arm free to use every processor would not be the same
   work. In the log and the tables a trailing `*` on `P` marks the pin.
-- **shared-counter** compares an actor to a mutex: each is the idiomatic way to guard shared state in its
-  language.
+- **shared-counter** compares an actor to an actor: the Go counter goroutine owns the count as the
+  `Counter` service does, an increment is a channel send as `inc()` is a message, and the final read is
+  a request carrying a reply channel as `read()` is an awaited reply.
 - **The kernel uses `bits(64)`.** `or` and `xor` give a signed `int` (see `specs/bitwise-operators.md`),
   so the Maxon kernel casts each `xor` back `as Word` to keep the following `shr` a zero-filling shift.
   Without the casts the shift sign-fills and the answer is wrong from the seventh round of task 0.
