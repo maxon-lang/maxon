@@ -507,3 +507,115 @@ metric (wall, CPU = user + kernel, peak working set); `arm` names the compiler (
 | 2026-10-15 | a69e38248 | dirty | orb | shared-counter | 200000 | 1 | 3 | 33 | 348 | 10.60 | 10.64 | 292.51 | slot | R5+R5b+R5c vs pre-R5 (7346b44c7): mailbox lock held across the park, direct handoff |
 | 2026-10-15 | a69e38248 | dirty | orb | shared-counter | 200000 | 7 | 3 | 454 | 694 | 1.53 | 2.30 | 224.72 | ref@7346b44c7 | R5+R5b+R5c vs pre-R5 (7346b44c7): mailbox lock held across the park, direct handoff |
 | 2026-10-15 | a69e38248 | dirty | orb | shared-counter | 200000 | 7 | 3 | 454 | 685 | 1.51 | 2.07 | 213.78 | slot | R5+R5b+R5c vs pre-R5 (7346b44c7): mailbox lock held across the park, direct handoff |
+| 2026-10-15 | e53136b60 | clean | windows | thread-ring | 3000000 | 1 | 3 | 343 | 726 | 2.12 | 2.09 | 0.86 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | windows | thread-ring | 3000000 | 1 | 3 | 343 | 642 | 1.87 | 1.86 | 0.87 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | windows | thread-ring | 3000000 | 12 | 3 | 1,565 | 1,221 | 0.78 | 0.15 | 0.81 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | windows | thread-ring | 3000000 | 12 | 3 | 1,565 | 1,003 | 0.64 | 0.12 | 0.81 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | windows | ping-pong | 1000000 | 1 | 3 | 364 | 412 | 1.13 | 1.13 | 0.71 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | windows | ping-pong | 1000000 | 1 | 3 | 364 | 357 | 0.98 | 1.00 | 0.71 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | windows | ping-pong | 1000000 | 12 | 3 | 492 | 721 | 1.47 | 1.60 | 0.70 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | windows | ping-pong | 1000000 | 12 | 3 | 492 | 590 | 1.20 | 1.32 | 0.70 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | windows | fan-in | 100000 | 1 | 3 | 287 | 695 | 2.42 | 2.32 | 49.86 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | windows | fan-in | 100000 | 1 | 3 | 287 | 692 | 2.41 | 2.32 | 49.86 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | windows | fan-in | 100000 | 12 | 3 | 1,004 | 2,029 | 2.02 | 6.73 | 40.65 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | windows | fan-in | 100000 | 12 | 3 | 1,004 | 1,996 | 1.99 | 6.76 | 40.24 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | windows | worker-pool | 6000 250000 | 1 | 3 | 2,129 | 2,128 | 1.00 | 1.00 | 1.27 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | windows | worker-pool | 6000 250000 | 1 | 3 | 2,129 | 2,128 | 1.00 | 0.99 | 1.34 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | windows | worker-pool | 6000 250000 | 12 | 3 | 218 | 257 | 1.18 | 1.04 | 1.14 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | windows | worker-pool | 6000 250000 | 12 | 3 | 218 | 231 | 1.06 | 1.06 | 1.19 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | windows | spawn-many | 200000 | 1 | 3 | 250 | 1,093 | 4.37 | 4.67 | 6.68 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | windows | spawn-many | 200000 | 1 | 3 | 250 | 1,100 | 4.40 | 4.60 | 6.77 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | windows | spawn-many | 200000 | 12 | 3 | 57 | 256 | 4.46 | 5.67 | 6.25 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | windows | spawn-many | 200000 | 12 | 3 | 57 | 229 | 3.99 | 5.11 | 6.99 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | windows | coroutine-churn | 200000 | 1 | 3 | 354 | 917 | 2.59 | 2.64 | 4.26 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | windows | coroutine-churn | 200000 | 1 | 3 | 354 | 934 | 2.64 | 2.73 | 4.29 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | windows | coroutine-churn | 200000 | 12* | 3 | 354 | 934 | 2.64 | 2.73 | 4.41 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | windows | coroutine-churn | 200000 | 12* | 3 | 354 | 930 | 2.63 | 2.73 | 4.44 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | windows | shared-counter | 200000 | 1 | 3 | 160 | 1,571 | 9.81 | 10.20 | 100.56 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | windows | shared-counter | 200000 | 1 | 3 | 160 | 1,365 | 8.53 | 8.80 | 99.26 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | windows | shared-counter | 200000 | 12 | 3 | 554 | 4,156 | 7.50 | 14.33 | 80.03 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | windows | shared-counter | 200000 | 12 | 3 | 554 | 4,019 | 7.25 | 14.11 | 81.25 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | wsl | thread-ring | 3000000 | 1 | 3 | 364 | 630 | 1.73 | 1.74 | 1.28 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | wsl | thread-ring | 3000000 | 1 | 3 | 364 | 571 | 1.57 | 1.57 | 1.28 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | wsl | thread-ring | 3000000 | 12 | 3 | 1,045 | 700 | 0.67 | 0.25 | 1.07 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | wsl | thread-ring | 3000000 | 12 | 3 | 1,045 | 631 | 0.60 | 0.22 | 1.07 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | wsl | ping-pong | 1000000 | 1 | 3 | 368 | 361 | 0.98 | 0.98 | 0.21 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | wsl | ping-pong | 1000000 | 1 | 3 | 368 | 322 | 0.88 | 0.88 | 0.21 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | wsl | ping-pong | 1000000 | 12 | 3 | 357 | 398 | 1.11 | 1.11 | 0.27 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | wsl | ping-pong | 1000000 | 12 | 3 | 357 | 359 | 1.01 | 1.01 | 0.20 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | wsl | fan-in | 100000 | 1 | 3 | 283 | 619 | 2.19 | 2.18 | 148.94 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | wsl | fan-in | 100000 | 1 | 3 | 283 | 607 | 2.14 | 2.14 | 148.81 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | wsl | fan-in | 100000 | 12 | 3 | 647 | 1,139 | 1.76 | 4.36 | 130.47 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | wsl | fan-in | 100000 | 12 | 3 | 647 | 1,159 | 1.79 | 5.04 | 129.65 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | wsl | worker-pool | 6000 250000 | 1 | 3 | 2,136 | 2,139 | 1.00 | 1.00 | 1.93 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | wsl | worker-pool | 6000 250000 | 1 | 3 | 2,136 | 2,142 | 1.00 | 1.00 | 2.13 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | wsl | worker-pool | 6000 250000 | 12 | 3 | 200 | 222 | 1.11 | 1.05 | 1.71 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | wsl | worker-pool | 6000 250000 | 12 | 3 | 200 | 226 | 1.13 | 1.06 | 1.94 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | wsl | spawn-many | 200000 | 1 | 3 | 172 | 491 | 2.86 | 2.91 | 5.86 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | wsl | spawn-many | 200000 | 1 | 3 | 172 | 508 | 2.96 | 3.01 | 6.08 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | wsl | spawn-many | 200000 | 12 | 3 | 52 | 286 | 5.53 | 7.90 | 10.08 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | wsl | spawn-many | 200000 | 12 | 3 | 52 | 247 | 4.77 | 5.94 | 11.32 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | wsl | coroutine-churn | 200000 | 1 | 3 | 283 | 333 | 1.18 | 1.18 | 2.71 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | wsl | coroutine-churn | 200000 | 1 | 3 | 283 | 349 | 1.24 | 1.23 | 2.77 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | wsl | coroutine-churn | 200000 | 12* | 3 | 260 | 337 | 1.30 | 1.30 | 2.62 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | wsl | coroutine-churn | 200000 | 12* | 3 | 260 | 351 | 1.35 | 1.35 | 2.68 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | wsl | shared-counter | 200000 | 1 | 3 | 156 | 1,250 | 8.01 | 8.00 | 297.38 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | wsl | shared-counter | 200000 | 1 | 3 | 156 | 1,201 | 7.69 | 7.72 | 297.50 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | wsl | shared-counter | 200000 | 12 | 3 | 717 | 2,257 | 3.15 | 4.29 | 246.33 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | wsl | shared-counter | 200000 | 12 | 3 | 717 | 2,319 | 3.24 | 4.68 | 245.06 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | macos | thread-ring | 3000000 | 1 | 3 | 153 | 408 | 2.67 | 2.68 | 0.78 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | macos | thread-ring | 3000000 | 1 | 3 | 153 | 345 | 2.26 | 2.26 | 0.80 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | macos | thread-ring | 3000000 | 8 | 3 | 691 | 628 | 0.91 | 0.33 | 0.72 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | macos | thread-ring | 3000000 | 8 | 3 | 691 | 441 | 0.64 | 0.24 | 0.74 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | macos | ping-pong | 1000000 | 1 | 3 | 179 | 261 | 1.45 | 1.46 | 0.59 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | macos | ping-pong | 1000000 | 1 | 3 | 179 | 235 | 1.31 | 1.31 | 0.59 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | macos | ping-pong | 1000000 | 8 | 3 | 203 | 475 | 2.34 | 2.29 | 0.58 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | macos | ping-pong | 1000000 | 8 | 3 | 203 | 330 | 1.63 | 1.61 | 0.60 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | macos | fan-in | 100000 | 1 | 3 | 126 | 290 | 2.30 | 2.27 | 80.68 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | macos | fan-in | 100000 | 1 | 3 | 126 | 288 | 2.28 | 2.25 | 80.68 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | macos | fan-in | 100000 | 8 | 3 | 430 | 690 | 1.60 | 3.03 | 58.42 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | macos | fan-in | 100000 | 8 | 3 | 430 | 683 | 1.59 | 3.05 | 58.23 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | macos | worker-pool | 6000 250000 | 1 | 3 | 2,227 | 2,227 | 1.00 | 1.00 | 1.49 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | macos | worker-pool | 6000 250000 | 1 | 3 | 2,227 | 2,228 | 1.00 | 1.00 | 1.59 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | macos | worker-pool | 6000 250000 | 8 | 3 | 412 | 423 | 1.03 | 1.00 | 1.30 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | macos | worker-pool | 6000 250000 | 8 | 3 | 412 | 426 | 1.03 | 1.00 | 1.39 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | macos | spawn-many | 200000 | 1 | 3 | 113 | 178 | 1.58 | 1.58 | 2.46 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | macos | spawn-many | 200000 | 1 | 3 | 113 | 185 | 1.64 | 1.66 | 2.56 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | macos | spawn-many | 200000 | 8 | 3 | 29 | 305 | 10.57 | 14.47 | 8.82 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | macos | spawn-many | 200000 | 8 | 3 | 29 | 181 | 6.27 | 7.18 | 9.88 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | macos | coroutine-churn | 200000 | 1 | 3 | 194 | 139 | 0.72 | 0.70 | 1.41 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | macos | coroutine-churn | 200000 | 1 | 3 | 194 | 152 | 0.78 | 0.76 | 1.44 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | macos | coroutine-churn | 200000 | 8* | 3 | 193 | 139 | 0.72 | 0.70 | 1.36 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | macos | coroutine-churn | 200000 | 8* | 3 | 193 | 151 | 0.78 | 0.77 | 1.39 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | macos | shared-counter | 200000 | 1 | 3 | 36 | 570 | 15.65 | 15.90 | 162.13 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | macos | shared-counter | 200000 | 1 | 3 | 36 | 574 | 15.76 | 16.19 | 162.12 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | macos | shared-counter | 200000 | 8 | 3 | 1,078 | 1,374 | 1.27 | 1.47 | 113.73 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | clean | macos | shared-counter | 200000 | 8 | 3 | 1,078 | 1,370 | 1.27 | 1.48 | 112.89 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | orb | thread-ring | 3000000 | 1 | 3 | 156 | 355 | 2.28 | 2.28 | 0.71 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | orb | thread-ring | 3000000 | 1 | 3 | 156 | 319 | 2.05 | 2.06 | 0.74 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | orb | thread-ring | 3000000 | 7 | 3 | 237 | 360 | 1.52 | 0.90 | 0.61 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | orb | thread-ring | 3000000 | 7 | 3 | 237 | 323 | 1.37 | 0.80 | 0.60 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | orb | ping-pong | 1000000 | 1 | 3 | 179 | 221 | 1.23 | 1.23 | 0.26 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | orb | ping-pong | 1000000 | 1 | 3 | 179 | 207 | 1.16 | 1.16 | 0.26 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | orb | ping-pong | 1000000 | 7 | 3 | 159 | 225 | 1.42 | 1.41 | 0.26 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | orb | ping-pong | 1000000 | 7 | 3 | 159 | 211 | 1.32 | 1.32 | 0.26 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | orb | fan-in | 100000 | 1 | 3 | 124 | 175 | 1.41 | 1.42 | 139.61 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | orb | fan-in | 100000 | 1 | 3 | 124 | 173 | 1.40 | 1.40 | 139.61 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | orb | fan-in | 100000 | 7 | 3 | 153 | 326 | 2.14 | 4.23 | 106.71 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | orb | fan-in | 100000 | 7 | 3 | 153 | 338 | 2.22 | 4.32 | 105.83 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | orb | worker-pool | 6000 250000 | 1 | 3 | 2,249 | 2,406 | 1.07 | 1.07 | 1.78 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | orb | worker-pool | 6000 250000 | 1 | 3 | 2,249 | 2,403 | 1.07 | 1.07 | 1.96 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | orb | worker-pool | 6000 250000 | 7 | 3 | 415 | 461 | 1.11 | 0.98 | 1.63 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | orb | worker-pool | 6000 250000 | 7 | 3 | 415 | 556 | 1.34 | 0.95 | 1.74 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | orb | spawn-many | 200000 | 1 | 3 | 111 | 143 | 1.30 | 1.29 | 3.75 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | orb | spawn-many | 200000 | 1 | 3 | 111 | 146 | 1.32 | 1.32 | 3.89 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | orb | spawn-many | 200000 | 7 | 3 | 52 | 111 | 2.16 | 2.45 | 2.25 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | orb | spawn-many | 200000 | 7 | 3 | 52 | 91 | 1.77 | 2.17 | 2.38 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | orb | coroutine-churn | 200000 | 1 | 3 | 194 | 111 | 0.57 | 0.57 | 1.55 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | orb | coroutine-churn | 200000 | 1 | 3 | 194 | 119 | 0.61 | 0.61 | 1.58 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | orb | coroutine-churn | 200000 | 7* | 3 | 193 | 112 | 0.58 | 0.58 | 1.55 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | orb | coroutine-churn | 200000 | 7* | 3 | 193 | 119 | 0.62 | 0.62 | 1.59 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | orb | shared-counter | 200000 | 1 | 3 | 32 | 343 | 10.57 | 10.59 | 291.94 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | orb | shared-counter | 200000 | 1 | 3 | 32 | 343 | 10.57 | 10.61 | 291.93 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | orb | shared-counter | 200000 | 7 | 3 | 458 | 647 | 1.41 | 1.95 | 221.35 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-15 | e53136b60 | dirty | orb | shared-counter | 200000 | 7 | 3 | 458 | 683 | 1.49 | 2.12 | 215.11 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |

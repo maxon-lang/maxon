@@ -1239,6 +1239,24 @@ against 7346b44c7, the tree before bb5d6fd54.** It reads R5, R5b and R5c togethe
 
 The R5 regression is gone on every lane. ping-pong on x64-linux and thread-ring on macOS now run faster than Go.
 
+**2026-10-16 — THE SCHEDULER LOCK COVERS ONLY WHAT GO'S sched.lock COVERS ON THE MESSAGE, SPAWN AND AWAIT PATHS
+(92f1c0bc2, R6 stage 1). A RUNTIME row, four lanes, against 5ad514a16.**
+
+| workload | P | x64-windows | x64-linux | arm64-macos | arm64-linux |
+|---|---|---|---|---|---|
+| ping-pong | 1 | 1.13 → **0.98** | 0.98 → **0.88** | 1.45 → 1.31 | 1.23 → 1.16 |
+| ping-pong | N | 1.47 → 1.20 | 1.11 → 1.01 | 2.34 → 1.63 | 1.42 → 1.32 |
+| thread-ring | N | 0.78 → 0.64 | 0.67 → 0.60 | 0.91 → **0.64** | 1.52 → 1.37 |
+| spawn-many | N | 4.46 → 3.99 | 5.53 → 4.77 | 10.57 → 6.27 | 2.16 → 1.77 |
+| fan-in | N | 2.02 → 1.99 | 1.76 → 1.79 | 1.60 → 1.59 | 2.14 → 2.22 |
+| coroutine-churn | 1 | 2.59 → **2.64** | 1.18 → **1.24** | 0.72 → **0.78** | 0.57 → **0.61** |
+| worker-pool | 1 | 1.00 → 1.00 | 1.00 → 1.00 | 1.00 → 1.00 | 1.07 → 1.07 |
+
+**coroutine-churn regressed 2–8% on every lane.** A coroutine's spawn and every yield now take its strand's
+record lock where they took `__sched_lock`. Uncontended, that costs the same lock pair. On x64-windows, every
+enter made from a green thread also runs the import shim. Go has no lock on that road: a goroutine goes
+straight onto the P's lock-free run queue.
+
 ## Bugs this uncovered
 
 Removing the dummy exposed a leak it had been half-hiding, and the leak in turn exposed a hole in the
