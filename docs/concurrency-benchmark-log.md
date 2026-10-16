@@ -619,3 +619,115 @@ metric (wall, CPU = user + kernel, peak working set); `arm` names the compiler (
 | 2026-10-15 | e53136b60 | dirty | orb | shared-counter | 200000 | 1 | 3 | 32 | 343 | 10.57 | 10.61 | 291.93 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
 | 2026-10-15 | e53136b60 | dirty | orb | shared-counter | 200000 | 7 | 3 | 458 | 647 | 1.41 | 1.95 | 221.35 | ref@5ad514a16 | R6 stage 1: Go lock structure on the message/spawn/await path |
 | 2026-10-15 | e53136b60 | dirty | orb | shared-counter | 200000 | 7 | 3 | 458 | 683 | 1.49 | 2.12 | 215.11 | slot | R6 stage 1: Go lock structure on the message/spawn/await path |
+| 2026-10-16 | 971e5932d | clean | windows | thread-ring | 3000000 | 1 | 3 | 338 | 638 | 1.89 | 1.86 | 0.87 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | windows | thread-ring | 3000000 | 1 | 3 | 338 | 567 | 1.68 | 1.64 | 0.86 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | windows | thread-ring | 3000000 | 12 | 3 | 1,530 | 967 | 0.63 | 0.13 | 0.81 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | windows | thread-ring | 3000000 | 12 | 3 | 1,530 | 858 | 0.56 | 0.10 | 0.81 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | windows | ping-pong | 1000000 | 1 | 3 | 361 | 352 | 0.97 | 1.00 | 0.70 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | windows | ping-pong | 1000000 | 1 | 3 | 361 | 302 | 0.84 | 0.83 | 0.70 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | windows | ping-pong | 1000000 | 12 | 3 | 488 | 588 | 1.20 | 1.18 | 0.69 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | windows | ping-pong | 1000000 | 12 | 3 | 488 | 525 | 1.08 | 1.04 | 0.70 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | windows | fan-in | 100000 | 1 | 3 | 276 | 683 | 2.47 | 2.59 | 50.05 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | windows | fan-in | 100000 | 1 | 3 | 276 | 452 | 1.64 | 1.71 | 49.83 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | windows | fan-in | 100000 | 12 | 3 | 1,027 | 2,013 | 1.96 | 6.13 | 41.42 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | windows | fan-in | 100000 | 12 | 3 | 1,027 | 1,310 | 1.27 | 2.17 | 41.40 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | windows | worker-pool | 6000 250000 | 1 | 3 | 2,122 | 2,123 | 1.00 | 1.01 | 1.33 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | windows | worker-pool | 6000 250000 | 1 | 3 | 2,122 | 2,123 | 1.00 | 1.01 | 1.29 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | windows | worker-pool | 6000 250000 | 12 | 3 | 198 | 206 | 1.04 | 1.06 | 1.17 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | windows | worker-pool | 6000 250000 | 12 | 3 | 198 | 205 | 1.03 | 1.02 | 1.13 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | windows | spawn-many | 200000 | 1 | 3 | 248 | 1,061 | 4.27 | 4.19 | 6.80 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | windows | spawn-many | 200000 | 1 | 3 | 248 | 1,002 | 4.04 | 4.00 | 6.70 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | windows | spawn-many | 200000 | 12 | 3 | 56 | 224 | 3.99 | 4.90 | 6.93 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | windows | spawn-many | 200000 | 12 | 3 | 56 | 212 | 3.76 | 4.00 | 6.45 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | windows | coroutine-churn | 200000 | 1 | 3 | 339 | 902 | 2.66 | 2.59 | 4.41 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | windows | coroutine-churn | 200000 | 1 | 3 | 339 | 868 | 2.56 | 2.50 | 4.39 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | windows | coroutine-churn | 200000 | 12* | 3 | 337 | 908 | 2.69 | 2.76 | 4.42 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | windows | coroutine-churn | 200000 | 12* | 3 | 337 | 879 | 2.61 | 2.67 | 4.40 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | windows | shared-counter | 200000 | 1 | 3 | 160 | 1,263 | 7.87 | 8.10 | 100.17 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | windows | shared-counter | 200000 | 1 | 3 | 160 | 900 | 5.61 | 5.80 | 99.13 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | windows | shared-counter | 200000 | 12 | 3 | 551 | 3,958 | 7.19 | 13.38 | 80.12 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | windows | shared-counter | 200000 | 12 | 3 | 551 | 2,559 | 4.65 | 4.76 | 82.34 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | wsl | thread-ring | 3000000 | 1 | 3 | 355 | 555 | 1.56 | 1.57 | 1.28 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | wsl | thread-ring | 3000000 | 1 | 3 | 355 | 547 | 1.54 | 1.54 | 1.32 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | wsl | thread-ring | 3000000 | 12 | 3 | 1,036 | 613 | 0.59 | 0.22 | 1.11 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | wsl | thread-ring | 3000000 | 12 | 3 | 1,036 | 624 | 0.60 | 0.22 | 1.11 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | wsl | ping-pong | 1000000 | 1 | 3 | 366 | 322 | 0.88 | 0.88 | 0.21 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | wsl | ping-pong | 1000000 | 1 | 3 | 366 | 306 | 0.83 | 0.83 | 0.21 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | wsl | ping-pong | 1000000 | 12 | 3 | 359 | 361 | 1.01 | 1.01 | 0.19 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | wsl | ping-pong | 1000000 | 12 | 3 | 359 | 343 | 0.96 | 0.96 | 0.19 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | wsl | fan-in | 100000 | 1 | 3 | 272 | 594 | 2.18 | 2.17 | 148.81 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | wsl | fan-in | 100000 | 1 | 3 | 272 | 575 | 2.11 | 2.11 | 148.75 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | wsl | fan-in | 100000 | 12 | 3 | 637 | 1,140 | 1.79 | 4.41 | 123.61 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | wsl | fan-in | 100000 | 12 | 3 | 637 | 1,140 | 1.79 | 3.66 | 121.22 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | wsl | worker-pool | 6000 250000 | 1 | 3 | 2,123 | 2,136 | 1.01 | 1.01 | 2.13 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | wsl | worker-pool | 6000 250000 | 1 | 3 | 2,123 | 2,136 | 1.01 | 1.01 | 2.00 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | wsl | worker-pool | 6000 250000 | 12 | 3 | 194 | 224 | 1.15 | 1.05 | 1.88 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | wsl | worker-pool | 6000 250000 | 12 | 3 | 194 | 212 | 1.09 | 1.08 | 1.82 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | wsl | spawn-many | 200000 | 1 | 3 | 172 | 487 | 2.84 | 2.88 | 5.87 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | wsl | spawn-many | 200000 | 1 | 3 | 172 | 471 | 2.74 | 2.77 | 5.64 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | wsl | spawn-many | 200000 | 12 | 3 | 49 | 235 | 4.76 | 6.03 | 11.09 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | wsl | spawn-many | 200000 | 12 | 3 | 49 | 247 | 5.01 | 6.22 | 10.30 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | wsl | coroutine-churn | 200000 | 1 | 3 | 256 | 341 | 1.33 | 1.35 | 2.86 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | wsl | coroutine-churn | 200000 | 1 | 3 | 256 | 339 | 1.32 | 1.34 | 2.82 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | wsl | coroutine-churn | 200000 | 12* | 3 | 256 | 375 | 1.46 | 1.47 | 2.88 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | wsl | coroutine-churn | 200000 | 12* | 3 | 256 | 330 | 1.29 | 1.30 | 2.83 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | wsl | shared-counter | 200000 | 1 | 3 | 156 | 1,181 | 7.60 | 7.63 | 297.31 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | wsl | shared-counter | 200000 | 1 | 3 | 156 | 1,077 | 6.93 | 6.94 | 297.38 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | wsl | shared-counter | 200000 | 12 | 3 | 705 | 2,309 | 3.27 | 4.61 | 244.50 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | wsl | shared-counter | 200000 | 12 | 3 | 705 | 2,288 | 3.24 | 3.45 | 241.72 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | macos | thread-ring | 3000000 | 1 | 3 | 156 | 349 | 2.24 | 2.25 | 0.80 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | macos | thread-ring | 3000000 | 1 | 3 | 156 | 313 | 2.01 | 2.02 | 0.79 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | macos | thread-ring | 3000000 | 8 | 3 | 696 | 435 | 0.63 | 0.23 | 0.73 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | macos | thread-ring | 3000000 | 8 | 3 | 696 | 399 | 0.57 | 0.21 | 1.04 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | macos | ping-pong | 1000000 | 1 | 3 | 178 | 234 | 1.31 | 1.31 | 0.59 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | macos | ping-pong | 1000000 | 1 | 3 | 178 | 198 | 1.11 | 1.11 | 0.60 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | macos | ping-pong | 1000000 | 8 | 3 | 204 | 331 | 1.62 | 1.60 | 0.58 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | macos | ping-pong | 1000000 | 8 | 3 | 204 | 269 | 1.32 | 1.32 | 0.59 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | macos | fan-in | 100000 | 1 | 3 | 126 | 284 | 2.26 | 2.26 | 80.67 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | macos | fan-in | 100000 | 1 | 3 | 126 | 180 | 1.43 | 1.39 | 80.66 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | macos | fan-in | 100000 | 8 | 3 | 434 | 682 | 1.57 | 2.99 | 58.21 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | macos | fan-in | 100000 | 8 | 3 | 434 | 535 | 1.23 | 1.81 | 60.32 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | macos | worker-pool | 6000 250000 | 1 | 3 | 2,226 | 2,233 | 1.00 | 1.00 | 1.58 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | macos | worker-pool | 6000 250000 | 1 | 3 | 2,226 | 2,235 | 1.00 | 1.00 | 1.52 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | macos | worker-pool | 6000 250000 | 8 | 3 | 410 | 424 | 1.03 | 1.00 | 1.37 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | macos | worker-pool | 6000 250000 | 8 | 3 | 410 | 428 | 1.04 | 1.00 | 1.31 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | macos | spawn-many | 200000 | 1 | 3 | 110 | 178 | 1.62 | 1.61 | 2.45 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | macos | spawn-many | 200000 | 1 | 3 | 110 | 142 | 1.29 | 1.25 | 2.36 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | macos | spawn-many | 200000 | 8 | 3 | 29 | 181 | 6.16 | 7.06 | 9.85 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | macos | spawn-many | 200000 | 8 | 3 | 29 | 148 | 5.05 | 4.99 | 9.17 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | macos | coroutine-churn | 200000 | 1 | 3 | 189 | 143 | 0.76 | 0.77 | 1.43 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | macos | coroutine-churn | 200000 | 1 | 3 | 189 | 112 | 0.60 | 0.58 | 1.41 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | macos | coroutine-churn | 200000 | 8* | 3 | 189 | 141 | 0.75 | 0.73 | 1.43 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | macos | coroutine-churn | 200000 | 8* | 3 | 189 | 113 | 0.60 | 0.60 | 1.40 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | macos | shared-counter | 200000 | 1 | 3 | 36 | 566 | 15.58 | 15.93 | 162.83 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | macos | shared-counter | 200000 | 1 | 3 | 36 | 357 | 9.82 | 9.98 | 162.81 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | macos | shared-counter | 200000 | 8 | 3 | 1,049 | 1,368 | 1.30 | 1.49 | 115.63 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | clean | macos | shared-counter | 200000 | 8 | 3 | 1,049 | 1,063 | 1.01 | 0.93 | 119.71 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | orb | thread-ring | 3000000 | 1 | 3 | 156 | 315 | 2.02 | 2.03 | 0.71 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | orb | thread-ring | 3000000 | 1 | 3 | 156 | 311 | 2.00 | 2.01 | 0.67 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | orb | thread-ring | 3000000 | 7 | 3 | 233 | 322 | 1.38 | 0.81 | 0.62 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | orb | thread-ring | 3000000 | 7 | 3 | 233 | 324 | 1.39 | 0.82 | 0.62 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | orb | ping-pong | 1000000 | 1 | 3 | 178 | 208 | 1.17 | 1.17 | 0.27 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | orb | ping-pong | 1000000 | 1 | 3 | 178 | 200 | 1.12 | 1.12 | 0.28 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | orb | ping-pong | 1000000 | 7 | 3 | 160 | 213 | 1.33 | 1.31 | 0.26 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | orb | ping-pong | 1000000 | 7 | 3 | 160 | 205 | 1.28 | 1.27 | 0.25 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | orb | fan-in | 100000 | 1 | 3 | 124 | 174 | 1.41 | 1.41 | 146.13 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | orb | fan-in | 100000 | 1 | 3 | 124 | 171 | 1.38 | 1.38 | 146.13 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | orb | fan-in | 100000 | 7 | 3 | 155 | 335 | 2.16 | 4.39 | 116.34 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | orb | fan-in | 100000 | 7 | 3 | 155 | 390 | 2.51 | 4.65 | 117.13 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | orb | worker-pool | 6000 250000 | 1 | 3 | 2,254 | 2,333 | 1.03 | 1.04 | 2.16 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | orb | worker-pool | 6000 250000 | 1 | 3 | 2,254 | 2,409 | 1.07 | 1.07 | 2.05 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | orb | worker-pool | 6000 250000 | 7 | 3 | 506 | 527 | 1.04 | 0.90 | 1.83 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | orb | worker-pool | 6000 250000 | 7 | 3 | 506 | 644 | 1.27 | 0.91 | 1.73 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | orb | spawn-many | 200000 | 1 | 3 | 109 | 149 | 1.37 | 1.38 | 3.78 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | orb | spawn-many | 200000 | 1 | 3 | 109 | 140 | 1.29 | 1.29 | 3.64 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | orb | spawn-many | 200000 | 7 | 3 | 59 | 88 | 1.49 | 1.82 | 2.01 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | orb | spawn-many | 200000 | 7 | 3 | 59 | 94 | 1.60 | 1.84 | 1.91 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | orb | coroutine-churn | 200000 | 1 | 3 | 173 | 119 | 0.69 | 0.69 | 1.62 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | orb | coroutine-churn | 200000 | 1 | 3 | 173 | 111 | 0.64 | 0.64 | 1.60 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | orb | coroutine-churn | 200000 | 7* | 3 | 168 | 118 | 0.70 | 0.70 | 1.65 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | orb | coroutine-churn | 200000 | 7* | 3 | 168 | 110 | 0.65 | 0.65 | 1.62 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | orb | shared-counter | 200000 | 1 | 3 | 33 | 344 | 10.58 | 10.60 | 293.08 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | orb | shared-counter | 200000 | 1 | 3 | 33 | 340 | 10.47 | 10.47 | 293.07 | slot | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | orb | shared-counter | 200000 | 7 | 3 | 447 | 647 | 1.45 | 1.96 | 217.93 | ref@daf7f1172 | R7 change 1: Go lock_spinbit runtime locks |
+| 2026-10-16 | 971e5932d | dirty | orb | shared-counter | 200000 | 7 | 3 | 447 | 758 | 1.70 | 2.32 | 222.57 | slot | R7 change 1: Go lock_spinbit runtime locks |

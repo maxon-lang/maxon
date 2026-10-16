@@ -1257,6 +1257,24 @@ record lock where they took `__sched_lock`. Uncontended, that costs the same loc
 enter made from a green thread also runs the import shim. Go has no lock on that road: a goroutine goes
 straight onto the P's lock-free run queue.
 
+**2026-10-16 — EVERY RUNTIME LOCK IS GO'S lock_spinbit: A ZERO WORD WITH AN INLINE CAS, A SPIN, AND A PER-M
+SEMAPHORE ONLY ON CONTENTION (971e5932d, R7 change 1). A RUNTIME row, four lanes, against daf7f1172.**
+
+| workload | P | x64-windows | x64-linux | arm64-macos | arm64-linux |
+|---|---|---|---|---|---|
+| ping-pong | 1 | 0.97 → 0.84 | 0.88 → 0.83 | 1.31 → 1.11 | 1.17 → 1.12 |
+| ping-pong | N | 1.20 → 1.08 | 1.01 → **0.96** | 1.62 → 1.32 | 1.33 → 1.28 |
+| thread-ring | N | 0.63 → 0.56 | 0.59 → 0.60 | 0.63 → 0.57 | 1.38 → 1.39 |
+| spawn-many | N | 3.99 → 3.76 | 4.76 → 5.01 | 6.16 → 5.05 | 1.49 → 1.60 |
+| fan-in | N | 1.96 → 1.27 | 1.79 → 1.79 | 1.57 → 1.23 | 2.16 → **2.51** |
+| shared-counter | N | 7.19 → 4.65 | 3.27 → 3.24 | 1.30 → 1.01 | 1.45 → **1.70** |
+| coroutine-churn | 1 | 2.66 → 2.56 | 1.33 → 1.32 | 0.76 → 0.60 | 0.69 → 0.64 |
+| worker-pool | 1 | 1.00 → 1.00 | 1.01 → 1.01 | 1.00 → 1.00 | 1.03 → 1.07 |
+
+The contended single-mailbox workloads gain most on x64-windows and arm64-macos: fan-in falls 35% and 22%,
+shared-counter 35% and 22%. coroutine-churn gains 4%, 22% and 7% on x64-windows, arm64-macos and arm64-linux and holds on x64-linux. On arm64-linux, fan-in and shared-counter
+at `P = N` regressed 16% and 17%, with CPU 4.39 → 4.65 and 1.96 → 2.32.
+
 ## Bugs this uncovered
 
 Removing the dummy exposed a leak it had been half-hiding, and the leak in turn exposed a hole in the
