@@ -210,9 +210,7 @@ function buildProfileNextThread(module StdModule)
 
 	// `NtGetNextThread` ends a walk with `STATUS_NO_MORE_ENTRIES`, so anything but success stops it — a genuine
 	// failure and running out of threads are one answer to the caller.
-	let success = emitConst(module, block: entry, value: NtStatusSuccess, ids: ids)
-	let walkedOn = emitCmp(module, block: entry, a: status, b: success, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(walkedOn, thenBlockId: walked.id, elseBlockId: ended.id))
+	emitBranchOnCompare(module, block: entry, value: status, pred: StdCmpPred.eq, against: NtStatusSuccess, whenTrue: walked, whenFalse: ended, ids: ids)
 
 	let handle = emitLoadField(module, block: walked, record: outPtr, offset: 0, ids: ids)
 	module.setTerminator(walked, op: StdOp.ret(handle))
@@ -327,9 +325,7 @@ function buildProfileSample(module StdModule, layout HostContextLayout)
 	emitStoreField(module, block: entry, record: mbiPtr, offset: layout.regionAllocationBaseOffset as ByteOffset, value: zero)
 
 	let suspended = emitHostSample(module, block: entry, service: HostProcessCall.suspendThread, a0: thread, a1: zero, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
-	let suspendFailed = emitConst(module, block: entry, value: layout.suspendThreadFailed, ids: ids)
-	let nothingSuspended = emitCmp(module, block: entry, a: suspended, b: suspendFailed, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(nothingSuspended, thenBlockId: answer.id, elseBlockId: readContext.id))
+	emitBranchOnCompare(module, block: entry, value: suspended, pred: StdCmpPred.eq, against: layout.suspendThreadFailed, whenTrue: answer, whenFalse: readContext, ids: ids)
 
 	// The thread is suspended from here on, so the answer becomes "this instant is unreadable" until
 	// `queryRegion` replaces it with a byte count.
@@ -338,18 +334,14 @@ function buildProfileSample(module StdModule, layout HostContextLayout)
 	let sampleFlags = emitConst(module, block: readContext, value: layout.contextControl or layout.contextInteger, ids: ids)
 	emitStoreField(module, block: readContext, record: ctxPtr, offset: layout.contextFlagsOffset as ByteOffset, value: sampleFlags)
 	let gotContext = emitHostSample(module, block: readContext, service: HostProcessCall.threadContext, a0: thread, a1: ctxPtr, a2: zero, a3: zero, a4: zero, a5: zero, ids: ids)
-	let noContext = emitConst(module, block: readContext, value: Win32False, ids: ids)
-	let contextFailed = emitCmp(module, block: readContext, a: gotContext, b: noContext, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(readContext, op: StdOp.condBranch(contextFailed, thenBlockId: resume.id, elseBlockId: queryRegion.id))
+	emitBranchOnCompare(module, block: readContext, value: gotContext, pred: StdCmpPred.eq, against: Win32False, whenTrue: resume, whenFalse: queryRegion, ids: ids)
 
 	// The registers are read from here on, so the answer is a byte count, zero until a copy succeeds.
 	emitStoreField(module, block: queryRegion, record: resultPtr, offset: 0, value: zero)
 	let stackPointer = emitLoadField(module, block: queryRegion, record: ctxPtr, offset: layout.contextRspOffset as ByteOffset, ids: ids)
 	let mbiBytes = emitConst(module, block: queryRegion, value: layout.regionRecordBytes, ids: ids)
 	let queried = emitHostSample(module, block: queryRegion, service: HostProcessCall.queryRegion, a0: proc, a1: stackPointer, a2: mbiPtr, a3: mbiBytes, a4: zero, a5: zero, ids: ids)
-	let queryMiss = emitConst(module, block: queryRegion, value: RegionQueryFailed, ids: ids)
-	let regionMissing = emitCmp(module, block: queryRegion, a: queried, b: queryMiss, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(queryRegion, op: StdOp.condBranch(regionMissing, thenBlockId: resume.id, elseBlockId: measureWindow.id))
+	emitBranchOnCompare(module, block: queryRegion, value: queried, pred: StdCmpPred.eq, against: RegionQueryFailed, whenTrue: resume, whenFalse: measureWindow, ids: ids)
 
 	// Both comparisons are unsigned: these are addresses, and a signed `>` reads a high-half pointer
 	// as negative.
@@ -373,9 +365,7 @@ function buildProfileSample(module StdModule, layout HostContextLayout)
 	emitStoreField(module, block: copyStack, record: readPtr, offset: 0, value: zero)
 	let copied = emitHostSample(module, block: copyStack, service: HostProcessCall.readProcessMemory, a0: proc, a1: stackPointer, a2: windowPtr, a3: want, a4: readPtr, a5: zero, ids: ids)
 	emitStoreField(module, block: copyStack, record: resultPtr, offset: 0, value: want)
-	let copyFalse = emitConst(module, block: copyStack, value: Win32False, ids: ids)
-	let copyFailed = emitCmp(module, block: copyStack, a: copied, b: copyFalse, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(copyStack, op: StdOp.condBranch(copyFailed, thenBlockId: partialCopy.id, elseBlockId: resume.id))
+	emitBranchOnCompare(module, block: copyStack, value: copied, pred: StdCmpPred.eq, against: Win32False, whenTrue: partialCopy, whenFalse: resume, ids: ids)
 
 	let partial = emitLoadField(module, block: partialCopy, record: readPtr, offset: 0, ids: ids)
 	emitStoreField(module, block: partialCopy, record: resultPtr, offset: 0, value: partial)
@@ -408,8 +398,7 @@ function buildProfileTimerCreate(module StdModule)
 	let access = emitConst(module, block: entry, value: TimerAllAccess, ids: ids)
 	let highResolution = emitConst(module, block: entry, value: CreateWaitableTimerHighResolution, ids: ids)
 	let fine = emitHostSample(module, block: entry, service: HostProcessCall.createHighResTimer, a0: zero, a1: zero, a2: highResolution, a3: access, a4: zero, a5: zero, ids: ids)
-	let noTimer = emitCmp(module, block: entry, a: fine, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(noTimer, thenBlockId: coarse.id, elseBlockId: made.id))
+	emitBranchOnCompare(module, block: entry, value: fine, pred: StdCmpPred.eq, against: 0, whenTrue: coarse, whenFalse: made, ids: ids)
 
 	let plain = emitHostSample(module, block: coarse, service: HostProcessCall.createHighResTimer, a0: zero, a1: zero, a2: emitConst(module, block: coarse, value: CreateWaitableTimerOrdinary, ids: ids), a3: access, a4: zero, a5: zero, ids: ids)
 	module.setTerminator(coarse, op: StdOp.ret(plain))
@@ -451,9 +440,7 @@ function buildProfileTimerWait(module StdModule)
 	// ⛔ **AN UNARMED TIMER IS NEVER WAITED ON.** The wait below is INFINITE, so a `SetWaitableTimer` that
 	// refused would hang the whole tool on a handle nothing will ever signal — the caller's tick simply
 	// costs nothing instead, which its own deadline arithmetic already survives.
-	let refused = emitConst(module, block: entry, value: Win32False, ids: ids)
-	let notArmed = emitCmp(module, block: entry, a: set, b: refused, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(notArmed, thenBlockId: unarmed.id, elseBlockId: armed.id))
+	emitBranchOnCompare(module, block: entry, value: set, pred: StdCmpPred.eq, against: Win32False, whenTrue: unarmed, whenFalse: armed, ids: ids)
 
 	let forever = emitConst(module, block: armed, value: WaitInfinite, ids: ids)
 	let waited = ids.mint()
@@ -539,9 +526,7 @@ function buildProfileClose(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let handle = 0 as ValueId
 
-	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	let noHandle = emitCmp(module, block: entry, a: handle, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(noHandle, thenBlockId: nothing.id, elseBlockId: live.id))
+	emitBranchOnCompare(module, block: entry, value: handle, pred: StdCmpPred.eq, against: 0, whenTrue: nothing, whenFalse: live, ids: ids)
 
 	module.appendOp(live, op: StdOp.osCloseHandle(handle))
 	module.setTerminator(live, op: StdOp.retVoid)
@@ -584,8 +569,7 @@ function buildProfilePagesRelease(module StdModule)
 
 	let base = emitLoadField(module, block: entry, record: box, offset: ManagedPagesBaseOffset, ids: ids)
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	let isHeld = emitCmp(module, block: entry, a: base, b: zero, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(isHeld, thenBlockId: held.id, elseBlockId: done.id))
+	emitBranchOnCompare(module, block: entry, value: base, pred: StdCmpPred.ne, against: 0, whenTrue: held, whenFalse: done, ids: ids)
 
 	let bytes = emitLoadField(module, block: held, record: box, offset: ManagedPagesBytesOffset, ids: ids)
 	emitStoreField(module, block: held, record: box, offset: ManagedPagesBaseOffset, value: zero)

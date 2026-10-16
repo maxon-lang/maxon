@@ -336,9 +336,7 @@ end 'buildCharFromCodepoint'
 // `emitUtf8WidthFork` because it is not a width question — both sides encode to one byte — and folding it in
 // would make a ladder rung mean two different things.
 function emitSingleByteWidthFork(module StdModule, block IrBlock, cp ValueId, isCr IrBlock, notCr IrBlock, ids ValueMinter)
-	let crByte = emitConst(module, block: block, value: CarriageReturnByte as FullRangeInt, ids: ids)
-	let matchesCr = emitCmp(module, block: block, a: cp, b: crByte, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(block, op: StdOp.condBranch(matchesCr, thenBlockId: isCr.id, elseBlockId: notCr.id))
+	emitBranchOnCompare(module, block: block, value: cp, pred: StdCmpPred.eq, against: CarriageReturnByte as FullRangeInt, whenTrue: isCr, whenFalse: notCr, ids: ids)
 end 'emitSingleByteWidthFork'
 
 // Encode a one-byte codepoint into a fresh Character record carrying the flag the caller decided, and return
@@ -353,9 +351,7 @@ end 'emitOneByteCharArm'
 // identical forks written once, so a ceiling cannot be tested with the wrong predicate in one arm and the
 // right one in another (`emitRangeTable`'s reason, one function up).
 function emitUtf8WidthFork(module StdModule, block IrBlock, cp ValueId, ceiling FullRangeInt, narrow IrBlock, wider IrBlock, ids ValueMinter)
-	let bound = emitConst(module, block: block, value: ceiling, ids: ids)
-	let fits = emitCmp(module, block: block, a: cp, b: bound, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(block, op: StdOp.condBranch(fits, thenBlockId: narrow.id, elseBlockId: wider.id))
+	emitBranchOnCompare(module, block: block, value: cp, pred: StdCmpPred.lt, against: ceiling, whenTrue: narrow, whenFalse: wider, ids: ids)
 end 'emitUtf8WidthFork'
 
 // A fresh owned Character record of `byteLength` bytes, plus the address its bytes start at — the pair
@@ -429,15 +425,11 @@ function buildCharAscii(module StdModule)
 	let record = 0
 
 	let len = emitLoadField(module, block: entry, record: record, offset: StringLengthOffset, ids: ids)
-	let oneByte = emitConst(module, block: entry, value: Utf8OneByteLength, ids: ids)
-	let isSingleByte = emitCmp(module, block: entry, a: len, b: oneByte, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(isSingleByte, thenBlockId: checkAscii.id, elseBlockId: notAscii.id))
+	emitBranchOnCompare(module, block: entry, value: len, pred: StdCmpPred.eq, against: Utf8OneByteLength, whenTrue: checkAscii, whenFalse: notAscii, ids: ids)
 
 	let buffer = emitLoadField(module, block: checkAscii, record: record, offset: StringBufferOffset, ids: ids)
 	let byteValue = emitLoadByteAt(module, block: checkAscii, addr: buffer, ids: ids)
-	let ceiling = emitConst(module, block: checkAscii, value: Utf8OneByteCeiling, ids: ids)
-	let singleByteGraphemes = emitCmp(module, block: checkAscii, a: byteValue, b: ceiling, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(checkAscii, op: StdOp.condBranch(singleByteGraphemes, thenBlockId: ok.id, elseBlockId: notAscii.id))
+	emitBranchOnCompare(module, block: checkAscii, value: byteValue, pred: StdCmpPred.lt, against: Utf8OneByteCeiling, whenTrue: ok, whenFalse: notAscii, ids: ids)
 
 	emitOkReturn(module, block: ok, value: byteValue, ids: ids)
 	emitErrorReturn(module, block: notAscii, flag: CharacterNotAsciiFlag, ids: ids)

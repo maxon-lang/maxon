@@ -1462,9 +1462,7 @@ module function buildRecordGatedAction(module StdModule, symbolName ByteArray, w
 
 	let word = ids.mint()
 	module.appendOp(entry, op: StdOp.loadIndirect(word, addrId: record, offset: wordOffset, valueType: StdType.i64))
-	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	let hasWord = emitCmp(module, block: entry, a: word, b: zero, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(hasWord, thenBlockId: doAct.id, elseBlockId: done.id))
+	emitBranchOnCompare(module, block: entry, value: word, pred: StdCmpPred.ne, against: 0, whenTrue: doAct, whenFalse: done, ids: ids)
 
 	match action 'act'
 		destroyThroughWord then emitRecordGatedDestroyTail(module, doAct: doAct, done: done, word: word, value: value, ids: ids)
@@ -1695,9 +1693,7 @@ function emitElementDestroyRange(module StdModule, func IrFunction, cur IrBlock,
 	let slot = emitSlotAddr(module, block: body, buffer: buffer, index: i, elementSize: elementSize, ids: ids)
 	let elem = ids.mint()
 	module.appendOp(body, op: StdOp.loadIndirect(elem, addrId: slot, offset: 0, valueType: StdType.i64))
-	let zero = emitConst(module, block: body, value: 0, ids: ids)
-	let nonNull = emitCmp(module, block: body, a: elem, b: zero, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(body, op: StdOp.condBranch(nonNull, thenBlockId: doDrop.id, elseBlockId: step.id))
+	emitBranchOnCompare(module, block: body, value: elem, pred: StdCmpPred.ne, against: 0, whenTrue: doDrop, whenFalse: step, ids: ids)
 
 	emitElementDestructorCall(module, block: doDrop, destroy: destroy, elem: elem, ids: ids)
 	module.setTerminator(doDrop, op: StdOp.branch(step.id))
@@ -1852,9 +1848,7 @@ function emitLoadElemAndOkReturn(module StdModule, func IrFunction, cur IrBlock,
 	module.setTerminator(checkDtor, op: StdOp.condBranch(managed, thenBlockId: checkNull.id, elseBlockId: ok.id))
 
 	// checkNull: a NULL managed slot is empty → throw; a live one returns ok.
-	let zeroVal = emitConst(module, block: checkNull, value: 0, ids: ids)
-	let isNull = emitCmp(module, block: checkNull, a: value, b: zeroVal, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(checkNull, op: StdOp.condBranch(isNull, thenBlockId: empty.id, elseBlockId: ok.id))
+	emitBranchOnCompare(module, block: checkNull, value: value, pred: StdCmpPred.eq, against: 0, whenTrue: empty, whenFalse: ok, ids: ids)
 
 	// ⚠ `emptySlot`, NOT `indexOutOfBounds` — see `ArrayErrorEmptySlotFlag`. This arm is reached only with an index
 	// the bounds check already accepted, so blaming the index would be a false statement about the program.
@@ -2255,12 +2249,10 @@ export function emitStrideDispatch(module StdModule, func IrFunction, cur IrBloc
 	// union above already carries — and it is the same pair `strideDispatchPlanForStamp` answers a
 	// STATICALLY-KNOWN stamp against. A compile-time answer that disagreed with these two compares would
 	// skip an arm the runtime would have taken, which is a wrong answer and not a missed optimization.
-	let wordStride = emitConst(module, block: cur, value: singleOpStrideBytes(SingleOpStride.word), ids: ids)
-	let isWord = emitCmp(module, block: cur, a: es, b: wordStride, pred: StdCmpPred.eq, ids: ids)
+	let isWord = emitCompareWithConstant(module, block: cur, value: es, pred: StdCmpPred.eq, against: singleOpStrideBytes(SingleOpStride.word), ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(isWord, thenBlockId: wordArm, elseBlockId: checkByte.id))
 
-	let byteStride = emitConst(module, block: checkByte, value: singleOpStrideBytes(SingleOpStride.byte), ids: ids)
-	let isByte = emitCmp(module, block: checkByte, a: es, b: byteStride, pred: StdCmpPred.eq, ids: ids)
+	let isByte = emitCompareWithConstant(module, block: checkByte, value: es, pred: StdCmpPred.eq, against: singleOpStrideBytes(SingleOpStride.byte), ids: ids)
 	module.setTerminator(checkByte, op: StdOp.condBranch(isByte, thenBlockId: byteArm, elseBlockId: otherArm))
 end 'emitStrideDispatch'
 
@@ -2477,9 +2469,7 @@ function emitGenericStrideStore(module StdModule, func IrFunction, cur IrBlock, 
 	var packedArm = module.addBlock(func, label: b"stpk", heat: BlockHeat.normal)
 	var byteLoopArm = module.addBlock(func, label: b"stby", heat: BlockHeat.normal)
 
-	let zero = emitConst(module, block: cur, value: 0, ids: ids)
-	let isPacked = emitCmp(module, block: cur, a: es, b: zero, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(isPacked, thenBlockId: packedArm.id, elseBlockId: byteLoopArm.id))
+	emitBranchOnCompare(module, block: cur, value: es, pred: StdCmpPred.lt, against: 0, whenTrue: packedArm, whenFalse: byteLoopArm, ids: ids)
 
 	// packedArm: the shared straight-line read-modify-write of the one byte this field lives in.
 	emitPackedFieldStore(module, block: packedArm, buffer: buffer, index: index, value: value, es: es, ids: ids)
@@ -2604,8 +2594,7 @@ function buildManagedMoveElems(module StdModule)
 	otherBuf.branchEdges.push(BranchEdge.create(direction.id, argIds: argsOf(forwardIsSafe)))
 
 	let zero = emitConst(module, block: direction, value: 0, ids: ids)
-	let isPacked = emitCmp(module, block: direction, a: es, b: zero, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(direction, op: StdOp.condBranch(isPacked, thenBlockId: packedArm.id, elseBlockId: byteArm.id))
+	emitBranchOnCompare(module, block: direction, value: es, pred: StdCmpPred.lt, against: 0, whenTrue: packedArm, whenFalse: byteArm, ids: ids)
 
 	// packedArm: one field at a time, from whichever end the shared answer names.
 	let packedGoesDown = emitCmp(module, block: packedArm, a: fromTheTop, b: zero, pred: StdCmpPred.eq, ids: ids)
@@ -2688,9 +2677,7 @@ function buildManagedZeroElems(module StdModule)
 	let count = 2
 	let es = 3
 
-	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	let isPacked = emitCmp(module, block: entry, a: es, b: zero, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(isPacked, thenBlockId: packedArm.id, elseBlockId: byteArm.id))
+	emitBranchOnCompare(module, block: entry, value: es, pred: StdCmpPred.lt, against: 0, whenTrue: packedArm, whenFalse: byteArm, ids: ids)
 
 	var afterPacked = emitPackedElementZero(module, func: func, cur: packedArm, buffer: buffer, start: start, count: count, es: es, ids: ids)
 	module.setTerminator(afterPacked, op: StdOp.branch(done.id))
@@ -2784,27 +2771,15 @@ end 'emitZeroElems'
 // `buildManagedCowDetach`'s header rejects, and the failure mode is not a compile error: it is a
 // store over an occupant nobody released, which is a LEAK (exit 101).
 export function emitElementIsManaged(module StdModule, block IrBlock, destroy ValueId, ids ValueMinter) returns ValueId
-	let trivial = emitConst(module, block: block, value: TrivialElementDestroy, ids: ids)
-	return emitCmp(module, block: block, a: destroy, b: trivial, pred: StdCmpPred.ne, ids: ids)
+	return emitCompareWithConstant(module, block: block, value: destroy, pred: StdCmpPred.ne, against: TrivialElementDestroy, ids: ids)
 end 'emitElementIsManaged'
 
-// `value < 0` — the SIGNED-negative test. Since the two bounds guards below took the unsigned idiom, every
-// caller left is one with NO limit to compare the value against, and there are NINE: a length or a count on
-// its way to being PUBLISHED (`__managed_resize`, `__managed_set_length`, `__managed_mem_create`'s `count`),
-// an ARGUMENT that is not itself an index (`__managed_fill`'s `start` and `count`, a shift's `count`), the
-// slice range's two endpoints, and `emitBufferAccessGuard`'s byte offset — which keeps two tests for a
-// reason of its own, stated in its header.
-//
 // ⛔⛔ **THE COMPILER HAS AN UNSIGNED COMPARE, EVEN THOUGH A `StdCmpPred` CARRIES NO SIGNEDNESS.** Signedness rides on a
 // compare's `operandType` (`StdDialect.stdTypeIsUnsigned` / `unsignedStdTypeOf`,
 // `LowerMaxonToStd.lowerCompare`), and all three backends read it — x64's `unsignedCondCodeForPred`
 // (`jae`/`jb`), arm64's `arm64UnsignedCondForPred` (`hs`/`lo`) and wasm's `i64.ge_u`/`lt_u`. That is what lets a
 // bounds guard be one compare instead of seven instructions.
-export function emitIsNegative(module StdModule, block IrBlock, value ValueId, ids ValueMinter) returns ValueId
-	let zero = emitConst(module, block: block, value: 0, ids: ids)
-	return emitCmp(module, block: block, a: value, b: zero, pred: StdCmpPred.lt, ids: ids)
-end 'emitIsNegative'
-
+//
 // ⭐⭐ **`u64` — THE ONE FACT THAT TURNS A BOUNDS GUARD FROM SEVEN INSTRUCTIONS INTO TWO, AND THE ONE
 // PRECONDITION IT COSTS.** Stated once, here, because the two guards below are its only readers and they must
 // not answer it differently.
@@ -2832,22 +2807,23 @@ end 'emitIsNegative'
 //      (`NotOwnedBufferCapacity`); `length@8` is a real element count for an owner, for a view's window, for
 //      an inline String and for an `.rdata` blob. `ManagedFileRuntime.buildManagedFileWrite`'s header states
 //      the same fact about the same field, for its own extent.
-//   2. **EVERY WRITER OF `length@8` PUBLISHES A NON-NEGATIVE.** ⚠ **AUDIT IT UNDER BOTH SPELLINGS**: the
-//      field also answers to `StringRuntime.StringLengthOffset`, which is `= ManagedRecordLengthOffset` and
-//      not a second number, so a grep for one name finds three writers the other's misses. The two that take
-//      the number from the USER refuse a negative one BEFORE publishing, both through `emitIsNegative` above:
-//      `__managed_resize` aborts (`RuntimeAbort.arrayNegativeResize`) and `__managed_set_length` throws
-//      `invalidLength`. Every other writer is DERIVED, and the derivations are of four kinds: a literal 0
-//      (`clear`); a sum or difference of non-negatives (`push`, `append`, and `remove`'s `length - 1` on a
-//      path its own bounds check has already proven holds an element); a bounds-checked window length
-//      (`slice`, the three clones, the `.rdata` const array's compile-time length); and a COUNT SOMETHING
-//      ELSE PRODUCED — `__console_read_stdin`'s bytes out of a ZEROED out-word whose high half a DWORD write
-//      cannot reach, the directory walk's own loop counter, the subprocess copy's `srcLen` parameter, and the
-//      String spellings' byte lengths. ⛔ That last kind is the one with no single mechanism behind it, and
-//      an earlier draft of this list wrongly attributed all three OS-fed counts to the out-word; a new writer
-//      of that kind owes its own argument rather than inheriting one. `ListRuntime`'s `count@16` is the
-//      easy shape: 0 at create, plus or minus one per link and unlink (`emitListCountDelta`), every unlink
-//      already bounds-checked.
+//   2. **EVERY WRITER OF `length@8` PUBLISHES A NON-NEGATIVE.** ⚠ **AUDIT IT UNDER BOTH
+//      SPELLINGS**: the field also answers to `StringRuntime.StringLengthOffset`, which is
+//      `= ManagedRecordLengthOffset` and not a second number, so a grep for one name finds three
+//      writers the other's misses. The two that take the number from the USER refuse a negative one
+//      BEFORE publishing, both through a signed `< 0` test: `__managed_resize` aborts
+//      (`RuntimeAbort.arrayNegativeResize`) and `__managed_set_length` throws `invalidLength`.
+//      Every other writer is DERIVED, and the derivations are of four kinds: a literal 0 (`clear`);
+//      a sum or difference of non-negatives (`push`, `append`, and `remove`'s `length - 1` on a
+//      path its own bounds check has already proven holds an element); a bounds-checked window
+//      length (`slice`, the three clones, the `.rdata` const array's compile-time length); and a
+//      COUNT SOMETHING ELSE PRODUCED — `__console_read_stdin`'s bytes out of a ZEROED out-word
+//      whose high half a DWORD write cannot reach, the directory walk's own loop counter, the
+//      subprocess copy's `srcLen` parameter, and the String spellings' byte lengths. ⛔ That last
+//      kind is the one with no single mechanism behind it, so a new writer of that kind owes its
+//      own argument rather than inheriting one. `ListRuntime`'s `count@16` is the easy shape: 0 at
+//      create, plus or minus one per link and unlink (`emitListCountDelta`), every unlink already
+//      bounds-checked.
 //   3. **`capacity@16` REACHES ONE OF THESE GUARDS, AND ONLY BEHIND AN OWNERSHIP TEST.**
 //      `InlineManagedPrimitives.guardIndexInRange` bounds the inlined `__managed_mem_set`'s index against
 //      `capacity@16` — the one limit here that CAN be a sentinel — so `emitStoreArm` asks
@@ -2869,7 +2845,7 @@ let BoundsCompareOperandType = StdType.u64
 //
 // ⭐⭐ **ONE UNSIGNED COMPARE ANSWERS BOTH HALVES OF THAT SENTENCE** — see
 // `BoundsCompareOperandType` above for the idiom and for the `length >= 0` precondition it rests on. The
-// alternative, `emitIsNegative` OR-ed into a signed `index >= length`, is on x64
+// alternative, a signed `index < 0` OR-ed into a signed `index >= length`, is on x64
 // `cmp`/`setcc`/`cmp`/`setcc`/`or`/`cmp`/`jcc`: SEVEN instructions in the hottest loop of every
 // array-indexing program — and seven rather than five because a `bitOr` is not a compare, so the branch on it
 // could not fuse and paid its own `cmp $0`. A single compare CAN fuse, and does: the guard is
@@ -3162,7 +3138,7 @@ end 'limitFieldRecord'
 // ⭐⭐ **AND THAT REFUSAL SURVIVES THE UNSIGNED REWRITE UNCHANGED, WHICH IS NOT A COINCIDENCE — IT IS THE
 // SAME FACT FROM THE OTHER SIDE.** A wrapped end is `>= 2^63` as an unsigned number and every length is
 // below `2^63` (see `BoundsCompareOperandType`'s part 2), so `end >u length` is TRUE for exactly the values
-// a signed `position > length` OR-ed with `emitIsNegative` catches. The guard is one
+// a signed `position > length` OR-ed with `position < 0` catches. The guard is one
 // `cmp position, length` + `ja`.
 //
 // ⚠ It sits HERE, beside its half-open twin, rather than in a caller, for exactly the reason that twin is
@@ -3192,13 +3168,12 @@ function emitSliceRangeViolated(module StdModule, block IrBlock, arr ValueId, st
 	let length = emitLoadField(module, block: block, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
 	let endTooLarge = emitCmp(module, block: block, a: endIndex, b: length, pred: StdCmpPred.gt, ids: ids)
 	let startPastEnd = emitCmp(module, block: block, a: start, b: endIndex, pred: StdCmpPred.gt, ids: ids)
-	let startNegative = emitIsNegative(module, block: block, value: start, ids: ids)
-	let endNegative = emitIsNegative(module, block: block, value: endIndex, ids: ids)
+	let startNegative = emitCompareWithConstant(module, block: block, value: start, pred: StdCmpPred.lt, against: 0, ids: ids)
+	let endNegative = emitCompareWithConstant(module, block: block, value: endIndex, pred: StdCmpPred.lt, against: 0, ids: ids)
 	let badRange = emitBin(module, block: block, a: endTooLarge, b: startPastEnd, opcode: StdBinOpcode.bitOr, ids: ids)
 	let negativeIndex = emitBin(module, block: block, a: startNegative, b: endNegative, opcode: StdBinOpcode.bitOr, ids: ids)
 	let anyErr = emitBin(module, block: block, a: badRange, b: negativeIndex, opcode: StdBinOpcode.bitOr, ids: ids)
-	let zero = emitConst(module, block: block, value: 0, ids: ids)
-	return emitCmp(module, block: block, a: anyErr, b: zero, pred: StdCmpPred.ne, ids: ids)
+	return emitCompareWithConstant(module, block: block, value: anyErr, pred: StdCmpPred.ne, against: 0, ids: ids)
 end 'emitSliceRangeViolated'
 
 // The out-of-bounds throw: `errorReturn(0, indexOutOfBounds)` — the one `ArrayError` case an INDEX earns.
@@ -3282,9 +3257,7 @@ function emitRecordView(module StdModule, func IrFunction, cur IrBlock, exit IrB
 	let es = emitLoadField(module, block: cur, record: srcRecord, offset: ManagedRecordElementSizeOffset, ids: ids)
 	let dtor = emitLoadField(module, block: cur, record: srcRecord, offset: ManagedRecordElementDestroyOffset, ids: ids)
 	let srcBuffer = emitLoadField(module, block: cur, record: srcRecord, offset: ManagedRecordBufferOffset, ids: ids)
-	let zero = emitConst(module, block: cur, value: 0, ids: ids)
-	let isPacked = emitCmp(module, block: cur, a: es, b: zero, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(isPacked, thenBlockId: packedArm.id, elseBlockId: shareArm.id))
+	emitBranchOnCompare(module, block: cur, value: es, pred: StdCmpPred.lt, against: 0, whenTrue: packedArm, whenFalse: shareArm, ids: ids)
 
 	// The two arms build DIFFERENT records, so the result joins on `exit` as a block argument rather than
 	// being a value one arm happens to dominate.
@@ -3456,9 +3429,7 @@ function buildManagedCowDetach(module StdModule)
 	// checkShared: an owner with no buffer at all (an array that never grew) has nothing to share and
 	// nothing to write; the mutator that follows will grow it.
 	let ownBuf = emitLoadField(module, block: checkShared, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
-	let zeroBuf = emitConst(module, block: checkShared, value: 0, ids: ids)
-	let hasBuf = emitCmp(module, block: checkShared, a: ownBuf, b: zeroBuf, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(checkShared, op: StdOp.condBranch(hasBuf, thenBlockId: checkRc.id, elseBlockId: done.id))
+	emitBranchOnCompare(module, block: checkShared, value: ownBuf, pred: StdCmpPred.ne, against: 0, whenTrue: checkRc, whenFalse: done, ids: ids)
 
 	// checkRc — ARM 2: the buffer is this record's, but is anyone else holding it? `emitIsSharedAllocation`
 	// owns what the count means (`owners - 1`, so sole ownership is 0), and the only thing that can hold a
@@ -3515,9 +3486,7 @@ function buildManagedGrownCap(module StdModule)
 	emitAtLeastMinimumReturn(module, func: func, block: takeAsk, value: required, ids: ids)
 
 	// checkSmall: double while below the threshold.
-	let thresh = emitConst(module, block: checkSmall, value: GrowthThreshold, ids: ids)
-	let isSmall = emitCmp(module, block: checkSmall, a: current, b: thresh, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(checkSmall, op: StdOp.condBranch(isSmall, thenBlockId: takeDoubled.id, elseBlockId: easeInit.id))
+	emitBranchOnCompare(module, block: checkSmall, value: current, pred: StdCmpPred.lt, against: GrowthThreshold, whenTrue: takeDoubled, whenFalse: easeInit, ids: ids)
 
 	emitAtLeastMinimumReturn(module, func: func, block: takeDoubled, value: doubled, ids: ids)
 
@@ -3549,9 +3518,7 @@ end 'buildManagedGrownCap'
 function emitAtLeastMinimumReturn(module StdModule, func IrFunction, block IrBlock, value ValueId, ids ValueMinter)
 	var retFloor = module.addBlock(func, label: b"retfloor", heat: BlockHeat.normal)
 	var retVal = module.addBlock(func, label: b"retval", heat: BlockHeat.normal)
-	let floor = emitConst(module, block: block, value: MinimumCapacity, ids: ids)
-	let below = emitCmp(module, block: block, a: value, b: floor, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(block, op: StdOp.condBranch(below, thenBlockId: retFloor.id, elseBlockId: retVal.id))
+	emitBranchOnCompare(module, block: block, value: value, pred: StdCmpPred.lt, against: MinimumCapacity, whenTrue: retFloor, whenFalse: retVal, ids: ids)
 	let floorRet = emitConst(module, block: retFloor, value: MinimumCapacity, ids: ids)
 	module.setTerminator(retFloor, op: StdOp.ret(floorRet))
 	module.setTerminator(retVal, op: StdOp.ret(value))
@@ -3672,9 +3639,7 @@ function buildManagedCreate(module StdModule)
 	let elementSize = 0
 	let elementDestroy = 1
 
-	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	let isZeroSize = emitCmp(module, block: entry, a: elementSize, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(isZeroSize, thenBlockId: badSize.id, elseBlockId: ok.id))
+	emitBranchOnCompare(module, block: entry, value: elementSize, pred: StdCmpPred.eq, against: 0, whenTrue: badSize, whenFalse: ok, ids: ids)
 
 	// This function RETURNS a record pointer, so its abort's dead terminator must carry a value — which
 	// `emitRuntimeAbort` derives from `func.returnType` rather than being told.
@@ -3807,7 +3772,7 @@ module function emitPromiseSlotVacateTail(module StdModule, func IrFunction, ent
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 	let occupant = emitLoadField(module, block: entry, record: slot, offset: 0, ids: ids)
 	let occupantMoved = emitCmp(module, block: entry, a: occupant, b: read, pred: StdCmpPred.ne, ids: ids)
-	let readNamesNoThread = emitCmp(module, block: entry, a: read, b: zero, pred: StdCmpPred.eq, ids: ids)
+	let readNamesNoThread = emitCompareWithConstant(module, block: entry, value: read, pred: StdCmpPred.eq, against: 0, ids: ids)
 	let alreadyConsumed = emitBin(module, block: entry, a: occupantMoved, b: readNamesNoThread, opcode: StdBinOpcode.bitOr, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(alreadyConsumed, thenBlockId: consumedTwice.id, elseBlockId: empty.id))
 
@@ -3911,13 +3876,9 @@ export function emitDestroyRejectedElement(module StdModule, func IrFunction, cu
 	let cont = module.addBlock(func, label: b"rejcont", heat: BlockHeat.normal)
 
 	let dtor = emitLoadField(module, block: cur, record: record, offset: destroyOffset, ids: ids)
-	let zeroDtor = emitConst(module, block: cur, value: 0, ids: ids)
-	let hasDtor = emitCmp(module, block: cur, a: dtor, b: zeroDtor, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(hasDtor, thenBlockId: checkNull.id, elseBlockId: cont.id))
+	emitBranchOnCompare(module, block: cur, value: dtor, pred: StdCmpPred.ne, against: 0, whenTrue: checkNull, whenFalse: cont, ids: ids)
 
-	let zeroVal = emitConst(module, block: checkNull, value: 0, ids: ids)
-	let nonNull = emitCmp(module, block: checkNull, a: value, b: zeroVal, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(checkNull, op: StdOp.condBranch(nonNull, thenBlockId: drop.id, elseBlockId: cont.id))
+	emitBranchOnCompare(module, block: checkNull, value: value, pred: StdCmpPred.ne, against: 0, whenTrue: drop, whenFalse: cont, ids: ids)
 
 	emitElementDestructorCall(module, block: drop, destroy: dtor, elem: value, ids: ids)
 	module.setTerminator(drop, op: StdOp.branch(cont.id))
@@ -3952,8 +3913,7 @@ function buildManagedSlotUnfilled(module StdModule, greenThreads bool)
 	let slotMustBeFilled = emitSlotMustBeFilled(module, block: entry, destroy: dtor, ids: ids, greenThreads: greenThreads)
 	module.setTerminator(entry, op: StdOp.condBranch(slotMustBeFilled, thenBlockId: checkSlot.id, elseBlockId: filled.id))
 
-	let isNull = emitCmp(module, block: checkSlot, a: value, b: emitConst(module, block: checkSlot, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(checkSlot, op: StdOp.condBranch(isNull, thenBlockId: unfilled.id, elseBlockId: filled.id))
+	emitBranchOnCompare(module, block: checkSlot, value: value, pred: StdCmpPred.eq, against: 0, whenTrue: unfilled, whenFalse: filled, ids: ids)
 
 	module.setTerminator(unfilled, op: StdOp.ret(emitConst(module, block: unfilled, value: 1, ids: ids)))
 	module.setTerminator(filled, op: StdOp.ret(emitConst(module, block: filled, value: 0, ids: ids)))
@@ -4000,13 +3960,14 @@ end 'buildManagedReserve'
 // newCap)` is already zero; an ungrown one's `[length, capacity)` is zero by the invariant), so only the
 // SHRINK path must actively zero the vacated `[n, oldLen)` region to keep the invariant.
 //
-// ⚠ **A NEGATIVE `n` IS REJECTED, not clamped** (`RuntimeAbort.arrayNegativeResize`) — it is the one array write that
-// lands OUTSIDE the buffer in both directions and that a detach cannot make safe, because the shrink's zero
-// range starts at `buffer + n·es`. The shrink test `n < oldLen` is a SIGNED compare — every compare in this
-// file is, unless it says otherwise on its `operandType` (see `BoundsCompareOperandType`) — so it happily
-// accepts a negative `n`; `emitIsNegative` is the file's one home for the guard that does not. It is a REJECT rather than
-// `insert`'s clamp because `insert` documents a `[0, length]` clamping contract and `resize` documents none —
-// a caller asking for a negative length has a bug, and silently resizing to empty would hide it.
+// ⚠ **A NEGATIVE `n` IS REJECTED, not clamped** (`RuntimeAbort.arrayNegativeResize`) — it is the
+// one array write that lands OUTSIDE the buffer in both directions and that a detach cannot make
+// safe, because the shrink's zero range starts at `buffer + n·es`. The shrink test `n < oldLen` is
+// a SIGNED compare — every compare in this file is, unless it says otherwise on its `operandType`
+// (see `BoundsCompareOperandType`) — so it happily accepts a negative `n`, and the `n < 0` test
+// ahead of it is the guard that does not. It is a REJECT rather than `insert`'s clamp because
+// `insert` documents a `[0, length]` clamping contract and `resize` documents none — a caller
+// asking for a negative length has a bug, and silently resizing to empty would hide it.
 function buildManagedResize(module StdModule)
 	var func = IrFunction.createFromStd(ManagedResizeName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
@@ -4022,8 +3983,7 @@ function buildManagedResize(module StdModule)
 	let n = 1
 
 	// entry: a negative length can never be published (see the note above).
-	let negative = emitIsNegative(module, block: entry, value: n, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(negative, thenBlockId: badLength.id, elseBlockId: resize.id))
+	emitBranchOnCompare(module, block: entry, value: n, pred: StdCmpPred.lt, against: 0, whenTrue: badLength, whenFalse: resize, ids: ids)
 
 	// badLength: abort — a negative length can never be published.
 	emitRuntimeAbort(module, func: func, block: badLength, abort: RuntimeAbort.arrayNegativeResize, ids: ids)
@@ -4064,9 +4024,7 @@ function buildManagedFirst(module StdModule, greenThreads bool)
 	let arr = 0
 
 	let length = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
-	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	let isEmpty = emitCmp(module, block: entry, a: length, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(isEmpty, thenBlockId: oob.id, elseBlockId: load.id))
+	emitBranchOnCompare(module, block: entry, value: length, pred: StdCmpPred.eq, against: 0, whenTrue: oob, whenFalse: load, ids: ids)
 
 	emitOobReturn(module, block: oob, ids: ids)
 
@@ -4531,12 +4489,9 @@ function buildManagedMemCreate(module StdModule)
 	let count = 0
 	let elementSize = 1
 
-	let one = emitConst(module, block: entry, value: 1, ids: ids)
-	let sizeTooSmall = emitCmp(module, block: entry, a: elementSize, b: one, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(sizeTooSmall, thenBlockId: bad.id, elseBlockId: checkCount.id))
+	emitBranchOnCompare(module, block: entry, value: elementSize, pred: StdCmpPred.lt, against: 1, whenTrue: bad, whenFalse: checkCount, ids: ids)
 
-	let negative = emitIsNegative(module, block: checkCount, value: count, ids: ids)
-	module.setTerminator(checkCount, op: StdOp.condBranch(negative, thenBlockId: bad.id, elseBlockId: build.id))
+	emitBranchOnCompare(module, block: checkCount, value: count, pred: StdCmpPred.lt, against: 0, whenTrue: bad, whenFalse: build, ids: ids)
 
 	emitMemoryThrow(module, block: bad, flag: MemoryInvalidAllocationFlag, ids: ids)
 
@@ -4590,8 +4545,7 @@ function buildManagedSetLength(module StdModule)
 	let arr = 0
 	let n = 1
 
-	let negative = emitIsNegative(module, block: entry, value: n, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(negative, thenBlockId: bad.id, elseBlockId: checkHigh.id))
+	emitBranchOnCompare(module, block: entry, value: n, pred: StdCmpPred.lt, against: 0, whenTrue: bad, whenFalse: checkHigh, ids: ids)
 
 	emitCowDetach(module, block: checkHigh, arr: arr, ids: ids)
 	let capacity = emitLoadField(module, block: checkHigh, record: arr, offset: ManagedRecordCapacityOffset, ids: ids)
@@ -4768,7 +4722,7 @@ function emitBufferAccessGuard(module StdModule, func IrFunction, block IrBlock,
 		module.setTerminator(detach, op: StdOp.branch(checkHigh.id))
 	end 'writerMustOwnItsBuffer'
 
-	let negative = emitIsNegative(module, block: block, value: offset, ids: ids)
+	let negative = emitCompareWithConstant(module, block: block, value: offset, pred: StdCmpPred.lt, against: 0, ids: ids)
 	module.setTerminator(block, op: StdOp.condBranch(negative, thenBlockId: bad.id, elseBlockId: limitEntryId))
 
 	let declaredLimit = emitLoadField(module, block: checkHigh, record: arr, offset: ManagedRecordCapacityOffset if isWrite else ManagedRecordLengthOffset, ids: ids)
@@ -4840,7 +4794,7 @@ end 'buildManagedMemSet'
 // the window got there: `start = -1, count = 2` over a length-5 buffer ends at 1, which is IN RANGE under
 // either reading, and the address would then be computed BEFORE the buffer. `start = 3, count = -1` ends at 2,
 // likewise in range, and the loop simply runs zero times while the call reports that it APPLIED — the worse
-// failure of the two, a wrong answer rather than a fault. ⇒ both `emitIsNegative` calls below are
+// failure of the two, a wrong answer rather than a fault. ⇒ both `< 0` tests below are
 // load-bearing; each is derived against the unsigned end test.
 //
 // ⚠ **THE BOUND IS THE LIVE LENGTH, WHERE `__managed_mem_set`'s IS THE CAPACITY, AND THAT IS DELIBERATE.**
@@ -4887,11 +4841,9 @@ function buildManagedFill(module StdModule)
 	let count = 2
 	let value = 3
 
-	let startIsNegative = emitIsNegative(module, block: entry, value: start, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(startIsNegative, thenBlockId: bad.id, elseBlockId: checkCount.id))
+	emitBranchOnCompare(module, block: entry, value: start, pred: StdCmpPred.lt, against: 0, whenTrue: bad, whenFalse: checkCount, ids: ids)
 
-	let countIsNegative = emitIsNegative(module, block: checkCount, value: count, ids: ids)
-	module.setTerminator(checkCount, op: StdOp.condBranch(countIsNegative, thenBlockId: bad.id, elseBlockId: checkHigh.id))
+	emitBranchOnCompare(module, block: checkCount, value: count, pred: StdCmpPred.lt, against: 0, whenTrue: bad, whenFalse: checkHigh, ids: ids)
 
 	// `stop` is computed HERE and read by the loop header below, which `checkHigh` dominates — the window's
 	// end is one addition whichever of the two asks for it.
@@ -5114,8 +5066,7 @@ function buildManagedMemShiftRight(module StdModule)
 
 	emitMemoryThrow(module, block: bad, flag: MemoryShiftOutOfBoundsFlag, ids: ids)
 
-	let noElements = emitCmp(module, block: shift, a: count, b: emitConst(module, block: shift, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(shift, op: StdOp.condBranch(noElements, thenBlockId: nothing.id, elseBlockId: move.id))
+	emitBranchOnCompare(module, block: shift, value: count, pred: StdCmpPred.eq, against: 0, whenTrue: nothing, whenFalse: move, ids: ids)
 
 	emitVoidOkReturn(module, block: nothing, ids: ids)
 
@@ -5169,8 +5120,7 @@ function buildManagedMemShiftLeft(module StdModule)
 
 	emitMemoryThrow(module, block: bad, flag: MemoryShiftOutOfBoundsFlag, ids: ids)
 
-	let noElements = emitCmp(module, block: shift, a: count, b: emitConst(module, block: shift, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(shift, op: StdOp.condBranch(noElements, thenBlockId: nothing.id, elseBlockId: move.id))
+	emitBranchOnCompare(module, block: shift, value: count, pred: StdCmpPred.eq, against: 0, whenTrue: nothing, whenFalse: move, ids: ids)
 
 	emitVoidOkReturn(module, block: nothing, ids: ids)
 
@@ -5196,9 +5146,8 @@ end 'buildManagedMemShiftLeft'
 // ⚠ **IT IS ASKED BEFORE THE DETACH, AND THAT ORDER IS `__managed_set_length`'s RULE APPLIED** — a
 // detach ALLOCATES, and a call refused on every possible buffer must not copy one first.
 function emitShiftArgumentIsNegative(module StdModule, block IrBlock, index ValueId, count ValueId, floor FullRangeInt, ids ValueMinter) returns ValueId
-	let limit = emitConst(module, block: block, value: floor, ids: ids)
-	let indexTooLow = emitCmp(module, block: block, a: index, b: limit, pred: StdCmpPred.lt, ids: ids)
-	let countNegative = emitIsNegative(module, block: block, value: count, ids: ids)
+	let indexTooLow = emitCompareWithConstant(module, block: block, value: index, pred: StdCmpPred.lt, against: floor, ids: ids)
+	let countNegative = emitCompareWithConstant(module, block: block, value: count, pred: StdCmpPred.lt, against: 0, ids: ids)
 	return emitBin(module, block: block, a: indexTooLow, b: countNegative, opcode: StdBinOpcode.bitOr, ids: ids)
 end 'emitShiftArgumentIsNegative'
 
@@ -5233,9 +5182,7 @@ function buildManagedCursorCreate(module StdModule)
 	let arr = 0
 
 	let length = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
-	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	let isEmpty = emitCmp(module, block: entry, a: length, b: zero, pred: StdCmpPred.le, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(isEmpty, thenBlockId: refuse.id, elseBlockId: build.id))
+	emitBranchOnCompare(module, block: entry, value: length, pred: StdCmpPred.le, against: 0, whenTrue: refuse, whenFalse: build, ids: ids)
 
 	emitMemoryThrow(module, block: refuse, flag: MemoryIndexOutOfBoundsFlag, ids: ids)
 
@@ -5368,8 +5315,7 @@ function buildManagedCursorCurrent(module StdModule, greenThreads bool, pastEnd 
 
 	module.setTerminator(loaded, op: StdOp.condBranch(slotMustBeFilled, thenBlockId: checkSlot.id, elseBlockId: ret.id))
 
-	let isNull = emitCmp(module, block: checkSlot, a: value, b: emitConst(module, block: checkSlot, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(checkSlot, op: StdOp.condBranch(isNull, thenBlockId: emptySlot.id, elseBlockId: ret.id))
+	emitBranchOnCompare(module, block: checkSlot, value: value, pred: StdCmpPred.eq, against: 0, whenTrue: emptySlot, whenFalse: ret, ids: ids)
 
 	emitCursorEmptySlotPanic(module, func: func, block: emptySlot, position: position, site: site, text: slotText, ids: ids)
 
@@ -5687,9 +5633,7 @@ export function emitElementRange(module StdModule, func IrFunction, cur IrBlock,
 	let slot = emitSlotAddr(module, block: body, buffer: base, index: i, elementSize: elementSize, ids: ids)
 	let elem = ids.mint()
 	module.appendOp(body, op: StdOp.loadIndirect(elem, addrId: slot, offset: 0, valueType: StdType.i64))
-	let zeroElem = emitConst(module, block: body, value: 0, ids: ids)
-	let nonNull = emitCmp(module, block: body, a: elem, b: zeroElem, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(body, op: StdOp.condBranch(nonNull, thenBlockId: visit.id, elseBlockId: step.block.id))
+	emitBranchOnCompare(module, block: body, value: elem, pred: StdCmpPred.ne, against: 0, whenTrue: visit, whenFalse: step.block, ids: ids)
 	pushCascadeEdge(body, to: step, values: onThisTrip)
 
 	let one = emitConst(module, block: step.block, value: 1, ids: ids)
@@ -5976,8 +5920,7 @@ end 'buildManagedAppendManaged'
 function emitCopyFuncBranch(module StdModule, entry IrBlock, descriptor ValueId, trivialId BlockId, managedId BlockId, ids ValueMinter) returns ValueId
 	let copyFn = ids.mint()
 	module.appendOp(entry, op: StdOp.loadIndirect(copyFn, addrId: descriptor, offset: LAYOUT_OFFSET_COPY_FUNC, valueType: StdType.i64))
-	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	let hasCloner = emitCmp(module, block: entry, a: copyFn, b: zero, pred: StdCmpPred.ne, ids: ids)
+	let hasCloner = emitCompareWithConstant(module, block: entry, value: copyFn, pred: StdCmpPred.ne, against: 0, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(hasCloner, thenBlockId: managedId, elseBlockId: trivialId))
 	return copyFn
 end 'emitCopyFuncBranch'

@@ -730,9 +730,7 @@ function synthesizeReleaser(module StdModule, name ByteArray, plan AsyncReleaseP
 
 	// `resultConsumed != 0` ⇒ an await already took the result's reference; stop here.
 	var releaseResult = module.addBlock(func, label: b"releaseresult", heat: BlockHeat.normal)
-	let zero = emitConst(module, block: cur, value: 0, ids: ids)
-	let notConsumed = emitCmp(module, block: cur, a: resultConsumed, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(notConsumed, thenBlockId: releaseResult.id, elseBlockId: done.id))
+	emitBranchOnCompare(module, block: cur, value: resultConsumed, pred: StdCmpPred.eq, against: 0, whenTrue: releaseResult, whenFalse: done, ids: ids)
 
 	emitResultOrErrorRelease(module, func: func, ids: ids, start: releaseResult, done: done, gt: gt, plan: plan)
 
@@ -764,8 +762,7 @@ function emitResultOrErrorRelease(module StdModule, func IrFunction, ids ValueMi
 	var releaseError = module.addBlock(func, label: b"releaseerror", heat: BlockHeat.normal)
 	let threw = ids.mint()
 	module.appendOp(start, op: StdOp.loadIndirect(threw, addrId: gt, offset: GtOffThrew, valueType: StdType.i64))
-	let noError = emitCmp(module, block: start, a: threw, b: emitConst(module, block: start, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(start, op: StdOp.condBranch(noError, thenBlockId: releaseSuccess.id, elseBlockId: releaseError.id))
+	emitBranchOnCompare(module, block: start, value: threw, pred: StdCmpPred.eq, against: 0, whenTrue: releaseSuccess, whenFalse: releaseError, ids: ids)
 
 	module.setTerminator(emitSlotReleases(module, func: func, ids: ids, cur: releaseSuccess, gt: gt, slots: plan.resultSlots), op: StdOp.branch(done.id))
 
@@ -806,7 +803,7 @@ function emitUnranSlotReleases(module StdModule, func IrFunction, ids ValueMinte
 
 	var release = module.addBlock(func, label: b"releaseunrun", heat: BlockHeat.normal)
 	let ran = module.addBlock(func, label: b"ran", heat: BlockHeat.normal)
-	let completed = emitGtStatusEquals(module, block: cur, status: emitLoadField(module, block: cur, record: gt, offset: GtOffStatus, ids: ids), want: GtStatusCompleted, ids: ids)
+	let completed = emitGtStatusEquals(module, block: cur, status: emitLoadField(module, block: cur, record: gt, offset: GtOffStatus, ids: ids), want: GtStatus.completed, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(completed, thenBlockId: ran.id, elseBlockId: release.id))
 	module.setTerminator(emitSlotReleases(module, func: func, ids: ids, cur: release, gt: gt, slots: slots), op: StdOp.branch(ran.id))
 	return ran
@@ -825,7 +822,7 @@ end 'emitCellSlotReleases'
 function emitCellSlotRelease(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, gt ValueId, slot AsyncCellSlot) returns IrBlock
 	let cell = ids.mint()
 	module.appendOp(cur, op: StdOp.loadIndirect(cell, addrId: gt, offset: slot.offset, valueType: StdType.i64))
-	let nonNull = emitCmp(module, block: cur, a: cell, b: emitConst(module, block: cur, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	let nonNull = emitCompareWithConstant(module, block: cur, value: cell, pred: StdCmpPred.ne, against: 0, ids: ids)
 	var release = module.addBlock(func, label: b"releasecell", heat: BlockHeat.normal)
 	let cont = module.addBlock(func, label: b"cont", heat: BlockHeat.normal)
 	module.setTerminator(cur, op: StdOp.condBranch(nonNull, thenBlockId: release.id, elseBlockId: cont.id))

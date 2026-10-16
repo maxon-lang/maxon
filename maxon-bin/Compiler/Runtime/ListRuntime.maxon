@@ -599,9 +599,7 @@ function buildListIsEmpty(module StdModule)
 	let list = 0
 
 	let count = emitLoadField(module, block: entry, record: list, offset: ListCountOffset, ids: ids)
-	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	let isEmpty = emitCmp(module, block: entry, a: count, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(isEmpty, thenBlockId: empty.id, elseBlockId: populated.id))
+	emitBranchOnCompare(module, block: entry, value: count, pred: StdCmpPred.eq, against: 0, whenTrue: empty, whenFalse: populated, ids: ids)
 
 	emitConstReturn(module, block: empty, value: BoolTrueValue, ids: ids)
 	emitConstReturn(module, block: populated, value: BoolFalseValue, ids: ids)
@@ -647,9 +645,7 @@ function emitListLinkAtEnd(module StdModule, func IrFunction, cur IrBlock, list 
 	var publish = module.addBlock(func, label: b"publish", heat: BlockHeat.normal)
 
 	let oldEnd = emitLoadField(module, block: cur, record: list, offset: nearEnd, ids: ids)
-	let zero = emitConst(module, block: cur, value: 0, ids: ids)
-	let isEmpty = emitCmp(module, block: cur, a: oldEnd, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(isEmpty, thenBlockId: wasEmpty.id, elseBlockId: splice.id))
+	emitBranchOnCompare(module, block: cur, value: oldEnd, pred: StdCmpPred.eq, against: 0, whenTrue: wasEmpty, whenFalse: splice, ids: ids)
 
 	// An empty list gains its FAR end too — the one node is both `head` and `tail`.
 	emitStoreField(module, block: wasEmpty, record: list, offset: farEnd, value: node)
@@ -805,9 +801,7 @@ function buildListInteriorInsert(module StdModule, name ByteArray, forward ByteO
 	emitStoreField(module, block: link, record: node, offset: backward, value: target)
 	emitStoreField(module, block: link, record: node, offset: forward, value: neighbour)
 	emitStoreField(module, block: link, record: target, offset: forward, value: node)
-	let chainEnd = emitConst(module, block: link, value: 0, ids: ids)
-	let hasNeighbour = emitCmp(module, block: link, a: neighbour, b: chainEnd, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(link, op: StdOp.condBranch(hasNeighbour, thenBlockId: spliced.id, elseBlockId: atEnd.id))
+	emitBranchOnCompare(module, block: link, value: neighbour, pred: StdCmpPred.ne, against: 0, whenTrue: spliced, whenFalse: atEnd, ids: ids)
 
 	emitStoreField(module, block: spliced, record: neighbour, offset: backward, value: node)
 	module.setTerminator(spliced, op: StdOp.branch(publish.id))
@@ -898,9 +892,7 @@ function buildListInsert(module StdModule)
 	var afterReject = emitDestroyRejectedElement(module, func: func, cur: oob, record: list, value: value, destroyOffset: ListElementDropOffset, ids: ids)
 	emitOobReturn(module, block: afterReject, ids: ids)
 
-	let front = emitConst(module, block: inRange, value: 0, ids: ids)
-	let isFront = emitCmp(module, block: inRange, a: index, b: front, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(inRange, op: StdOp.condBranch(isFront, thenBlockId: atFront.id, elseBlockId: afterFront.id))
+	emitBranchOnCompare(module, block: inRange, value: index, pred: StdCmpPred.eq, against: 0, whenTrue: atFront, whenFalse: afterFront, ids: ids)
 
 	let prepended = ids.mint()
 	module.appendOp(atFront, op: StdOp.call(prepended, callee: ListPrependName, args: twoArgs(list, second: value)))
@@ -964,9 +956,7 @@ function emitListUnlinkNodeFrom(module StdModule, func IrFunction, cur IrBlock, 
 
 	let prev = emitLoadField(module, block: cur, record: node, offset: ListPrevOffset, ids: ids)
 	let next = emitLoadField(module, block: cur, record: node, offset: ListNextOffset, ids: ids)
-	let chainEnd = emitConst(module, block: cur, value: 0, ids: ids)
-	let hasPrev = emitCmp(module, block: cur, a: prev, b: chainEnd, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(hasPrev, thenBlockId: relinkPrev.id, elseBlockId: newHead.id))
+	emitBranchOnCompare(module, block: cur, value: prev, pred: StdCmpPred.ne, against: 0, whenTrue: relinkPrev, whenFalse: newHead, ids: ids)
 
 	// An interior node: its predecessor now points past it.
 	emitStoreField(module, block: relinkPrev, record: prev, offset: ListNextOffset, value: next)
@@ -976,9 +966,7 @@ function emitListUnlinkNodeFrom(module StdModule, func IrFunction, cur IrBlock, 
 	emitStoreField(module, block: newHead, record: list, offset: ListHeadOffset, value: next)
 	module.setTerminator(newHead, op: StdOp.branch(backLinked.id))
 
-	let noNext = emitConst(module, block: backLinked, value: 0, ids: ids)
-	let hasNext = emitCmp(module, block: backLinked, a: next, b: noNext, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(backLinked, op: StdOp.condBranch(hasNext, thenBlockId: relinkNext.id, elseBlockId: newTail.id))
+	emitBranchOnCompare(module, block: backLinked, value: next, pred: StdCmpPred.ne, against: 0, whenTrue: relinkNext, whenFalse: newTail, ids: ids)
 
 	emitStoreField(module, block: relinkNext, record: next, offset: ListPrevOffset, value: prev)
 	module.setTerminator(relinkNext, op: StdOp.branch(unlinked.id))
@@ -1043,8 +1031,7 @@ function buildListUnlinkNode(module StdModule, name ByteArray, movesElementOut b
 		emitStoreField(module, block: entry, record: node, offset: ListValueOffset, value: detached)
 	end 'remove'
 
-	let isLinked = emitCmp(module, block: entry, a: owner, b: detached, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(isLinked, thenBlockId: ours.id, elseBlockId: alreadyDetached.id))
+	emitBranchOnCompare(module, block: entry, value: owner, pred: StdCmpPred.ne, against: 0, whenTrue: ours, whenFalse: alreadyDetached, ids: ids)
 
 	// ⭐⭐ **`owner@32` NAMES A CHAIN, AND THE GATE ASKS FOR THAT NAME RATHER THAN FOR ITS TRUTHINESS.** A
 	// linked node is unlinked only from the chain that OWNS it: the relink below repairs `list`'s `head`/`tail`
@@ -1128,9 +1115,7 @@ function buildListReinsert(module StdModule, name ByteArray, nearEnd ByteOffset,
 	let node = 1
 
 	let owner = emitLoadField(module, block: entry, record: node, offset: ListOwnerOffset, ids: ids)
-	let detached = emitConst(module, block: entry, value: 0, ids: ids)
-	let isLinked = emitCmp(module, block: entry, a: owner, b: detached, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(isLinked, thenBlockId: handover.id, elseBlockId: adopt.id))
+	emitBranchOnCompare(module, block: entry, value: owner, pred: StdCmpPred.ne, against: 0, whenTrue: handover, whenFalse: adopt, ids: ids)
 
 	// The chain reference the OLD owner held becomes `list`'s — no decref, no incref.
 	var unlinked = emitListUnlinkNodeFrom(module, func: func, cur: handover, list: owner, node: node, ids: ids)
@@ -1213,9 +1198,7 @@ function buildListCheckedNavigator(module StdModule, name ByteArray, offset Byte
 	let record = 0
 
 	let node = emitLoadField(module, block: entry, record: record, offset: offset, ids: ids)
-	let chainEnd = emitConst(module, block: entry, value: 0, ids: ids)
-	let noSuchNode = emitCmp(module, block: entry, a: node, b: chainEnd, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(noSuchNode, thenBlockId: absent.id, elseBlockId: found.id))
+	emitBranchOnCompare(module, block: entry, value: node, pred: StdCmpPred.eq, against: 0, whenTrue: absent, whenFalse: found, ids: ids)
 
 	emitOobReturn(module, block: absent, ids: ids)
 
@@ -1276,9 +1259,7 @@ function buildListClear(module StdModule)
 
 	let node = ids.mint()
 	walk.blockArgs.push(IrBlockArg.create(node, argType: StdType.i64))
-	let chainEnd = emitConst(module, block: walk, value: 0, ids: ids)
-	let more = emitCmp(module, block: walk, a: node, b: chainEnd, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(walk, op: StdOp.condBranch(more, thenBlockId: body.id, elseBlockId: emptied.id))
+	emitBranchOnCompare(module, block: walk, value: node, pred: StdCmpPred.ne, against: 0, whenTrue: body, whenFalse: emptied, ids: ids)
 
 	// `next` is read BEFORE the reference is dropped, and it dominates the branch below, so the walk never
 	// reads a link out of memory the drop may have released. It is also read before `emitListDropsItsNodeRef`
@@ -1319,9 +1300,7 @@ function buildListEndAccessor(module StdModule, name ByteArray, endOffset ByteOf
 	let list = 0
 
 	let node = emitLoadField(module, block: entry, record: list, offset: endOffset, ids: ids)
-	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	let isEmpty = emitCmp(module, block: entry, a: node, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(isEmpty, thenBlockId: oob.id, elseBlockId: load.id))
+	emitBranchOnCompare(module, block: entry, value: node, pred: StdCmpPred.eq, against: 0, whenTrue: oob, whenFalse: load, ids: ids)
 
 	emitOobReturn(module, block: oob, ids: ids)
 
@@ -1455,18 +1434,14 @@ function buildListEndRemove(module StdModule, name ByteArray, nearEnd ByteOffset
 	let list = 0
 
 	let node = emitLoadField(module, block: entry, record: list, offset: nearEnd, ids: ids)
-	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	let isEmpty = emitCmp(module, block: entry, a: node, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(isEmpty, thenBlockId: oob.id, elseBlockId: take.id))
+	emitBranchOnCompare(module, block: entry, value: node, pred: StdCmpPred.eq, against: 0, whenTrue: oob, whenFalse: take, ids: ids)
 
 	emitOobReturn(module, block: oob, ids: ids)
 
 	let value = emitLoadField(module, block: take, record: node, offset: ListValueOffset, ids: ids)
 	let neighbour = emitLoadField(module, block: take, record: node, offset: outward, ids: ids)
 	emitStoreField(module, block: take, record: list, offset: nearEnd, value: neighbour)
-	let noNeighbour = emitConst(module, block: take, value: 0, ids: ids)
-	let hasNeighbour = emitCmp(module, block: take, a: neighbour, b: noNeighbour, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(take, op: StdOp.condBranch(hasNeighbour, thenBlockId: detachNeighbour.id, elseBlockId: emptied.id))
+	emitBranchOnCompare(module, block: take, value: neighbour, pred: StdCmpPred.ne, against: 0, whenTrue: detachNeighbour, whenFalse: emptied, ids: ids)
 
 	// The new end node has nothing beyond it.
 	let noLink = emitConst(module, block: detachNeighbour, value: 0, ids: ids)
@@ -1562,16 +1537,12 @@ function buildListNodeValue(module StdModule)
 	let node = 0
 
 	let value = emitLoadField(module, block: entry, record: node, offset: ListValueOffset, ids: ids)
-	let empty = emitConst(module, block: entry, value: 0, ids: ids)
-	let holdsSomething = emitCmp(module, block: entry, a: value, b: empty, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(holdsSomething, thenBlockId: held.id, elseBlockId: slotIsEmpty.id))
+	emitBranchOnCompare(module, block: entry, value: value, pred: StdCmpPred.ne, against: 0, whenTrue: held, whenFalse: slotIsEmpty, ids: ids)
 
 	// An empty slot on a TRIVIAL-element chain is the element: `0`. On a managed one it is the hole a
 	// move-out left, and there is no value that can be returned for it.
 	let drop = emitLoadField(module, block: slotIsEmpty, record: node, offset: ListElementDropSlotOffset, ids: ids)
-	let noDrop = emitConst(module, block: slotIsEmpty, value: 0, ids: ids)
-	let isManaged = emitCmp(module, block: slotIsEmpty, a: drop, b: noDrop, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(slotIsEmpty, op: StdOp.condBranch(isManaged, thenBlockId: movedOut.id, elseBlockId: held.id))
+	emitBranchOnCompare(module, block: slotIsEmpty, value: drop, pred: StdCmpPred.ne, against: 0, whenTrue: movedOut, whenFalse: held, ids: ids)
 
 	emitRuntimeAbort(module, func: func, block: movedOut, abort: RuntimeAbort.managedListNodeElementMovedOut, ids: ids)
 
@@ -1635,14 +1606,10 @@ function emitDropNodeElement(module StdModule, func IrFunction, cur IrBlock, nod
 	let released = module.addBlock(func, label: b"released", heat: BlockHeat.normal)
 
 	let drop = emitLoadField(module, block: cur, record: node, offset: ListElementDropSlotOffset, ids: ids)
-	let noDrop = emitConst(module, block: cur, value: 0, ids: ids)
-	let isManaged = emitCmp(module, block: cur, a: drop, b: noDrop, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(isManaged, thenBlockId: stillHeld.id, elseBlockId: released.id))
+	emitBranchOnCompare(module, block: cur, value: drop, pred: StdCmpPred.ne, against: 0, whenTrue: stillHeld, whenFalse: released, ids: ids)
 
 	let value = emitLoadField(module, block: stillHeld, record: node, offset: ListValueOffset, ids: ids)
-	let movedOut = emitConst(module, block: stillHeld, value: 0, ids: ids)
-	let owns = emitCmp(module, block: stillHeld, a: value, b: movedOut, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(stillHeld, op: StdOp.condBranch(owns, thenBlockId: dropElem.id, elseBlockId: released.id))
+	emitBranchOnCompare(module, block: stillHeld, value: value, pred: StdCmpPred.ne, against: 0, whenTrue: dropElem, whenFalse: released, ids: ids)
 
 	emitElementDestructorCall(module, block: dropElem, destroy: drop, elem: value, ids: ids)
 	module.setTerminator(dropElem, op: StdOp.branch(released.id))
@@ -1752,9 +1719,7 @@ function buildListClone(module StdModule, name ByteArray, clonesElements bool)
 	// loop to stop on, and the reason an empty source needs no arm of its own (its `head@0` is that 0).
 	let node = ids.mint()
 	header.blockArgs.push(IrBlockArg.create(node, argType: StdType.i64))
-	let chainEnd = emitConst(module, block: header, value: 0, ids: ids)
-	let atEnd = emitCmp(module, block: header, a: node, b: chainEnd, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
+	emitBranchOnCompare(module, block: header, value: node, pred: StdCmpPred.eq, against: 0, whenTrue: done, whenFalse: body, ids: ids)
 
 	// append(elem): what this node contributes to the copy, however it was produced — the one join the two
 	// element kinds meet at, which is what keeps the append and the advance out of the split below.
@@ -1797,8 +1762,7 @@ function emitListClonedElement(module StdModule, func IrFunction, body IrBlock, 
 	var movedOut = module.addBlock(func, label: b"clnnull", heat: BlockHeat.normal)
 
 	let absent = emitConst(module, block: body, value: 0, ids: ids)
-	let owns = emitCmp(module, block: body, a: value, b: absent, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(body, op: StdOp.condBranch(owns, thenBlockId: deepCopy.id, elseBlockId: movedOut.id))
+	emitBranchOnCompare(module, block: body, value: value, pred: StdCmpPred.ne, against: 0, whenTrue: deepCopy, whenFalse: movedOut, ids: ids)
 
 	// Both ABI masks are 0 for `emitElementCloneRange`'s reason: a `(box) -> newBox` takes one whole-machine-word
 	// POINTER — never a float, never sub-word.
@@ -1837,9 +1801,7 @@ function buildListWalk(module StdModule, name ByteArray, walksElements bool, act
 	let head = emitLoadField(module, block: walked.block, record: list, offset: ListHeadOffset, ids: walk.ids)
 	emitCascadeBranch(module, from: CascadeCursor.create(walked.block, carried: linkThenCarried(head, carried: walked.carried)), to: atLink)
 
-	let chainEnd = emitConst(module, block: header, value: 0, ids: walk.ids)
-	let atEnd = emitCmp(module, block: header, a: node, b: chainEnd, pred: StdCmpPred.eq, ids: walk.ids)
-	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: walk.done.block.id, elseBlockId: body.id))
+	emitBranchOnCompare(module, block: header, value: node, pred: StdCmpPred.eq, against: 0, whenTrue: walk.done.block, whenFalse: body, ids: walk.ids)
 	pushCascadeEdge(header, to: walk.done, values: atNode.carried)
 
 	var nodeWalked = emitBoxWalkStep(module, func: walk.func, cursor: atNode, box: node, action: action, meeting: WalkMeeting.owner, stop: step, ids: walk.ids)
@@ -1871,9 +1833,7 @@ function emitListElementWalk(module StdModule, body CascadeCursor, step CascadeC
 	var visit = module.addBlock(walk.func, label: b"walkelem", heat: BlockHeat.normal)
 
 	let value = emitLoadField(module, block: body.block, record: node, offset: ListValueOffset, ids: walk.ids)
-	let absent = emitConst(module, block: body.block, value: 0, ids: walk.ids)
-	let owns = emitCmp(module, block: body.block, a: value, b: absent, pred: StdCmpPred.ne, ids: walk.ids)
-	module.setTerminator(body.block, op: StdOp.condBranch(owns, thenBlockId: visit.id, elseBlockId: step.block.id))
+	emitBranchOnCompare(module, block: body.block, value: value, pred: StdCmpPred.ne, against: 0, whenTrue: visit, whenFalse: step.block, ids: walk.ids)
 	pushCascadeEdge(body.block, to: step, values: body.carried)
 
 	// Both ABI masks are 0 for `emitListClonedElement`'s reason: a stamped element walk takes two

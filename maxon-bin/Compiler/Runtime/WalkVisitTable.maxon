@@ -118,9 +118,7 @@ function buildWalkSlot(module StdModule)
 	let isRecord = emitCmp(module, block: probe.block, a: occupant, b: record, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(probe.block, op: StdOp.condBranch(isRecord, thenBlockId: found.id, elseBlockId: vacancyTest.id))
 
-	let vacant = emitConst(module, block: vacancyTest, value: VacantVisitEntry, ids: ids)
-	let isVacant = emitCmp(module, block: vacancyTest, a: occupant, b: vacant, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(vacancyTest, op: StdOp.condBranch(isVacant, thenBlockId: found.id, elseBlockId: advance.id))
+	emitBranchOnCompare(module, block: vacancyTest, value: occupant, pred: StdCmpPred.eq, against: VacantVisitEntry, whenTrue: found, whenFalse: advance, ids: ids)
 
 	let one = emitConst(module, block: advance, value: 1, ids: ids)
 	let next = emitBin(module, block: advance, a: index, b: one, opcode: StdBinOpcode.add, ids: ids)
@@ -146,7 +144,7 @@ function buildWalkRevisit(module StdModule)
 	let record = 1
 	let kept = 2
 
-	emitBranchOnTable(module, block: entry, table: table, whenPresent: look, whenAbsent: notMet, ids: ids)
+	emitBranchOnCompare(module, block: entry, value: table, pred: StdCmpPred.ne, against: NoVisitTable, whenTrue: look, whenFalse: notMet, ids: ids)
 
 	let slot = emitRuntimeCall(module, block: look, callee: WalkSlotName, args: twoArgs(table, second: record), ids: ids)
 	let occupant = emitLoadField(module, block: look, record: slot, offset: VisitEntryRecordOffset, ids: ids)
@@ -182,7 +180,7 @@ function buildWalkNote(module StdModule)
 	let unmet = 2
 	var place = emitCascadeJoin(module, func: func, label: b"place", template: argsOf(table), ids: ids)
 
-	emitBranchOnTable(module, block: entry, table: table, whenPresent: check, whenAbsent: create, ids: ids)
+	emitBranchOnCompare(module, block: entry, value: table, pred: StdCmpPred.ne, against: NoVisitTable, whenTrue: check, whenFalse: create, ids: ids)
 
 	let fresh = emitVisitTableAlloc(module, block: create, entries: emitConst(module, block: create, value: VisitTableFirstEntries, ids: ids), ids: ids)
 	emitCascadeBranch(module, from: CascadeCursor.create(create, carried: argsOf(fresh)), to: place)
@@ -238,7 +236,7 @@ function buildWalkSettle(module StdModule)
 	emitParams(module, block: entry, count: SettleParamCount)
 	let table = 0
 
-	emitBranchOnTable(module, block: entry, table: table, whenPresent: scan, whenAbsent: done, ids: ids)
+	emitBranchOnCompare(module, block: entry, value: table, pred: StdCmpPred.ne, against: NoVisitTable, whenTrue: scan, whenFalse: done, ids: ids)
 
 	let entries = emitVisitTableEntryCount(module, block: scan, table: table, ids: ids)
 	let base = emitFieldAddr(module, block: scan, record: table, offset: VisitTableEntriesOffset, ids: ids)
@@ -262,21 +260,12 @@ function buildWalkSettle(module StdModule)
 
 	var settled = loop.done
 	module.appendOp(settled, op: StdOp.call(ids.mint(), callee: MmFreeName, args: argsOf(table)))
-	let allMet = emitConst(module, block: settled, value: AllOwnersMet, ids: ids)
-	let clean = emitCmp(module, block: settled, a: residue, b: allMet, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(settled, op: StdOp.condBranch(clean, thenBlockId: done.id, elseBlockId: ownerOutside.id))
+	emitBranchOnCompare(module, block: settled, value: residue, pred: StdCmpPred.eq, against: AllOwnersMet, whenTrue: done, whenFalse: ownerOutside, ids: ids)
 
 	emitRuntimeAbort(module, func: func, block: ownerOutside, abort: RuntimeAbort.transferredRecordNotSole, ids: ids)
 	module.setTerminator(done, op: StdOp.retVoid)
 	module.functions.push(func)
 end 'buildWalkSettle'
-
-// `table != NoVisitTable` → `whenPresent`, otherwise `whenAbsent`.
-function emitBranchOnTable(module StdModule, block IrBlock, table ValueId, whenPresent IrBlock, whenAbsent IrBlock, ids ValueMinter)
-	let none = emitConst(module, block: block, value: NoVisitTable, ids: ids)
-	let present = emitCmp(module, block: block, a: table, b: none, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(block, op: StdOp.condBranch(present, thenBlockId: whenPresent.id, elseBlockId: whenAbsent.id))
-end 'emitBranchOnTable'
 
 // The entries a table holds: its mask is one less.
 function emitVisitTableEntryCount(module StdModule, block IrBlock, table ValueId, ids ValueMinter) returns ValueId

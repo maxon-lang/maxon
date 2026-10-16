@@ -310,8 +310,7 @@ end 'synthesizeEnumFromRawValue'
 // author wrote. Both end in the same `condBranch`, so the chain above knows nothing about which it emitted.
 function emitRawValueTestBranch(module StdModule, block IrBlock, raw ValueId, layout EnumLayout, caseIndex CaseIndex, comparesBytes bool, globalData GlobalDataTable, hit IrBlock, miss IrBlock, ids ValueMinter)
 	if not comparesBytes 'aNumber'
-		let tag = emitConst(module, block: block, value: layout.tagOfIndex(caseIndex), ids: ids)
-		module.setTerminator(block, op: StdOp.condBranch(emitCmp(module, block: block, a: raw, b: tag, pred: StdCmpPred.eq, ids: ids), thenBlockId: hit.id, elseBlockId: miss.id))
+		emitBranchOnCompare(module, block: block, value: raw, pred: StdCmpPred.eq, against: layout.tagOfIndex(caseIndex), whenTrue: hit, whenFalse: miss, ids: ids)
 		return
 	end 'aNumber'
 

@@ -100,8 +100,7 @@ end 'releasedRegistryPanicLabel'
 function emitHeldOrPanic(module StdModule, func IrFunction, block IrBlock, held ValueId, released ByteArray, holdsSchedLock bool, ids ValueMinter) returns IrBlock
 	var releasedBlock = module.addBlock(func, label: b"regreleased", heat: BlockHeat.cold)
 	let live = module.addBlock(func, label: b"reglive", heat: BlockHeat.normal)
-	let isReleased = emitCmp(module, block: block, a: held, b: emitConst(module, block: block, value: ReleasedHolder, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(block, op: StdOp.condBranch(isReleased, thenBlockId: releasedBlock.id, elseBlockId: live.id))
+	emitBranchOnCompare(module, block: block, value: held, pred: StdCmpPred.eq, against: ReleasedHolder, whenTrue: releasedBlock, whenFalse: live, ids: ids)
 
 	if holdsSchedLock 'leaveTheLockFirst'
 		emitSchedLockLeave(module, block: releasedBlock, ids: ids)
@@ -114,8 +113,7 @@ end 'emitHeldOrPanic'
 
 function emitSkipIfReleased(module StdModule, func IrFunction, block IrBlock, held ValueId, done IrBlock, ids ValueMinter) returns IrBlock
 	let live = module.addBlock(func, label: b"regheld", heat: BlockHeat.normal)
-	let isReleased = emitCmp(module, block: block, a: held, b: emitConst(module, block: block, value: ReleasedHolder, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(block, op: StdOp.condBranch(isReleased, thenBlockId: done.id, elseBlockId: live.id))
+	emitBranchOnCompare(module, block: block, value: held, pred: StdCmpPred.eq, against: ReleasedHolder, whenTrue: done, whenFalse: live, ids: ids)
 	return live
 end 'emitSkipIfReleased'
 
@@ -142,9 +140,7 @@ end 'emitHolderCell'
 function emitCallIfPresent(module StdModule, func IrFunction, block IrBlock, fn ValueId, argument ValueId, ids ValueMinter, label ByteArray) returns IrBlock
 	var callIt = module.addBlock(func, label: label, heat: BlockHeat.normal)
 	let after = module.addBlock(func, label: b"shvafter", heat: BlockHeat.normal)
-	let absent = emitConst(module, block: block, value: NoRuntimeFunction, ids: ids)
-	let isAbsent = emitCmp(module, block: block, a: fn, b: absent, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(block, op: StdOp.condBranch(isAbsent, thenBlockId: after.id, elseBlockId: callIt.id))
+	emitBranchOnCompare(module, block: block, value: fn, pred: StdCmpPred.eq, against: NoRuntimeFunction, whenTrue: after, whenFalse: callIt, ids: ids)
 	module.appendOp(callIt, op: StdOp.callIndirect(ids.mint(), calleeReg: fn, resultType: StdReturnType.void, argFloatMask: 0, args: argsOf(argument)))
 	module.setTerminator(callIt, op: StdOp.branch(after.id))
 	return after
@@ -155,8 +151,7 @@ function emitRetainedIfPresent(module StdModule, func IrFunction, block IrBlock,
 	var after = module.addBlock(func, label: b"shvretained", heat: BlockHeat.normal)
 	after.blockArgs.push(IrBlockArg.create(result, argType: StdType.i64))
 
-	let isAbsent = emitCmp(module, block: block, a: fn, b: emitConst(module, block: block, value: NoRuntimeFunction, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(block, op: StdOp.condBranch(isAbsent, thenBlockId: after.id, elseBlockId: callIt.id))
+	emitBranchOnCompare(module, block: block, value: fn, pred: StdCmpPred.eq, against: NoRuntimeFunction, whenTrue: after, whenFalse: callIt, ids: ids)
 	block.branchEdges.push(BranchEdge.create(after.id, argIds: argsOf(value)))
 
 	let taken = ids.mint()
@@ -169,7 +164,7 @@ end 'emitRetainedIfPresent'
 function emitCasSucceeded(module StdModule, block IrBlock, addr ValueId, expected ValueId, replacement ValueId, ids ValueMinter) returns ValueId
 	let swapped = ids.mint()
 	module.appendOp(block, op: StdOp.atomicCas(swapped, addrId: addr, expectedId: expected, replacementId: replacement))
-	return emitCmp(module, block: block, a: swapped, b: emitConst(module, block: block, value: AtomicCasSucceeded, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	return emitCompareWithConstant(module, block: block, value: swapped, pred: StdCmpPred.eq, against: AtomicCasSucceeded, ids: ids)
 end 'emitCasSucceeded'
 
 function emitRefStep(module StdModule, block IrBlock, cell ValueId, delta FullRangeInt, ids ValueMinter) returns ValueId
@@ -188,9 +183,7 @@ function emitChainReplaced(module StdModule, func IrFunction, block IrBlock, cel
 	let chained = module.addBlock(func, label: b"shvchained", heat: BlockHeat.normal)
 
 	let dropFn = emitLoadField(module, block: block, record: cell, offset: SharedValueCellDropOffset, ids: ids)
-	let absent = emitConst(module, block: block, value: NoRuntimeFunction, ids: ids)
-	let ownsNothing = emitCmp(module, block: block, a: dropFn, b: absent, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(block, op: StdOp.condBranch(ownsNothing, thenBlockId: chained.id, elseBlockId: chainIt.id))
+	emitBranchOnCompare(module, block: block, value: dropFn, pred: StdCmpPred.eq, against: NoRuntimeFunction, whenTrue: chained, whenFalse: chainIt, ids: ids)
 
 	let node = ids.mint()
 	module.appendOp(chainIt, op: StdOp.call(node, callee: SlabAllocName, args: argsOf(emitConst(module, block: chainIt, value: SharedValueChainNodeBytes, ids: ids))))
@@ -340,8 +333,7 @@ function buildSharedValueReleaseCell(module StdModule)
 	let cell = 0
 
 	let prior = emitRefStep(module, block: entry, cell: cell, delta: SharedValueRefDown, ids: ids)
-	let wasLast = emitCmp(module, block: entry, a: prior, b: emitConst(module, block: entry, value: SharedValueLastRef, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(wasLast, thenBlockId: lastRef.id, elseBlockId: done.id))
+	emitBranchOnCompare(module, block: entry, value: prior, pred: StdCmpPred.eq, against: SharedValueLastRef, whenTrue: lastRef, whenFalse: done, ids: ids)
 
 	let dropFn = emitLoadField(module, block: lastRef, record: cell, offset: SharedValueCellDropOffset, ids: ids)
 	let current = emitLoadField(module, block: lastRef, record: cell, offset: SharedValueCellCurrentOffset, ids: ids)
@@ -349,9 +341,7 @@ function buildSharedValueReleaseCell(module StdModule)
 	module.setTerminator(afterCurrent, op: StdOp.branch(walkChain.id))
 
 	let node = emitLoadField(module, block: walkChain, record: cell, offset: SharedValueCellChainOffset, ids: ids)
-	let noNode = emitConst(module, block: walkChain, value: 0, ids: ids)
-	let chainEmpty = emitCmp(module, block: walkChain, a: node, b: noNode, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(walkChain, op: StdOp.condBranch(chainEmpty, thenBlockId: freeCell.id, elseBlockId: dropNode.id))
+	emitBranchOnCompare(module, block: walkChain, value: node, pred: StdCmpPred.eq, against: 0, whenTrue: freeCell, whenFalse: dropNode, ids: ids)
 
 	emitStoreField(module, block: dropNode, record: cell, offset: SharedValueCellChainOffset, value: emitLoadField(module, block: dropNode, record: node, offset: SharedValueChainNextOffset, ids: ids))
 	let chainedValue = emitLoadField(module, block: dropNode, record: node, offset: SharedValueChainValueOffset, ids: ids)
@@ -489,8 +479,7 @@ function buildRegistryServiceRelease(module StdModule)
 	let held = emitLockedSlotHandle(module, block: entry, slot: slot, ids: ids)
 	emitStoreField(module, block: entry, record: slot, offset: SharedValueHolderCellOffset, value: emitConst(module, block: entry, value: ReleasedHolder, ids: ids))
 	emitSchedLockLeave(module, block: entry, ids: ids)
-	let wasReleased = emitCmp(module, block: entry, a: held, b: emitConst(module, block: entry, value: ReleasedHolder, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(wasReleased, thenBlockId: done.id, elseBlockId: dropIt.id))
+	emitBranchOnCompare(module, block: entry, value: held, pred: StdCmpPred.eq, against: ReleasedHolder, whenTrue: done, whenFalse: dropIt, ids: ids)
 
 	module.appendOp(dropIt, op: StdOp.call(ids.mint(), callee: MboxHandleDropBoxName, args: argsOf(held)))
 	module.setTerminator(dropIt, op: StdOp.branch(done.id))

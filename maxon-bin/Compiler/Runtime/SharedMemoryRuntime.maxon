@@ -134,11 +134,11 @@ function segmentOperandEncoding(module StdModule, call SegmentCall) returns Host
 end 'segmentOperandEncoding'
 
 function emitLastErrorIs(module StdModule, block IrBlock, lastError ValueId, error Win32SegmentError, ids ValueMinter) returns ValueId
-	return emitCmp(module, block: block, a: lastError, b: emitConst(module, block: block, value: error.rawValue, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	return emitCompareWithConstant(module, block: block, value: lastError, pred: StdCmpPred.eq, against: error.rawValue, ids: ids)
 end 'emitLastErrorIs'
 
 function emitHandleIsNull(module StdModule, block IrBlock, handle ValueId, ids ValueMinter) returns ValueId
-	return emitCmp(module, block: block, a: handle, b: emitConst(module, block: block, value: SharedSegmentAnswer.refused.rawValue, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	return emitCompareWithConstant(module, block: block, value: handle, pred: StdCmpPred.eq, against: SharedSegmentAnswer.refused.rawValue, ids: ids)
 end 'emitHandleIsNull'
 
 // The Win32 adopt. Win32 reports no section's size through its handle, but `MapViewOfFile` refuses a view

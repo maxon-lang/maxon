@@ -245,7 +245,7 @@ instead.
 ⚠⚠ **THE `async` IS LOAD-BEARING AND IS NOT DECORATION — WITHOUT IT THIS CASE READS A DIFFERENT ARM OF
 `__slab_free`.** The allocator is one shape in every heap program, but WHICH arm a free takes is decided by
 the span's owner, and a program with no scheduler allocates with no P: every span it cuts is stamped
-`MspanOwningPNone`, so every free of one goes down the raw arm, which compares no owner and never reads an
+`SpanOwnerState.none`, so every free of one goes down the raw arm, which compares no owner and never reads an
 uncached sentinel. A real P is what stamps a span with a real owner, and the uncached/mine/remote routing
 this case is about begins there.
 ```maxon

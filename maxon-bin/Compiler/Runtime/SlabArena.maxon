@@ -397,6 +397,8 @@ let ArenaMapL1Shift = ArenaMapL2Shift + ArenaMapLevelBits
 // three miss blocks) and the future consumer cannot disagree about which value carries that meaning.
 export let ArenaMapNoSpan = 0
 
+let ArenaMapUnpublishedLevel = 0
+
 // --- Entry points ---
 
 export let SlabArenaAllocChunksName = b"__slab_arena_alloc_chunks"
@@ -768,15 +770,15 @@ export function emitSlabArenaMapGet(module StdModule, func IrFunction, cur IrBlo
 	let l1SlotAddr = ids.mint()
 	module.appendOp(cur, op: StdOp.globalAddr(l1SlotAddr, label: SlabArenaMapL1Label))
 	let l1 = emitLoadField(module, block: cur, record: l1SlotAddr, offset: 0, ids: ids)
-	emitBranchOnPresent(module, block: cur, pointer: l1, present: atL2, absent: miss, ids: ids)
+	emitBranchOnCompare(module, block: cur, value: l1, pred: StdCmpPred.eq, against: ArenaMapUnpublishedLevel, whenTrue: miss, whenFalse: atL2, ids: ids)
 
 	let l2SlotAddr = emitMapSlotAddr(module, block: atL2, tableBase: l1, addr: ptr, shift: ArenaMapL1Shift, mask: ArenaMapL1Mask, ids: ids)
 	let l2 = emitLoadField(module, block: atL2, record: l2SlotAddr, offset: 0, ids: ids)
-	emitBranchOnPresent(module, block: atL2, pointer: l2, present: atL3, absent: miss, ids: ids)
+	emitBranchOnCompare(module, block: atL2, value: l2, pred: StdCmpPred.eq, against: ArenaMapUnpublishedLevel, whenTrue: miss, whenFalse: atL3, ids: ids)
 
 	let l3SlotAddr = emitMapSlotAddr(module, block: atL3, tableBase: l2, addr: ptr, shift: ArenaMapL2Shift, mask: ArenaMapLevelMask, ids: ids)
 	let l3 = emitLoadField(module, block: atL3, record: l3SlotAddr, offset: 0, ids: ids)
-	emitBranchOnPresent(module, block: atL3, pointer: l3, present: atPage, absent: miss, ids: ids)
+	emitBranchOnCompare(module, block: atL3, value: l3, pred: StdCmpPred.eq, against: ArenaMapUnpublishedLevel, whenTrue: miss, whenFalse: atPage, ids: ids)
 
 	let pageSlotAddr = emitMapSlotAddr(module, block: atPage, tableBase: l3, addr: ptr, shift: SlabPageShift, mask: ArenaMapLevelMask, ids: ids)
 	let span = emitLoadField(module, block: atPage, record: pageSlotAddr, offset: 0, ids: ids)
@@ -789,12 +791,3 @@ export function emitSlabArenaMapGet(module StdModule, func IrFunction, cur IrBlo
 
 	return merge
 end 'emitSlabArenaMapGet'
-
-// Continue into `present` when `pointer` is non-zero, else into `absent`. The lookup's three level tests are
-// the same three ops, and writing them out per level is how one of the three ends up comparing the wrong
-// value.
-function emitBranchOnPresent(module StdModule, block IrBlock, pointer ValueId, present IrBlock, absent IrBlock, ids ValueMinter)
-	let none = emitConst(module, block: block, value: 0, ids: ids)
-	let uncommitted = emitCmp(module, block: block, a: pointer, b: none, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(block, op: StdOp.condBranch(uncommitted, thenBlockId: absent.id, elseBlockId: present.id))
-end 'emitBranchOnPresent'

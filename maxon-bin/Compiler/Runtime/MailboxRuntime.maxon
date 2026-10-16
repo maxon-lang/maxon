@@ -361,7 +361,7 @@ function emitMboxWakeAndUnlock(module StdModule, func IrFunction, cur IrBlock, m
 	let noneParked = emitConst(module, block: cur, value: 0, ids: ids)
 	emitStoreField(module, block: cur, record: mbox, offset: MboxOffParkedGt, value: noneParked)
 	emitMboxLockLeave(module, block: cur, mbox: mbox, ids: ids)
-	let nobodyWaiting = emitCmp(module, block: cur, a: parked, b: noneParked, pred: StdCmpPred.eq, ids: ids)
+	let nobodyWaiting = emitCompareWithConstant(module, block: cur, value: parked, pred: StdCmpPred.eq, against: 0, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(nobodyWaiting, thenBlockId: cont.id, elseBlockId: wakeParked.id))
 
 	emitGtReadyParkedService(module, func: func, cur: wakeParked, service: parked, cont: cont, ids: ids)
@@ -381,8 +381,7 @@ end 'emitMboxCountStep'
 
 // Was the step this caller just made the last one — i.e. did the count go 1 -> 0?
 function emitMboxWasLastOwner(module StdModule, block IrBlock, prior ValueId, ids ValueMinter) returns ValueId
-	let one = emitConst(module, block: block, value: MboxLastOwner, ids: ids)
-	return emitCmp(module, block: block, a: prior, b: one, pred: StdCmpPred.eq, ids: ids)
+	return emitCompareWithConstant(module, block: block, value: prior, pred: StdCmpPred.eq, against: MboxLastOwner, ids: ids)
 end 'emitMboxWasLastOwner'
 
 // `__svc_spawn(loopPtr, state, abandonPtr) -> mbox`. See `SvcSpawnName`.
@@ -440,9 +439,7 @@ function buildMboxSend(module StdModule)
 
 	emitMboxLockEnter(module, block: entry, mbox: mbox, ids: ids)
 	let closed = emitLoadField(module, block: entry, record: mbox, offset: MboxOffClosed, ids: ids)
-	let open = emitConst(module, block: entry, value: 0, ids: ids)
-	let stillOpen = emitCmp(module, block: entry, a: closed, b: open, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(stillOpen, thenBlockId: append.id, elseBlockId: abandon.id))
+	emitBranchOnCompare(module, block: entry, value: closed, pred: StdCmpPred.eq, against: 0, whenTrue: append, whenFalse: abandon, ids: ids)
 
 	// ⭐⭐ **THE CLOSED ARM IS REACHABLE AND IS NOT A RACE-ONLY SAFETY NET.** The LOOP closes the mailbox on
 	// its way out after a `__shutdown` pill, and the handles are still alive at that moment — so an author
@@ -463,8 +460,7 @@ function buildMboxSend(module StdModule)
 	let emptyQueue = emitConst(module, block: append, value: 0, ids: ids)
 	emitStoreField(module, block: append, record: box, offset: ServiceLinkOffset, value: emptyQueue)
 	let tail = emitLoadField(module, block: append, record: mbox, offset: MboxOffTail, ids: ids)
-	let queueIsEmpty = emitCmp(module, block: append, a: tail, b: emptyQueue, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(append, op: StdOp.condBranch(queueIsEmpty, thenBlockId: firstRequest.id, elseBlockId: chainRequest.id))
+	emitBranchOnCompare(module, block: append, value: tail, pred: StdCmpPred.eq, against: 0, whenTrue: firstRequest, whenFalse: chainRequest, ids: ids)
 
 	emitStoreField(module, block: firstRequest, record: mbox, offset: MboxOffHead, value: box)
 	module.setTerminator(firstRequest, op: StdOp.branch(linked.id))
@@ -501,8 +497,7 @@ function buildMboxRecv(module StdModule)
 	emitMboxLockEnter(module, block: attempt, mbox: mbox, ids: ids)
 	let head = emitLoadField(module, block: attempt, record: mbox, offset: MboxOffHead, ids: ids)
 	let noRequest = emitConst(module, block: attempt, value: 0, ids: ids)
-	let queueIsEmpty = emitCmp(module, block: attempt, a: head, b: noRequest, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(attempt, op: StdOp.condBranch(queueIsEmpty, thenBlockId: emptyQueue.id, elseBlockId: pop.id))
+	emitBranchOnCompare(module, block: attempt, value: head, pred: StdCmpPred.eq, against: 0, whenTrue: emptyQueue, whenFalse: pop, ids: ids)
 
 	let next = emitLoadField(module, block: pop, record: head, offset: ServiceLinkOffset, ids: ids)
 	emitStoreField(module, block: pop, record: mbox, offset: MboxOffHead, value: next)
@@ -714,8 +709,7 @@ function buildMboxServiceExit(module StdModule)
 	// A service stopped by its LAST HANDLE DROP never received a pill, so the slot is the slab's zero and
 	// there is nothing to answer.
 	let noReply = emitConst(module, block: doneBlock, value: 0, ids: ids)
-	let hasReply = emitCmp(module, block: doneBlock, a: shutdownReply, b: noReply, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(doneBlock, op: StdOp.condBranch(hasReply, thenBlockId: answerShutdown.id, elseBlockId: ownerDone.id))
+	emitBranchOnCompare(module, block: doneBlock, value: shutdownReply, pred: StdCmpPred.ne, against: 0, whenTrue: answerShutdown, whenFalse: ownerDone, ids: ids)
 
 	module.appendOp(answerShutdown, op: StdOp.call(ids.mint(), callee: GtCellCompleteName, args: threeArgs(shutdownReply, second: noReply, third: noReply)))
 	module.setTerminator(answerShutdown, op: StdOp.branch(ownerDone.id))
@@ -777,15 +771,12 @@ export function emitMboxRegisterPark(module StdModule, func IrFunction, cur IrBl
 
 	emitMboxLockEnter(module, block: cur, mbox: mbox, ids: ids)
 	let head = emitLoadField(module, block: cur, record: mbox, offset: MboxOffHead, ids: ids)
-	let zero = emitConst(module, block: cur, value: 0, ids: ids)
-	let queueIsEmpty = emitCmp(module, block: cur, a: head, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(queueIsEmpty, thenBlockId: recheckClosed.id, elseBlockId: undoPark.id))
+	emitBranchOnCompare(module, block: cur, value: head, pred: StdCmpPred.eq, against: 0, whenTrue: recheckClosed, whenFalse: undoPark, ids: ids)
 
 	let closed = emitLoadField(module, block: recheckClosed, record: mbox, offset: MboxOffClosed, ids: ids)
-	let stillOpen = emitCmp(module, block: recheckClosed, a: closed, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(recheckClosed, op: StdOp.condBranch(stillOpen, thenBlockId: registerWaiter.id, elseBlockId: undoPark.id))
+	emitBranchOnCompare(module, block: recheckClosed, value: closed, pred: StdCmpPred.eq, against: 0, whenTrue: registerWaiter, whenFalse: undoPark, ids: ids)
 
-	let waitingStatus = emitConst(module, block: registerWaiter, value: GtStatusWaiting, ids: ids)
+	let waitingStatus = emitConst(module, block: registerWaiter, value: GtStatus.waiting.rawValue, ids: ids)
 	emitStoreField(module, block: registerWaiter, record: mbox, offset: MboxOffParkedGt, value: gt)
 	emitStoreField(module, block: registerWaiter, record: gt, offset: GtOffStatus, value: waitingStatus)
 	emitMboxLockLeave(module, block: registerWaiter, mbox: mbox, ids: ids)

@@ -398,16 +398,14 @@ function emitListenerWatchedAccept(module StdModule, func IrFunction, ids ValueM
 
 	let event = ids.mint()
 	module.appendOp(attempt, op: StdOp.osEventCreate(event))
-	let haveEvent = emitCmp(module, block: attempt, a: event, b: emitConst(module, block: attempt, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(attempt, op: StdOp.condBranch(haveEvent, thenBlockId: armWatch.id, elseBlockId: noEvent.id))
+	emitBranchOnCompare(module, block: attempt, value: event, pred: StdCmpPred.ne, against: 0, whenTrue: armWatch, whenFalse: noEvent, ids: ids)
 
 	module.setTerminator(noEvent, op: StdOp.branch(retriable.id))
 
 	let selected = ids.mint()
 	let unusedArm = emitConst(module, block: armWatch, value: 0, ids: ids)
 	module.appendOp(armWatch, op: StdOp.osSocketOverlapped(selected, verb: SocketOverlappedVerb.watchAccept, a0Id: listener, a1Id: event, a2Id: unusedArm, a3Id: unusedArm))
-	let selectOk = emitCmp(module, block: armWatch, a: selected, b: emitConst(module, block: armWatch, value: WinsockCallOk, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(armWatch, op: StdOp.condBranch(selectOk, thenBlockId: issue.id, elseBlockId: watchRefused.id))
+	emitBranchOnCompare(module, block: armWatch, value: selected, pred: StdCmpPred.eq, against: WinsockCallOk, whenTrue: issue, whenFalse: watchRefused, ids: ids)
 
 	module.setTerminator(watchRefused, op: StdOp.branch(dropEvent.id))
 
@@ -442,17 +440,14 @@ function emitListenerWatchedAccept(module StdModule, func IrFunction, ids ValueM
 	emitNetpollUnwatchHandleOnPort(module, block: watching, token: token, ids: ids)
 	module.setTerminator(watching, op: StdOp.branch(awaited.id))
 
-	let signalled = emitCmp(module, block: awaited, a: verdict, b: emitConst(module, block: awaited, value: NetpollWaitReady, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(awaited, op: StdOp.condBranch(signalled, thenBlockId: issue.id, elseBlockId: notSignalled.id))
+	emitBranchOnCompare(module, block: awaited, value: verdict, pred: StdCmpPred.eq, against: NetpollWaitReady, whenTrue: issue, whenFalse: notSignalled, ids: ids)
 
 	// A wait that did not end in the event ended in the accept deadline, a dropped promise or a
 	// listener closed under it. The deadline leaves through `emitSocketLateExit`; the other two mean
 	// this accept will never complete, which is what `failed` reports.
-	let gone = emitCmp(module, block: notSignalled, a: verdict, b: emitConst(module, block: notSignalled, value: NetpollWaitStale, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(notSignalled, op: StdOp.condBranch(gone, thenBlockId: staleRecord.id, elseBlockId: notStale.id))
+	emitBranchOnCompare(module, block: notSignalled, value: verdict, pred: StdCmpPred.eq, against: NetpollWaitStale, whenTrue: staleRecord, whenFalse: notStale, ids: ids)
 
-	let late = emitCmp(module, block: notStale, a: verdict, b: emitConst(module, block: notStale, value: NetpollWaitTimedOut, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(notStale, op: StdOp.condBranch(late, thenBlockId: lateDrop.id, elseBlockId: dropEvent.id))
+	emitBranchOnCompare(module, block: notStale, value: verdict, pred: StdCmpPred.eq, against: NetpollWaitTimedOut, whenTrue: lateDrop, whenFalse: dropEvent, ids: ids)
 
 	emitSocketWatchGiveBack(module, block: lateDrop, socket: listener, event: event, ids: ids)
 	module.setTerminator(lateDrop, op: StdOp.branch(emitSocketLateExit(module, func: func, pollKey: pollKey, gen: gen, failureFlag: ManagedListenerAcceptFailedFlag, ids: ids).id))

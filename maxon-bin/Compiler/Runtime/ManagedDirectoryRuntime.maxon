@@ -304,9 +304,7 @@ export function emitCStringLength(module StdModule, func IrFunction, cur IrBlock
 	cur.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(zero)))
 
 	let ch = emitLoadByte(module, block: header, base: cstr, index: length, ids: ids)
-	let nul = emitConst(module, block: header, value: NulByte, ids: ids)
-	let atEnd = emitCmp(module, block: header, a: ch, b: nul, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
+	emitBranchOnCompare(module, block: header, value: ch, pred: StdCmpPred.eq, against: NulByte, whenTrue: done, whenFalse: body, ids: ids)
 
 	let one = emitConst(module, block: body, value: 1, ids: ids)
 	let next = emitBin(module, block: body, a: length, b: one, opcode: StdBinOpcode.add, ids: ids)
@@ -401,9 +399,7 @@ function buildManagedDirectoryOpenSearch(module StdModule)
 	let err = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.osLastError(err))
 	emitRawFree(module, block: afterCopy, ptr: scratch, ids: ids)
-	let invalidConst = emitConst(module, block: afterCopy, value: InvalidHandleValue, ids: ids)
-	let isInvalid = emitCmp(module, block: afterCopy, a: search, b: invalidConst, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(afterCopy, op: StdOp.condBranch(isInvalid, thenBlockId: failed.id, elseBlockId: opened.id))
+	emitBranchOnCompare(module, block: afterCopy, value: search, pred: StdCmpPred.eq, against: InvalidHandleValue, whenTrue: failed, whenFalse: opened, ids: ids)
 
 	// The find block is released on the failure path: the throw carries no box, so nothing else ever will.
 	emitRawFree(module, block: failed, ptr: findBlock, ids: ids)
@@ -471,9 +467,7 @@ function buildManagedDirectoryNext(module StdModule)
 	// Pending? Then `FindFirstFileW`'s entry is still unconsumed: clear the flag and go straight to the dot
 	// check, WITHOUT fetching. This is the half that keeps the first entry of every search.
 	let pendingFlag = emitLoadField(module, block: checkPend, record: findBlock, offset: FindBlockPendingOffset, ids: ids)
-	let consumedConst = emitConst(module, block: checkPend, value: FindEntryConsumed, ids: ids)
-	let alreadyConsumed = emitCmp(module, block: checkPend, a: pendingFlag, b: consumedConst, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(checkPend, op: StdOp.condBranch(alreadyConsumed, thenBlockId: fetch.id, elseBlockId: consume.id))
+	emitBranchOnCompare(module, block: checkPend, value: pendingFlag, pred: StdCmpPred.eq, against: FindEntryConsumed, whenTrue: fetch, whenFalse: consume, ids: ids)
 
 	let clearPending = emitConst(module, block: consume, value: FindEntryConsumed, ids: ids)
 	emitStoreField(module, block: consume, record: findBlock, offset: FindBlockPendingOffset, value: clearPending)
@@ -485,14 +479,10 @@ function buildManagedDirectoryNext(module StdModule)
 	module.appendOp(fetch, op: StdOp.osFileFindNext(verdict, handleId: handle, findDataPtrId: findData))
 	let err = ids.mint()
 	module.appendOp(fetch, op: StdOp.osLastError(err))
-	let falseConst = emitConst(module, block: fetch, value: Win32False, ids: ids)
-	let noEntry = emitCmp(module, block: fetch, a: verdict, b: falseConst, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(fetch, op: StdOp.condBranch(noEntry, thenBlockId: fetchFailed.id, elseBlockId: dotCheck.id))
+	emitBranchOnCompare(module, block: fetch, value: verdict, pred: StdCmpPred.eq, against: Win32False, whenTrue: fetchFailed, whenFalse: dotCheck, ids: ids)
 
 	// ⭐ A FALSE means one of two very different things, and `GetLastError` is what tells them apart.
-	let noMoreConst = emitConst(module, block: fetchFailed, value: ErrorNoMoreFiles, ids: ids)
-	let isEof = emitCmp(module, block: fetchFailed, a: err, b: noMoreConst, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(fetchFailed, op: StdOp.condBranch(isEof, thenBlockId: atEof.id, elseBlockId: fetchError.id))
+	emitBranchOnCompare(module, block: fetchFailed, value: err, pred: StdCmpPred.eq, against: ErrorNoMoreFiles, whenTrue: atEof, whenFalse: fetchError, ids: ids)
 
 	let complete = emitConst(module, block: atEof, value: DirectoryIterationComplete, ids: ids)
 	emitOkReturn(module, block: atEof, value: complete, ids: ids)
@@ -509,8 +499,7 @@ function buildManagedDirectoryNext(module StdModule)
 
 	let oneIndex = emitConst(module, block: dot1, value: 1, ids: ids)
 	let byte1 = emitHostUnit(module, block: dot1, base: name, unitIndex: oneIndex, ids: ids)
-	let nul1 = emitConst(module, block: dot1, value: NulByte, ids: ids)
-	let isSingleDot = emitCmp(module, block: dot1, a: byte1, b: nul1, pred: StdCmpPred.eq, ids: ids)
+	let isSingleDot = emitCompareWithConstant(module, block: dot1, value: byte1, pred: StdCmpPred.eq, against: NulByte, ids: ids)
 
 	// A bare `.` is skipped; anything else with a leading dot needs byte2 to decide.
 	module.setTerminator(dot1, op: StdOp.condBranch(isSingleDot, thenBlockId: fetch.id, elseBlockId: dot2.id))
@@ -521,9 +510,7 @@ function buildManagedDirectoryNext(module StdModule)
 
 	let twoIndex = emitConst(module, block: dot3, value: 2, ids: ids)
 	let byte2 = emitHostUnit(module, block: dot3, base: name, unitIndex: twoIndex, ids: ids)
-	let nul2 = emitConst(module, block: dot3, value: NulByte, ids: ids)
-	let isDoubleDot = emitCmp(module, block: dot3, a: byte2, b: nul2, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(dot3, op: StdOp.condBranch(isDoubleDot, thenBlockId: fetch.id, elseBlockId: found.id))
+	emitBranchOnCompare(module, block: dot3, value: byte2, pred: StdCmpPred.eq, against: NulByte, whenTrue: fetch, whenFalse: found, ids: ids)
 
 	let one = emitConst(module, block: found, value: DirectoryEntryFound, ids: ids)
 	emitOkReturn(module, block: found, value: one, ids: ids)
@@ -585,8 +572,7 @@ function buildManagedDirectoryClose(module StdModule)
 
 	let findBlock = emitLoadFindBlock(module, block: entry, box: box, ids: ids)
 	let slot = emitLoadField(module, block: entry, record: findBlock, offset: FindBlockHandleOffset, ids: ids)
-	let closedConst = emitConst(module, block: entry, value: ManagedDirectoryClosedHandle, ids: ids)
-	let alreadyClosed = emitCmp(module, block: entry, a: slot, b: closedConst, pred: StdCmpPred.eq, ids: ids)
+	let alreadyClosed = emitCompareWithConstant(module, block: entry, value: slot, pred: StdCmpPred.eq, against: ManagedDirectoryClosedHandle, ids: ids)
 
 	// `entry` dominates `doClose`, so the decoded handle is simply in scope there — the dominance argument
 	// `ManagedFileRuntime.emitLiveHandleOrClosedThrow` makes for its own.
@@ -671,9 +657,7 @@ function buildManagedDirectoryExists(module StdModule)
 	module.appendOp(afterCopy, op: StdOp.osFileAttributes(attrs, pathPtrId: scratch))
 	emitRawFree(module, block: afterCopy, ptr: scratch, ids: ids)
 
-	let invalidConst = emitConst(module, block: afterCopy, value: InvalidFileAttributes, ids: ids)
-	let noSuchPath = emitCmp(module, block: afterCopy, a: attrs, b: invalidConst, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(afterCopy, op: StdOp.condBranch(noSuchPath, thenBlockId: missing.id, elseBlockId: present.id))
+	emitBranchOnCompare(module, block: afterCopy, value: attrs, pred: StdCmpPred.eq, against: InvalidFileAttributes, whenTrue: missing, whenFalse: present, ids: ids)
 
 	let zeroAnswer = emitConst(module, block: missing, value: 0, ids: ids)
 	module.setTerminator(missing, op: StdOp.ret(zeroAnswer))
@@ -681,9 +665,7 @@ function buildManagedDirectoryExists(module StdModule)
 	// `exists()` asks whether the path is a directory, so a plain file answers false.
 	let dirMask = emitConst(module, block: present, value: FileAttributeDirectory, ids: ids)
 	let dirBit = emitBin(module, block: present, a: attrs, b: dirMask, opcode: StdBinOpcode.bitAnd, ids: ids)
-	let noBit = emitConst(module, block: present, value: 0, ids: ids)
-	let directory = emitCmp(module, block: present, a: dirBit, b: noBit, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(present, op: StdOp.condBranch(directory, thenBlockId: isDir.id, elseBlockId: notDir.id))
+	emitBranchOnCompare(module, block: present, value: dirBit, pred: StdCmpPred.ne, against: 0, whenTrue: isDir, whenFalse: notDir, ids: ids)
 
 	let yes = emitConst(module, block: isDir, value: 1, ids: ids)
 	module.setTerminator(isDir, op: StdOp.ret(yes))
@@ -719,9 +701,7 @@ function buildManagedDirectoryCreate(module StdModule)
 	let err = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.osLastError(err))
 	emitRawFree(module, block: afterCopy, ptr: scratch, ids: ids)
-	let falseConst = emitConst(module, block: afterCopy, value: Win32False, ids: ids)
-	let refused = emitCmp(module, block: afterCopy, a: verdict, b: falseConst, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(afterCopy, op: StdOp.condBranch(refused, thenBlockId: failed.id, elseBlockId: ok.id))
+	emitBranchOnCompare(module, block: afterCopy, value: verdict, pred: StdCmpPred.eq, against: Win32False, whenTrue: failed, whenFalse: ok, ids: ids)
 
 	emitDirectoryErrnoClassifiedThrow(module, func: func, block: failed, err: err, fallbackFlag: ManagedDirectoryCreateFailedFlag, ids: ids)
 	emitVoidOkReturn(module, block: ok, ids: ids)
@@ -760,13 +740,9 @@ function buildManagedDirectoryDelete(module StdModule)
 	let err = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.osLastError(err))
 	emitRawFree(module, block: afterCopy, ptr: scratch, ids: ids)
-	let falseConst = emitConst(module, block: afterCopy, value: Win32False, ids: ids)
-	let refused = emitCmp(module, block: afterCopy, a: verdict, b: falseConst, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(afterCopy, op: StdOp.condBranch(refused, thenBlockId: failed.id, elseBlockId: ok.id))
+	emitBranchOnCompare(module, block: afterCopy, value: verdict, pred: StdCmpPred.eq, against: Win32False, whenTrue: failed, whenFalse: ok, ids: ids)
 
-	let notEmptyConst = emitConst(module, block: failed, value: ErrorDirNotEmpty, ids: ids)
-	let stillOccupied = emitCmp(module, block: failed, a: err, b: notEmptyConst, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(failed, op: StdOp.condBranch(stillOccupied, thenBlockId: occupied.id, elseBlockId: otherFailure.id))
+	emitBranchOnCompare(module, block: failed, value: err, pred: StdCmpPred.eq, against: ErrorDirNotEmpty, whenTrue: occupied, whenFalse: otherFailure, ids: ids)
 
 	emitErrorReturn(module, block: occupied, flag: ManagedDirectoryDeleteNotEmptyFlag, ids: ids)
 	emitDirectoryErrnoClassifiedThrow(module, func: func, block: otherFailure, err: err, fallbackFlag: ManagedDirectoryDeleteFailedFlag, ids: ids)
@@ -810,9 +786,7 @@ end 'buildManagedDirectoryCurrentPath'
 // the buffer was too small. ⚠ The `written == 0` test comes first because a 0 also satisfies
 // `< capacity`: the fit test alone would copy out a buffer the OS never wrote.
 function emitFilledBufferVerdict(module StdModule, block IrBlock, check IrBlock, written ValueId, capacity ValueId, whenRefused IrBlock, whenFits IrBlock, whenTooSmall IrBlock, ids ValueMinter)
-	let zero = emitConst(module, block: block, value: 0, ids: ids)
-	let refused = emitCmp(module, block: block, a: written, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(block, op: StdOp.condBranch(refused, thenBlockId: whenRefused.id, elseBlockId: check.id))
+	emitBranchOnCompare(module, block: block, value: written, pred: StdCmpPred.eq, against: 0, whenTrue: whenRefused, whenFalse: check, ids: ids)
 
 	let fits = emitCmp(module, block: check, a: written, b: capacity, pred: StdCmpPred.lt, ids: ids)
 	module.setTerminator(check, op: StdOp.condBranch(fits, thenBlockId: whenFits.id, elseBlockId: whenTooSmall.id))

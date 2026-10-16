@@ -861,15 +861,12 @@ function buildDsInit(module StdModule, envNameLabel ByteArray)
 	// of the four exits below, all of which pass through this block.
 	module.appendOp(entry, op: StdOp.osCloseHandle(handle))
 	emitSlabFree(module, block: entry, ptr: envBuf, ids: ids)
-	let mapped = emitCmp(module, block: entry, a: base, b: emitConst(module, block: entry, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(mapped, thenBlockId: checkMagic.id, elseBlockId: dark.id))
+	emitBranchOnCompare(module, block: entry, value: base, pred: StdCmpPred.ne, against: 0, whenTrue: checkMagic, whenFalse: dark, ids: ids)
 
 	// `base` is defined in `entry`, which dominates every block below it, so it is read directly rather
 	// than threaded as a block argument — ordinary SSA.
 	let magic = emitLoadField(module, block: checkMagic, record: base, offset: DsOffMagic, ids: ids)
-	let expectedMagic = emitConst(module, block: checkMagic, value: DsMagic, ids: ids)
-	let magicOk = emitCmp(module, block: checkMagic, a: magic, b: expectedMagic, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(checkMagic, op: StdOp.condBranch(magicOk, thenBlockId: checkVersion.id, elseBlockId: dark.id))
+	emitBranchOnCompare(module, block: checkMagic, value: magic, pred: StdCmpPred.eq, against: DsMagic, whenTrue: checkVersion, whenFalse: dark, ids: ids)
 
 	let ourVersion = emitConst(module, block: checkVersion, value: DsSchemaVersion, ids: ids)
 	module.appendOp(checkVersion, op: StdOp.storeIndirect(base, offset: DsOffProducerVersion, valueId: ourVersion, valueType: StdType.i64))
@@ -913,8 +910,7 @@ function buildDsShutdown(module StdModule)
 	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
 
 	let base = emitLoadGlobalWord(module, block: entry, label: DsBaseLabel, ids: ids)
-	let attached = emitCmp(module, block: entry, a: base, b: emitConst(module, block: entry, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(attached, thenBlockId: clear.id, elseBlockId: done.id))
+	emitBranchOnCompare(module, block: entry, value: base, pred: StdCmpPred.ne, against: 0, whenTrue: clear, whenFalse: done, ids: ids)
 
 	let zero = emitConst(module, block: clear, value: 0, ids: ids)
 	module.appendOp(clear, op: StdOp.storeIndirect(base, offset: DsOffFlags, valueId: zero, valueType: StdType.i64))
@@ -1204,9 +1200,7 @@ end 'buildDsEmitSched'
 function emitReserveEntry(module StdModule, block IrBlock, eventType ValueId, entryBytes ValueId, write IrBlock, done IrBlock, ids ValueMinter) returns ValueId
 	let entryPtr = ids.mint()
 	module.appendOp(block, op: StdOp.call(entryPtr, callee: DsReserveName, args: twoArgs(eventType, second: entryBytes)))
-	let noEntry = emitConst(module, block: block, value: 0, ids: ids)
-	let reserved = emitCmp(module, block: block, a: entryPtr, b: noEntry, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(block, op: StdOp.condBranch(reserved, thenBlockId: write.id, elseBlockId: done.id))
+	emitBranchOnCompare(module, block: block, value: entryPtr, pred: StdCmpPred.ne, against: 0, whenTrue: write, whenFalse: done, ids: ids)
 	return entryPtr
 end 'emitReserveEntry'
 
@@ -1324,9 +1318,7 @@ function emitLogEntryOpen(module StdModule, func IrFunction, entry IrBlock, even
 	var reserve = module.addBlock(func, label: b"reserve", heat: BlockHeat.normal)
 
 	let base = emitLoadGlobalWord(module, block: entry, label: DsBaseLabel, ids: ids)
-	let detached = emitConst(module, block: entry, value: 0, ids: ids)
-	let attached = emitCmp(module, block: entry, a: base, b: detached, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(attached, thenBlockId: reserve.id, elseBlockId: done.id))
+	emitBranchOnCompare(module, block: entry, value: base, pred: StdCmpPred.ne, against: 0, whenTrue: reserve, whenFalse: done, ids: ids)
 
 	return emitReserveEntry(module, block: reserve, eventType: eventType, entryBytes: entryBytes, write: write, done: done, ids: ids)
 end 'emitLogEntryOpen'
@@ -1477,9 +1469,7 @@ function buildDsEmitLogText(module StdModule, usesGt bool)
 	// ⚠ **AN EMPTY MESSAGE HAS NO TAIL, AND WITHOUT THIS TEST THE PAD STORE WOULD LAND ON THE FIELDS WORD.**
 	// `align8(0)` is 0, so `textBase + tail - 8` is `entryPtr + 24` — the word just written — and a message
 	// of length 0 would erase its own category, level and unit.
-	let noTail = emitConst(module, block: write, value: 0, ids: ids)
-	let hasTail = emitCmp(module, block: write, a: tail, b: noTail, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(write, op: StdOp.condBranch(hasTail, thenBlockId: zeroPad.id, elseBlockId: copy.id))
+	emitBranchOnCompare(module, block: write, value: tail, pred: StdCmpPred.ne, against: 0, whenTrue: zeroPad, whenFalse: copy, ids: ids)
 
 	// ⭐ **THE RING IS REUSED MEMORY, so the pad bytes `[len, align8(len))` would otherwise carry a previous
 	// entry's payload** and the monitor would print it after the message. Only the LAST qword of the tail
@@ -1536,9 +1526,7 @@ function emitEventCallIfAttached(module StdModule, func IrFunction, block IrBloc
 	let resume = module.addBlock(func, label: b"dsResume", heat: BlockHeat.normal)
 
 	let base = emitLoadGlobalWord(module, block: block, label: DsBaseLabel, ids: ids)
-	let detached = emitConst(module, block: block, value: 0, ids: ids)
-	let attached = emitCmp(module, block: block, a: base, b: detached, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(block, op: StdOp.condBranch(attached, thenBlockId: emit.id, elseBlockId: resume.id))
+	emitBranchOnCompare(module, block: block, value: base, pred: StdCmpPred.ne, against: 0, whenTrue: emit, whenFalse: resume, ids: ids)
 
 	var args = argsOf(emitConst(module, block: emit, value: eventType, ids: ids))
 

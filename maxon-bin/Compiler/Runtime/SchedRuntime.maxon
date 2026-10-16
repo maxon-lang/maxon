@@ -897,10 +897,10 @@ let POffRetakeCount = POffStealCount + PointerSlotBytes
 // processors rather than frees received; the total is the same whenever both parties have a P.
 //
 // ⚠ **A FREER THAT HOLDS NO P IS NOT COUNTED, AND THE GAP IS DELIBERATE.**
-// `SlabRuntime.emitSlabResolveShard` answers `MspanOwningPNone` before `__sched_init_procs` has run, on an
-// OS thread holding no M, and on an M holding no P; crediting one of those would store through a sentinel,
-// so `emitSlabRemotePush` branches past the step instead. A reading of 0 does not prove the road was never
-// taken.
+// `SlabRuntime.emitSlabResolveShard` answers `SlabNoProcessor` before `__sched_init_procs` has run,
+// on an OS thread holding no M, and on an M holding no P; crediting one of those would store
+// through a sentinel, so `emitSlabRemotePush` branches past the step instead. A reading of 0 does
+// not prove the road was never taken.
 //
 // ⚠⚠ **IT IS THE ONE PER-P COUNTER STEPPED WITH AN `atomicRmw` RATHER THAN A PLAIN LOAD/ADD/STORE.** Its
 // two neighbours are written by a party that cannot be two — a P counts its OWN steals, and sysmon is the
@@ -2025,17 +2025,14 @@ function emitLoadCurrentPOrBail(module StdModule, cur IrBlock, haveOffset IrBloc
 	let m = emitLoadCurrentMOrBail(module, cur: cur, haveOffset: haveOffset, haveMachine: haveMachine, bail: noProc, bailValues: FullRangeIntArray.create(), ids: ids)
 
 	let p = emitLoadField(module, block: haveMachine, record: m, offset: MOffCurrentP, ids: ids)
-	let none = emitConst(module, block: haveMachine, value: 0, ids: ids)
-	let pIsNone = emitCmp(module, block: haveMachine, a: p, b: none, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(haveMachine, op: StdOp.condBranch(pIsNone, thenBlockId: noProc.id, elseBlockId: haveProc.id))
+	emitBranchOnCompare(module, block: haveMachine, value: p, pred: StdCmpPred.eq, against: 0, whenTrue: noProc, whenFalse: haveProc, ids: ids)
 	return p
 end 'emitLoadCurrentPOrBail'
 
 // Terminate `block` with *"`tested` is 0 → `bail`, otherwise `otherwise`"*, giving the bail edge this
 // block's own copy of each of its arguments.
 function emitBailIfZero(module StdModule, block IrBlock, tested ValueId, bail IrBlock, bailValues FullRangeIntArray, otherwise IrBlock, ids ValueMinter)
-	let zero = emitConst(module, block: block, value: 0, ids: ids)
-	let isZero = emitCmp(module, block: block, a: tested, b: zero, pred: StdCmpPred.eq, ids: ids)
+	let isZero = emitCompareWithConstant(module, block: block, value: tested, pred: StdCmpPred.eq, against: 0, ids: ids)
 
 	var edgeArgs = ValueIdArray.create()
 
@@ -2127,10 +2124,8 @@ export function emitLoadCurrentGtAndProcIdOrZero(module StdModule, func IrFuncti
 	// M cannot supply, not the thread it is running.
 	let gt = emitLoadField(module, block: haveMachine, record: m, offset: MOffCurrentGt, ids: ids)
 	let p = emitLoadField(module, block: haveMachine, record: m, offset: MOffCurrentP, ids: ids)
-	let machineZero = emitConst(module, block: haveMachine, value: 0, ids: ids)
 	let machineZeroProc = emitConst(module, block: haveMachine, value: 0, ids: ids)
-	let noProc = emitCmp(module, block: haveMachine, a: p, b: machineZero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(haveMachine, op: StdOp.condBranch(noProc, thenBlockId: merge.id, elseBlockId: haveProc.id))
+	emitBranchOnCompare(module, block: haveMachine, value: p, pred: StdCmpPred.eq, against: 0, whenTrue: merge, whenFalse: haveProc, ids: ids)
 	haveMachine.branchEdges.push(BranchEdge.create(merge.id, argIds: twoArgs(gt, second: machineZeroProc)))
 
 	let procId = emitLoadField(module, block: haveProc, record: p, offset: POffId, ids: ids)
@@ -2258,8 +2253,7 @@ function emitRequireTebTlsSlot(module StdModule, func IrFunction, cur IrBlock, t
 	var inTheTeb = module.addBlock(func, label: b"tlsinteb", heat: BlockHeat.normal)
 	var pastTheTeb = module.addBlock(func, label: b"tlspastteb", heat: BlockHeat.cold)
 
-	let fits = emitCmp(module, block: cur, a: tlsIndex, b: emitConst(module, block: cur, value: WindowsTebTlsSlotCount, ids: ids), pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(fits, thenBlockId: inTheTeb.id, elseBlockId: pastTheTeb.id))
+	emitBranchOnCompare(module, block: cur, value: tlsIndex, pred: StdCmpPred.lt, against: WindowsTebTlsSlotCount, whenTrue: inTheTeb, whenFalse: pastTheTeb, ids: ids)
 	emitRuntimeAbort(module, func: func, block: pastTheTeb, abort: RuntimeAbort.schedulerTlsSlotOutsideTheTeb, ids: ids)
 
 	return inTheTeb
@@ -2542,8 +2536,8 @@ end 'emitStepLockDepthAt'
 export function emitSchedLockDepthAddr(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	let tebOffset = emitLoadGlobalWord(module, block: block, label: SchedTlsTebOffsetLabel, ids: ids)
 	let m = emitLoadCurrentM(module, block: block, ids: ids)
-	let scheduled = emitCmp(module, block: block, a: tebOffset, b: emitConst(module, block: block, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
-	let hasMachine = emitCmp(module, block: block, a: m, b: emitConst(module, block: block, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	let scheduled = emitCompareWithConstant(module, block: block, value: tebOffset, pred: StdCmpPred.ne, against: 0, ids: ids)
+	let hasMachine = emitCompareWithConstant(module, block: block, value: m, pred: StdCmpPred.ne, against: 0, ids: ids)
 	let onMachine = emitBin(module, block: block, a: scheduled, b: hasMachine, opcode: StdBinOpcode.bitAnd, ids: ids)
 	let mineMask = emitBin(module, block: block, a: emitConst(module, block: block, value: 0, ids: ids), b: onMachine, opcode: StdBinOpcode.sub, ids: ids)
 	let sinkMask = emitBin(module, block: block, a: onMachine, b: emitConst(module, block: block, value: OneMore, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
@@ -2622,9 +2616,7 @@ end 'emitSchedListUnlinkHead'
 // in scope there.
 function emitSchedListTakeHead(module StdModule, cur IrBlock, got IrBlock, none IrBlock, head SchedListHead, linkOffset ByteOffset, ids ValueMinter) returns ValueId
 	let node = emitSchedListLoadHead(module, block: cur, head: head, ids: ids)
-	let noHead = emitConst(module, block: cur, value: 0, ids: ids)
-	let listEmpty = emitCmp(module, block: cur, a: node, b: noHead, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(listEmpty, thenBlockId: none.id, elseBlockId: got.id))
+	emitBranchOnCompare(module, block: cur, value: node, pred: StdCmpPred.eq, against: 0, whenTrue: none, whenFalse: got, ids: ids)
 
 	emitSchedListUnlinkHead(module, block: got, head: head, node: node, linkOffset: linkOffset, ids: ids)
 	return node
@@ -2703,7 +2695,7 @@ function emitSchedPidleGetLocked(module StdModule, func IrFunction, cur IrBlock,
 
 	if wakesMonitor 'monitorMayBeAsleep'
 		var wakeMonitor = module.addBlock(func, label: b"pidlegetsysmon", heat: BlockHeat.normal)
-		let asleep = emitCmp(module, block: taken, a: emitLoadGlobalWord(module, block: taken, label: SchedSysmonWaitLabel, ids: ids), b: emitConst(module, block: taken, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+		let asleep = emitCompareWithConstant(module, block: taken, value: emitLoadGlobalWord(module, block: taken, label: SchedSysmonWaitLabel, ids: ids), pred: StdCmpPred.ne, against: 0, ids: ids)
 		module.setTerminator(taken, op: StdOp.condBranch(asleep, thenBlockId: wakeMonitor.id, elseBlockId: got.id))
 
 		emitStoreGlobalWord(module, block: wakeMonitor, label: SchedSysmonWaitLabel, value: emitConst(module, block: wakeMonitor, value: 0, ids: ids), ids: ids)
@@ -2766,9 +2758,7 @@ function emitSchedMidlePutLocked(module StdModule, func IrFunction, cur IrBlock,
 	let oldHead = emitLoadGlobalWord(module, block: cur, label: SchedMidleLabel, ids: ids)
 	emitStoreField(module, block: cur, record: m, offset: MOffIdleNext, value: oldHead)
 	emitStoreGlobalWord(module, block: cur, label: SchedMidleLabel, value: m, ids: ids)
-	let noOldHead = emitConst(module, block: cur, value: 0, ids: ids)
-	let wasEmpty = emitCmp(module, block: cur, a: oldHead, b: noOldHead, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(wasEmpty, thenBlockId: joined.id, elseBlockId: linkBack.id))
+	emitBranchOnCompare(module, block: cur, value: oldHead, pred: StdCmpPred.eq, against: 0, whenTrue: joined, whenFalse: linkBack, ids: ids)
 
 	emitStoreField(module, block: linkBack, record: oldHead, offset: MOffIdlePrev, value: m)
 	module.setTerminator(linkBack, op: StdOp.branch(joined.id))
@@ -2781,8 +2771,7 @@ end 'emitSchedMidlePutLocked'
 // only member as absent; asking the head is what counts that one. `m` must not be 0.
 function emitSchedMidleHolds(module StdModule, block IrBlock, m ValueId, ids ValueMinter) returns ValueId
 	let isHead = emitCmp(module, block: block, a: emitLoadGlobalWord(module, block: block, label: SchedMidleLabel, ids: ids), b: m, pred: StdCmpPred.eq, ids: ids)
-	let noPrev = emitConst(module, block: block, value: 0, ids: ids)
-	let hasPrev = emitCmp(module, block: block, a: emitLoadField(module, block: block, record: m, offset: MOffIdlePrev, ids: ids), b: noPrev, pred: StdCmpPred.ne, ids: ids)
+	let hasPrev = emitCompareWithConstant(module, block: block, value: emitLoadField(module, block: block, record: m, offset: MOffIdlePrev, ids: ids), pred: StdCmpPred.ne, against: 0, ids: ids)
 
 	// Both operands are `cmp` results, so they are 0 or 1 and a bitwise OR is the logical one.
 	return emitBin(module, block: block, a: isHead, b: hasPrev, opcode: StdBinOpcode.bitOr, ids: ids)
@@ -2807,9 +2796,7 @@ function emitSchedMidleUnlinkLocked(module StdModule, func IrFunction, cur IrBlo
 	// Both links are read here, in the block that dominates every block below, so each is loaded once.
 	let next = emitLoadField(module, block: cur, record: m, offset: MOffIdleNext, ids: ids)
 	let prev = emitLoadField(module, block: cur, record: m, offset: MOffIdlePrev, ids: ids)
-	let noPrev = emitConst(module, block: cur, value: 0, ids: ids)
-	let isHead = emitCmp(module, block: cur, a: prev, b: noPrev, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(isHead, thenBlockId: wasHead.id, elseBlockId: wasInner.id))
+	emitBranchOnCompare(module, block: cur, value: prev, pred: StdCmpPred.eq, against: 0, whenTrue: wasHead, whenFalse: wasInner, ids: ids)
 
 	emitStoreGlobalWord(module, block: wasHead, label: SchedMidleLabel, value: next, ids: ids)
 	module.setTerminator(wasHead, op: StdOp.branch(mendNext.id))
@@ -2817,9 +2804,7 @@ function emitSchedMidleUnlinkLocked(module StdModule, func IrFunction, cur IrBlo
 	emitStoreField(module, block: wasInner, record: prev, offset: MOffIdleNext, value: next)
 	module.setTerminator(wasInner, op: StdOp.branch(mendNext.id))
 
-	let noNext = emitConst(module, block: mendNext, value: 0, ids: ids)
-	let isTail = emitCmp(module, block: mendNext, a: next, b: noNext, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(mendNext, op: StdOp.condBranch(isTail, thenBlockId: cleared.id, elseBlockId: backLinkNext.id))
+	emitBranchOnCompare(module, block: mendNext, value: next, pred: StdCmpPred.eq, against: 0, whenTrue: cleared, whenFalse: backLinkNext, ids: ids)
 
 	emitStoreField(module, block: backLinkNext, record: next, offset: MOffIdlePrev, value: prev)
 	module.setTerminator(backLinkNext, op: StdOp.branch(cleared.id))
@@ -2839,9 +2824,7 @@ end 'emitSchedMidleUnlinkLocked'
 //     then START one on a free P — an OS thread that idles for the life of the process, which is exactly the
 //     `workers` reading `multicore-stress/pin-matrix.sh` pins at 1.
 export function emitSchedWakeIfOwed(module StdModule, cur IrBlock, owed ValueId, wake IrBlock, cont IrBlock, ids ValueMinter)
-	let owesNothing = emitConst(module, block: cur, value: WakeDebtNone, ids: ids)
-	let nothingOwed = emitCmp(module, block: cur, a: owed, b: owesNothing, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(nothingOwed, thenBlockId: cont.id, elseBlockId: wake.id))
+	emitBranchOnCompare(module, block: cur, value: owed, pred: StdCmpPred.eq, against: WakeDebtNone, whenTrue: cont, whenFalse: wake, ids: ids)
 	emitSchedWakeAnIdleM(module, block: wake, ids: ids)
 	module.setTerminator(wake, op: StdOp.branch(cont.id))
 end 'emitSchedWakeIfOwed'
@@ -2983,9 +2966,7 @@ function buildSchedInitProcs(module StdModule, target Target)
 	// P[0] does not join: M0 is born holding it and enters `__sched_main_loop` with it, so offering
 	// it would hand a worker the processor M0 is about to run on. This is the only place that fact is
 	// written.
-	let mainProcIndex = emitConst(module, block: loopBody, value: 0, ids: ids)
-	let isMainProc = emitCmp(module, block: loopBody, a: iterId, b: mainProcIndex, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(loopBody, op: StdOp.condBranch(isMainProc, thenBlockId: loopNext.id, elseBlockId: loopOffer.id))
+	emitBranchOnCompare(module, block: loopBody, value: iterId, pred: StdCmpPred.eq, against: 0, whenTrue: loopNext, whenFalse: loopOffer, ids: ids)
 
 	var offered = emitSchedPidlePutLocked(module, func: func, cur: loopOffer, p: p, holdsWorkLabel: b"pofferheldwork", emptyLabel: b"poffered", ids: ids)
 	module.setTerminator(offered, op: StdOp.branch(loopNext.id))
@@ -3199,8 +3180,7 @@ function emitResolveMaxProcs(module StdModule, func IrFunction, cur IrBlock, set
 
 	let cpus = ids.mint()
 	module.appendOp(cur, op: StdOp.osCpuCount(cpus))
-	let cpuFloorConst = emitConst(module, block: cur, value: MinimumProcessorCount, ids: ids)
-	let belowFloor = emitCmp(module, block: cur, a: cpus, b: cpuFloorConst, pred: StdCmpPred.lt, ids: ids)
+	let belowFloor = emitCompareWithConstant(module, block: cur, value: cpus, pred: StdCmpPred.lt, against: MinimumProcessorCount, ids: ids)
 	let liveCpus = ids.mint()
 	cpuKnown.blockArgs.push(IrBlockArg.create(liveCpus, argType: StdType.i64))
 	module.setTerminator(cur, op: StdOp.condBranch(belowFloor, thenBlockId: cpuFloor.id, elseBlockId: cpuKnown.id))
@@ -3287,8 +3267,7 @@ end 'emitCStringEqualsLiteral'
 function emitByteAtEquals(module StdModule, block IrBlock, cstr ValueId, index FullRangeInt, expected FullRangeInt, ids ValueMinter) returns ValueId
 	let indexConst = emitConst(module, block: block, value: index, ids: ids)
 	let actual = emitLoadByteIndexed(module, block: block, base: cstr, index: indexConst, ids: ids)
-	let expectedConst = emitConst(module, block: block, value: expected, ids: ids)
-	return emitCmp(module, block: block, a: actual, b: expectedConst, pred: StdCmpPred.eq, ids: ids)
+	return emitCompareWithConstant(module, block: block, value: actual, pred: StdCmpPred.eq, against: expected, ids: ids)
 end 'emitByteAtEquals'
 
 // ⭐ **WHETHER THE MONITOR MAY TAKE A PROCESSOR: 1 when `MAXON_PREEMPT` is exactly `off`, else 0.** The answer
@@ -3315,8 +3294,7 @@ function emitResolvePreemptSwitch(module StdModule, func IrFunction, cur IrBlock
 	module.setTerminator(cur, op: StdOp.condBranch(tooLong, thenBlockId: unreadable.id, elseBlockId: lengthOk.id))
 
 	let zero = emitConst(module, block: lengthOk, value: 0, ids: ids)
-	let unset = emitCmp(module, block: lengthOk, a: read.written, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(lengthOk, op: StdOp.condBranch(unset, thenBlockId: settled.id, elseBlockId: isSet.id))
+	emitBranchOnCompare(module, block: lengthOk, value: read.written, pred: StdCmpPred.eq, against: 0, whenTrue: settled, whenFalse: isSet, ids: ids)
 	lengthOk.branchEdges.push(BranchEdge.create(settled.id, argIds: argsOf(zero)))
 
 	let off = emitConst(module, block: isSet, value: 1, ids: ids)
@@ -3360,13 +3338,9 @@ function emitParseRequestedProcessorCount(module StdModule, func IrFunction, cur
 	leadIsDigit.branchEdges.push(BranchEdge.create(scanHdr.id, argIds: twoArgs(leadIndex, second: emptyAcc)))
 
 	let ch = emitLoadByteIndexed(module, block: scanHdr, base: cstr, index: indexId, ids: ids)
-	let terminator = emitConst(module, block: scanHdr, value: 0, ids: ids)
-	let atEnd = emitCmp(module, block: scanHdr, a: ch, b: terminator, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(scanHdr, op: StdOp.condBranch(atEnd, thenBlockId: ended.id, elseBlockId: scanDigit.id))
+	emitBranchOnCompare(module, block: scanHdr, value: ch, pred: StdCmpPred.eq, against: 0, whenTrue: ended, whenFalse: scanDigit, ids: ids)
 
-	let fewest = emitConst(module, block: ended, value: FewestRequestedProcessors as FullRangeInt, ids: ids)
-	let belowFewest = emitCmp(module, block: ended, a: accId, b: fewest, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(ended, op: StdOp.condBranch(belowFewest, thenBlockId: rejected.id, elseBlockId: accepted.id))
+	emitBranchOnCompare(module, block: ended, value: accId, pred: StdCmpPred.lt, against: FewestRequestedProcessors as FullRangeInt, whenTrue: rejected, whenFalse: accepted, ids: ids)
 	ended.branchEdges.push(BranchEdge.create(accepted.id, argIds: argsOf(accId)))
 
 	var scanStep = emitRequireDecimalDigit(module, func: func, block: scanDigit, ch: ch, rejected: rejected, ids: ids)
@@ -3380,9 +3354,7 @@ function emitParseRequestedProcessorCount(module StdModule, func IrFunction, cur
 
 	// The bound is tested after every digit: tested once at the end, a long enough run of digits wraps the
 	// 64-bit accumulator back into range and is taken as a count.
-	let most = emitConst(module, block: scanStep, value: MostRequestedProcessors as FullRangeInt, ids: ids)
-	let overflows = emitCmp(module, block: scanStep, a: nextAcc, b: most, pred: StdCmpPred.gt, ids: ids)
-	module.setTerminator(scanStep, op: StdOp.condBranch(overflows, thenBlockId: rejected.id, elseBlockId: scanHdr.id))
+	emitBranchOnCompare(module, block: scanStep, value: nextAcc, pred: StdCmpPred.gt, against: MostRequestedProcessors as FullRangeInt, whenTrue: rejected, whenFalse: scanHdr, ids: ids)
 	scanStep.branchEdges.push(BranchEdge.create(scanHdr.id, argIds: twoArgs(nextIndex, second: nextAcc)))
 end 'emitParseRequestedProcessorCount'
 
@@ -3393,13 +3365,9 @@ function emitRequireDecimalDigit(module StdModule, func IrFunction, block IrBloc
 	var notBelow = module.addBlock(func, label: b"decnotbelow", heat: BlockHeat.normal)
 	var isDigit = module.addBlock(func, label: b"decdigit", heat: BlockHeat.normal)
 
-	let asciiZero = emitConst(module, block: block, value: AsciiZeroDigit, ids: ids)
-	let below = emitCmp(module, block: block, a: ch, b: asciiZero, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(block, op: StdOp.condBranch(below, thenBlockId: rejected.id, elseBlockId: notBelow.id))
+	emitBranchOnCompare(module, block: block, value: ch, pred: StdCmpPred.lt, against: AsciiZeroDigit, whenTrue: rejected, whenFalse: notBelow, ids: ids)
 
-	let asciiNine = emitConst(module, block: notBelow, value: AsciiNineDigit, ids: ids)
-	let above = emitCmp(module, block: notBelow, a: ch, b: asciiNine, pred: StdCmpPred.gt, ids: ids)
-	module.setTerminator(notBelow, op: StdOp.condBranch(above, thenBlockId: rejected.id, elseBlockId: isDigit.id))
+	emitBranchOnCompare(module, block: notBelow, value: ch, pred: StdCmpPred.gt, against: AsciiNineDigit, whenTrue: rejected, whenFalse: isDigit, ids: ids)
 
 	return isDigit
 end 'emitRequireDecimalDigit'
@@ -3434,10 +3402,15 @@ end 'emitRunqPublishTail'
 
 // `1` if this CAS lost. `AtomicCasFailed` is the contract's own spelling of the answer (`StdDialect`), not a
 // literal 0 restated at each CAS.
-export function emitCasLost(module StdModule, block IrBlock, result ValueId, ids ValueMinter) returns ValueId
-	let failed = emitConst(module, block: block, value: AtomicCasFailed, ids: ids)
-	return emitCmp(module, block: block, a: result, b: failed, pred: StdCmpPred.eq, ids: ids)
+module function emitCasLost(module StdModule, block IrBlock, result ValueId, ids ValueMinter) returns ValueId
+	return emitCompareWithConstant(module, block: block, value: result, pred: StdCmpPred.eq, against: AtomicCasFailed, ids: ids)
 end 'emitCasLost'
+
+module function emitBranchOnCasLost(module StdModule, block IrBlock, result ValueId, lost IrBlock, won IrBlock, ids ValueMinter)
+	let lostFlag = emitCasLost(module, block: block, result: result, ids: ids)
+
+	module.setTerminator(block, op: StdOp.condBranch(lostFlag, thenBlockId: lost.id, elseBlockId: won.id))
+end 'emitBranchOnCasLost'
 
 // ⭐⭐ **IS THE GLOBAL RUN QUEUE EMPTY, OR HOLDING SOMETHING? — the ONE spelling of that peek, and the one
 // tier a machine with NO PROCESSOR can both see and reach.**
@@ -3455,8 +3428,7 @@ end 'emitCasLost'
 // `underSchedLock` note enumerates the unlocked readers of this word by name.
 function emitSchedGlobalQueueIs(module StdModule, block IrBlock, pred StdCmpPred, ids ValueMinter) returns ValueId
 	let globalHead = emitQueueLoadHead(module, block: block, ends: GtQueueEnds.globalLabels, ids: ids)
-	let noGlobalHead = emitConst(module, block: block, value: 0, ids: ids)
-	return emitCmp(module, block: block, a: globalHead, b: noGlobalHead, pred: pred, ids: ids)
+	return emitCompareWithConstant(module, block: block, value: globalHead, pred: pred, against: 0, ids: ids)
 end 'emitSchedGlobalQueueIs'
 
 // `1` when this processor's run queue compares by `pred` to EMPTY — `eq` asks *"is it empty?"* and `ne` *"does
@@ -3466,7 +3438,7 @@ end 'emitSchedGlobalQueueIs'
 function emitSchedRunqIs(module StdModule, block IrBlock, p ValueId, pred StdCmpPred, ids ValueMinter) returns ValueId
 	let empty = ids.mint()
 	module.appendOp(block, op: StdOp.call(empty, callee: SchedRunqEmptyName, args: argsOf(p)))
-	return emitCmp(module, block: block, a: empty, b: emitConst(module, block: block, value: SchedRunqIsEmpty, ids: ids), pred: pred, ids: ids)
+	return emitCompareWithConstant(module, block: block, value: empty, pred: pred, against: SchedRunqIsEmpty, ids: ids)
 end 'emitSchedRunqIs'
 
 // `__sched_runq_empty`'s YES, which every caller reaches through `emitSchedRunqIs` and none spells itself.
@@ -3575,8 +3547,7 @@ function buildSchedRunqPut(module StdModule)
 	module.setTerminator(slotPut, op: StdOp.condBranch(lostSlot, thenBlockId: slotPut.id, elseBlockId: slotKick.id))
 
 	// slotKick: an empty slot is the whole put; otherwise the thread it held takes the ring path below.
-	let slotWasEmpty = emitCmp(module, block: slotKick, a: oldNext, b: emitConst(module, block: slotKick, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(slotKick, op: StdOp.condBranch(slotWasEmpty, thenBlockId: slotOnly.id, elseBlockId: retry.id))
+	emitBranchOnCompare(module, block: slotKick, value: oldNext, pred: StdCmpPred.eq, against: 0, whenTrue: slotOnly, whenFalse: retry, ids: ids)
 	slotKick.branchEdges.push(BranchEdge.create(retry.id, argIds: argsOf(oldNext)))
 
 	module.setTerminator(slotOnly, op: StdOp.retVoid)
@@ -3588,9 +3559,7 @@ function buildSchedRunqPut(module StdModule)
 	let head = emitLoadAcquireField(module, block: retry, record: p, offset: POffRunqHead, ids: ids)
 	let tail = emitLoadAcquireField(module, block: retry, record: p, offset: POffRunqTail, ids: ids)
 	let queued = emitBin(module, block: retry, a: tail, b: head, opcode: StdBinOpcode.sub, ids: ids)
-	let capacity = emitConst(module, block: retry, value: RunqSlots, ids: ids)
-	let full = emitCmp(module, block: retry, a: queued, b: capacity, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(retry, op: StdOp.condBranch(full, thenBlockId: claim.id, elseBlockId: push.id))
+	emitBranchOnCompare(module, block: retry, value: queued, pred: StdCmpPred.ge, against: RunqSlots, whenTrue: claim, whenFalse: push, ids: ids)
 
 	// push: write the slot, THEN publish the tail. The order is the whole contract with a thief — the locked
 	// tail bump is a release, so a thief that sees the new tail sees the slot that tail describes.
@@ -3734,8 +3703,7 @@ function buildSchedRunqNext(module StdModule)
 	let p = 0
 
 	let next = emitLoadAcquireField(module, block: entry, record: p, offset: POffRunnext, ids: ids)
-	let noNext = emitCmp(module, block: entry, a: next, b: emitConst(module, block: entry, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(noNext, thenBlockId: emptyBlock.id, elseBlockId: take.id))
+	emitBranchOnCompare(module, block: entry, value: next, pred: StdCmpPred.eq, against: 0, whenTrue: emptyBlock, whenFalse: take, ids: ids)
 
 	let slotAddr = emitFieldAddr(module, block: take, record: p, offset: POffRunnext, ids: ids)
 	let taken = ids.mint()
@@ -3781,9 +3749,8 @@ function buildSchedRunqEmpty(module StdModule)
 	let tailMoved = emitCmp(module, block: loopHdr, a: tailAgain, b: tail, pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(loopHdr, op: StdOp.condBranch(tailMoved, thenBlockId: loopHdr.id, elseBlockId: settled.id))
 
-	let settledZero = emitConst(module, block: settled, value: 0, ids: ids)
 	let ringEmpty = emitCmp(module, block: settled, a: head, b: tail, pred: StdCmpPred.eq, ids: ids)
-	let slotEmpty = emitCmp(module, block: settled, a: next, b: settledZero, pred: StdCmpPred.eq, ids: ids)
+	let slotEmpty = emitCompareWithConstant(module, block: settled, value: next, pred: StdCmpPred.eq, against: 0, ids: ids)
 
 	// Both operands are `cmp` results, so they are 0 or 1 and a bitwise AND is the logical one.
 	module.setTerminator(settled, op: StdOp.ret(emitBin(module, block: settled, a: ringEmpty, b: slotEmpty, opcode: StdBinOpcode.bitAnd, ids: ids)))
@@ -3819,14 +3786,12 @@ function buildSchedDrainRunq(module StdModule)
 
 	let slotGt = ids.mint()
 	module.appendOp(slotPop, op: StdOp.call(slotGt, callee: SchedRunqNextName, args: argsOf(p)))
-	let slotDry = emitCmp(module, block: slotPop, a: slotGt, b: emitConst(module, block: slotPop, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(slotPop, op: StdOp.condBranch(slotDry, thenBlockId: ringPop.id, elseBlockId: moveIt.id))
+	emitBranchOnCompare(module, block: slotPop, value: slotGt, pred: StdCmpPred.eq, against: 0, whenTrue: ringPop, whenFalse: moveIt, ids: ids)
 	slotPop.branchEdges.push(BranchEdge.create(moveIt.id, argIds: argsOf(slotGt)))
 
 	let ringGt = ids.mint()
 	module.appendOp(ringPop, op: StdOp.call(ringGt, callee: SchedRunqGetName, args: argsOf(p)))
-	let ringDry = emitCmp(module, block: ringPop, a: ringGt, b: emitConst(module, block: ringPop, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(ringPop, op: StdOp.condBranch(ringDry, thenBlockId: doneBlock.id, elseBlockId: moveIt.id))
+	emitBranchOnCompare(module, block: ringPop, value: ringGt, pred: StdCmpPred.eq, against: 0, whenTrue: doneBlock, whenFalse: moveIt, ids: ids)
 	ringPop.branchEdges.push(BranchEdge.create(moveIt.id, argIds: argsOf(ringGt)))
 
 	emitSchedEnqueueLocked(module, block: moveIt, gt: draining, ids: ids)
@@ -3899,8 +3864,7 @@ function buildSchedSteal(module StdModule)
 
 	// `<= 0` and not `== 0`: a torn read can make `vLen` negative, and a negative count would run the copy
 	// loop zero times and then answer a slot nobody wrote. Both bad readings land on the same arm.
-	let nothing = emitCmp(module, block: grabHdr, a: grabCount, b: grabZero, pred: StdCmpPred.le, ids: ids)
-	module.setTerminator(grabHdr, op: StdOp.condBranch(nothing, thenBlockId: slotArm.id, elseBlockId: sized.id))
+	emitBranchOnCompare(module, block: grabHdr, value: grabCount, pred: StdCmpPred.le, against: 0, whenTrue: slotArm, whenFalse: sized, ids: ids)
 
 	// slotArm: the ring gave nothing. Go's `stealRunNextG` arm — only the last round asks, and an empty slot
 	// is the end of this victim.
@@ -3916,7 +3880,7 @@ function buildSchedSteal(module StdModule)
 	// shape this exists for is a thread that readies a peer into the slot and blocks an instant later: without
 	// the pause a thief takes the peer in that window and the pair is thrashed between processors for as long
 	// as it bounces. A victim NO machine holds cannot be about to run it, so there is nothing to wait for.
-	let victimRunning = emitCmp(module, block: slotBusy, a: emitLoadField(module, block: slotBusy, record: victim, offset: POffStatus, ids: ids), b: emitConst(module, block: slotBusy, value: PStatusActive, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let victimRunning = emitCompareWithConstant(module, block: slotBusy, value: emitLoadField(module, block: slotBusy, record: victim, offset: POffStatus, ids: ids), pred: StdCmpPred.eq, against: PStatusActive, ids: ids)
 	module.setTerminator(slotBusy, op: StdOp.condBranch(victimRunning, thenBlockId: slotBackoff.id, elseBlockId: slotTake.id))
 
 	_ = emitNetpoll(module, block: slotBackoff, verb: NetpollVerb.shortSleep, operands: argsOf(emitConst(module, block: slotBackoff, value: StealRunNextBackoffUs, ids: ids)), ids: ids)
@@ -3932,8 +3896,7 @@ function buildSchedSteal(module StdModule)
 
 	module.setTerminator(slotTook, op: StdOp.ret(vNext))
 
-	let grabCap = emitConst(module, block: sized, value: RunqHalfSlots, ids: ids)
-	let inconsistent = emitCmp(module, block: sized, a: grabCount, b: grabCap, pred: StdCmpPred.gt, ids: ids)
+	let inconsistent = emitCompareWithConstant(module, block: sized, value: grabCount, pred: StdCmpPred.gt, against: RunqHalfSlots, ids: ids)
 	let copyStart = emitConst(module, block: sized, value: 0, ids: ids)
 	let copyIndex = ids.mint()
 	copyHdr.blockArgs.push(IrBlockArg.create(copyIndex, argType: StdType.i64))
@@ -3972,9 +3935,7 @@ function buildSchedSteal(module StdModule)
 	let keptCount = emitBin(module, block: publish, a: grabCount, b: publishStep, opcode: StdBinOpcode.sub, ids: ids)
 	let answerCounter = emitBin(module, block: publish, a: ourTail, b: keptCount, opcode: StdBinOpcode.add, ids: ids)
 	let answerGt = emitLoadField(module, block: publish, record: emitRunqSlotAddr(module, block: publish, p: p, counter: answerCounter, ids: ids), offset: 0, ids: ids)
-	let publishZero = emitConst(module, block: publish, value: 0, ids: ids)
-	let nonePublished = emitCmp(module, block: publish, a: keptCount, b: publishZero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(publish, op: StdOp.condBranch(nonePublished, thenBlockId: answer.id, elseBlockId: publishTail.id))
+	emitBranchOnCompare(module, block: publish, value: keptCount, pred: StdCmpPred.eq, against: 0, whenTrue: answer, whenFalse: publishTail, ids: ids)
 
 	emitRunqPublishTail(module, block: publishTail, p: p, delta: keptCount, ids: ids)
 	module.setTerminator(publishTail, op: StdOp.branch(answer.id))
@@ -4901,13 +4862,11 @@ function buildSchedFindRunnable(module StdModule)
 	let tick = emitBin(module, block: entry, a: emitLoadField(module, block: entry, record: p, offset: POffSchedTick, ids: ids), b: tickStep, opcode: StdBinOpcode.add, ids: ids)
 	let interval = emitConst(module, block: entry, value: GtFairnessInterval, ids: ids)
 	let phase = emitUnsignedMod(module, block: entry, a: tick, b: interval, ids: ids)
-	let entryZero = emitConst(module, block: entry, value: 0, ids: ids)
 
 	// Every source but the slot starts a slice of its own. `entry` dominates all of them, so the constant is
 	// materialized once.
 	let freshSlice = emitConst(module, block: entry, value: SchedSliceFresh, ids: ids)
-	let atFairness = emitCmp(module, block: entry, a: phase, b: entryZero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(atFairness, thenBlockId: fairPeek.id, elseBlockId: localPop.id))
+	emitBranchOnCompare(module, block: entry, value: phase, pred: StdCmpPred.eq, against: 0, whenTrue: fairPeek, whenFalse: localPop, ids: ids)
 
 	// The unlocked peek before the lock — Go's `!sched.runq.empty()` guard, and safe because it decides only
 	// whether to LOOK: the locked dequeue behind it is what decides anything.
@@ -4915,9 +4874,7 @@ function buildSchedFindRunnable(module StdModule)
 	module.setTerminator(fairPeek, op: StdOp.condBranch(fairEmpty, thenBlockId: localPop.id, elseBlockId: fairTake.id))
 
 	let fairGt = emitSchedDequeueLocked(module, block: fairTake, ids: ids)
-	let fairTakeZero = emitConst(module, block: fairTake, value: 0, ids: ids)
-	let fairMissed = emitCmp(module, block: fairTake, a: fairGt, b: fairTakeZero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(fairTake, op: StdOp.condBranch(fairMissed, thenBlockId: localPop.id, elseBlockId: candidate.id))
+	emitBranchOnCompare(module, block: fairTake, value: fairGt, pred: StdCmpPred.eq, against: 0, whenTrue: localPop, whenFalse: candidate, ids: ids)
 	fairTake.branchEdges.push(BranchEdge.create(candidate.id, argIds: twoArgs(fairGt, second: freshSlice)))
 
 	// ⭐⭐ **THE `runnext` SLOT IS CONSULTED BEFORE THE RING — Go's `runqget`, whose first arm this is — AND IT
@@ -4935,7 +4892,7 @@ function buildSchedFindRunnable(module StdModule)
 	// ⚠ It is also the RETRY target after a reclaimed thread: the fairness tick has already been spent, and the
 	// global queue has already been consulted on the arm that led here.
 	let streak = emitLoadField(module, block: localPop, record: p, offset: POffRunnextStreak, ids: ids)
-	let streakSpent = emitCmp(module, block: localPop, a: streak, b: emitConst(module, block: localPop, value: RunnextStreakLimit, ids: ids), pred: StdCmpPred.ge, ids: ids)
+	let streakSpent = emitCompareWithConstant(module, block: localPop, value: streak, pred: StdCmpPred.ge, against: RunnextStreakLimit, ids: ids)
 	let ringWaiting = emitCmp(module, block: localPop, a: emitLoadAcquireField(module, block: localPop, record: p, offset: POffRunqTail, ids: ids), b: emitLoadAcquireField(module, block: localPop, record: p, offset: POffRunqHead, ids: ids), pred: StdCmpPred.ne, ids: ids)
 	let globalWaiting = emitSchedGlobalQueueIs(module, block: localPop, pred: StdCmpPred.ne, ids: ids)
 
@@ -4946,9 +4903,7 @@ function buildSchedFindRunnable(module StdModule)
 
 	let slotGt = ids.mint()
 	module.appendOp(localSlot, op: StdOp.call(slotGt, callee: SchedRunqNextName, args: argsOf(p)))
-	let slotZero = emitConst(module, block: localSlot, value: 0, ids: ids)
-	let slotEmpty = emitCmp(module, block: localSlot, a: slotGt, b: slotZero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(localSlot, op: StdOp.condBranch(slotEmpty, thenBlockId: localRing.id, elseBlockId: localTook.id))
+	emitBranchOnCompare(module, block: localSlot, value: slotGt, pred: StdCmpPred.eq, against: 0, whenTrue: localRing, whenFalse: localTook, ids: ids)
 
 	emitStoreField(module, block: localTook, record: p, offset: POffRunnextStreak, value: emitBin(module, block: localTook, a: streak, b: emitConst(module, block: localTook, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids))
 	module.setTerminator(localTook, op: StdOp.branch(candidate.id))
@@ -4958,9 +4913,7 @@ function buildSchedFindRunnable(module StdModule)
 	emitStoreField(module, block: localRing, record: p, offset: POffRunnextStreak, value: emitConst(module, block: localRing, value: 0, ids: ids))
 	let localGt = ids.mint()
 	module.appendOp(localRing, op: StdOp.call(localGt, callee: SchedRunqGetName, args: argsOf(p)))
-	let localZero = emitConst(module, block: localRing, value: 0, ids: ids)
-	let localEmpty = emitCmp(module, block: localRing, a: localGt, b: localZero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(localRing, op: StdOp.condBranch(localEmpty, thenBlockId: globalPeek.id, elseBlockId: candidate.id))
+	emitBranchOnCompare(module, block: localRing, value: localGt, pred: StdCmpPred.eq, against: 0, whenTrue: globalPeek, whenFalse: candidate, ids: ids)
 	localRing.branchEdges.push(BranchEdge.create(candidate.id, argIds: twoArgs(localGt, second: freshSlice)))
 
 	let globalEmpty = emitSchedGlobalQueueIs(module, block: globalPeek, pred: StdCmpPred.eq, ids: ids)
@@ -4984,8 +4937,7 @@ function buildSchedFindRunnable(module StdModule)
 	let perProc = ids.mint()
 	module.appendOp(batchStart, op: StdOp.div(perProc, lhs: queued, rhs: numProcs, signedness: IntegerSignedness.signed))
 	let share = emitBin(module, block: batchStart, a: perProc, b: emitConst(module, block: batchStart, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids)
-	let batchMax = emitConst(module, block: batchStart, value: GlobalBatchMax, ids: ids)
-	let shareOverMax = emitCmp(module, block: batchStart, a: share, b: batchMax, pred: StdCmpPred.gt, ids: ids)
+	let shareOverMax = emitCompareWithConstant(module, block: batchStart, value: share, pred: StdCmpPred.gt, against: GlobalBatchMax, ids: ids)
 	let batchQuota = ids.mint()
 	batchSized.blockArgs.push(IrBlockArg.create(batchQuota, argType: StdType.i64))
 	module.setTerminator(batchStart, op: StdOp.condBranch(shareOverMax, thenBlockId: batchCapMax.id, elseBlockId: batchSized.id))
@@ -5002,7 +4954,7 @@ function buildSchedFindRunnable(module StdModule)
 	// The ring takes one short of the quota, because the first thread was taken above and is the answer.
 	let batchCap = emitBin(module, block: batchSized, a: batchQuota, b: emitConst(module, block: batchSized, value: 1, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
 	let batchSizedZero = emitConst(module, block: batchSized, value: 0, ids: ids)
-	let batchNone = emitCmp(module, block: batchSized, a: batchFirst, b: batchSizedZero, pred: StdCmpPred.eq, ids: ids)
+	let batchNone = emitCompareWithConstant(module, block: batchSized, value: batchFirst, pred: StdCmpPred.eq, against: 0, ids: ids)
 	let batchCount = ids.mint()
 	batchHdr.blockArgs.push(IrBlockArg.create(batchCount, argType: StdType.i64))
 	let published = ids.mint()
@@ -5017,8 +4969,7 @@ function buildSchedFindRunnable(module StdModule)
 
 	let batchGt = ids.mint()
 	module.appendOp(batchTake, op: StdOp.call(batchGt, callee: GtDequeueName, args: ValueIdArray.create()))
-	let batchTakeZero = emitConst(module, block: batchTake, value: 0, ids: ids)
-	let batchDrained = emitCmp(module, block: batchTake, a: batchGt, b: batchTakeZero, pred: StdCmpPred.eq, ids: ids)
+	let batchDrained = emitCompareWithConstant(module, block: batchTake, value: batchGt, pred: StdCmpPred.eq, against: 0, ids: ids)
 	var batchStore = module.addBlock(func, label: b"frbatchstore", heat: BlockHeat.normal)
 	module.setTerminator(batchTake, op: StdOp.condBranch(batchDrained, thenBlockId: batchPublish.id, elseBlockId: batchStore.id))
 	batchTake.branchEdges.push(BranchEdge.create(batchPublish.id, argIds: argsOf(batchCount)))
@@ -5030,9 +4981,7 @@ function buildSchedFindRunnable(module StdModule)
 	module.setTerminator(batchStore, op: StdOp.branch(batchHdr.id))
 	batchStore.branchEdges.push(BranchEdge.create(batchHdr.id, argIds: argsOf(nextBatchCount)))
 
-	let publishZero = emitConst(module, block: batchPublish, value: 0, ids: ids)
-	let nothingQueued = emitCmp(module, block: batchPublish, a: published, b: publishZero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(batchPublish, op: StdOp.condBranch(nothingQueued, thenBlockId: batchUnlock.id, elseBlockId: batchTail.id))
+	emitBranchOnCompare(module, block: batchPublish, value: published, pred: StdCmpPred.eq, against: 0, whenTrue: batchUnlock, whenFalse: batchTail, ids: ids)
 
 	emitRunqPublishTail(module, block: batchTail, p: p, delta: published, ids: ids)
 	module.setTerminator(batchTail, op: StdOp.branch(batchUnlock.id))
@@ -5040,9 +4989,7 @@ function buildSchedFindRunnable(module StdModule)
 	// The release is inside the function rather than at each exit because several arms reach it, and one
 	// release block cannot have an arm added later that forgets it.
 	emitSchedLockLeave(module, block: batchUnlock, ids: ids)
-	let unlockZero = emitConst(module, block: batchUnlock, value: 0, ids: ids)
-	let batchFailed = emitCmp(module, block: batchUnlock, a: batchFirst, b: unlockZero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(batchUnlock, op: StdOp.condBranch(batchFailed, thenBlockId: spinGate.id, elseBlockId: candidate.id))
+	emitBranchOnCompare(module, block: batchUnlock, value: batchFirst, pred: StdCmpPred.eq, against: 0, whenTrue: spinGate, whenFalse: candidate, ids: ids)
 	batchUnlock.branchEdges.push(BranchEdge.create(candidate.id, argIds: twoArgs(batchFirst, second: freshSlice)))
 
 	// ⭐⭐⭐ **THE SPINNER CAP — Go's `findRunnable` (`proc.go:3528`): a machine steals only if it is already
@@ -5055,8 +5002,7 @@ function buildSchedFindRunnable(module StdModule)
 	//
 	// `spinGate` dominates the two blocks that enter the rounds, so one first-round index serves both.
 	let firstRound = emitConst(module, block: spinGate, value: 0, ids: ids)
-	let heldConst = emitConst(module, block: spinGate, value: MSpinningHeld, ids: ids)
-	let alreadySpinning = emitCmp(module, block: spinGate, a: emitLoadField(module, block: spinGate, record: spinner, offset: MOffSpinning, ids: ids), b: heldConst, pred: StdCmpPred.eq, ids: ids)
+	let alreadySpinning = emitCompareWithConstant(module, block: spinGate, value: emitLoadField(module, block: spinGate, record: spinner, offset: MOffSpinning, ids: ids), pred: StdCmpPred.eq, against: MSpinningHeld, ids: ids)
 	module.setTerminator(spinGate, op: StdOp.condBranch(alreadySpinning, thenBlockId: roundHdr.id, elseBlockId: spinCap.id))
 	spinGate.branchEdges.push(BranchEdge.create(roundHdr.id, argIds: argsOf(firstRound)))
 
@@ -5080,8 +5026,7 @@ function buildSchedFindRunnable(module StdModule)
 	let roundIndex = ids.mint()
 	roundHdr.blockArgs.push(IrBlockArg.create(roundIndex, argType: StdType.i64))
 
-	let roundCap = emitConst(module, block: roundHdr, value: StealRounds, ids: ids)
-	let roundsDone = emitCmp(module, block: roundHdr, a: roundIndex, b: roundCap, pred: StdCmpPred.ge, ids: ids)
+	let roundsDone = emitCompareWithConstant(module, block: roundHdr, value: roundIndex, pred: StdCmpPred.ge, against: StealRounds, ids: ids)
 	let giveUp = emitConst(module, block: roundHdr, value: 0, ids: ids)
 	let victimStart = emitUnsignedMod(module, block: roundHdr, a: emitXorshiftStep(module, block: roundHdr, p: p, ids: ids), b: numProcs, ids: ids)
 	let victimIndex = ids.mint()
@@ -5100,19 +5045,15 @@ function buildSchedFindRunnable(module StdModule)
 
 	// A P no M has claimed has an empty ring by construction, and reading it would be a load for nothing.
 	let victimStatus = emitLoadField(module, block: victimActive, record: victim, offset: POffStatus, ids: ids)
-	let activeConst = emitConst(module, block: victimActive, value: PStatusActive, ids: ids)
-	let victimIdle = emitCmp(module, block: victimActive, a: victimStatus, b: activeConst, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(victimActive, op: StdOp.condBranch(victimIdle, thenBlockId: victimNext.id, elseBlockId: victimTry.id))
+	emitBranchOnCompare(module, block: victimActive, value: victimStatus, pred: StdCmpPred.ne, against: PStatusActive, whenTrue: victimNext, whenFalse: victimTry, ids: ids)
 
 	// ⭐⭐ **A VICTIM'S `runnext` IS TAKEN ONLY ON THE LAST ROUND — Go's `i > 2` over four (`proc.go:3886`).**
 	// The slot holds the thread its own processor is most likely to run next, so a thief takes it only once
 	// every ring on the box has been found empty three times over.
-	let lastRound = emitCmp(module, block: victimTry, a: roundIndex, b: emitConst(module, block: victimTry, value: StealRunNextRound, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let lastRound = emitCompareWithConstant(module, block: victimTry, value: roundIndex, pred: StdCmpPred.eq, against: StealRunNextRound, ids: ids)
 	let stolenGt = ids.mint()
 	module.appendOp(victimTry, op: StdOp.call(stolenGt, callee: SchedStealName, args: threeArgs(p, second: victim, third: lastRound)))
-	let stealZero = emitConst(module, block: victimTry, value: 0, ids: ids)
-	let stealFailed = emitCmp(module, block: victimTry, a: stolenGt, b: stealZero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(victimTry, op: StdOp.condBranch(stealFailed, thenBlockId: victimNext.id, elseBlockId: stole.id))
+	emitBranchOnCompare(module, block: victimTry, value: stolenGt, pred: StdCmpPred.eq, against: 0, whenTrue: victimNext, whenFalse: stole, ids: ids)
 
 	// The counter `__Builtins.schedStealCount()` sums. A P counts its OWN steals and nothing else writes the
 	// word.
@@ -5198,8 +5139,7 @@ function buildSchedAnyWork(module StdModule)
 
 	let p = emitLoadProc(module, block: loopBody, index: index, ids: ids)
 	let status = emitLoadField(module, block: loopBody, record: p, offset: POffStatus, ids: ids)
-	let idle = emitCmp(module, block: loopBody, a: status, b: emitConst(module, block: loopBody, value: PStatusActive, ids: ids), pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(loopBody, op: StdOp.condBranch(idle, thenBlockId: loopNext.id, elseBlockId: ringTest.id))
+	emitBranchOnCompare(module, block: loopBody, value: status, pred: StdCmpPred.ne, against: PStatusActive, whenTrue: loopNext, whenFalse: ringTest, ids: ids)
 
 	let ringHasWork = emitSchedRunqIs(module, block: ringTest, p: p, pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(ringTest, op: StdOp.condBranch(ringHasWork, thenBlockId: found.id, elseBlockId: loopNext.id))
@@ -5348,9 +5288,7 @@ function buildGtFreePut(module StdModule)
 	// lock, never finds a list at `GtFreeLocalHigh` (`GtFreePutName`'s bound).
 	let held = emitLoadField(module, block: local, record: p, offset: POffFreeListLen, ids: ids)
 	let pushedLen = emitBin(module, block: local, a: held, b: emitConst(module, block: local, value: OneMore, ids: ids), opcode: StdBinOpcode.add, ids: ids)
-	let high = emitConst(module, block: local, value: GtFreeLocalHigh, ids: ids)
-	let fills = emitCmp(module, block: local, a: pushedLen, b: high, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(local, op: StdOp.condBranch(fills, thenBlockId: shed.id, elseBlockId: keep.id))
+	emitBranchOnCompare(module, block: local, value: pushedLen, pred: StdCmpPred.ge, against: GtFreeLocalHigh, whenTrue: shed, whenFalse: keep, ids: ids)
 
 	emitGtFreeLocalPush(module, block: keep, p: p, gt: gt, ids: ids)
 	module.setTerminator(keep, op: StdOp.branch(doneBlock.id))
@@ -5362,9 +5300,7 @@ function buildGtFreePut(module StdModule)
 	module.setTerminator(shed, op: StdOp.branch(shedHdr.id))
 
 	let remaining = emitLoadField(module, block: shedHdr, record: p, offset: POffFreeListLen, ids: ids)
-	let low = emitConst(module, block: shedHdr, value: GtFreeLocalLow, ids: ids)
-	let shedEnough = emitCmp(module, block: shedHdr, a: remaining, b: low, pred: StdCmpPred.le, ids: ids)
-	module.setTerminator(shedHdr, op: StdOp.condBranch(shedEnough, thenBlockId: shedDone.id, elseBlockId: shedBody.id))
+	emitBranchOnCompare(module, block: shedHdr, value: remaining, pred: StdCmpPred.le, against: GtFreeLocalLow, whenTrue: shedDone, whenFalse: shedBody, ids: ids)
 
 	let moving = emitGtFreeLocalPop(module, block: shedBody, p: p, ids: ids)
 	emitSchedListPush(module, block: shedBody, head: SchedListHead.lockedWord(SchedGtFreeHeadLabel), linkOffset: GtOffNext, node: moving, ids: ids)
@@ -5407,9 +5343,7 @@ function buildGtFreeGet(module StdModule)
 	let p = emitLoadCurrentPOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, haveProc: haveProc, noProc: noProc, ids: ids)
 
 	let localLen = emitLoadField(module, block: haveProc, record: p, offset: POffFreeListLen, ids: ids)
-	let noneHeld = emitConst(module, block: haveProc, value: 0, ids: ids)
-	let localEmpty = emitCmp(module, block: haveProc, a: localLen, b: noneHeld, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(haveProc, op: StdOp.condBranch(localEmpty, thenBlockId: refill.id, elseBlockId: localPop.id))
+	emitBranchOnCompare(module, block: haveProc, value: localLen, pred: StdCmpPred.eq, against: 0, whenTrue: refill, whenFalse: localPop, ids: ids)
 
 	// No unlocked peek at the global head goes in front of this acquire: an empty global list sends the get to
 	// the carve, which needs the lock anyway.
@@ -5420,9 +5354,7 @@ function buildGtFreeGet(module StdModule)
 	module.setTerminator(refill, op: StdOp.branch(refillHdr.id))
 	refill.branchEdges.push(BranchEdge.create(refillHdr.id, argIds: argsOf(noneMoved)))
 
-	let batch = emitConst(module, block: refillHdr, value: GtFreeLocalLow, ids: ids)
-	let batchMoved = emitCmp(module, block: refillHdr, a: moved, b: batch, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(refillHdr, op: StdOp.condBranch(batchMoved, thenBlockId: refillDone.id, elseBlockId: refillPop.id))
+	emitBranchOnCompare(module, block: refillHdr, value: moved, pred: StdCmpPred.ge, against: GtFreeLocalLow, whenTrue: refillDone, whenFalse: refillPop, ids: ids)
 
 	let popped = emitSchedListTakeHead(module, cur: refillPop, got: refillPush, none: refillDone, head: SchedListHead.lockedWord(SchedGtFreeHeadLabel), linkOffset: GtOffNext, ids: ids)
 	emitGtFreeLocalPush(module, block: refillPush, p: p, gt: popped, ids: ids)
@@ -5433,9 +5365,7 @@ function buildGtFreeGet(module StdModule)
 
 	// Still under the lock, so a global list that gave nothing reaches the carve without a second acquire.
 	let refilledLen = emitLoadField(module, block: refillDone, record: p, offset: POffFreeListLen, ids: ids)
-	let stillNone = emitConst(module, block: refillDone, value: 0, ids: ids)
-	let nothingRefilled = emitCmp(module, block: refillDone, a: refilledLen, b: stillNone, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(refillDone, op: StdOp.condBranch(nothingRefilled, thenBlockId: carve.id, elseBlockId: refilled.id))
+	emitBranchOnCompare(module, block: refillDone, value: refilledLen, pred: StdCmpPred.eq, against: 0, whenTrue: carve, whenFalse: refilled, ids: ids)
 
 	emitSchedLockLeave(module, block: refilled, ids: ids)
 	module.setTerminator(refilled, op: StdOp.branch(localPop.id))
@@ -5649,8 +5579,7 @@ function buildSchedParkWakeCount(module StdModule)
 	module.setTerminator(entry, op: StdOp.branch(loopHdr.id))
 	entry.branchEdges.push(BranchEdge.create(loopHdr.id, argIds: twoArgs(firstMachine, second: zero)))
 
-	let walked = emitCmp(module, block: loopHdr, a: cursor, b: emitConst(module, block: loopHdr, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(loopHdr, op: StdOp.condBranch(walked, thenBlockId: doneBlock.id, elseBlockId: loopBody.id))
+	emitBranchOnCompare(module, block: loopHdr, value: cursor, pred: StdCmpPred.eq, against: 0, whenTrue: doneBlock, whenFalse: loopBody, ids: ids)
 
 	let countedHere = emitLoadField(module, block: loopBody, record: cursor, offset: MOffParkWakes, ids: ids)
 	let runningTotal = emitBin(module, block: loopBody, a: total, b: countedHere, opcode: StdBinOpcode.add, ids: ids)
@@ -5738,8 +5667,7 @@ function buildSchedStartM(module StdModule, target Target)
 	// can look"* true, and it is only true of a machine the teardown has not already walked past.
 	emitSchedBranchOnShutdown(module, cur: entry, stopping: noProc, live: notStopping, ids: ids)
 
-	let entryZero = emitConst(module, block: notStopping, value: 0, ids: ids)
-	let nothingHanded = emitCmp(module, block: notStopping, a: handedProc, b: entryZero, pred: StdCmpPred.eq, ids: ids)
+	let nothingHanded = emitCompareWithConstant(module, block: notStopping, value: handedProc, pred: StdCmpPred.eq, against: 0, ids: ids)
 
 	// `haveProc` is the merge of the two ways to arrive holding a processor — handed one, or taken one — and
 	// carries it as its block arg. A handed processor is already `PStatusActive` (`__sched_handoffp` receives
@@ -5777,25 +5705,19 @@ function buildSchedStartM(module StdModule, target Target)
 	// Go's `mgetSpecific` before `mget`. A processor no machine has released yet names no `oldm`, and one
 	// whose last machine is busy — running, or inside a kernel call — is not on the list; both take the head.
 	let oldM = emitLoadField(module, block: haveProc, record: chosenProc, offset: POffOldM, ids: ids)
-	let noOldM = emitConst(module, block: haveProc, value: 0, ids: ids)
-	let neverReleased = emitCmp(module, block: haveProc, a: oldM, b: noOldM, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(haveProc, op: StdOp.condBranch(neverReleased, thenBlockId: takeHead.id, elseBlockId: askOldM.id))
+	emitBranchOnCompare(module, block: haveProc, value: oldM, pred: StdCmpPred.eq, against: 0, whenTrue: takeHead, whenFalse: askOldM, ids: ids)
 
 	let chosenMachine = ids.mint()
 	pickMachine.blockArgs.push(IrBlockArg.create(chosenMachine, argType: StdType.i64))
 	let oldMIdle = emitSchedMidleHolds(module, block: askOldM, m: oldM, ids: ids)
-	let notHeld = emitConst(module, block: askOldM, value: 0, ids: ids)
-	let oldMBusy = emitCmp(module, block: askOldM, a: oldMIdle, b: notHeld, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(askOldM, op: StdOp.condBranch(oldMBusy, thenBlockId: takeHead.id, elseBlockId: pickMachine.id))
+	emitBranchOnCompare(module, block: askOldM, value: oldMIdle, pred: StdCmpPred.eq, against: 0, whenTrue: takeHead, whenFalse: pickMachine, ids: ids)
 	askOldM.branchEdges.push(BranchEdge.create(pickMachine.id, argIds: argsOf(oldM)))
 
 	let idleHead = emitLoadGlobalWord(module, block: takeHead, label: SchedMidleLabel, ids: ids)
 	module.setTerminator(takeHead, op: StdOp.branch(pickMachine.id))
 	takeHead.branchEdges.push(BranchEdge.create(pickMachine.id, argIds: argsOf(idleHead)))
 
-	let pickZero = emitConst(module, block: pickMachine, value: 0, ids: ids)
-	let noMachine = emitCmp(module, block: pickMachine, a: chosenMachine, b: pickZero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(pickMachine, op: StdOp.condBranch(noMachine, thenBlockId: spawnIt.id, elseBlockId: wakeIt.id))
+	emitBranchOnCompare(module, block: pickMachine, value: chosenMachine, pred: StdCmpPred.eq, against: 0, whenTrue: spawnIt, whenFalse: wakeIt, ids: ids)
 
 	// ⭐⭐⭐ **THE PROCESSOR IS DELIVERED *INSIDE* THE CRITICAL SECTION AND THE SIGNAL IS SENT OUTSIDE IT, AND
 	// THAT SPLIT IS A CORRECTNESS ARGUMENT RATHER THAN A COST ONE.** `MOffNextP` is written under the same
@@ -5811,9 +5733,7 @@ function buildSchedStartM(module StdModule, target Target)
 	// that arrives before the machine reaches its `osWaitHandle` is not lost, and one that arrives after it
 	// has already collected `MOffNextP` on another wake is a harmless spurious one.
 	var unlinked = emitSchedMidleUnlinkLocked(module, func: func, cur: wakeIt, m: chosenMachine, ids: ids)
-	let unreserved = emitConst(module, block: unlinked, value: SchedStartMCredit.unreserved.rawValue, ids: ids)
-	let nothingToHand = emitCmp(module, block: unlinked, a: credit, b: unreserved, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(unlinked, op: StdOp.condBranch(nothingToHand, thenBlockId: deliver.id, elseBlockId: handOver.id))
+	emitBranchOnCompare(module, block: unlinked, value: credit, pred: StdCmpPred.eq, against: SchedStartMCredit.unreserved.rawValue, whenTrue: deliver, whenFalse: handOver, ids: ids)
 
 	_ = emitSchedSpinningTransition(module, block: handOver, m: chosenMachine, transition: SpinningTransition.handOverSpinning, ids: ids)
 	module.setTerminator(handOver, op: StdOp.branch(deliver.id))
@@ -5828,9 +5748,7 @@ function buildSchedStartM(module StdModule, target Target)
 	// ever created is still on the roster, so `__sched_mcount` is the number that exists; creating the one past
 	// `SchedMaxMachines` aborts rather than trying, for that constant's reason.
 	let machines = emitLoadGlobalWord(module, block: spawnIt, label: SchedMcountLabel, ids: ids)
-	let machineLimit = emitConst(module, block: spawnIt, value: SchedMaxMachines, ids: ids)
-	let atLimit = emitCmp(module, block: spawnIt, a: machines, b: machineLimit, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(spawnIt, op: StdOp.condBranch(atLimit, thenBlockId: tooManyMachines.id, elseBlockId: spawnStart.id))
+	emitBranchOnCompare(module, block: spawnIt, value: machines, pred: StdCmpPred.ge, against: SchedMaxMachines, whenTrue: tooManyMachines, whenFalse: spawnStart, ids: ids)
 	emitRuntimeAbort(module, func: func, block: tooManyMachines, abort: RuntimeAbort.schedulerThreadExhaustion, ids: ids)
 
 	// ⭐⭐⭐ **THE LOCK IS HELD ACROSS `osThreadCreate` DELIBERATELY.** `__sched_stop_workers` sets the shutdown
@@ -5856,9 +5774,7 @@ function buildSchedStartM(module StdModule, target Target)
 	module.appendOp(spawnStart, op: StdOp.funcAddr(entryPtr, funcName: SchedWorkerLoopName))
 	let threadHandle = ids.mint()
 	module.appendOp(spawnStart, op: StdOp.osThreadCreate(threadHandle, entryPtrId: entryPtr, argId: newMachine))
-	let spawnZero = emitConst(module, block: spawnStart, value: 0, ids: ids)
-	let threadFailed = emitCmp(module, block: spawnStart, a: threadHandle, b: spawnZero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(spawnStart, op: StdOp.condBranch(threadFailed, thenBlockId: spawnFailed.id, elseBlockId: spawnOk.id))
+	emitBranchOnCompare(module, block: spawnStart, value: threadHandle, pred: StdCmpPred.eq, against: 0, whenTrue: spawnFailed, whenFalse: spawnOk, ids: ids)
 
 	// ⭐ **THE HANDLE IS STORED AND THE ROSTER IS JOINED IN THAT ORDER, AND ONLY ON SUCCESS.** The roster is
 	// what the teardown joins by, so a machine reachable through it must already carry a joinable handle —
@@ -5927,9 +5843,7 @@ function emitSchedMidleRemoveLocked(module StdModule, func IrFunction, cur IrBlo
 	var stillIdle = module.addBlock(func, label: b"mrmonlist", heat: BlockHeat.normal)
 
 	let onList = emitSchedMidleHolds(module, block: cur, m: m, ids: ids)
-	let absent = emitConst(module, block: cur, value: 0, ids: ids)
-	let takenOff = emitCmp(module, block: cur, a: onList, b: absent, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(takenOff, thenBlockId: cont.id, elseBlockId: stillIdle.id))
+	emitBranchOnCompare(module, block: cur, value: onList, pred: StdCmpPred.eq, against: 0, whenTrue: cont, whenFalse: stillIdle, ids: ids)
 
 	var unlinked = emitSchedMidleUnlinkLocked(module, func: func, cur: stillIdle, m: m, ids: ids)
 	module.setTerminator(unlinked, op: StdOp.branch(cont.id))
@@ -5940,13 +5854,11 @@ export function emitSchedStartLockedMachine(module StdModule, func IrFunction, c
 	var giveIt = module.addBlock(func, label: b"slmgive", heat: BlockHeat.cold)
 
 	let waiting = emitLoadField(module, block: cur, record: owner, offset: MOffLockedPark, ids: ids)
-	let notWaiting = emitCmp(module, block: cur, a: waiting, b: emitConst(module, block: cur, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(notWaiting, thenBlockId: declined.id, elseBlockId: examineProc.id))
+	emitBranchOnCompare(module, block: cur, value: waiting, pred: StdCmpPred.eq, against: 0, whenTrue: declined, whenFalse: examineProc, ids: ids)
 
 	let m = emitLoadCurrentM(module, block: examineProc, ids: ids)
 	let p = emitLoadField(module, block: examineProc, record: m, offset: MOffCurrentP, ids: ids)
-	let holdsNone = emitCmp(module, block: examineProc, a: p, b: emitConst(module, block: examineProc, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(examineProc, op: StdOp.condBranch(holdsNone, thenBlockId: declined.id, elseBlockId: giveIt.id))
+	emitBranchOnCompare(module, block: examineProc, value: p, pred: StdCmpPred.eq, against: 0, whenTrue: declined, whenFalse: giveIt, ids: ids)
 
 	let nobody = emitConst(module, block: giveIt, value: 0, ids: ids)
 	emitStoreField(module, block: giveIt, record: owner, offset: MOffLockedStrand, value: strand)
@@ -5969,12 +5881,10 @@ export function emitSchedHandProcessorToOwner(module StdModule, func IrFunction,
 
 	let m = emitLoadCurrentM(module, block: cur, ids: ids)
 	let p = emitLoadField(module, block: cur, record: m, offset: MOffCurrentP, ids: ids)
-	let holdsNone = emitCmp(module, block: cur, a: p, b: emitConst(module, block: cur, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(holdsNone, thenBlockId: keepIt.id, elseBlockId: examineOwner.id))
+	emitBranchOnCompare(module, block: cur, value: p, pred: StdCmpPred.eq, against: 0, whenTrue: keepIt, whenFalse: examineOwner, ids: ids)
 
 	let onList = emitSchedMidleHolds(module, block: examineOwner, m: owner, ids: ids)
-	let absent = emitCmp(module, block: examineOwner, a: onList, b: emitConst(module, block: examineOwner, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(examineOwner, op: StdOp.condBranch(absent, thenBlockId: drainIt.id, elseBlockId: giveIt.id))
+	emitBranchOnCompare(module, block: examineOwner, value: onList, pred: StdCmpPred.eq, against: 0, whenTrue: drainIt, whenFalse: giveIt, ids: ids)
 
 	var unlinked = emitSchedMidleUnlinkLocked(module, func: func, cur: giveIt, m: owner, ids: ids)
 	let nobody = emitConst(module, block: unlinked, value: 0, ids: ids)
@@ -6065,7 +5975,7 @@ end 'emitSchedEnterPhaseLocked'
 // only once there is a drain to signal.
 export function emitSchedMainHasCompleted(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	let running = emitSchedPhaseIs(module, block: block, phase: emitLoadAcquireGlobalWord(module, block: block, label: SchedPhaseLabel, ids: ids), want: SchedPhase.mainRunning, ids: ids)
-	return emitCmp(module, block: block, a: running, b: emitConst(module, block: block, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	return emitCompareWithConstant(module, block: block, value: running, pred: StdCmpPred.eq, against: 0, ids: ids)
 end 'emitSchedMainHasCompleted'
 
 export function emitSchedDrainIsStuck(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
@@ -6074,7 +5984,7 @@ end 'emitSchedDrainIsStuck'
 
 // 1 when the loaded phase word `phase` is `want`, else 0.
 function emitSchedPhaseIs(module StdModule, block IrBlock, phase ValueId, want SchedPhase, ids ValueMinter) returns ValueId
-	return emitCmp(module, block: block, a: phase, b: emitConst(module, block: block, value: want.rawValue, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	return emitCompareWithConstant(module, block: block, value: phase, pred: StdCmpPred.eq, against: want.rawValue, ids: ids)
 end 'emitSchedPhaseIs'
 
 // ⭐⭐ **WHAT ENDS A LOOP**, with the one value the main machine's test needs.
@@ -6135,10 +6045,8 @@ function buildSchedCheckdead(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let m = 0
 
-	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 	let running = emitSchedMachinesRunning(module, block: entry, ids: ids)
-	let someoneRunning = emitCmp(module, block: entry, a: running, b: zero, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(someoneRunning, thenBlockId: doneBlock.id, elseBlockId: nobodyRunning.id))
+	emitBranchOnCompare(module, block: entry, value: running, pred: StdCmpPred.ne, against: 0, whenTrue: doneBlock, whenFalse: nobodyRunning, ids: ids)
 
 	let somethingPending = emitGtStoresPending(module, block: nobodyRunning, ids: ids)
 	module.setTerminator(nobodyRunning, op: StdOp.condBranch(somethingPending, thenBlockId: doneBlock.id, elseBlockId: nothingPending.id))
@@ -6151,8 +6059,7 @@ function buildSchedCheckdead(module StdModule)
 	// deadlock: it is readied with the stuck word set, and this machine's own event is set so the wait
 	// it is about to enter returns to run it.
 	let quiescer = emitLoadAcquireGlobalWord(module, block: mainNeverFinishes, label: GtQuiesceWaiterLabel, ids: ids)
-	let aQuiescerWaits = emitCmp(module, block: mainNeverFinishes, a: quiescer, b: emitConst(module, block: mainNeverFinishes, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(mainNeverFinishes, op: StdOp.condBranch(aQuiescerWaits, thenBlockId: quiescerGivesUp.id, elseBlockId: deadlocked.id))
+	emitBranchOnCompare(module, block: mainNeverFinishes, value: quiescer, pred: StdCmpPred.ne, against: 0, whenTrue: quiescerGivesUp, whenFalse: deadlocked, ids: ids)
 
 	let vacated = emitBin(module, block: quiescerGivesUp, a: emitConst(module, block: quiescerGivesUp, value: 0, ids: ids), b: quiescer, opcode: StdBinOpcode.sub, ids: ids)
 	_ = emitGlobalAccumulate(module, block: quiescerGivesUp, label: GtQuiesceWaiterLabel, delta: vacated, multiM: true, ids: ids)
@@ -6176,8 +6083,7 @@ end 'buildSchedCheckdead'
 function emitSchedRunStrand(module StdModule, block IrBlock, m ValueId, g ValueId, handedOff IrBlock, cont IrBlock, ids ValueMinter)
 	let ranStrand = ids.mint()
 	module.appendOp(block, op: StdOp.call(ranStrand, callee: GtRunStrandName, args: twoArgs(m, second: g)))
-	let strandGaveItAway = emitCmp(module, block: block, a: ranStrand, b: emitConst(module, block: block, value: GtProcessorHandedOff, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(block, op: StdOp.condBranch(strandGaveItAway, thenBlockId: handedOff.id, elseBlockId: cont.id))
+	emitBranchOnCompare(module, block: block, value: ranStrand, pred: StdCmpPred.eq, against: GtProcessorHandedOff, whenTrue: handedOff, whenFalse: cont, ids: ids)
 end 'emitSchedRunStrand'
 
 // ⭐⭐⭐ **A MACHINE's SCHEDULER LOOP — Go's `schedule()`.** Fire what is due, search, run the strand whose
@@ -6269,8 +6175,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	emitSchedLoopExitBranch(module, func: func, cur: loopTop, leave: leave, exitBlock: exitBlock, cont: lockedCheck, holdsLock: false, ids: ids)
 
 	let lockedGt = emitLoadField(module, block: lockedCheck, record: m, offset: MOffLockedGt, ids: ids)
-	let unlockedMachine = emitCmp(module, block: lockedCheck, a: lockedGt, b: emitConst(module, block: lockedCheck, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(lockedCheck, op: StdOp.condBranch(unlockedMachine, thenBlockId: checkTimers.id, elseBlockId: lockedRelease.id))
+	emitBranchOnCompare(module, block: lockedCheck, value: lockedGt, pred: StdCmpPred.eq, against: 0, whenTrue: checkTimers, whenFalse: lockedRelease, ids: ids)
 
 	_ = emitSchedSpinningTransition(module, block: lockedRelease, m: m, transition: SpinningTransition.stopSpinning, ids: ids)
 	emitSchedLockEnter(module, block: lockedRelease, ids: ids)
@@ -6278,8 +6183,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	emitStoreField(module, block: lockedRelease, record: m, offset: MOffLockedPark, value: emitConst(module, block: lockedRelease, value: MLockedParkWaiting, ids: ids))
 	emitStoreField(module, block: lockedRelease, record: m, offset: MOffCurrentP, value: emitConst(module, block: lockedRelease, value: 0, ids: ids))
 	emitSchedLockLeave(module, block: lockedRelease, ids: ids)
-	let holdsNoProc = emitCmp(module, block: lockedRelease, a: lockedProc, b: emitConst(module, block: lockedRelease, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(lockedRelease, op: StdOp.condBranch(holdsNoProc, thenBlockId: lockedWait.id, elseBlockId: lockedHandOff.id))
+	emitBranchOnCompare(module, block: lockedRelease, value: lockedProc, pred: StdCmpPred.eq, against: 0, whenTrue: lockedWait, whenFalse: lockedHandOff, ids: ids)
 
 	emitStoreField(module, block: lockedHandOff, record: lockedProc, offset: POffM, value: emitConst(module, block: lockedHandOff, value: 0, ids: ids))
 	module.appendOp(lockedHandOff, op: StdOp.call(ids.mint(), callee: SchedHandoffPName, args: argsOf(lockedProc)))
@@ -6294,8 +6198,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	let lockedGiven = emitLoadField(module, block: lockedWoke, record: m, offset: MOffNextP, ids: ids)
 	emitStoreField(module, block: lockedWoke, record: m, offset: MOffNextP, value: emitConst(module, block: lockedWoke, value: 0, ids: ids))
 	emitSchedLockLeave(module, block: lockedWoke, ids: ids)
-	let gotNothing = emitCmp(module, block: lockedWoke, a: lockedGiven, b: emitConst(module, block: lockedWoke, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(lockedWoke, op: StdOp.condBranch(gotNothing, thenBlockId: lockedStopTest.id, elseBlockId: lockedAdopt.id))
+	emitBranchOnCompare(module, block: lockedWoke, value: lockedGiven, pred: StdCmpPred.eq, against: 0, whenTrue: lockedStopTest, whenFalse: lockedAdopt, ids: ids)
 
 	emitSchedLoopExitBranch(module, func: func, cur: lockedStopTest, leave: leave, exitBlock: exitBlock, cont: lockedWait, holdsLock: false, ids: ids)
 
@@ -6304,8 +6207,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 
 	let lockedStrand = emitLoadField(module, block: lockedRun, record: m, offset: MOffLockedStrand, ids: ids)
 	emitStoreField(module, block: lockedRun, record: m, offset: MOffLockedStrand, value: emitConst(module, block: lockedRun, value: 0, ids: ids))
-	let noStrand = emitCmp(module, block: lockedRun, a: lockedStrand, b: emitConst(module, block: lockedRun, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(lockedRun, op: StdOp.condBranch(noStrand, thenBlockId: loopTop.id, elseBlockId: lockedStrandRun.id))
+	emitBranchOnCompare(module, block: lockedRun, value: lockedStrand, pred: StdCmpPred.eq, against: 0, whenTrue: loopTop, whenFalse: lockedStrandRun, ids: ids)
 
 	emitSchedRunStrand(module, block: lockedStrandRun, m: m, g: lockedStrand, handedOff: handedOffProc, cont: loopTop, ids: ids)
 
@@ -6331,9 +6233,8 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	// when a waker handed it a credit before signalling it. `wfound` and `wpark` are the search's two exits and
 	// both release whatever credit the machine holds; `SchedSpinningLabel` carries what a leaked one costs.
 	let g = emitSchedFindRunnable(module, block: dequeue, m: m, ids: ids)
-	let empty = emitCmp(module, block: dequeue, a: g, b: emitConst(module, block: dequeue, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	let gaveItAway = emitCmp(module, block: dequeue, a: g, b: emitConst(module, block: dequeue, value: GtProcessorHandedOff, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(dequeue, op: StdOp.condBranch(gaveItAway, thenBlockId: handedOffProc.id, elseBlockId: sortWork.id))
+	let empty = emitCompareWithConstant(module, block: dequeue, value: g, pred: StdCmpPred.eq, against: 0, ids: ids)
+	emitBranchOnCompare(module, block: dequeue, value: g, pred: StdCmpPred.eq, against: GtProcessorHandedOff, whenTrue: handedOffProc, whenFalse: sortWork, ids: ids)
 	module.setTerminator(sortWork, op: StdOp.condBranch(empty, thenBlockId: idlePoll.id, elseBlockId: foundWork.id))
 
 	_ = emitSchedSpinningTransition(module, block: handedOffProc, m: m, transition: SpinningTransition.stopSpinning, ids: ids)
@@ -6346,7 +6247,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	// woken for. `emitSchedHandOnTheLooking` carries the re-check.
 	let wasSpinning = emitSchedSpinningTransition(module, block: foundWork, m: m, transition: SpinningTransition.stopSpinning, ids: ids)
 	let heldNoCredit = emitCasLost(module, block: foundWork, result: wasSpinning, ids: ids)
-	let owesNothing = emitCmp(module, block: foundWork, a: owed, b: emitConst(module, block: foundWork, value: WakeDebtNone, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let owesNothing = emitCompareWithConstant(module, block: foundWork, value: owed, pred: StdCmpPred.eq, against: WakeDebtNone, ids: ids)
 	let nothingSkipped = emitBin(module, block: foundWork, a: heldNoCredit, b: owesNothing, opcode: StdBinOpcode.bitAnd, ids: ids)
 	emitSchedHandOnTheLooking(module, func: func, cur: foundWork, nothingSkipped: nothingSkipped, cont: haveWork, checkLabel: b"wrecheck", wakeLabel: b"wwakemore", pollerLabel: b"wwakepoller", ids: ids)
 
@@ -6365,8 +6266,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	let idleDebt = ids.mint()
 	idleFire.blockArgs.push(IrBlockArg.create(idleDebt, argType: StdType.i64))
 	let firedAny = emitSchedAnyRunnable(module, block: idleFire, p: emitLoadField(module, block: idleFire, record: m, offset: MOffCurrentP, ids: ids), ids: ids)
-	let firedNone = emitCmp(module, block: idleFire, a: firedAny, b: emitConst(module, block: idleFire, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(idleFire, op: StdOp.condBranch(firedNone, thenBlockId: park.id, elseBlockId: dequeue.id))
+	emitBranchOnCompare(module, block: idleFire, value: firedAny, pred: StdCmpPred.eq, against: 0, whenTrue: park, whenFalse: dequeue, ids: ids)
 	idleFire.branchEdges.push(BranchEdge.create(dequeue.id, argIds: argsOf(idleDebt)))
 
 	// ==================================================================================================
@@ -6409,8 +6309,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	// every raise is made under, and a raiser that comes after this section finds the processor this machine
 	// releases idle, so it has nothing to raise.
 	let needed = emitLoadGlobalWord(module, block: unspunPark, label: SchedNeedSpinningLabel, ids: ids)
-	let isNeeded = emitCmp(module, block: unspunPark, a: needed, b: emitConst(module, block: unspunPark, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(unspunPark, op: StdOp.condBranch(isNeeded, thenBlockId: abandonPark.id, elseBlockId: parkDrain.id))
+	emitBranchOnCompare(module, block: unspunPark, value: needed, pred: StdCmpPred.ne, against: 0, whenTrue: abandonPark, whenFalse: parkDrain, ids: ids)
 
 	_ = emitSchedSpinningTransition(module, block: abandonPark, m: m, transition: SpinningTransition.becomeSpinning, ids: ids)
 	emitSchedLockLeave(module, block: abandonPark, ids: ids)
@@ -6436,8 +6335,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	// took it first.
 	let workAnywhere = ids.mint()
 	module.appendOp(released, op: StdOp.call(workAnywhere, callee: SchedAnyWorkName, args: ValueIdArray.create()))
-	let nowhere = emitCmp(module, block: released, a: workAnywhere, b: emitConst(module, block: released, value: SchedNoWorkFound, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(released, op: StdOp.condBranch(nowhere, thenBlockId: parkCheck.id, elseBlockId: parkRegain.id))
+	emitBranchOnCompare(module, block: released, value: workAnywhere, pred: StdCmpPred.eq, against: SchedNoWorkFound, whenTrue: parkCheck, whenFalse: parkRegain, ids: ids)
 
 	// ⭐⭐⭐ **THE FINAL LOOK: THE GLOBAL QUEUE.** Every road here arrives holding the lock and holding no
 	// processor, which is this block's whole precondition: a machine that has just released its processor
@@ -6455,8 +6353,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	// `__sched_find_runnable`'s global-batch arm takes what this read sees, so a positive answer always makes
 	// progress.
 	let anythingLeft = emitSchedGlobalQueueIs(module, block: parkCheck, pred: StdCmpPred.ne, ids: ids)
-	let nothingLeft = emitCmp(module, block: parkCheck, a: anythingLeft, b: emitConst(module, block: parkCheck, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(parkCheck, op: StdOp.condBranch(nothingLeft, thenBlockId: parkStopTest.id, elseBlockId: parkRegain.id))
+	emitBranchOnCompare(module, block: parkCheck, value: anythingLeft, pred: StdCmpPred.eq, against: 0, whenTrue: parkStopTest, whenFalse: parkRegain, ids: ids)
 
 	// There IS work. Take a processor back and go round again — Go's `checkRunqsNoP` arm. ⚠ **A failure here
 	// is not a contradiction and must not park us in a special way**: it means every processor is now held,
@@ -6492,8 +6389,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	module.setTerminator(idleTail, op: StdOp.condBranch(storesPending, thenBlockId: claimPoller.id, elseBlockId: parkJoin.id))
 
 	let lastPoll = emitLoadAcquireGlobalWord(module, block: claimPoller, label: SchedLastPollLabel, ids: ids)
-	let somebodyPolls = emitCmp(module, block: claimPoller, a: lastPoll, b: emitConst(module, block: claimPoller, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(claimPoller, op: StdOp.condBranch(somebodyPolls, thenBlockId: breakCheck.id, elseBlockId: pollDeadline.id))
+	emitBranchOnCompare(module, block: claimPoller, value: lastPoll, pred: StdCmpPred.eq, against: 0, whenTrue: breakCheck, whenFalse: pollDeadline, ids: ids)
 
 	// This machine is the poller. The deadline arrives as `wpolldeadline`'s own block argument once it is known.
 	let deadline = ids.mint()
@@ -6578,8 +6474,7 @@ function buildSchedLoop(module StdModule, role SchedLoopRole, target Target)
 	emitSchedMidleRemoveLocked(module, func: func, cur: afterWait, m: m, cont: taken, ids: ids)
 
 	// Handed nothing: back round the final look, holding the lock and no processor — its precondition.
-	let nothingGiven = emitCmp(module, block: taken, a: givenProc, b: emitConst(module, block: taken, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(taken, op: StdOp.condBranch(nothingGiven, thenBlockId: parkCheck.id, elseBlockId: adoptGiven.id))
+	emitBranchOnCompare(module, block: taken, value: givenProc, pred: StdCmpPred.eq, against: 0, whenTrue: parkCheck, whenFalse: adoptGiven, ids: ids)
 
 	emitSchedLockLeave(module, block: adoptGiven, ids: ids)
 	emitSchedAdoptProc(module, block: adoptGiven, m: m, p: givenProc)
@@ -6600,8 +6495,7 @@ function emitSchedMainMachineEntry(module StdModule, func IrFunction, entry IrBl
 	var enterIdle = module.addBlock(func, label: b"wentryidle", heat: BlockHeat.normal)
 
 	let p = emitLoadField(module, block: entry, record: m, offset: MOffCurrentP, ids: ids)
-	let holdsNone = emitCmp(module, block: entry, a: p, b: emitConst(module, block: entry, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(holdsNone, thenBlockId: enterIdle.id, elseBlockId: holdingProc.id))
+	emitBranchOnCompare(module, block: entry, value: p, pred: StdCmpPred.eq, against: 0, whenTrue: enterIdle, whenFalse: holdingProc, ids: ids)
 
 	emitSchedLockEnter(module, block: enterIdle, ids: ids)
 	module.setTerminator(enterIdle, op: StdOp.branch(noProc.id))
@@ -6632,8 +6526,7 @@ function emitSchedHandOnTheLooking(module StdModule, func IrFunction, cur IrBloc
 
 	let workRemains = ids.mint()
 	module.appendOp(check, op: StdOp.call(workRemains, callee: SchedAnyWorkName, args: ValueIdArray.create()))
-	let workLeft = emitCmp(module, block: check, a: workRemains, b: emitConst(module, block: check, value: SchedNoWorkFound, ids: ids), pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(check, op: StdOp.condBranch(workLeft, thenBlockId: wake.id, elseBlockId: poller.id))
+	emitBranchOnCompare(module, block: check, value: workRemains, pred: StdCmpPred.ne, against: SchedNoWorkFound, whenTrue: wake, whenFalse: poller, ids: ids)
 
 	emitSchedWakeAnIdleM(module, block: wake, ids: ids)
 	module.setTerminator(wake, op: StdOp.branch(cont.id))
@@ -6642,12 +6535,15 @@ function emitSchedHandOnTheLooking(module StdModule, func IrFunction, cur IrBloc
 	module.setTerminator(poller, op: StdOp.branch(cont.id))
 end 'emitSchedHandOnTheLooking'
 
+function emitSchedNobodyPolls(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+	return emitCompareWithConstant(module, block: block, value: emitLoadAcquireGlobalWord(module, block: block, label: SchedLastPollLabel, ids: ids), pred: StdCmpPred.ne, against: 0, ids: ids)
+end 'emitSchedNobodyPolls'
+
 function emitSchedPollerOwed(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
-	let zero = emitConst(module, block: block, value: 0, ids: ids)
-	let timerPending = emitCmp(module, block: block, a: emitGtLoadTimerWhen(module, block: block, ids: ids), b: emitConst(module, block: block, value: TimerWhenEmpty, ids: ids), pred: StdCmpPred.ne, ids: ids)
-	let sourcePending = emitCmp(module, block: block, a: emitLoadAcquireGlobalWord(module, block: block, label: NetpollWaitersLabel, ids: ids), b: zero, pred: StdCmpPred.ne, ids: ids)
+	let timerPending = emitCompareWithConstant(module, block: block, value: emitGtLoadTimerWhen(module, block: block, ids: ids), pred: StdCmpPred.ne, against: TimerWhenEmpty, ids: ids)
+	let sourcePending = emitCompareWithConstant(module, block: block, value: emitLoadAcquireGlobalWord(module, block: block, label: NetpollWaitersLabel, ids: ids), pred: StdCmpPred.ne, against: 0, ids: ids)
 	let pending = emitBin(module, block: block, a: timerPending, b: sourcePending, opcode: StdBinOpcode.bitOr, ids: ids)
-	let nobodyPolls = emitCmp(module, block: block, a: emitLoadAcquireGlobalWord(module, block: block, label: SchedLastPollLabel, ids: ids), b: zero, pred: StdCmpPred.ne, ids: ids)
+	let nobodyPolls = emitSchedNobodyPolls(module, block: block, ids: ids)
 	return emitBin(module, block: block, a: pending, b: nobodyPolls, opcode: StdBinOpcode.bitAnd, ids: ids)
 end 'emitSchedPollerOwed'
 
@@ -6751,18 +6647,18 @@ end 'emitSchedLoopExitTest'
 function emitSchedMainLoopUntilMet(module StdModule, block IrBlock, until ValueId, underTheLock bool, ids ValueMinter) returns ValueId
 	let phase = emitLoadAcquireGlobalWord(module, block: block, label: SchedPhaseLabel, ids: ids)
 
-	let mainDone = emitCmp(module, block: block, a: emitSchedPhaseIs(module, block: block, phase: phase, want: SchedPhase.mainRunning, ids: ids), b: emitConst(module, block: block, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	let awaitingMainOnly = emitCmp(module, block: block, a: until, b: emitConst(module, block: block, value: SchedMainLoopUntil.mainCompleted.rawValue, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let mainDone = emitCompareWithConstant(module, block: block, value: emitSchedPhaseIs(module, block: block, phase: phase, want: SchedPhase.mainRunning, ids: ids), pred: StdCmpPred.eq, against: 0, ids: ids)
+	let awaitingMainOnly = emitCompareWithConstant(module, block: block, value: until, pred: StdCmpPred.eq, against: SchedMainLoopUntil.mainCompleted.rawValue, ids: ids)
 
 	if not underTheLock 'mainCompletionOnly'
 		return emitBin(module, block: block, a: awaitingMainOnly, b: mainDone, opcode: StdBinOpcode.bitAnd, ids: ids)
 	end 'mainCompletionOnly'
 
-	let nothingOwned = emitCmp(module, block: block, a: emitLoadGlobalWord(module, block: block, label: GtLiveCountLabel, ids: ids), b: emitConst(module, block: block, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let nothingOwned = emitCompareWithConstant(module, block: block, value: emitLoadGlobalWord(module, block: block, label: GtLiveCountLabel, ids: ids), pred: StdCmpPred.eq, against: 0, ids: ids)
 	let isStuck = emitSchedPhaseIs(module, block: block, phase: phase, want: SchedPhase.stuck, ids: ids)
 	let anyWork = ids.mint()
 	module.appendOp(block, op: StdOp.call(anyWork, callee: SchedAnyWorkName, args: ValueIdArray.create()))
-	let nothingRunnable = emitCmp(module, block: block, a: anyWork, b: emitConst(module, block: block, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let nothingRunnable = emitCompareWithConstant(module, block: block, value: anyWork, pred: StdCmpPred.eq, against: 0, ids: ids)
 
 	// ⚠ **AND NOTHING PARKED, BECAUSE A RENOUNCED THREAD PARKS AGAIN ON ITS WAY OUT.** A dropped reader's
 	// unwinding drops its socket, and `__ms_close` opens with an I/O yield — so the thread is briefly on the
@@ -6770,7 +6666,7 @@ function emitSchedMainLoopUntilMet(module StdModule, block IrBlock, until ValueI
 	// MEASURED: exit 101 without this term and 0 with it. A service's mailbox park is on none of these stores,
 	// so a parked service still does not hold the exit open.
 	let stillParked = emitGtStoresPending(module, block: block, ids: ids)
-	let nothingPending = emitCmp(module, block: block, a: stillParked, b: emitConst(module, block: block, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let nothingPending = emitCompareWithConstant(module, block: block, value: stillParked, pred: StdCmpPred.eq, against: 0, ids: ids)
 	let quiet = emitBin(module, block: block, a: nothingRunnable, b: nothingPending, opcode: StdBinOpcode.bitAnd, ids: ids)
 
 	// ⛔⛔⛔ **AND NO OTHER MACHINE IS HOLDING A GREEN THREAD — THE ONE TERM THAT SEES A THREAD MID-FLIGHT.**
@@ -6789,13 +6685,13 @@ function emitSchedMainLoopUntilMet(module StdModule, block IrBlock, until ValueI
 	// section that ends with `__sched_checkdead`, which signals the main machine the moment the last one
 	// leaves it with nothing pending.
 	let running = emitSchedMachinesRunning(module, block: block, ids: ids)
-	let aloneOnTheBox = emitCmp(module, block: block, a: running, b: emitConst(module, block: block, value: 1, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let aloneOnTheBox = emitCompareWithConstant(module, block: block, value: running, pred: StdCmpPred.eq, against: 1, ids: ids)
 	let settled = emitBin(module, block: block, a: quiet, b: aloneOnTheBox, opcode: StdBinOpcode.bitAnd, ids: ids)
 
 	let nothingLeft = emitBin(module, block: block, a: nothingOwned, b: settled, opcode: StdBinOpcode.bitAnd, ids: ids)
 	let drainOver = emitBin(module, block: block, a: nothingLeft, b: isStuck, opcode: StdBinOpcode.bitOr, ids: ids)
 
-	let draining = emitCmp(module, block: block, a: until, b: emitConst(module, block: block, value: SchedMainLoopUntil.drained.rawValue, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let draining = emitCompareWithConstant(module, block: block, value: until, pred: StdCmpPred.eq, against: SchedMainLoopUntil.drained.rawValue, ids: ids)
 	let drainMet = emitBin(module, block: block, a: draining, b: drainOver, opcode: StdBinOpcode.bitAnd, ids: ids)
 	let mainMet = emitBin(module, block: block, a: awaitingMainOnly, b: mainDone, opcode: StdBinOpcode.bitAnd, ids: ids)
 	return emitBin(module, block: block, a: drainMet, b: mainMet, opcode: StdBinOpcode.bitOr, ids: ids)
@@ -6840,9 +6736,7 @@ function emitSchedWorkerExit(module StdModule, func IrFunction, exitBlock IrBloc
 	_ = emitGlobalAccumulate(module, block: exitBlock, label: SchedActiveWorkersLabel, delta: negOne, multiM: true, ids: ids)
 	_ = emitSchedSpinningTransition(module, block: exitBlock, m: m, transition: SpinningTransition.stopSpinning, ids: ids)
 	let exitProc = emitLoadField(module, block: exitBlock, record: m, offset: MOffCurrentP, ids: ids)
-	let exitZero = emitConst(module, block: exitBlock, value: 0, ids: ids)
-	let holdsNothing = emitCmp(module, block: exitBlock, a: exitProc, b: exitZero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(exitBlock, op: StdOp.condBranch(holdsNothing, thenBlockId: exitDone.id, elseBlockId: exitRelease.id))
+	emitBranchOnCompare(module, block: exitBlock, value: exitProc, pred: StdCmpPred.eq, against: 0, whenTrue: exitDone, whenFalse: exitRelease, ids: ids)
 
 	// ⚠ **IT GOES BACK THROUGH THE SAME DOOR EVERY OTHER RELEASE USES, LOCK AND ALL.** Putting it on
 	// `__sched_pidle` at teardown offers it to nobody — `__sched_startm` reads the shutdown flag under this
@@ -7013,8 +6907,7 @@ function buildSchedWakeOrSpawn(module StdModule)
 	// `emitSchedPidlePutLocked` would let both miss, and the work would wait for a yield or a
 	// preemption.
 	let idleProcessors = emitLoadAcquireGlobalWord(module, block: idleTest, label: SchedNpidleLabel, ids: ids)
-	let noneIdle = emitCmp(module, block: idleTest, a: idleProcessors, b: emitConst(module, block: idleTest, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(idleTest, op: StdOp.condBranch(noneIdle, thenBlockId: doneBlock.id, elseBlockId: spinTest.id))
+	emitBranchOnCompare(module, block: idleTest, value: idleProcessors, pred: StdCmpPred.eq, against: 0, whenTrue: doneBlock, whenFalse: spinTest, ids: ids)
 
 	// ⭐ **THE RESERVATION IS A LOAN, NOT A COUNT OF THIS THREAD.** `__sched_startm` settles it: the machine it
 	// wakes takes it over through `MOffSpinning`, and every other road gives it back inside that call.
@@ -7026,9 +6919,7 @@ function buildSchedWakeOrSpawn(module StdModule)
 	// already re-checked: work stranded. x86's `lock` prefix orders the plain load already, and the acquire
 	// costs it nothing.
 	let spinning = emitSchedLoadSpinning(module, block: spinTest, ids: ids)
-	let spinZero = emitConst(module, block: spinTest, value: 0, ids: ids)
-	let alreadyLooking = emitCmp(module, block: spinTest, a: spinning, b: spinZero, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(spinTest, op: StdOp.condBranch(alreadyLooking, thenBlockId: doneBlock.id, elseBlockId: spinClaim.id))
+	emitBranchOnCompare(module, block: spinTest, value: spinning, pred: StdCmpPred.ne, against: 0, whenTrue: doneBlock, whenFalse: spinClaim, ids: ids)
 
 	emitSchedReserveSpinner(module, cur: spinClaim, won: startIt, lost: doneBlock, ids: ids)
 
@@ -7050,7 +6941,7 @@ function emitSchedReserveSpinner(module StdModule, cur IrBlock, won IrBlock, los
 	module.appendOp(cur, op: StdOp.globalAddr(spinningAddr, label: SchedSpinningLabel))
 	let reserved = ids.mint()
 	module.appendOp(cur, op: StdOp.atomicCas(reserved, addrId: spinningAddr, expectedId: emitConst(module, block: cur, value: 0, ids: ids), replacementId: emitConst(module, block: cur, value: 1, ids: ids)))
-	module.setTerminator(cur, op: StdOp.condBranch(emitCasLost(module, block: cur, result: reserved, ids: ids), thenBlockId: lost.id, elseBlockId: won.id))
+	emitBranchOnCasLost(module, block: cur, result: reserved, lost: lost, won: won, ids: ids)
 end 'emitSchedReserveSpinner'
 
 // `__sched_nmspinning`, read with ACQUIRE — the ordering `__sched_wake_or_spawn`'s gate argues, and the one every
@@ -7088,11 +6979,9 @@ function buildSchedWakeNetpoller(module StdModule)
 
 	emitParams(module, block: entry, count: 1)
 	let when = 0
-	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 
 	let lastPoll = emitLoadAcquireGlobalWord(module, block: entry, label: SchedLastPollLabel, ids: ids)
-	let somebodyPolls = emitCmp(module, block: entry, a: lastPoll, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(somebodyPolls, thenBlockId: polling.id, elseBlockId: wakeOne.id))
+	emitBranchOnCompare(module, block: entry, value: lastPoll, pred: StdCmpPred.eq, against: 0, whenTrue: polling, whenFalse: wakeOne, ids: ids)
 
 	let pollUntil = emitLoadAcquireGlobalWord(module, block: polling, label: SchedPollUntilLabel, ids: ids)
 	let pollerLate = emitSchedPollerLate(module, block: polling, pollUntil: pollUntil, when: when, ids: ids)
@@ -7112,7 +7001,7 @@ end 'buildSchedWakeNetpoller'
 // poller that has claimed the role and not yet published, or has already cleared it on its way out: a break
 // costs either one early return.
 function emitSchedPollerLate(module StdModule, block IrBlock, pollUntil ValueId, when ValueId, ids ValueMinter) returns ValueId
-	let noDeadline = emitCmp(module, block: block, a: pollUntil, b: emitConst(module, block: block, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let noDeadline = emitCompareWithConstant(module, block: block, value: pollUntil, pred: StdCmpPred.eq, against: 0, ids: ids)
 	let laterDeadline = emitCmp(module, block: block, a: pollUntil, b: when, pred: StdCmpPred.gt, ids: ids)
 	return emitBin(module, block: block, a: noDeadline, b: laterDeadline, opcode: StdBinOpcode.bitOr, ids: ids)
 end 'emitSchedPollerLate'
@@ -7141,13 +7030,11 @@ function buildSchedWakePoller(module StdModule)
 	module.setTerminator(entry, op: StdOp.condBranch(emitSchedPollerOwed(module, block: entry, ids: ids), thenBlockId: peek.id, elseBlockId: doneBlock.id))
 
 	let seenHead = emitLoadGlobalWord(module, block: peek, label: SchedMidleLabel, ids: ids)
-	let seenEmpty = emitCmp(module, block: peek, a: seenHead, b: emitConst(module, block: peek, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(peek, op: StdOp.condBranch(seenEmpty, thenBlockId: doneBlock.id, elseBlockId: take.id))
+	emitBranchOnCompare(module, block: peek, value: seenHead, pred: StdCmpPred.eq, against: 0, whenTrue: doneBlock, whenFalse: take, ids: ids)
 
 	emitSchedLockEnter(module, block: take, ids: ids)
 	let parked = emitLoadGlobalWord(module, block: take, label: SchedMidleLabel, ids: ids)
-	let nobodyParked = emitCmp(module, block: take, a: parked, b: emitConst(module, block: take, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(take, op: StdOp.condBranch(nobodyParked, thenBlockId: noneParked.id, elseBlockId: unlink.id))
+	emitBranchOnCompare(module, block: take, value: parked, pred: StdCmpPred.eq, against: 0, whenTrue: noneParked, whenFalse: unlink, ids: ids)
 
 	var unlinked = emitSchedMidleUnlinkLocked(module, func: func, cur: unlink, m: parked, ids: ids)
 	let parkEvent = emitLoadField(module, block: unlinked, record: parked, offset: MOffParkEvent, ids: ids)
@@ -7201,9 +7088,7 @@ function buildSchedHandoffP(module StdModule)
 	// they answer. A false positive costs a machine that searches and finds nothing; a false negative is caught
 	// by the locked re-check below.
 	let runnable = emitSchedAnyRunnable(module, block: entry, p: p, ids: ids)
-	let entryZero = emitConst(module, block: entry, value: 0, ids: ids)
-	let nothingToRun = emitCmp(module, block: entry, a: runnable, b: entryZero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(nothingToRun, thenBlockId: spinArm.id, elseBlockId: startIt.id))
+	emitBranchOnCompare(module, block: entry, value: runnable, pred: StdCmpPred.eq, against: 0, whenTrue: spinArm, whenFalse: startIt, ids: ids)
 
 	// ⚠ **`__sched_startm` MAY PLACE NOTHING, AND THAT NEEDS NO ARM HERE.** A failed `osThreadCreate` moves the
 	// ring to the global queue and puts the processor back on `__sched_pidle` itself. The shutdown road, which
@@ -7221,8 +7106,7 @@ function buildSchedHandoffP(module StdModule)
 	// processor: start this one's machine spinning, with a credit reserved as `wakep` reserves one. Both counts
 	// are read unlocked, as Go reads them; the compare-and-swap is what decides.
 	let helpers = emitSchedSpinningPlusIdle(module, block: spinArm, ids: ids)
-	let nobodyFree = emitCmp(module, block: spinArm, a: helpers, b: emitConst(module, block: spinArm, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(spinArm, op: StdOp.condBranch(nobodyFree, thenBlockId: spinClaim.id, elseBlockId: recheck.id))
+	emitBranchOnCompare(module, block: spinArm, value: helpers, pred: StdCmpPred.eq, against: 0, whenTrue: spinClaim, whenFalse: recheck, ids: ids)
 
 	emitSchedReserveSpinner(module, cur: spinClaim, won: spinStart, lost: recheck, ids: ids)
 
@@ -7237,16 +7121,14 @@ function buildSchedHandoffP(module StdModule)
 	// final look states the same set from the other side).
 	emitSchedLockEnter(module, block: recheck, ids: ids)
 	let globalHasWork = emitSchedGlobalQueueIs(module, block: recheck, pred: StdCmpPred.ne, ids: ids)
-	let recheckZero = emitConst(module, block: recheck, value: 0, ids: ids)
-	let stillNothing = emitCmp(module, block: recheck, a: globalHasWork, b: recheckZero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(recheck, op: StdOp.condBranch(stillNothing, thenBlockId: lastProc.id, elseBlockId: lockedStart.id))
+	emitBranchOnCompare(module, block: recheck, value: globalHasWork, pred: StdCmpPred.eq, against: 0, whenTrue: lastProc, whenFalse: lockedStart, ids: ids)
 
 	// Arm 4 — Go's *"last running P and nobody polling the network"*: every other processor is idle and no
 	// machine waits in the poller, so a deadline could come due with nobody to wake for it. Both reads are under
 	// the lock their writers hold.
 	let othersIdle = emitBin(module, block: lastProc, a: emitLoadGlobalWord(module, block: lastProc, label: SchedNumProcsLabel, ids: ids), b: emitConst(module, block: lastProc, value: OneMore, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
 	let isLastProc = emitCmp(module, block: lastProc, a: emitLoadGlobalWord(module, block: lastProc, label: SchedNpidleLabel, ids: ids), b: othersIdle, pred: StdCmpPred.eq, ids: ids)
-	let nobodyPolls = emitCmp(module, block: lastProc, a: emitLoadAcquireGlobalWord(module, block: lastProc, label: SchedLastPollLabel, ids: ids), b: recheckZero, pred: StdCmpPred.ne, ids: ids)
+	let nobodyPolls = emitSchedNobodyPolls(module, block: lastProc, ids: ids)
 	let needsPoller = emitBin(module, block: lastProc, a: isLastProc, b: nobodyPolls, opcode: StdBinOpcode.bitAnd, ids: ids)
 	module.setTerminator(lastProc, op: StdOp.condBranch(needsPoller, thenBlockId: lockedStart.id, elseBlockId: idleIt.id))
 
@@ -7329,8 +7211,7 @@ function buildSchedRetake(module StdModule)
 	loopHdr.blockArgs.push(IrBlockArg.create(index, argType: StdType.i64))
 	loopHdr.blockArgs.push(IrBlockArg.create(taken, argType: StdType.i64))
 	let entryZero = emitConst(module, block: entry, value: 0, ids: ids)
-	let withdrawn = emitCmp(module, block: entry, a: preemptOff, b: entryZero, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(withdrawn, thenBlockId: switchedOff.id, elseBlockId: loopHdr.id))
+	emitBranchOnCompare(module, block: entry, value: preemptOff, pred: StdCmpPred.ne, against: 0, whenTrue: switchedOff, whenFalse: loopHdr, ids: ids)
 	entry.branchEdges.push(BranchEdge.create(loopHdr.id, argIds: twoArgs(entryZero, second: entryZero)))
 
 	emitConstReturn(module, block: switchedOff, value: 0, ids: ids)
@@ -7347,8 +7228,7 @@ function buildSchedRetake(module StdModule)
 	// The machine holding this processor, if any — a candidate, for this function's header's reason.
 	let proc = emitLoadProc(module, block: askProc, index: index, ids: ids)
 	let machine = emitLoadField(module, block: askProc, record: proc, offset: POffM, ids: ids)
-	let unheld = emitCmp(module, block: askProc, a: machine, b: emitConst(module, block: askProc, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(askProc, op: StdOp.condBranch(unheld, thenBlockId: nextProc.id, elseBlockId: haveMachine.id))
+	emitBranchOnCompare(module, block: askProc, value: machine, pred: StdCmpPred.eq, against: 0, whenTrue: nextProc, whenFalse: haveMachine, ids: ids)
 	askProc.branchEdges.push(BranchEdge.create(nextProc.id, argIds: argsOf(taken)))
 
 	// ⭐ **THE SCHEDULE COUNTER'S NOTE — Go's `sysmontick.schedtick`.** Owner-written and read unlocked here: a stale
@@ -7370,7 +7250,7 @@ function buildSchedRetake(module StdModule)
 	// ⚠ The note is NOT refreshed when a request is sent, as Go's is not: a request lost to a writer of the guard
 	// word is sent again at the next lap for as long as the strand keeps the processor.
 	let held = emitBin(module, block: sameStrand, a: now, b: emitLoadField(module, block: sameStrand, record: proc, offset: POffSysmonWhen, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
-	let heldTooLong = emitCmp(module, block: sameStrand, a: held, b: emitConst(module, block: sameStrand, value: SchedForcePreemptNs, ids: ids), pred: StdCmpPred.ge, ids: ids)
+	let heldTooLong = emitCompareWithConstant(module, block: sameStrand, value: held, pred: StdCmpPred.ge, against: SchedForcePreemptNs, ids: ids)
 	let notYet = emitConst(module, block: sameStrand, value: 0, ids: ids)
 	module.setTerminator(sameStrand, op: StdOp.condBranch(heldTooLong, thenBlockId: preempt.id, elseBlockId: syscallArm.id))
 	sameStrand.branchEdges.push(BranchEdge.create(syscallArm.id, argIds: argsOf(notYet)))
@@ -7393,13 +7273,11 @@ function buildSchedRetake(module StdModule)
 	// what makes the processor read below see the value the machine entered the call with.
 	let stateNow = emitLoadAcquireField(module, block: syscallArm, record: machine, offset: MOffSyscallState, ids: ids)
 	let stateMask = emitConst(module, block: syscallArm, value: MSyscallStateMask, ids: ids)
-	let inCallOnly = emitConst(module, block: syscallArm, value: MSyscallInCall, ids: ids)
 	let stateBits = emitBin(module, block: syscallArm, a: stateNow, b: stateMask, opcode: StdBinOpcode.bitAnd, ids: ids)
 
 	// EXACTLY `MSyscallInCall` — a machine whose stolen bit is also set has already had its processor taken and
 	// is inside `__sched_syscall_regain` waiting for another, which is the one state this pass must leave alone.
-	let notInCall = emitCmp(module, block: syscallArm, a: stateBits, b: inCallOnly, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(syscallArm, op: StdOp.condBranch(notInCall, thenBlockId: nextProc.id, elseBlockId: inSyscall.id))
+	emitBranchOnCompare(module, block: syscallArm, value: stateBits, pred: StdCmpPred.ne, against: MSyscallInCall, whenTrue: nextProc, whenFalse: inSyscall, ids: ids)
 	syscallArm.branchEdges.push(BranchEdge.create(nextProc.id, argIds: argsOf(taken)))
 
 	// ⭐⭐ **THE GENERATION TEST IS A COMPARISON OF THE WHOLE WORD**, because the generation lives in it — see
@@ -7424,9 +7302,9 @@ function buildSchedRetake(module StdModule)
 	// Go's rule: leave the processor with its machine only while the call is younger than `SysmonRetakeAfterNs`,
 	// its ring is empty, and a spinning machine or an idle processor can take up whatever else is published.
 	let callAge = emitBin(module, block: ruleIt, a: now, b: emitLoadField(module, block: ruleIt, record: machine, offset: MOffSysmonWhen, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
-	let young = emitCmp(module, block: ruleIt, a: callAge, b: emitConst(module, block: ruleIt, value: SysmonRetakeAfterNs, ids: ids), pred: StdCmpPred.lt, ids: ids)
+	let young = emitCompareWithConstant(module, block: ruleIt, value: callAge, pred: StdCmpPred.lt, against: SysmonRetakeAfterNs, ids: ids)
 	let ringEmpty = emitSchedRunqIs(module, block: ruleIt, p: proc, pred: StdCmpPred.eq, ids: ids)
-	let someoneFree = emitCmp(module, block: ruleIt, a: emitSchedSpinningPlusIdle(module, block: ruleIt, ids: ids), b: emitConst(module, block: ruleIt, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	let someoneFree = emitCompareWithConstant(module, block: ruleIt, value: emitSchedSpinningPlusIdle(module, block: ruleIt, ids: ids), pred: StdCmpPred.ne, against: 0, ids: ids)
 	let leaveIt = emitBin(module, block: ruleIt, a: emitBin(module, block: ruleIt, a: young, b: ringEmpty, opcode: StdBinOpcode.bitAnd, ids: ids), b: someoneFree, opcode: StdBinOpcode.bitAnd, ids: ids)
 	module.setTerminator(ruleIt, op: StdOp.condBranch(leaveIt, thenBlockId: nextProc.id, elseBlockId: oldEnough.id))
 	ruleIt.branchEdges.push(BranchEdge.create(nextProc.id, argIds: argsOf(taken)))
@@ -7518,20 +7396,16 @@ function buildSchedPreemptOne(module StdModule, target Target)
 	let m = 0
 
 	let withdrawn = emitLoadGlobalWord(module, block: entry, label: SchedAsyncPreemptOffLabel, ids: ids)
-	let asleep = emitCmp(module, block: entry, a: withdrawn, b: emitConst(module, block: entry, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(asleep, thenBlockId: doneBlock.id, elseBlockId: switchedOn.id))
+	emitBranchOnCompare(module, block: entry, value: withdrawn, pred: StdCmpPred.ne, against: 0, whenTrue: doneBlock, whenFalse: switchedOn, ids: ids)
 
 	let stateBits = emitBin(module, block: switchedOn, a: emitLoadField(module, block: switchedOn, record: m, offset: MOffSyscallState, ids: ids), b: emitConst(module, block: switchedOn, value: MSyscallStateMask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
-	let inCall = emitCmp(module, block: switchedOn, a: stateBits, b: emitConst(module, block: switchedOn, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(switchedOn, op: StdOp.condBranch(inCall, thenBlockId: doneBlock.id, elseBlockId: running.id))
+	emitBranchOnCompare(module, block: switchedOn, value: stateBits, pred: StdCmpPred.ne, against: 0, whenTrue: doneBlock, whenFalse: running, ids: ids)
 
 	let gt = emitLoadField(module, block: running, record: m, offset: MOffCurrentGt, ids: ids)
-	let noThread = emitCmp(module, block: running, a: gt, b: emitConst(module, block: running, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(running, op: StdOp.condBranch(noThread, thenBlockId: doneBlock.id, elseBlockId: onThread.id))
+	emitBranchOnCompare(module, block: running, value: gt, pred: StdCmpPred.eq, against: 0, whenTrue: doneBlock, whenFalse: onThread, ids: ids)
 
 	let stackBase = emitLoadField(module, block: onThread, record: gt, offset: GtOffStackBase, ids: ids)
-	let schedulerContext = emitCmp(module, block: onThread, a: stackBase, b: emitConst(module, block: onThread, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(onThread, op: StdOp.condBranch(schedulerContext, thenBlockId: doneBlock.id, elseBlockId: request.id))
+	emitBranchOnCompare(module, block: onThread, value: stackBase, pred: StdCmpPred.eq, against: 0, whenTrue: doneBlock, whenFalse: request, ids: ids)
 
 	emitStoreField(module, block: request, record: gt, offset: GtOffStackGuard, value: emitConst(module, block: request, value: GtStackGuardPreempt, ids: ids))
 
@@ -7598,24 +7472,19 @@ function buildGtPreemptSafe(module StdModule, target Target)
 	let sp = 2
 
 	let gt = emitLoadField(module, block: entry, record: m, offset: MOffCurrentGt, ids: ids)
-	let noThread = emitCmp(module, block: entry, a: gt, b: emitConst(module, block: entry, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(noThread, thenBlockId: notSafe.id, elseBlockId: onThread.id))
+	emitBranchOnCompare(module, block: entry, value: gt, pred: StdCmpPred.eq, against: 0, whenTrue: notSafe, whenFalse: onThread, ids: ids)
 
 	let stackBase = emitLoadField(module, block: onThread, record: gt, offset: GtOffStackBase, ids: ids)
-	let schedulerContext = emitCmp(module, block: onThread, a: stackBase, b: emitConst(module, block: onThread, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(onThread, op: StdOp.condBranch(schedulerContext, thenBlockId: notSafe.id, elseBlockId: asked.id))
+	emitBranchOnCompare(module, block: onThread, value: stackBase, pred: StdCmpPred.eq, against: 0, whenTrue: notSafe, whenFalse: asked, ids: ids)
 
 	let guard = emitLoadField(module, block: asked, record: gt, offset: GtOffStackGuard, ids: ids)
-	let notRequested = emitCmp(module, block: asked, a: guard, b: emitConst(module, block: asked, value: GtStackGuardPreempt, ids: ids), pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(asked, op: StdOp.condBranch(notRequested, thenBlockId: notSafe.id, elseBlockId: notInCall.id))
+	emitBranchOnCompare(module, block: asked, value: guard, pred: StdCmpPred.ne, against: GtStackGuardPreempt, whenTrue: notSafe, whenFalse: notInCall, ids: ids)
 
 	let stateBits = emitBin(module, block: notInCall, a: emitLoadField(module, block: notInCall, record: m, offset: MOffSyscallState, ids: ids), b: emitConst(module, block: notInCall, value: MSyscallStateMask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
-	let inCall = emitCmp(module, block: notInCall, a: stateBits, b: emitConst(module, block: notInCall, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(notInCall, op: StdOp.condBranch(inCall, thenBlockId: notSafe.id, elseBlockId: unlocked.id))
+	emitBranchOnCompare(module, block: notInCall, value: stateBits, pred: StdCmpPred.ne, against: 0, whenTrue: notSafe, whenFalse: unlocked, ids: ids)
 
 	let depth = emitLoadField(module, block: unlocked, record: m, offset: MOffLocks, ids: ids)
-	let holdsALock = emitCmp(module, block: unlocked, a: depth, b: emitConst(module, block: unlocked, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(unlocked, op: StdOp.condBranch(holdsALock, thenBlockId: notSafe.id, elseBlockId: aboveFloor.id))
+	emitBranchOnCompare(module, block: unlocked, value: depth, pred: StdCmpPred.ne, against: 0, whenTrue: notSafe, whenFalse: aboveFloor, ids: ids)
 
 	let floor = emitBin(module, block: aboveFloor, a: stackBase, b: emitConst(module, block: aboveFloor, value: gtAsyncPreemptFloor(target), ids: ids), opcode: StdBinOpcode.add, ids: ids)
 	let tooLow = emitCmp(module, block: aboveFloor, a: sp, b: floor, pred: StdCmpPred.lt, ids: ids)
@@ -7639,8 +7508,7 @@ function buildGtPreemptSafe(module StdModule, target Target)
 	let textOffset = emitBin(module, block: named, a: pc, b: textBase, opcode: StdBinOpcode.sub, ids: ids)
 	let index = ids.mint()
 	module.appendOp(named, op: StdOp.call(index, callee: SymtabIndexName, args: twoArgs(textOffset, second: symtable)))
-	let unnamed = emitCmp(module, block: named, a: index, b: emitConst(module, block: named, value: 0, ids: ids), pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(named, op: StdOp.condBranch(unnamed, thenBlockId: notSafe.id, elseBlockId: flagged.id))
+	emitBranchOnCompare(module, block: named, value: index, pred: StdCmpPred.lt, against: 0, whenTrue: notSafe, whenFalse: flagged, ids: ids)
 
 	// The safe-point run is one byte per entry at the entry's own index, reached through the header
 	// column that records where the variable-length names end — read as the whole header word and
@@ -7653,8 +7521,7 @@ function buildGtPreemptSafe(module StdModule, target Target)
 	let flagsBase = emitBin(module, block: flagged, a: symtable, b: flagsOffset, opcode: StdBinOpcode.add, ids: ids)
 	let flagsByte = emitLoadByteIndexed(module, block: flagged, base: flagsBase, index: index, ids: ids)
 	let safeFrom = emitBin(module, block: flagged, a: flagsByte, b: emitConst(module, block: flagged, value: SymtabSafeFromMask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
-	let neverSafe = emitCmp(module, block: flagged, a: safeFrom, b: emitConst(module, block: flagged, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(flagged, op: StdOp.condBranch(neverSafe, thenBlockId: notSafe.id, elseBlockId: pastTheGuard.id))
+	emitBranchOnCompare(module, block: flagged, value: safeFrom, pred: StdCmpPred.eq, against: 0, whenTrue: notSafe, whenFalse: pastTheGuard, ids: ids)
 
 	// Past the function's prologue guard too, which holds a machine in a register between its TLS load
 	// and its green-thread load: a thread stopped there resumes, possibly on another machine, and
@@ -7707,8 +7574,7 @@ function emitGtPreemptSafeLlscLookback(module StdModule, func IrFunction, pc Val
 		var check = module.addBlock(func, label: arm64LookbackBlockLabel(back), heat: BlockHeat.normal)
 		let word = emitLoadInstructionWord(module, block: check, pc: pc, wordsBack: back, ids: ids)
 		let group = emitBin(module, block: check, a: word, b: emitConst(module, block: check, value: Arm64ExclusiveLoadMask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
-		let isExclusiveLoad = emitCmp(module, block: check, a: group, b: emitConst(module, block: check, value: Arm64ExclusiveLoadBits, ids: ids), pred: StdCmpPred.eq, ids: ids)
-		module.setTerminator(check, op: StdOp.condBranch(isExclusiveLoad, thenBlockId: notSafe.id, elseBlockId: head.id))
+		emitBranchOnCompare(module, block: check, value: group, pred: StdCmpPred.eq, against: Arm64ExclusiveLoadBits, whenTrue: notSafe, whenFalse: head, ids: ids)
 		head = check
 	end 'eachPrecedingWord'
 
@@ -7811,8 +7677,7 @@ export function emitSchedSysmonStart(module StdModule, func IrFunction, cur IrBl
 	module.appendOp(switchKnown, op: StdOp.funcAddr(monitorEntry, funcName: SchedSysmonName))
 	let monitorHandle = ids.mint()
 	module.appendOp(switchKnown, op: StdOp.osThreadCreate(monitorHandle, entryPtrId: monitorEntry, argId: preemptOff))
-	let refused = emitCmp(module, block: switchKnown, a: monitorHandle, b: emitConst(module, block: switchKnown, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(switchKnown, op: StdOp.condBranch(refused, thenBlockId: unstarted.id, elseBlockId: cont.id))
+	emitBranchOnCompare(module, block: switchKnown, value: monitorHandle, pred: StdCmpPred.eq, against: 0, whenTrue: unstarted, whenFalse: cont, ids: ids)
 
 	emitRuntimeAbort(module, func: func, block: unstarted, abort: RuntimeAbort.schedulerMonitorUnstarted, ids: ids)
 end 'emitSchedSysmonStart'
@@ -7935,8 +7800,8 @@ function buildSysmon(module StdModule, target Target)
 	_ = emitGtBranchOnTimerDue(module, func: func, cur: timerArm, due: timerOverdue, notDue: retakeBlock, notDueArgs: ValueIdArray.create(), ids: ids)
 
 	emitSchedLockEnter(module, block: timerOverdue, ids: ids)
-	let anyIdle = emitCmp(module, block: timerOverdue, a: emitLoadGlobalWord(module, block: timerOverdue, label: SchedNpidleLabel, ids: ids), b: emitConst(module, block: timerOverdue, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
-	let nobodyPolls = emitCmp(module, block: timerOverdue, a: emitLoadAcquireGlobalWord(module, block: timerOverdue, label: SchedLastPollLabel, ids: ids), b: emitConst(module, block: timerOverdue, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	let anyIdle = emitCompareWithConstant(module, block: timerOverdue, value: emitLoadGlobalWord(module, block: timerOverdue, label: SchedNpidleLabel, ids: ids), pred: StdCmpPred.ne, against: 0, ids: ids)
+	let nobodyPolls = emitSchedNobodyPolls(module, block: timerOverdue, ids: ids)
 	module.setTerminator(timerOverdue, op: StdOp.condBranch(emitBin(module, block: timerOverdue, a: anyIdle, b: nobodyPolls, opcode: StdBinOpcode.bitAnd, ids: ids), thenBlockId: timerStart.id, elseBlockId: timerNoStart.id))
 
 	emitSchedStepLockedCount(module, block: timerStart, label: SchedTimerStartsLabel, delta: OneMore, ids: ids)
@@ -7949,8 +7814,7 @@ function buildSysmon(module StdModule, target Target)
 
 	let retakes = ids.mint()
 	module.appendOp(retakeBlock, op: StdOp.call(retakes, callee: SchedRetakeName, args: twoArgs(now, second: preemptOff)))
-	let tookNothing = emitCmp(module, block: retakeBlock, a: retakes, b: emitConst(module, block: retakeBlock, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(retakeBlock, op: StdOp.condBranch(tookNothing, thenBlockId: idled.id, elseBlockId: retook.id))
+	emitBranchOnCompare(module, block: retakeBlock, value: retakes, pred: StdCmpPred.eq, against: 0, whenTrue: idled, whenFalse: retook, ids: ids)
 
 	// A lap that took something is evidence the process is blocking, so the interval snaps back to its
 	// shortest — the next block is likely and the cost of noticing it late is a stalled processor.
@@ -7960,9 +7824,7 @@ function buildSysmon(module StdModule, target Target)
 	retook.branchEdges.push(BranchEdge.create(loopTop.id, argIds: twoArgs(snapBack, second: resetLaps)))
 
 	let lapsNow = emitBin(module, block: idled, a: idleLaps, b: emitConst(module, block: idled, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids)
-	let enoughLaps = emitConst(module, block: idled, value: SysmonIdlePollsBeforeBackoff, ids: ids)
-	let quietEnough = emitCmp(module, block: idled, a: lapsNow, b: enoughLaps, pred: StdCmpPred.gt, ids: ids)
-	module.setTerminator(idled, op: StdOp.condBranch(quietEnough, thenBlockId: backOff.id, elseBlockId: keepPace.id))
+	emitBranchOnCompare(module, block: idled, value: lapsNow, pred: StdCmpPred.gt, against: SysmonIdlePollsBeforeBackoff, whenTrue: backOff, whenFalse: keepPace, ids: ids)
 
 	// Doubled, then capped: `min(2·delay, SysmonMaxSleepUs)` spelled branch-free as the cap plus the part of the
 	// difference below zero.
@@ -7983,7 +7845,7 @@ end 'buildSysmon'
 
 // 1 when nobody is blocked in the poller and nobody has polled for `SysmonPollStaleNs`, else 0.
 function emitSchedPollIsStale(module StdModule, block IrBlock, lastPoll ValueId, now ValueId, ids ValueMinter) returns ValueId
-	let nobodyPolls = emitCmp(module, block: block, a: lastPoll, b: emitConst(module, block: block, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	let nobodyPolls = emitCompareWithConstant(module, block: block, value: lastPoll, pred: StdCmpPred.ne, against: 0, ids: ids)
 	let staleAt = emitBin(module, block: block, a: lastPoll, b: emitConst(module, block: block, value: SysmonPollStaleNs, ids: ids), opcode: StdBinOpcode.add, ids: ids)
 	let stale = emitCmp(module, block: block, a: staleAt, b: now, pred: StdCmpPred.lt, ids: ids)
 	return emitBin(module, block: block, a: nobodyPolls, b: stale, opcode: StdBinOpcode.bitAnd, ids: ids)
@@ -8088,9 +7950,7 @@ function buildSchedExitSyscall(module StdModule)
 	let prior = emitFieldAccumulate(module, block: haveMachine, record: machine, offset: MOffSyscallState, delta: delta, multiM: true, ids: ids)
 	let stolenMask = emitConst(module, block: haveMachine, value: MSyscallStolen, ids: ids)
 	let stolenBit = emitBin(module, block: haveMachine, a: prior, b: stolenMask, opcode: StdBinOpcode.bitAnd, ids: ids)
-	let notStolen = emitConst(module, block: haveMachine, value: 0, ids: ids)
-	let wasRobbed = emitCmp(module, block: haveMachine, a: stolenBit, b: notStolen, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(haveMachine, op: StdOp.condBranch(wasRobbed, thenBlockId: regainProc.id, elseBlockId: doneBlock.id))
+	emitBranchOnCompare(module, block: haveMachine, value: stolenBit, pred: StdCmpPred.ne, against: 0, whenTrue: regainProc, whenFalse: doneBlock, ids: ids)
 
 	module.appendOp(regainProc, op: StdOp.call(ids.mint(), callee: SchedSyscallRegainName, args: ValueIdArray.create()))
 	module.setTerminator(regainProc, op: StdOp.retVoid)
@@ -8217,8 +8077,7 @@ function buildSchedSyscallRegain(module StdModule)
 	// lock (`emitSchedPidlePutLocked`) — and none means it is still on it, woken by the teardown or by a stray
 	// signal.
 	let givenProc = emitLoadField(module, block: woke, record: selfMachine, offset: MOffNextP, ids: ids)
-	let nothingGiven = emitCmp(module, block: woke, a: givenProc, b: emitConst(module, block: woke, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(woke, op: StdOp.condBranch(nothingGiven, thenBlockId: stillWaiting.id, elseBlockId: handed.id))
+	emitBranchOnCompare(module, block: woke, value: givenProc, pred: StdCmpPred.eq, against: 0, whenTrue: stillWaiting, whenFalse: handed, ids: ids)
 
 	emitStoreField(module, block: handed, record: selfMachine, offset: MOffNextP, value: emitConst(module, block: handed, value: 0, ids: ids))
 	emitSchedRegainResume(module, block: handed, m: selfMachine, p: givenProc, ids: ids)
@@ -8235,9 +8094,7 @@ function buildSchedSyscallRegain(module StdModule)
 	// discarded by the process exit; a machine it did not create is the one RUNNING that exit and must be given
 	// its thread back.
 	let handle = emitLoadField(module, block: giveUp, record: selfMachine, offset: MOffOsThreadHandle, ids: ids)
-	let handleZero = emitConst(module, block: giveUp, value: 0, ids: ids)
-	let runsTheExit = emitCmp(module, block: giveUp, a: handle, b: handleZero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(giveUp, op: StdOp.condBranch(runsTheExit, thenBlockId: resumeExit.id, elseBlockId: parkForEver.id))
+	emitBranchOnCompare(module, block: giveUp, value: handle, pred: StdCmpPred.eq, against: 0, whenTrue: resumeExit, whenFalse: parkForEver, ids: ids)
 
 	// ⛔ **THE STOLEN BIT STAYS UP ON THIS ROAD, AND IT IS TELLING THE TRUTH: this machine is still holding a
 	// green thread with no processor.** Its two readers both want that reading — `__sched_retake` leaves the
@@ -8270,7 +8127,7 @@ end 'emitSchedRegainResume'
 // 1 once `__sched_stop_workers` has set its flag, else 0. Each reader argues at its own site whether it holds
 // `__sched_lock`.
 function emitSchedShuttingDown(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
-	return emitCmp(module, block: block, a: emitLoadGlobalWord(module, block: block, label: SchedShutdownFlagLabel, ids: ids), b: emitConst(module, block: block, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	return emitCompareWithConstant(module, block: block, value: emitLoadGlobalWord(module, block: block, label: SchedShutdownFlagLabel, ids: ids), pred: StdCmpPred.ne, against: 0, ids: ids)
 end 'emitSchedShuttingDown'
 
 // Terminate `cur`: to `stopping` once `__sched_stop_workers` has set its flag, else to `live`.
@@ -8301,8 +8158,7 @@ function emitSchedRegainUnlinkLocked(module StdModule, func IrFunction, cur IrBl
 	// walkHdr(prev): `prev` is on the list and is not `m`.
 	let prev = ids.mint()
 	walkHdr.blockArgs.push(IrBlockArg.create(prev, argType: StdType.i64))
-	let atEnd = emitCmp(module, block: walkHdr, a: prev, b: emitConst(module, block: walkHdr, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(walkHdr, op: StdOp.condBranch(atEnd, thenBlockId: lost.id, elseBlockId: walkStep.id))
+	emitBranchOnCompare(module, block: walkHdr, value: prev, pred: StdCmpPred.eq, against: 0, whenTrue: lost, whenFalse: walkStep, ids: ids)
 	emitRuntimeAbort(module, func: func, block: lost, abort: RuntimeAbort.schedulerRegainWaiterLost, ids: ids)
 
 	let next = emitLoadField(module, block: walkStep, record: prev, offset: MOffRegainNext, ids: ids)
@@ -8386,9 +8242,7 @@ function buildSchedStopWorkers(module StdModule)
 
 	// `__sched_allm` is 0 until the first `__sched_init_procs`, so a program that never started the scheduler
 	// walks nothing — the same zero `__sched_steal_count` rests on.
-	let wakeZero = emitConst(module, block: wakeHdr, value: 0, ids: ids)
-	let wakeDone = emitCmp(module, block: wakeHdr, a: wakeCursor, b: wakeZero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(wakeHdr, op: StdOp.condBranch(wakeDone, thenBlockId: joinStart.id, elseBlockId: wakeBody.id))
+	emitBranchOnCompare(module, block: wakeHdr, value: wakeCursor, pred: StdCmpPred.eq, against: 0, whenTrue: joinStart, whenFalse: wakeBody, ids: ids)
 
 	module.appendOp(wakeBody, op: StdOp.osSetEvent(emitLoadField(module, block: wakeBody, record: wakeCursor, offset: MOffParkEvent, ids: ids)))
 	let nextWake = emitLoadField(module, block: wakeBody, record: wakeCursor, offset: MOffAllNext, ids: ids)
@@ -8407,9 +8261,7 @@ function buildSchedStopWorkers(module StdModule)
 	module.setTerminator(joinStart, op: StdOp.branch(joinHdr.id))
 	joinStart.branchEdges.push(BranchEdge.create(joinHdr.id, argIds: argsOf(joinFirst)))
 
-	let joinEndZero = emitConst(module, block: joinHdr, value: 0, ids: ids)
-	let joinDone = emitCmp(module, block: joinHdr, a: joinCursor, b: joinEndZero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(joinHdr, op: StdOp.condBranch(joinDone, thenBlockId: doneBlock.id, elseBlockId: joinBody.id))
+	emitBranchOnCompare(module, block: joinHdr, value: joinCursor, pred: StdCmpPred.eq, against: 0, whenTrue: doneBlock, whenFalse: joinBody, ids: ids)
 
 	// ⛔⛔ **A MACHINE INSIDE A BLOCKING KERNEL CALL CANNOT BE WOKEN AND MUST NOT BE JOINED.** The
 	// signal walk above sets that machine's event, which it is not waiting on; `WaitInfinite` on its thread
@@ -8437,9 +8289,8 @@ function buildSchedStopWorkers(module StdModule)
 	let nextJoin = emitLoadField(module, block: joinBody, record: joinCursor, offset: MOffAllNext, ids: ids)
 	let syscallWord = emitLoadField(module, block: joinBody, record: joinCursor, offset: MOffSyscallState, ids: ids)
 	let joinStateMask = emitConst(module, block: joinBody, value: MSyscallStateMask, ids: ids)
-	let joinZero = emitConst(module, block: joinBody, value: 0, ids: ids)
-	let noThread = emitCmp(module, block: joinBody, a: threadHandle, b: joinZero, pred: StdCmpPred.eq, ids: ids)
-	let inKernel = emitCmp(module, block: joinBody, a: emitBin(module, block: joinBody, a: syscallWord, b: joinStateMask, opcode: StdBinOpcode.bitAnd, ids: ids), b: joinZero, pred: StdCmpPred.ne, ids: ids)
+	let noThread = emitCompareWithConstant(module, block: joinBody, value: threadHandle, pred: StdCmpPred.eq, against: 0, ids: ids)
+	let inKernel = emitCompareWithConstant(module, block: joinBody, value: emitBin(module, block: joinBody, a: syscallWord, b: joinStateMask, opcode: StdBinOpcode.bitAnd, ids: ids), pred: StdCmpPred.ne, against: 0, ids: ids)
 	let unjoinable = emitBin(module, block: joinBody, a: noThread, b: inKernel, opcode: StdBinOpcode.bitOr, ids: ids)
 	let carriedNext = ids.mint()
 	joinNext.blockArgs.push(IrBlockArg.create(carriedNext, argType: StdType.i64))

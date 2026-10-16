@@ -176,9 +176,7 @@ function buildCoverageWriteFile(module StdModule)
 
 	let handle = ids.mint()
 	module.appendOp(entry, op: StdOp.osFileOpenWrite(handle, pathPtrId: path))
-	let invalid = emitConst(module, block: entry, value: CoverageInvalidHandle, ids: ids)
-	let usable = emitCmp(module, block: entry, a: handle, b: invalid, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(usable, thenBlockId: opened.id, elseBlockId: giveUp.id))
+	emitBranchOnCompare(module, block: entry, value: handle, pred: StdCmpPred.ne, against: CoverageInvalidHandle, whenTrue: opened, whenFalse: giveUp, ids: ids)
 
 	module.setTerminator(giveUp, op: StdOp.retVoid)
 

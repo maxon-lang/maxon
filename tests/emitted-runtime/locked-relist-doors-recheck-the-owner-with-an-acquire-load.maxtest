@@ -12,7 +12,7 @@ let OwnerWordOffset = 48 as FieldOffset
 let SlabCallPrefix = "arm64.bl __slab_"
 let FreeToSpanCallPrefix = "arm64.bl __slab_free_to_span"
 
-let PublicationReason = "The owner word is published by the EVICTING processor: it pops the span dry and stores `MspanStateFull` into `owning_p` with a release (`stlr`). Both of these doors run on another OS thread, under `__slab_lock` — and that lock does not serialise the evicting processor's lock-free pop, so it supplies no ordering edge to that store. A plain `ldr` of the owner word therefore has no edge to the release at all: armv8 may satisfy the free-list head load that follows it from a line fetched before the span was popped dry, and the slot then goes back onto a free list the span no longer owns, handing a LIVE slot out twice. The read is `StdOp.loadAcquire`, which is `ldar` on both arm64 lanes and the same plain `mov` on x64."
+let PublicationReason = "The owner word is published by the EVICTING processor: it pops the span dry and stores `SpanOwnerState.full` into `owning_p` with a release (`stlr`). Both of these doors run on another OS thread, under `__slab_lock` — and that lock does not serialise the evicting processor's lock-free pop, so it supplies no ordering edge to that store. A plain `ldr` of the owner word therefore has no edge to the release at all: armv8 may satisfy the free-list head load that follows it from a line fetched before the span was popped dry, and the slot then goes back onto a free list the span no longer owns, handing a LIVE slot out twice. The read is `StdOp.loadAcquire`, which is `ldar` on both arm64 lanes and the same plain `mov` on x64."
 
 test 'both locked relist doors re-read the span owner word with an acquire load'
 	let staged = stagedProgram(CaseLabel)

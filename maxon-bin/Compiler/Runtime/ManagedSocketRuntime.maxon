@@ -67,7 +67,7 @@ export let ManagedSocketClosedHandle = 0 as FullRangeInt
 // five file-shaped errnos and answers `ERROR_GENERIC_FAILURE` for the rest, so "not yet" and
 // "never" would arrive as one code.
 export function emitSocketCallFailed(module StdModule, block IrBlock, answer ValueId, ids ValueMinter) returns ValueId
-	return emitCmp(module, block: block, a: answer, b: emitConst(module, block: block, value: 0, ids: ids), pred: StdCmpPred.lt, ids: ids)
+	return emitCompareWithConstant(module, block: block, value: answer, pred: StdCmpPred.lt, against: 0, ids: ids)
 end 'emitSocketCallFailed'
 
 // ⭐⭐ **THE IPv4/TCP PROTOCOL SELECTION — ONE HOME, TWO READERS.** These three values are `socket()`'s
@@ -164,7 +164,7 @@ module function emitCodeIsOneOf(module StdModule, block IrBlock, code ValueId, c
 	var matches = ValueIdArray.create()
 
 	for candidate in codes 'eachCode'
-		matches.push(emitCmp(module, block: block, a: code, b: emitConst(module, block: block, value: candidate, ids: ids), pred: StdCmpPred.eq, ids: ids))
+		matches.push(emitCompareWithConstant(module, block: block, value: code, pred: StdCmpPred.eq, against: candidate, ids: ids))
 	end 'eachCode'
 
 	var anyOf = try matches.get(0) otherwise panic("emitCodeIsOneOf: a classification names at least one code")
@@ -244,15 +244,13 @@ export function emitWinsockStartup(module StdModule, func IrFunction, block IrBl
 	var markStarted = module.addBlock(func, label: b"mswsaok", heat: BlockHeat.normal)
 
 	let started = emitLoadAcquireGlobalWord(module, block: block, label: WinsockStartedLabel, ids: ids)
-	let alreadyStarted = emitCmp(module, block: block, a: started, b: emitConst(module, block: block, value: WinsockNotStarted, ids: ids), pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(block, op: StdOp.condBranch(alreadyStarted, thenBlockId: ready.id, elseBlockId: startup.id))
+	emitBranchOnCompare(module, block: block, value: started, pred: StdCmpPred.ne, against: WinsockNotStarted, whenTrue: ready, whenFalse: startup, ids: ids)
 
 	let wsaData = emitRawAlloc(module, block: startup, byteCount: emitConst(module, block: startup, value: WsaDataBytes, ids: ids), ids: ids)
 	let startupResult = ids.mint()
 	module.appendOp(startup, op: StdOp.osSocketStartup(startupResult, wsaDataPtrId: wsaData))
 	emitRawFree(module, block: startup, ptr: wsaData, ids: ids)
-	let winsockReady = emitCmp(module, block: startup, a: startupResult, b: emitConst(module, block: startup, value: WinsockCallOk, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(startup, op: StdOp.condBranch(winsockReady, thenBlockId: markStarted.id, elseBlockId: notReady.id))
+	emitBranchOnCompare(module, block: startup, value: startupResult, pred: StdCmpPred.eq, against: WinsockCallOk, whenTrue: markStarted, whenFalse: notReady, ids: ids)
 
 	emitStoreReleaseGlobalWord(module, block: markStarted, label: WinsockStartedLabel, value: emitConst(module, block: markStarted, value: WinsockStarted, ids: ids), ids: ids)
 	module.setTerminator(markStarted, op: StdOp.branch(ready.id))
@@ -543,11 +541,9 @@ function emitSocketWaitReady(module StdModule, func IrFunction, block IrBlock, p
 	var live = module.addBlock(func, label: b"mswaitlive", heat: BlockHeat.normal)
 
 	let outcome = emitNetpollPdWait(module, block: block, source: pollKey, mode: mode, gen: gen, ids: ids)
-	let gone = emitCmp(module, block: block, a: outcome, b: emitConst(module, block: block, value: NetpollWaitStale, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(block, op: StdOp.condBranch(gone, thenBlockId: stale.id, elseBlockId: live.id))
+	emitBranchOnCompare(module, block: block, value: outcome, pred: StdCmpPred.eq, against: NetpollWaitStale, whenTrue: stale, whenFalse: live, ids: ids)
 
-	let late = emitCmp(module, block: live, a: outcome, b: emitConst(module, block: live, value: NetpollWaitTimedOut, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(live, op: StdOp.condBranch(late, thenBlockId: timedOut.id, elseBlockId: ready.id))
+	emitBranchOnCompare(module, block: live, value: outcome, pred: StdCmpPred.eq, against: NetpollWaitTimedOut, whenTrue: timedOut, whenFalse: ready, ids: ids)
 end 'emitSocketWaitReady'
 
 // The block a deadline ends an operation in; it reports the operation's own failure. That it was a
@@ -653,8 +649,7 @@ export function emitResolveHostIp(module StdModule, func IrFunction, resolve IrB
 
 	let hostLength = ids.mint()
 	var measured = emitCStringLength(module, func: func, cur: resolve, cstr: host, length: hostLength, ids: ids)
-	let noName = emitCmp(module, block: measured, a: hostLength, b: emitConst(module, block: measured, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(measured, op: StdOp.condBranch(noName, thenBlockId: unnamed.id, elseBlockId: named.id))
+	emitBranchOnCompare(module, block: measured, value: hostLength, pred: StdCmpPred.eq, against: 0, whenTrue: unnamed, whenFalse: named, ids: ids)
 
 	emitRawFree(module, block: unnamed, ptr: host, ids: ids)
 	module.setTerminator(unnamed, op: StdOp.branch(resolveFailed.id))
@@ -700,9 +695,7 @@ function emitResolveThroughAddrInfo(module StdModule, func IrFunction, lookup Ir
 	emitReleaseHostCopy(module, block: lookup, copy: hostName, encoding: module.hostText, ids: ids)
 	emitRawFree(module, block: lookup, ptr: hints, ids: ids)
 	emitRawFree(module, block: lookup, ptr: host, ids: ids)
-	let resolveOk = emitConst(module, block: lookup, value: WinsockCallOk, ids: ids)
-	let didResolve = emitCmp(module, block: lookup, a: resolveResult, b: resolveOk, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(lookup, op: StdOp.condBranch(didResolve, thenBlockId: looked.id, elseBlockId: notLooked.id))
+	emitBranchOnCompare(module, block: lookup, value: resolveResult, pred: StdCmpPred.eq, against: WinsockCallOk, whenTrue: looked, whenFalse: notLooked, ids: ids)
 
 	emitRawFree(module, block: notLooked, ptr: out, ids: ids)
 	module.setTerminator(notLooked, op: StdOp.branch(resolveFailed.id))
@@ -788,9 +781,7 @@ function buildManagedSocketTcpConnect(module StdModule, target Target)
 	let ip = emitResolveHostIp(module, func: func, resolve: resolve, resolved: resolved, resolveFailed: resolveFailed, renounced: noWinsock, host: host, shape: socketResolveShape(target), park: GtIoOperation.netConnect, ids: ids)
 	emitErrorReturn(module, block: resolveFailed, flag: ManagedSocketResolveFailedFlag, ids: ids)
 
-	let testNet = emitConst(module, block: resolved, value: TestNet1NetOrder, ids: ids)
-	let isTestNet = emitCmp(module, block: resolved, a: ip, b: testNet, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(resolved, op: StdOp.condBranch(isTestNet, thenBlockId: refused.id, elseBlockId: create.id))
+	emitBranchOnCompare(module, block: resolved, value: ip, pred: StdCmpPred.eq, against: TestNet1NetOrder, whenTrue: refused, whenFalse: create, ids: ids)
 
 	// Nothing has been allocated or opened on this edge — see `TestNet1NetOrder` for why the connect is not
 	// attempted at all.
@@ -865,8 +856,7 @@ function emitSocketPolledDial(module StdModule, func IrFunction, ids ValueMinter
 	let dialResult = ids.mint()
 	module.appendOp(dial, op: StdOp.osSocketConnect(dialResult, sockId: socket, addrPtrId: addr))
 	emitRawFree(module, block: dial, ptr: addr, ids: ids)
-	let didConnect = emitCmp(module, block: dial, a: dialResult, b: emitConst(module, block: dial, value: WinsockCallOk, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(dial, op: StdOp.condBranch(didConnect, thenBlockId: connected.id, elseBlockId: dialPending.id))
+	emitBranchOnCompare(module, block: dial, value: dialResult, pred: StdCmpPred.eq, against: WinsockCallOk, whenTrue: connected, whenFalse: dialPending, ids: ids)
 
 	// A stale wait may not take `failed`, the connect's `closeAndFail`, which releases the poll record
 	// and closes the socket: on a stale answer that fd number may name another socket. This exit leaks
@@ -910,8 +900,7 @@ function emitSocketWatchedDial(module StdModule, func IrFunction, ids ValueMinte
 
 	let event = ids.mint()
 	module.appendOp(dial, op: StdOp.osEventCreate(event))
-	let haveEvent = emitCmp(module, block: dial, a: event, b: emitConst(module, block: dial, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(dial, op: StdOp.condBranch(haveEvent, thenBlockId: armWatch.id, elseBlockId: noEvent.id))
+	emitBranchOnCompare(module, block: dial, value: event, pred: StdCmpPred.ne, against: 0, whenTrue: armWatch, whenFalse: noEvent, ids: ids)
 
 	emitRawFree(module, block: noEvent, ptr: addr, ids: ids)
 	module.setTerminator(noEvent, op: StdOp.branch(failed.id))
@@ -919,8 +908,7 @@ function emitSocketWatchedDial(module StdModule, func IrFunction, ids ValueMinte
 	let selected = ids.mint()
 	let unusedArm = emitConst(module, block: armWatch, value: 0, ids: ids)
 	module.appendOp(armWatch, op: StdOp.osSocketOverlapped(selected, verb: SocketOverlappedVerb.watchConnect, a0Id: socket, a1Id: event, a2Id: unusedArm, a3Id: unusedArm))
-	let selectOk = emitCmp(module, block: armWatch, a: selected, b: emitConst(module, block: armWatch, value: WinsockCallOk, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(armWatch, op: StdOp.condBranch(selectOk, thenBlockId: issue.id, elseBlockId: watchRefused.id))
+	emitBranchOnCompare(module, block: armWatch, value: selected, pred: StdCmpPred.eq, against: WinsockCallOk, whenTrue: issue, whenFalse: watchRefused, ids: ids)
 
 	emitRawFree(module, block: watchRefused, ptr: addr, ids: ids)
 	module.setTerminator(watchRefused, op: StdOp.branch(dropEvent.id))
@@ -928,8 +916,7 @@ function emitSocketWatchedDial(module StdModule, func IrFunction, ids ValueMinte
 	let dialResult = ids.mint()
 	module.appendOp(issue, op: StdOp.osSocketConnect(dialResult, sockId: socket, addrPtrId: addr))
 	emitRawFree(module, block: issue, ptr: addr, ids: ids)
-	let didConnect = emitCmp(module, block: issue, a: dialResult, b: emitConst(module, block: issue, value: WinsockCallOk, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(issue, op: StdOp.condBranch(didConnect, thenBlockId: giveBack.id, elseBlockId: dialPending.id))
+	emitBranchOnCompare(module, block: issue, value: dialResult, pred: StdCmpPred.eq, against: WinsockCallOk, whenTrue: giveBack, whenFalse: dialPending, ids: ids)
 
 	// `WSAEWOULDBLOCK` is Winsock's `EINPROGRESS` here. It and `WSAEINTR` mean the handshake is still
 	// running; every other code is a refusal this call already knows about.
@@ -951,11 +938,9 @@ function emitSocketWatchedDial(module StdModule, func IrFunction, ids ValueMinte
 
 	// A wait that did not end in the event is a dropped promise, which renounces the park; the
 	// handshake is abandoned along with the socket `failed` closes.
-	let signalled = emitCmp(module, block: awaited, a: verdict, b: emitConst(module, block: awaited, value: NetpollWaitReady, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(awaited, op: StdOp.condBranch(signalled, thenBlockId: verify.id, elseBlockId: notSignalled.id))
+	emitBranchOnCompare(module, block: awaited, value: verdict, pred: StdCmpPred.eq, against: NetpollWaitReady, whenTrue: verify, whenFalse: notSignalled, ids: ids)
 
-	let ranOut = emitCmp(module, block: notSignalled, a: verdict, b: emitConst(module, block: notSignalled, value: NetpollWaitTimedOut, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(notSignalled, op: StdOp.condBranch(ranOut, thenBlockId: dropEventLate.id, elseBlockId: dropEvent.id))
+	emitBranchOnCompare(module, block: notSignalled, value: verdict, pred: StdCmpPred.eq, against: NetpollWaitTimedOut, whenTrue: dropEventLate, whenFalse: dropEvent, ids: ids)
 
 	let noConnection = emitHandshakeRefused(module, block: verify, socket: socket, ids: ids)
 	module.setTerminator(verify, op: StdOp.condBranch(noConnection, thenBlockId: dropEvent.id, elseBlockId: giveBack.id))
@@ -1034,7 +1019,7 @@ function emitHandshakeRefused(module StdModule, block IrBlock, socket ValueId, i
 	let verdict = emitLoadDword(module, block: block, record: scratch, offset: SocketOptionValueOffset, ids: ids)
 	emitRawFree(module, block: block, ptr: scratch, ids: ids)
 	let askFailed = emitSocketCallFailed(module, block: block, answer: status, ids: ids)
-	let refused = emitCmp(module, block: block, a: verdict, b: emitConst(module, block: block, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	let refused = emitCompareWithConstant(module, block: block, value: verdict, pred: StdCmpPred.ne, against: 0, ids: ids)
 	return emitBin(module, block: block, a: askFailed, b: refused, opcode: StdBinOpcode.bitOr, ids: ids)
 end 'emitHandshakeRefused'
 
@@ -1089,12 +1074,9 @@ function buildManagedSocketSendFrom(module StdModule, target Target)
 	// and `send` is handed a NEGATIVE length, which its `int` parameter turns into a ~4-billion-byte read off
 	// the end of the buffer. The sum is still computed once (the capacity test needs it), but it may not
 	// stand in for the two sign tests.
-	let zero = emitConst(module, block: checkOffset, value: 0, ids: ids)
-	let negativeOffset = emitCmp(module, block: checkOffset, a: offset, b: zero, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(checkOffset, op: StdOp.condBranch(negativeOffset, thenBlockId: outOfBounds.id, elseBlockId: checkLength.id))
+	emitBranchOnCompare(module, block: checkOffset, value: offset, pred: StdCmpPred.lt, against: 0, whenTrue: outOfBounds, whenFalse: checkLength, ids: ids)
 
-	let negativeLength = emitCmp(module, block: checkLength, a: length, b: zero, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(checkLength, op: StdOp.condBranch(negativeLength, thenBlockId: outOfBounds.id, elseBlockId: pickBound.id))
+	emitBranchOnCompare(module, block: checkLength, value: length, pred: StdCmpPred.lt, against: 0, whenTrue: outOfBounds, whenFalse: pickBound, ids: ids)
 
 	// ⭐⭐ **WHICH FIELD BOUNDS THE READ DEPENDS ON WHO OWNS THE BUFFER, AND `capacity@16` ALONE CANNOT ANSWER
 	// IT — MEASURED.** The spec's rule is *"throws `bufferOutOfBounds` if `offset + length > capacity`"*, and
@@ -1309,8 +1291,8 @@ function emitSocketOverlappedTransfer(module StdModule, func IrFunction, ids Val
 	// call's own.
 	let failure = ids.mint()
 	module.appendOp(attempt, op: StdOp.osLastError(failure))
-	let inlineDone = emitCmp(module, block: attempt, a: answer, b: emitConst(module, block: attempt, value: WinsockCallOk, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	let queued = emitCmp(module, block: attempt, a: failure, b: emitConst(module, block: attempt, value: ErrorIoPending, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let inlineDone = emitCompareWithConstant(module, block: attempt, value: answer, pred: StdCmpPred.eq, against: WinsockCallOk, ids: ids)
+	let queued = emitCompareWithConstant(module, block: attempt, value: failure, pred: StdCmpPred.eq, against: ErrorIoPending, ids: ids)
 	let started = emitBin(module, block: attempt, a: inlineDone, b: queued, opcode: StdBinOpcode.bitOr, ids: ids)
 	module.setTerminator(attempt, op: StdOp.condBranch(started, thenBlockId: waitHdr.id, elseBlockId: issueFailed.id))
 
@@ -1319,15 +1301,12 @@ function emitSocketOverlappedTransfer(module StdModule, func IrFunction, ids Val
 	module.setTerminator(issueFailed, op: StdOp.branch(failed.id))
 
 	let verdict = emitNetpollPdWait(module, block: waitHdr, source: pollKey, mode: mode, gen: gen, ids: ids)
-	let woken = emitCmp(module, block: waitHdr, a: verdict, b: emitConst(module, block: waitHdr, value: NetpollWaitReady, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(waitHdr, op: StdOp.condBranch(woken, thenBlockId: landed.id, elseBlockId: notReady.id))
+	emitBranchOnCompare(module, block: waitHdr, value: verdict, pred: StdCmpPred.eq, against: NetpollWaitReady, whenTrue: landed, whenFalse: notReady, ids: ids)
 
 	let aimed = emitLoadField(module, block: landed, record: gt, offset: GtOffIoSource, ids: ids)
-	let stillOut = emitCmp(module, block: landed, a: aimed, b: emitConst(module, block: landed, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(landed, op: StdOp.condBranch(stillOut, thenBlockId: waitHdr.id, elseBlockId: completed.id))
+	emitBranchOnCompare(module, block: landed, value: aimed, pred: StdCmpPred.ne, against: 0, whenTrue: waitHdr, whenFalse: completed, ids: ids)
 
-	let late = emitCmp(module, block: notReady, a: verdict, b: emitConst(module, block: notReady, value: NetpollWaitTimedOut, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(notReady, op: StdOp.condBranch(late, thenBlockId: lateCollect.id, elseBlockId: staleCollect.id))
+	emitBranchOnCompare(module, block: notReady, value: verdict, pred: StdCmpPred.eq, against: NetpollWaitTimedOut, whenTrue: lateCollect, whenFalse: staleCollect, ids: ids)
 
 	// A deadline left the socket open and ours, so the cancel may name it. A request the kernel already finished
 	// ignores the cancel, and its packet comes either way.
@@ -1358,8 +1337,8 @@ function emitSocketOverlappedTransfer(module StdModule, func IrFunction, ids Val
 	// bytes, which the stdlib reads as `connectionClosed` — the same answer a blocking `recv` gave it.
 	let (status, moved, cancelled, abandoned) = emitSocketPacketPair(module, block: completed, gt: gt, ids: ids)
 	emitRawFree(module, block: completed, ptr: buffers, ids: ids)
-	let finished = emitCmp(module, block: completed, a: status, b: emitConst(module, block: completed, value: NtStatusSuccess, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	let kept = emitCmp(module, block: completed, a: abandoned, b: emitConst(module, block: completed, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let finished = emitCompareWithConstant(module, block: completed, value: status, pred: StdCmpPred.eq, against: NtStatusSuccess, ids: ids)
+	let kept = emitCompareWithConstant(module, block: completed, value: abandoned, pred: StdCmpPred.eq, against: 0, ids: ids)
 	let partial = emitBin(module, block: completed, a: cancelled, b: kept, opcode: StdBinOpcode.bitAnd, ids: ids)
 	let succeeded = emitBin(module, block: completed, a: finished, b: partial, opcode: StdBinOpcode.bitOr, ids: ids)
 	module.setTerminator(completed, op: StdOp.condBranch(succeeded, thenBlockId: ok.id, elseBlockId: failed.id))
@@ -1373,8 +1352,8 @@ end 'emitSocketOverlappedTransfer'
 function emitSocketPacketPair(module StdModule, block IrBlock, gt ValueId, ids ValueMinter) returns (ValueId, ValueId, ValueId, ValueId)
 	let status = emitLoadField(module, block: block, record: gt, offset: GtOffIoStatus, ids: ids)
 	let moved = emitLoadField(module, block: block, record: gt, offset: GtOffIoResult, ids: ids)
-	let cancelled = emitCmp(module, block: block, a: status, b: emitConst(module, block: block, value: NtStatusCancelled, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	let empty = emitCmp(module, block: block, a: moved, b: emitConst(module, block: block, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let cancelled = emitCompareWithConstant(module, block: block, value: status, pred: StdCmpPred.eq, against: NtStatusCancelled, ids: ids)
+	let empty = emitCompareWithConstant(module, block: block, value: moved, pred: StdCmpPred.eq, against: 0, ids: ids)
 	let abandoned = emitBin(module, block: block, a: cancelled, b: empty, opcode: StdBinOpcode.bitAnd, ids: ids)
 	return (status, moved, cancelled, abandoned)
 end 'emitSocketPacketPair'
@@ -1391,13 +1370,11 @@ function emitSocketCollectOutstanding(module StdModule, func IrFunction, ids Val
 	var notACompletion = module.addBlock(func, label: b"mscollectbad", heat: BlockHeat.normal)
 
 	let source = emitNetpollOpSettle(module, block: cur, ids: ids)
-	let outstanding = emitCmp(module, block: cur, a: source, b: emitConst(module, block: cur, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(outstanding, thenBlockId: wait.id, elseBlockId: cont.id))
+	emitBranchOnCompare(module, block: cur, value: source, pred: StdCmpPred.ne, against: 0, whenTrue: wait, whenFalse: cont, ids: ids)
 
 	let gen = emitNetpollPdOpBegin(module, block: wait, source: source, ids: ids)
 	let verdict = emitNetpollPdWait(module, block: wait, source: source, mode: mode, gen: gen, ids: ids)
-	let woken = emitCmp(module, block: wait, a: verdict, b: emitConst(module, block: wait, value: NetpollWaitReady, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(wait, op: StdOp.condBranch(woken, thenBlockId: collected.id, elseBlockId: notACompletion.id))
+	emitBranchOnCompare(module, block: wait, value: verdict, pred: StdCmpPred.eq, against: NetpollWaitReady, whenTrue: collected, whenFalse: notACompletion, ids: ids)
 
 	// A minted source arms no deadline and nobody but this thread releases it, so the completion is the only
 	// thing that can end this wait — any other verdict means one of those two facts has stopped holding.
@@ -1461,8 +1438,7 @@ function buildManagedSocketClose(module StdModule, target Target)
 	let box = 0
 
 	let slot = emitLoadField(module, block: entry, record: box, offset: ManagedSocketHandleOffset, ids: ids)
-	let closedConst = emitConst(module, block: entry, value: ManagedSocketClosedHandle, ids: ids)
-	let alreadyClosed = emitCmp(module, block: entry, a: slot, b: closedConst, pred: StdCmpPred.eq, ids: ids)
+	let alreadyClosed = emitCompareWithConstant(module, block: entry, value: slot, pred: StdCmpPred.eq, against: ManagedSocketClosedHandle, ids: ids)
 
 	// `entry` dominates `doClose`, so the decoded socket is simply in scope there — the dominance argument
 	// `ManagedFileRuntime.emitLiveHandleOrClosedThrow` makes for its own.
@@ -1556,7 +1532,7 @@ function emitManagedSocketTimedOutAnswer(module StdModule, func IrFunction, entr
 	var gone = module.addBlock(func, label: b"mstogone", heat: BlockHeat.normal)
 
 	let slot = emitLoadField(module, block: entry, record: box, offset: ManagedSocketHandleOffset, ids: ids)
-	let closed = emitCmp(module, block: entry, a: slot, b: emitConst(module, block: entry, value: ManagedSocketClosedHandle, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	let closed = emitCompareWithConstant(module, block: entry, value: slot, pred: StdCmpPred.eq, against: ManagedSocketClosedHandle, ids: ids)
 	let socket = emitHandleFromSlot(module, block: entry, slot: slot, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(closed, thenBlockId: gone.id, elseBlockId: live.id))
 
@@ -1873,7 +1849,7 @@ end 'emitResolverCall'
 
 // Whether a resolver's `answer` is an address rather than `ResolveNoAddress`.
 function emitIsAddress(module StdModule, block IrBlock, answer ValueId, ids ValueMinter) returns ValueId
-	return emitCmp(module, block: block, a: answer, b: emitConst(module, block: block, value: ResolveNoAddress, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	return emitCompareWithConstant(module, block: block, value: answer, pred: StdCmpPred.ne, against: ResolveNoAddress, ids: ids)
 end 'emitIsAddress'
 
 // ⭐⭐ **ONE LOOP, TWO INSTALLED FUNCTIONS — `__ms_blanks` SKIPS A RUN OF BLANKS AND `__ms_word` SKIPS A RUN
@@ -1912,12 +1888,10 @@ function buildManagedSocketSpan(module StdModule, name ByteArray, skipBlanks boo
 	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
 
 	let current = emitLoadByte(module, block: body, base: buf, index: pos, ids: ids)
-	let space = emitConst(module, block: body, value: ResolveSpaceByte, ids: ids)
-	let isSpace = emitCmp(module, block: body, a: current, b: space, pred: StdCmpPred.eq, ids: ids)
+	let isSpace = emitCompareWithConstant(module, block: body, value: current, pred: StdCmpPred.eq, against: ResolveSpaceByte, ids: ids)
 	module.setTerminator(body, op: StdOp.condBranch(isSpace, thenBlockId: onBlank, elseBlockId: tabTest.id))
 
-	let tab = emitConst(module, block: tabTest, value: ResolveTabByte, ids: ids)
-	let isTab = emitCmp(module, block: tabTest, a: current, b: tab, pred: StdCmpPred.eq, ids: ids)
+	let isTab = emitCompareWithConstant(module, block: tabTest, value: current, pred: StdCmpPred.eq, against: ResolveTabByte, ids: ids)
 	module.setTerminator(tabTest, op: StdOp.condBranch(isTab, thenBlockId: onBlank, elseBlockId: offBlank))
 
 	let one = emitConst(module, block: step, value: 1, ids: ids)
@@ -1957,9 +1931,7 @@ function buildManagedSocketEol(module StdModule)
 	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
 
 	let current = emitLoadByte(module, block: body, base: buf, index: pos, ids: ids)
-	let newline = emitConst(module, block: body, value: ResolveNewlineByte, ids: ids)
-	let isNewline = emitCmp(module, block: body, a: current, b: newline, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(body, op: StdOp.condBranch(isNewline, thenBlockId: done.id, elseBlockId: step.id))
+	emitBranchOnCompare(module, block: body, value: current, pred: StdCmpPred.eq, against: ResolveNewlineByte, whenTrue: done, whenFalse: step, ids: ids)
 
 	let one = emitConst(module, block: step, value: 1, ids: ids)
 	let next = emitBin(module, block: step, a: pos, b: one, opcode: StdBinOpcode.add, ids: ids)
@@ -2038,26 +2010,18 @@ function buildManagedSocketIpv4(module StdModule)
 	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: finish.id, elseBlockId: body.id))
 
 	let current = emitLoadByte(module, block: body, base: buf, index: pos, ids: ids)
-	let dotByte = emitConst(module, block: body, value: ResolveDotByte, ids: ids)
-	let isDot = emitCmp(module, block: body, a: current, b: dotByte, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(body, op: StdOp.condBranch(isDot, thenBlockId: dot.id, elseBlockId: digitLow.id))
+	emitBranchOnCompare(module, block: body, value: current, pred: StdCmpPred.eq, against: ResolveDotByte, whenTrue: dot, whenFalse: digitLow, ids: ids)
 
-	let zeroDigit = emitConst(module, block: digitLow, value: ResolveDigitZeroByte, ids: ids)
-	let belowDigits = emitCmp(module, block: digitLow, a: current, b: zeroDigit, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(digitLow, op: StdOp.condBranch(belowDigits, thenBlockId: failed.id, elseBlockId: digitHigh.id))
+	emitBranchOnCompare(module, block: digitLow, value: current, pred: StdCmpPred.lt, against: ResolveDigitZeroByte, whenTrue: failed, whenFalse: digitHigh, ids: ids)
 
-	let nineDigit = emitConst(module, block: digitHigh, value: ResolveDigitNineByte, ids: ids)
-	let aboveDigits = emitCmp(module, block: digitHigh, a: current, b: nineDigit, pred: StdCmpPred.gt, ids: ids)
-	module.setTerminator(digitHigh, op: StdOp.condBranch(aboveDigits, thenBlockId: failed.id, elseBlockId: digit.id))
+	emitBranchOnCompare(module, block: digitHigh, value: current, pred: StdCmpPred.gt, against: ResolveDigitNineByte, whenTrue: failed, whenFalse: digit, ids: ids)
 
 	let base = emitConst(module, block: digit, value: Ipv4DecimalBase, ids: ids)
 	let shifted = emitBin(module, block: digit, a: octet, b: base, opcode: StdBinOpcode.mul, ids: ids)
 	let digitZero = emitConst(module, block: digit, value: ResolveDigitZeroByte, ids: ids)
 	let digitValue = emitBin(module, block: digit, a: current, b: digitZero, opcode: StdBinOpcode.sub, ids: ids)
 	let grown = emitBin(module, block: digit, a: shifted, b: digitValue, opcode: StdBinOpcode.add, ids: ids)
-	let octetMax = emitConst(module, block: digit, value: Ipv4OctetMax, ids: ids)
-	let overflowed = emitCmp(module, block: digit, a: grown, b: octetMax, pred: StdCmpPred.gt, ids: ids)
-	module.setTerminator(digit, op: StdOp.condBranch(overflowed, thenBlockId: failed.id, elseBlockId: digitFits.id))
+	emitBranchOnCompare(module, block: digit, value: grown, pred: StdCmpPred.gt, against: Ipv4OctetMax, whenTrue: failed, whenFalse: digitFits, ids: ids)
 
 	let digitStep = emitConst(module, block: digitFits, value: 1, ids: ids)
 	let digitsNext = emitBin(module, block: digitFits, a: digits, b: digitStep, opcode: StdBinOpcode.add, ids: ids)
@@ -2067,13 +2031,9 @@ function buildManagedSocketIpv4(module StdModule)
 
 	// A dot closes an octet, and both guards are refusals: an EMPTY octet (`1..2`, a leading dot) and a
 	// FOURTH dot. Together they are what holds the accepted grammar to exactly four octets.
-	let dotEmptyZero = emitConst(module, block: dot, value: 0, ids: ids)
-	let dotEmpty = emitCmp(module, block: dot, a: digits, b: dotEmptyZero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(dot, op: StdOp.condBranch(dotEmpty, thenBlockId: failed.id, elseBlockId: dotCount.id))
+	emitBranchOnCompare(module, block: dot, value: digits, pred: StdCmpPred.eq, against: 0, whenTrue: failed, whenFalse: dotCount, ids: ids)
 
-	let lastIndex = emitConst(module, block: dotCount, value: Ipv4LastOctetIndex, ids: ids)
-	let dotsFull = emitCmp(module, block: dotCount, a: closed, b: lastIndex, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(dotCount, op: StdOp.condBranch(dotsFull, thenBlockId: failed.id, elseBlockId: dotClosed.id))
+	emitBranchOnCompare(module, block: dotCount, value: closed, pred: StdCmpPred.ge, against: Ipv4LastOctetIndex, whenTrue: failed, whenFalse: dotClosed, ids: ids)
 
 	let dotScale = emitConst(module, block: dotClosed, value: Ipv4OctetScale, ids: ids)
 	let placedDot = emitBin(module, block: dotClosed, a: octet, b: scale, opcode: StdBinOpcode.mul, ids: ids)
@@ -2089,13 +2049,9 @@ function buildManagedSocketIpv4(module StdModule)
 	// The end of the range closes the LAST octet. The same empty-octet refusal, and a count that must be
 	// EXACTLY three dots — where the dot arm's is a ceiling, because a fourth dot and a fourth octet are not
 	// the same event.
-	let finishEmptyZero = emitConst(module, block: finish, value: 0, ids: ids)
-	let finishEmpty = emitCmp(module, block: finish, a: digits, b: finishEmptyZero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(finish, op: StdOp.condBranch(finishEmpty, thenBlockId: failed.id, elseBlockId: finishCount.id))
+	emitBranchOnCompare(module, block: finish, value: digits, pred: StdCmpPred.eq, against: 0, whenTrue: failed, whenFalse: finishCount, ids: ids)
 
-	let finishLast = emitConst(module, block: finishCount, value: Ipv4LastOctetIndex, ids: ids)
-	let wrongCount = emitCmp(module, block: finishCount, a: closed, b: finishLast, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(finishCount, op: StdOp.condBranch(wrongCount, thenBlockId: failed.id, elseBlockId: finishClosed.id))
+	emitBranchOnCompare(module, block: finishCount, value: closed, pred: StdCmpPred.ne, against: Ipv4LastOctetIndex, whenTrue: failed, whenFalse: finishClosed, ids: ids)
 
 	let placedLast = emitBin(module, block: finishClosed, a: octet, b: scale, opcode: StdBinOpcode.mul, ids: ids)
 	let addressLast = emitBin(module, block: finishClosed, a: address, b: placedLast, opcode: StdBinOpcode.add, ids: ids)
@@ -2132,9 +2088,7 @@ function buildManagedSocketSlurp(module StdModule)
 
 	let handle = ids.mint()
 	module.appendOp(entry, op: StdOp.osFileOpenRead(handle, pathPtrId: path))
-	let invalid = emitConst(module, block: entry, value: InvalidHandleValue, ids: ids)
-	let openFailed = emitCmp(module, block: entry, a: handle, b: invalid, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(openFailed, thenBlockId: empty.id, elseBlockId: opened.id))
+	emitBranchOnCompare(module, block: entry, value: handle, pred: StdCmpPred.eq, against: InvalidHandleValue, whenTrue: empty, whenFalse: opened, ids: ids)
 
 	let out = emitWin32OutWord(module, block: opened, ids: ids)
 	let readOk = ids.mint()
@@ -2142,9 +2096,7 @@ function buildManagedSocketSlurp(module StdModule)
 	module.appendOp(opened, op: StdOp.osFileClose(handle))
 	let count = emitLoadField(module, block: opened, record: out, offset: Win32OutWordAnswerOffset, ids: ids)
 	emitRawFree(module, block: opened, ptr: out, ids: ids)
-	let readFalse = emitConst(module, block: opened, value: 0, ids: ids)
-	let readFailed = emitCmp(module, block: opened, a: readOk, b: readFalse, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(opened, op: StdOp.condBranch(readFailed, thenBlockId: empty.id, elseBlockId: read.id))
+	emitBranchOnCompare(module, block: opened, value: readOk, pred: StdCmpPred.eq, against: 0, whenTrue: empty, whenFalse: read, ids: ids)
 
 	module.setTerminator(read, op: StdOp.ret(count))
 
@@ -2246,9 +2198,7 @@ function buildManagedSocketHosts(module StdModule)
 	module.setTerminator(lineStart, op: StdOp.condBranch(addressEmpty, thenBlockId: nextLine.id, elseBlockId: haveAddress.id))
 
 	let addressFirst = emitLoadByte(module, block: haveAddress, base: buf, index: addressStart, ids: ids)
-	let hashByte = emitConst(module, block: haveAddress, value: ResolveHashByte, ids: ids)
-	let addressIsComment = emitCmp(module, block: haveAddress, a: addressFirst, b: hashByte, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(haveAddress, op: StdOp.condBranch(addressIsComment, thenBlockId: nextLine.id, elseBlockId: namesStart.id))
+	emitBranchOnCompare(module, block: haveAddress, value: addressFirst, pred: StdCmpPred.eq, against: ResolveHashByte, whenTrue: nextLine, whenFalse: namesStart, ids: ids)
 
 	// The name walk's cursor rides a block arg, so the entry into it is a plain branch — a `condBranch`
 	// carries no edge arguments at this tier.
@@ -2263,9 +2213,7 @@ function buildManagedSocketHosts(module StdModule)
 	module.setTerminator(nameHeader, op: StdOp.condBranch(namesDone, thenBlockId: nextLine.id, elseBlockId: nameCheck.id))
 
 	let nameFirst = emitLoadByte(module, block: nameCheck, base: buf, index: nameStart, ids: ids)
-	let nameHash = emitConst(module, block: nameCheck, value: ResolveHashByte, ids: ids)
-	let nameIsComment = emitCmp(module, block: nameCheck, a: nameFirst, b: nameHash, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(nameCheck, op: StdOp.condBranch(nameIsComment, thenBlockId: nextLine.id, elseBlockId: lengthCheck.id))
+	emitBranchOnCompare(module, block: nameCheck, value: nameFirst, pred: StdCmpPred.eq, against: ResolveHashByte, whenTrue: nextLine, whenFalse: lengthCheck, ids: ids)
 
 	let nameLength = emitBin(module, block: lengthCheck, a: nameEnd, b: nameStart, opcode: StdBinOpcode.sub, ids: ids)
 	let sameLength = emitCmp(module, block: lengthCheck, a: nameLength, b: hostLen, pred: StdCmpPred.eq, ids: ids)
@@ -2378,9 +2326,7 @@ function buildManagedSocketDnsSkip(module StdModule)
 	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: truncated.id, elseBlockId: body.id))
 
 	let current = emitLoadByte(module, block: body, base: buf, index: pos, ids: ids)
-	let zero = emitConst(module, block: body, value: 0, ids: ids)
-	let isRoot = emitCmp(module, block: body, a: current, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(body, op: StdOp.condBranch(isRoot, thenBlockId: root.id, elseBlockId: pointerTest.id))
+	emitBranchOnCompare(module, block: body, value: current, pred: StdCmpPred.eq, against: 0, whenTrue: root, whenFalse: pointerTest, ids: ids)
 
 	let terminatorBytes = emitConst(module, block: root, value: DnsLabelTerminatorBytes, ids: ids)
 	let afterRoot = emitBin(module, block: root, a: pos, b: terminatorBytes, opcode: StdBinOpcode.add, ids: ids)
@@ -2476,9 +2422,7 @@ function buildManagedSocketDns(module StdModule, target Target)
 	let server = 2
 
 	// A name longer than a DNS name may be, and the empty name, are refused before anything is allocated.
-	let nameMax = emitConst(module, block: entry, value: DnsMaxNameBytes, ids: ids)
-	let nameTooLong = emitCmp(module, block: entry, a: hostLen, b: nameMax, pred: StdCmpPred.gt, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(nameTooLong, thenBlockId: failed.id, elseBlockId: sized.id))
+	emitBranchOnCompare(module, block: entry, value: hostLen, pred: StdCmpPred.gt, against: DnsMaxNameBytes, whenTrue: failed, whenFalse: sized, ids: ids)
 
 	// The header. `ancount`, `nscount` and `arcount` are left as the zeroes `__mm_alloc` produced.
 	let message = emitRawAlloc(module, block: sized, byteCount: emitConst(module, block: sized, value: DnsMessageBytes, ids: ids), ids: ids)
@@ -2505,9 +2449,7 @@ function buildManagedSocketDns(module StdModule, target Target)
 	module.setTerminator(nameHeader, op: StdOp.condBranch(nameDone, thenBlockId: nameFinish.id, elseBlockId: nameByte.id))
 
 	let hostByte = emitLoadByte(module, block: nameByte, base: host, index: hostIndex, ids: ids)
-	let dotByte = emitConst(module, block: nameByte, value: ResolveDotByte, ids: ids)
-	let atDot = emitCmp(module, block: nameByte, a: hostByte, b: dotByte, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(nameByte, op: StdOp.condBranch(atDot, thenBlockId: nameDot.id, elseBlockId: nameChar.id))
+	emitBranchOnCompare(module, block: nameByte, value: hostByte, pred: StdCmpPred.eq, against: ResolveDotByte, whenTrue: nameDot, whenFalse: nameChar, ids: ids)
 
 	emitStoreByte(module, block: nameChar, base: message, index: writeAt, value: hostByte, ids: ids)
 	let charStep = emitConst(module, block: nameChar, value: 1, ids: ids)
@@ -2576,9 +2518,7 @@ function buildManagedSocketDns(module StdModule, target Target)
 	let dialResult = ids.mint()
 	module.appendOp(connectStep, op: StdOp.osSocketConnect(dialResult, sockId: socket, addrPtrId: address))
 	emitRawFree(module, block: connectStep, ptr: address, ids: ids)
-	let dialOk = emitConst(module, block: connectStep, value: WinsockCallOk, ids: ids)
-	let dialFailed = emitCmp(module, block: connectStep, a: dialResult, b: dialOk, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(connectStep, op: StdOp.condBranch(dialFailed, thenBlockId: connectWait.id, elseBlockId: sendStep.id))
+	emitBranchOnCompare(module, block: connectStep, value: dialResult, pred: StdCmpPred.ne, against: WinsockCallOk, whenTrue: connectWait, whenFalse: sendStep, ids: ids)
 	emitSocketConnectWait(module, func: func, cur: connectWait, answer: dialResult, socket: socket, pollKey: pollKey, gen: gen, connected: sendStep, failed: closeFailed, late: closeFailed, stale: closeFailed, shape: waitShape, target: target, ids: ids)
 
 	// A short send is treated as a failure rather than looped over: the query is at most 273 bytes and a
@@ -2604,9 +2544,7 @@ function buildManagedSocketDns(module StdModule, target Target)
 
 	let capacity = emitConst(module, block: recvHeader, value: DnsMessageBytes, ids: ids)
 	let room = emitBin(module, block: recvHeader, a: capacity, b: received, opcode: StdBinOpcode.sub, ids: ids)
-	let empty = emitConst(module, block: recvHeader, value: 0, ids: ids)
-	let noRoom = emitCmp(module, block: recvHeader, a: room, b: empty, pred: StdCmpPred.le, ids: ids)
-	module.setTerminator(recvHeader, op: StdOp.condBranch(noRoom, thenBlockId: recvFull.id, elseBlockId: recvRead.id))
+	emitBranchOnCompare(module, block: recvHeader, value: room, pred: StdCmpPred.le, against: 0, whenTrue: recvFull, whenFalse: recvRead, ids: ids)
 
 	module.setTerminator(recvFull, op: StdOp.branch(parse.id))
 	recvFull.branchEdges.push(BranchEdge.create(parse.id, argIds: argsOf(received)))
@@ -2620,8 +2558,7 @@ function buildManagedSocketDns(module StdModule, target Target)
 	// either the descriptor saying "not yet", which parks, or a failure, which closes.
 	let arrivedNow = ids.mint()
 	readOk.blockArgs.push(IrBlockArg.create(arrivedNow, argType: StdType.i64))
-	let readEnded = emitCmp(module, block: readOk, a: arrivedNow, b: emitConst(module, block: readOk, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(readOk, op: StdOp.condBranch(readEnded, thenBlockId: recvEof.id, elseBlockId: recvGot.id))
+	emitBranchOnCompare(module, block: readOk, value: arrivedNow, pred: StdCmpPred.eq, against: 0, whenTrue: recvEof, whenFalse: recvGot, ids: ids)
 
 	module.setTerminator(recvEof, op: StdOp.branch(parse.id))
 	recvEof.branchEdges.push(BranchEdge.create(parse.id, argIds: argsOf(received)))
@@ -2648,22 +2585,16 @@ function buildManagedSocketDns(module StdModule, target Target)
 	parse.blockArgs.push(IrBlockArg.create(arrived, argType: StdType.i64))
 	emitSocketPollerRelease(module, block: parse, pollKey: pollKey, ids: ids)
 	module.appendOp(parse, op: StdOp.osSocketClose(socket))
-	let minimumBytes = emitConst(module, block: parse, value: DnsQuestionStart, ids: ids)
-	let tooShort = emitCmp(module, block: parse, a: arrived, b: minimumBytes, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(parse, op: StdOp.condBranch(tooShort, thenBlockId: releaseFailed.id, elseBlockId: rcodeCheck.id))
+	emitBranchOnCompare(module, block: parse, value: arrived, pred: StdCmpPred.lt, against: DnsQuestionStart, whenTrue: releaseFailed, whenFalse: rcodeCheck, ids: ids)
 
 	let rcodeByte = emitLoadConstByte(module, block: rcodeCheck, base: message, offset: DnsRcodeByteOffset, ids: ids)
 	let rcodeMask = emitConst(module, block: rcodeCheck, value: DnsRcodeMask, ids: ids)
 	let rcode = emitBin(module, block: rcodeCheck, a: rcodeByte, b: rcodeMask, opcode: StdBinOpcode.bitAnd, ids: ids)
-	let noError = emitConst(module, block: rcodeCheck, value: DnsRcodeNoError, ids: ids)
-	let serverRefused = emitCmp(module, block: rcodeCheck, a: rcode, b: noError, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(rcodeCheck, op: StdOp.condBranch(serverRefused, thenBlockId: releaseFailed.id, elseBlockId: answerCount.id))
+	emitBranchOnCompare(module, block: rcodeCheck, value: rcode, pred: StdCmpPred.ne, against: DnsRcodeNoError, whenTrue: releaseFailed, whenFalse: answerCount, ids: ids)
 
 	let answerCountIndex = emitConst(module, block: answerCount, value: DnsAnCountHighIndex, ids: ids)
 	let answers = emitLoadBigEndian16(module, block: answerCount, buf: message, index: answerCountIndex, ids: ids)
-	let noAnswers = emitConst(module, block: answerCount, value: 0, ids: ids)
-	let emptyAnswer = emitCmp(module, block: answerCount, a: answers, b: noAnswers, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(answerCount, op: StdOp.condBranch(emptyAnswer, thenBlockId: releaseFailed.id, elseBlockId: skipQuestion.id))
+	emitBranchOnCompare(module, block: answerCount, value: answers, pred: StdCmpPred.eq, against: 0, whenTrue: releaseFailed, whenFalse: skipQuestion, ids: ids)
 
 	let questionStart = emitConst(module, block: skipQuestion, value: DnsQuestionStart, ids: ids)
 	let afterQuestionName = emitResolverCall(module, block: skipQuestion, callee: ManagedSocketDnsSkipName, args: threeArgs(message, second: questionStart, third: arrived), ids: ids)
@@ -2690,9 +2621,7 @@ function buildManagedSocketDns(module StdModule, target Target)
 	let rdLengthOffset = emitConst(module, block: answerFields, value: DnsRecordRdLengthOffset, ids: ids)
 	let rdLengthIndex = emitBin(module, block: answerFields, a: afterAnswerName, b: rdLengthOffset, opcode: StdBinOpcode.add, ids: ids)
 	let rdLength = emitLoadBigEndian16(module, block: answerFields, buf: message, index: rdLengthIndex, ids: ids)
-	let typeA = emitConst(module, block: answerFields, value: DnsTypeA, ids: ids)
-	let notAddress = emitCmp(module, block: answerFields, a: recordType, b: typeA, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(answerFields, op: StdOp.condBranch(notAddress, thenBlockId: answerNext.id, elseBlockId: addressRecord.id))
+	emitBranchOnCompare(module, block: answerFields, value: recordType, pred: StdCmpPred.ne, against: DnsTypeA, whenTrue: answerNext, whenFalse: addressRecord, ids: ids)
 
 	let addressBytes = emitConst(module, block: addressRecord, value: DnsAddressRdLength, ids: ids)
 	let wrongWidth = emitCmp(module, block: addressRecord, a: rdLength, b: addressBytes, pred: StdCmpPred.ne, ids: ids)
@@ -2743,13 +2672,9 @@ end 'emitDnsLabelLength'
 function emitDnsLabelGuard(module StdModule, func IrFunction, block IrBlock, labelLength ValueId, bad IrBlock, ok IrBlock, ids ValueMinter)
 	var upper = module.addBlock(func, label: b"msdqlim", heat: BlockHeat.normal)
 
-	let shortest = emitConst(module, block: block, value: 1, ids: ids)
-	let belowOne = emitCmp(module, block: block, a: labelLength, b: shortest, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(block, op: StdOp.condBranch(belowOne, thenBlockId: bad.id, elseBlockId: upper.id))
+	emitBranchOnCompare(module, block: block, value: labelLength, pred: StdCmpPred.lt, against: 1, whenTrue: bad, whenFalse: upper, ids: ids)
 
-	let longest = emitConst(module, block: upper, value: DnsMaxLabelBytes, ids: ids)
-	let aboveLimit = emitCmp(module, block: upper, a: labelLength, b: longest, pred: StdCmpPred.gt, ids: ids)
-	module.setTerminator(upper, op: StdOp.condBranch(aboveLimit, thenBlockId: bad.id, elseBlockId: ok.id))
+	emitBranchOnCompare(module, block: upper, value: labelLength, pred: StdCmpPred.gt, against: DnsMaxLabelBytes, whenTrue: bad, whenFalse: ok, ids: ids)
 end 'emitDnsLabelGuard'
 
 // One CONSTANT byte at a RUNTIME index plus a constant delta — the shape the question's tail is written

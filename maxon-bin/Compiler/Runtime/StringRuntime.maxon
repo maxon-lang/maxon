@@ -700,14 +700,12 @@ function buildStreamWrite(module StdModule, name ByteArray, stream OsOutputStrea
 		standardError then module.appendOp(lap, op: StdOp.osWriteStderr(written, bufId: cursor, lenId: remaining))
 	end 's'
 
-	let interrupted = emitCmp(module, block: lap, a: written, b: emitConst(module, block: lap, value: 0 - PosixErrno.interrupted.rawValue, ids: ids), pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(lap, op: StdOp.condBranch(interrupted, thenBlockId: reissue.id, elseBlockId: answered.id))
+	emitBranchOnCompare(module, block: lap, value: written, pred: StdCmpPred.eq, against: 0 - PosixErrno.interrupted.rawValue, whenTrue: reissue, whenFalse: answered, ids: ids)
 
 	module.setTerminator(reissue, op: StdOp.branch(header.id))
 	reissue.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(done)))
 
-	let progressed = emitCmp(module, block: answered, a: written, b: emitConst(module, block: answered, value: 0, ids: ids), pred: StdCmpPred.gt, ids: ids)
-	module.setTerminator(answered, op: StdOp.condBranch(progressed, thenBlockId: advance.id, elseBlockId: finished.id))
+	emitBranchOnCompare(module, block: answered, value: written, pred: StdCmpPred.gt, against: 0, whenTrue: advance, whenFalse: finished, ids: ids)
 
 	let doneAfter = emitBin(module, block: advance, a: done, b: written, opcode: StdBinOpcode.add, ids: ids)
 	module.setTerminator(advance, op: StdOp.branch(header.id))
@@ -1374,14 +1372,11 @@ function buildStrFromBytes(module StdModule)
 	module.setTerminator(scan, op: StdOp.condBranch(scanned, thenBlockId: build.id, elseBlockId: scanBody.id))
 
 	let raw = emitLoadByteIndexed(module, block: scanBody, base: buf, index: i, ids: ids)
-	let highBit = emitConst(module, block: scanBody, value: AsciiHighBit as FullRangeInt, ids: ids)
-	let isLow = emitCmp(module, block: scanBody, a: raw, b: highBit, pred: StdCmpPred.lt, ids: ids)
+	let isLow = emitCompareWithConstant(module, block: scanBody, value: raw, pred: StdCmpPred.lt, against: AsciiHighBit as FullRangeInt, ids: ids)
 	let iNext = emitBin(module, block: scanBody, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
 	module.setTerminator(scanBody, op: StdOp.condBranch(isLow, thenBlockId: notHigh.id, elseBlockId: sawMultiByteGrapheme.id))
 
-	let crByte = emitConst(module, block: notHigh, value: CarriageReturnByte as FullRangeInt, ids: ids)
-	let isNotCr = emitCmp(module, block: notHigh, a: raw, b: crByte, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(notHigh, op: StdOp.condBranch(isNotCr, thenBlockId: stillSingleByte.id, elseBlockId: sawMultiByteGrapheme.id))
+	emitBranchOnCompare(module, block: notHigh, value: raw, pred: StdCmpPred.ne, against: CarriageReturnByte as FullRangeInt, whenTrue: stillSingleByte, whenFalse: sawMultiByteGrapheme, ids: ids)
 
 	module.setTerminator(stillSingleByte, op: StdOp.branch(scan.id))
 	stillSingleByte.branchEdges.push(BranchEdge.create(scan.id, argIds: twoArgs(iNext, second: singleByte)))
@@ -1463,9 +1458,7 @@ function buildMmToCString(module StdModule)
 	// beside the two field reads it would run for every record, which is the out-of-bounds read the router
 	// exists to remove. `entry` dominates this block, so `buf` and `len` need no block argument.
 	let terminator = emitLoadByteIndexed(module, block: probe, base: buf, index: len, ids: ids)
-	let zero = emitConst(module, block: probe, value: 0, ids: ids)
-	let isTerminated = emitCmp(module, block: probe, a: terminator, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(probe, op: StdOp.condBranch(isTerminated, thenBlockId: alreadyTerminated.id, elseBlockId: terminateInPlace.id))
+	emitBranchOnCompare(module, block: probe, value: terminator, pred: StdCmpPred.eq, against: 0, whenTrue: alreadyTerminated, whenFalse: terminateInPlace, ids: ids)
 
 	module.setTerminator(alreadyTerminated, op: StdOp.ret(buf))
 

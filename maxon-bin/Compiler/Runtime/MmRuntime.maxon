@@ -217,9 +217,7 @@ function emitRouteOnRefcountWord(module StdModule, func IrFunction, block IrBloc
 	let isCounted = emitIsCountedWord(module, block: block, word: word, ids: ids)
 	module.setTerminator(block, op: StdOp.condBranch(isCounted, thenBlockId: counted.id, elseBlockId: uncounted.id))
 
-	let sentinel = emitConst(module, block: uncounted, value: MmImmortalRefcount, ids: ids)
-	let isImmortal = emitCmp(module, block: uncounted, a: word, b: sentinel, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(uncounted, op: StdOp.condBranch(isImmortal, thenBlockId: immortal.id, elseBlockId: shared.id))
+	emitBranchOnCompare(module, block: uncounted, value: word, pred: StdCmpPred.eq, against: MmImmortalRefcount, whenTrue: immortal, whenFalse: shared, ids: ids)
 end 'emitRouteOnRefcountWord'
 
 // ⭐⭐ **THE BOX LAYER KEEPS NO `.data` WORD.** Its counters — the leak gate's live count and the two
@@ -1029,9 +1027,7 @@ export function emitMovedOutSlotClear(module StdModule, func IrFunction, block I
 	var clear = module.addBlock(func, label: b"clearmoved", heat: BlockHeat.normal)
 	let resume = module.addBlock(func, label: b"moveddone", heat: BlockHeat.normal)
 
-	let noDrop = emitConst(module, block: block, value: 0, ids: ids)
-	let ownsElements = emitCmp(module, block: block, a: elemDrop, b: noDrop, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(block, op: StdOp.condBranch(ownsElements, thenBlockId: clear.id, elseBlockId: resume.id))
+	emitBranchOnCompare(module, block: block, value: elemDrop, pred: StdCmpPred.ne, against: 0, whenTrue: clear, whenFalse: resume, ids: ids)
 
 	let nullSlot = emitConst(module, block: clear, value: 0, ids: ids)
 	emitWordSlotStore(module, block: clear, base: base, index: index, value: nullSlot, ids: ids)
@@ -1252,6 +1248,20 @@ export function emitCmp(module StdModule, block IrBlock, a ValueId, b ValueId, p
 	module.appendOp(block, op: StdOp.cmp(v, lhs: a, rhs: b, pred: pred, operandType: operandType))
 	return v
 end 'emitCmp'
+
+// Each call emits its own constant. A site whose constant another op also reads keeps its shared
+// `emitConst`: a second copy changes register allocation and moves TargetIr pins.
+export function emitCompareWithConstant(module StdModule, block IrBlock, value ValueId, pred StdCmpPred, against FullRangeInt, ids ValueMinter) returns ValueId
+	let constant = emitConst(module, block: block, value: against, ids: ids)
+
+	return emitCmp(module, block: block, a: value, b: constant, pred: pred, ids: ids)
+end 'emitCompareWithConstant'
+
+export function emitBranchOnCompare(module StdModule, block IrBlock, value ValueId, pred StdCmpPred, against FullRangeInt, whenTrue IrBlock, whenFalse IrBlock, ids ValueMinter)
+	let holds = emitCompareWithConstant(module, block: block, value: value, pred: pred, against: against, ids: ids)
+
+	module.setTerminator(block, op: StdOp.condBranch(holds, thenBlockId: whenTrue.id, elseBlockId: whenFalse.id))
+end 'emitBranchOnCompare'
 
 // ⭐⭐ **THE TWO EXITS OF EVERY THROWING RUNTIME FUNCTION, ONE HOME.** A throwing runtime body ends in the
 // dual-register `errorReturn(value, flag)` ABI — `flag == NoErrorFlag` on the success edge, `ordinal +
@@ -1509,9 +1519,7 @@ export function openWordTailSplit(module StdModule, func IrFunction, cur IrBlock
 	var run = module.addBlock(func, label: "{String.from(label)}run".toByteArray(), heat: BlockHeat.normal)
 	let done = module.addBlock(func, label: "{String.from(label)}d".toByteArray(), heat: BlockHeat.normal)
 
-	let nothing = emitConst(module, block: cur, value: 0, ids: ids)
-	let empty = emitCmp(module, block: cur, a: byteCount, b: nothing, pred: StdCmpPred.le, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(empty, thenBlockId: done.id, elseBlockId: run.id))
+	emitBranchOnCompare(module, block: cur, value: byteCount, pred: StdCmpPred.le, against: 0, whenTrue: done, whenFalse: run, ids: ids)
 
 	let wordMask = emitConst(module, block: run, value: WholeWordsMask, ids: ids)
 	let wordEnd = emitBin(module, block: run, a: byteCount, b: wordMask, opcode: StdBinOpcode.bitAnd, ids: ids)
@@ -2150,9 +2158,7 @@ export function emitBoxWalkStep(module StdModule, func IrFunction, cursor Cascad
 
 	emitCascadeBranch(module, from: cursor.at(immortal), to: stop)
 
-	let soleWord = emitConst(module, block: counted, value: SoleOwnerRefcount, ids: ids)
-	let isSole = emitCmp(module, block: counted, a: count.word, b: soleWord, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(counted, op: StdOp.condBranch(isSole, thenBlockId: sole.id, elseBlockId: several.id))
+	emitBranchOnCompare(module, block: counted, value: count.word, pred: StdCmpPred.eq, against: SoleOwnerRefcount, whenTrue: sole, whenFalse: several, ids: ids)
 
 	emitMarkedDescent(module, from: cursor.at(sole), count: count, action: action, descend: descend, ids: ids)
 
@@ -2190,9 +2196,7 @@ function emitSoleWalkMeetings(module StdModule, shared CascadeCursor, several Ca
 	emitCascadeBranch(module, from: shared, to: stop)
 
 	let met = emitWalkRevisit(module, block: several.block, visits: several.visits(), record: box, meeting: meeting, ids: ids)
-	let notMet = emitConst(module, block: several.block, value: WalkNotMetBefore, ids: ids)
-	let metBefore = emitCmp(module, block: several.block, a: met, b: notMet, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(several.block, op: StdOp.condBranch(metBefore, thenBlockId: stop.block.id, elseBlockId: firstMeeting.id))
+	emitBranchOnCompare(module, block: several.block, value: met, pred: StdCmpPred.ne, against: WalkNotMetBefore, whenTrue: stop.block, whenFalse: firstMeeting, ids: ids)
 	pushCascadeEdge(several.block, to: stop, values: several.carried)
 end 'emitSoleWalkMeetings'
 
@@ -2257,8 +2261,7 @@ end 'buildMmShareBuffer'
 // `word < MmSharedRefcountMark` — does this refcount word belong to a COUNTED box? Signed, so a last owner's
 // transient `-1` reads as counted too.
 function emitIsCountedWord(module StdModule, block IrBlock, word ValueId, ids ValueMinter) returns ValueId
-	let mark = emitConst(module, block: block, value: MmSharedRefcountMark, ids: ids)
-	return emitCmp(module, block: block, a: word, b: mark, pred: StdCmpPred.lt, ids: ids)
+	return emitCompareWithConstant(module, block: block, value: word, pred: StdCmpPred.lt, against: MmSharedRefcountMark, ids: ids)
 end 'emitIsCountedWord'
 
 // Mark a counted box shared: `word + MmSharedRefcountMark`, stored PLAIN. The caller has established that the
@@ -2465,9 +2468,7 @@ export function emitRefcountCheckToLastOwner(module StdModule, func IrFunction, 
 	var step = emitStepOwnerCount(module, func: func, entry: entry, ptr: record, delta: OneFewer, immortal: lower, ids: ids)
 	var cur = emitMmDecrefEvent(module, func: func, block: step.block, ptr: record, priorCount: step.prior, ids: ids)
 
-	let noOwnerLeft = emitConst(module, block: cur, value: SoleOwnerRefcount, ids: ids)
-	let wasShared = emitCmp(module, block: cur, a: step.prior, b: noOwnerLeft, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(wasShared, thenBlockId: lower.id, elseBlockId: lastOwner.id))
+	emitBranchOnCompare(module, block: cur, value: step.prior, pred: StdCmpPred.ne, against: SoleOwnerRefcount, whenTrue: lower, whenFalse: lastOwner, ids: ids)
 
 	// ⚠ **`lower` HOLDS NO OPS AND IS THE EXIT FOR BOTH SURVIVING ARMS** — a box another owner still holds, and
 	// an image record that has no count to lower. Neither has anything to do but return, and giving the
@@ -2488,8 +2489,7 @@ function buildMmIsNull(module StdModule)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let ptr = 0
-	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	let isNull = emitCmp(module, block: entry, a: ptr, b: zero, pred: StdCmpPred.eq, ids: ids)
+	let isNull = emitCompareWithConstant(module, block: entry, value: ptr, pred: StdCmpPred.eq, against: 0, ids: ids)
 	module.setTerminator(entry, op: StdOp.ret(isNull))
 
 	module.functions.push(func)
@@ -2536,9 +2536,7 @@ function buildMmRelease(module StdModule)
 
 	let header = emitHeaderBase(module, block: entry, ptr: ptr, ids: ids)
 	let destructor = emitLoadField(module, block: entry, record: header, offset: HeaderDestructorOffset, ids: ids)
-	let trivial = emitConst(module, block: entry, value: TrivialDestructor, ids: ids)
-	let holdsReferences = emitCmp(module, block: entry, a: destructor, b: trivial, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(holdsReferences, thenBlockId: destroy.id, elseBlockId: free.id))
+	emitBranchOnCompare(module, block: entry, value: destructor, pred: StdCmpPred.ne, against: TrivialDestructor, whenTrue: destroy, whenFalse: free, ids: ids)
 
 	module.appendOp(destroy, op: StdOp.callIndirect(ids.mint(), calleeReg: destructor, resultType: StdReturnType.void, argFloatMask: 0, args: argsOf(ptr)))
 	module.setTerminator(destroy, op: StdOp.branch(free.id))
@@ -2738,13 +2736,9 @@ function buildAllocTallyReader(module StdModule, name ByteArray, column ByteOffs
 	var read = module.addBlock(func, label: b"read", heat: BlockHeat.normal)
 	var outside = module.addBlock(func, label: b"outside", heat: BlockHeat.normal)
 
-	let floor = emitConst(module, block: entry, value: AllocTallyLowestBucket, ids: ids)
-	let notBelow = emitCmp(module, block: entry, a: bucket, b: floor, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(notBelow, thenBlockId: aboveTheFloor.id, elseBlockId: outside.id))
+	emitBranchOnCompare(module, block: entry, value: bucket, pred: StdCmpPred.ge, against: AllocTallyLowestBucket, whenTrue: aboveTheFloor, whenFalse: outside, ids: ids)
 
-	let ceiling = emitConst(module, block: aboveTheFloor, value: SlabCensusTagBuckets, ids: ids)
-	let inTable = emitCmp(module, block: aboveTheFloor, a: bucket, b: ceiling, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(aboveTheFloor, op: StdOp.condBranch(inTable, thenBlockId: read.id, elseBlockId: outside.id))
+	emitBranchOnCompare(module, block: aboveTheFloor, value: bucket, pred: StdCmpPred.lt, against: SlabCensusTagBuckets, whenTrue: read, whenFalse: outside, ids: ids)
 
 	let row = emitAllocTallyRowAddr(module, block: read, bucket: bucket, ids: ids)
 	let answer = emitLoadField(module, block: read, record: row, offset: column, ids: ids)
@@ -2842,9 +2836,7 @@ function buildThreadCounterReader(module StdModule, name ByteArray, model Machin
 
 	let thread = ids.mint()
 	var ready = emitCurrentThreadOrZero(module, func: func, cur: walkThread, state: state, model: model, threadId: thread, ids: ids)
-	let zero = emitConst(module, block: ready, value: 0, ids: ids)
-	let noThread = emitCmp(module, block: ready, a: thread, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(ready, op: StdOp.condBranch(noThread, thenBlockId: oneThreadOfExecution.id, elseBlockId: haveThread.id))
+	emitBranchOnCompare(module, block: ready, value: thread, pred: StdCmpPred.eq, against: 0, whenTrue: oneThreadOfExecution, whenFalse: haveThread, ids: ids)
 
 	let field = emitLoadField(module, block: haveThread, record: thread, offset: threadColumnOffset(count), ids: ids)
 	module.setTerminator(haveThread, op: StdOp.ret(field))
@@ -4550,9 +4542,7 @@ function emitUnionManagedCaseChain(module StdModule, func IrFunction, cur Cascad
 
 		var caseBlock = module.addBlock(func, label: b"case", heat: BlockHeat.normal)
 		var nextTest = module.addBlock(func, label: b"casetest", heat: BlockHeat.normal)
-		let tagConst = emitConst(module, block: chain, value: layout.tagOfIndex(ci), ids: ids)
-		let isCase = emitCmp(module, block: chain, a: tag, b: tagConst, pred: StdCmpPred.eq, ids: ids)
-		module.setTerminator(chain, op: StdOp.condBranch(isCase, thenBlockId: caseBlock.id, elseBlockId: nextTest.id))
+		emitBranchOnCompare(module, block: chain, value: tag, pred: StdCmpPred.eq, against: layout.tagOfIndex(ci), whenTrue: caseBlock, whenFalse: nextTest, ids: ids)
 		emitManagedFieldCascades(module, func: func, start: cur.at(caseBlock), box: box, layout: layout, ci: ci, dest: dest, project: project, signatures: signatures, action: action, ids: ids)
 		chain = nextTest
 	end 'eachCase'
@@ -4588,8 +4578,7 @@ end 'emitManagedFieldCascades'
 // cursor.
 function emitManagedFieldCascade(module StdModule, func IrFunction, cur CascadeCursor, box ValueId, offset ByteOffset, strategy ManagedCascadeStrategy, action CascadeAction, ids ValueMinter) returns CascadeCursor
 	let oldPtr = emitLoadField(module, block: cur.block, record: box, offset: offset, ids: ids)
-	let zero = emitConst(module, block: cur.block, value: 0, ids: ids)
-	let nonNull = emitCmp(module, block: cur.block, a: oldPtr, b: zero, pred: StdCmpPred.ne, ids: ids)
+	let nonNull = emitCompareWithConstant(module, block: cur.block, value: oldPtr, pred: StdCmpPred.ne, against: 0, ids: ids)
 	var visitBlock = module.addBlock(func, label: cascadeFieldBlockLabel(action), heat: BlockHeat.normal)
 	let cont = emitCascadeJoin(module, func: func, label: b"cont", template: cur.carried, ids: ids)
 	module.setTerminator(cur.block, op: StdOp.condBranch(nonNull, thenBlockId: visitBlock.id, elseBlockId: cont.block.id))

@@ -182,12 +182,12 @@ export enum RuntimeAbort
 	// founding rule: that one is a bad RANGE inside a real arena, this one is no arena at all.
 	slabAddressOutsideEveryArena = 88
 
-	// ⛔⛔ `__slab_free`: a free reached a span carrying `MspanOwningPFreed` — the span has been destroyed and
-	// its header is on the metadata free list, so the pointer handed in is a DOUBLE FREE or a slot that
-	// outlived the span it came from. It cannot be a benign race: a span is destroyed only under
-	// `__slab_lock` after its remote chain has been collected and every one of its slots accounted free, so
-	// nobody who holds a live slot can see this sentinel. Left to continue, the free would CAS-push onto a
-	// record another span is about to be handed.
+	// ⛔⛔ `__slab_free`: a free reached a span carrying `SpanOwnerState.freed` — the span has been
+	// destroyed and its header is on the metadata free list, so the pointer handed in is a DOUBLE FREE
+	// or a slot that outlived the span it came from. It cannot be a benign race: a span is destroyed
+	// only under `__slab_lock` after its remote chain has been collected and every one of its slots
+	// accounted free, so nobody who holds a live slot can see this sentinel. Left to continue, the
+	// free would CAS-push onto a record another span is about to be handed.
 	//
 	// ⚠ It aborts for ANY caller, on a real P or on a raw OS thread: the counting argument does not depend
 	// on who is asking.

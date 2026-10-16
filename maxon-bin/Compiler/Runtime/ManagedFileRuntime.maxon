@@ -487,9 +487,7 @@ function emitWin32BoolVerdict(module StdModule, func IrFunction, block IrBlock, 
 	module.appendOp(block, op: StdOp.osLastError(err))
 	let answer = emitLoadField(module, block: block, record: out, offset: Win32OutWordAnswerOffset, ids: ids)
 	emitRawFree(module, block: block, ptr: out, ids: ids)
-	let falseConst = emitConst(module, block: block, value: Win32False, ids: ids)
-	let failedCall = emitCmp(module, block: block, a: verdict, b: falseConst, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(block, op: StdOp.condBranch(failedCall, thenBlockId: failed.id, elseBlockId: ok.id))
+	emitBranchOnCompare(module, block: block, value: verdict, pred: StdCmpPred.eq, against: Win32False, whenTrue: failed, whenFalse: ok, ids: ids)
 
 	emitFileErrnoClassifiedThrow(module, func: func, block: failed, err: err, fallbackFlag: fallbackFlag, ids: ids)
 	return answer
@@ -534,9 +532,7 @@ function emitThrowOnCode(module StdModule, func IrFunction, block IrBlock, err V
 	var matched = module.addBlock(func, label: b"mfcode", heat: BlockHeat.normal)
 	var rest = module.addBlock(func, label: b"mfrest", heat: BlockHeat.normal)
 
-	let codeConst = emitConst(module, block: block, value: code, ids: ids)
-	let isCode = emitCmp(module, block: block, a: err, b: codeConst, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(block, op: StdOp.condBranch(isCode, thenBlockId: matched.id, elseBlockId: rest.id))
+	emitBranchOnCompare(module, block: block, value: err, pred: StdCmpPred.eq, against: code, whenTrue: matched, whenFalse: rest, ids: ids)
 
 	emitErrorReturn(module, block: matched, flag: flag, ids: ids)
 	return rest
@@ -564,8 +560,7 @@ end 'emitThrowOnCode'
 // already emits `mf`-prefixed labels inside directory functions.
 export function emitLiveHandleOrClosedThrow(module StdModule, func IrFunction, entry IrBlock, join IrBlock, record ValueId, handleOffset ByteOffset, closedSentinel FullRangeInt, closedFlag FullRangeInt, ids ValueMinter) returns ValueId
 	let slot = emitLoadField(module, block: entry, record: record, offset: handleOffset, ids: ids)
-	let closedConst = emitConst(module, block: entry, value: closedSentinel, ids: ids)
-	let isClosed = emitCmp(module, block: entry, a: slot, b: closedConst, pred: StdCmpPred.eq, ids: ids)
+	let isClosed = emitCompareWithConstant(module, block: entry, value: slot, pred: StdCmpPred.eq, against: closedSentinel, ids: ids)
 	var closedBlock = module.addBlock(func, label: b"closedthrow", heat: BlockHeat.normal)
 	module.setTerminator(entry, op: StdOp.condBranch(isClosed, thenBlockId: closedBlock.id, elseBlockId: join.id))
 	emitErrorReturn(module, block: closedBlock, flag: closedFlag, ids: ids)
@@ -657,9 +652,7 @@ function buildManagedFileOpen(module StdModule, name ByteArray, mode ManagedFile
 	let err = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.osLastError(err))
 	emitRawFree(module, block: afterCopy, ptr: scratch, ids: ids)
-	let invalidConst = emitConst(module, block: afterCopy, value: InvalidHandleValue, ids: ids)
-	let isInvalid = emitCmp(module, block: afterCopy, a: handle, b: invalidConst, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(afterCopy, op: StdOp.condBranch(isInvalid, thenBlockId: failed.id, elseBlockId: opened.id))
+	emitBranchOnCompare(module, block: afterCopy, value: handle, pred: StdCmpPred.eq, against: InvalidHandleValue, whenTrue: failed, whenFalse: opened, ids: ids)
 
 	emitFileErrnoClassifiedThrow(module, func: func, block: failed, err: err, fallbackFlag: ManagedFileOpenFailedFlag, ids: ids)
 
@@ -695,8 +688,7 @@ function buildManagedFileClose(module StdModule)
 	let box = 0 as ValueId
 
 	let slot = emitLoadField(module, block: entry, record: box, offset: ManagedFileHandleOffset, ids: ids)
-	let closedConst = emitConst(module, block: entry, value: ManagedFileClosedHandle, ids: ids)
-	let alreadyClosed = emitCmp(module, block: entry, a: slot, b: closedConst, pred: StdCmpPred.eq, ids: ids)
+	let alreadyClosed = emitCompareWithConstant(module, block: entry, value: slot, pred: StdCmpPred.eq, against: ManagedFileClosedHandle, ids: ids)
 
 	// `entry` dominates `doClose`, so the decoded handle is simply in scope there — the dominance argument
 	// `emitLiveHandleOrClosedThrow` makes for its own.
@@ -824,9 +816,7 @@ function buildManagedFileRead(module StdModule, name ByteArray, placement Manage
 	let size = 2 as ValueId
 	let handle = emitOpenHandleOrThrow(module, func: func, entry: entry, join: checkLow, box: box, ids: ids)
 
-	let zero = emitConst(module, block: checkLow, value: 0, ids: ids)
-	let negative = emitCmp(module, block: checkLow, a: size, b: zero, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(checkLow, op: StdOp.condBranch(negative, thenBlockId: tooBig.id, elseBlockId: checkOwned.id))
+	emitBranchOnCompare(module, block: checkLow, value: size, pred: StdCmpPred.lt, against: 0, whenTrue: tooBig, whenFalse: checkOwned, ids: ids)
 
 	// The sign test reads only the ARGUMENT, so it comes first; the ownership test reads the RECORD and must
 	// clear before the capacity below is treated as a count at all. All three leave through one exit — the
@@ -963,9 +953,7 @@ function buildManagedFileExists(module StdModule)
 	emitIoPark(module, block: afterCopy, operation: GtIoOperation.fileExists, ids: ids)
 	module.appendOp(afterCopy, op: StdOp.osFileFindFirst(search, pathPtrId: scratch, findDataPtrId: findData))
 	emitRawFree(module, block: afterCopy, ptr: scratch, ids: ids)
-	let invalidConst = emitConst(module, block: afterCopy, value: InvalidHandleValue, ids: ids)
-	let notFound = emitCmp(module, block: afterCopy, a: search, b: invalidConst, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(afterCopy, op: StdOp.condBranch(notFound, thenBlockId: missing.id, elseBlockId: found.id))
+	emitBranchOnCompare(module, block: afterCopy, value: search, pred: StdCmpPred.eq, against: InvalidHandleValue, whenTrue: missing, whenFalse: found, ids: ids)
 
 	emitRawFree(module, block: missing, ptr: findData, ids: ids)
 	let zeroAnswer = emitConst(module, block: missing, value: 0, ids: ids)
@@ -978,9 +966,7 @@ function buildManagedFileExists(module StdModule)
 	emitRawFree(module, block: found, ptr: findData, ids: ids)
 	let dirMask = emitConst(module, block: found, value: FileAttributeDirectory, ids: ids)
 	let dirBit = emitBin(module, block: found, a: attrs, b: dirMask, opcode: StdBinOpcode.bitAnd, ids: ids)
-	let noBit = emitConst(module, block: found, value: 0, ids: ids)
-	let directory = emitCmp(module, block: found, a: dirBit, b: noBit, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(found, op: StdOp.condBranch(directory, thenBlockId: isDir.id, elseBlockId: isFile.id))
+	emitBranchOnCompare(module, block: found, value: dirBit, pred: StdCmpPred.ne, against: 0, whenTrue: isDir, whenFalse: isFile, ids: ids)
 
 	let dirAnswer = emitConst(module, block: isDir, value: 0, ids: ids)
 	module.setTerminator(isDir, op: StdOp.ret(dirAnswer))
@@ -1035,9 +1021,7 @@ function buildManagedFilePathOperation(module StdModule, name ByteArray, mode Ma
 		emitRawFree(module, block: afterSecond, ptr: secondPath, ids: ids)
 	end 'freeSecond'
 
-	let falseConst = emitConst(module, block: afterSecond, value: Win32False, ids: ids)
-	let failedCall = emitCmp(module, block: afterSecond, a: verdict, b: falseConst, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(afterSecond, op: StdOp.condBranch(failedCall, thenBlockId: failed.id, elseBlockId: ok.id))
+	emitBranchOnCompare(module, block: afterSecond, value: verdict, pred: StdCmpPred.eq, against: Win32False, whenTrue: failed, whenFalse: ok, ids: ids)
 
 	emitFileErrnoClassifiedThrow(module, func: func, block: failed, err: err, fallbackFlag: fallbackFlag, ids: ids)
 	emitVoidOkReturn(module, block: ok, ids: ids)
@@ -1100,9 +1084,7 @@ function buildManagedFileStat(module StdModule)
 	let err = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.osLastError(err))
 	emitRawFree(module, block: afterCopy, ptr: scratch, ids: ids)
-	let invalidConst = emitConst(module, block: afterCopy, value: InvalidHandleValue, ids: ids)
-	let notFound = emitCmp(module, block: afterCopy, a: search, b: invalidConst, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(afterCopy, op: StdOp.condBranch(notFound, thenBlockId: failed.id, elseBlockId: pack.id))
+	emitBranchOnCompare(module, block: afterCopy, value: search, pred: StdCmpPred.eq, against: InvalidHandleValue, whenTrue: failed, whenFalse: pack, ids: ids)
 
 	// The find record is released on the failure path too — the throw carries no buffer, so nothing else
 	// ever will.
@@ -1174,9 +1156,7 @@ function emitStoreAttributeFlag(module StdModule, func IrFunction, cur IrBlock, 
 
 	let maskConst = emitConst(module, block: cur, value: mask, ids: ids)
 	let bit = emitBin(module, block: cur, a: attrs, b: maskConst, opcode: StdBinOpcode.bitAnd, ids: ids)
-	let noBit = emitConst(module, block: cur, value: 0, ids: ids)
-	let isSet = emitCmp(module, block: cur, a: bit, b: noBit, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(isSet, thenBlockId: setBlock.id, elseBlockId: clearBlock.id))
+	emitBranchOnCompare(module, block: cur, value: bit, pred: StdCmpPred.ne, against: 0, whenTrue: setBlock, whenFalse: clearBlock, ids: ids)
 
 	let one = emitConst(module, block: setBlock, value: 1, ids: ids)
 	emitStoreField(module, block: setBlock, record: out, offset: offset, value: one)
@@ -1210,22 +1190,16 @@ function buildManagedFileStatField(module StdModule)
 	let buffer = 0
 	let index = 1
 
-	let nullConst = emitConst(module, block: entry, value: 0, ids: ids)
-	let isNull = emitCmp(module, block: entry, a: buffer, b: nullConst, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(isNull, thenBlockId: badBuffer.id, elseBlockId: checkIndex.id))
+	emitBranchOnCompare(module, block: entry, value: buffer, pred: StdCmpPred.eq, against: 0, whenTrue: badBuffer, whenFalse: checkIndex, ids: ids)
 	emitRuntimeAbort(module, func: func, block: badBuffer, abort: RuntimeAbort.managedFileStatNullBuffer, ids: ids)
 
 	// BOTH ENDS, in two compares: `StdCmpPred` is SIGNED throughout this tier (there is no unsigned
 	// predicate), so a lone `index >= fields` accepts a negative index and reads BELOW the buffer. This is
 	// `ManagedMemoryRuntime.emitIndexOutOfRange`'s shape and it is here for its reason.
 	var checkHigh = module.addBlock(func, label: b"mfchkhi", heat: BlockHeat.normal)
-	let zeroIndex = emitConst(module, block: checkIndex, value: 0, ids: ids)
-	let negativeIndex = emitCmp(module, block: checkIndex, a: index, b: zeroIndex, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(checkIndex, op: StdOp.condBranch(negativeIndex, thenBlockId: badIndex.id, elseBlockId: checkHigh.id))
+	emitBranchOnCompare(module, block: checkIndex, value: index, pred: StdCmpPred.lt, against: 0, whenTrue: badIndex, whenFalse: checkHigh, ids: ids)
 
-	let fieldsConst = emitConst(module, block: checkHigh, value: StatBufferFields, ids: ids)
-	let pastEnd = emitCmp(module, block: checkHigh, a: index, b: fieldsConst, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(checkHigh, op: StdOp.condBranch(pastEnd, thenBlockId: badIndex.id, elseBlockId: load.id))
+	emitBranchOnCompare(module, block: checkHigh, value: index, pred: StdCmpPred.ge, against: StatBufferFields, whenTrue: badIndex, whenFalse: load, ids: ids)
 	emitRuntimeAbort(module, func: func, block: badIndex, abort: RuntimeAbort.managedFileStatIndexOutOfRange, ids: ids)
 
 	let strideConst = emitConst(module, block: load, value: StatFieldBytes, ids: ids)
@@ -1251,9 +1225,7 @@ function buildManagedFileStatFree(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let buffer = 0
 
-	let nullConst = emitConst(module, block: entry, value: 0, ids: ids)
-	let isNull = emitCmp(module, block: entry, a: buffer, b: nullConst, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(isNull, thenBlockId: badBuffer.id, elseBlockId: release.id))
+	emitBranchOnCompare(module, block: entry, value: buffer, pred: StdCmpPred.eq, against: 0, whenTrue: badBuffer, whenFalse: release, ids: ids)
 	emitRuntimeAbort(module, func: func, block: badBuffer, abort: RuntimeAbort.managedFileStatNullBuffer, ids: ids)
 
 	emitRawFree(module, block: release, ptr: buffer, ids: ids)

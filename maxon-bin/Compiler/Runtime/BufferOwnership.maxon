@@ -355,8 +355,7 @@ end 'appendRecordSlot'
 // WIDER one — fused with "and is it big enough?" — sound, for a future grower to re-derive from.
 export function emitBufferNotOwned(module StdModule, block IrBlock, record ValueId, ids ValueMinter) returns ValueId
 	let capacity = emitLoadField(module, block: block, record: record, offset: ManagedRecordCapacityOffset, ids: ids)
-	let floor = emitConst(module, block: block, value: LowestOwnedCapacity, ids: ids)
-	return emitCmp(module, block: block, a: capacity, b: floor, pred: StdCmpPred.lt, ids: ids)
+	return emitCompareWithConstant(module, block: block, value: capacity, pred: StdCmpPred.lt, against: LowestOwnedCapacity, ids: ids)
 end 'emitBufferNotOwned'
 
 // The smallest `capacity@16` an OWNED buffer publishes; every `NotOwnedBufferCapacity` sentinel lies
@@ -462,8 +461,7 @@ end 'emitRecordIsImmortal'
 // only ever against a declared provenance, and asking it about `0` or `length` is a different question with
 // a different emitter (`emitBufferNotOwned`, or the `>` in the router).
 function emitCapacityIsSentinel(module StdModule, block IrBlock, capacity ValueId, sentinel NotOwnedBufferCapacity, ids ValueMinter) returns ValueId
-	let value = emitConst(module, block: block, value: sentinel as FullRangeInt, ids: ids)
-	return emitCmp(module, block: block, a: capacity, b: value, pred: StdCmpPred.eq, ids: ids)
+	return emitCompareWithConstant(module, block: block, value: capacity, pred: StdCmpPred.eq, against: sentinel as FullRangeInt, ids: ids)
 end 'emitCapacityIsSentinel'
 
 // ⭐⭐ **THE THIRD EXCEPTION: "MAY `buffer[length]` BE READ AT ALL?" — the ONE HOME of the terminator-slot
@@ -649,9 +647,7 @@ end 'emitReleaseOwedBase'
 
 // `base != NoOwedAllocation` → `whenOwed`, otherwise `whenNone`: the null guard every step on an owed base takes.
 export function emitRouteOnOwedBase(module StdModule, block IrBlock, base ValueId, whenOwed IrBlock, whenNone IrBlock, ids ValueMinter)
-	let zero = emitConst(module, block: block, value: NoOwedAllocation, ids: ids)
-	let owed = emitCmp(module, block: block, a: base, b: zero, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(block, op: StdOp.condBranch(owed, thenBlockId: whenOwed.id, elseBlockId: whenNone.id))
+	emitBranchOnCompare(module, block: block, value: base, pred: StdCmpPred.ne, against: NoOwedAllocation, whenTrue: whenOwed, whenFalse: whenNone, ids: ids)
 end 'emitRouteOnOwedBase'
 
 // ⭐⭐ **WHICH ALLOCATION MUST STAY ALIVE FOR THIS RECORD'S BUFFER TO BE READABLE — `NoOwedAllocation` when

@@ -751,9 +751,7 @@ type PrimitiveInliner
 			// `value` and `noError` are both readable here: `cur` defines `noError` and either defines `value` or
 			// takes it as its own block arg, and `cur` dominates this block — so both reach this block's own edge
 			// to the continuation too.
-			let emptySlot = emitConst(self.module, block: checkEmpty, value: EmptyManagedSlot, ids: self.valueIds())
-			let isEmpty = emitCmp(self.module, block: checkEmpty, a: value, b: emptySlot, pred: StdCmpPred.eq, ids: self.valueIds())
-			self.module.setTerminator(checkEmpty, op: StdOp.condBranch(isEmpty, thenBlockId: frame.slow.id, elseBlockId: frame.carve.cont.id))
+			emitBranchOnCompare(self.module, block: checkEmpty, value: value, pred: StdCmpPred.eq, against: EmptyManagedSlot, whenTrue: frame.slow, whenFalse: frame.carve.cont, ids: self.valueIds())
 			attachEdge(checkEmpty, targetId: frame.carve.cont.id, argIds: twoArgs(value, second: noError))
 		end 'askTheRecord'
 
@@ -856,8 +854,7 @@ type PrimitiveInliner
 		at = self.guardIndexInRange(at, arr: arr, index: index, limitOffset: limitOffset, slow: frame.slow, next: InlineBufferLabel)
 
 		let buffer = emitLoadField(self.module, block: at, record: arr, offset: ManagedRecordBufferOffset, ids: self.valueIds())
-		let zeroBuf = emitConst(self.module, block: at, value: NoBufferAllocated, ids: self.valueIds())
-		let unallocated = emitCmp(self.module, block: at, a: buffer, b: zeroBuf, pred: StdCmpPred.eq, ids: self.valueIds())
+		let unallocated = emitCompareWithConstant(self.module, block: at, value: buffer, pred: StdCmpPred.eq, against: NoBufferAllocated, ids: self.valueIds())
 		at = self.guard(at, refused: unallocated, slow: frame.slow, next: InlineViewedLabel)
 
 		let viewed = emitIsSharedAllocation(self.module, block: at, ptr: buffer, ids: self.valueIds())
@@ -955,10 +952,11 @@ type PrimitiveInliner
 	// is stated there and at `BoundsCompareOperandType`. `expandCheckedGet` needs nothing: its limit is
 	// `length@8`, which carries no sentinel at all.
 	//
-	// ⚠ `__managed_mem_set`'s runtime asks the same question as two separate tests (`emitIsNegative`, then
-	// `index >= capacity` inside `emitBufferAccessGuard`) rather than through this composition. The
-	// predicate is identical — a disjunction of the same two compares over the same two words — and asking
-	// it once here is the composition that already exists rather than a fourth spelling of it.
+	// ⚠ `__managed_mem_set`'s runtime asks the same question as two separate tests (`index < 0`, then
+	// `index >= capacity`, both inside `emitBufferAccessGuard`) rather than through this composition.
+	// The predicate is identical — a disjunction of the same two compares over the same two words —
+	// and asking it once here is the composition that already exists rather than a fourth spelling of
+	// it.
 	//
 	// ⚠ **A NON-OWNED RECORD LEAVES FOR THE SLOW ARM AT `emitBufferNotOwned`, ONE GUARD EARLIER, ON BOTH
 	// BOUNDS.** This test is UNSIGNED, so a sentinel capacity reads as ENORMOUS and admits everything — it

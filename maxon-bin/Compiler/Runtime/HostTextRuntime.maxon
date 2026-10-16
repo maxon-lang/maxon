@@ -173,9 +173,7 @@ function emitNulRefusedExtent(module StdModule, func IrFunction, cur IrBlock, bu
 	var joined = module.addBlock(func, label: b"pnulj", heat: BlockHeat.normal)
 
 	let byte = emitLoadByteIndexed(module, block: loop.body, base: buf, index: loop.index, ids: ids)
-	let nul = emitConst(module, block: loop.body, value: NulByte, ids: ids)
-	let holdsNul = emitCmp(module, block: loop.body, a: byte, b: nul, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(loop.body, op: StdOp.condBranch(holdsNul, thenBlockId: refused.id, elseBlockId: advance.id))
+	emitBranchOnCompare(module, block: loop.body, value: byte, pred: StdCmpPred.eq, against: NulByte, whenTrue: refused, whenFalse: advance, ids: ids)
 	closeCountedLoop(module, loop: loop, tail: advance, step: SingleStep, ids: ids)
 
 	let extent = ids.mint()
