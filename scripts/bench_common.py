@@ -13,6 +13,7 @@ EXE = ".exe" if IS_WINDOWS else ""
 SLOT_COMPILER = os.path.join(REPO, "maxon-bin", ".maxon", "maxon" + EXE)
 SEED_FETCH_SCRIPT = "scripts/fetch-seed.sh"
 SEED_BUILD_SCRIPT = "scripts/build-from-seed.sh"
+SEED_TAG_FILE = "scripts/seed-tag"
 SLOT_LABEL = "slot"
 LEAK_EXIT_CODE = 101
 EXIT_OK = 0
@@ -45,8 +46,9 @@ def add_arm_arguments(ap):
     ap.add_argument("--compiler", action="append", default=[], help="a compiler binary as an arm (repeatable)")
     ap.add_argument("--label", action="append", default=[], help="label for the matching --compiler")
     ap.add_argument("--ref", action="append", default=[],
-                    help=f"a git ref to build a compiler from, as an arm: its worktree's own {SEED_FETCH_SCRIPT} "
-                         f"and {SEED_BUILD_SCRIPT}, as CI builds it")
+                    help=f"a git ref to build a compiler from, as an arm: its worktree's own {SEED_BUILD_SCRIPT}, "
+                         f"as CI builds it, from the seed its {SEED_TAG_FILE} pins (this tree's .bootstrap seed when "
+                         f"the pins agree, else its own {SEED_FETCH_SCRIPT}, which needs gh)")
     ap.add_argument("--no-slot", action="store_true", help="do not add the slot compiler as an arm")
 
 
@@ -242,6 +244,40 @@ def posix_shell():
     return shell
 
 
+def seed_tag_of(root):
+    path = os.path.join(root, SEED_TAG_FILE)
+    if not os.path.exists(path):
+        raise BuildFailure(f"{root} has no {SEED_TAG_FILE}; it names the seed release that builds the tree")
+    with open(path, encoding="utf-8") as fh:
+        tag = "".join(fh.read().split())
+    if not tag:
+        raise BuildFailure(f"{path} is empty")
+    return tag
+
+
+def seed_path_of(root):
+    return os.path.join(root, ".bootstrap", "maxon" + EXE)
+
+
+def place_ref_seed(shell, tree):
+    ref_tag = seed_tag_of(tree)
+    own_tag = seed_tag_of(REPO)
+    own_seed = seed_path_of(REPO)
+    if ref_tag == own_tag and os.path.exists(own_seed):
+        ref_seed = seed_path_of(tree)
+        os.makedirs(os.path.dirname(ref_seed), exist_ok=True)
+        staging = ref_seed + ".partial"
+        shutil.copy2(own_seed, staging)
+        os.replace(staging, ref_seed)
+        print(f"{ref_seed} is {ref_tag}, copied from {own_seed}", flush=True)
+        return
+    if shutil.which("gh") is None:
+        held = f"{own_seed} holds {own_tag}" if os.path.exists(own_seed) else f"there is no seed at {own_seed}"
+        raise BuildFailure(f"the ref pins {ref_tag} and {held}, so {SEED_FETCH_SCRIPT} must download it, "
+                           f"and it needs gh, which is not on PATH")
+    run_tree_script(shell, tree, SEED_FETCH_SCRIPT)
+
+
 def run_tree_script(shell, tree, script):
     if not os.path.exists(os.path.join(tree, script)):
         raise BuildFailure(f"{tree} has no {script}; a ref is built the way CI builds it, by its own scripts")
@@ -265,8 +301,8 @@ def build_compiler_from_ref(ref, out_dir):
     os.makedirs(os.path.dirname(tree), exist_ok=True)
     git(REPO, "worktree", "add", "--detach", tree, sha)
     print(f"building a compiler from {ref} ({sha}) in {tree} ...", flush=True)
-    for script in (SEED_FETCH_SCRIPT, SEED_BUILD_SCRIPT):
-        run_tree_script(shell, tree, script)
+    place_ref_seed(shell, tree)
+    run_tree_script(shell, tree, SEED_BUILD_SCRIPT)
     if not os.path.exists(compiler):
         raise BuildFailure(f"{SEED_BUILD_SCRIPT} in {tree} exited 0 and left no compiler at {compiler}")
     return compiler

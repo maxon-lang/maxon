@@ -140,12 +140,13 @@ The script runs on Python 3.9 or newer and needs only the standard library.
 - **Maxon is built once per arm** into `out/<host>/maxon/<arm>/`: `slot` (the compiler in
   `maxon-bin/.maxon`), `--ref <sha>` (a compiler built from that commit in a cached worktree,
   `out/ref-<sha>/tree/`, by `scripts/bench_common.py`, which every bench harness shares), or
-  `--compiler <path> --label <name>`. A ref is built the way CI builds it: that worktree's own
-  `scripts/fetch-seed.sh` places the seed its `scripts/seed-tag` pins, and its own
-  `scripts/build-from-seed.sh` builds `C1` (staging its `scripts/seed-shim/` if the seed refuses the tree)
-  and then `C2`, so the control carries its own runtime. It is always built on the host the harness runs
-  on — Windows for `--host wsl`, the Mac for `--host orb` — with Git for Windows' `bash` on Windows; it
-  needs an authenticated `gh`, and any failure is a build failure (exit 2).
+  `--compiler <path> --label <name>`. A ref is built the way CI builds it, from the seed its
+  `scripts/seed-tag` pins. When the invoking tree pins the same seed, its `.bootstrap/maxon` is copied
+  into the worktree; otherwise the worktree's own `scripts/fetch-seed.sh` downloads it, which needs an
+  authenticated `gh`. The worktree's own `scripts/build-from-seed.sh` then builds `C1` (staging its
+  `scripts/seed-shim/` if the seed refuses the tree) and then `C2`, so the control carries its own runtime.
+  It is always built on the host the harness runs on — Windows for `--host wsl`, the Mac for `--host orb` —
+  with Git for Windows' `bash` on Windows, and any failure is a build failure (exit 2).
   Labels compare case-insensitively, two arms with one label are refused, and `go` is reserved for the
   Go arm; each is a usage error (exit 3).
 - **Processor counts.** Every workload runs at `P` in {1, the CPU count}, with `MAXON_MAX_PROCS=P`
