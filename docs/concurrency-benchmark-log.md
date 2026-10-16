@@ -171,3 +171,115 @@ metric (wall, CPU = user + kernel, peak working set); `arm` names the compiler (
 | 2026-10-15 | eb401fad2 | dirty | orb | shared-counter | 200000 | 1 | 3 | 33 | 354 | 10.82 | 10.84 | 279.43 | slot | arm64 A/B of R2-R4 (ref f561e2d8c) |
 | 2026-10-15 | eb401fad2 | dirty | orb | shared-counter | 200000 | 7 | 3 | 417 | 1,025 | 2.46 | 2.81 | 304.45 | ref@f561e2d8c | arm64 A/B of R2-R4 (ref f561e2d8c) |
 | 2026-10-15 | eb401fad2 | dirty | orb | shared-counter | 200000 | 7 | 3 | 417 | 675 | 1.62 | 2.45 | 218.79 | slot | arm64 A/B of R2-R4 (ref f561e2d8c) |
+| 2026-10-15 | bb5d6fd54 | clean | windows | thread-ring | 3000000 | 1 | 3 | 354 | 902 | 2.55 | 2.48 | 0.86 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | windows | thread-ring | 3000000 | 1 | 3 | 354 | 990 | 2.80 | 2.83 | 0.86 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | windows | thread-ring | 3000000 | 12 | 3 | 1,318 | 1,448 | 1.10 | 0.20 | 0.81 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | windows | thread-ring | 3000000 | 12 | 3 | 1,318 | 1,643 | 1.25 | 0.23 | 0.81 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | windows | ping-pong | 1000000 | 1 | 3 | 372 | 474 | 1.27 | 1.29 | 0.70 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | windows | ping-pong | 1000000 | 1 | 3 | 372 | 508 | 1.37 | 1.33 | 0.70 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | windows | ping-pong | 1000000 | 12 | 3 | 502 | 814 | 1.62 | 1.71 | 0.68 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | windows | ping-pong | 1000000 | 12 | 3 | 502 | 882 | 1.76 | 1.86 | 0.68 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | windows | fan-in | 100000 | 1 | 3 | 286 | 746 | 2.61 | 2.61 | 49.86 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | windows | fan-in | 100000 | 1 | 3 | 286 | 705 | 2.47 | 2.50 | 50.06 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | windows | fan-in | 100000 | 12 | 3 | 1,024 | 2,298 | 2.24 | 6.27 | 41.86 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | windows | fan-in | 100000 | 12 | 3 | 1,024 | 2,041 | 1.99 | 5.58 | 39.95 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | windows | worker-pool | 6000 250000 | 1 | 3 | 2,128 | 2,131 | 1.00 | 1.00 | 1.27 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | windows | worker-pool | 6000 250000 | 1 | 3 | 2,128 | 2,129 | 1.00 | 1.00 | 1.27 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | windows | worker-pool | 6000 250000 | 12 | 3 | 226 | 235 | 1.04 | 1.08 | 1.14 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | windows | worker-pool | 6000 250000 | 12 | 3 | 226 | 265 | 1.18 | 1.09 | 1.14 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | windows | spawn-many | 200000 | 1 | 3 | 245 | 1,104 | 4.50 | 4.38 | 6.67 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | windows | spawn-many | 200000 | 1 | 3 | 245 | 1,115 | 4.55 | 4.50 | 6.72 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | windows | spawn-many | 200000 | 12 | 3 | 58 | 399 | 6.93 | 9.33 | 6.21 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | windows | spawn-many | 200000 | 12 | 3 | 58 | 256 | 4.44 | 6.11 | 6.20 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | windows | coroutine-churn | 200000 | 1 | 3 | 376 | 914 | 2.43 | 2.52 | 4.30 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | windows | coroutine-churn | 200000 | 1 | 3 | 376 | 928 | 2.47 | 2.57 | 4.30 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | windows | coroutine-churn | 200000 | 12* | 3 | 365 | 925 | 2.53 | 2.57 | 4.36 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | windows | coroutine-churn | 200000 | 12* | 3 | 365 | 923 | 2.53 | 2.57 | 4.36 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | windows | shared-counter | 200000 | 1 | 3 | 160 | 1,473 | 9.20 | 9.30 | 98.23 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | windows | shared-counter | 200000 | 1 | 3 | 160 | 1,372 | 8.56 | 8.80 | 98.58 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | windows | shared-counter | 200000 | 12 | 3 | 570 | 4,500 | 7.90 | 13.28 | 81.33 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | windows | shared-counter | 200000 | 12 | 3 | 570 | 4,095 | 7.18 | 12.50 | 78.93 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | wsl | thread-ring | 3000000 | 1 | 3 | 372 | 747 | 2.01 | 2.02 | 1.28 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | wsl | thread-ring | 3000000 | 1 | 3 | 372 | 830 | 2.23 | 2.24 | 1.28 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | wsl | thread-ring | 3000000 | 12 | 3 | 1,092 | 820 | 0.75 | 0.28 | 0.96 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | wsl | thread-ring | 3000000 | 12 | 3 | 1,092 | 952 | 0.87 | 0.32 | 1.11 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | wsl | ping-pong | 1000000 | 1 | 3 | 367 | 395 | 1.08 | 1.08 | 0.21 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | wsl | ping-pong | 1000000 | 1 | 3 | 367 | 414 | 1.13 | 1.13 | 0.21 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | wsl | ping-pong | 1000000 | 12 | 3 | 366 | 438 | 1.20 | 1.20 | 0.25 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | wsl | ping-pong | 1000000 | 12 | 3 | 366 | 449 | 1.23 | 1.22 | 0.19 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | wsl | fan-in | 100000 | 1 | 3 | 276 | 699 | 2.53 | 2.52 | 148.81 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | wsl | fan-in | 100000 | 1 | 3 | 276 | 623 | 2.26 | 2.25 | 148.56 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | wsl | fan-in | 100000 | 12 | 3 | 685 | 1,396 | 2.04 | 4.81 | 122.89 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | wsl | fan-in | 100000 | 12 | 3 | 685 | 1,139 | 1.66 | 4.29 | 124.22 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | wsl | worker-pool | 6000 250000 | 1 | 3 | 2,140 | 2,156 | 1.01 | 1.01 | 1.93 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | wsl | worker-pool | 6000 250000 | 1 | 3 | 2,140 | 2,164 | 1.01 | 1.01 | 1.93 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | wsl | worker-pool | 6000 250000 | 12 | 3 | 216 | 247 | 1.14 | 1.05 | 1.71 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | wsl | worker-pool | 6000 250000 | 12 | 3 | 216 | 249 | 1.15 | 1.04 | 1.71 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | wsl | spawn-many | 200000 | 1 | 3 | 174 | 486 | 2.79 | 2.83 | 5.79 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | wsl | spawn-many | 200000 | 1 | 3 | 174 | 508 | 2.92 | 2.95 | 5.91 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | wsl | spawn-many | 200000 | 12 | 3 | 53 | 535 | 10.09 | 16.56 | 9.70 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | wsl | spawn-many | 200000 | 12 | 3 | 53 | 286 | 5.39 | 7.58 | 9.69 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | wsl | coroutine-churn | 200000 | 1 | 3 | 267 | 326 | 1.22 | 1.23 | 2.64 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | wsl | coroutine-churn | 200000 | 1 | 3 | 267 | 358 | 1.34 | 1.35 | 2.64 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | wsl | coroutine-churn | 200000 | 12* | 3 | 264 | 334 | 1.27 | 1.27 | 2.68 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | wsl | coroutine-churn | 200000 | 12* | 3 | 264 | 338 | 1.28 | 1.29 | 2.68 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | wsl | shared-counter | 200000 | 1 | 3 | 157 | 1,302 | 8.29 | 8.31 | 297.38 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | wsl | shared-counter | 200000 | 1 | 3 | 157 | 1,213 | 7.72 | 7.75 | 297.62 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | wsl | shared-counter | 200000 | 12 | 3 | 721 | 2,767 | 3.84 | 5.01 | 245.94 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | wsl | shared-counter | 200000 | 12 | 3 | 721 | 2,260 | 3.14 | 4.31 | 245.78 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | macos | thread-ring | 3000000 | 1 | 3 | 154 | 457 | 2.98 | 2.99 | 0.77 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | macos | thread-ring | 3000000 | 1 | 3 | 154 | 524 | 3.41 | 3.42 | 0.78 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | macos | thread-ring | 3000000 | 8 | 3 | 699 | 799 | 1.14 | 0.43 | 0.71 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | macos | thread-ring | 3000000 | 8 | 3 | 699 | 849 | 1.22 | 0.45 | 0.72 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | macos | ping-pong | 1000000 | 1 | 3 | 180 | 277 | 1.54 | 1.54 | 0.59 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | macos | ping-pong | 1000000 | 1 | 3 | 180 | 301 | 1.67 | 1.68 | 0.59 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | macos | ping-pong | 1000000 | 8 | 3 | 202 | 518 | 2.56 | 2.49 | 0.58 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | macos | ping-pong | 1000000 | 8 | 3 | 202 | 526 | 2.61 | 2.48 | 0.58 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | macos | fan-in | 100000 | 1 | 3 | 126 | 287 | 2.28 | 2.26 | 80.66 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | macos | fan-in | 100000 | 1 | 3 | 126 | 285 | 2.27 | 2.26 | 80.66 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | macos | fan-in | 100000 | 8 | 3 | 429 | 696 | 1.62 | 3.08 | 59.51 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | macos | fan-in | 100000 | 8 | 3 | 429 | 685 | 1.60 | 3.07 | 58.07 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | macos | worker-pool | 6000 250000 | 1 | 3 | 2,227 | 2,345 | 1.05 | 1.05 | 1.48 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | macos | worker-pool | 6000 250000 | 1 | 3 | 2,227 | 2,388 | 1.07 | 1.07 | 1.48 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | macos | worker-pool | 6000 250000 | 8 | 3 | 556 | 570 | 1.03 | 1.00 | 1.28 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | macos | worker-pool | 6000 250000 | 8 | 3 | 556 | 599 | 1.08 | 1.01 | 1.29 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | macos | spawn-many | 200000 | 1 | 3 | 112 | 182 | 1.63 | 1.66 | 2.41 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | macos | spawn-many | 200000 | 1 | 3 | 112 | 187 | 1.67 | 1.64 | 2.46 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | macos | spawn-many | 200000 | 8 | 3 | 29 | 353 | 12.20 | 15.70 | 9.02 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | macos | spawn-many | 200000 | 8 | 3 | 29 | 268 | 9.26 | 11.73 | 9.02 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | macos | coroutine-churn | 200000 | 1 | 3 | 251 | 163 | 0.65 | 0.63 | 1.58 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | macos | coroutine-churn | 200000 | 1 | 3 | 251 | 147 | 0.59 | 0.60 | 1.58 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | macos | coroutine-churn | 200000 | 8* | 3 | 194 | 140 | 0.72 | 0.71 | 1.44 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | macos | coroutine-churn | 200000 | 8* | 3 | 194 | 141 | 0.73 | 0.71 | 1.44 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | macos | shared-counter | 200000 | 1 | 3 | 36 | 576 | 15.83 | 16.16 | 160.73 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | macos | shared-counter | 200000 | 1 | 3 | 36 | 572 | 15.71 | 15.91 | 160.73 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | macos | shared-counter | 200000 | 8 | 3 | 1,068 | 1,412 | 1.32 | 1.49 | 118.03 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | clean | macos | shared-counter | 200000 | 8 | 3 | 1,068 | 1,382 | 1.29 | 1.49 | 115.28 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | orb | thread-ring | 3000000 | 1 | 3 | 155 | 365 | 2.35 | 2.35 | 0.69 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | orb | thread-ring | 3000000 | 1 | 3 | 155 | 392 | 2.53 | 2.53 | 0.70 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | orb | thread-ring | 3000000 | 7 | 3 | 241 | 374 | 1.55 | 0.88 | 0.59 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | orb | thread-ring | 3000000 | 7 | 3 | 241 | 397 | 1.65 | 0.94 | 0.61 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | orb | ping-pong | 1000000 | 1 | 3 | 180 | 229 | 1.28 | 1.28 | 0.20 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | orb | ping-pong | 1000000 | 1 | 3 | 180 | 233 | 1.30 | 1.30 | 0.26 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | orb | ping-pong | 1000000 | 7 | 3 | 159 | 234 | 1.47 | 1.46 | 0.24 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | orb | ping-pong | 1000000 | 7 | 3 | 159 | 236 | 1.49 | 1.48 | 0.24 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | orb | fan-in | 100000 | 1 | 3 | 124 | 179 | 1.45 | 1.45 | 140.13 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | orb | fan-in | 100000 | 1 | 3 | 124 | 174 | 1.41 | 1.40 | 140.14 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | orb | fan-in | 100000 | 7 | 3 | 144 | 357 | 2.47 | 5.46 | 114.17 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | orb | fan-in | 100000 | 7 | 3 | 144 | 318 | 2.20 | 4.48 | 110.50 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | orb | worker-pool | 6000 250000 | 1 | 3 | 2,408 | 2,410 | 1.00 | 1.00 | 1.85 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | orb | worker-pool | 6000 250000 | 1 | 3 | 2,408 | 2,404 | 1.00 | 1.00 | 1.83 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | orb | worker-pool | 6000 250000 | 7 | 3 | 422 | 482 | 1.14 | 0.98 | 1.79 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | orb | worker-pool | 6000 250000 | 7 | 3 | 422 | 482 | 1.14 | 1.01 | 1.77 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | orb | spawn-many | 200000 | 1 | 3 | 108 | 139 | 1.29 | 1.29 | 3.49 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | orb | spawn-many | 200000 | 1 | 3 | 108 | 143 | 1.33 | 1.33 | 3.56 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | orb | spawn-many | 200000 | 7 | 3 | 64 | 106 | 1.68 | 1.91 | 1.82 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | orb | spawn-many | 200000 | 7 | 3 | 64 | 115 | 1.81 | 1.75 | 1.86 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | orb | coroutine-churn | 200000 | 1 | 3 | 167 | 109 | 0.65 | 0.65 | 1.61 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | orb | coroutine-churn | 200000 | 1 | 3 | 167 | 110 | 0.66 | 0.66 | 1.61 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | orb | coroutine-churn | 200000 | 7* | 3 | 168 | 108 | 0.65 | 0.65 | 1.61 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | orb | coroutine-churn | 200000 | 7* | 3 | 168 | 111 | 0.66 | 0.66 | 1.61 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | orb | shared-counter | 200000 | 1 | 3 | 33 | 352 | 10.80 | 10.86 | 293.65 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | orb | shared-counter | 200000 | 1 | 3 | 33 | 346 | 10.61 | 10.65 | 293.65 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | orb | shared-counter | 200000 | 7 | 3 | 436 | 666 | 1.53 | 2.32 | 226.23 | ref@7346b44c7 | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |
+| 2026-10-15 | bb5d6fd54 | dirty | orb | shared-counter | 200000 | 7 | 3 | 436 | 618 | 1.42 | 1.97 | 216.92 | slot | R5: per-mailbox lock, spinning host locks, reply cell writes only its words |

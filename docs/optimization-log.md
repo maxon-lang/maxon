@@ -1174,6 +1174,36 @@ The measurement: `scripts/bench-concurrency.py --ref f561e2d8c --runs 3`, interl
 
 spawn-many at P=12 on Linux REGRESSED by 9% (436 → 476 ms). Every parker now pays an O(P) re-scan, where before only spinners did, and spawn-many parks most often per unit of work. That is a reading, not a profile; the spawn round reads it.
 
+**2026-10-15 — A MAILBOX TAKES ITS OWN LOCK, HOST LOCKS SPIN, A REPLY CELL WRITES ONLY ITS WORDS (bb5d6fd54). A
+RUNTIME row, measured on FOUR lanes.**
+
+The measurement was `scripts/bench-concurrency.py --ref 7346b44c7 --runs 3`, interleaved, on:
+- x64-windows;
+- WSL2 x64-linux;
+- arm64-macos (Apple M3, 4P+4E);
+- arm64-linux in an OrbStack machine on that Mac.
+
+Maxon/Go wall ratio, control → this change:
+
+| workload | P | x64-windows | x64-linux | arm64-macos | arm64-linux |
+|---|---|---|---|---|---|
+| spawn-many | N | 6.93 → 4.44 | 10.09 → 5.39 | 12.20 → 9.26 | 1.68 → 1.81 |
+| fan-in | N | 2.24 → 1.99 | 2.04 → 1.66 | 1.62 → 1.60 | 2.47 → 2.20 |
+| shared-counter | N | 7.90 → 7.18 | 3.84 → 3.14 | 1.32 → 1.29 | 1.53 → 1.42 |
+| shared-counter | 1 | 9.20 → 8.56 | 8.29 → 7.72 | 15.83 → 15.71 | 10.80 → 10.61 |
+| thread-ring | 1 | 2.55 → **2.80** | 2.01 → **2.23** | see the log | see the log |
+| thread-ring | N | 1.10 → **1.25** | 0.75 → **0.87** | 1.14 → **1.22** | 1.55 → **1.65** |
+| ping-pong | 1 | 1.27 → **1.37** | 1.08 → **1.13** | 1.54 → **1.67** | 1.28 → 1.30 |
+| worker-pool | 1 | 1.00 → 1.00 | 1.01 → 1.01 | 1.05 → 1.07 | 1.00 → 1.00 |
+
+N is 12 on x64, 8 on macOS and 7 on arm64-linux. Every cell is read from the rows this run appended to
+`docs/concurrency-benchmark-log.md`.
+
+**THE BOLD CELLS REGRESSED.** A send to a PARKED receiver now takes two locks: the mailbox lock to take and clear
+`parkedGt`, then `__sched_lock` in `__gt_ready`. Before, it took one, and thread-ring and ping-pong take that road on
+every message. Go pays one, because `goready` takes no lock at all. The next change makes a service's ready
+lock-free.
+
 ## Bugs this uncovered
 
 Removing the dummy exposed a leak it had been half-hiding, and the leak in turn exposed a hole in the
