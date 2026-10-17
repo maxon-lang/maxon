@@ -24,8 +24,10 @@ Arms:
 
 A label names an arm's output directory AND its timing list, so labels are compared
 case-insensitively, a duplicate is refused before anything is built, and `C` is reserved for the C
-arm. Every arm compiles the SAME source with its own compiler (and its own checkout's stdlib), into
-its own directory, so two arms never share a .ir or a cache.
+arm. Every arm compiles the example with its own compiler (and its own checkout's stdlib), into its
+own directory, so two arms never share a .ir or a cache. A --ref arm compiles its OWN commit's copy
+of a --source inside this tree, so an A/B across a change to the example compares two programs; a
+--source outside this tree is the one program every arm compiles.
 
 Exit codes: 0 ok; 1 a verification failure (no log row is written); 2 a build failure; 3 usage.
 """
@@ -133,12 +135,12 @@ def build_c_reference(clang, c_source, out_dir):
     return exe, clang_line, False
 
 
-def build_maxon_arm(label, compiler, source, out_dir):
-    """Compile the example with `compiler` into out/<label>/ and return the exe, the .ir and sizes."""
-    arm = bench_common.build_arm(label, compiler, out_dir, source, SOURCE_STEM, build_args=["--emit-ir"])
+def build_maxon_arm(planned, source, out_dir):
+    """Compile the arm's example with its compiler into out/<label>/ and return the exe, the .ir and sizes."""
+    arm = bench_common.build_arm(planned, out_dir, source, SOURCE_STEM, build_args=["--emit-ir"])
     ir = os.path.join(arm["dir"], SOURCE_STEM + ".ir")
     if not os.path.exists(ir):
-        raise bench_common.BuildFailure(f"{compiler} wrote no {os.path.basename(ir)} for arm {label} although --emit-ir was given")
+        raise bench_common.BuildFailure(f"{arm['compiler']} wrote no {os.path.basename(ir)} for arm {arm['label']} although --emit-ir was given")
     arm["ir"] = ir
     return arm
 
@@ -259,8 +261,7 @@ def main():
             clang = find_clang(args.clang)
             c_exe, clang_line, cached = build_c_reference(clang, args.c_source, out_dir)
 
-        maxon_arms = [build_maxon_arm(arm["label"], bench_common.arm_compiler(arm, out_dir), args.source, out_dir)
-                      for arm in plan]
+        maxon_arms = [build_maxon_arm(arm, args.source, out_dir) for arm in plan]
     except (bench_common.UsageFailure, bench_common.BuildFailure) as e:
         return bench_common.report_failure(e)
 
@@ -269,6 +270,7 @@ def main():
         print(f"  C: {clang_line}  {' '.join(CLANG_FLAGS)}  (no -fopenmp)")
     for arm in maxon_arms:
         print(f"  {arm['label']}: {bench_common.describe_identity(arm['identity'])}  exe {arm['exe_bytes']:,} B")
+    print(f"  program: {bench_common.describe_sources({arm['label']: {SOURCE_STEM: arm['source_sha256']} for arm in maxon_arms})}")
 
     # Runnable arms: the C reference first, then every Maxon arm. Each round runs every arm once,
     # alternating direction so neither drift nor a fixed order can manufacture a sign.

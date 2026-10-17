@@ -1382,6 +1382,57 @@ gained 8–9%. x64-windows reads 3.48 → 3.71 at `P = N` (194 → 207 ms, ±2% 
 (465 → 497 ms, the slot arm ±22%). CPU follows wall at `P = 1` on both lanes and holds at `P = N`. The +49 MiB
 peak at `P = 1` reproduces on both lanes.
 
+**2026-10-17 — EVERY MAILBOX HOLDS AT MOST 1024 MESSAGES, AND A SEND THAT CANNOT BE DELIVERED THROWS `mailboxFull`
+OR `serviceStopped` (7a97a4168, R9, with 29931a815's immutable `let`). A RUNTIME row, x64 lanes, against 6a8d2fe6e.**
+
+| workload | P | x64-windows | x64-linux |
+|---|---|---|---|
+| ping-pong | 1 | 0.75 → 0.74 | 0.74 → 0.74 |
+| ping-pong | N | 1.00 → 1.02 | 0.88 → 0.87 |
+| thread-ring | 1 | 1.41 → 1.43 | 1.23 → 1.28 |
+| thread-ring | N | 0.47 → 0.48 | 0.49 → 0.51 |
+| spawn-many | 1 | 2.45 → 2.40 | 2.93 → 2.86 |
+| spawn-many | N | 3.62 → 3.58 | 4.38 → 4.34 |
+| fan-in | 1 | 1.12 → **1.51** | 1.34 → **1.52** |
+| fan-in | N | 0.40 → **2.73** | 1.10 → **8.05** |
+| shared-counter | 1 | 1.08 → **1.47** | 1.35 → **1.47** |
+| shared-counter | N | 0.41 → **3.02** | 1.08 → **8.39** |
+| coroutine-churn | 1 | 1.36 → 1.34 | 1.54 → 1.32 |
+| coroutine-churn | N | 1.33 → 1.34 | 1.34 → 1.35 |
+| worker-pool | 1 | 1.00 → 1.00 | 1.01 → 1.01 |
+| worker-pool | N | 1.03 → **1.13** | 1.08 → **1.15** |
+
+Each column is one session at head 990357859, `--ref 6a8d2fe6e --runs 3`, note "R9 + 29931a815: bounded mailboxes
+(1024), failable sends"; `N` is 12. arm64-macos and arm64-linux are pending: the Mac is unavailable.
+
+**The arms are different programs.** R9 and 29931a815 changed the sources of thread-ring, fan-in, worker-pool,
+spawn-many and shared-counter (`try` on a send, `view`, `Promise with (Count)`), and 6a8d2fe6e's compiler rejects the
+new spelling, so the ref arm compiles 6a8d2fe6e's own programs and the slot arm this tree's. Only ping-pong and
+coroutine-churn are one program in both arms. The Go oracle is this tree's in both.
+
+**fan-in and shared-counter are not like for like with Go.** Their 64 senders now outrun a 1024-message mailbox. A
+Maxon producer whose send throws `mailboxFull` calls `Scheduler.yield()` and retries, so it stays runnable and burns
+its processor; a Go sender on a full channel parks until the receiver takes one. At `P = N` that is the whole
+regression: CPU rises 688 → 18,703 ms (fan-in) and 1,406 → 38,938 ms (shared-counter) on x64-windows, and 2,520 →
+37,006 ms and 4,867 → 77,380 ms on x64-linux, against wall times of 2.8–10.4 s. At `P = 1` the retry costs 34–36%
+on x64-windows and 10–13% on x64-linux.
+
+**Peak memory is now bounded.** fan-in falls 132.5 → 4.5 MiB at `P = 1` and 132.8 → 5.2 MiB at `P = N` on
+x64-windows, 128.9 → 1.0 and 128.7 → 1.2 MiB on x64-linux; shared-counter 260.5 → 4.5 and 260.7 → 5.2 MiB, 256.9 →
+1.0 and 256.7 → 1.1 MiB. As ratios to Go, fan-in reads 22.28 → 0.75 and 19.69 → 0.77 on x64-windows and 64.45 → 0.50
+and 57.19 → 0.56 on x64-linux; shared-counter 43.68 → 0.75 and 38.79 → 0.77, and 128.45 → 0.50 and 114.11 → 0.50.
+Both now use less memory than Go on both lanes. Every other peak holds to 0.2 MiB.
+
+worker-pool at `P = N` moves +9% and +7% inside spreads of ±20% and ±12%. The other workloads hold within their
+spreads; coroutine-churn's 1.54 at `P = 1` on x64-linux is the ref arm's ±16% spread.
+
+**R9 alone, against 29931a815, `--filter fan-in --filter shared-counter --filter worker-pool --filter spawn-many
+--runs 3`** (note "R9 alone against 29931a815"; again different programs for all four): the whole change is R9's.
+x64-windows reads fan-in 1.10 → 1.50 and 0.40 → 2.82, shared-counter 1.08 → 1.47 and 0.42 → 3.13, worker-pool 1.00
+→ 1.00 and 1.02 → 1.08, spawn-many 2.50 → 2.46 and 3.59 → 3.61. x64-linux reads fan-in 1.54 → 1.53 and 1.08 → 7.91,
+shared-counter 1.41 → 1.47 and 1.04 → 8.05, worker-pool 1.00 → 1.00 and 1.03 → 1.11, spawn-many 2.97 → 2.94 and 4.57
+→ 4.62. The peak-memory figures repeat to 0.1 MiB.
+
 ## Bugs this uncovered
 
 Removing the dummy exposed a leak it had been half-hiding, and the leak in turn exposed a hole in the

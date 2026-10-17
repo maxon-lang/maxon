@@ -359,12 +359,14 @@ def build_maxon_arm(planned, workloads, host_out_dir, host, ref_out_dir):
 
     arm_dir = maxon_arm_dir(host_out_dir, label)
     target_args = [f"--target={GUESTS[host].target}"] if host in GUESTS else []
-    executables = {workload.name: bench_common.compile_in_arm(compiler, label, arm_dir, os.path.join(BENCH_DIR, f"{workload.name}.maxon"),
-                                                        workload.name, build_args=target_args,
-                                                        exe_suffix=maxon_executable_suffix(host))
-                   for workload in workloads}
+    sources = {workload.name: bench_common.arm_source(planned, ref_out_dir, os.path.join(BENCH_DIR, f"{workload.name}.maxon"))
+               for workload in workloads}
+    executables = {name: bench_common.compile_in_arm(compiler, label, arm_dir, source, name, build_args=target_args,
+                                                     exe_suffix=maxon_executable_suffix(host))
+                   for name, source in sources.items()}
     return {"label": label, "identity": bench_common.compiler_identity(compiler),
-            "exe_bytes": {name: os.path.getsize(path) for name, path in executables.items()}}
+            "exe_bytes": {name: os.path.getsize(path) for name, path in executables.items()},
+            "sources": {name: bench_common.sha256_of(source) for name, source in sources.items()}}
 
 
 def maxon_arm_dir(host_out_dir, label):
@@ -513,6 +515,7 @@ def print_session(context, host, go, go_version, workloads, arms, args):
     print(f"  go: {go}  [{go_version}]")
     for arm in arms:
         print(f"  {arm['label']}: {bench_common.describe_identity(arm['identity'])}")
+    print(f"  programs: {bench_common.describe_sources({arm['label']: arm['sources'] for arm in arms})}")
     print("  sizes: " + "; ".join(f"{w.name} {' '.join(w.arguments)}" for w in workloads))
     print(f"  P in {processor_counts()}: MAXON_MAX_PROCS=P for maxon, GOMAXPROCS=P for go; * marks a go arm held at GOMAXPROCS=1")
 

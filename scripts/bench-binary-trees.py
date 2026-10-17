@@ -22,9 +22,12 @@ Arms:
 
 A label names an arm's output directory AND its timing list, so two arms may not share one, compared
 case-insensitively - a duplicate is refused before anything is built, because two arms writing one
-list report a ratio of 1.00 and call it verified. Every arm compiles the SAME source with its own compiler (and its own
-checkout's stdlib), into its own directory, so two arms never share a .ir or a cache. The expected
-output is computed from the depth, so any n the example accepts can be verified.
+list report a ratio of 1.00 and call it verified. Every arm compiles the example with its own compiler (and its own
+checkout's stdlib), into its own directory, so two arms never share a .ir or a cache. A --ref arm compiles its
+OWN commit's copy of a --source inside this tree, so an A/B across a change to the example compares two
+programs; a --source outside this tree is the one program every arm compiles. The expected output is
+computed from the depth and the bounds every arm's example must agree on, so any n the example accepts
+can be verified.
 
 Exit codes: 0 ok; 1 a verification failure; 2 a build failure; 3 usage.
 """
@@ -67,6 +70,15 @@ def example_bounds(source):
     return bounds
 
 
+def agreed_bounds(arms):
+    by_arm = {arm["label"]: example_bounds(arm["source"]) for arm in arms}
+    distinct = {tuple(sorted(bounds.items())) for bounds in by_arm.values()}
+    if len(distinct) > 1:
+        raise UsageFailure(f"the arms' examples declare different depth bounds {by_arm}; they print different "
+                           "outputs for one n, so no single expected output verifies them all")
+    return next(iter(by_arm.values()))
+
+
 def tree_check(depth):
     """The node count of a complete binary tree, which is what the benchmark's check sums."""
     return (1 << (depth + 1)) - 1
@@ -101,26 +113,25 @@ def main():
     # and building an arm all reach git or the compiler, so each failure has one report and one code.
     try:
         bench_common.check_arm_arguments(args)
-        bounds = example_bounds(args.source)
-        smallest_depth = bounds[BOUND_SMALLEST_DEPTH]
-        n = args.n if args.n is not None else bounds[BOUND_DEFAULT_N]
-        if not smallest_depth <= n <= bounds[BOUND_LARGEST_N]:
-            raise UsageFailure(f"n={n} is outside the example's {smallest_depth}..{bounds[BOUND_LARGEST_N]}")
         plan = bench_common.plan_arms(args)
 
         out_dir = os.path.abspath(args.out_dir)
         os.makedirs(out_dir, exist_ok=True)
         head, dirty = bench_common.tree_identity(bench_common.REPO)
         today = datetime.date.today().isoformat()
-        maxon_arms = [bench_common.build_arm(arm["label"], bench_common.arm_compiler(arm, out_dir),
-                                             out_dir, args.source, SOURCE_STEM)
-                      for arm in plan]
+        maxon_arms = [bench_common.build_arm(arm, out_dir, args.source, SOURCE_STEM) for arm in plan]
+        bounds = agreed_bounds(maxon_arms)
+        smallest_depth = bounds[BOUND_SMALLEST_DEPTH]
+        n = args.n if args.n is not None else bounds[BOUND_DEFAULT_N]
+        if not smallest_depth <= n <= bounds[BOUND_LARGEST_N]:
+            raise UsageFailure(f"n={n} is outside the example's {smallest_depth}..{bounds[BOUND_LARGEST_N]}")
     except (UsageFailure, BuildFailure) as e:
         return bench_common.report_failure(e)
 
     print(f"bench-binary-trees  {today}  head {head}{'*' if dirty else ''}  n={n}  runs={args.runs}  warmup={args.warmup}  (no C arm)")
     for arm in maxon_arms:
         print(f"  {arm['label']}: {bench_common.describe_identity(arm['identity'])}  exe {arm['exe_bytes']:,} B")
+    print(f"  program: {bench_common.describe_sources({arm['label']: {SOURCE_STEM: arm['source_sha256']} for arm in maxon_arms})}")
 
     # Each round runs every arm once, alternating direction so neither drift nor a fixed order can
     # manufacture a sign.

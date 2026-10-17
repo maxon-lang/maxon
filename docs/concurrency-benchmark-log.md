@@ -1199,3 +1199,91 @@ metric (wall, CPU = user + kernel, peak working set); `arm` names the compiler (
 | 2026-10-16 | f16b0678d | dirty | wsl | spawn-many | 200000 | 1 | 5 | 172 | 497 | 2.89 | 2.93 | 6.32 | slot | R8 spawn-many check: 386e5e1e2 against 41a928111 |
 | 2026-10-16 | f16b0678d | dirty | wsl | spawn-many | 200000 | 12 | 5 | 51 | 216 | 4.19 | 4.57 | 10.66 | ref@41a928111 | R8 spawn-many check: 386e5e1e2 against 41a928111 |
 | 2026-10-16 | f16b0678d | dirty | wsl | spawn-many | 200000 | 12 | 5 | 51 | 225 | 4.37 | 4.63 | 10.82 | slot | R8 spawn-many check: 386e5e1e2 against 41a928111 |
+| 2026-10-17 | 990357859 | dirty | windows | thread-ring | 3000000 | 1 | 3 | 345 | 484 | 1.41 | 1.48 | 0.88 | ref@6a8d2fe6e | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | windows | thread-ring | 3000000 | 1 | 3 | 345 | 492 | 1.43 | 1.48 | 0.86 | slot | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | windows | thread-ring | 3000000 | 12 | 3 | 1,591 | 755 | 0.47 | 0.08 | 0.79 | ref@6a8d2fe6e | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | windows | thread-ring | 3000000 | 12 | 3 | 1,591 | 761 | 0.48 | 0.08 | 0.78 | slot | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | windows | ping-pong | 1000000 | 1 | 3 | 360 | 268 | 0.75 | 0.74 | 0.70 | ref@6a8d2fe6e | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | windows | ping-pong | 1000000 | 1 | 3 | 360 | 268 | 0.74 | 0.74 | 0.71 | slot | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | windows | ping-pong | 1000000 | 12 | 3 | 491 | 492 | 1.00 | 0.98 | 0.69 | ref@6a8d2fe6e | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | windows | ping-pong | 1000000 | 12 | 3 | 491 | 503 | 1.02 | 1.02 | 0.69 | slot | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | windows | fan-in | 100000 | 1 | 3 | 273 | 308 | 1.12 | 1.12 | 22.28 | ref@6a8d2fe6e | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | windows | fan-in | 100000 | 1 | 3 | 273 | 413 | 1.51 | 1.53 | 0.75 | slot | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | windows | fan-in | 100000 | 12 | 3 | 1,008 | 399 | 0.40 | 0.21 | 19.69 | ref@6a8d2fe6e | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | windows | fan-in | 100000 | 12 | 3 | 1,008 | 2,756 | 2.73 | 5.70 | 0.77 | slot | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | windows | worker-pool | 6000 250000 | 1 | 3 | 2,111 | 2,113 | 1.00 | 0.99 | 1.27 | ref@6a8d2fe6e | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | windows | worker-pool | 6000 250000 | 1 | 3 | 2,111 | 2,109 | 1.00 | 1.00 | 1.27 | slot | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | windows | worker-pool | 6000 250000 | 12 | 3 | 193 | 200 | 1.03 | 1.03 | 1.17 | ref@6a8d2fe6e | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | windows | worker-pool | 6000 250000 | 12 | 3 | 193 | 218 | 1.13 | 1.08 | 1.17 | slot | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | windows | spawn-many | 200000 | 1 | 3 | 244 | 597 | 2.45 | 2.53 | 6.80 | ref@6a8d2fe6e | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | windows | spawn-many | 200000 | 1 | 3 | 244 | 585 | 2.40 | 2.47 | 6.80 | slot | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | windows | spawn-many | 200000 | 12 | 3 | 56 | 203 | 3.62 | 3.90 | 6.71 | ref@6a8d2fe6e | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | windows | spawn-many | 200000 | 12 | 3 | 56 | 201 | 3.58 | 3.50 | 6.71 | slot | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | windows | coroutine-churn | 200000 | 1 | 3 | 338 | 459 | 1.36 | 1.32 | 4.42 | ref@6a8d2fe6e | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | windows | coroutine-churn | 200000 | 1 | 3 | 338 | 452 | 1.34 | 1.27 | 4.42 | slot | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | windows | coroutine-churn | 200000 | 12* | 3 | 344 | 458 | 1.33 | 1.38 | 4.31 | ref@6a8d2fe6e | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | windows | coroutine-churn | 200000 | 12* | 3 | 344 | 460 | 1.34 | 1.38 | 4.31 | slot | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | windows | shared-counter | 200000 | 1 | 3 | 545 | 588 | 1.08 | 1.06 | 43.68 | ref@6a8d2fe6e | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | windows | shared-counter | 200000 | 1 | 3 | 545 | 802 | 1.47 | 1.46 | 0.75 | slot | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | windows | shared-counter | 200000 | 12 | 3 | 1,899 | 773 | 0.41 | 0.23 | 38.79 | ref@6a8d2fe6e | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | windows | shared-counter | 200000 | 12 | 3 | 1,899 | 5,727 | 3.02 | 6.44 | 0.77 | slot | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | wsl | thread-ring | 3000000 | 1 | 3 | 360 | 444 | 1.23 | 1.24 | 1.36 | ref@6a8d2fe6e | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | wsl | thread-ring | 3000000 | 1 | 3 | 360 | 460 | 1.28 | 1.28 | 1.28 | slot | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | wsl | thread-ring | 3000000 | 12 | 3 | 1,033 | 510 | 0.49 | 0.18 | 1.19 | ref@6a8d2fe6e | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | wsl | thread-ring | 3000000 | 12 | 3 | 1,033 | 526 | 0.51 | 0.19 | 1.19 | slot | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | wsl | ping-pong | 1000000 | 1 | 3 | 361 | 266 | 0.74 | 0.74 | 0.29 | ref@6a8d2fe6e | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | wsl | ping-pong | 1000000 | 1 | 3 | 361 | 267 | 0.74 | 0.74 | 0.29 | slot | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | wsl | ping-pong | 1000000 | 12 | 3 | 355 | 314 | 0.88 | 0.88 | 0.31 | ref@6a8d2fe6e | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | wsl | ping-pong | 1000000 | 12 | 3 | 355 | 309 | 0.87 | 0.86 | 0.31 | slot | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | wsl | fan-in | 100000 | 1 | 3 | 272 | 365 | 1.34 | 1.35 | 64.45 | ref@6a8d2fe6e | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | wsl | fan-in | 100000 | 1 | 3 | 272 | 413 | 1.52 | 1.52 | 0.50 | slot | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | wsl | fan-in | 100000 | 12 | 3 | 621 | 684 | 1.10 | 1.56 | 57.19 | ref@6a8d2fe6e | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | wsl | fan-in | 100000 | 12 | 3 | 621 | 5,000 | 8.05 | 22.93 | 0.56 | slot | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | wsl | worker-pool | 6000 250000 | 1 | 3 | 2,115 | 2,130 | 1.01 | 1.01 | 2.00 | ref@6a8d2fe6e | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | wsl | worker-pool | 6000 250000 | 1 | 3 | 2,115 | 2,127 | 1.01 | 1.01 | 2.00 | slot | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | wsl | worker-pool | 6000 250000 | 12 | 3 | 198 | 213 | 1.08 | 0.98 | 1.88 | ref@6a8d2fe6e | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | wsl | worker-pool | 6000 250000 | 12 | 3 | 198 | 228 | 1.15 | 1.02 | 1.88 | slot | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | wsl | spawn-many | 200000 | 1 | 3 | 169 | 495 | 2.93 | 2.96 | 6.35 | ref@6a8d2fe6e | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | wsl | spawn-many | 200000 | 1 | 3 | 169 | 484 | 2.86 | 2.88 | 6.35 | slot | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | wsl | spawn-many | 200000 | 12 | 3 | 51 | 223 | 4.38 | 4.68 | 10.69 | ref@6a8d2fe6e | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | wsl | spawn-many | 200000 | 12 | 3 | 51 | 220 | 4.34 | 4.49 | 10.68 | slot | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | wsl | coroutine-churn | 200000 | 1 | 3 | 243 | 375 | 1.54 | 1.54 | 2.92 | ref@6a8d2fe6e | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | wsl | coroutine-churn | 200000 | 1 | 3 | 243 | 320 | 1.32 | 1.32 | 2.92 | slot | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | wsl | coroutine-churn | 200000 | 12* | 3 | 238 | 319 | 1.34 | 1.35 | 2.97 | ref@6a8d2fe6e | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | wsl | coroutine-churn | 200000 | 12* | 3 | 238 | 322 | 1.35 | 1.35 | 2.97 | slot | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | wsl | shared-counter | 200000 | 1 | 3 | 549 | 738 | 1.35 | 1.35 | 128.45 | ref@6a8d2fe6e | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | wsl | shared-counter | 200000 | 1 | 3 | 549 | 809 | 1.47 | 1.48 | 0.50 | slot | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | wsl | shared-counter | 200000 | 12 | 3 | 1,240 | 1,342 | 1.08 | 1.52 | 114.11 | ref@6a8d2fe6e | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | wsl | shared-counter | 200000 | 12 | 3 | 1,240 | 10,407 | 8.39 | 24.20 | 0.50 | slot | R9 + 29931a815: bounded mailboxes (1024), failable sends |
+| 2026-10-17 | 990357859 | dirty | windows | fan-in | 100000 | 1 | 3 | 274 | 303 | 1.10 | 1.06 | 22.26 | ref@29931a815 | R9 alone against 29931a815 |
+| 2026-10-17 | 990357859 | dirty | windows | fan-in | 100000 | 1 | 3 | 274 | 412 | 1.50 | 1.44 | 0.75 | slot | R9 alone against 29931a815 |
+| 2026-10-17 | 990357859 | dirty | windows | fan-in | 100000 | 12 | 3 | 1,001 | 397 | 0.40 | 0.24 | 19.67 | ref@29931a815 | R9 alone against 29931a815 |
+| 2026-10-17 | 990357859 | dirty | windows | fan-in | 100000 | 12 | 3 | 1,001 | 2,825 | 2.82 | 6.10 | 0.77 | slot | R9 alone against 29931a815 |
+| 2026-10-17 | 990357859 | dirty | windows | worker-pool | 6000 250000 | 1 | 3 | 2,112 | 2,110 | 1.00 | 1.00 | 1.27 | ref@29931a815 | R9 alone against 29931a815 |
+| 2026-10-17 | 990357859 | dirty | windows | worker-pool | 6000 250000 | 1 | 3 | 2,112 | 2,109 | 1.00 | 1.00 | 1.27 | slot | R9 alone against 29931a815 |
+| 2026-10-17 | 990357859 | dirty | windows | worker-pool | 6000 250000 | 12 | 3 | 192 | 196 | 1.02 | 1.01 | 1.17 | ref@29931a815 | R9 alone against 29931a815 |
+| 2026-10-17 | 990357859 | dirty | windows | worker-pool | 6000 250000 | 12 | 3 | 192 | 207 | 1.08 | 1.02 | 1.17 | slot | R9 alone against 29931a815 |
+| 2026-10-17 | 990357859 | dirty | windows | spawn-many | 200000 | 1 | 3 | 237 | 591 | 2.50 | 2.60 | 6.63 | ref@29931a815 | R9 alone against 29931a815 |
+| 2026-10-17 | 990357859 | dirty | windows | spawn-many | 200000 | 1 | 3 | 237 | 583 | 2.46 | 2.47 | 6.63 | slot | R9 alone against 29931a815 |
+| 2026-10-17 | 990357859 | dirty | windows | spawn-many | 200000 | 12 | 3 | 56 | 202 | 3.59 | 4.00 | 6.64 | ref@29931a815 | R9 alone against 29931a815 |
+| 2026-10-17 | 990357859 | dirty | windows | spawn-many | 200000 | 12 | 3 | 56 | 204 | 3.61 | 4.11 | 6.64 | slot | R9 alone against 29931a815 |
+| 2026-10-17 | 990357859 | dirty | windows | shared-counter | 200000 | 1 | 3 | 544 | 586 | 1.08 | 1.06 | 43.65 | ref@29931a815 | R9 alone against 29931a815 |
+| 2026-10-17 | 990357859 | dirty | windows | shared-counter | 200000 | 1 | 3 | 544 | 801 | 1.47 | 1.46 | 0.75 | slot | R9 alone against 29931a815 |
+| 2026-10-17 | 990357859 | dirty | windows | shared-counter | 200000 | 12 | 3 | 1,840 | 772 | 0.42 | 0.25 | 38.88 | ref@29931a815 | R9 alone against 29931a815 |
+| 2026-10-17 | 990357859 | dirty | windows | shared-counter | 200000 | 12 | 3 | 1,840 | 5,764 | 3.13 | 7.10 | 0.76 | slot | R9 alone against 29931a815 |
+| 2026-10-17 | 990357859 | dirty | wsl | fan-in | 100000 | 1 | 3 | 272 | 420 | 1.54 | 1.55 | 64.45 | ref@29931a815 | R9 alone against 29931a815 |
+| 2026-10-17 | 990357859 | dirty | wsl | fan-in | 100000 | 1 | 3 | 272 | 417 | 1.53 | 1.54 | 0.50 | slot | R9 alone against 29931a815 |
+| 2026-10-17 | 990357859 | dirty | wsl | fan-in | 100000 | 12 | 3 | 616 | 666 | 1.08 | 1.47 | 57.23 | ref@29931a815 | R9 alone against 29931a815 |
+| 2026-10-17 | 990357859 | dirty | wsl | fan-in | 100000 | 12 | 3 | 616 | 4,875 | 7.91 | 22.65 | 0.56 | slot | R9 alone against 29931a815 |
+| 2026-10-17 | 990357859 | dirty | wsl | worker-pool | 6000 250000 | 1 | 3 | 2,120 | 2,123 | 1.00 | 1.00 | 2.00 | ref@29931a815 | R9 alone against 29931a815 |
+| 2026-10-17 | 990357859 | dirty | wsl | worker-pool | 6000 250000 | 1 | 3 | 2,120 | 2,124 | 1.00 | 1.00 | 2.00 | slot | R9 alone against 29931a815 |
+| 2026-10-17 | 990357859 | dirty | wsl | worker-pool | 6000 250000 | 12 | 3 | 196 | 201 | 1.03 | 1.01 | 1.88 | ref@29931a815 | R9 alone against 29931a815 |
+| 2026-10-17 | 990357859 | dirty | wsl | worker-pool | 6000 250000 | 12 | 3 | 196 | 216 | 1.11 | 1.05 | 1.88 | slot | R9 alone against 29931a815 |
+| 2026-10-17 | 990357859 | dirty | wsl | spawn-many | 200000 | 1 | 3 | 165 | 490 | 2.97 | 3.03 | 5.97 | ref@29931a815 | R9 alone against 29931a815 |
+| 2026-10-17 | 990357859 | dirty | wsl | spawn-many | 200000 | 1 | 3 | 165 | 485 | 2.94 | 2.99 | 5.97 | slot | R9 alone against 29931a815 |
+| 2026-10-17 | 990357859 | dirty | wsl | spawn-many | 200000 | 12 | 3 | 49 | 222 | 4.57 | 4.71 | 10.84 | ref@29931a815 | R9 alone against 29931a815 |
+| 2026-10-17 | 990357859 | dirty | wsl | spawn-many | 200000 | 12 | 3 | 49 | 224 | 4.62 | 4.60 | 10.81 | slot | R9 alone against 29931a815 |
+| 2026-10-17 | 990357859 | dirty | wsl | shared-counter | 200000 | 1 | 3 | 551 | 777 | 1.41 | 1.41 | 128.45 | ref@29931a815 | R9 alone against 29931a815 |
+| 2026-10-17 | 990357859 | dirty | wsl | shared-counter | 200000 | 1 | 3 | 551 | 807 | 1.47 | 1.47 | 0.50 | slot | R9 alone against 29931a815 |
+| 2026-10-17 | 990357859 | dirty | wsl | shared-counter | 200000 | 12 | 3 | 1,290 | 1,341 | 1.04 | 1.35 | 114.12 | ref@29931a815 | R9 alone against 29931a815 |
+| 2026-10-17 | 990357859 | dirty | wsl | shared-counter | 200000 | 12 | 3 | 1,290 | 10,381 | 8.05 | 21.79 | 0.56 | slot | R9 alone against 29931a815 |

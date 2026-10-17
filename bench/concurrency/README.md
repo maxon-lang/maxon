@@ -117,7 +117,7 @@ the arguments it used.
 ```
 python scripts/bench-concurrency.py                        # every workload, the slot compiler, 5 runs
 python scripts/bench-concurrency.py --runs 3 --filter ping-pong --filter fan-in
-python scripts/bench-concurrency.py --ref <pre-change-sha> --note "..."   # A/B: control compiler vs slot
+python scripts/bench-concurrency.py --ref <pre-change-sha> --note "..."   # A/B: the control commit's compiler and programs vs slot
 python scripts/bench-concurrency.py --host wsl             # the x64-linux lane, inside WSL (Windows host)
 python scripts/bench-concurrency.py --host orb             # the arm64-linux lane, inside OrbStack (macOS host)
 python scripts/bench-concurrency.py --json                 # also out/<host>/last-run.json
@@ -151,6 +151,12 @@ The script runs on Python 3.9 or newer and needs only the standard library.
   `scripts/seed-shim/` if the seed refuses the tree) and then `C2`, so the control carries its own runtime.
   It is always built on the host the harness runs on — Windows for `--host wsl`, the Mac for `--host orb` —
   with Git for Windows' `bash` on Windows, and any failure is a build failure (exit 2).
+- **Each arm compiles its own commit's programs.** A `--ref` arm compiles the workloads from its
+  worktree, `out/ref-<sha>/tree/bench/concurrency/<workload>.maxon`; `slot` and `--compiler` arms compile
+  this tree's. Where a workload's source changed between the two commits, an A/B therefore compares two
+  PROGRAMS, each built by its own compiler, and the session header's `programs:` line names every such
+  workload. A workload the ref's tree does not have is a build failure (exit 2). The Go programs are
+  always this tree's: they are the oracle every arm's output is checked against.
   Labels compare case-insensitively, two arms with one label are refused, and `go` is reserved for the
   Go arm; each is a usage error (exit 3).
 - **Processor counts.** Every workload runs at `P` in {1, the CPU count}, with `MAXON_MAX_PROCS=P`

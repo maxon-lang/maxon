@@ -105,6 +105,30 @@ def arm_compiler(planned, out_dir):
     return planned["compiler"]
 
 
+def arm_source_root(planned, out_dir):
+    return REPO if planned["sha"] is None else ref_tree_of(planned["sha"], out_dir)
+
+
+def repo_relative(path):
+    try:
+        relative = os.path.relpath(os.path.abspath(path), REPO)
+    except ValueError:
+        return None
+    return None if relative == os.pardir or relative.startswith(os.pardir + os.sep) else relative
+
+
+def arm_source(planned, out_dir, source):
+    relative = repo_relative(source)
+    if relative is None:
+        return os.path.abspath(source)
+    root = arm_source_root(planned, out_dir)
+    path = os.path.join(root, relative)
+    if not os.path.isfile(path):
+        raise BuildFailure(f"arm {planned['label']} has no {relative.replace(os.sep, '/')} in its checkout {root}; "
+                           "a ref arm compiles its own commit's program, never this tree's")
+    return path
+
+
 def describe_identity(identity):
     tree = f"{identity['head']}{'*' if identity['dirty'] else ''}" if "head" in identity else "no checkout"
     return f"{identity['compiler']}  [{tree}, {identity['bytes']:,} B, {identity['mtime']}]"
@@ -151,11 +175,24 @@ def compile_in_arm(compiler, label, arm_dir, source, stem, build_args=(), exe_su
     return exe
 
 
-def build_arm(label, compiler, out_dir, source, stem, build_args=()):
+def build_arm(planned, out_dir, source, stem, build_args=()):
+    label = planned["label"]
+    compiler = arm_compiler(planned, out_dir)
+    program = arm_source(planned, out_dir, source)
     arm_dir = os.path.join(out_dir, label)
-    exe = compile_in_arm(compiler, label, arm_dir, source, stem, build_args=build_args)
+    exe = compile_in_arm(compiler, label, arm_dir, program, stem, build_args=build_args)
     return {"label": label, "dir": arm_dir, "exe": exe, "exe_bytes": os.path.getsize(exe),
-            "identity": compiler_identity(compiler), "compiler": compiler}
+            "identity": compiler_identity(compiler), "compiler": compiler,
+            "source": program, "source_sha256": sha256_of(program)}
+
+
+def describe_sources(source_digests_by_arm):
+    labels = list(source_digests_by_arm)
+    names = list(source_digests_by_arm[labels[0]]) if labels else []
+    differing = [name for name in names if len({source_digests_by_arm[label][name] for label in labels}) > 1]
+    if not differing:
+        return "every arm compiles the same program"
+    return f"the arms compile DIFFERENT programs, each from its own checkout, for: {', '.join(differing)}"
 
 
 def print_timing_table(rows):
@@ -286,10 +323,14 @@ def run_tree_script(shell, tree, script):
         raise BuildFailure(f"{script} failed in {tree} (exit {r.returncode}):\n{r.stdout}\n{r.stderr}")
 
 
+def ref_tree_of(sha, out_dir):
+    return os.path.join(out_dir, f"ref-{sha}", "tree")
+
+
 def build_compiler_from_ref(ref, out_dir):
     """A compiler built from a git ref in its own worktree by that ref's own seed scripts. Cached by sha."""
     sha = git(REPO, "rev-parse", "--short", ref)
-    tree = os.path.join(out_dir, f"ref-{sha}", "tree")
+    tree = ref_tree_of(sha, out_dir)
     compiler = os.path.join(tree, "maxon-bin", ".maxon", "maxon" + EXE)
     if os.path.exists(compiler):
         return compiler
