@@ -1337,6 +1337,48 @@ spawn-many at `P = 1` peaks at 1,401 MiB and takes 0.8–1.0 s, against 620 MiB 
 c550796db. A `--runs 9` rerun shows the same; c550796db is bimodal there, with 7 of 9 runs at 620 MiB and
 465–527 ms, and 2 at 1,006 MiB and 621–716 ms.
 
+**2026-10-16 — A SERVICE MESSAGE IS COPIED INTO A RING ITS MAILBOX OWNS, SO A SEND ALLOCATES AND FREES NOTHING
+(386e5e1e2, R8). A RUNTIME row, four lanes, against 41a928111.**
+
+| workload | P | x64-windows | x64-linux | arm64-macos | arm64-linux |
+|---|---|---|---|---|---|
+| ping-pong | 1 | 0.85 → 0.75 | 0.84 → 0.74 | 1.08 → 1.00 | 1.13 → 1.06 |
+| ping-pong | N | 1.10 → 0.99 | 0.95 → 0.88 | 1.25 → 1.17 | 1.26 → 1.20 |
+| thread-ring | 1 | 1.63 → 1.38 | 1.57 → 1.25 | 1.95 → 1.65 | 2.02 → 1.66 |
+| thread-ring | N | 0.61 → 0.53 | 0.58 → 0.50 | 0.51 → 0.44 | 1.51 → 1.23 |
+| spawn-many | 1 | 2.27 → **2.41** | 2.77 → **3.03** | 1.32 → 1.21 | 1.29 → 1.19 |
+| spawn-many | N | 3.37 → **3.60** | 4.52 → **4.94** | 3.49 → **4.16** | 1.33 → 1.40 |
+| fan-in | 1 | 1.70 → 1.12 | 2.03 → 1.36 | 1.27 → 0.72 | 1.26 → 0.75 |
+| fan-in | N | 0.79 → 0.41 | 1.29 → 1.01 | 0.47 → 0.27 | 1.09 → 0.65 |
+| shared-counter | 1 | 1.69 → 1.09 | 2.24 → 1.31 | 1.26 → 0.70 | 1.24 → 0.74 |
+| shared-counter | N | 0.84 → 0.43 | 1.19 → 0.94 | 0.45 → 0.26 | 1.10 → 0.65 |
+| coroutine-churn | 1 | 1.34 → 1.35 | 1.27 → 1.26 | 0.59 → 0.59 | 0.60 → 0.60 |
+| worker-pool | 1 | 1.00 → 1.00 | 1.01 → 1.01 | 1.00 → 1.00 | 1.00 → 1.01 |
+| worker-pool | N | 1.09 → 1.05 | 1.12 → 1.14 | 1.03 → 1.04 | 0.93 → **1.25** |
+
+Each column is one session, `--ref 41a928111 --runs 3`, note "R8: mailbox ring, no per-message allocation".
+shared-counter's figures are against the channel-actor Go oracle of 41a928111, so they do not compare with the
+shared-counter rows of the entries above.
+
+fan-in and shared-counter gain 33–44% at `P = 1` and 21–49% at `P = N` on every lane, and now run faster than Go
+everywhere except at `P = 1` on x64, where they read 1.09–1.36, and fan-in at `P = N` on x64-linux, at 1.01. thread-ring gains 13–20%, ping-pong 5–12%.
+coroutine-churn and worker-pool at `P = 1` hold. Peak memory: fan-in falls 297 → 133 MiB on x64-windows and 298 →
+129 MiB on x64-linux, shared-counter 596 → 261 and 595 → 257, and their ratios more than halve on both arm64 lanes
+(fan-in at `P = 1` 80.81 → 35.68 and 150.59 → 66.19). Every other memory ratio holds within 5%, apart from ping-pong
+on x64-linux, whose sub-MiB peak gains 0.1 MiB, and spawn-many at `P = 1`, which rises on all four lanes: 1,795 → 1,845 MiB on x64-windows and 620 → 670 MiB on
+x64-linux, the same +49 MiB on both, and 2.73 → 2.94 and 3.56 → 3.84 as ratios on arm64.
+
+The arm64-linux worker-pool regression at `P = N` is not on x64, where the cell moves −4% and +2% inside a ±13%
+spread. Its 0.93 is the outlier: the six arms of the three arm64-linux sessions before read 1.09–1.41, and 1.25
+sits inside that range.
+
+**spawn-many against 41a928111, `--filter spawn-many --runs 5`** (note "R8 spawn-many check: 386e5e1e2 against
+41a928111"): the arm64-macos regression at `P = N` is on x64 too, and x64 also regresses at `P = 1`, where arm64
+gained 8–9%. x64-windows reads 3.48 → 3.71 at `P = N` (194 → 207 ms, ±2% both arms) and 2.29 → 2.49 at `P = 1`
+(571 → 622 ms). x64-linux reads 4.19 → 4.37 at `P = N` (216 → 225 ms, ±5% and ±8%) and 2.71 → 2.89 at `P = 1`
+(465 → 497 ms, the slot arm ±22%). CPU follows wall at `P = 1` on both lanes and holds at `P = N`. The +49 MiB
+peak at `P = 1` reproduces on both lanes.
+
 ## Bugs this uncovered
 
 Removing the dummy exposed a leak it had been half-hiding, and the leak in turn exposed a hole in the
