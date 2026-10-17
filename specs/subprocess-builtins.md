@@ -2531,7 +2531,7 @@ function main() returns ExitCode
 	let fifo = "{dir}/f"
 
 	let reader = spawn FifoReader.create()
-	reader.catFrom("{dir}/f")
+	try reader.catFrom("{dir}/f") otherwise return 9
 	sleep(setupHoldMs)
 	__Builtins.subprocessReleaseHandle(first)
 	try File.writeText(try FilePath.from(fifo) otherwise return 2, content: "through the fifo") otherwise return 3
@@ -2620,7 +2620,7 @@ function main() returns ExitCode
 	end 'fill'
 
 	let reader = spawn FifoReader.create()
-	reader.countFrom("{dir}/f")
+	try reader.countFrom("{dir}/f") otherwise return 9
 	try File.writeText(try FilePath.from(fifo) otherwise return 2, content: payload.build()) otherwise return 3
 	let answer = try await reader.answer() otherwise return 8
 	print("child: {answer}\n")
