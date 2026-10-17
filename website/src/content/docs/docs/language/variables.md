@@ -71,6 +71,68 @@ function main() returns ExitCode
 end 'main'
 ```
 
+So a `let` binds only a value nothing writes while it lives:
+
+- a fresh record no other name reaches (`let x = Box.create(1)`), frozen at birth;
+- a read-only value, such as a module-level `let`'s record or a `let` field of a read-only holder;
+- a part of a parameter (`let z = p.child`), which is as immutable as the argument the caller passed. A caller
+  that passes the same record through a second, writable argument may write it while the `let` lives.
+
+A `let` bound to state something may still write — a field of a writable `self` or `var`, an element of a `var`
+container, a getter's result on a `var` holder, a parameter the function writes, a `var`'s record that a
+container also holds — is **E3188** (``cannot bind `let` 'b' to a value reached through 'holder', which something
+may still write; use `view` to read it, `var` to write it, or bind a clone()``). A function that returns a
+`let`-bound value returns a read-only value.
+
+## Views (`view`)
+
+`view x = e` binds any value read-only through `x`. Unlike a `let`, a `view` promises nothing about other names: a
+write made through another name, or by another coroutine across an `await`, is seen through the view.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Holder
+	export var box as Box
+
+	static function create() returns Self
+		return Self{box: Box.create(1)}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	var h = Holder.create()
+	view v = h.box            // `let v = h.box` is E3188: h may still write it
+	h.box.n = 7
+	print("{v.n}\n")          // 7
+	// v.n = 8                // E3159: 'v' is read-only (a `view`)
+	return 0
+end 'main'
+```
+
+- Writing through a view, or handing it to a parameter the callee writes, is **E3159**.
+- A view lives only inside its function. Storing it, handing it to a parameter that keeps it, returning it (or a
+  call's result that is still the view) and capturing it in a closure are **E3078**; sending it to a service is
+  **E3138**. Use a `clone()` for any of them. A view of a number or another scalar is copied where it goes.
+- A view holds its own reference to the record it names. Once a view of a `var` is declared — of the `var`
+  itself, a field or an element of it, or any expression that may hand its record back (a ternary, an
+  `otherwise`, a `match`, a call) — the view co-owns that record for the rest of the function, read again or
+  not: sending it (**E3138**), publishing it (**E3174**) or handing it to a `sole`
+  parameter (**E3078**) is refused. The rule follows source order, so inside a loop a view declared earlier in the
+  body counts. Reassigning the `var` a fresh record makes it sole again, and returning the `var` is unaffected.
+- A record nothing can write — a heap type whose fields are all `let` — is shared instead: it is sent, published
+  or handed to a `sole` parameter as it is, and the view stays valid. An inline packed record is copied.
+- `view` is a [contextual keyword](/docs/language/overview/#keywords). It declares a local binding only: a `view` field, a module-level
+  `view`, a `view` in an extension body or an `@heap view` is **E2077**.
+
 ## Rules
 
 - Every variable is initialized where it is declared, and its type is inferred from the initializer.
@@ -85,7 +147,8 @@ end 'main'
   file order. See [Generic-Instance and Function-Type Aliases Are Brands](/docs/language/ranged-typealiases/#generic-instance-and-function-type-aliases-are-brands).
 - Variables are block-scoped.
 - **A `var` that is never reassigned or mutated is E3077** (`variable 'x' is never reassigned; use 'let'
-  instead of 'var'`).
+  instead of 'var'`) when a `let` in its place would compile: its initializer is a fresh record or a
+  read-only value, and nothing stores it where something may write it and reads it again.
 - **Every variable must be used (E3012).** This covers `let`/`var`, parameters, loop variables, pattern
   bindings and closure parameters. The name `_` discards: it creates no binding and may appear several
   times in one pattern (`for (_, _) in pairs`). Names such as `_x` are ordinary variables. A method that
@@ -176,10 +239,9 @@ end 'main'
 - A module-level `let` is [read-only](/docs/language/memory-model/#read-only-values) through everything it reaches, for the program's whole
   life. A write through it, or through a record a call handed back out of it, is **E3159**; binding it, a field
   of it (`var m = H.index`) or such a call result to a `var` is **E3078**. Read it through a `let`, or bind a
-  `clone()`. Pushing its record into a container, local or module-level, or storing it into a field of a
-  module-level `var` is **E3078** too; push or store a `clone()`. Handed to a function that stores its
-  parameter, put in an array literal or given to `upsert`, it is stored as a copy, and a write through the
-  copy leaves the `let` as it was.
+  `clone()`. Storing its record anywhere something may write it — pushing it into a container, local or
+  module-level, storing it into a `var` field, putting it in an array literal or a map value, or handing it to
+  a function that keeps its parameter — is **E3078** too; store a `clone()`.
 - A `spawn` reachable from a global initializer is **E3164**; start services in `main`, or declare a
   program-wide one with [`default`](/docs/language/async/#program-wide-defaults--default). A `Key.current()` or `Key.register()`
   reachable from a global initializer is [E3173](/docs/cli/error-codes/#e3173--registryreachedfromglobalinitializer): the

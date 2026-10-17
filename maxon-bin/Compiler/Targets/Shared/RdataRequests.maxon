@@ -21,7 +21,7 @@
 export union RdataRequest
 	floatConstant(bits FullRangeInt)
 	jumpTable(slotCount ElementIndex)
-	stringBlob(bytes ByteArray)
+	stringBlob(let bytes ByteArray)
 end 'RdataRequest'
 
 export typealias RdataRequestArray = Array with RdataRequest
@@ -30,7 +30,7 @@ export typealias RdataRequestArray = Array with RdataRequest
 typealias RdataRequestOrdinal = int(0 to u64.max)
 
 // Placeholder label → the label the request was registered under, for one function.
-typealias RdataLabelMap = Map with (ByteArray, ByteArray)
+typealias RdataLabelMap = Map with (ByteArray, readonly ByteArray)
 
 // A prefix no real `.rdata` label carries, so a placeholder can never be mistaken for a registered label
 // the Std tier put into an op — those reach the isel already final and are left alone by the patch.
@@ -128,7 +128,7 @@ function patchRdataLabels(module TargetModule, func IrFunction, labels RdataLabe
 	end 'nothingToPatch'
 
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = module.getBlock(blockRef)
+		view block = module.getBlock(blockRef)
 
 		for opIdx in block.bodyOps() 'eachOp'
 			patchRdataLabelAt(module, opIdx: opIdx, labels: labels)

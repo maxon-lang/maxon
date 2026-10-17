@@ -81,7 +81,7 @@ export typealias LandingSlotArray = Array with ElementIndex
 // order and reads each one's answer through `slotOf`. One record for every pool.
 export type LandingSlots
 	var slotOfJob as LandingSlotArray
-	var jobCount as ElementIndex
+	let jobCount as ElementIndex
 
 	// Filled with the one value no landing slot has — the job count — so a job that never landed is a panic
 	// at the fold rather than job 0's answer folded twice.
@@ -134,9 +134,9 @@ end 'InFlightSizeBound'
 export type PoolDispatch
 	var order as PoolJobArray
 	var sizeInDispatchOrder as PoolJobSizeArray
-	var jobCount as PoolSize
-	var workerCount as PoolSize
-	var assignment as PoolAssignment
+	let jobCount as PoolSize
+	let workerCount as PoolSize
+	let assignment as PoolAssignment
 	var dispatched as ElementIndex
 	var handedToWorker as PoolSlotArray
 	var positionOfJob as PoolSlotArray
@@ -366,9 +366,9 @@ end 'PoolAssignment'
 // `workerCount` is an `ElementIndex` rather than a `PoolSize` because zero is a legal answer: a caller with
 // no jobs still logs its line, and each consumer casts to `PoolSize` past its own `> 0` guard.
 export type PoolSizing
-	export var workerCount as ElementIndex
-	var processors as SchedulerProcessorCount
-	var jobCount as ElementIndex
+	export let workerCount as ElementIndex
+	let processors as SchedulerProcessorCount
+	let jobCount as ElementIndex
 
 	export static function forJobs(jobCount ElementIndex) returns PoolSizing
 		let processors = Scheduler.processorCount()
@@ -484,8 +484,8 @@ export type BackendWorker
 	var target as Target
 	var abi as CalleeAbiTable
 	var usesGt as bool
-	var pool as RegMask
-	var callerSaved as RegMask
+	let pool as RegMask
+	let callerSaved as RegMask
 	var file as RegisterFile
 	var opFacts as OpVariantFacts
 
@@ -536,7 +536,7 @@ export type BackendWorker
 		// cleanup rearranges, and a range resolved after it lands on the wrong op without a word.
 		resolveDebugRanges(lowered.targetModule, unitFunc: unitFunc)
 
-		let tail = self.finishFunction(lowered.targetModule, func: unitFunc, encoding: body.encoding)
+		var tail = self.finishFunction(lowered.targetModule, func: unitFunc, encoding: body.encoding)
 		lowered.targetModule.spans.requireParallelTo(lowered.targetModule.ops.count(), what: "after the backend tail")
 		lowered.targetModule.compactOps()
 
@@ -663,7 +663,7 @@ export function lowerAndAllocateOnAWorkerPool(stdModule StdModule, target Target
 
 	for funcIndex in 0 upto funcCount 'foldInIndexOrder'
 		var landing = try landed.get(slots.slotOf(funcIndex)) otherwise panic("lowerAndAllocateOnAWorkerPool: landed.get OOB for function {funcIndex}")
-		let func = module.getFunc(funcIndex)
+		var func = module.getFunc(funcIndex)
 		performRdataRequests(globalData, module: module, func: func, chunk: landing.tail.chunk, requests: landing.rdata)
 		attachInlineSites(landing.tail.chunk, func: func)
 		foldPoolPhaseDelta(project, phase: CompilePhase.isel, driver: CompilePhase.regalloc, delta: landing.iselCost)

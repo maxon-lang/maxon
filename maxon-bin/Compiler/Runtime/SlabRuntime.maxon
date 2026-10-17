@@ -1046,12 +1046,12 @@ export function emitSlabMachineOrBail(module StdModule, func IrFunction, cur IrB
 	// a `jcc`, and moves the `allocator-shape-is-one-in-a-program-with-no-scheduler` pin in
 	// `ir-specs/emitted-runtime-body.md` on every lane.
 	emitBranchOnCompare(module, block: cur, value: schedulerWord, pred: StdCmpPred.eq, against: 0, whenTrue: noScheduler.block, whenFalse: haveScheduler, ids: ids)
-	cur.branchEdges.push(BranchEdge.create(noScheduler.block.id, argIds: noScheduler.args))
+	cur.branchEdges.push(BranchEdge.create(noScheduler.block.id, argIds: noScheduler.args.clone()))
 
 	let m = ids.mint()
 	module.appendOp(haveScheduler, op: StdOp.tlsSlotLoad(m, tebOffsetId: schedulerWord))
 	emitBranchOnCompare(module, block: haveScheduler, value: m, pred: StdCmpPred.eq, against: 0, whenTrue: noMachine.block, whenFalse: haveMachine, ids: ids)
-	haveScheduler.branchEdges.push(BranchEdge.create(noMachine.block.id, argIds: noMachine.args))
+	haveScheduler.branchEdges.push(BranchEdge.create(noMachine.block.id, argIds: noMachine.args.clone()))
 
 	return m
 end 'emitSlabMachineOrBail'
@@ -1064,7 +1064,7 @@ end 'emitSlabMachineOrBail'
 export function emitSlabOwnerThreadOrBail(module StdModule, cur IrBlock, m ValueId, haveOwner IrBlock, noThread SlabBailEdge, ids ValueMinter) returns ValueId
 	let gt = emitLoadField(module, block: cur, record: m, offset: MOffCurrentGt, ids: ids)
 	emitBranchOnCompare(module, block: cur, value: gt, pred: StdCmpPred.eq, against: 0, whenTrue: noThread.block, whenFalse: haveOwner, ids: ids)
-	cur.branchEdges.push(BranchEdge.create(noThread.block.id, argIds: noThread.args))
+	cur.branchEdges.push(BranchEdge.create(noThread.block.id, argIds: noThread.args.clone()))
 
 	return emitLoadField(module, block: haveOwner, record: gt, offset: GtOffOwner, ids: ids)
 end 'emitSlabOwnerThreadOrBail'
@@ -1172,8 +1172,8 @@ export type SlabShardArms
 		let serialRouting = pushSerialRouting(module, block: serialised, state: state, need: need, ids: ids)
 		let serialTrafficRow = emitSlabTrafficRowAt(module, block: serialised, state: state, row: SlabRawShardRow, ids: ids)
 
-		let sole = SlabShardSite.create(soleWriter, trafficRow: soleTrafficRow, routing: soleRouting)
-		let serial = SlabShardSite.create(serialised, trafficRow: serialTrafficRow, routing: serialRouting)
+		var sole = SlabShardSite.create(soleWriter, trafficRow: soleTrafficRow, routing: soleRouting)
+		var serial = SlabShardSite.create(serialised, trafficRow: serialTrafficRow, routing: serialRouting)
 
 		return Self{schedulerWord: schedulerWord, sole: sole, serial: serial}
 	end 'create'
@@ -1292,11 +1292,11 @@ end 'ownSoleEdgeArgs'
 // unscheduled program lands in, which is I-cache the hot path pays for on every call.
 module function emitSlabResolveShard(module StdModule, func IrFunction, cur IrBlock, state ValueId, model MachineModel, need SlabShardNeed, traffic ThreadTraffic, ids ValueMinter, label ByteArray, heat BlockHeat = BlockHeat.normal) returns SlabShardArms
 	let schedulerWord = emitSlabSchedulerWord(module, block: cur, state: state, model: model, ids: ids)
-	let arms = SlabShardArms.create(module, func: func, state: state, schedulerWord: schedulerWord, need: need, ids: ids, label: label, heat: heat)
+	var arms = SlabShardArms.create(module, func: func, state: state, schedulerWord: schedulerWord, need: need, ids: ids, label: label, heat: heat)
 
 	let noProc = emitConst(module, block: cur, value: SlabNoProcessor, ids: ids)
 	let rawTrafficRow = emitSlabTrafficRowAt(module, block: cur, state: state, row: SlabRawShardRow, ids: ids)
-	let rawSoleArgs = rawSoleEdgeArgs(module, block: cur, state: state, trafficRow: rawTrafficRow, noProc: noProc, need: need, ids: ids)
+	var rawSoleArgs = rawSoleEdgeArgs(module, block: cur, state: state, trafficRow: rawTrafficRow, noProc: noProc, need: need, ids: ids)
 
 	if model == MachineModel.singleMachine 'oneThread'
 		module.setTerminator(cur, op: StdOp.branch(arms.sole.block.id))
@@ -1310,7 +1310,7 @@ module function emitSlabResolveShard(module StdModule, func IrFunction, cur IrBl
 	var haveProc = module.addBlock(func, label: label, heat: heat)
 	var ownRow = module.addBlock(func, label: label, heat: heat)
 
-	let rawRowUnlocked = SlabBailEdge.create(arms.sole.block, args: rawSoleArgs)
+	var rawRowUnlocked = SlabBailEdge.create(arms.sole.block, args: rawSoleArgs)
 	var rawRowSerialised = SlabBailEdge.create(noMachine, args: ValueIdArray.create())
 	let m = emitSlabMachineOrBail(module, func: func, cur: cur, schedulerWord: schedulerWord, haveMachine: haveMachine, noScheduler: rawRowUnlocked, noMachine: rawRowSerialised, ids: ids, label: label, heat: heat)
 
@@ -1667,7 +1667,7 @@ function emitSlabRemotePush(module StdModule, func IrFunction, cur IrBlock, span
 	var retry = module.addBlock(func, label: b"rpush", heat: BlockHeat.normal)
 	var cacherAsked = module.addBlock(func, label: b"rcacher", heat: BlockHeat.normal)
 	var credited = module.addBlock(func, label: b"rcredit", heat: BlockHeat.normal)
-	let done = module.addBlock(func, label: b"rpushed", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"rpushed", heat: BlockHeat.normal)
 
 	// Stepped before the head moves, so a reader holding `__slab_lock` that sees the chain also sees a count
 	// that covers it. The other order leaves a window where the chain is longer than the count.
@@ -2642,7 +2642,7 @@ end 'buildSlabCensusEntry'
 // `owning_p` against its own P; its raw arm and `__slab_free_to_full` hold `__slab_lock`; the collect runs
 // either on the owner or inside the lock, which is the same rule its own callers carry.
 function emitSlabFreeToSpan(module StdModule, func IrFunction, cur IrBlock, slot ValueId, span ValueId, ids ValueMinter, label ByteArray) returns IrBlock
-	let done = module.addBlock(func, label: label, heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: label, heat: BlockHeat.normal)
 
 	let head = emitLoadField(module, block: cur, record: span, offset: MspanFreeListOffset, ids: ids)
 	emitStoreField(module, block: cur, record: slot, offset: 0, value: head)

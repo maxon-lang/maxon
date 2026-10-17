@@ -511,7 +511,7 @@ function main() returns ExitCode
 	var xs = IntArray.create()
 	xs.push(7)
 	xs.push(8)
-	let m = bufferOf(xs)
+	view m = bufferOf(xs)
 	print("{m.length()}\n")
 	return 0
 end 'main'

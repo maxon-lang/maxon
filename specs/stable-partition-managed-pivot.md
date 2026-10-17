@@ -75,14 +75,14 @@ type Array uses Element implements BuiltinArrayLiteral
 	end 'clear'
 
 	function stablePartition(lo Small, hi Small, pivotIndex Small, scratch Self, pivotHold Self, cmp Cmp) returns Small
-		let pivotAtHome = try managed.get(pivotIndex) otherwise panic("get OOB at pivot")
+		var pivotAtHome = try managed.get(pivotIndex) otherwise panic("get OOB at pivot")
 		pivotHold.clear()
 		pivotHold.push(pivotAtHome)
-		let pv = try pivotHold.get(0) otherwise panic("pivotHold empty one line after a push")
+		view pv = try pivotHold.get(0) otherwise panic("pivotHold empty one line after a push")
 		var lessCount = 0 as Small
 		var scan = lo
 		while scan < hi 'count'
-			let v = try managed.get(scan) otherwise panic("get OOB during count")
+			view v = try managed.get(scan) otherwise panic("get OOB during count")
 			if cmp(v, pv) == Ordering.lessThan 'isLess'
 				lessCount = lessCount + 1
 			end 'isLess'
@@ -95,7 +95,7 @@ type Array uses Element implements BuiltinArrayLiteral
 			var k = 0 as Small
 			var i = lo
 			while i < hi 'splitGe'
-				let v = try managed.get(i) otherwise panic("get OOB at i (ge)")
+				var v = try managed.get(i) otherwise panic("get OOB at i (ge)")
 				if cmp(v, pv) != Ordering.lessThan 'toScratch'
 					try scratch.set(k, value: v) otherwise panic("scratch.set OOB (ge)")
 					k = k + 1
@@ -108,7 +108,7 @@ type Array uses Element implements BuiltinArrayLiteral
 			var out = lo + lessCount
 			var s = 0 as Small
 			while s < geCount 'writeGe'
-				let v = try scratch.get(s) otherwise panic("scratch.get OOB (ge)")
+				var v = try scratch.get(s) otherwise panic("scratch.get OOB (ge)")
 				try managed.set(out, value: v) otherwise panic("set OOB at out (ge)")
 				out = out + 1
 				s = s + 1
@@ -119,7 +119,7 @@ type Array uses Element implements BuiltinArrayLiteral
 			var k = 0 as Small
 			var i = lo
 			while i < hi 'splitLess'
-				let v = try managed.get(i) otherwise panic("get OOB at i (less)")
+				var v = try managed.get(i) otherwise panic("get OOB at i (less)")
 				if cmp(v, pv) == Ordering.lessThan 'toScratch2'
 					try scratch.set(k, value: v) otherwise panic("scratch.set OOB (less)")
 					k = k + 1
@@ -131,14 +131,14 @@ type Array uses Element implements BuiltinArrayLiteral
 			end 'splitLess'
 			var src = lo + geCount
 			while src > lo 'shiftGe'
-				let v = try managed.get(src - 1) otherwise panic("get OOB during shift")
+				var v = try managed.get(src - 1) otherwise panic("get OOB during shift")
 				try managed.set(src - 1 + lessCount, value: v) otherwise panic("set OOB during shift")
 				src = src - 1
 			end 'shiftGe'
 			var out = lo
 			var s = 0 as Small
 			while s < lessCount 'writeLess'
-				let v = try scratch.get(s) otherwise panic("scratch.get OOB (less)")
+				var v = try scratch.get(s) otherwise panic("scratch.get OOB (less)")
 				try managed.set(out, value: v) otherwise panic("set OOB at out (less)")
 				out = out + 1
 				s = s + 1
@@ -233,14 +233,14 @@ type Array uses Element implements BuiltinArrayLiteral
 	end 'clear'
 
 	function stablePartition(lo Small, hi Small, pivotIndex Small, scratch Self, pivotHold Self, cmp Cmp) returns Small
-		let pivotAtHome = try managed.get(pivotIndex) otherwise panic("get OOB at pivot")
+		var pivotAtHome = try managed.get(pivotIndex) otherwise panic("get OOB at pivot")
 		pivotHold.clear()
 		pivotHold.push(pivotAtHome)
-		let pv = try pivotHold.get(0) otherwise panic("pivotHold empty one line after a push")
+		view pv = try pivotHold.get(0) otherwise panic("pivotHold empty one line after a push")
 		var lessCount = 0 as Small
 		var scan = lo
 		while scan < hi 'count'
-			let v = try managed.get(scan) otherwise panic("get OOB during count")
+			view v = try managed.get(scan) otherwise panic("get OOB during count")
 			if cmp(v, pv) == Ordering.lessThan 'isLess'
 				lessCount = lessCount + 1
 			end 'isLess'
@@ -253,7 +253,7 @@ type Array uses Element implements BuiltinArrayLiteral
 			var k = 0 as Small
 			var i = lo
 			while i < hi 'splitGe'
-				let v = try managed.get(i) otherwise panic("get OOB at i (ge)")
+				var v = try managed.get(i) otherwise panic("get OOB at i (ge)")
 				if cmp(v, pv) != Ordering.lessThan 'toScratch'
 					try scratch.set(k, value: v) otherwise panic("scratch.set OOB (ge)")
 					k = k + 1
@@ -266,7 +266,7 @@ type Array uses Element implements BuiltinArrayLiteral
 			var out = lo + lessCount
 			var s = 0 as Small
 			while s < geCount 'writeGe'
-				let v = try scratch.get(s) otherwise panic("scratch.get OOB (ge)")
+				var v = try scratch.get(s) otherwise panic("scratch.get OOB (ge)")
 				try managed.set(out, value: v) otherwise panic("set OOB at out (ge)")
 				out = out + 1
 				s = s + 1
@@ -277,7 +277,7 @@ type Array uses Element implements BuiltinArrayLiteral
 			var k = 0 as Small
 			var i = lo
 			while i < hi 'splitLess'
-				let v = try managed.get(i) otherwise panic("get OOB at i (less)")
+				var v = try managed.get(i) otherwise panic("get OOB at i (less)")
 				if cmp(v, pv) == Ordering.lessThan 'toScratch2'
 					try scratch.set(k, value: v) otherwise panic("scratch.set OOB (less)")
 					k = k + 1
@@ -289,14 +289,14 @@ type Array uses Element implements BuiltinArrayLiteral
 			end 'splitLess'
 			var src = lo + geCount
 			while src > lo 'shiftGe'
-				let v = try managed.get(src - 1) otherwise panic("get OOB during shift")
+				var v = try managed.get(src - 1) otherwise panic("get OOB during shift")
 				try managed.set(src - 1 + lessCount, value: v) otherwise panic("set OOB during shift")
 				src = src - 1
 			end 'shiftGe'
 			var out = lo
 			var s = 0 as Small
 			while s < lessCount 'writeLess'
-				let v = try scratch.get(s) otherwise panic("scratch.get OOB (less)")
+				var v = try scratch.get(s) otherwise panic("scratch.get OOB (less)")
 				try managed.set(out, value: v) otherwise panic("set OOB at out (less)")
 				out = out + 1
 				s = s + 1

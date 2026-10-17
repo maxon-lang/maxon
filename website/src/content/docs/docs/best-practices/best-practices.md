@@ -342,6 +342,23 @@ let defaults = loadDefaults()
 defaults.retries = 5      // ERROR E3159: 'defaults' is read-only (a `let` binding)
 ```
 
+### Read Writable State Through a `view`
+
+A `let` binds only what nothing writes while it lives: a fresh record, a read-only value, or a part of a
+parameter. To read a field of a writable `self`, an element of a `var` container or a getter's result on a `var`
+holder, bind a `view`; a `let` there is E3188. Keep a view local: it cannot be stored, returned, captured or sent,
+and once a `var`'s record has been viewed it cannot be sent or handed to a `sole` parameter for the rest of the
+function, so view it after the send or send a `clone()`.
+
+```maxon
+// Good: read the current entry of a `var` registry, which may still change it
+view entry = try registry.items.get(0) otherwise return
+print("{entry.name}\n")
+
+// Bad: a `let` would promise that nothing writes the entry
+let entry = try registry.items.get(0) otherwise return   // ERROR E3188
+```
+
 ## Functions
 
 ### Use the First-Positional, Rest-Named Convention

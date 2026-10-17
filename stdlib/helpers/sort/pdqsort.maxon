@@ -114,10 +114,10 @@ public extension Array
 
 		while i <= j 'sweep'
 			// Read on every trip rather than held across the swap below, which writes `managed`.
-			let pv = try managed.get(lo) otherwise panic("partition: get OOB at pivot")
+			view pv = try managed.get(lo) otherwise panic("partition: get OOB at pivot")
 
 			// Advance i while arr[i] < pivot.
-			let vi = try managed.get(i) otherwise panic("partition: get OOB at i")
+			view vi = try managed.get(i) otherwise panic("partition: get OOB at i")
 			let cmpI = cmp(vi, pv)
 
 			if cmpI == Ordering.lessThan 'iAdvance'
@@ -126,7 +126,7 @@ public extension Array
 			end 'iAdvance'
 
 			// Retreat j while arr[j] > pivot.
-			let vj = try managed.get(j) otherwise panic("partition: get OOB at j")
+			view vj = try managed.get(j) otherwise panic("partition: get OOB at j")
 			let cmpJ = cmp(vj, pv)
 
 			if cmpJ == Ordering.greaterThan 'jRetreat'
@@ -181,16 +181,16 @@ public extension Array
 
 			// Pick the larger of the two children.
 			if child + 1 < count 'hasRight'
-				let l = try managed.get(lo + child) otherwise panic("siftDown: get OOB at left child")
-				let r = try managed.get(lo + child + 1) otherwise panic("siftDown: get OOB at right child")
+				view l = try managed.get(lo + child) otherwise panic("siftDown: get OOB at left child")
+				view r = try managed.get(lo + child + 1) otherwise panic("siftDown: get OOB at right child")
 
 				if cmp(l, r) == Ordering.lessThan 'rightBigger'
 					child = child + 1
 				end 'rightBigger'
 			end 'hasRight'
 
-			let rv = try managed.get(lo + root) otherwise panic("siftDown: get OOB at root")
-			let cv = try managed.get(lo + child) otherwise panic("siftDown: get OOB at chosen child")
+			view rv = try managed.get(lo + root) otherwise panic("siftDown: get OOB at root")
+			view cv = try managed.get(lo + child) otherwise panic("siftDown: get OOB at chosen child")
 
 			if cmp(rv, cv) != Ordering.lessThan 'heapOk'
 				return
@@ -261,8 +261,8 @@ public extension Array
 			// the slice on the right of that pivot — i.e. all are == pivot.
 			// We can skip a full partition pass.
 			if prevSame and curLo > 0 'tryCommonPrefix'
-				let prevAnchor = try managed.get(curLo - 1) otherwise panic("pdqsortRecurse: get OOB at curLo - 1")
-				let pivotVal = try managed.get(pivotIndex) otherwise panic("pdqsortRecurse: get OOB at pivotIndex")
+				view prevAnchor = try managed.get(curLo - 1) otherwise panic("pdqsortRecurse: get OOB at curLo - 1")
+				view pivotVal = try managed.get(pivotIndex) otherwise panic("pdqsortRecurse: get OOB at pivotIndex")
 
 				if cmp(prevAnchor, pivotVal) == Ordering.equalTo 'commonHit'
 					// Partition into [<pivot] (empty per the anchor invariant)

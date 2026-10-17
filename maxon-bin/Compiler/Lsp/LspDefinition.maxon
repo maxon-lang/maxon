@@ -134,7 +134,7 @@ function definitionClosesABlock(tokens TokenArray, at ElementIndex) returns bool
 	return before.kind == TokenKind.end
 end 'definitionClosesABlock'
 
-// The local binding forms this resolver knows: the three a KEYWORD introduces, plus a function's
+// The local binding forms this resolver knows: the four a KEYWORD introduces, plus a function's
 // parameter list.
 //
 // ⚠ **A PATTERN binding is deliberately absent** — a union arm's `success(value)`, a handler's
@@ -142,7 +142,7 @@ end 'definitionClosesABlock'
 // declaration would be answering from shape. They resolve to nothing, which is a miss rather than a
 // confident wrong line.
 function definitionBoundName(tokens TokenArray, keyword Token, at ElementIndex, name ByteArray) returns Token throws LspDeclarationLookupError
-	if keyword.kind == TokenKind.let or keyword.kind == TokenKind.var 'oneBinding'
+	if bindingKeywordSpells(keyword.kind) 'oneBinding'
 		return try definitionIdentifierNamed(tokens, at: at + 1, name: name)
 	end 'oneBinding'
 
@@ -343,9 +343,9 @@ extension Project
 	end 'definitionInTheCorpus'
 
 	function definitionInAnotherFile(declFile FilePath, name ByteArray) returns LspAnswer
-		let declTokens = try queryActiveTokens(self, path: declFile) otherwise return LspAnswer.nothing()
+		view declTokens = try queryActiveTokens(self, path: declFile) otherwise return LspAnswer.nothing()
 		let declared = try definitionDeclarationOf(declTokens, name: name) otherwise return LspAnswer.nothing()
-		let entry = try sourceEntryOf(self, path: declFile) otherwise return LspAnswer.nothing()
+		view entry = try sourceEntryOf(self, path: declFile) otherwise return LspAnswer.nothing()
 		let text = entry.content
 
 		return definitionLocationAnswer(lspFileUri(declFile), source: text, lines: LspLineIndex.build(text), name: declared)

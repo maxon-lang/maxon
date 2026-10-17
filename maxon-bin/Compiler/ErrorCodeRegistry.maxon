@@ -415,6 +415,19 @@ export enum ErrorCode
 	// the qualifier, or use `let` for a binding or a field.
 	readonlyQualifierMisplaced = "E2075"
 
+	// A capability qualifier is written where no boundary takes one. `keep` and `sole` qualify a parameter,
+	// and `returns sole` and `returns readonly` a result, of a function-type alias or an interface method
+	// requirement, and `returns sole` and `returns readonly` the result of a generic function: places where
+	// the declaration, not a body, states what a callee does with its values. A function with a body states it
+	// by what the body does, so its parameters take no qualifier, and neither does a type written anywhere else
+	// -- a cast, a binding, a field. Remove the qualifier.
+	capabilityQualifierMisplaced = "E2076"
+
+	// `view` declares something other than a local binding: a field, a module-level binding, an extension
+	// member, or an `@heap` binding. A `view` is a read-only name over data something else owns, valid only
+	// inside the function that binds it. Use `let` or `var`.
+	viewMisplaced = "E2077"
+
 	// The program declares no 'main' function.
 	noMainFunction = "E3001"
 
@@ -828,29 +841,35 @@ export enum ErrorCode
 	// into, and REPORTED after every check ahead of code generation, only when none of them raised a
 	// diagnostic; it takes precedence over a code-generation error (E5001, E4015). A MOVE-OUT counts
 	// as a use of mutability: the keyword decides move-vs-alias, so advising `let` would silently turn
-	// a move into an alias. Withheld where a `let` in the `var`'s place would meet a mutable door that
-	// moves or refuses it (`StorageProvenance.settleVarShouldBeLet`).
+	// a move into an alias. Reported only where a `let` in the `var`'s place would compile, so its
+	// initializer is a fresh record or a read-only value. Withheld where that `let` would be refused: bound
+	// to state something may still write (E3188), moved by a door and read afterwards, written through,
+	// stored where something may write it and read again, or read into another mutable name
+	// (`ProvenanceTracer.withholdVarShouldBeLet`).
 	semanticVarShouldBeLet = "E3077"
 
-	// A read-only value would reach a place something may write. Read-only are a `let` binding, a `let` field, a
-	// `let` union payload, a module-level `let`, a value read from a `SharedValue` or a registry `default`, an
-	// element of a `readonly` element type, and a `for`, `if let` or `match` binding over a read-only source,
-	// each through everything it reaches. Refused: binding such a value, a field of it or a call result that may
-	// share its storage to a `var`; storing a value read out of a `let` field, a `let` payload, a `readonly`
-	// element, a `SharedValue` or a registry `default` into a `var` field or a mutable container element, or
-	// passing it to a parameter the callee keeps where something may write it; and a module-level `var`
-	// initializer that may take a module-level `let`'s record. A `let` binding's own record may be stored or
-	// kept: it stays read-only through its new holder while the binding is live, so a write through it there is
-	// E3159.
+	// A read-only value would reach a place something may write. Read-only are a `let` binding, a `view`, a
+	// `let` field, a `let` union payload, a module-level `let`, a value read from a `SharedValue` or a registry
+	// `default`, an element of a `readonly` element type, and a `for`, `if let` or `match` binding over a
+	// read-only source, each through everything it reaches. Refused: binding such a value, a field of it or a
+	// call result that may share its storage to a `var`; storing it into a `var` field, a mutable container
+	// element or module storage, putting it in an array literal, or passing it to a parameter the callee keeps
+	// where something may write it, a parameter declared `keep` and one an escaping closure captures included;
+	// and a module-level `var` initializer that may take a module-level `let`'s record. A `let` bound to a fresh
+	// record may be stored or kept there at its last use, where the store consumes the name; stored there and
+	// read again afterwards, it is refused, since the holder may write what the `let` reads. When a callee both
+	// keeps and writes a read-only argument, the keep is reported here rather than the write (E3159).
 	// A `let` field, a `let` payload and a `readonly` element have no other writer, so what is stored into one,
 	// directly or through a parameter the callee stores there, must be read-only, a value type, or moved in (a
 	// sole-owned value, or a `var` at its last use). A generic body that keeps a value of its type parameter is
-	// judged at each instantiation. Use `let` for the binding, or bind or pass a `clone()`. Scalars, `String`,
-	// `Character`, function values and records whose fields are all `let` are value types and are allowed.
-	// A module-level `let` is image data. Its record pushed into a container, local or module-level,
-	// or stored into a field of a module-level `var` is refused; push or store a `clone()`. Handed to
-	// a function that stores its parameter, put in an array literal or given to `upsert`, it is stored
-	// as a copy, so a write through the copy leaves the `let` as it was.
+	// judged at each instantiation.
+	// A `sole` parameter consumes its argument, so the argument must be sole: a fresh value, or a `let` or `var`
+	// at its last use (a later use is E3102). A read-only value, a parameter, a field of a record that stays
+	// reachable after the call, and a record the value of a `view` declared earlier in the function may reach
+	// are refused. A `view` lives only inside its function: storing it, keeping it, returning it (or a call
+	// result that is still the view) and capturing it in a closure are refused too.
+	// Use `let` for the binding, or bind, store or pass a `clone()`. Scalars, `String`, `Character`, function
+	// values and records whose fields are all `let` are value types and are allowed.
 	semanticVarFromImmutable = "E3078"
 
 	// A match arm binds a case's payload values and then never reads them. Drop the bindings, or use them.
@@ -1013,7 +1032,8 @@ export enum ErrorCode
 	// single-owner model an owned value (an owned String, a struct box) has exactly one owner; a
 	// `let u = t` / `s = t` whose RHS is a bare `var` TRANSFERS ownership to the destination;
 	// the source is left moved-from. A `let` or `var` the sender owns, handed to a service message or to a
-	// `spawn`, moves the same way, a binding a closure captures moves into the closure, and one binding
+	// `spawn`, moves the same way, a binding a closure captures moves into the closure, a binding handed to a
+	// `sole` parameter moves into the callee, and one binding
 	// handed twice to one message is moved by the first. A later read of the source is refused -- it would read
 	// a value another owner now holds and will drop, and dropping it twice is a double-free. A value moved
 	// inside a loop is refused at its read on the next trip. A WRITE to a moved-from `var` is legal (it
@@ -1673,6 +1693,11 @@ export enum ErrorCode
 	// of a `var` field or an element of a container.
 	// The cure for those two is `.clone()`, which is explicit precisely because it is O(n) and the language
 	// makes costs visible; or restructuring so the value is freshly built at the send.
+	// A `view` is refused at a send, since it names data something else may write, and so is a record
+	// something may write that the value of a `view` declared earlier in the function may reach: the view's
+	// reference is a second owner for the rest of the function, whatever its initializer was. Reassigning the
+	// `var` a fresh record makes it sendable again. A record whose fields are all `let` is written by nothing,
+	// so it is shared instead and the view stays valid.
 	// A `spawn`'s factory argument that the factory keeps moves into the service's state on the same terms,
 	// so a borrowed one is refused, naming the argument and the `spawn`. A field read off a temporary built in
 	// the factory call's own argument list crosses, because the `spawn` releases that temporary.
@@ -1968,16 +1993,18 @@ export enum ErrorCode
 	// that survived and the rule that refused.
 	alwaysSplicedBodyIsStillCalled = "E3158"
 
-	// A write went through a read-only value. Read-only are a `let` binding, a `let` field, a `let` union
-	// payload, a module-level `let`, a value read from a `SharedValue` or a registry `default`, a stored `Map`
-	// key or `Set` element, an element of a `readonly` element type, and a `for`, `if let` or `match` binding
-	// over a read-only source, each through everything it reaches. Refused: a field store through one, a method
-	// that writes its receiver called on one, handing one to a parameter the callee writes (a call through a
-	// function value included), consuming a promise held in a `let` field, and a write through a record a call
+	// A write went through a read-only value. Read-only are a `let` binding, a `view`, a `let` field, a `let`
+	// union payload, a module-level `let`, a value read from a `SharedValue` or a registry `default`, a stored
+	// `Map` key or `Set` element, an element of a `readonly` element type, and a `for`, `if let` or `match`
+	// binding over a read-only source, each through everything it reaches. Refused: a field store through one, a
+	// method that writes its receiver called on one, handing one to a parameter the callee writes (a call through
+	// a function value included), consuming a promise held in a `let` field, and a write through a record a call
 	// handed back out of one. Releasing a resource -- closing a handle, writing its raw memory -- writes its
 	// receiver too. Inside a closure, a captured name is the closure's own copy, so handing it to a parameter
-	// the callee writes is refused for the same reason. The diagnostic names the read-only root. Use `var`, or
-	// write a `clone()`.
+	// the callee writes is refused for the same reason. A closure that does not escape -- it is only called,
+	// where it is made or by a parameter that only calls it -- writes what it writes of a parameter it captures,
+	// so handing its function a read-only value there is refused; a closure that escapes keeps what it captures
+	// instead (E3078). The diagnostic names the read-only root. Use `var`, or write a `clone()`.
 	// A `for` loop variable or an `if let` binding over a writable source is writable through and is
 	// reassigned by nothing, so handing it to a parameter the callee reassigns is refused; the
 	// diagnostic calls a `for` one a loop variable. A call through a function value or an interface
@@ -2108,7 +2135,9 @@ export enum ErrorCode
 	registryReachedFromGlobalInitializer = "E3173"
 
 	// A value handed to `Key.register` or `SharedValue.publish` has another owner: a second live name
-	// binds it, or it is held somewhere the caller does not own outright. A published value is read by
+	// binds it, it is held somewhere the caller does not own outright, or the value of a `view` declared
+	// earlier in the function may reach it (a record whose fields are all `let` is shared and published as
+	// it is, and the view stays valid). A published value is read by
 	// every thread at once and freed only when no reader can hold it, so no one may write or free it
 	// behind the registry. Reported at the argument. Publish a `.clone()`.
 	registryPublishedValueNotSolelyOwned = "E3174"
@@ -2202,10 +2231,31 @@ export enum ErrorCode
 	// A method behind the comparison operators writes its operand or its receiver. `==` and `!=` call
 	// `equals`, and `<`, `<=`, `>` and `>=` call `compare`, so a method of either name that takes one
 	// operand besides its receiver may not write that operand or its receiver -- reassigning it, writing a
-	// field or element of it, or handing it to a function that does. Reported at the method's declaration,
+	// field or element of it, keeping it where something may write it, or handing it to a function that
+	// does. Reported at the method's declaration,
 	// whichever type declares it and whether or not it implements `Equatable` or `Comparable`. Write the
 	// comparison so it only reads both sides.
 	comparisonMethodWritesItsParameter = "E3187"
+
+	// A `let` is bound to a value something may still write. A `let` is immutable at every depth, so it binds
+	// only a value nothing writes while it lives: a fresh record no other name reaches, a read-only value such
+	// as a module-level `let`'s record, or a part of a parameter, which is as immutable as the caller's
+	// argument. Refused: a field of a writable `self` or `var`, an element of a `var` container, a call result
+	// that hands back stored state of a `var` holder or a parameter the function writes, and a `var`'s record a
+	// container or another name also holds. Reported at the binding, naming the root the value is reached
+	// through. Bind a `view` to read the value, a `var` to write it, or `let` a `clone()`.
+	semanticLetBindsWritableState = "E3188"
+
+	// A function does more with a value than the boundary it stands behind declares. A caller through a
+	// function value or an interface trusts the declaration, so a function value converted to a function-type
+	// alias, or a conformer's method, may not keep a parameter the alias or requirement does not declare `keep`
+	// or `sole`, or return state something may still write where `returns sole` or `returns readonly` is
+	// declared; a generic function's body is held to its own `returns` qualifier the same way. A function value
+	// typed by one alias converts to another -- by a `return`, a store or an argument -- only when it keeps no
+	// parameter the target does not declare and declares at least the result capability the target declares.
+	// Reported at the conversion, or at the name of the function that breaks its declaration. Declare the
+	// qualifier on the boundary, or change the body to keep to it.
+	semanticCapabilityDeclarationBroken = "E3189"
 
 	// A field access could not be lowered: the base is not a struct, or the field has no slot.
 	invalidFieldAccess = "E4006"

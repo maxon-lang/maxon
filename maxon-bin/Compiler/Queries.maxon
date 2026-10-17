@@ -40,7 +40,7 @@ end 'settleProjectInlineRecordGeometry'
 module function queryTokens(project Project, path FilePath, lexing LexSource = LexSource.onThisThread) returns TokenArray throws CompileError
 	// ONE `sourceFiles` probe for the whole query: `entry` carries both the bytes to lex and the hash
 	// that validates and stamps the memo. See `sourceEntryOf` for why a probe is worth not repeating.
-	let entry = try sourceEntryOf(project, path: path)
+	view entry = try sourceEntryOf(project, path: path)
 
 	if let memo = try validMemoValue(project.db.tokenCache, path: path, entry: entry) 'hit'
 		project.db.tokenHits = project.db.tokenHits + 1
@@ -147,7 +147,7 @@ end 'tokenizedHere'
 // has no such guarantee — it outlives every `Project` — and so carries both in its key.
 module function queryActiveTokens(project Project, path FilePath, lexing LexSource = LexSource.onThisThread) returns TokenArray throws CompileError
 	// ONE `sourceFiles` probe, validating and stamping from the same hash — see `sourceEntryOf`.
-	let entry = try sourceEntryOf(project, path: path)
+	view entry = try sourceEntryOf(project, path: path)
 
 	if let memo = try validMemoValue(project.db.activeTokenCache, path: path, entry: entry) 'hit'
 		project.db.activeTokenHits = project.db.activeTokenHits + 1
@@ -172,7 +172,7 @@ module function queryActiveTokens(project Project, path FilePath, lexing LexSour
 	// Outside the probe, exactly as `queryParseOps` keeps `queryTokens` outside its `parse` probe: the
 	// tokens query does its own `lex` timing, and a phase that absorbed another's is the defect
 	// CompileTimings' header is about.
-	let tokens = try queryTokens(project, path: path, lexing: lexing)
+	view tokens = try queryTokens(project, path: path, lexing: lexing)
 
 	if let shared = try sharedActiveTokensServed(project, path: path, entry: entry, buildKey: buildKey) 'sharedHit'
 		return shared
@@ -247,7 +247,7 @@ end 'filteredHere'
 // Whether a query of `path`'s resolved stream would be answered without a lex — by this project's memo or by
 // the shared store — asked without counting, so the query that later answers is the one that counts.
 module function activeTokensAreHeld(project Project, path FilePath, buildKey BuildKey) returns bool throws CompileError
-	let entry = try sourceEntryOf(project, path: path)
+	view entry = try sourceEntryOf(project, path: path)
 
 	if memoHolds(project.db.activeTokenCache, path: path, entry: entry) 'heldHere'
 		return true
@@ -384,7 +384,7 @@ function identifierNamesWritten(project Project, paths MaxonSourcePathArray) ret
 	var seen = SourceNameSet.create()
 
 	for path in paths 'eachFile'
-		let tokens = try queryActiveTokens(project, path: path)
+		view tokens = try queryActiveTokens(project, path: path)
 
 		for i in 0 upto tokens.count() 'eachToken'
 			let token = try tokens.get(i) otherwise panic("identifierNamesWritten: tokens.get OOB at {i} below count {tokens.count()}")
@@ -624,7 +624,7 @@ end 'foldLibraryRemainder'
 
 function restoreDeclTokenStreams(project Project, signatures ProgramSignatures, streamed FilePathArray) throws CompileError
 	for path in streamed 'eachStream'
-		let tokens = try queryActiveTokens(project, path: path)
+		view tokens = try queryActiveTokens(project, path: path)
 		signatures.restoreDeclTokenStream(path.toString(), tokens: PreparedTokens.create(tokens, qualifiedNominalAt: QualifiedNominalSpellingMap.create()))
 	end 'eachStream'
 end 'restoreDeclTokenStreams'
@@ -897,7 +897,7 @@ function foldOneFileInto(project Project, signatures ProgramSignatures, path Fil
 	// Outside the probe, exactly as `queryAllModule` keeps `queryParseOps` outside its `merge` probe:
 	// the tokens query does its own `lex` timing, and a phase that absorbed another's is the defect
 	// CompileTimings' header is about.
-	let tokens = try queryActiveTokens(project, path: path)
+	view tokens = try queryActiveTokens(project, path: path)
 
 	if isLibrarySourceFile(project, path: path) 'aLibrarySweep'
 		project.db.libraryTally.swept = project.db.libraryTally.swept + 1
@@ -1167,7 +1167,7 @@ type FileTokenFacts
 end 'FileTokenFacts'
 
 function discoveredTokenFactsOf(project Project, signatures ProgramSignatures, path FilePath, isStdlibSource bool) returns FileTokenFacts throws CompileError
-	let tokens = try queryActiveTokens(project, path: path)
+	view tokens = try queryActiveTokens(project, path: path)
 	var gate = SpawnGate.always
 	var gateEnd = 0 as ElementIndex
 	var events = TokenFactEventArray.create()
@@ -1373,7 +1373,7 @@ function stdlibDeclarationsIn(project Project, stdlibPaths MaxonSourcePathArray)
 	var declaringFiles = FilePathArray.create()
 
 	for path in stdlibPaths 'eachStdlibFile'
-		let tokens = try queryActiveTokens(project, path: path)
+		view tokens = try queryActiveTokens(project, path: path)
 
 		for i in 0 upto tokens.count() 'eachToken'
 			let tok = try tokens.get(i) otherwise panic("stdlibDeclarationsIn: tokens.get OOB at {i} below count {tokens.count()}")
@@ -1562,7 +1562,7 @@ end 'declaresANominalTypeName'
 // Scanned only when something is actually contested.
 function refuseContestedNamesUsedAsMembers(project Project, signatures ProgramSignatures, stdlibPaths MaxonSourcePathArray) throws CompileError
 	for path in stdlibPaths 'eachStdlibFile'
-		let tokens = try queryActiveTokens(project, path: path)
+		view tokens = try queryActiveTokens(project, path: path)
 
 		for i in 0 upto tokens.count() 'eachToken'
 			let tok = try tokens.get(i) otherwise panic("refuseContestedNamesUsedAsMembers: tokens.get OOB at {i} below count {tokens.count()}")
@@ -1623,7 +1623,7 @@ end 'tokenIsAMemberSpelling'
 // each — so the grouping is a WALK and not a map: an inner loop consumes the run of sites sharing a
 // path.
 function foldInterfaceDeclarations(project Project, signatures ProgramSignatures) throws CompileError
-	let sites = signatures.settledDeclarations().interfaceDeclSites
+	view sites = signatures.settledDeclarations().interfaceDeclSites
 	var i = 0 as ElementIndex
 
 	while i < sites.count() 'eachFile'
@@ -1631,7 +1631,7 @@ function foldInterfaceDeclarations(project Project, signatures ProgramSignatures
 		var reader = try siteFileReader(project, signatures: signatures, path: path, buildsBodies: true)
 
 		while i < sites.count() 'eachSiteInFile'
-			let site = try sites.get(i) otherwise panic("foldInterfaceDeclarations: sites.get OOB at {i} below count {sites.count()}")
+			view site = try sites.get(i) otherwise panic("foldInterfaceDeclarations: sites.get OOB at {i} below count {sites.count()}")
 
 			if not site.path.equals(path) 'nextFile'
 				break
@@ -1667,7 +1667,7 @@ end 'foldExtensionDeclarations'
 // and the OOB sentences are written once: two copies of this loop would be two chances for the
 // passes to disagree about which sites they visit.
 function walkExtensionSitesPerFile(project Project, signatures ProgramSignatures, namesOnly bool) throws CompileError
-	let sites = signatures.settledDeclarations().extensionDeclSites
+	view sites = signatures.settledDeclarations().extensionDeclSites
 	var i = 0 as ElementIndex
 
 	while i < sites.count() 'eachFile'
@@ -1675,7 +1675,7 @@ function walkExtensionSitesPerFile(project Project, signatures ProgramSignatures
 		var reader = try siteFileReader(project, signatures: signatures, path: path, buildsBodies: true)
 
 		while i < sites.count() 'eachSiteInFile'
-			let site = try sites.get(i) otherwise panic("walkExtensionSitesPerFile: sites.get OOB at {i} below count {sites.count()}")
+			view site = try sites.get(i) otherwise panic("walkExtensionSitesPerFile: sites.get OOB at {i} below count {sites.count()}")
 
 			if not site.path.equals(path) 'nextFile'
 				break
@@ -1725,7 +1725,7 @@ end 'siteFileReader'
 // witness and a per-site closure across the compiler's hottest fold. What can be shared is: one
 // reader constructor (`siteFileReader`) and one reader per file.
 function foldConformanceClauses(project Project, signatures ProgramSignatures) throws CompileError
-	let sites = signatures.settledDeclarations().conformanceClauseSites
+	view sites = signatures.settledDeclarations().conformanceClauseSites
 	var i = 0 as ElementIndex
 
 	while i < sites.count() 'eachFile'
@@ -1733,7 +1733,7 @@ function foldConformanceClauses(project Project, signatures ProgramSignatures) t
 		var reader = try siteFileReader(project, signatures: signatures, path: path, buildsBodies: true)
 
 		while i < sites.count() 'eachSiteInFile'
-			let site = try sites.get(i) otherwise panic("foldConformanceClauses: sites.get OOB at {i} below count {sites.count()}")
+			view site = try sites.get(i) otherwise panic("foldConformanceClauses: sites.get OOB at {i} below count {sites.count()}")
 
 			if not site.path.equals(path) 'nextFile'
 				break
@@ -1768,7 +1768,7 @@ end 'foldConformanceClauses'
 // two stretches of the array. That costs at most a second `Parser` for that file and cannot change
 // the answer: the fixpoint is solved over the union, and the union is a set.
 function foldDescriptorNeeds(project Project, signatures ProgramSignatures) throws CompileError
-	let sites = signatures.settledDeclarations().descriptorScanSites
+	view sites = signatures.settledDeclarations().descriptorScanSites
 
 	if sites.count() == 0 'noGenericTypeInThisProgram'
 		return
@@ -1798,7 +1798,7 @@ function foldDescriptorNeeds(project Project, signatures ProgramSignatures) thro
 		var reader = try siteFileReader(project, signatures: signatures, path: path, buildsBodies: false)
 
 		while i < sites.count() 'eachSiteInFile'
-			let site = try sites.get(i) otherwise panic("foldDescriptorNeeds: sites.get OOB at {i} below count {sites.count()}")
+			view site = try sites.get(i) otherwise panic("foldDescriptorNeeds: sites.get OOB at {i} below count {sites.count()}")
 
 			if not site.path.equals(path) 'nextFile'
 				break
@@ -1855,15 +1855,13 @@ end 'sourceableDescriptorNeeds'
 // the settled index, and the key its artifact is stamped with.
 export union ParseQuery
 	memoized(artifact FileParseArtifact)
-	needed(job ParseJob, tokens TokenArray, overrides RowSetOverrideTable, stamp ParseStamp)
+	needed(let job ParseJob, let tokens TokenArray, let overrides RowSetOverrideTable, let stamp ParseStamp)
 end 'ParseQuery'
 
 // ⚠ A miss parses against the index as it stands, so it is legal only while no fold has merged into that index — a
 // reader after the fold of the same sources is a hit. `ProgramSignatures.openParseBand` refuses the other case.
 export function queryParseOps(project Project, path FilePath) returns FileParseArtifact throws CompileError
-	let query = try parseQueryOf(project, path: path)
-
-	return match query 'query'
+	return match try parseQueryOf(project, path: path) 'query'
 		memoized(artifact) gives artifact
 		needed(job, tokens, overrides, stamp) gives parsedHere(project, path: path, job: job, tokens: tokens, overrides: overrides, stamp: stamp)
 	end 'query'
@@ -1883,7 +1881,7 @@ module function parseQueryOf(project Project, path FilePath) returns ParseQuery 
 	// key carries the body demand it decides.
 	let isStdlibSource = isStdlibSourceFile(project, path: path)
 	let buildsBodies = buildsBodiesFor(project, path: path, isStdlibSource: isStdlibSource)
-	let overrides = project.db.rowSetOverrides.of(path)
+	view overrides = project.db.rowSetOverrides.of(path)
 	let contentHash = (try sourceEntryOf(project, path: path)).contentHash
 	let liveness = signatures.livenessDigestParsedBy(path)
 	let keyHash = currentParseMemoKey(project, contentHash: contentHash, signatureHash: Hasher.combined(signatures.hash, value: liveness), buildsBodies: buildsBodies, overrides: overrides)
@@ -1909,8 +1907,8 @@ module function parseQueryOf(project Project, path FilePath) returns ParseQuery 
 		return ParseQuery.memoized(served)
 	end 'servedByTheStore'
 
-	let tokens = try queryActiveTokens(project, path: path)
-	return ParseQuery.needed(job, tokens: tokens, overrides: overrides, stamp: ParseStamp.create(keyHash, sharing: sharing))
+	view tokens = try queryActiveTokens(project, path: path)
+	return ParseQuery.needed(job, tokens: tokens, overrides: overrides.clone(), stamp: ParseStamp.create(keyHash, sharing: sharing))
 end 'parseQueryOf'
 
 function parsedHere(project Project, path FilePath, job ParseJob, tokens TokenArray, overrides RowSetOverrideTable, stamp ParseStamp) returns FileParseArtifact
@@ -1954,7 +1952,7 @@ end 'reportFailedParse'
 // withheld; in the misclosed file, an error the parse met outside the block gives way to the label
 // refusal, which is the cause.
 function reportParseErrorBesideAMisclosedBlock(project Project, path FilePath, error SourceParseError)
-	let signatures = programSignaturesIn(project, asker: "reportParseErrorBesideAMisclosedBlock")
+	view signatures = programSignaturesIn(project, asker: "reportParseErrorBesideAMisclosedBlock")
 
 	if not signatures.hasMisclosedBlocks() 'everyBlockClosesWhereItOpened'
 		reportParseError(project, path: path, error: error)
@@ -1993,7 +1991,7 @@ end 'parseStoppedInside'
 // cannot disagree about what a parse depends on.
 function memoizedArtifact(project Project, path FilePath, artifact FileParseArtifact, stamp ParseStamp) returns FileParseArtifact
 	artifact.module.assertAllBlocksTerminated()
-	let canonical = stashParse(project, plan: stamp.sharing, artifact: artifact)
+	var canonical = stashParse(project, plan: stamp.sharing, artifact: artifact)
 	project.db.parseCache.upsert(path, value: ParseMemo.create(canonical, keyHash: stamp.keyHash))
 	return canonical
 end 'memoizedArtifact'
@@ -2036,7 +2034,7 @@ function queryAllModuleOn(project Project, pool FrontEndPool, directories Namesp
 	end 'hit'
 
 	project.db.allModuleMisses = project.db.allModuleMisses + 1
-	let merged = try foldTheFrontEnd(project, pool: pool)
+	var merged = try foldTheFrontEnd(project, pool: pool)
 
 	// The project's ranged-alias registry gets the same range-contest settlement `ProgramSignatures`
 	// did, and it must be settled here because this is where its last declaration lands. The two
@@ -2058,7 +2056,7 @@ function finishLibraryCache(project Project)
 	persistSharedEntries(project)
 	persistStashedParses(project)
 
-	let tally = project.db.libraryTally
+	view tally = project.db.libraryTally
 
 	if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
 		logCompilerDebugSettled("library cache — baseline {project.db.libraryBaseline.name}, {tally.loaded} loaded, {tally.written} written, {tally.rejected} rejected, {tally.swept} library file(s) swept, {tally.parsed} library file(s) parsed")
@@ -2084,7 +2082,7 @@ end 'refuseUnnameableNamespaceDirectories'
 // collision therefore reports E3006 alone.
 function refuseCollidingNominalDeclarations(project Project, pool FrontEndPool) throws CompileError
 	try pool.lexEveryFile(project)
-	let collisions = (try queryProgramSignatures(project)).collidingNominalDeclarations()
+	view collisions = (try queryProgramSignatures(project)).collidingNominalDeclarations()
 
 	if collisions.isEmpty() 'noNameIsDeclaredTwice'
 		return
@@ -2780,7 +2778,7 @@ function fileProvenanceOf(project Project, path FilePath) returns FileProvenance
 	// exemption from E2051, E3004 and E3155, E3152, E3153, E3154, the tier's module anchor) is a fact
 	// about the file.
 	let isRuntimeSource = resolvedPath.isInside(project.runtimeDir)
-	let derived = FileProvenance.create(isStdlibSource, isRuntimeSource: isRuntimeSource)
+	var derived = FileProvenance.create(isStdlibSource, isRuntimeSource: isRuntimeSource)
 
 	project.db.fileProvenance.upsert(path, value: derived)
 
@@ -2792,7 +2790,7 @@ end 'fileProvenanceOf'
 // WHICH of the two tiers a file came from. The gates that DO turn on the tier — the parser's privilege
 // bit, the declaration sweep's shadow contest — ask `isStdlibSourceFile` directly and must keep doing so.
 export function isLibrarySourceFile(project Project, path FilePath) returns bool
-	let provenance = fileProvenanceOf(project, path: path)
+	view provenance = fileProvenanceOf(project, path: path)
 
 	return provenance.isStdlibSource or provenance.isRuntimeSource
 end 'isLibrarySourceFile'
@@ -3466,8 +3464,9 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		// of its own rather than another raiser on `strayToken` is argued on the union arm.
 		selfOutsideInstanceMethod(line, column) gives Diagnostic.create(ErrorCode.parserUnexpectedToken, message: "'self' can only be used inside instance methods", line: line, column: column, filePath: path)
 
-		// The `@heap` annotation's three refusals — all E2001. The first two are pinned byte-for-byte;
-		// the third states the compiler's own rule, and the union arms carry the reason for each.
+		// The `@heap` annotation's three E2001 refusals (`@heap view` is `viewMisplaced`'s E2077). The
+		// first two are pinned byte-for-byte; the third states the compiler's own rule, and the union
+		// arms carry the reason for each.
 		unknownAnnotation(got, line, column) gives Diagnostic.create(ErrorCode.parserUnexpectedToken, message: "Unknown annotation '@{got}' (expected '@heap')", line: line, column: column, filePath: path)
 		heapAnnotationWithoutBinding(line, column) gives Diagnostic.create(ErrorCode.parserUnexpectedToken, message: "@heap must be followed by 'var' or 'let'", line: line, column: column, filePath: path)
 		heapAnnotationOnNonRecord(name, tag, line, column) gives Diagnostic.create(ErrorCode.parserUnexpectedToken, message: "@heap can only annotate a binding whose value is a heap record; '{name}' binds a '{tag}'", line: line, column: column, filePath: path)

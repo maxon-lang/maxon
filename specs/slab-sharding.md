@@ -539,7 +539,7 @@ function main() returns ExitCode
 		var replies = CountPromiseArray.create()
 		var k = 0 as Integer
 		while k < sinkCount 'sendEach'
-			let s = try sinks.get(k as ElementIndex) otherwise panic("sinks.get OOB at {k}")
+			view s = try sinks.get(k as ElementIndex) otherwise panic("sinks.get OOB at {k}")
 			replies.push(s.take("payload-{k}-{wave}"))
 			k = k + 1
 		end 'sendEach'

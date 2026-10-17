@@ -1027,7 +1027,7 @@ end 'plain'
 function main() returns ExitCode
 		var s = IntPromiseArray.create()
 		s.push(async plain())
-		let c = try s.cursor() otherwise panic("has one")
+		view c = try s.cursor() otherwise panic("has one")
 		let p = c.current()
 		return (await p) as ExitCode
 end 'main'
@@ -1310,7 +1310,7 @@ function main() returns ExitCode
 	var s = IntPromiseArray.create()
 	s.push(async plain(5))
 	s.push(async plain(37))
-	let c = try s.cursor() otherwise panic("has two")
+	view c = try s.cursor() otherwise panic("has two")
 	let ahead = try c.peek(1) otherwise panic("has two")
 	let first = try s.get(0) otherwise panic("has two")
 	return ((await ahead) + (await first)) as ExitCode
@@ -1393,7 +1393,7 @@ end 'plain'
 function main() returns ExitCode
 	var s = IntPromiseArray.create()
 	s.push(async plain(4))
-	let c = try s.cursor() otherwise panic("has one")
+	view c = try s.cursor() otherwise panic("has one")
 	let a = c.current()
 	let b = c.current()
 	return ((await a) + (await b)) as ExitCode
@@ -1423,7 +1423,7 @@ function main() returns ExitCode
 	var s = IntPromiseArray.create()
 	s.push(async plain(4))
 	let a = try s.get(0) otherwise panic("has one")
-	let c = try s.cursor() otherwise panic("has one")
+	view c = try s.cursor() otherwise panic("has one")
 	let b = c.current()
 	return ((await a) + (await b)) as ExitCode
 end 'main'

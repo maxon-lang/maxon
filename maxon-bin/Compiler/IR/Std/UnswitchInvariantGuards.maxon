@@ -254,7 +254,7 @@ type UnswitchFunction
 	// Value id -> every site that reads it. What makes the escape question and the exit-phi rewrite
 	// cost the loop's values × their reads rather than a walk of the function per loop.
 	export var sites as ReadSites
-	export var valueBound as ValueId
+	export let valueBound as ValueId
 
 	// Per position: a member of a loop versioned in this run, and a header of one.
 	var insideVersioned as BoolArray
@@ -406,7 +406,7 @@ end 'ElementStoreSite'
 typealias ElementStoreSiteArray = Array with ElementStoreSite
 
 type UnswitchPlan
-	export var header as ElementIndex
+	export let header as ElementIndex
 	export var preheader = 0 as ElementIndex
 
 	// Whether the loop is copied and its guards folded, or only its invariant fields hoisted.
@@ -1382,11 +1382,11 @@ function copyLoop(module StdModule, func IrFunction, plan UnswitchPlan, analysis
 
 	for index in 0 upto plan.members.count() 'eachMember'
 		let position = try plan.members.get(index) otherwise panic("unswitchInvariantGuards: members.get OOB at {index}")
-		let original = module.blockAtPosition(func, position: position)
+		view original = module.blockAtPosition(func, position: position)
 
 		// The label and the site are the copy's OWN boxes: this pass runs on a pool worker, and the function
 		// crosses back to the driver as a graph whose every record must have one owner (`StdUnit`).
-		let copy = module.addBlock(func, label: original.label.clone(), heat: original.heat, inlineSite: copiedInlineSite(original.inlineSite), role: original.role)
+		view copy = module.addBlock(func, label: original.label.clone(), heat: original.heat, inlineSite: copiedInlineSite(original.inlineSite), role: original.role)
 		columns.mapBlock(original.id, fresh: copy.id)
 		copyRefs.push(registeredBlockRef(module, func: func, block: copy))
 	end 'eachMember'
@@ -1471,7 +1471,7 @@ type TestChain
 	function block(module StdModule, func IrFunction) returns IrBlock
 		if not self.open 'openOne'
 			// The chain runs once per loop entry.
-			let fresh = module.addBlock(func, label: UnswitchTestLabel, heat: BlockHeat.normal, inlineSite: copiedInlineSite(self.inlineSite))
+			view fresh = module.addBlock(func, label: UnswitchTestLabel, heat: BlockHeat.normal, inlineSite: copiedInlineSite(self.inlineSite))
 			self.currentRef = registeredBlockRef(module, func: func, block: fresh)
 			self.open = true
 
@@ -1515,7 +1515,7 @@ function emitTestChain(module StdModule, func IrFunction, plan UnswitchPlan, ana
 	var hoistCursor = 0 as ElementIndex
 
 	for position in plan.walkOrder 'eachBlock'
-		let block = module.blockAtPosition(func, position: position)
+		view block = module.blockAtPosition(func, position: position)
 
 		for opIdx in block.bodyOps() 'eachOp'
 			stdOpDefinedValue(module.getOp(opIdx), def: scratch.def)
@@ -1638,12 +1638,12 @@ function wireTestChain(module StdModule, func IrFunction, plan UnswitchPlan, cha
 		return
 	end 'nothingEmitted'
 
-	let header = module.blockAtPosition(func, position: plan.header)
+	view header = module.blockAtPosition(func, position: plan.header)
 	let headerId = header.id
 	let copyHeaderId = clonedBlock(headerId, subst: columns.blockSubst)
 	var preheader = module.blockAtPosition(func, position: plan.preheader)
 	let takesArgs = header.blockArgs.count() != 0
-	let entryArgs = edgeArgsTo(preheader, targetId: headerId, takesArgs: takesArgs)
+	var entryArgs = edgeArgsTo(preheader, targetId: headerId, takesArgs: takesArgs)
 
 	// Ops hoisted after the last test sit in an open block that enters the copy directly.
 	var fastEntry = copyHeaderId
@@ -1705,7 +1705,7 @@ end 'wireTests'
 // `condBranch` becomes `branch(else)` and keeps only that edge — and its edges, with the exit phis'
 // values appended on every edge into the exit block.
 function copyMember(module StdModule, func IrFunction, plan UnswitchPlan, position ElementIndex, copyRef ElementIndex, scratch UnswitchScratch, columns RewriteColumns)
-	let original = module.blockAtPosition(func, position: position)
+	view original = module.blockAtPosition(func, position: position)
 	var copy = module.getBlock(copyRef)
 
 	if original.blockArgs.count() != 0 'hasPhis'

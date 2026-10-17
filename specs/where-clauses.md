@@ -3034,7 +3034,7 @@ typealias R = Runner with Val
 typealias ValOuter = Outer with Val
 
 function main() returns ExitCode
-	let o = ValOuter.create(41)
+	var o = ValOuter.create(41)
 	print("{R.run(o) == o.tally()}\n")
 	return 0
 end 'main'
@@ -3083,7 +3083,7 @@ typealias R = Runner with String
 typealias StrOuter = Outer with String
 
 function main() returns ExitCode
-	let o = StrOuter.create("outer {40 + 2} value long enough for a heap record")
+	var o = StrOuter.create("outer {40 + 2} value long enough for a heap record")
 	print("{R.run(o) == o.tally()} {R.run(o) == "outer 42 value long enough for a heap record".hash() + 1}\n")
 	return 0
 end 'main'
@@ -3148,7 +3148,7 @@ typealias KeyRunner = Runner with Key
 typealias KeyOuter = Outer with Key
 
 function main() returns ExitCode
-	let o = KeyOuter.create(Key.create("record {40 + 2} value long enough for a heap record"))
+	var o = KeyOuter.create(Key.create("record {40 + 2} value long enough for a heap record"))
 	print("{KeyRunner.run(o) == o.tally()} {KeyRunner.run(o) == "record 42 value long enough for a heap record".hash() + 1}\n")
 	return 0
 end 'main'

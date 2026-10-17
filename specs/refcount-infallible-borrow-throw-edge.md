@@ -98,7 +98,7 @@ function main() returns ExitCode
 	// Cursor sits at element 0 (the last). consume(): cur = element 0 (borrow);
 	// advance() fails (no element 1) -> throw; cur dies on the throw path. Pre-fix,
 	// element 0 is over-released and this arr teardown double-frees it.
-	let r = try reader.consume(0) otherwise Item.create("z", t: 5)
+	view r = try reader.consume(0) otherwise Item.create("z", t: 5)
 	let n = arr.count() + r.tag
 	return n
 end 'main'

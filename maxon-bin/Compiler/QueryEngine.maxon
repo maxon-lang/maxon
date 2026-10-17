@@ -177,7 +177,7 @@ function memoOrNew(project Project, contentHash HashDigest) returns SharedFileMe
 		return memo
 	end 'alreadyHeld'
 
-	let created = SharedFileMemo.holdingNothingYet()
+	var created = SharedFileMemo.holdingNothingYet()
 	project.session.fileMemos.entries.upsert(contentHash, value: created)
 
 	return created
@@ -276,9 +276,10 @@ end 'shareTokens'
 
 // The `#if`-resolved stream for these bytes AND this build, if this store has one.
 export function sharedActiveTokensOf(project Project, contentHash HashDigest, buildKey BuildKey) returns TokenArray throws SharedMemoMiss
-	let view = try heldViewFor(project, contentHash: contentHash, buildKey: buildKey)
+	let tokens = (try heldViewFor(project, contentHash: contentHash, buildKey: buildKey)).activeTokens
 	project.db.sharedActiveTokenHits = project.db.sharedActiveTokenHits + 1
-	return view.activeTokens
+
+	return tokens
 end 'sharedActiveTokensOf'
 
 // Whether `sharedActiveTokensOf` would answer, without counting a hit — the front end's pool asks
@@ -318,7 +319,7 @@ end 'shareActiveTokens'
 // declaration sweep asks for it, and a compile that never reaches the sweep must not pay a token
 // walk for it.
 export function sharedProducerMaskOf(project Project, contentHash HashDigest, buildKey BuildKey) returns ProducerMask throws SharedMemoMiss
-	let view = try heldViewFor(project, contentHash: contentHash, buildKey: buildKey)
+	var view = try heldViewFor(project, contentHash: contentHash, buildKey: buildKey)
 
 	if not view.producerMaskComputed 'notYetDerived'
 		throw SharedMemoMiss.notHeld
@@ -515,7 +516,7 @@ export function persistSharedEntries(project Project)
 	var fresh = false
 
 	for contentHash in project.db.shareableTokenHashes 'eachAdmitted'
-		let view = try memoViewOf(project, contentHash: contentHash, buildKey: buildKey) otherwise continue
+		view view = try memoViewOf(project, contentHash: contentHash, buildKey: buildKey) otherwise continue
 
 		if not view.persisted 'newToTheDisk'
 			fresh = true
@@ -527,8 +528,8 @@ export function persistSharedEntries(project Project)
 	end 'nothingNew'
 
 	for contentHash in project.db.shareableTokenHashes 'eachToWrite'
-		let memo = try heldMemoFor(project, contentHash: contentHash) otherwise continue
-		let view = try memo.viewOf(buildKey) otherwise continue
+		view memo = try heldMemoFor(project, contentHash: contentHash) otherwise continue
+		view view = try memo.viewOf(buildKey) otherwise continue
 		let facts = try memo.rawStreamFactsHeld() otherwise panic("persistSharedEntries: a memo holds a view but not its raw stream's facts, and every view is added beside them")
 		views.add(contentHash, second: NoRowQualifier, third: NoRowQualifier, payload: encodedViewSection(facts, view: view))
 	end 'eachToWrite'
@@ -587,7 +588,7 @@ function stashShareableParse(project Project, contentHash HashDigest, variant Ha
 
 	let retains = project.session.fileMemos.library.retainsWhatItLoads()
 
-	let canonical = try persistedCanonicalParse(project, held: held, contentHash: contentHash, libraryHash: signatures.libraryHash) otherwise 'notPersistable'
+	var canonical = try persistedCanonicalParse(project, held: held, contentHash: contentHash, libraryHash: signatures.libraryHash) otherwise 'notPersistable'
 		if retains 'aLaterCompileMayAsk'
 			project.db.pendingSharedParses.upsert(contentHash, value: held.cloned())
 		end 'aLaterCompileMayAsk'
@@ -624,7 +625,7 @@ function persistedCanonicalParse(project Project, held SharedLibraryParse, conte
 end 'persistedCanonicalParse'
 
 export function publishStandingParses(project Project)
-	let pending = project.db.pendingSharedParses
+	var pending = project.db.pendingSharedParses
 	var published = 0 as QueryCount
 
 	project.db.pendingSharedParses = PendingSharedParseMap.create()
@@ -653,7 +654,7 @@ export function compositeSourceHash(project Project) returns HashDigest
 	var h = Hasher.empty()
 
 	for path in project.db.sourcePaths 'each'
-		let entry = try project.db.sourceFiles.get(path) otherwise panic("compositeSourceHash: sourcePaths lists {path} but sourceFiles has no entry")
+		view entry = try project.db.sourceFiles.get(path) otherwise panic("compositeSourceHash: sourcePaths lists {path} but sourceFiles has no entry")
 
 		// The path is folded beside the content hash: the digest is a function of the (path, content)
 		// sequence, not of the contents alone. A rename moves no content, so a fold over contents alone

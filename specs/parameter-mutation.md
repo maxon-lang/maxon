@@ -1816,3 +1816,24 @@ end 'main'
 ```exitcode
 7
 ```
+
+<!-- test: let-array-in-parentheses-to-mutating-param-error -->
+Parentheses around the argument change nothing: `grow((g))` hands `g` to the parameter the callee pushes onto, as `grow(g)` does.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function grow(dest IntArray)
+	dest.push(9)
+end 'grow'
+
+function main() returns ExitCode
+	let g = IntArray.create()
+	grow((g))
+	return try g.get(0) otherwise -1
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:11:2: cannot pass 'g', which is read-only (a `let` binding), to a function that writes parameter 'dest' (in main); pass a clone()
+```

@@ -102,13 +102,13 @@ public type List uses Element implements InitableFromArrayLiteral with Element, 
 			return
 		end 'back'
 
-		let current = try walkTo(at - 1)
+		var current = try walkTo(at - 1)
 		chain.insertAfter(current, value: value)
 	end 'insert'
 
 	/// Remove and return the first element, throws if empty. O(1).
 	public function removeFirst() returns Element throws ArrayError
-		let node = try chain.head() otherwise 'err'
+		var node = try chain.head() otherwise 'err'
 			throw ArrayError.indexOutOfBounds
 		end 'err'
 
@@ -117,7 +117,7 @@ public type List uses Element implements InitableFromArrayLiteral with Element, 
 
 	/// Remove and return the last element, throws if empty. O(1).
 	public function removeLast() returns Element throws ArrayError
-		let node = try chain.tail() otherwise 'err'
+		var node = try chain.tail() otherwise 'err'
 			throw ArrayError.indexOutOfBounds
 		end 'err'
 
@@ -126,7 +126,7 @@ public type List uses Element implements InitableFromArrayLiteral with Element, 
 
 	/// Remove and return element at index, throws if out of bounds. O(n).
 	public function remove(at ElementIndex) returns Element throws ArrayError
-		let node = try walkTo(at)
+		var node = try walkTo(at)
 		return chain.remove(node)
 	end 'remove'
 
@@ -137,13 +137,13 @@ public type List uses Element implements InitableFromArrayLiteral with Element, 
 
 	/// Create a deep copy of this list
 	public function clone() returns Self
-		var result = Self{chain: EManagedList.create()}
+		var elements = ElementArray.create()
 
-		for item in self 'copy'
-			result.append(item)
-		end 'copy'
+		for item in self 'collect'
+			elements.push(item)
+		end 'collect'
 
-		return result
+		return Self.init(elements.clone())
 	end 'clone'
 
 	public typealias ListIter = ListIterator with Element

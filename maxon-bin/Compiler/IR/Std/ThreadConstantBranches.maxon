@@ -97,16 +97,16 @@ end 'threadConstantBranchesSummary'
 // answers in.
 type ThreadCandidate
 	export var position as ElementIndex
-	export var blockRef as ElementIndex
-	export var blockId as BlockId
-	export var compareOpIdx as ElementIndex
+	export let blockRef as ElementIndex
+	export let blockId as BlockId
+	export let compareOpIdx as ElementIndex
 
 	// The compare's result, read only by the terminator.
 	export var condId as ValueId
 
 	// The block arg the compare tests, and its slot.
-	export var testedArg as ValueId
-	export var testedSlot as ElementIndex
+	export let testedArg as ValueId
+	export let testedSlot as ElementIndex
 	export var imm as Imm32
 	export var pred as StdCmpPred
 	export var operandType as StdType
@@ -232,7 +232,7 @@ type FunctionAnalysis
 	static function gather(module StdModule, func IrFunction, scratch ThreadScratch) returns FunctionAnalysis
 		var def = StdFoldableDef.create()
 		let constMap = collectConstValues(module, opIndices: module.liveOpIndices(func), def: def)
-		let tree = StdDominatorTree.build(module, func: func)
+		var tree = StdDominatorTree.build(module, func: func)
 		var valueUses = StdValueUseSet.createTrackingRepeats()
 		collectFunctionValueUses(module, func: func, referenced: valueUses)
 		return Self{constMap: constMap, tree: tree, stamps: DominatorStamps.build(tree), valueUses: valueUses, positionById: module.blockIndexById(func), refusals: scratch.tally.threadRefusals, branch: scratch.branch}
@@ -496,9 +496,9 @@ end 'applyAdmitted'
 // changes an admitted candidate's predecessors.
 function threadOne(module StdModule, func IrFunction, origins DerivedOrigins, analysis FunctionAnalysis, candidate ThreadCandidate, index ElementIndex, argOwner ValueIdArray, argSlot ValueIdArray, minter ValueMinter)
 	var join = module.getBlock(candidate.blockRef)
-	let dropped = module.blockAtPosition(func, position: analysis.positionOf(candidate.droppedTarget))
+	view dropped = module.blockAtPosition(func, position: analysis.positionOf(candidate.droppedTarget))
 	let droppedTakesArgs = dropped.blockArgs.count() != 0
-	let argsToDropped = edgeArgsTo(join, targetId: candidate.droppedTarget, takesArgs: droppedTakesArgs)
+	view argsToDropped = edgeArgsTo(join, targetId: candidate.droppedTarget, takesArgs: droppedTakesArgs)
 
 	for k in 0 upto analysis.tree.pred.degree(candidate.position as CsrIndex) 'eachPred'
 		let predPosition = analysis.tree.pred.neighbour(candidate.position as CsrIndex, k: k)
@@ -538,7 +538,7 @@ end 'edgeArgsTo'
 // a fresh edge column — the edge to C it had, plus the edge to the dropped target when that takes args.
 function duplicateTestInto(module StdModule, pred IrBlock, candidate ThreadCandidate, index ElementIndex, incoming ValueId, argsToDropped ValueIdArray, droppedTakesArgs bool, argOwner ValueIdArray, argSlot ValueIdArray, origins DerivedOrigins, minter ValueMinter)
 	var predBlock = pred
-	let argsToJoin = soleEdge(predBlock).argIds
+	view argsToJoin = soleEdge(predBlock).argIds
 
 	// The duplicated test answers to the statement the original compare did, and stands in for its result.
 	module.spans.current = module.spans.at(candidate.compareOpIdx)
@@ -589,7 +589,7 @@ function dropTestedSlots(module StdModule, func IrFunction, candidates ThreadCan
 	var kept = flagColumn(bound)
 
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = module.getBlock(blockRef)
+		view block = module.getBlock(blockRef)
 
 		for arg in block.blockArgs 'eachArg'
 			setFlag(kept, v: arg.valueId)

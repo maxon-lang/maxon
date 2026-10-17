@@ -136,15 +136,15 @@ public extension Array
 		end 'trivial'
 
 		var runEnd = lo + 1
-		let v0 = try managed.get(lo) otherwise panic("naturalRunLen: get OOB at lo")
-		let v1 = try managed.get(lo + 1) otherwise panic("naturalRunLen: get OOB at lo+1")
+		view v0 = try managed.get(lo) otherwise panic("naturalRunLen: get OOB at lo")
+		view v1 = try managed.get(lo + 1) otherwise panic("naturalRunLen: get OOB at lo+1")
 		let initialOrd = cmp(v0, v1)
 		let isDescending = initialOrd == Ordering.greaterThan
 
 		if isDescending 'desc'
 			while runEnd < hi 'scanDesc'
-				let a = try managed.get(runEnd - 1) otherwise panic("naturalRunLen: get OOB at runEnd-1 (desc)")
-				let b = try managed.get(runEnd) otherwise panic("naturalRunLen: get OOB at runEnd (desc)")
+				view a = try managed.get(runEnd - 1) otherwise panic("naturalRunLen: get OOB at runEnd-1 (desc)")
+				view b = try managed.get(runEnd) otherwise panic("naturalRunLen: get OOB at runEnd (desc)")
 
 				if cmp(a, b) != Ordering.greaterThan 'stop'
 					break
@@ -156,8 +156,8 @@ public extension Array
 			self.reverseRange(lo, hi: runEnd)
 		end 'desc' else 'asc'
 			while runEnd < hi 'scanAsc'
-				let a = try managed.get(runEnd - 1) otherwise panic("naturalRunLen: get OOB at runEnd-1 (asc)")
-				let b = try managed.get(runEnd) otherwise panic("naturalRunLen: get OOB at runEnd (asc)")
+				view a = try managed.get(runEnd - 1) otherwise panic("naturalRunLen: get OOB at runEnd-1 (asc)")
+				view b = try managed.get(runEnd) otherwise panic("naturalRunLen: get OOB at runEnd (asc)")
 
 				if cmp(a, b) == Ordering.greaterThan 'stop'
 					break
@@ -251,8 +251,8 @@ public extension Array
 
 	function mergeTopTwo(stack RunArrayStack, scratch MergeScratchArray, scratchCap ElementIndex, pivotHold MergeScratchArray, cmp SortComparator)
 		let top = stack.count() - 1
-		let right = try stack.get(top) otherwise panic("mergeTopTwo: stack.get OOB at top")
-		let left = try stack.get(top - 1) otherwise panic("mergeTopTwo: stack.get OOB at top-1")
+		view right = try stack.get(top) otherwise panic("mergeTopTwo: stack.get OOB at top")
+		view left = try stack.get(top - 1) otherwise panic("mergeTopTwo: stack.get OOB at top-1")
 
 		if not left.sorted 'sortLeft'
 			self.stableQuicksortRange(left.startIndex, hi: left.startIndex + left.length, scratch: scratch, scratchCap: scratchCap, pivotHold: pivotHold, cmp: cmp)
@@ -348,7 +348,7 @@ public extension Array
 			// new one, then pop-merge while existing top runs have power
 			// >= this new boundary's power.
 			if stack.count() > 0 'havePrev'
-				let prev = try stack.get(stack.count() - 1) otherwise panic("driftsortRange: stack.get OOB")
+				view prev = try stack.get(stack.count() - 1) otherwise panic("driftsortRange: stack.get OOB")
 				let p = self.nodePowerBetween(prev.startIndex, s2: curStart, n2: runLen, n: n)
 
 				// Patch prev's power to record the boundary between prev and
@@ -365,8 +365,8 @@ public extension Array
 				// While the run two-from-top has a power >= top's power, merge top into it.
 				while stack.count() >= 2 'popMerge'
 					let topIdx = stack.count() - 1
-					let top = try stack.get(topIdx) otherwise panic("driftsortRange: top get OOB")
-					let below = try stack.get(topIdx - 1) otherwise panic("driftsortRange: below get OOB")
+					view top = try stack.get(topIdx) otherwise panic("driftsortRange: top get OOB")
+					view below = try stack.get(topIdx - 1) otherwise panic("driftsortRange: below get OOB")
 
 					if below.power < top.power 'stop'
 						break
@@ -391,7 +391,7 @@ public extension Array
 		// A lone logical run never reached a merge (e.g. the whole input became
 		// one short run). Sort it so the final array is ordered.
 		if stack.count() == 1 'lone'
-			let only = try stack.get(0) otherwise panic("driftsortRange: stack.get OOB at drain end")
+			view only = try stack.get(0) otherwise panic("driftsortRange: stack.get OOB at drain end")
 
 			if not only.sorted 'loneLogical'
 				self.stableQuicksortRange(only.startIndex, hi: only.startIndex + only.length, scratch: scratch, scratchCap: scratchCap, pivotHold: pivotHold, cmp: cmp)

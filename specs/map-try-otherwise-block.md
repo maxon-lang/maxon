@@ -72,7 +72,7 @@ end 'getEntry'
 function main() returns ExitCode
 		var m = EntryMap.create()
 		try m.insert("key", value: Entry.create("hello", count: 7)) otherwise ignore
-		let got = try getEntry(m, key: "key") otherwise Entry.create("none", count: 0)
+		view got = try getEntry(m, key: "key") otherwise Entry.create("none", count: 0)
 		return got.count
 end 'main'
 ```

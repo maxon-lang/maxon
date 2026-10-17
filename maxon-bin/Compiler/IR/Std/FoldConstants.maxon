@@ -177,8 +177,8 @@ function evaluateOps(module StdModule, opIndices OpIndexArray, constMap ConstVal
 	var def = StdFoldableDef.create()
 
 	for opIdx in opIndices 'eachOp'
-		let op = try module.ops.get(opIdx) otherwise panic("foldConstants: live op index {opIdx} not in module.ops")
-		let folded = tryEvaluate(op, constMap: constMap, operands: operands)
+		view op = try module.ops.get(opIdx) otherwise panic("foldConstants: live op index {opIdx} not in module.ops")
+		var folded = tryEvaluate(op, constMap: constMap, operands: operands)
 		try module.ops.set(opIdx, value: folded) otherwise panic("foldConstants: ops.set OOB at {opIdx}")
 
 		// The FOLDED op, not the original — recording the result is what feeds the next op's operands.
@@ -671,7 +671,7 @@ end 'foldCondBranch'
 
 // One compare a pass decided, and what it decided.
 module type CompareDecision
-	export var opIdx as ElementIndex
+	export let opIdx as ElementIndex
 	export var resultId as ValueId
 	export var holds as bool
 

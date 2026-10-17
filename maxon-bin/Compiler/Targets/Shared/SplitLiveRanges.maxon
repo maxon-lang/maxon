@@ -252,13 +252,13 @@ export type PressurePeak
 	// `liveBefore` is this peak's row only once this is set; read it through `ensurePeakRow`.
 	export var rowReady as bool
 
-	export var peakSeq as OpSeq
+	export let peakSeq as OpSeq
 
 	// The peak op's `module.ops` index, resolved once when the peak is materialized. `peakSeq` cannot
 	// stand in for it across the split: a re-space relabels slots, and with them sequence numbers. The
 	// ops array is append-only, so an op's index never moves and this stays valid across the mutations
 	// the split then makes.
-	export var peakOpIdx as ElementIndex
+	export let peakOpIdx as ElementIndex
 
 	// Which of the two overflows this point is — the distinction the amended Rule 2 turns on.
 	//
@@ -2402,7 +2402,7 @@ export type PressureIndex
 	// repair states the same quantity per VALUE (`operandContribution`); `verifyPressureIndex` is what
 	// keeps those two honest against each other.
 	export function rebuild(module TargetModule, liveness LivenessResult, sweep PressureSweepScratch, seedBuf ValueIdArray, scratch PressureRelayoutScratch)
-		let topo = liveness.cfg.topo
+		view topo = liveness.cfg.topo
 		self.layOut(module, topo: topo, opCounts: scratch.opCounts)
 		self.defSlot.refill(liveness.valueCount, value: 0)
 
@@ -3329,7 +3329,7 @@ end 'refreshTransientsNaming'
 //  3. the CLOBBERS of every op `w` is live ACROSS — the build's `ClobberEvents` half, with the
 //     blocks `w` is live straight through answered by `LiveSets.runClobbersOf`.
 function rebuildForbiddenOf(module TargetModule, liveness LivenessResult, pressure PressureIndex, w ValueId, paramCross ParamCrossForbid, range BlockSet, marks LivenessMarkScratch, buf OperandList, span LiveAcrossSpan)
-	let index = liveness.useIndex
+	view index = liveness.useIndex
 
 	// SOURCE 1. Asked of `nonSweptForbidOf` rather than restated here, because `computeLivenessOn` asks
 	// the same question of the same function — see its header for why the two may not be two lists. The
@@ -3499,7 +3499,7 @@ end 'liveAcrossClobbersIn'
 // off the same `ColdBlockRuns`: for each run of the block, the raw clobbers of the run ops `w` is live
 // across (inside `span`) that precede `w`'s last read in that run.
 function coldRunClobbersFor(module TargetModule, liveness LivenessResult, pressure PressureIndex, w ValueId, blockLocal ElementIndex, span LiveAcrossSpan, buf OperandList) returns RegMask
-	let runs = liveness.coldRuns.of(blockLocal)
+	view runs = liveness.coldRuns.of(blockLocal)
 	var mask = 0 as RegMask
 
 	for id in 0 upto runs.runCount() 'eachRun'
@@ -3599,7 +3599,7 @@ end 'lastUsePositionIn'
 // ⚠ ONLY THE VICTIM CAN MOVE ONE, so only its block is restated: a fresh id is never a block-arg, and no
 // other value's uses or liveness change.
 function refreshDeadPhisFor(module TargetModule, liveness LivenessResult, pressure PressureIndex, victim ValueId)
-	let index = liveness.useIndex
+	view index = liveness.useIndex
 
 	if not index.isPhiValue(victim) 'notABlockArg'
 		return
@@ -3646,7 +3646,7 @@ end 'refreshBlockDemandOf'
 
 function blockDemandOf(liveness LivenessResult, pressure PressureIndex, blockLocal ElementIndex, class RegClass) returns RegCount
 	var blockMax = pressure.blockLiveOut(blockLocal, class: class)
-	let peak = pressure.blockPeak(blockLocal, class: class)
+	view peak = pressure.blockPeak(blockLocal, class: class)
 
 	if peak.found and peak.pressure > blockMax 'theOpsDemandMore'
 		blockMax = peak.pressure
@@ -3658,7 +3658,7 @@ end 'blockDemandOf'
 function refreshDemandLeaves(liveness LivenessResult, pressure PressureIndex, blockLocal ElementIndex)
 	for classOrdinal in 0 upto RegClassCount 'eachClass'
 		let class = regClassAt(classOrdinal)
-		let peak = pressure.blockPeak(blockLocal, class: class)
+		view peak = pressure.blockPeak(blockLocal, class: class)
 		liveness.live.cover.setBase(class, blockLocal: blockLocal, base: demandBaseOf(liveness, peak: peak, blockLocal: blockLocal, class: class), found: peak.found)
 	end 'eachClass'
 end 'refreshDemandLeaves'
@@ -3717,9 +3717,9 @@ type CutSeed
 	export var known as bool
 	export var blockLocal as ElementIndex
 	export var pos as ElementIndex
-	export var victim as ValueId
-	export var freshFrom as ValueId
-	export var freshTo as ValueId
+	export let victim as ValueId
+	export let freshFrom as ValueId
+	export let freshTo as ValueId
 	export var liveBefore as BitRow
 	export var rowReady as bool
 
@@ -3877,7 +3877,7 @@ export type SplitScratch
 			for b in 0 upto numBlocks 'eachBlock'
 				for classOrdinal in 0 upto RegClassCount 'eachClass'
 					let class = regClassAt(classOrdinal)
-					let peak = self.pressure.blockPeak(b, class: class)
+					view peak = self.pressure.blockPeak(b, class: class)
 					liveness.live.cover.setBaseUnpulled(class, blockLocal: b, base: demandBaseOf(liveness, peak: peak, blockLocal: b, class: class), found: peak.found)
 				end 'eachClass'
 			end 'eachBlock'
@@ -3920,7 +3920,7 @@ export type SplitDriver
 	var scratch as SplitScratch
 	var lineage as SplitLineage
 	var paramCross as ParamCrossForbid
-	var pool as RegMask
+	let pool as RegMask
 	var file as RegisterFile
 	var nextValueId as ValueId
 	var nextSlot as SpillSlot
@@ -4067,13 +4067,13 @@ export type SplitDriver
 
 		while peak.found 'relieve'
 			if iterations >= iterationBound 'runaway'
-				let peakBlock = blockAt(module, topo: funcLiveness.cfg.topo, local: peak.blockLocal)
+				view peakBlock = blockAt(module, topo: funcLiveness.cfg.topo, local: peak.blockLocal)
 				panic("SplitDriver.relievePressure: '{String.from(func.name)}' did not converge after {iterations} splits (peak effective pressure {peak.pressure} still over its pool, at block '{String.from(peakBlock.label)}' ({peakBlock.heat.name}) sequence {peak.peakSeq} (op index {peak.peakOpIdx}: {opShapeDescription(module, opIdx: peak.peakOpIdx, buf: work.splitOperands, opFacts: funcLiveness.opFacts)}), clobberOnly={peak.clobberOnly}; last victim {lastVictim}: def {funcLiveness.useIndex.defKindOf(lastVictim).name} at {defSeqDescription(module, liveness: funcLiveness, pressure: work.pressure, valueId: lastVictim)}, uses at {useSeqsDescription(module, liveness: funcLiveness, valueId: lastVictim)}, slotResident={funcLiveness.useIndex.isSlotResident(lastVictim)}; as chosen: {lastVictimAsChosen}) — a splitter bug")
 			end 'runaway'
 
 			iterations = iterations + 1
 
-			let index = funcLiveness.useIndex
+			view index = funcLiveness.useIndex
 
 			// THE POINT THIS ITERATION ACTUALLY RELIEVES. Normally the analysis's own peak; but a FULL-POOL
 			// peak with no relievable value is not yet an E5001 — the same op may carry a CONFINED overflow
@@ -4332,7 +4332,7 @@ export type SplitDriver
 	export function repairAtExhaustion(module TargetModule, v ValueId, free RegMask, counters RegAllocCounters) returns bool
 		var work = self.scratch
 		var funcLiveness = self.liveness
-		let index = funcLiveness.useIndex
+		view index = funcLiveness.useIndex
 		self.buildSplitIndexOnce(module)
 
 		// `v`'s live REGION, as blocks. `walkValue` in the ADDING direction over a value that is ALREADY
@@ -4451,7 +4451,7 @@ export type SplitDriver
 
 		// The peak this seeding sweep finds must be EMPTY: `relievePressure` has returned, so its Φ is 0,
 		// and this is that post-condition restated from an independent walk.
-		let residual = self.buildSplitIndex(module)
+		view residual = self.buildSplitIndex(module)
 
 		if residual.found 'overPoolPointSurvivedRelief'
 			panic("SplitDriver.buildSplitIndexOnce: the relief loop returned but a re-analysis finds an over-pool point (pressure {residual.pressure} against witness {residual.witness}) — a stuck value is a CONFINEMENT, which presupposes that every point already fits its pool, so the two analyses disagree about the same IR")
@@ -4464,7 +4464,7 @@ export type SplitDriver
 	function applyRepairSplit(module TargetModule, victim ValueId, counters RegAllocCounters)
 		var work = self.scratch
 		var funcLiveness = self.liveness
-		let index = funcLiveness.useIndex
+		view index = funcLiveness.useIndex
 
 		// `hasStoreAnchor` never refuses a value the function DEFINES — its header states it — so this is
 		// an assertion, not a branch. Both cures reach it: the stuck value was having its DEF coloured, and
@@ -4489,7 +4489,7 @@ export type SplitDriver
 		// renames an already-live value over a region it was live in anyway. Asserting it is what keeps
 		// this cure from quietly handing `relievePressure`'s post-condition back broken — the colorer
 		// would then fail for the OTHER reason, and the panic would name the wrong owner.
-		let after = refreshPeak(module, liveness: funcLiveness, pool: self.pool, scratch: work, cut: CutSeed.unknown(work.peakLiveBefore))
+		view after = refreshPeak(module, liveness: funcLiveness, pool: self.pool, scratch: work, cut: CutSeed.unknown(work.peakLiveBefore))
 
 		if after.found 'repairRaisedPressure'
 			panic("SplitDriver.applyRepairSplit: splitting value {victim} at block {work.anchor.blockLocal} left an over-pool point (pressure {after.pressure} against witness {after.witness}, clobberOnly {after.clobberOnly}) — a split cannot raise any op's pressure, so either the store/reload placement or the incremental pressure repair is wrong")
@@ -4618,8 +4618,8 @@ end 'splitRunawayBound'
 type FailingPoint
 	export var blockLocal as ElementIndex
 	export var pos as ElementIndex
-	var atAnOp as bool
-	var opIdx as ElementIndex
+	let atAnOp as bool
+	let opIdx as ElementIndex
 
 	static function atOp(atBlock ElementIndex, pos ElementIndex, atOpIdx ElementIndex) returns FailingPoint
 		return Self{blockLocal: atBlock, pos: pos, atAnOp: true, opIdx: atOpIdx}
@@ -4833,9 +4833,9 @@ function collectVictimRegion(index UseIndex, liveness LivenessResult, scratch Sp
 end 'collectVictimRegion'
 
 function recordVictimWindows(index UseIndex, scratch SplitScratch, victim ValueId)
-	let pressure = scratch.pressure
-	let marks = scratch.marks
-	let dirty = scratch.dirty
+	view pressure = scratch.pressure
+	view marks = scratch.marks
+	view dirty = scratch.dirty
 	var windows = scratch.windows
 	let definedByAnOp = index.defKindOf(victim) == ValueDefKind.opDef
 
@@ -4979,7 +4979,7 @@ function refreshAfterSplit(module TargetModule, cfg FuncCfg, liveness LivenessRe
 end 'refreshAfterSplit'
 
 function remarkValue(module TargetModule, liveness LivenessResult, scratch SplitScratch, split SplitValues, w ValueId, paramCross ParamCrossForbid)
-	let index = liveness.useIndex
+	view index = liveness.useIndex
 	var range = scratch.range
 	range.clear()
 	scratch.marks.expandTransparent(scratch.confinedMode)
@@ -5079,7 +5079,7 @@ end 'applyLiveOutLedger'
 // function that somehow re-entered full-pool mode would sweep both halves from then on, which is merely
 // the eager cost — only the bound does.
 function refreshPeak(module TargetModule, liveness LivenessResult, pool RegMask, scratch SplitScratch, cut CutSeed) returns PressurePeak
-	let dirty = scratch.dirty
+	view dirty = scratch.dirty
 
 	if not scratch.confinedMode 'theChampionTreeIsLive'
 		for k in 0 upto dirty.count() 'eachDemandLeaf'
@@ -5201,7 +5201,7 @@ end 'confinedLeafRank'
 
 function refreshConfinedWindow(module TargetModule, liveness LivenessResult, pool RegMask, scratch SplitScratch, blockLocal ElementIndex, cut CutSeed)
 	var pressure = scratch.pressure
-	let edits = scratch.edits
+	view edits = scratch.edits
 	let ops = pressure.opCountOf(blockLocal)
 
 	if ops == 0 'nothingToRank'
@@ -5532,7 +5532,7 @@ end 'choiceScopeName'
 // The runaway panic's two descriptions of its victim: where it is defined, as a block position, and
 // where it is read, as sequence numbers — the coordinates the peak is stated in.
 function defSeqDescription(module TargetModule, liveness LivenessResult, pressure PressureIndex, valueId ValueId) returns String
-	let index = liveness.useIndex
+	view index = liveness.useIndex
 
 	match index.defKindOf(valueId) 'kind'
 		none then return "no def"
@@ -5542,7 +5542,7 @@ function defSeqDescription(module TargetModule, liveness LivenessResult, pressur
 end 'defSeqDescription'
 
 function useSeqsDescription(module TargetModule, liveness LivenessResult, valueId ValueId) returns String
-	let index = liveness.useIndex
+	view index = liveness.useIndex
 	var out = StringBuilder.create()
 	let useSites = index.useCount(valueId)
 
@@ -5613,7 +5613,7 @@ end 'peakCrossesAColdRun'
 // function, and it is the splitter's own bookkeeping.
 function timedLiveness(module TargetModule, cfg FuncCfg, func IrFunction, valueClass ValueClassColumn, file RegisterFile, opFacts OpVariantFacts, costs PoolPhaseCosts) returns LivenessResult
 	let probe = PhaseProbe.beginCounters()
-	let liveness = computeLivenessOn(module, cfg: cfg, func: func, valueClass: valueClass, file: file, opFacts: opFacts)
+	var liveness = computeLivenessOn(module, cfg: cfg, func: func, valueClass: valueClass, file: file, opFacts: opFacts)
 	costs.record(RegAllocPhase.liveness.ordinal, probe: probe)
 	return liveness
 end 'timedLiveness'
@@ -5632,7 +5632,7 @@ end 'timedLiveness'
 // cost. A splitting function pays one extra whole-function sweep, once, to seed it. (Same discipline as
 // `ReachCache` and `SplitScratch.beginSplitting`.)
 function analyzePressure(module TargetModule, liveness LivenessResult, pool RegMask, scratch SplitScratch, intoTree bool) returns PressurePeak
-	let topo = liveness.cfg.topo
+	view topo = liveness.cfg.topo
 	scratch.sweep.widenRow(liveness.wordsPerRow)
 
 	// The Hall machinery's one dense `value -> popcount(pool ∖ forbidden(v))` column. Filled in full
@@ -5772,15 +5772,15 @@ end 'rankOutranks'
 // EXACTLY ONE of the two ever runs, for the reason the whole-function/tournament pair gives: two live
 // answers to one question move the peak silently the day they disagree.
 function analyzeBlockPressure(module TargetModule, liveness LivenessResult, pool RegMask, scratch SplitScratch, blockLocal ElementIndex, wantFullPool bool, wantConfined bool, leaves bool) returns PeakRank
-	let topo = liveness.cfg.topo
+	view topo = liveness.cfg.topo
 
 	// Every buffer below is the FUNCTION's, not this call's (see `SplitScratch`). `liveRow` is zero on
 	// entry and zero again on exit (`finishSweepRow`), which is the invariant that lets a per-split
 	// sweep skip the O(values/64) wholesale clear the whole-function one could afford.
 	var ordered = scratch.sweep.ordered
-	let seedBuf = scratch.seedBuf
+	view seedBuf = scratch.seedBuf
 
-	let effPoolSizes = scratch.effPools.sizes
+	view effPoolSizes = scratch.effPools.sizes
 
 	// THREE ways the census is unnecessary, and it is skipped ENTIRELY — not merely screened out — under
 	// any of them, because the gate has to be on the STEP and not just on the screen: the screen is
@@ -5836,7 +5836,7 @@ function analyzeBlockPressure(module TargetModule, liveness LivenessResult, pool
 	// liveness sweep already filled; recomputing it here means re-sweeping the whole block and
 	// heap-allocating two arrays, once per block, on every splitter iteration.
 	// PER CLASS: a dead phi reserves a register of ITS OWN file and competes for nothing in the other.
-	var liveByClass = scratch.sweep.liveByClass
+	view liveByClass = scratch.sweep.liveByClass
 
 	ordered.clear()
 	collectOrderedOps(scratch.pressure, block: block, blockLocal: i, out: ordered)
@@ -5953,7 +5953,7 @@ function visitOpBackward(module TargetModule, liveness LivenessResult, pool RegM
 	var liveByClass = scratch.sweep.liveByClass
 	var effective = scratch.opEffective
 	var opBest = scratch.opRank
-	let effPoolSizes = scratch.effPools.sizes
+	view effPoolSizes = scratch.effPools.sizes
 	let op = try module.ops.get(opIdx) otherwise panic("visitOpBackward: opIdx not in module.ops")
 	targetOpOperands(op, buf: buf)
 
@@ -6136,7 +6136,7 @@ function peakIsNearTheCut(scratch SplitScratch, rank PeakRank, cut CutSeed) retu
 end 'peakIsNearTheCut'
 
 function rowBySteppingFromTheCut(module TargetModule, liveness LivenessResult, scratch SplitScratch, cut CutSeed, targetPos ElementIndex, row BitRow) returns ElementIndex
-	let pressure = scratch.pressure
+	view pressure = scratch.pressure
 	let cutPos = scratch.edits.postSplitPosition(cut.blockLocal, pos: cut.pos)
 	seedRowAtCut(liveness, pressure: pressure, scratch: scratch, cut: cut, cutPos: cutPos, row: row)
 
@@ -6219,7 +6219,7 @@ function fillLiveBeforeOp(module TargetModule, liveness LivenessResult, blockLoc
 	// that tally panics on underflow — so seed it truthfully, as every other sweep does.
 	seedClassLive(scratch.sweep.liveByClass, classes: liveness.valueClass, values: scratch.seedBuf)
 
-	let pressure = scratch.pressure
+	view pressure = scratch.pressure
 	let walksTheIndex = pressure.isLaidOut()
 	let opCount = pressure.opCountOf(blockLocal) if walksTheIndex else block.opCountInRunOrder()
 
@@ -6344,7 +6344,7 @@ function offerIndexedFullPoolPeak(module TargetModule, liveness LivenessResult, 
 
 	for classOrdinal in 0 upto RegClassCount 'eachClass'
 		let class = regClassAt(classOrdinal)
-		let blockPeak = pressure.blockPeak(blockLocal, class: class)
+		view blockPeak = pressure.blockPeak(blockLocal, class: class)
 
 		if not blockPeak.found 'noOpsInThisBlock'
 			continue
@@ -6536,7 +6536,7 @@ end 'recordDefLiveAfter'
 // O(values) per split for an answer of size O(pressure), and every eligibility question it then
 // asks walks the whole function. That is what the `UseIndex` retires.
 function chooseVictimByScan(module TargetModule, index UseIndex, liveness LivenessResult, peak PressurePeak, pool RegMask, scratch SplitScratch, placement SpillPlacement) returns SpillChoice
-	let topo = liveness.cfg.topo
+	view topo = liveness.cfg.topo
 
 	// Every candidate below is of the peak's own file (the class gate in the loop), so the pool a
 	// store anchor is measured against is THAT file's — 14 for an int, 16 for a float, never the 30
@@ -6770,7 +6770,7 @@ function gatherTailValues(tree GapTree, peakSlot ElementIndex, peakSeq OpSeq, in
 end 'gatherTailValues'
 
 function isRematWinner(module TargetModule, index UseIndex, liveness LivenessResult, scratch SplitScratch, peak PressurePeak, pool RegMask, v ValueId, peakPos ElementIndex, reach ReachCache) returns bool
-	let anchor = scratch.anchor
+	view anchor = scratch.anchor
 
 	if not (candidateAtPeak(index, liveness: liveness, scratch: scratch, peak: peak, pool: pool, v: v, peakPos: peakPos) and isRematVictim(index, topo: liveness.cfg.topo, valueId: v, anchor: anchor, reach: reach)) 'notARematVictim'
 		return false
@@ -6785,7 +6785,7 @@ function isRematWinner(module TargetModule, index UseIndex, liveness LivenessRes
 end 'isRematWinner'
 
 function isSpillWinner(module TargetModule, index UseIndex, liveness LivenessResult, scratch SplitScratch, peak PressurePeak, pool RegMask, v ValueId, peakPos ElementIndex, reach ReachCache, poolSize RegCount) returns bool
-	let anchor = scratch.anchor
+	view anchor = scratch.anchor
 
 	if not candidateAtPeak(index, liveness: liveness, scratch: scratch, peak: peak, pool: pool, v: v, peakPos: peakPos) 'notACandidate'
 		return false
@@ -6835,7 +6835,7 @@ function victimFromGaps(module TargetModule, index UseIndex, liveness LivenessRe
 	recheck.growFilled(liveness.valueCount, value: 0)
 	var gaps = scratch.gaps
 	gaps.wakeUpTo(scratch.splitEpoch as DenseInt, index: index)
-	let pressure = scratch.pressure
+	view pressure = scratch.pressure
 	let peakPos = pressure.positionOfSeq(peak.peakSeq)
 	let peakSlot = pressure.slotOfSeq(peak.peakSeq)
 	collectPeakReads(module, liveness: liveness, peak: peak, scratch: scratch)
@@ -8336,7 +8336,7 @@ end 'insertStore'
 function insertReloadFor(module TargetModule, cfg FuncCfg, index UseIndex, pressure PressureIndex, useRecord ElementIndex, valueId ValueId, freshId ValueId, slot SpillSlot, placement SpillPlacement, edits SplitEdits, buf OperandList, opFacts OpVariantFacts)
 	let blockLocal = index.useBlockAt(useRecord)
 	assertPlacementLegal(module, cfg: cfg, blockLocal: blockLocal, valueId: valueId, what: SplitPlacementOp.reload, placement: placement)
-	let block = blockAt(module, topo: cfg.topo, local: blockLocal)
+	view block = blockAt(module, topo: cfg.topo, local: blockLocal)
 
 	// An OP use takes the reload immediately before it — or before the first pre-move of the call group
 	// the use belongs to, so no reload lands among a call's pre-moves (`firstPreMoveBefore`). An EDGE use
@@ -8828,7 +8828,7 @@ end 'dropOriginalDef'
 // ALWAYS an original spilled value (never a reload), skipping every spill store is exactly right
 // and touches no genuine use. A no-op when the op does not use `from` at all.
 function rewriteOpAt(module TargetModule, opIdx ElementIndex, from ValueId, to ValueId, buf OperandList, opFacts OpVariantFacts)
-	let op = try module.ops.get(opIdx) otherwise panic("rewriteOpAt: opIdx not in module.ops")
+	var op = try module.ops.get(opIdx) otherwise panic("rewriteOpAt: opIdx not in module.ops")
 
 	if opFacts.slotRoleOf(op) == OpSlotRole.spillStore 'readsTheOriginalDeliberately'
 		return
@@ -9196,7 +9196,7 @@ function verifyIncremental(module TargetModule, cfg FuncCfg, func IrFunction, li
 	var freshScratch = SplitScratch.create(cfg.topo.numBlocks)
 
 	// `intoTree: false` — the WALK, which is the independent derivation the index is checked against.
-	let freshPeak = analyzePressure(module, liveness: fresh, pool: pool, scratch: freshScratch, intoTree: false)
+	view freshPeak = analyzePressure(module, liveness: fresh, pool: pool, scratch: freshScratch, intoTree: false)
 
 	if liveness.valueCount != fresh.valueCount 'valueCount'
 		panic("verifyIncremental ('{name}', after split {iterations}): the value space is {liveness.valueCount} but a full rebuild says {fresh.valueCount}")
@@ -9244,7 +9244,7 @@ function verifyIncremental(module TargetModule, cfg FuncCfg, func IrFunction, li
 				panic("verifyIncremental ('{name}', after split {iterations}): block {b} is covered by {liveness.live.cover.at(class, blockLocal: b)} {class.name} values live straight through it but a full rebuild says {fresh.live.cover.at(class, blockLocal: b)}")
 			end 'cover'
 
-			let heldPeak = scratch.pressure.blockPeak(b, class: class)
+			view heldPeak = scratch.pressure.blockPeak(b, class: class)
 
 			if liveness.live.cover.isArmed() 'theChampionTreeIsLive'
 				let leafPresent = liveness.live.cover.leafPresent(class, blockLocal: b)
@@ -9308,7 +9308,7 @@ end 'verifyEntryThreads'
 
 function verifyFirstBuild(module TargetModule, cfg FuncCfg, func IrFunction, liveness LivenessResult)
 	let name = String.from(func.name)
-	let fresh = computeLivenessOn(module, cfg: cfg.withoutSkip(), func: func, valueClass: liveness.valueClass, file: liveness.registerFile, opFacts: liveness.opFacts)
+	view fresh = computeLivenessOn(module, cfg: cfg.withoutSkip(), func: func, valueClass: liveness.valueClass, file: liveness.registerFile, opFacts: liveness.opFacts)
 
 	for b in 0 upto cfg.topo.numBlocks 'eachBlock'
 		var actualSet = ValueIdArray.create()
@@ -9397,8 +9397,8 @@ function verifyPressureIndex(module TargetModule, liveness LivenessResult, fresh
 			// The AGGREGATE, not just the leaves under it: a combine that folds the wrong way answers with
 			// every leaf right, and it is the aggregate the peak-finder actually reads. Checked against a
 			// SCAN of the same index's own leaves first, so a divergence says which half moved.
-			let scanned = held.blockPeakByScan(b, class: class)
-			let aggregated = held.blockPeak(b, class: class)
+			view scanned = held.blockPeakByScan(b, class: class)
+			view aggregated = held.blockPeak(b, class: class)
 
 			if aggregated.pressure != scanned.pressure or aggregated.slot != scanned.slot 'aggregateVsScan'
 				panic("verifyIncremental ('{name}', after split {iterations}): block {b}'s {class.name} peak aggregate says {aggregated.pressure} at slot {aggregated.slot} but a scan of the same leaves says {scanned.pressure} at slot {scanned.slot} — the tree's combine has drifted from the suffix sum it summarises")

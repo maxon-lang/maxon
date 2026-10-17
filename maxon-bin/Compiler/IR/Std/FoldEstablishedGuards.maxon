@@ -133,8 +133,8 @@ type EstablishedFunction
 	var boundElsePosition as BlockPositionColumn
 
 	static function build(module StdModule, func IrFunction, scratch EstablishedScratch) returns EstablishedFunction
-		let tree = StdDominatorTree.build(module, func: func)
-		let reader = StdShapeReader.create(module, func: func)
+		var tree = StdDominatorTree.build(module, func: func)
+		var reader = StdShapeReader.create(module, func: func)
 		var analysis = Self{tree: tree, stamps: DominatorStamps.build(tree), reader: reader, byId: module.blockIndexById(func), records: RecordIndex.sized(reader.defs.valueBound()), boundHead: OptionalElementIndexColumn.absent(reader.defs.valueBound()), boundNext: OptionalElementIndexColumn.create(), boundRecord: ValueIdArray.create(), boundElsePosition: BlockPositionColumn.create()}
 		analysis.gather(module, func: func, scratch: scratch)
 		return analysis
@@ -276,8 +276,8 @@ function transferBlock(module StdModule, func IrFunction, analysis EstablishedFu
 	classifyEstablishingEdge(analysis, scratch: scratch)
 
 	// The refusal of a guard, and the error arm of a flag test, learn nothing.
-	let thenEdge = scratch.edge if scratch.edge.establishesOnThen else scratch.plainEdge
-	let elseEdge = scratch.plainEdge if scratch.edge.establishesOnThen else scratch.edge
+	view thenEdge = scratch.edge if scratch.edge.establishesOnThen else scratch.plainEdge
+	view elseEdge = scratch.plainEdge if scratch.edge.establishesOnThen else scratch.edge
 	let thenMoved = scratch.state.meet(thenPosition, edge: thenEdge)
 	let elseMoved = scratch.state.meet(elsePosition, edge: elseEdge)
 	return thenMoved or elseMoved
@@ -478,7 +478,7 @@ function retireGuardOperands(module StdModule, func IrFunction, reader StdShapeR
 				continue
 			end 'stillReadOrNotAnOp'
 
-			let op = module.getOp(reader.defs.definingOp(valueId))
+			view op = module.getOp(reader.defs.definingOp(valueId))
 
 			if not op.rawValue.isPure and not reader.loadDefining(valueId) 'anEffect'
 				continue

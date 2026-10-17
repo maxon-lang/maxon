@@ -267,6 +267,50 @@ Omit `returns` for a function type that returns nothing: `typealias Callback = f
 throwing function cannot be used as a value (**E3101**) — wrap it in a function that handles the error.
 Function-type aliases are [brands](/docs/language/ranged-typealiases/#generic-instance-and-function-type-aliases-are-brands).
 
+## Capability Qualifiers (`keep`, `sole`, `returns readonly`)
+
+A call through a function value or an interface method has no body the compiler can read, so the boundary
+declares what the callee does with its values. The qualifier is written before the type:
+
+| Qualifier | Meaning |
+|-----------|---------|
+| `keep` on a parameter | the callee keeps the argument where something may write it |
+| `sole` on a parameter | the callee consumes the argument and owns it, so it may keep it anywhere |
+| `returns sole T` | the result is fresh, reached by no other name |
+| `returns readonly T` | the result is read-only |
+
+```maxon
+typealias Count = int(0 to 1000)
+typealias Sink = function(b keep Box)
+typealias Maker = function() returns sole Box
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+interface Source
+	function current() returns readonly Box
+end 'Source'
+```
+
+- They are written only on a parameter or result of a function-type alias or an
+  [interface](/docs/language/composite-types/#interfaces) requirement, and on the result of a [generic function](/docs/language/composite-types/#generic-functions). Anywhere
+  else — a parameter of a function with a body, a cast, a binding — a qualifier is **E2076**.
+- A caller trusts the declaration. An argument to a `keep` parameter follows the rule for a function that keeps
+  it, so a `let` read again afterwards is **E3078**. A `sole` parameter consumes its argument: pass a fresh value,
+  or a `let` or `var` at its last use (a later use is **E3102**); a read-only value, a parameter, a field of a
+  record that stays reachable, or a `var` a [view](/docs/language/variables/#views-view) has seen is **E3078**. The `let` of a
+  `returns sole` result is fresh, and a `let` of a `returns readonly` result is read-only.
+- A function value converted to the alias, a conformer's method, or a generic function's body that does more
+  than its boundary declares — keeps a parameter not declared `keep` or `sole`, or returns state something may
+  write where `returns sole` or `returns readonly` is declared — is **E3189**. A function value typed by one
+  alias converts to another, by a `return`, a store or an argument, only when it keeps no parameter the target
+  does not declare and declares at least the result capability the target declares.
+
 ## Closures
 
 A closure is an anonymous function written `function(parameters) gives expression`:
@@ -302,6 +346,12 @@ captured inside a loop is moved on the first trip, so the second is **E3102**. A
 before the call it is an argument of runs, so that call may not also consume the local, take it by
 reference or write it as its receiver (**E3102**); a call that only reads it may. Inside a closure, a captured name is the closure's own
 copy, so passing it to a parameter the callee writes is **E3159**.
+
+A closure that escapes — stored anywhere or returned — keeps every record it captures, so handing a read-only
+value to a function whose parameter such a closure captures is **E3078**. A closure that stays local — it is
+only called, where it is made or by a parameter that only calls it — writes what it writes of a parameter it
+captures, so handing that function a read-only value is **E3159**. A record [view](/docs/language/variables/#views-view) cannot be
+captured (**E3078**); a view of a number can, since the closure captures a copy.
 
 **A closure can go anywhere a value can.** A function value is one reference to a record holding the code
 and the captures, so a closure may be returned, stored in a field, a module-level variable, a container or

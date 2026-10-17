@@ -2418,7 +2418,7 @@ typealias BufArray = Array with __ManagedMemory
 function main() returns ExitCode
 	var a = BufArray.create()
 	a.push("hello".toByteArray())
-	let m = try a.get(0) otherwise return 1
+	view m = try a.get(0) otherwise return 1
 	return m.length() as ExitCode
 end 'main'
 ```
@@ -2565,7 +2565,7 @@ typealias BufArray = Array with ByteArray
 function main() returns ExitCode
 	var a = BufArray.create()
 	a.push("hello".toByteArray())
-	let m = try a.get(0) otherwise return 1
+	view m = try a.get(0) otherwise return 1
 	return m.count() as ExitCode
 end 'main'
 ```
@@ -2682,7 +2682,7 @@ function main() returns ExitCode
 	var arr = ByteArray.create()
 	arr.push(1 as Byte)
 	arr.push(2 as Byte)
-	let m = arr.managed
+	view m = arr.managed
 	var total = (m.length() as Integer) + bufLength(arr.managed) + (bufferOf(arr).length() as Integer) + (arr.count() as Integer)
 	var i = 0 as Count
 	while i < 4 'round'
@@ -2893,9 +2893,9 @@ function main() returns ExitCode
 	var a = BufArray.create()
 	a.push("hello".toByteArray())
 	a.push("ab".toByteArray())
-	let g = try a.get(0) otherwise return 1
-	let f = try a.first() otherwise return 2
-	let l = try a.last() otherwise return 3
+	view g = try a.get(0) otherwise return 1
+	view f = try a.first() otherwise return 2
+	view l = try a.last() otherwise return 3
 	return (g.length() + f.length() + l.length()) as ExitCode
 end 'main'
 ```
@@ -2914,7 +2914,7 @@ typealias BufArray = Array with __ManagedMemory
 function main() returns ExitCode
 	var a = BufArray.create()
 	a.push("hello".toByteArray())
-	let p = try a.pop() otherwise return 1
+	view p = try a.pop() otherwise return 1
 	return p.length() as ExitCode
 end 'main'
 ```

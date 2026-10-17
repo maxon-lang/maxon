@@ -237,7 +237,7 @@ function main() returns ExitCode
 	let shared = Counter.create(4)
 	var shelf = Shelf.create()
 	shelf.add(shared)
-	let first = try shelf.at(0) otherwise return 1
+	view first = try shelf.at(0) otherwise return 1
 	return first.n as ExitCode
 end 'main'
 ```

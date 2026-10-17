@@ -122,7 +122,7 @@ function main() returns ExitCode
 
 	var bad = 0 as FullRangeInt
 	for n in 1 upto 261 'check'
-		let b = try bufs.get(n - 1) otherwise return 1
+		view b = try bufs.get(n - 1) otherwise return 1
 		if b.count() != n 'length'
 			bad = bad + 1
 		end 'length'
@@ -177,7 +177,7 @@ function main() returns ExitCode
 
 	var bad = 0 as FullRangeInt
 	for k in 0 upto 3000 'check'
-		let b = try bufs.get(k) otherwise return 1
+		view b = try bufs.get(k) otherwise return 1
 		for i in 0 upto 24 'bytes'
 			let got = try b.get(i) otherwise return 2
 			if got != ((k + i) mod 251) 'value'
@@ -281,7 +281,7 @@ function main() returns ExitCode
 
 	var bad = 0 as FullRangeInt
 	for k in 0 upto 40 'check'
-		let b = try bufs.get(k) otherwise return 1
+		view b = try bufs.get(k) otherwise return 1
 		for i in 0 upto 64 'bytes'
 			let got = try b.get(i) otherwise return 2
 			if got != ((k * 7 + i) mod 251) 'value'
@@ -327,7 +327,7 @@ end 'dirty'
 function countNonZero() returns Integer
 	var mm = try __ManagedMemory.create(4096, elementSize: 1) otherwise return 1
 	try mm.setLength(4096) otherwise return 2
-	let arr = ByteArray.init(mm)
+	view arr = ByteArray.init(mm)
 	var seen = 0 as FullRangeInt
 	for i in 0 upto 4096 'scan'
 		let got = try arr.get(i) otherwise return 3
@@ -406,7 +406,7 @@ function main() returns ExitCode
 
 	var bad = 0 as Integer
 	for k in 0 upto 120 'check'
-		let b = try keep.get(k) otherwise return 1
+		view b = try keep.get(k) otherwise return 1
 		bad = bad + verify(b, n: (k + 8) as Len, seed: k as Len)
 	end 'check'
 
@@ -467,7 +467,7 @@ function main() returns ExitCode
 
 	var bad = 0 as FullRangeInt
 	for k in 0 upto 40 'check'
-		let b = try keep.get(k) otherwise return 1
+		view b = try keep.get(k) otherwise return 1
 		let n = k + 1
 		if b.count() != n 'length'
 			bad = bad + 1
@@ -533,7 +533,7 @@ function sweep() returns Integer
 	var bad = 0 as FullRangeInt
 	for k in 0 upto SweepCount 'check'
 		let n = FirstLen + k * LenStep
-		let b = try bufs.get(k) otherwise return 1
+		view b = try bufs.get(k) otherwise return 1
 		if b.count() != n 'length'
 			bad = bad + 1
 		end 'length'
@@ -598,7 +598,7 @@ function main() returns ExitCode
 
 	var bad = 0 as FullRangeInt
 	for k in 0 upto 96 'check'
-		let b = try bufs.get(k) otherwise return 1
+		view b = try bufs.get(k) otherwise return 1
 		for i in 0 upto 32 'bytes'
 			let got = try b.get(i) otherwise return 2
 			if got != ((i + k) mod 251) 'value'
@@ -653,7 +653,7 @@ function main() returns ExitCode
 
 	var bad = 0 as FullRangeInt
 	for k in 0 upto 640 'check'
-		let b = try bufs.get(k) otherwise return 1
+		view b = try bufs.get(k) otherwise return 1
 		for i in 0 upto 16 'bytes'
 			let got = try b.get(i) otherwise return 2
 			if got != ((i + k) mod 251) 'value'

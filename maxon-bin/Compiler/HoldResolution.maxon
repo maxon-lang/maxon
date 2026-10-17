@@ -1174,7 +1174,7 @@ type HoldResolver
 
 	function collectEntries(func IrFunction)
 		for blockPosition in 0 upto func.blockRefs.count() 'eachBlock'
-			let block = self.module.blockAtPosition(func, position: blockPosition)
+			view block = self.module.blockAtPosition(func, position: blockPosition)
 
 			for position in 0 upto block.bodyOpCount() 'eachOp'
 				let opIdx = try block.bodyOpAt(position) otherwise panic("HoldResolver.collectEntries: bodyOpAt OOB at {position}")
@@ -1259,7 +1259,7 @@ type HoldResolver
 		self.isBlockArg.growFilled(valueCount, value: false)
 
 		for blockPosition in 0 upto func.blockRefs.count() 'eachBlock'
-			let block = self.module.blockAtPosition(func, position: blockPosition)
+			view block = self.module.blockAtPosition(func, position: blockPosition)
 
 			for arg in block.blockArgs 'eachBlockArg'
 				try self.isBlockArg.set(arg.valueId, value: true) otherwise panic("HoldResolver.collectDefs: block arg v{arg.valueId} is outside the function's {valueCount} values")
@@ -1494,7 +1494,7 @@ type HoldResolver
 	end 'storeSummary'
 
 	function scanWindowBlock(func IrFunction, site ElementIndex, blockPosition ElementIndex, from ElementIndex, stamp ElementIndex)
-		let block = self.module.blockAtPosition(func, position: blockPosition)
+		view block = self.module.blockAtPosition(func, position: blockPosition)
 		let count = block.bodyOpCount()
 		var position = from
 
@@ -1899,7 +1899,7 @@ type HoldResolver
 
 		try self.projectionRead.set(index, value: true) otherwise panic("HoldResolver.readProjection: projectionRead.set OOB at {index}")
 		let first = self.projectionOffsets.count()
-		let func = try self.functions.get(index) otherwise panic("HoldResolver.readProjection: functions.get OOB at {index}")
+		view func = try self.functions.get(index) otherwise panic("HoldResolver.readProjection: functions.get OOB at {index}")
 		self.collectReceiverLoads(func)
 
 		if not self.everyReturnIsAReceiverLoad(func) 'aReturnIsNotAReceiverField'
@@ -1917,7 +1917,7 @@ type HoldResolver
 		self.receiverLoadOffsets.clear()
 
 		for blockPosition in 0 upto func.blockRefs.count() 'eachBlock'
-			let block = self.module.blockAtPosition(func, position: blockPosition)
+			view block = self.module.blockAtPosition(func, position: blockPosition)
 
 			for opIdx in block.bodyOps() 'eachOp'
 				self.noteReceiverLoad(self.module.getOp(opIdx))
@@ -1947,7 +1947,7 @@ type HoldResolver
 		var sawAReturn = false
 
 		for blockPosition in 0 upto func.blockRefs.count() 'eachBlock'
-			let block = self.module.blockAtPosition(func, position: blockPosition)
+			view block = self.module.blockAtPosition(func, position: blockPosition)
 
 			if not block.hasTerminatorOp() 'noExit'
 				continue
@@ -2106,7 +2106,7 @@ type HoldResolver
 
 	function lowerEntry(entry ElementIndex, isEnd bool, kind HoldKind)
 		let opIdx = try self.entryOps.get(entry) otherwise panic("HoldResolver.lowerEntry: entryOps.get OOB at {entry}")
-		let lowered = loweredHoldCall(self.module.getOp(opIdx), range: self.project.opRanges.get(opIdx))
+		var lowered = loweredHoldCall(self.module.getOp(opIdx), range: self.project.opRanges.get(opIdx))
 		try self.module.ops.set(opIdx, value: lowered) otherwise panic("HoldResolver.lowerEntry: ops.set OOB at {opIdx}")
 
 		if not isEnd 'aMarker'

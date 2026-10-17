@@ -2354,7 +2354,7 @@ typealias BoxHolder = Holder with IntBox
 function main() returns ExitCode
 	var h = BoxHolder.hold(IntBox.create(7))
 	h.item = IntBox.create(8)
-	let q = h.item
+	view q = h.item
 	print("{q.value}\n")
 	return q.value - 8
 end 'main'
@@ -2390,7 +2390,7 @@ typealias LabelBox = Box with Label
 function main() returns ExitCode
 	var b = LabelBox.create(Label.create("{9}", n: 3))
 	b.value = Label.create("{8}", n: 4)
-	let q = b.value
+	view q = b.value
 	print("{q.text} {q.n}\n")
 	return q.n - 4
 end 'main'
@@ -2532,7 +2532,7 @@ function main() returns ExitCode
 	var a = Nums.create()
 	a.push(4)
 	a.push(5)
-	let p = Payload.list(a)
+	view p = Payload.list(a)
 	match p 'k'
 		empty then print("none\n")
 		list(xs) then print("n={xs.count()} first={try xs.get(0) otherwise 0}\n")

@@ -6,10 +6,70 @@ module typealias WitnessSlotKey = int(0 to u64.max)
 typealias WitnessImplsMemo = Map with (WitnessSlotKey, CallLandingBodies)
 typealias FunctionValueBodiesMemo = Map with (ByteArray, CallLandingBodies)
 typealias InstanceRecordMemo = Map with (GenericInstanceId, bool)
-typealias FunctionRefNameMap = Map with (ValueId, ByteArray)
+typealias FunctionRefNameMap = Map with (ValueId, readonly ByteArray)
 typealias FunctionRefNamesByFunc = Map with (ElementIndex, FunctionRefNameMap)
 
 let WitnessSlotKeyShift = 16 as WitnessSlotKey
+
+module typealias CapabilityStrength = int(0 to 2)
+
+module function paramStrength(capability ParamCapability) returns CapabilityStrength
+	return match capability 'capability'
+		lent gives 0
+		keep gives 1
+		sole gives 2
+	end 'capability'
+end 'paramStrength'
+
+module function resultStrength(capability ResultCapability) returns CapabilityStrength
+	return match capability 'capability'
+		unqualified gives 0
+		readonly gives 1
+		sole gives 2
+	end 'capability'
+end 'resultStrength'
+
+function declaredPositionsOf(capabilities ParamCapabilityArray, firstPosition ParamCount, atLeast ParamCapability) returns ParamPositionMask
+	var declared = NoParamPositions
+
+	for (iter, capability) in capabilities.withIterator() 'eachParameter'
+		if paramStrength(capability) >= paramStrength(atLeast) 'declaresIt'
+			declared = maskWithParam(declared, param: firstPosition + (iter.index() as ParamCount))
+		end 'declaresIt'
+	end 'eachParameter'
+
+	return declared
+end 'declaredPositionsOf'
+
+module union LandingTarget
+	functionValue(callee ValueId)
+	requirement(methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex)
+end 'LandingTarget'
+
+module function landingTargetOf(op MaxonOp) returns LandingTarget
+	return match op 'landing'
+		indirectCall(_, callee, _, _) gives LandingTarget.functionValue(callee)
+		witnessDispatch(_, _, _, _, methodIndex, interfaceDeclIndex, _, _) gives LandingTarget.requirement(methodIndex, interfaceDeclIndex: interfaceDeclIndex)
+		witnessTryDispatch(_, _, _, _, _, methodIndex, interfaceDeclIndex, _) gives LandingTarget.requirement(methodIndex, interfaceDeclIndex: interfaceDeclIndex)
+		default panic("landingTargetOf: handed an op that is neither an indirect call nor a witness dispatch")
+	end 'landing'
+end 'landingTargetOf'
+
+module function requirementFirstPosition(method InterfaceMethodSig) returns ParamCount
+	return 0 as ParamCount if method.isStatic else WitnessReceiverArgCount
+end 'requirementFirstPosition'
+
+module function firstKeptButUndeclared(kept ParamPositionMask, capabilities ParamCapabilityArray, firstPosition ParamCount) returns ParamCount throws AbsentError
+	let declared = declaredPositionsOf(capabilities, firstPosition: firstPosition, atLeast: ParamCapability.keep)
+
+	for position in firstPosition upto (capabilities.count() as ParamCount) + firstPosition 'eachParameter'
+		if maskHasParam(kept, param: position) and not maskHasParam(declared, param: position) 'keptUndeclared'
+			return position
+		end 'keptUndeclared'
+	end 'eachParameter'
+
+	throw AbsentError.absent
+end 'firstKeptButUndeclared'
 
 module function witnessSlotKeyOf(interfaceDeclIndex ElementIndex, methodIndex WitnessMethodIndex) returns WitnessSlotKey
 	return ((interfaceDeclIndex as WitnessSlotKey) shl WitnessSlotKeyShift) or (methodIndex as WitnessSlotKey)
@@ -293,11 +353,65 @@ module type CallDependencies
 	end 'note'
 end 'CallDependencies'
 
+module union LandingKeeps
+	fromBodies
+	declared(kept ParamPositionMask, consumed ParamPositionMask, let paramNames NameRoster, firstPosition ParamCount, result ResultCapability)
+
+	module function isDeclared() returns bool
+		return match self 'keeps'
+			fromBodies gives false
+			declared gives true
+		end 'keeps'
+	end 'isDeclared'
+
+	module function declaredResult() returns ResultCapability
+		return match self 'keeps'
+			fromBodies gives ResultCapability.unqualified
+			declared(_, _, _, _, result) gives result
+		end 'keeps'
+	end 'declaredResult'
+
+	module function keptOr(fromBodies ParamPositionMask) returns ParamPositionMask
+		return match self 'keeps'
+			fromBodies gives fromBodies
+			declared(kept, _, _, _, _) gives kept
+		end 'keeps'
+	end 'keptOr'
+
+	module function declaredParameterAt(position ParamCount) returns ArgumentParameter
+		return match self 'keeps'
+			fromBodies panic("LandingKeeps.declaredParameterAt: a landing judged by its bodies declares no parameter names")
+			declared(_, _, names, firstPosition, _) gives declaredNameAt(names, firstPosition: firstPosition, position: position)
+		end 'keeps'
+	end 'declaredParameterAt'
+
+	module function consumes(position ParamCount) returns bool
+		return match self 'keeps'
+			fromBodies gives false
+			declared(_, consumed, _, _, _) gives maskHasParam(consumed, param: position)
+		end 'keeps'
+	end 'consumes'
+end 'LandingKeeps'
+
+function declaredNameAt(names NameRoster, firstPosition ParamCount, position ParamCount) returns ArgumentParameter
+	if position < firstPosition or position - firstPosition >= names.count() as ParamCount 'namesNothing'
+		return ArgumentParameter.unnamed
+	end 'namesNothing'
+
+	let name = try names.get((position - firstPosition) as ElementIndex) otherwise panic("declaredNameAt: names.get OOB at {position - firstPosition} below the count")
+
+	if name.isEmpty() 'unnamedInTheBoundary'
+		return ArgumentParameter.unnamed
+	end 'unnamedInTheBoundary'
+
+	return ArgumentParameter.named(name)
+end 'declaredNameAt'
+
 module type CallSummaryIndex
 	var project as Project
 	var module as MaxonModule
 	var signatures as ProgramSignatures
-	var funcIndexByName as FuncIndexByName
+	let funcIndexByName as FuncIndexByName
 	export var sites as CallSites
 	var conformers as ConformersByInterface
 	var witnessSlots as WitnessSlotsByDeclIndex
@@ -357,6 +471,36 @@ module type CallSummaryIndex
 		return witnessSlotAt(self.signatures, interfaces: self.signatures.interfaceMap(), witnessSlots: self.witnessSlots, interfaceDeclIndex: interfaceDeclIndex, methodIndex: methodIndex)
 	end 'witnessSlotOf'
 
+	module function landingKeepsOf(func IrFunction, op MaxonOp) returns LandingKeeps
+		return match landingTargetOf(op) 'target'
+			functionValue(callee) gives self.functionValueKeeps(functionValueOwnTypeName(self.project, func: func, value: callee))
+			requirement(methodIndex, interfaceDeclIndex) gives self.requirementKeeps(methodIndex, interfaceDeclIndex: interfaceDeclIndex)
+		end 'target'
+	end 'landingKeepsOf'
+
+	function functionValueKeeps(typeName ByteArray) returns LandingKeeps
+		let registry = functionTypeRegistryOf(self.project)
+
+		if let aliasShape = try registry.aliasShapes.get(typeName) 'aDeclaredBoundary'
+			let alias = try self.project.functionTypeAliases.get(typeName) otherwise panic("CallSummaryIndex.functionValueKeeps: '{String.from(typeName)}' has a shape but no alias")
+			var names = NameRoster.create()
+
+			for param in alias.paramTypes 'eachParameter'
+				names.push(param.name)
+			end 'eachParameter'
+
+			return LandingKeeps.declared(declaredPositionsOf(aliasShape.paramCapabilities, firstPosition: 0, atLeast: ParamCapability.keep), consumed: declaredPositionsOf(aliasShape.paramCapabilities, firstPosition: 0, atLeast: ParamCapability.sole), paramNames: names, firstPosition: 0, result: aliasShape.returnCapability)
+		end 'aDeclaredBoundary'
+
+		return LandingKeeps.fromBodies
+	end 'functionValueKeeps'
+
+	function requirementKeeps(methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex) returns LandingKeeps
+		let method = self.witnessSlotOf(methodIndex, interfaceDeclIndex: interfaceDeclIndex).method
+		let firstPosition = requirementFirstPosition(method)
+		return LandingKeeps.declared(declaredPositionsOf(method.paramCapabilities, firstPosition: firstPosition, atLeast: ParamCapability.keep), consumed: declaredPositionsOf(method.paramCapabilities, firstPosition: firstPosition, atLeast: ParamCapability.sole), paramNames: method.paramNames, firstPosition: firstPosition, result: method.returnCapability)
+	end 'requirementKeeps'
+
 	module function witnessMethodName(methodIndex WitnessMethodIndex, interfaceDeclIndex ElementIndex) returns String
 		return String.from(self.witnessSlotOf(methodIndex, interfaceDeclIndex: interfaceDeclIndex).method.name)
 	end 'witnessMethodName'
@@ -368,7 +512,7 @@ module type CallSummaryIndex
 			return memoized
 		end 'asked'
 
-		let found = witnessDispatchImpls(self.project, signatures: self.signatures, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, funcIndexByName: self.funcIndexByName, conformers: self.conformers, witnessSlots: self.witnessSlots)
+		var found = witnessDispatchImpls(self.project, signatures: self.signatures, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, funcIndexByName: self.funcIndexByName, conformers: self.conformers, witnessSlots: self.witnessSlots)
 		self.witnessImpls.upsert(key, value: found)
 		return found
 	end 'implsOf'
@@ -408,7 +552,7 @@ module type CallSummaryIndex
 
 		var registry = functionTypeRegistryOf(self.project)
 		self.gatherFunctionRefBodies()
-		let calleeShape = requireFunctionShapeOf(registry, name: calleeType, side: "called")
+		view calleeShape = requireFunctionShapeOf(registry, name: calleeType, side: "called")
 		var found = CallLandingBodies.create()
 		found.unresolved = self.functionRefBodies.unresolved
 		found.unresolvedMayStore = self.functionRefBodies.unresolvedMayStore
@@ -454,7 +598,7 @@ module type CallSummaryIndex
 		var names = FunctionRefNameMap.create()
 
 		for opIdx in self.module.liveOpIndices(func) 'eachOp'
-			let op = try self.module.ops.get(opIdx) otherwise panic("CallSummaryIndex.functionRefTargetOf: opIdx {opIdx} from liveOpIndices is not in module.ops")
+			view op = try self.module.ops.get(opIdx) otherwise panic("CallSummaryIndex.functionRefTargetOf: opIdx {opIdx} from liveOpIndices is not in module.ops")
 
 			if maxonOpCalleeKind(op) == MaxonCalleeKind.functionValue 'aFunctionRef'
 				names.upsert(try maxonOpDefinedValue(op) otherwise panic("CallSummaryIndex.functionRefTargetOf: a `functionRef` defines its result"), value: maxonOpCalleeName(op).clone())
@@ -532,7 +676,7 @@ module type CallSummaryIndex
 			return memoized
 		end 'asked'
 
-		let holds = self.signatures.instanceArgsMayHoldARecord(gid)
+		let holds = self.signatures.instanceArgsMayHoldARecord(gid, textIsARecord: true)
 		self.instanceHoldsARecord.upsert(gid, value: holds)
 		return holds
 	end 'mayHoldARecord'
@@ -651,7 +795,7 @@ module type CallSiteCursor
 			return site
 		end 'described'
 
-		sites.fileRuntimeRow(self.resolution.runtimeShapeOf(func, callee: callee, args: args), isBookkeeping: ownershipBookkeepingCallee(callee), forksAnImage: forksImageData(callee), linksANode: linksANewNodeCallee(callee))
+		sites.fileRuntimeRow(self.resolution.runtimeShapeOf(func, callee: callee, args: args), isBookkeeping: ownershipBookkeepingCallee(callee), linksANode: linksANewNodeCallee(callee))
 		return site
 	end 'nextCallSite'
 

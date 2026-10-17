@@ -154,7 +154,7 @@ function requireGrantedEnumMemberMatches(project Project, functionsByName Functi
 	// installs, which `bakeFuncAbs64Relocs` reports outright. A LOUD failure is the safe direction, and it is
 	// also the only one available: with no declaration there is no position to anchor a diagnostic on.
 	if let implFunc = try functionsByName.funcNamed(qualifiedName) 'declared'
-		let implSig = conformanceImplSignature(project, name: qualifiedName)
+		view implSig = conformanceImplSignature(project, name: qualifiedName)
 		let expected = formatInterfaceMethodSignature(method, signatures: signatures)
 
 		if project.overloadSets.contains(qualifiedName) 'overloaded'
@@ -249,7 +249,7 @@ function checkAssociatedTypeAbiAgreement(project Project, module MaxonModule, si
 		let written = dispatchedAssociatedNamesOf(project.interfaces, dispatched: dispatched, iface: iface)
 
 		for position in 0 upto iface.associatedTypeNames.count() 'eachAssociatedType'
-			let name = try iface.associatedTypeNames.get(position) otherwise panic("checkAssociatedTypeAbiAgreement: associatedTypeNames.get OOB at {position} below count {iface.associatedTypeNames.count()}")
+			view name = try iface.associatedTypeNames.get(position) otherwise panic("checkAssociatedTypeAbiAgreement: associatedTypeNames.get OOB at {position} below count {iface.associatedTypeNames.count()}")
 			checkOneAssociatedPosition(project, signatures: signatures, written: written, iface: iface, name: name, position: position)
 		end 'eachAssociatedType'
 	end 'eachInterface'
@@ -558,7 +558,7 @@ end 'unclaimedAssociatedPosition'
 // one map probe per conformer of one interface; the walk itself is the conformance list, the same one
 // `associatedAbiBindingOf` folds, and it runs only for a position some use site actually holds.
 function checkHeldAssociatedTypeBindings(project Project, signatures ProgramSignatures, iface IrInterface, name ByteArray, position ElementIndex, heldAt ByteArray)
-	let declared = declaredConformanceIndex(project)
+	view declared = declaredConformanceIndex(project)
 
 	for declIndex in 0 upto project.conformances.count() 'eachDecl'
 		checkOneConformersHeldBinding(project, signatures: signatures, declared: declared, iface: iface, name: name, conformance: try project.conformances.get(declIndex) otherwise panic("checkHeldAssociatedTypeBindings: declIndex {declIndex} is below project.conformances.count()"), position: position, heldAt: heldAt)
@@ -603,7 +603,7 @@ function checkOneHeldBinding(project Project, signatures ProgramSignatures, decl
 		return
 	end 'widensIntoTheHolding'
 
-	let shown = signatures.displaySpellingOfDeclaredName(binding)
+	view shown = signatures.displaySpellingOfDeclaredName(binding)
 	reportPositioned(project, code: ErrorCode.heldAssociatedTypeBindingNotConforming, message: "'{String.from(conformer.typeName)}' binds '{String.from(iface.name)}'s associated type '{String.from(name)}' to '{String.from(shown)}', and this program holds '{String.from(name)}' at the interface type '{String.from(heldAt)}' — every value of a held associated type is widened into that existential, so every conformer's binding must conform to it, and '{String.from(shown)}' does not implement '{String.from(heldAt)}'. Declare the conformance, or hold the associated type at an interface every conformer implements", line: conformer.nameLine, column: conformer.nameColumn, filePath: conformer.filePath)
 end 'checkOneHeldBinding'
 
@@ -762,7 +762,7 @@ end 'cacheReadDeclaredConformanceMap'
 // because *"does this type argument satisfy the base's `where` clause"* is one question and a
 // second copy of it would be free to answer the literal differently from the alias.
 export function checkWhereConstraints(project Project, signatures ProgramSignatures)
-	let aliasSites = signatures.instantiationSites()
+	view aliasSites = signatures.instantiationSites()
 
 	// ⭐ **A THIRD PROVENANCE: a literal written at FILE SCOPE.** `var m = [b"if": Info.create(…)]` interns a
 	// `Map with (K, V)` from its first pair exactly as a body's literal does, but the constant evaluator is a
@@ -770,7 +770,7 @@ export function checkWhereConstraints(project Project, signatures ProgramSignatu
 	// (`ProgramSignatures.constInferredInstantiationSites`). Without this list a file-scope literal keyed on a
 	// type implementing NEITHER of `Map`'s constraints was admitted in silence, which is the identical hole
 	// `project.inferredInstantiationSites` was added to close one position over.
-	let constSites = signatures.constInferredInstantiationSites()
+	view constSites = signatures.constInferredInstantiationSites()
 
 	if aliasSites.count() == 0 and project.inferredInstantiationSites.count() == 0 and constSites.count() == 0 'noSites'
 		return
@@ -784,7 +784,7 @@ export function checkWhereConstraints(project Project, signatures ProgramSignatu
 		return
 	end 'malformedProject'
 
-	let declared = declaredConformanceIndex(project)
+	view declared = declaredConformanceIndex(project)
 
 	// The DECLARED sites first, so a program whose alias and whose literal both name an inadmissible argument
 	// is reported against the declaration the author wrote before the one the compiler inferred.
@@ -830,7 +830,7 @@ export function checkLiteralInitConformance(project Project)
 		return
 	end 'malformedProject'
 
-	let declared = declaredConformanceIndex(project)
+	view declared = declaredConformanceIndex(project)
 
 	for siteIndex in 0 upto project.literalInitSites.count() 'eachSite'
 		let site = try project.literalInitSites.get(siteIndex) otherwise panic("checkLiteralInitConformance: siteIndex {siteIndex} is below project.literalInitSites.count()")
@@ -952,7 +952,7 @@ function requireWrittenBindingMatchesConformers(project Project, signatures Prog
 		return
 	end 'restatesTheSettledBinding'
 
-	let written = signatures.instanceArgDisplayName(site.gid, position: position)
+	view written = signatures.instanceArgDisplayName(site.gid, position: position)
 
 	let name = try iface.associatedTypeNames.get(position) otherwise panic("requireWrittenBindingMatchesConformers: associatedTypeNames.get OOB at {position} below count {iface.associatedTypeNames.count()} — the caller's loop bounds this position by that same list")
 	reportPositioned(project, code: ErrorCode.interfaceInstantiationBindingDisagreement, message: "this use of '{String.from(iface.name)}' binds its associated type '{String.from(name)}' to '{signatures.aliasIdentityDisplay(written)}', but '{String.from(conformer.typeName)}' binds it to '{String.from(binding)}' — an interface this program DISPATCHES through has exactly one binding per associated type (E3119's rule), so a use site does not choose one, it states the one the conformances already settled. Write the binding the conformers declare, or give the two readings different interfaces", line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
@@ -961,7 +961,7 @@ end 'requireWrittenBindingMatchesConformers'
 // Validate one STRUCT instantiation's every `where` constraint. A base with no constraints (the
 // whole non-generic-witness corpus) iterates zero times.
 function checkStructInstantiationConstraints(project Project, signatures ProgramSignatures, declared DeclaredConformanceMap, site GenericInstantiationSite, baseName ByteArray)
-	let constraints = signatures.structWhereConstraints(baseName)
+	view constraints = signatures.structWhereConstraints(baseName)
 
 	for i in 0 upto constraints.count() 'eachConstraint'
 		let constraint = try constraints.get(i) otherwise panic("checkStructInstantiationConstraints: whereConstraints.get OOB at {i}")
@@ -1010,14 +1010,14 @@ function checkConstraintAssociatedBindings(project Project, signatures ProgramSi
 	end 'aParametricInstantiation'
 
 	for position in 0 upto constraint.associatedBindings.count() 'eachBoundPosition'
-		let claimed = substitutedConstraintBinding(signatures, gid: site.gid, baseName: baseName, binding: try constraint.associatedBindings.get(position) otherwise panic("checkConstraintAssociatedBindings: associatedBindings.get OOB at {position} below count {constraint.associatedBindings.count()}"))
-		let supplied = try suppliedConstraintBinding(signatures, conformances: project.conformances, gid: site.gid, constraint: constraint, position: position) otherwise continue
+		view claimed = substitutedConstraintBinding(signatures, gid: site.gid, baseName: baseName, binding: try constraint.associatedBindings.get(position) otherwise panic("checkConstraintAssociatedBindings: associatedBindings.get OOB at {position} below count {constraint.associatedBindings.count()}"))
+		view supplied = try suppliedConstraintBinding(signatures, conformances: project.conformances, gid: site.gid, constraint: constraint, position: position) otherwise continue
 
 		if claimed.equals(supplied) 'theArgumentKeepsTheClaim'
 			continue
 		end 'theArgumentKeepsTheClaim'
 
-		reportPositioned(project, code: ErrorCode.semanticWhereConstraintBindingDisagreement, message: "'{String.from(baseName)}' constrains type parameter '{String.from(constrainedTypeParamName(signatures, baseName: baseName, position: constraint.typeParamIndex as FieldIndex))}' to '{String.from(constraint.interfaceName)} with {signatures.aliasIdentityDisplay(claimed)}', but '{signatures.aliasIdentityDisplay(signatures.instanceArgDisplayName(site.gid, position: constraint.typeParamIndex))}' binds '{String.from(constraint.interfaceName)}'s associated type '{String.from(associatedTypeNameAt(project.interfaces, interfaceName: constraint.interfaceName, position: position))}' to '{signatures.aliasIdentityDisplay(supplied)}' — a `where` constraint's binding is what types every dispatch through that parameter inside the shared body, which is compiled ONCE, so a conformer binding it otherwise would have its bits read as the claimed type. Bind the constraint to what the conformer declares, or supply an argument whose conformance binds what the constraint states", line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
+		reportPositioned(project, code: ErrorCode.semanticWhereConstraintBindingDisagreement, message: "'{String.from(baseName)}' constrains type parameter '{String.from(constrainedTypeParamName(signatures, baseName: baseName, position: constraint.typeParamIndex as FieldIndex))}' to '{String.from(constraint.interfaceName)} with {signatures.aliasIdentityDisplay(claimed)}', but '{signatures.aliasIdentityDisplay(signatures.instanceArgDisplayName(site.gid, position: constraint.typeParamIndex))}' binds '{String.from(constraint.interfaceName)}'s associated type '{String.from(associatedTypeNameAt(project.interfaces, interfaceName: constraint.interfaceName, position: position))}' to '{signatures.aliasIdentityDisplay(supplied.clone())}' — a `where` constraint's binding is what types every dispatch through that parameter inside the shared body, which is compiled ONCE, so a conformer binding it otherwise would have its bits read as the claimed type. Bind the constraint to what the conformer declares, or supply an argument whose conformance binds what the constraint states", line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
 		return
 	end 'eachBoundPosition'
 end 'checkConstraintAssociatedBindings'
@@ -1069,7 +1069,7 @@ end 'substitutedBindingIn'
 function suppliedConstraintBinding(signatures ProgramSignatures, conformances ConformanceDeclArray, gid GenericInstanceId, constraint WhereConstraint, position ElementIndex) returns ByteArray throws MapError
 	let conformer = signatures.conformerTypeArgName(gid, position: constraint.typeParamIndex).toByteArray()
 	let (decl, binding) = try conformanceDeclBinding(conformances, typeName: conformer, interfaceName: constraint.interfaceName, position: position)
-	let conformerParams = signatures.structTypeParamsOf(conformer)
+	view conformerParams = signatures.structTypeParamsOf(conformer)
 
 	if conformerParams.isEmpty() 'aNonGenericConformerBindsAConcreteType'
 		return signatures.declaredIdentityOfSpelling(binding, declFilePath: decl.filePath)
@@ -1132,7 +1132,7 @@ end 'instantiationMeetsConstraint'
 // SOURCE-spelling half (`instanceArgDisplayName`, which keeps `IntWrapper` where the comparison
 // uses the canonical name) is exactly the half that would drift.
 function reportUnsatisfiedConstraint(project Project, signatures ProgramSignatures, site GenericInstantiationSite, constraint WhereConstraint, baseName ByteArray)
-	let sourceType = signatures.instanceArgDisplayName(site.gid, position: constraint.typeParamIndex)
+	view sourceType = signatures.instanceArgDisplayName(site.gid, position: constraint.typeParamIndex)
 	reportPositioned(project, code: ErrorCode.semanticWhereConstraintViolation, message: "Type '{signatures.aliasIdentityDisplay(sourceType)}' does not satisfy constraint '{String.from(constraint.interfaceName)}' required by type parameter '{String.from(constrainedTypeParamName(signatures, baseName: baseName, position: constraint.typeParamIndex as FieldIndex))}' of '{String.from(baseName)}'", line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
 end 'reportUnsatisfiedConstraint'
 
@@ -1177,7 +1177,7 @@ end 'typeConformsTo'
 // the interface and the offending type argument because those are the two nouns the refusal quotes.
 export union ExtensionConstraintOnReceiver
 	met
-	unmet(interfaceName ByteArray, argDisplayName ByteArray)
+	unmet(let interfaceName ByteArray, let argDisplayName ByteArray)
 end 'ExtensionConstraintOnReceiver'
 
 // ⭐ **DOES A CONCRETE GENERIC INSTANCE SATISFY A CONDITIONAL TYPE EXTENSION'S CLAUSE?** — asked at the two
@@ -1488,13 +1488,14 @@ end 'copyDeclaredInterfaces'
 // conformance declaration answers false — the E3017 case.
 //
 // ⚠ **THE `extends` WALK IS WHY IT TAKES THE INTERFACE REGISTRY**, and the walk itself is
-// `IrInterface.declaredInterfacesReach` — the ONE list-level home, shared with
-// `ProgramSignatures.conformersOf`, which decides the same question for interface EXTENSIONS. What is left
+// `IrInterface.declaredInterfacesReach` — the ONE list-level home, over the same `extends` walk
+// `DeclaredConformerIndex` groups interface-EXTENSION conformers by. What is left
 // here is the only thing this door adds: the INDEX lookup, and the rule that a type with no row in it
-// declares nothing. `declaredInterfacesReach` carries the measurement.
+// declares nothing.
 //
-// ⭐ Exported for `conformersOf`, which reaches it with `ProgramSignatures.sweptConformanceIndex()` — the
-// same `type -> declared interfaces` relation this is handed, built from `StructLayout.conformsTo`.
+// ⭐ Exported for `ProgramSignatures.typeImplementsInterface` and the parser, which reach it with
+// `ProgramSignatures.sweptConformanceIndex()` — the `type -> declared interfaces` relation built
+// from `StructLayout.conformsTo`.
 export function typeDeclaresInterface(declared DeclaredConformanceMap, interfaces IrInterfaceMap, typeName ByteArray, interfaceName ByteArray) returns bool
 	if let declaredInterfaces = try declared.get(typeName) 'hasDecl'
 		return declaredInterfacesReach(interfaces, declaredNames: declaredInterfaces, wanted: interfaceName)
@@ -1519,7 +1520,7 @@ function checkOneConformance(project Project, functionsByName FunctionNameIndex,
 	//
 	// Neither declares `uses` parameters, which is also what a non-generic type's layout already holds — so
 	// the empty list is not a fallback here, it is the answer.
-	let typeParamNames = conformerTypeParamNames(project, conformance: conformance)
+	var typeParamNames = conformerTypeParamNames(project, conformance: conformance)
 
 	for i in 0 upto conformance.interfaces.count() 'eachIface'
 		let entry = try conformance.interfaces.get(i) otherwise panic("checkOneConformance: interfaces.get OOB at {i}")
@@ -1861,7 +1862,7 @@ function substituteAssociatedTypes(method InterfaceMethodSig, under RequirementS
 		paramTypeNames.push(boundTypeName(try method.paramTypeNames.get(i) otherwise panic("substituteAssociatedTypes: paramTypeNames.get OOB at {i}"), under: under))
 	end 'eachParam'
 
-	return InterfaceMethodSig.create(method.name, paramNames: method.paramNames, paramTypeNames: paramTypeNames, returnTypeName: boundTypeName(method.returnTypeName, under: under), isStatic: method.isStatic, throwsClause: substituteThrowsClause(method.throwsClause, under: under), paramIsBuffer: method.paramIsBuffer, nameLine: method.nameLine, nameColumn: method.nameColumn, written: method.written)
+	return InterfaceMethodSig.create(method.name, paramNames: method.paramNames, paramTypeNames: paramTypeNames, returnTypeName: boundTypeName(method.returnTypeName, under: under), isStatic: method.isStatic, throwsClause: substituteThrowsClause(method.throwsClause, under: under), paramIsBuffer: method.paramIsBuffer, paramCapabilities: method.paramCapabilities, returnCapability: method.returnCapability, nameLine: method.nameLine, nameColumn: method.nameColumn, written: method.written)
 end 'substituteAssociatedTypes'
 
 // What ONE written type name in a requirement denotes under this conformance's bindings: the argument bound
@@ -1957,7 +1958,7 @@ function checkOneMethod(project Project, functionsByName FunctionNameIndex, conf
 	end 'overloaded'
 
 	if let implFunc = try functionsByName.funcNamed(qualifiedName) 'present'
-		let implSig = conformanceImplSignature(project, name: qualifiedName)
+		view implSig = conformanceImplSignature(project, name: qualifiedName)
 
 		if not signatureMatches(project, method: method, interfaceDeclFilePath: collectedMethod.sourceDeclFilePath, conformingType: conformance.typeName, implFunc: implFunc, implSig: implSig, typeParamNames: typeParamNames, signatures: signatures) 'mismatch'
 			wrongSignature.push("{formatActualSignature(project, methodName: method.name, conformingType: conformance.typeName, implFunc: implFunc, implSig: implSig, typeParamNames: typeParamNames, signatures: signatures)} (expected {formatInterfaceMethodSignature(collectedMethod.displayMethod, signatures: signatures)})")
@@ -2030,7 +2031,7 @@ function checkOverloadedMembers(project Project, functionsByName FunctionNameInd
 		return
 	end 'notExactlyOne'
 
-	let selected = try matched.get(0) otherwise panic("checkOverloadedMembers: matched.count() is 1 but get(0) failed")
+	view selected = try matched.get(0) otherwise panic("checkOverloadedMembers: matched.count() is 1 but get(0) failed")
 	acceptConformingMember(project, functionsByName: functionsByName, conformance: conformance, collectedMethod: collectedMethod, selected: selected, implFunc: conformanceImplFunction(functionsByName, name: selected), typeParamNames: typeParamNames, signatures: signatures)
 end 'checkOverloadedMembers'
 
@@ -2486,8 +2487,8 @@ function signatureMatches(project Project, method InterfaceMethodSig, interfaceD
 		end 'requirementTakesAnyBuffer'
 
 		let written = try method.paramTypeNames.get(i) otherwise panic("signatureMatches: paramTypeNames.get OOB at {i}")
-		let expected = substituteSelf(signatures.declaredIdentityOfSpelling(written, declFilePath: interfaceDeclFilePath), conformingType: conformingType)
-		let actual = renderDeclaredTypeName(implType, declarationName: conformingType, typeParamNames: typeParamNames, typeNames: project.typeNames, signatures: signatures)
+		view expected = substituteSelf(signatures.declaredIdentityOfSpelling(written, declFilePath: interfaceDeclFilePath), conformingType: conformingType)
+		view actual = renderDeclaredTypeName(implType, declarationName: conformingType, typeParamNames: typeParamNames, typeNames: project.typeNames, signatures: signatures)
 
 		if expected.equals(actual) or aliasDecaysIntoPrimitive(project, expected: expected, actual: actual, readerFilePath: implFunc.sourceFilePath) 'oneSpelling'
 			continue
@@ -2512,8 +2513,8 @@ function signatureMatches(project Project, method InterfaceMethodSig, interfaceD
 		return false
 	end 'eachParam'
 
-	let expectedReturn = substituteSelf(signatures.declaredIdentityOfSpelling(method.returnTypeName, declFilePath: interfaceDeclFilePath), conformingType: conformingType)
-	let actualReturn = renderReturnType(project, returnType: implFunc.maxonReturnType, conformingType: conformingType, typeParamNames: typeParamNames, signatures: signatures)
+	view expectedReturn = substituteSelf(signatures.declaredIdentityOfSpelling(method.returnTypeName, declFilePath: interfaceDeclFilePath), conformingType: conformingType)
+	view actualReturn = renderReturnType(project, returnType: implFunc.maxonReturnType, conformingType: conformingType, typeParamNames: typeParamNames, signatures: signatures)
 	return expectedReturn.equals(actualReturn) or aliasDecaysIntoPrimitive(project, expected: expectedReturn, actual: actualReturn, readerFilePath: implFunc.sourceFilePath)
 end 'signatureMatches'
 

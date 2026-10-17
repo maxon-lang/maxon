@@ -100,8 +100,8 @@ export function buildBackend(stdModule StdModule, target Target, globalData Glob
 	// the backends. So an index taken here describes the array all three backends will walk — which is what
 	// lets their per-callee maps take the INDEX as an argument instead of the module, and stop resting on a
 	// uniqueness guarantee none of them stated.
-	let survivors = try eliminateDeadFunctions(stdModule, globalData: globalData, project: project)
-	let funcNames = survivors.funcNames
+	var survivors = try eliminateDeadFunctions(stdModule, globalData: globalData, project: project)
+	var funcNames = survivors.funcNames
 	registerReachedRuntimeAbortMessages(stdModule, globalData: globalData, survivors: funcNames)
 	recordPhase(project, phase: CompilePhase.deadFunctions, probe: dfeProbe)
 
@@ -226,7 +226,7 @@ end 'programStartedGlobals'
 // is the first to see; concat resolves those labels against the same table.
 module function encodeOnTheBackendPool(stdModule StdModule, target Target, globalData GlobalDataTable, project Project, usage RuntimeUsage, funcNames FunctionNameIndex, chunks FunctionCodeChunkArray) returns TargetModule throws CompileError
 	let regAllocProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.regalloc)
-	let targetModule = try lowerAndAllocateOnAWorkerPool(stdModule, target: target, globalData: globalData, project: project, funcNames: funcNames, usesGt: usage.usesGt, chunks: chunks)
+	var targetModule = try lowerAndAllocateOnAWorkerPool(stdModule, target: target, globalData: globalData, project: project, funcNames: funcNames, usesGt: usage.usesGt, chunks: chunks)
 	recordPhase(project, phase: CompilePhase.regalloc, probe: regAllocProbe)
 
 	let releaseProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.releaseIr)
@@ -303,7 +303,7 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	var prependedChunks = FunctionCodeChunkArray.create()
 
 	for position in 0 upto targetModule.funcCount() - userFunctionCount 'eachPrependedFunc'
-		let func = targetModule.getFunc(position)
+		var func = targetModule.getFunc(position)
 		let encoding = FunctionEncodingFacts.of(func, blocks: targetModule.blocks, spans: targetModule.spans, runtimeTier: project.libraryFacts.runtimeTier, spanTable: project.debugSpanTable)
 		var chunk = emitFunctionChunk(targetModule, func: func, frame: x64PrologueFrameOf(targetModule, func: func), encoding: encoding, usesGt: usage.usesGt, target: target)
 		attachInlineSites(chunk, func: func)
@@ -352,7 +352,7 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	releaseEncodedTargetModule(project, targetModule: targetModule)
 
 	let linkProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.link)
-	let codeResult = try concatX64FunctionChunks(targetModule, stdModule: stdModule, chunks: chunks, globalData: globalData, project: project, funcNames: funcNames)
+	var codeResult = try concatX64FunctionChunks(targetModule, stdModule: stdModule, chunks: chunks, globalData: globalData, project: project, funcNames: funcNames)
 	recordPhase(project, phase: CompilePhase.link, probe: linkProbe)
 
 	return codeResult

@@ -111,7 +111,7 @@ function main() returns ExitCode
 				entries.push(e)
 				i = i + 1
 		end 'fill'
-		let last = try entries.get(9) otherwise Entry.create(0, tag: Tag.number(0))
+		view last = try entries.get(9) otherwise Entry.create(0, tag: Tag.number(0))
 		match last.tag 'check'
 				number(n) then return n
 				text then return 0

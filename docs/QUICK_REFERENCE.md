@@ -175,13 +175,22 @@ var c = m.clone()       // deep copy -- c is independent
 c.x = 42                // m.x is still 99
 let frozen = c          // c moves into frozen, read-only all the way down
 // frozen.x = 1         // E3159: 'frozen' is read-only
+
+// view: a read-only name over data other names may still write
+view first = try points.get(0) otherwise panic("pushed")   // `let` here is E3188: points is a var
+points.push(Point.create(3, y: 4))
+print("{first.x}\n")    // reads through the view; first.x = 1 is E3159
 ```
 
 All variables must be used (E3012). The exact name `_` is a discard identifier -- it creates no binding and is exempt from unused checks. Names like `_x` are regular variables and must be used. Self-assignment (`x = x`) is an error (E3067). `_ =` requires a function call on the right-hand side (`_ = 42` is an error).
 
 **Assignment semantics:** A record is stored by reference: a record pushed into a container, stored in a field or passed to a call is shared, and a field write through one holder is visible through every other. `var b = a` and `let b = a` from a `var a` MOVE the record (reading `a` afterwards is E3102). Reassignment (`b = Point.create(...)`) rebinds without affecting the record `b` held. Use `a.clone()` for an independent deep copy (the type must be `Cloneable`). Primitives are always copied by value.
 
-**Read-only values:** `let` is read-only all the way down: a `let` binding, a `let` field, a `let` union payload, a module-level `let`, a `SharedValue` or registry read, a stored `Map` key or `Set` element, and an element of `Array with readonly T` / `Map with K, readonly V`. A write through one (a field store, a method that writes its receiver, an argument the callee writes) is E3159; binding one to a `var`, or storing it where something may write it, is E3078. `clone()` makes a mutable copy. A `for`, `if let` or `match` binding follows its source.
+**Read-only values:** `let` is read-only all the way down: a `let` binding, a `let` field, a `let` union payload, a module-level `let`, a `SharedValue` or registry read, a stored `Map` key or `Set` element, and an element of `Array with readonly T` / `Map with K, readonly V`. A write through one (a field store, a method that writes its receiver, an argument the callee writes) is E3159; binding one to a `var`, or storing it where something may write it, is E3078 — except a `let` of a fresh record at its last use, which the store consumes (judged per path: one arm of an `if`, `match` or ternary, or a branch that then returns). `clone()` makes a mutable copy. A `for`, `if let` or `match` binding follows its source.
+
+**What a `let` binds:** a fresh record, a read-only value, or a part of a parameter (as immutable as the caller's argument). A `let` of state something may still write — a field of a writable `self`, an element of a `var` container, a getter's result on a `var` — is E3188: use `view` to read it, `var` to write it, or `let` a `clone()`.
+
+**`view x = e`:** read-only through `x`, while other names may still write it. Writing through it is E3159; storing, keeping, returning or capturing it is E3078; sending it is E3138. Once a view of a `var`'s record exists, that record cannot be sent (E3138), published (E3174) or handed to a `sole` parameter (E3078) for the rest of the function, unless every field of its type is a `let`. `view` is contextual: it begins a binding only at a statement's start, or after `if` or `then`, followed by a name.
 
 **Auto-conformance:** The compiler auto-generates `Cloneable` and `Equatable` conformance for structs whose fields are all Cloneable/Equatable. Primitives, `String`, and `Array` are built-in Cloneable and Equatable types. Use `.clone()` to create independent copies.
 
@@ -297,7 +306,7 @@ let addX = function(n Score) gives n + x     // single expression body
 let double = function(n Score) gives n * 2
 ```
 
-A closure owns what it captures. A captured scalar is copied when the closure is created; a captured local holding a record, `String`, array or promise is **moved** into the closure, so reading it afterwards is E3102 (clone it first if you still need it); a captured parameter, `self` or field is shared. A closure can be returned, stored anywhere, and passed to `async`; storing one into a record it captures is E3183.
+A closure owns what it captures. A captured scalar is copied when the closure is created; a captured local holding a record, `String`, array or promise is **moved** into the closure, so reading it afterwards is E3102 (clone it first if you still need it); a captured parameter, `self` or field is shared. A closure can be returned, stored anywhere, and passed to `async`; storing one into a record it captures is E3183. An escaping closure (stored or returned) keeps every record it captures, so handing a read-only value to a function whose parameter it captures is E3078; a closure that only runs where it is made writes what it writes of a captured parameter (E3159 for a read-only argument).
 
 Closure parameters are checked for unused (E3012). Use `_` to discard: `function(_ Integer) gives 42`
 
@@ -334,6 +343,20 @@ let n = f(21)                             // 42
 Function-typed values can also live in collections — e.g.
 `typealias HandlerMap = Map with (String, UnaryOp)` lets the caller dispatch by
 key.
+
+**Capability qualifiers** state what a body the caller cannot see does with its values. They are written only
+on a function-type alias, an interface requirement, or a generic function's result (elsewhere E2076):
+
+```maxon
+typealias Sink = function(b keep Box)        // keeps its argument where something may write it
+typealias Take = function(b sole Box)        // consumes its argument: pass a fresh value or a name at its last use
+typealias Make = function() returns sole Box // the result is fresh
+interface Source
+	function current() returns readonly Box  // the result is read-only
+end 'Source'
+```
+
+A function value, conformer or generic body that does more than its boundary declares is E3189.
 
 ## Visibility
 

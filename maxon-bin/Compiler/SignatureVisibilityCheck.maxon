@@ -39,7 +39,7 @@ end 'SignatureSubject'
 
 union EnclosingType
 	none
-	named(typeName ByteArray)
+	named(let typeName ByteArray)
 end 'EnclosingType'
 
 function subjectDisplay(signatures ProgramSignatures, subject SignatureSubject) returns String
@@ -52,7 +52,7 @@ end 'subjectDisplay'
 // Carried as a union and rendered only where a diagnostic is reported: the phrase is one String per
 // parameter of every audited signature, on a walk that reports nothing in nearly every compile.
 union SignaturePosition
-	parameter(name ByteArray)
+	parameter(let name ByteArray)
 	returnType
 	throwsClause
 end 'SignaturePosition'
@@ -95,7 +95,7 @@ end 'checkSignatureVisibility'
 // above cannot reach one. It is reached through the declaration site instead, at the tier the interface
 // itself was written with.
 function checkInterfaceRequirements(project Project, signatures ProgramSignatures)
-	let interfaces = signatures.interfaceMap()
+	view interfaces = signatures.interfaceMap()
 
 	for site in signatures.interfaceDeclarationSites() 'eachInterface'
 		if site.visibility == Visibility.file 'noTypeCanBeNarrowerThanAFilePrivateInterface'
@@ -170,7 +170,7 @@ function checkDeclaredSignature(project Project, signatures ProgramSignatures, f
 		return
 	end 'noDeclaredSignatureToWalk'
 
-	let sig = try project.funcSignatures.get(func.name) otherwise panic("checkSignatureVisibility: contains({String.from(func.name)}) is true on the line above but get failed")
+	view sig = try project.funcSignatures.get(func.name) otherwise panic("checkSignatureVisibility: contains({String.from(func.name)}) is true on the line above but get failed")
 	let subject = SignatureSubject.create(SignatureSpelling.callee, tier: tier, readerFilePath: func.sourceFilePath, nameLine: func.nameLine, nameColumn: func.nameColumn, enclosing: enclosingTypeOf(func.name), declaredName: func.name)
 
 	checkParameterTypes(project, signatures: signatures, subject: subject, sig: sig)

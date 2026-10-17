@@ -190,7 +190,7 @@ function main() returns ExitCode
 	a.push(4 as Num)
 	a.push(5 as Num)
 	a.push(6 as Num)
-	let b = NumArray.init(a.managed)
+	view b = NumArray.init(a.managed)
 	if b.count() != a.count() 'disagree'
 		return 1
 	end 'disagree'
@@ -231,7 +231,7 @@ function main() returns ExitCode
 	var built = NumArray.create()
 	built.push(20 as Num)
 	built.push(22 as Num)
-	let adopted = NumArray.init(built.managed)
+	view adopted = NumArray.init(built.managed)
 	let head = try adopted.get(0) otherwise return 1
 	let tail = try adopted.get(1) otherwise return 2
 	return (head + tail) as ExitCode
@@ -903,7 +903,7 @@ function main() returns ExitCode
 	var a = StrArray.create()
 	a.push("alpha")
 	a.push("beta")
-	let b = a.buffer()
+	view b = a.buffer()
 	print("{b.length()} {a.count()}")
 	return 0
 end 'main'

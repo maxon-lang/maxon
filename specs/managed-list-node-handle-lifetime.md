@@ -272,7 +272,7 @@ end 'appendTo'
 
 function main() returns ExitCode
 	var chain = IntChain.create()
-	let node = appendTo(chain, value: 55)
+	view node = appendTo(chain, value: 55)
 	return node.value()
 end 'main'
 ```
@@ -303,7 +303,7 @@ end 'appendTo'
 
 function main() returns ExitCode
 	var chain = IntChain.create()
-	let n = appendTo(chain, value: 7)
+	view n = appendTo(chain, value: 7)
 	chain.clear()
 	print("{n.value()}\n")
 	return 0
@@ -620,8 +620,8 @@ end 'Slot'
 
 function main() returns ExitCode
 	var chain = StrChain.create()
-	let n = chain.insertLast("a heap string long enough to be a real allocation")
-	let s = Slot.held(n)
+	view n = chain.insertLast("a heap string long enough to be a real allocation")
+	view s = Slot.held(n)
 	match s 'take'
 		held(node) then print("[{chain.remove(node)}]\n")
 		empty then return 1
@@ -673,7 +673,7 @@ typealias StrChain = __ManagedList with String
 
 function main() returns ExitCode
 	var chain = StrChain.create()
-	let a = chain.insertLast("the element that stays behind, on the heap")
+	view a = chain.insertLast("the element that stays behind, on the heap")
 	let spliced = chain.remove(chain.insertAfter(a, value: "an element spliced in and taken straight out"))
 	print("[{spliced}]\n")
 	let last = chain.remove(try chain.tail() otherwise 'empty'
@@ -735,9 +735,9 @@ end 'headOf'
 
 function main() returns ExitCode
 	var chain = StrChain.create()
-	let n1 = chain.insertLast("one, long enough to be a real heap allocation")
-	let n2 = chain.insertLast("two, long enough to be a real heap allocation")
-	let k = Keeper.create(n2)
+	var n1 = chain.insertLast("one, long enough to be a real heap allocation")
+	var n2 = chain.insertLast("two, long enough to be a real heap allocation")
+	view k = Keeper.create(n2)
 	chain.reinsertFirst(k.node)
 	print("field: {headOf(chain)} / {k.read()}\n")
 	chain.reinsertLast(k.held())
@@ -885,16 +885,16 @@ function main() returns ExitCode
 		print("{n.value()}\n")
 	end 'tailSpin'
 	var one = StrChain.create()
-	let solo = one.insertFirst("the only node there is, on the heap")
+	view solo = one.insertFirst("the only node there is, on the heap")
 	for _ in 0 upto 50 'nextSpin'
-		let n = try solo.next() otherwise 'atEnd'
+		view n = try solo.next() otherwise 'atEnd'
 			caught = caught + 1
 			continue
 		end 'atEnd'
 		print("{n.value()}\n")
 	end 'nextSpin'
 	for _ in 0 upto 50 'prevSpin'
-		let n = try solo.prev() otherwise 'atStart'
+		view n = try solo.prev() otherwise 'atStart'
 			caught = caught + 1
 			continue
 		end 'atStart'
@@ -927,8 +927,8 @@ typealias StrChain = __ManagedList with String
 function main() returns ExitCode
 	var a = StrChain.create()
 	var b = StrChain.create()
-	let n1 = a.insertLast("first element of chain a, long enough for the heap")
-	let n2 = a.insertLast("second element of chain a, long enough for the heap")
+	view n1 = a.insertLast("first element of chain a, long enough for the heap")
+	view n2 = a.insertLast("second element of chain a, long enough for the heap")
 	let got = b.remove(n1)
 	print("[{got}] a={a.count()} b={b.count()} n2={n2.value()}\n")
 	return 0
@@ -956,7 +956,7 @@ typealias StrChain = __ManagedList with String
 
 function main() returns ExitCode
 	var chain = StrChain.create()
-	let n = chain.insertLast("a heap string long enough to be a real allocation")
+	view n = chain.insertLast("a heap string long enough to be a real allocation")
 	chain.clear()
 	let got = chain.remove(n)
 	print("[{got}]\n")
@@ -989,7 +989,7 @@ typealias StrChain = __ManagedList with String
 
 function main() returns ExitCode
 	var chain = StrChain.create()
-	let n = chain.insertLast("a heap string long enough not to be inline")
+	view n = chain.insertLast("a heap string long enough not to be inline")
 	chain.detach(n)
 	print("{n.value()}\n")
 	print("{chain.count()}\n")
@@ -1089,8 +1089,8 @@ typealias StrChain = __ManagedList with String
 
 function main() returns ExitCode
 	var chain = StrChain.create()
-	let a = chain.insertLast("the only element, long enough to be a real heap allocation")
-	let h = try chain.head() otherwise 'empty'
+	view a = chain.insertLast("the only element, long enough to be a real heap allocation")
+	view h = try chain.head() otherwise 'empty'
 		return 1
 	end 'empty'
 	let got = chain.remove(a)
@@ -1121,15 +1121,15 @@ typealias StrChain = __ManagedList with String
 
 function main() returns ExitCode
 	var chain = StrChain.create()
-	let a = chain.insertLast("the only element, long enough to be a real heap allocation")
-	let h = try chain.head() otherwise 'empty'
+	view a = chain.insertLast("the only element, long enough to be a real heap allocation")
+	view h = try chain.head() otherwise 'empty'
 		return 1
 	end 'empty'
 	let got = chain.remove(a)
 	print("removed [{got}] count={chain.count()}\n")
 	chain.reinsertFirst(h)
 	print("relinked count={chain.count()}\n")
-	let back = try chain.head() otherwise 'empty'
+	view back = try chain.head() otherwise 'empty'
 		return 1
 	end 'empty'
 	print("the chain's own head reads [{back.value()}]\n")
@@ -1157,9 +1157,9 @@ typealias StrChain = __ManagedList with String
 
 function main() returns ExitCode
 	var chain = StrChain.create()
-	let a = chain.insertLast("")
+	view a = chain.insertLast("")
 	var s = ""
-	let b = chain.insertLast(s)
+	view b = chain.insertLast(s)
 	print("[{a.value()}][{b.value()}] {chain.count()}\n")
 	return 0
 end 'main'

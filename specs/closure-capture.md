@@ -2366,7 +2366,7 @@ type Counter
 end 'Counter'
 
 function main() returns ExitCode
-	let c = Counter.create()
+	var c = Counter.create()
 	let f = c.setter()
 	print("{f()} {c.n}\n")
 	return 0
@@ -3308,7 +3308,7 @@ error E3183: <fragment>:23:45: this closure captures 'self' and is stored into a
 ```
 
 <!-- test: closure-capture.error.a-closure-capturing-a-borrowed-field-stored-into-that-field -->
-A captured borrow of a field is held too: storing the closure into that field's record closes a cycle, which is refused as a write through the borrow as well.
+A captured borrow of a field is held too: storing the closure into the borrowed record closes a cycle, and the store writes through a read-only `let`; the write is refused first.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Thunk = function() returns Integer
@@ -3335,7 +3335,7 @@ type Counter
 
 	export function arm()
 		let held = self.inner
-		self.inner.read = function() gives held.n
+		held.read = function() gives held.n
 	end 'arm'
 end 'Counter'
 
@@ -3346,8 +3346,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:27:3: cannot write through 'self.inner': 'held' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
-error E3183: <fragment>:27:21: this closure captures 'held' and is stored into a record 'held' holds, so 'held' would hold the closure and the closure would hold 'held', and neither would ever be released. Store it somewhere 'held' does not reach, or capture what the closure needs instead of 'held' itself
+error E3159: <fragment>:27:3: cannot write through 'held': 'held' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
 ```
 
 <!-- test: closure-capture.a-closure-capturing-a-copy-stored-into-the-record-it-was-copied-from -->
@@ -3418,7 +3417,7 @@ type Counter
 	end 'create'
 
 	export function arm()
-		let borrowed = self.left
+		var borrowed = self.left
 		self.right.read = function() gives borrowed.n
 	end 'arm'
 end 'Counter'
@@ -3705,7 +3704,7 @@ type Panel
 	end 'create'
 
 	export function rewire()
-		let old = self.left
+		var old = self.left
 		self.left = Button.create(2)
 		self.left.onClick = function() gives old.n
 	end 'rewire'
@@ -3759,7 +3758,7 @@ type Pair
 
 	static function build() returns Self
 		var pair = Self{left: Inner.create(3), right: Outer.create(4)}
-		let borrowed = pair.left
+		var borrowed = pair.left
 		pair.right.read = function() gives borrowed.n
 		return pair
 	end 'build'
@@ -4100,4 +4099,271 @@ end 'main'
 ```
 ```maxoncstderr
 error E3159: <fragment>:26:27: cannot pass a `let` field of 'o', which is read-only, to a function that writes parameter 'i' (in bump$closure_0); pass a clone()
+```
+
+<!-- test: closure-capture.error.an-escaping-closure-that-writes-a-captured-parameter-keeps-it -->
+`arm` returns a closure that captures `b` and writes it, so the parameter outlives the call where something may write it, and the `let` read afterwards is refused at the call.
+
+```maxon
+typealias Count = int(0 to 1000)
+typealias Bump = function() returns Count
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+function zero(b Box) returns Count
+	b.n = 9
+	return 0
+end 'zero'
+
+function arm(b Box) returns Bump
+	return function() gives zero(b)
+end 'arm'
+
+function main() returns ExitCode
+	let b = Box.create(1)
+	let f = arm(b)
+	_ = f()
+	print("{b.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:24:10: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'arm', which keeps it where something may write it; pass a clone()
+```
+
+<!-- test: closure-capture.error.an-escaping-closure-that-only-reads-a-captured-parameter-keeps-it -->
+The closure stored in the module holder outlives `arm`, so it keeps every record it captures, though its body only reads `b`; handing it the `let` is refused at the call.
+
+```maxon
+typealias Count = int(0 to 1000)
+typealias Read = function() returns Count
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Slot
+	export var show as Read
+
+	static function create() returns Self
+		return Self{show: function() gives 0}
+	end 'create'
+end 'Slot'
+
+var slot = Slot.create()
+
+function arm(b Box)
+	slot.show = function() gives b.n
+end 'arm'
+
+function main() returns ExitCode
+	let b = Box.create(1)
+	arm(b)
+	print("{slot.show()} {b.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:29:2: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'arm', which keeps it where something may write it; pass a clone()
+```
+
+<!-- test: closure-capture.error.a-let-captured-by-an-escaping-closure-that-returns-it-is-refused -->
+The closure stored in the module holder hands back the record it captured, so `main` could write it through `x`; the escaping closure keeps `b`, and handing it the `let` is refused at the call.
+
+```maxon
+typealias Count = int(0 to 1000)
+typealias Get = function() returns Box
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Slot
+	export var get as Get
+
+	static function create() returns Self
+		return Self{get: function() gives Box.create(0)}
+	end 'create'
+end 'Slot'
+
+var slot = Slot.create()
+
+function arm(b Box)
+	slot.get = function() gives b
+end 'arm'
+
+function main() returns ExitCode
+	let b = Box.create(1)
+	arm(b)
+	var x = slot.get()
+	x.n = 5
+	print("{b.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:29:2: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'arm', which keeps it where something may write it; pass a clone()
+```
+
+<!-- test: closure-capture.error.a-let-captured-by-an-escaping-closure-read-through-another-function-is-refused -->
+The same closure called from `fetch`, so nothing in `main`'s body links `x` to `b`; the keep is decided where the `let` is handed over.
+
+```maxon
+typealias Count = int(0 to 1000)
+typealias Get = function() returns Box
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Slot
+	export var get as Get
+
+	static function create() returns Self
+		return Self{get: function() gives Box.create(0)}
+	end 'create'
+end 'Slot'
+
+var slot = Slot.create()
+
+function arm(b Box)
+	slot.get = function() gives b
+end 'arm'
+
+function fetch() returns Box
+	return slot.get()
+end 'fetch'
+
+function main() returns ExitCode
+	let b = Box.create(1)
+	arm(b)
+	var x = fetch()
+	x.n = 5
+	print("{b.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:33:2: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'arm', which keeps it where something may write it; pass a clone()
+```
+
+<!-- test: closure-capture.error.a-let-captured-by-an-escaping-closure-that-keeps-it-is-refused -->
+The escaping closure's body hands `b` to `stash`, which pushes it into a module array that `main` then writes through.
+
+```maxon
+typealias Count = int(0 to 1000)
+typealias Boxes = Array with Box
+typealias Read = function() returns Count
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Slot
+	export var show as Read
+
+	static function create() returns Self
+		return Self{show: function() gives 0}
+	end 'create'
+end 'Slot'
+
+var kept = Boxes.create()
+var slot = Slot.create()
+
+function stash(b Box) returns Count
+	kept.push(b)
+	return 0
+end 'stash'
+
+function arm(b Box)
+	slot.show = function() gives stash(b)
+end 'arm'
+
+function main() returns ExitCode
+	let b = Box.create(1)
+	arm(b)
+	_ = slot.show()
+	var k = try kept.get(0) otherwise return 1
+	k.n = 5
+	print("{b.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:36:2: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'arm', which keeps it where something may write it; pass a clone()
+```
+
+<!-- test: closure-capture.error.a-parameter-kept-through-a-recursive-callee-beside-a-closure-is-refused -->
+`arm` captures `b` in an escaping closure and also hands it to `helper`, which pushes it into a module array; each keeps it, and the two functions calling each other changes nothing.
+
+```maxon
+typealias Count = int(0 to 1000)
+typealias Boxes = Array with Box
+typealias Read = function() returns Count
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Slot
+	export var show as Read
+
+	static function create() returns Self
+		return Self{show: function() gives 0}
+	end 'create'
+end 'Slot'
+
+var kept = Boxes.create()
+var slot = Slot.create()
+
+function arm(b Box, depth Count)
+	slot.show = function() gives b.n
+
+	if depth > 0 'deeper'
+		helper(b, depth: 0)
+	end 'deeper'
+end 'arm'
+
+function helper(b Box, depth Count)
+	kept.push(b)
+	arm(b, depth: depth)
+end 'helper'
+
+function main() returns ExitCode
+	let b = Box.create(1)
+	arm(b, depth: 1)
+	var k = try kept.get(0) otherwise return 1
+	k.n = 5
+	print("{b.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:40:2: cannot pass 'b', which is read-only (a `let` binding), to parameter 'b' of 'arm', which keeps it where something may write it; pass a clone()
 ```

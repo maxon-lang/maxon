@@ -161,7 +161,7 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 				let slotHash = try hashes.get(index as ElementIndex) otherwise panic("Set.insert: hashes.get OOB — the hash column is parallel to the states")
 
 				if slotHash == hash 'hash_match'
-					let existing = try elements.get(index as ElementIndex) otherwise panic("Set.insert: an occupied slot holds an element")
+					view existing = try elements.get(index as ElementIndex) otherwise panic("Set.insert: an occupied slot holds an element")
 
 					if existing == element 'exists'
 						// Element already exists - no-op for sets
@@ -232,7 +232,7 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 				let slotHash = try hashes.get(index as ElementIndex) otherwise panic("Set.contains: hashes.get OOB — the hash column is parallel to the states")
 
 				if slotHash == hash 'hash_match'
-					let existing = try elements.get(index as ElementIndex) otherwise panic("Set.contains: an occupied slot holds an element")
+					view existing = try elements.get(index as ElementIndex) otherwise panic("Set.contains: an occupied slot holds an element")
 
 					if existing == element 'found'
 						return true
@@ -287,7 +287,7 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 				let slotHash = try hashes.get(index as ElementIndex) otherwise panic("Set.remove: hashes.get OOB — the hash column is parallel to the states")
 
 				if slotHash == hash 'hash_match'
-					let existing = try elements.get(index as ElementIndex) otherwise panic("Set.remove: an occupied slot holds an element")
+					view existing = try elements.get(index as ElementIndex) otherwise panic("Set.remove: an occupied slot holds an element")
 
 					if existing == element 'found'
 						// A tombstone owns nothing, for `Map.remove`'s reason. The cached hash stays,
@@ -343,9 +343,9 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 		newHashes.resize(newCapacity)
 
 		// Save old arrays for rehashing, then replace with new ones
-		let oldElements = elements
-		let oldStates = states
-		let oldHashes = hashes
+		var oldElements = elements
+		var oldStates = states
+		var oldHashes = hashes
 		elements = newElements
 		states = newStates
 		hashes = newHashes
@@ -369,7 +369,7 @@ public type Set uses Element implements InitableFromArrayLiteral with Element, I
 			end 'so1'
 
 			if isOccupied 'occupied'
-				let element = try oldElements.get(i) otherwise panic("Set.rehash: an occupied slot holds an element")
+				var element = try oldElements.get(i) otherwise panic("Set.rehash: an occupied slot holds an element")
 				let hash = try oldHashes.get(i) otherwise panic("Set.rehash: oldHashes.get OOB — the hash column is parallel to the states")
 				var index = (spreadHash(hash) and (mask as HashValue)) as TableSlotIndex
 

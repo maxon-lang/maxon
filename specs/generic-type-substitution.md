@@ -137,8 +137,8 @@ typealias IntArray = Array with Integer
 function main() returns ExitCode
 	var a = IntArray.create()
 	a.push(7)
-	let o = O.create(a)
-	let w = o.wrap()
+	var o = O.create(a)
+	view w = o.wrap()
 	return (try w.first() otherwise 0) as ExitCode
 end 'main'
 ```
@@ -1215,7 +1215,7 @@ function main() returns ExitCode
 	var a = IntArray.create()
 	a.push(3)
 	a.push(4)
-	let w = IntWalker.create(a)
+	var w = IntWalker.create(a)
 	var total = 0 as Integer
 	for x in w 'walk'
 		total = total + x
@@ -1276,7 +1276,7 @@ function main() returns ExitCode
 	var a = IntArray.create()
 	a.push(11)
 	a.push(31)
-	let h = IntHolder.create(a)
+	var h = IntHolder.create(a)
 	let (x, y) = h.pair()
 	return x + y
 end 'main'
@@ -1314,7 +1314,7 @@ typealias IntLabeller = Labeller with Integer
 function main() returns ExitCode
 	var a = IntArray.create()
 	a.push(39)
-	let l = IntLabeller.create(a)
+	var l = IntLabeller.create(a)
 	let (name, v) = l.tagged()
 	return v + (name.count() as Integer)
 end 'main'
@@ -1372,7 +1372,7 @@ function main() returns ExitCode
 	var a = IntArray.create()
 	a.push(3)
 	a.push(4)
-	let b = B.create(a)
+	view b = B.create(a)
 	var total = 0 as Integer
 	for x in b 'walk'
 		total = total + x

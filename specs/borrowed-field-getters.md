@@ -50,7 +50,7 @@ end 'Shelf'
 
 function main() returns ExitCode
 	var shelf = Shelf.create("first note built at run time {40 + 2}")
-	let kept = shelf.holding()
+	view kept = shelf.holding()
 	shelf.replace("second note built at run time {40 + 3}")
 	print("[{kept.text}] [{shelf.holding().text}]\n")
 	return 0
@@ -246,7 +246,7 @@ end 'Library'
 
 function main() returns ExitCode
 	var library = Library.create()
-	let before = library.active()
+	view before = library.active()
 	library.retire()
 	library.flip()
 	print("[{before.text}] [{library.active().text}] {library.active().weight}\n")
@@ -344,7 +344,7 @@ end 'Shelf'
 
 function main() returns ExitCode
 	var shelf = Shelf.create("loop note built at run time {0 + 100}")
-	let first = shelf.holding()
+	view first = shelf.holding()
 
 	for trip in 1 to 3 'trips'
 		shelf.replace("loop note built at run time {trip + 100}", weight: trip as Count)
@@ -402,7 +402,7 @@ end 'Shelf'
 
 function main() returns ExitCode
 	var shelf = Shelf.create("first note built at run time {40 + 2}")
-	let kept = shelf.holding(0)
+	view kept = shelf.holding(0)
 	shelf.replace("second note built at run time {40 + 3}")
 	print("[{kept.text}] [{shelf.holding(0).text}]\n")
 	return 0
@@ -449,7 +449,7 @@ end 'Shelf'
 
 function main() returns ExitCode
 	var shelf = NoteShelf.create(Note.create("first note built at run time {40 + 2}", weight: 1))
-	let kept = shelf.holding()
+	view kept = shelf.holding()
 	shelf.replace(Note.create("second note built at run time {40 + 3}", weight: 2))
 	print("[{kept.text}] [{shelf.holding().text}]\n")
 	return 0
@@ -537,7 +537,7 @@ end 'Shelf'
 
 function main() returns ExitCode
 	var shelf = Shelf.create("first note built at run time {40 + 2}")
-	let kept = shelf.holding()
+	view kept = shelf.holding()
 	shelf = Shelf.create("second note built at run time {40 + 3}")
 	print("[{kept.text}] [{shelf.holding().text}]\n")
 	return 0

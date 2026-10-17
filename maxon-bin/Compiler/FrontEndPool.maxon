@@ -96,7 +96,7 @@ end 'LexOutcome'
 // One file's work for a worker: its bytes to lex, or what its parse reads beside the worker's index.
 union FrontEndWork
 	lex(content String)
-	parse(job ParseJob, tokens TokenArray, overrides RowSetOverrideTable)
+	parse(let job ParseJob, let tokens TokenArray, let overrides RowSetOverrideTable)
 end 'FrontEndWork'
 
 // What one file's work answered.
@@ -228,7 +228,7 @@ type FrontEndWorkerState
 
 	// ⛔ **POPPED, NOT READ** — see `FrontEndJob`.
 	function ran(job FrontEndJob) returns FrontEndOutcome
-		let work = try job.holder.pop() otherwise panic("FrontEndWorkerState.ran: the job carried no work — `FrontEndJob` pushes exactly one")
+		var work = try job.holder.pop() otherwise panic("FrontEndWorkerState.ran: the job carried no work — `FrontEndJob` pushes exactly one")
 
 		match work 'work'
 			lex(content) then return FrontEndOutcome.lexed(self.lexed(content))
@@ -259,7 +259,7 @@ type FrontEndWorkerState
 	function parsed(job ParseJob, tokens TokenArray, overrides RowSetOverrideTable) returns FileParseOutcome
 		var index = try self.ownIndex.get(0) otherwise panic("FrontEndWorkerState.parsed: a parse reached a worker holding no index — the pool hands every worker its baseline before the first parse it dispatches")
 		self.probe.reopenCounters()
-		let outcome = parseFile(job, tokens: tokens, overrides: overrides, signatures: index)
+		var outcome = parseFile(job, tokens: tokens, overrides: overrides, signatures: index)
 		self.costs.record(FrontEndStage.parse.ordinal, probe: self.probe)
 		return outcome
 	end 'parsed'
@@ -372,7 +372,7 @@ module type FrontEndPool
 
 		for fileIndex in 0 upto project.db.sourcePaths.count() 'eachFile'
 			try requireStillWanted(project)
-			let query = try parseQueryOf(project, path: sourcePathAt(project, fileIndex: fileIndex))
+			var query = try parseQueryOf(project, path: sourcePathAt(project, fileIndex: fileIndex))
 			noteParseJob(query, fileIndex: fileIndex, files: files, sizes: sizes)
 			queries.push(query)
 		end 'eachFile'
@@ -390,7 +390,7 @@ module type FrontEndPool
 		self.parsed = true
 		try self.drainEveryJob(project, input: FrontEndDrainInput.parsing(queries), files: files, sizes: sizes, outcomes: outcomes, slots: slots)
 
-		let artifacts = landParses(project, queries: queries, outcomes: outcomes, slots: slots)
+		var artifacts = landParses(project, queries: queries, outcomes: outcomes, slots: slots)
 		recordPhase(project, phase: CompilePhase.frontEndPool, probe: probe)
 		return artifacts
 	end 'parseEveryFile'
@@ -547,7 +547,7 @@ module type FrontEndPool
 			try requireStillWanted(project)
 			let fileIndex = fileOfJob(files, job: job)
 
-			let outcome = match input 'input'
+			var outcome = match input 'input'
 				lexing(sources) gives worker.ran(FrontEndJob.lexing(sourceTextAt(sources, fileIndex: fileIndex)))
 				parsing(queries) gives worker.ran(FrontEndJob.parsing(queryAt(queries, fileIndex: fileIndex)))
 			end 'input'
@@ -591,7 +591,7 @@ module type FrontEndPool
 			let freedWorker = dispatch.workerAt(ready)
 			let fileIndex = fileOfJob(files, job: dispatch.land(ready, outstanding: replies.count()))
 			let reply = try replies.remove(ready) otherwise panic("FrontEndPool.drain: replies.remove({ready}) — `awaitAny` answered a slot of this very array")
-			let answer = try await reply otherwise panic("{workerGoneMessage("FrontEndPool.drain", subject: "the worker handed file {fileIndex}")}")
+			var answer = try await reply otherwise panic("{workerGoneMessage("FrontEndPool.drain", subject: "the worker handed file {fileIndex}")}")
 			landOutcome(answer.outcome, fileIndex: fileIndex, outcomes: outcomes, slots: slots)
 
 			if dispatch.hasUndispatchedFor(freedWorker) 'handTheFreedWorkerTheNextJob'

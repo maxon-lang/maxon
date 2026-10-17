@@ -54,7 +54,7 @@ function main() returns ExitCode
 				return 99
 		end 'badCount'
 
-		let item = try dest.get(1) otherwise Item.create("", value: 0)
+		view item = try dest.get(1) otherwise Item.create("", value: 0)
 		return item.value
 end 'main'
 ```
@@ -92,7 +92,7 @@ function main() returns ExitCode
 				return 99
 		end 'badCount'
 
-		let op = try dest.get(1) otherwise Op.nop
+		view op = try dest.get(1) otherwise Op.nop
 		match op 'check'
 				add(v) then return v
 				sub then return 98
@@ -151,7 +151,7 @@ function main() returns ExitCode
 				return 99
 		end 'badCount'
 
-		let first = try allModule.functions.get(0) otherwise Func.create("", body: IntArray.create())
+		view first = try allModule.functions.get(0) otherwise Func.create("", body: IntArray.create())
 		if first.name == "func_a_with_long_name_for_heap" 'correct'
 				return 0
 		end 'correct'
@@ -205,7 +205,7 @@ function main() returns ExitCode
 				return 99
 		end 'badCount'
 
-		let rec = try dest.get(1) otherwise Record.create("", lines: StringArray.create())
+		view rec = try dest.get(1) otherwise Record.create("", lines: StringArray.create())
 		if rec.lines.count() != 2 'badLines'
 				return 98
 		end 'badLines'

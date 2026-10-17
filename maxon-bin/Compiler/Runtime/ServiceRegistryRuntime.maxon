@@ -65,7 +65,7 @@ export function installSharedValueRuntime(module StdModule, globalData GlobalDat
 		return
 	end 'noSharedValue'
 
-	let released = releasedRegistryPanicLabel(globalData)
+	view released = releasedRegistryPanicLabel(globalData)
 	buildSharedValueNew(module)
 	buildSharedValueInstall(module)
 	buildSharedValueCurrent(module, released: released)
@@ -84,7 +84,7 @@ export function installServiceRegistryRuntime(module StdModule, globalData Globa
 		return
 	end 'noServiceRegistry'
 
-	let released = releasedRegistryPanicLabel(globalData)
+	view released = releasedRegistryPanicLabel(globalData)
 	buildRegistryServiceCurrent(module, released: released)
 	buildRegistryServiceRegister(module, released: released)
 	buildRegistryServiceReplace(module, released: released)
@@ -100,7 +100,7 @@ end 'releasedRegistryPanicLabel'
 
 function emitHeldOrPanic(module StdModule, func IrFunction, block IrBlock, held ValueId, released ByteArray, holdsRegistryLock bool, ids ValueMinter) returns IrBlock
 	var releasedBlock = module.addBlock(func, label: b"regreleased", heat: BlockHeat.cold)
-	let live = module.addBlock(func, label: b"reglive", heat: BlockHeat.normal)
+	var live = module.addBlock(func, label: b"reglive", heat: BlockHeat.normal)
 	emitBranchOnCompare(module, block: block, value: held, pred: StdCmpPred.eq, against: ReleasedHolder, whenTrue: releasedBlock, whenFalse: live, ids: ids)
 
 	if holdsRegistryLock 'leaveTheLockFirst'
@@ -113,7 +113,7 @@ function emitHeldOrPanic(module StdModule, func IrFunction, block IrBlock, held 
 end 'emitHeldOrPanic'
 
 function emitSkipIfReleased(module StdModule, func IrFunction, block IrBlock, held ValueId, done IrBlock, ids ValueMinter) returns IrBlock
-	let live = module.addBlock(func, label: b"regheld", heat: BlockHeat.normal)
+	var live = module.addBlock(func, label: b"regheld", heat: BlockHeat.normal)
 	emitBranchOnCompare(module, block: block, value: held, pred: StdCmpPred.eq, against: ReleasedHolder, whenTrue: done, whenFalse: live, ids: ids)
 	return live
 end 'emitSkipIfReleased'
@@ -140,7 +140,7 @@ end 'emitHolderCell'
 
 function emitCallIfPresent(module StdModule, func IrFunction, block IrBlock, fn ValueId, argument ValueId, ids ValueMinter, label ByteArray) returns IrBlock
 	var callIt = module.addBlock(func, label: label, heat: BlockHeat.normal)
-	let after = module.addBlock(func, label: b"shvafter", heat: BlockHeat.normal)
+	var after = module.addBlock(func, label: b"shvafter", heat: BlockHeat.normal)
 	emitBranchOnCompare(module, block: block, value: fn, pred: StdCmpPred.eq, against: NoRuntimeFunction, whenTrue: after, whenFalse: callIt, ids: ids)
 	module.appendOp(callIt, op: StdOp.callIndirect(ids.mint(), calleeReg: fn, resultType: StdReturnType.void, argFloatMask: 0, args: argsOf(argument)))
 	module.setTerminator(callIt, op: StdOp.branch(after.id))
@@ -175,7 +175,7 @@ end 'emitRefStep'
 function emitChainReplaced(module StdModule, func IrFunction, block IrBlock, cell ValueId, replaced ValueId, ids ValueMinter) returns IrBlock
 	var chainIt = module.addBlock(func, label: b"shvchain", heat: BlockHeat.normal)
 	var retry = module.addBlock(func, label: b"shvchainretry", heat: BlockHeat.normal)
-	let chained = module.addBlock(func, label: b"shvchained", heat: BlockHeat.normal)
+	var chained = module.addBlock(func, label: b"shvchained", heat: BlockHeat.normal)
 
 	let dropFn = emitLoadField(module, block: block, record: cell, offset: SharedValueCellDropOffset, ids: ids)
 	emitBranchOnCompare(module, block: block, value: dropFn, pred: StdCmpPred.eq, against: NoRuntimeFunction, whenTrue: chained, whenFalse: chainIt, ids: ids)

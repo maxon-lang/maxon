@@ -493,8 +493,8 @@ typealias PointArray = Array with Point
 function main() returns ExitCode
 	var a = PointArray.create()
 	a.push(Point.create(7))
-	let out = a.map(function(p Point) gives p)
-	let first = try out.get(0) otherwise Point.create(0)
+	view out = a.map(function(p Point) gives p)
+	view first = try out.get(0) otherwise Point.create(0)
 	print("x={first.x}\n")
 	return 0
 end 'main'

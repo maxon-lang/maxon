@@ -1039,7 +1039,7 @@ export type StdToX64Lowering
 		// AFTER the walk, not during it: the column is sized by `scanFunctionValueCount` over the TARGET
 		// ops, so every op has to exist before it can be measured.
 		let valueClass = buildFunctionValueClasses(self.stdModule, targetModule: self.targetModule, funcIndex: UnitFunctionIndex, abi: self.abi)
-		let lowered = LoweredUnit.create(self.targetModule, valueClass: valueClass, rdata: self.rdata.requests)
+		var lowered = LoweredUnit.create(self.targetModule, valueClass: valueClass, rdata: self.rdata.requests)
 		self.stdModule = StdModule.create()
 		self.targetModule = TargetModule.create()
 		self.rdata = RdataRequestLog.create()
@@ -1311,7 +1311,7 @@ export type StdToX64Lowering
 	// that consume it are in the same function. All are computed BEFORE the op walk, because a
 	// compare is lowered long before the branch or the phi edge that decides what it must produce.
 	function prepareFunctionTables(funcIdx ElementIndex)
-		let srcFunc = self.stdModule.getFunc(funcIdx)
+		view srcFunc = self.stdModule.getFunc(funcIdx)
 		self.valueDefs.rebuild(self.stdModule, func: srcFunc)
 		self.compareFusion.computeForFunction(self.stdModule, func: srcFunc)
 		self.scaledIndexFolds.computeForFunction(self.stdModule, func: srcFunc, memoryForm: IndexedMemoryForm.anyScaleAndDisplacement)
@@ -1328,7 +1328,7 @@ export type StdToX64Lowering
 	// Phase 3 — the op walk. `originalBlockCount` bounds it to the Std module's own blocks; see
 	// `lowerFunction`.
 	function lowerFunctionBlocks(funcIdx ElementIndex, originalBlockCount ElementIndex) returns StackSize
-		let srcFunc = self.stdModule.getFunc(funcIdx)
+		view srcFunc = self.stdModule.getFunc(funcIdx)
 
 		// The max outgoing stack-arg bytes any op in this function needs — a running MAX (a call REUSES
 		// the region, so it is the largest single call's need, not their sum). An import call past four
@@ -1343,11 +1343,11 @@ export type StdToX64Lowering
 
 		for i in 0 upto originalBlockCount 'eachBlock'
 			let blockRef = try srcFunc.blockRefs.get(i) otherwise panic("StdToX64Lowering: blockRefs.get OOB at {i} despite the captured bound")
-			let srcBlock = try self.stdModule.blocks.get(blockRef) otherwise panic("StdToX64Lowering: blockRef from srcFunc.blockRefs not in stdModule.blocks")
+			view srcBlock = try self.stdModule.blocks.get(blockRef) otherwise panic("StdToX64Lowering: blockRef from srcFunc.blockRefs not in stdModule.blocks")
 			var dstBlock = try self.targetModule.blocks.get(blockRef) otherwise panic("StdToX64Lowering: targetModule.blocks 1:1 with stdModule.blocks but get({blockRef}) failed")
 
 			for opIdx in srcBlock.bodyOps() 'eachOp'
-				let stdOp = try self.stdModule.ops.get(opIdx) otherwise panic("StdToX64Lowering: opIdx from srcBlock.bodyOps() not in stdModule.ops")
+				view stdOp = try self.stdModule.ops.get(opIdx) otherwise panic("StdToX64Lowering: opIdx from srcBlock.bodyOps() not in stdModule.ops")
 				let opOutgoing = self.stdOpOutgoingArgBytes(stdOp)
 
 				if opOutgoing > outgoingArgBytes 'largerArgRegion'
@@ -1362,7 +1362,7 @@ export type StdToX64Lowering
 
 			if srcBlock.hasTerminatorOp() 'hasTerm'
 				let termIdx = srcBlock.terminatorIndex()
-				let termOp = try self.stdModule.ops.get(termIdx) otherwise panic("StdToX64Lowering: terminatorIndex not in stdModule.ops")
+				var termOp = try self.stdModule.ops.get(termIdx) otherwise panic("StdToX64Lowering: terminatorIndex not in stdModule.ops")
 				self.targetModule.spans.current = self.stdModule.spans.at(termIdx)
 				self.lowerTerminatorOp(termOp, dstBlock: dstBlock, returnType: srcFunc.returnType, blockRef: blockRef)
 			end 'hasTerm'
@@ -1933,8 +1933,8 @@ export type StdToX64Lowering
 		let leftId = rhs if swap else lhs
 		let rightId = lhs if swap else rhs
 		let dest = TargetVReg.virtual(resultId)
-		let lhsReg = TargetVReg.virtual(leftId)
-		let rhsReg = TargetVReg.virtual(rightId)
+		var lhsReg = TargetVReg.virtual(leftId)
+		var rhsReg = TargetVReg.virtual(rightId)
 
 		match opcode 'op'
 			add then self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRegReg(dest, base: lhsReg, index: rhsReg))
@@ -2887,18 +2887,18 @@ export type StdToX64Lowering
 	// `ERROR_INVALID_HANDLE` over the code the runtime's launch-failure path reads, and
 	// `executableNotFound` would become an invalid handle.
 	function emitWin64AdoptChildIntoJob(procInfoPtrId ValueId, dstBlock IrBlock)
-		let spawnError = self.mintVirtual()
+		var spawnError = self.mintVirtual()
 		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.GetLastError, into: spawnError)
 
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: NullPointer))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: NullPointer))
-		let job = self.mintVirtual()
+		var job = self.mintVirtual()
 		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.CreateJobObjectW, into: job)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(TargetVReg.virtual(procInfoPtrId), disp: ProcInfoTreeObjectOffset as Imm32, src: job, width: X64AccessWidth.word64))
 
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: job))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.loadRegBaseDisp(x64PhysReg(X64Register.rdx), base: TargetVReg.virtual(procInfoPtrId), disp: ProcInfoHProcessOffset as Imm32, width: X64AccessWidth.word64))
-		let answer = self.mintVirtual()
+		var answer = self.mintVirtual()
 		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.AssignProcessToJobObject, into: answer)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.cmpRegImm32(answer, imm: Win32False as Imm32))
 		let assigned = self.mintVirtual()
@@ -3028,10 +3028,10 @@ export type StdToX64Lowering
 	// One word, as the POSIX `kill(pid, 0)` answers: the handle `OpenProcess` gave, or
 	// `-GetLastError()` when it refused.
 	function lowerOsProcessProbeWin64(resultId ValueId, pidId ValueId, dstBlock IrBlock)
-		let handle = self.mintVirtual()
+		var handle = self.mintVirtual()
 		self.emitWin64OpenProcess(ProcessSynchronizeAccess, pidId: pidId, into: handle, dstBlock: dstBlock)
 
-		let lastError = self.mintVirtual()
+		var lastError = self.mintVirtual()
 		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.GetLastError, into: lastError)
 		let negatedError = self.mintVirtual()
 		self.targetModule.appendOp(dstBlock, op: TargetOp.negReg(negatedError, src: lastError))
@@ -3070,9 +3070,9 @@ export type StdToX64Lowering
 	// The tree may be a job or a process handle, so both terminates are asked of it; the one handed
 	// the wrong kind of handle fails, and the answer is the OR of the two BOOLs.
 	function lowerOsProcessTerminateWin64(resultId ValueId, handleId ValueId, exitCodeId ValueId, dstBlock IrBlock)
-		let treeEnded = self.mintVirtual()
+		var treeEnded = self.mintVirtual()
 		self.lowerHostValue(treeEnded, callee: HostCallee.import(IatSlot.TerminateJobObject), args: twoArgs(handleId, second: exitCodeId), dstBlock: dstBlock)
-		let childEnded = self.mintVirtual()
+		var childEnded = self.mintVirtual()
 		self.lowerHostValue(childEnded, callee: HostCallee.import(IatSlot.TerminateProcess), args: twoArgs(handleId, second: exitCodeId), dstBlock: dstBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.orRegReg(TargetVReg.virtual(resultId), lhs: treeEnded, rhs: childEnded))
 	end 'lowerOsProcessTerminateWin64'
@@ -3376,7 +3376,7 @@ export type StdToX64Lowering
 	end 'emitCaptureImportAnswer'
 
 	function capturedRax(dstBlock IrBlock) returns TargetVReg
-		let whole = self.mintVirtual()
+		var whole = self.mintVirtual()
 		self.emitCaptureRax(dstBlock, into: whole)
 		return whole
 	end 'capturedRax'
@@ -4362,8 +4362,8 @@ export type StdToX64Lowering
 
 		// The answer is CAPTURED before the fold, and the fold runs on virtuals: a physical op on rax/rcx
 		// after the syscall would read or clobber a register a cold-call bracket restores (`mintVirtual`).
-		let answer = self.capturedRax(dstBlock)
-		let bias = self.mintVirtual()
+		view answer = self.capturedRax(dstBlock)
+		var bias = self.mintVirtual()
 		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(bias, value: LinuxGetPriorityBias as MachineWord))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.subRegReg(TargetVReg.virtual(resultId), lhs: bias, rhs: answer))
 	end 'lowerOsEnterBackgroundPriorityLinux'
@@ -4721,7 +4721,7 @@ export type StdToX64Lowering
 	function lowerOsRandomFillWin64(resultId ValueId, bufPtrId ValueId, lenId ValueId, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(bufPtrId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(lenId)))
-		let verdict = self.mintVirtual()
+		var verdict = self.mintVirtual()
 		self.emitWin64ImportAnswer(dstBlock, slot: IatSlot.ProcessPrng, into: verdict)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.cmpRegImm32(verdict, imm: Win32False as Imm32))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.setccReg(TargetVReg.virtual(resultId), cond: X64CondCode.equal))
@@ -4808,7 +4808,7 @@ export type StdToX64Lowering
 			syscall gives linuxTlsSelfSlotOffset()
 		end 'route'
 
-		let slot = self.mintVirtual()
+		var slot = self.mintVirtual()
 		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(slot, value: selfSlot as MachineWord))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.x64GsLoadRegBase(TargetVReg.virtual(resultId), base: slot))
 	end 'lowerOsThreadToken'
@@ -5062,7 +5062,7 @@ export type StdToX64Lowering
 	// already uses (`BoolFalseImm`), and the reason the complement needs no `xor`: `xorRegImm32` is
 	// two-address, so it would want a reuse input, which is the shape the header rules out.
 	function appendFloatEqualityAsNotInequality(resultId ValueId, dstBlock IrBlock)
-		let inequality = x64PhysReg(FloatInequalityUnequalReg)
+		var inequality = x64PhysReg(FloatInequalityUnequalReg)
 		self.appendFloatInequality(inequality, dstBlock: dstBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.cmpRegImm32(inequality, imm: BoolFalseImm))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.setccReg(TargetVReg.virtual(resultId), cond: X64CondCode.equal))
@@ -5224,7 +5224,7 @@ export type StdToX64Lowering
 	// It is also a scoped READ of the function (the un-fuse touches only the census's predicate map), complete
 	// before `reserveFloatEqualityBlocks` mints anything.
 	function blocksNeedingFloatEqualitySplit(funcIdx ElementIndex) returns BlockRefArray
-		let srcFunc = self.stdModule.getFunc(funcIdx)
+		view srcFunc = self.stdModule.getFunc(funcIdx)
 		var toSplit = BlockRefArray.create()
 
 		for blockRef in srcFunc.blockRefs 'eachBlock'
@@ -5242,13 +5242,13 @@ export type StdToX64Lowering
 	// about to lose its fusion is still handed an `ordered` block), which is structural here
 	// instead of a note about pass ordering.
 	function settleFloatEqualityBranch(blockRef ElementIndex) returns bool
-		let block = try self.stdModule.blocks.get(blockRef) otherwise panic("settleFloatEqualityBranch: blockRef {blockRef} not in stdModule.blocks")
+		view block = try self.stdModule.blocks.get(blockRef) otherwise panic("settleFloatEqualityBranch: blockRef {blockRef} not in stdModule.blocks")
 
 		if not block.hasTerminatorOp() 'noTerm'
 			return false
 		end 'noTerm'
 
-		let term = try self.stdModule.ops.get(block.terminatorIndex()) otherwise panic("settleFloatEqualityBranch: terminatorIndex not in stdModule.ops")
+		view term = try self.stdModule.ops.get(block.terminatorIndex()) otherwise panic("settleFloatEqualityBranch: terminatorIndex not in stdModule.ops")
 		return match term 'term'
 			condBranch(condId, _, _) gives self.settleFloatEqualityCondition(blockRef, condId: condId)
 			const or
@@ -5437,7 +5437,7 @@ export type StdToX64Lowering
 
 		// The original's phi edges, cloned BEFORE the new block exists — the walk prunes the
 		// original down to its one surviving edge later, and `ordered` needs both.
-		let inheritedEdges = self.cloneBranchEdgesOf(blockRef)
+		var inheritedEdges = self.cloneBranchEdgesOf(blockRef)
 
 		// The `ordered` block is the second half of the original's branch, so it runs exactly when the
 		// original does.
@@ -5484,7 +5484,7 @@ export type StdToX64Lowering
 	// sharing one edge object would let a later rewrite of one silently move the other. `argIds`
 	// IS shared, and that is correct — nothing mutates it in place (see `prepareSkeleton`).
 	function cloneBranchEdgesOf(blockRef ElementIndex) returns BranchEdgeArray
-		let block = try self.targetModule.blocks.get(blockRef) otherwise panic("cloneBranchEdgesOf: blockRef {blockRef} not in targetModule.blocks")
+		var block = try self.targetModule.blocks.get(blockRef) otherwise panic("cloneBranchEdgesOf: blockRef {blockRef} not in targetModule.blocks")
 		var copied = BranchEdgeArray.create()
 
 		for edge in block.branchEdges 'each'

@@ -3100,7 +3100,7 @@ function probe(inner Inner) returns Integer
 end 'probe'
 
 function main() returns ExitCode
-	let inner = Inner.text("a co-owned payload inside a sole box, long enough for the heap")
+	var inner = Inner.text("a co-owned payload inside a sole box, long enough for the heap")
 	let n = probe(inner)
 	let again = match inner 'k'
 		text(body) gives body.byteLength() as ExitCode
@@ -3146,7 +3146,7 @@ function probe(inner Inner) returns Integer
 end 'probe'
 
 function main() returns ExitCode
-	let inner = Inner.text("a co-owned payload inside a sole box, long enough for the heap")
+	var inner = Inner.text("a co-owned payload inside a sole box, long enough for the heap")
 	let n = probe(inner)
 	let again = match inner 'k'
 		text(body) gives body.byteLength() as ExitCode
@@ -3226,14 +3226,14 @@ end 'Ty'
 function steal(ty Ty) returns Integer
 	var list = TyList.create()
 	list.append(ty)
-	let got = try list.removeFirst() otherwise panic("removeFirst failed")
+	view got = try list.removeFirst() otherwise panic("removeFirst failed")
 	return match got 'm'
 		concrete(name) gives name.byteLength() as Integer
 	end 'm'
 end 'steal'
 
 function main() returns ExitCode
-	let ty = Ty.concrete("a list element payload co-owned by its caller, heap-long")
+	var ty = Ty.concrete("a list element payload co-owned by its caller, heap-long")
 	let n = steal(ty)
 	let again = match ty 'k'
 		concrete(name) gives name.byteLength() as ExitCode
@@ -3266,14 +3266,14 @@ end 'Ty'
 function steal(ty Ty) returns Integer
 	var arr = TyArray.create()
 	arr.push(ty)
-	let got = try arr.remove(0) otherwise panic("remove failed")
+	view got = try arr.remove(0) otherwise panic("remove failed")
 	return match got 'm'
 		concrete(name) gives name.byteLength() as Integer
 	end 'm'
 end 'steal'
 
 function main() returns ExitCode
-	let ty = Ty.concrete("a list element payload co-owned by its caller, heap-long")
+	var ty = Ty.concrete("a list element payload co-owned by its caller, heap-long")
 	let n = steal(ty)
 	let again = match ty 'k'
 		concrete(name) gives name.byteLength() as ExitCode

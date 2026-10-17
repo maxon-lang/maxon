@@ -657,7 +657,7 @@ end 'CheckedCompile'
 // under edit and a tool asked to check a file, both of which want what was wrong; `compileToCodeResult`
 // reports and throws by design, and both of its paths leave `project.diagnostics` standing.
 module function checkWithoutWriting(project Project) returns CheckedCompile
-	let codeResult = try compileToCodeResult(project) otherwise 'refused'
+	view codeResult = try compileToCodeResult(project) otherwise 'refused'
 		project.retiredWorkers.release()
 		return CheckedCompile.refused
 	end 'refused'
@@ -1075,7 +1075,7 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	// `GlobalInitOrder`). That walk must sit between `liveGlobalLabels` and the synthesis for the reason
 	// `liveGlobalLabels`' own position has: `__module_init` opens every global with a `globalAddr` of its own
 	// slot, so a dependency walk run after it would find every global depending on itself.
-	let orderedGlobals = try dependencyOrderedGlobals(module, project: project, signatures: signatures, globals: signatures.managedGlobals(liveGlobals)) otherwise (failure) 'initOrderRefused'
+	var orderedGlobals = try dependencyOrderedGlobals(module, project: project, signatures: signatures, globals: signatures.managedGlobals(liveGlobals)) otherwise (failure) 'initOrderRefused'
 		try refuseUnlessAbandoned(project, failure: failure)
 	end 'initOrderRefused'
 
@@ -1372,9 +1372,9 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	var pipeline = lowered.pipeline
 	var usage = lowered.usage
 	var signatures = lowered.signatures
-	let asyncSpawnTargets = lowered.asyncSpawnTargets
-	let serviceReplyTargets = lowered.serviceReplyTargets
-	let userGlobals = lowered.userGlobals
+	view asyncSpawnTargets = lowered.asyncSpawnTargets
+	view serviceReplyTargets = lowered.serviceReplyTargets
+	view userGlobals = lowered.userGlobals
 	let parksOnIo = lowered.parksOnIo
 
 	// ⚠ After the WHOLE lowering list and not after `lowerMaxonToStd`: `ValueTupleReturn` is the last pass
@@ -1397,13 +1397,13 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	// program declaring `implements Iterable` — which expands `stdlib/Interfaces.maxon`'s `extension
 	// Iterable` onto the conformer and so can fail inside that file — would die with this panic INSTEAD of
 	// the diagnostic naming the real fault. Below the gate, that compile has already refused and said why.
-	let orderingEnum = requireCorpusDeclaredEnum(project.enumTypes, typeName: OrderingTypeName, reader: "the `Comparable` compare impls")
+	view orderingEnum = requireCorpusDeclaredEnum(project.enumTypes, typeName: OrderingTypeName, reader: "the `Comparable` compare impls")
 
 	// ⭐ **`__SubprocessStreamState`'s DECLARATION, FOR THE SAME REASON AND AT THE SAME POINT.** A streaming
 	// child's per-stream state word IS this enum's ordinal column, so reading the declaration keeps that wire
 	// value and the `match` arms the stdlib writes over it ONE fact — leaving no transcription for a drift
 	// check to hold.
-	let subprocessStreamStateEnum = requireCorpusDeclaredEnum(project.enumTypes, typeName: SubprocessStreamStateTypeName, reader: "the streaming subprocess runtime's per-stream state word")
+	view subprocessStreamStateEnum = requireCorpusDeclaredEnum(project.enumTypes, typeName: SubprocessStreamStateTypeName, reader: "the streaming subprocess runtime's per-stream state word")
 
 	// ⭐ **THE `.rdata` SLOTS ARE FILLED NOW, AND WHAT THEY NAME MUST BE INSTALLED.**
 	// Lowering is what decides which witness tables and layout descriptors a program gets, so the
@@ -1823,7 +1823,7 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 		expandRuntimeLocks(pipeline.stdModule, firstFuncIndex: firstEmittedFuncIndex, target: project.target)
 	end 'runtimeLocks'
 
-	var dataSection = dataSectionRoster(userGlobals, usage: usage, target: project.target)
+	var dataSection = dataSectionRoster(userGlobals.clone(), usage: usage, target: project.target)
 	assertPublishedWordAccessIsOrdered(pipeline.stdModule, entries: dataSection, firstFuncIndex: firstEmittedFuncIndex)
 
 	recordPhase(project, phase: CompilePhase.synthesizeBodies, probe: synthesizeProbe)
@@ -1858,7 +1858,7 @@ function codeResultOf(project Project) returns CodeResult throws CompileError
 	// them apart, and at its root set, for the half of that rule with no pair to count. Passing
 	// `project` is also what gives the allocator the `opRanges`/`valueOrigins` tables it
 	// maps a Target ValueId back to its source span through.
-	let codeResult = try buildBackend(pipeline.stdModule, target: project.target, globalData: project.globalData, project: project, usage: usage, dataSection: dataSection, userGlobalCount: userGlobals.count()) otherwise 'backendFailed'
+	var codeResult = try buildBackend(pipeline.stdModule, target: project.target, globalData: project.globalData, project: project, usage: usage, dataSection: dataSection, userGlobalCount: userGlobals.count()) otherwise 'backendFailed'
 		try refuseCompile(project)
 	end 'backendFailed'
 

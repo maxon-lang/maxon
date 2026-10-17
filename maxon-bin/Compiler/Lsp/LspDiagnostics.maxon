@@ -102,7 +102,7 @@ extension Project
 		let root = workspaceRootOf(reader, purpose: RootPurpose.readsTheDocument)
 		let tokens = lspDocumentTokens(text, keywords: self.keywords)
 
-		let fast = self.documentDiagnostics(reader, root: root, path: path, text: text, tokens: tokens)
+		view fast = self.documentDiagnostics(reader, root: root, path: path, text: text, tokens: tokens)
 		reader.workspace.writer.write(documentDiagnosticsText(uri, text: text, tokens: tokens, diagnostics: fast, path: path, unbuilt: StringArray.create()))
 
 		return BufferPublish.published(reader, root: root, path: path, fast: fast)
@@ -179,7 +179,7 @@ extension Project
 	end 'correctedRefusal'
 
 	function refusalCorrectedBy(corpus Project, signatures ProgramSignatures, reader FilePath, buffer FilePath, reported DiagnosticArray, text String, tokens TokenArray) returns DiagnosticArray
-		let live = try queryActiveTokens(self, path: buffer) otherwise return reported
+		view live = try queryActiveTokens(self, path: buffer) otherwise return reported
 
 		match corpus.sweptParseDiagnostics(reader, live: live) 'sweptParse'
 			parsed(published) then return published
@@ -189,13 +189,13 @@ extension Project
 	end 'refusalCorrectedBy'
 
 	function sweptParseDiagnostics(reader FilePath, live TokenArray) returns SweptParse
-		let swept = try queryActiveTokens(self, path: reader) otherwise return SweptParse.unavailable
+		view swept = try queryActiveTokens(self, path: reader) otherwise return SweptParse.unavailable
 
 		if not tokenStreamsAgree(live, swept: swept) 'theAuthorHasTyped'
 			return SweptParse.bufferHasBeenTypedInto
 		end 'theAuthorHasTyped'
 
-		let query = try parseQueryOf(self, path: reader) otherwise return SweptParse.unavailable
+		view query = try parseQueryOf(self, path: reader) otherwise return SweptParse.unavailable
 
 		return match query 'query'
 			memoized(artifact) gives SweptParse.parsed(artifact.diagnostics)
@@ -206,7 +206,7 @@ extension Project
 	function landedSweptParse(job ParseJob, tokens TokenArray, overrides RowSetOverrideTable, stamp ParseStamp, reader FilePath) returns SweptParse
 		self.diagnostics.clear()
 
-		let artifact = landParseOutcome(self, path: reader, outcome: parseFile(job, tokens: tokens, overrides: overrides, signatures: try queryProgramSignatures(self) otherwise return SweptParse.unavailable), stamp: stamp)
+		view artifact = landParseOutcome(self, path: reader, outcome: parseFile(job, tokens: tokens, overrides: overrides, signatures: try queryProgramSignatures(self) otherwise return SweptParse.unavailable), stamp: stamp)
 		var published = self.diagnostics.clone()
 		published.append(artifact.diagnostics)
 

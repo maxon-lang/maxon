@@ -627,7 +627,7 @@ function analyseAffectedFunctions(module StdModule, byName FunctionNameIndex, on
 	var liveOps = OpIndexArray.create()
 
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
-		let func = module.getFunc(funcIndex)
+		view func = module.getFunc(funcIndex)
 		module.collectLiveOpIndices(func, into: liveOps)
 		let consts = constantsFeedingAllocations(module, liveOps: liveOps)
 
@@ -898,7 +898,7 @@ function analyseOneFunction(module StdModule, func IrFunction, liveOps OpIndexAr
 	// exception is a returned value's exit chain, which `widenTheExitChain` carries as two block
 	// arguments.
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise panic("analyseOneFunction: blockRef from func.blockRefs not in module.blocks")
+		view block = try module.blocks.get(blockRef) otherwise panic("analyseOneFunction: blockRef from func.blockRefs not in module.blocks")
 
 		for edge in block.branchEdges 'eachEdge'
 			if flow.returnPlumbing.contains(edge.targetBlockId) 'intoAReturnsChain'
@@ -1930,7 +1930,7 @@ function halfColumn(valueBound ValueId) returns ValueIdArray
 end 'halfColumn'
 
 function rewriteOneFunction(module StdModule, funcIndex ElementIndex, flow FunctionTupleFlow, onTheConvention BoolArray)
-	let func = module.getFunc(funcIndex)
+	view func = module.getFunc(funcIndex)
 	let liveOps = module.liveOpIndices(func)
 
 	// The value space, read ONCE: it is a walk of the function, and the minter and the plan's columns are

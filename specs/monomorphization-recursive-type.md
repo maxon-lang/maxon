@@ -40,7 +40,7 @@ function main() returns ExitCode
 	outer.append(inner1)
 	outer.append(inner2)
 	print("{outer.count()}\n")
-	let first = try outer.first() otherwise IntList.create()
+	view first = try outer.first() otherwise IntList.create()
 	print("{first.count()}\n")
 	let val = try first.get(0) otherwise 0
 	print("{val}\n")
@@ -71,7 +71,7 @@ function main() returns ExitCode
 	list2.append(30)
 	var arr = [list1, list2]
 	print("{arr.count()}\n")
-	let first = try arr.get(0) otherwise IntList.create()
+	view first = try arr.get(0) otherwise IntList.create()
 	print("{first.count()}\n")
 	let val = try first.get(0) otherwise 0
 	print("{val}\n")

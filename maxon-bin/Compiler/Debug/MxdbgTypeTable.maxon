@@ -87,8 +87,8 @@ end 'MxdbgElementType'
 
 type MxdbgTypeDesc
 	export var kind as MxdbgIndex
-	export var size as MxdbgIndex
-	export var align as MxdbgIndex
+	export let size as MxdbgIndex
+	export let align as MxdbgIndex
 	export var fields as MxdbgFieldDescArray
 	export var element as MxdbgElementType
 	export var flags as MxdbgIndex
@@ -201,14 +201,14 @@ export type MxdbgTypeTable
 		var at = 0 as ElementIndex
 
 		while at < pending.count() 'eachPending'
-			let next = try pending.get(at) otherwise panic("MxdbgTypeTable.close: pending.get OOB at {at} despite the while guard")
+			view next = try pending.get(at) otherwise panic("MxdbgTypeTable.close: pending.get OOB at {at} despite the while guard")
 			at = at + 1
 
 			if self.positionByName.contains(next) 'alreadyDescribed'
 				continue
 			end 'alreadyDescribed'
 
-			let desc = try self.closureEnvDescOf(next) otherwise mxdbgDescribeType(project, signatures: signatures, name: next, element: self.arrayElementOf(next))
+			var desc = try self.closureEnvDescOf(next) otherwise mxdbgDescribeType(project, signatures: signatures, name: next, element: self.arrayElementOf(next))
 			var referenced = NameRoster.create()
 			referenced.reserve(desc.fields.count())
 
@@ -270,7 +270,7 @@ export type MxdbgTypeTable
 		self.seal()
 
 		for i in 0 upto self.entries.count() 'eachType'
-			let entry = try self.entries.get(i) otherwise panic("MxdbgTypeTable.writeInto: entries.get OOB at {i} despite the upto bound")
+			view entry = try self.entries.get(i) otherwise panic("MxdbgTypeTable.writeInto: entries.get OOB at {i} despite the upto bound")
 			writer.addType(String.from(authorSpelledName(entry.name, spellings: spellings)), kind: entry.desc.kind, size: entry.desc.size, align: entry.desc.align, elementTypeId: self.elementTypeIdOf(entry.desc.element), flags: entry.desc.flags)
 
 			for field in entry.desc.fields 'eachField'
@@ -300,7 +300,7 @@ export type MxdbgTypeTable
 		self.positionByName = MxdbgTypePositionMap.create()
 
 		for at in 0 upto names.count() 'eachPosition'
-			let name = try names.get(at) otherwise panic("MxdbgTypeTable.seal: names.get OOB at {at} despite the upto bound")
+			view name = try names.get(at) otherwise panic("MxdbgTypeTable.seal: names.get OOB at {at} despite the upto bound")
 			self.positionByName.upsert(name, value: at)
 		end 'eachPosition'
 

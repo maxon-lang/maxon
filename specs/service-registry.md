@@ -136,7 +136,7 @@ function main() returns ExitCode
 
 	var sources = SourceArray.create()
 	sources.push(spawn Fixed.create(8))
-	let element = try sources.get(0) otherwise panic("sources.get(0)")
+	view element = try sources.get(0) otherwise panic("sources.get(0)")
 	let fromElement = try await element.value() otherwise 0
 
 	let relay = spawn Relay.create()
@@ -3550,4 +3550,56 @@ typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3171: <fragment>:17:9: `Config` cannot be a registry value or a `SharedValue`: it is a `Config` whose graph reaches a promise, which owns a green thread that exactly one owner may reclaim — a shared value is read by every thread at once, so a share walk must be able to mark everything it reaches
+```
+
+<!-- test: a-registered-immutable-value-that-has-been-viewed-is-shared -->
+`Config` has only `let` fields, so nothing can write the record `w` has viewed: publishing `fresh` shares it with every thread, and `w` stays valid.
+```maxon
+type Config
+	export let n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Config'
+
+default Config = Config.create(1)
+
+function main() returns ExitCode
+	var fresh = Config.create(3)
+	fresh = Config.create(4)
+	view w = fresh
+	Config.register(fresh)
+	return (w.n + Config.current().n) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+8
+```
+
+<!-- test: error.a-registered-writable-value-that-has-been-viewed -->
+`Config` has a `var` field, so its record may be written, and `w`'s reference is a second owner for the rest of the function: publishing `fresh` would hand every thread a record this one still reaches through `w`.
+```maxon
+type Config
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Config'
+
+default Config = Config.create(1)
+
+function main() returns ExitCode
+	var fresh = Config.create(3)
+	fresh.n = 4
+	view w = fresh
+	Config.register(fresh)
+	return (w.n + Config.current().n) as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3174: <fragment>:16:18: the value published to `Config` has been viewed by 'w': a view's reference is a second owner — publish a `.clone()`
 ```

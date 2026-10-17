@@ -316,7 +316,7 @@ type Bag uses Element
 	end 'add'
 
 	function shift() throws ArrayError
-		let moved = try self.chain.removeFirst()
+		view moved = try self.chain.removeFirst()
 		self.spare.append(moved)
 	end 'shift'
 

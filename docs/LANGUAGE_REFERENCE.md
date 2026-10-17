@@ -190,6 +190,9 @@ else:
 | `test` | at the top level, followed by a quoted name (see [Testing](#testing)) |
 | `spawn` | followed by a type's static factory call (see [Services](#services--spawn)) |
 | `bits` | followed by `(` on the right-hand side of a typealias |
+| `view` | at the start of a statement, or after `if` or `then`, followed by a name, or by a `( … )` list and `=` (see [Views](#views-view)) |
+| `readonly` | before an element or value type argument of a container (see [Read-Only Values](#read-only-values)), and after `returns` at a boundary with no body (see [Capability Qualifiers](#capability-qualifiers-keep-sole-returns-readonly)) |
+| `keep`, `sole` | before a parameter's type, and `sole` after `returns`, at a boundary with no body (see [Capability Qualifiers](#capability-qualifiers-keep-sole-returns-readonly)) |
 
 `__line__` and `__file__` are valid only as parameter defaults (see
 [Caller-Location Defaults](#caller-location-defaults-__line__-__file__)).
@@ -1367,6 +1370,10 @@ end 'main'
 - A requirement may be `static function`; the conforming type provides it as a static method.
 - `interface Derived extends Base` inherits `Base`'s requirements; a type implementing `Derived` provides
   both, and satisfies parameters typed `Base`.
+- A requirement declares what a conformer may do with its values: `keep` or `sole` on a parameter it keeps,
+  `returns sole` or `returns readonly` on its result (see
+  [Capability Qualifiers](#capability-qualifiers-keep-sole-returns-readonly)). A conformer that does more is
+  **E3189**.
 
 **Interface-typed parameters, returns and fields.** An interface can be used as a type, as `describe`
 does above: a parameter typed `Shape` accepts any conforming type, `enum` and `union` conformers
@@ -1688,6 +1695,9 @@ function is itself visible like any function: a private one called from another 
 
 A non-generic declaration of the same name is chosen when its parameter types are exactly the argument
 types. Two generic declarations that both infer a type for one call are **E3007**.
+
+A generic function's result may declare `returns sole T` or `returns readonly T` (see
+[Capability Qualifiers](#capability-qualifiers-keep-sole-returns-readonly)); a body that breaks it is **E3189**.
 
 A generic function may reassign a parameter declared `T`, and the argument is then passed by reference, as
 for any function (see [Parameter Passing](#parameter-passing)). When a call's name reaches more than one
@@ -2679,6 +2689,68 @@ function main() returns ExitCode
 end 'main'
 ```
 
+So a `let` binds only a value nothing writes while it lives:
+
+- a fresh record no other name reaches (`let x = Box.create(1)`), frozen at birth;
+- a read-only value, such as a module-level `let`'s record or a `let` field of a read-only holder;
+- a part of a parameter (`let z = p.child`), which is as immutable as the argument the caller passed. A caller
+  that passes the same record through a second, writable argument may write it while the `let` lives.
+
+A `let` bound to state something may still write — a field of a writable `self` or `var`, an element of a `var`
+container, a getter's result on a `var` holder, a parameter the function writes, a `var`'s record that a
+container also holds — is **E3188** (``cannot bind `let` 'b' to a value reached through 'holder', which something
+may still write; use `view` to read it, `var` to write it, or bind a clone()``). A function that returns a
+`let`-bound value returns a read-only value.
+
+### Views (`view`)
+
+`view x = e` binds any value read-only through `x`. Unlike a `let`, a `view` promises nothing about other names: a
+write made through another name, or by another coroutine across an `await`, is seen through the view.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Holder
+	export var box as Box
+
+	static function create() returns Self
+		return Self{box: Box.create(1)}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	var h = Holder.create()
+	view v = h.box            // `let v = h.box` is E3188: h may still write it
+	h.box.n = 7
+	print("{v.n}\n")          // 7
+	// v.n = 8                // E3159: 'v' is read-only (a `view`)
+	return 0
+end 'main'
+```
+
+- Writing through a view, or handing it to a parameter the callee writes, is **E3159**.
+- A view lives only inside its function. Storing it, handing it to a parameter that keeps it, returning it (or a
+  call's result that is still the view) and capturing it in a closure are **E3078**; sending it to a service is
+  **E3138**. Use a `clone()` for any of them. A view of a number or another scalar is copied where it goes.
+- A view holds its own reference to the record it names. Once a view of a `var` is declared — of the `var`
+  itself, a field or an element of it, or any expression that may hand its record back (a ternary, an
+  `otherwise`, a `match`, a call) — the view co-owns that record for the rest of the function, read again or
+  not: sending it (**E3138**), publishing it (**E3174**) or handing it to a `sole`
+  parameter (**E3078**) is refused. The rule follows source order, so inside a loop a view declared earlier in the
+  body counts. Reassigning the `var` a fresh record makes it sole again, and returning the `var` is unaffected.
+- A record nothing can write — a heap type whose fields are all `let` — is shared instead: it is sent, published
+  or handed to a `sole` parameter as it is, and the view stays valid. An inline packed record is copied.
+- `view` is a [contextual keyword](#keywords). It declares a local binding only: a `view` field, a module-level
+  `view`, a `view` in an extension body or an `@heap view` is **E2077**.
+
 ### Rules
 
 - Every variable is initialized where it is declared, and its type is inferred from the initializer.
@@ -2693,7 +2765,8 @@ end 'main'
   file order. See [Generic-Instance and Function-Type Aliases Are Brands](#generic-instance-and-function-type-aliases-are-brands).
 - Variables are block-scoped.
 - **A `var` that is never reassigned or mutated is E3077** (`variable 'x' is never reassigned; use 'let'
-  instead of 'var'`).
+  instead of 'var'`) when a `let` in its place would compile: its initializer is a fresh record or a
+  read-only value, and nothing stores it where something may write it and reads it again.
 - **Every variable must be used (E3012).** This covers `let`/`var`, parameters, loop variables, pattern
   bindings and closure parameters. The name `_` discards: it creates no binding and may appear several
   times in one pattern (`for (_, _) in pairs`). Names such as `_x` are ordinary variables. A method that
@@ -2784,10 +2857,9 @@ end 'main'
 - A module-level `let` is [read-only](#read-only-values) through everything it reaches, for the program's whole
   life. A write through it, or through a record a call handed back out of it, is **E3159**; binding it, a field
   of it (`var m = H.index`) or such a call result to a `var` is **E3078**. Read it through a `let`, or bind a
-  `clone()`. Pushing its record into a container, local or module-level, or storing it into a field of a
-  module-level `var` is **E3078** too; push or store a `clone()`. Handed to a function that stores its
-  parameter, put in an array literal or given to `upsert`, it is stored as a copy, and a write through the
-  copy leaves the `let` as it was.
+  `clone()`. Storing its record anywhere something may write it — pushing it into a container, local or
+  module-level, storing it into a `var` field, putting it in an array literal or a map value, or handing it to
+  a function that keeps its parameter — is **E3078** too; store a `clone()`.
 - A `spawn` reachable from a global initializer is **E3164**; start services in `main`, or declare a
   program-wide one with [`default`](#program-wide-defaults--default). A `Key.current()` or `Key.register()`
   reachable from a global initializer is [E3173](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3173): the
@@ -3062,6 +3134,50 @@ Omit `returns` for a function type that returns nothing: `typealias Callback = f
 throwing function cannot be used as a value (**E3101**) — wrap it in a function that handles the error.
 Function-type aliases are [brands](#generic-instance-and-function-type-aliases-are-brands).
 
+### Capability Qualifiers (`keep`, `sole`, `returns readonly`)
+
+A call through a function value or an interface method has no body the compiler can read, so the boundary
+declares what the callee does with its values. The qualifier is written before the type:
+
+| Qualifier | Meaning |
+|-----------|---------|
+| `keep` on a parameter | the callee keeps the argument where something may write it |
+| `sole` on a parameter | the callee consumes the argument and owns it, so it may keep it anywhere |
+| `returns sole T` | the result is fresh, reached by no other name |
+| `returns readonly T` | the result is read-only |
+
+```maxon
+typealias Count = int(0 to 1000)
+typealias Sink = function(b keep Box)
+typealias Maker = function() returns sole Box
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+interface Source
+	function current() returns readonly Box
+end 'Source'
+```
+
+- They are written only on a parameter or result of a function-type alias or an
+  [interface](#interfaces) requirement, and on the result of a [generic function](#generic-functions). Anywhere
+  else — a parameter of a function with a body, a cast, a binding — a qualifier is **E2076**.
+- A caller trusts the declaration. An argument to a `keep` parameter follows the rule for a function that keeps
+  it, so a `let` read again afterwards is **E3078**. A `sole` parameter consumes its argument: pass a fresh value,
+  or a `let` or `var` at its last use (a later use is **E3102**); a read-only value, a parameter, a field of a
+  record that stays reachable, or a `var` a [view](#views-view) has seen is **E3078**. The `let` of a
+  `returns sole` result is fresh, and a `let` of a `returns readonly` result is read-only.
+- A function value converted to the alias, a conformer's method, or a generic function's body that does more
+  than its boundary declares — keeps a parameter not declared `keep` or `sole`, or returns state something may
+  write where `returns sole` or `returns readonly` is declared — is **E3189**. A function value typed by one
+  alias converts to another, by a `return`, a store or an argument, only when it keeps no parameter the target
+  does not declare and declares at least the result capability the target declares.
+
 ### Closures
 
 A closure is an anonymous function written `function(parameters) gives expression`:
@@ -3097,6 +3213,12 @@ captured inside a loop is moved on the first trip, so the second is **E3102**. A
 before the call it is an argument of runs, so that call may not also consume the local, take it by
 reference or write it as its receiver (**E3102**); a call that only reads it may. Inside a closure, a captured name is the closure's own
 copy, so passing it to a parameter the callee writes is **E3159**.
+
+A closure that escapes — stored anywhere or returned — keeps every record it captures, so handing a read-only
+value to a function whose parameter such a closure captures is **E3078**. A closure that stays local — it is
+only called, where it is made or by a parameter that only calls it — writes what it writes of a parameter it
+captures, so handing that function a read-only value is **E3159**. A record [view](#views-view) cannot be
+captured (**E3078**); a view of a number can, since the closure captures a copy.
 
 **A closure can go anywhere a value can.** A function value is one reference to a record holding the code
 and the captures, so a closure may be returned, stored in a field, a module-level variable, a container or
@@ -5415,6 +5537,7 @@ for as long as it is read-only. That is what makes sharing by reference safe.
 | Read-only root | Read-only through |
 |----------------|-------------------|
 | a `let` binding | everything it reaches |
+| a [`view`](#views-view) binding | everything it reaches, through the view; other names may still write it |
 | a `let` field | everything it reaches, for the record's whole life |
 | a module-level `let` | everything it reaches, for the program's whole life |
 | a value read from a `SharedValue` or a registry | everything it reaches |
@@ -5427,12 +5550,18 @@ The rules:
 - **No write through a read-only value.** A field store, a method that writes its receiver, or an argument the
   callee writes is **E3159**. The diagnostic names the read-only root.
 - **No mutable alias of a read-only value.** Binding a read-only value to a `var` is **E3078**, and so is a module
-  `var` initializer that may take a module-level `let`'s record. A value read out of a `let` field, a `let`
-  payload, a `readonly` element, a `SharedValue` or a registry is read-only for good, so storing it into a `var`
-  field or a mutable container element, or passing it to a parameter that keeps it mutably, is **E3078** too; a
-  module-level `let`'s record follows the rules in [Top-Level Variables](#top-level-variables). A `let` binding's own
-  record may be stored or kept: it stays read-only through its new holder while the binding is live, so a write
-  through that holder is **E3159**. [`clone()`](#explicit-cloning) makes an independent mutable copy.
+  `var` initializer that may take a module-level `let`'s record. Storing a read-only value into a `var` field, a
+  mutable container element or module storage, or passing it to a parameter that keeps it where something may
+  write it, is **E3078** too. A `let` bound to a fresh record is the one exception, at its last use: the store
+  consumes the name, so no `let` sees what the new holder writes. Stored there and read again afterwards, it is
+  refused. A last use is judged per path: a store on one arm of an `if`, a `match` or a ternary is the last use on
+  that arm when the arm reads the name no more, and so is a store on a branch that then leaves the function
+  (`return`, `throw`, `panic`), whatever the code after the `if` reads. A store on an arm that falls through to a
+  later read is refused. When a callee both keeps and writes a read-only argument, the keep is the error reported.
+  [`clone()`](#explicit-cloning) makes an independent mutable copy.
+- **A `let` binds only what nothing writes.** A `let` bound to state something may still write is **E3188**; see
+  [Immutable Variables](#immutable-variables-let). A `let` bound from a parameter is as immutable as the caller's
+  argument.
 - **A `let` field has no other writer.** A value stored into a `let` field must be:
   - already read-only;
   - a value type;
@@ -5450,7 +5579,9 @@ The rules:
   - an element read out is read-only;
   - the container itself stays mutable: elements can still be pushed, replaced and removed.
 
-  `readonly` appears only on a container's element or value type; bindings and fields use `let`.
+  As a type argument, `readonly` appears only on a container's element or value type; bindings and fields use
+  `let`. `returns readonly` on a boundary with no body is a
+  [capability qualifier](#capability-qualifiers-keep-sole-returns-readonly).
 - **Value types are exempt.** Scalars, `String`, `Character` and records whose fields are all `let` cannot give a
   stored value a second writer, so none of these rules apply to them. A `String` or `Character` a name does not
   own is copied when it is bound to a `var` or stored.
@@ -5472,7 +5603,7 @@ function main() returns ExitCode
 	var a = Point.create(1)
 	a.x = 2
 	let frozen = a                       // a moves into frozen, which is read-only
-	let view = frozen                    // view shares frozen's record, read-only
+	let shared = frozen                  // shared names frozen's record, read-only
 	// frozen.x = 3                      // E3159: 'frozen' is read-only
 	// var copy = frozen                 // E3078: 'frozen' is read-only
 	var b = frozen.clone()               // an independent, mutable record
@@ -5482,7 +5613,7 @@ function main() returns ExitCode
 	points.push(b)                       // the array shares b's record
 	var first = try points.get(0) otherwise panic("pushed")
 	first.x = 9                          // an element follows its container
-	print("{view.x} {b.x} {first.x}\n")     // 2 9 9
+	print("{shared.x} {b.x} {first.x}\n")   // 2 9 9
 	return 0
 end 'main'
 ```
@@ -5494,12 +5625,16 @@ end 'main'
 | `var b = a`, `a` a `var` | `a` moves into `b` |
 | `let b = a`, `a` a `var` | `a` moves into `b`, and `b` is read-only |
 | `let b = a`, `a` read-only | `b` shares the record, read-only |
+| `let b = e`, `e` state something may still write | **E3188**; `view b = e` reads it, `var b = e` writes it |
+| `view b = e` | `b` names the record read-only; other names may still write it |
 | `var b = a`, `a` read-only (a `let` included) | **E3078**; `a.clone()` is the mutable copy |
 | an ordinary call argument | shared with the callee for the call, counted where needed; a parameter the callee reassigns gets its own storage |
+| an argument the callee keeps where something may write it | a fresh `let` at its last use moves; any other read-only value is **E3078** |
 | an argument the callee keeps in a `let` field | must be read-only, a value type, or moved (a `var` at its last use) |
+| an argument to a [`sole`](#capability-qualifiers-keep-sole-returns-readonly) parameter | moves: a fresh value, or a `let` or `var` at its last use |
 | an [`async`](#starting-a-coroutine) call argument | shared like an ordinary call argument: the coroutine runs on the caller's green thread; a parameter the coroutine reassigns gets storage the coroutine owns; a promise moves to the coroutine |
 | a [closure](#closures) capture | the captured local moves into the closure; reading it afterwards is **E3102** |
-| a [service](#services--spawn) message or `spawn` factory argument | a mutable value moves to the service; a read-only value the sender does not own is shared |
+| a [service](#services--spawn) message or `spawn` factory argument | a mutable value moves to the service; a read-only value the sender does not own is shared; a view, or a record a view declared earlier may reach, is **E3138** |
 | `SharedValue.publish`, `Key.register` | the value must be solely owned (**E3174**), and every reader sees it read-only |
 
 ### Aliasing Between Arguments
@@ -5536,7 +5671,8 @@ end 'main'
 
 `clone()` comes from the `Cloneable` interface (`function clone() returns Self`). The compiler generates it
 for any type whose fields are all cloneable; primitives, `String`, and collections of cloneable elements are
-cloneable. A generic type's instance clones per instance — a `Map`, a `Set`, a declared `Box with String` —
+cloneable. A collection's `clone()` clones each element it holds, so no record of the copy is a record of the
+original, and the copy is solely owned. A generic type's instance clones per instance — a `Map`, a `Set`, a declared `Box with String` —
 copying what its type arguments hold. Declare `clone()` yourself for custom behaviour, or for a type holding
 an uncloneable field.
 
@@ -5562,7 +5698,8 @@ decorator of that shape reaches the clone check.
   run in parallel with it or with each other. They switch only at `await`, `sleep`, `Scheduler.yield()` and I/O,
   so their reference counts are plain and sharing between them needs no synchronization.
 - **Services own their state.** State that more than one thread uses lives in a [service](#services--spawn) and is
-  reached by message. Messages and replies move their mutable arguments.
+  reached by message. Messages and replies move their mutable arguments. A [view](#views-view) stays on its thread:
+  a send refuses a view, and a writable record a view declared earlier in the function may reach.
 - **Module `var`s stay on one thread.** A module or static `var` that code running on another thread (a service,
   or anything it calls) can reach is **E3143**.
 - **Read-only values are shared.** A module `let` reachable from another thread, a value published through

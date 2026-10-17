@@ -231,7 +231,7 @@ type HeldWorkspace
 		var project = try libraryTierProject(buildRootOf(root, readerPath: documentOf(request)), tiers: tiers, buffer: OpenBuffer.none, fileMemos: workspace.fileMemos) otherwise return SweptProject.unavailable
 		var fresh = HeldCorpus.create(project, selection: selection, sweep: sourcesUnder(root, selection: selection), sweptAtMs: Clock.nowMs())
 
-		let swept = fresh.sweptFor(root, request: request)
+		var swept = fresh.sweptFor(root, request: request)
 
 		match swept 'outcome'
 			read or
@@ -290,7 +290,7 @@ let ProjectLoadingKey = "loading"
 module type LspWorkspaceState
 	module var held as RecentHeldRoots
 	module var namedRoots as LspClientRootArray
-	module let fileMemos as SharedFileMemoMap
+	module var fileMemos as SharedFileMemoMap
 	module let writer as LspStdoutWriter.handle
 
 	module static function create(writer LspStdoutWriter.handle) returns LspWorkspaceState
@@ -508,7 +508,7 @@ function heldProjectSwept(workspace LspWorkspaceState, root WorkspaceRoot, tiers
 	end 'heldAlready'
 
 	var fresh = HeldWorkspace.create()
-	let swept = fresh.sweptFor(root, key: key, tiers: tiers, request: request, workspace: workspace)
+	var swept = fresh.sweptFor(root, key: key, tiers: tiers, request: request, workspace: workspace)
 
 	match swept 'outcome'
 		read or
@@ -584,7 +584,7 @@ type RecentHeldRoots
 	end 'rootAt'
 
 	function recentAt(key String) returns HeldRoot throws MapError
-		let held = try self.roots.get(key)
+		var held = try self.roots.get(key)
 		self.use(key)
 
 		return held
@@ -771,7 +771,7 @@ extension Project
 	function sweptForReader(walk SourceSweep, readerPath FilePath) returns SweptProject
 		let reader = try self.refreshFromWalk(walk, readerPath: readerPath, unreadable: UnreadableSource.skipped) otherwise panic("sweptForReader: a corpus skips a source it cannot read, so its refresh refuses nothing")
 
-		let signatures = try self.foldedSignatures() otherwise return SweptProject.unavailable
+		view signatures = try self.foldedSignatures() otherwise return SweptProject.unavailable
 
 		return SweptProject.read(self, signatures: signatures, readerPath: reader)
 	end 'sweptForReader'

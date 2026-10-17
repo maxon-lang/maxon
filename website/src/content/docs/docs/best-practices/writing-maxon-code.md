@@ -374,6 +374,7 @@ function f(x Coord) returns Coord
 - A typealias never named in a type position of its own file is **E3062**, unless it is visible outside the
   file (`module`, `export` or `public`). A bare `[...]` literal inferring the type is not a use.
 - A `var` that is neither reassigned nor mutated (`push`, `append`, a field write…) is **E3077** — use `let`.
+  It is reported only where a `let` in its place would compile.
 - Assigning a value to itself (`x = x`, `p.x = p.x`) is **E3067**.
 - A pure function's result must be used, and an impure one's used or discarded with `_ =` — see
   [Purity and discarded results](#purity-and-discarded-results).
@@ -1159,7 +1160,18 @@ Operators: `and`, `or`, `not`, plus parentheses for grouping.
 - `@heap let p = Point.create(0.0, y: 0.0)` forces heap allocation
 - `let` is read-only all the way down: a `let` binding, `let` field, `let` payload, module-level `let`,
   `SharedValue` or registry read, stored `Map` key or `Set` element, and `readonly` element. A write through
-  one is **E3159**; binding one to a `var` or storing it where something may write it is **E3078**.
+  one is **E3159**; binding one to a `var` or storing it where something may write it is **E3078**, except a
+  `let` of a fresh record at its last use, which the store consumes.
+- A `let` binds only a fresh record, a read-only value, or a part of a parameter. A `let` of state something
+  may still write (a field of a writable `self`, an element of a `var` container, a getter's result on a `var`)
+  is **E3188**: write `view x = …` to read it, `var` to write it, or `let` a `.clone()`.
+- `view x = …` is read-only through `x` while other names may still write it. It lives only inside its
+  function: storing, keeping, returning or capturing it is **E3078**, sending it **E3138**. Once a `var`'s
+  record has been viewed, sending, publishing or passing it to a `sole` parameter is refused for the rest of the
+  function, unless every field of its type is a `let`; reassign the `var` a fresh record or send a `.clone()`.
+- `keep` and `sole` on a parameter, and `returns sole` / `returns readonly` on a result, are written only on a
+  function-type alias, an interface requirement or a generic function's result (**E2076** elsewhere); a body
+  that does more than they declare is **E3189**.
 - `var b = a` and `let b = a` from a `var` `a` **move** it: reading `a` afterwards is **E3102**. `var b = a`
   from a `let` `a` is **E3078**; use `.clone()` for a mutable copy.
 - A parameter the function assigns to is passed by reference; passing a read-only value to it is **E3159**.

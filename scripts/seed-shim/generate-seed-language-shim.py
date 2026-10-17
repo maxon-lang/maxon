@@ -1,18 +1,25 @@
 #!/usr/bin/env python3
 """generate-seed-language-shim.py - write the seed shim that withdraws every language form the seed
-cannot parse.
+cannot parse, and rewrites every site the seed's older rules refuse.
 
-Five forms: a `typealias ... implements` clause, a generic function (`function f(...) uses T`), a type
-body's inferred field (`var x = e as T`, `var x = Type.member(...)`, `var x = "text"`, which the seed
-reads only as `var x as T = e`), a `readonly` qualifier on a container's element type
-(`Array with readonly T`, `Map with (K, readonly V)`) and a `let` on a union case's payload
-(`case(let name T)`). The seed enforces every ranged typealias nominally, so once the clauses are gone
-each widening crossing the tree relies on is an E3005/E2028 there; a generic function is withdrawn
-whole, which the tree affords because the compiler calls none; an inferred field is written back with
-the type its initializer names; the two qualifiers are withdrawn, which leaves the container and union
-types the seed always held. This script copies the tree's `maxon-bin/`, `stdlib/` and `runtime/` into a
-scratch directory, stages every other patch in `scripts/seed-shim/` in sorted order, strips all five
-forms, and then builds with the seed for one native target at a time until it is clean, and again for any lane
+Two forms are withdrawn on every run. A `view` binding (`view x = e`, `view (a, b) = e`, `if view x = e`, a
+`view` target of a tuple assignment) is written `let`, which the seed reads as a read-only binding of the same
+value. A capability qualifier is withdrawn: `keep` and `sole` on a parameter of a function-type alias or an
+interface requirement, and `sole` or `readonly` after `returns`.
+
+With --older-seed, five more forms are withdrawn for a seed that predates them: a `typealias ... implements`
+clause, a generic function (`function f(...) uses T`), a type body's inferred field (`var x = e as T`,
+`var x = Type.member(...)`, `var x = "text"`, which the seed reads only as `var x as T = e`), a `readonly`
+qualifier on a container's element type (`Array with readonly T`, `Map with (K, readonly V)`) and a `let` on a
+union case's payload (`case(let name T)`). Such a seed enforces every ranged typealias nominally, so once the
+clauses are gone each widening crossing the tree relies on is an E3005/E2028 there; a generic function is
+withdrawn whole, which the tree affords because the compiler calls none; an inferred field is written back with
+the type its initializer names; the two qualifiers are withdrawn, which leaves the container and union types the
+seed always held.
+
+This script copies the tree's `maxon-bin/`, `stdlib/` and `runtime/` into a scratch directory, stages every
+other patch in `scripts/seed-shim/` in sorted order, strips the forms, and then builds with the seed for one
+native target at a time until it is clean, and again for any lane
 the tree changed under since its last clean build, so the code a lane's `#if` selects is judged by the seed as
 well. The seed's parser ends a file's parse at its first type refusal, so a file that keeps failing is built
 through a split view (`view/` in the work directory) that spreads its functions over small files, each of which
@@ -28,8 +35,13 @@ are answered at each site the seed refuses by the rewrite its older rule asks fo
   E3070  a `let` that holds an element of a collection across a call that mutates the collection is
          bound to a `.clone()` of it; a loop it reads as still borrowing what its body mutates
          iterates a clone held in a local, when the script can prove the body leaves the collection
-         unmutated.
-  E3078  an immutable variable assigned to a mutable binding gets the `.clone()` the seed asks for.
+         unmutated. A `let` written from a `view` is not cloned: the clone would stop it seeing the
+         writes the tree lets it observe, so the site stops the script.
+  E3078  an immutable value bound or assigned to a mutable binding, passed to a parameter that keeps
+         or stores it, or stored into a `let` field, a `let` payload or a `readonly` element gets the
+         `.clone()` the seed asks for.
+  E3102  a `var` the seed reads as moved, by a `let` written from a `view` of it, is written `let`,
+         which the seed aliases instead of moving, when nothing in its function reassigns it.
   E2013  a loop whose element is assigned through becomes an index loop that binds a `var` alias of
          the element it reads.
   E3077  a `var` the seed reads as never reassigned, because it only sees assignments where the tree
@@ -38,21 +50,23 @@ The difference is the patch.
 
 Usage:
   python scripts/seed-shim/generate-seed-language-shim.py [--tree DIR] [--seed PATH] [--work DIR]
-      [--output PATH] [--resume]
+      [--output PATH] [--resume] [--older-seed]
 
 --work must be empty, and defaults to a fresh system temp directory; with --resume it is the
 directory a previous run left, and the build loop continues there. Keep it outside the checkout,
 whose `temp/` carries a `.maxonignore`. --output defaults to the committed patch in
-`scripts/seed-shim/`.
+`scripts/seed-shim/`. --older-seed also withdraws the five forms above for a seed that predates them.
 
 Exit codes: 0 the patch was written; 1 the tree holds what this script cannot shim: an integer
 literal it cannot rewrite in a form the seed lexes, a `Compiler.` qualifier it cannot write bare
 without changing the declaration it names, a field default with no inferable type, or a seed refusal
-it does not cast, including a loop it cannot prove leaves its iterated collection unmutated.
+it does not cast, including a loop it cannot prove leaves its iterated collection unmutated, a `view`
+the seed's older rule would clone, and a moved `var` it cannot write `let`.
 """
 import argparse
 import filecmp
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -65,7 +79,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 
 from maxon_source import FieldDefaultShapeError, field_default_type
 
-PATCH_NAME = "0008-withdraw-the-language-forms-the-seed-cannot-parse-from-the-first-build.patch"
+PATCH_NAME = "0009-withdraw-the-language-forms-the-seed-cannot-parse-from-the-first-build.patch"
 SOURCE_DIRS = ["maxon-bin", "stdlib", "runtime"]
 NATIVE_TARGETS = ["x64-windows", "x64-linux", "arm64-macos", "arm64-linux"]
 MAX_ROUNDS = 800
@@ -90,7 +104,12 @@ STRING_LITERAL = re.compile(r'^b?"(?:[^"\\]|\\.)*"$')
 SCOPE_OPENERS = ("if let ", "if var ", "while let ", "while var ", "for ")
 PLAIN_BINDERS = ("let ", "var ")
 
-HEADER = """# The seed cannot parse a `readonly` qualifier on a container's element type (`Array with readonly T`,
+HEADER = """# The seed cannot parse a `view` binding, so each is written `let`, which the seed reads as a read-only binding of
+# the same value; a `var` the seed then reads as moved by that `let` is written `let` too where nothing reassigns it.
+# The seed cannot parse a capability qualifier (`keep` or `sole` on a parameter of a function-type alias or an
+# interface requirement, `returns sole`, `returns readonly`), so each is withdrawn.
+# Against a seed older than the forms below (`--older-seed`), each of them is withdrawn as well.
+# The seed cannot parse a `readonly` qualifier on a container's element type (`Array with readonly T`,
 # `Map with (K, readonly V)`) or a `let` on a union case's payload (`case(let name T)`), so each is withdrawn. Without
 # the qualifier two instances of a container are one type to the seed, which is what it always held.
 # The seed cannot parse a generic function, so each is withdrawn whole; the compiler calls none of them.
@@ -102,17 +121,17 @@ HEADER = """# The seed cannot parse a `readonly` qualifier on a container's elem
 # and `var x = "text"` is written `var x as T = e`.
 # The seed cannot lex a decimal integer literal above i64.max, so each is written in hex, and a typealias range bound is
 # written i64.max.
-# The declarations, their ranges and every table stay, so `C1` knows the clause and compiles the unshimmed tree
-# into `C2`. An `export` whose only reach beyond its file was through such a crossing is an E3092 to the seed
-# once the crossing is a cast, so it is withdrawn too.
+# An `export` whose only reach beyond its file was through such a crossing is an E3092 to the seed once the crossing
+# is a cast, so it is withdrawn too.
 # The seed cannot parse a `Compiler.`-qualified name, so each is written bare; the seed resolves that to the same
-# declaration. Where its older borrow checker refuses a legal program, the patch writes the copy it demands: the
-# `.clone()` an E3078 names, and a clone held in a local for a loop it reads as borrowing what its body mutates.
+# declaration.
+# The declarations, their ranges and every table stay, so `C1` knows every withdrawn form and compiles the unshimmed
+# tree into `C2`.
 # The tree also no longer has rules the seed enforces, so each site the seed refuses is written the way its older
-# rule accepts: a `let` that holds a collection's element across a call that mutates the collection is bound to a
-# `.clone()` of it, and so is a loop's iterated collection where the body provably leaves it unmutated; a loop whose
-# element is assigned through is an index loop over a `var` alias of the element it reads; and a `var` the seed sees no
-# assignment to is a `let`.
+# rule accepts: the `.clone()` an E3078 names, at a binding, an argument or a store; a `let` that holds a collection's
+# element across a call that mutates the collection is bound to a `.clone()` of it, and so is a loop's iterated
+# collection where the body provably leaves it unmutated; a loop whose element is assigned through is an index loop
+# over a `var` alias of the element it reads; and a `var` the seed sees no assignment to is a `let`.
 # GENERATED by `scripts/seed-shim/generate-seed-language-shim.py`; regenerate it when the sources it touches move.
 """
 
@@ -132,6 +151,12 @@ UNUSED_EXPORT = re.compile(r"^exported [a-z]+ '(?P<name>[A-Za-z0-9_]+)' is never
 ARGUMENT = re.compile(r"^argument type mismatch for '(?P<label>[A-Za-z0-9_]+)': expected '(?P<expected>[A-Za-z0-9_]+)', got '(?P<got>[A-Za-z0-9_]+)'")
 IMMUTABLE_TO_MUTABLE = re.compile(r"^cannot assign immutable variable '(?P<source>[A-Za-z0-9_]+)' to mutable binding '(?P<target>[A-Za-z0-9_]+)'; .*use clone\(\)")
 BORROWED_BY_LOOP = re.compile(r"^cannot mutate '(?P<owner>[A-Za-z0-9_]+)' via '(?P<via>[A-Za-z0-9_]+)' while it is borrowed by '(?P<element>[A-Za-z0-9_]+)' \(borrowed at line (?P<line>\d+)\)")
+PASSED_TO_KEEPER = re.compile(r"^cannot pass '[A-Za-z0-9_]+', which is read-only \(.*\), to parameter '(?P<parameter>[A-Za-z0-9_]+)' of '.*', which keeps it where something may write it; pass a clone\(\)")
+STORED_INTO_READONLY_ELEMENT = re.compile(r"^cannot store a value other names may still write into a `readonly` element of the container written by '[A-Za-z0-9_]+'")
+PASSED_TO_STORER = re.compile(r"^cannot pass (?:the `var` '[A-Za-z0-9_]+', which is read again,|a value other names may still write) to parameter '(?P<parameter>[A-Za-z0-9_]+)' of '[^']+', which stores it into a `let` (?:payload|field)")
+STORED_INTO_LET_SLOT =re.compile(r"^cannot store a value other names may still write into a `let` (?:payload|field) '")
+STORED_ARGUMENT_LABEL = "value"
+SHARES_LET_STORAGE = re.compile(r"^cannot assign (?!immutable variable )[^;]+? to mutable binding '(?P<name>[A-Za-z0-9_]+)'; use 'let' instead of 'var', or use clone\(\)")
 NEVER_REASSIGNED = re.compile(r"^variable '(?P<name>[A-Za-z0-9_]+)' is never reassigned; use 'let' instead of 'var'")
 IMMUTABLE_LOOP_ELEMENT = re.compile(r"^cannot assign to immutable variable: '(?P<name>[A-Za-z0-9_]+)'$")
 SEED_PREFIX = "seed"
@@ -143,6 +168,32 @@ READONLY_ARGUMENT = re.compile(r"(?:\bwith |, |\()(?P<modifier>readonly (?=[A-Za
 UNION_OPEN = re.compile(r"^(?P<indent>[ \t]*)(?:[a-z]+ )*union (?P<name>[A-Z][A-Za-z0-9_]*)")
 UNION_CASE = re.compile(r"^[ \t]*[a-z][A-Za-z0-9_]*\(")
 PAYLOAD_LET = re.compile(r"(?:(?<=\()|(?<=, ))let (?=[a-z_][A-Za-z0-9_]* [A-Z(])")
+VIEW_WORD = "view"
+BINDING_WORD = "let"
+LEXER_SOURCE = os.path.join("maxon-bin", "Compiler", "Lexer.maxon")
+KEYWORD_ROW = re.compile(r'^\s*b"(?P<word>[A-Za-z]+)": KeywordInfo\.create\(', re.M)
+VIEW_WORD_AT = re.compile(r"\bview\b")
+VIEW_PRECEDER = re.compile(r"(?:^|\s)(?:if|then)\s*$")
+BINDING_NAME = re.compile(r"\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)")
+DESTRUCTURE_OPEN = re.compile(r"\s*\(")
+ASSIGNED_TO_NEXT = re.compile(r"\s*=(?!=)")
+VIEW_INITIALIZER = re.compile(r"^(?:\s+as\s+[A-Za-z_][A-Za-z0-9_.]*)?\s*=\s*(?P<value>.+?)\s*$")
+BARE_LOCAL_READ = re.compile(r"^\(*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\)*$")
+TUPLE_TARGET = r"(?:(?:let|var|view) )?[A-Za-z_][A-Za-z0-9_]*"
+TUPLE_ASSIGNMENT = re.compile(rf"\(\s*{TUPLE_TARGET}(?:\s*,\s*{TUPLE_TARGET})*\s*\)\s*=(?!=)")
+TUPLE_ASSIGNMENT_HEAD = re.compile(r"(?:^[ \t]*|\bthen )(?=\()")
+TUPLE_VIEW_TARGET = re.compile(r"(?P<lead>[(,]\s*)view (?P<name>[A-Za-z_][A-Za-z0-9_]*)")
+TUPLE_CLOSED_ASSIGNMENT = re.compile(r"\)\s*=(?!=)")
+VIEWED_VAR_NOTE = "; `{name}` is the bare initializer of a `view` in this file, and a `view` of a `var` the code reads again names data the tree lets it observe changing, so no seed-legal binding keeps both names"
+MOVED_VALUE = re.compile(r"^use of moved value '(?P<name>[A-Za-z0-9_]+)'")
+VIEW_REGISTRY = "view-bindings.json"
+CAPABILITY_HINT = re.compile(r"\b(?:keep|sole|returns readonly)\b")
+RESULT_QUALIFIER = re.compile(r"\breturns (?:sole|readonly) (?=[A-Za-z_(])")
+FUNCTION_TYPE_ALIAS = re.compile(r"^[ \t]*(?:[a-z]+ )*typealias [A-Za-z0-9_]+ = function(?=\()")
+INTERFACE_OPEN = re.compile(r"^(?P<indent>[ \t]*)(?:[a-z]+ )*interface (?P<name>[A-Z][A-Za-z0-9_]*)")
+INTERFACE_METHOD = re.compile(r"^[ \t]+(?:[a-z]+ )*function [A-Za-z_][A-Za-z0-9_]*(?=\()")
+UNNAMED_QUALIFIED_PARAMETER = re.compile(r"^(?P<lead>\s*)(?:keep|sole) (?=[A-Za-z_(])")
+NAMED_QUALIFIED_PARAMETER = re.compile(r"^(?P<head>\s*[A-Za-z_][A-Za-z0-9_]* )(?:keep|sole) (?=[A-Za-z_(])")
 CLONE_CALL = ".clone()"
 HELD_PREFIX = "seedHeld"
 PROVEN_LOOP_HOISTS = {
@@ -375,112 +426,278 @@ def strip_generic_functions(work):
 	return withdrawn
 
 
-def strip_readonly_arguments(work):
-	withdrawn = 0
+class LineRewrite:
+	def edits(self, line, masked):
+		raise NotImplementedError
+
+	def finish(self):
+		return None
+
+
+def rewrite_code(work, mentions, rewrite_for):
+	total = 0
 
 	for path in maxon_sources(work, SOURCE_DIRS):
 		text = read(path)
 
-		if READONLY_WORD not in text:
+		if not mentions(text):
 			continue
 
+		rel = os.path.relpath(path, work).replace("\\", "/")
 		lines = text.split("\n")
 
 		try:
-			regions = CodeRegions(lines).per_line
+			regions = CodeRegions(lines)
 		except Unhandled as e:
-			raise SystemExit(f"generate-seed-language-shim.py: {os.path.relpath(path, work)}: {e}")
+			raise SystemExit(f"generate-seed-language-shim.py: {rel}: {e}")
 
-		rewritten = []
+		rewrite = rewrite_for(rel)
 
 		for index, line in enumerate(lines):
-			out = []
-			last = 0
+			try:
+				edits = rewrite.edits(line, regions.view(index, line))
+			except Unhandled as e:
+				raise SystemExit(f"generate-seed-language-shim.py: {rel}:{index + 1}: {e}")
 
-			for start, end in regions[index]:
-				for m in READONLY_ARGUMENT.finditer(line, start, end):
-					out.append(line[last:m.start("modifier")])
-					last = m.end("modifier")
-					withdrawn += 1
+			for start, end, replacement in sorted(edits, reverse=True):
+				line = line[:start] + replacement + line[end:]
 
-			out.append(line[last:])
-			rewritten.append("".join(out))
+			if edits:
+				lines[index] = line
+				total += len(edits)
 
-		if rewritten != lines:
-			write(path, "\n".join(rewritten))
+		try:
+			rewrite.finish()
+		except Unhandled as e:
+			raise SystemExit(f"generate-seed-language-shim.py: {rel}: {e}")
 
-	return withdrawn
+		rewritten = "\n".join(lines)
+
+		if rewritten != text:
+			write(path, rewritten)
+
+	return total
 
 
-def payload_end(line, open_index):
-	depth = 0
+class ReadonlyArguments(LineRewrite):
+	def edits(self, line, masked):
+		return [(m.start("modifier"), m.end("modifier"), "") for m in READONLY_ARGUMENT.finditer(masked)]
 
-	for i in range(open_index, len(line)):
-		if line[i] == "(":
-			depth += 1
-		elif line[i] == ")":
-			depth -= 1
 
-			if depth == 0:
-				return i
+class PayloadLets(LineRewrite):
+	def __init__(self):
+		self.end = None
+		self.case_indent = ""
 
-	raise Unhandled("a union case's payload list does not close on its line")
+	def edits(self, line, masked):
+		if self.end is None:
+			opened = UNION_OPEN.match(masked)
+
+			if opened:
+				self.end = re.compile(r"^" + re.escape(opened.group("indent")) + r"end '" + re.escape(opened.group("name")) + r"'\r?$")
+				self.case_indent = opened.group("indent") + "\t"
+
+			return []
+
+		if self.end.match(line):
+			self.end = None
+			return []
+
+		declared = UNION_CASE.match(masked)
+
+		if declared is None or not masked.startswith(self.case_indent) or masked[len(self.case_indent):len(self.case_indent) + 1] in (" ", "\t"):
+			return []
+
+		open_index = declared.end() - 1
+		close = match_forward(masked, open_index)
+
+		return [(m.start(), m.end(), "") for m in PAYLOAD_LET.finditer(masked, open_index, close)]
+
+	def finish(self):
+		if self.end is not None:
+			raise Unhandled("a union is never closed")
+
+
+def strip_readonly_arguments(work):
+	return rewrite_code(work, lambda text: READONLY_WORD in text, lambda rel: ReadonlyArguments())
 
 
 def strip_payload_lets(work):
-	withdrawn = 0
+	return rewrite_code(work, lambda text: "let " in text and "union " in text, lambda rel: PayloadLets())
 
-	for path in maxon_sources(work, SOURCE_DIRS):
-		text = read(path)
 
-		if "let " not in text or "union " not in text:
+def lexer_keywords(work):
+	return {m.group("word") for m in KEYWORD_ROW.finditer(read(os.path.join(work, LEXER_SOURCE)))}
+
+
+def view_binding_heads(masked, keywords):
+	heads = []
+
+	for m in VIEW_WORD_AT.finditer(masked):
+		before = masked[:m.start()]
+
+		if before.endswith(".") or (before.strip() and VIEW_PRECEDER.search(before) is None):
 			continue
 
-		lines = text.split("\n")
-		end = None
-		changed = False
+		after = masked[m.end():]
+		named = BINDING_NAME.match(after)
 
-		for index, line in enumerate(lines):
-			if end is None:
-				opened = UNION_OPEN.match(line)
+		if named and named.group("name") not in keywords:
+			initializer = VIEW_INITIALIZER.match(after[named.end():])
+			source = BARE_LOCAL_READ.match(initializer.group("value")) if initializer else None
+			heads.append((m.start(), m.end(), [named.group("name")], source.group("name") if source else None))
+			continue
 
-				if opened:
-					end = re.compile(r"^" + re.escape(opened.group("indent")) + r"end '" + re.escape(opened.group("name")) + r"'\r?$")
-					case_indent = opened.group("indent") + "\t"
+		opened = DESTRUCTURE_OPEN.match(after)
 
-				continue
+		if opened is None:
+			continue
 
-			if end.match(line):
-				end = None
-				continue
+		open_index = m.end() + opened.end() - 1
+		try:
+			close = match_forward(masked, open_index)
+		except Unhandled:
+			continue
 
-			declared = UNION_CASE.match(line)
+		if ASSIGNED_TO_NEXT.match(masked, close + 1) is None:
+			continue
 
-			if declared is None or not line.startswith(case_indent) or line[len(case_indent):len(case_indent) + 1] in (" ", "\t"):
-				continue
+		heads.append((m.start(), m.end(), WORD.findall(masked[open_index + 1:close]), None))
 
-			open_index = declared.end() - 1
+	return heads
 
-			try:
-				close = payload_end(line, open_index)
-			except Unhandled as e:
-				raise SystemExit(f"generate-seed-language-shim.py: {os.path.relpath(path, work)}:{index + 1}: {e}")
 
-			payload = line[open_index:close]
-			stripped, count = PAYLOAD_LET.subn("", payload)
+def tuple_view_targets(masked, keywords):
+	targets = []
 
-			if count:
-				lines[index] = line[:open_index] + stripped + line[close:]
-				withdrawn += count
-				changed = True
+	for head in TUPLE_ASSIGNMENT_HEAD.finditer(masked):
+		assignment = TUPLE_ASSIGNMENT.match(masked, head.end())
 
-		if end is not None:
-			raise SystemExit(f"generate-seed-language-shim.py: {os.path.relpath(path, work)}: a union is never closed")
+		if assignment is None:
+			continue
 
-		if changed:
-			write(path, "\n".join(lines))
+		for target in TUPLE_VIEW_TARGET.finditer(masked, head.end(), assignment.end()):
+			if target.group("name") not in keywords:
+				targets.append((target.end("lead"), target.end("lead") + len(VIEW_WORD), target.group("name")))
 
-	return withdrawn
+	return targets
+
+
+class ViewBindings(LineRewrite):
+	def __init__(self, rel, keywords, registry):
+		self.rel = rel
+		self.keywords = keywords
+		self.registry = registry
+
+	def edits(self, line, masked):
+		if VIEW_WORD not in line:
+			return []
+
+		edits = []
+
+		for start, end, bound, source in view_binding_heads(masked, self.keywords):
+			edits.append((start, end, BINDING_WORD))
+			self.registry.names.setdefault(self.rel, set()).update(bound)
+
+			if source is not None:
+				self.registry.sources.setdefault(self.rel, set()).add(source)
+				self.registry.bare += 1
+
+		for start, end, bound in tuple_view_targets(masked, self.keywords):
+			edits.append((start, end, BINDING_WORD))
+			self.registry.names.setdefault(self.rel, set()).add(bound)
+
+		return edits
+
+
+class ViewRegistry:
+	def __init__(self):
+		self.names = {}
+		self.sources = {}
+		self.bare = 0
+
+
+def strip_view_bindings(work):
+	keywords = lexer_keywords(work)
+	registry = ViewRegistry()
+	withdrawn = rewrite_code(work, lambda text: VIEW_WORD in text, lambda rel: ViewBindings(rel, keywords, registry))
+	return withdrawn, registry.bare, registry.names, registry.sources
+
+
+def save_view_registry(work, names, sources):
+	registry = {"names": {rel: sorted(found) for rel, found in names.items()}, "sources": {rel: sorted(found) for rel, found in sources.items()}}
+	write(os.path.join(work, VIEW_REGISTRY), json.dumps(registry, indent="\t"))
+
+
+def load_view_registry(work):
+	path = os.path.join(work, VIEW_REGISTRY)
+
+	if not os.path.isfile(path):
+		raise SystemExit(f"generate-seed-language-shim.py: {work} holds no {VIEW_REGISTRY}, so it is not a work directory this version of the script left; start a run without --resume")
+
+	registry = json.loads(read(path))
+	return {rel: set(found) for rel, found in registry["names"].items()}, {rel: set(found) for rel, found in registry["sources"].items()}
+
+
+def top_level_parts(masked, start, end):
+	parts = []
+	depth = 0
+	begin = start
+
+	for i in range(start, end):
+		if masked[i] in OPENERS:
+			depth += 1
+		elif masked[i] in CLOSERS:
+			depth -= 1
+		elif masked[i] == "," and depth == 0:
+			parts.append((begin, i))
+			begin = i + 1
+
+	parts.append((begin, end))
+	return parts
+
+
+def parameter_qualifier_edits(masked, open_index, anonymous):
+	close = match_forward(masked, open_index)
+	edits = []
+
+	for begin, end in top_level_parts(masked, open_index + 1, close):
+		part = masked[begin:end]
+		qualified = (UNNAMED_QUALIFIED_PARAMETER.match(part) if anonymous else None) or NAMED_QUALIFIED_PARAMETER.match(part)
+
+		if qualified is not None:
+			edits.append((begin + qualified.end(qualified.lastgroup), begin + qualified.end()))
+
+	return edits
+
+
+class CapabilityQualifiers(LineRewrite):
+	def __init__(self):
+		self.interface_end = None
+
+	def edits(self, line, masked):
+		edits = [(m.start() + len("returns "), m.end(), "") for m in RESULT_QUALIFIER.finditer(masked)]
+		alias = FUNCTION_TYPE_ALIAS.match(masked)
+		method = INTERFACE_METHOD.match(masked) if self.interface_end is not None else None
+
+		if self.interface_end is None:
+			opened = INTERFACE_OPEN.match(masked)
+
+			if opened:
+				self.interface_end = re.compile(r"^" + re.escape(opened.group("indent")) + r"end '" + re.escape(opened.group("name")) + r"'\r?$")
+		elif self.interface_end.match(line):
+			self.interface_end = None
+
+		if alias:
+			edits += [(start, end, "") for start, end in parameter_qualifier_edits(masked, alias.end(), anonymous=True)]
+		elif method:
+			edits += [(start, end, "") for start, end in parameter_qualifier_edits(masked, method.end(), anonymous=False)]
+
+		return edits
+
+
+def strip_capability_qualifiers(work):
+	return rewrite_code(work, lambda text: CAPABILITY_HINT.search(text) is not None, lambda rel: CapabilityQualifiers())
 
 
 class Lexeme:
@@ -851,11 +1068,6 @@ def common_ancestor(parents, left, right):
 	raise Unhandled(f"'{left}' and '{right}' share no ancestor through an `implements` clause")
 
 
-def require_widening(parents, got, expected):
-	if expected not in ancestors(parents, got)[1:]:
-		raise Unhandled(f"'{got}' does not implement '{expected}', so no widening cast answers this")
-
-
 def match_back(line, close_index):
 	depth = 0
 	closer = line[close_index]
@@ -895,7 +1107,10 @@ def match_forward(line, open_index):
 		c = line[i]
 
 		if c == '"':
-			i = line.index('"', i + 1)
+			i = line.find('"', i + 1)
+
+			if i < 0:
+				raise Unhandled("an unterminated string literal inside the brackets")
 		elif c == opener:
 			depth += 1
 		elif c == closer:
@@ -906,7 +1121,7 @@ def match_forward(line, open_index):
 
 		i += 1
 
-	raise Unhandled("unbalanced brackets after the operator")
+	raise Unhandled("unbalanced brackets")
 
 
 def atom_before(line, end):
@@ -1181,7 +1396,7 @@ def fix_line(line, column, code, message, parents, ranges):
 	m = MISMATCH.match(message)
 
 	if code == "E3005" and m:
-		require_widening(parents, m.group("got"), m.group("expected"))
+		require_castable(parents, ranges, m.group("got"), m.group("expected"))
 
 		if at < len(line) and line[at] in ",)]}":
 			start, end = atom_before(line, at)
@@ -1213,7 +1428,7 @@ def fix_line(line, column, code, message, parents, ranges):
 	m = FIELD.match(message)
 
 	if code == "E3005" and m:
-		require_widening(parents, m.group("got"), m.group("expected"))
+		require_castable(parents, ranges, m.group("got"), m.group("expected"))
 		field = m.group("field")
 
 		if not line.startswith(field, at):
@@ -1231,7 +1446,7 @@ def fix_line(line, column, code, message, parents, ranges):
 	m = OTHERWISE.match(message)
 
 	if code == "E3059" and m:
-		require_widening(parents, m.group("got"), m.group("expected"))
+		require_castable(parents, ranges, m.group("got"), m.group("expected"))
 		keyword = line.find(OTHERWISE_KEYWORD, at)
 
 		if keyword < 0:
@@ -1253,7 +1468,7 @@ def fix_line(line, column, code, message, parents, ranges):
 	m = ARGUMENT.match(message)
 
 	if code == "E3005" and m:
-		require_widening(parents, m.group("got"), m.group("expected"))
+		require_castable(parents, ranges, m.group("got"), m.group("expected"))
 		start, end = argument_span(line, at, m.group("label"))
 		return cast(line, start, end, m.group("expected"))
 
@@ -1280,16 +1495,37 @@ def fix_line(line, column, code, message, parents, ranges):
 
 		return line[:cast_at.start()] + line[cast_at.end():]
 
-	m = NEVER_REASSIGNED.match(message)
+	m = NEVER_REASSIGNED.match(message) if code == "E3077" else SHARES_LET_STORAGE.match(message) if code == "E3078" else None
 
-	if code == "E3077" and m:
+	if m:
 		name = m.group("name")
 		keyword = "var "
 
-		if not line.startswith(name, at) or not line[:at].endswith(keyword):
-			raise Unhandled(f"no `var {name}` ending at the reported column")
+		if line.startswith(name, at) and line[:at].endswith(keyword):
+			return line[:at - len(keyword)] + "let " + line[at:]
 
-		return line[:at - len(keyword)] + "let " + line[at:]
+		assigned = ASSIGNMENT.match(line, at + len(name)) if line.startswith(name, at) else None
+
+		if code != "E3078" or assigned is None:
+			raise Unhandled(f"no `var {name}` ending at the reported column, and no assignment to `{name}` there")
+
+		value_at = assigned.end()
+
+		while value_at < len(line) and line[value_at] == " ":
+			value_at += 1
+
+		start, end = statement_value(line, value_at)
+		return clone_span(line, start, end)
+
+	m = PASSED_TO_KEEPER.match(message) or PASSED_TO_STORER.match(message) or STORED_INTO_READONLY_ELEMENT.match(message) if code == "E3078" else None
+
+	if m:
+		start, end = argument_span(line, at, m.groupdict().get("parameter", STORED_ARGUMENT_LABEL))
+		return clone_span(line, start, end)
+
+	if code == "E3078" and STORED_INTO_LET_SLOT.match(message):
+		start, end = atom_after(line, at)
+		return clone_span(line, start, end)
 
 	m = IMMUTABLE_TO_MUTABLE.match(message)
 
@@ -1568,6 +1804,43 @@ def mutation_at(code, start, end, members):
 		return "binds a mutable alias to {}"
 
 	return None
+
+
+def unmove_var(lines, index, name):
+	bounds = enclosing_function(lines, index)
+
+	if bounds is None:
+		raise Unhandled(f"line {index + 1} is outside any function, so the `var` that was moved cannot be found")
+
+	pattern = re.compile(r"^[ \t]*var " + re.escape(name) + r"\b")
+	declaration = next((j for j in range(index, bounds[0] - 1, -1) if pattern.match(lines[j])), None)
+
+	if declaration is None:
+		raise Unhandled(f"`{name}` is not a `var` declared in the function that uses it after it moved, so it cannot be made a `let` that the seed aliases instead of moving")
+
+	regions = CodeRegions(lines[bounds[0]:bounds[1] + 1])
+	rebinds = re.compile(r"(?<![A-Za-z0-9_.])" + re.escape(name) + r"\s*[-+*/%]?=(?!=)")
+	word = re.compile(r"(?<![A-Za-z0-9_.])" + re.escape(name) + r"\b")
+
+	for j in range(declaration + 1, bounds[1] + 1):
+		masked = regions.view(j - bounds[0], lines[j])
+
+		if rebinds.search(masked) or (masked.lstrip().startswith("(") and word.search(masked) and TUPLE_CLOSED_ASSIGNMENT.search(masked)):
+			raise Unhandled(f"`{name}` is reassigned at line {j + 1}, so it cannot be a `let` the seed aliases instead of moving")
+
+	lines[declaration] = re.sub(r"^([ \t]*)var ", r"\1let ", lines[declaration], count=1)
+
+
+def clone_span(line, start, end):
+	value = line[start:end]
+
+	if value.endswith(CLONE_CALL):
+		raise Unhandled(f"`{value}` is already a clone, which the seed still refuses")
+
+	if not is_member_chain(value):
+		value = f"({value})"
+
+	return line[:start] + value + CLONE_CALL + line[end:]
 
 
 def argument_span(line, at, label):
@@ -2109,10 +2382,12 @@ class Speculation:
 
 
 class Rewriter:
-	def __init__(self, work, parents, ranges):
+	def __init__(self, work, parents, ranges, view_names, view_sources):
 		self.work = work
 		self.parents = parents
 		self.ranges = ranges
+		self.view_names = view_names
+		self.view_sources = view_sources
 		self.members = MemberDeclarations(work)
 		self.casts = 0
 		self.generation = 0
@@ -2247,10 +2522,25 @@ class Rewriter:
 				if d.group("code") == "E3070" and borrow:
 					borrow_index = int(borrow.group("line")) - 1
 
-					if LET_BINDING.match(lines[borrow_index]):
+					if LET_BINDING.match(lines[borrow_index]) and borrow.group("element") in self.view_names.get(rel, ()):
+						refused.append(f"{d.group(0)}\n    `{borrow.group('element')}` is a `view` the tree reads while it observes the collection being mutated; the seed's older rule is answered with a `.clone()`, which would stop the view seeing those writes, so this script does not write it")
+					elif LET_BINDING.match(lines[borrow_index]):
 						clones.setdefault(borrow_index, (borrow, d, []))[2].append(key)
 					else:
 						hoists.append((borrow_index + 1, d, lambda borrow=borrow, line_number=line_number, rel=rel: hoist_loop_borrow(lines, line_number, borrow, self.members, rel), key))
+
+					continue
+
+				moved = MOVED_VALUE.match(d.group("message"))
+
+				if d.group("code") == "E3102" and moved:
+					try:
+						unmove_var(lines, index, moved.group("name"))
+						self.seen.add(key)
+						self.casts += 1
+					except Unhandled as e:
+						viewed = VIEWED_VAR_NOTE.format(name=moved.group("name")) if moved.group("name") in self.view_sources.get(rel, ()) else ""
+						refused.append(f"{d.group(0)}\n    {e}{viewed}")
 
 					continue
 
@@ -2422,6 +2712,36 @@ def converge(work, seed_name, lanes, rewriter, rounds, started, verified):
 		view.discard()
 
 
+def withdraw_older_seed_forms(work):
+	generics = strip_generic_functions(work)
+	print(f"withdrew {generics} generic functions", flush=True)
+	print(f"stripped {strip_clauses(work)} implements clauses", flush=True)
+	widened, refused = write_wide_literals_in_hex(work)
+
+	if refused:
+		return report_refusals("an integer literal this script cannot write in a form the seed lexes", refused, work)
+
+	print(f"wrote {widened} integer literals past the seed's decimal range in hex", flush=True)
+	unqualified, refused = strip_namespace_qualifiers(work)
+
+	if refused:
+		return report_refusals("a qualifier this script cannot write bare without changing the declaration it names", refused, work)
+
+	print(f"unqualified {unqualified} lines naming a `{NAMESPACE_QUALIFIER}` declaration", flush=True)
+
+	annotated, refused = annotate_inferred_fields(work)
+
+	if refused:
+		return report_refusals("a field default whose type this script cannot write back as an annotation", refused, work)
+
+	print(f"annotated {annotated} inferred fields", flush=True)
+	readonly = strip_readonly_arguments(work)
+	print(f"withdrew {readonly} `readonly` element-type qualifiers", flush=True)
+	payload_lets = strip_payload_lets(work)
+	print(f"withdrew {payload_lets} `let` union payload qualifiers", flush=True)
+	return 0
+
+
 def main():
 	started = time.monotonic()
 	here = os.path.dirname(os.path.abspath(__file__))
@@ -2431,6 +2751,7 @@ def main():
 	parser.add_argument("--work")
 	parser.add_argument("--output")
 	parser.add_argument("--resume", action="store_true")
+	parser.add_argument("--older-seed", action="store_true")
 	args = parser.parse_args()
 
 	tree = os.path.abspath(args.tree)
@@ -2449,34 +2770,18 @@ def main():
 	if not args.resume:
 		os.makedirs(work, exist_ok=True)
 		stage_work(tree, work, seed, output)
-		generics = strip_generic_functions(work)
-		print(f"withdrew {generics} generic functions", flush=True)
-		print(f"stripped {strip_clauses(work)} implements clauses", flush=True)
-		widened, refused = write_wide_literals_in_hex(work)
 
-		if refused:
-			return report_refusals("an integer literal this script cannot write in a form the seed lexes", refused, work)
+		if args.older_seed and withdraw_older_seed_forms(work) != 0:
+			return 1
 
-		print(f"wrote {widened} integer literals past the seed's decimal range in hex", flush=True)
-		unqualified, refused = strip_namespace_qualifiers(work)
+		views, bare, view_names, view_sources = strip_view_bindings(work)
+		save_view_registry(work, view_names, view_sources)
+		print(f"wrote {views} `view` binding keywords as `let`, {bare} of them over a bare local name", flush=True)
+		qualifiers = strip_capability_qualifiers(work)
+		print(f"withdrew {qualifiers} `keep`/`sole`/`readonly` parameter and result qualifiers", flush=True)
 
-		if refused:
-			return report_refusals("a qualifier this script cannot write bare without changing the declaration it names", refused, work)
-
-		print(f"unqualified {unqualified} lines naming a `{NAMESPACE_QUALIFIER}` declaration", flush=True)
-
-		annotated, refused = annotate_inferred_fields(work)
-
-		if refused:
-			return report_refusals("a field default whose type this script cannot write back as an annotation", refused, work)
-
-		print(f"annotated {annotated} inferred fields", flush=True)
-		readonly = strip_readonly_arguments(work)
-		print(f"withdrew {readonly} `readonly` element-type qualifiers", flush=True)
-		payload_lets = strip_payload_lets(work)
-		print(f"withdrew {payload_lets} `let` union payload qualifiers", flush=True)
-
-	rewriter = Rewriter(work, parents, ranges)
+	view_names, view_sources = load_view_registry(work)
+	rewriter = Rewriter(work, parents, ranges, view_names, view_sources)
 	rounds = 0
 	verified = {}
 

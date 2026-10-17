@@ -3072,7 +3072,7 @@ function main() returns ExitCode
 
 	var kept = 0 as Count
 	for i in 1 to rounds 'round'
-		let r = try readers.get(i mod serviceCount) otherwise panic("readers.get")
+		view r = try readers.get(i mod serviceCount) otherwise panic("readers.get")
 		var s = ""
 		s.append("payload {i mod 10}")
 		let bytes = s.toByteArray()
@@ -3082,7 +3082,7 @@ function main() returns ExitCode
 
 	var total = 0 as Integer
 	for k in 0 upto serviceCount 'collect'
-		let r = try readers.get(k) otherwise panic("readers.get({k})")
+		view r = try readers.get(k) otherwise panic("readers.get({k})")
 		total = total + (try await r.report() otherwise 0)
 	end 'collect'
 
@@ -3562,7 +3562,7 @@ end 'Svc'
 
 function main() returns ExitCode
 	var cell = Cell.create()
-	let s = Shape.held(cell)
+	var s = Shape.held(cell)
 	let h = spawn Svc.create()
 	h.take(s)
 	return cell.n as ExitCode
@@ -4224,7 +4224,7 @@ type Pair
 	export var right as Bag
 
 	static function create() returns Self
-		let bag = Bag.create()
+		var bag = Bag.create()
 		return Self{left: bag, right: bag}
 	end 'create'
 end 'Pair'
@@ -4272,7 +4272,7 @@ typealias CellArray = Array with Cell
 
 function oneCellTwice() returns CellArray
 	var cs = CellArray.create()
-	let c = Cell.create()
+	var c = Cell.create()
 	cs.push(c)
 	cs.push(c)
 	return cs
@@ -4288,7 +4288,7 @@ type Svc
 	export function report()
 		var first = try self.cells.get(0) otherwise panic("two cells were pushed")
 		first.n = 7
-		let second = try self.cells.get(1) otherwise panic("two cells were pushed")
+		view second = try self.cells.get(1) otherwise panic("two cells were pushed")
 		print("{second.n}\n")
 	end 'report'
 end 'Svc'
@@ -4396,7 +4396,7 @@ type Pair
 	export var right as Bag
 
 	static function create() returns Self
-		let bag = Bag.create()
+		var bag = Bag.create()
 		return Self{left: bag, right: bag}
 	end 'create'
 end 'Pair'
@@ -4478,7 +4478,7 @@ type Svc
 end 'Svc'
 
 function main() returns ExitCode
-	let bag = Bag.create()
+	var bag = Bag.create()
 	let h = spawn Svc.create()
 	h.take(Pair.around(bag))
 	return bag.n as ExitCode
@@ -4549,7 +4549,7 @@ typealias Cells = Map with (String, Cell)
 
 function oneCellUnderTwoKeys() returns Cells
 	var m = Cells.create()
-	let c = Cell.create()
+	var c = Cell.create()
 	m.upsert("a", value: c)
 	m.upsert("b", value: c)
 	return m
@@ -4565,7 +4565,7 @@ type Svc
 	export function report()
 		var a = try self.cells.get("a") otherwise panic("a was inserted")
 		a.n = 7
-		let b = try self.cells.get("b") otherwise panic("b was inserted")
+		view b = try self.cells.get("b") otherwise panic("b was inserted")
 		print("{b.n}\n")
 	end 'report'
 end 'Svc'
@@ -4600,7 +4600,7 @@ typealias Cells = List with Cell
 
 function oneCellTwice() returns Cells
 	var xs = Cells.create()
-	let c = Cell.create()
+	var c = Cell.create()
 	xs.append(c)
 	xs.append(c)
 	return xs
@@ -4655,7 +4655,7 @@ function pairedCells(pairs Integer) returns CellArray
 	var cs = CellArray.create()
 
 	for _ in 1 to pairs 'each'
-		let c = Cell.create()
+		var c = Cell.create()
 		cs.push(c)
 		cs.push(c)
 	end 'each'
@@ -4713,7 +4713,7 @@ function pairedCellsAround(kept Cell, pairs Integer) returns CellArray
 	var cs = CellArray.create()
 
 	for _ in 1 to pairs 'each'
-		let c = Cell.create()
+		var c = Cell.create()
 		cs.push(c)
 		cs.push(c)
 	end 'each'
@@ -4736,7 +4736,7 @@ type Svc
 end 'Svc'
 
 function main() returns ExitCode
-	let kept = Cell.create()
+	var kept = Cell.create()
 	let h = spawn Svc.create(pairedCellsAround(kept, pairs: 40))
 	h.report()
 	return kept.n as ExitCode
@@ -5246,7 +5246,7 @@ type Pair
 	export var right as Bag
 
 	static function create() returns Self
-		let bag = Bag.create()
+		var bag = Bag.create()
 		return Self{left: bag, right: bag}
 	end 'create'
 end 'Pair'
@@ -5311,7 +5311,7 @@ type Pair
 	export var right as Bag
 
 	static function create() returns Self
-		let bag = Bag.create()
+		var bag = Bag.create()
 		return Self{left: bag, right: bag}
 	end 'create'
 end 'Pair'
@@ -5366,7 +5366,7 @@ type Shelf
 
 	static function create() returns Self
 		var cells = CellArray.create()
-		let c = Cell.create()
+		var c = Cell.create()
 		cells.push(c)
 		cells.push(c)
 		return Self{cells: cells}
@@ -5708,7 +5708,7 @@ function main() returns ExitCode
 	route(h, xs: xs, n: 2, way: Route.toService)
 	route(h, xs: xs, n: 5, way: Route.toArray)
 	let seen = try await h.total() otherwise 0
-	let kept = try xs.get(0) otherwise panic("nothing was kept")
+	view kept = try xs.get(0) otherwise panic("nothing was kept")
 	print("the service saw {seen}\n")
 	print("kept {xs.count()} holding {kept.n}\n")
 	return 0
@@ -6823,7 +6823,7 @@ type Store
 	end 'put'
 
 	export function take() returns Items
-		let old = self.items
+		var old = self.items
 		self.items = Items.create()
 		return old
 	end 'take'
@@ -6865,7 +6865,7 @@ type Store
 	end 'put'
 
 	export function take() returns Items
-		let old = self.items
+		var old = self.items
 		let seen = self.items.count()
 		self.items = Items.create()
 		return old
@@ -6910,7 +6910,7 @@ type Store
 	end 'replace'
 
 	export function take() returns Items
-		let old = self.items
+		var old = self.items
 		self.items = Items.create()
 		return old
 	end 'take'
@@ -7956,7 +7956,7 @@ function main() returns ExitCode
 	var ps = TallyReplyArray.create()
 	ps.push(h.bumped(4))
 	let p = try ps.remove(0) otherwise panic("the reply was pushed into slot 0")
-	let tally = try await p otherwise return 70
+	view tally = try await p otherwise return 70
 	return tally.n as ExitCode
 end 'main'
 ```
@@ -8346,7 +8346,7 @@ typealias HandleArray = Array with SmallBoxHandle
 function main() returns ExitCode
 	var hs = HandleArray.create()
 	hs.push(spawn Box.create(6 as Small))
-	let h = try hs.get(0) otherwise return 1
+	view h = try hs.get(0) otherwise return 1
 	let s = try await h.peek() otherwise 0
 	return s as ExitCode
 end 'main'
@@ -10954,7 +10954,7 @@ type Worker
 	end 'measure'
 
 	function summarize(n Tally) returns Report
-		let report = Report.create(n)
+		var report = Report.create(n)
 		self.kept = report.inner
 		return report
 	end 'summarize'
@@ -12906,7 +12906,7 @@ end 'adopt'
 
 function main() returns ExitCode
 	let h = spawn Keeper.create()
-	let t = Box.create(5)
+	var t = Box.create(5)
 	var s = Box.create(1)
 	adopt(s, from: t)
 	let r = try await h.put(s) otherwise 0
@@ -13267,4 +13267,995 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+<!-- test: services.error.a-view-of-an-immutable-record-sent-to-a-service-is-refused -->
+`v` is a `view`, so it is refused as a message argument even though the record it names has only `let` fields; the refusal is decided by the argument's binding, so a second `view` elsewhere in the body changes nothing.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Point
+	export let x as Count
+
+	static function create(x Count) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Point'
+
+type Store
+	var seen as Count
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function show(p Point) returns Count
+		self.seen = self.seen + 1
+		return p.x
+	end 'show'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	var b = Box.create(1)
+	b.n = 2
+	view w = b
+	print("{w.n}\n")
+	let p = Point.create(7)
+	view v = p
+	let r = try await h.show(v) otherwise 0
+	print("{r}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3138: <fragment>:41:27: argument `v` of the message `Store.show` is a `view`: it names data something else may write, so it can be neither moved nor shared with the service. Send a `.clone()`
+```
+
+<!-- test: services.error.a-var-sent-after-it-has-been-viewed-is-refused -->
+<!-- unsupported-targets: wasm32-wasi -->
+Once `w` has viewed `b`, its reference is a second owner for the rest of the function, so `b` cannot be moved to the service, even though `w` is not read again.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Store
+	var seen as Count
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function keep(p Box) returns Count
+		self.seen = self.seen + 1
+		return p.n
+	end 'keep'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	var b = Box.create(1)
+	b.n = 2
+	view w = b
+	print("{w.n}\n")
+	let r = try await h.keep(b) otherwise 0
+	print("{r}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3138: <fragment>:31:27: argument `b` of the message `Store.keep` has been viewed by 'w': a view's reference is a second owner for the rest of the function, so `b` can be neither moved nor shared with the service. Send a `.clone()`
+```
+
+<!-- test: services.error.a-var-sent-after-it-has-been-viewed-and-read-afterwards-is-refused -->
+<!-- unsupported-targets: wasm32-wasi -->
+`w` has viewed `b` and is read after the send, so it would read a record the service now owns and writes.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Store
+	var kept as Box
+
+	static function create() returns Self
+		return Self{kept: Box.create(0)}
+	end 'create'
+
+	export function keep(p Box) returns Count
+		self.kept = p
+		self.kept.n = 9
+		return 0
+	end 'keep'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	var b = Box.create(1)
+	b.n = 2
+	view w = b
+	let r = try await h.keep(b) otherwise 0
+	print("{w.n} {r}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3138: <fragment>:31:27: argument `b` of the message `Store.keep` has been viewed by 'w': a view's reference is a second owner for the rest of the function, so `b` can be neither moved nor shared with the service. Send a `.clone()`
+```
+
+<!-- test: services.a-text-field-read-through-a-view-is-sent-as-a-value -->
+A `String` crosses to the service as a value, so a field read through a `view` may be sent after the record has been viewed.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Person
+	export var name as String
+	export var age as Count
+
+	static function create(name String) returns Self
+		return Self{name: name, age: 0}
+	end 'create'
+end 'Person'
+
+type Greeter
+	var seen as Count
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function greet(name String) returns String
+		self.seen = self.seen + 1
+		return "hello {name}"
+	end 'greet'
+end 'Greeter'
+
+function main() returns ExitCode
+	let h = spawn Greeter.create()
+	var b = Person.create("ada")
+	b.age = 3
+	view v = b
+	let r = try await h.greet(v.name) otherwise ""
+	print("{r} {v.age}\n")
+	return 0
+end 'main'
+```
+```stdout
+hello ada 3
+```
+```exitcode
+0
+```
+
+<!-- test: services.error.a-var-sent-after-a-field-of-it-has-been-viewed-is-refused -->
+<!-- unsupported-targets: wasm32-wasi -->
+`w` views a field of `b`, so its reference co-owns part of `b`'s graph for the rest of the function, and `b` cannot be moved to the service.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Inner
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Inner'
+
+type Box
+	export var child as Inner
+
+	static function create(n Count) returns Self
+		return Self{child: Inner.create(n)}
+	end 'create'
+end 'Box'
+
+type Store
+	var kept as Box
+
+	static function create() returns Self
+		return Self{kept: Box.create(0)}
+	end 'create'
+
+	export function keep(p Box) returns Count
+		self.kept = p
+		return 0
+	end 'keep'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	var b = Box.create(1)
+	b.child.n = 2
+	view w = b.child
+	let r = try await h.keep(b) otherwise 0
+	print("{w.n} {r}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3138: <fragment>:38:27: argument `b` of the message `Store.keep` has been viewed by 'w': a view's reference is a second owner for the rest of the function, so `b` can be neither moved nor shared with the service. Send a `.clone()`
+```
+
+<!-- test: services.error.a-var-a-ternary-view-may-name-sent-is-refused -->
+<!-- unsupported-targets: wasm32-wasi -->
+`w` names `b` or `c` depending on the comparison, so its reference may co-own `c`'s record, and `c` cannot be moved to the service.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Store
+	var seen as Count
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function keep(p Box) returns Count
+		self.seen = self.seen + 1
+		return p.n
+	end 'keep'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	var b = Box.create(1)
+	var c = Box.create(2)
+	b.n = 3
+	c.n = 4
+	view w = b if b.n > c.n else c
+	let r = try await h.keep(c) otherwise 0
+	print("{w.n} {r}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3138: <fragment>:32:27: argument `c` of the message `Store.keep` has been viewed by 'w': a view's reference is a second owner for the rest of the function, so `c` can be neither moved nor shared with the service. Send a `.clone()`
+```
+
+<!-- test: services.error.a-var-an-otherwise-view-may-name-sent-is-refused -->
+<!-- unsupported-targets: wasm32-wasi -->
+`w` names `spare` when the array has no element 0, so its reference may co-own `spare`'s record.
+
+```maxon
+typealias Count = int(0 to 1000)
+typealias Boxes = Array with Box
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Store
+	var seen as Count
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function keep(p Box) returns Count
+		self.seen = self.seen + 1
+		return p.n
+	end 'keep'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	var boxes = Boxes.create()
+	boxes.push(Box.create(1))
+	var spare = Box.create(0)
+	spare.n = 2
+	view w = try boxes.get(0) otherwise spare
+	let r = try await h.keep(spare) otherwise 0
+	print("{w.n} {r}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3138: <fragment>:33:27: argument `spare` of the message `Store.keep` has been viewed by 'w': a view's reference is a second owner for the rest of the function, so `spare` can be neither moved nor shared with the service. Send a `.clone()`
+```
+
+<!-- test: services.error.a-var-a-view-of-a-calls-result-may-name-sent-is-refused -->
+<!-- unsupported-targets: wasm32-wasi -->
+`pick` hands back its argument, so the record `w` views is `b`'s.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Store
+	var seen as Count
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function keep(p Box) returns Count
+		self.seen = self.seen + 1
+		return p.n
+	end 'keep'
+end 'Store'
+
+function pick(x Box) returns Box
+	return x
+end 'pick'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	var b = Box.create(1)
+	b.n = 2
+	view w = pick(b)
+	let r = try await h.keep(b) otherwise 0
+	print("{w.n} {r}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3138: <fragment>:34:27: argument `b` of the message `Store.keep` has been viewed by 'w': a view's reference is a second owner for the rest of the function, so `b` can be neither moved nor shared with the service. Send a `.clone()`
+```
+
+<!-- test: services.error.a-var-a-view-of-a-methods-result-may-name-sent-is-refused -->
+<!-- unsupported-targets: wasm32-wasi -->
+The same through a method: `c.pick(b)` hands back `b`, not something of `c`'s.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Picker
+	let tag as Count
+
+	static function create() returns Self
+		return Self{tag: 0}
+	end 'create'
+
+	function pick(x Box) returns Box
+		return x
+	end 'pick'
+end 'Picker'
+
+type Store
+	var seen as Count
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function keep(p Box) returns Count
+		self.seen = self.seen + 1
+		return p.n
+	end 'keep'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	let c = Picker.create()
+	var b = Box.create(1)
+	b.n = 2
+	view w = c.pick(b)
+	let r = try await h.keep(b) otherwise 0
+	print("{w.n} {r}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3138: <fragment>:43:27: argument `b` of the message `Store.keep` has been viewed by 'w': a view's reference is a second owner for the rest of the function, so `b` can be neither moved nor shared with the service. Send a `.clone()`
+```
+
+<!-- test: services.error.a-var-a-match-view-may-name-sent-is-refused -->
+<!-- unsupported-targets: wasm32-wasi -->
+One arm of the `match` gives `b`, so the record `w` views may be `b`'s.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+enum Side
+	left
+	right
+end 'Side'
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Store
+	var seen as Count
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function keep(p Box) returns Count
+		self.seen = self.seen + 1
+		return p.n
+	end 'keep'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	let side = Side.left
+	var b = Box.create(1)
+	var c = Box.create(2)
+	b.n = 3
+	c.n = 4
+
+	view w = match side 'which'
+		left gives b
+		right gives c
+	end 'which'
+
+	let r = try await h.keep(b) otherwise 0
+	print("{w.n} {r}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3138: <fragment>:43:27: argument `b` of the message `Store.keep` has been viewed by 'w': a view's reference is a second owner for the rest of the function, so `b` can be neither moved nor shared with the service. Send a `.clone()`
+```
+
+<!-- test: services.error.an-array-an-element-view-reaches-sent-is-refused -->
+<!-- unsupported-targets: wasm32-wasi -->
+`e` views an element of `boxes`, so its reference co-owns part of the array's graph, and the array cannot be moved to the service.
+
+```maxon
+typealias Count = int(0 to 1000)
+typealias Boxes = Array with Box
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Store
+	var seen as Count
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function keepAll(p Boxes) returns Count
+		self.seen = self.seen + 1
+		return p.count() as Count
+	end 'keepAll'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	var boxes = Boxes.create()
+	boxes.push(Box.create(1))
+	view e = try boxes.get(0) otherwise return 1
+	let r = try await h.keepAll(boxes) otherwise 0
+	print("{e.n} {r}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3138: <fragment>:31:30: argument `boxes` of the message `Store.keepAll` has been viewed by 'e': a view's reference is a second owner for the rest of the function, so `boxes` can be neither moved nor shared with the service. Send a `.clone()`
+```
+
+<!-- test: services.error.an-array-an-if-view-reached-sent-later-is-refused -->
+<!-- unsupported-targets: wasm32-wasi -->
+The `if view` binder views an element of `boxes`, and a view counts for the rest of the function, so the send after the `if` is refused too.
+
+```maxon
+typealias Count = int(0 to 1000)
+typealias Boxes = Array with Box
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Store
+	var seen as Count
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function keepAll(p Boxes) returns Count
+		self.seen = self.seen + 1
+		return p.count() as Count
+	end 'keepAll'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	var boxes = Boxes.create()
+	boxes.push(Box.create(1))
+
+	if view e = try boxes.get(0) 'first'
+		print("{e.n}\n")
+	end 'first'
+
+	let r = try await h.keepAll(boxes) otherwise 0
+	print("{r}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3138: <fragment>:35:30: argument `boxes` of the message `Store.keepAll` has been viewed by 'e': a view's reference is a second owner for the rest of the function, so `boxes` can be neither moved nor shared with the service. Send a `.clone()`
+```
+
+<!-- test: services.error.a-var-viewed-earlier-in-a-loop-body-sent-later-in-it-is-refused -->
+<!-- unsupported-targets: wasm32-wasi -->
+Inside one trip of the loop, `w` views `b` before the send, so the send is refused on every trip.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Store
+	var seen as Count
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function keep(p Box) returns Count
+		self.seen = self.seen + 1
+		return p.n
+	end 'keep'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+
+	for _ in 1 to 2 'each'
+		var b = Box.create(1)
+		b.n = 2
+		view w = b
+		print("{w.n}\n")
+		let r = try await h.keep(b) otherwise 0
+		print("{r}\n")
+	end 'each'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3138: <fragment>:33:28: argument `b` of the message `Store.keep` has been viewed by 'w': a view's reference is a second owner for the rest of the function, so `b` can be neither moved nor shared with the service. Send a `.clone()`
+```
+
+<!-- test: services.error.a-var-viewed-then-handed-to-spawn-as-state-is-refused -->
+<!-- unsupported-targets: wasm32-wasi -->
+The state `spawn` starts the service with is moved into it, so a `var` a view has seen cannot be that state.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Worker
+	var held as Box
+
+	static function create(held Box) returns Self
+		return Self{held: held}
+	end 'create'
+
+	export function bump() returns Count
+		self.held.n = self.held.n + 1
+		return self.held.n
+	end 'bump'
+end 'Worker'
+
+function main() returns ExitCode
+	var b = Box.create(1)
+	b.n = 2
+	view w = b
+	let h = spawn Worker.create(b)
+	let r = try await h.bump() otherwise 0
+	print("{w.n} {r}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3138: <fragment>:29:23: argument `b` of `spawn Worker.create(…)` has been viewed by 'w': a view's reference is a second owner for the rest of the function, so `b` can be neither moved nor shared with the service. Send a `.clone()`
+```
+
+<!-- test: services.a-viewed-var-of-an-immutable-record-is-shared-with-the-service -->
+`Box` has only `let` fields, so nothing can write its record: the send shares it with the service instead of moving it, and `w` stays valid. The service's reply reads the record, and `w` reads it after the send.
+
+```maxon
+typealias Count = int(i64.min to i64.max)
+
+type Box
+	export let n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Store
+	var seen as Count
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function keep(p Box) returns Count
+		self.seen = self.seen + 1
+		return p.n
+	end 'keep'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	var b = Box.create(1)
+	b = Box.create(2)
+	view w = b
+	let r = try await h.keep(b) otherwise 0
+	print("{w.n} {r}\n")
+	return 0
+end 'main'
+```
+```stdout
+2 2
+```
+```exitcode
+0
+```
+
+<!-- test: services.error.a-ternary-arm-sent-inside-a-view-initializer-moves -->
+The send inside `w`'s initializer moves whichever arm the ternary picks, exactly as it would inside a `let` initializer, so writing `a` afterwards is a use of a moved value.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Store
+	var seen as Count
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function keep(p Box) returns Count
+		self.seen = self.seen + 1
+		return p.n
+	end 'keep'
+end 'Store'
+
+function boxed(n Count) returns Box
+	return Box.create(n)
+end 'boxed'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	var a = Box.create(1)
+	a.n = 2
+	var other = Box.create(3)
+	other.n = 4
+	let flag = a.n > other.n
+	view w = boxed(try await h.keep(a if flag else other) otherwise 0)
+	a.n = 9
+	print("{w.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:37:2: use of moved value 'a': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: services.a-viewed-var-of-an-immutable-generic-instance-is-shared-with-the-service -->
+`Cell with Count` has only a `let` field, so nothing can write its record: the send shares it with the service instead of moving it, and `w` stays valid. The service's reply reads the record, and `w` reads it after the send.
+
+```maxon
+typealias Count = int(i64.min to i64.max)
+
+type Cell uses T
+	export let v as T
+
+	static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Cell'
+
+typealias CountCell = Cell with Count
+
+type Store
+	var seen as Count
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function keep(p CountCell) returns Count
+		self.seen = self.seen + 1
+		return p.v
+	end 'keep'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	var b = CountCell.create(1)
+	b = CountCell.create(3)
+	view w = b
+	let r = try await h.keep(b) otherwise 0
+	print("{w.v} {r}\n")
+	return 0
+end 'main'
+```
+```stdout
+3 3
+```
+```exitcode
+0
+```
+
+<!-- test: services.a-viewed-var-of-an-immutable-union-is-shared-with-the-service -->
+Every payload of `Note` is a `let`, so nothing can write its value: the send shares it with the service instead of moving it, and `w` stays valid. The service's reply reads the payload, and `w` reads it after the send.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+union Note
+	text(let body String)
+	blank
+end 'Note'
+
+type Store
+	var seen as Count
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function keep(n Note) returns Count
+		self.seen = self.seen + 1
+
+		return match n 'note'
+			text(body) gives body.byteLength() as Count
+			blank gives 0
+		end 'note'
+	end 'keep'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	var n = Note.text("a")
+	n = Note.text("bb")
+	view w = n
+	let r = try await h.keep(n) otherwise 0
+
+	let mine = match w 'note'
+		text(body) gives body.byteLength() as Count
+		blank gives 0
+	end 'note'
+
+	print("{r} {mine}\n")
+	return 0
+end 'main'
+```
+```stdout
+2 2
+```
+```exitcode
+0
+```
+
+<!-- test: services.error.a-viewed-var-sent-and-read-afterwards-reports-the-send -->
+<!-- unsupported-targets: wasm32-wasi -->
+`w` views the array that holds `b`'s record, so the send is refused; the read of `b` after it is not reported as a use of a moved value, because a refused send moves nothing.
+
+```maxon
+typealias Count = int(0 to 1000)
+typealias Boxes = Array with Box
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Store
+	var seen as Count
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function keep(p Box) returns Count
+		self.seen = self.seen + 1
+		return p.n
+	end 'keep'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	var boxes = Boxes.create()
+	var b = Box.create(1)
+	boxes.push(b)
+	view w = boxes
+	let r = try await h.keep(b) otherwise 0
+	print("{b.n} {r} {w.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3138: <fragment>:32:27: argument `b` of the message `Store.keep` has been viewed by 'w': a view's reference is a second owner for the rest of the function, so `b` can be neither moved nor shared with the service. Send a `.clone()`
+```
+
+<!-- test: services.error.an-immutable-record-no-view-reaches-is-moved-by-the-send -->
+`b`'s record is solely owned, so the send moves it even though its type has only `let` fields; the `view` of `other` reaches a different record and changes nothing, so reading `b` afterwards is a use of a moved value.
+
+```maxon
+typealias Count = int(i64.min to i64.max)
+
+type Box
+	export let n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Store
+	var seen as Count
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function keep(p Box) returns Count
+		self.seen = self.seen + 1
+		return p.n
+	end 'keep'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	let other = Box.create(7)
+	view z = other
+	var b = Box.create(1)
+	b = Box.create(2)
+	let r = try await h.keep(b) otherwise 0
+	let after = b.n
+	print("{after} {r} {z.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:32:14: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: services.an-otherwise-merge-of-two-fresh-records-is-sent -->
+Both edges of the `try … otherwise` merge are records the calls just made, so `x` is solely owned and the send moves it, as it would a ternary of two fresh calls.
+
+```maxon
+typealias Count = int(0 to 1000)
+
+enum MakeError implements Error
+	refused
+end 'MakeError'
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Store
+	var seen as Count
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function keep(p Box) returns Count
+		self.seen = self.seen + 1
+		return p.n
+	end 'keep'
+end 'Store'
+
+function made(fail bool) returns Box throws MakeError
+	if fail 'refuse'
+		throw MakeError.refused
+	end 'refuse'
+
+	return Box.create(1)
+end 'made'
+
+function spare() returns Box
+	return Box.create(2)
+end 'spare'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	let x = try made(true) otherwise spare()
+	let r = try await h.keep(x) otherwise 0
+	print("{r}\n")
+	return 0
+end 'main'
+```
+```stdout
+2
+```
+```exitcode
+0
 ```

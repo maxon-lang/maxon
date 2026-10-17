@@ -516,7 +516,7 @@ end 'Counter'
 
 function main() returns ExitCode
 	var c = Counter.create(41)
-	let d = c.bump()
+	view d = c.bump()
 	return d.value as ExitCode
 end 'main'
 ```

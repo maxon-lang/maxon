@@ -60,7 +60,7 @@ let MinimumPlausibleHeapAddress = 0x10000 as DebuggeeWord
 export function renderLocals(memory DebugMemory, symbols DebugSymbols, offset DebugAddress, site MxdbgInlineSiteLookup, framePointer DebugAddress, registers DebugRegisterAccess) returns DebugValueTree
 	var tree = DebugValueTree.create()
 	var named = DebugNameSet.create()
-	let locals = symbols.localsAt(offset, site: site)
+	var locals = symbols.localsAt(offset, site: site)
 
 	for local in locals 'eachLocal'
 		if named.contains(local.name) 'alreadyListed'
@@ -78,7 +78,7 @@ export function renderValuePath(memory DebugMemory, symbols DebugSymbols, offset
 	let pieces = path.trim().split(MemberSeparator)
 	let head = try pieces.get(0) otherwise return DebugValueAnswer.unknownName(path)
 
-	let locals = symbols.localsAt(offset, site: site)
+	var locals = symbols.localsAt(offset, site: site)
 
 	match symbols.localCoveringIn(locals, offset: offset, name: head) 'known'
 		undeclared then return DebugValueAnswer.unknownName(path)
@@ -100,7 +100,7 @@ export function renderValuePath(memory DebugMemory, symbols DebugSymbols, offset
 		end 'found'
 	end 'eachMember'
 
-	let held = tree.nodeAt(current)
+	var held = tree.nodeAt(current)
 	tree.roots.push(tree.add(DebugValueNode.create(path, typeName: held.typeName, kind: held.kind, display: held.display, availability: held.availability.clone(), children: held.children)))
 
 	return DebugValueAnswer.rendered(tree)

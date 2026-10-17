@@ -100,7 +100,7 @@ typealias Served = int(0 to 9)
 
 function serveOne(server HttpServer) returns Served
 	var exchange = try server.accept() otherwise return 1
-	let request = exchange.request()
+	view request = exchange.request()
 	let query = try request.url().query() otherwise "none"
 	let described = "{request.method().name} {request.url().path()} {query}"
 
@@ -205,7 +205,7 @@ typealias Served = int(0 to 9)
 
 function serveOne(server HttpServer) returns Served
 	var exchange = try server.accept() otherwise return 1
-	let headers = exchange.request().headers()
+	view headers = exchange.request().headers()
 	let lower = try headers.get("x-maxon-tag") otherwise "absent"
 	let upper = try headers.get("X-MAXON-TAG") otherwise "absent"
 
@@ -949,7 +949,7 @@ function serveOne(server HttpServer) returns Served
 		return 1
 	end 'refused'
 
-	let request = exchange.request()
+	view request = exchange.request()
 	let note = try request.headers().get("x-note") otherwise "absent"
 	print("path={request.url().path()} note={note}\n")
 
@@ -1199,7 +1199,7 @@ function acceptedAs(server HttpServer) returns String
 		return e.name
 	end 'refused'
 
-	let url = exchange.request().url()
+	view url = exchange.request().url()
 	let host = try url.host() otherwise "no-host"
 	let query = try url.query() otherwise "no-query"
 	let seen = "{host} {url.path()} {query}"
@@ -1386,7 +1386,7 @@ function acceptedAs(server HttpServer) returns String
 		return e.name
 	end 'refused'
 
-	let request = exchange.request()
+	view request = exchange.request()
 	let seen = "{request.method().name} {request.url().path()} [{request.body()}]"
 
 	try exchange.respondWith(StatusCode.ok, body: seen, contentType: "text/plain") otherwise return "respond-failed"
@@ -2119,7 +2119,7 @@ function acceptedAs(server HttpServer) returns String
 		return e.name
 	end 'refused'
 
-	let url = exchange.request().url()
+	view url = exchange.request().url()
 	let host = try url.host() otherwise "no-host"
 	let port = try url.port() otherwise 0
 	let query = try url.query() otherwise "no-query"
@@ -2208,7 +2208,7 @@ function acceptedAs(server HttpServer) returns String
 		return e.name
 	end 'refused'
 
-	let url = exchange.request().url()
+	view url = exchange.request().url()
 	let host = try url.host() otherwise "no-host"
 	let seen = "{host} {url.path()}"
 

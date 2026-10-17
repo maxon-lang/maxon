@@ -257,7 +257,7 @@ end 'serviceReplyNeedsReleaser'
 // `<T>.shutdown` is the compiler's own pill, which no file declares and which answers nothing, so the
 // lookup below failing IS the correct answer for it rather than a doomed program's symptom.
 function serviceReplyReleasePlanFor(messageName ByteArray, funcSignatures FuncSignatureMap, signatures ProgramSignatures, typeNames TypeNameInterner) returns AsyncReleasePlan
-	let noSlots = AsyncManagedSlotArray.create()
+	var noSlots = AsyncManagedSlotArray.create()
 	let sig = try funcSignatures.get(messageName) otherwise return AsyncReleasePlan.create(noSlots, consumedArgSlots: AsyncManagedSlotArray.create(), cellSlots: AsyncCellSlotArray.create(), resultSlots: AsyncManagedSlotArray.create(), errorSlots: AsyncManagedSlotArray.create(), calleeThrows: true)
 	return AsyncReleasePlan.create(noSlots, consumedArgSlots: AsyncManagedSlotArray.create(), cellSlots: AsyncCellSlotArray.create(), resultSlots: asyncResultSlotsOf(messageName, sig: sig, signatures: signatures, typeNames: typeNames), errorSlots: AsyncManagedSlotArray.create(), calleeThrows: true)
 end 'serviceReplyReleasePlanFor'
@@ -802,7 +802,7 @@ function emitUnranSlotReleases(module StdModule, func IrFunction, ids ValueMinte
 	end 'nothingTheCalleeTakes'
 
 	var release = module.addBlock(func, label: b"releaseunrun", heat: BlockHeat.normal)
-	let ran = module.addBlock(func, label: b"ran", heat: BlockHeat.normal)
+	var ran = module.addBlock(func, label: b"ran", heat: BlockHeat.normal)
 	let completed = emitGtStatusEquals(module, block: cur, status: emitLoadField(module, block: cur, record: gt, offset: GtOffStatus, ids: ids), want: GtStatus.completed, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(completed, thenBlockId: ran.id, elseBlockId: release.id))
 	module.setTerminator(emitSlotReleases(module, func: func, ids: ids, cur: release, gt: gt, slots: slots), op: StdOp.branch(ran.id))
@@ -824,7 +824,7 @@ function emitCellSlotRelease(module StdModule, func IrFunction, ids ValueMinter,
 	module.appendOp(cur, op: StdOp.loadIndirect(cell, addrId: gt, offset: slot.offset, valueType: StdType.i64))
 	let nonNull = emitCompareWithConstant(module, block: cur, value: cell, pred: StdCmpPred.ne, against: 0, ids: ids)
 	var release = module.addBlock(func, label: b"releasecell", heat: BlockHeat.normal)
-	let cont = module.addBlock(func, label: b"cont", heat: BlockHeat.normal)
+	var cont = module.addBlock(func, label: b"cont", heat: BlockHeat.normal)
 	module.setTerminator(cur, op: StdOp.condBranch(nonNull, thenBlockId: release.id, elseBlockId: cont.id))
 
 	match slot.content 'content'

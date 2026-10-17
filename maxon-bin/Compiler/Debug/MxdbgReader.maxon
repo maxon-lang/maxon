@@ -183,18 +183,18 @@ function windowPastTableText(window MxdbgWindow, record MxdbgIndex) returns Stri
 end 'windowPastTableText'
 
 export type MxdbgFunctionInfo
-	export var name as String
-	export var codeStart as MxdbgCodeOffset
+	export let name as String
+	export let codeStart as MxdbgCodeOffset
 	export var codeEnd as MxdbgCodeOffset
 	export var frameSize as MxdbgIndex
 	export var paramCount as MxdbgIndex
-	export var lineFirst as MxdbgIndex
-	export var lineCount as MxdbgIndex
-	export var localFirst as MxdbgIndex
+	export let lineFirst as MxdbgIndex
+	export let lineCount as MxdbgIndex
+	export let localFirst as MxdbgIndex
 	export var localCount as MxdbgIndex
-	export var displayName as String
+	export let displayName as String
 	export var origin as MxdbgOrigin
-	export var prologueOffset as MxdbgCodeOffset
+	export let prologueOffset as MxdbgCodeOffset
 
 	export static function create(name String, codeStart MxdbgCodeOffset, codeEnd MxdbgCodeOffset, prologueOffset MxdbgCodeOffset, frameSize MxdbgIndex, paramCount MxdbgIndex, lineFirst MxdbgIndex, lineCount MxdbgIndex, localFirst MxdbgIndex, localCount MxdbgIndex, displayName String, origin MxdbgOrigin) returns MxdbgFunctionInfo
 		return Self{name: name, codeStart: codeStart, codeEnd: codeEnd, frameSize: frameSize, paramCount: paramCount, lineFirst: lineFirst, lineCount: lineCount, localFirst: localFirst, localCount: localCount, displayName: displayName, origin: origin, prologueOffset: prologueOffset}
@@ -204,7 +204,7 @@ end 'MxdbgFunctionInfo'
 // One line record, materialized. `file` is the path the row's file id names, resolved here so a caller
 // never has to hold the reader and an id together.
 export type MxdbgLineInfo
-	export var codeOffset as MxdbgCodeOffset
+	export let codeOffset as MxdbgCodeOffset
 	export var file as String
 	export var line as MxdbgIndex
 	export var column as MxdbgIndex
@@ -223,13 +223,13 @@ end 'MxdbgLineInfo'
 // hand back what is written, and a kind it does not recognize must reach the caller rather than be
 // folded into one it does.
 export type MxdbgTypeInfo
-	export var name as String
+	export let name as String
 	export var kind as MxdbgIndex
-	export var size as MxdbgIndex
-	export var align as MxdbgIndex
-	export var fieldFirst as MxdbgIndex
+	export let size as MxdbgIndex
+	export let align as MxdbgIndex
+	export let fieldFirst as MxdbgIndex
 	export var fieldCount as MxdbgIndex
-	export var elementTypeId as MxdbgIndex
+	export let elementTypeId as MxdbgIndex
 	export var flags as MxdbgIndex
 
 	export static function create(name String, kind MxdbgIndex, size MxdbgIndex, align MxdbgIndex, fieldFirst MxdbgIndex, fieldCount MxdbgIndex, elementTypeId MxdbgIndex, flags MxdbgIndex) returns MxdbgTypeInfo
@@ -248,9 +248,9 @@ end 'MxdbgTypeInfo'
 // One field record, materialized. For an enum entry a "field" is a CASE and `offset` is its RAW TAG
 // VALUE rather than its ordinal, which is what a renderer has to match a stopped discriminant against.
 export type MxdbgFieldInfo
-	export var name as String
+	export let name as String
 	export var offset as MxdbgIndex
-	export var typeId as MxdbgIndex
+	export let typeId as MxdbgIndex
 
 	export static function create(name String, offset MxdbgIndex, typeId MxdbgIndex) returns MxdbgFieldInfo
 		return Self{name: name, offset: offset, typeId: typeId}
@@ -258,12 +258,12 @@ export type MxdbgFieldInfo
 end 'MxdbgFieldInfo'
 
 export type MxdbgLocalInfo
-	export var name as String
-	export var locKind as MxdbgIndex
-	export var locValue as MxdbgRecordFigure
-	export var typeId as MxdbgIndex
-	export var scopeStart as MxdbgCodeOffset
-	export var scopeEnd as MxdbgCodeOffset
+	export let name as String
+	export let locKind as MxdbgIndex
+	export let locValue as MxdbgRecordFigure
+	export let typeId as MxdbgIndex
+	export let scopeStart as MxdbgCodeOffset
+	export let scopeEnd as MxdbgCodeOffset
 	export var flags as MxdbgIndex
 	export var site as MxdbgInlineSiteLookup
 
@@ -299,8 +299,8 @@ export type MxdbgCovPointInfo
 	// The position of the CONSTRUCT this point is an arm of. It identifies the branch exactly — two `if`s
 	// or two `match`es cannot share one token position — so a report groups a branch's arms by it rather
 	// than by a relationship the file would have to carry.
-	export var branchLine as MxdbgIndex
-	export var branchColumn as MxdbgIndex
+	export let branchLine as MxdbgIndex
+	export let branchColumn as MxdbgIndex
 	var flags as MxdbgIndex
 
 	static function create(file String, line MxdbgIndex, column MxdbgIndex, branchLine MxdbgIndex, branchColumn MxdbgIndex, flags MxdbgIndex) returns MxdbgCovPointInfo
@@ -377,8 +377,8 @@ typealias MxdbgFuncOrder = Array with MxdbgIndex
 export typealias MxdbgLineInfoArray = Array with MxdbgLineInfo
 
 export type MxdbgGlobalInfo
-	export var name as String
-	export var imageOffset as MxdbgIndex
+	export let name as String
+	export let imageOffset as MxdbgIndex
 	export var slotBytes as MxdbgIndex
 
 	static function create(name String, imageOffset MxdbgIndex, slotBytes MxdbgIndex) returns MxdbgGlobalInfo
@@ -387,8 +387,8 @@ export type MxdbgGlobalInfo
 end 'MxdbgGlobalInfo'
 
 export type MxdbgLayoutFigureInfo
-	export var name as String
-	export var figure as MxdbgRecordFigure
+	export let name as String
+	export let figure as MxdbgRecordFigure
 
 	static function create(name String, figure MxdbgRecordFigure) returns MxdbgLayoutFigureInfo
 		return Self{name: name, figure: figure}
@@ -397,36 +397,36 @@ end 'MxdbgLayoutFigureInfo'
 
 export type MxdbgReader
 	var image as ByteArray
-	export var buildId as HashDigest
+	export let buildId as HashDigest
 	export var imageBase as MachineWord
 	export var target as Target
-	export var sourceRoot as String
-	var stringPoolOff as ByteOffset
-	var stringPoolSize as BytePos
-	var fileTableOff as ByteOffset
-	var fileTally as MxdbgIndex
-	var funcTableOff as ByteOffset
-	var funcTally as MxdbgIndex
-	var lineTableOff as ByteOffset
-	var lineTally as MxdbgIndex
-	var typeTableOff as ByteOffset
-	var typeTally as MxdbgIndex
-	var fieldTableOff as ByteOffset
-	var fieldTally as MxdbgIndex
-	var localTableOff as ByteOffset
-	var localTally as MxdbgIndex
-	var covTableOff as ByteOffset
-	var covTally as MxdbgIndex
-	var inlineSiteTableOff as ByteOffset
-	var inlineSiteTally as MxdbgIndex
-	var inlineRangeTableOff as ByteOffset
-	var inlineRangeTally as MxdbgIndex
-	var constTableOff as ByteOffset
-	var constTally as MxdbgIndex
-	var globalTableOff as ByteOffset
-	var globalTally as MxdbgIndex
-	var layoutTableOff as ByteOffset
-	var layoutTally as MxdbgIndex
+	export let sourceRoot as String
+	let stringPoolOff as ByteOffset
+	let stringPoolSize as BytePos
+	let fileTableOff as ByteOffset
+	let fileTally as MxdbgIndex
+	let funcTableOff as ByteOffset
+	let funcTally as MxdbgIndex
+	let lineTableOff as ByteOffset
+	let lineTally as MxdbgIndex
+	let typeTableOff as ByteOffset
+	let typeTally as MxdbgIndex
+	let fieldTableOff as ByteOffset
+	let fieldTally as MxdbgIndex
+	let localTableOff as ByteOffset
+	let localTally as MxdbgIndex
+	let covTableOff as ByteOffset
+	let covTally as MxdbgIndex
+	let inlineSiteTableOff as ByteOffset
+	let inlineSiteTally as MxdbgIndex
+	let inlineRangeTableOff as ByteOffset
+	let inlineRangeTally as MxdbgIndex
+	let constTableOff as ByteOffset
+	let constTally as MxdbgIndex
+	let globalTableOff as ByteOffset
+	let globalTally as MxdbgIndex
+	let layoutTableOff as ByteOffset
+	let layoutTally as MxdbgIndex
 
 	// Function indices in code-start order, which is what makes `functionContaining` a binary search. It is
 	// a sort rather than a claim about the writer: a sidecar may store its table in emission order, so a walk

@@ -301,7 +301,7 @@ function main() returns ExitCode
 	// reader looks at first. `fmt` and `mcp-server` are exempt because each refuses what it does not
 	// take itself, and `mcp-server` must be: the parser records its own flags as unknown.
 	if not args.refusedOptions.isEmpty() and args.command != MaxonCommand.fmt and args.command != MaxonCommand.mcpServer 'badOption'
-		let refusal = try args.refusedOptions.get(0) otherwise panic("main: refusedOptions is not empty and has no first entry")
+		view refusal = try args.refusedOptions.get(0) otherwise panic("main: refusedOptions is not empty and has no first entry")
 
 		match refusal 'why'
 			unknown(spelling) then reportUnknownOption(spelling)
@@ -530,7 +530,7 @@ end 'buildNamedTarget'
 // Several targets and no name are listed rather than guessed at: picking the first would report
 // success for a build nobody asked for.
 function chosenTarget(projectFile FilePath, word StatedText) returns TargetChoice
-	let declared = try entryNamesDeclaredIn(projectFile) otherwise (e) 'noRoster'
+	var declared = try entryNamesDeclaredIn(projectFile) otherwise (e) 'noRoster'
 		reportEntryRosterError(e)
 		return TargetChoice.refused(OwnFailureExit)
 	end 'noRoster'
@@ -696,7 +696,7 @@ end 'statedOrDefaultOutput'
 // A field the description states and this cannot use is an error, never a default: a guess is how a
 // build compiles the wrong thing while reporting success.
 module function buildFromManifestOutput(described String, args MaxonArgs, manifest FilePath, base ManifestBase, depth DelegationDepth) returns ExitCode
-	let doc = try Json.parse("{DescribedBuildsOpen}{described}{DescribedBuildsClose}") otherwise return refuseWhatIsNotABuild(described, manifest: manifest)
+	var doc = try Json.parse("{DescribedBuildsOpen}{described}{DescribedBuildsClose}") otherwise return refuseWhatIsNotABuild(described, manifest: manifest)
 	let describedCount = try doc.arrayLength(doc.root) otherwise panic("buildFromManifestOutput: the description is parsed inside brackets, so its root is an array")
 
 	if describedCount > 1 'severalBuilds'
@@ -2164,7 +2164,7 @@ end 'CommandAudience'
 // Held together so no field has a second table: `commandFromWord` decides what the parser accepts
 // by reading `word` back out of here.
 type CommandReference
-	export var word as String
+	export let word as String
 
 	// Empty for a command that takes none.
 	export var arguments as String
@@ -2174,9 +2174,9 @@ type CommandReference
 
 	// Empty when the summary says everything. Paragraphs are separated by `ParagraphSeparator`;
 	// nothing is wrapped by hand.
-	export var detail as String
+	export let detail as String
 
-	export var audience as CommandAudience
+	export let audience as CommandAudience
 
 	static function create(word String, arguments String, summary String, detail String, audience CommandAudience) returns CommandReference
 		return Self{word: word, arguments: arguments, summary: summary, detail: detail, audience: audience}
@@ -2291,11 +2291,11 @@ typealias OptionArrivalArray = Array with OptionArrival
 // The commands are a field so the option is printed under each command that reads it, making `maxon
 // help <command>` that command's whole surface, and so `main` refuses it under every other command.
 type OptionReference
-	export var spelling as String
-	export var description as String
+	export let spelling as String
+	export let description as String
 	export var commands as MaxonCommandArray
 	export var arrivals as OptionArrivalArray
-	export var listed as bool
+	export let listed as bool
 
 	static function create(spelling String, description String, commands MaxonCommandArray, arrivals OptionArrivalArray) returns OptionReference
 		return Self{spelling: spelling, description: description, commands: commands, arrivals: arrivals, listed: true}
@@ -2845,7 +2845,7 @@ export type MaxonArgs
 		// `assigned-only-loop-carried-vars-overflow` pins the x64 shape.
 		var parsed = Self.create()
 
-		let args = CommandLine.args()
+		var args = CommandLine.args()
 		var i = 1 as ElementIndex
 
 		while i < args.count() 'each'

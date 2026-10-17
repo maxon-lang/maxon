@@ -61,10 +61,10 @@ typealias StrChain = __ManagedList with String
 
 function main() returns ExitCode
 	var chain = StrChain.create()
-	let a = chain.insertFirst("alpha, long enough to be a real heap allocation")
-	let c = chain.insertLast("gamma, long enough to be a real heap allocation")
-	let b = chain.insertAfter(a, value: "beta, long enough to be a real heap allocation")
-	let z = chain.insertBefore(a, value: "zero, long enough to be a real heap allocation")
+	view a = chain.insertFirst("alpha, long enough to be a real heap allocation")
+	view c = chain.insertLast("gamma, long enough to be a real heap allocation")
+	view b = chain.insertAfter(a, value: "beta, long enough to be a real heap allocation")
+	view z = chain.insertBefore(a, value: "zero, long enough to be a real heap allocation")
 	var cur = try chain.head() otherwise 'empty'
 		return 1
 	end 'empty'
@@ -106,10 +106,10 @@ typealias StrChain = __ManagedList with String
 function main() returns ExitCode
 	var a = StrChain.create()
 	var b = StrChain.create()
-	let na = a.insertLast("the only element of chain a, on the heap")
-	let nb = b.insertLast("the only element of chain b, on the heap")
+	view na = a.insertLast("the only element of chain a, on the heap")
+	view nb = b.insertLast("the only element of chain b, on the heap")
 	print("before\n")
-	let spliced = b.insertAfter(na, value: "a value chain b will never hold")
+	view spliced = b.insertAfter(na, value: "a value chain b will never hold")
 	print("after [{spliced.value()}] [{nb.value()}]\n")
 	return 0
 end 'main'
@@ -134,10 +134,10 @@ typealias StrChain = __ManagedList with String
 
 function main() returns ExitCode
 	var chain = StrChain.create()
-	let n = chain.insertLast("the element of the node about to be detached")
+	view n = chain.insertLast("the element of the node about to be detached")
 	chain.detach(n)
 	print("before\n")
-	let spliced = chain.insertBefore(n, value: "a value this chain will never hold")
+	view spliced = chain.insertBefore(n, value: "a value this chain will never hold")
 	print("after [{spliced.value()}]\n")
 	return 0
 end 'main'
@@ -176,9 +176,9 @@ end 'dump'
 
 function main() returns ExitCode
 	var chain = StrChain.create()
-	let n1 = chain.insertLast("one, long enough to be a real heap allocation")
-	let n2 = chain.insertLast("two, long enough to be a real heap allocation")
-	let n3 = chain.insertLast("three, long enough to be a real heap allocation")
+	view n1 = chain.insertLast("one, long enough to be a real heap allocation")
+	view n2 = chain.insertLast("two, long enough to be a real heap allocation")
+	view n3 = chain.insertLast("three, long enough to be a real heap allocation")
 	chain.reinsertFirst(n3)
 	dump(chain, tag: "tail to front")
 	chain.reinsertLast(n3)
@@ -186,7 +186,7 @@ function main() returns ExitCode
 	chain.reinsertLast(n2)
 	dump(chain, tag: "middle to back")
 	var solo = StrChain.create()
-	let only = solo.insertLast("the only element there is, on the heap")
+	view only = solo.insertLast("the only element there is, on the heap")
 	solo.reinsertFirst(only)
 	dump(solo, tag: "a chain of one")
 	solo.reinsertLast(only)
@@ -217,8 +217,8 @@ typealias StrChain = __ManagedList with String
 
 function main() returns ExitCode
 	var chain = StrChain.create()
-	let n1 = chain.insertLast("one, long enough to be a real heap allocation")
-	let n2 = chain.insertLast("two, long enough to be a real heap allocation")
+	view n1 = chain.insertLast("one, long enough to be a real heap allocation")
+	view n2 = chain.insertLast("two, long enough to be a real heap allocation")
 	for _ in 0 upto 8 'churn'
 		chain.detach(n2)
 		chain.reinsertFirst(n2)
@@ -226,7 +226,7 @@ function main() returns ExitCode
 		chain.reinsertLast(n2)
 	end 'churn'
 	print("{chain.count()} {n1.value()} {n2.value()}\n")
-	let h = try chain.head() otherwise 'empty'
+	view h = try chain.head() otherwise 'empty'
 		return 1
 	end 'empty'
 	print("{h.value()}\n")
@@ -251,8 +251,8 @@ typealias StrChain = __ManagedList with String
 function main() returns ExitCode
 	var a = StrChain.create()
 	var b = StrChain.create()
-	let na = a.insertLast("the element that stays in chain a, on the heap")
-	let nb = b.insertLast("the element chain a is about to take, on the heap")
+	view na = a.insertLast("the element that stays in chain a, on the heap")
+	view nb = b.insertLast("the element chain a is about to take, on the heap")
 	a.reinsertLast(nb)
 	print("a={a.count()} b={b.count()}\n")
 	var cur = try a.head() otherwise 'empty'
@@ -290,7 +290,7 @@ function main() returns ExitCode
 		n.setValue("a replacement element, long enough to be a real allocation")
 	end 'churn'
 	print("{n.value()}\n")
-	let h = try chain.head() otherwise 'empty'
+	view h = try chain.head() otherwise 'empty'
 		return 1
 	end 'empty'
 	print("{h.value()}\n")
@@ -342,14 +342,14 @@ typealias StrChain = __ManagedList with String
 
 function main() returns ExitCode
 	var chain = StrChain.create()
-	let n = chain.insertFirst("the first element, long enough to be a real allocation")
+	view n = chain.insertFirst("the first element, long enough to be a real allocation")
 	n.setValue("a replacement element, long enough to be a real allocation")
 	print("{n.value()}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:7:4: cannot write through 'n': 'n' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
+error E3159: <fragment>:7:4: cannot write through 'n': 'n' is read-only (a `view`) and nothing reachable through it may be written; use 'var', or write a clone()
 ```
 
 <!-- test: detaching-through-a-let-chain-is-refused -->
@@ -400,7 +400,7 @@ function main() returns ExitCode
 	end 'fill'
 	chain.insertFirst("another element nobody keeps a handle to, on the heap").value()
 	print("{chain.count()}\n")
-	let h = try chain.head() otherwise 'empty'
+	view h = try chain.head() otherwise 'empty'
 		return 1
 	end 'empty'
 	print("{h.value()}\n")

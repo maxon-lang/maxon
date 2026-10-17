@@ -501,7 +501,7 @@ type DapAdapter
 	end 'armReplacing'
 
 	function armOne(session DebugToolSession, breakpoint DapBreakpointAsk, armed DapBreakpointAskArray, nodes JsonNodeIdArray, doc JsonDoc)
-		let answers = self.delivered(session, replies: session.conversation.perform(DebugCommand.arm(breakpoint.target, condition: breakpoint.condition, owner: DebugBreakOwner.client)), announceResume: false)
+		var answers = self.delivered(session, replies: session.conversation.perform(DebugCommand.arm(breakpoint.target, condition: breakpoint.condition, owner: DebugBreakOwner.client)), announceResume: false)
 
 		match dapBreakpointOutcome(answers) 'outcome'
 			armed(answer) then self.notedArmed(armed, nodes: nodes, doc: doc, breakpoint: breakpoint, answer: answer)
@@ -530,7 +530,7 @@ type DapAdapter
 	end 'configurationDone'
 
 	function threads(request DapRequest, session DebugToolSession)
-		let answers = self.delivered(session, replies: session.conversation.perform(DebugCommand.threads), announceResume: false)
+		view answers = self.delivered(session, replies: session.conversation.perform(DebugCommand.threads), announceResume: false)
 
 		if self.answeredAfterTheEnd(request) 'itEndedWhileWeAsked'
 			return
@@ -538,7 +538,7 @@ type DapAdapter
 
 		var doc = JsonDoc.create()
 
-		let rows = match answers.roster 'listed'
+		view rows = match answers.roster 'listed'
 			none gives DebugThreadRowArray.create()
 			listed(roster) gives roster.rows
 		end 'listed'
@@ -565,7 +565,7 @@ type DapAdapter
 			return
 		end 'noSuchThread'
 
-		let answers = self.delivered(session, replies: session.conversation.perform(walk), announceResume: false)
+		view answers = self.delivered(session, replies: session.conversation.perform(walk), announceResume: false)
 
 		if self.answeredAfterTheEnd(request) 'itEndedWhileWeAsked'
 			return
@@ -620,7 +620,7 @@ type DapAdapter
 			return
 		end 'noSuchReference'
 
-		let held = try self.variableRefs.get((reference - FirstReference) as ElementIndex) otherwise panic("DapAdapter.variablesOf: the reference was bounds-checked on the line above")
+		view held = try self.variableRefs.get((reference - FirstReference) as ElementIndex) otherwise panic("DapAdapter.variablesOf: the reference was bounds-checked on the line above")
 
 		match held 'which'
 			frameLocals(frame) then self.respondFrameLocals(request, session: session, frame: frame)
@@ -642,7 +642,7 @@ type DapAdapter
 	end 'respondFrameLocals'
 
 	function respondChildren(request DapRequest, tree ElementIndex, node ElementIndex)
-		let held = try self.renderedTrees.get(tree) otherwise panic("DapAdapter.respondChildren: a child reference names a tree this stop rendered")
+		view held = try self.renderedTrees.get(tree) otherwise panic("DapAdapter.respondChildren: a child reference names a tree this stop rendered")
 		let children = held.nodeAt(node).children.clone()
 		self.respondValues(request, tree: tree, indices: children)
 	end 'respondChildren'
@@ -658,7 +658,7 @@ type DapAdapter
 		var nodes = JsonNodeIdArray.create()
 
 		for index in indices 'eachValue'
-			let value = (try self.renderedTrees.get(tree) otherwise panic("DapAdapter.respondValues: the tree was registered before its values were asked for")).nodeAt(index)
+			view value = (try self.renderedTrees.get(tree) otherwise panic("DapAdapter.respondValues: the tree was registered before its values were asked for")).nodeAt(index)
 			nodes.push(dapVariableNode(doc, value: value, reference: self.childReference(tree, node: index, value: value)))
 		end 'eachValue'
 
@@ -680,7 +680,7 @@ type DapAdapter
 		let context = try request.arguments.textOr(ContextArgument, fallback: WatchContext)
 
 		if context == ReplContext 'aDebuggerCommand'
-			let answers = self.delivered(session, replies: session.conversation.run(expression), announceResume: true)
+			view answers = self.delivered(session, replies: session.conversation.run(expression), announceResume: true)
 			var doc = JsonDoc.create()
 			self.writer.respond(request, doc: doc, body: DapBody.object(dapEvaluateBody(doc, result: answers.transcript(), reference: NoChildren)))
 
@@ -698,7 +698,7 @@ type DapAdapter
 		if var tree = try answers.trees.get(0) 'rendered'
 			let treeIndex = self.held(tree)
 			let root = try tree.roots.get(0) otherwise panic("DapAdapter.evaluate: a `value` reply carries exactly one root")
-			let value = tree.nodeAt(root)
+			view value = tree.nodeAt(root)
 			var doc = JsonDoc.create()
 			self.writer.respond(request, doc: doc, body: DapBody.object(dapEvaluateBody(doc, result: dapValueText(value), reference: self.childReference(treeIndex, node: root, value: value))))
 
@@ -711,7 +711,7 @@ type DapAdapter
 	function moveThen(request DapRequest, session DebugToolSession, command DebugCommand)
 		self.lifecycle = DapLifecycle.live
 		self.emitProgramOutput(session.engine.takeOutput())
-		let answers = DapAnswers.of(session.conversation.perform(command))
+		view answers = DapAnswers.of(session.conversation.perform(command))
 
 		if answers.failures.count() > 0 'refused'
 			self.refuseWith(request, answers: answers)
@@ -792,7 +792,7 @@ type DapAdapter
 	function delivered(session DebugToolSession, replies DebugReplyArray, announceResume bool) returns DapAnswers
 		self.emitProgramOutput(session.engine.takeOutput())
 
-		let answers = DapAnswers.of(replies)
+		var answers = DapAnswers.of(replies)
 		self.reportMovements(answers, announceResume: announceResume)
 
 		return answers

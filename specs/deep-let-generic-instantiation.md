@@ -277,7 +277,7 @@ end 'Box'
 function main() returns ExitCode
 	var counters = CounterArray.create()
 	counters.push(Counter.create(1))
-	let box = CounterBox.create(try counters.get(0) otherwise panic("empty"))
+	var box = CounterBox.create(try counters.get(0) otherwise panic("empty"))
 
 	return box.peek().n as ExitCode
 end 'main'
@@ -354,7 +354,7 @@ end 'Box'
 function main() returns ExitCode
 	var items = CounterArray.create()
 	items.push(Counter.create(1))
-	let box = CounterBox.first(items)
+	var box = CounterBox.first(items)
 
 	return box.peek().n as ExitCode
 end 'main'
@@ -932,7 +932,7 @@ error E3078: specs/deep-let-generic-instantiation/error.a-var-written-after-a-ge
 ```
 
 <!-- test: error.a-let-view-of-a-vars-field-is-refused-by-a-let-field-keeper -->
-A `let` that only views the record a `var`'s field holds is read-only while it is live, so a `let` field that
+A `view` of the record a `var`'s field holds is read-only while it is live, so a `let` field that
 keeps it would still share the record with a name that writes it once the view is dead.
 
 ```maxon
@@ -969,7 +969,7 @@ end 'Box'
 
 function main() returns ExitCode
 	var holder = Holder.create(1)
-	let view = holder.field
+	view view = holder.field
 	let box = Box.create(view)
 	let seen = view.n
 	holder.field.n = 2
@@ -1024,7 +1024,7 @@ end 'main'
 
 <!-- test: error.a-let-view-of-a-vars-field-is-refused-by-a-factorys-struct-literal -->
 `x` only views the record `holder.field` holds. The struct literal's `let` field would keep it, so the store is
-refused although `x` is a `let`.
+refused although `x` is read-only.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1052,7 +1052,7 @@ type Box
 	static function create(n Integer) returns Self
 		var holder = Holder.create(n)
 		holder.field.n = n + 1
-		let x = holder.field
+		view x = holder.field
 		return Self{kept: x}
 	end 'create'
 
@@ -1068,7 +1068,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: specs/deep-let-generic-instantiation/error.a-let-view-of-a-vars-field-is-refused-by-a-factorys-struct-literal.maxon:28:15: cannot store a value other names may still write into a `let` field 'Box.kept': a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
+error E3078: specs/deep-let-generic-instantiation/error.a-let-view-of-a-vars-field-is-refused-by-a-factorys-struct-literal.maxon:28:15: cannot store view 'x' into a `let` field 'Box.kept': a `let` field has no other writer, so it takes a fresh or moved value or a read-only one; pass a clone()
 ```
 
 <!-- test: a-let-bound-to-a-fresh-record-is-kept-by-a-factorys-struct-literal -->

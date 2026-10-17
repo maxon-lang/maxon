@@ -364,7 +364,7 @@ end 'promoteInBlock'
 // by its releases when this op is a call that needs them — and answers whether anything was spliced in.
 // Same arm list, same band discipline and same `asyncCall` exclusion as the gate above.
 function promoteCallAt(project Project, module MaxonModule, opIdx ElementIndex, func IrFunction, funcIndex ElementIndex, provenance ArgProvenance, minter PromotedValueMinter, mutationSummary ParamMutationSummary, newRefs OpIndexArray) returns bool
-	let op = try module.ops.get(opIdx) otherwise panic("promoteCallAt: opIdx {opIdx} not in module.ops")
+	view op = try module.ops.get(opIdx) otherwise panic("promoteCallAt: opIdx {opIdx} not in module.ops")
 
 	match op 'op'
 		call(_, callee, args, argLabels, _, _, _, _) then return promoteArgsOf(project, module: module, opIdx: opIdx, func: func, funcIndex: funcIndex, callee: callee, args: args, argLabels: argLabels, provenance: provenance, minter: minter, mutationSummary: mutationSummary, newRefs: newRefs)
@@ -433,7 +433,7 @@ function promoteArgsOf(project Project, module MaxonModule, opIdx ElementIndex, 
 		return false
 	end 'noWrittenPositionToFill'
 
-	let sig = try project.funcSignatures.get(callee) otherwise panic("promoteArgsOf: funcSignatures has no entry for '{String.from(callee)}' one line after `contains` answered true for it")
+	view sig = try project.funcSignatures.get(callee) otherwise panic("promoteArgsOf: funcSignatures has no entry for '{String.from(callee)}' one line after `contains` answered true for it")
 
 	// Asked before anything is built, because a call to a writing callee is common and a literal or a merge
 	// AT one of its written positions is not: without it every such call would claim four arrays to discover
@@ -481,8 +481,8 @@ function promoteArgsOf(project Project, module MaxonModule, opIdx ElementIndex, 
 		newRefs.push(appendPromotionRuntimeCall(module, project: project, funcIndex: funcIndex, result: try promoted.get(i) otherwise panic("promoteArgsOf: promoted.get OOB at {i}"), callee: try callees.get(i) otherwise panic("promoteArgsOf: callees.get OOB at {i} — the three columns are pushed together"), arg: try sources.get(i) otherwise panic("promoteArgsOf: sources.get OOB at {i} — the three columns are pushed together"), range: range))
 	end 'eachPromotion'
 
-	let original = try module.ops.get(opIdx) otherwise panic("promoteArgsOf: module.ops.get OOB at {opIdx}")
-	let rewritten = withRewrittenArgs(original, args: promotedArgs, argImmutableNames: callArgImmutableNamesOf(original).clone())
+	var original = try module.ops.get(opIdx) otherwise panic("promoteArgsOf: module.ops.get OOB at {opIdx}")
+	var rewritten = withRewrittenArgs(original, args: promotedArgs, argImmutableNames: callArgImmutableNamesOf(original).clone())
 	try module.ops.set(opIdx, value: rewritten) otherwise panic("promoteArgsOf: module.ops.set OOB at {opIdx}")
 	newRefs.push(opIdx)
 

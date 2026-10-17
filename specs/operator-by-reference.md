@@ -10,8 +10,8 @@ category: type-system
 
 `a == b` and `a != b` dispatch to `equals`, and `a < b`, `a <= b`, `a > b` and `a >= b` to `compare`. A comparison
 never changes what it compares, so a method named `equals` or `compare` that takes one operand besides its
-receiver may not write that operand or its receiver, directly or by handing it to a function that does: that is
-refused at the method's declaration (`E3187`), whichever type declares it, whichever interface it satisfies and
+receiver may not write that operand or its receiver, or keep it where something may write it, directly or by
+handing it to a function that does: that is refused at the method's declaration (`E3187`), whichever type declares it, whichever interface it satisfies and
 whether or not it satisfies one. Operator operands are always read, so a `let`, a `var`, a field or an expression is an equally
 good operand.
 
@@ -823,4 +823,83 @@ end 'main'
 ```
 ```maxoncstderr
 error E3187: <fragment>:16:11: 'Tagged.equals' writes its receiver, but a method behind the comparison operators may not modify its receiver — `==`, `!=`, `<`, `<=`, `>` and `>=` pass it by value
+```
+
+<!-- test: operator-by-reference.error.a-comparison-method-may-not-write-its-operand-through-a-global -->
+`equals` keeps its operand in a module container, where a helper then writes it, so the method writes its operand.
+
+```maxon
+typealias Count = int(0 to 1000)
+typealias Boxes = Array with Box
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+type Reg
+	export var items as Boxes
+
+	static function create() returns Self
+		return Self{items: Boxes.create()}
+	end 'create'
+end 'Reg'
+
+type Outer
+	export var inner as Reg
+
+	static function create() returns Self
+		return Self{inner: Reg.create()}
+	end 'create'
+end 'Outer'
+
+type Top
+	export var outer as Outer
+
+	static function create() returns Self
+		return Self{outer: Outer.create()}
+	end 'create'
+end 'Top'
+
+function zeroBox(w Box)
+	w.n = 0
+end 'zeroBox'
+
+typealias Tags = Array with Tagged
+
+var seen = Tags.create()
+
+type Tagged
+	export var tag as Count
+
+	static function create(tag Count) returns Self
+		return Self{tag: tag}
+	end 'create'
+
+	function equals(other Self) returns bool
+		seen.push(other)
+		wipeSeen()
+		return true
+	end 'equals'
+end 'Tagged'
+
+function wipeSeen()
+	var w = try seen.get(0) otherwise return
+	w.tag = 0
+end 'wipeSeen'
+
+function main() returns ExitCode
+	let a = Tagged.create(2)
+	let b = Tagged.create(3)
+	if a == b 'same'
+		print("{a.tag}\n")
+	end 'same'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3187: <fragment>:52:11: 'Tagged.equals' writes its parameter 'other', but a method behind the comparison operators may not modify its operand — `==`, `!=`, `<`, `<=`, `>` and `>=` pass it by value
 ```

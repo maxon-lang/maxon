@@ -229,7 +229,7 @@ function main() returns ExitCode
 			unexpectedEof(line, column) then caught = 900
 		end 'k'
 	end 'fail'
-	let again = lex.pendingError
+	view again = lex.pendingError
 	match again 'k2'
 		unterminatedString(line, column) then return (caught + line + column)
 		unexpectedEof(line, column) then return (caught + 500)
@@ -337,7 +337,7 @@ function whyLen(e Err) returns Integer
 end 'whyLen'
 
 function main() returns ExitCode
-	let body = Body.create(Err.bad("a struct payload thrown out of a sole box, heap-long"))
+	var body = Body.create(Err.bad("a struct payload thrown out of a sole box, heap-long"))
 	let first = try probe(body) otherwise 7
 	let second = whyLen(body.e)
 	print("first={first} second={second}")

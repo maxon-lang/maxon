@@ -1153,7 +1153,7 @@ end 'assertRegisterFacts'
 // split and the same core, so it refuses at the same peak. A compile that reaches here is failing, so the
 // second run (and the fresh variant memo it builds) costs nothing anybody will see.
 module function refuseForRegisterPressure(project Project, stdModule StdModule, funcIndex ElementIndex, target Target, abi CalleeAbiTable, usesGt bool, pool RegMask, callerSaved RegMask, file RegisterFile) throws CompileError
-	let body = BackendUnitBody.extract(stdModule, func: stdModule.getFunc(funcIndex), runtimeTier: project.libraryFacts.runtimeTier, spanTable: project.debugSpanTable)
+	var body = BackendUnitBody.extract(stdModule, func: stdModule.getFunc(funcIndex), runtimeTier: project.libraryFacts.runtimeTier, spanTable: project.debugSpanTable)
 	var costs = PoolPhaseCosts.create(RegAllocPhase.allCases.count())
 	var iselCost = PhaseDelta.zero()
 	var lowered = lowerAndSplitUnit(unitLoweringFor(target, abi: abi, usesGt: usesGt), unitModule: body.unitModule, target: target, costs: costs, iselCost: iselCost)
@@ -1253,7 +1253,7 @@ module function allocateFunctionCore(module TargetModule, func IrFunction, hasAu
 	try driver.relievePressure(module, func: func, hasAuthor: hasAuthor, counters: counters, refusal: refusal)
 	costs.recordExcluding(RegAllocPhase.splitting.ordinal, probe: splitProbe, innerIndex: RegAllocPhase.liveness.ordinal, innerBefore: livenessBefore)
 
-	let liveness = driver.liveness
+	view liveness = driver.liveness
 
 	// Reuse-def copies the colorer materializes (two-address inputs that outlive their
 	// op) — consumed by the rewrite, which splices them. Populated during coloring.
@@ -2172,7 +2172,7 @@ end 'collectPhiEdgeHints'
 // ==========================================================================
 
 function colorFunction(module TargetModule, liveness LivenessResult, pool RegMask, callerSaved RegMask, counters RegAllocCounters, reuseCopies ReuseCopyPlan, brackets ColdCallBracketPlan, stuck StuckValues) returns Allocation
-	let topo = liveness.cfg.topo
+	view topo = liveness.cfg.topo
 	let valueCount = liveness.valueCount
 	let wordsPerRow = liveness.wordsPerRow
 	var alloc = Allocation.create(valueCount)
@@ -2213,7 +2213,7 @@ function colorFunction(module TargetModule, liveness LivenessResult, pool RegMas
 		block.collectOpsInRunOrder(ordered)
 		let deaths = computeBlockDeaths(module, ordered: ordered, liveness: liveness, local: local, block: block, buf: buf, seenBelow: seenBelow, seedBuf: seedBuf, liveByClass: deathsLiveByClass)
 
-		let runs = liveness.coldRuns.of(local)
+		view runs = liveness.coldRuns.of(local)
 
 		for pos in 0 upto ordered.count() 'eachOp'
 			let opIdx = try ordered.get(pos) otherwise panic("colorFunction: ordered.get OOB")
@@ -2479,7 +2479,7 @@ function reportExhaustion(v ValueId, working RegMask, classPool RegMask, callerS
 	occupants.push(v)
 
 	var hall = HallScratch.create()
-	let verdict = hallVerdictAt(liveness, live: occupants, pool: classPool, scratch: hall)
+	view verdict = hallVerdictAt(liveness, live: occupants, pool: classPool, scratch: hall)
 
 	if not verdict.feasible 'theExactVerdictIsOverflow'
 		panic("reportExhaustion: no free register for {situation} — and Hall's EXACT verdict at this point is OVERFLOW: {verdict.tight} of the values here are confined to the witness {verdict.witness}, which offers {regMaskPopcount(verdict.witness)} register(s), so {verdict.tight - regMaskPopcount(verdict.witness)} of them must leave. THE SPLITTER LEFT AN OVER-POOL POINT UNRELIEVED — relieving every one of them before coloring is what `SplitDriver.relievePressure`'s post-condition claims. If the witness IS the whole class pool it is plain per-file pigeonhole and `analyzeBlockPressure`'s `classRowGet(effective, ...) > classPoolSizeOf(...)` owns it; if it is a proper subset, `RegPoolCensus.screenViolates` plus `HallCondition`'s exact confirmation own it. ⚠ AND A REGISTER HELD AT AN OP THAT IS IN NO LIVE SET IS INVISIBLE TO BOTH — a reuse copy and a DEAD DEF are the two, `addOpTransientPressure` and `opConfinedTransient` are the ONE place each is counted, and a demand they miss is one no popcount over a live set can ever see. Occupants:{occupancy}")

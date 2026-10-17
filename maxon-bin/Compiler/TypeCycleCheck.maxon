@@ -95,8 +95,8 @@ let TypeCyclePathArrow = " → "
 
 union TypeCycleEdgeLabel
 	element
-	field(member ByteArray)
-	casePayload(caseName ByteArray, member ByteArray)
+	field(let member ByteArray)
+	casePayload(let caseName ByteArray, let member ByteArray)
 end 'TypeCycleEdgeLabel'
 
 typealias TypeCycleEdgeLabelArray = Array with TypeCycleEdgeLabel
@@ -122,7 +122,7 @@ type TypeCycleGraph
 
 	// How many generic instances the program interned — the container half's width, held here so the
 	// adjacency and the node numbering cannot come to disagree about how wide the space is.
-	var instanceCount as GenericInstanceId
+	let instanceCount as GenericInstanceId
 
 	// Interface name ⇒ its node, plus the reverse column — for the interfaces some declared reference NAMES.
 	// ⭐ **MINTED ON MENTION, AND NUMBERED ABOVE BOTH OTHER HALVES SO THE SPACE MAY GROW WHILE THE EDGES ARE
@@ -365,7 +365,7 @@ export function checkTypeReferenceCycles(project Project, signatures ProgramSign
 		return
 	end 'malformedProject'
 
-	let graph = buildTypeReferenceGraph(project, signatures: signatures)
+	view graph = buildTypeReferenceGraph(project, signatures: signatures)
 
 	match blameForTypeCycles(project, graph: graph) 'blame'
 		none then return
@@ -476,7 +476,7 @@ function buildTypeReferenceGraph(project Project, signatures ProgramSignatures) 
 
 		for index in 0 upto layout.fieldTypes.count() 'eachField'
 			let fieldType = try layout.fieldTypes.get(index) otherwise panic("buildTypeReferenceGraph: fieldTypes.get OOB at {index} below count {layout.fieldTypes.count()}")
-			let fieldName = try layout.fieldNames.get(index) otherwise panic("buildTypeReferenceGraph: '{String.from(name)}' declares {layout.fieldTypes.count()} field types against {layout.fieldNames.count()} names — `StructLayout.addField` is the one writer of both")
+			view fieldName = try layout.fieldNames.get(index) otherwise panic("buildTypeReferenceGraph: '{String.from(name)}' declares {layout.fieldTypes.count()} field types against {layout.fieldNames.count()} names — `StructLayout.addField` is the one writer of both")
 			graph.addEdge(owner, target: typeCycleTargetOf(fieldType, typeNames: project.typeNames), label: TypeCycleEdgeLabel.field(fieldName))
 		end 'eachField'
 	end 'eachStruct'
@@ -485,8 +485,8 @@ function buildTypeReferenceGraph(project Project, signatures ProgramSignatures) 
 		let owner = graph.nodeOfDeclaredAggregate(name)
 
 		for index in 0 upto layout.casePayloads.count() 'eachCase'
-			let caseName = try layout.caseNames.get(index) otherwise panic("buildTypeReferenceGraph: '{String.from(name)}' declares {layout.casePayloads.count()} payload lists against {layout.caseNames.count()} case names — `EnumLayout.addCase` is the one writer of both")
-			let payloads = try layout.casePayloads.get(index) otherwise panic("buildTypeReferenceGraph: casePayloads.get OOB at {index} below count {layout.casePayloads.count()}")
+			view caseName = try layout.caseNames.get(index) otherwise panic("buildTypeReferenceGraph: '{String.from(name)}' declares {layout.casePayloads.count()} payload lists against {layout.caseNames.count()} case names — `EnumLayout.addCase` is the one writer of both")
+			view payloads = try layout.casePayloads.get(index) otherwise panic("buildTypeReferenceGraph: casePayloads.get OOB at {index} below count {layout.casePayloads.count()}")
 
 			for payload in payloads 'eachPayload'
 				graph.addEdge(owner, target: typeCycleTargetOf(payload.declaredType, typeNames: project.typeNames), label: TypeCycleEdgeLabel.casePayload(caseName, member: payload.name))

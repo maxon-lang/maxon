@@ -85,7 +85,7 @@ type Module
 	end 'create'
 
 	function addBlock(i Num) returns Blk
-		let b = Blk.create(i)
+		var b = Blk.create(i)
 		blocks.push(b)
 		return b
 	end 'addBlock'
@@ -152,7 +152,7 @@ type Parser
 
 	function emitShortCircuit(entryBlock Blk) returns Num throws ParseErr
 		let entryId = entryBlock.id
-		let rhsBlock = module.addBlock(101)
+		var rhsBlock = module.addBlock(101)
 		let rhsId = rhsBlock.id
 		currentBlock = rhsBlock
 		let rhsResult = try parseExpressionBP(rhsBlock, opCount: 0, hasCall: true)
@@ -166,7 +166,7 @@ end 'Parser'
 
 function main() returns ExitCode
 	var m = Module.create()
-	let entry = m.addBlock(1)
+	var entry = m.addBlock(1)
 	var p = Parser.create(m, entry: entry)
 	let r = try p.parseExpressionBP(entry, opCount: 1, hasCall: true) otherwise return 3
 	let sum = m.sumIds()

@@ -78,7 +78,7 @@ function main() returns ExitCode
 	var e = h.entryAt(0)
 	e.0.bump(2)
 
-	let again = h.entryAt(0)
+	view again = h.entryAt(0)
 	return again.0.n
 end 'main'
 ```
@@ -134,7 +134,7 @@ function main() returns ExitCode
 		var b = try held.get("a") otherwise panic("absent")
 		b.bump()
 	end 'eachRound'
-	let c = try held.get("a") otherwise panic("absent")
+	view c = try held.get("a") otherwise panic("absent")
 	print("{c.n} {c.names.count()}\n")
 	return 0
 end 'main'
@@ -199,7 +199,7 @@ function main() returns ExitCode
 		var b = try held.get("a") otherwise panic("absent")
 		b.bump()
 	end 'eachRound'
-	let c = try held.get("a") otherwise panic("absent")
+	view c = try held.get("a") otherwise panic("absent")
 	print("{c.n} {c.names.count()}\n")
 	return 0
 end 'main'
@@ -257,7 +257,7 @@ function main() returns ExitCode
 	held.hold("a", value: Box.create(7))
 	var b = try held.get("a") otherwise panic("absent")
 	b.bump()
-	let c = try held.get("a") otherwise panic("absent")
+	view c = try held.get("a") otherwise panic("absent")
 	print("{c.n} {c.names.count()}\n")
 	return 0
 end 'main'
@@ -332,7 +332,7 @@ function main() returns ExitCode
 		var b = try registry.get("a") otherwise panic("absent")
 		b.bump()
 	end 'eachRound'
-	let c = try registry.get("a") otherwise panic("absent")
+	view c = try registry.get("a") otherwise panic("absent")
 	print("{c.n} {c.names.count()}\n")
 	return 0
 end 'main'
@@ -607,7 +607,7 @@ function main() returns ExitCode
 		var b = try registry.get("b") otherwise panic("absent")
 		b.bump()
 	end 'eachRound'
-	let c = try registry.get("a") otherwise panic("absent")
+	view c = try registry.get("a") otherwise panic("absent")
 	print("{c.n} {c.names.count()}\n")
 	return 0
 end 'main'
@@ -668,7 +668,7 @@ function main() returns ExitCode
 		var b = cell.later()
 		b.bump()
 	end 'eachRound'
-	let c = cell.get()
+	view c = cell.get()
 	print("{c.n} {c.names.count()}\n")
 	return 0
 end 'main'
@@ -743,8 +743,8 @@ function main() returns ExitCode
 			total = total + pair.1.n + (pair.1.names.count() as Count)
 		end 'sum'
 	end 'eachRound'
-	let a = try m.get("a") otherwise panic("absent")
-	let bb = try m.get("bb") otherwise panic("absent")
+	view a = try m.get("a") otherwise panic("absent")
+	view bb = try m.get("bb") otherwise panic("absent")
 	print("{total} {a.n} {a.names.count()} {bb.n} {bb.names.count()}\n")
 	return 0
 end 'main'
@@ -923,11 +923,11 @@ end 'heap'
 function main() returns ExitCode
 	var b = StrBag.create()
 	b.add(heap(1), tag: 4)
-	let c = b.copy()
-	let one = try c.get(0) otherwise return 90
+	var c = b.copy()
+	var one = try c.get(0) otherwise return 90
 	b.addBox(one)
 	b.add(heap(2), tag: 5)
-	let e = try c.get(0) otherwise return 92
+	view e = try c.get(0) otherwise return 92
 	print("{e.v} {c.count()}\n")
 	return 0
 end 'main'
@@ -993,12 +993,12 @@ end 'heap'
 function main() returns ExitCode
 	var b = StrBag.create()
 	b.add(heap(1), tag: 4)
-	let c = b.copy()
-	let one = try c.get(0) otherwise return 90
+	var c = b.copy()
+	var one = try c.get(0) otherwise return 90
 	let n = b.viaStash(one)
 	print("{n}\n")
 	b.add(heap(2), tag: 5)
-	let e = try c.get(0) otherwise return 92
+	view e = try c.get(0) otherwise return 92
 	print("{e.v} {c.count()}\n")
 	return 0
 end 'main'
@@ -1187,7 +1187,7 @@ function main() returns ExitCode
 	var h = BoxHolder.create()
 	h.put("x", value: Box.create(5))
 	h.put("y", value: Box.create(6))
-	let snap = h.snapshot()
+	view snap = h.snapshot()
 	h.put("z", value: Box.create(7))
 	var total = 0 as Count
 
@@ -1250,7 +1250,7 @@ function main() returns ExitCode
 	var h = BoxHolder.create()
 	h.put("x", value: Box.create(5))
 	h.put("y", value: Box.create(6))
-	let snap = h.snapshot()
+	view snap = h.snapshot()
 	h.put("z", value: Box.create(7))
 	var total = 0 as Count
 
@@ -1724,7 +1724,7 @@ function main() returns ExitCode
 	var h = BoxHolder.create()
 	h.put("x", value: Box.create(5))
 	h.put("y", value: Box.create(6))
-	let snap = h.snapshot()
+	var snap = h.snapshot()
 	let k = BoxHolder.countOf(snap)
 	h.put("z", value: Box.create(7))
 	var total = 0 as Count
@@ -2062,7 +2062,7 @@ function main() returns ExitCode
 	var xs = Strings.create()
 	xs.push(heapString("first payload ", b: "long enough to allocate"))
 	xs.push(heapString("second payload ", b: "long enough to allocate"))
-	let c = StrCell.firstOf(xs)
+	view c = StrCell.firstOf(xs)
 	print("{c.v}\n")
 	return 0
 end 'main'
@@ -2103,7 +2103,7 @@ function main() returns ExitCode
 	var xs = Strings.create()
 	xs.push(heapString("first payload ", b: "long enough to allocate"))
 	xs.push(heapString("second payload ", b: "long enough to allocate"))
-	let c = StrCell.firstOf(xs)
+	view c = StrCell.firstOf(xs)
 	print("{c.v}\n")
 	return 0
 end 'main'
@@ -2142,7 +2142,7 @@ function main() returns ExitCode
 	var xs = Strings.create()
 	xs.push(heapString("first payload ", b: "long enough to allocate"))
 	xs.push(heapString("second payload ", b: "long enough to allocate"))
-	let c = StrCell.firstOf(xs)
+	view c = StrCell.firstOf(xs)
 	print("{c.v}\n")
 	return 0
 end 'main'

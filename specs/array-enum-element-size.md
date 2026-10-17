@@ -60,7 +60,7 @@ function main() returns ExitCode
 		ops.push(Op.sub(20))
 		ops.push(Op.add(30))
 
-		let first = try ops.get(0) otherwise Op.nop
+		view first = try ops.get(0) otherwise Op.nop
 		match first 'check'
 				add(v) then return v
 				sub then return 99
@@ -91,7 +91,7 @@ function main() returns ExitCode
 		ops.push(Op.sub(20))
 		ops.push(Op.add(42))
 
-		let last = try ops.get(2) otherwise Op.nop
+		view last = try ops.get(2) otherwise Op.nop
 		match last 'check'
 				add(v) then return v
 				sub then return 99

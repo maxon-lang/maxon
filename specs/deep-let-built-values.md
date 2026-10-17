@@ -251,7 +251,7 @@ type Holder
 	end 'note'
 
 	function closeWhole() returns KeepLog
-		let old = self.log
+		var old = self.log
 		self.log = Log.create()
 		return KeepLog.create(old)
 	end 'closeWhole'
@@ -319,7 +319,7 @@ type Holder
 	end 'note'
 
 	function closeWhole() returns KeepLog
-		let old = self.log
+		var old = self.log
 		let next = self.generation + 1
 		self.generation = next
 		self.log = Log.create()
@@ -389,7 +389,7 @@ type Holder
 	end 'note'
 
 	function closeWhole() returns KeepLog
-		let old = self.log
+		var old = self.log
 		let seen = self.log.told.names.count()
 		self.total = seen as Count
 		self.log = Log.create()
@@ -456,7 +456,7 @@ type Holder
 	end 'note'
 
 	function closeWhole() returns KeepLog
-		let old = self.log
+		var old = self.log
 		self.note(b"peek")
 		self.log = Log.create()
 		return KeepLog.create(old)
@@ -522,7 +522,7 @@ type Holder
 	end 'note'
 
 	function closeWhole() returns KeepLog
-		let old = self.log
+		var old = self.log
 		self.log = Log.create()
 		return KeepLog.create(old)
 	end 'closeWhole'

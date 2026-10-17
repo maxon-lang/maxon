@@ -112,7 +112,7 @@ end 'handedParametersOf'
 typealias RecordIndexArray = Array with ElementIndex
 typealias RecordIndexMap = Map with (ByteArray, ElementIndex)
 typealias BrandKeySet = Set with ByteArray
-typealias MergeBrandMap = Map with (ByteArray, ByteArray)
+typealias MergeBrandMap = Map with (ByteArray, readonly ByteArray)
 
 type BrandResolver
 	let firstOf as RecordIndexMap
@@ -184,7 +184,7 @@ type BrandResolver
 
 		while index < project.pendingBrandRecords.count() 'eachRecordOfTheKey'
 			let record = try project.pendingBrandRecords.get(index) otherwise panic("BrandResolver.resolve: pendingBrandRecords.get OOB at {index}")
-			let brand = self.carriedBy(project, index: index)
+			view brand = self.carriedBy(project, index: index)
 
 			if not brand.isEmpty() 'aBrandedRecord'
 				self.adoptFrom(record, brand: brand)
@@ -285,8 +285,8 @@ end 'declaredParameterName'
 
 function indirectlyHandedParameterOf(project Project, context HandOverContext, record PendingBrandRecord) returns HandedParameter
 	let funcIndex = try context.owners.get(record.opIndex) otherwise panic("indirectlyHandedParameterOf: no function owns op {record.opIndex} — an indirect hand-over record names a live indirect call")
-	let func = try context.program.functions.get(funcIndex) otherwise panic("indirectlyHandedParameterOf: functions.get OOB at {funcIndex}")
-	let op = try context.program.ops.get(record.opIndex) otherwise panic("indirectlyHandedParameterOf: ops.get OOB at {record.opIndex}")
+	view func = try context.program.functions.get(funcIndex) otherwise panic("indirectlyHandedParameterOf: functions.get OOB at {funcIndex}")
+	view op = try context.program.ops.get(record.opIndex) otherwise panic("indirectlyHandedParameterOf: ops.get OOB at {record.opIndex}")
 
 	match op 'op'
 		indirectCall(_, callee, _, _) then return landedBrandsOf(project, module: context.program, bodies: context.calls.functionValueBodiesCalledThrough(func, callee: callee), position: record.argIndex)
@@ -309,7 +309,7 @@ function offerLandedBrands(project Project, module MaxonModule, bodies CallLandi
 end 'offerLandedBrands'
 
 function dispatchedParameterOf(project Project, context HandOverContext, record PendingBrandRecord) returns HandedParameter
-	let op = try context.program.ops.get(record.opIndex) otherwise panic("dispatchedParameterOf: ops.get OOB at {record.opIndex}")
+	view op = try context.program.ops.get(record.opIndex) otherwise panic("dispatchedParameterOf: ops.get OOB at {record.opIndex}")
 
 	match op 'op'
 		witnessDispatch(_, _, _, _, methodIndex, interfaceDeclIndex, _, _) then return witnessLandedParameterOf(project, context: context, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, position: record.argIndex)
@@ -404,13 +404,13 @@ function judgeMergeArm(project Project, signatures ProgramSignatures, adopted Ad
 	end 'anArmThatHoldsNoBrand'
 
 	let group = "{record.filePath.toString()}|{record.line}|{record.column}".toByteArray()
-	let first = try firstBrands.get(group) otherwise 'theFirstBrandedArm'
+	view first = try firstBrands.get(group) otherwise 'theFirstBrandedArm'
 		firstBrands.upsert(group, value: brand.clone())
 		return
 	end 'theFirstBrandedArm'
 
 	if brandsConflict(first, got: brand) and not refused.contains(group) 'aSecondBrand'
-		reportPositioned(project, code: ErrorCode.typeMismatch, message: "the arms of this merge hold '{signatures.aliasIdentityDisplay(first)}' and '{signatures.aliasIdentityDisplay(brand)}', so the merged value has no one brand", line: record.line, column: record.column, filePath: record.filePath)
+		reportPositioned(project, code: ErrorCode.typeMismatch, message: "the arms of this merge hold '{signatures.aliasIdentityDisplay(first.clone())}' and '{signatures.aliasIdentityDisplay(brand.clone())}', so the merged value has no one brand", line: record.line, column: record.column, filePath: record.filePath)
 		refused.insert(group)
 	end 'aSecondBrand'
 end 'judgeMergeArm'
@@ -431,7 +431,7 @@ function patchAdoptedBrands(project Project, module MaxonModule, adopted Adopted
 		end 'originatesNothing'
 
 		for (position, value) in func.brandOriginValues.withIterator() 'eachOrigin'
-			let key = try func.brandOriginKeys.get(position.index()) otherwise panic("patchAdoptedBrands: brandOriginKeys.get OOB at {position.index()} — the two origin columns are published together")
+			view key = try func.brandOriginKeys.get(position.index()) otherwise panic("patchAdoptedBrands: brandOriginKeys.get OOB at {position.index()} — the two origin columns are published together")
 			let held = try adopted.get(key) otherwise continue
 
 			if (try func.valueBrandIds.get(value) otherwise panic("patchAdoptedBrands: v{value} of function '{String.from(func.name)}' has no brand slot — the brand column is pushed in lockstep with the type columns")) != UnnamedTypeId 'alreadyWearsABrand'

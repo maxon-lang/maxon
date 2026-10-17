@@ -1066,7 +1066,7 @@ module union BatchReading
 	end 'needsRerun'
 end 'BatchReading'
 
-module typealias BatchReadingArray = Array with BatchReading
+module typealias BatchReadingArray = Array with readonly BatchReading
 
 let OutsideTheMarkers = "the batch program printed outside the case markers — a case runs code before main that the batching checks did not catch; the runner must keep it out of batches"
 let UnreadableOnThisTarget = "the batch program's output for this case could not be read (a crash, or no end marker), and this target cannot run a single case of the program again"
@@ -1075,8 +1075,8 @@ module function readBatch(batch ProcessCapture, caseCount ElementIndex, selects 
 	var readings = BatchReadingArray.create()
 	let unreadable = unreadableReading(selects)
 	let process = batchProcessTrusted(batch)
-	let stdout = parseMarkedStream(batch.stdout)
-	let stderr = parseMarkedStream(batch.stderr)
+	var stdout = parseMarkedStream(batch.stdout)
+	var stderr = parseMarkedStream(batch.stderr)
 
 	for index in 0 upto caseCount 'eachCase'
 		if not process 'untrusted'
@@ -1154,8 +1154,8 @@ module function readAlone(observation RunObservation, caseIndex ElementIndex) re
 end 'readAlone'
 
 function readAloneCapture(capture ProcessCapture, caseIndex ElementIndex) returns RunObservation
-	let stdout = parseMarkedStream(capture.stdout)
-	let stderr = parseMarkedStream(capture.stderr)
+	var stdout = parseMarkedStream(capture.stdout)
+	var stderr = parseMarkedStream(capture.stderr)
 
 	if not entryBegan(stdout, stderr: stderr, index: caseIndex) 'diedBeforeTheEntry'
 		return RunObservation.failed("the batch program died before case {caseIndex} began — a case runs code before main that failed, and the batching checks did not catch it; the runner must keep it out of batches")

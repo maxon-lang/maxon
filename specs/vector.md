@@ -1574,7 +1574,7 @@ extension Vector
 		try managed.swap(0, 1) otherwise ignore
 		try managed.shiftRight(0, 1) otherwise ignore
 		try managed.shiftLeft(0, 1) otherwise ignore
-		let e = try managed.get(0) otherwise panic("get")
+		view e = try managed.get(0) otherwise panic("get")
 		try managed.set(1, e) otherwise ignore
 		return (managed.length() as Int) + (managed.capacity() as Int)
 	end 'survey'

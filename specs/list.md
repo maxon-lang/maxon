@@ -885,7 +885,7 @@ function main() returns ExitCode
 	var l = PointList.create()
 	l.append(Point.at(3, y: 4))
 	l.append(Point.at(5, y: 6))
-	let p = try l.first() otherwise Point.at(0, y: 0)
+	view p = try l.first() otherwise Point.at(0, y: 0)
 	print("[{p.x},{p.y}] count={l.count()}\n")
 	return 0
 end 'main'

@@ -93,9 +93,9 @@ function main() returns ExitCode
 	items.push(Item.create(Color.blue))
 
 	// Verify enum values are stored correctly (not pointers)
-	let item0 = try items.get(0) otherwise Item.create(Color.blue)
-	let item1 = try items.get(1) otherwise Item.create(Color.blue)
-	let item2 = try items.get(2) otherwise Item.create(Color.red)
+	view item0 = try items.get(0) otherwise Item.create(Color.blue)
+	view item1 = try items.get(1) otherwise Item.create(Color.blue)
+	view item2 = try items.get(2) otherwise Item.create(Color.red)
 
 	// red=0, green=1, blue=2 — base-5 packing keeps the result inside ExitCode (0..125)
 	return item0.color.rawValue + item1.color.rawValue * 5 + item2.color.rawValue * 25

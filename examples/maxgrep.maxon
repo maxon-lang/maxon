@@ -521,7 +521,7 @@ end 'SearchError'
 
 type Searcher
 	var matcher as Matcher
-	var request as SearchRequest
+	let request as SearchRequest
 
 	static function prepare(request SearchRequest) returns Self throws PatternError
 		let fold = byteFold(request.ignoreCase)
@@ -721,7 +721,7 @@ function findFiles(options Options, summary RunSummary) returns PathArray
 	var files = PathArray.create()
 
 	for (walk, found) in walks.withIterator() 'finishWalks'
-		let tree = try await found otherwise 'unreadable'
+		view tree = try await found otherwise 'unreadable'
 			let root = try options.paths.get(walk.index()) otherwise panic("findFiles: one walk per path")
 			printError("maxgrep: {root}: cannot read\n")
 			summary.troubled = true
@@ -753,7 +753,7 @@ function searchFiles(files PathArray, request SearchRequest, style OutputStyle, 
 	for (received, reply) in replies.withIterator() 'receiveReports'
 		let path = try files.get(received.index()) otherwise panic("searchFiles: one reply per file")
 
-		let report = try await reply otherwise (e) 'failed'
+		view report = try await reply otherwise (e) 'failed'
 			match e 'why'
 				unreadable then printError("maxgrep: {path}: cannot read\n")
 				stopped then printError("maxgrep: {path}: the searcher stopped before it answered\n")

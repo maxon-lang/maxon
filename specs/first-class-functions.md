@@ -2095,7 +2095,7 @@ end 'storeIt'
 
 function main() returns ExitCode
 	var h = Handler.create(double)
-	let h2 = storeIt(h, op: double)
+	view h2 = storeIt(h, op: double)
 	return h2.op(20) + usesClosure(1)
 end 'main'
 ```
@@ -2744,7 +2744,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias UnaryOp = function(Integer) returns Integer
 
 interface Stasher
-	function stash(fn UnaryOp) returns Integer
+	function stash(fn keep UnaryOp) returns Integer
 end 'Stasher'
 
 type Slot implements Stasher

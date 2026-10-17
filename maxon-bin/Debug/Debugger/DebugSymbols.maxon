@@ -407,8 +407,8 @@ export type DebugSymbols
 	end 'completionPool'
 
 	export function stopRecordFor(reason String, stop EngineStop, textBase DebugAddress, thread DebugThreadRef, hidden DebugTally, entryCaller DebugEntryCaller) returns DebugStop
-		let frames = self.frameListFor(stop, textBase: textBase, entryCaller: entryCaller)
-		let fault = StatedText.stated(debugFaultDescription(stop.fault)) if reason == FaultStopReasonName else StatedText.unstated
+		var frames = self.frameListFor(stop, textBase: textBase, entryCaller: entryCaller)
+		var fault = StatedText.stated(debugFaultDescription(stop.fault)) if reason == FaultStopReasonName else StatedText.unstated
 		let offset = stop.pc - textBase
 
 		if not self.offsetIsTheProgramsOwn(offset) 'stoppedOutsideTheProgram'
@@ -507,7 +507,7 @@ export type DebugSymbols
 			return known
 		end 'judgedBefore'
 
-		let exit = self.exitOfSplice(root)
+		var exit = self.exitOfSplice(root)
 		self.spliceExits.upsert(root, value: exit)
 
 		return exit
@@ -1033,7 +1033,7 @@ export type DebugSymbols
 			grouping.place(placed.candidate, site: placed.context, functionStart: self.functionStartOf(codeOffsetIn(placed.candidate.offset)))
 		end 'eachCandidate'
 
-		let firstBody = try grouping.bodies.get(0) otherwise return BreakResolution.noCode(DebugFileName.named(name), line: DebugLineLookup.line(line))
+		view firstBody = try grouping.bodies.get(0) otherwise return BreakResolution.noCode(DebugFileName.named(name), line: DebugLineLookup.line(line))
 		let first = try firstBody.get(0) otherwise panic("resolvedLine: a body is opened by the candidate that places it, so it is never empty")
 
 		return BreakResolution.atLine(DebugFileName.named(name), line: DebugLineLookup.line(line), bodies: grouping.bodies, functionName: DebugFunctionNameLookup.named(self.presentedNameAt(first.offset, hidden: first.hidden)), breakpoint: "{path}{TargetSeparator}{line}")

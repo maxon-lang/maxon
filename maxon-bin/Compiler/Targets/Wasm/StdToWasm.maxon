@@ -226,7 +226,7 @@ let WasmRdataAlignment = 8
 // $exit; i32.const 0`), and exports `memory` + `run`. Deterministic: output is driven entirely
 // by module/block/op/arg ORDER, never by map iteration, so worker-count byte-identity holds.
 export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable, checkLeaks bool, initGlobals bool, releasesRegistry bool, funcNames FunctionNameIndex, entryFunction ByteArray, spellings StdlibShadowSpellingArray) returns ByteArray
-	let calleeParamTypes = buildCalleeParamTypesMap(funcNames)
+	var calleeParamTypes = buildCalleeParamTypesMap(funcNames)
 
 	var builder = WasmModuleBuilder.create()
 
@@ -243,7 +243,7 @@ export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable
 	// with a TABLE INDEX (`bakeFuncTableIndexRelocs`), so a module holding one must declare the table those
 	// indices index into — the ops that read the slot back live in a runtime body that DCE may have kept for
 	// a different reason. Gating on the op scan alone would ship an index into a table that does not exist.
-	let indirectCallTypeIdx = buildIndirectCallTypeIdxMap(module, builder: builder)
+	var indirectCallTypeIdx = buildIndirectCallTypeIdxMap(module, builder: builder)
 
 	if indirectCallTypeIdx.count() > 0 or globalData.pendingRdataRelocs.count() > 0 'usesFuncrefTable'
 		builder.enableFuncrefTable()
@@ -301,7 +301,7 @@ export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable
 	// (its index is read by every panic site, which was emitted above), then the entry stub.
 	appendPanicRuntime(builder, funcNames: funcNames, frames: frames)
 	let runFuncIdx = appendRunEntry(builder, module: module, funcNames: funcNames, frames: frames, checkLeaks: checkLeaks, initGlobals: initGlobals, releasesRegistry: releasesRegistry, entryFunction: entryFunction)
-	let functionNames = builder.functionDebugNames()
+	view functionNames = builder.functionDebugNames()
 
 	if functionNames.count() != wasmFirstInlinePosition(funcNames) 'positionDrift'
 		panic("buildWasmCoreModule: the module holds {functionNames.count()} functions, but every inline position was numbered from {wasmFirstInlinePosition(funcNames)} — a position would print another function's frame line")
@@ -1760,14 +1760,14 @@ type WasmFuncEmitter
 	// `.rdata` offset (base `rdataBase`). All module-wide constants; each emitter holds them so an
 	// address resolves in O(1) with no per-function setup.
 	var globalData as GlobalDataTable
-	var dataBase as Wasm32Index
-	var rdataBase as Wasm32Index
+	let dataBase as Wasm32Index
+	let rdataBase as Wasm32Index
 
 	// The module's CHECKED name index (`FunctionNameIndex`), threaded down from `buildBackend`. It
 	// answers both questions a direct `call` asks about its callee — which wasm function index to emit
 	// (`wasmFuncIdxOf`) and whether the callee returns a value at all — in place of the two maps that used
 	// to copy those facts out of the same function array without stating what made their keys unique.
-	let funcNames as FunctionNameIndex
+	var funcNames as FunctionNameIndex
 	var calleeParamTypes as CalleeParamTypesMap
 
 	// Indirect-call SIGNATURE key → its pre-interned functype index, read by `emitIndirectCallOp` (see
@@ -1789,7 +1789,7 @@ type WasmFuncEmitter
 
 	// Multi-block functions (and single-block self-loops) run under the loop+br_table
 	// dispatcher; a lone straight-line block that ends in a return does not.
-	var useDispatcher as bool
+	let useDispatcher as bool
 
 	// The i32 local holding the next block's dispatch index (only when `useDispatcher`).
 	var dispatchLocal as Wasm32Index
@@ -1811,7 +1811,7 @@ type WasmFuncEmitter
 	var currentSite as InlineSiteRef
 
 	static function create(module StdModule, func IrFunction, funcIdx Wasm32Index, frames WasmFrameStack, firstPosition Wasm32Index, globalData GlobalDataTable, dataBase Wasm32Index, rdataBase Wasm32Index, funcNames FunctionNameIndex, calleeParamTypes CalleeParamTypesMap, indirectCallTypeIdx IndirectCallTypeIdxMap) returns WasmFuncEmitter
-		let valtypes = buildValtypeTable(module, func: func, funcNames: funcNames)
+		var valtypes = buildValtypeTable(module, func: func, funcNames: funcNames)
 		let useDispatcher = decideDispatcher(module, func: func)
 
 		var emitter = Self{
@@ -1931,7 +1931,7 @@ type WasmFuncEmitter
 	// no dispatch local, no wrapping structure.
 	function emitSingleBlock()
 		let blockRef = try self.func.blockRefs.get(0) otherwise panic("emitSingleBlock: blockRefs.get(0) OOB")
-		let block = try self.module.blocks.get(blockRef) otherwise panic("emitSingleBlock: blockRef {blockRef} not in module.blocks")
+		view block = try self.module.blocks.get(blockRef) otherwise panic("emitSingleBlock: blockRef {blockRef} not in module.blocks")
 		self.currentSite = copiedInlineSite(block.inlineSite)
 
 		for opIdx in block.bodyOps() 'eachOp'
@@ -2101,7 +2101,7 @@ type WasmFuncEmitter
 			self.body.endOp()
 
 			let blockRef = try self.func.blockRefs.get(i) otherwise panic("emitDispatcher: blockRefs.get OOB at {i}")
-			let block = try self.module.blocks.get(blockRef) otherwise panic("emitDispatcher: blockRef {blockRef} not in module.blocks")
+			view block = try self.module.blocks.get(blockRef) otherwise panic("emitDispatcher: blockRef {blockRef} not in module.blocks")
 			self.currentSite = copiedInlineSite(block.inlineSite)
 
 			for opIdx in block.bodyOps() 'eachOp'
@@ -3074,7 +3074,7 @@ type WasmFuncEmitter
 	// capture differs (a plain call reads one value or none; a `tryCall` reads the value AND the error
 	// flag off the callee's multi-value return), so both share this.
 	function emitCallArgsAndCall(callee ByteArray, args ValueIdArray)
-		let paramTypes = try self.calleeParamTypes.get(callee) otherwise panic("emitCall: no param types for callee '{String.from(callee)}'")
+		view paramTypes = try self.calleeParamTypes.get(callee) otherwise panic("emitCall: no param types for callee '{String.from(callee)}'")
 
 		for argIdx in 0 upto args.count() 'eachArg'
 			let arg = try args.get(argIdx) otherwise panic("emitCall: args.get OOB at {argIdx}")
@@ -3141,7 +3141,7 @@ type WasmFuncEmitter
 	function emitCall(resultId ValueId, callee ByteArray, args ValueIdArray)
 		self.emitCallArgsAndCall(callee, args: args)
 
-		let rt = (try self.funcNames.funcNamed(callee) otherwise panic("emitCall: no return type for callee '{String.from(callee)}'")).returnType
+		view rt = (try self.funcNames.funcNamed(callee) otherwise panic("emitCall: no return type for callee '{String.from(callee)}'")).returnType
 
 		if not stdReturnTypeIsVoid(rt) 'hasResult'
 			self.body.localSet(resultId as Wasm32Index)
@@ -3164,7 +3164,7 @@ type WasmFuncEmitter
 
 		self.body.localSet(errorFlagId as Wasm32Index)
 
-		let rt = (try self.funcNames.funcNamed(callee) otherwise panic("emitTryCall: no return type for callee '{String.from(callee)}'")).returnType
+		view rt = (try self.funcNames.funcNamed(callee) otherwise panic("emitTryCall: no return type for callee '{String.from(callee)}'")).returnType
 
 		if not stdReturnTypeIsVoid(rt) 'hasResult'
 			self.body.localSet(resultId as Wasm32Index)

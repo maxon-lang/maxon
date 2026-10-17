@@ -184,7 +184,7 @@ function main() returns ExitCode
 	var replies = ReplyPromiseArray.create()
 	var k = 0 as Integer
 	while k < readerCount 'sendEach'
-		let r = try readers.get(k as ElementIndex) otherwise panic("readers.get OOB at {k} — the loop is bounded by the count the pushes above filled")
+		view r = try readers.get(k as ElementIndex) otherwise panic("readers.get OOB at {k} — the loop is bounded by the count the pushes above filled")
 		replies.push(r.roundTrip())
 		k = k + 1
 	end 'sendEach'
@@ -284,7 +284,7 @@ function main() returns ExitCode
 	var replies = ReplyPromiseArray.create()
 	var k = 0 as Integer
 	while k < runnerCount 'sendEach'
-		let r = try runners.get(k as ElementIndex) otherwise panic("runners.get OOB at {k} — the loop is bounded by the count the pushes above filled")
+		view r = try runners.get(k as ElementIndex) otherwise panic("runners.get OOB at {k} — the loop is bounded by the count the pushes above filled")
 		replies.push(r.child())
 		k = k + 1
 	end 'sendEach'

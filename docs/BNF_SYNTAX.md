@@ -55,8 +55,11 @@ KEYWORD       = 'and' | 'as' | 'async' | 'await' | 'bool' | 'break' | 'continue'
 
 Contextual keywords are IDENTIFIER tokens that act as syntax in one position only: `module` (directly
 before a declaration), `test` (a top-level declaration followed by a `TEST_NAME`), `spawn` (followed by a
-type's factory call), `bits` (followed by `(` on a typealias right-hand side) and `readonly` (before a type
-argument after `with`, `(` or `,`). `__line__` and `__file__`
+type's factory call), `bits` (followed by `(` on a typealias right-hand side), `readonly` (before a type
+argument after `with`, `(` or `,`, and as a `result_capability`), `view` (a `view_decl`: at the start of a
+statement or after `if` or `then`, followed by an IDENTIFIER, or by a parenthesized list whose `)` is followed by
+`=`; and before a name in a `tuple_assign_stmt` target), and `keep` and `sole` (a `param_capability` or
+`result_capability`). `__line__` and `__file__`
 are identifiers in the reserved `__` space, legal only as a parameter default (§3.1).
 
 ### 1.4 Literals
@@ -237,7 +240,8 @@ needs no `try`: the test handles the error.
 
 ```
 function_decl = visibility_prefix 'function' IDENTIFIER '(' [ param_list ] ')'
-                [ 'returns' type_ref ] [ throws_clause ] NEWLINE
+                [ 'returns' [ result_capability ] type_ref ] [ throws_clause ] NEWLINE
+                (* a result_capability only on a generic function; E2076 otherwise *)
                 body
                 'end' LABEL
 
@@ -371,7 +375,14 @@ extends_clause
 
 interface_method
               = [ 'static' ] 'function' IDENTIFIER
-                '(' [ param_list ] ')' [ 'returns' type_ref ] [ throws_clause ]
+                '(' [ req_param { ',' req_param } ] ')' [ 'returns' [ result_capability ] type_ref ]
+                [ throws_clause ]
+req_param     = IDENTIFIER [ param_capability ] type_ref [ '=' default_value ]
+
+param_capability
+              = 'keep' | 'sole'                              (* contextual; E2076 outside a function type or requirement *)
+result_capability
+              = 'sole' | 'readonly'                          (* contextual; also on a generic function's result *)
 ```
 
 ### 3.6 Extension Block
@@ -497,8 +508,9 @@ type_ref      = 'bool'
               | tuple_type
               | 'int' | 'float'              (* bare only on a typealias right-hand side and in sizeof; E3005 elsewhere *)
 
-function_type = 'function' '(' [ fn_type_param { ',' fn_type_param } ] ')' [ 'returns' type_ref ]
-fn_type_param = [ IDENTIFIER ] type_ref
+function_type = 'function' '(' [ fn_type_param { ',' fn_type_param } ] ')'
+                [ 'returns' [ result_capability ] type_ref ]
+fn_type_param = [ IDENTIFIER ] [ param_capability ] type_ref
               (* `returns` is optional; without it, the function type
                  returns void. A function type cannot declare `throws`.
                  `function(...)` is legal only as a `typealias` right-hand
@@ -518,6 +530,7 @@ statement     = return_stmt
               | annotated_decl
               | var_decl
               | let_decl
+              | view_decl
               | discard_stmt
               | if_stmt
               | while_stmt
@@ -555,10 +568,14 @@ var_decl      = 'var' IDENTIFIER '=' expression
 let_decl      = 'let' IDENTIFIER '=' expression
               | 'let' '(' IDENTIFIER { ',' IDENTIFIER } ')' '=' expression
 
+view_decl     = 'view' IDENTIFIER '=' expression               (* contextual; a local binding only, E2077 elsewhere *)
+              | 'view' '(' IDENTIFIER { ',' IDENTIFIER } ')' '=' expression
+
 discard_stmt  = '_' '=' expression
 ```
 
 Constraints:
+- An `@heap view` is E2077
 - The expression in `discard_stmt` must be a function call (error E3067)
 - `var _ = ...` and `let _ = ...` are not allowed; use `_ = ...` instead
 
@@ -584,6 +601,7 @@ tuple_assign_stmt
 
 tuple_assign_target
               = IDENTIFIER    (* must refer to an existing var-declared variable *)
+              | ( 'let' | 'var' | 'view' ) IDENTIFIER    (* declares a new binding *)
               | '_'           (* discard this element *)
 ```
 
@@ -615,7 +633,7 @@ condition     = expression
 if_try_stmt   = 'if' 'try' expression LABEL NEWLINE             (* only for a call that returns nothing; E3124 otherwise *)
                 body
                 'end' LABEL [ else_clause ]
-              | 'if' ('let' | 'var') IDENTIFIER '=' 'try' expression LABEL NEWLINE
+              | 'if' ('let' | 'var' | 'view') IDENTIFIER '=' 'try' expression LABEL NEWLINE
                 body
                 'end' LABEL [ else_clause ]
 ```

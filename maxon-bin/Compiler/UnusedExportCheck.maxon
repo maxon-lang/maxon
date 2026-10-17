@@ -69,18 +69,18 @@ type TrackedDecl
 	// The key a reference is matched against — a function's compiled name, a type's name, or a binding's
 	// name. NOT the display spelling: `displayName` is what the message prints.
 	export let key as ByteArray
-	export var displayName as String
+	export let displayName as String
 
 	// The word the message calls this declaration: "function", "type", "typealias", "constant", "variable".
 	// The spec expectations quote it verbatim, so the spelling is pinned.
-	export var noun as String
+	export let noun as String
 	export var visibility as Visibility
 	export var declFile as AuditedFile
-	export var nameLine as LineNumber
-	export var nameColumn as ColumnNumber
+	export let nameLine as LineNumber
+	export let nameColumn as ColumnNumber
 	export var sawOutsideFile as bool
 	export var sawOutsideModule as bool
-	export var isAlias as bool
+	export let isAlias as bool
 
 	static function create(kind TrackedDeclKind, key ByteArray, displayName String, noun String, visibility Visibility, declFile AuditedFile, nameLine LineNumber, nameColumn ColumnNumber, isAlias bool) returns TrackedDecl
 		return Self{kind: kind, key: key, displayName: displayName, noun: noun, visibility: visibility, declFile: declFile, nameLine: nameLine, nameColumn: nameColumn, sawOutsideFile: false, sawOutsideModule: false, isAlias: isAlias}
@@ -468,7 +468,7 @@ end 'namesAMethodOnATrackedType'
 // order, and the tier is looked up per name.
 function seedTypes(project Project, signatures ProgramSignatures, userFiles FilePathArray, tracked TrackedDecls) throws CompileError
 	for path in userFiles 'eachFile'
-		let artifact = try queryParseOps(project, path: path)
+		view artifact = try queryParseOps(project, path: path)
 
 		for decl in artifact.typeNameDecls 'eachTypeName'
 			seedOneTypeName(signatures, decl: decl, tracked: tracked)
@@ -728,7 +728,7 @@ end 'noteOpReferences'
 // credited here through the same door as the other two.
 function collectFileTypeReferences(project Project, signatures ProgramSignatures, userFiles FilePathArray, tracked TrackedDecls) throws CompileError
 	for path in userFiles 'eachFile'
-		let artifact = try queryParseOps(project, path: path)
+		view artifact = try queryParseOps(project, path: path)
 		let reader = tracked.fileOf(path, signatures: signatures)
 		noteEveryTypeName(signatures, tracked: tracked, roster: artifact.usedTypeNames, denotation: Denotation.readIn(reader), reader: reader)
 		noteEveryTypeName(signatures, tracked: tracked, roster: artifact.memberAccessedTypeNames, denotation: Denotation.nominal, reader: reader)
@@ -1009,7 +1009,7 @@ end 'noteBindingName'
 // compiler minted for itself, and the same answer the scan's fall-through gave.
 function noteGlobalLabel(signatures ProgramSignatures, tracked TrackedDecls, label ByteArray, reader AuditedFile)
 	let index = try tracked.globalLabels.get(label) otherwise return
-	let decl = signatures.declAt(index)
+	view decl = signatures.declAt(index)
 	noteBindingName(signatures, tracked: tracked, name: decl.name, reader: reader)
 	noteSlotType(signatures, tracked: tracked, index: index, reader: reader)
 end 'noteGlobalLabel'
@@ -1201,7 +1201,7 @@ end 'emitForGlobalTier'
 // `top-level-factory-globals/factory-returning-a-record-declared-in-another-file`.
 function noteTopLevelInitializerCallees(signatures ProgramSignatures, tracked TrackedDecls)
 	for i in 0 upto signatures.topLevelDeclCount() 'eachDecl'
-		let decl = signatures.declAt(i)
+		view decl = signatures.declAt(i)
 		noteOneInitializersCallees(signatures, tracked: tracked, decl: decl)
 	end 'eachDecl'
 end 'noteTopLevelInitializerCallees'

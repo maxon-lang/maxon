@@ -113,7 +113,7 @@ end 'cacheReadArgumentOverlapSiteArray'
 // @generated library-cache end
 
 export union StorageStep
-	field(name ByteArray)
+	field(let name ByteArray)
 	element
 
 	function meets(other StorageStep) returns bool
@@ -217,7 +217,7 @@ end 'directCalleesByResult'
 
 function reportArgumentOverlap(project Project, funcNames FunctionNameIndex, func IrFunction, site ArgumentOverlapSite, callees CalleeByResultMap)
 	let callee = try callees.get(site.callResult) otherwise panic("reportArgumentOverlap: '{String.from(func.name)}' filed an argument overlap at the call whose result is v{site.callResult}, where it holds no direct call — the parser files a site only at a call it is emitting, and the call op keeps that result")
-	let sig = try project.funcSignatures.get(callee) otherwise panic("reportArgumentOverlap: the call to '{String.from(callee)}' in '{String.from(func.name)}' has no signature in funcSignatures — a call op is checked against one before this pass runs")
+	view sig = try project.funcSignatures.get(callee) otherwise panic("reportArgumentOverlap: the call to '{String.from(callee)}' in '{String.from(func.name)}' has no signature in funcSignatures — a call op is checked against one before this pass runs")
 
 	let firstPosition = try argSlotPosition(sig.paramNames, argIndex: site.first.column, label: site.first.label) otherwise panic("reportArgumentOverlap: argument {site.first.column} (label '{String.from(site.first.label)}') fills no parameter of '{String.from(callee)}' — a call that slots no argument is refused before this pass runs")
 	let secondPosition = try argSlotPosition(sig.paramNames, argIndex: site.second.column, label: site.second.label) otherwise panic("reportArgumentOverlap: argument {site.second.column} (label '{String.from(site.second.label)}') fills no parameter of '{String.from(callee)}' — a call that slots no argument is refused before this pass runs")

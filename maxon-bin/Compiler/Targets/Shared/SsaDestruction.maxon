@@ -37,14 +37,14 @@ end 'EdgePlacement'
 // That is why floats needed no case here: a `mov` becomes a `movsd`, and a `swap` — which x64
 // has no `xchg` form of for XMMs — becomes a triple-`xorpd`, without this file knowing either.
 export type EdgeMovePlan
-	export var predLocal as ElementIndex
-	export var succLocal as ElementIndex
-	export var predBlockId as BlockId
-	export var succBlockId as BlockId
+	export let predLocal as ElementIndex
+	export let succLocal as ElementIndex
+	export let predBlockId as BlockId
+	export let succBlockId as BlockId
 
 	// Flat `module.blocks` indices.
-	export var predBlockRef as ElementIndex
-	export var succBlockRef as ElementIndex
+	export let predBlockRef as ElementIndex
+	export let succBlockRef as ElementIndex
 	export var moveDsts as RegNumColumn
 	export var moveSrcs as RegNumColumn
 	export var moveIsSwap as BoolArray
@@ -188,7 +188,7 @@ function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Alloc
 
 	for blockRef in func.blockRefs 'eachBlock'
 		var block = try module.blocks.get(blockRef) otherwise panic("colorAndDropSelfMoves: blockRef not in module.blocks")
-		let bodyOps = block.bodyOps()
+		view bodyOps = block.bodyOps()
 		let bodyCount = bodyOps.count()
 
 		// Whether the plan's open bracket has had its saves spliced and its reloads not yet.
@@ -204,8 +204,8 @@ function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Alloc
 		for pos in 0 upto bodyCount 'eachOp'
 			let opIdx = try bodyOps.get(pos) otherwise panic("colorAndDropSelfMoves: bodyOps.get OOB")
 			let atSeq = (seq + pos) as OpSeq
-			let uncolored = try module.ops.get(opIdx) otherwise panic("colorAndDropSelfMoves: opIdx not in module.ops")
-			let colored = colorTargetOp(uncolored, alloc: alloc)
+			var uncolored = try module.ops.get(opIdx) otherwise panic("colorAndDropSelfMoves: opIdx not in module.ops")
+			var colored = colorTargetOp(uncolored, alloc: alloc)
 			try module.ops.set(opIdx, value: colored) otherwise panic("colorAndDropSelfMoves: ops.set OOB")
 
 			// A run's saves go before its first op whether or not that op is emitted: a dropped self-move
@@ -821,7 +821,7 @@ function splitCriticalEdgesInFunc(module TargetModule, funcIdx ElementIndex, tar
 			continue
 		end 'singleSucc'
 
-		let predBlock = blockAt(module, topo: topo, local: predLocal)
+		var predBlock = blockAt(module, topo: topo, local: predLocal)
 
 		for edge in predBlock.branchEdges 'eachEdge'
 			let succLocal = try topo.localByBlockId.get(edge.targetBlockId) otherwise panic("splitCriticalEdgesInFunc: succ block id out of range")
@@ -842,14 +842,14 @@ function splitCriticalEdgesInFunc(module TargetModule, funcIdx ElementIndex, tar
 		let predRef = try predRefs.get(k) otherwise panic("splitCriticalEdgesInFunc: predRefs.get OOB")
 		let succId = try succIds.get(k) otherwise panic("splitCriticalEdgesInFunc: succIds.get OOB")
 		let heat = try heats.get(k) otherwise panic("splitCriticalEdgesInFunc: heats.get OOB")
-		let inlineSite = try sites.get(k) otherwise panic("splitCriticalEdgesInFunc: sites.get OOB")
+		view inlineSite = try sites.get(k) otherwise panic("splitCriticalEdgesInFunc: sites.get OOB")
 		performCriticalSplit(module, funcIdx: funcIdx, predRef: predRef, succId: succId, heat: heat, inlineSite: inlineSite, target: target)
 	end 'eachSplit'
 end 'splitCriticalEdgesInFunc'
 
 function performCriticalSplit(module TargetModule, funcIdx ElementIndex, predRef ElementIndex, succId BlockId, heat BlockHeat, inlineSite InlineSiteRef, target Target)
 	let newRef = addSplitBlock(module, funcIdx: funcIdx, succId: succId, heat: heat, inlineSite: inlineSite, target: target)
-	let newBlock = try module.blocks.get(newRef) otherwise panic("performCriticalSplit: newRef not in module.blocks")
+	view newBlock = try module.blocks.get(newRef) otherwise panic("performCriticalSplit: newRef not in module.blocks")
 	let newId = newBlock.id
 	moveBranchEdgeToSplit(module, predRef: predRef, succId: succId, splitRef: newRef)
 	retargetControlOp(module, predRef: predRef, oldTarget: succId, newTarget: newId)
@@ -885,7 +885,7 @@ end 'unconditionalBranchTo'
 // block. The phi args now flow pred → split → succ, and the split block (one
 // successor) is where SSA destruction places their moves.
 function moveBranchEdgeToSplit(module TargetModule, predRef ElementIndex, succId BlockId, splitRef ElementIndex)
-	let movedArgs = extractPredEdge(module, predRef: predRef, succId: succId)
+	var movedArgs = extractPredEdge(module, predRef: predRef, succId: succId)
 	addSplitEdge(module, splitRef: splitRef, succId: succId, argIds: movedArgs)
 end 'moveBranchEdgeToSplit'
 
@@ -949,9 +949,9 @@ export function retargetControlOp(module TargetModule, predRef ElementIndex, old
 	// arm takes ONE statement, so reading the slot as the union it is — rather than through a
 	// `hasCondBranchOp()`/`condBranchIndex()` pair whose second half panics if the first was not asked —
 	// needs the arm's work to be a call. The pair is unspellable in the wrong order here.
-	let predBlock = try module.blocks.get(predRef) otherwise panic("retargetControlOp: predRef not in module.blocks")
-	let condBranch = predBlock.condBranch
-	let terminator = predBlock.terminator
+	view predBlock = try module.blocks.get(predRef) otherwise panic("retargetControlOp: predRef not in module.blocks")
+	view condBranch = predBlock.condBranch
+	view terminator = predBlock.terminator
 	let predBlockId = predBlock.id
 
 	match condBranch 'condSlot'
@@ -975,7 +975,7 @@ end 'retargetControlOp'
 // this target uses. `predBlockId` is carried only for the panic, because the block itself may not be held
 // across the writes these arms make (see the caller).
 function retargetCondBranchOp(module TargetModule, opIdx ElementIndex, predBlockId BlockId, oldTarget BlockId, newTarget BlockId) returns bool
-	let op = try module.ops.get(opIdx) otherwise panic("retargetCondBranchOp: conditional branch op {opIdx} not in module.ops")
+	var op = try module.ops.get(opIdx) otherwise panic("retargetCondBranchOp: conditional branch op {opIdx} not in module.ops")
 
 	match op 'cond'
 		jcc(cond, target) then return retargetJcc(module, opIdx: opIdx, cond: cond, target: target, oldTarget: oldTarget, newTarget: newTarget)
@@ -992,7 +992,7 @@ end 'retargetCondBranchOp'
 // The TERMINATOR half — the block's terminator op. Every arm that is not a real terminator panics, which is
 // the roster the caller would otherwise carry inline.
 function retargetTerminatorOp(module TargetModule, opIdx ElementIndex, oldTarget BlockId, newTarget BlockId) returns bool
-	let op = try module.ops.get(opIdx) otherwise panic("retargetTerminatorOp: terminator not in module.ops")
+	var op = try module.ops.get(opIdx) otherwise panic("retargetTerminatorOp: terminator not in module.ops")
 
 	match op 'term'
 		jmp(target) then return retargetJmp(module, opIdx: opIdx, target: target, oldTarget: oldTarget, newTarget: newTarget)

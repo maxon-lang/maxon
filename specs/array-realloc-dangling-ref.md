@@ -68,7 +68,7 @@ function main() returns ExitCode
 	var arr = ItemArray.create()
 	arr.push(Item.create("first item {40 + 2} with a long name for heap allocation", value: 42))
 
-	let item = try arr.get(0) otherwise Item.create("", value: 0)
+	view item = try arr.get(0) otherwise Item.create("", value: 0)
 
 	// Force many growths
 	var i = 0 as Integer

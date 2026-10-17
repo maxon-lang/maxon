@@ -212,10 +212,11 @@ export type RuntimeUsage
 	// unused one.
 	export var usesMmOwn as bool
 
-	// ⭐⭐ Does the program hand a DECLARED GENERIC's container box to a durable sink? — the bit behind
-	// `__mm_own_deep`, whose immortal arm calls the instance's own cloner where `__mm_own`'s blits. Its OWN
-	// bit for the reason the one above states: a program that co-owns only plain boxes must not carry the
-	// deep entry, and one that co-owns only container boxes must not carry the blitting one.
+	// ⭐⭐ Does the program retain a box whose slots address other records, or hand one to a durable sink
+	// (`Parser.emitRetainCall`, `Parser.coOwnConcreteRecordForSink`)? — the
+	// bit behind `__mm_own_deep`, whose immortal arm calls the box's own cloner where `__mm_own`'s blits. Its
+	// OWN bit for the reason the one above states: a program that co-owns only plain boxes must not carry the
+	// deep entry, and one that co-owns only boxes with slots must not carry the blitting one.
 	export var usesMmOwnDeep as bool
 
 	// ⭐ The program declares at least one MANAGED top-level `var`, so it carries
@@ -1062,8 +1063,9 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesHeap = true
 	end 'own'
 
-	// A `__mm_own_deep` the PARSER emitted (a declared generic's container box co-owned into storage that
-	// outlives the statement). It needs no `usesStrCopy`: its copy arm `callIndirect`s the cloner the SECOND
+	// A `__mm_own_deep` the PARSER emitted (a box with pointer slots co-owned by a retain, a hold, or storage
+	// that outlives the statement). It needs
+	// no `usesStrCopy`: its copy arm `callIndirect`s the cloner the SECOND
 	// argument names, and that `funcAddr` declares the cloner's own transitive needs at its own site.
 	if callee.equals(MmOwnDeepName) 'ownDeep'
 		usage.usesMmOwnDeep = true

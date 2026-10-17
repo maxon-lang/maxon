@@ -49,11 +49,11 @@ typealias BlockArray = Array with Block
 
 interface Mergeable uses Func
 	function opCount() returns Count
-	function appendOps(source Self)
+	function appendOps(source keep Self)
 	function blockCount() returns Count
 	function funcCount() returns Count
 	function getFunc(index Count) returns Func
-	function pushFunc(func Func)
+	function pushFunc(func keep Func)
 	function cloneFunc(src Func) returns Func
 end 'Mergeable'
 

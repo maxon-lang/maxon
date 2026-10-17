@@ -303,6 +303,10 @@ end 'main'
 - A requirement may be `static function`; the conforming type provides it as a static method.
 - `interface Derived extends Base` inherits `Base`'s requirements; a type implementing `Derived` provides
   both, and satisfies parameters typed `Base`.
+- A requirement declares what a conformer may do with its values: `keep` or `sole` on a parameter it keeps,
+  `returns sole` or `returns readonly` on its result (see
+  [Capability Qualifiers](/docs/language/functions/#capability-qualifiers-keep-sole-returns-readonly)). A conformer that does more is
+  **E3189**.
 
 **Interface-typed parameters, returns and fields.** An interface can be used as a type, as `describe`
 does above: a parameter typed `Shape` accepts any conforming type, `enum` and `union` conformers
@@ -624,6 +628,9 @@ function is itself visible like any function: a private one called from another 
 
 A non-generic declaration of the same name is chosen when its parameter types are exactly the argument
 types. Two generic declarations that both infer a type for one call are **E3007**.
+
+A generic function's result may declare `returns sole T` or `returns readonly T` (see
+[Capability Qualifiers](/docs/language/functions/#capability-qualifiers-keep-sole-returns-readonly)); a body that breaks it is **E3189**.
 
 A generic function may reassign a parameter declared `T`, and the argument is then passed by reference, as
 for any function (see [Parameter Passing](/docs/language/functions/#parameter-passing)). When a call's name reaches more than one

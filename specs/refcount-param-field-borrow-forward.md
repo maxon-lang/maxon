@@ -76,7 +76,7 @@ type Lex
 		for i in 0 upto 200 'fill'
 			toks.push(Tok.make(i))
 		end 'fill'
-		let cur = try toks.cursor() otherwise throw IterErr.stop
+		var cur = try toks.cursor() otherwise throw IterErr.stop
 		return Self{toks: toks, cur: cur, counter: 0}
 	end 'create'
 
@@ -94,7 +94,7 @@ type Lex
 		counter = counter + 8
 		counter = counter + 9
 		counter = counter + 10
-		let t = cur.current()
+		var t = cur.current()
 		try cur.advance() otherwise throw IterErr.stop
 		return t
 	end 'consume'
@@ -118,12 +118,12 @@ function run() returns Integer throws IterErr
 	var lex = try Lex.create()
 	var sum = 0 as Integer
 	for _ in 0 upto 40 'loop'
-		let a = try lex.consumeExpecting(1)
+		view a = try lex.consumeExpecting(1)
 		sum = sum + a.line
 	end 'loop'
-	let b = try lex.consumeExpecting(2)
-	let c = try lex.consumeExpecting(3)
-	let d = try lex.consumeExpecting(4)
+	view b = try lex.consumeExpecting(2)
+	view c = try lex.consumeExpecting(3)
+	view d = try lex.consumeExpecting(4)
 	sum = sum + b.line + c.line + d.line
 	return sum
 end 'run'

@@ -1541,8 +1541,8 @@ function main() returns ExitCode
 	var xs = Xs.create()
 	xs.push(20)
 	xs.push(22)
-	let ys = xs as Ys
-	let back = ys as Xs
+	view ys = xs as Ys
+	view back = ys as Xs
 	print("{sumYs(ys)} {sumXs(back)}")
 	return 0
 end 'main'
@@ -1805,7 +1805,7 @@ end 'first'
 function main() returns ExitCode
 	var rows = Rows.create()
 	rows.push([7, 9])
-	let row = try rows.get(0) otherwise panic("no row")
+	view row = try rows.get(0) otherwise panic("no row")
 	print("{first(row.managed)}\n")
 	return 0
 end 'main'
@@ -1991,7 +1991,7 @@ typealias ItemIndex = Map with (Key, Items)
 function main() returns ExitCode
 	var index = ItemIndex.create()
 	index.upsert(500, value: [1, 2])
-	let found = try index.get(500) otherwise [0]
+	view found = try index.get(500) otherwise [0]
 	print("{index.count()} {found.count()}\n")
 	return 0
 end 'main'
@@ -2046,7 +2046,7 @@ end 'Slot'
 
 function main() returns ExitCode
 	var a = ["a"]
-	let s = Slot.held(a)
+	var s = Slot.held(a)
 	resetXs(a)
 
 	match s 'go'
@@ -2231,7 +2231,7 @@ function main() returns ExitCode
 	var a = ["a"]
 	let ys = Ys.create()
 	let c = true
-	let z = a if c else ys
+	var z = a if c else ys
 	resetXs(a)
 	takeXs(z)
 	return 0
@@ -2258,7 +2258,7 @@ function main() returns ExitCode
 	var a = ["a"]
 	var b = ["b"]
 	let c = true
-	let z = a if c else b
+	var z = a if c else b
 	resetXs(a)
 	resetYs(b)
 	takeXs(z)
@@ -2289,7 +2289,7 @@ function main() returns ExitCode
 	var a = ["a"]
 	var b = ["b", "c"]
 	let c = true
-	let z = a if c else b
+	view z = a if c else b
 	resetXs(a)
 	resetXs(b)
 	takeXs(z)
@@ -2525,7 +2525,7 @@ function main() returns ExitCode
 	let ys = Ys.create()
 	refill(a)
 	let choice = Pick.two
-	let z = match choice 'pick'
+	var z = match choice 'pick'
 		one gives b
 		two gives a
 		three gives ys

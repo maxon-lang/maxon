@@ -189,8 +189,8 @@ function main() returns ExitCode
 
 	b.push(Leaf.create("second label long enough for a heap record", value: 20))
 
-	let kept = try a.get(0) otherwise panic("no leaf")
-	let reread = try b.get(0) otherwise panic("no leaf")
+	view kept = try a.get(0) otherwise panic("no leaf")
+	view reread = try b.get(0) otherwise panic("no leaf")
 	print("{a.count()}:{kept.label}\n")
 	print("{b.count()}:{reread.label}\n")
 	return 0
@@ -223,7 +223,7 @@ function main() returns ExitCode
 	var clonedRow = try b.get(0) otherwise panic("no row")
 	clonedRow.push(2)
 
-	let keptRow = try a.get(0) otherwise panic("no row")
+	view keptRow = try a.get(0) otherwise panic("no row")
 	print("{keptRow.count()} {clonedRow.count()}\n")
 	return 0
 end 'main'
@@ -264,7 +264,7 @@ function main() returns ExitCode
 	var cloned = try c.get(0) otherwise panic("no leaf")
 	cloned.label = "mutated"
 
-	let fromA = try a.get(0) otherwise panic("no leaf")
+	view fromA = try a.get(0) otherwise panic("no leaf")
 	let fromB = try b.get(0) otherwise panic("no leaf")
 	print("{fromA.label}\n{fromB.label}\n{cloned.label}\n")
 	return 0
@@ -343,7 +343,7 @@ function main() returns ExitCode
 		none then return 3
 	end 'mut'
 
-	let aOp = try a.get(0) otherwise Op.none
+	view aOp = try a.get(0) otherwise Op.none
 	match aOp 'read'
 		holds(it) then print("a holds: {it.label}\n")
 		none then return 4
@@ -383,7 +383,7 @@ function main() returns ExitCode
 	a.push(Word.spelled("original word long enough for a heap record"))
 
 	let b = a.clone()
-	let wa = try a.get(0) otherwise Word.blank
+	view wa = try a.get(0) otherwise Word.blank
 	let wb = try b.get(0) otherwise Word.blank
 	if payloadOf(wa) is payloadOf(wb) 'shared'
 		print("shared\n")
@@ -426,7 +426,7 @@ function main() returns ExitCode
 	a.push(Slot.empty)
 
 	let b = a.clone()
-	let a0 = try a.get(0) otherwise Slot.empty
+	view a0 = try a.get(0) otherwise Slot.empty
 	let b0 = try b.get(0) otherwise Slot.empty
 	let b1 = try b.get(1) otherwise Slot.filled("wrong")
 	if textOf(a0) is textOf(b0) 'shared'
@@ -585,8 +585,8 @@ function main() returns ExitCode
 	var b = a.clone()
 	var grown = try b.get(0) otherwise panic("no holder")
 	grown.shape.grow()
-	let kept = try a.get(0) otherwise panic("no holder")
-	let reread = try b.get(0) otherwise panic("no holder")
+	view kept = try a.get(0) otherwise panic("no holder")
+	view reread = try b.get(0) otherwise panic("no holder")
 	print("{kept.shape.area()} {reread.shape.area()}\n")
 	return 0
 end 'main'
@@ -1021,7 +1021,7 @@ function main() returns ExitCode
 	end 'each'
 	print("{out}\n")
 
-	let a0 = try a.get(0) otherwise Outer.blank
+	view a0 = try a.get(0) otherwise Outer.blank
 	let b0 = try b.get(0) otherwise Outer.blank
 	if nestedTextOf(a0) is nestedTextOf(b0) 'shared'
 		print("nested payload SHARED\n")

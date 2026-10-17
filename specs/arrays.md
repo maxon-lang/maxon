@@ -2129,7 +2129,7 @@ typealias ItemArray = Array with Item
 function main() returns ExitCode
 	var arr = ItemArray.create()
 	arr.push(Item.create(9))
-	let first = try arr.get(0) otherwise Item.create(0)
+	view first = try arr.get(0) otherwise Item.create(0)
 	return first.value
 end 'main'
 ```
@@ -3110,7 +3110,7 @@ typealias Grid = Array with Items
 function main() returns ExitCode
 	var g = Grid.create()
 	g.push([23, 24])
-	let row = try g.get(0) otherwise Items.create()
+	view row = try g.get(0) otherwise Items.create()
 	return try row.get(1) otherwise 0
 end 'main'
 ```
@@ -3233,7 +3233,7 @@ function main() returns ExitCode
 	ps.push(async plain(5))
 	let first = try ps.get(0) otherwise panic("two were pushed")
 	var sum = await first
-	let cursor = try ps.cursor() otherwise panic("two were pushed")
+	view cursor = try ps.cursor() otherwise panic("two were pushed")
 	let again = cursor.current()
 	sum = sum + await again
 	return sum as ExitCode
@@ -3495,7 +3495,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:15:6: cannot write through 'h.a': 'a' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
+error E3078: <fragment>:14:17: cannot pass 'a', which is read-only (a `let` binding), to parameter 'a' of 'Holder.create', which keeps it where something may write it; pass a clone()
 ```
 
 <!-- test: error.a-let-array-element-in-a-dead-branch-outside-a-narrower-alias -->

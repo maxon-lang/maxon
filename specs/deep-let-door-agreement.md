@@ -64,7 +64,7 @@ type Hub
 	end 'seed'
 
 	function orphan() returns Keeper
-		let old = self.a
+		view old = self.a
 		self.a = CounterArray.create()
 		return Keeper.create(try old.get(0) otherwise panic("seeded before"))
 	end 'orphan'

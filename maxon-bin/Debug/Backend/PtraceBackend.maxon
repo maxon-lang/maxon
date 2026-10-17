@@ -107,8 +107,8 @@ type PtraceThreadEntry
 	export let id as BackendThreadId
 	export var stopped as bool
 	export var owedSignals as PtraceOwedSignalArray
-	export var stopOwed as bool
-	export var standingSignal as BackendWord
+	export let stopOwed as bool
+	export let standingSignal as BackendWord
 
 	static function create(id BackendThreadId, stopped bool, owedSignals PtraceOwedSignalArray, stopOwed bool, standingSignal BackendWord) returns PtraceThreadEntry
 		return Self{id: id, stopped: stopped, owedSignals: owedSignals, stopOwed: stopOwed, standingSignal: standingSignal}
@@ -789,7 +789,7 @@ export type PtraceBackend
 	// succeeds: the kernel does not re-raise an asynchronous signal its tracer withheld.
 	function resumeThread(thread BackendWord, asAStep bool) returns bool
 		let id = thread as BackendThreadId
-		let owed = self.owedSignalsOf(id)
+		view owed = self.owedSignalsOf(id)
 
 		if not self.trace.resume(thread as DebuggeeThreadId, signal: ptraceFirstSignalOf(owed) as DebuggeeSignal, stepping: asAStep) 'theKernelRefused'
 			return false

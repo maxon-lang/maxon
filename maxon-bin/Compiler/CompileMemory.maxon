@@ -175,10 +175,10 @@ end 'RegAllocMemory'
 // than a number. `SlabRuntime.SlabLiveBytesName` owns what each figure counts.
 export type PhaseResidency
 	export var liveBytes as HeapByteCount
-	export var freeBytes as HeapByteCount
-	export var cachedFreeBytes as HeapByteCount
-	export var parkedBytes as HeapByteCount
-	export var committedBytes as HeapByteCount
+	export let freeBytes as HeapByteCount
+	export let cachedFreeBytes as HeapByteCount
+	export let parkedBytes as HeapByteCount
+	export let committedBytes as HeapByteCount
 
 	export static function zero() returns PhaseResidency
 		return Self{liveBytes: 0, freeBytes: 0, cachedFreeBytes: 0, parkedBytes: 0, committedBytes: 0}
@@ -760,7 +760,7 @@ function compileResidencyReport(memory CompileMemory) returns String
 end 'compileResidencyReport'
 
 type TagCensusRow
-	export var bucket as TagBucketIndex
+	export let bucket as TagBucketIndex
 	export var count as AllocCount
 	export var bytes as HeapByteCount
 
@@ -988,7 +988,7 @@ type TagRowStyle
 	export var order as TagRowOrder
 	export var skip as TagRowSkip
 	export var kind as TagRowLine
-	export var whenEmpty as String
+	export let whenEmpty as String
 
 	static function create(order TagRowOrder, skip TagRowSkip, kind TagRowLine, whenEmpty String) returns TagRowStyle
 		return Self{order: order, skip: skip, kind: kind, whenEmpty: whenEmpty}
@@ -1097,7 +1097,7 @@ function keepTagTopRow(top TagCensusRowArray, row TagCensusRow, order TagRowOrde
 	var at = top.count()
 
 	while at > 0 'findItsPlace'
-		let ahead = try top.get(at - 1) otherwise panic("keepTagTopRow: slot {at - 1} of {top.count()} is not readable")
+		view ahead = try top.get(at - 1) otherwise panic("keepTagTopRow: slot {at - 1} of {top.count()} is not readable")
 
 		if tagRowRank(ahead, against: row, order: order) == Ordering.lessThan 'inPlace'
 			break

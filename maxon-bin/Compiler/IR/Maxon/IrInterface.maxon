@@ -454,6 +454,122 @@ export let OrderingLessThanCaseName = b"lessThan"
 export let OrderingEqualToCaseName = b"equalTo"
 export let OrderingGreaterThanCaseName = b"greaterThan"
 
+export enum ParamCapability
+	lent
+	keep
+	sole
+end 'ParamCapability'
+
+// @generated library-cache begin
+let CacheCasesParamCapability = [ParamCapability.lent, ParamCapability.keep, ParamCapability.sole]
+
+export function cacheReadParamCapability(reader LibraryCacheReader) returns ParamCapability throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesParamCapability.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadParamCapability'
+
+function cacheTableAgreesParamCapability() returns bool
+	let declared = ParamCapability.allCases
+
+	if CacheCasesParamCapability.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesParamCapability.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesParamCapability'
+
+export function cacheEnumTablesAgreeInCompilerIRMaxonIrInterface() returns bool
+	if not cacheTableAgreesResultCapability() 'disagreesCacheTableAgreesResultCapability'
+		return false
+	end 'disagreesCacheTableAgreesResultCapability'
+
+	if not cacheTableAgreesParamCapability() 'disagreesCacheTableAgreesParamCapability'
+		return false
+	end 'disagreesCacheTableAgreesParamCapability'
+
+	return true
+end 'cacheEnumTablesAgreeInCompilerIRMaxonIrInterface'
+
+// @generated library-cache end
+
+export enum ResultCapability
+	unqualified
+	sole
+	readonly
+end 'ResultCapability'
+
+// @generated library-cache begin
+let CacheCasesResultCapability = [ResultCapability.unqualified, ResultCapability.sole, ResultCapability.readonly]
+
+export function cacheReadResultCapability(reader LibraryCacheReader) returns ResultCapability throws LibraryCacheDamage
+	let ordinal = try reader.unsigned()
+
+	return try CacheCasesResultCapability.get(ordinal as ElementIndex) otherwise throw LibraryCacheDamage.unknownTag(ordinal)
+end 'cacheReadResultCapability'
+
+function cacheTableAgreesResultCapability() returns bool
+	let declared = ResultCapability.allCases
+
+	if CacheCasesResultCapability.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try CacheCasesResultCapability.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'cacheTableAgreesResultCapability'
+
+// @generated library-cache end
+
+export typealias ParamCapabilityArray = Array with ParamCapability
+
+// @generated library-cache begin
+function cacheWriteParamCapabilityArray(writer LibraryCacheWriter, value ParamCapabilityArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.unsigned(item.ordinal as CacheUnsigned)
+	end 'eachItem'
+end 'cacheWriteParamCapabilityArray'
+
+function cacheReadParamCapabilityArray(reader LibraryCacheReader) returns ParamCapabilityArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = ParamCapabilityArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try cacheReadParamCapability(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadParamCapabilityArray'
+
+// @generated library-cache end
+
+export function lentParams(count ParamCount) returns ParamCapabilityArray
+	var out = ParamCapabilityArray.create()
+	out.refill(count as ElementIndex, value: ParamCapability.lent)
+	return out
+end 'lentParams'
+
 // One method SIGNATURE declared in an interface body (no body). Its type columns are
 // rendered SOURCE strings (see the header). `paramNames`/`paramTypeNames` are parallel.
 export type InterfaceMethodSig
@@ -496,6 +612,15 @@ export type InterfaceMethodSig
 	// "any element".
 	export let paramIsBuffer as BoolArray
 
+	// Parallel to `paramNames`, which names no receiver: an instance requirement's entry `k` is
+	// parameter `k + 1` of a conformer's body (`SummaryCallDispatch.requirementFirstPosition`).
+	export let paramCapabilities as ParamCapabilityArray
+	export let returnCapability as ResultCapability
+
+	export function paramCapabilityAt(position ElementIndex) returns ParamCapability
+		return try self.paramCapabilities.get(position) otherwise panic("InterfaceMethodSig.paramCapabilityAt: position {position} is past the {self.paramCapabilities.count()} parameters of '{String.from(self.name)}'")
+	end 'paramCapabilityAt'
+
 	// A signature whose parameters carry no buffer spelling — every position plainly declared. The
 	// synthesized interfaces build one of these rather than passing an empty array, because a column that
 	// is SHORTER than `paramNames` would make "absent" and "false" two different things at every reader.
@@ -511,13 +636,13 @@ export type InterfaceMethodSig
 		return out
 	end 'noBufferParams'
 
-	export var nameLine as LineNumber
-	export var nameColumn as ColumnNumber
+	export let nameLine as LineNumber
+	export let nameColumn as ColumnNumber
 
 	export let written as WrittenTypeNames
 
-	export static function create(name ByteArray, paramNames NameRoster, paramTypeNames NameRoster, returnTypeName ByteArray, isStatic bool, throwsClause ThrowsClause, paramIsBuffer BoolArray, nameLine LineNumber, nameColumn ColumnNumber, written WrittenTypeNames) returns InterfaceMethodSig
-		return Self{name: name, paramNames: paramNames, paramTypeNames: paramTypeNames, returnTypeName: returnTypeName, isStatic: isStatic, throwsClause: throwsClause, paramIsBuffer: paramIsBuffer, nameLine: nameLine, nameColumn: nameColumn, written: written}
+	export static function create(name ByteArray, paramNames NameRoster, paramTypeNames NameRoster, returnTypeName ByteArray, isStatic bool, throwsClause ThrowsClause, paramIsBuffer BoolArray, paramCapabilities ParamCapabilityArray, returnCapability ResultCapability, nameLine LineNumber, nameColumn ColumnNumber, written WrittenTypeNames) returns InterfaceMethodSig
+		return Self{name: name, paramNames: paramNames, paramTypeNames: paramTypeNames, returnTypeName: returnTypeName, isStatic: isStatic, throwsClause: throwsClause, paramIsBuffer: paramIsBuffer, paramCapabilities: paramCapabilities, returnCapability: returnCapability, nameLine: nameLine, nameColumn: nameColumn, written: written}
 	end 'create'
 
 	// @generated library-cache begin
@@ -529,6 +654,8 @@ export type InterfaceMethodSig
 		writer.flag(self.isStatic)
 		cacheWriteThrowsClause(writer, value: self.throwsClause)
 		cacheWriteBoolArray(writer, value: self.paramIsBuffer)
+		cacheWriteParamCapabilityArray(writer, value: self.paramCapabilities)
+		writer.unsigned(self.returnCapability.ordinal as CacheUnsigned)
 		writer.unsigned(self.nameLine as CacheUnsigned)
 		writer.unsigned(self.nameColumn as CacheUnsigned)
 		self.written.cacheWrite(writer)
@@ -542,15 +669,17 @@ export type InterfaceMethodSig
 		let f_isStatic = try reader.flag()
 		let f_throwsClause = try cacheReadThrowsClause(reader)
 		let f_paramIsBuffer = try cacheReadBoolArray(reader)
+		let f_paramCapabilities = try cacheReadParamCapabilityArray(reader)
+		let f_returnCapability = try cacheReadResultCapability(reader)
 		let f_nameLine = (try reader.unsigned()) as LineNumber
 		let f_nameColumn = (try reader.unsigned()) as ColumnNumber
 		let f_written = try WrittenTypeNames.cacheRead(reader)
 
-		return Self{name: f_name, paramNames: f_paramNames, paramTypeNames: f_paramTypeNames, returnTypeName: f_returnTypeName, isStatic: f_isStatic, throwsClause: f_throwsClause, paramIsBuffer: f_paramIsBuffer, nameLine: f_nameLine, nameColumn: f_nameColumn, written: f_written}
+		return Self{name: f_name, paramNames: f_paramNames, paramTypeNames: f_paramTypeNames, returnTypeName: f_returnTypeName, isStatic: f_isStatic, throwsClause: f_throwsClause, paramIsBuffer: f_paramIsBuffer, paramCapabilities: f_paramCapabilities, returnCapability: f_returnCapability, nameLine: f_nameLine, nameColumn: f_nameColumn, written: f_written}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize80
-		return sizeof(InterfaceMethodSig) as CacheSize80
+	static function cacheLayoutBytes() returns CacheSize96
+		return sizeof(InterfaceMethodSig) as CacheSize96
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -855,7 +984,7 @@ end 'associatedAbiBindingOf'
 // Every conformer's binding held against the first conformer's, in source order: the first that differs, or the
 // one they all share.
 function agreementWith(conformances ConformanceDeclArray, signatures ProgramSignatures, interfaceName ByteArray, position ElementIndex, first ConformanceDecl, firstBinding ByteArray) returns AssociatedAbiBinding
-	let firstScoped = signatures.declaredIdentityOfSpelling(firstBinding, declFilePath: first.filePath)
+	view firstScoped = signatures.declaredIdentityOfSpelling(firstBinding, declFilePath: first.filePath)
 
 	for decl in conformances 'eachDeclaringType'
 		for entry in decl.interfaces 'eachInterface'
@@ -965,7 +1094,7 @@ end 'cacheReadStdlibShadowRenameMap'
 
 // @generated library-cache end
 
-export typealias IrInterfaceEntryMap = Map with (ByteArray, IrInterface)
+export typealias IrInterfaceEntryMap = Map with (ByteArray, readonly IrInterface)
 
 // @generated library-cache begin
 function cacheWriteIrInterfaceEntryMap(writer LibraryCacheWriter, value IrInterfaceEntryMap)
@@ -1102,7 +1231,7 @@ end 'IrInterfaceMap'
 
 // The per-file artifact contribution form — declaration order, folded into the
 // whole-program `IrInterfaceMap` by `mergeArtifact`.
-export typealias IrInterfaceArray = Array with IrInterface
+export typealias IrInterfaceArray = Array with readonly IrInterface
 
 // @generated library-cache begin
 export function cacheWriteIrInterfaceArray(writer LibraryCacheWriter, value IrInterfaceArray)
@@ -1356,7 +1485,7 @@ end 'cacheReadLiteralInitSiteArray'
 // The outcome of resolving an interface NAME to its definition — a synthesized builtin
 // or a user-declared one, else `notFound` (which `checkConformance` renders as E3015).
 export union InterfaceLookup
-	found(iface IrInterface)
+	found(let iface IrInterface)
 	notFound
 end 'InterfaceLookup'
 
@@ -1710,11 +1839,13 @@ export function conformanceSatisfiesInterface(interfaces IrInterfaceMap, declare
 	return closure.contains(wanted)
 end 'conformanceSatisfiesInterface'
 
-// ⭐⭐ **DOES A WHOLE DECLARED CONFORMANCE SET REACH `wanted`? — THE ONE LIST-LEVEL HOME, above the one
-// pairwise home.** `conformanceSatisfiesInterface` answers for a SINGLE declared name; this answers for
-// everything one `implements` clause declared, which is the question every caller actually has. Both
-// sites that ask it — `ConformanceCheck.typeDeclaresInterface` (the E3016/E3017 conformance answer) and
-// `ProgramSignatures.conformersOf` (which types an `extension <Interface>` publishes onto) — reach it here.
+// ⭐⭐ **DOES A WHOLE DECLARED CONFORMANCE SET REACH `wanted`? — THE ONE LIST-LEVEL HOME, above the
+// one pairwise home.** `conformanceSatisfiesInterface` answers for a SINGLE declared name; this
+// answers for everything one `implements` clause declared, which is the question every caller
+// actually has. Its caller is `ConformanceCheck.typeDeclaresInterface`, the E3016/E3017 conformance
+// answer; `DeclaredConformerIndex`, which places every type against every interface at once to
+// decide which types an `extension <Interface>` publishes onto, groups by
+// `collectDeclaredInterfaceClosure` below instead.
 //
 // ⛔ **SPELT ONCE AT EACH CALLER, THE TWO HALVES DRIFT ON COST BEFORE EITHER IS WRONG.** An
 // extension side that asks a DIRECT name test does not walk `extends` at all: `type ArrayIterator
@@ -1724,12 +1855,12 @@ end 'conformanceSatisfiesInterface'
 // walk allocates a fresh `visited` set per declared name. Two spellings of one orchestration, disagreeing
 // about cost, with the next edit to the rule landing in whichever one the editor opened.
 //
-// ⭐ **ONE CLOSURE FOR THE WHOLE CLAUSE, WHICH IS WHY THE LOOP IS HERE AND NOT AT EITHER CALLER.** A DIAMOND
-// (`implements Left, Right` where both `extends Root`) is walked once, by the closure's own set and not by a
-// second rule, exactly as `appendInterfaceWitnessSlots` handles its own; a cyclic `extends` chain terminates
-// on the same test. The cost is one allocation per (type, interface) ASKED — fine at a caller that asks it
-// once per site, and quadratic at one that asks it per pair, which is what
-// `collectDeclaredInterfaceClosure` exists for.
+// ⭐ **ONE CLOSURE FOR THE WHOLE CLAUSE, WHICH IS WHY THE LOOP IS HERE AND NOT AT THE CALLER.** A
+// DIAMOND (`implements Left, Right` where both `extends Root`) is walked once, by the closure's own
+// set and not by a second rule, exactly as `appendInterfaceWitnessSlots` handles its own; a cyclic
+// `extends` chain terminates on the same test. The cost is one allocation per (type, interface)
+// ASKED — fine at a caller that asks it once per site, and quadratic at one that asks it per pair,
+// which is what `collectDeclaredInterfaceClosure` exists for.
 //
 // ⚠ **THE DIRECT HIT IS A SET PROBE AND IS ASKED FIRST.** Every conformance in the corpus but the `extends`
 // cases answers there, in O(1) and before the closure allocates anything. That is why the parameter is an
@@ -1820,7 +1951,7 @@ end 'witnessTargetIsProtocol'
 // non-throwing — the builtin conformances (`int.hash()`, `String.equals(other)`) are compiler-emitted
 // runtime chunks with no error channel — so the throws clause is `none` at both helpers.
 function nullaryInterfaceMethod(name ByteArray, returnTypeName ByteArray) returns InterfaceMethodSig
-	return InterfaceMethodSig.create(name, paramNames: NameRoster.create(), paramTypeNames: NameRoster.create(), returnTypeName: returnTypeName, isStatic: false, throwsClause: ThrowsClause.none, paramIsBuffer: InterfaceMethodSig.noBufferParams(0), nameLine: 0, nameColumn: 0, written: sharedEmptyWrittenTypeNames)
+	return InterfaceMethodSig.create(name, paramNames: NameRoster.create(), paramTypeNames: NameRoster.create(), returnTypeName: returnTypeName, isStatic: false, throwsClause: ThrowsClause.none, paramIsBuffer: InterfaceMethodSig.noBufferParams(0), paramCapabilities: lentParams(0), returnCapability: ResultCapability.unqualified, nameLine: 0, nameColumn: 0, written: sharedEmptyWrittenTypeNames)
 end 'nullaryInterfaceMethod'
 
 // A one-parameter interface method (`equals(other Self)`, `toString(format String)`).
@@ -1830,7 +1961,8 @@ function unaryInterfaceMethod(name ByteArray, paramName ByteArray, paramTypeName
 	var paramTypeNames = NameRoster.create()
 	paramTypeNames.push(paramTypeName)
 	let paramIsBuffer = InterfaceMethodSig.noBufferParams(paramNames.count() as ParamCount)
-	return InterfaceMethodSig.create(name, paramNames: paramNames, paramTypeNames: paramTypeNames, returnTypeName: returnTypeName, isStatic: false, throwsClause: ThrowsClause.none, paramIsBuffer: paramIsBuffer, nameLine: 0, nameColumn: 0, written: sharedEmptyWrittenTypeNames)
+	let paramCapabilities = lentParams(paramNames.count() as ParamCount)
+	return InterfaceMethodSig.create(name, paramNames: paramNames, paramTypeNames: paramTypeNames, returnTypeName: returnTypeName, isStatic: false, throwsClause: ThrowsClause.none, paramIsBuffer: paramIsBuffer, paramCapabilities: paramCapabilities, returnCapability: ResultCapability.unqualified, nameLine: 0, nameColumn: 0, written: sharedEmptyWrittenTypeNames)
 end 'unaryInterfaceMethod'
 
 // An interface with exactly one method and no `extends`/`uses` — every synthesized
@@ -2558,7 +2690,7 @@ export union DirectConformanceTarget
 	// (`ProgramSignatures.enumConformanceImplName`). A `Self` formal takes a value of THAT enum and nothing
 	// else — an `int` actual would compare a tag against an unrelated number, and another enum's would
 	// compare two case indices that mean different things.
-	enumTagValue(enumName ByteArray)
+	enumTagValue(let enumName ByteArray)
 end 'DirectConformanceTarget'
 
 // The type a `Self` formal of a direct conformance dispatch is quoted as requiring: the conformer's own

@@ -136,12 +136,12 @@ export type Scope
 	// Declare a variable and return its slot. Throws
 	// `ScopeError.shadowsSelfField` when `name` currently maps to a self-field
 	// alias (binding a local of the same name would overwrite it — E3006).
-	export function declare(name ByteArray, varType MaxonType, mutable bool) returns VarSlot throws ScopeError
+	export function declare(name ByteArray, varType MaxonType, kind BindingKind) returns VarSlot throws ScopeError
 		if self.isSelfField(name) 'shadow'
 			throw ScopeError.shadowsSelfField(String.from(name))
 		end 'shadow'
 
-		return self.declareShadowing(name, varType: varType, mutable: mutable)
+		return self.declareShadowing(name, varType: varType, kind: kind)
 	end 'declare'
 
 	// Allocate a slot for `name` without the self-field-shadow guard — the shared slot-allocating
@@ -150,18 +150,18 @@ export type Scope
 	// ⚠ It is NOT an error-recovery path: no caller recovers from E3006. The E3006 that exists is
 	// `declareValueBinding`'s, and the parser turns it into a `SourceParseError` and stops. Nothing
 	// consumes this member — see the header.
-	export function declareShadowing(name ByteArray, varType MaxonType, mutable bool) returns VarSlot
+	export function declareShadowing(name ByteArray, varType MaxonType, kind BindingKind) returns VarSlot
 		let slot = nextSlot
 		nextSlot = nextSlot + 1
-		self.install(VarInfo.create(name, varType: varType, mutable: mutable, slot: slot))
+		self.install(VarInfo.create(name, varType: varType, kind: kind, slot: slot))
 		return slot
 	end 'declareShadowing'
 
 	// Bind `name` to an ALREADY-ALLOCATED slot (no new slot). Aliases a user
 	// binding onto a shared compiler slot so a single scope-exit release frees
 	// it (a separate slot would double-free).
-	export function bindExistingSlot(name ByteArray, slot VarSlot, varType MaxonType, mutable bool)
-		self.install(VarInfo.create(name, varType: varType, mutable: mutable, slot: slot))
+	export function bindExistingSlot(name ByteArray, slot VarSlot, varType MaxonType, kind BindingKind)
+		self.install(VarInfo.create(name, varType: varType, kind: kind, slot: slot))
 	end 'bindExistingSlot'
 
 	// Declare a self-field alias — field `fieldIndex` of the enclosing type, bound by name at
@@ -194,8 +194,8 @@ export type Scope
 	// value the arm loaded out of the box — carrying the box coordinates a WRITE goes back through
 	// (`VarInfo.isPayloadBinding`, `Parser.writeBackPayload`). It shares `declareBinding` with the two
 	// constructors below, so the self-field shadow rule is the one rule for every name a scope installs.
-	export function declarePayloadValueBinding(name ByteArray, varType MaxonType, mutable bool, value ValueId, scrutBox ValueId, slotOffset ByteOffset, storage MaxonType) returns VarInfo throws ScopeError
-		return try self.declareBinding(VarInfo.createPayloadBinding(name, varType: varType, mutable: mutable, boundValue: value, scrutBox: scrutBox, slotOffset: slotOffset, storage: storage))
+	export function declarePayloadValueBinding(name ByteArray, varType MaxonType, kind BindingKind, value ValueId, scrutBox ValueId, slotOffset ByteOffset, storage MaxonType) returns VarInfo throws ScopeError
+		return try self.declareBinding(VarInfo.createPayloadBinding(name, varType: varType, kind: kind, boundValue: value, scrutBox: scrutBox, slotOffset: slotOffset, storage: storage))
 	end 'declarePayloadValueBinding'
 
 	// Declare a value binding (the SSA-substitution model): bind `name` to the SSA
@@ -215,15 +215,15 @@ export type Scope
 	// REFERENCE (see the header): the parser keeps mutable bindings in its loop-phi
 	// list as the objects themselves, so a nested block that shadows the NAME cannot
 	// misdirect a phi write to the shadow.
-	export function declareValueBinding(name ByteArray, varType MaxonType, mutable bool, value ValueId, brandId TypeNameId) returns VarInfo throws ScopeError
-		return try self.declareBinding(VarInfo.createValueBinding(name, varType: varType, mutable: mutable, boundValue: value, brandId: brandId))
+	export function declareValueBinding(name ByteArray, varType MaxonType, kind BindingKind, value ValueId, brandId TypeNameId) returns VarInfo throws ScopeError
+		return try self.declareBinding(VarInfo.createValueBinding(name, varType: varType, kind: kind, boundValue: value, brandId: brandId))
 	end 'declareValueBinding'
 
 	// Declare a PARAMETER's value binding. Identical to `declareValueBinding` in everything the scope
 	// does with it, and different in the one bit the binding carries (`VarInfo.isParameter`), which is
 	// what tells "may this name be rebound?" from "may the container it denotes be written?".
-	export function declareParameterBinding(name ByteArray, varType MaxonType, mutable bool, value ValueId, brandId TypeNameId) returns VarInfo throws ScopeError
-		return try self.declareBinding(VarInfo.createParameterBinding(name, varType: varType, mutable: mutable, boundValue: value, brandId: brandId))
+	export function declareParameterBinding(name ByteArray, varType MaxonType, kind BindingKind, value ValueId, brandId TypeNameId) returns VarInfo throws ScopeError
+		return try self.declareBinding(VarInfo.createParameterBinding(name, varType: varType, kind: kind, boundValue: value, brandId: brandId))
 	end 'declareParameterBinding'
 
 	// Declare a CELL-RESIDENT binding: `name` denotes the heap cell `cell`, so a read is a
@@ -234,8 +234,8 @@ export type Scope
 	//
 	// It shares `declareBinding` with the three above, so the self-field shadow rule stays the one rule for
 	// every name a scope installs.
-	export function declareCellBinding(name ByteArray, varType MaxonType, mutable bool, cell ValueId, epoch ValueId, isParameter bool, crossesByReference bool, brandId TypeNameId) returns VarInfo throws ScopeError
-		return try self.declareBinding(VarInfo.createCellBinding(name, varType: varType, mutable: mutable, cell: cell, epoch: epoch, isParameter: isParameter, crossesByReference: crossesByReference, brandId: brandId))
+	export function declareCellBinding(name ByteArray, varType MaxonType, kind BindingKind, cell ValueId, epoch ValueId, isParameter bool, crossesByReference bool, brandId TypeNameId) returns VarInfo throws ScopeError
+		return try self.declareBinding(VarInfo.createCellBinding(name, varType: varType, kind: kind, cell: cell, epoch: epoch, isParameter: isParameter, crossesByReference: crossesByReference, brandId: brandId))
 	end 'declareCellBinding'
 
 	// The shared body of the four value-binding declarations above: refuse a name that would shadow a
@@ -394,11 +394,11 @@ export type Scope
 		let mark = try frameMarks.pop() otherwise panic("Scope.popScope: frameMarks is empty (unmatched popScope)")
 
 		while declNames.count() > mark 'drain'
-			let name = try declNames.pop() otherwise panic("Scope.popScope: declNames.pop failed above the frame mark {mark}")
+			view name = try declNames.pop() otherwise panic("Scope.popScope: declNames.pop failed above the frame mark {mark}")
 			let shadowed = try declShadowed.pop() otherwise panic("Scope.popScope: declShadowed.pop failed — it must stay parallel to declNames")
 
 			if shadowed 'restoreOuter'
-				let outer = try shadowedInfos.pop() otherwise panic("Scope.popScope: shadowedInfos.pop failed — one entry per declaration marked as shadowing")
+				var outer = try shadowedInfos.pop() otherwise panic("Scope.popScope: shadowedInfos.pop failed — one entry per declaration marked as shadowing")
 				vars.upsert(name, value: outer)
 			end 'restoreOuter' else 'removeOnly'
 				_ = vars.remove(name)

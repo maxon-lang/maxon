@@ -1,6 +1,8 @@
 // The kinds of read-only root a deep `let` write is blamed on, and the wording of every refusal through
-// one (E3078, E3159) for the parser, `SemanticCheck` and `StorageProvenance`; spec `maxoncstderr` blocks
-// pin that wording byte for byte.
+// one (E3078, E3159), of a `view` that escapes or is handed off (E3078, E3138, E3174), of a broken
+// capability boundary (E3189) and of a `let` bound to writable state (E3188), for the parser,
+// `SemanticCheck` and `StorageProvenance`; spec `maxoncstderr` blocks pin that wording byte for
+// byte.
 export enum ReadOnlyRootKind
 	letBinding
 	forElement
@@ -14,10 +16,12 @@ export enum ReadOnlyRootKind
 	storedSetElement
 	moduleLet
 	sharedView
+	view
+	destructuredTuple
 end 'ReadOnlyRootKind'
 
 // @generated library-cache begin
-let CacheCasesReadOnlyRootKind = [ReadOnlyRootKind.letBinding, ReadOnlyRootKind.forElement, ReadOnlyRootKind.loopVariable, ReadOnlyRootKind.ifLetBinding, ReadOnlyRootKind.matchBinding, ReadOnlyRootKind.letField, ReadOnlyRootKind.letPayload, ReadOnlyRootKind.readOnlyElement, ReadOnlyRootKind.storedMapKey, ReadOnlyRootKind.storedSetElement, ReadOnlyRootKind.moduleLet, ReadOnlyRootKind.sharedView]
+let CacheCasesReadOnlyRootKind = [ReadOnlyRootKind.letBinding, ReadOnlyRootKind.forElement, ReadOnlyRootKind.loopVariable, ReadOnlyRootKind.ifLetBinding, ReadOnlyRootKind.matchBinding, ReadOnlyRootKind.letField, ReadOnlyRootKind.letPayload, ReadOnlyRootKind.readOnlyElement, ReadOnlyRootKind.storedMapKey, ReadOnlyRootKind.storedSetElement, ReadOnlyRootKind.moduleLet, ReadOnlyRootKind.sharedView, ReadOnlyRootKind.view, ReadOnlyRootKind.destructuredTuple]
 
 module function cacheReadReadOnlyRootKind(reader LibraryCacheReader) returns ReadOnlyRootKind throws LibraryCacheDamage
 	let ordinal = try reader.unsigned()
@@ -68,6 +72,8 @@ export function readOnlyRootDescription(root ReadOnlyRootKind) returns String
 		storedSetElement gives "a stored Set element"
 		moduleLet gives "a module-level `let`"
 		sharedView gives "a `SharedValue` or registry value"
+		view gives "a `view`"
+		destructuredTuple gives "a destructured `let` tuple"
 	end 'kind'
 end 'readOnlyRootDescription'
 
@@ -121,6 +127,113 @@ export function deepLetStoreMessage(subject String, place String) returns String
 	return "cannot store {subject} into mutable place '{place}'; use clone()"
 end 'deepLetStoreMessage'
 
+export function deepLetStoredRootSubject(name String, kind ReadOnlyRootKind) returns String
+	return match kind 'kind'
+		letBinding gives "`let` '{name}'"
+		view gives "view '{name}'"
+		forElement or
+		loopVariable or
+		ifLetBinding or
+		matchBinding or
+		letField or
+		letPayload or
+		readOnlyElement or
+		storedMapKey or
+		storedSetElement or
+		moduleLet or
+		destructuredTuple or
+		sharedView gives "a value read out of {readOnlyRootDescription(kind)}"
+	end 'kind'
+end 'deepLetStoredRootSubject'
+
+export function deepLetElementKeptMessage(name String, kind ReadOnlyRootKind, method String) returns String
+	return deepLetStoreMessage(deepLetStoredRootSubject(name, kind: kind), place: "an element of the container {method} writes")
+end 'deepLetElementKeptMessage'
+
+export function viewReturnedMessage(name String) returns String
+	return "cannot return view '{name}': a `view` cannot outlive its function; return a clone()"
+end 'viewReturnedMessage'
+
+export function viewSentMessage(name String, message String) returns String
+	return "argument `{name}` of the message `{message}` is a `view`: it names data something else may write, so it can be neither moved nor shared with the service. Send a `.clone()`"
+end 'viewSentMessage'
+
+export function viewCapturedMessage(name String) returns String
+	return "cannot capture view '{name}' in a closure; capture a clone()"
+end 'viewCapturedMessage'
+
+export function boundaryDisagreementMessage(subject String, claim String, boundary String, stance String) returns String
+	return "{subject} {claim}, but '{boundary}' {stance}"
+end 'boundaryDisagreementMessage'
+
+export function parameterDemandMessage(subject String, verb String, parameter String, boundary String, qualifier String) returns String
+	return boundaryDisagreementMessage(subject, claim: "{verb} its parameter '{parameter}'", boundary: boundary, stance: "does not declare it `{qualifier}`")
+end 'parameterDemandMessage'
+
+export function resultBreaksBoundaryMessage(subject String, boundary String, capability ResultCapability) returns String
+	return boundaryDisagreementMessage(subject, claim: "returns a value something may still write", boundary: boundary, stance: "declares `returns {resultQualifierWord(capability)}`")
+end 'resultBreaksBoundaryMessage'
+
+export function keptUndeclaredMessage(subject String, parameter String, boundary String) returns String
+	let (verb, qualifier) = paramDemandWords(ParamCapability.keep)
+	return parameterDemandMessage(subject, verb: verb, parameter: parameter, boundary: boundary, qualifier: qualifier)
+end 'keptUndeclaredMessage'
+
+module function paramDemandWords(capability ParamCapability) returns (String, String)
+	return match capability 'capability'
+		lent panic("paramDemandWords: a lent parameter demands nothing of its boundary")
+		keep gives ("keeps", String.from(KeepQualifierWord))
+		sole gives ("consumes", String.from(SoleQualifierWord))
+	end 'capability'
+end 'paramDemandWords'
+
+module function resultQualifierWord(capability ResultCapability) returns String
+	return match capability 'capability'
+		unqualified panic("resultQualifierWord: an unqualified result declares nothing a function could break")
+		sole gives String.from(SoleQualifierWord)
+		readonly gives String.from(ReadonlyModifierWord)
+	end 'capability'
+end 'resultQualifierWord'
+
+module function handOffRefusalCode(kind MoveDestinationKind) returns ErrorCode
+	return match kind 'kind'
+		sentMessage gives ErrorCode.semanticServiceArgumentNotUnique
+		publishedValue gives ErrorCode.registryPublishedValueNotSolelyOwned
+		mutableName or
+		letField or
+		letFieldValue or
+		letPayload or
+		letPayloadValue or
+		readOnlyElement or
+		readOnlyElementValue or
+		keptArgument or
+		serviceReply or
+		sharedSend or
+		mutablePlace or
+		returnedValue panic("handOffRefusalCode: a '{kind.name}' site is neither a send nor a publish")
+	end 'kind'
+end 'handOffRefusalCode'
+
+export function viewedVarSubject(source String, view String) returns String
+	return "the `var` '{source}', which has been viewed by '{view}',"
+end 'viewedVarSubject'
+
+export function viewedParameterSubject(parameter String, view String) returns String
+	return "the parameter '{parameter}', which has been viewed by '{view}',"
+end 'viewedParameterSubject'
+
+export function viewedVarSentMessage(source String, view String, argumentOf String) returns String
+	return "argument `{source}` {argumentOf} has been viewed by '{view}': a view's reference is a second owner for the rest of the function, so `{source}` can be neither moved nor shared with the service. Send a `.clone()`"
+end 'viewedVarSentMessage'
+
+export function viewedVarPublishedExplanation(key String, view String) returns String
+	return "the value published to `{key}` has been viewed by '{view}': a view's reference is a second owner — publish a `.clone()`"
+end 'viewedVarPublishedExplanation'
+
+export function letBindsWritableStateMessage(name String, through String) returns String
+	return "cannot bind `let` '{name}' to a value reached through '{through}', which something may still write; use `view` to read it, `var` to write it, or bind a clone()"
+end 'letBindsWritableStateMessage'
+
 function deepLetKeptSlotName(into ReadOnlyRootKind) returns String
 	return match into 'kind'
 		readOnlyElement gives "`readonly` element"
@@ -159,6 +272,7 @@ export function rootKindOfHolder(holder WriteBlameHolder) returns ReadOnlyRootKi
 		storedSetElement gives ReadOnlyRootKind.storedSetElement
 		moduleLet gives ReadOnlyRootKind.moduleLet
 		sharedView gives ReadOnlyRootKind.sharedView
+		view gives ReadOnlyRootKind.view
 	end 'holder'
 end 'rootKindOfHolder'
 
@@ -176,6 +290,8 @@ export function holderOfRootKind(kind ReadOnlyRootKind) returns WriteBlameHolder
 		storedSetElement gives WriteBlameHolder.storedSetElement
 		moduleLet gives WriteBlameHolder.moduleLet
 		sharedView gives WriteBlameHolder.sharedView
+		view gives WriteBlameHolder.view
+		destructuredTuple gives WriteBlameHolder.binding
 	end 'kind'
 end 'holderOfRootKind'
 
@@ -192,7 +308,9 @@ export function moveDestinationOfLetSlot(slot ReadOnlyRootKind, movesAVar bool) 
 		storedMapKey or
 		storedSetElement or
 		moduleLet or
-		sharedView panic("moveDestinationOfLetSlot: '{slot.name}' is not a place a store keeps a value in")
+		sharedView or
+		destructuredTuple or
+		view panic("moveDestinationOfLetSlot: '{slot.name}' is not a place a store keeps a value in")
 	end 'slot'
 end 'moveDestinationOfLetSlot'
 
@@ -203,7 +321,8 @@ export function holderIsPermanent(holder WriteBlameHolder) returns bool
 		forElement or
 		loopVariable or
 		ifLetBinding or
-		matchBinding gives false
+		matchBinding or
+		view gives false
 		letField or
 		letPayload or
 		readOnlyElement or
@@ -214,9 +333,21 @@ export function holderIsPermanent(holder WriteBlameHolder) returns bool
 	end 'holder'
 end 'holderIsPermanent'
 
+function deepLetPassedMessage(root String, kind ReadOnlyRootKind, paramName String, functionName String, fate String) returns String
+	return "cannot pass {readOnlyRootClause(root, kind: kind)}, to parameter '{paramName}' of '{functionName}', which {fate}; pass a clone()"
+end 'deepLetPassedMessage'
+
 export function deepLetKeptMessage(root String, kind ReadOnlyRootKind, paramName String, functionName String) returns String
-	return "cannot pass {readOnlyRootClause(root, kind: kind)}, to parameter '{paramName}' of '{functionName}', which keeps it where something may write it; pass a clone()"
+	return deepLetPassedMessage(root, kind: kind, paramName: paramName, functionName: functionName, fate: "keeps it where something may write it")
 end 'deepLetKeptMessage'
+
+export function deepLetConsumedMessage(root String, kind ReadOnlyRootKind, paramName String, functionName String) returns String
+	return deepLetPassedMessage(root, kind: kind, paramName: paramName, functionName: functionName, fate: "consumes it")
+end 'deepLetConsumedMessage'
+
+export function deepLetConsumedArgumentMessage(subject String, paramName String, functionName String) returns String
+	return "cannot pass {subject} to parameter '{paramName}' of '{functionName}', which consumes it; pass a clone()"
+end 'deepLetConsumedArgumentMessage'
 
 export function deepLetKeptArgumentMessage(into ReadOnlyRootKind, subject String, paramName String, functionName String) returns String
 	return "cannot pass {subject} to parameter '{paramName}' of '{functionName}', which stores it into a {deepLetKeptSlotName(into)}: {deepLetNoOtherWriterReason(into)}"

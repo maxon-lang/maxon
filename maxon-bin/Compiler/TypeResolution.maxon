@@ -500,8 +500,11 @@ function functionAliasShapesIn(project Project, signatures ProgramSignatures, fo
 		var alias = try project.functionTypeAliases.get(name) otherwise panic("functionAliasShapesIn: '{String.from(name)}' was read out of the alias registry and is no longer in it")
 		var params = MaxonTypeArray.create()
 		var preErasedNames = NameRoster.create()
+		var capabilities = ParamCapabilityArray.create()
 
 		for param in alias.paramTypes 'eachParam'
+			capabilities.push(param.capability)
+
 			// The reader is the alias's OWN declaring file — a function alias's signature is written there
 			// and nowhere else, so a name it spells means what that file means by it.
 			params.push(functionAliasSlotIn(project, signatures: signatures, form: form, t: maxonTypeOfStoredAliasParam(param, typeNames: project.typeNames), declFilePath: alias.declFilePath))
@@ -519,7 +522,7 @@ function functionAliasShapesIn(project Project, signatures ProgramSignatures, fo
 			value(inner) gives MaxonReturnType.value(functionAliasSlotIn(project, signatures: signatures, form: form, t: inner, declFilePath: alias.declFilePath))
 		end 'storedReturn'
 
-		shapes.upsert(name, value: FunctionShape.create(params, returnType: returnType, paramAggregateNames: preErasedNames, returnAggregateName: alias.returnAggregateName))
+		shapes.upsert(name, value: FunctionShape.create(params, returnType: returnType, paramAggregateNames: preErasedNames, returnAggregateName: alias.returnAggregateName, paramCapabilities: capabilities, returnCapability: alias.returnCapability))
 	end 'eachAlias'
 
 	return shapes
@@ -603,7 +606,7 @@ end 'DeclaredFunctionShape'
 module function declaredFunctionShapeOf(registry FunctionTypeRegistry, name ByteArray) returns DeclaredFunctionShape
 	if let sig = try registry.funcSignatures.get(name) 'declaredFn'
 		let returnType = try registry.funcReturnTypes.get(name) otherwise panic("declaredFunctionShapeOf: '{String.from(name)}' is in funcSignatures but not funcReturnTypes — the two are committed together per function and re-synced together by resolveTypes")
-		return DeclaredFunctionShape.declared(FunctionShape.create(sig.paramTypes, returnType: returnType, paramAggregateNames: sig.paramAggregateNames, returnAggregateName: sig.returnAggregateName))
+		return DeclaredFunctionShape.declared(FunctionShape.create(sig.paramTypes, returnType: returnType, paramAggregateNames: sig.paramAggregateNames, returnAggregateName: sig.returnAggregateName, paramCapabilities: lentParams(sig.paramCount()), returnCapability: sig.returnCapability))
 	end 'declaredFn'
 
 	if let aliasShape = try registry.aliasShapes.get(name) 'alias'
@@ -1083,8 +1086,8 @@ function syncResolvedSignature(project Project, func IrFunction)
 		return
 	end 'noSig'
 
-	let sig = try project.funcSignatures.get(func.name) otherwise panic("syncResolvedSignature: contains({String.from(func.name)}) true but get failed")
-	project.funcSignatures.upsert(func.name, value: FuncSignature.create(sig.paramNames, paramTypes: sourceParamTypesOf(func, declaredCount: sig.paramNames.count() as ParamCount), paramAggregateNames: sig.paramAggregateNames, paramDeclaredNames: sig.paramDeclaredNames, returnAggregateName: sig.returnAggregateName, paramExistentialSites: sig.paramExistentialSites, returnExistentialSites: sig.returnExistentialSites, extensionConstraints: sig.extensionConstraints, writtenTypeNames: sig.writtenTypeNames, selfSpelledParams: sig.selfSpelledParams))
+	var sig = try project.funcSignatures.get(func.name) otherwise panic("syncResolvedSignature: contains({String.from(func.name)}) true but get failed")
+	project.funcSignatures.upsert(func.name, value: FuncSignature.create(sig.paramNames, paramTypes: sourceParamTypesOf(func, declaredCount: sig.paramNames.count() as ParamCount), paramAggregateNames: sig.paramAggregateNames, paramDeclaredNames: sig.paramDeclaredNames, returnAggregateName: sig.returnAggregateName, paramExistentialSites: sig.paramExistentialSites, returnExistentialSites: sig.returnExistentialSites, extensionConstraints: sig.extensionConstraints, writtenTypeNames: sig.writtenTypeNames, selfSpelledParams: sig.selfSpelledParams, returnCapability: sig.returnCapability))
 end 'syncResolvedSignature'
 
 // ⭐ **THE FUNCTION'S SOURCE PARAMETER TYPES — WHICH IS NOT ALWAYS ALL OF `maxonParamTypes`.** A LIFTED

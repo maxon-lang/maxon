@@ -132,7 +132,7 @@ end 'VersioningAnswer'
 // design. Built on the worker's own green thread, past every walk, that sharing is what it should be:
 // one record, read by the two things that need it.
 module type StdPassWorker
-	var reducesDivision as bool
+	let reducesDivision as bool
 	var budget as HoistPressureBudget
 	var schedule as StdFanOutStepArray
 
@@ -155,7 +155,7 @@ module type StdPassWorker
 		end 'alreadyBuilt'
 
 		for step in self.schedule 'eachStep'
-			let tally = StdPassTally.create()
+			var tally = StdPassTally.create()
 			self.tallies.push(tally)
 			self.steps.push(workspaceFor(step, tally: tally))
 		end 'eachStep'
@@ -317,7 +317,7 @@ export function runStdPassesOnAWorkerPool(project Project, module StdModule, mem
 	end 'somethingToRun'
 
 	for funcIndex in 0 upto funcCount 'foldOriginsInIndexOrder'
-		let origins = try landedOrigins.get(slots.slotOf(funcIndex)) otherwise panic("runStdPassesOnAWorkerPool: landedOrigins.get OOB for function {funcIndex}")
+		view origins = try landedOrigins.get(slots.slotOf(funcIndex)) otherwise panic("runStdPassesOnAWorkerPool: landedOrigins.get OOB for function {funcIndex}")
 		origins.foldInto(project.valueOrigins, funcIndex: funcIndex)
 	end 'foldOriginsInIndexOrder'
 
@@ -466,7 +466,7 @@ function drainTheStdPool(module StdModule, workers StdPassWorkerHandleArray, wor
 		let funcIndex = job
 		let reply = try replies.remove(ready) otherwise panic("drainTheStdPool: replies.remove({ready}) — `awaitAny` answered a slot of this very array")
 
-		let body = try await reply otherwise panic("{workerGoneMessage("drainTheStdPool", subject: "the worker running function {funcIndex}")}")
+		var body = try await reply otherwise panic("{workerGoneMessage("drainTheStdPool", subject: "the worker running function {funcIndex}")}")
 		slots.record(job, slot: landedOrigins.count())
 		arrivedUnits.arrive(body.unitModule)
 		landedOrigins.push(body.origins)

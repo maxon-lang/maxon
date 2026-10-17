@@ -1663,7 +1663,7 @@ function main() returns ExitCode
 	promises.push(async drainThunk(2))
 	var total = 0 as Count
 	for p in promises 'each'
-		let lines = try await p otherwise 'died'
+		view lines = try await p otherwise 'died'
 			continue
 		end 'died'
 		total = total + lines.count()
@@ -2633,14 +2633,14 @@ end 'poke'
 function main() returns ExitCode
 	var items = Boxes.create()
 	items.push(Box.create())
-	let a = try items.get(0) otherwise panic("no box")
+	view a = try items.get(0) otherwise panic("no box")
 	print("{await async poke(a)}\n")
 	print("{items.count()}\n")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:23:22: cannot pass 'a', which is read-only (a `let` binding), to a function that writes parameter 'p' (in main); pass a clone()
+error E3159: <fragment>:23:22: cannot pass 'a', which is read-only (a `view`), to a function that writes parameter 'p' (in main); pass a clone()
 ```
 
 <!-- test: async-await.a-counted-co-owner-bound-to-a-let-is-shared-with-async -->
@@ -2670,9 +2670,9 @@ end 'show'
 function main() returns ExitCode
 	var items = Boxes.create()
 	items.push(Box.create())
-	let a = first(items)
+	view a = first(items)
 	print("{await async show(a)}\n")
-	let kept = try items.get(0) otherwise panic("no box")
+	view kept = try items.get(0) otherwise panic("no box")
 	print("{items.count()} {kept.n}\n")
 	return 0
 end 'main'
@@ -2711,7 +2711,7 @@ end 'show'
 function main() returns ExitCode
 	var items = Boxes.create()
 	items.push(Box.create())
-	let a = first(items)
+	view a = first(items)
 	print("{await async show(a)}\n")
 	print("{a.n}\n")
 	return 0

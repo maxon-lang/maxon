@@ -35,7 +35,7 @@
 // Per-file memo: the tokenized form, stamped with the source hash it came from.
 export type TokenMemo
 	export let value as TokenArray
-	export var keyHash as HashDigest
+	export let keyHash as HashDigest
 
 	export static function create(value TokenArray, keyHash HashDigest) returns TokenMemo
 		return Self{value: value, keyHash: keyHash}
@@ -46,7 +46,7 @@ end 'TokenMemo'
 // contributions), stamped with the source hash it came from.
 export type ParseMemo
 	export var value as FileParseArtifact
-	export var keyHash as HashDigest
+	export let keyHash as HashDigest
 
 	export static function create(value FileParseArtifact, keyHash HashDigest) returns ParseMemo
 		return Self{value: value, keyHash: keyHash}
@@ -65,7 +65,7 @@ end 'ParseMemo'
 // single body was edited — see ProgramSignatures.hash.
 export type SignatureMemo
 	export var value as ProgramSignatures
-	export var keyHash as HashDigest
+	export let keyHash as HashDigest
 	export var computed as bool
 
 	export static function create(value ProgramSignatures, keyHash HashDigest, computed bool) returns SignatureMemo
@@ -88,7 +88,7 @@ end 'SignatureMemo'
 // legitimate value, so a bool flag, not a hash sentinel, marks emptiness).
 export type ModuleMemo
 	export var value as MaxonModule
-	export var keyHash as HashDigest
+	export let keyHash as HashDigest
 	export var computed as bool
 
 	export static function create(value MaxonModule, keyHash HashDigest, computed bool) returns ModuleMemo
@@ -538,7 +538,7 @@ export type SharedFileMemo
 	export function parseOf(variant HashDigest, key HashDigest, signatures ProgramSignatures, overrides RowSetOverrideTable, consuming bool) returns RebasedParse throws SharedMemoMiss
 		let position = try self.positionAnswering(variant, key: key)
 		var held = try self.parses.get(position) otherwise panic("SharedFileMemo.parseOf: parses.get OOB at {position}, the position just found")
-		let rebased = try held.rebasedOnto(signatures, overrides: overrides, consuming: consuming)
+		var rebased = try held.rebasedOnto(signatures, overrides: overrides, consuming: consuming)
 
 		if consuming 'noLaterCompileWillAsk'
 			_ = try self.parses.remove(position) otherwise panic("SharedFileMemo.parseOf: remove({position}) of {self.parses.count()} held parses")
@@ -661,8 +661,8 @@ end 'cacheReadHashDigestSet'
 // A source file input: its content plus the content hash all per-file memos key
 // against. The hash is computed once, at `fileChanged` time.
 export type SourceFileEntry
-	export var content as String
-	export var contentHash as HashDigest
+	export let content as String
+	export let contentHash as HashDigest
 
 	export static function create(content String, contentHash HashDigest) returns SourceFileEntry
 		return Self{content: content, contentHash: contentHash}
@@ -672,8 +672,8 @@ end 'SourceFileEntry'
 // Both provenance facts about one path, held for the compile; `Queries.fileProvenanceOf` is the one
 // place that fills this. The roots are siblings, so no file is ever both.
 export type FileProvenance
-	export var isStdlibSource as bool
-	export var isRuntimeSource as bool
+	export let isStdlibSource as bool
+	export let isRuntimeSource as bool
 
 	export static function create(isStdlibSource bool, isRuntimeSource bool) returns FileProvenance
 		return Self{isStdlibSource: isStdlibSource, isRuntimeSource: isRuntimeSource}

@@ -528,7 +528,7 @@ function main() returns ExitCode
 	var held = ValArray.create()
 	held.push(41)
 	held.push(42)
-	let holder = H.create(held)
+	view holder = H.create(held)
 	var equal = ValArray.create()
 	equal.push(41)
 	equal.push(42)

@@ -402,7 +402,7 @@ function main() returns ExitCode
 
 	var h = Holder.create()
 	h.push(Anchor.clone())
-	let stored = try h.get(0) otherwise NumArray.create()
+	view stored = try h.get(0) otherwise NumArray.create()
 	if stored is not Anchor 'storeCopies'
 		result = result + 2
 	end 'storeCopies'
@@ -428,7 +428,7 @@ let Anchor = NumArray.create()
 function main() returns ExitCode
 	var h = Holder.create()
 	h.push(Anchor)
-	let stored = try h.get(0) otherwise NumArray.create()
+	view stored = try h.get(0) otherwise NumArray.create()
 	return (h.count() as ExitCode) + (stored.count() as ExitCode)
 end 'main'
 ```
@@ -450,7 +450,7 @@ let Anchor = NumArray.create()
 function main() returns ExitCode
 	var h = Holder.create()
 	h.push(Anchor)
-	let stored = try h.get(0) otherwise NumArray.create()
+	view stored = try h.get(0) otherwise NumArray.create()
 
 	if stored is Anchor 'keepsIdentity'
 		return 1

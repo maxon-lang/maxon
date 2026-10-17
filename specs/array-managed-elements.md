@@ -44,7 +44,7 @@ function main() returns ExitCode
 	var items = ItemArray.create()
 	items.push(Item.create("hello world that needs heap allocation", value: 1))
 	items.push(Item.create("another long string for heap allocation", value: 2))
-	let first = try items.get(0) otherwise Item.create("", value: 0)
+	view first = try items.get(0) otherwise Item.create("", value: 0)
 	print("{first.name}\n")
 	return first.value
 end 'main'

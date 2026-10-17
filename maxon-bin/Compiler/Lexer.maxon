@@ -217,6 +217,7 @@ export enum TokenKind
 	// Declarations
 	returns = "returns"
 	var = "var"
+	view = "view"
 	type = "type"
 	union = "union"
 	enum = "enum"
@@ -344,7 +345,7 @@ export enum TokenKind
 end 'TokenKind'
 
 // @generated library-cache begin
-let CacheCasesTokenKind = [TokenKind.function, TokenKind.let, TokenKind.typealias, TokenKind.export, TokenKind.public, TokenKind.if, TokenKind.else, TokenKind.while, TokenKind.for, TokenKind.in, TokenKind.break, TokenKind.continue, TokenKind.return, TokenKind.panic, TokenKind.end, TokenKind.match, TokenKind.then, TokenKind.fallthrough, TokenKind.default, TokenKind.upto, TokenKind.gives, TokenKind.try, TokenKind.otherwise, TokenKind.throw, TokenKind.ignore, TokenKind.async, TokenKind.await, TokenKind.returns, TokenKind.var, TokenKind.type, TokenKind.union, TokenKind.enum, TokenKind.static, TokenKind.interface, TokenKind.extension, TokenKind.extends, TokenKind.implements, TokenKind.uses, TokenKind.with, TokenKind.where, TokenKind.self, TokenKind.selfType, TokenKind.throws, TokenKind.from, TokenKind.to, TokenKind.mod, TokenKind.and, TokenKind.or, TokenKind.not, TokenKind.xor, TokenKind.shl, TokenKind.shr, TokenKind.as, TokenKind.is, TokenKind.sizeof, TokenKind.countof, TokenKind.true, TokenKind.false, TokenKind.int, TokenKind.float, TokenKind.bool, TokenKind.cstring, TokenKind.intLiteral, TokenKind.floatLiteral, TokenKind.charLiteral, TokenKind.stringLiteral, TokenKind.byteStringLiteral, TokenKind.stringInterpStart, TokenKind.stringInterpEnd, TokenKind.stringFormatSpec, TokenKind.identifier, TokenKind.leftParen, TokenKind.rightParen, TokenKind.leftBrace, TokenKind.rightBrace, TokenKind.leftBracket, TokenKind.rightBracket, TokenKind.equals, TokenKind.equalsEquals, TokenKind.bangEquals, TokenKind.lessThan, TokenKind.lessEquals, TokenKind.greaterThan, TokenKind.greaterEquals, TokenKind.plus, TokenKind.minus, TokenKind.star, TokenKind.slash, TokenKind.dot, TokenKind.colon, TokenKind.comma, TokenKind.at, TokenKind.hashIf, TokenKind.hashElse, TokenKind.hashEndif, TokenKind.docComment, TokenKind.newline, TokenKind.eof]
+let CacheCasesTokenKind = [TokenKind.function, TokenKind.let, TokenKind.typealias, TokenKind.export, TokenKind.public, TokenKind.if, TokenKind.else, TokenKind.while, TokenKind.for, TokenKind.in, TokenKind.break, TokenKind.continue, TokenKind.return, TokenKind.panic, TokenKind.end, TokenKind.match, TokenKind.then, TokenKind.fallthrough, TokenKind.default, TokenKind.upto, TokenKind.gives, TokenKind.try, TokenKind.otherwise, TokenKind.throw, TokenKind.ignore, TokenKind.async, TokenKind.await, TokenKind.returns, TokenKind.var, TokenKind.view, TokenKind.type, TokenKind.union, TokenKind.enum, TokenKind.static, TokenKind.interface, TokenKind.extension, TokenKind.extends, TokenKind.implements, TokenKind.uses, TokenKind.with, TokenKind.where, TokenKind.self, TokenKind.selfType, TokenKind.throws, TokenKind.from, TokenKind.to, TokenKind.mod, TokenKind.and, TokenKind.or, TokenKind.not, TokenKind.xor, TokenKind.shl, TokenKind.shr, TokenKind.as, TokenKind.is, TokenKind.sizeof, TokenKind.countof, TokenKind.true, TokenKind.false, TokenKind.int, TokenKind.float, TokenKind.bool, TokenKind.cstring, TokenKind.intLiteral, TokenKind.floatLiteral, TokenKind.charLiteral, TokenKind.stringLiteral, TokenKind.byteStringLiteral, TokenKind.stringInterpStart, TokenKind.stringInterpEnd, TokenKind.stringFormatSpec, TokenKind.identifier, TokenKind.leftParen, TokenKind.rightParen, TokenKind.leftBrace, TokenKind.rightBrace, TokenKind.leftBracket, TokenKind.rightBracket, TokenKind.equals, TokenKind.equalsEquals, TokenKind.bangEquals, TokenKind.lessThan, TokenKind.lessEquals, TokenKind.greaterThan, TokenKind.greaterEquals, TokenKind.plus, TokenKind.minus, TokenKind.star, TokenKind.slash, TokenKind.dot, TokenKind.colon, TokenKind.comma, TokenKind.at, TokenKind.hashIf, TokenKind.hashElse, TokenKind.hashEndif, TokenKind.docComment, TokenKind.newline, TokenKind.eof]
 
 module function cacheReadTokenKind(reader LibraryCacheReader) returns TokenKind throws LibraryCacheDamage
 	let ordinal = try reader.unsigned()
@@ -453,6 +454,202 @@ function tokenKindAt(tokens TokenArray, index ElementIndex) returns TokenKind
 	let tok = try tokens.get(index) otherwise return TokenKind.eof
 	return tok.kind
 end 'tokenKindAt'
+
+let ViewBindingWord = b"view"
+
+module function tokenSpellsView(tokens TokenArray, index ElementIndex) returns bool
+	let tok = try tokens.get(index) otherwise return false
+	return tok.kind == TokenKind.identifier and tok.value.equals(ViewBindingWord)
+end 'tokenSpellsView'
+
+function kindBefore(tokens TokenArray, index ElementIndex) returns TokenKind
+	if index == 0 'atFileStart'
+		return TokenKind.newline
+	end 'atFileStart'
+
+	return tokenKindAt(tokens, index: (index - 1) as ElementIndex)
+end 'kindBefore'
+
+function viewMayFollow(previous TokenKind) returns bool
+	return previous == TokenKind.newline or previous == TokenKind.if or previous == TokenKind.then
+end 'viewMayFollow'
+
+function tupleAssignMayFollow(previous TokenKind) returns bool
+	return previous == TokenKind.newline or previous == TokenKind.then
+end 'tupleAssignMayFollow'
+
+// An unterminated group answers the EOF token's index, the one answer at which the token is not a `)`:
+// callers tell a match from malformed source by that, and the real parse reports the source.
+export function matchingRightParen(tokens TokenArray, open ElementIndex) returns ElementIndex
+	if tokenKindAt(tokens, index: open) != TokenKind.leftParen 'notAGroup'
+		panic("matchingRightParen: token {open} is not a `(` — a balanced group's extent is meaningful only at its opener")
+	end 'notAGroup'
+
+	var depth = 0 as NestingDepth
+	var at = open
+
+	while at < tokens.count() 'walk'
+		let kind = tokenKindAt(tokens, index: at)
+
+		if kind == TokenKind.leftParen 'opens'
+			depth = depth + 1
+		end 'opens' else if kind == TokenKind.rightParen 'closes'
+			depth = depth - 1
+
+			if depth == 0 'matched'
+				return at
+			end 'matched'
+		end 'closes' else if kind == TokenKind.eof 'unterminated'
+			return at
+		end 'unterminated'
+
+		at = at + 1
+	end 'walk'
+
+	return tokens.count() as ElementIndex
+end 'matchingRightParen'
+
+// The one rule for where `view` opens a binding. Both tmLanguage grammars
+// (`vscode-extension/syntaxes/`, `website/src/grammars/`) restate it by hand and nothing checks them.
+function viewOpensABindingAt(tokens TokenArray, index ElementIndex) returns bool
+	if not tokenSpellsView(tokens, index: index) or not viewMayFollow(kindBefore(tokens, index: index)) 'notABindingHead'
+		return false
+	end 'notABindingHead'
+
+	let next = tokenKindAt(tokens, index: index + 1)
+
+	if next == TokenKind.identifier 'aNamedBinding'
+		return true
+	end 'aNamedBinding'
+
+	if next != TokenKind.leftParen 'notADestructure'
+		return false
+	end 'notADestructure'
+
+	return tokenKindAt(tokens, index: matchingRightParen(tokens, open: index + 1) + 1) == TokenKind.equals
+end 'viewOpensABindingAt'
+
+// ⭐⭐ **`( <target> , … ) =` — THE ONE READER OF A TUPLE ASSIGNMENT'S TARGET-LIST SHAPE**
+// (`specs/tuple-assign.md`). Returns the index of the `=` that closes the list, or `index` itself when
+// the tokens at `index` are not one — the same "the answer IS the start index when there is nothing
+// here" convention `fieldChainEndAfter` uses, and unambiguous because a real answer is always at least
+// three tokens further on.
+//
+// The shape is exactly: `(` TARGET (`,` TARGET)* `)` `=`, where a TARGET is an optional `let`/`var`
+// qualifier followed by one identifier. Nothing else — no expression, no call, no index — which is what
+// makes the admission decidable from tokens alone, before a single op is emitted.
+//
+// ⭐ **THERE IS NO AMBIGUITY TO RESOLVE HERE.** The compiler admits NO statement that opens with `(` — a
+// parenthesised-expression statement, `(a + b).m()` included, dies in `parseStatement`'s
+// `strayStatementToken` arm as `E2001: unexpected token: '('`. So this predicate can only ever turn an
+// E2001 into a program; every `(`-opening statement it declines keeps that sentence. Should a
+// parenthesised-expression statement ever become legal, THIS is the predicate that decides between them,
+// and it is one predicate rather than a rule re-derived at each door.
+//
+// ⚠ **A ONE-NAME LIST IS ADMITTED ON PURPOSE, where `parseDestructuringNames` refuses one outright.**
+// `(x) = makePair(…)` must reach the ARITY diagnostic the spec pins
+// (`tuple-assign/tuple-assign-error-count-mismatch`, E3005 naming both counts), which a syntactic
+// refusal would pre-empt with a sentence about names rather than about the tuple.
+//
+// ⚠ **IT IS BOUNDED BY THE TOKEN ARRAY, NOT BY AN ARITY LIMIT.** `tokenKindAt` answers `eof` past
+// the end, which is neither an identifier nor a comma, so a malformed source falls
+// out of the walk at the first token that does not fit rather than running off. No arity cap is
+// needed: the EOF is the cap.
+//
+// ⚠ **THE "NOTHING HERE" ANSWER IS THE START INDEX, WHERE `DiscardedCallee` MINTS A UNION RATHER THAN
+// LET AN EMPTY `ByteArray` MEAN NONE — and the two rulings are not in tension.** An
+// empty `ByteArray` is a perfectly good callee KEY, so there "none" and a real answer are indistinguishable
+// to every reader downstream. Here they are not: a real answer is the index of an `=` at least three
+// tokens past the `(`, so `== index` is a value the successful case can never take. Copy the union when
+// the "none" value is one the domain admits; copy this when it is not.
+//
+// ⛔⛔ **A `(` DIRECTLY AFTER `let`/`var`/`view` OPENS THE DECLARING DESTRUCTURE AND IS REFUSED HERE, AT
+// THE ONE READER.** `let (x, y) = t` and `(x, y) = f()` are the SAME token run from the `(` onwards — this
+// walk cannot tell them apart looking forward, and `Parser.tupleAssignTargetAt` cannot either, because it
+// reads the token before each NAME and in the declaring form the keyword sits before the PAREN, so every
+// name there would classify as a REBIND, and the loop-phi scan would carry phis for names the loop cannot
+// be carrying at all.
+//
+// It is refused HERE rather than at the scan because it is a fact about the GRAMMAR — that `(` belongs to
+// another construct — and a guard at one call site is the rule the next caller forgets. `parseStatement`
+// is unaffected: it reaches this at a statement's first token, where the predecessor is a newline, and a
+// `let`/`var`/`view` there was consumed by its own arm two branches earlier.
+module function tupleAssignEqualsIn(tokens TokenArray, open ElementIndex) returns ElementIndex
+	if tokenKindAt(tokens, index: open) != TokenKind.leftParen 'notATargetList'
+		return open
+	end 'notATargetList'
+
+	let before = kindBefore(tokens, index: open)
+
+	if before == TokenKind.let or before == TokenKind.var or before == TokenKind.view 'opensADeclaringDestructure'
+		return open
+	end 'opensADeclaringDestructure'
+
+	var at = open + 1
+
+	while at < tokens.count() 'eachTarget'
+		let qualifier = tokenKindAt(tokens, index: at)
+
+		if qualifier == TokenKind.let or qualifier == TokenKind.var or qualifier == TokenKind.view or (tokenSpellsView(tokens, index: at) and tokenKindAt(tokens, index: at + 1) == TokenKind.identifier) 'declaresANewBinding'
+			at = at + 1
+		end 'declaresANewBinding'
+
+		if tokenKindAt(tokens, index: at) != TokenKind.identifier 'notATarget'
+			return open
+		end 'notATarget'
+
+		at = at + 1
+
+		if tokenKindAt(tokens, index: at) == TokenKind.rightParen 'endOfList'
+			return at + 1 if tokenKindAt(tokens, index: at + 1) == TokenKind.equals else open
+		end 'endOfList'
+
+		if tokenKindAt(tokens, index: at) != TokenKind.comma 'notASeparator'
+			return open
+		end 'notASeparator'
+
+		at = at + 1
+	end 'eachTarget'
+
+	return open
+end 'tupleAssignEqualsIn'
+
+function retagAsView(tokens TokenArray, index ElementIndex)
+	let word = try tokens.get(index) otherwise panic("retagAsView: tokens.get({index}) failed at an index the scan just read")
+	try tokens.set(index, value: Token.create(TokenKind.view, line: word.line, column: word.column, value: word.value, startByte: word.startByte, endByte: word.endByte)) otherwise panic("retagAsView: tokens.set({index}) failed at an index the scan just read")
+end 'retagAsView'
+
+function retagViewTargets(tokens TokenArray, open ElementIndex, equalsAt ElementIndex)
+	var at = open + 1
+
+	while at < equalsAt 'eachToken'
+		if tokenSpellsView(tokens, index: at) and tokenKindAt(tokens, index: at + 1) == TokenKind.identifier 'aViewTarget'
+			retagAsView(tokens, index: at)
+		end 'aViewTarget'
+
+		at = at + 1
+	end 'eachToken'
+end 'retagViewTargets'
+
+function markViewBindings(tokens TokenArray)
+	var index = 0 as ElementIndex
+
+	while index < tokens.count() 'eachToken'
+		let kind = tokenKindAt(tokens, index: index)
+
+		if kind == TokenKind.identifier and viewOpensABindingAt(tokens, index: index) 'aBindingHead'
+			retagAsView(tokens, index: index)
+		end 'aBindingHead' else if kind == TokenKind.leftParen and tupleAssignMayFollow(kindBefore(tokens, index: index)) 'aTargetList'
+			let equalsAt = tupleAssignEqualsIn(tokens, open: index)
+
+			if equalsAt != index 'aTupleAssignment'
+				retagViewTargets(tokens, open: index, equalsAt: equalsAt)
+			end 'aTupleAssignment'
+		end 'aTargetList'
+
+		index = index + 1
+	end 'eachToken'
+end 'markViewBindings'
 
 export type Token
 	export let kind as TokenKind
@@ -889,7 +1086,7 @@ type Lexer
 	end 'create'
 
 	function takeComments() returns CommentLog
-		let taken = self.comments
+		var taken = self.comments
 		self.comments = CommentLog.discarded
 
 		return taken
@@ -2067,8 +2264,9 @@ type Lexer
 		// consumed. Position points one column past the last lexed character on
 		// the same line.
 		self.tokens.push(Token.create(TokenKind.eof, line: line, column: column))
+		markViewBindings(self.tokens)
 
-		let finished = self.tokens
+		var finished = self.tokens
 		self.tokens = TokenArray.create()
 
 		return finished
@@ -2119,8 +2317,8 @@ export function tokenizeWithComments(source String, keywords KeywordTable) retur
 	end 'emptySource'
 
 	var lexer = Lexer.create(source, bytes: bytes, cursor: cursor, keywords: keywords, recording: true)
-	let tokens = try lexer.run()
-	let log = lexer.takeComments()
+	view tokens = try lexer.run()
+	view log = lexer.takeComments()
 
 	return LexedSource.create(tokens, comments: log)
 end 'tokenizeWithComments'
@@ -2158,8 +2356,8 @@ end 'isAlphaNum'
 
 type KeywordInfo
 	export var kind as TokenKind
-	export var helpText as String
-	export var canHaveBlockLabel as bool
+	export let helpText as String
+	export let canHaveBlockLabel as bool
 
 	static function create(kind TokenKind, helpText String, canHaveBlockLabel bool) returns KeywordInfo
 		return Self{kind: kind, helpText: helpText, canHaveBlockLabel: canHaveBlockLabel}

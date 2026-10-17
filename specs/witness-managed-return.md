@@ -96,7 +96,7 @@ type Store
 
 	function populate(maker ChunkMaker)
 		var transient = ChunkArray.create()
-		let chunk = maker.makeChunk()
+		var chunk = maker.makeChunk()
 		self.saved = chunk
 		transient.push(chunk)
 	end 'populate'

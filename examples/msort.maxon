@@ -493,7 +493,7 @@ function readInput(options Options, summary RunSummary) returns LineArray
 	var lines = LineArray.create()
 
 	for (read, pending) in reads.withIterator() 'finishReads'
-		let fileLines = try await pending otherwise 'unreadable'
+		view fileLines = try await pending otherwise 'unreadable'
 			let path = try options.paths.get(read.index()) otherwise panic("readInput: one read per FILE")
 			printError("msort: {path}: cannot read\n")
 			summary.troubled = true
@@ -536,7 +536,7 @@ function sortedChunks(lines LineArray, settings SortSettings, workers WorkerCoun
 	var chunks = ChunkArray.create()
 
 	for (received, reply) in replies.withIterator() 'receiveChunks'
-		let sorted = try await reply otherwise 'stopped'
+		view sorted = try await reply otherwise 'stopped'
 			printError("msort: worker {received.index()} stopped before it answered\n")
 			summary.troubled = true
 			continue
@@ -593,7 +593,7 @@ function mergeChunks(chunks ChunkArray, compare RowComparator) returns RowArray
 		var slot = 0 as ChunkPosition
 
 		while slot < round.count() 'eachPair'
-			let left = chunkAt(round, position: slot)
+			var left = chunkAt(round, position: slot)
 
 			if slot + 1 == round.count() 'anOddOneOut'
 				joined.push(left)
@@ -627,7 +627,7 @@ function withoutDuplicates(rows RowArray, compare RowComparator) returns RowArra
 
 	for row in rows 'eachRow'
 		if not kept.isEmpty() 'hasPrevious'
-			let previous = try kept.last() otherwise panic("withoutDuplicates: a non-empty array has a last element")
+			view previous = try kept.last() otherwise panic("withoutDuplicates: a non-empty array has a last element")
 
 			if compare(previous, row) == Ordering.equalTo 'sameKey'
 				continue

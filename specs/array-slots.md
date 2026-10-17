@@ -130,7 +130,7 @@ typealias SlotArray = Array with Slot
 function main() returns ExitCode
 	var arr = SlotArray.create()
 	arr.push(Slot.create(42))
-	let result = try arr.get(0) otherwise Slot.create(0)
+	view result = try arr.get(0) otherwise Slot.create(0)
 	return result.value
 end 'main'
 ```
@@ -298,7 +298,7 @@ function main() returns ExitCode
 	var arr = SlotArray.create()
 	arr.reserve(3)
 	try arr.managed.setLength(3) otherwise panic("setLength: capacity just reserved for 3")
-	let result = try arr.first() otherwise Slot.create(77)
+	view result = try arr.first() otherwise Slot.create(77)
 	return result.value
 end 'main'
 ```
@@ -327,7 +327,7 @@ function main() returns ExitCode
 	arr.push(Slot.create(1))
 	arr.reserve(3)
 	try arr.managed.setLength(3) otherwise panic("setLength: capacity just reserved for 3")
-	let result = try arr.last() otherwise Slot.create(55)
+	view result = try arr.last() otherwise Slot.create(55)
 	return result.value
 end 'main'
 ```

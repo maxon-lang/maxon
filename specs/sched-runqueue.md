@@ -999,13 +999,13 @@ function main() returns ExitCode
 
 	// Sink #1 is the thread the 257th push moved to the global queue. Nothing has been sent yet, so this
 	// asks the overflow's own victim to answer 0 — see the note above.
-	let first = try sinks.get(0) otherwise panic("sinks.get OOB at 0 — the loop above pushed 300")
+	view first = try sinks.get(0) otherwise panic("sinks.get OOB at 0 — the loop above pushed 300")
 	let beforeAnyRan = try await first.total() otherwise 0
 	print("beforeAnyRan={beforeAnyRan}\n")
 
 	var k = 0 as Integer
 	while k < 300 'sendEach'
-		let sink = try sinks.get(k as ElementIndex) otherwise panic("sinks.get OOB at {k} — the loop is bounded by the count the pushes above filled")
+		view sink = try sinks.get(k as ElementIndex) otherwise panic("sinks.get OOB at {k} — the loop is bounded by the count the pushes above filled")
 		sink.bump()
 		k = k + 1
 	end 'sendEach'
@@ -1013,7 +1013,7 @@ function main() returns ExitCode
 	var ran = 0 as Integer
 	var n = 0 as Integer
 	while n < 300 'collect'
-		let sink = try sinks.get(n as ElementIndex) otherwise panic("sinks.get OOB at {n} — the loop is bounded by the count the pushes above filled")
+		view sink = try sinks.get(n as ElementIndex) otherwise panic("sinks.get OOB at {n} — the loop is bounded by the count the pushes above filled")
 		ran = ran + (try await sink.total() otherwise 0)
 		n = n + 1
 	end 'collect'
@@ -1220,7 +1220,7 @@ function main() returns ExitCode
 
 	var k = 0 as Integer
 	while k < leafCount 'sendEach'
-		let leaf = try leaves.get(k as ElementIndex) otherwise panic("leaves.get OOB at {k} — the loop is bounded by the count the pushes above filled")
+		view leaf = try leaves.get(k as ElementIndex) otherwise panic("leaves.get OOB at {k} — the loop is bounded by the count the pushes above filled")
 		// A temporary argument moves, so each leaf gets its own reference to the collector.
 		leaf.go(tally.clone())
 		k = k + 1
@@ -1450,7 +1450,7 @@ function main() returns ExitCode
 	while r < 100 'eachRound'
 		var k = 0 as Integer
 		while k < 12 'eachWorker'
-			let worker = try workers.get(k as ElementIndex) otherwise panic("workers.get OOB at {k} — the loop is bounded by the count the pushes above filled")
+			view worker = try workers.get(k as ElementIndex) otherwise panic("workers.get OOB at {k} — the loop is bounded by the count the pushes above filled")
 			worker.go()
 			k = k + 1
 		end 'eachWorker'
@@ -1461,7 +1461,7 @@ function main() returns ExitCode
 	var done = 0 as Integer
 	var n = 0 as Integer
 	while n < 12 'collect'
-		let worker = try workers.get(n as ElementIndex) otherwise panic("workers.get OOB at {n} — the loop is bounded by the count the pushes above filled")
+		view worker = try workers.get(n as ElementIndex) otherwise panic("workers.get OOB at {n} — the loop is bounded by the count the pushes above filled")
 		done = done + (try await worker.total() otherwise 0)
 		n = n + 1
 	end 'collect'

@@ -62,7 +62,7 @@ function main() returns ExitCode
 		list.pushFront(20)
 		list.walk()
 		list.pushFront(30)
-		let n1 = try list.nodes.get(1) otherwise Node.create(0, next: -1)
+		view n1 = try list.nodes.get(1) otherwise Node.create(0, next: -1)
 		return n1.value
 end 'main'
 ```
@@ -101,7 +101,7 @@ function main() returns ExitCode
 		pairs.push(Pair.create(5, b: 6))
 		let sum = sumAll(pairs)
 		// After sumAll, elements should still be valid
-		let p1 = try pairs.get(1) otherwise Pair.create(0, b: 0)
+		view p1 = try pairs.get(1) otherwise Pair.create(0, b: 0)
 		if sum == 21 'ok'
 				return p1.a + p1.b
 		end 'ok'
@@ -137,7 +137,7 @@ function main() returns ExitCode
 		var items = ItemArray.create()
 		items.push(Item.create(21))
 		let result = readTwice(items)
-		let check = try items.get(0) otherwise Item.create(0)
+		view check = try items.get(0) otherwise Item.create(0)
 		return check.id + result
 end 'main'
 ```
@@ -163,7 +163,7 @@ typealias SlotArray = Array with Slot
 function main() returns ExitCode
 	var arr = SlotArray.create()
 	arr.push(Slot.create(10))
-	let result = try arr.get(1) otherwise Slot.create(-7)
+	view result = try arr.get(1) otherwise Slot.create(-7)
 	return result.value + 8
 end 'main'
 ```
@@ -209,7 +209,7 @@ function main() returns ExitCode
 	var a = NodeArray.create()
 	a.push(Node.create(10))
 	let fallback = Node.create(99)
-	let r = try a.get(9) otherwise fallback
+	view r = try a.get(9) otherwise fallback
 	return r.value + fallback.value
 end 'main'
 ```
@@ -235,7 +235,7 @@ typealias NodeArray = Array with Node
 function main() returns ExitCode
 	var a = NodeArray.create()
 	let fallback = Node.create(99)
-	let r = try a.pop() otherwise fallback
+	view r = try a.pop() otherwise fallback
 	return r.value + fallback.value
 end 'main'
 ```

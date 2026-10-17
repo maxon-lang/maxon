@@ -1055,7 +1055,7 @@ end 'emitSubpCreationFlags'
 // conventions meet.
 function emitSubpCwdOrNull(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, cwd ValueId, req ValueId) returns IrBlock
 	var setCwd = module.addBlock(func, label: b"subpcwd", heat: BlockHeat.normal)
-	let cont = module.addBlock(func, label: b"subpcwdd", heat: BlockHeat.normal)
+	var cont = module.addBlock(func, label: b"subpcwdd", heat: BlockHeat.normal)
 
 	let zeroIdx = emitConst(module, block: cur, value: 0, ids: ids)
 	let firstByte = emitLoadByte(module, block: cur, base: cwd, index: zeroIdx, ids: ids)
@@ -1149,7 +1149,7 @@ end 'emitSubpSpawnAndAnswer'
 // spawn's pointer is NULL and names no region.
 function emitSubpReleaseEnvVector(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, envPtr ValueId) returns IrBlock
 	var release = module.addBlock(func, label: b"subpenvfree", heat: BlockHeat.normal)
-	let cont = module.addBlock(func, label: b"subpenvfreed", heat: BlockHeat.normal)
+	var cont = module.addBlock(func, label: b"subpenvfreed", heat: BlockHeat.normal)
 
 	emitBranchOnCompare(module, block: cur, value: envPtr, pred: StdCmpPred.eq, against: 0, whenTrue: cont, whenFalse: release, ids: ids)
 
@@ -1827,7 +1827,7 @@ end 'emitSubpRegisterStdinForWrite'
 
 function emitSubpGroupAddStdin(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, group ValueId) returns IrBlock
 	var add = module.addBlock(func, label: b"wcgstdin", heat: BlockHeat.normal)
-	let cont = module.addBlock(func, label: b"wcgstdindone", heat: BlockHeat.normal)
+	var cont = module.addBlock(func, label: b"wcgstdindone", heat: BlockHeat.normal)
 
 	let blocked = emitLoadField(module, block: cur, record: state, offset: WcStdinBlocked, ids: ids)
 	let slot = emitSubpStateSlot(module, block: cur, ids: ids, state: state)
@@ -1903,7 +1903,7 @@ end 'emitSubpWaitForAnySource'
 function emitSubpGroupDeadline(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, group ValueId) returns IrBlock
 	var haveDeadline = module.addBlock(func, label: b"wcgdlhave", heat: BlockHeat.normal)
 	var bounded = module.addBlock(func, label: b"wcgdl", heat: BlockHeat.normal)
-	let cont = module.addBlock(func, label: b"wcgdldone", heat: BlockHeat.normal)
+	var cont = module.addBlock(func, label: b"wcgdldone", heat: BlockHeat.normal)
 
 	_ = emitSubpDeadlineWithFeed(module, func: func, ids: ids, cur: cur, state: state, have: haveDeadline)
 
@@ -1975,7 +1975,7 @@ end 'emitSubpGroupAddr'
 function emitSubpGroupAddStream(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, group ValueId, streamBase ByteOffset, doneOffset ByteOffset) returns IrBlock
 	var live = module.addBlock(func, label: b"wcglive", heat: BlockHeat.normal)
 	var add = module.addBlock(func, label: b"wcgadd", heat: BlockHeat.normal)
-	let cont = module.addBlock(func, label: b"wcgdone", heat: BlockHeat.normal)
+	var cont = module.addBlock(func, label: b"wcgdone", heat: BlockHeat.normal)
 
 	let done = emitLoadField(module, block: cur, record: state, offset: doneOffset, ids: ids)
 	emitBranchOnCompare(module, block: cur, value: done, pred: StdCmpPred.ne, against: 0, whenTrue: cont, whenFalse: live, ids: ids)
@@ -1992,7 +1992,7 @@ end 'emitSubpGroupAddStream'
 // is armed: both roads that arm none learn the exit (`emitSubpSourceLiveChild`).
 function emitSubpGroupAddChild(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, group ValueId) returns IrBlock
 	var add = module.addBlock(func, label: b"wcgchild", heat: BlockHeat.normal)
-	let cont = module.addBlock(func, label: b"wcgchilddone", heat: BlockHeat.normal)
+	var cont = module.addBlock(func, label: b"wcgchilddone", heat: BlockHeat.normal)
 
 	let exited = emitLoadField(module, block: cur, record: state, offset: WcChildExited, ids: ids)
 	emitBranchOnCompare(module, block: cur, value: exited, pred: StdCmpPred.eq, against: 0, whenTrue: add, whenFalse: cont, ids: ids)
@@ -2029,7 +2029,7 @@ end 'emitSubpOpenChildSource'
 // the completion-port lane is the one this compiler builds ITSELF on — so the symptom is a compiler that
 // panics compiling its own source, a generation after the edit.
 function emitSubpNoChildSource(module StdModule, func IrFunction, cur IrBlock) returns IrBlock
-	let cont = module.addBlock(func, label: b"wcsrcdone", heat: BlockHeat.normal)
+	var cont = module.addBlock(func, label: b"wcsrcdone", heat: BlockHeat.normal)
 
 	module.setTerminator(cur, op: StdOp.branch(cont.id))
 	return cont
@@ -2052,7 +2052,7 @@ end 'emitSubpNoChildSource'
 function emitSubpSourceLiveChild(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, handle ValueId) returns IrBlock
 	var stillRunning = module.addBlock(func, label: b"wcsrclive", heat: BlockHeat.normal)
 	var exitLearned = module.addBlock(func, label: b"wcsrcgone", heat: BlockHeat.normal)
-	let cont = module.addBlock(func, label: b"wcsrcdone", heat: BlockHeat.normal)
+	var cont = module.addBlock(func, label: b"wcsrcdone", heat: BlockHeat.normal)
 
 	let slot = emitSubpSlotOf(module, block: cur, ids: ids, handle: handle)
 	let hProcess = emitLoadField(module, block: cur, record: slot, offset: SubpSlotHProcess, ids: ids)
@@ -2126,7 +2126,7 @@ function emitSubpPushStdin(module StdModule, func IrFunction, ids ValueMinter, c
 	var fullChunk = module.addBlock(func, label: b"wcffull", heat: BlockHeat.normal)
 	var finish = module.addBlock(func, label: b"wcffinish", heat: BlockHeat.normal)
 	var honour = module.addBlock(func, label: b"wcfhonour", heat: BlockHeat.normal)
-	let cont = module.addBlock(func, label: b"wcfdone", heat: BlockHeat.normal)
+	var cont = module.addBlock(func, label: b"wcfdone", heat: BlockHeat.normal)
 
 	let slot = emitSubpStateSlot(module, block: cur, ids: ids, state: state)
 	let pend = emitLoadField(module, block: cur, record: slot, offset: SubpSlotStdinPend, ids: ids)
@@ -2215,7 +2215,7 @@ end 'emitSubpStateSlot'
 function emitSubpArmDelayedFeed(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId) returns IrBlock
 	var haveOutput = module.addBlock(func, label: b"wcfaout", heat: BlockHeat.normal)
 	var arm = module.addBlock(func, label: b"wcfarm", heat: BlockHeat.normal)
-	let cont = module.addBlock(func, label: b"wcfadone", heat: BlockHeat.normal)
+	var cont = module.addBlock(func, label: b"wcfadone", heat: BlockHeat.normal)
 
 	let handle = emitLoadField(module, block: cur, record: state, offset: WcHandle, ids: ids)
 	let slot = emitSubpSlotOf(module, block: cur, ids: ids, handle: handle)
@@ -2239,7 +2239,7 @@ end 'emitSubpArmDelayedFeed'
 // `state[outOffset] = min(a, limit)`, through memory for this file's stated reason.
 function emitSubpMinInto(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, outOffset ByteOffset, a ValueId, limit FullRangeInt) returns IrBlock
 	var takeLimit = module.addBlock(func, label: b"wcmincap", heat: BlockHeat.normal)
-	let cont = module.addBlock(func, label: b"wcmindone", heat: BlockHeat.normal)
+	var cont = module.addBlock(func, label: b"wcmindone", heat: BlockHeat.normal)
 
 	emitStoreField(module, block: cur, record: state, offset: outOffset, value: a)
 	emitBranchOnCompare(module, block: cur, value: a, pred: StdCmpPred.gt, against: limit, whenTrue: takeLimit, whenFalse: cont, ids: ids)
@@ -2287,7 +2287,7 @@ function emitSubpDrainStream(module StdModule, func IrFunction, ids ValueMinter,
 	var doRead = module.addBlock(func, label: b"wcdread", heat: BlockHeat.normal)
 	var keep = module.addBlock(func, label: b"wcdkeep", heat: BlockHeat.normal)
 	var markDone = module.addBlock(func, label: b"wcddone", heat: BlockHeat.normal)
-	let cont = module.addBlock(func, label: b"wcdcont", heat: BlockHeat.normal)
+	var cont = module.addBlock(func, label: b"wcdcont", heat: BlockHeat.normal)
 
 	// A stream already finished, or one that never had a pipe, costs one load and one branch per pass.
 	let done = emitLoadField(module, block: cur, record: state, offset: doneOffset, ids: ids)
@@ -2366,7 +2366,7 @@ function emitSubpKeepWithinLimit(module StdModule, func IrFunction, ids ValueMin
 	var roomLeft = module.addBlock(func, label: b"wckroom", heat: BlockHeat.normal)
 	var clip = module.addBlock(func, label: b"wckclip", heat: BlockHeat.normal)
 	var advance = module.addBlock(func, label: b"wckadv", heat: BlockHeat.normal)
-	let cont = module.addBlock(func, label: b"wckdone", heat: BlockHeat.normal)
+	var cont = module.addBlock(func, label: b"wckdone", heat: BlockHeat.normal)
 
 	let handle = emitLoadField(module, block: cur, record: state, offset: WcHandle, ids: ids)
 	let slot = emitSubpSlotOf(module, block: cur, ids: ids, handle: handle)
@@ -2419,7 +2419,7 @@ let SubpResultNullValue = 0
 // Terminate `cur` on a result pointer that names no struct, and return the block where it does. The three
 // builders below share it for the reason `emitSubpRequireHandle` is shared: one test, one place.
 function emitSubpRequireResult(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, result ValueId, whenBad IrBlock) returns IrBlock
-	let good = module.addBlock(func, label: b"resok", heat: BlockHeat.normal)
+	var good = module.addBlock(func, label: b"resok", heat: BlockHeat.normal)
 	emitBranchOnCompare(module, block: cur, value: result, pred: StdCmpPred.le, against: 0, whenTrue: whenBad, whenFalse: good, ids: ids)
 	return good
 end 'emitSubpRequireResult'
@@ -3009,7 +3009,7 @@ let CandidateSlackBytes = 4
 function emitSubpReadEnvInto(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, varName ByteArray, outOffset ByteOffset, fallback ByteArray) returns IrBlock
 	var retry = module.addBlock(func, label: b"rpenvretry", heat: BlockHeat.normal)
 	var useFallback = module.addBlock(func, label: b"rpenvnone", heat: BlockHeat.normal)
-	let cont = module.addBlock(func, label: b"rpenvdone", heat: BlockHeat.normal)
+	var cont = module.addBlock(func, label: b"rpenvdone", heat: BlockHeat.normal)
 
 	var readyId = cont.id
 
@@ -3121,7 +3121,7 @@ function emitSubpWindowsNameRules(module StdModule, func IrFunction, ids ValueMi
 	var markHasPath = module.addBlock(func, label: b"rpnamepath", heat: BlockHeat.normal)
 	var cwdRule = module.addBlock(func, label: b"rpnamecwdrule", heat: BlockHeat.normal)
 	var searchCwd = module.addBlock(func, label: b"rpnamecwd", heat: BlockHeat.normal)
-	let cont = module.addBlock(func, label: b"rpnamerules", heat: BlockHeat.normal)
+	var cont = module.addBlock(func, label: b"rpnamerules", heat: BlockHeat.normal)
 
 	let zero = emitConst(module, block: cur, value: 0, ids: ids)
 	emitStoreField(module, block: cur, record: state, offset: RpNameScan, value: zero)
@@ -3208,7 +3208,7 @@ function emitSubpWindowsSearchRungs(module StdModule, func IrFunction, ids Value
 
 	var pathOnly = module.addBlock(func, label: b"rppathonly", heat: BlockHeat.normal)
 	var searched = module.addBlock(func, label: b"rpsearched", heat: BlockHeat.normal)
-	let done = module.addBlock(func, label: b"rprungsdone", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"rprungsdone", heat: BlockHeat.normal)
 
 	let hasPath = emitSubpFieldIsSet(module, block: afterLegacy, ids: ids, state: state, offset: RpNameHasPath)
 	module.setTerminator(afterLegacy, op: StdOp.condBranch(hasPath, thenBlockId: pathOnly.id, elseBlockId: searched.id))
@@ -3258,7 +3258,7 @@ end 'emitSubpFillDirectory'
 function emitSubpTrimToDirectory(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId) returns IrBlock
 	var scanHdr = module.addBlock(func, label: b"rpexehdr", heat: BlockHeat.normal)
 	var scanByte = module.addBlock(func, label: b"rpexebyte", heat: BlockHeat.normal)
-	let cont = module.addBlock(func, label: b"rpexedir", heat: BlockHeat.normal)
+	var cont = module.addBlock(func, label: b"rpexedir", heat: BlockHeat.normal)
 	module.setTerminator(cur, op: StdOp.branch(scanHdr.id))
 
 	let lenH = emitLoadField(module, block: scanHdr, record: state, offset: RpExeDirLen, ids: ids)
@@ -3306,7 +3306,7 @@ end 'emitSubpPushDirectoryRung'
 
 function emitSubpPushRungWhen(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, when ValueId, dir ValueId, length ValueId) returns IrBlock
 	var push = module.addBlock(func, label: b"rprungpush", heat: BlockHeat.normal)
-	let cont = module.addBlock(func, label: b"rprungnext", heat: BlockHeat.normal)
+	var cont = module.addBlock(func, label: b"rprungnext", heat: BlockHeat.normal)
 	module.setTerminator(cur, op: StdOp.condBranch(when, thenBlockId: push.id, elseBlockId: cont.id))
 
 	emitSubpPushRung(module, block: push, ids: ids, state: state, dir: dir, length: length)
@@ -3331,7 +3331,7 @@ function emitSubpMemberLength(module StdModule, func IrFunction, ids ValueMinter
 	var scanHdr = module.addBlock(func, label: b"rpmemhdr", heat: BlockHeat.normal)
 	var scanStep = module.addBlock(func, label: b"rpmemstep", heat: BlockHeat.normal)
 	var sepTest = module.addBlock(func, label: b"rpmemsep", heat: BlockHeat.normal)
-	let cont = module.addBlock(func, label: b"rpmemdone", heat: BlockHeat.normal)
+	var cont = module.addBlock(func, label: b"rpmemdone", heat: BlockHeat.normal)
 
 	let zero = emitConst(module, block: cur, value: 0, ids: ids)
 	emitStoreField(module, block: cur, record: state, offset: lenOffset, value: zero)
@@ -3373,7 +3373,7 @@ let FlagClearWord = 0 as FullRangeInt
 // on it, which is what the loop header reads as "the list is spent".
 function emitSubpStepPastMember(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, listOffset ByteOffset, startOffset ByteOffset, lenOffset ByteOffset, separator FullRangeInt) returns IrBlock
 	var skipSep = module.addBlock(func, label: b"rpadvskip", heat: BlockHeat.normal)
-	let cont = module.addBlock(func, label: b"rpadvdone", heat: BlockHeat.normal)
+	var cont = module.addBlock(func, label: b"rpadvdone", heat: BlockHeat.normal)
 
 	let start = emitLoadField(module, block: cur, record: state, offset: startOffset, ids: ids)
 	let len = emitLoadField(module, block: cur, record: state, offset: lenOffset, ids: ids)

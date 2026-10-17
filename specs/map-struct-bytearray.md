@@ -36,9 +36,9 @@ function main() returns ExitCode
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
-	let e = Entry.create(arr, tag: 42)
+	var e = Entry.create(arr, tag: 42)
 	try m.insert("hello", value: e) otherwise ignore
-	let got = try m.get("hello") otherwise Entry.create(ByteArray.create(), tag: 0)
+	view got = try m.get("hello") otherwise Entry.create(ByteArray.create(), tag: 0)
 	print("{got.data.count()}\n")
 	print("{got.tag}\n")
 	let b = try got.data.get(1) otherwise 0
@@ -84,7 +84,7 @@ var db = Database.create(EntryMap.create(), sourcePaths: StringArray.create())
 
 function storeAndCheck(key String, data ByteArray)
 	if db.sourceFiles.contains(key) 'exists'
-		let existing = try db.sourceFiles.get(key) otherwise 'skip'
+		view existing = try db.sourceFiles.get(key) otherwise 'skip'
 			return
 		end 'skip'
 		let existingCount = existing.data.count()
@@ -141,7 +141,7 @@ export var db = Database.create(EntryMap.create(), sourcePaths: EntryPaths.creat
 // --- file: app/1-Logic.maxon
 export function storeAndCheck(key String, data EntryBytes)
 	if db.sourceFiles.contains(key) 'exists'
-		let existing = try db.sourceFiles.get(key) otherwise 'skip'
+		view existing = try db.sourceFiles.get(key) otherwise 'skip'
 			return
 		end 'skip'
 		let existingCount = existing.data.count()

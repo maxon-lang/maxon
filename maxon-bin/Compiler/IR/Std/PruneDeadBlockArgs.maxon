@@ -85,7 +85,7 @@ module function pruneDeadBlockArgsInFunc(module StdModule, func IrFunction) retu
 	var isBlockArg = flagColumn(bound)
 
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise panic("pruneDeadBlockArgs: blockRef from func.blockRefs not in module.blocks")
+		view block = try module.blocks.get(blockRef) otherwise panic("pruneDeadBlockArgs: blockRef from func.blockRefs not in module.blocks")
 
 		for arg in block.blockArgs 'eachArg'
 			setFlag(isBlockArg, v: arg.valueId)
@@ -326,7 +326,7 @@ export function dropBlockArgs(module StdModule, func IrFunction, refByBlockId Va
 		var newEdges = BranchEdgeArray.create()
 
 		for edge in pred.branchEdges 'eachEdge'
-			let target = blockById(module, refByBlockId: refByBlockId, id: edge.targetBlockId, from: pred.label)
+			view target = blockById(module, refByBlockId: refByBlockId, id: edge.targetBlockId, from: pred.label)
 			newEdges.push(BranchEdge.create(edge.targetBlockId, argIds: keptArgIds(edge, pred: pred, target: target, kept: kept)))
 		end 'eachEdge'
 

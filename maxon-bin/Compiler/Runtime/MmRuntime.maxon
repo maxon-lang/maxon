@@ -239,8 +239,8 @@ export let MmRetainName = b"__mm_retain"
 // and a private COPY for an image record.** See `buildMmOwn` for the defect the plain incref was.
 export let MmOwnName = b"__mm_own"
 
-// ⭐⭐ **`__mm_own_deep(box, cloner) -> box` — the co-own a DURABLE SINK owes a box whose SLOTS address
-// other records.** `__mm_own`'s blit is sound only for a box of scalars; see `buildMmOwnDeep`.
+// ⭐⭐ **`__mm_own_deep(box, cloner) -> box` — the co-own a DURABLE SINK or a RETAIN owes a box whose
+// SLOTS address other records.** `__mm_own`'s blit is sound only for a box of scalars; see `buildMmOwnDeep`.
 export let MmOwnDeepName = b"__mm_own_deep"
 export let MmAllocName = b"__mm_alloc"
 export let MmDecrefName = b"__mm_decref"
@@ -1025,7 +1025,7 @@ end 'emitWordSlotStore'
 // It returns the block execution continues in, because it FORKS: the caller goes on emitting into that.
 export function emitMovedOutSlotClear(module StdModule, func IrFunction, block IrBlock, base ValueId, index ValueId, elemDrop ValueId, ids ValueMinter) returns IrBlock
 	var clear = module.addBlock(func, label: b"clearmoved", heat: BlockHeat.normal)
-	let resume = module.addBlock(func, label: b"moveddone", heat: BlockHeat.normal)
+	var resume = module.addBlock(func, label: b"moveddone", heat: BlockHeat.normal)
 
 	emitBranchOnCompare(module, block: block, value: elemDrop, pred: StdCmpPred.ne, against: 0, whenTrue: clear, whenFalse: resume, ids: ids)
 
@@ -1420,7 +1420,7 @@ end 'CountedLoop'
 export function openCountedLoop(module StdModule, func IrFunction, cur IrBlock, from ValueId, to ValueId, label ByteArray, ids ValueMinter) returns CountedLoop
 	var header = module.addBlock(func, label: "{String.from(label)}h".toByteArray(), heat: BlockHeat.normal)
 	var body = module.addBlock(func, label: "{String.from(label)}b".toByteArray(), heat: BlockHeat.normal)
-	let done = module.addBlock(func, label: "{String.from(label)}d".toByteArray(), heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: "{String.from(label)}d".toByteArray(), heat: BlockHeat.normal)
 
 	module.setTerminator(cur, op: StdOp.branch(header.id))
 	let i = ids.mint()
@@ -1489,7 +1489,7 @@ export type WordTailSplit
 
 	// `byteCount and -8` — the end of the word run and the start of the byte tail, the one boundary both
 	// runs read.
-	export var wordEnd as ValueId
+	export let wordEnd as ValueId
 
 	export static function create(run IrBlock, done IrBlock, wordEnd ValueId) returns WordTailSplit
 		return Self{run: run, done: done, wordEnd: wordEnd}
@@ -1507,7 +1507,7 @@ end 'WordTailSplit'
 // way past.
 export function openWordTailSplit(module StdModule, func IrFunction, cur IrBlock, byteCount ValueId, label ByteArray, ids ValueMinter) returns WordTailSplit
 	var run = module.addBlock(func, label: "{String.from(label)}run".toByteArray(), heat: BlockHeat.normal)
-	let done = module.addBlock(func, label: "{String.from(label)}d".toByteArray(), heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: "{String.from(label)}d".toByteArray(), heat: BlockHeat.normal)
 
 	emitBranchOnCompare(module, block: cur, value: byteCount, pred: StdCmpPred.le, against: 0, whenTrue: done, whenFalse: run, ids: ids)
 
@@ -1821,12 +1821,12 @@ end 'buildMmRetain'
 // imaged record with a heap one, which is the reading `LiteralArgPromotion`'s header already records for the
 // String half of the same question.
 //
-// ⛔⛔ **A BYTE BLIT IS THE WHOLE CLONE, AND ONLY BECAUSE THE CALLER GATES THE BOXES THAT REACH IT.** An
-// imaged struct MAY hold a slot addressing another image object — an empty column, a nested box — and a blit
-// leaves the copy's slot addressing the `.rdata` one, so the second owner writes the image through one more
-// indirection. `Parser.valueIsAnImageableDeepBox` sends exactly those boxes to `__mm_own_deep` instead, and
-// what is left here owns no slot a second owner could be wrong about; `destructor@0` is trivial for the same
-// reason.
+// ⛔⛔ **A BYTE BLIT IS THE WHOLE CLONE, SOUND ONLY FOR A BOX THAT OWNS NO SLOT.** An imaged struct MAY hold
+// a slot addressing another image object — an empty column, a nested box — and a blit leaves the copy's slot
+// addressing the `.rdata` one, so the second owner writes the image through one more indirection; a trivial
+// `destructor@0` rests on the same premise. `Parser.valueIsAnImageableDeepBox` sends such boxes to
+// `__mm_own_deep` instead, from a retain and from a durable sink alike, so what is left here owns no slot a
+// second owner could be wrong about.
 function buildMmOwn(module StdModule)
 	var func = IrFunction.createFromStd(MmOwnName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
@@ -1856,7 +1856,7 @@ end 'buildMmOwn'
 // A declared generic's container (`Map`, `Set`, and every base written the way they are) is such a box, and
 // so is a user struct whose fields hold one: an empty one of either is image data
 // (`ProgramSignatures.declaredContainerBoxIsImageData` / `structBoxIsImageableWithSlots`), its slots hold
-// the imaged empty columns, and a durable sink holding it writes a read-only page at the first `upsert` — a
+// the imaged empty columns, and a second owner holding it writes a read-only page at the first `upsert` — a
 // fault on x64 and, on wasm32-wasi, which has no read-only section, a silent rewrite of the constant that
 // only the leak gate catches.
 //
@@ -2092,8 +2092,8 @@ export function beginWalkBody(module StdModule, name ByteArray, scope WalkScope,
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: paramCount)
 
-	let start = CascadeCursor.create(entry, carried: walkCarriedValues(scope))
-	let done = emitCascadeJoin(module, func: func, label: b"done", template: start.carried, ids: ids)
+	var start = CascadeCursor.create(entry, carried: walkCarriedValues(scope))
+	var done = emitCascadeJoin(module, func: func, label: b"done", template: start.carried, ids: ids)
 	return WalkBody.create(func, ids: ids, entry: start, done: done, scope: scope, walksElements: walksElements)
 end 'beginWalkBody'
 
@@ -2141,7 +2141,7 @@ export function emitBoxWalkStep(module StdModule, func IrFunction, cursor Cascad
 	var shared = module.addBlock(func, label: b"walkshared", heat: BlockHeat.normal)
 	var sole = module.addBlock(func, label: b"walksole", heat: BlockHeat.normal)
 	var several = module.addBlock(func, label: b"walkowned", heat: BlockHeat.normal)
-	let descend = emitCascadeJoin(module, func: func, label: b"walkdescend", template: cursor.carried, ids: ids)
+	var descend = emitCascadeJoin(module, func: func, label: b"walkdescend", template: cursor.carried, ids: ids)
 
 	let count = emitLoadRefcount(module, block: cursor.block, ptr: box, ids: ids)
 	emitRouteOnRefcountWord(module, func: func, block: cursor.block, word: count.word, counted: counted, immortal: immortal, shared: shared, ids: ids)
@@ -2657,7 +2657,7 @@ end 'buildMmFree'
 // thread's own columns are NOT stepped here — the slab door under this one already did, once per request.
 // Terminates `cur` and answers the block to continue in.
 function emitTrackedTrafficStep(module StdModule, func IrFunction, cur IrBlock, model MachineModel, event SlabTrafficEvent, ids ValueMinter) returns IrBlock
-	let done = module.addBlock(func, label: b"counted", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"counted", heat: BlockHeat.normal)
 
 	let state = emitSlabStateCommitted(module, block: cur, ids: ids)
 	var arms = emitSlabResolveShard(module, func: func, cur: cur, state: state, model: model, need: SlabShardNeed.creditsOnly, traffic: ThreadTraffic.none, ids: ids, label: b"shard")
@@ -2968,7 +2968,7 @@ function declareDestructorCascadeNeeds(usage RuntimeUsage, project Project, sign
 	// mangles to; that instance is minted as `__Array_Foo` instead (`reservedIfDeclared`), so the two cannot
 	// meet. The guard is the walk's structural precondition regardless of which route reaches it.
 	for id in 0 upto signatures.genericInstanceCount() 'eachInstance'
-		let mangled = signatures.mangleGenericInstance(id)
+		view mangled = signatures.mangleGenericInstance(id)
 
 		if usage.neededDestructors.contains(destructorSymbol(mangled)) 'referenced'
 			usage.usesHeap = true
@@ -3210,7 +3210,7 @@ function closeDestructorNeeds(usage RuntimeUsage, project Project, signatures Pr
 	// disjointness (`reservedIfDeclared`) means a declaration and an instance cannot produce one symbol, and
 	// only two INSTANCES can — which is E3006 and fails the build before this runs.
 	for id in 0 upto signatures.genericInstanceCount() 'eachInstance'
-		let mangled = signatures.mangleGenericInstance(id)
+		view mangled = signatures.mangleGenericInstance(id)
 		work.register(destructorSymbol(mangled), node: CascadeNode.genericInstance(id))
 
 		// The DICTIONARY destructor is a second node over the same instance, registered unconditionally for
@@ -3531,7 +3531,7 @@ function structRuntimeRoster(project Project, signatures ProgramSignatures) retu
 		roster.push(StructRosterEntry.create(layout, typeNames: project.typeNames))
 	end 'eachCommitted'
 
-	let indexTypeNames = signatures.indexTypeNames()
+	var indexTypeNames = signatures.indexTypeNames()
 
 	for layout in signatures.tupleLayouts() 'eachInternedTuple'
 		if not project.structTypes.contains(layout.name) 'notCommitted'
@@ -3968,7 +3968,7 @@ export function emitNullGuardedDrop(module StdModule, cur IrBlock, box ValueId, 
 	let nonNull = ids.mint()
 	module.appendOp(cur, op: StdOp.cmp(nonNull, lhs: ptr, rhs: zero, pred: StdCmpPred.ne, operandType: StdType.i64))
 	var dropBlock = module.addBlock(func, label: b"decref", heat: BlockHeat.normal)
-	let contBlock = module.addBlock(func, label: b"cont", heat: BlockHeat.normal)
+	var contBlock = module.addBlock(func, label: b"cont", heat: BlockHeat.normal)
 	module.setTerminator(cur, op: StdOp.condBranch(nonNull, thenBlockId: dropBlock.id, elseBlockId: contBlock.id))
 
 	let dropped = ids.mint()
@@ -4431,9 +4431,13 @@ function synthesizeStructCascade(module StdModule, layout StructLayout, typeName
 	match action 'action'
 		clone then emitFieldCascadeCloner(module, symbolName: clonerSymbol(layout.name), boxSize: layout.sizeBytes(), tagName: layout.name, clones: specs, project: project)
 		soleWalk or
-		shareWalk then emitFieldCascadeWalk(module, symbolName: perTypeCascadeSymbol(action, typeName: layout.name), walks: specs, action: action)
+		shareWalk then emitFieldCascadeWalk(module, symbolName: perTypeCascadeSymbol(action, typeName: layout.name), walks: specs, action: action, meeting: ownMeetingOfShareWalk(action, immutable: signatures.aggregateTypeIsImmutable(layout.name)))
 	end 'action'
 end 'synthesizeStructCascade'
+
+function ownMeetingOfShareWalk(action CascadeAction, immutable bool) returns WalkMeeting
+	return WalkMeeting.view if action == CascadeAction.shareWalk and immutable else WalkMeeting.owner
+end 'ownMeetingOfShareWalk'
 
 // ⭐⭐ **THE PER-INSTANCE DEEP-CLONER CASCADE** — the exact clone dual of
 // `synthesizeGenericInstanceDestructor`, and the same relationship to `synthesizeStructCascade` that one has to
@@ -4475,12 +4479,12 @@ end 'synthesizeStructCascade'
 // exactly as the clone emits no field copy and the destructor no field drop.
 function synthesizeGenericInstanceCascade(module StdModule, id GenericInstanceId, project Project, signatures ProgramSignatures, action CascadeAction)
 	let specs = instanceManagedFieldCascades(id, signatures: signatures, action: action)
-	let mangled = signatures.mangleGenericInstance(id)
+	view mangled = signatures.mangleGenericInstance(id)
 
 	match action 'action'
 		clone then emitFieldCascadeCloner(module, symbolName: clonerSymbol(mangled), boxSize: signatures.genericInstanceBoxSize(id), tagName: mangled, clones: specs, project: project)
 		soleWalk or
-		shareWalk then emitFieldCascadeWalk(module, symbolName: perTypeCascadeSymbol(action, typeName: mangled), walks: specs, action: action)
+		shareWalk then emitFieldCascadeWalk(module, symbolName: perTypeCascadeSymbol(action, typeName: mangled), walks: specs, action: action, meeting: ownMeetingOfShareWalk(action, immutable: signatures.genericInstanceIsImmutable(id)))
 	end 'action'
 end 'synthesizeGenericInstanceCascade'
 
@@ -4504,7 +4508,7 @@ function synthesizeUnionCloner(module StdModule, layout EnumLayout, project Proj
 	emitMmAllocCall(module, block: entry, result: newBox, size: size, destructor: zeroDtor, tag: userTagIndex(project.globalData, name: layout.name, debugStream: module.debugStream), ids: ids)
 	var copied = emitForwardCopy(module, func: func, cur: entry, dest: newBox, src: src, byteCount: size, ids: ids)
 	var start = CascadeCursor.create(copied, carried: ValueIdArray.create())
-	let finish = start.at(done)
+	view finish = start.at(done)
 
 	var fellThrough = emitUnionManagedCaseChain(module, func: func, cur: start, box: newBox, layout: layout, dest: finish, project: project, signatures: signatures, action: CascadeAction.clone, ids: ids)
 
@@ -4570,7 +4574,7 @@ function emitManagedFieldCascade(module StdModule, func IrFunction, cur CascadeC
 	let oldPtr = emitLoadField(module, block: cur.block, record: box, offset: offset, ids: ids)
 	let nonNull = emitCompareWithConstant(module, block: cur.block, value: oldPtr, pred: StdCmpPred.ne, against: 0, ids: ids)
 	var visitBlock = module.addBlock(func, label: cascadeFieldBlockLabel(action), heat: BlockHeat.normal)
-	let cont = emitCascadeJoin(module, func: func, label: b"cont", template: cur.carried, ids: ids)
+	var cont = emitCascadeJoin(module, func: func, label: b"cont", template: cur.carried, ids: ids)
 	module.setTerminator(cur.block, op: StdOp.condBranch(nonNull, thenBlockId: visitBlock.id, elseBlockId: cont.block.id))
 	pushCascadeEdge(cur.block, to: cont, values: cur.carried)
 
@@ -4712,9 +4716,9 @@ end 'synthesizeElementRecordWalk'
 // Emit `<symbolName>(box, visits)` for a TAGLESS box (a struct, or a monomorphized generic instance): the box's
 // own walk step, then each managed field behind the per-field null-guard a moved-out slot needs.
 // `emitFieldCascadeDestructor`'s shape minus the free, and `emitFieldCascadeCloner`'s minus the allocation.
-function emitFieldCascadeWalk(module StdModule, symbolName ByteArray, walks ManagedFieldCascadeArray, action CascadeAction)
+function emitFieldCascadeWalk(module StdModule, symbolName ByteArray, walks ManagedFieldCascadeArray, action CascadeAction, meeting WalkMeeting)
 	var body = beginWalkBody(module, name: symbolName, scope: WalkScope.graph, walksElements: false, recursesPerLevel: true)
-	var cur = emitBoxWalkStep(module, func: body.func, cursor: body.entry, box: WalkBoxParam, action: action, meeting: WalkMeeting.owner, stop: body.done, ids: body.ids)
+	var cur = emitBoxWalkStep(module, func: body.func, cursor: body.entry, box: WalkBoxParam, action: action, meeting: meeting, stop: body.done, ids: body.ids)
 
 	for spec in walks 'eachField'
 		cur = emitManagedFieldCascade(module, func: body.func, cur: cur, box: WalkBoxParam, offset: spec.offset, strategy: spec.strategy, action: action, ids: body.ids)
@@ -4729,7 +4733,7 @@ end 'emitFieldCascadeWalk'
 // box step alone.
 function synthesizeUnionWalk(module StdModule, layout EnumLayout, project Project, signatures ProgramSignatures, action CascadeAction)
 	var body = beginWalkBody(module, name: perTypeCascadeSymbol(action, typeName: layout.name), scope: WalkScope.graph, walksElements: false, recursesPerLevel: true)
-	var walked = emitBoxWalkStep(module, func: body.func, cursor: body.entry, box: WalkBoxParam, action: action, meeting: WalkMeeting.owner, stop: body.done, ids: body.ids)
+	var walked = emitBoxWalkStep(module, func: body.func, cursor: body.entry, box: WalkBoxParam, action: action, meeting: ownMeetingOfShareWalk(action, immutable: signatures.aggregateTypeIsImmutable(layout.name)), stop: body.done, ids: body.ids)
 	var fellThrough = emitUnionManagedCaseChain(module, func: body.func, cur: walked, box: WalkBoxParam, layout: layout, dest: body.done, project: project, signatures: signatures, action: action, ids: body.ids)
 
 	emitCascadeBranch(module, from: fellThrough, to: body.done)

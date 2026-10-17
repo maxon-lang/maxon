@@ -865,7 +865,7 @@ end 'elideFallthroughBranches'
 // A terminator that is not the ISA's unconditional branch — a `ret`, a multiway jump table, an
 // op-less `dead` slot — carries nothing to elide.
 function elideBranchInto(module TargetModule, blockRef ElementIndex, nextId BlockId)
-	let block = try module.blocks.get(blockRef) otherwise panic("elideBranchInto: blockRef {blockRef} not in module.blocks")
+	view block = try module.blocks.get(blockRef) otherwise panic("elideBranchInto: blockRef {blockRef} not in module.blocks")
 
 	match terminatorExitOf(module, block: block) 'terminator'
 		none or
@@ -927,7 +927,7 @@ end 'invertBranchAndElide'
 // THE ONE PLACE THE CONDITIONAL BRANCH IS REWRITTEN. False when it names anything but the physically
 // next block, which is the case where there is no fall-through to trade the terminator for.
 function invertCondBranchOntoElse(module TargetModule, blockRef ElementIndex, condOpIndex ElementIndex, nextId BlockId, elseTarget BlockId) returns bool
-	let op = try module.ops.get(condOpIndex) otherwise panic("invertCondBranchOntoElse: conditional branch op {condOpIndex} not in module.ops")
+	var op = try module.ops.get(condOpIndex) otherwise panic("invertCondBranchOntoElse: conditional branch op {condOpIndex} not in module.ops")
 	let thenTarget = condBranchTargetOf(op, block: try module.blocks.get(blockRef) otherwise panic("invertCondBranchOntoElse: blockRef {blockRef} not in module.blocks"))
 
 	if thenTarget != nextId 'thenIsNotNext'

@@ -504,7 +504,7 @@ function main() returns ExitCode
 		items.push(Item.value(10))
 		items.push(Item.value(20))
 		items.push(Item.empty)
-		let first = try items.get(0) otherwise Item.empty
+		view first = try items.get(0) otherwise Item.empty
 		match first 'check'
 				empty then return 0
 				value(n) then return n

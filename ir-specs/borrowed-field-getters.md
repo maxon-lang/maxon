@@ -387,7 +387,7 @@ end 'Shelf'
 
 function main() returns ExitCode
 	var shelf = Shelf.create()
-	let kept = shelf.holding()
+	view kept = shelf.holding()
 	shelf.retire()
 	return 0 if kept.weight == 1 else 1
 end 'main'

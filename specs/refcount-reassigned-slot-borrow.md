@@ -58,7 +58,7 @@ type Node
 end 'Node'
 
 function swap(n Node) returns Int
-	let old = n
+	view old = n
 	n = Node.create(99)
 	return old.tag
 end 'swap'
@@ -89,7 +89,7 @@ end 'Box'
 var gbox = Box.create(1)
 
 function main() returns ExitCode
-	let old = gbox
+	view old = gbox
 	gbox = Box.create(2)
 	return old.n
 end 'main'
@@ -121,7 +121,7 @@ end 'Outer'
 
 function main() returns ExitCode
 	var o = Outer.create(Inner.create(6))
-	let old = o.inner
+	view old = o.inner
 	o.inner = Inner.create(9)
 	return old.tag
 end 'main'
@@ -144,7 +144,7 @@ type Node
 end 'Node'
 
 function swap(n Node) returns Int
-	let old = n
+	view old = n
 	let t = old.tag
 	n = Node.create(99)
 	return t
@@ -176,7 +176,7 @@ var ga = Box.create(3)
 var gb = Box.create(9)
 
 function main() returns ExitCode
-	let a = ga
+	view a = ga
 	gb = Box.create(2)
 	return a.n
 end 'main'
@@ -204,7 +204,7 @@ function main() returns ExitCode
 	var sum = 0 as Int
 	var i = 0 as Int
 	while i < 3 'loop'
-		let old = gbox
+		view old = gbox
 		gbox = Box.create(i + 1)
 		sum = sum + old.n
 		i = i + 1

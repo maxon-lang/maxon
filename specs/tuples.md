@@ -379,7 +379,7 @@ function pair(a Num, b Num) returns (Num, Num)
 end 'pair'
 
 function stash(xs PairArray) returns (Num, Num)
-	let p = pair(10, b: 20)
+	var p = pair(10, b: 20)
 	xs.push(p)
 	return p
 end 'stash'
@@ -387,7 +387,7 @@ end 'stash'
 function main() returns ExitCode
 	var xs = PairArray.create()
 	let r = stash(xs)
-	let q = try xs.get(0) otherwise panic("element 0 was just pushed")
+	view q = try xs.get(0) otherwise panic("element 0 was just pushed")
 	return r._0 + r._1 + q._0 + q._1
 end 'main'
 ```
@@ -876,7 +876,7 @@ function main() returns ExitCode
 	let p = (1, 2)
 	let q = (3, 40)
 	var xs = [p, q]
-	let r = try xs.get(1) otherwise panic("pushed")
+	view r = try xs.get(1) otherwise panic("pushed")
 	return r.0 + r.1 + xs.count()
 end 'main'
 ```
@@ -902,7 +902,7 @@ function main() returns ExitCode
 	var xs = TaggedArray.create()
 	xs.push((1, "hello"))
 	xs.push((2, "world"))
-	let r = try xs.get(1) otherwise panic("pushed")
+	view r = try xs.get(1) otherwise panic("pushed")
 	print("{r.1}\n")
 	return (r.0 as Count) + xs.count()
 end 'main'
@@ -1301,7 +1301,7 @@ function main() returns ExitCode
 	let h = Holder.create()
 	var xs = PairArray.create()
 	xs.push((14, 0))
-	let e = try xs.get(0) otherwise return 1
+	view e = try xs.get(0) otherwise return 1
 	let n = nested()
 	let s = Slot.some((16, 0))
 	let sv = match s 'm'
@@ -1350,7 +1350,7 @@ function main() returns ExitCode
 	let h = Holder.create()
 	var xs = PairArray.create()
 	xs.push((14, 0))
-	let e = try xs.get(0) otherwise return 1
+	view e = try xs.get(0) otherwise return 1
 	let n = nested()
 	let s = Slot.some((16, 0))
 	let sv = match s 'm'
@@ -1802,7 +1802,7 @@ function main() returns ExitCode
 	xs.push((sb.build(), 3))
 	let ys = xs.clone()
 
-	let original = try xs.get(0) otherwise panic("pushed")
+	view original = try xs.get(0) otherwise panic("pushed")
 	let copied = try ys.get(0) otherwise panic("cloned")
 	print("{original.0}|{copied.0}\n")
 	return original.1 + copied.1 + xs.count() as Integer + ys.count() as Integer
@@ -1864,7 +1864,7 @@ function main() returns ExitCode
 	var m = PointMap.create()
 	m.upsert("a", value: Point.create("alpha"))
 	for e in m 'each'
-		let arr = [e]
+		view arr = [e]
 		let cp = arr.clone()
 		let copied = try cp.get(0) otherwise panic("cloned")
 		print("{copied.0}{copied.1.name}\n")

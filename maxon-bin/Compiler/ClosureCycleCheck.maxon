@@ -111,7 +111,7 @@ function effectFor(effects GlobalEffectArray, label ByteArray) returns GlobalEff
 		end 'thisGlobal'
 	end 'eachEffect'
 
-	let effect = GlobalEffect.create(label)
+	var effect = GlobalEffect.create(label)
 	effects.push(effect)
 	return effect
 end 'effectFor'
@@ -149,7 +149,7 @@ type CycleSummary
 	export var globals as GlobalEffectColumn
 
 	static function create(funcCount ElementIndex) returns CycleSummary
-		let noStores = ParamPositionMaskArray.create()
+		var noStores = ParamPositionMaskArray.create()
 		var globals = GlobalEffectColumn.create()
 
 		while globals.count() < funcCount 'eachFunction'
@@ -480,7 +480,7 @@ typealias CycleBodyIndexByFunction = Map with (ElementIndex, CycleBodyIndex)
 type CycleTrace implements SummaryCallWalker
 	var checker as ClosureCycleChecker
 	var traced as IrFunction
-	var tracedIndex as ElementIndex
+	let tracedIndex as ElementIndex
 	var tracked as BoolArray
 	var blockIndex as BlockIndexById
 	var kinds as OriginKindArray
@@ -566,7 +566,7 @@ type CycleTrace implements SummaryCallWalker
 	end 'trackValues'
 
 	function indexBody()
-		let module = self.checker.module
+		view module = self.checker.module
 		module.refillBlockIndexById(self.traced, into: self.blockIndex)
 		var targets = BlockIdArray.create()
 		var predecessorCounts = EntryIndexArray.create()
@@ -575,7 +575,7 @@ type CycleTrace implements SummaryCallWalker
 		lastPredecessor.refill(self.traced.blockRefs.count(), value: 0)
 
 		for (blockIter, blockRef) in self.traced.blockRefs.withIterator() 'eachBlock'
-			let block = self.blockAt(blockRef)
+			view block = self.blockAt(blockRef)
 			var blockSuccessors = OriginList.create()
 			targets.clear()
 			collectMaxonBlockSuccessors(module, block: block, into: targets)
@@ -598,7 +598,7 @@ type CycleTrace implements SummaryCallWalker
 	end 'indexBody'
 
 	function indexForwardedLoads(predecessorCounts EntryIndexArray, lastPredecessor EntryIndexArray)
-		let module = self.checker.module
+		view module = self.checker.module
 		var exits = KnownStoresByBlock.create()
 
 		for (blockIter, blockRef) in self.traced.blockRefs.withIterator() 'eachBlock'
@@ -737,7 +737,7 @@ type CycleTrace implements SummaryCallWalker
 	end 'walk'
 
 	function walkBlock(block IrBlock)
-		let module = self.checker.module
+		view module = self.checker.module
 
 		for opIdx in block.bodyOps() 'eachOp'
 			self.walkOp(try module.ops.get(opIdx) otherwise panic("CycleTrace.walkBlock: opIdx {opIdx} not in module.ops"), opIdx: opIdx)
@@ -759,10 +759,10 @@ type CycleTrace implements SummaryCallWalker
 		end 'terminated'
 
 		for edge in block.branchEdges 'eachEdge'
-			let target = self.blockAt(try self.traced.blockRefs.get(self.positionOfBlock(edge.targetBlockId)) otherwise panic("CycleTrace.walkBlock: block position past func.blockRefs"))
+			view target = self.blockAt(try self.traced.blockRefs.get(self.positionOfBlock(edge.targetBlockId)) otherwise panic("CycleTrace.walkBlock: block position past func.blockRefs"))
 
 			for (iter, incoming) in edge.argIds.withIterator() 'eachIncoming'
-				let phi = try target.blockArgs.get(iter.index()) otherwise panic("CycleTrace.walkBlock: an edge into block {edge.targetBlockId} carries more values than it has block args")
+				view phi = try target.blockArgs.get(iter.index()) otherwise panic("CycleTrace.walkBlock: an edge into block {edge.targetBlockId} carries more values than it has block args")
 
 				if self.isTracked(phi.valueId) and self.isTracked(incoming) 'mayBeTheIncoming'
 					self.unionValueIntoBase(phi.valueId, from: incoming)
@@ -865,8 +865,8 @@ type CycleTrace implements SummaryCallWalker
 			return
 		end 'movesNoFunction'
 
-		let cursor = self.checker.calls
-		let summary = self.checker.summary
+		view cursor = self.checker.calls
+		view summary = self.checker.summary
 
 		for (receiverIter, receiver) in args.withIterator() 'eachReceiver'
 			let into = try cursor.argPositionAt(receiverIter.index() as ParamCount) otherwise continue
@@ -906,7 +906,7 @@ type CycleTrace implements SummaryCallWalker
 	end 'applyCalleeSummary'
 
 	function applyStoreSummary(calleeIndex ElementIndex, into ParamCount, position ParamCount, receiver ValueId, stored ValueId, opIdx ElementIndex, at SourceRange)
-		let summary = self.checker.summary
+		view summary = self.checker.summary
 		let storesHeld = maskHasParam(storeRowMaskAt(summary.storesHeld, index: calleeIndex, into: into), param: position)
 		let storesRecord = maskHasParam(storeRowMaskAt(summary.storesRecord, index: calleeIndex, into: into), param: position)
 		let storesCaptured = maskHasParam(storeRowMaskAt(summary.storesCaptured, index: calleeIndex, into: into), param: position)
@@ -943,7 +943,7 @@ type CycleTrace implements SummaryCallWalker
 	function applyGlobalEffect(effect GlobalEffect, result ValueId, args ValueIdArray, opIdx ElementIndex)
 		let global = self.globalOriginOf(effect.label)
 		let globalBase = self.listOfOne(global)
-		let cursor = self.checker.calls
+		view cursor = self.checker.calls
 
 		for (iter, arg) in args.withIterator() 'eachArg'
 			let position = try cursor.argPositionAt(iter.index() as ParamCount) otherwise continue
@@ -962,7 +962,7 @@ type CycleTrace implements SummaryCallWalker
 			end 'whatItHolds'
 
 			if maskHasParam(effect.storedCaptured, param: position) 'aClosureHoldingIt'
-				let captured = self.baseOf(arg)
+				view captured = self.baseOf(arg)
 				self.store(globalBase, offset: WildOffset, records: self.listOfOne(self.recordTheCalleeStored(opIdx, position: position, kind: SyntheticCapturedKind, holding: captured)), held: captured, opIdx: opIdx)
 			end 'aClosureHoldingIt'
 
@@ -986,7 +986,7 @@ type CycleTrace implements SummaryCallWalker
 	end 'applyGlobalEffect'
 
 	function applyResultSummary(calleeIndex ElementIndex, position ParamCount, result ValueId, fresh OriginIndex, arg ValueId, opIdx ElementIndex)
-		let summary = self.checker.summary
+		view summary = self.checker.summary
 
 		if maskHasParam(summaryMaskAt(summary.resultIs, index: calleeIndex), param: position) 'theArgument'
 			self.unionValueIntoBase(result, from: arg)
@@ -1080,7 +1080,7 @@ type CycleTrace implements SummaryCallWalker
 			return
 		end 'storesNoFunction'
 
-		let records = self.baseOf(value)
+		view records = self.baseOf(value)
 
 		if self.mode == CycleTraceMode.propagate and offset >= FunctionRecordCaptureBase 'mayBeACapture'
 			for origin in self.baseOf(addr) 'eachTarget'
@@ -1716,7 +1716,7 @@ type CycleTrace implements SummaryCallWalker
 
 	function seedHeldGlobals(child OriginIndex)
 		let global = try self.globalRootOf(child) otherwise return
-		let labels = try self.checker.heldGlobalsOf(self.globalLabelOf(global)) otherwise return
+		view labels = try self.checker.heldGlobalsOf(self.globalLabelOf(global)) otherwise return
 
 		for label in labels 'eachHeldGlobal'
 			self.addToList(self.handleIn(self.heldHandles, key: child), origin: self.globalOriginOf(label))

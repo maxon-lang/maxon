@@ -224,8 +224,8 @@ end 'LiteralCast'
 
 export union LetCastConstant
 	unknown
-	integer(value FullRangeInt)
-	real(bits FullRangeInt)
+	integer(let value FullRangeInt)
+	real(let bits FullRangeInt)
 end 'LetCastConstant'
 
 // @generated library-cache begin
@@ -355,7 +355,7 @@ export type LetCastSubject
 end 'LetCastSubject'
 
 export type LetCastRead
-	export let subject as LetCastSubject
+	export var subject as LetCastSubject
 	export let site as ByteOffset
 	export var claimed as bool
 
@@ -1036,14 +1036,14 @@ end 'cacheReadDebugFoldedConstantImmediate'
 // The TYPE is captured with the name because the Std tier erases it: every store below the Maxon boundary
 // carries a width and no source type at all.
 export type DebugLocalDecl
-	export var name as ByteArray
+	export let name as ByteArray
 	export var declaredType as MaxonType
 	export var valueIds as ValueIdArray
 
 	// The name denotes a cell address, not the value — a `var` another frame may write, or a
 	// by-reference parameter. Its values locate the cell, so a register or a slot stated for one of
 	// them would render the address as the contents; such a binding is written `optimizedOut`.
-	export var heldInACell as bool
+	export let heldInACell as bool
 
 	export var foldedConstant = DebugFoldedConstant.none
 
@@ -1261,7 +1261,7 @@ end 'cacheReadClosureStoreDestinationField'
 
 // The binding a field store was written through — the name E3183 gives the record it writes.
 export union ClosureStoreBase
-	spelled(record ValueId, name ByteArray)
+	spelled(record ValueId, let name ByteArray)
 	unspelled
 end 'ClosureStoreBase'
 
@@ -1376,7 +1376,7 @@ export typealias DebugValueNumber = int(0 to u64.max)
 
 export type DebugValueLocation
 	export var kind as DebugValueLocationKind
-	export var number as DebugValueNumber
+	export let number as DebugValueNumber
 
 	export static function create(kind DebugValueLocationKind, number DebugValueNumber) returns DebugValueLocation
 		return Self{kind: kind, number: number}
@@ -1431,11 +1431,11 @@ end 'cacheReadDebugValueLocationArray'
 export typealias DebugOpAnchor = int(0 to u64.max) implements ElementIndex
 
 export type DebugValueRange
-	export var valueOrdinal as ElementIndex
-	export var blockId as BlockId
+	export let valueOrdinal as ElementIndex
+	export let blockId as BlockId
 	export var first as DebugOpAnchor
 	export var last as DebugOpAnchor
-	export var fromBlockEntry as bool
+	export let fromBlockEntry as bool
 
 	export static function create(valueOrdinal ElementIndex, blockId BlockId, first DebugOpAnchor, last DebugOpAnchor, fromBlockEntry bool) returns DebugValueRange
 		return Self{valueOrdinal: valueOrdinal, blockId: blockId, first: first, last: last, fromBlockEntry: fromBlockEntry}
@@ -1493,31 +1493,25 @@ end 'cacheReadDebugValueRangeArray'
 
 // @generated library-cache end
 
-// The immutable names of one function in declaration order: the `let` bindings the author wrote and the
-// module-level `let`s its body reads (`moduleLets`, image data among them in `images`). A value bound by two of
-// them appears twice; the first names it. `borrows` says a binding took no reference of its own — a field or
-// element read, a loop variable — so it borrows the record it names. `infos` is each local binding's `VarInfo`,
-// whose last use is final once the body is parsed and bounds how long the binding borrows what it names; a module
-// `let`'s is a record of its own that is never read for one.
+// The immutable names of one function in declaration order: the `let` bindings the author wrote and
+// the module-level `let`s its body reads (`moduleLets`). A value bound by two of them appears
+// twice; the first names it. `infos` is each local binding's `VarInfo`, whose last use is final
+// once the body is parsed; a module `let`'s is a record of its own that is never read for one.
 export type ImmutableBindings
 	export var values as ValueIdArray
 	export var names as NameRoster
 	export var moduleLets as BoolArray
-	export var images as BoolArray
-	export var borrows as BoolArray
 	export var declTokens as TokenIndexArray
 	export var infos as VarInfoArray
 
 	export static function create() returns ImmutableBindings
-		return Self{values: ValueIdArray.create(), names: NameRoster.create(), moduleLets: BoolArray.create(), images: BoolArray.create(), borrows: BoolArray.create(), declTokens: TokenIndexArray.create(), infos: VarInfoArray.create()}
+		return Self{values: ValueIdArray.create(), names: NameRoster.create(), moduleLets: BoolArray.create(), declTokens: TokenIndexArray.create(), infos: VarInfoArray.create()}
 	end 'create'
 
-	export function record(value ValueId, name ByteArray, moduleLet bool, image bool, borrowsIt bool, declToken ElementIndex, info VarInfo)
+	export function record(value ValueId, name ByteArray, moduleLet bool, declToken ElementIndex, info VarInfo)
 		self.values.push(value)
 		self.names.push(name)
 		self.moduleLets.push(moduleLet)
-		self.images.push(image)
-		self.borrows.push(borrowsIt)
 		self.declTokens.push(declToken)
 		self.infos.push(info)
 	end 'record'
@@ -1527,8 +1521,6 @@ export type ImmutableBindings
 		cacheWriteValueIdArray(writer, value: self.values)
 		cacheWriteNameRoster(writer, value: self.names)
 		cacheWriteBoolArray(writer, value: self.moduleLets)
-		cacheWriteBoolArray(writer, value: self.images)
-		cacheWriteBoolArray(writer, value: self.borrows)
 		cacheWriteTokenIndexArray(writer, value: self.declTokens)
 		cacheWriteVarInfoArray(writer, value: self.infos)
 	end 'cacheWrite'
@@ -1537,16 +1529,14 @@ export type ImmutableBindings
 		let f_values = try cacheReadValueIdArray(reader)
 		let f_names = try cacheReadNameRoster(reader)
 		let f_moduleLets = try cacheReadBoolArray(reader)
-		let f_images = try cacheReadBoolArray(reader)
-		let f_borrows = try cacheReadBoolArray(reader)
 		let f_declTokens = try cacheReadTokenIndexArray(reader)
 		let f_infos = try cacheReadVarInfoArray(reader)
 
-		return Self{values: f_values, names: f_names, moduleLets: f_moduleLets, images: f_images, borrows: f_borrows, declTokens: f_declTokens, infos: f_infos}
+		return Self{values: f_values, names: f_names, moduleLets: f_moduleLets, declTokens: f_declTokens, infos: f_infos}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize56
-		return sizeof(ImmutableBindings) as CacheSize56
+	static function cacheLayoutBytes() returns CacheSize40
+		return sizeof(ImmutableBindings) as CacheSize40
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -1556,13 +1546,23 @@ end 'ImmutableBindings'
 export typealias PositionKey = int(0 to u64.max)
 
 let PositionLineShift = 32 as PositionKey
+let PositionColumnMask = u32.max as PositionKey
 
 export function positionKey(line LineNumber, column ColumnNumber) returns PositionKey
 	return ((line as PositionKey) shl PositionLineShift) or (column as PositionKey)
 end 'positionKey'
 
+export function positionKeyLine(key PositionKey) returns LineNumber
+	return (key shr PositionLineShift) as LineNumber
+end 'positionKeyLine'
+
+export function positionKeyColumn(key PositionKey) returns ColumnNumber
+	return (key and PositionColumnMask) as ColumnNumber
+end 'positionKeyColumn'
+
 // The token each call of a body ends at, by the call's position.
 export typealias TokenByPosition = Map with (PositionKey, ElementIndex)
+export typealias StartByPosition = Map with (PositionKey, PositionKey)
 
 // ⭐ **A DOOR WHOSE VERDICT IS A WHOLE-PROGRAM QUESTION, SO THE SITE WAITS FOR `StorageProvenance`.** `name` is
 // what the author wrote there: the mutable binding a value was bound or assigned to, the mutable name that
@@ -1700,6 +1700,69 @@ end 'cacheReadFieldWriteSiteArray'
 
 // @generated library-cache end
 
+export type WriteRefusalSite
+	export let root as ByteArray
+	export let kind as ReadOnlyRootKind
+	export let place as ByteArray
+	export let line as LineNumber
+	export let column as ColumnNumber
+
+	export static function create(root ByteArray, kind ReadOnlyRootKind, place ByteArray, line LineNumber, column ColumnNumber) returns WriteRefusalSite
+		return Self{root: root, kind: kind, place: place, line: line, column: column}
+	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.root)
+		writer.unsigned(self.kind.ordinal as CacheUnsigned)
+		writer.bytes(self.place)
+		writer.unsigned(self.line as CacheUnsigned)
+		writer.unsigned(self.column as CacheUnsigned)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns WriteRefusalSite throws LibraryCacheDamage
+		let f_root = try reader.bytes()
+		let f_kind = try cacheReadReadOnlyRootKind(reader)
+		let f_place = try reader.bytes()
+		let f_line = (try reader.unsigned()) as LineNumber
+		let f_column = (try reader.unsigned()) as ColumnNumber
+
+		return Self{root: f_root, kind: f_kind, place: f_place, line: f_line, column: f_column}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize40
+		return sizeof(WriteRefusalSite) as CacheSize40
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
+end 'WriteRefusalSite'
+
+export typealias WriteRefusalSiteArray = Array with WriteRefusalSite
+
+// @generated library-cache begin
+function cacheWriteWriteRefusalSiteArray(writer LibraryCacheWriter, value WriteRefusalSiteArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteWriteRefusalSiteArray'
+
+function cacheReadWriteRefusalSiteArray(reader LibraryCacheReader) returns WriteRefusalSiteArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = WriteRefusalSiteArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try WriteRefusalSite.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadWriteRefusalSiteArray'
+
+// @generated library-cache end
+
 export type ReceiverWriteSite
 	export let receiver as ValueId
 	export let place as ByteArray
@@ -1774,10 +1837,14 @@ export enum MoveDestinationKind
 	keptArgument
 	serviceReply
 	sharedSend
+	sentMessage
+	publishedValue
+	mutablePlace
+	returnedValue
 end 'MoveDestinationKind'
 
 // @generated library-cache begin
-let CacheCasesMoveDestinationKind = [MoveDestinationKind.mutableName, MoveDestinationKind.letField, MoveDestinationKind.letFieldValue, MoveDestinationKind.letPayload, MoveDestinationKind.letPayloadValue, MoveDestinationKind.readOnlyElement, MoveDestinationKind.readOnlyElementValue, MoveDestinationKind.keptArgument, MoveDestinationKind.serviceReply, MoveDestinationKind.sharedSend]
+let CacheCasesMoveDestinationKind = [MoveDestinationKind.mutableName, MoveDestinationKind.letField, MoveDestinationKind.letFieldValue, MoveDestinationKind.letPayload, MoveDestinationKind.letPayloadValue, MoveDestinationKind.readOnlyElement, MoveDestinationKind.readOnlyElementValue, MoveDestinationKind.keptArgument, MoveDestinationKind.serviceReply, MoveDestinationKind.sharedSend, MoveDestinationKind.sentMessage, MoveDestinationKind.publishedValue, MoveDestinationKind.mutablePlace, MoveDestinationKind.returnedValue]
 
 function cacheReadMoveDestinationKind(reader LibraryCacheReader) returns MoveDestinationKind throws LibraryCacheDamage
 	let ordinal = try reader.unsigned()
@@ -1809,8 +1876,9 @@ end 'cacheTableAgreesMoveDestinationKind'
 // ⭐ **A NAME HANDED WHOLE TO A DESTINATION THAT MAY TAKE IT, AND THE FIRST READ OF IT AFTER.**
 // Filed where a `let` — or a `var`, whose E3077 verdict needs the same fact — is bound or assigned
 // to a mutable name, or handed to the door `destinationKind` names (`destination`). Whether the
-// door moves the name, refuses it or does nothing is `StorageProvenance`'s to decide; the parser
-// fills in the first read of the name after the door on the door's own path
+// door moves the name, refuses it or does nothing is `StorageProvenance`'s to decide; a site the
+// parser already refused arrives `refused`, and a refused hand-off carries its wording in
+// `refusal`. The parser fills in the first read of the name after the door on the door's own path
 // (`Parser.requireBindingLive`), which is where a move is observed.
 export type MoveSite
 	export let value as ValueId
@@ -1826,9 +1894,11 @@ export type MoveSite
 	export var readInALaterIteration = false
 	export var readLine = 0 as LineNumber
 	export var readColumn = 0 as ColumnNumber
+	export var refused = false
+	export var refusal as ByteArray
 
 	export static function create(value ValueId, source ByteArray, sourceValue ValueId, sourceIsMutable bool, destination ByteArray, line LineNumber, column ColumnNumber, token ElementIndex) returns MoveSite
-		return Self{value: value, source: source, sourceValue: sourceValue, sourceIsMutable: sourceIsMutable, destination: destination, line: line, column: column, token: token}
+		return Self{value: value, source: source, sourceValue: sourceValue, sourceIsMutable: sourceIsMutable, destination: destination, line: line, column: column, token: token, refusal: ByteArray.create()}
 	end 'create'
 
 	// The first read of the source after this door, and no later one.
@@ -1866,6 +1936,8 @@ export type MoveSite
 		writer.flag(self.readInALaterIteration)
 		writer.unsigned(self.readLine as CacheUnsigned)
 		writer.unsigned(self.readColumn as CacheUnsigned)
+		writer.flag(self.refused)
+		writer.bytes(self.refusal)
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns MoveSite throws LibraryCacheDamage
@@ -1882,12 +1954,14 @@ export type MoveSite
 		let f_readInALaterIteration = try reader.flag()
 		let f_readLine = (try reader.unsigned()) as LineNumber
 		let f_readColumn = (try reader.unsigned()) as ColumnNumber
+		let f_refused = try reader.flag()
+		let f_refusal = try reader.bytes()
 
-		return Self{value: f_value, source: f_source, sourceValue: f_sourceValue, sourceIsMutable: f_sourceIsMutable, destination: f_destination, line: f_line, column: f_column, token: f_token, destinationKind: f_destinationKind, readAfter: f_readAfter, readInALaterIteration: f_readInALaterIteration, readLine: f_readLine, readColumn: f_readColumn}
+		return Self{value: f_value, source: f_source, sourceValue: f_sourceValue, sourceIsMutable: f_sourceIsMutable, destination: f_destination, line: f_line, column: f_column, token: f_token, destinationKind: f_destinationKind, readAfter: f_readAfter, readInALaterIteration: f_readInALaterIteration, readLine: f_readLine, readColumn: f_readColumn, refused: f_refused, refusal: f_refusal}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize104
-		return sizeof(MoveSite) as CacheSize104
+	static function cacheLayoutBytes() returns CacheSize120
+		return sizeof(MoveSite) as CacheSize120
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -2106,25 +2180,39 @@ export type LetReads
 	// @generated library-cache end
 end 'LetReads'
 
-// Where each call of a body ends (`Parser.noteCallToken`), in the order the calls were emitted, so a later call at
-// one position replaces an earlier one in `byPosition` exactly as the map it builds would have.
+// Where each call of a body ends and the position it starts at (`Parser.noteCallToken`), in the
+// order the calls were emitted, so a later call at one position replaces an earlier one in
+// `byPosition` exactly as the map it builds would have.
 export type CallTokenColumns
 	export var positions as PositionKeyArray
 	export var tokens as TokenIndexArray
+	export var starts as PositionKeyArray
 
 	export static function create() returns CallTokenColumns
-		return Self{positions: PositionKeyArray.create(), tokens: TokenIndexArray.create()}
+		return Self{positions: PositionKeyArray.create(), tokens: TokenIndexArray.create(), starts: PositionKeyArray.create()}
 	end 'create'
 
-	export function record(position PositionKey, token ElementIndex)
+	export function record(position PositionKey, token ElementIndex, start PositionKey)
 		self.positions.push(position)
 		self.tokens.push(token)
+		self.starts.push(start)
 	end 'record'
 
 	export function clear()
 		self.positions.clear()
 		self.tokens.clear()
+		self.starts.clear()
 	end 'clear'
+
+	export function startsByPosition() returns StartByPosition
+		var byPosition = StartByPosition.create()
+
+		for i in 0 upto self.positions.count() 'eachCall'
+			byPosition.upsert(try self.positions.get(i) otherwise panic("CallTokenColumns.startsByPosition: positions.get OOB at {i}"), value: try self.starts.get(i) otherwise panic("CallTokenColumns.startsByPosition: starts.get OOB at {i} — a call pushes all three columns"))
+		end 'eachCall'
+
+		return byPosition
+	end 'startsByPosition'
 
 	export function byPosition() returns TokenByPosition
 		var byPosition = TokenByPosition.create()
@@ -2140,17 +2228,19 @@ export type CallTokenColumns
 	function cacheWrite(writer LibraryCacheWriter)
 		cacheWritePositionKeyArray(writer, value: self.positions)
 		cacheWriteTokenIndexArray(writer, value: self.tokens)
+		cacheWritePositionKeyArray(writer, value: self.starts)
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns CallTokenColumns throws LibraryCacheDamage
 		let f_positions = try cacheReadPositionKeyArray(reader)
 		let f_tokens = try cacheReadTokenIndexArray(reader)
+		let f_starts = try cacheReadPositionKeyArray(reader)
 
-		return Self{positions: f_positions, tokens: f_tokens}
+		return Self{positions: f_positions, tokens: f_tokens, starts: f_starts}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize16
-		return sizeof(CallTokenColumns) as CacheSize16
+	static function cacheLayoutBytes() returns CacheSize24
+		return sizeof(CallTokenColumns) as CacheSize24
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -2160,41 +2250,36 @@ end 'CallTokenColumns'
 export type ModuleLetReads
 	export var values as ValueIdArray
 	export var names as NameRoster
-	export var images as BoolArray
 
 	export static function create() returns ModuleLetReads
-		return Self{values: ValueIdArray.create(), names: NameRoster.create(), images: BoolArray.create()}
+		return Self{values: ValueIdArray.create(), names: NameRoster.create()}
 	end 'create'
 
-	export function record(value ValueId, name ByteArray, image bool)
+	export function record(value ValueId, name ByteArray)
 		self.values.push(value)
 		self.names.push(name)
-		self.images.push(image)
 	end 'record'
 
 	export function clear()
 		self.values.clear()
 		self.names.clear()
-		self.images.clear()
 	end 'clear'
 
 	// @generated library-cache begin
 	function cacheWrite(writer LibraryCacheWriter)
 		cacheWriteValueIdArray(writer, value: self.values)
 		cacheWriteNameRoster(writer, value: self.names)
-		cacheWriteBoolArray(writer, value: self.images)
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns ModuleLetReads throws LibraryCacheDamage
 		let f_values = try cacheReadValueIdArray(reader)
 		let f_names = try cacheReadNameRoster(reader)
-		let f_images = try cacheReadBoolArray(reader)
 
-		return Self{values: f_values, names: f_names, images: f_images}
+		return Self{values: f_values, names: f_names}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize24
-		return sizeof(ModuleLetReads) as CacheSize24
+	static function cacheLayoutBytes() returns CacheSize16
+		return sizeof(ModuleLetReads) as CacheSize16
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -2310,21 +2395,27 @@ export type DeferredReceiverWrites
 	// @generated library-cache end
 end 'DeferredReceiverWrites'
 
-// ⭐ **WHAT A BODY FILES THAT IS ASKED ONLY OF A BODY WITH SOMETHING TO GUARD.** `StorageProvenance` reads these of
-// a function only once it holds an immutable name or an E3077 candidate — or, for `receiverWrites` and
-// `nameBindSites`, once a parameter of it may hold a record, whose summary is traced from them. The parser keeps
-// one of these for the body it is parsing, in storage it reuses from body to body, and files it at the body's
-// `end` (`IrFunction.fileTracedProvenance`, `fileGuardedProvenance`): a body neither is asked of allocates nothing
-// for any of it. `moduleLets` is the exception, filed whole as immutable names (`Parser.publishExistentialInstances`).
-// Every column starts as a shared empty and is replaced the first time it is written, and a column filed is handed
-// over whole, so the next body starts that one empty again.
+// ⭐ **WHAT A BODY FILES THAT IS ASKED ONLY OF A BODY WITH SOMETHING TO GUARD.** `StorageProvenance`
+// reads these of a function only once it has something to guard (`Parser.fileDeferredProvenance`
+// decides) — or, for `receiverWrites` and `nameBindSites`, once a parameter of it may hold a
+// record, whose summary is traced from them, and for `calls` alone, once it hands a record to a
+// call. The parser keeps one of these for the body it is parsing, in storage it reuses from body to
+// body, and files it at the body's `end` (`IrFunction.fileTracedProvenance`,
+// `fileGuardedProvenance`, `fileCallProvenance`): a body none is asked of allocates nothing for any
+// of it. `moduleLets` is the exception, filed whole as immutable names
+// (`Parser.publishExistentialInstances`). Every column starts as a shared empty and is replaced the
+// first time it is written, and a column filed is handed over whole, so the next body starts that
+// one empty again.
 export type DeferredProvenance
 	export var calls as CallTokenColumns
 	export var moduleLets as ModuleLetReads
 	export var loops as TokenSpans
 	export var fieldWrites as ValueIdArray
 	export var writableValues as ValueIdArray
+	export var writableNames as NameRoster
+	export var writableInfos as VarInfoArray
 	export var moveSites as MoveSiteArray
+	export var writeRefusals as WriteRefusalSiteArray
 	export var mutableBindingSites as StorageSiteArray
 	export var nameBindSites as StorageSiteArray
 	export var writeThroughs as DeferredWriteThroughs
@@ -2346,7 +2437,7 @@ export type DeferredProvenance
 	export var empty as ProvenanceColumns
 
 	export static function create(empty ProvenanceColumns) returns DeferredProvenance
-		return Self{letReads: empty.letReads, letCaptures: empty.letReads, exclusiveArms: empty.tokenSpans, calls: empty.calls, moduleLets: empty.moduleLets, loops: empty.tokenSpans, fieldWrites: empty.values, writableValues: empty.values, moveSites: empty.moveSites, mutableBindingSites: empty.storageSites, nameBindSites: empty.storageSites, writeThroughs: empty.writeThroughs, receiverWrites: empty.deferredReceiverWrites, handsARecordToACall: false, readsASharedView: false, empty: empty}
+		return Self{letReads: empty.letReads, letCaptures: empty.letReads, exclusiveArms: empty.tokenSpans, calls: empty.calls, moduleLets: empty.moduleLets, loops: empty.tokenSpans, fieldWrites: empty.values, writableValues: empty.values, writableNames: empty.names, writableInfos: empty.varInfos, moveSites: empty.moveSites, writeRefusals: empty.writeRefusals, mutableBindingSites: empty.storageSites, nameBindSites: empty.storageSites, writeThroughs: empty.writeThroughs, receiverWrites: empty.deferredReceiverWrites, handsARecordToACall: false, readsASharedView: false, empty: empty}
 	end 'create'
 
 	// Empty for the next body, keeping what each column this parser owns has grown to. A shared empty one is left
@@ -2372,9 +2463,21 @@ export type DeferredProvenance
 			self.writableValues.clear()
 		end 'ownsWritableValues'
 
+		if self.writableNames is not self.empty.names 'ownsWritableNames'
+			self.writableNames.clear()
+		end 'ownsWritableNames'
+
+		if self.writableInfos is not self.empty.varInfos 'ownsWritableInfos'
+			self.writableInfos.clear()
+		end 'ownsWritableInfos'
+
 		if self.moveSites is not self.empty.moveSites 'ownsMoveSites'
 			self.moveSites.clear()
 		end 'ownsMoveSites'
+
+		if self.writeRefusals is not self.empty.writeRefusals 'ownsWriteRefusals'
+			self.writeRefusals.clear()
+		end 'ownsWriteRefusals'
 
 		if self.mutableBindingSites is not self.empty.storageSites 'ownsMutableBindingSites'
 			self.mutableBindingSites.clear()
@@ -2433,20 +2536,20 @@ export type DeferredProvenance
 		self.exclusiveArms.record(elseStart, finish: elseEnd)
 	end 'noteExclusiveArms'
 
-	export function noteCall(position PositionKey, token ElementIndex)
+	export function noteCall(position PositionKey, token ElementIndex, start PositionKey)
 		if self.calls is self.empty.calls 'firstCall'
 			self.calls = CallTokenColumns.create()
 		end 'firstCall'
 
-		self.calls.record(position, token: token)
+		self.calls.record(position, token: token, start: start)
 	end 'noteCall'
 
-	export function noteModuleLetRead(value ValueId, name ByteArray, image bool)
+	export function noteModuleLetRead(value ValueId, name ByteArray)
 		if self.moduleLets is self.empty.moduleLets 'firstRead'
 			self.moduleLets = ModuleLetReads.create()
 		end 'firstRead'
 
-		self.moduleLets.record(value, name: name, image: image)
+		self.moduleLets.record(value, name: name)
 	end 'noteModuleLetRead'
 
 	export function noteLoop(start ElementIndex, finish ElementIndex)
@@ -2466,12 +2569,16 @@ export type DeferredProvenance
 		self.fieldWrites.push(target)
 	end 'noteFieldWrite'
 
-	export function noteWritableValue(value ValueId)
+	export function noteWritableValue(value ValueId, name ByteArray, info VarInfo)
 		if self.writableValues is self.empty.values 'firstValue'
 			self.writableValues = ValueIdArray.create()
+			self.writableNames = NameRoster.create()
+			self.writableInfos = VarInfoArray.create()
 		end 'firstValue'
 
 		self.writableValues.push(value)
+		self.writableNames.push(name)
+		self.writableInfos.push(info)
 	end 'noteWritableValue'
 
 	export function noteMoveSite(site MoveSite)
@@ -2481,6 +2588,20 @@ export type DeferredProvenance
 
 		self.moveSites.push(site)
 	end 'noteMoveSite'
+
+	export function refuseMoveSite(index ElementIndex, refusal ByteArray)
+		var site = try self.moveSites.get(index) otherwise panic("ProvenanceSites.refuseMoveSite: no move site {index} is filed to refuse")
+		site.refused = true
+		site.refusal = refusal
+	end 'refuseMoveSite'
+
+	export function noteWriteRefusal(site WriteRefusalSite)
+		if self.writeRefusals is self.empty.writeRefusals 'firstSite'
+			self.writeRefusals = WriteRefusalSiteArray.create()
+		end 'firstSite'
+
+		self.writeRefusals.push(site)
+	end 'noteWriteRefusal'
 
 	export function noteMutableBindingSite(site StorageSite)
 		if self.mutableBindingSites is self.empty.storageSites 'firstSite'
@@ -2526,13 +2647,17 @@ export type DeferredProvenance
 		end 'someNameBind'
 	end 'fileTracedInto'
 
-	// Everything else but the write-throughs, which the parser spells, into the `sites` of a body with something to
-	// guard.
-	export function fileGuardedInto(sites ProvenanceSites)
+	export function fileCallsInto(sites ProvenanceSites)
 		if self.calls.positions.count() > 0 'someCall'
 			sites.calls = self.calls
 			self.calls = self.empty.calls
 		end 'someCall'
+	end 'fileCallsInto'
+
+	// Everything else but the write-throughs, which the parser spells, into the `sites` of a body with something to
+	// guard.
+	export function fileGuardedInto(sites ProvenanceSites)
+		self.fileCallsInto(sites)
 
 		if self.loops.starts.count() > 0 'someLoop'
 			sites.loops = self.loops
@@ -2561,13 +2686,22 @@ export type DeferredProvenance
 
 		if self.writableValues.count() > 0 'someWritableValue'
 			sites.writableValues = self.writableValues
+			sites.writableNames = self.writableNames
+			sites.writableInfos = self.writableInfos
 			self.writableValues = self.empty.values
+			self.writableNames = self.empty.names
+			self.writableInfos = self.empty.varInfos
 		end 'someWritableValue'
 
 		if self.moveSites.count() > 0 'someMoveSite'
 			sites.moveSites = self.moveSites
 			self.moveSites = self.empty.moveSites
 		end 'someMoveSite'
+
+		if self.writeRefusals.count() > 0 'someWriteRefusal'
+			sites.writeRefusals = self.writeRefusals
+			self.writeRefusals = self.empty.writeRefusals
+		end 'someWriteRefusal'
 
 		if self.mutableBindingSites.count() > 0 'someMutableBinding'
 			sites.mutableBindingSites = self.mutableBindingSites
@@ -2588,7 +2722,10 @@ export type ProvenanceSites
 	export var receiverWrites as ReceiverWriteSiteArray
 	export var fieldWrites as ValueIdArray
 	export var moveSites as MoveSiteArray
+	export var writeRefusals as WriteRefusalSiteArray
 	export var writableValues as ValueIdArray
+	export var writableNames as NameRoster
+	export var writableInfos as VarInfoArray
 	export var loops as TokenSpans
 	export var calls as CallTokenColumns
 	export var letReads as LetReads
@@ -2598,15 +2735,15 @@ export type ProvenanceSites
 	export var empty as ProvenanceColumns
 
 	export static function create(empty ProvenanceColumns) returns ProvenanceSites
-		return Self{letReads: empty.letReads, letCaptures: empty.letReads, exclusiveArms: empty.tokenSpans, immutableBindings: empty.immutableBindings, mutableBindingSites: empty.storageSites, nameBindSites: empty.storageSites, writeThroughSites: empty.fieldWriteSites, receiverWrites: empty.receiverWrites, fieldWrites: empty.values, moveSites: empty.moveSites, writableValues: empty.values, loops: empty.tokenSpans, calls: empty.calls, varCandidates: FiledVarCandidates.none, empty: empty}
+		return Self{letReads: empty.letReads, letCaptures: empty.letReads, exclusiveArms: empty.tokenSpans, immutableBindings: empty.immutableBindings, mutableBindingSites: empty.storageSites, nameBindSites: empty.storageSites, writeThroughSites: empty.fieldWriteSites, receiverWrites: empty.receiverWrites, fieldWrites: empty.values, moveSites: empty.moveSites, writeRefusals: empty.writeRefusals, writableValues: empty.values, writableNames: empty.names, writableInfos: empty.varInfos, loops: empty.tokenSpans, calls: empty.calls, varCandidates: FiledVarCandidates.none, empty: empty}
 	end 'create'
 
-	export function recordImmutableName(value ValueId, name ByteArray, moduleLet bool, image bool, borrowsIt bool, declToken ElementIndex, info VarInfo)
+	export function recordImmutableName(value ValueId, name ByteArray, moduleLet bool, declToken ElementIndex, info VarInfo)
 		if self.immutableBindings is self.empty.immutableBindings 'firstName'
 			self.immutableBindings = ImmutableBindings.create()
 		end 'firstName'
 
-		self.immutableBindings.record(value, name: name, moduleLet: moduleLet, image: image, borrowsIt: borrowsIt, declToken: declToken, info: info)
+		self.immutableBindings.record(value, name: name, moduleLet: moduleLet, declToken: declToken, info: info)
 	end 'recordImmutableName'
 
 	export function renumberBindingTypeIds(remap TypeIdRemap, epoch RenumberingEpoch)
@@ -2631,7 +2768,10 @@ export type ProvenanceSites
 		cacheWriteReceiverWriteSiteArray(writer, value: self.receiverWrites)
 		cacheWriteValueIdArray(writer, value: self.fieldWrites)
 		cacheWriteMoveSiteArray(writer, value: self.moveSites)
+		cacheWriteWriteRefusalSiteArray(writer, value: self.writeRefusals)
 		cacheWriteValueIdArray(writer, value: self.writableValues)
+		cacheWriteNameRoster(writer, value: self.writableNames)
+		cacheWriteVarInfoArray(writer, value: self.writableInfos)
 		self.loops.cacheWrite(writer)
 		self.calls.cacheWrite(writer)
 		self.letReads.cacheWrite(writer)
@@ -2649,7 +2789,10 @@ export type ProvenanceSites
 		let f_receiverWrites = try cacheReadReceiverWriteSiteArray(reader)
 		let f_fieldWrites = try cacheReadValueIdArray(reader)
 		let f_moveSites = try cacheReadMoveSiteArray(reader)
+		let f_writeRefusals = try cacheReadWriteRefusalSiteArray(reader)
 		let f_writableValues = try cacheReadValueIdArray(reader)
+		let f_writableNames = try cacheReadNameRoster(reader)
+		let f_writableInfos = try cacheReadVarInfoArray(reader)
 		let f_loops = try TokenSpans.cacheRead(reader)
 		let f_calls = try CallTokenColumns.cacheRead(reader)
 		let f_letReads = try LetReads.cacheRead(reader)
@@ -2658,11 +2801,11 @@ export type ProvenanceSites
 		let f_varCandidates = try cacheReadFiledVarCandidates(reader)
 		let f_empty = try ProvenanceColumns.cacheRead(reader)
 
-		return Self{immutableBindings: f_immutableBindings, mutableBindingSites: f_mutableBindingSites, nameBindSites: f_nameBindSites, writeThroughSites: f_writeThroughSites, receiverWrites: f_receiverWrites, fieldWrites: f_fieldWrites, moveSites: f_moveSites, writableValues: f_writableValues, loops: f_loops, calls: f_calls, letReads: f_letReads, letCaptures: f_letCaptures, exclusiveArms: f_exclusiveArms, varCandidates: f_varCandidates, empty: f_empty}
+		return Self{immutableBindings: f_immutableBindings, mutableBindingSites: f_mutableBindingSites, nameBindSites: f_nameBindSites, writeThroughSites: f_writeThroughSites, receiverWrites: f_receiverWrites, fieldWrites: f_fieldWrites, moveSites: f_moveSites, writeRefusals: f_writeRefusals, writableValues: f_writableValues, writableNames: f_writableNames, writableInfos: f_writableInfos, loops: f_loops, calls: f_calls, letReads: f_letReads, letCaptures: f_letCaptures, exclusiveArms: f_exclusiveArms, varCandidates: f_varCandidates, empty: f_empty}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize120
-		return sizeof(ProvenanceSites) as CacheSize120
+	static function cacheLayoutBytes() returns CacheSize144
+		return sizeof(ProvenanceSites) as CacheSize144
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -2724,15 +2867,18 @@ export type ProvenanceColumns
 	export var receiverWrites as ReceiverWriteSiteArray
 	export var values as ValueIdArray
 	export var moveSites as MoveSiteArray
+	export var writeRefusals as WriteRefusalSiteArray
 	export var tokenSpans as TokenSpans
 	export var letReads as LetReads
 	export var calls as CallTokenColumns
 	export var moduleLets as ModuleLetReads
 	export var writeThroughs as DeferredWriteThroughs
 	export var deferredReceiverWrites as DeferredReceiverWrites
+	export var names as NameRoster
+	export var varInfos as VarInfoArray
 
 	export static function create() returns ProvenanceColumns
-		return Self{immutableBindings: ImmutableBindings.create(), storageSites: StorageSiteArray.create(), fieldWriteSites: FieldWriteSiteArray.create(), receiverWrites: ReceiverWriteSiteArray.create(), values: ValueIdArray.create(), moveSites: MoveSiteArray.create(), tokenSpans: TokenSpans.create(), letReads: LetReads.create(), calls: CallTokenColumns.create(), moduleLets: ModuleLetReads.create(), writeThroughs: DeferredWriteThroughs.create(), deferredReceiverWrites: DeferredReceiverWrites.create()}
+		return Self{immutableBindings: ImmutableBindings.create(), storageSites: StorageSiteArray.create(), fieldWriteSites: FieldWriteSiteArray.create(), receiverWrites: ReceiverWriteSiteArray.create(), values: ValueIdArray.create(), names: NameRoster.create(), varInfos: VarInfoArray.create(), moveSites: MoveSiteArray.create(), writeRefusals: WriteRefusalSiteArray.create(), tokenSpans: TokenSpans.create(), letReads: LetReads.create(), calls: CallTokenColumns.create(), moduleLets: ModuleLetReads.create(), writeThroughs: DeferredWriteThroughs.create(), deferredReceiverWrites: DeferredReceiverWrites.create()}
 	end 'create'
 
 	// @generated library-cache begin
@@ -2743,12 +2889,15 @@ export type ProvenanceColumns
 		cacheWriteReceiverWriteSiteArray(writer, value: self.receiverWrites)
 		cacheWriteValueIdArray(writer, value: self.values)
 		cacheWriteMoveSiteArray(writer, value: self.moveSites)
+		cacheWriteWriteRefusalSiteArray(writer, value: self.writeRefusals)
 		self.tokenSpans.cacheWrite(writer)
 		self.letReads.cacheWrite(writer)
 		self.calls.cacheWrite(writer)
 		self.moduleLets.cacheWrite(writer)
 		self.writeThroughs.cacheWrite(writer)
 		self.deferredReceiverWrites.cacheWrite(writer)
+		cacheWriteNameRoster(writer, value: self.names)
+		cacheWriteVarInfoArray(writer, value: self.varInfos)
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns ProvenanceColumns throws LibraryCacheDamage
@@ -2758,18 +2907,21 @@ export type ProvenanceColumns
 		let f_receiverWrites = try cacheReadReceiverWriteSiteArray(reader)
 		let f_values = try cacheReadValueIdArray(reader)
 		let f_moveSites = try cacheReadMoveSiteArray(reader)
+		let f_writeRefusals = try cacheReadWriteRefusalSiteArray(reader)
 		let f_tokenSpans = try TokenSpans.cacheRead(reader)
 		let f_letReads = try LetReads.cacheRead(reader)
 		let f_calls = try CallTokenColumns.cacheRead(reader)
 		let f_moduleLets = try ModuleLetReads.cacheRead(reader)
 		let f_writeThroughs = try DeferredWriteThroughs.cacheRead(reader)
 		let f_deferredReceiverWrites = try DeferredReceiverWrites.cacheRead(reader)
+		let f_names = try cacheReadNameRoster(reader)
+		let f_varInfos = try cacheReadVarInfoArray(reader)
 
-		return Self{immutableBindings: f_immutableBindings, storageSites: f_storageSites, fieldWriteSites: f_fieldWriteSites, receiverWrites: f_receiverWrites, values: f_values, moveSites: f_moveSites, tokenSpans: f_tokenSpans, letReads: f_letReads, calls: f_calls, moduleLets: f_moduleLets, writeThroughs: f_writeThroughs, deferredReceiverWrites: f_deferredReceiverWrites}
+		return Self{immutableBindings: f_immutableBindings, storageSites: f_storageSites, fieldWriteSites: f_fieldWriteSites, receiverWrites: f_receiverWrites, values: f_values, moveSites: f_moveSites, writeRefusals: f_writeRefusals, tokenSpans: f_tokenSpans, letReads: f_letReads, calls: f_calls, moduleLets: f_moduleLets, writeThroughs: f_writeThroughs, deferredReceiverWrites: f_deferredReceiverWrites, names: f_names, varInfos: f_varInfos}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize96
-		return sizeof(ProvenanceColumns) as CacheSize96
+	static function cacheLayoutBytes() returns CacheSize120
+		return sizeof(ProvenanceColumns) as CacheSize120
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -2798,7 +2950,7 @@ export type FunctionPlaceholders
 	export var noLetCastReads as LetCastReadArray
 
 	export static function create() returns FunctionPlaceholders
-		let provenance = ProvenanceColumns.create()
+		var provenance = ProvenanceColumns.create()
 		return Self{provenance: provenance, noSites: ProvenanceSites.create(provenance), noFiledProvenance: FiledProvenance.none, paramGuards: RangeCheckParamGuardArray.create(), inlineSites: InlineSiteArray.create(), mintedSole: BoolArray.create(), noArgumentOverlaps: ArgumentOverlapSiteArray.create(), noLiteralCastArguments: LiteralCastMap.create(), noLetCastReads: LetCastReadArray.create()}
 	end 'create'
 end 'FunctionPlaceholders'
@@ -2870,6 +3022,10 @@ export function maskWithoutParam(mask ParamPositionMask, param ParamCount) retur
 	return mask xor (mask and maskWithParam(NoParamPositions, param: param))
 end 'maskWithoutParam'
 
+export function maskWithout(mask ParamPositionMask, removed ParamPositionMask) returns ParamPositionMask
+	return mask xor (mask and removed)
+end 'maskWithout'
+
 export union ClosureCaptureSource
 	none
 	envSlot(offset ByteOffset)
@@ -2932,8 +3088,8 @@ export type IrFunction
 	export var nextBlockId as BlockId
 
 	// Line and column of the function-name token; zero for synthesized functions.
-	export var nameLine as LineNumber
-	export var nameColumn as ColumnNumber
+	export let nameLine as LineNumber
+	export let nameColumn as ColumnNumber
 	export var closeLine as LineNumber
 	export var closeColumn as ColumnNumber
 
@@ -3144,7 +3300,7 @@ export type IrFunction
 	// --- Backend frame-size scalars (zero until the relevant pass runs) ---
 	// Total number of slot-addressed variables used by ISel; spill slots sit
 	// below the variable area.
-	export var varSlotCount as VarSlot
+	export let varSlotCount as VarSlot
 
 	// Running tally of bytes the function needs on the stack (locals + spills +
 	// callee-save area); the cold-spill splitter sets it to its spill-slot bytes,
@@ -3694,16 +3850,16 @@ export type IrFunction
 		self.debugLocals.push(local)
 	end 'recordSplicedLocal'
 
-	export function recordImmutableBinding(value ValueId, bindingName ByteArray, borrows bool, info VarInfo, declToken ElementIndex, empty ProvenanceColumns)
+	export function recordImmutableBinding(value ValueId, bindingName ByteArray, info VarInfo, declToken ElementIndex, empty ProvenanceColumns)
 		var sites = self.provenanceSitesForWrite(empty)
-		sites.recordImmutableName(value, name: bindingName, moduleLet: false, image: false, borrowsIt: borrows, declToken: declToken, info: info)
+		sites.recordImmutableName(value, name: bindingName, moduleLet: false, declToken: declToken, info: info)
 	end 'recordImmutableBinding'
 
-	// A value the body read out of a module-level `let`, which is immutable storage wherever it is read. `image`: the
-	// `let` is image data, which a store copies rather than shares.
-	export function recordModuleLetRead(value ValueId, globalName ByteArray, image bool, empty ProvenanceColumns)
+	// A value the body read out of a module-level `let`, which is immutable storage wherever it is
+	// read.
+	export function recordModuleLetRead(value ValueId, globalName ByteArray, empty ProvenanceColumns)
 		var sites = self.provenanceSitesForWrite(empty)
-		sites.recordImmutableName(value, name: globalName, moduleLet: true, image: image, borrowsIt: false, declToken: 0, info: VarInfo.create(globalName, varType: MaxonType.unresolved, mutable: false, slot: 0))
+		sites.recordImmutableName(value, name: globalName, moduleLet: true, declToken: 0, info: VarInfo.create(globalName, varType: MaxonType.unresolved, kind: BindingKind.let, slot: 0))
 	end 'recordModuleLetRead'
 
 	// Every E3077 candidate of the body, the first of which the parser reported as `reported`.
@@ -3748,6 +3904,11 @@ export type IrFunction
 		var sites = self.provenanceSitesForWrite(deferred.empty)
 		deferred.fileGuardedInto(sites)
 	end 'fileGuardedProvenance'
+
+	export function fileCallProvenance(deferred DeferredProvenance)
+		var sites = self.provenanceSitesForWrite(deferred.empty)
+		deferred.fileCallsInto(sites)
+	end 'fileCallProvenance'
 
 	export function noteClosureStoreSite(site ClosureStoreSite)
 		if self.closureStoreSites.isEmpty() 'firstSite'

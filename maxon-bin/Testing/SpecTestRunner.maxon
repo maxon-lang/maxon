@@ -944,11 +944,11 @@ export function runOneSpec(specDir FilePath, specName String, runs SpecRuns, fil
 	end 'eachCompile'
 
 	var firstPass = executeRuns(prepared, batches: batch.batches, specName: specName, tempDir: tempDir, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget)
-	let performed = withBatchedFailuresDiagnosed(firstPass, prepared: prepared, programCount: batch.batches.count(), tests: tests, actions: actions, specName: specName, specDirName: specDirName, tempDir: tempDir, exeExtension: exeExtension, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
+	view performed = withBatchedFailuresDiagnosed(firstPass, prepared: prepared, programCount: batch.batches.count(), tests: tests, actions: actions, specName: specName, specDirName: specDirName, tempDir: tempDir, exeExtension: exeExtension, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
 
 	for (iter, test) in tests.withIterator() 'eachVerdict'
-		let step = try prepared.get(iter.index()) otherwise panic("runOneSpec: {prepared.count()} prepared tests for {tests.count()} selected — one is pushed per selected test, in one loop")
-		let observation = try performed.observations.get(iter.index()) otherwise panic("runOneSpec: {performed.observations.count()} run observations for {prepared.count()} prepared tests — `executeRuns` answers one per prepared test, including the ones that needed no execution")
+		view step = try prepared.get(iter.index()) otherwise panic("runOneSpec: {prepared.count()} prepared tests for {tests.count()} selected — one is pushed per selected test, in one loop")
+		view observation = try performed.observations.get(iter.index()) otherwise panic("runOneSpec: {performed.observations.count()} run observations for {prepared.count()} prepared tests — `executeRuns` answers one per prepared test, including the ones that needed no execution")
 		let settled = match step 'phase'
 			finished(done) gives done
 			awaiting(pending) gives finishPendingRun(pending, observation: observation, effectiveTarget: effectiveTarget)
@@ -1042,7 +1042,7 @@ function withBatchedFailuresDiagnosed(performed RunsPerformed, prepared Prepared
 	for at in failed 'eachAffected'
 		let test = try tests.get(at) otherwise panic("withBatchedFailuresDiagnosed: test {at} is past the {tests.count()} the spec selected")
 		let action = irActionAt(actions, index: at)
-		let step = prepareOneTest(test, specName: specName, specDirName: specDirName, tempDir: tempDir, exeExtension: exeExtension, action: action, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
+		var step = prepareOneTest(test, specName: specName, specDirName: specDirName, tempDir: tempDir, exeExtension: exeExtension, action: action, effectiveTarget: effectiveTarget, fileMemos: fileMemos)
 		again.push(step)
 		try prepared.set(at, value: step) otherwise panic("withBatchedFailuresDiagnosed: prepared test {at} is past the {prepared.count()} the spec prepared")
 	end 'eachAffected'
@@ -2378,7 +2378,7 @@ function compileOneTest(test SpecTest, staged StagedTest, exeBase FilePath, exeP
 	// no printer for a name to reach. An `<!-- AsyncTrace -->` case and a capture case each ask for
 	// their producer per CASE, so no other case pays for it and an untraced program is byte-for-byte
 	// what it was.
-	let product = try compileToProduct(staged.buildTargets, target: effectiveTarget, outputOverride: StatedText.stated(exeBase.toString()), emitIr: emitIr, runtimeIrNames: test.runtimeNames, asyncTrace: test.asyncTrace, debugStream: traceCaptureMode(test), debugInfo: test.debugInfo, stdlibDirOverride: StatedText.stated(staged.stdlibDir), runtimeDirOverride: StatedText.stated(staged.runtimeDir), session: session) otherwise (e) 'compileFailed'
+	let product = try compileToProduct(staged.buildTargets, target: effectiveTarget, outputOverride: StatedText.stated(exeBase.toString()), emitIr: emitIr, runtimeIrNames: test.runtimeNames.clone(), asyncTrace: test.asyncTrace, debugStream: traceCaptureMode(test), debugInfo: test.debugInfo, stdlibDirOverride: StatedText.stated(staged.stdlibDir), runtimeDirOverride: StatedText.stated(staged.runtimeDir), session: session) otherwise (e) 'compileFailed'
 		reportCompileError(e, sink: session.diagnostics)
 		return CompiledTest.create(test, staged: staged, compile: CompileAnswer.create(compileVerdictOf(e), diagnostics: session.diagnostics.text()), cpu: CompileCpu.unreported, irText: StatedText.unstated, exePath: exePath)
 	end 'compileFailed'
@@ -2527,7 +2527,7 @@ function spliceRemintedBlocks(specPath FilePath, parsedText String, reminted Blo
 		panic("SpecTestRunner: {specPath.toString()} changed between this run's parse of it and the splice of {reminted.count()} re-minted block(s). Every block is written at the line the parse found it on, so writing now would land each one at a line that no longer holds it. Re-run with {UpdateRequiredFlag} once the file stops changing")
 	end 'changedSinceTheParse'
 
-	let lines = specLinesOf(original)
+	var lines = specLinesOf(original)
 	let lineTail = CarriageReturn if original.contains("{CarriageReturn}{LineSeparator}") else ""
 
 	reminted.sort(function(left BlockRemint, right BlockRemint) gives right.slice.blockStart.compare(left.slice.blockStart))
@@ -3846,7 +3846,7 @@ function spawnGuestSuite(guestExe FilePath, specDir FilePath, filterPatterns Fil
 		at(path) then argv.push("{ResultJsonFlagPrefix}{path.toString()}")
 	end 'documentAsked'
 
-	var config = Configuration.create(launch.exe)
+	var config = Configuration.create(launch.exe.clone())
 	config.arguments = argv
 	config.standardOutput = OutputDestination.inherit
 	config.standardError = OutputDestination.inherit
@@ -4066,7 +4066,7 @@ function executeRuns(prepared PreparedTestArray, batches PreparedBatchArray, spe
 		firstRound.push(selectedExecution(program, indices: program.allCases(), key: program.exePath.filename(), label: "{specName}: {program.members.count()} cases in one program"))
 	end 'eachBatchToStart'
 
-	let first = lane.perform(firstRound)
+	var first = lane.perform(firstRound)
 	var observations = notRequiredFor(prepared)
 	var performed = soloPerformed(first, solo: solo, observations: observations)
 
@@ -4096,7 +4096,7 @@ function soloPerformed(first RunObservationArray, solo SoloRuns, observations Ru
 	var alone = 0 as TestTally
 
 	for (iter, at) in solo.preparedAt.withIterator() 'eachSolo'
-		let observation = observationAt(first, index: iter.index())
+		var observation = observationAt(first, index: iter.index())
 		try observations.set(at, value: observation) otherwise panic("SpecTestRunner: solo execution {iter.index()} belongs to prepared test {at}, past the {observations.count()} the spec prepared")
 
 		if wasExecuted(observation) 'ranHere'
@@ -4239,7 +4239,7 @@ function spawnExecution(execution Execution, runWorkingDir FilePath, effectiveTa
 	// ⭐ A TEST BINARY'S WORKING DIRECTORY IS PART OF WHAT ITS SPEC ASSERTS — `directory.md` reaches
 	// `../bin` through it — so it is stated rather than inherited from whoever launched the suite. See
 	// `RunWorkingSubdirName`.
-	let spawned = try runProcess(runCommand.exe, argv: runCommand.argv, workingDirectory: runWorkingDir, environment: runEnvironmentFor(execution.procs, preempt: execution.preempt), standardInput: runStdinFor(execution.stdin)) otherwise (e) 'runSpawnFailed'
+	let spawned = try runProcess(runCommand.exe.clone(), argv: runCommand.argv.clone(), workingDirectory: runWorkingDir, environment: runEnvironmentFor(execution.procs, preempt: execution.preempt), standardInput: runStdinFor(execution.stdin)) otherwise (e) 'runSpawnFailed'
 		return RunObservation.failed(runFailureReason(e))
 	end 'runSpawnFailed'
 

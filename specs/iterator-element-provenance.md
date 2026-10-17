@@ -272,8 +272,8 @@ function main() returns ExitCode
 	var d = it.current()
 	d.n = d.n + 1000
 
-	let first = try items.get(0) otherwise return 1
-	let second = try items.get(1) otherwise return 1
+	view first = try items.get(0) otherwise return 1
+	view second = try items.get(1) otherwise return 1
 	return (first.n + second.n - 1000 - 100) as ExitCode
 end 'main'
 ```

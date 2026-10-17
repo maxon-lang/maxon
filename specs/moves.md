@@ -1088,7 +1088,7 @@ type Holder
 	end 'create'
 
 	function refresh(n Count)
-		let before = self.list
+		view before = self.list
 		var sink = Counts.create()
 
 		for i in 0 upto n 'each'
@@ -1141,4 +1141,42 @@ end 'main'
 ```
 ```stdout
 first padded out long enough to heap allocate 1 0
+```
+
+<!-- test: moves.error.a-var-handed-in-parentheses-to-a-sole-parameter-is-moved -->
+Parentheses around the argument change nothing: `sink((b))` consumes `b` exactly as `sink(b)` does, so reading `b` afterwards is a use of a moved value.
+
+```maxon
+typealias Count = int(0 to 1000)
+typealias Boxes = Array with Box
+typealias Sink = function(b sole Box)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+var kept = Boxes.create()
+
+function stash(b Box)
+	kept.push(b)
+end 'stash'
+
+function feed(sink Sink) returns Count
+	var b = Box.create(1)
+	sink((b))
+	return b.n
+end 'feed'
+
+function main() returns ExitCode
+	let n = feed(stash)
+	print("{n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:23:9: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
 ```

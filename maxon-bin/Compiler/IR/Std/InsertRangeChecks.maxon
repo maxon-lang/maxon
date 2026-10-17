@@ -75,8 +75,8 @@ end 'RangeCheckEdge'
 type RangeBoundCheck
 	export var pred as StdCmpPred
 	export var bound as FullRangeInt
-	export var onTrue as RangeCheckEdge
-	export var unsigned as bool
+	export let onTrue as RangeCheckEdge
+	export let unsigned as bool
 
 	static function create(pred StdCmpPred, bound FullRangeInt) returns RangeBoundCheck
 		return Self{pred: pred, bound: bound, onTrue: RangeCheckEdge.panic, unsigned: false}
@@ -458,7 +458,7 @@ type RangeCheckEmitter
 		probeIntervals(self.module, func: self.func, scratch: scratch)
 
 		for ordinal in 0 upto literalSites.count() 'eachProbe'
-			let site = try literalSites.get(ordinal) otherwise panic("checkLiteralUses: literalSites.get OOB at {ordinal}")
+			view site = try literalSites.get(ordinal) otherwise panic("checkLiteralUses: literalSites.get OOB at {ordinal}")
 			let reached = scratch.probeWasReached(ordinal)
 			let low = scratch.probeLow(ordinal) if reached else i64.min
 			let high = scratch.probeHigh(ordinal) if reached else i64.max
@@ -645,7 +645,7 @@ type RangeCheckEmitter
 		// bumps it, so `[firstMintedId, nextBlockId)` is exactly this guard's blocks with no second list
 		// to keep in step.
 		let firstMintedId = self.func.nextBlockId
-		let ok = self.emitGuardAt(guardSite, operand: self.paramOperand(site), alias: alias, chain: GuardChain.blockChain(entryId), filePath: filePath, line: site.line, column: site.column)
+		view ok = self.emitGuardAt(guardSite, operand: self.paramOperand(site), alias: alias, chain: GuardChain.blockChain(entryId), filePath: filePath, line: site.line, column: site.column)
 
 		if ok.id == headId 'bothBoundsElided'
 			return
@@ -838,7 +838,7 @@ type RangeCheckEmitter
 	// parameter was declared with is the one visible where the FUNCTION was written. The diagnostic's
 	// file stays this function's — see `guardVerdict`.
 	function processArgSite(site RangeCheckArgSite, filePath FilePath)
-		let alias = try self.paramAliasOf(site) otherwise return
+		var alias = try self.paramAliasOf(site) otherwise return
 		self.checkArgAgainstParamRange(site, alias: alias, filePath: filePath)
 	end 'processArgSite'
 
@@ -975,7 +975,7 @@ type RangeCheckEmitter
 	function needsRuntimeGuard(value ValueId, alias RangedTypeAlias, line LineNumber, column ColumnNumber, filePath FilePath) returns bool
 		let isFloat = aliasIsFloat(alias)
 
-		let literals = self.floatConsts if isFloat else self.intConsts
+		view literals = self.floatConsts if isFloat else self.intConsts
 
 		if literals.contains(value) 'literal'
 			let v = literals.constantOf(value)
@@ -1017,7 +1017,7 @@ type RangeCheckEmitter
 		end 'noBoundNeeded'
 
 		self.module.spans.current = sourceSpanOf(self.project, filePath: filePath, line: line, column: column)
-		let ok = self.emitCheckedGuard(site, operand: operand, checks: checks, message: self.rangeCheckMessage(filePath, line: line, alias: alias), chain: chain, isFloat: isFloat, checksBorrow: not isFloat and aliasIsUnsignedFullQuantity(alias))
+		var ok = self.emitCheckedGuard(site, operand: operand, checks: checks, message: self.rangeCheckMessage(filePath, line: line, alias: alias), chain: chain, isFloat: isFloat, checksBorrow: not isFloat and aliasIsUnsignedFullQuantity(alias))
 		self.module.spans.current = NoSpanId
 
 		return ok
@@ -1026,7 +1026,7 @@ type RangeCheckEmitter
 	function emitCheckedGuard(site GuardSite, operand GuardedOperand, checks RangeBoundCheckArray, message ByteArray, chain GuardChain, isFloat bool, checksBorrow bool) returns IrBlock
 		// The split advances the chain inside itself, before `emitPanicBlock`, and that order is
 		// load-bearing — see `extendGuardChain`.
-		let ok = self.splitFor(site, chain: chain)
+		var ok = self.splitFor(site, chain: chain)
 
 		// The dereference goes between the split and the cascade: after the split `site.block` holds
 		// exactly the ops that stood before the site, so the load lands past the `param` ops and
@@ -1034,7 +1034,7 @@ type RangeCheckEmitter
 		// `extendGuardChain`'s "the last block registered is the continuation" invariant holds.
 		let compared = self.comparedValue(operand, head: site.block, isFloat: isFloat)
 		let tested = self.borrowWitnessOf(compared, head: site.block) if checksBorrow else compared
-		let panicBlock = self.emitPanicBlock(message)
+		view panicBlock = self.emitPanicBlock(message)
 		self.emitCascade(site.block, value: tested, checks: checks, panicId: panicBlock.id, okId: ok.id, isFloat: isFloat)
 		return ok
 	end 'emitCheckedGuard'
@@ -1043,7 +1043,7 @@ type RangeCheckEmitter
 	// `(~lhs & rhs) | (~(lhs ^ rhs) & difference)` is that borrow, so the cascade's sign test reads it;
 	// `TypeRules.unsignedSubtractionBorrows` folds the same identity and the two must agree.
 	function borrowWitnessOf(difference ValueId, head IrBlock) returns ValueId
-		let recorded = match self.borrowOperands 'column'
+		view recorded = match self.borrowOperands 'column'
 			unwritten gives sharedNoBorrowOperands
 			entries(byDifference) gives byDifference
 		end 'column'
@@ -1147,7 +1147,7 @@ type RangeCheckEmitter
 	// chain cuts left to right. Carving forward out of one stable list makes every copy a segment nobody
 	// copies again, so the whole chain moves B op refs in total.
 	function splitChainEnd(site GuardSite, sourceBlockId BlockId) returns IrBlock
-		let source = self.chainSourceOps(sourceBlockId, chainEnd: site.block)
+		var source = self.chainSourceOps(sourceBlockId, chainEnd: site.block)
 
 		// The block is about to hand its list over to the segment carved below, so park the pre-split list
 		// where the rest of the chain can still read it. Idempotent after the first split: `chainSourceOps`
@@ -1167,7 +1167,7 @@ type RangeCheckEmitter
 
 		headBlock.replaceBodyOps(segment)
 
-		let ok = splitBlockExit(self.module, func: self.func, head: headBlock, label: RangeCheckOkLabel)
+		var ok = splitBlockExit(self.module, func: self.func, head: headBlock, label: RangeCheckOkLabel)
 		self.extendGuardChain(sourceBlockId, continuation: ok, splitAt: site.position)
 		return ok
 	end 'splitChainEnd'
@@ -1222,7 +1222,7 @@ type RangeCheckEmitter
 			end 'alreadyHoldsOps'
 
 			let base = try self.guardChainBase.get(blockId) otherwise panic("materializeChainTails: guardChainBase has no entry for block id {blockId}, which guardChainTail just answered for")
-			let source = self.chainSourceOps(blockId, chainEnd: chainEnd)
+			view source = self.chainSourceOps(blockId, chainEnd: chainEnd)
 
 			for i in base upto source.count() 'eachPendingOp'
 				let opIdx = try source.get(i) otherwise panic("materializeChainTails: pre-split list of block {blockId} holds {source.count()} ops but its last split cut at {base}")
@@ -1360,7 +1360,7 @@ type RangeCheckEmitter
 	function guardSiteAt(blockId BlockId, stdOpPos ElementIndex) returns GuardSite
 		self.ensureChainIndex()
 
-		let block = blockById(self.module, refByBlockId: self.guardChainTail, id: blockId, from: self.func.name)
+		var block = blockById(self.module, refByBlockId: self.guardChainTail, id: blockId, from: self.func.name)
 		let base = try self.guardChainBase.get(blockId) otherwise panic("guardSiteAt: guardChainBase has no entry for block id {blockId}, which blockById just resolved within the function")
 
 		if stdOpPos < base 'behindTheChain'
@@ -1373,7 +1373,7 @@ type RangeCheckEmitter
 		// filled only by `materializeChainTails` (see `guardChainSource`). Checked against the block as it
 		// stands, every guard after the first in a block would read a count of zero and this would fire on
 		// a program with nothing wrong with it.
-		let sourceOps = self.chainSourceOps(blockId, chainEnd: block)
+		view sourceOps = self.chainSourceOps(blockId, chainEnd: block)
 
 		if stdOpPos > sourceOps.count() 'pastTheBlock'
 			panic("guardSiteAt: '{String.from(self.func.name)}' records a guard at position {stdOpPos} of block {blockId}, which held only {sourceOps.count()} ops before this pass split it — `splitChainEnd` would silently carve the whole block into the head and anchor the guard at the end")
@@ -1410,13 +1410,13 @@ type RangeCheckEmitter
 	function retBlockOf(site RangeCheckReturnSite) returns RetBlockLookup
 		self.ensureChainIndex()
 
-		let block = blockById(self.module, refByBlockId: self.guardChainTail, id: site.block, from: self.func.name)
+		view block = blockById(self.module, refByBlockId: self.guardChainTail, id: site.block, from: self.func.name)
 
 		if not block.hasTerminatorOp() 'noRetLeft'
 			return RetBlockLookup.notFound
 		end 'noRetLeft'
 
-		let term = try self.module.ops.get(block.terminatorIndex()) otherwise panic("retBlockOf: terminatorIndex of block {block.id} in '{String.from(self.func.name)}' not in module.ops")
+		view term = try self.module.ops.get(block.terminatorIndex()) otherwise panic("retBlockOf: terminatorIndex of block {block.id} in '{String.from(self.func.name)}' not in module.ops")
 
 		if not retMatchesValue(term, block: block, target: site.value) 'notThisSitesRet'
 			return RetBlockLookup.notFound
@@ -1473,7 +1473,7 @@ type RangeCheckEmitter
 	// patterns on the other, and nothing downstream could tell them apart from the payload alone.
 	function collectConsts()
 		for opIdx in self.module.liveOpIndices(self.func) 'eachOp'
-			let op = try self.module.ops.get(opIdx) otherwise panic("collectConsts: live op index {opIdx} not in module.ops")
+			view op = try self.module.ops.get(opIdx) otherwise panic("collectConsts: live op index {opIdx} not in module.ops")
 
 			match op 'c'
 				const(resultId, value, valueType) then self.recordConst(resultId, value: value, valueType: valueType)
@@ -2145,7 +2145,7 @@ type EntryGuardWaivers
 		var params = try self.candidates.get(callee) otherwise panic("EntryGuardWaivers.denyParamsTheCallDidNotRecord: '{String.from(callee)}' was just found among the candidates")
 
 		for i in 0 upto params.count() 'eachParam'
-			let param = try params.get(i) otherwise panic("EntryGuardWaivers.denyParamsTheCallDidNotRecord: params.get OOB at {i}")
+			view param = try params.get(i) otherwise panic("EntryGuardWaivers.denyParamsTheCallDidNotRecord: params.get OOB at {i}")
 
 			if not callRecordedSlot(project, callee: callee, sites: sites, slot: param.index) 'unrecorded'
 				denyParamAt(params, at: i)

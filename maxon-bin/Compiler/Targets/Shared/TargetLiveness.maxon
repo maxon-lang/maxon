@@ -1330,7 +1330,7 @@ end 'assertClassColumnCovers'
 // only pass between the two is nothing, so the skeleton this built is still exactly the
 // function's.
 export function reorderFuncBlocksRpo(module TargetModule, func IrFunction) returns FuncTopology
-	let topo = buildFuncTopology(module, func: func)
+	var topo = buildFuncTopology(module, func: func)
 
 	if topo.numBlocks == 0 'empty'
 		return topo
@@ -2151,7 +2151,7 @@ module function lineEntryColumn(module TargetModule, func IrFunction, encoding F
 	openingSites.refill(func.nextBlockId, value: InlineSiteRef.none)
 
 	for blockRef in func.blockRefs 'eachBlockOpening'
-		let block = try module.blocks.get(blockRef) otherwise panic("lineEntryColumn: blockRef from func.blockRefs not in module.blocks")
+		var block = try module.blocks.get(blockRef) otherwise panic("lineEntryColumn: blockRef from func.blockRefs not in module.blocks")
 		try firstSpans.set(block.id, value: firstSpanOf(module, block: block)) otherwise panic("lineEntryColumn: block '{String.from(block.label)}' has id {block.id}, past the {func.nextBlockId} this function numbers")
 		try openingSites.set(block.id, value: block.inlineSite) otherwise panic("lineEntryColumn: block '{String.from(block.label)}' has id {block.id}, past the {func.nextBlockId} this function numbers")
 	end 'eachBlockOpening'
@@ -2173,7 +2173,7 @@ module function lineEntryColumn(module TargetModule, func IrFunction, encoding F
 		for k in 0 upto ways.successors.degree(block.id as CsrIndex) 'eachTarget'
 			let target = ways.successors.neighbour(block.id as CsrIndex, k: k) as BlockId
 			let arriving = try firstSpans.get(target) otherwise panic("lineEntryColumn: block '{String.from(block.label)}' branches to block {target}, past the {func.nextBlockId} this function numbers")
-			let targetSite = try blockSites.get(target) otherwise panic("lineEntryColumn: block '{String.from(block.label)}' branches to block {target}, past the {func.nextBlockId} this function numbers")
+			view targetSite = try blockSites.get(target) otherwise panic("lineEntryColumn: block '{String.from(block.label)}' branches to block {target}, past the {func.nextBlockId} this function numbers")
 
 			if ways.leavesAnotherLine(block.id, arriving: arriving, targetSite: targetSite) 'fromAnotherLine'
 				try entered.set(target, value: true) otherwise panic("lineEntryColumn: block {target} is past the {func.nextBlockId} this function numbers")
@@ -2372,7 +2372,7 @@ type LineWays
 	end 'requeueTransparentSuccessors'
 
 	function adoptedFrontier(before CsrIndex, adopter CsrIndex) returns BlockIdArray
-		let frontier = self.frontierOf(before)
+		var frontier = self.frontierOf(before)
 
 		for held in frontier 'eachHeld'
 			if not self.claimsItsLine(held) 'aSecondBlockOfOneLine'
@@ -2825,7 +2825,7 @@ export type UseIndex
 	export var opCount as OpSeq
 
 	// Strictly greater than every sequence number this function can produce (`seqLimitFor`).
-	export var seqLimit as OpSeq
+	export let seqLimit as OpSeq
 
 	// THE RECORD ARENA. A RECORD is one (op, value) use site. Its INDEX into these columns is its
 	// identity, and the two threads below are what address it.
@@ -3398,9 +3398,9 @@ end 'falseColumn'
 // remat ids it minted. They are the only values whose index facts, liveness or forbidden mask a split
 // can change, so they are the only ones re-derived afterwards.
 export type SplitValues
-	export var victim as ValueId
-	export var freshFrom as ValueId
-	export var freshTo as ValueId
+	export let victim as ValueId
+	export let freshFrom as ValueId
+	export let freshTo as ValueId
 
 	export static function create(victim ValueId, freshFrom ValueId, freshTo ValueId) returns SplitValues
 		return Self{victim: victim, freshFrom: freshFrom, freshTo: freshTo}
@@ -3762,7 +3762,7 @@ end 'spanHiOf'
 // iteration count (there is no fixpoint). Returned alongside the sets.
 type LivenessWalk
 	export var live as LiveSets
-	export var markSteps as EventCount
+	export let markSteps as EventCount
 
 	static function create(live LiveSets, markSteps EventCount) returns LivenessWalk
 		return Self{live: live, markSteps: markSteps}
@@ -4776,7 +4776,7 @@ end 'countDeadPhis'
 // cross-param register forbidding below.
 type ParamCapture
 	export var valueId as ValueId
-	export var incomingReg as RegNum
+	export let incomingReg as RegNum
 
 	static function create(valueId ValueId, incomingReg RegNum) returns ParamCapture
 		return Self{valueId: valueId, incomingReg: incomingReg}
@@ -5377,7 +5377,7 @@ export type ColdRunTable
 
 	export static function build(module TargetModule, topo FuncTopology, buf OperandList, opFacts OpVariantFacts) returns ColdRunTable
 		var blocks = ColdBlockRunsArray.create()
-		let noRuns = ColdBlockRuns.create()
+		var noRuns = ColdBlockRuns.create()
 
 		for local in 0 upto topo.numBlocks 'eachBlock'
 			let block = blockAt(module, topo: topo, local: local)

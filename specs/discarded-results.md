@@ -1859,7 +1859,7 @@ typealias BoxArray = Array with Box
 var registry = BoxArray.create()
 
 function enroll() returns Box
-	let box = Box.create()
+	var box = Box.create()
 	registry.push(box)
 	return box
 end 'enroll'
@@ -3156,7 +3156,7 @@ A record handed an argument by a function the caller passed in holds that argume
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
-typealias Adopt = function(Holder, IntArray)
+typealias Adopt = function(Holder, keep IntArray)
 
 type Holder
 	var items as IntArray
@@ -3208,7 +3208,7 @@ end 'main'
 The same shape over records instead of arrays.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias Adopt = function(Holder, Box)
+typealias Adopt = function(Holder, keep Box)
 
 type Box
 	export var number as Integer

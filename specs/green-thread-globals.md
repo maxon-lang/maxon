@@ -249,7 +249,7 @@ function main() returns ExitCode
 	var ps = IntPromiseArray.create()
 	var k = 0 as Count
 	while k < 12 'send'
-		let h = try hs.get(k) otherwise panic("get")
+		view h = try hs.get(k) otherwise panic("get")
 		ps.push(h.size())
 		k = k + 1
 	end 'send'
@@ -649,8 +649,8 @@ type Bag
 end 'Bag'
 
 type Pair
-	export var left as Bag
-	export var right as Bag
+	export let left as Bag
+	export let right as Bag
 
 	static function around(bag Bag) returns Self
 		return Self{left: bag, right: bag}

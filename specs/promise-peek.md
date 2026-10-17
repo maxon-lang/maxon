@@ -267,7 +267,7 @@ function main() returns ExitCode
 	var arr = IntPromiseArray.create()
 	arr.push(async makeValue())
 	let p = try arr.get(0) otherwise panic("the promise was just pushed")
-	let h = Holder.of(p)
+	view h = Holder.of(p)
 	let before = h.p.isComplete()
 	var spins = 0 as Count
 	var after = false

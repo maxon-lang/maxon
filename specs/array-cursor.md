@@ -463,7 +463,7 @@ names, and can seek onto the element the push added.
 ```maxon
 function main() returns ExitCode
 	var a = ["x {40 + 2} long enough heap string", "y {40 + 2} long enough heap string", "z {40 + 2} long enough heap string", "w {40 + 2} long enough heap string"]
-	let c = try a.cursor() otherwise panic("cursor")
+	view c = try a.cursor() otherwise panic("cursor")
 	try c.seek(1) otherwise panic("seek")
 	a.push("v {40 + 2} long enough heap string")
 	print("{c.current()}\n")
@@ -486,7 +486,7 @@ past the live length and panics with an index out of range rather than reading t
 ```maxon
 function main() returns ExitCode
 	var a = ["x {40 + 2} long enough heap string", "y {40 + 2} long enough heap string", "z {40 + 2} long enough heap string", "w {40 + 2} long enough heap string"]
-	let c = try a.cursor() otherwise panic("cursor")
+	view c = try a.cursor() otherwise panic("cursor")
 	try c.seek(3) otherwise panic("seek")
 	a.clear()
 	print("{c.current()}\n")

@@ -1227,7 +1227,7 @@ function main() returns ExitCode
         end 'k'
     end 'h'
 
-    let first = try outer.get(0) otherwise Inner.create()
+    view first = try outer.get(0) otherwise Inner.create()
     let v = try first.get(0) otherwise -1
     return v as ExitCode
 end 'main'
@@ -1263,7 +1263,7 @@ function main() returns ExitCode
         end 'k'
     end 'h'
 
-    let first = try outer.get(0) otherwise Inner.create()
+    view first = try outer.get(0) otherwise Inner.create()
     let v = try first.get(0) otherwise -1
     return v as ExitCode
 end 'main'

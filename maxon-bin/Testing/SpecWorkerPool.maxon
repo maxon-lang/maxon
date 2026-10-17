@@ -728,7 +728,7 @@ function runSpecJob(specDir FilePath, specName String, runs SpecRuns, filterPatt
 	// checks the records against its plan. See this file's protocol note.
 	print("{jobCountsLine(WorkerJobBatchMarker, first: run.batch.batched as ParsedCount, second: run.batch.programs as ParsedCount, third: run.batch.alone as ParsedCount)}\n")
 
-	let library = fileMemos.library.takeTotals()
+	view library = fileMemos.library.takeTotals()
 	print("{jobCountsLine(WorkerJobLibraryMarker, first: library.loaded as ParsedCount, second: library.written as ParsedCount, third: library.rejected as ParsedCount)}\n")
 	print("{jobCountsLine(WorkerJobCpuMarker, first: run.cpu.ticks as ParsedCount, second: run.cpu.reported as ParsedCount, third: run.cpu.unreported as ParsedCount)}\n")
 end 'runSpecJob'
@@ -1261,7 +1261,7 @@ end 'drainChildStderr'
 
 type PersistentWorkerHandle
 	export var child as StreamingSubprocess
-	export var workerId as WorkerId
+	export let workerId as WorkerId
 
 	// Spawn the child without waiting for its WORKER_READY hello: the caller fires all N spawns before
 	// draining the hellos, so the workers' process creation and runtime init overlap.
@@ -2099,7 +2099,7 @@ export function runSpecPool(harnessExe FilePath, specDir FilePath, filterPattern
 			// reaches here is a read that FAILED — the parent unable to read a pipe it owns, which is no
 			// test's failure and is the harness itself. Binding `e` is also what RELEASES it: a union's
 			// payload is a heap pointer, and the binding is what decrefs it.
-			let lines = try await drain otherwise (e) 'stdoutUnreadable'
+			var lines = try await drain otherwise (e) 'stdoutUnreadable'
 				abortOnDeadWorker(handle, job: job, reason: "the parent could not read its stdout: {e.displayReason()}")
 			end 'stdoutUnreadable'
 

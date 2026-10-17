@@ -272,7 +272,7 @@ function main() returns ExitCode
 	var spun = ReplyPromiseArray.create()
 	var k = 0 as Count
 	while k < spinners.count() 'sendEach'
-		let s = try spinners.get(k) otherwise panic("spinners.get out of range at {k}: bounded by the pushes above")
+		view s = try spinners.get(k) otherwise panic("spinners.get out of range at {k}: bounded by the pushes above")
 		spun.push(s.spin(spinBursts, startMs: start))
 		k = k + 1
 	end 'sendEach'
@@ -290,7 +290,7 @@ function main() returns ExitCode
 	var firstEndMs = (0 - 1) as Integer
 	var j = 0 as Count
 	while j < spinners.count() 'earliest'
-		let s = try spinners.get(j) otherwise panic("spinners.get out of range at {j}: bounded by the pushes above")
+		view s = try spinners.get(j) otherwise panic("spinners.get out of range at {j}: bounded by the pushes above")
 		let e = try await s.endedAt() otherwise 0 - 1
 		if firstEndMs < 0 or e < firstEndMs 'earlier'
 			firstEndMs = e
@@ -633,7 +633,7 @@ function main() returns ExitCode
 	var spun = ReplyPromiseArray.create()
 	var k = 0 as Count
 	while k < spinners.count() 'sendEach'
-		let s = try spinners.get(k) otherwise panic("spinners.get out of range at {k}: bounded by the pushes above")
+		view s = try spinners.get(k) otherwise panic("spinners.get out of range at {k}: bounded by the pushes above")
 		spun.push(s.spin(spinSteps, startMs: start))
 		k = k + 1
 	end 'sendEach'
@@ -651,7 +651,7 @@ function main() returns ExitCode
 	var firstEndMs = (0 - 1) as Integer
 	var j = 0 as Count
 	while j < spinners.count() 'earliest'
-		let s = try spinners.get(j) otherwise panic("spinners.get out of range at {j}: bounded by the pushes above")
+		view s = try spinners.get(j) otherwise panic("spinners.get out of range at {j}: bounded by the pushes above")
 		let e = try await s.endedAt() otherwise 0 - 1
 		if firstEndMs < 0 or e < firstEndMs 'earlier'
 			firstEndMs = e

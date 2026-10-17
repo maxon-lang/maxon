@@ -90,8 +90,8 @@
 // ⭐ **AND THE `.data` LABELS THE SURVIVORS NAME COME BACK WITH IT**, collected by the same op walk that
 // finds the call edges, so the layout that reads them cannot count a body this pass did not.
 export function eliminateDeadFunctions(module StdModule, globalData GlobalDataTable, project Project) returns DeadFunctionSurvivors throws CompileError
-	let index = try FunctionNameIndex.create(module.functions, project: project)
-	let byName = index.byName
+	view index = try FunctionNameIndex.create(module.functions, project: project)
+	view byName = index.byName
 
 	var reached = BoolArray.create()
 	reached.resize(module.funcCount())
@@ -109,7 +109,7 @@ export function eliminateDeadFunctions(module StdModule, globalData GlobalDataTa
 
 	while worklist.count() > 0 'walk'
 		let idx = try worklist.pop() otherwise panic("eliminateDeadFunctions: pop from a non-empty worklist")
-		let func = module.getFunc(idx)
+		view func = module.getFunc(idx)
 		requireNotSplicedAway(module, func: func, byName: byName, reached: reached)
 		markReferencesOf(module, func: func, byName: byName, reached: reached, worklist: worklist, reference: reference, referencedGlobals: referencedGlobals, recordCodes: recordCodes, referencedRecords: referencedRecords)
 	end 'walk'
@@ -123,7 +123,7 @@ export function eliminateDeadFunctions(module StdModule, globalData GlobalDataTa
 	// cannot report one — it is here for the POSITIONS, which the sweep renumbered. It goes through the one
 	// door anyway rather than a subset-only shortcut: a second construction path is a second place the
 	// check could be skipped, which is the shape this whole mechanism exists to remove.
-	let funcNames = try FunctionNameIndex.create(module.functions, project: project)
+	var funcNames = try FunctionNameIndex.create(module.functions, project: project)
 	return DeadFunctionSurvivors.create(funcNames, referencedGlobals: referencedGlobals)
 end 'eliminateDeadFunctions'
 
@@ -768,7 +768,7 @@ function sweepUnreachedFunctions(module StdModule, reached BoolArray, project Pr
 	var keptNumberingShifted = false
 
 	for i in 0 upto total 'eachFunc'
-		let func = module.getFunc(i)
+		var func = module.getFunc(i)
 		let isLive = try reached.get(i) otherwise panic("eliminateDeadFunctions: reached.get OOB at function index {i}")
 		let newIndex = kept.count()
 		newIndexOfOld.push(newIndex)

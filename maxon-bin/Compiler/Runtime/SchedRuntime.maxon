@@ -2753,7 +2753,7 @@ function emitSchedPidlePutLocked(module StdModule, func IrFunction, cur IrBlock,
 	var ringEmpty = module.addBlock(func, label: emptyLabel, heat: BlockHeat.normal)
 	var handOver = module.addBlock(func, label: b"pidleputregain", heat: BlockHeat.normal)
 	var idleIt = module.addBlock(func, label: b"pidleputidle", heat: BlockHeat.normal)
-	let placed = module.addBlock(func, label: b"pidleputplaced", heat: BlockHeat.normal)
+	var placed = module.addBlock(func, label: b"pidleputplaced", heat: BlockHeat.normal)
 
 	let stillHasWork = emitSchedRunqIs(module, block: cur, p: p, pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(stillHasWork, thenBlockId: holdsWork.id, elseBlockId: ringEmpty.id))
@@ -5353,7 +5353,7 @@ end 'emitGtFreeLocalPop'
 function emitGtFreeGlobalPush(module StdModule, func IrFunction, cur IrBlock, gt ValueId, ids ValueMinter) returns IrBlock
 	var withStack = module.addBlock(func, label: b"gfpglobalstack", heat: BlockHeat.normal)
 	var withoutStack = module.addBlock(func, label: b"gfpglobalnostack", heat: BlockHeat.normal)
-	let pushed = module.addBlock(func, label: b"gfpglobalpushed", heat: BlockHeat.normal)
+	var pushed = module.addBlock(func, label: b"gfpglobalpushed", heat: BlockHeat.normal)
 
 	let base = emitLoadField(module, block: cur, record: gt, offset: GtOffStackBase, ids: ids)
 	emitBranchOnCompare(module, block: cur, value: base, pred: StdCmpPred.ne, against: 0, whenTrue: withStack, whenFalse: withoutStack, ids: ids)
@@ -7736,7 +7736,7 @@ function buildGtPreemptSafe(module StdModule, target Target)
 	let safeGranules = emitBin(module, block: pastTheGuard, a: safeFrom, b: emitConst(module, block: pastTheGuard, value: SymtabSafeFromBias, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
 	let firstSafe = emitBin(module, block: pastTheGuard, a: safeGranules, b: emitConst(module, block: pastTheGuard, value: safePointGranuleOf(target) as FullRangeInt, ids: ids), opcode: StdBinOpcode.mul, ids: ids)
 	let insideTheGuard = emitCmp(module, block: pastTheGuard, a: intoFunc, b: firstSafe, pred: StdCmpPred.lt, ids: ids)
-	let cleared = emitGtPreemptSafeLlscLookback(module, func: func, pc: pc, notSafe: notSafe, safe: safe, target: target, ids: ids)
+	view cleared = emitGtPreemptSafeLlscLookback(module, func: func, pc: pc, notSafe: notSafe, safe: safe, target: target, ids: ids)
 	module.setTerminator(pastTheGuard, op: StdOp.condBranch(insideTheGuard, thenBlockId: notSafe.id, elseBlockId: cleared.id))
 
 	module.setTerminator(safe, op: StdOp.ret(gt))

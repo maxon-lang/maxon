@@ -139,7 +139,7 @@ function main() returns ExitCode
 	while i < 3000 'l'
 		var a = Blk.create()
 		a.args.push(i)
-		let c = cloneBlk(a)
+		view c = cloneBlk(a)
 		total = total + (a.args.count() + c.args.count()) as Num
 		i = i + 1
 	end 'l'

@@ -189,7 +189,7 @@ end 'DebugBreakRequest'
 
 export union DebugBreakCondition
 	unconditional
-	when(text String)
+	when(let text String)
 
 	export function sameAs(other DebugBreakCondition) returns bool
 		return match self 'own'
@@ -303,6 +303,7 @@ function compiledWithWidth(local MxdbgLocalInfo, signedCompare DebugAddress, op 
 	match conditionLiteralOf(literalSpelling, isABool: isABool) 'read'
 		none then return DebugConditionCompile.invalid
 		value(literal) then return compiledWithLiteral(local, signedCompare: signedCompare, op: op, width: width, literal: literal)
+
 		// A signed compare reads the word as a negative, so it would stop on a value nobody wrote.
 		aboveSignedRange(literal) then return compiledWithLiteral(local, signedCompare: signedCompare, op: op, width: width, literal: literal) if signedCompare == UnsignedCompare else DebugConditionCompile.invalid
 	end 'read'

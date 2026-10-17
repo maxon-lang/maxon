@@ -95,7 +95,7 @@ function main() returns ExitCode
 
 	try src.set(0, value: StrBox.create("replaced", tag: 99)) otherwise return 91
 
-	let theirs = try src.get(0) otherwise return 92
+	view theirs = try src.get(0) otherwise return 92
 	if theirs.tag != 99 'sourceNotReplaced'
 		return 93
 	end 'sourceNotReplaced'
@@ -502,8 +502,8 @@ function main() returns ExitCode
 	var b = IntBag.create()
 	b.add(91, tag: 4)
 
-	let c = b.items
-	let e = try c.get(0) otherwise return 90
+	view c = b.items
+	view e = try c.get(0) otherwise return 90
 	return 4 as ExitCode if e.v.equals(91) else 70 as ExitCode
 end 'main'
 ```

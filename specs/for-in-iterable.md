@@ -88,7 +88,7 @@ function main() returns ExitCode
 	a.push(10)
 	a.push(20)
 	a.push(30)
-	let s = IntSeq.create(a)
+	var s = IntSeq.create(a)
 	var sum = 0 as Integer
 	for v in s 'each'
 		sum = sum + v
@@ -235,8 +235,8 @@ function main() returns ExitCode
 	a.push(10)
 	a.push(20)
 	a.push(30)
-	let filled = IntSeq.create(a)
-	let empty = IntSeq.create(IntArray.create())
+	var filled = IntSeq.create(a)
+	var empty = IntSeq.create(IntArray.create())
 	print("break={firstOver(filled, floor: 15)} breakEmpty={firstOver(empty, floor: 15)}\n")
 	print("return={earlyReturn(filled)} returnEmpty={earlyReturn(empty)}\n")
 	return 0

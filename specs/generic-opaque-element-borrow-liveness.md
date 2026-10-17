@@ -48,8 +48,8 @@ type Array uses Element implements BuiltinArrayLiteral
 	end 'create'
 
 	function rotateFirstTwo()
-		let a = try managed.get(0) otherwise panic("oob")
-		let b = try managed.get(1) otherwise panic("oob")
+		view a = try managed.get(0) otherwise panic("oob")
+		view b = try managed.get(1) otherwise panic("oob")
 		try managed.set(0, value: b) otherwise panic("oob")
 		try managed.set(1, value: a) otherwise panic("oob")
 	end 'rotateFirstTwo'
@@ -93,9 +93,9 @@ type Array uses Element implements BuiltinArrayLiteral
 	end 'create'
 
 	function rotateThree()
-		let a = try managed.get(0) otherwise panic("oob")
-		let b = try managed.get(1) otherwise panic("oob")
-		let c = try managed.get(2) otherwise panic("oob")
+		view a = try managed.get(0) otherwise panic("oob")
+		view b = try managed.get(1) otherwise panic("oob")
+		view c = try managed.get(2) otherwise panic("oob")
 		try managed.set(0, value: c) otherwise panic("oob")
 		try managed.set(1, value: a) otherwise panic("oob")
 		try managed.set(2, value: b) otherwise panic("oob")
@@ -144,7 +144,7 @@ type Array uses Element implements BuiltinArrayLiteral
 	end 'create'
 
 	function readThenDisplace(other Self) returns Element
-		let a = try managed.get(0) otherwise panic("oob")
+		var a = try managed.get(0) otherwise panic("oob")
 		let v = try other.managed.get(0) otherwise panic("oob")
 		try managed.set(0, value: v) otherwise panic("oob")
 		return a
@@ -238,8 +238,8 @@ type Array uses Element implements BuiltinArrayLiteral
 	end 'create'
 
 	function rotateFirstTwo()
-		let a = try managed.get(0) otherwise panic("oob")
-		let b = try managed.get(1) otherwise panic("oob")
+		view a = try managed.get(0) otherwise panic("oob")
+		view b = try managed.get(1) otherwise panic("oob")
 		try managed.set(0, value: b) otherwise panic("oob")
 		try managed.set(1, value: a) otherwise panic("oob")
 	end 'rotateFirstTwo'
@@ -324,7 +324,7 @@ type Array uses Element implements BuiltinArrayLiteral
 	end 'create'
 
 	function moveFirstInto(other Self)
-		let a = try managed.get(0) otherwise panic("oob")
+		view a = try managed.get(0) otherwise panic("oob")
 		try other.managed.set(0, value: a) otherwise panic("oob")
 		try managed.setLength(0) otherwise panic("length")
 	end 'moveFirstInto'
@@ -374,7 +374,7 @@ type Array uses Element implements BuiltinArrayLiteral
 		var w = 0 as Small
 		var i = 0 as Small
 		while i < hi 'scan'
-			let v = try managed.get(i) otherwise panic("oob")
+			view v = try managed.get(i) otherwise panic("oob")
 			try managed.set(w, value: v) otherwise panic("oob")
 			w = w + 1
 			i = i + 1
@@ -597,7 +597,7 @@ function main() returns ExitCode
 	var b = StrBox.create()
 	b.add("alpha {40 + 2} value long enough for a heap record")
 	b.add("beta {40 + 2} value long enough for a heap record")
-	let seen = b.collectWhileWiping()
+	view seen = b.collectWhileWiping()
 	print("{seen.count()} [{try seen.get(0) otherwise "?"}] {b.size()}\n")
 	return 0
 end 'main'
@@ -668,7 +668,7 @@ type Box uses T
 	end 'create'
 
 	static function keepFirst(items Items, into Items)
-		let first = try items.get(0) otherwise panic("empty")
+		view first = try items.get(0) otherwise panic("empty")
 		items.clear()
 		into.push(first)
 	end 'keepFirst'
@@ -844,7 +844,7 @@ function main() returns ExitCode
 	xs.push(Tag.make("beta {40 + 2} label long enough for a heap record", weight: 9))
 	var ys = Tags.create()
 	let moved = TagBox.moveWhileClearing(xs, into: ys)
-	let first = try ys.get(0) otherwise panic("empty")
+	view first = try ys.get(0) otherwise panic("empty")
 	print("{moved} [{first.describe()}] {xs.count()}\n")
 	return 0
 end 'main'
@@ -979,7 +979,7 @@ type Box uses T
 			throw BoxError.empty
 		end 'none'
 
-		let first = try items.get(0) otherwise panic("empty")
+		view first = try items.get(0) otherwise panic("empty")
 		items.clear()
 		into.push(first)
 	end 'keepFirst'
@@ -1090,7 +1090,7 @@ function main() returns ExitCode
 	xs.push(Entry.create("alpha {40 + 2} value long enough for a heap record", n: 5))
 	var ys = Entries.create()
 	let moved = Box.moveWhileClearing(xs, into: ys)
-	let first = try ys.get(0) otherwise panic("empty")
+	view first = try ys.get(0) otherwise panic("empty")
 	print("{moved} {xs.count()} {first.name} {first.n}\n")
 	return 0
 end 'main'
@@ -1417,7 +1417,7 @@ type Slot uses T where T is Equatable
 	end 'observe'
 
 	function look() returns Count
-		let held = current
+		view held = current
 		return observe(held)
 	end 'look'
 
@@ -1426,7 +1426,7 @@ type Slot uses T where T is Equatable
 	end 'pass'
 
 	function lookSelf() returns Count
-		let held = self.current
+		view held = self.current
 		return observe(held)
 	end 'lookSelf'
 end 'Slot'
@@ -1583,8 +1583,8 @@ error E2015: <fragment>:10:12: Unsupported: interpolating a value of type 'type 
 ```
 
 <!-- test: error.a-let-read-of-an-element-record-is-still-not-written -->
-The counted element read of the cases above does not make the element writable: `first` is a `let` naming the
-record the container holds in slot 0, so a write through it is refused, as it is for any other `let`.
+The counted element read of the cases above does not make the element writable: `first` is a `view` naming the
+record the container holds in slot 0, so a write through it is refused, as it is for a `let`.
 
 ```maxon
 typealias Count = int(0 to 1000)
@@ -1594,11 +1594,11 @@ typealias Rows = Array with Row
 function main() returns ExitCode
 	var rows = Rows.create()
 	rows.push(Row.create())
-	let first = try rows.get(0) otherwise Row.create()
+	view first = try rows.get(0) otherwise Row.create()
 	first.push(1)
 	return rows.count() as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:10:8: cannot write through 'first': 'first' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
+error E3159: <fragment>:10:8: cannot write through 'first': 'first' is read-only (a `view`) and nothing reachable through it may be written; use 'var', or write a clone()
 ```

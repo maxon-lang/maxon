@@ -744,7 +744,7 @@ end 'recordedInputsOf'
 
 function readBuildRecord(path FilePath) returns RecordRead throws RunCacheError
 	let text = try File.readText(path) otherwise throw RunCacheError.unavailable("{path.toString()} could not be read")
-	let lines = try recordLinesIn(text)
+	var lines = try recordLinesIn(text)
 
 	let format = try fieldAt(try soleFieldsOf(lines, label: RecordLabel.format), index: FirstField)
 
@@ -753,7 +753,7 @@ function readBuildRecord(path FilePath) returns RecordRead throws RunCacheError
 	end 'anotherFormat'
 
 	let output = try pathOf(try fieldAt(try soleFieldsOf(lines, label: RecordLabel.output), index: FirstField))
-	let build = BuildRecord.create(path, output: output, compiler: try soleFieldsOf(lines, label: RecordLabel.compiler), options: try namedValuesOf(lines, label: RecordLabel.option), defines: try namedValuesOf(lines, label: RecordLabel.define), programs: try recordedInputsOf(lines, label: RecordLabel.program), libraries: try recordedInputsOf(lines, label: RecordLabel.library), tools: try recordedInputsOf(lines, label: RecordLabel.tool))
+	let build = BuildRecord.create(path, output: output, compiler: (try soleFieldsOf(lines, label: RecordLabel.compiler)).clone(), options: try namedValuesOf(lines, label: RecordLabel.option), defines: try namedValuesOf(lines, label: RecordLabel.define), programs: try recordedInputsOf(lines, label: RecordLabel.program), libraries: try recordedInputsOf(lines, label: RecordLabel.library), tools: try recordedInputsOf(lines, label: RecordLabel.tool))
 	let started = try timestampOf(try fieldAt(try soleFieldsOf(lines, label: RecordLabel.started), index: FirstField))
 
 	return RecordRead.stored(StoredRecord.create(build, started: started, files: try namedValuesOf(lines, label: RecordLabel.file)))

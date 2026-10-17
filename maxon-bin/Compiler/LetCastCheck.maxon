@@ -4,7 +4,7 @@ typealias MentionLinesMap = Map with (ByteArray, LineNumberArray)
 typealias MentionIndexMap = Map with (String, MentionLinesMap)
 
 type LetCastVerdict
-	export let subject as LetCastSubject
+	export var subject as LetCastSubject
 	export var everyReadClaimed as bool
 	export var sites as ReadSiteSet
 
@@ -54,7 +54,7 @@ module function checkUnneededLetCasts(project Project, module MaxonModule) throw
 			continue
 		end 'aMentionTheParserNeverSaw'
 
-		let subject = verdict.subject
+		view subject = verdict.subject
 		reportPositioned(project, code: ErrorCode.semanticUnneededCast, message: unneededLetCastMessage(subject.cast, name: subject.name), line: subject.cast.asRange.line, column: subject.cast.asRange.column, filePath: subject.declFile)
 	end 'eachCast'
 end 'checkUnneededLetCasts'
@@ -63,8 +63,8 @@ end 'checkUnneededLetCasts'
 // `#if`-disabled code, an uninstantiated template or a shadowing binding keeps the cast.
 function everyMentionIsARead(project Project, verdict LetCastVerdict, mentions MentionIndexMap) returns bool throws CompileError
 	let subject = verdict.subject
-	let inFile = try mentionIndexOf(project, file: subject.declFile, mentions: mentions)
-	let lines = try inFile.get(subject.name) otherwise LineNumberArray.create()
+	view inFile = try mentionIndexOf(project, file: subject.declFile, mentions: mentions)
+	view lines = try inFile.get(subject.name) otherwise LineNumberArray.create()
 	return mentionsWithin(lines, scope: subject.scope) == verdict.sites.count()
 end 'everyMentionIsARead'
 
@@ -75,7 +75,7 @@ function mentionIndexOf(project Project, file FilePath, mentions MentionIndexMap
 		return known
 	end 'aKnownFile'
 
-	let tokens = try queryTokens(project, path: file)
+	view tokens = try queryTokens(project, path: file)
 	var built = MentionLinesMap.create()
 
 	for (iter, tok) in tokens.withIterator() 'eachToken'
@@ -96,7 +96,7 @@ function isANameRead(tokens TokenArray, position ElementIndex) returns bool
 	if position > 0 'aTokenBefore'
 		let before = (try tokens.get(position - 1) otherwise panic("isANameRead: tokens.get OOB at {position - 1} below a position inside the stream")).kind
 
-		if before == TokenKind.dot or before == TokenKind.let or before == TokenKind.var 'notAReadOfTheBinding'
+		if before == TokenKind.dot or bindingKeywordSpells(before) 'notAReadOfTheBinding'
 			return false
 		end 'notAReadOfTheBinding'
 	end 'aTokenBefore'

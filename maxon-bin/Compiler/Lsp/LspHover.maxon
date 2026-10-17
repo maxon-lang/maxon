@@ -65,6 +65,22 @@ module function hoverAnswer(request LspRequest) returns LspAnswer throws LspPara
 	end 'answer'
 end 'hoverAnswer'
 
+function bindingKindWord(keyword TokenKind) returns String
+	if keyword == TokenKind.let 'aLet'
+		return "constant"
+	end 'aLet'
+
+	if keyword == TokenKind.var 'aVar'
+		return "variable"
+	end 'aVar'
+
+	if keyword == TokenKind.view 'aView'
+		return "view"
+	end 'aView'
+
+	panic("bindingKindWord: '{keyword.rawValue}' is not a binding keyword")
+end 'bindingKindWord'
+
 function hoverRenderingOf(request LspRequest, document HoverDocument, cursor ElementIndex) returns HoverRendering
 	let inTheBuffer = document.renderingForToken(cursor)
 
@@ -161,7 +177,7 @@ end 'HoverRendering'
 // the rendering is the same act for a function and for a type, and doing it once is what keeps them from
 // drifting apart.
 union HoverDeclaration
-	// A `let`/`var`, at its keyword.
+	// A `let`/`var`/`view`, at its keyword.
 	binding(index ElementIndex)
 
 	// A parameter: the `function` token whose list it is in, and the name token itself.
@@ -194,7 +210,7 @@ enum HoverDeclarationScope
 end 'HoverDeclarationScope'
 
 union HoverMemberOwner
-	declaredIn(name ByteArray)
+	declaredIn(let name ByteArray)
 	notAMemberLine
 end 'HoverMemberOwner'
 
@@ -270,7 +286,7 @@ union HoverTypeParamSite
 end 'HoverTypeParamSite'
 
 union HoverDeclaringType
-	at(owner ByteArray)
+	at(let owner ByteArray)
 	none
 end 'HoverDeclaringType'
 
@@ -544,7 +560,7 @@ module type HoverDocument
 			return HoverDeclaration.none
 		end 'declaresSomethingElse'
 
-		if kind == TokenKind.let or kind == TokenKind.var or kind == TokenKind.for 'bindingHead'
+		if bindingKeywordSpells(kind) or kind == TokenKind.for 'bindingHead'
 			return bindingDeclaredAt(index, scope: scope)
 		end 'bindingHead'
 
@@ -744,7 +760,7 @@ module type HoverDocument
 			return LoopVariableSubject
 		end 'walksACollection'
 
-		let mutability = "constant" if tokenAt(keyword).kind == TokenKind.let else "variable"
+		let mutability = bindingKindWord(tokenAt(keyword).kind)
 
 		if tokenAt(declarationStart(keyword)).column == TopLevelColumn 'moduleScope'
 			return "Module-level {mutability}"
@@ -1895,8 +1911,8 @@ end 'HoverDocument'
 
 extension Project
 	function hoverDocumentOf(path FilePath, reading KeywordTable, corpus LspCorpus) returns HoverDeclaringDocument
-		let declTokens = try queryActiveTokens(self, path: path) otherwise return HoverDeclaringDocument.none
-		let entry = try sourceEntryOf(self, path: path) otherwise return HoverDeclaringDocument.none
+		view declTokens = try queryActiveTokens(self, path: path) otherwise return HoverDeclaringDocument.none
+		view entry = try sourceEntryOf(self, path: path) otherwise return HoverDeclaringDocument.none
 
 		var declaring = HoverDocument.ofTokens(entry.content, tokens: declTokens, keywords: reading, corpus: corpus)
 

@@ -1454,9 +1454,9 @@ end 'arm64NonNegDisp'
 // a `b.cond`/`cbz`/`cbnz` a 19-bit imm (±1 MiB). A function's blocks are contiguous within its one
 // chunk, so these resolve HERE (like x64's `resolveChunkRel32Fixups`), independent of concat.
 export type Arm64BlockBranchFixup
-	export var codeOffset as CodeOffset
-	export var targetBlock as BlockId
-	export var wide as bool
+	export let codeOffset as CodeOffset
+	export let targetBlock as BlockId
+	export let wide as bool
 
 	static function create(codeOffset CodeOffset, targetBlock BlockId, wide bool) returns Arm64BlockBranchFixup
 		return Self{codeOffset: codeOffset, targetBlock: targetBlock, wide: wide}
@@ -3168,7 +3168,7 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 	releaseEncodedTargetModule(project, targetModule: targetModule)
 
 	let linkProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.link)
-	let codeResult = try concatArm64FunctionChunks(targetModule, stdModule: stdModule, chunks: chunks, globalData: globalData, project: project, funcNames: funcNames)
+	var codeResult = try concatArm64FunctionChunks(targetModule, stdModule: stdModule, chunks: chunks, globalData: globalData, project: project, funcNames: funcNames)
 	recordPhase(project, phase: CompilePhase.link, probe: linkProbe)
 
 	return codeResult

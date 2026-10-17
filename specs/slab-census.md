@@ -357,7 +357,7 @@ function main() returns ExitCode
 
 	var bad = 0 as FullRangeInt
 	for k in 0 upto 600 'check'
-		let b = try large.get(k) otherwise return 3
+		view b = try large.get(k) otherwise return 3
 		if b.count() != LargePayload 'length'
 			bad = bad + 1
 		end 'length'

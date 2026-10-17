@@ -222,10 +222,9 @@ end 'ImmortalStringTable'
 // `registerImmortalByteArrayRecord`'s twin over the one shape whose payload is POINTERS: an element slot
 // cannot hold the element, so it holds the element's address.
 //
-// ⛔ **THE ELEMENTS ARE NOT CLONED, AND THAT IS THE WHOLE SAVING.** A durable store of a constant normally
-// takes a private copy, because the sink may be written through. Neither end can be here: the slot is in
-// `.rdata` and so is the record it names, so the copy would be a fresh heap String per element that nothing
-// could ever observe as distinct.
+// ⛔ **THE ELEMENTS ARE NOT CLONED, AND THAT IS THE WHOLE SAVING.** The slot is in `.rdata` and so is the
+// record it names, and nothing may write either, so a copy would be a fresh heap String per element that
+// nothing could ever observe as distinct.
 //
 // ⚠ **EVERY SEED IS AN rdata OFFSET AND THAT IS LOAD-BEARING FOR DEDUP** — `immortalRecordBytes`'s rule, one
 // tier down. A buffer of zeroes would collapse every same-LENGTH table onto one label under
@@ -505,8 +504,8 @@ export let ManagedShareAloneName = b"__managed_share_alone"
 // the identical question over the String representation.
 //
 // ⚠ **TWO ENTRIES AND NOT ONE, AND THE SHAPE IS WHY.** `__managed_retain` owes its caller a value it may
-// WRITE and DROP, so on the immortal arm it CLONES — which is what keeps `var b = <a constant>` the writable
-// array it has always been. `__managed_incref` owes nothing back: its caller goes on holding the record it
+// WRITE and DROP, so on the immortal arm it CLONES and the caller holds a record it may write.
+// `__managed_incref` owes nothing back: its caller goes on holding the record it
 // already had, so the immortal arm does nothing at all, and that is balanced because `__managed_decref` skips
 // an immortal record too. Folding them would make the void form allocate a clone nobody holds.
 //
@@ -1679,7 +1678,7 @@ function emitElementDestroyRange(module StdModule, func IrFunction, cur IrBlock,
 	var body = module.addBlock(func, label: b"dtorb", heat: BlockHeat.normal)
 	var doDrop = module.addBlock(func, label: b"dtordo", heat: BlockHeat.normal)
 	var step = module.addBlock(func, label: b"dtorstep", heat: BlockHeat.normal)
-	let done = module.addBlock(func, label: b"dtordone", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"dtordone", heat: BlockHeat.normal)
 
 	module.setTerminator(cur, op: StdOp.branch(header.id))
 
@@ -1734,7 +1733,7 @@ function emitDestroyRangeIfManaged(module StdModule, func IrFunction, cur IrBloc
 	let dtor = emitLoadField(module, block: cur, record: record, offset: ManagedRecordElementDestroyOffset, ids: ids)
 	let hasDtor = emitElementIsManaged(module, block: cur, destroy: dtor, ids: ids)
 	var walk = module.addBlock(func, label: b"mwalk", heat: BlockHeat.normal)
-	let cont = module.addBlock(func, label: b"mcont", heat: BlockHeat.normal)
+	var cont = module.addBlock(func, label: b"mcont", heat: BlockHeat.normal)
 	module.setTerminator(cur, op: StdOp.condBranch(hasDtor, thenBlockId: walk.id, elseBlockId: cont.id))
 
 	var afterWalk = emitElementDestroyRange(module, func: func, cur: walk, buffer: buffer, start: start, stop: stop, elementSize: elementSize, destroy: dtor, ids: ids)
@@ -1748,7 +1747,7 @@ end 'emitDestroyRangeIfManaged'
 function emitStoreElem(module StdModule, func IrFunction, cur IrBlock, addr ValueId, value ValueId, size ValueId, ids ValueMinter) returns IrBlock
 	var header = module.addBlock(func, label: b"steh", heat: BlockHeat.normal)
 	var body = module.addBlock(func, label: b"steb", heat: BlockHeat.normal)
-	let done = module.addBlock(func, label: b"sted", heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: b"sted", heat: BlockHeat.normal)
 
 	let zero = ids.mint()
 	module.appendOp(cur, op: StdOp.const(zero, value: 0, valueType: StdType.i64))
@@ -2125,19 +2124,19 @@ end 'emitElementByteLen'
 // exactly how one of the four comes to be computed differently from the others.
 type PackedElementPlacement
 	// Buffer-relative byte where the field's first (and, when packed, only) byte sits.
-	export var byteOffset as ValueId
+	export let byteOffset as ValueId
 
 	// Bits to shift the loaded word right by to bring the field to bit 0. Always 0 for a byte-strided
 	// element, because its bit position is a multiple of 8.
-	export var shiftBits as ValueId
+	export let shiftBits as ValueId
 
 	// `(1 << bits) - 1`, computed as `-1 >>logical (64 - bits)` so the machine-word width is not a special
 	// case. All ones for a byte-strided 8-byte element, which is what makes the mask a no-op there.
-	export var widthMask as ValueId
+	export let widthMask as ValueId
 
 	// How many BYTES the field touches: 1 for every packed width (they divide a byte, so a field cannot
 	// straddle), and exactly `element_size` for a byte-strided element.
-	export var byteSpan as ValueId
+	export let byteSpan as ValueId
 
 	static function create(byteOffset ValueId, shiftBits ValueId, widthMask ValueId, byteSpan ValueId) returns PackedElementPlacement
 		return Self{byteOffset: byteOffset, shiftBits: shiftBits, widthMask: widthMask, byteSpan: byteSpan}
@@ -2446,7 +2445,7 @@ function emitStoreElemAt(module StdModule, func IrFunction, cur IrBlock, buffer 
 	var wordArm = module.addBlock(func, label: b"stword", heat: BlockHeat.normal)
 	var byteArm = module.addBlock(func, label: b"stbyte", heat: BlockHeat.normal)
 	var otherStride = module.addBlock(func, label: b"stother", heat: BlockHeat.normal)
-	let join = module.addBlock(func, label: b"stjoin", heat: BlockHeat.normal)
+	var join = module.addBlock(func, label: b"stjoin", heat: BlockHeat.normal)
 
 	emitStrideDispatch(module, func: func, cur: cur, es: es, wordArm: wordArm.id, byteArm: byteArm.id, otherArm: otherStride.id, ids: ids)
 
@@ -3866,7 +3865,7 @@ end 'emitElementStoreAndOkReturn'
 export function emitDestroyRejectedElement(module StdModule, func IrFunction, cur IrBlock, record ValueId, value ValueId, destroyOffset ByteOffset, ids ValueMinter) returns IrBlock
 	var checkNull = module.addBlock(func, label: b"rejchk", heat: BlockHeat.normal)
 	var drop = module.addBlock(func, label: b"rejdrop", heat: BlockHeat.normal)
-	let cont = module.addBlock(func, label: b"rejcont", heat: BlockHeat.normal)
+	var cont = module.addBlock(func, label: b"rejcont", heat: BlockHeat.normal)
 
 	let dtor = emitLoadField(module, block: cur, record: record, offset: destroyOffset, ids: ids)
 	emitBranchOnCompare(module, block: cur, value: dtor, pred: StdCmpPred.ne, against: 0, whenTrue: checkNull, whenFalse: cont, ids: ids)
@@ -5601,14 +5600,14 @@ export function emitElementRange(module StdModule, func IrFunction, cur IrBlock,
 	var header = module.addBlock(func, label: labels.header, heat: BlockHeat.normal)
 	var body = module.addBlock(func, label: labels.body, heat: BlockHeat.normal)
 	var step = emitCascadeJoin(module, func: func, label: labels.step, template: carried, ids: ids)
-	let done = module.addBlock(func, label: labels.done, heat: BlockHeat.normal)
+	var done = module.addBlock(func, label: labels.done, heat: BlockHeat.normal)
 
 	let zero = emitConst(module, block: cur, value: 0, ids: ids)
 	module.setTerminator(cur, op: StdOp.branch(header.id))
 
 	let i = ids.mint()
 	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	let onThisTrip = appendCarriedBlockArgs(header, template: carried, ids: ids)
+	var onThisTrip = appendCarriedBlockArgs(header, template: carried, ids: ids)
 	var entering = argsOf(zero)
 	entering.append(carried)
 	cur.branchEdges.push(BranchEdge.create(header.id, argIds: entering))
@@ -5782,7 +5781,7 @@ end 'emitWalkedRecordBytes'
 // Mark an owner's separate buffer shared, when it has one; an owner that never allocated a buffer owes nothing.
 function emitSharedOwnBuffer(module StdModule, func IrFunction, from CascadeCursor, arr ValueId, to CascadeCursor, ids ValueMinter)
 	let buffer = emitLoadField(module, block: from.block, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
-	let marked = emitReleaseOwedBase(module, func: func, cur: from.block, base: buffer, callee: MmShareBufferName, ids: ids)
+	var marked = emitReleaseOwedBase(module, func: func, cur: from.block, base: buffer, callee: MmShareBufferName, ids: ids)
 	emitCascadeBranch(module, from: from.at(marked), to: to)
 end 'emitSharedOwnBuffer'
 
@@ -5792,7 +5791,7 @@ end 'emitSharedOwnBuffer'
 function emitElementWalkRange(module StdModule, func IrFunction, cur CascadeCursor, base ValueId, count ValueId, elementSize ValueId, elementWalk ValueId, action CascadeAction, ids ValueMinter) returns CascadeCursor
 	var visit = module.addBlock(func, label: b"walkdo", heat: BlockHeat.normal)
 	var loop = emitElementRange(module, func: func, cur: cur.block, base: base, count: count, elementSize: elementSize, visit: visit, carried: cur.carried, labels: elementRangeLabels(action), ids: ids)
-	let trip = CascadeCursor.create(visit, carried: loop.carried)
+	view trip = CascadeCursor.create(visit, carried: loop.carried)
 
 	// Both ABI masks are 0 for `emitElementDestructorCall`'s reason: a stamped element walk takes two
 	// whole-machine-word arguments, a POINTER and a table address.

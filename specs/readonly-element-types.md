@@ -940,7 +940,7 @@ function main() returns ExitCode
 	var others = Others.create()
 	others.push(ro_Counter.create())
 	let a = try roster.get(0) otherwise return 1
-	let b = try others.get(0) otherwise return 1
+	view b = try others.get(0) otherwise return 1
 	return (a.n + (b.label.count() as Integer) + (b.extra.count() as Integer)) as ExitCode
 end 'main'
 ```

@@ -112,7 +112,7 @@ typealias ByteArray = Array with Byte
 function main() returns ExitCode
 	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
 	try mm.setLength(3) otherwise return 2
-	let a = ByteArray.init(mm)
+	view a = ByteArray.init(mm)
 	if a.count() != mm.length() 'disagree'
 		return 4
 	end 'disagree'
@@ -137,7 +137,7 @@ function main() returns ExitCode
 	try mm.setByte(0, value: 7) otherwise return 3
 	try mm.setByte(1, value: 9) otherwise return 3
 	try mm.setByte(2, value: 11) otherwise return 3
-	let a = ByteArray.init(mm)
+	view a = ByteArray.init(mm)
 	let v0 = try a.get(0) otherwise return 4
 	let v1 = try a.get(1) otherwise return 4
 	let v2 = try a.get(2) otherwise return 4
@@ -211,7 +211,7 @@ function main() returns ExitCode
 	try mm.setLength(2) otherwise return 2
 	try mm.setByte(0, value: 20) otherwise return 3
 	try mm.setByte(1, value: 22) otherwise return 3
-	let a = Bytes.init(mm)
+	view a = Bytes.init(mm)
 	let v0 = try a.get(0) otherwise return 4
 	let v1 = try a.get(1) otherwise return 4
 	return (v0 + v1) as ExitCode
@@ -234,8 +234,8 @@ typealias ByteArray = Array with Byte
 function main() returns ExitCode
 	var mm = try __ManagedMemory.create(8, elementSize: 1) otherwise return 1
 	try mm.setLength(4) otherwise return 2
-	let a = ByteArray.init(mm)
-	let b = ByteArray.init(mm)
+	view a = ByteArray.init(mm)
+	view b = ByteArray.init(mm)
 	if a.count() != 4 'badA'
 		return 3
 	end 'badA'
@@ -320,7 +320,7 @@ function main() returns ExitCode
 	try mm.setLength(2) otherwise return 2
 	try mm.setByte(0, value: 20) otherwise return 3
 	try mm.setByte(1, value: 22) otherwise return 3
-	let a = wrap(mm)
+	view a = wrap(mm)
 	let v0 = try a.get(0) otherwise return 4
 	let v1 = try a.get(1) otherwise return 4
 	return (v0 + v1) as ExitCode
@@ -345,7 +345,7 @@ function main() returns ExitCode
 	var i = 0 as Count
 	var total = 0 as Count
 	while i < 64 'spin'
-		let a = ByteArray.init(mm)
+		view a = ByteArray.init(mm)
 		total = total + a.count()
 		i = i + 1
 	end 'spin'
@@ -506,7 +506,7 @@ type Container uses Element
 	end 'push'
 
 	function drain() returns Count
-		let t = ElementArray.init(self.items)
+		view t = ElementArray.init(self.items)
 		self.items = ElementArray.create()
 		return t.count()
 	end 'drain'
@@ -550,7 +550,7 @@ function main() returns ExitCode
 	try mm.setLength(2) otherwise return 2
 	try mm.setByte(0, value: 20) otherwise return 3
 	try mm.setByte(1, value: 22) otherwise return 3
-	let h = Holder.wrap(mm)
+	view h = Holder.wrap(mm)
 	let v0 = try h.bytes.get(0) otherwise return 4
 	let v1 = try h.bytes.get(1) otherwise return 4
 	return (v0 + v1) as ExitCode
@@ -577,7 +577,7 @@ end 'Boom'
 function adoptThenThrow(fail bool) returns Integer throws Boom
 	var mm = try __ManagedMemory.create(4, elementSize: 1) otherwise panic("create failed")
 	try mm.setLength(2) otherwise panic("setLength failed")
-	let a = ByteArray.init(mm)
+	view a = ByteArray.init(mm)
 	if fail 'boom'
 		throw Boom.bad
 	end 'boom'

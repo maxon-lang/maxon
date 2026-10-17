@@ -118,10 +118,10 @@ type Tbl uses Key where Key is Hashable and Equatable
 		var newHashes = HashSlotArray{}
 		newHashes.resize(newCapacity)
 
-		let oldKeys = keys
-		let oldValues = values
-		let oldStates = states
-		let oldHashes = hashes
+		view oldKeys = keys
+		view oldValues = values
+		view oldStates = states
+		view oldHashes = hashes
 		keys = newKeys
 		values = newValues
 		states = newStates
@@ -140,7 +140,7 @@ type Tbl uses Key where Key is Hashable and Equatable
 				Deleted gives false
 			end 'so1'
 			if isOccupied 'occupied'
-				let key = try oldKeys.get(i) otherwise 'skip_key'
+				view key = try oldKeys.get(i) otherwise 'skip_key'
 					continue
 				end 'skip_key'
 				let value = try oldValues.get(i) otherwise 'skip_val'

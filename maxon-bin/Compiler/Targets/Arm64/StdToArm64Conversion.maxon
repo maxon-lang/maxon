@@ -183,7 +183,7 @@ let Arm64LogicalNotMask = 1 as Imm32
 // zero — and it is a PAIR rather than two returns because the two only ever mean anything together.
 type Arm64MemOperand
 	export var base as TargetVReg
-	export var disp as Imm32
+	export let disp as Imm32
 
 	static function create(base TargetVReg, disp Imm32) returns Arm64MemOperand
 		return Self{base: base, disp: disp}
@@ -464,7 +464,7 @@ export type StdToArm64Lowering
 		self.lowerFunction(UnitFunctionIndex)
 
 		let valueClass = buildFunctionValueClasses(self.stdModule, targetModule: self.targetModule, funcIndex: UnitFunctionIndex, abi: self.abi)
-		let lowered = LoweredUnit.create(self.targetModule, valueClass: valueClass, rdata: self.rdata.requests)
+		var lowered = LoweredUnit.create(self.targetModule, valueClass: valueClass, rdata: self.rdata.requests)
 		self.stdModule = StdModule.create()
 		self.targetModule = TargetModule.create()
 		self.rdata = RdataRequestLog.create()
@@ -516,7 +516,7 @@ export type StdToArm64Lowering
 	// because a compare is lowered long before the branch or the phi edge that decides what it has to
 	// produce.
 	function prepareFunctionTables(funcIdx ElementIndex)
-		let srcFunc = self.stdModule.getFunc(funcIdx)
+		view srcFunc = self.stdModule.getFunc(funcIdx)
 		self.scaledIndexFolds.computeForFunction(self.stdModule, func: srcFunc, memoryForm: IndexedMemoryForm.accessWidthScaleAtZeroOffset)
 		self.compareFusion.computeForFunction(self.stdModule, func: srcFunc)
 		self.fresh = ValueMinter.create(nextFreeValueId(self.stdModule, func: srcFunc) as ParamCount)
@@ -527,8 +527,8 @@ export type StdToArm64Lowering
 	// contribute on arm64: its OS primitives (`write`, `mmap`, `exit`) are all ≤6-argument, register-only,
 	// which is why there is no `stdOpOutgoingArgBytes` table here to mirror x64's.
 	function lowerFunctionBlocks(funcIdx ElementIndex) returns StackSize
-		let srcFunc = self.stdModule.getFunc(funcIdx)
-		let returnType = srcFunc.returnType
+		view srcFunc = self.stdModule.getFunc(funcIdx)
+		view returnType = srcFunc.returnType
 
 		// This function's OWN parameter files, folded ONCE — every `param` op then reads a scalar instead of
 		// re-walking the parameter types, which is what the per-parameter `computeParamSlotIndex` did.
@@ -574,7 +574,7 @@ export type StdToArm64Lowering
 		var outgoingArgBytes = 0 as StackSize
 
 		for i in 0 upto opCount 'eachOp'
-			let stdOp = self.stdBlockOpAt(blockRef, index: i)
+			view stdOp = self.stdBlockOpAt(blockRef, index: i)
 			let opOutgoing = self.stdOpOutgoingArgBytes(stdOp)
 
 			if opOutgoing > outgoingArgBytes 'largerArgRegion'
@@ -587,7 +587,7 @@ export type StdToArm64Lowering
 		end 'eachOp'
 
 		if self.stdBlockHasTerminator(blockRef) 'hasTerm'
-			let termOp = self.stdBlockTerminator(blockRef)
+			var termOp = self.stdBlockTerminator(blockRef)
 			self.targetModule.spans.current = self.stdModule.spans.at(self.stdBlockTerminatorIndex(blockRef))
 			self.lowerTerminatorOp(termOp, dstRef: blockRef, returnType: returnType)
 		end 'hasTerm'
@@ -1314,9 +1314,9 @@ export type StdToArm64Lowering
 			return
 		end 'scaledIndexAddress'
 
-		let dest = TargetVReg.virtual(resultId)
-		let lhsReg = TargetVReg.virtual(lhs)
-		let rhsReg = TargetVReg.virtual(rhs)
+		var dest = TargetVReg.virtual(resultId)
+		var lhsReg = TargetVReg.virtual(lhs)
+		var rhsReg = TargetVReg.virtual(rhs)
 
 		match opcode 'op'
 			add then self.emit(dstRef, op: TargetOp.arm64Add(dest, lhs: lhsReg, rhs: rhsReg))
@@ -1504,8 +1504,8 @@ export type StdToArm64Lowering
 			return
 		end 'foldedIntoAddress'
 
-		let dest = TargetVReg.virtual(resultId)
-		let src = TargetVReg.virtual(lhs)
+		var dest = TargetVReg.virtual(resultId)
+		var src = TargetVReg.virtual(lhs)
 
 		match opcode 'op'
 			add then self.lowerAddSubImm(dest, src: src, imm: imm, isSub: false, dstRef: dstRef)
@@ -1621,7 +1621,7 @@ export type StdToArm64Lowering
 			return Arm64MemOperand.create(base, disp: disp)
 		end 'direct'
 
-		let scratch = arm64PhysReg(Arm64Scratch)
+		var scratch = arm64PhysReg(Arm64Scratch)
 		self.lowerAddSubImm(scratch, src: base, imm: disp, isSub: false, dstRef: dstRef)
 		return Arm64MemOperand.create(scratch, disp: 0)
 	end 'addressFor'
@@ -1637,7 +1637,7 @@ export type StdToArm64Lowering
 			return
 		end 'indexed'
 
-		let mem = self.addressFor(TargetVReg.virtual(addrId), offset: offset, width: width, dstRef: dstRef)
+		view mem = self.addressFor(TargetVReg.virtual(addrId), offset: offset, width: width, dstRef: dstRef)
 		self.emit(dstRef, op: TargetOp.loadRegBaseDisp(TargetVReg.virtual(resultId), base: mem.base, disp: mem.disp, width: width))
 	end 'lowerLoadIndirect'
 
@@ -1650,7 +1650,7 @@ export type StdToArm64Lowering
 			return
 		end 'indexed'
 
-		let mem = self.addressFor(TargetVReg.virtual(addrId), offset: offset, width: width, dstRef: dstRef)
+		view mem = self.addressFor(TargetVReg.virtual(addrId), offset: offset, width: width, dstRef: dstRef)
 		self.emit(dstRef, op: TargetOp.storeBaseDispReg(mem.base, disp: mem.disp, src: TargetVReg.virtual(valueId), width: width))
 	end 'lowerStoreIndirect'
 
@@ -1678,7 +1678,7 @@ export type StdToArm64Lowering
 			return base
 		end 'alreadyTheAddress'
 
-		let scratch = arm64PhysReg(Arm64Scratch)
+		var scratch = arm64PhysReg(Arm64Scratch)
 		self.lowerAddSubImm(scratch, src: base, imm: disp, isSub: false, dstRef: dstRef)
 		return scratch
 	end 'orderedAccessBase'
@@ -1708,12 +1708,12 @@ export type StdToArm64Lowering
 	// divisor, lhs`. x16 is non-allocatable, so no value is coloured into it across the pair — see
 	// `Arm64Scratch` for why "adjacent" is not the argument and what is.
 	function lowerDivMod(resultId ValueId, lhs ValueId, rhs ValueId, isRemainder bool, signedness IntegerSignedness, dstRef ElementIndex)
-		let divisor = TargetVReg.virtual(rhs)
+		var divisor = TargetVReg.virtual(rhs)
 		let dest = TargetVReg.virtual(resultId)
-		let lhsReg = TargetVReg.virtual(lhs)
+		var lhsReg = TargetVReg.virtual(lhs)
 
 		if isRemainder 'mod'
-			let quot = arm64PhysReg(Arm64Scratch)
+			var quot = arm64PhysReg(Arm64Scratch)
 			self.emit(dstRef, op: arm64DivideOp(quot, lhs: lhsReg, rhs: divisor, signedness: signedness))
 			self.emit(dstRef, op: TargetOp.arm64Msub(dest, mulLhs: quot, mulRhs: divisor, minuend: lhsReg))
 		end 'mod' else 'div'
@@ -1984,7 +1984,7 @@ export type StdToArm64Lowering
 		// and a second un-asked spelling here is exactly how a wrong-field read gets written down twice. The
 		// fold's scratch is x16 — the register the callee is about to land in — which is why it is safe: the
 		// `add` and the `ldr` that consumes it stay adjacent, and the load overwrites its own address.
-		let slot = self.addressFor(TargetVReg.virtual(witnessAddr), offset: witnessMethodSlotOffset(methodIndex), width: X64AccessWidth.word64, dstRef: dstRef)
+		view slot = self.addressFor(TargetVReg.virtual(witnessAddr), offset: witnessMethodSlotOffset(methodIndex), width: X64AccessWidth.word64, dstRef: dstRef)
 		self.emit(dstRef, op: TargetOp.loadRegBaseDisp(callee, base: slot.base, disp: slot.disp, width: X64AccessWidth.word64))
 		self.emit(dstRef, op: TargetOp.arm64BranchLinkReg(callee))
 	end 'emitWitnessCallSequence'

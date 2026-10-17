@@ -867,7 +867,7 @@ function build(n Count) returns Count
 	end 'fill'
 	var total = 0 as Count
 	for i in 0 upto n 'read'
-		let t = try m.get(i) otherwise panic("Map lost an entry across its rehash")
+		view t = try m.get(i) otherwise panic("Map lost an entry across its rehash")
 		total = total + t.score()
 	end 'read'
 	return total
@@ -1290,7 +1290,7 @@ end 'Info'
 var table = [b"if": Info.create("conditional", n: 1), b"else": Info.create("alternative", n: 2)]
 
 function main() returns ExitCode
-	let e = try table.get(b"else") otherwise panic("the file-scope literal lost a key")
+	view e = try table.get(b"else") otherwise panic("the file-scope literal lost a key")
 	print("{e.help} {e.n} count {table.count()}")
 	return 0
 end 'main'
@@ -1755,8 +1755,8 @@ error E3159: <fragment>:4:29: cannot pass 'm', which is read-only (a `let` bindi
 ```
 
 <!-- test: error.a-let-map-stored-in-a-var-struct-field-cannot-be-written-through-it -->
-A `let` map literal stored into a field of a `var` record is still the immutable record: a write through that
-field is refused, so the range column read from the `let` stays true.
+A `let` map literal cannot be stored into a field of a `var` record, so no write through that field can reach
+it and the range column read from the `let` stays true.
 ```maxon
 typealias CountMap = Map with (Count, Count)
 
@@ -1776,7 +1776,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:15:6: cannot pass 'm', which is read-only (a `let` binding), to a function that writes parameter 'self' (in main); pass a clone()
+error E3078: <fragment>:14:17: cannot pass 'm', which is read-only (a `let` binding), to parameter 'm' of 'Holder.create', which keeps it where something may write it; pass a clone()
 ```
 
 <!-- test: error.a-let-map-handed-to-a-function-value-that-writes-it-is-refused -->

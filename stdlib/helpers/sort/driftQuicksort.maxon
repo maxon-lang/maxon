@@ -34,17 +34,16 @@ public extension Array
 	// Each split loop tests membership of the BUFFERED class first, so the scanned element's last mention is the
 	// in-place `managed.set` that consumes it.
 	function stablePartition(lo ElementIndex, hi ElementIndex, pivotIndex ElementIndex, scratch MergeScratchArray, pivotHold MergeScratchArray, cmp SortComparator) returns ElementIndex
-		let pivotAtHome = try managed.get(pivotIndex) otherwise panic("stablePartition: get OOB at pivot")
 		pivotHold.clear()
-		pivotHold.push(pivotAtHome)
-		let pv = try pivotHold.get(0) otherwise panic("stablePartition: pivotHold is empty one line after a push into it")
+		pivotHold.push(try managed.get(pivotIndex) otherwise panic("stablePartition: get OOB at pivot"))
+		view pv = try pivotHold.get(0) otherwise panic("stablePartition: pivotHold is empty one line after a push into it")
 
 		// Count the `< pivot` class so we can pick the smaller class to buffer.
 		var lessCount = 0 as ElementIndex
 		var scan = lo
 
 		while scan < hi 'count'
-			let v = try managed.get(scan) otherwise panic("stablePartition: get OOB during count")
+			view v = try managed.get(scan) otherwise panic("stablePartition: get OOB during count")
 
 			if cmp(v, pv) == Ordering.lessThan 'isLess'
 				lessCount = lessCount + 1
@@ -68,7 +67,7 @@ public extension Array
 			var i = lo
 
 			while i < hi 'splitGe'
-				let v = try managed.get(i) otherwise panic("stablePartition: get OOB at i (ge)")
+				var v = try managed.get(i) otherwise panic("stablePartition: get OOB at i (ge)")
 
 				if cmp(v, pv) != Ordering.lessThan 'toScratch'
 					try scratch.set(k, value: v) otherwise panic("stablePartition: scratch.set OOB (ge)")
@@ -85,8 +84,7 @@ public extension Array
 			var s = 0 as ElementIndex
 
 			while s < geCount 'writeGe'
-				let v = try scratch.get(s) otherwise panic("stablePartition: scratch.get OOB (ge)")
-				try managed.set(out, value: v) otherwise panic("stablePartition: set OOB at out (ge)")
+				try managed.set(out, value: try scratch.get(s) otherwise panic("stablePartition: scratch.get OOB (ge)")) otherwise panic("stablePartition: set OOB at out (ge)")
 				out = out + 1
 				s = s + 1
 			end 'writeGe'
@@ -104,7 +102,7 @@ public extension Array
 			var i = lo
 
 			while i < hi 'splitLess'
-				let v = try managed.get(i) otherwise panic("stablePartition: get OOB at i (less)")
+				var v = try managed.get(i) otherwise panic("stablePartition: get OOB at i (less)")
 
 				if cmp(v, pv) == Ordering.lessThan 'toScratch2'
 					try scratch.set(k, value: v) otherwise panic("stablePartition: scratch.set OOB (less)")
@@ -122,8 +120,7 @@ public extension Array
 			var src = lo + geCount
 
 			while src > lo 'shiftGe'
-				let v = try managed.get(src - 1) otherwise panic("stablePartition: get OOB during shift")
-				try managed.set(src - 1 + lessCount, value: v) otherwise panic("stablePartition: set OOB during shift")
+				try managed.set(src - 1 + lessCount, value: try managed.get(src - 1) otherwise panic("stablePartition: get OOB during shift")) otherwise panic("stablePartition: set OOB during shift")
 				src = src - 1
 			end 'shiftGe'
 
@@ -131,8 +128,7 @@ public extension Array
 			var s = 0 as ElementIndex
 
 			while s < lessCount 'writeLess'
-				let v = try scratch.get(s) otherwise panic("stablePartition: scratch.get OOB (less)")
-				try managed.set(out, value: v) otherwise panic("stablePartition: set OOB at out (less)")
+				try managed.set(out, value: try scratch.get(s) otherwise panic("stablePartition: scratch.get OOB (less)")) otherwise panic("stablePartition: set OOB at out (less)")
 				out = out + 1
 				s = s + 1
 			end 'writeLess'

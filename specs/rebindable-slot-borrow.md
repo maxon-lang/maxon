@@ -50,7 +50,7 @@ type Holder
 	end 'fill'
 
 	function swapAndRead() returns Integer
-		let old = items
+		view old = items
 		var fresh = IntArray.create()
 		fresh.push(99)
 		items = fresh
@@ -153,7 +153,7 @@ var G = IntArray.create()
 function main() returns ExitCode
 	G.push(1)
 	G.push(2)
-	let old = G
+	view old = G
 	var fresh = IntArray.create()
 	fresh.push(99)
 	G = fresh

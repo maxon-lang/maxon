@@ -29,16 +29,12 @@ public extension Array
 	// Buffered merge when the LEFT side is smaller (or equal). Copies left
 	// into scratch, then sweeps left-to-right merging scratch + right into
 	// the output range. Stable (when picking equal, left wins).
-	//
-	// The pick tests "take the RIGHT one" first, so `rv`, read from `managed[r]`, is last named by the
-	// `managed.set` that consumes it. `mergeBufferedRight` below reads the same way round.
 	function mergeBufferedLeft(lo ElementIndex, mid ElementIndex, hi ElementIndex, scratch MergeScratchArray, cmp SortComparator)
 		let leftLen = mid - lo
 		var i = 0 as ElementIndex
 
 		while i < leftLen 'copyLeft'
-			let v = try managed.get(lo + i) otherwise panic("mergeBufferedLeft: get OOB during copy")
-			try scratch.set(i, value: v) otherwise panic("mergeBufferedLeft: scratch.set OOB")
+			try scratch.set(i, value: try managed.get(lo + i) otherwise panic("mergeBufferedLeft: get OOB during copy")) otherwise panic("mergeBufferedLeft: scratch.set OOB")
 			i = i + 1
 		end 'copyLeft'
 
@@ -47,14 +43,14 @@ public extension Array
 		var out = lo
 
 		while l < leftLen and r < hi 'pick'
-			let lv = try scratch.get(l) otherwise panic("mergeBufferedLeft: scratch.get OOB at l")
-			let rv = try managed.get(r) otherwise panic("mergeBufferedLeft: get OOB at r")
+			view lv = try scratch.get(l) otherwise panic("mergeBufferedLeft: scratch.get OOB at l")
+			view rv = try managed.get(r) otherwise panic("mergeBufferedLeft: get OOB at r")
 
 			if cmp(lv, rv) == Ordering.greaterThan 'takeRight'
-				try managed.set(out, value: rv) otherwise panic("mergeBufferedLeft: set OOB at out (right)")
+				try managed.set(out, value: try managed.get(r) otherwise panic("mergeBufferedLeft: get OOB at r (right)")) otherwise panic("mergeBufferedLeft: set OOB at out (right)")
 				r = r + 1
 			end 'takeRight' else 'takeLeft'
-				try managed.set(out, value: lv) otherwise panic("mergeBufferedLeft: set OOB at out (left)")
+				try managed.set(out, value: try scratch.get(l) otherwise panic("mergeBufferedLeft: scratch.get OOB at l (left)")) otherwise panic("mergeBufferedLeft: set OOB at out (left)")
 				l = l + 1
 			end 'takeLeft'
 
@@ -62,8 +58,7 @@ public extension Array
 		end 'pick'
 
 		while l < leftLen 'drainLeft'
-			let lv = try scratch.get(l) otherwise panic("mergeBufferedLeft: scratch.get OOB drain")
-			try managed.set(out, value: lv) otherwise panic("mergeBufferedLeft: set OOB drain")
+			try managed.set(out, value: try scratch.get(l) otherwise panic("mergeBufferedLeft: scratch.get OOB drain")) otherwise panic("mergeBufferedLeft: set OOB drain")
 			l = l + 1
 			out = out + 1
 		end 'drainLeft'
@@ -88,8 +83,7 @@ public extension Array
 		var i = 0 as ElementIndex
 
 		while i < rightLen 'copyRight'
-			let v = try managed.get(mid + i) otherwise panic("mergeBufferedRight: get OOB during copy")
-			try scratch.set(i, value: v) otherwise panic("mergeBufferedRight: scratch.set OOB")
+			try scratch.set(i, value: try managed.get(mid + i) otherwise panic("mergeBufferedRight: get OOB during copy")) otherwise panic("mergeBufferedRight: scratch.set OOB")
 			i = i + 1
 		end 'copyRight'
 
@@ -102,14 +96,14 @@ public extension Array
 		var outEnd = hi
 
 		while lEnd > lo and rEnd > 0 'pick'
-			let lv = try managed.get(lEnd - 1) otherwise panic("mergeBufferedRight: get OOB at lEnd-1")
-			let rv = try scratch.get(rEnd - 1) otherwise panic("mergeBufferedRight: scratch.get OOB at rEnd-1")
+			view lv = try managed.get(lEnd - 1) otherwise panic("mergeBufferedRight: get OOB at lEnd-1")
+			view rv = try scratch.get(rEnd - 1) otherwise panic("mergeBufferedRight: scratch.get OOB at rEnd-1")
 
 			if cmp(lv, rv) == Ordering.greaterThan 'takeLeft'
-				try managed.set(outEnd - 1, value: lv) otherwise panic("mergeBufferedRight: set OOB at outEnd-1 (left)")
+				try managed.set(outEnd - 1, value: try managed.get(lEnd - 1) otherwise panic("mergeBufferedRight: get OOB at lEnd-1 (left)")) otherwise panic("mergeBufferedRight: set OOB at outEnd-1 (left)")
 				lEnd = lEnd - 1
 			end 'takeLeft' else 'takeRight'
-				try managed.set(outEnd - 1, value: rv) otherwise panic("mergeBufferedRight: set OOB at outEnd-1 (right)")
+				try managed.set(outEnd - 1, value: try scratch.get(rEnd - 1) otherwise panic("mergeBufferedRight: scratch.get OOB at rEnd-1 (right)")) otherwise panic("mergeBufferedRight: set OOB at outEnd-1 (right)")
 				rEnd = rEnd - 1
 			end 'takeRight'
 
@@ -119,8 +113,7 @@ public extension Array
 		// Drain remaining scratch (right). Any remaining left tail is already
 		// in place since `managed` was untouched there during the copy.
 		while rEnd > 0 'drainRight'
-			let rv = try scratch.get(rEnd - 1) otherwise panic("mergeBufferedRight: scratch.get OOB at drain")
-			try managed.set(outEnd - 1, value: rv) otherwise panic("mergeBufferedRight: set OOB at drain")
+			try managed.set(outEnd - 1, value: try scratch.get(rEnd - 1) otherwise panic("mergeBufferedRight: scratch.get OOB at drain")) otherwise panic("mergeBufferedRight: set OOB at drain")
 			rEnd = rEnd - 1
 			outEnd = outEnd - 1
 		end 'drainRight'
@@ -181,7 +174,7 @@ public extension Array
 		// split that mates with the longer side's midpoint.
 		if leftLen >= rightLen 'leftLonger'
 			let q = lo + leftLen / 2
-			let qVal = try managed.get(q) otherwise panic("mergeRotation: get OOB at q (left)")
+			view qVal = try managed.get(q) otherwise panic("mergeRotation: get OOB at q (left)")
 			let r = self.lowerBound(mid, hi: hi, target: qVal, cmp: cmp)
 
 			// Rotate [q+1, mid) and [mid, r) so the right-side elements
@@ -198,7 +191,7 @@ public extension Array
 			self.mergeRotation(newMid + 1, mid: r, hi: hi, cmp: cmp)
 		end 'leftLonger' else 'rightLonger'
 			let q = mid + rightLen / 2
-			let qVal = try managed.get(q) otherwise panic("mergeRotation: get OOB at q (right)")
+			view qVal = try managed.get(q) otherwise panic("mergeRotation: get OOB at q (right)")
 			let l = self.upperBound(lo, hi: mid, target: qVal, cmp: cmp)
 
 			// Rotate [l, mid) and [mid, q+1) so q's value lands at the

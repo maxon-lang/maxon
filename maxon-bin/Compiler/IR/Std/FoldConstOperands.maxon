@@ -402,7 +402,7 @@ function rewriteBinAndCmpOps(module StdModule, opIndices OpIndexArray, constMap 
 	var operands = StdArithOperands.create()
 
 	for opIdx in opIndices 'eachOp'
-		let op = try module.ops.get(opIdx) otherwise panic("foldConstOperands: live op index {opIdx} not in module.ops")
+		var op = try module.ops.get(opIdx) otherwise panic("foldConstOperands: live op index {opIdx} not in module.ops")
 		try module.ops.set(opIdx, value: tryFold(op, constMap: constMap, operands: operands)) otherwise panic("foldConstOperands: ops.set OOB at {opIdx}")
 	end 'eachOp'
 end 'rewriteBinAndCmpOps'
@@ -430,7 +430,7 @@ function substituteIdentityImmediates(module StdModule, func IrFunction, opIndic
 	var subst = ValueIdArray.create()
 
 	for opIdx in opIndices 'eachOp'
-		let op = try module.ops.get(opIdx) otherwise panic("foldConstOperands: live op index {opIdx} not in module.ops")
+		view op = try module.ops.get(opIdx) otherwise panic("foldConstOperands: live op index {opIdx} not in module.ops")
 		classifyFoldableDef(op, def: def)
 
 		if def.isIdentityDef() 'isIdentity'

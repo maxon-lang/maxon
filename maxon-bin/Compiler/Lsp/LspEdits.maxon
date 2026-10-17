@@ -204,7 +204,7 @@ function unusedLocalNamesIn(tokens TokenArray, blocks LspDocumentBlockArray, sel
 	return found
 end 'unusedLocalNamesIn'
 
-// One `let`/`var` binding written inside a block, named by its NAME token.
+// One `let`/`var`/`view` binding written inside a block, named by its NAME token.
 type LocalBinding
 	export let tokenIndex as ElementIndex
 	export let startByte as ByteOffset
@@ -224,7 +224,7 @@ function localBindingsIn(tokens TokenArray, blocks LspDocumentBlockArray) return
 	var bindings = LocalBindingArray.create()
 
 	for (position, token) in tokens.withIterator() 'eachToken'
-		if token.kind != TokenKind.let and token.kind != TokenKind.var 'notABinding'
+		if not bindingKeywordSpells(token.kind) 'notABinding'
 			continue
 		end 'notABinding'
 

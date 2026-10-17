@@ -203,7 +203,7 @@ function main() returns ExitCode
 	triplet.push(Point.create(9, y: 10))
 	triplet.push(Point.create(11, y: 12))
 	for i in 0 upto 3 'alias_loop'
-		let p = try triplet.get(i) otherwise 'missErr'
+		view p = try triplet.get(i) otherwise 'missErr'
 			panic("alias_loop: triplet.get({i}) invariant violated")
 		end 'missErr'
 		total = total + sum_point(p)

@@ -162,7 +162,7 @@ end 'decode'
 function main() returns ExitCode
 	var m = TypeMap.create()
 	m.upsert("a", value: ReturnType.value(MaxonType.named(42)))
-	let t = dispatch(m, key: "a")
+	view t = dispatch(m, key: "a")
 	return decode(t)
 end 'main'
 ```

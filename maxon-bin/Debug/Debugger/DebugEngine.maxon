@@ -139,7 +139,7 @@ let FirstStopSeq = 1
 type EngineBreakpoint
 	export let offset as DebugAddress
 	export let address as DebugAddress
-	export var originalBytes as ByteArray
+	export let originalBytes as ByteArray
 	export let usersOwn as bool
 	export let conditioned as bool
 	export let condition as DebugConditionRecord
@@ -321,8 +321,8 @@ export type DebugEngine implements DebugMemory
 	var lastStopSeq as EngineSeq
 	var breakpoints as EngineBreakpointArray
 	var returnPoints as EngineReturnPointArray
-	var textBase as DebugAddress
-	var textSize as DebugAddress
+	let textBase as DebugAddress
+	let textSize as DebugAddress
 	var cacheBase as DebugAddress
 	var cacheBytes as ByteArray
 	var cacheFilled as bool
@@ -385,7 +385,7 @@ export type DebugEngine implements DebugMemory
 			ready(placed) then placement = placed
 		end 'adopted'
 
-		let contract = DebugRuntimeContract.readFrom(reader, textBytes: textBytes, placement: placement)
+		var contract = DebugRuntimeContract.readFrom(reader, textBytes: textBytes, placement: placement)
 		var engine = Self{backend: backend, target: target, contract: contract, stopTimeoutMs: stopTimeoutMs, lastStopSeq: 0, breakpoints: EngineBreakpointArray.create(), returnPoints: EngineReturnPointArray.create(), textBase: contract.textBase(), textSize: contract.textSize(), cacheBase: 0, cacheBytes: ByteArray.create(), cacheFilled: false, trace: trace, routing: routing, registers: DebugRegisterFile.create(), stopThread: 0, stopped: false, answeredUnder: 0, liftedTraps: EngineLiftedTrapArray.create(), detached: false, closed: false, holdArmed: false, lastReason: 0, lastFault: 0, lastPc: 0, lastConditionMissed: false, pausePending: false, readerStep: EngineReaderStep.none}
 
 		return engine.awaitEntryStop()
@@ -480,7 +480,7 @@ export type DebugEngine implements DebugMemory
 		// The backend closes before the target settles: while a stub is attached XNU makes it the program's
 		// parent, and the driver can reap the program only once the stub has let it go.
 		self.backend.close()
-		let outcome = self.target.settle(how)
+		var outcome = self.target.settle(how)
 		self.target.pump()
 		closeTraceRing(self.trace)
 		Scheduler.unpinFromMachine()
@@ -657,7 +657,7 @@ export type DebugEngine implements DebugMemory
 		end 'pastTheImage'
 
 		if self.armedAt(self.textBase + offset) 'armedAlready'
-			let original = self.originalBytesAt(offset)
+			view original = self.originalBytesAt(offset)
 			self.recordBreakpoint(offset, originalBytes: original, usersOwn: forTheUser or self.userBreakpointAt(self.textBase + offset), conditioned: false, condition: DebugConditionRecord.unconditioned())
 			self.forgetTheHoldAt(offset)
 
@@ -746,7 +746,7 @@ export type DebugEngine implements DebugMemory
 			return held
 		end 'theWalkCouldNotHoldItsReturn'
 
-		let original = self.originalBytesAt(offset)
+		view original = self.originalBytesAt(offset)
 		self.recordBreakpoint(offset, originalBytes: original, usersOwn: true, conditioned: true, condition: record)
 
 		return CommandOutcome.done
@@ -758,7 +758,7 @@ export type DebugEngine implements DebugMemory
 			at then break
 		end 'known'
 
-		let original = self.originalBytesAt(offset)
+		view original = self.originalBytesAt(offset)
 		self.recordBreakpoint(offset, originalBytes: original, usersOwn: true, conditioned: false, condition: DebugConditionRecord.unconditioned())
 
 		return CommandOutcome.done
@@ -915,7 +915,7 @@ export type DebugEngine implements DebugMemory
 	// address the walk still holds — it forgets the record and restores no byte — so lifting from a roster
 	// that still names the point leaves a live `int3` in the debuggee with `armedAt` reading clean.
 	export function liftReturnPoint() returns CommandOutcome
-		let standing = self.returnPoints
+		view standing = self.returnPoints
 		self.returnPoints = EngineReturnPointArray.create()
 		var outcome = CommandOutcome.done
 
@@ -1104,7 +1104,7 @@ export type DebugEngine implements DebugMemory
 		let deadline = debugDeadlineAfter(sliceMs)
 
 		while not debugDeadlinePassed(deadline) 'poll'
-			let look = self.lastLookForAStop()
+			var look = self.lastLookForAStop()
 
 			match look 'seen'
 				stopped or
@@ -1146,7 +1146,7 @@ export type DebugEngine implements DebugMemory
 	end 'parkedAtEntry'
 
 	function lookAtADetachedProgram() returns StopWait
-		let outcome = self.target.settle(TargetSettling.polled)
+		view outcome = self.target.settle(TargetSettling.polled)
 
 		if targetIsRunning(outcome) 'stillRunning'
 			return StopWait.timedOut

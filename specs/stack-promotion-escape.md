@@ -317,7 +317,7 @@ function main() returns ExitCode
 	var arr = ItemArray.create()
 	fill(arr)
 	let noise = churn(1000)
-	let got = try arr.get(0) otherwise Item.create(0)
+	view got = try arr.get(0) otherwise Item.create(0)
 	return got.value if noise > 0 else 1
 end 'main'
 ```

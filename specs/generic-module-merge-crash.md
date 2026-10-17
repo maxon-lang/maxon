@@ -19,9 +19,9 @@ typealias Integer = int(i64.min to i64.max)
 interface Mergeable uses Func
 	function itemCount() returns Count
 	function getItem(index Count) returns Func
-	function pushItem(item Func)
+	function pushItem(item keep Func)
 	function opsCount() returns Count
-	function appendOps(source Self)
+	function appendOps(source keep Self)
 	function cloneItem(src Func) returns Func
 end 'Mergeable'
 
@@ -103,7 +103,7 @@ function main() returns ExitCode
 	b.merge(a)
 
 	if b.opsCount() == 2 and b.itemCount() == 1 'check'
-		let item = b.getItem(0)
+		view item = b.getItem(0)
 		if item.value == 99 'valueCheck'
 			return 0
 		end 'valueCheck'

@@ -461,7 +461,7 @@ function demandOneStdlibFileIfReached(project Project, path FilePath, reachable 
 		return false
 	end 'notTheDemandTier'
 
-	let artifact = try queryParseOps(project, path: path)
+	view artifact = try queryParseOps(project, path: path)
 
 	for func in artifact.module.functions 'eachFunc'
 		if not reachable.contains(func.name) 'notReached'
@@ -514,7 +514,7 @@ end 'libraryFunctionRoster'
 function collectOneLibraryFile(project Project, path FilePath, names NameRoster, runtimeTier FunctionNameSet, compilerReached FunctionNameSet) throws CompileError
 	let isRuntime = isRuntimeSourceFile(project, path: path)
 	let isCompilerCalled = isRuntime and runtimeTierFileIsCompilerCalled(path)
-	let artifact = try queryParseOps(project, path: path)
+	view artifact = try queryParseOps(project, path: path)
 
 	for func in artifact.module.functions 'eachFunc'
 		names.push(func.name)
@@ -853,7 +853,7 @@ function reachableMaxonFunctionNames(module MaxonModule, project Project, signat
 		end 'nothingLeftToSeedOrDrain'
 
 		while interfacesSeeded < witnessInterfaceOrder.count() 'eachNewlyNamedInterface'
-			let interfaceName = try witnessInterfaceOrder.get(interfacesSeeded) otherwise panic("reachableMaxonFunctionNames: witnessInterfaceOrder.get OOB at {interfacesSeeded} despite the loop guard")
+			view interfaceName = try witnessInterfaceOrder.get(interfacesSeeded) otherwise panic("reachableMaxonFunctionNames: witnessInterfaceOrder.get OOB at {interfacesSeeded} despite the loop guard")
 			interfacesSeeded = interfacesSeeded + 1
 
 			for conformerName in seedConformers 'eachSeededConformer'
@@ -945,7 +945,7 @@ typealias EnumConformersByInterface = Map with (ByteArray, NameRoster)
 // hundred `implements Error` enums out of this map entirely.
 function enumConformersByInterface(project Project) returns EnumConformersByInterface
 	var byInterface = EnumConformersByInterface.create()
-	let declared = declaredConformanceIndex(project)
+	view declared = declaredConformanceIndex(project)
 
 	for (conformerName, declaredInterfaces) in declared 'eachDeclaredConformer'
 		if not project.enumTypes.contains(conformerName) 'itsValuesComeFromACall'
@@ -1475,7 +1475,7 @@ function markEveryDeclaredWitnessImplOf(typeName ByteArray, project Project, sig
 		return
 	end 'theSeedOwnsThisConformer'
 
-	let conformedTo = try declaredConformanceIndex(project).get(typeName) otherwise 'declaresNoConformance'
+	view conformedTo = try declaredConformanceIndex(project).get(typeName) otherwise 'declaresNoConformance'
 		return
 	end 'declaresNoConformance'
 
@@ -1490,7 +1490,7 @@ end 'markEveryDeclaredWitnessImplOf'
 // them would call live library code dead and `requireUnreachableLibraryStayedDead` panics.
 function markConstraintArgumentImpls(ledger ConstrainedOwnerLedger, project Project, signatures ProgramSignatures, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	for owner in ledger.pending 'eachNewlyReachedOwner'
-		let instances = try ledger.instancesByBase.get(owner) otherwise panic("markConstraintArgumentImpls: '{String.from(owner)}' was filed because the index holds instances of it")
+		view instances = try ledger.instancesByBase.get(owner) otherwise panic("markConstraintArgumentImpls: '{String.from(owner)}' was filed because the index holds instances of it")
 
 		for instance in instances.ids 'eachInstance'
 			for constraint in signatures.structWhereConstraints(owner) 'eachConstraint'
@@ -1528,7 +1528,7 @@ function markWitnessImplsOfConformer(typeName ByteArray, interfaceName ByteArray
 		return
 	end 'thisPairHasNoTable'
 
-	let iface = try project.interfaces.entries.get(interfaceName) otherwise 'noSuchInterface'
+	view iface = try project.interfaces.entries.get(interfaceName) otherwise 'noSuchInterface'
 		// A witness position naming an interface the program does not declare is E3017's / E3011's, reported
 		// one pass later; a reachability walk has nothing to add and nothing to credit.
 		return
@@ -1715,7 +1715,7 @@ end 'userCodeDemandsAWitnessTable'
 // conformance, so this gate is TRUE in every compile. The shared list keeps it right for the reason it is
 // written — the seed and its gate are ONE roster — rather than by accident of which modules are listed.
 function corpusDeclaresASeededConformance(project Project, signatures ProgramSignatures) returns bool
-	let index = declaredConformanceIndex(project)
+	view index = declaredConformanceIndex(project)
 
 	for conformerName in conformersMintedWithoutTheirOwnMethods(signatures) 'eachSeededConformer'
 		if index.contains(conformerName) 'declaresOne'

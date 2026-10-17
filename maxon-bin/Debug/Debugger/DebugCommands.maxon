@@ -73,7 +73,7 @@ let WordGap = " "
 export type DebugCommandRow
 	export var canonical as String
 	export var aliases as StringArray
-	export var completesAFunctionName as bool
+	export let completesAFunctionName as bool
 
 	export static function create(canonical String, aliases StringArray, completesAFunctionName bool) returns DebugCommandRow
 		return Self{canonical: canonical, aliases: aliases, completesAFunctionName: completesAFunctionName}
@@ -1200,7 +1200,7 @@ export type DebugConversation
 	end 'purposesOtherThan'
 
 	function dropPurpose(offset DebugAddress, hidden DebugTally, identity DebugBreakIdentity) returns PurposeDrop
-		let held = try self.armPurposes.get(offset) otherwise return PurposeDrop.notArmed
+		view held = try self.armPurposes.get(offset) otherwise return PurposeDrop.notArmed
 		let kept = self.purposesOtherThan(offset, hidden: hidden, identity: identity)
 
 		if kept.count() == held.count() 'notThisPurpose'
@@ -1457,7 +1457,7 @@ export type DebugConversation
 	end 'threadOfStop'
 
 	function refreshThreads() returns GreenThreadListing
-		let listing = self.engine.listGreenThreads()
+		var listing = self.engine.listGreenThreads()
 
 		match listing 'answered'
 			listed(records, truncated) then self.threads.refresh(records, wasTruncated: truncated, symbols: self.symbols, textBase: self.engine.imageTextBase())

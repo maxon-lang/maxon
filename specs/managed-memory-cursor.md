@@ -414,7 +414,7 @@ function main() returns ExitCode
 	var xs = StrArray.create()
 	xs.push("alpha heap string long enough to require an allocation")
 	xs.push("beta heap string long enough to require an allocation")
-	let cursor = try xs.managed.createCursor() otherwise return 99
+	view cursor = try xs.managed.createCursor() otherwise return 99
 	xs.clear()
 	print("{cursor.current()}\n")
 	return 0
@@ -472,7 +472,7 @@ function main() returns ExitCode
 	for i in 0 upto 2 'fill'
 		xs.push("element {i} of the source, long enough to need a heap record")
 	end 'fill'
-	let cursor = try xs.managed.createCursor() otherwise return 99
+	view cursor = try xs.managed.createCursor() otherwise return 99
 	let first = cursor.current()
 	xs.clear()
 	print("{first}\n")

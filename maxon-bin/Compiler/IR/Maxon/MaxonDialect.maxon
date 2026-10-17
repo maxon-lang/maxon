@@ -3372,10 +3372,11 @@ export enum WriteBlameHolder
 	storedSetElement
 	moduleLet
 	sharedView
+	view
 end 'WriteBlameHolder'
 
 // @generated library-cache begin
-let CacheCasesWriteBlameHolder = [WriteBlameHolder.binding, WriteBlameHolder.closure, WriteBlameHolder.forElement, WriteBlameHolder.loopVariable, WriteBlameHolder.ifLetBinding, WriteBlameHolder.matchBinding, WriteBlameHolder.letField, WriteBlameHolder.letPayload, WriteBlameHolder.readOnlyElement, WriteBlameHolder.storedMapKey, WriteBlameHolder.storedSetElement, WriteBlameHolder.moduleLet, WriteBlameHolder.sharedView]
+let CacheCasesWriteBlameHolder = [WriteBlameHolder.binding, WriteBlameHolder.closure, WriteBlameHolder.forElement, WriteBlameHolder.loopVariable, WriteBlameHolder.ifLetBinding, WriteBlameHolder.matchBinding, WriteBlameHolder.letField, WriteBlameHolder.letPayload, WriteBlameHolder.readOnlyElement, WriteBlameHolder.storedMapKey, WriteBlameHolder.storedSetElement, WriteBlameHolder.moduleLet, WriteBlameHolder.sharedView, WriteBlameHolder.view]
 
 function cacheReadWriteBlameHolder(reader LibraryCacheReader) returns WriteBlameHolder throws LibraryCacheDamage
 	let ordinal = try reader.unsigned()
@@ -3406,11 +3407,12 @@ end 'cacheTableAgreesWriteBlameHolder'
 
 export union WriteBlame
 	unblamed
-	blamed(name ByteArray, holder WriteBlameHolder)
+	blamed(let name ByteArray, holder WriteBlameHolder)
+
 	// A binding that may be written through but not rebound: a `for` or `if let` binding over a
 	// writable source. Only a callee that reassigns its by-reference parameter blames it
 	// (`whenRebinding`).
-	rebindOnly(name ByteArray, holder WriteBlameHolder)
+	rebindOnly(let name ByteArray, holder WriteBlameHolder)
 
 	export function isBlamed() returns bool
 		return match self 'blame'

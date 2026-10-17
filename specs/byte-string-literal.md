@@ -183,8 +183,8 @@ end 'Info'
 var m = [b"hello": Info.create(10), b"world": Info.create(20)]
 
 function main() returns ExitCode
-		let v1 = try m.get(b"hello") otherwise Info.create(0)
-		let v2 = try m.get(b"world") otherwise Info.create(0)
+		view v1 = try m.get(b"hello") otherwise Info.create(0)
+		view v2 = try m.get(b"world") otherwise Info.create(0)
 		print("{v1.value} {v2.value}")
 		return 0
 end 'main'
@@ -621,17 +621,14 @@ end 'main'
 2 65 66
 ```
 
-<!-- test: byte-string-literal.constant-into-a-container-detaches -->
+<!-- test: error.byte-string-literal.constant-pushed-into-a-container-is-refused -->
 
 ⭐ **THE NINE DETACH CASES ABOVE ALL WRITE AN INLINE `b"…"`, WHOSE RECORD IS AN ORDINARY HEAP BOX. A
-MODULE-LEVEL `let`'s RECORD IS `.rdata` ITSELF**, so a mutation reached through it writes a read-only page:
-`0xC0000005` on x64, and on wasm — which has no read-only section — a SILENT overwrite of the image plus a
-leak report. The detach cannot rescue it: a detach republishes `buffer@0` and `capacity@16` IN the record.
+MODULE-LEVEL `let`'s RECORD IS `.rdata` ITSELF**, so a mutation reached through it would write a read-only
+page, and a detach cannot rescue it: a detach republishes `buffer@0` and `capacity@16` IN the record.
 
-So the constant may never come to rest in a mutable sink. Storing one into a container is a co-own
-(`Parser.coOwnConcreteRecordForSink`), and an immortal record's only co-owner is a private COPY —
-`__managed_retain` forks on `capacity@16` and clones. The element the container then hands back is that
-copy, writable like any other, and the constant is untouched.
+So the constant may never come to rest in a mutable sink: pushing it into a container's element is refused;
+push a `clone()`.
 ```maxon
 typealias ByteArrayArray = Array with ByteArray
 
@@ -647,18 +644,14 @@ function main() returns ExitCode
 		return 0
 end 'main'
 ```
-```exitcode
-0
-```
-```stdout
-10 9 99
+```maxoncstderr
+error E3078: <fragment>:8:5: cannot store a value read out of a module-level `let` into mutable place 'an element of the container push writes'; use clone()
 ```
 
-<!-- test: byte-string-literal.constant-into-a-struct-field-detaches -->
+<!-- test: error.byte-string-literal.constant-handed-to-a-factory-that-keeps-it-is-refused -->
 
-The other durable sink, and the same fork reached through the other door: a field of a record this frame
-builds. `Holder.create(Keyword)` co-owns its argument for the box that will hold it, so the field holds the
-copy and `h.b.push(…)` writes that.
+The other durable sink: a field of a record this frame builds. `Holder.create` keeps its argument in a `var`
+field, so handing it the constant is refused; pass a `clone()`.
 ```maxon
 let Keyword = b"critsplit"
 
@@ -678,18 +671,14 @@ function main() returns ExitCode
 		return 0
 end 'main'
 ```
-```exitcode
-0
-```
-```stdout
-10 9 99
+```maxoncstderr
+error E3078: <fragment>:13:18: cannot pass 'Keyword', which is read-only (a module-level `let`), to parameter 'b' of 'Holder.create', which keeps it where something may write it; pass a clone()
 ```
 
-<!-- test: byte-string-literal.constant-into-a-corpus-container-detaches -->
+<!-- test: error.byte-string-literal.constant-appended-to-a-corpus-container-is-refused -->
 
-`List.append` is a CORPUS member, so the constant reaches storage through the type-parameter FEED sink
-rather than through a compiler-emitted container primitive. Both sinks owe the same reference and take it
-the same way, which is what this case pins: two doors, one fork.
+`List.append` is a CORPUS member, so the constant reaches storage through a parameter the stdlib body keeps
+rather than through a compiler-emitted container primitive. The refusal is the same at either door.
 ```maxon
 typealias ByteArrayList = List with ByteArray
 
@@ -705,11 +694,8 @@ function main() returns ExitCode
 		return 0
 end 'main'
 ```
-```exitcode
-0
-```
-```stdout
-10 9 99
+```maxoncstderr
+error E3078: <fragment>:8:5: cannot store a value read out of a module-level `let` into mutable place 'an element of the container append writes'; use clone()
 ```
 
 <!-- test: error.byte-string-literal.negative-resize-is-refused -->

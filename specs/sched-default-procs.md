@@ -186,7 +186,7 @@ function main() returns ExitCode
 
 	var k = 0 as Integer
 	while k < serviceCount 'sendEach'
-		let h = try hs.get(k as ElementIndex) otherwise panic("hs.get OOB at {k} — the loop is bounded by the count the pushes above filled")
+		view h = try hs.get(k as ElementIndex) otherwise panic("hs.get OOB at {k} — the loop is bounded by the count the pushes above filled")
 		h.grind(k, work: workPerService)
 		k = k + 1
 	end 'sendEach'
@@ -194,7 +194,7 @@ function main() returns ExitCode
 	var aggregate = 0 as Integer
 	var n = 0 as Integer
 	while n < serviceCount 'collect'
-		let h = try hs.get(n as ElementIndex) otherwise panic("hs.get OOB at {n} — the loop is bounded by the count the pushes above filled")
+		view h = try hs.get(n as ElementIndex) otherwise panic("hs.get OOB at {n} — the loop is bounded by the count the pushes above filled")
 		aggregate = aggregate + (try await h.total() otherwise 0)
 		n = n + 1
 	end 'collect'
@@ -267,7 +267,7 @@ function main() returns ExitCode
 
 	var k = 0 as Integer
 	while k < serviceCount 'sendEach'
-		let h = try hs.get(k as ElementIndex) otherwise panic("hs.get OOB at {k} — the loop is bounded by the count the pushes above filled")
+		view h = try hs.get(k as ElementIndex) otherwise panic("hs.get OOB at {k} — the loop is bounded by the count the pushes above filled")
 		h.grind(k, work: workPerService)
 		k = k + 1
 	end 'sendEach'
@@ -275,7 +275,7 @@ function main() returns ExitCode
 	var aggregate = 0 as Integer
 	var n = 0 as Integer
 	while n < serviceCount 'collect'
-		let h = try hs.get(n as ElementIndex) otherwise panic("hs.get OOB at {n} — the loop is bounded by the count the pushes above filled")
+		view h = try hs.get(n as ElementIndex) otherwise panic("hs.get OOB at {n} — the loop is bounded by the count the pushes above filled")
 		aggregate = aggregate + (try await h.total() otherwise 0)
 		n = n + 1
 	end 'collect'
@@ -345,7 +345,7 @@ function main() returns ExitCode
 
 	var k = 0 as Integer
 	while k < serviceCount 'sendEach'
-		let h = try hs.get(k as ElementIndex) otherwise panic("hs.get OOB at {k} — the loop is bounded by the count the pushes above filled")
+		view h = try hs.get(k as ElementIndex) otherwise panic("hs.get OOB at {k} — the loop is bounded by the count the pushes above filled")
 		h.grind(k, work: workPerService)
 		k = k + 1
 	end 'sendEach'
@@ -353,7 +353,7 @@ function main() returns ExitCode
 	var aggregate = 0 as Integer
 	var n = 0 as Integer
 	while n < serviceCount 'collect'
-		let h = try hs.get(n as ElementIndex) otherwise panic("hs.get OOB at {n} — the loop is bounded by the count the pushes above filled")
+		view h = try hs.get(n as ElementIndex) otherwise panic("hs.get OOB at {n} — the loop is bounded by the count the pushes above filled")
 		aggregate = aggregate + (try await h.total() otherwise 0)
 		n = n + 1
 	end 'collect'
@@ -417,7 +417,7 @@ function main() returns ExitCode
 
 	var k = 0 as Integer
 	while k < serviceCount 'sendEach'
-		let h = try hs.get(k as ElementIndex) otherwise panic("hs.get OOB at {k} — the loop is bounded by the count the pushes above filled")
+		view h = try hs.get(k as ElementIndex) otherwise panic("hs.get OOB at {k} — the loop is bounded by the count the pushes above filled")
 		h.grind(k, work: workPerService)
 		k = k + 1
 	end 'sendEach'
@@ -425,7 +425,7 @@ function main() returns ExitCode
 	var aggregate = 0 as Integer
 	var n = 0 as Integer
 	while n < serviceCount 'collect'
-		let h = try hs.get(n as ElementIndex) otherwise panic("hs.get OOB at {n} — the loop is bounded by the count the pushes above filled")
+		view h = try hs.get(n as ElementIndex) otherwise panic("hs.get OOB at {n} — the loop is bounded by the count the pushes above filled")
 		aggregate = aggregate + (try await h.total() otherwise 0)
 		n = n + 1
 	end 'collect'

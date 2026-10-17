@@ -174,8 +174,8 @@ export type FuncReturnTypeEntry
 	export let returnType as MaxonReturnType
 	export let declaredSurface as DeclaredSurface
 	export var visibility as Visibility
-	export var takesReceiver as bool
-	export var opaqueParams as OpaqueParamInfo
+	export let takesReceiver as bool
+	export let opaqueParams as OpaqueParamInfo
 	export let paramNames as NameRoster
 	export let paramTypes as MaxonTypeArray
 	export let paramDeclaredBrands as NameRoster
@@ -189,8 +189,8 @@ export type FuncReturnTypeEntry
 	// alias is a whole-program question, and this entry is built during the declaration SWEEP that
 	// answers it. The consumer asks, at parse time, with the index complete.
 	export var returnAliasName as ReturnAliasSpelling
-	export var nameLine as LineNumber
-	export var nameColumn as ColumnNumber
+	export let nameLine as LineNumber
+	export let nameColumn as ColumnNumber
 
 	// ⚠ **THE THREE EMPTY DEFAULTS ARE FRESH, NOT SHARED ANCHORS.** A default naming a module-level `let`
 	// makes that anchor an export nothing calls, which `checkUnusedExports` reports as E3092. An empty
@@ -211,8 +211,8 @@ export typealias FuncReturnTypeEntryArray = Array with FuncReturnTypeEntry
 export type FuncSignatureEntry
 	export let name as ByteArray
 	export var signature as FuncSignature
-	export var nameLine as LineNumber
-	export var nameColumn as ColumnNumber
+	export let nameLine as LineNumber
+	export let nameColumn as ColumnNumber
 	export var sourceFilePath as FilePath
 
 	// ⭐⭐ **DID THE COMPILER MINT THIS FUNCTION, OR DID THE AUTHOR WRITE IT? — the bit
@@ -227,7 +227,7 @@ export type FuncSignatureEntry
 	// from the name's `__` prefix at the
 	// merge, for the reason this file keeps: a minted name is a thing to be RECORDED, never a thing to be
 	// read back apart.
-	export var synthesized as bool
+	export let synthesized as bool
 	export var role as FunctionDeclarationRole
 	export var returnType as MaxonReturnType
 
@@ -411,7 +411,7 @@ export type FileParseArtifact
 	// `livesUnderStdlibDirectory` and NOT `isStdlibSource` for the reason
 	// `Parser.requireTypeNameNotCompilerOwned` states: a project rooted under `stdlib/` must still record its
 	// own declarations, or the readiness probe would disagree with the loaded module.
-	export var livesUnderStdlibDirectory as bool
+	export let livesUnderStdlibDirectory as bool
 
 	// ⭐⭐ **HAVE THIS ARTIFACT'S NAME IDS ALREADY BEEN FOLDED INTO THE PROJECT INTERNER?**
 	//
@@ -943,7 +943,7 @@ export type FileParseArtifact
 	// header says why both registries need it). Here rather than at `parseEnumDeclaration`'s tail so the
 	// artifact's enum list and the sweep's are filled by one rule.
 	export function recordEnumType(layout EnumLayout)
-		let owned = layout.clone()
+		var owned = layout.clone()
 		self.enumTypes.push(owned)
 		appendUnionCasesCompanion(self.enumTypes, layout: owned)
 	end 'recordEnumType'
@@ -1472,7 +1472,7 @@ module function nominalNameCollisionsOf(decls TypeNameDeclArray, paths FilePathA
 
 	for entry in sourceFilesInPathOrder(paths) 'eachInPathOrder'
 		let path = try paths.get(entry.position) otherwise panic("nominalNameCollisionsOf: paths.get OOB at {entry.position} below count {paths.count()}")
-		let declared = try byFile.get(path.toString()) otherwise continue
+		view declared = try byFile.get(path.toString()) otherwise continue
 
 		for collision in registry.recordAll(declared, directories: directories) 'eachCollisionHere'
 			if isTypeAliasDecl(collision.decl.claim.kind) or isTypeAliasDecl(collision.winner.claim.kind) 'anAliasIsInvolved'
@@ -1598,7 +1598,7 @@ export function checkTypeSymbolNamespace(project Project, signatures ProgramSign
 	var claimed = CompiledTypeNameClaimMap.create()
 
 	for gid in 0 upto instantiationCount 'eachInstantiation'
-		let compiled = signatures.mangleGenericInstance(gid)
+		view compiled = signatures.mangleGenericInstance(gid)
 
 		// A rejected newcomer is deliberately NOT recorded: the incumbent stays the one every later
 		// instantiation is measured against, which is `TypeNameRegistry`'s own rule (a rejected
@@ -1965,7 +1965,7 @@ export function rebaseArtifact(project Project, artifact FileParseArtifact, reba
 		scratch = scratch + 1
 	end 'eachBaselineRow'
 
-	moves.applyTo(project, artifact: artifact, names: TypeIdRemap.unmoved().movingInterfaces(rebase.interfaces))
+	moves.applyTo(project, artifact: artifact, names: TypeIdRemap.unmoved().movingInterfaces(rebase.interfaces.clone()))
 end 'rebaseArtifact'
 
 // The id each of the artifact's parse rows is adopted under by this merge — every artifact no real parse built
@@ -1994,7 +1994,7 @@ function rewriteTypeIds(project Project, artifact FileParseArtifact, remap TypeI
 	end 'eachFunc'
 
 	for position in 0 upto artifact.module.ops.count() 'eachOp'
-		let op = try artifact.module.ops.get(position) otherwise panic("rewriteTypeIds: ops.get OOB at {position}")
+		var op = try artifact.module.ops.get(position) otherwise panic("rewriteTypeIds: ops.get OOB at {position}")
 		try artifact.module.ops.set(position, value: renumberedOp(op, remap: remap)) otherwise panic("rewriteTypeIds: ops.set OOB at {position}")
 	end 'eachOp'
 
@@ -2133,7 +2133,7 @@ function commitFuncSignatures(project Project, artifact FileParseArtifact)
 			// naming `__paramDefault#f#0` — a symbol absent from the source. The kept entry is still chosen
 			// exactly as for a reported duplicate: the two paths differ in what they SAY, never in what the
 			// registry holds.
-			let blamed = blamedFunctionDeclaration(project, newcomer: entry)
+			view blamed = blamedFunctionDeclaration(project, newcomer: entry)
 
 			if not blamed.synthesized 'theAuthorWroteThisName'
 				reportPositioned(project, code: ErrorCode.duplicateDefinition, message: duplicateFunctionMessage(project, name: blamed.name, declFilePath: blamed.sourceFilePath), line: blamed.nameLine, column: blamed.nameColumn, filePath: blamed.sourceFilePath)
@@ -2155,7 +2155,7 @@ function holdFunctionFloor(project Project, entry FuncSignatureEntry)
 end 'holdFunctionFloor'
 
 function blamedFunctionDeclaration(project Project, newcomer FuncSignatureEntry) returns FuncSignatureEntry
-	let floor = try project.funcSignatureFloors.get(newcomer.name) otherwise panic("blamedFunctionDeclaration: '{String.from(newcomer.name)}' is in funcSignatures, and every name committed there has its floor committed beside it")
+	var floor = try project.funcSignatureFloors.get(newcomer.name) otherwise panic("blamedFunctionDeclaration: '{String.from(newcomer.name)}' is in funcSignatures, and every name committed there has its floor committed beside it")
 
 	if newcomerDisplacesTheFloor(newcomer, floor: floor) 'theFloorIsBlamed'
 		holdFunctionFloor(project, entry: newcomer)

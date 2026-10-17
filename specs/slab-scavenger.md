@@ -222,7 +222,7 @@ function main() returns ExitCode
 
 	var bad = 0 as FullRangeInt
 	for k in 0 upto 16000 'check'
-		let b = try bufs.get(k) otherwise return 1
+		view b = try bufs.get(k) otherwise return 1
 		if b.count() != 96 'length'
 			bad = bad + 1
 		end 'length'
@@ -295,7 +295,7 @@ function main() returns ExitCode
 
 	var bad = 0 as FullRangeInt
 	for k in 0 upto 16000 'check'
-		let b = try second.get(k) otherwise return 2
+		view b = try second.get(k) otherwise return 2
 		for i in 0 upto 96 'bytes'
 			let got = try b.get(i) otherwise return 3
 			if got != ((k + 7 + i) mod 251) 'value'
@@ -362,7 +362,7 @@ function main() returns ExitCode
 
 	var bad = 0 as FullRangeInt
 	for k in 0 upto 3000 'check'
-		let b = try large.get(k) otherwise return 2
+		view b = try large.get(k) otherwise return 2
 		if b.count() != 500 'length'
 			bad = bad + 1
 		end 'length'

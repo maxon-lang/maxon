@@ -87,8 +87,8 @@ Inside the `otherwise` block the get failed and `existing` was never bound; the 
 typealias ByteArrayMap = Map with (String, ByteArray)
 
 function intern(lookup ByteArrayMap, name String) returns ByteArray
-	let existing = try lookup.get(name) otherwise 'fresh'
-		let bytes = name.toByteArray()
+	var existing = try lookup.get(name) otherwise 'fresh'
+		var bytes = name.toByteArray()
 		lookup.upsert(name, value: bytes)
 		return bytes
 	end 'fresh'
@@ -97,7 +97,7 @@ end 'intern'
 
 function main() returns ExitCode
 	var m = ByteArrayMap.create()
-	let bytes = intern(m, name: "hello")
+	view bytes = intern(m, name: "hello")
 	print("{bytes.count()}\n")
 	return 0
 end 'main'

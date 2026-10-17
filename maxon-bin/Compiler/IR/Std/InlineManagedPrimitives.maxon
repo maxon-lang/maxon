@@ -179,7 +179,7 @@ type InlineCarve
 	// `addBlock` inside it, so the continuation is the function's last-registered block exactly then
 	// and never again. A search for it later would be O(blocks) per site, i.e. Θ(sites × blocks) over
 	// a function that accesses many elements — which is precisely the function this pass exists for.
-	export var contRef as ElementIndex
+	export let contRef as ElementIndex
 
 	static function create(cont IrBlock, contRef ElementIndex) returns InlineCarve
 		return Self{cont: cont, contRef: contRef}
@@ -618,7 +618,7 @@ type PrimitiveInliner
 			noFastArm then return blockRef
 		end 'plan'
 
-		let frame = self.openPlain(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, slowHeat: self.slowArmHeat(plan, fastArmServesEveryElement: true))
+		view frame = self.openPlain(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, slowHeat: self.slowArmHeat(plan, fastArmServesEveryElement: true))
 
 		for arm in self.openStrideArms(blockRef, arr: arr, slow: frame.slow.id, plan: plan) 'eachArm'
 			self.emitLoadArmToCont(self.blockAt(arm.blockRef), arr: arr, index: index, stride: arm.stride, cont: frame.carve.cont)
@@ -686,7 +686,7 @@ type PrimitiveInliner
 		let trivialElement = self.trivialElements.contains(site)
 
 		// The fast arm reads every element; the slow arm is an index out of range or an empty managed slot.
-		let frame = self.openThrowing(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId, slowHeat: self.slowArmHeat(plan, fastArmServesEveryElement: true))
+		view frame = self.openThrowing(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId, slowHeat: self.slowArmHeat(plan, fastArmServesEveryElement: true))
 		let arms = self.openStrideArms(blockRef, arr: arr, slow: frame.slow.id, plan: plan)
 
 		// ⭐ **ONE ARM NEEDS NO JOIN, AND THE JOIN IS THE ONLY REASON THE TAIL IS NOT WRITTEN IN PLACE.**
@@ -811,7 +811,7 @@ type PrimitiveInliner
 		let trivialElement = self.trivialElements.contains(site)
 
 		// A managed element's every `set` takes the slow arm (`emitStoreArm`), which is then the common path.
-		let frame = self.openThrowing(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId, slowHeat: self.slowArmHeat(plan, fastArmServesEveryElement: trivialElement))
+		view frame = self.openThrowing(blockRef, pos: pos, callee: callee, args: args, resultId: resultId, errorFlagId: errorFlagId, slowHeat: self.slowArmHeat(plan, fastArmServesEveryElement: trivialElement))
 
 		for arm in self.openStrideArms(blockRef, arr: arr, slow: frame.slow.id, plan: plan) 'eachArm'
 			self.emitStoreArm(self.blockAt(arm.blockRef), arr: arr, index: index, value: value, limitOffset: limitOffset, stride: arm.stride, frame: frame, trivialElement: trivialElement)
@@ -975,7 +975,7 @@ type PrimitiveInliner
 	// into a fresh block the caller goes on emitting into. `cur` is TERMINATED here, so every body op the
 	// caller wanted in it must already be there.
 	function guard(cur IrBlock, refused ValueId, slow IrBlock, next ByteArray) returns IrBlock
-		let ok = self.module.addBlock(self.func, label: next, heat: BlockHeat.normal)
+		var ok = self.module.addBlock(self.func, label: next, heat: BlockHeat.normal)
 		self.module.setTerminator(cur, op: StdOp.condBranch(refused, thenBlockId: slow.id, elseBlockId: ok.id))
 		return ok
 	end 'guard'
@@ -1039,8 +1039,8 @@ type PrimitiveInliner
 	// valid only while the continuation is the function's LAST-registered block, and the `addBlock` below is
 	// precisely what ends that — so the order between them may not be left to argument evaluation.
 	function carveFrame(blockRef ElementIndex, pos ElementIndex, slowHeat BlockHeat) returns InlineFrame
-		let carve = self.carveContinuation(blockRef, pos: pos)
-		let slow = self.module.addBlock(self.func, label: ManagedSlowLabel, heat: slowHeat)
+		var carve = self.carveContinuation(blockRef, pos: pos)
+		var slow = self.module.addBlock(self.func, label: ManagedSlowLabel, heat: slowHeat)
 		return InlineFrame.create(carve, slow: slow)
 	end 'carveFrame'
 
@@ -1082,7 +1082,7 @@ type PrimitiveInliner
 		// depends on the call still being live, and the carve two lines down is what ends that.
 		_ = self.valueIds()
 
-		let cont = self.carve(blockRef, pos: pos)
+		var cont = self.carve(blockRef, pos: pos)
 
 		// Read immediately, and CHECKED by identity — `carve` is the one moment the continuation is the
 		// function's last-registered block, and the `addBlock` on the next line ends it. The check is not
@@ -1119,7 +1119,7 @@ type PrimitiveInliner
 	// continuation while leaving the head un-terminated, and that is one rule with one home.
 	function carve(blockRef ElementIndex, pos ElementIndex) returns IrBlock
 		var head = self.blockAt(blockRef)
-		let cont = splitBlockInPlace(self.module, func: self.func, head: head, position: pos + 1, label: ManagedContLabel)
+		var cont = splitBlockInPlace(self.module, func: self.func, head: head, position: pos + 1, label: ManagedContLabel)
 		head.truncateBodyOps(pos)
 		return cont
 	end 'carve'

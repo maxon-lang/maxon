@@ -116,6 +116,7 @@ for as long as it is read-only. That is what makes sharing by reference safe.
 | Read-only root | Read-only through |
 |----------------|-------------------|
 | a `let` binding | everything it reaches |
+| a [`view`](/docs/language/variables/#views-view) binding | everything it reaches, through the view; other names may still write it |
 | a `let` field | everything it reaches, for the record's whole life |
 | a module-level `let` | everything it reaches, for the program's whole life |
 | a value read from a `SharedValue` or a registry | everything it reaches |
@@ -128,12 +129,18 @@ The rules:
 - **No write through a read-only value.** A field store, a method that writes its receiver, or an argument the
   callee writes is **E3159**. The diagnostic names the read-only root.
 - **No mutable alias of a read-only value.** Binding a read-only value to a `var` is **E3078**, and so is a module
-  `var` initializer that may take a module-level `let`'s record. A value read out of a `let` field, a `let`
-  payload, a `readonly` element, a `SharedValue` or a registry is read-only for good, so storing it into a `var`
-  field or a mutable container element, or passing it to a parameter that keeps it mutably, is **E3078** too; a
-  module-level `let`'s record follows the rules in [Top-Level Variables](/docs/language/variables/#top-level-variables). A `let` binding's own
-  record may be stored or kept: it stays read-only through its new holder while the binding is live, so a write
-  through that holder is **E3159**. [`clone()`](#explicit-cloning) makes an independent mutable copy.
+  `var` initializer that may take a module-level `let`'s record. Storing a read-only value into a `var` field, a
+  mutable container element or module storage, or passing it to a parameter that keeps it where something may
+  write it, is **E3078** too. A `let` bound to a fresh record is the one exception, at its last use: the store
+  consumes the name, so no `let` sees what the new holder writes. Stored there and read again afterwards, it is
+  refused. A last use is judged per path: a store on one arm of an `if`, a `match` or a ternary is the last use on
+  that arm when the arm reads the name no more, and so is a store on a branch that then leaves the function
+  (`return`, `throw`, `panic`), whatever the code after the `if` reads. A store on an arm that falls through to a
+  later read is refused. When a callee both keeps and writes a read-only argument, the keep is the error reported.
+  [`clone()`](#explicit-cloning) makes an independent mutable copy.
+- **A `let` binds only what nothing writes.** A `let` bound to state something may still write is **E3188**; see
+  [Immutable Variables](/docs/language/variables/#immutable-variables-let). A `let` bound from a parameter is as immutable as the caller's
+  argument.
 - **A `let` field has no other writer.** A value stored into a `let` field must be:
   - already read-only;
   - a value type;
@@ -151,7 +158,9 @@ The rules:
   - an element read out is read-only;
   - the container itself stays mutable: elements can still be pushed, replaced and removed.
 
-  `readonly` appears only on a container's element or value type; bindings and fields use `let`.
+  As a type argument, `readonly` appears only on a container's element or value type; bindings and fields use
+  `let`. `returns readonly` on a boundary with no body is a
+  [capability qualifier](/docs/language/functions/#capability-qualifiers-keep-sole-returns-readonly).
 - **Value types are exempt.** Scalars, `String`, `Character` and records whose fields are all `let` cannot give a
   stored value a second writer, so none of these rules apply to them. A `String` or `Character` a name does not
   own is copied when it is bound to a `var` or stored.
@@ -173,7 +182,7 @@ function main() returns ExitCode
 	var a = Point.create(1)
 	a.x = 2
 	let frozen = a                       // a moves into frozen, which is read-only
-	let view = frozen                    // view shares frozen's record, read-only
+	let shared = frozen                  // shared names frozen's record, read-only
 	// frozen.x = 3                      // E3159: 'frozen' is read-only
 	// var copy = frozen                 // E3078: 'frozen' is read-only
 	var b = frozen.clone()               // an independent, mutable record
@@ -183,7 +192,7 @@ function main() returns ExitCode
 	points.push(b)                       // the array shares b's record
 	var first = try points.get(0) otherwise panic("pushed")
 	first.x = 9                          // an element follows its container
-	print("{view.x} {b.x} {first.x}\n")     // 2 9 9
+	print("{shared.x} {b.x} {first.x}\n")   // 2 9 9
 	return 0
 end 'main'
 ```
@@ -195,12 +204,16 @@ end 'main'
 | `var b = a`, `a` a `var` | `a` moves into `b` |
 | `let b = a`, `a` a `var` | `a` moves into `b`, and `b` is read-only |
 | `let b = a`, `a` read-only | `b` shares the record, read-only |
+| `let b = e`, `e` state something may still write | **E3188**; `view b = e` reads it, `var b = e` writes it |
+| `view b = e` | `b` names the record read-only; other names may still write it |
 | `var b = a`, `a` read-only (a `let` included) | **E3078**; `a.clone()` is the mutable copy |
 | an ordinary call argument | shared with the callee for the call, counted where needed; a parameter the callee reassigns gets its own storage |
+| an argument the callee keeps where something may write it | a fresh `let` at its last use moves; any other read-only value is **E3078** |
 | an argument the callee keeps in a `let` field | must be read-only, a value type, or moved (a `var` at its last use) |
+| an argument to a [`sole`](/docs/language/functions/#capability-qualifiers-keep-sole-returns-readonly) parameter | moves: a fresh value, or a `let` or `var` at its last use |
 | an [`async`](/docs/language/async/#starting-a-coroutine) call argument | shared like an ordinary call argument: the coroutine runs on the caller's green thread; a parameter the coroutine reassigns gets storage the coroutine owns; a promise moves to the coroutine |
 | a [closure](/docs/language/functions/#closures) capture | the captured local moves into the closure; reading it afterwards is **E3102** |
-| a [service](/docs/language/async/#services--spawn) message or `spawn` factory argument | a mutable value moves to the service; a read-only value the sender does not own is shared |
+| a [service](/docs/language/async/#services--spawn) message or `spawn` factory argument | a mutable value moves to the service; a read-only value the sender does not own is shared; a view, or a record a view declared earlier may reach, is **E3138** |
 | `SharedValue.publish`, `Key.register` | the value must be solely owned (**E3174**), and every reader sees it read-only |
 
 ### Aliasing Between Arguments
@@ -237,7 +250,8 @@ end 'main'
 
 `clone()` comes from the `Cloneable` interface (`function clone() returns Self`). The compiler generates it
 for any type whose fields are all cloneable; primitives, `String`, and collections of cloneable elements are
-cloneable. A generic type's instance clones per instance — a `Map`, a `Set`, a declared `Box with String` —
+cloneable. A collection's `clone()` clones each element it holds, so no record of the copy is a record of the
+original, and the copy is solely owned. A generic type's instance clones per instance — a `Map`, a `Set`, a declared `Box with String` —
 copying what its type arguments hold. Declare `clone()` yourself for custom behaviour, or for a type holding
 an uncloneable field.
 
@@ -263,7 +277,8 @@ decorator of that shape reaches the clone check.
   run in parallel with it or with each other. They switch only at `await`, `sleep`, `Scheduler.yield()` and I/O,
   so their reference counts are plain and sharing between them needs no synchronization.
 - **Services own their state.** State that more than one thread uses lives in a [service](/docs/language/async/#services--spawn) and is
-  reached by message. Messages and replies move their mutable arguments.
+  reached by message. Messages and replies move their mutable arguments. A [view](/docs/language/variables/#views-view) stays on its thread:
+  a send refuses a view, and a writable record a view declared earlier in the function may reach.
 - **Module `var`s stay on one thread.** A module or static `var` that code running on another thread (a service,
   or anything it calls) can reach is **E3143**.
 - **Read-only values are shared.** A module `let` reachable from another thread, a value published through

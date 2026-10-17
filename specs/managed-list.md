@@ -483,7 +483,7 @@ function main() returns ExitCode
 	node.setValue(99)
 	print("{node.value()}\n")
 	// Verify through list head too
-	let h = try list.head() otherwise 'err'
+	view h = try list.head() otherwise 'err'
 		return 1
 	end 'err'
 	print("{h.value()}\n")

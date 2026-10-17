@@ -561,7 +561,7 @@ function main() returns ExitCode
 
 	dest.append(src)
 
-	let appended = try dest.get(1) otherwise return 91
+	view appended = try dest.get(1) otherwise return 91
 	let s = try appended.get(0) otherwise return 92
 
 	print("{dest.count()} {src.count()}\n{s}\n")
@@ -630,4 +630,107 @@ end 'main'
 ```stdout
 a 1
 b 0
+```
+
+<!-- test: a-write-through-a-cloned-arrays-record-element-leaves-the-source-alone -->
+### A write through an element of the clone does not reach the source
+The clone deep-copies each record element, so `e` is the copy's own record and the source's element still reads `1`.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+typealias Boxes = Array with Box
+
+function main() returns ExitCode
+	var a = Boxes.create()
+	a.push(Box.create(1))
+	var b = a.clone()
+	var e = try b.get(0) otherwise return 91
+	e.n = 9
+	view first = try a.get(0) otherwise return 92
+	view second = try b.get(0) otherwise return 93
+	print("{first.n} {second.n}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 9
+```
+
+<!-- test: a-write-through-a-cloned-lists-record-element-leaves-the-source-alone -->
+### The same for a `List`
+`List.clone` deep-copies each record element too, so the write through the copy's element leaves the source's at `1`.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+typealias BoxList = List with Box
+
+function main() returns ExitCode
+	var src = BoxList.create()
+	src.append(Box.create(1))
+	var c = src.clone()
+	var e = try c.get(0) otherwise return 91
+	e.n = 9
+	view s = try src.get(0) otherwise return 92
+	print("{s.n}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: a-write-through-a-cloned-maps-record-value-leaves-the-source-alone -->
+### The same for a `Map` value
+A map's clone deep-copies each record value, so the write through the copy's value leaves the source's at `1`.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Box
+	export var n as Count
+
+	static function create(n Count) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+typealias BoxMap = Map with (Count, Box)
+
+function main() returns ExitCode
+	var src = BoxMap.create()
+	src.upsert(1, value: Box.create(1))
+	var c = src.clone()
+	var e = try c.get(1) otherwise return 91
+	e.n = 9
+	view s = try src.get(1) otherwise return 92
+	print("{s.n}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
 ```

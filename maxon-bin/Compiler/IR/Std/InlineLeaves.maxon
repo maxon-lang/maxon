@@ -389,7 +389,7 @@ typealias LeafVerdictArray = Array with LeafVerdict
 // What one scan of a candidate body found. A record rather than two out-params because the verdict is a
 // JOIN of several facts and the budget question needs the op count even when the answer is `eligible`.
 type LeafBodyScan
-	export var verdict as LeafVerdict
+	export let verdict as LeafVerdict
 	export var opCount as ElementIndex
 
 	static function create(verdict LeafVerdict, opCount ElementIndex) returns LeafBodyScan
@@ -877,11 +877,11 @@ type DeclinedGuards
 
 	// The callee's block-id space — held rather than spent at construction, because the columns are seeded
 	// only if something is actually declined.
-	var blockIdSpace as BlockId
+	let blockIdSpace as BlockId
 
 	// The number of cascades, which BOUNDS the forwarding chase below: cascades chain (the k-th guard
 	// splits the (k-1)-th's `__rc_ok`), so a declined guard's continuation can itself be a declined head.
-	var guardCount as GuardCount
+	let guardCount as GuardCount
 
 	// ⭐ Has anything been declined? It is ALSO the seeded bit for the two columns, and they are one fact:
 	// the columns are written in exactly one place and it is the first decline.
@@ -1304,15 +1304,15 @@ function spliceLeaves(project Project, module StdModule, byName FunctionNameInde
 	// Built ONCE, over the eligible callees alone — see `ValueOriginTable.indexRowsOfFunctions` for why
 	// the alternative (`lookup` per copied value) is a quadratic against a table with one row per
 	// value-producing op in the program.
-	let origins = project.valueOrigins.indexRowsOfFunctions(plan.eligibleFuncs, funcCount: module.funcCount())
+	var origins = project.valueOrigins.indexRowsOfFunctions(plan.eligibleFuncs, funcCount: module.funcCount())
 	var stats = InlineLeafStats.create()
-	let admission = SpliceAdmission.leaves(plan)
+	var admission = SpliceAdmission.leaves(plan)
 	let closedToTheCallerWalk = spliceAlwaysSplicedCallees(project, module: module, byName: byName, plan: plan, always: always, admission: admission, origins: origins, stats: stats, def: def, cloner: cloner, meta: meta, round: round)
 
 	// ⭐ **THE ROUND'S CALLERS, NOT THE MODULE'S** — a pipeline function's sites were offered to the
 	// first run and are not offered again (`SpliceRound`).
 	for funcIndex in firstCallerOf(round) upto module.funcCount() 'eachFunc'
-		let func = module.getFunc(funcIndex)
+		var func = module.getFunc(funcIndex)
 
 		// ⭐ A STDLIB FUNCTION NO PATH FROM `main` REACHES IS SKIPPED — the same reachability fact
 		// `insertRangeChecks` and `inlineManagedPrimitives` skip on. Here it is purely cost:
@@ -1904,7 +1904,7 @@ typealias CallerSiteFactsMap = Map with (ElementIndex, CallerSiteFacts)
 // `across` is filled only under a register budget, and stops at budget + 1 ids: a site past the
 // budget is refused on its count alone, so the ids past that are never read.
 type SiteAcross
-	export var calleeIndex as ElementIndex
+	export let calleeIndex as ElementIndex
 	export var position as ElementIndex
 	export var opPos as ElementIndex
 	export var args as ValueIdArray
@@ -1922,7 +1922,7 @@ type SiteAcrossCensus implements LiveRangeVisitor
 	var cutSites as SiteAcrossArray
 	var loops as FunctionLoops
 	var liveness as StdLiveness
-	var cap as RegCount
+	let cap as RegCount
 	var cutsByRank as BlockPositionColumn
 	var settled as ElementIndex
 
@@ -2372,7 +2372,7 @@ function spliceCalledOnceCallees(project Project, module StdModule, byName Funct
 			continue
 		end 'notCalledOnce'
 
-		let func = module.getFunc(funcIndex)
+		view func = module.getFunc(funcIndex)
 
 		if census.callerOfCallee(funcIndex) < firstCallerOf(round) 'siteBelongsToTheOtherRound'
 			refusals.add(CalledOnceRefusal.siteOutsideThisRound.ordinal, count: 1)
@@ -2618,12 +2618,12 @@ function spliceWave(project Project, module StdModule, byName FunctionNameIndex,
 	var callers = FuncIndexArray.create()
 
 	for (callerIndex, callees) in calleesByCaller 'eachCaller'
-		let caller = module.getFunc(callerIndex)
-		let facts = siteFactsOf(callerFacts, module: module, caller: caller, callerIndex: callerIndex, census: census, calleesOfCallers: calleesOfCallers, byName: byName, budget: budget, liveness: liveness)
+		view caller = module.getFunc(callerIndex)
+		view facts = siteFactsOf(callerFacts, module: module, caller: caller, callerIndex: callerIndex, census: census, calleesOfCallers: calleesOfCallers, byName: byName, budget: budget, liveness: liveness)
 		var admittedAny = false
 
 		for calleeIndex in callees 'eachCandidate'
-			let callee = module.getFunc(calleeIndex)
+			view callee = module.getFunc(calleeIndex)
 			let valueBound = calleeValueBound(callerFacts, module: module, callee: callee, calleeIndex: calleeIndex)
 
 			if fitsSpliceBudget(module, budget: budget, facts: facts, callee: callee, calleeIndex: calleeIndex, calleeValueBound: valueBound, across: across, liveness: liveness) 'admitted'
@@ -2646,7 +2646,7 @@ function spliceWave(project Project, module StdModule, byName FunctionNameIndex,
 		compilerLogger(CompilerLogGroup.ir).debug("inlineLeaves: called-once wave — {readyCount} callee(s) ready across {callerCount} caller(s)")
 	end 'debugging'
 
-	let admission = SpliceAdmission.calledOnce(wave)
+	var admission = SpliceAdmission.calledOnce(wave)
 
 	for callerIndex in callers 'eachSplicingCaller'
 		// A callee is ready only once every callee of its own is processed, so a body copied this wave is
@@ -2658,7 +2658,7 @@ function spliceWave(project Project, module StdModule, byName FunctionNameIndex,
 
 		var facts = try callerFacts.get(callerIndex) otherwise panic("spliceWave: no site facts for a caller whose callees this wave admitted — the admission loop above takes them first")
 		var splicer = SiteSplicer.create(project, module: module, func: module.getFunc(callerIndex), funcIndex: callerIndex, byName: byName, admission: admission, origins: origins, stats: stats, def: def, cloner: cloner, meta: meta, ids: facts.ids, seeded: true)
-		let readyCallees = try calleesByCaller.get(callerIndex) otherwise panic("spliceWave: no ready callees for a caller this wave admitted callees of")
+		view readyCallees = try calleesByCaller.get(callerIndex) otherwise panic("spliceWave: no ready callees for a caller this wave admitted callees of")
 		splicer.spliceCalledOnceSites(facts, readyCallees: readyCallees, wave: wave)
 	end 'eachSplicingCaller'
 
@@ -2765,7 +2765,7 @@ function siteFactsOf(callerFacts CallerSiteFactsMap, module StdModule, caller Ir
 		return known
 	end 'known'
 
-	let facts = CallerSiteFacts.of(module, func: caller, callerIndex: callerIndex, census: census, calleesOfCallers: calleesOfCallers, byName: byName, budget: budget, liveness: liveness)
+	var facts = CallerSiteFacts.of(module, func: caller, callerIndex: callerIndex, census: census, calleesOfCallers: calleesOfCallers, byName: byName, budget: budget, liveness: liveness)
 	callerFacts.upsert(callerIndex, value: facts)
 	return facts
 end 'siteFactsOf'
@@ -3001,7 +3001,7 @@ type SiteSplicer
 	// later wave now stands in the continuation of the nearest spliced site before it, at its distance
 	// past that site's call; a site ahead of every spliced one has not moved.
 	function recoordinatePendingSites(facts CallerSiteFacts, position ElementIndex)
-		let standing = try facts.sitesAtBlock.get(position) otherwise panic("SiteSplicer.recoordinatePendingSites: the caller's facts hold no site in block {position}, where this wave just spliced one")
+		view standing = try facts.sitesAtBlock.get(position) otherwise panic("SiteSplicer.recoordinatePendingSites: the caller's facts hold no site in block {position}, where this wave just spliced one")
 		var staying = FuncIndexArray.create()
 
 		for index in standing 'eachSite'
@@ -3068,7 +3068,7 @@ type SiteSplicer
 
 			// Split immediately PAST the call, so the call stays the last op of the block on the left and
 			// its continuation begins at the op that followed it.
-			let cont = splitBlockInPlace(self.module, func: self.func, head: self.blockAt(blockRef), position: at + 1, label: InlineContLabel)
+			view cont = splitBlockInPlace(self.module, func: self.func, head: self.blockAt(blockRef), position: at + 1, label: InlineContLabel)
 			try contRefs.set(k, value: registeredBlockRef(self.module, func: self.func, block: cont)) otherwise panic("SiteSplicer.spliceRecordedSites: contRefs.set OOB at {k}")
 		end 'eachSiteBackwards'
 
@@ -3102,7 +3102,7 @@ type SiteSplicer
 			self.clearSiteBuffers()
 		end 'reuse'
 
-		let block = self.blockAt(blockRef)
+		view block = self.blockAt(blockRef)
 
 		for pos in 0 upto block.bodyOpCount() 'eachOp'
 			match self.module.getOp(try block.bodyOpAt(pos) otherwise panic("SiteSplicer.collectSites: bodyOpAt OOB at {pos} inside its own count")) 'kind'
@@ -3464,7 +3464,7 @@ type SiteSplicer
 	// that followed it, and — if this is the block's last site — the block's whole exit.
 	function splice(predRef ElementIndex, contRef ElementIndex, calleeIndex ElementIndex, callee ByteArray, args ValueIdArray, resultId ValueId, siteSpan SpanId)
 		requireCallNamesCallee(callee, calleeIndex: calleeIndex, caller: self.func, byName: self.byName)
-		let calleeFunc = self.module.getFunc(calleeIndex)
+		var calleeFunc = self.module.getFunc(calleeIndex)
 
 		if args.count() as ParamCount != calleeFunc.paramCount 'arity'
 			panic("SiteSplicer.splice: '{String.from(self.func.name)}' calls '{String.from(callee)}' with {args.count()} argument(s) against {calleeFunc.paramCount} parameter(s) — `lowerCall` emits arguments in declaration order and fills every slot, the trailing layout/witness parameters of a generic callee included, so a mismatch here is a malformed call rather than a shape to decline")
@@ -3475,7 +3475,7 @@ type SiteSplicer
 		// The splice's site nests under whatever site the call's own block carries — the caller's text, or a
 		// body an earlier splice copied in.
 		let spliceSite = self.func.recordInlineSite(InlineSite.create(callee, parent: self.blockAt(predRef).inlineSite, callSpan: siteSpan, calleeSourceFile: calleeFunc.sourceFilePath))
-		let blocks = self.mintCopiedBlocks(calleeFunc, guards: self.declinedGuards(calleeFunc, args: args), spliceSite: spliceSite)
+		var blocks = self.mintCopiedBlocks(calleeFunc, guards: self.declinedGuards(calleeFunc, args: args), spliceSite: spliceSite)
 		self.attachContinuationArg(contRef, calleeFunc: calleeFunc, resultId: resultId)
 		self.aReturnReachesTheContinuation = false
 		self.copyBodies(calleeFunc, contRef: contRef, blocks: blocks, subst: subst)
@@ -3630,7 +3630,7 @@ type SiteSplicer
 
 		for i in 0 upto calleeFunc.blockRefs.count() 'eachBlock'
 			let calleeBlockRef = try calleeFunc.blockRefs.get(i) otherwise panic("SiteSplicer.mintCopiedBlocks: blockRefs.get OOB at {i}")
-			let calleeBlock = try self.module.blocks.get(calleeBlockRef) otherwise panic("SiteSplicer.mintCopiedBlocks: blockRef {calleeBlockRef} of '{String.from(calleeFunc.name)}' is not in module.blocks")
+			view calleeBlock = try self.module.blocks.get(calleeBlockRef) otherwise panic("SiteSplicer.mintCopiedBlocks: blockRef {calleeBlockRef} of '{String.from(calleeFunc.name)}' is not in module.blocks")
 
 			// ⭐ **A DECLINED CASCADE'S BLOCKS ARE NOT COPIED**: its `__rc_panic` is one of them, and a
 			// copied panic nothing can reach would be a dead block holding a call to `mrt_panic`.
@@ -3641,7 +3641,7 @@ type SiteSplicer
 			// The label marks the block the splice ENTERS, which is the callee's entry only while no cascade
 			// in front of it was declined — `__il_body` is a claim about this copy, not about the callee, so
 			// it follows the entry rather than position 0.
-			let fresh = self.module.addBlock(self.func, label: InlineBodyLabel if calleeBlock.id == entryId else calleeBlock.label, heat: calleeBlock.heat, inlineSite: blocks.siteOf(calleeBlock.inlineSite), role: calleeBlock.role)
+			view fresh = self.module.addBlock(self.func, label: InlineBodyLabel if calleeBlock.id == entryId else calleeBlock.label, heat: calleeBlock.heat, inlineSite: blocks.siteOf(calleeBlock.inlineSite), role: calleeBlock.role)
 			try blocks.blockSubst.set(calleeBlock.id, value: fresh.id) otherwise panic("SiteSplicer.mintCopiedBlocks: block '{String.from(calleeBlock.label)}' has id {calleeBlock.id}, outside '{String.from(calleeFunc.name)}'s id space of {calleeFunc.nextBlockId}")
 			let freshRef = registeredBlockRef(self.module, func: self.func, block: fresh)
 			blocks.copiedRefs.push(freshRef)
@@ -3743,7 +3743,7 @@ type SiteSplicer
 	// One block's phis, ops and — unless it aborts — its exit. Answers whether the copy still owes the
 	// aborting block's dead return.
 	function copyBody(calleeBlockRef ElementIndex, freshRef ElementIndex, contRef ElementIndex, subst ValueIdArray, blocks SpliceBlocks, calleeFunc IrFunction) returns bool
-		let calleeBlock = self.blockAt(calleeBlockRef)
+		view calleeBlock = self.blockAt(calleeBlockRef)
 		self.copyBlockArgs(calleeBlock, freshRef: freshRef, subst: subst)
 
 		if self.copyBlockOps(calleeBlock, freshRef: freshRef, subst: subst, blocks: blocks, calleeFunc: calleeFunc) 'aborts'
@@ -3786,7 +3786,7 @@ type SiteSplicer
 		var fresh = self.blockAt(freshRef)
 
 		for opIdx in calleeBlock.bodyOps() 'eachOp'
-			let op = self.module.getOp(opIdx)
+			var op = self.module.getOp(opIdx)
 
 			// The dialect's own role names the `param` variant and nothing else, so it answers what
 			// `inlineOpRole`'s ninety-arm match would, for every copied op of every spliced body.
@@ -3800,7 +3800,7 @@ type SiteSplicer
 			// debugger could never step into one.
 			let calleeSpan = self.module.spans.at(opIdx)
 			let aborts = self.meta.hasRole(op, role: OpRole.diverging)
-			let cloned = self.cloner.clone(op, valueSubst: subst, blockSubst: blocks.blockSubst, payloads: ClonePayloads.shared)
+			var cloned = self.cloner.clone(op, valueSubst: subst, blockSubst: blocks.blockSubst, payloads: ClonePayloads.shared)
 			self.noteClonedDefs(cloned)
 			self.module.spans.current = calleeSpan
 			self.module.appendOp(fresh, op: cloned)
@@ -3827,7 +3827,7 @@ type SiteSplicer
 			return
 		end 'oplessTerminator'
 
-		let term = self.module.getOp(calleeBlock.terminatorIndex())
+		var term = self.module.getOp(calleeBlock.terminatorIndex())
 
 		// The cloned exit is the callee's terminator, so it answers to the callee's own line — the body
 		// walk left the cursor on this block's LAST op, which is a different statement.

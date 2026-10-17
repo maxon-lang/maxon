@@ -37,7 +37,7 @@ export type BackendUnitBody
 	// the bool rather than the `FilePath` it is derived from: a path is a managed value with no other reader
 	// here, and a reconstruction that left it empty would silently turn every user function into a
 	// compiler-emitted one.
-	export var hasAuthor as bool
+	export let hasAuthor as bool
 
 	// The named values, flat and in `IrFunction.debugLocals` order, each with its inline site. The
 	// allocator is the last point at which a `ValueId` still means anything — the encoder sees
@@ -105,12 +105,12 @@ export type SpanLineTable
 end 'SpanLineTable'
 
 export type FunctionEncodingFacts
-	export var siteCount as ElementIndex
+	export let siteCount as ElementIndex
 	export var siteCallSpans as SpanIdArray
 	export var siteParentKeys as DebugSiteKeyColumn
 	export var lines as SpanLineTable
 	export var compilerScaffolding as bool
-	export var skipsStackGuard as bool
+	export let skipsStackGuard as bool
 	export var pinsItsThread as bool
 
 	export static function of(func IrFunction, blocks IrBlockArray, spans DebugSpanColumn, runtimeTier FunctionNameSet, spanTable DebugSpanTable) returns FunctionEncodingFacts
@@ -339,7 +339,7 @@ export type BackendUnitReply
 	// left empty, and the fresh literal below is the reply's alone once this frame's `body` has died.
 	export static function afterRunning(unit BackendUnit, worker BackendWorker) returns BackendUnitReply throws RegAllocRefusal
 		var body = try unit.holder.pop() otherwise panic("BackendUnitReply.afterRunning: the unit for function {unit.funcIndex} carried no body — `BackendUnit.extract` pushes exactly one")
-		let finished = try worker.finish(body)
+		var finished = try worker.finish(body)
 		return Self{unitModule: finished.unitModule, landing: finished.landing}
 	end 'afterRunning'
 end 'BackendUnitReply'
@@ -349,7 +349,7 @@ end 'BackendUnitReply'
 // pass dropped, left behind with the unit. The scalars the worker settled and the debug locations
 // land on the real function, which the Target module shares with the Std module.
 export function spliceBackendUnit(module TargetModule, func IrFunction, unitModule TargetModule)
-	let unitFunc = unitModule.getFunc(UnitFunctionIndex)
+	var unitFunc = unitModule.getFunc(UnitFunctionIndex)
 
 	// Asked here because this is where the unit stops being appended to: a column short by one would
 	// misattribute every later line row once it is placed into the real module.

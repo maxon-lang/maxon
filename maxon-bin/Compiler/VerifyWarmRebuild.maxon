@@ -586,7 +586,7 @@ function verifyInvalidation(inputPath FilePath, target Target) returns bool thro
 
 	let firstPath = try project.db.sourcePaths.get(0) otherwise panic("verifyInvalidation: the project has no source files — loadSourceFiles must throw noSourceFiles before this")
 	let editedPath = try FilePath.from(firstPath.path) otherwise panic("verifyInvalidation: '{firstPath.path}' came out of the project's own source list, so it cannot fail to re-parse as a path")
-	let entry = try project.db.sourceFiles.get(editedPath) otherwise panic("verifyInvalidation: sourcePaths lists {editedPath} but sourceFiles has no entry for it")
+	view entry = try project.db.sourceFiles.get(editedPath) otherwise panic("verifyInvalidation: sourcePaths lists {editedPath} but sourceFiles has no entry for it")
 	let original = entry.content
 
 	// Warm every per-file memo (and the signature index) against the UNEDITED program. Only
@@ -750,11 +750,11 @@ function verifyWarmCompileMatchesCold(inputPath FilePath, target Target) returns
 	let editedContent = "{edited.content}\n{BytesOnlyEditText}\n"
 
 	fileChanged(warm, path: edited.path, content: editedContent)
-	let warmResult = try compileToCodeResult(warm)
+	view warmResult = try compileToCodeResult(warm)
 
 	var cold = try loadProject([inputPath], target: target, session: CompileSession.printingWithoutLibraryCache())
 	fileChanged(cold, path: edited.path, content: editedContent)
-	let coldResult = try compileToCodeResult(cold)
+	view coldResult = try compileToCodeResult(cold)
 
 	return match compareCodeResults(warmResult, right: coldResult) 'outcome'
 		allIdentical(totalBytes) gives reportWarmPass(totalBytes)
@@ -812,24 +812,24 @@ function verifyLibraryParseReuse(inputPath FilePath, target Target) returns Libr
 	_ = try compileToCodeResult(primer)
 
 	var first = try loadProject([inputPath], target: target, session: session)
-	let firstResult = try compileToCodeResult(first)
+	view firstResult = try compileToCodeResult(first)
 	let verdict = (try queryProgramSignatures(first)).libraryParseSharing
 
 	var coldFirst = try loadProject([inputPath], target: target, session: CompileSession.printingWithoutLibraryCache())
-	let coldFirstResult = try compileToCodeResult(coldFirst)
+	view coldFirstResult = try compileToCodeResult(coldFirst)
 
 	var second = try loadProbedProject(inputPath, target: target, session: session)
-	let secondResult = try compileToCodeResult(second)
+	view secondResult = try compileToCodeResult(second)
 
 	var cold = try loadProbedProject(inputPath, target: target, session: CompileSession.printingWithoutLibraryCache())
-	let coldResult = try compileToCodeResult(cold)
+	view coldResult = try compileToCodeResult(cold)
 	let storeIsBounded = sharedStoreIsBounded(primer, second: second)
 
 	var third = try loadReplacedProject(inputPath, target: target, session: session, firstFileText: RenamedProgramText)
-	let thirdResult = try compileToCodeResult(third)
+	view thirdResult = try compileToCodeResult(third)
 
 	var coldThird = try loadReplacedProject(inputPath, target: target, session: CompileSession.printingWithoutLibraryCache(), firstFileText: RenamedProgramText)
-	let coldThirdResult = try compileToCodeResult(coldThird)
+	view coldThirdResult = try compileToCodeResult(coldThird)
 
 	let firstMatchesCold = reusedMatchesCold(firstResult, cold: coldFirstResult, subject: "the program compiled after a primer of another shape")
 	let secondMatchesCold = reusedMatchesCold(secondResult, cold: coldResult, subject: "a second program")

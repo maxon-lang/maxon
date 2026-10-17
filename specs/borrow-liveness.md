@@ -1672,7 +1672,7 @@ hello 5
 ```maxon
 function main() returns ExitCode
 	var xs = ["hello world this is a long string for heap allocation {40 + 2}"]
-	let c = try xs.cursor() otherwise return 1
+	view c = try xs.cursor() otherwise return 1
 	let s = c.current()
 	xs.clear()
 	print("[{s}] {xs.count()}\n")
@@ -1691,7 +1691,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	var xs = ["hello world this is a long string for heap allocation {40 + 2}"]
-	let c = try xs.cursor() otherwise return 1
+	view c = try xs.cursor() otherwise return 1
 	let s = c.current()
 	print("[{s}]\n")
 	xs.clear()
@@ -1757,7 +1757,7 @@ end 'wipe'
 
 function main() returns ExitCode
 	var chain = StringChain.create()
-	let node = chain.insertLast("alpha string long enough for heap allocation {40 + 2}")
+	view node = chain.insertLast("alpha string long enough for heap allocation {40 + 2}")
 	wipe(chain)
 	print("[{node.value()}]\n")
 	return 0
@@ -1789,7 +1789,7 @@ end 'grow'
 
 function main() returns ExitCode
 	var chain = StringChain.create()
-	let node = chain.insertLast("alpha string long enough for heap allocation {40 + 2}")
+	view node = chain.insertLast("alpha string long enough for heap allocation {40 + 2}")
 	grow(chain)
 	print("[{node.value()}] {chain.count()}\n")
 	return 0
@@ -3453,10 +3453,10 @@ end 'announce'
 
 function replaceFirst(items Boxes, cb Hook)
 	cb()
-	let e = try items.get(0) otherwise panic("the caller pushed one")
+	view e = try items.get(0) otherwise panic("the caller pushed one")
 	try items.set(0, value: Box.create("replacement {7} padded out long enough for the heap")) otherwise panic("the caller pushed one")
 	let filler = Box.create("filler {9} padded out long enough for the heap")
-	let now = try items.get(0) otherwise panic("the caller pushed one")
+	view now = try items.get(0) otherwise panic("the caller pushed one")
 	print("[{e.label}] [{now.label}] [{filler.label}]\n")
 end 'replaceFirst'
 
@@ -3483,7 +3483,7 @@ The raw cursor's `current()` is an element read like `get`: it counts what it re
 ```maxon
 function main() returns ExitCode
 	var xs = ["alpha {40 + 2} value long enough for a heap record"]
-	let c = try xs.managed.createCursor() otherwise return 1
+	view c = try xs.managed.createCursor() otherwise return 1
 	let s = c.current()
 	xs.managed.clear()
 	let filler = "filler {9} padded out long enough for the heap"

@@ -977,9 +977,9 @@ function main() returns ExitCode
 	let tool = appDir.join("maxon-spec-app-dir-tool.exe")
 	let image = try File.readBinary(systemTool) otherwise panic("hostname.exe is readable")
 	try File.writeBinary(tool, content: image) otherwise panic("the application directory is writable")
-	let exe = Executable.name("maxon-spec-app-dir-tool")
+	var exe = Executable.name("maxon-spec-app-dir-tool")
 	#else
-	let exe = Executable.name("sh")
+	var exe = Executable.name("sh")
 	#endif
 
 	var control = Configuration.create(exe)
@@ -1445,7 +1445,7 @@ function main() returns ExitCode
 
 	var j = 0 as FullRangeInt
 	for p in promises 'drain'
-		let r = try await p otherwise return 2
+		view r = try await p otherwise return 2
 		if not r.succeeded() 'check-success'
 			return 3
 		end 'check-success'
@@ -1534,7 +1534,7 @@ function main() returns ExitCode
 	var firstCompletion = 0 as DurationMs
 	var lastCompletion = 0 as DurationMs
 	for p in promises 'drain'
-		let r = try await p otherwise return 2
+		view r = try await p otherwise return 2
 		if not r.succeeded() 'check-success'
 			return 3
 		end 'check-success'
@@ -1789,7 +1789,7 @@ function main() returns ExitCode
 		return 0
 	end 'childMode'
 
-	let exe = Executable.path(try Process.executablePath() otherwise return 2)
+	var exe = Executable.path(try Process.executablePath() otherwise return 2)
 	var argv = StringArray.create()
 	argv.push("child")
 
@@ -1923,7 +1923,7 @@ function main() returns ExitCode
 	let holding = Directory.currentPath().join("subprocess-nul-redirect\0x")
 	try File.writeText(prefix, content: "x") otherwise return 2
 
-	let exe = Executable.path(try Process.executablePath() otherwise return 3)
+	var exe = Executable.path(try Process.executablePath() otherwise return 3)
 	var argv = StringArray.create()
 	argv.push("child")
 
@@ -2001,7 +2001,7 @@ function main() returns ExitCode
 		return 0
 	end 'childMode'
 
-	let exe = Executable.path(try Process.executablePath() otherwise return 2)
+	var exe = Executable.path(try Process.executablePath() otherwise return 2)
 	var argv = StringArray.create()
 	argv.push("child")
 

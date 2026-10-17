@@ -643,7 +643,7 @@ export function fromHigh() returns High
 	var row = Slots.create()
 	row.push(1500)
 	g.push(row)
-	let back = try g.get(0) otherwise Slots.create()
+	view back = try g.get(0) otherwise Slots.create()
 	return try back.get(0) otherwise 1000
 end 'fromHigh'
 
@@ -657,7 +657,7 @@ function main() returns ExitCode
 	var row = Slots.create()
 	row.push(40)
 	g.push(row)
-	let back = try g.get(0) otherwise Slots.create()
+	view back = try g.get(0) otherwise Slots.create()
 	return (((fromHigh() / 100) as Low) + (try back.get(0) otherwise 0)) as ExitCode
 end 'main'
 ```
@@ -1532,7 +1532,7 @@ export function alphaSide()
 	let h = HolderA.create()
 	var xs = PairsA.create()
 	xs.push((4, 1))
-	let e = try xs.get(0) otherwise return
+	view e = try xs.get(0) otherwise return
 	let b = BoxA.create((6, 3))
 	let s = SlotA.some((8, 5))
 	let ys = xs.clone()
@@ -1569,7 +1569,7 @@ export function gammaSide()
 	let h = HolderG.create()
 	var xs = PairsG.create()
 	xs.push(("c", "d"))
-	let e = try xs.get(0) otherwise return
+	view e = try xs.get(0) otherwise return
 	let b = BoxG.create(("e", "f"))
 	let s = SlotG.some(("g", "h"))
 	let ys = xs.clone()
@@ -1640,7 +1640,7 @@ export function gammaSide()
 	let h = HolderG.create()
 	var xs = PairsG.create()
 	xs.push(("c", "d"))
-	let e = try xs.get(0) otherwise return
+	view e = try xs.get(0) otherwise return
 	let b = BoxG.create(("e", "f"))
 	let s = SlotG.some(("g", "h"))
 	let ys = xs.clone()
@@ -1677,7 +1677,7 @@ export function alphaSide()
 	let h = HolderA.create()
 	var xs = PairsA.create()
 	xs.push((4, 1))
-	let e = try xs.get(0) otherwise return
+	view e = try xs.get(0) otherwise return
 	let b = BoxA.create((6, 3))
 	let s = SlotA.some((8, 5))
 	let ys = xs.clone()

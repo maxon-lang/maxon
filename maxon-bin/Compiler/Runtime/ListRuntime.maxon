@@ -1599,7 +1599,7 @@ end 'buildListNodeDecref'
 function emitDropNodeElement(module StdModule, func IrFunction, cur IrBlock, node ValueId, ids ValueMinter) returns IrBlock
 	var stillHeld = module.addBlock(func, label: b"stillheld", heat: BlockHeat.normal)
 	var dropElem = module.addBlock(func, label: b"dropelem", heat: BlockHeat.normal)
-	let released = module.addBlock(func, label: b"released", heat: BlockHeat.normal)
+	var released = module.addBlock(func, label: b"released", heat: BlockHeat.normal)
 
 	let drop = emitLoadField(module, block: cur, record: node, offset: ListElementDropSlotOffset, ids: ids)
 	emitBranchOnCompare(module, block: cur, value: drop, pred: StdCmpPred.ne, against: 0, whenTrue: stillHeld, whenFalse: released, ids: ids)
@@ -1790,7 +1790,7 @@ function buildListWalk(module StdModule, name ByteArray, walksElements bool, act
 	let node = walk.ids.mint()
 	header.blockArgs.push(IrBlockArg.create(node, argType: StdType.i64))
 	var atNode = CascadeCursor.create(body, carried: appendCarriedBlockArgs(header, template: walk.entry.carried, ids: walk.ids))
-	let atLink = CascadeCursor.create(header, carried: linkThenCarried(node, carried: atNode.carried))
+	view atLink = CascadeCursor.create(header, carried: linkThenCarried(node, carried: atNode.carried))
 
 	var walked = emitBoxWalkStep(module, func: walk.func, cursor: walk.entry, box: list, action: action, meeting: WalkMeeting.owner, stop: walk.done, ids: walk.ids)
 	let head = emitLoadField(module, block: walked.block, record: list, offset: ListHeadOffset, ids: walk.ids)

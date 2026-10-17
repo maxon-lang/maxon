@@ -59,7 +59,7 @@ export function installServiceLoops(module MaxonModule, project Project, signatu
 		return
 	end 'spawnsNothing'
 
-	let funcNames = try FunctionNameIndex.create(module.functions, project: project)
+	view funcNames = try FunctionNameIndex.create(module.functions, project: project)
 
 	// ⭐ **ONE WALK OF THE MODULE FOR EVERY SERVICE, NOT ONE PER SERVICE.** The walk is Θ(program), so
 	// driving it from inside the roster loop would multiply the whole module by the number of service types
@@ -235,7 +235,7 @@ function buildServiceLoop(module MaxonModule, project Project, signatures Progra
 	var fn = SynthesizedFunction.open(module, project: project, name: serviceLoopSymbolFor(signatures, typeName: typeName, instance: instance), returnType: MaxonReturnType.void, paramTypes: paramTypes)
 
 	let site = SynthesizedSite.compilersOwn
-	let request = requireServiceRequestLayout(signatures, typeName: typeName)
+	view request = requireServiceRequestLayout(signatures, typeName: typeName)
 
 	var entry = fn.currentBlock()
 	var receive = fn.openBlock(b"serve")
@@ -294,7 +294,7 @@ function buildServiceDrain(fn SynthesizedFunction, project Project, signatures P
 	fn.emitPositionalCallDiscarding(MboxAbandonName, args: twoArgs(ServiceMailboxParam, second: leftover), site: site)
 	fn.terminateBlock(abandonOne, op: MaxonOp.branch(drain.id), site: site)
 
-	let teardown = fn.openBlock(b"finished")
+	view teardown = fn.openBlock(b"finished")
 	fn.terminateBlock(drain, op: MaxonOp.condBranch(drained, thenBlockId: teardown.id, elseBlockId: abandonOne.id), site: site)
 
 	// The state was MOVED into this thread at the `spawn`, so this frame is
@@ -340,7 +340,7 @@ function buildServiceAbandon(module MaxonModule, project Project, signatures Pro
 	var fn = SynthesizedFunction.open(module, project: project, name: serviceAbandonSymbol(typeName), returnType: MaxonReturnType.void, paramTypes: paramTypes)
 
 	let site = SynthesizedSite.compilersOwn
-	let request = requireServiceRequestLayout(signatures, typeName: typeName)
+	view request = requireServiceRequestLayout(signatures, typeName: typeName)
 	let box = ServiceAbandonBoxParam
 
 	var entry = fn.currentBlock()
@@ -471,7 +471,7 @@ function buildMessageArm(fn SynthesizedFunction, signatures ProgramSignatures, f
 	// to disagree about which register the reply's value word came back in.
 	let returned = serviceHandlerReturnType(signatures, callee: callee, instance: instance, typeNames: signatures.indexTypeNames())
 	let reply = serviceArmReply(fn, request: request, caseIndex: caseIndex, payloads: payloads, req: req, site: site)
-	let cells = spillReassignedPayloads(fn, byReference: funcNames.byReferenceParamsOf(callee), classes: payloadClasses, types: payloadTypes, args: args, site: site)
+	view cells = spillReassignedPayloads(fn, byReference: funcNames.byReferenceParamsOf(callee), classes: payloadClasses, types: payloadTypes, args: args, site: site)
 	let outcome = emitServiceHandlerCall(fn, callee: callee, returned: returned, signatures: signatures, args: handlerArgsOf(args, cells: cells), site: site)
 	reclaimReassignedPayloads(fn, cells: cells, args: args, site: site)
 
@@ -503,7 +503,7 @@ end 'buildMessageArm'
 type ReassignedPayloadCell
 	export let position as ParamCount
 	export let cell as ValueId
-	export var class as PayloadClass
+	export let class as PayloadClass
 	export let valueType as MaxonType
 
 	static function create(position ParamCount, cell ValueId, class PayloadClass, valueType MaxonType) returns Self
@@ -705,7 +705,7 @@ function emitRoutedReplyCompletion(fn SynthesizedFunction, signatures ProgramSig
 	var answered = fn.openBlock(b"replyok")
 	publishAnsweredReply(fn, signatures: signatures, callee: callee, returned: returned, result: result, reply: reply, site: site)
 
-	let handled = fn.openBlock(b"handled")
+	var handled = fn.openBlock(b"handled")
 	fn.terminateBlock(caught, op: MaxonOp.condBranch(threw, thenBlockId: thrown.id, elseBlockId: answered.id), site: site)
 	fn.terminateBlock(thrown, op: MaxonOp.branch(handled.id), site: site)
 	fn.terminateBlock(answered, op: MaxonOp.branch(handled.id), site: site)

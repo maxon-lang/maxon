@@ -738,7 +738,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: specs/var-should-be-let/let-record-laundered-through-a-container.maxon:23:6: cannot assign the result of 'launder', which may share storage with immutable variable 'a', to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+error E3078: specs/var-should-be-let/let-record-laundered-through-a-container.maxon:23:10: cannot pass 'a', which is read-only (a `let` binding), to parameter 'p' of 'launder', which keeps it where something may write it; pass a clone()
 ```
 
 <!-- test: let-record-laundered-through-a-setter -->
@@ -785,7 +785,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: specs/var-should-be-let/let-record-laundered-through-a-setter.maxon:37:6: cannot assign the result of 'launder', which may share storage with immutable variable 'a', to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+error E3078: specs/var-should-be-let/let-record-laundered-through-a-setter.maxon:37:10: cannot pass 'a', which is read-only (a `let` binding), to parameter 'p' of 'launder', which keeps it where something may write it; pass a clone()
 ```
 
 <!-- test: let-record-laundered-through-an-array-literal -->
@@ -815,7 +815,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: specs/var-should-be-let/let-record-laundered-through-an-array-literal.maxon:20:6: cannot assign the result of 'launder', which may share storage with immutable variable 'a', to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+error E3078: specs/var-should-be-let/let-record-laundered-through-an-array-literal.maxon:20:10: cannot pass 'a', which is read-only (a `let` binding), to parameter 'p' of 'launder', which keeps it where something may write it; pass a clone()
 ```
 
 <!-- test: let-record-of-a-let-global-through-a-call -->
@@ -969,7 +969,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: specs/var-should-be-let/let-record-constructed-into-a-var.maxon:24:2: cannot write through 'box.item': 'a' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
+error E3078: specs/var-should-be-let/let-record-constructed-into-a-var.maxon:23:16: cannot pass 'a', which is read-only (a `let` binding), to parameter 'item' of 'Box.create', which keeps it where something may write it; pass a clone()
 ```
 
 <!-- test: let-record-pushed-into-a-var-container -->
@@ -999,7 +999,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: specs/var-should-be-let/let-record-pushed-into-a-var-container.maxon:19:6: cannot assign the result of 'get', which may share storage with immutable variable 'a', to mutable binding 'e'; use 'let' instead of 'var', or use clone()
+error E3078: specs/var-should-be-let/let-record-pushed-into-a-var-container.maxon:18:6: cannot store `let` 'a' into mutable place 'an element of the container push writes'; use clone()
 ```
 
 <!-- test: let-record-stored-into-a-var-field -->
@@ -1034,7 +1034,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: specs/var-should-be-let/let-record-stored-into-a-var-field.maxon:25:2: cannot write through 'box.item': 'a' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
+error E3078: specs/var-should-be-let/let-record-stored-into-a-var-field.maxon:24:6: cannot store `let` 'a' into mutable place 'Box.item'; use clone()
 ```
 
 <!-- test: error.let-record-bound-to-a-var-is-refused -->
@@ -1062,8 +1062,9 @@ end 'main'
 error E3078: specs/var-should-be-let/error.let-record-bound-to-a-var-is-refused.maxon:15:6: cannot assign the read-only 'p' to mutable binding 'q'; use 'let' instead of 'var', or use clone()
 ```
 
-<!-- test: let-record-popped-while-its-let-is-live -->
-Popping the record back out does not make it the `var`'s alone while `a` is still read.
+<!-- test: error.let-record-pushed-and-popped-while-still-read-is-refused-at-the-push -->
+`a` is read after the push, so the push is not its last use and is refused; popping the record back out
+would not make it the `var`'s alone.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1088,12 +1089,13 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: specs/var-should-be-let/let-record-popped-while-its-let-is-live.maxon:19:6: cannot assign the result of 'pop', which may share storage with immutable variable 'a', to mutable binding 'e'; use 'let' instead of 'var', or use clone()
+error E3078: specs/var-should-be-let/error.let-record-pushed-and-popped-while-still-read-is-refused-at-the-push.maxon:18:6: cannot store `let` 'a' into mutable place 'an element of the container push writes'; use clone()
 ```
 
-<!-- test: let-borrow-live-refuses-a-var-of-the-same-element -->
-A `let` bound to an element borrows it for as long as it is used. While `s` is live, a `var` read out
-of the same container may be the record `s` names, and a write through it would change what `s` reads.
+<!-- test: error.a-let-of-an-element-a-var-of-the-same-element-then-writes-is-refused -->
+An element of a `var` container is a record something may still write: here a `var` read out of the same
+container writes it while `s` reads it. So the `let` is refused at its binding; bind it with `view` to read
+the element as it changes.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1118,12 +1120,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: specs/var-should-be-let/let-borrow-live-refuses-a-var-of-the-same-element.maxon:19:6: cannot assign the result of 'get', which may share storage with immutable variable 's', to mutable binding 'e'; use 'let' instead of 'var', or use clone()
+error E3188: specs/var-should-be-let/error.a-let-of-an-element-a-var-of-the-same-element-then-writes-is-refused.maxon:18:6: cannot bind `let` 's' to a value reached through 'arr', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
 ```
 
-<!-- test: let-borrow-of-a-field-refuses-a-write-through-it -->
-A `let` bound to a field of a `var` borrows that record, so a write reaching it through the `var` while
-the `let` is live is refused.
+<!-- test: error.a-let-of-a-field-of-a-var-written-through-the-var-is-refused -->
+A field of a `var` is a record something may still write, as the write through `box` here does, so a `let`
+bound to it is refused at its binding.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1152,7 +1154,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: specs/var-should-be-let/let-borrow-of-a-field-refuses-a-write-through-it.maxon:24:2: cannot write through 'box.item': 'p' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
+error E3188: specs/var-should-be-let/error.a-let-of-a-field-of-a-var-written-through-the-var-is-refused.maxon:23:6: cannot bind `let` 'p' to a value reached through 'box', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
 ```
 
 <!-- test: let-record-written-through-an-interface-call -->
@@ -1227,9 +1229,9 @@ end 'main'
 error E3078: specs/var-should-be-let/let-record-written-through-a-function-value.maxon:23:6: cannot assign the result of 'relay', which may share storage with immutable variable 'a', to mutable binding 'b'; use 'let' instead of 'var', or use clone()
 ```
 
-<!-- test: let-borrow-taken-after-a-var-of-the-same-element -->
-The same two names in the other order: `s` borrows the element `e` already holds, so the write through `e`
-while `s` is live changes what `s` reads.
+<!-- test: error.a-let-of-an-element-a-var-already-holds-is-refused -->
+The same two names in the other order: `s` would name the element `e` already holds and writes, so the `let`
+is refused at its binding.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1254,12 +1256,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: specs/var-should-be-let/let-borrow-taken-after-a-var-of-the-same-element.maxon:20:2: cannot write through 'e': 's' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
+error E3188: specs/var-should-be-let/error.a-let-of-an-element-a-var-already-holds-is-refused.maxon:19:6: cannot bind `let` 's' to a value reached through 'arr', which something may still write; use `view` to read it, `var` to write it, or bind a clone()
 ```
 
 <!-- test: sibling-fields-do-not-alias -->
 Two fields of one record are two places: an element read out of `pair.left` is no element of `pair.right`, so
-writing through `dst` changes nothing `src` reads.
+writing through `dst` changes nothing the `view` `src` reads, and it still reads 3.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1287,7 +1289,7 @@ function main() returns ExitCode
 	var pair = Pair.create()
 	pair.left.push(Point.create(3))
 	pair.right.push(Point.create(4))
-	let src = try pair.left.get(0) otherwise panic("an element was pushed")
+	view src = try pair.left.get(0) otherwise panic("an element was pushed")
 	var dst = try pair.right.get(0) otherwise panic("an element was pushed")
 	dst.x = 9
 	return src.x
@@ -1298,7 +1300,8 @@ end 'main'
 ```
 
 <!-- test: a-read-on-the-other-arm-is-not-after -->
-A `let` read only on the other arm of an `if` is not read after a write on this one: no path runs both.
+A `let` read only on the other arm of an `if` is not read after a store on this one: no path runs both, so
+the push is the `let`'s last use on its path and moves the record into the container.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1314,11 +1317,11 @@ end 'Point'
 typealias PointArray = Array with Point
 
 function main() returns ExitCode
+	let s = Point.create(1)
 	var arr = PointArray.create()
-	arr.push(Point.create(1))
-	let s = try arr.get(0) otherwise panic("an element was pushed")
 
-	if arr.count() > 0 'writes'
+	if arr.count() == 0 'writes'
+		arr.push(s)
 		var e = try arr.get(0) otherwise panic("an element was pushed")
 		e.x = 9
 		print("wrote {e.x}\n")
@@ -1337,8 +1340,9 @@ wrote 9
 ```
 
 <!-- test: one-record-handed-to-two-fields-aliases-them -->
-Two fields are two places only when no record went into both: `pair` was built with `p` in each, so `l` and
-`pair.right` are one record and the write changes what `l` reads.
+Two fields are two places only when no record went into both: `pair` was built with `p` in each, so the
+`view` `l` and `pair.right` are one record and the write changes what `l` reads. `p` is written through that
+alias, so `E3077` does not report it.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1361,15 +1365,15 @@ type Pair
 end 'Pair'
 
 function main() returns ExitCode
-	let p = Point.create(1)
+	var p = Point.create(1)
 	var pair = Pair.create(p, right: p)
-	let l = pair.left
+	view l = pair.left
 	pair.right.x = 9
 	return l.x
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/var-should-be-let/one-record-handed-to-two-fields-aliases-them.maxon:26:2: cannot write through 'pair.right': 'l' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
+```exitcode
+9
 ```
 
 <!-- test: one-record-stored-into-two-fields-aliases-them -->
@@ -1396,21 +1400,21 @@ type Pair
 end 'Pair'
 
 function main() returns ExitCode
-	let p = Point.create(1)
+	var p = Point.create(1)
 	var pair = Pair.create(Point.create(0), right: Point.create(0))
 	pair.left = p
 	pair.right = p
-	let l = pair.left
+	view l = pair.left
 	pair.right.x = 9
 	return l.x
 end 'main'
 ```
-```maxoncstderr
-error E3159: specs/var-should-be-let/one-record-stored-into-two-fields-aliases-them.maxon:28:2: cannot write through 'pair.right': 'l' is read-only (a `let` binding) and nothing reachable through it may be written; use 'var', or write a clone()
+```exitcode
+9
 ```
 
 <!-- test: a-let-a-closure-captured-is-read-when-the-closure-is-called -->
-A closure that captured `s` reads it wherever it is called, so `s` is live until the call.
+A closure that captures `s` takes ownership of it, so pushing `s` afterwards uses a moved value.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1426,17 +1430,17 @@ end 'Point'
 typealias PointArray = Array with Point
 
 function main() returns ExitCode
-	var arr = PointArray.create()
-	arr.push(Point.create(1))
-	let s = try arr.get(0) otherwise panic("an element was pushed")
+	let s = Point.create(1)
 	let f = function() gives s.x
+	var arr = PointArray.create()
+	arr.push(s)
 	var e = try arr.get(0) otherwise panic("an element was pushed")
 	e.x = 9
 	return f() as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: specs/var-should-be-let/a-let-a-closure-captured-is-read-when-the-closure-is-called.maxon:20:6: cannot assign the result of 'get', which may share storage with immutable variable 's', to mutable binding 'e'; use 'let' instead of 'var', or use clone()
+error E3102: <fragment>:19:11: use of moved value 's': its ownership moved to the closure that captures it
 ```
 
 <!-- test: a-var-written-only-through-a-callee-argument-is-needed -->

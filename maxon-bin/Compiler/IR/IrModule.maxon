@@ -313,7 +313,7 @@ export type IrModule uses Op
 		var webOfPhi = ExitWebByPhi.create()
 
 		for blockRef in func.blockRefs 'eachBlock'
-			let block = self.getBlock(blockRef)
+			var block = self.getBlock(blockRef)
 
 			if block.role != BlockRole.exitChain 'ordinaryBlock'
 				continue
@@ -330,10 +330,10 @@ export type IrModule uses Op
 			return chains
 		end 'noExitChain'
 
-		let incoming = self.incomingIntoExitChain(func, chainIds: chainIds)
+		var incoming = self.incomingIntoExitChain(func, chainIds: chainIds)
 
 		for value in returned 'eachReturned'
-			let start = try webOfPhi.get(value) otherwise continue
+			var start = try webOfPhi.get(value) otherwise continue
 			chains.upsert(value, value: self.exitChainFrom(start, incoming: incoming, webOfPhi: webOfPhi))
 		end 'eachReturned'
 
@@ -344,7 +344,7 @@ export type IrModule uses Op
 		var incoming = ExitIncomingByTarget.create()
 
 		for blockRef in func.blockRefs 'eachSource'
-			let source = self.getBlock(blockRef)
+			var source = self.getBlock(blockRef)
 
 			for edge in source.branchEdges 'eachEdge'
 				if not chainIds.contains(edge.targetBlockId) 'leavesTheChain'
@@ -370,11 +370,11 @@ export type IrModule uses Op
 		visited.insert(start.block.id)
 
 		while next < web.count() 'untilTheChainIsWalked'
-			let current = try web.get(next) otherwise panic("exitChainFrom: web.get OOB at {next} below its own count")
+			view current = try web.get(next) otherwise panic("exitChainFrom: web.get OOB at {next} below its own count")
 			let currentId = current.block.id
 			let currentSlot = current.slot
 			next = next + 1
-			let arrivals = try incoming.get(currentId) otherwise continue
+			var arrivals = try incoming.get(currentId) otherwise continue
 
 			for arrival in arrivals 'eachArrival'
 				let arg = try arrival.args.get(currentSlot) otherwise panic("exitChainFrom: an edge into the exit chain carries fewer values than the payload slot {currentSlot}")
@@ -753,7 +753,7 @@ export type IrModule uses Op
 	// after calling this (the function returns the allocated id via the block).
 	function createAndRegisterBlock(blockRefs BlockRefArray, id BlockId, label ByteArray, heat BlockHeat, inlineSite InlineSiteRef, role BlockRole) returns IrBlock
 		let blockIdx = blocks.count()
-		let block = IrBlock.create(id, label: label, heat: heat, inlineSite: inlineSite, role: role)
+		var block = IrBlock.create(id, label: label, heat: heat, inlineSite: inlineSite, role: role)
 		blocks.push(block)
 		blockRefs.push(blockIdx)
 		return block
@@ -801,7 +801,7 @@ export type IrModule uses Op
 		self.spans.appendFrom(source.spans, count: source.ops.count())
 
 		for i in 0 upto source.blocks.count() 'eachBlock'
-			let srcBlock = try source.blocks.get(i) otherwise panic("merge: blocks.get out of bounds")
+			var srcBlock = try source.blocks.get(i) otherwise panic("merge: blocks.get out of bounds")
 			self.blocks.push(relocateIrBlock(srcBlock, opOffset: opOffset))
 		end 'eachBlock'
 
@@ -879,8 +879,8 @@ end 'SpliceScratch'
 // entry-typed and stay on the module; the index arithmetic is shared here.
 type OpCompactionPlan
 	export var forward as OpIndexArray
-	export var liveCount as ElementIndex
-	export var deadMarker as ElementIndex
+	export let liveCount as ElementIndex
+	export let deadMarker as ElementIndex
 
 	static function create(forward OpIndexArray, liveCount ElementIndex, deadMarker ElementIndex) returns OpCompactionPlan
 		return Self{forward: forward, liveCount: liveCount, deadMarker: deadMarker}

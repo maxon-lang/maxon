@@ -410,7 +410,7 @@ function main() returns ExitCode
 		let n = Node.create(10)
 		arr.push(n)
 	end 'scope'
-	let got = try arr.get(0) otherwise Node.create(-1)
+	var got = try arr.get(0) otherwise Node.create(-1)
 	return got.id
 end 'main'
 ```
@@ -437,7 +437,7 @@ function main() returns ExitCode
 	var arr = NodeArray.create()
 	arr.push(Node.create(1))
 	arr.push(Node.create(2))
-	let popped = try arr.remove(arr.count() - 1) otherwise 'err'
+	view popped = try arr.remove(arr.count() - 1) otherwise 'err'
 		return 99
 	end 'err'
 	return (arr.count() as Integer) + popped.id - popped.id
@@ -466,7 +466,7 @@ function main() returns ExitCode
 	var arr = ItemArray.create()
 	arr.push(Item.create(50))
 	try arr.set(0, value: Item.create(99)) otherwise panic("test invariant: set OOB")
-	let got = try arr.get(0) otherwise Item.create(-1)
+	var got = try arr.get(0) otherwise Item.create(-1)
 	return got.value
 end 'main'
 ```
@@ -558,7 +558,7 @@ function main() returns ExitCode
 	end 'push'
 	var total = 0 as Integer
 	while arr.count() > 0 'pop'
-		let e = try arr.remove(0) otherwise 'err'
+		view e = try arr.remove(0) otherwise 'err'
 			return 99
 		end 'err'
 		total = total + e.key
@@ -590,9 +590,9 @@ function main() returns ExitCode
 	arr.push(Val.create(10))
 	arr.push(Val.create(30))
 	arr.insert(1, value: Val.create(20))
-	let a = try arr.get(0) otherwise Val.create(-1)
-	let b = try arr.get(1) otherwise Val.create(-1)
-	let c = try arr.get(2) otherwise Val.create(-1)
+	view a = try arr.get(0) otherwise Val.create(-1)
+	view b = try arr.get(1) otherwise Val.create(-1)
+	view c = try arr.get(2) otherwise Val.create(-1)
 	return a.n + b.n + c.n
 end 'main'
 ```
@@ -620,7 +620,7 @@ function main() returns ExitCode
 	arr.push(Val.create(1))
 	arr.push(Val.create(2))
 	arr.push(Val.create(3))
-	let removed = try arr.remove(1) otherwise 'err'
+	view removed = try arr.remove(1) otherwise 'err'
 		return 99
 	end 'err'
 	return removed.n + (arr.count() as Integer)
@@ -717,7 +717,7 @@ end 'getFirst'
 function main() returns ExitCode
 	var arr = ItemArray.create()
 	arr.push(Item.create(77))
-	let result = getFirst(arr)
+	var result = getFirst(arr)
 	return result.value
 end 'main'
 ```
@@ -911,7 +911,7 @@ typealias ItemArray = Array with Item
 
 function main() returns ExitCode
 	var arr = ItemArray.create()
-	let got = try arr.get(0) otherwise Item.create(99)
+	var got = try arr.get(0) otherwise Item.create(99)
 	return got.value
 end 'main'
 ```
@@ -937,7 +937,7 @@ typealias TokenManagedList = __ManagedList with Token
 function main() returns ExitCode
 	var managedList = TokenManagedList.create()
 	let t = Token.create(7)
-	let node = managedList.insertFirst(t)
+	view node = managedList.insertFirst(t)
 	return node.value().id
 end 'main'
 ```
@@ -962,8 +962,8 @@ typealias TokenManagedList = __ManagedList with Token
 
 function main() returns ExitCode
 	var managedList = TokenManagedList.create()
-	let node = managedList.insertFirst(Token.create(9))
-	let removed = managedList.remove(node)
+	view node = managedList.insertFirst(Token.create(9))
+	view removed = managedList.remove(node)
 	return removed.id + managedList.count()
 end 'main'
 ```
@@ -1935,7 +1935,7 @@ end 'pushLocal'
 
 function main() returns ExitCode
 	pushLocal()
-	let elem = try globalArr.get(0) otherwise Item.create(-1)
+	var elem = try globalArr.get(0) otherwise Item.create(-1)
 	return elem.value
 end 'main'
 ```
@@ -1968,7 +1968,7 @@ function main() returns ExitCode
 	end 'push'
 	var total = 0 as Integer
 	while globalArr.count() > 0 'remove'
-		let elem = try globalArr.remove(0) otherwise 'err'
+		view elem = try globalArr.remove(0) otherwise 'err'
 			return 99
 		end 'err'
 		total = total + elem.value
@@ -2093,7 +2093,7 @@ typealias ItemManagedList = __ManagedList with Item
 
 function main() returns ExitCode
 	var managedList = ItemManagedList.create()
-	let node = managedList.insertFirst(Item.create(50))
+	view node = managedList.insertFirst(Item.create(50))
 	managedList.remove(node)
 	return managedList.count()
 end 'main'
@@ -2310,7 +2310,7 @@ type OpBuffer
 end 'OpBuffer'
 
 function rewrap(buf OpBuffer) returns Integer
-	let old = buf.ops
+	view old = buf.ops
 	buf.ops = IntList.create()
 	var total = 0 as Integer
 	for x in old 'each'
@@ -2627,7 +2627,7 @@ end 'getFirst'
 function main() returns ExitCode
 	var arr = WrapperArray.create()
 	arr.push(Wrapper.create(99))
-	let w = try getFirst(arr) otherwise Wrapper.create(0)
+	var w = try getFirst(arr) otherwise Wrapper.create(0)
 	return w.n
 end 'main'
 ```
@@ -2683,8 +2683,8 @@ typealias FallbackArray = Array with Fallback
 function main() returns ExitCode
 	var arr = FallbackArray.create()
 	arr.push(Fallback.create(10))
-	let a = try arr.get(0) otherwise Fallback.create(99)
-	let b = try arr.get(5) otherwise Fallback.create(42)
+	view a = try arr.get(0) otherwise Fallback.create(99)
+	view b = try arr.get(5) otherwise Fallback.create(42)
 	return a.n + b.n
 end 'main'
 ```
@@ -3043,7 +3043,7 @@ function main() returns ExitCode
 	var arr = WrapperArray.create()
 	let w = Wrapper.create(42)
 	arr.push(w)
-	let got = firstOrDefault(arr)
+	var got = firstOrDefault(arr)
 	return got.value
 end 'main'
 ```

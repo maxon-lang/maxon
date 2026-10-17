@@ -343,7 +343,7 @@ function main() returns ExitCode
 	var replies = ReplyPromiseArray.create()
 	var k = 0 as Integer
 	while k < shares 'sendEach'
-		let h = try hs.get(k as ElementIndex) otherwise panic("hs.get OOB at {k} — bounded by the pushes above")
+		view h = try hs.get(k as ElementIndex) otherwise panic("hs.get OOB at {k} — bounded by the pushes above")
 		replies.push(h.work(200000))
 		k = k + 1
 	end 'sendEach'

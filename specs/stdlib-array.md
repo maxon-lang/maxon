@@ -1418,7 +1418,7 @@ function main() returns ExitCode
 
 	arr.insert(1, value: Item.create(2))
 
-	let removed = try arr.remove(0) otherwise 'err'
+	view removed = try arr.remove(0) otherwise 'err'
 		return 99
 	end 'err'
 

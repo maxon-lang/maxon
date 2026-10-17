@@ -161,7 +161,7 @@ type Chain uses T
 		let pad = 1
 		var arr = CellArray.create()
 		arr.push(Cell.init(pad))
-		let missed = try arr.get(7) otherwise Cell.init(3)
+		view missed = try arr.get(7) otherwise Cell.init(3)
 		return try (missed.v / d) otherwise 9
 	end 'churn'
 end 'Chain'

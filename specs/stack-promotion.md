@@ -129,7 +129,7 @@ function main() returns ExitCode
 	var arr = ItemArray.create()
 	let item = Item.create(7)
 	arr.push(item)
-	let got = try arr.get(0) otherwise Item.create(0)
+	view got = try arr.get(0) otherwise Item.create(0)
 	return got.value
 end 'main'
 ```

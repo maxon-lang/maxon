@@ -45,7 +45,7 @@ function main() returns ExitCode
 	var arr = EntryArray.create()
 	arr.push(Entry.create("apple"))
 	arr.push(Entry.create("banana"))
-	let found = findEntry(arr, key: "banana")
+	view found = findEntry(arr, key: "banana")
 	print("found={found.key}\n")
 	return 0
 end 'main'

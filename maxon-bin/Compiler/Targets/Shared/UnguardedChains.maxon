@@ -15,7 +15,7 @@ enum ChainOverflow
 end 'ChainOverflow'
 
 export union UnguardedCallStep
-	callee(name ByteArray, below StackSize)
+	callee(let name ByteArray, below StackSize)
 	fixed(bytes StackSize)
 end 'UnguardedCallStep'
 
@@ -229,7 +229,7 @@ type UnguardedChainWalk
 	var funcNames as FunctionNameIndex
 	var chunks as FunctionCodeChunkArray
 	var target as Target
-	var margin as StackSize
+	let margin as StackSize
 	var indexOf as ChunkIndexByName
 	var viaPointer as BoolArray
 	var addressTaken as BoolArray
@@ -298,7 +298,7 @@ type UnguardedChainWalk
 		end 'eachRdataSlot'
 
 		for index in 0 upto self.chunks.count() 'eachChunk'
-			let chunk = self.chunkAt(index)
+			view chunk = self.chunkAt(index)
 
 			for fixup in chunk.callFixups 'eachFixup'
 				if fixup.takesAddressOnly 'addressOnly'
@@ -405,7 +405,7 @@ type UnguardedChainWalk
 	end 'stoppedThreadTreeBytes'
 
 	function edgeBytes(callee ElementIndex) returns StackSize throws CompileError
-		let chunk = self.chunkAt(callee)
+		var chunk = self.chunkAt(callee)
 
 		if chunk.checksStack 'guardedCallee'
 			return StackWordBytes as StackSize
@@ -422,7 +422,7 @@ type UnguardedChainWalk
 	end 'edgeBytes'
 
 	function edgesOf(index ElementIndex) returns ChainEdgeArray throws CompileError
-		let chunk = self.chunkAt(index)
+		view chunk = self.chunkAt(index)
 		var edges = ChainEdgeArray.create()
 
 		for fixup in chunk.callFixups 'eachCall'
@@ -494,7 +494,7 @@ type UnguardedChainWalk
 			unvisited then break
 		end 'visit'
 
-		let chunk = self.chunkAt(index)
+		view chunk = self.chunkAt(index)
 		try self.visits.set(index, value: ChainVisit.visiting) otherwise panic("UnguardedChainWalk.depthBelow: visits.set OOB at {index}")
 		self.path.push(index)
 

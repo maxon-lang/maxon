@@ -146,7 +146,7 @@ end 'cacheReadSpawnGateDefaultOf'
 
 export union DefaultSpawn
 	value
-	spawns(typeName ByteArray)
+	spawns(let typeName ByteArray)
 
 	export function spawnedTypeName() returns ByteArray throws AbsentError
 		match self 'spawn'
@@ -532,11 +532,11 @@ module union ServiceRosterVerdict
 
 	// A message declared more than once. One variant carries one payload shape, so an overloaded message has
 	// no single shape to become — and the dispatch `match` would have no arm to pick between them. E2015.
-	messageIsOverloaded(methodName ByteArray, declarationCount ElementIndex)
+	messageIsOverloaded(let methodName ByteArray, declarationCount ElementIndex)
 
 	// A message parameter of a type that cannot cross to another green thread. `noun` is what it IS, so the
 	// sentence reads as the reason rather than as a spelling (see `untransferableParameterNoun`).
-	messageParameterIsNotTransferable(methodName ByteArray, paramName ByteArray, noun String)
+	messageParameterIsNotTransferable(let methodName ByteArray, let paramName ByteArray, noun String)
 
 	// ⭐⭐ **A MESSAGE WHOSE REPLY WILL NOT FIT THE CELL.** A reply travels in TWO WORDS — the value, and
 	// one error word holding the fused ordinal of `{ServiceError, throwsOf(<message>)}` — so a `float`
@@ -547,15 +547,15 @@ module union ServiceRosterVerdict
 	// The loop completes a reply for every reply-bearing variant whether or not the program ever sends one,
 	// so a message the cell cannot carry would put `__gt_cell_complete(cell, <a float>, 0)` in a body the
 	// service really runs. Refusing it at the send would leave that body built.
-	messageReplyIsNotCarriable(methodName ByteArray, noun String)
+	messageReplyIsNotCarriable(let methodName ByteArray, noun String)
 
 	// A reply whose graph, at the type an instantiation substitutes, reaches a type no per-type walk can be
 	// built for. E3138, the refusal the handler's `return` raises for a type its body declares.
-	messageReplyGraphIsNotWalkable(methodName ByteArray, noun String)
+	messageReplyGraphIsNotWalkable(let methodName ByteArray, noun String)
 
 	// A reply declared at a bare `T` that hands back the service's own state, at an instantiation resolving
 	// `T` to a managed type. E3137, the refusal a handler's `return` raises for a type its body declares.
-	messageReplyAliasesServiceState(methodName ByteArray, replyTypeName String)
+	messageReplyAliasesServiceState(let methodName ByteArray, replyTypeName String)
 end 'ServiceRosterVerdict'
 
 // ⭐⭐ **IS THIS A SPAWN TARGET? — the whole rule, in one place.** The order of the arms is the order the
@@ -574,14 +574,14 @@ end 'ServiceRosterVerdict'
 // Accepting only `structRef` here would make `returns Self` a service and `returns Calc` not one, which is
 // the same declaration written two ways.
 module function classifyServiceTarget(signatures ProgramSignatures, typeName ByteArray, member ByteArray) returns ServiceTargetVerdict
-	let declared = try serviceLayoutOf(signatures, typeName: typeName) otherwise return ServiceTargetVerdict.typeIsNotAStruct
+	view declared = try serviceLayoutOf(signatures, typeName: typeName) otherwise return ServiceTargetVerdict.typeIsNotAStruct
 
 	if not declared.whereConstraints.isEmpty() 'constrainedGeneric'
 		return ServiceTargetVerdict.typeIsAConstrainedGeneric
 	end 'constrainedGeneric'
 
 	let factoryKey = qualifiedMethodName(typeName, methodName: member)
-	let decls = signatures.overloadedDeclsOf(factoryKey)
+	view decls = signatures.overloadedDeclsOf(factoryKey)
 
 	if decls.count() == 0 'noSuchMember'
 		return ServiceTargetVerdict.memberIsNotDeclared
@@ -671,9 +671,9 @@ module function classifyServiceRoster(signatures ProgramSignatures, typeName Byt
 	var layout = spawnTargetLayoutOf(signatures, typeName: typeName)
 
 	for i in 0 upto layout.messageMethodCount() 'eachMessage'
-		let methodName = layout.messageMethodAt(i)
+		view methodName = layout.messageMethodAt(i)
 		let messageKey = qualifiedMethodName(typeName, methodName: methodName)
-		let decls = signatures.overloadedDeclsOf(messageKey)
+		view decls = signatures.overloadedDeclsOf(messageKey)
 
 		if decls.count() > 1 'overloaded'
 			return ServiceRosterVerdict.messageIsOverloaded(methodName, declarationCount: decls.count())
@@ -1191,8 +1191,12 @@ end 'serviceTransferSourceClause'
 // the author never named it — it is the factory's result — so the blame names the SPAWN instead, which is the
 // line they wrote.
 module function serviceSpawnStateBlame(typeName ByteArray, member ByteArray) returns String
-	return "the state `spawn {String.from(typeName)}.{String.from(member)}(…)` would start the service with"
+	return "the state `{serviceSpawnText(typeName, member: member)}` would start the service with"
 end 'serviceSpawnStateBlame'
+
+function serviceSpawnText(typeName ByteArray, member ByteArray) returns String
+	return "spawn {String.from(typeName)}.{String.from(member)}(…)"
+end 'serviceSpawnText'
 
 module function interfaceMessageUnimplementedRefusal(interfaceName ByteArray, handleName ByteArray, member ByteArray) returns String
 	return "`interface {String.from(interfaceName)}` requires `{String.from(member)}`, but no service implementing it declares `{String.from(member)}` as an `export` instance method, so `{String.from(handleName)}` has no such message to send. Implement it on the service"
@@ -1272,8 +1276,16 @@ end 'serviceSpawnNoteText'
 // ⭐ **WHAT ONE MESSAGE ARGUMENT IS**, its twin one construct over. Here the author DID name the value's
 // destination, so the blame names the parameter and the message rather than the send.
 module function serviceSendArgumentBlame(typeName ByteArray, methodName ByteArray, paramName ByteArray) returns String
-	return "argument `{String.from(paramName)}` of the message `{String.from(typeName)}.{String.from(methodName)}`"
+	return "argument `{String.from(paramName)}` {serviceSendArgumentOf(typeName, methodName: methodName)}"
 end 'serviceSendArgumentBlame'
+
+module function serviceSendArgumentOf(typeName ByteArray, methodName ByteArray) returns String
+	return "of the message `{String.from(typeName)}.{String.from(methodName)}`"
+end 'serviceSendArgumentOf'
+
+module function serviceSpawnStateOf(typeName ByteArray, member ByteArray) returns String
+	return "of `{serviceSpawnText(typeName, member: member)}`"
+end 'serviceSpawnStateOf'
 
 module function serviceFactoryArgumentBlame(callee ByteArray, paramName ByteArray) returns String
 	return "argument `{String.from(paramName)}` of `spawn {String.from(callee)}(…)`"
@@ -1296,7 +1308,7 @@ end 'serviceReplyBlame'
 module function buildServiceRequestUnion(signatures ProgramSignatures, typeName ByteArray, into TypeNameInterner) returns EnumLayout
 	var layout = spawnTargetLayoutOf(signatures, typeName: typeName)
 	let declFilePath = layout.declFilePath
-	var request = EnumLayout.create(serviceRequestCompanionName(typeName), isUnion: true, conformsTo: sharedEmptyDeclaredConformances, visibility: layout.visibility, declFilePath: declFilePath, backing: EnumBacking.integer)
+	var request = EnumLayout.create(serviceRequestCompanionName(typeName), isUnion: true, conformsTo: NameRoster.create(), visibility: layout.visibility, declFilePath: declFilePath, backing: EnumBacking.integer)
 
 	// ⭐ **VARIANT 0 IS THE COMPILER'S, SO ADDING A MESSAGE NEVER RENUMBERS IT** — see
 	// `ServiceShutdownCaseName`. It carries a reply slot like any reply-bearing variant, which is what lets
@@ -1311,7 +1323,7 @@ module function buildServiceRequestUnion(signatures ProgramSignatures, typeName 
 	addServiceRequestCase(request, caseName: ServiceShutdownCaseName, payloads: shutdownPayloads)
 
 	for i in 0 upto layout.messageMethodCount() 'eachMessage'
-		let methodName = layout.messageMethodAt(i)
+		view methodName = layout.messageMethodAt(i)
 		addServiceRequestCase(request, caseName: methodName, payloads: serviceRequestPayloads(signatures, typeName: typeName, methodName: methodName, declFilePath: declFilePath, into: into))
 	end 'eachMessage'
 
@@ -1323,7 +1335,7 @@ end 'buildServiceRequestUnion'
 // fire-and-forget — nothing waits on it, so there is no cell to carry and no slot to make one for.
 function serviceRequestPayloads(signatures ProgramSignatures, typeName ByteArray, methodName ByteArray, declFilePath FilePath, into TypeNameInterner) returns PayloadFieldArray
 	let key = qualifiedMethodName(typeName, methodName: methodName)
-	let decls = signatures.overloadedDeclsOf(key)
+	view decls = signatures.overloadedDeclsOf(key)
 	let decl = serviceFirstDeclOf(decls, key: key)
 
 	var payloads = PayloadFieldArray.create()
@@ -1479,7 +1491,7 @@ end 'serviceReplyHandlerFusedShift'
 module function serviceReplyErrorLayout(signatures ProgramSignatures, errorName ByteArray) returns EnumLayout
 	return match signatures.enumInAnyFile(errorName) 'e'
 		declared(layout) gives layout
-		undeclared gives EnumLayout.create(errorName, isUnion: false, conformsTo: sharedEmptyDeclaredConformances, visibility: Visibility.global, declFilePath: CompilerOwnedDeclFilePath, backing: EnumBacking.integer)
+		undeclared gives EnumLayout.create(errorName, isUnion: false, conformsTo: NameRoster.create(), visibility: Visibility.global, declFilePath: CompilerOwnedDeclFilePath, backing: EnumBacking.integer)
 	end 'e'
 end 'serviceReplyErrorLayout'
 
@@ -1606,7 +1618,7 @@ module function serviceMessageIndexOf(signatures ProgramSignatures) returns Serv
 	var index = ServiceMessageIndex.create()
 
 	for typeName in serviceCompanionRoster(signatures) 'eachService'
-		let request = try serviceRequestLayoutOf(signatures, typeName: typeName) otherwise continue
+		view request = try serviceRequestLayoutOf(signatures, typeName: typeName) otherwise continue
 
 		for caseIndex in 0 upto request.caseCount() 'eachVariant'
 			match serviceArmAt(request, typeName: typeName, caseIndex: caseIndex) 'arm'
@@ -1879,7 +1891,7 @@ module function synthesizeServiceCompanions(signatures ProgramSignatures)
 	// error member is `ServiceError` IS a `ServiceError`, an ordinary declared enum, and minting a synonym
 	// for it would be a second name for one type with nothing to keep the two answers equal.
 	for typeName in services 'eachReplyErrorType'
-		let layout = spawnTargetLayoutOf(signatures, typeName: typeName)
+		view layout = spawnTargetLayoutOf(signatures, typeName: typeName)
 
 		for i in 0 upto layout.messageMethodCount() 'eachMessage'
 			mintServiceReplyErrorType(signatures, messageKey: qualifiedMethodName(typeName, methodName: layout.messageMethodAt(i)))
@@ -1888,7 +1900,7 @@ module function synthesizeServiceCompanions(signatures ProgramSignatures)
 end 'synthesizeServiceCompanions'
 
 function mintInterfaceHandlesOf(signatures ProgramSignatures, typeName ByteArray)
-	let service = spawnTargetLayoutOf(signatures, typeName: typeName)
+	view service = spawnTargetLayoutOf(signatures, typeName: typeName)
 
 	if not service.typeParamNames.isEmpty() 'aGenericService'
 		return
@@ -1942,8 +1954,8 @@ module function synthesizeInterfaceRequestUnions(signatures ProgramSignatures)
 end 'synthesizeInterfaceRequestUnions'
 
 function buildInterfaceRequestUnion(signatures ProgramSignatures, interfaceName ByteArray, visibility Visibility, declFilePath FilePath) returns EnumLayout
-	let concrete = requireServiceRequestLayout(signatures, typeName: signatures.interfaceHandleRepresentative(interfaceName))
-	var request = EnumLayout.create(serviceRequestCompanionName(interfaceName), isUnion: true, conformsTo: sharedEmptyDeclaredConformances, visibility: visibility, declFilePath: declFilePath, backing: EnumBacking.integer)
+	view concrete = requireServiceRequestLayout(signatures, typeName: signatures.interfaceHandleRepresentative(interfaceName))
+	var request = EnumLayout.create(serviceRequestCompanionName(interfaceName), isUnion: true, conformsTo: NameRoster.create(), visibility: visibility, declFilePath: declFilePath, backing: EnumBacking.integer)
 	addServiceRequestCase(request, caseName: ServiceShutdownCaseName, payloads: copiedPayloads(concrete.payloadsAt(ServiceShutdownCaseIndex)))
 	let requirements = try signatures.interfaceRequirementSlots(interfaceName) otherwise CollectedInterfaceMethodArray.create()
 
@@ -1963,7 +1975,7 @@ end 'buildInterfaceRequestUnion'
 // `MailboxRuntime.installInterfaceHandleConversions` builds conversions over, so the services a send is
 // vetted against are exactly the services its handle can convert to.
 module function interfaceServiceImplementers(signatures ProgramSignatures, interfaceName ByteArray) returns NameRoster
-	let recorded = signatures.interfaceHandleRepresentative(interfaceName)
+	view recorded = signatures.interfaceHandleRepresentative(interfaceName)
 	var implementers = NameRoster.create()
 	implementers.push(recorded)
 
@@ -2074,7 +2086,7 @@ function mintServiceReplyErrorType(signatures ProgramSignatures, messageKey Byte
 		return
 	end 'refusedAtTheSpawn'
 
-	let handlerLayout = serviceReplyErrorLayout(signatures, errorName: handlerError)
+	view handlerLayout = serviceReplyErrorLayout(signatures, errorName: handlerError)
 	let handlerPlacement = serviceReplyHandlerPlacement(signatures, errorName: handlerError)
 
 	// Asked of the REGISTRY rather than of the roster, for pass 1's reason: a warm rebuild arrives with a

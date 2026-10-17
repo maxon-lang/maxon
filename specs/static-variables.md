@@ -3107,8 +3107,8 @@ function main() returns ExitCode
 	var b = Names.create()
 	b.push(2)
 	b.push(3)
-	let short = pairable(a, wanted: b)
-	let long = pairable(b, wanted: a)
+	view short = pairable(a, wanted: b)
+	view long = pairable(b, wanted: a)
 	print("short={short.count()} long={long.count()}")
 	return 0
 end 'main'
@@ -3690,7 +3690,7 @@ function main() returns ExitCode
 		sum = sum + tagOf(sentinel)
 		i = i + 1
 	end 'each'
-	let first = try xs.get(0) otherwise Boxed.plain
+	view first = try xs.get(0) otherwise Boxed.plain
 	print("count={xs.count()} sum={sum} first={tagOf(first)}")
 	return 0
 end 'main'
@@ -3742,7 +3742,7 @@ function main() returns ExitCode
 		sum = sum + tagOf(sentinel)
 		i = i + 1
 	end 'each'
-	let first = try xs.get(0) otherwise Boxed.plain
+	view first = try xs.get(0) otherwise Boxed.plain
 	print("count={xs.count()} sum={sum} first={tagOf(first)}")
 	return 0
 end 'main'
@@ -3984,7 +3984,7 @@ end 'Op'
 var globalOps = [Op.add(7), Op.nop]
 
 function main() returns ExitCode
-	let first = try globalOps.get(0) otherwise Op.nop
+	view first = try globalOps.get(0) otherwise Op.nop
 	return match first 'check'
 		add(v) gives v
 		nop gives 99
@@ -4028,7 +4028,7 @@ function main() returns ExitCode
 	ops.push(Op.add(1))
 	ops.push(Op.nop)
 
-	let info = try keywordMap.get(b"if") otherwise KeywordInfo.create(0, helpText: "")
+	view info = try keywordMap.get(b"if") otherwise KeywordInfo.create(0, helpText: "")
 	if info.kind != 1 'badLookup'
 		return 1
 	end 'badLookup'
@@ -4057,7 +4057,7 @@ var opMap = [
 ]
 
 function main() returns ExitCode
-	let op = try opMap.get(b"add") otherwise Op.nop
+	view op = try opMap.get(b"add") otherwise Op.nop
 	return match op 'check'
 		add(v) gives v
 		nop gives 99
@@ -4096,7 +4096,7 @@ var keywordMap = [
 var unusedNames = StringArray.create()
 
 function main() returns ExitCode
-	let info = try keywordMap.get(b"else") otherwise KeywordInfo.create(0, helpText: "")
+	view info = try keywordMap.get(b"else") otherwise KeywordInfo.create(0, helpText: "")
 	if info.helpText != "kind 2" 'badHelp'
 		return 1
 	end 'badHelp'
