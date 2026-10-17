@@ -74,8 +74,8 @@ not 80.
   caller. A coroutine that writes a parameter is refused a [read-only](/docs/language/memory-model/#read-only-values) argument
   (**E3159**), as an ordinary call is.
 - A closure that captured a binding owns it, so handing that binding to `async` afterwards is **E3102**.
-- The callee must be able to wait — call `sleep`, `await`, `Scheduler.yield()`, or perform file, socket or
-  process I/O, directly or through its callees. A function that never yields is **E3073** (`function never
+- The callee must be able to wait — call `sleep`, `await`, `Scheduler.yield()`, send a service message with a
+  `sendTimeout:`, or perform file, socket or process I/O, directly or through its callees. A function that never yields is **E3073** (`function never
   yields; 'async' is for I/O-concurrent work only`): there is nothing to overlap.
 
 ## Awaiting Results
@@ -209,7 +209,9 @@ when it goes out of scope (or is overwritten), which has the same effect.
   next `TcpClient.connect`, `TcpListener.accept`, `send`, `sendFrom`, `recv`, or `TcpListener.bind` to a
   host **name** throws that operation's own [`NetworkError`](/docs/stdlib/network/#tcpclient) variant at once
   instead of parking for a wake-up nothing will send. `close()` still completes, and so does a `bind` to a
-  numeric address.
+  numeric address. A service send it makes to a full mailbox fails `mailboxFull` at once, with or without a
+  `sendTimeout:`, and a send already waiting for room fails `mailboxFull` when the promise is dropped (see
+  [Mailboxes and failed sends](#mailboxes-and-failed-sends)).
 - A promise held in an array or a field is dropped with its container.
 
 ## Yielding
@@ -357,11 +359,31 @@ A mailbox holds at most its **capacity** of queued messages: `DefaultMailboxCapa
 `MailboxCapacity` (`int(1 to 2^31)`) that `spawn(capacity: n) Type.factory(args)` names. The capacity is a
 ceiling: the mailbox's memory grows with its backlog, up to the capacity.
 
-A send returns at once: the message is queued, or the send fails with an error the compiler declares for
-each message, `<Service>.<message>.sendError`, whose two cases carry the arguments the send was given:
+A send queues the message, or fails with an error the compiler declares for each message,
+`<Service>.<message>.sendError`, whose two cases carry the arguments the send was given:
 
 - `mailboxFull(<arguments>)` — the mailbox holds its capacity;
 - `serviceStopped(<arguments>)` — the service has been shut down.
+
+**`sendTimeout:`.** Every message call takes a reserved last argument, `sendTimeout: Milliseconds`, which
+says how long a send waits for room in a full mailbox. It defaults to 0: a send to a full mailbox fails
+`mailboxFull` at once. It may be the call's only argument, `h.ping(sendTimeout: 5000)`. It stays with the
+send: the handler receives the message's own arguments alone.
+
+- A send given a positive timeout waits in line behind the senders already waiting on that mailbox. Each
+  message the service takes frees a slot, and the first waiting sender's message goes into it, so the
+  waiting sends are delivered in the order they began to wait.
+- The service shutting down fails every waiting send with `serviceStopped`.
+- The timeout passing fails the send with `mailboxFull`.
+- `sendTimeout: ForeverMs` waits as long as it takes, untimed: the blocking send of a Go channel.
+  When the mailbox stays full and every green thread is waiting, the program stops with exit code
+  **92** (see [Exit Codes](#exit-codes)).
+- A send in a coroutine whose promise has been dropped (see
+  [Cancellation and Dropped Promises](#cancellation-and-dropped-promises)) fails `mailboxFull` at once, and so
+  does a waiting one when the promise is dropped. This is the one way a send given `ForeverMs` fails
+  `mailboxFull`.
+- A message that declares a parameter named `sendTimeout`, and an argument after `sendTimeout:`, are
+  **[E3192](/docs/cli/error-codes/#e3192--semanticservicesendtimeoutreserved)**.
 
 The arguments come back owned by the caller, so they can be sent again, to this service or another. A
 read-only value the send shared (see above) comes back as a copy. One whose type has no deep copy comes back
@@ -390,36 +412,28 @@ function main() returns ExitCode
 	let h = spawn(capacity: 64) Store.create()
 
 	for i in 0 upto 1000 'eachLine'
-		var pending = "line {i}"
-
-		while true 'untilItLands'
-			try h.keep(pending) otherwise (e) 'refused'
-				match e 'why'
-					mailboxFull(back) then pending = back
-					serviceStopped then return 1
-				end 'why'
-
-				Scheduler.yield()
-				continue
-			end 'refused'
-
-			break
-		end 'untilItLands'
+		try h.keep("line {i}", sendTimeout: 50) otherwise (e) 'refused'
+			match e 'why'
+				mailboxFull(back) then print("dropped {back}\n")
+				serviceStopped then return 1
+			end 'why'
+		end 'refused'
 	end 'eachLine'
 
 	return 0
 end 'main'
 ```
 
-- **A full mailbox is the sender's to handle.** Retry after `Scheduler.yield()`, as above, send elsewhere, or
-  drop the message. A send returns at once whatever happens, so the only place a sender waits is an
-  `await`, which is what keeps [E3139](/docs/cli/error-codes/#e3139--semanticservicecallcycle)'s cycle rule
-  sufficient for deadlock freedom.
+- **A full mailbox is the sender's to handle.** Wait for room with `sendTimeout:`, as above, send elsewhere,
+  or drop the message. A send with a finite timeout waits a bounded time, so with those the only unbounded
+  wait is an `await`, and [E3139](/docs/cli/error-codes/#e3139--semanticservicecallcycle)'s cycle rule keeps the
+  program deadlock-free. A `ForeverMs` send is an unbounded wait too: services that fill each other's
+  mailboxes with `ForeverMs` sends can deadlock.
 - ⚠ **Retrying coroutines can livelock.** A yield runs the green thread's other runnable coroutines first.
-  When every coroutine of one green thread retries a send to the same full service, at one processor with
-  preemption off (`MAXON_MAX_PROCS=1`, `MAXON_PREEMPT=off`) the coroutines hand the processor to each other
-  and the service waits for it forever. Let the coroutines park instead, with `sleep` or by awaiting a
-  reply.
+  When every coroutine of one green thread retries a send without a timeout to the same full service, at one
+  processor with preemption off (`MAXON_MAX_PROCS=1`, `MAXON_PREEMPT=off`) the coroutines hand the processor
+  to each other and the service waits for it forever. Give the send a `sendTimeout:`, which parks the
+  coroutine until there is room.
 - **A send error is propagated** by a bare `try` in a function that `throws <Service>.<message>.sendError`,
   or rethrown with `throw e` from the binding that caught it. Throwing one the function does not solely
   own — a parameter, say — is **E3191**, because its catcher takes the arguments out of it as their only
@@ -642,7 +656,8 @@ that call and the report.
   behind the other runnable work, so a CPU-bound loop cannot starve the rest of the program.
   `MAXON_PREEMPT=off` disables preemption; `on`, or unset, is the default, and any other value makes the
   program exit at start-up with code 116.
-- **Coroutines switch only where they wait**: at `await`, `sleep`, `Scheduler.yield()` and I/O.
+- **Coroutines switch only where they wait**: at `await`, `sleep`, `Scheduler.yield()`, I/O, and a service
+  send given a `sendTimeout:`, while its mailbox is full.
 
 The [CLI reference](/docs/cli/) lists the environment variables a compiled program reads.
 
@@ -654,8 +669,9 @@ Each of these aborts writes `fatal error: runtime abort N (name)` to stderr, the
 |-----------|-------|
 | 75 | a green thread was neither awaited nor dropped when the program ended |
 | 90 | a service's message loop received a message its type does not declare — reachable only if a send the compiler built names no message of the service |
-| 92 | deadlock: `main` has not finished and nothing can ever run again (for example `awaitAny` on an empty array) |
+| 92 | deadlock: `main` is unfinished and every green thread waits for good (for example `awaitAny` on an empty array, or a `sendTimeout: ForeverMs` send to a mailbox that stays full) |
 | 96 | a service send found a value with a second owner |
+| 98 | a service send waiting for room broke the protocol between the sender and the party that wakes it — reachable only through a send the compiler built wrongly |
 | 116 | `MAXON_PREEMPT` holds a value other than `on` or `off` |
 | 120 | a deep copy reached an interface-typed field whose conformer cannot be duplicated — reachable only if a `.clone()` the front end should have refused was compiled |
 

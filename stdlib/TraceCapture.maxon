@@ -76,42 +76,26 @@ type TraceCaptureControl
 		self.capturing.publish(true)
 	end 'start'
 
-	// See `LogSink.write` for why the retry yields and where it can still livelock.
+	// A `ForeverMs` send fails `mailboxFull` only for a cancelled sender: here its command is dropped,
+	// and in `stop` it gets no keys.
 	function submit(command TraceCommand)
-		var pending = command.clone()
-
-		while true 'untilQueued'
-			try self.recorder.apply(pending) otherwise (e) 'refused'
-				match e 'why'
-					mailboxFull(back) then pending = back
-					serviceStopped then return
-				end 'why'
-
-				Scheduler.yield()
-				continue
-			end 'refused'
-
-			return
-		end 'untilQueued'
+		try self.recorder.apply(command.clone(), sendTimeout: ForeverMs) otherwise (e) 'refused'
+			match e 'why'
+				mailboxFull or
+				serviceStopped then return
+			end 'why'
+		end 'refused'
 	end 'submit'
 
 	function stop() returns TraceKeyArray
 		self.capturing.publish(false)
 
-		while true 'untilAnswered'
-			let keys = try await self.recorder.finish() otherwise (e) 'refused'
-				match e 'why'
-					mailboxFull then Scheduler.yield()
-					serviceStopped then panic("TraceCapture.stopCapture: the recorder service is gone")
-				end 'why'
-
-				continue
-			end 'refused'
-
-			return keys
-		end 'untilAnswered'
-
-		panic("TraceCapture.stopCapture: the retry loop ends only by returning the captured keys")
+		return try await self.recorder.finish(sendTimeout: ForeverMs) otherwise (e) 'refused'
+			match e 'why'
+				mailboxFull then return TraceKeyArray.create()
+				serviceStopped then panic("TraceCapture.stopCapture: the recorder service is gone")
+			end 'why'
+		end 'refused'
 	end 'stop'
 end 'TraceCaptureControl'
 

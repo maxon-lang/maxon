@@ -199,21 +199,12 @@ function workersFor(files PathArray) returns WorkerCount
 end 'workersFor'
 
 function submitCount(replies CountPromiseArray, counter Counter.handle, path FilePath)
-	var pending = path.clone()
-
-	while true 'untilItLands'
-		replies.push(try counter.count(pending) otherwise (e) 'refused'
-			match e 'why'
-				mailboxFull(back) then pending = back
-				serviceStopped then panic("submitCount: a counter stopped before the files were sent")
-			end 'why'
-
-			Scheduler.yield()
-			continue
-		end 'refused')
-
-		break
-	end 'untilItLands'
+	replies.push(try counter.count(path.clone(), sendTimeout: ForeverMs) otherwise (e) 'refused'
+		match e 'why'
+			mailboxFull then panic("submitCount: runs on main's green thread, which no promise names and so nothing cancels, and a send given ForeverMs waits for room — mailboxFull cannot occur")
+			serviceStopped then panic("submitCount: a counter stopped before the files were sent")
+		end 'why'
+	end 'refused')
 end 'submitCount'
 
 function countFiles(paths PathArray, report Report)

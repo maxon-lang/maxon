@@ -2372,6 +2372,671 @@ end 'main'
 keys=1024
 ```
 
+<!-- test: a-send-with-a-timeout-waits-for-room -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+A send given `sendTimeout:` waits for room instead of failing at once. The first send fills a capacity of one
+before the service has run, so the second finds the mailbox full and parks `main` on the mailbox's sender queue.
+At one processor with preemption off that park is the only way the service runs. Its receive takes `s0` and,
+finding `main` queued, moves `main`'s `s1` into the freed slot and readies `main`, as Go's receive moves a
+parked sender's element into the buffer. The send is already delivered when `main` runs again. The service
+keeps the processor until it parks, so it handles `s0` and then `s1` before `main` prints.
+```maxon
+type Store
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function keep(s String)
+		self.n = self.n + 1
+		print("kept {s}\n")
+	end 'keep'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn(capacity: 1) Store.create()
+	try h.keep("s{0}") otherwise panic("a capacity of one takes the first send")
+
+	try h.keep("s{1}", sendTimeout: 5000) otherwise (e) 'refused'
+		match e 'why'
+			mailboxFull(s) then print("full {s}\n")
+			serviceStopped(s) then print("stopped {s}\n")
+		end 'why'
+
+		return 1
+	end 'refused'
+
+	print("sent s1\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+kept s0
+kept s1
+sent s1
+```
+
+<!-- test: a-parameterless-message-takes-only-a-named-send-timeout -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+`sendTimeout:` is optional, so it is named wherever it appears, even as a call's only argument: a message with
+no parameters takes `h.ping(sendTimeout: 5000)`. The shape is `a-send-with-a-timeout-waits-for-room`'s: the
+second ping parks until the service's receive takes the first and moves the second into the freed slot. The
+service then runs both pings before `main` prints.
+```maxon
+type Store
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function ping()
+		self.n = self.n + 1
+		print("ping {self.n}\n")
+	end 'ping'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn(capacity: 1) Store.create()
+	try h.ping() otherwise panic("a capacity of one takes the first send")
+
+	try h.ping(sendTimeout: 5000) otherwise (e) 'refused'
+		match e 'why'
+			mailboxFull then print("full\n")
+			serviceStopped then print("stopped\n")
+		end 'why'
+
+		return 1
+	end 'refused'
+
+	print("sent the second ping\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+ping 1
+ping 2
+sent the second ping
+```
+
+<!-- test: an-awaited-send-with-a-timeout-waits-for-room -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+`try await` takes `sendTimeout:` too. The send waits for the service to take `s0`, as in
+`a-send-with-a-timeout-waits-for-room`, and the one `try` then awaits the reply.
+```maxon
+type Store
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function keep(s String)
+		self.n = self.n + 1
+		print("kept {s}\n")
+	end 'keep'
+
+	export function tally(s String) returns Integer
+		self.n = self.n + 1
+		print("tallied {s}\n")
+
+		return self.n
+	end 'tally'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn(capacity: 1) Store.create()
+	try h.keep("s{0}") otherwise panic("a capacity of one takes the first send")
+
+	let n = try await h.tally("s{1}", sendTimeout: 5000) otherwise (e) 'refused'
+		match e 'why'
+			mailboxFull(s) then print("full {s}\n")
+			serviceStopped(s) then print("stopped {s}\n")
+		end 'why'
+
+		return 1
+	end 'refused'
+
+	print("n={n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+kept s0
+tallied s1
+n=2
+```
+
+<!-- test: a-send-whose-timeout-expires-fails-mailbox-full -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+A send whose timeout expires before room appears fails `mailboxFull` and hands its `String` back. The yield
+lets the service take `hold`, whose handler sleeps for `holdMs`, so nothing drains the mailbox while `main`
+waits: `s0` fills the one slot and `s1` waits out its `timeoutMs`. The wait is measured with `Clock`: at least
+the timeout, and well short of the handler's sleep, which says the timer and not a drain ended it. Both queued
+messages run at the exit drain.
+```maxon
+let holdMs = 500
+let timeoutMs = 20
+let wellShortMs = 250
+
+type Store
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function hold(ms Milliseconds)
+		sleep(ms)
+		print("held\n")
+	end 'hold'
+
+	export function keep(s String)
+		self.n = self.n + 1
+		print("kept {s}\n")
+	end 'keep'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn(capacity: 1) Store.create()
+	try h.hold(holdMs) otherwise panic("an empty mailbox takes the first send")
+	Scheduler.yield()
+	try h.keep("s{0}") otherwise panic("the service took hold, so its one slot is free")
+	let start = Clock.nowMs()
+
+	try h.keep("s{1}", sendTimeout: timeoutMs) otherwise (e) 'refused'
+		let waited = Clock.elapsedMs(start)
+
+		match e 'why'
+			mailboxFull(s) then print("full {s}\n")
+			serviceStopped(s) then print("stopped {s}\n")
+		end 'why'
+
+		print("waited out the timeout: {waited >= timeoutMs}\n")
+		print("returned before the handler woke: {waited < wellShortMs}\n")
+		return 0
+	end 'refused'
+
+	print("sent s1\n")
+	return 1
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+full s1
+waited out the timeout: true
+returned before the handler woke: true
+held
+kept s0
+```
+
+<!-- test: shutdown-wakes-a-sender-waiting-for-room -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+`shutdown()` wakes a send waiting for room, and the send fails `serviceStopped` with its `String`. The waiting
+green thread cannot shut the service down itself, so a second service, `Closer`, does. The yield lets `Store`
+take `hold` and sleep, and lets `Closer` park on its empty mailbox. `s0` then fills `Store`'s one slot,
+`close` goes to `Closer`, and `s1` waits with a timeout far longer than the case runs. Its wait is what lets
+`Closer` run. `s0` still runs after the shutdown, once `hold` returns.
+```maxon
+let holdMs = 300
+let longTimeoutMs = 60000
+
+type Store
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function hold(ms Milliseconds)
+		sleep(ms)
+		print("held\n")
+	end 'hold'
+
+	export function keep(s String)
+		self.n = self.n + 1
+		print("kept {s}\n")
+	end 'keep'
+end 'Store'
+
+type Closer
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function close(target Store.handle)
+		print("closing\n")
+		target.shutdown()
+	end 'close'
+end 'Closer'
+
+function main() returns ExitCode
+	let h = spawn(capacity: 1) Store.create()
+	let closer = spawn Closer.create()
+	try h.hold(holdMs) otherwise panic("an empty mailbox takes the first send")
+	Scheduler.yield()
+	try h.keep("s{0}") otherwise panic("the service took hold, so its one slot is free")
+	try closer.close(h.clone()) otherwise panic("an open mailbox with room takes the send")
+
+	try h.keep("s{1}", sendTimeout: longTimeoutMs) otherwise (e) 'refused'
+		match e 'why'
+			mailboxFull(s) then print("full {s}\n")
+			serviceStopped(s) then print("stopped {s}\n")
+		end 'why'
+
+		return 0
+	end 'refused'
+
+	print("sent s1\n")
+	return 1
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+closing
+stopped s1
+held
+kept s0
+```
+
+<!-- test: a-coroutine-dropped-while-waiting-for-room-gives-up-its-send -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+A coroutine parked on a full mailbox's sender queue has its promise dropped. The drop takes it off the queue and
+readies it, and its send fails `mailboxFull` with the `String` handed back, so a coroutine winding down gives up
+its message rather than waiting out a timeout this long. `main` yields twice for what the case needs parked: once
+so `Store` takes `hold` and sleeps, and once so `begForRoom` runs to its wait. The block's end drops the promise,
+and `main` prints before the coroutine runs again.
+```maxon
+let holdMs = 300
+let longTimeoutMs = 60000
+
+type Store
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function hold(ms Milliseconds)
+		sleep(ms)
+		print("held\n")
+	end 'hold'
+
+	export function keep(s String)
+		self.n = self.n + 1
+		print("kept {s}\n")
+	end 'keep'
+end 'Store'
+
+function begForRoom(h Store.handle) returns Integer
+	try h.keep("s1", sendTimeout: longTimeoutMs) otherwise (e) 'refused'
+		match e 'why'
+			mailboxFull(s) then print("gave up {s}\n")
+			serviceStopped(s) then print("stopped {s}\n")
+		end 'why'
+
+		return 1
+	end 'refused'
+
+	return 0
+end 'begForRoom'
+
+function main() returns ExitCode
+	let h = spawn(capacity: 1) Store.create()
+	try h.hold(holdMs) otherwise panic("an empty mailbox takes the first send")
+	Scheduler.yield()
+	try h.keep("s0") otherwise panic("the service took hold, so its one slot is free")
+
+	if true 'scope'
+		let waiting = async begForRoom(h.clone())
+		Scheduler.yield()
+		print("waiting: {not waiting.isComplete()}\n")
+	end 'scope'
+
+	print("dropped\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+waiting: true
+dropped
+gave up s1
+held
+kept s0
+```
+
+<!-- test: a-renounced-coroutine-does-not-wait-for-room -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+A coroutine whose promise was dropped while it slept may not begin a wait on a far end, and a send given
+`sendTimeout:` to a full mailbox is one. The drop ends the sleep early, the coroutine resumes, and its send
+fails `mailboxFull` at once with the `String` handed back, so `s1` is never delivered. A coroutine that waited
+instead would be woken by `Store` taking `s0` once `hold` returns, and `kept s1` would print.
+```maxon
+let holdMs = 300
+let napMs = 5000
+let longTimeoutMs = 60000
+
+type Store
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function hold(ms Milliseconds)
+		sleep(ms)
+		print("held\n")
+	end 'hold'
+
+	export function keep(s String)
+		self.n = self.n + 1
+		print("kept {s}\n")
+	end 'keep'
+end 'Store'
+
+function napThenBeg(h Store.handle) returns Integer
+	sleep(napMs)
+
+	try h.keep("s1", sendTimeout: longTimeoutMs) otherwise (e) 'refused'
+		match e 'why'
+			mailboxFull(s) then print("gave up {s}\n")
+			serviceStopped(s) then print("stopped {s}\n")
+		end 'why'
+
+		return 1
+	end 'refused'
+
+	return 0
+end 'napThenBeg'
+
+function main() returns ExitCode
+	let h = spawn(capacity: 1) Store.create()
+	try h.hold(holdMs) otherwise panic("an empty mailbox takes the first send")
+	Scheduler.yield()
+	try h.keep("s0") otherwise panic("the service took hold, so its one slot is free")
+
+	if true 'scope'
+		let napping = async napThenBeg(h.clone())
+		Scheduler.yield()
+		print("napping: {not napping.isComplete()}\n")
+	end 'scope'
+
+	print("dropped\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+napping: true
+dropped
+gave up s1
+held
+kept s0
+```
+
+<!-- test: a-zero-send-timeout-fails-at-once -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+`sendTimeout: 0` is the default spelled out: a full mailbox fails `mailboxFull` at once, exactly as
+`a-full-mailbox-refuses-a-send-and-hands-its-arguments-back` does with no label. `main` never parks, so the
+service runs nothing until the exit drain.
+```maxon
+type Store
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function keep(s String)
+		self.n = self.n + 1
+		print("kept {s}\n")
+	end 'keep'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn(capacity: 1) Store.create()
+	try h.keep("s{0}") otherwise panic("a capacity of one takes the first send")
+
+	try h.keep("s{1}", sendTimeout: 0) otherwise (e) 'refused'
+		match e 'why'
+			mailboxFull(s) then print("full {s}\n")
+			serviceStopped(s) then print("stopped {s}\n")
+		end 'why'
+
+		return 0
+	end 'refused'
+
+	print("sent s1\n")
+	return 1
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+full s1
+kept s0
+```
+
+<!-- test: the-largest-send-timeout-waits-for-room-instead-of-failing-at-once -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+A `sendTimeout:` of `Milliseconds` maximum is a wait with no practical end, not an overflowed deadline that
+has already passed. The shape is `a-send-with-a-timeout-waits-for-room`'s: the second send finds the one slot
+full and parks until the service has taken `s0`, then lands in the slot that take freed. The service handles
+`s0` and `s1` before `main` prints.
+```maxon
+let longestTimeoutMs = u64.max
+
+type Store
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function keep(s String)
+		self.n = self.n + 1
+		print("kept {s}\n")
+	end 'keep'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn(capacity: 1) Store.create()
+	try h.keep("s{0}") otherwise panic("a capacity of one takes the first send")
+
+	try h.keep("s{1}", sendTimeout: longestTimeoutMs) otherwise (e) 'refused'
+		match e 'why'
+			mailboxFull(s) then print("full {s}\n")
+			serviceStopped(s) then print("stopped {s}\n")
+		end 'why'
+
+		return 1
+	end 'refused'
+
+	print("sent s1\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+kept s0
+kept s1
+sent s1
+```
+
+<!-- test: an-indefinite-send-waits-past-a-sleeping-handler-and-delivers -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+A send whose `sendTimeout:` is so large that its deadline cannot be represented arms no timer, so nothing but a
+drain, a shutdown or a cancellation ends the wait. The wait here is a real one: the yield lets the service take
+`hold`, whose handler sleeps for `holdMs`, so `s0` fills the one slot and `s1` parks for the whole sleep. The
+service then takes `s0`, moves `s1` into the freed slot and readies `main`, which would have failed
+`mailboxFull` had a deadline been armed and passed. The service handles `s0` and `s1` before `main` prints.
+`i64.max` is the other half of `the-largest-send-timeout-waits-for-room-instead-of-failing-at-once`: it is
+representable as a signed count of milliseconds and too large to turn into a deadline, so the saturation is the
+clock-reading road's rather than the sign test's.
+```maxon
+let holdMs = 150
+let indefiniteTimeoutMs = i64.max
+
+type Store
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function hold(ms Milliseconds)
+		sleep(ms)
+		print("held\n")
+	end 'hold'
+
+	export function keep(s String)
+		self.n = self.n + 1
+		print("kept {s}\n")
+	end 'keep'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn(capacity: 1) Store.create()
+	try h.hold(holdMs) otherwise panic("an empty mailbox takes the first send")
+	Scheduler.yield()
+	try h.keep("s{0}") otherwise panic("the service took hold, so its one slot is free")
+
+	try h.keep("s{1}", sendTimeout: indefiniteTimeoutMs) otherwise (e) 'refused'
+		match e 'why'
+			mailboxFull(s) then print("full {s}\n")
+			serviceStopped(s) then print("stopped {s}\n")
+		end 'why'
+
+		return 1
+	end 'refused'
+
+	print("sent s1\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+held
+kept s0
+kept s1
+sent s1
+```
+
+<!-- test: a-sender-waiting-without-end-on-a-service-that-never-receives-is-a-deadlock -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+A send that waits without end arms no timer, so a sender parked on a mailbox nobody will ever receive from is a
+deadlock, as Go's blocking send on a channel nobody reads is: `RuntimeAbort.schedulerDeadlock`, **exit 92**.
+`stall` fills the service's own one slot with `fill` and then sends a second `fill` to the same full mailbox
+with `ForeverMs`, so the service parks as a sender on the mailbox it would have to receive from. `main` then
+sends to the same full mailbox and parks behind it. Every green thread is parked, no timer is pending and no
+read or child is outstanding, so the machine that goes idle last finds nothing that can wake any of them.
+```maxon
+type Store
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function stall(me Store.handle)
+		try me.fill() otherwise panic("the slot the take of `stall` freed holds the first fill")
+		try me.fill(sendTimeout: ForeverMs) otherwise panic("a send that waits without end returns only when it is delivered or the service stops")
+	end 'stall'
+
+	export function fill()
+		self.n = self.n + 1
+	end 'fill'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn(capacity: 1) Store.create()
+	try h.stall(h.clone()) otherwise panic("an empty mailbox takes the first send")
+	Scheduler.yield()
+	try h.fill(sendTimeout: ForeverMs) otherwise panic("a send that waits without end returns only when it is delivered or the service stops")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+92
+```
+```stderr
+fatal error: runtime abort 92 (schedulerDeadlock)
+```
+
+<!-- test: error.a-message-may-not-declare-a-send-timeout-parameter -->
+`sendTimeout:` is reserved on every message call, so a message may not declare a parameter of that name: a
+call could not tell the payload from the timeout.
+```maxon
+type Store
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function keep(s String, sendTimeout Milliseconds)
+		self.n = self.n + 1
+		print("kept {s} {sendTimeout}\n")
+	end 'keep'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	try h.keep("a{1}", sendTimeout: 3) otherwise panic("an open mailbox with room takes the send")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3192: <fragment>:16:10: the message `Store.keep` declares a parameter named `sendTimeout`, and this `spawn` makes `Store` a service. `sendTimeout:` is reserved on every message call: it is the milliseconds a send waits for room in a full mailbox, and it never enters the request, so a call could not tell the parameter from the timeout. Rename the parameter
+```
+
 <!-- test: dropping-the-last-handle-shuts-the-service-down -->
 <!-- procs: 1 -->
 <!-- preempt: off -->

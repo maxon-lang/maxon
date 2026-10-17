@@ -200,6 +200,7 @@ func @main {
     x64.storeBaseDispReg.word64 [r8 + 0], rax
     x64.storeBaseDispReg.word64 [r8 + 8], rbx
     x64.movRegImm32 rax, 16
+    x64.movRegImm32 r9, 0
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegReg rdx, r8
     x64.callDirect __mbox_send
@@ -565,6 +566,7 @@ func @main {
     x64.storeBaseDispReg.word64 [r8 + 0], rax
     x64.storeBaseDispReg.word64 [r8 + 8], rbx
     x64.movRegImm32 rax, 16
+    x64.movRegImm32 r9, 0
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegReg rdx, r8
     x64.callDirect __mbox_send
@@ -926,6 +928,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x1 + 0], x0
     arm64.storeBaseDispReg.word64 [x1 + 8], x19
     arm64.movImm x2, 16
+    arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.bl __mbox_send
     arm64.cmp x0, 0
@@ -1283,6 +1286,7 @@ func @main {
     arm64.storeBaseDispReg.word64 [x1 + 0], x0
     arm64.storeBaseDispReg.word64 [x1 + 8], x19
     arm64.movImm x2, 16
+    arm64.movImm x3, 0
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.bl __mbox_send
     arm64.cmp x0, 0

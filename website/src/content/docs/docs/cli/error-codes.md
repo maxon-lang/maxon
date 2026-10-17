@@ -852,6 +852,10 @@ A message that returns a value or throws is sent as a bare statement. Its send d
 
 A function throws a service send's error, `<Service>.<message>.sendError`, from a value it does not own alone -- a parameter, say, which its caller still holds. Whoever catches a send error takes the arguments out of its `mailboxFull` or `serviceStopped` case as their only owner, so the error must have no other holder. Propagate the failed send's error with a bare `try`, or `throw` the binding of the `otherwise (e)` that caught it, which hands the error over.
 
+### E3192 — `semanticServiceSendTimeoutReserved`
+
+`sendTimeout:` is reserved on every message call: it is how many milliseconds the send waits for room in a full mailbox before it fails `mailboxFull`, and it stays with the send. Reported at a `spawn` whose service declares a message with a parameter named `sendTimeout`, and at a `sendTimeout:` argument with another argument after it. Rename the parameter, or move `sendTimeout:` to the end of the argument list.
+
 ## Intermediate Representation (E4xxx)
 
 IR generation.

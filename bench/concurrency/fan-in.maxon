@@ -23,41 +23,21 @@ type Sink
 end 'Sink'
 
 function deliver(sink Sink.handle, value Count)
-	var landed = false
-
-	while not landed 'untilItLands'
-		try sink.receive(value) otherwise (e) 'refused'
-			match e 'why'
-				mailboxFull then Scheduler.yield()
-				serviceStopped then panic("fan-in: the sink stopped while a producer was sending")
-			end 'why'
-
-			continue
-		end 'refused'
-
-		landed = true
-	end 'untilItLands'
+	try sink.receive(value, sendTimeout: ForeverMs) otherwise (e) 'refused'
+		match e 'why'
+			mailboxFull then panic("fan-in: a producer runs on its service's green thread, which no promise names and so nothing cancels, and a send given ForeverMs waits for room — mailboxFull cannot occur")
+			serviceStopped then panic("fan-in: the sink stopped while a producer was sending")
+		end 'why'
+	end 'refused'
 end 'deliver'
 
 function readTotal(sink Sink.handle) returns Count
-	var total = 0 as Count
-	var read = false
-
-	while not read 'untilItLands'
-		let received = try await sink.received() otherwise (e) 'refused'
-			match e 'why'
-				mailboxFull then Scheduler.yield()
-				serviceStopped then panic("fan-in: the sink stopped before the final read")
-			end 'why'
-
-			continue
-		end 'refused'
-
-		total = received
-		read = true
-	end 'untilItLands'
-
-	return total
+	return try await sink.received(sendTimeout: ForeverMs) otherwise (e) 'refused'
+		match e 'why'
+			mailboxFull then panic("fan-in: main's green thread is named by no promise and so nothing cancels it, and a send given ForeverMs waits for room — mailboxFull cannot occur")
+			serviceStopped then panic("fan-in: the sink stopped before the final read")
+		end 'why'
+	end 'refused'
 end 'readTotal'
 
 type Producer

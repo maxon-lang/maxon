@@ -5839,14 +5839,14 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: SvcSpawnName, args: fourArgs(loopPtr, second: state, third: slotBytes, fourth: capacity)))
 	end 'emitServiceSpawn'
 
-	// ⭐ **`h.m(…)` → `__mbox_send(mailbox, request, bytes)`.** Everything else about a send happened
-	// at the parse: the arguments were MOVED into the request in the staging buffer, the request was
-	// tagged, and the mailbox was loaded out of the handle. The op's `callee` is carried for
-	// `UnusedExportCheck` and `StdlibSource`, which read it as a reference to the message — neither is
-	// a lowering question, so nothing here reads it.
+	// ⭐ **`h.m(…)` → `__mbox_send(mailbox, request, bytes, timeoutMs)`.** Everything else about a send
+	// happened at the parse: the arguments were MOVED into the request in the staging buffer, the request
+	// was tagged, and the mailbox was loaded out of the handle. The op's `callee` is carried for
+	// `UnusedExportCheck` and `StdlibSource`, which read it as a reference to the message, and `timed`
+	// for `SemanticCheck.opYields` — none is a lowering question, so nothing here reads them.
 	function lowerServiceSend(hlOp MaxonOp, dstBlock IrBlock)
 		match hlOp 's'
-			serviceSend(_, status, _, handle, request, bytes) then self.stdModule.appendOp(dstBlock, op: StdOp.call(status, callee: MboxSendName, args: threeArgs(handle, second: request, third: bytes)))
+			serviceSend(_, status, _, handle, request, bytes, timeoutMs, _) then self.stdModule.appendOp(dstBlock, op: StdOp.call(status, callee: MboxSendName, args: fourArgs(handle, second: request, third: bytes, fourth: timeoutMs)))
 			default panic("lowerServiceSend: expected a `serviceSend` op, got a different MaxonOp variant — `lowerOp` routes only `serviceSend` here")
 		end 's'
 	end 'lowerServiceSend'

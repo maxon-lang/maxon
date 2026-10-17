@@ -5232,7 +5232,8 @@ end 'functionYieldsDirectly'
 
 // The per-op arm. Every op is named, as in `EffectSummaryBuilder.walkOp`, so a newly appended op fails to
 // compile here too. The two part company where "suspends the green thread" and "is observable"
-// genuinely differ: a service send is an effect and no yield at all, while an `await` is both.
+// genuinely differ: a service send without `sendTimeout:` is an effect and no yield at all, while an
+// `await` is both.
 function opYields(op MaxonOp, funcIndexByName FuncIndexByName, callerIndex ElementIndex, edges CallGraphEdges, runtimeTier FunctionNameSet) returns bool
 	return match op 'op'
 		call(_, callee, _, _, _, _, _, _) gives calleeYields(callee, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges, runtimeTier: runtimeTier)
@@ -5263,13 +5264,11 @@ function opYields(op MaxonOp, funcIndexByName FuncIndexByName, callerIndex Eleme
 		panicAbortValue or
 		errorFlagEncode or
 
-		// A service op neither suspends the frame that wrote it nor is an edge. A `spawn` hands the work
-		// to a green thread of its own and returns a handle; a send copies its request into the mailbox
-		// under the mailbox's lock and returns. The handler runs on the service's thread, so whether it
-		// can park says nothing about this frame — the opposite of `asyncCall`, whose coroutine runs on
-		// this frame's own thread.
+		// A service op is not an edge. A `spawn` hands the work to a green thread of its own and returns a
+		// handle, and the handler a send reaches runs on the service's thread, so whether it can park says
+		// nothing about this frame — the opposite of `asyncCall`, whose coroutine runs on this frame's own
+		// thread.
 		serviceSpawn or
-		serviceSend or
 		serviceReplyCell or
 		immortalStructRecord or
 		immortalStringTable or
@@ -5278,6 +5277,10 @@ function opYields(op MaxonOp, funcIndexByName FuncIndexByName, callerIndex Eleme
 		existentialWitness or
 		holdValue or
 		holdEnd gives false
+
+		// A send given `sendTimeout:` parks this frame while its mailbox is full. Its value is known only at
+		// run time, so the label alone decides.
+		serviceSend(_, _, _, _, _, _, _, timed) gives timed
 		tryCall(_, _, callee, _, _, _, _, _, _) gives calleeYields(callee, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges, runtimeTier: runtimeTier)
 
 		// An indirect call or a witness dispatch chooses its target at run time or out of a witness
@@ -5339,8 +5342,9 @@ end 'recordCallGraphEdge'
 //     green thread, or drives one of its own coroutines.
 //   • `__gt_process_run` — parks on a child process until it exits.
 //   • `__gt_await_any` — the SELECT: it runs the shared cooperative drive loop, so it switches into
-//     other green threads and blocks this M on the netpoll exactly as an `await` does. `__mbox_send` and
-//     `__mbox_close` are the counter-example and are deliberately absent — both complete INLINE.
+//     other green threads and blocks this M on the netpoll exactly as an `await` does. `__mbox_close` is
+//     the counter-example and is deliberately absent — it completes INLINE. `__mbox_send` is absent too:
+//     it parks only when given `sendTimeout:`, which `opYields` reads off the `serviceSend` op.
 //     ⚠ **RE-MEASURED FOR THIS MEMBER, and the block below's finding holds one name later:** with
 //     `__gt_await_any` struck from the predicate and rebuilt, `async` over a function whose ONLY yield is
 //     `__Builtins.awaitAny` still COMPILES, and the control — `async` over a pure function — still answers

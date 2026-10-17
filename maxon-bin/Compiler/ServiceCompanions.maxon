@@ -557,7 +557,21 @@ module union ServiceRosterVerdict
 	// A reply declared at a bare `T` that hands back the service's own state, at an instantiation resolving
 	// `T` to a managed type. E3137, the refusal a handler's `return` raises for a type its body declares.
 	messageReplyAliasesServiceState(let methodName ByteArray, replyTypeName String)
+
+	messageDeclaresTheSendTimeoutLabel(let methodName ByteArray)
 end 'ServiceRosterVerdict'
+
+module let ServiceSendTimeoutLabel = b"sendTimeout"
+
+function declaresTheSendTimeoutLabel(decl OverloadedDecl) returns bool
+	for p in 0 upto decl.paramNames.count() 'eachParamName'
+		if serviceParamName(decl, index: p as ParamCount).equals(ServiceSendTimeoutLabel) 'reserved'
+			return true
+		end 'reserved'
+	end 'eachParamName'
+
+	return false
+end 'declaresTheSendTimeoutLabel'
 
 // ⭐⭐ **IS THIS A SPAWN TARGET? — the whole rule, in one place.** The order of the arms is the order the
 // questions can be ASKED: a member cannot be classified before its type is known to be a struct, and a
@@ -681,6 +695,10 @@ module function classifyServiceRoster(signatures ProgramSignatures, typeName Byt
 		end 'overloaded'
 
 		let decl = serviceFirstDeclOf(decls, key: messageKey)
+
+		if declaresTheSendTimeoutLabel(decl) 'reservedLabel'
+			return ServiceRosterVerdict.messageDeclaresTheSendTimeoutLabel(methodName)
+		end 'reservedLabel'
 
 		match uncarriableReplyNoun(signatures, messageKey: messageKey, decl: decl, declFilePath: layout.declFilePath, knowledge: knowledge) 'replyCannotBeCarried'
 			acceptable then break
@@ -1132,6 +1150,10 @@ module function spawnShapeRefusalMessage(written String) returns String
 	return "`spawn {written}…` does not start a service: `spawn` is followed by a STATIC CALL on a type, and there is no bare `spawn f()` green thread — the unit of concurrency is a service, whose message surface the compiler can check. {SpawnTeachingSentence}"
 end 'spawnShapeRefusalMessage'
 
+module function serviceSendTimeoutNotLastRefusal() returns String
+	return "`{String.from(ServiceSendTimeoutLabel)}:` is reserved on every message call and is the LAST argument: it is the milliseconds the send waits for room in a full mailbox, not a payload, so no argument may follow it. Move it to the end of the argument list"
+end 'serviceSendTimeoutNotLastRefusal'
+
 // ⭐⭐ **THE WORDS FOR A ROSTER THAT CANNOT BE DISPATCHED — and both of them NAME THE SPAWN by being raised
 // at it.** The design's own requirement is that a service diagnostic name the site that made the type a
 // service, because whether a type is a service is a whole-program property and the method it fires on may be
@@ -1143,6 +1165,7 @@ module function serviceRosterRefusalMessage(verdict ServiceRosterVerdict, typeNa
 		messageParameterIsNotTransferable(methodName, paramName, noun) then return "parameter `{String.from(paramName)}` of the message `{String.from(typeName)}.{String.from(methodName)}` is {noun}, and this `spawn` makes `{String.from(typeName)}` a service — whose messages hand their arguments to another green thread. Send a `.clone()`, send the scalar it is derived from, or drop the parameter from the message"
 		messageReplyGraphIsNotWalkable(methodName, noun) then return serviceUnclosedRecordTransferMessage(serviceReplyBlame(typeName, methodName: methodName), sourceClause: NoTransferSourceClause, noun: noun)
 		messageReplyAliasesServiceState(methodName, replyTypeName) then return serviceGenericReplyAliasesStateRefusal(typeName, methodName: methodName, replyTypeName: replyTypeName)
+		messageDeclaresTheSendTimeoutLabel(methodName) then return "the message `{String.from(typeName)}.{String.from(methodName)}` declares a parameter named `{String.from(ServiceSendTimeoutLabel)}`, and this `spawn` makes `{String.from(typeName)}` a service. `{String.from(ServiceSendTimeoutLabel)}:` is reserved on every message call: it is the milliseconds a send waits for room in a full mailbox, and it never enters the request, so a call could not tell the parameter from the timeout. Rename the parameter"
 		messageReplyIsNotCarriable(methodName, noun) then return "the message `{String.from(typeName)}.{String.from(methodName)}` declares {noun}, and this `spawn` makes `{String.from(typeName)}` a service — whose reply-bearing messages resolve through a CELL, a green thread that never runs, carrying one value word and one error word. Return an integer, a `String`, a struct or a service handle, and throw a payload-free `enum`; or drop the `returns` and `throws` clauses, which makes the message fire-and-forget and gives it no reply to carry"
 	end 'why'
 end 'serviceRosterRefusalMessage'

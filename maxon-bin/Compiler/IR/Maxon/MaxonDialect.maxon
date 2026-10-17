@@ -2200,13 +2200,15 @@ export union MaxonOp
 	// the compiler's own name, which that pass tracks nothing under.
 	serviceSpawn(result ValueId, let typeName ByteArray, state ValueId, capacity ValueId) = MaxonOpMeta{category: OpCategory.awaiting}
 
-	// ⭐⭐ **`serviceSend(result, status, callee, handle, request, bytes)` — COPY ONE MESSAGE INTO THE
-	// MAILBOX, INLINE, AND RETURN.** `status` is the `MboxSendStatus` `__mbox_send` answers, which the
-	// parser branches on to build the send error. `callee` is the message's own qualified name
-	// (`"Calc.bump"`), `handle` the mailbox pointer loaded out of the handle box, `request` the
-	// request record the parser filled in this green thread's staging buffer (`emitEnumBox`), and
+	// ⭐⭐ **`serviceSend(result, status, callee, handle, request, bytes, timeoutMs, timed)` — COPY ONE
+	// MESSAGE INTO THE MAILBOX, OR WAIT FOR ROOM.** `status` is the `MboxSendStatus` `__mbox_send`
+	// answers, which the parser branches on to build the send error. `callee` is the message's own
+	// qualified name (`"Calc.bump"`), `handle` the mailbox pointer loaded out of the handle box, `request`
+	// the request record the parser filled in this green thread's staging buffer (`emitEnumBox`), and
 	// `bytes` the size of the sender's request union — on an interface send the interface's, which can
-	// be narrower than the service's slot — which is how much of it the mailbox copies.
+	// be narrower than the service's slot — which is how much of it the mailbox copies. `timeoutMs` is the
+	// call's `sendTimeout:`, or a literal 0 without one, and `timed` says the call wrote the label: only
+	// a timed send can park, which is what `SemanticCheck.opYields` reads.
 	//
 	// ⚠ **`result` IS `void`, AND THAT IS THE SCOPE STATED IN THE TYPE RATHER THAN IN A FLAG.** A
 	// reply travels through its `serviceReplyCell`, never this slot, so there is nothing to bind and
@@ -2225,7 +2227,7 @@ export union MaxonOp
 	// call's callee is, and `noteQualifiedOwner` credits `Calc` from the same name — so the pass needs no arm
 	// of its own. It can never reach the overload RESOLVER's rewrite: an overloaded message is refused at the
 	// `spawn` (`ServiceCompanions.classifyServiceRoster`), so `Calc.bump` is never an overload set's key.
-	serviceSend(result ValueId, status ValueId, let callee ByteArray, handle ValueId, request ValueId, bytes ValueId) = MaxonOpMeta{category: OpCategory.awaiting}
+	serviceSend(result ValueId, status ValueId, let callee ByteArray, handle ValueId, request ValueId, bytes ValueId, timeoutMs ValueId, timed bool) = MaxonOpMeta{category: OpCategory.awaiting}
 
 	// ⭐⭐⭐ **`serviceReplyCell(result, messageName)` — MINT THE REPLY CELL ONE AWAITABLE SEND WILL RESOLVE
 	// THROUGH.** `result` is the cell POINTER, an integer, and it is a `Promise` to everything above:
@@ -2381,7 +2383,7 @@ export function cacheWriteMaxonOp(writer LibraryCacheWriter, value MaxonOp)
 		panicAbortValue(a0) then cacheWriteMaxonOpPanicAbortValue(writer, a0: a0)
 		errorFlagEncode(a0, a1, a2) then cacheWriteMaxonOpErrorFlagEncode(writer, a0: a0, a1: a1, a2: a2)
 		serviceSpawn(a0, a1, a2, a3) then cacheWriteMaxonOpServiceSpawn(writer, a0: a0, a1: a1, a2: a2, a3: a3)
-		serviceSend(a0, a1, a2, a3, a4, a5) then cacheWriteMaxonOpServiceSend(writer, a0: a0, a1: a1, a2: a2, a3: a3, a4: a4, a5: a5)
+		serviceSend(a0, a1, a2, a3, a4, a5, a6, a7) then cacheWriteMaxonOpServiceSend(writer, a0: a0, a1: a1, a2: a2, a3: a3, a4: a4, a5: a5, a6: a6, a7: a7)
 		serviceReplyCell(a0, a1, a2) then cacheWriteMaxonOpServiceReplyCell(writer, a0: a0, a1: a1, a2: a2)
 		immortalStructRecord(a0, a1, a2) then cacheWriteMaxonOpImmortalStructRecord(writer, a0: a0, a1: a1, a2: a2)
 		immortalStringTable(a0, a1, a2, a3) then cacheWriteMaxonOpImmortalStringTable(writer, a0: a0, a1: a1, a2: a2, a3: a3)
@@ -2585,13 +2587,15 @@ function cacheWriteMaxonOpServiceSpawn(writer LibraryCacheWriter, a0 ValueId, a1
 	writer.unsigned(a3 as CacheUnsigned)
 end 'cacheWriteMaxonOpServiceSpawn'
 
-function cacheWriteMaxonOpServiceSend(writer LibraryCacheWriter, a0 ValueId, a1 ValueId, a2 ByteArray, a3 ValueId, a4 ValueId, a5 ValueId)
+function cacheWriteMaxonOpServiceSend(writer LibraryCacheWriter, a0 ValueId, a1 ValueId, a2 ByteArray, a3 ValueId, a4 ValueId, a5 ValueId, a6 ValueId, a7 bool)
 	writer.unsigned(a0 as CacheUnsigned)
 	writer.unsigned(a1 as CacheUnsigned)
 	writer.bytes(a2)
 	writer.unsigned(a3 as CacheUnsigned)
 	writer.unsigned(a4 as CacheUnsigned)
 	writer.unsigned(a5 as CacheUnsigned)
+	writer.unsigned(a6 as CacheUnsigned)
+	writer.flag(a7)
 end 'cacheWriteMaxonOpServiceSend'
 
 function cacheWriteMaxonOpServiceReplyCell(writer LibraryCacheWriter, a0 ValueId, a1 ByteArray, a2 ByteArray)
@@ -2950,8 +2954,10 @@ function cacheReadMaxonOpServiceSend(reader LibraryCacheReader) returns MaxonOp 
 	let a3 = (try reader.unsigned()) as ValueId
 	let a4 = (try reader.unsigned()) as ValueId
 	let a5 = (try reader.unsigned()) as ValueId
+	let a6 = (try reader.unsigned()) as ValueId
+	let a7 = try reader.flag()
 
-	return MaxonOp.serviceSend(a0, status: a1, callee: a2, handle: a3, request: a4, bytes: a5)
+	return MaxonOp.serviceSend(a0, status: a1, callee: a2, handle: a3, request: a4, bytes: a5, timeoutMs: a6, timed: a7)
 end 'cacheReadMaxonOpServiceSend'
 
 function cacheReadMaxonOpServiceReplyCell(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
@@ -3187,7 +3193,7 @@ export function maxonOpCalleeName(op MaxonOp) returns ByteArray
 		tryCall(_, _, callee, _, _, _, _, _, _) gives callee
 		asyncCall(_, callee, _, _, _, _, _) gives callee
 		functionRef(_, funcName, _) gives funcName
-		serviceSend(_, _, callee, _, _, _) gives callee
+		serviceSend(_, _, callee, _, _, _, _, _) gives callee
 		default panic("maxonOpCalleeName: asked of an op that binds no callee name — `maxonOpCalleeKind` answers `noCallee` for it, and every caller gates on that")
 	end 'op'
 end 'maxonOpCalleeName'

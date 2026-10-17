@@ -74,6 +74,7 @@ end 'main'
 | `SchedulerProcessorCount` | `int(1 to u64.max)` | Scheduler |
 | `MailboxCapacity` | `int(1 to 2147483648)` — how many messages a service's mailbox may queue, set by `spawn(capacity: n)` ([Services](/docs/language/async/#mailboxes-and-failed-sends)) | Builtins |
 | `DefaultMailboxCapacity` | the constant `1024 as MailboxCapacity` — the capacity a bare `spawn` gives a mailbox | Builtins |
+| `ForeverMs` | the constant `u64.max as Milliseconds` — a `sendTimeout:` that waits for room as long as it takes, untimed ([Services](/docs/language/async/#mailboxes-and-failed-sends)) | Sleep |
 | `NetworkPort` | `int(0 to 65535)` | TcpClient; also `URL.port()` |
 | `EnvMap` | `Map with String, String` | Subprocess |
 | `JsonNodeId` / `JsonNodeIdArray` | `int(0 to u64.max)` / `Array with JsonNodeId` | Json |

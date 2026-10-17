@@ -735,21 +735,12 @@ function findFiles(options Options, summary RunSummary) returns PathArray
 end 'findFiles'
 
 function submitSearch(replies ReportPromiseArray, searcher Searcher.handle, path FilePath)
-	var pending = path.clone()
-
-	while true 'untilItLands'
-		replies.push(try searcher.search(pending) otherwise (e) 'refused'
-			match e 'why'
-				mailboxFull(back) then pending = back
-				serviceStopped then panic("submitSearch: a searcher stopped before the files were sent")
-			end 'why'
-
-			Scheduler.yield()
-			continue
-		end 'refused')
-
-		break
-	end 'untilItLands'
+	replies.push(try searcher.search(path.clone(), sendTimeout: ForeverMs) otherwise (e) 'refused'
+		match e 'why'
+			mailboxFull then panic("submitSearch: runs on main's green thread, which no promise names and so nothing cancels, and a send given ForeverMs waits for room — mailboxFull cannot occur")
+			serviceStopped then panic("submitSearch: a searcher stopped before the files were sent")
+		end 'why'
+	end 'refused')
 end 'submitSearch'
 
 function searchFiles(files PathArray, request SearchRequest, style OutputStyle, workers WorkerCount, summary RunSummary)

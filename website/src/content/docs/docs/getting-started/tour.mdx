@@ -1,6 +1,6 @@
 ---
 title: "A tour: building wc"
-description: A guided read of examples/wc.maxon — a parallel word counter in about 270 lines of Maxon, with the code on the left and what it teaches on the right.
+description: A guided read of examples/wc.maxon — a parallel word counter in about 260 lines of Maxon, with the code on the left and what it teaches on the right.
 sidebar:
   order: 4
 ---
@@ -139,21 +139,22 @@ eight places. A `StringBuilder` collects the row so it is printed once.
 
 ## Using the processors
 
-<TourStep from={195} to={244}>
+<TourStep from={195} to={235}>
 **`spawn` turns a type into a service running on its own green thread**, scheduled across the
 machine's processors. `spawn Counter.create()` runs the factory over there and hands back a
 `Counter.handle`. `workersFor` starts one per processor, or one per file when there are fewer files —
 the `as WorkerCount` at the end is checked at run time, and `Options.parse` has already guaranteed at
 least one file.
 
-`try counter.count(pending)` **returns at once**. It posts the message and hands back a promise, so
-every file is in flight before the first answer is read. Sending moves a value to the service; the
+`try counter.count(path.clone(), sendTimeout: ForeverMs)` **returns once the message is queued**. It
+hands back a promise, so every file is in flight before the first answer is read. Sending moves a value to the service; the
 `clone()` in `submitCount` gives it a path of its own, because `paths` still holds the original. See
 the [memory model](/docs/language/memory-model/).
 
 A send is a `try` because it can fail on the spot: a service's mailbox holds at most 1024 messages, and
-a stopped service takes none. A failed send hands its arguments back, so on `mailboxFull(back)` the
-loop keeps the returned path, lets the workers run with `Scheduler.yield()`, and sends it again.
+a stopped service takes none. `sendTimeout: ForeverMs` makes a send to a full mailbox wait its turn
+until a worker takes a message, so `mailboxFull` reaches only a cancelled coroutine. `submitCount` runs
+on `main`'s own green thread, and the `panic` in that arm says why it is unreachable.
 
 `await reply` takes each answer back, **in the order the files were named**, not the order the
 workers finished — so the output is the same at one worker or sixty-four. A message that was queued
@@ -165,7 +166,7 @@ down explicitly. See [Concurrency](/docs/language/async/).
 
 ## Finishing
 
-<TourStep from={246} to={270}>
+<TourStep from={237} to={261}>
 `printUsage` walks `Flag.allCases` again, so the help text cannot fall behind the enum.
 
 `try Options.parse(…) otherwise (problem) 'badUsage'` binds the error that was thrown, and the handler

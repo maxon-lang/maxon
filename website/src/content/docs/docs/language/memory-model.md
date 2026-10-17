@@ -274,8 +274,8 @@ decorator of that shape reaches the clone check.
 ### Threads and Shared Data
 
 - **A green thread and its coroutines run one at a time.** The coroutines a green thread starts with `async` never
-  run in parallel with it or with each other. They switch only at `await`, `sleep`, `Scheduler.yield()` and I/O,
-  so their reference counts are plain and sharing between them needs no synchronization.
+  run in parallel with it or with each other. They switch only at `await`, `sleep`, `Scheduler.yield()`, I/O
+  and a service send given a `sendTimeout:` to a full mailbox, so their reference counts are plain and sharing between them needs no synchronization.
 - **Services own their state.** State that more than one thread uses lives in a [service](/docs/language/async/#services--spawn) and is
   reached by message. Messages and replies move their mutable arguments. A [view](/docs/language/variables/#views-view) stays on its thread:
   a send refuses a view, and a writable record a view declared earlier in the function may reach.

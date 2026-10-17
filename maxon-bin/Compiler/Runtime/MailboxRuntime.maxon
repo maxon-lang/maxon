@@ -2,10 +2,13 @@
 // around it. The spec is `specs/services.md`: §"Sending MOVES, and that is load-bearing" for
 // the ownership rule, §"Shutdown" for the close-after-drain and the last-handle close.
 //
-// ⭐⭐ **A MAILBOX IS A RING OF MESSAGE SLOTS, A ONE-SLOT INBOX AND TWO REFERENCE COUNTS, AND NOTHING
-// ELSE.** A send copies the message into the ring's tail, or into the inbox of a parked receiver,
-// and returns; a receive copies the head slot into the inbox or PARKS; a close makes the queue
-// drainable and un-fillable. No message is ever a heap record. What makes it more than a queue is
+// ⭐⭐ **A MAILBOX IS A RING OF MESSAGE SLOTS, A ONE-SLOT INBOX, A SENDER QUEUE AND TWO REFERENCE
+// COUNTS, AND NOTHING ELSE.** A send copies the message into the ring's tail, or into the inbox of a
+// parked receiver, and returns; a receive copies the head slot into the inbox or PARKS; a close makes
+// the queue drainable and un-fillable. A send given a timeout to a full mailbox parks on the FIFO
+// sender queue (Go's `sendq`): the receive that frees a slot moves the first waiting sender's message
+// into it and readies that sender, and a close readies every waiting sender `stopped`. No message is
+// ever a heap record. What makes it more than a queue is
 // the pair of counts: `handles` is how many `<T>.handle` boxes name it (the last one to go CLOSES
 // it, which is the whole of "an ordinary program needs no shutdown boilerplate"), and `refs` is
 // that plus the loop itself (the last one to go FREES it, which is what lets the loop outlive the
@@ -16,7 +19,8 @@
 // those pointers through precise stack maps when `copystack` moves one. A green thread's stack
 // moves here too and only its sp/fp and saved-fp chain are rebased, so a stack address held across
 // a park or a guarded call goes stale. The sender builds the message in its thread's staging buffer
-// (`MboxStagingName`) and the receiver reads it from the inbox in this region.
+// (`MboxStagingName`) and the receiver reads it from the inbox in this region; a waiting sender's
+// message stays in that buffer until the receive moves it.
 //
 // ⭐⭐ **NO NEW `.data` WORD, AND THAT IS A LAYOUT ARGUMENT AS WELL AS A DESIGN ONE.** Mailbox state
 // is per-STRUCT, in the heap, reached from the handle box. A `.data` word would need a
@@ -25,14 +29,15 @@
 // records that cost for the allocator's lock, which lives in its state region for exactly this
 // reason.
 //
-// ⚠ THE RECEIVE PARK CARRIES THE MAILBOX LOCK ACROSS `__gt_context_switch`. `__mbox_recv` publishes
-// itself as `parkedGt` and parks holding the lock, and `__gt_run_strand` leaves it in the park
-// commit (`emitMboxParkCommit`) on the same OS thread, before that thread runs any other green
-// thread. The lock is exclusive, so a green thread run there while the hold was still open would
-// wait for ever on a holder that cannot run.
+// ⚠ BOTH PARKS CARRY THE MAILBOX LOCK ACROSS `__gt_context_switch`. `__mbox_recv` publishes itself
+// as `parkedGt`, and `__mbox_send` appends itself to the sender queue, and each parks holding the
+// lock; `__gt_run_strand` leaves it in the park commit (`emitMboxParkCommit`,
+// `emitMboxSendParkCommit`) on the same OS thread, before that thread runs any other green thread.
+// The lock is exclusive, so a green thread run there while the hold was still open would wait for
+// ever on a holder that cannot run.
 //
-// ring, ringSlots, head, count, parkedGt and closed are read and written only under the mailbox
-// lock, because `__mbox_recv`'s decision to park rests on "empty, open and nobody parked" being one
+// ring, ringSlots, head, count, parkedGt, closed and the sender queue are read and written only
+// under the mailbox lock, because `__mbox_recv`'s decision to park rests on "empty, open and nobody parked" being one
 // instant across three words. The two counts are `lock xadd` instead: each is one word whose
 // transaction is exactly its own increment.
 let MboxOffRing = 0x00
@@ -68,12 +73,19 @@ let MboxOffCapacity = 0x48
 // two at or above the capacity, capped at `MboxInitialSlots`.
 let MboxOffInitialSlots = 0x50
 
-// A leaf lock except for the stack pool's and the allocator's: `__gt_run_strand` may shrink a
-// parked receiver's stack, which takes the stack-pool lock, inside the hold the receive carried
-// across the switch, and the ring's scaffold alloc and free run inside it too. Nothing else takes a
-// lock while this one is held — a ready runs after the leave — and neither the stack pool nor the
-// allocator takes a mailbox lock, so a path that took this lock under either would deadlock.
-let MboxOffLock = 0x58 as ByteOffset
+// The sender queue's root: `mbox + MboxSendRootBias` reads as a GT whose `GtOffSendNext` and
+// `GtOffSendPrev` are these two words, so the circular list has no empty case. ⚠ The two must stay
+// one word apart, as the GT's pair is, or a link store through the root lands in another field.
+let MboxOffSendNext = 0x58
+let MboxOffSendPrev = MboxOffSendNext + PointerFieldBytes
+let MboxSendRootBias = MboxOffSendNext - GtOffSendNext
+
+// Taken before `__sched_lock`, never under it. Inside its hold: `__gt_run_strand` may shrink a
+// parked receiver's stack, which takes the stack-pool lock; the ring's scaffold alloc and free run;
+// and releasing a waiting sender, or arming a waiting sender's timer, takes `__sched_lock`. A
+// receiver's ready runs after the leave. Neither the stack pool, the allocator nor a `__sched_lock`
+// holder takes a mailbox lock, so a path that took this lock under any of them would deadlock.
+let MboxOffLock = (MboxOffSendPrev + PointerFieldBytes) as ByteOffset
 let MboxHeaderBytes = (MboxOffLock as FullRangeInt) + ExclusiveLockBytes
 let MboxOffInbox = MboxHeaderBytes as ByteOffset
 
@@ -100,6 +112,13 @@ let MboxIsClosed = 1
 let MboxNoHandedMessage = 0
 let MboxHandedMessage = 1
 
+enum MboxSendWake
+	pending = 0
+	delivered = 1
+	cancelled = 2
+	stopped = 3
+end 'MboxSendWake'
+
 export enum MboxSendStatus
 	delivered = 0
 	full = 1
@@ -120,10 +139,12 @@ end 'MboxSendStatus'
 // what a managed record costs.
 export let SvcSpawnName = b"__svc_spawn"
 
-// `__mbox_send(mbox, msg, bytes)` — copy `bytes` of one staged request into the parked receiver's
-// inbox or the ring's tail, or answer `MboxSendStatus.stopped` / `.full` if it cannot. It completes
-// INLINE and never suspends, which is why it is deliberately NOT on `SemanticCheck`'s park roster:
-// listing it would let `async` wrap a genuinely non-yielding function.
+// `__mbox_send(mbox, msg, bytes, timeoutMs)` — copy `bytes` of one staged request into the parked
+// receiver's inbox or the ring's tail, or answer `MboxSendStatus.stopped` / `.full` if it cannot.
+// With `timeoutMs` 0 a full mailbox answers `full` at once and the send never suspends. Otherwise
+// the sender waits on the sender queue until a receive moves its message (`delivered`), a close
+// (`stopped`), its deadline or a dropped promise (`full`). It is NOT on `SemanticCheck`'s park
+// roster: whether a send can park is the `serviceSend` op's `timed` bit, which `opYields` reads.
 export let MboxSendName = b"__mbox_send"
 
 // `__mbox_staging() -> record` — the calling green thread's message buffer, sized to the program's
@@ -141,6 +162,12 @@ export let MboxRecvName = b"__mbox_recv"
 // EXPORTED because `h.shutdown()` closes the mailbox while its handles are still alive — the close is what
 // lets the loop drain what is queued and then exit.
 export let MboxCloseName = b"__mbox_close"
+
+// `__mbox_send_abandon(gt) -> wakeDebt` — `GtRuntime.buildGtPromiseDrop`'s answer to a coroutine
+// parked in a send: take it off its mailbox's sender queue and ready it `cancelled`, so its send
+// answers `full` and hands the arguments back. A sender already off the queue belongs to the waker
+// that took it off, and is left alone.
+export let MboxSendAbandonName = b"__mbox_send_abandon"
 
 // `__mbox_handle_clone_box(handleBox) -> handleBox` — a second HANDLE to the SAME service, never a second
 // service. Exported because `SignatureIndex.managedNameCascadeStrategy` routes `<T>.handle`'s clone here.
@@ -194,6 +221,7 @@ export function installMailboxRuntime(module StdModule, requestStagingBytes Byte
 	buildMboxSend(module)
 	buildMboxRecv(module)
 	buildMboxClose(module)
+	buildMboxSendAbandon(module)
 	buildMboxHandleCloneBox(module)
 	buildMboxHandleRetainBox(module)
 	buildMboxHandleDropBox(module)
@@ -272,21 +300,22 @@ module function emitInterfaceHandleBoxHolding(module StdModule, block IrBlock, m
 end 'emitInterfaceHandleBoxHolding'
 
 function buildMboxInterfaceSend(module StdModule)
-	var func = IrFunction.createFromStd(MboxInterfaceSendName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params())
-	var ids = ValueMinter.create(4)
+	var func = IrFunction.createFromStd(MboxInterfaceSendName, returnType: StdReturnType.value(StdType.i64), paramCount: 5, paramTypes: fiveI64Params())
+	var ids = ValueMinter.create(5)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	emitParams(module, block: entry, count: 4)
+	emitParams(module, block: entry, count: 5)
 	let handleBox = 0
 	let slotOffset = 1
 	let request = 2
 	let bytes = 3
+	let timeoutMs = 4
 
 	let mbox = emitLoadField(module, block: entry, record: handleBox, offset: ServiceHandleMailboxOffset, ids: ids)
 	let table = emitLoadField(module, block: entry, record: handleBox, offset: InterfaceHandleTableOffset, ids: ids)
 	let stub = emitLoadField(module, block: entry, record: emitBin(module, block: entry, a: table, b: slotOffset, opcode: StdBinOpcode.add, ids: ids), offset: 0, ids: ids)
 	let status = ids.mint()
-	module.appendOp(entry, op: StdOp.callIndirect(status, calleeReg: stub, resultType: StdReturnType.value(StdType.i64), argFloatMask: 0, args: threeArgs(mbox, second: request, third: bytes)))
+	module.appendOp(entry, op: StdOp.callIndirect(status, calleeReg: stub, resultType: StdReturnType.value(StdType.i64), argFloatMask: 0, args: fourArgs(mbox, second: request, third: bytes, fourth: timeoutMs)))
 	module.setTerminator(entry, op: StdOp.ret(status))
 	module.functions.push(func)
 end 'buildMboxInterfaceSend'
@@ -349,17 +378,18 @@ function buildInterfaceSendStub(module StdModule, name ByteArray, serviceTag Ful
 		panic("buildInterfaceSendStub: `{String.from(name)}` copies {interfaceBytes} byte(s) of an interface request into a ring slot of {slotBytes} — an interface request union holds only the requirements an implementer declares as messages, so the concrete service's union must be at least as wide, and this pair breaks that")
 	end 'widerThanTheSlot'
 
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params())
-	var ids = ValueMinter.create(3)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params())
+	var ids = ValueMinter.create(4)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	emitParams(module, block: entry, count: 3)
+	emitParams(module, block: entry, count: 4)
 	let mbox = 0
 	let request = 1
 	let bytes = 2
+	let timeoutMs = 3
 
 	emitStoreField(module, block: entry, record: request, offset: UnionTagOffset, value: emitConst(module, block: entry, value: serviceTag, ids: ids))
 	let status = ids.mint()
-	module.appendOp(entry, op: StdOp.call(status, callee: MboxSendName, args: threeArgs(mbox, second: request, third: bytes)))
+	module.appendOp(entry, op: StdOp.call(status, callee: MboxSendName, args: fourArgs(mbox, second: request, third: bytes, fourth: timeoutMs)))
 	module.setTerminator(entry, op: StdOp.ret(status))
 	module.functions.push(func)
 end 'buildInterfaceSendStub'
@@ -385,6 +415,60 @@ function emitMboxWakeParked(module StdModule, func IrFunction, cur IrBlock, mbox
 	emitMboxLockLeave(module, block: cur, mbox: mbox, ids: ids)
 	emitGtReadyParkedService(module, func: func, cur: cur, service: parked, cont: cont, ids: ids)
 end 'emitMboxWakeParked'
+
+function emitMboxSendRoot(module StdModule, block IrBlock, mbox ValueId, ids ValueMinter) returns ValueId
+	return emitBin(module, block: block, a: mbox, b: emitConst(module, block: block, value: MboxSendRootBias, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+end 'emitMboxSendRoot'
+
+function emitMboxSendAppend(module StdModule, block IrBlock, root ValueId, sender ValueId, ids ValueMinter)
+	let tail = emitLoadField(module, block: block, record: root, offset: GtOffSendPrev, ids: ids)
+
+	emitStoreField(module, block: block, record: sender, offset: GtOffSendNext, value: root)
+	emitStoreField(module, block: block, record: sender, offset: GtOffSendPrev, value: tail)
+	emitStoreField(module, block: block, record: tail, offset: GtOffSendNext, value: sender)
+	emitStoreField(module, block: block, record: root, offset: GtOffSendPrev, value: sender)
+end 'emitMboxSendAppend'
+
+function emitMboxSendUnlink(module StdModule, block IrBlock, sender ValueId, ids ValueMinter)
+	let before = emitLoadField(module, block: block, record: sender, offset: GtOffSendPrev, ids: ids)
+	let after = emitLoadField(module, block: block, record: sender, offset: GtOffSendNext, ids: ids)
+	let unlinked = emitConst(module, block: block, value: 0, ids: ids)
+
+	emitStoreField(module, block: block, record: before, offset: GtOffSendNext, value: after)
+	emitStoreField(module, block: block, record: after, offset: GtOffSendPrev, value: before)
+	emitStoreField(module, block: block, record: sender, offset: GtOffSendNext, value: unlinked)
+	emitStoreField(module, block: block, record: sender, offset: GtOffSendPrev, value: unlinked)
+end 'emitMboxSendUnlink'
+
+// Under the mailbox lock. The timer entry decides who readies the sender: a fired entry has readied
+// it already, so a sender no longer `waiting` once the entry is removed is only told its outcome.
+// ⚠ The outcome is stored last, inside the `__sched_lock` hold: a timer-woken sender that read it
+// could return and park again at once, and an earlier store would let this hold ready that park.
+function emitMboxReleaseSender(module StdModule, func IrFunction, cur IrBlock, sender ValueId, outcome MboxSendWake, cont IrBlock, ids ValueMinter)
+	var disarm = module.addBlock(func, label: b"sendwakedisarm", heat: BlockHeat.normal)
+	var removed = module.addBlock(func, label: b"sendwakeremoved", heat: BlockHeat.normal)
+	var ready = module.addBlock(func, label: b"sendwakeready", heat: BlockHeat.normal)
+	var firedFirst = module.addBlock(func, label: b"sendwakefired", heat: BlockHeat.normal)
+
+	emitMboxSendUnlink(module, block: cur, sender: sender, ids: ids)
+	emitSchedLockEnter(module, block: cur, ids: ids)
+	let deadline = emitLoadField(module, block: cur, record: sender, offset: GtOffSendDeadline, ids: ids)
+	emitBranchOnCompare(module, block: cur, value: deadline, pred: StdCmpPred.eq, against: GtDeadlineMaxNs, whenTrue: removed, whenFalse: disarm, ids: ids)
+
+	emitGtTimerStoreRemove(module, func: func, ids: ids, startBlock: disarm, gt: sender, tag: emitConst(module, block: disarm, value: TimerTagSend, ids: ids), cont: removed)
+
+	let status = emitLoadField(module, block: removed, record: sender, offset: GtOffStatus, ids: ids)
+	let stillParked = emitGtStatusEquals(module, block: removed, status: status, want: GtStatus.waiting, ids: ids)
+	module.appendOp(removed, op: StdOp.storeRelease(sender, offset: GtOffSendOutcome, valueId: emitConst(module, block: removed, value: outcome.rawValue, ids: ids), valueType: StdType.i64))
+	module.setTerminator(removed, op: StdOp.condBranch(stillParked, thenBlockId: ready.id, elseBlockId: firedFirst.id))
+
+	let debt = emitGtReadyLocked(module, block: ready, gt: sender, ids: ids)
+	emitSchedLockLeave(module, block: ready, ids: ids)
+	emitBranchCarrying(module, from: ready, to: cont, value: debt)
+
+	emitSchedLockLeave(module, block: firedFirst, ids: ids)
+	emitBranchCarrying(module, from: firedFirst, to: cont, value: emitConst(module, block: firedFirst, value: WakeDebtNone, ids: ids))
+end 'emitMboxReleaseSender'
 
 function emitMboxSlotAddr(module StdModule, block IrBlock, ring ValueId, index ValueId, slotBytes ValueId, ids ValueMinter) returns ValueId
 	return emitBin(module, block: block, a: ring, b: emitBin(module, block: block, a: index, b: slotBytes, opcode: StdBinOpcode.mul, ids: ids), opcode: StdBinOpcode.add, ids: ids)
@@ -465,6 +549,9 @@ function buildSvcSpawn(module StdModule)
 	emitStoreField(module, block: entry, record: mbox, offset: MboxOffRefs, value: emitConst(module, block: entry, value: MboxInitialRefs, ids: ids))
 	emitStoreField(module, block: entry, record: mbox, offset: MboxOffCapacity, value: capacity)
 	emitStoreField(module, block: entry, record: mbox, offset: MboxOffInitialSlots, value: emitMboxInitialSlots(module, block: entry, capacity: capacity, ids: ids))
+	let sendRoot = emitMboxSendRoot(module, block: entry, mbox: mbox, ids: ids)
+	emitStoreField(module, block: entry, record: mbox, offset: MboxOffSendNext, value: sendRoot)
+	emitStoreField(module, block: entry, record: mbox, offset: MboxOffSendPrev, value: sendRoot)
 
 	// ⭐⭐ **`__gt_spawn_green`, NOT `__gt_spawn` — a SERVICE IS A GREEN THREAD AND NOT A COROUTINE.** The two
 	// bodies differ in one store (a coroutine copies its spawner's owner; a green thread is stamped with
@@ -510,17 +597,33 @@ function buildMboxStaging(module StdModule, bytes ByteOffset)
 	module.functions.push(func)
 end 'buildMboxStaging'
 
-// `__mbox_send(mbox, msg, bytes)`. See `MboxSendName`.
+// `__mbox_send(mbox, msg, bytes, timeoutMs)`. See `MboxSendName`.
 function buildMboxSend(module StdModule)
-	var func = IrFunction.createFromStd(MboxSendName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params())
-	var ids = ValueMinter.create(3)
+	var func = IrFunction.createFromStd(MboxSendName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params())
+	var ids = ValueMinter.create(4)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var attempt = module.addBlock(func, label: b"sendtry", heat: BlockHeat.normal)
 	var refuseClosed = module.addBlock(func, label: b"sendclosed", heat: BlockHeat.cold)
 	var route = module.addBlock(func, label: b"sendroute", heat: BlockHeat.normal)
 	var handoff = module.addBlock(func, label: b"sendhandoff", heat: BlockHeat.normal)
 	var append = module.addBlock(func, label: b"sendappend", heat: BlockHeat.normal)
+	var roomGate = module.addBlock(func, label: b"sendroomgate", heat: BlockHeat.normal)
 	var refuseFull = module.addBlock(func, label: b"sendfull", heat: BlockHeat.cold)
+	var waitCheck = module.addBlock(func, label: b"sendwaitcheck", heat: BlockHeat.normal)
+	var waitGate = module.addBlock(func, label: b"sendwaitgate", heat: BlockHeat.normal)
+	var stagingMismatch = module.addBlock(func, label: b"sendstagingmismatch", heat: BlockHeat.cold)
+	var enqueue = module.addBlock(func, label: b"sendenqueue", heat: BlockHeat.normal)
+	var woken = module.addBlock(func, label: b"sendwoken", heat: BlockHeat.normal)
+	var wakeLocked = module.addBlock(func, label: b"sendwakelocked", heat: BlockHeat.normal)
+	var timedOut = module.addBlock(func, label: b"sendtimedout", heat: BlockHeat.normal)
+	var wakeUnlocked = module.addBlock(func, label: b"sendwakeunlocked", heat: BlockHeat.normal)
+	var wakeSettled = module.addBlock(func, label: b"sendwakesettled", heat: BlockHeat.normal)
+	var wakeFailed = module.addBlock(func, label: b"sendwakefailed", heat: BlockHeat.normal)
+	var wakeStopped = module.addBlock(func, label: b"sendwakestopped", heat: BlockHeat.normal)
+	var wakeNotStopped = module.addBlock(func, label: b"sendwakenotstopped", heat: BlockHeat.normal)
+	var wakeCancelled = module.addBlock(func, label: b"sendwakecancelled", heat: BlockHeat.normal)
+	var wakeUnexpected = module.addBlock(func, label: b"sendwakeunexpected", heat: BlockHeat.cold)
 	var queue = module.addBlock(func, label: b"sendqueue", heat: BlockHeat.normal)
 	var seedRing = module.addBlock(func, label: b"sendseedring", heat: BlockHeat.normal)
 	var haveRing = module.addBlock(func, label: b"sendhavering", heat: BlockHeat.normal)
@@ -528,14 +631,17 @@ function buildMboxSend(module StdModule)
 	var place = module.addBlock(func, label: b"sendplace", heat: BlockHeat.normal)
 	var doneBlock = module.addBlock(func, label: b"senddone", heat: BlockHeat.normal)
 
-	emitParams(module, block: entry, count: 3)
+	emitParams(module, block: entry, count: 4)
 	let mbox = 0
 	let msg = 1
 	let bytes = 2
+	let timeoutMs = 3
 
 	emitMboxLockEnter(module, block: entry, mbox: mbox, ids: ids)
-	let closed = emitLoadField(module, block: entry, record: mbox, offset: MboxOffClosed, ids: ids)
-	emitBranchOnCompare(module, block: entry, value: closed, pred: StdCmpPred.eq, against: 0, whenTrue: route, whenFalse: refuseClosed, ids: ids)
+	module.setTerminator(entry, op: StdOp.branch(attempt.id))
+
+	let closed = emitLoadField(module, block: attempt, record: mbox, offset: MboxOffClosed, ids: ids)
+	emitBranchOnCompare(module, block: attempt, value: closed, pred: StdCmpPred.eq, against: 0, whenTrue: route, whenFalse: refuseClosed, ids: ids)
 
 	emitMboxRefuse(module, block: refuseClosed, mbox: mbox, status: MboxSendStatus.stopped, ids: ids)
 
@@ -548,9 +654,60 @@ function buildMboxSend(module StdModule)
 
 	let queued = emitLoadField(module, block: append, record: mbox, offset: MboxOffCount, ids: ids)
 	let capacity = emitLoadField(module, block: append, record: mbox, offset: MboxOffCapacity, ids: ids)
-	emitBranchOnCompareValues(module, block: append, a: queued, pred: StdCmpPred.eq, b: capacity, whenTrue: refuseFull, whenFalse: queue, ids: ids)
+	emitBranchOnCompareValues(module, block: append, a: queued, pred: StdCmpPred.eq, b: capacity, whenTrue: roomGate, whenFalse: queue, ids: ids)
+
+	emitBranchOnCompare(module, block: roomGate, value: timeoutMs, pred: StdCmpPred.eq, against: 0, whenTrue: refuseFull, whenFalse: waitCheck, ids: ids)
 
 	emitMboxRefuse(module, block: refuseFull, mbox: mbox, status: MboxSendStatus.full, ids: ids)
+
+	// A scheduler context has no green thread to park, and a renounced coroutine is never awaited, so
+	// both answer `full` at once. ⚠ A drop landing between this read and the park commit is missed:
+	// the sender stays queued until a receive or a close, and with `ForeverMs` nothing else ends it.
+	let selfGt = emitLoadCurrentGt(module, block: waitCheck, ids: ids)
+	let stackBase = emitLoadField(module, block: waitCheck, record: selfGt, offset: GtOffStackBase, ids: ids)
+	let onGreenStack = emitCompareWithConstant(module, block: waitCheck, value: stackBase, pred: StdCmpPred.ne, against: 0, ids: ids)
+	let renounced = emitLoadField(module, block: waitCheck, record: selfGt, offset: GtOffRenounced, ids: ids)
+	let promiseHeld = emitCompareWithConstant(module, block: waitCheck, value: renounced, pred: StdCmpPred.eq, against: GtPromiseHeld, ids: ids)
+	let mayWait = emitBin(module, block: waitCheck, a: onGreenStack, b: promiseHeld, opcode: StdBinOpcode.bitAnd, ids: ids)
+	module.setTerminator(waitCheck, op: StdOp.condBranch(mayWait, thenBlockId: waitGate.id, elseBlockId: refuseFull.id))
+
+	let staging = emitLoadField(module, block: waitGate, record: selfGt, offset: GtOffStaging, ids: ids)
+	emitBranchOnCompareValues(module, block: waitGate, a: msg, pred: StdCmpPred.eq, b: staging, whenTrue: enqueue, whenFalse: stagingMismatch, ids: ids)
+
+	emitRuntimeAbort(module, func: func, block: stagingMismatch, abort: RuntimeAbort.serviceSendProtocolBroken, ids: ids)
+
+	let sendRoot = emitMboxSendRoot(module, block: enqueue, mbox: mbox, ids: ids)
+	emitStoreField(module, block: enqueue, record: selfGt, offset: GtOffSendOutcome, value: emitConst(module, block: enqueue, value: MboxSendWake.pending.rawValue, ids: ids))
+	emitStoreField(module, block: enqueue, record: selfGt, offset: GtOffSendDeadline, value: emitGtDeadlineAfterMs(module, block: enqueue, ms: timeoutMs, ids: ids))
+	emitMboxSendAppend(module, block: enqueue, root: sendRoot, sender: selfGt, ids: ids)
+
+	emitGtPark(module, ids: ids, cur: enqueue, kind: GtParkKind.mailboxSend.rawValue, arg: mbox, cont: woken)
+
+	let wakeOutcome = emitLoadAcquireField(module, block: woken, record: selfGt, offset: GtOffSendOutcome, ids: ids)
+	emitBranchOnCompare(module, block: woken, value: wakeOutcome, pred: StdCmpPred.eq, against: MboxSendWake.pending.rawValue, whenTrue: wakeLocked, whenFalse: wakeSettled, ids: ids)
+
+	// A pending outcome means the timer woke this sender. Still queued under the lock, it has timed
+	// out; already unlinked, a waker took it first and published its outcome before leaving the lock.
+	emitMboxLockEnter(module, block: wakeLocked, mbox: mbox, ids: ids)
+	let stillQueued = emitLoadField(module, block: wakeLocked, record: selfGt, offset: GtOffSendNext, ids: ids)
+	emitBranchOnCompare(module, block: wakeLocked, value: stillQueued, pred: StdCmpPred.ne, against: 0, whenTrue: timedOut, whenFalse: wakeUnlocked, ids: ids)
+
+	emitMboxSendUnlink(module, block: timedOut, sender: selfGt, ids: ids)
+	emitMboxRefuse(module, block: timedOut, mbox: mbox, status: MboxSendStatus.full, ids: ids)
+
+	emitMboxLockLeave(module, block: wakeUnlocked, mbox: mbox, ids: ids)
+	module.setTerminator(wakeUnlocked, op: StdOp.branch(wakeSettled.id))
+
+	let settled = emitLoadField(module, block: wakeSettled, record: selfGt, offset: GtOffSendOutcome, ids: ids)
+	emitBranchOnCompare(module, block: wakeSettled, value: settled, pred: StdCmpPred.eq, against: MboxSendWake.delivered.rawValue, whenTrue: doneBlock, whenFalse: wakeFailed, ids: ids)
+
+	emitBranchOnCompare(module, block: wakeFailed, value: settled, pred: StdCmpPred.eq, against: MboxSendWake.stopped.rawValue, whenTrue: wakeStopped, whenFalse: wakeNotStopped, ids: ids)
+	emitConstReturn(module, block: wakeStopped, value: MboxSendStatus.stopped.rawValue, ids: ids)
+
+	emitBranchOnCompare(module, block: wakeNotStopped, value: settled, pred: StdCmpPred.eq, against: MboxSendWake.cancelled.rawValue, whenTrue: wakeCancelled, whenFalse: wakeUnexpected, ids: ids)
+	emitConstReturn(module, block: wakeCancelled, value: MboxSendStatus.full.rawValue, ids: ids)
+
+	emitRuntimeAbort(module, func: func, block: wakeUnexpected, abort: RuntimeAbort.serviceSendProtocolBroken, ids: ids)
 
 	let ring = emitLoadField(module, block: queue, record: mbox, offset: MboxOffRing, ids: ids)
 	emitBranchOnCompare(module, block: queue, value: ring, pred: StdCmpPred.eq, against: 0, whenTrue: seedRing, whenFalse: haveRing, ids: ids)
@@ -597,7 +754,7 @@ end 'buildMboxSend'
 
 function emitMboxRefuse(module StdModule, block IrBlock, mbox ValueId, status MboxSendStatus, ids ValueMinter)
 	emitMboxLockLeave(module, block: block, mbox: mbox, ids: ids)
-	module.setTerminator(block, op: StdOp.ret(emitConst(module, block: block, value: status.rawValue, ids: ids)))
+	emitConstReturn(module, block: block, value: status.rawValue, ids: ids)
 end 'emitMboxRefuse'
 
 // `__mbox_recv(mbox) -> inbox | 0`. See `MboxRecvName`.
@@ -610,6 +767,11 @@ function buildMboxRecv(module StdModule)
 	var pop = module.addBlock(func, label: b"recvpop", heat: BlockHeat.normal)
 	var shrink = module.addBlock(func, label: b"recvshrink", heat: BlockHeat.normal)
 	var popped = module.addBlock(func, label: b"recvpopped", heat: BlockHeat.normal)
+	var noSender = module.addBlock(func, label: b"recvnosender", heat: BlockHeat.normal)
+	var wakeSender = module.addBlock(func, label: b"recvwakesender", heat: BlockHeat.normal)
+	var senderWoken = module.addBlock(func, label: b"recvsenderwoken", heat: BlockHeat.normal)
+	var senderWake = module.addBlock(func, label: b"recvsenderwake", heat: BlockHeat.normal)
+	var senderPaid = module.addBlock(func, label: b"recvsenderpaid", heat: BlockHeat.normal)
 	var emptyQueue = module.addBlock(func, label: b"recvempty", heat: BlockHeat.normal)
 	var drained = module.addBlock(func, label: b"recvdrained", heat: BlockHeat.normal)
 	var park = module.addBlock(func, label: b"recvpark", heat: BlockHeat.normal)
@@ -632,13 +794,26 @@ function buildMboxRecv(module StdModule)
 	let inbox = emitFieldAddr(module, block: pop, record: mbox, offset: MboxOffInbox, ids: ids)
 	var copiedOut = emitForwardCopy(module, func: func, cur: pop, dest: inbox, src: emitMboxSlotAddr(module, block: pop, ring: ring, index: head, slotBytes: slotBytes, ids: ids), byteCount: slotBytes, ids: ids)
 	let slotMask = emitBin(module, block: copiedOut, a: ringSlots, b: emitConst(module, block: copiedOut, value: 1, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
-	emitStoreField(module, block: copiedOut, record: mbox, offset: MboxOffHead, value: emitBin(module, block: copiedOut, a: emitBin(module, block: copiedOut, a: head, b: emitConst(module, block: copiedOut, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids), b: slotMask, opcode: StdBinOpcode.bitAnd, ids: ids))
+	let newHead = emitBin(module, block: copiedOut, a: emitBin(module, block: copiedOut, a: head, b: emitConst(module, block: copiedOut, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids), b: slotMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	emitStoreField(module, block: copiedOut, record: mbox, offset: MboxOffHead, value: newHead)
 	let remaining = emitBin(module, block: copiedOut, a: queued, b: emitConst(module, block: copiedOut, value: 1, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
 	emitStoreField(module, block: copiedOut, record: mbox, offset: MboxOffCount, value: remaining)
-	let nowEmpty = emitCompareWithConstant(module, block: copiedOut, value: remaining, pred: StdCmpPred.eq, against: 0, ids: ids)
-	let initialSlots = emitLoadField(module, block: copiedOut, record: mbox, offset: MboxOffInitialSlots, ids: ids)
-	let grownPast = emitCmp(module, block: copiedOut, a: ringSlots, b: initialSlots, pred: StdCmpPred.gt, ids: ids)
-	module.setTerminator(copiedOut, op: StdOp.condBranch(emitBin(module, block: copiedOut, a: nowEmpty, b: grownPast, opcode: StdBinOpcode.bitAnd, ids: ids), thenBlockId: shrink.id, elseBlockId: popped.id))
+	let sendRoot = emitMboxSendRoot(module, block: copiedOut, mbox: mbox, ids: ids)
+	let firstSender = emitLoadField(module, block: copiedOut, record: sendRoot, offset: GtOffSendNext, ids: ids)
+	emitBranchOnCompareValues(module, block: copiedOut, a: firstSender, pred: StdCmpPred.ne, b: sendRoot, whenTrue: wakeSender, whenFalse: popped, ids: ids)
+
+	// Go's `recv`: the slot this pop freed goes to the first waiting sender's message at once, so a send
+	// arriving later cannot take it ahead of the senders that waited.
+	let tailIndex = emitBin(module, block: wakeSender, a: emitBin(module, block: wakeSender, a: newHead, b: remaining, opcode: StdBinOpcode.add, ids: ids), b: slotMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let senderStaging = emitLoadField(module, block: wakeSender, record: firstSender, offset: GtOffStaging, ids: ids)
+	var moved = emitForwardCopy(module, func: func, cur: wakeSender, dest: emitMboxSlotAddr(module, block: wakeSender, ring: ring, index: tailIndex, slotBytes: slotBytes, ids: ids), src: senderStaging, byteCount: slotBytes, ids: ids)
+	emitStoreField(module, block: moved, record: mbox, offset: MboxOffCount, value: queued)
+	emitMboxReleaseSender(module, func: func, cur: moved, sender: firstSender, outcome: MboxSendWake.delivered, cont: senderWoken, ids: ids)
+
+	let nowEmpty = emitCompareWithConstant(module, block: popped, value: remaining, pred: StdCmpPred.eq, against: 0, ids: ids)
+	let initialSlots = emitLoadField(module, block: popped, record: mbox, offset: MboxOffInitialSlots, ids: ids)
+	let grownPast = emitCmp(module, block: popped, a: ringSlots, b: initialSlots, pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(popped, op: StdOp.condBranch(emitBin(module, block: popped, a: nowEmpty, b: grownPast, opcode: StdBinOpcode.bitAnd, ids: ids), thenBlockId: shrink.id, elseBlockId: noSender.id))
 
 	// A grown ring drained empty is replaced by a fresh initial-size one, so a burst's backlog is not
 	// held for the mailbox's life.
@@ -647,10 +822,16 @@ function buildMboxRecv(module StdModule)
 	emitStoreField(module, block: shrink, record: mbox, offset: MboxOffRing, value: fresh)
 	emitStoreField(module, block: shrink, record: mbox, offset: MboxOffRingSlots, value: initialSlots)
 	emitStoreField(module, block: shrink, record: mbox, offset: MboxOffHead, value: noRequest)
-	module.setTerminator(shrink, op: StdOp.branch(popped.id))
+	module.setTerminator(shrink, op: StdOp.branch(noSender.id))
 
-	emitMboxLockLeave(module, block: popped, mbox: mbox, ids: ids)
-	module.setTerminator(popped, op: StdOp.ret(inbox))
+	emitMboxLockLeave(module, block: noSender, mbox: mbox, ids: ids)
+	module.setTerminator(noSender, op: StdOp.ret(inbox))
+
+	let wakeDebt = ids.mint()
+	senderWoken.blockArgs.push(IrBlockArg.create(wakeDebt, argType: StdType.i64))
+	emitMboxLockLeave(module, block: senderWoken, mbox: mbox, ids: ids)
+	emitSchedWakeIfOwed(module, cur: senderWoken, owed: wakeDebt, wake: senderWake, cont: senderPaid, ids: ids)
+	module.setTerminator(senderPaid, op: StdOp.ret(inbox))
 
 	// ⭐ **THE `closed` READ IS INSIDE THE SAME CRITICAL SECTION THE COUNT READ WAS**, which is what
 	// makes "empty AND closed" one instant rather than two: a close that landed between two separate
@@ -679,32 +860,87 @@ function buildMboxRecv(module StdModule)
 	module.functions.push(func)
 end 'buildMboxRecv'
 
-// `__mbox_close(mbox)` — make the queue un-fillable and drainable, and wake whoever is parked on it
-// so the loop can observe that. Idempotent: both roads to it (the last handle drop, and
+// `__mbox_close(mbox)` — make the queue un-fillable and drainable, ready every waiting sender
+// `stopped`, and wake whoever is parked on it so the loop can observe that. Idempotent: both roads to it (the last handle drop, and
 // `h.shutdown()`) may run, in either order.
 function buildMboxClose(module StdModule)
 	var func = IrFunction.createFromStd(MboxCloseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var drainSenders = module.addBlock(func, label: b"closedrainsenders", heat: BlockHeat.normal)
+	var stopSender = module.addBlock(func, label: b"closestopsender", heat: BlockHeat.normal)
+	var senderStopped = module.addBlock(func, label: b"closesenderstopped", heat: BlockHeat.normal)
+	var sendersDrained = module.addBlock(func, label: b"closesendersdrained", heat: BlockHeat.normal)
 	var handoff = module.addBlock(func, label: b"closewakeparked", heat: BlockHeat.normal)
 	var nobodyParked = module.addBlock(func, label: b"closenoreceiver", heat: BlockHeat.normal)
 	var doneBlock = module.addBlock(func, label: b"mboxwoken", heat: BlockHeat.normal)
+	var payWake = module.addBlock(func, label: b"closepaywake", heat: BlockHeat.normal)
+	var finished = module.addBlock(func, label: b"closefinished", heat: BlockHeat.normal)
 	emitParams(module, block: entry, count: 1)
 	let mbox = 0
 
 	emitMboxLockEnter(module, block: entry, mbox: mbox, ids: ids)
 	emitStoreField(module, block: entry, record: mbox, offset: MboxOffClosed, value: emitConst(module, block: entry, value: MboxIsClosed, ids: ids))
-	let parked = emitMboxBranchOnParkedReceiver(module, cur: entry, mbox: mbox, noReceiver: nobodyParked, handoff: handoff, ids: ids)
+	let sendRoot = emitMboxSendRoot(module, block: entry, mbox: mbox, ids: ids)
+	let noDebt = emitConst(module, block: entry, value: WakeDebtNone, ids: ids)
+	module.setTerminator(entry, op: StdOp.branch(drainSenders.id))
+	entry.branchEdges.push(BranchEdge.create(drainSenders.id, argIds: argsOf(noDebt)))
+
+	let owed = ids.mint()
+	drainSenders.blockArgs.push(IrBlockArg.create(owed, argType: StdType.i64))
+	let waiting = emitLoadField(module, block: drainSenders, record: sendRoot, offset: GtOffSendNext, ids: ids)
+	emitBranchOnCompareValues(module, block: drainSenders, a: waiting, pred: StdCmpPred.ne, b: sendRoot, whenTrue: stopSender, whenFalse: sendersDrained, ids: ids)
+
+	emitMboxReleaseSender(module, func: func, cur: stopSender, sender: waiting, outcome: MboxSendWake.stopped, cont: senderStopped, ids: ids)
+
+	let wakeDebt = ids.mint()
+	senderStopped.blockArgs.push(IrBlockArg.create(wakeDebt, argType: StdType.i64))
+	let owedNow = emitBin(module, block: senderStopped, a: owed, b: wakeDebt, opcode: StdBinOpcode.bitOr, ids: ids)
+	module.setTerminator(senderStopped, op: StdOp.branch(drainSenders.id))
+	senderStopped.branchEdges.push(BranchEdge.create(drainSenders.id, argIds: argsOf(owedNow)))
+
+	let parked = emitMboxBranchOnParkedReceiver(module, cur: sendersDrained, mbox: mbox, noReceiver: nobodyParked, handoff: handoff, ids: ids)
 	emitMboxWakeParked(module, func: func, cur: handoff, mbox: mbox, parked: parked, handed: emitConst(module, block: handoff, value: MboxNoHandedMessage, ids: ids), cont: doneBlock, ids: ids)
 
 	emitMboxLockLeave(module, block: nobodyParked, mbox: mbox, ids: ids)
 	module.setTerminator(nobodyParked, op: StdOp.branch(doneBlock.id))
 
-	module.setTerminator(doneBlock, op: StdOp.retVoid)
+	emitSchedWakeIfOwed(module, cur: doneBlock, owed: owed, wake: payWake, cont: finished, ids: ids)
+	module.setTerminator(finished, op: StdOp.retVoid)
 
 	module.functions.push(func)
 end 'buildMboxClose'
+
+// `__mbox_send_abandon(gt) -> wakeDebt`. See `MboxSendAbandonName`.
+function buildMboxSendAbandon(module StdModule)
+	var func = IrFunction.createFromStd(MboxSendAbandonName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var dequeue = module.addBlock(func, label: b"abandondequeue", heat: BlockHeat.normal)
+	var woken = module.addBlock(func, label: b"abandonwoken", heat: BlockHeat.normal)
+	var gone = module.addBlock(func, label: b"abandongone", heat: BlockHeat.normal)
+	emitParams(module, block: entry, count: 1)
+	let sender = 0
+
+	let mbox = emitLoadField(module, block: entry, record: sender, offset: GtOffParkArg, ids: ids)
+	emitMboxLockEnter(module, block: entry, mbox: mbox, ids: ids)
+	let queued = emitLoadField(module, block: entry, record: sender, offset: GtOffSendNext, ids: ids)
+	emitBranchOnCompare(module, block: entry, value: queued, pred: StdCmpPred.ne, against: 0, whenTrue: dequeue, whenFalse: gone, ids: ids)
+
+	emitMboxReleaseSender(module, func: func, cur: dequeue, sender: sender, outcome: MboxSendWake.cancelled, cont: woken, ids: ids)
+
+	let debt = ids.mint()
+	woken.blockArgs.push(IrBlockArg.create(debt, argType: StdType.i64))
+	emitMboxLockLeave(module, block: woken, mbox: mbox, ids: ids)
+	module.setTerminator(woken, op: StdOp.ret(debt))
+
+	emitMboxLockLeave(module, block: gone, mbox: mbox, ids: ids)
+	emitConstReturn(module, block: gone, value: WakeDebtNone, ids: ids)
+
+	module.functions.push(func)
+end 'buildMboxSendAbandon'
 
 // `__mbox_handle_clone_box(handleBox) -> handleBox`. See `MboxHandleCloneBoxName`.
 //
@@ -891,6 +1127,30 @@ end 'buildMboxUnknownTag'
 // `waiting`.
 export function emitMboxParkCommit(module StdModule, block IrBlock, gt ValueId, mbox ValueId, ids ValueMinter)
 	emitStoreField(module, block: block, record: gt, offset: GtOffParkArg, value: emitConst(module, block: block, value: MboxNoHandedMessage, ids: ids))
+	emitMboxParkWaiting(module, block: block, gt: gt, mbox: mbox, ids: ids)
+end 'emitMboxParkCommit'
+
+function emitMboxParkWaiting(module StdModule, block IrBlock, gt ValueId, mbox ValueId, ids ValueMinter)
 	emitStoreField(module, block: block, record: gt, offset: GtOffStatus, value: emitConst(module, block: block, value: GtStatus.waiting.rawValue, ids: ids))
 	emitMboxLockLeave(module, block: block, mbox: mbox, ids: ids)
-end 'emitMboxParkCommit'
+end 'emitMboxParkWaiting'
+
+// The second half of `__mbox_send`'s park, run as `emitMboxParkCommit` is. `waiting` and the timer
+// precede the leave, because a waker that takes the lock may release the sender at once.
+export function emitMboxSendParkCommit(module StdModule, func IrFunction, block IrBlock, gt ValueId, mbox ValueId, ids ValueMinter) returns IrBlock
+	var arm = module.addBlock(func, label: b"sendparkarm", heat: BlockHeat.normal)
+	var unbounded = module.addBlock(func, label: b"sendparkunbounded", heat: BlockHeat.normal)
+	var committed = module.addBlock(func, label: b"sendparkcommitted", heat: BlockHeat.normal)
+
+	let deadline = emitLoadField(module, block: block, record: gt, offset: GtOffSendDeadline, ids: ids)
+	emitBranchOnCompare(module, block: block, value: deadline, pred: StdCmpPred.eq, against: GtDeadlineMaxNs, whenTrue: unbounded, whenFalse: arm, ids: ids)
+
+	var armed = emitGtArmTimerDeadline(module, func: func, cur: arm, gt: gt, deadline: deadline, tag: TimerTagSend, ids: ids)
+	emitMboxLockLeave(module, block: armed, mbox: mbox, ids: ids)
+	module.setTerminator(armed, op: StdOp.branch(committed.id))
+
+	emitMboxParkWaiting(module, block: unbounded, gt: gt, mbox: mbox, ids: ids)
+	module.setTerminator(unbounded, op: StdOp.branch(committed.id))
+
+	return committed
+end 'emitMboxSendParkCommit'

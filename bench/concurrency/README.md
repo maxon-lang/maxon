@@ -38,11 +38,11 @@ definition.
 |---|---|---|---|---|---|
 | thread-ring | `N` (1000) | the 1-based label of the thread holding the token when it reaches 0, with 503 threads | 503 goroutines, each blocked on its own `sync.Mutex`; the token is handed on by unlocking the next | 503 services; `pass(remaining)` is a reply-less message to the successor; the holder at 0 reports to a `Reporter` service | send, park, wake |
 | ping-pong | `N` (1000000) | the sum of `i+1` over the rounds | two goroutines on unbuffered channels | `main` and one `Partner` service; `try await partner.ping(i)` each round | the reply path: cell, await, completion |
-| fan-in | `M` (100000) | the total of `p*M+j` over 64 producers | 64 producer goroutines send to one consumer on a channel of capacity 1024 | 64 `Producer` services send reply-less messages to one `Sink` (capacity 1024), yielding and resending on `mailboxFull`; each producer answers a completion reply; then one awaited total | one mailbox under contention, the global lock |
+| fan-in | `M` (100000) | the total of `p*M+j` over 64 producers | 64 producer goroutines send to one consumer on a channel of capacity 1024 | 64 `Producer` services send reply-less messages to one `Sink` (capacity 1024) with `sendTimeout: ForeverMs`, waiting on its sender queue when it is full; each producer answers a completion reply; then one awaited total | one mailbox under contention, the global lock |
 | worker-pool | `T K` (4096 250000) | the sum of the xorshift kernel's results over `T` tasks | `GOMAXPROCS` workers range over a buffered job channel and write a buffered result channel | `Scheduler.processorCount()` `Worker` services; task `t` goes to worker `t mod count`; every reply is awaited and summed | parallel scaling |
 | spawn-many | `S` (100000) | the sum of `i*2` over `S` threads | `S` goroutines write into a slice behind a `WaitGroup` | `S` `Doubler` services, one reply method each, all awaited and summed | spawn cost, the stack pool, peak memory |
 | coroutine-churn | `N` (100000) | the sum of `i` over `N` coroutines that each yield once | `N` goroutines, each `runtime.Gosched()` once, at `GOMAXPROCS=1` | `N` `async` calls, each `Scheduler.yield()` once; all awaited | `async` spawn, park, await, with no parallelism |
-| shared-counter | `M` (100000) | the number of increments, `64*M` | 64 incrementer goroutines send `M` increments each to one counter goroutine that owns the count, on a channel of capacity 1024; each incrementer signals its own `done` channel; then one read request carrying a reply channel | 64 `Incrementer` services send `M` reply-less `inc()` to one `Counter` service (capacity 1024), yielding and resending on `mailboxFull`; each incrementer answers a completion reply; then one awaited `read()` | state owned by one thread, one mailbox under contention |
+| shared-counter | `M` (100000) | the number of increments, `64*M` | 64 incrementer goroutines send `M` increments each to one counter goroutine that owns the count, on a channel of capacity 1024; each incrementer signals its own `done` channel; then one read request carrying a reply channel | 64 `Incrementer` services send `M` reply-less `inc()` to one `Counter` service (capacity 1024) with `sendTimeout: ForeverMs`, waiting on its sender queue when it is full; each incrementer answers a completion reply; then one awaited `read()` | state owned by one thread, one mailbox under contention |
 
 The worker-pool kernel, identical in both languages:
 
@@ -61,11 +61,11 @@ is NOT bent to dodge a runtime cost, because the cost is what the instrument exi
   its own is a service, and the only way to talk to it is a message handled one at a time from a FIFO
   mailbox. A mailbox holds at most its capacity, `DefaultMailboxCapacity` (1024) unless the `spawn`
   names one, as Go's channels in fan-in and shared-counter hold 1024.
-- **A full Maxon send fails and is retried; a full Go send parks.** A Maxon send returns at once, and on
-  `mailboxFull` fan-in's producers and shared-counter's incrementers call `Scheduler.yield()` and send
-  again, where a Go sender parks on the full channel until the receiver makes room. Both bound the
-  backlog at 1024 messages, so peak memory compares directly; the retry spends CPU time that Go's park
-  does not.
+- **A full send parks in both.** fan-in's producers and shared-counter's incrementers send with
+  `sendTimeout: ForeverMs`: a sender that finds the mailbox full parks on the mailbox's FIFO sender queue,
+  and the receive that frees a slot moves the first waiting sender's message into it and wakes that
+  sender, as a Go sender parks on the full channel's `sendq` until the receiver makes room. Both bound the
+  backlog at 1024 messages, so peak memory compares directly.
 - **spawn-many** pays a message and a reply round trip per Maxon service, where each goroutine writes
   one slice slot, so its ratio is skewed against Maxon by the messaging on top of the spawn.
 - **thread-ring** cannot await its successor: the ring is a cycle of handles and a node awaiting a node

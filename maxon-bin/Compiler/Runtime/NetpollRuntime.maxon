@@ -1289,9 +1289,7 @@ function buildNetpollPdDeadline(module StdModule)
 	emitBranchOnCompare(module, block: known, value: ms, pred: StdCmpPred.le, against: 0, whenTrue: store, whenFalse: arm, ids: ids)
 	known.branchEdges.push(BranchEdge.create(store.id, argIds: argsOf(cleared)))
 
-	let now = emitGtNowNs(module, block: arm, ids: ids)
-	let delta = emitBin(module, block: arm, a: ms, b: emitConst(module, block: arm, value: NanosPerMilli, ids: ids), opcode: StdBinOpcode.mul, ids: ids)
-	let deadline = emitBin(module, block: arm, a: now, b: delta, opcode: StdBinOpcode.add, ids: ids)
+	let deadline = emitGtDeadlineAfterMs(module, block: arm, ms: ms, ids: ids)
 	module.setTerminator(arm, op: StdOp.branch(store.id))
 	arm.branchEdges.push(BranchEdge.create(store.id, argIds: argsOf(deadline)))
 

@@ -22,41 +22,21 @@ type Counter
 end 'Counter'
 
 function deliverIncrement(counter Counter.handle)
-	var landed = false
-
-	while not landed 'untilItLands'
-		try counter.inc() otherwise (e) 'refused'
-			match e 'why'
-				mailboxFull then Scheduler.yield()
-				serviceStopped then panic("shared-counter: the counter stopped while an incrementer was sending")
-			end 'why'
-
-			continue
-		end 'refused'
-
-		landed = true
-	end 'untilItLands'
+	try counter.inc(sendTimeout: ForeverMs) otherwise (e) 'refused'
+		match e 'why'
+			mailboxFull then panic("shared-counter: an incrementer runs on its service's green thread, which no promise names and so nothing cancels, and a send given ForeverMs waits for room — mailboxFull cannot occur")
+			serviceStopped then panic("shared-counter: the counter stopped while an incrementer was sending")
+		end 'why'
+	end 'refused'
 end 'deliverIncrement'
 
 function readCount(counter Counter.handle) returns Count
-	var total = 0 as Count
-	var done = false
-
-	while not done 'untilItLands'
-		let current = try await counter.read() otherwise (e) 'refused'
-			match e 'why'
-				mailboxFull then Scheduler.yield()
-				serviceStopped then panic("shared-counter: the counter stopped before the final read")
-			end 'why'
-
-			continue
-		end 'refused'
-
-		total = current
-		done = true
-	end 'untilItLands'
-
-	return total
+	return try await counter.read(sendTimeout: ForeverMs) otherwise (e) 'refused'
+		match e 'why'
+			mailboxFull then panic("shared-counter: main's green thread is named by no promise and so nothing cancels it, and a send given ForeverMs waits for room — mailboxFull cannot occur")
+			serviceStopped then panic("shared-counter: the counter stopped before the final read")
+		end 'why'
+	end 'refused'
 end 'readCount'
 
 type Incrementer

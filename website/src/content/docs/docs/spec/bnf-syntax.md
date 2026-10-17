@@ -984,6 +984,9 @@ spawn_capacity = '(' 'capacity' ':' expression ')'     (* the mailbox's capacity
   direct call on a value and a message on a handle. A send throws `<type>.<message>.sendError`, so it is
   written under `try` (E3057 otherwise), and a message that returns or throws, sent as a statement, is
   E3190.
+- A message send's `arg_list` may end in the reserved labelled argument `sendTimeout: expression`, checked
+  against `Milliseconds`, which may also be its first and only argument: `h.ping(sendTimeout: 5000)`. An
+  argument after it, or a message declaring a parameter named `sendTimeout`, is E3192.
 - `spawn` on `wasm32-wasi`, which has no green threads, is refused with E3104.
 
 ### 6.8 Function and Method Calls

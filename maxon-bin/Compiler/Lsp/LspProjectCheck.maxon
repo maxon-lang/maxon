@@ -93,24 +93,14 @@ module type LspProjectChecker
 	end 'interestIn'
 end 'LspProjectChecker'
 
-// See `stdlib/Log.maxon`'s `LogSink.write` for why the retry yields and where it can still
-// livelock.
+// A `ForeverMs` send fails `mailboxFull` only for a cancelled sender, whose request is dropped.
 module function submitProjectCheck(checker LspProjectChecker.handle, request LspProjectCheckRequest)
-	var pending = request.clone()
-
-	while true 'untilQueued'
-		try checker.check(pending) otherwise (e) 'refused'
-			match e 'why'
-				mailboxFull(back) then pending = back
-				serviceStopped then panic("submitProjectCheck: the project checker stopped while the workspace still held its handle")
-			end 'why'
-
-			Scheduler.yield()
-			continue
-		end 'refused'
-
-		return
-	end 'untilQueued'
+	try checker.check(request.clone(), sendTimeout: ForeverMs) otherwise (e) 'refused'
+		match e 'why'
+			mailboxFull then return
+			serviceStopped then panic("submitProjectCheck: the project checker stopped while the workspace still held its handle")
+		end 'why'
+	end 'refused'
 end 'submitProjectCheck'
 
 union ProjectCheck

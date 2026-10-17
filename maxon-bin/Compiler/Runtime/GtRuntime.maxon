@@ -446,9 +446,9 @@ let GtOffStrandResume = GtOffStackHighWater + PointerFieldBytes
 // 0 on every other green thread.
 export let GtOffReplyWitness = GtOffStrandResume + PointerFieldBytes
 
-let GtOffRenounced = GtOffReplyWitness + PointerFieldBytes
+export let GtOffRenounced = GtOffReplyWitness + PointerFieldBytes
 
-let GtPromiseHeld = 0
+export let GtPromiseHeld = 0
 let GtPromiseGivenUp = 1
 
 let GtRestraintArmed = 1
@@ -469,6 +469,15 @@ let GtOffPinDepth = GtOffPinnedM + PointerFieldBytes
 // `mrt_host_last_error` reads it back on a green thread.
 export let GtOffLastError = GtOffPinDepth + PointerFieldBytes
 
+// A sender waiting on a full mailbox (`MailboxRuntime.MboxSendName`): its links in that mailbox's
+// sender queue, under the mailbox lock and 0 once a waker has unlinked it; its absolute deadline,
+// `GtDeadlineMaxNs` when it armed no timer; and the `MboxSendWake` its waker publishes, a release
+// store inside `__sched_lock` that the sender reads with an acquire.
+export let GtOffSendNext = GtOffLastError + PointerFieldBytes
+export let GtOffSendPrev = GtOffSendNext + PointerFieldBytes
+export let GtOffSendDeadline = GtOffSendPrev + PointerFieldBytes
+export let GtOffSendOutcome = GtOffSendDeadline + PointerFieldBytes
+
 export enum GtLastErrorDirection
 	intoGt
 	fromGt
@@ -485,7 +494,7 @@ end 'GtLastErrorDirection'
 // ⚠ This line is the one a growth must restate: a new field goes before the lock, and this offset
 // names the last field rather than following it. A field added without re-deriving it shares the
 // lock's bytes and escapes the spawn's zeroing, and nothing refuses it.
-let GtOffRecordLock = GtOffLastError + PointerFieldBytes
+let GtOffRecordLock = GtOffSendOutcome + PointerFieldBytes
 
 // The thread's message staging buffer (`MailboxRuntime.MboxStagingName`), or 0 until its first
 // send. It sits past the record lock so the spawn's zeroing leaves it: the buffer is arena memory
@@ -550,6 +559,11 @@ export enum GtParkKind
 
 	// `__gt_quiesce`: the argument is unused; the thread registers in `GtQuiesceWaiterLabel`'s word.
 	quiesce = 11
+
+	// `__mbox_send` on a full mailbox: the argument is the mailbox. Committed by `__gt_run_strand`
+	// (`MailboxRuntime.emitMboxSendParkCommit`) under the same lock-across-the-switch rule as `mailbox`,
+	// so `__gt_register_park` never sees it.
+	mailboxSend = 12
 end 'GtParkKind'
 
 // ⭐ **THE POLLER OWNS TWO PARK KINDS, AND EVERY SITE THAT ASKS WHETHER A THREAD IS ON IT MEANS BOTH.** One
@@ -982,6 +996,7 @@ let TimerHeapBytes = TimerHeapCapacity * TimerEntrySize
 let TimerTagSleep = 0
 let TimerTagReadDeadline = 1
 let TimerTagWriteDeadline = 2 as FullRangeInt
+export let TimerTagSend = 3
 
 // A netpoll park's direction (`NetpollModeRead`/`NetpollModeWrite`) as the tag its deadline entry carries.
 // EXPORTED for `NetpollRuntime`, which arms an entry at the park and removes it whenever the wait ends.
@@ -1130,6 +1145,10 @@ let NanosPerSecond = 1000000000
 // EXPORTED for `NetpollRuntime`, which turns a deadline in milliseconds into the absolute nanoseconds the
 // timer store keys on.
 export let NanosPerMilli = 1000000
+
+// Where `emitGtDeadlineAfterMs` saturates. A send whose deadline is this waits with no timer armed,
+// which `ForeverMs` and every timeout too long to reach it share.
+export let GtDeadlineMaxNs = i64.max - NanosPerMilli
 
 // --- Runtime function names ---
 export let GtContextSwitchName = b"__gt_context_switch"
@@ -4215,10 +4234,13 @@ function buildGtTimerCheck(module StdModule)
 	// fire: end the popped wait. The order these happen in IS the order the threads resume in, which is what
 	// makes the pop-min above observable at all.
 	//
-	// ⭐⭐ **THE TAG DECIDES WHOSE DEADLINE THIS IS.** A sleep or an I/O yield is readied straight away; a SOCKET
+	// ⭐⭐ **THE TAG DECIDES WHOSE DEADLINE THIS IS.** A sleep, an I/O yield or a waiting send is readied straight
+	// away, a send then failing itself under its mailbox lock; a SOCKET
 	// deadline goes through the poll-descriptor band, which must take the thread off the direction word it is
 	// published on first — and which answers no debt at all when a readiness event got there first.
-	emitBranchOnCompare(module, block: fire, value: root.tag, pred: StdCmpPred.eq, against: TimerTagSleep, whenTrue: fireSleep, whenFalse: fireNetpoll, ids: ids)
+	let isSleepTag = emitCompareWithConstant(module, block: fire, value: root.tag, pred: StdCmpPred.eq, against: TimerTagSleep, ids: ids)
+	let isSendTag = emitCompareWithConstant(module, block: fire, value: root.tag, pred: StdCmpPred.eq, against: TimerTagSend, ids: ids)
+	module.setTerminator(fire, op: StdOp.condBranch(emitBin(module, block: fire, a: isSleepTag, b: isSendTag, opcode: StdBinOpcode.bitOr, ids: ids), thenBlockId: fireSleep.id, elseBlockId: fireNetpoll.id))
 
 	let sleepDebt = emitGtReadyLocked(module, block: fireSleep, gt: root.gt, ids: ids)
 	module.setTerminator(fireSleep, op: StdOp.branch(fireJoin.id))
@@ -5646,6 +5668,8 @@ end 'buildGtCellComplete'
 //     the thread, which unwinds itself — the await arm's answer, and this dropper never owns the struct.
 //   • `waiting` in an await or an awaitAny — the thread will be readied by the completion it waits for, so it
 //     takes the arm below.
+//   • `waiting` in a send — `__mbox_send_abandon` takes it off the sender queue and readies it, and it then
+//     takes the arm below.
 //   • anything else (`ready`, or a `completed`/running thread whose status this call never inspects) — the
 //     thread is in a strand queue, on a processor, or finished, and in every one of those a RUNNER will
 //     arrive: the party that takes a NEVER-RUN tombstone out of a queue, or — for a thread that has already
@@ -5669,6 +5693,9 @@ function buildGtPromiseDrop(module StdModule)
 	var notAReplyCell = module.addBlock(func, label: b"notreplycell", heat: BlockHeat.normal)
 	var mailboxParked = module.addBlock(func, label: b"droppedmailboxpark", heat: BlockHeat.normal)
 	var notMailbox = module.addBlock(func, label: b"droppednotmailbox", heat: BlockHeat.normal)
+	var sendParked = module.addBlock(func, label: b"droppedsendpark", heat: BlockHeat.normal)
+	var sendWake = module.addBlock(func, label: b"droppedsendwake", heat: BlockHeat.normal)
+	var notSendParked = module.addBlock(func, label: b"droppednotsendpark", heat: BlockHeat.normal)
 	var waitingArm = module.addBlock(func, label: b"waitingarm", heat: BlockHeat.normal)
 	var notAwaiting = module.addBlock(func, label: b"droppednotawaiting", heat: BlockHeat.normal)
 	var pollerParked = module.addBlock(func, label: b"droppedpollerpark", heat: BlockHeat.normal)
@@ -5698,7 +5725,7 @@ function buildGtPromiseDrop(module StdModule)
 	// The renounce mark is stored ahead of every arm below, because each of them readies the
 	// thread (`emitGtRenouncePark`): a mark written past that point races the coroutine's own
 	// resumption, and what slips through the window is a far-end wait this one-shot call can no
-	// longer end. `__gt_io_park` reads it.
+	// longer end. `__gt_io_park` and `__mbox_send` read it.
 	emitStoreField(module, block: entry, record: gt, offset: GtOffRenounced, value: emitConst(module, block: entry, value: GtPromiseGivenUp, ids: ids))
 	module.setTerminator(entry, op: StdOp.condBranch(isReplyCell, thenBlockId: queuedArm.id, elseBlockId: notAReplyCell.id))
 
@@ -5735,13 +5762,19 @@ function buildGtPromiseDrop(module StdModule)
 	emitBranchOnCompare(module, block: waitingArm, value: parkKind, pred: StdCmpPred.eq, against: GtParkKind.mailbox.rawValue, whenTrue: mailboxParked, whenFalse: notMailbox, ids: ids)
 	emitRuntimeAbort(module, func: func, block: mailboxParked, abort: RuntimeAbort.schedulerPromiseParkedOnAMailbox, ids: ids)
 
+	emitBranchOnCompare(module, block: notMailbox, value: parkKind, pred: StdCmpPred.eq, against: GtParkKind.mailboxSend.rawValue, whenTrue: sendParked, whenFalse: notSendParked, ids: ids)
+
+	let abandonDebt = ids.mint()
+	module.appendOp(sendParked, op: StdOp.call(abandonDebt, callee: MboxSendAbandonName, args: argsOf(gt)))
+	emitSchedWakeIfOwed(module, cur: sendParked, owed: abandonDebt, wake: sendWake, cont: queuedArm, ids: ids)
+
 	// ⭐⭐ **A THREAD PARKED IN AN AWAIT OR AN awaitAny IS RENOUNCED, NOT DEREGISTERED.** Its frame holds the
 	// promise it awaits, and only its own body can drop that; the completion it waits for readies it, it runs
 	// its body out, and its runner reclaims it — the queued arm's contract.
-	let inAwait = emitCompareWithConstant(module, block: notMailbox, value: parkKind, pred: StdCmpPred.eq, against: GtParkKind.awaitPromise.rawValue, ids: ids)
-	let inAwaitAny = emitCompareWithConstant(module, block: notMailbox, value: parkKind, pred: StdCmpPred.eq, against: GtParkKind.awaitAny.rawValue, ids: ids)
-	let awaiting = emitBin(module, block: notMailbox, a: inAwait, b: inAwaitAny, opcode: StdBinOpcode.bitOr, ids: ids)
-	module.setTerminator(notMailbox, op: StdOp.condBranch(awaiting, thenBlockId: queuedArm.id, elseBlockId: notAwaiting.id))
+	let inAwait = emitCompareWithConstant(module, block: notSendParked, value: parkKind, pred: StdCmpPred.eq, against: GtParkKind.awaitPromise.rawValue, ids: ids)
+	let inAwaitAny = emitCompareWithConstant(module, block: notSendParked, value: parkKind, pred: StdCmpPred.eq, against: GtParkKind.awaitAny.rawValue, ids: ids)
+	let awaiting = emitBin(module, block: notSendParked, a: inAwait, b: inAwaitAny, opcode: StdBinOpcode.bitOr, ids: ids)
+	module.setTerminator(notSendParked, op: StdOp.condBranch(awaiting, thenBlockId: queuedArm.id, elseBlockId: notAwaiting.id))
 
 	// ⭐⭐⭐ **A PARKED THREAD IS RENOUNCED, NOT ABANDONED — the AWAIT arm's answer, generalised, and MEASURED.**
 	// Nothing can unwind a SUSPENDED frame from outside: freeing the stack of a thread that will never resume
@@ -6176,6 +6209,24 @@ export function emitGtTimerStoreRemove(module StdModule, func IrFunction, ids Va
 	module.setTerminator(published, op: StdOp.branch(cont.id))
 end 'emitGtTimerStoreRemove'
 
+// The absolute deadline `ms` from now, saturating at `GtDeadlineMaxNs`. A `Milliseconds` above
+// `i64.max` reads negative here, and a product past the headroom wraps, and either would be a deadline
+// already past: the wait meant to be longest would end at once.
+export function emitGtDeadlineAfterMs(module StdModule, block IrBlock, ms ValueId, ids ValueMinter) returns ValueId
+	let now = emitGtNowNs(module, block: block, ids: ids)
+	let milliConst = emitConst(module, block: block, value: NanosPerMilli, ids: ids)
+	let latest = emitConst(module, block: block, value: GtDeadlineMaxNs, ids: ids)
+	let headroomNs = emitBin(module, block: block, a: latest, b: now, opcode: StdBinOpcode.sub, ids: ids)
+	let headroomMs = ids.mint()
+	module.appendOp(block, op: StdOp.div(headroomMs, lhs: headroomNs, rhs: milliConst, signedness: IntegerSignedness.signed))
+	let aboveSignedRange = emitCompareWithConstant(module, block: block, value: ms, pred: StdCmpPred.lt, against: 0, ids: ids)
+	let aboveHeadroom = emitCmp(module, block: block, a: ms, b: headroomMs, pred: StdCmpPred.gt, ids: ids)
+	let saturates = emitBin(module, block: block, a: aboveSignedRange, b: aboveHeadroom, opcode: StdBinOpcode.bitOr, ids: ids)
+	let msNs = emitBin(module, block: block, a: ms, b: milliConst, opcode: StdBinOpcode.mul, ids: ids)
+	let deadline = emitBin(module, block: block, a: now, b: msNs, opcode: StdBinOpcode.add, ids: ids)
+	return emitSelectWord(module, block: block, cond: saturates, whenSet: latest, whenClear: deadline, ids: ids)
+end 'emitGtDeadlineAfterMs'
+
 // `__gt_sleep(ms)` — suspend the current GT for `ms` milliseconds: compute the absolute deadline and park on
 // the timer store (`__gt_park`).
 function buildGtSleep(module StdModule, tracing GtTracing)
@@ -6185,16 +6236,9 @@ function buildGtSleep(module StdModule, tracing GtTracing)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
-	let ms = 0 as ValueId
+	let ms = 0
 
-	// deadline = __gt_now_ns() + ms * 1e6.
-	let now = emitGtNowNs(module, block: entry, ids: ids)
-	let milliConst = ids.mint()
-	module.appendOp(entry, op: StdOp.const(milliConst, value: NanosPerMilli, valueType: StdType.i64))
-	let msNs = ids.mint()
-	module.appendOp(entry, op: StdOp.binOp(msNs, lhs: ms, rhs: milliConst, opcode: StdBinOpcode.mul, operandType: StdType.i64))
-	let deadline = ids.mint()
-	module.appendOp(entry, op: StdOp.binOp(deadline, lhs: now, rhs: msNs, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let deadline = emitGtDeadlineAfterMs(module, block: entry, ms: ms, ids: ids)
 
 	// The trace pair BRACKETS the park, exactly as `__gt_io_park`'s does — same exit, different tag, and the
 	// tag is the only thing that tells a reader which kind of wait this green thread is in.
@@ -6337,8 +6381,6 @@ function buildGtRegisterPark(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var timerArm = module.addBlock(func, label: b"parktimer", heat: BlockHeat.normal)
-	var timerWake = module.addBlock(func, label: b"parktimerwake", heat: BlockHeat.normal)
-	var timerPaid = module.addBlock(func, label: b"parktimerpaid", heat: BlockHeat.normal)
 	var notTimer = module.addBlock(func, label: b"notparktimer", heat: BlockHeat.normal)
 	var netpollArm = module.addBlock(func, label: b"parknetpoll", heat: BlockHeat.normal)
 	var netpollWake = module.addBlock(func, label: b"parknetpollwake", heat: BlockHeat.normal)
@@ -6375,15 +6417,7 @@ function buildGtRegisterPark(module StdModule)
 	let noDebt = emitConst(module, block: entry, value: WakeDebtNone, ids: ids)
 	emitBranchOnCompare(module, block: entry, value: kind, pred: StdCmpPred.eq, against: GtParkKind.timer.rawValue, whenTrue: timerArm, whenFalse: notTimer, ids: ids)
 
-	// Go's `maybeAdd`: `when < wakeTime`, read against the root before the add, is what makes this the deadline
-	// the scheduler waits for next. An empty store publishes `TimerWhenEmpty`, which every deadline precedes.
-	emitSchedLockEnter(module, block: timerArm, ids: ids)
-	emitStoreField(module, block: timerArm, record: gt, offset: GtOffStatus, value: waitingConst)
-	let rootBefore = emitGtLoadTimerWhen(module, block: timerArm, ids: ids)
-	module.appendOp(timerArm, op: StdOp.call(ids.mint(), callee: GtTimerAddName, args: threeArgs(gt, second: arg, third: emitConst(module, block: timerArm, value: TimerTagSleep, ids: ids))))
-	emitBranchOnCompareValues(module, block: timerArm, a: arg, pred: StdCmpPred.lt, b: rootBefore, whenTrue: timerWake, whenFalse: timerPaid, ids: ids)
-	emitGtWakeNetpoller(module, block: timerWake, when: arg, cont: timerPaid, ids: ids)
-	emitSchedLockLeave(module, block: timerPaid, ids: ids)
+	var timerPaid = emitGtArmTimerDeadline(module, func: func, cur: timerArm, gt: gt, deadline: arg, tag: TimerTagSleep, ids: ids)
 	emitBranchCarrying(module, from: timerPaid, to: doneBlock, value: noDebt)
 
 	emitGtBranchOnPollerPark(module, block: notTimer, kind: kind, onPoller: netpollArm, elsewhere: notNetpoll, ids: ids)
@@ -6470,7 +6504,27 @@ function buildGtRegisterPark(module StdModule)
 	module.functions.push(func)
 end 'buildGtRegisterPark'
 
-// Call `__sched_wake_netpoller(when)` in `block`, inside `__gt_register_park`'s hold, and continue
+// The timer arm's discipline (`buildGtRegisterPark`), for any tag: `waiting` and the add in one
+// `__sched_lock` hold.
+//
+// Go's `maybeAdd`: `when < wakeTime`, read against the root before the add, is what makes this the deadline
+// the scheduler waits for next. An empty store publishes `TimerWhenEmpty`, which every deadline precedes.
+export function emitGtArmTimerDeadline(module StdModule, func IrFunction, cur IrBlock, gt ValueId, deadline ValueId, tag FullRangeInt, ids ValueMinter) returns IrBlock
+	var wake = module.addBlock(func, label: b"parktimerwake", heat: BlockHeat.normal)
+	var paid = module.addBlock(func, label: b"parktimerpaid", heat: BlockHeat.normal)
+
+	emitSchedLockEnter(module, block: cur, ids: ids)
+	emitStoreField(module, block: cur, record: gt, offset: GtOffStatus, value: emitConst(module, block: cur, value: GtStatus.waiting.rawValue, ids: ids))
+	let rootBefore = emitGtLoadTimerWhen(module, block: cur, ids: ids)
+	module.appendOp(cur, op: StdOp.call(ids.mint(), callee: GtTimerAddName, args: threeArgs(gt, second: deadline, third: emitConst(module, block: cur, value: tag, ids: ids))))
+	emitBranchOnCompareValues(module, block: cur, a: deadline, pred: StdCmpPred.lt, b: rootBefore, whenTrue: wake, whenFalse: paid, ids: ids)
+	emitGtWakeNetpoller(module, block: wake, when: deadline, cont: paid, ids: ids)
+	emitSchedLockLeave(module, block: paid, ids: ids)
+
+	return paid
+end 'emitGtArmTimerDeadline'
+
+// Call `__sched_wake_netpoller(when)` in `block`, inside a park's `__sched_lock` hold, and continue
 // at `cont`.
 function emitGtWakeNetpoller(module StdModule, block IrBlock, when ValueId, cont IrBlock, ids ValueMinter)
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: SchedWakeNetpollerName, args: argsOf(when)))
@@ -6567,6 +6621,8 @@ function buildGtRunStrand(module StdModule, target Target)
 	var notYield = module.addBlock(func, label: b"strandnotyield", heat: BlockHeat.normal)
 	var notPreempt = module.addBlock(func, label: b"strandnotpreempt", heat: BlockHeat.normal)
 	var mailboxCommit = module.addBlock(func, label: b"strandmailboxcommit", heat: BlockHeat.normal)
+	var notMailbox = module.addBlock(func, label: b"strandnotmailbox", heat: BlockHeat.normal)
+	var mailboxSendCommit = module.addBlock(func, label: b"strandmailboxsendcommit", heat: BlockHeat.normal)
 	var yielded = module.addBlock(func, label: b"strandyield", heat: BlockHeat.normal)
 	var preempted = module.addBlock(func, label: b"strandpreempted", heat: BlockHeat.normal)
 	var pollStores = module.addBlock(func, label: b"strandpoll", heat: BlockHeat.normal)
@@ -6643,14 +6699,20 @@ function buildGtRunStrand(module StdModule, target Target)
 
 	emitBranchOnCompare(module, block: notYield, value: kind, pred: StdCmpPred.eq, against: GtParkKind.preempt.rawValue, whenTrue: preempted, whenFalse: notPreempt, ids: ids)
 
-	emitBranchOnCompare(module, block: notPreempt, value: kind, pred: StdCmpPred.eq, against: GtParkKind.mailbox.rawValue, whenTrue: mailboxCommit, whenFalse: register, ids: ids)
+	emitBranchOnCompare(module, block: notPreempt, value: kind, pred: StdCmpPred.eq, against: GtParkKind.mailbox.rawValue, whenTrue: mailboxCommit, whenFalse: notMailbox, ids: ids)
 
-	// After the shrink, never before: once the commit leaves the mailbox lock a send can ready the member on
-	// another M, and a shrink then would relocate a stack that is running. The commit also runs before
-	// `__gt_strand_next`, so this OS thread runs no other green thread while the receive's hold is open.
+	emitBranchOnCompare(module, block: notMailbox, value: kind, pred: StdCmpPred.eq, against: GtParkKind.mailboxSend.rawValue, whenTrue: mailboxSendCommit, whenFalse: register, ids: ids)
+
+	// After the shrink, never before: once either mailbox commit leaves the mailbox lock a waker can ready the
+	// member on another M, and a shrink then would relocate a stack that is running. Each commit also runs
+	// before `__gt_strand_next`, so this OS thread runs no other green thread while the park's hold is open.
 	emitMboxParkCommit(module, block: mailboxCommit, gt: member, mbox: emitLoadField(module, block: mailboxCommit, record: member, offset: GtOffParkArg, ids: ids), ids: ids)
 	module.setTerminator(mailboxCommit, op: StdOp.branch(next.id))
 	mailboxCommit.branchEdges.push(BranchEdge.create(next.id, argIds: argsOf(zero)))
+
+	var sendCommitted = emitMboxSendParkCommit(module, func: func, block: mailboxSendCommit, gt: member, mbox: emitLoadField(module, block: mailboxSendCommit, record: member, offset: GtOffParkArg, ids: ids), ids: ids)
+	module.setTerminator(sendCommitted, op: StdOp.branch(next.id))
+	sendCommitted.branchEdges.push(BranchEdge.create(next.id, argIds: argsOf(zero)))
 
 	module.setTerminator(register, op: StdOp.branch(next.id))
 	register.branchEdges.push(BranchEdge.create(next.id, argIds: argsOf(member)))

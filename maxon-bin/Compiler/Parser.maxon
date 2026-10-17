@@ -4813,6 +4813,11 @@ union RecordedSend
 	recorded(opIdx ElementIndex, funcIndex ElementIndex, send SentMessage)
 end 'RecordedSend'
 
+union SendTimeoutArgument
+	absent
+	given(value ValueId)
+end 'SendTimeoutArgument'
+
 union UnsettledSend
 	settled
 	pending(opIdx ElementIndex, range SourceRange)
@@ -6367,6 +6372,10 @@ let ByteTypeName = b"byte"
 let CountAliasName = b"Count"
 
 let MailboxCapacityAliasName = b"MailboxCapacity"
+
+let MillisecondsAliasName = b"Milliseconds"
+
+let NoSendTimeoutMs = 0
 
 let DefaultMailboxCapacityName = b"DefaultMailboxCapacity"
 
@@ -8270,6 +8279,11 @@ enum ArgLabelRule
 	// or a builtin-style member with positional later arguments, so no label and no absence of one is
 	// refused; E3004 at the call rejects the program.
 	unknownMember
+
+	// A message call through a service handle: `ordinary`, except that the reserved `sendTimeout:` may
+	// label the first argument too. `parseCallArgs` takes it off the argument list, so it never reaches
+	// the request, and refuses an argument after it (E3192).
+	messageSend
 end 'ArgLabelRule'
 
 // **THE `trunc` BUILTIN'S NAME**, and the whole of what makes it one. A `b""` literal, matched
@@ -19659,6 +19673,10 @@ export type Parser
 	// the argument contains sees a request that is not for it.
 	var cellArgumentToken as CellArgumentToken
 	var cellArgumentWantsAPlace as bool
+
+	// Set by `parseCallArgs` under `ArgLabelRule.messageSend`; `emitServiceSend` takes it and resets it
+	// on every exit, a refused argument list included, so no later send inherits a timeout.
+	var pendingSendTimeout as SendTimeoutArgument
 	var handedPlaceStorage as PlaceStorage
 
 	// ⭐⭐ **A RECEIVING SLOT HAS STATED THE `Array` INSTANCE THE LITERAL AT THIS TOKEN MUST BE BUILT AT.**
@@ -20189,6 +20207,7 @@ export type Parser
 			elementStoreDestination: ElementStoreDestination.none,
 			cellArgumentToken: CellArgumentToken.none,
 			cellArgumentWantsAPlace: false,
+			pendingSendTimeout: SendTimeoutArgument.absent,
 			handedPlaceStorage: noHandedPlaceStorage,
 			arrayLiteralTargetTokenIndex: 0,
 			arrayLiteralTarget: DeclaredArrayInstance.none,
@@ -45545,7 +45564,7 @@ export type Parser
 
 	function sendStatusOf(opIdx ElementIndex) returns ValueId
 		match try self.artifact.module.ops.get(opIdx) otherwise panic("sendStatusOf: opRef {opIdx} not in module.ops") 'send'
-			serviceSend(_, status, _, _, _, _) then return status
+			serviceSend(_, status, _, _, _, _, _, _) then return status
 			call(result, _, _, _, _, _, _, _) then return result
 			default panic("sendStatusOf: the op at {opIdx} is neither a mailbox send nor an interface-table send — `routableOpAt` classified it as a send")
 		end 'send'
@@ -47945,7 +47964,7 @@ export type Parser
 	function routableOpAt(opIdx ElementIndex) returns RoutableOp
 		return match try self.artifact.module.ops.get(opIdx) otherwise panic("routableOpAt: opRef {opIdx} not in module.ops") 'op'
 			call(result, callee, _, _, _, _, _, _) gives RoutableOp.send(result) if callee.equals(MboxInterfaceSendName) else RoutableOp.call(result, callee: callee)
-			serviceSend(result, _, _, _, _, _) gives RoutableOp.send(result)
+			serviceSend(result, _, _, _, _, _, _, _) gives RoutableOp.send(result)
 			tryCall(result, _, callee, _, _, _, _, _, _) gives RoutableOp.tryChannelCall(result, callee: callee)
 			witnessDispatch(result, _, _, _, _, _, _, _) gives RoutableOp.witness(result)
 			await (result, promise) gives RoutableOp.await(result, promise: promise)
@@ -64672,6 +64691,7 @@ export type Parser
 			// the return door's note names a `spawn` that may be in another file, and this one would point at
 			// its own line.
 			messageReplyAliasesServiceState then throw SourceParseError.serviceReplyAliasesState(serviceRosterRefusalMessage(roster, typeName: typeName), line: spawnTok.line, column: spawnTok.column, note: DiagnosticNote.none)
+			messageDeclaresTheSendTimeoutLabel then throw SourceParseError.registryRefused(ErrorCode.semanticServiceSendTimeoutReserved, explanation: serviceRosterRefusalMessage(roster, typeName: typeName), line: spawnTok.line, column: spawnTok.column, note: DiagnosticNote.none)
 		end 'roster'
 	end 'requireServiceRosterIsDispatchable'
 
@@ -76552,9 +76572,15 @@ export type Parser
 		let argumentTempFloor = self.bodyState.pendingTempDrops.count()
 		let argumentOwnedFloor = self.bodyState.ownedBindings.count()
 
-		// ORDINARY, unconditionally: a message is a declared method, so it always has parameter names to label
-		// with — no bare builtin can arrive through a handle.
-		_ = try self.parseCallArgs(func, target: CallArgTarget.movedInto(callee), anchor: memberTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, rule: ArgLabelRule.ordinary)
+		// `messageSend`, unconditionally: a message is a declared method, so it always has parameter names to
+		// label with — no bare builtin can arrive through a handle.
+		_ = try self.parseCallArgs(func, target: CallArgTarget.movedInto(callee), anchor: memberTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, rule: ArgLabelRule.messageSend) otherwise (refusal) 'argsRefused'
+			self.pendingSendTimeout = SendTimeoutArgument.absent
+			throw refusal
+		end 'argsRefused'
+
+		let timeout = self.pendingSendTimeout.clone()
+		self.pendingSendTimeout = SendTimeoutArgument.absent
 		let rparenTok = try self.consume(TokenKind.rightParen)
 
 		// A message's declared defaults are filled exactly as a direct call's are, through the same door, so
@@ -76579,7 +76605,7 @@ export type Parser
 		let (box, handBack) = try self.emitEnumBox(request, caseIndex: caseIndex, args: slotValues, argsBareLocal: bareLocal, argAnchors: slotAnchors, caseTok: memberTok, range: range, fill: PayloadFill.serviceMessage(typeName))
 		let spelling = qualifiedMethodName(awaitedServiceOf(route, typeName: typeName), methodName: memberTok.value)
 		try self.requireSendSettled()
-		return self.emitServiceSendOp(base, box: box, request: request, caseIndex: caseIndex, handBack: handBack, callee: callee, spelling: spelling, reply: reply, route: route, range: range, argsAreChecked: argsAreChecked)
+		return self.emitServiceSendOp(base, box: box, request: request, caseIndex: caseIndex, handBack: handBack, callee: callee, spelling: spelling, reply: reply, route: route, range: range, argsAreChecked: argsAreChecked, timeout: timeout)
 	end 'emitServiceSend'
 
 	function widenMessageArgsToInterfaceHandles(payloads PayloadFieldArray, slotValues ValueIdArray, filled BoolArray, firstTok Token, lastTok Token)
@@ -76674,15 +76700,20 @@ export type Parser
 
 	// ⚠ The request sits in this thread's one staging buffer until the op copies it out, so nothing
 	// between `emitEnumBox`'s fill and the op may send: a nested send would overwrite it.
-	function emitServiceSendOp(base StructBase, box ValueId, request EnumLayout, caseIndex CaseIndex, handBack SharedSlotHandBackArray, callee ByteArray, spelling ByteArray, reply ServiceReplyValue, route MessageRoute, range SourceRange, argsAreChecked bool) returns ValueId
+	function emitServiceSendOp(base StructBase, box ValueId, request EnumLayout, caseIndex CaseIndex, handBack SharedSlotHandBackArray, callee ByteArray, spelling ByteArray, reply ServiceReplyValue, route MessageRoute, range SourceRange, argsAreChecked bool, timeout SendTimeoutArgument) returns ValueId
 		// A table send is a runtime call, not an `indirectCall`, so E3143 does not widen it to every
 		// address-taken function in the program; the stubs it reaches only retag and send.
 		let bytes = self.emitLiteral(request.boxSizeBytes() as FullRangeInt, valueType: MaxonType.integer, range: range)
 		let sent = self.mintValue(ValueTypeTag.void, nameId: UnnamedTypeId)
 
+		let (timeoutMs, timed) = match timeout 'timeout'
+			absent gives (self.emitLiteral(NoSendTimeoutMs, valueType: MaxonType.integer, range: range), false)
+			given(value) gives (value, true)
+		end 'timeout'
+
 		let checkable = match route 'route'
-			mailbox gives self.emitMailboxSend(base, box: box, bytes: bytes, callee: callee, sent: sent, range: range)
-			sendTable(slot, _) gives self.emitInterfaceSend(base, slot: slot, box: box, bytes: bytes, range: range)
+			mailbox gives self.emitMailboxSend(base, box: box, bytes: bytes, callee: callee, sent: sent, range: range, timeoutMs: timeoutMs, timed: timed)
+			sendTable(slot, _) gives self.emitInterfaceSend(base, slot: slot, box: box, bytes: bytes, range: range, timeoutMs: timeoutMs)
 		end 'route'
 
 		let opIdx = self.artifact.module.opCount() - 1
@@ -76713,16 +76744,16 @@ export type Parser
 		self.routeThrowingOp(destination, opIdx: opIdx, clause: recordedSendOf(self.lastSend, opIdx: opIdx).throwsClause(), result: result)
 	end 'routeOrHoldSend'
 
-	function emitMailboxSend(base StructBase, box ValueId, bytes ValueId, callee ByteArray, sent ValueId, range SourceRange) returns ValueId
+	function emitMailboxSend(base StructBase, box ValueId, bytes ValueId, callee ByteArray, sent ValueId, range SourceRange, timeoutMs ValueId, timed bool) returns ValueId
 		let mailbox = self.emitFieldLoad(base.box, layout: base.layout, index: ServiceHandleMailboxFieldIndex, range: range)
 		let status = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
-		self.artifact.emitOp(self.bodyState.currentBlock, op: MaxonOp.serviceSend(sent, status: status, callee: callee, handle: mailbox, request: box, bytes: bytes), range: range)
+		self.artifact.emitOp(self.bodyState.currentBlock, op: MaxonOp.serviceSend(sent, status: status, callee: callee, handle: mailbox, request: box, bytes: bytes, timeoutMs: timeoutMs, timed: timed), range: range)
 		return sent
 	end 'emitMailboxSend'
 
-	function emitInterfaceSend(base StructBase, slot CaseIndex, box ValueId, bytes ValueId, range SourceRange) returns ValueId
+	function emitInterfaceSend(base StructBase, slot CaseIndex, box ValueId, bytes ValueId, range SourceRange, timeoutMs ValueId) returns ValueId
 		let slotOffset = self.emitLiteral(interfaceSendSlotOffset(slot), valueType: MaxonType.integer, range: range)
-		return self.emitRuntimeCall(MboxInterfaceSendName, args: quadArgs(base.box, second: slotOffset, third: box, fourth: bytes), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		return self.emitRuntimeCall(MboxInterfaceSendName, args: fiveArgs(base.box, second: slotOffset, third: box, fourth: bytes, fifth: timeoutMs), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 	end 'emitInterfaceSend'
 
 	// ⭐ **`h.shutdown()` — CLOSE THE MAILBOX, AND THE LOOP DRAINS IT.** Everything already queued
@@ -97744,6 +97775,12 @@ export type Parser
 				// value's first token — anchors this argument's diagnostic span.
 				let argFirstTok = self.current()
 				let label = try self.consumeArgLabel(argIndex, rule: rule)
+
+				if rule == ArgLabelRule.messageSend and label.equals(ServiceSendTimeoutLabel) 'theSendTimeout'
+					self.pendingSendTimeout = SendTimeoutArgument.given(try self.parseSendTimeoutValue(func, labelTok: argFirstTok))
+					break
+				end 'theSendTimeout'
+
 				let valueTok = self.current()
 				let valueStart = self.pos
 
@@ -97856,6 +97893,25 @@ export type Parser
 		self.openByRefHandOffs.truncate(enclosingHandOffs)
 		return placeArgumentsOf(places)
 	end 'parseCallArgs'
+
+	function parseSendTimeoutValue(func IrFunction, labelTok Token) returns ValueId throws SourceParseError
+		let valueTok = self.current()
+		let holdsSend = self.bodyState.holdsSendForTryAwait
+		self.bodyState.holdsSendForTryAwait = false
+		let value = try self.parseValueExpression(func)
+		self.bodyState.holdsSendForTryAwait = holdsSend
+		try self.requireArgumentFitsDeclaredAlias(value, alias: self.millisecondsAlias(), paramName: labelTok.value, anchor: valueTok)
+
+		if self.at(TokenKind.comma) 'notTheLastArgument'
+			throw SourceParseError.registryRefused(ErrorCode.semanticServiceSendTimeoutReserved, explanation: serviceSendTimeoutNotLastRefusal(), line: labelTok.line, column: labelTok.column, note: DiagnosticNote.none)
+		end 'notTheLastArgument'
+
+		return value
+	end 'parseSendTimeoutValue'
+
+	function millisecondsAlias() returns RangedTypeAlias
+		return try requireDeclaredAlias(self.signatures.libraryAliasDeclaration(MillisecondsAliasName)) otherwise panic("millisecondsAlias: no library file declares the ranged typealias `{String.from(MillisecondsAliasName)}`, which stdlib/Sleep.maxon declares")
+	end 'millisecondsAlias'
 
 	function argumentIsManaged(value ValueId, handedTheCell bool, valueTok Token) returns bool
 		if self.valueIsManagedHeap(value) 'aRecord'
@@ -98482,11 +98538,13 @@ export type Parser
 			ordinary gives false
 			firstMayBeNamed or
 			unknownMember gives true
+			messageSend gives labelTok.value.equals(ServiceSendTimeoutLabel)
 			allPositional panic("consumeArgLabel: `allPositional` returns above — a builtin's label verdict is decided whole, before argIndex is consulted, so it must never reach the first-argument rule")
 		end 'firstArgRegime'
 
 		let laterArgMayBeUnlabelled = match rule 'laterArgRegime'
 			ordinary or
+			messageSend or
 			firstMayBeNamed gives false
 			unknownMember gives true
 			allPositional panic("consumeArgLabel: `allPositional` returns above — a builtin's label verdict is decided whole, before argIndex is consulted, so it must never reach the later-argument rule")

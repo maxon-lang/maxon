@@ -35,41 +35,24 @@ export union LspWriterCommand
 	report(uri String, clientVersion ClientDocumentVersion, outcome ProjectCheckOutcome)
 end 'LspWriterCommand'
 
-// See `stdlib/Log.maxon`'s `LogSink.write` for why the retries here yield and where they can still
-// livelock.
+// A `ForeverMs` send fails `mailboxFull` only for a cancelled sender: here its command is dropped,
+// and below its question answers false.
 module function submitToLspWriter(writer LspStdoutWriter.handle, command LspWriterCommand)
-	var pending = command.clone()
-
-	while true 'untilQueued'
-		try writer.perform(pending) otherwise (e) 'refused'
-			match e 'why'
-				mailboxFull(back) then pending = back
-				serviceStopped then panic("submitToLspWriter: the stdout writer stopped while the session still held its handle")
-			end 'why'
-
-			Scheduler.yield()
-			continue
-		end 'refused'
-
-		return
-	end 'untilQueued'
+	try writer.perform(command.clone(), sendTimeout: ForeverMs) otherwise (e) 'refused'
+		match e 'why'
+			mailboxFull then return
+			serviceStopped then panic("submitToLspWriter: the stdout writer stopped while the session still held its handle")
+		end 'why'
+	end 'refused'
 end 'submitToLspWriter'
 
 export function lspWriterHoldsVersion(writer LspStdoutWriter.handle, uri String, version LspDocumentVersion) returns bool
-	while true 'untilAnswered'
-		let current = try await writer.isCurrent(uri.clone(), version: version) otherwise (e) 'refused'
-			match e 'why'
-				mailboxFull then Scheduler.yield()
-				serviceStopped then return false
-			end 'why'
-
-			continue
-		end 'refused'
-
-		return current
-	end 'untilAnswered'
-
-	panic("lspWriterHoldsVersion: the retry loop ends only by returning the writer's answer")
+	return try await writer.isCurrent(uri.clone(), version: version, sendTimeout: ForeverMs) otherwise (e) 'refused'
+		match e 'why'
+			mailboxFull or
+			serviceStopped then return false
+		end 'why'
+	end 'refused'
 end 'lspWriterHoldsVersion'
 
 // The one writer of the client's stream, spawned as a service: a project check runs on a strand of its

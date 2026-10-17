@@ -36,9 +36,11 @@
 // `try byteAt(index) otherwise panic("String.byteAtOrPanic: index out of bounds — …")`: ordinary Maxon
 // reaching `osPanic` with a real line and a real message. Only a SYNTHESIZED runtime function, which has no
 // source line and no message to bake, needs a number instead.
-// ⇒ **THE NEXT ENTRY TAKES THE NEXT FREE NUMBER ABOVE 70, WHICH IS 98.** 76, 80 and 108 are vacant
-// and stay so: reserving a vacated number would be this space defending against a claimant that no
-// longer exists — the very thing the paragraph above rejects. 127 and above are not ours either:
+// ⇒ **NO NUMBER IS FREE: 71 TO 126 ARE TAKEN BUT FOR 76, 80 AND 108, WHICH ARE VACANT AND STAY SO.**
+// Reserving a vacated number would be this space defending against a claimant that no longer exists —
+// the very thing the paragraph above rejects. So the next abort has no number to take: its author
+// puts the numbering to the user before writing it, rather than reusing one of those three or
+// reaching past 126. 127 and above are not ours either:
 // 127 is the shell's "command not found", which this repository reads as "the binary was never
 // written", and 128 and up are a signal's death (128 + the signal), so an abort there is
 // indistinguishable from the process being killed.
@@ -223,7 +225,8 @@ export enum RuntimeAbort
 	// finding into its answer instead: the check readies it as stuck rather than aborting.
 	//
 	// ⭐ **AN `awaitAny` REACHES IT ON THE SAME ARGUMENT, K THREADS INSTEAD OF ONE.** ⚠ An **EMPTY** array
-	// reaches it too, and correctly: awaiting any of zero promises can never complete.
+	// reaches it too, and correctly: awaiting any of zero promises can never complete. A send waiting with
+	// `ForeverMs` reaches it the same way: it arms no timer.
 	//
 	// ⭐ **IT IS AN ABORT AND NOT A HANG**, because a deadlock is a defect in the program or in the runtime
 	// and the honest response is to say so and stop.
@@ -237,8 +240,8 @@ export enum RuntimeAbort
 	// `__gt_register_park`: the park note carries a kind it does not register. `GtRuntime`'s
 	// `GtParkKind.timer` / `GtParkKind.netpoll` / `GtParkKind.netpollAny` /
 	// `GtParkKind.awaitPromise` / `GtParkKind.awaitAny` / `GtParkKind.quiesce` are the kinds it
-	// registers, and `GtParkKind.yielded` and `GtParkKind.preempt` are placed and `GtParkKind.mailbox`
-	// committed by the strand runner and never reach it — so any other value is a COMPILER bug rather than a program's, and it is silent
+	// registers, and `GtParkKind.yielded` and `GtParkKind.preempt` are placed and `GtParkKind.mailbox` and
+	// `GtParkKind.mailboxSend` committed by the strand runner and never reach it — so any other value is a COMPILER bug rather than a program's, and it is silent
 	// without this: the thread would be suspended having been registered on NO store at all, which is
 	// a hang three functions away from its cause. It is a separate code from `schedulerDeadlock`
 	// above, this registry's founding rule: a runtime that cannot register a park and a scheduler that
@@ -302,6 +305,14 @@ export enum RuntimeAbort
 	// ⚠ **NO SPEC REACHES IT**: it takes ten thousand simultaneously blocked machines. It is proved by lowering
 	// the limit, which a `procs: 4` service program then crosses on its third machine.
 	schedulerThreadExhaustion = 97
+
+	// ⛔ `__mbox_send`: THE SEND PROTOCOL IS BROKEN — one invariant, between a waiting sender and its wakers,
+	// checked at its two ends. A sender about to wait must hold its message in its staging buffer
+	// (`GtOffStaging`), because the receive that frees a slot copies the message from there; any other
+	// address would deliver whatever that buffer held. A woken sender must find an outcome its waker
+	// published (`MailboxRuntime.MboxSendWake`), or its send would answer a status nobody decided. Both are
+	// COMPILER bugs rather than a program's, and two ends of one invariant report one number.
+	serviceSendProtocolBroken = 98
 
 	// ⛔ `__gt_morestack` and `__gt_spawn`: the OS REFUSED the pages for a green thread's stack. Unguarded,
 	// the grower copies the old stack to `<refused base> + size` and the spawn seeds its first frame there —
