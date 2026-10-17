@@ -181,6 +181,7 @@ func @main {
   __il_cont#4:
     x64.leaRegFunc rcx, [rip + Ping.__loop]
     x64.leaRegFunc rax, [rip + Ping.__abandon]
+    x64.movRegImm32 r9, 16
     x64.movRegReg rdx, r8
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
@@ -193,12 +194,11 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect __gt_cell_alloc
     x64.movRegReg rbx, r8
-    x64.movRegImm32 rcx, 24
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
+    x64.callDirect __mbox_staging
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 16], rbx
+    x64.storeBaseDispReg.word64 [r8 + 8], rbx
+    x64.movRegImm32 rax, 16
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegReg rdx, r8
     x64.callDirect __mbox_send
@@ -284,8 +284,6 @@ func @Ping.__loop {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
     x64.prologue 32
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
@@ -298,10 +296,8 @@ func @Ping.__loop {
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=hit] @__jumptable_6
   __shutdown:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 16]
-    x64.storeBaseDispReg.word64 [r12 + 56], rax
-    x64.movRegReg rcx, r8
-    x64.callDirect __mm_decref
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.storeBaseDispReg.word64 [r12 + 72], rax
   stopping:
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_close
@@ -317,8 +313,6 @@ func @Ping.__loop {
     x64.callDirect __mbox_service_exit
     x64.movRegReg rax, r8
     x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -329,16 +323,12 @@ func @Ping.__loop {
     x64.callDirect __mbox_abandon
     x64.jmp drain
   hit:
-    x64.loadRegBaseDisp.word64 r13, [r8 + 16]
+    x64.loadRegBaseDisp.word64 rcx, [r8 + 8]
   __il_body:
     x64.aluBaseDispImm32.add [rbx + 0], 1
-    x64.loadRegBaseDisp.word64 r14, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 0]
   __il_cont:
-    x64.movRegReg rcx, r8
-    x64.callDirect __mm_decref
     x64.movRegImm32 rax, 0
-    x64.movRegReg rcx, r13
-    x64.movRegReg rdx, r14
     x64.callDirect __gt_cell_complete
     x64.jmp serve
 }
@@ -347,28 +337,22 @@ func @Ping.__abandon {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=hit] @__jumptable_7
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jumpTable rax, default=abandondone [[0]=__shutdown, [1]=hit] @__jumptable_7
   __shutdown:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
     x64.movRegImm32 rdx, 0
     x64.movRegImm32 rax, 1
     x64.callDirect __gt_cell_complete
-    x64.jmp abandondrop
+    x64.jmp abandondone
   hit:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
     x64.movRegImm32 rdx, 0
     x64.movRegImm32 rax, 1
     x64.callDirect __gt_cell_complete
-  abandondrop:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rax, r8
-    x64.epilogue 40
-    x64.popReg rbx
+  abandondone:
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }
@@ -587,6 +571,7 @@ func @main {
   __il_cont#4:
     x64.leaRegFunc rcx, [rip + Ping.__loop]
     x64.leaRegFunc rax, [rip + Ping.__abandon]
+    x64.movRegImm32 r9, 16
     x64.movRegReg rdx, r8
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
@@ -599,12 +584,11 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.callDirect __gt_cell_alloc
     x64.movRegReg rbx, r8
-    x64.movRegImm32 rcx, 24
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
+    x64.callDirect __mbox_staging
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 16], rbx
+    x64.storeBaseDispReg.word64 [r8 + 8], rbx
+    x64.movRegImm32 rax, 16
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.movRegReg rdx, r8
     x64.callDirect __mbox_send
@@ -690,8 +674,6 @@ func @Ping.__loop {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.pushReg r13
-    x64.pushReg r14
     x64.prologue 32
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
@@ -704,10 +686,8 @@ func @Ping.__loop {
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=hit] @__jumptable_6
   __shutdown:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 16]
-    x64.storeBaseDispReg.word64 [r12 + 56], rax
-    x64.movRegReg rcx, r8
-    x64.callDirect __mm_decref
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.storeBaseDispReg.word64 [r12 + 72], rax
   stopping:
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_close
@@ -723,8 +703,6 @@ func @Ping.__loop {
     x64.callDirect __mbox_service_exit
     x64.movRegReg rax, r8
     x64.epilogue 32
-    x64.popReg r14
-    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -735,16 +713,12 @@ func @Ping.__loop {
     x64.callDirect __mbox_abandon
     x64.jmp drain
   hit:
-    x64.loadRegBaseDisp.word64 r13, [r8 + 16]
+    x64.loadRegBaseDisp.word64 rcx, [r8 + 8]
   __il_body:
     x64.aluBaseDispImm32.add [rbx + 0], 1
-    x64.loadRegBaseDisp.word64 r14, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 0]
   __il_cont:
-    x64.movRegReg rcx, r8
-    x64.callDirect __mm_decref
     x64.movRegImm32 rax, 0
-    x64.movRegReg rcx, r13
-    x64.movRegReg rdx, r14
     x64.callDirect __gt_cell_complete
     x64.jmp serve
 }
@@ -753,28 +727,22 @@ func @Ping.__abandon {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.jumpTable rax, default=abandondrop [[0]=__shutdown, [1]=hit] @__jumptable_7
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jumpTable rax, default=abandondone [[0]=__shutdown, [1]=hit] @__jumptable_7
   __shutdown:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
     x64.movRegImm32 rdx, 0
     x64.movRegImm32 rax, 1
     x64.callDirect __gt_cell_complete
-    x64.jmp abandondrop
+    x64.jmp abandondone
   hit:
-    x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
     x64.movRegImm32 rdx, 0
     x64.movRegImm32 rax, 1
     x64.callDirect __gt_cell_complete
-  abandondrop:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rax, r8
-    x64.epilogue 40
-    x64.popReg rbx
+  abandondone:
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }
@@ -990,6 +958,7 @@ func @main {
   __il_cont#4:
     arm64.leaFuncAddr x0, Ping.__loop
     arm64.leaFuncAddr x2, Ping.__abandon
+    arm64.movImm x3, 16
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
@@ -1000,13 +969,12 @@ func @main {
     arm64.movImm x0, 0
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x19, x0
-    arm64.movImm x0, 24
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
+    arm64.bl __mbox_staging
     arm64.movRegReg x1, x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 16], x19
+    arm64.storeBaseDispReg.word64 [x1 + 8], x19
+    arm64.movImm x2, 16
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.bl __mbox_send
     arm64.movRegReg x0, x19
@@ -1088,9 +1056,7 @@ func @main {
 
 func @Ping.__loop {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
+    arm64.prologue 32
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
@@ -1104,9 +1070,8 @@ func @Ping.__loop {
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=hit] @__jumptable_6
   __shutdown:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
-    arm64.storeBaseDispReg.word64 [x20 + 56], x1
-    arm64.bl __mm_decref
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.storeBaseDispReg.word64 [x20 + 72], x0
   stopping:
     arm64.movRegReg x0, x20
     arm64.bl __mbox_close
@@ -1124,54 +1089,43 @@ func @Ping.__loop {
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
+    arm64.epilogue 32
     arm64.ret
   abandon:
     arm64.movRegReg x0, x20
     arm64.bl __mbox_abandon
     arm64.b drain
   hit:
-    arm64.loadRegBaseDisp.word64 x21, [x0 + 16]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
   __il_body:
     arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.add x1, x1, 1
     arm64.storeBaseDispReg.word64 [x19 + 0], x1
-    arm64.loadRegBaseDisp.word64 x22, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
   __il_cont:
-    arm64.bl __mm_decref
     arm64.movImm x2, 0
-    arm64.movRegReg x0, x21
-    arm64.movRegReg x1, x22
     arm64.bl __gt_cell_complete
     arm64.b serve
 }
 
 func @Ping.__abandon {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=hit] @__jumptable_7
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=abandondone [[0]=__shutdown, [1]=hit] @__jumptable_7
   __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.movImm x1, 0
     arm64.movImm x2, 1
     arm64.bl __gt_cell_complete
-    arm64.b abandondrop
+    arm64.b abandondone
   hit:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.movImm x1, 0
     arm64.movImm x2, 1
     arm64.bl __gt_cell_complete
-  abandondrop:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
+  abandondone:
+    arm64.epilogue 16
     arm64.ret
 }
 
@@ -1384,6 +1338,7 @@ func @main {
   __il_cont#4:
     arm64.leaFuncAddr x0, Ping.__loop
     arm64.leaFuncAddr x2, Ping.__abandon
+    arm64.movImm x3, 16
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
@@ -1394,13 +1349,12 @@ func @main {
     arm64.movImm x0, 0
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x19, x0
-    arm64.movImm x0, 24
-    arm64.movImm x1, 0
-    arm64.bl __mm_alloc
+    arm64.bl __mbox_staging
     arm64.movRegReg x1, x0
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 16], x19
+    arm64.storeBaseDispReg.word64 [x1 + 8], x19
+    arm64.movImm x2, 16
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.bl __mbox_send
     arm64.movRegReg x0, x19
@@ -1482,9 +1436,7 @@ func @main {
 
 func @Ping.__loop {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot3, x22
-    arm64.storeSlotReg slot2, x21
+    arm64.prologue 32
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
@@ -1498,9 +1450,8 @@ func @Ping.__loop {
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=hit] @__jumptable_6
   __shutdown:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
-    arm64.storeBaseDispReg.word64 [x20 + 56], x1
-    arm64.bl __mm_decref
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
+    arm64.storeBaseDispReg.word64 [x20 + 72], x0
   stopping:
     arm64.movRegReg x0, x20
     arm64.bl __mbox_close
@@ -1518,54 +1469,43 @@ func @Ping.__loop {
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.loadRegSlot x22, slot3
-    arm64.epilogue 48
+    arm64.epilogue 32
     arm64.ret
   abandon:
     arm64.movRegReg x0, x20
     arm64.bl __mbox_abandon
     arm64.b drain
   hit:
-    arm64.loadRegBaseDisp.word64 x21, [x0 + 16]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
   __il_body:
     arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.add x1, x1, 1
     arm64.storeBaseDispReg.word64 [x19 + 0], x1
-    arm64.loadRegBaseDisp.word64 x22, [x19 + 0]
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
   __il_cont:
-    arm64.bl __mm_decref
     arm64.movImm x2, 0
-    arm64.movRegReg x0, x21
-    arm64.movRegReg x1, x22
     arm64.bl __gt_cell_complete
     arm64.b serve
 }
 
 func @Ping.__abandon {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.jumpTable x0, default=abandondrop [[0]=__shutdown, [1]=hit] @__jumptable_7
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=abandondone [[0]=__shutdown, [1]=hit] @__jumptable_7
   __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.movImm x1, 0
     arm64.movImm x2, 1
     arm64.bl __gt_cell_complete
-    arm64.b abandondrop
+    arm64.b abandondone
   hit:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 16]
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
     arm64.movImm x1, 0
     arm64.movImm x2, 1
     arm64.bl __gt_cell_complete
-  abandondrop:
-    arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot0
-    arm64.epilogue 32
+  abandondone:
+    arm64.epilogue 16
     arm64.ret
 }
 

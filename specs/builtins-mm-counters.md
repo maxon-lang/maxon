@@ -91,8 +91,13 @@ can say whether a header-free BUFFER leaked:
   machines, processors, lock and park stores), the service mailboxes, the
   subprocess scratch buffers and the DebugStream ring. A green thread is not among them: its STACK comes
   from `osAllocPages`, and its RECORD from the scheduler's own record arena, which is carved from
-  `osAllocPages` chunks — scaffolding like the stack, invisible to both layers. The slab's callers are
-  genuinely header-free and no `__mm_alloc` counter can see them, so they are what the RAW columns report.
+  `osAllocPages` chunks — scaffolding like the stack, invisible to both layers. A mailbox's MESSAGE RING
+  is scaffolding of the same kind, and so is a green thread's staging buffer: whether a message is queued
+  at all depends on whether its receiver was parked when it arrived, so a ring cut, grown or shrunk in
+  these columns would make two identical runs report different counts. The ring comes from the slab's
+  uncounted door (`__slab_alloc_scaffold`, freed by `__slab_free_scaffold`) and the staging buffer from
+  the scheduler's arena; neither is credited to either layer. The slab's other callers are genuinely
+  header-free and no `__mm_alloc` counter can see them, so they are what the RAW columns report.
 
 ⇒ **A case that reads ONE layer is reading a runtime-internal fact; a case that reads the SUM is
 reading the contract.** `bytes-scale-with-the-request` below is written on the sum for exactly this
@@ -119,7 +124,8 @@ is exactly what the process-wide totals answer (`process-totals-are-the-six-summ
 They read two columns. `mmRawAllocTotal` is cumulative and only ever rises; `mmRawAllocLive` rises with
 each slab request and FALLS at `__slab_free`. A `__slab_alloc` caller that frees its region moves the
 live column back: the subprocess runner's and the read probe's per-call scratch, and a service's
-mailbox, freed by whichever of its handle and its service lets go last. A green-thread record is never credited at
+mailbox, freed by whichever of its handle and its service lets go last (its message ring goes back with
+it through the uncounted door and moves neither column). A green-thread record is never credited at
 all: it comes from the scheduler's record arena, not the slab, and is recycled through the scheduler's
 own free lists (`runtime-scratch-reclaim.md`'s `spawn-await-loop-is-bounded`). `__mm_alloc`'s boxes move
 both raw columns and both tracked columns by the same amount, so the reader's subtraction leaves the
@@ -381,40 +387,50 @@ end 'main'
 
 <!-- test: builtins-mm-counters.raw-columns-count-the-scheduler-scaffolding -->
 <!-- tier: stdlib -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
 **THE CASE THAT SAYS THE RAW COLUMNS ARE MAINTAINED AT ALL**, which is the hazard a column reading
 a plausible `0` hides. `__gt_init` takes the scheduler's tables from `__slab_alloc` before `main` runs, and
 `main` itself runs on a green thread, so by its first line the columns already count that scaffolding and
-are not 0. The first window then spawns a service and awaits one message: `__svc_spawn` takes the
-service's MAILBOX straight from `__slab_alloc` (`MailboxRuntime.maxon`) with no box header, so the raw
-columns rise and the tracked ones do not. The third assertion separates the byte column from the count
-column: the mailbox is many bytes wide, so the two deltas cannot be equal unless one of the two
-intrinsics is wired to the other's slot.
+are not 0. Three windows follow, each pinned to the regions it cuts: the spawn, the first message, and a
+second message. `__svc_spawn` takes the service's MAILBOX straight from `__slab_alloc`
+(`MailboxRuntime.maxon`) with no box header, so the raw columns rise and the tracked ones do not. The last
+assertion separates the byte column from the count column: the mailbox is many bytes wide, so the two
+deltas cannot be equal unless one of the two intrinsics is wired to the other's slot.
 
-⭐ **THE MAILBOX IS ONE REGION OF 72 BYTES: ITS 64-BYTE RECORD AND ITS OWN 8-BYTE LOCK WORD.** A mailbox's
-head, tail, closed flag and parked receiver are guarded by a lock of the mailbox's own, not by
-`__sched_lock`, so the region `__svc_spawn` cuts holds the record and, behind it, the lock word — a
-runtime lock is one zeroed word, so the slab's zeroing is its whole initialisation. The byte column counts
-the size requested, not the slab class it lands in, so the fifth assertion pins the first window at
-exactly that: one raw region, 72 bytes. A mailbox still guarded by the scheduler's lock reads 64; a lock
-cut as a region of its own reads two regions.
+⭐ **THE MAILBOX IS ONE REGION: ITS RECORD, ITS ONE-SLOT INBOX AND ITS OWN 8-BYTE LOCK WORD.** A mailbox's
+ring bookkeeping, closed flag and parked receiver are guarded by a lock of the mailbox's own, not by
+`__sched_lock`, and the receiver reads each message from an inbox inside the mailbox, sized at spawn to one
+`Counter.request`. So the region `__svc_spawn` cuts holds the record, the inbox and, behind them, the lock
+word — a runtime lock is one zeroed word, so the slab's zeroing is its whole initialisation. The byte
+column counts the size requested, not the slab class it lands in, so the spawn window is exactly one raw
+region of that size. A lock or an inbox cut as a region of its own reads two regions.
 
-⭐ **A MESSAGE TAKES NO RAW REGION, AND THE SECOND WINDOW IS WHERE THAT IS SAID.** The mailbox's queue is
-intrusive: the request box the send hands over carries the queue's link itself, so `__mbox_send` cuts
-nothing from the slab and `__mbox_recv` hands nothing back. The request box and the reply cell are the
-message's whole cost, and neither is raw — the box is a tracked allocation with a header, the cell a
-green-thread record from the scheduler's arena. So a second message to the SAME service, once its
-mailbox exists, moves NEITHER raw column. A queue that wrapped each request in an envelope of its own
-would move both, by one region per message.
+⭐ **THE FIRST MESSAGE CUTS NO COUNTED REGION, AND THE SECOND WINDOW IS WHERE THAT IS SAID.** At one
+processor with preemption off the spawned service has not run when `main` sends, so no receiver is parked
+and the message is copied into the mailbox's message ring, which that send cuts: 16 slots of one
+`Counter.request` each. The ring is scaffolding, taken from the slab's uncounted door, because whether a
+message queues, and so whether a ring is cut, grown or shrunk, depends on the schedule — a receiver that
+is already parked is handed the message directly and no ring exists — and a timing-dependent allocation
+must not reach the counts. The sender's staging buffer is arena memory and is uncounted too. So the
+window around the first message moves NEITHER raw column. A ring credited to the columns would read one
+region and 16 slots of bytes here.
+
+⭐ **A LATER MESSAGE TAKES NO RAW REGION EITHER, AND THE THIRD WINDOW IS WHERE THAT IS SAID.** A second
+message to the SAME service is copied into the ring, or straight into the parked receiver's inbox, and
+moves neither raw column. The reply cell is not raw: it is a green-thread record from the scheduler's
+arena. A queue that cut a counted region per message would move both.
 
 ⚠ **THE WITNESS IS A SERVICE AND NOT AN `async` SPAWN**, because a green thread moves neither column: its
 record comes from the scheduler's record arena and its stack from `osAllocPages` (see *The two LAYERS*
-above). An `async` spawn and await in the first window would read `after == before`.
+above). An `async` spawn and await would read `after == before`.
 
 ✅ **THE HALVES FAIL FOR DIFFERENT REASONS.** With the raw columns' maintenance removed from
-`__slab_alloc`, the first three assertions go RED — a column nothing maintains reads 0 at `main`'s first
-line and moves in neither window — while the second window's equality holds vacuously; that is why
-`theServiceAllocatedRaw` stays beside it. A queue that allocates per message keeps the first three GREEN and
-fails only the fourth.
+`__slab_alloc`, the scaffolding and mailbox assertions go RED — a column nothing maintains reads 0 at
+`main`'s first line and moves in no window — while the equalities of the second and third windows hold
+vacuously; that is why the mailbox's region is counted beside them. A ring or a staging buffer taken from
+the counted door fails the second window, and a queue that cuts a counted region per message fails the
+third.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -432,61 +448,69 @@ type Counter
 	end 'next'
 end 'Counter'
 
-let mailboxRecordBytes = 64
+let mailboxRecordBytes = 88
 let lockWordBytes = 8
+let requestSlotBytes = 24
 
 function main() returns ExitCode
 	let before = __Builtins.mmRawAllocTotal()
 	let bytesBefore = __Builtins.mmRawAllocBytes()
 	let c = spawn Counter.create()
+	let afterSpawn = __Builtins.mmRawAllocTotal()
+	let bytesAfterSpawn = __Builtins.mmRawAllocBytes()
 	let a = try await c.next(1) otherwise 0
-	let after = __Builtins.mmRawAllocTotal()
-	let bytesAfter = __Builtins.mmRawAllocBytes()
+	let afterFirst = __Builtins.mmRawAllocTotal()
+	let bytesAfterFirst = __Builtins.mmRawAllocBytes()
 	let b = try await c.next(a) otherwise 0
 	let afterSecond = __Builtins.mmRawAllocTotal()
 	let bytesAfterSecond = __Builtins.mmRawAllocBytes()
-	var score = b - 1
+	var score = b - 3
 	if before > 0 'theSchedulerIsInstalledBeforeMain'
 		score = score + 1
 	end 'theSchedulerIsInstalledBeforeMain'
-	if after > before 'theServiceAllocatedRaw'
+	if afterSpawn - before == 1 and bytesAfterSpawn - bytesBefore == mailboxRecordBytes + requestSlotBytes + lockWordBytes 'theMailboxCarriesItsInboxAndLock'
 		score = score + 2
-	end 'theServiceAllocatedRaw'
-	if bytesAfter - bytesBefore > after - before 'bytesAreBytesNotACount'
-		score = score + 3
-	end 'bytesAreBytesNotACount'
-	if afterSecond == after and bytesAfterSecond == bytesAfter 'aMessageTakesNoRawRegion'
+	end 'theMailboxCarriesItsInboxAndLock'
+	if afterFirst == afterSpawn and bytesAfterFirst == bytesAfterSpawn 'theFirstQueuedMessageCutsNoCountedRegion'
 		score = score + 4
-	end 'aMessageTakesNoRawRegion'
-	if after - before == 1 and bytesAfter - bytesBefore == mailboxRecordBytes + lockWordBytes 'theMailboxCarriesItsOwnLock'
-		score = score + 5
-	end 'theMailboxCarriesItsOwnLock'
+	end 'theFirstQueuedMessageCutsNoCountedRegion'
+	if afterSecond == afterFirst and bytesAfterSecond == bytesAfterFirst 'aLaterMessageTakesNoRawRegion'
+		score = score + 8
+	end 'aLaterMessageTakesNoRawRegion'
+	if bytesAfterSpawn - bytesBefore > afterSpawn - before 'bytesAreBytesNotACount'
+		score = score + 16
+	end 'bytesAreBytesNotACount'
 	return score as ExitCode
 end 'main'
 ```
 ```exitcode
-17
+31
 ```
 
 <!-- test: builtins-mm-counters.raw-live-falls-below-raw-total -->
 <!-- tier: stdlib -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
 **THE CASE THAT PINS THE RAW COLUMNS AS TWO NUMBERS: A COUNTED CALLER FREES, SO `live` FALLS BELOW
-`total`.** The caller is a service's MAILBOX, the one raw region a service owns. `__svc_spawn` cuts it
-from `__slab_alloc`, and whichever of its two owners lets go LAST hands it back through `__slab_free`:
-the handle, dropped when `serveOnce` returns, closes the mailbox, and the service's green thread, waking
-to a closed and drained queue, runs `__mbox_service_exit` and frees it. So the window around `serveOnce`
-and the wait after it credits `total` by exactly ONE region and leaves `live` where it started. A
-runtime whose free door did not debit the live column would leave `live` one above.
+`total`.** The caller is a service's MAILBOX, the one counted raw region a service owns. `__svc_spawn`
+cuts it from `__slab_alloc`, and whichever of its two owners lets go LAST hands it back through
+`__slab_free`: the handle, dropped when `serveOnce` returns, closes the mailbox, and the service's green
+thread, waking to a closed and drained queue, runs `__mbox_service_exit` and frees it. So the window around
+`serveOnce` and the wait after it credits `total` by exactly ONE region and leaves `live` where it started.
+A runtime whose free door did not debit the live column would leave `live` one above.
 
-⭐ **EXACTLY ONE, BECAUSE A MESSAGE TAKES NO RAW REGION.** The awaited `next` is a real message, and the
-mailbox's queue is intrusive — the request box carries the link — so the send cuts nothing from the slab.
-A queue that wrapped each request in an envelope of its own would credit `total` once more per message
-and free it again on the pop, so `live` would still come back and only the count would tell.
+⭐ **EXACTLY ONE, BECAUSE A MESSAGE TAKES NO COUNTED REGION.** At one processor with preemption off the
+service has not run when `main` sends, so the awaited `next` is queued and its send cuts the mailbox's
+message ring. The ring is scaffolding from the slab's uncounted door, freed with the mailbox through the
+matching uncounted door: whether a ring exists depends on whether the receiver was parked when a message
+arrived, and a timing-dependent allocation must not reach the counts. The sender's staging buffer is arena
+memory and uncounted too. A queue that wrapped each request in an envelope of its own, or took its ring
+from the counted door, would credit `total` once more and free it again, so `live` would still come back
+and only the count would tell.
 
 ⚠ **THE WAIT IS A BOUNDED YIELD LOOP, NOT A FIXED NUMBER OF YIELDS**, because the free runs on the
-SERVICE's green thread after the handle drop has made it ready, and on a multi-processor run another
-machine may be the one to run it. At one processor the first yield runs it. The budget is what keeps a
-runtime that never frees the mailbox a red case rather than a hang.
+SERVICE's green thread after the handle drop has made it ready. At one processor the first yield runs it.
+The budget is what keeps a runtime that never frees the mailbox a red case rather than a hang.
 
 It is asserted only where there is something to compare — the window credited something, so the count
 moved — because `0 == 0` says nothing about a runtime that maintains no raw counter at all.
@@ -546,6 +570,70 @@ end 'main'
 ```
 ```exitcode
 15
+```
+
+<!-- test: builtins-mm-counters.a-message-moves-no-tracked-allocation -->
+<!-- tier: stdlib -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+⭐⭐ **A MESSAGE IS COPIED INTO ITS MAILBOX, SO SENDING ONE MOVES NO TRACKED COLUMN.** The sender fills its
+green thread's staging buffer and `__mbox_send` copies it into the mailbox's ring, or into the mailbox's
+inbox when the receiver is parked; the receiver reads it from the inbox. Nothing is boxed, so `mmAllocTotal` does not move per message. The case
+compares two windows on one service whose messages carry only `Integer`s: ONE awaited `read`, and
+eight fire-and-forget `add`s followed by the same awaited `read`. The two must move the tracked count by
+the same amount — whatever an awaited reply costs, it costs it once in each window — so a message that
+allocated a tracked box would put the second window eight above the first, and nothing else can.
+
+⚠ **THE WARM-UP `read` IS WHAT MAKES THE WINDOWS COMPARABLE.** It is sent before either window, so every
+one-time cost of a first message is paid before the first reading. The mailbox's ring and `main`'s staging
+buffer are scaffolding outside both layers, so this case reads only the tracked column and neither can
+move it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Adder
+	var total as Integer
+
+	static function create() returns Self
+		return Self{total: 0}
+	end 'create'
+
+	export function add(n Integer)
+		self.total = self.total + n
+	end 'add'
+
+	export function read() returns Integer
+		return self.total
+	end 'read'
+end 'Adder'
+
+let queuedMessages = 8
+let sumOfQueued = 28
+
+function main() returns ExitCode
+	let c = spawn Adder.create()
+	let warm = try await c.read() otherwise -1
+	let oneBefore = __Builtins.mmAllocTotal()
+	let one = try await c.read() otherwise -1
+	let oneAfter = __Builtins.mmAllocTotal()
+	let manyBefore = __Builtins.mmAllocTotal()
+	for i in 0 upto queuedMessages 'queue'
+		c.add(i)
+	end 'queue'
+	let many = try await c.read() otherwise -1
+	let manyAfter = __Builtins.mmAllocTotal()
+	var score = 0 as Count
+	if warm == 0 and one == 0 and many == sumOfQueued 'everyMessageWasHandled'
+		score = score + 1
+	end 'everyMessageWasHandled'
+	if manyAfter - manyBefore == oneAfter - oneBefore 'aMessageMovesNoTrackedAllocation'
+		score = score + 2
+	end 'aMessageMovesNoTrackedAllocation'
+	return score as ExitCode
+end 'main'
+```
+```exitcode
+3
 ```
 
 <!-- test: builtins-mm-counters.all-six-run-on-wasm -->

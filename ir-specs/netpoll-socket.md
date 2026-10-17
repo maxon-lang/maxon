@@ -541,7 +541,7 @@ func @__np_pd_mark_timed_out {
     x64.movRegImm32 rdi, 0
     x64.subRegReg rdi, rdi, rdx
     x64.leaRegRegImm32 rdx, rdx, -1
-    x64.leaRegRegImm32 rsi, rsi, 616
+    x64.leaRegRegImm32 rsi, rsi, 624
     x64.leaRegGlobal r8, __sched_lock_depth_sink
     x64.andRegReg rsi, rsi, rdi
     x64.andRegReg r8, r8, rdx
@@ -596,7 +596,7 @@ func @__np_pd_mark_timed_out {
     x64.movRegImm32 rdx, 0
     x64.subRegReg rdx, rdx, rax
     x64.leaRegRegImm32 rax, rax, -1
-    x64.leaRegRegImm32 rcx, rcx, 616
+    x64.leaRegRegImm32 rcx, rcx, 624
     x64.leaRegGlobal rsi, __sched_lock_depth_sink
     x64.andRegReg rcx, rcx, rdx
     x64.andRegReg rsi, rsi, rax
@@ -1076,7 +1076,7 @@ func @__np_pd_mark_timed_out {
     x64.movRegImm32 rdi, 0
     x64.subRegReg rdi, rdi, rdx
     x64.leaRegRegImm32 rdx, rdx, -1
-    x64.leaRegRegImm32 rsi, rsi, 616
+    x64.leaRegRegImm32 rsi, rsi, 624
     x64.leaRegGlobal r8, __sched_lock_depth_sink
     x64.andRegReg rsi, rsi, rdi
     x64.andRegReg r8, r8, rdx
@@ -1131,7 +1131,7 @@ func @__np_pd_mark_timed_out {
     x64.movRegImm32 rdx, 0
     x64.subRegReg rdx, rdx, rax
     x64.leaRegRegImm32 rax, rax, -1
-    x64.leaRegRegImm32 rcx, rcx, 616
+    x64.leaRegRegImm32 rcx, rcx, 624
     x64.leaRegGlobal rsi, __sched_lock_depth_sink
     x64.andRegReg rcx, rcx, rdx
     x64.andRegReg rsi, rsi, rax
@@ -1623,7 +1623,7 @@ func @__np_pd_mark_timed_out {
     arm64.movImm x4, 0
     arm64.sub x4, x4, x2
     arm64.sub x2, x2, 1
-    arm64.add x3, x3, 616
+    arm64.add x3, x3, 624
     arm64.leaGlobal x5, __sched_lock_depth_sink
     arm64.and x3, x3, x4
     arm64.and x2, x5, x2
@@ -1684,7 +1684,7 @@ func @__np_pd_mark_timed_out {
     arm64.movImm x3, 0
     arm64.sub x3, x3, x1
     arm64.sub x1, x1, 1
-    arm64.add x2, x2, 616
+    arm64.add x2, x2, 624
     arm64.leaGlobal x4, __sched_lock_depth_sink
     arm64.and x2, x2, x3
     arm64.and x1, x4, x1
@@ -2181,7 +2181,7 @@ func @__np_pd_mark_timed_out {
     arm64.movImm x4, 0
     arm64.sub x4, x4, x2
     arm64.sub x2, x2, 1
-    arm64.add x3, x3, 616
+    arm64.add x3, x3, 624
     arm64.leaGlobal x5, __sched_lock_depth_sink
     arm64.and x3, x3, x4
     arm64.and x2, x5, x2
@@ -2242,7 +2242,7 @@ func @__np_pd_mark_timed_out {
     arm64.movImm x3, 0
     arm64.sub x3, x3, x1
     arm64.sub x1, x1, 1
-    arm64.add x2, x2, 616
+    arm64.add x2, x2, 624
     arm64.leaGlobal x4, __sched_lock_depth_sink
     arm64.and x2, x2, x3
     arm64.and x1, x4, x1

@@ -998,25 +998,17 @@ module function fieldIsAServiceWitnessHalf(field PayloadField) returns bool
 	return bytesStartWith(field.name, prefix: ServiceWitnessHalfSlotPrefix)
 end 'fieldIsAServiceWitnessHalf'
 
-function serviceLinkPayload() returns PayloadField
-	return PayloadField.create(ServiceLinkSlotName, declaredType: MaxonType.integer, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText, isLet: false)
-end 'serviceLinkPayload'
-
-module function fieldIsTheServiceLink(field PayloadField) returns bool
-	return field.name.equals(ServiceLinkSlotName)
-end 'fieldIsTheServiceLink'
-
-// ⭐ **THE PAYLOAD SLOT OF A MESSAGE'S PARAMETER `paramIndex`** — its position plus one for the
-// leading link slot and one for every interface-typed parameter before it, whose witness half takes
-// the slot after it. The send slots an argument through it and the loop loads one through it, so
-// the two cannot come to name different slots.
+// ⭐ **THE PAYLOAD SLOT OF A MESSAGE'S PARAMETER `paramIndex`** — its position plus one for every
+// interface-typed parameter before it, whose witness half takes the slot after it. The send slots
+// an argument through it and the loop loads one through it, so the two cannot come to name
+// different slots.
 module function serviceParamPayloadSlot(payloads PayloadFieldArray, paramIndex ParamCount) returns PayloadSlotIndex
 	var seen = 0 as ParamCount
 
 	for slot in 0 upto payloads.count() 'eachSlot'
 		let field = try payloads.get(slot) otherwise panic("serviceParamPayloadSlot: payloads.get OOB at {slot} on a list walked to its own count")
 
-		if fieldIsAServiceWitnessHalf(field) or fieldIsTheServiceLink(field) 'aCompilersSlot'
+		if fieldIsAServiceWitnessHalf(field) 'aCompilersSlot'
 			continue
 		end 'aCompilersSlot'
 
@@ -1315,7 +1307,6 @@ module function buildServiceRequestUnion(signatures ProgramSignatures, typeName 
 	// nothing declares what `shutdown` hands back — so the slot is filled and completed and never read. See
 	// there for the argument; a uniform variant shape is what this file owes, not a reachable reply.
 	var shutdownPayloads = PayloadFieldArray.create()
-	shutdownPayloads.push(serviceLinkPayload())
 	shutdownPayloads.push(PayloadField.create(ServiceReplySlotName, declaredType: MaxonType.integer, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText, isLet: false))
 	addServiceRequestCase(request, caseName: ServiceShutdownCaseName, payloads: shutdownPayloads)
 
@@ -1327,7 +1318,7 @@ module function buildServiceRequestUnion(signatures ProgramSignatures, typeName 
 	return request
 end 'buildServiceRequestUnion'
 
-// One message's payload list: the mailbox link, its parameters as declared, then the reply slot
+// One message's payload list: its parameters as declared, then the reply slot
 // when the message HAS a reply to deliver. A message that returns nothing and throws nothing is
 // fire-and-forget — nothing waits on it, so there is no cell to carry and no slot to make one for.
 function serviceRequestPayloads(signatures ProgramSignatures, typeName ByteArray, methodName ByteArray, declFilePath FilePath, into TypeNameInterner) returns PayloadFieldArray
@@ -1336,7 +1327,6 @@ function serviceRequestPayloads(signatures ProgramSignatures, typeName ByteArray
 	let decl = serviceFirstDeclOf(decls, key: key)
 
 	var payloads = PayloadFieldArray.create()
-	payloads.push(serviceLinkPayload())
 
 	for p in 0 upto decl.paramTypes.count() 'eachParam'
 		let declared = try decl.paramTypes.get(p) otherwise panic("serviceRequestPayloads: paramTypes.get OOB at {p} below count {decl.paramTypes.count()} for '{String.from(key)}'")
@@ -1497,12 +1487,6 @@ end 'serviceReplyErrorLayout'
 // the case count rather than written down, exactly as `Project.addBuiltinEnumCase` derives a builtin error
 // enum's — a literal here would be a second statement of the position and the two are free to disagree.
 function addServiceRequestCase(request EnumLayout, caseName ByteArray, payloads PayloadFieldArray)
-	let leading = try payloads.get(ServiceLinkSlotIndex) otherwise panic("addServiceRequestCase: variant `{String.from(caseName)}` of `{String.from(request.name)}` carries no payload slots, so it has no `{String.from(ServiceLinkSlotName)}` link for the mailbox to queue it by")
-
-	if not fieldIsTheServiceLink(leading) 'linkIsFirst'
-		panic("addServiceRequestCase: variant `{String.from(caseName)}` of `{String.from(request.name)}` leads with `{String.from(leading.name)}`, not `{String.from(ServiceLinkSlotName)}` — the mailbox queues a request by the word at `ServiceLinkOffset`, so every variant must put its link there")
-	end 'linkIsFirst'
-
 	let tag = request.caseCount()
 	request.addCase(caseName, tag: tag as FullRangeInt, rawValue: "{tag}", declaresRawValue: false, payloads: payloads, backingFields: sharedEmptyEnumBackingFields)
 end 'addServiceRequestCase'
@@ -1706,6 +1690,26 @@ end 'serviceHandleAdmits'
 module function requireServiceRequestLayout(signatures ProgramSignatures, typeName ByteArray) returns EnumLayout
 	return try serviceRequestLayoutOf(signatures, typeName: typeName) otherwise panic("requireServiceRequestLayout: nothing declares `union {String.from(serviceRequestCompanionName(typeName))}` — the companions are minted for every accepted spawn target inside `queryProgramSignatures`, before any body is parsed")
 end 'requireServiceRequestLayout'
+
+module function serviceRequestStagingBytes(signatures ProgramSignatures) returns ByteOffset
+	var owners = serviceCompanionRoster(signatures)
+
+	for interfaceName in signatures.interfacesWithHandles() 'eachInterfaceHandle'
+		owners.push(interfaceName)
+	end 'eachInterfaceHandle'
+
+	var widest = 0 as ByteOffset
+
+	for owner in owners 'eachRequestUnion'
+		let size = requireServiceRequestLayout(signatures, typeName: owner).boxSizeBytes()
+
+		if size > widest 'wider'
+			widest = size
+		end 'wider'
+	end 'eachRequestUnion'
+
+	return widest
+end 'serviceRequestStagingBytes'
 
 // ⭐⭐ **WHAT `<T>.__loop`'s ARM FOR ONE REQUEST VARIANT RUNS — the ONE answer to "which functions does the
 // loop call?"** `ServiceLoop.buildServiceArm` builds each arm from it, `serviceMessageIndexOf` answers "is this

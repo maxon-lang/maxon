@@ -3489,7 +3489,7 @@ function checkCalls(project Project, module MaxonModule, signatures ProgramSigna
 					witnessTryDispatch(_, _, args, argImmutableNames, _, methodIndex, interfaceDeclIndex, _) then checkWitnessArguments(project, module: module, calls: calls, func: func, signatures: signatures, witnessSlots: witnessSlots, opIndex: opIdx, args: args, argImmutableNames: argImmutableNames, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex, mutationSummary: mutationSummary, provenance: provenance)
 
 					// A service op's arguments are checked at the parser and cannot be checked here: a message's
-					// are inside the request box (typed against the request union's payload fields, which are the
+					// are inside the request (typed against the request union's payload fields, which are the
 					// method's declared parameter types — `ServiceCompanions.serviceRequestPayloads`), and a
 					// `spawn`'s state is the factory `call` op's own result, validated as that call.
 					//
@@ -5165,10 +5165,10 @@ function opYields(op MaxonOp, funcIndexByName FuncIndexByName, callerIndex Eleme
 		errorFlagEncode or
 
 		// A service op neither suspends the frame that wrote it nor is an edge. A `spawn` hands the work
-		// to a green thread of its own and returns a handle; a send appends its request box under its
-		// mailbox's lock and returns. The handler runs on the service's thread, so whether it can park
-		// says nothing about this frame — the opposite of `asyncCall`, whose coroutine runs on this
-		// frame's own thread.
+		// to a green thread of its own and returns a handle; a send copies its request into the mailbox
+		// under the mailbox's lock and returns. The handler runs on the service's thread, so whether it
+		// can park says nothing about this frame — the opposite of `asyncCall`, whose coroutine runs on
+		// this frame's own thread.
 		serviceSpawn or
 		serviceSend or
 		serviceReplyCell or

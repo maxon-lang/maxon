@@ -43946,11 +43946,12 @@ export type Parser
 	// not transitive and a container the handler mints in its own frame whose ELEMENTS are the service's state
 	// passes every static rule there is.
 	//
-	// ⛔ **THE WALK ITSELF IS NOT EMITTED HERE — `ServiceLoop.publishReplyValue` EMITS IT, AT THE PUBLISH.** A
-	// `return` still owes releases before the reply is handed over: this frame's scope drops, and the loop's
-	// drop of the request box's payloads. A local the reply was built over, or a message parameter it holds,
-	// is a second owner until then and none after, so a walk here would abort a reply that crosses with one
-	// owner. What stays here is the refusal of a graph no walk can be built for, which needs a position.
+	// ⛔ **THE WALK ITSELF IS NOT EMITTED HERE — `ServiceLoop.publishReplyValue` EMITS IT, AT THE
+	// PUBLISH.** A `return` still owes releases before the reply is handed over: this frame's scope
+	// drops, and the loop's drop of the message's payloads. A local the reply was built over, or a
+	// message parameter it holds, is a second owner until then and none after, so a walk here would
+	// abort a reply that crosses with one owner. What stays here is the refusal of a graph no walk can
+	// be built for, which needs a position.
 	//
 	// ⚠ **THE BLAME NAMES THE REPLY**, so a refused GRAPH on this road does not describe itself as an
 	// argument of a send.
@@ -45066,7 +45067,7 @@ export type Parser
 			// `try` to catch — but the author who wrote one is asking for the awaitable form, and `try` is
 			// exactly its first token. Refusing it as *"`try` must be applied to a call"* would be true and
 			// useless.
-			serviceSend(_, callee, _, _) then return try self.rejectTriedServiceSend(tryTok, callee: callee)
+			serviceSend(_, callee, _, _, _) then return try self.rejectTriedServiceSend(tryTok, callee: callee)
 			default throws self.notACallTryTarget(tryTok)
 		end 'refused'
 	end 'rejectNonRoutableTryTarget'
@@ -72268,20 +72269,24 @@ export type Parser
 		end 'each'
 	end 'requireAllPayloadsProvided'
 
-	// Emit the box: validate + classify every payload field (type-check each argument) BEFORE any op, then `__mm_alloc` the `8 + maxArity*8` bytes, store the case TAG at
-	// offset 0, store each payload at `8 + slot*8`, and ZERO-FILL the unused slots `[arity, maxArity)`.
+	// Emit the record: validate + classify every payload field (type-check each argument) BEFORE any
+	// op, then open the record — a construct `__mm_alloc`s a box of `8 + maxArity*8` bytes, a service
+	// message takes its green thread's staging buffer (`__mbox_staging`) — store the case TAG at
+	// offset 0, store each payload at `8 + slot*8`, and, for a construct, ZERO-FILL the unused slots
+	// `[arity, maxArity)`.
 	//
-	// ⭐ The box is TAGGED `named(<union>)` — the same tag a scalar enum value carries, so `match`
-	// recognizes it through the one `enumMatchFor` door — and enrolled as an OWNED HEAP TEMPORARY
-	// (`trackOwnedTemp`), so `parseBinding` binds its drop to scope exit and an unbound `Move.walk(5)`
-	// statement is freed at statement end.
+	// ⭐ A construct's box is TAGGED `named(<union>)` — the same tag a scalar enum value carries, so
+	// `match` recognizes it through the one `enumMatchFor` door — and enrolled as an OWNED HEAP
+	// TEMPORARY (`trackOwnedTemp`), so `parseBinding` binds its drop to scope exit and an unbound
+	// `Move.walk(5)` statement is freed at statement end.
 	//
-	// ⭐ **A MANAGED PAYLOAD IS MOVED IN** (`moveInPayload`) — no incref, no copy of an owned value. The
-	// box owns the payload after the store; the source binding is poisoned (E3102) and an owned temporary
-	// is removed from the statement's pending drops. A wholly-scalar union keeps the trivial
-	// destructor; a managed one drops through `__destruct_<U>` (see `emitDecref`/`synthesizeUnionDestructor`).
+	// ⭐ **A MANAGED PAYLOAD IS MOVED IN** (`moveInPayload`) — no incref, no copy of an owned value.
+	// The record owns the payload after the store; the source binding is poisoned (E3102) and an owned
+	// temporary is removed from the statement's pending drops. A wholly-scalar union keeps the trivial
+	// destructor; a managed one drops through `__destruct_<U>` (see
+	// `emitDecref`/`synthesizeUnionDestructor`).
 	//
-	// ⚠ **THE ZERO-FILL IS MANDATORY** even though the slab returns zeroed memory: it pins a
+	// ⚠ **A CONSTRUCT'S ZERO-FILL IS MANDATORY** even though the slab returns zeroed memory: it pins a
 	// deterministic 0 in a narrow case's unused slots, and a NULL slot is exactly what the cascade's
 	// null-guard skips — so a zeroed managed slot is never decref'd as a bogus pointer.
 	function emitEnumBox(layout EnumLayout, caseIndex CaseIndex, args ValueIdArray, argsBareLocal BoolArray, argAnchors TokenIndexArray, caseTok Token, range SourceRange, fill PayloadFill) returns ValueId throws SourceParseError
@@ -72304,7 +72309,7 @@ export type Parser
 			// suite**, blaming the author for an argument they did not write and the compiler minted. Both
 			// sides of this slot are the compiler's, which is what makes skipping it honest rather than a
 			// hole. `moveMessagePayloads` skips the same slot for its own reason, through the same predicate.
-			if fieldIsTheServiceReplySlot(field) or fieldIsAServiceWitnessHalf(field) or fieldIsTheServiceLink(field) 'theCompilersOwnSlot'
+			if fieldIsTheServiceReplySlot(field) or fieldIsAServiceWitnessHalf(field) 'theCompilersOwnSlot'
 				continue
 			end 'theCompilersOwnSlot'
 
@@ -72320,24 +72325,16 @@ export type Parser
 			end 'fill'
 		end 'validate'
 
-		// ⭐⭐ **A MESSAGE'S PAYLOADS ARE TRANSFERRED BEFORE THE BOX EXISTS, AND THE ORDER IS THE WHOLE
-		// DIFFERENCE.** A construct's move-in needs the box (an opaque slot's reference is recorded ON the record
-		// it fills), so it happens at the store. A SEND's transfer can REFUSE — an argument this frame does not
-		// solely own is E3138 — and a refusal after the `__mm_alloc` would leave a box behind that nothing frees:
-		// the enrolment two lines down is what would have made it droppable. `transferConsumedArgs` runs before
-		// its own call op for the same reason.
 		try self.transferPayloadsIntoAGreenThread(fill, args: args, payloads: payloads, argAnchors: argAnchors, caseTok: caseTok)
 
-		let size = self.emitLiteral(layout.boxSizeBytes() as FullRangeInt, valueType: MaxonType.integer, range: range)
-		let box = self.emitBoxAlloc(size, resultTag: ValueTypeTag.named, resultNameId: self.artifact.typeNames.intern(layout.name), range: range)
-		self.trackOwnedTemp(box, exclusivity: OwnedHeapExclusivity.sole)
+		let box = self.openPayloadRecord(layout, fill: fill, range: range)
 
 		self.emitUnionTagStore(box, tag: layout.tagOfIndex(caseIndex), range: range)
 
 		for i in 0 upto payloads.count() 'storeEach'
 			let field = try payloads.get(i) otherwise panic("emitEnumBox: payloads.get OOB at {i} on a list walked to its own count")
 
-			if fieldIsAServiceWitnessHalf(field) or fieldIsTheServiceLink(field) 'storedWithItsValue'
+			if fieldIsAServiceWitnessHalf(field) 'storedWithItsValue'
 				continue
 			end 'storedWithItsValue'
 
@@ -72353,15 +72350,39 @@ export type Parser
 			end 'andItsWitnessHalf'
 		end 'storeEach'
 
-		// The fill keeps a box's bytes deterministic whatever the allocator returns; the union cloner blits
-		// the whole box (`MmRuntime.synthesizeUnionCloner`), so it copies these slots too.
-		for j in payloads.count() as PayloadSlotIndex upto layout.maxPayloadArity() 'zeroFill'
-			let zero = self.emitLiteral(0, valueType: MaxonType.integer, range: range)
-			self.emitIndirectStore(box, offset: layout.payloadSlotOffset(j), value: zero, storageType: MaxonType.integer, range: range)
-		end 'zeroFill'
+		// The fill keeps a box's bytes deterministic whatever the allocator returns; the union cloner
+		// blits the whole box (`MmRuntime.synthesizeUnionCloner`), so it copies these slots too. A
+		// message skips it: it is read only through its live variant (the loop's arm and
+		// `<T>.__abandon`), so the words an earlier message left in the staging buffer are never
+		// followed.
+		match fill 'zeroFillOwnership'
+			unionConstruct then self.zeroFillUnusedPayloadSlots(box, layout: layout, firstUnused: payloads.count() as PayloadSlotIndex, range: range)
+			serviceMessage then break
+		end 'zeroFillOwnership'
 
 		return box
 	end 'emitEnumBox'
+
+	function openPayloadRecord(layout EnumLayout, fill PayloadFill, range SourceRange) returns ValueId
+		match fill 'destination'
+			unionConstruct then return self.allocatedUnionBox(layout, range: range)
+			serviceMessage then return self.emitRuntimeCall(MboxStagingName, args: ValueIdArray.create(), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		end 'destination'
+	end 'openPayloadRecord'
+
+	function allocatedUnionBox(layout EnumLayout, range SourceRange) returns ValueId
+		let size = self.emitLiteral(layout.boxSizeBytes() as FullRangeInt, valueType: MaxonType.integer, range: range)
+		let box = self.emitBoxAlloc(size, resultTag: ValueTypeTag.named, resultNameId: self.artifact.typeNames.intern(layout.name), range: range)
+		self.trackOwnedTemp(box, exclusivity: OwnedHeapExclusivity.sole)
+		return box
+	end 'allocatedUnionBox'
+
+	function zeroFillUnusedPayloadSlots(box ValueId, layout EnumLayout, firstUnused PayloadSlotIndex, range SourceRange)
+		for j in firstUnused upto layout.maxPayloadArity() 'zeroFill'
+			let zero = self.emitLiteral(0, valueType: MaxonType.integer, range: range)
+			self.emitIndirectStore(box, offset: layout.payloadSlotOffset(j), value: zero, storageType: MaxonType.integer, range: range)
+		end 'zeroFill'
+	end 'zeroFillUnusedPayloadSlots'
 
 	function recordPayloadRangeCheck(value ValueId, class PayloadClass, declared MaxonType, layout EnumLayout, anchor Token)
 		match class 'c'
@@ -72415,7 +72436,7 @@ export type Parser
 		for i in 0 upto payloads.count() 'eachAuthored'
 			let field = try payloads.get(i) otherwise panic("moveMessagePayloads: payloads.get OOB at {i} — the loop is bounded by that same count")
 
-			if not fieldIsTheServiceReplySlot(field) and not fieldIsAServiceWitnessHalf(field) and not fieldIsTheServiceLink(field) 'theAuthorsArgument'
+			if not fieldIsTheServiceReplySlot(field) and not fieldIsAServiceWitnessHalf(field) 'theAuthorsArgument'
 				authored.push(HandedOffArgument.create(i, value: try args.get(i) otherwise panic("moveMessagePayloads: args.get OOB at {i} — the caller sized the columns to the variant's payload count"), anchor: self.tokenAt(try argAnchors.get(i) otherwise panic("moveMessagePayloads: argAnchors.get OOB at {i} — filled in lockstep with the args")), door: ThreadHandOffDoor.message(serviceSendArgumentBlame(serviceTypeName, methodName: caseTok.value, paramName: field.name))))
 			end 'theAuthorsArgument'
 		end 'eachAuthored'
@@ -75466,17 +75487,19 @@ export type Parser
 		throw SourceParseError.serviceNotAMessage(serviceNotAMessageRefusal(interfaceName, handleName: base.layout.name, member: memberTok.value, declaresIt: false), line: memberTok.line, column: memberTok.column)
 	end 'dispatchOnInterfaceHandle'
 
-	// ⭐⭐ **`h.m(…)` — BUILD THE REQUEST BOX AND ENQUEUE IT.** The arguments are read by the ORDINARY call
-	// reader (`parseCallArgs` + `fillOmittedArgDefaults`), so a message takes labels, defaults and every
-	// argument diagnostic exactly as a direct call to the same method does; only what happens to them
-	// afterwards is this reader's. They are then SLOTTED into the variant's payload columns through
-	// `argSlotPosition` — the one home of the label-to-position mapping — and handed to `emitEnumBox`, which
-	// types each against the payload field (which IS the parameter's declared type) and MOVES it into the box.
+	// ⭐⭐ **`h.m(…)` — FILL THE REQUEST AND SEND IT.** The arguments are read by the ORDINARY call
+	// reader (`parseCallArgs` + `fillOmittedArgDefaults`), so a message takes labels, defaults and
+	// every argument diagnostic exactly as a direct call to the same method does; only what happens to
+	// them afterwards is this reader's. They are then SLOTTED into the variant's payload columns
+	// through `argSlotPosition` — the one home of the label-to-position mapping — and handed to
+	// `emitEnumBox`, which types each against the payload field (which IS the parameter's declared
+	// type) and MOVES it into the request.
 	//
-	// ⚠ **THE ARGUMENTS NEVER REACH `SemanticCheck.checkArgTypes`, WHICH IS WHY THE TYPING HAPPENS HERE.** The
-	// `serviceSend` op carries a BOX and not an argument list, so the pass that types a call's arguments has
-	// nothing to type. That is the same position a parser-intrinsic container mutator is in, and the refusal
-	// takes the same voice for the same reason (`SlotMismatchVoice.containerElementArgument`).
+	// ⚠ **THE ARGUMENTS NEVER REACH `SemanticCheck.checkArgTypes`, WHICH IS WHY THE TYPING HAPPENS
+	// HERE.** The `serviceSend` op carries a REQUEST and not an argument list, so the pass that types
+	// a call's arguments has nothing to type. That is the same position a parser-intrinsic container
+	// mutator is in, and the refusal takes the same voice for the same reason
+	// (`SlotMismatchVoice.containerElementArgument`).
 	function emitServiceSend(func IrFunction, base StructBase, baseTok Token, memberTok Token, typeName ByteArray, request EnumLayout, caseIndex CaseIndex, route MessageRoute, resultUsed bool) returns ValueId throws SourceParseError
 		let callee = qualifiedMethodName(typeName, methodName: memberTok.value)
 		try self.requireServiceSendResultUnused(resultUsed, request: request, caseIndex: caseIndex, typeName: typeName, memberTok: memberTok)
@@ -75491,10 +75514,11 @@ export type Parser
 		var argLabels = NameRoster.create()
 		var argRanges = SourceRangeArray.create()
 
-		// Filled and DISCARDED, both of them, and each for its own reason. `argRanges` is the column an op
-		// carries so a LATER pass can position a diagnostic about one argument, and a send's op carries a BOX
-		// rather than arguments; `argImmutableNames` blames a binding for E3159, which is keyed by callee
-		// mutation summary — and a message writes a value this frame has given up, so there is nothing to blame.
+		// Filled and DISCARDED, both of them, and each for its own reason. `argRanges` is the column an
+		// op carries so a LATER pass can position a diagnostic about one argument, and a send's op
+		// carries a REQUEST rather than arguments; `argImmutableNames` blames a binding for E3159, which
+		// is keyed by callee mutation summary — and a message writes a value this frame has given up, so
+		// there is nothing to blame.
 		var argImmutableNames = WriteBlameArray.create()
 		var argAnchors = TokenIndexArray.create()
 		let argumentTempFloor = self.bodyState.pendingTempDrops.count()
@@ -75525,7 +75549,7 @@ export type Parser
 
 		self.releaseHandOffBuildTemps(argumentTempFloor, ownedFloor: argumentOwnedFloor, handedOff: slotValues, anchor: memberTok)
 		let box = try self.emitEnumBox(request, caseIndex: caseIndex, args: slotValues, argsBareLocal: bareLocal, argAnchors: slotAnchors, caseTok: memberTok, range: range, fill: PayloadFill.serviceMessage(typeName))
-		return self.emitServiceSendOp(base, box: box, callee: callee, reply: reply, route: route, range: range, argsAreChecked: argsAreChecked)
+		return self.emitServiceSendOp(base, box: box, requestBytes: request.boxSizeBytes() as FullRangeInt, callee: callee, reply: reply, route: route, range: range, argsAreChecked: argsAreChecked)
 	end 'emitServiceSend'
 
 	function widenMessageArgsToInterfaceHandles(payloads PayloadFieldArray, slotValues ValueIdArray, filled BoolArray, firstTok Token, lastTok Token)
@@ -75537,7 +75561,7 @@ export type Parser
 			let slot = position.index()
 			let given = try filled.get(slot) otherwise panic("widenMessageArgsToInterfaceHandles: filled.get OOB at {slot} — the columns are sized to the variant's payload count")
 
-			if not given or fieldIsTheServiceReplySlot(field) or fieldIsAServiceWitnessHalf(field) or fieldIsTheServiceLink(field) 'noArgumentHere'
+			if not given or fieldIsTheServiceReplySlot(field) or fieldIsAServiceWitnessHalf(field) 'noArgumentHere'
 				continue
 			end 'noArgumentHere'
 
@@ -75596,12 +75620,13 @@ export type Parser
 		return (try self.signatures.typeParamOwnerOf(token) otherwise panic("replyTypeParamName: type-parameter token {token} names no declaration's parameter — every token was filed by `ProgramSignatures.recordStruct` from the `uses` list that minted it")).paramName
 	end 'replyTypeParamName'
 
-	// ⭐ **THE FOUR LAYOUT-PARALLEL COLUMNS A REQUEST BOX IS FILLED THROUGH, SEEDED FOR ONE VARIANT.** Both
+	// ⭐ **THE FOUR LAYOUT-PARALLEL COLUMNS A REQUEST IS FILLED THROUGH, SEEDED FOR ONE VARIANT.** Both
 	// doors that build one need all four and neither may seed three — `emitEnumBox` indexes every one of them
 	// by slot, so a column short by an entry is an out-of-bounds panic rather than a missing value.
 	//
-	// A witness-half slot is seeded FILLED: its value is the witness of the argument before it, which the box
-	// store writes beside that argument (`emitEnumBox`), so no source argument ever fills it.
+	// A witness-half slot is seeded FILLED: its value is the witness of the argument before it, which
+	// the payload store writes beside that argument (`emitEnumBox`), so no source argument ever fills
+	// it.
 	//
 	// ⚠ **`bareLocal` IS ALL FALSE AND CANNOT BE OTHERWISE, WHICH IS WHY IT IS SEEDED HERE AND NEVER WRITTEN.**
 	// The transfer a message's payload takes is `handOff`, which resolves the source binding
@@ -75611,28 +75636,27 @@ export type Parser
 	function seedMessageSlots(payloads PayloadFieldArray, anchor ElementIndex, slotValues ValueIdArray, filled BoolArray, bareLocal BoolArray, slotAnchors TokenIndexArray)
 		for field in payloads 'eachSlot'
 			slotValues.push(0)
-			filled.push(fieldIsAServiceWitnessHalf(field) or fieldIsTheServiceLink(field))
+			filled.push(fieldIsAServiceWitnessHalf(field))
 			bareLocal.push(false)
 			slotAnchors.push(anchor)
 		end 'eachSlot'
 	end 'seedMessageSlots'
 
-	// ⭐ **THE ENQUEUE ITSELF — the mailbox out of the handle, and the op.** Written once because BOTH doors
-	// that put a request in a mailbox reach it: an author's message and the compiler's `__shutdown` pill.
-	// They differ in which variant they build and in nothing else, and a second copy of these three lines is a
-	// second chance to load the mailbox from the wrong offset.
+	// ⭐ **THE SEND ITSELF — the mailbox out of the handle, and the op.** Written once because BOTH
+	// doors that put a request in a mailbox reach it: an author's message and the compiler's
+	// `__shutdown` pill. They differ in which variant they build and in nothing else, and a second
+	// copy of these three lines is a second chance to load the mailbox from the wrong offset.
 	//
-	// ⚠ The BOX is enrolled as an owned temporary by `emitEnumBox`, and it must be DRAINED here: the mailbox
-	// owns it from the moment the op is emitted, and the statement-end drop would free a request the service
-	// is about to read.
-	function emitServiceSendOp(base StructBase, box ValueId, callee ByteArray, reply ServiceReplyValue, route MessageRoute, range SourceRange, argsAreChecked bool) returns ValueId
-		self.removeFromPendingTemps(box)
-
+	// ⚠ The request sits in this thread's one staging buffer until the op copies it out, so nothing
+	// between `emitEnumBox`'s fill and the op may send: a nested send would overwrite it.
+	function emitServiceSendOp(base StructBase, box ValueId, requestBytes FullRangeInt, callee ByteArray, reply ServiceReplyValue, route MessageRoute, range SourceRange, argsAreChecked bool) returns ValueId
 		// A table send is a runtime call, not an `indirectCall`, so E3143 does not widen it to every
-		// address-taken function in the program; the stubs it reaches only enqueue.
+		// address-taken function in the program; the stubs it reaches only retag and send.
+		let bytes = self.emitLiteral(requestBytes, valueType: MaxonType.integer, range: range)
+
 		let sent = match route 'route'
-			mailbox gives self.emitMailboxSend(base, box: box, callee: callee, range: range)
-			sendTable(slot, _) gives self.emitRuntimeCall(MboxInterfaceSendName, args: tripleArgs(base.box, second: self.emitLiteral(interfaceSendSlotOffset(slot), valueType: MaxonType.integer, range: range), third: box), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			mailbox gives self.emitMailboxSend(base, box: box, bytes: bytes, callee: callee, range: range)
+			sendTable(slot, _) gives self.emitRuntimeCall(MboxInterfaceSendName, args: quadArgs(base.box, second: self.emitLiteral(interfaceSendSlotOffset(slot), valueType: MaxonType.integer, range: range), third: box, fourth: bytes), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'route'
 
 		if argsAreChecked 'theQuantityDoorIsKept'
@@ -75649,16 +75673,16 @@ export type Parser
 		end 'r'
 	end 'emitServiceSendOp'
 
-	function emitMailboxSend(base StructBase, box ValueId, callee ByteArray, range SourceRange) returns ValueId
+	function emitMailboxSend(base StructBase, box ValueId, bytes ValueId, callee ByteArray, range SourceRange) returns ValueId
 		let mailbox = self.emitFieldLoad(base.box, layout: base.layout, index: ServiceHandleMailboxFieldIndex, range: range)
 		let sent = self.mintValue(ValueTypeTag.void, nameId: UnnamedTypeId)
-		self.artifact.emitOp(self.bodyState.currentBlock, op: MaxonOp.serviceSend(sent, callee: callee, handle: mailbox, request: box), range: range)
+		self.artifact.emitOp(self.bodyState.currentBlock, op: MaxonOp.serviceSend(sent, callee: callee, handle: mailbox, request: box, bytes: bytes), range: range)
 		return sent
 	end 'emitMailboxSend'
 
-	// ⭐ **`h.shutdown()` — THE COMPILER'S POISON PILL, ENQUEUED LIKE ANY OTHER MESSAGE.** Variant 0 carries
-	// only its reply slot, so the box is built through the same `emitEnumBox` an author's message goes
-	// through and the drain behind it is the loop's.
+	// ⭐ **`h.shutdown()` — THE COMPILER'S POISON PILL, ENQUEUED LIKE ANY OTHER MESSAGE.** Variant 0
+	// carries only its reply slot, so the request is filled through the same `emitEnumBox` an author's
+	// message goes through and the drain behind it is the loop's.
 	//
 	// ⛔⛔ **THE PILL IS A STATEMENT, AND THE VALUE POSITION IS REFUSED — which is the OPPOSITE of what
 	// carrying a reply slot suggests, so read this before restoring it.** Variant 0 does carry one
@@ -75686,10 +75710,10 @@ export type Parser
 
 		let range = SourceRange.between(baseTok, last: rparenTok)
 
-		// ⭐ **THE PILL'S ONLY PAYLOAD IS THE REPLY SLOT, so the mint EVERY message's box takes fills the whole
-		// variant here and there is no argument to slot.** `buildServiceRequestUnion` gives variant 0 exactly one
-		// payload, `__reply`, and gives it to every request union there will ever be — so this is not a shape
-		// this door assumes, it is the shape that door builds.
+		// ⭐ **THE PILL'S ONLY PAYLOAD IS THE REPLY SLOT, so the mint EVERY message's request takes fills
+		// the whole variant here and there is no argument to slot.** `buildServiceRequestUnion` gives
+		// variant 0 exactly one payload, `__reply`, and gives it to every request union there will ever
+		// be — so this is not a shape this door assumes, it is the shape that door builds.
 		let payloads = request.payloadsAt(ServiceShutdownCaseIndex)
 		var slotValues = ValueIdArray.create()
 		var filled = BoolArray.create()
@@ -75700,7 +75724,7 @@ export type Parser
 		let reply = self.fillMessageReplySlot(payloads, callee: callee, awaitedService: awaitedServiceOf(route, typeName: typeName), instance: self.serviceInstanceOfHandle(base.box, typeName: typeName), slotValues: slotValues, filled: filled, range: range)
 
 		let box = try self.emitEnumBox(request, caseIndex: ServiceShutdownCaseIndex, args: slotValues, argsBareLocal: bareLocal, argAnchors: slotAnchors, caseTok: memberTok, range: range, fill: PayloadFill.serviceMessage(typeName))
-		return self.emitServiceSendOp(base, box: box, callee: callee, reply: reply, route: route, range: range, argsAreChecked: true)
+		return self.emitServiceSendOp(base, box: box, requestBytes: request.boxSizeBytes() as FullRangeInt, callee: callee, reply: reply, route: route, range: range, argsAreChecked: true)
 	end 'emitServiceShutdown'
 
 	// ⭐ **`h.clone()` — A SECOND HANDLE TO THE SAME SERVICE, NEVER A SECOND SERVICE.** It cannot take
@@ -101691,7 +101715,7 @@ export type Parser
 			let slot = position.index()
 			let given = try filled.get(slot) otherwise panic("serviceArgumentsAreChecked: filled.get OOB at {slot} — the columns are sized to the variant's payload count")
 
-			if not given or fieldIsTheServiceReplySlot(field) or fieldIsAServiceWitnessHalf(field) or fieldIsTheServiceLink(field) 'noArgumentHere'
+			if not given or fieldIsTheServiceReplySlot(field) or fieldIsAServiceWitnessHalf(field) 'noArgumentHere'
 				continue
 			end 'noArgumentHere'
 

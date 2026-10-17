@@ -921,6 +921,301 @@ typealias Integer = int(i64.min to i64.max)
 acc=123
 ```
 
+<!-- test: a-mailbox-grows-past-its-first-ring-and-keeps-fifo-order -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+⭐ **A BACKLOG LONGER THAN THE MAILBOX'S FIRST RING, EVERY MESSAGE CARRYING A HEAP `String`.** At one
+processor with preemption off the service's green thread does not run until `main` parks at the `await`, so
+all 100 `note` messages are queued at once — more than the ring's first 16 slots, so it grows several times
+with managed payloads in it. The handler checks every message against the index FIFO order says it must
+carry, and the reply reports the count, any message that arrived out of place, and the first and last
+three. Exit 0 also says no payload leaked across a grow (exit 101).
+```maxon
+typealias Tally = int(0 to 1000)
+
+let backlog = 100 as Tally
+let edge = 3
+
+type FifoTape
+	var seen as Tally
+	var misplaced as Tally
+	var trail as String
+
+	static function create() returns Self
+		return Self{seen: 0, misplaced: 0, trail: ""}
+	end 'create'
+
+	export function note(s String)
+		if s != "m{self.seen}" 'outOfPlace'
+			self.misplaced = self.misplaced + 1
+		end 'outOfPlace'
+
+		if self.seen < edge or self.seen >= backlog - edge 'atAnEdge'
+			self.trail.append(" {s}")
+		end 'atAnEdge'
+
+		self.seen = self.seen + 1
+	end 'note'
+
+	export function report() returns String
+		return "seen={self.seen} misplaced={self.misplaced}{self.trail}"
+	end 'report'
+end 'FifoTape'
+
+function main() returns ExitCode
+	let h = spawn FifoTape.create()
+
+	for i in 0 upto backlog 'fill'
+		h.note("m{i}")
+	end 'fill'
+
+	let summary = try await h.report() otherwise 'gone'
+		return 9
+	end 'gone'
+
+	print("{summary}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+seen=100 misplaced=0 m0 m1 m2 m97 m98 m99
+```
+
+<!-- test: a-service-shut-down-with-a-full-grown-ring-abandons-every-message -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+⭐ **THE ABANDON OF A GROWN RING, EVERY SLOT HOLDING A PAYLOAD THE LOOP NEVER HANDLES.** The poison pill goes
+in FIRST, so every message behind it is dropped unprocessed: 100 `keep` messages, each carrying a heap
+`String`, with a reply-bearing `value` stored as a promise after every 25th. At one processor with
+preemption off nothing runs on the service's green thread until `main` parks at the first `await`, so the
+pill and all 104 messages are queued together and the ring has grown past its first 16 slots. The loop
+takes the pill, closes the mailbox and abandons the rest: no `kept` line prints, every promise answers
+`ServiceError.stopped`, and exit 0 says every abandoned `String` was released (exit 101).
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Tally = int(0 to 1000)
+typealias ReplyPromise = Promise with (Integer, ServiceError)
+typealias ReplyPromiseArray = Array with ReplyPromise
+
+let backlog = 100 as Tally
+let replyEvery = 25 as Tally
+
+type Backlog
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function keep(s String)
+		self.n = self.n + 1
+		print("kept {s}\n")
+	end 'keep'
+
+	export function value() returns Integer
+		return self.n
+	end 'value'
+end 'Backlog'
+
+function main() returns ExitCode
+	let h = spawn Backlog.create()
+	h.shutdown()
+	var ps = ReplyPromiseArray.create()
+
+	for i in 0 upto backlog 'fill'
+		h.keep("s{i}")
+
+		if (i + 1) mod replyEvery == 0 'replyHere'
+			ps.push(h.value())
+		end 'replyHere'
+	end 'fill'
+
+	var stops = 0 as Tally
+	var answered = 0 as Tally
+
+	while ps.count() > 0 'drain'
+		let ready = ps.awaitAny()
+		let p = try ps.remove(ready) otherwise panic("awaitAny named a slot that is in range")
+		try await p otherwise (e) 'gone'
+			match e 'why'
+				stopped then stops = stops + 1
+			end 'why'
+		end 'gone'
+		answered = answered + 1
+	end 'drain'
+
+	print("answered={answered} stopped={stops}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+answered=4 stopped=4
+```
+
+<!-- test: a-mailbox-grows-with-its-queue-wrapped-around-the-ring -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+⭐ **A GROW WHILE THE QUEUE STRADDLES THE END OF THE RING.** The ring is a circular buffer, so a grow must
+copy the oldest message first even when it does not sit in slot 0. At one processor with preemption off the
+service runs only when `main` parks at an `await`. Five `note` messages and the awaited `sync` go through
+the ring first, and the service pops them all, which leaves the ring EMPTY with its head at slot 6 — a pop
+moves the head and an empty ring keeps its size. Eighteen more `note` messages follow. The first finds the
+service parked and is handed to it directly; the other seventeen queue from slot 6 on, so the sixteenth
+fills the ring by wrapping from slot 15 round to slot 5 and the seventeenth meets a FULL ring whose head is
+not 0. Every message carries a heap `String`, and the handler checks each against the index FIFO order says
+it must carry. A grow that copied slots `0..15` in place, or forgot the wrapped run, hands the loop the
+messages out of order and `misplaced` is not 0; a payload dropped or doubled by it is a leak or a double
+free (exit 101).
+```maxon
+typealias Tally = int(0 to 1000)
+
+let firstBatch = 5 as Tally
+let secondBatch = 18 as Tally
+
+type WrapTape
+	var seen as Tally
+	var misplaced as Tally
+
+	static function create() returns Self
+		return Self{seen: 0, misplaced: 0}
+	end 'create'
+
+	export function note(s String)
+		if s != "m{self.seen}" 'outOfPlace'
+			self.misplaced = self.misplaced + 1
+		end 'outOfPlace'
+
+		self.seen = self.seen + 1
+	end 'note'
+
+	export function sync() returns Tally
+		return self.seen
+	end 'sync'
+
+	export function report() returns String
+		return "seen={self.seen} misplaced={self.misplaced}"
+	end 'report'
+end 'WrapTape'
+
+function main() returns ExitCode
+	let h = spawn WrapTape.create()
+	var next = 0 as Tally
+
+	for _ in 0 upto firstBatch 'first'
+		h.note("m{next}")
+		next = next + 1
+	end 'first'
+
+	let drained = try await h.sync() otherwise 'syncFailed'
+		return 9
+	end 'syncFailed'
+
+	for _ in 0 upto secondBatch 'second'
+		h.note("m{next}")
+		next = next + 1
+	end 'second'
+
+	let summary = try await h.report() otherwise 'reportFailed'
+		return 9
+	end 'reportFailed'
+
+	print("drained={drained}\n")
+	print("{summary}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+drained=5
+seen=23 misplaced=0
+```
+
+<!-- test: a-mailbox-queues-into-a-fresh-ring-after-shrinking -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+⭐ **A SEND INTO THE RING THE MAILBOX SHRANK TO.** A ring that has grown past its first 16 slots is replaced
+by a fresh 16-slot ring when the service pops its last message. At one processor with preemption off the
+service runs only when `main` parks at an `await`. Forty `note` messages queue first, growing the ring to
+64 slots, and the awaited `sync` behind them makes the service pop every one: the pop of `sync` empties a
+64-slot ring and shrinks it. Forty more follow. The first finds the service parked and is handed to it; the
+other thirty-nine queue into the NEW ring from slot 0, which is full at 16, doubles at the seventeenth and
+doubles again at the thirty-third. Each message carries a heap `String` and the handler checks it against
+the index FIFO order says it must carry. A shrink that left the old ring's size or its head behind the new
+region writes past a 16-slot ring or reads a stale one, so the order breaks or the heap does (exit 101); a
+shrink that freed the ring the next send then used would do the same.
+```maxon
+typealias Tally = int(0 to 1000)
+
+let burst = 40 as Tally
+
+type ShrinkTape
+	var seen as Tally
+	var misplaced as Tally
+
+	static function create() returns Self
+		return Self{seen: 0, misplaced: 0}
+	end 'create'
+
+	export function note(s String)
+		if s != "m{self.seen}" 'outOfPlace'
+			self.misplaced = self.misplaced + 1
+		end 'outOfPlace'
+
+		self.seen = self.seen + 1
+	end 'note'
+
+	export function sync() returns Tally
+		return self.seen
+	end 'sync'
+
+	export function report() returns String
+		return "seen={self.seen} misplaced={self.misplaced}"
+	end 'report'
+end 'ShrinkTape'
+
+function main() returns ExitCode
+	let h = spawn ShrinkTape.create()
+	var next = 0 as Tally
+
+	for _ in 0 upto burst 'grow'
+		h.note("m{next}")
+		next = next + 1
+	end 'grow'
+
+	let drained = try await h.sync() otherwise 'syncFailed'
+		return 9
+	end 'syncFailed'
+
+	for _ in 0 upto burst 'again'
+		h.note("m{next}")
+		next = next + 1
+	end 'again'
+
+	let summary = try await h.report() otherwise 'reportFailed'
+		return 9
+	end 'reportFailed'
+
+	print("drained={drained}\n")
+	print("{summary}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+drained=40
+seen=80 misplaced=0
+```
+
 <!-- test: two-instances-are-independent -->
 Two spawns of one type are two services with two states.
 
@@ -1453,12 +1748,11 @@ kept a literal (3)
 ⭐⭐ **A `throws` CLAUSE IS WHAT MAKES A MESSAGE REPLY-BEARING, AND IT CAN STILL BE SENT FIRE-AND-FORGET.**
 The reply slot is filled with 0, the handler runs, and its error has nowhere to go — which is the
 fire-and-forget half of the design, not a gap in it. What must NOT happen is a leak: the second `keep`
-throws before it reads `s`, so the `String` it was handed is still the loop's to drop, and the request box
-is still the loop's to release.
+throws before it reads `s`, so the `String` it was handed is still the loop's to drop.
 
-⛔ **A `tryCall` opens an error-edge diamond, so the payload drop and the shell decref land in that
-diamond's MERGE.** An arm that terminates its own block instead overwrites the diamond's branch and skips
-both: correct answers print, and every throwing message's box and payload is stranded — exit 101.
+⛔ **A `tryCall` opens an error-edge diamond, so the payload drop lands in that diamond's MERGE.** An arm
+that terminates its own block instead overwrites the diamond's branch and skips it: correct answers print,
+and every throwing message's payload is stranded — exit 101.
 ```maxon
 enum StoreError
 	full
@@ -4801,7 +5095,7 @@ sender still reads tree 4 with 4 leaves
 <!-- test: borrow.the-sender-releases-first-and-the-service-frees-the-graph -->
 <!-- procs: 1 -->
 <!-- preempt: off -->
-`sendAndReturn` sends its graph and returns while the message is still queued, so the request box is the
+`sendAndReturn` sends its graph and returns while the message is still queued, so the queued message is the
 graph's last owner and the service's release is the one that frees it — a release that never comes is
 exit 101. The two pins make *still queued* the premise rather than luck: on one processor that `main` is
 never preempted from, nothing runs on the service until `main` parks at its await.
@@ -6637,9 +6931,9 @@ note: <fragment>:28:10: the `spawn` that makes `Store` a service
 
 <!-- test: error.a-reply-may-not-return-a-message-parameter -->
 ⭐⭐ **THE SECOND POPULATION E3137 REFUSES.** `s`
-is reachable from nothing — it is a message PARAMETER, which arrives BORROWED out of the request box the loop
+is reachable from nothing — it is a message PARAMETER, which arrives BORROWED out of the message the loop
 still owns and releases (`ServiceLoop.dropUnconsumedPayloads`). Handing it back would give the awaiter a
-second reference to that box, which is the same two-green-threads-one-refcount picture `return self` draws.
+second reference to it, which is the same two-green-threads-one-refcount picture `return self` draws.
 
 ⚠ **THE CURE IS THE SAME `.clone()`**, but the refusal does not tell the author their value is reachable
 from `self`, because it is not, and a refusal's noun is what a reader takes away.
@@ -10068,7 +10362,7 @@ end 'main'
 ```
 
 <!-- test: services.a-reply-built-over-a-message-parameter-crosses-once -->
-A reply may hold a message parameter: the request box releases its reference to the argument before the
+A reply may hold a message parameter: the loop releases the message's reference to the argument before the
 reply is handed to the caller, so the caller becomes the only owner of everything the reply reaches.
 ```maxon
 typealias Flags = Array with bool

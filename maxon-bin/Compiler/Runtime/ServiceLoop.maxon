@@ -10,12 +10,12 @@
 // `__destruct_<T>` calls and installs the floor they need, and `lowerMaxonToStd` lowers it like anything
 // else.
 //
-// ⭐ **ONE CONSEQUENCE WORTH STATING, BECAUSE IT DELETES A WHOLE OBLIGATION.** `AsyncReleaser` has to
-// DECLARE what its bodies will call (`declareAsyncReleaserNeeds`) because they are Std-tier bodies built
-// AFTER the runtime-needs scan — rule 2 of `RuntimeUsage`'s header. This loop is built BEFORE that scan, so
-// every drop it emits is DISCOVERED: the request union's cascade, each payload's drop and the state's are
-// rooted by the ordinary walk, and the two `funcAddr`s `LowerMaxonToStd.lowerServiceSpawn` emits name
-// symbols the loop itself already calls.
+// ⭐ **ONE CONSEQUENCE WORTH STATING, BECAUSE IT DELETES A WHOLE OBLIGATION.** `AsyncReleaser` has
+// to DECLARE what its bodies will call (`declareAsyncReleaserNeeds`) because they are Std-tier
+// bodies built AFTER the runtime-needs scan — rule 2 of `RuntimeUsage`'s header. This loop is built
+// BEFORE that scan, so every drop it emits is DISCOVERED: each payload's drop and the state's are
+// rooted by the ordinary walk, and the two `funcAddr`s `LowerMaxonToStd.lowerServiceSpawn` emits
+// name symbols the loop itself already calls.
 //
 // ⛔⛔⛔ **EVERY TYPE THIS FILE RESOLVES OUT OF THE SIGNATURE INDEX STAYS IN THE INDEX'S NAME SPACE, AND
 // `SynthesizedFunction.mint` IS WHAT CROSSES IT.** *"Names travel between interners; ids never
@@ -38,11 +38,11 @@
 // `SynthesizedFunction.open` (which stores parameter ids RAW — see the carrier), and the drop callee that
 // pairs with it. A `typeNames:` argument and the `MaxonType` beside it must always be one table.
 //
-// ⭐⭐ **NO `__do_<m>` TRAMPOLINES, BECAUSE A DISPATCH ARM HERE IS NOT A `match` ARM.** **E2049**'s one
-// statement per arm is a SOURCE rule (`Parser.parseArmBody`, `Parser.isBlockOpeningStatement`) and this loop
-// is not source: at the IR tier a `switch` arm is a BLOCK, which holds as many ops as it likes. So there is
-// ONE function per service and the handler call, the drops and the shell decref all live in the arm — which
-// is also what makes the un-consumed-payload drop expressible at all.
+// ⭐⭐ **NO `__do_<m>` TRAMPOLINES, BECAUSE A DISPATCH ARM HERE IS NOT A `match` ARM.** **E2049**'s
+// one statement per arm is a SOURCE rule (`Parser.parseArmBody`, `Parser.isBlockOpeningStatement`)
+// and this loop is not source: at the IR tier a `switch` arm is a BLOCK, which holds as many ops as
+// it likes. So there is ONE function per service and the handler call and the drops all live in the
+// arm — which is also what makes the un-consumed-payload drop expressible at all.
 
 // ⭐⭐ **BUILD `<T>.__loop` FOR EVERY SERVICE IN THE PROGRAM.** Called from
 // `Compiler.lowerTheProgram` directly after `installManagedGlobalInit`, at the same tier and for
@@ -197,15 +197,15 @@ let ServiceMailboxParam = 1 as ValueId
 // ⭐⭐ **THE WHOLE LOOP, and its shape is the answer to "what does a service DO?".**
 //
 // ```
-// loop:      req = __mbox_recv(mailbox)        // parks when the queue is empty and the mailbox is open
+// loop:      req = __mbox_recv(mailbox)        // the inbox; parks on an empty, open mailbox
 //            req == 0 -> exit                  // closed AND drained: nobody can ever send again
 //            switch loadIndirect(req, tag)
-//              case 0 (__shutdown) -> drop the pill, exit
+//              case 0 (__shutdown) -> park the pill's reply cell on the mailbox, exit
 //              case k              -> load each payload, call <T>.<m>(state, …), drop what the
-//                                     handler did not consume, __mm_decref the shell, loop
+//                                     handler did not consume, loop
 // exit:      __mbox_close(mailbox)             // idempotent; makes the queue drainable and un-fillable
 // drain:     leftover = __mbox_recv(mailbox)   // closed now, so this never parks
-//            leftover != 0 -> abandon it through the request union's own cascade, drain again
+//            leftover != 0 -> abandon it in place through <T>.__abandon, drain again
 //            drop state
 //            __mbox_service_exit(mailbox)
 // ```
@@ -215,9 +215,10 @@ let ServiceMailboxParam = 1 as ValueId
 // the queue's pop protocol is written once and a message abandoned after a `shutdown` takes the same road a
 // handled one does, minus the handler.
 //
-// ⚠ **THE `__shutdown` ARM DROPS THE PILL AND LEAVES; IT DOES NOT DRAIN.** Draining is the exit path's, and
-// both roads into `exit` go through it — so "shutdown drains what was queued behind the pill" and "the last
-// handle drop drains what was queued" are one piece of code rather than two that could disagree.
+// ⚠ **THE `__shutdown` ARM PARKS THE PILL'S REPLY AND LEAVES; IT DOES NOT DRAIN.** Draining is the
+// exit path's, and both roads into `exit` go through it — so "shutdown drains what was queued
+// behind the pill" and "the last handle drop drains what was queued" are one piece of code rather
+// than two that could disagree.
 function buildServiceLoop(module MaxonModule, project Project, signatures ProgramSignatures, funcNames FunctionNameIndex, typeName ByteArray, instance ServiceStateInstance)
 	// ⭐ **THE STATE PARAMETER'S TYPE IS WHERE THE WHOLE PER-INSTANCE ABI COMES FROM.** A `genericInstance`
 	// here is what makes `MaxonToStdLowering.materializeLayoutArg` hand each handler `__layout_<mangled>` and
@@ -270,22 +271,22 @@ function buildServiceLoop(module MaxonModule, project Project, signatures Progra
 	buildServiceDrain(fn, project: project, signatures: signatures, stateType: stateType, exit: exit, site: site)
 end 'buildServiceLoop'
 
-// The exit path: drain whatever is still queued through the request union's own cascade, drop the state, and
-// hand back this green thread's own ticket. `exit` has already closed the mailbox.
+// The exit path: drain whatever is still queued through `<T>.__abandon`, drop the state, and hand
+// back this green thread's own ticket. `exit` has already closed the mailbox.
 function buildServiceDrain(fn SynthesizedFunction, project Project, signatures ProgramSignatures, stateType MaxonType, exit IrBlock, site SynthesizedSite)
 	var drain = fn.openBlock(b"drain")
 	let leftover = fn.emitPositionalCall(MboxRecvName, args: argsOf(ServiceMailboxParam), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, site: site)
 	let drained = fn.emitCompare(leftover, rhs: fn.emitTypedLiteral(0, valueType: MaxonType.integer, site: site), op: MaxonCmpOp.eq, site: site)
 	fn.terminateBlock(exit, op: MaxonOp.branch(drain.id), site: site)
 
-	// ⭐ **AN ABANDONED REQUEST TAKES `<T>.__abandon`, WHERE A HANDLED ONE TAKES A SHELL DECREF — and the
-	// difference is which of them still owns its payloads AND whether anybody is waiting on it.** A handled
-	// message's arguments were consumed or dropped slot by slot by the arm that ran it and its reply was
-	// answered; an abandoned one still holds every payload and still owes its sender an answer, and
-	// `<T>.__abandon` is what does both — `ServiceError.stopped` into the reply slot, then the
-	// tag-conditional `__destruct_<T>.request`, which is the only thing that knows what the payloads are.
-	// That is the design's own argument for a closed union: *a closure-based mailbox holds erased
-	// environments, cannot know what to free, and would fail the leak gate.*
+	// ⭐ **AN ABANDONED REQUEST TAKES `<T>.__abandon`, WHERE A HANDLED ONE TAKES ITS ARM'S DROPS — and
+	// the difference is which of them still owns its payloads AND whether anybody is waiting on it.**
+	// A handled message's arguments were consumed or dropped slot by slot by the arm that ran it and
+	// its reply was answered; an abandoned one still holds every payload and still owes its sender an
+	// answer, and `<T>.__abandon` is what does both — `ServiceError.stopped` into the reply slot, then
+	// the live variant's managed payloads dropped in place, which only a per-variant arm knows the
+	// types of. That is the design's own argument for a closed union: *a closure-based mailbox holds
+	// erased environments, cannot know what to free, and would fail the leak gate.*
 	//
 	// ⚠ It goes through the MAILBOX's own pointer rather than naming the symbol — see `MboxAbandonName` for
 	// the E3004 that forced it and for why one door is better than two anyway.
@@ -303,48 +304,42 @@ function buildServiceDrain(fn SynthesizedFunction, project Project, signatures P
 	fn.terminate(MaxonOp.retVoid, site: site)
 end 'buildServiceDrain'
 
-// ⭐⭐⭐ **`<T>.__abandon(box)` — WHAT A REQUEST NOBODY WILL HANDLE GETS, AND IT IS A LIVENESS
+// ⭐⭐⭐ **`<T>.__abandon(msg)` — WHAT A REQUEST NOBODY WILL HANDLE GETS, AND IT IS A LIVENESS
 // OBLIGATION BEFORE IT IS A MEMORY ONE.** Two roads reach it, and both are races the design admits: a send
 // that finds the mailbox already CLOSED (`MailboxRuntime.buildMboxSend`'s abandon arm, on the SENDER's own
 // green thread), and the loop's DRAIN, which empties whatever was queued behind a `__shutdown` pill. In both
 // the message dies unprocessed — and its awaiter is parked on a reply that will never come.
 //
 // ```
-// tag = load(box, tagOffset)
+// tag = load(msg, tagOffset)
 // switch tag
-//   variant with a reply -> __gt_cell_complete(load(box, replySlot), 0, ServiceError.stopped + bias)
-//   variant without      -> (nothing)
-// destruct: __destruct_<T>.request(box)
+//   variant with a reply -> __gt_cell_complete(load(msg, replySlot), 0, ServiceError.stopped + bias)
+//   every variant        -> drop each managed payload, read in place
 // ```
 //
-// ⭐ **THE ANSWER COMES FIRST AND THE PAYLOAD DROP SECOND, and the order is not arbitrary.** The cascade
-// frees what the box owns; the reply slot is a raw integer the cascade skips, but reading it after the box
-// has been released would be a use-after-free the day a request union grows a payload the cascade rewrites.
-//
-// ⚠⚠ **AND IT IS THE OPPOSITE ORDER TO `buildMessageArm`'s, WHICH RELEASES BEFORE IT PUBLISHES — SAID HERE
-// SO NEITHER GETS "FIXED" INTO THE OTHER.** The rule both obey is *nothing this green thread
-// still owns may be touched after the publish*. The arm has to WORK for it: a handler may return a record
-// whose managed field it built over a message parameter, so the reply and the request box can name one string
-// and the box's release has to come first. **This function cannot reach that shape at all** — the value word
-// it writes is a literal `0`, so a message dying here hands its awaiter nothing, and the payloads the cascade
-// frees are the box's alone. The rule is satisfied vacuously, which is what lets the slot-before-cascade
-// constraint above decide the order instead.
+// ⚠⚠ **THE ANSWER COMES BEFORE THE DROPS, THE OPPOSITE ORDER TO `buildMessageArm`'s, WHICH RELEASES
+// BEFORE IT PUBLISHES.** The rule both obey is *nothing this green thread still owns may be touched
+// after the publish*. The arm has to WORK for it: a handler may return a record whose managed field
+// it built over a message parameter, so the reply and the message can name one string and the
+// message's payload drop has to come first. **This function cannot reach that shape at all** — the
+// value word it writes is a literal `0`, so a message dying here hands its awaiter nothing, and the
+// payloads it drops are the message's alone. The rule is satisfied vacuously, so the arm's order
+// must not be "fixed" into this one.
 //
 // ⭐ **THE ERROR WORD IS ALREADY FUSED.** `ServiceError` is the transport member, pinned at
 // `ErrorFlagOrdinalBias`, so `stopped`'s fused ordinal IS the ordinary scalar flag — no shift, and the same
 // number an awaiter's `match e ... stopped` arm dispatches on whether the message throws or not.
 //
-// ⚠ **IT IS SYNTHESIZED FOR EVERY SERVICE, INCLUDING ONE WHOSE MESSAGES ALL LACK REPLIES**, where its
-// switch has nothing to do and it is the union's cascade wearing a name. That is deliberate: the mailbox
-// holds ONE `abandonFn` pointer, and a per-service choice between two symbols would be a second place that
-// knows which services have replies.
+// ⚠ **IT IS SYNTHESIZED FOR EVERY SERVICE, INCLUDING ONE WHOSE MESSAGES ALL LACK REPLIES**, where
+// its arms only drop payloads. That is deliberate: the mailbox holds ONE `abandonFn` pointer, and a
+// per-service choice between two symbols would be a second place that knows which services have
+// replies.
 function buildServiceAbandon(module MaxonModule, project Project, signatures ProgramSignatures, typeName ByteArray)
 	var paramTypes = MaxonTypeArray.create()
 	paramTypes.push(MaxonType.integer)
 	var fn = SynthesizedFunction.open(module, project: project, name: serviceAbandonSymbol(typeName), returnType: MaxonReturnType.void, paramTypes: paramTypes)
 
 	let site = SynthesizedSite.compilersOwn
-	let requestName = serviceRequestCompanionName(typeName)
 	let request = requireServiceRequestLayout(signatures, typeName: typeName)
 	let box = ServiceAbandonBoxParam
 
@@ -354,8 +349,7 @@ function buildServiceAbandon(module MaxonModule, project Project, signatures Pro
 
 	// Opened BEFORE the arms so every arm has a block id to branch to — `buildServiceLoop`'s arrangement, for
 	// its reason.
-	var destruct = fn.openBlock(b"abandondrop")
-	fn.emitPositionalCallDiscarding(signatures.unionBoxDropCallee(requestName), args: argsOf(box), site: site)
+	var destruct = fn.openBlock(b"abandondone")
 	fn.terminate(MaxonOp.retVoid, site: site)
 
 	var armIds = BlockIdArray.create()
@@ -364,13 +358,13 @@ function buildServiceAbandon(module MaxonModule, project Project, signatures Pro
 		armIds.push(buildServiceAbandonArm(fn, signatures: signatures, request: request, caseIndex: caseIndex, box: box, destruct: destruct, site: site))
 	end 'eachVariant'
 
-	// The default is the DROP, which is also every arm's exit: the table covers every tag the union has, so
-	// the default is unreachable by construction and answering it with the release is the conservative answer
-	// to a request nothing recognises — `buildServiceLoop`'s call, for its reason.
+	// The default is the shared return, which is also every arm's exit: the table covers every tag the
+	// union has, so the default is unreachable by construction — `buildServiceLoop`'s call, for its
+	// reason.
 	fn.terminateBlock(entry, op: MaxonOp.switch(tag, denseTargetBlockIds: armIds, defaultBlockId: destruct.id), site: site)
 end 'buildServiceAbandon'
 
-// One abandon arm: answer this variant's reply if it has one, then fall through to the shared release.
+// One abandon arm: answer this variant's reply if it has one, then drop its managed payloads.
 function buildServiceAbandonArm(fn SynthesizedFunction, signatures ProgramSignatures, request EnumLayout, caseIndex CaseIndex, box ValueId, destruct IrBlock, site SynthesizedSite) returns BlockId
 	let armId = fn.openBlock(request.caseNameAt(caseIndex)).id
 	let payloads = request.payloadsAt(caseIndex)
@@ -380,9 +374,40 @@ function buildServiceAbandonArm(fn SynthesizedFunction, signatures ProgramSignat
 		at then fn.emitPositionalCallDiscarding(GtCellCompleteName, args: threeArgs(loadServiceReplyCell(fn, request: request, caseIndex: caseIndex, payloads: payloads, req: box, site: site), second: fn.emitTypedLiteral(0, valueType: MaxonType.integer, site: site), third: fn.emitTypedLiteral(serviceStoppedErrorFlag(signatures), valueType: MaxonType.integer, site: site)), site: site)
 	end 'reply'
 
+	dropAbandonedPayloads(fn, signatures: signatures, request: request, caseIndex: caseIndex, box: box, site: site)
 	fn.terminate(MaxonOp.branch(destruct.id), site: site)
 	return armId
 end 'buildServiceAbandonArm'
+
+function dropAbandonedPayloads(fn SynthesizedFunction, signatures ProgramSignatures, request EnumLayout, caseIndex CaseIndex, box ValueId, site SynthesizedSite)
+	let payloads = request.payloadsAt(caseIndex)
+
+	for slot in 0 upto payloads.count() 'eachSlot'
+		let field = try payloads.get(slot) otherwise panic("dropAbandonedPayloads: payloads.get OOB at {slot} on a list walked to its own count")
+
+		if fieldIsTheServiceReplySlot(field) or fieldIsAServiceWitnessHalf(field) 'aCompilersSlot'
+			continue
+		end 'aCompilersSlot'
+
+		let declared = signatures.payloadTypeOf(field, layout: request, into: signatures.indexTypeNames())
+		let class = classifyUnionPayload(signatures, typeNames: signatures.indexTypeNames(), fieldType: declared, slotScopeFilePath: request.declFilePath)
+
+		if not payloadClassIsManaged(class) 'ownsNoHeap'
+			continue
+		end 'ownsNoHeap'
+
+		dropLoadedPayload(fn, signatures: signatures, request: request, field: field, class: class, loaded: loadPayloadWord(fn, box: box, offset: request.payloadSlotOffset(slot as PayloadSlotIndex), class: class, valueType: payloadValueTypeOf(class, declared: declared), site: site), site: site)
+	end 'eachSlot'
+end 'dropAbandonedPayloads'
+
+function dropLoadedPayload(fn SynthesizedFunction, signatures ProgramSignatures, request EnumLayout, field PayloadField, class PayloadClass, loaded ValueId, site SynthesizedSite)
+	if payloadClassIsExistential(class) 'aFatPointer'
+		fn.emitPositionalCallDiscarding(DropExistentialName, args: twoArgs(fn.witnessOf(loaded), second: loaded), site: site)
+		return
+	end 'aFatPointer'
+
+	fn.emitPositionalCallDiscarding(managedFieldDropCallee(signatures, typeNames: signatures.indexTypeNames(), fieldType: signatures.payloadTypeOf(field, layout: request, into: signatures.indexTypeNames())), args: argsOf(loaded), site: site)
+end 'dropLoadedPayload'
 
 // `<T>.__abandon`'s one parameter, by the ValueId the parameter numbering reserves for it —
 // `ServiceStateParam`'s shape, and for its reason.
@@ -407,10 +432,9 @@ function buildShutdownPillArm(fn SynthesizedFunction, request EnumLayout, caseIn
 	// drain and a state to drop; `__mbox_service_exit`, the loop's LAST act, answers it instead — a phi
 	// threading the pointer through the drain loop would be three blocks to reach the same instant.
 	//
-	// ⚠ The pill's only payload IS the reply slot, so the shell decref is the whole release. Whatever is queued
+	// ⚠ The pill's only payload IS the reply slot, so it owns nothing to release. Whatever is queued
 	// BEHIND it is the exit path's to abandon.
 	fn.emit(MaxonOp.storeIndirect(ServiceMailboxParam, offset: MboxOffShutdownReply, value: loadServiceReplyCell(fn, request: request, caseIndex: caseIndex, payloads: request.payloadsAt(caseIndex), req: req, site: site), valueType: MaxonType.integer), site: site)
-	fn.emitPositionalCallDiscarding(MmDecrefName, args: argsOf(req), site: site)
 	fn.terminate(MaxonOp.branch(exit.id), site: site)
 end 'buildShutdownPillArm'
 
@@ -460,29 +484,19 @@ function buildMessageArm(fn SynthesizedFunction, signatures ProgramSignatures, f
 	//
 	// ⚠ **AND THE TWO REALLY CAN NAME ONE BOX.** A message may return a record with a managed FIELD, and a
 	// handler may build that record over a message PARAMETER — `Wrapper.of(s)` co-owns `s`, so the string is
-	// named by the reply the awaiter now holds AND by this request box, whose reference
+	// named by the reply the awaiter now holds AND by this message, whose reference
 	// `dropUnconsumedPayloads` is about to give back. Published first, those two decrements are two green
 	// threads stepping one count with no atomic between them: a race by construction, however narrow, and the
 	// ordering that removes it costs nothing. It is the rule `GtRuntime.emitGtTeardownArrive` states for the
 	// teardown word: **every read or release of shared state precedes the arrival that hands it over.**
 	dropUnconsumedPayloads(fn, signatures: signatures, callee: callee, request: request, caseIndex: caseIndex, classes: payloadClasses, args: args, site: site)
 
-	// ⭐ **THE SHELL, AND ONLY THE SHELL.** The payloads were consumed by the handler or dropped by the loop
-	// one line up, so the box's own record is all that is left to release — and the box was allocated with
-	// the trivial destructor (`Parser.emitBoxAlloc`), which is what makes the plain decref the right entry
-	// rather than the cascade the abandon path takes.
-	//
-	// ⚠ It is safe here rather than after the completion for the reason above, and safe this early because
-	// nothing below reads `req`: the cell pointer was loaded into `reply` before the call, and the payloads
-	// the drops release are the values `args` already holds.
-	fn.emitPositionalCallDiscarding(MmDecrefName, args: argsOf(req), site: site)
-
 	emitServiceReplyCompletion(fn, signatures: signatures, callee: callee, returned: returned, outcome: outcome, reply: reply, site: site)
 
 	// ⛔⛔ **THE CURRENT BLOCK, NOT THE ARM'S ENTRY — THE TWO DIFFER FOR A THROWING HANDLER.** Its `tryCall`'s
 	// error edge is a diamond (`emitServiceReplyCompletion`), so the ops above landed in that diamond's MERGE and
 	// the entry is already terminated by its `condBranch`. Terminating the entry again would overwrite that
-	// branch and skip the payload drops and the shell decref; `fn.terminate` closes wherever the ops ended up.
+	// branch and skip the payload drops; `fn.terminate` closes wherever the ops ended up.
 	fn.terminate(MaxonOp.branch(receive.id), site: site)
 end 'buildMessageArm'
 
@@ -789,10 +803,10 @@ function emitFusedHandlerFlag(fn SynthesizedFunction, signatures ProgramSignatur
 	return fused
 end 'emitFusedHandlerFlag'
 
-// ⭐⭐ **DROP EVERY MANAGED PAYLOAD THE HANDLER DID NOT TAKE OWNERSHIP OF.** The request box holds exactly
-// one reference to each of its managed payloads — the one the send moved in — and the handler
-// either consumed it or borrowed it. A borrowed one is still this loop's to release, through the
-// ordinary drop, and releasing it is what balances the move.
+// ⭐⭐ **DROP EVERY MANAGED PAYLOAD THE HANDLER DID NOT TAKE OWNERSHIP OF.** The message holds
+// exactly one reference to each of its managed payloads — the one the send moved in — and the
+// handler either consumed it or borrowed it. A borrowed one is still this loop's to release,
+// through the ordinary drop, and releasing it is what balances the move.
 //
 // ⚠ **`consumeOf(callee).isConsumedAt` ANSWERS `false` FOR EVERY MESSAGE, AND THAT IS A CHECKED
 // ANSWER, NOT A SKIP.** The sweep reads every declaration's parameters, an instance method's
@@ -823,13 +837,8 @@ function dropUnconsumedPayloads(fn SynthesizedFunction, signatures ProgramSignat
 
 		let loaded = try args.get(param + ServiceReceiverArgCount) otherwise panic("dropUnconsumedPayloads: args.get OOB at {param + ServiceReceiverArgCount} — `args` holds the receiver followed by one value per parameter")
 
-		if payloadClassIsExistential(class) 'aFatPointer'
-			fn.emitPositionalCallDiscarding(DropExistentialName, args: twoArgs(fn.witnessOf(loaded), second: loaded), site: site)
-			continue
-		end 'aFatPointer'
-
 		let field = try payloads.get(serviceParamPayloadSlot(payloads, paramIndex: param as ParamCount)) otherwise panic("dropUnconsumedPayloads: `serviceParamPayloadSlot` answered a slot past the variant's payloads")
-		fn.emitPositionalCallDiscarding(managedFieldDropCallee(signatures, typeNames: signatures.indexTypeNames(), fieldType: signatures.payloadTypeOf(field, layout: request, into: signatures.indexTypeNames())), args: argsOf(loaded), site: site)
+		dropLoadedPayload(fn, signatures: signatures, request: request, field: field, class: class, loaded: loaded, site: site)
 	end 'eachPayload'
 end 'dropUnconsumedPayloads'
 

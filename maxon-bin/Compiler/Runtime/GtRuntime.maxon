@@ -474,21 +474,27 @@ export enum GtLastErrorDirection
 	fromGt
 end 'GtLastErrorDirection'
 
-// ⭐⭐ **THE RECORD LOCK — LAST IN THE STRUCT, BECAUSE `__gt_spawn` ZEROES EVERY FIELD BELOW IT BUT
-// THE TWO STACK WORDS, AND NONE OF IT.** It is a recursive runtime lock (`RuntimeLock`), free in
+// ⭐⭐ **THE RECORD LOCK — `__gt_spawn` ZEROES EVERY FIELD BELOW IT BUT THE TWO STACK WORDS, AND
+// NONE OF IT OR WHAT FOLLOWS IT.** It is a recursive runtime lock (`RuntimeLock`), free in
 // the zeroed pages the arena carves the record from (`__gt_free_get`), and stays live across every
-// reuse; a field placed after it would escape the spawn's zeroing. On a green thread it is the
-// strand lock over the strand queue (`GtOffCoroHead`). On a coroutine or a reply cell it is the
-// promise lock, where await, awaitAny and the completer meet over `GtOffAwaiter` — Go's
-// `hchan.lock`. The two roles never fall on one record.
+// reuse; a field placed after it escapes the spawn's zeroing, which only `GtOffStaging` wants. On a
+// green thread it is the strand lock over the strand queue (`GtOffCoroHead`). On a coroutine or a
+// reply cell it is the promise lock, where await, awaitAny and the completer meet over
+// `GtOffAwaiter` — Go's `hchan.lock`. The two roles never fall on one record.
 //
 // ⚠ This line is the one a growth must restate: a new field goes before the lock, and this offset
 // names the last field rather than following it. A field added without re-deriving it shares the
 // lock's bytes and escapes the spawn's zeroing, and nothing refuses it.
 let GtOffRecordLock = GtOffLastError + PointerFieldBytes
 
+// The thread's message staging buffer (`MailboxRuntime.MboxStagingName`), or 0 until its first
+// send. It sits past the record lock so the spawn's zeroing leaves it: the buffer is arena memory
+// that is never freed, so a reused record keeps the one it has, and a zeroed word would carve a
+// second.
+export let GtOffStaging = GtOffRecordLock + RecursiveLockBytes
+
 // The GT struct's size: the 0xC8 header, the inline argument region, then every field above, the
-// record lock last. Must be a multiple of 8.
+// record lock and the staging word last. Must be a multiple of 8.
 //
 // Growth inserts before the record lock, which is why nothing else already placed ever moves: every
 // field of the portable layout (0x00–0xA8) and every offset a hand-assembled chunk spells is below
@@ -496,7 +502,7 @@ let GtOffRecordLock = GtOffLastError + PointerFieldBytes
 // a growth walks them all along correctly.
 //
 // EXPORTED because `SchedRuntime`'s M struct embeds a whole GT inline as its scheduler context.
-export let GtStructSize = GtOffRecordLock + RecursiveLockBytes
+export let GtStructSize = GtOffStaging + PointerFieldBytes
 
 // ⭐⭐ **THE PARK KINDS — what the strand runner dispatches on after the switch.** Each names the STORE
 // `__gt_register_park` puts the thread on; a yield and a preemption register nothing and are placed back on
@@ -2436,7 +2442,7 @@ export function ioCompletionShape(target Target) returns IoCompletionShape
 	end 'os'
 end 'ioCompletionShape'
 
-export function installGtRuntime(module StdModule, globalData GlobalDataTable, asyncTrace bool, target Target, streamState EnumLayout, releasesRegistry bool, releasesGlobals bool)
+export function installGtRuntime(module StdModule, globalData GlobalDataTable, asyncTrace bool, target Target, streamState EnumLayout, releasesRegistry bool, releasesGlobals bool, requestStagingBytes ByteOffset)
 	// The first function index this install owns — the range `assertCompletedPublicationIsOrdered` checks at
 	// the end. Taken from the module rather than assumed to be zero: the runtime installs run after the whole
 	// user program is already lowered into this module.
@@ -2542,7 +2548,7 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	// wake goes through `__gt_ready`; a program that never spawns a service loses every mailbox
 	// function to `DeadFunctionElimination`, whose only edge into them is the `funcAddr`/`call` pair
 	// `LowerMaxonToStd.lowerServiceSpawn` emits.
-	installMailboxRuntime(module)
+	installMailboxRuntime(module, requestStagingBytes: requestStagingBytes)
 
 	assertCompletedPublicationIsOrdered(module, firstFuncIndex: firstFuncIndex)
 	assertRunQueueObservationIsOrdered(module, firstFuncIndex: firstFuncIndex)

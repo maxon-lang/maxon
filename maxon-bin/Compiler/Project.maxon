@@ -8532,15 +8532,15 @@ end 'serviceLoopSymbol'
 let ServiceAbandonMemberName = b"__abandon"
 
 // ⭐⭐ **`<T>.__abandon` — WHAT A REQUEST THAT WILL NEVER BE HANDLED GETS, SPELLED ONCE FOR ITS THREE
-// READERS.** `ServiceLoop.buildServiceAbandon` BUILDS it, `LowerMaxonToStd.lowerServiceSpawn` emits the
-// `funcAddr` that stores its address into the mailbox's `abandonFn`, and `ServiceLoop.buildServiceDrain`
-// calls it by name on the way out.
+// READERS.** `ServiceLoop.buildServiceAbandon` BUILDS it, `LowerMaxonToStd.lowerServiceSpawn` emits
+// the `funcAddr` that stores its address into the mailbox's `abandonFn`, and
+// `MailboxRuntime.buildMboxAbandon` calls it through that pointer.
 //
-// ⭐ **IT IS NOT A BARE `__destruct_<T>.request`, AND THE DIFFERENCE IS A LIVENESS OBLIGATION.** The
-// request union's own drop cascade frees an unhandled message's payloads and stops, but a message
-// that dies unprocessed also has an AWAITER, and leaving it parked for a reply that will never come
-// is a hang with no diagnostic — so the abandon path answers `ServiceError.stopped` into the reply
-// slot FIRST and then drops the payloads through that same cascade.
+// ⭐ **IT IS NOT A BARE PAYLOAD DROP, AND THE DIFFERENCE IS A LIVENESS OBLIGATION.** Dropping an
+// unhandled message's payloads releases what it owns and stops, but a message that dies unprocessed
+// also has an AWAITER, and leaving it parked for a reply that will never come is a hang with no
+// diagnostic — so the abandon path answers `ServiceError.stopped` into the reply slot FIRST and
+// then drops the live variant's managed payloads in place.
 module function serviceAbandonSymbol(typeName ByteArray) returns ByteArray
 	return qualifiedMethodName(typeName, methodName: ServiceAbandonMemberName)
 end 'serviceAbandonSymbol'
@@ -8557,24 +8557,17 @@ export let ServiceShutdownCaseName = b"__shutdown"
 // pill FIRST, and `addServiceRequestCase` gives each case the index its position in the roster gives it.
 export let ServiceShutdownCaseIndex = 0 as CaseIndex
 
-// ⭐⭐ **THE REPLY SLOT IS AN `Integer`, DELIBERATELY, AND THE PAYLOAD CASCADE IS WHY.** It is a raw
-// cell pointer, NOT a managed box: the `__destruct_<U>` payload cascade must SKIP it, and it does
-// so structurally because a scalar payload is not managed. Answering an abandoned reply cell is
-// `<T>.__abandon`'s job, not a decref's — and a managed-typed slot here would hand the cascade a
-// box it must not free.
+// ⭐⭐ **THE REPLY SLOT IS AN `Integer`, DELIBERATELY, AND THE PAYLOAD DROPS ARE WHY.** It is a raw
+// cell pointer, NOT a managed box: every payload drop — `<T>.__abandon`'s and a `__destruct_<U>`
+// cascade's — must SKIP it, and each does so structurally because a scalar payload is not managed.
+// Answering an abandoned reply cell is `<T>.__abandon`'s job, not a decref's — and a managed-typed
+// slot here would hand those drops a box they must not free.
 //
 // ⚠ **A VARIANT EITHER HAS THIS SLOT OR DOES NOT, AND THERE IS NO `0` STANDING FOR "NO REPLY".**
 // The presence of the slot IS the question, and `ServiceCompanions.serviceReplySlotIndex` is the
 // one place it is asked. A zero as a second spelling of the same fact would be a sentinel every
 // reader had to remember not to dereference.
 module let ServiceReplySlotName = b"__reply"
-
-// Slot 0 of every request variant, the mailbox's queue link: a queued box is its own list node.
-module let ServiceLinkSlotName = b"__next"
-
-module let ServiceLinkSlotIndex = 0 as PayloadSlotIndex
-
-module let ServiceLinkOffset = UnionTagBytes + (ServiceLinkSlotIndex as ByteOffset) * FieldSlotBytes
 
 // ⭐ **THE TRANSPORT HALF OF EVERY REPLY'S ERROR TYPE, AS A NAME.** `stdlib/Builtins.maxon` declares
 // `public enum ServiceError`, and the compiler has to look that declaration up to place its cases on a

@@ -1140,7 +1140,7 @@ let GtFreeLocalLow = 32
 
 // ⭐ **ONE SCHEDULER-ARENA CHUNK: 64 KiB, Windows' allocation granularity**, so no reservation strands address
 // space, and a whole multiple of every lane's page. A tail too short for the next carve is never carved.
-let SchedArenaChunkBytes = 65536
+export let SchedArenaChunkBytes = 65536
 
 // ==========================================================================
 // The `.data` slots
@@ -1950,7 +1950,7 @@ export let GtFreeGetName = b"__gt_free_get"
 
 // ⭐⭐ `__sched_arena_carve(bytes) -> address` — the scheduler's uncounted arena, which GT records and machines are
 // carved from. See `buildSchedArenaCarve`.
-let SchedArenaCarveName = b"__sched_arena_carve"
+export let SchedArenaCarveName = b"__sched_arena_carve"
 
 // ⭐⭐ **THE PER-P COUNTER SUMS — `buildSchedPerProcSum`'s names:** one body, one walk of `__sched_procs`,
 // one field offset each. That builder refuses a name that is not here, and `isSchedSubstrateQueryCallee`
@@ -5601,19 +5601,19 @@ function buildGtFreeGet(module StdModule)
 end 'buildGtFreeGet'
 
 // ⭐⭐ **`__sched_arena_carve(bytes) -> address` — CARVE `bytes` FROM THE SCHEDULER's ARENA.** It
-// takes no lock: every caller holds `__gt_gfree_lock` (`__gt_free_get` across its consult and carve,
-// `emitSchedAllocM` around the call, under `__sched_lock`), so a machine's carve and a record's
-// share one cursor. The carve is the `bytes` at `__sched_arena_cursor`; when the current chunk has
-// no room for them, a new chunk of
-// `SchedArenaChunkBytes` is mapped and the old one's tail is abandoned. A chunk's pages arrive
-// zeroed and nothing is carved twice or ever returned, so a carve needs no `memFill` and is never
-// freed.
+// takes no lock: every caller holds `__gt_gfree_lock` (`__gt_free_get` across its consult and
+// carve, `emitSchedAllocM` around the call, under `__sched_lock`, and `__mbox_staging` around the
+// call), so every carve shares one cursor. The carve is the `bytes` at `__sched_arena_cursor`; when
+// the current chunk has no room for them, a new chunk of `SchedArenaChunkBytes` is mapped and the
+// old one's tail is abandoned. A chunk's pages arrive zeroed and nothing is carved twice or ever
+// returned, so a carve needs no `memFill` and is never freed.
 //
-// ⭐⭐ **THE ARENA IS SCHEDULER SCAFFOLDING, LIKE THE STACKS, AND IS NEVER THE COUNTED SLAB.** It holds the GT
-// records (`__gt_free_get`) and the machines (`emitSchedAllocM`), whose creation both depend on timing — which
-// processor a spawn runs on, when `__sysmon` retakes a processor or finds a timer overdue — and outside the slab
-// that timing cannot reach the allocation counts `scale-test` requires to be identical between two compiles of
-// one program.
+// ⭐⭐ **THE ARENA IS SCHEDULER SCAFFOLDING, LIKE THE STACKS, AND IS NEVER THE COUNTED SLAB.** It
+// holds the GT records (`__gt_free_get`), the machines (`emitSchedAllocM`) and the message staging
+// buffers (`__mbox_staging`), whose creation all depend on timing — which processor a spawn runs
+// on, which record a spawn reuses, when `__sysmon` retakes a processor or finds a timer overdue —
+// and outside the slab that timing cannot reach the allocation counts `scale-test` requires to be
+// identical between two compiles of one program.
 //
 // ⚠ **THE COMPARE IS SIGNED, WHICH IS SOUND**: no lane maps a page base that is zero or negative
 // (`__slab_assert_os_alloc`'s argument), and 0 against 0 — the state before the first carve — fails the test

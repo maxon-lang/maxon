@@ -5842,16 +5842,19 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.funcAddr(loopPtr, funcName: serviceLoopSymbolFor(self.signatures, typeName: typeName, instance: self.spawnedStateInstance(state))))
 		let abandonPtr = self.mintStdValueId()
 		self.stdModule.appendOp(dstBlock, op: StdOp.funcAddr(abandonPtr, funcName: serviceAbandonSymbol(typeName)))
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: SvcSpawnName, args: threeArgs(loopPtr, second: state, third: abandonPtr)))
+		let slotBytes = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(slotBytes, value: requireServiceRequestLayout(self.signatures, typeName: typeName).boxSizeBytes() as FullRangeInt, valueType: StdType.i64))
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: SvcSpawnName, args: fourArgs(loopPtr, second: state, third: abandonPtr, fourth: slotBytes)))
 	end 'emitServiceSpawn'
 
-	// ⭐ **`h.m(…)` → `__mbox_send(mailbox, request)`.** Everything else about a send happened at
-	// the parse: the arguments were MOVED into the request box, the box was built and tagged, and the mailbox
-	// was loaded out of the handle. The op's `callee` is carried for `UnusedExportCheck` and `StdlibSource`,
-	// which read it as a reference to the message — neither is a lowering question, so nothing here reads it.
+	// ⭐ **`h.m(…)` → `__mbox_send(mailbox, request, bytes)`.** Everything else about a send happened
+	// at the parse: the arguments were MOVED into the request in the staging buffer, the request was
+	// tagged, and the mailbox was loaded out of the handle. The op's `callee` is carried for
+	// `UnusedExportCheck` and `StdlibSource`, which read it as a reference to the message — neither is
+	// a lowering question, so nothing here reads it.
 	function lowerServiceSend(hlOp MaxonOp, dstBlock IrBlock)
 		match hlOp 's'
-			serviceSend(result, _, handle, request) then self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: MboxSendName, args: twoArgs(handle, second: request)))
+			serviceSend(result, _, handle, request, bytes) then self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: MboxSendName, args: threeArgs(handle, second: request, third: bytes)))
 			default panic("lowerServiceSend: expected a `serviceSend` op, got a different MaxonOp variant — `lowerOp` routes only `serviceSend` here")
 		end 's'
 	end 'lowerServiceSend'

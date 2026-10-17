@@ -139,10 +139,10 @@ export function maxonOpDefinedValue(op MaxonOp) returns ValueId throws AbsentErr
 		// A SEND defines a VOID result — a service message is fire-and-forget, so there is no reply for that slot
 		// to carry, and it exists for the reason a void `call`'s does: every op in this dialect that a statement
 		// can be names its result.
-		serviceSend(result, _, _, _) then return result
+		serviceSend(result, _, _, _, _) then return result
 
 		// ⭐ A REPLY CELL defines the PROMISE an awaitable send hands back — a value the parser binds,
-		// slots into the request box and awaits, so it needs an origin exactly as every other one does.
+		// slots into the request and awaits, so it needs an origin exactly as every other one does.
 		serviceReplyCell(result, _, _) then return result
 		immortalStructRecord(result, _, _) then return result
 		immortalStringTable(result, _, _, _) then return result
@@ -184,7 +184,7 @@ export function maxonOpOperandValues(op MaxonOp, into ValueIdArray)
 		binOp(_, lhs, rhs, _) then appendPair(into, first: lhs, second: rhs)
 		compare(_, lhs, rhs, _, _) then appendPair(into, first: lhs, second: rhs)
 		storeIndirect(addr, _, value, _) then appendPair(into, first: addr, second: value)
-		serviceSend(_, _, handle, request) then appendPair(into, first: handle, second: request)
+		serviceSend(_, _, handle, request, bytes) then appendTriple(into, first: handle, second: request, third: bytes)
 		unaryOp(_, operand, _) then into.push(operand)
 		condBranch(cond, _, _) then into.push(cond)
 		loadIndirect(_, addr, _, _) then into.push(addr)
@@ -237,6 +237,12 @@ function appendPair(into ValueIdArray, first ValueId, second ValueId)
 	into.push(first)
 	into.push(second)
 end 'appendPair'
+
+function appendTriple(into ValueIdArray, first ValueId, second ValueId, third ValueId)
+	into.push(first)
+	into.push(second)
+	into.push(third)
+end 'appendTriple'
 
 // The outcome of an origin lookup: `found(opIndex)` for a value defined by a Maxon op,
 // `none` for a value with no op origin (a phi/block-arg, or a value not in this table).
