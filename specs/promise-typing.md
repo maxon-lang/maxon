@@ -371,10 +371,10 @@ end 'Calc'
 
 function main() returns ExitCode
 	let h = spawn Calc.create()
-	let p = h.total()
+	let p = try h.total() otherwise panic("send total")
 	let named = p.inner > 0
 	print("names a thread {named}")
-	return (try await p otherwise 0) as ExitCode
+	return (await p) as ExitCode
 end 'main'
 ```
 ```maxoncstderr
@@ -382,8 +382,8 @@ error E3185: <fragment>:19:16: '.inner' read from outside the library tiers: a p
 ```
 
 <!-- test: promise-typing.a-promise-array-element-may-be-spelled-inline -->
-⛔⛔ **`Array with Promise with (T, E)` AND THE TWO-STEP ALIAS ARE ONE TYPE.**
-`typealias Ps = Promise with (Integer, ServiceError)` followed by `Array with Ps` and the element written
+⛔⛔ **`Array with Promise with T` AND THE TWO-STEP ALIAS ARE ONE TYPE.**
+`typealias Ps = Promise with Integer` followed by `Array with Ps` and the element written
 inline must mean the same thing; an inline element sized through the primitive helper raises
 
 ```
@@ -412,7 +412,7 @@ exits 0 under both spellings, so the inline form gets the same `element_size@24`
 `element_destroy@40` stamp rather than merely stopping short of the panic.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntPromiseArray = Array with Promise with (Integer, ServiceError)
+typealias IntPromiseArray = Array with Promise with Integer
 
 type Calc
 	var n as Integer
@@ -429,10 +429,10 @@ end 'Calc'
 function main() returns ExitCode
 	let h = spawn Calc.create()
 	var ps = IntPromiseArray.create()
-	ps.push(h.double(21))
+	ps.push(try h.double(21) otherwise panic("send double"))
 
 	let p = try ps.pop() otherwise panic("the push above filled it")
-	return (try await p otherwise 0) as ExitCode
+	return (await p) as ExitCode
 end 'main'
 ```
 ```exitcode

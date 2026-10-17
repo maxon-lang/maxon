@@ -56,11 +56,10 @@ same array and this same primitive picks the first one to answer — `over-servi
 it is why the design carries a waiting primitive rather than a mailbox-specific select: a reply is an
 ordinary promise (`specs/services.md`).
 
-The storage must be `Promise with (T, ServiceError)`: a reply ALWAYS carries `ServiceError`, because the
-service can be gone whatever the message declares. A message that itself THROWS has a two-member reply error
-type no `throws` clause can name, and its reply may not be stored at all — both rules are pinned in
-`specs/services.md`, whose `awaitany-returns-the-completed-index` and
-`a-stored-reply-decodes-serviceerror-through-the-storage-road` carry them.
+The storage names the reply's own error type: `Promise with T` for a message whose handler cannot throw,
+`Promise with (T, E)` with the handler's error type `E` for one that can. A send that cannot be queued fails
+at the send, with the message's own `sendError`, so a reply carries no service error of its own
+(`specs/services.md`).
 
 ### A wait registers on EVERY slot, and the first completer readies it once
 
@@ -326,12 +325,12 @@ select" anywhere in the design. Two services are sent to; the first handler slee
 once, so the index that comes back is `1`: **reply order, not send order**, which is the whole point of
 selecting rather than awaiting slot 0.
 
-⚠ The storage names `ServiceError` because a reply always carries it (`services.md`'s
-`error.a-reply-stored-without-its-error-type-is-refused`), and both replies are awaited afterwards because
-`awaitAny` retires nothing.
+⚠ The storage is a plain `Promise with Integer` because neither handler throws (`specs/services.md`), so
+each reply is awaited with a plain `await`, and both are awaited afterwards because `awaitAny` retires
+nothing.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias ReplyPromise = Promise with (Integer, ServiceError)
+typealias ReplyPromise = Promise with Integer
 typealias ReplyPromiseArray = Array with ReplyPromise
 
 type Slow
@@ -363,8 +362,8 @@ function main() returns ExitCode
 	let slow = spawn Slow.create()
 	let quick = spawn Quick.create()
 	var ps = ReplyPromiseArray.create()
-	ps.push(slow.value())
-	ps.push(quick.value())
+	ps.push(try slow.value() otherwise panic("send slow"))
+	ps.push(try quick.value() otherwise panic("send quick"))
 	let ready = ps.awaitAny()
 	var score = 0 as Integer
 	if ready == 1 'thequickreplywonthoughitwassentsecond'
@@ -372,7 +371,7 @@ function main() returns ExitCode
 	end 'thequickreplywonthoughitwassentsecond'
 	var sum = 0 as Integer
 	for p in ps 'drainbothreplies'
-		sum = sum + (try await p otherwise 0)
+		sum = sum + (await p)
 	end 'drainbothreplies'
 	if sum == 3 'bothrepliessurvivedtheselect'
 		score = score + 4
@@ -526,7 +525,7 @@ lock any two slots share is taken at all. `replies-racing-the-registration-at-on
 one processor, where every reply completes after the registration.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias ReplyPromise = Promise with (Integer, ServiceError)
+typealias ReplyPromise = Promise with Integer
 typealias ReplyPromiseArray = Array with ReplyPromise
 typealias EchoHandleArray = Array with Echo.handle
 
@@ -557,7 +556,7 @@ function main() returns ExitCode
 	for r in 0 upto rounds 'eachRound'
 		var replies = ReplyPromiseArray.create()
 		for (slot, echo) in echoes.withIterator() 'sendEach'
-			replies.push(echo.value((r as Integer) * services + (slot.index() as Integer)))
+			replies.push(try echo.value((r as Integer) * services + (slot.index() as Integer)) otherwise panic("send value"))
 		end 'sendEach'
 
 		let ready = replies.awaitAny()
@@ -567,7 +566,7 @@ function main() returns ExitCode
 				completedPicks = completedPicks + 1
 			end 'theNamedSlotHadCompleted'
 
-			sum = sum + (try await p otherwise 0)
+			sum = sum + (await p)
 		end 'drain'
 	end 'eachRound'
 
@@ -592,7 +591,7 @@ the system monitor could take the processor from `main` between two sends and ru
 select. That road must give the same answers as the racing one. Like its twin, it is a control.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias ReplyPromise = Promise with (Integer, ServiceError)
+typealias ReplyPromise = Promise with Integer
 typealias ReplyPromiseArray = Array with ReplyPromise
 typealias EchoHandleArray = Array with Echo.handle
 
@@ -623,7 +622,7 @@ function main() returns ExitCode
 	for r in 0 upto rounds 'eachRound'
 		var replies = ReplyPromiseArray.create()
 		for (slot, echo) in echoes.withIterator() 'sendEach'
-			replies.push(echo.value((r as Integer) * services + (slot.index() as Integer)))
+			replies.push(try echo.value((r as Integer) * services + (slot.index() as Integer)) otherwise panic("send value"))
 		end 'sendEach'
 
 		let ready = replies.awaitAny()
@@ -633,7 +632,7 @@ function main() returns ExitCode
 				completedPicks = completedPicks + 1
 			end 'theNamedSlotHadCompleted'
 
-			sum = sum + (try await p otherwise 0)
+			sum = sum + (await p)
 		end 'drain'
 	end 'eachRound'
 
@@ -669,7 +668,7 @@ answer is fixed: 400 completed picks and the sum of every value sent, `6400 * 63
 `sixteen-replies-completing-out-of-order-at-one-processor` is its twin at one processor.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias ReplyPromise = Promise with (Integer, ServiceError)
+typealias ReplyPromise = Promise with Integer
 typealias ReplyPromiseArray = Array with ReplyPromise
 typealias EchoHandleArray = Array with Echo.handle
 
@@ -708,7 +707,7 @@ function main() returns ExitCode
 		for (slot, echo) in echoes.withIterator() 'sendEach'
 			let s = slot.index() as Integer
 			let spins = (s * slotStride + (r as Integer) * roundStride) mod services
-			replies.push(echo.value((r as Integer) * services + s, spins: spins))
+			replies.push(try echo.value((r as Integer) * services + s, spins: spins) otherwise panic("send value"))
 		end 'sendEach'
 
 		let ready = replies.awaitAny()
@@ -718,7 +717,7 @@ function main() returns ExitCode
 				completedPicks = completedPicks + 1
 			end 'theNamedSlotHadCompleted'
 
-			sum = sum + (try await p otherwise 0)
+			sum = sum + (await p)
 		end 'drain'
 	end 'eachRound'
 
@@ -743,7 +742,7 @@ order, every completion after the registration. The sixteen-way registration and
 order they share, must give the same answers as on the racing road. Like its twin, it is a control.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias ReplyPromise = Promise with (Integer, ServiceError)
+typealias ReplyPromise = Promise with Integer
 typealias ReplyPromiseArray = Array with ReplyPromise
 typealias EchoHandleArray = Array with Echo.handle
 
@@ -782,7 +781,7 @@ function main() returns ExitCode
 		for (slot, echo) in echoes.withIterator() 'sendEach'
 			let s = slot.index() as Integer
 			let spins = (s * slotStride + (r as Integer) * roundStride) mod services
-			replies.push(echo.value((r as Integer) * services + s, spins: spins))
+			replies.push(try echo.value((r as Integer) * services + s, spins: spins) otherwise panic("send value"))
 		end 'sendEach'
 
 		let ready = replies.awaitAny()
@@ -792,7 +791,7 @@ function main() returns ExitCode
 				completedPicks = completedPicks + 1
 			end 'theNamedSlotHadCompleted'
 
-			sum = sum + (try await p otherwise 0)
+			sum = sum + (await p)
 		end 'drain'
 	end 'eachRound'
 

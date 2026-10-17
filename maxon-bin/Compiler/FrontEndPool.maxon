@@ -32,9 +32,9 @@
 // ⚠ **WHAT A WORKER STRUCTURALLY CANNOT DO** is `BackendPool`'s list: reach a module `var` (E3143), await, or be
 // handed a record a second frame still owns (E3138 at the send, exit 96 at run time).
 
-// A reply cell for each message that carries one. No message throws, so the error set is the bare
-// `ServiceError` — the service can be gone.
-typealias FrontEndReplyPromise = Promise with (FrontEndReply, ServiceError)
+// A reply cell for each message that carries one. No message throws, so the promise names no error
+// type.
+typealias FrontEndReplyPromise = Promise with (FrontEndReply)
 typealias FrontEndReplyPromiseArray = Array with FrontEndReplyPromise
 typealias FrontEndWorkerHandleArray = Array with FrontEndWorker.handle
 
@@ -495,7 +495,7 @@ module type FrontEndPool
 
 		// Temporaries, so the send moves them: the handles are the worker's alone, and the declarations
 		// they name are shared.
-		worker.adopt(handoff.declarations.clone(), template: handoff.template.clone())
+		try worker.adopt(handoff.declarations.clone(), template: handoff.template.clone()) otherwise panic("{workerRefusedSendMessage("FrontEndPool.requireAdopted", subject: "the worker in slot {workerSlot}")}")
 		self.adoptions = self.adoptions + 1
 		try self.adopted.set(workerSlot, value: true) otherwise panic("FrontEndPool.requireAdopted: adopted.set OOB at {workerSlot} below count {self.adopted.count()}")
 		try self.heldRevisions.set(workerSlot, value: handoff.liveKeysRevision) otherwise panic("FrontEndPool.requireAdopted: heldRevisions.set OOB at {workerSlot} below count {self.heldRevisions.count()}")
@@ -511,7 +511,7 @@ module type FrontEndPool
 			return
 		end 'current'
 
-		self.workerAt(workerSlot).adoptLiveKeys(self.baselineIndex().liveDefaultKeys().clone())
+		try self.workerAt(workerSlot).adoptLiveKeys(self.baselineIndex().liveDefaultKeys().clone()) otherwise panic("{workerRefusedSendMessage("FrontEndPool.refreshLiveKeys", subject: "the worker in slot {workerSlot}")}")
 		try self.heldRevisions.set(workerSlot, value: self.baselineRevision) otherwise panic("FrontEndPool.refreshLiveKeys: heldRevisions.set OOB at {workerSlot} below count {self.heldRevisions.count()}")
 	end 'refreshLiveKeys'
 
@@ -591,7 +591,7 @@ module type FrontEndPool
 			let freedWorker = dispatch.workerAt(ready)
 			let fileIndex = fileOfJob(files, job: dispatch.land(ready, outstanding: replies.count()))
 			let reply = try replies.remove(ready) otherwise panic("FrontEndPool.drain: replies.remove({ready}) — `awaitAny` answered a slot of this very array")
-			var answer = try await reply otherwise panic("{workerGoneMessage("FrontEndPool.drain", subject: "the worker handed file {fileIndex}")}")
+			var answer = await reply
 			landOutcome(answer.outcome, fileIndex: fileIndex, outcomes: outcomes, slots: slots)
 
 			if dispatch.hasUndispatchedFor(freedWorker) 'handTheFreedWorkerTheNextJob'
@@ -605,8 +605,8 @@ module type FrontEndPool
 		let fileIndex = fileOfJob(files, job: dispatch.nextJob(workerSlot))
 
 		match input 'input'
-			lexing(project) then replies.push(self.workerAt(workerSlot).run(FrontEndJob.lexing(sourceTextAt(project, fileIndex: fileIndex))))
-			parsing(queries) then replies.push(self.adoptedWorkerAt(workerSlot).run(FrontEndJob.parsing(queryAt(queries, fileIndex: fileIndex))))
+			lexing(project) then replies.push(try self.workerAt(workerSlot).run(FrontEndJob.lexing(sourceTextAt(project, fileIndex: fileIndex))) otherwise panic("{workerRefusedSendMessage("FrontEndPool.dispatchJob", subject: "the worker handed file {fileIndex}")}"))
+			parsing(queries) then replies.push(try self.adoptedWorkerAt(workerSlot).run(FrontEndJob.parsing(queryAt(queries, fileIndex: fileIndex))) otherwise panic("{workerRefusedSendMessage("FrontEndPool.dispatchJob", subject: "the worker handed file {fileIndex}")}"))
 		end 'input'
 	end 'dispatchJob'
 

@@ -358,16 +358,16 @@ function serviceCallCycleHopLine(graph ServiceBlockingGraph, cycle CsrColumn, st
 	return "{ServiceCyclePathSeparator}`{String.from(graph.edgeMessageAt(edge))}` ({site.declFilePath.toString()}:{site.line}:{site.column}) awaits a reply from `{String.from(graph.serviceNameOf(awaited))}`"
 end 'serviceCallCycleHopLine'
 
-// ⚠ **THE CURE DIFFERS BETWEEN A RING AND A SELF-EDGE, and only the self-edge needs the reason.** A ring is
-// broken by making any one of its calls fire-and-forget; a SELF-EDGE names a shape that would not actually
-// deadlock at run time — two distinct instances — so the sentence has to say why it is refused anyway before
-// the workaround reads as anything but arbitrary.
+// ⚠ **THE CURE DIFFERS BETWEEN A RING AND A SELF-EDGE, and only the self-edge needs the reason.** A
+// ring is broken by sending any one of its messages without awaiting a reply; a SELF-EDGE names a
+// shape that would not actually deadlock at run time — two distinct instances — so the sentence has
+// to say why it is refused anyway before the workaround reads as anything but arbitrary.
 function serviceCallCycleCure(graph ServiceBlockingGraph, cycle CsrColumn, start CsrIndex) returns String
 	if cycle.count() == 1 'aSelfEdge'
-		return "Two distinct instances of `{String.from(graph.serviceNameOf(start))}` would not deadlock — but edges are by TYPE, which is what makes them statically knowable at all, so the analysis cannot tell the instances apart and must be conservative. Make the peer call fire-and-forget (send it as a statement and have the peer reply with a separate message), or split the role into two types"
+		return "Two distinct instances of `{String.from(graph.serviceNameOf(start))}` would not deadlock — but edges are by TYPE, which is what makes them statically knowable at all, so the analysis cannot tell the instances apart and must be conservative. Make the peer message return nothing and throw nothing, and send it with `try <handle>.<message>(…) otherwise …` without awaiting it (have the peer reply with a separate message), or split the role into two types"
 	end 'aSelfEdge'
 
-	return "A message may not await a reply from a service that can await back. Break the ring by making one of these calls fire-and-forget — drop its `returns` and `throws` clauses, or send it as a statement and do not await it — because a non-blocking send is not part of the graph"
+	return "A message may not await a reply from a service that can await back. Break the ring by making one of these messages return nothing and throw nothing, and send it with `try <handle>.<message>(…) otherwise …` without awaiting it — because a non-blocking send is not part of the graph"
 end 'serviceCallCycleCure'
 
 // The line break each hop and the closing sentence open with. Named because it is one fact — the path is a

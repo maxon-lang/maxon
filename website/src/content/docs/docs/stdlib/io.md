@@ -310,7 +310,9 @@ The standard library's default sink is a `TextLogHandler` on stderr with the tim
 milliseconds) and a minimum level of INFO.
 
 Only an enabled call builds a record: the level is checked at the call, before anything reaches the handler.
-Below ERROR, a call sends its record to the handler and returns, and the handler writes it. `Log.error` —
+Below ERROR, a call sends its record to the handler and returns, and the handler writes it. When the
+handler's mailbox is full, the call yields and sends the record again until it is queued; a record logged
+after the handler has stopped is discarded. `Log.error` —
 and any call at a rank of ERROR or above — returns once the handler has written its record, and so every
 record sent before it too, because the handler takes records in order; a line logged just before a `panic` is
 on the stream. When the program exits normally, every record still queued is written first.
@@ -486,6 +488,9 @@ library's `default` for its capture control: a program that calls `TraceCapture`
 | `TraceCapture.startCapture()` | — | Clear the recorder, then switch capturing on. |
 | `TraceCapture.stopCapture()` | `TraceKeyArray` | Switch capturing off, then await the recorder's keys, in the order it received them; the recorder starts empty again. |
 | `TraceCapture.fired(capturedKeys TraceKeyArray, key String)` | `bool` | True when `key` was recorded at least once. |
+
+`trace`, `startCapture` and `stopCapture` wait for room when the recorder's mailbox is full: each yields and
+sends again until the recorder takes its message.
 
 ```maxon
 function main() returns ExitCode

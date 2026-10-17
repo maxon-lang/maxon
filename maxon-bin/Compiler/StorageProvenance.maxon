@@ -2889,8 +2889,8 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			sizeofType(result, _) then self.flowFromOperands(func, op: op, result: result)
 			constArrayLiteral(result, _, _, _) then self.flowFromOperands(func, op: op, result: result)
 			errorFlagEncode(result, _, _) then self.flowFromOperands(func, op: op, result: result)
-			serviceSpawn(result, _, _) then self.flowFromOperands(func, op: op, result: result)
-			serviceSend(result, _, _, _, _) then self.flowFromOperands(func, op: op, result: result)
+			serviceSpawn(result, _, _, _) then self.flowFromOperands(func, op: op, result: result)
+			serviceSend(result, _, _, _, _, _) then self.flowFromOperands(func, op: op, result: result)
 			serviceReplyCell(result, _, _) then self.flowFromOperands(func, op: op, result: result)
 			immortalStructRecord(result, _, _) then self.flowFromOperands(func, op: op, result: result)
 			immortalStringTable(result, _, _, _) then self.flowFromOperands(func, op: op, result: result)
@@ -6066,8 +6066,8 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			witnessDispatch(result, _, _, _, _, _, _, _) then self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
 			witnessTryDispatch(result, _, _, _, _, _, _, _) then self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
 			errorFlagEncode(result, _, _) then self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
-			serviceSpawn(result, _, _) then self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
-			serviceSend(result, _, _, _, _) then self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
+			serviceSpawn(result, _, _, _) then self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
+			serviceSend(result, _, _, _, _, _) then self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
 			serviceReplyCell(result, _, _) then self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
 			immortalStructRecord(result, _, _) then self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
 			immortalStringTable(result, _, _, _) then self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
@@ -6702,7 +6702,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			return
 		end 'theReportedOneStands'
 
-		let at = try self.hygieneIndexOf(candidates.reported) otherwise return
+		let at = try self.hygieneIndexOf(candidates.reported) otherwise panic("ProvenanceTracer.withholdVarShouldBeLet: the E3077 the parser filed with these candidates is not among the project's binding-hygiene diagnostics — `commitDiagnostics` merges every artifact's")
 
 		if firstUnexcused == candidates.values.count() 'everyOneIsNeeded'
 			try self.hygieneWithdrawn.set(at, value: true) otherwise panic("ProvenanceTracer.withholdVarShouldBeLet: hygieneWithdrawn.set OOB at {at}")
@@ -6718,7 +6718,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 		self.indexHygieneDiagnostics()
 		var at = try self.hygieneFirstAtPosition.get(hygienePositionKeyOf(reported)) otherwise throw AbsentError.absent
 
-		while not ((try self.project.bindingHygieneDiagnostics.get(at) otherwise panic("ProvenanceTracer.hygieneIndexOf: bindingHygieneDiagnostics.get OOB at {at}")) is reported) 'eachAtThePosition'
+		while not hygieneDiagnosticsAreOne(try self.project.bindingHygieneDiagnostics.get(at) otherwise panic("ProvenanceTracer.hygieneIndexOf: bindingHygieneDiagnostics.get OOB at {at}"), reported: reported) 'eachAtThePosition'
 			at = try self.hygieneNextAtPosition.get(at)
 		end 'eachAtThePosition'
 
@@ -10718,6 +10718,12 @@ function hygienePositionKeyOf(diagnostic Diagnostic) returns PositionKey
 	let site = hygieneSiteOf(diagnostic)
 	return positionKey(site.1, column: site.2)
 end 'hygienePositionKeyOf'
+
+function hygieneDiagnosticsAreOne(recorded Diagnostic, reported Diagnostic) returns bool
+	let (recordedFile, recordedLine, recordedColumn) = hygieneSiteOf(recorded)
+	let (reportedFile, reportedLine, reportedColumn) = hygieneSiteOf(reported)
+	return recorded.code == reported.code and recordedLine == reportedLine and recordedColumn == reportedColumn and recordedFile == reportedFile
+end 'hygieneDiagnosticsAreOne'
 
 function hygieneSiteOf(diagnostic Diagnostic) returns (FilePath, LineNumber, ColumnNumber)
 	match diagnostic.anchor 'anchor'

@@ -53,12 +53,12 @@ type RingNode
 
 	export function pass(remaining Count)
 		if remaining == 0 'holdsZero'
-			self.reporter.report(self.label)
+			try self.reporter.report(self.label) otherwise panic("RingNode.pass: the reporter refused the only report")
 			return
 		end 'holdsZero'
 
 		match self.successor 'forward'
-			linked(next) then next.pass(remaining - 1)
+			linked(next) then try next.pass(remaining - 1) otherwise panic("RingNode.pass: the only token in the ring was refused")
 			unlinked then panic("RingNode.pass: the ring was never linked")
 		end 'forward'
 	end 'pass'
@@ -85,10 +85,10 @@ function main() returns ExitCode
 
 	for slot in 0 upto ringSize 'linkNodes'
 		let following = ((slot + 1) mod ringSize) as RingSlot
-		ringNodeAt(nodes, slot: slot as RingSlot).link(ringNodeAt(nodes, slot: following).clone())
+		try ringNodeAt(nodes, slot: slot as RingSlot).link(ringNodeAt(nodes, slot: following).clone()) otherwise panic("thread-ring: a fresh node refused its link")
 	end 'linkNodes'
 
-	ringNodeAt(nodes, slot: 0).pass(passes)
+	try ringNodeAt(nodes, slot: 0).pass(passes) otherwise panic("thread-ring: the first node refused the token")
 
 	// The holder at zero reports fire-and-forget, because a node awaiting its successor in a cycle is
 	// E3139; only an idle ring guarantees the report has landed.

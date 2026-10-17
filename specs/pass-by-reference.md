@@ -3267,7 +3267,7 @@ end 'Meter'
 function main() returns ExitCode
 	let h = spawn Meter.create()
 	var x = 3 as Narrow
-	h.set(x)
+	try h.set(x) otherwise panic("an open mailbox with room takes the send")
 	let level = try await h.read() otherwise 0
 	print("{x} {level}\n")
 	return 0

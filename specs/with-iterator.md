@@ -217,11 +217,11 @@ end 'main'
 ```
 
 <!-- test: withIterator.awaits-every-service-reply-of-an-array -->
-The same loop over replies to a service's throwing message, whose promise type names the message's merged
-error set through `Calc.divide.errors`.
+The same loop over replies to a service's throwing message, whose promise type names the handler's own error
+type, `MathError`.
 ```maxon
 typealias Tally = int(0 to u64.max)
-typealias ReplyPromise = Promise with (Tally, Calc.divide.errors)
+typealias ReplyPromise = Promise with (Tally, MathError)
 typealias ReplyPromiseArray = Array with ReplyPromise
 
 enum MathError implements Error
@@ -249,8 +249,8 @@ end 'Calc'
 function main() returns ExitCode
 	let calc = spawn Calc.create()
 	var replies = ReplyPromiseArray.create()
-	replies.push(calc.divide(10, by: 2))
-	replies.push(calc.divide(10, by: 0))
+	replies.push(try calc.divide(10, by: 2) otherwise panic("an open mailbox with room takes the send"))
+	replies.push(try calc.divide(10, by: 0) otherwise panic("an open mailbox with room takes the send"))
 
 	for (position, reply) in replies.withIterator() 'each'
 		let value = try await reply otherwise 0

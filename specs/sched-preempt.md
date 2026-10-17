@@ -99,11 +99,11 @@ function main() returns ExitCode
 	let s = spawn Spinner.create()
 	let b = spawn Bystander.create()
 	let start = Clock.nowMs()
-	let spun = s.spin(spinBursts, startMs: start)
+	let spun = try s.spin(spinBursts, startMs: start) otherwise panic("an open mailbox with room takes the send")
 	sleep(20)
 	let p = try await b.ping() otherwise 0
 	let pingAtMs = Clock.elapsedMs(start) as Integer
-	let q = try await spun otherwise 0
+	let q = await spun
 	let spinEndedAtMs = try await s.endedAt() otherwise 0 - 1
 	print("prompt={pingAtMs < spinEndedAtMs} ping={p} spun={q > 0} preempted={Scheduler.counters().preempts > 0}\n")
 	return 0
@@ -180,11 +180,11 @@ function main() returns ExitCode
 	let r = spawn Recurser.create()
 	let b = spawn Bystander.create()
 	let start = Clock.nowMs()
-	let churned = r.churn(churnRounds, startMs: start)
+	let churned = try r.churn(churnRounds, startMs: start) otherwise panic("an open mailbox with room takes the send")
 	sleep(20)
 	let p = try await b.ping() otherwise 0
 	let pingAtMs = Clock.elapsedMs(start) as Integer
-	let wrong = try await churned otherwise 0 - 1
+	let wrong = await churned
 	let churnEndedAtMs = try await r.endedAt() otherwise 0 - 1
 	print("prompt={pingAtMs < churnEndedAtMs} ping={p} wrong={wrong}\n")
 	return 0
@@ -205,7 +205,7 @@ EARLIEST of them, so what it states is that the bystander was answered while eve
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias SpinnerHandleArray = Array with Spinner.handle
-typealias ReplyPromise = Promise with (Integer, ServiceError)
+typealias ReplyPromise = Promise with Integer
 typealias ReplyPromiseArray = Array with ReplyPromise
 
 // Calibrated to about 300 ms. The bound is WORK and not the clock, so a host that holds the process off a
@@ -273,7 +273,7 @@ function main() returns ExitCode
 	var k = 0 as Count
 	while k < spinners.count() 'sendEach'
 		view s = try spinners.get(k) otherwise panic("spinners.get out of range at {k}: bounded by the pushes above")
-		spun.push(s.spin(spinBursts, startMs: start))
+		spun.push(try s.spin(spinBursts, startMs: start) otherwise panic("an open mailbox with room takes the send"))
 		k = k + 1
 	end 'sendEach'
 	sleep(20)
@@ -282,7 +282,7 @@ function main() returns ExitCode
 	var ran = 0 as Count
 	while spun.count() > 0 'collect'
 		let r = try spun.pop() otherwise panic("spun.pop on a non-empty array")
-		let q = try await r otherwise 0
+		let q = await r
 		if q > 0 'spun'
 			ran = ran + 1
 		end 'spun'
@@ -481,11 +481,11 @@ end 'Mixer'
 function main() returns ExitCode
 	let m1 = spawn Mixer.create(0, scale: 1.0)
 	let m2 = spawn Mixer.create(1000, scale: 9.75)
-	let churned1 = m1.churn(200)
-	let churned2 = m2.churn(200)
+	let churned1 = try m1.churn(200) otherwise panic("an open mailbox with room takes the send")
+	let churned2 = try m2.churn(200) otherwise panic("an open mailbox with room takes the send")
 	sleep(20)
-	let wrong1 = try await churned1 otherwise 0 - 1
-	let wrong2 = try await churned2 otherwise 0 - 1
+	let wrong1 = await churned1
+	let wrong2 = await churned2
 	print("wrong={wrong1 + wrong2} preempted={Scheduler.counters().preempts > 1}\n")
 	return 0
 end 'main'
@@ -552,11 +552,11 @@ function main() returns ExitCode
 	let s = spawn Spinner.create()
 	let b = spawn Bystander.create()
 	let start = Clock.nowMs()
-	let spun = s.spin(spinSteps, startMs: start)
+	let spun = try s.spin(spinSteps, startMs: start) otherwise panic("an open mailbox with room takes the send")
 	sleep(20)
 	let p = try await b.ping() otherwise 0
 	let pingAtMs = Clock.elapsedMs(start) as Integer
-	let q = try await spun otherwise 0
+	let q = await spun
 	let spinEndedAtMs = try await s.endedAt() otherwise 0 - 1
 	print("prompt={pingAtMs < spinEndedAtMs} ping={p} spun={q > 0} preempted={Scheduler.counters().preempts > 0}\n")
 	return 0
@@ -578,7 +578,7 @@ answered while every processor was still busy.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias SpinnerHandleArray = Array with Spinner.handle
-typealias ReplyPromise = Promise with (Integer, ServiceError)
+typealias ReplyPromise = Promise with Integer
 typealias ReplyPromiseArray = Array with ReplyPromise
 
 let spinSteps = 90000000
@@ -634,7 +634,7 @@ function main() returns ExitCode
 	var k = 0 as Count
 	while k < spinners.count() 'sendEach'
 		view s = try spinners.get(k) otherwise panic("spinners.get out of range at {k}: bounded by the pushes above")
-		spun.push(s.spin(spinSteps, startMs: start))
+		spun.push(try s.spin(spinSteps, startMs: start) otherwise panic("an open mailbox with room takes the send"))
 		k = k + 1
 	end 'sendEach'
 	sleep(20)
@@ -643,7 +643,7 @@ function main() returns ExitCode
 	var ran = 0 as Count
 	while spun.count() > 0 'collect'
 		let r = try spun.pop() otherwise panic("spun.pop on a non-empty array")
-		let q = try await r otherwise 0
+		let q = await r
 		if q > 0 'spun'
 			ran = ran + 1
 		end 'spun'
@@ -770,9 +770,9 @@ end 'Churner'
 
 function main() returns ExitCode
 	let c = spawn Churner.create()
-	let churned = c.churn()
+	let churned = try c.churn() otherwise panic("an open mailbox with room takes the send")
 	sleep(20)
-	let wrong = try await churned otherwise 0 - 1
+	let wrong = await churned
 	print("wrong={wrong} preempted={Scheduler.counters().preempts > 0}\n")
 	return 0
 end 'main'
@@ -822,13 +822,13 @@ end 'Echo'
 
 function main() returns ExitCode
 	let e = spawn Echo.create()
-	let reply = e.ping()
+	let reply = try e.ping() otherwise panic("an open mailbox with room takes the send")
 	let start = Clock.nowMs()
 	var acc = 0 as Integer
 	while (Clock.elapsedMs(start) as Integer) < holdMs 'hold'
 		acc = step(acc, depth: 4)
 	end 'hold'
-	let p = try await reply otherwise 0 - 1
+	let p = await reply
 	print("ping={p} held={acc mod 2 + 1 > 0} preempted={Scheduler.counters().preempts} retaken={Scheduler.counters().retakes}\n")
 	return 0
 end 'main'
@@ -863,7 +863,7 @@ is not a disturbed attempt but its own printed line and exit 3, as is running ou
 distinct failure rather than a timeout.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias ReplyPromise = Promise with (Integer, ServiceError)
+typealias ReplyPromise = Promise with Integer
 typealias ReplyPromiseArray = Array with ReplyPromise
 
 let burstCap = 100000
@@ -921,13 +921,13 @@ function attempt() returns (Integer, Integer) throws Attempt
 
 	let c = spawn Marker.create(3)
 	var replies = ReplyPromiseArray.create()
-	replies.push(a.rank())
-	replies.push(b.rank())
-	replies.push(c.rank())
+	replies.push(try a.rank() otherwise panic("an open mailbox with room takes the send"))
+	replies.push(try b.rank() otherwise panic("an open mailbox with room takes the send"))
+	replies.push(try c.rank() otherwise panic("an open mailbox with room takes the send"))
 	let first = replies.awaitAny()
 	var sum = 0 as Integer
 	for p in replies 'drainthemall'
-		sum = sum + (try await p otherwise 0)
+		sum = sum + (await p)
 	end 'drainthemall'
 	if Scheduler.counters().preempts != c0 + 1 'late'
 		throw Attempt.preemptedAfterTheWindow

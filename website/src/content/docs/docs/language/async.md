@@ -246,15 +246,16 @@ end 'Calc'
 
 function main() returns ExitCode
 	let h = spawn Calc.create()
-	h.bump(3)                                       // fire-and-forget message
-	h.bump(4)
+	try h.bump(3) otherwise ignore                  // a message with no reply
+	try h.bump(4) otherwise ignore
 	let n = try await h.total() otherwise 0         // a message with a reply
 	print("total={n}\n")                            // total=7
 
 	h.shutdown()
 	let after = try await h.total() otherwise (e) 'stopped'
 		match e 'why'
-			stopped then print("service stopped\n")
+			mailboxFull then print("mailbox full\n")
+			serviceStopped then print("service stopped\n")
 		end 'why'
 		return 0
 	end 'stopped'
@@ -266,19 +267,30 @@ end 'main'
 
 - **The same type is still a plain value.** `Calc.create()` without `spawn` is an ordinary record with
   ordinary calls, so a service's logic is unit-testable without threads.
-- **Messages.** A method that returns nothing and throws nothing is sent and forgotten. A method that returns
-  a value, or throws, is awaited: `try await h.method(…)`. The reply can always fail with
-  `ServiceError.stopped`, so plain `await` outside a `try` block or a test body is **E3057**; the method's
-  own error type merges with it in the
-  handler's `match`.
+- **Messages.** Every send is a throwing call, because it can fail at the send (see
+  [Mailboxes and failed sends](#mailboxes-and-failed-sends)): write `try h.method(…)` with an `otherwise`,
+  or propagate it. A send with no `try` is **E3057**, except inside a block-form `try` or a `test` body,
+  which take its error.
+- **Replies.** A method that returns a value, or throws, delivers a reply. `try await h.method(…)` sends it
+  and awaits the reply, and its one `try` covers both: the error it binds has the send's cases
+  `mailboxFull` and `serviceStopped` beside the method's own. `let p = try h.method(…)` sends it and keeps
+  the reply as a promise, whose error type is the method's own alone: `Promise with (T, E)` for a method
+  that throws `E`, `Promise with T` for one that throws nothing, which a plain `await p` resolves. A
+  bare `try await` that propagates is refused (**E3059**) when the method throws too, because the two
+  errors have no single type to propagate: handle it with `otherwise (e)` and `match e`, or split it into
+  `let p = try h.method(…)` and `try await p`.
+- **A reply is kept, or discarded on purpose.** A method that returns or throws, sent as a statement, is
+  **E3190**. Await the reply, keep it, or discard it on purpose with `_ = try h.method(…)`.
 - **Private methods are not messages.** Calling a non-exported method or a static through a handle is
   **E3136**. A service cannot send to itself.
 - **A message is as visible as its service, and no more.** Its `export` makes it a message rather than
   widening it past the type, so the types its signature names need only the service type's visibility
   ([E3167](/docs/cli/error-codes/#e3167--semanticsignaturetypelessvisiblethanfunction)): a file-private service's messages may name
   file-private types.
-- **Shutdown.** `h.shutdown()` stops the service after the messages already queued. Dropping the last
-  handle does the same. Replies requested afterwards fail with `ServiceError.stopped`.
+- **Shutdown.** `h.shutdown()` closes the mailbox: the messages already queued still run, and then the
+  service stops. Every later send fails with `serviceStopped`. It always succeeds, on a full mailbox too.
+  Dropping the last handle does the same. A
+  queued message always runs, so a reply always resolves.
 - **The target** of `spawn` must be a static factory that returns its own type; anything else — including a
   bare `spawn f()` — is **E3134**.
 - **Generic services.** A generic type can be spawned; its handle type is spelled through an alias,
@@ -339,11 +351,87 @@ a `var` whose initializer may take a `let`'s record is **E3078** (see
 **Output order.** Text printed by `main` and by a service handler may interleave in any order; sequence it
 through awaited replies when order matters.
 
+### Mailboxes and failed sends
+
+A mailbox holds at most its **capacity** of queued messages: `DefaultMailboxCapacity` (1024), or the
+`MailboxCapacity` (`int(1 to 2^31)`) that `spawn(capacity: n) Type.factory(args)` names. The capacity is a
+ceiling: the mailbox's memory grows with its backlog, up to the capacity.
+
+A send returns at once: the message is queued, or the send fails with an error the compiler declares for
+each message, `<Service>.<message>.sendError`, whose two cases carry the arguments the send was given:
+
+- `mailboxFull(<arguments>)` — the mailbox holds its capacity;
+- `serviceStopped(<arguments>)` — the service has been shut down.
+
+The arguments come back owned by the caller, so they can be sent again, to this service or another. A
+read-only value the send shared (see above) comes back as a copy. One whose type has no deep copy comes back
+as the shared value itself, which the caller may read and keeps for itself. A message with no parameters
+has payload-free cases. Through an
+[interface handle](#interface-handles) the error is `<Interface>.<message>.sendError`.
+
+```maxon
+typealias Count = int(0 to 1000000)
+
+type Store
+	var kept as Count
+	var last as String
+
+	static function create() returns Self
+		return Self{kept: 0, last: ""}
+	end 'create'
+
+	export function keep(line String)
+		self.kept = self.kept + 1
+		self.last = line
+	end 'keep'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn(capacity: 64) Store.create()
+
+	for i in 0 upto 1000 'eachLine'
+		var pending = "line {i}"
+
+		while true 'untilItLands'
+			try h.keep(pending) otherwise (e) 'refused'
+				match e 'why'
+					mailboxFull(back) then pending = back
+					serviceStopped then return 1
+				end 'why'
+
+				Scheduler.yield()
+				continue
+			end 'refused'
+
+			break
+		end 'untilItLands'
+	end 'eachLine'
+
+	return 0
+end 'main'
+```
+
+- **A full mailbox is the sender's to handle.** Retry after `Scheduler.yield()`, as above, send elsewhere, or
+  drop the message. A send returns at once whatever happens, so the only place a sender waits is an
+  `await`, which is what keeps [E3139](/docs/cli/error-codes/#e3139--semanticservicecallcycle)'s cycle rule
+  sufficient for deadlock freedom.
+- ⚠ **Retrying coroutines can livelock.** A yield runs the green thread's other runnable coroutines first.
+  When every coroutine of one green thread retries a send to the same full service, at one processor with
+  preemption off (`MAXON_MAX_PROCS=1`, `MAXON_PREEMPT=off`) the coroutines hand the processor to each other
+  and the service waits for it forever. Let the coroutines park instead, with `sleep` or by awaiting a
+  reply.
+- **A send error is propagated** by a bare `try` in a function that `throws <Service>.<message>.sendError`,
+  or rethrown with `throw e` from the binding that caught it. Throwing one the function does not solely
+  own — a parameter, say — is **E3191**, because its catcher takes the arguments out of it as their only
+  owner.
+- `otherwise ignore` drops a failed send and releases its arguments.
+
 ## Interface Handles
 
 A service type may `implements` an interface, and `I.handle` is a handle to any running service whose type
 implements `I`. Each requirement of `I` is a message: a call through an `I.handle` is sent to whichever
-service the handle holds, fire-and-forget or awaited by the same rules as the service's own handle.
+service the handle holds, by the same rules as the service's own handle. Its send error is
+`I.<requirement>.sendError`, with the same `mailboxFull` and `serviceStopped` cases.
 
 ```maxon
 typealias Count = int(0 to 1000000)
@@ -370,7 +458,7 @@ type Counter implements Tally
 end 'Counter'
 
 function report(t Tally.handle) returns Count
-	t.add(5)
+	try t.add(5) otherwise ignore
 	return try await t.total() otherwise 0
 end 'report'
 
@@ -565,6 +653,7 @@ Each of these aborts writes `fatal error: runtime abort N (name)` to stderr, the
 | Exit code | Cause |
 |-----------|-------|
 | 75 | a green thread was neither awaited nor dropped when the program ended |
+| 90 | a service's message loop received a message its type does not declare — reachable only if a send the compiler built names no message of the service |
 | 92 | deadlock: `main` has not finished and nothing can ever run again (for example `awaitAny` on an empty array) |
 | 96 | a service send found a value with a second owner |
 | 116 | `MAXON_PREEMPT` holds a value other than `on` or `off` |

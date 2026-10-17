@@ -1225,7 +1225,8 @@ function discoveredTokenFactsOf(project Project, signatures ProgramSignatures, p
 end 'discoveredTokenFactsOf'
 
 // Matches `spawn <Type> . <member> (` and nothing looser, reading the four tokens after the
-// already-matched `spawn` keyword at `index`.
+// already-matched `spawn` keyword at `index` and its optional `(capacity: …)` group
+// (`spawnTargetIndexIn`).
 //
 // ⚠ The walk cannot be the declaration sweep's: `Parser.foldDeclaredSignaturesInto` consumes a
 // `type` declaration whole — method bodies included — and resumes past its `end`, so an arm added
@@ -1233,8 +1234,8 @@ end 'discoveredTokenFactsOf'
 // question about the whole file is answered by reading the whole file.
 //
 // ⚠ The shape is exact, which is what lets `spawn` stay an ordinary identifier:
-// `Subprocess.spawn(cmd)` puts a `(` after the word, `function f(spawn Calc)` has no `.`, `var
-// spawn as Calc` has no `(` — none of those shapes match.
+// `Subprocess.spawn(cmd)` puts a `(` that opens no `capacity:` group after the word, `function
+// f(spawn Calc)` has no `.`, `var spawn as Calc` has no `(` — none of those shapes match.
 //
 // ⚠ Both name positions ask `tokenCanBeAName`, not "is it an identifier": a keyword may be a
 // declared name (a factory spelled `static function from(...)`), and this must stay in lockstep
@@ -1246,25 +1247,26 @@ end 'discoveredTokenFactsOf'
 // declines is still refused at the site: `Parser.parseSpawn` claims every `spawn <name>` the
 // grammar can reach.
 function serviceSpawnFollowing(tokens TokenArray, index ElementIndex, gate SpawnGate) returns TokenFactEvent throws NoServiceSpawn
-	let typeTok = try tokens.get(index + 1) otherwise throw NoServiceSpawn.notOne
+	let targetIndex = spawnTargetIndexIn(tokens, spawnIndex: index)
+	let typeTok = try tokens.get(targetIndex) otherwise throw NoServiceSpawn.notOne
 
 	if not tokenCanBeAName(typeTok) 'notATypeName'
 		throw NoServiceSpawn.notOne
 	end 'notATypeName'
 
-	let dotTok = try tokens.get(index + 2) otherwise throw NoServiceSpawn.notOne
+	let dotTok = try tokens.get(targetIndex + 1) otherwise throw NoServiceSpawn.notOne
 
 	if dotTok.kind != TokenKind.dot 'notQualified'
 		throw NoServiceSpawn.notOne
 	end 'notQualified'
 
-	let memberTok = try tokens.get(index + 3) otherwise throw NoServiceSpawn.notOne
+	let memberTok = try tokens.get(targetIndex + 2) otherwise throw NoServiceSpawn.notOne
 
 	if not tokenCanBeAName(memberTok) 'notAMemberName'
 		throw NoServiceSpawn.notOne
 	end 'notAMemberName'
 
-	let openTok = try tokens.get(index + 4) otherwise throw NoServiceSpawn.notOne
+	let openTok = try tokens.get(targetIndex + 3) otherwise throw NoServiceSpawn.notOne
 
 	if openTok.kind != TokenKind.leftParen 'notACall'
 		throw NoServiceSpawn.notOne

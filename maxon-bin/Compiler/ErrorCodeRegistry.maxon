@@ -631,6 +631,8 @@ export enum ErrorCode
 	// test is not the test's body, so it still needs one. Write `try f() otherwise …`, propagate with
 	// a bare `try` from a function that `throws` the same error type, or move the call into a `try`
 	// block.
+	// Every message sent to a service is such a call, because a send fails at once with
+	// `<Service>.<message>.sendError` when the mailbox is full or the service has stopped.
 	throwingFunctionRequiresTry = "E3057"
 
 	// 'otherwise' is written without a 'try'.
@@ -642,6 +644,10 @@ export enum ErrorCode
 	// `try`. A BINDING is a value position too, so `if let x = try voidF()` (and `if let _ =`, which
 	// discards a result that does not exist) is refused here as well.
 	// NOT E3124, which is the opposite mismatch -- a value produced and dropped.
+	// A THIRD message refuses a bare propagating `try await h.m(x)` whose handler throws: the await can fail
+	// at the send with `<Service>.<message>.sendError` and in the handler with its own error, and no one
+	// error type names both. Handle both with `otherwise (e)` and `match e`, or split it: `let p = try
+	// h.m(x)` propagates the send error, then `try await p` propagates the handler's.
 	errorTypeMismatch = "E3059"
 
 	// Two typealiases in scope declare the same name.
@@ -1001,6 +1007,9 @@ export enum ErrorCode
 	// check the enclosing function's `throws` against, so a thunk throwing A can be
 	// awaited inside a function throwing B and A's ordinals reinterpreted as B's tags.
 	// The fix a diagnostic can name is the point: it says which two-parameter type to write.
+	// A service reply kept with `let p = try h.m(x)` is a promise of the handler's own error alone -- the
+	// send's error is the `try`'s -- so it is stored as `Promise with (T, E)` when the message throws `E`,
+	// and as `Promise with T` when it throws nothing.
 	promiseErrorTypeMismatch = "E3098"
 
 	// A promise is awaited a SECOND time. `await` is LINEAR: a promise is awaited exactly once.
@@ -1728,9 +1737,9 @@ export enum ErrorCode
 	// The compiler builds a directed graph over service TYPES and refuses any cycle in it. An edge `A -> B`
 	// exists when a message of `A` AWAITS a reply from a `B.handle` -- transitively through ordinary
 	// functions, so a message that calls a helper that awaits still contributes the edge.
-	// ONLY BLOCKING EDGES COUNT. A fire-and-forget send is not an edge, because a non-blocking send cannot
-	// participate in a wait cycle -- which is what keeps peer-to-peer messaging legal, and is the whole of
-	// why the rule is not crippling.
+	// ONLY BLOCKING EDGES COUNT. A send that is not awaited is not an edge: a send returns at once, queued
+	// or failed with its `sendError`, so it cannot participate in a wait cycle -- which is what keeps
+	// peer-to-peer messaging legal, and is the whole of why the rule is not crippling.
 	// Why acyclicity is sufficient rather than merely suggestive: an acyclic graph has a topological order,
 	// the service lowest in it awaits nobody and so always makes progress, and by induction every blocked
 	// caller eventually resumes. There is no configuration in which everyone is waiting.
@@ -1738,9 +1747,9 @@ export enum ErrorCode
 	// from another `Worker` is refused even though two distinct instances would not actually deadlock. Edges
 	// are by TYPE, which is what makes them statically knowable at all, so the analysis cannot tell the
 	// instances apart and must be conservative -- the guarantee is deadlock freedom.
-	// The cure is to break the cycle: make one of the calls fire-and-forget (drop the `returns` and `throws`
-	// clauses, or send it as a statement and do not await it) and have the peer reply with a separate
-	// message, or split the role into two types.
+	// The cure is to break the cycle: make one of the messages return nothing and throw nothing, send it
+	// with `try <handle>.<message>(…) otherwise …` without awaiting it, and have the peer reply with a
+	// separate message; or split the role into two types.
 	semanticServiceCallCycle = "E3139"
 
 	// A `spawn` makes a type a SERVICE, and one of its reply-bearing messages declares a reply the compiler
@@ -1751,19 +1760,16 @@ export enum ErrorCode
 	// result register holds: an integer, a `bool`, a `String`, a struct, a service handle, or the value half
 	// of an interface-typed value. A `float` comes back in a floating-point register the cell has no slot for;
 	// an opaque type parameter is released through a companion the cell does not carry.
-	// The ERROR word holds the FUSED ORDINAL of a two-member dispatch line -- `ServiceError` (what the
-	// transport can fail with, whatever the message declares) beneath the message's own error type -- which
-	// is what lets `match e` tell a stopped service apart from a handler that threw, using the same
-	// tag-interval dispatch every other `match` uses. A payload-free `enum` fits that line exactly, because
-	// its flag IS an ordinal. A payload-carrying `union`'s flag is a heap BOX POINTER instead, and a
-	// float-backed enum's tags are IEEE-754 bit patterns that can span more of the i64 range than the line
-	// has left above `ServiceError`'s own slice.
+	// The ERROR word holds the handler's `ordinal + bias`, so a payload-free `enum` fits it exactly. A
+	// payload-carrying `union`'s flag is a heap BOX POINTER instead, and a float-backed enum's tags are
+	// IEEE-754 bit patterns that can span more of the i64 range than the line a `try await` fuses the send's
+	// error and the handler's on can hold.
 	// It fires at the `spawn` rather than at a send, as every service diagnostic does, and for a reason of
 	// its own beyond the usual one: the dispatch loop the compiler synthesizes completes a reply for every
 	// reply-bearing message of the type, so a message the cell cannot carry would put a wrong-width store
 	// into a body the service really runs, whether or not the program ever sends that message.
 	// The cure is to return a value that fits the word and throw a payload-free `enum`, or to drop the
-	// `returns` and `throws` clauses -- which makes the message fire-and-forget, with no reply to carry.
+	// `returns` and `throws` clauses -- which leaves the message no reply to carry.
 	semanticServiceReplyNotCarriable = "E3140"
 
 	// A promise owns a green thread, and a green thread has exactly ONE owner at every instant -- awaiting
@@ -2256,6 +2262,20 @@ export enum ErrorCode
 	// Reported at the conversion, or at the name of the function that breaks its declaration. Declare the
 	// qualifier on the boundary, or change the body to keep to it.
 	semanticCapabilityDeclarationBroken = "E3189"
+	// A message that returns a value or throws is sent as a bare statement. Its send delivers a reply, and a
+	// statement keeps nothing, so the value and any error the handler throws would be lost. Reported even
+	// when the send's own error is handled (`try h.m(x) otherwise ignore`): the reply is the fault. Await
+	// it with `try await h.m(x)`, keep it with `let reply = try h.m(x)`, or discard it on purpose with
+	// `_ = try h.m(x)`. A message that returns nothing and throws nothing has no reply and may be sent as
+	// a statement.
+	semanticServiceReplyDropped = "E3190"
+
+	// A function throws a service send's error, `<Service>.<message>.sendError`, from a value it does not
+	// own alone -- a parameter, say, which its caller still holds. Whoever catches a send error takes the
+	// arguments out of its `mailboxFull` or `serviceStopped` case as their only owner, so the error must
+	// have no other holder. Propagate the failed send's error with a bare `try`, or `throw` the binding of
+	// the `otherwise (e)` that caught it, which hands the error over.
+	semanticServiceSendErrorNotSolelyOwned = "E3191"
 
 	// A field access could not be lowered: the base is not a struct, or the field has no slot.
 	invalidFieldAccess = "E4006"

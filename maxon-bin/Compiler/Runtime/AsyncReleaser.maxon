@@ -246,16 +246,14 @@ end 'serviceReplyNeedsReleaser'
 //     struct's inline argument region is never written for a cell and may hold a previous
 //     tenant's words. Deriving them from the message's parameters, as the async plan does, would
 //     release those.
-//   • **NO ERROR SLOT.** A reply's `threw` word carries the FUSED ORDINAL of a scalar dispatch line, never a
+//   • **NO ERROR SLOT.** A reply's `threw` word carries an `ordinal + bias`, never a
 //     box: `ServiceCompanions.uncarriableReplyErrorNoun` refuses a message whose `throws` names a
 //     payload-carrying union at the `spawn` (E3140), precisely so this word can never be a pointer.
-//   • **`calleeThrows` IS UNCONDITIONALLY TRUE**, because a reply ALWAYS throws `ServiceError` whatever the
-//     message declares — which is what gates the result release on `threw == 0`, the one reading that keeps
-//     a transport failure's zero result slot away from a drop callee.
+//   • **`calleeThrows` IS UNCONDITIONALLY TRUE**, because a reply's error word is written for every
+//     message, even a non-throwing one — which is what gates the result release on `threw == 0`,
+//     the one reading that keeps a refused reply's zero result slot away from a drop callee.
 //
-// ⚠ **AN UNDECLARED MESSAGE ANSWERS THE INERT PLAN**, on `asyncReleasePlanFor`'s reason plus one of its own:
-// `<T>.shutdown` is the compiler's own pill, which no file declares and which answers nothing, so the
-// lookup below failing IS the correct answer for it rather than a doomed program's symptom.
+// ⚠ **AN UNDECLARED MESSAGE ANSWERS THE INERT PLAN**, on `asyncReleasePlanFor`'s reason.
 function serviceReplyReleasePlanFor(messageName ByteArray, funcSignatures FuncSignatureMap, signatures ProgramSignatures, typeNames TypeNameInterner) returns AsyncReleasePlan
 	var noSlots = AsyncManagedSlotArray.create()
 	let sig = try funcSignatures.get(messageName) otherwise return AsyncReleasePlan.create(noSlots, consumedArgSlots: AsyncManagedSlotArray.create(), cellSlots: AsyncCellSlotArray.create(), resultSlots: AsyncManagedSlotArray.create(), errorSlots: AsyncManagedSlotArray.create(), calleeThrows: true)

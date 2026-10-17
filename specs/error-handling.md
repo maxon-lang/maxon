@@ -601,7 +601,7 @@ end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	h.wipe()
+	_ = try h.wipe() otherwise panic("send wipe")
 	return 0
 end 'main'
 ```

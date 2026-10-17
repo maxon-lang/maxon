@@ -187,7 +187,7 @@ function main() returns ExitCode
 	var k = 0 as Integer
 	while k < serviceCount 'sendEach'
 		view h = try hs.get(k as ElementIndex) otherwise panic("hs.get OOB at {k} — the loop is bounded by the count the pushes above filled")
-		h.grind(k, work: workPerService)
+		try h.grind(k, work: workPerService) otherwise panic("an open mailbox with room takes the send")
 		k = k + 1
 	end 'sendEach'
 
@@ -268,7 +268,7 @@ function main() returns ExitCode
 	var k = 0 as Integer
 	while k < serviceCount 'sendEach'
 		view h = try hs.get(k as ElementIndex) otherwise panic("hs.get OOB at {k} — the loop is bounded by the count the pushes above filled")
-		h.grind(k, work: workPerService)
+		try h.grind(k, work: workPerService) otherwise panic("an open mailbox with room takes the send")
 		k = k + 1
 	end 'sendEach'
 
@@ -346,7 +346,7 @@ function main() returns ExitCode
 	var k = 0 as Integer
 	while k < serviceCount 'sendEach'
 		view h = try hs.get(k as ElementIndex) otherwise panic("hs.get OOB at {k} — the loop is bounded by the count the pushes above filled")
-		h.grind(k, work: workPerService)
+		try h.grind(k, work: workPerService) otherwise panic("an open mailbox with room takes the send")
 		k = k + 1
 	end 'sendEach'
 
@@ -418,7 +418,7 @@ function main() returns ExitCode
 	var k = 0 as Integer
 	while k < serviceCount 'sendEach'
 		view h = try hs.get(k as ElementIndex) otherwise panic("hs.get OOB at {k} — the loop is bounded by the count the pushes above filled")
-		h.grind(k, work: workPerService)
+		try h.grind(k, work: workPerService) otherwise panic("an open mailbox with room takes the send")
 		k = k + 1
 	end 'sendEach'
 

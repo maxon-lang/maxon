@@ -147,8 +147,8 @@ function main() returns ExitCode
 
 	while i < serviceCount 'kick'
 		view probe = try probes.get(i as ElementIndex) otherwise panic("syscall-stack-torture: probes.get OOB at {i} — the loop is bounded by the count the pushes above filled")
-		probe.identify(i)
-		probe.churn(rounds)
+		try probe.identify(i) otherwise panic("syscall-stack-torture: a fresh service refused its first message")
+		try probe.churn(rounds) otherwise panic("syscall-stack-torture: a fresh service refused its second message")
 		i = i + 1
 	end 'kick'
 

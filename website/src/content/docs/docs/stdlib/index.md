@@ -72,6 +72,8 @@ end 'main'
 | `DurationMs`, `InstantMs`, `DurationNanos`, `InstantNanos` | `int(0 to u64.max)` | Clock |
 | `UnixSeconds`, `UnixNanos`, `UnixDays` | `int(i64.min to i64.max)` | Clock |
 | `SchedulerProcessorCount` | `int(1 to u64.max)` | Scheduler |
+| `MailboxCapacity` | `int(1 to 2147483648)` — how many messages a service's mailbox may queue, set by `spawn(capacity: n)` ([Services](/docs/language/async/#mailboxes-and-failed-sends)) | Builtins |
+| `DefaultMailboxCapacity` | the constant `1024 as MailboxCapacity` — the capacity a bare `spawn` gives a mailbox | Builtins |
 | `NetworkPort` | `int(0 to 65535)` | TcpClient; also `URL.port()` |
 | `EnvMap` | `Map with String, String` | Subprocess |
 | `JsonNodeId` / `JsonNodeIdArray` | `int(0 to u64.max)` / `Array with JsonNodeId` | Json |

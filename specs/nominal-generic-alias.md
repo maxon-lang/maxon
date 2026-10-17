@@ -2566,12 +2566,12 @@ end 'Sink'
 function main() returns ExitCode
 	let h = spawn Sink.create()
 	let a = Xs.create()
-	h.take(a)
+	try h.take(a) otherwise panic("send take")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:22:9: argument type mismatch for 'ys': expected 'Ys', got 'Xs'
+error E3005: <fragment>:22:13: argument type mismatch for 'ys': expected 'Ys', got 'Xs'
 ```
 
 <!-- test: error.a-service-message-argument-adopted-later-is-judged-against-the-parameter-brand -->
@@ -2599,7 +2599,7 @@ function main() returns ExitCode
 	let h = spawn Sink.create()
 	var a = ["a"]
 	refill(a)
-	h.take(a)
+	try h.take(a) otherwise panic("send take")
 	return 0
 end 'main'
 
@@ -2608,5 +2608,5 @@ function refill(xs Xs)
 end 'refill'
 ```
 ```maxoncstderr
-error E3005: <fragment>:23:9: cannot assign a value of type 'Xs' to union payload 'ys', which holds 'Ys'
+error E3005: <fragment>:23:13: cannot assign a value of type 'Xs' to union payload 'ys', which holds 'Ys'
 ```

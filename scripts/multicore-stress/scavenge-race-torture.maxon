@@ -93,7 +93,7 @@ typealias ChurnHandleArray = Array with Churn.handle
 
 function main() returns ExitCode
 	let scav = spawn Scavenger.create()
-	scav.sweep()
+	_ = try scav.sweep() otherwise panic("scavenge-race-torture: the fresh scavenger refused its only message")
 
 	var workers = ChurnHandleArray.create()
 
@@ -105,7 +105,7 @@ function main() returns ExitCode
 
 	for w in workers 'grindThem'
 		seed = seed + 1
-		w.grind(seed)
+		_ = try w.grind(seed) otherwise panic("scavenge-race-torture: a fresh churn service refused its only message")
 	end 'grindThem'
 
 	workers.clear()

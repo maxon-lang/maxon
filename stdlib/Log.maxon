@@ -308,19 +308,35 @@ public type LogSink
 	end 'change'
 
 	function write(level LogLevel, message String, bound LogFieldArray, attrs LogAttrArray, groups LogGroupPath, file String, line SourceLineNumber)
-		let record = ownedLogRecord(level, message: message, bound: bound, attrs: attrs, groups: groups, file: file, line: line)
+		let time = WallClock.nowUnixNanos()
 
-		// An error waits for its own write. The handler's mailbox is first in, first out, so every
-		// earlier record is written too, and a panic right after the call loses none of them.
-		if level.rank >= LogLevel.error.rank 'waitsUntilWritten'
-			try await self.handler.handle(record) otherwise ignore
-		end 'waitsUntilWritten' else 'sendsAndForgets'
-			_ = self.handler.handle(record)
-		end 'sendsAndForgets'
+		var pending = ownedLogRecord(time, level: level, message: message, bound: bound, attrs: attrs, groups: groups, file: file, line: line)
+
+		while true 'untilHandedOver'
+			let reply = try self.handler.handle(pending) otherwise (e) 'refused'
+				match e 'why'
+					mailboxFull(back) then pending = back
+					serviceStopped then return
+				end 'why'
+
+				// Yielding gives the handler a turn to drain its mailbox. ⚠ Coroutines of one strand that all
+				// retry on one full service still livelock at one processor with preemption off.
+				Scheduler.yield()
+				continue
+			end 'refused'
+
+			// An error waits for its own write. The handler's mailbox is first in, first out, so every
+			// earlier record is written too, and a panic right after the call loses none of them.
+			if level.rank >= LogLevel.error.rank 'waitsUntilWritten'
+				await reply
+			end 'waitsUntilWritten'
+
+			return
+		end 'untilHandedOver'
 	end 'write'
 end 'LogSink'
 
-function ownedLogRecord(level LogLevel, message String, bound LogFieldArray, attrs LogAttrArray, groups LogGroupPath, file String, line SourceLineNumber) returns LogRecord
+function ownedLogRecord(time UnixNanos, level LogLevel, message String, bound LogFieldArray, attrs LogAttrArray, groups LogGroupPath, file String, line SourceLineNumber) returns LogRecord
 	var fields = LogFieldArray.create()
 
 	for field in bound 'eachBound'
@@ -328,7 +344,7 @@ function ownedLogRecord(level LogLevel, message String, bound LogFieldArray, att
 	end 'eachBound'
 
 	appendLogFields(attrs, groups: groups, into: fields)
-	return LogRecord.create(WallClock.nowUnixNanos(), level: level.clone(), message: "{message}", attrs: fields, file: "{file}", line: line)
+	return LogRecord.create(time, level: level.clone(), message: "{message}", attrs: fields, file: "{file}", line: line)
 end 'ownedLogRecord'
 
 default LogSink = LogSink.create(spawn TextLogHandler.create(LogHandlerOptions.standard()), levels: LogLevelVar.create(LogLevels.minimum(LogLevel.info)))

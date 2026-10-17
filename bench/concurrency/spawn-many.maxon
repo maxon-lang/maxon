@@ -1,4 +1,4 @@
-typealias DoubledPromise = Promise with (Count, ServiceError)
+typealias DoubledPromise = Promise with (Count)
 typealias DoubledPromiseArray = Array with DoubledPromise
 
 let defaultThreadCount = 100000
@@ -27,13 +27,13 @@ function main() returns ExitCode
 
 	for index in 0 upto threadCount 'spawnDoublers'
 		let doubler = spawn Doubler.create(index)
-		replies.push(doubler.doubled())
+		replies.push(try doubler.doubled() otherwise panic("spawn-many: a fresh doubler refused its only message"))
 	end 'spawnDoublers'
 
 	var sum = 0 as Count
 
 	for reply in replies 'awaitDoublers'
-		sum = sum + (try await reply otherwise panic("spawn-many: a service stopped before it answered"))
+		sum = sum + (await reply)
 	end 'awaitDoublers'
 
 	print("spawn-many {sum}\n")

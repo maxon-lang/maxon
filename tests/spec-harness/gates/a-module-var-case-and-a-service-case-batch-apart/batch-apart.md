@@ -31,9 +31,9 @@ end 'Sorter'
 
 function main() returns ExitCode
 	let h = spawn Sorter.create()
-	h.add(3)
-	h.add(1)
-	h.add(2)
+	try h.add(3) otherwise panic("a fresh sorter refused an add")
+	try h.add(1) otherwise panic("a fresh sorter refused an add")
+	try h.add(2) otherwise panic("a fresh sorter refused an add")
 	let span = try await h.arrange() otherwise 0
 	print("span={span}\n")
 	return (span - 4) as ExitCode

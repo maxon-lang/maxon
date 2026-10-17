@@ -87,7 +87,7 @@ typealias SiblingVerdictMap = Map with (ByteArray, bool)
 
 // Tell the editor this document has nothing on it — the notification a closed document is owed.
 module function clearPublishedDiagnostics(writer LspStdoutWriter.handle, uri String)
-	writer.write(diagnosticsNotificationText(uri, items: JsonNodeIdArray.create(), doc: JsonDoc.create()))
+	submitToLspWriter(writer, command: LspWriterCommand.write(diagnosticsNotificationText(uri, items: JsonNodeIdArray.create(), doc: JsonDoc.create())))
 end 'clearPublishedDiagnostics'
 
 extension Project
@@ -103,7 +103,7 @@ extension Project
 		let tokens = lspDocumentTokens(text, keywords: self.keywords)
 
 		view fast = self.documentDiagnostics(reader, root: root, path: path, text: text, tokens: tokens)
-		reader.workspace.writer.write(documentDiagnosticsText(uri, text: text, tokens: tokens, diagnostics: fast, path: path, unbuilt: StringArray.create()))
+		submitToLspWriter(reader.workspace.writer, command: LspWriterCommand.write(documentDiagnosticsText(uri, text: text, tokens: tokens, diagnostics: fast, path: path, unbuilt: StringArray.create())))
 
 		return BufferPublish.published(reader, root: root, path: path, fast: fast)
 	end 'publishDocumentDiagnostics'

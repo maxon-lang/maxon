@@ -1,17 +1,18 @@
 // ServiceCompanions — what the compiler synthesizes beside a SERVICE, and the rules that decide there is
 // one. Specified in `specs/services.md` §"What the compiler synthesizes".
 //
-// ⭐⭐ **A `spawn T.create()` ANYWHERE IN THE PROGRAM MAKES `T` A SERVICE.** There is no `service` keyword
-// and no member keyword: a service is an ordinary `type`, and its message surface is exactly its
-// `export`/`public` INSTANCE methods (`StructLayout.messageMethodNames`). Two companion types are minted
-// beside it, under the DOTTED names an author writes:
+// ⭐⭐ **A `spawn T.create()` ANYWHERE IN THE PROGRAM MAKES `T` A SERVICE.** There is no `service`
+// keyword and no member keyword: a service is an ordinary `type`, and its message surface is
+// exactly its `export`/`public` INSTANCE methods (`StructLayout.messageMethodNames`). Its companion
+// types are minted beside it, under the DOTTED names an author writes:
 //
-//   • **`T.request`** — a union, one variant per message in declaration order, behind the compiler's own
-//     `__shutdown` at variant 0. A message's payload is its parameter list, plus a trailing `__reply`
-//     integer when the message has a reply to deliver.
+//   • **`T.request`** — a union, one variant per message in declaration order. A message's payload is
+//     its parameter list, plus a trailing `__reply` integer when the message has a reply to deliver.
 //   • **`T.handle`** — a one-field struct holding the mailbox pointer. A REAL 8-byte box on
 //     `managedFileLayout`'s shape, deliberately: moves, E3102, struct fields, arrays and the drop cascade
 //     then all reach it by construction rather than through a special case at each door.
+//   • **`T.<message>.sendError`** — per message, what a failed send throws: `mailboxFull` and
+//     `serviceStopped`, each carrying the message's arguments back to the sender.
 //
 // ⚠⚠ **WHY THE SYNTHESIS IS SILENT AND THE REFUSALS ARE THE PARSER'S.** Everything in this file runs inside
 // `queryProgramSignatures`, which is MEMOIZED and which `Parser.foldDeclaredSignaturesInto` states outright
@@ -539,7 +540,7 @@ module union ServiceRosterVerdict
 	messageParameterIsNotTransferable(let methodName ByteArray, let paramName ByteArray, noun String)
 
 	// ⭐⭐ **A MESSAGE WHOSE REPLY WILL NOT FIT THE CELL.** A reply travels in TWO WORDS — the value, and
-	// one error word holding the fused ordinal of `{ServiceError, throwsOf(<message>)}` — so a `float`
+	// one error word holding the handler's `ordinal + bias` — so a `float`
 	// result (which returns in XMM0) or a payload-carrying error union (whose flag is a heap BOX POINTER)
 	// has nowhere to go. `noun` is what it IS, exactly as the arm above.
 	//
@@ -852,9 +853,10 @@ function uncarriableReplyNounOfType(resolved MaxonType) returns ServiceCrossing
 	return ServiceCrossing.refused("a reply whose value is {maxonTypeTag(resolved).name}, which does not travel in the single integer word a reply cell carries — a `float` comes back in XMM0, and an opaque type parameter is released through a companion the cell does not carry")
 end 'uncarriableReplyNounOfType'
 
-// The ERROR word. It holds the FUSED ORDINAL of the reply's two-member dispatch line, so a payload-carrying
-// union (whose flag is a box POINTER) will not fit — and neither will an error enum whose own tags cannot be
-// placed above `ServiceError`'s slice, which a FLOAT-backed enum's IEEE-754 bit patterns really can be.
+// The ERROR word. It holds the handler's `ordinal + bias`, so a payload-carrying union (whose flag is a box
+// POINTER) will not fit — and neither will an error enum whose own tags cannot be placed above the send
+// error's on the line a `try await` fuses them on, which a FLOAT-backed enum's IEEE-754 bit patterns really
+// can be.
 function uncarriableReplyErrorNoun(signatures ProgramSignatures, messageKey ByteArray) returns ServiceCrossing
 	let errorName = try throwsClauseName(signatures.throwsOf(messageKey)) otherwise return ServiceCrossing.acceptable
 
@@ -865,11 +867,16 @@ function uncarriableReplyErrorNoun(signatures ProgramSignatures, messageKey Byte
 	end 'notAnErrorType'
 
 	if serviceReplyErrorLayout(signatures, errorName: errorName.toByteArray()).isBoxed() 'aBoxedUnion'
-		return ServiceCrossing.refused("a reply that throws `{errorName}`, a PAYLOAD-CARRYING union whose error flag is a heap box pointer — a reply's one error word already carries the fused ordinal that tells `ServiceError` apart from the message's own error, and a pointer is not an ordinal")
+		return ServiceCrossing.refused("a reply that throws `{errorName}`, a PAYLOAD-CARRYING union whose error flag is a heap box pointer — a reply's one error word holds an `ordinal + bias`, and a pointer is not an ordinal")
 	end 'aBoxedUnion'
 
-	if not serviceReplyHandlerPlacement(signatures, errorName: errorName.toByteArray()).fusable 'tooWideToFuse'
-		return ServiceCrossing.refused("a reply that throws `{errorName}`, whose case tags span more of the i64 range than the reply's fused error line can hold above `ServiceError`'s own slice (a FLOAT-backed enum's tags are IEEE-754 bit patterns, so two cases can be ~1.8e19 apart)")
+	let sendLayout = match signatures.enumInAnyFile(serviceSendErrorCompanionName(messageKey)) 'sendError'
+		declared(layout) gives layout
+		undeclared panic("uncarriableReplyErrorNoun: nothing declares `{String.from(serviceSendErrorCompanionName(messageKey))}` — `synthesizeServiceCompanions` mints one beside every request union, and the roster walk asks only about messages of a minted service")
+	end 'sendError'
+
+	if not serviceReplyHandlerPlacement(signatures, sendLayout: sendLayout, errorName: errorName.toByteArray()).fusable 'tooWideToFuse'
+		return ServiceCrossing.refused("a reply that throws `{errorName}`, whose case tags span more of the i64 range than the error line a `try await` fuses with the send's error can hold (a FLOAT-backed enum's tags are IEEE-754 bit patterns, so two cases can be ~1.8e19 apart)")
 	end 'tooWideToFuse'
 
 	return ServiceCrossing.acceptable
@@ -997,6 +1004,18 @@ let ServiceWitnessHalfSlotPrefix = b"__witness_"
 module function fieldIsAServiceWitnessHalf(field PayloadField) returns bool
 	return bytesStartWith(field.name, prefix: ServiceWitnessHalfSlotPrefix)
 end 'fieldIsAServiceWitnessHalf'
+
+module function bindablePayloadCount(payloads PayloadFieldArray) returns PayloadSlotIndex
+	var bindable = 0 as PayloadSlotIndex
+
+	for field in payloads 'eachSlot'
+		if not fieldIsAServiceWitnessHalf(field) 'anArgument'
+			bindable = bindable + 1
+		end 'anArgument'
+	end 'eachSlot'
+
+	return bindable
+end 'bindablePayloadCount'
 
 // ⭐ **THE PAYLOAD SLOT OF A MESSAGE'S PARAMETER `paramIndex`** — its position plus one for every
 // interface-typed parameter before it, whose witness half takes the slot after it. The send slots
@@ -1222,28 +1241,28 @@ module function serviceNotAMessageRefusal(typeName ByteArray, handleName ByteArr
 	return "`type {String.from(typeName)}` declares no `{String.from(member)}`, so `{String.from(handleName)}` has no such message. A handle's surface is exactly the service's `export` instance methods"
 end 'serviceNotAMessageRefusal'
 
-// ⭐ **THE WORDS FOR A SEND WHOSE VALUE THE AUTHOR TRIED TO USE.** A message that returns nothing and throws
-// nothing is FIRE-AND-FORGET by construction — it carries no `__reply` slot, so there is no cell, no promise
-// and nothing to bind. The cure is on the DECLARATION rather than at the call, which is what the sentence
-// says: give the message a `returns` clause or a `throws` clause and its send becomes awaitable.
-module function serviceSendHasNoValueRefusal(typeName ByteArray, member ByteArray) returns String
-	return "the value of `{String.from(typeName)}.{String.from(member)}` sent as a MESSAGE — it returns nothing and throws nothing, so it carries no reply slot and a send of it delivers no value. Give it a `returns` clause or a `throws` clause and `try await <handle>.{String.from(member)}(…)` resolves through a reply cell; otherwise send it as a statement"
+module function serviceReplyDroppedRefusal(message ByteArray) returns String
+	return "`{String.from(message)}` returns or throws, so a send of it delivers a reply, and as a statement the reply is dropped — and with it the value and any error the handler throws. Await it with `try await <handle>.<message>(…)`, keep it with `let reply = try <handle>.<message>(…)`, or discard it on purpose with `_ = try <handle>.<message>(…)`"
+end 'serviceReplyDroppedRefusal'
+
+module function serviceSendErrorNotSolelyOwnedRefusal(errorType ByteArray) returns String
+	return "`{String.from(errorType)}` is thrown from a value this function does not solely own, and its caller would take the arguments out of it as the only owner. Only the failed send's own error may be thrown: propagate it with a bare `try`, or `throw` the binding that caught it, which hands the error over and is not read again"
+end 'serviceSendErrorNotSolelyOwnedRefusal'
+
+module function serviceSendHasNoValueRefusal(message ByteArray) returns String
+	let member = match splitQualifiedName(message) 'shape'
+		parts(_, name) gives name
+		notQualified panic("serviceSendHasNoValueRefusal: `{String.from(message)}` is not a `<service>.<message>` name — every send is recorded under its qualified callee")
+	end 'shape'
+
+	return "the value of `{String.from(message)}` sent as a MESSAGE — it returns nothing and throws nothing, so it carries no reply slot and a send of it delivers no value. Send it as a statement, `try <handle>.{String.from(member)}(…) otherwise …`, or give it a `returns` clause or a `throws` clause and `try await <handle>.{String.from(member)}(…)` resolves through a reply cell"
 end 'serviceSendHasNoValueRefusal'
 
-// ⭐ **THE WORDS FOR THE POISON PILL USED FOR ITS VALUE.** Why it is refused at all — and why the reason is
-// NOT the void-message sibling's — is `Parser.emitServiceShutdown`'s to state, and it does. What this owes
-// is only that the SENTENCE not borrow the sibling's "it carries no reply slot", which is false of the pill.
+// ⭐ **THE WORDS FOR `h.shutdown()` USED FOR ITS VALUE.** Why it is refused is
+// `Parser.emitServiceShutdown`'s to state.
 module function serviceShutdownHasNoValueRefusal(typeName ByteArray) returns String
-	return "the value of `{String.from(typeName)}.{String.from(ServiceShutdownMethodName)}()` — `{String.from(ServiceShutdownMethodName)}` is the HANDLE's own method and not a message of `{String.from(typeName)}`, so no declaration says what it hands back and an expression has nothing to bind. Write `<handle>.{String.from(ServiceShutdownMethodName)}()` as a statement: the pill goes in behind everything already queued, and dropping the last handle starts the same drain"
+	return "the value of `{String.from(typeName)}.{String.from(ServiceShutdownMethodName)}()` — `{String.from(ServiceShutdownMethodName)}` is the HANDLE's own method and not a message of `{String.from(typeName)}`, so no declaration says what it hands back and an expression has nothing to bind. Write `<handle>.{String.from(ServiceShutdownMethodName)}()` as a statement: it closes the mailbox once everything already queued has run, and dropping the last handle does the same"
 end 'serviceShutdownHasNoValueRefusal'
-
-// ⭐ **THE WORDS FOR A `try` ON A SEND**, and it is a SENTENCE rather than a rejection for the reason
-// `Parser.rewriteLastCallToTryCall`'s arm gives: the author who wrote one is asking for the awaitable form,
-// and `try` is exactly its first token. Refusing it as *"`try` must be applied to a call"* would be true and
-// useless.
-module function serviceSendCannotBeTriedRefusal(callee ByteArray) returns String
-	return "`try` on the message `{String.from(callee)}` — a SEND is not the reply. It enqueues and returns, so it can fail at nothing; what carries an error is the reply, and awaiting it is what makes that error this frame's. Write `try await <handle>.<message>(…)`, or drop the `try` on a message that returns nothing and throws nothing"
-end 'serviceSendCannotBeTriedRefusal'
 
 // ⭐⭐ **THE WORDS FOR A REPLY THAT WOULD ALIAS SOMETHING THIS FRAME DOES NOT SOLELY OWN.** See
 // `Parser.requireServiceReplyDoesNotAliasState` for the rule and for why `.clone()` is the right answer
@@ -1304,23 +1323,11 @@ end 'serviceReplyBlame'
 // is a struct — and `fieldTypeOf`'s records the two doors that each got it wrong once. So the builder never
 // picks: the caller hands it the table its own ids live in.
 //
-// The request union: `__shutdown` at variant 0, then one variant per message in declaration order.
+// The request union: one variant per message in declaration order.
 module function buildServiceRequestUnion(signatures ProgramSignatures, typeName ByteArray, into TypeNameInterner) returns EnumLayout
 	var layout = spawnTargetLayoutOf(signatures, typeName: typeName)
 	let declFilePath = layout.declFilePath
 	var request = EnumLayout.create(serviceRequestCompanionName(typeName), isUnion: true, conformsTo: NameRoster.create(), visibility: layout.visibility, declFilePath: declFilePath, backing: EnumBacking.integer)
-
-	// ⭐ **VARIANT 0 IS THE COMPILER'S, SO ADDING A MESSAGE NEVER RENUMBERS IT** — see
-	// `ServiceShutdownCaseName`. It carries a reply slot like any reply-bearing variant, which is what lets
-	// the pill be built through the same `emitEnumBox` every message takes and completed by the same
-	// `__gt_cell_complete` at `__mbox_service_exit`.
-	//
-	// ⚠ **NOTHING IN SOURCE AWAITS IT.** `Parser.emitServiceShutdown` refuses the pill in value position —
-	// nothing declares what `shutdown` hands back — so the slot is filled and completed and never read. See
-	// there for the argument; a uniform variant shape is what this file owes, not a reachable reply.
-	var shutdownPayloads = PayloadFieldArray.create()
-	shutdownPayloads.push(PayloadField.create(ServiceReplySlotName, declaredType: MaxonType.integer, declaredSurface: sharedEmptyDeclaredSurface, declaredBrand: EmptySourceText, isLet: false))
-	addServiceRequestCase(request, caseName: ServiceShutdownCaseName, payloads: shutdownPayloads)
 
 	for i in 0 upto layout.messageMethodCount() 'eachMessage'
 		view methodName = layout.messageMethodAt(i)
@@ -1368,10 +1375,8 @@ end 'serviceParamBrand'
 // has an error to carry back and nothing else.
 //
 // ⚠ **IT IS THE BUILDER'S QUESTION AND NOT THE AUTHORITY EVERY OTHER SITE READS.** What decides
-// whether a SEND mints a cell, whether the loop completes one and whether the abandon path answers
-// `stopped` is `serviceReplySlotIndex` — asked of the VARIANT this answer built — because variant 0 carries
-// a reply slot with no declaration behind it at all (the compiler's `__shutdown` pill, whose completion
-// `await h.shutdown()` is), and a second by-name test would answer `false` for exactly that one.
+// whether a SEND mints a cell and whether the loop completes one is `serviceReplySlotIndex`, asked
+// of the VARIANT this answer built.
 function serviceMessageHasAReply(signatures ProgramSignatures, key ByteArray, decl OverloadedDecl) returns bool
 	if not maxonReturnTypeIsVoid(decl.returnType) 'returnsAValue'
 		return true
@@ -1383,14 +1388,10 @@ function serviceMessageHasAReply(signatures ProgramSignatures, key ByteArray, de
 	end 'throws'
 end 'serviceMessageHasAReply'
 
-// ⭐⭐ **WHICH PAYLOAD SLOT OF ONE VARIANT IS THE `__reply` CELL, IF ANY — THE ONE AUTHORITY THREE SITES
-// READ.** The send mints a cell into it (`Parser.fillMessageReplySlot`), the loop completes what it
-// finds there (`ServiceLoop.buildMessageArm`) and the abandon path answers `ServiceError.stopped` into it
-// (`ServiceLoop.buildServiceAbandon`) — and a disagreement between any two of them is a HANG: a cell minted
+// ⭐⭐ **WHICH PAYLOAD SLOT OF ONE VARIANT IS THE `__reply` CELL, IF ANY — THE ONE AUTHORITY TWO SITES
+// READ.** The send mints a cell into it (`Parser.fillMessageReplySlot`) and the loop completes what it
+// finds there (`ServiceLoop.buildMessageArm`) — and a disagreement between them is a HANG: a cell minted
 // by a send the loop never completes leaves its awaiter parked for ever, with no leak and no diagnostic.
-//
-// It is asked of the PAYLOAD LIST rather than of the declaration for the reason `serviceMessageHasAReply`
-// records: variant 0's slot has no declaration behind it.
 module function serviceReplySlotIndex(payloads PayloadFieldArray) returns ServiceReplySlotIndex
 	for slot in 0 upto payloads.count() 'eachSlot'
 		let field = try payloads.get(slot) otherwise panic("serviceReplySlotIndex: payloads.get OOB at {slot} on a list walked to its own count")
@@ -1421,73 +1422,22 @@ module union ServiceReplySlotIndex
 	at(slot PayloadSlotIndex)
 end 'ServiceReplySlotIndex'
 
-// ⭐⭐⭐ **THE REPLY'S ERROR UNION IS `{ServiceError, throwsOf(<message>)}`, AND ITS TWO POSITIONS ARE
-// COMPUTED HERE ONCE FOR BOTH SIDES OF THE WIRE.** A reply carries ONE error word, and what that word
-// holds is the FUSED ORDINAL of a two-member dispatch line — exactly the line a block-form `try` builds when
-// its body routes two error types, and placed by exactly the same arithmetic
-// (`Parser.fusedPlacementAtTheBias` / `fusedPlacementAt`), so `match e` over a reply is an ordinary enum
-// match and needs no second dispatch engine.
-//
-// ⛔⛔ **THE TWO SIDES ARE IN DIFFERENT PROCESSES OF THE COMPILER AND MUST AGREE TO THE DIGIT.**
-// `ServiceLoop.emitFusedHandlerFlag` SHIFTS the handler's raw error flag by `offset - ErrorFlagOrdinalBias`
-// before writing it into the cell, and `Parser.serviceReplyErrorMembers` builds the layout the awaiter's
-// `match e` dispatches against from the same offsets. A disagreement is not a crash: it is an arm running
-// for a case that was not raised.
-//
-// ⭐ **THE TRANSPORT MEMBER IS FIRST AND PINNED AT THE BIAS**, which is what makes a message that throws
-// NOTHING cost nothing at all: its reply's only member is `ServiceError`, its fused ordinal IS the ordinary
-// `ordinal + bias` flag, and the awaiter binds a plain `ServiceError` with no union machinery anywhere.
-// ⭐⭐ **THE ERROR WORD `<T>.__abandon` WRITES: `ServiceError.stopped`, ALREADY FUSED.** The transport
-// member is pinned at `ErrorFlagOrdinalBias`, so its fused ordinal IS the ordinary scalar error flag
-// `ordinal + bias` — which is why a message that throws nothing needs no shift anywhere and its awaiter
-// binds a plain `ServiceError`.
-//
-// ⚠ **IT TRANSCRIBES AN ORDINAL, WHICH IS WHY `Project.BuiltinErrorOrdinalCheck` HAS A ROW FOR THIS
-// FAMILY.** The number this returns is written into a word another green thread decodes against the
-// DECLARED layout, so a reordering of `stdlib/Builtins.maxon`'s cases with this transcription left behind
-// would select the wrong arm silently.
-module function serviceStoppedErrorFlag(signatures ProgramSignatures) returns FullRangeInt
-	let layout = serviceReplyErrorLayout(signatures, errorName: ServiceErrorTypeName)
-	let index = try layout.indexOfCase(ServiceErrorStoppedCaseName) otherwise panic("serviceStoppedErrorFlag: `enum {String.from(ServiceErrorTypeName)}` declares no `{String.from(ServiceErrorStoppedCaseName)}` case — `stdlib/Builtins.maxon` declares it and `Project.BuiltinErrorOrdinalCheck` verifies the transcription, so reaching here means the stdlib this program was compiled against is not the one that declares it")
+module function serviceSendErrorPlacement(sendLayout EnumLayout) returns FusedPlacement
+	let span = enumTagSpan(sendLayout)
 
-	return layout.tagOfIndex(index) + ErrorFlagOrdinalBias
-end 'serviceStoppedErrorFlag'
+	if sendLayout.isBoxed() 'loadedFromTheBox'
+		return fusedPlacementAt(0, span: span)
+	end 'loadedFromTheBox'
 
-module function serviceReplyTransportPlacement(signatures ProgramSignatures) returns FusedPlacement
-	return fusedPlacementAtTheBias(enumTagSpan(serviceReplyErrorLayout(signatures, errorName: ServiceErrorTypeName)))
-end 'serviceReplyTransportPlacement'
+	return fusedPlacementAtTheBias(span)
+end 'serviceSendErrorPlacement'
 
-// The HANDLER member's position — the slice one past the transport member's top. `tooWide` is a real answer
-// and not a compiler bug: a FLOAT-backed error enum's tags are IEEE-754 bit patterns and one spanning a
-// negative and a positive double is wider than the whole i64 line, so such a message is refused at the
-// SPAWN (`classifyServiceRoster` -> `uncarriableReplyErrorNoun`, E3140 — NOT a
-// `Parser.requireServiceReplyIsCarriable`, which this comment named for two rungs and which has never
-// existed) rather than silently mis-dispatched.
-module function serviceReplyHandlerPlacement(signatures ProgramSignatures, errorName ByteArray) returns FusedPlacement
-	return fusedPlacementAt(serviceReplyTransportPlacement(signatures).top + 1, span: enumTagSpan(serviceReplyErrorLayout(signatures, errorName: errorName)))
+module function serviceReplyHandlerPlacement(signatures ProgramSignatures, sendLayout EnumLayout, errorName ByteArray) returns FusedPlacement
+	let send = serviceSendErrorPlacement(sendLayout)
+	let floor = send.top + 1 if send.fusable else 0
+	return fusedPlacementAt(floor, span: enumTagSpan(serviceReplyErrorLayout(signatures, errorName: errorName)))
 end 'serviceReplyHandlerPlacement'
 
-// ⭐⭐ **WHAT `<T>.__loop` ADDS TO A HANDLER'S OWN ERROR FLAG BEFORE WRITING IT INTO THE CELL.** A
-// scalar flag is `ordinal + ErrorFlagOrdinalBias` and the fused ordinal is `ordinal + offset`, so the shift
-// is exactly `offset - bias` — and it is ZERO for a message that throws nothing, which is the case where
-// nothing is emitted at all.
-//
-// ⚠ It is the same `offset` `Parser.serviceReplyErrorMembers` builds the awaiter's dispatch table from,
-// read through the same function. A second derivation is an arm running for a case that was not raised.
-module function serviceReplyHandlerFusedShift(signatures ProgramSignatures, errorName ByteArray) returns FullRangeInt
-	let placement = serviceReplyHandlerPlacement(signatures, errorName: errorName)
-
-	if not placement.fusable 'refusedAtTheSpawn'
-		panic("serviceReplyHandlerFusedShift: `{String.from(errorName)}` cannot be placed on a reply's fused error line — `classifyServiceRoster` refuses such a message at the `spawn` (E3140), so no loop is ever synthesized for one")
-	end 'refusedAtTheSpawn'
-
-	return placement.offset - ErrorFlagOrdinalBias
-end 'serviceReplyHandlerFusedShift'
-
-// The layout of one member of a reply's error union. An UNDECLARED name answers an EMPTY layout rather than
-// panicking: `ServiceError` is declared by `stdlib/Builtins.maxon`, so its absence means a program compiled
-// without the stdlib, and a message throwing a type nothing declares is a program `SemanticCheck` refuses
-// with its own diagnostic — neither is this function's to report.
 module function serviceReplyErrorLayout(signatures ProgramSignatures, errorName ByteArray) returns EnumLayout
 	return match signatures.enumInAnyFile(errorName) 'e'
 		declared(layout) gives layout
@@ -1613,7 +1563,7 @@ end 'cacheReadServiceMessageIndex'
 // roster `dispatchOnServiceHandle` resolves a send against. Built once, after the companions are
 // minted (`Queries.queryProgramSignatures`), so an ask is one probe.
 //
-// A message is exactly a function `<T>.__loop` calls (`serviceArmAt`), so the pill is never one.
+// A message is exactly a function `<T>.__loop` calls (`serviceLoopHandlerCallees`).
 module function serviceMessageIndexOf(signatures ProgramSignatures) returns ServiceMessageIndex
 	var index = ServiceMessageIndex.create()
 
@@ -1621,10 +1571,8 @@ module function serviceMessageIndexOf(signatures ProgramSignatures) returns Serv
 		view request = try serviceRequestLayoutOf(signatures, typeName: typeName) otherwise continue
 
 		for caseIndex in 0 upto request.caseCount() 'eachVariant'
-			match serviceArmAt(request, typeName: typeName, caseIndex: caseIndex) 'arm'
-				shutdownPill then continue
-				message(handler) then fileFirstServiceMessage(index, message: ServiceMessage.create(handler, typeName: typeName, methodName: request.caseNameAt(caseIndex)))
-			end 'arm'
+			let methodName = request.caseNameAt(caseIndex)
+			fileFirstServiceMessage(index, message: ServiceMessage.create(qualifiedMethodName(typeName, methodName: methodName), typeName: typeName, methodName: methodName))
 		end 'eachVariant'
 	end 'eachService'
 
@@ -1638,7 +1586,7 @@ function fileFirstServiceMessage(index ServiceMessageIndex, message ServiceMessa
 end 'fileFirstServiceMessage'
 
 // ⭐⭐ **`<T>.request`'s LAYOUT — the ONE door.** `Parser.dispatchOnServiceHandle` resolves a send
-// against it, `ServiceLoop` builds the dispatch and the abandon switch from it, and the two
+// against it, `ServiceLoop` builds the dispatch from it, and the two
 // whole-program service rules read it to answer *"is this function a message?"*. Each had its own
 // lookup and its own panic text.
 //
@@ -1654,24 +1602,6 @@ module function serviceRequestLayoutOf(signatures ProgramSignatures, typeName By
 	end 'lookup'
 end 'serviceRequestLayoutOf'
 
-// ⚠ Variant 0 is the compiler's own `__shutdown` pill and is not a message. It is `__`-prefixed, so no
-// source may declare it and no author may name it (E2051); refusing it here is the structural backstop
-// for a spelling that arrives anyway, and it answers as an absent member does.
-module function serviceMessageCaseIndex(request EnumLayout, member ByteArray) returns CaseIndex throws MapError
-	let caseIndex = try request.indexOfCase(member)
-
-	if caseIndex == ServiceShutdownCaseIndex 'namesNoMessage'
-		throw MapError.keyNotFound
-	end 'namesNoMessage'
-
-	return caseIndex
-end 'serviceMessageCaseIndex'
-
-function serviceDeclaresMessage(request EnumLayout, member ByteArray) returns bool
-	try serviceMessageCaseIndex(request, member: member) otherwise return false
-	return true
-end 'serviceDeclaresMessage'
-
 // Everything an author may spell on a `<T>.handle`: the service's messages, plus the handle's own
 // `shutdown` and `clone`. `serviceHandleAdmits` below is the same roster asked about ONE name, and
 // `Parser.dispatchOnServiceHandle` has an arm per entry. The editor's offer set and the compiler's admit
@@ -1680,10 +1610,6 @@ module function serviceHandleSurface(request EnumLayout) returns NameRoster
 	var surface = NameRoster.create()
 
 	for index in 0 upto request.caseCount() 'eachVariant'
-		if index == ServiceShutdownCaseIndex 'theCompilersOwnPill'
-			continue
-		end 'theCompilersOwnPill'
-
 		surface.push(request.caseNameAt(index))
 	end 'eachVariant'
 
@@ -1694,7 +1620,7 @@ module function serviceHandleSurface(request EnumLayout) returns NameRoster
 end 'serviceHandleSurface'
 
 module function serviceHandleAdmits(request EnumLayout, member ByteArray) returns bool
-	return serviceDeclaresMessage(request, member: member) or member.equals(ServiceShutdownMethodName) or member.equals(CloneMethodName)
+	return request.hasCase(member) or member.equals(ServiceShutdownMethodName) or member.equals(CloneMethodName)
 end 'serviceHandleAdmits'
 
 // The request union's layout, or a panic, for a caller that holds a SPAWNED type: its companions were minted
@@ -1723,26 +1649,6 @@ module function serviceRequestStagingBytes(signatures ProgramSignatures) returns
 	return widest
 end 'serviceRequestStagingBytes'
 
-// ⭐⭐ **WHAT `<T>.__loop`'s ARM FOR ONE REQUEST VARIANT RUNS — the ONE answer to "which functions does the
-// loop call?"** `ServiceLoop.buildServiceArm` builds each arm from it, `serviceMessageIndexOf` answers "is this
-// function a message?" from it, and `serviceLoopHandlerCallees` hands the reachability walk the same list, so
-// the handlers the loop calls and the stdlib bodies the compile builds for them cannot come apart.
-module union ServiceArm
-	// Variant 0, the compiler's `__shutdown`: no source declares a function under that name.
-	shutdownPill
-
-	// Every other variant calls the message it is named after.
-	message(let callee ByteArray)
-end 'ServiceArm'
-
-module function serviceArmAt(request EnumLayout, typeName ByteArray, caseIndex CaseIndex) returns ServiceArm
-	if caseIndex == ServiceShutdownCaseIndex 'thePoisonPill'
-		return ServiceArm.shutdownPill
-	end 'thePoisonPill'
-
-	return ServiceArm.message(qualifiedMethodName(typeName, methodName: request.caseNameAt(caseIndex)))
-end 'serviceArmAt'
-
 // ⭐⭐ **EVERY HANDLER A `spawn` OF `typeName` MAKES LIVE, WHETHER OR NOT ANY HANDLE SENDS IT.** The loop's
 // switch has an arm per variant, so a message nobody sends is still called — and `DeadFunctionElimination`
 // reaches it through the `funcAddr` the `spawn` lowers to. `StdlibSource`'s walk runs before the loop exists
@@ -1752,10 +1658,7 @@ module function serviceLoopHandlerCallees(signatures ProgramSignatures, typeName
 	var callees = NameRoster.create()
 
 	for caseIndex in 0 upto request.caseCount() 'eachVariant'
-		match serviceArmAt(request, typeName: typeName, caseIndex: caseIndex) 'arm'
-			shutdownPill then continue
-			message(callee) then callees.push(callee)
-		end 'arm'
+		callees.push(qualifiedMethodName(typeName, methodName: request.caseNameAt(caseIndex)))
 	end 'eachVariant'
 
 	return callees
@@ -1879,25 +1782,77 @@ module function synthesizeServiceCompanions(signatures ProgramSignatures)
 			continue
 		end 'alreadyMinted'
 
-		signatures.recordServiceRequest(buildServiceRequestUnion(signatures, typeName: typeName, into: signatures.indexTypeNames()))
+		signatures.recordServiceUnion(buildServiceRequestUnion(signatures, typeName: typeName, into: signatures.indexTypeNames()))
 	end 'eachRequest'
 
-	// ⭐⭐ **PASS 3 — ONE NOMINAL ENUM PER *THROWING* MESSAGE, SO THE FUSED REPLY ERROR TYPE HAS A
-	// NAME.** `<Service>.<method>.errors` is what a `throws` clause spells, what a `Promise with (T,
-	// E)` puts in its second argument, and what `Parser.mintServiceReplyCell` interns the reply's own
-	// type against. Before it, the two-member type existed only as a diagnostic string.
-	//
-	// ⚠ **NON-THROWING MESSAGES ARE SKIPPED BECAUSE THEY ALREADY HAVE A REAL NAME** — a reply whose only
-	// error member is `ServiceError` IS a `ServiceError`, an ordinary declared enum, and minting a synonym
-	// for it would be a second name for one type with nothing to keep the two answers equal.
-	for typeName in services 'eachReplyErrorType'
-		view layout = spawnTargetLayoutOf(signatures, typeName: typeName)
-
-		for i in 0 upto layout.messageMethodCount() 'eachMessage'
-			mintServiceReplyErrorType(signatures, messageKey: qualifiedMethodName(typeName, methodName: layout.messageMethodAt(i)))
-		end 'eachMessage'
-	end 'eachReplyErrorType'
+	for typeName in services 'eachSendErrorType'
+		recordServiceSendErrors(signatures, errors: buildServiceSendErrors(signatures, typeName: typeName, into: signatures.indexTypeNames()))
+	end 'eachSendErrorType'
 end 'synthesizeServiceCompanions'
+
+module let ServiceSendMailboxFullCaseName = b"mailboxFull"
+module let ServiceSendServiceStoppedCaseName = b"serviceStopped"
+
+function recordServiceSendErrors(signatures ProgramSignatures, errors EnumLayoutArray)
+	for layout in errors 'eachSendError'
+		if signatures.containsEnumInAnyFile(layout.name) 'alreadyMinted'
+			continue
+		end 'alreadyMinted'
+
+		signatures.recordServiceSendError(layout)
+	end 'eachSendError'
+end 'recordServiceSendErrors'
+
+module function buildServiceSendErrors(signatures ProgramSignatures, typeName ByteArray, into TypeNameInterner) returns EnumLayoutArray
+	view owner = spawnTargetLayoutOf(signatures, typeName: typeName)
+	return buildSendErrorsOf(signatures, ownerName: typeName, visibility: owner.visibility, declFilePath: owner.declFilePath, into: into)
+end 'buildServiceSendErrors'
+
+module function buildInterfaceSendErrors(signatures ProgramSignatures, interfaceName ByteArray, visibility Visibility, declFilePath FilePath, into TypeNameInterner) returns EnumLayoutArray
+	return buildSendErrorsOf(signatures, ownerName: interfaceName, visibility: visibility, declFilePath: declFilePath, into: into)
+end 'buildInterfaceSendErrors'
+
+function buildSendErrorsOf(signatures ProgramSignatures, ownerName ByteArray, visibility Visibility, declFilePath FilePath, into TypeNameInterner) returns EnumLayoutArray
+	view request = requireServiceRequestLayout(signatures, typeName: ownerName)
+	var errors = EnumLayoutArray.create()
+
+	for caseIndex in 0 upto request.caseCount() 'eachMessage'
+		let name = serviceSendErrorCompanionName(qualifiedMethodName(ownerName, methodName: request.caseNameAt(caseIndex)))
+		let payloads = adoptedPayloads(signatures, payloads: serviceSendErrorPayloads(request.payloadsAt(caseIndex)), into: into)
+		errors.push(buildServiceSendErrorUnion(signatures, name: name, payloads: payloads, visibility: visibility, declFilePath: declFilePath))
+	end 'eachMessage'
+
+	return errors
+end 'buildSendErrorsOf'
+
+function adoptedPayloads(signatures ProgramSignatures, payloads PayloadFieldArray, into TypeNameInterner) returns PayloadFieldArray
+	var adopted = PayloadFieldArray.create()
+
+	for field in payloads 'eachField'
+		adopted.push(PayloadField.create(field.name, declaredType: signatures.adoptType(field.declaredType, into: into), declaredSurface: field.declaredSurface, declaredBrand: field.declaredBrand, isLet: field.isLet))
+	end 'eachField'
+
+	return adopted
+end 'adoptedPayloads'
+
+function serviceSendErrorPayloads(payloads PayloadFieldArray) returns PayloadFieldArray
+	var arguments = PayloadFieldArray.create()
+
+	for field in payloads 'eachField'
+		if not fieldIsTheServiceReplySlot(field) 'anArgument'
+			arguments.push(field)
+		end 'anArgument'
+	end 'eachField'
+
+	return arguments
+end 'serviceSendErrorPayloads'
+
+function buildServiceSendErrorUnion(signatures ProgramSignatures, name ByteArray, payloads PayloadFieldArray, visibility Visibility, declFilePath FilePath) returns EnumLayout
+	var errors = EnumLayout.create(name, isUnion: payloads.count() > 0, conformsTo: builtinErrorConformance(signatures.interfaceMap()), visibility: visibility, declFilePath: declFilePath, backing: EnumBacking.integer)
+	addServiceRequestCase(errors, caseName: ServiceSendMailboxFullCaseName, payloads: payloads)
+	addServiceRequestCase(errors, caseName: ServiceSendServiceStoppedCaseName, payloads: copiedPayloads(payloads))
+	return errors
+end 'buildServiceSendErrorUnion'
 
 function mintInterfaceHandlesOf(signatures ProgramSignatures, typeName ByteArray)
 	view service = spawnTargetLayoutOf(signatures, typeName: typeName)
@@ -1947,16 +1902,19 @@ module function synthesizeInterfaceRequestUnions(signatures ProgramSignatures)
 		end 'alreadyMinted'
 
 		match signatures.interfaceDeclarationOf(interfaceName) 'site'
-			declared(_, visibility, declFilePath) then signatures.recordServiceRequest(buildInterfaceRequestUnion(signatures, interfaceName: interfaceName, visibility: visibility, declFilePath: declFilePath))
+			declared(_, visibility, declFilePath) then recordInterfaceRequestAndSendErrors(signatures, interfaceName: interfaceName, visibility: visibility, declFilePath: declFilePath)
 			undeclared then panic("synthesizeInterfaceRequestUnions: `{String.from(interfaceName)}` minted a handle from its declaration site, which is gone")
 		end 'site'
 	end 'eachInterface'
 end 'synthesizeInterfaceRequestUnions'
 
+function recordInterfaceRequestAndSendErrors(signatures ProgramSignatures, interfaceName ByteArray, visibility Visibility, declFilePath FilePath)
+	signatures.recordServiceUnion(buildInterfaceRequestUnion(signatures, interfaceName: interfaceName, visibility: visibility, declFilePath: declFilePath))
+	recordServiceSendErrors(signatures, errors: buildInterfaceSendErrors(signatures, interfaceName: interfaceName, visibility: visibility, declFilePath: declFilePath, into: signatures.indexTypeNames()))
+end 'recordInterfaceRequestAndSendErrors'
+
 function buildInterfaceRequestUnion(signatures ProgramSignatures, interfaceName ByteArray, visibility Visibility, declFilePath FilePath) returns EnumLayout
-	view concrete = requireServiceRequestLayout(signatures, typeName: signatures.interfaceHandleRepresentative(interfaceName))
 	var request = EnumLayout.create(serviceRequestCompanionName(interfaceName), isUnion: true, conformsTo: NameRoster.create(), visibility: visibility, declFilePath: declFilePath, backing: EnumBacking.integer)
-	addServiceRequestCase(request, caseName: ServiceShutdownCaseName, payloads: copiedPayloads(concrete.payloadsAt(ServiceShutdownCaseIndex)))
 	let requirements = try signatures.interfaceRequirementSlots(interfaceName) otherwise CollectedInterfaceMethodArray.create()
 
 	for requirement in requirements 'eachRequirement'
@@ -1994,7 +1952,7 @@ end 'interfaceServiceImplementers'
 // for it, so its conversion would have no slot to fill; the send is refused (E3136) instead.
 module function interfaceMessageWithholder(signatures ProgramSignatures, interfaceName ByteArray, member ByteArray) returns ByteArray throws MapError
 	for service in interfaceServiceImplementers(signatures, interfaceName: interfaceName) 'eachImplementer'
-		if signatures.declaresCallee(qualifiedMethodName(service, methodName: member)) and not serviceDeclaresMessage(requireServiceRequestLayout(signatures, typeName: service), member: member) 'withholdsIt'
+		if signatures.declaresCallee(qualifiedMethodName(service, methodName: member)) and not requireServiceRequestLayout(signatures, typeName: service).hasCase(member) 'withholdsIt'
 			return service
 		end 'withholdsIt'
 	end 'eachImplementer'
@@ -2013,7 +1971,7 @@ module function interfaceMessageRepresentative(signatures ProgramSignatures, int
 	end 'anImplementerWithholdsIt'
 
 	for service in interfaceServiceImplementers(signatures, interfaceName: interfaceName) 'eachSender'
-		if let caseIndex = try serviceMessageCaseIndex(requireServiceRequestLayout(signatures, typeName: service), member: member) 'declaresIt'
+		if let caseIndex = try requireServiceRequestLayout(signatures, typeName: service).indexOfCase(member) 'declaresIt'
 			return (service.clone(), caseIndex)
 		end 'declaresIt'
 	end 'eachSender'
@@ -2030,120 +1988,3 @@ function copiedPayloads(payloads PayloadFieldArray) returns PayloadFieldArray
 
 	return copy
 end 'copiedPayloads'
-
-// ⭐⭐ **THE THIRD PASS'S BODY FOR ONE MESSAGE — split out so the roster walk above stays two lines and the
-// four gates below read as one sequence.**
-//
-// ⛔⛔ **IT SKIPS RATHER THAN PANICS ON A MESSAGE THIS PROGRAM WILL BE REFUSED FOR.** `serviceTypeRoster`
-// runs `classifyServiceTarget` and NOT `classifyServiceRoster`, so this sweep also runs for rosters
-// `Parser.parseSpawn` is about to refuse with E3140, and for programs `SemanticCheck` will refuse with
-// E3113. `serviceReplyHandlerFusedShift` PANICS on an unplaceable member, so the same gates are asked here
-// and answered by declining to mint — the boxed and unfusable pair THROUGH `uncarriableReplyErrorNoun`
-// itself rather than restated, so the two sweeps cannot drift. Those diagnostics own such programs; a
-// compiler panic would take the program's real refusal with it.
-function mintServiceReplyErrorType(signatures ProgramSignatures, messageKey ByteArray)
-	let errorName = try throwsClauseName(signatures.throwsOf(messageKey)) otherwise return
-	let handlerError = errorName.toByteArray()
-
-	// ⚠ **THE UNDECLARED GATE CANNOT BE FOLDED INTO THE NOUN BELOW, AND THAT ASYMMETRY IS DELIBERATE ON
-	// BOTH SIDES.** `uncarriableReplyErrorNoun` answers `""` for an undeclared type ON PURPOSE, so as not to
-	// pre-empt E3113 — which means its silence reads *"carriable, OR not an error type at all"*, and only
-	// this test tells the two apart.
-	// ⚠ **READER-AWARE, AND THE READER IS THE MESSAGE'S OWN DECLARING FILE.** `handlerError` is a name a USER
-	// WROTE in a `throws` clause, so it is a MEANING question and takes the same reader as
-	// `SemanticCheck`'s `classifyThrowsClauseName`, which decides E3113 for this very clause. Asking
-	// `containsEnumInAnyFile` here would answer a different program's question: under a cross-kind contest a
-	// name can be an `enum` in one file and a ranged alias in the message's own, and the bare door would say
-	// "enum" and mint a fused companion off a declaration the handler cannot name.
-	//
-	// ⛔ **THE SURROUNDING PROGRAM BEING REFUSED IS NOT A REASON TO ASK THE BARE DOOR.** E3113 refuses it
-	// only BECAUSE `classifyThrowsClauseName` reads the same reader; the two agreeing is what makes the
-	// refusal and this decline one answer rather than two that happen to coincide.
-	//
-	// ⚠ **NO PROGRAM CURRENTLY TELLS THE TWO SPELLINGS APART, AND THE REASON IS SPECIFIC — it is not
-	// "nobody can build one".** `containsEnumFor` is `containsEnumInAnyFile and not aliasShadowsNominalFor`,
-	// so it is strictly the MORE RESTRICTIVE of the two: it can never admit what the bare door refuses, and
-	// the only divergence is bare-admits / reader-declines. Every program in that gap has a `throws` clause
-	// whose reader means something other than an enum, which is precisely what `SemanticCheck` refuses with
-	// E3113 off the SAME reader — so the bare door's extra mint can only ever be spared for a program that
-	// is already dead. MEASURED: a service whose message declares `throws Fault` where its own file means a
-	// ranged `Fault` and another file declares `enum Fault` reports the identical E3113 under both
-	// spellings (`type-name-collision.md`'s `error.crossfile-a-service-throws-a-contested-name` pins that
-	// refusal, which is the property this argument rests on).
-	//
-	// ⇒ The reader-aware spelling is chosen because it asks the RIGHT QUESTION, not because it changes an
-	// answer today: it is the one that stays correct if E3113 ever stops covering this gap.
-	if not signatures.containsEnumFor(handlerError, readerFilePath: signatures.declaringFileOf(messageKey)) 'semanticCheckRefusesThisProgram'
-		return
-	end 'semanticCheckRefusesThisProgram'
-
-	// ⭐ **THE BOXED AND UNFUSABLE GATES ARE ASKED *THROUGH* `uncarriableReplyErrorNoun`, NOT RESTATED.**
-	// That function is the one `classifyServiceRoster` refuses such a program by (E3140), so asking it here
-	// is what keeps the two sweeps agreeing: a fourth uncarriable shape added there stops this pass minting
-	// for it in the same commit, where two hand-copied gates would have drifted silently — and a drift here
-	// is not a crash, it is a registered enum for a program that has no valid reply at all.
-	if uncarriableReplyErrorNoun(signatures, messageKey: messageKey).isRefused() 'refusedAtTheSpawn'
-		return
-	end 'refusedAtTheSpawn'
-
-	view handlerLayout = serviceReplyErrorLayout(signatures, errorName: handlerError)
-	let handlerPlacement = serviceReplyHandlerPlacement(signatures, errorName: handlerError)
-
-	// Asked of the REGISTRY rather than of the roster, for pass 1's reason: a warm rebuild arrives with a
-	// fresh roster and a filled registry.
-	let name = serviceReplyErrorsCompanionName(messageKey)
-
-	if signatures.containsEnumInAnyFile(name) 'alreadyMinted'
-		return
-	end 'alreadyMinted'
-
-	signatures.recordServiceReplyErrors(buildServiceReplyErrorEnum(signatures, name: name, handlerLayout: handlerLayout, handlerPlacement: handlerPlacement), messageKey: messageKey)
-end 'mintServiceReplyErrorType'
-
-// ⭐⭐⭐ **THE FUSED PAIR AS A DECLARATION — `ServiceError`'s cases then the handler's, AT THE FUSED TAGS
-// THE WIRE ALREADY CARRIES.** A registered case's tag is `Parser.fusedCaseTag(...)` — the ONE home of that
-// sum, shared with `fusedErrorUnionInfo`'s dispatch table — **MINUS `ErrorFlagOrdinalBias`**, and the
-// subtraction is not a fudge: a declared enum's case is thrown as `tag + bias` by the ordinary Std-tier
-// encode, so storing the fused ordinal minus the bias is what makes that encode reproduce the fused word.
-// The universal scalar invariant `flag = tag + bias` therefore holds for this enum on every road at once:
-// the reply's own fused word, and a bare `try` that re-publishes it verbatim.
-//
-// ⚠ **THERE IS NO `throw Calc.divide.errors.<case>` ROAD, AND THIS HEADER USED TO NAME ONE.** A dotted
-// static access three segments deep does not parse (`E2010` at the `.divide`), so the enum is reachable as
-// a TYPE — in a `throws` clause, in a `Promise`'s error argument — and not as a case literal. If that road
-// is ever opened it needs a rule first: `EnumLayout.indexOfCase` returns the FIRST match, and this layout
-// deliberately holds both members' cases, so a colliding name would silently mean the transport member.
-//
-// ⛔⛔ **BOTH POSITIONS COME FROM `serviceReplyTransportPlacement` / `serviceReplyHandlerPlacement` AND
-// NOWHERE ELSE.** Those functions' own header states why (*"the two sides are in different processes of the
-// compiler and must agree to the digit"*); a second derivation here would be an arm running for a case that
-// was not raised.
-//
-// ⭐ **DUPLICATE BARE CASE NAMES ACROSS THE TWO MEMBERS ARE KEPT, NOT MERGED.** `Halt.stopped` beside
-// `ServiceError.stopped` is two cases at two tags, and the ambiguity is the author's to resolve at the
-// `match` (E3085) — collapsing them here would put the two members' cases on one tag and dispatch the wrong
-// one.
-// ⚠⚠ **THE MEMBERSHIP BELOW IS STATED TWICE AND HAS NO SHARED HOME — `Parser.serviceReplyErrorMembers`
-// IS THE OTHER COPY.** Both say *"member 1 is `ServiceError` at `serviceReplyTransportPlacement`, member 2
-// is the handler's at `serviceReplyHandlerPlacement`"*. They cannot be merged cheaply: the roster's natural
-// carrier is `TryBlockErrorMember`, which is file-private to `Parser.maxon`, and the two callers run in
-// different PHASES — this one during `queryProgramSignatures`, before any `Parser` exists. Widening a
-// try-block type onto the module surface to share two lines would be the worse coupling.
-// ⇒ **A THIRD MEMBER, OR A REORDERING, MUST BE MADE IN BOTH.** What is NOT duplicated, and matters far
-// more, is the arithmetic (`Parser.fusedCaseTag`) and the positions (the two placement functions): those
-// have one home each, so the two copies cannot disagree about a NUMBER — only about a membership, which
-// would show up as a case set the dispatch table does not hold rather than as a wrong arm.
-function buildServiceReplyErrorEnum(signatures ProgramSignatures, name ByteArray, handlerLayout EnumLayout, handlerPlacement FusedPlacement) returns EnumLayout
-	var errors = EnumLayout.create(name, isUnion: false, conformsTo: builtinErrorConformance(signatures.interfaceMap()), visibility: Visibility.global, declFilePath: CompilerOwnedDeclFilePath, backing: EnumBacking.integer)
-	addServiceReplyErrorCases(errors, member: serviceReplyErrorLayout(signatures, errorName: ServiceErrorTypeName), placement: serviceReplyTransportPlacement(signatures))
-	addServiceReplyErrorCases(errors, member: handlerLayout, placement: handlerPlacement)
-	return errors
-end 'buildServiceReplyErrorEnum'
-
-// One member's cases, shifted onto the fused line. `declaresRawValue: false` is the literal truth: neither
-// member's raw values survive the shift, and nothing interpolates a case of this enum.
-function addServiceReplyErrorCases(errors EnumLayout, member EnumLayout, placement FusedPlacement)
-	for i in 0 upto member.caseCount() 'eachCase'
-		errors.addCase(member.caseNameAt(i), tag: fusedCaseTag(member.tagOfIndex(i), offset: placement.offset) - ErrorFlagOrdinalBias, rawValue: "", declaresRawValue: false, payloads: PayloadFieldArray.create(), backingFields: sharedEmptyEnumBackingFields)
-	end 'eachCase'
-end 'addServiceReplyErrorCases'

@@ -505,7 +505,7 @@ green run of this case plus a green `pin-matrix.sh` row is the pair.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias SinkHandleArray = Array with Sink.handle
-typealias CountPromise = Promise with (Integer, ServiceError)
+typealias CountPromise = Promise with Integer
 typealias CountPromiseArray = Array with CountPromise
 
 let sinkCount = 8
@@ -540,14 +540,14 @@ function main() returns ExitCode
 		var k = 0 as Integer
 		while k < sinkCount 'sendEach'
 			view s = try sinks.get(k as ElementIndex) otherwise panic("sinks.get OOB at {k}")
-			replies.push(s.take("payload-{k}-{wave}"))
+			replies.push(try s.take("payload-{k}-{wave}") otherwise panic("an open mailbox with room takes the send"))
 			k = k + 1
 		end 'sendEach'
 
 		var n = 0 as Integer
 		while n < sinkCount 'collect'
 			let p = try replies.get(n as ElementIndex) otherwise panic("replies.get OOB at {n}")
-			delivered = delivered + (try await p otherwise 0)
+			delivered = delivered + (await p)
 			n = n + 1
 		end 'collect'
 		wave = wave + 1

@@ -95,7 +95,7 @@ end 'Sleeper'
 
 function main() returns ExitCode
 	let s = spawn Sleeper.create()
-	let r = s.nap()
+	let r = try s.nap() otherwise panic("an open mailbox with room takes the send")
 	sleep(20)
 	// Busy, so this machine does not go idle: the other machine settles into the poller on the 600 ms
 	// deadline first, and only an interrupt can end that wait at 50.
@@ -109,7 +109,7 @@ function main() returns ExitCode
 	let start = Clock.nowMs()
 	sleep(50)
 	let tookMs = Clock.elapsedMs(start) as Integer
-	let v = try await r otherwise 0
+	let v = await r
 	print("late={tookMs >= lateMs} v={v}\n")
 	return 0
 end 'main'
@@ -160,17 +160,17 @@ end 'spinMs'
 function main() returns ExitCode
 	let longer = spawn Sleeper.create()
 	let shorter = spawn Sleeper.create()
-	let r1 = longer.nap(900)
+	let r1 = try longer.nap(900) otherwise panic("an open mailbox with room takes the send")
 
 	// `main`'s machine is the poller for this one, and then the other machine polls on the 900 ms deadline.
 	sleep(20)
 	let settled = spinMs(10)
 
 	// Armed by a third machine while `main`'s keeps running: only the break can end the poller's wait at 50.
-	let r2 = shorter.nap(50)
+	let r2 = try shorter.nap(50) otherwise panic("an open mailbox with room takes the send")
 	let busy = spinMs(600)
-	let took = try await r2 otherwise 0
-	let slept = try await r1 otherwise 0
+	let took = await r2
+	let slept = await r1
 	print("late={took >= lateMs} spun={settled > 0} {busy > 0} slept={slept >= 900}\n")
 	return 0
 end 'main'

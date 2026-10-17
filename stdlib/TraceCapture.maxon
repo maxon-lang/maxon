@@ -31,6 +31,11 @@ public typealias TraceKeyArray = Array with String
 
 typealias TraceCaptureSwitch = SharedValue with bool
 
+union TraceCommand
+	note(key String)
+	reset
+end 'TraceCommand'
+
 type TraceRecorder
 	var keys as TraceKeyArray
 
@@ -38,13 +43,12 @@ type TraceRecorder
 		return Self{keys: TraceKeyArray.create()}
 	end 'create'
 
-	export function record(key String)
-		self.keys.push(key)
-	end 'record'
-
-	export function begin()
-		self.keys.clear()
-	end 'begin'
+	export function apply(command TraceCommand)
+		match command 'which'
+			note(key) then self.keys.push(key)
+			reset then self.keys.clear()
+		end 'which'
+	end 'apply'
 
 	export function finish() returns TraceKeyArray
 		var result = self.keys
@@ -63,18 +67,51 @@ type TraceCaptureControl
 
 	function note(key String)
 		if self.capturing.current() 'on'
-			self.recorder.record(key)
+			self.submit(TraceCommand.note(key))
 		end 'on'
 	end 'note'
 
 	function start()
-		self.recorder.begin()
+		self.submit(TraceCommand.reset)
 		self.capturing.publish(true)
 	end 'start'
 
+	// See `LogSink.write` for why the retry yields and where it can still livelock.
+	function submit(command TraceCommand)
+		var pending = command.clone()
+
+		while true 'untilQueued'
+			try self.recorder.apply(pending) otherwise (e) 'refused'
+				match e 'why'
+					mailboxFull(back) then pending = back
+					serviceStopped then return
+				end 'why'
+
+				Scheduler.yield()
+				continue
+			end 'refused'
+
+			return
+		end 'untilQueued'
+	end 'submit'
+
 	function stop() returns TraceKeyArray
 		self.capturing.publish(false)
-		return try await self.recorder.finish() otherwise panic("TraceCapture.stopCapture: the recorder service is gone")
+
+		while true 'untilAnswered'
+			let keys = try await self.recorder.finish() otherwise (e) 'refused'
+				match e 'why'
+					mailboxFull then Scheduler.yield()
+					serviceStopped then panic("TraceCapture.stopCapture: the recorder service is gone")
+				end 'why'
+
+				continue
+			end 'refused'
+
+			return keys
+		end 'untilAnswered'
+
+		panic("TraceCapture.stopCapture: the retry loop ends only by returning the captured keys")
 	end 'stop'
 end 'TraceCaptureControl'
 

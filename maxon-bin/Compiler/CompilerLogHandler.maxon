@@ -75,8 +75,25 @@ export function installCompilerLogHandler()
 	Log.setDefault(LogSink.create(CompilerLogRoute.current().handler.clone(), levels: LogLevelVar.create(LogLevels.minimum(LogLevel.info))))
 end 'installCompilerLogHandler'
 
+// See `stdlib/Log.maxon`'s `LogSink.write` for why the retries here yield and where they can still
+// livelock.
 module function attributeCompilerLog(unit TraceUnit)
-	CompilerLogRoute.current().handler.attribute(unit)
+	var pending = unit
+
+	while true 'untilQueued'
+		try CompilerLogRoute.current().handler.attribute(pending) otherwise (e) 'refused'
+			match e 'why'
+				mailboxFull(back) then pending = back
+				serviceStopped then panic("attributeCompilerLog: the compiler's log handler stopped while the process still held its handle")
+			end 'why'
+
+			Scheduler.yield()
+			continue
+		end 'refused'
+
+		break
+	end 'untilQueued'
+
 	flushCompilerLog()
 end 'attributeCompilerLog'
 
@@ -84,7 +101,18 @@ end 'attributeCompilerLog'
 // moves on, allocating inside whatever measured bracket is open by then. A compile flushes before
 // its totals close.
 module function flushCompilerLog()
-	try await CompilerLogRoute.current().handler.flush() otherwise panic("flushCompilerLog: the compiler's log handler stopped answering")
+	while true 'untilAnswered'
+		try await CompilerLogRoute.current().handler.flush() otherwise (e) 'refused'
+			match e 'why'
+				mailboxFull then Scheduler.yield()
+				serviceStopped then panic("flushCompilerLog: the compiler's log handler stopped answering")
+			end 'why'
+
+			continue
+		end 'refused'
+
+		return
+	end 'untilAnswered'
 end 'flushCompilerLog'
 
 module function logCompilerDebugSettled(message String)

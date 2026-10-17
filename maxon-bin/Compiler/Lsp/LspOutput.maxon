@@ -26,6 +26,52 @@ export enum ProjectCheckOutcome
 	superseded = "superseded"
 end 'ProjectCheckOutcome'
 
+export union LspWriterCommand
+	write(body String)
+	track(uri String, version LspDocumentVersion)
+	forget(uri String)
+	endSession
+	publishIfCurrent(uri String, version LspDocumentVersion, clientVersion ClientDocumentVersion, outcome ProjectCheckOutcome, body String)
+	report(uri String, clientVersion ClientDocumentVersion, outcome ProjectCheckOutcome)
+end 'LspWriterCommand'
+
+// See `stdlib/Log.maxon`'s `LogSink.write` for why the retries here yield and where they can still
+// livelock.
+module function submitToLspWriter(writer LspStdoutWriter.handle, command LspWriterCommand)
+	var pending = command.clone()
+
+	while true 'untilQueued'
+		try writer.perform(pending) otherwise (e) 'refused'
+			match e 'why'
+				mailboxFull(back) then pending = back
+				serviceStopped then panic("submitToLspWriter: the stdout writer stopped while the session still held its handle")
+			end 'why'
+
+			Scheduler.yield()
+			continue
+		end 'refused'
+
+		return
+	end 'untilQueued'
+end 'submitToLspWriter'
+
+export function lspWriterHoldsVersion(writer LspStdoutWriter.handle, uri String, version LspDocumentVersion) returns bool
+	while true 'untilAnswered'
+		let current = try await writer.isCurrent(uri.clone(), version: version) otherwise (e) 'refused'
+			match e 'why'
+				mailboxFull then Scheduler.yield()
+				serviceStopped then return false
+			end 'why'
+
+			continue
+		end 'refused'
+
+		return current
+	end 'untilAnswered'
+
+	panic("lspWriterHoldsVersion: the retry loop ends only by returning the writer's answer")
+end 'lspWriterHoldsVersion'
+
 // The one writer of the client's stream, spawned as a service: a project check runs on a strand of its
 // own, and two strands framing onto stdout would interleave their bytes.
 //
@@ -40,19 +86,18 @@ export type LspStdoutWriter
 		return Self{versions: LspDocumentVersionMap.create(), sessionOpen: true}
 	end 'create'
 
-	export function write(body String)
-		writeLspMessage(body)
-	end 'write'
+	export function perform(command LspWriterCommand)
+		match command 'which'
+			write(body) then writeLspMessage(body)
+			track(uri, version) then self.versions.upsert(uri.clone(), value: version)
+			forget(uri) then _ = self.versions.remove(uri)
+			endSession then self.endSession()
+			publishIfCurrent(uri, version, clientVersion, outcome, body) then self.publishIfCurrent(uri, version: version, clientVersion: clientVersion, outcome: outcome, body: body)
+			report(uri, clientVersion, outcome) then self.report(uri, clientVersion: clientVersion, outcome: outcome)
+		end 'which'
+	end 'perform'
 
-	export function track(uri String, version LspDocumentVersion)
-		self.versions.upsert(uri, value: version)
-	end 'track'
-
-	export function forget(uri String)
-		_ = self.versions.remove(uri)
-	end 'forget'
-
-	export function endSession()
+	function endSession()
 		self.versions = LspDocumentVersionMap.create()
 		self.sessionOpen = false
 	end 'endSession'
@@ -63,7 +108,7 @@ export type LspStdoutWriter
 		return current == version
 	end 'isCurrent'
 
-	export function publishIfCurrent(uri String, version LspDocumentVersion, clientVersion ClientDocumentVersion, outcome ProjectCheckOutcome, body String)
+	function publishIfCurrent(uri String, version LspDocumentVersion, clientVersion ClientDocumentVersion, outcome ProjectCheckOutcome, body String)
 		if not self.isCurrent(uri, version: version) 'superseded'
 			self.report(uri, clientVersion: clientVersion, outcome: ProjectCheckOutcome.superseded)
 			return
@@ -73,7 +118,7 @@ export type LspStdoutWriter
 		self.report(uri, clientVersion: clientVersion, outcome: outcome)
 	end 'publishIfCurrent'
 
-	export function report(uri String, clientVersion ClientDocumentVersion, outcome ProjectCheckOutcome)
+	function report(uri String, clientVersion ClientDocumentVersion, outcome ProjectCheckOutcome)
 		if not self.sessionOpen 'noClientToTell'
 			return
 		end 'noClientToTell'

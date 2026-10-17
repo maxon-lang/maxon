@@ -124,14 +124,14 @@ type Sender
 			// `__str_retain`'s COPY arm and never touches a refcount, so a literal
 			// would move nothing and the cross-thread drop would not exist.
 			let payload = "msg {self.id}:{r}"
-			sink.take(payload)
+			try sink.take(payload) otherwise panic("service-fanin-torture: the sink's mailbox holds every payload the run sends it")
 			r = r + 1
 		end 'eachRound'
 	end 'run'
 end 'Sender'
 
 function main() returns ExitCode
-	let sink = spawn Sink.create()
+	let sink = spawn(capacity: expectedTotal) Sink.create()
 
 	var senders = SenderHandleArray.create()
 
@@ -149,7 +149,7 @@ function main() returns ExitCode
 
 	while k < senderCount 'startEach'
 		view sender = try senders.get(k) otherwise panic("service-fanin-torture: senders.get OOB at {k} — the loop is bounded by the count the pushes above filled")
-		sender.run(sink.clone(), rounds: roundsPerSender)
+		try sender.run(sink.clone(), rounds: roundsPerSender) otherwise panic("service-fanin-torture: a fresh sender refused its only message")
 		k = k + 1
 	end 'startEach'
 

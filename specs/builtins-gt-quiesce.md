@@ -55,7 +55,7 @@ end 'Greeter'
 
 function main() returns ExitCode
 	var greeter = spawn Greeter.create()
-	greeter.greet(2)
+	try greeter.greet(2) otherwise panic("an open mailbox with room takes the send")
 	greeter.shutdown()
 
 	let outstanding = __Builtins.gtQuiesce()
@@ -111,7 +111,7 @@ end 'Greeter'
 
 function main() returns ExitCode
 	var greeter = spawn Greeter.create()
-	greeter.greet(1)
+	try greeter.greet(1) otherwise panic("an open mailbox with room takes the send")
 
 	let stranded = __Builtins.gtQuiesce()
 	print("stranded {stranded}\n")
@@ -150,7 +150,7 @@ end 'Waiter'
 
 function main() returns ExitCode
 	var waiter = spawn Waiter.create()
-	waiter.wait()
+	try waiter.wait() otherwise panic("an open mailbox with room takes the send")
 
 	let outstanding = __Builtins.gtQuiesce()
 	print("main saw {outstanding}\n")
@@ -169,7 +169,7 @@ fatal error: runtime abort 123 (schedulerQuiesceWaiterTaken)
 <!-- unsupported-targets: wasm32-wasi -->
 <!-- procs: 4 -->
 ⭐⭐ **A WAIT THAT REGISTERS WHILE THE LAST GREEN THREADS' COROUTINES ARE STILL COMPLETING.** Each round spawns
-three services and sends each one `work`, then `linger`, then the shutdown. Both messages run three
+three services, sends each one `work` and then `linger`, and then shuts it down. Both messages run three
 coroutines on the worker's strand, two that yield and one that sleeps for 1 ms, and sum their answers.
 `main` awaits the three `work` replies and then waits at once. So at four processors the `linger`
 coroutines complete and the workers exit on other machines while `main` is checking the live count,
@@ -189,7 +189,7 @@ decide between the two without a lock.
 last exit never overlap.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias ReplyPromise = Promise with (Integer, ServiceError)
+typealias ReplyPromise = Promise with Integer
 typealias ReplyPromiseArray = Array with ReplyPromise
 
 let rounds = 100
@@ -240,13 +240,13 @@ function main() returns ExitCode
 
 		for _ in 0 upto workersPerRound 'spawnEach'
 			var worker = spawn Worker.create()
-			replies.push(worker.work(r))
-			worker.linger(r)
+			replies.push(try worker.work(r) otherwise panic("an open mailbox with room takes the send"))
+			try worker.linger(r) otherwise panic("an open mailbox with room takes the send")
 			worker.shutdown()
 		end 'spawnEach'
 
 		for p in replies 'collect'
-			sum = sum + (try await p otherwise 0)
+			sum = sum + (await p)
 		end 'collect'
 
 		outstanding = outstanding + (__Builtins.gtQuiesce() as Integer)
@@ -273,7 +273,7 @@ finds the live count already at zero, or registers first and is readied by the l
 give the same answers as the racing ones. Like its twin, it is a control.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias ReplyPromise = Promise with (Integer, ServiceError)
+typealias ReplyPromise = Promise with Integer
 typealias ReplyPromiseArray = Array with ReplyPromise
 
 let rounds = 100
@@ -324,13 +324,13 @@ function main() returns ExitCode
 
 		for _ in 0 upto workersPerRound 'spawnEach'
 			var worker = spawn Worker.create()
-			replies.push(worker.work(r))
-			worker.linger(r)
+			replies.push(try worker.work(r) otherwise panic("an open mailbox with room takes the send"))
+			try worker.linger(r) otherwise panic("an open mailbox with room takes the send")
 			worker.shutdown()
 		end 'spawnEach'
 
 		for p in replies 'collect'
-			sum = sum + (try await p otherwise 0)
+			sum = sum + (await p)
 		end 'collect'
 
 		outstanding = outstanding + (__Builtins.gtQuiesce() as Integer)

@@ -73,10 +73,10 @@ function main() returns ExitCode
 	let z = spawn Z.create()
 	let y = spawn Y.create()
 	let w = spawn W.create()
-	let py = y.ask(z.clone())
-	let pw = w.run(y.clone(), zh: z.clone())
-	let a = try await py otherwise 0
-	let b = try await pw otherwise 0
+	let py = try y.ask(z.clone()) otherwise panic("an open mailbox with room takes the send")
+	let pw = try w.run(y.clone(), zh: z.clone()) otherwise panic("an open mailbox with room takes the send")
+	let a = await py
+	let b = await pw
 	return (a + b) as ExitCode
 end 'main'
 ```
@@ -130,10 +130,10 @@ function main() returns ExitCode
 	let z = spawn Z.create()
 	let y = spawn Y.create()
 	let w = spawn W.create()
-	let py = y.ask(z.clone())
-	let pw = w.run(y.clone(), zh: z.clone())
-	let a = try await py otherwise 0
-	let b = try await pw otherwise 0
+	let py = try y.ask(z.clone()) otherwise panic("an open mailbox with room takes the send")
+	let pw = try w.run(y.clone(), zh: z.clone()) otherwise panic("an open mailbox with room takes the send")
+	let a = await py
+	let b = await pw
 	return (a + b) as ExitCode
 end 'main'
 ```
@@ -180,11 +180,11 @@ end 'Middle'
 function main() returns ExitCode
 	try File.delete(FilePath from "sched-park-flag-one.txt") otherwise ignore
 	let m = spawn Middle.create()
-	let r = m.go()
+	let r = try m.go() otherwise panic("an open mailbox with room takes the send")
 	sleep(5)
 	print("main woke\n")
 	try File.writeText(FilePath from "sched-park-flag-one.txt", content: "x") otherwise ignore
-	let v = try await r otherwise 0
+	let v = await r
 	print("v={v}\n")
 	try File.delete(FilePath from "sched-park-flag-one.txt") otherwise ignore
 	return 0
@@ -236,11 +236,11 @@ end 'Middle'
 function main() returns ExitCode
 	try File.delete(FilePath from "sched-park-flag-four.txt") otherwise ignore
 	let m = spawn Middle.create()
-	let r = m.go()
+	let r = try m.go() otherwise panic("an open mailbox with room takes the send")
 	sleep(5)
 	print("main woke\n")
 	try File.writeText(FilePath from "sched-park-flag-four.txt", content: "x") otherwise ignore
-	let v = try await r otherwise 0
+	let v = await r
 	print("v={v}\n")
 	try File.delete(FilePath from "sched-park-flag-four.txt") otherwise ignore
 	return 0
@@ -292,12 +292,12 @@ end 'Middle'
 
 function main() returns ExitCode
 	let m = spawn Middle.create()
-	let r = m.go()
+	let r = try m.go() otherwise panic("an open mailbox with room takes the send")
 	let start = Clock.nowMs()
 	sleep(10)
 	let tookMs = Clock.elapsedMs(start) as Integer
 	print("late={tookMs >= lateMs}\n")
-	let v = try await r otherwise 0
+	let v = await r
 	print("v={v}\n")
 	return 0
 end 'main'

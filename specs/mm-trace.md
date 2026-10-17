@@ -674,7 +674,7 @@ call is short an argument.**
 function main() returns ExitCode
 	let a = spawn Counter.create()
 	let b = a.clone()
-	b.tick()
+	try b.tick() otherwise panic("send tick")
 	return 0
 end 'main'
 

@@ -2343,8 +2343,7 @@ union AsyncCalleeLookup
 	// ⭐ **A SERVICE REPLY CELL** — a promise whose defining op is a `serviceReplyCell`, naming the
 	// MESSAGE whose reply it will carry. It is a distinct arm rather than a second `found` because the two
 	// roads describe the promise differently at every door: an `async` spawn's facts come off the callee's
-	// own signature, a reply's off the message's PLUS `ServiceError`, which the callee's signature does not
-	// mention and never will.
+	// own signature, a reply's off the message's.
 	serviceReply(let messageName ByteArray, let awaitedService ByteArray)
 	none
 end 'AsyncCalleeLookup'
@@ -3800,6 +3799,13 @@ end 'HandOffPlan'
 
 typealias HandOffPlanArray = Array with HandOffPlan
 
+union SharedSlotHandBack
+	moved
+	copied(clone ManagedCascadeStrategy, release ByteArray)
+end 'SharedSlotHandBack'
+
+typealias SharedSlotHandBackArray = Array with SharedSlotHandBack
+
 function handOffTakeEndsTheWriteBlame(take HandOffTake) returns bool
 	return match take 'take'
 		cellOccupant(_, exclusivity) gives exclusivity == CellOccupantExclusivity.sole
@@ -4802,6 +4808,128 @@ function unrecordedTryTarget(opIdx ElementIndex) returns TryTarget
 	panic("recordedTryTargetOf: the op at {opIdx} is not the one its door recorded — `emitAwaitOp` and `emitWitnessDispatch` record the target of the op they emit, and whoever reads it back does so before either emits another")
 end 'unrecordedTryTarget'
 
+union RecordedSend
+	nothingRecorded
+	recorded(opIdx ElementIndex, funcIndex ElementIndex, send SentMessage)
+end 'RecordedSend'
+
+union UnsettledSend
+	settled
+	pending(opIdx ElementIndex, range SourceRange)
+end 'UnsettledSend'
+
+type SentLeg
+	export let refusedId as BlockId
+	export let flag as ValueId
+	export let fused as ValueId
+	export let members as TryBlockErrorMemberArray
+
+	static function create(refusedId BlockId, flag ValueId, fused ValueId, members TryBlockErrorMemberArray) returns SentLeg
+		return Self{refusedId: refusedId, flag: flag, fused: fused, members: members}
+	end 'create'
+
+	export function holdsAUnion() returns bool
+		return self.members.count() > 1
+	end 'holdsAUnion'
+end 'SentLeg'
+
+union SentLegSlot
+	none
+	held(leg SentLeg)
+end 'SentLegSlot'
+
+type JoinedError
+	export let flag as ValueId
+	export let fused as ValueId
+
+	static function create(flag ValueId, fused ValueId) returns JoinedError
+		return Self{flag: flag, fused: fused}
+	end 'create'
+end 'JoinedError'
+
+type SentLegJoin
+	export let slot as SentLegSlot
+	export let entryBlockId as BlockId
+	export let handlerFlag as ValueId
+	export let handlerFused as ValueId
+	export let joined as JoinedError
+
+	static function create(slot SentLegSlot, entryBlockId BlockId, handlerFlag ValueId, handlerFused ValueId, joined JoinedError) returns SentLegJoin
+		return Self{slot: slot, entryBlockId: entryBlockId, handlerFlag: handlerFlag, handlerFused: handlerFused, joined: joined}
+	end 'create'
+end 'SentLegJoin'
+
+type SentMessage
+	export let messageName as ByteArray
+	export let spelling as ByteArray
+	export let handle as ValueId
+	export let staging as ValueId
+	export let reply as ServiceReplyValue
+	export let request as EnumLayout
+	export let caseIndex as CaseIndex
+	let handBack as SharedSlotHandBackArray
+
+	static function create(messageName ByteArray, spelling ByteArray, handle ValueId, staging ValueId, reply ServiceReplyValue, request EnumLayout, caseIndex CaseIndex, handBack SharedSlotHandBackArray) returns SentMessage
+		return Self{messageName: messageName, spelling: spelling, handle: handle, staging: staging, reply: reply, request: request, caseIndex: caseIndex, handBack: handBack}
+	end 'create'
+
+	function handBackOf(slot PayloadSlotIndex) returns SharedSlotHandBack
+		return try self.handBack.get(slot) otherwise panic("SentMessage.handBackOf: handBack.get OOB at {slot} — the column is sized to the request variant's payload count, and a send-error union's slots map onto it slot for slot")
+	end 'handBackOf'
+
+	function requestPayloadAt(slot PayloadSlotIndex) returns PayloadField
+		return try self.request.payloadsAt(self.caseIndex).get(slot) otherwise panic("SentMessage.requestPayloadAt: payloadsAt.get OOB at {slot} — the request variant of `{String.from(self.messageName)}` has fewer payload slots than the send-error union claims")
+	end 'requestPayloadAt'
+
+	export function sendErrorName() returns ByteArray
+		return serviceSendErrorCompanionName(self.spelling)
+	end 'sendErrorName'
+
+	export function throwsClause() returns ThrowsClause
+		return ThrowsClause.throwing(String.from(self.sendErrorName()))
+	end 'throwsClause'
+
+	export function resultValue(sent ValueId) returns ValueId
+		return match self.reply 'reply'
+			fireAndForget gives sent
+			cell(promise) gives promise
+		end 'reply'
+	end 'resultValue'
+
+	export function awaitsCell(promise ValueId) returns bool
+		return match self.reply 'reply'
+			fireAndForget gives false
+			cell(held) gives held == promise
+		end 'reply'
+	end 'awaitsCell'
+end 'SentMessage'
+
+function recordedSendOf(record RecordedSend, opIdx ElementIndex) returns SentMessage
+	return match record 'record'
+		recorded(recordedIdx, _, send) gives send if recordedIdx == opIdx else unrecordedSend(opIdx)
+		nothingRecorded gives unrecordedSend(opIdx)
+	end 'record'
+end 'recordedSendOf'
+
+function unrecordedSend(opIdx ElementIndex) returns SentMessage
+	panic("recordedSendOf: the op at {opIdx} is not the send `emitServiceSendOp` recorded — whoever rewrites a send into the try channel does so before another send is emitted")
+end 'unrecordedSend'
+
+union DroppedReplyAnchor
+	atTry(tryTok Token)
+	atTheSend
+end 'DroppedReplyAnchor'
+
+let StagedWitnessSlotDistance = 1
+
+function stagedWordAt(staged ValueIdArray, slot ElementIndex) returns ValueId
+	return try staged.get(slot) otherwise panic("stagedWordAt: staged.get OOB at {slot} — a word was loaded for every payload slot of the send-error union, and an interface value's witness is the slot after it")
+end 'stagedWordAt'
+
+function stagedWitnessAt(staged ValueIdArray, slot ElementIndex) returns ValueId
+	return stagedWordAt(staged, slot: slot + StagedWitnessSlotDistance)
+end 'stagedWitnessAt'
+
 union ValueProducer
 	noOwnOp
 	at(opIdx ElementIndex)
@@ -4813,6 +4941,7 @@ union RoutableOp
 	tryChannelCall(result ValueId, let callee ByteArray)
 	witness(result ValueId)
 	await(result ValueId, promise ValueId)
+	send(result ValueId)
 end 'RoutableOp'
 
 union TryChannelResult
@@ -4826,6 +4955,7 @@ function tryChannelCallOf(op RoutableOp, opIndex ElementIndex, wanted TryChannel
 		notRoutable or
 		call or
 		witness or
+		send or
 		await gives DiscardedCallee.notACall
 	end 'op'
 end 'tryChannelCallOf'
@@ -4850,6 +4980,7 @@ function routableOpIsAwait(op RoutableOp) returns bool
 		notRoutable or
 		call or
 		tryChannelCall or
+		send or
 		witness gives false
 	end 'op'
 end 'routableOpIsAwait'
@@ -6234,6 +6365,10 @@ end 'QualifiedChainUse'
 let ByteTypeName = b"byte"
 
 let CountAliasName = b"Count"
+
+let MailboxCapacityAliasName = b"MailboxCapacity"
+
+let DefaultMailboxCapacityName = b"DefaultMailboxCapacity"
 
 let FileSizeAliasName = b"FileSize"
 
@@ -9836,10 +9971,12 @@ end 'readonlyMayFollow'
 // takes into EVERY compile. A `KeywordTable` row would break both on the day it landed, so
 // `filter=associated-types` and `filter=subprocess` staying green IS this decision's gate.
 //
-// The recognition is EXACT rather than heuristic, exactly as `atModuleModifier`'s is: the word is the
-// prefix operator iff the very next token is an identifier or `Self`. Two adjacent NAME tokens open no
-// expression the grammar has, and `newline` is a real token — so `return spawn` followed by a line break
-// reads the local named `spawn`, and `Subprocess.spawn(cmd)` (whose next token is `(`) is untouched.
+// The recognition is EXACT rather than heuristic, exactly as `atModuleModifier`'s is: the word is
+// the prefix operator iff the next token past an optional `(capacity: …)` group
+// (`spawnTargetIndexIn`) is an identifier or `Self`. Two adjacent NAME tokens open no expression
+// the grammar has, and `newline` is a real token — so `return spawn` followed by a line break reads
+// the local named `spawn`, and `Subprocess.spawn(cmd)` (whose `(` opens no `capacity:` group) is
+// untouched.
 let SpawnKeywordName = b"spawn"
 
 // Is `tok` the WORD `spawn`? A free function over a TOKEN because the two askers hold different things: the
@@ -9849,6 +9986,49 @@ let SpawnKeywordName = b"spawn"
 module function tokenIsTheSpawnKeyword(tok Token) returns bool
 	return tok.kind == TokenKind.identifier and tok.value.equals(SpawnKeywordName)
 end 'tokenIsTheSpawnKeyword'
+
+let SpawnCapacityLabel = b"capacity"
+
+module function spawnTargetIndexIn(tokens TokenArray, spawnIndex ElementIndex) returns ElementIndex
+	let groupStart = spawnIndex + 1
+
+	if tokenKindIn(tokens, index: groupStart) != TokenKind.leftParen or tokenKindIn(tokens, index: groupStart + 2) != TokenKind.colon 'noCapacityGroup'
+		return groupStart
+	end 'noCapacityGroup'
+
+	let labelTok = try tokens.get(groupStart + 1) otherwise return groupStart
+
+	if labelTok.kind != TokenKind.identifier or not labelTok.value.equals(SpawnCapacityLabel) 'notTheCapacityLabel'
+		return groupStart
+	end 'notTheCapacityLabel'
+
+	var i = groupStart
+	var depth = 0 as BracketDepth
+
+	while true 'scan'
+		let kind = tokenKindIn(tokens, index: i)
+
+		if kind == TokenKind.eof 'fileEnd'
+			return groupStart
+		end 'fileEnd'
+
+		if kind == TokenKind.leftParen 'openParen'
+			depth = depth + 1
+		end 'openParen'
+
+		if kind == TokenKind.rightParen 'closeParen'
+			depth = depth - 1
+		end 'closeParen'
+
+		i = i + 1
+
+		if depth == 0 'groupClosed'
+			break
+		end 'groupClosed'
+	end 'scan'
+
+	return i
+end 'spawnTargetIndexIn'
 
 function tokenKindIn(tokens TokenArray, index ElementIndex) returns TokenKind
 	if index >= tokens.count() 'pastEnd'
@@ -9907,13 +10087,14 @@ module function defaultDeclarationFrom(tokens TokenArray, index ElementIndex, pa
 	let keyTok = try tokens.get(index + 1) otherwise panic("defaultDeclarationFrom: `defaultDeclarationAt` saw the key at {index + 1}")
 	let exprStart = index + 3
 	let exprEnd = initializerEndIndexIn(tokens, start: exprStart)
-	let startsWithASpawn = exprStart < tokens.count() and tokenIsTheSpawnKeyword(try tokens.get(exprStart) otherwise panic("defaultDeclarationFrom: exprStart below count just checked")) and tokenKindIn(tokens, index: exprStart + 2) == TokenKind.dot
+	let spawnTargetIndex = spawnTargetIndexIn(tokens, spawnIndex: exprStart)
+	let startsWithASpawn = exprStart < tokens.count() and tokenIsTheSpawnKeyword(try tokens.get(exprStart) otherwise panic("defaultDeclarationFrom: exprStart below count just checked")) and tokenKindIn(tokens, index: spawnTargetIndex + 1) == TokenKind.dot
 
 	if not startsWithASpawn 'aValueDefault'
 		return DefaultDeclaration.create(keyTok.value, declFilePath: path, keyRange: SourceRange.ofToken(keyTok), isStdlibSource: isStdlibSource, exprStart: exprStart, exprEnd: exprEnd, spawn: DefaultSpawn.value)
 	end 'aValueDefault'
 
-	let typeTok = try tokens.get(exprStart + 1) otherwise panic("defaultDeclarationFrom: the dot at +2 proves a token at +1")
+	let typeTok = try tokens.get(spawnTargetIndex) otherwise panic("defaultDeclarationFrom: the dot after the spawn target proves a token at it")
 	return DefaultDeclaration.create(keyTok.value, declFilePath: path, keyRange: SourceRange.ofToken(keyTok), isStdlibSource: isStdlibSource, exprStart: exprStart, exprEnd: exprEnd, spawn: DefaultSpawn.spawns(typeTok.value))
 end 'defaultDeclarationFrom'
 
@@ -11921,8 +12102,7 @@ let RawScratchSizeRequirement = "a positive whole number of 8-byte slots"
 // cases quote it exactly.
 //
 // ⚠ The REPLY road names the MESSAGE instead (`requirePromiseStorageDescribesReply`), because *"this
-// promise's function"* would be the handler — whose own `throws` clause says nothing about the
-// `ServiceError` a reply always carries, so it would send the author to fix the wrong declaration.
+// promise's function"* would be the handler.
 let PromiseStorageSubjectIsTheCallee = "this promise's function"
 
 // ⭐ **THE `panic at <file>:<line>: <text>\n` LINE A `panic(…)` HANDS THE RUNTIME, IN THE ONE OF TWO FORMS
@@ -13407,7 +13587,7 @@ union IfCondition
 	// The caught-error form rides beside the type because a service reply's `(e)` binds a synthesized
 	// two-member union rather than a declared enum, and the `else` branch that decodes it is parsed
 	// far from the `try` target that decided which.
-	tryCatch(test ValueId, result ValueId, resultWasPending bool, flag ValueId, errorType MaxonType, form CaughtErrorForm)
+	tryCatch(test ValueId, result ValueId, resultWasPending bool, flag ValueId, errorType MaxonType, form CaughtErrorForm, join SentLegJoin)
 end 'IfCondition'
 
 // The optional success binder in front of a catching condition — `if let x = try …` / `if var x = try …`.
@@ -13422,7 +13602,7 @@ end 'IfBinder'
 function ifConditionTest(cond IfCondition) returns ValueId
 	return match cond 'shape'
 		plain(test) gives test
-		tryCatch(test, _, _, _, _, _) gives test
+		tryCatch(test, _, _, _, _, _, _) gives test
 	end 'shape'
 end 'ifConditionTest'
 
@@ -13471,16 +13651,11 @@ union TryTarget
 	// rather than E3055.
 	promise(let storageName ByteArray, let throwsClause ThrowsClause)
 
-	// ⭐⭐ **A SERVICE REPLY: the MESSAGE's name, and nothing else.** Unlike `witness` and `promise` it
-	// carries no clause, because a reply's error type is not a fact the DECLARATION records — it is derived
-	// from `ServiceError` merged with whatever the message itself throws, and deriving it once at
-	// `tryTargetThrows` is what stops the plain-`await` reject (E3057), the `otherwise (e)` binding and the
-	// propagate check (E3059) from coming to three different answers about the same reply.
-	//
-	// ⚠ **THAT DERIVED TYPE HAS A REGISTERED NAME** (`<message>.errors`), so the OTHER three arms
-	// can carry it in an ordinary clause — see `caughtErrorFormFor`, which routes them to this arm's dispatch
-	// table by asking the registry rather than by re-deriving anything.
 	serviceReply(let messageName ByteArray, let awaitedService ByteArray)
+
+	sentReply(let messageName ByteArray, let awaitedService ByteArray, let sendErrorName ByteArray)
+
+	send(let messageName ByteArray, let throwsClause ThrowsClause)
 
 	// A call to a callee nothing defines: its `unresolved` result is a deferral to E3004, so every
 	// door passes it through (see `deferredUnresolvedMemberResult`).
@@ -13522,10 +13697,26 @@ function tryTargetNoun(target TryTarget, signatures ProgramSignatures) returns B
 		named(callee) gives tryTargetNamedNoun(callee, signatures: signatures)
 		witness(methodName, _) gives methodName
 		promise(methodName, _) gives methodName
+		send(methodName, _) gives methodName
 		serviceReply(methodName, _) gives methodName
+		sentReply(methodName, _, _) gives methodName
 		deferred panic("tryTargetNoun: a deferred `try` target reached a diagnostic about what it produces — `requireCaughtResultIsSpokenFor` returns before asking for one, and `parseTry` asks only of a `void` result, which no deferred target has")
 	end 'kind'
 end 'tryTargetNoun'
+
+function tryTargetProducesNoValueError(target TryTarget, signatures ProgramSignatures, tryTok Token) returns SourceParseError
+	match target 'kind'
+		send(messageName, _) then return SourceParseError.unsupported(serviceSendHasNoValueRefusal(messageName), line: tryTok.line, column: tryTok.column)
+		named or
+		witness or
+		promise or
+		serviceReply or
+		sentReply or
+		deferred then break
+	end 'kind'
+
+	return SourceParseError.errorTypeMismatch("'{String.from(tryTargetNoun(target, signatures: signatures))}' does not return a value", line: tryTok.line, column: tryTok.column)
+end 'tryTargetProducesNoValueError'
 
 // **E3059's NOUN for a `named` target, and the reason it is not just the callee.** A COMPILER-EMITTED
 // callee is not a name the author can type — `__` is the prefix E2051 bars every declaration from — so
@@ -14478,9 +14669,11 @@ type TryFork
 	export let entryVals as ValueIdArray
 	export var entryMoveMark as MoveMark
 	export let resultWasPending as bool
+	export let errFlag as ValueId
+	export let errFused as ValueId
 
-	static function create(okBlock IrBlock, forkTemps ValueIdArray, suspendedMark ElementIndex, entryVals ValueIdArray, entryMoveMark MoveMark, resultWasPending bool) returns TryFork
-		return Self{okBlock: okBlock, forkTemps: forkTemps, suspendedMark: suspendedMark, entryVals: entryVals, entryMoveMark: entryMoveMark, resultWasPending: resultWasPending}
+	static function create(okBlock IrBlock, forkTemps ValueIdArray, suspendedMark ElementIndex, entryVals ValueIdArray, entryMoveMark MoveMark, resultWasPending bool, errFlag ValueId, errFused ValueId) returns TryFork
+		return Self{okBlock: okBlock, forkTemps: forkTemps, suspendedMark: suspendedMark, entryVals: entryVals, entryMoveMark: entryMoveMark, resultWasPending: resultWasPending, errFlag: errFlag, errFused: errFused}
 	end 'create'
 end 'TryFork'
 
@@ -14554,19 +14747,10 @@ module type FusedPlacement
 	end 'tooWide'
 end 'FusedPlacement'
 
-// ⭐⭐ **WHERE ONE MEMBER'S CASE LANDS ON THE FUSED LINE — the arithmetic itself, written ONCE because
-// THREE parties have to land on the same number and two of them are in different passes.** The dispatch
-// table (`fusedErrorUnionInfo`), the reply's NOMINAL enum
-// (`ServiceCompanions.addServiceReplyErrorCases`) and the flag the service actually writes
-// (`ServiceLoop.emitFusedHandlerFlag`, via `serviceReplyHandlerFusedShift`) all express this same sum.
-//
-// ⚠ **THE NOMINAL ENUM SPELLS IT `fusedCaseTag(...) - ErrorFlagOrdinalBias`, AND THE SUBTRACTION IS THE
-// POINT.** A declared enum's case is thrown as `tag + bias` by the ordinary Std-tier encode, so storing
-// the fused ordinal MINUS the bias is exactly what makes that encode reproduce the fused word — the
-// universal `flag = tag + bias` then holds for the reply's own cell, for a bare `try` that republishes it
-// verbatim, and for the dispatch table alike. Written as two independent formulas this relationship is
-// invisible, and a disagreement is not a crash: it is a `match e` arm running for a case nothing raised.
-module function fusedCaseTag(memberTag FullRangeInt, offset FullRangeInt) returns FullRangeInt
+// ⭐⭐ **WHERE ONE MEMBER'S CASE LANDS ON THE FUSED LINE — the arithmetic itself, written ONCE because the
+// parties that have to land on the same number are in different places.** The dispatch table
+// (`fusedErrorUnionInfo`) and every routed edge's fused ordinal express this same sum.
+function fusedCaseTag(memberTag FullRangeInt, offset FullRangeInt) returns FullRangeInt
 	return memberTag + offset
 end 'fusedCaseTag'
 
@@ -15759,14 +15943,24 @@ enum OwnedHeapExclusivity
 	// find it refused here, not absent.
 	sole
 
-	// Some other live owner holds the same allocation, or this frame cannot prove that none does. Three
-	// producers, and the third is the one an enumeration would miss: a RETAIN (`__mm_retain`/`__mm_incref` —
-	// co-ownership by construction), a MERGE whose edges are not all sole, and a value that CROSSED A FRAME
-	// BOUNDARY — a consumed parameter, a call's owned result, a caught error box — where the transferring
-	// frame's choice between a move and an incref is invisible here and is a whole-program fact the compiler does not
-	// compute.
+	// Some other live owner holds the same allocation, or this frame cannot prove that none does.
+	// Three producers, and the third is the one an enumeration would miss: a RETAIN
+	// (`__mm_retain`/`__mm_incref` — co-ownership by construction), a MERGE whose edges are not all
+	// sole, and a value that CROSSED A FRAME BOUNDARY — a consumed parameter, a call's owned result, a
+	// caught error box other than a send error's (`serviceSendErrorExclusivity`) — where the
+	// transferring frame's choice between a move and an incref is invisible here and is a
+	// whole-program fact the compiler does not compute.
 	coOwned
 end 'OwnedHeapExclusivity'
+
+// ⚠ A send error is `sole` wherever it is held, which is what lets a caught one's arguments be
+// moved out and sent again. The failed send built the box from the words it owned and cloned every
+// shared argument, so no thrower's container can read it; E3191 refuses a rethrow from a holder
+// that does not own it solely. A payload of an uncloneable type is handed back uncloned, so its
+// bind retains instead (`sendErrorSlotIsCoOwnedByType`).
+function serviceSendErrorExclusivity(signatures ProgramSignatures, unionName ByteArray) returns OwnedHeapExclusivity
+	return OwnedHeapExclusivity.sole if signatures.isServiceSendError(unionName) else OwnedHeapExclusivity.coOwned
+end 'serviceSendErrorExclusivity'
 
 // ⭐⭐ **WHERE A NODE HANDLE WAS MINTED FROM — the provenance `__ManagedList.remove`'s ONE compile-time
 // exemption is keyed to.** A handle minted BY A CHAIN carries that chain's value, so
@@ -17601,6 +17795,8 @@ type FunctionBodyState
 	// `emitProtocolTryCall` rewrites itself, which routed first would be rewritten twice.
 	export var throwRouteClaim as ThrowRouteClaim
 
+	export var holdsSendForTryAwait as bool
+
 	// A `try` target must still be a call when the target parse ends, so no fold may remove one inside
 	// it. `parseTry` and `if let x = try …` rewrite the op producing the target's value
 	// (`rewriteLastCallToTryCall`) and decide E3055 from what it names; a constant-slice fold that
@@ -17795,8 +17991,8 @@ type FunctionBodyState
 	// being movable at the instant the reference is taken, with no site having to remember a second write.
 	//
 	// Same lockstep as `valuePromiseMarks` (pushed `false` in `mintValue`/`recordValueType`, set by
-	// `markValueFromFreshReturn` at the ONE door that knows a callee's name, recreated per function and
-	// swapped across a closure body).
+	// `markValueFromFreshReturn` — see there for its writers — recreated per function and swapped
+	// across a closure body).
 	export var valueFromFreshReturn as BoolArray
 
 	// ⭐ **THE PROMISE MARK** — true iff value `v` is an `async` spawn's handle. A per-value bool
@@ -18551,6 +18747,7 @@ type FunctionBodyState
 			// Fresh per function, with its companion flag — see the `tryBlocks` field declaration for why.
 			tryBlocks: TryBlockContextArray.create(),
 			throwRouteClaim: ThrowRouteClaim.unclaimed,
+			holdsSendForTryAwait: false,
 			tryTargetMustStayACall: false,
 			loopClaimsWithIteratorPromise: false,
 			matches: MatchContextArray.create(),
@@ -19248,6 +19445,12 @@ export type Parser
 
 	// See `lastWitnessDispatch`.
 	var lastAwait as RecordedTryTarget
+
+	var lastSend as RecordedSend
+
+	var unsettledSend as UnsettledSend
+
+	var sentLeg as SentLegSlot
 
 	// ⭐ The BARE MEMBER NAMES of the INNER ranged typealiases declared in the type currently being parsed —
 	// `{Idx}` inside `type Wrapper` with `typealias Idx = int(0 to u64.max)`, empty otherwise. It
@@ -19950,6 +20153,9 @@ export type Parser
 			lastWitnessDispatch: RecordedTryTarget.nothingRecorded,
 			pendingRequirementParam: PendingUnstorableRequirement.none,
 			lastAwait: RecordedTryTarget.nothingRecorded,
+			lastSend: RecordedSend.nothingRecorded,
+			unsettledSend: UnsettledSend.settled,
+			sentLeg: SentLegSlot.none,
 			enclosingInnerAliases: noInnerAliases,
 			interfaceAliasScratch: anchors.interfaceAliases,
 			innerAliasesFromIndex: false,
@@ -27091,9 +27297,10 @@ export type Parser
 	end 'atModuleModifier'
 
 	// ⭐⭐ **IS THE CURSOR ON THE `spawn` PREFIX OPERATOR?** — `atModuleModifier`'s shape one construct
-	// over, and its exactness argument transfers unchanged: an identifier spelled `spawn` is the operator iff
-	// the very next token opens a NAME, because two adjacent name tokens begin no expression the grammar has.
-	// See `SpawnKeywordName` for the two live declarations of the word that forbid a `KeywordTable` row.
+	// over, and its exactness argument transfers unchanged: an identifier spelled `spawn` is the
+	// operator iff the next token past an optional `(capacity: …)` group opens a NAME, because two
+	// adjacent name tokens begin no expression the grammar has. See `SpawnKeywordName` for the two
+	// live declarations of the word that forbid a `KeywordTable` row.
 	//
 	// `Self` is admitted here and REFUSED inside `parseSpawn`, deliberately: `spawn Self.create()` is a
 	// spelling that cannot be resolved (the whole-program discovery walk that decides which types are
@@ -27118,13 +27325,14 @@ export type Parser
 			return false
 		end 'notTheWord'
 
-		let next = self.kindAt(self.pos + 1)
+		let targetIndex = spawnTargetIndexIn(self.tokens, spawnIndex: self.pos)
+		let next = self.kindAt(targetIndex)
 
 		if next == TokenKind.identifier or next == TokenKind.selfType 'anOrdinaryTypeName'
 			return true
 		end 'anOrdinaryTypeName'
 
-		return tokenCanBeAName(self.tokenAt(self.pos + 1)) and self.kindAt(self.pos + 2) == TokenKind.dot
+		return tokenCanBeAName(self.tokenAt(targetIndex)) and self.kindAt(targetIndex + 1) == TokenKind.dot
 	end 'atSpawnPrefix'
 
 	// Is the token at `index` the WORD `spawn`? Split from `atSpawnPrefix` for `moduleModifierIn`'s reason:
@@ -32132,7 +32340,25 @@ export type Parser
 		// Through `recordEnumType`, which is also what appends the `unionCases` companion — so a request union
 		// reaches `project.enumTypes` with the same three-layout shape an author's boxed union does.
 		self.artifact.recordEnumType(buildServiceRequestUnion(self.signatures, typeName: typeName, into: self.artifact.typeNames))
+		self.contributeSendErrors(buildServiceSendErrors(self.signatures, typeName: typeName, into: self.artifact.typeNames))
 	end 'contributeServiceCompanions'
+
+	function contributeInterfaceSendErrors(interfaceName ByteArray)
+		if not self.signatures.containsStructInAnyFile(serviceHandleCompanionName(interfaceName)) 'noHandle'
+			return
+		end 'noHandle'
+
+		match self.signatures.interfaceDeclarationOf(interfaceName) 'site'
+			declared(_, visibility, declFilePath) then self.contributeSendErrors(buildInterfaceSendErrors(self.signatures, interfaceName: interfaceName, visibility: visibility, declFilePath: declFilePath, into: self.artifact.typeNames))
+			undeclared then panic("contributeInterfaceSendErrors: `{String.from(interfaceName)}` has a handle, so the sweep recorded its declaration site")
+		end 'site'
+	end 'contributeInterfaceSendErrors'
+
+	function contributeSendErrors(errors EnumLayoutArray)
+		for layout in errors 'eachSendError'
+			self.artifact.recordEnumType(layout)
+		end 'eachSendError'
+	end 'contributeSendErrors'
 
 	// The member list's TERMINATOR test, shared by a `type` body and an `extension` body: blank lines are
 	// skipped, an `end` closes, and EOF is the unterminated-declaration throw. The two bodies differ only in
@@ -32386,6 +32612,7 @@ export type Parser
 		view iface = try self.readInterfaceDeclaration(true)
 		try self.requireNoUnstorableRequirementType()
 		self.artifact.recordInterface(iface)
+		self.contributeInterfaceSendErrors(iface.name)
 	end 'parseInterfaceDeclaration'
 
 	// ⭐⭐ **THE REFUSAL IS RECORDED BY THE SHARED READER AND THROWN ONLY HERE, AND THAT SPLIT IS FORCED.**
@@ -37180,8 +37407,8 @@ export type Parser
 	// shared, exactly as `parseOptionalReturnType` is.
 	//
 	// ⭐⭐ **THE NAME MAY BE A DOTTED CHAIN.** `BNF_SYNTAX.md:241` says `throws_clause = 'throws' type_ref`, and a
-	// type reference is a chain, so `throws Calc.divide.errors` — a reply's fused error type, which is a registered
-	// enum — is one name; a reader that consumed exactly ONE identifier would die on `E2001: unexpected token: '.'`.
+	// type reference is a chain, so `throws Store.keep.sendError` — a send's error type, which is a registered
+	// union — is one name; a reader that consumed exactly ONE identifier would die on `E2001: unexpected token: '.'`.
 	//
 	// ⭐ **IT IS THE *SAME* WALK `parseTypeReference`'s qualified arm uses**, `dottedChainLengthAt` /
 	// `assembleDottedChainAt`, rather than a hand-rolled loop — which is what admits a KEYWORD standing as a
@@ -38624,7 +38851,7 @@ export type Parser
 			let methodTempFloor = self.bodyState.pendingTempDrops.count()
 			let methodOpFloor = self.artifact.module.ops.count()
 			let methodResult = try self.parsePostfix(func, value: try self.parseMethodCall(func, resultUsed: false), resultUsed: false)
-			self.finishCallStatement(func, result: methodResult, opFloor: methodOpFloor, tempFloor: methodTempFloor, anchor: methodAnchor)
+			try self.finishCallStatement(func, result: methodResult, opFloor: methodOpFloor, tempFloor: methodTempFloor, anchor: methodAnchor)
 		end 'methodCallStmt' else if self.fieldChainMethodCallAt(self.pos) 'fieldChainMethodStmt'
 			// `b.ops.push(1)` / `o.inner.op()` — a call reached through a ≥2-hop field chain, on an ARRAY FIELD's
 			// method or a FUNCTION-typed FIELD (#97). `methodCallsAt` covers only the one-hop `b.push(…)` / `h.op()`;
@@ -38634,7 +38861,7 @@ export type Parser
 			let chainTempFloor = self.bodyState.pendingTempDrops.count()
 			let chainOpFloor = self.artifact.module.ops.count()
 			let chainResult = try self.parseFieldChainCall(func, resultUsed: false)
-			self.finishCallStatement(func, result: chainResult, opFloor: chainOpFloor, tempFloor: chainTempFloor, anchor: chainAnchor)
+			try self.finishCallStatement(func, result: chainResult, opFloor: chainOpFloor, tempFloor: chainTempFloor, anchor: chainAnchor)
 		end 'fieldChainMethodStmt' else if self.staticMemberCallsAt(self.pos) 'staticMemberCallStmt'
 			// `Names.items.push(9)` — a method called for its EFFECT on a static member's record. The
 			// expression door reaches the same reader through `parseDottedPrimary`'s static arm; a statement
@@ -38645,7 +38872,7 @@ export type Parser
 			let staticTempFloor = self.bodyState.pendingTempDrops.count()
 			let staticOpFloor = self.artifact.module.ops.count()
 			let staticResult = try self.parseStaticMemberAccess(func, baseTok: try self.typeBaseTokenAt(self.pos), resultUsed: false)
-			self.finishCallStatement(func, result: staticResult, opFloor: staticOpFloor, tempFloor: staticTempFloor, anchor: staticAnchor)
+			try self.finishCallStatement(func, result: staticResult, opFloor: staticOpFloor, tempFloor: staticTempFloor, anchor: staticAnchor)
 		end 'staticMemberCallStmt' else if self.qualifiedStaticCallsAt(self.pos) 'qualifiedStaticCallStmt'
 			// ⭐ `Clock.tick()` / `__Builtins.sleep(ms)` / `__ManagedFile.statFree(buffer)` — A STATIC CALLED
 			// ON A LINE OF ITS OWN, and `statFree` is the case that makes the position load-bearing rather
@@ -38673,7 +38900,7 @@ export type Parser
 			let staticCallTempFloor = self.bodyState.pendingTempDrops.count()
 			let staticCallOpFloor = self.artifact.module.ops.count()
 			let staticCallResult = try self.parsePostfix(func, value: try self.parseQualifiedCall(func, resultUsed: false), resultUsed: false)
-			self.finishCallStatement(func, result: staticCallResult, opFloor: staticCallOpFloor, tempFloor: staticCallTempFloor, anchor: staticCallAnchor)
+			try self.finishCallStatement(func, result: staticCallResult, opFloor: staticCallOpFloor, tempFloor: staticCallTempFloor, anchor: staticCallAnchor)
 		end 'qualifiedStaticCallStmt' else if self.namespaceQualifiedChainDotsAt(self.pos, minimumDots: MethodQualifierDots, use: QualifiedChainUse.call) > 0 'namespaceQualifiedCallStmt'
 			// ⭐ **`utils.shout()` / `lib.inner.shout()` ON A LINE OF ITS OWN** — a FREE call written with
 			// a directory qualifier, and a free call is exactly what `callStmt` below already admits: the
@@ -38696,7 +38923,7 @@ export type Parser
 			let qualifiedTempFloor = self.bodyState.pendingTempDrops.count()
 			let qualifiedOpFloor = self.artifact.module.ops.count()
 			let qualifiedResult = try self.parsePostfix(func, value: try self.parseNamespaceQualifiedCall(func, resultUsed: false), resultUsed: false)
-			self.finishCallStatement(func, result: qualifiedResult, opFloor: qualifiedOpFloor, tempFloor: qualifiedTempFloor, anchor: qualifiedAnchor)
+			try self.finishCallStatement(func, result: qualifiedResult, opFloor: qualifiedOpFloor, tempFloor: qualifiedTempFloor, anchor: qualifiedAnchor)
 		end 'namespaceQualifiedCallStmt' else if self.atSpawnPrefix() 'spawnStmt'
 			// ⭐ **`spawn Calc.create()` ON A LINE OF ITS OWN** — a service started for its EFFECT, its handle
 			// discarded. It needs an arm of its own for `namespaceQualifiedCallStmt`'s reason one arm up: the
@@ -38736,7 +38963,7 @@ export type Parser
 				// E3064's bare-call door: the statement took none of what the call produced. Probed before
 				// `terminateAfterDivergingCall` moves the parser into a dead block the probe would read
 				// instead.
-				self.finishCallStatement(func, result: callResult, opFloor: callOpFloor, tempFloor: callTempFloor, anchor: calleeTok)
+				try self.finishCallStatement(func, result: callResult, opFloor: callOpFloor, tempFloor: callTempFloor, anchor: calleeTok)
 				self.terminateAfterDivergingCall(func, calleeTok: calleeTok, tempFloor: callTempFloor)
 			end 'directCallStmt'
 		end 'callStmt' else if self.peekKind() == TokenKind.dot 'memberExprStmt'
@@ -38788,6 +39015,8 @@ export type Parser
 			let tok = self.current()
 			throw SourceParseError.strayToken(tokenDisplayText(tok), line: tok.line, column: tok.column)
 		end 'strayStatementToken'
+
+		try self.requireSendSettled()
 
 		// Drop the statement's unconsumed owned temporaries. `print("{x}")` created an interpolation
 		// result `print` only borrowed, so this statement owns it and it dies here; a binding has already
@@ -44372,6 +44601,7 @@ export type Parser
 		try self.requireThrownTypeFitsEnclosing(func, errorType: errorType, routed: routed, anchor: anchor)
 
 		let errorIsBoxed = self.throwsTypeIsBoxedUnion(errorType)
+		try self.requireThrownSendErrorIsSolelyOwned(errValue, errorType: errorType, anchor: anchor)
 
 		// A thrown box must be owned by this frame: the catch adopts it and drops it once. An owned box
 		// (a fresh `throw U.case(x)`, a caught `(e)`) is moved out below. One not owned here is either:
@@ -44409,6 +44639,16 @@ export type Parser
 
 		self.emitHandoffExit(thrownExit(errValue, errorIsBoxed: errorIsBoxed), anchor: anchor)
 	end 'emitThrowError'
+
+	function requireThrownSendErrorIsSolelyOwned(errValue ValueId, errorType MaxonType, anchor Token) throws SourceParseError
+		let errorName = self.internedName(typeNameIdOf(errorType))
+
+		if not self.signatures.isServiceSendError(errorName) or self.valueIsSoleHeapOwner(errValue) 'nothingElseCanReadIt'
+			return
+		end 'nothingElseCanReadIt'
+
+		throw SourceParseError.registryRefused(ErrorCode.semanticServiceSendErrorNotSolelyOwned, explanation: serviceSendErrorNotSolelyOwnedRefusal(errorName), line: anchor.line, column: anchor.column, note: DiagnosticNote.none)
+	end 'requireThrownSendErrorIsSolelyOwned'
 
 	function endADeferredThrow(errValue ValueId, routed bool, anchor Token)
 		if not routed 'outOfTheFunction'
@@ -44449,7 +44689,7 @@ export type Parser
 
 		let flag = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
 		self.artifact.emitOp(self.bodyState.currentBlock, op: MaxonOp.errorFlagEncode(flag, errorValue: errValue, errorIsBoxed: errorIsBoxed), range: SourceRange.ofToken(anchor))
-		let fused = self.routedEdgeFusedValue(ctx, member: member, flag: flag)
+		let fused = self.routedEdgeFusedValue(member, flag: flag, anchor: ctx.tryTok)
 
 		var errArgs = self.tryBlockErrorEdgeArgs(ctx, flag: flag)
 		var inFlight = HandedOff.nothing
@@ -44637,7 +44877,8 @@ export type Parser
 	// (E3064/E3065), which must find a routed call's `tryCall`, and the implied route, where an
 	// always-throwing callee's unreachable ok edge is closed, as `desugarTry` closes it for a
 	// propagating `try`.
-	function finishCallStatement(func IrFunction, result ValueId, opFloor ElementIndex, tempFloor ElementIndex, anchor Token)
+	function finishCallStatement(func IrFunction, result ValueId, opFloor ElementIndex, tempFloor ElementIndex, anchor Token) throws SourceParseError
+		try self.requireSendReplyKept(result, opFloor: opFloor, anchor: DroppedReplyAnchor.atTheSend)
 		self.recordDiscardedCallResult(result, opFloor: opFloor, anchor: anchor, door: DiscardDoor.statement)
 
 		if self.throwRouteDestination() != ThrowRouteDestination.impliedTestHandler 'theImpliedHandlerIsNotHere'
@@ -44726,13 +44967,10 @@ export type Parser
 			named(callee) gives self.signatures.functionAlwaysThrows(callee)
 			witness or
 			promise or
+			send or
 			deferred or
-
-			// ⚠ A reply always throws `ServiceError` and still answers `false`: this asks whether the
-			// target throws on every path — the fact that lets the ok edge be pruned — and a reply's
-			// transport failure is a fact about the service's state at delivery. A running service
-			// answers normally.
-			serviceReply gives false
+			serviceReply or
+			sentReply gives false
 		end 'shape'
 	end 'tryTargetAlwaysThrows'
 
@@ -44785,8 +45023,13 @@ export type Parser
 		let targetDeferralFloor = self.artifact.deferralSources.count()
 		let result = try self.parseTryCallTarget(func)
 		let (target, flag) = try self.rewriteLastCallToTryCall(result, tryTok: tryTok, targetDeferralFloor: targetDeferralFloor, targetOpFloor: targetOpFloor)
+		var leg = self.takeSentLeg()
 
 		try self.requireThrowingTryTarget(target, tryTok: tryTok)
+
+		if not resultUsed 'aStatement'
+			try self.requireSendReplyKept(result, opFloor: targetOpFloor, anchor: DroppedReplyAnchor.atTry(tryTok))
+		end 'aStatement'
 
 		// A value-position `try` on a VOID callee has no value to yield (E3059).
 		//
@@ -44796,10 +45039,10 @@ export type Parser
 		// arm's `resultUsed` guard a pass earlier. Two codes, two checks, two positions — `void-call-result.md`
 		// pins both halves of every void mutator, because a guard lost from either arm passes on the other's case.
 		if resultUsed and self.tagOf(result) == ValueTypeTag.void 'voidInValue'
-			throw SourceParseError.errorTypeMismatch("'{String.from(tryTargetNoun(target, signatures: self.signatures))}' does not return a value", line: tryTok.line, column: tryTok.column)
+			throw tryTargetProducesNoValueError(target, signatures: self.signatures, tryTok: tryTok)
 		end 'voidInValue'
 
-		return try self.desugarTry(func, tryTok: tryTok, result: result, flag: flag, target: target, resultUsed: resultUsed, tempFloor: tempFloor)
+		return try self.desugarTry(func, tryTok: tryTok, result: result, flag: flag, target: target, resultUsed: resultUsed, tempFloor: tempFloor, leg: leg)
 	end 'parseTry'
 
 	// Parse the throwing target after `try` — a primary call form followed by its whole postfix chain
@@ -44927,10 +45170,13 @@ export type Parser
 		// its error flag. The operand parse has already consumed any postfix on the promise itself.
 		if self.at(TokenKind.await) 'awaitTarget'
 			let awaitTok = try self.consume(TokenKind.await)
+			let holdsSend = self.bodyState.holdsSendForTryAwait
+			self.bodyState.holdsSendForTryAwait = true
 			let promise = try self.parseUnclaimedUnary(func)
+			self.bodyState.holdsSendForTryAwait = holdsSend
 
 			match try self.awaitOperandOf(func, promise: promise, awaitTok: awaitTok) 'operand'
-				promise(facts) then return (try self.emitAwaitOp(promise, facts: facts, awaitTok: awaitTok)).0
+				promise(facts) then return (try self.emitAwaitOp(promise, facts: self.holdTheSendOfAnAwait(promise, facts: facts), awaitTok: awaitTok)).0
 				deferred(result) then return result
 			end 'operand'
 		end 'awaitTarget'
@@ -45213,6 +45459,7 @@ export type Parser
 			notRoutable or
 			tryChannelCall or
 			witness or
+			send or
 			await gives DiscardedCallee.notACall
 		end 'producer'
 	end 'directCallDefining'
@@ -45237,17 +45484,319 @@ export type Parser
 	end 'rewriteLastCallToTryCall'
 
 	function commitTryTargetRewrite(opIdx ElementIndex, tryTok Token) returns (TryTarget, ValueId) throws SourceParseError
-		let flag = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
 		view op = self.routableOpAt(opIdx)
 
 		match op 'rewrite'
+			send then return self.rewriteSendToTryChannel(opIdx)
 			notRoutable or
-			tryChannelCall then return (try self.rejectNonRoutableTryTarget(opIdx, tryTok: tryTok), flag)
+			tryChannelCall then throw self.notACallTryTarget(tryTok)
 			call or
 			witness or
-			await then return (self.rewriteToTryChannel(opIdx, op: op, flag: flag), flag)
+			await then break
 		end 'rewrite'
+
+		let flag = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
+		return (self.rewriteToTryChannel(opIdx, op: op, flag: flag), flag)
 	end 'commitTryTargetRewrite'
+
+	function rewriteSendToTryChannel(opIdx ElementIndex) returns (TryTarget, ValueId)
+		let sent = recordedSendOf(self.lastSend, opIdx: opIdx)
+		view layout = self.sendErrorLayoutOf(sent)
+		let status = self.sendStatusOf(opIdx)
+		self.unsettledSend = UnsettledSend.settled
+		let range = self.artifact.opRanges.get(opIdx)
+		let anchor = anchorTokenSpanning(range)
+		var (refused, accepted) = self.branchOnSendStatus(status, anchor: anchor)
+		var settled = self.artifact.module.addBlock(self.bodyFunction(), label: b"sendsettled", heat: BlockHeat.normal)
+		let flag = self.mintPhi(settled, tag: ValueTypeTag.integer, nameId: UnnamedTypeId)
+
+		self.bodyState.currentBlock = accepted
+		self.joinSendFlag(accepted, settled: settled, flag: self.emitLiteral(NoErrorFlag, valueType: MaxonType.integer, range: range))
+
+		self.bodyState.currentBlock = refused
+		self.joinSendFlag(refused, settled: settled, flag: self.emitRefusedSendFlag(sent, layout: layout, status: status, range: range, anchor: anchor))
+
+		self.bodyState.currentBlock = settled
+		return (TryTarget.send(sent.messageName, throwsClause: sent.throwsClause()), flag)
+	end 'rewriteSendToTryChannel'
+
+	function branchOnSendStatus(status ValueId, anchor Token) returns (IrBlock, IrBlock)
+		var func = self.bodyFunction()
+		var refused = self.artifact.module.addBlock(func, label: b"sendrefused", heat: BlockHeat.cold)
+		var accepted = self.artifact.module.addBlock(func, label: b"sendaccepted", heat: BlockHeat.normal)
+
+		let isRefused = self.emitCompareAgainstLiteral(status, literal: MboxSendStatus.delivered.rawValue, op: MaxonCmpOp.ne, opTok: anchor)
+		self.emitCondBranch(self.bodyState.currentBlock, cond: isRefused, thenId: refused.id, elseId: accepted.id, ifTok: anchor)
+
+		return (refused, accepted)
+	end 'branchOnSendStatus'
+
+	function joinSendFlag(block IrBlock, settled IrBlock, flag ValueId)
+		self.recordBranchEdge(block, targetId: settled.id, argIds: singletonArgs(flag))
+		self.emitBranch(block, targetId: settled.id)
+	end 'joinSendFlag'
+
+	function sendErrorLayoutOf(sent SentMessage) returns EnumLayout
+		match self.signatures.enumInAnyFile(sent.sendErrorName()) 'registered'
+			declared(layout) then return layout
+			undeclared then panic("sendErrorLayoutOf: nothing declares `{String.from(sent.sendErrorName())}` —`ServiceCompanions.mintServiceSendErrorTypes` mints one beside every request union, and a send to `{String.from(sent.messageName)}` was parsed")
+		end 'registered'
+	end 'sendErrorLayoutOf'
+
+	function sendStatusOf(opIdx ElementIndex) returns ValueId
+		match try self.artifact.module.ops.get(opIdx) otherwise panic("sendStatusOf: opRef {opIdx} not in module.ops") 'send'
+			serviceSend(_, status, _, _, _, _) then return status
+			call(result, _, _, _, _, _, _, _) then return result
+			default panic("sendStatusOf: the op at {opIdx} is neither a mailbox send nor an interface-table send — `routableOpAt` classified it as a send")
+		end 'send'
+	end 'sendStatusOf'
+
+	function holdTheSendOfAnAwait(promise ValueId, facts AwaitedPromise) returns AwaitedPromise
+		match facts.tryTarget 'target'
+			serviceReply(messageName, awaitedService) then return self.holdTheSendOfAReply(promise, facts: facts, messageName: messageName, awaitedService: awaitedService)
+			named or
+			witness or
+			promise or
+			send or
+			sentReply or
+			deferred then return facts
+		end 'target'
+	end 'holdTheSendOfAnAwait'
+
+	function holdTheSendOfAReply(promise ValueId, facts AwaitedPromise, messageName ByteArray, awaitedService ByteArray) returns AwaitedPromise
+		match self.unsettledSend 'unsettled'
+			settled then return facts
+			pending(opIdx, range) then return self.holdPendingSendLeg(opIdx, range: range, promise: promise, facts: facts, messageName: messageName, awaitedService: awaitedService)
+		end 'unsettled'
+	end 'holdTheSendOfAReply'
+
+	function holdPendingSendLeg(opIdx ElementIndex, range SourceRange, promise ValueId, facts AwaitedPromise, messageName ByteArray, awaitedService ByteArray) returns AwaitedPromise
+		let sent = recordedSendOf(self.lastSend, opIdx: opIdx)
+
+		if not sent.awaitsCell(promise) 'someOtherPromise'
+			return facts
+		end 'someOtherPromise'
+
+		self.unsettledSend = UnsettledSend.settled
+		let status = self.sendStatusOf(opIdx)
+		let anchor = anchorTokenSpanning(range)
+		let members = self.sentReplyErrorMembers(messageName, sendErrorName: sent.sendErrorName())
+		let sendMember = try members.get(0) otherwise panic("holdPendingSendLeg: `sentReplyErrorMembers` answers the send error first, always")
+		var (refused, accepted) = self.branchOnSendStatus(status, anchor: anchor)
+
+		self.bodyState.currentBlock = refused
+		let flag = self.emitRefusedSendFlag(sent, layout: sendMember.layout, status: status, range: range, anchor: anchor)
+		let fused = self.routedEdgeOrdinalForUnion(sendMember, block: refused, flag: flag, fusedValue: self.routedEdgeFusedValue(sendMember, flag: flag, anchor: anchor), anchor: anchor)
+		self.sentLeg = SentLegSlot.held(SentLeg.create(refused.id, flag: flag, fused: fused, members: members))
+
+		self.bodyState.currentBlock = accepted
+		return AwaitedPromise.create(facts.result, tryTarget: TryTarget.sentReply(messageName, awaitedService: awaitedService, sendErrorName: sent.sendErrorName()))
+	end 'holdPendingSendLeg'
+
+	function takeSentLeg() returns SentLegSlot
+		var taken = self.sentLeg
+		self.sentLeg = SentLegSlot.none
+		return taken
+	end 'takeSentLeg'
+
+	function mintJoinedError(slot SentLegSlot, handlerFlag ValueId) returns JoinedError
+		return match slot 'slot'
+			none gives JoinedError.create(handlerFlag, fused: handlerFlag)
+			held(leg) gives self.mintHeldJoinedError(leg)
+		end 'slot'
+	end 'mintJoinedError'
+
+	function mintHeldJoinedError(leg SentLeg) returns JoinedError
+		let flag = self.mintDetachedPhi(ValueTypeTag.integer, nameId: UnnamedTypeId)
+
+		if not leg.holdsAUnion() 'oneErrorType'
+			return JoinedError.create(flag, fused: flag)
+		end 'oneErrorType'
+
+		return JoinedError.create(flag, fused: self.mintDetachedPhi(ValueTypeTag.integer, nameId: UnnamedTypeId))
+	end 'mintHeldJoinedError'
+
+	function handlerFusedOrdinal(slot SentLegSlot, handlerFlag ValueId, anchor Token) returns ValueId
+		return match slot 'slot'
+			none gives handlerFlag
+			held(leg) gives self.heldHandlerFusedOrdinal(leg, handlerFlag: handlerFlag, anchor: anchor)
+		end 'slot'
+	end 'handlerFusedOrdinal'
+
+	function heldHandlerFusedOrdinal(leg SentLeg, handlerFlag ValueId, anchor Token) returns ValueId
+		if not leg.holdsAUnion() 'noHandlerMember'
+			return handlerFlag
+		end 'noHandlerMember'
+
+		let handlerMember = try leg.members.get(1) otherwise panic("heldHandlerFusedOrdinal: a leg that holds a union has two members")
+		return self.routedEdgeFusedValue(handlerMember, flag: handlerFlag, anchor: anchor)
+	end 'heldHandlerFusedOrdinal'
+
+	function joinSentLeg(join SentLegJoin, errBlock IrBlock)
+		match join.slot 'slot'
+			none then return
+			held(leg) then self.joinHeldSentLeg(leg, join: join, errBlock: errBlock)
+		end 'slot'
+	end 'joinSentLeg'
+
+	function joinHeldSentLeg(leg SentLeg, join SentLegJoin, errBlock IrBlock)
+		self.attachDetachedPhi(errBlock, phi: join.joined.flag)
+		var refusedArgs = singletonArgs(leg.flag)
+		var handlerArgs = singletonArgs(join.handlerFlag)
+
+		if leg.holdsAUnion() 'withTheFusedOrdinal'
+			self.attachDetachedPhi(errBlock, phi: join.joined.fused)
+			refusedArgs.push(leg.fused)
+			handlerArgs.push(join.handlerFused)
+		end 'withTheFusedOrdinal'
+
+		var refused = self.blockOfThisBody(leg.refusedId)
+		var entry = self.blockOfThisBody(join.entryBlockId)
+		self.recordBranchEdge(refused, targetId: errBlock.id, argIds: refusedArgs)
+		self.emitBranch(refused, targetId: errBlock.id)
+		self.recordBranchEdge(entry, targetId: errBlock.id, argIds: handlerArgs)
+	end 'joinHeldSentLeg'
+
+	function blockOfThisBody(id BlockId) returns IrBlock
+		return try self.artifact.module.getBlockByIdIn(self.bodyFunction(), id: id) otherwise panic("blockOfThisBody: block {id} is not in the function being parsed — a held send leg names only blocks this body created")
+	end 'blockOfThisBody'
+
+	function requireSentReplyPropagates(target TryTarget, tryTok Token) throws SourceParseError
+		match target 'kind'
+			sentReply(messageName, _, sendErrorName) then try self.requireSentReplyHasOneErrorType(messageName, sendErrorName: sendErrorName, tryTok: tryTok)
+			named or
+			witness or
+			promise or
+			send or
+			serviceReply or
+			deferred then return
+		end 'kind'
+	end 'requireSentReplyPropagates'
+
+	function requireSentReplyHasOneErrorType(messageName ByteArray, sendErrorName ByteArray, tryTok Token) throws SourceParseError
+		if self.sentReplyErrorMembers(messageName, sendErrorName: sendErrorName).count() < 2 'oneErrorType'
+			return
+		end 'oneErrorType'
+
+		let handlerError = try throwsClauseName(self.signatures.throwsOf(messageName)) otherwise panic("requireSentReplyHasOneErrorType: a reply has two error types only when its handler throws")
+		throw SourceParseError.errorTypeMismatch("`try await` of '{String.from(messageName)}' can fail at the send ('{String.from(sendErrorName)}') and in the handler ('{handlerError}'), so it has no single error type to propagate — handle it here with `otherwise (e)` and `match e`, or split it: `let p = try h.m(x)` propagates '{String.from(sendErrorName)}', then `try await p` propagates '{handlerError}'", line: tryTok.line, column: tryTok.column)
+	end 'requireSentReplyHasOneErrorType'
+
+	function requireSendSettled() throws SourceParseError
+		match self.unsettledSend 'unsettled'
+			settled then return
+			pending(opIdx, range) then throw SourceParseError.registryRefused(ErrorCode.throwingFunctionRequiresTry, explanation: throwingCallRequiresTryMessage(recordedSendOf(self.lastSend, opIdx: opIdx).spelling), line: range.line, column: range.column, note: DiagnosticNote.none)
+		end 'unsettled'
+	end 'requireSendSettled'
+
+	function requireSendReplyKept(result ValueId, opFloor ElementIndex, anchor DroppedReplyAnchor) throws SourceParseError
+		match self.lastSend 'last'
+			nothingRecorded then return
+			recorded(opIdx, funcIndex, sent) then try self.requireNotADroppedReply(sent, opIdx: opIdx, funcIndex: funcIndex, opFloor: opFloor, result: result, anchor: anchor)
+		end 'last'
+	end 'requireSendReplyKept'
+
+	function requireNotADroppedReply(sent SentMessage, opIdx ElementIndex, funcIndex ElementIndex, opFloor ElementIndex, result ValueId, anchor DroppedReplyAnchor) throws SourceParseError
+		if funcIndex != self.artifact.currentFuncIndex or opIdx < opFloor or not sent.awaitsCell(result) 'noReplyDropped'
+			return
+		end 'noReplyDropped'
+
+		let range = match anchor 'where'
+			atTry(tryTok) gives SourceRange.ofToken(tryTok)
+			atTheSend gives self.artifact.opRanges.get(opIdx)
+		end 'where'
+
+		throw SourceParseError.registryRefused(ErrorCode.semanticServiceReplyDropped, explanation: serviceReplyDroppedRefusal(sent.spelling), line: range.line, column: range.column, note: DiagnosticNote.none)
+	end 'requireNotADroppedReply'
+
+	function emitRefusedSendFlag(sent SentMessage, layout EnumLayout, status ValueId, range SourceRange, anchor Token) returns ValueId
+		self.releaseRefusedReply(sent.reply, range: range)
+		let tagShift = self.sendErrorTagShift(layout)
+
+		if not layout.isBoxed() 'aScalarError'
+			return self.emitAddLiteral(status, addend: tagShift + ErrorFlagOrdinalBias, anchor: anchor)
+		end 'aScalarError'
+
+		let size = self.emitLiteral(layout.boxSizeBytes() as FullRangeInt, valueType: MaxonType.integer, range: range)
+		let box = self.emitBoxAlloc(size, resultTag: ValueTypeTag.named, resultNameId: self.artifact.typeNames.intern(layout.name), range: range)
+		self.emitIndirectStore(box, offset: UnionTagOffset, value: self.emitAddLiteral(status, addend: tagShift, anchor: anchor), storageType: MaxonType.integer, range: range)
+
+		var staged = ValueIdArray.create()
+
+		for slot in 0 upto layout.maxPayloadArity() 'eachStagedWord'
+			self.requireSendErrorSlotMatchesRequest(sent, layout: layout, slot: slot)
+			staged.push(self.emitIndirectLoad(MaxonType.integer, box: sent.staging, offset: layout.payloadSlotOffset(slot), storageType: MaxonType.integer, range: range))
+		end 'eachStagedWord'
+
+		for slot in 0 upto layout.maxPayloadArity() 'eachArgumentWord'
+			self.emitIndirectStore(box, offset: layout.payloadSlotOffset(slot), value: self.emitHandedBackWord(sent, slot: slot, staged: staged, range: range), storageType: MaxonType.integer, range: range)
+		end 'eachArgumentWord'
+
+		return box
+	end 'emitRefusedSendFlag'
+
+	function requireSendErrorSlotMatchesRequest(sent SentMessage, layout EnumLayout, slot PayloadSlotIndex)
+		let full = try layout.indexOfCase(ServiceSendMailboxFullCaseName) otherwise panic("requireSendErrorSlotMatchesRequest: `{String.from(layout.name)}` declares no `{String.from(ServiceSendMailboxFullCaseName)}` case — `buildServiceSendErrorUnion` builds both")
+		let argument = try layout.payloadsAt(full).get(slot) otherwise panic("requireSendErrorSlotMatchesRequest: `{String.from(layout.name)}` has no payload slot {slot}, and its arity is {layout.maxPayloadArity()}")
+		let claimed = sent.requestPayloadAt(slot)
+
+		if not argument.name.equals(claimed.name) or layout.payloadSlotOffset(slot) != sent.request.payloadSlotOffset(slot) 'slotsDiverged'
+			panic("requireSendErrorSlotMatchesRequest: slot {slot} of `{String.from(layout.name)}` is `{String.from(argument.name)}` at offset {layout.payloadSlotOffset(slot)}, while slot {slot} of the request variant `{String.from(sent.messageName)}` is `{String.from(claimed.name)}` at offset {sent.request.payloadSlotOffset(slot)} — a refused send copies a staged word to the send-error slot at its own offset, so the two layouts must agree slot for slot")
+		end 'slotsDiverged'
+	end 'requireSendErrorSlotMatchesRequest'
+
+	function emitHandedBackWord(sent SentMessage, slot PayloadSlotIndex, staged ValueIdArray, range SourceRange) returns ValueId
+		let word = stagedWordAt(staged, slot: slot)
+
+		match sent.handBackOf(slot) 'handBack'
+			moved then return word
+			copied(clone, release) then return self.emitSharedWordCopiedAndReleased(sent, staged: staged, slot: slot, clone: clone, release: release, range: range)
+		end 'handBack'
+	end 'emitHandedBackWord'
+
+	function emitSharedWordCopiedAndReleased(sent SentMessage, staged ValueIdArray, slot PayloadSlotIndex, clone ManagedCascadeStrategy, release ByteArray, range SourceRange) returns ValueId
+		let copy = self.emitSharedWordCopy(sent, staged: staged, slot: slot, clone: clone, range: range)
+		let word = stagedWordAt(staged, slot: slot)
+
+		match clone 'strategy'
+			throughWitness then self.emitOwnershipRuntimeCall(release, args: pairArgs(stagedWitnessAt(staged, slot: slot), second: word), range: range)
+			direct or
+			managedElements then self.emitOwnershipRuntimeCall(release, args: singletonArgs(word), range: range)
+			unsupported then panic("emitSharedWordCopiedAndReleased: slot {slot} of `{String.from(sent.messageName)}` carries a strategy with no copy — `sharedSlotHandBack` hands such a slot back uncopied")
+		end 'strategy'
+
+		return copy
+	end 'emitSharedWordCopiedAndReleased'
+
+	function emitSharedWordCopy(sent SentMessage, staged ValueIdArray, slot PayloadSlotIndex, clone ManagedCascadeStrategy, range SourceRange) returns ValueId
+		let word = stagedWordAt(staged, slot: slot)
+
+		match clone 'strategy'
+			direct(callee) then return self.emitRuntimeCall(callee, args: singletonArgs(word), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+			managedElements(containerCopy, elementCopy) then return self.emitRuntimeCall(containerCopy, args: pairArgs(word, second: self.emitCodeAddress(elementCopy, range: range)), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+			throughWitness(entry) then return self.emitRuntimeCall(entry, args: pairArgs(stagedWitnessAt(staged, slot: slot), second: word), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+			unsupported then panic("emitSharedWordCopy: slot {slot} of `{String.from(sent.messageName)}` carries a strategy with no copy — `sharedSlotHandBack` hands such a slot back uncopied")
+		end 'strategy'
+	end 'emitSharedWordCopy'
+
+	function sendErrorTagShift(layout EnumLayout) returns FullRangeInt
+		let full = try layout.indexOfCase(ServiceSendMailboxFullCaseName) otherwise panic("sendErrorTagShift: `{String.from(layout.name)}` declares no `{String.from(ServiceSendMailboxFullCaseName)}` case — `buildServiceSendErrorUnion` builds both")
+		let stopped = try layout.indexOfCase(ServiceSendServiceStoppedCaseName) otherwise panic("sendErrorTagShift: `{String.from(layout.name)}` declares no `{String.from(ServiceSendServiceStoppedCaseName)}` case — `buildServiceSendErrorUnion` builds both")
+		let shift = layout.tagOfIndex(full) - MboxSendStatus.full.rawValue
+
+		if layout.tagOfIndex(stopped) - MboxSendStatus.stopped.rawValue != shift 'statusesDrifted'
+			panic("sendErrorTagShift: `{String.from(layout.name)}` tags `full` and `stopped` {layout.tagOfIndex(stopped) - layout.tagOfIndex(full)} apart, while `MboxSendStatus` numbers them {MboxSendStatus.stopped.rawValue - MboxSendStatus.full.rawValue} apart — the runtime answers the status and the tag is derived from it by one shift")
+		end 'statusesDrifted'
+
+		return shift
+	end 'sendErrorTagShift'
+
+	function releaseRefusedReply(reply ServiceReplyValue, range SourceRange)
+		match reply 'reply'
+			fireAndForget then return
+			cell(promise) then _ = self.emitRuntimeCall(MboxReplyRefusedName, args: singletonArgs(promise), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		end 'reply'
+	end 'releaseRefusedReply'
 
 	function rewriteToTryChannel(opIdx ElementIndex, op RoutableOp, flag ValueId) returns TryTarget
 		return match op 'rewrite'
@@ -45255,6 +45804,7 @@ export type Parser
 			witness gives self.commitWitnessTryDispatchRewrite(opIdx, flag: flag)
 			await (result, promise) gives self.commitTryAwaitRewrite(opIdx, result: result, flag: flag, promise: promise)
 			notRoutable or
+			send or
 			tryChannelCall panic("rewriteToTryChannel: the op at {opIdx} is neither a call, a witness dispatch nor an await — both callers classify it with `routableOpAt` first")
 		end 'rewrite'
 	end 'rewriteToTryChannel'
@@ -45269,23 +45819,6 @@ export type Parser
 
 		return TryTarget.deferred
 	end 'tryTargetOfCallee'
-
-	function rejectNonRoutableTryTarget(opIdx ElementIndex, tryTok Token) returns TryTarget throws SourceParseError
-		match try self.artifact.module.ops.get(opIdx) otherwise panic("rejectNonRoutableTryTarget: opRef {opIdx} not in module.ops") 'refused'
-			// ⭐⭐ **THE ONE ARM HERE THAT IS A SENTENCE RATHER THAN A REJECTION, AND IT NAMES THE FORM THAT
-			// WILL CARRY AN ERROR.** A fire-and-forget message delivers no reply, so there is nothing for a
-			// `try` to catch — but the author who wrote one is asking for the awaitable form, and `try` is
-			// exactly its first token. Refusing it as *"`try` must be applied to a call"* would be true and
-			// useless.
-			serviceSend(_, callee, _, _, _) then return try self.rejectTriedServiceSend(tryTok, callee: callee)
-			default throws self.notACallTryTarget(tryTok)
-		end 'refused'
-	end 'rejectNonRoutableTryTarget'
-
-	// The refusal above, in its own function so the arm stays one statement.
-	function rejectTriedServiceSend(tryTok Token, callee ByteArray) returns TryTarget throws SourceParseError
-		throw SourceParseError.unsupported(serviceSendCannotBeTriedRefusal(callee), line: tryTok.line, column: tryTok.column)
-	end 'rejectTriedServiceSend'
 
 	// Replace the `witnessDispatch` at `opIdx` with a `witnessTryDispatch` and return the interface
 	// method's name and declared `throws`. The op carries neither — both are facts of the constraint
@@ -45453,11 +45986,9 @@ export type Parser
 			named(callee) then try self.requireThrowingNamedTryTarget(callee, tryTok: tryTok)
 			witness(methodName, throwsClause) then try requireThrowingClauseTryTarget(methodName, throwsClause: throwsClause, tryTok: tryTok)
 			promise(methodName, throwsClause) then try requireThrowingClauseTryTarget(methodName, throwsClause: throwsClause, tryTok: tryTok)
-
-			// A reply always throws `ServiceError`, whatever the message declares, so there is no
-			// non-throwing reply for E3055 to refuse — `tryTargetThrows` answers `throwing` for every one. A
-			// `deferred` target is the undeclared callee above, left to E3004.
-			serviceReply or
+			send(methodName, throwsClause) then try requireThrowingClauseTryTarget(methodName, throwsClause: throwsClause, tryTok: tryTok)
+			serviceReply(messageName, _) then try requireThrowingClauseTryTarget(messageName, throwsClause: self.signatures.throwsOf(messageName), tryTok: tryTok)
+			sentReply or
 			deferred then break
 		end 'kind'
 	end 'requireThrowingTryTarget'
@@ -45501,8 +46032,9 @@ export type Parser
 
 	// Build the flag split + handler + merge for a parsed `tryCall`. `result` is the success value,
 	// `flag` its error flag, both defined by the `tryCall` in `currentBlock`.
-	function desugarTry(func IrFunction, tryTok Token, result ValueId, flag ValueId, target TryTarget, resultUsed bool, tempFloor ElementIndex) returns ValueId throws SourceParseError
+	function desugarTry(func IrFunction, tryTok Token, result ValueId, flag ValueId, target TryTarget, resultUsed bool, tempFloor ElementIndex, leg SentLegSlot) returns ValueId throws SourceParseError
 		if not self.at(TokenKind.otherwise) 'propagate'
+			try self.requireSentReplyPropagates(target, tryTok: tryTok)
 			let calleeThrows = self.tryTargetThrows(target)
 			let reportsTheThrow = self.testBodyAbsorbs(calleeThrows)
 
@@ -45510,7 +46042,7 @@ export type Parser
 				try self.checkPropagateType(func, throwsClause: calleeThrows, tryTok: tryTok)
 			end 'propagatesToTheCaller'
 
-			self.forkOntoPropagatingHandler(func, flag: flag, clause: calleeThrows, result: result, anchor: tryTok, reportsTheThrow: reportsTheThrow)
+			self.forkOntoPropagatingHandler(func, flag: flag, clause: calleeThrows, result: result, anchor: tryTok, reportsTheThrow: reportsTheThrow, leg: leg)
 
 			// A propagating `try` in statement position whose callee can only ever throw has an ok edge
 			// control never takes, so the block ends here. An `otherwise` catches the error and control
@@ -45527,8 +46059,8 @@ export type Parser
 			return result
 		end 'propagate'
 
-		var fork = self.openTryFork(func, flag: flag, result: result, anchor: tryTok)
-		var handler = try self.parseOtherwiseHandler(func, result: result, flag: flag, target: target, resultUsed: resultUsed, tryTok: tryTok)
+		var fork = self.openTryFork(func, flag: flag, result: result, anchor: tryTok, leg: leg)
+		var handler = try self.parseOtherwiseHandler(func, result: result, flag: fork.errFlag, fused: fork.errFused, target: target, resultUsed: resultUsed, tryTok: tryTok)
 		var errEnd = self.bodyState.currentBlock
 		let errMoveMark = self.captureMoveMark()
 
@@ -45544,13 +46076,13 @@ export type Parser
 		return merged
 	end 'desugarTry'
 
-	function forkOntoPropagatingHandler(func IrFunction, flag ValueId, clause ThrowsClause, result ValueId, anchor Token, reportsTheThrow bool)
-		var fork = self.openTryFork(func, flag: flag, result: result, anchor: anchor)
+	function forkOntoPropagatingHandler(func IrFunction, flag ValueId, clause ThrowsClause, result ValueId, anchor Token, reportsTheThrow bool, leg SentLegSlot)
+		var fork = self.openTryFork(func, flag: flag, result: result, anchor: anchor, leg: leg)
 
 		if reportsTheThrow 'anUncaughtThrowInATest'
-			self.emitUncaughtTestThrow(flag, throwsClause: clause, anchor: anchor)
+			self.emitUncaughtTestThrow(fork.errFlag, throwsClause: clause, anchor: anchor)
 		end 'anUncaughtThrowInATest' else 'republishTheFlag'
-			self.emitFunctionExit(self.bodyState.currentBlock, exit: FunctionExit.propagate(flag), anchor: anchor)
+			self.emitFunctionExit(self.bodyState.currentBlock, exit: FunctionExit.propagate(fork.errFlag), anchor: anchor)
 		end 'republishTheFlag'
 
 		_ = self.finishTerminatedTry(fork, result: result)
@@ -45585,7 +46117,7 @@ export type Parser
 	// They come off `pendingTempDrops` for the handler's duration because a handler's own
 	// statement-end drains read the whole list and would sweep and forget them, leaking on the ok
 	// path; `resumeForkTemps` hands them back once both edges are wired.
-	function openTryFork(func IrFunction, flag ValueId, result ValueId, anchor Token) returns TryFork
+	function openTryFork(func IrFunction, flag ValueId, result ValueId, anchor Token, leg SentLegSlot) returns TryFork
 		let isErr = self.emitErrorFlagTest(flag, op: MaxonCmpOp.ne, anchor: anchor)
 
 		// The result is owned only on the ok edge: on `tryerr` its register is NULL, and a handler exit
@@ -45603,6 +46135,9 @@ export type Parser
 		let forkTemps = self.takeForkTemps()
 		let suspendedMark = self.suspendForkTempsAsOwned(forkTemps)
 
+		let handlerFused = self.handlerFusedOrdinal(leg, handlerFlag: flag, anchor: anchor)
+		let joined = self.mintJoinedError(leg, handlerFlag: flag)
+		self.joinSentLeg(SentLegJoin.create(leg, entryBlockId: entryBlock.id, handlerFlag: flag, handlerFused: handlerFused, joined: joined), errBlock: errBlock)
 		self.emitCondBranch(entryBlock, cond: isErr, thenId: errBlock.id, elseId: okBlock.id, ifTok: anchor)
 
 		// Values entering both branches: the ok path leaves the carried vars unchanged, so `entryVals`
@@ -45621,7 +46156,7 @@ export type Parser
 		let entryMoveMark = self.captureMoveMark()
 
 		self.bodyState.currentBlock = errBlock
-		return TryFork.create(okBlock, forkTemps: forkTemps, suspendedMark: suspendedMark, entryVals: entryVals, entryMoveMark: entryMoveMark, resultWasPending: resultWasPending)
+		return TryFork.create(okBlock, forkTemps: forkTemps, suspendedMark: suspendedMark, entryVals: entryVals, entryMoveMark: entryMoveMark, resultWasPending: resultWasPending, errFlag: joined.flag, errFused: joined.fused)
 	end 'openTryFork'
 
 	// ⭐⭐ **RECONCILE THE MOVE STATE OF A MERGE WITH TWO LIVE EDGES** — an `if`'s two branches, a `try`'s ok
@@ -45924,16 +46459,19 @@ export type Parser
 	// Parse the `otherwise` handler into the current (error) block and report how it affects the
 	// merge. A `try` with no `otherwise` never reaches here: `desugarTry` forks it onto
 	// `forkOntoPropagatingHandler`.
-	function parseOtherwiseHandler(func IrFunction, result ValueId, flag ValueId, target TryTarget, resultUsed bool, tryTok Token) returns TryHandler throws SourceParseError
+	function parseOtherwiseHandler(func IrFunction, result ValueId, flag ValueId, fused ValueId, target TryTarget, resultUsed bool, tryTok Token) returns TryHandler throws SourceParseError
 		try self.consume(TokenKind.otherwise)
+
+		let eType = self.tryErrorEnumType(self.tryTargetThrows(target))
+		let form = self.caughtErrorFormFor(target, fused: fused)
 
 		// Block forms own their caught box end-to-end (`parseOtherwiseBlock` enrols, binds and drops it).
 		if self.at(TokenKind.leftParen) 'bindingForm'
-			return try self.parseOtherwiseBinding(func, flag: flag, errorType: self.tryErrorEnumType(self.tryTargetThrows(target)), form: self.caughtErrorFormFor(target, flag: flag))
+			return try self.parseOtherwiseBinding(func, flag: flag, errorType: eType, form: form)
 		end 'bindingForm'
 
 		if self.at(TokenKind.charLiteral) 'blockForm'
-			return try self.parseOtherwiseBlock(func, binder: CaughtErrorBinder.anonymous(self.current()), flag: flag, errorType: self.tryErrorEnumType(self.tryTargetThrows(target)), form: self.caughtErrorFormFor(target, flag: flag))
+			return try self.parseOtherwiseBlock(func, binder: CaughtErrorBinder.anonymous(self.current()), flag: flag, errorType: eType, form: form)
 		end 'blockForm'
 
 		// The non-block forms discard the caught error, so its box must drop here. `otherwise ignore`, a
@@ -45943,10 +46481,13 @@ export type Parser
 		// `emitScopeDrops` releases it, then dropped here for the non-terminating forms
 		// (`dropArmScopedOwned` frees it on a live exit and drains it either way). A scalar error owns no
 		// box, so this is inert. (`otherwise panic` aborts the process before any free matters.)
-		let eType = self.tryErrorEnumType(self.tryTargetThrows(target))
 		let ownedFloor = self.bodyState.ownedBindings.count()
 
-		if self.throwsTypeIsBoxedUnion(eType) 'enrolBox'
+		if errorUnionIsSynthesized(caughtErrorUnionMatch(form)) 'aCombinedError'
+			if not self.at(TokenKind.panic) 'survivesTheHandler'
+				self.releaseCombinedErrorBox(func, form: form, flag: flag, anchor: tryTok)
+			end 'survivesTheHandler'
+		end 'aCombinedError' else if self.throwsTypeIsBoxedUnion(eType) 'enrolBox'
 			_ = self.enrollAnonymousCaughtBox(flag, eType: eType, anchor: tryTok)
 		end 'enrolBox'
 
@@ -45954,6 +46495,32 @@ export type Parser
 		self.dropArmScopedOwned(ownedFloor, exitBlock: self.bodyState.currentBlock, anchor: tryTok)
 		return handler
 	end 'parseOtherwiseHandler'
+
+	function releaseCombinedErrorBox(func IrFunction, form CaughtErrorForm, flag ValueId, anchor Token)
+		let caught = caughtErrorUnionMatch(form)
+
+		if not errorUnionIsSynthesized(caught) 'nothingCombined'
+			return
+		end 'nothingCombined'
+
+		let info = requireErrorUnionInfo(caught)
+		self.bodyState.currentBlock = self.emitErrorUnionBoxReleases(func, members: info.members, fused: info.fusedOrdinal, entry: self.bodyState.currentBlock, flag: flag, anchor: anchor)
+	end 'releaseCombinedErrorBox'
+
+	function settleCaughtCombinedError(func IrFunction, binder CaughtErrorBinder, form CaughtErrorForm, flag ValueId)
+		let combined = caughtErrorUnionMatch(form)
+
+		if not errorUnionIsSynthesized(combined) or not membersHoldABox(requireErrorUnionInfo(combined).members) 'nothingBoxed'
+			return
+		end 'nothingBoxed'
+
+		if let name = try binder.boundName() 'aNamedBinding'
+			view caught = self.bodyState.scope.getInfo(name)
+			self.enrolOwnedBinding(VarInfo.createErrorMatchObligation(name, varType: caught.varType, flag: caught.boundValue))
+		end 'aNamedBinding' else 'anAnonymousBinding'
+			self.releaseCombinedErrorBox(func, form: form, flag: flag, anchor: binder.anchor)
+		end 'anAnonymousBinding'
+	end 'settleCaughtCombinedError'
 
 	// Is a throw with this clause, landing in a `test` body, reported rather than propagated? Two
 	// conditions:
@@ -46276,7 +46843,8 @@ export type Parser
 	// The box is co-owned because the throw may have retained rather than moved: the flag carries no
 	// note of which transfer produced it, and the catcher is a different frame and cannot ask. A
 	// `match e` on a caught box therefore retains its payload rather than nulling a slot the thrower's
-	// container may still read (see `OwnedHeapExclusivity`).
+	// container may still read (see `OwnedHeapExclusivity`). A send error is the exception, sole by
+	// its type (`serviceSendErrorExclusivity`).
 	function enrollCaughtBox(flag ValueId, eType MaxonType, binder CaughtErrorBinder) returns ValueId throws SourceParseError
 		let name = try binder.boundName() otherwise return self.enrollAnonymousCaughtBox(flag, eType: eType, anchor: binder.anchor)
 
@@ -46293,7 +46861,7 @@ export type Parser
 
 	function retagCaughtBox(flag ValueId, eType MaxonType, anchor Token) returns ValueId
 		let box = self.emitRetaggedCastValue(flag, targetType: eType, range: SourceRange.ofToken(anchor))
-		self.markValueOwnsHeap(box, exclusivity: OwnedHeapExclusivity.coOwned)
+		self.markValueOwnsHeap(box, exclusivity: serviceSendErrorExclusivity(self.signatures, unionName: self.internedName(typeNameIdOf(eType))))
 		return box
 	end 'retagCaughtBox'
 
@@ -46565,8 +47133,6 @@ export type Parser
 		try self.consume(TokenKind.charLiteral)
 		try self.requireNewlineAfterBlockLabel()
 
-		var errBlock = self.bodyState.currentBlock
-
 		// The owned-binding height BEFORE the caught box is enrolled — a handler-local drop FLOOR, the try
 		// twin of `openBlock`'s `ownedCount` (drained by `dropArmScopedOwned` below). A boxed error is an
 		// owned heap value this handler received ownership of; a scalar error owns no heap and adds none.
@@ -46574,14 +47140,9 @@ export type Parser
 		self.bodyState.scope.pushScope()
 
 		try self.declareCaughtError(flag, errorType: errorType, binder: binder, form: form)
-		let caughtUnion = caughtErrorUnionMatch(form)
+		self.settleCaughtCombinedError(func, binder: binder, form: form, flag: flag)
 
-		if let name = try binder.boundName() 'aNamedBinding'
-			if errorUnionIsSynthesized(caughtUnion) and membersHoldABox(requireErrorUnionInfo(caughtUnion).members) 'owesOneMatch'
-				view caught = self.bodyState.scope.getInfo(name)
-				self.enrolOwnedBinding(VarInfo.createErrorMatchObligation(name, varType: caught.varType, flag: caught.boundValue))
-			end 'owesOneMatch'
-		end 'aNamedBinding'
+		var errBlock = self.bodyState.currentBlock
 
 		// ⭐ **E3084's BRACKET.** A BLOCK-form handler is reached by every routed edge, so one that never
 		// `match`es on its binding has silently swallowed every error the body could raise; the single-call
@@ -46847,8 +47408,8 @@ export type Parser
 	//
 	// ⚠ **TWO CONSTRUCTS BUILD ONE, AND THEY DIFFER ONLY IN WHERE THE MEMBERS AND THE SUBJECT COME
 	// FROM.** A block-form `try` collects its members from what its body ROUTED and its subject is a phi over
-	// the throw edges; a service REPLY's two members are `ServiceError` and whatever the message declares,
-	// and its subject is the reply's error FLAG, which the service wrote already fused. Everything after that
+	// the throw edges; a `try await` of a send has the send's error and whatever the message declares for
+	// members, and its subject is the phi the two edges meet in. Everything after that
 	// — the table, the ordering, the tag arithmetic — is one operation, and a second copy of it would be a
 	// `match e` arm selected by a table the other half did not build.
 	function fusedErrorUnionInfo(members TryBlockErrorMemberArray, fusedOrdinal ValueId) returns ErrorUnionInfo
@@ -46869,90 +47430,39 @@ export type Parser
 		return ErrorUnionInfo.create(layout, caseMembers: caseMembers, members: members, fusedOrdinal: fusedOrdinal)
 	end 'fusedErrorUnionInfo'
 
-	// ⭐⭐ **WHAT `(e)` BINDS FOR A SINGLE-CALL `try` — and the ONE target shape that is not a single enum.**
-	// Every other target throws exactly one declared type, which `declareCaughtError` decodes; a
-	// SERVICE REPLY throws `{ServiceError, throwsOf(<message>)}`, and when the message really does throw that
-	// is TWO members with no declaration between them. So the reply hands the handler the same synthesized
-	// union a block-form `try` hands it, and every arm/dispatch/exhaustiveness rule downstream is the one
-	// that already exists.
-	//
-	// ⭐ **THE SUBJECT IS THE FLAG ITSELF, WHICH IS WHY THIS COSTS NOTHING AT RUN TIME.** A block-form `try`
-	// computes a fused ordinal per throw edge and merges them through a phi; a reply has ONE edge, and the
-	// SERVICE already wrote the fused ordinal into the cell's error word (`ServiceLoop.emitFusedHandlerFlag`
-	// shifts the handler's flag by exactly the offset this table is built from). So `e` and the dispatch
-	// subject are one value and no op is emitted here at all.
-	//
-	// ⭐⭐ **AND THE OTHER THREE TARGETS REACH THE SAME TABLE BY NAME.** A reply's fused pair is a
-	// REGISTERED enum, so a function may declare `throws Calc.divide.errors`, a storage type may
-	// name it in its `ErrorType` argument, and an interface method may declare it — and on each of those
-	// roads the word `(e)` binds is still the FUSED ordinal the service wrote, propagated verbatim by a bare
-	// `try`. Decoding it as an ordinary declared enum (`flag - bias` against the source tags) would be
-	// numerically wrong for every case of the handler member, silently. So the classification is a REGISTRY
-	// question — `isServiceReplyErrorType` — asked at this one choke point, which all three `try` doors and
-	// the `if let` door come through.
-	function caughtErrorFormFor(target TryTarget, flag ValueId) returns CaughtErrorForm
-		match target 'kind'
+	function caughtErrorFormFor(target TryTarget, fused ValueId) returns CaughtErrorForm
+		return match target 'kind'
 			named or
 			witness or
 			promise or
-			deferred then break
-			serviceReply(messageName, _) then return self.serviceReplyCaughtForm(messageName, flag: flag)
+			send or
+			serviceReply or
+			deferred gives CaughtErrorForm.singleCall
+			sentReply(messageName, _, sendErrorName) gives self.sentReplyCaughtForm(messageName, sendErrorName: sendErrorName, fused: fused)
 		end 'kind'
-
-		// ⚡ Gated on the one-`count()` question, because the probe below builds a `ByteArray` from the
-		// clause's name. It asks the column the probe itself reads — a program may declare services and no
-		// THROWING message, and then there is still nothing here to find.
-		if not self.signatures.declaresAServiceReplyErrorType() 'noFusedReplyErrorsInThisProgram'
-			return CaughtErrorForm.singleCall
-		end 'noFusedReplyErrorsInThisProgram'
-
-		let thrown = try throwsClauseName(self.tryTargetThrows(target)) otherwise return CaughtErrorForm.singleCall
-		let errorName = thrown.toByteArray()
-
-		if not self.signatures.isServiceReplyErrorType(errorName) 'anOrdinaryErrorType'
-			return CaughtErrorForm.singleCall
-		end 'anOrdinaryErrorType'
-
-		return self.serviceReplyCaughtForm(self.signatures.messageOfServiceReplyErrorType(errorName), flag: flag)
 	end 'caughtErrorFormFor'
 
-	// A reply's caught-error form: the fused union when the message throws, and the ORDINARY single-enum
-	// decode when it does not — one member is not a union, and `ServiceError` alone is a declared enum `e`
-	// can be bound at directly.
-	function serviceReplyCaughtForm(messageName ByteArray, flag ValueId) returns CaughtErrorForm
-		let members = self.serviceReplyErrorMembers(messageName)
+	function sentReplyCaughtForm(messageName ByteArray, sendErrorName ByteArray, fused ValueId) returns CaughtErrorForm
+		let members = self.sentReplyErrorMembers(messageName, sendErrorName: sendErrorName)
 
 		if members.count() < 2 'oneErrorTypeIsNoUnion'
 			return CaughtErrorForm.singleCall
 		end 'oneErrorTypeIsNoUnion'
 
-		return CaughtErrorForm.blockForm(ErrorUnionMatch.synthesized(fusedErrorUnionInfo(members, fusedOrdinal: flag)))
-	end 'serviceReplyCaughtForm'
+		return CaughtErrorForm.blockForm(ErrorUnionMatch.synthesized(fusedErrorUnionInfo(members, fusedOrdinal: fused)))
+	end 'sentReplyCaughtForm'
 
-	// ⭐⭐ **THE REPLY'S ERROR MEMBERS — `ServiceError` first, ALWAYS, then the message's own if it declares
-	// one.** The transport member is first because its position is what makes a non-throwing message's reply
-	// free: pinned at `ErrorFlagOrdinalBias`, its fused ordinal IS the flag, so nothing is shifted anywhere.
-	//
-	// ⚠ **NEITHER MEMBER IS BOXED, AND THAT IS ENFORCED RATHER THAN ASSUMED.** `ServiceError` is a
-	// payload-free enum in `stdlib/Builtins.maxon`, and a message whose `throws` names a payload-carrying
-	// union is refused at the SPAWN (`ServiceCompanions.classifyServiceRoster`, E3140) precisely so this
-	// stays true — a boxed
-	// member's fused ordinal is a LOAD out of the box, and there is no landing pad on a reply's one edge to
-	// put it in.
-	// ⚠⚠ **THIS MEMBERSHIP IS STATED TWICE — `ServiceCompanions.buildServiceReplyErrorEnum` IS THE OTHER
-	// COPY**, and its header says why there is no shared home (this roster's carrier is file-private here,
-	// and that caller runs before any `Parser` exists). A third member, or a reordering, must be made in
-	// both. The NUMBERS are not duplicated: `fusedCaseTag` and the two placement functions have one home
-	// each, so the copies can differ only about membership.
-	function serviceReplyErrorMembers(messageName ByteArray) returns TryBlockErrorMemberArray
+	function sentReplyErrorMembers(messageName ByteArray, sendErrorName ByteArray) returns TryBlockErrorMemberArray
 		var members = TryBlockErrorMemberArray.create()
-		members.push(TryBlockErrorMember.create(ServiceErrorTypeName, clause: ThrowsClause.throwing(String.from(ServiceErrorTypeName)), isBoxed: false, layout: serviceReplyErrorLayout(self.signatures, errorName: ServiceErrorTypeName), placement: serviceReplyTransportPlacement(self.signatures)))
+		let sendLayout = self.requireRoutedErrorLayout(sendErrorName)
+		members.push(TryBlockErrorMember.create(sendErrorName, clause: ThrowsClause.throwing(String.from(sendErrorName)), isBoxed: sendLayout.isBoxed(), layout: sendLayout, placement: serviceSendErrorPlacement(sendLayout)))
 
 		let clause = self.signatures.throwsOf(messageName)
 		let errorName = try throwsClauseName(clause) otherwise return members
-		members.push(TryBlockErrorMember.create(errorName.toByteArray(), clause: clause, isBoxed: false, layout: serviceReplyErrorLayout(self.signatures, errorName: errorName.toByteArray()), placement: serviceReplyHandlerPlacement(self.signatures, errorName: errorName.toByteArray())))
+		let handlerName = errorName.toByteArray()
+		members.push(TryBlockErrorMember.create(handlerName, clause: clause, isBoxed: false, layout: serviceReplyErrorLayout(self.signatures, errorName: handlerName), placement: serviceReplyHandlerPlacement(self.signatures, sendLayout: sendLayout, errorName: handlerName)))
 		return members
-	end 'serviceReplyErrorMembers'
+	end 'sentReplyErrorMembers'
 
 	// The value one recorded edge contributes to the fused phi. The two SCALAR shapes settled theirs where the
 	// edge was built (`routedEdgeFusedValue`); a BOXED member's is emitted HERE, into the landing pad that
@@ -47137,8 +47647,9 @@ export type Parser
 
 		let ownedFloor = self.bodyState.ownedBindings.count()
 		let unionBindingDepth = self.bodyState.errorUnionBindings.count()
+		let form = CaughtErrorForm.blockForm(errorUnion)
 		self.bodyState.scope.pushScope()
-		try self.declareCaughtError(flag, errorType: errorType, binder: binder, form: CaughtErrorForm.blockForm(errorUnion))
+		try self.declareCaughtError(flag, errorType: errorType, binder: binder, form: form)
 
 		// ⚠ **A SYNTHESIZED UNION'S BOX IS RELEASED HERE FOR THE REASON A `default` ARM'S IS.** Over a union
 		// the binding owns nothing at all — the flag is an ordinal on some incoming edges and a box POINTER on
@@ -47150,10 +47661,7 @@ export type Parser
 		// The release `__destruct_`s the in-flight box; a binding readable AFTERWARDS would be naming a freed
 		// one. `rejectDivergentBindingOverErrorUnion` is what makes "readable afterwards" impossible — remove
 		// it and this ordering becomes a wrong VALUE, which is exactly what review measured.
-		if errorUnionIsSynthesized(errorUnion) 'releaseTheBoxInFlight'
-			let info = requireErrorUnionInfo(errorUnion)
-			self.bodyState.currentBlock = self.emitErrorUnionBoxReleases(func, members: info.members, fused: info.fusedOrdinal, entry: self.bodyState.currentBlock, flag: flag, anchor: binder.anchor)
-		end 'releaseTheBoxInFlight'
+		self.releaseCombinedErrorBox(func, form: form, flag: flag, anchor: binder.anchor)
 
 		try self.parseDivergingTerminalForm(func, block: self.bodyState.currentBlock)
 
@@ -47415,6 +47923,7 @@ export type Parser
 		match self.routableOpAt(opIdx) 'held'
 			notRoutable or
 			tryChannelCall then return
+			send(result) then self.routeSend(destination, opIdx: opIdx, result: result)
 			call(result, callee) then self.routeThrowingOp(destination, opIdx: opIdx, clause: self.signatures.throwsOf(callee), result: result)
 			witness(result) then self.routeThrowingOp(destination, opIdx: opIdx, clause: self.tryTargetThrows(recordedTryTargetOf(self.lastWitnessDispatch, opIdx: opIdx)), result: result)
 			await (result, _) then self.routeThrowingOp(destination, opIdx: opIdx, clause: self.heldAwaitClause(opIdx), result: result)
@@ -47435,7 +47944,8 @@ export type Parser
 	// and every reader of a producing op asks it, so an op added to `MaxonOp` is classified once.
 	function routableOpAt(opIdx ElementIndex) returns RoutableOp
 		return match try self.artifact.module.ops.get(opIdx) otherwise panic("routableOpAt: opRef {opIdx} not in module.ops") 'op'
-			call(result, callee, _, _, _, _, _, _) gives RoutableOp.call(result, callee: callee)
+			call(result, callee, _, _, _, _, _, _) gives RoutableOp.send(result) if callee.equals(MboxInterfaceSendName) else RoutableOp.call(result, callee: callee)
+			serviceSend(result, _, _, _, _, _) gives RoutableOp.send(result)
 			tryCall(result, _, callee, _, _, _, _, _, _) gives RoutableOp.tryChannelCall(result, callee: callee)
 			witnessDispatch(result, _, _, _, _, _, _, _) gives RoutableOp.witness(result)
 			await (result, promise) gives RoutableOp.await(result, promise: promise)
@@ -47465,7 +47975,6 @@ export type Parser
 			panicAbortValue or
 			errorFlagEncode or
 			serviceSpawn or
-			serviceSend or
 			serviceReplyCell or
 			immortalStructRecord or
 			immortalStringTable or
@@ -47480,7 +47989,7 @@ export type Parser
 	function routeToImpliedTestHandler(opIdx ElementIndex, clause ThrowsClause, result ValueId)
 		var func = self.bodyFunction()
 		let flag = self.rewriteRoutedOp(opIdx)
-		self.forkOntoPropagatingHandler(func, flag: flag, clause: clause, result: result, anchor: anchorTokenSpanning(self.artifact.opRanges.get(opIdx)), reportsTheThrow: self.testBodyAbsorbs(clause))
+		self.forkOntoPropagatingHandler(func, flag: flag, clause: clause, result: result, anchor: anchorTokenSpanning(self.artifact.opRanges.get(opIdx)), reportsTheThrow: self.testBodyAbsorbs(clause), leg: SentLegSlot.none)
 	end 'routeToImpliedTestHandler'
 
 	function bodyFunction() returns IrFunction
@@ -47528,7 +48037,7 @@ export type Parser
 		// moment it can be: `IrModule.appendOp` refuses to append past a conditional branch (an op there would
 		// run on the not-taken edge only), and the branch is two statements away. A first SCALAR member spends
 		// nothing — see `routedEdgeFusedValue`.
-		let fused = self.routedEdgeFusedValue(ctx, member: member, flag: flag)
+		let fused = self.routedEdgeFusedValue(member, flag: flag, anchor: ctx.tryTok)
 		let isErr = self.emitErrorFlagTest(flag, op: MaxonCmpOp.ne, anchor: ctx.tryTok)
 
 		var errArgs = self.tryBlockErrorEdgeArgs(ctx, flag: flag)
@@ -47663,7 +48172,7 @@ export type Parser
 	//   • **a BOXED member** — the tag is a LOAD, and it cannot stand on a path where the flag may be `0`.
 	//     Deferred to the landing pad `tryBlockThrowEdgeTarget` forces for exactly this reason, and filled by
 	//     `routedEdgeOrdinalForUnion` only if the block turns out to be a union.
-	function routedEdgeFusedValue(ctx TryBlockContext, member TryBlockErrorMember, flag ValueId) returns ValueId
+	function routedEdgeFusedValue(member TryBlockErrorMember, flag ValueId, anchor Token) returns ValueId
 		if member.isBoxed 'deferredToThePad'
 			return flag
 		end 'deferredToThePad'
@@ -47674,7 +48183,7 @@ export type Parser
 			return flag
 		end 'theFlagIsAlreadyTheOrdinal'
 
-		return self.emitAddLiteral(flag, addend: shift, anchor: ctx.tryTok)
+		return self.emitAddLiteral(flag, addend: shift, anchor: anchor)
 	end 'routedEdgeFusedValue'
 
 	// `subject + addend` as an integer value, through the two ops the fused-ordinal shift needs and nothing
@@ -47697,10 +48206,26 @@ export type Parser
 	// as routable, so any other kind is a broken compiler invariant — `rewriteToTryChannel`'s panic,
 	// not a diagnostic.
 	function rewriteRoutedOp(opIdx ElementIndex) returns ValueId
+		let op = self.routableOpAt(opIdx)
+
+		match op 'op'
+			send then return self.rewriteSendToTryChannel(opIdx).1
+			notRoutable or
+			call or
+			witness or
+			await or
+			tryChannelCall then break
+		end 'op'
+
 		let flag = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
-		_ = self.rewriteToTryChannel(opIdx, op: self.routableOpAt(opIdx), flag: flag)
+		_ = self.rewriteToTryChannel(opIdx, op: op, flag: flag)
 		return flag
 	end 'rewriteRoutedOp'
+
+	function routeSend(destination ThrowRouteDestination, opIdx ElementIndex, result ValueId)
+		let sent = recordedSendOf(self.lastSend, opIdx: opIdx)
+		self.routeThrowingOp(destination, opIdx: opIdx, clause: sent.throwsClause(), result: sent.resultValue(result))
+	end 'routeSend'
 
 	// ⭐ **WHAT A ROUTED EDGE TELLS THE SHARED HANDLER — which UNION MEMBER it raises, and the OWNERSHIP state
 	// the handler will be entered with.** Returns the member; the caller needs it to compute the edge's fused
@@ -48002,7 +48527,9 @@ export type Parser
 			named(callee) gives self.signatures.throwsOf(callee)
 			witness(_, throwsClause) gives throwsClause
 			promise(_, throwsClause) gives throwsClause
-			serviceReply(messageName, _) gives ThrowsClause.throwing(String.from(self.signatures.serviceReplyErrorName(messageName)))
+			send(_, throwsClause) gives throwsClause
+			serviceReply(messageName, _) gives self.signatures.throwsOf(messageName)
+			sentReply(_, _, sendErrorName) gives ThrowsClause.throwing(String.from(sendErrorName))
 			deferred gives ThrowsClause.none
 		end 'kind'
 	end 'tryTargetThrows'
@@ -49870,9 +50397,11 @@ export type Parser
 		self.raiseCellEpochExclusivity(read.epoch, to: to)
 	end 'raiseCellOccupantExclusivity'
 
-	// ⭐ **MARK A CALL RESULT AS THE SOLE REFERENCE TO A RECORD ITS CALLEE JUST BUILT.** The one writer
-	// of `valueFromFreshReturn`, called from `emitCall` — the one line every direct, method and static call
-	// passes with the callee's NAME in hand, which is what the whole-program summary is keyed by.
+	// ⭐ **MARK A VALUE AS THE SOLE REFERENCE TO A RECORD NO OTHER FRAME OWNS.** Set on a call result
+	// by `emitCall` — the one line every direct, method and static call passes with the callee's NAME
+	// in hand, which is what the whole-program summary is keyed by — and carried onto a merged
+	// binding's phi when every incoming is solely owned here (`mintPhiForBinding`,
+	// `pushMergedEdgeValue`).
 	//
 	// ⚠ **IT MUST RUN AFTER `enrolOwnedCallTemp` AND IT DOES.** That door marks a call result `coOwned`, which
 	// goes through `markValueCoOwnsHeap` — the very line that CLEARS this bit. Ordered the other way the mark
@@ -51133,7 +51662,7 @@ export type Parser
 		// (`__mbox_handle_drop_box`) steps a `handles` share, a `refs` share and the box. `__mm_own`'s copy
 		// arm allocates a second box and blits the mailbox pointer into it, so two handles would name one
 		// mailbox holding ONE share: the original's drop takes that share to zero, the service drains, and
-		// the next send is answered `ServiceError.stopped`. MEASURED as exit 0 where the answer is 3.
+		// the next send is refused as stopped. MEASURED as exit 0 where the answer is 3.
 		//
 		// ⚠ It is `emitIncref`, which asks `retainCalleeOf` — so the reference a sink takes and the
 		// reference a scope-exit drop releases are the SAME answer, and stay duals by construction.
@@ -52241,7 +52770,7 @@ export type Parser
 	function parseElseBody(func IrFunction, elseBlock IrBlock, cond IfCondition, ifTok Token) returns IrBlock throws SourceParseError
 		match cond 'shape'
 			plain then break
-			tryCatch(_, _, _, flag, errorType, form) then return try self.parseCatchingElseBody(func, elseBlock: elseBlock, flag: flag, errorType: errorType, form: form, ifTok: ifTok)
+			tryCatch(_, _, _, flag, errorType, form, join) then return try self.parseCatchingElseBody(func, elseBlock: elseBlock, flag: flag, errorType: errorType, form: form, join: join, ifTok: ifTok)
 		end 'shape'
 
 		try self.consume(TokenKind.else)
@@ -52276,7 +52805,7 @@ export type Parser
 	// ⭐ **IT RUNS EVEN WHEN NO `else` IS WRITTEN**, because the error edge exists either way and a caught box
 	// has to die on it. With nothing written the branch is empty: the release is all it holds and it falls
 	// straight through to the merge, carrying the entry values the caller already restored.
-	function parseCatchingElseBody(func IrFunction, elseBlock IrBlock, flag ValueId, errorType MaxonType, form CaughtErrorForm, ifTok Token) returns IrBlock throws SourceParseError
+	function parseCatchingElseBody(func IrFunction, elseBlock IrBlock, flag ValueId, errorType MaxonType, form CaughtErrorForm, join SentLegJoin, ifTok Token) returns IrBlock throws SourceParseError
 		let elseWritten = self.at(TokenKind.else)
 		let ownedFloor = self.bodyState.ownedBindings.count()
 		self.bodyState.scope.pushScope()
@@ -52296,17 +52825,24 @@ export type Parser
 
 		// The decode (and, for a boxed error, the enrolment) belongs at the TOP of the error edge — before a
 		// nested `else if`'s own condition, and before the written body's first statement.
+		self.joinSentLeg(join, errBlock: elseBlock)
 		self.bodyState.currentBlock = elseBlock
 		try self.declareCaughtError(flag, errorType: errorType, binder: binder, form: form)
+		self.settleCaughtCombinedError(func, binder: binder, form: form, flag: flag)
 
-		var elseEnd = elseBlock
+		var elseEnd = self.bodyState.currentBlock
 
 		if elseWritten 'writtenBody'
-			elseEnd = try self.parseElseBranchBody(func, elseBlock: elseBlock)
+			elseEnd = try self.parseElseBranchBody(func, elseBlock: elseEnd)
 		end 'writtenBody'
 
 		self.bodyState.scope.popScope()
 		self.dropArmScopedOwned(ownedFloor, exitBlock: elseEnd, anchor: binder.anchor)
+
+		if errorUnionIsSynthesized(caughtErrorUnionMatch(form)) 'aCombinedError'
+			try self.requireNoHeldErrorMatchRefusal()
+		end 'aCombinedError'
+
 		return elseEnd
 	end 'parseCatchingElseBody'
 
@@ -52395,7 +52931,9 @@ export type Parser
 			named or
 			witness or
 			promise or
-			serviceReply then break
+			send or
+			serviceReply or
+			sentReply then break
 		end 'kind'
 
 		let producesNothing = self.tagOf(result) == ValueTypeTag.void
@@ -52405,7 +52943,7 @@ export type Parser
 		end 'b'
 
 		if bound and producesNothing 'boundNothing'
-			throw SourceParseError.errorTypeMismatch("'{String.from(tryTargetNoun(target, signatures: self.signatures))}' does not return a value", line: tryTok.line, column: tryTok.column)
+			throw tryTargetProducesNoValueError(target, signatures: self.signatures, tryTok: tryTok)
 		end 'boundNothing'
 
 		if not bound and not producesNothing 'droppedSomething'
@@ -52438,6 +52976,7 @@ export type Parser
 		let result = try self.parseTryCallTarget(func)
 		self.catchingSourceIsWritable = not self.expressionImmutableBlame(self.tokenAt(sourceStart), valueStart: sourceStart, value: result).isBlamed()
 		let (target, flag) = try self.rewriteLastCallToTryCall(result, tryTok: tryTok, targetDeferralFloor: targetDeferralFloor, targetOpFloor: targetOpFloor)
+		var leg = self.takeSentLeg()
 		try self.requireThrowingTryTarget(target, tryTok: tryTok)
 		try self.requireCaughtResultIsSpokenFor(result, target: target, binder: binder, tryTok: tryTok)
 		self.recordCatchingDiscard(binder, opFloor: targetOpFloor)
@@ -52449,7 +52988,10 @@ export type Parser
 		// its own when the boolean form discards it.
 		let resultWasPending = self.takeOffPendingTemps(result)
 		let test = self.emitErrorFlagTest(flag, op: MaxonCmpOp.eq, anchor: tryTok)
-		return IfCondition.tryCatch(test, result: result, resultWasPending: resultWasPending, flag: flag, errorType: self.tryErrorEnumType(self.tryTargetThrows(target)), form: self.caughtErrorFormFor(target, flag: flag))
+		let handlerFused = self.handlerFusedOrdinal(leg, handlerFlag: flag, anchor: tryTok)
+		let joined = self.mintJoinedError(leg, handlerFlag: flag)
+		let join = SentLegJoin.create(leg, entryBlockId: self.bodyState.currentBlock.id, handlerFlag: flag, handlerFused: handlerFused, joined: joined)
+		return IfCondition.tryCatch(test, result: result, resultWasPending: resultWasPending, flag: joined.flag, errorType: self.tryErrorEnumType(self.tryTargetThrows(target)), form: self.caughtErrorFormFor(target, fused: joined.fused), join: join)
 	end 'parseCatchingCondition'
 
 	// ⭐⭐ **`if let _ = try f()` IS AN EXPLICIT DISCARD, AND A PURE CALLEE'S RESULT MAY NOT BE ONE (E3064).**
@@ -52487,7 +53029,7 @@ export type Parser
 	function parseIfThenBody(func IrFunction, thenBlock IrBlock, label ByteArray, cond IfCondition, binder IfBinder, anchor Token) returns IrBlock throws SourceParseError
 		match cond 'shape'
 			plain then break
-			tryCatch(_, result, resultWasPending, _, _, _) then return try self.parseCaughtThenBody(func, thenBlock: thenBlock, label: label, result: result, resultWasPending: resultWasPending, binder: binder, anchor: anchor)
+			tryCatch(_, result, resultWasPending, _, _, _, _) then return try self.parseCaughtThenBody(func, thenBlock: thenBlock, label: label, result: result, resultWasPending: resultWasPending, binder: binder, anchor: anchor)
 		end 'shape'
 
 		return try self.parseBlockBody(func, block: thenBlock, label: label)
@@ -60026,7 +60568,7 @@ export type Parser
 	// exact: a binding list is `( name [, name]* )` and every element is a single identifier (or `_`), so the
 	// identifiers between the parens ARE the bindings.
 	function requireErrorUnionBindingCount(member TryBlockErrorMember, caseIndex CaseIndex, caseTok Token) throws SourceParseError
-		let declared = member.layout.payloadArityAt(caseIndex)
+		let declared = bindablePayloadCount(member.layout.payloadsAt(caseIndex))
 		var supplied = 0 as ElementIndex
 		var scan = self.pos + 1
 
@@ -60172,24 +60714,26 @@ export type Parser
 		// (`payloads.get` has nothing past it) while the arity diagnostic names how many the author
 		// wrote, so a name past the end is counted but neither bound nor reserved-name checked. Judged
 		// once, below, so both directions carry one code.
-		let declaredArity = CheckedBindingNames.leading(payloads.count())
+		let bindable = bindablePayloadCount(payloads)
+		let declaredArity = CheckedBindingNames.leading(bindable)
 		let names = try self.parseBindingNameList(declaredArity)
 
 		for nameTok in names 'bindLoop'
 			if declaredArity.covers(bindings.count()) 'withinTheDeclaredArity'
-				let field = try payloads.get(bindings.count()) otherwise panic("parseCasePayloadBindings: payloads.get OOB below the declared arity")
+				let slot = serviceParamPayloadSlot(payloads, paramIndex: bindings.count() as ParamCount)
+				let field = try payloads.get(slot) otherwise panic("parseCasePayloadBindings: payloads.get OOB below the declared arity")
 
 				if nameTok.value.equals(DiscardBindingName) 'discard'
-					bindings.push(PayloadBinding.discard(nameTok, field: field, slot: bindings.count() as PayloadSlotIndex, caseIndex: caseIndex))
+					bindings.push(PayloadBinding.discard(nameTok, field: field, slot: slot, caseIndex: caseIndex))
 				end 'discard' else 'realBinding'
-					bindings.push(PayloadBinding.bound(nameTok, field: field, slot: bindings.count() as PayloadSlotIndex, caseIndex: caseIndex))
+					bindings.push(PayloadBinding.bound(nameTok, field: field, slot: slot, caseIndex: caseIndex))
 					allDiscard = false
 				end 'realBinding'
 			end 'withinTheDeclaredArity'
 		end 'bindLoop'
 
-		if names.count() != payloads.count() 'arityDisagrees'
-			throw SourceParseError.enumWrongBindingCount(String.from(layout.caseNameAt(caseIndex)), expected: payloads.count() as PayloadSlotIndex, got: names.count(), line: caseTok.line, column: caseTok.column)
+		if names.count() != bindable 'arityDisagrees'
+			throw SourceParseError.enumWrongBindingCount(String.from(layout.caseNameAt(caseIndex)), expected: bindable, got: names.count(), line: caseTok.line, column: caseTok.column)
 		end 'arityDisagrees'
 
 		// ⭐ **AN ALL-DISCARD LIST IS EXACTLY THE BARE CASE NAME, so the language admits only the one
@@ -60322,7 +60866,7 @@ export type Parser
 				end 'borrowedScrutinee'
 
 				self.markValuePromise(loaded)
-				self.moveOutManagedPayload(bindingInfo, loaded: loaded, scrutBox: scrutBox, offset: offset, storage: storage, range: range)
+				self.moveOutManagedPayload(bindingInfo, loaded: loaded, scrutBox: scrutBox, offset: offset, storage: storage, exclusivity: OwnedHeapExclusivity.coOwned, range: range)
 				movedManaged = true
 			end 'aGreenThreadPayload' else if payloadClassIsManaged(class) 'managedPayload'
 				// ⭐⭐ **A `var` UNION'S PAYLOAD SLOT IS A PLACE THIS FRAME MAY STILL WRITE, SO THE BIND BORROWS
@@ -60334,8 +60878,8 @@ export type Parser
 				// (`text.append(" tail")`) writes through that window without ever assigning the binding — so a
 				// move-out hands the record to a binding that frees it at the arm's exit, leaving the box holding
 				// a null the author never emptied. The retain keeps the box's own reference where it is.
-				if scrutSolelyOwned and not scrutMutable 'ownedMoveOut'
-					self.moveOutManagedPayload(bindingInfo, loaded: loaded, scrutBox: scrutBox, offset: offset, storage: storage, range: range)
+				if scrutSolelyOwned and not scrutMutable and not self.sendErrorSlotIsCoOwnedByType(layout, slotType: declared) 'ownedMoveOut'
+					self.moveOutManagedPayload(bindingInfo, loaded: loaded, scrutBox: scrutBox, offset: offset, storage: storage, exclusivity: serviceSendErrorExclusivity(self.signatures, unionName: layout.name), range: range)
 					movedManaged = true
 				end 'ownedMoveOut' else 'retainedCoOwn'
 					self.retainBorrowedPayload(bindingInfo, loaded: loaded, range: range)
@@ -60360,7 +60904,10 @@ export type Parser
 	// the retain as well. All three take `retainBorrowedPayload` instead, which leaves the slot alone;
 	// `declarePayloadBindings` is the one place that picks between them, and `OwnedHeapExclusivity` records the
 	// six programs the wider gate segfaulted.
-	function moveOutManagedPayload(bindingInfo VarInfo, loaded ValueId, scrutBox ValueId, offset ByteOffset, storage MaxonType, range SourceRange)
+	function moveOutManagedPayload(bindingInfo VarInfo, loaded ValueId, scrutBox ValueId, offset ByteOffset, storage MaxonType, exclusivity OwnedHeapExclusivity, range SourceRange)
+		// The caller passes `coOwned` for every union but a send error, whose payloads are sole by its
+		// type (`serviceSendErrorExclusivity`).
+		//
 		// ⛔⛔ **CO-OWNED, AND THE ARGUMENT FOR `sole` HERE WAS THIS RUNG'S OWN BUG ONE LEVEL DOWN.** It read
 		// *"the box was this frame's alone and the store below empties the slot, so the binding now holds the
 		// allocation's only reference"* — and the second clause does not follow from the first. The box's
@@ -60382,7 +60929,7 @@ export type Parser
 		// ownership state and a new invariant to a predicate that has already paid six segfaults for answering
 		// two facts. The cost of understating is one refcount pair per nested move-out; the cost of
 		// overstating is a stolen slot. `OwnedHeapExclusivity`'s own safety argument decides it.
-		self.ownPayloadBinding(bindingInfo, loaded: loaded, exclusivity: OwnedHeapExclusivity.coOwned)
+		self.ownPayloadBinding(bindingInfo, loaded: loaded, exclusivity: exclusivity)
 
 		let zero = self.emitLiteral(0, valueType: MaxonType.integer, range: range)
 		self.emitIndirectStore(scrutBox, offset: offset, value: zero, storageType: storage, range: range)
@@ -61166,11 +61713,20 @@ export type Parser
 	// DEFAULT: a future merge inherits it, and only a site holding the complete incoming set can lift it
 	// (`recordMergeAliasProof`).
 	function mintPhi(block IrBlock, tag ValueTypeTag, nameId TypeNameId) returns ValueId
-		let phiId = self.mintValue(tag, nameId: nameId)
-		try self.bodyState.aliasUnprovenMarks.set(phiId, value: true) otherwise panic("mintPhi: v{phiId} has no merge-alias slot — every SSA value must be minted through mintValue, which seeds the column")
-		block.blockArgs.push(IrBlockArg.create(phiId, argType: StdType.i64))
+		let phiId = self.mintDetachedPhi(tag, nameId: nameId)
+		self.attachDetachedPhi(block, phi: phiId)
 		return phiId
 	end 'mintPhi'
+
+	function mintDetachedPhi(tag ValueTypeTag, nameId TypeNameId) returns ValueId
+		let phiId = self.mintValue(tag, nameId: nameId)
+		try self.bodyState.aliasUnprovenMarks.set(phiId, value: true) otherwise panic("mintDetachedPhi: v{phiId} has no merge-alias slot — every SSA value must be minted through mintValue, which seeds the column")
+		return phiId
+	end 'mintDetachedPhi'
+
+	function attachDetachedPhi(block IrBlock, phi ValueId)
+		block.blockArgs.push(IrBlockArg.create(phi, argType: StdType.i64))
+	end 'attachDetachedPhi'
 
 	// ⭐⭐ **LIFT A MERGE'S WITHHELD ALIAS CLAIM — the ONE place `mintPhi`'s blanket withholding is undone,
 	// and it is undone only against the COMPLETE incoming set.** A merge denotes alias `A` exactly when every
@@ -61334,6 +61890,10 @@ export type Parser
 		// and borrows on another is an ownership question with no answer, not a mark to join.
 		if self.valueIsOwnedHeap(binding.boundValue) 'ownedBinding'
 			self.markValueOwnsHeap(phiId, exclusivity: OwnedHeapExclusivity.sole if self.valueIsSoleHeapOwner(binding.boundValue) else OwnedHeapExclusivity.coOwned)
+
+			if self.valueIsSolelyOwnedHere(binding.boundValue) 'aHandOffSource'
+				self.markValueFromFreshReturn(phiId)
+			end 'aHandOffSource'
 		end 'ownedBinding'
 
 		// ⭐⭐ **THE IMMUTABLE-GLOBAL-READ MARK CROSSES A BINDING MERGE, and this half alone is not enough — see
@@ -61431,7 +61991,12 @@ export type Parser
 		end 'anEdgeAViewCoOwns'
 
 		if phiOwns and not self.valueIsSoleHeapOwner(value) 'edgeCoOwns'
+			let everyEdgeSolelyOwned = self.valueIsSolelyOwnedHere(binding.boundValue) and self.valueIsSolelyOwnedHere(value)
 			self.markValueCoOwnsHeap(binding.boundValue)
+
+			if everyEdgeSolelyOwned 'stillAHandOffSource'
+				self.markValueFromFreshReturn(binding.boundValue)
+			end 'stillAHandOffSource'
 		end 'edgeCoOwns'
 	end 'pushMergedEdgeValue'
 
@@ -63934,9 +64499,11 @@ export type Parser
 	// Single-homing it is the point. A statement-position copy is exactly the shape that drifts — it would
 	// be spelled `await <primary>` by whoever wrote it next and then `await async f()` would parse in one
 	// position and not the other, for no reason anyone could state.
-	// ⭐⭐ **`spawn <T>.<factory>(…)` — the ONE reader, for the TWO positions that admit it** (`parseAwait`'s
-	// precedent, and its reason: a statement-position copy is exactly the shape that drifts). The cursor sits
-	// on the word `spawn`, which `atSpawnPrefix` has already recognized.
+	// ⭐⭐ **`spawn <T>.<factory>(…)` — the ONE reader, for the TWO positions that admit it**
+	// (`parseAwait`'s precedent, and its reason: a statement-position copy is exactly the shape that
+	// drifts). The cursor sits on the word `spawn`, which `atSpawnPrefix` has already recognized. An
+	// optional `(capacity: n)` group between the word and the target sets the mailbox's capacity;
+	// without one it is `DefaultMailboxCapacity`.
 	//
 	// ⭐⭐ **EVERY SERVICE REFUSAL IS RAISED HERE, AT THE SITE THE AUTHOR WROTE — and that is forced twice
 	// over.** The classification is a WHOLE-PROGRAM fact and could only be computed by the declaration sweep;
@@ -63963,6 +64530,7 @@ export type Parser
 	function parseSpawn(func IrFunction) returns ValueId throws SourceParseError
 		let spawnTok = self.current()
 		self.advance()
+		let capacity = try self.parseSpawnCapacity(func, spawnTok: spawnTok)
 
 		// ⛔ **`spawn Self.create()` IS REFUSED, AND THE REFUSAL IS THE DISCOVERY WALK'S SHAPE RATHER THAN A
 		// GAP IN THIS READER.** Which types are services is decided before any file is parsed, by a walk over
@@ -64038,8 +64606,45 @@ export type Parser
 		end 'fixed'
 
 		self.releaseHandOffBuildTemps(factoryTempFloor, ownedFloor: factoryOwnedFloor, handedOff: singletonArgs(state), anchor: memberTok)
-		return try self.emitServiceSpawn(typeTok.value, member: memberTok.value, state: state, instance: instance, spawnTok: spawnTok, memberTok: memberTok)
+		return try self.emitServiceSpawn(typeTok.value, member: memberTok.value, state: state, capacity: capacity, instance: instance, spawnTok: spawnTok, memberTok: memberTok)
 	end 'parseSpawn'
+
+	function parseSpawnCapacity(func IrFunction, spawnTok Token) returns ValueId throws SourceParseError
+		if not self.at(TokenKind.leftParen) 'noCapacityGroup'
+			return self.emitDefaultMailboxCapacity(spawnTok)
+		end 'noCapacityGroup'
+
+		try self.consume(TokenKind.leftParen)
+		let labelTok = try self.consume(TokenKind.identifier)
+
+		if not labelTok.value.equals(SpawnCapacityLabel) 'notTheCapacityLabel'
+			panic("parseSpawnCapacity: the group opens with `{String.from(labelTok.value)}`, and `atSpawnPrefix` admits a group only when its label is `{String.from(SpawnCapacityLabel)}`")
+		end 'notTheCapacityLabel'
+
+		try self.consume(TokenKind.colon)
+		let valueTok = self.current()
+		let capacity = try self.parseValueExpression(func)
+		try self.requireArgumentFitsDeclaredAlias(capacity, alias: self.mailboxCapacityAlias(), paramName: labelTok.value, anchor: valueTok)
+		try self.consume(TokenKind.rightParen)
+
+		return capacity
+	end 'parseSpawnCapacity'
+
+	function mailboxCapacityAlias() returns RangedTypeAlias
+		return try requireDeclaredAlias(self.signatures.libraryAliasDeclaration(MailboxCapacityAliasName)) otherwise panic("mailboxCapacityAlias: no library file declares the ranged typealias `{String.from(MailboxCapacityAliasName)}`, which stdlib/Builtins.maxon declares")
+	end 'mailboxCapacityAlias'
+
+	function emitDefaultMailboxCapacity(spawnTok Token) returns ValueId
+		let alias = self.mailboxCapacityAlias()
+
+		return match self.signatures.constantValueOf(DefaultMailboxCapacityName, readerFilePath: alias.declFilePath) 'constant'
+			found(payload, tag, typeName) gives self.emitFoldedConstant(payload, tag: tag, typeName: typeName, range: SourceRange.ofToken(spawnTok))
+			foundManaged or
+			foundImageRecord or
+			foundImageBox or
+			notFound panic("emitDefaultMailboxCapacity: `{String.from(DefaultMailboxCapacityName)}` is not an integer constant beside `{String.from(MailboxCapacityAliasName)}` in stdlib/Builtins.maxon")
+		end 'constant'
+	end 'emitDefaultMailboxCapacity'
 
 	// ⭐ **THE ROSTER'S REFUSALS, IN ONE PLACE BECAUSE THE `spawn` ASKS TWICE.** Both asks raise the same
 	// three diagnostics at the same site; a second copy of these arms would be a second chance for the two
@@ -64089,12 +64694,12 @@ export type Parser
 	//      `trackOwnedTemp` is what makes a handle an ORDINARY owned value: `let h = …` binds it, a second
 	//      read after a move is E3102, an array element drop reaches it, and its scope-exit drop is what
 	//      shuts the service down. A runtime-minted box would need every one of those taught to it.
-	function emitServiceSpawn(typeName ByteArray, member ByteArray, state ValueId, instance ServiceStateInstance, spawnTok Token, memberTok Token) returns ValueId throws SourceParseError
+	function emitServiceSpawn(typeName ByteArray, member ByteArray, state ValueId, capacity ValueId, instance ServiceStateInstance, spawnTok Token, memberTok Token) returns ValueId throws SourceParseError
 		let range = SourceRange.between(spawnTok, last: memberTok)
 		let moved = try self.handOff(SoleHandedOffPosition, value: state, door: ThreadHandOffDoor.message(serviceSpawnStateBlame(typeName, member: member), argumentOf: serviceSpawnStateOf(typeName, member: member)), anchor: memberTok)
 
 		let mailbox = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
-		self.artifact.emitOp(self.bodyState.currentBlock, op: MaxonOp.serviceSpawn(mailbox, typeName: typeName, state: moved), range: range)
+		self.artifact.emitOp(self.bodyState.currentBlock, op: MaxonOp.serviceSpawn(mailbox, typeName: typeName, state: moved, capacity: capacity), range: range)
 
 		view handle = self.serviceHandleLayout(typeName)
 		let handleType = self.serviceHandleValueType(handle, instance: instance)
@@ -72474,7 +73079,7 @@ export type Parser
 
 		try self.requireAllPayloadsProvided(layout, payloads: payloads, filled: filled, caseTok: caseTok)
 
-		return try self.emitEnumBox(layout, caseIndex: caseIndex, args: slotValues, argsBareLocal: slotBareLocal, argAnchors: slotAnchors, caseTok: caseTok, range: range, fill: PayloadFill.unionConstruct)
+		return (try self.emitEnumBox(layout, caseIndex: caseIndex, args: slotValues, argsBareLocal: slotBareLocal, argAnchors: slotAnchors, caseTok: caseTok, range: range, fill: PayloadFill.unionConstruct)).0
 	end 'parseEnumBoxConstruct'
 
 	// Parse the `(pos, label: value, …)` payload argument list into the layout-parallel columns. The caller
@@ -72609,7 +73214,7 @@ export type Parser
 	// ⚠ **A CONSTRUCT'S ZERO-FILL IS MANDATORY** even though the slab returns zeroed memory: it pins a
 	// deterministic 0 in a narrow case's unused slots, and a NULL slot is exactly what the cascade's
 	// null-guard skips — so a zeroed managed slot is never decref'd as a bogus pointer.
-	function emitEnumBox(layout EnumLayout, caseIndex CaseIndex, args ValueIdArray, argsBareLocal BoolArray, argAnchors TokenIndexArray, caseTok Token, range SourceRange, fill PayloadFill) returns ValueId throws SourceParseError
+	function emitEnumBox(layout EnumLayout, caseIndex CaseIndex, args ValueIdArray, argsBareLocal BoolArray, argAnchors TokenIndexArray, caseTok Token, range SourceRange, fill PayloadFill) returns (ValueId, SharedSlotHandBackArray) throws SourceParseError
 		let payloads = layout.payloadsAt(caseIndex)
 
 		// Validate + classify every field before emitting a single op — a refused payload emits no code.
@@ -72645,7 +73250,7 @@ export type Parser
 			end 'fill'
 		end 'validate'
 
-		try self.transferPayloadsIntoAGreenThread(fill, args: args, payloads: payloads, argAnchors: argAnchors, caseTok: caseTok)
+		let handBack = try self.transferPayloadsIntoAGreenThread(fill, args: args, payloads: payloads, argAnchors: argAnchors, caseTok: caseTok)
 
 		let box = self.openPayloadRecord(layout, fill: fill, range: range)
 
@@ -72672,15 +73277,14 @@ export type Parser
 
 		// The fill keeps a box's bytes deterministic whatever the allocator returns; the union cloner
 		// blits the whole box (`MmRuntime.synthesizeUnionCloner`), so it copies these slots too. A
-		// message skips it: it is read only through its live variant (the loop's arm and
-		// `<T>.__abandon`), so the words an earlier message left in the staging buffer are never
-		// followed.
+		// message skips it: it is read only through its live variant (the loop's arm), so the words an
+		// earlier message left in the staging buffer are never followed.
 		match fill 'zeroFillOwnership'
 			unionConstruct then self.zeroFillUnusedPayloadSlots(box, layout: layout, firstUnused: payloads.count() as PayloadSlotIndex, range: range)
 			serviceMessage then break
 		end 'zeroFillOwnership'
 
-		return box
+		return (box, handBack)
 	end 'emitEnumBox'
 
 	function openPayloadRecord(layout EnumLayout, fill PayloadFill, range SourceRange) returns ValueId
@@ -72730,10 +73334,10 @@ export type Parser
 	// It REWRITES `args` in place, exactly as `transferConsumedArgs` rewrites a call's, and for the identical
 	// reason: a borrowed byte record is PROMOTED, so what crosses is a different record than what was parsed
 	// and the store below must carry the copy rather than the borrow.
-	function transferPayloadsIntoAGreenThread(fill PayloadFill, args ValueIdArray, payloads PayloadFieldArray, argAnchors TokenIndexArray, caseTok Token) throws SourceParseError
+	function transferPayloadsIntoAGreenThread(fill PayloadFill, args ValueIdArray, payloads PayloadFieldArray, argAnchors TokenIndexArray, caseTok Token) returns SharedSlotHandBackArray throws SourceParseError
 		match fill 'fill'
-			unionConstruct then return
-			serviceMessage(serviceTypeName) then try self.moveMessagePayloads(serviceTypeName, args: args, payloads: payloads, argAnchors: argAnchors, caseTok: caseTok)
+			unionConstruct then return SharedSlotHandBackArray.create()
+			serviceMessage(serviceTypeName) then return try self.moveMessagePayloads(serviceTypeName, args: args, payloads: payloads, argAnchors: argAnchors, caseTok: caseTok)
 		end 'fill'
 	end 'transferPayloadsIntoAGreenThread'
 
@@ -72750,7 +73354,7 @@ export type Parser
 	// refcounted: it is the two-party TEARDOWN RENDEZVOUS itself (`GtRuntime.GtOffTeardown`), whose whole
 	// design is that the sender and the service each hold it and each arrive at it exactly once. Handing it
 	// over IS the mechanism the rule exists to protect.
-	function moveMessagePayloads(serviceTypeName ByteArray, args ValueIdArray, payloads PayloadFieldArray, argAnchors TokenIndexArray, caseTok Token) throws SourceParseError
+	function moveMessagePayloads(serviceTypeName ByteArray, args ValueIdArray, payloads PayloadFieldArray, argAnchors TokenIndexArray, caseTok Token) returns SharedSlotHandBackArray throws SourceParseError
 		var authored = HandedOffArgumentArray.create()
 
 		for i in 0 upto payloads.count() 'eachAuthored'
@@ -72772,10 +73376,15 @@ export type Parser
 		end 'eachAuthored'
 
 		view plans = try self.handOffArguments(authored, args: args)
+		var handBack = SharedSlotHandBackArray.create()
+
+		for _ in 0 upto payloads.count() 'eachSlot'
+			handBack.push(SharedSlotHandBack.moved)
+		end 'eachSlot'
 
 		for plan in plans 'eachPlan'
 			match plan.take 'take'
-				sharedReadOnly then self.fileSharedSendSite(plan.argument, handler: qualifiedMethodName(serviceTypeName, methodName: caseTok.value), parameter: (try payloads.get(plan.argument.position) otherwise panic("moveMessagePayloads: payloads.get OOB at {plan.argument.position} — the plan came from this very list")).name)
+				sharedReadOnly then self.fileSharedSendSite(plan.argument, handler: qualifiedMethodName(serviceTypeName, methodName: caseTok.value), parameter: (try payloads.get(plan.argument.position) otherwise panic("moveMessagePayloads: payloads.get OOB at {plan.argument.position} — the plan came from this very list")).name, handBack: handBack)
 
 				copied or
 				cellOccupant or
@@ -72786,6 +73395,8 @@ export type Parser
 				anOpaqueReference then continue
 			end 'take'
 		end 'eachPlan'
+
+		return handBack
 	end 'moveMessagePayloads'
 
 	function valueHasACapability(value ValueId) returns bool
@@ -72833,7 +73444,45 @@ export type Parser
 		self.bodyState.deferredProvenance.noteMoveSite(site)
 	end 'noteHandedOffSite'
 
-	function fileSharedSendSite(argument HandedOffArgument, handler ByteArray, parameter ByteArray)
+	function sharedSlotHandBack(argument HandedOffArgument) returns SharedSlotHandBack
+		let valueType = self.typeOf(argument.value)
+
+		if self.typeCannotBeCloned(valueType) 'handedBackAsItIs'
+			return SharedSlotHandBack.moved
+		end 'handedBackAsItIs'
+
+		let clone = managedFieldCascadeStrategy(self.signatures, typeNames: self.artifact.typeNames, fieldType: valueType, asElement: false, action: CascadeAction.clone)
+		return SharedSlotHandBack.copied(clone, release: DropExistentialName if maxonTypeTag(valueType) == ValueTypeTag.interfaceRef else managedFieldDropCallee(self.signatures, typeNames: self.artifact.typeNames, fieldType: valueType))
+	end 'sharedSlotHandBack'
+
+	function typeCannotBeCloned(valueType MaxonType) returns bool
+		match managedFieldCascadeStrategy(self.signatures, typeNames: self.artifact.typeNames, fieldType: valueType, asElement: false, action: CascadeAction.clone) 'strategy'
+			unsupported then return true
+			direct or
+			managedElements or
+			throughWitness then break
+		end 'strategy'
+
+		let tag = maxonTypeTag(valueType)
+
+		if tag == ValueTypeTag.genericInstance 'anInstance'
+			return self.signatures.sourceCloneVerdictOfType(MaxonType.genericInstance(genericInstanceIdOf(valueType))) == SourceCloneVerdict.holdsAnUncloneable
+		end 'anInstance'
+
+		if not self.signatures.tagMayNameAggregate(tag) 'namesNoAggregate'
+			return false
+		end 'namesNoAggregate'
+
+		return not self.signatures.aggregateSupportsDeepClone(self.signatures.denotedAggregateName(self.internedName(typeNameIdOf(valueType))))
+	end 'typeCannotBeCloned'
+
+	function sendErrorSlotIsCoOwnedByType(layout EnumLayout, slotType MaxonType) returns bool
+		return self.signatures.isServiceSendError(layout.name) and self.typeCannotBeCloned(slotType)
+	end 'sendErrorSlotIsCoOwnedByType'
+
+	function fileSharedSendSite(argument HandedOffArgument, handler ByteArray, parameter ByteArray, handBack SharedSlotHandBackArray)
+		try handBack.set(argument.position, value: self.sharedSlotHandBack(argument)) otherwise panic("fileSharedSendSite: handBack.set OOB at {argument.position} — the column is sized to the variant's payload count and the position came from that list")
+
 		if self.bodyState.deferredProvenance is self.anchors.noDeferredProvenance 'noBody'
 			return
 		end 'noBody'
@@ -73497,6 +74146,10 @@ export type Parser
 		// `emitFieldLoad`'s reason: every `match` arm, every nesting depth and every scrutinee ownership
 		// mode funnels through this one line, and a per-door mark would be the enumeration that misses one.
 		self.markDeclaredSurface(result, declared: self.signatures.payloadSurfaceOf(field))
+
+		if maxonTypeTag(valueType) == ValueTypeTag.interfaceRef 'andItsWitnessHalf'
+			self.pairInterfaceWitness(result, witness: self.emitIndirectLoad(MaxonType.integer, box: box, offset: offset + InterfaceWitnessHalfOffset, storageType: MaxonType.integer, range: range))
+		end 'andItsWitnessHalf'
 
 		return result
 	end 'emitUnionPayloadLoad'
@@ -75775,14 +76428,14 @@ export type Parser
 	// `ServiceCompanions.serviceHandleSurface` is the same set enumerated for an editor.
 	//
 	// The request union is the roster: it holds one variant per message in declaration order, so "is this
-	// a message?" is `serviceMessageCaseIndex` and needs no second list to fall out of step with
+	// a message?" is `request.indexOfCase` and needs no second list to fall out of step with
 	// `messageMethodNames`.
 	//
 	// The variant test comes first, and that is what gives a declared `clone`/`shutdown` precedence. A
-	// service declaring `export function shutdown()` has a variant of that name, so the author's method
-	// wins and the compiler's pill becomes unspellable for it — which leaves dropping the last handle as
-	// the other road to the same drain. It is `cloneIsSynthesized`'s rule, reached by asking the roster
-	// rather than by asking `declaresCallee` a second time.
+	// service declaring `export function shutdown()` has a variant of that name, so the author's
+	// method wins and the compiler's `shutdown` becomes unspellable for it — which leaves dropping the
+	// last handle as the other road to the same close. It is `cloneIsSynthesized`'s rule, reached by
+	// asking the roster rather than by asking `declaresCallee` a second time.
 	//
 	// ⚠ `shutdown` is the handle's own method too, and that is not why its arm refuses a value. So is
 	// `clone`, whose whole point is the value it hands back. What separates them is that nothing declares
@@ -75791,13 +76444,13 @@ export type Parser
 		view typeName = self.signatures.serviceOfHandle(base.layout.name)
 		view request = try serviceRequestLayoutOf(self.signatures, typeName: typeName) otherwise panic("dispatchOnServiceHandle: nothing declares `union {String.from(serviceRequestCompanionName(typeName))}` — `ServiceCompanions.synthesizeServiceCompanions` mints it beside the handle, and this caller reached a handle")
 
-		if let caseIndex = try serviceMessageCaseIndex(request, member: memberTok.value) 'aMessage'
+		if let caseIndex = try request.indexOfCase(memberTok.value) 'aMessage'
 			return try self.emitServiceSend(func, base: base, baseTok: baseTok, memberTok: memberTok, typeName: typeName, request: request, caseIndex: caseIndex, route: MessageRoute.mailbox, resultUsed: resultUsed)
 		end 'aMessage'
 
-		if memberTok.value.equals(ServiceShutdownMethodName) 'thePoisonPill'
-			return try self.emitServiceShutdown(base, baseTok: baseTok, memberTok: memberTok, typeName: typeName, request: request, route: MessageRoute.mailbox, resultUsed: resultUsed)
-		end 'thePoisonPill'
+		if memberTok.value.equals(ServiceShutdownMethodName) 'theShutdownMethod'
+			return try self.emitServiceShutdown(base, baseTok: baseTok, memberTok: memberTok, typeName: typeName, resultUsed: resultUsed)
+		end 'theShutdownMethod'
 
 		if memberTok.value.equals(CloneMethodName) 'aSecondHandle'
 			return try self.emitServiceHandleClone(base, cloner: MboxHandleCloneBoxName, baseTok: baseTok, memberTok: memberTok)
@@ -75822,7 +76475,7 @@ export type Parser
 
 			// An implementer lacking the message does not conform, which `ConformanceCheck` reports (E3016)
 			// after parsing; a program this reaches may still be that one.
-			let serviceCase = try serviceMessageCaseIndex(serviceRequest, member: member) otherwise continue
+			let serviceCase = try serviceRequest.indexOfCase(member) otherwise continue
 
 			if payloadsAgree(request.payloadsAt(caseIndex), other: serviceRequest.payloadsAt(serviceCase)) and self.returnAnswersAreInterchangeable(representativeReturn, right: self.serviceMessageDeclOf(message).returnType) and throwsClausesAgree(representativeThrows, other: self.signatures.throwsOf(message)) 'answersAlike'
 				continue
@@ -75837,15 +76490,15 @@ export type Parser
 		view representative = self.signatures.interfaceHandleRepresentative(interfaceName)
 		view request = try serviceRequestLayoutOf(self.signatures, typeName: interfaceName) otherwise panic("dispatchOnInterfaceHandle: nothing declares `union {String.from(serviceRequestCompanionName(interfaceName))}` — `ServiceCompanions.synthesizeInterfaceRequestUnions` mints it beside every interface handle")
 
-		if let caseIndex = try serviceMessageCaseIndex(request, member: memberTok.value) 'aRequirement'
+		if let caseIndex = try request.indexOfCase(memberTok.value) 'aRequirement'
 			let (sender, _) = try interfaceMessageRepresentative(self.signatures, interfaceName: interfaceName, member: memberTok.value) otherwise panic("dispatchOnInterfaceHandle: `union {String.from(serviceRequestCompanionName(interfaceName))}` lists `{String.from(memberTok.value)}`, and `buildInterfaceRequestUnion` lists a requirement only when an implementer declares it as a message")
 			try self.requireImplementersAnswerAlike(interfaceName, representative: sender, request: request, caseIndex: caseIndex, memberTok: memberTok)
 			return try self.emitServiceSend(func, base: base, baseTok: baseTok, memberTok: memberTok, typeName: sender, request: request, caseIndex: caseIndex, route: MessageRoute.sendTable(caseIndex, interfaceName: interfaceName), resultUsed: resultUsed)
 		end 'aRequirement'
 
-		if memberTok.value.equals(ServiceShutdownMethodName) 'thePoisonPill'
-			return try self.emitServiceShutdown(base, baseTok: baseTok, memberTok: memberTok, typeName: representative, request: request, route: MessageRoute.sendTable(ServiceShutdownCaseIndex, interfaceName: interfaceName), resultUsed: resultUsed)
-		end 'thePoisonPill'
+		if memberTok.value.equals(ServiceShutdownMethodName) 'theShutdownMethod'
+			return try self.emitServiceShutdown(base, baseTok: baseTok, memberTok: memberTok, typeName: representative, resultUsed: resultUsed)
+		end 'theShutdownMethod'
 
 		if memberTok.value.equals(CloneMethodName) 'aSecondHandle'
 			return try self.emitServiceHandleClone(base, cloner: MboxInterfaceCloneBoxName, baseTok: baseTok, memberTok: memberTok)
@@ -75877,7 +76530,7 @@ export type Parser
 	// (`SlotMismatchVoice.containerElementArgument`).
 	function emitServiceSend(func IrFunction, base StructBase, baseTok Token, memberTok Token, typeName ByteArray, request EnumLayout, caseIndex CaseIndex, route MessageRoute, resultUsed bool) returns ValueId throws SourceParseError
 		let callee = qualifiedMethodName(typeName, methodName: memberTok.value)
-		try self.requireServiceSendResultUnused(resultUsed, request: request, caseIndex: caseIndex, typeName: typeName, memberTok: memberTok)
+		try self.requireServiceSendResultUnused(resultUsed, request: request, caseIndex: caseIndex, callee: callee, memberTok: memberTok)
 		let instance = self.serviceInstanceOfHandle(base.box, typeName: typeName)
 		try self.requireServiceReplyInstanceIsKnown(callee, typeName: typeName, instance: instance, memberTok: memberTok)
 
@@ -75923,8 +76576,10 @@ export type Parser
 		try self.requireEveryMessageArgumentGiven(callee, payloads: payloads, filled: filled, given: args.count() as ParamCount, memberTok: memberTok)
 
 		self.releaseHandOffBuildTemps(argumentTempFloor, ownedFloor: argumentOwnedFloor, handedOff: slotValues, anchor: memberTok)
-		let box = try self.emitEnumBox(request, caseIndex: caseIndex, args: slotValues, argsBareLocal: bareLocal, argAnchors: slotAnchors, caseTok: memberTok, range: range, fill: PayloadFill.serviceMessage(typeName))
-		return self.emitServiceSendOp(base, box: box, requestBytes: request.boxSizeBytes() as FullRangeInt, callee: callee, reply: reply, route: route, range: range, argsAreChecked: argsAreChecked)
+		let (box, handBack) = try self.emitEnumBox(request, caseIndex: caseIndex, args: slotValues, argsBareLocal: bareLocal, argAnchors: slotAnchors, caseTok: memberTok, range: range, fill: PayloadFill.serviceMessage(typeName))
+		let spelling = qualifiedMethodName(awaitedServiceOf(route, typeName: typeName), methodName: memberTok.value)
+		try self.requireSendSettled()
+		return self.emitServiceSendOp(base, box: box, request: request, caseIndex: caseIndex, handBack: handBack, callee: callee, spelling: spelling, reply: reply, route: route, range: range, argsAreChecked: argsAreChecked)
 	end 'emitServiceSend'
 
 	function widenMessageArgsToInterfaceHandles(payloads PayloadFieldArray, slotValues ValueIdArray, filled BoolArray, firstTok Token, lastTok Token)
@@ -76017,64 +76672,70 @@ export type Parser
 		end 'eachSlot'
 	end 'seedMessageSlots'
 
-	// ⭐ **THE SEND ITSELF — the mailbox out of the handle, and the op.** Written once because BOTH
-	// doors that put a request in a mailbox reach it: an author's message and the compiler's
-	// `__shutdown` pill. They differ in which variant they build and in nothing else, and a second
-	// copy of these three lines is a second chance to load the mailbox from the wrong offset.
-	//
 	// ⚠ The request sits in this thread's one staging buffer until the op copies it out, so nothing
 	// between `emitEnumBox`'s fill and the op may send: a nested send would overwrite it.
-	function emitServiceSendOp(base StructBase, box ValueId, requestBytes FullRangeInt, callee ByteArray, reply ServiceReplyValue, route MessageRoute, range SourceRange, argsAreChecked bool) returns ValueId
+	function emitServiceSendOp(base StructBase, box ValueId, request EnumLayout, caseIndex CaseIndex, handBack SharedSlotHandBackArray, callee ByteArray, spelling ByteArray, reply ServiceReplyValue, route MessageRoute, range SourceRange, argsAreChecked bool) returns ValueId
 		// A table send is a runtime call, not an `indirectCall`, so E3143 does not widen it to every
 		// address-taken function in the program; the stubs it reaches only retag and send.
-		let bytes = self.emitLiteral(requestBytes, valueType: MaxonType.integer, range: range)
+		let bytes = self.emitLiteral(request.boxSizeBytes() as FullRangeInt, valueType: MaxonType.integer, range: range)
+		let sent = self.mintValue(ValueTypeTag.void, nameId: UnnamedTypeId)
 
-		let sent = match route 'route'
-			mailbox gives self.emitMailboxSend(base, box: box, bytes: bytes, callee: callee, range: range)
-			sendTable(slot, _) gives self.emitRuntimeCall(MboxInterfaceSendName, args: quadArgs(base.box, second: self.emitLiteral(interfaceSendSlotOffset(slot), valueType: MaxonType.integer, range: range), third: box, fourth: bytes), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		let checkable = match route 'route'
+			mailbox gives self.emitMailboxSend(base, box: box, bytes: bytes, callee: callee, sent: sent, range: range)
+			sendTable(slot, _) gives self.emitInterfaceSend(base, slot: slot, box: box, bytes: bytes, range: range)
 		end 'route'
 
+		let opIdx = self.artifact.module.opCount() - 1
+		let message = SentMessage.create(callee, spelling: spelling, handle: base.box, staging: box, reply: reply, request: request, caseIndex: caseIndex, handBack: handBack)
+		self.lastSend = RecordedSend.recorded(opIdx, funcIndex: self.artifact.currentFuncIndex, send: message)
+
 		if argsAreChecked 'theQuantityDoorIsKept'
-			self.markCallChecked(sent)
+			self.markCallChecked(checkable)
 		end 'theQuantityDoorIsKept'
 
 		// ⭐ **THE VALUE OF AN AWAITABLE SEND IS ITS REPLY CELL, NOT THE SEND.** The `serviceSend` op
 		// still defines a void `sent` — it is a statement, and every op in this dialect names a result — but
 		// what the expression yields is the PROMISE the cell op minted one box earlier, which is what `await`
 		// and `try await` are then applied to.
-		return match reply 'r'
-			fireAndForget gives sent
-			cell(promise) gives promise
-		end 'r'
+		let value = message.resultValue(sent)
+		self.routeOrHoldSend(opIdx, range: range, result: value)
+		return value
 	end 'emitServiceSendOp'
 
-	function emitMailboxSend(base StructBase, box ValueId, bytes ValueId, callee ByteArray, range SourceRange) returns ValueId
+	function routeOrHoldSend(opIdx ElementIndex, range SourceRange, result ValueId)
+		let destination = self.unclaimedThrowRouteDestination()
+
+		if destination == ThrowRouteDestination.nowhere or self.bodyState.holdsSendForTryAwait 'nothingCatchesIt'
+			self.unsettledSend = UnsettledSend.pending(opIdx, range: range)
+			return
+		end 'nothingCatchesIt'
+
+		self.routeThrowingOp(destination, opIdx: opIdx, clause: recordedSendOf(self.lastSend, opIdx: opIdx).throwsClause(), result: result)
+	end 'routeOrHoldSend'
+
+	function emitMailboxSend(base StructBase, box ValueId, bytes ValueId, callee ByteArray, sent ValueId, range SourceRange) returns ValueId
 		let mailbox = self.emitFieldLoad(base.box, layout: base.layout, index: ServiceHandleMailboxFieldIndex, range: range)
-		let sent = self.mintValue(ValueTypeTag.void, nameId: UnnamedTypeId)
-		self.artifact.emitOp(self.bodyState.currentBlock, op: MaxonOp.serviceSend(sent, callee: callee, handle: mailbox, request: box, bytes: bytes), range: range)
+		let status = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
+		self.artifact.emitOp(self.bodyState.currentBlock, op: MaxonOp.serviceSend(sent, status: status, callee: callee, handle: mailbox, request: box, bytes: bytes), range: range)
 		return sent
 	end 'emitMailboxSend'
 
-	// ⭐ **`h.shutdown()` — THE COMPILER'S POISON PILL, ENQUEUED LIKE ANY OTHER MESSAGE.** Variant 0
-	// carries only its reply slot, so the request is filled through the same `emitEnumBox` an author's
-	// message goes through and the drain behind it is the loop's.
+	function emitInterfaceSend(base StructBase, slot CaseIndex, box ValueId, bytes ValueId, range SourceRange) returns ValueId
+		let slotOffset = self.emitLiteral(interfaceSendSlotOffset(slot), valueType: MaxonType.integer, range: range)
+		return self.emitRuntimeCall(MboxInterfaceSendName, args: quadArgs(base.box, second: slotOffset, third: box, fourth: bytes), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+	end 'emitInterfaceSend'
+
+	// ⭐ **`h.shutdown()` — CLOSE THE MAILBOX, AND THE LOOP DRAINS IT.** Everything already queued
+	// still runs and a later send fails with `serviceStopped`; nothing is enqueued, so it takes no
+	// slot and cannot fail.
 	//
-	// ⛔⛔ **THE PILL IS A STATEMENT, AND THE VALUE POSITION IS REFUSED — which is the OPPOSITE of what
-	// carrying a reply slot suggests, so read this before restoring it.** Variant 0 does carry one
-	// (`ServiceCompanions.buildServiceRequestUnion` gives it to every request union there will ever be) and
-	// the loop really does complete it, through `MboxOffShutdownReply` at `__mbox_service_exit`. What it has
-	// no DECLARATION for is what comes back: `shutdown` is the HANDLE's own method rather than a message of
-	// the type (`ProgramSignatures.serviceMessageOf` holds no entry for it), so nothing types its reply and no
-	// roster entry names it.
-	//
-	// ⛔ **THE GATE IS HERE, AT THE VALUE POSITION, AND NOT IN THE ROSTER.** An awaited reply cell's
-	// bookkeeping names the message it awaits, and `<T>.shutdown` is on no message roster; making the
-	// roster tolerant would give every reader of it a second answer for a name that is genuinely not
-	// on it.
+	// ⛔ **THE VALUE POSITION IS REFUSED.** `shutdown` is the HANDLE's own method rather than a message
+	// of the type (`ProgramSignatures.serviceMessageOf` holds no entry for it), so no declaration says
+	// what it hands back.
 	//
 	// ⚠ **IT REFUSES BEFORE IT EMITS**, `emitBinOp`'s ordering rule, which is why the gate precedes even the
 	// argument list's two tokens.
-	function emitServiceShutdown(base StructBase, baseTok Token, memberTok Token, typeName ByteArray, request EnumLayout, route MessageRoute, resultUsed bool) returns ValueId throws SourceParseError
+	function emitServiceShutdown(base StructBase, baseTok Token, memberTok Token, typeName ByteArray, resultUsed bool) returns ValueId throws SourceParseError
 		if resultUsed 'usedForItsValue'
 			throw SourceParseError.unsupported(serviceShutdownHasNoValueRefusal(typeName), line: memberTok.line, column: memberTok.column)
 		end 'usedForItsValue'
@@ -76084,22 +76745,7 @@ export type Parser
 		let rparenTok = try self.consume(TokenKind.rightParen)
 
 		let range = SourceRange.between(baseTok, last: rparenTok)
-
-		// ⭐ **THE PILL'S ONLY PAYLOAD IS THE REPLY SLOT, so the mint EVERY message's request takes fills
-		// the whole variant here and there is no argument to slot.** `buildServiceRequestUnion` gives
-		// variant 0 exactly one payload, `__reply`, and gives it to every request union there will ever
-		// be — so this is not a shape this door assumes, it is the shape that door builds.
-		let payloads = request.payloadsAt(ServiceShutdownCaseIndex)
-		var slotValues = ValueIdArray.create()
-		var filled = BoolArray.create()
-		var bareLocal = BoolArray.create()
-		var slotAnchors = TokenIndexArray.create()
-		self.seedMessageSlots(payloads, anchor: self.pos, slotValues: slotValues, filled: filled, bareLocal: bareLocal, slotAnchors: slotAnchors)
-		let callee = qualifiedMethodName(typeName, methodName: memberTok.value)
-		let reply = self.fillMessageReplySlot(payloads, callee: callee, awaitedService: awaitedServiceOf(route, typeName: typeName), instance: self.serviceInstanceOfHandle(base.box, typeName: typeName), slotValues: slotValues, filled: filled, range: range)
-
-		let box = try self.emitEnumBox(request, caseIndex: ServiceShutdownCaseIndex, args: slotValues, argsBareLocal: bareLocal, argAnchors: slotAnchors, caseTok: memberTok, range: range, fill: PayloadFill.serviceMessage(typeName))
-		return self.emitServiceSendOp(base, box: box, requestBytes: request.boxSizeBytes() as FullRangeInt, callee: callee, reply: reply, route: route, range: range, argsAreChecked: true)
+		return self.emitRuntimeCall(MboxCloseName, args: singletonArgs(self.emitFieldLoad(base.box, layout: base.layout, index: ServiceHandleMailboxFieldIndex, range: range)), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 	end 'emitServiceShutdown'
 
 	// ⭐ **`h.clone()` — A SECOND HANDLE TO THE SAME SERVICE, NEVER A SECOND SERVICE.** It cannot take
@@ -76117,17 +76763,17 @@ export type Parser
 		return self.emitOwnedRuntimeResult(cloner, args: singletonArgs(base.box), resultTag: self.tagOf(base.box), resultNameId: self.valueNameId(base.box), range: SourceRange.between(baseTok, last: memberTok))
 	end 'emitServiceHandleClone'
 
-	// ⭐ **A FIRE-AND-FORGET SEND DELIVERS NO REPLY, SO THERE IS NOTHING TO BIND.** A
+	// ⭐ **A SEND OF A MESSAGE WITH NO REPLY HAS NO VALUE, SO THERE IS NOTHING TO BIND.** A
 	// message that returns nothing and throws nothing carries no `__reply` slot, so no cell is minted and the
 	// send has no value — and the sentence names the DECLARATION that would give it one.
-	function requireServiceSendResultUnused(resultUsed bool, request EnumLayout, caseIndex CaseIndex, typeName ByteArray, memberTok Token) throws SourceParseError
+	function requireServiceSendResultUnused(resultUsed bool, request EnumLayout, caseIndex CaseIndex, callee ByteArray, memberTok Token) throws SourceParseError
 		if not resultUsed 'aStatement'
 			return
 		end 'aStatement'
 
 		match serviceReplySlotIndex(request.payloadsAt(caseIndex)) 'reply'
 			at then return
-			absent then throw SourceParseError.unsupported(serviceSendHasNoValueRefusal(typeName, member: memberTok.value), line: memberTok.line, column: memberTok.column)
+			absent then throw SourceParseError.unsupported(serviceSendHasNoValueRefusal(callee), line: memberTok.line, column: memberTok.column)
 		end 'reply'
 	end 'requireServiceSendResultUnused'
 
@@ -76169,10 +76815,11 @@ export type Parser
 	// destructor cascade must not follow — while the VALUE is a `Promise`, which is why `emitEnumBox` skips
 	// exactly this slot's argument-type check (`fieldIsTheServiceReplySlot`).
 	//
-	// ⚠ **AND IT IS ENROLLED AS AN OWNED PROMISE IN THE SAME BREATH**, exactly as `emitAsyncCall` enrols a
-	// spawn's: `markValuePromise` makes `await`/`try await`/E3100 see it, and `pendingTempDrops` makes an
-	// UNBOUND send (`h.say("a")` as a statement) drop it at statement end through `__gt_promise_drop` — the
-	// abandoned-cell road `services.reply-discarded-is-dropped-clean` pins.
+	// ⚠ **AND IT IS ENROLLED AS AN OWNED PROMISE IN THE SAME BREATH**, exactly as `emitAsyncCall`
+	// enrols a spawn's: `markValuePromise` makes `await`/`try await`/E3100 see it, and
+	// `pendingTempDrops` makes a DISCARDED reply (`_ = try h.say("a") otherwise …`) drop it at
+	// statement end through `__gt_promise_drop` — the abandoned-cell road
+	// `services.reply-discarded-is-dropped-clean` pins.
 	function fillMessageReplySlot(payloads PayloadFieldArray, callee ByteArray, awaitedService ByteArray, instance ServiceStateInstance, slotValues ValueIdArray, filled BoolArray, range SourceRange) returns ServiceReplyValue
 		match serviceReplySlotIndex(payloads) 'reply'
 			absent then return ServiceReplyValue.fireAndForget
@@ -76196,7 +76843,7 @@ export type Parser
 	// reply road would be a
 	// plain number and `return h.total()`, `p + 1`, `takesInt(h.total())` and `p.clone()` would all COMPILE. The
 	// instance comes from `SignatureIndex.internPromiseInstanceForReply`, interned in the index's own name
-	// space so it is the SAME gid a `typealias R = Promise with (Integer, Calc.divide.errors)` resolves to —
+	// space so it is the SAME gid a `typealias R = Promise with (Integer, MathError)` resolves to —
 	// which is what lets a reply be stored in the type that names it.
 	//
 	// ⚠ **`markValuePromise` STAYS, AND IT IS NOT REDUNDANT WITH THE TYPE.** The mark answers *"does THIS
@@ -86178,12 +86825,6 @@ export type Parser
 	// What `value` IS — the one thing a storage claim can be checked against. Anything that is neither an
 	// `async` spawn's handle nor a service reply is refused here rather than by the tag doors below, whose
 	// sentence would compare a `Promise with …` against an `int` and tell the author nothing about why.
-	//
-	// ⭐⭐ **EVERY SERVICE REPLY IS ADMITTED, BECAUSE THE STORAGE TYPE'S `ErrorType` ARGUMENT CAN SPELL ITS ERROR.**
-	// A message that throws NOTHING has a
-	// reply whose only error member is `ServiceError`; one that DOES throw has the fused pair, registered
-	// under `<message>.errors`. Either way the storage type names a declared enum, and the STORAGE road and
-	// the DIRECT road decode identically because `caughtErrorFormFor` classifies both off the same registry.
 	function promiseSourceStoredHere(func IrFunction, value ValueId, storage GenericInstanceId, anchor Token) returns AsyncCalleeLookup throws SourceParseError
 		if self.valueOwnsGreenThread(value) 'aSpawnOrAReply'
 			let source = self.asyncCallCalleeOf(func, promise: value)
@@ -86198,11 +86839,6 @@ export type Parser
 		throw SourceParseError.promiseStorageMismatch("only an `async` spawn or a service reply can be stored in '{String.from(self.signatures.instanceDisplayName(storage))}' — the value here is {self.valueDisplayTypeName(value)}", line: anchor.line, column: anchor.column)
 	end 'promiseSourceStoredHere'
 
-	// ⭐⭐ **WHERE THE TWO ROADS' FACTS COME FROM, AND THE ONLY PLACE THEY DIFFER.** An `async` spawn is
-	// described by its CALLEE's own signature; a service reply by the MESSAGE's return type plus
-	// `ServiceError`, which that signature does not mention and never will — which is exactly why
-	// `AsyncCalleeLookup` keeps them as two arms. Everything after this point is one comparison over a
-	// `(returns, throws)` pair, so the storage rule cannot come to mean two different things by road.
 	function requirePromiseStorageDescribesSource(source AsyncCalleeLookup, cell ValueId, storage GenericInstanceId, anchor Token) throws SourceParseError
 		match source 'road'
 			found(callee) then try self.requirePromiseStorageDescribesSpawn(callee, cell: cell, storage: storage, anchor: anchor)
@@ -86219,35 +86855,8 @@ export type Parser
 		try self.requirePromiseStorageDescribes(self.spawnPromiseReturnType(cell), throwsClause: self.signatures.throwsOf(callee), subject: PromiseStorageSubjectIsTheCallee, storage: storage, anchor: anchor)
 	end 'requirePromiseStorageDescribesSpawn'
 
-	// ⭐⭐ **EVERY REPLY MAY BE STORED.** A reply from 'X' throws 'X.errors', a declaration:
-	// `ServiceCompanions.synthesizeServiceCompanions`' third pass registers `<message>.errors` as a nominal
-	// enum, so the storage type spells it like any other error type and the awaiter decodes it through
-	// `caughtErrorFormFor`'s registry classification rather than as a single enum.
-	//
-	// ⭐ What is left is the ordinary comparison: the result is what the MESSAGE declares
-	// (`serviceReplyResultType`, the same door the await reads it through) and the error is
-	// `ProgramSignatures.serviceReplyErrorName`'s — never `throwsOf(<message>)`, which is the HANDLER's
-	// clause and says nothing about the transport a reply always carries. A storage type that names only the
-	// handler half is therefore an ordinary name mismatch at `requirePromiseStorageErrorMatches`.
 	function requirePromiseStorageDescribesReply(messageName ByteArray, cell ValueId, storage GenericInstanceId, anchor Token) throws SourceParseError
-		// The subject and the reply's error type are each spelled ONCE and read by both sentences below: two
-		// copies of *"a reply from 'X'"* is two places for one phrase to drift, and `serviceReplyErrorName` is
-		// the one home of *what a reply throws* either way.
-		let subject = "a reply from '{String.from(messageName)}'"
-		let replyThrows = String.from(self.signatures.serviceReplyErrorName(messageName))
-
-		// ⚠ **AND THE STORAGE MUST NAME AN ERROR TYPE AT ALL, REFUSED HERE RATHER THAN BY THE SHARED
-		// COMPARISON.** A reply ALWAYS carries `ServiceError` — the service can be gone, whatever the message
-		// declares — so `Promise with T` would erase it and leave a `try await` with nothing to bind `e` at.
-		// The shared `requirePromiseStorageErrorless` says the same thing in the SPAWN's vocabulary (*"a
-		// promise from a function that throws"*), which is a wrong noun here: `Slow.value` throws nothing,
-		// its REPLY does.
-		match promiseStorageThrows(self.signatures, gid: storage) 'storageNamesAnError'
-			throwing then break
-			none then throw SourceParseError.promiseStorageMismatch("{subject} always carries '{replyThrows}' — the service can be gone, whatever the message declares — so '{String.from(self.signatures.instanceDisplayName(storage))}' would erase it; declare the storage as 'Promise with (T, {replyThrows})' so 'try await' can bind it", line: anchor.line, column: anchor.column)
-		end 'storageNamesAnError'
-
-		try self.requirePromiseStorageDescribes(self.serviceReplyResultType(messageName, cell: cell), throwsClause: ThrowsClause.throwing(replyThrows), subject: subject, storage: storage, anchor: anchor)
+		try self.requirePromiseStorageDescribes(self.serviceReplyResultType(messageName, cell: cell), throwsClause: self.signatures.throwsOf(messageName), subject: "a reply from '{String.from(messageName)}'", storage: storage, anchor: anchor)
 	end 'requirePromiseStorageDescribesReply'
 
 	// The two comparisons `storedPromiseValue`'s header sets out, in the order an author most wants to hear
@@ -86317,9 +86926,8 @@ export type Parser
 	// and is GARBAGE for a non-throwing callee (`Runtime/AsyncReleaser.maxon`'s header), so a `try await`
 	// admitted on this claim would branch on that garbage and hand its `otherwise (e)` a fabricated error.
 	//
-	// ⚠ **A REPLY NEVER REACHES THAT ARM AND MUST NOT BE READ AS IF IT COULD.** Its clause is always
-	// `throwing` — a reply carries `ServiceError` whatever the message declares — and the word it decodes is
-	// written by `__gt_cell_complete`, deliberately, rather than left as the trampoline's garbage.
+	// ⚠ **A REPLY'S ERROR WORD IS WRITTEN BY `__gt_cell_complete` FOR EVERY MESSAGE**, so the non-throwing
+	// arm is the trampoline's garbage word only for a spawn.
 	function requirePromiseStorageErrorMatches(clause ThrowsClause, claimedError String, subject String, storageName String, anchor Token) throws SourceParseError
 		if not throwsClauseIsThrowing(clause) 'calleeThrowsNothing'
 			throw SourceParseError.promiseStorageMismatch("'{storageName}' names the error type '{claimedError}', but {subject} does not throw — store it in a 'Promise with T' instead", line: anchor.line, column: anchor.column)
@@ -97169,7 +97777,10 @@ export type Parser
 				// `parseValueExpression` (the climber plus a trailing ternary — `f(a if c else b)`), not
 				// `parseExpression`: an argument is parsed INSIDE an expression that has already seeded
 				// `currentBlock`, and re-seeding it would discard a short-circuit an EARLIER argument performed.
+				let holdsSend = self.bodyState.holdsSendForTryAwait
+				self.bodyState.holdsSendForTryAwait = false
 				let value = try self.parseValueExpression(func)
+				self.bodyState.holdsSendForTryAwait = holdsSend
 
 				// The read CLEARS the request when it takes it, so this is how the call site learns whether it was
 				// handed a cell. Cleared unconditionally either way: a request the read declined (the name was not
@@ -99975,7 +100586,7 @@ export type Parser
 		//
 		// ⚠ A reply cell is itself typed `Promise with (T, E)`, so it answers `typeIsPromiseStorage`
 		// below and would otherwise be described by its rendered instance name instead of by the message:
-		// E3057, E3059 and every reply diagnostic would name `Promise with (int, ServiceError)` rather
+		// E3057, E3059 and every reply diagnostic would name `Promise with (int, E)` rather
 		// than `Calc.divide`. Asked first it changes only the subject of the sentence, because the
 		// storage door proved the storage type describes the reply exactly.
 		match source 'reply'
@@ -100003,14 +100614,11 @@ export type Parser
 	end 'awaitedPromiseFacts'
 
 	// What `await <reply>` yields: the message's declared return type, repaired through the same swept
-	// walk `calleeReturnType` uses. A message nothing declares is the compiler's own `<T>.shutdown`
-	// pill, a legal send whose reply carries nothing, so it answers void — the one place the two
-	// differ, since `calleeReturnType`'s undeclared arm answers `unresolved` for a program E3004
-	// rejects.
+	// walk `calleeReturnType` uses.
 	function serviceReplyResultType(messageName ByteArray, cell ValueId) returns MaxonReturnType
 		return match self.signatures.returnTypeOf(messageName, into: self.artifact.typeNames) 'r'
 			declared(declaredReturn) gives self.fixedReplyResultType(declaredReturn, messageName: messageName, cell: cell)
-			undeclared gives MaxonReturnType.void
+			undeclared panic("serviceReplyResultType: `{String.from(messageName)}` declares no return type — a reply cell is minted for a declared message only")
 		end 'r'
 	end 'serviceReplyResultType'
 
@@ -100260,10 +100868,16 @@ export type Parser
 			named or
 			witness or
 			promise or
+			send or
 			deferred then return
-			serviceReply(_, awaitedService) then self.artifact.recordServiceAwaitSite(ServiceAwaitSite.create(awaitedService, line: awaitTok.line, column: awaitTok.column, declFilePath: self.filePath))
+			serviceReply(_, awaitedService) then self.fileServiceAwaitSite(awaitedService, awaitTok: awaitTok)
+			sentReply(_, awaitedService, _) then self.fileServiceAwaitSite(awaitedService, awaitTok: awaitTok)
 		end 'target'
 	end 'recordServiceReplyAwait'
+
+	function fileServiceAwaitSite(awaitedService ByteArray, awaitTok Token)
+		self.artifact.recordServiceAwaitSite(ServiceAwaitSite.create(awaitedService, line: awaitTok.line, column: awaitTok.column, declFilePath: self.filePath))
+	end 'fileServiceAwaitSite'
 
 	// Transfer ownership of every argument the callee takes. For a callee the sweep recorded ownership
 	// facts for, each source argument is slotted to its parameter position (the sweep's `paramNames`

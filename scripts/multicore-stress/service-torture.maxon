@@ -69,6 +69,8 @@ let sinkCount = 12
 // stated there, at the gate that reads these programs.
 let rounds = 4000
 
+let sinkCapacity = rounds * 2
+
 type Sink
 	var taken as Integer
 	var bytes as Integer
@@ -97,7 +99,7 @@ function main() returns ExitCode
 	var i = 0 as Integer
 
 	while i < sinkCount 'spawnEach'
-		sinks.push(spawn Sink.create())
+		sinks.push(spawn(capacity: sinkCapacity) Sink.create())
 		i = i + 1
 	end 'spawnEach'
 
@@ -121,8 +123,8 @@ function main() returns ExitCode
 			// The element is BORROWED — a send reads the mailbox out of the handle box
 			// and never takes the handle itself, so nothing here transfers a handle.
 			view sink = try sinks.get(k) otherwise panic("service-torture: sinks.get OOB at {k} — the loop is bounded by the count the pushes above filled")
-			sink.take(payload)
-			sink.tick(1)
+			try sink.take(payload) otherwise panic("service-torture: a sink's mailbox holds every message the run sends it")
+			try sink.tick(1) otherwise panic("service-torture: a sink's mailbox holds every message the run sends it")
 			k = k + 1
 		end 'eachSink'
 

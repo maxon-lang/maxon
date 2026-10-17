@@ -124,6 +124,17 @@ allocator the seed emits into it; the restore runs first, and `C1` builds `C2` f
 `git diff HEAD -R` of the tier file, regenerated after every edit to that file, and the freeze that pins a seed
 built from the tree makes it dead.
 
+⭐ **A SEND THE SEED READS BY ITS OLDER RULE IS THE NINTH CASE.** The tree's sends fail: a full mailbox answers
+`mailboxFull` and a stopped one `serviceStopped`, so every send site is a `try`, a reply-bearing message's promise
+names only its own error type, and `stdlib/Builtins.maxon` declares no `ServiceError`. The seed refuses `try` on a
+send (E2015) and expects `ServiceError` in the library. `0010-withdraw-the-failable-send-from-the-first-build.patch`
+writes the send sites back to the seed's form — the compiler's pools (`FrontEndPool`, `StdPassPool`,
+`BackendPool`), its log handler, the LSP writer and checker with their callers, and `stdlib/Log.maxon` and
+`stdlib/TraceCapture.maxon` — and declares `ServiceError` again. It touches no compiler logic: the parser,
+lowering and runtime that teach `C1` failable sends stay, so `C1` compiles the unshimmed tree into `C2`, and only
+`C1`'s own services and library send by the seed's rule. Like 0008 it is hand-written over the committed tree, and
+`scripts/freeze-seed.sh`, which pins a seed built from the tree, makes it dead.
+
 ⛔ **Delete a patch once the pinned seed accepts what it withdraws.** `scripts/freeze-seed.sh` makes that seed from the tree,
 so the patches a freeze makes dead are all of them: the directory holds none while the pin is current. A patch is dead
 from that moment — the plain build succeeds and nothing here is read — and a patch that no longer

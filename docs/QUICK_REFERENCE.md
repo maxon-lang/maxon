@@ -990,6 +990,8 @@ end 'each'
 ```
 
 - `async` starts a coroutine of the CURRENT green thread — not a new thread. It overlaps waiting, not execution; `spawn` starts a **service**, which is what creates an independently scheduled green thread (`specs/services.md`)
+- Every service send is a throwing call: `try h.m(x) otherwise …`, `try await h.m(x)` for a reply, `let p = try h.m(x)` to keep the reply as a promise. A send returns at once: the message is queued, or the send fails with `<Svc>.<msg>.sendError` — `mailboxFull(args)` or `serviceStopped(args)`, handing the arguments back. A message that returns or throws, sent as a statement, is **E3190**; `_ = try h.m(x)` discards its reply
+- `spawn(capacity: n) T.create()` sets the mailbox's capacity, a `MailboxCapacity` (`int(1 to 2^31)`); a bare `spawn` takes `DefaultMailboxCapacity` (1024). `h.shutdown()` lets the queued messages run, then stops the service; later sends fail `serviceStopped`
 - Green threads run on the four native lanes; `wasm32-wasi` has none at all and refuses `async` and `sleep` with **E3104**
 - Every wait PARKS: the waiter gives its machine back to the scheduler and whoever completes the wait readies it. A coroutine hands over at `await` points, `sleep` calls, `Scheduler.yield()` and I/O, never in between
 - A green thread that has held its processor for 10 ms is preempted at its next function entry and may resume on another OS thread

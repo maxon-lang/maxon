@@ -277,7 +277,7 @@ parks in `awaitAny()`; `specs/sched-preempt.md`'s
 forced, pinning the other order.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias ReplyPromise = Promise with (Integer, ServiceError)
+typealias ReplyPromise = Promise with Integer
 typealias ReplyPromiseArray = Array with ReplyPromise
 
 type Marker
@@ -297,13 +297,13 @@ function main() returns ExitCode
 	let b = spawn Marker.create(2)
 	let c = spawn Marker.create(3)
 	var replies = ReplyPromiseArray.create()
-	replies.push(a.rank())
-	replies.push(b.rank())
-	replies.push(c.rank())
+	replies.push(try a.rank() otherwise panic("an open mailbox with room takes the send"))
+	replies.push(try b.rank() otherwise panic("an open mailbox with room takes the send"))
+	replies.push(try c.rank() otherwise panic("an open mailbox with room takes the send"))
 	let first = replies.awaitAny()
 	var sum = 0 as Integer
 	for p in replies 'drainthemall'
-		sum = sum + (try await p otherwise 0)
+		sum = sum + (await p)
 	end 'drainthemall'
 	print("first={first} sum={sum}\n")
 	return 0
@@ -346,7 +346,7 @@ type Ping
 		self.seen = self.seen + 1
 
 		if n > 0 'bounce'
-			pong.hit(me.clone(), pong: pong.clone(), n: n - 1)
+			try pong.hit(me.clone(), pong: pong.clone(), n: n - 1) otherwise panic("a bounce finds room in the peer's mailbox")
 		end 'bounce'
 
 		if n == 0 'last'
@@ -366,7 +366,7 @@ type Pong
 		self.seen = self.seen + 1
 
 		if n > 0 'bounce'
-			ping.hit(pong.clone(), me: ping.clone(), n: n - 1)
+			try ping.hit(pong.clone(), me: ping.clone(), n: n - 1) otherwise panic("a bounce finds room in the peer's mailbox")
 		end 'bounce'
 	end 'hit'
 end 'Pong'
@@ -389,9 +389,9 @@ function main() returns ExitCode
 	let idle = spawn Bystander.create()
 	let pong = spawn Pong.create()
 
-	ping.hit(pong.clone(), me: ping.clone(), n: totalBounces)
+	try ping.hit(pong.clone(), me: ping.clone(), n: totalBounces) otherwise panic("an open mailbox with room takes the send")
 
-	idle.poke()
+	try idle.poke() otherwise panic("an open mailbox with room takes the send")
 
 	return 42
 end 'main'
@@ -845,9 +845,9 @@ function main() returns ExitCode
 	var total = 0 as Integer
 
 	for r in 0 upto rounds 'eachRound'
-		let reply = hub.round(r)
-		hub.poke()
-		total = total + (try await reply otherwise 0)
+		let reply = try hub.round(r) otherwise panic("an open mailbox with room takes the send")
+		try hub.poke() otherwise panic("an open mailbox with room takes the send")
+		total = total + (await reply)
 	end 'eachRound'
 
 	let pokes = try await hub.pokeCount() otherwise 0
@@ -921,9 +921,9 @@ function main() returns ExitCode
 	var total = 0 as Integer
 
 	for r in 0 upto rounds 'eachRound'
-		let reply = hub.round(r)
-		hub.poke()
-		total = total + (try await reply otherwise 0)
+		let reply = try hub.round(r) otherwise panic("an open mailbox with room takes the send")
+		try hub.poke() otherwise panic("an open mailbox with room takes the send")
+		total = total + (await reply)
 	end 'eachRound'
 
 	let pokes = try await hub.pokeCount() otherwise 0
@@ -1006,7 +1006,7 @@ function main() returns ExitCode
 	var k = 0 as Integer
 	while k < 300 'sendEach'
 		view sink = try sinks.get(k as ElementIndex) otherwise panic("sinks.get OOB at {k} — the loop is bounded by the count the pushes above filled")
-		sink.bump()
+		try sink.bump() otherwise panic("an open mailbox with room takes the send")
 		k = k + 1
 	end 'sendEach'
 
@@ -1090,7 +1090,7 @@ function main() returns ExitCode
 	var sum = 0 as Integer
 	var i = 0 as Integer
 	while i < 6000 'rounds'
-		h.tick()
+		try h.tick() otherwise panic("an open mailbox with room takes the send")
 		// Queued behind the tick, so this IS the settle: the service is drained and re-published once more
 		// per round, which is what drives both monotonic counters far past 256 slots.
 		sum = try await h.total() otherwise 0
@@ -1143,7 +1143,7 @@ native lanes, with and without a preemption during the spawn loop.
 
 ⛔⛔ **THE SEQUENCE IS A SERVICE'S MAILBOX AND NOT A MODULE-LEVEL `var`, WHICH `green-thread-globals.md`
 REFUSES.** This case's subject is an ORDER ACROSS SERVICES, so its tally cannot live in any one leaf's
-`self`. It lives in a 301st service: each leaf sends `note(id, slice)` fire-and-forget as it runs, and a
+`self`. It lives in a 301st service: each leaf sends `note(id, slice)` without awaiting a reply as it runs, and a
 mailbox is FIFO, so the order the notes are enqueued is the order the leaves ran, with no word two green
 threads both step.
 
@@ -1198,7 +1198,7 @@ type Leaf
 	end 'create'
 
 	export function go(sink Tally.handle)
-		sink.note(self.id, slice: Scheduler.counters().slices as Integer)
+		try sink.note(self.id, slice: Scheduler.counters().slices as Integer) otherwise panic("the collector's mailbox holds every leaf's note")
 	end 'go'
 end 'Leaf'
 
@@ -1222,7 +1222,7 @@ function main() returns ExitCode
 	while k < leafCount 'sendEach'
 		view leaf = try leaves.get(k as ElementIndex) otherwise panic("leaves.get OOB at {k} — the loop is bounded by the count the pushes above filled")
 		// A temporary argument moves, so each leaf gets its own reference to the collector.
-		leaf.go(tally.clone())
+		try leaf.go(tally.clone()) otherwise panic("an open mailbox with room takes the send")
 		k = k + 1
 	end 'sendEach'
 
@@ -1329,7 +1329,7 @@ type Spawnee
 	end 'create'
 
 	export function go(sink Tally.handle)
-		sink.note(spawneeId)
+		try sink.note(spawneeId) otherwise panic("the collector's mailbox holds every note")
 	end 'go'
 end 'Spawnee'
 
@@ -1343,7 +1343,7 @@ type Spawner
 	export function go(sink Tally.handle)
 		let child = spawn Spawnee.create()
 		// A parameter cannot be moved by a send, so the child gets its own reference.
-		child.go(sink.clone())
+		try child.go(sink.clone()) otherwise panic("an open mailbox with room takes the send")
 	end 'go'
 end 'Spawner'
 
@@ -1356,7 +1356,7 @@ type Yielder
 
 	export function go(sink Tally.handle)
 		Scheduler.yield()
-		sink.note(yielderId)
+		try sink.note(yielderId) otherwise panic("the collector's mailbox holds every note")
 	end 'go'
 end 'Yielder'
 
@@ -1364,8 +1364,8 @@ function main() returns ExitCode
 	let y = spawn Yielder.create()
 	let s = spawn Spawner.create()
 	let tally = spawn Tally.create()
-	y.go(tally.clone())
-	s.go(tally.clone())
+	try y.go(tally.clone()) otherwise panic("an open mailbox with room takes the send")
+	try s.go(tally.clone()) otherwise panic("an open mailbox with room takes the send")
 
 	var order = 0 as Integer
 	var spins = 0 as Integer
@@ -1451,7 +1451,7 @@ function main() returns ExitCode
 		var k = 0 as Integer
 		while k < 12 'eachWorker'
 			view worker = try workers.get(k as ElementIndex) otherwise panic("workers.get OOB at {k} — the loop is bounded by the count the pushes above filled")
-			worker.go()
+			try worker.go() otherwise panic("an open mailbox with room takes the send")
 			k = k + 1
 		end 'eachWorker'
 		r = r + 1

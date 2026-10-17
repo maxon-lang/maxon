@@ -53,8 +53,8 @@ end 'Plot'
 
 function main() returns ExitCode
 	let h = spawn Plot.create()
-	h.at(Point.create(1, y: 2))
-	h.at(Point.create(3, y: 4))
+	try h.at(Point.create(1, y: 2)) otherwise panic("a fresh plot refused a message")
+	try h.at(Point.create(3, y: 4)) otherwise panic("a fresh plot refused a message")
 	return 0
 end 'main'
 ```

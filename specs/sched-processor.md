@@ -309,7 +309,7 @@ as busy.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias ShareHandleArray = Array with Share.handle
-typealias ReplyPromise = Promise with (Integer, ServiceError)
+typealias ReplyPromise = Promise with Integer
 typealias ReplyPromiseArray = Array with ReplyPromise
 
 let shares = 4
@@ -344,14 +344,14 @@ function main() returns ExitCode
 	var k = 0 as Integer
 	while k < shares 'sendEach'
 		view h = try hs.get(k as ElementIndex) otherwise panic("hs.get OOB at {k} — bounded by the pushes above")
-		replies.push(h.work(200000))
+		replies.push(try h.work(200000) otherwise panic("an open mailbox with room takes the send"))
 		k = k + 1
 	end 'sendEach'
 	var total = 0 as Integer
 	var n = 0 as Integer
 	while n < shares 'collect'
 		let p = try replies.get(n as ElementIndex) otherwise panic("replies.get OOB at {n} — bounded by the pushes above")
-		total = total + (try await p otherwise 0)
+		total = total + (await p)
 		n = n + 1
 	end 'collect'
 	let everyButMain = (Scheduler.processorCount() as Integer) - 1

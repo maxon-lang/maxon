@@ -375,20 +375,20 @@ type Setter
 	end 'apply'
 end 'Setter'
 
-typealias ApplyReplyArray = Array with Promise with (Integer, ServiceError)
+typealias ApplyReplyArray = Array with Promise with Integer
 
 function main() returns ExitCode
 	var replies = ApplyReplyArray.create()
 
 	for i in 0 upto 8 'spawnEach'
 		let setter = spawn Setter.create("g{i}", quiet: i mod 2 == 1)
-		replies.push(setter.apply())
+		replies.push(try setter.apply() otherwise panic("send apply"))
 	end 'spawnEach'
 
 	var applied = 0 as Integer
 
 	for r in replies 'awaitEach'
-		applied = applied + (try await r otherwise 0)
+		applied = applied + (await r)
 	end 'awaitEach'
 
 	for i in 0 upto 8 'reportEach'

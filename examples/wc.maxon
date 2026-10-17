@@ -6,7 +6,7 @@ typealias FlagArray = Array with Flag
 typealias Column = function(Counts) returns Tally
 typealias ColumnArray = Array with Column
 typealias CounterArray = Array with Counter.handle
-typealias CountPromise = Promise with (FileCount, ServiceError)
+typealias CountPromise = Promise with (FileCount)
 typealias CountPromiseArray = Array with CountPromise
 
 let programPathArgument = 0
@@ -198,6 +198,24 @@ function workersFor(files PathArray) returns WorkerCount
 	return mostWorkers if wanted > mostWorkers else wanted as WorkerCount
 end 'workersFor'
 
+function submitCount(replies CountPromiseArray, counter Counter.handle, path FilePath)
+	var pending = path.clone()
+
+	while true 'untilItLands'
+		replies.push(try counter.count(pending) otherwise (e) 'refused'
+			match e 'why'
+				mailboxFull(back) then pending = back
+				serviceStopped then panic("submitCount: a counter stopped before the files were sent")
+			end 'why'
+
+			Scheduler.yield()
+			continue
+		end 'refused')
+
+		break
+	end 'untilItLands'
+end 'submitCount'
+
 function countFiles(paths PathArray, report Report)
 	let workerCount = workersFor(paths)
 	var counters = CounterArray.create()
@@ -211,13 +229,13 @@ function countFiles(paths PathArray, report Report)
 
 	for path in paths 'sendFiles'
 		var counter = try counters.get(nextWorker) otherwise panic("countFiles: nextWorker stays below the worker count")
-		replies.push(counter.count(path.clone()))
+		submitCount(replies, counter: counter, path: path)
 		nextWorker = (nextWorker + 1) mod workerCount
 	end 'sendFiles'
 
 	for (file, reply) in replies.withIterator() 'receiveCounts'
 		let path = try paths.get(file.index()) otherwise panic("countFiles: one reply per file")
-		report.record(try await reply otherwise FileCount.unreadable, label: "{path}")
+		report.record(await reply, label: "{path}")
 	end 'receiveCounts'
 
 	for counter in counters 'shutDown'

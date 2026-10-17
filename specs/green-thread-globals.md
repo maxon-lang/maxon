@@ -111,7 +111,7 @@ end 'Counter'
 
 function main() returns ExitCode
 	let h = spawn Counter.create()
-	h.add(5)
+	try h.add(5) otherwise panic("add")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -147,7 +147,7 @@ end 'Counter'
 
 function main() returns ExitCode
 	let h = spawn Counter.create()
-	h.add(5)
+	try h.add(5) otherwise panic("add")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -212,7 +212,7 @@ records the stores freed. A READ is refused like a write.
 wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
 typealias ReaderHandleArray = Array with Reader.handle
-typealias IntPromise = Promise with (Integer, ServiceError)
+typealias IntPromise = Promise with Integer
 typealias IntPromiseArray = Array with IntPromise
 
 var label = "alpha"
@@ -250,7 +250,7 @@ function main() returns ExitCode
 	var k = 0 as Count
 	while k < 12 'send'
 		view h = try hs.get(k) otherwise panic("get")
-		ps.push(h.size())
+		ps.push(try h.size() otherwise panic("size"))
 		k = k + 1
 	end 'send'
 
@@ -265,7 +265,7 @@ function main() returns ExitCode
 	var a = 0 as Count
 	while a < 12 'collect'
 		let p = try ps.get(a) otherwise panic("get p")
-		let v = try await p otherwise 0
+		let v = await p
 		if v != 0 'sawOdd'
 			worst = v
 		end 'sawOdd'
@@ -360,8 +360,8 @@ end 'Counter'
 
 function main() returns ExitCode
 	let h = spawn Counter.create()
-	h.add(3)
-	h.add(4)
+	try h.add(3) otherwise panic("add 3")
+	try h.add(4) otherwise panic("add 4")
 	let n = try await h.total() otherwise 0
 	print("count={n}\n")
 	return n as ExitCode
@@ -412,7 +412,7 @@ function main() returns ExitCode
 	var n = 40 as Integer
 
 	while n > 0 'fill'
-		h.add(n)
+		try h.add(n) otherwise panic("add")
 		n = n - 1
 	end 'fill'
 
@@ -514,13 +514,13 @@ function main() returns ExitCode
 
 	for _ in 0 upto ChurnerCount 'eachChurner'
 		let h = spawn Churner.create()
-		replies.push(h.churn(RoundsPerChurner))
+		replies.push(try h.churn(RoundsPerChurner) otherwise panic("churn"))
 	end 'eachChurner'
 
 	var held = 0 as Integer
 
 	for r in replies 'eachReply'
-		held = held + (try await r otherwise 0)
+		held = held + (await r)
 	end 'eachReply'
 
 	print("held={held} names={roster.names.count()}\n")
@@ -533,7 +533,7 @@ let RoundsPerChurner = 200000
 typealias Integer = int(i64.min to i64.max)
 typealias NameArray = Array with String
 typealias HeldNamesArray = Array with readonly NameArray
-typealias ChurnReplyArray = Array with Promise with (Integer, ServiceError)
+typealias ChurnReplyArray = Array with Promise with Integer
 ```
 ```stdout
 held=1600000 names=4
@@ -732,7 +732,7 @@ type Box
 
 	static function start() returns Self
 		let h = spawn Reader.create()
-		_ = h.read()
+		_ = try h.read() otherwise panic("read")
 		return Self{h: h}
 	end 'start'
 end 'Box'
@@ -782,7 +782,7 @@ end 'Counter'
 function main() returns ExitCode
 	let h = spawn Counter.create()
 	bookKeeping(10)
-	h.add(5)
+	try h.add(5) otherwise panic("add")
 	let n = try await h.total() otherwise 0
 	bookKeeping(n)
 	print("ledger={ledger} count={n}\n")
@@ -828,7 +828,7 @@ end 'Counter'
 function main() returns ExitCode
 	let h = spawn Counter.create()
 	bookKeeping(10)
-	h.add(5)
+	try h.add(5) otherwise panic("add")
 	let n = try await h.total() otherwise 0
 	bookKeeping(n)
 	print("ledger={ledger} count={n}\n")
@@ -1055,9 +1055,9 @@ end 'Printer'
 
 function main() returns ExitCode
 	let printer = spawn Printer.create()
-	printer.show(1)
-	printer.show(2)
-	printer.show(3)
+	try printer.show(1) otherwise panic("show 1")
+	try printer.show(2) otherwise panic("show 2")
+	try printer.show(3) otherwise panic("show 3")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -1101,9 +1101,9 @@ end 'Printer'
 
 function main() returns ExitCode
 	let printer = spawn Printer.create()
-	printer.show(1)
-	printer.show(2)
-	printer.show(3)
+	try printer.show(1) otherwise panic("show 1")
+	try printer.show(2) otherwise panic("show 2")
+	try printer.show(3) otherwise panic("show 3")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -1226,7 +1226,7 @@ end 'Counter'
 
 function main() returns ExitCode
 	let h = spawn Counter.create()
-	h.add(5)
+	try h.add(5) otherwise panic("add")
 	return Counter.created as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)

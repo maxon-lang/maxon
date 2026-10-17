@@ -2546,7 +2546,7 @@ end 'Sink'
 
 function main() returns ExitCode
 	let h = spawn Sink.create()
-	h.put(top(1))
+	try h.put(top(1)) otherwise panic("an open mailbox with room takes the send")
 	let got = try await h.get() otherwise 0
 	print("{got}\n")
 	return 0
@@ -2580,14 +2580,14 @@ function main() returns ExitCode
 	let h = spawn Sink.create()
 
 	for i in 0 upto 2 'each'
-		h.put(i - 1)
+		try h.put(i - 1) otherwise panic("an open mailbox with room takes the send")
 	end 'each'
 
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:18:5: Value -1 is outside the range of 'Count' (int(0 to 18446744073709551615))
+error E3005: <fragment>:18:9: Value -1 is outside the range of 'Count' (int(0 to 18446744073709551615))
 ```
 
 <!-- test: a-large-count-through-a-generic-instances-function-field -->
@@ -2703,7 +2703,7 @@ end 'Sink'
 
 function main() returns ExitCode
 	let h = spawn Sink.create()
-	h.put(CommandLine.args().count() - 2)
+	try h.put(CommandLine.args().count() - 2) otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
 ```

@@ -1,4 +1,4 @@
-typealias IncrementedPromise = Promise with (Count, ServiceError)
+typealias IncrementedPromise = Promise with (Count)
 typealias IncrementedPromiseArray = Array with IncrementedPromise
 
 let incrementerCount = 64
@@ -21,6 +21,44 @@ type Counter
 	end 'read'
 end 'Counter'
 
+function deliverIncrement(counter Counter.handle)
+	var landed = false
+
+	while not landed 'untilItLands'
+		try counter.inc() otherwise (e) 'refused'
+			match e 'why'
+				mailboxFull then Scheduler.yield()
+				serviceStopped then panic("shared-counter: the counter stopped while an incrementer was sending")
+			end 'why'
+
+			continue
+		end 'refused'
+
+		landed = true
+	end 'untilItLands'
+end 'deliverIncrement'
+
+function readCount(counter Counter.handle) returns Count
+	var total = 0 as Count
+	var done = false
+
+	while not done 'untilItLands'
+		let current = try await counter.read() otherwise (e) 'refused'
+			match e 'why'
+				mailboxFull then Scheduler.yield()
+				serviceStopped then panic("shared-counter: the counter stopped before the final read")
+			end 'why'
+
+			continue
+		end 'refused'
+
+		total = current
+		done = true
+	end 'untilItLands'
+
+	return total
+end 'readCount'
+
 type Incrementer
 	var counter as Counter.handle
 
@@ -30,7 +68,7 @@ type Incrementer
 
 	export function increment(perIncrementer Count) returns Count
 		for _ in 0 upto perIncrementer 'eachIncrement'
-			self.counter.inc()
+			deliverIncrement(self.counter)
 		end 'eachIncrement'
 
 		return perIncrementer
@@ -48,16 +86,15 @@ function main() returns ExitCode
 
 	for _ in 0 upto incrementerCount 'spawnIncrementers'
 		let incrementer = spawn Incrementer.create(counter.clone())
-		finished.push(incrementer.increment(perIncrementer))
+		finished.push(try incrementer.increment(perIncrementer) otherwise panic("shared-counter: a fresh incrementer refused its only message"))
 	end 'spawnIncrementers'
 
 	// An incrementer replies only after its last `inc()`, and the counter's mailbox is FIFO, so once
 	// every reply is in, every increment is queued ahead of the read below.
 	for completion in finished 'awaitIncrementers'
-		_ = try await completion otherwise panic("shared-counter: an incrementer stopped before it finished")
+		_ = await completion
 	end 'awaitIncrementers'
 
-	let count = try await counter.read() otherwise panic("shared-counter: the counter stopped before it answered")
-	print("shared-counter {count}\n")
+	print("shared-counter {readCount(counter)}\n")
 	return 0
 end 'main'

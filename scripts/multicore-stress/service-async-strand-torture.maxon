@@ -27,7 +27,7 @@
 
 typealias Integer = int(i64.min to i64.max)
 typealias WorkerHandleArray = Array with Worker.handle
-typealias ReplyPromise = Promise with (Integer, ServiceError)
+typealias ReplyPromise = Promise with (Integer)
 typealias ReplyPromiseArray = Array with ReplyPromise
 typealias WorkPromise = Promise with Integer
 typealias WorkPromiseArray = Array with WorkPromise
@@ -107,9 +107,9 @@ function batch(joined bool, base Integer) returns Integer
 		view h = try hs.get(j as ElementIndex) otherwise panic("hs.get OOB at {j} — bounded by the pushes above")
 
 		if joined 'control'
-			replies.push(h.joinIt(base + j))
+			replies.push(try h.joinIt(base + j) otherwise panic("service-async-strand-torture: a fresh worker refused its only message"))
 		end 'control' else 'subject'
-			replies.push(h.fire(base + j))
+			replies.push(try h.fire(base + j) otherwise panic("service-async-strand-torture: a fresh worker refused its only message"))
 		end 'subject'
 
 		j = j + 1
@@ -120,7 +120,7 @@ function batch(joined bool, base Integer) returns Integer
 
 	while n < BatchSize 'collect'
 		let p = try replies.get(n as ElementIndex) otherwise panic("replies.get OOB at {n} — bounded by the pushes above")
-		sum = sum + (try await p otherwise 0)
+		sum = sum + (await p)
 		n = n + 1
 	end 'collect'
 

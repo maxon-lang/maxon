@@ -2367,7 +2367,7 @@ end 'Spawner'
 
 function main() returns ExitCode
 	let spawner = spawn Spawner.create()
-	spawner.burst()
+	try spawner.burst() otherwise panic("an open mailbox with room takes the send")
 
 	var argv = StringArray.create()
 	argv.push("/c")

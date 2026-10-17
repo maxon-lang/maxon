@@ -5809,23 +5809,17 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(gt, offset: GtOffReleaser as ByteOffset, valueId: releaserPtr, valueType: StdType.i64))
 	end 'emitAsyncReleaserStore'
 
-	// ⭐⭐ **`spawn <T>.<factory>(…)` → `__svc_spawn(&<T>.__loop, state, &<T>.request's drop)`.**
-	// The op carries the TYPE and the state; the two ADDRESSES are derived here, from that one name, because
-	// deriving them at the parse would put the loop's symbol in a second place and the abandon callee in a
-	// third — and a `funcAddr` naming a symbol nothing built is a link failure with no line on it.
+	// ⭐⭐ **`spawn <T>.<factory>(…)` → `__svc_spawn(&<T>.__loop, state, slotBytes, capacity)`.**
+	// The op carries the TYPE and the state; the loop's address is derived here, from that one
+	// name, because deriving it at the parse would put the loop's symbol in a second place — and a
+	// `funcAddr` naming a symbol nothing built is a link failure with no line on it.
 	//
-	// ⭐⭐ **THE ABANDON CALLEE IS `<T>.__abandon`, AND THE REQUEST UNION'S BARE TAG-CONDITIONAL
-	// `__destruct_<U>` CASCADE CANNOT STAND IN FOR IT.** `specs/services.md` reserves such a function because
-	// a dead message owes more than its payloads: it owes its AWAITER an answer, and leaving one parked for a
-	// reply that will never come is a hang with no diagnostic. `Project.serviceAbandonSymbol` states the
-	// obligation, and `<T>.__abandon`'s own body still ends in that very cascade.
-	//
-	// ⚠ Both symbols are ROOTED by these two `funcAddr`s, which `DeadFunctionElimination` treats as static
-	// edges (`funcAddrCalleeEdge`). The loop is additionally reachable from
-	// nothing else at all, which is what keeps a service-free program's output byte-identical.
+	// ⚠ The loop is ROOTED by this `funcAddr`, which `DeadFunctionElimination` treats as a static
+	// edge (`funcAddrCalleeEdge`). It is reachable from nothing else at all, which is what keeps a
+	// service-free program's output byte-identical.
 	function lowerServiceSpawn(hlOp MaxonOp, dstBlock IrBlock)
 		match hlOp 's'
-			serviceSpawn(result, typeName, state) then self.emitServiceSpawn(result, typeName: typeName, state: state, dstBlock: dstBlock)
+			serviceSpawn(result, typeName, state, capacity) then self.emitServiceSpawn(result, typeName: typeName, state: state, capacity: capacity, dstBlock: dstBlock)
 			default panic("lowerServiceSpawn: expected a `serviceSpawn` op, got a different MaxonOp variant — `lowerOp` routes only `serviceSpawn` here")
 		end 's'
 	end 'lowerServiceSpawn'
@@ -5837,14 +5831,12 @@ type MaxonToStdLowering
 		return serviceStateInstanceOfValueType(self.valueTagOf(state), nameId: try self.valueNameIds.get(state) otherwise panic("spawnedStateInstance: v{state} is not in '{String.from(self.currentFuncName())}'s dense value-name column"))
 	end 'spawnedStateInstance'
 
-	function emitServiceSpawn(result ValueId, typeName ByteArray, state ValueId, dstBlock IrBlock)
+	function emitServiceSpawn(result ValueId, typeName ByteArray, state ValueId, capacity ValueId, dstBlock IrBlock)
 		let loopPtr = self.mintStdValueId()
 		self.stdModule.appendOp(dstBlock, op: StdOp.funcAddr(loopPtr, funcName: serviceLoopSymbolFor(self.signatures, typeName: typeName, instance: self.spawnedStateInstance(state))))
-		let abandonPtr = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.funcAddr(abandonPtr, funcName: serviceAbandonSymbol(typeName)))
 		let slotBytes = self.mintStdValueId()
 		self.stdModule.appendOp(dstBlock, op: StdOp.const(slotBytes, value: requireServiceRequestLayout(self.signatures, typeName: typeName).boxSizeBytes() as FullRangeInt, valueType: StdType.i64))
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: SvcSpawnName, args: fourArgs(loopPtr, second: state, third: abandonPtr, fourth: slotBytes)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: SvcSpawnName, args: fourArgs(loopPtr, second: state, third: slotBytes, fourth: capacity)))
 	end 'emitServiceSpawn'
 
 	// ⭐ **`h.m(…)` → `__mbox_send(mailbox, request, bytes)`.** Everything else about a send happened
@@ -5854,7 +5846,7 @@ type MaxonToStdLowering
 	// a lowering question, so nothing here reads it.
 	function lowerServiceSend(hlOp MaxonOp, dstBlock IrBlock)
 		match hlOp 's'
-			serviceSend(result, _, handle, request, bytes) then self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: MboxSendName, args: threeArgs(handle, second: request, third: bytes)))
+			serviceSend(_, status, _, handle, request, bytes) then self.stdModule.appendOp(dstBlock, op: StdOp.call(status, callee: MboxSendName, args: threeArgs(handle, second: request, third: bytes)))
 			default panic("lowerServiceSend: expected a `serviceSend` op, got a different MaxonOp variant — `lowerOp` routes only `serviceSend` here")
 		end 's'
 	end 'lowerServiceSend'
@@ -5891,7 +5883,8 @@ type MaxonToStdLowering
 	// yielding the awaited scalar in R8.
 	function lowerAwait(result ValueId, promise ValueId, dstBlock IrBlock)
 		if self.valueTagOf(result) == ValueTypeTag.interfaceRef 'aFatPointer'
-			panic("lowerAwait: a plain `await` yields a value held at an interface type — only a service reply does, and a reply throws `ServiceError`, so it is `try await`ed (E3057)")
+			self.lowerTryAwait(result, errorFlag: self.mintStdValueId(), promise: promise, dstBlock: dstBlock)
+			return
 		end 'aFatPointer'
 
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: GtAwaitName, args: argsOf(promise)))

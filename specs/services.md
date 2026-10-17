@@ -63,10 +63,8 @@ grammar:
 
 | name | what it is |
 |---|---|
-| `Calc.request` | a union — `__shutdown` at variant 0, then one variant per message in declaration order. A message's payload is its parameters, plus an integer `__reply` slot when it has a reply to deliver. |
+| `Calc.request` | a union — one variant per message in declaration order, the first message at variant 0. A message's payload is its parameters, plus an integer `__reply` slot when it has a reply to deliver. |
 | `Calc.handle` | a one-field struct holding the mailbox pointer. A real 8-byte box, so moves, E3102, struct fields, arrays and the drop cascade all reach it by construction. |
-
-`__shutdown` is variant **0** so that adding a message never renumbers the synthesized one.
 
 Whether a type is a service is a **whole-program** property: a `spawn` anywhere makes the type a service
 and subjects all its export methods to the service rules. That is why every service diagnostic fires **at
@@ -90,19 +88,13 @@ owner outside the graph (a record the graph reaches twice is legal when both ref
 immortal literal has no count and passes), a shared copy-on-write buffer is detached, and a RECORD with an
 owner outside the graph aborts the process with exit **96** rather than hand one box to two green threads.
 
-### `ServiceError`
+### A send can fail
 
-A service can be gone: `h.shutdown()` enqueues a poison pill behind everything queued, and dropping the last
-handle closes the mailbox, which drains it the same way. So `stdlib/Builtins.maxon` declares
-
-```text
-public enum ServiceError implements Error
-	stopped
-end 'ServiceError'
-```
-
-which a reply's error type will be merged with. It carries no `__` prefix precisely so a user can write
-`match e … stopped …`.
+A service can be gone and a mailbox can be full, so every send is a throwing call. It fails AT the send, with
+the message's own `<Svc>.<msg>.sendError` — `mailboxFull(…)` or `serviceStopped(…)` — which hands the send's
+arguments back to the sender. `h.shutdown()` closes the mailbox once it has drained, takes no slot and cannot
+fail, and dropping the last handle closes the mailbox the same way; a message that was queued always runs.
+A reply's error type is the handler's own and nothing else, so no reply can answer `stopped`.
 
 ## Targets
 
@@ -121,8 +113,8 @@ rule moves — which is why the reason is written here rather than left to the m
 ⚠ **Almost every REFUSAL in this file is unmarked, and that is the same rule read from the other end.** A
 verdict the PARSE reaches — a token shape, a declaration, a transferability rule, a move, E3137, E3140 — is
 target-neutral by construction, so a marker on one would hide a green lane rather than describe a red one.
-`spawn-is-not-a-keyword` and `service-error-is-declared-and-nameable` are unmarked for the neighbouring
-reason: they RUN, but they start no service and reach no scheduler at all.
+`spawn-is-not-a-keyword` is unmarked for the neighbouring reason: it RUNS, but it starts no service and
+reaches no scheduler at all.
 
 ⛔⛔ **THE DISCRIMINATOR IS *WHO REACHES THE VERDICT FIRST*, NOT *IS THE RULE TARGET-NEUTRAL*.** A parse
 refusal THROWS and the compile
@@ -497,8 +489,8 @@ end 'Calc'
 
 function main() returns ExitCode
 	let h = spawn Calc.create()
-	h.measure(Square.create(3))
-	h.measure(Square.create(2))
+	try h.measure(Square.create(3)) otherwise panic("an open mailbox with room takes the send")
+	try h.measure(Square.create(2)) otherwise panic("an open mailbox with room takes the send")
 	let total = try await h.total() otherwise panic("the service is running")
 	print("{total}\n")
 	h.shutdown()
@@ -785,25 +777,39 @@ typealias Integer = int(i64.min to i64.max)
 12
 ```
 
-<!-- test: service-error-is-declared-and-nameable -->
-`ServiceError` is declared by `stdlib/Builtins.maxon` and carries no `__` prefix, so a user may throw it
-and name its case in a `match`. The mailbox runtime produces it, and a reply's synthesized error union is
-built from the declaration.
+<!-- test: a-send-error-is-declared-and-nameable -->
+A message's send error is a declared type with a name an author can write: `Store.ping.sendError` in a
+`throws` clause, and its cases in a `match`. The mailbox runtime produces it — here a send after `shutdown()`
+— and `ping` takes no parameters, so `mailboxFull` and `serviceStopped` carry nothing.
 ```maxon
-function risky(n Integer) returns Integer throws ServiceError
-	if n == 0 'gone'
-		throw ServiceError.stopped
-	end 'gone'
-	return n
-end 'risky'
+type Store
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function ping()
+		self.n = self.n + 1
+	end 'ping'
+end 'Store'
+
+function poke(h Store.handle) throws Store.ping.sendError
+	try h.ping()
+end 'poke'
 
 function main() returns ExitCode
-	let v = try risky(0) otherwise (e) 'failed'
+	let h = spawn Store.create()
+	h.shutdown()
+
+	try poke(h) otherwise (e) 'failed'
 		match e 'why'
-			stopped then return 7
+			mailboxFull then return 6
+			serviceStopped then return 7
 		end 'why'
 	end 'failed'
-	return v as ExitCode
+
+	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -871,9 +877,9 @@ end 'Counter'
 
 function main() returns ExitCode
 	let h = spawn Counter.create()
-	h.tick()
-	h.tick()
-	h.report()
+	try h.tick() otherwise panic("an open mailbox with room takes the send")
+	try h.tick() otherwise panic("an open mailbox with room takes the send")
+	try h.report() otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -906,10 +912,10 @@ end 'Log'
 
 function main() returns ExitCode
 	let h = spawn Log.create()
-	h.push(1)
-	h.push(2)
-	h.push(3)
-	h.read()
+	try h.push(1) otherwise panic("an open mailbox with room takes the send")
+	try h.push(2) otherwise panic("an open mailbox with room takes the send")
+	try h.push(3) otherwise panic("an open mailbox with room takes the send")
+	try h.read() otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -966,7 +972,7 @@ function main() returns ExitCode
 	let h = spawn FifoTape.create()
 
 	for i in 0 upto backlog 'fill'
-		h.note("m{i}")
+		try h.note("m{i}") otherwise panic("an open mailbox with room takes the send")
 	end 'fill'
 
 	let summary = try await h.report() otherwise 'gone'
@@ -984,21 +990,15 @@ end 'main'
 seen=100 misplaced=0 m0 m1 m2 m97 m98 m99
 ```
 
-<!-- test: a-service-shut-down-with-a-full-grown-ring-abandons-every-message -->
-<!-- procs: 1 -->
-<!-- preempt: off -->
-⭐ **THE ABANDON OF A GROWN RING, EVERY SLOT HOLDING A PAYLOAD THE LOOP NEVER HANDLES.** The poison pill goes
-in FIRST, so every message behind it is dropped unprocessed: 100 `keep` messages, each carrying a heap
-`String`, with a reply-bearing `value` stored as a promise after every 25th. At one processor with
-preemption off nothing runs on the service's green thread until `main` parks at the first `await`, so the
-pill and all 104 messages are queued together and the ring has grown past its first 16 slots. The loop
-takes the pill, closes the mailbox and abandons the rest: no `kept` line prints, every promise answers
-`ServiceError.stopped`, and exit 0 says every abandoned `String` was released (exit 101).
+<!-- test: a-send-to-a-shut-down-service-hands-every-argument-back -->
+⭐ **A BACKLOG SENT AFTER `shutdown()`, EVERY MESSAGE CARRYING A HEAP `String`.** `shutdown()` closes the
+mailbox, so each of 100 `keep` sends is refused with `serviceStopped` and hands its `String` back, in send
+order: the handler never runs, no `kept` line prints, and `misplaced` counts any returned `String` that is not
+the one that send was given. After every 25th a reply-bearing `value` is awaited, and the one `try` of
+`try await` catches the same refusal. Exit 0 says every refused `String` was released (exit 101).
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Tally = int(0 to 1000)
-typealias ReplyPromise = Promise with (Integer, ServiceError)
-typealias ReplyPromiseArray = Array with ReplyPromise
 
 let backlog = 100 as Tally
 let replyEvery = 25 as Tally
@@ -1020,34 +1020,47 @@ type Backlog
 	end 'value'
 end 'Backlog'
 
+function countMisplaced(s String, index Tally) returns Tally
+	if s == "s{index}" 'inPlace'
+		return 0
+	end 'inPlace'
+
+	return 1
+end 'countMisplaced'
+
 function main() returns ExitCode
 	let h = spawn Backlog.create()
 	h.shutdown()
-	var ps = ReplyPromiseArray.create()
+
+	var refused = 0 as Tally
+	var misplaced = 0 as Tally
+	var valueRefused = 0 as Tally
 
 	for i in 0 upto backlog 'fill'
-		h.keep("s{i}")
+		try h.keep("s{i}") otherwise (e) 'keepRefused'
+			match e 'keepWhy'
+				mailboxFull(s) then panic("a mailbox with room is never full: {s}")
+				serviceStopped(s) then misplaced = misplaced + countMisplaced(s, index: i)
+			end 'keepWhy'
+
+			refused = refused + 1
+		end 'keepRefused'
 
 		if (i + 1) mod replyEvery == 0 'replyHere'
-			ps.push(h.value())
+			let v = try await h.value() otherwise (e) 'valueGone'
+				match e 'valueWhy'
+					mailboxFull then panic("a mailbox with room is never full")
+					serviceStopped then valueRefused = valueRefused + 1
+				end 'valueWhy'
+
+				continue
+			end 'valueGone'
+
+			print("answered {v}\n")
 		end 'replyHere'
 	end 'fill'
 
-	var stops = 0 as Tally
-	var answered = 0 as Tally
-
-	while ps.count() > 0 'drain'
-		let ready = ps.awaitAny()
-		let p = try ps.remove(ready) otherwise panic("awaitAny named a slot that is in range")
-		try await p otherwise (e) 'gone'
-			match e 'why'
-				stopped then stops = stops + 1
-			end 'why'
-		end 'gone'
-		answered = answered + 1
-	end 'drain'
-
-	print("answered={answered} stopped={stops}\n")
+	print("refused={refused} misplaced={misplaced} valueRefused={valueRefused}\n")
 	return 0
 end 'main'
 ```
@@ -1055,7 +1068,7 @@ end 'main'
 0
 ```
 ```stdout
-answered=4 stopped=4
+refused=100 misplaced=0 valueRefused=4
 ```
 
 <!-- test: a-mailbox-grows-with-its-queue-wrapped-around-the-ring -->
@@ -1108,7 +1121,7 @@ function main() returns ExitCode
 	var next = 0 as Tally
 
 	for _ in 0 upto firstBatch 'first'
-		h.note("m{next}")
+		try h.note("m{next}") otherwise panic("an open mailbox with room takes the send")
 		next = next + 1
 	end 'first'
 
@@ -1117,7 +1130,7 @@ function main() returns ExitCode
 	end 'syncFailed'
 
 	for _ in 0 upto secondBatch 'second'
-		h.note("m{next}")
+		try h.note("m{next}") otherwise panic("an open mailbox with room takes the send")
 		next = next + 1
 	end 'second'
 
@@ -1186,7 +1199,7 @@ function main() returns ExitCode
 	var next = 0 as Tally
 
 	for _ in 0 upto burst 'grow'
-		h.note("m{next}")
+		try h.note("m{next}") otherwise panic("an open mailbox with room takes the send")
 		next = next + 1
 	end 'grow'
 
@@ -1195,7 +1208,7 @@ function main() returns ExitCode
 	end 'syncFailed'
 
 	for _ in 0 upto burst 'again'
-		h.note("m{next}")
+		try h.note("m{next}") otherwise panic("an open mailbox with room takes the send")
 		next = next + 1
 	end 'again'
 
@@ -1243,17 +1256,17 @@ type Counter
 
 	export function reportThen(peer Counter.handle)
 		print("{self.id}={self.n}\n")
-		peer.report()
+		try peer.report() otherwise panic("an open mailbox with room takes the send")
 	end 'reportThen'
 end 'Counter'
 
 function main() returns ExitCode
 	let a = spawn Counter.create(1)
 	let b = spawn Counter.create(2)
-	a.tick()
-	a.tick()
-	b.tick()
-	b.reportThen(a)
+	try a.tick() otherwise panic("an open mailbox with room takes the send")
+	try a.tick() otherwise panic("an open mailbox with room takes the send")
+	try b.tick() otherwise panic("an open mailbox with room takes the send")
+	try b.reportThen(a) otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -1293,8 +1306,8 @@ function main() returns ExitCode
 	direct.total()
 
 	let h = spawn Calc.create()
-	h.bump(3)
-	h.total()
+	try h.bump(3) otherwise panic("an open mailbox with room takes the send")
+	try h.total() otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -1334,12 +1347,12 @@ error E3136: <fragment>:16:4: `record` is declared on `type Calc` but is not a m
 ```
 
 <!-- test: shutdown-drains-what-is-queued -->
-`shutdown()` is a graceful drain, not a kill: the poison pill goes in BEHIND everything already queued, so
+`shutdown()` is a graceful drain, not a kill: it closes the mailbox once everything already queued has run, so
 every message sent before it still runs.
 
 ⚠ `shutdown` is the handle's own method and is not a message of `Log`. It follows `clone`'s precedent
 exactly (`Parser.structCloneIsSynthesized`): a service that declares an `export function shutdown()` of its
-own WINS, and the compiler's pill is then unspellable for it — which leaves dropping the last handle, the
+own WINS, and the compiler's close is then unspellable for it — which leaves dropping the last handle, the
 other road to the same drain.
 ```maxon
 type Log
@@ -1360,9 +1373,9 @@ end 'Log'
 
 function main() returns ExitCode
 	let h = spawn Log.create()
-	h.push(1)
-	h.push(2)
-	h.read()
+	try h.push(1) otherwise panic("an open mailbox with room takes the send")
+	try h.push(2) otherwise panic("an open mailbox with room takes the send")
+	try h.read() otherwise panic("an open mailbox with room takes the send")
 	h.shutdown()
 	return 0
 end 'main'
@@ -1375,13 +1388,13 @@ typealias Integer = int(i64.min to i64.max)
 acc=3
 ```
 
-<!-- test: a-send-after-shutdown-is-dropped-cleanly -->
-⭐⭐ **THE CASE THAT REACHES THE ABANDON PATH, AND IT REACHES IT BY EITHER OF TWO ROADS.** The second `keep`
-is sent after the poison pill, so the loop never runs its handler — and which road drops its `String` is a
-race this case deliberately does not resolve: if the send wins, the request is queued behind the pill and
-the loop's exit drain abandons it; if the loop wins, the mailbox is already closed and `__mbox_send` abandons
-it inline. **Both roads must print exactly the same thing and leak exactly nothing**, which is the property
-worth pinning — the drop of a sent payload nobody will ever handle.
+<!-- test: a-let-sent-after-shutdown-is-handed-back-and-released -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+⭐⭐ **A `let` THE REFUSED SEND MOVED COMES BACK, AND IS RELEASED EXACTLY ONCE.** The second `keep` is sent
+after `shutdown()`, so the mailbox is closed and the send is refused with `serviceStopped`, handing back the
+`String` the `let` moved. The first `keep`, queued before the shutdown, still runs at the exit drain. Exit 0
+says the returned `String` was released once and the queued one by the service (exit 101 otherwise).
 ```maxon
 type Store
 	var n as Integer
@@ -1399,10 +1412,17 @@ end 'Store'
 function main() returns ExitCode
 	let h = spawn Store.create()
 	let first = "a{1}"
-	h.keep(first)
+	try h.keep(first) otherwise panic("an open mailbox with room takes the send")
 	h.shutdown()
 	let second = "b{2}"
-	h.keep(second)
+
+	try h.keep(second) otherwise (e) 'refused'
+		match e 'why'
+			mailboxFull(s) then print("full {s}\n")
+			serviceStopped(s) then print("refused {s}\n")
+		end 'why'
+	end 'refused'
+
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -1411,7 +1431,945 @@ typealias Integer = int(i64.min to i64.max)
 0
 ```
 ```stdout
+refused b2
 kept a1
+```
+
+### A bounded mailbox, and a send that fails
+
+A mailbox holds at most its capacity, `DefaultMailboxCapacity` (1024) unless `spawn(capacity: n)` names one.
+Every send throws at the send when the mailbox is full or the service has stopped, with the message's own
+`<Svc>.<msg>.sendError`: `mailboxFull(…)` and `serviceStopped(…)`, each carrying the arguments the send was given.
+
+<!-- test: a-full-mailbox-refuses-a-send-and-hands-its-arguments-back -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+At one processor with preemption off the service runs nothing until `main` returns, so the first two sends
+fill a capacity of two and the third is refused with `mailboxFull`, handing back the `String` it was given. The
+two queued messages still run at the exit drain, and exit 7 says the refused `String` was released.
+```maxon
+type Store
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function keep(s String)
+		self.n = self.n + 1
+		print("kept {s}\n")
+	end 'keep'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn(capacity: 2) Store.create()
+
+	for i in 0 upto 3 'fill'
+		try h.keep("s{i}") otherwise (e) 'refused'
+			match e 'why'
+				mailboxFull(s) then print("full {s}\n")
+				serviceStopped(s) then print("stopped {s}\n")
+			end 'why'
+
+			return 7
+		end 'refused'
+	end 'fill'
+
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+7
+```
+```stdout
+full s2
+kept s0
+kept s1
+```
+
+<!-- test: a-handed-back-argument-can-be-resent -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+The `String` a refused send hands back is the caller's own, so it can be sent again. A capacity of one
+refuses the second send of `h`; the arm hands the returned `String` to `other`, which has room, and a
+retry loop reassigns a `var` from the returned value and sends it until it lands. At one processor the
+retry cannot land without `Scheduler.yield()` letting `h`'s service drain its queue, and the loop prints
+once per refusal, so the output shows it took exactly one yield. Exit 0 says every `String` was released.
+```maxon
+type Store
+	var tag as Integer
+
+	static function create(tag Integer) returns Self
+		return Self{tag: tag}
+	end 'create'
+
+	export function keep(s String)
+		print("store{self.tag} kept {s}\n")
+	end 'keep'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn(capacity: 1) Store.create(1)
+	let other = spawn Store.create(2)
+
+	try h.keep("s{0}") otherwise panic("a capacity of one takes the first send")
+
+	try h.keep("s{1}") otherwise (e) 'refused'
+		match e 'why'
+			mailboxFull(back) then try other.keep(back) otherwise panic("a service with room takes the send")
+			serviceStopped then return 1
+		end 'why'
+	end 'refused'
+
+	var pending = "s{2}"
+
+	while true 'untilItLands'
+		try h.keep(pending) otherwise (e) 'refusedAgain'
+			match e 'again'
+				mailboxFull(back) then pending = back
+				serviceStopped then return 2
+			end 'again'
+
+			print("full, yielding\n")
+			Scheduler.yield()
+			continue
+		end 'refusedAgain'
+
+		break
+	end 'untilItLands'
+
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+full, yielding
+store2 kept s1
+store1 kept s0
+store1 kept s2
+```
+
+<!-- test: a-send-after-shutdown-fails-stopped-with-its-arguments -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+A send after `shutdown()` is refused with `serviceStopped` and gets its `String` back; the message sent before the
+shutdown still runs.
+```maxon
+type Store
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function keep(s String)
+		self.n = self.n + 1
+		print("kept {s}\n")
+	end 'keep'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	try h.keep("a{1}") otherwise panic("an open mailbox with room takes the send")
+	h.shutdown()
+
+	try h.keep("b{2}") otherwise (e) 'refused'
+		match e 'why'
+			mailboxFull(s) then print("full {s}\n")
+			serviceStopped(s) then print("stopped {s}\n")
+		end 'why'
+	end 'refused'
+
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+stopped b2
+kept a1
+```
+
+<!-- test: a-reply-bearing-send-to-a-full-mailbox-fails-at-the-send -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+A reply-bearing send fails at the send too, and the one `try` of `try await` catches it: `value` takes no
+parameters, so its `mailboxFull` and `serviceStopped` carry nothing.
+```maxon
+type Store
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function keep(s String)
+		self.n = self.n + 1
+		print("kept {s}\n")
+	end 'keep'
+
+	export function value() returns Integer
+		return self.n
+	end 'value'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn(capacity: 1) Store.create()
+	try h.keep("a{1}") otherwise panic("a capacity of one takes the first send")
+
+	let v = try await h.value() otherwise (e) 'refused'
+		match e 'why'
+			mailboxFull then print("full\n")
+			serviceStopped then print("stopped\n")
+		end 'why'
+
+		return 0
+	end 'refused'
+
+	print("value={v}\n")
+	return 1
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+full
+kept a1
+```
+
+<!-- test: a-stored-reply-send-needs-its-own-try -->
+A reply that is stored rather than awaited takes its own `try` for the send, and the promise it yields
+carries only the handler's errors: `Promise with (Integer, StoreError)`, matched exhaustively by `empty`.
+```maxon
+enum StoreError implements Error
+	empty
+end 'StoreError'
+
+typealias ValuePromise = Promise with (Integer, StoreError)
+typealias ValuePromiseArray = Array with ValuePromise
+
+type Store
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function add(by Integer)
+		self.n = self.n + by
+	end 'add'
+
+	export function value() returns Integer throws StoreError
+		if self.n == 0 'none'
+			throw StoreError.empty
+		end 'none'
+
+		return self.n
+	end 'value'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	var ps = ValuePromiseArray.create()
+	ps.push(try h.value() otherwise panic("an open mailbox with room takes the send"))
+	try h.add(5) otherwise panic("an open mailbox with room takes the send")
+	ps.push(try h.value() otherwise panic("an open mailbox with room takes the send"))
+
+	while ps.count() > 0 'drain'
+		let p = try ps.remove(0) otherwise panic("the loop runs while a promise is left")
+
+		let v = try await p otherwise (e) 'failed'
+			match e 'why'
+				empty then print("empty\n")
+			end 'why'
+
+			continue
+		end 'failed'
+
+		print("value={v}\n")
+	end 'drain'
+
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+empty
+value=5
+```
+
+<!-- test: error.a-bare-send-requires-try -->
+A send can fail, so a send with no `try` is the ordinary refusal of a throwing call made without one.
+```maxon
+type Store
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function keep(s String)
+		self.n = self.n + 1
+		print("kept {s}\n")
+	end 'keep'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	h.keep("a{1}")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3057: <fragment>:17:2: throwing function requires try: 'Store.keep'
+```
+
+<!-- test: error.a-reply-bearing-message-sent-as-a-statement-is-refused -->
+A message that returns or throws sent as a statement drops its reply, and with it the value or the
+handler's error. The send's own error is handled here, so the drop is the only fault: await the reply,
+store it, or discard it with `_ =`.
+```maxon
+type Store
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function value() returns Integer
+		return self.n
+	end 'value'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	try h.value() otherwise ignore
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3190: <fragment>:16:2: `Store.value` returns or throws, so a send of it delivers a reply, and as a statement the reply is dropped — and with it the value and any error the handler throws. Await it with `try await <handle>.<message>(…)`, keep it with `let reply = try <handle>.<message>(…)`, or discard it on purpose with `_ = try <handle>.<message>(…)`
+```
+
+<!-- test: shutdown-of-a-full-mailbox-runs-what-is-queued -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+`shutdown()` takes no slot, so it succeeds on a full mailbox: both queued messages still run, and the send
+after it is refused with `serviceStopped`.
+```maxon
+type Store
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function keep(s String)
+		self.n = self.n + 1
+		print("kept {s}\n")
+	end 'keep'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn(capacity: 2) Store.create()
+	try h.keep("a{1}") otherwise panic("a capacity of two takes the first send")
+	try h.keep("b{2}") otherwise panic("a capacity of two takes the second send")
+	h.shutdown()
+
+	try h.keep("c{3}") otherwise (e) 'refused'
+		match e 'why'
+			mailboxFull(s) then print("full {s}\n")
+			serviceStopped(s) then print("stopped {s}\n")
+		end 'why'
+	end 'refused'
+
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+stopped c3
+kept a1
+kept b2
+```
+
+<!-- test: the-default-capacity-queues-1024-messages -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+A bare `spawn` takes `DefaultMailboxCapacity`: 1024 sends queue before the service runs, the 1025th is
+refused with `mailboxFull`, and every queued message runs at the exit drain.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Tally = int(0 to 1025)
+
+let attempts = 1025 as Tally
+let lastQueued = 1024
+
+type Store
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function keep(s String)
+		self.n = self.n + 1
+
+		if self.n == lastQueued 'last'
+			print("ran {self.n} last={s}\n")
+		end 'last'
+	end 'keep'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	var queued = 0 as Tally
+
+	for i in 0 upto attempts 'fill'
+		try h.keep("s{i}") otherwise (e) 'refused'
+			match e 'why'
+				mailboxFull(s) then print("queued={queued} full {s}\n")
+				serviceStopped(s) then print("queued={queued} stopped {s}\n")
+			end 'why'
+
+			return 0
+		end 'refused'
+
+		queued = queued + 1
+	end 'fill'
+
+	print("queued={queued} nothing refused\n")
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+queued=1024 full s1024
+ran 1024 last=s1023
+```
+
+<!-- test: a-propagated-send-error-carries-its-arguments -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+A bare `try` propagates the send's error through a function declared to throw `Store.keep.sendError`, and
+the caller that catches it gets the `String` back.
+```maxon
+type Store
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function keep(s String)
+		self.n = self.n + 1
+		print("kept {s}\n")
+	end 'keep'
+end 'Store'
+
+function stash(h Store.handle, tag Integer) throws Store.keep.sendError
+	try h.keep("s{tag}")
+end 'stash'
+
+function main() returns ExitCode
+	let h = spawn(capacity: 1) Store.create()
+	try stash(h, tag: 1) otherwise panic("a capacity of one takes the first send")
+
+	try stash(h, tag: 2) otherwise (e) 'refused'
+		match e 'why'
+			mailboxFull(s) then print("full {s}\n")
+			serviceStopped(s) then print("stopped {s}\n")
+		end 'why'
+	end 'refused'
+
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+full s2
+kept s1
+```
+
+<!-- test: a-shared-argument-handed-back-leaves-the-callers-value-intact -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+A read-only parameter is shared with the service rather than moved into the message, and a refused send hands
+back a copy of it: the `Wrap` that `offer` receives is its own, so it is sent on to `other` as it stands. The
+original, which the `main` binding `first` still reads, is intact afterwards. Exit 0 says every reference was
+released, and `other` printing the text twice says the two handed-back values carried it.
+```maxon
+union Wrap
+	held(text String)
+	empty
+end 'Wrap'
+
+type Store
+	var n as Integer
+	var tag as Integer
+
+	static function create(tag Integer) returns Self
+		return Self{n: 0, tag: tag}
+	end 'create'
+
+	export function keep(w Wrap)
+		match w 'm'
+			held(t) then self.take(t)
+			empty then self.n = self.n + 100
+		end 'm'
+	end 'keep'
+
+	function take(t String)
+		self.n = self.n + 1
+
+		if self.tag == 2 'loud'
+			print("other kept {t}\n")
+		end 'loud'
+	end 'take'
+
+	export function count() returns Integer
+		return self.n
+	end 'count'
+end 'Store'
+
+function describe(w Wrap)
+	match w 'again'
+		held(t) then print("still holds {t}\n")
+		empty then print("empty\n")
+	end 'again'
+end 'describe'
+
+function offer(h Store.handle, other Store.handle, w Wrap)
+	try h.keep(w) otherwise (e) 'refused'
+		match e 'why'
+			mailboxFull(back) then try other.keep(back) otherwise panic("a service with room takes the send")
+			serviceStopped then panic("the service is running")
+		end 'why'
+	end 'refused'
+end 'offer'
+
+function main() returns ExitCode
+	let h = spawn(capacity: 1) Store.create(1)
+	let other = spawn Store.create(2)
+	let first = Wrap.held("first{1}")
+
+	for _ in 0 upto 3 'many'
+		offer(h, other: other, w: first)
+	end 'many'
+
+	let total = try await other.count() otherwise panic("a running service answers")
+	print("other took {total}\n")
+	describe(first)
+
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+other kept first1
+other kept first1
+other took 2
+still holds first1
+```
+
+<!-- test: a-propagated-send-error-hands-a-shared-argument-back-to-be-resent -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+`offer` shares its read-only parameter with the service and propagates the refusal with a bare `try`, through a
+function declared to throw `Store.keep.sendError`. Whoever catches the error owns the arguments in it, so `main`
+sends the handed-back `Wrap` to `other`, while the `first` it passed in is intact. Exit 0 says every reference
+was released.
+```maxon
+union Wrap
+	held(text String)
+	empty
+end 'Wrap'
+
+type Store
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function keep(w Wrap)
+		match w 'm'
+			held(t) then print("kept {t}\n")
+			empty then self.n = self.n + 100
+		end 'm'
+	end 'keep'
+end 'Store'
+
+function describe(w Wrap)
+	match w 'again'
+		held(t) then print("still holds {t}\n")
+		empty then print("empty\n")
+	end 'again'
+end 'describe'
+
+function offer(h Store.handle, w Wrap) throws Store.keep.sendError
+	try h.keep(w)
+end 'offer'
+
+function main() returns ExitCode
+	let h = spawn(capacity: 1) Store.create()
+	let other = spawn Store.create()
+	let first = Wrap.held("first{1}")
+
+	try offer(h, w: first) otherwise panic("a capacity of one takes the first send")
+
+	try offer(h, w: first) otherwise (e) 'refused'
+		match e 'why'
+			mailboxFull(back) then try other.keep(back) otherwise panic("a service with room takes the send")
+			serviceStopped then return 1
+		end 'why'
+	end 'refused'
+
+	describe(first)
+
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+still holds first1
+kept first1
+kept first1
+```
+
+<!-- test: a-shared-value-that-cannot-be-cloned-is-handed-back-retained -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+`Port` is a `Shape` that owns a listening socket, which cannot be duplicated, so no `Holder` — whose field is
+held at `Shape` — can be deep-cloned, though the `Holder` this program builds holds a `Plain` and walks to the
+service without trouble. A refused send therefore cannot hand back a copy of the read-only `Holder` that `offer`
+shares: the send-error slot holds the very `Holder` the caller passed, and the binding in the arm retains it
+rather than taking it over. The handed-back `back` is usable, and the `Holder` that `main` still names is intact.
+Exit 0 says every reference was released.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+interface Shape
+	function area() returns Tally
+end 'Shape'
+
+type Plain implements Shape
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	function area() returns Tally
+		return 1
+	end 'area'
+end 'Plain'
+
+type Port implements Shape
+	var listener as TcpListener
+
+	static function create(listener TcpListener) returns Self
+		return Self{listener: listener}
+	end 'create'
+
+	function area() returns Tally
+		return 2
+	end 'area'
+end 'Port'
+
+type Holder
+	let shape as Shape
+
+	static function create(shape Shape) returns Self
+		return Self{shape: shape}
+	end 'create'
+
+	function measure() returns Tally
+		return self.shape.area()
+	end 'measure'
+end 'Holder'
+
+type Door
+	var seen as Tally
+
+	static function create() returns Self
+		return Self{seen: 0}
+	end 'create'
+
+	export function look(h Holder)
+		self.seen = self.seen + h.measure()
+	end 'look'
+end 'Door'
+
+function offer(h Door.handle, held Holder)
+	try h.look(held) otherwise (e) 'refused'
+		match e 'why'
+			serviceStopped(back) then print("stopped, handed back a holder measuring {back.measure()}\n")
+			mailboxFull then panic("a stopped service is not full")
+		end 'why'
+	end 'refused'
+end 'offer'
+
+function main() returns ExitCode
+	let h = spawn Door.create()
+	h.shutdown()
+
+	let holder = Holder.create(Plain.create())
+	offer(h, held: holder)
+	print("the original measures {holder.measure()}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+stopped, handed back a holder measuring 1
+the original measures 1
+```
+
+<!-- test: a-caught-send-error-can-be-thrown-on -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+The binding that caught a send's error owns it alone, so `throw e` hands it on to the caller, which gets the
+`String` back.
+```maxon
+type Store
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function keep(s String)
+		self.n = self.n + 1
+		print("kept {s}\n")
+	end 'keep'
+end 'Store'
+
+function relay(h Store.handle, tag Integer) throws Store.keep.sendError
+	try h.keep("s{tag}") otherwise (e) 'refused'
+		throw e
+	end 'refused'
+end 'relay'
+
+function main() returns ExitCode
+	let h = spawn(capacity: 1) Store.create()
+	try relay(h, tag: 1) otherwise panic("a capacity of one takes the first send")
+
+	try relay(h, tag: 2) otherwise (e) 'refused'
+		match e 'why'
+			mailboxFull(s) then print("full {s}\n")
+			serviceStopped(s) then print("stopped {s}\n")
+		end 'why'
+	end 'refused'
+
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+full s2
+kept s1
+```
+
+<!-- test: error.a-send-error-may-not-be-thrown-from-a-value-the-function-does-not-own -->
+A send-error a function is handed is borrowed from its caller, so throwing it would give the catcher a box
+another owner still reads. Only the failed send's own error, a bare `try` propagation, or the binding that caught
+it may be thrown.
+```maxon
+type Store
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function keep(s String)
+		self.n = self.n + 1
+		print("kept {s}\n")
+	end 'keep'
+end 'Store'
+
+function again(e Store.keep.sendError) throws Store.keep.sendError
+	throw e
+end 'again'
+
+function main() returns ExitCode
+	let h = spawn(capacity: 1) Store.create()
+	try h.keep("a") otherwise panic("a capacity of one takes the first send")
+
+	try h.keep("b") otherwise (e) 'refused'
+		try again(e) otherwise ignore
+	end 'refused'
+
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3191: <fragment>:16:2: `Store.keep.sendError` is thrown from a value this function does not solely own, and its caller would take the arguments out of it as the only owner. Only the failed send's own error may be thrown: propagate it with a bare `try`, or `throw` the binding that caught it, which hands the error over and is not read again
+```
+
+<!-- test: error.a-capacity-out-of-range-is-refused -->
+A capacity is a `MailboxCapacity`, `int(1 to 2^31)`, so a literal outside it is the ordinary ranged-literal
+refusal.
+```maxon
+type Store
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function keep(s String)
+		self.n = self.n + 1
+		print("kept {s}\n")
+	end 'keep'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn(capacity: 0) Store.create()
+	try h.keep("a{1}") otherwise panic("a mailbox with room takes the send")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3005: <fragment>:16:26: Value 0 is outside the range of 'MailboxCapacity' (int(1 to 2147483648))
+```
+
+<!-- test: a-capacity-that-is-not-a-power-of-two-fills-drains-and-fills-again-in-order -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+A capacity of 20 is not a power of two, so the ring grows past 16 slots to 32 while the queue stops at 20. The
+service is parked on its empty mailbox at the start of each round, so a round's first send goes straight to it
+and the next 20 queue: the 22nd send is refused. `Scheduler.yield()` lets the service run them all, which
+empties the queue and returns the grown ring to its initial size, and the second round fills it again. The
+service logs the numbers in the order it receives them, so the output pins FIFO across the growth, the drain
+and the regrowth.
+```maxon
+typealias Tally = int(0 to u64.max)
+
+let attempts = 22 as Tally
+
+type Ledger
+	var taken as Tally
+	var log as String
+
+	static function create() returns Self
+		return Self{taken: 0, log: ""}
+	end 'create'
+
+	export function take(n Tally)
+		self.taken = self.taken + 1
+		self.log.append(" {n}")
+	end 'take'
+
+	export function finish() returns Tally
+		print("order:{self.log}\n")
+
+		return self.taken
+	end 'finish'
+end 'Ledger'
+
+function fill(h Ledger.handle, base Tally) returns Tally
+	for i in 0 upto attempts 'fill'
+		try h.take(base + i) otherwise (e) 'refused'
+			match e 'why'
+				mailboxFull then print("refused after {i} sends\n")
+				serviceStopped then panic("the service is running")
+			end 'why'
+
+			return i
+		end 'refused'
+	end 'fill'
+
+	panic("a capacity of 20 took 22 sends")
+end 'fill'
+
+function main() returns ExitCode
+	let h = spawn(capacity: 20) Ledger.create()
+	Scheduler.yield()
+	let first = fill(h, base: 0)
+	Scheduler.yield()
+	let second = fill(h, base: first)
+	Scheduler.yield()
+	let taken = try await h.finish() otherwise panic("a running service answers")
+	print("sent {first} then {second}, taken={taken}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+refused after 21 sends
+refused after 21 sends
+order: 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41
+sent 21 then 21, taken=42
+```
+
+<!-- test: a-trace-capture-stop-waits-for-room-in-a-full-recorder-mailbox -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+`TraceCapture` records through a service whose mailbox holds 1024 messages, and `stopCapture()` is a barrier
+sent to it. The yield parks the recorder on its empty mailbox first, so `startCapture()`'s reset is handed
+straight to it and the 1024 trace keys that follow fill the mailbox to exactly its capacity, with the recorder
+not yet run. The barrier is then refused as `mailboxFull`; it yields until the recorder has drained and sends
+again, rather than treating the refusal as a stopped recorder. Every key reaches the capture.
+```maxon
+let traces = 1024
+
+function main() returns ExitCode
+	Scheduler.yield()
+	TraceCapture.startCapture()
+
+	for _ in 0 upto traces 'emit'
+		TraceCapture.trace("k")
+	end 'emit'
+
+	let keys = TraceCapture.stopCapture()
+	print("keys={keys.count()}\n")
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+keys=1024
 ```
 
 <!-- test: dropping-the-last-handle-shuts-the-service-down -->
@@ -1461,9 +2419,9 @@ function main() returns ExitCode
 	let outer = spawn Beeper.create(2)
 	if true 'early'
 		let inner = spawn Beeper.create(1)
-		inner.beep()
+		try inner.beep() otherwise panic("an open mailbox with room takes the send")
 	end 'early'
-	outer.beep()
+	try outer.beep() otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -1499,9 +2457,9 @@ end 'Counter'
 function main() returns ExitCode
 	let a = spawn Counter.create()
 	let b = a.clone()
-	a.tick()
-	b.tick()
-	b.report()
+	try a.tick() otherwise panic("an open mailbox with room takes the send")
+	try b.tick() otherwise panic("an open mailbox with room takes the send")
+	try b.report() otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -1539,14 +2497,14 @@ type Worker
 	end 'create'
 
 	export function run(sink Logger.handle)
-		sink.say("from the worker")
+		try sink.say("from the worker") otherwise panic("an open mailbox with room takes the send")
 	end 'run'
 end 'Worker'
 
 function main() returns ExitCode
 	var logger = spawn Logger.create()
 	let worker = spawn Worker.create()
-	worker.run(logger)
+	try worker.run(logger) otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -1617,7 +2575,7 @@ type Counter
 end 'Counter'
 
 typealias CounterHandleArray = Array with Counter.handle
-typealias BumpReplyArray = Array with Promise with (Integer, ServiceError)
+typealias BumpReplyArray = Array with Promise with Integer
 
 function main() returns ExitCode
 	var hs = CounterHandleArray.create()
@@ -1626,12 +2584,12 @@ function main() returns ExitCode
 	var replies = BumpReplyArray.create()
 	for step in 1 to 3 'eachSend'
 		var h = try hs.get(0) otherwise panic("hs.get(0)")
-		replies.push(h.bump(step))
+		replies.push(try h.bump(step) otherwise panic("an open mailbox with room takes the send"))
 	end 'eachSend'
 
 	var total = 0 as Integer
 	for r in replies 'eachReply'
-		total = try await r otherwise 0
+		total = await r
 	end 'eachReply'
 
 	return total as ExitCode
@@ -1685,15 +2643,15 @@ type Worker
 	end 'create'
 
 	export function run(sink Logger.handle)
-		sink.say("from the worker")
-		sink.report()
+		try sink.say("from the worker") otherwise panic("an open mailbox with room takes the send")
+		try sink.report() otherwise panic("an open mailbox with room takes the send")
 	end 'run'
 end 'Worker'
 
 function main() returns ExitCode
 	let logger = spawn Logger.create()
 	let worker = spawn Worker.create()
-	worker.run(logger.clone())
+	try worker.run(logger.clone()) otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -1727,10 +2685,10 @@ end 'Store'
 function main() returns ExitCode
 	let h = spawn Store.create()
 	var a = "one-{1}"
-	h.keep(a)
+	try h.keep(a) otherwise panic("an open mailbox with room takes the send")
 	var b = "two-{2}"
-	h.keep(b)
-	h.keep("a literal")
+	try h.keep(b) otherwise panic("an open mailbox with room takes the send")
+	try h.keep("a literal") otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -1745,10 +2703,11 @@ kept a literal (3)
 ```
 
 <!-- test: a-throwing-message-is-sent-fire-and-forget -->
-⭐⭐ **A `throws` CLAUSE IS WHAT MAKES A MESSAGE REPLY-BEARING, AND IT CAN STILL BE SENT FIRE-AND-FORGET.**
-The reply slot is filled with 0, the handler runs, and its error has nowhere to go — which is the
-fire-and-forget half of the design, not a gap in it. What must NOT happen is a leak: the second `keep`
-throws before it reads `s`, so the `String` it was handed is still the loop's to drop.
+⭐⭐ **A `throws` CLAUSE IS WHAT MAKES A MESSAGE REPLY-BEARING, AND ITS REPLY CAN STILL BE DISCARDED ON
+PURPOSE.** Sent as a bare statement it is E3190, because the reply would be dropped without anyone seeing the
+error; `_ = try h.keep(…)` drops it deliberately. The handler runs and its error has nowhere to go. What must
+NOT happen is a leak: the second `keep` throws before it reads `s`, so the `String` it was handed is still the
+loop's to drop.
 
 ⛔ **A `tryCall` opens an error-edge diamond, so the payload drop lands in that diamond's MERGE.** An arm
 that terminates its own block instead overwrites the diamond's branch and skips it: correct answers print,
@@ -1776,8 +2735,8 @@ end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	h.keep("a{1}")
-	h.keep("b{2}")
+	_ = try h.keep("a{1}") otherwise panic("an open mailbox with room takes the send")
+	_ = try h.keep("b{2}") otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -1790,8 +2749,8 @@ kept a1
 ```
 
 <!-- test: unioncases-tags-the-request-variants -->
-The synthesized request union is an ordinary union, so its `.unionCases` companion exists — and `__shutdown`
-holds variant 0, so the first message an author declares is variant 1.
+The synthesized request union is an ordinary union, so its `.unionCases` companion exists — and the first
+message an author declares is variant 0, the next variant 1.
 ```maxon
 type Calc
 	var count as Integer
@@ -1803,16 +2762,24 @@ type Calc
 	export function bump(by Integer)
 		self.count = self.count + by
 	end 'bump'
+
+	export function total() returns Integer
+		return self.count
+	end 'total'
 end 'Calc'
 
 function main() returns ExitCode
 	spawn Calc.create()
-	return Calc.request.unionCases.bump.rawValue as ExitCode
+	print("{Calc.request.unionCases.bump.rawValue} {Calc.request.unionCases.total.rawValue}\n")
+	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
-1
+0
+```
+```stdout
+0 1
 ```
 
 <!-- test: an-idle-service-that-is-never-sent-to-still-exits-zero -->
@@ -1860,7 +2827,7 @@ type A
 	end 'create'
 
 	export function ping(b B.handle)
-		b.pong()
+		try b.pong() otherwise panic("an open mailbox with room takes the send")
 	end 'ping'
 
 	export function ack()
@@ -1883,7 +2850,7 @@ end 'B'
 function main() returns ExitCode
 	let a = spawn A.create()
 	let b = spawn B.create()
-	a.ping(b)
+	try a.ping(b) otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -1912,7 +2879,7 @@ type A
 	end 'create'
 
 	export function kick(peer B.handle, mine A.handle) returns Integer
-		peer.work(mine.clone())
+		try peer.work(mine.clone()) otherwise panic("an open mailbox with room takes the send")
 		return 1
 	end 'kick'
 
@@ -1976,7 +2943,7 @@ export typealias Integer = int(i64.min to i64.max)
 // --- file: main.maxon
 function main() returns ExitCode
 	let h = spawn Calc.create()
-	h.bump(1)
+	try h.bump(1) otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
 ```
@@ -2008,7 +2975,7 @@ end 'Store'
 function main() returns ExitCode
 	let h = spawn Store.create()
 	var buf = "hello {1}"
-	h.keep(buf)
+	try h.keep(buf) otherwise panic("an open mailbox with room takes the send")
 	print("{buf}")
 	return 0
 end 'main'
@@ -2036,7 +3003,7 @@ end 'Store'
 function main() returns ExitCode
 	let h = spawn Store.create()
 	let buf = "hello {1}"
-	h.keep(buf)
+	try h.keep(buf) otherwise panic("an open mailbox with room takes the send")
 	print("{buf}")
 	return 0
 end 'main'
@@ -2069,7 +3036,7 @@ end 'Store'
 function main() returns ExitCode
 	let h = spawn Store.create()
 	let buf = "hello padded out long enough to heap allocate {1}"
-	h.keep(buf)
+	try h.keep(buf) otherwise panic("an open mailbox with room takes the send")
 	let n = try await h.total() otherwise 0
 	print("{n}\n")
 	return 0
@@ -2106,14 +3073,14 @@ function main() returns ExitCode
 	let buf = "hello {1}"
 	var held = Strings.create()
 	held.push(buf)
-	h.keep(buf)
+	try h.keep(buf) otherwise panic("an open mailbox with room takes the send")
 	return held.count() as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 typealias Strings = Array with String
 ```
 ```maxoncstderr
-error E3138: <fragment>:20:9: argument `s` of the message `Store.keep` cannot be proven to have exactly one owner (`buf`): this frame has either taken a SECOND reference to it — a container push, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send moves a mutable value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. A read-only value is shared with the service instead. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
+error E3138: <fragment>:20:13: argument `s` of the message `Store.keep` cannot be proven to have exactly one owner (`buf`): this frame has either taken a SECOND reference to it — a container push, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send moves a mutable value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. A read-only value is shared with the service instead. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
 ```
 
 <!-- test: a-borrowed-parameter-nothing-writes-is-shared-with-the-service -->
@@ -2534,14 +3501,14 @@ end 'Plot'
 
 function main() returns ExitCode
 	let h = spawn Plot.create()
-	h.at(1)
+	try h.at(1) otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
 error E3104: <fragment>:15:10: 'spawn' lowers to the runtime entry '__svc_spawn', which has no wasm32-wasi implementation
-error E3104: <fragment>:16:2: a message send lowers to the runtime entry '__mbox_send', which has no wasm32-wasi implementation
+error E3104: <fragment>:16:6: a message send lowers to the runtime entry '__mbox_send', which has no wasm32-wasi implementation
 ```
 
 <!-- test: a-scalar-only-record-crosses-whole -->
@@ -2573,8 +3540,8 @@ end 'Plot'
 
 function main() returns ExitCode
 	let h = spawn Plot.create()
-	h.at(Point.create(1, y: 2))
-	h.at(Point.create(3, y: 4))
+	try h.at(Point.create(1, y: 2)) otherwise panic("an open mailbox with room takes the send")
+	try h.at(Point.create(3, y: 4)) otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -2631,7 +3598,7 @@ end 'Svc'
 
 function main() returns ExitCode
 	let h = spawn Svc.create(Holder.create(7))
-	h.report()
+	try h.report() otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -2808,7 +3775,7 @@ function main() returns ExitCode
 	cs.push(Cell.create())
 	cs.push(Cell.create())
 	let h = spawn Svc.create()
-	h.take(cs)
+	try h.take(cs) otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -2856,7 +3823,7 @@ function main() returns ExitCode
 	var cs = CellArray.create()
 	cs.push(cell)
 	let h = spawn Svc.create()
-	h.take(cs)
+	try h.take(cs) otherwise panic("an open mailbox with room takes the send")
 	return cell.n as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -3021,7 +3988,7 @@ function main() returns ExitCode
 	let h = spawn Svc.create()
 	var s = "payload {42}"
 	let bytes = s.toByteArray()
-	h.take(s)
+	try h.take(s) otherwise panic("an open mailbox with room takes the send")
 	return bytes.count() as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -3039,7 +4006,8 @@ A String that has been APPENDED to owns a separate buffer, so a `toByteArray()` 
 not the record. A shared buffer is what copy-on-write is for: the move's walk detaches `s` onto a private copy,
 and the view is left the old buffer's one owner on this green thread. Without the detach the view's release
 here and the String's release on the service step one plain count from two processors — a lost update leaks
-the buffer (exit 101) or frees it early.
+the buffer (exit 101) or frees it early. Each reader's mailbox holds every round, so a send never finds it
+full however far the readers fall behind.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -3067,7 +4035,7 @@ typealias ReaderHandles = Array with Reader.handle
 function main() returns ExitCode
 	var readers = ReaderHandles.create()
 	for _ in 1 to serviceCount 'spawnEach'
-		readers.push(spawn Reader.create())
+		readers.push(spawn(capacity: rounds) Reader.create())
 	end 'spawnEach'
 
 	var kept = 0 as Count
@@ -3076,7 +4044,7 @@ function main() returns ExitCode
 		var s = ""
 		s.append("payload {i mod 10}")
 		let bytes = s.toByteArray()
-		r.take(s)
+		try r.take(s) otherwise panic("an open mailbox with room takes the send")
 		kept = kept + bytes.count()
 	end 'round'
 
@@ -3124,7 +4092,7 @@ function main() returns ExitCode
 	xs.append("a {1}")
 	xs.append("b {2}")
 	let h = spawn Svc.create()
-	h.take(xs)
+	try h.take(xs) otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -3169,7 +4137,7 @@ function main() returns ExitCode
 	var cell = Cell.create()
 	xs.append(cell)
 	let h = spawn Svc.create()
-	h.take(xs)
+	try h.take(xs) otherwise panic("an open mailbox with room takes the send")
 	return cell.n as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -3206,7 +4174,7 @@ function main() returns ExitCode
 	var m = Names.create()
 	m.upsert("a {1}", value: "x {2}")
 	let h = spawn Svc.create()
-	h.take(m)
+	try h.take(m) otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -3250,7 +4218,7 @@ function main() returns ExitCode
 	var cell = Cell.create()
 	m.upsert("k {1}", value: cell)
 	let h = spawn Svc.create()
-	h.take(m)
+	try h.take(m) otherwise panic("an open mailbox with room takes the send")
 	return cell.n as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -3516,7 +4484,7 @@ end 'Svc'
 
 function main() returns ExitCode
 	let h = spawn Svc.create()
-	h.take(Shape.labelled("heap {1 + 1}"))
+	try h.take(Shape.labelled("heap {1 + 1}")) otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -3564,7 +4532,7 @@ function main() returns ExitCode
 	var cell = Cell.create()
 	var s = Shape.held(cell)
 	let h = spawn Svc.create()
-	h.take(s)
+	try h.take(s) otherwise panic("an open mailbox with room takes the send")
 	return cell.n as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -4178,8 +5146,8 @@ end 'Sink'
 
 function main() returns ExitCode
 	let h = spawn Sink.create()
-	h.take(S63.create())
-	h.report()
+	try h.take(S63.create()) otherwise panic("an open mailbox with room takes the send")
+	try h.report() otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
 typealias Level = int(0 to 1024)
@@ -4244,7 +5212,7 @@ end 'Svc'
 
 function main() returns ExitCode
 	let h = spawn Svc.create(Pair.create())
-	h.report()
+	try h.report() otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -4295,7 +5263,7 @@ end 'Svc'
 
 function main() returns ExitCode
 	let h = spawn Svc.create(oneCellTwice())
-	h.report()
+	try h.report() otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -4353,7 +5321,7 @@ end 'Svc'
 
 function main() returns ExitCode
 	let h = spawn Svc.create(Frame.create())
-	h.report()
+	try h.report() otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -4480,7 +5448,7 @@ end 'Svc'
 function main() returns ExitCode
 	var bag = Bag.create()
 	let h = spawn Svc.create()
-	h.take(Pair.around(bag))
+	try h.take(Pair.around(bag)) otherwise panic("an open mailbox with room takes the send")
 	return bag.n as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -4572,7 +5540,7 @@ end 'Svc'
 
 function main() returns ExitCode
 	let h = spawn Svc.create(oneCellUnderTwoKeys())
-	h.report()
+	try h.report() otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -4625,7 +5593,7 @@ end 'Svc'
 
 function main() returns ExitCode
 	let h = spawn Svc.create(oneCellTwice())
-	h.report()
+	try h.report() otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -4683,7 +5651,7 @@ end 'Svc'
 
 function main() returns ExitCode
 	let h = spawn Svc.create(pairedCells(40))
-	h.report()
+	try h.report() otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -4738,7 +5706,7 @@ end 'Svc'
 function main() returns ExitCode
 	var kept = Cell.create()
 	let h = spawn Svc.create(pairedCellsAround(kept, pairs: 40))
-	h.report()
+	try h.report() otherwise panic("an open mailbox with room takes the send")
 	return kept.n as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -5001,11 +5969,11 @@ function main() returns ExitCode
 	let one = spawn Reader.create(1)
 	let two = spawn Reader.create(2)
 	let doc = Doc.create(7)
-	let first = one.read(doc.clone())
-	let second = two.read(doc.clone())
+	let first = try one.read(doc.clone()) otherwise panic("an open mailbox with room takes the send")
+	let second = try two.read(doc.clone()) otherwise panic("an open mailbox with room takes the send")
 	let mine = digest(doc)
-	let a = try await first otherwise 0
-	let b = try await second otherwise 0
+	let a = await first
+	let b = await second
 	print("first {a}\n")
 	print("second {b}\n")
 	print("sender {mine}\n")
@@ -5075,7 +6043,7 @@ function main() returns ExitCode
 	let h = spawn Tally.create()
 	let tree = Tree.create(4)
 	for _ in 1 to 200 'send'
-		h.take(tree.clone())
+		try h.take(tree.clone()) otherwise panic("an open mailbox with room takes the send")
 	end 'send'
 	let report = try await h.report() otherwise "gone"
 	print("{report}\n")
@@ -5143,7 +6111,7 @@ end 'Keeper'
 function sendAndReturn(h Keeper.handle)
 	let tree = Tree.create(3)
 	print("sender read {tree.name}\n")
-	h.take(tree)
+	try h.take(tree) otherwise panic("an open mailbox with room takes the send")
 end 'sendAndReturn'
 
 function main() returns ExitCode
@@ -5203,7 +6171,7 @@ end 'Svc'
 function main() returns ExitCode
 	let h = spawn Svc.create()
 	let b = Holder.create()
-	h.poke(b)
+	try h.poke(b) otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -5638,7 +6606,7 @@ end 'Relay'
 function main() returns ExitCode
 	let counter = spawn Counter.create()
 	let relay = spawn Relay.create()
-	relay.adopt(counter.clone())
+	try relay.adopt(counter.clone()) otherwise panic("an open mailbox with room takes the send")
 	let viaRelay = try await relay.forward(5) otherwise 0
 	print("relay {viaRelay}\n")
 	let direct = try await counter.bump(2) otherwise 0
@@ -5697,7 +6665,7 @@ end 'stash'
 function route(h Svc.handle, xs Boxes, n Integer, way Route)
 	let b = Box.create(n)
 	match way 'send'
-		toService then h.take(b)
+		toService then try h.take(b) otherwise panic("an open mailbox with room takes the send")
 		toArray then stash(xs, item: b)
 	end 'send'
 end 'route'
@@ -5761,7 +6729,7 @@ end 'stash'
 function route(h Svc.handle, xs Boxes, n Integer, way Route)
 	let b = Box.create(n)
 	match way 'send'
-		toService then h.take(b)
+		toService then try h.take(b) otherwise panic("an open mailbox with room takes the send")
 		toArray then print("kept, not sent\n")
 	end 'send'
 	stash(xs, item: b)
@@ -5826,7 +6794,7 @@ function main() returns ExitCode
 	while trip < 2 'twice'
 		match routeFor(trip) 'send'
 			toArray then stash(xs, item: b)
-			toService then h.take(b)
+			toService then try h.take(b) otherwise panic("an open mailbox with room takes the send")
 		end 'send'
 		trip = trip + 1
 	end 'twice'
@@ -5889,7 +6857,7 @@ function main() returns ExitCode
 		let b = Box.create(trip + 1)
 		match routeFor(trip) 'send'
 			toArray then stash(xs, item: b)
-			toService then h.take(b)
+			toService then try h.take(b) otherwise panic("an open mailbox with room takes the send")
 		end 'send'
 		trip = trip + 1
 	end 'eachTrip'
@@ -5940,7 +6908,7 @@ end 'Svc'
 function main() returns ExitCode
 	let h = spawn Svc.create()
 	let b = Box.create()
-	h.take(b)
+	try h.take(b) otherwise panic("an open mailbox with room takes the send")
 	var m = b
 	m.n = 2
 	return m.n as ExitCode
@@ -5978,7 +6946,7 @@ function main() returns ExitCode
 	let h = spawn Svc.create()
 	var m = Box.create()
 	let b = Box.create()
-	h.take(b)
+	try h.take(b) otherwise panic("an open mailbox with room takes the send")
 	m = b
 	m.n = 2
 	return m.n as ExitCode
@@ -6023,7 +6991,7 @@ end 'Svc'
 function main() returns ExitCode
 	let h = spawn Svc.create()
 	let p = Pair.create(Box.create())
-	h.take(p)
+	try h.take(p) otherwise panic("an open mailbox with room takes the send")
 	var y = p.inner
 	y.n = 2
 	return y.n as ExitCode
@@ -6069,7 +7037,7 @@ function main() returns ExitCode
 	let h = spawn Svc.create()
 	var holder = Holder.create()
 	let b = Box.create()
-	h.take(b)
+	try h.take(b) otherwise panic("an open mailbox with room takes the send")
 	holder.item = b
 	return holder.item.n as ExitCode
 end 'main'
@@ -6111,7 +7079,7 @@ end 'Svc'
 function main() returns ExitCode
 	let h = spawn Svc.create()
 	let b = Box.create()
-	h.take(b)
+	try h.take(b) otherwise panic("an open mailbox with room takes the send")
 	let w = Wrap.held(b)
 	print("{w.name}\n")
 	return 0
@@ -6151,7 +7119,7 @@ function main() returns ExitCode
 	let h = spawn Svc.create()
 	var xs = Boxes.create()
 	let b = Box.create()
-	h.take(b)
+	try h.take(b) otherwise panic("an open mailbox with room takes the send")
 	xs.push(b)
 	return xs.count() as ExitCode
 end 'main'
@@ -6187,7 +7155,7 @@ end 'Svc'
 function sendAndKeep() returns Box
 	let h = spawn Svc.create()
 	let b = Box.create()
-	h.take(b)
+	try h.take(b) otherwise panic("an open mailbox with room takes the send")
 	return b
 end 'sendAndKeep'
 
@@ -6227,7 +7195,7 @@ end 'Svc'
 function main() returns ExitCode
 	let h = spawn Svc.create()
 	let b = Box.create()
-	h.take(b)
+	try h.take(b) otherwise panic("an open mailbox with room takes the send")
 	let peek = function() gives b.n
 	return peek() as ExitCode
 end 'main'
@@ -6265,7 +7233,7 @@ end 'Svc'
 function main() returns ExitCode
 	let h = spawn Svc.create()
 	let b = Box.create()
-	h.keep(b)
+	try h.keep(b) otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -6310,7 +7278,7 @@ end 'Svc'
 function main() returns ExitCode
 	let h = spawn Svc.create()
 	let pair = Pair.create(Box.create())
-	h.keep(pair)
+	try h.keep(pair) otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -6346,7 +7314,7 @@ end 'Svc'
 function main() returns ExitCode
 	let h = spawn Svc.create()
 	let b = Box.create()
-	h.bump(b)
+	try h.bump(b) otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -6385,7 +7353,7 @@ end 'Svc'
 function main() returns ExitCode
 	let h = spawn Svc.create()
 	let b = Box.create()
-	h.poke(b)
+	try h.poke(b) otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -6432,7 +7400,7 @@ end 'Svc'
 function main() returns ExitCode
 	let h = spawn Svc.create()
 	let b = Holder.create()
-	h.poke(b)
+	try h.poke(b) otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -6483,7 +7451,7 @@ end 'Svc'
 function main() returns ExitCode
 	let h = spawn Svc.create()
 	let b = Holder.create()
-	h.poke(b)
+	try h.poke(b) otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -6524,7 +7492,7 @@ end 'Svc'
 function main() returns ExitCode
 	let h = spawn Svc.create()
 	let b = Holder.create()
-	h.poke(b)
+	try h.poke(b) otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -6563,13 +7531,13 @@ end 'Store'
 function main() returns ExitCode
 	let h = spawn Store.create()
 	let p = async work()
-	h.keep(p)
+	try h.keep(p) otherwise panic("an open mailbox with room takes the send")
 	let r = await p
 	return r as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:23:9: argument type mismatch for 'value': expected 'Integer', got 'Promise with int(-9223372036854775808 to 9223372036854775807)'
+error E3005: <fragment>:23:13: argument type mismatch for 'value': expected 'Integer', got 'Promise with int(-9223372036854775808 to 9223372036854775807)'
 ```
 
 <!-- test: error.a-handle-of-another-service-is-refused -->
@@ -6596,27 +7564,29 @@ type Logger
 	end 'create'
 
 	export function say(peer Calc.handle)
-		peer.bump()
+		try peer.bump() otherwise panic("an open mailbox with room takes the send")
 	end 'say'
 end 'Logger'
 
 function main() returns ExitCode
 	let c = spawn Calc.create()
 	let l = spawn Logger.create()
-	l.say(l)
+	try l.say(l) otherwise panic("an open mailbox with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3005: <fragment>:29:8: argument type mismatch for 'peer': expected 'Calc.handle', got 'Logger.handle'
+error E3005: <fragment>:29:12: argument type mismatch for 'peer': expected 'Calc.handle', got 'Logger.handle'
 ```
 
 <!-- test: error.a-message-that-returns-nothing-and-throws-nothing-has-no-value -->
-⭐ **A FIRE-AND-FORGET SEND IS A STATEMENT, AND THE REFUSAL POINTS AT THE DECLARATION.** A message
-that returns nothing and throws nothing carries no `__reply` slot at all, so the send mints no cell and there
-is no promise to bind — and the cure is on `bump` rather than at the call. Every OTHER message is awaitable,
-which is why the diagnostic names what would give this one a reply.
+⭐ **A MESSAGE THAT RETURNS NOTHING IS SENT AS A STATEMENT, AND THE REFUSAL POINTS AT THE DECLARATION.** A
+message that returns nothing and throws nothing carries no `__reply` slot at all, so the send mints no cell
+and there is no promise to bind — and the cure is on `bump` rather than at the call. Every OTHER message is
+awaitable, which is why the diagnostic names what would give this one a reply. The tried spelling
+`try h.bump() otherwise …` is the one a send takes, so it is the spelling that must get this sentence rather
+than the generic "does not return a value".
 ```maxon
 type Calc
 	var count as Integer
@@ -6632,41 +7602,13 @@ end 'Calc'
 
 function main() returns ExitCode
 	let h = spawn Calc.create()
-	let n = h.bump()
+	let n = try h.bump() otherwise panic("an open mailbox with room takes the send")
 	return n as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E2015: <fragment>:16:12: Unsupported: the value of `Calc.bump` sent as a MESSAGE — it returns nothing and throws nothing, so it carries no reply slot and a send of it delivers no value. Give it a `returns` clause or a `throws` clause and `try await <handle>.bump(…)` resolves through a reply cell; otherwise send it as a statement
-```
-
-<!-- test: error.a-send-may-not-be-tried -->
-A `try` on a SEND has nothing to catch: the send enqueues and returns, and it is the REPLY that carries an
-error. The refusal names the awaitable form rather than reporting a syntax fault — and for `bump`, which
-returns nothing and throws nothing, it names the other cure too: there is no reply at all, so drop the `try`.
-```maxon
-type Calc
-	var n as Integer
-
-	static function create() returns Self
-		return Self{n: 0}
-	end 'create'
-
-	export function bump()
-		self.n = self.n + 1
-	end 'bump'
-end 'Calc'
-
-function main() returns ExitCode
-	let h = spawn Calc.create()
-	try h.bump()
-	return 0
-end 'main'
-typealias Integer = int(i64.min to i64.max)
-```
-```maxoncstderr
-error E2015: <fragment>:16:2: Unsupported: `try` on the message `Calc.bump` — a SEND is not the reply. It enqueues and returns, so it can fail at nothing; what carries an error is the reply, and awaiting it is what makes that error this frame's. Write `try await <handle>.<message>(…)`, or drop the `try` on a message that returns nothing and throws nothing
+error E2015: <fragment>:16:10: Unsupported: the value of `Calc.bump` sent as a MESSAGE — it returns nothing and throws nothing, so it carries no reply slot and a send of it delivers no value. Send it as a statement, `try <handle>.bump(…) otherwise …`, or give it a `returns` clause or a `throws` clause and `try await <handle>.bump(…)` resolves through a reply cell
 ```
 
 <!-- test: send-and-await-a-reply -->
@@ -6690,7 +7632,7 @@ end 'Calc'
 
 function main() returns ExitCode
 	let h = spawn Calc.create()
-	h.bump(3)
+	try h.bump(3) otherwise panic("a running service with room takes the send")
 	let n = try await h.total() otherwise 0
 	return n as ExitCode
 end 'main'
@@ -6700,8 +7642,9 @@ typealias Integer = int(i64.min to i64.max)
 3
 ```
 
-<!-- test: a-message-throws-and-the-error-merges-with-serviceerror -->
-The merge is always two-way — transport plus one handler.
+<!-- test: a-message-throws-and-the-handler-error-merges-with-the-send-errors -->
+One `try` covers the send and the handler: the error it binds has the send's two arms, `mailboxFull` and
+`serviceStopped`, beside the handler's own cases.
 ```maxon
 enum MathError implements Error
 	divideByZero
@@ -6726,7 +7669,8 @@ function main() returns ExitCode
 	let h = spawn Calc.create()
 	let v = try await h.divide(10, by: 0) otherwise (e) 'oops'
 		match e 'why'
-			stopped then return 70
+			mailboxFull then return 69
+			serviceStopped then return 70
 			divideByZero then return 71
 		end 'why'
 	end 'oops'
@@ -6738,8 +7682,8 @@ typealias Integer = int(i64.min to i64.max)
 71
 ```
 
-<!-- test: a-call-after-shutdown-answers-stopped -->
-A stopped service resolves its pending replies rather than hanging their awaiters.
+<!-- test: a-call-after-shutdown-fails-service-stopped -->
+A call to a stopped service fails at the send with `serviceStopped`, so the awaiter never has a reply to wait for.
 ```maxon
 type Calc
 	var count as Integer
@@ -6758,7 +7702,8 @@ function main() returns ExitCode
 	h.shutdown()
 	let v = try await h.total() otherwise (e) 'gone'
 		match e 'why'
-			stopped then return 9
+			mailboxFull then return 8
+			serviceStopped then return 9
 		end 'why'
 	end 'gone'
 	return v as ExitCode
@@ -6831,7 +7776,7 @@ end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	h.put(4)
+	try h.put(4) otherwise panic("a running service with room takes the send")
 	let got = try await h.take() otherwise return 2
 	print("{got.count()}\n")
 	return 0
@@ -6874,7 +7819,7 @@ end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	h.put(4)
+	try h.put(4) otherwise panic("a running service with room takes the send")
 	let got = try await h.take() otherwise return 2
 	print("{got.count()}\n")
 	return 0
@@ -6918,7 +7863,7 @@ end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	h.put(4)
+	try h.put(4) otherwise panic("a running service with room takes the send")
 	let got = try await h.take() otherwise return 2
 	print("{got.count()}\n")
 	return 0
@@ -7053,15 +7998,15 @@ typealias Integer = int(i64.min to i64.max)
 error E3139: <fragment>:10:14: service call cycle — these messages can deadlock waiting on each other:
     `A.ping` (<fragment>:10:14) awaits a reply from `B`
     `B.pong` (<fragment>:26:14) awaits a reply from `A`
-    A message may not await a reply from a service that can await back. Break the ring by making one of these calls fire-and-forget — drop its `returns` and `throws` clauses, or send it as a statement and do not await it — because a non-blocking send is not part of the graph
+    A message may not await a reply from a service that can await back. Break the ring by making one of these messages return nothing and throw nothing, and send it with `try <handle>.<message>(…) otherwise …` without awaiting it — because a non-blocking send is not part of the graph
 ```
 
 <!-- test: a-reply-error-type-with-one-member-is-nameable -->
-⭐ **A MESSAGE THAT THROWS NOTHING HAS A ONE-MEMBER REPLY ERROR TYPE, AND ONE MEMBER IS A NAME.** The reply of
-`total()` can fail only in transport, so its error type is `ServiceError` itself — an ordinary declared enum a
-`throws` clause can spell, which is what lets a bare `try` PROPAGATE it out of an intermediate function. Only a
-message that throws needs the two-member union, and that one is spelled `<Service>.<method>.errors` — a name the
-compiler synthesizes rather than one an author declares (see `a-declared-throws-clause-names-a-replys-errors`).
+⭐ **A MESSAGE THAT THROWS NOTHING FAILS ONLY AT THE SEND, AND THAT ERROR HAS A NAME.** The awaited `total()` can
+fail only because the mailbox is full or the service has stopped, so its error type is `Calc.total.sendError` —
+the per-message type a `throws` clause can spell, which is what lets a bare `try` PROPAGATE it out of an
+intermediate function. A message that also throws has its handler's error beside the send's, and a bare propagating
+`try await` of it is refused (see `error.bare-try-propagation-of-a-two-member-reply-is-refused`).
 ```maxon
 type Calc
 	var count as Integer
@@ -7075,7 +8020,7 @@ type Calc
 	end 'total'
 end 'Calc'
 
-function fetch(h Calc.handle) returns Integer throws ServiceError
+function fetch(h Calc.handle) returns Integer throws Calc.total.sendError
 	return try await h.total()
 end 'fetch'
 
@@ -7091,12 +8036,11 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: error.bare-try-propagation-of-a-two-member-reply-is-refused -->
-A message that THROWS has a two-member reply error type, and a `throws` clause CAN name it — the pair is
-synthesized as `Calc.divide.errors`, which is what `a-declared-throws-clause-names-a-replys-errors` propagates
-through. What THIS case pins is the MISMATCH: `fetch` declares `throws MathError`, the handler half alone,
-which is not the reply's error type — so the bare `try` that would re-publish the fused flag under that
-narrower name earns the same E3059 an ordinary type mismatch does. Either name the reply's own error type or
-CATCH it here, which is what `otherwise (e)` is for.
+A message that THROWS has two error sources: the send, which fails with `Calc.divide.sendError`, and the
+handler, which throws `MathError`. A bare `try await` of it has no single error type to propagate, so
+`fetch`, which declares `throws MathError`, is refused with E3059 rather than re-publishing the handler's half
+under a name that hides the send's. Either CATCH both here, which is what `otherwise (e)` is for, or split the
+send from the await, which is what `a-split-send-and-await-propagates-the-handlers-error` does.
 ```maxon
 enum MathError implements Error
 	divideByZero
@@ -7128,15 +8072,13 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3059: <fragment>:22:9: try propagates 'Calc.divide.errors' but enclosing function throws 'MathError' — add 'otherwise' to convert
+error E3059: <fragment>:22:9: type mismatch: '`try await` of 'Calc.divide' can fail at the send ('Calc.divide.sendError') and in the handler ('MathError'), so it has no single error type to propagate — handle it here with `otherwise (e)` and `match e`, or split it: `let p = try h.m(x)` propagates 'Calc.divide.sendError', then `try await p` propagates 'MathError''
 ```
 
-<!-- test: a-declared-throws-clause-names-a-replys-errors -->
-⭐ **THE SPELLING THE PREVIOUS CASE'S MISMATCH IMPLIES** (§"`ServiceError`"). The fused pair is a
-nominal enum registered under `<Service>.<method>.errors`, so a `throws` clause can name it — and once it
-can, a bare `try` inside `fetch` re-publishes the flag VERBATIM to `fetch`'s own caller instead of being
-refused. The two members survive the hop: `main` catches at the call and still selects between transport and
-handler.
+<!-- test: a-split-send-and-await-propagates-the-handlers-error -->
+⭐ **THE SPLIT THE PREVIOUS CASE'S REFUSAL NAMES.** The send is its own `try` and the await is another: the send
+is handled where it is made, and the bare `try await` of the stored promise propagates the handler's `MathError`
+alone, which `fetch` declares. `main` catches it at the call and selects the handler's case.
 ```maxon
 enum MathError implements Error
 	divideByZero
@@ -7157,15 +8099,15 @@ type Calc
 	end 'divide'
 end 'Calc'
 
-function fetch(h Calc.handle) returns Integer throws Calc.divide.errors
-	return try await h.divide(10, by: 0)
+function fetch(h Calc.handle) returns Integer throws MathError
+	let p = try h.divide(10, by: 0) otherwise panic("a running service with room takes the send")
+	return try await p
 end 'fetch'
 
 function main() returns ExitCode
 	let h = spawn Calc.create()
 	let v = try fetch(h) otherwise (e) 'oops'
 		match e 'why'
-			stopped then return 70
 			divideByZero then return 71
 		end 'why'
 	end 'oops'
@@ -7177,14 +8119,15 @@ typealias Integer = int(i64.min to i64.max)
 71
 ```
 
-<!-- test: error.an-ambiguous-bare-arm-over-a-fused-reply-error-is-refused -->
-Fusing two members into one dispatch table can collide on a bare case name: `Halt` declares a `stopped` of its
-own, so `stopped` in the `match` names both `ServiceError.stopped` and `Halt.stopped` and there is no rule
-that picks one. The qualified spelling disambiguates; the bare one is REFUSED rather than silently selecting a
-member, which is the same E3085 an ordinary two-member `try` union earns.
+<!-- test: error.an-ambiguous-bare-arm-over-a-merged-reply-error-is-refused -->
+Merging the send's error with the handler's into one dispatch table can collide on a bare case name: `Halt`
+declares a `serviceStopped` of its own, so `serviceStopped` in the `match` names both
+`Guard.risky.sendError.serviceStopped` and `Halt.serviceStopped` and there is no rule that picks one. The
+qualified spelling disambiguates; the bare one is REFUSED rather than silently selecting a member, which is the
+same E3085 an ordinary two-member `try` union earns.
 ```maxon
 enum Halt implements Error
-	stopped
+	serviceStopped
 	halted
 end 'Halt'
 
@@ -7207,8 +8150,9 @@ function main() returns ExitCode
 	let h = spawn Guard.create()
 	try await h.risky() otherwise (e) 'oops'
 		match e 'why'
-			stopped then return 70 as ExitCode
+			serviceStopped then return 70 as ExitCode
 			halted then return 71 as ExitCode
+			mailboxFull then return 72 as ExitCode
 		end 'why'
 	end 'oops'
 	return 0 as ExitCode
@@ -7216,20 +8160,20 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3085: <fragment>:26:4: case 'stopped' is shared by multiple union members; qualify with 'EnumName.stopped'
+error E3085: <fragment>:26:4: case 'serviceStopped' is shared by multiple union members; qualify with 'EnumName.serviceStopped'
 ```
 
 <!-- test: shutdown-resolves-pending-replies -->
-⭐ **THE LIVENESS OBLIGATION, ON BOTH OF ITS ROADS.** A message that dies unprocessed must not hang its awaiter.
-The FIRST send is queued behind the poison pill and is abandoned by the loop's own drain; the SECOND arrives
-after the mailbox is already closed and is abandoned by the send. Both answer `ServiceError.stopped`, and the
-case passes by TERMINATING at all.
+⭐ **THE LIVENESS OBLIGATION, ON BOTH OF ITS ROADS.** No awaiter hangs. A message queued before `shutdown()` still
+runs, so its stored reply resolves with the handler's value; a message sent after it fails at the send with
+`serviceStopped`, so there is no reply to wait for. The case passes by TERMINATING at all, and its exit code
+says which road each took.
 ```maxon
 type Slow
 	var n as Integer
 
 	static function create() returns Self
-		return Self{n: 0}
+		return Self{n: 5}
 	end 'create'
 
 	export function value() returns Integer
@@ -7240,23 +8184,21 @@ end 'Slow'
 function main() returns ExitCode
 	var stops = 0 as Integer
 	let h = spawn Slow.create()
+	let queued = try h.value() otherwise panic("a running service with room takes the send")
 	h.shutdown()
-	try await h.value() otherwise (e) 'first'
-		match e 'w1'
-			stopped then stops = stops + 1
-		end 'w1'
-	end 'first'
+	let answer = await queued
 	try await h.value() otherwise (e) 'second'
 		match e 'w2'
-			stopped then stops = stops + 1
+			mailboxFull then stops = stops + 100
+			serviceStopped then stops = stops + 1
 		end 'w2'
 	end 'second'
-	return stops as ExitCode
+	return (answer + stops) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```exitcode
-2
+6
 ```
 
 <!-- test: a-string-moves-in-and-a-fresh-string-comes-back -->
@@ -7291,8 +8233,8 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: reply-discarded-is-dropped-clean -->
-⭐ A reply-bearing message sent in STATEMENT position mints a cell nobody binds, so the promise is dropped at
-statement end while the cell is still PENDING. The dropper may not free it — the replier is about to write into
+⭐ A reply-bearing message whose reply is discarded on purpose with `_ =` mints a cell nobody binds, so the promise
+is dropped at statement end while the cell is still PENDING. The dropper may not free it — the replier is about to write into
 it — so it adds the consumer ticket only, and the reply's own completion supplies the runner's half. The managed
 result nobody took is released by whichever arrives second.
 ```maxon
@@ -7310,8 +8252,8 @@ end 'Echo'
 
 function main() returns ExitCode
 	let h = spawn Echo.create()
-	h.say("a")
-	h.say("b")
+	_ = try h.say("a") otherwise panic("a running service with room takes the send")
+	_ = try h.say("b") otherwise panic("a running service with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -7344,7 +8286,7 @@ end 'Echo'
 
 function main() returns ExitCode
 	let h = spawn Echo.create()
-	h.say("a")
+	_ = try h.say("a") otherwise panic("a running service with room takes the send")
 	let n = try await h.count() otherwise 0
 	return n as ExitCode
 end 'main'
@@ -7374,10 +8316,10 @@ end 'Echo'
 
 function main() returns ExitCode
 	let h = spawn Echo.create()
-	var p = h.count()
+	var p = try h.count() otherwise panic("a running service with room takes the send")
 	let n = try await h.count() otherwise 0
-	p = h.count()
-	let m = try await p otherwise 0
+	p = try h.count() otherwise panic("a running service with room takes the send")
+	let m = await p
 	return (n + m) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -7452,20 +8394,20 @@ end 'Calc'
 
 function main() returns ExitCode
 	let h = spawn Calc.create()
-	let p = h.total()
-	let a = try await p otherwise 0
-	let b = try await p otherwise 0
+	let p = try h.total() otherwise panic("a running service with room takes the send")
+	let a = await p
+	let b = await p
 	return (a + b) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3142: <fragment>:18:20: this promise was already consumed by an earlier 'await': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again
+error E3142: <fragment>:18:16: this promise was already consumed by an earlier 'await': a promise owns a green thread, and a green thread has exactly one owner — the consume reclaims the thread's struct, so a later use of any name that spells it reads memory the scheduler has taken back. An alias names the same thread. Re-arm the binding from a fresh `async` spawn to use the name again
 ```
 
 <!-- test: error.plain-await-of-a-reply -->
-A reply ALWAYS throws `ServiceError`, whatever the message itself declares — so a plain `await` of one is
-E3057 by construction and there is no reply in the language that can be awaited without `try`.
+Every send throws, whatever the message itself declares — so a plain `await` of a send is E3057 by construction.
+Only the promise a send returns is awaited without `try`, when the handler cannot throw.
 ```maxon
 type Calc
 	var count as Integer
@@ -7487,15 +8429,13 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3057: <fragment>:16:10: throwing function requires try: 'await' on a promise from a function that throws 'ServiceError' drops the error and leaks its payload — use 'try await'
+error E3057: <fragment>:16:16: throwing function requires try: 'Calc.total'
 ```
 
 <!-- test: error.a-message-that-throws-a-payload-carrying-union-is-refused -->
 ⚠ **THE ONE ERROR SHAPE A REPLY CANNOT CARRY, REFUSED RATHER THAN MISCOMPILED.** The reply's error word is a
-single word carrying the FUSED ordinal of a two-member dispatch line, which is what lets `match e` tell
-`ServiceError` apart from the handler's own error; a payload-carrying union's flag is a heap POINTER instead,
-so the two facts would need two words and the box would cross green threads with no soleness rule to say it
-may.
+single word holding the handler error's `ordinal + bias`; a payload-carrying union's flag is a heap POINTER
+instead, so the box would cross green threads with no soleness rule to say it may.
 
 ⚠ **IT FIRES AT THE `spawn` AND NOT AT A SEND, AND THAT IS FORCED RATHER THAN CONVENTIONAL.** `<T>.__loop` is
 synthesized from the DECLARATION and completes a reply for every reply-bearing message of the type, so a
@@ -7525,7 +8465,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3140: <fragment>:19:10: the message `Store.wipe` declares a reply that throws `Trouble`, a PAYLOAD-CARRYING union whose error flag is a heap box pointer — a reply's one error word already carries the fused ordinal that tells `ServiceError` apart from the message's own error, and a pointer is not an ordinal, and this `spawn` makes `Store` a service — whose reply-bearing messages resolve through a CELL, a green thread that never runs, carrying one value word and one error word. Return an integer, a `String`, a struct or a service handle, and throw a payload-free `enum`; or drop the `returns` and `throws` clauses, which makes the message fire-and-forget and gives it no reply to carry
+error E3140: <fragment>:19:10: the message `Store.wipe` declares a reply that throws `Trouble`, a PAYLOAD-CARRYING union whose error flag is a heap box pointer — a reply's one error word holds an `ordinal + bias`, and a pointer is not an ordinal, and this `spawn` makes `Store` a service — whose reply-bearing messages resolve through a CELL, a green thread that never runs, carrying one value word and one error word. Return an integer, a `String`, a struct or a service handle, and throw a payload-free `enum`; or drop the `returns` and `throws` clauses, which makes the message fire-and-forget and gives it no reply to carry
 ```
 
 <!-- test: cycle-through-a-free-function-is-refused -->
@@ -7579,7 +8519,7 @@ typealias Integer = int(i64.min to i64.max)
 error E3139: <fragment>:3:13: service call cycle — these messages can deadlock waiting on each other:
     `A.ping` (<fragment>:3:13) awaits a reply from `B`
     `B.pong` (<fragment>:30:14) awaits a reply from `A`
-    A message may not await a reply from a service that can await back. Break the ring by making one of these calls fire-and-forget — drop its `returns` and `throws` clauses, or send it as a statement and do not await it — because a non-blocking send is not part of the graph
+    A message may not await a reply from a service that can await back. Break the ring by making one of these messages return nothing and throw nothing, and send it with `try <handle>.<message>(…) otherwise …` without awaiting it — because a non-blocking send is not part of the graph
 ```
 
 <!-- test: cycle-same-type-self-edge-is-refused -->
@@ -7606,7 +8546,7 @@ end 'Worker'
 
 function main() returns ExitCode
 	let w = spawn Worker.create()
-	w.ask(w.clone())
+	_ = try w.ask(w.clone()) otherwise panic("a running service with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -7614,7 +8554,7 @@ typealias Integer = int(i64.min to i64.max)
 ```maxoncstderr
 error E3139: <fragment>:10:14: service call cycle — these messages can deadlock waiting on each other:
     `Worker.ask` (<fragment>:10:14) awaits a reply from `Worker`
-    Two distinct instances of `Worker` would not deadlock — but edges are by TYPE, which is what makes them statically knowable at all, so the analysis cannot tell the instances apart and must be conservative. Make the peer call fire-and-forget (send it as a statement and have the peer reply with a separate message), or split the role into two types
+    Two distinct instances of `Worker` would not deadlock — but edges are by TYPE, which is what makes them statically knowable at all, so the analysis cannot tell the instances apart and must be conservative. Make the peer message return nothing and throw nothing, and send it with `try <handle>.<message>(…) otherwise …` without awaiting it (have the peer reply with a separate message), or split the role into two types
 ```
 
 <!-- test: cycle-behind-a-second-await-is-still-refused -->
@@ -7677,7 +8617,7 @@ function main() returns ExitCode
 	let a = spawn A.create()
 	let b = spawn B.create()
 	let c = spawn C.create()
-	a.ping(b, c: c)
+	_ = try a.ping(b, c: c) otherwise panic("a running service with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -7686,7 +8626,7 @@ typealias Integer = int(i64.min to i64.max)
 error E3139: <fragment>:10:15: service call cycle — these messages can deadlock waiting on each other:
     `A.ping` (<fragment>:10:15) awaits a reply from `B`
     `B.pong` (<fragment>:28:14) awaits a reply from `A`
-    A message may not await a reply from a service that can await back. Break the ring by making one of these calls fire-and-forget — drop its `returns` and `throws` clauses, or send it as a statement and do not await it — because a non-blocking send is not part of the graph
+    A message may not await a reply from a service that can await back. Break the ring by making one of these messages return nothing and throw nothing, and send it with `try <handle>.<message>(…) otherwise …` without awaiting it — because a non-blocking send is not part of the graph
 ```
 
 <!-- test: a-blocking-cycle-through-an-indirect-call-aborts -->
@@ -7830,17 +8770,16 @@ MAKES IT TRUE.** A reply is an ordinary `Promise`, so it goes into an `Array wit
 its `awaitAny()` selects over it exactly as it does over `async` spawns — no separate "channel select"
 and no second waiting mechanism.
 
-⚠ **THE STORAGE MUST NAME THE REPLY'S OWN ERROR TYPE.** A reply ALWAYS carries `ServiceError` (the service can
-be gone, whatever the message declares), so `Promise with Integer` alone would erase it; and a message that
-DOES throw has a two-member reply error type the storage must spell by its fused name, which is
-`a-throwing-reply-stores-in-a-promise-naming-its-errors` below. `Slow.value` throws nothing, so `ServiceError`
-is the whole of its reply error type.
+⚠ **THE STORAGE NAMES THE HANDLER'S OWN ERROR TYPE, AND NOTHING MORE.** The send's failure surfaces at the send,
+before any promise exists, so a reply carries only what its handler throws. `Slow.value` throws nothing, so its
+storage is `Promise with Integer`; a message that DOES throw adds its error as the second argument, as
+`a-throwing-reply-stores-in-a-promise-naming-its-errors` below does.
 
 ⚠ The reply is awaited afterwards. `awaitAny` retires nothing, so the array would otherwise die holding a
 live reply cell — exit 75; see `specs/await-any.md`.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias ReplyPromise = Promise with (Integer, ServiceError)
+typealias ReplyPromise = Promise with Integer
 typealias ReplyPromiseArray = Array with ReplyPromise
 
 type Slow
@@ -7858,10 +8797,10 @@ end 'Slow'
 function main() returns ExitCode
 	let h = spawn Slow.create()
 	var ps = ReplyPromiseArray.create()
-	ps.push(h.value())
+	ps.push(try h.value() otherwise panic("a running service with room takes the send"))
 	let ready = ps.awaitAny()
 	let p = try ps.get(ready) otherwise panic("awaitAny named a slot that is in range")
-	let v = try await p otherwise 0
+	let v = await p
 	return (ready as Integer + v) as ExitCode
 end 'main'
 ```
@@ -7870,18 +8809,17 @@ end 'main'
 ```
 
 <!-- test: a-throwing-reply-stores-in-a-promise-naming-its-errors -->
-⭐ **THE FUSED ERROR TYPE HAS A NAME, SO A THROWING MESSAGE'S REPLY CAN BE STORED.** A message that
-throws has a reply error type of `{ServiceError, <what the message throws>}`, and that pair is synthesized as
-a nominal enum under `<Service>.<method>.errors` — an ordinary declared type a `Promise with (T, E)` can put
-in its second argument. The storage road and the direct road then describe the SAME two members, so `e` binds
-the same fused flag either way and the bare arms select through one dispatch table.
+⭐ **A THROWING MESSAGE'S REPLY IS STORED UNDER THE HANDLER'S OWN ERROR.** A message that throws replies with
+`Promise with (T, <what the message throws>)`, an ordinary declared type, because the send's failure surfaces at
+the send and never in the promise. The storage road therefore binds only the handler's cases, and the
+direct `try await` road adds the send's two beside them.
 ```maxon
 enum MathError implements Error
 	divideByZero
 end 'MathError'
 
 typealias Integer = int(i64.min to i64.max)
-typealias DivideReply = Promise with (Integer, Calc.divide.errors)
+typealias DivideReply = Promise with (Integer, MathError)
 typealias DivideReplyArray = Array with DivideReply
 
 type Calc
@@ -7902,11 +8840,10 @@ end 'Calc'
 function main() returns ExitCode
 	let h = spawn Calc.create()
 	var ps = DivideReplyArray.create()
-	ps.push(h.divide(10, by: 0))
+	ps.push(try h.divide(10, by: 0) otherwise panic("a running service with room takes the send"))
 	let p = try ps.get(0) otherwise panic("the reply was pushed into slot 0")
 	try await p otherwise (e) 'oops'
 		match e 'why'
-			stopped then return 70
 			divideByZero then return 71
 		end 'why'
 	end 'oops'
@@ -7922,8 +8859,8 @@ end 'main'
 SEND MINTS.** `Promise with (T, E)` is interned on its base and its ARGUMENTS, and a declared type reaches
 the two roads under two different tags — `structRef` off the message's `returns` clause, `named` off the
 type argument the author wrote — which mangle to one symbol. Interned as two, a program would be refused as
-a duplicate definition of its own promise. Every `Promise with (Integer, …)` case above is blind to it: a
-scalar argument carries no name, so it carries no second tag.
+a duplicate definition of its own promise. Every `Promise with Integer` and `Promise with (Integer, …)` case above
+is blind to it: a scalar argument carries no name, so it carries no second tag.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -7948,15 +8885,15 @@ type Counter
 	end 'bumped'
 end 'Counter'
 
-typealias TallyReply = Promise with (Tally, ServiceError)
+typealias TallyReply = Promise with Tally
 typealias TallyReplyArray = Array with TallyReply
 
 function main() returns ExitCode
 	let h = spawn Counter.create()
 	var ps = TallyReplyArray.create()
-	ps.push(h.bumped(4))
+	ps.push(try h.bumped(4) otherwise panic("a running service with room takes the send"))
 	let p = try ps.remove(0) otherwise panic("the reply was pushed into slot 0")
-	view tally = try await p otherwise return 70
+	view tally = await p
 	return tally.n as ExitCode
 end 'main'
 ```
@@ -7965,17 +8902,20 @@ end 'main'
 ```
 
 <!-- test: error.a-stored-reply-that-names-the-wrong-errors-is-refused -->
-The two-member type HAS a name, so the refusal is an ordinary name mismatch. `ReplyPromise` names `ServiceError`, which is only the TRANSPORT half; storing a reply from a
-throwing message under it would erase the handler member, and the awaiter would then decode a fused
-two-member flag as a single enum: a silent wrong `match` arm rather than a diagnostic. So the refusal stays at
-the STORE, where both the declared name and the message's own are still known.
+`ReplyPromise` names `OtherError`, which is not the error `Calc.divide` throws; storing the reply under it
+would make the awaiter decode the handler's flag as another enum: a silent wrong `match` arm rather than a
+diagnostic. So the refusal stays at the STORE, where both the declared name and the message's own are still known.
 ```maxon
 enum MathError implements Error
 	divideByZero
 end 'MathError'
 
+enum OtherError implements Error
+	unrelated
+end 'OtherError'
+
 typealias Integer = int(i64.min to i64.max)
-typealias ReplyPromise = Promise with (Integer, ServiceError)
+typealias ReplyPromise = Promise with (Integer, OtherError)
 typealias ReplyPromiseArray = Array with ReplyPromise
 
 type Calc
@@ -7996,27 +8936,22 @@ end 'Calc'
 function main() returns ExitCode
 	let h = spawn Calc.create()
 	var ps = ReplyPromiseArray.create()
-	ps.push(h.divide(10, by: 2))
+	ps.push(try h.divide(10, by: 2) otherwise panic("a running service with room takes the send"))
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3098: <fragment>:28:5: 'ReplyPromise' names the error type 'ServiceError', but a reply from 'Calc.divide' throws 'Calc.divide.errors'
+error E3098: <fragment>:32:5: 'ReplyPromise' names the error type 'OtherError', but a reply from 'Calc.divide' throws 'MathError'
 ```
 
-<!-- test: a-stored-reply-decodes-serviceerror-through-the-storage-road -->
-⭐⭐ **THE CASE THAT SAYS THE TWO ROADS DECODE THE SAME WORD.** A reply awaited DIRECTLY is described by its
-message (`TryTarget.serviceReply`); one awaited out of an array is described by its STORAGE TYPE
-(`TryTarget.promise`) — two different roads through `caughtErrorFormFor`, reading one error word that the
-service wrote already fused. If they disagreed the failure would be silent: a `match e` arm selected by a
-table the writer did not build, never a diagnostic.
-
-They agree because a message that throws NOTHING has exactly one reply error member, so both roads answer
-`CaughtErrorForm.singleCall` and `e` binds a plain `ServiceError`. This shuts the service down first, so the
-send is abandoned at the send and the reply really does carry `stopped`.
+<!-- test: a-stopped-service-stores-no-reply-and-its-send-fails-serviceStopped -->
+⭐⭐ **A STORED REPLY NEVER CARRIES THE STOP.** A reply awaited out of an array is described by its STORAGE TYPE,
+which names only what the handler throws; the failure of the send is read where the send is made. This shuts the
+service down first, so the send fails with `serviceStopped` before any reply exists: the `if let` takes its
+`else` road, nothing reaches the array, and the stop is counted at the send.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias ReplyPromise = Promise with (Integer, ServiceError)
+typealias ReplyPromise = Promise with Integer
 typealias ReplyPromiseArray = Array with ReplyPromise
 
 type Slow
@@ -8036,15 +8971,15 @@ function main() returns ExitCode
 	let h = spawn Slow.create()
 	h.shutdown()
 	var ps = ReplyPromiseArray.create()
-	ps.push(h.value())
-	let ready = ps.awaitAny()
-	let p = try ps.get(ready) otherwise panic("awaitAny named a slot that is in range")
-	try await p otherwise (e) 'gone'
+	if let reply = try h.value() 'sent'
+		ps.push(reply)
+	end 'sent' else (e) 'gone'
 		match e 'w'
-			stopped then stops = stops + 1
+			mailboxFull then stops = stops + 100
+			serviceStopped then stops = stops + 1
 		end 'w'
 	end 'gone'
-	return stops as ExitCode
+	return (stops + ps.count() as Integer) as ExitCode
 end 'main'
 ```
 ```exitcode
@@ -8052,11 +8987,15 @@ end 'main'
 ```
 
 <!-- test: error.a-reply-stored-without-its-error-type-is-refused -->
-A reply ALWAYS carries `ServiceError` — the service can be gone, whatever the message declares — so a
-`Promise with T` storage would erase it and leave a `try await` with nothing to bind `e` at. The refusal
-names the MESSAGE rather than *"this promise's function"*: `Slow.value` throws nothing, its REPLY does, and
-a sentence blaming the handler would send the author to add a `throws` clause that changes none of this.
+A reply from a message that throws carries the handler's error, so a `Promise with T` storage would erase it and
+leave a `try await` with nothing to bind `e` at. The refusal names the MESSAGE rather than *"this promise's
+function"*: the promise belongs to the reply of `Slow.value`, whose `throws` clause is what the storage
+must spell.
 ```maxon
+enum SlowError implements Error
+	tooSlow
+end 'SlowError'
+
 typealias Integer = int(i64.min to i64.max)
 typealias BarePromise = Promise with Integer
 typealias BarePromiseArray = Array with BarePromise
@@ -8068,7 +9007,10 @@ type Slow
 		return Self{n: 7}
 	end 'create'
 
-	export function value() returns Integer
+	export function value() returns Integer throws SlowError
+		if self.n > 9 'slow'
+			throw SlowError.tooSlow
+		end 'slow'
 		return self.n
 	end 'value'
 end 'Slow'
@@ -8076,12 +9018,12 @@ end 'Slow'
 function main() returns ExitCode
 	let h = spawn Slow.create()
 	var ps = BarePromiseArray.create()
-	ps.push(h.value())
+	ps.push(try h.value() otherwise panic("a running service with room takes the send"))
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3098: <fragment>:21:5: a reply from 'Slow.value' always carries 'ServiceError' — the service can be gone, whatever the message declares — so 'BarePromise' would erase it; declare the storage as 'Promise with (T, ServiceError)' so 'try await' can bind it
+error E3098: <fragment>:28:5: cannot store a promise from a function that throws 'SlowError' in 'BarePromise': it names the result type only, which would erase the error type — declare the storage as 'Promise with (T, SlowError)' so 'try await' can bind and release the error
 ```
 
 <!-- test: a-generic-service-is-supported -->
@@ -8283,7 +9225,7 @@ A handle in a FIELD, which co-owns it. ⭐ **A generic handle is `genericInstanc
 `structRef`-tagged after its companion's name**, and a retain router that reads it as the latter lets a
 co-owning store fall through to `__mm_incref` — which steps the box while the release still steps a
 `handles` share, a `refs` share AND the box. The mailbox handle count then reaches zero under a live handle,
-the service drains, and the next send answers `stopped`. **Exit 0 is the failure here**, not a crash.
+the service drains, and the next send fails with `serviceStopped`. **Exit 0 is the failure here**, not a crash.
 ```maxon
 type Box uses T
 	var item as T
@@ -8396,7 +9338,7 @@ here, so its retain is chosen from the layout descriptor's `retainFunc` rather t
 fourth road, and one only the handle's `with` spelling opens. With the protocol classifier blind to a
 service handle, the element is retained through `__mm_retain`, which steps the box, while the release still
 steps a `handles` share, a `refs` share AND the box; the mailbox handle count reaches zero under a live
-handle, the service drains, and the SECOND ask answers `stopped`. **This case answers 6, and 3 under that
+handle, the service drains, and the SECOND ask fails with `serviceStopped`. **This case answers 6, and 3 under that
 sabotage**, with a concrete-typed field unchanged in both directions as the control.
 ```maxon
 type Box uses T
@@ -8519,10 +9461,9 @@ error E3140: <fragment>:15:10: the message `Box.peek` declares a reply whose val
 
 <!-- test: error.awaiting-shutdown-is-refused -->
 `shutdown` carries no reply, so there is nothing for a `try await` to resolve — the same answer a void
-MESSAGE gets one rule over (`error.void-message-sent-for-its-value`), and it must be a refusal because the
-alternative is a COMPILER PANIC: `emitServiceShutdown` mints a reply cell for the `__shutdown` pill
-under the name `<T>.shutdown`, and `serviceTypeOfMessage` then looks that name up on the message roster,
-where the compiler's own pill is not.
+MESSAGE gets one rule over (`error.void-message-sent-for-its-value`). It is the handle's own method rather than
+a message of the service, so it is refused where its value is wanted instead of being looked up on the message
+roster, where it is not.
 ```maxon
 type Calc
 	var count as Whole
@@ -8546,7 +9487,7 @@ end 'main'
 typealias Whole = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E2015: <fragment>:18:14: Unsupported: the value of `Calc.shutdown()` — `shutdown` is the HANDLE's own method and not a message of `Calc`, so no declaration says what it hands back and an expression has nothing to bind. Write `<handle>.shutdown()` as a statement: the pill goes in behind everything already queued, and dropping the last handle starts the same drain
+error E2015: <fragment>:18:14: Unsupported: the value of `Calc.shutdown()` — `shutdown` is the HANDLE's own method and not a message of `Calc`, so no declaration says what it hands back and an expression has nothing to bind. Write `<handle>.shutdown()` as a statement: it closes the mailbox once everything already queued has run, and dropping the last handle does the same
 ```
 
 <!-- test: a-spawn-inside-a-generic-body-over-an-inferred-instance -->
@@ -8801,7 +9742,7 @@ type Store
 end 'Store'
 
 function forward(h Store.handle, buf String)
-	h.keep(buf.clone())
+	try h.keep(buf.clone()) otherwise panic("a running service with room takes the send")
 end 'forward'
 
 function main() returns ExitCode
@@ -8861,7 +9802,7 @@ end 'Store'
 
 function main() returns ExitCode
 	let h = spawn Store.create()
-	h.keep(Payload.create())
+	try h.keep(Payload.create()) otherwise panic("a running service with room takes the send")
 	let total = try await h.total() otherwise panic("the service answers")
 	return total as ExitCode
 end 'main'
@@ -8908,7 +9849,7 @@ type Store
 end 'Store'
 
 function forward(h Store.handle, buf String)
-	h.keep("{buf}")
+	try h.keep("{buf}") otherwise panic("a running service with room takes the send")
 end 'forward'
 
 function main() returns ExitCode
@@ -8955,8 +9896,8 @@ end 'Calc'
 
 function main() returns ExitCode
 	let h = spawn Calc.create()
-	let p = h.total()
-	let a = try await p otherwise 0
+	let p = try h.total() otherwise panic("a running service with room takes the send")
+	let a = await p
 	let b = p
 	let done = 1 if b.isComplete() else 0
 	return (a + done) as ExitCode
@@ -9018,10 +9959,10 @@ end 'Calc'
 
 function main() returns ExitCode
 	let h = spawn Calc.create()
-	let p = h.total()
+	let p = try h.total() otherwise panic("a running service with room takes the send")
 	let bumped = p + 1
 	print("bumped {bumped}")
-	return (try await p otherwise 0) as ExitCode
+	return (await p) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -9032,8 +9973,7 @@ error E2004: <fragment>:17:17: Cannot operate on struct and int
 <!-- test: error.a-reply-in-an-integer-parameter -->
 <!-- unsupported-targets: wasm32-wasi -->
 An `Integer` parameter does not take a reply. The cure is to `await` it and pass the RESULT — which is also
-the only spelling that keeps the cell's one owner intact. A reply always carries an error member, so it
-renders as a two-argument `Promise` instance.
+the only spelling that keeps the cell's one owner intact. A reply renders as a `Promise` instance over its result.
 
 ⚠ **THIS IS THE ONE REPLY-TYPING REFUSAL THAT CARRIES THE MARKER, AND THE REASON IS *WHO REACHES THE
 VERDICT FIRST* — the discriminator this file's Targets section states.** Its four siblings (return,
@@ -9063,12 +10003,12 @@ end 'takesInt'
 
 function main() returns ExitCode
 	let h = spawn Calc.create()
-	return takesInt(h.total()) as ExitCode
+	return takesInt(try h.total() otherwise panic("a running service with room takes the send")) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3005: <fragment>:20:9: argument type mismatch for 'n': expected 'Integer', got 'Promise with (int(-9223372036854775808 to 9223372036854775807), ServiceError)'
+error E3005: <fragment>:20:9: argument type mismatch for 'n': expected 'Integer', got 'Promise with int(-9223372036854775808 to 9223372036854775807)'
 ```
 
 <!-- test: error.clone-a-reply -->
@@ -9091,15 +10031,15 @@ end 'Calc'
 
 function main() returns ExitCode
 	let h = spawn Calc.create()
-	let p = h.total()
+	let p = try h.total() otherwise panic("a running service with room takes the send")
 	let copy = p.clone()
 	print("copied {copy.isComplete()}")
-	return (try await p otherwise 0) as ExitCode
+	return (await p) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3141: <fragment>:17:15: a promise cannot be borrowed through 'clone': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. `Promise with (int(-9223372036854775808 to 9223372036854775807), ServiceError)` is or holds a promise, and a promise owns a green thread that exactly one owner may reclaim — so a copy would give two of them one thread. `await` the promise and copy a value holding its RESULT
+error E3141: <fragment>:17:15: a promise cannot be borrowed through 'clone': it owns a green thread, and a green thread has exactly one owner — so reading one out of the thing that holds it MOVES it. `Promise with int(-9223372036854775808 to 9223372036854775807)` is or holds a promise, and a promise owns a green thread that exactly one owner may reclaim — so a copy would give two of them one thread. `await` the promise and copy a value holding its RESULT
 ```
 
 <!-- test: a-reply-inner-compiles-in-the-library-tier -->
@@ -9122,10 +10062,10 @@ end 'Calc'
 
 function main() returns ExitCode
 	let h = spawn Calc.create()
-	let p = h.total()
+	let p = try h.total() otherwise panic("a running service with room takes the send")
 	let named = p.inner > 0
 	print("names a thread {named}")
-	return (try await p otherwise 0) as ExitCode
+	return (await p) as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
@@ -9515,11 +10455,11 @@ end 'Middle'
 
 function main() returns ExitCode
 	let m = spawn Middle.create()
-	let r1 = m.go()
+	let r1 = try m.go() otherwise panic("a running service with room takes the send")
 	sleep(1)
-	let r2 = m.go()
-	let a = try await r1 otherwise 0
-	let b = try await r2 otherwise 0
+	let r2 = try m.go() otherwise panic("a running service with room takes the send")
+	let a = await r1
+	let b = await r2
 	print("a={a} b={b}\n")
 	return 0
 end 'main'
@@ -10263,9 +11203,9 @@ end 'main'
 42
 ```
 
-<!-- test: services.an-or-arm-matches-a-reply-error-merged-with-stopped -->
-A reply's error is the message's own error set merged with `ServiceError.stopped`, and a `match` over it takes
-the same `or` arms a match over any error enum does.
+<!-- test: services.an-or-arm-matches-a-handler-error-merged-with-the-send-errors -->
+An awaited message's error is the handler's own error set merged with the send's `mailboxFull` and
+`serviceStopped`, and a `match` over it takes the same `or` arms a match over any error enum does.
 ```maxon
 typealias Tally = int(0 to u64.max)
 
@@ -10297,7 +11237,8 @@ function main() returns ExitCode
 	let value = try await calc.divide(10, by: 0) otherwise (e) 'failed'
 		match e 'why'
 			divideByZero or
-				stopped then print("no answer\n")
+				serviceStopped then print("no answer\n")
+			mailboxFull then print("full\n")
 		end 'why'
 
 		return 1
@@ -11114,7 +12055,7 @@ function main() returns ExitCode
 	let h = spawn Calc.create()
 	let shape = squareOf(3)
 	let mine = shape.area()
-	h.measure(shape)
+	try h.measure(shape) otherwise panic("a running service with room takes the send")
 	let total = try await h.total() otherwise panic("the service is running")
 	print("{total} {mine}\n")
 	h.shutdown()
@@ -11180,7 +12121,7 @@ function main() returns ExitCode
 	cells.append(cell)
 	let h = spawn Svc.create()
 	var shape = crateOf(cells)
-	h.take(shape)
+	try h.take(shape) otherwise panic("a running service with room takes the send")
 	return cell.n as ExitCode
 end 'main'
 ```
@@ -11235,7 +12176,7 @@ end 'Calc'
 function main() returns ExitCode
 	let h = spawn Calc.create()
 	var shape = labelOf(1234)
-	h.measure(shape)
+	try h.measure(shape) otherwise panic("a running service with room takes the send")
 	let total = try await h.total() otherwise panic("the service is running")
 	print("{total}\n")
 	h.shutdown()
@@ -11288,7 +12229,7 @@ end 'Factory'
 
 function main() returns ExitCode
 	let factory = spawn Factory.create()
-	factory.make(1234)
+	_ = try factory.make(1234) otherwise panic("a running service with room takes the send")
 	let made = try await factory.count() otherwise panic("the factory is running")
 	print("{made}\n")
 	factory.shutdown()
@@ -11328,12 +12269,12 @@ end 'Calc'
 
 function main() returns ExitCode
 	let h = spawn Calc.create()
-	h.measure(7 as Tally)
+	try h.measure(7 as Tally) otherwise panic("a running service with room takes the send")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:22:12: argument type mismatch for 's' of the message 'measure': type 'Tally' does not implement interface 'Shape'
+error E3005: <fragment>:22:16: argument type mismatch for 's' of the message 'measure': type 'Tally' does not implement interface 'Shape'
 ```
 
 <!-- test: error.a-generic-service-spawned-over-an-interface-type-is-refused -->
@@ -11386,10 +12327,11 @@ end 'main'
 error E2015: <fragment>:37:20: Unsupported: a type argument inferred from a factory argument declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a slot standing at a type parameter is one machine word. Declare it at a concrete type, or take the interface as a PARAMETER of a plain function, which carries its witness as an adjacent argument
 ```
 
-<!-- test: services.an-interface-reply-from-a-stopped-service-answers-stopped -->
-A reply held at an interface type from a service that has stopped answers `ServiceError.stopped` like any
-other reply, and its error edge releases nothing. An interface-typed argument the stopped mailbox abandons
-is released through its witness, so the conformer's heap `String` does not leak (exit 101).
+<!-- test: services.an-interface-argument-sent-to-a-stopped-service-is-handed-back -->
+A send to a service that has stopped fails with `serviceStopped` and hands the interface-typed argument back,
+still held at its interface type: the arm calls through its witness, and when the binding dies the conformer's
+heap `String` is released rather than leaked (exit 101). An awaited send to the same service fails the same way
+and has no reply to release.
 ```maxon
 typealias Tally = int(0 to u64.max)
 
@@ -11432,19 +12374,29 @@ end 'labelOf'
 
 function main() returns ExitCode
 	let factory = spawn Factory.create()
+	var stops = 0 as Tally
+	var area = 0 as Tally
 	factory.shutdown()
-	factory.make(7)
-	factory.inspect(labelOf(5))
-	let shape = try await factory.make(1234) otherwise (e) 'gone'
+
+	try factory.inspect(labelOf(5)) otherwise (e) 'refused'
 		match e 'why'
-			stopped then return 9
+			mailboxFull then stops = stops + 100
+			serviceStopped(back) then area = back.area()
 		end 'why'
+	end 'refused'
+
+	try await factory.make(1234) otherwise (e) 'gone'
+		match e 'again'
+			mailboxFull then stops = stops + 100
+			serviceStopped then stops = stops + 1
+		end 'again'
 	end 'gone'
-	return shape.area() as ExitCode
+
+	return (stops * 10 + area) as ExitCode
 end 'main'
 ```
 ```exitcode
-9
+12
 ```
 
 <!-- test: services.interface-arguments-each-take-their-own-payload-slot -->
@@ -11562,7 +12514,7 @@ end 'Svc'
 function main() returns ExitCode
 	let h = spawn Svc.create()
 	let c = counterOf()
-	h.poke(c)
+	try h.poke(c) otherwise panic("a running service with room takes the send")
 	return 0
 end 'main'
 ```
@@ -11610,7 +12562,7 @@ end 'Keeper'
 function main() returns ExitCode
 	let h = spawn Keeper.create()
 	let s = squareOf(2)
-	h.keep(s)
+	try h.keep(s) otherwise panic("a running service with room takes the send")
 	return 0
 end 'main'
 ```
@@ -11710,7 +12662,7 @@ function main() returns ExitCode
 	var listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
 	let h = spawn Calc.create()
 	var shape = portOf(listener)
-	h.measure(shape)
+	try h.measure(shape) otherwise panic("a running service with room takes the send")
 	return 0
 end 'main'
 ```
@@ -11759,12 +12711,12 @@ end 'Calc'
 function main() returns ExitCode
 	var listener = try TcpListener.bind("127.0.0.1", port: 0) otherwise return 1
 	let h = spawn Calc.create()
-	h.measure(Port.create(listener))
+	try h.measure(Port.create(listener)) otherwise panic("a running service with room takes the send")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:35:12: argument `s` of the message `Calc.measure` is a `Port` whose graph reaches a type this compiler synthesizes no per-type walk for — an OS handle or a base-struct-less generic instance. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it
+error E3138: <fragment>:35:16: argument `s` of the message `Calc.measure` is a `Port` whose graph reaches a type this compiler synthesizes no per-type walk for — an OS handle or a base-struct-less generic instance. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it
 ```
 
 <!-- test: error.a-reply-may-not-alias-an-interface-value-the-state-holds -->
@@ -12246,7 +13198,7 @@ module type Calc
 end 'Calc'
 module function poke(h Calc.handle)
 	var k = 5 as Integer
-	h.put(1, b: k)
+	try h.put(1, b: k) otherwise panic("a running service with room takes the send")
 	print("{k}\n")
 end 'poke'
 
@@ -12357,7 +13309,7 @@ end 'Calc'
 
 function poke(h Calc.handle)
 	var k = 5 as Integer
-	h.put(1, b: k)
+	try h.put(1, b: k) otherwise panic("a running service with room takes the send")
 end 'poke'
 
 function main() returns ExitCode
@@ -12409,7 +13361,7 @@ function main() returns ExitCode
 
 	let loud = try await h.shout("hello padded out long enough to heap allocate {1}") otherwise "stopped"
 	print("{loud}\n")
-	h.note("quiet padded out long enough to heap allocate {2}")
+	try h.note("quiet padded out long enough to heap allocate {2}") otherwise panic("a running service with room takes the send")
 	let n = try await h.total() otherwise 0
 	print("{n}\n")
 	return 0
@@ -12597,13 +13549,13 @@ end 'Svc'
 function main() returns ExitCode
 	let h = spawn Svc.create()
 	let b = Box.create()
-	h.take2(b, other: b)
+	try h.take2(b, other: b) otherwise panic("a running service with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3102: <fragment>:25:20: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
+error E3102: <fragment>:25:24: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
 ```
 
 <!-- test: services.error.a-let-and-its-alias-sent-in-one-message-are-refused -->
@@ -12633,13 +13585,13 @@ function main() returns ExitCode
 	let h = spawn Svc.create()
 	let b = Box.create()
 	let c = b
-	h.take2(b, other: c)
+	try h.take2(b, other: c) otherwise panic("a running service with room takes the send")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3138: <fragment>:26:20: argument `other` of the message `Svc.take2` cannot be proven to have exactly one owner (`b`): this frame has either taken a SECOND reference to it — a container push, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send moves a mutable value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. A read-only value is shared with the service instead. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
+error E3138: <fragment>:26:24: argument `other` of the message `Svc.take2` cannot be proven to have exactly one owner (`b`): this frame has either taken a SECOND reference to it — a container push, a consuming call — or received it across a frame boundary whose far side may still hold one (a parameter, or a call whose callee the compiler cannot prove returns a fresh record). A send moves a mutable value: the service becomes its one owner and this frame gives up the reference it held, and a box one green thread holds is counted plainly — so a value with a second owner would put one box into two green threads' hands. A read-only value is shared with the service instead. Send a `.clone()`, or build the value at the send: an INTERPOLATION over it is a record nothing else can name
 ```
 
 <!-- test: services.error.a-sent-let-used-as-a-method-receiver-is-use-after-move -->
@@ -12672,7 +13624,7 @@ end 'Svc'
 function main() returns ExitCode
 	let h = spawn Svc.create()
 	let b = Box.create()
-	h.take(b)
+	try h.take(b) otherwise panic("a running service with room takes the send")
 	return b.doubled() as ExitCode
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -12712,7 +13664,7 @@ end 'readIt'
 function main() returns ExitCode
 	let h = spawn Svc.create()
 	let b = Box.create()
-	h.take(b)
+	try h.take(b) otherwise panic("a running service with room takes the send")
 	let p = async readIt(b)
 	return (await p) as ExitCode
 end 'main'
@@ -13148,12 +14100,12 @@ end 'Calc'
 
 function main() returns ExitCode
 	let h = spawn Calc.create()
-	h.run(Job.create(function(n Tally) gives n + 1))
+	try h.run(Job.create(function(n Tally) gives n + 1)) otherwise panic("a running service with room takes the send")
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3138: <fragment>:27:8: argument `j` of the message `Calc.run` is a `Job` whose graph reaches a function value, a closure record that owns what it captures and does not cross to another thread. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it
+error E3138: <fragment>:27:12: argument `j` of the message `Calc.run` is a `Job` whose graph reaches a function value, a closure record that owns what it captures and does not cross to another thread. A send hands the record over WHOLE, and this compiler walks the graph below it at run time, immediately before the send — but it can only walk a graph whose every type has a per-type cascade, and this one does not. Send the scalars the value is built from, or keep it on this side and send what the service needs of it
 ```
 
 <!-- test: services.error.a-function-valued-reply-is-refused -->

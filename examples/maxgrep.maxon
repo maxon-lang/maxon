@@ -13,7 +13,7 @@ typealias ByteMembership = Vector with 256 bool
 typealias WalkPromise = Promise with (PathArray, WalkError)
 typealias WalkPromiseArray = Array with WalkPromise
 typealias SearcherArray = Array with Searcher.handle
-typealias ReportPromise = Promise with (FileReport, Searcher.search.errors)
+typealias ReportPromise = Promise with (FileReport, SearchError)
 typealias ReportPromiseArray = Array with ReportPromise
 
 let programPathArgument = 0
@@ -734,6 +734,24 @@ function findFiles(options Options, summary RunSummary) returns PathArray
 	return files
 end 'findFiles'
 
+function submitSearch(replies ReportPromiseArray, searcher Searcher.handle, path FilePath)
+	var pending = path.clone()
+
+	while true 'untilItLands'
+		replies.push(try searcher.search(pending) otherwise (e) 'refused'
+			match e 'why'
+				mailboxFull(back) then pending = back
+				serviceStopped then panic("submitSearch: a searcher stopped before the files were sent")
+			end 'why'
+
+			Scheduler.yield()
+			continue
+		end 'refused')
+
+		break
+	end 'untilItLands'
+end 'submitSearch'
+
 function searchFiles(files PathArray, request SearchRequest, style OutputStyle, workers WorkerCount, summary RunSummary)
 	var searchers = SearcherArray.create()
 
@@ -746,7 +764,7 @@ function searchFiles(files PathArray, request SearchRequest, style OutputStyle, 
 
 	for path in files 'sendFiles'
 		var searcher = try searchers.get(nextWorker) otherwise panic("searchFiles: nextWorker stays below the worker count")
-		replies.push(searcher.search(path.clone()))
+		submitSearch(replies, searcher: searcher, path: path)
 		nextWorker = (nextWorker + 1) mod workers
 	end 'sendFiles'
 
@@ -756,7 +774,6 @@ function searchFiles(files PathArray, request SearchRequest, style OutputStyle, 
 		view report = try await reply otherwise (e) 'failed'
 			match e 'why'
 				unreadable then printError("maxgrep: {path}: cannot read\n")
-				stopped then printError("maxgrep: {path}: the searcher stopped before it answered\n")
 			end 'why'
 
 			summary.troubled = true

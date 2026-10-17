@@ -36,9 +36,12 @@
 // `try byteAt(index) otherwise panic("String.byteAtOrPanic: index out of bounds — …")`: ordinary Maxon
 // reaching `osPanic` with a real line and a real message. Only a SYNTHESIZED runtime function, which has no
 // source line and no message to bake, needs a number instead.
-// ⇒ **THE NEXT ENTRY TAKES THE NEXT FREE NUMBER ABOVE 70, WHICH IS 123.** 76, 80 and 108 are vacant and stay so:
-// reserving a vacated number would be this space defending against a claimant that no longer exists — the
-// very thing the paragraph above rejects.
+// ⇒ **THE NEXT ENTRY TAKES THE NEXT FREE NUMBER ABOVE 70, WHICH IS 98.** 76, 80 and 108 are vacant
+// and stay so: reserving a vacated number would be this space defending against a claimant that no
+// longer exists — the very thing the paragraph above rejects. 127 and above are not ours either:
+// 127 is the shell's "command not found", which this repository reads as "the binary was never
+// written", and 128 and up are a signal's death (128 + the signal), so an abort there is
+// indistinguishable from the process being killed.
 export enum RuntimeAbort
 	// `__managed_grow`: `capacity·element_size` overflowed i64. Without the guard the wrapped byte count
 	// under-allocates and the next element write runs off the buffer — a silent heap overflow.
@@ -461,6 +464,11 @@ export enum RuntimeAbort
 	// sleep on a runtime lock creates (`osEventCreate` answered 0), so the machine has nothing to
 	// sleep on.
 	runtimeLockSemaphoreRefused = 126
+
+	// `__mbox_unknown_tag`, the default arm of `<T>.__loop`'s dispatch: a received request's tag
+	// names no variant of the request union. The switch covers every variant, so only a corrupted
+	// mailbox slot reaches it.
+	serviceLoopUnknownMessageTag = 90
 
 	// ⚠ **108 IS VACANT, NOT REUSABLE.** The fault it would name — `__np_pd_open` / `__np_pd_release` finding
 	// a green thread still PUBLISHED on a direction word of the record they are about to reset — is not a

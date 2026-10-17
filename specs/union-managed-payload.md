@@ -3444,9 +3444,9 @@ end 'Thermometer'
 
 function main() returns ExitCode
 	let t = spawn Thermometer.create()
-	t.show(Reading.celsius(21.5))
-	t.show(Reading.missing)
-	t.show(Reading.celsius(-3.25))
+	try t.show(Reading.celsius(21.5)) otherwise panic("send show")
+	try t.show(Reading.missing) otherwise panic("send show")
+	try t.show(Reading.celsius(-3.25)) otherwise panic("send show")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)

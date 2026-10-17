@@ -6214,18 +6214,20 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 48
+    x64.movRegImm32 rbx, 1024
   __il_body:
-    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
   __il_cont:
     x64.leaRegFunc rcx, [rip + Counter.__loop]
-    x64.leaRegFunc rax, [rip + Counter.__abandon]
-    x64.movRegImm32 r9, 24
+    x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
+    x64.movRegReg r9, rbx
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
@@ -6238,20 +6240,27 @@ func @main {
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
     x64.callDirect __mbox_staging
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.storeBaseDispReg.word64 [r14 + 16], r13
     x64.movRegImm32 rax, 24
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r8
+    x64.movRegReg rdx, r14
     x64.callDirect __mbox_send
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, sendrefused
+  sendaccepted:
     x64.movRegReg rcx, r13
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
+  critsplit:
+    x64.movRegReg rcx, r10
   tryerr:
     x64.movRegImm32 rbx, 0
+    x64.callDirect __mm_decref
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
@@ -6265,17 +6274,37 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_handle_drop_box
     x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  sendrefused:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mbox_reply_refused
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.storeSlotReg slot0, r8
+    x64.callDirect __mm_alloc
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot r8, slot0
+    x64.leaRegRegImm32 rax, r8, -1
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp tryerr
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at linux-lock-enter-makes-no-kernel-call-uncontended.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -6296,21 +6325,7 @@ func @Counter.__loop {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, stopping
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.storeBaseDispReg.word64 [r12 + 72], rax
-  stopping:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_close
-  drain:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, abandon
+    x64.jcc notEqual, dispatch
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -6322,11 +6337,17 @@ func @Counter.__loop {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  abandon:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
-    x64.callDirect __mbox_abandon
-    x64.jmp drain
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    x64.callDirect __mbox_unknown_tag
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -6337,30 +6358,6 @@ func @Counter.__loop {
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
     x64.jmp serve
-}
-
-func @Counter.__abandon {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jumpTable rax, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-    x64.jmp abandondone
-  next:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-  abandondone:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
 }
 
 func @__rtlock_enter_slow {
@@ -6874,21 +6871,23 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x19, 1024
   __il_body:
-    arm64.movImm x19, 0
+    arm64.movImm x20, 0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+    arm64.storeBaseDispReg.word64 [x1 + 0], x20
   __il_cont:
     arm64.leaFuncAddr x0, Counter.__loop
-    arm64.leaFuncAddr x2, Counter.__abandon
-    arm64.movImm x3, 24
+    arm64.movImm x2, 24
+    arm64.movRegReg x3, x19
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
@@ -6901,20 +6900,27 @@ func @main {
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
     arm64.bl __mbox_staging
-    arm64.movRegReg x1, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x19
-    arm64.storeBaseDispReg.word64 [x1 + 16], x21
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x19
+    arm64.storeBaseDispReg.word64 [x22 + 16], x21
     arm64.movImm x2, 24
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.movRegReg x1, x22
     arm64.bl __mbox_send
+    arm64.cmp x0, 0
+    arm64.b.ne sendrefused
+  sendaccepted:
     arm64.movRegReg x0, x21
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
     arm64.b.eq tryok
+  critsplit:
+    arm64.movRegReg x0, x9
   tryerr:
     arm64.movImm x19, 0
+    arm64.bl __mm_decref
     arm64.b trycont
   tryok:
     arm64.movRegReg x19, x0
@@ -6928,19 +6934,42 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_handle_drop_box
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
+  sendrefused:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mbox_reply_refused
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.movImm x1, 16
+    arm64.movImm x2, 0
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.add x0, x0, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.movRegReg x0, x1
+    arm64.b tryerr
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at linux-lock-enter-makes-no-kernel-call-uncontended.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 
@@ -6955,22 +6984,7 @@ func @Counter.__loop {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.cmp x0, 0
-    arm64.b.eq stopping
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.storeBaseDispReg.word64 [x20 + 72], x0
-  stopping:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_close
-  drain:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.movRegReg x1, x0
-    arm64.cmp x1, 0
-    arm64.b.ne abandon
+    arm64.b.ne dispatch
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -6981,10 +6995,16 @@ func @Counter.__loop {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  abandon:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_abandon
-    arm64.b drain
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    arm64.bl __mbox_unknown_tag
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -6997,27 +7017,6 @@ func @Counter.__loop {
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
     arm64.b serve
-}
-
-func @Counter.__abandon {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-    arm64.b abandondone
-  next:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-  abandondone:
-    arm64.epilogue 16
-    arm64.ret
 }
 
 func @__rtlock_enter_slow {
@@ -7555,18 +7554,20 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 48
+    x64.movRegImm32 rbx, 1024
   __il_body:
-    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
   __il_cont:
     x64.leaRegFunc rcx, [rip + Counter.__loop]
-    x64.leaRegFunc rax, [rip + Counter.__abandon]
-    x64.movRegImm32 r9, 24
+    x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
+    x64.movRegReg r9, rbx
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
@@ -7579,20 +7580,27 @@ func @main {
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
     x64.callDirect __mbox_staging
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.storeBaseDispReg.word64 [r14 + 16], r13
     x64.movRegImm32 rax, 24
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r8
+    x64.movRegReg rdx, r14
     x64.callDirect __mbox_send
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, sendrefused
+  sendaccepted:
     x64.movRegReg rcx, r13
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
+  critsplit:
+    x64.movRegReg rcx, r10
   tryerr:
     x64.movRegImm32 rbx, 0
+    x64.callDirect __mm_decref
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
@@ -7607,17 +7615,37 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_handle_drop_box
     x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  sendrefused:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mbox_reply_refused
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.storeSlotReg slot0, r8
+    x64.callDirect __mm_alloc
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot r8, slot0
+    x64.leaRegRegImm32 rax, r8, -1
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp tryerr
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-lock-spin-pause-waits-a-time-on-arm64-as-go-s-procyield-does.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -7638,21 +7666,7 @@ func @Counter.__loop {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, stopping
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.storeBaseDispReg.word64 [r12 + 72], rax
-  stopping:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_close
-  drain:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, abandon
+    x64.jcc notEqual, dispatch
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -7664,11 +7678,17 @@ func @Counter.__loop {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  abandon:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
-    x64.callDirect __mbox_abandon
-    x64.jmp drain
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    x64.callDirect __mbox_unknown_tag
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -7679,30 +7699,6 @@ func @Counter.__loop {
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
     x64.jmp serve
-}
-
-func @Counter.__abandon {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jumpTable rax, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-    x64.jmp abandondone
-  next:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-  abandondone:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
 }
 
 chunk @mrt_host_spin_pause {
@@ -7795,18 +7791,20 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 48
+    x64.movRegImm32 rbx, 1024
   __il_body:
-    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
   __il_cont:
     x64.leaRegFunc rcx, [rip + Counter.__loop]
-    x64.leaRegFunc rax, [rip + Counter.__abandon]
-    x64.movRegImm32 r9, 24
+    x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
+    x64.movRegReg r9, rbx
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
@@ -7819,20 +7817,27 @@ func @main {
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
     x64.callDirect __mbox_staging
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.storeBaseDispReg.word64 [r14 + 16], r13
     x64.movRegImm32 rax, 24
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r8
+    x64.movRegReg rdx, r14
     x64.callDirect __mbox_send
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, sendrefused
+  sendaccepted:
     x64.movRegReg rcx, r13
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
+  critsplit:
+    x64.movRegReg rcx, r10
   tryerr:
     x64.movRegImm32 rbx, 0
+    x64.callDirect __mm_decref
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
@@ -7846,17 +7851,37 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_handle_drop_box
     x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  sendrefused:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mbox_reply_refused
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.storeSlotReg slot0, r8
+    x64.callDirect __mm_alloc
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot r8, slot0
+    x64.leaRegRegImm32 rax, r8, -1
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp tryerr
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-lock-spin-pause-waits-a-time-on-arm64-as-go-s-procyield-does.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -7877,21 +7902,7 @@ func @Counter.__loop {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, stopping
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.storeBaseDispReg.word64 [r12 + 72], rax
-  stopping:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_close
-  drain:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, abandon
+    x64.jcc notEqual, dispatch
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -7903,11 +7914,17 @@ func @Counter.__loop {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  abandon:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
-    x64.callDirect __mbox_abandon
-    x64.jmp drain
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    x64.callDirect __mbox_unknown_tag
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -7918,30 +7935,6 @@ func @Counter.__loop {
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
     x64.jmp serve
-}
-
-func @Counter.__abandon {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jumpTable rax, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-    x64.jmp abandondone
-  next:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-  abandondone:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
 }
 
 chunk @mrt_host_spin_pause {
@@ -8030,21 +8023,23 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x19, 1024
   __il_body:
-    arm64.movImm x19, 0
+    arm64.movImm x20, 0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+    arm64.storeBaseDispReg.word64 [x1 + 0], x20
   __il_cont:
     arm64.leaFuncAddr x0, Counter.__loop
-    arm64.leaFuncAddr x2, Counter.__abandon
-    arm64.movImm x3, 24
+    arm64.movImm x2, 24
+    arm64.movRegReg x3, x19
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
@@ -8057,20 +8052,27 @@ func @main {
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
     arm64.bl __mbox_staging
-    arm64.movRegReg x1, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x19
-    arm64.storeBaseDispReg.word64 [x1 + 16], x21
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x19
+    arm64.storeBaseDispReg.word64 [x22 + 16], x21
     arm64.movImm x2, 24
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.movRegReg x1, x22
     arm64.bl __mbox_send
+    arm64.cmp x0, 0
+    arm64.b.ne sendrefused
+  sendaccepted:
     arm64.movRegReg x0, x21
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
     arm64.b.eq tryok
+  critsplit:
+    arm64.movRegReg x0, x9
   tryerr:
     arm64.movImm x19, 0
+    arm64.bl __mm_decref
     arm64.b trycont
   tryok:
     arm64.movRegReg x19, x0
@@ -8084,19 +8086,42 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_handle_drop_box
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
+  sendrefused:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mbox_reply_refused
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.movImm x1, 16
+    arm64.movImm x2, 0
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.add x0, x0, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.movRegReg x0, x1
+    arm64.b tryerr
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-lock-spin-pause-waits-a-time-on-arm64-as-go-s-procyield-does.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 
@@ -8111,22 +8136,7 @@ func @Counter.__loop {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.cmp x0, 0
-    arm64.b.eq stopping
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.storeBaseDispReg.word64 [x20 + 72], x0
-  stopping:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_close
-  drain:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.movRegReg x1, x0
-    arm64.cmp x1, 0
-    arm64.b.ne abandon
+    arm64.b.ne dispatch
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -8137,10 +8147,16 @@ func @Counter.__loop {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  abandon:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_abandon
-    arm64.b drain
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    arm64.bl __mbox_unknown_tag
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -8153,27 +8169,6 @@ func @Counter.__loop {
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
     arm64.b serve
-}
-
-func @Counter.__abandon {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-    arm64.b abandondone
-  next:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-  abandondone:
-    arm64.epilogue 16
-    arm64.ret
 }
 
 chunk @mrt_host_spin_pause {
@@ -8261,21 +8256,23 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x19, 1024
   __il_body:
-    arm64.movImm x19, 0
+    arm64.movImm x20, 0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+    arm64.storeBaseDispReg.word64 [x1 + 0], x20
   __il_cont:
     arm64.leaFuncAddr x0, Counter.__loop
-    arm64.leaFuncAddr x2, Counter.__abandon
-    arm64.movImm x3, 24
+    arm64.movImm x2, 24
+    arm64.movRegReg x3, x19
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
@@ -8288,20 +8285,27 @@ func @main {
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
     arm64.bl __mbox_staging
-    arm64.movRegReg x1, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x19
-    arm64.storeBaseDispReg.word64 [x1 + 16], x21
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x19
+    arm64.storeBaseDispReg.word64 [x22 + 16], x21
     arm64.movImm x2, 24
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.movRegReg x1, x22
     arm64.bl __mbox_send
+    arm64.cmp x0, 0
+    arm64.b.ne sendrefused
+  sendaccepted:
     arm64.movRegReg x0, x21
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
     arm64.b.eq tryok
+  critsplit:
+    arm64.movRegReg x0, x9
   tryerr:
     arm64.movImm x19, 0
+    arm64.bl __mm_decref
     arm64.b trycont
   tryok:
     arm64.movRegReg x19, x0
@@ -8315,19 +8319,42 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_handle_drop_box
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
+  sendrefused:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mbox_reply_refused
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.movImm x1, 16
+    arm64.movImm x2, 0
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.add x0, x0, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.movRegReg x0, x1
+    arm64.b tryerr
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-lock-spin-pause-waits-a-time-on-arm64-as-go-s-procyield-does.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 
@@ -8342,22 +8369,7 @@ func @Counter.__loop {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.cmp x0, 0
-    arm64.b.eq stopping
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.storeBaseDispReg.word64 [x20 + 72], x0
-  stopping:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_close
-  drain:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.movRegReg x1, x0
-    arm64.cmp x1, 0
-    arm64.b.ne abandon
+    arm64.b.ne dispatch
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -8368,10 +8380,16 @@ func @Counter.__loop {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  abandon:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_abandon
-    arm64.b drain
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    arm64.bl __mbox_unknown_tag
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -8384,27 +8402,6 @@ func @Counter.__loop {
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
     arm64.b serve
-}
-
-func @Counter.__abandon {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-    arm64.b abandondone
-  next:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-  abandondone:
-    arm64.epilogue 16
-    arm64.ret
 }
 
 chunk @mrt_host_spin_pause {
@@ -8541,21 +8538,23 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x19, 1024
   __il_body:
-    arm64.movImm x19, 0
+    arm64.movImm x20, 0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+    arm64.storeBaseDispReg.word64 [x1 + 0], x20
   __il_cont:
     arm64.leaFuncAddr x0, Counter.__loop
-    arm64.leaFuncAddr x2, Counter.__abandon
-    arm64.movImm x3, 24
+    arm64.movImm x2, 24
+    arm64.movRegReg x3, x19
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
@@ -8568,20 +8567,27 @@ func @main {
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
     arm64.bl __mbox_staging
-    arm64.movRegReg x1, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x19
-    arm64.storeBaseDispReg.word64 [x1 + 16], x21
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x19
+    arm64.storeBaseDispReg.word64 [x22 + 16], x21
     arm64.movImm x2, 24
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.movRegReg x1, x22
     arm64.bl __mbox_send
+    arm64.cmp x0, 0
+    arm64.b.ne sendrefused
+  sendaccepted:
     arm64.movRegReg x0, x21
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
     arm64.b.eq tryok
+  critsplit:
+    arm64.movRegReg x0, x9
   tryerr:
     arm64.movImm x19, 0
+    arm64.bl __mm_decref
     arm64.b trycont
   tryok:
     arm64.movRegReg x19, x0
@@ -8595,19 +8601,42 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_handle_drop_box
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
+  sendrefused:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mbox_reply_refused
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.movImm x1, 16
+    arm64.movImm x2, 0
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.add x0, x0, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.movRegReg x0, x1
+    arm64.b tryerr
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at arm64-atomics-are-lse-on-macos-and-hwcap-checked-on-linux.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 
@@ -8622,22 +8651,7 @@ func @Counter.__loop {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.cmp x0, 0
-    arm64.b.eq stopping
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.storeBaseDispReg.word64 [x20 + 72], x0
-  stopping:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_close
-  drain:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.movRegReg x1, x0
-    arm64.cmp x1, 0
-    arm64.b.ne abandon
+    arm64.b.ne dispatch
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -8648,10 +8662,16 @@ func @Counter.__loop {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  abandon:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_abandon
-    arm64.b drain
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    arm64.bl __mbox_unknown_tag
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -8664,27 +8684,6 @@ func @Counter.__loop {
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
     arm64.b serve
-}
-
-func @Counter.__abandon {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-    arm64.b abandondone
-  next:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-  abandondone:
-    arm64.epilogue 16
-    arm64.ret
 }
 
 chunk @__gt_preempt_m {
@@ -8777,21 +8776,23 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x19, 1024
   __il_body:
-    arm64.movImm x19, 0
+    arm64.movImm x20, 0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+    arm64.storeBaseDispReg.word64 [x1 + 0], x20
   __il_cont:
     arm64.leaFuncAddr x0, Counter.__loop
-    arm64.leaFuncAddr x2, Counter.__abandon
-    arm64.movImm x3, 24
+    arm64.movImm x2, 24
+    arm64.movRegReg x3, x19
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
@@ -8804,20 +8805,27 @@ func @main {
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
     arm64.bl __mbox_staging
-    arm64.movRegReg x1, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x19
-    arm64.storeBaseDispReg.word64 [x1 + 16], x21
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x19
+    arm64.storeBaseDispReg.word64 [x22 + 16], x21
     arm64.movImm x2, 24
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.movRegReg x1, x22
     arm64.bl __mbox_send
+    arm64.cmp x0, 0
+    arm64.b.ne sendrefused
+  sendaccepted:
     arm64.movRegReg x0, x21
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
     arm64.b.eq tryok
+  critsplit:
+    arm64.movRegReg x0, x9
   tryerr:
     arm64.movImm x19, 0
+    arm64.bl __mm_decref
     arm64.b trycont
   tryok:
     arm64.movRegReg x19, x0
@@ -8831,19 +8839,42 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_handle_drop_box
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
+  sendrefused:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mbox_reply_refused
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.movImm x1, 16
+    arm64.movImm x2, 0
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.add x0, x0, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.movRegReg x0, x1
+    arm64.b tryerr
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at arm64-atomics-are-lse-on-macos-and-hwcap-checked-on-linux.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 
@@ -8858,22 +8889,7 @@ func @Counter.__loop {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.cmp x0, 0
-    arm64.b.eq stopping
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.storeBaseDispReg.word64 [x20 + 72], x0
-  stopping:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_close
-  drain:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.movRegReg x1, x0
-    arm64.cmp x1, 0
-    arm64.b.ne abandon
+    arm64.b.ne dispatch
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -8884,10 +8900,16 @@ func @Counter.__loop {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  abandon:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_abandon
-    arm64.b drain
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    arm64.bl __mbox_unknown_tag
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -8900,27 +8922,6 @@ func @Counter.__loop {
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
     arm64.b serve
-}
-
-func @Counter.__abandon {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-    arm64.b abandondone
-  next:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-  abandondone:
-    arm64.epilogue 16
-    arm64.ret
 }
 
 chunk @__gt_preempt_m {
@@ -9065,18 +9066,20 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 48
+    x64.movRegImm32 rbx, 1024
   __il_body:
-    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
   __il_cont:
     x64.leaRegFunc rcx, [rip + Counter.__loop]
-    x64.leaRegFunc rax, [rip + Counter.__abandon]
-    x64.movRegImm32 r9, 24
+    x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
+    x64.movRegReg r9, rbx
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
@@ -9089,20 +9092,27 @@ func @main {
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
     x64.callDirect __mbox_staging
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.storeBaseDispReg.word64 [r14 + 16], r13
     x64.movRegImm32 rax, 24
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r8
+    x64.movRegReg rdx, r14
     x64.callDirect __mbox_send
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, sendrefused
+  sendaccepted:
     x64.movRegReg rcx, r13
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
+  critsplit:
+    x64.movRegReg rcx, r10
   tryerr:
     x64.movRegImm32 rbx, 0
+    x64.callDirect __mm_decref
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
@@ -9116,17 +9126,37 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_handle_drop_box
     x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  sendrefused:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mbox_reply_refused
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.storeSlotReg slot0, r8
+    x64.callDirect __mm_alloc
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot r8, slot0
+    x64.leaRegRegImm32 rax, r8, -1
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp tryerr
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-linux-event-set-wakes-only-a-sleeper-that-announced-itself.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -9147,21 +9177,7 @@ func @Counter.__loop {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, stopping
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.storeBaseDispReg.word64 [r12 + 72], rax
-  stopping:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_close
-  drain:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, abandon
+    x64.jcc notEqual, dispatch
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -9173,11 +9189,17 @@ func @Counter.__loop {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  abandon:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
-    x64.callDirect __mbox_abandon
-    x64.jmp drain
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    x64.callDirect __mbox_unknown_tag
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -9188,30 +9210,6 @@ func @Counter.__loop {
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
     x64.jmp serve
-}
-
-func @Counter.__abandon {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jumpTable rax, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-    x64.jmp abandondone
-  next:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-  abandondone:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
 }
 
 chunk @mrt_host_event_set {
@@ -9305,21 +9303,23 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x19, 1024
   __il_body:
-    arm64.movImm x19, 0
+    arm64.movImm x20, 0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+    arm64.storeBaseDispReg.word64 [x1 + 0], x20
   __il_cont:
     arm64.leaFuncAddr x0, Counter.__loop
-    arm64.leaFuncAddr x2, Counter.__abandon
-    arm64.movImm x3, 24
+    arm64.movImm x2, 24
+    arm64.movRegReg x3, x19
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
@@ -9332,20 +9332,27 @@ func @main {
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
     arm64.bl __mbox_staging
-    arm64.movRegReg x1, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x19
-    arm64.storeBaseDispReg.word64 [x1 + 16], x21
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x19
+    arm64.storeBaseDispReg.word64 [x22 + 16], x21
     arm64.movImm x2, 24
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.movRegReg x1, x22
     arm64.bl __mbox_send
+    arm64.cmp x0, 0
+    arm64.b.ne sendrefused
+  sendaccepted:
     arm64.movRegReg x0, x21
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
     arm64.b.eq tryok
+  critsplit:
+    arm64.movRegReg x0, x9
   tryerr:
     arm64.movImm x19, 0
+    arm64.bl __mm_decref
     arm64.b trycont
   tryok:
     arm64.movRegReg x19, x0
@@ -9359,19 +9366,42 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_handle_drop_box
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
+  sendrefused:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mbox_reply_refused
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.movImm x1, 16
+    arm64.movImm x2, 0
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.add x0, x0, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.movRegReg x0, x1
+    arm64.b tryerr
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-linux-event-set-wakes-only-a-sleeper-that-announced-itself.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 
@@ -9386,22 +9416,7 @@ func @Counter.__loop {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.cmp x0, 0
-    arm64.b.eq stopping
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.storeBaseDispReg.word64 [x20 + 72], x0
-  stopping:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_close
-  drain:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.movRegReg x1, x0
-    arm64.cmp x1, 0
-    arm64.b.ne abandon
+    arm64.b.ne dispatch
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -9412,10 +9427,16 @@ func @Counter.__loop {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  abandon:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_abandon
-    arm64.b drain
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    arm64.bl __mbox_unknown_tag
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -9428,27 +9449,6 @@ func @Counter.__loop {
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
     arm64.b serve
-}
-
-func @Counter.__abandon {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-    arm64.b abandondone
-  next:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-  abandondone:
-    arm64.epilogue 16
-    arm64.ret
 }
 
 chunk @mrt_host_event_set {
@@ -12749,7 +12749,8 @@ read-modify-write buys nothing and costs a full barrier at every enter and every
 
 `__mbox_send` is the witness because it is the smallest body that takes a runtime lock on every message:
 one enter and one leave of its mailbox's lock on its append road and on its handoff road, and one leave on
-its closed road. A locked step in this pin — `x64.lock add` on an x64 lane, an atomic add on an arm64
+each of its two refusing roads (a closed mailbox answers `stopped`, a mailbox holding its capacity answers
+`full`). A locked step in this pin — `x64.lock add` on an x64 lane, an atomic add on an arm64
 lane — is the per-message cost this case exists to keep out.
 
 **A SEND TO A PARKED RECEIVER COPIES THE MESSAGE INTO ITS INBOX, AS GO's `sendDirect` COPIES INTO THE
@@ -12762,9 +12763,12 @@ receiver's park commit emptied and nothing else writes while it is parked, clear
 and leaves the lock. The receiver returns the inbox address from `__mbox_recv` without taking the lock
 again. A close hands nothing: it leaves the word empty, and the receiver re-enters the lock to find the ring
 empty and closed. A send that finds the parked slot empty appends to the ring, and the receiver's later pop
-copies the head slot into the inbox behind any already queued, so the order is exact. The append road cuts
-the ring, 16 slots of the concrete service's request union, at the first message it has to queue, and
-doubles it when it is full: it copies the queued messages into the new ring in order, starting from the
+copies the head slot into the inbox behind any already queued, so the order is exact. A send that finds as
+many messages queued as the mailbox's capacity (1024 unless the spawn names another) queues nothing and
+answers `full`; a send to a closed mailbox likewise answers `stopped`, and in both the message is left in
+the sender's staging buffer. The append road cuts the ring, 16 slots of the concrete service's request union
+(or the capacity, when that is smaller), at the first message it has to queue, and doubles it when it is
+full and still below the capacity: it copies the queued messages into the new ring in order, starting from the
 head, stores the new ring and frees the old one. The ring is runtime scaffolding like a green thread's
 stack, so it is cut with `__slab_alloc_scaffold` and freed with `__slab_free_scaffold`, which step none of
 the allocator's traffic columns: whether a message queues depends on whether its receiver was parked, and
@@ -12907,18 +12911,20 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 48
+    x64.movRegImm32 rbx, 1024
   __il_body:
-    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
   __il_cont:
     x64.leaRegFunc rcx, [rip + Counter.__loop]
-    x64.leaRegFunc rax, [rip + Counter.__abandon]
-    x64.movRegImm32 r9, 24
+    x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
+    x64.movRegReg r9, rbx
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
@@ -12931,20 +12937,27 @@ func @main {
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
     x64.callDirect __mbox_staging
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.storeBaseDispReg.word64 [r14 + 16], r13
     x64.movRegImm32 rax, 24
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r8
+    x64.movRegReg rdx, r14
     x64.callDirect __mbox_send
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, sendrefused
+  sendaccepted:
     x64.movRegReg rcx, r13
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
+  critsplit:
+    x64.movRegReg rcx, r10
   tryerr:
     x64.movRegImm32 rbx, 0
+    x64.callDirect __mm_decref
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
@@ -12959,17 +12972,37 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_handle_drop_box
     x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  sendrefused:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mbox_reply_refused
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.storeSlotReg slot0, r8
+    x64.callDirect __mm_alloc
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot r8, slot0
+    x64.leaRegRegImm32 rax, r8, -1
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp tryerr
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-mailbox-send-steps-its-lock-depth-with-a-plain-add.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -12990,21 +13023,7 @@ func @Counter.__loop {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, stopping
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.storeBaseDispReg.word64 [r12 + 72], rax
-  stopping:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_close
-  drain:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, abandon
+    x64.jcc notEqual, dispatch
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -13016,11 +13035,17 @@ func @Counter.__loop {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  abandon:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
-    x64.callDirect __mbox_abandon
-    x64.jmp drain
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    x64.callDirect __mbox_unknown_tag
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -13031,30 +13056,6 @@ func @Counter.__loop {
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
     x64.jmp serve
-}
-
-func @Counter.__abandon {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jumpTable rax, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-    x64.jmp abandondone
-  next:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-  abandondone:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
 }
 
 func @__mbox_send {
@@ -13094,8 +13095,8 @@ func @__mbox_send {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#46
-  __rl_cont#45:
+    x64.jcc notEqual, __rl_slow#48
+  __rl_cont#47:
     x64.loadRegBaseDisp.word64 rax, [rbx + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, sendclosed
@@ -13104,25 +13105,30 @@ func @__mbox_send {
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, sendhandoff
   sendappend:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.cmpRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 72]
+    x64.cmpRegReg rax, rcx
+    x64.jcc equal, sendfull
+  sendqueue:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, sendhavering
   sendseedring:
-    x64.movRegImm32 r12, 16
-    x64.loadRegBaseDisp.word64 rax, [rbx + 80]
-    x64.imulRegRegImm32 rcx, rax, 16
+    x64.loadRegBaseDisp.word64 r12, [rbx + 80]
+    x64.loadRegBaseDisp.word64 rax, [rbx + 64]
+    x64.movRegReg rcx, r12
+    x64.imulRegReg rcx, r12, rax
     x64.callDirect __slab_alloc_scaffold
     x64.storeBaseDispReg.word64 [rbx + 0], r8
     x64.storeBaseDispReg.word64 [rbx + 8], r12
     x64.jmp sendplace
   sendhavering:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
     x64.loadRegBaseDisp.word64 r12, [rbx + 8]
     x64.cmpRegReg rax, r12
     x64.jcc notEqual, sendplace
   sendgrowring:
     x64.loadRegBaseDisp.word64 r13, [rbx + 16]
-    x64.loadRegBaseDisp.word64 r14, [rbx + 80]
+    x64.loadRegBaseDisp.word64 r14, [rbx + 64]
     x64.imulRegRegImm32 r15, r12, 2
     x64.movRegReg rcx, r15
     x64.imulRegReg rcx, r15, r14
@@ -13133,72 +13139,72 @@ func @__mbox_send {
     x64.imulRegReg r13, r13, r14
     x64.leaRegRegReg rax, rcx, r13
     x64.cmpRegImm32 r12, 0
-    x64.jcc lessEqual, cpyfd#22
-  cpyfrun#21:
+    x64.jcc lessEqual, cpyfd#24
+  cpyfrun#23:
     x64.movRegReg rdx, r12
     x64.andRegImm32 rdx, r12, -8
     x64.movRegImm32 rsi, 0
-  cpyfwh#23:
+  cpyfwh#25:
     x64.cmpRegReg rsi, rdx
-    x64.jcc less, cpyfwb#24
-  cpyfth#26:
+    x64.jcc less, cpyfwb#26
+  cpyfth#28:
     x64.cmpRegReg rdx, r12
-    x64.jcc less, cpyftb#27
-  cpyfd#22:
+    x64.jcc less, cpyftb#29
+  cpyfd#24:
     x64.leaRegRegReg rax, r8, r12
     x64.cmpRegImm32 r13, 0
-    x64.jcc lessEqual, cpyfd#30
-  cpyfrun#29:
+    x64.jcc lessEqual, cpyfd#32
+  cpyfrun#31:
     x64.movRegReg rdx, r13
     x64.andRegImm32 rdx, r13, -8
     x64.movRegImm32 rsi, 0
-  cpyfwh#31:
+  cpyfwh#33:
     x64.cmpRegReg rsi, rdx
-    x64.jcc less, cpyfwb#32
-  cpyfth#34:
+    x64.jcc less, cpyfwb#34
+  cpyfth#36:
     x64.cmpRegReg rdx, r13
-    x64.jcc less, cpyftb#35
-  cpyfd#30:
+    x64.jcc less, cpyftb#37
+  cpyfd#32:
     x64.storeBaseDispReg.word64 [rbx + 0], r8
     x64.storeBaseDispReg.word64 [rbx + 8], r15
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rbx + 16], rax
     x64.callDirect __slab_free_scaffold
     x64.jmp sendplace
-  cpyftb#35:
+  cpyftb#37:
     x64.leaRegRegReg rsi, rcx, rdx
     x64.loadRegBaseDisp.byte rsi, [rsi + 0]
     x64.leaRegRegReg rdi, rax, rdx
     x64.storeBaseDispReg.byte [rdi + 0], rsi
     x64.leaRegRegImm32 rdx, rdx, 1
-    x64.jmp cpyfth#34
-  cpyfwb#32:
+    x64.jmp cpyfth#36
+  cpyfwb#34:
     x64.leaRegRegReg rdi, rcx, rsi
     x64.loadRegBaseDisp.word64 rdi, [rdi + 0]
     x64.leaRegRegReg r9, rax, rsi
     x64.storeBaseDispReg.word64 [r9 + 0], rdi
     x64.leaRegRegImm32 rsi, rsi, 8
-    x64.jmp cpyfwh#31
-  cpyftb#27:
+    x64.jmp cpyfwh#33
+  cpyftb#29:
     x64.leaRegRegReg rsi, rax, rdx
     x64.loadRegBaseDisp.byte rsi, [rsi + 0]
     x64.leaRegRegReg rdi, r8, rdx
     x64.storeBaseDispReg.byte [rdi + 0], rsi
     x64.leaRegRegImm32 rdx, rdx, 1
-    x64.jmp cpyfth#26
-  cpyfwb#24:
+    x64.jmp cpyfth#28
+  cpyfwb#26:
     x64.leaRegRegReg rdi, rax, rsi
     x64.loadRegBaseDisp.word64 rdi, [rdi + 0]
     x64.leaRegRegReg r9, r8, rsi
     x64.storeBaseDispReg.word64 [r9 + 0], rdi
     x64.leaRegRegImm32 rsi, rsi, 8
-    x64.jmp cpyfwh#23
+    x64.jmp cpyfwh#25
   sendplace:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.loadRegBaseDisp.word64 rdx, [rbx + 16]
     x64.loadRegBaseDisp.word64 rsi, [rbx + 24]
-    x64.loadRegBaseDisp.word64 rdi, [rbx + 80]
+    x64.loadRegBaseDisp.word64 rdi, [rbx + 64]
     x64.leaRegRegImm32 rcx, rcx, -1
     x64.leaRegRegReg rdx, rdx, rsi
     x64.andRegReg rdx, rdx, rcx
@@ -13206,27 +13212,27 @@ func @__mbox_send {
     x64.leaRegRegReg rax, rax, rdx
     x64.loadRegSlot rcx, slot2
     x64.cmpRegImm32 rcx, 0
-    x64.jcc lessEqual, cpyfd#38
-  cpyfrun#37:
+    x64.jcc lessEqual, cpyfd#40
+  cpyfrun#39:
     x64.loadRegSlot rcx, slot2
     x64.andRegImm32 rcx, rcx, -8
     x64.movRegImm32 rdx, 0
-  cpyfwh#39:
+  cpyfwh#41:
     x64.cmpRegReg rdx, rcx
-    x64.jcc less, cpyfwb#40
-  cpyfth#42:
+    x64.jcc less, cpyfwb#42
+  cpyfth#44:
     x64.loadRegSlot rdx, slot2
     x64.cmpRegReg rcx, rdx
-    x64.jcc less, cpyftb#43
-  cpyfd#38:
+    x64.jcc less, cpyftb#45
+  cpyfd#40:
     x64.leaRegRegImm32 rax, rsi, 1
     x64.storeBaseDispReg.word64 [rbx + 24], rax
     x64.movRegImm32 rdx, 0
     x64.loadRegSlot rax, slot1
     x64.xchg8 [rax], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#52
-  __rl_cont#51:
+    x64.jcc notEqual, __rl_slow#56
+  __rl_cont#55:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -13247,39 +13253,39 @@ func @__mbox_send {
     x64.orRegReg rcx, rcx, rsi
     x64.aluBaseDispImm32.add [rcx + 0], -1
     x64.jmp senddone
-  cpyftb#43:
+  cpyftb#45:
     x64.loadRegSlot rdx, slot0
     x64.leaRegRegReg rdx, rdx, rcx
     x64.loadRegBaseDisp.byte rdx, [rdx + 0]
     x64.leaRegRegReg rdi, rax, rcx
     x64.storeBaseDispReg.byte [rdi + 0], rdx
     x64.leaRegRegImm32 rcx, rcx, 1
-    x64.jmp cpyfth#42
-  cpyfwb#40:
+    x64.jmp cpyfth#44
+  cpyfwb#42:
     x64.loadRegSlot rdi, slot0
     x64.leaRegRegReg rdi, rdi, rdx
     x64.loadRegBaseDisp.word64 rdi, [rdi + 0]
     x64.leaRegRegReg r8, rax, rdx
     x64.storeBaseDispReg.word64 [r8 + 0], rdi
     x64.leaRegRegImm32 rdx, rdx, 8
-    x64.jmp cpyfwh#39
+    x64.jmp cpyfwh#41
   sendhandoff:
     x64.leaRegRegImm32 rax, rbx, 96
     x64.loadRegSlot rdx, slot2
     x64.cmpRegImm32 rdx, 0
-    x64.jcc lessEqual, cpyfd#11
-  cpyfrun#10:
+    x64.jcc lessEqual, cpyfd#13
+  cpyfrun#12:
     x64.loadRegSlot rdx, slot2
     x64.andRegImm32 rdx, rdx, -8
     x64.movRegImm32 rsi, 0
-  cpyfwh#12:
+  cpyfwh#14:
     x64.cmpRegReg rsi, rdx
-    x64.jcc less, cpyfwb#13
-  cpyfth#15:
+    x64.jcc less, cpyfwb#15
+  cpyfth#17:
     x64.loadRegSlot rsi, slot2
     x64.cmpRegReg rdx, rsi
-    x64.jcc less, cpyftb#16
-  cpyfd#11:
+    x64.jcc less, cpyftb#18
+  cpyfd#13:
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [rcx + 296], rax
     x64.movRegImm32 rax, 0
@@ -13288,8 +13294,8 @@ func @__mbox_send {
     x64.loadRegSlot rax, slot1
     x64.xchg8 [rax], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#50
-  __rl_cont#49:
+    x64.jcc notEqual, __rl_slow#54
+  __rl_cont#53:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rdx, __sched_tls_teb_offset
@@ -13332,30 +13338,56 @@ func @__mbox_send {
     x64.lock add [rdx], rax
     x64.callDirect __sched_runq_put
     x64.callDirect __sched_wake_or_spawn
-    x64.jmp senddone
-  cpyftb#16:
+  senddone:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  cpyftb#18:
     x64.loadRegSlot rsi, slot0
     x64.leaRegRegReg rsi, rsi, rdx
     x64.loadRegBaseDisp.byte rsi, [rsi + 0]
     x64.leaRegRegReg rdi, rax, rdx
     x64.storeBaseDispReg.byte [rdi + 0], rsi
     x64.leaRegRegImm32 rdx, rdx, 1
-    x64.jmp cpyfth#15
-  cpyfwb#13:
+    x64.jmp cpyfth#17
+  cpyfwb#15:
     x64.loadRegSlot rdi, slot0
     x64.leaRegRegReg rdi, rdi, rsi
     x64.loadRegBaseDisp.word64 rdi, [rdi + 0]
     x64.leaRegRegReg r8, rax, rsi
     x64.storeBaseDispReg.word64 [r8 + 0], rdi
     x64.leaRegRegImm32 rsi, rsi, 8
-    x64.jmp cpyfwh#12
-  sendclosed:
+    x64.jmp cpyfwh#14
+  __rl_slow#48:
+    x64.callDirect __rtlock_acquire
+    x64.jmp __rl_cont#47
+  __rl_slow#56:
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __rtlock_release
+    x64.jmp __rl_cont#55
+  __rl_slow#54:
+    x64.loadRegSlot rax, slot1
+    x64.storeSlotReg slot3, rcx
+    x64.movRegReg rcx, rax
+    x64.callDirect __rtlock_release
+    x64.loadRegSlot rcx, slot3
+    x64.jmp __rl_cont#53
+  sendfull:
     x64.movRegImm32 rdx, 0
     x64.loadRegSlot rax, slot1
     x64.xchg8 [rax], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#48
-  __rl_cont#47:
+    x64.jcc equal, __rl_cont#51
+  __rl_slow#52:
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __rtlock_release
+  __rl_cont#51:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -13375,10 +13407,7 @@ func @__mbox_send {
     x64.andRegReg rsi, rsi, rax
     x64.orRegReg rcx, rcx, rsi
     x64.aluBaseDispImm32.add [rcx + 0], -1
-    x64.loadRegSlot rdx, slot0
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mbox_abandon
-  senddone:
+    x64.movRegImm32 r8, 1
     x64.epilogue 72
     x64.popReg r15
     x64.popReg r14
@@ -13387,24 +13416,44 @@ func @__mbox_send {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rl_slow#46:
-    x64.callDirect __rtlock_acquire
-    x64.jmp __rl_cont#45
-  __rl_slow#52:
-    x64.loadRegSlot rcx, slot1
-    x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#51
-  __rl_slow#50:
+  sendclosed:
+    x64.movRegImm32 rdx, 0
     x64.loadRegSlot rax, slot1
-    x64.storeSlotReg slot3, rcx
-    x64.movRegReg rcx, rax
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rcx, slot3
-    x64.jmp __rl_cont#49
-  __rl_slow#48:
+    x64.xchg8 [rax], rdx <- rdx
+    x64.cmpRegImm32 rdx, 1
+    x64.jcc equal, __rl_cont#49
+  __rl_slow#50:
     x64.loadRegSlot rcx, slot1
     x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#47
+  __rl_cont#49:
+    x64.leaRegGlobal rax, __sched_tls_teb_offset
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegGlobal rcx, __sched_tls_teb_offset
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.mov rcx, gs:[rcx]
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg notEqual, rax
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg notEqual, rdx
+    x64.andRegReg rax, rax, rdx
+    x64.movRegImm32 rdx, 0
+    x64.subRegReg rdx, rdx, rax
+    x64.leaRegRegImm32 rax, rax, -1
+    x64.leaRegRegImm32 rcx, rcx, 624
+    x64.leaRegGlobal rsi, __sched_lock_depth_sink
+    x64.andRegReg rcx, rcx, rdx
+    x64.andRegReg rsi, rsi, rax
+    x64.orRegReg rcx, rcx, rsi
+    x64.aluBaseDispImm32.add [rcx + 0], -1
+    x64.movRegImm32 r8, 2
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
 }
 ```
 ```TargetIr:x64-linux
@@ -13492,18 +13541,20 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 48
+    x64.movRegImm32 rbx, 1024
   __il_body:
-    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
   __il_cont:
     x64.leaRegFunc rcx, [rip + Counter.__loop]
-    x64.leaRegFunc rax, [rip + Counter.__abandon]
-    x64.movRegImm32 r9, 24
+    x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
+    x64.movRegReg r9, rbx
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
@@ -13516,20 +13567,27 @@ func @main {
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
     x64.callDirect __mbox_staging
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.storeBaseDispReg.word64 [r14 + 16], r13
     x64.movRegImm32 rax, 24
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r8
+    x64.movRegReg rdx, r14
     x64.callDirect __mbox_send
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, sendrefused
+  sendaccepted:
     x64.movRegReg rcx, r13
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
+  critsplit:
+    x64.movRegReg rcx, r10
   tryerr:
     x64.movRegImm32 rbx, 0
+    x64.callDirect __mm_decref
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
@@ -13543,17 +13601,37 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_handle_drop_box
     x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  sendrefused:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mbox_reply_refused
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.storeSlotReg slot0, r8
+    x64.callDirect __mm_alloc
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot r8, slot0
+    x64.leaRegRegImm32 rax, r8, -1
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp tryerr
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-mailbox-send-steps-its-lock-depth-with-a-plain-add.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -13574,21 +13652,7 @@ func @Counter.__loop {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, stopping
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.storeBaseDispReg.word64 [r12 + 72], rax
-  stopping:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_close
-  drain:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, abandon
+    x64.jcc notEqual, dispatch
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -13600,11 +13664,17 @@ func @Counter.__loop {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  abandon:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
-    x64.callDirect __mbox_abandon
-    x64.jmp drain
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    x64.callDirect __mbox_unknown_tag
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -13615,30 +13685,6 @@ func @Counter.__loop {
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
     x64.jmp serve
-}
-
-func @Counter.__abandon {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jumpTable rax, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-    x64.jmp abandondone
-  next:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-  abandondone:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
 }
 
 func @__mbox_send {
@@ -13678,8 +13724,8 @@ func @__mbox_send {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#46
-  __rl_cont#45:
+    x64.jcc notEqual, __rl_slow#48
+  __rl_cont#47:
     x64.loadRegBaseDisp.word64 rax, [rbx + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, sendclosed
@@ -13688,25 +13734,30 @@ func @__mbox_send {
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, sendhandoff
   sendappend:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.cmpRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 72]
+    x64.cmpRegReg rax, rcx
+    x64.jcc equal, sendfull
+  sendqueue:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, sendhavering
   sendseedring:
-    x64.movRegImm32 r12, 16
-    x64.loadRegBaseDisp.word64 rax, [rbx + 80]
-    x64.imulRegRegImm32 rcx, rax, 16
+    x64.loadRegBaseDisp.word64 r12, [rbx + 80]
+    x64.loadRegBaseDisp.word64 rax, [rbx + 64]
+    x64.movRegReg rcx, r12
+    x64.imulRegReg rcx, r12, rax
     x64.callDirect __slab_alloc_scaffold
     x64.storeBaseDispReg.word64 [rbx + 0], r8
     x64.storeBaseDispReg.word64 [rbx + 8], r12
     x64.jmp sendplace
   sendhavering:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
     x64.loadRegBaseDisp.word64 r12, [rbx + 8]
     x64.cmpRegReg rax, r12
     x64.jcc notEqual, sendplace
   sendgrowring:
     x64.loadRegBaseDisp.word64 r13, [rbx + 16]
-    x64.loadRegBaseDisp.word64 r14, [rbx + 80]
+    x64.loadRegBaseDisp.word64 r14, [rbx + 64]
     x64.imulRegRegImm32 r15, r12, 2
     x64.movRegReg rcx, r15
     x64.imulRegReg rcx, r15, r14
@@ -13717,72 +13768,72 @@ func @__mbox_send {
     x64.imulRegReg r13, r13, r14
     x64.leaRegRegReg rax, rcx, r13
     x64.cmpRegImm32 r12, 0
-    x64.jcc lessEqual, cpyfd#22
-  cpyfrun#21:
+    x64.jcc lessEqual, cpyfd#24
+  cpyfrun#23:
     x64.movRegReg rdx, r12
     x64.andRegImm32 rdx, r12, -8
     x64.movRegImm32 rsi, 0
-  cpyfwh#23:
+  cpyfwh#25:
     x64.cmpRegReg rsi, rdx
-    x64.jcc less, cpyfwb#24
-  cpyfth#26:
+    x64.jcc less, cpyfwb#26
+  cpyfth#28:
     x64.cmpRegReg rdx, r12
-    x64.jcc less, cpyftb#27
-  cpyfd#22:
+    x64.jcc less, cpyftb#29
+  cpyfd#24:
     x64.leaRegRegReg rax, r8, r12
     x64.cmpRegImm32 r13, 0
-    x64.jcc lessEqual, cpyfd#30
-  cpyfrun#29:
+    x64.jcc lessEqual, cpyfd#32
+  cpyfrun#31:
     x64.movRegReg rdx, r13
     x64.andRegImm32 rdx, r13, -8
     x64.movRegImm32 rsi, 0
-  cpyfwh#31:
+  cpyfwh#33:
     x64.cmpRegReg rsi, rdx
-    x64.jcc less, cpyfwb#32
-  cpyfth#34:
+    x64.jcc less, cpyfwb#34
+  cpyfth#36:
     x64.cmpRegReg rdx, r13
-    x64.jcc less, cpyftb#35
-  cpyfd#30:
+    x64.jcc less, cpyftb#37
+  cpyfd#32:
     x64.storeBaseDispReg.word64 [rbx + 0], r8
     x64.storeBaseDispReg.word64 [rbx + 8], r15
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rbx + 16], rax
     x64.callDirect __slab_free_scaffold
     x64.jmp sendplace
-  cpyftb#35:
+  cpyftb#37:
     x64.leaRegRegReg rsi, rcx, rdx
     x64.loadRegBaseDisp.byte rsi, [rsi + 0]
     x64.leaRegRegReg rdi, rax, rdx
     x64.storeBaseDispReg.byte [rdi + 0], rsi
     x64.leaRegRegImm32 rdx, rdx, 1
-    x64.jmp cpyfth#34
-  cpyfwb#32:
+    x64.jmp cpyfth#36
+  cpyfwb#34:
     x64.leaRegRegReg rdi, rcx, rsi
     x64.loadRegBaseDisp.word64 rdi, [rdi + 0]
     x64.leaRegRegReg r9, rax, rsi
     x64.storeBaseDispReg.word64 [r9 + 0], rdi
     x64.leaRegRegImm32 rsi, rsi, 8
-    x64.jmp cpyfwh#31
-  cpyftb#27:
+    x64.jmp cpyfwh#33
+  cpyftb#29:
     x64.leaRegRegReg rsi, rax, rdx
     x64.loadRegBaseDisp.byte rsi, [rsi + 0]
     x64.leaRegRegReg rdi, r8, rdx
     x64.storeBaseDispReg.byte [rdi + 0], rsi
     x64.leaRegRegImm32 rdx, rdx, 1
-    x64.jmp cpyfth#26
-  cpyfwb#24:
+    x64.jmp cpyfth#28
+  cpyfwb#26:
     x64.leaRegRegReg rdi, rax, rsi
     x64.loadRegBaseDisp.word64 rdi, [rdi + 0]
     x64.leaRegRegReg r9, r8, rsi
     x64.storeBaseDispReg.word64 [r9 + 0], rdi
     x64.leaRegRegImm32 rsi, rsi, 8
-    x64.jmp cpyfwh#23
+    x64.jmp cpyfwh#25
   sendplace:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.loadRegBaseDisp.word64 rdx, [rbx + 16]
     x64.loadRegBaseDisp.word64 rsi, [rbx + 24]
-    x64.loadRegBaseDisp.word64 rdi, [rbx + 80]
+    x64.loadRegBaseDisp.word64 rdi, [rbx + 64]
     x64.leaRegRegImm32 rcx, rcx, -1
     x64.leaRegRegReg rdx, rdx, rsi
     x64.andRegReg rdx, rdx, rcx
@@ -13790,27 +13841,27 @@ func @__mbox_send {
     x64.leaRegRegReg rax, rax, rdx
     x64.loadRegSlot rcx, slot2
     x64.cmpRegImm32 rcx, 0
-    x64.jcc lessEqual, cpyfd#38
-  cpyfrun#37:
+    x64.jcc lessEqual, cpyfd#40
+  cpyfrun#39:
     x64.loadRegSlot rcx, slot2
     x64.andRegImm32 rcx, rcx, -8
     x64.movRegImm32 rdx, 0
-  cpyfwh#39:
+  cpyfwh#41:
     x64.cmpRegReg rdx, rcx
-    x64.jcc less, cpyfwb#40
-  cpyfth#42:
+    x64.jcc less, cpyfwb#42
+  cpyfth#44:
     x64.loadRegSlot rdx, slot2
     x64.cmpRegReg rcx, rdx
-    x64.jcc less, cpyftb#43
-  cpyfd#38:
+    x64.jcc less, cpyftb#45
+  cpyfd#40:
     x64.leaRegRegImm32 rax, rsi, 1
     x64.storeBaseDispReg.word64 [rbx + 24], rax
     x64.movRegImm32 rdx, 0
     x64.loadRegSlot rax, slot1
     x64.xchg8 [rax], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#52
-  __rl_cont#51:
+    x64.jcc notEqual, __rl_slow#56
+  __rl_cont#55:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -13831,39 +13882,39 @@ func @__mbox_send {
     x64.orRegReg rcx, rcx, rsi
     x64.aluBaseDispImm32.add [rcx + 0], -1
     x64.jmp senddone
-  cpyftb#43:
+  cpyftb#45:
     x64.loadRegSlot rdx, slot0
     x64.leaRegRegReg rdx, rdx, rcx
     x64.loadRegBaseDisp.byte rdx, [rdx + 0]
     x64.leaRegRegReg rdi, rax, rcx
     x64.storeBaseDispReg.byte [rdi + 0], rdx
     x64.leaRegRegImm32 rcx, rcx, 1
-    x64.jmp cpyfth#42
-  cpyfwb#40:
+    x64.jmp cpyfth#44
+  cpyfwb#42:
     x64.loadRegSlot rdi, slot0
     x64.leaRegRegReg rdi, rdi, rdx
     x64.loadRegBaseDisp.word64 rdi, [rdi + 0]
     x64.leaRegRegReg r8, rax, rdx
     x64.storeBaseDispReg.word64 [r8 + 0], rdi
     x64.leaRegRegImm32 rdx, rdx, 8
-    x64.jmp cpyfwh#39
+    x64.jmp cpyfwh#41
   sendhandoff:
     x64.leaRegRegImm32 rax, rbx, 96
     x64.loadRegSlot rdx, slot2
     x64.cmpRegImm32 rdx, 0
-    x64.jcc lessEqual, cpyfd#11
-  cpyfrun#10:
+    x64.jcc lessEqual, cpyfd#13
+  cpyfrun#12:
     x64.loadRegSlot rdx, slot2
     x64.andRegImm32 rdx, rdx, -8
     x64.movRegImm32 rsi, 0
-  cpyfwh#12:
+  cpyfwh#14:
     x64.cmpRegReg rsi, rdx
-    x64.jcc less, cpyfwb#13
-  cpyfth#15:
+    x64.jcc less, cpyfwb#15
+  cpyfth#17:
     x64.loadRegSlot rsi, slot2
     x64.cmpRegReg rdx, rsi
-    x64.jcc less, cpyftb#16
-  cpyfd#11:
+    x64.jcc less, cpyftb#18
+  cpyfd#13:
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [rcx + 296], rax
     x64.movRegImm32 rax, 0
@@ -13872,8 +13923,8 @@ func @__mbox_send {
     x64.loadRegSlot rax, slot1
     x64.xchg8 [rax], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#50
-  __rl_cont#49:
+    x64.jcc notEqual, __rl_slow#54
+  __rl_cont#53:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rdx, __sched_tls_teb_offset
@@ -13916,30 +13967,56 @@ func @__mbox_send {
     x64.lock add [rdx], rax
     x64.callDirect __sched_runq_put
     x64.callDirect __sched_wake_or_spawn
-    x64.jmp senddone
-  cpyftb#16:
+  senddone:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  cpyftb#18:
     x64.loadRegSlot rsi, slot0
     x64.leaRegRegReg rsi, rsi, rdx
     x64.loadRegBaseDisp.byte rsi, [rsi + 0]
     x64.leaRegRegReg rdi, rax, rdx
     x64.storeBaseDispReg.byte [rdi + 0], rsi
     x64.leaRegRegImm32 rdx, rdx, 1
-    x64.jmp cpyfth#15
-  cpyfwb#13:
+    x64.jmp cpyfth#17
+  cpyfwb#15:
     x64.loadRegSlot rdi, slot0
     x64.leaRegRegReg rdi, rdi, rsi
     x64.loadRegBaseDisp.word64 rdi, [rdi + 0]
     x64.leaRegRegReg r8, rax, rsi
     x64.storeBaseDispReg.word64 [r8 + 0], rdi
     x64.leaRegRegImm32 rsi, rsi, 8
-    x64.jmp cpyfwh#12
-  sendclosed:
+    x64.jmp cpyfwh#14
+  __rl_slow#48:
+    x64.callDirect __rtlock_acquire
+    x64.jmp __rl_cont#47
+  __rl_slow#56:
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __rtlock_release
+    x64.jmp __rl_cont#55
+  __rl_slow#54:
+    x64.loadRegSlot rax, slot1
+    x64.storeSlotReg slot3, rcx
+    x64.movRegReg rcx, rax
+    x64.callDirect __rtlock_release
+    x64.loadRegSlot rcx, slot3
+    x64.jmp __rl_cont#53
+  sendfull:
     x64.movRegImm32 rdx, 0
     x64.loadRegSlot rax, slot1
     x64.xchg8 [rax], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#48
-  __rl_cont#47:
+    x64.jcc equal, __rl_cont#51
+  __rl_slow#52:
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __rtlock_release
+  __rl_cont#51:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -13959,10 +14036,7 @@ func @__mbox_send {
     x64.andRegReg rsi, rsi, rax
     x64.orRegReg rcx, rcx, rsi
     x64.aluBaseDispImm32.add [rcx + 0], -1
-    x64.loadRegSlot rdx, slot0
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mbox_abandon
-  senddone:
+    x64.movRegImm32 r8, 1
     x64.epilogue 72
     x64.popReg r15
     x64.popReg r14
@@ -13971,24 +14045,44 @@ func @__mbox_send {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rl_slow#46:
-    x64.callDirect __rtlock_acquire
-    x64.jmp __rl_cont#45
-  __rl_slow#52:
-    x64.loadRegSlot rcx, slot1
-    x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#51
-  __rl_slow#50:
+  sendclosed:
+    x64.movRegImm32 rdx, 0
     x64.loadRegSlot rax, slot1
-    x64.storeSlotReg slot3, rcx
-    x64.movRegReg rcx, rax
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rcx, slot3
-    x64.jmp __rl_cont#49
-  __rl_slow#48:
+    x64.xchg8 [rax], rdx <- rdx
+    x64.cmpRegImm32 rdx, 1
+    x64.jcc equal, __rl_cont#49
+  __rl_slow#50:
     x64.loadRegSlot rcx, slot1
     x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#47
+  __rl_cont#49:
+    x64.leaRegGlobal rax, __sched_tls_teb_offset
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegGlobal rcx, __sched_tls_teb_offset
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.mov rcx, gs:[rcx]
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg notEqual, rax
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg notEqual, rdx
+    x64.andRegReg rax, rax, rdx
+    x64.movRegImm32 rdx, 0
+    x64.subRegReg rdx, rdx, rax
+    x64.leaRegRegImm32 rax, rax, -1
+    x64.leaRegRegImm32 rcx, rcx, 624
+    x64.leaRegGlobal rsi, __sched_lock_depth_sink
+    x64.andRegReg rcx, rcx, rdx
+    x64.andRegReg rsi, rsi, rax
+    x64.orRegReg rcx, rcx, rsi
+    x64.aluBaseDispImm32.add [rcx + 0], -1
+    x64.movRegImm32 r8, 2
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
 }
 ```
 ```TargetIr:arm64-macos
@@ -14068,21 +14162,23 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x19, 1024
   __il_body:
-    arm64.movImm x19, 0
+    arm64.movImm x20, 0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+    arm64.storeBaseDispReg.word64 [x1 + 0], x20
   __il_cont:
     arm64.leaFuncAddr x0, Counter.__loop
-    arm64.leaFuncAddr x2, Counter.__abandon
-    arm64.movImm x3, 24
+    arm64.movImm x2, 24
+    arm64.movRegReg x3, x19
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
@@ -14095,20 +14191,27 @@ func @main {
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
     arm64.bl __mbox_staging
-    arm64.movRegReg x1, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x19
-    arm64.storeBaseDispReg.word64 [x1 + 16], x21
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x19
+    arm64.storeBaseDispReg.word64 [x22 + 16], x21
     arm64.movImm x2, 24
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.movRegReg x1, x22
     arm64.bl __mbox_send
+    arm64.cmp x0, 0
+    arm64.b.ne sendrefused
+  sendaccepted:
     arm64.movRegReg x0, x21
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
     arm64.b.eq tryok
+  critsplit:
+    arm64.movRegReg x0, x9
   tryerr:
     arm64.movImm x19, 0
+    arm64.bl __mm_decref
     arm64.b trycont
   tryok:
     arm64.movRegReg x19, x0
@@ -14122,19 +14225,42 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_handle_drop_box
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
+  sendrefused:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mbox_reply_refused
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.movImm x1, 16
+    arm64.movImm x2, 0
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.add x0, x0, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.movRegReg x0, x1
+    arm64.b tryerr
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-mailbox-send-steps-its-lock-depth-with-a-plain-add.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 
@@ -14149,22 +14275,7 @@ func @Counter.__loop {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.cmp x0, 0
-    arm64.b.eq stopping
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.storeBaseDispReg.word64 [x20 + 72], x0
-  stopping:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_close
-  drain:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.movRegReg x1, x0
-    arm64.cmp x1, 0
-    arm64.b.ne abandon
+    arm64.b.ne dispatch
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -14175,10 +14286,16 @@ func @Counter.__loop {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  abandon:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_abandon
-    arm64.b drain
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    arm64.bl __mbox_unknown_tag
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -14191,27 +14308,6 @@ func @Counter.__loop {
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
     arm64.b serve
-}
-
-func @Counter.__abandon {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-    arm64.b abandondone
-  next:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-  abandondone:
-    arm64.epilogue 16
-    arm64.ret
 }
 
 func @__mbox_send {
@@ -14258,8 +14354,8 @@ func @__mbox_send {
     arm64.movImm x0, 1
     arm64.arm64AtomicRmw.exchangeByte x1, [x22], x0
     arm64.cmp x1, 0
-    arm64.b.ne __rl_slow#46
-  __rl_cont#45:
+    arm64.b.ne __rl_slow#48
+  __rl_cont#47:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
     arm64.cmp x0, 0
     arm64.b.ne sendclosed
@@ -14268,25 +14364,29 @@ func @__mbox_send {
     arm64.cmp x0, 0
     arm64.b.ne sendhandoff
   sendappend:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.cmp x0, 0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 72]
+    arm64.cmp x0, x1
+    arm64.b.eq sendfull
+  sendqueue:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
+    arm64.cmp x1, 0
     arm64.b.ne sendhavering
   sendseedring:
-    arm64.movImm x23, 16
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 80]
-    arm64.lsl x0, x0, 4
+    arm64.loadRegBaseDisp.word64 x23, [x19 + 80]
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 64]
+    arm64.mul x0, x23, x0
     arm64.bl __slab_alloc_scaffold
     arm64.storeBaseDispReg.word64 [x19 + 0], x0
     arm64.storeBaseDispReg.word64 [x19 + 8], x23
     arm64.b sendplace
   sendhavering:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
     arm64.loadRegBaseDisp.word64 x23, [x19 + 8]
     arm64.cmp x0, x23
     arm64.b.ne sendplace
   sendgrowring:
     arm64.loadRegBaseDisp.word64 x24, [x19 + 16]
-    arm64.loadRegBaseDisp.word64 x25, [x19 + 80]
+    arm64.loadRegBaseDisp.word64 x25, [x19 + 64]
     arm64.lsl x26, x23, 1
     arm64.mul x0, x26, x25
     arm64.bl __slab_alloc_scaffold
@@ -14296,30 +14396,30 @@ func @__mbox_send {
     arm64.mul x3, x24, x25
     arm64.add x4, x2, x3
     arm64.cmp x1, 0
-    arm64.b.le cpyfd#22
-  cpyfrun#21:
+    arm64.b.le cpyfd#24
+  cpyfrun#23:
     arm64.and x5, x1, -8
     arm64.movImm x6, 0
-  cpyfwh#23:
+  cpyfwh#25:
     arm64.cmp x6, x5
-    arm64.b.lt cpyfwb#24
-  cpyfth#26:
+    arm64.b.lt cpyfwb#26
+  cpyfth#28:
     arm64.cmp x5, x1
-    arm64.b.lt cpyftb#27
-  cpyfd#22:
+    arm64.b.lt cpyftb#29
+  cpyfd#24:
     arm64.add x1, x0, x1
     arm64.cmp x3, 0
-    arm64.b.le cpyfd#30
-  cpyfrun#29:
+    arm64.b.le cpyfd#32
+  cpyfrun#31:
     arm64.and x4, x3, -8
     arm64.movImm x5, 0
-  cpyfwh#31:
+  cpyfwh#33:
     arm64.cmp x5, x4
-    arm64.b.lt cpyfwb#32
-  cpyfth#34:
+    arm64.b.lt cpyfwb#34
+  cpyfth#36:
     arm64.cmp x4, x3
-    arm64.b.lt cpyftb#35
-  cpyfd#30:
+    arm64.b.lt cpyftb#37
+  cpyfd#32:
     arm64.storeBaseDispReg.word64 [x19 + 0], x0
     arm64.storeBaseDispReg.word64 [x19 + 8], x26
     arm64.movImm x0, 0
@@ -14327,64 +14427,64 @@ func @__mbox_send {
     arm64.movRegReg x0, x2
     arm64.bl __slab_free_scaffold
     arm64.b sendplace
-  cpyftb#35:
+  cpyftb#37:
     arm64.add x5, x2, x4
     arm64.loadRegBaseDisp.byte x5, [x5 + 0]
     arm64.add x6, x1, x4
     arm64.storeBaseDispReg.byte [x6 + 0], x5
     arm64.add x4, x4, 1
-    arm64.b cpyfth#34
-  cpyfwb#32:
+    arm64.b cpyfth#36
+  cpyfwb#34:
     arm64.add x6, x2, x5
     arm64.loadRegBaseDisp.word64 x6, [x6 + 0]
     arm64.add x7, x1, x5
     arm64.storeBaseDispReg.word64 [x7 + 0], x6
     arm64.add x5, x5, 8
-    arm64.b cpyfwh#31
-  cpyftb#27:
+    arm64.b cpyfwh#33
+  cpyftb#29:
     arm64.add x6, x4, x5
     arm64.loadRegBaseDisp.byte x6, [x6 + 0]
     arm64.add x7, x0, x5
     arm64.storeBaseDispReg.byte [x7 + 0], x6
     arm64.add x5, x5, 1
-    arm64.b cpyfth#26
-  cpyfwb#24:
+    arm64.b cpyfth#28
+  cpyfwb#26:
     arm64.add x7, x4, x6
     arm64.loadRegBaseDisp.word64 x7, [x7 + 0]
     arm64.add x8, x0, x6
     arm64.storeBaseDispReg.word64 [x8 + 0], x7
     arm64.add x6, x6, 8
-    arm64.b cpyfwh#23
+    arm64.b cpyfwh#25
   sendplace:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
     arm64.loadRegBaseDisp.word64 x2, [x19 + 16]
     arm64.loadRegBaseDisp.word64 x3, [x19 + 24]
-    arm64.loadRegBaseDisp.word64 x4, [x19 + 80]
+    arm64.loadRegBaseDisp.word64 x4, [x19 + 64]
     arm64.sub x1, x1, 1
     arm64.add x2, x2, x3
     arm64.and x1, x2, x1
     arm64.mul x1, x1, x4
     arm64.add x0, x0, x1
     arm64.cmp x21, 0
-    arm64.b.le cpyfd#38
-  cpyfrun#37:
+    arm64.b.le cpyfd#40
+  cpyfrun#39:
     arm64.and x1, x21, -8
     arm64.movImm x2, 0
-  cpyfwh#39:
+  cpyfwh#41:
     arm64.cmp x2, x1
-    arm64.b.lt cpyfwb#40
-  cpyfth#42:
+    arm64.b.lt cpyfwb#42
+  cpyfth#44:
     arm64.cmp x1, x21
-    arm64.b.lt cpyftb#43
-  cpyfd#38:
+    arm64.b.lt cpyftb#45
+  cpyfd#40:
     arm64.add x0, x3, 1
     arm64.storeBaseDispReg.word64 [x19 + 24], x0
     arm64.movImm x0, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x22], x0
     arm64.cmp x1, 1
-    arm64.b.ne __rl_slow#52
-  __rl_cont#51:
+    arm64.b.ne __rl_slow#56
+  __rl_cont#55:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -14412,34 +14512,34 @@ func @__mbox_send {
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x0 + 0], x1
     arm64.b senddone
-  cpyftb#43:
+  cpyftb#45:
     arm64.add x2, x20, x1
     arm64.loadRegBaseDisp.byte x2, [x2 + 0]
     arm64.add x4, x0, x1
     arm64.storeBaseDispReg.byte [x4 + 0], x2
     arm64.add x1, x1, 1
-    arm64.b cpyfth#42
-  cpyfwb#40:
+    arm64.b cpyfth#44
+  cpyfwb#42:
     arm64.add x4, x20, x2
     arm64.loadRegBaseDisp.word64 x4, [x4 + 0]
     arm64.add x5, x0, x2
     arm64.storeBaseDispReg.word64 [x5 + 0], x4
     arm64.add x2, x2, 8
-    arm64.b cpyfwh#39
+    arm64.b cpyfwh#41
   sendhandoff:
     arm64.add x1, x19, 96
     arm64.cmp x21, 0
-    arm64.b.le cpyfd#11
-  cpyfrun#10:
+    arm64.b.le cpyfd#13
+  cpyfrun#12:
     arm64.and x2, x21, -8
     arm64.movImm x3, 0
-  cpyfwh#12:
+  cpyfwh#14:
     arm64.cmp x3, x2
-    arm64.b.lt cpyfwb#13
-  cpyfth#15:
+    arm64.b.lt cpyfwb#15
+  cpyfth#17:
     arm64.cmp x2, x21
-    arm64.b.lt cpyftb#16
-  cpyfd#11:
+    arm64.b.lt cpyftb#18
+  cpyfd#13:
     arm64.movImm x1, 1
     arm64.storeBaseDispReg.word64 [x0 + 296], x1
     arm64.movImm x1, 0
@@ -14447,8 +14547,8 @@ func @__mbox_send {
     arm64.movImm x1, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x22], x1
     arm64.cmp x1, 1
-    arm64.b.ne __rl_slow#50
-  __rl_cont#49:
+    arm64.b.ne __rl_slow#54
+  __rl_cont#53:
     arm64.leaGlobal x1, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.leaGlobal x2, __sched_tls_teb_offset
@@ -14497,27 +14597,56 @@ func @__mbox_send {
     arm64.arm64AtomicRmw.add x1, [x2], x1
     arm64.bl __sched_runq_put
     arm64.bl __sched_wake_or_spawn
-    arm64.b senddone
-  cpyftb#16:
+  senddone:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.loadRegSlot x23, slot5
+    arm64.loadRegSlot x24, slot6
+    arm64.loadRegSlot x25, slot7
+    arm64.loadRegSlot x26, slot8
+    arm64.epilogue 96
+    arm64.ret
+  cpyftb#18:
     arm64.add x3, x20, x2
     arm64.loadRegBaseDisp.byte x3, [x3 + 0]
     arm64.add x4, x1, x2
     arm64.storeBaseDispReg.byte [x4 + 0], x3
     arm64.add x2, x2, 1
-    arm64.b cpyfth#15
-  cpyfwb#13:
+    arm64.b cpyfth#17
+  cpyfwb#15:
     arm64.add x4, x20, x3
     arm64.loadRegBaseDisp.word64 x4, [x4 + 0]
     arm64.add x5, x1, x3
     arm64.storeBaseDispReg.word64 [x5 + 0], x4
     arm64.add x3, x3, 8
-    arm64.b cpyfwh#12
-  sendclosed:
+    arm64.b cpyfwh#14
+  __rl_slow#48:
+    arm64.movRegReg x0, x22
+    arm64.bl __rtlock_acquire
+    arm64.b __rl_cont#47
+  __rl_slow#56:
+    arm64.movRegReg x0, x22
+    arm64.bl __rtlock_release
+    arm64.b __rl_cont#55
+  __rl_slow#54:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x22
+    arm64.bl __rtlock_release
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.b __rl_cont#53
+  sendfull:
     arm64.movImm x0, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x22], x0
     arm64.cmp x1, 1
-    arm64.b.ne __rl_slow#48
-  __rl_cont#47:
+    arm64.b.eq __rl_cont#51
+  __rl_slow#52:
+    arm64.movRegReg x0, x22
+    arm64.bl __rtlock_release
+  __rl_cont#51:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -14544,10 +14673,7 @@ func @__mbox_send {
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x0 + 0], x1
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x20
-    arm64.bl __mbox_abandon
-  senddone:
+    arm64.movImm x0, 1
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
     arm64.loadRegSlot x21, slot3
@@ -14558,25 +14684,52 @@ func @__mbox_send {
     arm64.loadRegSlot x26, slot8
     arm64.epilogue 96
     arm64.ret
-  __rl_slow#46:
-    arm64.movRegReg x0, x22
-    arm64.bl __rtlock_acquire
-    arm64.b __rl_cont#45
-  __rl_slow#52:
-    arm64.movRegReg x0, x22
-    arm64.bl __rtlock_release
-    arm64.b __rl_cont#51
+  sendclosed:
+    arm64.movImm x0, 0
+    arm64.arm64AtomicRmw.exchangeByte x1, [x22], x0
+    arm64.cmp x1, 1
+    arm64.b.eq __rl_cont#49
   __rl_slow#50:
-    arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x22
     arm64.bl __rtlock_release
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.b __rl_cont#49
-  __rl_slow#48:
-    arm64.movRegReg x0, x22
-    arm64.bl __rtlock_release
-    arm64.b __rl_cont#47
+  __rl_cont#49:
+    arm64.leaGlobal x0, __sched_tls_teb_offset
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.leaGlobal x1, __sched_tls_teb_offset
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.arm64ThreadPointer x16, darwinMaskedReadOnly
+    arm64.add x16, x16, x1
+    arm64.cmp x1, 0
+    arm64.cset x17, ne
+    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
+    arm64.mul x1, x16, x17
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cmp x1, 0
+    arm64.cset x2, ne
+    arm64.and x0, x0, x2
+    arm64.movImm x2, 0
+    arm64.sub x2, x2, x0
+    arm64.sub x0, x0, 1
+    arm64.add x1, x1, 624
+    arm64.leaGlobal x3, __sched_lock_depth_sink
+    arm64.and x1, x1, x2
+    arm64.and x0, x3, x0
+    arm64.orr x0, x1, x0
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.add x1, x1, -1
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.movImm x0, 2
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.loadRegSlot x23, slot5
+    arm64.loadRegSlot x24, slot6
+    arm64.loadRegSlot x25, slot7
+    arm64.loadRegSlot x26, slot8
+    arm64.epilogue 96
+    arm64.ret
 }
 ```
 ```TargetIr:arm64-linux
@@ -14660,21 +14813,23 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x19, 1024
   __il_body:
-    arm64.movImm x19, 0
+    arm64.movImm x20, 0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+    arm64.storeBaseDispReg.word64 [x1 + 0], x20
   __il_cont:
     arm64.leaFuncAddr x0, Counter.__loop
-    arm64.leaFuncAddr x2, Counter.__abandon
-    arm64.movImm x3, 24
+    arm64.movImm x2, 24
+    arm64.movRegReg x3, x19
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
@@ -14687,20 +14842,27 @@ func @main {
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
     arm64.bl __mbox_staging
-    arm64.movRegReg x1, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x19
-    arm64.storeBaseDispReg.word64 [x1 + 16], x21
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x19
+    arm64.storeBaseDispReg.word64 [x22 + 16], x21
     arm64.movImm x2, 24
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.movRegReg x1, x22
     arm64.bl __mbox_send
+    arm64.cmp x0, 0
+    arm64.b.ne sendrefused
+  sendaccepted:
     arm64.movRegReg x0, x21
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
     arm64.b.eq tryok
+  critsplit:
+    arm64.movRegReg x0, x9
   tryerr:
     arm64.movImm x19, 0
+    arm64.bl __mm_decref
     arm64.b trycont
   tryok:
     arm64.movRegReg x19, x0
@@ -14714,19 +14876,42 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_handle_drop_box
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
+  sendrefused:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mbox_reply_refused
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.movImm x1, 16
+    arm64.movImm x2, 0
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.add x0, x0, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.movRegReg x0, x1
+    arm64.b tryerr
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-mailbox-send-steps-its-lock-depth-with-a-plain-add.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 
@@ -14741,22 +14926,7 @@ func @Counter.__loop {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.cmp x0, 0
-    arm64.b.eq stopping
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.storeBaseDispReg.word64 [x20 + 72], x0
-  stopping:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_close
-  drain:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.movRegReg x1, x0
-    arm64.cmp x1, 0
-    arm64.b.ne abandon
+    arm64.b.ne dispatch
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -14767,10 +14937,16 @@ func @Counter.__loop {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  abandon:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_abandon
-    arm64.b drain
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    arm64.bl __mbox_unknown_tag
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -14783,27 +14959,6 @@ func @Counter.__loop {
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
     arm64.b serve
-}
-
-func @Counter.__abandon {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-    arm64.b abandondone
-  next:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-  abandondone:
-    arm64.epilogue 16
-    arm64.ret
 }
 
 func @__mbox_send {
@@ -14850,8 +15005,8 @@ func @__mbox_send {
     arm64.movImm x0, 1
     arm64.arm64AtomicRmw.exchangeByte x1, [x22], x0
     arm64.cmp x1, 0
-    arm64.b.ne __rl_slow#46
-  __rl_cont#45:
+    arm64.b.ne __rl_slow#48
+  __rl_cont#47:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
     arm64.cmp x0, 0
     arm64.b.ne sendclosed
@@ -14860,25 +15015,29 @@ func @__mbox_send {
     arm64.cmp x0, 0
     arm64.b.ne sendhandoff
   sendappend:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.cmp x0, 0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 72]
+    arm64.cmp x0, x1
+    arm64.b.eq sendfull
+  sendqueue:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
+    arm64.cmp x1, 0
     arm64.b.ne sendhavering
   sendseedring:
-    arm64.movImm x23, 16
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 80]
-    arm64.lsl x0, x0, 4
+    arm64.loadRegBaseDisp.word64 x23, [x19 + 80]
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 64]
+    arm64.mul x0, x23, x0
     arm64.bl __slab_alloc_scaffold
     arm64.storeBaseDispReg.word64 [x19 + 0], x0
     arm64.storeBaseDispReg.word64 [x19 + 8], x23
     arm64.b sendplace
   sendhavering:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
     arm64.loadRegBaseDisp.word64 x23, [x19 + 8]
     arm64.cmp x0, x23
     arm64.b.ne sendplace
   sendgrowring:
     arm64.loadRegBaseDisp.word64 x24, [x19 + 16]
-    arm64.loadRegBaseDisp.word64 x25, [x19 + 80]
+    arm64.loadRegBaseDisp.word64 x25, [x19 + 64]
     arm64.lsl x26, x23, 1
     arm64.mul x0, x26, x25
     arm64.bl __slab_alloc_scaffold
@@ -14888,30 +15047,30 @@ func @__mbox_send {
     arm64.mul x3, x24, x25
     arm64.add x4, x2, x3
     arm64.cmp x1, 0
-    arm64.b.le cpyfd#22
-  cpyfrun#21:
+    arm64.b.le cpyfd#24
+  cpyfrun#23:
     arm64.and x5, x1, -8
     arm64.movImm x6, 0
-  cpyfwh#23:
+  cpyfwh#25:
     arm64.cmp x6, x5
-    arm64.b.lt cpyfwb#24
-  cpyfth#26:
+    arm64.b.lt cpyfwb#26
+  cpyfth#28:
     arm64.cmp x5, x1
-    arm64.b.lt cpyftb#27
-  cpyfd#22:
+    arm64.b.lt cpyftb#29
+  cpyfd#24:
     arm64.add x1, x0, x1
     arm64.cmp x3, 0
-    arm64.b.le cpyfd#30
-  cpyfrun#29:
+    arm64.b.le cpyfd#32
+  cpyfrun#31:
     arm64.and x4, x3, -8
     arm64.movImm x5, 0
-  cpyfwh#31:
+  cpyfwh#33:
     arm64.cmp x5, x4
-    arm64.b.lt cpyfwb#32
-  cpyfth#34:
+    arm64.b.lt cpyfwb#34
+  cpyfth#36:
     arm64.cmp x4, x3
-    arm64.b.lt cpyftb#35
-  cpyfd#30:
+    arm64.b.lt cpyftb#37
+  cpyfd#32:
     arm64.storeBaseDispReg.word64 [x19 + 0], x0
     arm64.storeBaseDispReg.word64 [x19 + 8], x26
     arm64.movImm x0, 0
@@ -14919,64 +15078,64 @@ func @__mbox_send {
     arm64.movRegReg x0, x2
     arm64.bl __slab_free_scaffold
     arm64.b sendplace
-  cpyftb#35:
+  cpyftb#37:
     arm64.add x5, x2, x4
     arm64.loadRegBaseDisp.byte x5, [x5 + 0]
     arm64.add x6, x1, x4
     arm64.storeBaseDispReg.byte [x6 + 0], x5
     arm64.add x4, x4, 1
-    arm64.b cpyfth#34
-  cpyfwb#32:
+    arm64.b cpyfth#36
+  cpyfwb#34:
     arm64.add x6, x2, x5
     arm64.loadRegBaseDisp.word64 x6, [x6 + 0]
     arm64.add x7, x1, x5
     arm64.storeBaseDispReg.word64 [x7 + 0], x6
     arm64.add x5, x5, 8
-    arm64.b cpyfwh#31
-  cpyftb#27:
+    arm64.b cpyfwh#33
+  cpyftb#29:
     arm64.add x6, x4, x5
     arm64.loadRegBaseDisp.byte x6, [x6 + 0]
     arm64.add x7, x0, x5
     arm64.storeBaseDispReg.byte [x7 + 0], x6
     arm64.add x5, x5, 1
-    arm64.b cpyfth#26
-  cpyfwb#24:
+    arm64.b cpyfth#28
+  cpyfwb#26:
     arm64.add x7, x4, x6
     arm64.loadRegBaseDisp.word64 x7, [x7 + 0]
     arm64.add x8, x0, x6
     arm64.storeBaseDispReg.word64 [x8 + 0], x7
     arm64.add x6, x6, 8
-    arm64.b cpyfwh#23
+    arm64.b cpyfwh#25
   sendplace:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
     arm64.loadRegBaseDisp.word64 x2, [x19 + 16]
     arm64.loadRegBaseDisp.word64 x3, [x19 + 24]
-    arm64.loadRegBaseDisp.word64 x4, [x19 + 80]
+    arm64.loadRegBaseDisp.word64 x4, [x19 + 64]
     arm64.sub x1, x1, 1
     arm64.add x2, x2, x3
     arm64.and x1, x2, x1
     arm64.mul x1, x1, x4
     arm64.add x0, x0, x1
     arm64.cmp x21, 0
-    arm64.b.le cpyfd#38
-  cpyfrun#37:
+    arm64.b.le cpyfd#40
+  cpyfrun#39:
     arm64.and x1, x21, -8
     arm64.movImm x2, 0
-  cpyfwh#39:
+  cpyfwh#41:
     arm64.cmp x2, x1
-    arm64.b.lt cpyfwb#40
-  cpyfth#42:
+    arm64.b.lt cpyfwb#42
+  cpyfth#44:
     arm64.cmp x1, x21
-    arm64.b.lt cpyftb#43
-  cpyfd#38:
+    arm64.b.lt cpyftb#45
+  cpyfd#40:
     arm64.add x0, x3, 1
     arm64.storeBaseDispReg.word64 [x19 + 24], x0
     arm64.movImm x0, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x22], x0
     arm64.cmp x1, 1
-    arm64.b.ne __rl_slow#52
-  __rl_cont#51:
+    arm64.b.ne __rl_slow#56
+  __rl_cont#55:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -15004,34 +15163,34 @@ func @__mbox_send {
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x0 + 0], x1
     arm64.b senddone
-  cpyftb#43:
+  cpyftb#45:
     arm64.add x2, x20, x1
     arm64.loadRegBaseDisp.byte x2, [x2 + 0]
     arm64.add x4, x0, x1
     arm64.storeBaseDispReg.byte [x4 + 0], x2
     arm64.add x1, x1, 1
-    arm64.b cpyfth#42
-  cpyfwb#40:
+    arm64.b cpyfth#44
+  cpyfwb#42:
     arm64.add x4, x20, x2
     arm64.loadRegBaseDisp.word64 x4, [x4 + 0]
     arm64.add x5, x0, x2
     arm64.storeBaseDispReg.word64 [x5 + 0], x4
     arm64.add x2, x2, 8
-    arm64.b cpyfwh#39
+    arm64.b cpyfwh#41
   sendhandoff:
     arm64.add x1, x19, 96
     arm64.cmp x21, 0
-    arm64.b.le cpyfd#11
-  cpyfrun#10:
+    arm64.b.le cpyfd#13
+  cpyfrun#12:
     arm64.and x2, x21, -8
     arm64.movImm x3, 0
-  cpyfwh#12:
+  cpyfwh#14:
     arm64.cmp x3, x2
-    arm64.b.lt cpyfwb#13
-  cpyfth#15:
+    arm64.b.lt cpyfwb#15
+  cpyfth#17:
     arm64.cmp x2, x21
-    arm64.b.lt cpyftb#16
-  cpyfd#11:
+    arm64.b.lt cpyftb#18
+  cpyfd#13:
     arm64.movImm x1, 1
     arm64.storeBaseDispReg.word64 [x0 + 296], x1
     arm64.movImm x1, 0
@@ -15039,8 +15198,8 @@ func @__mbox_send {
     arm64.movImm x1, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x22], x1
     arm64.cmp x1, 1
-    arm64.b.ne __rl_slow#50
-  __rl_cont#49:
+    arm64.b.ne __rl_slow#54
+  __rl_cont#53:
     arm64.leaGlobal x1, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.leaGlobal x2, __sched_tls_teb_offset
@@ -15089,27 +15248,56 @@ func @__mbox_send {
     arm64.arm64AtomicRmw.add x1, [x2], x1
     arm64.bl __sched_runq_put
     arm64.bl __sched_wake_or_spawn
-    arm64.b senddone
-  cpyftb#16:
+  senddone:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.loadRegSlot x23, slot5
+    arm64.loadRegSlot x24, slot6
+    arm64.loadRegSlot x25, slot7
+    arm64.loadRegSlot x26, slot8
+    arm64.epilogue 96
+    arm64.ret
+  cpyftb#18:
     arm64.add x3, x20, x2
     arm64.loadRegBaseDisp.byte x3, [x3 + 0]
     arm64.add x4, x1, x2
     arm64.storeBaseDispReg.byte [x4 + 0], x3
     arm64.add x2, x2, 1
-    arm64.b cpyfth#15
-  cpyfwb#13:
+    arm64.b cpyfth#17
+  cpyfwb#15:
     arm64.add x4, x20, x3
     arm64.loadRegBaseDisp.word64 x4, [x4 + 0]
     arm64.add x5, x1, x3
     arm64.storeBaseDispReg.word64 [x5 + 0], x4
     arm64.add x3, x3, 8
-    arm64.b cpyfwh#12
-  sendclosed:
+    arm64.b cpyfwh#14
+  __rl_slow#48:
+    arm64.movRegReg x0, x22
+    arm64.bl __rtlock_acquire
+    arm64.b __rl_cont#47
+  __rl_slow#56:
+    arm64.movRegReg x0, x22
+    arm64.bl __rtlock_release
+    arm64.b __rl_cont#55
+  __rl_slow#54:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x22
+    arm64.bl __rtlock_release
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.b __rl_cont#53
+  sendfull:
     arm64.movImm x0, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x22], x0
     arm64.cmp x1, 1
-    arm64.b.ne __rl_slow#48
-  __rl_cont#47:
+    arm64.b.eq __rl_cont#51
+  __rl_slow#52:
+    arm64.movRegReg x0, x22
+    arm64.bl __rtlock_release
+  __rl_cont#51:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -15136,10 +15324,7 @@ func @__mbox_send {
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x0 + 0], x1
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x20
-    arm64.bl __mbox_abandon
-  senddone:
+    arm64.movImm x0, 1
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
     arm64.loadRegSlot x21, slot3
@@ -15150,25 +15335,52 @@ func @__mbox_send {
     arm64.loadRegSlot x26, slot8
     arm64.epilogue 96
     arm64.ret
-  __rl_slow#46:
-    arm64.movRegReg x0, x22
-    arm64.bl __rtlock_acquire
-    arm64.b __rl_cont#45
-  __rl_slow#52:
-    arm64.movRegReg x0, x22
-    arm64.bl __rtlock_release
-    arm64.b __rl_cont#51
+  sendclosed:
+    arm64.movImm x0, 0
+    arm64.arm64AtomicRmw.exchangeByte x1, [x22], x0
+    arm64.cmp x1, 1
+    arm64.b.eq __rl_cont#49
   __rl_slow#50:
-    arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x22
     arm64.bl __rtlock_release
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.b __rl_cont#49
-  __rl_slow#48:
-    arm64.movRegReg x0, x22
-    arm64.bl __rtlock_release
-    arm64.b __rl_cont#47
+  __rl_cont#49:
+    arm64.leaGlobal x0, __sched_tls_teb_offset
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.leaGlobal x1, __sched_tls_teb_offset
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.arm64ThreadPointer x16, linuxWritable
+    arm64.add x16, x16, x1
+    arm64.cmp x1, 0
+    arm64.cset x17, ne
+    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
+    arm64.mul x1, x16, x17
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cmp x1, 0
+    arm64.cset x2, ne
+    arm64.and x0, x0, x2
+    arm64.movImm x2, 0
+    arm64.sub x2, x2, x0
+    arm64.sub x0, x0, 1
+    arm64.add x1, x1, 624
+    arm64.leaGlobal x3, __sched_lock_depth_sink
+    arm64.and x1, x1, x2
+    arm64.and x0, x3, x0
+    arm64.orr x0, x1, x0
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.add x1, x1, -1
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.movImm x0, 2
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.loadRegSlot x23, slot5
+    arm64.loadRegSlot x24, slot6
+    arm64.loadRegSlot x25, slot7
+    arm64.loadRegSlot x26, slot8
+    arm64.epilogue 96
+    arm64.ret
 }
 ```
 
@@ -15316,18 +15528,20 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 48
+    x64.movRegImm32 rbx, 1024
   __il_body:
-    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
   __il_cont:
     x64.leaRegFunc rcx, [rip + Counter.__loop]
-    x64.leaRegFunc rax, [rip + Counter.__abandon]
-    x64.movRegImm32 r9, 24
+    x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
+    x64.movRegReg r9, rbx
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
@@ -15340,20 +15554,27 @@ func @main {
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
     x64.callDirect __mbox_staging
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.storeBaseDispReg.word64 [r14 + 16], r13
     x64.movRegImm32 rax, 24
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r8
+    x64.movRegReg rdx, r14
     x64.callDirect __mbox_send
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, sendrefused
+  sendaccepted:
     x64.movRegReg rcx, r13
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
+  critsplit:
+    x64.movRegReg rcx, r10
   tryerr:
     x64.movRegImm32 rbx, 0
+    x64.callDirect __mm_decref
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
@@ -15368,17 +15589,37 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_handle_drop_box
     x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  sendrefused:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mbox_reply_refused
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.storeSlotReg slot0, r8
+    x64.callDirect __mm_alloc
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot r8, slot0
+    x64.leaRegRegImm32 rax, r8, -1
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp tryerr
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-locked-ready-claims-the-strand-holder-with-a-cas.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -15399,21 +15640,7 @@ func @Counter.__loop {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, stopping
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.storeBaseDispReg.word64 [r12 + 72], rax
-  stopping:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_close
-  drain:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, abandon
+    x64.jcc notEqual, dispatch
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -15425,11 +15652,17 @@ func @Counter.__loop {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  abandon:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
-    x64.callDirect __mbox_abandon
-    x64.jmp drain
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    x64.callDirect __mbox_unknown_tag
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -15440,30 +15673,6 @@ func @Counter.__loop {
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
     x64.jmp serve
-}
-
-func @Counter.__abandon {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jumpTable rax, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-    x64.jmp abandondone
-  next:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-  abandondone:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
 }
 
 func @__gt_ready_locked {
@@ -15737,18 +15946,20 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 48
+    x64.movRegImm32 rbx, 1024
   __il_body:
-    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
   __il_cont:
     x64.leaRegFunc rcx, [rip + Counter.__loop]
-    x64.leaRegFunc rax, [rip + Counter.__abandon]
-    x64.movRegImm32 r9, 24
+    x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
+    x64.movRegReg r9, rbx
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
@@ -15761,20 +15972,27 @@ func @main {
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
     x64.callDirect __mbox_staging
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.storeBaseDispReg.word64 [r14 + 16], r13
     x64.movRegImm32 rax, 24
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r8
+    x64.movRegReg rdx, r14
     x64.callDirect __mbox_send
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, sendrefused
+  sendaccepted:
     x64.movRegReg rcx, r13
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
+  critsplit:
+    x64.movRegReg rcx, r10
   tryerr:
     x64.movRegImm32 rbx, 0
+    x64.callDirect __mm_decref
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
@@ -15788,17 +16006,37 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_handle_drop_box
     x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  sendrefused:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mbox_reply_refused
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.storeSlotReg slot0, r8
+    x64.callDirect __mm_alloc
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot r8, slot0
+    x64.leaRegRegImm32 rax, r8, -1
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp tryerr
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-locked-ready-claims-the-strand-holder-with-a-cas.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -15819,21 +16057,7 @@ func @Counter.__loop {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, stopping
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.storeBaseDispReg.word64 [r12 + 72], rax
-  stopping:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_close
-  drain:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, abandon
+    x64.jcc notEqual, dispatch
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -15845,11 +16069,17 @@ func @Counter.__loop {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  abandon:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
-    x64.callDirect __mbox_abandon
-    x64.jmp drain
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    x64.callDirect __mbox_unknown_tag
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -15860,30 +16090,6 @@ func @Counter.__loop {
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
     x64.jmp serve
-}
-
-func @Counter.__abandon {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jumpTable rax, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-    x64.jmp abandondone
-  next:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-  abandondone:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
 }
 
 func @__gt_ready_locked {
@@ -16149,21 +16355,23 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x19, 1024
   __il_body:
-    arm64.movImm x19, 0
+    arm64.movImm x20, 0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+    arm64.storeBaseDispReg.word64 [x1 + 0], x20
   __il_cont:
     arm64.leaFuncAddr x0, Counter.__loop
-    arm64.leaFuncAddr x2, Counter.__abandon
-    arm64.movImm x3, 24
+    arm64.movImm x2, 24
+    arm64.movRegReg x3, x19
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
@@ -16176,20 +16384,27 @@ func @main {
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
     arm64.bl __mbox_staging
-    arm64.movRegReg x1, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x19
-    arm64.storeBaseDispReg.word64 [x1 + 16], x21
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x19
+    arm64.storeBaseDispReg.word64 [x22 + 16], x21
     arm64.movImm x2, 24
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.movRegReg x1, x22
     arm64.bl __mbox_send
+    arm64.cmp x0, 0
+    arm64.b.ne sendrefused
+  sendaccepted:
     arm64.movRegReg x0, x21
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
     arm64.b.eq tryok
+  critsplit:
+    arm64.movRegReg x0, x9
   tryerr:
     arm64.movImm x19, 0
+    arm64.bl __mm_decref
     arm64.b trycont
   tryok:
     arm64.movRegReg x19, x0
@@ -16203,19 +16418,42 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_handle_drop_box
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
+  sendrefused:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mbox_reply_refused
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.movImm x1, 16
+    arm64.movImm x2, 0
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.add x0, x0, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.movRegReg x0, x1
+    arm64.b tryerr
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-locked-ready-claims-the-strand-holder-with-a-cas.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 
@@ -16230,22 +16468,7 @@ func @Counter.__loop {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.cmp x0, 0
-    arm64.b.eq stopping
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.storeBaseDispReg.word64 [x20 + 72], x0
-  stopping:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_close
-  drain:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.movRegReg x1, x0
-    arm64.cmp x1, 0
-    arm64.b.ne abandon
+    arm64.b.ne dispatch
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -16256,10 +16479,16 @@ func @Counter.__loop {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  abandon:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_abandon
-    arm64.b drain
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    arm64.bl __mbox_unknown_tag
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -16272,27 +16501,6 @@ func @Counter.__loop {
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
     arm64.b serve
-}
-
-func @Counter.__abandon {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-    arm64.b abandondone
-  next:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-  abandondone:
-    arm64.epilogue 16
-    arm64.ret
 }
 
 func @__gt_ready_locked {
@@ -16578,21 +16786,23 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x19, 1024
   __il_body:
-    arm64.movImm x19, 0
+    arm64.movImm x20, 0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+    arm64.storeBaseDispReg.word64 [x1 + 0], x20
   __il_cont:
     arm64.leaFuncAddr x0, Counter.__loop
-    arm64.leaFuncAddr x2, Counter.__abandon
-    arm64.movImm x3, 24
+    arm64.movImm x2, 24
+    arm64.movRegReg x3, x19
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
@@ -16605,20 +16815,27 @@ func @main {
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
     arm64.bl __mbox_staging
-    arm64.movRegReg x1, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x19
-    arm64.storeBaseDispReg.word64 [x1 + 16], x21
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x19
+    arm64.storeBaseDispReg.word64 [x22 + 16], x21
     arm64.movImm x2, 24
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.movRegReg x1, x22
     arm64.bl __mbox_send
+    arm64.cmp x0, 0
+    arm64.b.ne sendrefused
+  sendaccepted:
     arm64.movRegReg x0, x21
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
     arm64.b.eq tryok
+  critsplit:
+    arm64.movRegReg x0, x9
   tryerr:
     arm64.movImm x19, 0
+    arm64.bl __mm_decref
     arm64.b trycont
   tryok:
     arm64.movRegReg x19, x0
@@ -16632,19 +16849,42 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_handle_drop_box
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
+  sendrefused:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mbox_reply_refused
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.movImm x1, 16
+    arm64.movImm x2, 0
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.add x0, x0, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.movRegReg x0, x1
+    arm64.b tryerr
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-locked-ready-claims-the-strand-holder-with-a-cas.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 
@@ -16659,22 +16899,7 @@ func @Counter.__loop {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.cmp x0, 0
-    arm64.b.eq stopping
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.storeBaseDispReg.word64 [x20 + 72], x0
-  stopping:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_close
-  drain:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.movRegReg x1, x0
-    arm64.cmp x1, 0
-    arm64.b.ne abandon
+    arm64.b.ne dispatch
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -16685,10 +16910,16 @@ func @Counter.__loop {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  abandon:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_abandon
-    arm64.b drain
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    arm64.bl __mbox_unknown_tag
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -16701,27 +16932,6 @@ func @Counter.__loop {
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
     arm64.b serve
-}
-
-func @Counter.__abandon {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-    arm64.b abandondone
-  next:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-  abandondone:
-    arm64.epilogue 16
-    arm64.ret
 }
 
 func @__gt_ready_locked {
@@ -16934,7 +17144,9 @@ two services' traffic never meets on a lock and a service's traffic never meets 
 and run-queue work. `__mbox_recv` takes that lock around its count read and its pop on the `recvtry` road,
 and its `closed` read on the empty road is inside the same hold as the count read, so "empty and closed" is
 one instant. The pop copies the head slot into the mailbox's inbox and answers the inbox's address, and a
-ring that has grown past its first 16 slots is replaced by a fresh 16-slot ring once the pop empties it.
+ring that has grown past its first slots (16, or the capacity when that is smaller) is replaced by a fresh
+ring of that size once the pop empties it. It answers 0 only on a closed, empty mailbox, which is the one
+instant the service loop exits on, so no message is ever left queued behind the exit.
 
 What this pin shows is the lock each road enters and leaves: the lock word the enter and leave operate on
 is the mailbox's own lock field, computed from the `mbox` argument, and no load of `__sched_lock`
@@ -17066,18 +17278,20 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 48
+    x64.movRegImm32 rbx, 1024
   __il_body:
-    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
   __il_cont:
     x64.leaRegFunc rcx, [rip + Counter.__loop]
-    x64.leaRegFunc rax, [rip + Counter.__abandon]
-    x64.movRegImm32 r9, 24
+    x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
+    x64.movRegReg r9, rbx
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
@@ -17090,20 +17304,27 @@ func @main {
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
     x64.callDirect __mbox_staging
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.storeBaseDispReg.word64 [r14 + 16], r13
     x64.movRegImm32 rax, 24
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r8
+    x64.movRegReg rdx, r14
     x64.callDirect __mbox_send
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, sendrefused
+  sendaccepted:
     x64.movRegReg rcx, r13
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
+  critsplit:
+    x64.movRegReg rcx, r10
   tryerr:
     x64.movRegImm32 rbx, 0
+    x64.callDirect __mm_decref
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
@@ -17118,17 +17339,37 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_handle_drop_box
     x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  sendrefused:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mbox_reply_refused
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.storeSlotReg slot0, r8
+    x64.callDirect __mm_alloc
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot r8, slot0
+    x64.leaRegRegImm32 rax, r8, -1
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp tryerr
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-mailbox-receive-takes-the-mailboxs-own-lock.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -17149,21 +17390,7 @@ func @Counter.__loop {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, stopping
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.storeBaseDispReg.word64 [r12 + 72], rax
-  stopping:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_close
-  drain:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, abandon
+    x64.jcc notEqual, dispatch
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -17175,11 +17402,17 @@ func @Counter.__loop {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  abandon:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
-    x64.callDirect __mbox_abandon
-    x64.jmp drain
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    x64.callDirect __mbox_unknown_tag
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -17192,30 +17425,6 @@ func @Counter.__loop {
     x64.jmp serve
 }
 
-func @Counter.__abandon {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jumpTable rax, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-    x64.jmp abandondone
-  next:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-  abandondone:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
 func @__mbox_recv {
   entry:
     x64.pushReg rbp
@@ -17225,7 +17434,7 @@ func @__mbox_recv {
     x64.pushReg r13
     x64.pushReg r14
     x64.pushReg r15
-    x64.prologue 40
+    x64.prologue 56
     x64.movRegReg rbx, rcx
     x64.jmp recvtry
   recvempty:
@@ -17278,7 +17487,7 @@ func @__mbox_recv {
     x64.jmp recvpop
   recvdelivered:
     x64.leaRegRegImm32 r8, rbx, 96
-    x64.epilogue 40
+    x64.epilogue 56
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -17311,7 +17520,7 @@ func @__mbox_recv {
     x64.andRegReg rsi, rsi, rax
     x64.orRegReg rcx, rcx, rsi
     x64.aluBaseDispImm32.add [rcx + 0], -1
-    x64.epilogue 40
+    x64.epilogue 56
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -17323,8 +17532,9 @@ func @__mbox_recv {
     x64.loadRegBaseDisp.word64 r13, [rbx + 0]
     x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
     x64.loadRegBaseDisp.word64 rdx, [rbx + 8]
-    x64.loadRegBaseDisp.word64 rsi, [rbx + 80]
-    x64.leaRegRegImm32 r14, rbx, 96
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 64]
+    x64.leaRegRegImm32 rdi, rbx, 96
+    x64.storeSlotReg slot0, rdi
     x64.movRegReg rdi, rcx
     x64.imulRegReg rdi, rcx, rsi
     x64.leaRegRegReg rdi, r13, rdi
@@ -17349,20 +17559,21 @@ func @__mbox_recv {
     x64.storeBaseDispReg.word64 [rbx + 24], rax
     x64.cmpRegImm32 rax, 0
     x64.setccReg equal, rax
-    x64.cmpRegImm32 rdx, 16
+    x64.loadRegBaseDisp.word64 r14, [rbx + 80]
+    x64.cmpRegReg rdx, r14
     x64.setccReg greater, rcx
     x64.andRegReg rax, rax, rcx
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, recvpopped
   recvshrink:
-    x64.imulRegRegImm32 rcx, rsi, 16
+    x64.movRegReg rcx, r14
+    x64.imulRegReg rcx, r14, rsi
     x64.callDirect __slab_alloc_scaffold
     x64.movRegReg r15, r8
     x64.movRegReg rcx, r13
     x64.callDirect __slab_free_scaffold
     x64.storeBaseDispReg.word64 [rbx + 0], r15
-    x64.movRegImm32 rax, 16
-    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.storeBaseDispReg.word64 [rbx + 8], r14
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rbx + 16], rax
   recvpopped:
@@ -17390,8 +17601,8 @@ func @__mbox_recv {
     x64.andRegReg rsi, rsi, rax
     x64.orRegReg rcx, rcx, rsi
     x64.aluBaseDispImm32.add [rcx + 0], -1
-    x64.movRegReg r8, r14
-    x64.epilogue 40
+    x64.loadRegSlot r8, slot0
+    x64.epilogue 56
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -17402,14 +17613,16 @@ func @__mbox_recv {
   cpyftb:
     x64.leaRegRegReg r9, rdi, r8
     x64.loadRegBaseDisp.byte r9, [r9 + 0]
-    x64.leaRegRegReg r10, r14, r8
+    x64.loadRegSlot r10, slot0
+    x64.leaRegRegReg r10, r10, r8
     x64.storeBaseDispReg.byte [r10 + 0], r9
     x64.leaRegRegImm32 r8, r8, 1
     x64.jmp cpyfth
   cpyfwb:
     x64.leaRegRegReg r10, rdi, r9
     x64.loadRegBaseDisp.word64 r10, [r10 + 0]
-    x64.leaRegRegReg r11, r14, r9
+    x64.loadRegSlot r11, slot0
+    x64.leaRegRegReg r11, r11, r9
     x64.storeBaseDispReg.word64 [r11 + 0], r10
     x64.leaRegRegImm32 r9, r9, 8
     x64.jmp cpyfwh
@@ -17418,11 +17631,11 @@ func @__mbox_recv {
     x64.callDirect __rtlock_acquire
     x64.jmp __rl_cont#18
   __rl_slow#23:
-    x64.storeSlotReg slot0, r8
+    x64.storeSlotReg slot1, r8
     x64.movRegReg rcx, r12
     x64.callDirect __rtlock_release
     x64.movRegReg rax, r8
-    x64.loadRegSlot r8, slot0
+    x64.loadRegSlot r8, slot1
     x64.jmp __rl_cont#22
   __rl_slow#21:
     x64.movRegReg rcx, r12
@@ -17515,18 +17728,20 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 48
+    x64.movRegImm32 rbx, 1024
   __il_body:
-    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
   __il_cont:
     x64.leaRegFunc rcx, [rip + Counter.__loop]
-    x64.leaRegFunc rax, [rip + Counter.__abandon]
-    x64.movRegImm32 r9, 24
+    x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
+    x64.movRegReg r9, rbx
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
@@ -17539,20 +17754,27 @@ func @main {
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
     x64.callDirect __mbox_staging
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.storeBaseDispReg.word64 [r14 + 16], r13
     x64.movRegImm32 rax, 24
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r8
+    x64.movRegReg rdx, r14
     x64.callDirect __mbox_send
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, sendrefused
+  sendaccepted:
     x64.movRegReg rcx, r13
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
+  critsplit:
+    x64.movRegReg rcx, r10
   tryerr:
     x64.movRegImm32 rbx, 0
+    x64.callDirect __mm_decref
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
@@ -17566,17 +17788,37 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_handle_drop_box
     x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  sendrefused:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mbox_reply_refused
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.storeSlotReg slot0, r8
+    x64.callDirect __mm_alloc
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot r8, slot0
+    x64.leaRegRegImm32 rax, r8, -1
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp tryerr
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-mailbox-receive-takes-the-mailboxs-own-lock.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -17597,21 +17839,7 @@ func @Counter.__loop {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, stopping
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.storeBaseDispReg.word64 [r12 + 72], rax
-  stopping:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_close
-  drain:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, abandon
+    x64.jcc notEqual, dispatch
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -17623,11 +17851,17 @@ func @Counter.__loop {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  abandon:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
-    x64.callDirect __mbox_abandon
-    x64.jmp drain
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    x64.callDirect __mbox_unknown_tag
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -17640,30 +17874,6 @@ func @Counter.__loop {
     x64.jmp serve
 }
 
-func @Counter.__abandon {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jumpTable rax, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-    x64.jmp abandondone
-  next:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-  abandondone:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
-}
-
 func @__mbox_recv {
   entry:
     x64.pushReg rbp
@@ -17673,7 +17883,7 @@ func @__mbox_recv {
     x64.pushReg r13
     x64.pushReg r14
     x64.pushReg r15
-    x64.prologue 40
+    x64.prologue 56
     x64.movRegReg rbx, rcx
     x64.jmp recvtry
   recvempty:
@@ -17726,7 +17936,7 @@ func @__mbox_recv {
     x64.jmp recvpop
   recvdelivered:
     x64.leaRegRegImm32 r8, rbx, 96
-    x64.epilogue 40
+    x64.epilogue 56
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -17759,7 +17969,7 @@ func @__mbox_recv {
     x64.andRegReg rsi, rsi, rax
     x64.orRegReg rcx, rcx, rsi
     x64.aluBaseDispImm32.add [rcx + 0], -1
-    x64.epilogue 40
+    x64.epilogue 56
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -17771,8 +17981,9 @@ func @__mbox_recv {
     x64.loadRegBaseDisp.word64 r13, [rbx + 0]
     x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
     x64.loadRegBaseDisp.word64 rdx, [rbx + 8]
-    x64.loadRegBaseDisp.word64 rsi, [rbx + 80]
-    x64.leaRegRegImm32 r14, rbx, 96
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 64]
+    x64.leaRegRegImm32 rdi, rbx, 96
+    x64.storeSlotReg slot0, rdi
     x64.movRegReg rdi, rcx
     x64.imulRegReg rdi, rcx, rsi
     x64.leaRegRegReg rdi, r13, rdi
@@ -17797,20 +18008,21 @@ func @__mbox_recv {
     x64.storeBaseDispReg.word64 [rbx + 24], rax
     x64.cmpRegImm32 rax, 0
     x64.setccReg equal, rax
-    x64.cmpRegImm32 rdx, 16
+    x64.loadRegBaseDisp.word64 r14, [rbx + 80]
+    x64.cmpRegReg rdx, r14
     x64.setccReg greater, rcx
     x64.andRegReg rax, rax, rcx
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, recvpopped
   recvshrink:
-    x64.imulRegRegImm32 rcx, rsi, 16
+    x64.movRegReg rcx, r14
+    x64.imulRegReg rcx, r14, rsi
     x64.callDirect __slab_alloc_scaffold
     x64.movRegReg r15, r8
     x64.movRegReg rcx, r13
     x64.callDirect __slab_free_scaffold
     x64.storeBaseDispReg.word64 [rbx + 0], r15
-    x64.movRegImm32 rax, 16
-    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.storeBaseDispReg.word64 [rbx + 8], r14
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rbx + 16], rax
   recvpopped:
@@ -17838,8 +18050,8 @@ func @__mbox_recv {
     x64.andRegReg rsi, rsi, rax
     x64.orRegReg rcx, rcx, rsi
     x64.aluBaseDispImm32.add [rcx + 0], -1
-    x64.movRegReg r8, r14
-    x64.epilogue 40
+    x64.loadRegSlot r8, slot0
+    x64.epilogue 56
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -17850,14 +18062,16 @@ func @__mbox_recv {
   cpyftb:
     x64.leaRegRegReg r9, rdi, r8
     x64.loadRegBaseDisp.byte r9, [r9 + 0]
-    x64.leaRegRegReg r10, r14, r8
+    x64.loadRegSlot r10, slot0
+    x64.leaRegRegReg r10, r10, r8
     x64.storeBaseDispReg.byte [r10 + 0], r9
     x64.leaRegRegImm32 r8, r8, 1
     x64.jmp cpyfth
   cpyfwb:
     x64.leaRegRegReg r10, rdi, r9
     x64.loadRegBaseDisp.word64 r10, [r10 + 0]
-    x64.leaRegRegReg r11, r14, r9
+    x64.loadRegSlot r11, slot0
+    x64.leaRegRegReg r11, r11, r9
     x64.storeBaseDispReg.word64 [r11 + 0], r10
     x64.leaRegRegImm32 r9, r9, 8
     x64.jmp cpyfwh
@@ -17866,11 +18080,11 @@ func @__mbox_recv {
     x64.callDirect __rtlock_acquire
     x64.jmp __rl_cont#18
   __rl_slow#23:
-    x64.storeSlotReg slot0, r8
+    x64.storeSlotReg slot1, r8
     x64.movRegReg rcx, r12
     x64.callDirect __rtlock_release
     x64.movRegReg rax, r8
-    x64.loadRegSlot r8, slot0
+    x64.loadRegSlot r8, slot1
     x64.jmp __rl_cont#22
   __rl_slow#21:
     x64.movRegReg rcx, r12
@@ -17955,21 +18169,23 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x19, 1024
   __il_body:
-    arm64.movImm x19, 0
+    arm64.movImm x20, 0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+    arm64.storeBaseDispReg.word64 [x1 + 0], x20
   __il_cont:
     arm64.leaFuncAddr x0, Counter.__loop
-    arm64.leaFuncAddr x2, Counter.__abandon
-    arm64.movImm x3, 24
+    arm64.movImm x2, 24
+    arm64.movRegReg x3, x19
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
@@ -17982,20 +18198,27 @@ func @main {
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
     arm64.bl __mbox_staging
-    arm64.movRegReg x1, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x19
-    arm64.storeBaseDispReg.word64 [x1 + 16], x21
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x19
+    arm64.storeBaseDispReg.word64 [x22 + 16], x21
     arm64.movImm x2, 24
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.movRegReg x1, x22
     arm64.bl __mbox_send
+    arm64.cmp x0, 0
+    arm64.b.ne sendrefused
+  sendaccepted:
     arm64.movRegReg x0, x21
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
     arm64.b.eq tryok
+  critsplit:
+    arm64.movRegReg x0, x9
   tryerr:
     arm64.movImm x19, 0
+    arm64.bl __mm_decref
     arm64.b trycont
   tryok:
     arm64.movRegReg x19, x0
@@ -18009,19 +18232,42 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_handle_drop_box
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
+  sendrefused:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mbox_reply_refused
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.movImm x1, 16
+    arm64.movImm x2, 0
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.add x0, x0, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.movRegReg x0, x1
+    arm64.b tryerr
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-mailbox-receive-takes-the-mailboxs-own-lock.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 
@@ -18036,22 +18282,7 @@ func @Counter.__loop {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.cmp x0, 0
-    arm64.b.eq stopping
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.storeBaseDispReg.word64 [x20 + 72], x0
-  stopping:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_close
-  drain:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.movRegReg x1, x0
-    arm64.cmp x1, 0
-    arm64.b.ne abandon
+    arm64.b.ne dispatch
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -18062,10 +18293,16 @@ func @Counter.__loop {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  abandon:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_abandon
-    arm64.b drain
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    arm64.bl __mbox_unknown_tag
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -18078,27 +18315,6 @@ func @Counter.__loop {
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
     arm64.b serve
-}
-
-func @Counter.__abandon {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-    arm64.b abandondone
-  next:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-  abandondone:
-    arm64.epilogue 16
-    arm64.ret
 }
 
 func @__mbox_recv {
@@ -18230,7 +18446,7 @@ func @__mbox_recv {
     arm64.loadRegBaseDisp.word64 x22, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x19 + 16]
     arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
-    arm64.loadRegBaseDisp.word64 x3, [x19 + 80]
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 64]
     arm64.add x23, x19, 96
     arm64.mul x4, x1, x3
     arm64.add x4, x22, x4
@@ -18254,13 +18470,13 @@ func @__mbox_recv {
     arm64.storeBaseDispReg.word64 [x19 + 24], x0
     arm64.cmp x0, 0
     arm64.cset x0, eq
-    arm64.cmp x2, 16
+    arm64.loadRegBaseDisp.word64 x24, [x19 + 80]
+    arm64.cmp x2, x24
     arm64.cset x1, gt
     arm64.and x0, x0, x1
     arm64.cbz x0, recvpopped
   recvshrink:
-    arm64.movImm x24, 16
-    arm64.lsl x0, x3, 4
+    arm64.mul x0, x24, x3
     arm64.bl __slab_alloc_scaffold
     arm64.movRegReg x25, x0
     arm64.movRegReg x0, x22
@@ -18419,21 +18635,23 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x19, 1024
   __il_body:
-    arm64.movImm x19, 0
+    arm64.movImm x20, 0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+    arm64.storeBaseDispReg.word64 [x1 + 0], x20
   __il_cont:
     arm64.leaFuncAddr x0, Counter.__loop
-    arm64.leaFuncAddr x2, Counter.__abandon
-    arm64.movImm x3, 24
+    arm64.movImm x2, 24
+    arm64.movRegReg x3, x19
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
@@ -18446,20 +18664,27 @@ func @main {
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
     arm64.bl __mbox_staging
-    arm64.movRegReg x1, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x19
-    arm64.storeBaseDispReg.word64 [x1 + 16], x21
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x19
+    arm64.storeBaseDispReg.word64 [x22 + 16], x21
     arm64.movImm x2, 24
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.movRegReg x1, x22
     arm64.bl __mbox_send
+    arm64.cmp x0, 0
+    arm64.b.ne sendrefused
+  sendaccepted:
     arm64.movRegReg x0, x21
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
     arm64.b.eq tryok
+  critsplit:
+    arm64.movRegReg x0, x9
   tryerr:
     arm64.movImm x19, 0
+    arm64.bl __mm_decref
     arm64.b trycont
   tryok:
     arm64.movRegReg x19, x0
@@ -18473,19 +18698,42 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_handle_drop_box
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
+  sendrefused:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mbox_reply_refused
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.movImm x1, 16
+    arm64.movImm x2, 0
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.add x0, x0, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.movRegReg x0, x1
+    arm64.b tryerr
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-mailbox-receive-takes-the-mailboxs-own-lock.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 
@@ -18500,22 +18748,7 @@ func @Counter.__loop {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.cmp x0, 0
-    arm64.b.eq stopping
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.storeBaseDispReg.word64 [x20 + 72], x0
-  stopping:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_close
-  drain:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.movRegReg x1, x0
-    arm64.cmp x1, 0
-    arm64.b.ne abandon
+    arm64.b.ne dispatch
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -18526,10 +18759,16 @@ func @Counter.__loop {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  abandon:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_abandon
-    arm64.b drain
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    arm64.bl __mbox_unknown_tag
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -18542,27 +18781,6 @@ func @Counter.__loop {
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
     arm64.b serve
-}
-
-func @Counter.__abandon {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-    arm64.b abandondone
-  next:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-  abandondone:
-    arm64.epilogue 16
-    arm64.ret
 }
 
 func @__mbox_recv {
@@ -18694,7 +18912,7 @@ func @__mbox_recv {
     arm64.loadRegBaseDisp.word64 x22, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x19 + 16]
     arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
-    arm64.loadRegBaseDisp.word64 x3, [x19 + 80]
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 64]
     arm64.add x23, x19, 96
     arm64.mul x4, x1, x3
     arm64.add x4, x22, x4
@@ -18718,13 +18936,13 @@ func @__mbox_recv {
     arm64.storeBaseDispReg.word64 [x19 + 24], x0
     arm64.cmp x0, 0
     arm64.cset x0, eq
-    arm64.cmp x2, 16
+    arm64.loadRegBaseDisp.word64 x24, [x19 + 80]
+    arm64.cmp x2, x24
     arm64.cset x1, gt
     arm64.and x0, x0, x1
     arm64.cbz x0, recvpopped
   recvshrink:
-    arm64.movImm x24, 16
-    arm64.lsl x0, x3, 4
+    arm64.mul x0, x24, x3
     arm64.bl __slab_alloc_scaffold
     arm64.movRegReg x25, x0
     arm64.movRegReg x0, x22
@@ -18812,7 +19030,8 @@ stands between the last store and `__mbox_send`. `__mbox_send(mbox, msg, bytes)`
 of the sender's request union as the parser knows it (24 here, a constant `main` passes), then copies `bytes` of it
 under the mailbox lock, into the parked receiver's inbox when one is parked (Go's `sendDirect`), and
 otherwise into the ring's tail slot, cutting the ring on the first message that has to be queued and
-doubling it, with a copy, when it is full. `__mbox_recv(mbox)` copies the head slot into the mailbox's
+doubling it, with a copy, when it is full and below the mailbox's capacity, and answers a status:
+delivered, `full` or `stopped`. `__mbox_recv(mbox)` copies the head slot into the mailbox's
 one-slot inbox, shrinks a ring that has grown past its first 16 slots back to 16 once the queue is empty,
 and answers the inbox address, so the loop reads the tag and each argument from that address. A payload is
 moved into the staging buffer, and each copy after that moves plain words with no reference-count step.
@@ -18821,8 +19040,8 @@ What these pins show is the absence. `main` allocates the service's state and it
 the message: its only `__mm_alloc` calls are those two. `Counter.__loop` has no `__mm_decref` of a request
 shell, its only one being the state's drop on the way out, and neither has a `__mm_free`. The stores into the
 staging buffer are the message, and `__mbox_staging` is the call before them, never between them and the
-send. `Counter.__abandon` runs on the record in place: it answers the reply cell with `stopped` and frees the
-payloads the record still owns, and no release of the record follows.
+send. The loop has no drain after it: `__mbox_recv` answers 0 only on a closed, empty mailbox, so nothing
+is left to drop when the loop exits, and its dispatch default calls `__mbox_unknown_tag`, which aborts.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -18942,18 +19161,20 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 48
+    x64.movRegImm32 rbx, 1024
   __il_body:
-    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
   __il_cont:
     x64.leaRegFunc rcx, [rip + Counter.__loop]
-    x64.leaRegFunc rax, [rip + Counter.__abandon]
-    x64.movRegImm32 r9, 24
+    x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
+    x64.movRegReg r9, rbx
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
@@ -18966,20 +19187,27 @@ func @main {
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
     x64.callDirect __mbox_staging
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.storeBaseDispReg.word64 [r14 + 16], r13
     x64.movRegImm32 rax, 24
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r8
+    x64.movRegReg rdx, r14
     x64.callDirect __mbox_send
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, sendrefused
+  sendaccepted:
     x64.movRegReg rcx, r13
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
+  critsplit:
+    x64.movRegReg rcx, r10
   tryerr:
     x64.movRegImm32 rbx, 0
+    x64.callDirect __mm_decref
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
@@ -18994,17 +19222,37 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_handle_drop_box
     x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  sendrefused:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mbox_reply_refused
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.storeSlotReg slot0, r8
+    x64.callDirect __mm_alloc
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot r8, slot0
+    x64.leaRegRegImm32 rax, r8, -1
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp tryerr
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-service-message-is-copied-into-its-mailbox-with-no-allocation.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -19025,21 +19273,7 @@ func @Counter.__loop {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, stopping
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.storeBaseDispReg.word64 [r12 + 72], rax
-  stopping:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_close
-  drain:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, abandon
+    x64.jcc notEqual, dispatch
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -19051,11 +19285,17 @@ func @Counter.__loop {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  abandon:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
-    x64.callDirect __mbox_abandon
-    x64.jmp drain
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    x64.callDirect __mbox_unknown_tag
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -19066,30 +19306,6 @@ func @Counter.__loop {
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
     x64.jmp serve
-}
-
-func @Counter.__abandon {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jumpTable rax, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-    x64.jmp abandondone
-  next:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-  abandondone:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
 }
 
 func @__mbox_send {
@@ -19129,8 +19345,8 @@ func @__mbox_send {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#46
-  __rl_cont#45:
+    x64.jcc notEqual, __rl_slow#48
+  __rl_cont#47:
     x64.loadRegBaseDisp.word64 rax, [rbx + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, sendclosed
@@ -19139,25 +19355,30 @@ func @__mbox_send {
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, sendhandoff
   sendappend:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.cmpRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 72]
+    x64.cmpRegReg rax, rcx
+    x64.jcc equal, sendfull
+  sendqueue:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, sendhavering
   sendseedring:
-    x64.movRegImm32 r12, 16
-    x64.loadRegBaseDisp.word64 rax, [rbx + 80]
-    x64.imulRegRegImm32 rcx, rax, 16
+    x64.loadRegBaseDisp.word64 r12, [rbx + 80]
+    x64.loadRegBaseDisp.word64 rax, [rbx + 64]
+    x64.movRegReg rcx, r12
+    x64.imulRegReg rcx, r12, rax
     x64.callDirect __slab_alloc_scaffold
     x64.storeBaseDispReg.word64 [rbx + 0], r8
     x64.storeBaseDispReg.word64 [rbx + 8], r12
     x64.jmp sendplace
   sendhavering:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
     x64.loadRegBaseDisp.word64 r12, [rbx + 8]
     x64.cmpRegReg rax, r12
     x64.jcc notEqual, sendplace
   sendgrowring:
     x64.loadRegBaseDisp.word64 r13, [rbx + 16]
-    x64.loadRegBaseDisp.word64 r14, [rbx + 80]
+    x64.loadRegBaseDisp.word64 r14, [rbx + 64]
     x64.imulRegRegImm32 r15, r12, 2
     x64.movRegReg rcx, r15
     x64.imulRegReg rcx, r15, r14
@@ -19168,72 +19389,72 @@ func @__mbox_send {
     x64.imulRegReg r13, r13, r14
     x64.leaRegRegReg rax, rcx, r13
     x64.cmpRegImm32 r12, 0
-    x64.jcc lessEqual, cpyfd#22
-  cpyfrun#21:
+    x64.jcc lessEqual, cpyfd#24
+  cpyfrun#23:
     x64.movRegReg rdx, r12
     x64.andRegImm32 rdx, r12, -8
     x64.movRegImm32 rsi, 0
-  cpyfwh#23:
+  cpyfwh#25:
     x64.cmpRegReg rsi, rdx
-    x64.jcc less, cpyfwb#24
-  cpyfth#26:
+    x64.jcc less, cpyfwb#26
+  cpyfth#28:
     x64.cmpRegReg rdx, r12
-    x64.jcc less, cpyftb#27
-  cpyfd#22:
+    x64.jcc less, cpyftb#29
+  cpyfd#24:
     x64.leaRegRegReg rax, r8, r12
     x64.cmpRegImm32 r13, 0
-    x64.jcc lessEqual, cpyfd#30
-  cpyfrun#29:
+    x64.jcc lessEqual, cpyfd#32
+  cpyfrun#31:
     x64.movRegReg rdx, r13
     x64.andRegImm32 rdx, r13, -8
     x64.movRegImm32 rsi, 0
-  cpyfwh#31:
+  cpyfwh#33:
     x64.cmpRegReg rsi, rdx
-    x64.jcc less, cpyfwb#32
-  cpyfth#34:
+    x64.jcc less, cpyfwb#34
+  cpyfth#36:
     x64.cmpRegReg rdx, r13
-    x64.jcc less, cpyftb#35
-  cpyfd#30:
+    x64.jcc less, cpyftb#37
+  cpyfd#32:
     x64.storeBaseDispReg.word64 [rbx + 0], r8
     x64.storeBaseDispReg.word64 [rbx + 8], r15
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rbx + 16], rax
     x64.callDirect __slab_free_scaffold
     x64.jmp sendplace
-  cpyftb#35:
+  cpyftb#37:
     x64.leaRegRegReg rsi, rcx, rdx
     x64.loadRegBaseDisp.byte rsi, [rsi + 0]
     x64.leaRegRegReg rdi, rax, rdx
     x64.storeBaseDispReg.byte [rdi + 0], rsi
     x64.leaRegRegImm32 rdx, rdx, 1
-    x64.jmp cpyfth#34
-  cpyfwb#32:
+    x64.jmp cpyfth#36
+  cpyfwb#34:
     x64.leaRegRegReg rdi, rcx, rsi
     x64.loadRegBaseDisp.word64 rdi, [rdi + 0]
     x64.leaRegRegReg r9, rax, rsi
     x64.storeBaseDispReg.word64 [r9 + 0], rdi
     x64.leaRegRegImm32 rsi, rsi, 8
-    x64.jmp cpyfwh#31
-  cpyftb#27:
+    x64.jmp cpyfwh#33
+  cpyftb#29:
     x64.leaRegRegReg rsi, rax, rdx
     x64.loadRegBaseDisp.byte rsi, [rsi + 0]
     x64.leaRegRegReg rdi, r8, rdx
     x64.storeBaseDispReg.byte [rdi + 0], rsi
     x64.leaRegRegImm32 rdx, rdx, 1
-    x64.jmp cpyfth#26
-  cpyfwb#24:
+    x64.jmp cpyfth#28
+  cpyfwb#26:
     x64.leaRegRegReg rdi, rax, rsi
     x64.loadRegBaseDisp.word64 rdi, [rdi + 0]
     x64.leaRegRegReg r9, r8, rsi
     x64.storeBaseDispReg.word64 [r9 + 0], rdi
     x64.leaRegRegImm32 rsi, rsi, 8
-    x64.jmp cpyfwh#23
+    x64.jmp cpyfwh#25
   sendplace:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.loadRegBaseDisp.word64 rdx, [rbx + 16]
     x64.loadRegBaseDisp.word64 rsi, [rbx + 24]
-    x64.loadRegBaseDisp.word64 rdi, [rbx + 80]
+    x64.loadRegBaseDisp.word64 rdi, [rbx + 64]
     x64.leaRegRegImm32 rcx, rcx, -1
     x64.leaRegRegReg rdx, rdx, rsi
     x64.andRegReg rdx, rdx, rcx
@@ -19241,27 +19462,27 @@ func @__mbox_send {
     x64.leaRegRegReg rax, rax, rdx
     x64.loadRegSlot rcx, slot2
     x64.cmpRegImm32 rcx, 0
-    x64.jcc lessEqual, cpyfd#38
-  cpyfrun#37:
+    x64.jcc lessEqual, cpyfd#40
+  cpyfrun#39:
     x64.loadRegSlot rcx, slot2
     x64.andRegImm32 rcx, rcx, -8
     x64.movRegImm32 rdx, 0
-  cpyfwh#39:
+  cpyfwh#41:
     x64.cmpRegReg rdx, rcx
-    x64.jcc less, cpyfwb#40
-  cpyfth#42:
+    x64.jcc less, cpyfwb#42
+  cpyfth#44:
     x64.loadRegSlot rdx, slot2
     x64.cmpRegReg rcx, rdx
-    x64.jcc less, cpyftb#43
-  cpyfd#38:
+    x64.jcc less, cpyftb#45
+  cpyfd#40:
     x64.leaRegRegImm32 rax, rsi, 1
     x64.storeBaseDispReg.word64 [rbx + 24], rax
     x64.movRegImm32 rdx, 0
     x64.loadRegSlot rax, slot1
     x64.xchg8 [rax], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#52
-  __rl_cont#51:
+    x64.jcc notEqual, __rl_slow#56
+  __rl_cont#55:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -19282,39 +19503,39 @@ func @__mbox_send {
     x64.orRegReg rcx, rcx, rsi
     x64.aluBaseDispImm32.add [rcx + 0], -1
     x64.jmp senddone
-  cpyftb#43:
+  cpyftb#45:
     x64.loadRegSlot rdx, slot0
     x64.leaRegRegReg rdx, rdx, rcx
     x64.loadRegBaseDisp.byte rdx, [rdx + 0]
     x64.leaRegRegReg rdi, rax, rcx
     x64.storeBaseDispReg.byte [rdi + 0], rdx
     x64.leaRegRegImm32 rcx, rcx, 1
-    x64.jmp cpyfth#42
-  cpyfwb#40:
+    x64.jmp cpyfth#44
+  cpyfwb#42:
     x64.loadRegSlot rdi, slot0
     x64.leaRegRegReg rdi, rdi, rdx
     x64.loadRegBaseDisp.word64 rdi, [rdi + 0]
     x64.leaRegRegReg r8, rax, rdx
     x64.storeBaseDispReg.word64 [r8 + 0], rdi
     x64.leaRegRegImm32 rdx, rdx, 8
-    x64.jmp cpyfwh#39
+    x64.jmp cpyfwh#41
   sendhandoff:
     x64.leaRegRegImm32 rax, rbx, 96
     x64.loadRegSlot rdx, slot2
     x64.cmpRegImm32 rdx, 0
-    x64.jcc lessEqual, cpyfd#11
-  cpyfrun#10:
+    x64.jcc lessEqual, cpyfd#13
+  cpyfrun#12:
     x64.loadRegSlot rdx, slot2
     x64.andRegImm32 rdx, rdx, -8
     x64.movRegImm32 rsi, 0
-  cpyfwh#12:
+  cpyfwh#14:
     x64.cmpRegReg rsi, rdx
-    x64.jcc less, cpyfwb#13
-  cpyfth#15:
+    x64.jcc less, cpyfwb#15
+  cpyfth#17:
     x64.loadRegSlot rsi, slot2
     x64.cmpRegReg rdx, rsi
-    x64.jcc less, cpyftb#16
-  cpyfd#11:
+    x64.jcc less, cpyftb#18
+  cpyfd#13:
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [rcx + 296], rax
     x64.movRegImm32 rax, 0
@@ -19323,8 +19544,8 @@ func @__mbox_send {
     x64.loadRegSlot rax, slot1
     x64.xchg8 [rax], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#50
-  __rl_cont#49:
+    x64.jcc notEqual, __rl_slow#54
+  __rl_cont#53:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rdx, __sched_tls_teb_offset
@@ -19367,30 +19588,56 @@ func @__mbox_send {
     x64.lock add [rdx], rax
     x64.callDirect __sched_runq_put
     x64.callDirect __sched_wake_or_spawn
-    x64.jmp senddone
-  cpyftb#16:
+  senddone:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  cpyftb#18:
     x64.loadRegSlot rsi, slot0
     x64.leaRegRegReg rsi, rsi, rdx
     x64.loadRegBaseDisp.byte rsi, [rsi + 0]
     x64.leaRegRegReg rdi, rax, rdx
     x64.storeBaseDispReg.byte [rdi + 0], rsi
     x64.leaRegRegImm32 rdx, rdx, 1
-    x64.jmp cpyfth#15
-  cpyfwb#13:
+    x64.jmp cpyfth#17
+  cpyfwb#15:
     x64.loadRegSlot rdi, slot0
     x64.leaRegRegReg rdi, rdi, rsi
     x64.loadRegBaseDisp.word64 rdi, [rdi + 0]
     x64.leaRegRegReg r8, rax, rsi
     x64.storeBaseDispReg.word64 [r8 + 0], rdi
     x64.leaRegRegImm32 rsi, rsi, 8
-    x64.jmp cpyfwh#12
-  sendclosed:
+    x64.jmp cpyfwh#14
+  __rl_slow#48:
+    x64.callDirect __rtlock_acquire
+    x64.jmp __rl_cont#47
+  __rl_slow#56:
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __rtlock_release
+    x64.jmp __rl_cont#55
+  __rl_slow#54:
+    x64.loadRegSlot rax, slot1
+    x64.storeSlotReg slot3, rcx
+    x64.movRegReg rcx, rax
+    x64.callDirect __rtlock_release
+    x64.loadRegSlot rcx, slot3
+    x64.jmp __rl_cont#53
+  sendfull:
     x64.movRegImm32 rdx, 0
     x64.loadRegSlot rax, slot1
     x64.xchg8 [rax], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#48
-  __rl_cont#47:
+    x64.jcc equal, __rl_cont#51
+  __rl_slow#52:
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __rtlock_release
+  __rl_cont#51:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -19410,10 +19657,7 @@ func @__mbox_send {
     x64.andRegReg rsi, rsi, rax
     x64.orRegReg rcx, rcx, rsi
     x64.aluBaseDispImm32.add [rcx + 0], -1
-    x64.loadRegSlot rdx, slot0
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mbox_abandon
-  senddone:
+    x64.movRegImm32 r8, 1
     x64.epilogue 72
     x64.popReg r15
     x64.popReg r14
@@ -19422,24 +19666,44 @@ func @__mbox_send {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rl_slow#46:
-    x64.callDirect __rtlock_acquire
-    x64.jmp __rl_cont#45
-  __rl_slow#52:
-    x64.loadRegSlot rcx, slot1
-    x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#51
-  __rl_slow#50:
+  sendclosed:
+    x64.movRegImm32 rdx, 0
     x64.loadRegSlot rax, slot1
-    x64.storeSlotReg slot3, rcx
-    x64.movRegReg rcx, rax
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rcx, slot3
-    x64.jmp __rl_cont#49
-  __rl_slow#48:
+    x64.xchg8 [rax], rdx <- rdx
+    x64.cmpRegImm32 rdx, 1
+    x64.jcc equal, __rl_cont#49
+  __rl_slow#50:
     x64.loadRegSlot rcx, slot1
     x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#47
+  __rl_cont#49:
+    x64.leaRegGlobal rax, __sched_tls_teb_offset
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegGlobal rcx, __sched_tls_teb_offset
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.mov rcx, gs:[rcx]
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg notEqual, rax
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg notEqual, rdx
+    x64.andRegReg rax, rax, rdx
+    x64.movRegImm32 rdx, 0
+    x64.subRegReg rdx, rdx, rax
+    x64.leaRegRegImm32 rax, rax, -1
+    x64.leaRegRegImm32 rcx, rcx, 624
+    x64.leaRegGlobal rsi, __sched_lock_depth_sink
+    x64.andRegReg rcx, rcx, rdx
+    x64.andRegReg rsi, rsi, rax
+    x64.orRegReg rcx, rcx, rsi
+    x64.aluBaseDispImm32.add [rcx + 0], -1
+    x64.movRegImm32 r8, 2
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
 }
 
 func @__mbox_recv {
@@ -19451,7 +19715,7 @@ func @__mbox_recv {
     x64.pushReg r13
     x64.pushReg r14
     x64.pushReg r15
-    x64.prologue 40
+    x64.prologue 56
     x64.movRegReg rbx, rcx
     x64.jmp recvtry
   recvempty:
@@ -19504,7 +19768,7 @@ func @__mbox_recv {
     x64.jmp recvpop
   recvdelivered:
     x64.leaRegRegImm32 r8, rbx, 96
-    x64.epilogue 40
+    x64.epilogue 56
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -19537,7 +19801,7 @@ func @__mbox_recv {
     x64.andRegReg rsi, rsi, rax
     x64.orRegReg rcx, rcx, rsi
     x64.aluBaseDispImm32.add [rcx + 0], -1
-    x64.epilogue 40
+    x64.epilogue 56
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -19549,8 +19813,9 @@ func @__mbox_recv {
     x64.loadRegBaseDisp.word64 r13, [rbx + 0]
     x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
     x64.loadRegBaseDisp.word64 rdx, [rbx + 8]
-    x64.loadRegBaseDisp.word64 rsi, [rbx + 80]
-    x64.leaRegRegImm32 r14, rbx, 96
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 64]
+    x64.leaRegRegImm32 rdi, rbx, 96
+    x64.storeSlotReg slot0, rdi
     x64.movRegReg rdi, rcx
     x64.imulRegReg rdi, rcx, rsi
     x64.leaRegRegReg rdi, r13, rdi
@@ -19575,20 +19840,21 @@ func @__mbox_recv {
     x64.storeBaseDispReg.word64 [rbx + 24], rax
     x64.cmpRegImm32 rax, 0
     x64.setccReg equal, rax
-    x64.cmpRegImm32 rdx, 16
+    x64.loadRegBaseDisp.word64 r14, [rbx + 80]
+    x64.cmpRegReg rdx, r14
     x64.setccReg greater, rcx
     x64.andRegReg rax, rax, rcx
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, recvpopped
   recvshrink:
-    x64.imulRegRegImm32 rcx, rsi, 16
+    x64.movRegReg rcx, r14
+    x64.imulRegReg rcx, r14, rsi
     x64.callDirect __slab_alloc_scaffold
     x64.movRegReg r15, r8
     x64.movRegReg rcx, r13
     x64.callDirect __slab_free_scaffold
     x64.storeBaseDispReg.word64 [rbx + 0], r15
-    x64.movRegImm32 rax, 16
-    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.storeBaseDispReg.word64 [rbx + 8], r14
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rbx + 16], rax
   recvpopped:
@@ -19616,8 +19882,8 @@ func @__mbox_recv {
     x64.andRegReg rsi, rsi, rax
     x64.orRegReg rcx, rcx, rsi
     x64.aluBaseDispImm32.add [rcx + 0], -1
-    x64.movRegReg r8, r14
-    x64.epilogue 40
+    x64.loadRegSlot r8, slot0
+    x64.epilogue 56
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -19628,14 +19894,16 @@ func @__mbox_recv {
   cpyftb:
     x64.leaRegRegReg r9, rdi, r8
     x64.loadRegBaseDisp.byte r9, [r9 + 0]
-    x64.leaRegRegReg r10, r14, r8
+    x64.loadRegSlot r10, slot0
+    x64.leaRegRegReg r10, r10, r8
     x64.storeBaseDispReg.byte [r10 + 0], r9
     x64.leaRegRegImm32 r8, r8, 1
     x64.jmp cpyfth
   cpyfwb:
     x64.leaRegRegReg r10, rdi, r9
     x64.loadRegBaseDisp.word64 r10, [r10 + 0]
-    x64.leaRegRegReg r11, r14, r9
+    x64.loadRegSlot r11, slot0
+    x64.leaRegRegReg r11, r11, r9
     x64.storeBaseDispReg.word64 [r11 + 0], r10
     x64.leaRegRegImm32 r9, r9, 8
     x64.jmp cpyfwh
@@ -19644,11 +19912,11 @@ func @__mbox_recv {
     x64.callDirect __rtlock_acquire
     x64.jmp __rl_cont#18
   __rl_slow#23:
-    x64.storeSlotReg slot0, r8
+    x64.storeSlotReg slot1, r8
     x64.movRegReg rcx, r12
     x64.callDirect __rtlock_release
     x64.movRegReg rax, r8
-    x64.loadRegSlot r8, slot0
+    x64.loadRegSlot r8, slot1
     x64.jmp __rl_cont#22
   __rl_slow#21:
     x64.movRegReg rcx, r12
@@ -19741,18 +20009,20 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 48
+    x64.movRegImm32 rbx, 1024
   __il_body:
-    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
   __il_cont:
     x64.leaRegFunc rcx, [rip + Counter.__loop]
-    x64.leaRegFunc rax, [rip + Counter.__abandon]
-    x64.movRegImm32 r9, 24
+    x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
+    x64.movRegReg r9, rbx
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
@@ -19765,20 +20035,27 @@ func @main {
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
     x64.callDirect __mbox_staging
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.storeBaseDispReg.word64 [r14 + 16], r13
     x64.movRegImm32 rax, 24
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r8
+    x64.movRegReg rdx, r14
     x64.callDirect __mbox_send
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, sendrefused
+  sendaccepted:
     x64.movRegReg rcx, r13
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
+  critsplit:
+    x64.movRegReg rcx, r10
   tryerr:
     x64.movRegImm32 rbx, 0
+    x64.callDirect __mm_decref
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
@@ -19792,17 +20069,37 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_handle_drop_box
     x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  sendrefused:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mbox_reply_refused
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.storeSlotReg slot0, r8
+    x64.callDirect __mm_alloc
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot r8, slot0
+    x64.leaRegRegImm32 rax, r8, -1
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp tryerr
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-service-message-is-copied-into-its-mailbox-with-no-allocation.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -19823,21 +20120,7 @@ func @Counter.__loop {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, stopping
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.storeBaseDispReg.word64 [r12 + 72], rax
-  stopping:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_close
-  drain:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, abandon
+    x64.jcc notEqual, dispatch
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -19849,11 +20132,17 @@ func @Counter.__loop {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  abandon:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
-    x64.callDirect __mbox_abandon
-    x64.jmp drain
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    x64.callDirect __mbox_unknown_tag
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -19864,30 +20153,6 @@ func @Counter.__loop {
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
     x64.jmp serve
-}
-
-func @Counter.__abandon {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jumpTable rax, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-    x64.jmp abandondone
-  next:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-  abandondone:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
 }
 
 func @__mbox_send {
@@ -19927,8 +20192,8 @@ func @__mbox_send {
     x64.movRegImm32 rdx, 1
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 0
-    x64.jcc notEqual, __rl_slow#46
-  __rl_cont#45:
+    x64.jcc notEqual, __rl_slow#48
+  __rl_cont#47:
     x64.loadRegBaseDisp.word64 rax, [rbx + 40]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, sendclosed
@@ -19937,25 +20202,30 @@ func @__mbox_send {
     x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, sendhandoff
   sendappend:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
-    x64.cmpRegImm32 rax, 0
+    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 72]
+    x64.cmpRegReg rax, rcx
+    x64.jcc equal, sendfull
+  sendqueue:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.cmpRegImm32 rcx, 0
     x64.jcc notEqual, sendhavering
   sendseedring:
-    x64.movRegImm32 r12, 16
-    x64.loadRegBaseDisp.word64 rax, [rbx + 80]
-    x64.imulRegRegImm32 rcx, rax, 16
+    x64.loadRegBaseDisp.word64 r12, [rbx + 80]
+    x64.loadRegBaseDisp.word64 rax, [rbx + 64]
+    x64.movRegReg rcx, r12
+    x64.imulRegReg rcx, r12, rax
     x64.callDirect __slab_alloc_scaffold
     x64.storeBaseDispReg.word64 [rbx + 0], r8
     x64.storeBaseDispReg.word64 [rbx + 8], r12
     x64.jmp sendplace
   sendhavering:
-    x64.loadRegBaseDisp.word64 rax, [rbx + 24]
     x64.loadRegBaseDisp.word64 r12, [rbx + 8]
     x64.cmpRegReg rax, r12
     x64.jcc notEqual, sendplace
   sendgrowring:
     x64.loadRegBaseDisp.word64 r13, [rbx + 16]
-    x64.loadRegBaseDisp.word64 r14, [rbx + 80]
+    x64.loadRegBaseDisp.word64 r14, [rbx + 64]
     x64.imulRegRegImm32 r15, r12, 2
     x64.movRegReg rcx, r15
     x64.imulRegReg rcx, r15, r14
@@ -19966,72 +20236,72 @@ func @__mbox_send {
     x64.imulRegReg r13, r13, r14
     x64.leaRegRegReg rax, rcx, r13
     x64.cmpRegImm32 r12, 0
-    x64.jcc lessEqual, cpyfd#22
-  cpyfrun#21:
+    x64.jcc lessEqual, cpyfd#24
+  cpyfrun#23:
     x64.movRegReg rdx, r12
     x64.andRegImm32 rdx, r12, -8
     x64.movRegImm32 rsi, 0
-  cpyfwh#23:
+  cpyfwh#25:
     x64.cmpRegReg rsi, rdx
-    x64.jcc less, cpyfwb#24
-  cpyfth#26:
+    x64.jcc less, cpyfwb#26
+  cpyfth#28:
     x64.cmpRegReg rdx, r12
-    x64.jcc less, cpyftb#27
-  cpyfd#22:
+    x64.jcc less, cpyftb#29
+  cpyfd#24:
     x64.leaRegRegReg rax, r8, r12
     x64.cmpRegImm32 r13, 0
-    x64.jcc lessEqual, cpyfd#30
-  cpyfrun#29:
+    x64.jcc lessEqual, cpyfd#32
+  cpyfrun#31:
     x64.movRegReg rdx, r13
     x64.andRegImm32 rdx, r13, -8
     x64.movRegImm32 rsi, 0
-  cpyfwh#31:
+  cpyfwh#33:
     x64.cmpRegReg rsi, rdx
-    x64.jcc less, cpyfwb#32
-  cpyfth#34:
+    x64.jcc less, cpyfwb#34
+  cpyfth#36:
     x64.cmpRegReg rdx, r13
-    x64.jcc less, cpyftb#35
-  cpyfd#30:
+    x64.jcc less, cpyftb#37
+  cpyfd#32:
     x64.storeBaseDispReg.word64 [rbx + 0], r8
     x64.storeBaseDispReg.word64 [rbx + 8], r15
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rbx + 16], rax
     x64.callDirect __slab_free_scaffold
     x64.jmp sendplace
-  cpyftb#35:
+  cpyftb#37:
     x64.leaRegRegReg rsi, rcx, rdx
     x64.loadRegBaseDisp.byte rsi, [rsi + 0]
     x64.leaRegRegReg rdi, rax, rdx
     x64.storeBaseDispReg.byte [rdi + 0], rsi
     x64.leaRegRegImm32 rdx, rdx, 1
-    x64.jmp cpyfth#34
-  cpyfwb#32:
+    x64.jmp cpyfth#36
+  cpyfwb#34:
     x64.leaRegRegReg rdi, rcx, rsi
     x64.loadRegBaseDisp.word64 rdi, [rdi + 0]
     x64.leaRegRegReg r9, rax, rsi
     x64.storeBaseDispReg.word64 [r9 + 0], rdi
     x64.leaRegRegImm32 rsi, rsi, 8
-    x64.jmp cpyfwh#31
-  cpyftb#27:
+    x64.jmp cpyfwh#33
+  cpyftb#29:
     x64.leaRegRegReg rsi, rax, rdx
     x64.loadRegBaseDisp.byte rsi, [rsi + 0]
     x64.leaRegRegReg rdi, r8, rdx
     x64.storeBaseDispReg.byte [rdi + 0], rsi
     x64.leaRegRegImm32 rdx, rdx, 1
-    x64.jmp cpyfth#26
-  cpyfwb#24:
+    x64.jmp cpyfth#28
+  cpyfwb#26:
     x64.leaRegRegReg rdi, rax, rsi
     x64.loadRegBaseDisp.word64 rdi, [rdi + 0]
     x64.leaRegRegReg r9, r8, rsi
     x64.storeBaseDispReg.word64 [r9 + 0], rdi
     x64.leaRegRegImm32 rsi, rsi, 8
-    x64.jmp cpyfwh#23
+    x64.jmp cpyfwh#25
   sendplace:
     x64.loadRegBaseDisp.word64 rax, [rbx + 0]
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.loadRegBaseDisp.word64 rdx, [rbx + 16]
     x64.loadRegBaseDisp.word64 rsi, [rbx + 24]
-    x64.loadRegBaseDisp.word64 rdi, [rbx + 80]
+    x64.loadRegBaseDisp.word64 rdi, [rbx + 64]
     x64.leaRegRegImm32 rcx, rcx, -1
     x64.leaRegRegReg rdx, rdx, rsi
     x64.andRegReg rdx, rdx, rcx
@@ -20039,27 +20309,27 @@ func @__mbox_send {
     x64.leaRegRegReg rax, rax, rdx
     x64.loadRegSlot rcx, slot2
     x64.cmpRegImm32 rcx, 0
-    x64.jcc lessEqual, cpyfd#38
-  cpyfrun#37:
+    x64.jcc lessEqual, cpyfd#40
+  cpyfrun#39:
     x64.loadRegSlot rcx, slot2
     x64.andRegImm32 rcx, rcx, -8
     x64.movRegImm32 rdx, 0
-  cpyfwh#39:
+  cpyfwh#41:
     x64.cmpRegReg rdx, rcx
-    x64.jcc less, cpyfwb#40
-  cpyfth#42:
+    x64.jcc less, cpyfwb#42
+  cpyfth#44:
     x64.loadRegSlot rdx, slot2
     x64.cmpRegReg rcx, rdx
-    x64.jcc less, cpyftb#43
-  cpyfd#38:
+    x64.jcc less, cpyftb#45
+  cpyfd#40:
     x64.leaRegRegImm32 rax, rsi, 1
     x64.storeBaseDispReg.word64 [rbx + 24], rax
     x64.movRegImm32 rdx, 0
     x64.loadRegSlot rax, slot1
     x64.xchg8 [rax], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#52
-  __rl_cont#51:
+    x64.jcc notEqual, __rl_slow#56
+  __rl_cont#55:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -20080,39 +20350,39 @@ func @__mbox_send {
     x64.orRegReg rcx, rcx, rsi
     x64.aluBaseDispImm32.add [rcx + 0], -1
     x64.jmp senddone
-  cpyftb#43:
+  cpyftb#45:
     x64.loadRegSlot rdx, slot0
     x64.leaRegRegReg rdx, rdx, rcx
     x64.loadRegBaseDisp.byte rdx, [rdx + 0]
     x64.leaRegRegReg rdi, rax, rcx
     x64.storeBaseDispReg.byte [rdi + 0], rdx
     x64.leaRegRegImm32 rcx, rcx, 1
-    x64.jmp cpyfth#42
-  cpyfwb#40:
+    x64.jmp cpyfth#44
+  cpyfwb#42:
     x64.loadRegSlot rdi, slot0
     x64.leaRegRegReg rdi, rdi, rdx
     x64.loadRegBaseDisp.word64 rdi, [rdi + 0]
     x64.leaRegRegReg r8, rax, rdx
     x64.storeBaseDispReg.word64 [r8 + 0], rdi
     x64.leaRegRegImm32 rdx, rdx, 8
-    x64.jmp cpyfwh#39
+    x64.jmp cpyfwh#41
   sendhandoff:
     x64.leaRegRegImm32 rax, rbx, 96
     x64.loadRegSlot rdx, slot2
     x64.cmpRegImm32 rdx, 0
-    x64.jcc lessEqual, cpyfd#11
-  cpyfrun#10:
+    x64.jcc lessEqual, cpyfd#13
+  cpyfrun#12:
     x64.loadRegSlot rdx, slot2
     x64.andRegImm32 rdx, rdx, -8
     x64.movRegImm32 rsi, 0
-  cpyfwh#12:
+  cpyfwh#14:
     x64.cmpRegReg rsi, rdx
-    x64.jcc less, cpyfwb#13
-  cpyfth#15:
+    x64.jcc less, cpyfwb#15
+  cpyfth#17:
     x64.loadRegSlot rsi, slot2
     x64.cmpRegReg rdx, rsi
-    x64.jcc less, cpyftb#16
-  cpyfd#11:
+    x64.jcc less, cpyftb#18
+  cpyfd#13:
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [rcx + 296], rax
     x64.movRegImm32 rax, 0
@@ -20121,8 +20391,8 @@ func @__mbox_send {
     x64.loadRegSlot rax, slot1
     x64.xchg8 [rax], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#50
-  __rl_cont#49:
+    x64.jcc notEqual, __rl_slow#54
+  __rl_cont#53:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rdx, __sched_tls_teb_offset
@@ -20165,30 +20435,56 @@ func @__mbox_send {
     x64.lock add [rdx], rax
     x64.callDirect __sched_runq_put
     x64.callDirect __sched_wake_or_spawn
-    x64.jmp senddone
-  cpyftb#16:
+  senddone:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  cpyftb#18:
     x64.loadRegSlot rsi, slot0
     x64.leaRegRegReg rsi, rsi, rdx
     x64.loadRegBaseDisp.byte rsi, [rsi + 0]
     x64.leaRegRegReg rdi, rax, rdx
     x64.storeBaseDispReg.byte [rdi + 0], rsi
     x64.leaRegRegImm32 rdx, rdx, 1
-    x64.jmp cpyfth#15
-  cpyfwb#13:
+    x64.jmp cpyfth#17
+  cpyfwb#15:
     x64.loadRegSlot rdi, slot0
     x64.leaRegRegReg rdi, rdi, rsi
     x64.loadRegBaseDisp.word64 rdi, [rdi + 0]
     x64.leaRegRegReg r8, rax, rsi
     x64.storeBaseDispReg.word64 [r8 + 0], rdi
     x64.leaRegRegImm32 rsi, rsi, 8
-    x64.jmp cpyfwh#12
-  sendclosed:
+    x64.jmp cpyfwh#14
+  __rl_slow#48:
+    x64.callDirect __rtlock_acquire
+    x64.jmp __rl_cont#47
+  __rl_slow#56:
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __rtlock_release
+    x64.jmp __rl_cont#55
+  __rl_slow#54:
+    x64.loadRegSlot rax, slot1
+    x64.storeSlotReg slot3, rcx
+    x64.movRegReg rcx, rax
+    x64.callDirect __rtlock_release
+    x64.loadRegSlot rcx, slot3
+    x64.jmp __rl_cont#53
+  sendfull:
     x64.movRegImm32 rdx, 0
     x64.loadRegSlot rax, slot1
     x64.xchg8 [rax], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
-    x64.jcc notEqual, __rl_slow#48
-  __rl_cont#47:
+    x64.jcc equal, __rl_cont#51
+  __rl_slow#52:
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __rtlock_release
+  __rl_cont#51:
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.leaRegGlobal rcx, __sched_tls_teb_offset
@@ -20208,10 +20504,7 @@ func @__mbox_send {
     x64.andRegReg rsi, rsi, rax
     x64.orRegReg rcx, rcx, rsi
     x64.aluBaseDispImm32.add [rcx + 0], -1
-    x64.loadRegSlot rdx, slot0
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mbox_abandon
-  senddone:
+    x64.movRegImm32 r8, 1
     x64.epilogue 72
     x64.popReg r15
     x64.popReg r14
@@ -20220,24 +20513,44 @@ func @__mbox_send {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  __rl_slow#46:
-    x64.callDirect __rtlock_acquire
-    x64.jmp __rl_cont#45
-  __rl_slow#52:
-    x64.loadRegSlot rcx, slot1
-    x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#51
-  __rl_slow#50:
+  sendclosed:
+    x64.movRegImm32 rdx, 0
     x64.loadRegSlot rax, slot1
-    x64.storeSlotReg slot3, rcx
-    x64.movRegReg rcx, rax
-    x64.callDirect __rtlock_release
-    x64.loadRegSlot rcx, slot3
-    x64.jmp __rl_cont#49
-  __rl_slow#48:
+    x64.xchg8 [rax], rdx <- rdx
+    x64.cmpRegImm32 rdx, 1
+    x64.jcc equal, __rl_cont#49
+  __rl_slow#50:
     x64.loadRegSlot rcx, slot1
     x64.callDirect __rtlock_release
-    x64.jmp __rl_cont#47
+  __rl_cont#49:
+    x64.leaRegGlobal rax, __sched_tls_teb_offset
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegGlobal rcx, __sched_tls_teb_offset
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.mov rcx, gs:[rcx]
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg notEqual, rax
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg notEqual, rdx
+    x64.andRegReg rax, rax, rdx
+    x64.movRegImm32 rdx, 0
+    x64.subRegReg rdx, rdx, rax
+    x64.leaRegRegImm32 rax, rax, -1
+    x64.leaRegRegImm32 rcx, rcx, 624
+    x64.leaRegGlobal rsi, __sched_lock_depth_sink
+    x64.andRegReg rcx, rcx, rdx
+    x64.andRegReg rsi, rsi, rax
+    x64.orRegReg rcx, rcx, rsi
+    x64.aluBaseDispImm32.add [rcx + 0], -1
+    x64.movRegImm32 r8, 2
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
 }
 
 func @__mbox_recv {
@@ -20249,7 +20562,7 @@ func @__mbox_recv {
     x64.pushReg r13
     x64.pushReg r14
     x64.pushReg r15
-    x64.prologue 40
+    x64.prologue 56
     x64.movRegReg rbx, rcx
     x64.jmp recvtry
   recvempty:
@@ -20302,7 +20615,7 @@ func @__mbox_recv {
     x64.jmp recvpop
   recvdelivered:
     x64.leaRegRegImm32 r8, rbx, 96
-    x64.epilogue 40
+    x64.epilogue 56
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -20335,7 +20648,7 @@ func @__mbox_recv {
     x64.andRegReg rsi, rsi, rax
     x64.orRegReg rcx, rcx, rsi
     x64.aluBaseDispImm32.add [rcx + 0], -1
-    x64.epilogue 40
+    x64.epilogue 56
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -20347,8 +20660,9 @@ func @__mbox_recv {
     x64.loadRegBaseDisp.word64 r13, [rbx + 0]
     x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
     x64.loadRegBaseDisp.word64 rdx, [rbx + 8]
-    x64.loadRegBaseDisp.word64 rsi, [rbx + 80]
-    x64.leaRegRegImm32 r14, rbx, 96
+    x64.loadRegBaseDisp.word64 rsi, [rbx + 64]
+    x64.leaRegRegImm32 rdi, rbx, 96
+    x64.storeSlotReg slot0, rdi
     x64.movRegReg rdi, rcx
     x64.imulRegReg rdi, rcx, rsi
     x64.leaRegRegReg rdi, r13, rdi
@@ -20373,20 +20687,21 @@ func @__mbox_recv {
     x64.storeBaseDispReg.word64 [rbx + 24], rax
     x64.cmpRegImm32 rax, 0
     x64.setccReg equal, rax
-    x64.cmpRegImm32 rdx, 16
+    x64.loadRegBaseDisp.word64 r14, [rbx + 80]
+    x64.cmpRegReg rdx, r14
     x64.setccReg greater, rcx
     x64.andRegReg rax, rax, rcx
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, recvpopped
   recvshrink:
-    x64.imulRegRegImm32 rcx, rsi, 16
+    x64.movRegReg rcx, r14
+    x64.imulRegReg rcx, r14, rsi
     x64.callDirect __slab_alloc_scaffold
     x64.movRegReg r15, r8
     x64.movRegReg rcx, r13
     x64.callDirect __slab_free_scaffold
     x64.storeBaseDispReg.word64 [rbx + 0], r15
-    x64.movRegImm32 rax, 16
-    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.storeBaseDispReg.word64 [rbx + 8], r14
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [rbx + 16], rax
   recvpopped:
@@ -20414,8 +20729,8 @@ func @__mbox_recv {
     x64.andRegReg rsi, rsi, rax
     x64.orRegReg rcx, rcx, rsi
     x64.aluBaseDispImm32.add [rcx + 0], -1
-    x64.movRegReg r8, r14
-    x64.epilogue 40
+    x64.loadRegSlot r8, slot0
+    x64.epilogue 56
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
@@ -20426,14 +20741,16 @@ func @__mbox_recv {
   cpyftb:
     x64.leaRegRegReg r9, rdi, r8
     x64.loadRegBaseDisp.byte r9, [r9 + 0]
-    x64.leaRegRegReg r10, r14, r8
+    x64.loadRegSlot r10, slot0
+    x64.leaRegRegReg r10, r10, r8
     x64.storeBaseDispReg.byte [r10 + 0], r9
     x64.leaRegRegImm32 r8, r8, 1
     x64.jmp cpyfth
   cpyfwb:
     x64.leaRegRegReg r10, rdi, r9
     x64.loadRegBaseDisp.word64 r10, [r10 + 0]
-    x64.leaRegRegReg r11, r14, r9
+    x64.loadRegSlot r11, slot0
+    x64.leaRegRegReg r11, r11, r9
     x64.storeBaseDispReg.word64 [r11 + 0], r10
     x64.leaRegRegImm32 r9, r9, 8
     x64.jmp cpyfwh
@@ -20442,11 +20759,11 @@ func @__mbox_recv {
     x64.callDirect __rtlock_acquire
     x64.jmp __rl_cont#18
   __rl_slow#23:
-    x64.storeSlotReg slot0, r8
+    x64.storeSlotReg slot1, r8
     x64.movRegReg rcx, r12
     x64.callDirect __rtlock_release
     x64.movRegReg rax, r8
-    x64.loadRegSlot r8, slot0
+    x64.loadRegSlot r8, slot1
     x64.jmp __rl_cont#22
   __rl_slow#21:
     x64.movRegReg rcx, r12
@@ -20531,21 +20848,23 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x19, 1024
   __il_body:
-    arm64.movImm x19, 0
+    arm64.movImm x20, 0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+    arm64.storeBaseDispReg.word64 [x1 + 0], x20
   __il_cont:
     arm64.leaFuncAddr x0, Counter.__loop
-    arm64.leaFuncAddr x2, Counter.__abandon
-    arm64.movImm x3, 24
+    arm64.movImm x2, 24
+    arm64.movRegReg x3, x19
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
@@ -20558,20 +20877,27 @@ func @main {
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
     arm64.bl __mbox_staging
-    arm64.movRegReg x1, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x19
-    arm64.storeBaseDispReg.word64 [x1 + 16], x21
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x19
+    arm64.storeBaseDispReg.word64 [x22 + 16], x21
     arm64.movImm x2, 24
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.movRegReg x1, x22
     arm64.bl __mbox_send
+    arm64.cmp x0, 0
+    arm64.b.ne sendrefused
+  sendaccepted:
     arm64.movRegReg x0, x21
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
     arm64.b.eq tryok
+  critsplit:
+    arm64.movRegReg x0, x9
   tryerr:
     arm64.movImm x19, 0
+    arm64.bl __mm_decref
     arm64.b trycont
   tryok:
     arm64.movRegReg x19, x0
@@ -20585,19 +20911,42 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_handle_drop_box
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
+  sendrefused:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mbox_reply_refused
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.movImm x1, 16
+    arm64.movImm x2, 0
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.add x0, x0, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.movRegReg x0, x1
+    arm64.b tryerr
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-service-message-is-copied-into-its-mailbox-with-no-allocation.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 
@@ -20612,22 +20961,7 @@ func @Counter.__loop {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.cmp x0, 0
-    arm64.b.eq stopping
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.storeBaseDispReg.word64 [x20 + 72], x0
-  stopping:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_close
-  drain:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.movRegReg x1, x0
-    arm64.cmp x1, 0
-    arm64.b.ne abandon
+    arm64.b.ne dispatch
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -20638,10 +20972,16 @@ func @Counter.__loop {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  abandon:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_abandon
-    arm64.b drain
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    arm64.bl __mbox_unknown_tag
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -20654,27 +20994,6 @@ func @Counter.__loop {
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
     arm64.b serve
-}
-
-func @Counter.__abandon {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-    arm64.b abandondone
-  next:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-  abandondone:
-    arm64.epilogue 16
-    arm64.ret
 }
 
 func @__mbox_send {
@@ -20721,8 +21040,8 @@ func @__mbox_send {
     arm64.movImm x0, 1
     arm64.arm64AtomicRmw.exchangeByte x1, [x22], x0
     arm64.cmp x1, 0
-    arm64.b.ne __rl_slow#46
-  __rl_cont#45:
+    arm64.b.ne __rl_slow#48
+  __rl_cont#47:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
     arm64.cmp x0, 0
     arm64.b.ne sendclosed
@@ -20731,25 +21050,29 @@ func @__mbox_send {
     arm64.cmp x0, 0
     arm64.b.ne sendhandoff
   sendappend:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.cmp x0, 0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 72]
+    arm64.cmp x0, x1
+    arm64.b.eq sendfull
+  sendqueue:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
+    arm64.cmp x1, 0
     arm64.b.ne sendhavering
   sendseedring:
-    arm64.movImm x23, 16
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 80]
-    arm64.lsl x0, x0, 4
+    arm64.loadRegBaseDisp.word64 x23, [x19 + 80]
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 64]
+    arm64.mul x0, x23, x0
     arm64.bl __slab_alloc_scaffold
     arm64.storeBaseDispReg.word64 [x19 + 0], x0
     arm64.storeBaseDispReg.word64 [x19 + 8], x23
     arm64.b sendplace
   sendhavering:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
     arm64.loadRegBaseDisp.word64 x23, [x19 + 8]
     arm64.cmp x0, x23
     arm64.b.ne sendplace
   sendgrowring:
     arm64.loadRegBaseDisp.word64 x24, [x19 + 16]
-    arm64.loadRegBaseDisp.word64 x25, [x19 + 80]
+    arm64.loadRegBaseDisp.word64 x25, [x19 + 64]
     arm64.lsl x26, x23, 1
     arm64.mul x0, x26, x25
     arm64.bl __slab_alloc_scaffold
@@ -20759,30 +21082,30 @@ func @__mbox_send {
     arm64.mul x3, x24, x25
     arm64.add x4, x2, x3
     arm64.cmp x1, 0
-    arm64.b.le cpyfd#22
-  cpyfrun#21:
+    arm64.b.le cpyfd#24
+  cpyfrun#23:
     arm64.and x5, x1, -8
     arm64.movImm x6, 0
-  cpyfwh#23:
+  cpyfwh#25:
     arm64.cmp x6, x5
-    arm64.b.lt cpyfwb#24
-  cpyfth#26:
+    arm64.b.lt cpyfwb#26
+  cpyfth#28:
     arm64.cmp x5, x1
-    arm64.b.lt cpyftb#27
-  cpyfd#22:
+    arm64.b.lt cpyftb#29
+  cpyfd#24:
     arm64.add x1, x0, x1
     arm64.cmp x3, 0
-    arm64.b.le cpyfd#30
-  cpyfrun#29:
+    arm64.b.le cpyfd#32
+  cpyfrun#31:
     arm64.and x4, x3, -8
     arm64.movImm x5, 0
-  cpyfwh#31:
+  cpyfwh#33:
     arm64.cmp x5, x4
-    arm64.b.lt cpyfwb#32
-  cpyfth#34:
+    arm64.b.lt cpyfwb#34
+  cpyfth#36:
     arm64.cmp x4, x3
-    arm64.b.lt cpyftb#35
-  cpyfd#30:
+    arm64.b.lt cpyftb#37
+  cpyfd#32:
     arm64.storeBaseDispReg.word64 [x19 + 0], x0
     arm64.storeBaseDispReg.word64 [x19 + 8], x26
     arm64.movImm x0, 0
@@ -20790,64 +21113,64 @@ func @__mbox_send {
     arm64.movRegReg x0, x2
     arm64.bl __slab_free_scaffold
     arm64.b sendplace
-  cpyftb#35:
+  cpyftb#37:
     arm64.add x5, x2, x4
     arm64.loadRegBaseDisp.byte x5, [x5 + 0]
     arm64.add x6, x1, x4
     arm64.storeBaseDispReg.byte [x6 + 0], x5
     arm64.add x4, x4, 1
-    arm64.b cpyfth#34
-  cpyfwb#32:
+    arm64.b cpyfth#36
+  cpyfwb#34:
     arm64.add x6, x2, x5
     arm64.loadRegBaseDisp.word64 x6, [x6 + 0]
     arm64.add x7, x1, x5
     arm64.storeBaseDispReg.word64 [x7 + 0], x6
     arm64.add x5, x5, 8
-    arm64.b cpyfwh#31
-  cpyftb#27:
+    arm64.b cpyfwh#33
+  cpyftb#29:
     arm64.add x6, x4, x5
     arm64.loadRegBaseDisp.byte x6, [x6 + 0]
     arm64.add x7, x0, x5
     arm64.storeBaseDispReg.byte [x7 + 0], x6
     arm64.add x5, x5, 1
-    arm64.b cpyfth#26
-  cpyfwb#24:
+    arm64.b cpyfth#28
+  cpyfwb#26:
     arm64.add x7, x4, x6
     arm64.loadRegBaseDisp.word64 x7, [x7 + 0]
     arm64.add x8, x0, x6
     arm64.storeBaseDispReg.word64 [x8 + 0], x7
     arm64.add x6, x6, 8
-    arm64.b cpyfwh#23
+    arm64.b cpyfwh#25
   sendplace:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
     arm64.loadRegBaseDisp.word64 x2, [x19 + 16]
     arm64.loadRegBaseDisp.word64 x3, [x19 + 24]
-    arm64.loadRegBaseDisp.word64 x4, [x19 + 80]
+    arm64.loadRegBaseDisp.word64 x4, [x19 + 64]
     arm64.sub x1, x1, 1
     arm64.add x2, x2, x3
     arm64.and x1, x2, x1
     arm64.mul x1, x1, x4
     arm64.add x0, x0, x1
     arm64.cmp x21, 0
-    arm64.b.le cpyfd#38
-  cpyfrun#37:
+    arm64.b.le cpyfd#40
+  cpyfrun#39:
     arm64.and x1, x21, -8
     arm64.movImm x2, 0
-  cpyfwh#39:
+  cpyfwh#41:
     arm64.cmp x2, x1
-    arm64.b.lt cpyfwb#40
-  cpyfth#42:
+    arm64.b.lt cpyfwb#42
+  cpyfth#44:
     arm64.cmp x1, x21
-    arm64.b.lt cpyftb#43
-  cpyfd#38:
+    arm64.b.lt cpyftb#45
+  cpyfd#40:
     arm64.add x0, x3, 1
     arm64.storeBaseDispReg.word64 [x19 + 24], x0
     arm64.movImm x0, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x22], x0
     arm64.cmp x1, 1
-    arm64.b.ne __rl_slow#52
-  __rl_cont#51:
+    arm64.b.ne __rl_slow#56
+  __rl_cont#55:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -20875,34 +21198,34 @@ func @__mbox_send {
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x0 + 0], x1
     arm64.b senddone
-  cpyftb#43:
+  cpyftb#45:
     arm64.add x2, x20, x1
     arm64.loadRegBaseDisp.byte x2, [x2 + 0]
     arm64.add x4, x0, x1
     arm64.storeBaseDispReg.byte [x4 + 0], x2
     arm64.add x1, x1, 1
-    arm64.b cpyfth#42
-  cpyfwb#40:
+    arm64.b cpyfth#44
+  cpyfwb#42:
     arm64.add x4, x20, x2
     arm64.loadRegBaseDisp.word64 x4, [x4 + 0]
     arm64.add x5, x0, x2
     arm64.storeBaseDispReg.word64 [x5 + 0], x4
     arm64.add x2, x2, 8
-    arm64.b cpyfwh#39
+    arm64.b cpyfwh#41
   sendhandoff:
     arm64.add x1, x19, 96
     arm64.cmp x21, 0
-    arm64.b.le cpyfd#11
-  cpyfrun#10:
+    arm64.b.le cpyfd#13
+  cpyfrun#12:
     arm64.and x2, x21, -8
     arm64.movImm x3, 0
-  cpyfwh#12:
+  cpyfwh#14:
     arm64.cmp x3, x2
-    arm64.b.lt cpyfwb#13
-  cpyfth#15:
+    arm64.b.lt cpyfwb#15
+  cpyfth#17:
     arm64.cmp x2, x21
-    arm64.b.lt cpyftb#16
-  cpyfd#11:
+    arm64.b.lt cpyftb#18
+  cpyfd#13:
     arm64.movImm x1, 1
     arm64.storeBaseDispReg.word64 [x0 + 296], x1
     arm64.movImm x1, 0
@@ -20910,8 +21233,8 @@ func @__mbox_send {
     arm64.movImm x1, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x22], x1
     arm64.cmp x1, 1
-    arm64.b.ne __rl_slow#50
-  __rl_cont#49:
+    arm64.b.ne __rl_slow#54
+  __rl_cont#53:
     arm64.leaGlobal x1, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.leaGlobal x2, __sched_tls_teb_offset
@@ -20960,27 +21283,56 @@ func @__mbox_send {
     arm64.arm64AtomicRmw.add x1, [x2], x1
     arm64.bl __sched_runq_put
     arm64.bl __sched_wake_or_spawn
-    arm64.b senddone
-  cpyftb#16:
+  senddone:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.loadRegSlot x23, slot5
+    arm64.loadRegSlot x24, slot6
+    arm64.loadRegSlot x25, slot7
+    arm64.loadRegSlot x26, slot8
+    arm64.epilogue 96
+    arm64.ret
+  cpyftb#18:
     arm64.add x3, x20, x2
     arm64.loadRegBaseDisp.byte x3, [x3 + 0]
     arm64.add x4, x1, x2
     arm64.storeBaseDispReg.byte [x4 + 0], x3
     arm64.add x2, x2, 1
-    arm64.b cpyfth#15
-  cpyfwb#13:
+    arm64.b cpyfth#17
+  cpyfwb#15:
     arm64.add x4, x20, x3
     arm64.loadRegBaseDisp.word64 x4, [x4 + 0]
     arm64.add x5, x1, x3
     arm64.storeBaseDispReg.word64 [x5 + 0], x4
     arm64.add x3, x3, 8
-    arm64.b cpyfwh#12
-  sendclosed:
+    arm64.b cpyfwh#14
+  __rl_slow#48:
+    arm64.movRegReg x0, x22
+    arm64.bl __rtlock_acquire
+    arm64.b __rl_cont#47
+  __rl_slow#56:
+    arm64.movRegReg x0, x22
+    arm64.bl __rtlock_release
+    arm64.b __rl_cont#55
+  __rl_slow#54:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x22
+    arm64.bl __rtlock_release
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.b __rl_cont#53
+  sendfull:
     arm64.movImm x0, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x22], x0
     arm64.cmp x1, 1
-    arm64.b.ne __rl_slow#48
-  __rl_cont#47:
+    arm64.b.eq __rl_cont#51
+  __rl_slow#52:
+    arm64.movRegReg x0, x22
+    arm64.bl __rtlock_release
+  __rl_cont#51:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -21007,10 +21359,7 @@ func @__mbox_send {
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x0 + 0], x1
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x20
-    arm64.bl __mbox_abandon
-  senddone:
+    arm64.movImm x0, 1
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
     arm64.loadRegSlot x21, slot3
@@ -21021,25 +21370,52 @@ func @__mbox_send {
     arm64.loadRegSlot x26, slot8
     arm64.epilogue 96
     arm64.ret
-  __rl_slow#46:
-    arm64.movRegReg x0, x22
-    arm64.bl __rtlock_acquire
-    arm64.b __rl_cont#45
-  __rl_slow#52:
-    arm64.movRegReg x0, x22
-    arm64.bl __rtlock_release
-    arm64.b __rl_cont#51
+  sendclosed:
+    arm64.movImm x0, 0
+    arm64.arm64AtomicRmw.exchangeByte x1, [x22], x0
+    arm64.cmp x1, 1
+    arm64.b.eq __rl_cont#49
   __rl_slow#50:
-    arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x22
     arm64.bl __rtlock_release
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.b __rl_cont#49
-  __rl_slow#48:
-    arm64.movRegReg x0, x22
-    arm64.bl __rtlock_release
-    arm64.b __rl_cont#47
+  __rl_cont#49:
+    arm64.leaGlobal x0, __sched_tls_teb_offset
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.leaGlobal x1, __sched_tls_teb_offset
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.arm64ThreadPointer x16, darwinMaskedReadOnly
+    arm64.add x16, x16, x1
+    arm64.cmp x1, 0
+    arm64.cset x17, ne
+    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
+    arm64.mul x1, x16, x17
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cmp x1, 0
+    arm64.cset x2, ne
+    arm64.and x0, x0, x2
+    arm64.movImm x2, 0
+    arm64.sub x2, x2, x0
+    arm64.sub x0, x0, 1
+    arm64.add x1, x1, 624
+    arm64.leaGlobal x3, __sched_lock_depth_sink
+    arm64.and x1, x1, x2
+    arm64.and x0, x3, x0
+    arm64.orr x0, x1, x0
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.add x1, x1, -1
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.movImm x0, 2
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.loadRegSlot x23, slot5
+    arm64.loadRegSlot x24, slot6
+    arm64.loadRegSlot x25, slot7
+    arm64.loadRegSlot x26, slot8
+    arm64.epilogue 96
+    arm64.ret
 }
 
 func @__mbox_recv {
@@ -21171,7 +21547,7 @@ func @__mbox_recv {
     arm64.loadRegBaseDisp.word64 x22, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x19 + 16]
     arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
-    arm64.loadRegBaseDisp.word64 x3, [x19 + 80]
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 64]
     arm64.add x23, x19, 96
     arm64.mul x4, x1, x3
     arm64.add x4, x22, x4
@@ -21195,13 +21571,13 @@ func @__mbox_recv {
     arm64.storeBaseDispReg.word64 [x19 + 24], x0
     arm64.cmp x0, 0
     arm64.cset x0, eq
-    arm64.cmp x2, 16
+    arm64.loadRegBaseDisp.word64 x24, [x19 + 80]
+    arm64.cmp x2, x24
     arm64.cset x1, gt
     arm64.and x0, x0, x1
     arm64.cbz x0, recvpopped
   recvshrink:
-    arm64.movImm x24, 16
-    arm64.lsl x0, x3, 4
+    arm64.mul x0, x24, x3
     arm64.bl __slab_alloc_scaffold
     arm64.movRegReg x25, x0
     arm64.movRegReg x0, x22
@@ -21360,21 +21736,23 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x19, 1024
   __il_body:
-    arm64.movImm x19, 0
+    arm64.movImm x20, 0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+    arm64.storeBaseDispReg.word64 [x1 + 0], x20
   __il_cont:
     arm64.leaFuncAddr x0, Counter.__loop
-    arm64.leaFuncAddr x2, Counter.__abandon
-    arm64.movImm x3, 24
+    arm64.movImm x2, 24
+    arm64.movRegReg x3, x19
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
@@ -21387,20 +21765,27 @@ func @main {
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
     arm64.bl __mbox_staging
-    arm64.movRegReg x1, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x19
-    arm64.storeBaseDispReg.word64 [x1 + 16], x21
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x19
+    arm64.storeBaseDispReg.word64 [x22 + 16], x21
     arm64.movImm x2, 24
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.movRegReg x1, x22
     arm64.bl __mbox_send
+    arm64.cmp x0, 0
+    arm64.b.ne sendrefused
+  sendaccepted:
     arm64.movRegReg x0, x21
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
     arm64.b.eq tryok
+  critsplit:
+    arm64.movRegReg x0, x9
   tryerr:
     arm64.movImm x19, 0
+    arm64.bl __mm_decref
     arm64.b trycont
   tryok:
     arm64.movRegReg x19, x0
@@ -21414,19 +21799,42 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_handle_drop_box
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
+  sendrefused:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mbox_reply_refused
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.movImm x1, 16
+    arm64.movImm x2, 0
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.add x0, x0, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.movRegReg x0, x1
+    arm64.b tryerr
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-service-message-is-copied-into-its-mailbox-with-no-allocation.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 
@@ -21441,22 +21849,7 @@ func @Counter.__loop {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.cmp x0, 0
-    arm64.b.eq stopping
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.storeBaseDispReg.word64 [x20 + 72], x0
-  stopping:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_close
-  drain:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.movRegReg x1, x0
-    arm64.cmp x1, 0
-    arm64.b.ne abandon
+    arm64.b.ne dispatch
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -21467,10 +21860,16 @@ func @Counter.__loop {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  abandon:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_abandon
-    arm64.b drain
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    arm64.bl __mbox_unknown_tag
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -21483,27 +21882,6 @@ func @Counter.__loop {
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
     arm64.b serve
-}
-
-func @Counter.__abandon {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-    arm64.b abandondone
-  next:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-  abandondone:
-    arm64.epilogue 16
-    arm64.ret
 }
 
 func @__mbox_send {
@@ -21550,8 +21928,8 @@ func @__mbox_send {
     arm64.movImm x0, 1
     arm64.arm64AtomicRmw.exchangeByte x1, [x22], x0
     arm64.cmp x1, 0
-    arm64.b.ne __rl_slow#46
-  __rl_cont#45:
+    arm64.b.ne __rl_slow#48
+  __rl_cont#47:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 40]
     arm64.cmp x0, 0
     arm64.b.ne sendclosed
@@ -21560,25 +21938,29 @@ func @__mbox_send {
     arm64.cmp x0, 0
     arm64.b.ne sendhandoff
   sendappend:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.cmp x0, 0
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 72]
+    arm64.cmp x0, x1
+    arm64.b.eq sendfull
+  sendqueue:
+    arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
+    arm64.cmp x1, 0
     arm64.b.ne sendhavering
   sendseedring:
-    arm64.movImm x23, 16
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 80]
-    arm64.lsl x0, x0, 4
+    arm64.loadRegBaseDisp.word64 x23, [x19 + 80]
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 64]
+    arm64.mul x0, x23, x0
     arm64.bl __slab_alloc_scaffold
     arm64.storeBaseDispReg.word64 [x19 + 0], x0
     arm64.storeBaseDispReg.word64 [x19 + 8], x23
     arm64.b sendplace
   sendhavering:
-    arm64.loadRegBaseDisp.word64 x0, [x19 + 24]
     arm64.loadRegBaseDisp.word64 x23, [x19 + 8]
     arm64.cmp x0, x23
     arm64.b.ne sendplace
   sendgrowring:
     arm64.loadRegBaseDisp.word64 x24, [x19 + 16]
-    arm64.loadRegBaseDisp.word64 x25, [x19 + 80]
+    arm64.loadRegBaseDisp.word64 x25, [x19 + 64]
     arm64.lsl x26, x23, 1
     arm64.mul x0, x26, x25
     arm64.bl __slab_alloc_scaffold
@@ -21588,30 +21970,30 @@ func @__mbox_send {
     arm64.mul x3, x24, x25
     arm64.add x4, x2, x3
     arm64.cmp x1, 0
-    arm64.b.le cpyfd#22
-  cpyfrun#21:
+    arm64.b.le cpyfd#24
+  cpyfrun#23:
     arm64.and x5, x1, -8
     arm64.movImm x6, 0
-  cpyfwh#23:
+  cpyfwh#25:
     arm64.cmp x6, x5
-    arm64.b.lt cpyfwb#24
-  cpyfth#26:
+    arm64.b.lt cpyfwb#26
+  cpyfth#28:
     arm64.cmp x5, x1
-    arm64.b.lt cpyftb#27
-  cpyfd#22:
+    arm64.b.lt cpyftb#29
+  cpyfd#24:
     arm64.add x1, x0, x1
     arm64.cmp x3, 0
-    arm64.b.le cpyfd#30
-  cpyfrun#29:
+    arm64.b.le cpyfd#32
+  cpyfrun#31:
     arm64.and x4, x3, -8
     arm64.movImm x5, 0
-  cpyfwh#31:
+  cpyfwh#33:
     arm64.cmp x5, x4
-    arm64.b.lt cpyfwb#32
-  cpyfth#34:
+    arm64.b.lt cpyfwb#34
+  cpyfth#36:
     arm64.cmp x4, x3
-    arm64.b.lt cpyftb#35
-  cpyfd#30:
+    arm64.b.lt cpyftb#37
+  cpyfd#32:
     arm64.storeBaseDispReg.word64 [x19 + 0], x0
     arm64.storeBaseDispReg.word64 [x19 + 8], x26
     arm64.movImm x0, 0
@@ -21619,64 +22001,64 @@ func @__mbox_send {
     arm64.movRegReg x0, x2
     arm64.bl __slab_free_scaffold
     arm64.b sendplace
-  cpyftb#35:
+  cpyftb#37:
     arm64.add x5, x2, x4
     arm64.loadRegBaseDisp.byte x5, [x5 + 0]
     arm64.add x6, x1, x4
     arm64.storeBaseDispReg.byte [x6 + 0], x5
     arm64.add x4, x4, 1
-    arm64.b cpyfth#34
-  cpyfwb#32:
+    arm64.b cpyfth#36
+  cpyfwb#34:
     arm64.add x6, x2, x5
     arm64.loadRegBaseDisp.word64 x6, [x6 + 0]
     arm64.add x7, x1, x5
     arm64.storeBaseDispReg.word64 [x7 + 0], x6
     arm64.add x5, x5, 8
-    arm64.b cpyfwh#31
-  cpyftb#27:
+    arm64.b cpyfwh#33
+  cpyftb#29:
     arm64.add x6, x4, x5
     arm64.loadRegBaseDisp.byte x6, [x6 + 0]
     arm64.add x7, x0, x5
     arm64.storeBaseDispReg.byte [x7 + 0], x6
     arm64.add x5, x5, 1
-    arm64.b cpyfth#26
-  cpyfwb#24:
+    arm64.b cpyfth#28
+  cpyfwb#26:
     arm64.add x7, x4, x6
     arm64.loadRegBaseDisp.word64 x7, [x7 + 0]
     arm64.add x8, x0, x6
     arm64.storeBaseDispReg.word64 [x8 + 0], x7
     arm64.add x6, x6, 8
-    arm64.b cpyfwh#23
+    arm64.b cpyfwh#25
   sendplace:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x19 + 8]
     arm64.loadRegBaseDisp.word64 x2, [x19 + 16]
     arm64.loadRegBaseDisp.word64 x3, [x19 + 24]
-    arm64.loadRegBaseDisp.word64 x4, [x19 + 80]
+    arm64.loadRegBaseDisp.word64 x4, [x19 + 64]
     arm64.sub x1, x1, 1
     arm64.add x2, x2, x3
     arm64.and x1, x2, x1
     arm64.mul x1, x1, x4
     arm64.add x0, x0, x1
     arm64.cmp x21, 0
-    arm64.b.le cpyfd#38
-  cpyfrun#37:
+    arm64.b.le cpyfd#40
+  cpyfrun#39:
     arm64.and x1, x21, -8
     arm64.movImm x2, 0
-  cpyfwh#39:
+  cpyfwh#41:
     arm64.cmp x2, x1
-    arm64.b.lt cpyfwb#40
-  cpyfth#42:
+    arm64.b.lt cpyfwb#42
+  cpyfth#44:
     arm64.cmp x1, x21
-    arm64.b.lt cpyftb#43
-  cpyfd#38:
+    arm64.b.lt cpyftb#45
+  cpyfd#40:
     arm64.add x0, x3, 1
     arm64.storeBaseDispReg.word64 [x19 + 24], x0
     arm64.movImm x0, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x22], x0
     arm64.cmp x1, 1
-    arm64.b.ne __rl_slow#52
-  __rl_cont#51:
+    arm64.b.ne __rl_slow#56
+  __rl_cont#55:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -21704,34 +22086,34 @@ func @__mbox_send {
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x0 + 0], x1
     arm64.b senddone
-  cpyftb#43:
+  cpyftb#45:
     arm64.add x2, x20, x1
     arm64.loadRegBaseDisp.byte x2, [x2 + 0]
     arm64.add x4, x0, x1
     arm64.storeBaseDispReg.byte [x4 + 0], x2
     arm64.add x1, x1, 1
-    arm64.b cpyfth#42
-  cpyfwb#40:
+    arm64.b cpyfth#44
+  cpyfwb#42:
     arm64.add x4, x20, x2
     arm64.loadRegBaseDisp.word64 x4, [x4 + 0]
     arm64.add x5, x0, x2
     arm64.storeBaseDispReg.word64 [x5 + 0], x4
     arm64.add x2, x2, 8
-    arm64.b cpyfwh#39
+    arm64.b cpyfwh#41
   sendhandoff:
     arm64.add x1, x19, 96
     arm64.cmp x21, 0
-    arm64.b.le cpyfd#11
-  cpyfrun#10:
+    arm64.b.le cpyfd#13
+  cpyfrun#12:
     arm64.and x2, x21, -8
     arm64.movImm x3, 0
-  cpyfwh#12:
+  cpyfwh#14:
     arm64.cmp x3, x2
-    arm64.b.lt cpyfwb#13
-  cpyfth#15:
+    arm64.b.lt cpyfwb#15
+  cpyfth#17:
     arm64.cmp x2, x21
-    arm64.b.lt cpyftb#16
-  cpyfd#11:
+    arm64.b.lt cpyftb#18
+  cpyfd#13:
     arm64.movImm x1, 1
     arm64.storeBaseDispReg.word64 [x0 + 296], x1
     arm64.movImm x1, 0
@@ -21739,8 +22121,8 @@ func @__mbox_send {
     arm64.movImm x1, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x22], x1
     arm64.cmp x1, 1
-    arm64.b.ne __rl_slow#50
-  __rl_cont#49:
+    arm64.b.ne __rl_slow#54
+  __rl_cont#53:
     arm64.leaGlobal x1, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
     arm64.leaGlobal x2, __sched_tls_teb_offset
@@ -21789,27 +22171,56 @@ func @__mbox_send {
     arm64.arm64AtomicRmw.add x1, [x2], x1
     arm64.bl __sched_runq_put
     arm64.bl __sched_wake_or_spawn
-    arm64.b senddone
-  cpyftb#16:
+  senddone:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.loadRegSlot x23, slot5
+    arm64.loadRegSlot x24, slot6
+    arm64.loadRegSlot x25, slot7
+    arm64.loadRegSlot x26, slot8
+    arm64.epilogue 96
+    arm64.ret
+  cpyftb#18:
     arm64.add x3, x20, x2
     arm64.loadRegBaseDisp.byte x3, [x3 + 0]
     arm64.add x4, x1, x2
     arm64.storeBaseDispReg.byte [x4 + 0], x3
     arm64.add x2, x2, 1
-    arm64.b cpyfth#15
-  cpyfwb#13:
+    arm64.b cpyfth#17
+  cpyfwb#15:
     arm64.add x4, x20, x3
     arm64.loadRegBaseDisp.word64 x4, [x4 + 0]
     arm64.add x5, x1, x3
     arm64.storeBaseDispReg.word64 [x5 + 0], x4
     arm64.add x3, x3, 8
-    arm64.b cpyfwh#12
-  sendclosed:
+    arm64.b cpyfwh#14
+  __rl_slow#48:
+    arm64.movRegReg x0, x22
+    arm64.bl __rtlock_acquire
+    arm64.b __rl_cont#47
+  __rl_slow#56:
+    arm64.movRegReg x0, x22
+    arm64.bl __rtlock_release
+    arm64.b __rl_cont#55
+  __rl_slow#54:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x22
+    arm64.bl __rtlock_release
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.b __rl_cont#53
+  sendfull:
     arm64.movImm x0, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x22], x0
     arm64.cmp x1, 1
-    arm64.b.ne __rl_slow#48
-  __rl_cont#47:
+    arm64.b.eq __rl_cont#51
+  __rl_slow#52:
+    arm64.movRegReg x0, x22
+    arm64.bl __rtlock_release
+  __rl_cont#51:
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.leaGlobal x1, __sched_tls_teb_offset
@@ -21836,10 +22247,7 @@ func @__mbox_send {
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.add x1, x1, -1
     arm64.storeBaseDispReg.word64 [x0 + 0], x1
-    arm64.movRegReg x0, x19
-    arm64.movRegReg x1, x20
-    arm64.bl __mbox_abandon
-  senddone:
+    arm64.movImm x0, 1
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
     arm64.loadRegSlot x21, slot3
@@ -21850,25 +22258,52 @@ func @__mbox_send {
     arm64.loadRegSlot x26, slot8
     arm64.epilogue 96
     arm64.ret
-  __rl_slow#46:
-    arm64.movRegReg x0, x22
-    arm64.bl __rtlock_acquire
-    arm64.b __rl_cont#45
-  __rl_slow#52:
-    arm64.movRegReg x0, x22
-    arm64.bl __rtlock_release
-    arm64.b __rl_cont#51
+  sendclosed:
+    arm64.movImm x0, 0
+    arm64.arm64AtomicRmw.exchangeByte x1, [x22], x0
+    arm64.cmp x1, 1
+    arm64.b.eq __rl_cont#49
   __rl_slow#50:
-    arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x22
     arm64.bl __rtlock_release
-    arm64.movRegReg x1, x0
-    arm64.loadRegSlot x0, slot0
-    arm64.b __rl_cont#49
-  __rl_slow#48:
-    arm64.movRegReg x0, x22
-    arm64.bl __rtlock_release
-    arm64.b __rl_cont#47
+  __rl_cont#49:
+    arm64.leaGlobal x0, __sched_tls_teb_offset
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.leaGlobal x1, __sched_tls_teb_offset
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.arm64ThreadPointer x16, linuxWritable
+    arm64.add x16, x16, x1
+    arm64.cmp x1, 0
+    arm64.cset x17, ne
+    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
+    arm64.mul x1, x16, x17
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cmp x1, 0
+    arm64.cset x2, ne
+    arm64.and x0, x0, x2
+    arm64.movImm x2, 0
+    arm64.sub x2, x2, x0
+    arm64.sub x0, x0, 1
+    arm64.add x1, x1, 624
+    arm64.leaGlobal x3, __sched_lock_depth_sink
+    arm64.and x1, x1, x2
+    arm64.and x0, x3, x0
+    arm64.orr x0, x1, x0
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.add x1, x1, -1
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.movImm x0, 2
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.loadRegSlot x23, slot5
+    arm64.loadRegSlot x24, slot6
+    arm64.loadRegSlot x25, slot7
+    arm64.loadRegSlot x26, slot8
+    arm64.epilogue 96
+    arm64.ret
 }
 
 func @__mbox_recv {
@@ -22000,7 +22435,7 @@ func @__mbox_recv {
     arm64.loadRegBaseDisp.word64 x22, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x19 + 16]
     arm64.loadRegBaseDisp.word64 x2, [x19 + 8]
-    arm64.loadRegBaseDisp.word64 x3, [x19 + 80]
+    arm64.loadRegBaseDisp.word64 x3, [x19 + 64]
     arm64.add x23, x19, 96
     arm64.mul x4, x1, x3
     arm64.add x4, x22, x4
@@ -22024,13 +22459,13 @@ func @__mbox_recv {
     arm64.storeBaseDispReg.word64 [x19 + 24], x0
     arm64.cmp x0, 0
     arm64.cset x0, eq
-    arm64.cmp x2, 16
+    arm64.loadRegBaseDisp.word64 x24, [x19 + 80]
+    arm64.cmp x2, x24
     arm64.cset x1, gt
     arm64.and x0, x0, x1
     arm64.cbz x0, recvpopped
   recvshrink:
-    arm64.movImm x24, 16
-    arm64.lsl x0, x3, 4
+    arm64.mul x0, x24, x3
     arm64.bl __slab_alloc_scaffold
     arm64.movRegReg x25, x0
     arm64.movRegReg x0, x22
@@ -22245,18 +22680,20 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 48
+    x64.movRegImm32 rbx, 1024
   __il_body:
-    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
   __il_cont:
     x64.leaRegFunc rcx, [rip + Counter.__loop]
-    x64.leaRegFunc rax, [rip + Counter.__abandon]
-    x64.movRegImm32 r9, 24
+    x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
+    x64.movRegReg r9, rbx
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
@@ -22269,20 +22706,27 @@ func @main {
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
     x64.callDirect __mbox_staging
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.storeBaseDispReg.word64 [r14 + 16], r13
     x64.movRegImm32 rax, 24
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r8
+    x64.movRegReg rdx, r14
     x64.callDirect __mbox_send
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, sendrefused
+  sendaccepted:
     x64.movRegReg rcx, r13
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
+  critsplit:
+    x64.movRegReg rcx, r10
   tryerr:
     x64.movRegImm32 rbx, 0
+    x64.callDirect __mm_decref
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
@@ -22297,17 +22741,37 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_handle_drop_box
     x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  sendrefused:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mbox_reply_refused
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.storeSlotReg slot0, r8
+    x64.callDirect __mm_alloc
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot r8, slot0
+    x64.leaRegRegImm32 rax, r8, -1
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp tryerr
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-windows-host-lock-spins-before-it-sleeps.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -22328,21 +22792,7 @@ func @Counter.__loop {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, stopping
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.storeBaseDispReg.word64 [r12 + 72], rax
-  stopping:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_close
-  drain:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, abandon
+    x64.jcc notEqual, dispatch
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -22354,11 +22804,17 @@ func @Counter.__loop {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  abandon:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
-    x64.callDirect __mbox_abandon
-    x64.jmp drain
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    x64.callDirect __mbox_unknown_tag
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -22369,30 +22825,6 @@ func @Counter.__loop {
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
     x64.jmp serve
-}
-
-func @Counter.__abandon {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jumpTable rax, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-    x64.jmp abandondone
-  next:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-  abandondone:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
 }
 
 func @__sched_init_procs {
@@ -23098,18 +23530,20 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 48
+    x64.movRegImm32 rbx, 1024
   __il_body:
-    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
   __il_cont:
     x64.leaRegFunc rcx, [rip + Counter.__loop]
-    x64.leaRegFunc rax, [rip + Counter.__abandon]
-    x64.movRegImm32 r9, 24
+    x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
+    x64.movRegReg r9, rbx
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
@@ -23122,20 +23556,27 @@ func @main {
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
     x64.callDirect __mbox_staging
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.storeBaseDispReg.word64 [r14 + 16], r13
     x64.movRegImm32 rax, 24
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r8
+    x64.movRegReg rdx, r14
     x64.callDirect __mbox_send
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, sendrefused
+  sendaccepted:
     x64.movRegReg rcx, r13
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
+  critsplit:
+    x64.movRegReg rcx, r10
   tryerr:
     x64.movRegImm32 rbx, 0
+    x64.callDirect __mm_decref
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
@@ -23150,17 +23591,37 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_handle_drop_box
     x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  sendrefused:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mbox_reply_refused
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.storeSlotReg slot0, r8
+    x64.callDirect __mm_alloc
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot r8, slot0
+    x64.leaRegRegImm32 rax, r8, -1
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp tryerr
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-reply-cell-writes-only-its-own-words.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -23181,21 +23642,7 @@ func @Counter.__loop {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, stopping
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.storeBaseDispReg.word64 [r12 + 72], rax
-  stopping:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_close
-  drain:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, abandon
+    x64.jcc notEqual, dispatch
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -23207,11 +23654,17 @@ func @Counter.__loop {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  abandon:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
-    x64.callDirect __mbox_abandon
-    x64.jmp drain
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    x64.callDirect __mbox_unknown_tag
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -23222,30 +23675,6 @@ func @Counter.__loop {
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
     x64.jmp serve
-}
-
-func @Counter.__abandon {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jumpTable rax, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-    x64.jmp abandondone
-  next:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-  abandondone:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
 }
 
 func @__gt_free_get {
@@ -23897,18 +24326,20 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 48
+    x64.movRegImm32 rbx, 1024
   __il_body:
-    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
   __il_cont:
     x64.leaRegFunc rcx, [rip + Counter.__loop]
-    x64.leaRegFunc rax, [rip + Counter.__abandon]
-    x64.movRegImm32 r9, 24
+    x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
+    x64.movRegReg r9, rbx
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
@@ -23921,20 +24352,27 @@ func @main {
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
     x64.callDirect __mbox_staging
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.storeBaseDispReg.word64 [r14 + 16], r13
     x64.movRegImm32 rax, 24
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r8
+    x64.movRegReg rdx, r14
     x64.callDirect __mbox_send
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, sendrefused
+  sendaccepted:
     x64.movRegReg rcx, r13
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
+  critsplit:
+    x64.movRegReg rcx, r10
   tryerr:
     x64.movRegImm32 rbx, 0
+    x64.callDirect __mm_decref
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
@@ -23948,17 +24386,37 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_handle_drop_box
     x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  sendrefused:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mbox_reply_refused
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.storeSlotReg slot0, r8
+    x64.callDirect __mm_alloc
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot r8, slot0
+    x64.leaRegRegImm32 rax, r8, -1
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp tryerr
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-reply-cell-writes-only-its-own-words.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -23979,21 +24437,7 @@ func @Counter.__loop {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, stopping
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.storeBaseDispReg.word64 [r12 + 72], rax
-  stopping:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_close
-  drain:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, abandon
+    x64.jcc notEqual, dispatch
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -24005,11 +24449,17 @@ func @Counter.__loop {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  abandon:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
-    x64.callDirect __mbox_abandon
-    x64.jmp drain
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    x64.callDirect __mbox_unknown_tag
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -24020,30 +24470,6 @@ func @Counter.__loop {
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
     x64.jmp serve
-}
-
-func @Counter.__abandon {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jumpTable rax, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-    x64.jmp abandondone
-  next:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-  abandondone:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
 }
 
 func @__gt_free_get {
@@ -24689,21 +25115,23 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x19, 1024
   __il_body:
-    arm64.movImm x19, 0
+    arm64.movImm x20, 0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+    arm64.storeBaseDispReg.word64 [x1 + 0], x20
   __il_cont:
     arm64.leaFuncAddr x0, Counter.__loop
-    arm64.leaFuncAddr x2, Counter.__abandon
-    arm64.movImm x3, 24
+    arm64.movImm x2, 24
+    arm64.movRegReg x3, x19
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
@@ -24716,20 +25144,27 @@ func @main {
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
     arm64.bl __mbox_staging
-    arm64.movRegReg x1, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x19
-    arm64.storeBaseDispReg.word64 [x1 + 16], x21
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x19
+    arm64.storeBaseDispReg.word64 [x22 + 16], x21
     arm64.movImm x2, 24
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.movRegReg x1, x22
     arm64.bl __mbox_send
+    arm64.cmp x0, 0
+    arm64.b.ne sendrefused
+  sendaccepted:
     arm64.movRegReg x0, x21
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
     arm64.b.eq tryok
+  critsplit:
+    arm64.movRegReg x0, x9
   tryerr:
     arm64.movImm x19, 0
+    arm64.bl __mm_decref
     arm64.b trycont
   tryok:
     arm64.movRegReg x19, x0
@@ -24743,19 +25178,42 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_handle_drop_box
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
+  sendrefused:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mbox_reply_refused
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.movImm x1, 16
+    arm64.movImm x2, 0
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.add x0, x0, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.movRegReg x0, x1
+    arm64.b tryerr
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-reply-cell-writes-only-its-own-words.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 
@@ -24770,22 +25228,7 @@ func @Counter.__loop {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.cmp x0, 0
-    arm64.b.eq stopping
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.storeBaseDispReg.word64 [x20 + 72], x0
-  stopping:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_close
-  drain:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.movRegReg x1, x0
-    arm64.cmp x1, 0
-    arm64.b.ne abandon
+    arm64.b.ne dispatch
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -24796,10 +25239,16 @@ func @Counter.__loop {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  abandon:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_abandon
-    arm64.b drain
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    arm64.bl __mbox_unknown_tag
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -24812,27 +25261,6 @@ func @Counter.__loop {
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
     arm64.b serve
-}
-
-func @Counter.__abandon {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-    arm64.b abandondone
-  next:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-  abandondone:
-    arm64.epilogue 16
-    arm64.ret
 }
 
 func @__gt_free_get {
@@ -25555,21 +25983,23 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x19, 1024
   __il_body:
-    arm64.movImm x19, 0
+    arm64.movImm x20, 0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+    arm64.storeBaseDispReg.word64 [x1 + 0], x20
   __il_cont:
     arm64.leaFuncAddr x0, Counter.__loop
-    arm64.leaFuncAddr x2, Counter.__abandon
-    arm64.movImm x3, 24
+    arm64.movImm x2, 24
+    arm64.movRegReg x3, x19
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
@@ -25582,20 +26012,27 @@ func @main {
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
     arm64.bl __mbox_staging
-    arm64.movRegReg x1, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x19
-    arm64.storeBaseDispReg.word64 [x1 + 16], x21
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x19
+    arm64.storeBaseDispReg.word64 [x22 + 16], x21
     arm64.movImm x2, 24
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.movRegReg x1, x22
     arm64.bl __mbox_send
+    arm64.cmp x0, 0
+    arm64.b.ne sendrefused
+  sendaccepted:
     arm64.movRegReg x0, x21
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
     arm64.b.eq tryok
+  critsplit:
+    arm64.movRegReg x0, x9
   tryerr:
     arm64.movImm x19, 0
+    arm64.bl __mm_decref
     arm64.b trycont
   tryok:
     arm64.movRegReg x19, x0
@@ -25609,19 +26046,42 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_handle_drop_box
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
+  sendrefused:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mbox_reply_refused
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.movImm x1, 16
+    arm64.movImm x2, 0
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.add x0, x0, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.movRegReg x0, x1
+    arm64.b tryerr
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-reply-cell-writes-only-its-own-words.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 
@@ -25636,22 +26096,7 @@ func @Counter.__loop {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.cmp x0, 0
-    arm64.b.eq stopping
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.storeBaseDispReg.word64 [x20 + 72], x0
-  stopping:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_close
-  drain:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.movRegReg x1, x0
-    arm64.cmp x1, 0
-    arm64.b.ne abandon
+    arm64.b.ne dispatch
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -25662,10 +26107,16 @@ func @Counter.__loop {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  abandon:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_abandon
-    arm64.b drain
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    arm64.bl __mbox_unknown_tag
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -25678,27 +26129,6 @@ func @Counter.__loop {
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
     arm64.b serve
-}
-
-func @Counter.__abandon {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-    arm64.b abandondone
-  next:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-  abandondone:
-    arm64.epilogue 16
-    arm64.ret
 }
 
 func @__gt_free_get {
@@ -26469,18 +26899,20 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 48
+    x64.movRegImm32 rbx, 1024
   __il_body:
-    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
   __il_cont:
     x64.leaRegFunc rcx, [rip + Counter.__loop]
-    x64.leaRegFunc rax, [rip + Counter.__abandon]
-    x64.movRegImm32 r9, 24
+    x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
+    x64.movRegReg r9, rbx
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
@@ -26493,20 +26925,27 @@ func @main {
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
     x64.callDirect __mbox_staging
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.storeBaseDispReg.word64 [r14 + 16], r13
     x64.movRegImm32 rax, 24
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r8
+    x64.movRegReg rdx, r14
     x64.callDirect __mbox_send
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, sendrefused
+  sendaccepted:
     x64.movRegReg rcx, r13
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
+  critsplit:
+    x64.movRegReg rcx, r10
   tryerr:
     x64.movRegImm32 rbx, 0
+    x64.callDirect __mm_decref
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
@@ -26521,17 +26960,37 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_handle_drop_box
     x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  sendrefused:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mbox_reply_refused
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.storeSlotReg slot0, r8
+    x64.callDirect __mm_alloc
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot r8, slot0
+    x64.leaRegRegImm32 rax, r8, -1
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp tryerr
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-wake-with-no-idle-processor-takes-no-lock.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -26552,21 +27011,7 @@ func @Counter.__loop {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, stopping
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.storeBaseDispReg.word64 [r12 + 72], rax
-  stopping:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_close
-  drain:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, abandon
+    x64.jcc notEqual, dispatch
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -26578,11 +27023,17 @@ func @Counter.__loop {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  abandon:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
-    x64.callDirect __mbox_abandon
-    x64.jmp drain
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    x64.callDirect __mbox_unknown_tag
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -26593,30 +27044,6 @@ func @Counter.__loop {
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
     x64.jmp serve
-}
-
-func @Counter.__abandon {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jumpTable rax, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-    x64.jmp abandondone
-  next:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-  abandondone:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
 }
 
 func @__sched_wake_or_spawn {
@@ -26741,18 +27168,20 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 48
+    x64.movRegImm32 rbx, 1024
   __il_body:
-    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
   __il_cont:
     x64.leaRegFunc rcx, [rip + Counter.__loop]
-    x64.leaRegFunc rax, [rip + Counter.__abandon]
-    x64.movRegImm32 r9, 24
+    x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
+    x64.movRegReg r9, rbx
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
@@ -26765,20 +27194,27 @@ func @main {
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
     x64.callDirect __mbox_staging
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.storeBaseDispReg.word64 [r14 + 16], r13
     x64.movRegImm32 rax, 24
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r8
+    x64.movRegReg rdx, r14
     x64.callDirect __mbox_send
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, sendrefused
+  sendaccepted:
     x64.movRegReg rcx, r13
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
+  critsplit:
+    x64.movRegReg rcx, r10
   tryerr:
     x64.movRegImm32 rbx, 0
+    x64.callDirect __mm_decref
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
@@ -26792,17 +27228,37 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_handle_drop_box
     x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  sendrefused:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mbox_reply_refused
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.storeSlotReg slot0, r8
+    x64.callDirect __mm_alloc
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot r8, slot0
+    x64.leaRegRegImm32 rax, r8, -1
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp tryerr
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-wake-with-no-idle-processor-takes-no-lock.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -26823,21 +27279,7 @@ func @Counter.__loop {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, stopping
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.storeBaseDispReg.word64 [r12 + 72], rax
-  stopping:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_close
-  drain:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, abandon
+    x64.jcc notEqual, dispatch
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -26849,11 +27291,17 @@ func @Counter.__loop {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  abandon:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
-    x64.callDirect __mbox_abandon
-    x64.jmp drain
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    x64.callDirect __mbox_unknown_tag
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -26864,30 +27312,6 @@ func @Counter.__loop {
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
     x64.jmp serve
-}
-
-func @Counter.__abandon {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jumpTable rax, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-    x64.jmp abandondone
-  next:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-  abandondone:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
 }
 
 func @__sched_wake_or_spawn {
@@ -27004,21 +27428,23 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x19, 1024
   __il_body:
-    arm64.movImm x19, 0
+    arm64.movImm x20, 0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+    arm64.storeBaseDispReg.word64 [x1 + 0], x20
   __il_cont:
     arm64.leaFuncAddr x0, Counter.__loop
-    arm64.leaFuncAddr x2, Counter.__abandon
-    arm64.movImm x3, 24
+    arm64.movImm x2, 24
+    arm64.movRegReg x3, x19
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
@@ -27031,20 +27457,27 @@ func @main {
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
     arm64.bl __mbox_staging
-    arm64.movRegReg x1, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x19
-    arm64.storeBaseDispReg.word64 [x1 + 16], x21
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x19
+    arm64.storeBaseDispReg.word64 [x22 + 16], x21
     arm64.movImm x2, 24
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.movRegReg x1, x22
     arm64.bl __mbox_send
+    arm64.cmp x0, 0
+    arm64.b.ne sendrefused
+  sendaccepted:
     arm64.movRegReg x0, x21
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
     arm64.b.eq tryok
+  critsplit:
+    arm64.movRegReg x0, x9
   tryerr:
     arm64.movImm x19, 0
+    arm64.bl __mm_decref
     arm64.b trycont
   tryok:
     arm64.movRegReg x19, x0
@@ -27058,19 +27491,42 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_handle_drop_box
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
+  sendrefused:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mbox_reply_refused
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.movImm x1, 16
+    arm64.movImm x2, 0
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.add x0, x0, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.movRegReg x0, x1
+    arm64.b tryerr
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-wake-with-no-idle-processor-takes-no-lock.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 
@@ -27085,22 +27541,7 @@ func @Counter.__loop {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.cmp x0, 0
-    arm64.b.eq stopping
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.storeBaseDispReg.word64 [x20 + 72], x0
-  stopping:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_close
-  drain:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.movRegReg x1, x0
-    arm64.cmp x1, 0
-    arm64.b.ne abandon
+    arm64.b.ne dispatch
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -27111,10 +27552,16 @@ func @Counter.__loop {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  abandon:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_abandon
-    arm64.b drain
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    arm64.bl __mbox_unknown_tag
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -27127,27 +27574,6 @@ func @Counter.__loop {
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
     arm64.b serve
-}
-
-func @Counter.__abandon {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-    arm64.b abandondone
-  next:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-  abandondone:
-    arm64.epilogue 16
-    arm64.ret
 }
 
 func @__sched_wake_or_spawn {
@@ -27264,21 +27690,23 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x19, 1024
   __il_body:
-    arm64.movImm x19, 0
+    arm64.movImm x20, 0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+    arm64.storeBaseDispReg.word64 [x1 + 0], x20
   __il_cont:
     arm64.leaFuncAddr x0, Counter.__loop
-    arm64.leaFuncAddr x2, Counter.__abandon
-    arm64.movImm x3, 24
+    arm64.movImm x2, 24
+    arm64.movRegReg x3, x19
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
@@ -27291,20 +27719,27 @@ func @main {
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
     arm64.bl __mbox_staging
-    arm64.movRegReg x1, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x19
-    arm64.storeBaseDispReg.word64 [x1 + 16], x21
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x19
+    arm64.storeBaseDispReg.word64 [x22 + 16], x21
     arm64.movImm x2, 24
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.movRegReg x1, x22
     arm64.bl __mbox_send
+    arm64.cmp x0, 0
+    arm64.b.ne sendrefused
+  sendaccepted:
     arm64.movRegReg x0, x21
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
     arm64.b.eq tryok
+  critsplit:
+    arm64.movRegReg x0, x9
   tryerr:
     arm64.movImm x19, 0
+    arm64.bl __mm_decref
     arm64.b trycont
   tryok:
     arm64.movRegReg x19, x0
@@ -27318,19 +27753,42 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_handle_drop_box
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
+  sendrefused:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mbox_reply_refused
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.movImm x1, 16
+    arm64.movImm x2, 0
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.add x0, x0, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.movRegReg x0, x1
+    arm64.b tryerr
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-wake-with-no-idle-processor-takes-no-lock.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 
@@ -27345,22 +27803,7 @@ func @Counter.__loop {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.cmp x0, 0
-    arm64.b.eq stopping
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.storeBaseDispReg.word64 [x20 + 72], x0
-  stopping:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_close
-  drain:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.movRegReg x1, x0
-    arm64.cmp x1, 0
-    arm64.b.ne abandon
+    arm64.b.ne dispatch
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -27371,10 +27814,16 @@ func @Counter.__loop {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  abandon:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_abandon
-    arm64.b drain
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    arm64.bl __mbox_unknown_tag
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -27387,27 +27836,6 @@ func @Counter.__loop {
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
     arm64.b serve
-}
-
-func @Counter.__abandon {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-    arm64.b abandondone
-  next:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-  abandondone:
-    arm64.epilogue 16
-    arm64.ret
 }
 
 func @__sched_wake_or_spawn {
@@ -27602,18 +28030,20 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 48
+    x64.movRegImm32 rbx, 1024
   __il_body:
-    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
   __il_cont:
     x64.leaRegFunc rcx, [rip + Counter.__loop]
-    x64.leaRegFunc rax, [rip + Counter.__abandon]
-    x64.movRegImm32 r9, 24
+    x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
+    x64.movRegReg r9, rbx
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
@@ -27626,20 +28056,27 @@ func @main {
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
     x64.callDirect __mbox_staging
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.storeBaseDispReg.word64 [r14 + 16], r13
     x64.movRegImm32 rax, 24
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r8
+    x64.movRegReg rdx, r14
     x64.callDirect __mbox_send
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, sendrefused
+  sendaccepted:
     x64.movRegReg rcx, r13
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
+  critsplit:
+    x64.movRegReg rcx, r10
   tryerr:
     x64.movRegImm32 rbx, 0
+    x64.callDirect __mm_decref
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
@@ -27654,17 +28091,37 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_handle_drop_box
     x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  sendrefused:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mbox_reply_refused
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.storeSlotReg slot0, r8
+    x64.callDirect __mm_alloc
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot r8, slot0
+    x64.leaRegRegImm32 rax, r8, -1
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp tryerr
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-strand-turn-takes-only-its-own-strands-lock.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -27685,21 +28142,7 @@ func @Counter.__loop {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, stopping
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.storeBaseDispReg.word64 [r12 + 72], rax
-  stopping:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_close
-  drain:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, abandon
+    x64.jcc notEqual, dispatch
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -27711,11 +28154,17 @@ func @Counter.__loop {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  abandon:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
-    x64.callDirect __mbox_abandon
-    x64.jmp drain
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    x64.callDirect __mbox_unknown_tag
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -27726,30 +28175,6 @@ func @Counter.__loop {
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
     x64.jmp serve
-}
-
-func @Counter.__abandon {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jumpTable rax, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-    x64.jmp abandondone
-  next:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-  abandondone:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
 }
 
 func @__gt_strand_next {
@@ -29472,18 +29897,20 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 48
+    x64.movRegImm32 rbx, 1024
   __il_body:
-    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
   __il_cont:
     x64.leaRegFunc rcx, [rip + Counter.__loop]
-    x64.leaRegFunc rax, [rip + Counter.__abandon]
-    x64.movRegImm32 r9, 24
+    x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
+    x64.movRegReg r9, rbx
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
@@ -29496,20 +29923,27 @@ func @main {
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
     x64.callDirect __mbox_staging
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.storeBaseDispReg.word64 [r14 + 16], r13
     x64.movRegImm32 rax, 24
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r8
+    x64.movRegReg rdx, r14
     x64.callDirect __mbox_send
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, sendrefused
+  sendaccepted:
     x64.movRegReg rcx, r13
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
+  critsplit:
+    x64.movRegReg rcx, r10
   tryerr:
     x64.movRegImm32 rbx, 0
+    x64.callDirect __mm_decref
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
@@ -29523,17 +29957,37 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_handle_drop_box
     x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  sendrefused:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mbox_reply_refused
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.storeSlotReg slot0, r8
+    x64.callDirect __mm_alloc
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot r8, slot0
+    x64.leaRegRegImm32 rax, r8, -1
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp tryerr
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-strand-turn-takes-only-its-own-strands-lock.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -29554,21 +30008,7 @@ func @Counter.__loop {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, stopping
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.storeBaseDispReg.word64 [r12 + 72], rax
-  stopping:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_close
-  drain:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, abandon
+    x64.jcc notEqual, dispatch
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -29580,11 +30020,17 @@ func @Counter.__loop {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  abandon:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
-    x64.callDirect __mbox_abandon
-    x64.jmp drain
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    x64.callDirect __mbox_unknown_tag
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -29595,30 +30041,6 @@ func @Counter.__loop {
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
     x64.jmp serve
-}
-
-func @Counter.__abandon {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jumpTable rax, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-    x64.jmp abandondone
-  next:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-  abandondone:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
 }
 
 func @__gt_strand_next {
@@ -31329,21 +31751,23 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x19, 1024
   __il_body:
-    arm64.movImm x19, 0
+    arm64.movImm x20, 0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+    arm64.storeBaseDispReg.word64 [x1 + 0], x20
   __il_cont:
     arm64.leaFuncAddr x0, Counter.__loop
-    arm64.leaFuncAddr x2, Counter.__abandon
-    arm64.movImm x3, 24
+    arm64.movImm x2, 24
+    arm64.movRegReg x3, x19
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
@@ -31356,20 +31780,27 @@ func @main {
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
     arm64.bl __mbox_staging
-    arm64.movRegReg x1, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x19
-    arm64.storeBaseDispReg.word64 [x1 + 16], x21
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x19
+    arm64.storeBaseDispReg.word64 [x22 + 16], x21
     arm64.movImm x2, 24
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.movRegReg x1, x22
     arm64.bl __mbox_send
+    arm64.cmp x0, 0
+    arm64.b.ne sendrefused
+  sendaccepted:
     arm64.movRegReg x0, x21
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
     arm64.b.eq tryok
+  critsplit:
+    arm64.movRegReg x0, x9
   tryerr:
     arm64.movImm x19, 0
+    arm64.bl __mm_decref
     arm64.b trycont
   tryok:
     arm64.movRegReg x19, x0
@@ -31383,19 +31814,42 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_handle_drop_box
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
+  sendrefused:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mbox_reply_refused
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.movImm x1, 16
+    arm64.movImm x2, 0
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.add x0, x0, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.movRegReg x0, x1
+    arm64.b tryerr
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-strand-turn-takes-only-its-own-strands-lock.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 
@@ -31410,22 +31864,7 @@ func @Counter.__loop {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.cmp x0, 0
-    arm64.b.eq stopping
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.storeBaseDispReg.word64 [x20 + 72], x0
-  stopping:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_close
-  drain:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.movRegReg x1, x0
-    arm64.cmp x1, 0
-    arm64.b.ne abandon
+    arm64.b.ne dispatch
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -31436,10 +31875,16 @@ func @Counter.__loop {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  abandon:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_abandon
-    arm64.b drain
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    arm64.bl __mbox_unknown_tag
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -31452,27 +31897,6 @@ func @Counter.__loop {
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
     arm64.b serve
-}
-
-func @Counter.__abandon {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-    arm64.b abandondone
-  next:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-  abandondone:
-    arm64.epilogue 16
-    arm64.ret
 }
 
 func @__gt_strand_next {
@@ -33359,21 +33783,23 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x19, 1024
   __il_body:
-    arm64.movImm x19, 0
+    arm64.movImm x20, 0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+    arm64.storeBaseDispReg.word64 [x1 + 0], x20
   __il_cont:
     arm64.leaFuncAddr x0, Counter.__loop
-    arm64.leaFuncAddr x2, Counter.__abandon
-    arm64.movImm x3, 24
+    arm64.movImm x2, 24
+    arm64.movRegReg x3, x19
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
@@ -33386,20 +33812,27 @@ func @main {
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
     arm64.bl __mbox_staging
-    arm64.movRegReg x1, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x19
-    arm64.storeBaseDispReg.word64 [x1 + 16], x21
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x19
+    arm64.storeBaseDispReg.word64 [x22 + 16], x21
     arm64.movImm x2, 24
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.movRegReg x1, x22
     arm64.bl __mbox_send
+    arm64.cmp x0, 0
+    arm64.b.ne sendrefused
+  sendaccepted:
     arm64.movRegReg x0, x21
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
     arm64.b.eq tryok
+  critsplit:
+    arm64.movRegReg x0, x9
   tryerr:
     arm64.movImm x19, 0
+    arm64.bl __mm_decref
     arm64.b trycont
   tryok:
     arm64.movRegReg x19, x0
@@ -33413,19 +33846,42 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_handle_drop_box
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
+  sendrefused:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mbox_reply_refused
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.movImm x1, 16
+    arm64.movImm x2, 0
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.add x0, x0, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.movRegReg x0, x1
+    arm64.b tryerr
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-strand-turn-takes-only-its-own-strands-lock.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 
@@ -33440,22 +33896,7 @@ func @Counter.__loop {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.cmp x0, 0
-    arm64.b.eq stopping
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.storeBaseDispReg.word64 [x20 + 72], x0
-  stopping:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_close
-  drain:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.movRegReg x1, x0
-    arm64.cmp x1, 0
-    arm64.b.ne abandon
+    arm64.b.ne dispatch
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -33466,10 +33907,16 @@ func @Counter.__loop {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  abandon:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_abandon
-    arm64.b drain
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    arm64.bl __mbox_unknown_tag
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -33482,27 +33929,6 @@ func @Counter.__loop {
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
     arm64.b serve
-}
-
-func @Counter.__abandon {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-    arm64.b abandondone
-  next:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-  abandondone:
-    arm64.epilogue 16
-    arm64.ret
 }
 
 func @__gt_strand_next {
@@ -35447,18 +35873,20 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 48
+    x64.movRegImm32 rbx, 1024
   __il_body:
-    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
   __il_cont:
     x64.leaRegFunc rcx, [rip + Counter.__loop]
-    x64.leaRegFunc rax, [rip + Counter.__abandon]
-    x64.movRegImm32 r9, 24
+    x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
+    x64.movRegReg r9, rbx
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
@@ -35471,20 +35899,27 @@ func @main {
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
     x64.callDirect __mbox_staging
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.storeBaseDispReg.word64 [r14 + 16], r13
     x64.movRegImm32 rax, 24
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r8
+    x64.movRegReg rdx, r14
     x64.callDirect __mbox_send
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, sendrefused
+  sendaccepted:
     x64.movRegReg rcx, r13
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
+  critsplit:
+    x64.movRegReg rcx, r10
   tryerr:
     x64.movRegImm32 rbx, 0
+    x64.callDirect __mm_decref
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
@@ -35499,17 +35934,37 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_handle_drop_box
     x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  sendrefused:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mbox_reply_refused
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.storeSlotReg slot0, r8
+    x64.callDirect __mm_alloc
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot r8, slot0
+    x64.leaRegRegImm32 rax, r8, -1
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp tryerr
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-spawn-readies-its-green-thread-with-no-scheduler-lock.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -35530,21 +35985,7 @@ func @Counter.__loop {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, stopping
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.storeBaseDispReg.word64 [r12 + 72], rax
-  stopping:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_close
-  drain:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, abandon
+    x64.jcc notEqual, dispatch
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -35556,11 +35997,17 @@ func @Counter.__loop {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  abandon:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
-    x64.callDirect __mbox_abandon
-    x64.jmp drain
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    x64.callDirect __mbox_unknown_tag
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -35571,30 +36018,6 @@ func @Counter.__loop {
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
     x64.jmp serve
-}
-
-func @Counter.__abandon {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jumpTable rax, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-    x64.jmp abandondone
-  next:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-  abandondone:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
 }
 
 func @__gt_ready {
@@ -35708,18 +36131,20 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 48
+    x64.movRegImm32 rbx, 1024
   __il_body:
-    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
   __il_cont:
     x64.leaRegFunc rcx, [rip + Counter.__loop]
-    x64.leaRegFunc rax, [rip + Counter.__abandon]
-    x64.movRegImm32 r9, 24
+    x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
+    x64.movRegReg r9, rbx
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
@@ -35732,20 +36157,27 @@ func @main {
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
     x64.callDirect __mbox_staging
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.storeBaseDispReg.word64 [r14 + 16], r13
     x64.movRegImm32 rax, 24
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r8
+    x64.movRegReg rdx, r14
     x64.callDirect __mbox_send
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, sendrefused
+  sendaccepted:
     x64.movRegReg rcx, r13
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
+  critsplit:
+    x64.movRegReg rcx, r10
   tryerr:
     x64.movRegImm32 rbx, 0
+    x64.callDirect __mm_decref
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
@@ -35759,17 +36191,37 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_handle_drop_box
     x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  sendrefused:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mbox_reply_refused
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.storeSlotReg slot0, r8
+    x64.callDirect __mm_alloc
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot r8, slot0
+    x64.leaRegRegImm32 rax, r8, -1
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp tryerr
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-spawn-readies-its-green-thread-with-no-scheduler-lock.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -35790,21 +36242,7 @@ func @Counter.__loop {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, stopping
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.storeBaseDispReg.word64 [r12 + 72], rax
-  stopping:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_close
-  drain:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, abandon
+    x64.jcc notEqual, dispatch
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -35816,11 +36254,17 @@ func @Counter.__loop {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  abandon:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
-    x64.callDirect __mbox_abandon
-    x64.jmp drain
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    x64.callDirect __mbox_unknown_tag
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -35831,30 +36275,6 @@ func @Counter.__loop {
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
     x64.jmp serve
-}
-
-func @Counter.__abandon {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jumpTable rax, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-    x64.jmp abandondone
-  next:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-  abandondone:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
 }
 
 func @__gt_ready {
@@ -35960,21 +36380,23 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x19, 1024
   __il_body:
-    arm64.movImm x19, 0
+    arm64.movImm x20, 0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+    arm64.storeBaseDispReg.word64 [x1 + 0], x20
   __il_cont:
     arm64.leaFuncAddr x0, Counter.__loop
-    arm64.leaFuncAddr x2, Counter.__abandon
-    arm64.movImm x3, 24
+    arm64.movImm x2, 24
+    arm64.movRegReg x3, x19
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
@@ -35987,20 +36409,27 @@ func @main {
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
     arm64.bl __mbox_staging
-    arm64.movRegReg x1, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x19
-    arm64.storeBaseDispReg.word64 [x1 + 16], x21
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x19
+    arm64.storeBaseDispReg.word64 [x22 + 16], x21
     arm64.movImm x2, 24
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.movRegReg x1, x22
     arm64.bl __mbox_send
+    arm64.cmp x0, 0
+    arm64.b.ne sendrefused
+  sendaccepted:
     arm64.movRegReg x0, x21
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
     arm64.b.eq tryok
+  critsplit:
+    arm64.movRegReg x0, x9
   tryerr:
     arm64.movImm x19, 0
+    arm64.bl __mm_decref
     arm64.b trycont
   tryok:
     arm64.movRegReg x19, x0
@@ -36014,19 +36443,42 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_handle_drop_box
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
+  sendrefused:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mbox_reply_refused
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.movImm x1, 16
+    arm64.movImm x2, 0
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.add x0, x0, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.movRegReg x0, x1
+    arm64.b tryerr
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-spawn-readies-its-green-thread-with-no-scheduler-lock.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 
@@ -36041,22 +36493,7 @@ func @Counter.__loop {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.cmp x0, 0
-    arm64.b.eq stopping
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.storeBaseDispReg.word64 [x20 + 72], x0
-  stopping:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_close
-  drain:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.movRegReg x1, x0
-    arm64.cmp x1, 0
-    arm64.b.ne abandon
+    arm64.b.ne dispatch
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -36067,10 +36504,16 @@ func @Counter.__loop {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  abandon:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_abandon
-    arm64.b drain
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    arm64.bl __mbox_unknown_tag
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -36083,27 +36526,6 @@ func @Counter.__loop {
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
     arm64.b serve
-}
-
-func @Counter.__abandon {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-    arm64.b abandondone
-  next:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-  abandondone:
-    arm64.epilogue 16
-    arm64.ret
 }
 
 func @__gt_ready {
@@ -36210,21 +36632,23 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x19, 1024
   __il_body:
-    arm64.movImm x19, 0
+    arm64.movImm x20, 0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+    arm64.storeBaseDispReg.word64 [x1 + 0], x20
   __il_cont:
     arm64.leaFuncAddr x0, Counter.__loop
-    arm64.leaFuncAddr x2, Counter.__abandon
-    arm64.movImm x3, 24
+    arm64.movImm x2, 24
+    arm64.movRegReg x3, x19
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
@@ -36237,20 +36661,27 @@ func @main {
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
     arm64.bl __mbox_staging
-    arm64.movRegReg x1, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x19
-    arm64.storeBaseDispReg.word64 [x1 + 16], x21
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x19
+    arm64.storeBaseDispReg.word64 [x22 + 16], x21
     arm64.movImm x2, 24
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.movRegReg x1, x22
     arm64.bl __mbox_send
+    arm64.cmp x0, 0
+    arm64.b.ne sendrefused
+  sendaccepted:
     arm64.movRegReg x0, x21
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
     arm64.b.eq tryok
+  critsplit:
+    arm64.movRegReg x0, x9
   tryerr:
     arm64.movImm x19, 0
+    arm64.bl __mm_decref
     arm64.b trycont
   tryok:
     arm64.movRegReg x19, x0
@@ -36264,19 +36695,42 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_handle_drop_box
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
+  sendrefused:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mbox_reply_refused
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.movImm x1, 16
+    arm64.movImm x2, 0
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.add x0, x0, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.movRegReg x0, x1
+    arm64.b tryerr
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-spawn-readies-its-green-thread-with-no-scheduler-lock.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 
@@ -36291,22 +36745,7 @@ func @Counter.__loop {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.cmp x0, 0
-    arm64.b.eq stopping
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.storeBaseDispReg.word64 [x20 + 72], x0
-  stopping:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_close
-  drain:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.movRegReg x1, x0
-    arm64.cmp x1, 0
-    arm64.b.ne abandon
+    arm64.b.ne dispatch
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -36317,10 +36756,16 @@ func @Counter.__loop {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  abandon:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_abandon
-    arm64.b drain
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    arm64.bl __mbox_unknown_tag
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -36333,27 +36778,6 @@ func @Counter.__loop {
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
     arm64.b serve
-}
-
-func @Counter.__abandon {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-    arm64.b abandondone
-  next:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-  abandondone:
-    arm64.epilogue 16
-    arm64.ret
 }
 
 func @__gt_ready {
@@ -36522,18 +36946,20 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 48
+    x64.movRegImm32 rbx, 1024
   __il_body:
-    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
   __il_cont:
     x64.leaRegFunc rcx, [rip + Counter.__loop]
-    x64.leaRegFunc rax, [rip + Counter.__abandon]
-    x64.movRegImm32 r9, 24
+    x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
+    x64.movRegReg r9, rbx
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
@@ -36546,20 +36972,27 @@ func @main {
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
     x64.callDirect __mbox_staging
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.storeBaseDispReg.word64 [r14 + 16], r13
     x64.movRegImm32 rax, 24
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r8
+    x64.movRegReg rdx, r14
     x64.callDirect __mbox_send
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, sendrefused
+  sendaccepted:
     x64.movRegReg rcx, r13
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
+  critsplit:
+    x64.movRegReg rcx, r10
   tryerr:
     x64.movRegImm32 rbx, 0
+    x64.callDirect __mm_decref
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
@@ -36574,17 +37007,37 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_handle_drop_box
     x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  sendrefused:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mbox_reply_refused
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.storeSlotReg slot0, r8
+    x64.callDirect __mm_alloc
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot r8, slot0
+    x64.leaRegRegImm32 rax, r8, -1
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp tryerr
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-completion-hands-its-awaiter-over-under-the-promises-own-lock.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -36605,21 +37058,7 @@ func @Counter.__loop {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, stopping
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.storeBaseDispReg.word64 [r12 + 72], rax
-  stopping:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_close
-  drain:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, abandon
+    x64.jcc notEqual, dispatch
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -36631,11 +37070,17 @@ func @Counter.__loop {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  abandon:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
-    x64.callDirect __mbox_abandon
-    x64.jmp drain
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    x64.callDirect __mbox_unknown_tag
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -36646,30 +37091,6 @@ func @Counter.__loop {
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
     x64.jmp serve
-}
-
-func @Counter.__abandon {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jumpTable rax, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-    x64.jmp abandondone
-  next:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-  abandondone:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
 }
 
 func @__gt_runner_done {
@@ -37394,18 +37815,20 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 48
+    x64.movRegImm32 rbx, 1024
   __il_body:
-    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
   __il_cont:
     x64.leaRegFunc rcx, [rip + Counter.__loop]
-    x64.leaRegFunc rax, [rip + Counter.__abandon]
-    x64.movRegImm32 r9, 24
+    x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
+    x64.movRegReg r9, rbx
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
@@ -37418,20 +37841,27 @@ func @main {
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
     x64.callDirect __mbox_staging
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.storeBaseDispReg.word64 [r14 + 16], r13
     x64.movRegImm32 rax, 24
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r8
+    x64.movRegReg rdx, r14
     x64.callDirect __mbox_send
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, sendrefused
+  sendaccepted:
     x64.movRegReg rcx, r13
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
+  critsplit:
+    x64.movRegReg rcx, r10
   tryerr:
     x64.movRegImm32 rbx, 0
+    x64.callDirect __mm_decref
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
@@ -37445,17 +37875,37 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_handle_drop_box
     x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  sendrefused:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mbox_reply_refused
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.storeSlotReg slot0, r8
+    x64.callDirect __mm_alloc
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot r8, slot0
+    x64.leaRegRegImm32 rax, r8, -1
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp tryerr
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-completion-hands-its-awaiter-over-under-the-promises-own-lock.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -37476,21 +37926,7 @@ func @Counter.__loop {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, stopping
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.storeBaseDispReg.word64 [r12 + 72], rax
-  stopping:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_close
-  drain:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, abandon
+    x64.jcc notEqual, dispatch
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -37502,11 +37938,17 @@ func @Counter.__loop {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  abandon:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
-    x64.callDirect __mbox_abandon
-    x64.jmp drain
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    x64.callDirect __mbox_unknown_tag
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -37517,30 +37959,6 @@ func @Counter.__loop {
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
     x64.jmp serve
-}
-
-func @Counter.__abandon {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jumpTable rax, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-    x64.jmp abandondone
-  next:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-  abandondone:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
 }
 
 func @__gt_runner_done {
@@ -38257,21 +38675,23 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x19, 1024
   __il_body:
-    arm64.movImm x19, 0
+    arm64.movImm x20, 0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+    arm64.storeBaseDispReg.word64 [x1 + 0], x20
   __il_cont:
     arm64.leaFuncAddr x0, Counter.__loop
-    arm64.leaFuncAddr x2, Counter.__abandon
-    arm64.movImm x3, 24
+    arm64.movImm x2, 24
+    arm64.movRegReg x3, x19
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
@@ -38284,20 +38704,27 @@ func @main {
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
     arm64.bl __mbox_staging
-    arm64.movRegReg x1, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x19
-    arm64.storeBaseDispReg.word64 [x1 + 16], x21
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x19
+    arm64.storeBaseDispReg.word64 [x22 + 16], x21
     arm64.movImm x2, 24
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.movRegReg x1, x22
     arm64.bl __mbox_send
+    arm64.cmp x0, 0
+    arm64.b.ne sendrefused
+  sendaccepted:
     arm64.movRegReg x0, x21
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
     arm64.b.eq tryok
+  critsplit:
+    arm64.movRegReg x0, x9
   tryerr:
     arm64.movImm x19, 0
+    arm64.bl __mm_decref
     arm64.b trycont
   tryok:
     arm64.movRegReg x19, x0
@@ -38311,19 +38738,42 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_handle_drop_box
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
+  sendrefused:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mbox_reply_refused
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.movImm x1, 16
+    arm64.movImm x2, 0
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.add x0, x0, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.movRegReg x0, x1
+    arm64.b tryerr
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-completion-hands-its-awaiter-over-under-the-promises-own-lock.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 
@@ -38338,22 +38788,7 @@ func @Counter.__loop {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.cmp x0, 0
-    arm64.b.eq stopping
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.storeBaseDispReg.word64 [x20 + 72], x0
-  stopping:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_close
-  drain:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.movRegReg x1, x0
-    arm64.cmp x1, 0
-    arm64.b.ne abandon
+    arm64.b.ne dispatch
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -38364,10 +38799,16 @@ func @Counter.__loop {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  abandon:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_abandon
-    arm64.b drain
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    arm64.bl __mbox_unknown_tag
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -38380,27 +38821,6 @@ func @Counter.__loop {
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
     arm64.b serve
-}
-
-func @Counter.__abandon {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-    arm64.b abandondone
-  next:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-  abandondone:
-    arm64.epilogue 16
-    arm64.ret
 }
 
 func @__gt_runner_done {
@@ -39182,21 +39602,23 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x19, 1024
   __il_body:
-    arm64.movImm x19, 0
+    arm64.movImm x20, 0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+    arm64.storeBaseDispReg.word64 [x1 + 0], x20
   __il_cont:
     arm64.leaFuncAddr x0, Counter.__loop
-    arm64.leaFuncAddr x2, Counter.__abandon
-    arm64.movImm x3, 24
+    arm64.movImm x2, 24
+    arm64.movRegReg x3, x19
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
@@ -39209,20 +39631,27 @@ func @main {
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
     arm64.bl __mbox_staging
-    arm64.movRegReg x1, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x19
-    arm64.storeBaseDispReg.word64 [x1 + 16], x21
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x19
+    arm64.storeBaseDispReg.word64 [x22 + 16], x21
     arm64.movImm x2, 24
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.movRegReg x1, x22
     arm64.bl __mbox_send
+    arm64.cmp x0, 0
+    arm64.b.ne sendrefused
+  sendaccepted:
     arm64.movRegReg x0, x21
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
     arm64.b.eq tryok
+  critsplit:
+    arm64.movRegReg x0, x9
   tryerr:
     arm64.movImm x19, 0
+    arm64.bl __mm_decref
     arm64.b trycont
   tryok:
     arm64.movRegReg x19, x0
@@ -39236,19 +39665,42 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_handle_drop_box
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
+  sendrefused:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mbox_reply_refused
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.movImm x1, 16
+    arm64.movImm x2, 0
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.add x0, x0, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.movRegReg x0, x1
+    arm64.b tryerr
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-completion-hands-its-awaiter-over-under-the-promises-own-lock.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 
@@ -39263,22 +39715,7 @@ func @Counter.__loop {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.cmp x0, 0
-    arm64.b.eq stopping
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.storeBaseDispReg.word64 [x20 + 72], x0
-  stopping:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_close
-  drain:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.movRegReg x1, x0
-    arm64.cmp x1, 0
-    arm64.b.ne abandon
+    arm64.b.ne dispatch
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -39289,10 +39726,16 @@ func @Counter.__loop {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  abandon:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_abandon
-    arm64.b drain
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    arm64.bl __mbox_unknown_tag
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -39305,27 +39748,6 @@ func @Counter.__loop {
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
     arm64.b serve
-}
-
-func @Counter.__abandon {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-    arm64.b abandondone
-  next:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-  abandondone:
-    arm64.epilogue 16
-    arm64.ret
 }
 
 func @__gt_runner_done {
@@ -40184,18 +40606,20 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 48
+    x64.movRegImm32 rbx, 1024
   __il_body:
-    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
   __il_cont:
     x64.leaRegFunc rcx, [rip + Counter.__loop]
-    x64.leaRegFunc rax, [rip + Counter.__abandon]
-    x64.movRegImm32 r9, 24
+    x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
+    x64.movRegReg r9, rbx
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
@@ -40208,20 +40632,27 @@ func @main {
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
     x64.callDirect __mbox_staging
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.storeBaseDispReg.word64 [r14 + 16], r13
     x64.movRegImm32 rax, 24
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r8
+    x64.movRegReg rdx, r14
     x64.callDirect __mbox_send
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, sendrefused
+  sendaccepted:
     x64.movRegReg rcx, r13
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
+  critsplit:
+    x64.movRegReg rcx, r10
   tryerr:
     x64.movRegImm32 rbx, 0
+    x64.callDirect __mm_decref
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
@@ -40236,17 +40667,37 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_handle_drop_box
     x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  sendrefused:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mbox_reply_refused
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.storeSlotReg slot0, r8
+    x64.callDirect __mm_alloc
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot r8, slot0
+    x64.leaRegRegImm32 rax, r8, -1
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp tryerr
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-record-refill-takes-the-free-lists-own-lock.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -40267,21 +40718,7 @@ func @Counter.__loop {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, stopping
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.storeBaseDispReg.word64 [r12 + 72], rax
-  stopping:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_close
-  drain:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, abandon
+    x64.jcc notEqual, dispatch
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -40293,11 +40730,17 @@ func @Counter.__loop {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  abandon:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
-    x64.callDirect __mbox_abandon
-    x64.jmp drain
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    x64.callDirect __mbox_unknown_tag
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -40308,30 +40751,6 @@ func @Counter.__loop {
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
     x64.jmp serve
-}
-
-func @Counter.__abandon {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jumpTable rax, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-    x64.jmp abandondone
-  next:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-  abandondone:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
 }
 
 func @__gt_free_get {
@@ -41581,18 +42000,20 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 48
+    x64.movRegImm32 rbx, 1024
   __il_body:
-    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
   __il_cont:
     x64.leaRegFunc rcx, [rip + Counter.__loop]
-    x64.leaRegFunc rax, [rip + Counter.__abandon]
-    x64.movRegImm32 r9, 24
+    x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
+    x64.movRegReg r9, rbx
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
@@ -41605,20 +42026,27 @@ func @main {
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
     x64.callDirect __mbox_staging
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.storeBaseDispReg.word64 [r14 + 16], r13
     x64.movRegImm32 rax, 24
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r8
+    x64.movRegReg rdx, r14
     x64.callDirect __mbox_send
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, sendrefused
+  sendaccepted:
     x64.movRegReg rcx, r13
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
+  critsplit:
+    x64.movRegReg rcx, r10
   tryerr:
     x64.movRegImm32 rbx, 0
+    x64.callDirect __mm_decref
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
@@ -41632,17 +42060,37 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_handle_drop_box
     x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  sendrefused:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mbox_reply_refused
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.storeSlotReg slot0, r8
+    x64.callDirect __mm_alloc
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot r8, slot0
+    x64.leaRegRegImm32 rax, r8, -1
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp tryerr
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-record-refill-takes-the-free-lists-own-lock.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -41663,21 +42111,7 @@ func @Counter.__loop {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, stopping
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.storeBaseDispReg.word64 [r12 + 72], rax
-  stopping:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_close
-  drain:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, abandon
+    x64.jcc notEqual, dispatch
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -41689,11 +42123,17 @@ func @Counter.__loop {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  abandon:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
-    x64.callDirect __mbox_abandon
-    x64.jmp drain
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    x64.callDirect __mbox_unknown_tag
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -41704,30 +42144,6 @@ func @Counter.__loop {
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
     x64.jmp serve
-}
-
-func @Counter.__abandon {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jumpTable rax, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-    x64.jmp abandondone
-  next:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-  abandondone:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
 }
 
 func @__gt_free_get {
@@ -42971,21 +43387,23 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x19, 1024
   __il_body:
-    arm64.movImm x19, 0
+    arm64.movImm x20, 0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+    arm64.storeBaseDispReg.word64 [x1 + 0], x20
   __il_cont:
     arm64.leaFuncAddr x0, Counter.__loop
-    arm64.leaFuncAddr x2, Counter.__abandon
-    arm64.movImm x3, 24
+    arm64.movImm x2, 24
+    arm64.movRegReg x3, x19
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
@@ -42998,20 +43416,27 @@ func @main {
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
     arm64.bl __mbox_staging
-    arm64.movRegReg x1, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x19
-    arm64.storeBaseDispReg.word64 [x1 + 16], x21
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x19
+    arm64.storeBaseDispReg.word64 [x22 + 16], x21
     arm64.movImm x2, 24
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.movRegReg x1, x22
     arm64.bl __mbox_send
+    arm64.cmp x0, 0
+    arm64.b.ne sendrefused
+  sendaccepted:
     arm64.movRegReg x0, x21
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
     arm64.b.eq tryok
+  critsplit:
+    arm64.movRegReg x0, x9
   tryerr:
     arm64.movImm x19, 0
+    arm64.bl __mm_decref
     arm64.b trycont
   tryok:
     arm64.movRegReg x19, x0
@@ -43025,19 +43450,42 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_handle_drop_box
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
+  sendrefused:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mbox_reply_refused
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.movImm x1, 16
+    arm64.movImm x2, 0
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.add x0, x0, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.movRegReg x0, x1
+    arm64.b tryerr
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-record-refill-takes-the-free-lists-own-lock.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 
@@ -43052,22 +43500,7 @@ func @Counter.__loop {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.cmp x0, 0
-    arm64.b.eq stopping
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.storeBaseDispReg.word64 [x20 + 72], x0
-  stopping:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_close
-  drain:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.movRegReg x1, x0
-    arm64.cmp x1, 0
-    arm64.b.ne abandon
+    arm64.b.ne dispatch
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -43078,10 +43511,16 @@ func @Counter.__loop {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  abandon:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_abandon
-    arm64.b drain
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    arm64.bl __mbox_unknown_tag
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -43094,27 +43533,6 @@ func @Counter.__loop {
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
     arm64.b serve
-}
-
-func @Counter.__abandon {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-    arm64.b abandondone
-  next:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-  abandondone:
-    arm64.epilogue 16
-    arm64.ret
 }
 
 func @__gt_free_get {
@@ -44494,21 +44912,23 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x19, 1024
   __il_body:
-    arm64.movImm x19, 0
+    arm64.movImm x20, 0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+    arm64.storeBaseDispReg.word64 [x1 + 0], x20
   __il_cont:
     arm64.leaFuncAddr x0, Counter.__loop
-    arm64.leaFuncAddr x2, Counter.__abandon
-    arm64.movImm x3, 24
+    arm64.movImm x2, 24
+    arm64.movRegReg x3, x19
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
@@ -44521,20 +44941,27 @@ func @main {
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
     arm64.bl __mbox_staging
-    arm64.movRegReg x1, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x19
-    arm64.storeBaseDispReg.word64 [x1 + 16], x21
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x19
+    arm64.storeBaseDispReg.word64 [x22 + 16], x21
     arm64.movImm x2, 24
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.movRegReg x1, x22
     arm64.bl __mbox_send
+    arm64.cmp x0, 0
+    arm64.b.ne sendrefused
+  sendaccepted:
     arm64.movRegReg x0, x21
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
     arm64.b.eq tryok
+  critsplit:
+    arm64.movRegReg x0, x9
   tryerr:
     arm64.movImm x19, 0
+    arm64.bl __mm_decref
     arm64.b trycont
   tryok:
     arm64.movRegReg x19, x0
@@ -44548,19 +44975,42 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_handle_drop_box
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
+  sendrefused:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mbox_reply_refused
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.movImm x1, 16
+    arm64.movImm x2, 0
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.add x0, x0, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.movRegReg x0, x1
+    arm64.b tryerr
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-record-refill-takes-the-free-lists-own-lock.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 
@@ -44575,22 +45025,7 @@ func @Counter.__loop {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.cmp x0, 0
-    arm64.b.eq stopping
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.storeBaseDispReg.word64 [x20 + 72], x0
-  stopping:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_close
-  drain:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.movRegReg x1, x0
-    arm64.cmp x1, 0
-    arm64.b.ne abandon
+    arm64.b.ne dispatch
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -44601,10 +45036,16 @@ func @Counter.__loop {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  abandon:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_abandon
-    arm64.b drain
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    arm64.bl __mbox_unknown_tag
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -44617,27 +45058,6 @@ func @Counter.__loop {
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
     arm64.b serve
-}
-
-func @Counter.__abandon {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-    arm64.b abandondone
-  next:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-  abandondone:
-    arm64.epilogue 16
-    arm64.ret
 }
 
 func @__gt_free_get {
@@ -46082,18 +46502,20 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 48
+    x64.movRegImm32 rbx, 1024
   __il_body:
-    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
   __il_cont:
     x64.leaRegFunc rcx, [rip + Counter.__loop]
-    x64.leaRegFunc rax, [rip + Counter.__abandon]
-    x64.movRegImm32 r9, 24
+    x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
+    x64.movRegReg r9, rbx
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
@@ -46106,20 +46528,27 @@ func @main {
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
     x64.callDirect __mbox_staging
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.storeBaseDispReg.word64 [r14 + 16], r13
     x64.movRegImm32 rax, 24
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r8
+    x64.movRegReg rdx, r14
     x64.callDirect __mbox_send
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, sendrefused
+  sendaccepted:
     x64.movRegReg rcx, r13
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
+  critsplit:
+    x64.movRegReg rcx, r10
   tryerr:
     x64.movRegImm32 rbx, 0
+    x64.callDirect __mm_decref
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
@@ -46134,17 +46563,37 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_handle_drop_box
     x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  sendrefused:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mbox_reply_refused
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.storeSlotReg slot0, r8
+    x64.callDirect __mm_alloc
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot r8, slot0
+    x64.leaRegRegImm32 rax, r8, -1
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp tryerr
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-runtime-lock-enter-is-an-atomic-on-its-word-with-no-call.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -46165,21 +46614,7 @@ func @Counter.__loop {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, stopping
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.storeBaseDispReg.word64 [r12 + 72], rax
-  stopping:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_close
-  drain:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, abandon
+    x64.jcc notEqual, dispatch
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -46191,11 +46626,17 @@ func @Counter.__loop {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  abandon:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
-    x64.callDirect __mbox_abandon
-    x64.jmp drain
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    x64.callDirect __mbox_unknown_tag
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -46206,30 +46647,6 @@ func @Counter.__loop {
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
     x64.jmp serve
-}
-
-func @Counter.__abandon {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jumpTable rax, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-    x64.jmp abandondone
-  next:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-  abandondone:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
 }
 
 func @__mbox_close {
@@ -46457,18 +46874,20 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 48
+    x64.movRegImm32 rbx, 1024
   __il_body:
-    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
   __il_cont:
     x64.leaRegFunc rcx, [rip + Counter.__loop]
-    x64.leaRegFunc rax, [rip + Counter.__abandon]
-    x64.movRegImm32 r9, 24
+    x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
+    x64.movRegReg r9, rbx
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
@@ -46481,20 +46900,27 @@ func @main {
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
     x64.callDirect __mbox_staging
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.storeBaseDispReg.word64 [r14 + 16], r13
     x64.movRegImm32 rax, 24
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r8
+    x64.movRegReg rdx, r14
     x64.callDirect __mbox_send
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, sendrefused
+  sendaccepted:
     x64.movRegReg rcx, r13
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
+  critsplit:
+    x64.movRegReg rcx, r10
   tryerr:
     x64.movRegImm32 rbx, 0
+    x64.callDirect __mm_decref
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
@@ -46508,17 +46934,37 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_handle_drop_box
     x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  sendrefused:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mbox_reply_refused
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.storeSlotReg slot0, r8
+    x64.callDirect __mm_alloc
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot r8, slot0
+    x64.leaRegRegImm32 rax, r8, -1
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp tryerr
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-runtime-lock-enter-is-an-atomic-on-its-word-with-no-call.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -46539,21 +46985,7 @@ func @Counter.__loop {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, stopping
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.storeBaseDispReg.word64 [r12 + 72], rax
-  stopping:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_close
-  drain:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, abandon
+    x64.jcc notEqual, dispatch
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -46565,11 +46997,17 @@ func @Counter.__loop {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  abandon:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
-    x64.callDirect __mbox_abandon
-    x64.jmp drain
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    x64.callDirect __mbox_unknown_tag
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -46580,30 +47018,6 @@ func @Counter.__loop {
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
     x64.jmp serve
-}
-
-func @Counter.__abandon {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jumpTable rax, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-    x64.jmp abandondone
-  next:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-  abandondone:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
 }
 
 func @__mbox_close {
@@ -46823,21 +47237,23 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x19, 1024
   __il_body:
-    arm64.movImm x19, 0
+    arm64.movImm x20, 0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+    arm64.storeBaseDispReg.word64 [x1 + 0], x20
   __il_cont:
     arm64.leaFuncAddr x0, Counter.__loop
-    arm64.leaFuncAddr x2, Counter.__abandon
-    arm64.movImm x3, 24
+    arm64.movImm x2, 24
+    arm64.movRegReg x3, x19
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
@@ -46850,20 +47266,27 @@ func @main {
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
     arm64.bl __mbox_staging
-    arm64.movRegReg x1, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x19
-    arm64.storeBaseDispReg.word64 [x1 + 16], x21
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x19
+    arm64.storeBaseDispReg.word64 [x22 + 16], x21
     arm64.movImm x2, 24
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.movRegReg x1, x22
     arm64.bl __mbox_send
+    arm64.cmp x0, 0
+    arm64.b.ne sendrefused
+  sendaccepted:
     arm64.movRegReg x0, x21
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
     arm64.b.eq tryok
+  critsplit:
+    arm64.movRegReg x0, x9
   tryerr:
     arm64.movImm x19, 0
+    arm64.bl __mm_decref
     arm64.b trycont
   tryok:
     arm64.movRegReg x19, x0
@@ -46877,19 +47300,42 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_handle_drop_box
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
+  sendrefused:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mbox_reply_refused
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.movImm x1, 16
+    arm64.movImm x2, 0
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.add x0, x0, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.movRegReg x0, x1
+    arm64.b tryerr
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-runtime-lock-enter-is-an-atomic-on-its-word-with-no-call.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 
@@ -46904,22 +47350,7 @@ func @Counter.__loop {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.cmp x0, 0
-    arm64.b.eq stopping
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.storeBaseDispReg.word64 [x20 + 72], x0
-  stopping:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_close
-  drain:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.movRegReg x1, x0
-    arm64.cmp x1, 0
-    arm64.b.ne abandon
+    arm64.b.ne dispatch
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -46930,10 +47361,16 @@ func @Counter.__loop {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  abandon:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_abandon
-    arm64.b drain
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    arm64.bl __mbox_unknown_tag
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -46946,27 +47383,6 @@ func @Counter.__loop {
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
     arm64.b serve
-}
-
-func @Counter.__abandon {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-    arm64.b abandondone
-  next:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-  abandondone:
-    arm64.epilogue 16
-    arm64.ret
 }
 
 func @__mbox_close {
@@ -47210,21 +47626,23 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x19, 1024
   __il_body:
-    arm64.movImm x19, 0
+    arm64.movImm x20, 0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+    arm64.storeBaseDispReg.word64 [x1 + 0], x20
   __il_cont:
     arm64.leaFuncAddr x0, Counter.__loop
-    arm64.leaFuncAddr x2, Counter.__abandon
-    arm64.movImm x3, 24
+    arm64.movImm x2, 24
+    arm64.movRegReg x3, x19
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
@@ -47237,20 +47655,27 @@ func @main {
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
     arm64.bl __mbox_staging
-    arm64.movRegReg x1, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x19
-    arm64.storeBaseDispReg.word64 [x1 + 16], x21
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x19
+    arm64.storeBaseDispReg.word64 [x22 + 16], x21
     arm64.movImm x2, 24
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.movRegReg x1, x22
     arm64.bl __mbox_send
+    arm64.cmp x0, 0
+    arm64.b.ne sendrefused
+  sendaccepted:
     arm64.movRegReg x0, x21
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
     arm64.b.eq tryok
+  critsplit:
+    arm64.movRegReg x0, x9
   tryerr:
     arm64.movImm x19, 0
+    arm64.bl __mm_decref
     arm64.b trycont
   tryok:
     arm64.movRegReg x19, x0
@@ -47264,19 +47689,42 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_handle_drop_box
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
+  sendrefused:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mbox_reply_refused
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.movImm x1, 16
+    arm64.movImm x2, 0
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.add x0, x0, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.movRegReg x0, x1
+    arm64.b tryerr
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-runtime-lock-enter-is-an-atomic-on-its-word-with-no-call.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 
@@ -47291,22 +47739,7 @@ func @Counter.__loop {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.cmp x0, 0
-    arm64.b.eq stopping
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.storeBaseDispReg.word64 [x20 + 72], x0
-  stopping:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_close
-  drain:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.movRegReg x1, x0
-    arm64.cmp x1, 0
-    arm64.b.ne abandon
+    arm64.b.ne dispatch
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -47317,10 +47750,16 @@ func @Counter.__loop {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  abandon:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_abandon
-    arm64.b drain
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    arm64.bl __mbox_unknown_tag
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -47333,27 +47772,6 @@ func @Counter.__loop {
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
     arm64.b serve
-}
-
-func @Counter.__abandon {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-    arm64.b abandondone
-  next:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-  abandondone:
-    arm64.epilogue 16
-    arm64.ret
 }
 
 func @__mbox_close {
@@ -47650,18 +48068,20 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 48
+    x64.movRegImm32 rbx, 1024
   __il_body:
-    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
   __il_cont:
     x64.leaRegFunc rcx, [rip + Counter.__loop]
-    x64.leaRegFunc rax, [rip + Counter.__abandon]
-    x64.movRegImm32 r9, 24
+    x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
+    x64.movRegReg r9, rbx
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
@@ -47674,20 +48094,27 @@ func @main {
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
     x64.callDirect __mbox_staging
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.storeBaseDispReg.word64 [r14 + 16], r13
     x64.movRegImm32 rax, 24
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r8
+    x64.movRegReg rdx, r14
     x64.callDirect __mbox_send
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, sendrefused
+  sendaccepted:
     x64.movRegReg rcx, r13
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
+  critsplit:
+    x64.movRegReg rcx, r10
   tryerr:
     x64.movRegImm32 rbx, 0
+    x64.callDirect __mm_decref
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
@@ -47702,17 +48129,37 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_handle_drop_box
     x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  sendrefused:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mbox_reply_refused
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.storeSlotReg slot0, r8
+    x64.callDirect __mm_alloc
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot r8, slot0
+    x64.leaRegRegImm32 rax, r8, -1
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp tryerr
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-mailbox-lock-is-a-zero-word-with-no-init-and-no-destroy.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -47733,21 +48180,7 @@ func @Counter.__loop {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, stopping
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.storeBaseDispReg.word64 [r12 + 72], rax
-  stopping:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_close
-  drain:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, abandon
+    x64.jcc notEqual, dispatch
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -47759,11 +48192,17 @@ func @Counter.__loop {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  abandon:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
-    x64.callDirect __mbox_abandon
-    x64.jmp drain
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    x64.callDirect __mbox_unknown_tag
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -47774,30 +48213,6 @@ func @Counter.__loop {
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
     x64.jmp serve
-}
-
-func @Counter.__abandon {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jumpTable rax, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-    x64.jmp abandondone
-  next:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-  abandondone:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
 }
 
 func @__svc_spawn {
@@ -47814,15 +48229,32 @@ func @__svc_spawn {
     x64.movRegReg r12, rdx
     x64.movRegReg r13, rax
     x64.movRegReg r14, r9
-    x64.leaRegRegImm32 rcx, r14, 96
+    x64.leaRegRegImm32 rcx, r13, 96
     x64.callDirect __slab_alloc
     x64.movRegReg r15, r8
-    x64.storeBaseDispReg.word64 [r15 + 80], r14
+    x64.storeBaseDispReg.word64 [r15 + 64], r13
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [r15 + 48], rax
     x64.movRegImm32 rax, 2
     x64.storeBaseDispReg.word64 [r15 + 56], rax
-    x64.storeBaseDispReg.word64 [r15 + 64], r13
+    x64.storeBaseDispReg.word64 [r15 + 72], r14
+    x64.movRegImm32 rax, 1
+    x64.cmpRegImm32 r14, 1
+    x64.setccReg greater, rcx
+    x64.shlRegCl rax, rax
+    x64.cmpRegReg r14, rax
+    x64.setccReg greater, rdx
+    x64.movRegReg rcx, rdx
+    x64.shlRegCl rax, rax
+    x64.cmpRegReg r14, rax
+    x64.setccReg greater, rdx
+    x64.movRegReg rcx, rdx
+    x64.shlRegCl rax, rax
+    x64.cmpRegReg r14, rax
+    x64.setccReg greater, rdx
+    x64.movRegReg rcx, rdx
+    x64.shlRegCl rax, rax
+    x64.storeBaseDispReg.word64 [r15 + 80], rax
     x64.movRegReg rcx, rbx
     x64.callDirect __gt_spawn_green
     x64.storeBaseDispReg.word64 [r8 + 208], r12
@@ -47889,14 +48321,12 @@ func @__mbox_service_exit {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.pushReg r13
-    x64.prologue 40
+    x64.prologue 32
     x64.movRegReg rbx, rcx
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.mov rax, gs:[rax]
     x64.loadRegBaseDisp.word64 r12, [rax + 8]
-    x64.loadRegBaseDisp.word64 r13, [rbx + 72]
     x64.leaRegRegImm32 rax, rbx, 56
     x64.movRegImm rcx, 18446744073709551615
     x64.lock xadd [rax], rcx <- rcx
@@ -47912,19 +48342,10 @@ func @__mbox_service_exit {
     x64.movRegReg rcx, rbx
     x64.callDirect __slab_free
   exitdone:
-    x64.movRegImm32 rax, 0
-    x64.cmpRegImm32 r13, 0
-    x64.jcc equal, exitownerdone
-  exitanswershutdown:
-    x64.movRegReg rcx, r13
-    x64.movRegReg rdx, rax
-    x64.callDirect __gt_cell_complete
-  exitownerdone:
     x64.movRegReg rcx, r12
     x64.callDirect __gt_owner_done
     x64.movRegReg rax, r8
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -48016,18 +48437,20 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 48
+    x64.movRegImm32 rbx, 1024
   __il_body:
-    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
   __il_cont:
     x64.leaRegFunc rcx, [rip + Counter.__loop]
-    x64.leaRegFunc rax, [rip + Counter.__abandon]
-    x64.movRegImm32 r9, 24
+    x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
+    x64.movRegReg r9, rbx
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
@@ -48040,20 +48463,27 @@ func @main {
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
     x64.callDirect __mbox_staging
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.storeBaseDispReg.word64 [r14 + 16], r13
     x64.movRegImm32 rax, 24
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r8
+    x64.movRegReg rdx, r14
     x64.callDirect __mbox_send
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, sendrefused
+  sendaccepted:
     x64.movRegReg rcx, r13
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
+  critsplit:
+    x64.movRegReg rcx, r10
   tryerr:
     x64.movRegImm32 rbx, 0
+    x64.callDirect __mm_decref
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
@@ -48067,17 +48497,37 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_handle_drop_box
     x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  sendrefused:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mbox_reply_refused
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.storeSlotReg slot0, r8
+    x64.callDirect __mm_alloc
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot r8, slot0
+    x64.leaRegRegImm32 rax, r8, -1
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp tryerr
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-mailbox-lock-is-a-zero-word-with-no-init-and-no-destroy.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -48098,21 +48548,7 @@ func @Counter.__loop {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, stopping
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.storeBaseDispReg.word64 [r12 + 72], rax
-  stopping:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_close
-  drain:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, abandon
+    x64.jcc notEqual, dispatch
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -48124,11 +48560,17 @@ func @Counter.__loop {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  abandon:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
-    x64.callDirect __mbox_abandon
-    x64.jmp drain
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    x64.callDirect __mbox_unknown_tag
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -48139,30 +48581,6 @@ func @Counter.__loop {
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
     x64.jmp serve
-}
-
-func @Counter.__abandon {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jumpTable rax, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-    x64.jmp abandondone
-  next:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-  abandondone:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
 }
 
 func @__svc_spawn {
@@ -48179,15 +48597,32 @@ func @__svc_spawn {
     x64.movRegReg r12, rdx
     x64.movRegReg r13, rax
     x64.movRegReg r14, r9
-    x64.leaRegRegImm32 rcx, r14, 96
+    x64.leaRegRegImm32 rcx, r13, 96
     x64.callDirect __slab_alloc
     x64.movRegReg r15, r8
-    x64.storeBaseDispReg.word64 [r15 + 80], r14
+    x64.storeBaseDispReg.word64 [r15 + 64], r13
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [r15 + 48], rax
     x64.movRegImm32 rax, 2
     x64.storeBaseDispReg.word64 [r15 + 56], rax
-    x64.storeBaseDispReg.word64 [r15 + 64], r13
+    x64.storeBaseDispReg.word64 [r15 + 72], r14
+    x64.movRegImm32 rax, 1
+    x64.cmpRegImm32 r14, 1
+    x64.setccReg greater, rcx
+    x64.shlRegCl rax, rax
+    x64.cmpRegReg r14, rax
+    x64.setccReg greater, rdx
+    x64.movRegReg rcx, rdx
+    x64.shlRegCl rax, rax
+    x64.cmpRegReg r14, rax
+    x64.setccReg greater, rdx
+    x64.movRegReg rcx, rdx
+    x64.shlRegCl rax, rax
+    x64.cmpRegReg r14, rax
+    x64.setccReg greater, rdx
+    x64.movRegReg rcx, rdx
+    x64.shlRegCl rax, rax
+    x64.storeBaseDispReg.word64 [r15 + 80], rax
     x64.movRegReg rcx, rbx
     x64.callDirect __gt_spawn_green
     x64.storeBaseDispReg.word64 [r8 + 208], r12
@@ -48254,14 +48689,12 @@ func @__mbox_service_exit {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.pushReg r13
-    x64.prologue 40
+    x64.prologue 32
     x64.movRegReg rbx, rcx
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.mov rax, gs:[rax]
     x64.loadRegBaseDisp.word64 r12, [rax + 8]
-    x64.loadRegBaseDisp.word64 r13, [rbx + 72]
     x64.leaRegRegImm32 rax, rbx, 56
     x64.movRegImm rcx, 18446744073709551615
     x64.lock xadd [rax], rcx <- rcx
@@ -48277,19 +48710,10 @@ func @__mbox_service_exit {
     x64.movRegReg rcx, rbx
     x64.callDirect __slab_free
   exitdone:
-    x64.movRegImm32 rax, 0
-    x64.cmpRegImm32 r13, 0
-    x64.jcc equal, exitownerdone
-  exitanswershutdown:
-    x64.movRegReg rcx, r13
-    x64.movRegReg rdx, rax
-    x64.callDirect __gt_cell_complete
-  exitownerdone:
     x64.movRegReg rcx, r12
     x64.callDirect __gt_owner_done
     x64.movRegReg rax, r8
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -48373,21 +48797,23 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x19, 1024
   __il_body:
-    arm64.movImm x19, 0
+    arm64.movImm x20, 0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+    arm64.storeBaseDispReg.word64 [x1 + 0], x20
   __il_cont:
     arm64.leaFuncAddr x0, Counter.__loop
-    arm64.leaFuncAddr x2, Counter.__abandon
-    arm64.movImm x3, 24
+    arm64.movImm x2, 24
+    arm64.movRegReg x3, x19
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
@@ -48400,20 +48826,27 @@ func @main {
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
     arm64.bl __mbox_staging
-    arm64.movRegReg x1, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x19
-    arm64.storeBaseDispReg.word64 [x1 + 16], x21
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x19
+    arm64.storeBaseDispReg.word64 [x22 + 16], x21
     arm64.movImm x2, 24
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.movRegReg x1, x22
     arm64.bl __mbox_send
+    arm64.cmp x0, 0
+    arm64.b.ne sendrefused
+  sendaccepted:
     arm64.movRegReg x0, x21
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
     arm64.b.eq tryok
+  critsplit:
+    arm64.movRegReg x0, x9
   tryerr:
     arm64.movImm x19, 0
+    arm64.bl __mm_decref
     arm64.b trycont
   tryok:
     arm64.movRegReg x19, x0
@@ -48427,19 +48860,42 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_handle_drop_box
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
+  sendrefused:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mbox_reply_refused
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.movImm x1, 16
+    arm64.movImm x2, 0
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.add x0, x0, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.movRegReg x0, x1
+    arm64.b tryerr
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-mailbox-lock-is-a-zero-word-with-no-init-and-no-destroy.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 
@@ -48454,22 +48910,7 @@ func @Counter.__loop {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.cmp x0, 0
-    arm64.b.eq stopping
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.storeBaseDispReg.word64 [x20 + 72], x0
-  stopping:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_close
-  drain:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.movRegReg x1, x0
-    arm64.cmp x1, 0
-    arm64.b.ne abandon
+    arm64.b.ne dispatch
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -48480,10 +48921,16 @@ func @Counter.__loop {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  abandon:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_abandon
-    arm64.b drain
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    arm64.bl __mbox_unknown_tag
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -48498,27 +48945,6 @@ func @Counter.__loop {
     arm64.b serve
 }
 
-func @Counter.__abandon {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-    arm64.b abandondone
-  next:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-  abandondone:
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @__svc_spawn {
   entry:
     arm64.prologue 64
@@ -48531,15 +48957,29 @@ func @__svc_spawn {
     arm64.movRegReg x20, x1
     arm64.movRegReg x21, x2
     arm64.movRegReg x22, x3
-    arm64.add x0, x22, 96
+    arm64.add x0, x21, 96
     arm64.bl __slab_alloc
     arm64.movRegReg x23, x0
-    arm64.storeBaseDispReg.word64 [x23 + 80], x22
+    arm64.storeBaseDispReg.word64 [x23 + 64], x21
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x23 + 48], x0
     arm64.movImm x0, 2
     arm64.storeBaseDispReg.word64 [x23 + 56], x0
-    arm64.storeBaseDispReg.word64 [x23 + 64], x21
+    arm64.storeBaseDispReg.word64 [x23 + 72], x22
+    arm64.movImm x0, 1
+    arm64.cmp x22, 1
+    arm64.cset x1, gt
+    arm64.lslv x0, x0, x1
+    arm64.cmp x22, x0
+    arm64.cset x1, gt
+    arm64.lslv x0, x0, x1
+    arm64.cmp x22, x0
+    arm64.cset x1, gt
+    arm64.lslv x0, x0, x1
+    arm64.cmp x22, x0
+    arm64.cset x1, gt
+    arm64.lslv x0, x0, x1
+    arm64.storeBaseDispReg.word64 [x23 + 80], x0
     arm64.movRegReg x0, x19
     arm64.bl __gt_spawn_green
     arm64.storeBaseDispReg.word64 [x0 + 208], x20
@@ -48597,8 +49037,7 @@ func @__mbox_handle_drop_box {
 
 func @__mbox_service_exit {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
+    arm64.prologue 32
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
@@ -48611,7 +49050,6 @@ func @__mbox_service_exit {
     arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
     arm64.mul x0, x16, x17
     arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x21, [x19 + 72]
     arm64.add x0, x19, 56
     arm64.movImm x1, 18446744073709551615
     arm64.arm64AtomicRmw.add x0, [x0], x1
@@ -48627,21 +49065,12 @@ func @__mbox_service_exit {
     arm64.movRegReg x0, x19
     arm64.bl __slab_free
   exitdone:
-    arm64.movImm x2, 0
-    arm64.cmp x21, 0
-    arm64.b.eq exitownerdone
-  exitanswershutdown:
-    arm64.movRegReg x0, x21
-    arm64.movRegReg x1, x2
-    arm64.bl __gt_cell_complete
-  exitownerdone:
     arm64.movRegReg x0, x20
     arm64.bl __gt_owner_done
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.epilogue 32
     arm64.ret
 }
 ```
@@ -48726,21 +49155,23 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x19, 1024
   __il_body:
-    arm64.movImm x19, 0
+    arm64.movImm x20, 0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+    arm64.storeBaseDispReg.word64 [x1 + 0], x20
   __il_cont:
     arm64.leaFuncAddr x0, Counter.__loop
-    arm64.leaFuncAddr x2, Counter.__abandon
-    arm64.movImm x3, 24
+    arm64.movImm x2, 24
+    arm64.movRegReg x3, x19
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
@@ -48753,20 +49184,27 @@ func @main {
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
     arm64.bl __mbox_staging
-    arm64.movRegReg x1, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x19
-    arm64.storeBaseDispReg.word64 [x1 + 16], x21
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x19
+    arm64.storeBaseDispReg.word64 [x22 + 16], x21
     arm64.movImm x2, 24
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.movRegReg x1, x22
     arm64.bl __mbox_send
+    arm64.cmp x0, 0
+    arm64.b.ne sendrefused
+  sendaccepted:
     arm64.movRegReg x0, x21
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
     arm64.b.eq tryok
+  critsplit:
+    arm64.movRegReg x0, x9
   tryerr:
     arm64.movImm x19, 0
+    arm64.bl __mm_decref
     arm64.b trycont
   tryok:
     arm64.movRegReg x19, x0
@@ -48780,19 +49218,42 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_handle_drop_box
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
+  sendrefused:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mbox_reply_refused
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.movImm x1, 16
+    arm64.movImm x2, 0
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.add x0, x0, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.movRegReg x0, x1
+    arm64.b tryerr
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-mailbox-lock-is-a-zero-word-with-no-init-and-no-destroy.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 
@@ -48807,22 +49268,7 @@ func @Counter.__loop {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.cmp x0, 0
-    arm64.b.eq stopping
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.storeBaseDispReg.word64 [x20 + 72], x0
-  stopping:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_close
-  drain:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.movRegReg x1, x0
-    arm64.cmp x1, 0
-    arm64.b.ne abandon
+    arm64.b.ne dispatch
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -48833,10 +49279,16 @@ func @Counter.__loop {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  abandon:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_abandon
-    arm64.b drain
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    arm64.bl __mbox_unknown_tag
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -48851,27 +49303,6 @@ func @Counter.__loop {
     arm64.b serve
 }
 
-func @Counter.__abandon {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-    arm64.b abandondone
-  next:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-  abandondone:
-    arm64.epilogue 16
-    arm64.ret
-}
-
 func @__svc_spawn {
   entry:
     arm64.prologue 64
@@ -48884,15 +49315,29 @@ func @__svc_spawn {
     arm64.movRegReg x20, x1
     arm64.movRegReg x21, x2
     arm64.movRegReg x22, x3
-    arm64.add x0, x22, 96
+    arm64.add x0, x21, 96
     arm64.bl __slab_alloc
     arm64.movRegReg x23, x0
-    arm64.storeBaseDispReg.word64 [x23 + 80], x22
+    arm64.storeBaseDispReg.word64 [x23 + 64], x21
     arm64.movImm x0, 1
     arm64.storeBaseDispReg.word64 [x23 + 48], x0
     arm64.movImm x0, 2
     arm64.storeBaseDispReg.word64 [x23 + 56], x0
-    arm64.storeBaseDispReg.word64 [x23 + 64], x21
+    arm64.storeBaseDispReg.word64 [x23 + 72], x22
+    arm64.movImm x0, 1
+    arm64.cmp x22, 1
+    arm64.cset x1, gt
+    arm64.lslv x0, x0, x1
+    arm64.cmp x22, x0
+    arm64.cset x1, gt
+    arm64.lslv x0, x0, x1
+    arm64.cmp x22, x0
+    arm64.cset x1, gt
+    arm64.lslv x0, x0, x1
+    arm64.cmp x22, x0
+    arm64.cset x1, gt
+    arm64.lslv x0, x0, x1
+    arm64.storeBaseDispReg.word64 [x23 + 80], x0
     arm64.movRegReg x0, x19
     arm64.bl __gt_spawn_green
     arm64.storeBaseDispReg.word64 [x0 + 208], x20
@@ -48950,8 +49395,7 @@ func @__mbox_handle_drop_box {
 
 func @__mbox_service_exit {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
+    arm64.prologue 32
     arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
     arm64.movRegReg x19, x0
@@ -48964,7 +49408,6 @@ func @__mbox_service_exit {
     arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
     arm64.mul x0, x16, x17
     arm64.loadRegBaseDisp.word64 x20, [x0 + 8]
-    arm64.loadRegBaseDisp.word64 x21, [x19 + 72]
     arm64.add x0, x19, 56
     arm64.movImm x1, 18446744073709551615
     arm64.arm64AtomicRmw.add x0, [x0], x1
@@ -48980,21 +49423,12 @@ func @__mbox_service_exit {
     arm64.movRegReg x0, x19
     arm64.bl __slab_free
   exitdone:
-    arm64.movImm x2, 0
-    arm64.cmp x21, 0
-    arm64.b.eq exitownerdone
-  exitanswershutdown:
-    arm64.movRegReg x0, x21
-    arm64.movRegReg x1, x2
-    arm64.bl __gt_cell_complete
-  exitownerdone:
     arm64.movRegReg x0, x20
     arm64.bl __gt_owner_done
     arm64.movRegReg x1, x0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.epilogue 32
     arm64.ret
 }
 ```
@@ -52188,18 +52622,20 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 48
+    x64.movRegImm32 rbx, 1024
   __il_body:
-    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
   __il_cont:
     x64.leaRegFunc rcx, [rip + Counter.__loop]
-    x64.leaRegFunc rax, [rip + Counter.__abandon]
-    x64.movRegImm32 r9, 24
+    x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
+    x64.movRegReg r9, rbx
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
@@ -52212,20 +52648,27 @@ func @main {
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
     x64.callDirect __mbox_staging
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.storeBaseDispReg.word64 [r14 + 16], r13
     x64.movRegImm32 rax, 24
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r8
+    x64.movRegReg rdx, r14
     x64.callDirect __mbox_send
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, sendrefused
+  sendaccepted:
     x64.movRegReg rcx, r13
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
+  critsplit:
+    x64.movRegReg rcx, r10
   tryerr:
     x64.movRegImm32 rbx, 0
+    x64.callDirect __mm_decref
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
@@ -52240,17 +52683,37 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_handle_drop_box
     x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  sendrefused:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mbox_reply_refused
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.storeSlotReg slot0, r8
+    x64.callDirect __mm_alloc
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot r8, slot0
+    x64.leaRegRegImm32 rax, r8, -1
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp tryerr
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-stack-takes-the-pool-lock-only-to-refill-or-release.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -52271,21 +52734,7 @@ func @Counter.__loop {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, stopping
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.storeBaseDispReg.word64 [r12 + 72], rax
-  stopping:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_close
-  drain:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, abandon
+    x64.jcc notEqual, dispatch
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -52297,11 +52746,17 @@ func @Counter.__loop {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  abandon:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
-    x64.callDirect __mbox_abandon
-    x64.jmp drain
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    x64.callDirect __mbox_unknown_tag
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -52312,30 +52767,6 @@ func @Counter.__loop {
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
     x64.jmp serve
-}
-
-func @Counter.__abandon {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jumpTable rax, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-    x64.jmp abandondone
-  next:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-  abandondone:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
 }
 
 func @__gt_stack_alloc {
@@ -53024,18 +53455,20 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 48
+    x64.movRegImm32 rbx, 1024
   __il_body:
-    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
   __il_cont:
     x64.leaRegFunc rcx, [rip + Counter.__loop]
-    x64.leaRegFunc rax, [rip + Counter.__abandon]
-    x64.movRegImm32 r9, 24
+    x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
+    x64.movRegReg r9, rbx
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
@@ -53048,20 +53481,27 @@ func @main {
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
     x64.callDirect __mbox_staging
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.storeBaseDispReg.word64 [r14 + 16], r13
     x64.movRegImm32 rax, 24
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r8
+    x64.movRegReg rdx, r14
     x64.callDirect __mbox_send
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, sendrefused
+  sendaccepted:
     x64.movRegReg rcx, r13
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
+  critsplit:
+    x64.movRegReg rcx, r10
   tryerr:
     x64.movRegImm32 rbx, 0
+    x64.callDirect __mm_decref
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
@@ -53075,17 +53515,37 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_handle_drop_box
     x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  sendrefused:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mbox_reply_refused
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.storeSlotReg slot0, r8
+    x64.callDirect __mm_alloc
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot r8, slot0
+    x64.leaRegRegImm32 rax, r8, -1
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp tryerr
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-stack-takes-the-pool-lock-only-to-refill-or-release.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -53106,21 +53566,7 @@ func @Counter.__loop {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, stopping
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.storeBaseDispReg.word64 [r12 + 72], rax
-  stopping:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_close
-  drain:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, abandon
+    x64.jcc notEqual, dispatch
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -53132,11 +53578,17 @@ func @Counter.__loop {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  abandon:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
-    x64.callDirect __mbox_abandon
-    x64.jmp drain
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    x64.callDirect __mbox_unknown_tag
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -53147,30 +53599,6 @@ func @Counter.__loop {
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
     x64.jmp serve
-}
-
-func @Counter.__abandon {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jumpTable rax, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-    x64.jmp abandondone
-  next:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-  abandondone:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
 }
 
 func @__gt_stack_alloc {
@@ -53856,21 +54284,23 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x19, 1024
   __il_body:
-    arm64.movImm x19, 0
+    arm64.movImm x20, 0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+    arm64.storeBaseDispReg.word64 [x1 + 0], x20
   __il_cont:
     arm64.leaFuncAddr x0, Counter.__loop
-    arm64.leaFuncAddr x2, Counter.__abandon
-    arm64.movImm x3, 24
+    arm64.movImm x2, 24
+    arm64.movRegReg x3, x19
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
@@ -53883,20 +54313,27 @@ func @main {
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
     arm64.bl __mbox_staging
-    arm64.movRegReg x1, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x19
-    arm64.storeBaseDispReg.word64 [x1 + 16], x21
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x19
+    arm64.storeBaseDispReg.word64 [x22 + 16], x21
     arm64.movImm x2, 24
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.movRegReg x1, x22
     arm64.bl __mbox_send
+    arm64.cmp x0, 0
+    arm64.b.ne sendrefused
+  sendaccepted:
     arm64.movRegReg x0, x21
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
     arm64.b.eq tryok
+  critsplit:
+    arm64.movRegReg x0, x9
   tryerr:
     arm64.movImm x19, 0
+    arm64.bl __mm_decref
     arm64.b trycont
   tryok:
     arm64.movRegReg x19, x0
@@ -53910,19 +54347,42 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_handle_drop_box
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
+  sendrefused:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mbox_reply_refused
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.movImm x1, 16
+    arm64.movImm x2, 0
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.add x0, x0, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.movRegReg x0, x1
+    arm64.b tryerr
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-stack-takes-the-pool-lock-only-to-refill-or-release.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 
@@ -53937,22 +54397,7 @@ func @Counter.__loop {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.cmp x0, 0
-    arm64.b.eq stopping
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.storeBaseDispReg.word64 [x20 + 72], x0
-  stopping:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_close
-  drain:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.movRegReg x1, x0
-    arm64.cmp x1, 0
-    arm64.b.ne abandon
+    arm64.b.ne dispatch
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -53963,10 +54408,16 @@ func @Counter.__loop {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  abandon:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_abandon
-    arm64.b drain
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    arm64.bl __mbox_unknown_tag
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -53979,27 +54430,6 @@ func @Counter.__loop {
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
     arm64.b serve
-}
-
-func @Counter.__abandon {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-    arm64.b abandondone
-  next:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-  abandondone:
-    arm64.epilogue 16
-    arm64.ret
 }
 
 func @__gt_stack_alloc {
@@ -54761,21 +55191,23 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x19, 1024
   __il_body:
-    arm64.movImm x19, 0
+    arm64.movImm x20, 0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+    arm64.storeBaseDispReg.word64 [x1 + 0], x20
   __il_cont:
     arm64.leaFuncAddr x0, Counter.__loop
-    arm64.leaFuncAddr x2, Counter.__abandon
-    arm64.movImm x3, 24
+    arm64.movImm x2, 24
+    arm64.movRegReg x3, x19
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
@@ -54788,20 +55220,27 @@ func @main {
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
     arm64.bl __mbox_staging
-    arm64.movRegReg x1, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x19
-    arm64.storeBaseDispReg.word64 [x1 + 16], x21
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x19
+    arm64.storeBaseDispReg.word64 [x22 + 16], x21
     arm64.movImm x2, 24
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.movRegReg x1, x22
     arm64.bl __mbox_send
+    arm64.cmp x0, 0
+    arm64.b.ne sendrefused
+  sendaccepted:
     arm64.movRegReg x0, x21
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
     arm64.b.eq tryok
+  critsplit:
+    arm64.movRegReg x0, x9
   tryerr:
     arm64.movImm x19, 0
+    arm64.bl __mm_decref
     arm64.b trycont
   tryok:
     arm64.movRegReg x19, x0
@@ -54815,19 +55254,42 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_handle_drop_box
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
+  sendrefused:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mbox_reply_refused
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.movImm x1, 16
+    arm64.movImm x2, 0
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.add x0, x0, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.movRegReg x0, x1
+    arm64.b tryerr
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-stack-takes-the-pool-lock-only-to-refill-or-release.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 
@@ -54842,22 +55304,7 @@ func @Counter.__loop {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.cmp x0, 0
-    arm64.b.eq stopping
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.storeBaseDispReg.word64 [x20 + 72], x0
-  stopping:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_close
-  drain:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.movRegReg x1, x0
-    arm64.cmp x1, 0
-    arm64.b.ne abandon
+    arm64.b.ne dispatch
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -54868,10 +55315,16 @@ func @Counter.__loop {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  abandon:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_abandon
-    arm64.b drain
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    arm64.bl __mbox_unknown_tag
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -54884,27 +55337,6 @@ func @Counter.__loop {
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
     arm64.b serve
-}
-
-func @Counter.__abandon {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-    arm64.b abandondone
-  next:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-  abandondone:
-    arm64.epilogue 16
-    arm64.ret
 }
 
 func @__gt_stack_alloc {
@@ -59473,18 +59905,20 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 48
+    x64.movRegImm32 rbx, 1024
   __il_body:
-    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
   __il_cont:
     x64.leaRegFunc rcx, [rip + Counter.__loop]
-    x64.leaRegFunc rax, [rip + Counter.__abandon]
-    x64.movRegImm32 r9, 24
+    x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
+    x64.movRegReg r9, rbx
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
@@ -59497,20 +59931,27 @@ func @main {
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
     x64.callDirect __mbox_staging
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.storeBaseDispReg.word64 [r14 + 16], r13
     x64.movRegImm32 rax, 24
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r8
+    x64.movRegReg rdx, r14
     x64.callDirect __mbox_send
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, sendrefused
+  sendaccepted:
     x64.movRegReg rcx, r13
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
+  critsplit:
+    x64.movRegReg rcx, r10
   tryerr:
     x64.movRegImm32 rbx, 0
+    x64.callDirect __mm_decref
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
@@ -59525,17 +59966,37 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_handle_drop_box
     x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  sendrefused:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mbox_reply_refused
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.storeSlotReg slot0, r8
+    x64.callDirect __mm_alloc
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot r8, slot0
+    x64.leaRegRegImm32 rax, r8, -1
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp tryerr
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-record-carve-takes-the-free-list-lock-once.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -59556,21 +60017,7 @@ func @Counter.__loop {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, stopping
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.storeBaseDispReg.word64 [r12 + 72], rax
-  stopping:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_close
-  drain:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, abandon
+    x64.jcc notEqual, dispatch
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -59582,11 +60029,17 @@ func @Counter.__loop {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  abandon:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
-    x64.callDirect __mbox_abandon
-    x64.jmp drain
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    x64.callDirect __mbox_unknown_tag
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -59597,30 +60050,6 @@ func @Counter.__loop {
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
     x64.jmp serve
-}
-
-func @Counter.__abandon {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jumpTable rax, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-    x64.jmp abandondone
-  next:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-  abandondone:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
 }
 
 func @__gt_free_get {
@@ -60271,18 +60700,20 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.pushReg r14
+    x64.prologue 48
+    x64.movRegImm32 rbx, 1024
   __il_body:
-    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
   __il_cont:
     x64.leaRegFunc rcx, [rip + Counter.__loop]
-    x64.leaRegFunc rax, [rip + Counter.__abandon]
-    x64.movRegImm32 r9, 24
+    x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
+    x64.movRegReg r9, rbx
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
@@ -60295,20 +60726,27 @@ func @main {
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
     x64.callDirect __mbox_staging
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.storeBaseDispReg.word64 [r14 + 16], r13
     x64.movRegImm32 rax, 24
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r8
+    x64.movRegReg rdx, r14
     x64.callDirect __mbox_send
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, sendrefused
+  sendaccepted:
     x64.movRegReg rcx, r13
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
+  critsplit:
+    x64.movRegReg rcx, r10
   tryerr:
     x64.movRegImm32 rbx, 0
+    x64.callDirect __mm_decref
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
@@ -60322,17 +60760,37 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_handle_drop_box
     x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  sendrefused:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mbox_reply_refused
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.storeSlotReg slot0, r8
+    x64.callDirect __mm_alloc
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot r8, slot0
+    x64.leaRegRegImm32 rax, r8, -1
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp tryerr
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-record-carve-takes-the-free-list-lock-once.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -60353,21 +60811,7 @@ func @Counter.__loop {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, stopping
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.storeBaseDispReg.word64 [r12 + 72], rax
-  stopping:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_close
-  drain:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, abandon
+    x64.jcc notEqual, dispatch
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -60379,11 +60823,17 @@ func @Counter.__loop {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  abandon:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
-    x64.callDirect __mbox_abandon
-    x64.jmp drain
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    x64.callDirect __mbox_unknown_tag
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -60394,30 +60844,6 @@ func @Counter.__loop {
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
     x64.jmp serve
-}
-
-func @Counter.__abandon {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jumpTable rax, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-    x64.jmp abandondone
-  next:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-  abandondone:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
 }
 
 func @__gt_free_get {
@@ -61064,21 +61490,23 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x19, 1024
   __il_body:
-    arm64.movImm x19, 0
+    arm64.movImm x20, 0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+    arm64.storeBaseDispReg.word64 [x1 + 0], x20
   __il_cont:
     arm64.leaFuncAddr x0, Counter.__loop
-    arm64.leaFuncAddr x2, Counter.__abandon
-    arm64.movImm x3, 24
+    arm64.movImm x2, 24
+    arm64.movRegReg x3, x19
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
@@ -61091,20 +61519,27 @@ func @main {
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
     arm64.bl __mbox_staging
-    arm64.movRegReg x1, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x19
-    arm64.storeBaseDispReg.word64 [x1 + 16], x21
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x19
+    arm64.storeBaseDispReg.word64 [x22 + 16], x21
     arm64.movImm x2, 24
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.movRegReg x1, x22
     arm64.bl __mbox_send
+    arm64.cmp x0, 0
+    arm64.b.ne sendrefused
+  sendaccepted:
     arm64.movRegReg x0, x21
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
     arm64.b.eq tryok
+  critsplit:
+    arm64.movRegReg x0, x9
   tryerr:
     arm64.movImm x19, 0
+    arm64.bl __mm_decref
     arm64.b trycont
   tryok:
     arm64.movRegReg x19, x0
@@ -61118,19 +61553,42 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_handle_drop_box
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
+  sendrefused:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mbox_reply_refused
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.movImm x1, 16
+    arm64.movImm x2, 0
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.add x0, x0, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.movRegReg x0, x1
+    arm64.b tryerr
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-record-carve-takes-the-free-list-lock-once.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 
@@ -61145,22 +61603,7 @@ func @Counter.__loop {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.cmp x0, 0
-    arm64.b.eq stopping
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.storeBaseDispReg.word64 [x20 + 72], x0
-  stopping:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_close
-  drain:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.movRegReg x1, x0
-    arm64.cmp x1, 0
-    arm64.b.ne abandon
+    arm64.b.ne dispatch
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -61171,10 +61614,16 @@ func @Counter.__loop {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  abandon:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_abandon
-    arm64.b drain
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    arm64.bl __mbox_unknown_tag
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -61187,27 +61636,6 @@ func @Counter.__loop {
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
     arm64.b serve
-}
-
-func @Counter.__abandon {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-    arm64.b abandondone
-  next:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-  abandondone:
-    arm64.epilogue 16
-    arm64.ret
 }
 
 func @__gt_free_get {
@@ -61925,21 +62353,23 @@ data {
 
 func @main {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x21
-    arm64.storeSlotReg slot1, x20
-    arm64.storeSlotReg slot0, x19
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x22
+    arm64.storeSlotReg slot3, x21
+    arm64.storeSlotReg slot2, x20
+    arm64.storeSlotReg slot1, x19
+    arm64.movImm x19, 1024
   __il_body:
-    arm64.movImm x19, 0
+    arm64.movImm x20, 0
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
     arm64.movRegReg x1, x0
-    arm64.storeBaseDispReg.word64 [x1 + 0], x19
+    arm64.storeBaseDispReg.word64 [x1 + 0], x20
   __il_cont:
     arm64.leaFuncAddr x0, Counter.__loop
-    arm64.leaFuncAddr x2, Counter.__abandon
-    arm64.movImm x3, 24
+    arm64.movImm x2, 24
+    arm64.movRegReg x3, x19
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
@@ -61952,20 +62382,27 @@ func @main {
     arm64.bl __gt_cell_alloc
     arm64.movRegReg x21, x0
     arm64.bl __mbox_staging
-    arm64.movRegReg x1, x0
-    arm64.movImm x0, 1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x0
-    arm64.storeBaseDispReg.word64 [x1 + 8], x19
-    arm64.storeBaseDispReg.word64 [x1 + 16], x21
+    arm64.movRegReg x22, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x22 + 0], x0
+    arm64.storeBaseDispReg.word64 [x22 + 8], x19
+    arm64.storeBaseDispReg.word64 [x22 + 16], x21
     arm64.movImm x2, 24
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.movRegReg x1, x22
     arm64.bl __mbox_send
+    arm64.cmp x0, 0
+    arm64.b.ne sendrefused
+  sendaccepted:
     arm64.movRegReg x0, x21
     arm64.bl __gt_try_await
     arm64.cmp x9, 0
     arm64.b.eq tryok
+  critsplit:
+    arm64.movRegReg x0, x9
   tryerr:
     arm64.movImm x19, 0
+    arm64.bl __mm_decref
     arm64.b trycont
   tryok:
     arm64.movRegReg x19, x0
@@ -61979,19 +62416,42 @@ func @main {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_handle_drop_box
     arm64.movRegReg x0, x19
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
+  sendrefused:
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x21
+    arm64.bl __mbox_reply_refused
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.movImm x1, 16
+    arm64.movImm x2, 0
+    arm64.storeSlotReg slot0, x0
+    arm64.movRegReg x0, x1
+    arm64.movRegReg x1, x2
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x0, slot0
+    arm64.add x0, x0, -1
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.loadRegBaseDisp.word64 x0, [x22 + 8]
+    arm64.storeBaseDispReg.word64 [x1 + 8], x0
+    arm64.loadRegBaseDisp.word64 x0, [x1 + 0]
+    arm64.movRegReg x0, x1
+    arm64.b tryerr
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-record-carve-takes-the-free-list-lock-once.test:22: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
-    arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
-    arm64.loadRegSlot x21, slot2
-    arm64.epilogue 48
+    arm64.loadRegSlot x19, slot1
+    arm64.loadRegSlot x20, slot2
+    arm64.loadRegSlot x21, slot3
+    arm64.loadRegSlot x22, slot4
+    arm64.epilogue 64
     arm64.ret
 }
 
@@ -62006,22 +62466,7 @@ func @Counter.__loop {
     arm64.movRegReg x0, x20
     arm64.bl __mbox_recv
     arm64.cmp x0, 0
-    arm64.b.eq stopping
-  dispatch:
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_4
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.storeBaseDispReg.word64 [x20 + 72], x0
-  stopping:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_close
-  drain:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_recv
-    arm64.movRegReg x1, x0
-    arm64.cmp x1, 0
-    arm64.b.ne abandon
+    arm64.b.ne dispatch
   finished:
     arm64.movRegReg x0, x19
     arm64.bl __mm_decref
@@ -62032,10 +62477,16 @@ func @Counter.__loop {
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
-  abandon:
-    arm64.movRegReg x0, x20
-    arm64.bl __mbox_abandon
-    arm64.b drain
+  dispatch:
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
+  unknowntag:
+    arm64.bl __mbox_unknown_tag
+    arm64.movRegReg x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -62048,27 +62499,6 @@ func @Counter.__loop {
     arm64.movImm x2, 0
     arm64.bl __gt_cell_complete
     arm64.b serve
-}
-
-func @Counter.__abandon {
-  entry:
-    arm64.prologue 16
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
-    arm64.jumpTable x1, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_5
-  __shutdown:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-    arm64.b abandondone
-  next:
-    arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
-    arm64.movImm x1, 0
-    arm64.movImm x2, 1
-    arm64.bl __gt_cell_complete
-  abandondone:
-    arm64.epilogue 16
-    arm64.ret
 }
 
 func @__gt_free_get {
@@ -66075,18 +66505,20 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
-  __il_body#9:
-    x64.movRegImm32 rbx, 0
+    x64.pushReg r14
+    x64.prologue 48
+    x64.movRegImm32 rbx, 1024
+  __il_body#11:
+    x64.movRegImm32 r12, 0
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
-  __il_cont#8:
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
+  __il_cont#10:
     x64.leaRegFunc rcx, [rip + Counter.__loop]
-    x64.leaRegFunc rax, [rip + Counter.__abandon]
-    x64.movRegImm32 r9, 24
+    x64.movRegImm32 rax, 24
     x64.movRegReg rdx, r8
+    x64.movRegReg r9, rbx
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
@@ -66099,28 +66531,35 @@ func @main {
     x64.callDirect __gt_cell_alloc
     x64.movRegReg r13, r8
     x64.callDirect __mbox_staging
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 0], rax
-    x64.storeBaseDispReg.word64 [r8 + 8], rbx
-    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.storeBaseDispReg.word64 [r14 + 16], r13
     x64.movRegImm32 rax, 24
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.movRegReg rdx, r8
+    x64.movRegReg rdx, r14
     x64.callDirect __mbox_send
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, sendrefused
+  sendaccepted:
     x64.movRegReg rcx, r13
     x64.callDirect __gt_try_await
     x64.cmpRegImm32 r10, 0
     x64.jcc equal, tryok
+  critsplit:
+    x64.movRegReg rcx, r10
   tryerr:
     x64.movRegImm32 rbx, 0
+    x64.callDirect __mm_decref
     x64.jmp trycont
   tryok:
     x64.movRegReg rbx, r8
   trycont:
     x64.leaRegRdata rcx, [rip + __str_rec_1]  ; "done\x0a"
-  __il_body#11:
+  __il_body#13:
     x64.callDirect __write_stdout
-  __il_cont#10:
+  __il_cont#12:
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
   __rc_chk:
@@ -66131,17 +66570,37 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_handle_drop_box
     x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
+  sendrefused:
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mbox_reply_refused
+    x64.movRegReg rax, r8
+    x64.loadRegSlot r8, slot0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.storeSlotReg slot0, r8
+    x64.callDirect __mm_alloc
+    x64.movRegReg rcx, r8
+    x64.loadRegSlot r8, slot0
+    x64.leaRegRegImm32 rax, r8, -1
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [r14 + 8]
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp tryerr
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at a-windows-blocking-import-carries-the-last-error-across-a-lost-processor.test:24: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 48
+    x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -66162,21 +66621,7 @@ func @Counter.__loop {
     x64.movRegReg rcx, r12
     x64.callDirect __mbox_recv
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, stopping
-  dispatch:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
-    x64.jumpTable rax, default=stopping [[0]=__shutdown, [1]=next] @__jumptable_6
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
-    x64.storeBaseDispReg.word64 [r12 + 72], rax
-  stopping:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_close
-  drain:
-    x64.movRegReg rcx, r12
-    x64.callDirect __mbox_recv
-    x64.cmpRegImm32 r8, 0
-    x64.jcc notEqual, abandon
+    x64.jcc notEqual, dispatch
   finished:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
@@ -66188,11 +66633,17 @@ func @Counter.__loop {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  abandon:
-    x64.movRegReg rcx, r12
-    x64.movRegReg rdx, r8
-    x64.callDirect __mbox_abandon
-    x64.jmp drain
+  dispatch:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_6
+  unknowntag:
+    x64.callDirect __mbox_unknown_tag
+    x64.movRegReg rax, r8
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -66203,30 +66654,6 @@ func @Counter.__loop {
     x64.movRegImm32 rax, 0
     x64.callDirect __gt_cell_complete
     x64.jmp serve
-}
-
-func @Counter.__abandon {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.jumpTable rax, default=abandondone [[0]=__shutdown, [1]=next] @__jumptable_7
-  __shutdown:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-    x64.jmp abandondone
-  next:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 16]
-    x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 1
-    x64.callDirect __gt_cell_complete
-  abandondone:
-    x64.epilogue 32
-    x64.popReg rbp
-    x64.ret
 }
 
 chunk @mrt_write_stream {

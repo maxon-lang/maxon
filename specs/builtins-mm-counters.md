@@ -401,8 +401,8 @@ deltas cannot be equal unless one of the two intrinsics is wired to the other's 
 ⭐ **THE MAILBOX IS ONE REGION: ITS RECORD, ITS ONE-SLOT INBOX AND ITS OWN 8-BYTE LOCK WORD.** A mailbox's
 ring bookkeeping, closed flag and parked receiver are guarded by a lock of the mailbox's own, not by
 `__sched_lock`, and the receiver reads each message from an inbox inside the mailbox, sized at spawn to one
-`Counter.request`. So the region `__svc_spawn` cuts holds the record, the inbox and, behind them, the lock
-word — a runtime lock is one zeroed word, so the slab's zeroing is its whole initialisation. The byte
+`Counter.request`. So the region `__svc_spawn` cuts holds the record, the lock word that follows it and
+the inbox — a runtime lock is one zeroed word, so the slab's zeroing is its whole initialisation. The byte
 column counts the size requested, not the slab class it lands in, so the spawn window is exactly one raw
 region of that size. A lock or an inbox cut as a region of its own reads two regions.
 
@@ -580,7 +580,7 @@ end 'main'
 green thread's staging buffer and `__mbox_send` copies it into the mailbox's ring, or into the mailbox's
 inbox when the receiver is parked; the receiver reads it from the inbox. Nothing is boxed, so `mmAllocTotal` does not move per message. The case
 compares two windows on one service whose messages carry only `Integer`s: ONE awaited `read`, and
-eight fire-and-forget `add`s followed by the same awaited `read`. The two must move the tracked count by
+eight `add`s that return nothing followed by the same awaited `read`. The two must move the tracked count by
 the same amount — whatever an awaited reply costs, it costs it once in each window — so a message that
 allocated a tracked box would put the second window eight above the first, and nothing else can.
 
@@ -618,7 +618,7 @@ function main() returns ExitCode
 	let oneAfter = __Builtins.mmAllocTotal()
 	let manyBefore = __Builtins.mmAllocTotal()
 	for i in 0 upto queuedMessages 'queue'
-		c.add(i)
+		try c.add(i) otherwise panic("an open mailbox with room takes the send")
 	end 'queue'
 	let many = try await c.read() otherwise -1
 	let manyAfter = __Builtins.mmAllocTotal()
@@ -741,8 +741,8 @@ function main() returns ExitCode
 
 	let busyThreadBefore = __Builtins.threadAllocTotal()
 	let busyProcessBefore = processWide()
-	let reply = h.churn(60000)
-	_ = try await reply otherwise 0
+	let reply = try h.churn(60000) otherwise panic("an open mailbox with room takes the send")
+	_ = await reply
 	let busyThread = __Builtins.threadAllocTotal() - busyThreadBefore
 	let busyProcess = processWide() - busyProcessBefore
 
@@ -919,7 +919,7 @@ end 'Churn'
 function main() returns ExitCode
 	let h = spawn Churn.create()
 	let freesBefore = __Builtins.processFreeTotal()
-	let reply = h.churn(100000)
+	let reply = try h.churn(100000) otherwise panic("an open mailbox with room takes the send")
 
 	var lastAllocs = __Builtins.processAllocTotal()
 	var lastFrees = __Builtins.processFreeTotal()
@@ -940,7 +940,7 @@ function main() returns ExitCode
 		lastBytes = bytes
 	end 'watch'
 
-	let rounds = try await reply otherwise 0
+	let rounds = await reply
 	var score = 0 as Count
 	if backwards == 0 'onlyRose'
 		score = score + 1

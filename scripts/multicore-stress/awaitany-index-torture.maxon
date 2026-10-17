@@ -51,7 +51,7 @@
 
 typealias Integer = int(i64.min to i64.max)
 typealias RoundTally = int(0 to u64.max)
-typealias ReplyPromise = Promise with (Integer, ServiceError)
+typealias ReplyPromise = Promise with (Integer)
 typealias ReplyPromiseArray = Array with ReplyPromise
 
 // ⭐ ROUNDS × `slowSleepMs` IS THE RUN LENGTH, and each round is one chance at
@@ -131,8 +131,8 @@ function main() returns ExitCode
 
 	while r < rounds 'eachRound'
 		var ps = ReplyPromiseArray.create()
-		ps.push(slow.value(slowSleepMs))
-		ps.push(quick.value())
+		ps.push(try slow.value(slowSleepMs) otherwise panic("awaitany-index-torture: Slow refused a round's only message"))
+		ps.push(try quick.value() otherwise panic("awaitany-index-torture: Quick refused a round's only message"))
 
 		let started = Clock.nowNanos()
 		let ready = ps.awaitAny()
@@ -154,7 +154,7 @@ function main() returns ExitCode
 		var sum = 0 as Integer
 
 		for p in ps 'drainboth'
-			sum = sum + (try await p otherwise 0)
+			sum = sum + (await p)
 		end 'drainboth'
 
 		if sum != repliedSum 'arepliedwrong'

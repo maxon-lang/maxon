@@ -47,10 +47,8 @@
 // `PoolDispatch` applies it to every pool.
 let JobsInFlightPerWorker = 2
 
-// A reply cell carrying one finished function. `BackendWorker.run.errors` is the synthesized fusion of
-// `ServiceError` (the service can be gone) with what the message itself throws — see `specs/services.md`;
-// a promise declared over the bare `ServiceError` is E3098 here, because it would erase the refusal.
-typealias BackendReply = Promise with (BackendUnitReply, BackendWorker.run.errors)
+// A reply cell carrying one finished function, and the refusal its message can throw.
+typealias BackendReply = Promise with (BackendUnitReply, RegAllocRefusal)
 typealias BackendReplyArray = Array with BackendReply
 typealias BackendArrivedUnits = ArrivedUnits with TargetModule
 typealias BackendWorkerHandleArray = Array with BackendWorker.handle
@@ -744,7 +742,6 @@ function drainTheBackendPool(stdModule StdModule, module TargetModule, workers B
 			landed.push(answer.landing)
 		end 'finished' else (e) 'notFinished'
 			match e 'why'
-				stopped then panic("{workerGoneMessage("drainTheBackendPool", subject: "the worker running function {funcIndex}")}")
 				hotOverflow then refused = funcIndex if funcIndex < refused else refused
 			end 'why'
 		end 'notFinished'
@@ -800,8 +797,12 @@ end 'ArrivedUnits'
 // Why a pool worker's reply never came, for every pool's panic: no driver drops a handle before every reply has
 // landed, so the worker's green thread ended on its own — a panic whose message is already on stderr.
 export function workerGoneMessage(driver String, subject String) returns String
-	return "{driver}: {subject} is gone. This driver drops no handle until every reply has landed, so its green thread ended on its own — look above for the panic it printed."
+	return "{driver}: {subject} did not answer. This driver keeps at most {JobsInFlightPerWorker} jobs in flight per worker against a mailbox of {DefaultMailboxCapacity}, so the mailbox was not full, and it drops no handle until every reply has landed, so the worker's green thread ended on its own — look above for the panic it printed."
 end 'workerGoneMessage'
+
+export function workerRefusedSendMessage(driver String, subject String) returns String
+	return "{driver}: {subject} refused a send. This driver keeps at most {JobsInFlightPerWorker} jobs in flight per worker against a mailbox of {DefaultMailboxCapacity}, and drops no handle until every reply has landed, so a refusal means the worker's green thread ended on its own — look above for the panic it printed."
+end 'workerRefusedSendMessage'
 
 // Send the next job in dispatch order to ONE worker, and push its reply at the slot `PoolDispatch` just
 // recorded the job in.
@@ -813,7 +814,7 @@ end 'workerGoneMessage'
 function dispatchOneBackendJob(stdModule StdModule, workers BackendWorkerHandleArray, workerSlot ElementIndex, dispatch PoolDispatch, replies BackendReplyArray, runtimeTier FunctionNameSet, spanTable DebugSpanTable)
 	var worker = try workers.get(workerSlot) otherwise panic("dispatchOneBackendJob: workers.get OOB at {workerSlot} below count {workers.count()}")
 	let funcIndex = dispatch.nextJob(workerSlot)
-	replies.push(worker.run(BackendUnit.extract(stdModule, func: stdModule.getFunc(funcIndex), funcIndex: funcIndex, runtimeTier: runtimeTier, spanTable: spanTable)))
+	replies.push(try worker.run(BackendUnit.extract(stdModule, func: stdModule.getFunc(funcIndex), funcIndex: funcIndex, runtimeTier: runtimeTier, spanTable: spanTable)) otherwise panic("{workerRefusedSendMessage("dispatchOneBackendJob", subject: "the worker running function {funcIndex}")}"))
 end 'dispatchOneBackendJob'
 
 // ⭐⭐ **THE DISPATCH ORDER: LONGEST JOB FIRST (LPT).**

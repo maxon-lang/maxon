@@ -37,7 +37,7 @@ solely owned (E3174).
 ## Tests
 
 <!-- test: an-interface-handle-sends-and-awaits -->
-A handle at interface type sends a fire-and-forget requirement and awaits a returning one, exactly as the
+A handle at interface type sends a requirement that has no reply and awaits a returning one, exactly as the
 service's own handle would.
 ```maxon
 interface Tally
@@ -63,8 +63,8 @@ end 'Counter'
 
 function main() returns ExitCode
 	let h = (spawn Counter.create()) as Tally.handle
-	h.add(4)
-	h.add(5)
+	try h.add(4) otherwise panic("send add 4")
+	try h.add(5) otherwise panic("send add 5")
 	let total = try await h.total() otherwise 0
 	return total as ExitCode
 end 'main'
@@ -177,8 +177,8 @@ type Counter implements Bumper
 end 'Counter'
 
 function drive(b Bumper.handle) returns Integer
-	_ = b.bump(5)
-	_ = b.bump(2)
+	_ = try b.bump(5) otherwise panic("send bump 5")
+	_ = try b.bump(2) otherwise panic("send bump 2")
 	return try await b.read() otherwise 0
 end 'drive'
 
@@ -278,7 +278,7 @@ type Worker
 	end 'create'
 
 	export function run() returns Integer
-		Ledger.current().add(self.k)
+		try Ledger.current().add(self.k) otherwise panic("send add")
 		return self.k
 	end 'run'
 end 'Worker'
@@ -645,9 +645,9 @@ end 'Console'
 default Journal = spawn Console.create()
 
 function main() returns ExitCode
-	Journal.current().write(1)
-	Journal.current().write(2)
-	Journal.current().write(3)
+	try Journal.current().write(1) otherwise panic("send write 1")
+	try Journal.current().write(2) otherwise panic("send write 2")
+	try Journal.current().write(3) otherwise panic("send write 3")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -708,7 +708,7 @@ type Caller
 
 	export function call(g Greeter.handle) returns Integer
 		self.asked = self.asked + 1
-		g.note(self.asked)
+		try g.note(self.asked) otherwise panic("send note")
 		return try await g.greet() otherwise 0
 	end 'call'
 end 'Caller'
@@ -962,9 +962,9 @@ end 'Printer'
 
 function main() returns ExitCode
 	let printer = spawn Printer.create()
-	printer.say(1)
-	printer.say(2)
-	printer.say(3)
+	try printer.say(1) otherwise panic("send say 1")
+	try printer.say(2) otherwise panic("send say 2")
+	try printer.say(3) otherwise panic("send say 3")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -1011,15 +1011,15 @@ type Worker
 
 	export function work(n Integer)
 		self.worked = self.worked + 1
-		Sink.current().put(n)
+		try Sink.current().put(n) otherwise panic("send put")
 	end 'work'
 end 'Worker'
 
 function main() returns ExitCode
 	let worker = spawn Worker.create()
-	worker.work(1)
-	worker.work(2)
-	worker.work(3)
+	try worker.work(1) otherwise panic("send work 1")
+	try worker.work(2) otherwise panic("send work 2")
+	try worker.work(3) otherwise panic("send work 3")
 	return 0
 end 'main'
 typealias Integer = int(i64.min to i64.max)
@@ -1118,7 +1118,7 @@ type Ledger implements Tally
 end 'Ledger'
 
 function drive(t Tally.handle, by Integer) returns Integer
-	t.add(by)
+	try t.add(by) otherwise panic("send add")
 	return try await t.total() otherwise 0
 end 'drive'
 
@@ -1197,7 +1197,7 @@ typealias Integer = int(i64.min to i64.max)
 error E3139: <fragment>:41:14: service call cycle — these messages can deadlock waiting on each other:
     `Bouncer.back` (<fragment>:41:14) awaits a reply from `Relay`
     `Relay.echo` (<fragment>:28:14) awaits a reply from `Bouncer`
-    A message may not await a reply from a service that can await back. Break the ring by making one of these calls fire-and-forget — drop its `returns` and `throws` clauses, or send it as a statement and do not await it — because a non-blocking send is not part of the graph
+    A message may not await a reply from a service that can await back. Break the ring by making one of these messages return nothing and throw nothing, and send it with `try <handle>.<message>(…) otherwise …` without awaiting it — because a non-blocking send is not part of the graph
 ```
 
 <!-- test: a-shared-value-of-a-string -->
@@ -1285,7 +1285,7 @@ note: <fragment>:14:9: the `default` for `Config`
 ```
 
 <!-- test: a-message-with-a-float-parameter -->
-A fire-and-forget message takes a `float` argument. A reply cell carries one integer word (E3140), so the
+A message with no reply takes a `float` argument. A reply cell carries one integer word (E3140), so the
 awaited answer is the average in hundredths.
 ```maxon
 type Averager
@@ -1309,9 +1309,9 @@ end 'Averager'
 
 function main() returns ExitCode
 	let h = spawn Averager.create()
-	h.take(20.25)
-	h.take(21.5)
-	h.take(22.75)
+	try h.take(20.25) otherwise panic("send take 20.25")
+	try h.take(21.5) otherwise panic("send take 21.5")
+	try h.take(22.75) otherwise panic("send take 22.75")
 	let hundredths = try await h.averageHundredths() otherwise 0
 	print("{hundredths}\n")
 	return 0

@@ -191,7 +191,7 @@ else:
 |------|--------------|
 | `module` | directly before a declaration, as a visibility modifier |
 | `test` | at the top level, followed by a quoted name (see [Testing](/docs/language/testing/)) |
-| `spawn` | followed by a type's static factory call (see [Services](/docs/language/async/#services--spawn)) |
+| `spawn` | followed by a type's static factory call, optionally after `(capacity: n)` (see [Services](/docs/language/async/#services--spawn)) |
 | `bits` | followed by `(` on the right-hand side of a typealias |
 | `view` | at the start of a statement, or after `if` or `then`, followed by a name, or by a `( … )` list and `=` (see [Views](/docs/language/variables/#views-view)) |
 | `readonly` | before an element or value type argument of a container (see [Read-Only Values](/docs/language/memory-model/#read-only-values)), and after `returns` at a boundary with no body (see [Capability Qualifiers](/docs/language/functions/#capability-qualifiers-keep-sole-returns-readonly)) |

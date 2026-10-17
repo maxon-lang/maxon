@@ -551,7 +551,7 @@ end 'Greeter'
 
 function main() returns ExitCode
 	var greeter = spawn Greeter.create()
-	greeter.greet(2)
+	try greeter.greet(2) otherwise panic("an open mailbox with room takes the send")
 	greeter.shutdown()
 
 	let outstanding = Scheduler.quiesce()

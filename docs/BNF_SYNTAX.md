@@ -55,7 +55,7 @@ KEYWORD       = 'and' | 'as' | 'async' | 'await' | 'bool' | 'break' | 'continue'
 
 Contextual keywords are IDENTIFIER tokens that act as syntax in one position only: `module` (directly
 before a declaration), `test` (a top-level declaration followed by a `TEST_NAME`), `spawn` (followed by a
-type's factory call), `bits` (followed by `(` on a typealias right-hand side), `readonly` (before a type
+type's factory call, optionally after a `(capacity: n)` group), `bits` (followed by `(` on a typealias right-hand side), `readonly` (before a type
 argument after `with`, `(` or `,`, and as a `result_capability`), `view` (a `view_decl`: at the start of a
 statement or after `if` or `then`, followed by an IDENTIFIER, or by a parenthesized list whose `)` is followed by
 `=`; and before a name in a `tuple_assign_stmt` target), and `keep` and `sole` (a `param_capability` or
@@ -969,12 +969,17 @@ cancel_expr   = expression '.' 'cancel' '(' ')'            (* cancel a coroutine
 ### 6.7 Spawn Expressions
 
 ```
-spawn_expr    = 'spawn' IDENTIFIER '.' IDENTIFIER '(' [ arg_list ] ')'  (* start a service, returns <type>.handle *)
+spawn_expr    = 'spawn' [ spawn_capacity ] IDENTIFIER '.' IDENTIFIER '(' [ arg_list ] ')'
+                                                         (* start a service, returns <type>.handle *)
+spawn_capacity = '(' 'capacity' ':' expression ')'     (* the mailbox's capacity, a MailboxCapacity *)
 ```
 
 **Restrictions:**
-- `spawn` is a contextual keyword, not a reserved word: it is an identifier followed by a name, so `spawn`
-  remains usable as the name of a function, a static, a parameter, a field or a local.
+- `spawn` is a contextual keyword, not a reserved word: it is an identifier followed by a name or by
+  `( capacity :`, so `spawn` remains usable as the name of a function, a static, a parameter, a field or a
+  local. `capacity` is a label in that position only.
+- `spawn_capacity`'s expression is checked against `MailboxCapacity`, `int(1 to 2^31)`; a literal outside it
+  is E3005. Without it the mailbox takes `DefaultMailboxCapacity` (1024).
 - The target must be a static factory of a declared `type` that returns that type; there is no bare
   `spawn f()` (E3134).
 - Naming a type in a `spawn` makes it a service program-wide, which synthesizes `<type>.request` and
@@ -983,7 +988,9 @@ spawn_expr    = 'spawn' IDENTIFIER '.' IDENTIFIER '(' [ arg_list ] ')'  (* start
   `I.handle` wherever one is expected.
 - A message send has no production of its own: it is `call_expr`'s method form (§6.8) whose receiver is a
   `<type>.handle` or an `I.handle`. Dispatch is decided by the receiver's type, so the same spelling is a
-  direct call on a value and a message on a handle.
+  direct call on a value and a message on a handle. A send throws `<type>.<message>.sendError`, so it is
+  written under `try` (E3057 otherwise), and a message that returns or throws, sent as a statement, is
+  E3190.
 - `spawn` on `wasm32-wasi`, which has no green threads, is refused with E3104.
 
 ### 6.8 Function and Method Calls

@@ -1,6 +1,6 @@
 ---
 title: "A tour: building wc"
-description: A guided read of examples/wc.maxon — a parallel word counter in about 250 lines of Maxon, with the code on the left and what it teaches on the right.
+description: A guided read of examples/wc.maxon — a parallel word counter in about 270 lines of Maxon, with the code on the left and what it teaches on the right.
 sidebar:
   order: 4
 ---
@@ -139,22 +139,25 @@ eight places. A `StringBuilder` collects the row so it is printed once.
 
 ## Using the processors
 
-<TourStep from={195} to={226}>
+<TourStep from={195} to={244}>
 **`spawn` turns a type into a service running on its own green thread**, scheduled across the
 machine's processors. `spawn Counter.create()` runs the factory over there and hands back a
 `Counter.handle`. `workersFor` starts one per processor, or one per file when there are fewer files —
 the `as WorkerCount` at the end is checked at run time, and `Options.parse` has already guaranteed at
 least one file.
 
-`counter.count(path.clone())` **does not block**. It posts the message and hands back a promise, so
+`try counter.count(pending)` **returns at once**. It posts the message and hands back a promise, so
 every file is in flight before the first answer is read. Sending moves a value to the service; the
-`clone()` gives it a path of its own, because `paths` still holds the original. See the
-[memory model](/docs/language/memory-model/).
+`clone()` in `submitCount` gives it a path of its own, because `paths` still holds the original. See
+the [memory model](/docs/language/memory-model/).
 
-`try await reply` takes each answer back, **in the order the files were named**, not the order the
-workers finished — so the output is the same at one worker or sixty-four. It is a `try` because the
-one failure every message has is a service that is gone, and this program reports that the same way as
-a file it could not read.
+A send is a `try` because it can fail on the spot: a service's mailbox holds at most 1024 messages, and
+a stopped service takes none. A failed send hands its arguments back, so on `mailboxFull(back)` the
+loop keeps the returned path, lets the workers run with `Scheduler.yield()`, and sends it again.
+
+`await reply` takes each answer back, **in the order the files were named**, not the order the
+workers finished — so the output is the same at one worker or sixty-four. A message that was queued
+always runs, so its reply carries only what the handler returns.
 
 A service outlives the function that spawned it until someone says otherwise, so every worker is shut
 down explicitly. See [Concurrency](/docs/language/async/).
@@ -162,7 +165,7 @@ down explicitly. See [Concurrency](/docs/language/async/).
 
 ## Finishing
 
-<TourStep from={228} to={252}>
+<TourStep from={246} to={270}>
 `printUsage` walks `Flag.allCases` again, so the help text cannot fall behind the enum.
 
 `try Options.parse(…) otherwise (problem) 'badUsage'` binds the error that was thrown, and the handler

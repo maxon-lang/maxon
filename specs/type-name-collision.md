@@ -3173,8 +3173,8 @@ the program. That shape cannot be rebuilt around E3167 in one directory: an EXPO
 beside an `enum Fault` there is a duplicate definition (E3006), so the throws clause cannot name a visible
 ranged `Fault` while the enum exists. The enum is file-private because `b.maxon` would otherwise see two
 declarations of `Fault`, its own included, and its bare `Fault` would be E3063.
-`ServiceCompanions.mintServiceReplyErrorType` asks the same reader and is harmless only while a refusal
-holds here; the refusal is E3167's.
+`ServiceCompanions.serviceReplyErrorLayout` resolves the clause's `Fault` in any file rather than through
+the message's reader, and is harmless only while a refusal holds here; the refusal is E3167's.
 ```maxon
 // --- file: a.maxon
 enum Fault implements Error
@@ -3678,9 +3678,9 @@ end 'main'
 true
 ```
 
-<!-- test: an-authors-error-leaves-a-services-reply-errors-conforming -->
-An author `Error` beside the library's. A service's reply errors still conform to the library's `Error`,
-so an implementation may narrow the library's abstract `throws Error` to them.
+<!-- test: an-authors-error-leaves-a-service-send-error-conforming -->
+An author `Error` beside the library's. A service message's send error still conforms to the library's
+`Error`, so a function may declare `throws Calc.divide.sendError` and propagate it.
 ```maxon
 interface Error
 	function code() returns bool
@@ -3712,19 +3712,16 @@ type Calc
 	end 'divide'
 end 'Calc'
 
-type Value implements Parsable
-	export var n as Integer
+function divided(h Calc.handle) returns Integer throws Calc.divide.sendError
+	let p = try h.divide(3, by: 1)
 
-	static function fromString(_ String) returns Self throws Calc.divide.errors
-		let h = spawn Calc.create()
-		let q = try await h.divide(3, by: 1)
-		return Value{n: q}
-	end 'fromString'
-end 'Value'
+	return try await p otherwise 0
+end 'divided'
 
 function main() returns ExitCode
-	let v = try Value.fromString("abc") otherwise panic("cannot fail")
-	print("{v.n}\n")
+	let h = spawn Calc.create()
+	let q = try divided(h) otherwise panic("cannot fail")
+	print("{q}\n")
 	return 0
 end 'main'
 ```

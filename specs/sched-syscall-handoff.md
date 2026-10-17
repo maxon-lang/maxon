@@ -126,7 +126,7 @@ harness runs its cases in parallel out of one `temp/` directory.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias ReaderHandleArray = Array with Reader.handle
-typealias ReplyPromise = Promise with (Integer, ServiceError)
+typealias ReplyPromise = Promise with Integer
 typealias ReplyPromiseArray = Array with ReplyPromise
 
 let readerCount = 8
@@ -185,21 +185,21 @@ function main() returns ExitCode
 	var k = 0 as Integer
 	while k < readerCount 'sendEach'
 		view r = try readers.get(k as ElementIndex) otherwise panic("readers.get OOB at {k} — the loop is bounded by the count the pushes above filled")
-		replies.push(r.roundTrip())
+		replies.push(try r.roundTrip() otherwise panic("an open mailbox with room takes the send"))
 		k = k + 1
 	end 'sendEach'
 
-	let tailReply = last.ping()
+	let tailReply = try last.ping() otherwise panic("an open mailbox with room takes the send")
 
 	var aggregate = 0 as Integer
 	var n = 0 as Integer
 	while n < readerCount 'collect'
 		let p = try replies.get(n as ElementIndex) otherwise panic("replies.get OOB at {n} — the loop is bounded by the count the pushes above filled")
-		aggregate = aggregate + (try await p otherwise 0)
+		aggregate = aggregate + (await p)
 		n = n + 1
 	end 'collect'
 
-	let tail = try await tailReply otherwise 0
+	let tail = await tailReply
 
 	print("aggregate={aggregate} last={tail}\n")
 	return 0
@@ -230,7 +230,7 @@ their sum is fixed however the scheduler interleaves them.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias RunnerHandleArray = Array with Runner.handle
-typealias ReplyPromise = Promise with (Integer, ServiceError)
+typealias ReplyPromise = Promise with Integer
 typealias ReplyPromiseArray = Array with ReplyPromise
 
 let runnerCount = 8
@@ -285,21 +285,21 @@ function main() returns ExitCode
 	var k = 0 as Integer
 	while k < runnerCount 'sendEach'
 		view r = try runners.get(k as ElementIndex) otherwise panic("runners.get OOB at {k} — the loop is bounded by the count the pushes above filled")
-		replies.push(r.child())
+		replies.push(try r.child() otherwise panic("an open mailbox with room takes the send"))
 		k = k + 1
 	end 'sendEach'
 
-	let tailReply = last.ping()
+	let tailReply = try last.ping() otherwise panic("an open mailbox with room takes the send")
 
 	var aggregate = 0 as Integer
 	var n = 0 as Integer
 	while n < runnerCount 'collect'
 		let p = try replies.get(n as ElementIndex) otherwise panic("replies.get OOB at {n} — the loop is bounded by the count the pushes above filled")
-		aggregate = aggregate + (try await p otherwise 0)
+		aggregate = aggregate + (await p)
 		n = n + 1
 	end 'collect'
 
-	let tail = try await tailReply otherwise 0
+	let tail = await tailReply
 
 	print("aggregate={aggregate} last={tail}\n")
 	return 0
@@ -374,13 +374,13 @@ type Reader
 
 	export function read(sentinel Sentinel.handle) returns Integer
 		print("R: reading\n")
-		let tailReply = sentinel.ping()
+		let tailReply = try sentinel.ping() otherwise panic("an open mailbox with room takes the send")
 		let start = Clock.nowMs()
 		let line = try Console.stdin().readLine() otherwise ""
 		let waitedMs = Clock.elapsedMs(start)
 		print("R: read returned\n")
 
-		let tail = try await tailReply otherwise 0
+		let tail = await tailReply
 		var blocked = "no"
 		if waitedMs >= blockedThresholdMs 'blocked'
 			blocked = "yes"
@@ -464,13 +464,13 @@ type Reader
 
 	export function read(sentinel Sentinel.handle) returns Integer
 		print("R: reading\n")
-		let tailReply = sentinel.ping()
+		let tailReply = try sentinel.ping() otherwise panic("an open mailbox with room takes the send")
 		let start = Clock.nowMs()
 		let line = try Console.stdin().readLine() otherwise ""
 		let waitedMs = Clock.elapsedMs(start)
 		print("R: read returned\n")
 
-		let tail = try await tailReply otherwise 0
+		let tail = await tailReply
 		var blocked = "no"
 		if waitedMs >= blockedThresholdMs 'blocked'
 			blocked = "yes"
@@ -551,13 +551,13 @@ type Reader
 
 	export function read(sentinel Sentinel.handle) returns Integer
 		print("R: reading\n")
-		let tailReply = sentinel.ping()
+		let tailReply = try sentinel.ping() otherwise panic("an open mailbox with room takes the send")
 		let start = Clock.nowMs()
 		let line = try Console.stdin().readLine() otherwise ""
 		let waitedMs = Clock.elapsedMs(start)
 		print("R: read returned\n")
 
-		let tail = try await tailReply otherwise 0
+		let tail = await tailReply
 		var blocked = "no"
 		if waitedMs >= blockedThresholdMs 'blocked'
 			blocked = "yes"
@@ -668,7 +668,7 @@ type Waiter
 		end 'noChild'
 
 		print("W: waiting\n")
-		let tailReply = sentinel.ping()
+		let tailReply = try sentinel.ping() otherwise panic("an open mailbox with room takes the send")
 		let retakesBefore = Scheduler.counters().retakes
 		let start = Clock.nowMs()
 		let killed = endedByItsDeadline(child)
@@ -677,7 +677,7 @@ type Waiter
 		child.release()
 		print("W: wait returned\n")
 
-		let tail = try await tailReply otherwise 0
+		let tail = await tailReply
 		var blocked = "no"
 
 		if waitedMs >= blockedThresholdMs 'blocked'
@@ -831,13 +831,13 @@ type Reader
 
 	export function read(sentinel Sentinel.handle) returns Integer
 		print("R: reading\n")
-		let tailReply = sentinel.ping()
+		let tailReply = try sentinel.ping() otherwise panic("an open mailbox with room takes the send")
 		let start = Clock.nowMs()
 		let line = try Console.stdin().readLine() otherwise ""
 		let waitedMs = Clock.elapsedMs(start)
 		print("R: read returned\n")
 
-		let tail = try await tailReply otherwise 0
+		let tail = await tailReply
 		var blocked = "no"
 		if waitedMs >= blockedThresholdMs 'blocked'
 			blocked = "yes"
@@ -900,10 +900,10 @@ function main() returns ExitCode
 	let sentinel = spawn Sentinel.create()
 	let reader = spawn Reader.create()
 
-	let spun = spinner.spin(spinMs)
+	let spun = try spinner.spin(spinMs) otherwise panic("an open mailbox with room takes the send")
 	_ = lowestIdleOver(claimMs)
 	let n = try await reader.read(sentinel) otherwise 0
-	let s = try await spun otherwise 0
+	let s = await spun
 	var retaken = "no"
 	if Scheduler.counters().retakes > 0 'retaken'
 		retaken = "yes"
@@ -911,13 +911,13 @@ function main() returns ExitCode
 
 	sleep(settleMs)
 	let probe = spawn Spinner.create()
-	let reply = probe.spin(1)
+	let reply = try probe.spin(1) otherwise panic("an open mailbox with room takes the send")
 	let watchStart = Clock.nowMs()
 	var answered = false
 	while (Clock.elapsedMs(watchStart) as Integer) < watchMs and not answered 'watch'
 		answered = reply.isComplete()
 	end 'watch'
-	let p = try await reply otherwise 0
+	let p = await reply
 	print("retaken={retaken} woken={answered} ran={n + s + p}\n")
 
 	return 0
@@ -964,13 +964,13 @@ end 'Sentinel'
 function main() returns ExitCode
 	let sentinel = spawn Sentinel.create()
 	print("M: reading\n")
-	let tailReply = sentinel.ping()
+	let tailReply = try sentinel.ping() otherwise panic("an open mailbox with room takes the send")
 	let start = Clock.nowMs()
 	let line = try Console.stdin().readLine() otherwise ""
 	let waitedMs = Clock.elapsedMs(start)
 	print("M: read returned\n")
 
-	let tail = try await tailReply otherwise 0
+	let tail = await tailReply
 	var blocked = "no"
 	if waitedMs >= blockedThresholdMs 'blocked'
 		blocked = "yes"

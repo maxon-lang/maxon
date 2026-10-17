@@ -14,7 +14,7 @@ typealias RowComparator = function(Row, Row) returns Ordering
 typealias ReadPromise = Promise with (LineArray, ReadError)
 typealias ReadPromiseArray = Array with ReadPromise
 typealias SorterArray = Array with Sorter.handle
-typealias SortedPromise = Promise with (LineArray, ServiceError)
+typealias SortedPromise = Promise with (LineArray)
 typealias SortedPromiseArray = Array with SortedPromise
 
 let programPathArgument = 0
@@ -506,7 +506,7 @@ function readInput(options Options, summary RunSummary) returns LineArray
 	return lines
 end 'readInput'
 
-function sortedChunks(lines LineArray, settings SortSettings, workers WorkerCount, maker KeyMaker, summary RunSummary) returns ChunkArray
+function sortedChunks(lines LineArray, settings SortSettings, workers WorkerCount, maker KeyMaker) returns ChunkArray
 	var sorters = SorterArray.create()
 
 	for _ in 1 to workers 'spawnWorkers'
@@ -529,20 +529,14 @@ function sortedChunks(lines LineArray, settings SortSettings, workers WorkerCoun
 			chunk.push(line.clone())
 		end 'eachLine'
 
-		replies.push(sorter.sortLines(chunk))
+		replies.push(try sorter.sortLines(chunk) otherwise panic("sortedChunks: a fresh sorter refuses its only chunk"))
 		first = stop
 	end 'sendChunks'
 
 	var chunks = ChunkArray.create()
 
-	for (received, reply) in replies.withIterator() 'receiveChunks'
-		view sorted = try await reply otherwise 'stopped'
-			printError("msort: worker {received.index()} stopped before it answered\n")
-			summary.troubled = true
-			continue
-		end 'stopped'
-
-		chunks.push(rowsFrom(sorted, maker: maker))
+	for reply in replies 'receiveChunks'
+		chunks.push(rowsFrom(await reply, maker: maker))
 	end 'receiveChunks'
 
 	for sorter in sorters 'shutDown'
@@ -614,12 +608,12 @@ function mergeChunks(chunks ChunkArray, compare RowComparator) returns RowArray
 	return chunkAt(round, position: 0)
 end 'mergeChunks'
 
-function sortedRows(lines LineArray, settings SortSettings, workers WorkerCount, maker KeyMaker, summary RunSummary) returns RowArray
+function sortedRows(lines LineArray, settings SortSettings, workers WorkerCount, maker KeyMaker) returns RowArray
 	if workers == fewestWorkers 'inProcess'
 		return Sorter.create(settings.clone()).sortRows(lines)
 	end 'inProcess'
 
-	return mergeChunks(sortedChunks(lines, settings: settings, workers: workers, maker: maker, summary: summary), compare: settings.comparator())
+	return mergeChunks(sortedChunks(lines, settings: settings, workers: workers, maker: maker), compare: settings.comparator())
 end 'sortedRows'
 
 function withoutDuplicates(rows RowArray, compare RowComparator) returns RowArray
@@ -689,7 +683,7 @@ function main() returns ExitCode
 	summary.linesRead = lines.count() as LineCount
 
 	summary.workers = options.workersFor(lines.count() as LineCount)
-	let sorted = sortedRows(lines, settings: settings, workers: summary.workers, maker: maker, summary: summary)
+	let sorted = sortedRows(lines, settings: settings, workers: summary.workers, maker: maker)
 	printRows(withoutDuplicates(sorted, compare: compare) if options.unique else sorted)
 
 	if options.stats 'stats'

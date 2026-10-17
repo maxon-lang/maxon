@@ -362,10 +362,11 @@ function noteIfFunctionRef(op MaxonOp, seen FnRefThunkSet, targets NameRoster, f
 		// The error-flag encode names no function value — its operand is an enum tag or a box pointer.
 		errorFlagEncode then break
 
-		// No service op names a function VALUE. The two addresses a `serviceSpawn` lowers to (`<T>.__loop`,
-		// `<T>.__abandon`) and the one a `serviceReplyCell` lowers to (`__gt_reply_release_<message>`) are
-		// `StdOp.funcAddr`s the LOWERING mints, and every one is called through the uniform runtime ABI rather
-		// than through a function value's `(args, record)` one.
+		// No service op names a function VALUE. The address a `serviceSpawn` lowers to
+		// (`<T>.__loop`) and the one a `serviceReplyCell` lowers to
+		// (`__gt_reply_release_<message>`) are `StdOp.funcAddr`s the LOWERING mints, and every one
+		// is called through the uniform runtime ABI rather than through a function value's `(args,
+		// record)` one.
 		serviceSpawn or
 		serviceSend or
 		serviceReplyCell then break
@@ -537,7 +538,7 @@ function uncheckedCallPathOf(op MaxonOp, marks ValueMarkColumn) returns CallPath
 	return match op 'op'
 		indirectCall(result, _, args, _) gives CallPath.none if valueIsMarked(marks, value: result) else CallPath.indirect(userArityOfIndirectCall(args))
 		asyncCall(result, callee, _, _, _, _, _) gives CallPath.none if valueIsMarked(marks, value: result) else CallPath.named(callee)
-		serviceSend(result, callee, _, _, _) gives CallPath.none if valueIsMarked(marks, value: result) else CallPath.named(callee)
+		serviceSend(result, _, callee, _, _, _) gives CallPath.none if valueIsMarked(marks, value: result) else CallPath.named(callee)
 		witnessDispatch(result, _, _, _, methodIndex, interfaceDeclIndex, _, _) gives CallPath.none if valueIsMarked(marks, value: result) else CallPath.witness(interfaceDeclIndex, methodIndex: methodIndex)
 		witnessTryDispatch(result, _, _, _, _, methodIndex, interfaceDeclIndex, _) gives CallPath.none if valueIsMarked(marks, value: result) else CallPath.witness(interfaceDeclIndex, methodIndex: methodIndex)
 		call(result, callee, _, _, _, _, _, _) gives CallPath.tableSend if callee.equals(MboxInterfaceSendName) and not valueIsMarked(marks, value: result) else CallPath.none

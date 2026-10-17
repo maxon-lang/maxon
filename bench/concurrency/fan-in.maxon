@@ -1,5 +1,5 @@
 typealias ProducerIndex = int(0 to 63)
-typealias SentPromise = Promise with (Count, ServiceError)
+typealias SentPromise = Promise with (Count)
 typealias SentPromiseArray = Array with SentPromise
 
 let producerCount = 64
@@ -22,6 +22,44 @@ type Sink
 	end 'received'
 end 'Sink'
 
+function deliver(sink Sink.handle, value Count)
+	var landed = false
+
+	while not landed 'untilItLands'
+		try sink.receive(value) otherwise (e) 'refused'
+			match e 'why'
+				mailboxFull then Scheduler.yield()
+				serviceStopped then panic("fan-in: the sink stopped while a producer was sending")
+			end 'why'
+
+			continue
+		end 'refused'
+
+		landed = true
+	end 'untilItLands'
+end 'deliver'
+
+function readTotal(sink Sink.handle) returns Count
+	var total = 0 as Count
+	var read = false
+
+	while not read 'untilItLands'
+		let received = try await sink.received() otherwise (e) 'refused'
+			match e 'why'
+				mailboxFull then Scheduler.yield()
+				serviceStopped then panic("fan-in: the sink stopped before the final read")
+			end 'why'
+
+			continue
+		end 'refused'
+
+		total = received
+		read = true
+	end 'untilItLands'
+
+	return total
+end 'readTotal'
+
 type Producer
 	var index as ProducerIndex
 	var sink as Sink.handle
@@ -34,7 +72,7 @@ type Producer
 		let base = (self.index as Count) * perProducer
 
 		for offset in 0 upto perProducer 'eachValue'
-			self.sink.receive(base + offset)
+			deliver(self.sink, value: base + offset)
 		end 'eachValue'
 
 		return perProducer
@@ -52,16 +90,15 @@ function main() returns ExitCode
 
 	for index in 0 upto producerCount 'spawnProducers'
 		let producer = spawn Producer.create(index as ProducerIndex, sink: sink.clone())
-		sent.push(producer.produce(perProducer))
+		sent.push(try producer.produce(perProducer) otherwise panic("fan-in: a fresh producer refused its only message"))
 	end 'spawnProducers'
 
 	// A producer replies only after its last send, and the sink's mailbox is FIFO, so once every reply
 	// is in, every value is queued ahead of the read below.
 	for completion in sent 'awaitProducers'
-		_ = try await completion otherwise panic("fan-in: a producer stopped before it finished")
+		_ = await completion
 	end 'awaitProducers'
 
-	let total = try await sink.received() otherwise panic("fan-in: the sink stopped before it answered")
-	print("fan-in {total}\n")
+	print("fan-in {readTotal(sink)}\n")
 	return 0
 end 'main'

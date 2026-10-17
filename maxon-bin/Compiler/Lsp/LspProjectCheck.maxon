@@ -81,17 +81,37 @@ module type LspProjectChecker
 		let tokens = lspDocumentTokens(request.text, keywords: KeywordTable.create())
 		let body = documentDiagnosticsText(request.uri, text: request.text, tokens: tokens, diagnostics: diagnostics, path: request.path, unbuilt: unbuilt)
 
-		self.writer.publishIfCurrent(request.uri.clone(), version: request.version, clientVersion: request.clientVersion.clone(), outcome: outcome, body: body)
+		submitToLspWriter(self.writer, command: LspWriterCommand.publishIfCurrent(request.uri.clone(), version: request.version, clientVersion: request.clientVersion.clone(), outcome: outcome, body: body))
 	end 'publishDiagnostics'
 
 	function report(request LspProjectCheckRequest, outcome ProjectCheckOutcome)
-		self.writer.report(request.uri.clone(), clientVersion: request.clientVersion.clone(), outcome: outcome)
+		submitToLspWriter(self.writer, command: LspWriterCommand.report(request.uri.clone(), clientVersion: request.clientVersion.clone(), outcome: outcome))
 	end 'report'
 
 	function interestIn(request LspProjectCheckRequest) returns CompileInterest
 		return CompileInterest.whileCurrent(self.writer.clone(), uri: request.uri.clone(), version: request.version)
 	end 'interestIn'
 end 'LspProjectChecker'
+
+// See `stdlib/Log.maxon`'s `LogSink.write` for why the retry yields and where it can still
+// livelock.
+module function submitProjectCheck(checker LspProjectChecker.handle, request LspProjectCheckRequest)
+	var pending = request.clone()
+
+	while true 'untilQueued'
+		try checker.check(pending) otherwise (e) 'refused'
+			match e 'why'
+				mailboxFull(back) then pending = back
+				serviceStopped then panic("submitProjectCheck: the project checker stopped while the workspace still held its handle")
+			end 'why'
+
+			Scheduler.yield()
+			continue
+		end 'refused'
+
+		return
+	end 'untilQueued'
+end 'submitProjectCheck'
 
 union ProjectCheck
 	checked(diagnostics DiagnosticArray)

@@ -63,12 +63,12 @@ function main() returns ExitCode
 
 	// This one is legal and is the whole of what a service may be handed: `main` owns
 	// `shared` alone, gives up its reference, and `first` becomes the box's one owner.
-	first.churn(shared, perRound: rounds)
+	try first.churn(shared, perRound: rounds) otherwise panic("refcount-service-refused: a fresh service refused its only message")
 
 	// ⛔ THE LINE THAT MUST NOT COMPILE. `main` no longer holds a reference to give up,
 	// and the only way this could be made to work is the one the language refuses —
 	// two green threads owning one box and stepping one plain refcount word.
-	second.churn(shared, perRound: rounds)
+	try second.churn(shared, perRound: rounds) otherwise panic("refcount-service-refused: a fresh service refused its only message")
 
 	return 42
 end 'main'

@@ -34,9 +34,9 @@
 // does, `insertRangeChecks`, which stays serial. A diagnostic added to one of these passes needs a
 // `Project`, which no worker has: it fails to compile the worker rather than being lost on a pool thread.
 
-// A reply cell carrying one function back. The message throws nothing, so its error set is the bare
-// `ServiceError` — the service can be gone.
-typealias StdPassReply = Promise with (StdUnitBody, ServiceError)
+// A reply cell carrying one function back. The message throws nothing, so the promise names no
+// error type.
+typealias StdPassReply = Promise with (StdUnitBody)
 typealias StdPassReplyArray = Array with StdPassReply
 typealias StdArrivedUnits = ArrivedUnits with StdModule
 typealias StdPassWorkerHandleArray = Array with StdPassWorker.handle
@@ -463,10 +463,9 @@ function drainTheStdPool(module StdModule, workers StdPassWorkerHandleArray, wor
 		let ready = replies.awaitAny()
 		let freedWorker = dispatch.workerAt(ready)
 		let job = dispatch.land(ready, outstanding: replies.count())
-		let funcIndex = job
 		let reply = try replies.remove(ready) otherwise panic("drainTheStdPool: replies.remove({ready}) — `awaitAny` answered a slot of this very array")
 
-		var body = try await reply otherwise panic("{workerGoneMessage("drainTheStdPool", subject: "the worker running function {funcIndex}")}")
+		var body = await reply
 		slots.record(job, slot: landedOrigins.count())
 		arrivedUnits.arrive(body.unitModule)
 		landedOrigins.push(body.origins)
@@ -497,7 +496,7 @@ end 'spliceSettledStdUnits'
 function dispatchOneStdJob(module StdModule, workers StdPassWorkerHandleArray, workerSlot ElementIndex, dispatch PoolDispatch, replies StdPassReplyArray)
 	var worker = try workers.get(workerSlot) otherwise panic("dispatchOneStdJob: workers.get OOB at {workerSlot} below count {workers.count()}")
 	let funcIndex = dispatch.nextJob(workerSlot)
-	replies.push(worker.run(StdUnit.extract(module, func: module.getFunc(funcIndex), funcIndex: funcIndex)))
+	replies.push(try worker.run(StdUnit.extract(module, func: module.getFunc(funcIndex), funcIndex: funcIndex)) otherwise panic("{workerRefusedSendMessage("dispatchOneStdJob", subject: "the worker running function {funcIndex}")}"))
 end 'dispatchOneStdJob'
 
 function announceAndSummarizeSteps(members StdFanOutStepArray, tallies StdPassTallyArray, funcCount ElementIndex, reducesDivision bool)

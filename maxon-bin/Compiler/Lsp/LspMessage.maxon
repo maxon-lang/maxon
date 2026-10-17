@@ -161,7 +161,7 @@ module function writeLspResult(writer LspStdoutWriter.handle, doc JsonDoc, id Ls
 end 'writeLspResult'
 
 module function writeLspNotification(writer LspStdoutWriter.handle, doc JsonDoc, method String, params JsonNodeId)
-	writer.write(lspNotificationText(doc, method: method, params: params))
+	submitToLspWriter(writer, command: LspWriterCommand.write(lspNotificationText(doc, method: method, params: params)))
 end 'writeLspNotification'
 
 module function lspNotificationText(doc JsonDoc, method String, params JsonNodeId) returns String
@@ -190,7 +190,7 @@ function writeLspResponse(writer LspStdoutWriter.handle, doc JsonDoc, id LspRequ
 	var envelope = beginJsonRpcMessage(doc)
 	envelope.put(JsonRpcIdKey, value: idNodeFor(id))
 	envelope.putNode(memberKey, value: payload)
-	writer.write(jsonRpcMessageText(doc, envelope: envelope))
+	submitToLspWriter(writer, command: LspWriterCommand.write(jsonRpcMessageText(doc, envelope: envelope)))
 end 'writeLspResponse'
 
 // The one member EVERY JSON-RPC message carries, whichever direction it goes and whether or not it is

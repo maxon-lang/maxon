@@ -134,12 +134,12 @@ export function maxonOpDefinedValue(op MaxonOp) returns ValueId throws AbsentErr
 		errorFlagEncode(result, _, _) then return result
 
 		// A `spawn` DEFINES the mailbox pointer the parser stores into the handle box.
-		serviceSpawn(result, _, _) then return result
+		serviceSpawn(result, _, _, _) then return result
 
-		// A SEND defines a VOID result — a service message is fire-and-forget, so there is no reply for that slot
-		// to carry, and it exists for the reason a void `call`'s does: every op in this dialect that a statement
-		// can be names its result.
-		serviceSend(result, _, _, _, _) then return result
+		// A SEND defines a VOID result — a reply travels through its `serviceReplyCell`, so there is none
+		// for that slot to carry, and it exists for the reason a void `call`'s does: every op in this
+		// dialect that a statement can be names its result.
+		serviceSend(result, _, _, _, _, _) then return result
 
 		// ⭐ A REPLY CELL defines the PROMISE an awaitable send hands back — a value the parser binds,
 		// slots into the request and awaits, so it needs an origin exactly as every other one does.
@@ -184,7 +184,7 @@ export function maxonOpOperandValues(op MaxonOp, into ValueIdArray)
 		binOp(_, lhs, rhs, _) then appendPair(into, first: lhs, second: rhs)
 		compare(_, lhs, rhs, _, _) then appendPair(into, first: lhs, second: rhs)
 		storeIndirect(addr, _, value, _) then appendPair(into, first: addr, second: value)
-		serviceSend(_, _, handle, request, bytes) then appendTriple(into, first: handle, second: request, third: bytes)
+		serviceSend(_, _, _, handle, request, bytes) then appendTriple(into, first: handle, second: request, third: bytes)
 		unaryOp(_, operand, _) then into.push(operand)
 		condBranch(cond, _, _) then into.push(cond)
 		loadIndirect(_, addr, _, _) then into.push(addr)
@@ -195,7 +195,7 @@ export function maxonOpOperandValues(op MaxonOp, into ValueIdArray)
 		switch(subject, _, _) then into.push(subject)
 		panicAbortValue(messagePtr) then into.push(messagePtr)
 		errorFlagEncode(_, errorValue, _) then into.push(errorValue)
-		serviceSpawn(_, _, state) then into.push(state)
+		serviceSpawn(_, _, state, capacity) then appendPair(into, first: state, second: capacity)
 		existentialWitness(_, _, conformer) then into.push(conformer)
 		holdValue(_, held, _, args, _) then appendValuesAndOne(into, values: args, one: held)
 		holdEnd(_, held, _, args, _) then appendValuesAndOne(into, values: args, one: held)

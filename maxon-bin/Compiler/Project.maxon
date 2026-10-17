@@ -7201,8 +7201,8 @@ export type StructLayout
 
 	// ⭐⭐ **THE TYPE'S MESSAGE ROSTER — its `export`/`public` INSTANCE methods, IN DECLARATION ORDER.**
 	// A `spawn T.create()` anywhere in the program makes `T` a service, and this list IS the synthesized
-	// `T.request` union's variant order after the compiler's own `__shutdown` at variant 0. The ORDER is
-	// therefore a wire format: reordering two exported methods renumbers two variants.
+	// `T.request` union's variant order. The ORDER is therefore a wire format: reordering two exported
+	// methods renumbers two variants.
 	//
 	// ⚠ **MEMBERSHIP IS `isProgramWideTier` AND `takesReceiver`, and each half excludes something different.**
 	// The tier is the reach `export` and `public` share (see `isProgramWideTier`) — a `module` or file-private
@@ -8407,8 +8407,8 @@ end 'conformanceListDeclares'
 // `E3016: … which does not conform to Error`.
 //
 // ⇒ A seed stands in for a DECLARATION and owes every clause that declaration writes, not just its cases.
-// ⚠ `module`: `ServiceCompanions.buildServiceReplyErrorEnum` synthesizes an error enum too,
-// and it owes `implements Error` for the reason this header gives — a `throws Calc.divide.errors` clause is
+// ⚠ `module`: `ServiceCompanions.buildServiceSendErrorUnion` synthesizes an error enum too,
+// and it owes `implements Error` for the reason this header gives — a `throws Store.keep.sendError` clause is
 // checked by `ConformanceCheck.requireImplErrorConformsAndIsScalar` like any other.
 module function builtinErrorConformance(interfaces IrInterfaceMap) returns NameRoster
 	var conformsTo = NameRoster.create()
@@ -8594,8 +8594,8 @@ export function serviceHandleCompanionName(typeName ByteArray) returns ByteArray
 	return "{String.from(typeName)}.{String.from(ServiceHandleMemberName)}".toByteArray()
 end 'serviceHandleCompanionName'
 
-// The member half of the DISPATCH LOOP's symbol — `__`-prefixed for `ServiceShutdownCaseName`'s reason: no
-// source may declare it (E2051) and no author may call it.
+// The member half of the DISPATCH LOOP's symbol — `__`-prefixed so no source may declare it (E2051)
+// and no author may call it.
 module let ServiceLoopMemberName = b"__loop"
 
 // ⭐⭐ **`<T>.__loop` — THE SYNTHESIZED DISPATCH LOOP'S SYMBOL, SPELLED ONCE FOR ITS THREE READERS.**
@@ -8609,40 +8609,10 @@ module function serviceLoopSymbol(typeName ByteArray) returns ByteArray
 	return qualifiedMethodName(typeName, methodName: ServiceLoopMemberName)
 end 'serviceLoopSymbol'
 
-// The member half of the ABANDON function's symbol — `__`-prefixed for `ServiceLoopMemberName`'s reason.
-let ServiceAbandonMemberName = b"__abandon"
-
-// ⭐⭐ **`<T>.__abandon` — WHAT A REQUEST THAT WILL NEVER BE HANDLED GETS, SPELLED ONCE FOR ITS THREE
-// READERS.** `ServiceLoop.buildServiceAbandon` BUILDS it, `LowerMaxonToStd.lowerServiceSpawn` emits
-// the `funcAddr` that stores its address into the mailbox's `abandonFn`, and
-// `MailboxRuntime.buildMboxAbandon` calls it through that pointer.
-//
-// ⭐ **IT IS NOT A BARE PAYLOAD DROP, AND THE DIFFERENCE IS A LIVENESS OBLIGATION.** Dropping an
-// unhandled message's payloads releases what it owns and stops, but a message that dies unprocessed
-// also has an AWAITER, and leaving it parked for a reply that will never come is a hang with no
-// diagnostic — so the abandon path answers `ServiceError.stopped` into the reply slot FIRST and
-// then drops the live variant's managed payloads in place.
-module function serviceAbandonSymbol(typeName ByteArray) returns ByteArray
-	return qualifiedMethodName(typeName, methodName: ServiceAbandonMemberName)
-end 'serviceAbandonSymbol'
-
-// ⭐⭐ **`__shutdown` IS VARIANT 0 OF EVERY REQUEST UNION, SO ADDING A MESSAGE NEVER RENUMBERS IT.** The
-// poison pill is the one variant the RUNTIME will construct from a literal tag, and the roster above it is
-// the author's to reorder; putting it last would move it every time a method was added. It wears the `__`
-// prefix because no source may declare it (`requireUnreservedName`, E2051) and no `match` an author writes
-// may name it.
-export let ServiceShutdownCaseName = b"__shutdown"
-
-// The variant INDEX that name occupies, which is what a reader that has a layout in hand actually needs.
-// Derived from nothing and written here beside the rule that fixes it: `buildServiceRequestUnion` adds the
-// pill FIRST, and `addServiceRequestCase` gives each case the index its position in the roster gives it.
-export let ServiceShutdownCaseIndex = 0 as CaseIndex
-
 // ⭐⭐ **THE REPLY SLOT IS AN `Integer`, DELIBERATELY, AND THE PAYLOAD DROPS ARE WHY.** It is a raw
-// cell pointer, NOT a managed box: every payload drop — `<T>.__abandon`'s and a `__destruct_<U>`
+// cell pointer, NOT a managed box: every payload drop — the loop's and a `__destruct_<U>`
 // cascade's — must SKIP it, and each does so structurally because a scalar payload is not managed.
-// Answering an abandoned reply cell is `<T>.__abandon`'s job, not a decref's — and a managed-typed
-// slot here would hand those drops a box they must not free.
+// A managed-typed slot here would hand those drops a box they must not free.
 //
 // ⚠ **A VARIANT EITHER HAS THIS SLOT OR DOES NOT, AND THERE IS NO `0` STANDING FOR "NO REPLY".**
 // The presence of the slot IS the question, and `ServiceCompanions.serviceReplySlotIndex` is the
@@ -8650,43 +8620,11 @@ export let ServiceShutdownCaseIndex = 0 as CaseIndex
 // reader had to remember not to dereference.
 module let ServiceReplySlotName = b"__reply"
 
-// ⭐ **THE TRANSPORT HALF OF EVERY REPLY'S ERROR TYPE, AS A NAME.** `stdlib/Builtins.maxon` declares
-// `public enum ServiceError`, and the compiler has to look that declaration up to place its cases on a
-// reply's fused dispatch line — so the spelling is here, once, rather than as a byte literal at each of the
-// three sites that ask (`ServiceCompanions.serviceReplyTransportPlacement`,
-// `Parser.serviceReplyErrorMembers` and `ProgramSignatures.serviceReplyErrorName`).
-module let ServiceErrorTypeName = b"ServiceError"
+let ServiceSendErrorSuffix = b"sendError"
 
-// ⭐ **THE ONE CASE OF `ServiceError`, AS A NAME.** `<T>.__abandon` transcribes its ORDINAL into a reply's
-// error word, which makes the case ORDER a wire format — so the transcription is checked against the
-// declaration on every compile (`BuiltinErrorOrdinalCheck`), exactly as the three `__Managed*Error`
-// families' are, and this constant is what names the case at both ends of that check.
-module let ServiceErrorStoppedCaseName = b"stopped"
-
-// ⭐ **THE MEMBER HALF OF A TWO-MEMBER REPLY ERROR TYPE'S NAME** — `Calc.divide.errors`,
-// `specs/services.md`'s own spelling.
-//
-// ⛔ **IT IS A REGISTERED TYPE AND NOT MERELY A DIAGNOSTIC STRING** — so *"no registry holds it, nothing
-// resolves it, and that is what makes a bare `try` over such a reply E3059 — there is no `throws` clause an
-// author could write that names it"* is false in every clause.
-// `ServiceCompanions.synthesizeServiceCompanions`' third pass mints a nominal enum under this
-// name for every THROWING message and registers it through the same `recordEnum` door every author-written
-// enum takes, so `function fetch(…) throws Calc.divide.errors` resolves and
-// `Promise with (Integer, Calc.divide.errors)` interns. E3059 is what a bare `try` earns when the
-// enclosing clause names the HANDLER half alone — a name mismatch, which is a different sentence for a
-// different mistake.
-let ServiceReplyErrorSuffix = b"errors"
-
-// ⭐ **THE FUSED REPLY ERROR TYPE'S REGISTERED NAME — `<Service>.<method>.errors`.** DOTTED for
-// `serviceRequestCompanionName`'s reason and by the same construction: `Parser.parseTypeReference`'s
-// qualified arm and `Parser.parseOptionalThrowsClause` both assemble a dotted chain into one name, so the
-// enum is found under exactly the key a `throws Calc.divide.errors` clause produces.
-//
-// ⚠ **ITS ARGUMENT IS THE MESSAGE KEY (`<Service>.<method>`), not a service name** — the fused pair is a
-// property of ONE message, because what it fuses is `ServiceError` with what THAT message declares.
-export function serviceReplyErrorsCompanionName(messageKey ByteArray) returns ByteArray
-	return "{String.from(messageKey)}.{String.from(ServiceReplyErrorSuffix)}".toByteArray()
-end 'serviceReplyErrorsCompanionName'
+export function serviceSendErrorCompanionName(messageKey ByteArray) returns ByteArray
+	return "{String.from(messageKey)}.{String.from(ServiceSendErrorSuffix)}".toByteArray()
+end 'serviceSendErrorCompanionName'
 
 // The one field of `<T>.handle`: the mailbox pointer. A real 8-byte box on `managedFileLayout`'s shape
 // rather than a parse-time mark, so moves, E3102, struct fields, arrays and the drop cascade all reach it
@@ -8698,23 +8636,21 @@ module let ServiceHandleMailboxFieldName = b"mailbox"
 // is what keeps the index and `ServiceHandleMailboxOffset` two spellings of one geometry.
 export let ServiceHandleMailboxFieldIndex = 0 as FieldIndex
 
+// ⭐⭐ **`shutdown` IS THE HANDLE'S OWN METHOD, NOT A MESSAGE — AND IT YIELDS TO ONE OF THAT NAME.**
+// It closes the mailbox, so everything already queued still runs and every later send fails with
+// `serviceStopped`, which is what makes a shutdown a graceful drain rather than a kill. It follows
+// `clone`'s precedent exactly (`Parser.structCloneIsSynthesized`): a service that declares an
+// `export function shutdown()` of its own WINS, because that declaration is a VARIANT of the
+// request union and the dispatch looks for a variant first — which leaves dropping the last handle
+// as the other road to the same close.
+export let ServiceShutdownMethodName = b"shutdown"
+
 // ⭐⭐ **THE HANDLE BOX'S GEOMETRY AS A NUMBER, FOR THE ONE READER THAT HAS NO LAYOUT — the RUNTIME.**
 // `__mbox_handle_clone_box` mints a fresh handle box and `__mbox_handle_drop_box` reads the mailbox out of
 // one, and neither can ask `StructLayout` anything: they are Std-tier bodies built after the pipeline. The
 // pair is AUDITED against the layout at the one place that builds it
 // (`ServiceCompanions.buildServiceHandleStruct`), so a field added to the handle fails the compile rather
 // than making the runtime read past the record's end.
-// ⭐⭐ **`shutdown` IS THE HANDLE'S OWN METHOD, NOT A MESSAGE — AND IT YIELDS TO ONE OF THAT NAME.** It
-// enqueues the `__shutdown` pill BEHIND everything already queued, which is what makes a shutdown a graceful
-// drain rather than a kill. It follows `clone`'s precedent exactly (`Parser.structCloneIsSynthesized`): a
-// service that declares an `export function shutdown()` of its own WINS, because that declaration is a
-// VARIANT of the request union and the dispatch looks for a variant first — which leaves dropping the last
-// handle as the other road to the same drain.
-//
-// ⚠ It is the AUTHOR-SPELLABLE name; `ServiceShutdownCaseName` above is the compiler's `__`-prefixed
-// VARIANT, which no source may declare and no author may name.
-export let ServiceShutdownMethodName = b"shutdown"
-
 export let ServiceHandleMailboxOffset = 0 as ByteOffset
 export let ServiceHandleBoxSize = 8 as FullRangeInt
 
@@ -8773,7 +8709,7 @@ export function appendUnionCasesCompanion(enums EnumLayoutArray, layout EnumLayo
 end 'appendUnionCasesCompanion'
 
 // ⭐ **THE COMPANION ITSELF, SPLIT FROM THE APPENDER FOR ITS SECOND REGISTRAR.** A SERVICE's
-// request union is registered through `ProgramSignatures.recordServiceRequest` rather than pushed onto an
+// request union is registered through `ProgramSignatures.recordServiceUnion` rather than pushed onto an
 // array, and it owes its `unionCases` companion exactly as an author's union does —
 // `services.unioncases-tags-the-request-variants` reads `Calc.request.unionCases.bump.rawValue`. Two builders
 // would be two answers to "what tag does a variant carry", which is the drift the header below is entirely
@@ -12536,7 +12472,7 @@ export union CompileInterest
 	export function stillWanted() returns bool
 		match self 'interest'
 			always then return true
-			whileCurrent(writer, uri, version) then return try await writer.isCurrent(uri.clone(), version: version) otherwise false
+			whileCurrent(writer, uri, version) then return lspWriterHoldsVersion(writer, uri: uri, version: version)
 		end 'interest'
 	end 'stillWanted'
 end 'CompileInterest'

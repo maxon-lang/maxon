@@ -87,7 +87,7 @@ type LspSession
 			end 'incoming'
 		end 'pump'
 
-		self.workspace.writer.endSession()
+		submitToLspWriter(self.workspace.writer, command: LspWriterCommand.endSession)
 
 		return exitCode()
 	end 'run'
@@ -96,7 +96,7 @@ type LspSession
 		self.documents.upsert(uri, value: text)
 		self.nextDocumentVersion = self.nextDocumentVersion + 1
 		let version = self.nextDocumentVersion
-		self.workspace.writer.track(uri.clone(), version: version)
+		submitToLspWriter(self.workspace.writer, command: LspWriterCommand.track(uri.clone(), version: version))
 
 		match publishBufferDiagnostics(self.workspace, uri: uri, text: text, arrival: arrival) 'publish'
 			unchecked then return
@@ -107,7 +107,7 @@ type LspSession
 	function requestProjectCheck(request LspProjectCheckRequest, reader LspReaderSearch, root WorkspaceRoot)
 		match lspProjectCheckRoot(reader, root: root) 'root'
 			none then return
-			at(dir) then lspProjectCheckerFor(self.workspace, dir: dir, tiers: reader.tiers).check(request.clone())
+			at(dir) then submitProjectCheck(lspProjectCheckerFor(self.workspace, dir: dir, tiers: reader.tiers), request: request)
 		end 'root'
 	end 'requestProjectCheck'
 
@@ -273,7 +273,7 @@ type LspSession
 	function closeDocument(doc JsonDoc) throws LspParamsError
 		let (_, _, uri) = try notifiedDocument(doc)
 		_ = self.documents.remove(uri)
-		self.workspace.writer.forget(uri.clone())
+		submitToLspWriter(self.workspace.writer, command: LspWriterCommand.forget(uri.clone()))
 		clearPublishedDiagnostics(self.workspace.writer, uri: uri)
 	end 'closeDocument'
 
