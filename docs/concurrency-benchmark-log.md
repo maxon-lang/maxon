@@ -1079,3 +1079,59 @@ metric (wall, CPU = user + kernel, peak working set); `arm` names the compiler (
 | 2026-10-16 | d914f3bc4 | dirty | windows | shared-counter | 200000 | 12 | 3 | 2,032 | 1,583 | 0.78 | 0.89 | 82.75 | slot | shared-counter oracle is the channel-actor equivalent (cap 1024) |
 | 2026-10-16 | d914f3bc4 | dirty | wsl | shared-counter | 200000 | 1 | 3 | 568 | 1,169 | 2.06 | 2.05 | 297.38 | slot | shared-counter oracle is the channel-actor equivalent (cap 1024) |
 | 2026-10-16 | d914f3bc4 | dirty | wsl | shared-counter | 200000 | 12 | 3 | 1,514 | 1,718 | 1.14 | 1.65 | 252.56 | slot | shared-counter oracle is the channel-actor equivalent (cap 1024) |
+| 2026-10-16 | 41a928111 | dirty | macos | thread-ring | 3000000 | 1 | 3 | 154 | 300 | 1.95 | 1.96 | 0.86 | ref@41a928111 | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | macos | thread-ring | 3000000 | 1 | 3 | 154 | 254 | 1.65 | 1.66 | 0.87 | slot | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | macos | thread-ring | 3000000 | 8 | 3 | 713 | 367 | 0.51 | 0.19 | 1.04 | ref@41a928111 | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | macos | thread-ring | 3000000 | 8 | 3 | 713 | 317 | 0.44 | 0.16 | 1.02 | slot | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | macos | ping-pong | 1000000 | 1 | 3 | 178 | 193 | 1.08 | 1.08 | 0.61 | ref@41a928111 | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | macos | ping-pong | 1000000 | 1 | 3 | 178 | 178 | 1.00 | 1.00 | 0.61 | slot | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | macos | ping-pong | 1000000 | 8 | 3 | 206 | 258 | 1.25 | 1.23 | 0.60 | ref@41a928111 | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | macos | ping-pong | 1000000 | 8 | 3 | 206 | 241 | 1.17 | 1.14 | 0.60 | slot | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | macos | fan-in | 100000 | 1 | 3 | 126 | 160 | 1.27 | 1.24 | 80.81 | ref@41a928111 | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | macos | fan-in | 100000 | 1 | 3 | 126 | 90 | 0.72 | 0.72 | 35.68 | slot | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | macos | fan-in | 100000 | 8 | 3 | 480 | 225 | 0.47 | 0.35 | 57.68 | ref@41a928111 | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | macos | fan-in | 100000 | 8 | 3 | 480 | 131 | 0.27 | 0.15 | 29.08 | slot | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | macos | worker-pool | 6000 250000 | 1 | 3 | 2,228 | 2,235 | 1.00 | 1.00 | 1.53 | ref@41a928111 | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | macos | worker-pool | 6000 250000 | 1 | 3 | 2,228 | 2,231 | 1.00 | 1.00 | 1.51 | slot | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | macos | worker-pool | 6000 250000 | 8 | 3 | 413 | 424 | 1.03 | 1.00 | 1.36 | ref@41a928111 | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | macos | worker-pool | 6000 250000 | 8 | 3 | 413 | 429 | 1.04 | 1.00 | 1.42 | slot | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | macos | spawn-many | 200000 | 1 | 3 | 107 | 141 | 1.32 | 1.28 | 2.73 | ref@41a928111 | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | macos | spawn-many | 200000 | 1 | 3 | 107 | 130 | 1.21 | 1.17 | 2.94 | slot | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | macos | spawn-many | 200000 | 8 | 3 | 29 | 102 | 3.49 | 3.85 | 9.09 | ref@41a928111 | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | macos | spawn-many | 200000 | 8 | 3 | 29 | 121 | 4.16 | 4.19 | 9.21 | slot | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | macos | coroutine-churn | 200000 | 1 | 3 | 189 | 112 | 0.59 | 0.57 | 1.46 | ref@41a928111 | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | macos | coroutine-churn | 200000 | 1 | 3 | 189 | 113 | 0.59 | 0.60 | 1.47 | slot | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | macos | coroutine-churn | 200000 | 8* | 3 | 189 | 113 | 0.60 | 0.58 | 1.45 | ref@41a928111 | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | macos | coroutine-churn | 200000 | 8* | 3 | 189 | 113 | 0.60 | 0.58 | 1.45 | slot | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | macos | shared-counter | 200000 | 1 | 3 | 251 | 315 | 1.26 | 1.25 | 161.42 | ref@41a928111 | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | macos | shared-counter | 200000 | 1 | 3 | 251 | 175 | 0.70 | 0.70 | 70.08 | slot | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | macos | shared-counter | 200000 | 8 | 3 | 989 | 447 | 0.45 | 0.33 | 112.49 | ref@41a928111 | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | macos | shared-counter | 200000 | 8 | 3 | 989 | 255 | 0.26 | 0.14 | 56.75 | slot | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | orb | thread-ring | 3000000 | 1 | 3 | 156 | 315 | 2.02 | 2.03 | 0.82 | ref@41a928111 | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | orb | thread-ring | 3000000 | 1 | 3 | 156 | 257 | 1.66 | 1.66 | 0.86 | slot | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | orb | thread-ring | 3000000 | 7 | 3 | 213 | 322 | 1.51 | 0.97 | 0.88 | ref@41a928111 | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | orb | thread-ring | 3000000 | 7 | 3 | 213 | 263 | 1.23 | 0.79 | 0.89 | slot | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | orb | ping-pong | 1000000 | 1 | 3 | 178 | 201 | 1.13 | 1.13 | 0.33 | ref@41a928111 | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | orb | ping-pong | 1000000 | 1 | 3 | 178 | 188 | 1.06 | 1.06 | 0.32 | slot | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | orb | ping-pong | 1000000 | 7 | 3 | 159 | 199 | 1.26 | 1.25 | 0.31 | ref@41a928111 | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | orb | ping-pong | 1000000 | 7 | 3 | 159 | 191 | 1.20 | 1.19 | 0.31 | slot | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | orb | fan-in | 100000 | 1 | 3 | 124 | 156 | 1.26 | 1.26 | 150.59 | ref@41a928111 | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | orb | fan-in | 100000 | 1 | 3 | 124 | 93 | 0.75 | 0.75 | 66.19 | slot | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | orb | fan-in | 100000 | 7 | 3 | 145 | 158 | 1.09 | 0.97 | 105.50 | ref@41a928111 | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | orb | fan-in | 100000 | 7 | 3 | 145 | 94 | 0.65 | 0.57 | 54.87 | slot | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | orb | worker-pool | 6000 250000 | 1 | 3 | 2,243 | 2,252 | 1.00 | 1.00 | 2.05 | ref@41a928111 | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | orb | worker-pool | 6000 250000 | 1 | 3 | 2,243 | 2,256 | 1.01 | 1.00 | 2.12 | slot | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | orb | worker-pool | 6000 250000 | 7 | 3 | 458 | 426 | 0.93 | 1.04 | 1.91 | ref@41a928111 | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | orb | worker-pool | 6000 250000 | 7 | 3 | 458 | 572 | 1.25 | 0.97 | 1.97 | slot | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | orb | spawn-many | 200000 | 1 | 3 | 108 | 139 | 1.29 | 1.29 | 3.56 | ref@41a928111 | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | orb | spawn-many | 200000 | 1 | 3 | 108 | 128 | 1.19 | 1.18 | 3.84 | slot | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | orb | spawn-many | 200000 | 7 | 3 | 56 | 74 | 1.33 | 1.37 | 2.36 | ref@41a928111 | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | orb | spawn-many | 200000 | 7 | 3 | 56 | 78 | 1.40 | 1.43 | 2.36 | slot | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | orb | coroutine-churn | 200000 | 1 | 3 | 188 | 113 | 0.60 | 0.60 | 1.64 | ref@41a928111 | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | orb | coroutine-churn | 200000 | 1 | 3 | 188 | 113 | 0.60 | 0.60 | 1.65 | slot | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | orb | coroutine-churn | 200000 | 7* | 3 | 168 | 114 | 0.68 | 0.68 | 1.59 | ref@41a928111 | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | orb | coroutine-churn | 200000 | 7* | 3 | 168 | 109 | 0.65 | 0.65 | 1.59 | slot | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | orb | shared-counter | 200000 | 1 | 3 | 249 | 310 | 1.24 | 1.24 | 274.88 | ref@41a928111 | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | orb | shared-counter | 200000 | 1 | 3 | 249 | 186 | 0.74 | 0.75 | 120.46 | slot | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | orb | shared-counter | 200000 | 7 | 3 | 285 | 315 | 1.10 | 1.01 | 209.98 | ref@41a928111 | R8: mailbox ring, no per-message allocation |
+| 2026-10-16 | 41a928111 | dirty | orb | shared-counter | 200000 | 7 | 3 | 285 | 187 | 0.65 | 0.59 | 113.86 | slot | R8: mailbox ring, no per-message allocation |
