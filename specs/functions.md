@@ -17,7 +17,8 @@ return value comes back in `R8`. A seventh integer argument travels in a stack s
 
 ### Argument labels
 
-The FIRST argument is positional; every argument after it must be named with its
+The FIRST argument is positional, and may carry a label only when the callee's first
+parameter has a default; every argument after it must be named with its
 parameter's label (`name: value`). Labelled arguments are reordered to the callee's
 declaration order, so `add(2, b: 3)` binds `2` to `a` and `3` to `b`:
 
@@ -27,7 +28,7 @@ function add(a int, b int) returns int
 end 'add'
 ```
 
-A first argument that carries a label is `E2052`; a later argument that omits one is
+A first argument that carries a label while its parameter has no default is `E2052`; a later argument that omits one is
 `E2053`. Calling an undefined function is `E3004`, a wrong argument count is `E3036`,
 and a label that names no parameter is `E3037`.
 
@@ -304,7 +305,7 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: first-arg-named -->
-The first argument is positional — a label on it is E2052.
+A first argument whose parameter has no default is positional — a label on it is E2052.
 ```maxon
 function add(a Integer, b Integer) returns Integer
 	return a + b
@@ -316,7 +317,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E2052: <fragment>:7:13: the first argument cannot be named; only the second and later arguments take 'name:' labels
+error E2052: <fragment>:7:13: the first argument cannot be named because its parameter has no default
 ```
 
 <!-- test: second-arg-unnamed -->

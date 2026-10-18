@@ -583,19 +583,17 @@ export union SourceParseError implements Error
 	// `targets` as above. Renders as E2047.
 	unknownLoopLabel(keyword String, targets String, label String, line LineNumber, column ColumnNumber)
 
-	// A call whose FIRST argument carries a `name:` label — the first argument is
-	// positional, only the 2nd and later take labels. Renders as E2052. A syntactic
-	// rule the parser checks without the callee's signature.
+	// A call whose FIRST argument carries a `name:` label while the callee's first parameter has no
+	// default. Renders as E2052.
 	firstArgNamed(line LineNumber, column ColumnNumber)
 
-	// A call whose 2nd-or-later argument has NO `name:` label. Renders as E2053. The
-	// symmetric syntactic rule to `firstArgNamed`.
+	// A call whose 2nd-or-later argument has NO `name:` label. Renders as E2053.
 	argMissingLabel(line LineNumber, column ColumnNumber)
 
 	// A call that labels an argument of a callee with NO DECLARATION, at ANY index — a bare compiler
 	// BUILTIN or a `__Builtins.`-qualified intrinsic. Renders as E2067. The THIRD reading of the same
-	// syntactic question, and it needs its own code because the two above both assert that some
-	// position takes labels, which is false for a callee that has no parameters at all.
+	// question, and it needs its own code because the two above both speak of a callee whose
+	// parameters take labels, which is false for a callee that has no parameters at all.
 	// See `argLabelRuleForCallee` for which callees answer that way, and why it is two families.
 	builtinArgNamed(line LineNumber, column ColumnNumber)
 
@@ -8260,9 +8258,9 @@ end 'requireBinOpOperands'
 // enum rather than booleans, so no combination of flags can mean nothing; an `enum` rather than a
 // `union` because a payload-free union case still heap-allocates, once per parsed argument.
 enum ArgLabelRule
-	// Every ordinary call, method call and enum-payload argument list: the first argument is
-	// positional (a label there is E2052) and every later one must be labelled (a bare value there
-	// is E2053).
+	// A list whose parameters declare no defaults — an enum payload, a UCD load,
+	// `__DebugStream.nameId`: the first argument is positional (a label there is E2052) and every
+	// later one must be labelled (a bare value there is E2053).
 	ordinary
 
 	// A witness dispatch through an interface / type-parameter receiver, where the first argument may
@@ -8280,10 +8278,17 @@ enum ArgLabelRule
 	// refused; E3004 at the call rejects the program.
 	unknownMember
 
-	// A message call through a service handle: `ordinary`, except that the reserved `sendTimeout:` may
-	// label the first argument too. `parseCallArgs` takes it off the argument list, so it never reaches
-	// the request, and refuses an argument after it (E3192).
+	// A message call through a service handle: `firstNamedIfDefaulted`, judged at the message's first
+	// parameter after `self`, except that the reserved `sendTimeout:` may label the first argument
+	// whatever the defaults. `parseCallArgs` takes it off the argument list, so it never reaches the
+	// request, and refuses an argument after it (E3192).
 	messageSend
+
+	// Every other call to a declared callee: the first argument may be labelled only when the callee's
+	// first parameter after any receiver has a default (E2052 otherwise), and every later one must be
+	// labelled (E2053). `consumeArgLabel` accepts the first label; `requireFirstArgLabelHasDefault`
+	// judges it once the list is parsed.
+	firstNamedIfDefaulted
 end 'ArgLabelRule'
 
 // **THE `trunc` BUILTIN'S NAME**, and the whole of what makes it one. A `b""` literal, matched
@@ -8963,10 +8968,9 @@ end 'mathBuiltinHelp'
 //
 // ⚠⚠ **RESTRICTING THIS TO `min` WOULD HAVE LEFT THE DEFECT CLASS ALIVE INSIDE ITS OWN FIX** — this
 // repo's recorded scar (a wrong noun corrected for one family and left standing one door over). The
-// arity-1 builtins reach E2052, whose registered sentence is *"the first argument cannot be named;
-// only the second and later arguments take 'name:' labels"* — which invites the reader to fix
-// `abs(x: 1.0)` by writing `abs(1.0, x: …)`, nonsense for a one-argument callee with no declaration.
-// Same wrong noun, one door over. E2067 says the true thing for every member.
+// arity-1 builtins would reach E2052, whose registered sentence (*"the first argument cannot be
+// named because its parameter has no default"*) blames a default on a parameter that a callee with
+// no declaration does not have. E2067 says the true thing for every member.
 //
 // ⭐ **AND THE WIDENING IS WHAT LET `max` COST NOTHING HERE.** When `max` landed at its own whitelist
 // position it needed one more `equals` on this line and nothing else — no new rule, no second
@@ -9640,17 +9644,17 @@ end 'isBuiltinsIntrinsicCallee'
 // The two directions have different reasons and the roster is NOT one of them, so state them apart:
 //
 //   • **RECOGNIZED** intrinsics — every arm of `parseCallNamed`'s `__Builtins` chain — take 0 or 1
-//     argument, so a label on one was already refused. It was refused as E2052, whose sentence (*"only
-//     the second and later arguments take 'name:' labels"*) invites the reader to fix
-//     `__Builtins.readStdin(n: 8)` by moving the label to a second argument that does not exist. E2067
-//     says the true thing, which is the same wrong-noun correction `calleeTakesPositionalArgsOnly`'s
-//     header records for the arity-1 math intrinsics.
+//     argument, so a label on one is refused either way. Under the declared-callee rule it would be
+//     E2052, whose sentence blames a default on a parameter `__Builtins.readStdin(n: 8)` does not
+//     have. E2067 says the true thing, which is the same wrong-noun correction
+//     `calleeTakesPositionalArgsOnly`'s header records for the arity-1 math intrinsics.
 //   • **UNRECOGNIZED** ones can carry any arity — `stdlib/Subprocess.maxon:387`'s fourteen is the case
 //     that opened this — and they were never a working program either: the labelled spelling parsed
-//     under `ordinary` and died at E3004 one pass later. What moves is WHICH refusal speaks first.
-//     MEASURED both ways on `__Builtins.subprocessWaitCollect(1, timeoutMs: 0)`: E3004 before, E2067
-//     now. That is the correct direction — the label really is wrong, and saying so at the label is
-//     nearer the mistake than a resolution failure reported after the whole list is parsed.
+//     under the declared-callee rule and died at E3004 one pass later. What moves is WHICH refusal
+//     speaks first. MEASURED both ways on `__Builtins.subprocessWaitCollect(1, timeoutMs: 0)`:
+//     E3004 before, E2067 now. That is the correct direction — the label really is wrong, and
+//     saying so at the label is nearer the mistake than a resolution failure reported after the
+//     whole list is parsed.
 //
 // No committed expectation moves: the only `maxoncstderr` pin of E2052 against a `__Builtins` callee is
 // `specs/builtins-ucd.md`'s, and that one is on the ucd path above.
@@ -9667,19 +9671,31 @@ end 'isBuiltinsIntrinsicCallee'
 //
 // ⭐ **A DECLARATION TAKES THE NAME BACK, WHICH IS WHY THIS ASKS `shadowedByADeclaration`.** A bare-name
 // builtin owns its spelling only while no file declares one; once a file does, the call binds to that
-// declaration and must meet the ORDINARY label rule, because the declaration has real parameters for a
-// label to name. The two other families can never be shadowed — a `__Builtins.` / `__DebugStream.`
-// callee is qualified, and no file can declare that name — so the term costs them nothing. It is one
-// question asked once in `parseCallNamed` and threaded to both halves: the label rule fires while the
-// arguments are parsed and the emit is chosen after, and a builtin that answered one way here and the
-// other way there would slot a user's arguments under the compiler's rule.
+// declaration and must meet the declared-callee label rule (`firstNamedIfDefaulted`), because the
+// declaration has real parameters for a label to name. The two other families can never be
+// shadowed — a `__Builtins.` / `__DebugStream.` callee is qualified, and no file can declare that
+// name — so the term costs them nothing. It is one question asked once in `parseCallNamed` and
+// threaded to both halves: the label rule fires while the arguments are parsed and the emit is
+// chosen after, and a builtin that answered one way here and the other way there would slot a
+// user's arguments under the compiler's rule.
 function argLabelRuleForCallee(callee ByteArray, shadowedByADeclaration bool) returns ArgLabelRule
 	if shadowedByADeclaration 'aFileOwnsThisName'
-		return ArgLabelRule.ordinary
+		return ArgLabelRule.firstNamedIfDefaulted
 	end 'aFileOwnsThisName'
 
-	return ArgLabelRule.allPositional if calleeTakesPositionalArgsOnly(callee) or isBuiltinsIntrinsicCallee(callee) or isDebugStreamCallee(callee) else ArgLabelRule.ordinary
+	return ArgLabelRule.allPositional if calleeTakesPositionalArgsOnly(callee) or isBuiltinsIntrinsicCallee(callee) or isDebugStreamCallee(callee) else ArgLabelRule.firstNamedIfDefaulted
 end 'argLabelRuleForCallee'
+
+function argLabelRuleChecksFirstParameterDefault(rule ArgLabelRule) returns bool
+	return match rule 'rule'
+		firstNamedIfDefaulted or
+		messageSend gives true
+		ordinary or
+		firstMayBeNamed or
+		allPositional or
+		unknownMember gives false
+	end 'rule'
+end 'argLabelRuleChecksFirstParameterDefault'
 
 // Every clock intrinsic reads a clock and takes nothing.
 let ClockIntrinsicArity = 0
@@ -11646,6 +11662,8 @@ let MapUpsertValueArgSlot = 2 as FieldIndex
 // any program. Read-only (its readers only index it), so ONE allocation serves them all, exactly as
 // `NoImmutableArgNames` does for its own column. See `MaxonOp.call`.
 export let NoDefaultArgSlots = ParamCountArray.create()
+
+let NoReceiverSlots = 0
 
 // The name an E3159 would blame for argument `index` of a call, or `unblamed`. Decodes BOTH shapes
 // of the column — parallel-to-`args`, or the shared empty one above — so no reader has to know
@@ -70448,9 +70466,9 @@ export type Parser
 	// consumed `{`; this leaves the cursor on `}`.
 	//
 	// ⚠ **EVERY FIELD IS LABELLED, INCLUDING THE FIRST — which is the opposite of a CALL's rule**
-	// (`consumeArgLabel`: the first argument is positional, E2052 if labelled). They are two
-	// syntaxes, not one: a call's arguments are ordered by the DECLARATION and the first needs no
-	// name to find its place, while a struct literal names slots outright. So this reads its own
+	// (`ArgLabelRule`: the first argument is positional unless its parameter has a default). They
+	// are two syntaxes, not one: a call's arguments are ordered by the DECLARATION and the first needs
+	// no name to find its place, while a struct literal names slots outright. So this reads its own
 	// labels rather than reusing the call's, and `slotCallArgs` is not involved — there is nothing
 	// to reorder, because the label IS the destination.
 	function parseStructLiteralFields(func IrFunction, layout StructLayout, fieldValues ValueIdArray, filled BoolArray, fieldBareLocal BoolArray) throws SourceParseError
@@ -73062,13 +73080,14 @@ export type Parser
 	// (`requireAllPayloadsProvided`), and hands off to `emitEnumBox`, which validates each field's TYPE
 	// before it emits a single op.
 	//
-	// ⭐ **THE PAYLOAD ARGUMENT LIST FOLLOWS THE CALL-ARG RULE** — the first argument is positional, the
-	// second and later are named (`consumeArgLabel`) — crossed with the struct literal's slot-by-name: a
-	// named argument lands in the slot whose payload FIELD its label names, whatever position it was written
-	// in. A case's payload is ordered by its declaration, so the first argument needs no name to find its
-	// place; the rest do, exactly as a call's arguments do. This is where the two syntaxes meet, and it is
-	// why `slotBareLocal` is captured per SLOT and not per source position — `emitEnumBox`/`moveInPayload`
-	// reads `argsBareLocal[i]` for the field at slot `i`, so a reordering named argument must poison the
+	// ⭐ **THE PAYLOAD ARGUMENT LIST FOLLOWS THE CALL-ARG RULE FOR A LIST WITH NO DEFAULTS** — the
+	// first argument is positional, the second and later are named (`ArgLabelRule.ordinary`) —
+	// crossed with the struct literal's slot-by-name: a named argument lands in the slot whose payload
+	// FIELD its label names, whatever position it was written in. A case's payload is ordered by its
+	// declaration, so the first argument needs no name to find its place; the rest do, exactly as a
+	// call's arguments do. This is where the two syntaxes meet, and it is why `slotBareLocal` is
+	// captured per SLOT and not per source position — `emitEnumBox`/`moveInPayload` reads
+	// `argsBareLocal[i]` for the field at slot `i`, so a reordering named argument must poison the
 	// right source (get it wrong and a managed payload's move-in poisons a use-after-move or leaks).
 	function parseEnumBoxConstruct(func IrFunction, layout EnumLayout, caseIndex CaseIndex, caseTok Token, range SourceRange) returns ValueId throws SourceParseError
 		let payloads = layout.payloadsAt(caseIndex)
@@ -76585,7 +76604,7 @@ export type Parser
 
 		// A message's declared defaults are filled exactly as a direct call's are, through the same door, so
 		// `h.bump()` on a `bump(by int = 1)` sends the same request `h.bump(1)` does.
-		_ = try self.fillOmittedArgDefaults(callee, anchor: memberTok, args: args, argLabels: argLabels, argRanges: argRanges)
+		_ = try self.fillOmittedArgDefaults(callee, anchor: memberTok, args: args, argLabels: argLabels, argRanges: argRanges, receiverSlots: self.serviceMessageFirstParam(callee))
 
 		let range = SourceRange.between(baseTok, last: rparenTok)
 		let payloads = request.payloadsAt(caseIndex)
@@ -76912,6 +76931,10 @@ export type Parser
 	function serviceMessageParamNames(callee ByteArray) returns NameRoster
 		return self.serviceMessageDeclOf(callee).paramNames
 	end 'serviceMessageParamNames'
+
+	function serviceMessageFirstParam(callee ByteArray) returns ParamCount
+		return firstUserParamIndex(self.serviceMessageDeclOf(callee).takesReceiver)
+	end 'serviceMessageFirstParam'
 
 	function serviceMessageDeclOf(callee ByteArray) returns OverloadedDecl
 		return try self.signatures.overloadedDeclsOf(callee).get(0) otherwise panic("serviceMessageDeclOf: '{String.from(callee)}' is a VARIANT of a request union the sweep built from that declaration, so `overloadedDeclsOf` cannot be empty")
@@ -93153,6 +93176,7 @@ export type Parser
 		end 'hasArguments'
 
 		try self.consumeConstToken(TokenKind.rightParen)
+		try self.requireConstFactoryFirstArgNameHasDefault(callee, args: args, argTokens: argTokens)
 		try self.requireConstFactoryArgumentsFit(callee, args: args, argTokens: argTokens)
 
 		self.fillConstFactoryArgDefaults(calls, callee: callee, args: args)
@@ -93161,6 +93185,15 @@ export type Parser
 
 		return self.pushConstNode(calls, node: node)
 	end 'evalConstFactoryCallInto'
+
+	function requireConstFactoryFirstArgNameHasDefault(callee ConstInitializerCallee, args ConstFactoryArgumentArray, argTokens TokenArray) throws ConstEvalError
+		let first = try args.get(0) otherwise return
+
+		if self.firstArgLabelIsRefused(first.label, callee: callee.name, firstParam: 0) 'refused'
+			let labelTok = try argTokens.get(0) otherwise panic("requireConstFactoryFirstArgNameHasDefault: argTokens.get OOB at 0, one token was recorded per argument")
+			throw ConstEvalError.defective(SourceParseError.firstArgNamed(labelTok.line, column: labelTok.column))
+		end 'refused'
+	end 'requireConstFactoryFirstArgNameHasDefault'
 
 	function requireConstFactoryArgumentsFit(callee ConstInitializerCallee, args ConstFactoryArgumentArray, argTokens TokenArray) throws ConstEvalError
 		let decl = try self.signatures.singleDeclarationOf(callee.name) otherwise return
@@ -95682,9 +95715,9 @@ export type Parser
 		// `SelfParamName`. The two ends of the convention never speak to each other.
 		//
 		// It does NOT disturb the label rules. `parseCallArgs` counts the SOURCE's arguments from
-		// zero on its own counter, so `acc.add(10)`'s `10` is still "the first argument" and is
-		// still required to be positional — the receiver is not something the user wrote and must
-		// not shift what they did.
+		// zero on its own counter, so `acc.add(10)`'s `10` is still "the first argument", and whether it
+		// may be labelled is asked of the first parameter after the receiver — the receiver is not
+		// something the user wrote and must not shift what they did.
 		//
 		// ⚠ **IT DOES DISTURB THE ARITY COUNTS, AND THIS IS THE ONE PLACE THAT CAN SAY SO.** Every E3036
 		// against a method now counts the receiver on BOTH sides, so both numbers are one higher than
@@ -97177,9 +97210,9 @@ export type Parser
 	// is exactly the sort of value a corpus spells with one (`stdlib/helpers/string/unicodeCategory.maxon`
 	// hands over a `Codepoint`).
 	function parseUcdTableLoad(func IrFunction, callee ByteArray, load UcdTableStride, anchor Token) returns ValueId throws SourceParseError
-		// The table label is the FIRST argument and is therefore positional — the language's rule for the
-		// first argument of every call, inherited rather than restated. Asked BEFORE the literal is
-		// consumed so a labelled one earns E2052 instead of "expected a string literal".
+		// The table label is the FIRST argument and its parameter has no default, so it is positional.
+		// Asked BEFORE the literal is consumed so a labelled one earns E2052 instead of "expected a
+		// string literal".
 		_ = try self.consumeArgLabel(0, rule: ArgLabelRule.ordinary)
 
 		let labelTok = try self.consume(TokenKind.stringLiteral)
@@ -97231,8 +97264,8 @@ export type Parser
 	// can number them is the one that walks the merged module.
 	//
 	// ⚠ **THE LABEL RULE IS `consumeArgLabel`'s, NOT A SECOND COPY**, exactly as the UCD loads' is: the
-	// first argument of every call is positional, inherited rather than restated. Asked BEFORE the literal is
-	// consumed so a labelled one earns E2052 rather than "expected a string literal".
+	// first argument of a list with no defaults is positional. Asked BEFORE the literal is consumed so
+	// a labelled one earns E2052 rather than "expected a string literal".
 	//
 	// ⚠ **AN INTERPOLATED LITERAL IS REFUSED BY THE `)` EXPECTATION AND NOT BY A RULE OF ITS OWN.** A
 	// hole cannot be known while the call is parsed; `self.at(stringLiteral)` is true for `"a{n}"`
@@ -97731,13 +97764,12 @@ export type Parser
 	// Parse a comma-separated argument list into the parallel `args`/`argLabels`/
 	// `argRanges` lists (all empty for `()`). The caller has consumed `(`; this leaves
 	// the cursor on `)`. Each argument is an expression, optionally prefixed by a
-	// `name:` label — the FIRST argument must be positional and every later argument
-	// must be labelled (`consumeArgLabel` enforces both, positioned at the offending
-	// token) — except under the other two `ArgLabelRule`s, which lift the first-argument
-	// rule for an interface / type-parameter receiver and switch labels off entirely for a
-	// bare builtin (see there). Whether a `name:` label actually
+	// `name:` label, at the positions `rule` allows (`ArgLabelRule`). Whether a `name:` label actually
 	// matches a parameter is a check for whoever holds the callee's parameter names —
 	// SemanticCheck for a direct call, `slottedWitnessArgs` for a witness dispatch.
+	//
+	// A first argument's label is judged against the callee's first-parameter default only after the
+	// whole list is parsed: a generic callee's defaults are keyed by the instance its arguments pick.
 	function parseCallArgs(func IrFunction, target CallArgTarget, anchor Token, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, argImmutableNames WriteBlameArray, argAnchors TokenIndexArray, rule ArgLabelRule, constructorInstance ConstructorInstance = ConstructorInstance.none) returns PlaceArgumentArray throws SourceParseError
 		// ⭐ **WHATEVER IS ALREADY IN `args` IS THE PREPENDED RECEIVER** — one entry, or none for a free call.
 		// Counted rather than passed: `parseCallNamed`'s receiver push is the only thing that can have filled the column
@@ -97891,6 +97923,11 @@ export type Parser
 		end 'mayHandOverlappingStorage'
 
 		self.openByRefHandOffs.truncate(enclosingHandOffs)
+
+		if argLabelRuleChecksFirstParameterDefault(rule) 'firstLabelNeedsADefault'
+			try self.requireFirstArgLabelHasDefault(target, rule: rule, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, receiverArgs: receiverArgs)
+		end 'firstLabelNeedsADefault'
+
 		return placeArgumentsOf(places)
 	end 'parseCallArgs'
 
@@ -98522,7 +98559,7 @@ export type Parser
 		// what makes a label wrong here: a callee with no declaration has no parameters, so a label at
 		// ANY index names one that does not exist and that nothing downstream will ever check. It
 		// returns rather than falling through to the two rules below — neither of which could state
-		// this, since both of their sentences promise that SOME argument position takes labels. See
+		// this, since both of their sentences speak of a callee whose parameters take labels. See
 		// `argLabelRuleForCallee`.
 		if rule == ArgLabelRule.allPositional 'builtinArgs'
 			if isNamed 'labelled'
@@ -98537,14 +98574,16 @@ export type Parser
 		let firstArgMayBeNamed = match rule 'firstArgRegime'
 			ordinary gives false
 			firstMayBeNamed or
+			firstNamedIfDefaulted or
+			messageSend or
 			unknownMember gives true
-			messageSend gives labelTok.value.equals(ServiceSendTimeoutLabel)
 			allPositional panic("consumeArgLabel: `allPositional` returns above — a builtin's label verdict is decided whole, before argIndex is consulted, so it must never reach the first-argument rule")
 		end 'firstArgRegime'
 
 		let laterArgMayBeUnlabelled = match rule 'laterArgRegime'
 			ordinary or
 			messageSend or
+			firstNamedIfDefaulted or
 			firstMayBeNamed gives false
 			unknownMember gives true
 			allPositional panic("consumeArgLabel: `allPositional` returns above — a builtin's label verdict is decided whole, before argIndex is consulted, so it must never reach the later-argument rule")
@@ -98605,7 +98644,7 @@ export type Parser
 		// and the emit below see `args`, a defaulted argument is indistinguishable from a written one, which
 		// is what makes the consume transfer, the drop enrollment and `slotCallArgs`' arity gate correct for
 		// it with no change to any of them.
-		let argDefaultSlots = try self.fillOmittedArgDefaults(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges)
+		let argDefaultSlots = try self.fillOmittedArgDefaults(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, receiverSlots: NoReceiverSlots)
 		view declarations = self.declarationsTheCallMayBind(callee, places: places, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots)
 		let placeBindings = try self.bindPlaceArguments(places, declarations: declarations, args: args, argLabels: argLabels)
 		self.widenArgsToInterfaceHandles(callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots, anchor: anchor, rparenTok: rparenTok)
@@ -99408,7 +99447,12 @@ export type Parser
 	// position, and read the RESOLVED signature rather than the tolerant sweep — E3036 and E3037, from
 	// `SemanticCheck` through `slotCallArgs`. Reporting either here would be a second opinion built on the
 	// weaker registry.
-	function fillOmittedArgDefaults(callee ByteArray, anchor Token, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray) returns ParamCountArray throws SourceParseError
+	//
+	// `receiverSlots` counts the leading declared parameters `args` does not hold — a message's
+	// `self`, which a send never carries — so the written arguments are slotted from there. A direct
+	// method call has its receiver in `args` already and passes `NoReceiverSlots`; passing that for a
+	// message would fill every default one slot early.
+	function fillOmittedArgDefaults(callee ByteArray, anchor Token, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, receiverSlots ParamCount) returns ParamCountArray throws SourceParseError
 		// ⚡ The gate is the allocation-free PRESENCE test, not `defaultsOf` itself: this runs at every call
 		// in the program, and a payload-free union case still heap-allocates in Maxon — an `allRequired`
 		// minted per parsed call is the constant factor that reverted the math-intrinsic resolver
@@ -99419,19 +99463,63 @@ export type Parser
 
 		match self.signatures.defaultsOf(callee) 'defaults'
 			allRequired then return NoDefaultArgSlots
-			defaults(info) then return try self.fillArgsFromParamDefaults(info, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges)
+			defaults(info) then return try self.fillArgsFromParamDefaults(info, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, receiverSlots: receiverSlots)
 		end 'defaults'
 	end 'fillOmittedArgDefaults'
+
+	function firstParameterHasDefault(callee ByteArray, firstParam ParamCount) returns bool
+		return match self.signatures.defaultsOf(callee) 'defaults'
+			allRequired gives false
+			defaults(info) gives not producerIsRequired(info.producerFor(firstParam))
+		end 'defaults'
+	end 'firstParameterHasDefault'
+
+	function firstArgLabelIsRefused(label ByteArray, callee ByteArray, firstParam ParamCount) returns bool
+		return not label.isEmpty() and not self.firstParameterHasDefault(callee, firstParam: firstParam)
+	end 'firstArgLabelIsRefused'
+
+	function requireFirstArgLabelHasDefault(target CallArgTarget, rule ArgLabelRule, anchor Token, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, receiverArgs Count) throws SourceParseError
+		let firstLabel = try argLabels.get(receiverArgs) otherwise return
+
+		if firstLabel.isEmpty() 'positional'
+			return
+		end 'positional'
+
+		let declared = try target.declaredName() otherwise panic("requireFirstArgLabelHasDefault: a witness dispatch names no callee, and no rule that checks the first parameter's default is parsed under one")
+
+		let callee = match rule 'defaultsKey'
+			messageSend gives declared
+			firstNamedIfDefaulted gives try self.genericInstanceCallee(declared, anchor: anchor, args: args, argLabels: argLabels)
+			ordinary or
+			firstMayBeNamed or
+			allPositional or
+			unknownMember panic("requireFirstArgLabelHasDefault: only the rules `argLabelRuleChecksFirstParameterDefault` names reach here")
+		end 'defaultsKey'
+
+		let firstParam = match rule 'firstParam'
+			messageSend gives self.serviceMessageFirstParam(declared)
+			firstNamedIfDefaulted gives receiverArgs as ParamCount
+			ordinary or
+			firstMayBeNamed or
+			allPositional or
+			unknownMember panic("requireFirstArgLabelHasDefault: only the rules `argLabelRuleChecksFirstParameterDefault` names reach here")
+		end 'firstParam'
+
+		if self.firstArgLabelIsRefused(firstLabel, callee: callee, firstParam: firstParam) 'refused'
+			let labelRange = try argRanges.get(receiverArgs) otherwise panic("requireFirstArgLabelHasDefault: argRanges.get OOB at {receiverArgs} — the range column is parallel to the label column")
+			throw SourceParseError.firstArgNamed(labelRange.line, column: labelRange.column)
+		end 'refused'
+	end 'requireFirstArgLabelHasDefault'
 
 	// ⭐ **RETURNS THE SLOT OF EVERY ARGUMENT IT APPENDED, IN APPEND ORDER** — `MaxonOp.call`'s
 	// `argDefaultSlots`. The label it also writes is the parameter's NAME, which is what every by-name reader
 	// downstream still bridges through; the slots are what `slotCallArgs` uses, because a name cannot address
 	// a position when the signature declares `_` more than once. See the op's own header for why exactly one
 	// reader needs the exact answer.
-	function fillArgsFromParamDefaults(info ParamDefaultInfo, anchor Token, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray) returns ParamCountArray throws SourceParseError
+	function fillArgsFromParamDefaults(info ParamDefaultInfo, anchor Token, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, receiverSlots ParamCount) returns ParamCountArray throws SourceParseError
 		let paramCount = info.paramNames.count()
 
-		if args.count() >= paramCount 'nothingOmitted'
+		if args.count() + receiverSlots >= paramCount 'nothingOmitted'
 			return NoDefaultArgSlots
 		end 'nothingOmitted'
 
@@ -99443,7 +99531,7 @@ export type Parser
 
 		for i in 0 upto args.count() 'markSupplied'
 			view label = try argLabels.get(i) otherwise panic("fillArgsFromParamDefaults: argLabels.get OOB at {i} — the label column is pushed in lockstep with args")
-			let suppliedSlot = try argSlotPosition(info.paramNames, argIndex: i as ParamCount, label: label) otherwise return NoDefaultArgSlots
+			let suppliedSlot = try argSlotPosition(info.paramNames, argIndex: (i as ParamCount) + receiverSlots, label: label) otherwise return NoDefaultArgSlots
 			try filled.set(suppliedSlot, value: true) otherwise panic("fillArgsFromParamDefaults: filled.set OOB at {suppliedSlot} — filled holds one entry per parameter name")
 		end 'markSupplied'
 
@@ -100259,11 +100347,11 @@ export type Parser
 		// token.
 		var argAnchors = TokenIndexArray.create()
 
-		// ORDINARY, unconditionally: an `async` call always emits a real `MaxonOp.call` to a declared
-		// function, so its callee always has parameter names — no bare builtin is reachable through
-		// this door, and the positional-argument regime would be answering for a callee that cannot
-		// arrive here.
-		_ = try self.parseCallArgs(func, target: CallArgTarget.movedInto(target.name), anchor: target.anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, rule: ArgLabelRule.ordinary)
+		// `firstNamedIfDefaulted`, unconditionally: an `async` call always emits a real `MaxonOp.call` to
+		// a declared function, so its callee always has parameter names — no bare builtin is reachable
+		// through this door, and the positional-argument regime would be answering for a callee that
+		// cannot arrive here.
+		_ = try self.parseCallArgs(func, target: CallArgTarget.movedInto(target.name), anchor: target.anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, rule: ArgLabelRule.firstNamedIfDefaulted)
 		let rparenTok = try self.consume(TokenKind.rightParen)
 
 		// `self.pos` now sits one PAST the `)`, which is exactly `tokenTextFrom`'s exclusive end. The POSITION is
@@ -100332,7 +100420,7 @@ export type Parser
 		// `f()` is. It sits BEFORE the scalar check on purpose: the helper's result is an ordinary value and
 		// must meet the async argument rule exactly as a written argument does, so a MANAGED default earns
 		// the existing refusal below rather than a second one worded here.
-		let argDefaultSlots = try self.fillOmittedArgDefaults(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges)
+		let argDefaultSlots = try self.fillOmittedArgDefaults(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, receiverSlots: NoReceiverSlots)
 		let conventions = self.spawnedCalleeConventions(callee, writtenCallee: writtenCallee)
 
 		for i in 0 upto args.count() 'eachArg'

@@ -68,6 +68,25 @@ end 'paint'
 var result = paint()  // uses default Color.blue, result is 2
 ```
 
+### A Defaulted First Parameter May Be Named
+
+A call's first argument may carry a `name:` label when the callee's first parameter (after a method's
+receiver, or a message's `self`) has a default. A default may sit on any parameter, before or after the
+required ones:
+
+```text
+function connect(port Integer = 80, retries Integer = 3)
+connect()             // port 80, retries 3
+connect(8080)         // port 8080, retries 3
+connect(port: 8080)   // port 8080, retries 3
+connect(retries: 5)   // port 80, retries 5
+
+function place(a Integer = 1, b Integer) returns Integer
+place(b: 2)           // a is 1
+```
+
+A first argument whose parameter is required stays positional; labelling it is `E2052`.
+
 ## Tests
 
 <!-- test: default-values.string-default-omitted -->
@@ -471,4 +490,323 @@ end 'main'
 ```
 ```maxoncstderr
 error E2010: specs/default-values/default-values.error.param-default-exponent-without-point.maxon:4:30: Expected 'end of default value' but got 'e100'
+```
+
+### A defaulted first parameter may be named
+
+<!-- test: default-values.a-defaulted-first-parameter-may-be-named -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function connect(port Integer = 80, retries Integer = 3)
+	print("port={port} retries={retries}\n")
+end 'connect'
+
+function main() returns ExitCode
+	connect()
+	connect(8080)
+	connect(port: 8080)
+	connect(retries: 5)
+	connect(retries: 5, port: 1)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+port=80 retries=3
+port=8080 retries=3
+port=8080 retries=3
+port=80 retries=5
+port=1 retries=5
+```
+
+<!-- test: default-values.a-method-with-a-defaulted-first-parameter-may-name-it -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Probe
+	let base as Integer
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+
+	function configure(retries Integer = 3, delay Integer = 10) returns String
+		return "base={self.base} retries={retries} delay={delay}"
+	end 'configure'
+end 'Probe'
+
+function main() returns ExitCode
+	let p = Probe.create(1)
+	let delayed = p.configure(delay: 7)
+	let retried = p.configure(retries: 1)
+	print("{delayed}\n")
+	print("{retried}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+base=1 retries=3 delay=7
+base=1 retries=1 delay=10
+```
+
+<!-- test: default-values.a-static-create-with-a-defaulted-first-parameter-may-name-it -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Grid
+	export let size as Integer
+	export let fill as Integer
+
+	static function create(size Integer = 4, fill Integer = 0) returns Self
+		return Self{size: size, fill: fill}
+	end 'create'
+end 'Grid'
+
+function main() returns ExitCode
+	let g = Grid.create(fill: 1)
+	print("size={g.size} fill={g.fill}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+size=4 fill=1
+```
+
+<!-- test: default-values.an-omitted-defaulted-first-parameter-lets-a-required-one-be-named-first -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function place(a Integer = 1, b Integer) returns Integer
+	return a * 10 + b
+end 'place'
+
+function main() returns ExitCode
+	let omitted = place(b: 2)
+	let given = place(5, b: 2)
+	print("{omitted} {given}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+12 52
+```
+
+<!-- test: default-values.overloads-agreeing-on-a-defaulted-first-parameter-may-name-it -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function scale(factor Integer = 2, unit String) returns String
+	return "{factor} {unit}"
+end 'scale'
+
+function scale(factor Integer = 2, unit bool) returns String
+	if unit 'metric'
+		return "{factor} metric"
+	end 'metric'
+
+	return "{factor} imperial"
+end 'scale'
+
+function main() returns ExitCode
+	let named = scale(factor: 3, unit: "cm")
+	let flagged = scale(factor: 4, unit: true)
+	let namedDefault = scale(unit: "mm")
+	let flaggedDefault = scale(unit: false)
+	print("{named}\n{flagged}\n{namedDefault}\n{flaggedDefault}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3 cm
+4 metric
+2 mm
+2 imperial
+```
+
+<!-- test: default-values.an-async-call-may-name-a-defaulted-first-parameter -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function fetch(retries Integer = 3, delay Integer = 10) returns Integer
+	_ = File.exists(FilePath from "noyield.txt")
+	return retries * 100 + delay
+end 'fetch'
+
+function main() returns ExitCode
+	let promise = async fetch(retries: 5)
+	let result = await promise
+	print("{result}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+510
+```
+
+<!-- test: default-values.a-module-scope-constant-may-name-a-defaulted-first-parameter -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Scaler
+	export let factor as Integer
+	export let offset as Integer
+
+	static function make(scale Integer = 1, offset Integer = 0) returns Scaler
+		return Self{factor: scale * 2, offset: offset}
+	end 'make'
+end 'Scaler'
+
+let tripled = Scaler.make(scale: 3)
+
+function main() returns ExitCode
+	print("{tripled.factor} {tripled.offset}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+6 0
+```
+
+<!-- test: default-values.a-generic-function-with-a-defaulted-first-parameter-may-name-it -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function pick(times Integer = 1, item T) uses T returns T
+	print("times={times}\n")
+	return item
+end 'pick'
+
+function main() returns ExitCode
+	let s = pick(item: "x")
+	let n = pick(times: 2, item: 7 as Integer)
+	print("{s} {n}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+times=1
+times=2
+x 7
+```
+
+<!-- test: default-values.a-generic-types-create-with-a-defaulted-first-parameter-may-name-it -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Crate uses T
+	export let size as Integer
+	export var item as T
+
+	static function create(size Integer = 1, item T) returns Self
+		return Self{size: size, item: item}
+	end 'create'
+end 'Crate'
+
+typealias StringCrate = Crate with String
+
+function main() returns ExitCode
+	let c = StringCrate.create(item: "s")
+	let d = StringCrate.create(size: 3, item: "t")
+	print("{c.size} {c.item}\n{d.size} {d.item}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 s
+3 t
+```
+
+### Error: A required first parameter stays positional
+
+<!-- test: default-values.error.a-required-first-parameter-is-still-positional -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function shift(a Integer, b Integer = 2) returns Integer
+	return a + b
+end 'shift'
+
+function main() returns ExitCode
+	return shift(a: 1, b: 3)
+end 'main'
+```
+```maxoncstderr
+error E2052: <fragment>:9:15: the first argument cannot be named because its parameter has no default
+```
+
+<!-- test: default-values.error.a-module-scope-constant-may-not-name-a-required-first-parameter -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Window
+	export let width as Integer
+	export let height as Integer
+
+	static function make(width Integer, height Integer = 1) returns Window
+		return Self{width: width, height: height}
+	end 'make'
+end 'Window'
+
+let wide = Window.make(width: 8, height: 2)
+
+function main() returns ExitCode
+	print("{wide.width} {wide.height}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2052: <fragment>:13:24: the first argument cannot be named because its parameter has no default
+```
+
+<!-- test: default-values.error.a-callee-without-defaults-keeps-its-first-argument-positional -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Couple
+	let a as Integer
+	let b as Integer
+
+	static function create(a Integer, b Integer) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+
+	function combine(first Integer, second Integer) returns Integer
+		return a + b + first + second
+	end 'combine'
+end 'Couple'
+
+function main() returns ExitCode
+	let p = Couple.create(1, b: 2)
+	return p.combine(first: 3, second: 4)
+end 'main'
+```
+```maxoncstderr
+error E2052: <fragment>:19:19: the first argument cannot be named because its parameter has no default
 ```

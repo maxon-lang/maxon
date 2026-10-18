@@ -125,8 +125,8 @@ The positional-argument rule is the MATH BUILTIN FAMILY's, not `min`'s alone: `a
 has no declaration either, so its one argument has no parameter for `x:` to name.
 Arity is irrelevant to the reason — a builtin has nothing to label at any position —
 so the arity-1 intrinsics answer with the same E2067 the arity-2 `min` does rather
-than with E2052, whose wording ("only the second and later arguments take 'name:'
-labels") would invite the nonsense repair `abs(1.0, x: ...)` on a one-argument callee.
+than with E2052, whose wording ("the first argument cannot be named because its
+parameter has no default") speaks of a parameter a builtin does not have.
 
 Reading the label as a variable reference instead would answer
 `E2004: Undefined variable 'x'` — a consequence of the defect rather than the defect itself.

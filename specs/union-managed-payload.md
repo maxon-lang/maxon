@@ -2449,7 +2449,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2052: <fragment>:10:22: the first argument cannot be named; only the second and later arguments take 'name:' labels
+error E2052: <fragment>:10:22: the first argument cannot be named because its parameter has no default
 ```
 
 <!-- test: error.payload-unknown-label -->

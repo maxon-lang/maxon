@@ -122,7 +122,7 @@ var name = "hi"
 
 ### 6. First argument is positional, all others MUST be named
 
-The first argument NEVER carries a label — labeling it is rejected as **E2052 "first arg cannot be named"**. Every argument after the first MUST use `name: value`.
+The first argument carries a label only when its parameter has a default — labeling a required first parameter is rejected as **E2052 "the first argument cannot be named because its parameter has no default"**. Every argument after the first MUST use `name: value`.
 
 ```maxon
 // WRONG — second arg missing label
@@ -134,6 +134,9 @@ connect(host: "localhost", port: 8080, timeout: 5000)
 // CORRECT
 connect("localhost", port: 8080, timeout: 5000)
 ```
+
+Against `function open(path String = "config.toml", mode Mode = Mode.read)`, `open(mode: Mode.write)`
+names the first argument and is legal, because `path` has a default.
 
 A [builtin](#builtin-functions) such as `min` or `max` is the exception: it has no declaration to name a
 parameter, so all of its arguments are positional and naming one is **E2067**.

@@ -24,8 +24,8 @@ bits 21..41 are `rangeEnd`, bits 42..46 are the category. 21 bits covers U+10FFF
 
 ### Each intrinsic HAS A DECLARATION, and that is why the label rule applies to it
 
-Maxon's call rule is universal: the first argument is positional and every later argument carries
-its `name:` label (`E2052`/`E2053`). A label names a PARAMETER OF A DECLARATION — which is exactly
+Maxon's call rule is universal: the first argument is positional unless its parameter has a default,
+and every later argument carries its `name:` label (`E2052`/`E2053`). A label names a PARAMETER OF A DECLARATION — which is exactly
 why the bare compiler builtins (`min`, `abs`, ...) are exempt from it (`E2067`): they have no
 declaration, so there is no parameter for a label to name.
 
@@ -232,15 +232,15 @@ error E2053: <fragment>:3:43: the second and later arguments must be named ('nam
 
 <!-- test: builtins-ucd.label-cannot-be-named -->
 <!-- tier: stdlib -->
-The FIRST argument stays positional, which is not an exception granted to these two: it is the
-language's rule for the first argument of every call (`E2052`).
+The FIRST argument stays positional, which is not an exception granted to these two: their `label`
+parameter has no default, and a first argument at a required parameter is positional (`E2052`).
 ```maxon
 function main() returns ExitCode
 	return __Builtins.ucdByteAt(label: "__ucd_bmp", offset: 65) as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2052: <fragment>:3:30: the first argument cannot be named; only the second and later arguments take 'name:' labels
+error E2052: <fragment>:3:30: the first argument cannot be named because its parameter has no default
 ```
 
 <!-- test: builtins-ucd.offset-label-must-be-the-declared-name -->

@@ -21,7 +21,7 @@ parameters separate with `,` (`where T is Digest, U is Tagged`).
 A witness dispatch's ARGUMENTS obey the same `name:` label grammar and the same label→position slotting as
 any other call (see `parameter-labels.md`), with one documented exemption: because the receiver is an
 interface / type-parameter value rather than a concrete struct, the FIRST argument's label is optional
-(`self.item.add(1, b: 2)` and `self.item.add(a: 1, b: 2)` are both legal), while arguments 2 and later must
+whether or not its parameter has a default (`self.item.add(1, b: 2)` and `self.item.add(a: 1, b: 2)` are both legal), while arguments 2 and later must
 still carry one. The labels bind against the INTERFACE's declared parameter names, not the conformer's:
 under dictionary-passing the shared body has no concrete callee to ask, and conformance compares arity and
 types only — several conformers may spell their parameters differently, so the interface's names are the
@@ -479,8 +479,8 @@ end 'main'
 <!-- test: where-clauses.witness-multi-arg-first-arg-labelled -->
 A LABELLED FIRST ARGUMENT is accepted at an interface / type-parameter receiver — the one documented
 exemption from the rule `parameter-labels.md` states, because the receiver's concrete type is unknown in the
-shared body and the label binds against the interface. A concrete-struct receiver still rejects it with
-E2052 (`parameter-labels.md`'s `error-method-first-arg-named`), and that rule is unchanged. Same call, same
+shared body and the label binds against the interface. A concrete-struct receiver rejects it with E2052
+when the parameter has no default (`parameter-labels.md`'s `error-method-first-arg-named`). Same call, same
 answer as `witness-multi-arg-labelled`: 10.
 ```maxon
 typealias Code = int(0 to u32.max)

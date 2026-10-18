@@ -9,7 +9,7 @@ category: core
 
 ## Documentation
 
-In function and method calls, the first argument is positional and every subsequent argument must be named using `name: value` syntax. The first argument carries no label; labels on the remaining arguments improve clarity at the call site by making each parameter's role explicit.
+In function and method calls, the first argument is positional and every subsequent argument must be named using `name: value` syntax. The first argument carries a label only when the callee's first parameter has a default (see `default-values`); labels on the remaining arguments improve clarity at the call site by making each parameter's role explicit.
 
 ### First Argument Positional, Rest Named
 
@@ -53,7 +53,7 @@ end 'main'
 
 ### Default Parameter Values
 
-Parameters with default values can be omitted. The first parameter is still passed positionally:
+Parameters with default values can be omitted. A required first parameter is passed positionally:
 
 ```maxon
 typealias Score = int(i64.min to i64.max)
@@ -197,7 +197,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2052: <fragment>:10:13: the first argument cannot be named; only the second and later arguments take 'name:' labels
+error E2052: <fragment>:10:13: the first argument cannot be named because its parameter has no default
 ```
 
 <!-- test: error-method-first-arg-named -->
@@ -205,11 +205,11 @@ error E2052: <fragment>:10:13: the first argument cannot be named; only the seco
 
 typealias Integer = int(i64.min to i64.max)
 
-// A CONCRETE-STRUCT method call rejects a named first arg, exactly like a
-// free-function call. The parser defers E2052 for all method calls (the
-// receiver type isn't known at parse time), and TypeResolution re-applies it
-// once the receiver resolves to a concrete struct. Interface / type-parameter
-// receivers are exempt (see interface-dispatch/dispatch-named-first-arg).
+// A CONCRETE-STRUCT method call rejects a named first arg whose parameter
+// (the first after the receiver) has no default, exactly like a free-function
+// call. The parser raises E2052 once the argument list is parsed, against the
+// method's declaration.
+// Interface / type-parameter receivers are exempt (see interface-dispatch/dispatch-named-first-arg).
 type Pair
 	let a as Integer
 	let b as Integer
@@ -229,7 +229,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2052: <fragment>:25:19: the first argument cannot be named; only the second and later arguments take 'name:' labels
+error E2052: <fragment>:25:19: the first argument cannot be named because its parameter has no default
 ```
 
 

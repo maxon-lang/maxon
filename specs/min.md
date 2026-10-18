@@ -246,10 +246,9 @@ error E2067: <fragment>:3:19: a builtin's arguments are all positional and canno
 <!-- test: min.error-first-arg-named -->
 The SAME code at the first argument, and that is the point of having a code of its
 own rather than reusing E2052. E2052's sentence is *"the first argument cannot be
-named; only the second and later arguments take 'name:' labels"* — true of an ordinary
-call, and false here in a way that misleads: it invites the reader to move the label to
-the second argument, where it is equally meaningless. A builtin takes no label at ANY
-position, and one sentence says so at every position.
+named because its parameter has no default"* — true of a declared callee, and false
+here in a way that misleads: it suggests a default would make the label legal. A builtin
+takes no label at ANY position, and one sentence says so at every position.
 ```maxon
 function main() returns ExitCode
 	let x = min(a: 3.0, 5.0)

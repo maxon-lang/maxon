@@ -341,8 +341,8 @@ These rules cover the mistakes code generators make most often when writing Maxo
    typealias TallyArray = Array with Tally
    ```
 
-3. **Pass the first argument positionally and name the rest.** `connect("localhost", port: 8080)`. Naming
-   the first argument is an error.
+3. **Pass the first argument positionally and name the rest.** `connect("localhost", port: 8080)`. The
+   first argument may be named only when its parameter has a default.
 
 4. **Construct records through a static factory.** `Point{x: 1}` is legal only inside `Point`'s own body;
    elsewhere call `Point.create(1)`.

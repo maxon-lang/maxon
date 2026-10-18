@@ -1010,7 +1010,9 @@ arg           = expression                                  (* first argument: p
 
 **Calling convention:** the first argument is positional; all subsequent
 arguments must use `name: value` syntax and may appear in any order.
-Arguments with default values may be omitted.
+Arguments with default values may be omitted. When the callee's first
+parameter (after a method's receiver, or a message's `self`) has a default,
+the first argument may also be named; naming it otherwise is E2052.
 
 ---
 

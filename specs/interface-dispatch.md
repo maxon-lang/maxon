@@ -209,11 +209,11 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-// An interface (or type-parameter) method call may name its FIRST argument:
-// the receiver dispatches through interface monomorphization, which is
-// receiver-type-dependent and so cannot be ruled out syntactically at parse
-// time. The E2052 check is deferred to TypeResolution, which re-applies it
-// only for concrete-struct / enum / builtin receivers.
+// An interface (or type-parameter) method call may name its FIRST argument
+// whatever its defaults: the shared body has no concrete callee whose
+// declaration could refuse the label, so it binds against the interface.
+// A concrete receiver's call raises E2052 at parse time when the method's
+// first parameter has no default.
 interface Combiner
 	function combine(first Integer, second Integer) returns Integer
 end 'Combiner'
@@ -246,8 +246,8 @@ end 'main'
 
 <!-- test: dispatch-error-missing-arg-label -->
 The label grammar is the SAME rule at an interface dispatch as at a direct call:
-`parameter-labels` rules that the first argument is positional and every argument
-after it must carry a `name:` label. Only the FIRST argument's label is optional
+`parameter-labels` rules that the first argument is positional unless its parameter
+has a default, and every argument after it must carry a `name:` label. Only the FIRST argument's label is optional
 here (see `dispatch-named-first-arg` for why); the rest are not, and a dispatch is
 not a hole in the grammar.
 

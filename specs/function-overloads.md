@@ -48,8 +48,8 @@ slice(10, endIndex: 32)   // calls slice(start, endIndex)
 slice(10, length: 32)     // calls slice(start, length)
 ```
 
-The first argument is always positional — naming it is **E2052** — so its label can never select an
-overload.
+A first argument is named only at a defaulted parameter (**E2052** otherwise), and overloads of one name
+that declare defaults must agree on their parameters, so its label can never select an overload.
 
 #### Ambiguous calls
 

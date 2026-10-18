@@ -271,8 +271,8 @@ end 'check'
 // Anywhere but a parameter default -- including a struct field default -- is E2060.
 
 // Calling: first arg positional, rest named.
-// Labeling the first arg is rejected as E2052; omitting a
-// label on the second-or-later arg is rejected as E3005.
+// The first arg may be named only when its parameter has a default
+// (E2052 otherwise); omitting a label on the second-or-later arg is E2053.
 greet("Smith", title: "Dr.")
 ```
 

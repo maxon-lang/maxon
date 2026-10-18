@@ -19,7 +19,7 @@ and time of day use `WallClock`.
 | `Clock.osTickMs()` | `InstantMs` | How long the machine has been up, in milliseconds, from the operating system's tick count. It moves in host ticks, up to 16 ms apart on `x64-windows`. |
 | `Clock.threadCpuTicks()` | `ThreadCpuTicks` | CPU time the calling thread has consumed. It advances only while the thread runs on a core, so a difference of two readings is that thread's cost alone, whatever else the machine runs. |
 
-`since` is the first argument, so it is written without a label: `Clock.elapsedNanos(start)`.
+`since` is the first argument and has no default, so it is written without a label: `Clock.elapsedNanos(start)`.
 
 The unit of `threadCpuTicks()` belongs to the platform: TSC cycles on Windows (`QueryThreadCycleTime`) and
 nanoseconds elsewhere (`CLOCK_THREAD_CPUTIME_ID`). Compare two readings from one platform, or ratios of

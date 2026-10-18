@@ -2470,6 +2470,79 @@ ping 2
 sent the second ping
 ```
 
+<!-- test: a-message-with-a-defaulted-first-parameter-may-name-it -->
+```maxon
+type Meter
+	var n as Integer
+
+	static function create(start Integer = 0) returns Self
+		return Self{n: start}
+	end 'create'
+
+	export function bump(by Integer = 1)
+		self.n = self.n + by
+	end 'bump'
+
+	export function total() returns Integer
+		return self.n
+	end 'total'
+end 'Meter'
+
+function main() returns ExitCode
+	let h = spawn Meter.create(start: 5)
+	try h.bump() otherwise panic("an open mailbox with room takes the send")
+	try h.bump(by: 2) otherwise panic("an open mailbox with room takes the send")
+	try h.bump(by: 3, sendTimeout: 1000) otherwise panic("an open mailbox with room takes the send")
+	let total = try await h.total() otherwise panic("the service is running")
+	print("total={total}\n")
+	h.shutdown()
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+total=11
+```
+
+<!-- test: a-message-with-a-defaulted-first-parameter-takes-it-positionally -->
+```maxon
+type Meter
+	var n as Integer
+
+	static function create(start Integer = 0) returns Self
+		return Self{n: start}
+	end 'create'
+
+	export function bump(by Integer = 1)
+		self.n = self.n + by
+	end 'bump'
+
+	export function total() returns Integer
+		return self.n
+	end 'total'
+end 'Meter'
+
+function main() returns ExitCode
+	let h = spawn Meter.create(5)
+	try h.bump(2) otherwise panic("an open mailbox with room takes the send")
+	try h.bump(3, sendTimeout: 1000) otherwise panic("an open mailbox with room takes the send")
+	let total = try await h.total() otherwise panic("the service is running")
+	print("total={total}\n")
+	h.shutdown()
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+total=10
+```
+
 <!-- test: an-awaited-send-with-a-timeout-waits-for-room -->
 <!-- procs: 1 -->
 <!-- preempt: off -->

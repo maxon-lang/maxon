@@ -2906,7 +2906,11 @@ end 'greet'
 
 Maxon calls use a **first-positional, rest-named** rule:
 
-- The first argument is positional. Labelling it is **E2052** (`the first argument cannot be named`).
+- The first argument is positional. When the callee's first parameter has a default, the first argument
+  may also be written `name: value`, naming that parameter or any later one. Labelling a first argument
+  whose parameter is required is **E2052** (`the first argument cannot be named because its parameter
+  has no default`). For a method the first parameter is the one after the receiver; for a service
+  message, the one after `self`.
 - Every later argument is written `name: value`; omitting a label is **E2053**.
 - Named arguments may appear in any order, and parameters with defaults may be omitted.
 
@@ -2955,7 +2959,28 @@ function main() returns ExitCode
 end 'main'
 ```
 
-Parameters with defaults come after the parameters without them.
+A default may sit on any parameter, before or after the required ones. When the first parameter has a
+default, a call may omit it and name a later argument first:
+
+```maxon
+typealias Port = int(0 to 65535)
+typealias Retries = int(0 to 10)
+
+function connect(port Port = 80, retries Retries = 3)
+	print("port {port}, {retries} retries\n")
+end 'connect'
+
+function main() returns ExitCode
+	connect()                    // port 80, 3 retries
+	connect(8080)                // port 8080, 3 retries
+	connect(port: 8080)          // port 8080, 3 retries
+	connect(retries: 5)          // port 80, 5 retries
+	return 0
+end 'main'
+```
+
+A required parameter after a defaulted first one is named: `function f(a Integer = 1, b Integer)` is
+called `f(b: 2)` or `f(5, b: 2)`.
 
 ### Caller-Location Defaults (`__line__`, `__file__`)
 
@@ -3031,8 +3056,9 @@ function main() returns ExitCode
 end 'main'
 ```
 
-- A call that more than one overload matches is **E3007** (`Ambiguous overload`). Because the first argument
-  is never labelled, two single-parameter overloads of the same type cannot be told apart.
+- A call that more than one overload matches is **E3007** (`Ambiguous overload`). A first argument
+  is labelled only at a defaulted parameter, and overloads of one name that declare defaults must agree
+  on their parameters, so two single-parameter overloads of the same type cannot be told apart.
 - Declaring the same overload twice, with the same parameter names and types, is a duplicate
   definition (**E3006**). Overloads with the same parameter types but different parameter names are
   separate declarations; a call whose labels cannot tell them apart is **E3007**.
@@ -6360,8 +6386,8 @@ These rules cover the mistakes code generators make most often when writing Maxo
    typealias TallyArray = Array with Tally
    ```
 
-3. **Pass the first argument positionally and name the rest.** `connect("localhost", port: 8080)`. Naming
-   the first argument is an error.
+3. **Pass the first argument positionally and name the rest.** `connect("localhost", port: 8080)`. The
+   first argument may be named only when its parameter has a default.
 
 4. **Construct records through a static factory.** `Point{x: 1}` is legal only inside `Point`'s own body;
    elsewhere call `Point.create(1)`.

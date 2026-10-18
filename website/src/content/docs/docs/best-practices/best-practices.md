@@ -363,7 +363,7 @@ let entry = try registry.items.get(0) otherwise return   // ERROR E3188
 
 ### Use the First-Positional, Rest-Named Convention
 
-The first argument is always positional. Subsequent arguments use `name: value` syntax. This reads naturally at call sites.
+The first argument is positional. Subsequent arguments use `name: value` syntax. This reads naturally at call sites. When the first parameter has a default, a call may skip it and name a later one first: `connect(port: 8080)` against `function connect(host String = "localhost", port Port = 80)`.
 
 ```maxon
 print("hello")
