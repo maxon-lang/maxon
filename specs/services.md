@@ -104,7 +104,7 @@ refused by `SemanticCheck.requireTargetSupportsServiceEntry`, which the harness 
 naming the case. A marker would restate that and take the case out of the run in silence — see
 `specs/async-scheduler.md`'s Targets section for the one statement of it.
 
-⛔ **THE FIVE REFUSALS THAT DO EXCLUDE wasm32-wasi ARE EXCLUDED FOR THEIR DIAGNOSTIC, NOT FOR THEIR
+⛔ **THE REFUSALS THAT DO EXCLUDE wasm32-wasi ARE EXCLUDED FOR THEIR DIAGNOSTIC, NOT FOR THEIR
 RULE.** Each is target-neutral and would be reached on every lane, but on wasm the same program earns
 E3104 for `__svc_spawn` / `__mbox_send` FIRST, so the stderr they pin is not what the compiler emits
 there. They expire when wasm grows a service substrate, not when the
@@ -126,7 +126,8 @@ case's own program contains all three. On `--target=wasm32-wasi`,
 `cycle-through-a-free-function-is-refused` and `cycle-same-type-self-edge-is-refused` print E3104
 lines ahead of the diagnostic they pin. They carry the marker — the
 rule they pin is target-neutral and the x64 lane pins it; what is not target-neutral is the SCAFFOLDING they
-need to reach it. ⇒ **a case whose
+need to reach it. A ranged-literal **E3005** the parser defers to `InsertRangeChecks` is later still: that
+pass runs after lowering, which the E3104s stop, so on wasm it never prints at all. ⇒ **a case whose
 refusal is not a parse throw needs the marker, however target-neutral the rule.**
 
 ⚠ **THE TWO E3104 CASES ARE THE EXCEPTION, AND THEY ARE MARKED WITH THE TARGET THEY REFUSE.** A refusal
@@ -2241,8 +2242,10 @@ error E3191: <fragment>:16:2: `Store.keep.sendError` is thrown from a value this
 ```
 
 <!-- test: error.a-capacity-out-of-range-is-refused -->
+<!-- unsupported-targets: wasm32-wasi -->
 A capacity is a `MailboxCapacity`, `int(1 to 2^31)`, so a literal outside it is the ordinary ranged-literal
 refusal.
+wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
 type Store
 	var n as Integer
