@@ -470,9 +470,10 @@ let GtOffPinDepth = GtOffPinnedM + PointerFieldBytes
 export let GtOffLastError = GtOffPinDepth + PointerFieldBytes
 
 // A sender waiting on a full mailbox (`MailboxRuntime.MboxSendName`): its links in that mailbox's
-// sender queue, under the mailbox lock and 0 once a waker has unlinked it; its absolute deadline,
-// `GtDeadlineMaxNs` when it armed no timer; and the `MboxSendWake` its waker publishes, a release
-// store inside `__sched_lock` that the sender reads with an acquire.
+// sender queue, under the mailbox lock and 0 once it is unlinked (`__mbox_close` threads its own
+// chain through `GtOffSendNext` until it readies the sender); its absolute deadline,
+// `GtDeadlineMaxNs` when it armed no timer; and the `MboxSendWake` a waker claims it with
+// (`MailboxRuntime.emitMboxClaimSender`), which the sender reads with an acquire.
 export let GtOffSendNext = GtOffLastError + PointerFieldBytes
 export let GtOffSendPrev = GtOffSendNext + PointerFieldBytes
 export let GtOffSendDeadline = GtOffSendPrev + PointerFieldBytes
@@ -1149,6 +1150,8 @@ export let NanosPerMilli = 1000000
 // Where `emitGtDeadlineAfterMs` saturates. A send whose deadline is this waits with no timer armed,
 // which `ForeverMs` and every timeout too long to reach it share.
 export let GtDeadlineMaxNs = i64.max - NanosPerMilli
+
+let GtDeadlineMaxMs = GtDeadlineMaxNs / NanosPerMilli
 
 // --- Runtime function names ---
 export let GtContextSwitchName = b"__gt_context_switch"
@@ -4187,6 +4190,10 @@ function buildGtTimerCheck(module StdModule)
 	var moveLast = module.addBlock(func, label: b"movelast", heat: BlockHeat.normal)
 	var fire = module.addBlock(func, label: b"fire", heat: BlockHeat.normal)
 	var fireSleep = module.addBlock(func, label: b"firesleep", heat: BlockHeat.normal)
+	var fireNotSleep = module.addBlock(func, label: b"firenotsleep", heat: BlockHeat.normal)
+	var fireSend = module.addBlock(func, label: b"firesend", heat: BlockHeat.normal)
+	var fireSendWon = module.addBlock(func, label: b"firesendwon", heat: BlockHeat.normal)
+	var fireSendLost = module.addBlock(func, label: b"firesendlost", heat: BlockHeat.normal)
 	var fireNetpoll = module.addBlock(func, label: b"firenetpoll", heat: BlockHeat.normal)
 	var fireJoin = module.addBlock(func, label: b"firejoin", heat: BlockHeat.normal)
 	var doneBlock = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
@@ -4234,17 +4241,30 @@ function buildGtTimerCheck(module StdModule)
 	// fire: end the popped wait. The order these happen in IS the order the threads resume in, which is what
 	// makes the pop-min above observable at all.
 	//
-	// ⭐⭐ **THE TAG DECIDES WHOSE DEADLINE THIS IS.** A sleep, an I/O yield or a waiting send is readied straight
-	// away, a send then failing itself under its mailbox lock; a SOCKET
+	// ⭐⭐ **THE TAG DECIDES WHOSE DEADLINE THIS IS.** A sleep or an I/O yield is readied straight
+	// away; a waiting send only if the timer wins its claim (`MailboxRuntime.emitMboxClaimSender`),
+	// the send then unlinking itself under its mailbox lock; a SOCKET
 	// deadline goes through the poll-descriptor band, which must take the thread off the direction word it is
 	// published on first — and which answers no debt at all when a readiness event got there first.
 	let isSleepTag = emitCompareWithConstant(module, block: fire, value: root.tag, pred: StdCmpPred.eq, against: TimerTagSleep, ids: ids)
-	let isSendTag = emitCompareWithConstant(module, block: fire, value: root.tag, pred: StdCmpPred.eq, against: TimerTagSend, ids: ids)
-	module.setTerminator(fire, op: StdOp.condBranch(emitBin(module, block: fire, a: isSleepTag, b: isSendTag, opcode: StdBinOpcode.bitOr, ids: ids), thenBlockId: fireSleep.id, elseBlockId: fireNetpoll.id))
+	module.setTerminator(fire, op: StdOp.condBranch(isSleepTag, thenBlockId: fireSleep.id, elseBlockId: fireNotSleep.id))
 
 	let sleepDebt = emitGtReadyLocked(module, block: fireSleep, gt: root.gt, ids: ids)
 	module.setTerminator(fireSleep, op: StdOp.branch(fireJoin.id))
 	fireSleep.branchEdges.push(BranchEdge.create(fireJoin.id, argIds: argsOf(sleepDebt)))
+
+	let isSendTag = emitCompareWithConstant(module, block: fireNotSleep, value: root.tag, pred: StdCmpPred.eq, against: TimerTagSend, ids: ids)
+	module.setTerminator(fireNotSleep, op: StdOp.condBranch(isSendTag, thenBlockId: fireSend.id, elseBlockId: fireNetpoll.id))
+
+	emitMboxClaimSender(module, block: fireSend, sender: root.gt, outcome: MboxSendWake.timedOut, lost: fireSendLost, won: fireSendWon, ids: ids)
+
+	let sendDebt = emitGtReadyLocked(module, block: fireSendWon, gt: root.gt, ids: ids)
+	module.setTerminator(fireSendWon, op: StdOp.branch(fireJoin.id))
+	fireSendWon.branchEdges.push(BranchEdge.create(fireJoin.id, argIds: argsOf(sendDebt)))
+
+	let sendLostDebt = emitConst(module, block: fireSendLost, value: WakeDebtNone, ids: ids)
+	module.setTerminator(fireSendLost, op: StdOp.branch(fireJoin.id))
+	fireSendLost.branchEdges.push(BranchEdge.create(fireJoin.id, argIds: argsOf(sendLostDebt)))
 
 	let expireDebt = ids.mint()
 	module.appendOp(fireNetpoll, op: StdOp.call(expireDebt, callee: NetpollPdExpireName, args: argsOf(root.gt)))
@@ -5668,8 +5688,8 @@ end 'buildGtCellComplete'
 //     the thread, which unwinds itself — the await arm's answer, and this dropper never owns the struct.
 //   • `waiting` in an await or an awaitAny — the thread will be readied by the completion it waits for, so it
 //     takes the arm below.
-//   • `waiting` in a send — `__mbox_send_abandon` takes it off the sender queue and readies it, and it then
-//     takes the arm below.
+//   • `waiting` in a send — `__mbox_send_abandon`, or the waker that claimed it first, readies it,
+//     and it then takes the arm below.
 //   • anything else (`ready`, or a `completed`/running thread whose status this call never inspects) — the
 //     thread is in a strand queue, on a processor, or finished, and in every one of those a RUNNER will
 //     arrive: the party that takes a NEVER-RUN tombstone out of a queue, or — for a thread that has already
@@ -6211,20 +6231,43 @@ end 'emitGtTimerStoreRemove'
 
 // The absolute deadline `ms` from now, saturating at `GtDeadlineMaxNs`. A `Milliseconds` above
 // `i64.max` reads negative here, and a product past the headroom wraps, and either would be a deadline
-// already past: the wait meant to be longest would end at once.
-export function emitGtDeadlineAfterMs(module StdModule, block IrBlock, ms ValueId, ids ValueMinter) returns ValueId
-	let now = emitGtNowNs(module, block: block, ids: ids)
-	let milliConst = emitConst(module, block: block, value: NanosPerMilli, ids: ids)
-	let latest = emitConst(module, block: block, value: GtDeadlineMaxNs, ids: ids)
-	let headroomNs = emitBin(module, block: block, a: latest, b: now, opcode: StdBinOpcode.sub, ids: ids)
+// already past: the wait meant to be longest would end at once. It ends `cur` and answers
+// `joined`'s block argument.
+//
+// A timeout above `GtDeadlineMaxMs` saturates at any clock reading, because the clock is never
+// negative, so it is decided before the clock is read: a waiting send computes this inside its
+// mailbox lock, and where reading the clock is a system call every `ForeverMs` send would hold
+// the lock across one, serialising the mailbox's producers.
+export function emitGtDeadlineAfterMs(module StdModule, func IrFunction, cur IrBlock, ms ValueId, joined IrBlock, ids ValueMinter) returns ValueId
+	var saturated = module.addBlock(func, label: b"deadlinesaturated", heat: BlockHeat.normal)
+	var finite = module.addBlock(func, label: b"deadlinefinite", heat: BlockHeat.normal)
+
+	let aboveSignedRange = emitCompareWithConstant(module, block: cur, value: ms, pred: StdCmpPred.lt, against: 0, ids: ids)
+	let aboveCeiling = emitCompareWithConstant(module, block: cur, value: ms, pred: StdCmpPred.gt, against: GtDeadlineMaxMs, ids: ids)
+	let saturatesAtAnyClock = emitBin(module, block: cur, a: aboveSignedRange, b: aboveCeiling, opcode: StdBinOpcode.bitOr, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(saturatesAtAnyClock, thenBlockId: saturated.id, elseBlockId: finite.id))
+
+	let latestWhenSaturated = emitConst(module, block: saturated, value: GtDeadlineMaxNs, ids: ids)
+	module.setTerminator(saturated, op: StdOp.branch(joined.id))
+	saturated.branchEdges.push(BranchEdge.create(joined.id, argIds: argsOf(latestWhenSaturated)))
+
+	let now = emitGtNowNs(module, block: finite, ids: ids)
+	let milliConst = emitConst(module, block: finite, value: NanosPerMilli, ids: ids)
+	let latest = emitConst(module, block: finite, value: GtDeadlineMaxNs, ids: ids)
+	let headroomNs = emitBin(module, block: finite, a: latest, b: now, opcode: StdBinOpcode.sub, ids: ids)
 	let headroomMs = ids.mint()
-	module.appendOp(block, op: StdOp.div(headroomMs, lhs: headroomNs, rhs: milliConst, signedness: IntegerSignedness.signed))
-	let aboveSignedRange = emitCompareWithConstant(module, block: block, value: ms, pred: StdCmpPred.lt, against: 0, ids: ids)
-	let aboveHeadroom = emitCmp(module, block: block, a: ms, b: headroomMs, pred: StdCmpPred.gt, ids: ids)
-	let saturates = emitBin(module, block: block, a: aboveSignedRange, b: aboveHeadroom, opcode: StdBinOpcode.bitOr, ids: ids)
-	let msNs = emitBin(module, block: block, a: ms, b: milliConst, opcode: StdBinOpcode.mul, ids: ids)
-	let deadline = emitBin(module, block: block, a: now, b: msNs, opcode: StdBinOpcode.add, ids: ids)
-	return emitSelectWord(module, block: block, cond: saturates, whenSet: latest, whenClear: deadline, ids: ids)
+	module.appendOp(finite, op: StdOp.div(headroomMs, lhs: headroomNs, rhs: milliConst, signedness: IntegerSignedness.signed))
+	let aboveHeadroom = emitCmp(module, block: finite, a: ms, b: headroomMs, pred: StdCmpPred.gt, ids: ids)
+	let msNs = emitBin(module, block: finite, a: ms, b: milliConst, opcode: StdBinOpcode.mul, ids: ids)
+	let sum = emitBin(module, block: finite, a: now, b: msNs, opcode: StdBinOpcode.add, ids: ids)
+	let deadline = emitSelectWord(module, block: finite, cond: aboveHeadroom, whenSet: latest, whenClear: sum, ids: ids)
+	module.setTerminator(finite, op: StdOp.branch(joined.id))
+	finite.branchEdges.push(BranchEdge.create(joined.id, argIds: argsOf(deadline)))
+
+	let value = ids.mint()
+	joined.blockArgs.push(IrBlockArg.create(value, argType: StdType.i64))
+
+	return value
 end 'emitGtDeadlineAfterMs'
 
 // `__gt_sleep(ms)` — suspend the current GT for `ms` milliseconds: compute the absolute deadline and park on
@@ -6234,11 +6277,13 @@ function buildGtSleep(module StdModule, tracing GtTracing)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var timed = module.addBlock(func, label: b"sleeptimed", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let ms = 0
 
-	let deadline = emitGtDeadlineAfterMs(module, block: entry, ms: ms, ids: ids)
+	let deadline = emitGtDeadlineAfterMs(module, func: func, cur: entry, ms: ms, joined: timed, ids: ids)
+	entry = timed
 
 	// The trace pair BRACKETS the park, exactly as `__gt_io_park`'s does — same exit, different tag, and the
 	// tag is the only thing that tells a reader which kind of wait this green thread is in.
