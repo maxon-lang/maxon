@@ -1,28 +1,23 @@
 // Runtime/RuntimeAbort.maxon — ⭐ **THE ONE HOME OF THE PROCESS EXIT CODES THE EMITTED RUNTIME ABORTS
 // WITH**, and the one shape those aborts are emitted in.
 //
-// ⚠ **IT EXISTS BECAUSE THE SPACE HAD ALREADY COLLIDED.** `GtRuntime.ProcStoreOverflowExitCode` and
-// `ManagedMemoryRuntime.ElementSizeZeroExitCode` were BOTH 70 — two unrelated aborts wearing one number, each
-// picked against a different file-local list of "codes I can see from here". Nothing was broken by it
-// (a program cannot reach both), but the next number added was a coin flip, and a runtime abort that
-// reports another abort's code is a debugging session that starts by reading the wrong function.
-//
-// ⭐ **THE FIX IS THE SHAPE THE 4-DIGIT ERROR CODES ALREADY PROVE: ONE DECLARATION SITE PLUS A CHECK
-// THAT FAILS THE BUILD ON A DUPLICATE** — except that here the check needs no tooling, because the
-// LANGUAGE already is one. An enum's raw values must be distinct, so a second claimant on a number is
-// **E3031 `duplicate raw value`** from the compiler that compiles this file: the collision cannot be
-// committed, let alone shipped. That is why these are enum CASES and not seven `let`s.
+// ⭐ **ONE DECLARATION SITE PLUS A CHECK THAT FAILS THE BUILD ON A DUPLICATE.** A runtime abort that
+// reports another abort's code is a debugging session that starts by reading the wrong function,
+// and file-local lists of codes cannot see each other. Here the check needs no tooling, because the
+// LANGUAGE already is one. An enum's raw values must be distinct, so a second claimant on a number
+// is **E3031 `duplicate raw value`** from the compiler that compiles this file: the collision
+// cannot be committed, let alone shipped. That is why these are enum CASES and not seven `let`s.
 //
 // ⚠ **THIS IS NOT THE 4-DIGIT ERROR REGISTRY AND MUST NOT BE FOLDED INTO IT.** `ErrorCodeRegistry.maxon`
 // numbers DIAGNOSTICS the compiler prints at compile time; these are PROCESS EXIT CODES a compiled
 // program dies with at run time. Different space, different consumers (a shell / a spec's `exitcode`
 // block), different lifetimes.
 //
-// ⭐ **HOW TO PICK THE NEXT ONE: take the next free number ABOVE 70.** The band below is not ours —
+// ⭐ **THE BAND IS 70 TO 126.** The band below is not ours —
 // 0-69 are ordinary program exit codes (a Maxon `main` returns one), and the subprocess specs' children
 // already use 1/2/3/4/5/25/45/123 — so an abort down there is indistinguishable from a program that
 // simply returned. (`runProcess`'s two failures THROW `RunProcessError` for that reason, and no abort sits
-// below 71.)
+// below 70.)
 // 101 is the one code the compiler already spends outside this band and it is declared here so the
 // enum's own duplicate check covers it.
 //
@@ -36,15 +31,18 @@
 // `try byteAt(index) otherwise panic("String.byteAtOrPanic: index out of bounds — …")`: ordinary Maxon
 // reaching `osPanic` with a real line and a real message. Only a SYNTHESIZED runtime function, which has no
 // source line and no message to bake, needs a number instead.
-// ⇒ **NO NUMBER IS FREE: 71 TO 126 ARE TAKEN BUT FOR 76, 80 AND 108, WHICH ARE VACANT AND STAY SO.**
-// Reserving a vacated number would be this space defending against a claimant that no longer exists —
-// the very thing the paragraph above rejects. So the next abort has no number to take: its author
-// puts the numbering to the user before writing it, rather than reusing one of those three or
-// reaching past 126. 127 and above are not ours either:
-// 127 is the shell's "command not found", which this repository reads as "the binary was never
-// written", and 128 and up are a signal's death (128 + the signal), so an abort there is
-// indistinguishable from the process being killed.
+// ⇒ **THE NUMBERED ABORTS ARE CLOSED: 71 TO 126 ARE TAKEN BUT FOR 76, 80 AND 108, WHICH ARE VACANT
+// AND STAY SO.** Reserving a vacated number would be this space defending against a claimant that
+// no longer exists — the very thing the paragraph above rejects. A new runtime invariant check is a
+// `RuntimeFatal` case instead: every one exits `runtimeFatal` (70) and is told apart by its
+// `fatal error: <reason>` line on stderr. 127 and above are not ours either: 127 is the shell's
+// "command not found", which this repository reads as "the binary was never written", and 128 and
+// up are a signal's death (128 + the signal), so an abort there is indistinguishable from the
+// process being killed.
 export enum RuntimeAbort
+	// The one exit of every `RuntimeFatal`. A case here, so no numbered abort can take 70.
+	runtimeFatal = 70
+
 	// `__managed_grow`: `capacity·element_size` overflowed i64. Without the guard the wrapped byte count
 	// under-allocates and the next element write runs off the buffer — a silent heap overflow.
 	arrayCapacityOverflow = 71
@@ -559,27 +557,32 @@ end 'lastSegment'
 // The stderr line is `.rdata` text, so an abort path allocates nothing — an allocator-failure abort
 // among them.
 export function emitRuntimeAbort(module StdModule, func IrFunction, block IrBlock, abort RuntimeAbort, ids ValueMinter)
+	emitAbortDoorCall(module, func: func, block: block, reason: RuntimeAbortReason.abort(abort), ids: ids)
+end 'emitRuntimeAbort'
+
+export function emitRuntimeFatal(module StdModule, func IrFunction, block IrBlock, fatal RuntimeFatal, ids ValueMinter)
+	emitAbortDoorCall(module, func: func, block: block, reason: RuntimeAbortReason.fatal(fatal), ids: ids)
+end 'emitRuntimeFatal'
+
+function emitAbortDoorCall(module StdModule, func IrFunction, block IrBlock, reason RuntimeAbortReason, ids ValueMinter)
 	if not module.runtimeAbortDoorBuilt 'firstSite'
 		buildRuntimeAbortDoor(module)
 		module.runtimeAbortDoorBuilt = true
 	end 'firstSite'
 
-	module.runtimeAbortSites.push(RuntimeAbortSite.create(abort, funcName: func.name.clone()))
+	module.runtimeAbortSites.push(RuntimeAbortSite.create(reason, funcName: func.name.clone()))
 
+	let message = reason.message()
+	let code = reason.exitCode()
 	let messageAddr = ids.mint()
-	module.appendOp(block, op: StdOp.rdataAddr(messageAddr, label: runtimeAbortMessageLabel(abort)))
+	module.appendOp(block, op: StdOp.rdataAddr(messageAddr, label: reason.messageLabel()))
 	let messageLength = ids.mint()
-	module.appendOp(block, op: StdOp.const(messageLength, value: runtimeAbortMessage(abort).count() as FullRangeInt, valueType: StdType.i64))
-
-	// Bound to a local FIRST: the union-case argument type-checker cannot lower an
-	// `EnumMember.rawValue` written directly as a case argument (E9001) — the same reason
-	// `StdToArm64Conversion.vregOf` binds `reg.rawValue` before using it.
-	let code = abort.rawValue
+	module.appendOp(block, op: StdOp.const(messageLength, value: message.count() as FullRangeInt, valueType: StdType.i64))
 	let codeId = ids.mint()
 	module.appendOp(block, op: StdOp.const(codeId, value: code, valueType: StdType.i64))
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: RuntimeAbortName, args: threeArgs(messageAddr, second: messageLength, third: codeId)))
 	emitDeadTerminator(module, func: func, block: block, ids: ids)
-end 'emitRuntimeAbort'
+end 'emitAbortDoorCall'
 
 let RuntimeAbortName = b"__rt_abort"
 
@@ -597,12 +600,54 @@ function buildRuntimeAbortDoor(module StdModule)
 	module.functions.push(func)
 end 'buildRuntimeAbortDoor'
 
+export enum RuntimeFatal
+	badGreenThreadStatusInReady
+	badGreenThreadStatusInReadyRunnable
+	promiseDroppedOffItsStrand
+	promiseDroppedInAnUnknownPark
+end 'RuntimeFatal'
+
+export union RuntimeAbortReason
+	abort(cause RuntimeAbort)
+	fatal(cause RuntimeFatal)
+
+	function slot() returns ElementIndex
+		return match self 'which'
+			abort(cause) gives cause.ordinal
+			fatal(cause) gives RuntimeAbort.allCases.count() + cause.ordinal
+		end 'which'
+	end 'slot'
+
+	function exitCode() returns FullRangeInt
+		return match self 'which'
+			abort(cause) gives cause.rawValue
+			fatal gives RuntimeAbort.runtimeFatal.rawValue
+		end 'which'
+	end 'exitCode'
+
+	function messageLabel() returns ByteArray
+		return match self 'which'
+			abort(cause) gives "{RuntimeAbortMessageLabelPrefix}{cause.rawValue}".toByteArray()
+			fatal(cause) gives "{RuntimeFatalMessageLabelPrefix}{cause.ordinal}".toByteArray()
+		end 'which'
+	end 'messageLabel'
+
+	function message() returns ByteArray
+		return match self 'which'
+			abort(cause) gives "fatal error: runtime abort {cause.rawValue} ({cause.name})\n".toByteArray()
+			fatal(cause) gives "fatal error: {runtimeFatalReason(cause)}\n".toByteArray()
+		end 'which'
+	end 'message'
+end 'RuntimeAbortReason'
+
+typealias RuntimeAbortReasonArray = Array with RuntimeAbortReason
+
 export type RuntimeAbortSite
-	export let abort as RuntimeAbort
+	export let reason as RuntimeAbortReason
 	export let funcName as ByteArray
 
-	static function create(abort RuntimeAbort, funcName ByteArray) returns RuntimeAbortSite
-		return Self{abort: abort, funcName: funcName}
+	static function create(reason RuntimeAbortReason, funcName ByteArray) returns RuntimeAbortSite
+		return Self{reason: reason, funcName: funcName}
 	end 'create'
 end 'RuntimeAbortSite'
 
@@ -610,33 +655,52 @@ export typealias RuntimeAbortSiteArray = Array with RuntimeAbortSite
 
 let RuntimeAbortMessageLabelPrefix = "__abort_msg_"
 
-function runtimeAbortMessageLabel(abort RuntimeAbort) returns ByteArray
-	return "{RuntimeAbortMessageLabelPrefix}{abort.rawValue}".toByteArray()
-end 'runtimeAbortMessageLabel'
+let RuntimeFatalMessageLabelPrefix = "__fatal_msg_"
 
-function runtimeAbortMessage(abort RuntimeAbort) returns ByteArray
-	return "fatal error: runtime abort {abort.rawValue} ({abort.name})\n".toByteArray()
-end 'runtimeAbortMessage'
+function runtimeFatalReason(fatal RuntimeFatal) returns String
+	return match fatal 'reason'
+		badGreenThreadStatusInReady gives "bad green-thread status in ready"
+		badGreenThreadStatusInReadyRunnable gives "bad green-thread status in ready of a runnable thread"
+		promiseDroppedOffItsStrand gives "promise dropped by a machine that does not hold its strand"
+		promiseDroppedInAnUnknownPark gives "promise dropped while waiting in an unknown kind of park"
+	end 'reason'
+end 'runtimeFatalReason'
+
+function allRuntimeAbortReasons() returns RuntimeAbortReasonArray
+	var reasons = RuntimeAbortReasonArray.create()
+
+	for abort in RuntimeAbort.allCases 'eachAbort'
+		reasons.push(RuntimeAbortReason.abort(abort))
+	end 'eachAbort'
+
+	for fatal in RuntimeFatal.allCases 'eachFatal'
+		reasons.push(RuntimeAbortReason.fatal(fatal))
+	end 'eachFatal'
+
+	return reasons
+end 'allRuntimeAbortReasons'
 
 // Asked after dead-function elimination, so a program carries text only for the aborts a surviving
-// function can reach; registered in `allCases` order so the `.rdata` image is deterministic.
+// function can reach; registered in `allRuntimeAbortReasons` order so the `.rdata` image is
+// deterministic.
 export function registerReachedRuntimeAbortMessages(module StdModule, globalData GlobalDataTable, survivors FunctionNameIndex)
+	let reasons = allRuntimeAbortReasons()
 	var reached = BoolArray.create()
-	reached.refill(RuntimeAbort.allCases.count(), value: false)
+	reached.refill(reasons.count(), value: false)
 
 	for site in module.runtimeAbortSites 'eachSite'
 		if survivors.byName.contains(site.funcName) 'survived'
-			try reached.set(site.abort.ordinal, value: true) otherwise panic("registerReachedRuntimeAbortMessages: abort ordinal {site.abort.ordinal} is past the {reached.count()} cases RuntimeAbort declares")
+			try reached.set(site.reason.slot(), value: true) otherwise panic("registerReachedRuntimeAbortMessages: reason slot {site.reason.slot()} is past the {reached.count()} reasons RuntimeAbort and RuntimeFatal declare")
 		end 'survived'
 	end 'eachSite'
 
-	for abort in RuntimeAbort.allCases 'eachAbort'
-		let isReached = try reached.get(abort.ordinal) otherwise panic("registerReachedRuntimeAbortMessages: abort ordinal {abort.ordinal} is past the {reached.count()} cases RuntimeAbort declares")
+	for reason in reasons 'eachReason'
+		let isReached = try reached.get(reason.slot()) otherwise panic("registerReachedRuntimeAbortMessages: reason slot {reason.slot()} is past the {reached.count()} reasons RuntimeAbort and RuntimeFatal declare")
 
-		if isReached 'reachedAbort'
-			_ = globalData.registerRdataConstantLabeled(String.from(runtimeAbortMessageLabel(abort)), bytes: runtimeAbortMessage(abort), kind: RdataPayloadKind.runtimeAbortMessage)
-		end 'reachedAbort'
-	end 'eachAbort'
+		if isReached 'reachedReason'
+			_ = globalData.registerRdataConstantLabeled(String.from(reason.messageLabel()), bytes: reason.message(), kind: RdataPayloadKind.runtimeAbortMessage)
+		end 'reachedReason'
+	end 'eachReason'
 end 'registerReachedRuntimeAbortMessages'
 
 export function emitDeadTerminator(module StdModule, func IrFunction, block IrBlock, ids ValueMinter)

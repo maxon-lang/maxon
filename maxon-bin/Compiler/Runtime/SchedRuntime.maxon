@@ -710,11 +710,17 @@ export let MOffLockWaitNext = MOffOsThreadUniqueId + PointerSlotBytes
 export let MOffLockSema = MOffLockWaitNext + PointerSlotBytes
 export let MOffLockRand = MOffLockSema + PointerSlotBytes
 
+// The owner of the strand this machine's `__gt_run_strand` is running, or `GtNoHeldStrand`: stored
+// at its entry and cleared on every return (`GtRuntime.emitStrandRunReturn`), so it covers the
+// scheduler context's tombstone reclaims between members. `__gt_promise_drop` checks its premise
+// against it.
+export let MOffHeldStrand = MOffLockRand + PointerSlotBytes
+
 // The three head scalars, the inline GT, the idle tail, the syscall bracket's three, the idle
 // back-link, the wake count, the regain link, asynchronous preemption's four, the pinned thread's
-// three and the lock sleeper's three. Derived, never written down as a number, for `PStructSize`'s
-// reason.
-let MStructSize = ((MOffLockRand + PointerSlotBytes) as FullRangeInt)
+// three, the lock sleeper's three and the held strand. Derived, never written down as a number, for
+// `PStructSize`'s reason.
+let MStructSize = ((MOffHeldStrand + PointerSlotBytes) as FullRangeInt)
 
 // ==========================================================================
 // The ProcContext (P) struct
@@ -6270,7 +6276,7 @@ function buildSchedCheckdead(module StdModule)
 	emitBranchOnCasLost(module, block: quiescerGivesUp, result: claimedWaiter, lost: doneBlock, won: quiescerClaimed, ids: ids)
 
 	_ = emitGlobalAccumulate(module, block: quiescerClaimed, label: GtQuiesceStuckLabel, delta: emitConst(module, block: quiescerClaimed, value: OneMore, ids: ids), multiM: true, ids: ids)
-	_ = emitGtReadyLocked(module, block: quiescerClaimed, gt: quiescer, ids: ids)
+	_ = emitGtReady(module, block: quiescerClaimed, gt: quiescer, gate: GtReadyGate.fromWaiting, ids: ids)
 	module.appendOp(quiescerClaimed, op: StdOp.osSetEvent(emitLoadField(module, block: quiescerClaimed, record: m, offset: MOffParkEvent, ids: ids)))
 	module.setTerminator(quiescerClaimed, op: StdOp.branch(doneBlock.id))
 

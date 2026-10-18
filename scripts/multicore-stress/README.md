@@ -148,6 +148,10 @@ COVERS A CROSS-P FREE**, and none should be read as doing so.
   its assertion: how far the scheduler's record-carve count runs past the most a runtime that
   reclaims every dropped record can carve, over enough rounds that one record stranded per round
   would reach twice that bound. A row that prints no `leaked=` is a failure, not a pass.
+- **`drop-sleeping-torture.maxon`** — promises dropped while their coroutines sleep or wait on a socket
+  read, each drop swept across the moment the deadline fires or the readiness lands, so the drop and the
+  waker race to ready one parked thread. A second ready exits 70 (`fatal error: bad green-thread status
+  in ready`). `leaked=` is its assertion, read as `drop-running-torture`'s is.
 - **`refcount-torture.maxon`** — twelve tasks all reading the SAME module-level heap `String`, each pushing it into
   a local container in a loop: one round is N increfs and N decrefs of ONE word. ⚠ **THE EXIT CODE IS
   THE ONLY DISCRIMINATOR** — the aggregate is byte-identical in passing and crashing runs, and

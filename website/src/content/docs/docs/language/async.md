@@ -675,6 +675,9 @@ Each of these aborts writes `fatal error: runtime abort N (name)` to stderr, the
 | 116 | `MAXON_PREEMPT` holds a value other than `on` or `off` |
 | 120 | a deep copy reached an interface-typed field whose conformer cannot be duplicated — reachable only if a `.clone()` the front end should have refused was compiled |
 
+Exit code 70 with `fatal error: <reason>` on stderr is a broken runtime invariant: a bug in the compiler or
+its runtime, worth reporting with the program that produced it.
+
 Exit code 2 with `fatal error: cannot open standard fds` is the start-up check described under
 [Entry Point](/docs/language/overview/#entry-point).
 

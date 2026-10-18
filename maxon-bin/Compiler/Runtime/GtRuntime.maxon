@@ -367,7 +367,7 @@ let GtMainThreadMark = 1
 
 // ⭐⭐⭐ **1 WHILE SOME MACHINE OWNS THIS STRAND — its owner token is in a run queue, or a machine is
 // running the strand — and 0 otherwise.** Meaningful only on a green thread. Every claim is a 0 → 1
-// CAS (`emitGtStrandClaimLost`) made with no lock, by `__gt_ready_locked` and by the parked-service
+// CAS (`emitGtStrandClaimLost`) made with no lock, by the two ready doors and by the parked-service
 // ready (`emitGtReadyParkedService`), and its winner publishes the token. A spawned green thread is
 // born held: `__gt_ready` stores 1 before the record is published. `__gt_strand_next` releases it
 // with an atomic decrement when the strand queue is empty, then re-reads the queue and re-claims it
@@ -377,7 +377,7 @@ let GtMainThreadMark = 1
 // readier whose CAS wins, and this reads 0 only after the executing machine found the strand queue
 // empty and gave the strand up. So a readier either loses and leaves the member on the strand queue
 // for the machine that holds the strand — whose release re-reads the queue after it lets go
-// (`buildGtReadyLocked`) — or wins, at a moment when no machine is running any member, and becomes
+// (`buildGtReadyDoor`) — or wins, at a moment when no machine is running any member, and becomes
 // the one publisher of the one token. No member of a strand can therefore be run by a second
 // machine while one is running any of them, and the owner is never readied onto a run queue while
 // one of its coroutines executes elsewhere.
@@ -592,18 +592,18 @@ let GtTeardownConsumerTicket = 1
 let GtTeardownRunnerTicket = 2
 
 // --- GT status ---
-// `ready` (a fresh record's zero, and what `__gt_ready_locked` stores), `completed` (set by the trampoline,
-// read by the strand runner's completion gate) and `waiting` (stored by a park's registration, cleared to
-// `ready` by whoever readies the thread) are load-bearing.
+// `ready` (a fresh record's zero, and what `__gt_ready_locked` stores), `completed` (set by the
+// trampoline, read by the strand runner's completion gate) and `waiting` (stored only through
+// `emitGtMarkWaiting`, cleared to `ready` by whoever readies the thread) are load-bearing.
 //
 // ⛔⛔ **`running` (1) EXISTS IN THE LAYOUT AND IS NEVER STORED, AND THAT IS A DECISION RATHER THAN A
-// HOLE.** `ready` reads the same on a thread sitting in a ring and on one another M popped a microsecond ago,
-// and the trampoline overwrites this word with `completed` from hand-assembled bytes, so no mark left here
-// survives the event a dropper must rendezvous with. **The rendezvous therefore lives in a word of its own
-// (`GtOffTeardown`) and the drop does not ask this one who is running** — it asks only `waiting?`, because a
-// PARKED thread is the single shape whose teardown needs a store deregistered, and that question this word
-// answers exactly (the timer store and the poll descriptors are mutated under `__sched_lock`, which the
-// drop's waiting arm holds while it scans).
+// HOLE.** `ready` reads the same on a thread sitting in a ring and on one another M popped a
+// microsecond ago, and the trampoline overwrites this word with `completed` from hand-assembled
+// bytes, so no mark left here survives the event a dropper must rendezvous with. **The rendezvous
+// therefore lives in a word of its own (`GtOffTeardown`) and the drop does not ask this one who is
+// running** — it asks only `waiting?`, because a PARKED thread is the single shape whose teardown
+// needs a store deregistered (`buildGtPromiseDrop` says why its unlocked read of this word is
+// enough).
 //
 // `waiting` MUST be distinct from `completed` so the strand runner's `status == completed` gate NEVER hands a
 // merely-parked GT to the runner's teardown (freeing a parked GT's stack is a use-after-free when it resumes).
@@ -1247,22 +1247,28 @@ export let GtRunMainName = b"__gt_run_main"
 export let GtReadyName = b"__gt_ready"
 
 // ⭐⭐⭐ **`__gt_ready_locked(gt) -> wakeDebt` — THE WAKE DOOR, Go's `ready`.** It moves `gt` from
-// `waiting` to `ready` by CAS and, if no machine owns the strand, claims it and publishes the
-// owner's token to this processor's ring (the global queue on an OS thread with none). Otherwise
-// `gt` goes onto its strand queue under the owner's record lock — the FRONT for a strand's owner,
-// which a strand runs first, the back for a coroutine. It answers `WakeDebtOwed` exactly when it
-// published a token: a caller holding a lock then owes `__sched_wake_or_spawn` AFTER its release
-// (`SchedRuntime.emitSchedWakeIfOwed`), because a wake inside a critical section has no StoreLoad
-// fence and a nested leave of a recursive lock releases nothing. A mailbox-parked service comes
-// here only when its strand is held, and is otherwise readied with no lock
-// (`emitGtReadyParkedService`).
+// `waiting` to `ready` by CAS — a lost CAS is a second ready of one wait, which would queue the
+// thread twice, so it is fatal (`RuntimeFatal.badGreenThreadStatusInReady`) — and, if no machine
+// owns the strand, claims it and publishes the owner's token to this processor's ring (the global
+// queue on an OS thread with none). Otherwise `gt` goes onto its strand queue under the owner's
+// record lock — the FRONT for a strand's owner, which a strand runs first, the back for a
+// coroutine. It answers `WakeDebtOwed` exactly when it published a token: a caller holding a lock
+// then owes `__sched_wake_or_spawn` AFTER its release (`SchedRuntime.emitSchedWakeIfOwed`), because
+// a wake inside a critical section has no StoreLoad fence and a nested leave of a recursive lock
+// releases nothing. A mailbox-parked service comes here only when its strand is held, and is
+// otherwise readied with no lock (`emitGtReadyParkedService`).
 //
 // EXPORTED for its callers in `MailboxRuntime` and for the root that keeps it alive for the hand-assembled
 // chunks that name it (`DeadFunctionElimination.seedRoots`).
 export let GtReadyLockedName = b"__gt_ready_locked"
 
-// What `__gt_ready_locked` answers. Named because every waker compares against them and a bare literal at each
-// end would be one fact written twice.
+// `__gt_ready_runnable(gt) -> wakeDebt` — the same enqueue for a thread never marked `waiting`: a
+// fresh coroutine's publish, `main`'s start, and a park that finds its wait already over before it
+// marked anything. It requires `ready`, and anything else is fatal.
+let GtReadyRunnableName = b"__gt_ready_runnable"
+
+// What the two ready doors answer. Named because every waker compares against them and a bare
+// literal at each end would be one fact written twice.
 let WakeDebtOwed = 1
 export let WakeDebtNone = 0 as FullRangeInt
 
@@ -1330,8 +1336,7 @@ export let GtPromiseFieldVacateName = b"__gt_promise_field_vacate"
 // runner ticket; if the consumer was already there it performs the teardown. Its callers are the strand
 // runner when a switch comes back from a `completed` thread, the parties that take a renounced thread out of
 // a queue rather than running it (`__gt_strand_next`, `__gt_coro_sweep_dropped`, `__sched_find_runnable`,
-// `__sched_sweep_dropped`), `__gt_cell_complete`, and `__gt_promise_drop`'s waiting arm once it has
-// deregistered a parked thread from every store. The two in `SchedRuntime` reach it through
+// `__sched_sweep_dropped`), and `__gt_cell_complete`. The two in `SchedRuntime` reach it through
 // `emitGtTombstoneHandback` and `emitGtFifoSweepDropped`.
 //
 // ⛔⛔⛔ **IT IS NEVER CALLED WITH `__sched_lock` HELD.** `__sched_lock` is RECURSIVE: a nested leave
@@ -2498,7 +2503,8 @@ export function installGtRuntime(module StdModule, globalData GlobalDataTable, a
 	buildGtSpawn(module, kind: GtSpawnKind.greenThread, tracing: tracing, target: target)
 	buildGtSpawn(module, kind: GtSpawnKind.mainThread, tracing: tracing, target: target)
 	buildGtReady(module)
-	buildGtReadyLocked(module)
+	buildGtReadyDoor(module, gate: GtReadyGate.fromWaiting)
+	buildGtReadyDoor(module, gate: GtReadyGate.alreadyRunnable)
 	buildGtEnqueue(module)
 	buildGtDequeue(module)
 
@@ -2873,10 +2879,10 @@ function emitGtSeedX64ReturnWord(module StdModule, block IrBlock, gt ValueId, st
 end 'emitGtSeedX64ReturnWord'
 
 // `__gt_ready(gt)` — make a spawned GT discoverable. See `GtReadyName` for why this is not the tail
-// of `__gt_spawn`. A coroutine is readied through `__gt_ready_locked` and joins its owner's strand.
-// A green thread heads a new strand whose token goes to this processor's `runnext` slot, and is
-// born holding it: no other thread can reach the record yet, so its holder and resume words take
-// plain stores, which the run queue put's release publishes.
+// of `__gt_spawn`. A coroutine is readied through `__gt_ready_runnable` and joins its owner's
+// strand. A green thread heads a new strand whose token goes to this processor's `runnext` slot,
+// and is born holding it: no other thread can reach the record yet, so its holder and resume words
+// take plain stores, which the run queue put's release publishes.
 function buildGtReady(module StdModule)
 	var func = IrFunction.createFromStd(GtReadyName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
@@ -2898,20 +2904,33 @@ function buildGtReady(module StdModule)
 	emitSchedRunqPut(module, block: greenArm, gt: gt, ids: ids)
 	module.setTerminator(greenArm, op: StdOp.branch(wake.id))
 
-	let debt = emitGtReadyLocked(module, block: coroArm, gt: gt, ids: ids)
+	let debt = emitGtReady(module, block: coroArm, gt: gt, gate: GtReadyGate.alreadyRunnable, ids: ids)
 	emitSchedWakeIfOwed(module, cur: coroArm, owed: debt, wake: wake, cont: doneBlock, ids: ids)
 	module.setTerminator(doneBlock, op: StdOp.retVoid)
 
 	module.functions.push(func)
 end 'buildGtReady'
 
-export function emitGtReadyLocked(module StdModule, block IrBlock, gt ValueId, ids ValueMinter) returns ValueId
+export function emitGtReady(module StdModule, block IrBlock, gt ValueId, gate GtReadyGate, ids ValueMinter) returns ValueId
 	let debt = ids.mint()
-	module.appendOp(block, op: StdOp.call(debt, callee: GtReadyLockedName, args: argsOf(gt)))
+	module.appendOp(block, op: StdOp.call(debt, callee: gtReadyNameOf(gate), args: argsOf(gt)))
 	return debt
-end 'emitGtReadyLocked'
+end 'emitGtReady'
 
-// `__gt_ready_locked(gt) -> wakeDebt`. See `GtReadyLockedName`.
+export enum GtReadyGate
+	fromWaiting
+	alreadyRunnable
+end 'GtReadyGate'
+
+function gtReadyNameOf(gate GtReadyGate) returns ByteArray
+	return match gate 'gate'
+		fromWaiting gives GtReadyLockedName
+		alreadyRunnable gives GtReadyRunnableName
+	end 'gate'
+end 'gtReadyNameOf'
+
+// `__gt_ready_locked` and `__gt_ready_runnable`, which differ only in the status gate. See
+// `GtReadyLockedName` and `GtReadyRunnableName`.
 //
 // ⭐ **THE OWNER GOES TO THE FRONT OF ITS STRAND QUEUE AND A COROUTINE TO THE BACK.** A readied owner is what
 // its strand was waiting on; a coroutine joins behind whatever its strand already has runnable.
@@ -2924,8 +2943,8 @@ end 'emitGtReadyLocked'
 // up past a queued member. The claim being a CAS is what makes two claimers unable to both win. An
 // owner whose first claim wins is not queued at all: it becomes the strand's resume member
 // (`GtOffStrandResume`).
-function buildGtReadyLocked(module StdModule)
-	var func = IrFunction.createFromStd(GtReadyLockedName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+function buildGtReadyDoor(module StdModule, gate GtReadyGate)
+	var func = IrFunction.createFromStd(gtReadyNameOf(gate), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2940,10 +2959,10 @@ function buildGtReadyLocked(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let gt = 0
 
-	_ = emitGtCasStatus(module, block: entry, gt: gt, from: GtStatus.waiting, to: GtStatus.ready, ids: ids)
-	let owner = emitLoadField(module, block: entry, record: gt, offset: GtOffOwner, ids: ids)
-	let isOwner = emitCmp(module, block: entry, a: owner, b: gt, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(isOwner, thenBlockId: ownerArm.id, elseBlockId: coroArm.id))
+	var statusOk = emitGtReadyGate(module, func: func, cur: entry, gt: gt, gate: gate, ids: ids)
+	let owner = emitLoadField(module, block: statusOk, record: gt, offset: GtOffOwner, ids: ids)
+	let isOwner = emitCmp(module, block: statusOk, a: owner, b: gt, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(statusOk, op: StdOp.condBranch(isOwner, thenBlockId: ownerArm.id, elseBlockId: coroArm.id))
 
 	let ownerHeld = emitGtStrandClaimLost(module, block: ownerArm, owner: owner, ids: ids)
 	module.setTerminator(ownerArm, op: StdOp.condBranch(ownerHeld, thenBlockId: ownerQueue.id, elseBlockId: ownerWon.id))
@@ -2969,11 +2988,45 @@ function buildGtReadyLocked(module StdModule)
 	emitConstReturn(module, block: publish, value: WakeDebtOwed, ids: ids)
 
 	module.functions.push(func)
-end 'buildGtReadyLocked'
+end 'buildGtReadyDoor'
+
+function emitGtReadyGate(module StdModule, func IrFunction, cur IrBlock, gt ValueId, gate GtReadyGate, ids ValueMinter) returns IrBlock
+	return match gate 'gate'
+		fromWaiting gives emitGtCasWaitingToReady(module, func: func, cur: cur, gt: gt, ids: ids)
+		alreadyRunnable gives emitGtRequireRunnable(module, func: func, cur: cur, gt: gt, ids: ids)
+	end 'gate'
+end 'emitGtReadyGate'
+
+function emitGtRequireRunnable(module StdModule, func IrFunction, cur IrBlock, gt ValueId, ids ValueMinter) returns IrBlock
+	var notRunnable = module.addBlock(func, label: b"readynotrunnable", heat: BlockHeat.cold)
+	var runnable = module.addBlock(func, label: b"readyrunnable", heat: BlockHeat.normal)
+
+	let status = emitLoadField(module, block: cur, record: gt, offset: GtOffStatus, ids: ids)
+	let isReady = emitGtStatusEquals(module, block: cur, status: status, want: GtStatus.ready, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(isReady, thenBlockId: runnable.id, elseBlockId: notRunnable.id))
+	emitRuntimeFatal(module, func: func, block: notRunnable, fatal: RuntimeFatal.badGreenThreadStatusInReadyRunnable, ids: ids)
+
+	return runnable
+end 'emitGtRequireRunnable'
 
 function emitGtCasStatus(module StdModule, block IrBlock, gt ValueId, from GtStatus, to GtStatus, ids ValueMinter) returns ValueId
 	return emitCasField(module, block: block, record: gt, offset: GtOffStatus as ByteOffset, expected: emitConst(module, block: block, value: from.rawValue, ids: ids), replacement: emitConst(module, block: block, value: to.rawValue, ids: ids), ids: ids)
 end 'emitGtCasStatus'
+
+function emitGtCasWaitingToReady(module StdModule, func IrFunction, cur IrBlock, gt ValueId, ids ValueMinter) returns IrBlock
+	var lost = module.addBlock(func, label: b"readybadstatus", heat: BlockHeat.cold)
+	var won = module.addBlock(func, label: b"readystatusok", heat: BlockHeat.normal)
+
+	let result = emitGtCasStatus(module, block: cur, gt: gt, from: GtStatus.waiting, to: GtStatus.ready, ids: ids)
+	emitBranchOnCasLost(module, block: cur, result: result, lost: lost, won: won, ids: ids)
+	emitRuntimeFatal(module, func: func, block: lost, fatal: RuntimeFatal.badGreenThreadStatusInReady, ids: ids)
+
+	return won
+end 'emitGtCasWaitingToReady'
+
+export function emitGtMarkWaiting(module StdModule, block IrBlock, gt ValueId, ids ValueMinter)
+	emitStoreField(module, block: block, record: gt, offset: GtOffStatus, value: emitConst(module, block: block, value: GtStatus.waiting.rawValue, ids: ids))
+end 'emitGtMarkWaiting'
 
 function emitGtRecordLockEnter(module StdModule, block IrBlock, record ValueId, ids ValueMinter)
 	emitLockEnterAt(module, block: block, lock: emitFieldAddr(module, block: block, record: record, offset: GtOffRecordLock as ByteOffset, ids: ids), kind: RuntimeLockKind.recursive, ids: ids)
@@ -3014,7 +3067,7 @@ export function emitGtReadyParkedService(module StdModule, func IrFunction, cur 
 	emitSchedWakeAnIdleM(module, block: lockFree, ids: ids)
 	module.setTerminator(lockFree, op: StdOp.branch(cont.id))
 
-	let debt = emitGtReadyLocked(module, block: locked, gt: service, ids: ids)
+	let debt = emitGtReady(module, block: locked, gt: service, gate: GtReadyGate.fromWaiting, ids: ids)
 	emitSchedWakeIfOwed(module, cur: locked, owed: debt, wake: lockedWake, cont: cont, ids: ids)
 end 'emitGtReadyParkedService'
 
@@ -3617,7 +3670,7 @@ end 'buildGtCoroDequeue'
 // re-enters at `snpop` and registers nothing again.
 //
 // ⭐⭐⭐ **AN EMPTY QUEUE RELEASES THE STRAND AND THEN LOOKS AGAIN** — the other half of
-// `buildGtReadyLocked`'s Dekker pair: a member pushed before the decrement is seen by the acquire
+// `buildGtReadyDoor`'s Dekker pair: a member pushed before the decrement is seen by the acquire
 // re-read and the strand re-claimed, and one pushed after finds the holder word 0 and publishes a
 // token. The strand hold's reference is dropped only once the strand is given up
 // (`emitGtStrandUnref`), which may reclaim `owner` — so the caller touches `owner` no more once
@@ -4249,7 +4302,7 @@ function buildGtTimerCheck(module StdModule)
 	let isSleepTag = emitCompareWithConstant(module, block: fire, value: root.tag, pred: StdCmpPred.eq, against: TimerTagSleep, ids: ids)
 	module.setTerminator(fire, op: StdOp.condBranch(isSleepTag, thenBlockId: fireSleep.id, elseBlockId: fireNotSleep.id))
 
-	let sleepDebt = emitGtReadyLocked(module, block: fireSleep, gt: root.gt, ids: ids)
+	let sleepDebt = emitGtReady(module, block: fireSleep, gt: root.gt, gate: GtReadyGate.fromWaiting, ids: ids)
 	module.setTerminator(fireSleep, op: StdOp.branch(fireJoin.id))
 	fireSleep.branchEdges.push(BranchEdge.create(fireJoin.id, argIds: argsOf(sleepDebt)))
 
@@ -4258,7 +4311,7 @@ function buildGtTimerCheck(module StdModule)
 
 	emitMboxClaimSender(module, block: fireSend, sender: root.gt, outcome: MboxSendWake.timedOut, lost: fireSendLost, won: fireSendWon, ids: ids)
 
-	let sendDebt = emitGtReadyLocked(module, block: fireSendWon, gt: root.gt, ids: ids)
+	let sendDebt = emitGtReady(module, block: fireSendWon, gt: root.gt, gate: GtReadyGate.fromWaiting, ids: ids)
 	module.setTerminator(fireSendWon, op: StdOp.branch(fireJoin.id))
 	fireSendWon.branchEdges.push(BranchEdge.create(fireJoin.id, argIds: argsOf(sendDebt)))
 
@@ -4701,6 +4754,8 @@ end 'buildGtDrainAtExit'
 // `__gt_quiesce()`: park the caller until no green thread is live, or until `__sched_checkdead`
 // finds the scheduler stuck with only the caller left to finish, and answer the live count at that
 // moment. It tears nothing down. The stuck word is what lets the woken caller tell stuck from done.
+// A renounced caller answers at once, for the reason the renounce mark in `buildGtPromiseDrop`
+// gives.
 function buildGtQuiesce(module StdModule)
 	var func = IrFunction.createFromStd(GtQuiesceName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
 	var ids = ValueMinter.create(0)
@@ -4708,6 +4763,7 @@ function buildGtQuiesce(module StdModule)
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var check = module.addBlock(func, label: b"quiescecheck", heat: BlockHeat.normal)
 	var pending = module.addBlock(func, label: b"quiescepending", heat: BlockHeat.normal)
+	var promiseCheck = module.addBlock(func, label: b"quiescepromise", heat: BlockHeat.normal)
 	var wait = module.addBlock(func, label: b"quiescepark", heat: BlockHeat.normal)
 	var finish = module.addBlock(func, label: b"quiescefinish", heat: BlockHeat.normal)
 	var clearStuck = module.addBlock(func, label: b"quiescecleared", heat: BlockHeat.normal)
@@ -4719,7 +4775,10 @@ function buildGtQuiesce(module StdModule)
 	let outstanding = emitLoadAcquireGlobalWord(module, block: check, label: GtLiveCountLabel, ids: ids)
 	emitBranchOnCompare(module, block: check, value: outstanding, pred: StdCmpPred.eq, against: 0, whenTrue: finish, whenFalse: pending, ids: ids)
 
-	emitBranchOnCompare(module, block: pending, value: stuck, pred: StdCmpPred.ne, against: 0, whenTrue: finish, whenFalse: wait, ids: ids)
+	emitBranchOnCompare(module, block: pending, value: stuck, pred: StdCmpPred.ne, against: 0, whenTrue: finish, whenFalse: promiseCheck, ids: ids)
+
+	let renounced = emitLoadField(module, block: promiseCheck, record: emitLoadCurrentGt(module, block: promiseCheck, ids: ids), offset: GtOffRenounced, ids: ids)
+	emitBranchOnCompare(module, block: promiseCheck, value: renounced, pred: StdCmpPred.ne, against: GtPromiseHeld, whenTrue: finish, whenFalse: wait, ids: ids)
 
 	emitGtPark(module, ids: ids, cur: wait, kind: GtParkKind.quiesce.rawValue, arg: emitConst(module, block: wait, value: GtParkArgUnused, ids: ids), cont: check)
 
@@ -4790,7 +4849,7 @@ function buildGtRunMain(module StdModule, target Target)
 	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: GtInitName, args: ValueIdArray.create()))
 	let mainGt = ids.mint()
 	module.appendOp(entry, op: StdOp.call(mainGt, callee: GtSpawnMainName, args: argsOf(mainEntry)))
-	_ = emitGtReadyLocked(module, block: entry, gt: mainGt, ids: ids)
+	_ = emitGtReady(module, block: entry, gt: mainGt, gate: GtReadyGate.alreadyRunnable, ids: ids)
 	emitSchedSysmonStart(module, func: func, cur: entry, cont: running, target: target, ids: ids)
 	emitSchedMainLoop(module, block: running, until: SchedMainLoopUntil.mainCompleted, ids: ids)
 
@@ -5161,7 +5220,7 @@ function buildGtOwnerDone(module StdModule)
 	let claimed = emitCasGlobalWord(module, block: wakeQuiescer, label: GtQuiesceWaiterLabel, expected: waiting, replacement: emitConst(module, block: wakeQuiescer, value: 0, ids: ids), ids: ids)
 	emitBranchOnCasLost(module, block: wakeQuiescer, result: claimed, lost: afterQuiescer, won: claimQuiescer, ids: ids)
 
-	let quiescerDebt = emitGtReadyLocked(module, block: claimQuiescer, gt: waiting, ids: ids)
+	let quiescerDebt = emitGtReady(module, block: claimQuiescer, gt: waiting, gate: GtReadyGate.fromWaiting, ids: ids)
 	emitSchedWakeIfOwed(module, cur: claimQuiescer, owed: quiescerDebt, wake: payQuiescer, cont: afterQuiescer, ids: ids)
 
 	let draining = emitSchedMainHasCompleted(module, block: afterQuiescer, ids: ids)
@@ -5607,8 +5666,7 @@ function buildGtCellAlloc(module StdModule)
 	emitStoreField(module, block: entry, record: cell, offset: GtOffReplyWitness, value: cleared)
 	emitStoreField(module, block: entry, record: cell, offset: GtOffRenounced, value: cleared)
 
-	let waitingStatus = emitConst(module, block: entry, value: GtStatus.waiting.rawValue, ids: ids)
-	emitStoreField(module, block: entry, record: cell, offset: GtOffStatus, value: waitingStatus)
+	emitGtMarkWaiting(module, block: entry, gt: cell, ids: ids)
 	let owner = emitLoadField(module, block: entry, record: emitLoadCurrentGt(module, block: entry, ids: ids), offset: GtOffOwner, ids: ids)
 	emitStoreField(module, block: entry, record: cell, offset: GtOffOwner, value: owner)
 	emitStoreField(module, block: entry, record: cell, offset: GtOffReleaser as ByteOffset, value: releaser)
@@ -5650,11 +5708,12 @@ end 'buildGtCellComplete'
 // call on every path to scope exit / a re-arm that neither `await`s nor re-arms it, and `p.cancel()` arrives
 // by the same road.
 //
-// ⭐⭐⭐ **A REPLY CELL TAKES THE FIRST ARM, AND IT IS THE ONE POPULATION THIS FUNCTION MAY NEVER FREE.**
-// A cell is a `Promise` whose status is `waiting` for its whole life, so without this arm it would fall into
-// the `waiting` road below, miss both store scans, re-read `waiting` and take `soleOwner` — freeing a struct
-// the REPLIER is about to write three words into. ⇒ a cell adds **the consumer's ticket only, never a free**,
-// and the pair still closes exactly once on every (state × consumer) combination:
+// ⭐⭐⭐ **A REPLY CELL TAKES THE FIRST ARM, AND IT IS THE ONE POPULATION THIS FUNCTION MAY NEVER
+// FREE.** A cell is a `Promise` whose status is `waiting` for its whole life without ever having
+// parked, so the `waiting` road below, which withdraws a park and readies the thread, has nothing
+// to act on in a struct the REPLIER is about to write three words into. ⇒ a cell adds **the
+// consumer's ticket only, never a free**, and the pair still closes exactly once on every (state ×
+// consumer) combination:
 //
 //   • **PENDING, dropped, then answered** — the drop adds the consumer ticket and returns; the replier's
 //     `__gt_cell_complete` writes into a live struct and its `__gt_runner_done` finds the consumer ticket
@@ -5669,19 +5728,20 @@ end 'buildGtCellComplete'
 //     (`Parser.emitServiceSend`), so every path either awaits it or drops it, and `__gt_live_count` would
 //     report a `greenThreadLeak` if one did not.
 //
-// ⭐⭐ **IT HAS THREE ARMS, AND THE TWO QUESTIONS IT ASKS ARE `a reply cell?` AND `waiting?`.** Everything a
-// drop owes a thread that is queued, RUNNING on another M, or already completed is the same thing — the
-// consumer's half of the teardown rendezvous (`GtOffTeardown`) — so those three collapse into one arm that
-// cannot be got wrong by misreading a state. **A PARKED thread is the one genuine exception**: it is
-// registered in the timer store, on a poll descriptor, or in an in-flight OVERLAPPED read, and no runner
-// will ever come back for it, so it must be DEREGISTERED first and then given up from BOTH sides by this
-// same call.
+// ⭐⭐ **IT HAS THREE ARMS, AND THE TWO QUESTIONS IT ASKS ARE `a reply cell?` AND `waiting?`.**
+// Everything a drop owes a thread that is queued, RUNNING on another M, or already completed is the
+// same thing — the consumer's half of the teardown rendezvous (`GtOffTeardown`) — so those three
+// collapse into one arm that cannot be got wrong by misreading a state. **A PARKED thread is the
+// one genuine exception**: it is registered in the timer store, on a poll descriptor, on the
+// quiesce word or in an in-flight OVERLAPPED read, and its wait must be ended before a runner will
+// come back for it.
 //
-//   • `waiting` (3) — the thread ran up to a `sleep`/`runProcess` and parked. Remove it from BOTH stores (a
-//     parked GT is on exactly one, but both scans are cheap and safe; the process scan `CloseHandle`s the
-//     child handle — abandon the WAIT, do not kill the child). **If a scan finds it, this dropper is now its
-//     ONLY owner** and performs the runner's half as well: the (possibly morestack-grown) stack, then the
-//     consumer's half, which reclaims.
+//   • `waiting` on the timer, the poller or the quiesce word — the drop withdraws the registration
+//     and readies the thread ONLY IF ITS OWN WITHDRAWAL FOUND IT: the timer removal found the
+//     entry, `__np_pd_drop` answered found, or the CAS on `GtQuiesceWaiterLabel` won. A miss means
+//     the fire, the readiness walk, or `__gt_owner_done`/`__sched_checkdead` has readied it
+//     already, and a second ready of one wait is fatal. Either way the thread runs its body out and
+//     its runner reclaims it.
 //   • `waiting` with an IN-FLIGHT OVERLAPPED READ: the thread parked on a yielding `ReadFile` and the KERNEL
 //     still holds its OVERLAPPED (`gt + 0x60`). Freeing the GT here would be a use-after-free when the read
 //     completes, so the park is left standing and the read is CANCELLED (CancelIoEx): its own packet readies
@@ -5697,20 +5757,21 @@ end 'buildGtCellComplete'
 //     out rather than abandoned (`emitGtIsDropped` states why). So the drop performs the consumer's half and
 //     nothing else, and whichever of the two arrives SECOND reclaims.
 //
-// ⛔⛔ **A THREAD THAT IS RE-READIED WHILE THIS CALL IS ACQUIRING THE LOCK IS NOT AN ERROR PATH, AND IT IS
-// WHY THE TWO ARMS SHARE AN EXIT.** A `waiting` thread can be re-readied under `__sched_lock` between the
-// status load above and this call's own acquisition of that lock — `__gt_timer_check` fires a due deadline,
-// or the poller's walk reaches a ready source — and the thread is then QUEUED, not parked. Deregistering
-// nothing and freeing anyway would be a use-after-free on a thread sitting in a queue. The waiting arm
-// therefore RE-READS the status under the lock it holds and falls through to the queued arm when it no longer
-// says `waiting`; whichever party got the lock first decides, exactly, and the tombstone the fall-through
-// leaves is reclaimed by whoever pops it.
+// ⛔⛔ **THE STATUS AND THE PARK NOTE ARE READ WITHOUT A LOCK, WHICH IS SOUND ONLY BECAUSE THE
+// EXECUTING MACHINE HOLDS THE TARGET's STRAND.** A dropper is a member of that strand, or the
+// scheduler context of the machine running it, reclaiming a tombstone's argument promise; a strand
+// runs on one machine at a time, so the target cannot run, re-park or rewrite its note between
+// these reads and the arm's acts. The premise is checked against `SchedRuntime.MOffHeldStrand`, and
+// a drop on any other machine is fatal. A waker on another machine can still move `waiting` to
+// `ready` meanwhile, which the found-or-missed rule above answers.
 function buildGtPromiseDrop(module StdModule)
 	var func = IrFunction.createFromStd(GtPromiseDropName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true, pinsItsThread: true)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var notAReplyCell = module.addBlock(func, label: b"notreplycell", heat: BlockHeat.normal)
+	var strandHeld = module.addBlock(func, label: b"dropstrandheld", heat: BlockHeat.normal)
+	var strandNotHeld = module.addBlock(func, label: b"dropstrandnotheld", heat: BlockHeat.cold)
 	var mailboxParked = module.addBlock(func, label: b"droppedmailboxpark", heat: BlockHeat.normal)
 	var notMailbox = module.addBlock(func, label: b"droppednotmailbox", heat: BlockHeat.normal)
 	var sendParked = module.addBlock(func, label: b"droppedsendpark", heat: BlockHeat.normal)
@@ -5723,11 +5784,14 @@ function buildGtPromiseDrop(module StdModule)
 	var readCancel = module.addBlock(func, label: b"droppedreadcancel", heat: BlockHeat.normal)
 	var readMovedOn = module.addBlock(func, label: b"droppedreadmovedon", heat: BlockHeat.normal)
 	var netpollParked = module.addBlock(func, label: b"droppednetpoll", heat: BlockHeat.normal)
+	var netpollOwned = module.addBlock(func, label: b"droppednetpollowned", heat: BlockHeat.normal)
 	var notNetpollPark = module.addBlock(func, label: b"droppednotnetpoll", heat: BlockHeat.normal)
 	var timerParked = module.addBlock(func, label: b"droppedtimer", heat: BlockHeat.normal)
-	var waitingStores = module.addBlock(func, label: b"waitingstores", heat: BlockHeat.normal)
-	var waitingUnlock = module.addBlock(func, label: b"waitingunlock", heat: BlockHeat.normal)
-	var soleOwner = module.addBlock(func, label: b"soleowner", heat: BlockHeat.normal)
+	var parkMissed = module.addBlock(func, label: b"droppedparkmissed", heat: BlockHeat.normal)
+	var notTimerPark = module.addBlock(func, label: b"droppednottimer", heat: BlockHeat.normal)
+	var quiesceParked = module.addBlock(func, label: b"droppedquiesce", heat: BlockHeat.normal)
+	var quiesceOwned = module.addBlock(func, label: b"droppedquiesceowned", heat: BlockHeat.normal)
+	var unknownPark = module.addBlock(func, label: b"droppedunknownpark", heat: BlockHeat.cold)
 	var queuedArm = module.addBlock(func, label: b"queuedarm", heat: BlockHeat.normal)
 	var sweepGreen = module.addBlock(func, label: b"sweepgreen", heat: BlockHeat.normal)
 	var sweepCoro = module.addBlock(func, label: b"sweepcoro", heat: BlockHeat.normal)
@@ -5745,13 +5809,19 @@ function buildGtPromiseDrop(module StdModule)
 	// The renounce mark is stored ahead of every arm below, because each of them readies the
 	// thread (`emitGtRenouncePark`): a mark written past that point races the coroutine's own
 	// resumption, and what slips through the window is a far-end wait this one-shot call can no
-	// longer end. `__gt_io_park` and `__mbox_send` read it.
+	// longer end. `__gt_io_park`, `__mbox_send` and `__gt_quiesce` read it.
 	emitStoreField(module, block: entry, record: gt, offset: GtOffRenounced, value: emitConst(module, block: entry, value: GtPromiseGivenUp, ids: ids))
 	module.setTerminator(entry, op: StdOp.condBranch(isReplyCell, thenBlockId: queuedArm.id, elseBlockId: notAReplyCell.id))
 
-	let status = emitLoadField(module, block: notAReplyCell, record: gt, offset: GtOffStatus, ids: ids)
-	let isWaiting = emitGtStatusEquals(module, block: notAReplyCell, status: status, want: GtStatus.waiting, ids: ids)
-	module.setTerminator(notAReplyCell, op: StdOp.condBranch(isWaiting, thenBlockId: waitingArm.id, elseBlockId: queuedArm.id))
+	let heldStrand = emitLoadField(module, block: notAReplyCell, record: emitLoadCurrentM(module, block: notAReplyCell, ids: ids), offset: MOffHeldStrand, ids: ids)
+	let targetStrand = emitLoadField(module, block: notAReplyCell, record: gt, offset: GtOffOwner, ids: ids)
+	let holdsTargetStrand = emitCmp(module, block: notAReplyCell, a: heldStrand, b: targetStrand, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(notAReplyCell, op: StdOp.condBranch(holdsTargetStrand, thenBlockId: strandHeld.id, elseBlockId: strandNotHeld.id))
+	emitRuntimeFatal(module, func: func, block: strandNotHeld, fatal: RuntimeFatal.promiseDroppedOffItsStrand, ids: ids)
+
+	let status = emitLoadField(module, block: strandHeld, record: gt, offset: GtOffStatus, ids: ids)
+	let isWaiting = emitGtStatusEquals(module, block: strandHeld, status: status, want: GtStatus.waiting, ids: ids)
+	module.setTerminator(strandHeld, op: StdOp.condBranch(isWaiting, thenBlockId: waitingArm.id, elseBlockId: queuedArm.id))
 
 	// waiting arm: the park kind decides which store has to be emptied before the thread can be given up.
 	//
@@ -5759,9 +5829,9 @@ function buildGtPromiseDrop(module StdModule)
 	// A park is registered on the TIMER or the POLLER by `__gt_register_park`, or on a MAILBOX by
 	// `__mbox_recv`, which stores the GT into `mbox.parkedGt`. The road below empties the timer and poller
 	// stores, and NOTHING anywhere clears `mbox.parkedGt` but the waker's own store — so a mailbox-parked GT
-	// falling through it would miss both scans, re-read `waiting`, take `soleOwner`, and free the stack (and
-	// possibly the struct) while `mbox.parkedGt` still pointed at it. The next `__mbox_send` / `__mbox_close`
-	// would then store into freed memory and publish a freed GT: a cross-green-thread use-after-free.
+	// given up by this call would be reclaimed while `mbox.parkedGt` still pointed at it. The next
+	// `__mbox_send` / `__mbox_close` would then store into freed memory and publish a freed GT: a
+	// cross-green-thread use-after-free.
 	//
 	// ⭐⭐ **IT IS AN ABORT RATHER THAN A THIRD DEREGISTRATION BECAUSE NOTHING IN THE LANGUAGE CAN REACH IT.**
 	// `__mbox_recv` — the ONE producer of a mailbox park — has exactly two callers, both inside the synthesized
@@ -5796,12 +5866,10 @@ function buildGtPromiseDrop(module StdModule)
 	let awaiting = emitBin(module, block: notSendParked, a: inAwait, b: inAwaitAny, opcode: StdBinOpcode.bitOr, ids: ids)
 	module.setTerminator(notSendParked, op: StdOp.condBranch(awaiting, thenBlockId: queuedArm.id, elseBlockId: notAwaiting.id))
 
-	// ⭐⭐⭐ **A PARKED THREAD IS RENOUNCED, NOT ABANDONED — the AWAIT arm's answer, generalised, and MEASURED.**
-	// Nothing can unwind a SUSPENDED frame from outside: freeing the stack of a thread that will never resume
-	// strands every heap value its locals own. MEASURED with no socket anywhere in it — a coroutine holding one
-	// interpolated `String` inside a `sleep`, dropped while parked, exits 101; the same coroutine holding
-	// nothing exits 0. So the wait is EXPIRED and the thread READIED: it resumes, unwinds its own frame, and its
-	// runner reclaims it. The status re-read below then finds `ready` and takes the queued arm by itself.
+	// ⭐⭐⭐ **A PARKED THREAD IS RENOUNCED, NOT ABANDONED — the AWAIT arm's answer, generalised.**
+	// Nothing can unwind a SUSPENDED frame from outside: freeing the stack of a thread that will never
+	// resume strands every heap value its locals own. So the wait is EXPIRED and the thread READIED:
+	// it resumes, unwinds its own frame, and its runner reclaims it.
 	emitGtBranchOnPollerPark(module, block: notAwaiting, kind: parkKind, onPoller: pollerParked, elsewhere: notNetpollPark, ids: ids)
 
 	// ⭐⭐⭐ **AN OPERATION THE KERNEL IS STILL SERVING IS RENOUNCED IN PLACE, WITHOUT BEING TAKEN OFF THE POLLER —
@@ -5855,52 +5923,39 @@ function buildGtPromiseDrop(module StdModule)
 	// The poller's expiry takes the thread off its direction word and marks the wait, so its resumption answers
 	// `timedOut` rather than re-issuing a syscall on a descriptor nobody wants.
 	emitSchedLockEnter(module, block: netpollParked, ids: ids)
-	module.appendOp(netpollParked, op: StdOp.call(ids.mint(), callee: NetpollPdDropName, args: argsOf(gt)))
-	emitGtRenouncePark(module, func: func, ids: ids, cur: netpollParked, gt: gt, cont: waitingUnlock, label: b"netpoll")
+	let netpollTook = ids.mint()
+	module.appendOp(netpollParked, op: StdOp.call(netpollTook, callee: NetpollPdDropName, args: argsOf(gt)))
+	emitBranchOnCompare(module, block: netpollParked, value: netpollTook, pred: StdCmpPred.ne, against: NetpollDropMissed, whenTrue: netpollOwned, whenFalse: parkMissed, ids: ids)
+	emitGtRenouncePark(module, func: func, ids: ids, cur: netpollOwned, gt: gt, cont: queuedArm, label: b"netpoll")
 
 	// ⚠ **A `sleep` AND AN I/O YIELD ARE ONE KIND HERE**, because `__gt_io_park` IS a timer park with a
 	// deadline of `now` (`GtIoParkName`): both resume from `emitGtParkOnDeadline` and both simply carry on, so
 	// the expiry is the store removal and nothing else — a sleep that ends early is an answer, not an error.
-	emitBranchOnCompare(module, block: notNetpollPark, value: parkKind, pred: StdCmpPred.eq, against: GtParkKind.timer.rawValue, whenTrue: timerParked, whenFalse: waitingStores, ids: ids)
+	emitBranchOnCompare(module, block: notNetpollPark, value: parkKind, pred: StdCmpPred.eq, against: GtParkKind.timer.rawValue, whenTrue: timerParked, whenFalse: notTimerPark, ids: ids)
 
 	var timerExpired = module.addBlock(func, label: b"droppedtimerexpired", heat: BlockHeat.normal)
 	emitSchedLockEnter(module, block: timerParked, ids: ids)
-	emitGtTimerStoreRemove(module, func: func, ids: ids, startBlock: timerParked, gt: gt, tag: emitConst(module, block: timerParked, value: TimerTagSleep, ids: ids), cont: timerExpired)
-	emitGtRenouncePark(module, func: func, ids: ids, cur: timerExpired, gt: gt, cont: waitingUnlock, label: b"timer")
+	emitGtTimerStoreRemove(module, func: func, ids: ids, startBlock: timerParked, gt: gt, tag: emitConst(module, block: timerParked, value: TimerTagSleep, ids: ids), found: timerExpired, missing: parkMissed)
+	emitGtRenouncePark(module, func: func, ids: ids, cur: timerExpired, gt: gt, cont: queuedArm, label: b"timer")
 
-	emitSchedLockEnter(module, block: waitingStores, ids: ids)
-	emitGtTimerStoreRemove(module, func: func, ids: ids, startBlock: waitingStores, gt: gt, tag: emitConst(module, block: waitingStores, value: TimerTagSleep, ids: ids), cont: waitingUnlock)
+	emitSchedLockLeave(module, block: parkMissed, ids: ids)
+	module.setTerminator(parkMissed, op: StdOp.branch(queuedArm.id))
 
-	// ⭐⭐ **EVERY ARM ABOVE RUNS UNDER THE RUN-QUEUE LOCK, AND THE VERDICT IS A RE-READ OF THE
-	// STATUS UNDER THAT SAME LOCK.** The timer removal is a scan-then-swap-remove over the `.data` store that
-	// `__gt_timer_add` appends to and `__gt_timer_check` compacts; the poller's drop rewrites a direction word
-	// any M can reach. The lock is what makes either one act.
-	//
-	// **`status` IS STILL `waiting` IF AND ONLY IF NOTHING RE-READIED THIS THREAD**, because the three parties
-	// that could — the timer check firing a due deadline, the poller's walk readying a source's waiter, and
-	// the poller's walk finishing a read — all store `ready`, and all of them do it under this lock, which
-	// this arm holds. So ONE load answers the question exactly, and it answers it for every arm at once: none
-	// has to report whether its own scan hit, and none's dozen exits grows an argument a later exit could
-	// forget to supply. `completed` reads here too (re-readied, run and finished while this arm waited for the
-	// lock) and takes the same road as `ready`, which is right for the same reason.
-	let parkedStatus = emitLoadField(module, block: waitingUnlock, record: gt, offset: GtOffStatus, ids: ids)
-	let stillParked = emitGtStatusEquals(module, block: waitingUnlock, status: parkedStatus, want: GtStatus.waiting, ids: ids)
-	emitSchedLockLeave(module, block: waitingUnlock, ids: ids)
-	module.setTerminator(waitingUnlock, op: StdOp.condBranch(stillParked, thenBlockId: soleOwner.id, elseBlockId: queuedArm.id))
+	emitBranchOnCompare(module, block: notTimerPark, value: parkKind, pred: StdCmpPred.eq, against: GtParkKind.quiesce.rawValue, whenTrue: quiesceParked, whenFalse: unknownPark, ids: ids)
+	emitRuntimeFatal(module, func: func, block: unknownPark, fatal: RuntimeFatal.promiseDroppedInAnUnknownPark, ids: ids)
 
-	// soleOwner: the thread was parked and this call took it out of the store (or drained its abandoned read),
-	// so nothing else in the process holds a reference to it and no runner will ever arrive. This dropper is
-	// therefore BOTH parties: the runner's half first (which frees the stack the parked thread is suspended
-	// on — it will never resume), then the consumer's half, which finds the runner ticket and reclaims.
-	module.appendOp(soleOwner, op: StdOp.call(ids.mint(), callee: GtRunnerDoneName, args: twoArgs(gt, second: emitConst(module, block: soleOwner, value: GtNoHeldStrand, ids: ids))))
-	module.setTerminator(soleOwner, op: StdOp.branch(queuedArm.id))
+	let quiesceClaim = emitCasGlobalWord(module, block: quiesceParked, label: GtQuiesceWaiterLabel, expected: gt, replacement: emitConst(module, block: quiesceParked, value: 0, ids: ids), ids: ids)
+	emitBranchOnCasLost(module, block: quiesceParked, result: quiesceClaim, lost: queuedArm, won: quiesceOwned, ids: ids)
+	emitSchedLockEnter(module, block: quiesceOwned, ids: ids)
+	emitGtRenouncePark(module, func: func, ids: ids, cur: quiesceOwned, gt: gt, cont: queuedArm, label: b"quiesce")
 
-	// queuedArm: the consumer's half, and the ONE exit of this function. The sweep after it reclaims the
-	// tombstones sitting at the FRONT of the dropped coroutine's OWN owner's queue, which in the common shape
-	// (spawn, drop, spawn, drop) is the one just renounced — see `buildGtCoroSweepDropped` for why the front
-	// alone is the right bound. It is called on the `soleOwner` road too, where it finds nothing and costs two
-	// loads: a sweep guarded by which arm arrived would be a second copy of the arm choice, in the one place a
-	// wrong copy is a coroutine run after its promise was dropped.
+	// queuedArm: the consumer's half, and the ONE exit of this function. The sweep after it reclaims
+	// the tombstones sitting at the FRONT of the dropped coroutine's OWN owner's queue, which in the
+	// common shape (spawn, drop, spawn, drop) is the one just renounced — see
+	// `buildGtCoroSweepDropped` for why the front alone is the right bound. Every arm reaches it, a
+	// renounced park included, where it finds nothing and costs two loads: a sweep guarded by which
+	// arm arrived would be a second copy of the arm choice, in the one place a wrong copy is a
+	// coroutine run after its promise was dropped.
 	//
 	// ⚠ **THE OWNER IS READ OFF THE DROPPED COROUTINE AND NOT FROM TLS**, so the sweep rests on no
 	// claim about which green thread is dropping. Per-await linearity (E3100) already makes the dropper the
@@ -5930,28 +5985,20 @@ function buildGtPromiseDrop(module StdModule)
 	module.functions.push(func)
 end 'buildGtPromiseDrop'
 
-// ⭐⭐ **THE HALF EVERY EXPIRED PARK SHARES: READY THE THREAD, PAY THE WAKE, AND REJOIN THE VERDICT.** The
-// caller has already taken `__sched_lock` and emptied whatever store held the thread; this readies it, releases,
-// pays a wake debt outside the lock (a wake inside a critical section has no StoreLoad fence), and takes the
-// lock again — recursively, as every other re-entry in this file does — because the verdict `cont` reads is
-// taken under it. What that verdict will read is `ready` or `completed`, both of which are the queued arm's: a
-// renounced thread is one a runner will arrive for.
-//
-// ⚠ **READIED WHATEVER THE STORE SAID.** A thread some other party re-readied while this arm waited for the
-// lock is already queued, and this is a second ready on it — which `__gt_ready_locked` answers for, exactly as
-// every other re-ready racing a drop in this function does.
+// ⭐⭐ **THE HALF EVERY EXPIRED PARK SHARES: READY THE THREAD AND PAY THE WAKE.** The caller holds
+// `__sched_lock` and its own withdrawal found the registration, so no other party will ready this
+// wait (a miss must not come here: `__gt_ready_locked` is fatal on a second ready). This readies
+// the thread, releases, and pays a wake debt outside the lock (a wake inside a critical section has
+// no StoreLoad fence).
 function emitGtRenouncePark(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, gt ValueId, cont IrBlock, label ByteArray)
 	var payWake = module.addBlock(func, label: bytesWithSuffix(b"droppedwake", suffix: label), heat: BlockHeat.normal)
-	var rejoin = module.addBlock(func, label: bytesWithSuffix(b"droppedrejoin", suffix: label), heat: BlockHeat.normal)
 
-	let debt = emitGtReadyLocked(module, block: cur, gt: gt, ids: ids)
+	let debt = emitGtReady(module, block: cur, gt: gt, gate: GtReadyGate.fromWaiting, ids: ids)
 	emitSchedLockLeave(module, block: cur, ids: ids)
-	emitSchedWakeIfOwed(module, cur: cur, owed: debt, wake: payWake, cont: rejoin, ids: ids)
-	emitSchedLockEnter(module, block: rejoin, ids: ids)
-	module.setTerminator(rejoin, op: StdOp.branch(cont.id))
+	emitSchedWakeIfOwed(module, cur: cur, owed: debt, wake: payWake, cont: cont, ids: ids)
 end 'emitGtRenouncePark'
 
-// A block label with a per-arm suffix, so the two renounce arms' blocks are distinguishable in a dump.
+// A block label with a per-arm suffix, so the renounce arms' blocks are distinguishable in a dump.
 function bytesWithSuffix(base ByteArray, suffix ByteArray) returns ByteArray
 	var out = base.clone()
 	out.append(suffix)
@@ -5968,7 +6015,6 @@ end 'bytesWithSuffix'
 //     `__gt_coro_sweep_dropped`, taking the ones off the front of an owner's queue — and their green-thread
 //     counterparts in `SchedRuntime`. In all of them the thread never ran and never will.
 //   • `__gt_cell_complete`, the replier's half for a reply cell that never runs.
-//   • `__gt_promise_drop`'s `soleOwner` arm, once it has taken a PARKED thread out of every store.
 //
 // ⭐⭐⭐ **THE AWAITER IS TAKEN UNDER THIS GT's RECORD LOCK, THE LOCK ITS REGISTRATION HOLDS.** The
 // completer published `completed` before this call and the registration re-reads the status under
@@ -6054,18 +6100,18 @@ function buildGtRunnerDone(module StdModule, target Target)
 
 	// An awaiter that is the strand the caller holds (`reapMember`) is readied with no lock, because the
 	// holder may write `GtOffStrandResume`.
-	_ = emitGtCasStatus(module, block: readyHeld, gt: awaiter, from: GtStatus.waiting, to: GtStatus.ready, ids: ids)
-	emitStoreField(module, block: readyHeld, record: awaiter, offset: GtOffStrandResume, value: awaiter)
-	emitBranchCarrying(module, from: readyHeld, to: payWake, value: emitConst(module, block: readyHeld, value: WakeDebtNone, ids: ids))
+	var heldReady = emitGtCasWaitingToReady(module, func: func, cur: readyHeld, gt: awaiter, ids: ids)
+	emitStoreField(module, block: heldReady, record: awaiter, offset: GtOffStrandResume, value: awaiter)
+	emitBranchCarrying(module, from: heldReady, to: payWake, value: emitConst(module, block: heldReady, value: WakeDebtNone, ids: ids))
 
-	emitBranchCarrying(module, from: readyElsewhere, to: payWake, value: emitGtReadyLocked(module, block: readyElsewhere, gt: awaiter, ids: ids))
+	emitBranchCarrying(module, from: readyElsewhere, to: payWake, value: emitGtReady(module, block: readyElsewhere, gt: awaiter, gate: GtReadyGate.fromWaiting, ids: ids))
 
 	let selecting = emitBin(module, block: selectAwaiter, a: awaiter, b: tag, opcode: StdBinOpcode.sub, ids: ids)
 	let selectClaim = emitCasField(module, block: selectAwaiter, record: selecting, offset: GtOffSelectDone as ByteOffset, expected: emitConst(module, block: selectAwaiter, value: SelectPending, ids: ids), replacement: emitConst(module, block: selectAwaiter, value: SelectReadied, ids: ids), ids: ids)
 	emitGtRecordLockLeave(module, block: selectAwaiter, record: gt, ids: ids)
 	emitBranchOnCasLost(module, block: selectAwaiter, result: selectClaim, lost: stackCheck, won: claimSelect, ids: ids)
 
-	emitBranchCarrying(module, from: claimSelect, to: payWake, value: emitGtReadyLocked(module, block: claimSelect, gt: selecting, ids: ids))
+	emitBranchCarrying(module, from: claimSelect, to: payWake, value: emitGtReady(module, block: claimSelect, gt: selecting, gate: GtReadyGate.fromWaiting, ids: ids))
 
 	emitSchedWakeIfOwed(module, cur: payWake, owed: debt, wake: wake, cont: stackCheck, ids: ids)
 
@@ -6135,11 +6181,12 @@ function buildGtRunnerDone(module StdModule, target Target)
 	module.functions.push(func)
 end 'buildGtRunnerDone'
 
-// Remove the `(gt, tag)` entry from the timer MIN-HEAP, then branch to `cont`. Used by `__gt_promise_drop`'s
-// waiting arm and by the poller's readiness path, whose readiness ends a wait the deadline no longer has to.
-// Keyed on the PAIR, so FINDING the entry is a linear scan: the heap is ordered by `(deadline, seq)` and says
-// nothing about which GT sits where. A thread holds at most one wait of each tag, so the first match removes
-// and stops; a `(gt, tag)` NOT on the timer scans to the end and branches to `cont` untouched.
+// Remove the `(gt, tag)` entry from the timer MIN-HEAP, then branch to `found`. Used by
+// `__gt_promise_drop`'s waiting arm and by the poller's readiness path, whose readiness ends a wait
+// the deadline no longer has to. Keyed on the PAIR, so FINDING the entry is a linear scan: the heap
+// is ordered by `(deadline, seq)` and says nothing about which GT sits where. A thread holds at
+// most one wait of each tag, so the first match removes and stops; a `(gt, tag)` NOT on the timer
+// scans to the end and branches to `missing` untouched.
 //
 // ⚠ **THE TAG IS HALF THE KEY AND NOT A FILTER** — see `TimerTagSleep`: a thread holding both a `sleep` and a
 // socket read deadline has two entries, and a gt-keyed scan would take whichever it met first.
@@ -6150,7 +6197,7 @@ end 'buildGtRunnerDone'
 // last live entry fills the hole, and from there it may be too EARLY for its new parent or too LATE for its
 // new children — never both, because the rest of the array is still a heap. Comparing it against its parent
 // answers which, so exactly one sift walk runs. Removing the last entry itself leaves a heap already.
-export function emitGtTimerStoreRemove(module StdModule, func IrFunction, ids ValueMinter, startBlock IrBlock, gt ValueId, tag ValueId, cont IrBlock)
+export function emitGtTimerStoreRemove(module StdModule, func IrFunction, ids ValueMinter, startBlock IrBlock, gt ValueId, tag ValueId, found IrBlock, missing IrBlock)
 	var scanHdr = module.addBlock(func, label: b"tmscanhdr", heat: BlockHeat.normal)
 	var scanBody = module.addBlock(func, label: b"tmscanbody", heat: BlockHeat.normal)
 	var advance = module.addBlock(func, label: b"tmadvance", heat: BlockHeat.normal)
@@ -6170,10 +6217,10 @@ export function emitGtTimerStoreRemove(module StdModule, func IrFunction, ids Va
 	module.setTerminator(startBlock, op: StdOp.branch(scanHdr.id))
 	startBlock.branchEdges.push(BranchEdge.create(scanHdr.id, argIds: argsOf(zeroConst)))
 
-	// scanHdr(i): if i >= count → cont; else inspect entry i.
+	// scanHdr(i): if i >= count → missing; else inspect entry i.
 	let i = ids.mint()
 	scanHdr.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
-	emitBranchOnCompareValues(module, block: scanHdr, a: i, pred: StdCmpPred.ge, b: count, whenTrue: cont, whenFalse: scanBody, ids: ids)
+	emitBranchOnCompareValues(module, block: scanHdr, a: i, pred: StdCmpPred.ge, b: count, whenTrue: missing, whenFalse: scanBody, ids: ids)
 
 	// scanBody: both halves of the key are compared, and the AND is branch-free for
 	// `emitTimerEntryBefore`'s reason — a comparison's value lives in the 0/1 domain on every lane.
@@ -6226,7 +6273,7 @@ export function emitGtTimerStoreRemove(module StdModule, func IrFunction, ids Va
 
 	// Every road that removed an entry may have moved the root.
 	var published = emitGtPublishTimerWhen(module, func: func, cur: republish, heapBase: heapBase, count: newCount, ids: ids)
-	module.setTerminator(published, op: StdOp.branch(cont.id))
+	module.setTerminator(published, op: StdOp.branch(found.id))
 end 'emitGtTimerStoreRemove'
 
 // The absolute deadline `ms` from now, saturating at `GtDeadlineMaxNs`. A `Milliseconds` above
@@ -6396,12 +6443,10 @@ end 'emitLoadCurrentGtCpuOffset'
 // ⛔⛔ **EACH ARM'S LOCK DISCIPLINE IS ITS OWN AND THEY ARE NOT INTERCHANGEABLE.**
 //
 //   • **timer** — the `waiting` store and the `__gt_timer_add` MUST be inside ONE `__sched_lock`
-//     hold. Split, another M's `__gt_timer_check` can fire the entry and ready the thread BETWEEN
-//     them, after which this store leaves `waiting` on a thread that is already queued — and
-//     `__gt_promise_drop`'s re-read of the status under the lock then reads that as *"still parked,
-//     I am its sole owner"* and frees a queued thread. `__gt_timer_add` takes the lock itself,
-//     recursively. A deadline earlier than every other now pending owes the poller a look
-//     (`SchedRuntime.__sched_wake_netpoller`), inside the hold.
+//     hold. Split, another M's `__gt_timer_check` can fire the entry BETWEEN them, and its ready
+//     finds a thread not yet `waiting`: fatal (`RuntimeFatal.badGreenThreadStatusInReady`).
+//     `__gt_timer_add` takes the lock itself, recursively. A deadline earlier than every other now
+//     pending owes the poller a look (`SchedRuntime.__sched_wake_netpoller`), inside the hold.
 //   • **netpoll** — `NetpollRuntime.__np_pd_commit` under `__sched_lock`, which may UNDO the park:
 //     readiness that landed between the mark and the commit was recorded by a party that found
 //     nobody published, so the thread is readied rather than left waiting for a wake already
@@ -6414,9 +6459,10 @@ end 'emitLoadCurrentGtCpuOffset'
 //   • **awaitAny** — the same over every slot: re-scan under every slot's record lock
 //     (`__gt_any_lock`) and ready at once if any slot has completed, else register on every slot
 //     with `GtOffSelectDone` cleared.
-//   • **quiesce** — no lock: `__gt_quiesce_waiter` is claimed by CAS, here and by `__gt_owner_done`
-//     and `__sched_checkdead`, so exactly one of them readies the thread. `waiting` is stored
-//     before the registration, because a claimer may ready the thread the moment it is registered.
+//   • **quiesce** — no lock: `__gt_quiesce_waiter` is claimed by CAS, here and by
+//     `__gt_owner_done`, `__sched_checkdead` and `__gt_promise_drop`, so exactly one of them
+//     readies the thread. `waiting` is stored before the registration, because a claimer may ready
+//     the thread the moment it is registered.
 //
 // Every arm releases its lock before it answers the wake debt its ready owes, or none, and the
 // caller pays it.
@@ -6447,6 +6493,7 @@ function buildGtRegisterPark(module StdModule)
 	var quiesceUndo = module.addBlock(func, label: b"parkquiesceundo", heat: BlockHeat.normal)
 	var quiesceTake = module.addBlock(func, label: b"parkquiescetake", heat: BlockHeat.normal)
 	var resumeNow = module.addBlock(func, label: b"parkresumenow", heat: BlockHeat.normal)
+	var resumeRunnable = module.addBlock(func, label: b"parkresumerunnable", heat: BlockHeat.normal)
 	var unknownArm = module.addBlock(func, label: b"parkunknown", heat: BlockHeat.normal)
 	var doneBlock = module.addBlock(func, label: b"parkdone", heat: BlockHeat.normal)
 
@@ -6458,7 +6505,6 @@ function buildGtRegisterPark(module StdModule)
 
 	let kind = emitLoadField(module, block: entry, record: gt, offset: GtOffParkKind, ids: ids)
 	let arg = emitLoadField(module, block: entry, record: gt, offset: GtOffParkArg, ids: ids)
-	let waitingConst = emitConst(module, block: entry, value: GtStatus.waiting.rawValue, ids: ids)
 	let noDebt = emitConst(module, block: entry, value: WakeDebtNone, ids: ids)
 	emitBranchOnCompare(module, block: entry, value: kind, pred: StdCmpPred.eq, against: GtParkKind.timer.rawValue, whenTrue: timerArm, whenFalse: notTimer, ids: ids)
 
@@ -6495,10 +6541,10 @@ function buildGtRegisterPark(module StdModule)
 	module.setTerminator(awaitArm, op: StdOp.condBranch(awaitedDone, thenBlockId: awaitCompleted.id, elseBlockId: awaitRegister.id))
 
 	emitGtRecordLockLeave(module, block: awaitCompleted, record: arg, ids: ids)
-	module.setTerminator(awaitCompleted, op: StdOp.branch(resumeNow.id))
+	module.setTerminator(awaitCompleted, op: StdOp.branch(resumeRunnable.id))
 
 	emitGtClaimAwaiter(module, func: func, cur: awaitRegister, promise: arg, awaiter: gt, cont: awaitTake, ids: ids)
-	emitStoreField(module, block: awaitTake, record: gt, offset: GtOffStatus, value: waitingConst)
+	emitGtMarkWaiting(module, block: awaitTake, gt: gt, ids: ids)
 	emitGtRecordLockLeave(module, block: awaitTake, record: arg, ids: ids)
 	emitBranchCarrying(module, from: awaitTake, to: doneBlock, value: noDebt)
 
@@ -6510,7 +6556,7 @@ function buildGtRegisterPark(module StdModule)
 	// word, then an acquire load of the other's (StoreLoad on x64, release then acquire on arm64).
 	// Weaken either and the last debit and this registration can each miss the other, leaving the
 	// waiter parked with nothing live.
-	emitStoreField(module, block: quiesceArm, record: gt, offset: GtOffStatus, value: waitingConst)
+	emitGtMarkWaiting(module, block: quiesceArm, gt: gt, ids: ids)
 	let registered = emitCasGlobalWord(module, block: quiesceArm, label: GtQuiesceWaiterLabel, expected: emitConst(module, block: quiesceArm, value: 0, ids: ids), replacement: gt, ids: ids)
 	emitBranchOnCasLost(module, block: quiesceArm, result: registered, lost: quiesceTaken, won: quiesceRegister, ids: ids)
 	emitRuntimeAbort(module, func: func, block: quiesceTaken, abort: RuntimeAbort.schedulerQuiesceWaiterTaken, ids: ids)
@@ -6530,16 +6576,19 @@ function buildGtRegisterPark(module StdModule)
 	emitBranchOnCompare(module, block: awaitAnyArm, value: completedSlot, pred: StdCmpPred.ne, against: NoCompletedPromise, whenTrue: awaitAnyCompleted, whenFalse: awaitAnyRegister, ids: ids)
 
 	module.appendOp(awaitAnyCompleted, op: StdOp.call(ids.mint(), callee: GtAnyUnlockName, args: argsOf(lockedSlots)))
-	module.setTerminator(awaitAnyCompleted, op: StdOp.branch(resumeNow.id))
+	module.setTerminator(awaitAnyCompleted, op: StdOp.branch(resumeRunnable.id))
 
 	emitStoreField(module, block: awaitAnyRegister, record: gt, offset: GtOffSelectDone, value: emitConst(module, block: awaitAnyRegister, value: SelectPending, ids: ids))
 	emitGtAwaitAnySlotWalk(module, func: func, cur: awaitAnyRegister, record: arg, g: gt, act: AwaitAnySlotAct.register, cont: awaitAnyRegistered, ids: ids)
-	emitStoreField(module, block: awaitAnyRegistered, record: gt, offset: GtOffStatus, value: waitingConst)
+	emitGtMarkWaiting(module, block: awaitAnyRegistered, gt: gt, ids: ids)
 	module.appendOp(awaitAnyRegistered, op: StdOp.call(ids.mint(), callee: GtAnyUnlockName, args: argsOf(lockedSlots)))
 	emitBranchCarrying(module, from: awaitAnyRegistered, to: doneBlock, value: noDebt)
 
-	// resumeNow: what the thread waits for has already happened, so it is readied at once.
-	emitBranchCarrying(module, from: resumeNow, to: doneBlock, value: emitGtReadyLocked(module, block: resumeNow, gt: gt, ids: ids))
+	// resumeNow / resumeRunnable: what the thread waits for has already happened, so it is readied at
+	// once — from `waiting` where its arm marked it (the quiesce undo), as still `ready` where it did
+	// not.
+	emitBranchCarrying(module, from: resumeNow, to: doneBlock, value: emitGtReady(module, block: resumeNow, gt: gt, gate: GtReadyGate.fromWaiting, ids: ids))
+	emitBranchCarrying(module, from: resumeRunnable, to: doneBlock, value: emitGtReady(module, block: resumeRunnable, gt: gt, gate: GtReadyGate.alreadyRunnable, ids: ids))
 
 	// ⛔ **A KIND NOTHING WRITES — a compiler bug.** A yield never reaches here (the strand runner places it),
 	// and falling through silently would leave a thread suspended on no store at all.
@@ -6559,7 +6608,7 @@ export function emitGtArmTimerDeadline(module StdModule, func IrFunction, cur Ir
 	var paid = module.addBlock(func, label: b"parktimerpaid", heat: BlockHeat.normal)
 
 	emitSchedLockEnter(module, block: cur, ids: ids)
-	emitStoreField(module, block: cur, record: gt, offset: GtOffStatus, value: emitConst(module, block: cur, value: GtStatus.waiting.rawValue, ids: ids))
+	emitGtMarkWaiting(module, block: cur, gt: gt, ids: ids)
 	let rootBefore = emitGtLoadTimerWhen(module, block: cur, ids: ids)
 	module.appendOp(cur, op: StdOp.call(ids.mint(), callee: GtTimerAddName, args: threeArgs(gt, second: deadline, third: emitConst(module, block: cur, value: tag, ids: ids))))
 	emitBranchOnCompareValues(module, block: cur, a: deadline, pred: StdCmpPred.lt, b: rootBefore, whenTrue: wake, whenFalse: paid, ids: ids)
@@ -6684,6 +6733,7 @@ function buildGtRunStrand(module StdModule, target Target)
 	let owner = 1 as ValueId
 	let schedulerContext = emitFieldAddr(module, block: entry, record: m, offset: MOffSchedulerContext, ids: ids)
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	emitStoreField(module, block: entry, record: m, offset: MOffHeldStrand, value: owner)
 	module.setTerminator(entry, op: StdOp.branch(next.id))
 	entry.branchEdges.push(BranchEdge.create(next.id, argIds: argsOf(zero)))
 	let nothingParked = ids.mint()
@@ -6693,10 +6743,10 @@ function buildGtRunStrand(module StdModule, target Target)
 	let member = ids.mint()
 	module.appendOp(next, op: StdOp.call(member, callee: GtStrandNextName, args: twoArgs(owner, second: nothingParked)))
 	emitBranchOnCompareValues(module, block: next, a: member, pred: StdCmpPred.eq, b: zero, whenTrue: released, whenFalse: sortMember, ids: ids)
-	emitConstReturn(module, block: released, value: 0, ids: ids)
+	emitStrandRunReturn(module, block: released, m: m, value: 0, ids: ids)
 
 	emitBranchOnCompare(module, block: sortMember, value: member, pred: StdCmpPred.eq, against: GtProcessorHandedOff, whenTrue: handedOffProc, whenFalse: run, ids: ids)
-	emitConstReturn(module, block: handedOffProc, value: GtProcessorHandedOff, ids: ids)
+	emitStrandRunReturn(module, block: handedOffProc, m: m, value: GtProcessorHandedOff, ids: ids)
 
 	emitGtExecute(module, block: run, g: member, schedulerContext: schedulerContext, m: m, target: target, ids: ids)
 
@@ -6787,10 +6837,15 @@ function buildGtRunStrand(module StdModule, target Target)
 	module.appendOp(behindEveryone, op: StdOp.call(ids.mint(), callee: GtEnqueueName, args: argsOf(owner)))
 	emitSchedLockLeave(module, block: behindEveryone, ids: ids)
 	emitSchedWakeAnIdleM(module, block: behindEveryone, ids: ids)
-	emitConstReturn(module, block: behindEveryone, value: 0, ids: ids)
+	emitStrandRunReturn(module, block: behindEveryone, m: m, value: 0, ids: ids)
 
 	module.functions.push(func)
 end 'buildGtRunStrand'
+
+function emitStrandRunReturn(module StdModule, block IrBlock, m ValueId, value FullRangeInt, ids ValueMinter)
+	emitStoreField(module, block: block, record: m, offset: MOffHeldStrand, value: emitConst(module, block: block, value: GtNoHeldStrand, ids: ids))
+	emitConstReturn(module, block: block, value: value, ids: ids)
+end 'emitStrandRunReturn'
 
 // ⭐⭐⭐ **`__gt_stack_shrink(gt)` — Go's `shrinkstack`: HALVE A PARKED THREAD's STACK WHEN LESS THAN A QUARTER OF IT
 // IS IN USE.** Its one caller is the strand runner's park door, for a stack above the floor, on the machine's

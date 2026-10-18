@@ -803,7 +803,7 @@ let NetpollPdMarkTimedOutName = b"__np_pd_mark_timed_out"
 export let NetpollPdTimedOutName = b"__np_pd_timed_out"
 
 // `__np_pd_wake(fd, readReady, writeReady) -> wakeDebt` — the poller's readiness walk, whose one caller is the
-// decode in this file. `__sched_lock` NOT held.
+// decode in this file. Called with `__sched_lock` NOT held; it takes the lock itself.
 let NetpollPdWakeName = b"__np_pd_wake"
 
 // `__np_pd_commit(gt) -> wakeDebt` — `__gt_register_park`'s netpoll arm: publish the parked thread into the
@@ -814,11 +814,14 @@ export let NetpollPdCommitName = b"__np_pd_commit"
 // `__sched_lock` held.
 export let NetpollPdExpireName = b"__np_pd_expire"
 
-// `__np_pd_drop(gt)` — the promise was dropped while its coroutine was parked here: take it off the poller,
-// disarm its deadline and mark the wait EXPIRED, so its resumption answers `timedOut` rather than re-issuing a
-// syscall on a descriptor nobody wants. The READY is the caller's (`GtRuntime.emitGtRenouncePark`), which is
-// the half every park kind shares. `__sched_lock` held.
+// `__np_pd_drop(gt) -> found` — the promise was dropped while its coroutine was parked here: take
+// it off the poller, disarm its deadline and mark the wait EXPIRED, so its resumption answers
+// `timedOut` rather than re-issuing a syscall on a descriptor nobody wants. The READY is the
+// caller's (`GtRuntime.emitGtRenouncePark`), owed only when this answers found; `NetpollDropMissed`
+// means the readiness walk or the deadline readied the thread first. `__sched_lock` held.
 export let NetpollPdDropName = b"__np_pd_drop"
+
+export let NetpollDropMissed = 0 as FullRangeInt
 
 // ⭐ **IS THIS THREAD'S PARK NOTE A PAIR OR A LIST?** Its ARGUMENT is read as `(fd, mode)` for one source and
 // as a group record for several, and the park KIND is the only thing that says which — so every door that
@@ -867,7 +870,7 @@ function emitNetpollDisarmDeadline(module StdModule, func IrFunction, ids ValueM
 	var scan = module.addBlock(func, label: b"npdisarmscan", heat: BlockHeat.normal)
 
 	emitBranchOnCompare(module, block: startBlock, value: deadline, pred: StdCmpPred.ne, against: 0, whenTrue: scan, whenFalse: cont, ids: ids)
-	emitGtTimerStoreRemove(module, func: func, ids: ids, startBlock: scan, gt: gt, tag: tag, cont: cont)
+	emitGtTimerStoreRemove(module, func: func, ids: ids, startBlock: scan, gt: gt, tag: tag, found: cont, missing: cont)
 end 'emitNetpollDisarmDeadline'
 
 // The deadline this direction's wait armed, or 0 for a wait that armed none.
@@ -1471,9 +1474,9 @@ function buildNetpollPdCommit(module StdModule)
 	// Readiness landed between the mark and this commit, so the thread is readied rather than left waiting for
 	// a wake that has already happened — Go's `netpollblockcommit` answering false. A record that moved on
 	// arrives here too, and the resumed `__np_pd_wait`'s own generation test answers `NetpollWaitStale`.
-	module.setTerminator(resumeNow, op: StdOp.ret(emitGtReadyLocked(module, block: resumeNow, gt: gt, ids: ids)))
+	module.setTerminator(resumeNow, op: StdOp.ret(emitGtReady(module, block: resumeNow, gt: gt, gate: GtReadyGate.alreadyRunnable, ids: ids)))
 
-	emitStoreField(module, block: publish, record: gt, offset: GtOffStatus, value: emitConst(module, block: publish, value: GtStatus.waiting.rawValue, ids: ids))
+	emitGtMarkWaiting(module, block: publish, gt: gt, ids: ids)
 	emitStoreField(module, block: publish, record: gpp, offset: 0, value: gt)
 	emitNetpollStepWaiters(module, block: publish, delta: 1, ids: ids)
 	emitSchedCountNetpollBlock(module, block: publish, ids: ids)
@@ -1510,7 +1513,7 @@ function buildNetpollPdExpire(module StdModule)
 	// thread would ready it a second time.
 	emitNetpollBranchOnGroupPark(module, block: entry, gt: gt, several: groupArm, one: single, ids: ids)
 	module.appendOp(groupArm, op: StdOp.call(ids.mint(), callee: NetpollGroupUnhookName, args: argsOf(gt)))
-	module.setTerminator(groupArm, op: StdOp.ret(emitGtReadyLocked(module, block: groupArm, gt: gt, ids: ids)))
+	module.setTerminator(groupArm, op: StdOp.ret(emitGtReady(module, block: groupArm, gt: gt, gate: GtReadyGate.fromWaiting, ids: ids)))
 
 	// A word no longer naming this thread is one the readiness walk got to first, removing the entry with it —
 	// the race's losing side, and nothing is owed.
@@ -1521,7 +1524,7 @@ function buildNetpollPdExpire(module StdModule)
 	emitConstReturn(module, block: gone, value: WakeDebtNone, ids: ids)
 
 	emitNetpollUnhookExpired(module, block: fire, gpp: gpp, ids: ids)
-	module.setTerminator(fire, op: StdOp.ret(emitGtReadyLocked(module, block: fire, gt: gt, ids: ids)))
+	module.setTerminator(fire, op: StdOp.ret(emitGtReady(module, block: fire, gt: gt, gate: GtReadyGate.fromWaiting, ids: ids)))
 
 	module.functions.push(func)
 end 'buildNetpollPdExpire'
@@ -1534,12 +1537,13 @@ end 'buildNetpollPdExpire'
 // client. A `sleep`-parked coroutine holding one `String` exits 101 by exactly the same road, which is what
 // says the gap is the ABANDONMENT and not the poller.
 //
-// ⭐ **SO THIS IS THE AWAIT ARM's ANSWER, APPLIED TO A SOCKET WAIT** (`buildGtPromiseDrop`'s "a thread parked
-// in an await is RENOUNCED"): take the thread off the direction word so no readiness event can reach it,
-// disarm its deadline, and mark the wait EXPIRED. The caller readies it; it runs its own body out, its own
-// frame's destructors free what it held, and its runner reclaims it — the queued arm's contract exactly.
+// ⭐ **SO THIS IS THE AWAIT ARM's ANSWER, APPLIED TO A SOCKET WAIT** (`buildGtPromiseDrop`'s "a
+// thread parked in an await is RENOUNCED"): take the thread off the direction word so no readiness
+// event can reach it, disarm its deadline, and mark the wait EXPIRED. The caller readies it when
+// this answers found; it runs its own body out, its own frame's destructors free what it held, and
+// its runner reclaims it — the queued arm's contract exactly.
 function buildNetpollPdDrop(module StdModule)
-	var func = IrFunction.createFromStd(NetpollPdDropName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+	var func = IrFunction.createFromStd(NetpollPdDropName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -1548,31 +1552,35 @@ function buildNetpollPdDrop(module StdModule)
 	var look = module.addBlock(func, label: b"npdlook", heat: BlockHeat.normal)
 	var unhook = module.addBlock(func, label: b"npdunhook", heat: BlockHeat.normal)
 	var disarm = module.addBlock(func, label: b"npddisarm", heat: BlockHeat.normal)
-	var doneBlock = module.addBlock(func, label: b"npddone", heat: BlockHeat.normal)
+	var groupDone = module.addBlock(func, label: b"npdgroupdone", heat: BlockHeat.normal)
+	var singleDone = module.addBlock(func, label: b"npdsingledone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let gt = 0
 
-	// A GROUP is taken off every one of its members, and its deadline is the GROUP's rather than a direction's.
 	emitNetpollBranchOnGroupPark(module, block: entry, gt: gt, several: groupArm, one: single, ids: ids)
+	let groupStatus = emitLoadField(module, block: groupArm, record: gt, offset: GtOffStatus, ids: ids)
+	let groupTook = emitGtStatusEquals(module, block: groupArm, status: groupStatus, want: GtStatus.waiting, ids: ids)
 	module.appendOp(groupArm, op: StdOp.call(ids.mint(), callee: NetpollGroupUnhookName, args: argsOf(gt)))
 	let groupDeadline = emitNetpollGroupDeadline(module, block: groupArm, gt: gt, ids: ids)
-	emitNetpollDisarmDeadline(module, func: func, ids: ids, startBlock: groupArm, gt: gt, deadline: groupDeadline, tag: emitNetpollGroupTimerTag(module, block: groupArm, ids: ids), cont: doneBlock)
+	emitNetpollDisarmDeadline(module, func: func, ids: ids, startBlock: groupArm, gt: gt, deadline: groupDeadline, tag: emitNetpollGroupTimerTag(module, block: groupArm, ids: ids), cont: groupDone)
+	module.setTerminator(groupDone, op: StdOp.ret(groupTook))
 
 	let parkedOn = emitNetpollParkedDirection(module, func: func, cur: single, gt: gt, known: look, ids: ids)
 	let tag = emitTimerTagOfNetpollMode(module, block: look, mode: parkedOn.mode, ids: ids)
 	let deadline = emitPdDeadline(module, block: look, pd: parkedOn.pd, mode: parkedOn.mode, ids: ids)
 	let gpp = parkedOn.gpp
 	let state = emitLoadField(module, block: look, record: gpp, offset: 0, ids: ids)
-	emitBranchOnCompareValues(module, block: look, a: state, pred: StdCmpPred.eq, b: gt, whenTrue: unhook, whenFalse: disarm, ids: ids)
+	let singleTook = emitCmp(module, block: look, a: state, b: gt, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(look, op: StdOp.condBranch(singleTook, thenBlockId: unhook.id, elseBlockId: disarm.id))
 
 	emitNetpollUnhookExpired(module, block: unhook, gpp: gpp, ids: ids)
 	module.setTerminator(unhook, op: StdOp.branch(disarm.id))
 
 	// The deadline goes whether or not the direction still named this thread: a readiness wake that got there
 	// first removed the entry already, and the scan then answers "not present" rather than taking another's.
-	emitNetpollDisarmDeadline(module, func: func, ids: ids, startBlock: disarm, gt: gt, deadline: deadline, tag: tag, cont: doneBlock)
-	module.setTerminator(doneBlock, op: StdOp.retVoid)
+	emitNetpollDisarmDeadline(module, func: func, ids: ids, startBlock: disarm, gt: gt, deadline: deadline, tag: tag, cont: singleDone)
+	module.setTerminator(singleDone, op: StdOp.ret(singleTook))
 
 	module.functions.push(func)
 end 'buildNetpollPdDrop'
@@ -1647,7 +1655,7 @@ function buildNetpollPdReadyOne(module StdModule)
 	disarmTimer.blockArgs.push(IrBlockArg.create(deadline, argType: StdType.i64))
 	disarmTimer.blockArgs.push(IrBlockArg.create(disarmTag, argType: StdType.i64))
 	emitNetpollDisarmDeadline(module, func: func, ids: ids, startBlock: disarmTimer, gt: state, deadline: deadline, tag: disarmTag, cont: readied)
-	module.setTerminator(readied, op: StdOp.ret(emitGtReadyLocked(module, block: readied, gt: state, ids: ids)))
+	module.setTerminator(readied, op: StdOp.ret(emitGtReady(module, block: readied, gt: state, gate: GtReadyGate.fromWaiting, ids: ids)))
 
 	module.functions.push(func)
 end 'buildNetpollPdReadyOne'
@@ -2954,7 +2962,7 @@ function emitNetpollCommitGroup(module StdModule, func IrFunction, cur IrBlock, 
 	module.setTerminator(testAct, op: StdOp.condBranch(ourMark, thenBlockId: testNext.id, elseBlockId: resumeNow.id))
 	emitNetpollGroupWalkEnd(module, next: testNext, hdr: testHdr, index: test.index, ids: ids)
 
-	emitStoreField(module, block: publishPre, record: gt, offset: GtOffStatus, value: emitConst(module, block: publishPre, value: GtStatus.waiting.rawValue, ids: ids))
+	emitGtMarkWaiting(module, block: publishPre, gt: gt, ids: ids)
 	emitSchedCountNetpollBlock(module, block: publishPre, ids: ids)
 	let publish = emitNetpollGroupWalk(module, func: func, pre: publishPre, hdr: publishHdr, body: publishBody, act: publishAct, exhausted: deadlineTest, group: group, count: count, ids: ids)
 	emitStoreField(module, block: publishAct, record: publish.member.gpp, offset: 0, value: gt)

@@ -479,9 +479,9 @@ function emitMboxReadyClaimedSender(module StdModule, func IrFunction, cur IrBlo
 	let deadline = emitLoadField(module, block: cur, record: sender, offset: GtOffSendDeadline, ids: ids)
 	emitBranchOnCompare(module, block: cur, value: deadline, pred: StdCmpPred.eq, against: GtDeadlineMaxNs, whenTrue: ready, whenFalse: disarm, ids: ids)
 
-	emitGtTimerStoreRemove(module, func: func, ids: ids, startBlock: disarm, gt: sender, tag: emitConst(module, block: disarm, value: TimerTagSend, ids: ids), cont: ready)
+	emitGtTimerStoreRemove(module, func: func, ids: ids, startBlock: disarm, gt: sender, tag: emitConst(module, block: disarm, value: TimerTagSend, ids: ids), found: ready, missing: ready)
 
-	let debt = emitGtReadyLocked(module, block: ready, gt: sender, ids: ids)
+	let debt = emitGtReady(module, block: ready, gt: sender, gate: GtReadyGate.fromWaiting, ids: ids)
 	emitSchedLockLeave(module, block: ready, ids: ids)
 	emitBranchCarrying(module, from: ready, to: cont, value: debt)
 end 'emitMboxReadyClaimedSender'
@@ -682,8 +682,9 @@ function buildMboxSend(module StdModule)
 	emitMboxRefuse(module, block: refuseFull, mbox: mbox, status: MboxSendStatus.full, ids: ids)
 
 	// A scheduler context has no green thread to park, and a renounced coroutine is never awaited, so
-	// both answer `full` at once. ⚠ A drop landing between this read and the park commit is missed:
-	// the sender stays queued until a receive or a close, and with `ForeverMs` nothing else ends it.
+	// both answer `full` at once. No drop can land between this read and the park commit: a dropper
+	// runs on the machine holding this sender's strand, which is busy running the sender
+	// (`__gt_promise_drop` checks it).
 	let selfGt = emitLoadCurrentGt(module, block: waitCheck, ids: ids)
 	let stackBase = emitLoadField(module, block: waitCheck, record: selfGt, offset: GtOffStackBase, ids: ids)
 	let onGreenStack = emitCompareWithConstant(module, block: waitCheck, value: stackBase, pred: StdCmpPred.ne, against: 0, ids: ids)
@@ -1173,7 +1174,7 @@ export function emitMboxParkCommit(module StdModule, block IrBlock, gt ValueId, 
 end 'emitMboxParkCommit'
 
 function emitMboxParkWaiting(module StdModule, block IrBlock, gt ValueId, mbox ValueId, ids ValueMinter)
-	emitStoreField(module, block: block, record: gt, offset: GtOffStatus, value: emitConst(module, block: block, value: GtStatus.waiting.rawValue, ids: ids))
+	emitGtMarkWaiting(module, block: block, gt: gt, ids: ids)
 	emitMboxLockLeave(module, block: block, mbox: mbox, ids: ids)
 end 'emitMboxParkWaiting'
 

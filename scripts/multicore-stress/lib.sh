@@ -38,7 +38,7 @@ spawns_green_threads() {
 # that one needs it because its ~24,000 BLOCKING CALLS are retaken, and a retake's `__sched_handoffp` starts a
 # machine on the processor it took — so its `workers` reading at ONE processor is the monitor's doing and not a
 # green thread reaching a worker.
-MONITOR_WITNESS_PROGRAMS="${MONITOR_WITNESS_PROGRAMS:-steal-torture drop-running-torture park-torture alloc-torture remote-free-torture refcount-torture service-torture service-fanin-torture syscall-stack-torture}"
+MONITOR_WITNESS_PROGRAMS="${MONITOR_WITNESS_PROGRAMS:-steal-torture drop-running-torture drop-sleeping-torture park-torture alloc-torture remote-free-torture refcount-torture service-torture service-fanin-torture syscall-stack-torture}"
 
 # ⭐⭐ PROGRAMS THAT MUST NOT COMPILE, AND THE CODE EACH MUST BE REFUSED WITH.
 # `refcount-torture.maxon` has twelve tasks read ONE module-level heap `String` — the

@@ -23,7 +23,8 @@ program carries on afterwards exactly as it was.
 
 The wait ends in one of two ways. The live count reaches zero, and the answer is `0`. Or every machine is idle
 with nothing pending, so nothing that still owns a green thread can ever run again, and the answer is the count
-that is left: a program that asks is told, where one that does not is a scheduler deadlock.
+that is left: a program that asks is told, where one that does not is a scheduler deadlock. A coroutine
+whose promise has been dropped answers at once, without waiting, with the live count at that moment.
 
 ## Targets
 
@@ -345,4 +346,34 @@ outstanding=0 sum=30000
 ```
 ```exitcode
 0
+```
+
+<!-- test: builtins-gt-quiesce.a-dropped-coroutine-parked-in-the-wait-is-not-the-waiter-afterwards -->
+<!-- unsupported-targets: wasm32-wasi -->
+A coroutine that calls `Scheduler.quiesce()` parks as the scheduler's one waiter while `main` awaits a sibling. `main` then
+returns with the quiescing coroutine un-awaited, so scope exit drops its promise while it is parked in the wait. The
+drop must withdraw the waiter registration before the coroutine can be reclaimed: the last live thread's exit
+claims that registration, and one naming a reclaimed thread would be readied as though it were parked.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function quiescer() returns Integer
+	return Scheduler.quiesce() as Integer
+end 'quiescer'
+
+function fast() returns Integer
+	Scheduler.yield()
+	return 42
+end 'fast'
+
+function main() returns ExitCode
+	let waiter = async quiescer()
+	let sibling = async fast()
+	let answer = await sibling
+	let finished = 1 if waiter.isComplete() else 0
+	return (answer + finished) as ExitCode
+end 'main'
+```
+```exitcode
+42
 ```

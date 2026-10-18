@@ -322,6 +322,7 @@ Nothing in Maxon is undefined behaviour. At run time:
 | on x64-windows, the green-thread scheduler starting up with a thread-local slot Windows placed past the 64 slots of the thread's own block | exit code **121** |
 | a second green thread calling `Scheduler.quiesce()` while another is waiting in it | exit code **123** |
 | the operating system refusing a green-thread program's OS thread the event it sleeps on while it waits for a runtime lock | exit code **126** |
+| a broken runtime invariant — a bug in the compiler or its runtime | the program prints `fatal error: <reason>` to stderr and exits with code **70** |
 | deadlock | exit code **92** |
 
 `maxon execute` and `maxon test` report these exit codes; see the [CLI reference](/docs/cli/).

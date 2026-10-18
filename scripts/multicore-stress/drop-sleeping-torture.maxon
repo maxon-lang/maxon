@@ -1,0 +1,146 @@
+typealias Integer = int(i64.min to i64.max)
+typealias NapPromise = Promise with Integer
+typealias HeldNaps = Array with NapPromise
+typealias RoundTally = int(0 to u64.max)
+typealias PhaseTally = int(0 to u64.max)
+
+let NapsPerRound = 16
+let NapLengthsMs = 3
+let SweepSlots = 24
+let SweepStepNs = 25000
+let SweepWithinStepStrideNs = 7919
+let NanosPerMilli = 1000000
+let WarmRounds = 12
+let MinMeasuredRounds = 240
+let SocketRounds = 96
+let SocketDeadlineBaseMs = 2
+let SocketDeadlineLengths = 3
+let SocketReadBytes = 16
+let SocketPayload = "x"
+let LoopbackHost = "127.0.0.1"
+let AnyPort = 0
+let ListSlack = 63
+let PeakLiveSlack = 4
+
+function nap(idx Integer, ms Milliseconds) returns Integer
+	let tag = "nap-{idx}-{ms}"
+	sleep(ms)
+
+	return tag.byteLength() as Integer
+end 'nap'
+
+function readOnce(conn TcpClient, idx Integer) returns Integer
+	let tag = "read-{idx}"
+	let heard = try conn.recv(SocketReadBytes) otherwise ""
+
+	return tag.byteLength() as Integer + heard.byteLength() as Integer
+end 'readOnce'
+
+function spinFor(ns Integer)
+	let began = Clock.nowNanos()
+	let target = ns as DurationNanos
+
+	while Clock.elapsedNanos(began) < target 'spin'
+		Scheduler.parallelBoundary()
+	end 'spin'
+end 'spinFor'
+
+function sweepOffsetNs(round Integer) returns Integer
+	return ((round mod SweepSlots) - SweepSlots / 2) * SweepStepNs
+end 'sweepOffsetNs'
+
+function sweepWithinStepNs(round Integer) returns Integer
+	return (round * SweepWithinStepStrideNs) mod SweepStepNs
+end 'sweepWithinStepNs'
+
+function sleepRound(round Integer) returns Integer
+	var held = HeldNaps.create()
+	var k = 0 as Integer
+
+	while k < NapsPerRound 'spawnEach'
+		held.push(async nap(round * NapsPerRound + k, ms: (1 + (round + k) mod NapLengthsMs) as Milliseconds))
+		k = k + 1
+	end 'spawnEach'
+
+	Scheduler.yield()
+
+	// The drop at return is swept across the deadline of the naps whose length matches this spin, so
+	// across rounds it lands both before and after the timer fires, and the two race to ready one
+	// sleeper.
+	spinFor((1 + round mod NapLengthsMs) * NanosPerMilli + sweepOffsetNs(round))
+
+	return held.count() as Integer
+end 'sleepRound'
+
+// The reader's drop lands near both its read deadline and the readiness the send delivers, so the
+// poller arm races the deadline's expiry and the readiness walk.
+function raceReader(client TcpClient, conn TcpClient, round Integer) returns Integer
+	var held = HeldNaps.create()
+	held.push(async readOnce(conn, idx: round))
+	Scheduler.yield()
+	spinFor((SocketDeadlineBaseMs + round mod SocketDeadlineLengths) * NanosPerMilli + sweepOffsetNs(round))
+	_ = try client.send(SocketPayload) otherwise 0
+	spinFor(sweepWithinStepNs(round))
+
+	return 1
+end 'raceReader'
+
+function socketRound(listener TcpListener, round Integer) returns Integer
+	let client = try TcpClient.connect(LoopbackHost, port: listener.port()) otherwise panic("drop-sleeping-torture: loopback connect refused")
+	let conn = try listener.accept() otherwise panic("drop-sleeping-torture: loopback accept failed")
+	try conn.setReadDeadline((SocketDeadlineBaseMs + round mod SocketDeadlineLengths) as SocketDeadlineMs) otherwise panic("drop-sleeping-torture: setReadDeadline refused")
+
+	let raced = raceReader(client, conn: conn, round: round)
+
+	client.close()
+	conn.close()
+
+	return raced
+end 'socketRound'
+
+function main() returns ExitCode
+	var napsHeld = 0 as PhaseTally
+	var w = 0 as RoundTally
+
+	while w < WarmRounds 'warm'
+		napsHeld = napsHeld + (sleepRound(w as Integer) as PhaseTally)
+		w = w + 1
+	end 'warm'
+
+	let listener = try TcpListener.bind(LoopbackHost, port: AnyPort) otherwise panic("drop-sleeping-torture: loopback bind refused")
+	var socketsRaced = 0 as PhaseTally
+	var s = 0 as RoundTally
+
+	while s < SocketRounds 'sockets'
+		socketsRaced = socketsRaced + (socketRound(listener, round: s as Integer) as PhaseTally)
+		s = s + 1
+	end 'sockets'
+
+	listener.close()
+
+	let bound = (2 * NapsPerRound + PeakLiveSlack) + ListSlack * ((Scheduler.processorCount() as SchedulerEventCount) - 1)
+	var i = 0 as RoundTally
+
+	while i < MinMeasuredRounds or i < 2 * (bound as RoundTally) 'measured'
+		_ = sleepRound((WarmRounds as Integer) + (i as Integer))
+		i = i + 1
+	end 'measured'
+
+	let counters = Scheduler.counters()
+	let carved = counters.threadRecordsCarved
+	let leaked = carved - bound if carved > bound else 0
+	let steals = counters.steals
+	let workers = counters.maxActiveWorkers
+	let monitor = monitorActions()
+	let cpus = Scheduler.machineCpuCount()
+
+	print("leaked={leaked}\n")
+	print("carved={carved} bound={bound} rounds={i}\n")
+	print("aggregate={napsHeld + socketsRaced}\n")
+	print("steals={steals}\n")
+	print("workers={workers}\n")
+	print("monitor={monitor}\n")
+	print("cpucount={cpus}\n")
+
+	return 42
+end 'main'
