@@ -79,7 +79,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 
 from maxon_source import FieldDefaultShapeError, field_default_type
 
-PATCH_NAME = "0009-withdraw-the-language-forms-the-seed-cannot-parse-from-the-first-build.patch"
+PATCH_NAME = "0010-withdraw-the-language-forms-the-seed-cannot-parse-from-the-first-build.patch"
 SOURCE_DIRS = ["maxon-bin", "stdlib", "runtime"]
 NATIVE_TARGETS = ["x64-windows", "x64-linux", "arm64-macos", "arm64-linux"]
 MAX_ROUNDS = 800
@@ -288,6 +288,9 @@ def stage_work(tree, work, seed, output):
 
 		if patch == PATCH_NAME or os.path.abspath(path) == os.path.abspath(output):
 			continue
+
+		if patch > PATCH_NAME:
+			raise SystemExit(f"generate-seed-language-shim.py: {patch} sorts after {PATCH_NAME}, so build-from-seed.sh applies it over this patch while this script would stage it under it; renumber it below {PATCH_NAME[:4]}")
 
 		git(work, "apply", "--", path)
 

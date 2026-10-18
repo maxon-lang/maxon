@@ -53,6 +53,8 @@ and again for any lane the tree changed under since its last clean build, so the
 judged too. The one patch for every such form is written by
 `generate-seed-language-shim.py` and not by hand — regenerate it whenever the sources it touches move, and
 after the documenter has written its comments, since a comment edit moves the context a hunk is matched on.
+Its hunks are computed over every other patch here, so it sorts LAST: a hand-written patch is numbered below
+it and written over the tree with the forms still in place, and the script refuses a patch that sorts after it.
 
 ⭐ **THE LIBRARY LINKED INTO `C1` IS THE FIFTH CASE.** The first build compiles the tree's `stdlib/` into
 `C1` as it would into any program, so a library body that names a type, a method or a `__Builtins` intrinsic
@@ -127,7 +129,7 @@ built from the tree makes it dead.
 ⭐ **A SEND THE SEED READS BY ITS OLDER RULE IS THE NINTH CASE.** The tree's sends fail: a full mailbox answers
 `mailboxFull` and a stopped one `serviceStopped`, so every send site is a `try`, a reply-bearing message's promise
 names only its own error type, and `stdlib/Builtins.maxon` declares no `ServiceError`. The seed refuses `try` on a
-send (E2015) and expects `ServiceError` in the library. `0010-withdraw-the-failable-send-from-the-first-build.patch`
+send (E2015) and expects `ServiceError` in the library. `0009-withdraw-the-failable-send-from-the-first-build.patch`
 writes the send sites back to the seed's form — the compiler's pools (`FrontEndPool`, `StdPassPool`,
 `BackendPool`), its log handler, the LSP writer and checker with their callers, and `stdlib/Log.maxon` and
 `stdlib/TraceCapture.maxon` — and declares `ServiceError` again. It touches no compiler logic: the parser,
