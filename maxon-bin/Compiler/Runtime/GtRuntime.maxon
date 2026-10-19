@@ -60,7 +60,7 @@
 // `shrinkstack`). So deep recursion inside an `async` body just works, and a thread that once
 // recursed deep does not keep that stack for life. The GT record comes from the scheduler's record
 // arena and its stack from the stack pool, both INVISIBLE to the heap leak gate's tracked live
-// column (`GtLiveCountLabel` is the gate for them). A finished GT's stack stays with its record when
+// column (`SchedRuntime.MOffGtLive` is the gate for them). A finished GT's stack stays with its record when
 // it is the seed's size and otherwise goes back to the pool on completion (`__gt_runner_done` →
 // `__gt_stack_free`).
 
@@ -553,7 +553,8 @@ export enum GtParkKind
 	// address of its own group.
 	netpollAny = 10
 
-	// `__gt_quiesce`: the argument is unused; the thread registers in `GtQuiesceWaiterLabel`'s word.
+	// `__gt_quiesce`: the argument is unused; the thread registers in `GtQuiesceWaiterLabel`'s word, and
+	// `__sched_checkdead` writes the answer into `GtOffParkArg` before readying it.
 	quiesce = 11
 
 	// `__mbox_send` on a full mailbox: the argument is the mailbox. Committed by `__gt_run_strand`
@@ -1342,7 +1343,7 @@ export let GtPromiseFieldVacateName = b"__gt_promise_field_vacate"
 // release there is a no-op, and the party it was released for blocks on its acquire for ever.
 //
 // **`__gt_owner_done(gt)` — THE CONSUMER's half: the promise is finished with.** It gives back the thread's
-// slot in `__gt_live_count` and adds the consumer ticket; if the runner was already there it performs the
+// slot in `MOffGtLive` and adds the consumer ticket; if the runner was already there it performs the
 // teardown. Its callers are `__gt_await`/`__gt_try_await` (after the result has been taken and the
 // arguments released), `__gt_promise_drop` (on every arm), `__gt_run_main` and a service's exit.
 //
@@ -1422,7 +1423,7 @@ let GtParkName = b"__gt_park"
 // the answer is the INDEX of the first element found `completed`.
 //
 // ⭐ **IT RETIRES NOTHING, WHICH IS WHY IT IS A FUNCTION AND NOT A `select` STATEMENT.** No promise is
-// consumed, no GT is reclaimed and `__gt_live_count` does not move — the caller then `await`s exactly one
+// consumed, no GT is reclaimed and `MOffGtLive` does not move — the caller then `await`s exactly one
 // promise under the ordinary rules.
 //
 // ⭐⭐ **A WAIT REGISTERS ON EVERY SLOT, Go's `selectgo`.** With nothing complete the caller parks, its
@@ -1803,22 +1804,8 @@ let GtRunQueueTailLabel = b"__gt_run_queue_tail"
 // on a free list under the pending `await`, and the next spawn would zero it and overwrite its result. So the
 // struct goes back only when both the runner and the consumer are finished (`GtOffTeardown`).
 
-// ⭐ **THE GREEN-THREAD LIVE COUNT — the leak gate for GT records and stacks.** A GT record comes
-// from the scheduler's record arena and its seed stack from the stack pool, and neither is a box,
-// so both are INVISIBLE to the tracked live column and a spawned-but-never-reclaimed green thread
-// leaks past the `__mm` gate silently. `__gt_spawn` increments this — not `main`'s thread, which
-// has no promise and which `__gt_run_main` reclaims before the count is read, nor an M's inline
-// scheduler context, which is never spawned; every reclaim decrements it — the
-// `__gt_await`/`__gt_try_await` tail (an awaited GT) AND `__gt_promise_drop` (an un-awaited,
-// dropped GT). At program exit the leak gate (`MmRuntime.buildMmLeakCheck`, the ONE OS-exit check)
-// asserts it is zero: a non-zero count means a green thread was neither awaited nor dropped — a
-// leak (or, negative, an over-reclaim). EXPORTED because that gate lives in `MmRuntime` and reads
-// this slot directly. Its zero image is the initial state — no GT spawned yet.
-export let GtLiveCountLabel = b"__gt_live_count"
-
 export let GtQuiesceName = b"__gt_quiesce"
 export let GtQuiesceWaiterLabel = b"__gt_quiesce_waiter"
-export let GtQuiesceStuckLabel = b"__gt_quiesce_stuck"
 
 // ⭐⭐ **THE ADAPTIVE SEED — Go's `startingStackSize`.** The size `__gt_spawn` asks
 // `__gt_free_get` for a new thread's stack: the smallest power of two in [`gtSeedStackBytes`,
@@ -2404,11 +2391,7 @@ export function gtRuntimeGlobals(usage RuntimeUsage, target Target) returns Data
 	pushRuntimeGlobal(out, label: GtTimerWhenLabel, sharing: MultiMSharing.publishedFromTheLock, reach: DataReach.walked, seed: TimerWhenEmpty)
 	pushRuntimeGlobal(out, label: GtTraceCounterLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.walked)
 
-	// The green-thread live count (spawn++, await/drop reclaim--), asserted zero at exit. It counts GREEN
-	// THREADS, which the `__mm` gate cannot see whatever happens to their memory.
-	pushRuntimeGlobal(out, label: GtLiveCountLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: GtQuiesceWaiterLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.walked)
-	pushRuntimeGlobal(out, label: GtQuiesceStuckLabel, sharing: MultiMSharing.atomicStep, reach: DataReach.walked)
 
 	// The adaptive seed starts at the floor, so the first spawn commits what every spawn committed before any
 	// thread has finished.
@@ -2806,7 +2789,7 @@ end 'buildGtInit'
 // ⭐⭐⭐ **THE THREE KINDS OF GT THIS RUNTIME SPAWNS.** They are the two halves of `GtOffOwner`'s relation,
 // named where the creation happens: an `async f(…)` frame is a COROUTINE of the green thread that called it,
 // and a `spawn` and `main` are GREEN THREADS, which own themselves. `main`'s thread additionally carries the
-// main-thread mark (`GtOffIsMainThread`), has no promise, so it takes no slot in `__gt_live_count`, and is not
+// main-thread mark (`GtOffIsMainThread`), has no promise, so it takes no slot in `MOffGtLive`, and is not
 // a spawn a trace names: it keeps trace id 0, which is what every async trace prints for `main`. Nothing else
 // about a spawn differs, which is why this is an argument to ONE builder rather than three builders.
 enum GtSpawnKind
@@ -2973,8 +2956,7 @@ end 'emitGtStackRefused'
 // by one per promise so a clean exit balances it to zero; and, in a build that reads it, the trace id (see
 // `GtOffTraceId`). Returns the block to continue in, because the DebugStream event splits it.
 function emitGtSpawnCountAndTraceId(module StdModule, func IrFunction, block IrBlock, gt ValueId, tracing GtTracing, ids ValueMinter) returns IrBlock
-	let spawnCredit = emitConst(module, block: block, value: OneMore, ids: ids)
-	_ = emitGlobalAccumulate(module, block: block, label: GtLiveCountLabel, delta: spawnCredit, multiM: true, ids: ids)
+	emitSchedStepGtLive(module, block: block, delta: OneMore, ids: ids)
 
 	var current = block
 
@@ -3406,7 +3388,7 @@ end 'emitGtFifoPop'
 // through `cont`.
 //
 // ⛔⛔ **IT IS WHAT KEEPS A NEVER-SCHEDULED PROGRAM's MEMORY BOUNDED.** `__gt_promise_drop` hands back the half
-// a dropped promise owns — its managed arguments and its slot in `__gt_live_count` — but the STACK and the
+// a dropped promise owns — its managed arguments and its slot in the live count — but the STACK and the
 // STRUCT can only be freed by a party allowed to take the GT out of a queue. A program that spawns and drops in
 // a loop and never awaits would otherwise pile them up.
 //
@@ -4916,13 +4898,13 @@ end 'buildGtAwaitAny'
 // `GtDrainAtExitName` for where it is called from and why the join is not optional. It runs on the main
 // machine once `main` has completed, in three steps:
 //
-//   1. **RUN THE SCHEDULER LOOP UNTIL NOBODY OWNS A GREEN THREAD** — or until nothing is left that can run
-//      (`SchedRuntime.SchedPhase`), which leaves the count for the leak gate to report.
+//   1. **RUN THE SCHEDULER LOOP UNTIL NOTHING IS LEFT TO RUN** — nothing runnable, no store pending and no
+//      other machine running, or every machine idle (`SchedRuntime.emitSchedMainLoopUntilMet`). What still
+//      owns a green thread then is the leak gate's to report.
 //   2. **RELEASE THE REGISTRY SLOTS AND THE MANAGED GLOBALS** (`__maxon_registry_release`,
 //      `__maxon_global_cleanup`). Both stay live through step 1, because a handler still running
-//      there may look a key up or read a module `let`. A loop that stopped with every remaining
-//      green thread parked idle releases them first — which closes the mailboxes only they held —
-//      and runs the loop again.
+//      there may look a key up or read a module `let`. The release closes the mailboxes only parked
+//      services held, so the loop runs once more after it.
 //   3. **STOP AND JOIN THE WORKER Ms** (`__sched_stop_workers`), which is where the counter this
 //      exit path is about to read stops moving.
 //
@@ -4945,44 +4927,40 @@ function buildGtDrainAtExit(module StdModule, releasesRegistry bool, releasesGlo
 	module.functions.push(func)
 end 'buildGtDrainAtExit'
 
-// `__gt_quiesce()`: park the caller until no green thread is live, or until `__sched_checkdead`
-// finds the scheduler stuck with only the caller left to finish, and answer the live count at that
-// moment. It tears nothing down. The stuck word is what lets the woken caller tell stuck from done.
-// A renounced caller answers at once, for the reason the renounce mark in `buildGtPromiseDrop`
-// gives.
+// `__gt_quiesce()`: park the caller until `__sched_checkdead` finds every machine idle with nothing
+// pending, and answer the live sum it stored at that moment. It tears nothing down. A renounced
+// caller answers without that wait, for the reason the renounce mark in `buildGtPromiseDrop` gives;
+// its sum is taken unlocked, so steps in flight on other machines can leave it transiently negative,
+// and it is clamped to 0.
 function buildGtQuiesce(module StdModule)
 	var func = IrFunction.createFromStd(GtQuiesceName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
 	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var check = module.addBlock(func, label: b"quiescecheck", heat: BlockHeat.normal)
-	var pending = module.addBlock(func, label: b"quiescepending", heat: BlockHeat.normal)
-	var promiseCheck = module.addBlock(func, label: b"quiescepromise", heat: BlockHeat.normal)
 	var wait = module.addBlock(func, label: b"quiescepark", heat: BlockHeat.normal)
-	var finish = module.addBlock(func, label: b"quiescefinish", heat: BlockHeat.normal)
-	var clearStuck = module.addBlock(func, label: b"quiescecleared", heat: BlockHeat.normal)
-	var doneBlock = module.addBlock(func, label: b"quiescedone", heat: BlockHeat.normal)
+	var resumed = module.addBlock(func, label: b"quiesceresumed", heat: BlockHeat.normal)
+	var answered = module.addBlock(func, label: b"quiesceanswered", heat: BlockHeat.normal)
+	var renounced = module.addBlock(func, label: b"quiescerenounced", heat: BlockHeat.normal)
+	var negative = module.addBlock(func, label: b"quiescenegative", heat: BlockHeat.normal)
+	var counted = module.addBlock(func, label: b"quiescecounted", heat: BlockHeat.normal)
 
-	module.setTerminator(entry, op: StdOp.branch(check.id))
+	let renouncedBeforeParking = emitLoadField(module, block: entry, record: emitLoadCurrentGt(module, block: entry, ids: ids), offset: GtOffRenounced, ids: ids)
+	emitBranchOnCompare(module, block: entry, value: renouncedBeforeParking, pred: StdCmpPred.ne, against: GtPromiseHeld, whenTrue: renounced, whenFalse: wait, ids: ids)
 
-	let stuck = emitLoadAcquireGlobalWord(module, block: check, label: GtQuiesceStuckLabel, ids: ids)
-	let outstanding = emitLoadAcquireGlobalWord(module, block: check, label: GtLiveCountLabel, ids: ids)
-	emitBranchOnCompare(module, block: check, value: outstanding, pred: StdCmpPred.eq, against: 0, whenTrue: finish, whenFalse: pending, ids: ids)
+	emitGtPark(module, ids: ids, cur: wait, kind: GtParkKind.quiesce.rawValue, arg: emitConst(module, block: wait, value: GtParkArgUnused, ids: ids), cont: resumed)
 
-	emitBranchOnCompare(module, block: pending, value: stuck, pred: StdCmpPred.ne, against: 0, whenTrue: finish, whenFalse: promiseCheck, ids: ids)
+	let quiescer = emitLoadCurrentGt(module, block: resumed, ids: ids)
+	let renouncedWhileParked = emitLoadField(module, block: resumed, record: quiescer, offset: GtOffRenounced, ids: ids)
+	emitBranchOnCompare(module, block: resumed, value: renouncedWhileParked, pred: StdCmpPred.ne, against: GtPromiseHeld, whenTrue: renounced, whenFalse: answered, ids: ids)
 
-	let renounced = emitLoadField(module, block: promiseCheck, record: emitLoadCurrentGt(module, block: promiseCheck, ids: ids), offset: GtOffRenounced, ids: ids)
-	emitBranchOnCompare(module, block: promiseCheck, value: renounced, pred: StdCmpPred.ne, against: GtPromiseHeld, whenTrue: finish, whenFalse: wait, ids: ids)
+	module.setTerminator(answered, op: StdOp.ret(emitLoadField(module, block: answered, record: quiescer, offset: GtOffParkArg, ids: ids)))
 
-	emitGtPark(module, ids: ids, cur: wait, kind: GtParkKind.quiesce.rawValue, arg: emitConst(module, block: wait, value: GtParkArgUnused, ids: ids), cont: check)
+	let outstanding = emitSchedGtLiveSum(module, block: renounced, ids: ids)
+	emitBranchOnCompare(module, block: renounced, value: outstanding, pred: StdCmpPred.lt, against: 0, whenTrue: negative, whenFalse: counted, ids: ids)
 
-	emitBranchOnCompare(module, block: finish, value: stuck, pred: StdCmpPred.ne, against: 0, whenTrue: clearStuck, whenFalse: doneBlock, ids: ids)
+	module.setTerminator(negative, op: StdOp.ret(emitConst(module, block: negative, value: 0, ids: ids)))
+	module.setTerminator(counted, op: StdOp.ret(outstanding))
 
-	let unstick = emitBin(module, block: clearStuck, a: emitConst(module, block: clearStuck, value: 0, ids: ids), b: stuck, opcode: StdBinOpcode.sub, ids: ids)
-	_ = emitGlobalAccumulate(module, block: clearStuck, label: GtQuiesceStuckLabel, delta: unstick, multiM: true, ids: ids)
-	module.setTerminator(clearStuck, op: StdOp.branch(doneBlock.id))
-
-	module.setTerminator(doneBlock, op: StdOp.ret(outstanding))
 	module.functions.push(func)
 end 'buildGtQuiesce'
 
@@ -4992,9 +4970,7 @@ function emitReleaseOwnersAfterDrain(module StdModule, func IrFunction, cur IrBl
 	end 'nothingOwnsAService'
 
 	var release = module.addBlock(func, label: b"drainreleaseowners", heat: BlockHeat.normal)
-	var settled = module.addBlock(func, label: b"drainsettled", heat: BlockHeat.normal)
-	var drained = module.addBlock(func, label: b"draindone", heat: BlockHeat.normal)
-	module.setTerminator(cur, op: StdOp.condBranch(emitSchedDrainIsStuck(module, block: cur, ids: ids), thenBlockId: release.id, elseBlockId: settled.id))
+	module.setTerminator(cur, op: StdOp.branch(release.id))
 
 	emitSchedLockEnter(module, block: release, ids: ids)
 	emitSchedEnterPhaseLocked(module, block: release, phase: SchedPhase.draining, ids: ids)
@@ -5002,11 +4978,7 @@ function emitReleaseOwnersAfterDrain(module StdModule, func IrFunction, cur IrBl
 
 	emitOwnerReleaseCalls(module, block: release, releasesRegistry: releasesRegistry, releasesGlobals: releasesGlobals, code: code, ids: ids)
 	emitSchedMainLoop(module, block: release, until: SchedMainLoopUntil.drained, ids: ids)
-	module.setTerminator(release, op: StdOp.branch(drained.id))
-
-	emitOwnerReleaseCalls(module, block: settled, releasesRegistry: releasesRegistry, releasesGlobals: releasesGlobals, code: code, ids: ids)
-	module.setTerminator(settled, op: StdOp.branch(drained.id))
-	return drained
+	return release
 end 'emitReleaseOwnersAfterDrain'
 
 function emitOwnerReleaseCalls(module StdModule, block IrBlock, releasesRegistry bool, releasesGlobals bool, code ValueId, ids ValueMinter)
@@ -5374,65 +5346,27 @@ function buildGtReclaim(module StdModule)
 end 'buildGtReclaim'
 
 // ⭐⭐ **`__gt_owner_done(gt)` — THE CONSUMER's HALF: this promise is finished with.** Give back the thread's
-// slot in `__gt_live_count`, then arrive at the rendezvous; if the runner was already there, reclaim.
+// slot in `MOffGtLive`, then arrive at the rendezvous; if the runner was already there, reclaim.
 //
 // ⚠ **THE DEBIT IS THE CONSUMER'S AND IS UNCONDITIONAL, WHICH IS WHAT KEEPS THE EXIT GATE HONEST.**
-// `__gt_live_count` counts threads whose OWNERSHIP is outstanding, and this call is exactly where a
+// `MOffGtLive` counts threads whose OWNERSHIP is outstanding, and this call is exactly where a
 // promise's ownership ends — whether the thread has finished, is running on another M, or is sitting in a
 // ring that nothing will ever schedule. Moving it to the reclaim instead would make the exit gate report a
 // leak for the honest program that spawns, drops and returns without ever driving the scheduler
 // (`async-promise-drop.spawn-drop-loop-bounded` is that program); the MEMORY outliving the debit by a few
 // schedules is the runner's business and `__gt_coro_sweep_dropped` is what bounds it.
-//
-// ⭐⭐ **THE LAST DEBIT AFTER `main` HAS COMPLETED SIGNALS THE MAIN MACHINE**, which may be parked in the exit
-// drain waiting for exactly this count (`SchedRuntime.SchedPhase`). While `main` runs no drain can be waiting,
-// so the phase is read WITHOUT the lock and a program that awaits in a loop takes none here.
-//
-// ⛔ **THE UNLOCKED READ IS HALF OF A DEKKER PAIR, AND BOTH HALVES ARE ORDERED.** This side steps the count with
-// a locked read-modify-write and only then reads the phase with acquire — and the acquire is load-bearing: on
-// arm64 the step's store is a store-release (`STLXR`), which orders a later `LDAR` but not a plain load. The
-// main machine acts on the count only in its drain loop, which it enters only after it has observed the phase
-// leave `mainRunning` (acquire, or under the lock the phase was moved under), so its read of the count is
-// ordered after the phase store. Of the two reads, at least one sees the other side's write: this read sees
-// the drain's phase and signals, or the main machine's read sees the zero and leaves without waiting. A
-// completion racing the move is covered by the same pair.
 function buildGtOwnerDone(module StdModule)
 	var func = IrFunction.createFromStd(GtOwnerDoneName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var lastOwned = module.addBlock(func, label: b"ownerlastlive", heat: BlockHeat.normal)
-	var wakeQuiescer = module.addBlock(func, label: b"ownerwakequiescer", heat: BlockHeat.normal)
-	var claimQuiescer = module.addBlock(func, label: b"ownerclaimquiescer", heat: BlockHeat.normal)
-	var payQuiescer = module.addBlock(func, label: b"ownerpayquiescer", heat: BlockHeat.normal)
-	var afterQuiescer = module.addBlock(func, label: b"ownerafterquiescer", heat: BlockHeat.normal)
-	var signalDrain = module.addBlock(func, label: b"ownersignaldrain", heat: BlockHeat.normal)
-	var arrive = module.addBlock(func, label: b"ownerarrive", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let gt = 0
 
-	let debit = emitConst(module, block: entry, value: OneFewer, ids: ids)
-	let prior = emitGlobalAccumulate(module, block: entry, label: GtLiveCountLabel, delta: debit, multiM: true, ids: ids)
-	emitBranchOnCompare(module, block: entry, value: prior, pred: StdCmpPred.eq, against: 1, whenTrue: lastOwned, whenFalse: arrive, ids: ids)
+	emitSchedStepGtLive(module, block: entry, delta: OneFewer, ids: ids)
 
-	// The other half of `__gt_register_park`'s quiesce Dekker pair.
-	let waiting = emitLoadAcquireGlobalWord(module, block: lastOwned, label: GtQuiesceWaiterLabel, ids: ids)
-	emitBranchOnCompare(module, block: lastOwned, value: waiting, pred: StdCmpPred.ne, against: 0, whenTrue: wakeQuiescer, whenFalse: afterQuiescer, ids: ids)
-
-	let claimed = emitCasGlobalWord(module, block: wakeQuiescer, label: GtQuiesceWaiterLabel, expected: waiting, replacement: emitConst(module, block: wakeQuiescer, value: 0, ids: ids), ids: ids)
-	emitBranchOnCasLost(module, block: wakeQuiescer, result: claimed, lost: afterQuiescer, won: claimQuiescer, ids: ids)
-
-	let quiescerDebt = emitGtReady(module, block: claimQuiescer, gt: waiting, gate: GtReadyGate.fromWaiting, ids: ids)
-	emitSchedWakeIfOwed(module, cur: claimQuiescer, owed: quiescerDebt, wake: payQuiescer, cont: afterQuiescer, ids: ids)
-
-	let draining = emitSchedMainHasCompleted(module, block: afterQuiescer, ids: ids)
-	module.setTerminator(afterQuiescer, op: StdOp.condBranch(draining, thenBlockId: signalDrain.id, elseBlockId: arrive.id))
-
-	emitSchedSignalMainMachine(module, block: signalDrain, ids: ids)
-	module.setTerminator(signalDrain, op: StdOp.branch(arrive.id))
-
-	var doneBlock = emitGtArriveAndReclaimIfSecond(module, func: func, cur: arrive, gt: gt, ticket: GtTeardownConsumerTicket, otherTicket: GtTeardownRunnerTicket, ids: ids)
+	var doneBlock = emitGtArriveAndReclaimIfSecond(module, func: func, cur: entry, gt: gt, ticket: GtTeardownConsumerTicket, otherTicket: GtTeardownRunnerTicket, ids: ids)
 	module.setTerminator(doneBlock, op: StdOp.retVoid)
 
 	module.functions.push(func)
@@ -5868,8 +5802,7 @@ function buildGtCellAlloc(module StdModule)
 	emitStoreField(module, block: entry, record: cell, offset: GtOffOwner, value: owner)
 	emitStoreField(module, block: entry, record: cell, offset: GtOffReleaser as ByteOffset, value: releaser)
 
-	let credit = emitConst(module, block: entry, value: OneMore, ids: ids)
-	_ = emitGlobalAccumulate(module, block: entry, label: GtLiveCountLabel, delta: credit, multiM: true, ids: ids)
+	emitSchedStepGtLive(module, block: entry, delta: OneMore, ids: ids)
 
 	module.setTerminator(entry, op: StdOp.ret(cell))
 	module.functions.push(func)
@@ -5917,12 +5850,12 @@ end 'buildGtCellComplete'
 //     already there, so the REPLIER reclaims. (`services.pending-reply-dropped-then-answered`.)
 //   • **COMPLETED, then dropped** — the runner ticket is already there, so `__gt_owner_done` is second and
 //     the DROPPER reclaims. Taking the `waiting` road for this one would have stranded the struct
-//     INVISIBLY: `__gt_owner_done` has already debited `__gt_live_count`, so the exit gate reads clean.
+//     INVISIBLY: `__gt_owner_done` has already debited the live count, so the exit gate reads clean.
 //     (`services.completed-reply-dropped-is-reclaimed`.)
 //   • **PENDING, then AWAITED** — no drop happens at all; `__gt_try_await` is the consumer and the replier
 //     the runner, in whichever order they arrive. (`services.send-and-await-a-reply`.)
 //   • **ANSWERED and never dropped nor awaited** — impossible: the promise is enrolled owned at the send
-//     (`Parser.emitServiceSend`), so every path either awaits it or drops it, and `__gt_live_count` would
+//     (`Parser.emitServiceSend`), so every path either awaits it or drops it, and the live count would
 //     report a `greenThreadLeak` if one did not.
 //
 // ⭐⭐ **IT HAS THREE ARMS, AND THE TWO QUESTIONS IT ASKS ARE `a reply cell?` AND `waiting?`.**
@@ -6228,7 +6161,7 @@ end 'bytesWithSuffix'
 // reference for its own execution, and the arrival is made by whichever reference goes last. A coroutine's
 // completion drops the reference it holds on its owner once its own arrival is made.
 //
-// ⚠ **IT DOES NOT TOUCH `__gt_live_count`.** That count is stepped once per PROMISE, by `__gt_owner_done`.
+// ⚠ **IT DOES NOT TOUCH `MOffGtLive`.** That count is stepped once per PROMISE, by `__gt_owner_done`.
 function buildGtRunnerDone(module StdModule, target Target)
 	var func = IrFunction.createFromStd(GtRunnerDoneName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params())
 	var ids = ValueMinter.create(2)
@@ -6687,9 +6620,6 @@ function buildGtRegisterPark(module StdModule)
 	var quiesceArm = module.addBlock(func, label: b"parkquiesce", heat: BlockHeat.normal)
 	var quiesceTaken = module.addBlock(func, label: b"parkquiescetaken", heat: BlockHeat.cold)
 	var quiesceRegister = module.addBlock(func, label: b"parkquiesceregister", heat: BlockHeat.normal)
-	var quiesceUndo = module.addBlock(func, label: b"parkquiesceundo", heat: BlockHeat.normal)
-	var quiesceTake = module.addBlock(func, label: b"parkquiescetake", heat: BlockHeat.normal)
-	var resumeNow = module.addBlock(func, label: b"parkresumenow", heat: BlockHeat.normal)
 	var resumeRunnable = module.addBlock(func, label: b"parkresumerunnable", heat: BlockHeat.normal)
 	var unknownArm = module.addBlock(func, label: b"parkunknown", heat: BlockHeat.normal)
 	var doneBlock = module.addBlock(func, label: b"parkdone", heat: BlockHeat.normal)
@@ -6749,22 +6679,12 @@ function buildGtRegisterPark(module StdModule)
 
 	emitBranchOnCompare(module, block: notAwaitAny, value: kind, pred: StdCmpPred.eq, against: GtParkKind.quiesce.rawValue, whenTrue: quiesceArm, whenFalse: unknownArm, ids: ids)
 
-	// ⚠ One half of a Dekker pair with `__gt_owner_done`: each side makes a locked RMW on its own
-	// word, then an acquire load of the other's (StoreLoad on x64, release then acquire on arm64).
-	// Weaken either and the last debit and this registration can each miss the other, leaving the
-	// waiter parked with nothing live.
 	emitGtMarkWaiting(module, block: quiesceArm, gt: gt, ids: ids)
 	let registered = emitCasGlobalWord(module, block: quiesceArm, label: GtQuiesceWaiterLabel, expected: emitConst(module, block: quiesceArm, value: 0, ids: ids), replacement: gt, ids: ids)
 	emitBranchOnCasLost(module, block: quiesceArm, result: registered, lost: quiesceTaken, won: quiesceRegister, ids: ids)
 	emitRuntimeAbort(module, func: func, block: quiesceTaken, abort: RuntimeAbort.schedulerQuiesceWaiterTaken, ids: ids)
 
-	let ownedNow = emitLoadAcquireGlobalWord(module, block: quiesceRegister, label: GtLiveCountLabel, ids: ids)
-	emitBranchOnCompare(module, block: quiesceRegister, value: ownedNow, pred: StdCmpPred.eq, against: 0, whenTrue: quiesceUndo, whenFalse: quiesceTake, ids: ids)
-
-	let withdrawn = emitCasGlobalWord(module, block: quiesceUndo, label: GtQuiesceWaiterLabel, expected: gt, replacement: emitConst(module, block: quiesceUndo, value: 0, ids: ids), ids: ids)
-	emitBranchOnCasLost(module, block: quiesceUndo, result: withdrawn, lost: quiesceTake, won: resumeNow, ids: ids)
-
-	emitBranchCarrying(module, from: quiesceTake, to: doneBlock, value: noDebt)
+	emitBranchCarrying(module, from: quiesceRegister, to: doneBlock, value: noDebt)
 
 	// awaitAny: `arg` is the promise array's record.
 	let lockedSlots = ids.mint()
@@ -6781,10 +6701,8 @@ function buildGtRegisterPark(module StdModule)
 	module.appendOp(awaitAnyRegistered, op: StdOp.call(ids.mint(), callee: GtAnyUnlockName, args: argsOf(lockedSlots)))
 	emitBranchCarrying(module, from: awaitAnyRegistered, to: doneBlock, value: noDebt)
 
-	// resumeNow / resumeRunnable: what the thread waits for has already happened, so it is readied at
-	// once — from `waiting` where its arm marked it (the quiesce undo), as still `ready` where it did
-	// not.
-	emitBranchCarrying(module, from: resumeNow, to: doneBlock, value: emitGtReady(module, block: resumeNow, gt: gt, gate: GtReadyGate.fromWaiting, ids: ids))
+	// resumeRunnable: what the thread waits for has already happened, so it is readied at once, as still
+	// `ready`.
 	emitBranchCarrying(module, from: resumeRunnable, to: doneBlock, value: emitGtReady(module, block: resumeRunnable, gt: gt, gate: GtReadyGate.alreadyRunnable, ids: ids))
 
 	// ⛔ **A KIND NOTHING WRITES — a compiler bug.** A yield never reaches here (the strand runner places it),

@@ -361,7 +361,7 @@ relocating morestack resized is returned to the stack pool as its runner finishe
 hold at most one resident stack at a time and exit cleanly. (Without it, every spawn would leak its stack
 commit — invisible to the `__mm` leak gate — and exhaust commit on a bounded-pagefile machine.) This loop is also a LEAK GATE on the GT struct + its inline
 arg buffer: each completed thread's struct is recycled onto the free-list and the completion-based
-`__gt_live_count` is balanced to zero, so a clean exit (0) proves nothing leaked. The struct and its arg
+The green-thread live count is balanced to zero, so a clean exit (0) proves nothing leaked. The struct and its arg
 buffer are slab allocations that are not boxes, so the heap leak gate's tracked live column never sees them.
 ```maxon
 

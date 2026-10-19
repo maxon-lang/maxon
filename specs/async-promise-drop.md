@@ -23,8 +23,9 @@ thread parked on a wait (a `sleep` timer, a `runProcess` child) has that wait en
 resumes, unwinds its own frame, and its strand's runner reclaims it — because nothing can unwind a suspended
 frame from outside, and freeing its stack would strand every heap value its locals own. Because
 a green thread's struct and stack are slab/OS allocations invisible to the `__mm` heap leak gate, a spawned
-thread that is neither awaited nor dropped leaks silently — so the runtime keeps a `__gt_live_count` (one up
-per spawn, one down per await-reclaim AND per drop-reclaim) and the one OS-exit leak gate asserts it is zero.
+thread that is neither awaited nor dropped leaks silently — so the runtime keeps a green-thread live count (one up
+per spawn, one down when the promise's owner releases it, by an await or a drop) and the one OS-exit leak gate
+asserts it is zero.
 A leak (or an over-reclaim) reports `RuntimeAbort.greenThreadLeak` (75), distinct from the heap gate's 101.
 
 `__gt_promise_drop` branches on the thread's state: a `completed` thread (which may have run while its owner
@@ -63,7 +64,7 @@ the binding written there. `p.isComplete()` on a read of a slot another read alr
 
 <!-- test: async-promise-drop.never-ran-drop-no-leak -->
 A spawned green thread that is never awaited is DROPPED at scope exit: it is renounced where it sits in its
-strand's queue, so it is reclaimed — seed stack and struct — rather than run, and `__gt_live_count` balances to
+strand's queue, so it is reclaimed — seed stack and struct — rather than run, and the green-thread live count balances to
 zero — so the program exits with `main`'s own code (0), not the GT-leak abort (75).
 ```maxon
 
@@ -146,7 +147,7 @@ promise is dropped at the loop body's scope exit — renounced in its strand's q
 than run when the queue reaches it) and its struct recycled onto the free-list, which the next spawn reuses.
 Memory stays bounded across 1000 iterations and the live count balances to zero (exit 0). Neither the struct
 nor the seed stack is a box, so both are invisible to the heap leak gate's tracked live column, and
-`__gt_live_count` is the gate that catches them.
+The green-thread live count is the gate that catches them.
 ```maxon
 
 function trivial() returns Integer
@@ -801,7 +802,7 @@ end 'main'
 ⭐ The container is an OWNER. An array of promises that reaches scope exit holding un-awaited elements
 drops each one — the same `__gt_promise_drop` a bare binding gets, reached through the element
 destructor the array record stamps at `element_destroy@40`. A record stamped `0` there would let the array
-die taking its elements' threads with it, unreclaimed: `__gt_live_count` would stay at 1 and the program
+die taking its elements' threads with it, unreclaimed: the green-thread live count would stay at 1 and the program
 would exit **75**.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1138,7 +1139,7 @@ end 'main'
 
 <!-- test: async-promise-drop.a-callee-cancels-the-promise-it-is-handed -->
 `cancel` is the other door onto the same reclaim, so it transfers ownership exactly as `await` does — the
-callee cancels a thread it owns, `__gt_live_count` balances to zero and no leak abort fires. The two doors
+callee cancels a thread it owns, the green-thread live count balances to zero and no leak abort fires. The two doors
 are one list (`PromiseConsume`), which is what stops the sweep learning one and not the other.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1959,7 +1960,7 @@ end 'main'
 
 <!-- test: async-promise-drop.a-returned-spawn-dropped-by-the-caller -->
 A returned promise the caller never awaits is the CALLER's to drop: its binding's scope exit renounces the
-thread, and `__gt_live_count` balances to zero. Were the callee to drop it too, the thread would be
+thread, and the green-thread live count balances to zero. Were the callee to drop it too, the thread would be
 reclaimed twice and the run would abort **75**.
 ```maxon
 typealias Integer = int(i64.min to i64.max)

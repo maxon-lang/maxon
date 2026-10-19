@@ -10916,7 +10916,7 @@ shape stays GREEN under the sabotage below.
 `__gt_promise_drop`'s parked arm, the coroutine is never reclaimed and neither is its service's green thread,
 whose strand reference it still holds; this case exits **101** at one, four and sixteen processors, because the
 `Probe` is released only by that reclaim. The exit gate proper cannot see the loss — the drop's consumer half
-has already debited `__gt_live_count` — so the same program without the `Probe` argument exits 42 under the
+has already debited the green-thread live count — so the same program without the `Probe` argument exits 42 under the
 sabotage, carving more records than a sound runtime does.
 
 ⭐ **THE SCHEDULER'S RECORD-CARVE COUNT IS THE INSTRUMENT THAT SEES A STRANDED RECORD.**

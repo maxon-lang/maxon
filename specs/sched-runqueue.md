@@ -86,7 +86,7 @@ party adds its own half-ticket to it exactly once:
 
 | Party | Who that is | What it does first | Ticket |
 |---|---|---|---|
-| the **consumer** | the promise's owner: `await`, `try await`, or `__gt_promise_drop` (and the `cancel` that routes through it) | takes the result, or renounces it; gives back the thread's slot in `__gt_live_count` | 1 |
+| the **consumer** | the promise's owner: `await`, `try await`, or `__gt_promise_drop` (and the `cancel` that routes through it) | takes the result, or renounces it; gives back the thread's slot in the green-thread live count | 1 |
 | the **runner** | whoever finishes with the thread's EXECUTION: the strand runner whose context switch came back from a `completed` thread, the scheduler party that takes a tombstone off a queue, or a dropper that has deregistered a PARKED thread from every store | samples the stack the thread needed, and returns it to the stack pool unless it is the current seed size | 2 |
 
 **The party whose add hands back the OTHER ticket is SECOND, and the second party performs the
@@ -460,7 +460,7 @@ coroutines sit around it in the queue — one ahead of it, one behind — so the
 sweep cannot reach it and `__gt_strand_next` is what has to refuse it. While `main` is parked on its
 awaits the strand runner reaches `marker`, and it must reclaim that coroutine instead of running it, so
 `ran` stays 0 and the two live results still arrive. A scheduler that ran it would both set `ran` and leave
-a thread nobody awaits, which is the `__gt_live_count` abort (75) rather than 7.
+a thread nobody awaits, which is the green-thread live-count abort (75) rather than 7.
 ```maxon
 var ran = 0 as Integer
 
@@ -617,7 +617,7 @@ window, and each one either takes a record off the free list or carves a new one
     renounced sleeper finish and give its record back.
   • **`recycled=3`** — the renounced record is NEVER reclaimed, so only the awaited `done` of each round comes
     back and every sleeper's spawn carves. The sabotage reading: remove the reclamation from this arm
-    altogether and the case still exits 0, because the consumer's half has already debited `__gt_live_count`
+    altogether and the case still exits 0, because the consumer's half has already debited the green-thread live count
     and the exit gate reads clean.
 The two cases above stay GREEN under both.
 ```maxon
@@ -689,7 +689,7 @@ written as a number, so it follows the count the scheduler resolved.
 
 ✅ **THIS CASE OWNS THE RUNNER'S HALF, AND THE EXIT GATE CANNOT SEE IT.** With the runner's half removed from the parked-drop
 arm, this case reads `bounded=false` — 1,002 records carved at four processors against a bound of 192 — and
-still exits 0, because the consumer's half has already debited `__gt_live_count`. A runtime whose reclaim never
+still exits 0, because the consumer's half has already debited the green-thread live count. A runtime whose reclaim never
 returns a record to a free list reads `bounded=false` too, with 2,001 carved.
 ```maxon
 typealias Integer = int(i64.min to i64.max)

@@ -42,7 +42,7 @@ caller's to finish. Two outcomes, both live in this file:
 | **drops the array with losers still in it** | **leak-free**, exit 0 — the array drops each un-awaited loser |
 
 ✅ **THE SECOND ROW IS NOT A LEAK.** A container is an OWNER of its promise elements and drops each
-un-awaited one when it dies, so `__gt_live_count` returns to zero — the case that pins the composition is
+un-awaited one when it dies, so the green-thread live count returns to zero — the case that pins the composition is
 `the-losers-are-dropped-when-the-array-dies`. See
 `async-promise-drop.a-container-drops-its-un-awaited-elements` for the isolated statement of it.
 

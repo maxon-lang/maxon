@@ -9,9 +9,8 @@ category: system
 
 ## Documentation
 
-`__Builtins.gtQuiesce()` parks the calling green thread until every other green thread that owns a slot in
-the scheduler's live count has finished, and answers how many have not. It takes no arguments and answers an
-`int`.
+`__Builtins.gtQuiesce()` parks the calling green thread until nothing else can run, and answers how many green
+threads still own a slot in the scheduler's live count. It takes no arguments and answers an `int`.
 
 Every `__Builtins` member is library-tier: only a source file under `stdlib/` or `runtime/` may call one,
 and a call from anywhere else is E3185. The cases below call the intrinsics themselves, so they compile in
@@ -21,10 +20,12 @@ the library tier (`<!-- tier: stdlib -->`). A program calls `Scheduler.quiesce()
 It is not the exit drain. It releases no registry slot, runs no global cleanup and stops no worker, so the
 program carries on afterwards exactly as it was.
 
-The wait ends in one of two ways. The live count reaches zero, and the answer is `0`. Or every machine is idle
-with nothing pending, so nothing that still owns a green thread can ever run again, and the answer is the count
-that is left: a program that asks is told, where one that does not is a scheduler deadlock. A coroutine
-whose promise has been dropped answers at once, without waiting, with the live count at that moment.
+The wait ends at the moment every machine is idle with nothing pending, and the answer is the live count then:
+`0` when every other green thread has finished, and otherwise the count that is left, which a program that asks
+is told where one that does not is a scheduler deadlock. A machine waiting for its pinned thread's next turn
+counts as idle. A coroutine still unwinding after its promise was dropped, and a green thread inside a kernel
+call, keep the wait open until they are done. A coroutine whose promise has been dropped answers at once,
+without waiting, with the live count at that moment, at least `0`.
 
 ## Targets
 
@@ -173,19 +174,18 @@ fatal error: runtime abort 123 (schedulerQuiesceWaiterTaken)
 three services, sends each one `work` and then `linger`, and then shuts it down. Both messages run three
 coroutines on the worker's strand, two that yield and one that sleeps for 1 ms, and sum their answers.
 `main` awaits the three `work` replies and then waits at once. So at four processors the `linger`
-coroutines complete and the workers exit on other machines while `main` is checking the live count,
-registering as the waiter, or already parked. The worker whose exit takes the live count to zero claims the
-waiter word and readies `main`. Exactly one party may claim it, whichever order the registration and the
-last exit come in. A wake lost there leaves `main` parked until the deadlock check answers a count that is
-not zero, or hangs the round. A claim made twice readies `main` twice. A `linger` that lost a coroutine
-prints its round.
+coroutines complete and the workers exit on other machines while `main` is registering as the waiter or
+already parked. The machine that goes idle last claims the waiter word and readies `main` with the live count,
+whichever order the registration and the last exit come in. A count read while another machine still runs
+answers one that is not zero, and a lost wake hangs the round. A `linger` that lost a coroutine prints its
+round.
 
-The replies are awaited before the wait because a reply nobody has awaited holds its slot in the live count.
-A wait made over one would end only at the deadlock check, which answers the count of unawaited replies.
+The replies are awaited before the wait because a reply nobody has awaited holds its slot in the live count,
+and the wait would answer the count of unawaited replies.
 
 ✅ **IT IS A CONTROL: ANY SOUND WAKE PROTOCOL PASSES IT, AND IT HOLDS THIS ONE TO ITS ANSWERS.** The waker
-claims the waiter word by a compare-and-swap. That and the registration's own atomic steps on the same word
-decide between the two without a lock.
+claims the waiter word by a compare-and-swap, and the registration's own compare-and-swap on the same word
+decides between the two.
 `races-coroutine-completion-at-one-processor` is its twin at one processor, where the registration and the
 last exit never overlap.
 ```maxon
@@ -269,9 +269,8 @@ outstanding=0 sum=30000
 <!-- unsupported-targets: wasm32-wasi -->
 <!-- procs: 1 -->
 **THE ONE-PROCESSOR TWIN OF `races-coroutine-completion-across-many-rounds`.** With one processor nothing
-runs beside `main`, so the wait's registration and the last worker's exit never overlap. Each round either
-finds the live count already at zero, or registers first and is readied by the last exit. Those orders must
-give the same answers as the racing ones. Like its twin, it is a control.
+runs beside `main`, so the wait's registration and the last worker's exit never overlap. Each round registers
+and is readied when the one machine goes idle. That order must give the same answers as the racing ones. Like its twin, it is a control.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias ReplyPromise = Promise with Integer
@@ -352,8 +351,9 @@ outstanding=0 sum=30000
 <!-- unsupported-targets: wasm32-wasi -->
 A coroutine that calls `Scheduler.quiesce()` parks as the scheduler's one waiter while `main` awaits a sibling. `main` then
 returns with the quiescing coroutine un-awaited, so scope exit drops its promise while it is parked in the wait. The
-drop must withdraw the waiter registration before the coroutine can be reclaimed: the last live thread's exit
-claims that registration, and one naming a reclaimed thread would be readied as though it were parked.
+drop must withdraw the waiter registration before the coroutine can be reclaimed: the deadlock check claims that
+registration when every machine goes idle, and one naming a reclaimed thread would be readied as though it were
+parked.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -376,4 +376,104 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+<!-- test: builtins-gt-quiesce.waits-for-a-renounced-coroutine-to-finish-unwinding -->
+<!-- unsupported-targets: wasm32-wasi -->
+<!-- procs: 1 -->
+The wait answers at the moment every machine is idle, so a coroutine whose promise was dropped holds it open until
+it has run out. `sleeper` is parked on its timer when `startAndDrop` returns and scope exit drops its promise. The
+drop gives up the promise's slot in the live count and readies the sleeper with its sleep ended early, so the count
+is already zero when `main` waits. The wait still parks `main`, the sleeper prints its line as it finishes, and only
+then does the wait answer `0`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function sleeper() returns Integer
+	sleep(50)
+	print("the sleeper finished\n")
+	return 1
+end 'sleeper'
+
+function fast() returns Integer
+	Scheduler.yield()
+	return 42
+end 'fast'
+
+function startAndDrop() returns Integer
+	let s = async sleeper()
+	let q = async fast()
+	let answer = await q
+	let finished = 1 if s.isComplete() else 0
+	return answer + finished
+end 'startAndDrop'
+
+function main() returns ExitCode
+	let answer = startAndDrop()
+	print("answered {answer}\n")
+
+	let outstanding = Scheduler.quiesce()
+	print("quiesced {outstanding}\n")
+	print("after the wait\n")
+	return 0
+end 'main'
+```
+```stdout
+answered 42
+the sleeper finished
+quiesced 0
+after the wait
+```
+```exitcode
+0
+```
+
+<!-- test: builtins-gt-quiesce.answers-while-a-pinned-thread-waits-for-its-machine -->
+<!-- unsupported-targets: wasm32-wasi -->
+`main` pins itself to its machine, so while it is parked in the wait that machine blocks for `main`'s next turn and
+joins no idle list. The wait still answers when every other machine is idle, as a machine waiting for its pinned
+thread counts as idle: the one green thread that is left, then none once the service has been shut down.
+```maxon
+typealias Count = int(0 to 1000)
+
+type Greeter
+	var greeted as Count
+
+	static function create() returns Self
+		return Self{greeted: 0}
+	end 'create'
+
+	export function greet(times Count)
+		self.greeted = self.greeted + times
+		print("greeted {self.greeted}\n")
+	end 'greet'
+end 'Greeter'
+
+function main() returns ExitCode
+	if not Scheduler.pinToMachine() 'refused'
+		print("refused\n")
+		return 1
+	end 'refused'
+
+	var greeter = spawn Greeter.create()
+	try greeter.greet(1) otherwise panic("an open mailbox with room takes the send")
+
+	let stranded = Scheduler.quiesce()
+	print("stranded {stranded}\n")
+
+	greeter.shutdown()
+	let outstanding = Scheduler.quiesce()
+	print("outstanding {outstanding}\n")
+
+	Scheduler.unpinFromMachine()
+	return 0
+end 'main'
+```
+```stdout
+greeted 1
+stranded 1
+outstanding 0
+```
+```exitcode
+0
 ```
