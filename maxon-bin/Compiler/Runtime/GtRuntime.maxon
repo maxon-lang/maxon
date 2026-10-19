@@ -78,7 +78,7 @@ export let PointerFieldBytes = 8
 
 // ⭐⭐ **THE RECORD LOCK — FIRST IN THE RECORD AND OUTSIDE EVERY ZEROING.** It is a recursive runtime
 // lock (`RuntimeLock`), free in the zeroed pages the arena carves a record or a cell from, and stays
-// live across every reuse: `__gt_spawn` zeroes from `GtStackWordsEnd` up to `GtOffStaging`, and
+// live across every reuse: `__gt_spawn` zeroes only the fields `gtFieldRoster` marks for it, and
 // `__gt_cell_alloc` from `GtOffStackBase` up to `GtCellBytes`. On a
 // green thread it is the strand lock over the strand queue (`GtOffCoroHead`). On a coroutine or a
 // reply cell it is the promise lock, where await, awaitAny and the completer meet over
@@ -92,8 +92,6 @@ export let GtOffStackBase = GtOffRecordLock + GtRecordLockBytes  // low address 
 // EXPORTED because the hand-assembled grower reads the CURRENT stack size to compute the doubled size, and
 // `__gt_stack_relocate` reads it for the old stack's top and writes the new size back.
 export let GtOffStackSize = GtOffStackBase + PointerFieldBytes
-
-let GtStackWordsEnd = GtOffStackSize + PointerFieldBytes
 
 // The green-thread stack GUARD: the low-water address a function's PROLOGUE compares its projected rsp against —
 // `projectedRsp < stackGuard` means the frame would overflow, so the prologue's cold path reaches `__gt_morestack` to
@@ -130,20 +128,22 @@ export let GtOffFuncPtr = GtOffThrew + PointerFieldBytes  // the async function'
 // `SchedRuntime`'s.
 export let GtOffNext = GtOffFuncPtr + PointerFieldBytes
 
-// ⭐⭐ **THE PER-CALLEE RELEASER — the address of this GT's `__gt_release_<callee>`, or 0.** A spawn whose
-// callee has NO managed argument, result or error writes 0 here and both release sites skip rather than
-// indirect-call through it; `Runtime/AsyncReleaser.maxon` is the one home of that decision and of the
-// synthesized body. Written by the spawn lowering (`LowerMaxonToStd.emitAsyncSpawn`) beside the inline
-// argument stores, read by `__gt_await`/`__gt_try_await` (result CONSUMED) and by `__gt_promise_drop`
-// (result NOT consumed) — see `emitGtReleaserCall` for why those two differ and what each failure mode costs.
+// ⭐⭐ **THE PER-CALLEE RELEASER — the address of this GT's `__gt_release_<callee>`, or 0.** A spawn
+// whose callee has NO managed argument, result or error writes nothing here and both release sites
+// skip rather than indirect-call through it; `Runtime/AsyncReleaser.maxon` is the one home of that
+// decision and of the synthesized body. Written by the spawn lowering
+// (`LowerMaxonToStd.emitAsyncSpawn`) beside the inline argument stores, read by
+// `__gt_await`/`__gt_try_await` (result CONSUMED) and by `__gt_promise_drop` (result NOT consumed)
+// — see `emitGtReleaserCall` for why those two differ and what each failure mode costs.
 //
-// ⚠⚠ **IT DEPENDS ON A SPAWNED STRUCT ARRIVING ZEROED, AND THAT IS A CORRECTNESS TRAP RATHER THAN
-// AN OPTIMIZATION.** Without it, a spawn of a releaser-free callee would INHERIT the previous
-// tenant's releaser and release that tenant's arguments out of stale argument slots — a wild free
-// rather than a leak. The zero is what makes "no releaser" the default state of every GT rather
-// than a state the spawn must remember to restore, and `__gt_spawn` is what supplies it: it zeroes
-// every field of the record `__gt_free_get` hands it from past the two stack words, which
-// `__gt_free_get` writes, up to the staging word (`GtOffStaging`).
+// ⚠⚠ **IT DEPENDS ON EVERY RECORD A SPAWN TAKES HOLDING 0 HERE, AND THAT IS A CORRECTNESS TRAP
+// RATHER THAN AN OPTIMIZATION.** Without it, a spawn of a releaser-free callee would INHERIT the
+// previous tenant's releaser and release that tenant's arguments out of stale argument slots — a
+// wild free rather than a leak. The zero is what makes "no releaser" the default state of every GT
+// rather than a state the spawn must remember to restore. The spawn does not zero the word; a
+// carved record arrives zero, and a recycled one is 0 because `__gt_reclaim`, the one caller of
+// `__gt_free_put`, claims the word by swapping it to 0 first (`emitGtReleaserCall`). A second
+// road onto a free list must clear it too.
 export let GtOffReleaser = GtOffNext + PointerFieldBytes
 
 // ⭐ **THE ASYNC-TRACE ID (`spawn #1`, `await #1 [yield]`).** A small unique number assigned at spawn from
@@ -158,7 +158,8 @@ export let GtOffReleaser = GtOffNext + PointerFieldBytes
 // (`__gt_context_switch`, `__gt_trampoline`, `__gt_morestack`) that read fixed offsets. A layout that changed
 // shape with a debug flag would mean the byte code and the builder disagreed in exactly the configuration
 // nobody routinely runs. Eight bytes per green thread is the price of one layout. The id is assigned only in a
-// traced or `debugStream` build, the two that read it; elsewhere the spawn's zeroing leaves it 0.
+// traced or `debugStream` build, the two that read it. `main`'s spawn zeroes it; in any other
+// build every other thread's holds whatever the record's previous tenant left.
 let GtOffTraceId = GtOffReleaser + PointerFieldBytes
 
 // ⭐⭐ **THE TEARDOWN RENDEZVOUS WORD — the ONE place the two halves of a green thread's
@@ -221,7 +222,7 @@ let GtOffAwaiter = GtOffOwner + PointerFieldBytes
 // carries one value word (`GtOffResult`), and a fat pointer is two, so the service loop writes the witness
 // here before `__gt_cell_complete` publishes (`ServiceLoop.storeReplyWitness`) and the awaiter takes it
 // through `__gt_reply_witness`; the reply releaser drops through it (`AsyncReleaser.asyncSlotsAt`).
-// 0 on every other green thread.
+// Read only on a reply cell: a green thread's holds a stale word.
 export let GtOffReplyWitness = GtOffAwaiter + PointerFieldBytes
 
 export let GtOffRenounced = GtOffReplyWitness + PointerFieldBytes
@@ -249,7 +250,8 @@ export let GtOffArgBuf = GtOffWaiter + PointerFieldBytes  // a self-pointer to t
 // lpOverlapped by CONTAINING_RECORD (`gt = ovlPtr - GtOffOverlapped`), so no per-read allocation and no separate
 // waiter table is needed. EXPORTED because `NetpollRuntime`'s decode reads it to recover the thread and the read
 // builtin passes `gt + GtOffOverlapped` to ReadFile. It MUST be zero-inited before each ReadFile (a dirty
-// `hEvent` low bit suppresses the completion packet) — the read builtin zeroes it.
+// `hEvent` low bit suppresses the completion packet) — every transfer issued against it zeroes it
+// first (`emitGtZeroOverlapped`).
 export let GtOffOverlapped = GtOffArgBuf + PointerFieldBytes
 let GtOverlappedBytes = 32
 
@@ -384,8 +386,10 @@ export let GtOffThreadAllocBytes = GtOffThreadFrees + PointerFieldBytes
 // (`GtKeepsCpuClockLabel`) pays for the two reads. Written only by the thread itself.
 let GtOffCpuOffset = GtOffThreadAllocBytes + PointerFieldBytes
 
-// ⭐⭐ **1 FOR `main`'s THREAD, 0 FOR EVERY OTHER.** Stamped by `__gt_spawn_main`; read by `__gt_runner_done`,
-// because `main`'s completion is what ends the main machine's first loop (`SchedRuntime.SchedPhase`).
+// ⭐⭐ **1 FOR `main`'s THREAD, 0 FOR EVERY OTHER GREEN THREAD.** Stamped by `__gt_spawn_main`;
+// read by `__gt_runner_done`, because `main`'s completion is what ends the main machine's first
+// loop (`SchedRuntime.SchedPhase`). It reads it on a green thread only, so a coroutine's spawn
+// leaves the word.
 let GtOffIsMainThread = GtOffCpuOffset + PointerFieldBytes
 let GtMainThreadMark = 1
 
@@ -494,15 +498,14 @@ export enum GtLastErrorDirection
 end 'GtLastErrorDirection'
 
 // The thread's message staging buffer (`MailboxRuntime.MboxStagingName`), or 0 until its first
-// send. It is the last field, where the spawn's zeroing ends, so the zeroing leaves it: the buffer is
-// arena memory that is never freed, so a reused record keeps the one it has, and a zeroed word would
-// carve a second.
+// send. The spawn's zeroing leaves it: the buffer is arena memory that is never freed, so a reused
+// record keeps the one it has, and a zeroed word would carve a second.
 export let GtOffStaging = GtOffSendOutcome + PointerFieldBytes
 
 // The GT struct's size. Must be a multiple of 8.
 //
-// A new field goes before `GtOffStaging`, inside the spawn's zeroing, and into
-// `requireGtRecordLayout`'s roster, whose tiling check panics at install on a field it does not name.
+// A new field goes into `gtFieldRoster` with the rule that says who initialises it; the layout
+// check iterates that roster and panics at install on a field it does not name.
 // `SchedRuntime`'s M fields after the inline GT are each derived from the one before, so a growth
 // walks them all along correctly.
 //
@@ -512,9 +515,6 @@ export let GtStructSize = GtOffStaging + PointerFieldBytes
 // ⭐⭐ **THE PARK KINDS — what the strand runner dispatches on after the switch.** Each names the STORE
 // `__gt_register_park` puts the thread on; a yield and a preemption register nothing and are placed back on
 // the thread's strand (`__gt_run_strand`).
-//
-// ⚠ Zero is not a kind: it is the slab's, i.e. "this GT has never parked", which is why the numbering starts
-// at one.
 //
 // EXPORTED because `MailboxRuntime` and `NetpollRuntime` produce kinds whose arms are here — the
 // files must spell one number.
@@ -1795,8 +1795,8 @@ let GtRunQueueTailLabel = b"__gt_run_queue_tail"
 // is carved from the scheduler's record arena, `__gt_reclaim` hands it to `__gt_free_put` and
 // `__gt_spawn` takes one from `__gt_free_get` (`SchedRuntime.GtFreePutName` and `GtFreeGetName`
 // carry why), and a reply cell travels the same road through `__gt_cell_put` and `__gt_cell_get`; a
-// spawn zeroes the record from past the two stack words up to `GtOffStaging`, and a cell is zeroed
-// past its record lock.
+// spawn zeroes the fields `gtFieldRoster` marks for its kind, and a cell is zeroed past its record
+// lock.
 //
 // ⭐ **RECLAIM AT THE AWAITER, NOT AT COMPLETION.** A GT can complete long before anybody awaits it, and its
 // struct still holds its result for a live, un-awaited promise. Reclaiming at completion would put that struct
@@ -2466,77 +2466,129 @@ export function ioCompletionShape(target Target) returns IoCompletionShape
 	end 'os'
 end 'ioCompletionShape'
 
-function requireGtFieldAt(cursor FullRangeInt, name String, offset FullRangeInt, width FullRangeInt) returns FullRangeInt
-	if offset != cursor 'tiles'
-		panic("requireGtRecordLayout: {name} is at offset {offset} but the field before it ends at {cursor} — the record's fields must tile it with no gap and no overlap")
-	end 'tiles'
+// What gives each GT field its value in a new tenancy. A spawn zeroes a field only when a reader
+// can reach it before any writer of that tenancy; every other field holds the previous tenant's
+// word until written, so a rule naming the wrong writer is a stale read. `requireGtRecordLayout`
+// walks the roster, so a field left out of it panics at install.
+enum GtFieldRule
+	keptAcrossReuse
+	setByFreeGet
+	setBySpawn
+	setBySpawnOnX64
+	setBySpawnOfStrandOwners
+	setBeforeRead
+	zeroedBySpawn
+	zeroedBySpawnOfStrandOwners
+	zeroedBySpawnOfMain
+	zeroedByReclaim
+end 'GtFieldRule'
 
-	return cursor + width
-end 'requireGtFieldAt'
+type GtField
+	export let name as String
+	export let offset as ByteOffset
+	export let width as ByteOffset
+	export let rule as GtFieldRule
+
+	static function create(name String, offset ByteOffset, width ByteOffset, rule GtFieldRule) returns Self
+		return Self{name: name, offset: offset, width: width, rule: rule}
+	end 'create'
+end 'GtField'
+
+typealias GtFieldArray = Array with GtField
+
+function gtFieldRoster() returns GtFieldArray
+	var fields = GtFieldArray.create()
+
+	fields.push(GtField.create("GtOffRecordLock", offset: GtOffRecordLock, width: GtRecordLockBytes as ByteOffset, rule: GtFieldRule.keptAcrossReuse))
+	fields.push(GtField.create("GtOffStackBase", offset: GtOffStackBase, width: PointerFieldBytes, rule: GtFieldRule.setByFreeGet))
+	fields.push(GtField.create("GtOffStackSize", offset: GtOffStackSize, width: PointerFieldBytes, rule: GtFieldRule.setByFreeGet))
+	fields.push(GtField.create("GtOffStackGuard", offset: GtOffStackGuard, width: PointerFieldBytes, rule: GtFieldRule.setBySpawn))
+	fields.push(GtField.create("GtOffStatus", offset: GtOffStatus, width: PointerFieldBytes, rule: GtFieldRule.zeroedBySpawn))
+
+	// A dropped thread that never ran has its releaser read both
+	// (`AsyncReleaser.emitResultOrErrorRelease`), so a stale result would be freed.
+	fields.push(GtField.create("GtOffResult", offset: GtOffResult, width: PointerFieldBytes, rule: GtFieldRule.zeroedBySpawn))
+	fields.push(GtField.create("GtOffThrew", offset: GtOffThrew, width: PointerFieldBytes, rule: GtFieldRule.zeroedBySpawn))
+
+	fields.push(GtField.create("GtOffFuncPtr", offset: GtOffFuncPtr, width: PointerFieldBytes, rule: GtFieldRule.setBySpawn))
+	fields.push(GtField.create("GtOffNext", offset: GtOffNext, width: PointerFieldBytes, rule: GtFieldRule.setBeforeRead))
+	fields.push(GtField.create("GtOffReleaser", offset: GtOffReleaser, width: PointerFieldBytes, rule: GtFieldRule.zeroedByReclaim))
+	fields.push(GtField.create("GtOffTraceId", offset: GtOffTraceId, width: PointerFieldBytes, rule: GtFieldRule.zeroedBySpawnOfMain))
+	fields.push(GtField.create("GtOffTeardown", offset: GtOffTeardown, width: GtTeardownBytes, rule: GtFieldRule.zeroedBySpawn))
+	fields.push(GtField.create("GtOffOwner", offset: GtOffOwner, width: PointerFieldBytes, rule: GtFieldRule.setBySpawn))
+	fields.push(GtField.create("GtOffAwaiter", offset: GtOffAwaiter, width: PointerFieldBytes, rule: GtFieldRule.zeroedBySpawn))
+	fields.push(GtField.create("GtOffReplyWitness", offset: GtOffReplyWitness, width: PointerFieldBytes, rule: GtFieldRule.setBeforeRead))
+	fields.push(GtField.create("GtOffRenounced", offset: GtOffRenounced, width: PointerFieldBytes, rule: GtFieldRule.zeroedBySpawn))
+	fields.push(GtField.create("GtOffSp", offset: GtOffSp, width: PointerFieldBytes, rule: GtFieldRule.setBySpawn))
+	fields.push(GtField.create("GtOffFp", offset: GtOffFp, width: PointerFieldBytes, rule: GtFieldRule.zeroedBySpawn))
+	fields.push(GtField.create("GtOffWaiter", offset: GtOffWaiter, width: PointerFieldBytes, rule: GtFieldRule.zeroedBySpawn))
+	fields.push(GtField.create("GtOffArgBuf", offset: GtOffArgBuf, width: PointerFieldBytes, rule: GtFieldRule.setBySpawn))
+	fields.push(GtField.create("GtOffOverlapped", offset: GtOffOverlapped, width: GtOverlappedBytes, rule: GtFieldRule.setBeforeRead))
+	fields.push(GtField.create("GtOffIoStatus", offset: GtOffIoStatus, width: PointerFieldBytes, rule: GtFieldRule.setBeforeRead))
+	fields.push(GtField.create("GtOffIoResult", offset: GtOffIoResult, width: PointerFieldBytes, rule: GtFieldRule.setBeforeRead))
+	fields.push(GtField.create("GtOffTibStackBase", offset: GtOffTibStackBase, width: PointerFieldBytes, rule: GtFieldRule.setBySpawnOnX64))
+	fields.push(GtField.create("GtOffTibStackLimit", offset: GtOffTibStackLimit, width: PointerFieldBytes, rule: GtFieldRule.setBySpawnOnX64))
+	fields.push(GtField.create("GtOffIoSource", offset: GtOffIoSource, width: PointerFieldBytes, rule: GtFieldRule.zeroedBySpawn))
+	fields.push(GtField.create("GtOffIoHandle", offset: GtOffIoHandle, width: PointerFieldBytes, rule: GtFieldRule.setBeforeRead))
+	fields.push(GtField.create("GtOffIoMode", offset: GtOffIoMode, width: PointerFieldBytes, rule: GtFieldRule.setBeforeRead))
+	fields.push(GtField.create("GtOffTibDeallocation", offset: GtOffTibDeallocation, width: PointerFieldBytes, rule: GtFieldRule.setBySpawnOnX64))
+	fields.push(GtField.create("GtOffArgInline", offset: GtOffArgInline, width: ArgBufBytes, rule: GtFieldRule.setBeforeRead))
+	fields.push(GtField.create("GtOffCoroHead", offset: GtOffCoroHead, width: PointerFieldBytes, rule: GtFieldRule.zeroedBySpawnOfStrandOwners))
+	fields.push(GtField.create("GtOffCoroTail", offset: GtOffCoroTail, width: PointerFieldBytes, rule: GtFieldRule.zeroedBySpawnOfStrandOwners))
+	fields.push(GtField.create("GtOffParkKind", offset: GtOffParkKind, width: PointerFieldBytes, rule: GtFieldRule.setBeforeRead))
+	fields.push(GtField.create("GtOffParkArg", offset: GtOffParkArg, width: PointerFieldBytes, rule: GtFieldRule.setBeforeRead))
+	fields.push(GtField.create("GtOffParkGen", offset: GtOffParkGen, width: PointerFieldBytes, rule: GtFieldRule.setBeforeRead))
+	fields.push(GtField.create("GtOffThreadAllocs", offset: GtOffThreadAllocs, width: PointerFieldBytes, rule: GtFieldRule.zeroedBySpawn))
+	fields.push(GtField.create("GtOffThreadFrees", offset: GtOffThreadFrees, width: PointerFieldBytes, rule: GtFieldRule.zeroedBySpawn))
+	fields.push(GtField.create("GtOffThreadAllocBytes", offset: GtOffThreadAllocBytes, width: PointerFieldBytes, rule: GtFieldRule.zeroedBySpawn))
+	fields.push(GtField.create("GtOffCpuOffset", offset: GtOffCpuOffset, width: PointerFieldBytes, rule: GtFieldRule.zeroedBySpawn))
+	fields.push(GtField.create("GtOffIsMainThread", offset: GtOffIsMainThread, width: PointerFieldBytes, rule: GtFieldRule.zeroedBySpawnOfStrandOwners))
+	fields.push(GtField.create("GtOffStrandHolder", offset: GtOffStrandHolder, width: PointerFieldBytes, rule: GtFieldRule.zeroedBySpawnOfMain))
+	fields.push(GtField.create("GtOffStrandRefs", offset: GtOffStrandRefs, width: PointerFieldBytes, rule: GtFieldRule.setBySpawnOfStrandOwners))
+	fields.push(GtField.create("GtOffSelectDone", offset: GtOffSelectDone, width: PointerFieldBytes, rule: GtFieldRule.setBeforeRead))
+	fields.push(GtField.create("GtOffRunqNext", offset: GtOffRunqNext, width: PointerFieldBytes, rule: GtFieldRule.setBeforeRead))
+	fields.push(GtField.create("GtOffStackMarks", offset: GtOffStackMarks, width: PointerFieldBytes, rule: GtFieldRule.setBySpawn))
+	fields.push(GtField.create("GtOffStackResizedAt", offset: GtOffStackResizedAt, width: PointerFieldBytes, rule: GtFieldRule.setBeforeRead))
+	fields.push(GtField.create("GtOffStackHighWater", offset: GtOffStackHighWater, width: PointerFieldBytes, rule: GtFieldRule.zeroedBySpawn))
+	fields.push(GtField.create("GtOffStrandResume", offset: GtOffStrandResume, width: PointerFieldBytes, rule: GtFieldRule.setBeforeRead))
+	fields.push(GtField.create("GtOffHold", offset: GtOffHold, width: PointerFieldBytes, rule: GtFieldRule.zeroedBySpawn))
+	fields.push(GtField.create("GtOffPinnedM", offset: GtOffPinnedM, width: PointerFieldBytes, rule: GtFieldRule.zeroedBySpawn))
+	fields.push(GtField.create("GtOffPinDepth", offset: GtOffPinDepth, width: PointerFieldBytes, rule: GtFieldRule.zeroedBySpawn))
+	fields.push(GtField.create("GtOffLastError", offset: GtOffLastError, width: PointerFieldBytes, rule: GtFieldRule.zeroedBySpawn))
+	fields.push(GtField.create("GtOffSendNext", offset: GtOffSendNext, width: PointerFieldBytes, rule: GtFieldRule.setBeforeRead))
+	fields.push(GtField.create("GtOffSendPrev", offset: GtOffSendPrev, width: PointerFieldBytes, rule: GtFieldRule.setBeforeRead))
+	fields.push(GtField.create("GtOffSendDeadline", offset: GtOffSendDeadline, width: PointerFieldBytes, rule: GtFieldRule.setBeforeRead))
+	fields.push(GtField.create("GtOffSendOutcome", offset: GtOffSendOutcome, width: PointerFieldBytes, rule: GtFieldRule.setBeforeRead))
+	fields.push(GtField.create("GtOffStaging", offset: GtOffStaging, width: PointerFieldBytes, rule: GtFieldRule.keptAcrossReuse))
+
+	return fields
+end 'gtFieldRoster'
 
 function requireGtRecordLayout()
-	var cursor = requireGtFieldAt(0, name: "GtOffRecordLock", offset: GtOffRecordLock, width: GtRecordLockBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffStackBase", offset: GtOffStackBase, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffStackSize", offset: GtOffStackSize, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffStackGuard", offset: GtOffStackGuard, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffStatus", offset: GtOffStatus, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffResult", offset: GtOffResult, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffThrew", offset: GtOffThrew, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffFuncPtr", offset: GtOffFuncPtr, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffNext", offset: GtOffNext, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffReleaser", offset: GtOffReleaser, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffTraceId", offset: GtOffTraceId, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffTeardown", offset: GtOffTeardown, width: GtTeardownBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffOwner", offset: GtOffOwner, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffAwaiter", offset: GtOffAwaiter, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffReplyWitness", offset: GtOffReplyWitness, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffRenounced", offset: GtOffRenounced, width: PointerFieldBytes)
+	var cursor = 0 as ByteOffset
+	var cellEdgeSeen = false
 
-	if cursor != GtCellBytes 'cellPrefixEnds'
-		panic("requireGtRecordLayout: the fields a reply cell is read through end at offset {cursor} but GtCellBytes is {GtCellBytes} — a cell is carved exactly that long, so a field past it reads beyond the cell")
+	for field in gtFieldRoster() 'eachField'
+		if field.offset != cursor 'tiles'
+			panic("requireGtRecordLayout: {field.name} is at offset {field.offset} but the field before it ends at {cursor} — the record's fields must tile it with no gap and no overlap")
+		end 'tiles'
+
+		for kind in GtSpawnKind.allCases 'eachKind'
+			if gtFieldIsZeroedBySpawn(field.rule, kind: kind) and field.width mod PointerFieldBytes != 0 'wholeWords'
+				panic("requireGtRecordLayout: {field.name} is zeroed a word at a time but is {field.width} bytes wide, which is not a multiple of {PointerFieldBytes} — the last {field.width mod PointerFieldBytes} bytes would keep the previous owner's contents")
+			end 'wholeWords'
+		end 'eachKind'
+
+		if cursor == GtCellBytes 'cellEdge'
+			cellEdgeSeen = true
+		end 'cellEdge'
+
+		cursor = cursor + field.width
+	end 'eachField'
+
+	if not cellEdgeSeen 'cellPrefixEnds'
+		panic("requireGtRecordLayout: no field starts at GtCellBytes ({GtCellBytes}) — a cell is carved exactly that long, so a field straddling it reads beyond the cell")
 	end 'cellPrefixEnds'
-
-	cursor = requireGtFieldAt(cursor, name: "GtOffSp", offset: GtOffSp, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffFp", offset: GtOffFp, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffWaiter", offset: GtOffWaiter, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffArgBuf", offset: GtOffArgBuf, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffOverlapped", offset: GtOffOverlapped, width: GtOverlappedBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffIoStatus", offset: GtOffIoStatus, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffIoResult", offset: GtOffIoResult, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffTibStackBase", offset: GtOffTibStackBase, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffTibStackLimit", offset: GtOffTibStackLimit, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffIoSource", offset: GtOffIoSource, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffIoHandle", offset: GtOffIoHandle, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffIoMode", offset: GtOffIoMode, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffTibDeallocation", offset: GtOffTibDeallocation, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffArgInline", offset: GtOffArgInline, width: ArgBufBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffCoroHead", offset: GtOffCoroHead, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffCoroTail", offset: GtOffCoroTail, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffParkKind", offset: GtOffParkKind, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffParkArg", offset: GtOffParkArg, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffParkGen", offset: GtOffParkGen, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffThreadAllocs", offset: GtOffThreadAllocs, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffThreadFrees", offset: GtOffThreadFrees, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffThreadAllocBytes", offset: GtOffThreadAllocBytes, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffCpuOffset", offset: GtOffCpuOffset, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffIsMainThread", offset: GtOffIsMainThread, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffStrandHolder", offset: GtOffStrandHolder, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffStrandRefs", offset: GtOffStrandRefs, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffSelectDone", offset: GtOffSelectDone, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffRunqNext", offset: GtOffRunqNext, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffStackMarks", offset: GtOffStackMarks, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffStackResizedAt", offset: GtOffStackResizedAt, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffStackHighWater", offset: GtOffStackHighWater, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffStrandResume", offset: GtOffStrandResume, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffHold", offset: GtOffHold, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffPinnedM", offset: GtOffPinnedM, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffPinDepth", offset: GtOffPinDepth, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffLastError", offset: GtOffLastError, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffSendNext", offset: GtOffSendNext, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffSendPrev", offset: GtOffSendPrev, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffSendDeadline", offset: GtOffSendDeadline, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffSendOutcome", offset: GtOffSendOutcome, width: PointerFieldBytes)
-	cursor = requireGtFieldAt(cursor, name: "GtOffStaging", offset: GtOffStaging, width: PointerFieldBytes)
 
 	if cursor != GtStructSize 'structEnds'
 		panic("requireGtRecordLayout: the fields end at offset {cursor} but GtStructSize is {GtStructSize}")
@@ -2550,6 +2602,43 @@ function requireGtRecordLayout()
 		panic("requireGtRecordLayout: the stack guard word is at offset {GtOffStackGuard}, which has no scaled imm12 form for the arm64 prologue guard's ldr")
 	end 'guardReachesArm64Imm12'
 end 'requireGtRecordLayout'
+
+function gtFieldIsZeroedBySpawn(rule GtFieldRule, kind GtSpawnKind) returns bool
+	return match rule 'rule'
+		zeroedBySpawn gives true
+		zeroedBySpawnOfStrandOwners gives kind != GtSpawnKind.coroutine
+		zeroedBySpawnOfMain gives kind == GtSpawnKind.mainThread
+		keptAcrossReuse or
+		setByFreeGet or
+		setBySpawn or
+		setBySpawnOnX64 or
+		setBySpawnOfStrandOwners or
+		setBeforeRead or
+		zeroedByReclaim gives false
+	end 'rule'
+end 'gtFieldIsZeroedBySpawn'
+
+function emitGtSpawnZeroing(module StdModule, block IrBlock, gt ValueId, kind GtSpawnKind, ids ValueMinter)
+	let zero = emitConst(module, block: block, value: 0, ids: ids)
+
+	for field in gtFieldRoster() 'eachField'
+		if not gtFieldIsZeroedBySpawn(field.rule, kind: kind) 'keptAsItIs'
+			continue
+		end 'keptAsItIs'
+
+		for word in 0 upto field.width / PointerFieldBytes 'eachWord'
+			emitStoreField(module, block: block, record: gt, offset: field.offset + word * PointerFieldBytes, value: zero)
+		end 'eachWord'
+	end 'eachField'
+end 'emitGtSpawnZeroing'
+
+export function emitGtZeroOverlapped(module StdModule, block IrBlock, overlapped ValueId, ids ValueMinter)
+	let zero = emitConst(module, block: block, value: 0, ids: ids)
+
+	for word in 0 upto GtOverlappedBytes / PointerFieldBytes 'eachWord'
+		emitStoreField(module, block: block, record: overlapped, offset: word * PointerFieldBytes, value: zero)
+	end 'eachWord'
+end 'emitGtZeroOverlapped'
 
 export function installGtRuntime(module StdModule, globalData GlobalDataTable, asyncTrace bool, target Target, streamState EnumLayout, releasesRegistry bool, releasesGlobals bool, requestStagingBytes ByteOffset)
 	requireGtRecordLayout()
@@ -2752,10 +2841,6 @@ end 'gtSpawnNameOf'
 // the initial context-switch frame — is identical for the three, so building them from three bodies would be
 // one algorithm written three times with nothing making the copies agree.
 function buildGtSpawn(module StdModule, kind GtSpawnKind, tracing GtTracing, target Target)
-	if GtOffStackSize != GtOffStackBase + PointerFieldBytes 'stackWordsApart'
-		panic("buildGtSpawn: the stack base is at offset {GtOffStackBase} and the stack size at {GtOffStackSize} — the spawn's two fills leave one {2 * PointerFieldBytes}-byte gap for the pair `__gt_free_get` writes")
-	end 'stackWordsApart'
-
 	var func = IrFunction.createFromStd(gtSpawnNameOf(kind), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
@@ -2768,8 +2853,7 @@ function buildGtSpawn(module StdModule, kind GtSpawnKind, tracing GtTracing, tar
 	let gt = ids.mint()
 	module.appendOp(initBlock, op: StdOp.call(gt, callee: GtFreeGetName, args: argsOf(stackSizeVal)))
 
-	let afterStack = emitFieldAddr(module, block: initBlock, record: gt, offset: GtStackWordsEnd, ids: ids)
-	module.appendOp(initBlock, op: StdOp.memFill(afterStack, byteCountId: emitConst(module, block: initBlock, value: GtOffStaging - GtStackWordsEnd, ids: ids), value: 0))
+	emitGtSpawnZeroing(module, block: initBlock, gt: gt, kind: kind, ids: ids)
 
 	// gt.argBuf = gt + GtOffArgInline — a SELF-POINTER into this struct's own inline arg region.
 	// The trampoline reads `gt.argBuf` as a pointer and loads the slots from there, so pointing it at the inline
@@ -2780,10 +2864,11 @@ function buildGtSpawn(module StdModule, kind GtSpawnKind, tracing GtTracing, tar
 	module.appendOp(initBlock, op: StdOp.binOp(argInlinePtr, lhs: gt, rhs: argInlineOffConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
 	module.appendOp(initBlock, op: StdOp.storeIndirect(gt, offset: GtOffArgBuf, valueId: argInlinePtr, valueType: StdType.i64))
 
-	// ⭐⭐⭐ **gt.owner = currentGt.owner, AND A ZERO HERE IS NOT A BENIGN DEFAULT.** The struct arrives ZEROED
-	// and every other zero in it is the correct initial state (`GtOffStatus` is `ready`, `GtOffWaiter` is *"never
-	// ran"*, the strand queue is *"empty"*) — this one is not. An owner of 0 is a coroutine owned by NOBODY, and
-	// the first ready of it would write a strand queue through a null pointer.
+	// ⭐⭐⭐ **gt.owner = currentGt.owner, AND A ZERO HERE IS NOT A BENIGN DEFAULT.** Every zero the
+	// spawn's zeroing stores is the correct initial state (`GtOffStatus` is `ready`, `GtOffWaiter` is
+	// *"never ran"*, the strand queue is *"empty"*); this word is outside it, so a freshly carved
+	// record's owner is 0 and a recycled one's is its previous tenant's. An owner of 0 is a coroutine
+	// owned by NOBODY, and the first ready of it would write a strand queue through a null pointer.
 	//
 	// ⭐ **A COROUTINE TAKES THE SPAWNER's OWNER, NOT THE SPAWNER**, so a coroutine spawned by a coroutine joins
 	// the same strand; a green thread takes itself and heads a strand of its own.
@@ -5118,10 +5203,10 @@ end 'awaitExitTerminator'
 // both release sites (`__gt_await`/`__gt_try_await` and `__gt_promise_drop`), so the null guard, the
 // argument order and the clear are stated once. Returns the block execution continues in.
 //
-// **A NULL RELEASER IS THE COMMON CASE AND MUST BE FREE.** A spawn of a callee with no managed argument,
-// result or error writes 0 (`LowerMaxonToStd.emitAsyncSpawn`), and this SKIPS rather than indirect-calling
-// through it — so a scalar-only async program pays one load, one compare and one branch, and emits nothing
-// else.
+// **A NULL RELEASER IS THE COMMON CASE AND MUST BE FREE.** A spawn of a callee with no managed
+// argument, result or error leaves it 0 (`LowerMaxonToStd.emitAsyncSpawn`), and this SKIPS rather
+// than indirect-calling through it — so a scalar-only async program pays one load, one compare and
+// one branch, and emits nothing else.
 //
 // ⚠ **THE CLEAR IS A BACKSTOP AND NOT THE MECHANISM, AND THE ORDER OF THOSE TWO WORDS MATTERS.** What
 // actually stops a GT being released twice is a COMPILE-TIME fact: `Parser.emitAwaitOp` consumes the
@@ -5130,6 +5215,7 @@ end 'awaitExitTerminator'
 // second in line: it makes "this GT no longer owes a release" a state the STRUCT carries, which is what
 // composes with cancel — cancel reaches `__gt_promise_drop` by a road the parser's move analysis does not
 // walk. Both sites clear it, because the invariant is about the GT and not about which door released it.
+// The clear is also what leaves a recycled record's word 0 for its next tenant (`GtOffReleaser`).
 //
 // ⛔⛔ **THE CLAIM IS A CAS, AND IT IS THE ONE ITEM ON THE MULTI-M AUDIT WHOSE FAILURE IS A DOUBLE FREE
 // RATHER THAN A LOST COUNT.** A load / call / clear is a read-modify-write with the entire release sitting
@@ -5151,8 +5237,9 @@ function emitGtReleaserCall(module StdModule, func IrFunction, ids ValueMinter, 
 	var release = module.addBlock(func, label: b"release", heat: BlockHeat.normal)
 	var cont = module.addBlock(func, label: b"releasedone", heat: BlockHeat.normal)
 
-	// The cheap test first: a spawn whose callee owns nothing writes 0 and MUST pay nothing, which is most
-	// async programs (see this function's header). Only a GT that really owes a release reaches the CAS.
+	// The cheap test first: a spawn whose callee owns nothing leaves 0 and MUST pay nothing, which is
+	// most async programs (see this function's header). Only a GT that really owes a release reaches
+	// the CAS.
 	let releaser = ids.mint()
 	module.appendOp(startBlock, op: StdOp.loadIndirect(releaser, addrId: gt, offset: GtOffReleaser, valueType: StdType.i64))
 	emitBranchOnCompare(module, block: startBlock, value: releaser, pred: StdCmpPred.ne, against: 0, whenTrue: claim, whenFalse: cont, ids: ids)
@@ -8968,10 +9055,7 @@ function buildSubpYieldRead(module StdModule, target Target)
 	let selfGt = emitLoadCurrentGt(module, block: entry, ids: ids)
 	let ovlOffConst = emitConst(module, block: entry, value: GtOffOverlapped as FullRangeInt, ids: ids)
 	let ovlPtr = emitBin(module, block: entry, a: selfGt, b: ovlOffConst, opcode: StdBinOpcode.add, ids: ids)
-	module.appendOp(entry, op: StdOp.storeIndirect(ovlPtr, offset: 0, valueId: zeroConst, valueType: StdType.i64))
-	module.appendOp(entry, op: StdOp.storeIndirect(ovlPtr, offset: 8, valueId: zeroConst, valueType: StdType.i64))
-	module.appendOp(entry, op: StdOp.storeIndirect(ovlPtr, offset: 16, valueId: zeroConst, valueType: StdType.i64))
-	module.appendOp(entry, op: StdOp.storeIndirect(ovlPtr, offset: 24, valueId: zeroConst, valueType: StdType.i64))
+	emitGtZeroOverlapped(module, block: entry, overlapped: ovlPtr, ids: ids)
 
 	// ⛔ **THE SOURCE IS OPENED BEFORE THE READ IS ISSUED**, because a packet can be delivered the instant it is
 	// — see `NetpollRuntime.NetpollOpOpenName`. The handle goes on the thread FIRST, because the open is what

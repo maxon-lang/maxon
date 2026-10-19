@@ -931,14 +931,13 @@ let POffRetakeCount = POffStealCount + PointerSlotBytes
 // through a sentinel, so `emitSlabRemotePush` branches past the step instead. A reading of 0 does
 // not prove the road was never taken.
 //
-// ⚠⚠ **IT IS THE ONE PER-P COUNTER STEPPED WITH AN `atomicRmw` RATHER THAN A PLAIN LOAD/ADD/STORE.** Its
-// two neighbours are written by a party that cannot be two — a P counts its OWN steals, and sysmon is the
-// only one that retakes. This word is written by whichever machine currently holds the P, which is one
-// machine at a time and not one machine, so a plain step is not the same argument. It is one `lock xadd` on
-// a path that already executes a CAS loop, against a wrong answer that is merely TOO SMALL — which no
-// suite, no leak gate and no fixpoint can see. All three step through `MmRuntime.emitFieldAccumulate`,
-// whose `multiM` argument HAS NO DEFAULT for `emitGlobalAccumulate`'s stated reason: the sequence is shared
-// and the decision is not.
+// ⚠⚠ **IT IS A PLAIN LOAD/ADD/STORE, ON `POffFreeListHead`'s ARGUMENT.** Only the machine holding
+// the P writes it, and the free road from `SlabRuntime.emitSlabResolveShard` to the credit brackets
+// no kernel call, so a retake cannot move the P between the load and the store. A second writer
+// would lose counts, a wrong answer that is merely TOO SMALL — which no suite, no leak gate and no
+// fixpoint can see. All three step through `MmRuntime.emitFieldAccumulate`, whose `multiM` argument
+// HAS NO DEFAULT for `emitGlobalAccumulate`'s stated reason: the sequence is shared and the
+// decision is not.
 // EXPORTED, unlike its two neighbours, because its one WRITER is in another file: the credit happens at
 // `SlabRuntime.emitSlabRemotePush`, where the slot is queued. The sum stays here with the walk.
 export let POffRemoteFreeCount = POffRetakeCount + PointerSlotBytes
@@ -1964,9 +1963,9 @@ export let GtCellGetName = b"__gt_cell_get"
 // this hold.
 //
 // ⚠ A recycled record is handed out holding its previous tenant's words, so each taker initialises
-// what it reads: `__gt_spawn` zeroes every field from past the two stack words this function writes
-// up to `GtRuntime.GtOffStaging`, and `__gt_cell_alloc` every word of a cell past its record lock. A
-// taker that skipped this would release the previous tenant's arguments.
+// what it reads: `__gt_spawn` by `GtRuntime.gtFieldRoster`'s rules, and `__gt_cell_alloc` by
+// zeroing every word of a cell past its record lock. A taker that skipped this would release the
+// previous tenant's arguments.
 export let GtFreeGetName = b"__gt_free_get"
 
 // ⭐⭐ `__sched_arena_carve(bytes) -> address` — the scheduler's uncounted arena, which GT records and machines are
@@ -5751,10 +5750,9 @@ end 'buildSchedArenaCarve'
 // GREEN-THREAD PROGRAM's RENDERED TARGET IR.** Counting is per-P and the summing happens here, in a
 // function no program that does not ask for it carries (`DeadFunctionElimination`).
 //
-// ⚠ **THE READ IS NOT ATOMIC AND DOES NOT NEED TO BE**, even for `POffRemoteFreeCount`, whose WRITE is atomic
-// to serialise its many producers against each other. Each counter is one aligned word, so every value the
-// walk reads is one some writer really stored; a concurrent step costs FRESHNESS, not a torn number, and a
-// harness reads it after its work has finished, which is when it is exact.
+// ⚠ **THE READ IS NOT ATOMIC AND DOES NOT NEED TO BE.** Each counter is one aligned word, so every
+// value the walk reads is one some writer really stored; a concurrent step costs FRESHNESS, not a
+// torn number, and a harness reads it after its work has finished, which is when it is exact.
 //
 // ⛔⛔ **THE ROSTER DRIFT GUARD.** Every name is written down twice — once as a call site in
 // `installSchedRuntime`, once as an arm of `isSchedPerProcSumCallee` — and a sum built here and left off that

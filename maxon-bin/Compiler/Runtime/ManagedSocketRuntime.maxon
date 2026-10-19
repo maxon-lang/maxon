@@ -1265,7 +1265,7 @@ function emitSocketOverlappedTransfer(module StdModule, func IrFunction, ids Val
 
 	let gt = emitLoadCurrentGt(module, block: attempt, ids: ids)
 	let overlapped = emitBin(module, block: attempt, a: gt, b: emitConst(module, block: attempt, value: GtOffOverlapped as FullRangeInt, ids: ids), opcode: StdBinOpcode.add, ids: ids)
-	emitSocketZeroOverlapped(module, block: attempt, overlapped: overlapped, ids: ids)
+	emitGtZeroOverlapped(module, block: attempt, overlapped: overlapped, ids: ids)
 
 	let buffers = emitRawAlloc(module, block: attempt, byteCount: emitConst(module, block: attempt, value: WsaTransferScratchBytes, ids: ids), ids: ids)
 	emitStoreField(module, block: attempt, record: buffers, offset: WsaBufLengthOffset, value: emitSocketWsaLength(module, block: attempt, length: length, ids: ids))
@@ -1383,16 +1383,6 @@ function emitSocketCollectOutstanding(module StdModule, func IrFunction, ids Val
 	module.setTerminator(collected, op: StdOp.branch(cont.id))
 end 'emitSocketCollectOutstanding'
 
-// The four words of the `OVERLAPPED` the transfer is issued against. It MUST be zero before each one: a dirty
-// `hEvent` low bit suppresses the completion packet, which is the one thing this wait has.
-function emitSocketZeroOverlapped(module StdModule, block IrBlock, overlapped ValueId, ids ValueMinter)
-	let zero = emitConst(module, block: block, value: 0, ids: ids)
-
-	for word in 0 upto OverlappedWords 'eachWord'
-		emitStoreField(module, block: block, record: overlapped, offset: (word * PointerFieldBytes) as ByteOffset, value: zero)
-	end 'eachWord'
-end 'emitSocketZeroOverlapped'
-
 // ⚠ **ONE `WSABUF` CARRIES A 32-BIT LENGTH, SO A LONGER BUFFER IS OFFERED IN PART** — which is an answer both
 // surfaces already handle, `send` looping over a partial write and `recv` filling what it is given. The clamp
 // is branchless because the comparison is already a 0/1: over the ceiling it subtracts exactly the excess, and
@@ -1414,9 +1404,6 @@ let WsaTransferScratchBytes = 24
 
 // `WSABUF.len` is a `ULONG`.
 let WsaBufMaxBytes = 4294967295
-
-// `OVERLAPPED` is four words: Internal, InternalHigh, Offset/Pointer, hEvent.
-let OverlappedWords = 4
 
 // `__ms_close(box)` — close the socket, idempotently. Returns nothing and throws nothing, per the spec's
 // *"Idempotent. Also called automatically via destructor. Does not throw."*

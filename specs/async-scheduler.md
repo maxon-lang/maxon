@@ -388,11 +388,11 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: async-scheduler.struct-reuse -->
-The GT-struct free-list is exercised AND its whole-struct memzero-on-recycle is correct: five spawn/awaits run
+The GT-struct free-list is exercised AND a recycled struct is reset where it must be: five spawn/awaits run
 in sequence, each reusing the struct the previous completed thread pushed onto the free-list.
 Each thread computes `2 * i` from its argument, so `2+4+6+8+10 = 30` proves every recycled struct actually RAN
 its function. A recycled struct carries its previous tenant's fields (it lives outside the always-zeroing slab),
-so without the whole-struct memzero the second spawn would inherit `status == completed` and its `await` would
+so a spawn that did not zero its status would inherit `status == completed` and its `await` would
 short-circuit to the PRIOR result without ever running the new thread — a wrong sum, not 30.
 ```maxon
 

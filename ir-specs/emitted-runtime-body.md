@@ -1916,9 +1916,7 @@ func @__slab_free {
     x64.cmpRegImm32 rax, 0
     x64.jcc less, rpush
   rcredit:
-    x64.movRegImm32 rax, 1
-    x64.leaRegRegImm32 rsi, rdi, 152
-    x64.lock add [rsi], rax
+    x64.aluBaseDispImm32.add [rdi + 152], 1
   rpush:
     x64.loadRegBaseDisp.word64 rax, [rdx + 0]
     x64.storeBaseDispReg.word64 [rcx + 0], rax
@@ -2687,9 +2685,7 @@ func @__slab_free {
     x64.cmpRegImm32 rax, 0
     x64.jcc less, rpush
   rcredit:
-    x64.movRegImm32 rax, 1
-    x64.leaRegRegImm32 rsi, rdi, 152
-    x64.lock add [rsi], rax
+    x64.aluBaseDispImm32.add [rdi + 152], 1
   rpush:
     x64.loadRegBaseDisp.word64 rax, [rdx + 0]
     x64.storeBaseDispReg.word64 [rcx + 0], rax
@@ -3480,9 +3476,9 @@ func @__slab_free {
     arm64.cmp x2, 0
     arm64.b.lt rpush
   rcredit:
-    arm64.movImm x2, 1
-    arm64.add x3, x4, 152
-    arm64.arm64AtomicRmw.add x2, [x3], x2
+    arm64.loadRegBaseDisp.word64 x2, [x4 + 152]
+    arm64.add x2, x2, 1
+    arm64.storeBaseDispReg.word64 [x4 + 152], x2
   rpush:
     arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
     arm64.storeBaseDispReg.word64 [x0 + 0], x2
@@ -4287,9 +4283,9 @@ func @__slab_free {
     arm64.cmp x2, 0
     arm64.b.lt rpush
   rcredit:
-    arm64.movImm x2, 1
-    arm64.add x3, x4, 152
-    arm64.arm64AtomicRmw.add x2, [x3], x2
+    arm64.loadRegBaseDisp.word64 x2, [x4 + 152]
+    arm64.add x2, x2, 1
+    arm64.storeBaseDispReg.word64 [x4 + 152], x2
   rpush:
     arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
     arm64.storeBaseDispReg.word64 [x0 + 0], x2
@@ -28314,7 +28310,7 @@ service message mints a reply cell, a record that never runs: no stack, no entry
 read and written only through the first `GtCellBytes` of the green-thread record, so it is carved that long
 and comes from a pool of its own (`__gt_cell_get`, `__gt_cell_put`), and `__gt_cell_alloc` zeroes those
 words past the record lock. `__gt_free_get` hands its taker the record as the free list held it, and a
-green-thread or `async` spawn clears the record itself.
+green-thread or `async` spawn zeroes the words its own readers reach first.
 
 The cell pool is type-stable, as the record pool is: a stale `awaitAny` or `isComplete` read of a recycled
 cell lands in a cell of the same shape.
@@ -41098,8 +41094,8 @@ func @__gt_register_park {
 goroutine with a `casgstatus` and a put on its own processor's run queue, and takes `sched.lock` for neither.
 A newly spawned green thread heads a strand of its own that no machine holds and that has no coroutines, so
 its ready needs no lock either. Nor does it need an atomic: no other machine can reach the record until its
-token is published, so nothing can race a write to it. Its status is already `ready`, the zero the spawn's
-fill leaves. Its strand's holder word is stored held and its strand references stored two (the owner's own
+token is published, so nothing can race a write to it. Its status is already `ready`, the zero the spawn
+stores. Its strand's holder word is stored held and its strand references stored two (the owner's own
 execution and the strand hold), with plain stores. It goes into the strand's resume slot rather than onto a
 strand queue, and its token goes to this processor's ring, whose publish is the release that makes those
 stores visible to the machine that pops it. A send to a parked service whose strand is free takes the same
@@ -55983,11 +55979,11 @@ freshly carved record, are given a stack by `__gt_free_get` itself, as `gfget` a
 read of its fresh arena page that the write then faults a second time.
 
 What this pin shows is `__gt_spawn`. The seed word is loaded once, before the record is taken, and is passed
-to `__gt_free_get`. The record's two stack words are not zeroed: the record's one `memFill` starts after
-the stack size and ends at the staging word, and the stack base is loaded only after it, to lay the first
-frame. `__gt_spawn` calls no `__gt_stack_alloc` and has no refused-seed abort; both are
-`__gt_free_get`'s (`gfgneedstack`). A fill over the two words would zero the stack `__gt_free_get` attached,
-and the first frame would be laid one seed size above address 0.
+to `__gt_free_get`. The record's two stack words are not zeroed: the spawn's zero stores name only words
+past the stack size that a reader can reach before the new thread writes them, and the stack base is loaded
+only after them, to lay the first frame. `__gt_spawn` calls no `__gt_stack_alloc` and has no refused-seed
+abort; both are `__gt_free_get`'s (`gfgneedstack`). A zero store to either of the two words would zero the
+stack `__gt_free_get` attached, and the first frame would be laid one seed size above address 0.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -56621,9 +56617,25 @@ func @__gt_spawn {
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.movRegReg rcx, r12
     x64.callDirect __gt_free_get
-    x64.leaRegRegImm32 rdi, r8, 40
-    x64.movRegImm32 rcx, 488
-    x64.x64MemFill 0x00
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r8 + 48], rax
+    x64.storeBaseDispReg.word64 [r8 + 56], rax
+    x64.storeBaseDispReg.word64 [r8 + 64], rax
+    x64.storeBaseDispReg.word64 [r8 + 104], rax
+    x64.storeBaseDispReg.word64 [r8 + 120], rax
+    x64.storeBaseDispReg.word64 [r8 + 136], rax
+    x64.storeBaseDispReg.word64 [r8 + 152], rax
+    x64.storeBaseDispReg.word64 [r8 + 160], rax
+    x64.storeBaseDispReg.word64 [r8 + 240], rax
+    x64.storeBaseDispReg.word64 [r8 + 360], rax
+    x64.storeBaseDispReg.word64 [r8 + 368], rax
+    x64.storeBaseDispReg.word64 [r8 + 376], rax
+    x64.storeBaseDispReg.word64 [r8 + 384], rax
+    x64.storeBaseDispReg.word64 [r8 + 448], rax
+    x64.storeBaseDispReg.word64 [r8 + 464], rax
+    x64.storeBaseDispReg.word64 [r8 + 472], rax
+    x64.storeBaseDispReg.word64 [r8 + 480], rax
+    x64.storeBaseDispReg.word64 [r8 + 488], rax
     x64.leaRegRegImm32 rax, r8, 272
     x64.storeBaseDispReg.word64 [r8 + 168], rax
     x64.leaRegGlobal rax, __sched_tls_teb_offset
@@ -57286,9 +57298,25 @@ func @__gt_spawn {
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.movRegReg rcx, r12
     x64.callDirect __gt_free_get
-    x64.leaRegRegImm32 rdi, r8, 40
-    x64.movRegImm32 rcx, 488
-    x64.x64MemFill 0x00
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r8 + 48], rax
+    x64.storeBaseDispReg.word64 [r8 + 56], rax
+    x64.storeBaseDispReg.word64 [r8 + 64], rax
+    x64.storeBaseDispReg.word64 [r8 + 104], rax
+    x64.storeBaseDispReg.word64 [r8 + 120], rax
+    x64.storeBaseDispReg.word64 [r8 + 136], rax
+    x64.storeBaseDispReg.word64 [r8 + 152], rax
+    x64.storeBaseDispReg.word64 [r8 + 160], rax
+    x64.storeBaseDispReg.word64 [r8 + 240], rax
+    x64.storeBaseDispReg.word64 [r8 + 360], rax
+    x64.storeBaseDispReg.word64 [r8 + 368], rax
+    x64.storeBaseDispReg.word64 [r8 + 376], rax
+    x64.storeBaseDispReg.word64 [r8 + 384], rax
+    x64.storeBaseDispReg.word64 [r8 + 448], rax
+    x64.storeBaseDispReg.word64 [r8 + 464], rax
+    x64.storeBaseDispReg.word64 [r8 + 472], rax
+    x64.storeBaseDispReg.word64 [r8 + 480], rax
+    x64.storeBaseDispReg.word64 [r8 + 488], rax
     x64.leaRegRegImm32 rax, r8, 272
     x64.storeBaseDispReg.word64 [r8 + 168], rax
     x64.leaRegGlobal rax, __sched_tls_teb_offset
@@ -58011,9 +58039,25 @@ func @__gt_spawn {
     arm64.movRegReg x0, x20
     arm64.bl __gt_free_get
     arm64.movRegReg x4, x0
-    arm64.add x0, x4, 40
-    arm64.movImm x1, 488
-    arm64.arm64MemFill 0x00
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x4 + 48], x0
+    arm64.storeBaseDispReg.word64 [x4 + 56], x0
+    arm64.storeBaseDispReg.word64 [x4 + 64], x0
+    arm64.storeBaseDispReg.word64 [x4 + 104], x0
+    arm64.storeBaseDispReg.word64 [x4 + 120], x0
+    arm64.storeBaseDispReg.word64 [x4 + 136], x0
+    arm64.storeBaseDispReg.word64 [x4 + 152], x0
+    arm64.storeBaseDispReg.word64 [x4 + 160], x0
+    arm64.storeBaseDispReg.word64 [x4 + 240], x0
+    arm64.storeBaseDispReg.word64 [x4 + 360], x0
+    arm64.storeBaseDispReg.word64 [x4 + 368], x0
+    arm64.storeBaseDispReg.word64 [x4 + 376], x0
+    arm64.storeBaseDispReg.word64 [x4 + 384], x0
+    arm64.storeBaseDispReg.word64 [x4 + 448], x0
+    arm64.storeBaseDispReg.word64 [x4 + 464], x0
+    arm64.storeBaseDispReg.word64 [x4 + 472], x0
+    arm64.storeBaseDispReg.word64 [x4 + 480], x0
+    arm64.storeBaseDispReg.word64 [x4 + 488], x0
     arm64.add x0, x4, 272
     arm64.storeBaseDispReg.word64 [x4 + 168], x0
     arm64.leaGlobal x0, __sched_tls_teb_offset
@@ -58745,9 +58789,25 @@ func @__gt_spawn {
     arm64.movRegReg x0, x20
     arm64.bl __gt_free_get
     arm64.movRegReg x4, x0
-    arm64.add x0, x4, 40
-    arm64.movImm x1, 488
-    arm64.arm64MemFill 0x00
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x4 + 48], x0
+    arm64.storeBaseDispReg.word64 [x4 + 56], x0
+    arm64.storeBaseDispReg.word64 [x4 + 64], x0
+    arm64.storeBaseDispReg.word64 [x4 + 104], x0
+    arm64.storeBaseDispReg.word64 [x4 + 120], x0
+    arm64.storeBaseDispReg.word64 [x4 + 136], x0
+    arm64.storeBaseDispReg.word64 [x4 + 152], x0
+    arm64.storeBaseDispReg.word64 [x4 + 160], x0
+    arm64.storeBaseDispReg.word64 [x4 + 240], x0
+    arm64.storeBaseDispReg.word64 [x4 + 360], x0
+    arm64.storeBaseDispReg.word64 [x4 + 368], x0
+    arm64.storeBaseDispReg.word64 [x4 + 376], x0
+    arm64.storeBaseDispReg.word64 [x4 + 384], x0
+    arm64.storeBaseDispReg.word64 [x4 + 448], x0
+    arm64.storeBaseDispReg.word64 [x4 + 464], x0
+    arm64.storeBaseDispReg.word64 [x4 + 472], x0
+    arm64.storeBaseDispReg.word64 [x4 + 480], x0
+    arm64.storeBaseDispReg.word64 [x4 + 488], x0
     arm64.add x0, x4, 272
     arm64.storeBaseDispReg.word64 [x4 + 168], x0
     arm64.leaGlobal x0, __sched_tls_teb_offset
@@ -62553,9 +62613,25 @@ func @__gt_spawn {
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.movRegReg rcx, r12
     x64.callDirect __gt_free_get
-    x64.leaRegRegImm32 rdi, r8, 40
-    x64.movRegImm32 rcx, 488
-    x64.x64MemFill 0x00
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r8 + 48], rax
+    x64.storeBaseDispReg.word64 [r8 + 56], rax
+    x64.storeBaseDispReg.word64 [r8 + 64], rax
+    x64.storeBaseDispReg.word64 [r8 + 104], rax
+    x64.storeBaseDispReg.word64 [r8 + 120], rax
+    x64.storeBaseDispReg.word64 [r8 + 136], rax
+    x64.storeBaseDispReg.word64 [r8 + 152], rax
+    x64.storeBaseDispReg.word64 [r8 + 160], rax
+    x64.storeBaseDispReg.word64 [r8 + 240], rax
+    x64.storeBaseDispReg.word64 [r8 + 360], rax
+    x64.storeBaseDispReg.word64 [r8 + 368], rax
+    x64.storeBaseDispReg.word64 [r8 + 376], rax
+    x64.storeBaseDispReg.word64 [r8 + 384], rax
+    x64.storeBaseDispReg.word64 [r8 + 448], rax
+    x64.storeBaseDispReg.word64 [r8 + 464], rax
+    x64.storeBaseDispReg.word64 [r8 + 472], rax
+    x64.storeBaseDispReg.word64 [r8 + 480], rax
+    x64.storeBaseDispReg.word64 [r8 + 488], rax
     x64.leaRegRegImm32 rax, r8, 272
     x64.storeBaseDispReg.word64 [r8 + 168], rax
     x64.leaRegGlobal rax, __sched_tls_teb_offset
@@ -63467,9 +63543,25 @@ func @__gt_spawn {
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.movRegReg rcx, r12
     x64.callDirect __gt_free_get
-    x64.leaRegRegImm32 rdi, r8, 40
-    x64.movRegImm32 rcx, 488
-    x64.x64MemFill 0x00
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r8 + 48], rax
+    x64.storeBaseDispReg.word64 [r8 + 56], rax
+    x64.storeBaseDispReg.word64 [r8 + 64], rax
+    x64.storeBaseDispReg.word64 [r8 + 104], rax
+    x64.storeBaseDispReg.word64 [r8 + 120], rax
+    x64.storeBaseDispReg.word64 [r8 + 136], rax
+    x64.storeBaseDispReg.word64 [r8 + 152], rax
+    x64.storeBaseDispReg.word64 [r8 + 160], rax
+    x64.storeBaseDispReg.word64 [r8 + 240], rax
+    x64.storeBaseDispReg.word64 [r8 + 360], rax
+    x64.storeBaseDispReg.word64 [r8 + 368], rax
+    x64.storeBaseDispReg.word64 [r8 + 376], rax
+    x64.storeBaseDispReg.word64 [r8 + 384], rax
+    x64.storeBaseDispReg.word64 [r8 + 448], rax
+    x64.storeBaseDispReg.word64 [r8 + 464], rax
+    x64.storeBaseDispReg.word64 [r8 + 472], rax
+    x64.storeBaseDispReg.word64 [r8 + 480], rax
+    x64.storeBaseDispReg.word64 [r8 + 488], rax
     x64.leaRegRegImm32 rax, r8, 272
     x64.storeBaseDispReg.word64 [r8 + 168], rax
     x64.leaRegGlobal rax, __sched_tls_teb_offset
@@ -64370,9 +64462,25 @@ func @__gt_spawn {
     arm64.movRegReg x0, x20
     arm64.bl __gt_free_get
     arm64.movRegReg x4, x0
-    arm64.add x0, x4, 40
-    arm64.movImm x1, 488
-    arm64.arm64MemFill 0x00
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x4 + 48], x0
+    arm64.storeBaseDispReg.word64 [x4 + 56], x0
+    arm64.storeBaseDispReg.word64 [x4 + 64], x0
+    arm64.storeBaseDispReg.word64 [x4 + 104], x0
+    arm64.storeBaseDispReg.word64 [x4 + 120], x0
+    arm64.storeBaseDispReg.word64 [x4 + 136], x0
+    arm64.storeBaseDispReg.word64 [x4 + 152], x0
+    arm64.storeBaseDispReg.word64 [x4 + 160], x0
+    arm64.storeBaseDispReg.word64 [x4 + 240], x0
+    arm64.storeBaseDispReg.word64 [x4 + 360], x0
+    arm64.storeBaseDispReg.word64 [x4 + 368], x0
+    arm64.storeBaseDispReg.word64 [x4 + 376], x0
+    arm64.storeBaseDispReg.word64 [x4 + 384], x0
+    arm64.storeBaseDispReg.word64 [x4 + 448], x0
+    arm64.storeBaseDispReg.word64 [x4 + 464], x0
+    arm64.storeBaseDispReg.word64 [x4 + 472], x0
+    arm64.storeBaseDispReg.word64 [x4 + 480], x0
+    arm64.storeBaseDispReg.word64 [x4 + 488], x0
     arm64.add x0, x4, 272
     arm64.storeBaseDispReg.word64 [x4 + 168], x0
     arm64.leaGlobal x0, __sched_tls_teb_offset
@@ -65351,9 +65459,25 @@ func @__gt_spawn {
     arm64.movRegReg x0, x20
     arm64.bl __gt_free_get
     arm64.movRegReg x4, x0
-    arm64.add x0, x4, 40
-    arm64.movImm x1, 488
-    arm64.arm64MemFill 0x00
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x4 + 48], x0
+    arm64.storeBaseDispReg.word64 [x4 + 56], x0
+    arm64.storeBaseDispReg.word64 [x4 + 64], x0
+    arm64.storeBaseDispReg.word64 [x4 + 104], x0
+    arm64.storeBaseDispReg.word64 [x4 + 120], x0
+    arm64.storeBaseDispReg.word64 [x4 + 136], x0
+    arm64.storeBaseDispReg.word64 [x4 + 152], x0
+    arm64.storeBaseDispReg.word64 [x4 + 160], x0
+    arm64.storeBaseDispReg.word64 [x4 + 240], x0
+    arm64.storeBaseDispReg.word64 [x4 + 360], x0
+    arm64.storeBaseDispReg.word64 [x4 + 368], x0
+    arm64.storeBaseDispReg.word64 [x4 + 376], x0
+    arm64.storeBaseDispReg.word64 [x4 + 384], x0
+    arm64.storeBaseDispReg.word64 [x4 + 448], x0
+    arm64.storeBaseDispReg.word64 [x4 + 464], x0
+    arm64.storeBaseDispReg.word64 [x4 + 472], x0
+    arm64.storeBaseDispReg.word64 [x4 + 480], x0
+    arm64.storeBaseDispReg.word64 [x4 + 488], x0
     arm64.add x0, x4, 272
     arm64.storeBaseDispReg.word64 [x4 + 168], x0
     arm64.leaGlobal x0, __sched_tls_teb_offset

@@ -1660,7 +1660,7 @@ end 'emitSlabRowDisjoint'
 // list, but it crosses no processor. The test is `owner < 0` rather than one sentinel, so a
 // sentinel added later is not credited. What `__slab_remote_free_count` reports is therefore frees
 // PERFORMED across processors, and a freer that holds no P at all is not counted — a reading of 0
-// does not mean the road was never taken. The credit is emitted in `cur` rather than inside
+// does not mean the road was never taken. The credit is emitted before `retry` rather than inside
 // `retry`, because a contended push runs the loop body several times for one free and a credit in
 // there would count CAS attempts.
 function emitSlabRemotePush(module StdModule, func IrFunction, cur IrBlock, span ValueId, slot ValueId, owner ValueId, myP ValueId, ids ValueMinter) returns IrBlock
@@ -1671,6 +1671,7 @@ function emitSlabRemotePush(module StdModule, func IrFunction, cur IrBlock, span
 
 	// Stepped before the head moves, so a reader holding `__slab_lock` that sees the chain also sees a count
 	// that covers it. The other order leaves a window where the chain is longer than the count.
+	// Atomic, unlike the per-P credit below: frees from several processors land on one span.
 	let queued = emitConst(module, block: cur, value: OneMore, ids: ids)
 	_ = emitFieldAccumulate(module, block: cur, record: span, offset: MspanRemoteCountOffset, delta: queued, multiM: true, ids: ids)
 
@@ -1681,7 +1682,7 @@ function emitSlabRemotePush(module StdModule, func IrFunction, cur IrBlock, span
 	emitBranchOnCompare(module, block: cacherAsked, value: owner, pred: StdCmpPred.lt, against: 0, whenTrue: retry, whenFalse: credited, ids: ids)
 
 	let credit = emitConst(module, block: credited, value: OneMore, ids: ids)
-	_ = emitFieldAccumulate(module, block: credited, record: myP, offset: POffRemoteFreeCount, delta: credit, multiM: true, ids: ids)
+	_ = emitFieldAccumulate(module, block: credited, record: myP, offset: POffRemoteFreeCount, delta: credit, multiM: false, ids: ids)
 	module.setTerminator(credited, op: StdOp.branch(retry.id))
 
 	let head = emitLoadField(module, block: retry, record: headAddr, offset: 0, ids: ids)

@@ -191,9 +191,10 @@ type AsyncReleasePlan
 	end 'create'
 
 	// Is there nothing at all to release? Then the spawn writes NOTHING into `gt.releaser`
-	// (`LowerMaxonToStd.emitAsyncReleaserStore` returns early — the 0 is already there, from the slab zero on
-	// a fresh struct and from `__gt_spawn`'s whole-struct memzero on a recycled one), and both release sites
-	// read that 0 and SKIP rather than indirect-calling through it.
+	// (`LowerMaxonToStd.emitAsyncReleaserStore` returns early — the 0 is already there, from the
+	// arena zero on a fresh struct and from the reclaim's claim on a recycled one,
+	// `GtRuntime.GtOffReleaser`), and both release sites read that 0 and SKIP rather than
+	// indirect-calling through it.
 	//
 	// ⚠ **THAT IS "PAYS ALMOST NOTHING", NOT "EMITS NOTHING".** `emitGtReleaserCall` is emitted
 	// UNCONDITIONALLY into `__gt_await`, `__gt_try_await` and `__gt_promise_drop` — the compiler cannot know
@@ -776,10 +777,11 @@ end 'emitResultOrErrorRelease'
 // offset into it, which is exactly what `emitNullGuardedDrop` already takes; `FieldDropKind.direct` is
 // exactly the release a slot's `dropCallee` wants. This loop therefore owns only the ITERATION.
 //
-// ⚠ The null guard is what makes a PARTIALLY INITIALIZED GT safe: `emitAsyncSpawn` fills the argument slots
-// only after `__gt_spawn` returns, and the result/error words are written only by a thread that actually
-// completed. A zero word means "nothing was ever put here", which is the one reading a release must not act
-// on, and it is the reading a memzeroed recycled struct guarantees.
+// ⚠ The null guard is what makes a PARTIALLY INITIALIZED GT safe: the result/error words are
+// written only by a thread that actually completed, and the spawn zeroes both
+// (`GtRuntime.gtFieldRoster`). A zero word means "nothing was ever put here", which is the one
+// reading a release must not act on. The argument slots are not zeroed, and need not be:
+// `emitAsyncSpawn` stores the releaser only after it has filled every one of them.
 function emitSlotReleases(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, gt ValueId, slots AsyncManagedSlotArray) returns IrBlock
 	var block = cur
 

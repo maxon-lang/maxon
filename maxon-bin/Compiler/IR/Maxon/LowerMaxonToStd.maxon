@@ -5758,10 +5758,9 @@ type MaxonToStdLowering
 	// `__gt_await` (result CONSUMED) and by `__gt_promise_drop` (result NOT consumed), which is where the
 	// reference `Parser.transferAsyncSpawnArgs` took for each managed argument is given back.
 	//
-	// **A CALLEE WITH NOTHING TO RELEASE STORES NOTHING AT ALL**, rather than storing 0: `__gt_free_get` hands
-	// `__gt_spawn` a record that is zero on both of its arms, so the store would be redundant. That makes the
-	// recycled arm's zeroing load-bearing here too (`GtOffReleaser`): without it a recycled record would inherit
-	// the previous tenant's releaser and free that tenant's arguments out of stale slots.
+	// **A CALLEE WITH NOTHING TO RELEASE STORES NOTHING AT ALL**, rather than storing 0: every
+	// record a spawn takes already holds 0 here (`GtOffReleaser` carries why), so the store would be
+	// redundant.
 	//
 	// ⚠ Whether a releaser EXISTS is `asyncCalleeNeedsReleaser`'s answer and is not restated here — see there
 	// for why a disagreement between this site and the synthesis is a compile error at neither, and for which
