@@ -862,7 +862,7 @@ IR generation.
 
 ### E4006 — `invalidFieldAccess`
 
-A field access could not be lowered: the base is not a struct, or the field has no slot.
+A member is used that its type does not have: a method the type does not declare, a method a conditional extension gives only to types meeting its `where` clause, or `allCases` on a union. The message names the type as source would qualify it, so the library's `Range` in a program declaring its own is `stdlib.Range`. Correct the member's name, or call it on a type that has it.
 
 ### E4014 — `irTypeCycle`
 

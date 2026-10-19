@@ -19964,6 +19964,12 @@ export type ProgramSignatures
 		return self.settledDeclarations().interfaces.isMintedLibraryName(qualifiedCalleeHead(callee))
 	end 'isMintedStdlibShadowCallee'
 
+	// Both conjuncts bind: the compiler's own runtime calls (`__write_stdout`, interpolation parts) carry
+	// `resolvedTypeQualifier` too, and a hand-typed `__Range.nosuch()` is `notMinted` and stays E3004.
+	export function isMemberOfAMintedLibraryType(callee ByteArray, mint CalleeMint) returns bool
+		return mint == CalleeMint.resolvedTypeQualifier and self.isMintedStdlibShadowCallee(callee)
+	end 'isMemberOfAMintedLibraryType'
+
 	export function settleStdlibShadowSpellings(declaredNames NameRoster, declaringFiles FilePathArray)
 		var spellings = StdlibShadowSpellingArray.create()
 		var spelled = WrittenMintSet.create()

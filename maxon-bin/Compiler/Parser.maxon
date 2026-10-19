@@ -2389,7 +2389,7 @@ function asyncCalleeIfMatch(op MaxonOp, promise ValueId) returns AsyncCalleeLook
 		existentialWitness or
 		holdValue or
 		holdEnd gives AsyncCalleeLookup.none
-		asyncCall(result, callee, _, _, _, _, _) gives foundCalleeIfEqual(result, callee: callee, promise: promise)
+		asyncCall(result, callee, _, _, _, _, _, _) gives foundCalleeIfEqual(result, callee: callee, promise: promise)
 
 		// A reply cell mints a promise too; this arm is how `awaitedPromiseFacts` finds one.
 		serviceReplyCell(result, messageName, awaitedService) gives serviceReplyIfEqual(result, messageName: messageName, awaitedService: awaitedService, promise: promise)
@@ -5399,9 +5399,8 @@ end 'CompilerOwnedStaticSurface'
 
 // ⭐⭐ **THE CALLEE A `<Type>.<member>(…)` NAMES once the compiler-owned surfaces have declined** — the half
 // of the qualified-call resolution that needs the member token. The three arms are three answers to *"whose
-// name is this?"*, which is precisely what the `async` door has to know: a MINTED name is one
-// `MaxonOp.asyncCall` cannot carry (it has no `mint` field), while the other two are ordinary declared
-// functions a spawn can take the address of.
+// name is this?"*, which is precisely what the `async` door has to know: a MINTED name is one the door
+// refuses, while the other two are ordinary declared functions a spawn can take the address of.
 union QualifiedStaticCallee
 	// `int.fromString` → `__int_fromString` (`CalleeMint.primitiveStatic`).
 	minted(let callee ByteArray)
@@ -42081,9 +42080,7 @@ export type Parser
 		// ⚠⚠ **AND THE THIRD CLAUSE IS THAT THE HEAD IS NOT BYTES THE AUTHOR TYPED, FOR `requireUnreservedName`'s
 		// REASON.** A `__Clock.nowMs()` the author wrote out in a USER file is the author
 		// reaching into the reserved space, and the rule this whole mechanism states is that the moved name is
-		// one "no user program can reach" by NAME. MEASURED without any such clause: a user program declaring
-		// `type Clock` and calling `__Clock.nowMs()` COMPILED AND RAN, returning the stdlib clock, while the
-		// identical call in a program with no shadow was correctly refused
+		// one "no user program can reach" by NAME
 		// (`stdlib-user-shadows.error.the-mint-is-not-reachable-from-user-code` holds that shut).
 		//
 		// ⭐⭐ **BUT "THE AUTHOR TYPED IT" IS NOT "THE FILE IS A USER FILE", AND READ AS IF IT WERE, THIS CLAUSE
@@ -42108,6 +42105,12 @@ export type Parser
 		if (self.everySpellingIsTheCompilers() or mintHeadIsTheCompilers(mint)) and self.signatures.isMintedStdlibShadowCallee(callee) and self.signatures.declaresCallee(callee) 'theCompilersOwnMint'
 			return
 		end 'theCompilersOwnMint'
+
+		// A member the respelled library type does not declare is SemanticCheck's to report (E4006); see
+		// `SemanticCheck.calleeIsBuilderBuilt`, which asks the same predicate.
+		if self.signatures.isMemberOfAMintedLibraryType(callee, mint: mint) 'aMissOnAMintedTypeIsSemanticChecks'
+			return
+		end 'aMissOnAMintedTypeIsSemanticChecks'
 
 		throw SourceParseError.unknownCompilerIntrinsic(String.from(callee), reason: reason, line: anchor.line, column: anchor.column)
 	end 'requireCalleeIsNotReservedName'
@@ -100351,10 +100354,6 @@ export type Parser
 		self.advance()
 
 		match try self.qualifiedStaticCallee(typeTok, memberTok: memberTok, aliasName: aliasName) 'callee'
-			// ⛔ **A MINTED CALLEE IS ONE `MaxonOp.asyncCall` CANNOT DESCRIBE** — it carries no `mint` field,
-			// so a reader downstream (`SemanticCheck.validateAsyncCall`'s visibility rule) would judge
-			// `__int_fromString` as a name the author wrote. Refused here so that no spawn carries a
-			// `primitiveStatic` mint.
 			minted(mintedCallee) then throw SourceParseError.unsupported("`async {String.from(typeTok.value)}.{String.from(memberTok.value)}(…)` — a primitive's static resolves to the compiler-minted callee `{String.from(mintedCallee)}`, and a spawn records no callee but the one the author wrote. Call it directly", line: memberTok.line, column: memberTok.column)
 			namespaceQualifiedFree(free) then return AsyncSpawnCallee.create(free, anchor: memberTok, mint: CalleeMint.notMinted)
 			declared(callee) then return try self.declaredStaticAsyncSpawnCallee(callee, aliasName: aliasName, typeTok: typeTok, memberTok: memberTok, mint: self.staticCallHeadMint(baseIndex, typeTok: typeTok))
@@ -100563,7 +100562,7 @@ export type Parser
 
 		// Immediately before the emit, so the site keys the op that emit is about to append.
 		self.artifact.recordAsyncSpawnSite(spawnSite)
-		self.artifact.emitOp(self.bodyState.currentBlock, op: MaxonOp.asyncCall(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: settledImmutableArgNames(argImmutableNames), argDefaultSlots: argDefaultSlots), range: SourceRange.between(anchor, last: rparenTok))
+		self.artifact.emitOp(self.bodyState.currentBlock, op: MaxonOp.asyncCall(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: settledImmutableArgNames(argImmutableNames), argDefaultSlots: argDefaultSlots, mint: mint), range: SourceRange.between(anchor, last: rparenTok))
 		let callSpan = SourceRange.between(anchor, last: rparenTok)
 		self.noteCallToken(callSpan, args: args, start: callSpan)
 		return result

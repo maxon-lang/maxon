@@ -1170,3 +1170,52 @@ end 'main'
 ```stdout
 level=INFO msg=up
 ```
+
+<!-- test: stdlib-user-shadows.error.a-missing-method-on-a-shadowed-library-type-is-named-as-written -->
+A method the library's `Range` does not declare, called on a value of it in a program that shadows
+`Range`, is refused as a missing method of `stdlib.Range`, as it would be of an unshadowed type.
+```maxon
+type Range
+	export var y as Count
+end 'Range'
+
+function main() returns ExitCode
+	let bound = stdlib.Range.create(1, finish: 4)
+	return bound.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E4006: <fragment>:8:15: Type 'stdlib.Range' has no method named 'count'
+```
+
+<!-- test: stdlib-user-shadows.error.a-missing-static-on-a-shadowed-library-type-is-named-as-written -->
+A static the library's `Range` does not declare, called through `stdlib.Range` in a program that shadows
+`Range`, is refused as a missing member of `stdlib.Range`.
+```maxon
+type Range
+	export var y as Count
+end 'Range'
+
+function main() returns ExitCode
+	return stdlib.Range.nosuch() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E4006: <fragment>:7:22: Type 'stdlib.Range' has no method named 'nosuch'
+```
+
+<!-- test: stdlib-user-shadows.error.a-missing-static-spawned-async-on-a-shadowed-library-type-is-named-as-written -->
+The same missing static, spawned with `async`, is refused the same way.
+```maxon
+type Range
+	export var y as Count
+end 'Range'
+
+function main() returns ExitCode
+	let n = await async stdlib.Range.nosuch()
+	return n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E4006: <fragment>:7:35: Type 'stdlib.Range' has no method named 'nosuch'
+```

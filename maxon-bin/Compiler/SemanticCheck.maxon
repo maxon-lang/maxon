@@ -1499,7 +1499,7 @@ function overloadResultValue(op MaxonOp) returns OverloadResultValue
 	return match op 'op'
 		call(result, _, _, _, _, _, _, _) gives OverloadResultValue.defines(result)
 		tryCall(result, _, _, _, _, _, _, _, _) gives OverloadResultValue.defines(result)
-		asyncCall(result, _, _, _, _, _, _) gives OverloadResultValue.definesAPromise(result)
+		asyncCall(result, _, _, _, _, _, _, _) gives OverloadResultValue.definesAPromise(result)
 		default panic("overloadResultValue: asked of an op that binds no direct callee — `maxonOpCalleeKind` answers `direct` for exactly these three")
 	end 'op'
 end 'overloadResultValue'
@@ -1564,7 +1564,7 @@ end 'OverloadCallArgs'
 function overloadCallArgs(op MaxonOp) returns OverloadCallArgs
 	return match op 'op'
 		call(_, _, args, argLabels, _, _, defaultSlots, mint) gives OverloadCallArgs.supplied(args, argLabels: argLabels, defaultSlots: defaultSlots, mint: mint)
-		asyncCall(_, _, args, argLabels, _, _, defaultSlots) gives OverloadCallArgs.supplied(args, argLabels: argLabels, defaultSlots: defaultSlots, mint: CalleeMint.notMinted)
+		asyncCall(_, _, args, argLabels, _, _, defaultSlots, mint) gives OverloadCallArgs.supplied(args, argLabels: argLabels, defaultSlots: defaultSlots, mint: mint)
 		tryCall(_, _, _, args, argLabels, _, _, defaultSlots, mint) gives OverloadCallArgs.supplied(args, argLabels: argLabels, defaultSlots: defaultSlots, mint: mint)
 		default panic("overloadCallArgs: asked of an op that supplies no argument list — `maxonOpCalleeKind` answers `direct` for exactly these three")
 	end 'op'
@@ -1615,13 +1615,13 @@ function checkThrowsClausesNameDeclaredErrors(project Project, module MaxonModul
 	for func in module.functions 'eachFunc'
 		match func.throwsTypeName 'clause'
 			none then break
-			throwing(declared) then anyUnthrown = (requireThrowsClauseNamesADeclaredError(project, signatures: signatures, func: func, declared: declared) and isUnthrownCandidate(project, module: module, func: func)) or anyUnthrown
+			throwing(declared) then anyUnthrown = (requireThrowsClauseNamesADeclaredError(project, signatures: signatures, func: func, declared: declared) and isUnthrownCandidate(project, module: module, signatures: signatures, func: func)) or anyUnthrown
 		end 'clause'
 	end 'eachFunc'
 
 	if anyUnthrown 'someClauseGoesUnthrown'
 		var unthrown = UnthrownClauses.collect(project, module: module, signatures: signatures)
-		unthrown.settleAnsweredSites(project, module: module)
+		unthrown.settleAnsweredSites(project, module: module, signatures: signatures)
 		unthrown.reportUnsettled(project)
 	end 'someClauseGoesUnthrown'
 end 'checkThrowsClausesNameDeclaredErrors'
@@ -1644,17 +1644,17 @@ end 'requireThrowsClauseNamesADeclaredError'
 
 // The entry's clause is E3054's to refuse, and a test's is implied by the parser, so neither is the
 // author's to remove.
-function isUnthrownCandidate(project Project, module MaxonModule, func IrFunction) returns bool
-	return not bodyIsUnreadable(func) and func.name != project.entryFunctionName and not isTestFunctionName(func.name) and not functionCanThrow(module, func: func) and not bodyHoldsAnUnresolvedCall(project, module: module, func: func)
+function isUnthrownCandidate(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction) returns bool
+	return not bodyIsUnreadable(func) and func.name != project.entryFunctionName and not isTestFunctionName(func.name) and not functionCanThrow(module, func: func) and not bodyHoldsAnUnresolvedCall(project, module: module, signatures: signatures, func: func)
 end 'isUnthrownCandidate'
 
 // An unresolved callee's throw behaviour is unknown, so E3168 cannot say this body never throws; the
-// call itself is E3004's to report.
-function bodyHoldsAnUnresolvedCall(project Project, module MaxonModule, func IrFunction) returns bool
+// call itself is `validateCall`'s to report.
+function bodyHoldsAnUnresolvedCall(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction) returns bool
 	for opIdx in module.liveOpIndices(func) 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("bodyHoldsAnUnresolvedCall: live op index not in module.ops")
 
-		if maxonOpCalleeKind(op) == MaxonCalleeKind.direct and calleeIsUnresolved(maxonOpCalleeName(op), funcSignatures: project.funcSignatures) 'unresolved'
+		if maxonOpCalleeKind(op) == MaxonCalleeKind.direct and calleeIsUnresolved(maxonOpCalleeName(op), mint: maxonOpCalleeMint(op), signatures: signatures, funcSignatures: project.funcSignatures) 'unresolved'
 			return true
 		end 'unresolved'
 	end 'eachOp'
@@ -1662,8 +1662,14 @@ function bodyHoldsAnUnresolvedCall(project Project, module MaxonModule, func IrF
 	return false
 end 'bodyHoldsAnUnresolvedCall'
 
-function calleeIsUnresolved(callee ByteArray, funcSignatures FuncSignatureMap) returns bool
-	return not isSignaturelessCompilerCallee(callee, funcSignatures: funcSignatures) and not funcSignatures.contains(callee)
+// Asks the predicate `Parser.requireCalleeIsNotReservedName`'s last clause asks: a minted-type miss that
+// door admits must be reported here, or it returns early unvalidated and reaches lowering with no callee.
+function calleeIsBuilderBuilt(callee ByteArray, mint CalleeMint, signatures ProgramSignatures, funcSignatures FuncSignatureMap) returns bool
+	return isSignaturelessCompilerCallee(callee, funcSignatures: funcSignatures) and not signatures.isMemberOfAMintedLibraryType(callee, mint: mint)
+end 'calleeIsBuilderBuilt'
+
+function calleeIsUnresolved(callee ByteArray, mint CalleeMint, signatures ProgramSignatures, funcSignatures FuncSignatureMap) returns bool
+	return not calleeIsBuilderBuilt(callee, mint: mint, signatures: signatures, funcSignatures: funcSignatures) and not funcSignatures.contains(callee)
 end 'calleeIsUnresolved'
 
 function namePositionOf(func IrFunction) returns PositionKey
@@ -1710,7 +1716,7 @@ type UnthrownClauses
 	end 'collect'
 
 	function noteIfCandidate(project Project, module MaxonModule, signatures ProgramSignatures, func IrFunction, declared String)
-		if not isUnthrownCandidate(project, module: module, func: func) or classifyThrowsClauseName(project, signatures: signatures, name: declared, readerFilePath: func.sourceFilePath) != ThrowsClauseKind.concreteError 'notACandidate'
+		if not isUnthrownCandidate(project, module: module, signatures: signatures, func: func) or classifyThrowsClauseName(project, signatures: signatures, name: declared, readerFilePath: func.sourceFilePath) != ThrowsClauseKind.concreteError 'notACandidate'
 			return
 		end 'notACandidate'
 
@@ -1746,7 +1752,7 @@ type UnthrownClauses
 		throw MapError.keyNotFound
 	end 'siteAt'
 
-	function settleAnsweredSites(project Project, module MaxonModule)
+	function settleAnsweredSites(project Project, module MaxonModule, signatures ProgramSignatures)
 		for func in module.functions 'eachFunc'
 			if not throwsClauseIsThrowing(func.throwsTypeName) 'noClause'
 				continue
@@ -1754,7 +1760,7 @@ type UnthrownClauses
 
 			let site = try self.siteAt(namePositionOf(func), path: func.sourceFilePath) otherwise continue
 
-			if not isUnthrownCandidate(project, module: module, func: func) 'answersItsSite'
+			if not isUnthrownCandidate(project, module: module, signatures: signatures, func: func) 'answersItsSite'
 				self.settle(site)
 			end 'answersItsSite'
 		end 'eachFunc'
@@ -2216,7 +2222,7 @@ function collectCallParamEdgesAt(project Project, signatures ProgramSignatures, 
 		// writes its parameter writes the caller's own, before the await or after it. Without the edge,
 		// `relay(q)` spawning a writing `replace(q)` would read as writing nothing, and E3159 would admit
 		// a `let` handed to `relay`.
-		asyncCall(_, callee, args, argLabels, _, _, _) then addCallParamEdges(project, callee: callee, args: args, argLabels: argLabels, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges, capturedLoads: capturedLoads)
+		asyncCall(_, callee, args, argLabels, _, _, _, _) then addCallParamEdges(project, callee: callee, args: args, argLabels: argLabels, func: func, callerIndex: callerIndex, funcIndexByName: funcIndexByName, edges: edges, capturedLoads: capturedLoads)
 		literal or
 		ret or
 		retVoid or
@@ -3436,7 +3442,7 @@ function checkCalls(project Project, module MaxonModule, signatures ProgramSigna
 					// makes binding `args` here safe.
 					indirectCall then checkIndirectCall(project, module: module, calls: calls, func: func, opIndex: opIdx, op: op, mutationSummary: mutationSummary, provenance: provenance)
 
-					asyncCall(result, callee, args, argLabels, argRanges, argImmutableNames, argDefaultSlots) then validateAsyncCall(project, func: func, signatures: signatures, funcNames: funcNames, opIndex: opIdx, result: result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mutationSummary: mutationSummary, provenance: provenance, blameTargetErrorsHere: blameTargetErrorsHere)
+					asyncCall(result, callee, args, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) then validateAsyncCall(project, func: func, signatures: signatures, funcNames: funcNames, opIndex: opIdx, result: result, callee: callee, mint: mint, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mutationSummary: mutationSummary, provenance: provenance, blameTargetErrorsHere: blameTargetErrorsHere)
 
 					// A witness dispatch has no callee NAME to resolve — the parser already resolved the interface
 					// method against the type's `where` constraints (`findWitnessDispatchCandidates`), so there is nothing
@@ -3490,11 +3496,8 @@ end 'checkCalls'
 // holds the pre-resolution types and must type the promise safely); this is the one check the
 // parser cannot make — a callee declared in another file, whose param types only the whole-program
 // `funcSignatures` registry has.
-function validateAsyncCall(project Project, func IrFunction, signatures ProgramSignatures, funcNames FunctionNameIndex, opIndex ElementIndex, result ValueId, callee ByteArray, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, argImmutableNames WriteBlameArray, argDefaultSlots ParamCountArray, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, blameTargetErrorsHere bool)
-	// `notMinted`: `Parser.asyncSpawnCallee` admits only a name the author wrote — a free call's identifier
-	// (or the generic instance it names) or a `<Type>.<static>` mangle of two written tokens — and refuses a
-	// MINTED callee in words, because `MaxonOp.asyncCall` carries no `mint` field to tell the two apart.
-	validateCall(project, func: func, signatures: signatures, funcNames: funcNames, opIndex: opIndex, result: result, callee: callee, mint: CalleeMint.notMinted, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mutationSummary: mutationSummary, provenance: provenance, blameTargetErrorsHere: blameTargetErrorsHere)
+function validateAsyncCall(project Project, func IrFunction, signatures ProgramSignatures, funcNames FunctionNameIndex, opIndex ElementIndex, result ValueId, callee ByteArray, mint CalleeMint, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, argImmutableNames WriteBlameArray, argDefaultSlots ParamCountArray, mutationSummary ParamMutationSummary, provenance ProvenanceTracer, blameTargetErrorsHere bool)
+	validateCall(project, func: func, signatures: signatures, funcNames: funcNames, opIndex: opIndex, result: result, callee: callee, mint: mint, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mutationSummary: mutationSummary, provenance: provenance, blameTargetErrorsHere: blameTargetErrorsHere)
 	requireAsyncScalarParams(project, func: func, funcNames: funcNames, opIndex: opIndex, callee: callee)
 end 'validateAsyncCall'
 
@@ -3983,11 +3986,11 @@ function validateCall(project Project, func IrFunction, signatures ProgramSignat
 	// The ONE thing this pass can say about a compiler-owned callee is which TARGET it can be lowered for,
 	// because it is the first pass that holds both the call's source span and `project.target` — and that
 	// is asked of every callee above, before this return.
-	if isSignaturelessCompilerCallee(callee, funcSignatures: project.funcSignatures) 'compilerOwnCall'
+	if calleeIsBuilderBuilt(callee, mint: mint, signatures: signatures, funcSignatures: project.funcSignatures) 'compilerOwnCall'
 		return
 	end 'compilerOwnCall'
 
-	if calleeIsUnresolved(callee, funcSignatures: project.funcSignatures) 'unknownFn'
+	if calleeIsUnresolved(callee, mint: mint, signatures: signatures, funcSignatures: project.funcSignatures) 'unknownFn'
 		// ⭐⭐ **E3095 RE-ASKS A RESOLUTION THE PARSER ALREADY MADE.** A subdirectory's declaration of a contested
 		// free function is registered under its directory-qualified spelling, so a bare callee that found no single
 		// declaration this file may name (`ProgramSignatures.nameABareCallBinds`) reaches this arm still wearing
@@ -4771,7 +4774,7 @@ function reportIfNonYielding(project Project, op MaxonOp, opIndex ElementIndex, 
 		existentialWitness or
 		holdValue or
 		holdEnd then return
-		asyncCall(_, callee, _, _, _, _, _) then reportSpawnOfNonYielding(project, callee: callee, opIndex: opIndex, func: func, funcNames: funcNames, yields: yields)
+		asyncCall(_, callee, _, _, _, _, _, _) then reportSpawnOfNonYielding(project, callee: callee, opIndex: opIndex, func: func, funcNames: funcNames, yields: yields)
 	end 'op'
 end 'reportIfNonYielding'
 
@@ -5242,7 +5245,7 @@ function opYields(op MaxonOp, funcIndexByName FuncIndexByName, callerIndex Eleme
 		// A spawn is an edge, not a yield. `async f()` suspends this frame exactly when `f` can suspend,
 		// so it contributes the same edge an ordinary call does — which makes a function that spawns a
 		// yielding function itself yielding, and is exactly the case E3073 rejects when `f` cannot.
-		asyncCall(_, callee, _, _, _, _, _) gives calleeYields(callee, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges, runtimeTier: runtimeTier)
+		asyncCall(_, callee, _, _, _, _, _, _) gives calleeYields(callee, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges, runtimeTier: runtimeTier)
 		literal or
 		ret or
 		retVoid or

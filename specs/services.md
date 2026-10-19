@@ -2244,6 +2244,39 @@ full s2
 kept s1
 ```
 
+<!-- test: error.a-throws-clause-over-a-send-whose-error-is-handled-never-throws -->
+<!-- unsupported-targets: wasm32-wasi -->
+A send's error caught with `otherwise` leaves nothing for the declared clause to carry, so the clause is
+refused as one the body can never throw.
+wasm32-wasi has no services, so it answers `E3104` for the send and the `spawn` beside this refusal; the case is pinned on the native lanes.
+```maxon
+type Store
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function ping()
+		self.n = self.n + 1
+	end 'ping'
+end 'Store'
+
+function poke(h Store.handle) throws Store.ping.sendError
+	try h.ping() otherwise return
+end 'poke'
+
+function main() returns ExitCode
+	let h = spawn Store.create()
+	try poke(h) otherwise return 1
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```maxoncstderr
+error E3168: <fragment>:14:10: 'throws Store.ping.sendError' is declared but nothing in the body throws — no 'throw', no bare 'try' and no 'otherwise throw' reaches a caller. Remove the clause
+```
+
 <!-- test: error.a-send-error-may-not-be-thrown-from-a-value-the-function-does-not-own -->
 A send-error a function is handed is borrowed from its caller, so throwing it would give the catcher a box
 another owner still reads. Only the failed send's own error, a bare `try` propagation, or the binding that caught

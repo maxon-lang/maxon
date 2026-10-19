@@ -2869,7 +2869,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			// to a mutable name, hands back inside its result — is kept out of this frame just as a direct call's
 			// is, and the summary must carry it one frame out or a caller that only spawns reads as keeping
 			// nothing.
-			asyncCall(result, callee, args, argLabels, argRanges, _, _) then dispatchNamedCall(self, func: func, op: op, opIdx: opIdx, result: result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges)
+			asyncCall(result, callee, args, argLabels, argRanges, _, _, _) then dispatchNamedCall(self, func: func, op: op, opIdx: opIdx, result: result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges)
 			witnessDispatch(result, args, _, _, methodIndex, interfaceDeclIndex, _, _) then self.traceLandingCall(func, op: op, opIdx: opIdx, result: result, args: args, bodies: self.calls.resolution.implsOf(methodIndex, interfaceDeclIndex: interfaceDeclIndex))
 			witnessTryDispatch(result, _, args, _, _, methodIndex, interfaceDeclIndex, _) then self.traceLandingCall(func, op: op, opIdx: opIdx, result: result, args: args, bodies: self.calls.resolution.implsOf(methodIndex, interfaceDeclIndex: interfaceDeclIndex))
 
@@ -4361,7 +4361,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			// its own reference to a managed argument (`Parser.transferAsyncSpawnArgs`), so the value standing at
 			// the op is that RETAIN and never the parameter's own — without this arm nothing relates the two and
 			// the target's writes stop at its own frame.
-			asyncCall(_, _, args, _, _, _, _) then self.addNamedCallRecordEdges(func, args: args, callerIndex: callerIndex)
+			asyncCall(_, _, args, _, _, _, _, _) then self.addNamedCallRecordEdges(func, args: args, callerIndex: callerIndex)
 			indirectCall then self.addFunctionValueRecordEdges(func, op: op, callerIndex: callerIndex)
 
 			// A message hands its arguments to another green thread.
@@ -6058,7 +6058,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			stringLiteral(result, _) then self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
 			functionRef(result, _, _) then self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
 			indirectCall(result, _, _, _) then self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
-			asyncCall(result, _, _, _, _, _, _) then self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
+			asyncCall(result, _, _, _, _, _, _, _) then self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
 			await (result, _) then self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
 			tryAwait(result, _, _) then self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
 			sizeofType(result, _) then self.noteRootDefinition(result, opIdx: opIdx, valueCount: valueCount)
@@ -9531,7 +9531,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 				match op 'op'
 					call(result, callee, args, argLabels, _, _, _, _) then grew = self.judgeNamedInstantiation(caller, callerIndex: callerIndex, opIdx: opIdx, result: result, called: callee, args: args, argLabels: argLabels, reporting: reporting) or grew
 					tryCall(result, _, callee, args, argLabels, _, _, _, _) then grew = self.judgeNamedInstantiation(caller, callerIndex: callerIndex, opIdx: opIdx, result: result, called: callee, args: args, argLabels: argLabels, reporting: reporting) or grew
-					asyncCall(result, callee, args, argLabels, _, _, _) then grew = self.judgeNamedInstantiation(caller, callerIndex: callerIndex, opIdx: opIdx, result: result, called: callee, args: args, argLabels: argLabels, reporting: reporting) or grew
+					asyncCall(result, callee, args, argLabels, _, _, _, _) then grew = self.judgeNamedInstantiation(caller, callerIndex: callerIndex, opIdx: opIdx, result: result, called: callee, args: args, argLabels: argLabels, reporting: reporting) or grew
 					witnessDispatch(result, args, _, _, methodIndex, interfaceDeclIndex, _, _) then grew = self.judgeLandingInstantiation(caller, callerIndex: callerIndex, opIdx: opIdx, result: result, args: args, bodies: self.calls.resolution.implsOf(methodIndex, interfaceDeclIndex: interfaceDeclIndex), reporting: reporting) or grew
 					witnessTryDispatch(result, _, args, _, _, methodIndex, interfaceDeclIndex, _) then grew = self.judgeLandingInstantiation(caller, callerIndex: callerIndex, opIdx: opIdx, result: result, args: args, bodies: self.calls.resolution.implsOf(methodIndex, interfaceDeclIndex: interfaceDeclIndex), reporting: reporting) or grew
 

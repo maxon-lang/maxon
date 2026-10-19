@@ -2006,12 +2006,7 @@ export union MaxonOp
 	// or result that does not ride the GPR channel (`tagRidesAsyncGprChannel`) before this op is
 	// emitted, so every `args` value and the callee's return are GPR words. `argImmutableNames`
 	// carries the same per-argument blame names a plain `call` does — see there.
-	//
-	// ⚠ **NO `mint` FIELD, UNLIKE `call` — and `Parser.asyncSpawnCallee` is what keeps that honest.** A
-	// spawn's `callee` is always bytes the author wrote (a free identifier, or a `<Type>.<static>` mangle of
-	// two written tokens); a MINTED callee (`int.fromString` → `__int_fromString`) is REFUSED at the parse
-	// door rather than carried here, so every reader downstream may read this name as the author's own.
-	asyncCall(result ValueId, let callee ByteArray, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, let argImmutableNames WriteBlameArray, argDefaultSlots ParamCountArray) = MaxonOpMeta{category: OpCategory.awaiting}
+	asyncCall(result ValueId, let callee ByteArray, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, let argImmutableNames WriteBlameArray, argDefaultSlots ParamCountArray, mint CalleeMint) = MaxonOpMeta{category: OpCategory.awaiting}
 
 	// AWAIT `promise`'s green thread and yield its result. `promise` is the i64 handle `asyncCall` produced;
 	// `result` is the awaited scalar. Lowers to `__gt_await(promise)`.
@@ -2374,7 +2369,7 @@ export function cacheWriteMaxonOp(writer LibraryCacheWriter, value MaxonOp)
 		panicAbort(a0) then cacheWriteMaxonOpPanicAbort(writer, a0: a0)
 		functionRef(a0, a1, a2) then cacheWriteMaxonOpFunctionRef(writer, a0: a0, a1: a1, a2: a2)
 		indirectCall(a0, a1, a2, a3) then cacheWriteMaxonOpIndirectCall(writer, a0: a0, a1: a1, a2: a2, a3: a3)
-		asyncCall(a0, a1, a2, a3, a4, a5, a6) then cacheWriteMaxonOpAsyncCall(writer, a0: a0, a1: a1, a2: a2, a3: a3, a4: a4, a5: a5, a6: a6)
+		asyncCall(a0, a1, a2, a3, a4, a5, a6, a7) then cacheWriteMaxonOpAsyncCall(writer, a0: a0, a1: a1, a2: a2, a3: a3, a4: a4, a5: a5, a6: a6, a7: a7)
 		await (a0, a1) then cacheWriteMaxonOpAwait(writer, a0: a0, a1: a1)
 		tryAwait(a0, a1, a2) then cacheWriteMaxonOpTryAwait(writer, a0: a0, a1: a1, a2: a2)
 		sizeofType(a0, a1) then cacheWriteMaxonOpSizeofType(writer, a0: a0, a1: a1)
@@ -2511,7 +2506,7 @@ function cacheWriteMaxonOpIndirectCall(writer LibraryCacheWriter, a0 ValueId, a1
 	cacheWriteWriteBlameArray(writer, value: a3)
 end 'cacheWriteMaxonOpIndirectCall'
 
-function cacheWriteMaxonOpAsyncCall(writer LibraryCacheWriter, a0 ValueId, a1 ByteArray, a2 ValueIdArray, a3 NameRoster, a4 SourceRangeArray, a5 WriteBlameArray, a6 ParamCountArray)
+function cacheWriteMaxonOpAsyncCall(writer LibraryCacheWriter, a0 ValueId, a1 ByteArray, a2 ValueIdArray, a3 NameRoster, a4 SourceRangeArray, a5 WriteBlameArray, a6 ParamCountArray, a7 CalleeMint)
 	writer.unsigned(a0 as CacheUnsigned)
 	writer.bytes(a1)
 	cacheWriteValueIdArray(writer, value: a2)
@@ -2519,6 +2514,7 @@ function cacheWriteMaxonOpAsyncCall(writer LibraryCacheWriter, a0 ValueId, a1 By
 	cacheWriteSourceRangeArray(writer, value: a4)
 	cacheWriteWriteBlameArray(writer, value: a5)
 	cacheWriteParamCountArray(writer, value: a6)
+	writer.unsigned(a7.ordinal as CacheUnsigned)
 end 'cacheWriteMaxonOpAsyncCall'
 
 function cacheWriteMaxonOpAwait(writer LibraryCacheWriter, a0 ValueId, a1 ValueId)
@@ -2857,8 +2853,9 @@ function cacheReadMaxonOpAsyncCall(reader LibraryCacheReader) returns MaxonOp th
 	let a4 = try cacheReadSourceRangeArray(reader)
 	let a5 = try cacheReadWriteBlameArray(reader)
 	let a6 = try cacheReadParamCountArray(reader)
+	let a7 = try cacheReadCalleeMint(reader)
 
-	return MaxonOp.asyncCall(a0, callee: a1, args: a2, argLabels: a3, argRanges: a4, argImmutableNames: a5, argDefaultSlots: a6)
+	return MaxonOp.asyncCall(a0, callee: a1, args: a2, argLabels: a3, argRanges: a4, argImmutableNames: a5, argDefaultSlots: a6, mint: a7)
 end 'cacheReadMaxonOpAsyncCall'
 
 function cacheReadMaxonOpAwait(reader LibraryCacheReader) returns MaxonOp throws LibraryCacheDamage
@@ -3193,12 +3190,22 @@ export function maxonOpCalleeName(op MaxonOp) returns ByteArray
 	return match op 'op'
 		call(_, callee, _, _, _, _, _, _) gives callee
 		tryCall(_, _, callee, _, _, _, _, _, _) gives callee
-		asyncCall(_, callee, _, _, _, _, _) gives callee
+		asyncCall(_, callee, _, _, _, _, _, _) gives callee
 		functionRef(_, funcName, _) gives funcName
 		serviceSend(_, _, callee, _, _, _, _, _) gives callee
 		default panic("maxonOpCalleeName: asked of an op that binds no callee name — `maxonOpCalleeKind` answers `noCallee` for it, and every caller gates on that")
 	end 'op'
 end 'maxonOpCalleeName'
+
+export function maxonOpCalleeMint(op MaxonOp) returns CalleeMint
+	return match op 'op'
+		call(_, _, _, _, _, _, _, mint) gives mint
+		tryCall(_, _, _, _, _, _, _, _, mint) gives mint
+		asyncCall(_, _, _, _, _, _, _, mint) gives mint
+		serviceSend gives CalleeMint.notMinted
+		default panic("maxonOpCalleeMint: asked of an op that binds no direct callee — every caller gates on `maxonOpCalleeKind` answering `direct`")
+	end 'op'
+end 'maxonOpCalleeMint'
 
 // ⭐ **DOES THIS OP START A SERVICE?** A `spawn` binds no callee (`maxonOpCalleeKind`), yet it makes the
 // synthesized `<T>.__loop` — and every handler that loop dispatches — live, so a walk that follows calls must
@@ -3355,7 +3362,7 @@ export function withRewrittenCallee(op MaxonOp, callee ByteArray) returns MaxonO
 		// re-mint check panic on the spot.
 		call(result, _, args, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) gives MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint)
 		tryCall(result, errorFlag, _, args, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) gives MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint)
-		asyncCall(result, _, args, argLabels, argRanges, argImmutableNames, argDefaultSlots) gives MaxonOp.asyncCall(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots)
+		asyncCall(result, _, args, argLabels, argRanges, argImmutableNames, argDefaultSlots, mint) gives MaxonOp.asyncCall(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint)
 
 		// ⚠ **`serviceSend` IS `direct` AND IS DELIBERATELY ABSENT.** Only overload resolution rewrites a
 		// callee, and a message's name can never be an overload set's key: `classifyServiceRoster` refuses
@@ -3567,7 +3574,7 @@ export function withRewrittenArgs(op MaxonOp, args ValueIdArray, argImmutableNam
 	return match op 'op'
 		call(result, callee, _, argLabels, argRanges, _, argDefaultSlots, mint) gives MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint)
 		tryCall(result, errorFlag, callee, _, argLabels, argRanges, _, argDefaultSlots, mint) gives MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint)
-		asyncCall(result, callee, _, argLabels, argRanges, _, argDefaultSlots) gives MaxonOp.asyncCall(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots)
+		asyncCall(result, callee, _, argLabels, argRanges, _, argDefaultSlots, mint) gives MaxonOp.asyncCall(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, mint: mint)
 		indirectCall(result, callee, _, _) gives MaxonOp.indirectCall(result, callee: callee, args: args, argImmutableNames: argImmutableNames)
 		default panic("withRewrittenArgs: asked of an op that supplies no substitutable argument list — only the three direct-call variants and the indirect call carry one")
 
@@ -3580,7 +3587,7 @@ export function callArgImmutableNamesOf(op MaxonOp) returns WriteBlameArray
 	return match op 'op'
 		call(_, _, _, _, _, argImmutableNames, _, _) gives argImmutableNames
 		tryCall(_, _, _, _, _, _, argImmutableNames, _, _) gives argImmutableNames
-		asyncCall(_, _, _, _, _, argImmutableNames, _) gives argImmutableNames
+		asyncCall(_, _, _, _, _, argImmutableNames, _, _) gives argImmutableNames
 		indirectCall(_, _, _, argImmutableNames) gives argImmutableNames
 		default panic("callArgImmutableNamesOf: asked of an op that supplies no argument list — only the three direct-call variants and the indirect call carry one")
 	end 'op'
