@@ -974,8 +974,8 @@ acc=123
 <!-- preempt: off -->
 ⭐ **A BACKLOG LONGER THAN THE MAILBOX'S FIRST RING, EVERY MESSAGE CARRYING A HEAP `String`.** At one
 processor with preemption off the service's green thread does not run until `main` parks at the `await`, so
-all 100 `note` messages are queued at once — more than the ring's first 16 slots, so it grows several times
-with managed payloads in it. The handler checks every message against the index FIFO order says it must
+all 100 `note` messages are queued at once — the first in the mailbox's inbox and the other 99 in the ring, far
+more than its first 16 slots, so it grows several times with managed payloads in it. The handler checks every message against the index FIFO order says it must
 carry, and the reply reports the count, any message that arrived out of place, and the first and last
 three. Exit 0 also says no payload leaked across a grow (exit 101).
 ```maxon
@@ -1030,6 +1030,72 @@ end 'main'
 ```
 ```stdout
 seen=100 misplaced=0 m0 m1 m2 m97 m98 m99
+```
+
+<!-- test: a-services-first-message-sits-in-its-inbox-and-the-queue-behind-it-keeps-fifo-order -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+⭐ **THE FIRST MESSAGE TO A SERVICE THAT HAS NEVER RUN WAITS IN THE MAILBOX'S OWN INBOX, AND EVERY MESSAGE
+BEHIND IT QUEUES IN THE RING.** At one processor with preemption off the service's green thread does not run
+until `main` parks at the `await`, so `m0` arrives while no receiver has ever started and the 18 sends after
+it queue behind it: the ring fills its first 16 slots with `m1` to `m16` and the seventeenth, `m17`, grows it.
+The service's first receive must answer the inbox message before any ring slot, then the ring in send order.
+Every message carries a heap `String`, and the handler checks each against the index FIFO order says it must
+carry; a first receive that answered the ring's head first, or answered the inbox twice, or dropped it, shows
+as `misplaced` or as a short `seen`. Exit 0 also says the inbox message's `String` was released exactly once
+(exit 101).
+```maxon
+typealias Tally = int(0 to 1000)
+
+let backlog = 19 as Tally
+let edge = 2
+
+type InboxTape
+	var seen as Tally
+	var misplaced as Tally
+	var trail as String
+
+	static function create() returns Self
+		return Self{seen: 0, misplaced: 0, trail: ""}
+	end 'create'
+
+	export function note(s String)
+		if s != "m{self.seen}" 'outOfPlace'
+			self.misplaced = self.misplaced + 1
+		end 'outOfPlace'
+
+		if self.seen < edge or self.seen >= backlog - edge 'atAnEdge'
+			self.trail.append(" {s}")
+		end 'atAnEdge'
+
+		self.seen = self.seen + 1
+	end 'note'
+
+	export function report() returns String
+		return "seen={self.seen} misplaced={self.misplaced}{self.trail}"
+	end 'report'
+end 'InboxTape'
+
+function main() returns ExitCode
+	let h = spawn InboxTape.create()
+
+	for i in 0 upto backlog 'fill'
+		try h.note("m{i}") otherwise panic("an open mailbox with room takes the send")
+	end 'fill'
+
+	let summary = try await h.report() otherwise 'gone'
+		return 9
+	end 'gone'
+
+	print("{summary}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+seen=19 misplaced=0 m0 m1 m17 m18
 ```
 
 <!-- test: a-send-to-a-shut-down-service-hands-every-argument-back -->
@@ -1118,19 +1184,19 @@ refused=100 misplaced=0 valueRefused=4
 <!-- preempt: off -->
 ⭐ **A GROW WHILE THE QUEUE STRADDLES THE END OF THE RING.** The ring is a circular buffer, so a grow must
 copy the oldest message first even when it does not sit in slot 0. At one processor with preemption off the
-service runs only when `main` parks at an `await`. Five `note` messages and the awaited `sync` go through
-the ring first, and the service pops them all, which leaves the ring EMPTY with its head at slot 6 — a pop
-moves the head and an empty ring keeps its size. Eighteen more `note` messages follow. The first finds the
-service parked and is handed to it directly; the other seventeen queue from slot 6 on, so the sixteenth
-fills the ring by wrapping from slot 15 round to slot 5 and the seventeenth meets a FULL ring whose head is
-not 0. Every message carries a heap `String`, and the handler checks each against the index FIFO order says
+service runs only when `main` parks at an `await`. Six `note` messages and the awaited `sync` go through
+the mailbox first: the first waits in its inbox and the other five and `sync` take ring slots 0 to 5, and the
+service takes them all, which leaves the ring EMPTY with its head at slot 6 — a pop moves the head and an
+empty ring keeps its size. Eighteen more `note` messages follow. The first finds the service parked and is
+handed to it directly; the other seventeen queue from slot 6 on, so the sixteenth fills the ring by wrapping
+from slot 15 round to slot 5 and the seventeenth meets a FULL ring whose head is not 0. Every message carries a heap `String`, and the handler checks each against the index FIFO order says
 it must carry. A grow that copied slots `0..15` in place, or forgot the wrapped run, hands the loop the
 messages out of order and `misplaced` is not 0; a payload dropped or doubled by it is a leak or a double
 free (exit 101).
 ```maxon
 typealias Tally = int(0 to 1000)
 
-let firstBatch = 5 as Tally
+let firstBatch = 6 as Tally
 let secondBatch = 18 as Tally
 
 type WrapTape
@@ -1189,8 +1255,8 @@ end 'main'
 0
 ```
 ```stdout
-drained=5
-seen=23 misplaced=0
+drained=6
+seen=24 misplaced=0
 ```
 
 <!-- test: a-mailbox-queues-into-a-fresh-ring-after-shrinking -->
@@ -1198,9 +1264,9 @@ seen=23 misplaced=0
 <!-- preempt: off -->
 ⭐ **A SEND INTO THE RING THE MAILBOX SHRANK TO.** A ring that has grown past its first 16 slots is replaced
 by a fresh 16-slot ring when the service pops its last message. At one processor with preemption off the
-service runs only when `main` parks at an `await`. Forty `note` messages queue first, growing the ring to
-64 slots, and the awaited `sync` behind them makes the service pop every one: the pop of `sync` empties a
-64-slot ring and shrinks it. Forty more follow. The first finds the service parked and is handed to it; the
+service runs only when `main` parks at an `await`. Forty `note` messages queue first, the first in the
+mailbox's inbox and the other 39 growing the ring to 64 slots, and the awaited `sync` behind them makes the
+service take every one: the pop of `sync` empties a 64-slot ring and shrinks it. Forty more follow. The first finds the service parked and is handed to it; the
 other thirty-nine queue into the NEW ring from slot 0, which is full at 16, doubles at the seventeenth and
 doubles again at the thirty-third. Each message carries a heap `String` and the handler checks it against
 the index FIFO order says it must carry. A shrink that left the old ring's size or its head behind the new
@@ -2497,6 +2563,205 @@ typealias Integer = int(i64.min to i64.max)
 kept s0
 kept s1
 sent s1
+```
+
+<!-- test: a-waiting-sender-of-a-capacity-one-mailbox-lands-in-a-ring-cut-for-it -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+⭐ **A WAITING SENDER'S MESSAGE LANDS IN THE RING WHEN THE FIRST RECEIVE TAKES THE INBOX MESSAGE, AND THE
+MAILBOX HAS NO RING YET.** The first send fills a capacity of one while the service has never run, so `s0`
+waits in the mailbox's inbox and nothing is queued behind it. The second send, given `sendTimeout:`, finds the
+mailbox full and parks `main` on the sender queue. The service's first receive hands `s0` to the loop and
+must put `main`'s `s1` somewhere that is not the inbox the loop now reads, so it cuts the ring there, queues
+`s1` in it and readies `main`. The loop then runs `s0` and `s1` in that order. A third send after `main` wakes
+and an awaited `count` behind it show the mailbox keeps working after its ring was cut late: `s2` is run
+before the count is read.
+```maxon
+type Store
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function keep(s String)
+		self.n = self.n + 1
+		print("kept {s}\n")
+	end 'keep'
+
+	export function count() returns Integer
+		return self.n
+	end 'count'
+end 'Store'
+
+function main() returns ExitCode
+	let h = spawn(capacity: 1) Store.create()
+	try h.keep("s{0}") otherwise panic("a capacity of one takes the first send")
+
+	try h.keep("s{1}", sendTimeout: 5000) otherwise (e) 'refused'
+		match e 'why'
+			mailboxFull(s) then print("full {s}\n")
+			serviceStopped(s) then print("stopped {s}\n")
+		end 'why'
+
+		return 1
+	end 'refused'
+
+	print("sent s1\n")
+	try h.keep("s{2}") otherwise panic("the service has drained its queue, so a capacity of one takes the send")
+
+	let n = try await h.count() otherwise 'gone'
+		return 9
+	end 'gone'
+
+	print("count={n}\n")
+	return 0
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+kept s0
+kept s1
+sent s1
+kept s2
+count=3
+```
+
+<!-- test: a-waiting-sender-meets-a-full-ring-and-grows-it-when-the-inbox-message-leaves -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+⭐ **A WAITING SENDER'S MESSAGE NEEDS A RING SLOT THE FIRST RECEIVE DID NOT FREE.** A capacity of 17 starts a
+16-slot ring. At one processor with preemption off the service has not run when `main` sends 17 messages: `m0`
+waits in the inbox and `m1` to `m16` fill the ring exactly. The eighteenth, given `sendTimeout:`, finds the
+mailbox full and parks `main`. The service's first receive takes the inbox message, which frees no ring slot,
+so the waiting `m17` must grow the full ring before it is queued behind `m16`. The handler checks each
+message against the index FIFO order says it must carry, and every message carries a heap `String`, so a
+sender placed over the ring's oldest slot, or a ring that was not grown, shows as `misplaced` or as a heap
+error (exit 101).
+```maxon
+typealias Tally = int(0 to 1000)
+
+let queued = 17 as Tally
+
+type FullRingTape
+	var seen as Tally
+	var misplaced as Tally
+
+	static function create() returns Self
+		return Self{seen: 0, misplaced: 0}
+	end 'create'
+
+	export function note(s String)
+		if s != "m{self.seen}" 'outOfPlace'
+			self.misplaced = self.misplaced + 1
+		end 'outOfPlace'
+
+		self.seen = self.seen + 1
+	end 'note'
+
+	export function report() returns String
+		return "seen={self.seen} misplaced={self.misplaced}"
+	end 'report'
+end 'FullRingTape'
+
+function main() returns ExitCode
+	let h = spawn(capacity: 17) FullRingTape.create()
+
+	for i in 0 upto queued 'fill'
+		try h.note("m{i}") otherwise panic("a capacity of 17 takes the first 17 sends")
+	end 'fill'
+
+	try h.note("m{queued}", sendTimeout: 5000) otherwise (e) 'refused'
+		match e 'why'
+			mailboxFull(s) then print("full {s}\n")
+			serviceStopped(s) then print("stopped {s}\n")
+		end 'why'
+
+		return 1
+	end 'refused'
+
+	let summary = try await h.report() otherwise 'gone'
+		return 9
+	end 'gone'
+
+	print("{summary}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+seen=18 misplaced=0
+```
+
+<!-- test: shutdown-before-the-service-runs-fails-a-waiting-sender-and-still-runs-the-inbox-message -->
+<!-- procs: 1 -->
+<!-- preempt: off -->
+⭐ **A WAITING SENDER BEHIND THE INBOX MESSAGE OF A SERVICE THAT HAS NEVER RUN, AND A `shutdown()` BEFORE IT
+DOES.** The waiting green thread cannot shut the service down itself, so a second service, `Closer`, does, and
+it is spawned after `Store` so that it runs before it. `s0` fills `Store`'s one slot while `Store` has never run,
+so it waits in the mailbox's inbox. `close` goes to `Closer`, and `s1`, given `sendTimeout:`, finds the mailbox
+full and parks `main` on the sender queue. Its wait is what lets `Closer` run: `Closer` shuts `Store` down
+while `s0` is still in the inbox and `s1` still waits. The waiting send fails `serviceStopped` with its
+`String`, and `Store`, which first runs after the shutdown, still runs `s0` from the inbox.
+```maxon
+let longTimeoutMs = 60000
+
+type Store
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function keep(s String)
+		self.n = self.n + 1
+		print("kept {s}\n")
+	end 'keep'
+end 'Store'
+
+type Closer
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function close(target Store.handle)
+		print("closing\n")
+		target.shutdown()
+	end 'close'
+end 'Closer'
+
+function main() returns ExitCode
+	let h = spawn(capacity: 1) Store.create()
+	let closer = spawn Closer.create()
+	try h.keep("s{0}") otherwise panic("the service has never run, so its one slot is free")
+	try closer.close(h.clone()) otherwise panic("an open mailbox with room takes the send")
+
+	try h.keep("s{1}", sendTimeout: longTimeoutMs) otherwise (e) 'refused'
+		match e 'why'
+			mailboxFull(s) then print("full {s}\n")
+			serviceStopped(s) then print("stopped {s}\n")
+		end 'why'
+
+		return 0
+	end 'refused'
+
+	print("sent s1\n")
+	return 1
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+0
+```
+```stdout
+closing
+stopped s1
+kept s0
 ```
 
 <!-- test: a-parameterless-message-takes-only-a-named-send-timeout -->

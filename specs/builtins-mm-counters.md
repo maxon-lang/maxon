@@ -408,13 +408,14 @@ region of that size. A lock or an inbox cut as a region of its own reads two reg
 
 ⭐ **THE FIRST MESSAGE CUTS NO COUNTED REGION, AND THE SECOND WINDOW IS WHERE THAT IS SAID.** At one
 processor with preemption off the spawned service has not run when `main` sends, so no receiver is parked
-and the message is copied into the mailbox's message ring, which that send cuts: 16 slots of one
-`Counter.request` each. The ring is scaffolding, taken from the slab's uncounted door, because whether a
-message queues, and so whether a ring is cut, grown or shrunk, depends on the schedule — a receiver that
-is already parked is handed the message directly and no ring exists — and a timing-dependent allocation
-must not reach the counts. The sender's staging buffer is arena memory and is uncounted too. So the
-window around the first message moves NEITHER raw column. A ring credited to the columns would read one
-region and 16 slots of bytes here.
+and the message is copied into the mailbox's own inbox, which the region `__svc_spawn` cut already holds:
+the first message cuts no message ring either. The ring a LATER queued message cuts (16 slots of one
+`Counter.request` each) is scaffolding, taken from the slab's uncounted door, because whether a message
+queues, and so whether a ring is cut, grown or shrunk, depends on the schedule — a receiver that is
+already parked is handed the message directly and no ring exists — and a timing-dependent allocation must
+not reach the counts. The sender's staging buffer is arena memory and is uncounted too. So the window
+around the first message moves NEITHER raw column. A first message that cut a ring from the counted door
+would read one region and 16 slots of bytes here.
 
 ⭐ **A LATER MESSAGE TAKES NO RAW REGION EITHER, AND THE THIRD WINDOW IS WHERE THAT IS SAID.** A second
 message to the SAME service is copied into the ring, or straight into the parked receiver's inbox, and
@@ -500,10 +501,10 @@ thread, waking to a closed and drained queue, runs `__mbox_service_exit` and fre
 A runtime whose free door did not debit the live column would leave `live` one above.
 
 ⭐ **EXACTLY ONE, BECAUSE A MESSAGE TAKES NO COUNTED REGION.** At one processor with preemption off the
-service has not run when `main` sends, so the awaited `next` is queued and its send cuts the mailbox's
-message ring. The ring is scaffolding from the slab's uncounted door, freed with the mailbox through the
-matching uncounted door: whether a ring exists depends on whether the receiver was parked when a message
-arrived, and a timing-dependent allocation must not reach the counts. The sender's staging buffer is arena
+service has not run when `main` sends, so the awaited `next` waits in the mailbox's inbox. A message
+ring, cut only by a message that queues behind another, is scaffolding from the slab's uncounted door,
+freed with the mailbox through the matching uncounted door: whether a ring exists depends on whether the
+receiver was parked when a message arrived, and a timing-dependent allocation must not reach the counts. The sender's staging buffer is arena
 memory and uncounted too. A queue that wrapped each request in an envelope of its own, or took its ring
 from the counted door, would credit `total` once more and free it again, so `live` would still come back
 and only the count would tell.
@@ -578,7 +579,7 @@ end 'main'
 <!-- preempt: off -->
 ⭐⭐ **A MESSAGE IS COPIED INTO ITS MAILBOX, SO SENDING ONE MOVES NO TRACKED COLUMN.** The sender fills its
 green thread's staging buffer and `__mbox_send` copies it into the mailbox's ring, or into the mailbox's
-inbox when the receiver is parked; the receiver reads it from the inbox. Nothing is boxed, so `mmAllocTotal` does not move per message. The case
+inbox when the receiver is parked or has never run; the receiver reads it from the inbox. Nothing is boxed, so `mmAllocTotal` does not move per message. The case
 compares two windows on one service whose messages carry only `Integer`s: ONE awaited `read`, and
 eight `add`s that return nothing followed by the same awaited `read`. The two must move the tracked count by
 the same amount — whatever an awaited reply costs, it costs it once in each window — so a message that
