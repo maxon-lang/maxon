@@ -29391,7 +29391,7 @@ export type Parser
 	function recordBaseTypeNameUse(baseIndex ElementIndex, resolved Token)
 		let written = self.tokenAt(baseIndex)
 
-		if written.kind == TokenKind.identifier and not self.qualifiedTypeBaseIsAt(baseIndex) and not self.qualifiedNominalAt.contains(baseIndex) 'aWrittenName'
+		if written.kind == TokenKind.identifier and not self.baseWasQualifiedAt(baseIndex) 'aWrittenName'
 			self.recordTypeNameUse(written.value)
 			return
 		end 'aWrittenName'
@@ -41906,6 +41906,10 @@ export type Parser
 	function respelledHeadMint(typeTok Token) returns CalleeMint
 		return CalleeMint.resolvedTypeQualifier if self.wasRespelled(typeTok) else CalleeMint.notMinted
 	end 'respelledHeadMint'
+
+	function staticCallHeadMint(baseIndex ElementIndex, typeTok Token) returns CalleeMint
+		return CalleeMint.resolvedTypeQualifier if self.baseWasQualifiedAt(baseIndex) else self.respelledHeadMint(typeTok)
+	end 'staticCallHeadMint'
 
 	// ⭐ **THE "UNKNOWN INTRINSIC" ARM OF THE `__Builtins` TABLE — AND OF EVERY OTHER RESERVED CALLEE.**
 	//
@@ -74890,7 +74894,7 @@ export type Parser
 		match try self.qualifiedStaticCallee(typeTok, memberTok: memberTok, aliasName: aliasName) 'callee'
 			minted(minted) then return try self.parseCallNamed(func, callee: minted, anchor: memberTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.primitiveStatic)
 			namespaceQualifiedFree(free) then return try self.parseCallNamed(func, callee: free, anchor: memberTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
-			declared(callee) then return try self.parseDeclaredStaticCall(func, callee: callee, aliasName: aliasName, typeTok: typeTok, memberTok: memberTok, resultUsed: resultUsed, mint: CalleeMint.resolvedTypeQualifier if self.baseWasQualifiedAt(self.pos - TokensPerQualifierSegment) else self.respelledHeadMint(typeTok))
+			declared(callee) then return try self.parseDeclaredStaticCall(func, callee: callee, aliasName: aliasName, typeTok: typeTok, memberTok: memberTok, resultUsed: resultUsed, mint: self.staticCallHeadMint(self.pos - TokensPerQualifierSegment, typeTok: typeTok))
 		end 'callee'
 	end 'parseStaticMemberCall'
 
@@ -100320,7 +100324,7 @@ export type Parser
 			// `primitiveStatic` mint.
 			minted(mintedCallee) then throw SourceParseError.unsupported("`async {String.from(typeTok.value)}.{String.from(memberTok.value)}(…)` — a primitive's static resolves to the compiler-minted callee `{String.from(mintedCallee)}`, and a spawn records no callee but the one the author wrote. Call it directly", line: memberTok.line, column: memberTok.column)
 			namespaceQualifiedFree(free) then return AsyncSpawnCallee.create(free, anchor: memberTok, mint: CalleeMint.notMinted)
-			declared(callee) then return try self.declaredStaticAsyncSpawnCallee(callee, aliasName: aliasName, typeTok: typeTok, memberTok: memberTok)
+			declared(callee) then return try self.declaredStaticAsyncSpawnCallee(callee, aliasName: aliasName, typeTok: typeTok, memberTok: memberTok, mint: self.staticCallHeadMint(baseIndex, typeTok: typeTok))
 		end 'callee'
 	end 'qualifiedAsyncSpawnCallee'
 
@@ -100358,12 +100362,12 @@ export type Parser
 	// PROMISE, whose argument comes from the callee's DECLARED return
 	// (`internPromiseInstanceForCallee`) — the generic BASE. There is no promise-side substitution to make,
 	// so the await would hand back a value at the base type.
-	function declaredStaticAsyncSpawnCallee(callee ByteArray, aliasName ByteArray, typeTok Token, memberTok Token) returns AsyncSpawnCallee throws SourceParseError
+	function declaredStaticAsyncSpawnCallee(callee ByteArray, aliasName ByteArray, typeTok Token, memberTok Token, mint CalleeMint) returns AsyncSpawnCallee throws SourceParseError
 		try self.requireCalleeIsNotRawSurface(callee, anchor: memberTok)
 		try self.requireCalleeIsASpawnableFunction(callee, typeTok: typeTok, memberTok: memberTok)
 
 		match self.constructorInstanceOf(aliasName) 'constructed'
-			none then return AsyncSpawnCallee.create(callee, anchor: memberTok, mint: self.respelledHeadMint(typeTok))
+			none then return AsyncSpawnCallee.create(callee, anchor: memberTok, mint: mint)
 			instance then throw SourceParseError.unsupported("`async {String.from(typeTok.value)}.{String.from(memberTok.value)}(…)` — `{String.from(typeTok.value)}` names a generic INSTANCE, and the promise a spawn mints is typed from the callee's declared return, which names the generic base rather than the instance this alias fixes. Awaiting it would hand back a value at the wrong type. Call it directly", line: memberTok.line, column: memberTok.column)
 		end 'constructed'
 	end 'declaredStaticAsyncSpawnCallee'

@@ -1112,3 +1112,21 @@ end 'main'
 ```maxoncstderr
 error E3005: <fragment>:7:25: operator '+' requires both operands to be the same type: 'stdlib.Count' and 'Count' are different typealiases — cast one side with 'as'
 ```
+
+<!-- test: stdlib-user-shadows.an-async-spawn-reaches-a-shadowed-library-type-by-its-qualified-name -->
+A program that declares its own `Range` spawns a static of the library's `Range` by writing `stdlib.Range`,
+the same spelling the synchronous call accepts.
+```maxon
+type Range
+	export var y as Count
+end 'Range'
+
+function main() returns ExitCode
+	let bound = await async stdlib.Range.create(1, finish: 4)
+	let doubled = bound.map(function(x) gives x * 2)
+	return 0 if doubled.count() > 0 else 1
+end 'main'
+```
+```exitcode
+0
+```
