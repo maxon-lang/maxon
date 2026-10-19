@@ -13,7 +13,8 @@ category: concurrency
 handle; `await p` parks the caller until `p`'s coroutine completes and hands back its result. A coroutine runs
 on the machine that holds its green thread's strand, one member of the strand at a time, and hands over to a
 sibling only at a wait — an `await`, a `sleep`, a `Scheduler.yield()` or an I/O point. The GREEN THREAD around
-them is preempted: one that has held its processor for 10 ms is stopped at its next function entry and put
+them is preempted: one that has held its processor for 10 ms is stopped at its next function entry, `spawn` or
+`async` call and put
 behind every other runnable one (`specs/sched-preempt.md`).
 
 ```text

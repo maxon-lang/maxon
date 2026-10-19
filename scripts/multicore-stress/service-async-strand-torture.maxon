@@ -18,8 +18,8 @@
 // ⭐⭐ THE READING IS A BOUND, NOT A DIFFERENCE. Every batch spawns `BatchSize` services, awaits each one's reply
 // and drops every handle, then settles for `SettleMs`. At most two batches' records are live at once
 // (`RecordsPerService` each, plus `main`), and a spawn carves only when its processor's list and the global one
-// are both empty, so a sound runtime carves no more than that population plus fewer than 64 records on each
-// other processor's list — `bound` — however many batches run. The phases run until one record lost per round
+// are both empty, so a sound runtime carves no more than that population plus fewer than 64 on each of every
+// other processor's lists — `bound` — however many batches run. The phases run until one record lost per round
 // would carry the count to twice the bound. `leaked` is how far the count runs past `bound`, and MUST be 0.
 //
 // ⭐ THE CONTROL IS BUILT IN. `await` batches await their coroutine, so the shutdown finds nothing in flight.
@@ -50,6 +50,10 @@ let RecordsPerService = 3 as Integer
 
 // A processor's free list holds fewer than 64 records.
 let ListSlack = 63
+
+// A processor keeps one free list of GT records and one of reply cells, and a carve from either steps the
+// count.
+let FreeListPools = 2
 
 type Probe
 	export var started as bool
@@ -141,7 +145,7 @@ function phase(joined bool, batches Integer) returns Integer
 end 'phase'
 
 function main() returns ExitCode
-	let bound = (1 + 2 * RecordsPerService * BatchSize) as SchedulerEventCount + ListSlack * ((Scheduler.processorCount() as SchedulerEventCount) - 1)
+	let bound = (1 + 2 * RecordsPerService * BatchSize) as SchedulerEventCount + ListSlack * FreeListPools * ((Scheduler.processorCount() as SchedulerEventCount) - 1)
 	var batches = MinBatches
 
 	while (batches * BatchSize) as SchedulerEventCount < 2 * bound 'enoughToDiscriminate'

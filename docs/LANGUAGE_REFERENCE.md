@@ -5376,7 +5376,7 @@ that call and the report.
   count above the CPU count; any other value leaves the default. `Scheduler.processorCount()` answers the resolved count. Services use
   the processors in parallel; an `async`-only program's coroutines stay on the green thread that started
   them.
-- **Preemption.** A green thread that has run for 10 ms is stopped at its next function entry and moved
+- **Preemption.** A green thread that has run for 10 ms is stopped at its next function entry, `spawn` or `async` call and moved
   behind the other runnable work, so a CPU-bound loop cannot starve the rest of the program.
   `MAXON_PREEMPT=off` disables preemption; `on`, or unset, is the default, and any other value makes the
   program exit at start-up with code 116.

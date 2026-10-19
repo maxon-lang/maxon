@@ -5856,10 +5856,9 @@ type MaxonToStdLowering
 	// and for its reason: deriving it at the parse would put the releaser's symbol in a second place, and a
 	// `funcAddr` naming a symbol nothing built is a link failure with no line on it.
 	//
-	// ⚠ **A MESSAGE WHOSE REPLY OWNS NO HEAP WRITES A NULL RELEASER, and that is the common case.** The cell
-	// arrives zeroed from `__gt_free_get`, so a plan `serviceReplyNeedsReleaser` answers false for stores
-	// nothing at all and both release sites read the 0 and SKIP — `emitAsyncReleaserStore`'s arrangement one
-	// road over.
+	// ⚠ **A MESSAGE WHOSE REPLY OWNS NO HEAP WRITES A NULL RELEASER, and that is the common case.**
+	// `__gt_cell_alloc` stores the releaser it is passed, so a plan `serviceReplyNeedsReleaser` answers false
+	// for passes 0 and both release sites read the 0 and SKIP.
 	function lowerServiceReplyCell(hlOp MaxonOp, dstBlock IrBlock)
 		match hlOp 's'
 			serviceReplyCell(result, messageName, _) then self.emitServiceReplyCell(result, messageName: messageName, dstBlock: dstBlock)

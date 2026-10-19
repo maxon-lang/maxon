@@ -966,6 +966,60 @@ first=1 sum=6
 0
 ```
 
+<!-- test: sched-preempt.a-loop-that-only-spawns-is-preempted-at-a-spawn -->
+<!-- procs: 1 -->
+**A `main` THAT ONLY SPAWNS AND SENDS IS ASKED TO YIELD AT A `spawn`.** A spawn is a preemption point, as
+Go's `newproc` is: it is not `nosplit`, so a pending request lands at the next `go` statement. The loop below
+spends its time in the spawn and the send, so without that point no spawned service runs at one processor
+until `main` parks in its first `await`. 100,000 spawns take far longer than the monitor's 10 ms on any host,
+so the counters are read once, right after the loop and before the first `await`: `preempted` is a request
+`main` honoured inside the loop, and `ran` is a record given back — a service whose handle `main` dropped
+answers its one message and exits. Each is a single boolean, never a count, so a fast or a slow host prints
+the same line; `sum` checks every reply was produced.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias ReplyPromise = Promise with Integer
+typealias ReplyPromiseArray = Array with ReplyPromise
+
+let spawnCount = 100000
+
+type Doubler
+	var index as Integer
+
+	static function create(index Integer) returns Self
+		return Self{index: index}
+	end 'create'
+
+	export function doubled() returns Integer
+		return self.index * 2
+	end 'doubled'
+end 'Doubler'
+
+function main() returns ExitCode
+	var replies = ReplyPromiseArray.create()
+	replies.reserve(spawnCount)
+	for index in 0 upto spawnCount 'spawnDoublers'
+		let doubler = spawn Doubler.create(index as Integer)
+		replies.push(try doubler.doubled() otherwise panic("a fresh doubler takes its only message"))
+	end 'spawnDoublers'
+
+	let afterSpawns = Scheduler.counters()
+	var sum = 0 as Integer
+	for reply in replies 'awaitDoublers'
+		sum = sum + (await reply)
+	end 'awaitDoublers'
+
+	print("preempted={afterSpawns.preempts > 0} ran={afterSpawns.recycledThreads > 0} sum={sum}\n")
+	return 0
+end 'main'
+```
+```stdout
+preempted=true ran=true sum=9999900000
+```
+```exitcode
+0
+```
+
 <!-- test: sched-preempt.a-switch-value-that-is-neither-off-nor-on-is-refused-at-start -->
 <!-- unsupported-targets: wasm32-wasi -->
 **A VALUE THAT IS NEITHER `off` NOR `on` ABORTS THE PROGRAM AT START WITH `RuntimeAbort.schedulerPreemptSwitchUnreadable`, EXIT 116.**

@@ -2959,7 +2959,7 @@ Every field is a `SchedulerEventCount` (`int(0 to u64.max)`) summed over every p
 | `parkWakes` | Times a parked machine's wait returned, for any reason. An idle program keeps it near zero. |
 | `netpollBlocks` | Times a green thread suspended on the network poller waiting for a socket. |
 | `idleProcessors` | Processors idle with no machine right now. |
-| `threadRecordsCarved` | Green-thread records ever carved from the record arena. |
+| `threadRecordsCarved` | Green-thread records and reply cells ever carved from the scheduler's arena. |
 | `timerScanSteps` | Timer-heap entries inspected while cancelling deadlines. |
 | `globalPushes` | Green threads ever pushed onto the global run queue. |
 

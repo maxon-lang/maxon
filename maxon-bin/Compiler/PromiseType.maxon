@@ -36,14 +36,8 @@
 // would be an allocation the leak gate has to see freed, which storing the handle never makes. What does not
 // follow is the conclusion, because **THE FIELD-READ DOOR MUST BE TOLD**: the ordinary lowering of a
 // field read is *load the word at the field's offset*, and with the value being the handle that
-// DEREFERENCES it. `inner` is at offset 0, where a green thread keeps its saved stack pointer (`GtOffSp`).
-// MEASURED on `function peek(p IntPromise) returns Integer { return p.inner }`:
-// `x64.loadRegBaseDisp.word64 r8, [rcx + 0]` — `gt->sp`, handed to a caller that asked for the handle. It
-// never faulted (the stack is committed) and never crashed; it answered a plausible number, and
-// `Testing/SpecWorkerPool.drainHasAnswered` would have peeked a word 16 bytes into the green thread's own
-// stack. ⇒ `fieldReadIsThePromiseHandle` below is what the door asks, and `specs/promise-peek.md`
-// is what would have caught it: with the read left as a load, its `completes-under-the-drive` case exits
-// **0xC0000005**.
+// DEREFERENCES it. `inner` is at offset 0, the green thread's record lock (`GtOffRecordLock`), so the load
+// answers a lock word and never faults. ⇒ `fieldReadIsThePromiseHandle` below is what the door asks.
 //
 // ⭐ **THE SECOND FACT: THE ERROR TYPE IS AN ARGUMENT, AND ITS ABSENCE IS THE NON-THROWING CASE.** The
 // declaration names two parameters and `Promise with T` supplies one. That is not an arity error — the

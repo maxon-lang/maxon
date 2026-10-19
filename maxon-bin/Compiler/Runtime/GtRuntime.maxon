@@ -65,35 +65,35 @@
 // `__gt_stack_free`).
 
 // --- GreenThread struct offsets ---
-// The offsets 0x00 through 0xA8 are a FIXED, portable layout: a field placed at a different offset later is a
-// layout fork, and the hand-assembled chunks would read the wrong word with nothing failing.
-// The offsets the hand-assembled chunks (X64GtRuntime — the context switch, the trampoline, and now the
+// Each offset is derived from the field before it, and `requireGtRecordLayout` refuses a layout whose fields
+// leave a gap or overlap.
+// The offsets the hand-assembled chunks (X64GtRuntime — the context switch, the trampoline and the
 // syscall shim) read/write are EXPORTED so the byte code and this builder name one struct layout — the
 // offsets are a contract the two sides share, not a fact each restates. `GtOffStackBase` is exported
 // because the shim's GT-stack guard reads it (`stackBase == 0` ⇒ run the kernel call directly, no switch).
-export let GtOffSp = 0x00  // saved stack pointer at the context-switch point
-export let GtOffFp = 0x08  // saved frame pointer (rbp) at the context-switch point
-export let GtOffStatus = 0x10  // `GtStatus` below
-export let GtOffStackBase = 0x18  // low address of the GT's stack (0 for an M's scheduler context, a reply cell and a free record that kept none)
+
+// One machine word — the width of most GT fields. NAMED for
+// `GtTeardownBytes`' reason: one literal spelled at every field is one fact written many times.
+export let PointerFieldBytes = 8
+
+// ⭐⭐ **THE RECORD LOCK — FIRST IN THE RECORD AND OUTSIDE EVERY ZEROING.** It is a recursive runtime
+// lock (`RuntimeLock`), free in the zeroed pages the arena carves a record or a cell from, and stays
+// live across every reuse: `__gt_spawn` zeroes from `GtStackWordsEnd` up to `GtOffStaging`, and
+// `__gt_cell_alloc` from `GtOffStackBase` up to `GtCellBytes`. On a
+// green thread it is the strand lock over the strand queue (`GtOffCoroHead`). On a coroutine or a
+// reply cell it is the promise lock, where await, awaitAny and the completer meet over
+// `GtOffAwaiter` — Go's `hchan.lock`. The two roles never fall on one record.
+let GtOffRecordLock = 0
+
+let GtRecordLockBytes = RecursiveLockBytes
+
+export let GtOffStackBase = GtOffRecordLock + GtRecordLockBytes  // low address of the GT's stack (0 for an M's scheduler context, a reply cell and a free record that kept none)
 
 // EXPORTED because the hand-assembled grower reads the CURRENT stack size to compute the doubled size, and
 // `__gt_stack_relocate` reads it for the old stack's top and writes the new size back.
-export let GtOffStackSize = 0x20
-export let GtOffResult = 0x28  // the R8 return value, captured by the trampoline when the GT completes
+export let GtOffStackSize = GtOffStackBase + PointerFieldBytes
 
-// ⭐⭐ **THE SCHEDULER CONTEXT TO SWITCH BACK TO WHEN THIS GT PARKS, YIELDS OR COMPLETES — and ALSO THE ANSWER
-// TO "HAS THIS THREAD EVER RUN?".** `emitGtExecute` stores the executing machine's scheduler context here
-// immediately before every switch-in; that is never 0 and nothing clears it. So `waiter == 0` means no machine
-// has ever switched into it — the population whose stack and struct may be freed without asking its own code
-// first, which is what `emitGtIsDropped` reads it for.
-export let GtOffWaiter = 0x30
-
-// The chain of whichever one list this GT is on: its owner's strand queue or — once reclaimed — a GT-record
-// free list. (The global run queue has its own link, `GtOffRunqNext`.) EXPORTED because the free lists are
-// `SchedRuntime`'s.
-export let GtOffNext = 0x38
-export let GtOffFuncPtr = 0x40  // the async function's address
-export let GtOffArgBuf = 0x48  // a self-pointer to this struct's inline argument region (`GtOffArgInline`)
+let GtStackWordsEnd = GtOffStackSize + PointerFieldBytes
 
 // The green-thread stack GUARD: the low-water address a function's PROLOGUE compares its projected rsp against —
 // `projectedRsp < stackGuard` means the frame would overflow, so the prologue's cold path reaches `__gt_morestack` to
@@ -101,8 +101,8 @@ export let GtOffArgBuf = 0x48  // a self-pointer to this struct's inline argumen
 // moves it to `newBase + gtStackGuardHeight` after a grow or a shrink; an M's inline scheduler context keeps the
 // slab zero, so its guard compare (`projectedRsp >= 0` unsigned) always passes — it runs on the OS thread's own
 // stack and never grows. EXPORTED because the hand-assembled prologue guard reads it and `__gt_stack_relocate`
-// writes it. Offset 0x50 is the FREE word between `argBuf@0x48` and `threw@0x58`.
-export let GtOffStackGuard = 0x50
+// writes it.
+export let GtOffStackGuard = GtOffStackSize + PointerFieldBytes
 
 // ⭐⭐ **A PREEMPTION REQUEST — Go's `stackPreempt`.** `__sysmon` stores it into the guard word of a thread that
 // has held its processor too long (`SchedRuntime.__sched_preemptone`). Read unsigned it is above every stack
@@ -112,66 +112,23 @@ export let GtOffStackGuard = 0x50
 // EXPORTED for both lanes' guards and `__gt_guard_tripped`, and for the monitor.
 export let GtStackGuardPreempt = -1314 as FullRangeInt
 
+export let GtOffStatus = GtOffStackGuard + PointerFieldBytes  // `GtStatus` below
+
+export let GtOffResult = GtOffStatus + PointerFieldBytes  // the R8 return value, captured by the trampoline when the GT completes
+
 // The dual-register ERROR FLAG the trampoline captures from R10 when a THROWING async thunk returns:
 // 0 = success, non-zero = threw (a scalar error's `ordinal + ErrorFlagOrdinalBias`, or a boxed
 // union's box pointer — whatever the thunk left in R10). Read ONLY by `__gt_try_await`, which returns it as
 // the second register of its dual-register exit; `__gt_await` (a non-throwing await) never reads it, so a
-// non-throwing thunk leaving garbage in R10 here is harmless. Offset 0x58 sits above the stack guard at 0x50.
-export let GtOffThrew = 0x58
+// non-throwing thunk leaving garbage in R10 here is harmless.
+export let GtOffThrew = GtOffResult + PointerFieldBytes
 
-// ⭐ **THE NTSTATUS THE COMPLETION PACKET CARRIED, masked to its 32 bits.** Written by the poller's decode
-// (`NetpollRuntime.emitNetpollDecodeCompletion`) beside `io_result` and read by `__gt_subp_yield_read` after
-// its wait, which is how a parked read tells bytes from a clean end of stream from a failure. It fills 0x80 of
-// the 0x60–0xA8 reserved window. EXPORTED because `NetpollRuntime` writes it.
-export let GtOffIoStatus = 0x80
+export let GtOffFuncPtr = GtOffThrew + PointerFieldBytes  // the async function's address
 
-// The GT's OWN Windows TIB stack bounds, saved so the syscall shim can repoint `gs:[0x08]`
-// (NT_TIB.StackBase) / `gs:[0x10]` (NT_TIB.StackLimit) at the system stack for a kernel call and RESTORE
-// them to this GT's stack afterwards — heavy kernel calls probe the TIB and fault when RSP is outside its
-// bounds. `__gt_spawn` seeds them to the GT's own stack (`tibStackBase = stackBase + seed size`,
-// `tibStackLimit = stackBase`); an M's inline scheduler context starts at 0/0 — the shim calls directly for it
-// (`stackBase == 0`), and the first context switch away from it captures its OS thread's real bounds. EXPORTED
-// because the shim (a hand-assembled Target-tier chunk) reads them. Offsets 0x90/0x98 fill two words of the
-// 0x60–0xA8 window, which is now assigned end to end — a further field takes 0xB8 or beyond.
-export let GtOffTibStackBase = 0x90
-export let GtOffTibStackLimit = 0x98
-
-// The TEB's `DeallocationStack` (`gs:[0x1478]`), saved, repointed and restored at every site that
-// moves the two bounds above, so the three always name one stack.
-export let GtOffTibDeallocation = 0xC8
-
-// ⭐ **THE PIPE HANDLE THE IN-FLIGHT READ WAS ISSUED ON.** Written before the read, read by
-// `__gt_promise_drop` to cancel it — and READ ONLY WHERE `io_source` IS NON-ZERO, which is exactly while the
-// kernel owns the operation. 0xA8 is part of the portable layout, so no field moves. EXPORTED because
-// `NetpollRuntime`'s aim writes it.
-export let GtOffIoHandle = 0xA8
-
-// --- The overlapped-read fields ---
-// The 32-byte Win32 OVERLAPPED the yielding ReadFile is issued against, EMBEDDED in the GT struct's reserved
-// 0x60-0x7F window (four words). The poller's decode recovers the reading thread from the completion packet's
-// lpOverlapped by CONTAINING_RECORD (`gt = ovlPtr - GtOffOverlapped`), so no per-read allocation and no separate
-// waiter table is needed. EXPORTED because `NetpollRuntime`'s decode reads it to recover the thread and the read
-// builtin passes `gt + GtOffOverlapped` to ReadFile. It MUST be zero-inited before each ReadFile (a dirty
-// `hEvent` low bit suppresses the completion packet) — the read builtin zeroes it.
-export let GtOffOverlapped = 0x60
-
-// The bytes the completion packet reported transferred (`OVERLAPPED_ENTRY.dwNumberOfBytesTransferred`), read
-// back by `__gt_subp_yield_read` once its wait ends. 0x88 is the free word between `io_status@0x80` and
-// `tib_base@0x90`, so no field moves. EXPORTED — the poller's decode writes it.
-export let GtOffIoResult = 0x88
-
-// ⭐⭐ **THE STAMPED SOURCE KEY OF THE READ THIS THREAD HAS IN FLIGHT** — `index | (gen << 32)` for the poll
-// record `__np_op_open` gave the operation. The completion packet names the OPERATION through its
-// `lpOverlapped` and carries no key of its own, so the decode recovers this thread and then reads the record
-// to wake out of this word. Written BEFORE the read is issued, which is what makes it readable by a packet
-// that arrives before the thread has parked. 0xA0 is the free word between `tib_limit@0x98` and
-// `io_handle@0xA8`, so no field moves. EXPORTED because `NetpollRuntime` writes and reads it.
-//
-// ⛔ **A ZERO HERE MEANS "NO READ IN FLIGHT", AND THE STAMP IS WHAT MAKES THAT EXACT.** `__gt_promise_drop`
-// reads this word to tell a dropped READ from a dropped socket or child wait, so a live read must never
-// stamp a zero — and it cannot: `__np_pd_adopt` BUMPS the record's generation, so every stamped key carries
-// a generation of at least one in its high half whatever index it got, index zero included.
-export let GtOffIoSource = 0xA0
+// The chain of whichever one list this GT is on: its owner's strand queue or — once reclaimed — a free
+// list. (The global run queue has its own link, `GtOffRunqNext`.) EXPORTED because the free lists are
+// `SchedRuntime`'s.
+export let GtOffNext = GtOffFuncPtr + PointerFieldBytes
 
 // ⭐⭐ **THE PER-CALLEE RELEASER — the address of this GT's `__gt_release_<callee>`, or 0.** A spawn whose
 // callee has NO managed argument, result or error writes 0 here and both release sites skip rather than
@@ -185,12 +142,9 @@ export let GtOffIoSource = 0xA0
 // tenant's releaser and release that tenant's arguments out of stale argument slots — a wild free
 // rather than a leak. The zero is what makes "no releaser" the default state of every GT rather
 // than a state the spawn must remember to restore, and `__gt_spawn` is what supplies it: it zeroes
-// every field of the record `__gt_free_get` hands it below the record lock (`GtOffRecordLock`), but
-// the two stack words, which `__gt_free_get` writes.
-//
-// It sits at 0xB0, at the head of the inline argument region, so every field of the portable layout
-// (0x00–0xA8) stays exactly where it is.
-export let GtOffReleaser = 0xB0
+// every field of the record `__gt_free_get` hands it from past the two stack words, which
+// `__gt_free_get` writes, up to the staging word (`GtOffStaging`).
+export let GtOffReleaser = GtOffNext + PointerFieldBytes
 
 // ⭐ **THE ASYNC-TRACE ID (`spawn #1`, `await #1 [yield]`).** A small unique number assigned at spawn from
 // `__gt_trace_counter` (`GtTraceCounterLabel`), so a trace line can name a green thread the way a reader can
@@ -205,38 +159,7 @@ export let GtOffReleaser = 0xB0
 // shape with a debug flag would mean the byte code and the builder disagreed in exactly the configuration
 // nobody routinely runs. Eight bytes per green thread is the price of one layout. The id is assigned only in a
 // traced or `debugStream` build, the two that read it; elsewhere the spawn's zeroing leaves it 0.
-//
-// ⚠ It cannot sit at 0xA0, which the in-flight operation's source key holds. At 0xB8 it leaves every
-// already-placed field (0x00–0xB0, through `io_handle`@0xA8 and `releaser`@0xB0) exactly where it is and moves
-// only the inline argument region.
-let GtOffTraceId = 0xB8
-
-// ⭐⭐ **WHICH DIRECTION THE IN-FLIGHT OVERLAPPED OPERATION IS, `NetpollModeRead` or `NetpollModeWrite`.**
-// A completion packet names the OPERATION through its `lpOverlapped` and carries no direction of its own, so
-// the decode reads it off the thread to know which of the record's two direction words to ready. Written
-// before the operation is issued, beside `io_handle` and under the same guard: it is read only where
-// `io_source` is non-zero. EXPORTED because `NetpollRuntime`'s decode reads it.
-export let GtOffIoMode = 0xC0
-
-// ⭐ **THE INLINE ARGUMENT REGION.** MaxAsyncArgs i64 slots at the END of the GT struct, so a spawn needs NO
-// separate argument buffer — `__gt_spawn` sets `gt.argBuf` (0x48) to a SELF-POINTER `gt + GtOffArgInline`,
-// and the trampoline dereferences that self-pointer as it would a separate buffer.
-//
-// ⚠⚠ **THE REGION IS INLINE RATHER THAN A SEPARATELY ALLOCATED BUFFER.** A separate buffer is a SECOND
-// allocation and a SECOND lifetime per spawn, and the second lifetime is the expensive half — the releaser
-// reads these slots at the AWAIT or the DROP, long after the thread has finished, so a separate buffer would
-// have to be freed by whichever of `__gt_await`, `__gt_try_await` and `__gt_promise_drop` got there, on
-// every arm of each. Inline, the region's lifetime IS the struct's, and `__gt_reclaim` ends both.
-//
-// ⚠ **IT IS THE LAST THING IN THE RESERVED HEADER, SO IT MOVES AND NOTHING ELSE DOES.** A field added to the
-// header takes this region's start and pushes the region down; every field of the portable layout
-// (0x00–0xA8) stays where it is, and the region grafts onto nothing.
-//
-// ⚠ **THE ARGUMENT SLOTS ARE NOT DEAD BY COMPLETION.** The trampoline reads each slot once at run-start, and
-// `__gt_release_<callee>` reloads the managed ones to drop them at the await or the drop, after the GT has
-// finished. Nothing between the spawn's stores and that read writes the region, so the values are still
-// there; a change that reused the region as scratch would be a wild free, not merely a mis-loaded argument.
-export let GtOffArgInline = 0xD0
+let GtOffTraceId = GtOffReleaser + PointerFieldBytes
 
 // ⭐⭐ **THE TEARDOWN RENDEZVOUS WORD — the ONE place the two halves of a green thread's
 // ownership meet, and the ONLY word in the struct that BOTH halves write.** Every green thread is owned by
@@ -272,17 +195,12 @@ export let GtOffArgInline = 0xD0
 // ⚠ NOT exported. Every tombstone asker goes through `emitGtIsDropped`, which is in this file and pairs the
 // load with the compare, so the OFFSET has no reader outside it — which is what E3092 refuses, and is the
 // shape a single-homed layout constant should have.
-let GtOffTeardown = GtOffArgInline + ArgBufBytes
+let GtOffTeardown = GtOffTraceId + PointerFieldBytes
 
 // One i64 word for the teardown rendezvous. NAMED rather than spelled `8` beside `GtOffTeardown` for the
 // reason `StackWordBytes` was split out of `GtArgSlotBytes`: two facts sharing one literal means an edit to
 // either silently moves the other.
 let GtTeardownBytes = 8
-
-// One machine word — the width of each GT field appended below the teardown word. NAMED for
-// `GtTeardownBytes`' reason: one literal spelled at every field is one fact written many times.
-export let PointerFieldBytes = 8
-let GtStackWordsEnd = GtOffStackSize + PointerFieldBytes
 
 // ⭐⭐ **THE GREEN THREAD THIS GT BELONGS TO — the head of its STRAND.** A coroutine's owner is the green thread
 // that created it; a GREEN THREAD's owner is ITSELF, which is what makes the relation total rather than a
@@ -293,12 +211,118 @@ let GtStackWordsEnd = GtOffStackSize + PointerFieldBytes
 // EXPORTED because `SchedRuntime.emitSchedBecomeM` stamps the scheduler context's self-ownership.
 export let GtOffOwner = GtOffTeardown + GtTeardownBytes
 
+// ⭐⭐ **THE GT PARKED WAITING FOR THIS ONE TO COMPLETE, OR 0.** Written under this GT's record lock
+// (`GtOffRecordLock`) by the await and awaitAny registrations, taken under it by
+// `__gt_runner_done`. An awaitAny registration stores its thread with `AwaitAnyTag` set, so the
+// completer knows to ask `GtOffSelectDone` before readying it.
+let GtOffAwaiter = GtOffOwner + PointerFieldBytes
+
+// ⭐ **ON A REPLY CELL ANSWERING WITH A VALUE HELD AT AN INTERFACE TYPE: THE VALUE'S WITNESS HALF.** A cell
+// carries one value word (`GtOffResult`), and a fat pointer is two, so the service loop writes the witness
+// here before `__gt_cell_complete` publishes (`ServiceLoop.storeReplyWitness`) and the awaiter takes it
+// through `__gt_reply_witness`; the reply releaser drops through it (`AsyncReleaser.asyncSlotsAt`).
+// 0 on every other green thread.
+export let GtOffReplyWitness = GtOffAwaiter + PointerFieldBytes
+
+export let GtOffRenounced = GtOffReplyWitness + PointerFieldBytes
+
+// A reply cell is the record's first `GtCellBytes` and is carved exactly that long, so every field a cell
+// is read or written through lies below it: one past it reads a neighbouring cell's bytes. The layout check
+// sees only that the prefix tiles, never which fields a cell's readers touch.
+export let GtCellBytes = GtOffRenounced + PointerFieldBytes
+
+export let GtOffSp = GtCellBytes  // saved stack pointer at the context-switch point
+export let GtOffFp = GtOffSp + PointerFieldBytes  // saved frame pointer (rbp) at the context-switch point
+
+// ⭐⭐ **THE SCHEDULER CONTEXT TO SWITCH BACK TO WHEN THIS GT PARKS, YIELDS OR COMPLETES — and ALSO THE ANSWER
+// TO "HAS THIS THREAD EVER RUN?".** `emitGtExecute` stores the executing machine's scheduler context here
+// immediately before every switch-in; that is never 0 and nothing clears it. So `waiter == 0` means no machine
+// has ever switched into it — the population whose stack and struct may be freed without asking its own code
+// first, which is what `emitGtIsDropped` reads it for.
+export let GtOffWaiter = GtOffFp + PointerFieldBytes
+
+export let GtOffArgBuf = GtOffWaiter + PointerFieldBytes  // a self-pointer to this struct's inline argument region (`GtOffArgInline`)
+
+// --- The overlapped-read fields ---
+// The 32-byte Win32 OVERLAPPED the yielding ReadFile is issued against, EMBEDDED in the GT struct (four
+// words). The poller's decode recovers the reading thread from the completion packet's
+// lpOverlapped by CONTAINING_RECORD (`gt = ovlPtr - GtOffOverlapped`), so no per-read allocation and no separate
+// waiter table is needed. EXPORTED because `NetpollRuntime`'s decode reads it to recover the thread and the read
+// builtin passes `gt + GtOffOverlapped` to ReadFile. It MUST be zero-inited before each ReadFile (a dirty
+// `hEvent` low bit suppresses the completion packet) — the read builtin zeroes it.
+export let GtOffOverlapped = GtOffArgBuf + PointerFieldBytes
+let GtOverlappedBytes = 32
+
+// ⭐ **THE NTSTATUS THE COMPLETION PACKET CARRIED, masked to its 32 bits.** Written by the poller's decode
+// (`NetpollRuntime.emitNetpollDecodeCompletion`) beside `io_result` and read by `__gt_subp_yield_read` after
+// its wait, which is how a parked read tells bytes from a clean end of stream from a failure. EXPORTED because
+// `NetpollRuntime` writes it.
+export let GtOffIoStatus = GtOffOverlapped + GtOverlappedBytes
+
+// The bytes the completion packet reported transferred (`OVERLAPPED_ENTRY.dwNumberOfBytesTransferred`), read
+// back by `__gt_subp_yield_read` once its wait ends. EXPORTED — the poller's decode writes it.
+export let GtOffIoResult = GtOffIoStatus + PointerFieldBytes
+
+// The GT's OWN Windows TIB stack bounds, saved so the syscall shim can repoint `gs:[0x08]`
+// (NT_TIB.StackBase) / `gs:[0x10]` (NT_TIB.StackLimit) at the system stack for a kernel call and RESTORE
+// them to this GT's stack afterwards — heavy kernel calls probe the TIB and fault when RSP is outside its
+// bounds. `__gt_spawn` seeds them to the GT's own stack (`tibStackBase = stackBase + seed size`,
+// `tibStackLimit = stackBase`); an M's inline scheduler context starts at 0/0 — the shim calls directly for it
+// (`stackBase == 0`), and the first context switch away from it captures its OS thread's real bounds. EXPORTED
+// because the shim (a hand-assembled Target-tier chunk) reads them.
+export let GtOffTibStackBase = GtOffIoResult + PointerFieldBytes
+export let GtOffTibStackLimit = GtOffTibStackBase + PointerFieldBytes
+
+// ⭐⭐ **THE STAMPED SOURCE KEY OF THE READ THIS THREAD HAS IN FLIGHT** — `index | (gen << 32)` for the poll
+// record `__np_op_open` gave the operation. The completion packet names the OPERATION through its
+// `lpOverlapped` and carries no key of its own, so the decode recovers this thread and then reads the record
+// to wake out of this word. Written BEFORE the read is issued, which is what makes it readable by a packet
+// that arrives before the thread has parked. EXPORTED because `NetpollRuntime` writes and reads it.
+//
+// ⛔ **A ZERO HERE MEANS "NO READ IN FLIGHT", AND THE STAMP IS WHAT MAKES THAT EXACT.** `__gt_promise_drop`
+// reads this word to tell a dropped READ from a dropped socket or child wait, so a live read must never
+// stamp a zero — and it cannot: `__np_pd_adopt` BUMPS the record's generation, so every stamped key carries
+// a generation of at least one in its high half whatever index it got, index zero included.
+export let GtOffIoSource = GtOffTibStackLimit + PointerFieldBytes
+
+// ⭐ **THE PIPE HANDLE THE IN-FLIGHT READ WAS ISSUED ON.** Written before the read, read by
+// `__gt_promise_drop` to cancel it — and READ ONLY WHERE `io_source` IS NON-ZERO, which is exactly while the
+// kernel owns the operation. EXPORTED because `NetpollRuntime`'s aim writes it.
+export let GtOffIoHandle = GtOffIoSource + PointerFieldBytes
+
+// ⭐⭐ **WHICH DIRECTION THE IN-FLIGHT OVERLAPPED OPERATION IS, `NetpollModeRead` or `NetpollModeWrite`.**
+// A completion packet names the OPERATION through its `lpOverlapped` and carries no direction of its own, so
+// the decode reads it off the thread to know which of the record's two direction words to ready. Written
+// before the operation is issued, beside `io_handle` and under the same guard: it is read only where
+// `io_source` is non-zero. EXPORTED because `NetpollRuntime`'s decode reads it.
+export let GtOffIoMode = GtOffIoHandle + PointerFieldBytes
+
+// The TEB's `DeallocationStack` (`gs:[0x1478]`), saved, repointed and restored at every site that
+// moves the two bounds above, so the three always name one stack.
+export let GtOffTibDeallocation = GtOffIoMode + PointerFieldBytes
+
+// ⭐ **THE INLINE ARGUMENT REGION.** MaxAsyncArgs i64 slots inside the GT struct, so a spawn needs NO
+// separate argument buffer — `__gt_spawn` sets `gt.argBuf` to a SELF-POINTER `gt + GtOffArgInline`,
+// and the trampoline dereferences that self-pointer as it would a separate buffer.
+//
+// ⚠⚠ **THE REGION IS INLINE RATHER THAN A SEPARATELY ALLOCATED BUFFER.** A separate buffer is a SECOND
+// allocation and a SECOND lifetime per spawn, and the second lifetime is the expensive half — the releaser
+// reads these slots at the AWAIT or the DROP, long after the thread has finished, so a separate buffer would
+// have to be freed by whichever of `__gt_await`, `__gt_try_await` and `__gt_promise_drop` got there, on
+// every arm of each. Inline, the region's lifetime IS the struct's, and `__gt_reclaim` ends both.
+//
+// ⚠ **THE ARGUMENT SLOTS ARE NOT DEAD BY COMPLETION.** The trampoline reads each slot once at run-start, and
+// `__gt_release_<callee>` reloads the managed ones to drop them at the await or the drop, after the GT has
+// finished. Nothing between the spawn's stores and that read writes the region, so the values are still
+// there; a change that reused the region as scratch would be a wild free, not merely a mis-loaded argument.
+export let GtOffArgInline = GtOffTibDeallocation + PointerFieldBytes
+
 // ⭐⭐ **THE STRAND QUEUE — the members of this green thread's strand that are runnable, an intrusive
 // FIFO through `GtOffNext`.** Meaningful only on a green thread. A readied coroutine and a yielder
 // join the back; the owner readied from a wait joins the FRONT, so a strand runs its owner first
 // when the owner is ready. The owner's record lock (`GtOffRecordLock`) guards both ends. The head
 // is stored with a release, because `__gt_strand_next` reads it with an acquire and no lock.
-let GtOffCoroHead = GtOffOwner + PointerFieldBytes
+let GtOffCoroHead = GtOffArgInline + ArgBufBytes
 let GtOffCoroTail = GtOffCoroHead + PointerFieldBytes
 
 // ⭐⭐⭐ **THE PARK NOTE — WHAT KIND OF WAIT THIS GT IS ENTERING, AND THE ONE ARGUMENT THAT WAIT NEEDS.** A thread
@@ -393,16 +417,10 @@ let StrandRefsOwnerAndHold = 2
 // taken on whatever thread readies a member, a machine draining the poller included.
 let GtOffStrandRefs = GtOffStrandHolder + PointerFieldBytes
 
-// ⭐⭐ **THE GT PARKED WAITING FOR THIS ONE TO COMPLETE, OR 0.** Written under this GT's record lock
-// (`GtOffRecordLock`) by the await and awaitAny registrations, taken under it by
-// `__gt_runner_done`. An awaitAny registration stores its thread with `AwaitAnyTag` set, so the
-// completer knows to ask `GtOffSelectDone` before readying it.
-let GtOffAwaiter = GtOffStrandRefs + PointerFieldBytes
-
 // ⭐ **ON AN awaitAny WAITER: 1 once a completer has readied it, 0 while it is still registered** —
 // Go's `selectDone`, so K slots completing ready the waiter once. A completer claims it by CAS,
 // because K completers hold K different record locks.
-let GtOffSelectDone = GtOffAwaiter + PointerFieldBytes
+let GtOffSelectDone = GtOffStrandRefs + PointerFieldBytes
 let SelectPending = 0
 let SelectReadied = 1
 
@@ -439,21 +457,12 @@ let GtOffStackHighWater = GtOffStackResizedAt + PointerFieldBytes
 // whenever a member runs, because the taking is what starts one.
 let GtOffStrandResume = GtOffStackHighWater + PointerFieldBytes
 
-// ⭐ **ON A REPLY CELL ANSWERING WITH A VALUE HELD AT AN INTERFACE TYPE: THE VALUE'S WITNESS HALF.** A cell
-// carries one value word (`GtOffResult`), and a fat pointer is two, so the service loop writes the witness
-// here before `__gt_cell_complete` publishes (`ServiceLoop.storeReplyWitness`) and the awaiter takes it
-// through `__gt_reply_witness`; the reply releaser drops through it (`AsyncReleaser.asyncSlotsAt`).
-// 0 on every other green thread.
-export let GtOffReplyWitness = GtOffStrandResume + PointerFieldBytes
-
-export let GtOffRenounced = GtOffReplyWitness + PointerFieldBytes
-
 export let GtPromiseHeld = 0
 let GtPromiseGivenUp = 1
 
 let GtRestraintArmed = 1
 
-export let GtOffHold = GtOffRenounced + PointerFieldBytes
+export let GtOffHold = GtOffStrandResume + PointerFieldBytes
 
 export let GtHoldReleased = 0 as FullRangeInt
 export let GtHoldRequested = 1 as FullRangeInt
@@ -484,32 +493,18 @@ export enum GtLastErrorDirection
 	fromGt
 end 'GtLastErrorDirection'
 
-// ⭐⭐ **THE RECORD LOCK — `__gt_spawn` ZEROES EVERY FIELD BELOW IT BUT THE TWO STACK WORDS, AND
-// NONE OF IT OR WHAT FOLLOWS IT.** It is a recursive runtime lock (`RuntimeLock`), free in
-// the zeroed pages the arena carves the record from (`__gt_free_get`), and stays live across every
-// reuse; a field placed after it escapes the spawn's zeroing, which only `GtOffStaging` wants. On a
-// green thread it is the strand lock over the strand queue (`GtOffCoroHead`). On a coroutine or a
-// reply cell it is the promise lock, where await, awaitAny and the completer meet over
-// `GtOffAwaiter` — Go's `hchan.lock`. The two roles never fall on one record.
-//
-// ⚠ This line is the one a growth must restate: a new field goes before the lock, and this offset
-// names the last field rather than following it. A field added without re-deriving it shares the
-// lock's bytes and escapes the spawn's zeroing, and nothing refuses it.
-let GtOffRecordLock = GtOffSendOutcome + PointerFieldBytes
-
 // The thread's message staging buffer (`MailboxRuntime.MboxStagingName`), or 0 until its first
-// send. It sits past the record lock so the spawn's zeroing leaves it: the buffer is arena memory
-// that is never freed, so a reused record keeps the one it has, and a zeroed word would carve a
-// second.
-export let GtOffStaging = GtOffRecordLock + RecursiveLockBytes
+// send. It is the last field, where the spawn's zeroing ends, so the zeroing leaves it: the buffer is
+// arena memory that is never freed, so a reused record keeps the one it has, and a zeroed word would
+// carve a second.
+export let GtOffStaging = GtOffSendOutcome + PointerFieldBytes
 
-// The GT struct's size: the 0xC8 header, the inline argument region, then every field above, the
-// record lock and the staging word last. Must be a multiple of 8.
+// The GT struct's size. Must be a multiple of 8.
 //
-// Growth inserts before the record lock, which is why nothing else already placed ever moves: every
-// field of the portable layout (0x00–0xA8) and every offset a hand-assembled chunk spells is below
-// 0xC8, and `SchedRuntime`'s M fields after the inline GT are each derived from the one before, so
-// a growth walks them all along correctly.
+// A new field goes before `GtOffStaging`, inside the spawn's zeroing, and into
+// `requireGtRecordLayout`'s roster, whose tiling check panics at install on a field it does not name.
+// `SchedRuntime`'s M fields after the inline GT are each derived from the one before, so a growth
+// walks them all along correctly.
 //
 // EXPORTED because `SchedRuntime`'s M struct embeds a whole GT inline as its scheduler context.
 export let GtStructSize = GtOffStaging + PointerFieldBytes
@@ -1206,7 +1201,8 @@ export let GtSystemStackAllocName = b"__gt_system_stack_alloc"
 let GtStackShrinkName = b"__gt_stack_shrink"
 
 // ⭐⭐ **`__gt_preempt(gt)` — HONOUR A PREEMPTION REQUEST: Go's `newstack` preempt arm and `gopreempt_m`.** See
-// `buildGtPreempt`. Called by `__gt_guard_tripped`'s preempt arm, a hand-assembled chunk on both ISAs, so EXPORTED
+// `buildGtPreempt`. Called by every spawn (`emitGtHonourPreemptRequest`) and by `__gt_guard_tripped`'s preempt
+// arm, a hand-assembled chunk on both ISAs, so EXPORTED
 // for the root that keeps it alive (`DeadFunctionElimination.seedRoots`), for both arms and for the backends,
 // which certify the depth of its call tree against the guard margin.
 export let GtPreemptName = b"__gt_preempt"
@@ -1376,8 +1372,8 @@ let GtReclaimName = b"__gt_reclaim"
 // `specs/promise-peek.md:rejected-on-wasm` pins that attribution.
 export let GtIsCompleteName = b"__gt_is_complete"
 
-// ⭐⭐⭐ **THE REPLY CELL — A GT THAT NEVER RUNS.** `__gt_cell_alloc(releaser) -> cell` takes a GT struct
-// through `__gt_free_get` and leaves it **UNPUBLISHED**: `stackBase = 0`, `funcPtr = 0`, `status = waiting`,
+// ⭐⭐⭐ **THE REPLY CELL — A GT THAT NEVER RUNS.** `__gt_cell_alloc(releaser) -> cell` takes a cell, the
+// record's first `GtCellBytes`, through `__gt_cell_get` and leaves it **UNPUBLISHED**: `stackBase = 0`, `funcPtr = 0`, `status = waiting`,
 // on no queue and in no store. It is a wait token plus a result slot, and it is a `Promise` to everything
 // above it — `specs/services.md` states a reply is an ordinary `Promise` — so `__gt_await`,
 // `__gt_try_await`, `__gt_is_complete` and E3100's linearity treat it as any other promise.
@@ -1798,8 +1794,9 @@ let GtRunQueueTailLabel = b"__gt_run_queue_tail"
 // ⭐⭐ **THE RECORD IS THE OPPOSITE: TYPE-STABLE, RECYCLED THROUGH FREE LISTS AND NEVER FREED.** It
 // is carved from the scheduler's record arena, `__gt_reclaim` hands it to `__gt_free_put` and
 // `__gt_spawn` takes one from `__gt_free_get` (`SchedRuntime.GtFreePutName` and `GtFreeGetName`
-// carry why); a spawn zeroes the record over every field below its record lock but the two stack
-// words, and a reply cell writes the words it reads.
+// carry why), and a reply cell travels the same road through `__gt_cell_put` and `__gt_cell_get`; a
+// spawn zeroes the record from past the two stack words up to `GtOffStaging`, and a cell is zeroed
+// past its record lock.
 //
 // ⭐ **RECLAIM AT THE AWAITER, NOT AT COMPLETION.** A GT can complete long before anybody awaits it, and its
 // struct still holds its result for a live, un-awaited promise. Reclaiming at completion would put that struct
@@ -2469,7 +2466,94 @@ export function ioCompletionShape(target Target) returns IoCompletionShape
 	end 'os'
 end 'ioCompletionShape'
 
+function requireGtFieldAt(cursor FullRangeInt, name String, offset FullRangeInt, width FullRangeInt) returns FullRangeInt
+	if offset != cursor 'tiles'
+		panic("requireGtRecordLayout: {name} is at offset {offset} but the field before it ends at {cursor} — the record's fields must tile it with no gap and no overlap")
+	end 'tiles'
+
+	return cursor + width
+end 'requireGtFieldAt'
+
+function requireGtRecordLayout()
+	var cursor = requireGtFieldAt(0, name: "GtOffRecordLock", offset: GtOffRecordLock, width: GtRecordLockBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffStackBase", offset: GtOffStackBase, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffStackSize", offset: GtOffStackSize, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffStackGuard", offset: GtOffStackGuard, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffStatus", offset: GtOffStatus, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffResult", offset: GtOffResult, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffThrew", offset: GtOffThrew, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffFuncPtr", offset: GtOffFuncPtr, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffNext", offset: GtOffNext, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffReleaser", offset: GtOffReleaser, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffTraceId", offset: GtOffTraceId, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffTeardown", offset: GtOffTeardown, width: GtTeardownBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffOwner", offset: GtOffOwner, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffAwaiter", offset: GtOffAwaiter, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffReplyWitness", offset: GtOffReplyWitness, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffRenounced", offset: GtOffRenounced, width: PointerFieldBytes)
+
+	if cursor != GtCellBytes 'cellPrefixEnds'
+		panic("requireGtRecordLayout: the fields a reply cell is read through end at offset {cursor} but GtCellBytes is {GtCellBytes} — a cell is carved exactly that long, so a field past it reads beyond the cell")
+	end 'cellPrefixEnds'
+
+	cursor = requireGtFieldAt(cursor, name: "GtOffSp", offset: GtOffSp, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffFp", offset: GtOffFp, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffWaiter", offset: GtOffWaiter, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffArgBuf", offset: GtOffArgBuf, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffOverlapped", offset: GtOffOverlapped, width: GtOverlappedBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffIoStatus", offset: GtOffIoStatus, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffIoResult", offset: GtOffIoResult, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffTibStackBase", offset: GtOffTibStackBase, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffTibStackLimit", offset: GtOffTibStackLimit, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffIoSource", offset: GtOffIoSource, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffIoHandle", offset: GtOffIoHandle, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffIoMode", offset: GtOffIoMode, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffTibDeallocation", offset: GtOffTibDeallocation, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffArgInline", offset: GtOffArgInline, width: ArgBufBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffCoroHead", offset: GtOffCoroHead, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffCoroTail", offset: GtOffCoroTail, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffParkKind", offset: GtOffParkKind, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffParkArg", offset: GtOffParkArg, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffParkGen", offset: GtOffParkGen, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffThreadAllocs", offset: GtOffThreadAllocs, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffThreadFrees", offset: GtOffThreadFrees, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffThreadAllocBytes", offset: GtOffThreadAllocBytes, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffCpuOffset", offset: GtOffCpuOffset, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffIsMainThread", offset: GtOffIsMainThread, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffStrandHolder", offset: GtOffStrandHolder, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffStrandRefs", offset: GtOffStrandRefs, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffSelectDone", offset: GtOffSelectDone, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffRunqNext", offset: GtOffRunqNext, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffStackMarks", offset: GtOffStackMarks, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffStackResizedAt", offset: GtOffStackResizedAt, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffStackHighWater", offset: GtOffStackHighWater, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffStrandResume", offset: GtOffStrandResume, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffHold", offset: GtOffHold, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffPinnedM", offset: GtOffPinnedM, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffPinDepth", offset: GtOffPinDepth, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffLastError", offset: GtOffLastError, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffSendNext", offset: GtOffSendNext, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffSendPrev", offset: GtOffSendPrev, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffSendDeadline", offset: GtOffSendDeadline, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffSendOutcome", offset: GtOffSendOutcome, width: PointerFieldBytes)
+	cursor = requireGtFieldAt(cursor, name: "GtOffStaging", offset: GtOffStaging, width: PointerFieldBytes)
+
+	if cursor != GtStructSize 'structEnds'
+		panic("requireGtRecordLayout: the fields end at offset {cursor} but GtStructSize is {GtStructSize}")
+	end 'structEnds'
+
+	if GtOffStackGuard > i8.max 'guardReachesX64Disp8'
+		panic("requireGtRecordLayout: the stack guard word is at offset {GtOffStackGuard}, past the {i8.max} a signed disp8 reaches, which the x64 prologue guard's compare is encoded with")
+	end 'guardReachesX64Disp8'
+
+	if not arm64ByteOffsetFitsScaledImm12(GtOffStackGuard, scale: Arm64SlotScale) 'guardReachesArm64Imm12'
+		panic("requireGtRecordLayout: the stack guard word is at offset {GtOffStackGuard}, which has no scaled imm12 form for the arm64 prologue guard's ldr")
+	end 'guardReachesArm64Imm12'
+end 'requireGtRecordLayout'
+
 export function installGtRuntime(module StdModule, globalData GlobalDataTable, asyncTrace bool, target Target, streamState EnumLayout, releasesRegistry bool, releasesGlobals bool, requestStagingBytes ByteOffset)
+	requireGtRecordLayout()
+
 	// The first function index this install owns — the range `assertCompletedPublicationIsOrdered` checks at
 	// the end. Taken from the module rather than assumed to be zero: the runtime installs run after the whole
 	// user program is already lowered into this module.
@@ -2684,9 +2768,8 @@ function buildGtSpawn(module StdModule, kind GtSpawnKind, tracing GtTracing, tar
 	let gt = ids.mint()
 	module.appendOp(initBlock, op: StdOp.call(gt, callee: GtFreeGetName, args: argsOf(stackSizeVal)))
 
-	module.appendOp(initBlock, op: StdOp.memFill(gt, byteCountId: emitConst(module, block: initBlock, value: GtOffStackBase, ids: ids), value: 0))
 	let afterStack = emitFieldAddr(module, block: initBlock, record: gt, offset: GtStackWordsEnd, ids: ids)
-	module.appendOp(initBlock, op: StdOp.memFill(afterStack, byteCountId: emitConst(module, block: initBlock, value: GtOffRecordLock - GtStackWordsEnd, ids: ids), value: 0))
+	module.appendOp(initBlock, op: StdOp.memFill(afterStack, byteCountId: emitConst(module, block: initBlock, value: GtOffStaging - GtStackWordsEnd, ids: ids), value: 0))
 
 	// gt.argBuf = gt + GtOffArgInline — a SELF-POINTER into this struct's own inline arg region.
 	// The trampoline reads `gt.argBuf` as a pointer and loads the slots from there, so pointing it at the inline
@@ -2751,6 +2834,14 @@ function buildGtSpawn(module StdModule, kind GtSpawnKind, tracing GtTracing, tar
 		mainThread then break
 	end 'countedAndNamed'
 
+	// Runtime functions skip the stack guard, so without this a loop that only spawns never reads a pending
+	// request, and at one processor nothing it spawned runs until it parks.
+	match kind 'preemptionPoint'
+		coroutine or
+		greenThread then seeded = emitGtHonourPreemptRequest(module, func: func, block: seeded, ids: ids)
+		mainThread then break
+	end 'preemptionPoint'
+
 	// ⚠ **THE GT IS NOT PUBLISHED HERE.** It is returned UNQUEUED, and the lowering calls `__gt_ready` once
 	// every argument slot and the releaser are written — see `GtReadyName` for the wrong answer that ordering
 	// exists to prevent.
@@ -2758,6 +2849,24 @@ function buildGtSpawn(module StdModule, kind GtSpawnKind, tracing GtTracing, tar
 
 	module.functions.push(func)
 end 'buildGtSpawn'
+
+function emitGtHonourPreemptRequest(module StdModule, func IrFunction, block IrBlock, ids ValueMinter) returns IrBlock
+	var honour = module.addBlock(func, label: b"spawnpreempt", heat: BlockHeat.cold)
+	var resume = module.addBlock(func, label: b"spawnresume", heat: BlockHeat.normal)
+
+	let gt = emitLoadCurrentGt(module, block: block, ids: ids)
+	emitBranchOnPreemptRequest(module, block: block, gt: gt, requested: honour, notRequested: resume, ids: ids)
+
+	module.appendOp(honour, op: StdOp.call(ids.mint(), callee: GtPreemptName, args: argsOf(gt)))
+	module.setTerminator(honour, op: StdOp.branch(resume.id))
+
+	return resume
+end 'emitGtHonourPreemptRequest'
+
+export function emitBranchOnPreemptRequest(module StdModule, block IrBlock, gt ValueId, requested IrBlock, notRequested IrBlock, ids ValueMinter)
+	let guard = emitLoadField(module, block: block, record: gt, offset: GtOffStackGuard, ids: ids)
+	emitBranchOnCompare(module, block: block, value: guard, pred: StdCmpPred.eq, against: GtStackGuardPreempt, whenTrue: requested, whenFalse: notRequested, ids: ids)
+end 'emitBranchOnPreemptRequest'
 
 // `gt.stackGuard = gt.stackBase + gtStackGuardHeight` — the low-water mark a guarded prologue compares its
 // projected stack pointer against, and what clears a preemption request. The spawn seeds it, a switch-in and
@@ -5160,9 +5269,16 @@ function buildGtReclaim(module StdModule)
 
 	var released = emitGtReleaserCall(module, func: func, ids: ids, startBlock: entry, gt: gt, resultDisposition: AsyncResultDisposition.ownedByThisDrop)
 
+	var cellBlock = module.addBlock(func, label: b"reclaimcell", heat: BlockHeat.normal)
+	var recordBlock = module.addBlock(func, label: b"reclaimrecord", heat: BlockHeat.normal)
 	var putBlock = module.addBlock(func, label: b"reclaimput", heat: BlockHeat.normal)
-	let seed = emitLoadGlobalWord(module, block: released, label: GtSeedBytesLabel, ids: ids)
-	emitGtDropStackUnlessSized(module, func: func, cur: released, record: gt, kept: seed, cont: putBlock, ids: ids)
+	module.setTerminator(released, op: StdOp.condBranch(emitGtIsReplyCell(module, block: released, gt: gt, ids: ids), thenBlockId: cellBlock.id, elseBlockId: recordBlock.id))
+
+	module.appendOp(cellBlock, op: StdOp.call(ids.mint(), callee: GtCellPutName, args: argsOf(gt)))
+	module.setTerminator(cellBlock, op: StdOp.retVoid)
+
+	let seed = emitLoadGlobalWord(module, block: recordBlock, label: GtSeedBytesLabel, ids: ids)
+	emitGtDropStackUnlessSized(module, func: func, cur: recordBlock, record: gt, kept: seed, cont: putBlock, ids: ids)
 
 	module.appendOp(putBlock, op: StdOp.call(ids.mint(), callee: GtFreePutName, args: argsOf(gt)))
 	module.setTerminator(putBlock, op: StdOp.retVoid)
@@ -5369,8 +5485,8 @@ let CompletedPublicationCheckName = "assertCompletedPublicationIsOrdered"
 //   • a plain `loadIndirect` from `GtOffStatus` whose result is compared FOR EQUALITY against the constant
 //     `completed` — an OBSERVATION with no acquire, which is the same defect read from the other end.
 //
-// Both tests require the OFFSET **and** the constant together: `GtOffStatus` is 0x10, an offset three other
-// structs in this file also use, and `2` is an ordinary small integer, so only the pair names the publication.
+// Both tests require the OFFSET **and** the constant together: `GtOffStatus` is a small offset other structs
+// in this file also use, and `2` is an ordinary small integer, so only the pair names the publication.
 //
 // ⚠ **THE PAIR ALONE IS NOT ENOUGH, WHICH IS WHY THE OBSERVATION TEST ALSO READS THE PREDICATE** — see
 // `requireOrderedObservation` for the record in another file that matched both halves and asked nothing about a
@@ -5504,8 +5620,8 @@ end 'requireOrderedPublication'
 // one spelling would go quiet the day a fold ran first.
 function requireOrderedObservation(func IrFunction, lhs ValueId, rhs ValueId, pred StdCmpPred, completedConsts ValueIdArray, plainStatusLoads ValueIdArray)
 	// ⛔⛔ **ONLY AN EQUALITY TEST ASKS THIS QUESTION, AND THE OFFSET-AND-CONSTANT PAIR IS NOT THE EXACT
-	// DISCRIMINATOR THIS CHECK'S HEADER CLAIMS.** `GtOffStatus` is 0x10 and `completed` is 2, and a record in
-	// another file whose word at 0x10 is ORDERED against 2 matches both halves while asking nothing about a
+	// DISCRIMINATOR THIS CHECK'S HEADER CLAIMS.** `completed` is 2, and a record in another file whose word
+	// at `GtOffStatus`'s offset is ORDERED against 2 matches both halves while asking nothing about a
 	// green thread. ⇒ the predicate is the third half of the pair: *"has this thread reached `completed`?"* is
 	// `==` or `!=` and can be nothing else, so an ORDER comparison is not the observation this check exists for.
 	//
@@ -5618,7 +5734,9 @@ end 'buildGtIsComplete'
 // `GtCellAllocName` for why the discriminator is this word and not a kind field, and for the one population
 // that shares the zero and cannot reach this predicate.
 //
-// ⚠ NOT exported: its single reader is `__gt_promise_drop`, in this file. A cell needs no such question
+// ⚠ NOT exported: its readers are `__gt_promise_drop`, `__gt_runner_done` and `__gt_reclaim`, in this
+// file. `__gt_reclaim`'s answer picks the pool, and a cell put on a GT-record list would be handed to a
+// spawn as a whole record. A cell needs no such question
 // anywhere else — `__gt_await`, `__gt_try_await` and `__gt_is_complete` treat it as the ordinary promise it
 // is, which is the design's whole claim.
 function emitGtIsReplyCell(module StdModule, block IrBlock, gt ValueId, ids ValueMinter) returns ValueId
@@ -5652,19 +5770,11 @@ function buildGtCellAlloc(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let releaser = 0
 
-	let cleared = emitConst(module, block: entry, value: 0, ids: ids)
 	let cell = ids.mint()
-	module.appendOp(entry, op: StdOp.call(cell, callee: GtFreeGetName, args: argsOf(cleared)))
+	module.appendOp(entry, op: StdOp.call(cell, callee: GtCellGetName, args: ValueIdArray.create()))
 
-	emitStoreField(module, block: entry, record: cell, offset: GtOffFuncPtr, value: cleared)
-	emitStoreField(module, block: entry, record: cell, offset: GtOffResult, value: cleared)
-	emitStoreField(module, block: entry, record: cell, offset: GtOffThrew, value: cleared)
-	emitStoreField(module, block: entry, record: cell, offset: GtOffTraceId, value: cleared)
-	emitStoreField(module, block: entry, record: cell, offset: GtOffTeardown, value: cleared)
-	emitStoreField(module, block: entry, record: cell, offset: GtOffIsMainThread, value: cleared)
-	emitStoreField(module, block: entry, record: cell, offset: GtOffAwaiter, value: cleared)
-	emitStoreField(module, block: entry, record: cell, offset: GtOffReplyWitness, value: cleared)
-	emitStoreField(module, block: entry, record: cell, offset: GtOffRenounced, value: cleared)
+	let fieldsStart = emitFieldAddr(module, block: entry, record: cell, offset: GtOffStackBase, ids: ids)
+	module.appendOp(entry, op: StdOp.memFill(fieldsStart, byteCountId: emitConst(module, block: entry, value: GtCellBytes - GtOffStackBase, ids: ids), value: 0))
 
 	emitGtMarkWaiting(module, block: entry, gt: cell, ids: ids)
 	let owner = emitLoadField(module, block: entry, record: emitLoadCurrentGt(module, block: entry, ids: ids), offset: GtOffOwner, ids: ids)
@@ -5743,7 +5853,7 @@ end 'buildGtCellComplete'
 //     already, and a second ready of one wait is fatal. Either way the thread runs its body out and
 //     its runner reclaims it.
 //   • `waiting` with an IN-FLIGHT OVERLAPPED READ: the thread parked on a yielding `ReadFile` and the KERNEL
-//     still holds its OVERLAPPED (`gt + 0x60`). Freeing the GT here would be a use-after-free when the read
+//     still holds its OVERLAPPED (`gt + GtOffOverlapped`). Freeing the GT here would be a use-after-free when the read
 //     completes, so the park is left standing and the read is CANCELLED (CancelIoEx): its own packet readies
 //     the thread, which unwinds itself — the await arm's answer, and this dropper never owns the struct.
 //   • `waiting` in an await or an awaitAny — the thread will be readied by the completion it waits for, so it
@@ -6072,7 +6182,6 @@ function buildGtRunnerDone(module StdModule, target Target)
 	let noStack = emitCompareWithConstant(module, block: entry, value: stackBase, pred: StdCmpPred.eq, against: 0, ids: ids)
 	let owner = emitLoadField(module, block: entry, record: gt, offset: GtOffOwner, ids: ids)
 	let isGreen = emitGtIsGreenThread(module, block: entry, gt: gt, ids: ids)
-	let isMain = emitCompareWithConstant(module, block: entry, value: emitLoadField(module, block: entry, record: gt, offset: GtOffIsMainThread, ids: ids), pred: StdCmpPred.ne, against: 0, ids: ids)
 	let isCell = emitGtIsReplyCell(module, block: entry, gt: gt, ids: ids)
 
 	// Only a coroutine or a reply cell is named by a promise, so only they can have an awaiter.
@@ -6157,6 +6266,7 @@ function buildGtRunnerDone(module StdModule, target Target)
 
 	module.setTerminator(afterStack, op: StdOp.condBranch(isGreen, thenBlockId: greenDone.id, elseBlockId: coroDone.id))
 
+	let isMain = emitCompareWithConstant(module, block: greenDone, value: emitLoadField(module, block: greenDone, record: gt, offset: GtOffIsMainThread, ids: ids), pred: StdCmpPred.ne, against: 0, ids: ids)
 	module.setTerminator(greenDone, op: StdOp.condBranch(isMain, thenBlockId: mainDone.id, elseBlockId: greenUnref.id))
 
 	// ⭐⭐ **`main` HAS COMPLETED: THE PROCESS IS NOW DRAINING.** The phase moves under the lock

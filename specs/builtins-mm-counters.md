@@ -418,7 +418,7 @@ region and 16 slots of bytes here.
 
 ⭐ **A LATER MESSAGE TAKES NO RAW REGION EITHER, AND THE THIRD WINDOW IS WHERE THAT IS SAID.** A second
 message to the SAME service is copied into the ring, or straight into the parked receiver's inbox, and
-moves neither raw column. The reply cell is not raw: it is a green-thread record from the scheduler's
+moves neither raw column. The reply cell is not raw: it is carved from the scheduler's
 arena. A queue that cut a counted region per message would move both.
 
 ⚠ **THE WITNESS IS A SERVICE AND NOT AN `async` SPAWN**, because a green thread moves neither column: its

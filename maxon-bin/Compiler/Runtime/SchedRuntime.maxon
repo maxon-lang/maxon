@@ -861,7 +861,7 @@ let POffRunnext = 0x58
 // and stores: only the M holding this P touches either word, and neither door contains a bracketed kernel
 // call, so a retake cannot move the P out from under one.
 let POffFreeListHead = 0x60 as ByteOffset
-let POffFreeListLen = 0x68
+let POffFreeListLen = 0x68 as ByteOffset
 
 // ⭐⭐ **A RESERVED SYSCALL-STACK SLOT — the scratch stack lives on the M (`MOffSystemStackSP`), AND THIS
 // SLOT IS THE WHOLE ARGUMENT FOR THAT.** A per-P scratch stack is only as sound as *"an M can only reach its
@@ -1062,7 +1062,11 @@ export let POffStackSampleCount = POffStackSampleSum + PointerSlotBytes
 export let POffTraceIdNext = POffStackSampleCount + PointerSlotBytes
 export let POffTraceIdEnd = POffTraceIdNext + PointerSlotBytes
 
-let POffRunqBase = POffTraceIdEnd + PointerSlotBytes
+// This P's reply-cell free list, kept under `POffFreeListHead`'s rule.
+let POffCellFreeHead = POffTraceIdEnd + PointerSlotBytes
+let POffCellFreeLen = POffCellFreeHead + PointerSlotBytes
+
+let POffRunqBase = POffCellFreeLen + PointerSlotBytes
 
 // The portable header, the inline GT, the tail scalars and the ring. See the layout header.
 //
@@ -1284,16 +1288,20 @@ export let SchedTimerScanStepsLabel = b"__sched_timer_scan_steps"
 let SchedGtFreeHeadLabel = b"__gt_gfree_head"
 let SchedGtFreeNoStackHeadLabel = b"__gt_gfree_nostack_head"
 
+// The global reply-cell free list, under the same lock.
+let SchedCellFreeHeadLabel = b"__gt_cell_gfree_head"
+
 // ⭐⭐ **THE SCHEDULER ARENA's CARVE CURSOR AND THE END OF ITS CURRENT CHUNK**
 // (`__sched_arena_carve`). Both 0 until the first carve, which finds no room and maps the first
 // chunk. `underOwnLock`: the carve is their only reader and writer, and its callers hold `__gt_gfree_lock`.
 let SchedArenaCursorLabel = b"__sched_arena_cursor"
 let SchedArenaLimitLabel = b"__sched_arena_limit"
 
-// ⭐⭐ **HOW MANY RECORDS THE ARENA HAS EVER CARVED — what `__Builtins.schedGtRecordsCarved()`
-// answers.** Stepped beside the carve alone, under `__gt_gfree_lock`. A program that reclaims every
+// ⭐⭐ **HOW MANY GT RECORDS AND REPLY CELLS THE ARENA HAS EVER CARVED — what
+// `__Builtins.schedGtRecordsCarved()` answers.** Stepped beside each of the two carves alone, under
+// `__gt_gfree_lock`. A program that reclaims every
 // record it finishes with keeps it within its peak live population plus what the other processors'
-// lists can hold (`GtFreePutName`), however many rounds it runs; one that strands a record per
+// lists of both pools can hold (`GtFreePutName`), however many rounds it runs; one that strands a record per
 // round grows it with the rounds. That makes it the leak witness `__gt_live_count` cannot be for a
 // record whose consumer has already debited that count, and `__Builtins.schedGtRecycleCount()`
 // cannot be above one processor, where a spawn may carve while a reclaimed record waits on another
@@ -1911,21 +1919,29 @@ export let SchedGtStackBytesName = b"__sched_gt_stack_bytes"
 // `__sched_pidle`, so up to `GtFreeLocalHigh - 1` records per processor wait there until a machine
 // takes that P again, and a spawn elsewhere carves fresh ones meanwhile. A carve holds
 // `__gt_gfree_lock`, so it never sees a list at `GtFreeLocalHigh`: the records a process ever
-// carves are bounded by its peak count of records on no list — live threads and cells, and records
-// mid-reclaim — plus `GtFreeLocalHigh - 1` per processor.
+// carves are bounded by its peak count of records on no list — live threads and records
+// mid-reclaim — plus `GtFreeLocalHigh - 1` per processor, and its reply cells the same way through
+// their own lists.
 //
 // ⚠ **IT TAKES `__gt_gfree_lock` ONLY TO SHED OR ON THE P-LESS ROAD, AND CALLS NOTHING WHILE
 // HOLDING IT**, so it adds no lock order: the hold covers list links only.
 export let GtFreePutName = b"__gt_free_put"
 
+// `__gt_cell_put(cell)` and `__gt_cell_get() -> cell` — the reply cells' pool, the two doors above and
+// below over a per-P list (`POffCellFreeHead`) and one global list, under the same lock and the same
+// bounds. A cell is `GtRuntime.GtCellBytes` long and type-stable as a record is, and it never shares a
+// list with records: a spawn handed a cell would lay a whole record over its neighbours. A carved cell steps
+// `GtRecordsCarvedLabel` and is not appended to `__gt_allg`, whose reader, the debugger, reads fields past the cell.
+export let GtCellPutName = b"__gt_cell_put"
+export let GtCellGetName = b"__gt_cell_get"
+
 // ⭐⭐⭐ **`__gt_free_get(wantedSize) -> gt` — Go's `gfget` plus `malg`'s allocation: the ONE door a
-// GT record is taken through**, by `__gt_spawn` with the seed's size and `__gt_cell_alloc` with 0. It
+// GT record is taken through**, by `__gt_spawn` with the seed's size. It
 // pops the current P's list, refilling up to `GtFreeLocalLow` from the global lists when the local one
-// is empty; a thread holding no P pops the global lists. A spawn tries the list of records with a kept
-// stack first and a cell the list without, so a cell does not strip a stack a spawn could reuse. A
+// is empty; a thread holding no P pops the global lists. A
 // record whose kept stack is not `wantedSize` has it freed before it is handed back
-// (`GtRuntime.emitGtDropStackUnlessSized`). For a non-zero `wantedSize` the record comes back
-// holding a stack of that size, kept or allocated after the lock is left, and a refused allocation
+// (`GtRuntime.emitGtDropStackUnlessSized`). The record comes back
+// holding a stack of `wantedSize`, kept or allocated after the lock is left, and a refused allocation
 // aborts: `__gt_spawn` lays its first frame through that stack without checking it. When every list
 // it may consult is empty it carves a fresh record from the scheduler's arena
 // (`__sched_arena_carve`) inside the same hold of `__gt_gfree_lock`, which is why no record
@@ -1948,10 +1964,9 @@ export let GtFreePutName = b"__gt_free_put"
 // this hold.
 //
 // ⚠ A recycled record is handed out holding its previous tenant's words, so each taker initialises
-// what it reads: `__gt_spawn` zeroes every field below the record lock but the two stack words this
-// function writes, and `__gt_cell_alloc` stores
-// every word a cell is read through. A taker that skipped this would release the previous tenant's
-// arguments.
+// what it reads: `__gt_spawn` zeroes every field from past the two stack words this function writes
+// up to `GtRuntime.GtOffStaging`, and `__gt_cell_alloc` every word of a cell past its record lock. A
+// taker that skipped this would release the previous tenant's arguments.
 export let GtFreeGetName = b"__gt_free_get"
 
 // ⭐⭐ `__sched_arena_carve(bytes) -> address` — the scheduler's uncounted arena, which GT records and machines are
@@ -2375,6 +2390,7 @@ export function schedRuntimeGlobals(usage RuntimeUsage, target Target) returns D
 	// under `__gt_gfree_lock`.
 	pushRuntimeGlobal(out, label: SchedGtFreeHeadLabel, sharing: MultiMSharing.underOwnLock, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: SchedGtFreeNoStackHeadLabel, sharing: MultiMSharing.underOwnLock, reach: DataReach.walked)
+	pushRuntimeGlobal(out, label: SchedCellFreeHeadLabel, sharing: MultiMSharing.underOwnLock, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: SchedArenaCursorLabel, sharing: MultiMSharing.underOwnLock, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: SchedArenaLimitLabel, sharing: MultiMSharing.underOwnLock, reach: DataReach.walked)
 	pushRuntimeGlobal(out, label: GtRecordsCarvedLabel, sharing: MultiMSharing.underOwnLock, reach: DataReach.walked)
@@ -2467,8 +2483,10 @@ export function installSchedRuntime(module StdModule, target Target)
 	buildSchedSweepDropped(module)
 
 	// The GT-record doors: every record is taken through the one and given back through the other.
-	buildGtFreePut(module)
+	buildGtFreePut(module, pool: GtFreePool.records)
 	buildGtFreeGet(module)
+	buildGtFreePut(module, pool: GtFreePool.cells)
+	buildGtCellGet(module)
 	buildSchedArenaCarve(module)
 
 	// The per-P sums, from ONE body: they differ in the name they answer to and the field they read, and in
@@ -4215,9 +4233,8 @@ end 'runqTaintCarriesValue'
 // `runqTail` or `runnext` is refused wherever the base it is read through can be attributed to a processor.
 //
 // ⚠ The displacement alone cannot be the key, which is the whole reason the attribution exists. 0x00, 0x08
-// and 0x58 are `MOffCurrentP`, `MOffCurrentGt` and `GtOffThrew` as well, and `GtOffSp`/`GtOffFp` on a green
-// thread, so an offset-only test would refuse the emitted runtime's plain reads of records that have no
-// ring at all.
+// and 0x58 are `MOffCurrentP`, `MOffCurrentGt` and `GtOffReleaser` as well, so an offset-only test would
+// refuse the emitted runtime's plain reads of records that have no ring at all.
 //
 // The two walks are ordered. Attribution crosses a function boundary only by argument and by return, so it
 // must settle over the whole module before any load is judged; and the second walk collects each function
@@ -5334,29 +5351,56 @@ end 'buildSchedSweepDropped'
 // `__gt_free_put` and `__gt_free_get` — the GT-record free lists and the record arena
 // ==========================================================================
 
-// The head of P `p`'s own GT-record free list.
-function gtFreeLocalHead(p ValueId) returns SchedListHead
-	return SchedListHead.heldProcessorField(p, offset: POffFreeListHead)
+enum GtFreePool
+	records
+	cells
+end 'GtFreePool'
+
+// The head of P `p`'s own free list of `pool`.
+function gtFreeLocalHead(p ValueId, pool GtFreePool) returns SchedListHead
+	return match pool 'pool'
+		records gives SchedListHead.heldProcessorField(p, offset: POffFreeListHead)
+		cells gives SchedListHead.heldProcessorField(p, offset: POffCellFreeHead)
+	end 'pool'
 end 'gtFreeLocalHead'
 
-// Push `gt` onto P `p`'s own free list.
-function emitGtFreeLocalPush(module StdModule, block IrBlock, p ValueId, gt ValueId, ids ValueMinter)
-	emitSchedListPush(module, block: block, head: gtFreeLocalHead(p), linkOffset: GtOffNext, first: gt, last: gt, ids: ids)
+function gtFreeLocalLen(pool GtFreePool) returns ByteOffset
+	return match pool 'pool'
+		records gives POffFreeListLen
+		cells gives POffCellFreeLen
+	end 'pool'
+end 'gtFreeLocalLen'
+
+// Push `gt` onto P `p`'s own free list of `pool`.
+function emitGtFreeLocalPush(module StdModule, block IrBlock, p ValueId, gt ValueId, pool GtFreePool, ids ValueMinter)
+	emitSchedListPush(module, block: block, head: gtFreeLocalHead(p, pool: pool), linkOffset: GtOffNext, first: gt, last: gt, ids: ids)
 	let step = emitConst(module, block: block, value: OneMore, ids: ids)
-	_ = emitFieldAccumulate(module, block: block, record: p, offset: POffFreeListLen, delta: step, multiM: false, ids: ids)
+	_ = emitFieldAccumulate(module, block: block, record: p, offset: gtFreeLocalLen(pool), delta: step, multiM: false, ids: ids)
 end 'emitGtFreeLocalPush'
 
-// Pop the head of P `p`'s own free list, which the caller has seen non-empty.
-function emitGtFreeLocalPop(module StdModule, block IrBlock, p ValueId, ids ValueMinter) returns ValueId
-	let localHead = gtFreeLocalHead(p)
+// Pop the head of P `p`'s own free list of `pool`, which the caller has seen non-empty.
+function emitGtFreeLocalPop(module StdModule, block IrBlock, p ValueId, pool GtFreePool, ids ValueMinter) returns ValueId
+	let localHead = gtFreeLocalHead(p, pool: pool)
 	let head = emitSchedListLoadHead(module, block: block, head: localHead, ids: ids)
 	emitSchedListUnlinkHead(module, block: block, head: localHead, node: head, linkOffset: GtOffNext, ids: ids)
 	let step = emitConst(module, block: block, value: OneFewer, ids: ids)
-	_ = emitFieldAccumulate(module, block: block, record: p, offset: POffFreeListLen, delta: step, multiM: false, ids: ids)
+	_ = emitFieldAccumulate(module, block: block, record: p, offset: gtFreeLocalLen(pool), delta: step, multiM: false, ids: ids)
 	return head
 end 'emitGtFreeLocalPop'
 
-function emitGtFreeGlobalPush(module StdModule, func IrFunction, cur IrBlock, gt ValueId, ids ValueMinter) returns IrBlock
+function emitGtFreeGlobalPush(module StdModule, func IrFunction, cur IrBlock, gt ValueId, pool GtFreePool, ids ValueMinter) returns IrBlock
+	return match pool 'pool'
+		records gives emitGtFreeRecordGlobalPush(module, func: func, cur: cur, gt: gt, ids: ids)
+		cells gives emitGtFreeCellGlobalPush(module, cur: cur, gt: gt, ids: ids)
+	end 'pool'
+end 'emitGtFreeGlobalPush'
+
+function emitGtFreeCellGlobalPush(module StdModule, cur IrBlock, gt ValueId, ids ValueMinter) returns IrBlock
+	emitSchedListPush(module, block: cur, head: SchedListHead.lockedWord(SchedCellFreeHeadLabel), linkOffset: GtOffNext, first: gt, last: gt, ids: ids)
+	return cur
+end 'emitGtFreeCellGlobalPush'
+
+function emitGtFreeRecordGlobalPush(module StdModule, func IrFunction, cur IrBlock, gt ValueId, ids ValueMinter) returns IrBlock
 	var withStack = module.addBlock(func, label: b"gfpglobalstack", heat: BlockHeat.normal)
 	var withoutStack = module.addBlock(func, label: b"gfpglobalnostack", heat: BlockHeat.normal)
 	var pushed = module.addBlock(func, label: b"gfpglobalpushed", heat: BlockHeat.normal)
@@ -5371,33 +5415,37 @@ function emitGtFreeGlobalPush(module StdModule, func IrFunction, cur IrBlock, gt
 	module.setTerminator(withoutStack, op: StdOp.branch(pushed.id))
 
 	return pushed
-end 'emitGtFreeGlobalPush'
+end 'emitGtFreeRecordGlobalPush'
 
-function emitGtFreeTakeTwoLists(module StdModule, func IrFunction, cur IrBlock, first ByteArray, second ByteArray, merge IrBlock, none IrBlock, ids ValueMinter)
-	var gotFirst = module.addBlock(func, label: b"gfgglobalfirst", heat: BlockHeat.normal)
-	var trySecond = module.addBlock(func, label: b"gfgglobaltrysecond", heat: BlockHeat.normal)
-	var gotSecond = module.addBlock(func, label: b"gfgglobalsecond", heat: BlockHeat.normal)
+function emitGtFreeTakeOneList(module StdModule, func IrFunction, cur IrBlock, label ByteArray, merge IrBlock, none IrBlock, ids ValueMinter)
+	var got = module.addBlock(func, label: b"gfgglobalgot", heat: BlockHeat.normal)
 
-	let fromFirst = emitSchedListTakeHead(module, cur: cur, got: gotFirst, none: trySecond, head: SchedListHead.lockedWord(first), linkOffset: GtOffNext, ids: ids)
-	emitBranchCarrying(module, from: gotFirst, to: merge, value: fromFirst)
+	let taken = emitSchedListTakeHead(module, cur: cur, got: got, none: none, head: SchedListHead.lockedWord(label), linkOffset: GtOffNext, ids: ids)
+	emitBranchCarrying(module, from: got, to: merge, value: taken)
+end 'emitGtFreeTakeOneList'
 
-	let fromSecond = emitSchedListTakeHead(module, cur: trySecond, got: gotSecond, none: none, head: SchedListHead.lockedWord(second), linkOffset: GtOffNext, ids: ids)
-	emitBranchCarrying(module, from: gotSecond, to: merge, value: fromSecond)
-end 'emitGtFreeTakeTwoLists'
-
-function emitGtFreeTakeGlobal(module StdModule, func IrFunction, cur IrBlock, wantedSize ValueId, merge IrBlock, none IrBlock, ids ValueMinter)
-	var stackless = module.addBlock(func, label: b"gfgglobalcell", heat: BlockHeat.normal)
-	var stacked = module.addBlock(func, label: b"gfgglobalspawn", heat: BlockHeat.normal)
-
-	emitBranchOnCompare(module, block: cur, value: wantedSize, pred: StdCmpPred.eq, against: 0, whenTrue: stackless, whenFalse: stacked, ids: ids)
-
-	emitGtFreeTakeTwoLists(module, func: func, cur: stackless, first: SchedGtFreeNoStackHeadLabel, second: SchedGtFreeHeadLabel, merge: merge, none: none, ids: ids)
-	emitGtFreeTakeTwoLists(module, func: func, cur: stacked, first: SchedGtFreeHeadLabel, second: SchedGtFreeNoStackHeadLabel, merge: merge, none: none, ids: ids)
+function emitGtFreeTakeGlobal(module StdModule, func IrFunction, cur IrBlock, pool GtFreePool, merge IrBlock, none IrBlock, ids ValueMinter)
+	match pool 'pool'
+		records then emitGtFreeTakeStackedFirst(module, func: func, cur: cur, merge: merge, none: none, ids: ids)
+		cells then emitGtFreeTakeOneList(module, func: func, cur: cur, label: SchedCellFreeHeadLabel, merge: merge, none: none, ids: ids)
+	end 'pool'
 end 'emitGtFreeTakeGlobal'
 
-// See `GtFreePutName`.
-function buildGtFreePut(module StdModule)
-	var func = IrFunction.createFromStd(GtFreePutName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+function emitGtFreeTakeStackedFirst(module StdModule, func IrFunction, cur IrBlock, merge IrBlock, none IrBlock, ids ValueMinter)
+	var trySecond = module.addBlock(func, label: b"gfgglobaltrysecond", heat: BlockHeat.normal)
+
+	emitGtFreeTakeOneList(module, func: func, cur: cur, label: SchedGtFreeHeadLabel, merge: merge, none: trySecond, ids: ids)
+	emitGtFreeTakeOneList(module, func: func, cur: trySecond, label: SchedGtFreeNoStackHeadLabel, merge: merge, none: none, ids: ids)
+end 'emitGtFreeTakeStackedFirst'
+
+// See `GtFreePutName` and `GtCellPutName`.
+function buildGtFreePut(module StdModule, pool GtFreePool)
+	let name = match pool 'name'
+		records gives GtFreePutName
+		cells gives GtCellPutName
+	end 'name'
+
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -5419,31 +5467,31 @@ function buildGtFreePut(module StdModule)
 
 	// Decided BEFORE the push, so the push that fills the list is made under the lock: a carve, which holds that
 	// lock, never finds a list at `GtFreeLocalHigh` (`GtFreePutName`'s bound).
-	let held = emitLoadField(module, block: local, record: p, offset: POffFreeListLen, ids: ids)
+	let held = emitLoadField(module, block: local, record: p, offset: gtFreeLocalLen(pool), ids: ids)
 	let pushedLen = emitBin(module, block: local, a: held, b: emitConst(module, block: local, value: OneMore, ids: ids), opcode: StdBinOpcode.add, ids: ids)
 	emitBranchOnCompare(module, block: local, value: pushedLen, pred: StdCmpPred.ge, against: GtFreeLocalHigh, whenTrue: shed, whenFalse: keep, ids: ids)
 
-	emitGtFreeLocalPush(module, block: keep, p: p, gt: gt, ids: ids)
+	emitGtFreeLocalPush(module, block: keep, p: p, gt: gt, pool: pool, ids: ids)
 	module.setTerminator(keep, op: StdOp.branch(doneBlock.id))
 
 	// One acquire, on the edge that runs once: the lock COUNTS, so an acquire in the loop header would be
 	// taken once per record against the one release at `gfpsheddone`.
 	emitLockWordEnter(module, block: shed, label: GtFreeLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
-	emitGtFreeLocalPush(module, block: shed, p: p, gt: gt, ids: ids)
+	emitGtFreeLocalPush(module, block: shed, p: p, gt: gt, pool: pool, ids: ids)
 	module.setTerminator(shed, op: StdOp.branch(shedHdr.id))
 
-	let remaining = emitLoadField(module, block: shedHdr, record: p, offset: POffFreeListLen, ids: ids)
+	let remaining = emitLoadField(module, block: shedHdr, record: p, offset: gtFreeLocalLen(pool), ids: ids)
 	emitBranchOnCompare(module, block: shedHdr, value: remaining, pred: StdCmpPred.le, against: GtFreeLocalLow, whenTrue: shedDone, whenFalse: shedBody, ids: ids)
 
-	let moving = emitGtFreeLocalPop(module, block: shedBody, p: p, ids: ids)
-	var movedOn = emitGtFreeGlobalPush(module, func: func, cur: shedBody, gt: moving, ids: ids)
+	let moving = emitGtFreeLocalPop(module, block: shedBody, p: p, pool: pool, ids: ids)
+	var movedOn = emitGtFreeGlobalPush(module, func: func, cur: shedBody, gt: moving, pool: pool, ids: ids)
 	module.setTerminator(movedOn, op: StdOp.branch(shedHdr.id))
 
 	emitLockWordLeave(module, block: shedDone, label: GtFreeLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
 	module.setTerminator(shedDone, op: StdOp.branch(doneBlock.id))
 
 	emitLockWordEnter(module, block: globalOnly, label: GtFreeLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
-	var globalPushed = emitGtFreeGlobalPush(module, func: func, cur: globalOnly, gt: gt, ids: ids)
+	var globalPushed = emitGtFreeGlobalPush(module, func: func, cur: globalOnly, gt: gt, pool: pool, ids: ids)
 	emitLockWordLeave(module, block: globalPushed, label: GtFreeLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
 	module.setTerminator(globalPushed, op: StdOp.branch(doneBlock.id))
 
@@ -5491,12 +5539,9 @@ export function emitGtFreeStacks(module StdModule, func IrFunction, cur IrBlock,
 	module.setTerminator(relist, op: StdOp.branch(cont.id))
 end 'emitGtFreeStacks'
 
-// See `GtFreeGetName`.
-function buildGtFreeGet(module StdModule)
-	var func = IrFunction.createFromStd(GtFreeGetName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
-
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+// A popped record continues at `recycle` as its block argument, and an empty pool at `carve` with
+// `__gt_gfree_lock` held, which the carve road leaves.
+function emitGtFreeAcquire(module StdModule, func IrFunction, entry IrBlock, pool GtFreePool, recycle IrBlock, carve IrBlock, ids ValueMinter)
 	var haveOffset = module.addBlock(func, label: b"gfgoffset", heat: BlockHeat.normal)
 	var haveMachine = module.addBlock(func, label: b"gfgmachine", heat: BlockHeat.normal)
 	var haveProc = module.addBlock(func, label: b"gfgproc", heat: BlockHeat.normal)
@@ -5509,21 +5554,10 @@ function buildGtFreeGet(module StdModule)
 	var localPop = module.addBlock(func, label: b"gfglocalpop", heat: BlockHeat.normal)
 	var noProc = module.addBlock(func, label: b"gfgnoproc", heat: BlockHeat.normal)
 	var globalPop = module.addBlock(func, label: b"gfgglobalpop", heat: BlockHeat.normal)
-	var recycle = module.addBlock(func, label: b"gfgrecycle", heat: BlockHeat.normal)
-	var recycled = module.addBlock(func, label: b"gfgrecycled", heat: BlockHeat.normal)
-	var recycledStack = module.addBlock(func, label: b"gfgrecycledstack", heat: BlockHeat.normal)
-	var needStack = module.addBlock(func, label: b"gfgneedstack", heat: BlockHeat.normal)
-	var stackRefused = module.addBlock(func, label: b"gfgstackrefused", heat: BlockHeat.cold)
-	var stackReady = module.addBlock(func, label: b"gfgstackready", heat: BlockHeat.normal)
-	var handBack = module.addBlock(func, label: b"gfghandback", heat: BlockHeat.normal)
-	var carve = module.addBlock(func, label: b"gfgcarve", heat: BlockHeat.normal)
-
-	emitParams(module, block: entry, count: 1)
-	let wantedSize = 0
 
 	let p = emitLoadCurrentPOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, haveProc: haveProc, noProc: noProc, ids: ids)
 
-	let localLen = emitLoadField(module, block: haveProc, record: p, offset: POffFreeListLen, ids: ids)
+	let localLen = emitLoadField(module, block: haveProc, record: p, offset: gtFreeLocalLen(pool), ids: ids)
 	emitBranchOnCompare(module, block: haveProc, value: localLen, pred: StdCmpPred.eq, against: 0, whenTrue: refill, whenFalse: localPop, ids: ids)
 
 	// No unlocked peek at the global heads goes in front of this acquire: empty global lists send the get to
@@ -5537,41 +5571,63 @@ function buildGtFreeGet(module StdModule)
 
 	emitBranchOnCompare(module, block: refillHdr, value: moved, pred: StdCmpPred.ge, against: GtFreeLocalLow, whenTrue: refillDone, whenFalse: refillPop, ids: ids)
 
-	emitGtFreeTakeGlobal(module, func: func, cur: refillPop, wantedSize: wantedSize, merge: refillPush, none: refillDone, ids: ids)
+	emitGtFreeTakeGlobal(module, func: func, cur: refillPop, pool: pool, merge: refillPush, none: refillDone, ids: ids)
 	let popped = ids.mint()
 	refillPush.blockArgs.push(IrBlockArg.create(popped, argType: StdType.i64))
-	emitGtFreeLocalPush(module, block: refillPush, p: p, gt: popped, ids: ids)
+	emitGtFreeLocalPush(module, block: refillPush, p: p, gt: popped, pool: pool, ids: ids)
 	let moveStep = emitConst(module, block: refillPush, value: OneMore, ids: ids)
 	let nextMoved = emitBin(module, block: refillPush, a: moved, b: moveStep, opcode: StdBinOpcode.add, ids: ids)
 	module.setTerminator(refillPush, op: StdOp.branch(refillHdr.id))
 	refillPush.branchEdges.push(BranchEdge.create(refillHdr.id, argIds: argsOf(nextMoved)))
 
 	// Still under the lock, so global lists that gave nothing reach the carve without a second acquire.
-	let refilledLen = emitLoadField(module, block: refillDone, record: p, offset: POffFreeListLen, ids: ids)
+	let refilledLen = emitLoadField(module, block: refillDone, record: p, offset: gtFreeLocalLen(pool), ids: ids)
 	emitBranchOnCompare(module, block: refillDone, value: refilledLen, pred: StdCmpPred.eq, against: 0, whenTrue: carve, whenFalse: refilled, ids: ids)
 
 	emitLockWordLeave(module, block: refilled, label: GtFreeLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
 	module.setTerminator(refilled, op: StdOp.branch(localPop.id))
 
-	let reused = emitGtFreeLocalPop(module, block: localPop, p: p, ids: ids)
-	emitSchedProcCountOne(module, block: localPop, p: p, offset: POffGtRecycleCount, ids: ids)
+	let reused = emitGtFreeLocalPop(module, block: localPop, p: p, pool: pool, ids: ids)
+
+	match pool 'pool'
+		records then emitSchedProcCountOne(module, block: localPop, p: p, offset: POffGtRecycleCount, ids: ids)
+		cells then break
+	end 'pool'
+
 	emitBranchCarrying(module, from: localPop, to: recycle, value: reused)
 
 	// A thread holding no processor is served from the global lists all the same, and counted nowhere:
 	// `POffGtRecycleCount` needs a processor to hold the count.
 	emitLockWordEnter(module, block: noProc, label: GtFreeLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
-	emitGtFreeTakeGlobal(module, func: func, cur: noProc, wantedSize: wantedSize, merge: globalPop, none: carve, ids: ids)
+	emitGtFreeTakeGlobal(module, func: func, cur: noProc, pool: pool, merge: globalPop, none: carve, ids: ids)
 	let taken = ids.mint()
 	globalPop.blockArgs.push(IrBlockArg.create(taken, argType: StdType.i64))
 	emitLockWordLeave(module, block: globalPop, label: GtFreeLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
 	emitBranchCarrying(module, from: globalPop, to: recycle, value: taken)
+end 'emitGtFreeAcquire'
+
+// See `GtFreeGetName`.
+function buildGtFreeGet(module StdModule)
+	var func = IrFunction.createFromStd(GtFreeGetName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var recycle = module.addBlock(func, label: b"gfgrecycle", heat: BlockHeat.normal)
+	var recycledStack = module.addBlock(func, label: b"gfgrecycledstack", heat: BlockHeat.normal)
+	var needStack = module.addBlock(func, label: b"gfgneedstack", heat: BlockHeat.normal)
+	var stackRefused = module.addBlock(func, label: b"gfgstackrefused", heat: BlockHeat.cold)
+	var stackReady = module.addBlock(func, label: b"gfgstackready", heat: BlockHeat.normal)
+	var handBack = module.addBlock(func, label: b"gfghandback", heat: BlockHeat.normal)
+	var carve = module.addBlock(func, label: b"gfgcarve", heat: BlockHeat.normal)
+
+	emitParams(module, block: entry, count: 1)
+	let wantedSize = 0
 
 	let record = ids.mint()
 	recycle.blockArgs.push(IrBlockArg.create(record, argType: StdType.i64))
-	emitGtDropStackUnlessSized(module, func: func, cur: recycle, record: record, kept: wantedSize, cont: recycled, ids: ids)
+	emitGtFreeAcquire(module, func: func, entry: entry, pool: GtFreePool.records, recycle: recycle, carve: carve, ids: ids)
 
-	emitBranchOnCompare(module, block: recycled, value: wantedSize, pred: StdCmpPred.eq, against: 0, whenTrue: handBack, whenFalse: recycledStack, ids: ids)
-	recycled.branchEdges.push(BranchEdge.create(handBack.id, argIds: argsOf(record)))
+	emitGtDropStackUnlessSized(module, func: func, cur: recycle, record: record, kept: wantedSize, cont: recycledStack, ids: ids)
 
 	let keptBase = emitLoadField(module, block: recycledStack, record: record, offset: GtOffStackBase, ids: ids)
 	emitBranchOnCompare(module, block: recycledStack, value: keptBase, pred: StdCmpPred.ne, against: 0, whenTrue: handBack, whenFalse: needStack, ids: ids)
@@ -5588,9 +5644,7 @@ function buildGtFreeGet(module StdModule)
 	emitSchedStepLockedCount(module, block: carve, label: GtRecordsCarvedLabel, delta: OneMore, ids: ids)
 	var registered = emitGtAllGAppend(module, func: func, cur: carve, gt: carved, ids: ids)
 	emitLockWordLeave(module, block: registered, label: GtFreeLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
-	emitBranchOnCompare(module, block: registered, value: wantedSize, pred: StdCmpPred.eq, against: 0, whenTrue: handBack, whenFalse: needStack, ids: ids)
-	registered.branchEdges.push(BranchEdge.create(handBack.id, argIds: argsOf(carved)))
-	registered.branchEdges.push(BranchEdge.create(needStack.id, argIds: argsOf(carved)))
+	emitBranchCarrying(module, from: registered, to: needStack, value: carved)
 
 	let bare = ids.mint()
 	needStack.blockArgs.push(IrBlockArg.create(bare, argType: StdType.i64))
@@ -5605,6 +5659,29 @@ function buildGtFreeGet(module StdModule)
 
 	module.functions.push(func)
 end 'buildGtFreeGet'
+
+// See `GtCellGetName`.
+function buildGtCellGet(module StdModule)
+	var func = IrFunction.createFromStd(GtCellGetName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var recycle = module.addBlock(func, label: b"cgrecycle", heat: BlockHeat.normal)
+	var carve = module.addBlock(func, label: b"cgcarve", heat: BlockHeat.normal)
+
+	let record = ids.mint()
+	recycle.blockArgs.push(IrBlockArg.create(record, argType: StdType.i64))
+	emitGtFreeAcquire(module, func: func, entry: entry, pool: GtFreePool.cells, recycle: recycle, carve: carve, ids: ids)
+	module.setTerminator(recycle, op: StdOp.ret(record))
+
+	let carved = ids.mint()
+	module.appendOp(carve, op: StdOp.call(carved, callee: SchedArenaCarveName, args: argsOf(emitConst(module, block: carve, value: GtCellBytes, ids: ids))))
+	emitSchedStepLockedCount(module, block: carve, label: GtRecordsCarvedLabel, delta: OneMore, ids: ids)
+	emitLockWordLeave(module, block: carve, label: GtFreeLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
+	module.setTerminator(carve, op: StdOp.ret(carved))
+
+	module.functions.push(func)
+end 'buildGtCellGet'
 
 // ⭐⭐ **`__sched_arena_carve(bytes) -> address` — CARVE `bytes` FROM THE SCHEDULER's ARENA.** It
 // takes no lock: every caller holds `__gt_gfree_lock` (`__gt_free_get` across its consult and
@@ -7685,8 +7762,7 @@ function buildGtPreemptSafe(module StdModule, target Target)
 	let stackBase = emitLoadField(module, block: onThread, record: gt, offset: GtOffStackBase, ids: ids)
 	emitBranchOnCompare(module, block: onThread, value: stackBase, pred: StdCmpPred.eq, against: 0, whenTrue: notSafe, whenFalse: asked, ids: ids)
 
-	let guard = emitLoadField(module, block: asked, record: gt, offset: GtOffStackGuard, ids: ids)
-	emitBranchOnCompare(module, block: asked, value: guard, pred: StdCmpPred.ne, against: GtStackGuardPreempt, whenTrue: notSafe, whenFalse: notInCall, ids: ids)
+	emitBranchOnPreemptRequest(module, block: asked, gt: gt, requested: notInCall, notRequested: notSafe, ids: ids)
 
 	let stateBits = emitBin(module, block: notInCall, a: emitLoadField(module, block: notInCall, record: m, offset: MOffSyscallState, ids: ids), b: emitConst(module, block: notInCall, value: MSyscallStateMask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
 	emitBranchOnCompare(module, block: notInCall, value: stateBits, pred: StdCmpPred.ne, against: 0, whenTrue: notSafe, whenFalse: unlocked, ids: ids)
