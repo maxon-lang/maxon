@@ -529,7 +529,7 @@ One conforming type reaches ONE interface's requirement by two routes that selec
 
 ### E3112 — `stdlibShadowedNameIsAlsoAMember`
 
-A user program declares a type name that a stdlib module ALSO declares, and that same spelling is used by stdlib source as a MEMBER name -- a field, a method, or an argument label. The shadowing rule moves the stdlib TYPE declaration into the reserved `__` space so both declarations can coexist, and that rename is applied uniformly to the stdlib file's identifier tokens, which is what makes it reach every spelling of the type at once. A member is the one spelling that is also reachable from USER code, whose tokens are never rewritten, so the two sides would disagree about one name and the member would silently stop resolving. Refused rather than risked; rename the type in the user program.
+A user program declares a type name that a stdlib module ALSO declares, and that same spelling is used by stdlib source, or by a scriptlib package the program loads, as a MEMBER name -- a field, a method, or an argument label. The shadowing rule moves the stdlib TYPE declaration into the reserved `__` space so both declarations can coexist, and that rename is applied uniformly to the stdlib and scriptlib files' identifier tokens, which is what makes it reach every spelling of the type at once. A member is the one spelling that is also reachable from USER code, whose tokens are never rewritten, so the two sides would disagree about one name and the member would silently stop resolving. Refused rather than risked; rename the type in the user program.
 
 ### E3113 — `throwsTypeNotAnErrorEnum`
 
@@ -814,7 +814,7 @@ A generic function's type parameter would be inferred from an argument of a kind
 
 ### E3182 — `namespaceDirectoryNotNameable`
 
-A directory holding the program's source cannot be spelled as a namespace. Each directory is a namespace written with its path's pieces joined by dots (`app.ui.Button`), so every piece must lex as one name, and the first must not be a keyword or a qualifier the language already owns: `export` qualifies the project root, `stdlib` names the standard library and `runtime` the runtime tier. Reported when the program is loaded, naming the directory and the piece. Rename the directory.
+A directory holding the program's source cannot be spelled as a namespace. Each directory is a namespace written with its path's pieces joined by dots (`app.ui.Button`), so every piece must lex as one name, and the first must not be a keyword or a qualifier the language already owns: `export` qualifies the project root, `stdlib` names the standard library, `runtime` the runtime tier and `scriptlib` the scriptlib packages. Reported when the program is loaded, naming the directory and the piece. Rename the directory.
 
 ### E3183 — `closureStoredIntoWhatItCaptures`
 

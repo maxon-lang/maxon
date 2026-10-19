@@ -1,0 +1,24 @@
+let ShadowedPackageTypeCaseLabel = "scriptlib-a-script-shadowing-a-package-type-leaves-the-package-whole"
+let WidgetsPackageName = "widgets"
+let WidgetsPackageFileName = "Widgets.maxon"
+let WidgetsPackageSource = "public type Widget\n\tpublic static function make() returns Count\n\t\treturn 7\n\tend 'make'\nend 'Widget'\n\npublic function use() returns Count\n\treturn Widget.make()\nend 'use'\n"
+let ShadowedWidgetTypeName = "Widget"
+let WidgetsFunction = "use"
+let WidgetAnswer = "7"
+
+test 'a script declaring a type a scriptlib package declares leaves the package its own type'
+	let staged = stageScriptlibCase(ShadowedPackageTypeCaseLabel)
+	writeScriptlibPackageFile(ShadowedPackageTypeCaseLabel, package: WidgetsPackageName, fileName: WidgetsPackageFileName, content: WidgetsPackageSource)
+	let script = writeStagedFile(staged.sources, fileName: ScriptFileName, content: shadowingScriptSource(ShadowedWidgetTypeName, packageFunction: WidgetsFunction))
+
+	let run = runProgram(staged, program: script)
+
+	let observedExit = run.exitCode()
+	Expect.equal(observedExit, expected: 0, message: "a script declaring its own `type {ShadowedWidgetTypeName}` and calling `use()`, whose package reads its own `{ShadowedWidgetTypeName}.make()`, did not run. It said: {run.stdout}{run.stderr}")
+
+	let observedStdout = withoutCarriageReturns(run.stdout)
+	Expect.equal(observedStdout, expected: "{WidgetAnswer}{LineFeed}", message: "the script did not print the answer the package's own `{ShadowedWidgetTypeName}` returns")
+
+	let observedStderr = withoutCarriageReturns(run.stderr)
+	Expect.equal(observedStderr, expected: "", message: "the run wrote to stderr, and neither the script nor the package writes anything there")
+end 'a script declaring a type a scriptlib package declares leaves the package its own type'

@@ -669,15 +669,24 @@ export type SourceFileEntry
 	end 'create'
 end 'SourceFileEntry'
 
-// Both provenance facts about one path, held for the compile; `Queries.fileProvenanceOf` is the one
-// place that fills this. The roots are siblings, so no file is ever both.
+// The provenance facts about one path, held for the compile; `Queries.fileProvenanceOf` is the one
+// place that fills this. The roots are siblings, so no file is ever two of them.
 export type FileProvenance
 	export let isStdlibSource as bool
 	export let isRuntimeSource as bool
+	export let isScriptlibSource as bool
 
-	export static function create(isStdlibSource bool, isRuntimeSource bool) returns FileProvenance
-		return Self{isStdlibSource: isStdlibSource, isRuntimeSource: isRuntimeSource}
+	export static function create(isStdlibSource bool, isRuntimeSource bool, isScriptlibSource bool) returns FileProvenance
+		return Self{isStdlibSource: isStdlibSource, isRuntimeSource: isRuntimeSource, isScriptlibSource: isScriptlibSource}
 	end 'create'
+
+	export function isLibrary() returns bool
+		return self.isStdlibSource or self.isRuntimeSource or self.isScriptlibSource
+	end 'isLibrary'
+
+	export function carriesStdlibPrivileges() returns bool
+		return self.isStdlibSource or self.isScriptlibSource
+	end 'carriesStdlibPrivileges'
 end 'FileProvenance'
 
 export typealias FileProvenanceMemo = Map with (FilePath, FileProvenance)

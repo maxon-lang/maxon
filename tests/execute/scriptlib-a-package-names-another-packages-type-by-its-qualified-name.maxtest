@@ -1,0 +1,27 @@
+let QualifiedPackageTypeCaseLabel = "scriptlib-a-package-names-another-packages-type-by-its-qualified-name"
+let ShapesPackageName = "shapes"
+let ShapesPackageFileName = "Shapes.maxon"
+let ShapesPackageSource = "public type Square\n\tpublic let side as Count\n\n\tpublic static function create(side Count) returns Square\n\t\treturn Self\{side: side\}\n\tend 'create'\nend 'Square'\n"
+let GeometryPackageName = "geometry"
+let GeometryPackageFileName = "Geometry.maxon"
+let GeometryPackageSource = "public function area() returns Count\n\tlet square = scriptlib.shapes.Square.create(3)\n\treturn square.side * square.side\nend 'area'\n"
+let GeometryFunction = "area"
+let SquareArea = "9"
+
+test 'a scriptlib package names another package type by its qualified name'
+	let staged = stageScriptlibCase(QualifiedPackageTypeCaseLabel)
+	writeScriptlibPackageFile(QualifiedPackageTypeCaseLabel, package: ShapesPackageName, fileName: ShapesPackageFileName, content: ShapesPackageSource)
+	writeScriptlibPackageFile(QualifiedPackageTypeCaseLabel, package: GeometryPackageName, fileName: GeometryPackageFileName, content: GeometryPackageSource)
+	let script = writeStagedFile(staged.sources, fileName: ScriptFileName, content: printingMainSource(GeometryFunction))
+
+	let run = runProgram(staged, program: script)
+
+	let observedExit = run.exitCode()
+	Expect.equal(observedExit, expected: 0, message: "a script calling `area()`, whose package builds `scriptlib.{ShapesPackageName}.Square` by its qualified name, did not run. It said: {run.stdout}{run.stderr}")
+
+	let observedStdout = withoutCarriageReturns(run.stdout)
+	Expect.equal(observedStdout, expected: "{SquareArea}{LineFeed}", message: "the script did not print the area the package computes")
+
+	let observedStderr = withoutCarriageReturns(run.stderr)
+	Expect.equal(observedStderr, expected: "", message: "the run wrote to stderr, and neither the script nor either package writes anything there")
+end 'a scriptlib package names another package type by its qualified name'

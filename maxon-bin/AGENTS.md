@@ -7,7 +7,9 @@ the Windows form.
 ⭐ **TWO SOURCE TIERS ARE READ ON EVERY COMPILE, AND BOTH LIVE AT THE CHECKOUT ROOT.** `stdlib/` is the
 standard library; `runtime/` beside it is the language runtime. The compiler locates `stdlib/` by
 walking UP from its own executable and reaches `runtime/` as its sibling, so a tree holding one without
-the other compiles nothing.
+the other compiles nothing. A third, `scriptlib/` beside them, holds the USER's own packages (gitignored,
+nothing shipped) and is read only by a program whose root is one file; harnesses and gates pass
+`ScriptlibLoad.omitted`, so a developer's own `scriptlib/` never reaches what they compile.
 
 ⛔ **A `runtime/` FILE IS NOT COMPILER SOURCE AND NEEDS ONE SELF-COMPILE, NOT TWO.** It is input the
 compiler READS. `Compiler/Runtime/` and the per-target `*Runtime*.maxon` files, which the compiler WRITES

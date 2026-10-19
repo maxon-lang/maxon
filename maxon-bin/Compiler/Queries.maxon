@@ -545,10 +545,11 @@ end 'closeDeclarationFold'
 function declarationsFoldedUserFirst(project Project, handedOver DiscoveredTokenFacts) returns ProgramSignatures throws CompileError
 	var signatures = newProgramSignatures(project)
 
-	// The sweep is partitioned by provenance, user files first, stdlib files second. The shadow
-	// contest is decided ahead of both halves, off the declarations `discoverWholeProgramTokenFacts`
-	// read from every file's tokens, so every file already knows the contest's answer when it is
-	// folded — the fold is what records its declarations and every name its own signatures reference.
+	// The sweep is partitioned by provenance, user files first, stdlib and scriptlib files second. The
+	// shadow contest is decided ahead of both halves, off the declarations
+	// `discoverWholeProgramTokenFacts` read from every file's tokens, so every file already knows the
+	// contest's answer when it is folded — the fold is what records its declarations and every name its
+	// own signatures reference.
 	//
 	// This is a PROVENANCE order, not a dependence on filesystem order — within each half the walk's
 	// own order is untouched and unsorted, so a latent order dependence still surfaces rather than
@@ -563,7 +564,7 @@ function declarationsFoldedUserFirst(project Project, handedOver DiscoveredToken
 	var stdlibPaths = MaxonSourcePathArray.create()
 
 	for path in project.db.sourcePaths 'eachFile'
-		if isStdlibSourceFile(project, path: path) 'stdlibSource'
+		if isStdlibTierSourceFile(project, path: path) 'stdlibSource'
 			stdlibPaths.push(path)
 			continue
 		end 'stdlibSource'
@@ -581,24 +582,41 @@ module type ProgramPartition
 	module let userPaths as MaxonSourcePathArray
 	module let runtimePaths as MaxonSourcePathArray
 	module let stdlibPaths as MaxonSourcePathArray
+	module let scriptlibPaths as MaxonSourcePathArray
 
-	module static function create(userPaths MaxonSourcePathArray, runtimePaths MaxonSourcePathArray, stdlibPaths MaxonSourcePathArray) returns ProgramPartition
-		return Self{userPaths: userPaths, runtimePaths: runtimePaths, stdlibPaths: stdlibPaths}
+	module static function create(userPaths MaxonSourcePathArray, runtimePaths MaxonSourcePathArray, stdlibPaths MaxonSourcePathArray, scriptlibPaths MaxonSourcePathArray) returns ProgramPartition
+		return Self{userPaths: userPaths, runtimePaths: runtimePaths, stdlibPaths: stdlibPaths, scriptlibPaths: scriptlibPaths}
 	end 'create'
+
+	module function stdlibTierPaths() returns MaxonSourcePathArray
+		var paths = MaxonSourcePathArray.create()
+		paths.append(self.stdlibPaths)
+		paths.append(self.scriptlibPaths)
+
+		return paths
+	end 'stdlibTierPaths'
 end 'ProgramPartition'
 
 module function partitionedByTier(project Project, paths FilePathArray) returns ProgramPartition
 	var userPaths = MaxonSourcePathArray.create()
 	var runtimePaths = MaxonSourcePathArray.create()
 	var stdlibPaths = MaxonSourcePathArray.create()
+	var scriptlibPaths = MaxonSourcePathArray.create()
 
 	for path in paths 'eachFile'
-		if isStdlibSourceFile(project, path: path) 'stdlibSource'
+		view provenance = fileProvenanceOf(project, path: path)
+
+		if provenance.isStdlibSource 'stdlibSource'
 			stdlibPaths.push(path)
 			continue
 		end 'stdlibSource'
 
-		if isRuntimeSourceFile(project, path: path) 'runtimeSource'
+		if provenance.isScriptlibSource 'scriptlibSource'
+			scriptlibPaths.push(path)
+			continue
+		end 'scriptlibSource'
+
+		if provenance.isRuntimeSource 'runtimeSource'
 			runtimePaths.push(path)
 			continue
 		end 'runtimeSource'
@@ -606,7 +624,7 @@ module function partitionedByTier(project Project, paths FilePathArray) returns 
 		userPaths.push(path)
 	end 'eachFile'
 
-	return ProgramPartition.create(userPaths, runtimePaths: runtimePaths, stdlibPaths: stdlibPaths)
+	return ProgramPartition.create(userPaths, runtimePaths: runtimePaths, stdlibPaths: stdlibPaths, scriptlibPaths: scriptlibPaths)
 end 'partitionedByTier'
 
 module function foldLibraryRemainder(project Project, signatures ProgramSignatures, deferred FilePathArray) throws CompileError
@@ -615,17 +633,18 @@ module function foldLibraryRemainder(project Project, signatures ProgramSignatur
 	end 'nothingDeferred'
 
 	let tiers = partitionedByTier(project, paths: deferred)
+	let stdlibTierPaths = tiers.stdlibTierPaths()
 	var extents = BlockExtentsByPath.create()
-	try discoverWholeProgramTokenFacts(project, signatures: signatures, userPaths: tiers.runtimePaths, stdlibPaths: tiers.stdlibPaths, extents: extents, handedOver: DiscoveredTokenFacts.none())
-	signatures.noteStdlibDeclaredTypeNames((try stdlibDeclarationsIn(project, stdlibPaths: tiers.stdlibPaths)).names)
+	try discoverWholeProgramTokenFacts(project, signatures: signatures, userPaths: tiers.runtimePaths, stdlibPaths: stdlibTierPaths, extents: extents, handedOver: DiscoveredTokenFacts.none())
+	signatures.noteStdlibDeclaredTypeNames((try stdlibDeclarationsIn(project, stdlibPaths: stdlibTierPaths)).names)
 	try foldFilesInto(project, signatures: signatures, paths: tiers.runtimePaths, isStdlibSource: false, extents: extents)
-	try foldFilesInto(project, signatures: signatures, paths: tiers.stdlibPaths, isStdlibSource: true, extents: extents)
+	try foldFilesInto(project, signatures: signatures, paths: stdlibTierPaths, isStdlibSource: true, extents: extents)
 end 'foldLibraryRemainder'
 
 function restoreDeclTokenStreams(project Project, signatures ProgramSignatures, streamed FilePathArray) throws CompileError
 	for path in streamed 'eachStream'
 		view tokens = try queryActiveTokens(project, path: path)
-		signatures.restoreDeclTokenStream(path.toString(), tokens: PreparedTokens.create(tokens, qualifiedNominalAt: QualifiedNominalSpellingMap.create()))
+		signatures.restoreDeclTokenStream(path.toString(), tokens: PreparedTokens.create(tokens, qualifiedNominalAt: QualifiedNominalSpellingMap.create(), respelledStarts: RespelledTokenStartSet.create()))
 	end 'eachStream'
 end 'restoreDeclTokenStreams'
 
@@ -668,7 +687,12 @@ function declarationsFoldedOntoTheLibraryBaseline(project Project) returns Basel
 	// fold reads the instances this program requests.
 	adoptProgramFacts(project, signatures: signatures)
 
-	try foldLibraryRemainder(project, signatures: signatures, deferred: start.remainder)
+	// Scriptlib packages fold here and are never in the baseline: that is cached per compiler and
+	// target, and the user edits a package under it.
+	var deferred = FilePathArray.create()
+	deferred.append(start.remainder)
+	deferred.append(partition.scriptlibPaths)
+	try foldLibraryRemainder(project, signatures: signatures, deferred: deferred)
 
 	var extents = BlockExtentsByPath.create()
 	var discovered = DiscoveredTokenFacts.none()
@@ -949,13 +973,15 @@ function producerMaskFor(project Project, signatures ProgramSignatures, path Fil
 	return mask
 end 'producerMaskFor'
 
-// A file's module-directory anchor is one of three, derived rather than threaded in by a caller:
+// A file's module-directory anchor is one of five, derived rather than threaded in by a caller:
 //
 //   • a `stdlib/` file is anchored at `stdlib/`'s PARENT, so `stdlib/String.maxon` is `stdlib` and
 //     `stdlib/helpers/url/urlHelpers.maxon` is `stdlib/helpers/url` — rendered
 //     `stdlib.helpers.url`, the spelling `specs/namespaces.md` gives. Anchoring stdlib at the
 //     USER's root would put every stdlib file outside it and collapse the whole cone onto
 //     `deriveModuleDirectory`'s parent-name fallback.
+//   • a `runtime/` or `scriptlib/` file is anchored at its own root's PARENT, for the stdlib arm's
+//     reason, so `scriptlib/text/Lines.maxon` is `scriptlib/text`.
 //   • a DIRECTORY build is anchored at the directory, which is what makes a spec fixture's
 //     `feature/sub/deep.maxon` derive `feature/sub`.
 //   • a SINGLE-FILE build is anchored at the file's own directory: the one file compiled is at the
@@ -978,35 +1004,41 @@ end 'producerMaskFor'
 // It is the same distinction `Project.rootIsUnder` draws for the two
 // `module`-visible `String` methods, arriving at a second door — asked rather than re-spelled, so
 // the two doors cannot drift apart on it.
-function moduleDirectoryForFile(project Project, path FilePath, livesUnderStdlibDirectory bool, livesUnderRuntimeDirectory bool) returns String
+function moduleDirectoryForFile(project Project, path FilePath, tier SourceTier) returns String
 	let cwd = Directory.currentPath()
-	return deriveModuleDirectory(path.resolve(cwd), rootPath: namespaceAnchorFor(project, cwd: cwd, livesUnderStdlibDirectory: livesUnderStdlibDirectory, livesUnderRuntimeDirectory: livesUnderRuntimeDirectory))
+	return deriveModuleDirectory(path.resolve(cwd), rootPath: namespaceAnchorFor(project, cwd: cwd, tier: tier))
 end 'moduleDirectoryForFile'
 
-function namespaceAnchorFor(project Project, cwd FilePath, livesUnderStdlibDirectory bool, livesUnderRuntimeDirectory bool) returns FilePath
+function namespaceConeOf(project Project, path FilePath, livesUnderStdlibDirectory bool) returns SourceTier
 	if livesUnderStdlibDirectory 'thestdlibsOwnCone'
-		return libraryConeAnchor(project.stdlibDir, cwd: cwd)
+		return SourceTier.stdlib
 	end 'thestdlibsOwnCone'
 
-	// The RUNTIME tier's cone, measured from its own root for the stdlib arm's reason: anchored at the
-	// USER's root instead, a `runtime/` file compiled under a project outside the checkout falls out of
-	// that root entirely and collapses onto `deriveModuleDirectory`'s parent-name fallback.
-	if livesUnderRuntimeDirectory 'theRuntimesOwnCone'
-		return libraryConeAnchor(project.runtimeDir, cwd: cwd)
-	end 'theRuntimesOwnCone'
+	return sourceTierOf(project, path: path)
+end 'namespaceConeOf'
 
+function namespaceAnchorFor(project Project, cwd FilePath, tier SourceTier) returns FilePath
+	return match tier 'tier'
+		stdlib gives libraryConeAnchor(project.stdlibDir, cwd: cwd)
+		runtime gives libraryConeAnchor(project.runtimeDir, cwd: cwd)
+		scriptlib gives libraryConeAnchor(try project.scriptlib.packagesRoot() otherwise panic("namespaceAnchorFor: a scriptlib-tier file in a compile that holds no scriptlib — the tier is derived from the directory this project carries"), cwd: cwd)
+		author gives authorsAnchorFor(project, cwd: cwd)
+	end 'tier'
+end 'namespaceAnchorFor'
+
+function authorsAnchorFor(project Project, cwd FilePath) returns FilePath
 	let root = project.rootPath.resolve(cwd)
 
 	if Directory.isDirectory(root) 'projectBuild'
 		return root
 	end 'projectBuild'
 
-	return try root.parent() otherwise panic("namespaceAnchorFor: '{root.toString()}' has no parent — a single-file build's root is an absolute FILE path, resolved against the cwd on the line above")
-end 'namespaceAnchorFor'
+	return try root.parent() otherwise panic("authorsAnchorFor: '{root.toString()}' has no parent — a single-file build's root is an absolute FILE path, resolved against the cwd on the line above")
+end 'authorsAnchorFor'
 
 // A library root's cone is anchored at that root's PARENT, so `stdlib/String.maxon` is `stdlib` and
-// `runtime/Word.maxon` is `runtime`. One body for both roots, because the rule is the root's shape and
-// not which root it is.
+// `runtime/Word.maxon` is `runtime`. One body for every library root, because the rule is the root's
+// shape and not which root it is.
 function libraryConeAnchor(libraryDir FilePath, cwd FilePath) returns FilePath
 	let resolved = libraryDir.resolve(cwd)
 	return try resolved.parent() otherwise panic("libraryConeAnchor: '{resolved.toString()}' has no parent — it is an absolute directory path, resolved against the cwd on the line above")
@@ -1149,15 +1181,16 @@ type FileTokenFacts
 	let moduleDirectory as String
 	let declarations as FileDeclarationHeaders
 	let events as TokenFactEventArray
+	let isScriptlibSource as bool
 
-	static function create(moduleDirectory String, declarations FileDeclarationHeaders, events TokenFactEventArray) returns FileTokenFacts
-		return Self{moduleDirectory: moduleDirectory, declarations: declarations, events: events}
+	static function create(moduleDirectory String, declarations FileDeclarationHeaders, events TokenFactEventArray, isScriptlibSource bool) returns FileTokenFacts
+		return Self{moduleDirectory: moduleDirectory, declarations: declarations, events: events, isScriptlibSource: isScriptlibSource}
 	end 'create'
 
 	function noteInto(signatures ProgramSignatures, path FilePath, isStdlibSource bool, extents BlockExtentsByPath)
 		let isRuntimeSource = self.declarations.isRuntimeTier()
 		signatures.attributeHashEventsTo(hashEventSourceOf(isStdlibSource, isRuntimeSource: isRuntimeSource))
-		signatures.recordFileModuleDirectory(path, moduleDirectory: self.moduleDirectory, isLibrary: isStdlibSource or isRuntimeSource, isRuntime: isRuntimeSource)
+		signatures.recordFileModuleDirectory(path, moduleDirectory: self.moduleDirectory, isLibrary: isStdlibSource or isRuntimeSource, isRuntime: isRuntimeSource, isScriptlib: self.isScriptlibSource)
 		self.declarations.noteInto(signatures, path: path, moduleDirectory: self.moduleDirectory, isStdlibSource: isStdlibSource, extents: extents)
 
 		for event in self.events 'eachEvent'
@@ -1172,13 +1205,13 @@ function discoveredTokenFactsOf(project Project, signatures ProgramSignatures, p
 	var gateEnd = 0 as ElementIndex
 	var events = TokenFactEventArray.create()
 	let isRuntimeSource = not isStdlibSource and isRuntimeSourceFile(project, path: path)
-	let livesUnderTheLibrary = livesUnderStdlibDirectory(signatures, isStdlibSource: isStdlibSource)
+	let livesUnderTheLibrary = fileLivesUnderStdlibDirectory(project, signatures: signatures, path: path)
 
 	// Derived here, once, before any file's declarations are folded, so every later reader (the
 	// type-name admission, the sweep's `module`-tier questions, the real parse, the constant
 	// evaluator) reads an index rather than re-deriving a string from a path. ⚠ The anchor is chosen
 	// by where the file lives, not by whose it is — see `moduleDirectoryForFile`.
-	let moduleDirectory = moduleDirectoryForFile(project, path: path, livesUnderStdlibDirectory: livesUnderTheLibrary, livesUnderRuntimeDirectory: isRuntimeSource)
+	let moduleDirectory = moduleDirectoryForFile(project, path: path, tier: namespaceConeOf(project, path: path, livesUnderStdlibDirectory: livesUnderTheLibrary))
 
 	let job = parseJobFrom(project, path: path, namespace: namespaceForModuleDirectory(moduleDirectory), livesUnderStdlibDirectory: livesUnderTheLibrary, isStdlibSource: isStdlibSource, buildsBodies: false)
 	var reader = Parser.structuralReader(tokens, job: job, signatures: signatures, anchors: project.readerAnchors)
@@ -1221,7 +1254,7 @@ function discoveredTokenFactsOf(project Project, signatures ProgramSignatures, p
 		events.push(TokenFactEvent.arrayLiteralConformer(nameTok.value))
 	end 'eachToken'
 
-	return FileTokenFacts.create(moduleDirectory, declarations: declarations, events: events)
+	return FileTokenFacts.create(moduleDirectory, declarations: declarations, events: events, isScriptlibSource: isScriptlibSourceFile(project, path: path))
 end 'discoveredTokenFactsOf'
 
 // Matches `spawn <Type> . <member> (` and nothing looser, reading the four tokens after the
@@ -1444,7 +1477,7 @@ function reportUnnameableNamespaceDirectories(project Project, signatures Progra
 	let cwd = Directory.currentPath()
 
 	for path in project.db.sourcePaths 'eachFile'
-		if isStdlibSourceFile(project, path: path) or isRuntimeSourceFile(project, path: path) 'aLibraryFile'
+		if isLibrarySourceFile(project, path: path) 'aLibraryFile'
 			continue
 		end 'aLibraryFile'
 
@@ -1475,6 +1508,7 @@ enum NamespacePieceReason
 	qualifiesTheRoot
 	namesTheLibrary
 	namesTheRuntimeTier
+	namesTheScriptlibTier
 	isAKeyword
 	isNotAName
 end 'NamespacePieceReason'
@@ -1489,6 +1523,7 @@ function namespacePieceReasonText(reason NamespacePieceReason) returns String
 		qualifiesTheRoot gives "already qualifies the project root"
 		namesTheLibrary gives "already names the standard library"
 		namesTheRuntimeTier gives "already names the runtime tier"
+		namesTheScriptlibTier gives "already names the scriptlib tier"
 		isAKeyword gives "is a keyword, which cannot begin a qualified name"
 		isNotAName gives "is not a name"
 	end 'reason'
@@ -1510,6 +1545,7 @@ function reservedNamespaceHeads() returns ReservedNamespaceHeadArray
 	heads.push(ReservedNamespaceHead.create(RootNamespaceQualifier, reason: NamespacePieceReason.qualifiesTheRoot))
 	heads.push(ReservedNamespaceHead.create(StdlibDirName, reason: NamespacePieceReason.namesTheLibrary))
 	heads.push(ReservedNamespaceHead.create(RuntimeDirName, reason: NamespacePieceReason.namesTheRuntimeTier))
+	heads.push(ReservedNamespaceHead.create(ScriptlibDirName, reason: NamespacePieceReason.namesTheScriptlibTier))
 	return heads
 end 'reservedNamespaceHeads'
 
@@ -1552,40 +1588,75 @@ function declaresANominalTypeName(kind TokenKind) returns bool
 	return kind == TokenKind.type or kind == TokenKind.enum or kind == TokenKind.union or kind == TokenKind.interface
 end 'declaresANominalTypeName'
 
-// The rename is applied to a stdlib file's identifier tokens, which is sound because it is uniform
-// over stdlib source: a name renamed at its declaration is renamed at every stdlib use of it, so
-// only the cross-file reachability of the bare name changes. What that does not cover is a MEMBER
-// of a stdlib type spelled exactly like a contested TYPE name — a field, method, or parameter label
-// — which is reachable from user code, whose tokens are never rewritten: the stdlib declaration
+// The rename is applied to a stdlib or scriptlib file's identifier tokens, which is sound because it
+// is uniform over library source: a name renamed at its declaration is renamed at every library use
+// of it, so only the cross-file reachability of the bare name changes. What that does not cover is a
+// MEMBER of a library type spelled exactly like a contested TYPE name — a field, method, or parameter
+// label — which is reachable from user code, whose tokens are never rewritten: the stdlib declaration
 // `var ParseError` would become `__ParseError` while a user's `x.ParseError` stayed bare. That
 // silent disagreement is detected here and the program is refused, naming the collision.
 //
 // A member access is an identifier PRECEDED by `.`; an argument label is one FOLLOWED by `:`.
-// Scanned only when something is actually contested.
+// Scanned only when something is actually contested. A scriptlib file is read over its collapsed
+// qualifiers, as the parser reads it: raw, the `Clock` of `stdlib.Clock` follows a `.` and would read
+// as a member.
 function refuseContestedNamesUsedAsMembers(project Project, signatures ProgramSignatures, stdlibPaths MaxonSourcePathArray) throws CompileError
 	for path in stdlibPaths 'eachStdlibFile'
-		view tokens = try queryActiveTokens(project, path: path)
+		match try contestedMemberIn(project, signatures: signatures, path: path) 'census'
+			clean then continue
+			spelled(name) then reportDiagnostic(project, diagnostic: Diagnostic.programWide(ErrorCode.stdlibShadowedNameIsAlsoAMember, message: contestedMemberMessage(project, name: name, path: path)))
+		end 'census'
 
-		for i in 0 upto tokens.count() 'eachToken'
-			let tok = try tokens.get(i) otherwise panic("refuseContestedNamesUsedAsMembers: tokens.get OOB at {i} below count {tokens.count()}")
-
-			if tok.kind != TokenKind.identifier 'notAName'
-				continue
-			end 'notAName'
-
-			if signatures.interfaceMap().libraryNameOf(tok.value).equals(tok.value) 'notContested'
-				continue
-			end 'notContested'
-
-			if not tokenIsAMemberSpelling(tokens, index: i) 'notAMember'
-				continue
-			end 'notAMember'
-
-			reportDiagnostic(project, diagnostic: Diagnostic.programWide(ErrorCode.stdlibShadowedNameIsAlsoAMember, message: "'{String.from(tok.value)}' cannot be shadowed: this program declares it as a type, and a stdlib module also uses it as a MEMBER name (a field, a method or an argument label). Shadowing moves the stdlib TYPE into the reserved space, which would leave that member reachable from user code under a name the stdlib side no longer spells — rename the type in this program"))
-			return
-		end 'eachToken'
+		return
 	end 'eachStdlibFile'
 end 'refuseContestedNamesUsedAsMembers'
+
+function contestedMemberMessage(project Project, name ByteArray, path FilePath) returns String
+	if isScriptlibSourceFile(project, path: path) 'aScriptlibPackage'
+		return contestedMemberSentence(name, holder: "a scriptlib package ({path.toString()})", movedSide: "library", memberSide: "scriptlib")
+	end 'aScriptlibPackage'
+
+	return contestedMemberSentence(name, holder: "a stdlib module", movedSide: "stdlib", memberSide: "stdlib")
+end 'contestedMemberMessage'
+
+function contestedMemberSentence(name ByteArray, holder String, movedSide String, memberSide String) returns String
+	return "'{String.from(name)}' cannot be shadowed: this program declares it as a type, and {holder} also uses it as a MEMBER name (a field, a method or an argument label). Shadowing moves the {movedSide} TYPE into the reserved space, which would leave that member reachable from user code under a name the {memberSide} side no longer spells — rename the type in this program"
+end 'contestedMemberSentence'
+
+union ContestedMember
+	clean
+	spelled(name ByteArray)
+end 'ContestedMember'
+
+function contestedMemberIn(project Project, signatures ProgramSignatures, path FilePath) returns ContestedMember throws CompileError
+	view tokens = try queryActiveTokens(project, path: path)
+	view provenance = fileProvenanceOf(project, path: path)
+	let collapses = Parser.qualifiersCollapseIn(provenance.isStdlibSource, isRuntimeSource: provenance.isRuntimeSource, isScriptlibSource: provenance.isScriptlibSource)
+
+	return contestedMemberAmong(Parser.qualifiedTokens(tokens, signatures: signatures, collapses: collapses, readerFilePath: path).tokens, signatures: signatures)
+end 'contestedMemberIn'
+
+function contestedMemberAmong(tokens TokenArray, signatures ProgramSignatures) returns ContestedMember
+	for i in 0 upto tokens.count() 'eachToken'
+		let tok = try tokens.get(i) otherwise panic("contestedMemberAmong: tokens.get OOB at {i} below count {tokens.count()}")
+
+		if tok.kind != TokenKind.identifier 'notAName'
+			continue
+		end 'notAName'
+
+		if signatures.interfaceMap().libraryNameOf(tok.value).equals(tok.value) 'notContested'
+			continue
+		end 'notContested'
+
+		if not tokenIsAMemberSpelling(tokens, index: i) 'notAMember'
+			continue
+		end 'notAMember'
+
+		return ContestedMember.spelled(tok.value)
+	end 'eachToken'
+
+	return ContestedMember.clean
+end 'contestedMemberAmong'
 
 function tokenIsAMemberSpelling(tokens TokenArray, index ElementIndex) returns bool
 	if index > 0 'hasPredecessor'
@@ -1707,7 +1778,7 @@ end 'walkExtensionSitesPerFile'
 // gives: every entry point opens with `enterTypeScope`, which assigns the per-declaration scopes
 // rather than merging into them, so a site that throws part-way cannot be observed by the next.
 function siteFileReader(project Project, signatures ProgramSignatures, path FilePath, buildsBodies bool) returns Parser throws CompileError
-	return fileReader(project, signatures: signatures, path: path, tokens: try queryActiveTokens(project, path: path), isStdlibSource: isStdlibSourceFile(project, path: path), buildsBodies: buildsBodies)
+	return fileReader(project, signatures: signatures, path: path, tokens: try queryActiveTokens(project, path: path), isStdlibSource: isStdlibTierSourceFile(project, path: path), buildsBodies: buildsBodies)
 end 'siteFileReader'
 
 // A conformance clause's own extent is a whole-program fact: `implements Marker with T, Holder with
@@ -1881,7 +1952,7 @@ module function parseQueryOf(project Project, path FilePath) returns ParseQuery 
 	// at the end of the query, so the check and the stamp are the same value rather than two
 	// computations that have to agree. `isStdlibSource` must be settled before the key, because the
 	// key carries the body demand it decides.
-	let isStdlibSource = isStdlibSourceFile(project, path: path)
+	let isStdlibSource = isStdlibTierSourceFile(project, path: path)
 	let buildsBodies = buildsBodiesFor(project, path: path, isStdlibSource: isStdlibSource)
 	view overrides = project.db.rowSetOverrides.of(path)
 	let contentHash = (try sourceEntryOf(project, path: path)).contentHash
@@ -2238,18 +2309,19 @@ end 'foldEveryFileInto'
 
 let EmissionPathSeparator = "/"
 
-enum EmissionTier
+enum SourceTier
 	author
 	stdlib
 	runtime
-end 'EmissionTier'
+	scriptlib
+end 'SourceTier'
 
 type EmissionSlot
-	let tier as EmissionTier
+	let tier as SourceTier
 	let components as NameRoster
 	export let position as ElementIndex
 
-	static function create(tier EmissionTier, components NameRoster, position ElementIndex) returns EmissionSlot
+	static function create(tier SourceTier, components NameRoster, position ElementIndex) returns EmissionSlot
 		return Self{tier: tier, components: components, position: position}
 	end 'create'
 
@@ -2278,21 +2350,27 @@ end 'EmissionSlot'
 
 typealias EmissionSlotArray = Array with EmissionSlot
 
-function emissionTierOf(project Project, path FilePath) returns EmissionTier
-	if isStdlibSourceFile(project, path: path) 'theStdlib'
-		return EmissionTier.stdlib
+function sourceTierOf(project Project, path FilePath) returns SourceTier
+	view provenance = fileProvenanceOf(project, path: path)
+
+	if provenance.isStdlibSource 'theStdlib'
+		return SourceTier.stdlib
 	end 'theStdlib'
 
-	if isRuntimeSourceFile(project, path: path) 'theRuntime'
-		return EmissionTier.runtime
+	if provenance.isRuntimeSource 'theRuntime'
+		return SourceTier.runtime
 	end 'theRuntime'
 
-	return EmissionTier.author
-end 'emissionTierOf'
+	if provenance.isScriptlibSource 'theScriptlib'
+		return SourceTier.scriptlib
+	end 'theScriptlib'
 
-function emissionComponentsOf(project Project, path FilePath, tier EmissionTier, cwd FilePath) returns NameRoster
+	return SourceTier.author
+end 'sourceTierOf'
+
+function emissionComponentsOf(project Project, path FilePath, tier SourceTier, cwd FilePath) returns NameRoster
 	let resolved = path.resolve(cwd)
-	let anchor = namespaceAnchorFor(project, cwd: cwd, livesUnderStdlibDirectory: tier == EmissionTier.stdlib, livesUnderRuntimeDirectory: tier == EmissionTier.runtime)
+	let anchor = namespaceAnchorFor(project, cwd: cwd, tier: tier)
 	let relative = try resolved.relativeTo(anchor) otherwise resolved
 	var components = NameRoster.create()
 
@@ -2314,7 +2392,7 @@ function sourceFilesInEmissionOrder(project Project) returns EmissionSlotArray
 	var slots = EmissionSlotArray.create()
 
 	for (iter, path) in project.db.sourcePaths.withIterator() 'eachSourcePath'
-		let tier = emissionTierOf(project, path: path)
+		let tier = sourceTierOf(project, path: path)
 		slots.push(EmissionSlot.create(tier, components: emissionComponentsOf(project, path: path, tier: tier, cwd: cwd), position: iter.index()))
 	end 'eachSourcePath'
 
@@ -2737,16 +2815,8 @@ function probeOnePathCacheHits(project Project, path FilePath) throws CompileErr
 	_ = try queryParseOps(project, path: path)
 end 'probeOnePathCacheHits'
 
-// Asked once per file, by the places that need a file's provenance: the two queries that build a
-// `Parser` for a real parse, and `queryProgramSignatures`'s partition of the declaration sweep, which
-// asks it once and hands the answer down rather than letting `foldOneFileInto` re-derive it.
-//
-// ⚠ **IT IS THE STDLIB TIER SPECIFICALLY, NOT "the library", AND EVERY READER HERE MEANS THAT.** It is
-// not only a visibility question: besides a `typealias` declaration's visibility, it decides whether a
-// file's tokens are rewritten by the stdlib/user shadow rename and whether the `__`-reservation doors
-// admit this compile's own mints — privileges the RUNTIME tier does not carry. A gate that means "not
-// the author's code" asks `isLibrarySourceFile` below instead. Resolving both sides before comparing
-// governs all of those.
+// Strictly the `stdlib/` tier (`isStdlibRootFile`). The parser's privilege bit and the declaration sweep's partition
+// ask `isStdlibTierSourceFile`, which a scriptlib package file answers too.
 //
 // ⚠ The derivation asks the DIRECTORIES and not `project.librarySourcePaths`, whose membership test
 // would be a linear scan over that array, growing with every file added to a library root.
@@ -2765,8 +2835,8 @@ end 'isRuntimeSourceFile'
 // allocates a String per component, and each file asks more than once. The key is the spelling the
 // caller passed, which is what `isInside` compares, so the memo saves work and decides nothing.
 //
-// Never invalidated: the answer is a function of that spelling, `project.rootPath` and the two
-// library roots, and a compile moves none of them.
+// Never invalidated: the answer is a function of that spelling, `project.rootPath` and the library
+// roots, and a compile moves none of them.
 function fileProvenanceOf(project Project, path FilePath) returns FileProvenance
 	if let memoized = try project.db.fileProvenance.get(path) 'alreadyDerived'
 		return memoized
@@ -2780,21 +2850,53 @@ function fileProvenanceOf(project Project, path FilePath) returns FileProvenance
 	// exemption from E2051, E3004 and E3155, E3152, E3153, E3154, the tier's module anchor) is a fact
 	// about the file.
 	let isRuntimeSource = resolvedPath.isInside(project.runtimeDir)
-	var derived = FileProvenance.create(isStdlibSource, isRuntimeSource: isRuntimeSource)
+	let isScriptlibSource = not isStdlibSource and not isRuntimeSource and isScriptlibRootFile(project, resolvedPath: resolvedPath, cwd: cwd)
+	var derived = FileProvenance.create(isStdlibSource, isRuntimeSource: isRuntimeSource, isScriptlibSource: isScriptlibSource)
 
 	project.db.fileProvenance.upsert(path, value: derived)
 
 	return derived
 end 'fileProvenanceOf'
 
+export function isScriptlibSourceFile(project Project, path FilePath) returns bool
+	return fileProvenanceOf(project, path: path).isScriptlibSource
+end 'isScriptlibSourceFile'
+
+export function scriptlibBodiesAreEveryBody(project Project, path FilePath) returns bool
+	return project.scriptlib.buildsEveryBody() and isScriptlibSourceFile(project, path: path)
+end 'scriptlibBodiesAreEveryBody'
+
+// Asked once per file, by the places that need a file's provenance: the two queries that build a
+// `Parser` for a real parse, and `queryProgramSignatures`'s partition of the declaration sweep, which
+// asks it once and hands the answer down rather than letting `foldOneFileInto` re-derive it.
+//
+// ⚠ **IT IS THE STDLIB TIER SPECIFICALLY, NOT "the library", AND EVERY READER HERE MEANS THAT.** It is
+// not only a visibility question: besides a `typealias` declaration's visibility, it decides whether a
+// file's tokens are rewritten by the stdlib/user shadow rename and whether the `__`-reservation doors
+// admit this compile's own mints — privileges the RUNTIME tier does not carry. A gate that means "not
+// the author's code" asks `isLibrarySourceFile` below instead. A scriptlib file's doors admit only the
+// tokens the rename wrote (`Parser.everySpellingIsTheCompilers`).
+export function isStdlibTierSourceFile(project Project, path FilePath) returns bool
+	return fileProvenanceOf(project, path: path).carriesStdlibPrivileges()
+end 'isStdlibTierSourceFile'
+
+// A program rooted inside `scriptlib/` (a package file the language server checks) keeps its own
+// files as the user's, as `isStdlibRootFile` does for `stdlib/`; the other packages stay the tier.
+function isScriptlibRootFile(project Project, resolvedPath FilePath, cwd FilePath) returns bool
+	if not project.scriptlib.holds(resolvedPath) 'outsideThisRoot'
+		return false
+	end 'outsideThisRoot'
+
+	return not rootIsUnderScriptlib(project, cwd: cwd) or not resolvedPath.isInside(project.rootPath.resolve(cwd))
+end 'isScriptlibRootFile'
+
 // ⭐ **"IS THIS FILE THE LIBRARY'S, AS OPPOSED TO THE AUTHOR'S?"** — the question every gate about
 // BLAME, about auditing and about lazily-built bodies is really asking, because none of them turns on
-// WHICH of the two tiers a file came from. The gates that DO turn on the tier — the parser's privilege
-// bit, the declaration sweep's shadow contest — ask `isStdlibSourceFile` directly and must keep doing so.
+// WHICH of the library tiers a file came from. The gates that DO turn on the tier — the parser's
+// privilege bit, the declaration sweep's shadow contest — ask `isStdlibTierSourceFile` directly and must
+// keep doing so.
 export function isLibrarySourceFile(project Project, path FilePath) returns bool
-	view provenance = fileProvenanceOf(project, path: path)
-
-	return provenance.isStdlibSource or provenance.isRuntimeSource
+	return fileProvenanceOf(project, path: path).isLibrary()
 end 'isLibrarySourceFile'
 
 // The path arrives resolved, because `isInside` compares spellings. Containment in `stdlib/` is
@@ -2869,6 +2971,10 @@ end 'programSignaturesIn'
 export function livesUnderStdlibDirectory(signatures ProgramSignatures, isStdlibSource bool) returns bool
 	return isStdlibSource or signatures.rootIsUnderStdlibDirectory
 end 'livesUnderStdlibDirectory'
+
+function fileLivesUnderStdlibDirectory(project Project, signatures ProgramSignatures, path FilePath) returns bool
+	return livesUnderStdlibDirectory(signatures, isStdlibSource: isStdlibSourceFile(project, path: path))
+end 'fileLivesUnderStdlibDirectory'
 
 // The one module whose declarations MAY carry the reserved `__` prefix — `stdlib/Builtins.maxon`,
 // the type-system bridge to the compiler's intrinsics. Named RELATIVE to `stdlib/` and joined
@@ -2957,7 +3063,7 @@ end 'isCompilerWrittenDeclaration'
 // once per file from the anchor only it holds, and a second derivation is a second chance to pick a
 // different anchor for the same file.
 function parseJobFor(project Project, signatures ProgramSignatures, path FilePath, isStdlibSource bool, buildsBodies bool) returns ParseJob
-	return parseJobFrom(project, path: path, namespace: signatures.namespaceOf(path), livesUnderStdlibDirectory: livesUnderStdlibDirectory(signatures, isStdlibSource: isStdlibSource), isStdlibSource: isStdlibSource, buildsBodies: buildsBodies)
+	return parseJobFrom(project, path: path, namespace: signatures.namespaceOf(path), livesUnderStdlibDirectory: fileLivesUnderStdlibDirectory(project, signatures: signatures, path: path), isStdlibSource: isStdlibSource, buildsBodies: buildsBodies)
 end 'parseJobFor'
 
 function parseJobFrom(project Project, path FilePath, namespace String, livesUnderStdlibDirectory bool, isStdlibSource bool, buildsBodies bool) returns ParseJob
@@ -2966,7 +3072,7 @@ function parseJobFrom(project Project, path FilePath, namespace String, livesUnd
 	// one compile, which is the drift this routine exists to prevent.
 	let isRuntimeSource = isRuntimeSourceFile(project, path: path)
 
-	return ParseJob.create(path, namespace: namespace, isStdlibSource: isStdlibSource, isRuntimeSource: isRuntimeSource, declaresCompilerInternalNames: declaresCompilerInternalNames(project, path: path, isRuntimeSource: isRuntimeSource), compilerMintedNames: project.compilerWrittenSources.mintedNamesIn(path), livesUnderStdlibDirectory: livesUnderStdlibDirectory, buildsBodies: buildsBodies, capturesDebugLocals: project.debugInfo, instrumentsCoverage: project.coverage)
+	return ParseJob.create(path, namespace: namespace, isStdlibSource: isStdlibSource, isRuntimeSource: isRuntimeSource, isScriptlibSource: isScriptlibSourceFile(project, path: path), declaresCompilerInternalNames: declaresCompilerInternalNames(project, path: path, isRuntimeSource: isRuntimeSource), compilerMintedNames: project.compilerWrittenSources.mintedNamesIn(path), livesUnderStdlibDirectory: livesUnderStdlibDirectory, buildsBodies: buildsBodies, capturesDebugLocals: project.debugInfo, instrumentsCoverage: project.coverage)
 end 'parseJobFrom'
 
 // A reader over one file for a pass that folds what it reads into the index rather than building an artifact —
@@ -2985,12 +3091,13 @@ function hashEventSourceOf(isStdlibSource bool, isRuntimeSource bool) returns Ha
 	return HashEventSource.library if isStdlibSource or isRuntimeSource else HashEventSource.author
 end 'hashEventSourceOf'
 
-// ⭐⭐ **THREE STATES, AND ONLY `stdlib/` IS THE LAZY ONE.**
+// ⭐⭐ **ONLY THE STDLIB TIER IS LAZY: `stdlib/`, AND `scriptlib/` OUTSIDE `check-scriptlib`.**
 //
 // A USER file's bodies are always built — its bodies are the program, and a diagnostic in unreached user
 // code is still the user's bug. A `stdlib/` file builds once any function it declares has been reached,
 // and then builds all of them; see `BuildsBodies` for why the unit is the file, and why the demand
-// cannot be asked per function.
+// cannot be asked per function. A package under `check-scriptlib` is always built: the check has no
+// program to reach it, and its whole job is the diagnostics in bodies no script reached.
 //
 // ⛔⛔ **A `runtime/` FILE IS ALWAYS BUILT, AND A DEMAND-DRIVEN ANSWER THERE IS NOT MERELY CONSERVATIVE —
 // IT IS ALWAYS EMPTY.** The demand is discovered from SOURCE CALL SITES: a library file earns its bodies
@@ -2999,7 +3106,7 @@ end 'hashEventSourceOf'
 // can never grow, every one of its bodies would be skipped, and each would ship as the bare `retVoid`
 // `Parser.skipUnreachedFunctionBody` leaves behind. A silent wrong answer, not a missing feature.
 function buildsBodiesFor(project Project, path FilePath, isStdlibSource bool) returns bool
-	if not isStdlibSource 'notTheLazyTier'
+	if not isStdlibSource or scriptlibBodiesAreEveryBody(project, path: path) 'notTheLazyTier'
 		return true
 	end 'notTheLazyTier'
 

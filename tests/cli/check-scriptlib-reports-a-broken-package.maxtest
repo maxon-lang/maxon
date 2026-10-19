@@ -1,0 +1,33 @@
+let CaseDirName = "check-scriptlib-reports-a-broken-package"
+let FinePackageName = "fine"
+let FinePackageFileName = "Fine.maxon"
+let FinePackageSource = "public function fineAnswer() returns Count\n\treturn 1\nend 'fineAnswer'\n"
+let BadPackageName = "bad"
+let BadPackageFileName = "Bad.maxon"
+let BadPackageSource = "public function badAnswer() returns Count\n\treturn \"not a count\"\nend 'badAnswer'\n"
+let FailedCheckExitCode = 1
+let PosixSegmentSeparator = "/"
+let WindowsSegmentSeparator = "\\"
+
+test 'check-scriptlib reports a type error in a package function nothing calls'
+	requireHeldInAnInstallOutsideCheckout(CaseDirName, check: BrokenPackageIsReported.create())
+end 'check-scriptlib reports a type error in a package function nothing calls'
+
+type BrokenPackageIsReported implements OutsideCheckoutCase
+	static function create() returns BrokenPackageIsReported
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		writeScriptlibPackageFile(dir, package: FinePackageName, fileName: FinePackageFileName, content: FinePackageSource)
+		writeScriptlibPackageFile(dir, package: BadPackageName, fileName: BadPackageFileName, content: BadPackageSource)
+
+		let check = runCheckScriptlib(dir)
+		let said = "It wrote to stdout: {check.stdout} and to stderr: {check.stderr}"
+		let posixSegment = "{BadPackageName}{PosixSegmentSeparator}{BadPackageFileName}"
+		let windowsSegment = "{BadPackageName}{WindowsSegmentSeparator}{BadPackageFileName}"
+
+		try Expect.equal(check.exitCode(), expected: FailedCheckExitCode, message: "`check-scriptlib` over a scriptlib holding `{posixSegment}`, whose never-called `badAnswer` returns a String where it promised a Count, did not exit {FailedCheckExitCode}. Every package body is built, reached or not. {said}")
+		try Expect.isTrue(check.stderr.contains(posixSegment) or check.stderr.contains(windowsSegment), message: "`check-scriptlib` did not name `{posixSegment}`, the file holding the error. {said}")
+	end 'requireHeldIn'
+end 'BrokenPackageIsReported'

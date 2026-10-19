@@ -1,0 +1,20 @@
+let MemberNamedLikeTypeCaseLabel = "scriptlib-a-package-member-named-like-a-shadowed-type-is-refused"
+let MemberNamedLikeTypeFunction = "stamp"
+let MemberNamedLikeTypePackageSource = "public type Ticker\n\tpublic static function Clock() returns Count\n\t\treturn 1\n\tend 'Clock'\nend 'Ticker'\n\npublic function stamp() returns Count\n\treturn Ticker.Clock()\nend 'stamp'\n"
+let ShadowedNameIsAMemberCode = "E3112"
+let ScriptlibWord = "scriptlib"
+
+test 'a scriptlib package member spelled like a library type the script shadows is refused'
+	let staged = stageScriptlibCase(MemberNamedLikeTypeCaseLabel)
+	writeScriptlibPackageFile(MemberNamedLikeTypeCaseLabel, package: MintProbePackageName, fileName: MintProbePackageFileName, content: MemberNamedLikeTypePackageSource)
+	let script = writeStagedFile(staged.sources, fileName: ScriptFileName, content: shadowingScriptSource(ShadowedClockTypeName, packageFunction: MemberNamedLikeTypeFunction))
+
+	let run = runProgram(staged, program: script)
+
+	let observedExit = run.exitCode()
+	Expect.notEqual(observedExit, expected: 0, message: "a package declaring a method named `Clock` ran beside a script declaring `type Clock`. The script's type moves the library's `Clock` aside, and a package member of that spelling would silently stop resolving. It said: {run.stdout}{run.stderr}")
+
+	let observedStderr = withoutCarriageReturns(run.stderr)
+	Expect.contains(observedStderr, needle: ShadowedNameIsAMemberCode, message: "the package's `Ticker.Clock` was refused, but not as a shadowed name that is also a member ({ShadowedNameIsAMemberCode})")
+	Expect.contains(observedStderr, needle: ScriptlibWord, message: "the refusal does not name the {ScriptlibWord} package whose member collides")
+end 'a scriptlib package member spelled like a library type the script shadows is refused'

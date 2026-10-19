@@ -126,6 +126,7 @@ main() {
 	rm -rf "$retired"
 
 	say "installed Maxon $version in $root"
+	check_scriptlib "$root" "$bin_dir" "$version"
 	finish_path "$bin_dir" "$modify_path"
 }
 
@@ -153,8 +154,10 @@ USAGE
 
 say() { printf 'maxon-install: %s\n' "$1"; }
 
+warn() { printf 'maxon-install: %s\n' "$1" >&2; }
+
 fail() {
-	printf 'maxon-install: %s\n' "$1" >&2
+	warn "$1"
 	exit 1
 }
 
@@ -211,6 +214,21 @@ swap_in() {
 		: > "$retired/$entry.placed" || return 1
 	done
 	mv -f "$unpacked/maxon" "$root/bin/maxon" || return 1
+}
+
+# Notifies and never fails: the exit status is the contract `maxon upgrade` reads (see the header), and
+# a package this release rejects is the user's to update. The `help` probe skips a release that
+# predates the command.
+check_scriptlib() {
+	root="$1"
+	bin_dir="$2"
+	version="$3"
+	[ -d "$root/scriptlib" ] || return 0
+	"$bin_dir/maxon" help check-scriptlib >/dev/null 2>&1 || return 0
+	if ! "$bin_dir/maxon" check-scriptlib; then
+		warn "$root/scriptlib needs updating for Maxon $version: the packages above do not compile with this release. The install itself is complete."
+	fi
+	return 0
 }
 
 roll_back() {

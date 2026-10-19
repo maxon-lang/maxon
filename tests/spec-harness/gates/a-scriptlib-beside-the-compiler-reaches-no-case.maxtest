@@ -1,0 +1,18 @@
+let ScriptlibGateSpecName = "scriptlib-gate"
+let BrokenPackageName = "bad"
+let BrokenPackageFileName = "Bad.maxon"
+let BrokenPackageSource = "public function broken( returns Count\n\treturn 0\nend 'broken'\n"
+
+test 'a scriptlib beside the compiler reaches no spec case'
+	let run = runGateFixtureBesideAStagedScriptlib(BrokenPackageName, fileName: BrokenPackageFileName, content: BrokenPackageSource)
+	let said = everythingSaid(run)
+	var broken = StringArray.create()
+
+	collectNotPassed(said, specName: ScriptlibGateSpecName, testNames: ["scriptlib-gate.returns-zero"], broken: broken)
+
+	if run.exitCode() != SuccessExitCode 'runFailed'
+		broken.push("the run exited {run.exitCode()}. It said:\n{said}\n")
+	end 'runFailed'
+
+	requireNothingBroken(broken, headline: "a `scriptlib/` package that does not parse, beside the compiler running `spec-test`, is never loaded into a spec case")
+end 'a scriptlib beside the compiler reaches no spec case'

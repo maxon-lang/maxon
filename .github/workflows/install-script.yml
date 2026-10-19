@@ -281,6 +281,35 @@ jobs:
           leftovers="$(find "$HOME/.maxon" -mindepth 1 -maxdepth 1 -name '.*')"
           [ -z "$leftovers" ] || { echo "::error::left behind: $leftovers"; exit 1; }
 
+      - name: A scriptlib package the new compiler rejects is reported, and the install still succeeds
+        run: |
+          set -euo pipefail
+          custom="$(mktemp -d)/maxon"
+          MAXON_INSTALL="$custom" sh -s -- --no-modify-path < website/public/install.sh
+          if ! "$custom/bin/maxon" help check-scriptlib > /dev/null 2>&1; then
+            echo "::notice::the latest release has no maxon check-scriptlib yet"
+            exit 0
+          fi
+          package="$custom/scriptlib/broken"
+          mkdir -p "$package"
+          {
+            printf '%s\n' 'public function broken() returns Count'
+            printf '\t%s\n' 'return "not a count"'
+            printf '%s\n' "end 'broken'"
+          } > "$package/Broken.maxon"
+          out="$(MAXON_INSTALL="$custom" sh -s -- --force --no-modify-path < website/public/install.sh 2>&1)"
+          echo "$out"
+          case "$out" in
+            *"scriptlib needs updating"*) ;;
+            *) echo "::error::an install over a scriptlib package the compiler rejects printed no notice"; exit 1 ;;
+          esac
+          case "$out" in
+            *Broken.maxon*) ;;
+            *) echo "::error::the notice did not carry the compiler's diagnostics"; exit 1 ;;
+          esac
+          [ -f "$package/Broken.maxon" ] || { echo "::error::the install removed the user's scriptlib package"; exit 1; }
+          "$custom/bin/maxon" version
+
       - name: MAXON_INSTALL puts the install anywhere, and refuses a directory that is not one
         run: |
           set -euo pipefail
@@ -566,6 +595,30 @@ jobs:
           if ($LASTEXITCODE -ne 1) { throw 'a tampered SHA256SUMS was accepted' }
           if ((Get-FileHash "$HOME\.maxon\bin\maxon.exe").Hash -ne $before) { throw 'the failed install changed the existing one' }
           $global:LASTEXITCODE = 0
+
+      - name: A scriptlib package the new compiler rejects is reported, and the install still succeeds
+        run: |
+          $install = [scriptblock]::Create((Get-Content -Raw website/public/install.ps1))
+          $env:MAXON_INSTALL = Join-Path $env:RUNNER_TEMP 'scriptlib-notice'
+          & $install -NoPathUpdate
+          if ($LASTEXITCODE -ne 0) { throw 'the install failed' }
+          $maxon = "$env:MAXON_INSTALL\bin\maxon.exe"
+          & $maxon help check-scriptlib *> $null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host '::notice::the latest release has no maxon check-scriptlib yet'
+            Remove-Item Env:MAXON_INSTALL
+            $global:LASTEXITCODE = 0
+            return
+          }
+          $package = New-Item -ItemType Directory -Force -Path "$env:MAXON_INSTALL\scriptlib\broken"
+          Set-Content -LiteralPath "$package\Broken.maxon" -Encoding ascii -Value @('public function broken() returns Count', "`treturn `"not a count`"", "end 'broken'")
+          $out = & $install -Force -NoPathUpdate 6>&1 | Out-String
+          $out
+          if ($LASTEXITCODE -ne 0) { throw "the install over a rejected scriptlib package failed ($LASTEXITCODE)" }
+          if ($out -notmatch 'scriptlib needs updating') { throw 'an install over a scriptlib package the compiler rejects printed no notice' }
+          if ($out -notmatch 'Broken.maxon') { throw 'the notice did not carry the compiler''s diagnostics' }
+          if (-not (Test-Path -LiteralPath "$package\Broken.maxon")) { throw 'the install removed the user''s scriptlib package' }
+          Remove-Item Env:MAXON_INSTALL
 
       - name: MAXON_INSTALL with -NoPathUpdate installs anywhere and leaves the user PATH alone
         run: |

@@ -7,7 +7,8 @@ sidebar:
 
 A Maxon program is every `.maxon` file in a project directory, compiled together. There are no import
 statements: a file sees its own declarations, the declarations other files make visible, and the standard
-library.
+library. A program that is one file also sees the scriptlib packages
+([The scriptlib directory](/docs/cli/#the-scriptlib-directory)).
 
 ## Automatic Derivation
 
@@ -20,6 +21,9 @@ A file's namespace is its directory path relative to the project root, joined wi
 | `lib/fmt/integer.maxon` | `lib.fmt` |
 
 Every file in one directory shares that directory's namespace.
+
+A scriptlib package's namespace is `scriptlib.<package>`: `scriptlib/text/Lines.maxon` is in
+`scriptlib.text`, and its subdirectories extend it the same way.
 
 ## Visibility
 
@@ -148,10 +152,11 @@ is written: a declaration, a cast, a construction, a static call's base, a `thro
 or `extends` clause, and the head of a top-level constant's initializer. It never bypasses visibility: a
 type the referring file may not name is refused qualified exactly as it is bare.
 
-Two qualifiers are reserved. `export.X` names a declaration at the project root, and `stdlib.X` one in the
-standard library. A source directory that cannot be written as a qualifier is refused when the program is
-loaded, **E3182**: one whose name is not an identifier, such as `my-dir`, and a top-level one named
-`export`, `stdlib`, `runtime` or a keyword.
+Three qualifiers are reserved. `export.X` names a declaration at the project root, `stdlib.X` one in the
+standard library, and `scriptlib.<package>.X` one in a scriptlib package. A source directory that cannot be
+written as a qualifier is refused when the program is loaded, **E3182**: one whose name is not an
+identifier, such as `my-dir`, and a top-level one named `export`, `stdlib`, `runtime`, `scriptlib` or a
+keyword.
 
 ## Bare Names and Ambiguity
 

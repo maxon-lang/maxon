@@ -384,7 +384,7 @@ function freshnessKey(program FilePath, target Target, entryFunction ByteArray) 
 	let sources = try programSources([program])
 	manifest.append(try digestLines(ProgramFieldLabel, paths: sources))
 
-	let library = try libraryInputs()
+	let library = try libraryInputs([program])
 	manifest.append(try digestLines(StdlibFieldLabel, paths: library))
 
 	return hexOfLeadingBytes(sha256(manifest.toByteArray()), count: CacheNameDigestBytes)
@@ -500,14 +500,18 @@ end 'programSources'
 
 // ⛔ **EVERY FILE A COMPILE READS AND THE AUTHOR DID NOT WRITE — BOTH LIBRARY ROOTS, because a build
 // reads both and a key that hashed only one would serve a stale executable after a `runtime/` edit.** The
-// Unicode tables the compiler embeds are read from under `stdlib/` too (see `ucdTableStems`).
-module function libraryInputs() returns CompileInputArray throws RunCacheError
+// Unicode tables the compiler embeds are read from under `stdlib/` too (see `ucdTableStems`), and a
+// single-file program's scriptlib packages are listed by the loader's own
+// `StdlibLoader.scriptlibSourcesLoadedBy`, so an edited package rebuilds exactly the programs that
+// load it.
+module function libraryInputs(programPaths MaxonSourcePathArray) returns CompileInputArray throws RunCacheError
 	let stdlibDir = try locateStdlibDir() otherwise throw RunCacheError.unavailable("could not locate the stdlib/ directory, which the build cache key is computed over")
 	let runtimeDir = try runtimeDirBeside(stdlibDir) otherwise throw RunCacheError.unavailable("could not locate the runtime/ directory beside stdlib/, which the build cache key is computed over")
 
 	var walked = MaxonSourcePathArray.create()
-	_ = try collectMaxonSources(stdlibDir, into: walked) otherwise throw RunCacheError.unavailable("could not walk {stdlibDir.toString()} for the sources the build cache key is computed over")
-	_ = try collectMaxonSources(runtimeDir, into: walked) otherwise throw RunCacheError.unavailable("could not walk {runtimeDir.toString()} for the sources the build cache key is computed over")
+	try walkLibraryRoot(stdlibDir, into: walked)
+	try walkLibraryRoot(runtimeDir, into: walked)
+	walked.append(try scriptlibInputs(programPaths, stdlibDir: stdlibDir))
 
 	var inputs = walked as CompileInputArray
 
@@ -517,6 +521,22 @@ module function libraryInputs() returns CompileInputArray throws RunCacheError
 
 	return inputs
 end 'libraryInputs'
+
+function walkLibraryRoot(root FilePath, into MaxonSourcePathArray) throws RunCacheError
+	_ = try collectMaxonSources(root, into: into) otherwise throw libraryRootUnwalkable(root)
+end 'walkLibraryRoot'
+
+function libraryRootUnwalkable(root FilePath) returns RunCacheError
+	return RunCacheError.unavailable("could not walk {root.toString()} for the sources the build cache key is computed over")
+end 'libraryRootUnwalkable'
+
+function scriptlibInputs(programPaths MaxonSourcePathArray, stdlibDir FilePath) returns MaxonSourcePathArray throws RunCacheError
+	let root = try commonAncestorOf(programPaths) otherwise throw RunCacheError.unavailable("could not find the root of the program, which decides whether the build cache key covers scriptlib/")
+
+	let scriptlibDir = scriptlibDirBeside(stdlibDir)
+
+	return try scriptlibSourcesLoadedBy(root, scriptlibDir: scriptlibDir) otherwise throw libraryRootUnwalkable(scriptlibDir)
+end 'scriptlibInputs'
 
 export function hexOfLeadingBytes(digest ByteArray, count DigestPrefixBytes) returns String
 	var rendered = ""

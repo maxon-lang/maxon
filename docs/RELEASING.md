@@ -241,6 +241,12 @@ deploy, as `text/plain` (`website/public/_headers`). They read the newest versio
 `~/.maxon`. So a release is installable by script the moment it is published, with nothing to
 regenerate.
 
+The swap replaces `bin/`, `stdlib/`, `runtime/` and `examples/`, and `~/.maxon/scriptlib/`, the user's
+own packages, stays as it is. After a successful swap each script runs the new compiler's
+`check-scriptlib` when that directory exists and the compiler lists the command
+(`help check-scriptlib`); a failing check prints its diagnostics and a `scriptlib needs updating`
+notice, and the exit status stays the install's.
+
 `install-script.yml` runs both on every platform against the latest release. `release.yml` starts it
 once a release is published, and a push that touches either script runs it too.
 

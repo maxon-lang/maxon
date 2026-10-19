@@ -5419,9 +5419,10 @@ end 'QualifiedStaticCallee'
 type AsyncSpawnCallee
 	export let name as ByteArray
 	export let anchor as Token
+	export let mint as CalleeMint
 
-	static function create(name ByteArray, anchor Token) returns AsyncSpawnCallee
-		return AsyncSpawnCallee{name: name, anchor: anchor}
+	static function create(name ByteArray, anchor Token, mint CalleeMint) returns AsyncSpawnCallee
+		return AsyncSpawnCallee{name: name, anchor: anchor, mint: mint}
 	end 'create'
 end 'AsyncSpawnCallee'
 
@@ -9722,7 +9723,8 @@ let NanosPerMillisecond = 1000000
 
 // ⭐ **DID THE COMPILER SPELL THE CALLEE'S HEAD?** — the provenance question the shadow-mint exemption
 // asks, over the two mints that join a RESOLVED type name to something: a method dispatch's receiver type
-// (`p.join(…)` ⇒ `__FilePath.join`) and a range operator's stdlib type (`a upto b` ⇒ `__OpenRange.create`).
+// (`p.join(…)` ⇒ `__FilePath.join`, or a scriptlib head the rename respelled) and a range operator's
+// stdlib type (`a upto b` ⇒ `__OpenRange.create`).
 // A roster rather than `!= notMinted` for `mintSpellsTheWholeCallee`'s reason: the arms that mint a `__`
 // HELPER name are a different fact and must not be swept in by a negation.
 function mintHeadIsTheCompilers(mint CalleeMint) returns bool
@@ -9736,160 +9738,6 @@ function mintHeadIsTheCompilers(mint CalleeMint) returns bool
 		rangeOperator gives true
 	end 'm'
 end 'mintHeadIsTheCompilers'
-
-// ⭐ **THE "UNKNOWN INTRINSIC" ARM OF THE `__Builtins` TABLE — AND OF EVERY OTHER RESERVED CALLEE.**
-//
-// `__` is reserved for compiler internals: `E2051` refuses to DECLARE such a name, and the compiler emits
-// its own calls to them through `emitRuntimeCall`, never through here. So a `__`-prefixed callee arriving
-// at one of the two SOURCE call doors (`emitCall`, `emitAsyncCall`) either matched the intrinsic table
-// above — in which case it was already lowered and never reached this — or names nothing at all.
-//
-// ⚠ **THE CHECK IS HERE AND NOT IN SemanticCheck, AND THAT IS THE WHOLE REPAIR.**
-// `SemanticCheck.validateCall` RETURNS EARLY on any `__` callee, on the premise that "no user name can be
-// DECLARED with this prefix, so a `__` CALLEE is provably compiler-owned". The premise is about
-// DECLARATIONS and the conclusion is about CALLEES, and a callee need not be declared anywhere — so a
-// source-written `__foo()` sailed past E3004, past the arity/label/type checks, past lowering, and died in
-// the LINKER with neither a file nor a line:
-//
-//   panic at X64Backend.maxon:1781: resolveCallFixups: call to unknown function '__Builtins.currentTimeMs'
-//   panic at LowerMaxonToStd.maxon:1336: lowerAsyncCall: async callee '__whatever' has no signature
-//   panic at LowerMaxonToStd.maxon:108:  valueTagToStdType: an `unresolved` tag reached lowering
-//
-// (all three measured, all three on plain user code). SemanticCheck cannot make this check itself: by the
-// time it runs, a `call __mm_decref` the parser emitted and a `call __whatever` the user wrote are the same
-// `MaxonOp.call`, and nothing in the Maxon tier records which is which. The PARSER is the one tier that
-// knows, because it knows which of its own two doors the name came through — so the fix is to close the
-// door.
-//
-// ⭐⭐ **THE DOOR IS AJAR FOR EXACTLY ONE FILE, AND FOR EXACTLY THE NAMES THAT FILE DECLARES.**
-// `stdlib/Builtins.maxon` — the module that DECLARES the reserved space rather than merely using it — is let
-// past `requireUnreservedName` on the DECLARATION side, and the CALL side reads the
-// same one bit the declaration side does (`declaresCompilerInternalNames`, an identity compare against each
-// exempt module's `<stdlibDir>/<name>` — never a basename, see `Queries.declaresCompilerInternalNames`).
-// A rule stated on one side of a name lapses on the other: the module could
-// declare `__int_fromString` at `:214` and then not call it at `:322`.
-//
-// ⚠ **THE `declaresCallee` CLAUSE IS THE OTHER HALF, AND WITHOUT IT THE EXEMPTION IS FAR WIDER THAN THE
-// DECLARATION SIDE'S.**
-// The declaration exemption admits the names that module WRITES; a bare file test here would admit every
-// name it does not — `__mm_free()`, `__gt_spawn()`, `__nosuch()` — none of which any file declares, all of
-// which would then sail past SemanticCheck (nothing to look up) into the backend. So the exemption is "a
-// name some file declares", which is the call-side dual of the declaration exemption, and a typo in that module gets
-// the positioned E3004 below instead of the linker panic this whole check exists to replace.
-//
-// The file facts arrive as PARAMETERS because this sits outside `type Parser` and has no `self`; both call
-// sites are Parser methods and hand it the same ones, so there is still exactly one copy of the rule.
-//
-// ⚠ This door asks `ProgramSignatures` (swept from every file's tokens; a parser holds no
-// `Project`), and `SemanticCheck.validateCall` asks `project.funcSignatures` (folded from parsed
-// declarations), skipping arity/label/type validation when the answer is no. So a `__` name this
-// door admits and that registry lacks would be admitted and unvalidated. Both registries are
-// derived from function declarations. `Parser.requireSweptDeclaration` (E9003) refuses a parsed
-// declaration the sweep lacks; the direction this door relies on, a swept name the parse does not
-// register, has no check, because SemanticCheck cannot tell a source-written `__` callee from a
-// compiler-emitted one.
-function requireCalleeIsNotReservedName(callee ByteArray, anchor Token, fileDeclaresReservedNames bool, isStdlibSource bool, isRuntimeSource bool, mint CalleeMint, signatures ProgramSignatures) throws SourceParseError
-	// ⭐⭐ **THE `__Raw` PRIVILEGE IS THE TIER'S, AND THIS IS THE ONE DOOR BOTH CALL FORMS FUNNEL THROUGH**
-	// — `emitCall` and `emitAsyncCall` — so the refusal cannot hold at one spelling and lapse at the other.
-	// A LISTED member called FROM a runtime file never arrives here at all: `parseCallNamed`'s table arm
-	// lowers it. What reaches this line is either the call from outside the tier, refused by name, or an
-	// unlisted member, which falls through to the ordinary E3004 below whichever file wrote it.
-	if isRawIntrinsicCallee(callee) and not isRuntimeSource 'theRawFloorIsTheRuntimesAlone'
-		throw SourceParseError.rawIntrinsicOutsideRuntimeTier(String.from(callee), line: anchor.line, column: anchor.column)
-	end 'theRawFloorIsTheRuntimesAlone'
-
-	// ⭐ **ASKED ONCE AND CARRIED, NOT ASKED AGAIN TO EXPLAIN.** The classifier's answer IS the refusal's
-	// reason, so there is one derivation and nothing to keep in step. A reason derived independently of the
-	// gate is how `String.compare` comes to be refused for a `__` prefix it does not carry.
-	let reason = reservedCalleeReasonOf(callee)
-
-	if reason == ReservedCalleeReason.notReserved 'ordinaryCallee'
-		return
-	end 'ordinaryCallee'
-
-	// `<conformer>.<method>` names both the symbol `BuiltinConformanceRuntime` mints for a witness
-	// slot and the legal static spelling of a declared instance method (`String.hash("a")` is
-	// `"a".hash()`, and `stdlib/String.maxon` declares `hash()` and `equals()`). So the
-	// synthesized-impl clause is the compiler's only while no file declares the method; conjoined with
-	// `declaresCallee` like the clauses below, it refuses a `<conformer>.<method>` no file declares,
-	// which no signature could validate. Sound while the two registries agree (see this function's
-	// header): a callee `funcSignatures` contains is not `isSignaturelessCompilerCallee`, so
-	// SemanticCheck validates it and `lowerCall` slots its arguments against the declaration.
-	if reason == ReservedCalleeReason.synthesizedConformanceImpl and signatures.declaresCallee(callee) 'theCorpusOwnDeclarationNamedStatically'
-		return
-	end 'theCorpusOwnDeclarationNamedStatically'
-
-	// ⭐⭐ **THE THIRD KIND OF EXEMPTION: THE NAME IS RESERVED AND THE AUTHOR DID NOT WRITE IT.**
-	// The two clauses below both key on a FILE — "which file is calling?" — because every other `__`
-	// callee reaching this door is bytes the author typed, so the file is the only variable. A
-	// `<primitive>.<method>(…)` call is one whose callee the COMPILER spelled, out of a source name
-	// with no `__` in it, so no file fact can tell it from a typed one: `CalleeMint` is that fact, and
-	// it is stated by the one routine that mints such a name (`parseQualifiedCall`'s primitive arm).
-	//
-	// ⚠ **`declaresCallee` IS CONJOINED FOR THE OTHER TWO CLAUSES' REASON**, not as belt-and-braces: the
-	// mint says the compiler owns the head, and this says the program actually has that function. The mint
-	// site already refuses an undeclared primitive static in the AUTHOR'S OWN SPELLING (it must — this
-	// message would name `__int_frobnicate`, a symbol nobody wrote), so a `minted` callee that is not
-	// declared is a drift between that check and this one, and lands here rather than in the backend.
-	if mint == CalleeMint.primitiveStatic and signatures.declaresCallee(callee) 'theCompilersOwnPrimitiveStaticMint'
-		return
-	end 'theCompilersOwnPrimitiveStaticMint'
-
-	// ⭐ **THE FOURTH KIND OF EXEMPTION: A DEFAULT VALUE'S HELPER** — a PARAMETER's or a
-	// FIELD's, which are one exemption because they are one mechanism and one mistake. It is the
-	// `primitiveStatic` clause one mint over, and conjoined with `declaresCallee` for its exact reason: the
-	// mint says the compiler spelled the callee, and this says the program actually contains that function.
-	// Both helpers are declared by the SWEEP (`recordScannedParamDefaults` / `recordScannedFieldDefaultHelper`
-	// publish their return types), so a mint whose helper is absent is a drift between the sweep and the
-	// fill and lands here rather than in the backend.
-	if calleeMintIsDefaultHelper(mint) and signatures.declaresCallee(callee) 'theCompilersOwnDefaultHelperMint'
-		return
-	end 'theCompilersOwnDefaultHelperMint'
-
-	if fileDeclaresReservedNames and signatures.declaresCallee(callee) 'theReservedSpacesOwnDeclaration'
-		return
-	end 'theReservedSpacesOwnDeclaration'
-
-	// ⭐ **THE CALL-SIDE HALF OF THE SHADOW MINT** — `requireUnreservedName`'s arm, one door
-	// over, and the SAME conjunction the `fileDeclaresReservedNames` clause above states rather than a second
-	// rule. `stdlib/Clock.maxon`'s own
-	// `Clock.nowMs()` becomes `__Clock.nowMs()` when a user program declares `type Clock`, so a `__` callee
-	// can be a name the compiler itself minted for a declaration that genuinely exists. Both clauses are
-	// load-bearing for that clause's stated reason: the mint says the compiler owns the head, and `declaresCallee`
-	// says the program actually has that function — a mint-only door would admit `__Clock.whatever`.
-	//
-	// ⚠⚠ **AND THE THIRD CLAUSE IS THAT THE HEAD IS NOT BYTES THE AUTHOR TYPED, FOR `requireUnreservedName`'s
-	// REASON.** A `__Clock.nowMs()` the author wrote out in a USER file is the author
-	// reaching into the reserved space, and the rule this whole mechanism states is that the moved name is
-	// one "no user program can reach" by NAME. MEASURED without any such clause: a user program declaring
-	// `type Clock` and calling `__Clock.nowMs()` COMPILED AND RAN, returning the stdlib clock, while the
-	// identical call in a program with no shadow was correctly refused
-	// (`stdlib-user-shadows.error.the-mint-is-not-reachable-from-user-code` holds that shut).
-	//
-	// ⭐⭐ **BUT "THE AUTHOR TYPED IT" IS NOT "THE FILE IS A USER FILE", AND READ AS IF IT WERE, THIS CLAUSE
-	// WOULD MAKE THE MOVED DECLARATION UNUSABLE.** The contest's soundness argument is about NAME
-	// reachability (`Queries.contestStdlibDeclarationsAgainstUserNames`) — and a VALUE crosses the same file
-	// boundary a name does not. `stdlib/Directory.maxon`'s `currentPath()` hands user code a `FilePath`,
-	// which under a user `type FilePath` is a `__FilePath`, and a method call on it spells its callee out of
-	// that resolved TYPE: **`E3004 … '__FilePath.join': the '__' prefix names a compiler intrinsic`**, about
-	// a callee no author wrote and a function the program declares. Two different meanings on one spelling —
-	// the `__` the compiler RESERVED and the `__` this compile MINTED.
-	//
-	// ⇒ The clause is the PROVENANCE OF THE HEAD, of which the stdlib file test is one case: a stdlib file's
-	// identifier tokens were rewritten by the contest before this parse saw them, so nothing it spells is the
-	// author's. The other is `CalleeMint.resolvedTypeQualifier`, stated by the doors that join a resolved
-	// type name to a written member, whichever file they stand in. It is a per-SITE fact for
-	// `CalleeMint`'s standing reason: the two spellings build the identical callee bytes, so no name-keyed
-	// rule can tell them apart.
-	//
-	// The disjunction is first because both halves are single compares while `isMintedStdlibShadowCallee` is
-	// the allocating table scan this function's own header keeps off the common path.
-	if (isStdlibSource or mintHeadIsTheCompilers(mint)) and signatures.isMintedStdlibShadowCallee(callee) and signatures.declaresCallee(callee) 'theCompilersOwnMint'
-		return
-	end 'theCompilersOwnMint'
-
-	throw SourceParseError.unknownCompilerIntrinsic(String.from(callee), reason: reason, line: anchor.line, column: anchor.column)
-end 'requireCalleeIsNotReservedName'
 
 // Is this call site's callee a DEFAULT VALUE's synthesized helper — a parameter's or a field's? The two
 // mints are separate because the diagnostic noun each decodes to is different
@@ -19197,6 +19045,7 @@ export type Parser
 	var heldAwaits as HeldAwaitArray
 	var qualifiedTypeBase as QualifiedTypeBase
 	let qualifiedNominalAt as QualifiedNominalSpellingMap
+	let respelledStarts as RespelledTokenStartSet
 	var settledTypeNames as SettledTypeNameMap
 	var declaredAliasAnswers as DeclaredAliasAnswerMap
 	var globalMapColumnAnswers as GlobalMapColumnsAnswerMap
@@ -19729,11 +19578,11 @@ export type Parser
 	// nothing per expression.
 	let emptyMoveMark as MoveMark
 
-	// ⭐ **IS THE FILE BEING PARSED `stdlib/` SOURCE?** One bit, decided once per file by the
-	// query that builds this parser (`Queries`), because that is the only tier holding the project. It is
-	// the LAYER a declaration belongs to, never a tier: it travels on every `TypeNameClaim` so a user's
-	// declaration of a library name shadows it rather than meeting it, and it keeps the library out of
-	// the E3062 candidate list (see `recordTypeName`).
+	// ⭐ **IS THE FILE BEING PARSED `stdlib/` OR `scriptlib/` SOURCE?** One bit, decided once per file
+	// by the query that builds this parser (`Queries`), because that is the only tier holding the
+	// project. It is the LAYER a declaration belongs to, never a tier: it travels on every
+	// `TypeNameClaim` so a user's declaration of a library name shadows it rather than meeting it, and it
+	// keeps the library out of the E3062 candidate list (see `recordTypeName`).
 	let isStdlibSource as bool
 
 	// ⭐ **MAY THIS FILE DECLARE `__`-PREFIXED NAMES?** True for the
@@ -19763,6 +19612,11 @@ export type Parser
 	// `stdlib/Testing.maxon` also may; these three rules are about being the RUNTIME, which neither of
 	// those is. One slot carrying both claims is a semantic slot shared by two facts.
 	let isRuntimeSource as bool
+
+	// Set together with `isStdlibSource`, whose library privileges a scriptlib file shares. It marks the
+	// two places such a file is still the user's: its qualifiers collapse (`qualifiersCollapseIn`), and
+	// a `__` name is the compiler's only where the shadow rename wrote it (`everySpellingIsTheCompilers`).
+	let isScriptlibSource as bool
 
 	// ⭐⭐ **THE FIRST MANAGED VALUE THIS RUNTIME FILE BUILDS, HELD UNTIL THE END OF ITS PARSE.**
 	// `mintValue` and `retypeValue` are the only writers of the value type columns, so a
@@ -19933,13 +19787,14 @@ export type Parser
 	// ONCE, to the identifier tokens the file is parsed from, and every one of those spellings follows by
 	// construction. There is no roster of doors to keep complete, and no door to forget.
 	//
-	// ⚠ **IT IS SOUND BECAUSE IT IS UNIFORM OVER STDLIB SOURCE.** Every stdlib file is rewritten with the
-	// same table, so a name renamed at its declaration is renamed at every stdlib use of it — including a
-	// method's `Type.` head and a cross-module reference — and everything stdlib-internal is therefore
-	// unchanged. What DOES change is exactly the rule: user code, whose tokens are never rewritten, cannot
-	// reach the library's declaration by the bare name, which means the author's own declaration there — a
-	// synthesized protocol included (`IrInterfaceMap.protocolKind`). The one shape that argument does not cover — a stdlib MEMBER spelled
-	// like a contested type name, which user code can name — is refused before this runs
+	// ⚠ **IT IS SOUND BECAUSE IT IS UNIFORM OVER STDLIB SOURCE.** Every stdlib and scriptlib file is
+	// rewritten with the same table, so a name renamed at its declaration is renamed at every library
+	// use of it — including a method's `Type.` head and a cross-module reference — and everything
+	// library-internal is therefore unchanged. What DOES change is exactly the rule: user code, whose
+	// tokens are never rewritten, cannot reach the library's declaration by the bare name, which means
+	// the author's own declaration there — a synthesized protocol included
+	// (`IrInterfaceMap.protocolKind`). The one shape that argument does not cover — a library MEMBER
+	// spelled like a contested type name, which user code can name — is refused before this runs
 	// (`Queries.refuseContestedNamesUsedAsMembers`, E3112).
 	//
 	// ⚠ **NOT IN `queryActiveTokens`, AND THAT IS NOT A PREFERENCE.** That query is memoized on the file's
@@ -19953,8 +19808,9 @@ export type Parser
 		return isStdlibSource and signatures.interfaceMap().hasLibraryRenames()
 	end 'shadowRenamesTokens'
 
-	static function shadowRenamedTokens(tokens TokenArray, signatures ProgramSignatures) returns TokenArray
+	static function shadowRenamedTokens(tokens TokenArray, signatures ProgramSignatures, recordsRespelledStarts bool) returns ShadowRenamedTokens
 		var renamed = TokenArray.create()
+		var respelled = RespelledTokenStartSet.create()
 		renamed.reserve(tokens.count())
 
 		for tok in tokens 'eachToken'
@@ -19975,16 +19831,26 @@ export type Parser
 			// the source the author can read, and the rename is a fact about the name space rather than
 			// about the file's text.
 			renamed.push(Token.create(TokenKind.identifier, line: tok.line, column: tok.column, value: name.clone(), startByte: tok.startByte, endByte: tok.endByte))
+
+			if recordsRespelledStarts 'aFileWhoseMintsAreCheckedPerToken'
+				respelled.insert(tok.startByte)
+			end 'aFileWhoseMintsAreCheckedPerToken'
 		end 'eachToken'
 
-		return renamed
+		return ShadowRenamedTokens.create(renamed, respelledStarts: respelled)
 	end 'shadowRenamedTokens'
 
-	static function qualifiedTokens(tokens TokenArray, signatures ProgramSignatures, isLibrarySource bool, readerFilePath FilePath) returns PreparedTokens
+	// Asked with a `ParseJob`'s bits, whose `isStdlibSource` includes scriptlib, and by the E3112 census
+	// with a `FileProvenance`'s, whose does not; testing `isScriptlibSource` first gives both one answer.
+	export static function qualifiersCollapseIn(isStdlibSource bool, isRuntimeSource bool, isScriptlibSource bool) returns bool
+		return isScriptlibSource or not (isStdlibSource or isRuntimeSource)
+	end 'qualifiersCollapseIn'
+
+	export static function qualifiedTokens(tokens TokenArray, signatures ProgramSignatures, collapses bool, readerFilePath FilePath) returns PreparedTokens
 		var rewrittenAt = QualifiedNominalSpellingMap.create()
 
-		if isLibrarySource or not writesAQualifier(tokens, signatures: signatures) 'nothingToRewrite'
-			return PreparedTokens.create(tokens, qualifiedNominalAt: rewrittenAt)
+		if not collapses or not writesAQualifier(tokens, signatures: signatures) 'nothingToRewrite'
+			return PreparedTokens.create(tokens, qualifiedNominalAt: rewrittenAt, respelledStarts: RespelledTokenStartSet.create())
 		end 'nothingToRewrite'
 
 		var bindings = QualifierHeadBindings.of(tokens)
@@ -20011,7 +19877,7 @@ export type Parser
 			at = at + 1
 		end 'eachToken'
 
-		return PreparedTokens.create(rewritten, qualifiedNominalAt: rewrittenAt)
+		return PreparedTokens.create(rewritten, qualifiedNominalAt: rewrittenAt, respelledStarts: RespelledTokenStartSet.create())
 	end 'qualifiedTokens'
 
 	static function writesAQualifier(tokens TokenArray, signatures ProgramSignatures) returns bool
@@ -20128,20 +19994,29 @@ export type Parser
 		return 0
 	end 'sourceByteCountOf'
 
+	// The collapse runs before the rename: a scriptlib file's `stdlib.Clock` must reach the rename as
+	// the one token `Clock`, so it is respelled with every other spelling of the library's name.
 	export static function create(tokens TokenArray, job ParseJob, signatures ProgramSignatures, anchors ParserAnchors) returns Parser
-		let isLibrarySource = job.isStdlibSource or job.isRuntimeSource
-		let prepared = qualifiedTokens(shadowRenamedTokens(tokens, signatures: signatures), signatures: signatures, isLibrarySource: isLibrarySource, readerFilePath: job.path) if shadowRenamesTokens(signatures, isStdlibSource: job.isStdlibSource) else qualifiedTokens(tokens, signatures: signatures, isLibrarySource: isLibrarySource, readerFilePath: job.path)
-		return createOverPreparedTokens(prepared, job: job, signatures: signatures, anchors: anchors)
+		let qualified = qualifiedTokens(tokens, signatures: signatures, collapses: qualifiersCollapseIn(job.isStdlibSource, isRuntimeSource: job.isRuntimeSource, isScriptlibSource: job.isScriptlibSource), readerFilePath: job.path)
+
+		if not shadowRenamesTokens(signatures, isStdlibSource: job.isStdlibSource) 'nothingIsRenamed'
+			return createOverPreparedTokens(qualified, job: job, signatures: signatures, anchors: anchors)
+		end 'nothingIsRenamed'
+
+		let renamed = shadowRenamedTokens(qualified.tokens, signatures: signatures, recordsRespelledStarts: job.isScriptlibSource)
+
+		return createOverPreparedTokens(PreparedTokens.create(renamed.tokens, qualifiedNominalAt: qualified.qualifiedNominalAt, respelledStarts: renamed.respelledStarts), job: job, signatures: signatures, anchors: anchors)
 	end 'create'
 
 	export static function structuralReader(tokens TokenArray, job ParseJob, signatures ProgramSignatures, anchors ParserAnchors) returns Parser
-		return createOverPreparedTokens(PreparedTokens.create(tokens, qualifiedNominalAt: QualifiedNominalSpellingMap.create()), job: job, signatures: signatures, anchors: anchors)
+		return createOverPreparedTokens(PreparedTokens.create(tokens, qualifiedNominalAt: QualifiedNominalSpellingMap.create(), respelledStarts: RespelledTokenStartSet.create()), job: job, signatures: signatures, anchors: anchors)
 	end 'structuralReader'
 
 	export static function createOverPreparedTokens(prepared PreparedTokens, job ParseJob, signatures ProgramSignatures, anchors ParserAnchors) returns Parser
 		return Self{
 			tokens: prepared.tokens,
 			qualifiedNominalAt: prepared.qualifiedNominalAt,
+			respelledStarts: prepared.respelledStarts,
 			settledTypeNames: SettledTypeNameMap.create(),
 			declaredAliasAnswers: DeclaredAliasAnswerMap.create(),
 			globalMapColumnAnswers: GlobalMapColumnsAnswerMap.create(),
@@ -20236,6 +20111,7 @@ export type Parser
 			isStdlibSource: job.isStdlibSource,
 			buildsBodies: job.buildsBodies,
 			isRuntimeSource: job.isRuntimeSource,
+			isScriptlibSource: job.isScriptlibSource,
 			runtimeSourceOffence: RuntimeSourceOffence.none,
 			misclosedBlock: MisclosedBlock.none,
 			declaresCompilerInternalNames: job.declaresCompilerInternalNames,
@@ -20688,7 +20564,7 @@ export type Parser
 
 		self.pos = resume
 
-		index.foldFile(entries, aliases: aliases, implementsClauses: self.sweptImplementsClauses, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, innerAliasEntries: innerAliases, methodInnerAliasParamEntries: methodInnerAliasParams, interfaceSites: interfaceSites, extensionSites: extensionSites, conformanceSites: conformanceSites, scanSites: self.descriptorScanSites, bindings: bindings, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, freeFunctionNames: freeFunctionNames, testDecls: testDecls, moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTokens: PreparedTokens.create(self.tokens, qualifiedNominalAt: self.qualifiedNominalAt), fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
+		index.foldFile(entries, aliases: aliases, implementsClauses: self.sweptImplementsClauses, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, innerAliasEntries: innerAliases, methodInnerAliasParamEntries: methodInnerAliasParams, interfaceSites: interfaceSites, extensionSites: extensionSites, conformanceSites: conformanceSites, scanSites: self.descriptorScanSites, bindings: bindings, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, freeFunctionNames: freeFunctionNames, testDecls: testDecls, moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTokens: PreparedTokens.create(self.tokens, qualifiedNominalAt: self.qualifiedNominalAt, respelledStarts: self.respelledStarts), fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
 		self.sweptImplementsClauses = AliasImplementsClauseArray.create()
 
 		// ⭐⭐ **WHAT THIS FILE'S TOKENS SAY THE PROGRAM WILL MATERIALIZE — NOTED, NEVER PERFORMED.**
@@ -28133,7 +28009,7 @@ export type Parser
 		// there is one place that decides what a scanned signature means. Everything an extension does not
 		// contribute is passed empty; the type-name interner is this reader's own artifact's, exactly as the
 		// per-file sweep passes its own.
-		index.foldFile(entries, aliases: RangedTypeAliasArray.create(), implementsClauses: AliasImplementsClauseArray.create(), functionAliases: functionAliasOut, structs: StructLayoutArray.create(), enums: EnumLayoutArray.create(), genericAliasEntries: genericAliasOut, innerAliasEntries: innerAliasOut, methodInnerAliasParamEntries: methodInnerAliasParamOut, interfaceSites: InterfaceDeclSiteArray.create(), extensionSites: ExtensionDeclSiteArray.create(), conformanceSites: ConformanceClauseDeclSiteArray.create(), scanSites: descriptorScanSiteOut, bindings: TopLevelDeclArray.create(), paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, freeFunctionNames: freeFunctionNameOut, testDecls: DiscoveredTestArray.create(), moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTokens: PreparedTokens.create(self.tokens, qualifiedNominalAt: self.qualifiedNominalAt), fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
+		index.foldFile(entries, aliases: RangedTypeAliasArray.create(), implementsClauses: AliasImplementsClauseArray.create(), functionAliases: functionAliasOut, structs: StructLayoutArray.create(), enums: EnumLayoutArray.create(), genericAliasEntries: genericAliasOut, innerAliasEntries: innerAliasOut, methodInnerAliasParamEntries: methodInnerAliasParamOut, interfaceSites: InterfaceDeclSiteArray.create(), extensionSites: ExtensionDeclSiteArray.create(), conformanceSites: ConformanceClauseDeclSiteArray.create(), scanSites: descriptorScanSiteOut, bindings: TopLevelDeclArray.create(), paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, bodyFacts: bodyFacts, freeFunctionNames: freeFunctionNameOut, testDecls: DiscoveredTestArray.create(), moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTokens: PreparedTokens.create(self.tokens, qualifiedNominalAt: self.qualifiedNominalAt, respelledStarts: self.respelledStarts), fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
 	end 'foldExtensionDeclarationInto'
 
 	// ⭐⭐ **`extension <Name> [where <constraints>]` — THE ONE READER OF THE HEADER, for the three passes that
@@ -41903,7 +41779,7 @@ export type Parser
 	end 'requireWritableInstance'
 
 	// May this file call a reserved `__` name at all: the call door's half of the question
-	// (`requireCalleeIsNotReservedName`, whose `fileDeclaresReservedNames` argument this is). Two
+	// (`requireCalleeIsNotReservedName`). Two
 	// provenances answer yes, and neither is a spelling: `declaresCompilerInternalNames` (a `runtime/`
 	// file, or one of the stdlib modules that declare the reserved space), and a non-empty
 	// `compilerMintedNames` (this compile wrote part of the file, `Queries.compilerMintedNamesIn`).
@@ -41986,10 +41862,10 @@ export type Parser
 		// `type Clock` reaches here as `__Clock`. The exemption is "this exact name is one this compile
 		// minted", asked of the rename table, and not "a stdlib file may declare `__` names".
 		//
-		// ⚠ It is scoped to stdlib source because `shadowRenamedTokens` rewrites only stdlib tokens: a
-		// minted name reaching here from a user file is the author typing `__Clock`, which E2051 exists
-		// to refuse.
-		if self.isStdlibSource and self.signatures.interfaceMap().isMintedLibraryName(declaredName) 'theCompilersOwnMint'
+		// ⚠ It is scoped to the token's provenance (`mintIsTheCompilersAt`) because `shadowRenamedTokens`
+		// rewrites only library tokens: a minted name reaching here from a user file, or from a scriptlib
+		// token the rename did not write, is the author typing `__Clock`, which E2051 exists to refuse.
+		if self.mintIsTheCompilersAt(nameTok) and self.signatures.interfaceMap().isMintedLibraryName(declaredName) 'theCompilersOwnMint'
 			return
 		end 'theCompilersOwnMint'
 
@@ -42009,6 +41885,179 @@ export type Parser
 
 		throw SourceParseError.reservedIdentifier(String.from(declaredName), line: nameTok.line, column: nameTok.column)
 	end 'requireUnreservedName'
+
+	function mintIsTheCompilersAt(token Token) returns bool
+		return self.everySpellingIsTheCompilers() or self.wasRespelled(token)
+	end 'mintIsTheCompilersAt'
+
+	// A scriptlib file carries `isStdlibSource`, but its author may never write a `__` name, and the
+	// rename's mints sit among the author's own bytes. Asking `isStdlibSource` alone here would admit a
+	// hand-typed `__Clock` in a package.
+	function everySpellingIsTheCompilers() returns bool
+		return self.isStdlibSource and not self.isScriptlibSource
+	end 'everySpellingIsTheCompilers'
+
+	// Keyed by start byte, which every synthetic token shares at 0. No identifier starts at byte 0,
+	// since every file opens with a keyword, so a synthetic token never reads as respelled.
+	function wasRespelled(token Token) returns bool
+		return self.respelledStarts.contains(token.startByte)
+	end 'wasRespelled'
+
+	function respelledHeadMint(typeTok Token) returns CalleeMint
+		return CalleeMint.resolvedTypeQualifier if self.wasRespelled(typeTok) else CalleeMint.notMinted
+	end 'respelledHeadMint'
+
+	// ⭐ **THE "UNKNOWN INTRINSIC" ARM OF THE `__Builtins` TABLE — AND OF EVERY OTHER RESERVED CALLEE.**
+	//
+	// `__` is reserved for compiler internals: `E2051` refuses to DECLARE such a name, and the compiler emits
+	// its own calls to them through `emitRuntimeCall`, never through here. So a `__`-prefixed callee arriving
+	// at one of the two SOURCE call doors (`emitCall`, `emitAsyncCall`) either matched the intrinsic table
+	// above — in which case it was already lowered and never reached this — or names nothing at all.
+	//
+	// ⚠ **THE CHECK IS HERE AND NOT IN SemanticCheck, AND THAT IS THE WHOLE REPAIR.**
+	// `SemanticCheck.validateCall` RETURNS EARLY on any `__` callee, on the premise that "no user name can be
+	// DECLARED with this prefix, so a `__` CALLEE is provably compiler-owned". The premise is about
+	// DECLARATIONS and the conclusion is about CALLEES, and a callee need not be declared anywhere — so a
+	// source-written `__foo()` sailed past E3004, past the arity/label/type checks, past lowering, and died in
+	// the LINKER with neither a file nor a line:
+	//
+	//   panic at X64Backend.maxon:1781: resolveCallFixups: call to unknown function '__Builtins.currentTimeMs'
+	//   panic at LowerMaxonToStd.maxon:1336: lowerAsyncCall: async callee '__whatever' has no signature
+	//   panic at LowerMaxonToStd.maxon:108:  valueTagToStdType: an `unresolved` tag reached lowering
+	//
+	// (all three measured, all three on plain user code). SemanticCheck cannot make this check itself: by the
+	// time it runs, a `call __mm_decref` the parser emitted and a `call __whatever` the user wrote are the same
+	// `MaxonOp.call`, and nothing in the Maxon tier records which is which. The PARSER is the one tier that
+	// knows, because it knows which of its own two doors the name came through — so the fix is to close the
+	// door.
+	//
+	// ⭐⭐ **THE DOOR IS AJAR FOR EXACTLY ONE FILE, AND FOR EXACTLY THE NAMES THAT FILE DECLARES.**
+	// `stdlib/Builtins.maxon` — the module that DECLARES the reserved space rather than merely using it — is let
+	// past `requireUnreservedName` on the DECLARATION side, and the CALL side reads the
+	// same one bit the declaration side does (`declaresCompilerInternalNames`, an identity compare against each
+	// exempt module's `<stdlibDir>/<name>` — never a basename, see `Queries.declaresCompilerInternalNames`).
+	// A rule stated on one side of a name lapses on the other: the module could
+	// declare `__int_fromString` at `:214` and then not call it at `:322`.
+	//
+	// ⚠ **THE `declaresCallee` CLAUSE IS THE OTHER HALF, AND WITHOUT IT THE EXEMPTION IS FAR WIDER THAN THE
+	// DECLARATION SIDE'S.**
+	// The declaration exemption admits the names that module WRITES; a bare file test here would admit every
+	// name it does not — `__mm_free()`, `__gt_spawn()`, `__nosuch()` — none of which any file declares, all of
+	// which would then sail past SemanticCheck (nothing to look up) into the backend. So the exemption is "a
+	// name some file declares", which is the call-side dual of the declaration exemption, and a typo in that module gets
+	// the positioned E3004 below instead of the linker panic this whole check exists to replace.
+	//
+	// ⚠ This door asks `ProgramSignatures` (swept from every file's tokens; a parser holds no
+	// `Project`), and `SemanticCheck.validateCall` asks `project.funcSignatures` (folded from parsed
+	// declarations), skipping arity/label/type validation when the answer is no. So a `__` name this
+	// door admits and that registry lacks would be admitted and unvalidated. Both registries are
+	// derived from function declarations. `Parser.requireSweptDeclaration` (E9003) refuses a parsed
+	// declaration the sweep lacks; the direction this door relies on, a swept name the parse does not
+	// register, has no check, because SemanticCheck cannot tell a source-written `__` callee from a
+	// compiler-emitted one.
+	function requireCalleeIsNotReservedName(callee ByteArray, anchor Token, mint CalleeMint) throws SourceParseError
+		// ⭐⭐ **THE `__Raw` PRIVILEGE IS THE TIER'S, AND THIS IS THE ONE DOOR BOTH CALL FORMS FUNNEL THROUGH**
+		// — `emitCall` and `emitAsyncCall` — so the refusal cannot hold at one spelling and lapse at the other.
+		// A LISTED member called FROM a runtime file never arrives here at all: `parseCallNamed`'s table arm
+		// lowers it. What reaches this line is either the call from outside the tier, refused by name, or an
+		// unlisted member, which falls through to the ordinary E3004 below whichever file wrote it.
+		if isRawIntrinsicCallee(callee) and not self.isRuntimeSource 'theRawFloorIsTheRuntimesAlone'
+			throw SourceParseError.rawIntrinsicOutsideRuntimeTier(String.from(callee), line: anchor.line, column: anchor.column)
+		end 'theRawFloorIsTheRuntimesAlone'
+
+		// ⭐ **ASKED ONCE AND CARRIED, NOT ASKED AGAIN TO EXPLAIN.** The classifier's answer IS the refusal's
+		// reason, so there is one derivation and nothing to keep in step. A reason derived independently of the
+		// gate is how `String.compare` comes to be refused for a `__` prefix it does not carry.
+		let reason = reservedCalleeReasonOf(callee)
+
+		if reason == ReservedCalleeReason.notReserved 'ordinaryCallee'
+			return
+		end 'ordinaryCallee'
+
+		// `<conformer>.<method>` names both the symbol `BuiltinConformanceRuntime` mints for a witness
+		// slot and the legal static spelling of a declared instance method (`String.hash("a")` is
+		// `"a".hash()`, and `stdlib/String.maxon` declares `hash()` and `equals()`). So the
+		// synthesized-impl clause is the compiler's only while no file declares the method; conjoined with
+		// `declaresCallee` like the clauses below, it refuses a `<conformer>.<method>` no file declares,
+		// which no signature could validate. Sound while the two registries agree (see this function's
+		// header): a callee `funcSignatures` contains is not `isSignaturelessCompilerCallee`, so
+		// SemanticCheck validates it and `lowerCall` slots its arguments against the declaration.
+		if reason == ReservedCalleeReason.synthesizedConformanceImpl and self.signatures.declaresCallee(callee) 'theCorpusOwnDeclarationNamedStatically'
+			return
+		end 'theCorpusOwnDeclarationNamedStatically'
+
+		// ⭐⭐ **THE THIRD KIND OF EXEMPTION: THE NAME IS RESERVED AND THE AUTHOR DID NOT WRITE IT.**
+		// The two clauses below both key on a FILE — "which file is calling?" — because every other `__`
+		// callee reaching this door is bytes the author typed, so the file is the only variable. A
+		// `<primitive>.<method>(…)` call is one whose callee the COMPILER spelled, out of a source name
+		// with no `__` in it, so no file fact can tell it from a typed one: `CalleeMint` is that fact, and
+		// it is stated by the one routine that mints such a name (`parseQualifiedCall`'s primitive arm).
+		//
+		// ⚠ **`declaresCallee` IS CONJOINED FOR THE OTHER TWO CLAUSES' REASON**, not as belt-and-braces: the
+		// mint says the compiler owns the head, and this says the program actually has that function. The mint
+		// site already refuses an undeclared primitive static in the AUTHOR'S OWN SPELLING (it must — this
+		// message would name `__int_frobnicate`, a symbol nobody wrote), so a `minted` callee that is not
+		// declared is a drift between that check and this one, and lands here rather than in the backend.
+		if mint == CalleeMint.primitiveStatic and self.signatures.declaresCallee(callee) 'theCompilersOwnPrimitiveStaticMint'
+			return
+		end 'theCompilersOwnPrimitiveStaticMint'
+
+		// ⭐ **THE FOURTH KIND OF EXEMPTION: A DEFAULT VALUE'S HELPER** — a PARAMETER's or a
+		// FIELD's, which are one exemption because they are one mechanism and one mistake. It is the
+		// `primitiveStatic` clause one mint over, and conjoined with `declaresCallee` for its exact reason: the
+		// mint says the compiler spelled the callee, and this says the program actually contains that function.
+		// Both helpers are declared by the SWEEP (`recordScannedParamDefaults` / `recordScannedFieldDefaultHelper`
+		// publish their return types), so a mint whose helper is absent is a drift between the sweep and the
+		// fill and lands here rather than in the backend.
+		if calleeMintIsDefaultHelper(mint) and self.signatures.declaresCallee(callee) 'theCompilersOwnDefaultHelperMint'
+			return
+		end 'theCompilersOwnDefaultHelperMint'
+
+		if self.fileMayUseReservedNames() and self.signatures.declaresCallee(callee) 'theReservedSpacesOwnDeclaration'
+			return
+		end 'theReservedSpacesOwnDeclaration'
+
+		// ⭐ **THE CALL-SIDE HALF OF THE SHADOW MINT** — `requireUnreservedName`'s arm, one door
+		// over, and the SAME conjunction the `fileMayUseReservedNames` clause above states rather than a second
+		// rule. `stdlib/Clock.maxon`'s own
+		// `Clock.nowMs()` becomes `__Clock.nowMs()` when a user program declares `type Clock`, so a `__` callee
+		// can be a name the compiler itself minted for a declaration that genuinely exists. Both clauses are
+		// load-bearing for that clause's stated reason: the mint says the compiler owns the head, and `declaresCallee`
+		// says the program actually has that function — a mint-only door would admit `__Clock.whatever`.
+		//
+		// ⚠⚠ **AND THE THIRD CLAUSE IS THAT THE HEAD IS NOT BYTES THE AUTHOR TYPED, FOR `requireUnreservedName`'s
+		// REASON.** A `__Clock.nowMs()` the author wrote out in a USER file is the author
+		// reaching into the reserved space, and the rule this whole mechanism states is that the moved name is
+		// one "no user program can reach" by NAME. MEASURED without any such clause: a user program declaring
+		// `type Clock` and calling `__Clock.nowMs()` COMPILED AND RAN, returning the stdlib clock, while the
+		// identical call in a program with no shadow was correctly refused
+		// (`stdlib-user-shadows.error.the-mint-is-not-reachable-from-user-code` holds that shut).
+		//
+		// ⭐⭐ **BUT "THE AUTHOR TYPED IT" IS NOT "THE FILE IS A USER FILE", AND READ AS IF IT WERE, THIS CLAUSE
+		// WOULD MAKE THE MOVED DECLARATION UNUSABLE.** The contest's soundness argument is about NAME
+		// reachability (`Queries.contestStdlibDeclarationsAgainstUserNames`) — and a VALUE crosses the same file
+		// boundary a name does not. `stdlib/Directory.maxon`'s `currentPath()` hands user code a `FilePath`,
+		// which under a user `type FilePath` is a `__FilePath`, and a method call on it spells its callee out of
+		// that resolved TYPE: **`E3004 … '__FilePath.join': the '__' prefix names a compiler intrinsic`**, about
+		// a callee no author wrote and a function the program declares. Two different meanings on one spelling —
+		// the `__` the compiler RESERVED and the `__` this compile MINTED.
+		//
+		// ⇒ The clause is the PROVENANCE OF THE HEAD, of which the stdlib file test is one case
+		// (`everySpellingIsTheCompilers`): a stdlib file's identifier tokens were rewritten by the contest
+		// before this parse saw them, so nothing it spells is the author's. The other is
+		// `CalleeMint.resolvedTypeQualifier`, stated by the doors that join a resolved type name, or a
+		// head the rename respelled in a scriptlib file (`respelledHeadMint`), to a written member. It is a
+		// per-SITE fact for `CalleeMint`'s standing reason: the two spellings build the identical callee
+		// bytes, so no name-keyed rule can tell them apart.
+		//
+		// The disjunction is first because both halves are a few compares while `isMintedStdlibShadowCallee` is
+		// the allocating table scan this function's own header keeps off the common path.
+		if (self.everySpellingIsTheCompilers() or mintHeadIsTheCompilers(mint)) and self.signatures.isMintedStdlibShadowCallee(callee) and self.signatures.declaresCallee(callee) 'theCompilersOwnMint'
+			return
+		end 'theCompilersOwnMint'
+
+		throw SourceParseError.unknownCompilerIntrinsic(String.from(callee), reason: reason, line: anchor.line, column: anchor.column)
+	end 'requireCalleeIsNotReservedName'
 
 	// ⭐⭐ **A DECLARATION MAY NOT TAKE THE FAULT PROBE'S NAME IN THE *FREE-FUNCTION* NAME SPACE.**
 	// `requireUnreservedName`'s second sibling, and a sibling for `requireTypeNameNotCompilerOwned`'s exact
@@ -64624,9 +64673,8 @@ export type Parser
 		// is `Calc.create(…)` plus a transfer: the arguments, the labels, the defaults, the overload
 		// resolution and the diagnostics are all the ordinary call's, and only what happens to the RESULT and
 		// to an argument the factory keeps is this reader's — `spawned` makes the call move a kept argument
-		// into the state, or refuse it borrowed (`transferConsumedColumn`). `notMinted` because both halves of
-		// the name are the author's own bytes; `inferInstanceOf` because a generic target's type arguments
-		// exist nowhere but this argument list.
+		// into the state, or refuse it borrowed (`transferConsumedColumn`). `inferInstanceOf` because a
+		// generic target's type arguments exist nowhere but this argument list.
 		let factoryTempFloor = self.bodyState.pendingTempDrops.count()
 		let factoryOwnedFloor = self.bodyState.ownedBindings.count()
 
@@ -64635,7 +64683,7 @@ export type Parser
 		// cleared to those this argument list makes, and an enclosing `spawn`'s are restored after it.
 		var outerTemporaryFieldReads = self.bodyState.temporaryFieldReads
 		self.bodyState.temporaryFieldReads = noValueMarks
-		let state = try self.parseCallNamed(func, callee: qualifiedMethodName(typeTok.value, methodName: memberTok.value), anchor: memberTok, receiver: ReceiverArg.none, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted, inferInstanceOf: FactoryInference.of(typeTok.value), spawned: true)
+		let state = try self.parseCallNamed(func, callee: qualifiedMethodName(typeTok.value, methodName: memberTok.value), anchor: memberTok, receiver: ReceiverArg.none, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: self.respelledHeadMint(typeTok), inferInstanceOf: FactoryInference.of(typeTok.value), spawned: true)
 		self.bodyState.temporaryFieldReads = outerTemporaryFieldReads
 		let instance = self.serviceStateInstanceOf(state)
 
@@ -74842,7 +74890,7 @@ export type Parser
 		match try self.qualifiedStaticCallee(typeTok, memberTok: memberTok, aliasName: aliasName) 'callee'
 			minted(minted) then return try self.parseCallNamed(func, callee: minted, anchor: memberTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.primitiveStatic)
 			namespaceQualifiedFree(free) then return try self.parseCallNamed(func, callee: free, anchor: memberTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
-			declared(callee) then return try self.parseDeclaredStaticCall(func, callee: callee, aliasName: aliasName, typeTok: typeTok, memberTok: memberTok, resultUsed: resultUsed, mint: CalleeMint.resolvedTypeQualifier if self.baseWasQualifiedAt(self.pos - TokensPerQualifierSegment) else CalleeMint.notMinted)
+			declared(callee) then return try self.parseDeclaredStaticCall(func, callee: callee, aliasName: aliasName, typeTok: typeTok, memberTok: memberTok, resultUsed: resultUsed, mint: CalleeMint.resolvedTypeQualifier if self.baseWasQualifiedAt(self.pos - TokensPerQualifierSegment) else self.respelledHeadMint(typeTok))
 		end 'callee'
 	end 'parseStaticMemberCall'
 
@@ -98622,7 +98670,7 @@ export type Parser
 	// question the reserved-space door cannot answer from the name — see `CalleeMint`.
 	function emitCall(writtenCallee ByteArray, anchor Token, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, argImmutableNames WriteBlameArray, rparenTok Token, resultUsed bool, constructorInstance ConstructorInstance, mint CalleeMint, inferInstanceOf FactoryInference = FactoryInference.none, spawned bool = false, places PlaceArgumentArray = noPlaceArguments) returns ValueId throws SourceParseError
 		let callee = try self.genericInstanceCallee(writtenCallee, anchor: anchor, args: args, argLabels: argLabels)
-		try requireCalleeIsNotReservedName(callee, anchor: anchor, fileDeclaresReservedNames: self.fileMayUseReservedNames(), isStdlibSource: self.isStdlibSource, isRuntimeSource: self.isRuntimeSource, mint: mint, signatures: self.signatures)
+		try self.requireCalleeIsNotReservedName(callee, anchor: anchor, mint: mint)
 
 		// ⭐⭐ **A SLICE OF A LITERAL WITH COMPILE-TIME BOUNDS BECOMES A LITERAL, AND THEN THIS IS NOT A CALL AT
 		// ALL** (`specs/constant-string-slice.md`). Asked FIRST, ahead of the mint, the default fill and
@@ -100219,7 +100267,7 @@ export type Parser
 		end 'notCall'
 
 		let calleeTok = try self.consume(TokenKind.identifier)
-		return AsyncSpawnCallee.create(self.signatures.nameABareCallBinds(calleeTok.value, readerFilePath: self.filePath), anchor: calleeTok)
+		return AsyncSpawnCallee.create(self.signatures.nameABareCallBinds(calleeTok.value, readerFilePath: self.filePath), anchor: calleeTok, mint: CalleeMint.notMinted)
 	end 'asyncSpawnCallee'
 
 	// ⭐⭐ **`async <Type>.<static>(…)` — resolved through the doors `parseQualifiedCall` resolves an ordinary
@@ -100267,11 +100315,11 @@ export type Parser
 
 		match try self.qualifiedStaticCallee(typeTok, memberTok: memberTok, aliasName: aliasName) 'callee'
 			// ⛔ **A MINTED CALLEE IS ONE `MaxonOp.asyncCall` CANNOT DESCRIBE** — it carries no `mint` field,
-			// so every reader downstream (`requireCalleeIsNotReservedName`, `SemanticCheck.validateAsyncCall`'s
-			// visibility rule) would judge `__int_fromString` as a name the author wrote. Refused here so that
-			// `CalleeMint.notMinted` is TRUE of every spawn by construction rather than by assumption.
+			// so a reader downstream (`SemanticCheck.validateAsyncCall`'s visibility rule) would judge
+			// `__int_fromString` as a name the author wrote. Refused here so that no spawn carries a
+			// `primitiveStatic` mint.
 			minted(mintedCallee) then throw SourceParseError.unsupported("`async {String.from(typeTok.value)}.{String.from(memberTok.value)}(…)` — a primitive's static resolves to the compiler-minted callee `{String.from(mintedCallee)}`, and a spawn records no callee but the one the author wrote. Call it directly", line: memberTok.line, column: memberTok.column)
-			namespaceQualifiedFree(free) then return AsyncSpawnCallee.create(free, anchor: memberTok)
+			namespaceQualifiedFree(free) then return AsyncSpawnCallee.create(free, anchor: memberTok, mint: CalleeMint.notMinted)
 			declared(callee) then return try self.declaredStaticAsyncSpawnCallee(callee, aliasName: aliasName, typeTok: typeTok, memberTok: memberTok)
 		end 'callee'
 	end 'qualifiedAsyncSpawnCallee'
@@ -100315,7 +100363,7 @@ export type Parser
 		try self.requireCalleeIsASpawnableFunction(callee, typeTok: typeTok, memberTok: memberTok)
 
 		match self.constructorInstanceOf(aliasName) 'constructed'
-			none then return AsyncSpawnCallee.create(callee, anchor: memberTok)
+			none then return AsyncSpawnCallee.create(callee, anchor: memberTok, mint: self.respelledHeadMint(typeTok))
 			instance then throw SourceParseError.unsupported("`async {String.from(typeTok.value)}.{String.from(memberTok.value)}(…)` — `{String.from(typeTok.value)}` names a generic INSTANCE, and the promise a spawn mints is typed from the callee's declared return, which names the generic base rather than the instance this alias fixes. Awaiting it would hand back a value at the wrong type. Call it directly", line: memberTok.line, column: memberTok.column)
 		end 'constructed'
 	end 'declaredStaticAsyncSpawnCallee'
@@ -100362,7 +100410,7 @@ export type Parser
 		let asyncTok = self.tokenAt(spawnStart)
 		let spawnSite = AsyncSpawnSite.create(self.tokenTextFrom(spawnStart, endIndex: self.pos).toByteArray(), line: asyncTok.line, column: asyncTok.column)
 
-		return try self.emitAsyncCall(target.name, anchor: target.anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, rparenTok: rparenTok, spawnSite: spawnSite)
+		return try self.emitAsyncCall(target.name, anchor: target.anchor, mint: target.mint, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, rparenTok: rparenTok, spawnSite: spawnSite)
 	end 'parseAsyncCall'
 
 	// Mint the Promise handle an `async` spawn defines and emit the `asyncCall` op. The spawn is SCALAR ONLY: the
@@ -100402,7 +100450,7 @@ export type Parser
 		return conventions
 	end 'spawnedCalleeConventions'
 
-	function emitAsyncCall(writtenCallee ByteArray, anchor Token, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, argImmutableNames WriteBlameArray, argAnchors TokenIndexArray, rparenTok Token, spawnSite AsyncSpawnSite) returns ValueId throws SourceParseError
+	function emitAsyncCall(writtenCallee ByteArray, anchor Token, mint CalleeMint, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, argImmutableNames WriteBlameArray, argAnchors TokenIndexArray, rparenTok Token, spawnSite AsyncSpawnSite) returns ValueId throws SourceParseError
 		try self.requireCalleeIsNotRawSurface(writtenCallee, anchor: anchor)
 
 		let callee = try self.genericInstanceCallee(writtenCallee, anchor: anchor, args: args, argLabels: argLabels)
@@ -100411,12 +100459,7 @@ export type Parser
 			throw SourceParseError.unsupported("`async {String.from(callee)}(…)` reads the enclosing instance's layout descriptor, which a spawn cannot hand it — the green thread's argument region carries the written arguments only. Call it directly, or spawn a function that carries none", line: anchor.line, column: anchor.column)
 		end 'aSpawnPassesNoDescriptor'
 
-		// ⭐ `notMinted` is not a default here, it is the shape of the door: `asyncSpawnCallee` admits a free
-		// call's identifier and a `<Type>.<static>` mangle of two tokens the author wrote, and REFUSES a
-		// minted callee outright (`async int.fromString(s)`), because `MaxonOp.asyncCall` carries no `mint`
-		// field to tell one from the other. So an `async` spawn's name is the author's own bytes, or the
-		// instance of the generic function they name, exactly as an ordinary call's is.
-		try requireCalleeIsNotReservedName(callee, anchor: anchor, fileDeclaresReservedNames: self.fileMayUseReservedNames(), isStdlibSource: self.isStdlibSource, isRuntimeSource: self.isRuntimeSource, mint: CalleeMint.notMinted, signatures: self.signatures)
+		try self.requireCalleeIsNotReservedName(callee, anchor: anchor, mint: mint)
 
 		// ⭐ **AN OMITTED ARGUMENT IS SUPPLIED AT THIS DOOR TOO** — the SECOND of the two
 		// source call doors, so `async f()` against `function f(n Integer = 1)` is the same legal call
@@ -105662,6 +105705,15 @@ export type Parser
 		end 'label'
 	end 'skipOptionalLabel'
 end 'Parser'
+
+type ShadowRenamedTokens
+	export let tokens as TokenArray
+	export let respelledStarts as RespelledTokenStartSet
+
+	static function create(tokens TokenArray, respelledStarts RespelledTokenStartSet) returns ShadowRenamedTokens
+		return Self{tokens: tokens, respelledStarts: respelledStarts}
+	end 'create'
+end 'ShadowRenamedTokens'
 
 function conformanceInterfaceNames(interfaces InterfaceConformanceArray) returns NameRoster
 	if interfaces.isEmpty() 'declaresNothing'

@@ -1,0 +1,21 @@
+let EditRecompilesCaseLabel = "scriptlib-edit-recompiles"
+let FirstAnswer = "one"
+let EditedAnswer = "two"
+
+test 'an edit to a scriptlib package recompiles the script that calls it'
+	let staged = stageScriptlibCase(EditRecompilesCaseLabel)
+	writeScriptlibPackageFile(EditRecompilesCaseLabel, package: GreetingPackageName, fileName: GreetingPackageFileName, content: greetingPackageSource(FirstAnswer))
+	let script = writeStagedFile(staged.sources, fileName: ScriptFileName, content: greetingScriptSource())
+
+	let first = runProgram(staged, program: script)
+	let firstExit = first.exitCode()
+	Expect.equal(firstExit, expected: 0, message: "the first run failed, so there is no build for an edit to invalidate. It said: {first.stdout}{first.stderr}")
+	Expect.equal(withoutCarriageReturns(first.stdout), expected: "{FirstAnswer}{LineFeed}", message: "the first run did not print what the package returns")
+
+	writeScriptlibPackageFile(EditRecompilesCaseLabel, package: GreetingPackageName, fileName: GreetingPackageFileName, content: greetingPackageSource(EditedAnswer))
+
+	let second = runProgram(staged, program: script)
+	let secondExit = second.exitCode()
+	Expect.equal(secondExit, expected: 0, message: "the run after the package edit failed. It said: {second.stdout}{second.stderr}")
+	Expect.equal(withoutCarriageReturns(second.stdout), expected: "{EditedAnswer}{LineFeed}", message: "the run after the package edit printed the OLD answer, so a cached build was served for a script whose scriptlib package had changed")
+end 'an edit to a scriptlib package recompiles the script that calls it'

@@ -1,0 +1,21 @@
+let LooseFileCaseLabel = "scriptlib-loose-file-is-never-loaded"
+let LooseFileName = "Broken.maxon"
+let LooseFileSource = "public function broken() returns Count\n\treturn thereIsNoSuchFunction()\nend 'broken'\n"
+
+test 'a maxon file directly in scriptlib is never loaded'
+	let staged = stageScriptlibCase(LooseFileCaseLabel)
+	writeScriptlibPackageFile(LooseFileCaseLabel, package: GreetingPackageName, fileName: GreetingPackageFileName, content: greetingPackageSource(ScriptlibGreeting))
+	writeLooseScriptlibFile(LooseFileCaseLabel, fileName: LooseFileName, content: LooseFileSource)
+	let script = writeStagedFile(staged.sources, fileName: ScriptFileName, content: greetingScriptSource())
+
+	let run = runProgram(staged, program: script)
+
+	let observedExit = run.exitCode()
+	Expect.equal(observedExit, expected: 0, message: "`scriptlib/{LooseFileName}` sits directly in scriptlib/, in no package, and does not compile; a script beside it did not run. It said: {run.stdout}{run.stderr}")
+
+	let observedStdout = withoutCarriageReturns(run.stdout)
+	Expect.equal(observedStdout, expected: "{ScriptlibGreeting}{LineFeed}", message: "the script did not print the answer the scriptlib package returns")
+
+	let observedStderr = withoutCarriageReturns(run.stderr)
+	Expect.equal(observedStderr, expected: "", message: "the run wrote to stderr, so `scriptlib/{LooseFileName}` was read: a file directly in scriptlib/ is never loaded, and says nothing")
+end 'a maxon file directly in scriptlib is never loaded'

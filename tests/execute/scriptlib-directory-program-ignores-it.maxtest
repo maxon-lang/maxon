@@ -1,0 +1,17 @@
+let DirectoryProgramCaseLabel = "scriptlib-directory-program-ignores-it"
+let DirectoryProgramMainFileName = "main.maxon"
+let UnknownFunctionCode = "E3004"
+
+test 'a directory program does not see scriptlib'
+	let staged = stageScriptlibCase(DirectoryProgramCaseLabel)
+	writeScriptlibPackageFile(DirectoryProgramCaseLabel, package: GreetingPackageName, fileName: GreetingPackageFileName, content: greetingPackageSource(ScriptlibGreeting))
+	_ = writeStagedFile(staged.sources, fileName: DirectoryProgramMainFileName, content: printingMainSource(GreetingFunctionName))
+
+	let run = runProgram(staged, program: staged.sources)
+
+	let observedExit = run.exitCode()
+	Expect.notEqual(observedExit, expected: 0, message: "a DIRECTORY program calling `greeting()`, which only scriptlib declares, ran. A directory program is its own sources and never loads scriptlib. It said: {run.stdout}{run.stderr}")
+
+	let observedStderr = withoutCarriageReturns(run.stderr)
+	Expect.contains(observedStderr, needle: UnknownFunctionCode, message: "the directory program was refused, but not as a call to an unknown function ({UnknownFunctionCode})")
+end 'a directory program does not see scriptlib'

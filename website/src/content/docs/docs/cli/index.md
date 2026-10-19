@@ -21,6 +21,7 @@ agents, and reads back what a program did.
 | `maxon build <file\|directory>...` | Compile a Maxon program to an executable |
 | `maxon init [<directory>]` | Scaffold a new project: `<directory>.maxproj` and `main.maxon` |
 | `maxon cache [clear]` | Report what this compiler has cached on the host, or remove it |
+| `maxon check-scriptlib [<directory>]` | Compile every [scriptlib](#the-scriptlib-directory) package with every function body built |
 | `maxon coverage <run\|report> <exe>` | Run a `--coverage` binary and report line and branch coverage ([Debugging and Profiling](/docs/cli/debugging/)) |
 | `maxon dap-server` | Speak the Debug Adapter Protocol over stdio ([Editor Support](/docs/cli/editor/)) |
 | `maxon debug <exe> [-- args...]` | Debug a program interactively: breakpoints, stepping, backtraces and locals ([Debugging and Profiling](/docs/cli/debugging/)) |
@@ -93,8 +94,9 @@ built from changes:
 ```
 
 - **The key is a content hash**, never a modification time. It covers every source file of the program,
-  every standard-library and runtime source the build compiles and the Unicode tables the compiler
-  embeds, each hashed by its bytes, plus the compiler's
+  every standard-library and runtime source the build compiles, every
+  [scriptlib](#the-scriptlib-directory) package source when the program is one file, and the Unicode
+  tables the compiler embeds, each hashed by its bytes, plus the compiler's
   identity (its path, size, modification time and target). Editing any of them rebuilds; nothing else
   does.
 - **The key is the file name.** A cache hit is that file existing, so two runs of one program cannot
@@ -151,6 +153,8 @@ compile, in any process, starts from what that one wrote:
 
 - **It is always on**, under the same `<cache>` as the run cache: the first usable row of the table
   above, so `MAXON_RUN_CACHE_ROOT` moves it too. On a host with no usable row, compiles run without it.
+- **It holds the installed `stdlib/` and `runtime/`.** [Scriptlib](#the-scriptlib-directory) packages
+  are your own files and change between compiles, so each compile reads and parses them fresh.
 - **A program folds its own declarations on top of the library's.** A program that shadows a library
   type, declares a name the library uses, or lives inside `stdlib/` has its names settled first: it
   sweeps the library's declarations itself, from the cached tokens, and its parses of library files are
@@ -207,6 +211,65 @@ maxon execute myproject --verbose     # a directory as one program; --verbose is
 maxon hello.maxon a b c               # no command word, three arguments
 MAXON_RUN_CACHE_ROOT=/build/cache maxon execute hello.maxon
 ```
+
+### The scriptlib directory
+
+A script is a single file, so code that several scripts share goes in **scriptlib**: a directory of
+your own packages beside the compiler's `stdlib/`. An install's is `~/.maxon/scriptlib/`, and a
+checkout's compiler reads `<checkout>/scriptlib/`, which Git ignores. Every file in it is yours, and an
+install or [`maxon upgrade`](#maxon-upgrade) leaves it as it is.
+
+```text
+~/.maxon/scriptlib/
+├── text/                 # a package: namespace scriptlib.text
+│   └── Lines.maxon
+└── notes.maxon           # outside every package: skipped
+```
+
+- **Each immediate subdirectory is a package**, and every file beneath it is part of that package. A
+  `.maxon` file directly in `scriptlib/` belongs to no package and is skipped.
+- **A program whose root is one file compiles the packages**: `maxon execute <file>`, a shebang script,
+  `maxon build <file>`, a described build whose `sources` is one file, and a single file the language
+  server or an MCP tool checks. A directory program is compiled from its own files.
+- **A package's `public` and `export` declarations are what a script calls**, bare like a
+  standard-library name, or qualified by the package's namespace, `scriptlib.<package>`
+  ([Namespaces](/docs/language/namespaces/)). A `module` declaration stays inside its package.
+- **A package compiles as the standard library does.** A script builds only the package files whose
+  functions it reaches, and a diagnostic raised inside a package names the package file. A script may
+  declare a type named like one the library or a package declares, and inside the package the name
+  keeps its library or package meaning; a package that also spells that name as a member is
+  [E3112](/docs/cli/error-codes/#e3112--stdlibshadowednameisalsoamember). The unused-export checks (E3092, E3094)
+  cover the program's own files.
+- **The compiler's reserved surface stays closed to a package**: a `__` name is
+  [E2051](/docs/cli/error-codes/#e2051--reservedidentifier) or
+  [E3004](/docs/cli/error-codes/#e3004--callunknownfunction), and the raw memory surface is
+  [E3185](/docs/cli/error-codes/#e3185--rawsurfaceoutsidelibrarytier).
+- **Editing a package rebuilds the scripts that load it**: its sources are part of the
+  [run cache](#the-run-cache) key.
+
+A script compiles only what it reaches, so a package this compiler rejects can sit unseen until a script
+calls into it. [`maxon check-scriptlib`](#maxon-check-scriptlib) builds every package body.
+
+## `maxon check-scriptlib`
+
+Compiles every package of a [scriptlib](#the-scriptlib-directory) directory, with every function body
+built, and reports every diagnostic on stderr.
+
+```bash
+maxon check-scriptlib              # the scriptlib/ beside this compiler's stdlib/
+maxon check-scriptlib <directory>  # any other directory laid out as packages
+```
+
+The check supplies the `main` a program needs, and its only output is the diagnostics. It proves that
+the packages compile on their own; a script's own calls into them are checked when that script
+compiles.
+
+| Code | Meaning |
+|------|---------|
+| `0` | Every package compiles, or there is no package to check: a default directory that is missing or holds no package prints a line saying so on stdout |
+| `1` | A package does not compile (its diagnostics are on stderr), the named path is not a directory, or the directory could not be read |
+
+The install scripts run it after every install and upgrade; see [`maxon upgrade`](#maxon-upgrade).
 
 ## `maxon run`
 
@@ -758,6 +821,12 @@ A compiler the script did not install is refused with exit 1, naming what does u
 | A Homebrew keg | `brew upgrade maxon-lang/tap/maxon` |
 | A source checkout | `git -C <root> pull`, then `maxon-bin/.maxon/maxon run build` |
 | Anywhere else | The install one-liner |
+
+An install keeps `<root>/scriptlib/` as it is. When it exists, the script runs the newly installed
+compiler's [`maxon check-scriptlib`](#maxon-check-scriptlib) once the new release is in place; a
+package that release rejects is printed with its diagnostics and the line
+`<root>/scriptlib needs updating for Maxon <version>`, and the install completes with its own exit
+status.
 
 `--dry-run` never bypasses a refusal, and a refusal writes nothing to stdout. The command takes no other
 argument and no option but `--dry-run`. To install a specific release, run the install script yourself

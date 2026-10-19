@@ -234,7 +234,57 @@ export function loadLibrarySources(project Project) throws CompileError
 	if not runtimeContributed 'runtimeContributedNothing'
 		throw CompileError.runtimeNotFound
 	end 'runtimeContributedNothing'
+
+	try loadScriptlibPackages(project, usersOwn: usersOwn)
 end 'loadLibrarySources'
+
+export function scriptlibPackageSources(scriptlibDir FilePath) returns MaxonSourcePathArray throws CompileError
+	var found = MaxonSourcePathArray.create()
+
+	if not Directory.exists(scriptlibDir) 'noPackages'
+		return found
+	end 'noPackages'
+
+	let entries = try Directory.list(scriptlibDir) otherwise throw CompileError.directoryNotFound(scriptlibDir)
+
+	// A `.maxon` directly in the directory belongs to no package, so no `scriptlib.<package>` can name
+	// it; it is skipped and draws no diagnostic.
+	for entry in entries 'eachEntry'
+		if not Directory.isDirectory(entry) or holdsIgnoreMarker(entry) 'notAPackage'
+			continue
+		end 'notAPackage'
+
+		_ = try collectMaxonSources(entry, into: found)
+	end 'eachEntry'
+
+	return found
+end 'scriptlibPackageSources'
+
+// Only a program whose root is one file loads scriptlib: a directory program already composes its own
+// files. The run cache and the build record key on this same answer (`RunCache.scriptlibInputs`), so
+// they cannot disagree with the loader about which files a program compiles.
+export function scriptlibSourcesLoadedBy(root FilePath, scriptlibDir FilePath) returns MaxonSourcePathArray throws CompileError
+	if not rootIsASingleFile(root) 'aProgramOfSeveralFiles'
+		return MaxonSourcePathArray.create()
+	end 'aProgramOfSeveralFiles'
+
+	return try scriptlibPackageSources(scriptlibDir)
+end 'scriptlibSourcesLoadedBy'
+
+// Unlike `loadLibraryRoot`, nothing here is marked a shared token source: that memo holds the
+// install-fixed tiers, and a package is the user's to edit.
+function loadScriptlibPackages(project Project, usersOwn MaxonSourcePathSet) throws CompileError
+	let scriptlibDir = try project.scriptlib.packagesRoot() otherwise return
+
+	for path in try scriptlibSourcesLoadedBy(project.rootPath, scriptlibDir: scriptlibDir) 'eachPackageFile'
+		if usersOwn.contains(path) 'theUsersOwnFile'
+			continue
+		end 'theUsersOwnFile'
+
+		try loadOneSourceFile(project, path: path)
+		project.librarySourcePaths.push(path)
+	end 'eachPackageFile'
+end 'loadScriptlibPackages'
 
 // Register every Maxon source under ONE library root, answering whether the root contributed anything.
 //
@@ -302,15 +352,15 @@ end 'loadLibraryRoot'
 
 // A library file the project already registered is not loaded a second time by the library walk.
 // The user registers one by naming it on the command line or in a manifest's `sources` beside a
-// program, or by rooting the project under `stdlib/`. The query database keys a source on its
-// `FilePath`, whose equality compares text, so the set holds each registered path resolved: a
-// second load of a `runtime/` file is E3006 against itself, and of a `stdlib/` file a silent
-// shadow.
+// program, or by rooting the project under `stdlib/` or `scriptlib/`. The query database keys a
+// source on its `FilePath`, whose equality compares text, so the set holds each registered path
+// resolved: a second load of a `runtime/` file is E3006 against itself, and of a `stdlib/` file a
+// silent shadow.
 //
 // A registered file whose provenance is library is recorded as library source too, so the file has
 // one classification: parsed as tier but absent from `LibraryFacts.runtimeTier`, it would be
-// classified two ways. Under a `stdlib/` root the project's own files stay the user's and are not
-// recorded.
+// classified two ways. Under a `stdlib/` or `scriptlib/` root the project's own files stay the user's
+// and are not recorded.
 function setAsideTheUsersOwnLibraryFiles(project Project) returns MaxonSourcePathSet
 	var setAside = MaxonSourcePathSet.create()
 	var libraryFiles = MaxonSourcePathArray.create()
@@ -319,7 +369,7 @@ function setAsideTheUsersOwnLibraryFiles(project Project) returns MaxonSourcePat
 	// `Queries.livesUnderStdlibDirectory`'s soundness proof is a claim about this exact predicate holding
 	// the same way here and in `isStdlibSourceFile`, so it is asked in one place. See its header.
 	let cwd = Directory.currentPath()
-	let rootIsUnderStdlib = rootIsUnder(project, libraryRoot: project.stdlibDir, cwd: cwd)
+	let rootIsUnderALibraryTree = rootIsUnder(project, libraryRoot: project.stdlibDir, cwd: cwd) or rootIsUnderScriptlib(project, cwd: cwd)
 
 	for path in project.db.sourcePaths 'each'
 		let isTheLibrarys = isLibrarySourceFile(project, path: path)
@@ -328,7 +378,7 @@ function setAsideTheUsersOwnLibraryFiles(project Project) returns MaxonSourcePat
 			libraryFiles.push(path)
 		end 'theLibrarysOwnFile'
 
-		if isTheLibrarys or rootIsUnderStdlib 'aLibraryModuleTheUserNamed'
+		if isTheLibrarys or rootIsUnderALibraryTree 'aLibraryModuleTheUserNamed'
 			setAside.insert(path.resolve(cwd))
 		end 'aLibraryModuleTheUserNamed'
 	end 'each'

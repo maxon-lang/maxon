@@ -49,6 +49,8 @@ build: test sources are a separate category that only `maxon test` compiles.
 
 The standard library is part of every compilation; the compiler finds it by walking up from its own
 executable, so nothing in the project refers to it. See the [Standard Library](/docs/stdlib/).
+A program whose root is one file also compiles the [scriptlib](/docs/cli/#the-scriptlib-directory) packages beside
+`stdlib/`.
 
 A file of the compiler's own `stdlib/` or `runtime/` that a build names — as its path, or in a
 described build's `sources` beside a program — is read once, as part of the library. A `runtime/` file

@@ -17,6 +17,10 @@ let RunCacheRootDirName = "run-cache"
 let IgnoredWrapperInnerDirName = "spec"
 let IgnoreMarkerFileName = ".maxonignore"
 let CheckoutMarkerDirName = "stdlib"
+let StageLibraryTierCommandName = "stage-library-tier"
+let StagedTierDirName = "tier"
+let StagedTierBinDirName = "bin"
+let ScriptlibDirName = "scriptlib"
 
 let CallerPathSeparator = "/"
 let CarriageReturn = "\r"
@@ -99,9 +103,7 @@ module function requireMarkerShapeRan(label String, caller String = __file__) th
 	try Expect.isTrue(said.contains(ranVerdict), message: "the fixture did NOT run '{label}': the compiler no longer reads this marker shape the way the reference does, and the case is simply GONE. Expected '{ranVerdict}', and it said:\n{said}")
 end 'requireMarkerShapeRan'
 
-module function runSpecTest(staged FilePath, includeNetwork bool, extraArguments StringArray = StringArray.create(), environment Environment = Environment.inherit) returns CollectedOutput
-	let binary = testedCompilerPath()
-
+module function runSpecTest(staged FilePath, includeNetwork bool, extraArguments StringArray = StringArray.create(), environment Environment = Environment.inherit, binary FilePath = testedCompilerPath()) returns CollectedOutput
 	if not File.exists(binary) 'noBinary'
 		panic("spec-harness tests: the gate could not run - there is no compiler at {binary.toString()}. This corpus's paths are relative to the CHECKOUT ROOT; run it from there, and build `{TestedCompilerStem}` first.")
 	end 'noBinary'
@@ -311,6 +313,38 @@ module function runGateFixtureBelowAnIgnoredDirectory(caller String = __file__) 
 	discardStaging(wrapper)
 	return run
 end 'runGateFixtureBelowAnIgnoredDirectory'
+
+module function runGateFixtureBesideAStagedScriptlib(package String, fileName String, content String, caller String = __file__) returns CollectedOutput
+	let fixture = fixtureOf(caller, kind: GatesDirName)
+	let staged = stagedCopyOf(fixture)
+	let tier = hostTempDir().join("{StagingDirNamePrefix}-{Process.id()}-{StagedTierDirName}-{fixture.caseName}").resolve(Directory.currentPath())
+	createFreshDirectory(tier)
+
+	var config = Configuration.create(Executable.path(testedCompilerPath()))
+	config.arguments = [StageLibraryTierCommandName, tier.toString()]
+	config.workingDirectory = tier
+
+	let stager = try config.run() otherwise (e) 'spawnFailed'
+		panic("spec-harness tests: the gate could not run - could not spawn `{StageLibraryTierCommandName}` ({e.displayReason()}).")
+	end 'spawnFailed'
+
+	if stager.exitCode() != SuccessExitCode 'didNotStage'
+		panic("spec-harness tests: the gate could not run - `{StageLibraryTierCommandName} {tier.toString()}` exited {stager.exitCode()}. It wrote to stderr: {stager.stderr}")
+	end 'didNotStage'
+
+	let packageDir = tier.join(ScriptlibDirName).join(package)
+
+	if not Directory.create(packageDir) 'couldNotCreate'
+		panic("spec-harness tests: the gate could not run - could not create {packageDir.toString()}.")
+	end 'couldNotCreate'
+
+	writeStagedText(packageDir.join(fileName), content: content)
+
+	let run = runSpecTest(staged, includeNetwork: false, binary: tier.join(StagedTierBinDirName).join(testedCompilerPath().filename()))
+	discardStaging(staged)
+	discardStaging(tier)
+	return run
+end 'runGateFixtureBesideAStagedScriptlib'
 
 function createFreshDirectory(dir FilePath)
 	requireNoCheckoutAbove(dir)

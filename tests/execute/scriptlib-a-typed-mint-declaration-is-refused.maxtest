@@ -1,0 +1,19 @@
+let TypedMintDeclarationCaseLabel = "scriptlib-a-typed-mint-declaration-is-refused"
+let TypedMintDeclarationFunction = "use"
+let TypedMintDeclarationPackageSource = "public function __Clock() returns Count\n\treturn 3\nend '__Clock'\n\npublic function use() returns Count\n\treturn __Clock()\nend 'use'\n"
+let ReservedNameCode = "E2051"
+
+test 'a scriptlib package declaring a minted name is refused, even when the script makes the compiler mint it'
+	let staged = stageScriptlibCase(TypedMintDeclarationCaseLabel)
+	writeScriptlibPackageFile(TypedMintDeclarationCaseLabel, package: MintProbePackageName, fileName: MintProbePackageFileName, content: TypedMintDeclarationPackageSource)
+	let script = writeStagedFile(staged.sources, fileName: ScriptFileName, content: shadowingScriptSource(ShadowedClockTypeName, packageFunction: TypedMintDeclarationFunction))
+
+	let run = runProgram(staged, program: script)
+
+	let observedExit = run.exitCode()
+	Expect.notEqual(observedExit, expected: 0, message: "a package declaring `function __Clock()` ran. The script's own `type Clock` makes the compiler mint `__Clock`, and a `__` name is the compiler's, never a package's. It said: {run.stdout}{run.stderr}")
+
+	let observedStderr = withoutCarriageReturns(run.stderr)
+	Expect.contains(observedStderr, needle: ReservedNameCode, message: "the package's `function __Clock()` was refused, but not as a reserved name ({ReservedNameCode})")
+	Expect.contains(observedStderr, needle: MintProbePackageFileName, message: "the refusal does not name `{MintProbePackageFileName}`, the package file holding the declaration")
+end 'a scriptlib package declaring a minted name is refused, even when the script makes the compiler mint it'

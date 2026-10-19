@@ -11794,9 +11794,7 @@ export type Project
 	// Incremental query plumbing (source inputs + memo caches + dep graph).
 	export var db as QueryDatabase
 
-	// The checkout's `stdlib/` directory, located once at load time (`locateStdlibDir`). Read by the
-	// stdlib loader, which enumerates it, and by nothing else — every later pass asks about a
-	// FUNCTION, not a path (`isLibraryFunction`).
+	// The checkout's `stdlib/` directory, located once at load time (`locateStdlibDir`).
 	export var stdlibDir as FilePath
 
 	// The checkout's `runtime/` directory — the language runtime, the second source tier every compile
@@ -11804,10 +11802,13 @@ export type Project
 	// a compile cannot pair one tree's stdlib with another tree's runtime.
 	export let runtimeDir as FilePath
 
-	// Every file the library loader parsed out of those two directories — which is exactly "the LIBRARY
-	// source this compile contains", established by construction rather than by re-testing paths later
-	// (see StdlibSource). One array and not one per root, because every reader asks the same question of
-	// it: which of this compile's files did the program's author not write. Empty until the loader runs.
+	export let scriptlib as ScriptlibTier
+
+	// Every file the library loader parsed out of those two directories and the scriptlib packages it
+	// loaded — which is exactly "the LIBRARY source this compile contains", established by construction
+	// rather than by re-testing paths later (see StdlibSource). One array and not one per root, because
+	// every reader asks the same question of it: which of this compile's files did the program's author
+	// not write. Empty until the loader runs.
 	export var librarySourcePaths as MaxonSourcePathArray
 
 	// What THIS compile knows about the stdlib source it loaded (`deriveLibraryFacts`), computed once
@@ -12354,13 +12355,14 @@ export type Project
 	// folds and the constant evaluator. A real parse builds its own (`ParseStaging.parseFile`).
 	export var readerAnchors as ParserAnchors
 
-	export static function create(db QueryDatabase, rootPath FilePath, target Target, stdlibDir FilePath, runtimeDir FilePath, debugStream bool, session CompileSession, entryFunction ByteArray, defines DefineArray, productVersion VersionComponentArray) returns Project
+	export static function create(db QueryDatabase, rootPath FilePath, target Target, stdlibDir FilePath, runtimeDir FilePath, scriptlib ScriptlibTier, debugStream bool, session CompileSession, entryFunction ByteArray, defines DefineArray, productVersion VersionComponentArray) returns Project
 		let interfaces = IrInterfaceMap.create()
 
 		return Self{
 			db: db,
 			stdlibDir: stdlibDir,
 			runtimeDir: runtimeDir,
+			scriptlib: scriptlib,
 			librarySourcePaths: MaxonSourcePathArray.create(),
 			libraryFacts: LibraryFacts.empty(),
 			managedGlobals: ManagedGlobalArray.create(),
@@ -12454,11 +12456,11 @@ end 'Project'
 
 // Construct a fresh Project rooted at `rootPath` for `target`. The single
 // constructor a driver needs.
-// Both library roots are passed IN rather than located here so the project is born
+// The library roots are passed IN rather than located here so the project is born
 // with valid ones: the library loader reads them before the first pass runs, and a
 // field that is briefly wrong is a field something can read while it is wrong.
-export function createProject(rootPath FilePath, target Target, stdlibDir FilePath, runtimeDir FilePath, debugStream bool, session CompileSession, entryFunction ByteArray = MainFunctionName, defines DefineArray = DefineArray.create(), productVersion VersionComponentArray = VersionComponentArray.create()) returns Project
-	return Project.create(QueryDatabase.create(target.os), rootPath: rootPath, target: target, stdlibDir: stdlibDir, runtimeDir: runtimeDir, debugStream: debugStream, session: session, entryFunction: entryFunction, defines: defines, productVersion: productVersion)
+export function createProject(rootPath FilePath, target Target, stdlibDir FilePath, runtimeDir FilePath, scriptlib ScriptlibTier, debugStream bool, session CompileSession, entryFunction ByteArray = MainFunctionName, defines DefineArray = DefineArray.create(), productVersion VersionComponentArray = VersionComponentArray.create()) returns Project
+	return Project.create(QueryDatabase.create(target.os), rootPath: rootPath, target: target, stdlibDir: stdlibDir, runtimeDir: runtimeDir, scriptlib: scriptlib, debugStream: debugStream, session: session, entryFunction: entryFunction, defines: defines, productVersion: productVersion)
 end 'createProject'
 
 // Asking a `whileCurrent` interest is a round trip to the stdout writer's service, and the checkpoints
@@ -12568,6 +12570,14 @@ export function rootIsUnder(project Project, libraryRoot FilePath, cwd FilePath)
 	return project.rootPath.resolve(cwd).isInside(libraryRoot)
 end 'rootIsUnder'
 
+export function rootIsUnderScriptlib(project Project, cwd FilePath) returns bool
+	return project.scriptlib.holds(project.rootPath.resolve(cwd))
+end 'rootIsUnderScriptlib'
+
+export function rootIsASingleFile(root FilePath) returns bool
+	return not Directory.isDirectory(root.resolve(Directory.currentPath()))
+end 'rootIsASingleFile'
+
 // Append a diagnostic to the project's sink. The single funnel every reporting
 // pass routes through, so diagnostic bookkeeping lives in one place — which is
 // why the library-blame swap (`Diagnostic.blamedAt`) and the staged-source path
@@ -12658,7 +12668,7 @@ module function aliasSpelledForReader(project Project, alias RangedTypeAlias, re
 end 'aliasSpelledForReader'
 
 module function shadowSpellingReaderOf(project Project, path FilePath) returns ShadowSpellingReader
-	return ShadowSpellingReader.libraryCode if not path.isEmpty() and isStdlibSourceFile(project, path: path) else ShadowSpellingReader.authorCode
+	return ShadowSpellingReader.libraryCode if not path.isEmpty() and isStdlibTierSourceFile(project, path: path) else ShadowSpellingReader.authorCode
 end 'shadowSpellingReaderOf'
 
 export function adoptShadowSpellings(project Project, roster ShadowSpellingRoster)

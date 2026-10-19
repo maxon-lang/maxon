@@ -1,0 +1,36 @@
+let CaseDirName = "build-a-file-sees-scriptlib"
+let OutputStem = "program"
+let ScriptFileName = "script.maxon"
+let GreetingPackageName = "greeting"
+let GreetingPackageFileName = "Greeting.maxon"
+let ScriptlibGreeting = "hello from scriptlib"
+let GreetingScriptSource = "#!/usr/bin/env maxon\n\nfunction main() returns ExitCode\n\tprint(\"\{greeting()\}\\n\")\n\treturn 0\nend 'main'\n"
+let PrintedLineEnd = "\n"
+
+test 'a build of one file compiles the scriptlib packages beside the compiler'
+	requireHeldInAnInstallOutsideCheckout(CaseDirName, check: BuildAFileSeesScriptlib.create())
+end 'a build of one file compiles the scriptlib packages beside the compiler'
+
+type BuildAFileSeesScriptlib implements OutsideCheckoutCase
+	static function create() returns BuildAFileSeesScriptlib
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		writeScriptlibPackageFile(dir, package: GreetingPackageName, fileName: GreetingPackageFileName, content: greetingPackageSource())
+		writeStagedFile(dir.join(ScriptFileName), content: GreetingScriptSource)
+
+		try requireBuilt(runRecordedBuild(dir, program: ScriptFileName, output: OutputStem, options: ListedWordArray.create(), binary: installedCompilerIn(dir)), which: "a build of `{ScriptFileName}`, which calls `greeting()` from `scriptlib/{GreetingPackageName}/{GreetingPackageFileName}`")
+
+		let executable = dir.join("{OutputStem}{executableSuffix()}")
+		let run = runDriver(ListedWordArray.create(), binary: executable, workingDirectory: dir)
+		let said = "It wrote to stdout: {run.stdout} and to stderr: {run.stderr}"
+
+		try Expect.equal(run.exitCode(), expected: 0, message: "the built script did not exit 0. {said}")
+		try Expect.equal(withoutCarriageReturns(run.stdout), expected: "{ScriptlibGreeting}{PrintedLineEnd}", message: "the built script did not print the answer the scriptlib package returns. {said}")
+	end 'requireHeldIn'
+end 'BuildAFileSeesScriptlib'
+
+function greetingPackageSource() returns String
+	return "public function greeting() returns String\n\treturn \"{ScriptlibGreeting}\"\nend 'greeting'\n"
+end 'greetingPackageSource'

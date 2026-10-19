@@ -1,0 +1,19 @@
+let TypedMintCallCaseLabel = "scriptlib-a-typed-mint-call-is-refused"
+let TypedMintCallFunction = "stamp"
+let TypedMintCallPackageSource = "public function stamp() returns Count\n\treturn __Clock.nowMs() as Count\nend 'stamp'\n"
+let TypedMintCallCode = "E3004"
+
+test 'a scriptlib package calling a type by its minted name is refused, even when the script makes the compiler mint it'
+	let staged = stageScriptlibCase(TypedMintCallCaseLabel)
+	writeScriptlibPackageFile(TypedMintCallCaseLabel, package: MintProbePackageName, fileName: MintProbePackageFileName, content: TypedMintCallPackageSource)
+	let script = writeStagedFile(staged.sources, fileName: ScriptFileName, content: shadowingScriptSource(ShadowedClockTypeName, packageFunction: TypedMintCallFunction))
+
+	let run = runProgram(staged, program: script)
+
+	let observedExit = run.exitCode()
+	Expect.notEqual(observedExit, expected: 0, message: "a package calling `__Clock.nowMs()` ran. The script's own `type Clock` makes the compiler respell the library's `Clock` as `__Clock`, and that spelling is the compiler's, never a package's. It said: {run.stdout}{run.stderr}")
+
+	let observedStderr = withoutCarriageReturns(run.stderr)
+	Expect.contains(observedStderr, needle: TypedMintCallCode, message: "the package's `__Clock.nowMs()` was refused, but not as a call to an unknown function ({TypedMintCallCode})")
+	Expect.contains(observedStderr, needle: MintProbePackageFileName, message: "the refusal does not name `{MintProbePackageFileName}`, the package file holding the call")
+end 'a scriptlib package calling a type by its minted name is refused, even when the script makes the compiler mint it'

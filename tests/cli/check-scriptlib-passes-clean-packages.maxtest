@@ -1,0 +1,28 @@
+let CaseDirName = "check-scriptlib-passes-clean-packages"
+let FirstPackageName = "first"
+let FirstPackageFileName = "First.maxon"
+let FirstPackageSource = "public function firstAnswer() returns Count\n\treturn 1\nend 'firstAnswer'\n"
+let SecondPackageName = "second"
+let SecondPackageFileName = "Second.maxon"
+let SecondPackageSource = "public function secondAnswer() returns String\n\treturn \"two\"\nend 'secondAnswer'\n"
+
+test 'check-scriptlib passes a scriptlib of clean packages that declares no main'
+	requireHeldInAnInstallOutsideCheckout(CaseDirName, check: CleanPackagesPass.create())
+end 'check-scriptlib passes a scriptlib of clean packages that declares no main'
+
+type CleanPackagesPass implements OutsideCheckoutCase
+	static function create() returns CleanPackagesPass
+		return Self{}
+	end 'create'
+
+	export function requireHeldIn(dir FilePath) throws TestFailure
+		writeScriptlibPackageFile(dir, package: FirstPackageName, fileName: FirstPackageFileName, content: FirstPackageSource)
+		writeScriptlibPackageFile(dir, package: SecondPackageName, fileName: SecondPackageFileName, content: SecondPackageSource)
+
+		let check = runCheckScriptlib(dir)
+		let said = "It wrote to stdout: {check.stdout} and to stderr: {check.stderr}"
+
+		try Expect.equal(check.exitCode(), expected: 0, message: "`check-scriptlib` over two clean packages did not exit 0. A scriptlib declares no `main`, and needs none. {said}")
+		try Expect.equal(check.stderr, expected: "", message: "`check-scriptlib` over two clean packages wrote to stderr. {said}")
+	end 'requireHeldIn'
+end 'CleanPackagesPass'

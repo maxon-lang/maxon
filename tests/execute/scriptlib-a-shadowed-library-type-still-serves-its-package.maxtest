@@ -1,0 +1,21 @@
+let ShadowedTypeCaseLabel = "scriptlib-a-shadowed-library-type-still-serves-its-package"
+let ShadowedTypeFunction = "stamp"
+let ShadowedTypePackageSource = "public function stamp() returns Count\n\tlet t = Clock.nowMs()\n\treturn 1 if t >= t else 0\nend 'stamp'\n"
+let ShadowedTypeAnswer = "1"
+
+test 'a scriptlib package still reaches a library type the script shadows'
+	let staged = stageScriptlibCase(ShadowedTypeCaseLabel)
+	writeScriptlibPackageFile(ShadowedTypeCaseLabel, package: MintProbePackageName, fileName: MintProbePackageFileName, content: ShadowedTypePackageSource)
+	let script = writeStagedFile(staged.sources, fileName: ScriptFileName, content: shadowingScriptSource(ShadowedClockTypeName, packageFunction: ShadowedTypeFunction))
+
+	let run = runProgram(staged, program: script)
+
+	let observedExit = run.exitCode()
+	Expect.equal(observedExit, expected: 0, message: "a package calling the library's `Clock.nowMs()` did not run beside a script declaring a `type Clock` of its own. The package names the library's type as written; the script's shadowing is the script's. It said: {run.stdout}{run.stderr}")
+
+	let observedStdout = withoutCarriageReturns(run.stdout)
+	Expect.equal(observedStdout, expected: "{ShadowedTypeAnswer}{LineFeed}", message: "the script did not print the answer the package returns")
+
+	let observedStderr = withoutCarriageReturns(run.stderr)
+	Expect.equal(observedStderr, expected: "", message: "the run wrote to stderr, and neither the script nor the package writes anything there")
+end 'a scriptlib package still reaches a library type the script shadows'

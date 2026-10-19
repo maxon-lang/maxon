@@ -30,6 +30,11 @@
 // over that tier report nothing a change could ever fix. Keyed on `isRuntimeSourceFile` so it fails
 // CLOSED: a file outside `runtime/` is audited.
 //
+// ⛔ **A SCRIPTLIB PACKAGE IS EXEMPT BY PATH TOO.** A script builds only the package bodies it reaches,
+// so its `export` and `module` declarations would be judged by whichever bodies one script's compile
+// built, raising E3092/E3094 in scripts that never touch the package; under `check-scriptlib` no
+// caller exists at all.
+//
 // ⛔ **THE SECOND EXEMPTION IS A SIGNATURE DEMAND, AND IT IS PER DECLARATION RATHER THAN BY PATH** — see
 // `reachedSignatureDemands`. A type that E3167 requires an exported or `module` function to be able to
 // name is credited at the tier E3167 judges that function at, so this pass and E3167 cannot contradict each other on one
@@ -157,18 +162,18 @@ typealias LibrarySourcePathSet = Set with String
 
 typealias EntryPointNameSet = Set with ByteArray
 
-// The author's files, the library's, and the runtime tier's, told apart in ONE walk over
-// `project.db.sourcePaths`. All three come from the same pair of answers per path, so the populations
-// cannot come to disagree about a file the way independently-filtered walks could. `runtimeFiles` is a
-// SUBSET of `libraryFiles`: a runtime file is the library's for `noteRead`'s rule and additionally
-// exempt from emission.
+// The author's files, the library's, and the unaudited tiers' (runtime and scriptlib), told apart in ONE
+// walk over `project.db.sourcePaths`. All three come from the same answers per path, so the populations
+// cannot come to disagree about a file the way independently-filtered walks could. `unauditedFiles` is a
+// SUBSET of `libraryFiles`: a runtime or scriptlib file is the library's for `noteRead`'s rule and
+// additionally exempt from emission.
 type SourcePathSplit
 	export let userFiles as FilePathArray
 	export let libraryFiles as LibrarySourcePathSet
-	export let runtimeFiles as LibrarySourcePathSet
+	export let unauditedFiles as LibrarySourcePathSet
 
-	static function create(userFiles FilePathArray, libraryFiles LibrarySourcePathSet, runtimeFiles LibrarySourcePathSet) returns SourcePathSplit
-		return Self{userFiles: userFiles, libraryFiles: libraryFiles, runtimeFiles: runtimeFiles}
+	static function create(userFiles FilePathArray, libraryFiles LibrarySourcePathSet, unauditedFiles LibrarySourcePathSet) returns SourcePathSplit
+		return Self{userFiles: userFiles, libraryFiles: libraryFiles, unauditedFiles: unauditedFiles}
 	end 'create'
 end 'SourcePathSplit'
 
@@ -309,13 +314,13 @@ module function checkUnusedExports(project Project, module MaxonModule, signatur
 	try requireStillWanted(project)
 	try collectFileTypeReferences(project, signatures: signatures, userFiles: sources.userFiles, tracked: tracked)
 	try requireStillWanted(project)
-	emitDiagnostics(project, tracked: tracked, runtimeFiles: sources.runtimeFiles, demanded: reachedSignatureDemands(project, tracked: tracked))
+	emitDiagnostics(project, tracked: tracked, unauditedFiles: sources.unauditedFiles, demanded: reachedSignatureDemands(project, tracked: tracked))
 end 'checkUnusedExports'
 
 function splitSourcePaths(project Project) returns SourcePathSplit
 	var paths = FilePathArray.create()
 	var libraryFiles = LibrarySourcePathSet.create()
-	var runtimeFiles = LibrarySourcePathSet.create()
+	var unauditedFiles = LibrarySourcePathSet.create()
 
 	for path in project.db.sourcePaths 'eachFile'
 		if isStdlibSourceFile(project, path: path) 'stdlibFile'
@@ -323,16 +328,16 @@ function splitSourcePaths(project Project) returns SourcePathSplit
 			continue
 		end 'stdlibFile'
 
-		if isRuntimeSourceFile(project, path: path) 'runtimeFile'
+		if isRuntimeSourceFile(project, path: path) or isScriptlibSourceFile(project, path: path) 'unauditedTierFile'
 			libraryFiles.insert(path.toString())
-			runtimeFiles.insert(path.toString())
+			unauditedFiles.insert(path.toString())
 			continue
-		end 'runtimeFile'
+		end 'unauditedTierFile'
 
 		paths.push(path)
 	end 'eachFile'
 
-	return SourcePathSplit.create(paths, libraryFiles: libraryFiles, runtimeFiles: runtimeFiles)
+	return SourcePathSplit.create(paths, libraryFiles: libraryFiles, unauditedFiles: unauditedFiles)
 end 'splitSourcePaths'
 
 // One pass over the declaration arena, so `noteGlobalLabel` is a lookup and not a scan of it.
@@ -1133,17 +1138,17 @@ end 'reachedFromOutsideItsFile'
 
 // In DECLARATION order, which is the order the seed was built in — see `TrackedDecls`.
 //
-// ⛔ The RUNTIME tier's declarations are dropped HERE rather than at seed time, and a set lookup rather
-// than a path probe, for the reason `LibrarySourcePathSet` states: this runs per tracked DECLARATION,
-// not per file, and the answer was already computed once per file by `splitSourcePaths`. See this
-// file's header for why the tier is exempt at all.
-function emitDiagnostics(project Project, tracked TrackedDecls, runtimeFiles LibrarySourcePathSet, demanded DemandedTierMap)
+// ⛔ The runtime and scriptlib declarations are dropped HERE rather than at seed time, and a set lookup
+// rather than a path probe, for the reason `LibrarySourcePathSet` states: this runs per tracked
+// DECLARATION, not per file, and the answer was already computed once per file by `splitSourcePaths`.
+// See this file's header for why the tiers are exempt at all.
+function emitDiagnostics(project Project, tracked TrackedDecls, unauditedFiles LibrarySourcePathSet, demanded DemandedTierMap)
 	for i in 0 upto tracked.entries.count() 'eachTracked'
 		let decl = tracked.at(i)
 
-		if runtimeFiles.contains(decl.declFile.pathText) 'theRuntimeTiersOwn'
+		if unauditedFiles.contains(decl.declFile.pathText) 'anUnauditedTiersOwn'
 			continue
-		end 'theRuntimeTiersOwn'
+		end 'anUnauditedTiersOwn'
 
 		emitOne(project, decl: decl, demandedTier: demandedTierOf(decl, demanded: demanded))
 	end 'eachTracked'

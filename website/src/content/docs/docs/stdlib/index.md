@@ -224,6 +224,14 @@ raw `__Raw.*` intrinsics. A program cannot reach into it:
 
 The rules for the runtime files themselves are in [The Runtime Tier](/docs/language/overview/).
 
+### The scriptlib tier
+
+A `scriptlib/` directory beside `stdlib/` holds your own packages, and a program whose root is one file
+compiles them with the standard library. Every file in it is yours. A package is compiled as the library
+is, with the raw surface above closed to it as it is to a program
+([E3185](/docs/cli/error-codes/#e3185--rawsurfaceoutsidelibrarytier)). See
+[The scriptlib directory](/docs/cli/#the-scriptlib-directory).
+
 ## Core Functions
 
 These are free functions and compiler builtins available everywhere.

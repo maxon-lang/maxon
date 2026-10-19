@@ -36,7 +36,8 @@ standard error and exits with code 2 before `main` runs.
 - A file's namespace comes from its directory (see [Namespaces](#namespaces)).
 - Declarations are private to their file unless marked `export`, `public` or `module`.
 - Declaration order does not matter: a function may call one declared later or in another file.
-- The standard library is available to every file.
+- The standard library is available to every file. A program that is one file also compiles your
+  scriptlib packages ([The scriptlib directory](CLI_REFERENCE.md#the-scriptlib-directory)).
 
 ### Blocks and Labels
 
@@ -4491,7 +4492,8 @@ alone. See the [CLI reference](CLI_REFERENCE.md#maxon-test) for its flags.
 
 A Maxon program is every `.maxon` file in a project directory, compiled together. There are no import
 statements: a file sees its own declarations, the declarations other files make visible, and the standard
-library.
+library. A program that is one file also sees the scriptlib packages
+([The scriptlib directory](CLI_REFERENCE.md#the-scriptlib-directory)).
 
 ### Automatic Derivation
 
@@ -4504,6 +4506,9 @@ A file's namespace is its directory path relative to the project root, joined wi
 | `lib/fmt/integer.maxon` | `lib.fmt` |
 
 Every file in one directory shares that directory's namespace.
+
+A scriptlib package's namespace is `scriptlib.<package>`: `scriptlib/text/Lines.maxon` is in
+`scriptlib.text`, and its subdirectories extend it the same way.
 
 ### Visibility
 
@@ -4632,10 +4637,11 @@ is written: a declaration, a cast, a construction, a static call's base, a `thro
 or `extends` clause, and the head of a top-level constant's initializer. It never bypasses visibility: a
 type the referring file may not name is refused qualified exactly as it is bare.
 
-Two qualifiers are reserved. `export.X` names a declaration at the project root, and `stdlib.X` one in the
-standard library. A source directory that cannot be written as a qualifier is refused when the program is
-loaded, **E3182**: one whose name is not an identifier, such as `my-dir`, and a top-level one named
-`export`, `stdlib`, `runtime` or a keyword.
+Three qualifiers are reserved. `export.X` names a declaration at the project root, `stdlib.X` one in the
+standard library, and `scriptlib.<package>.X` one in a scriptlib package. A source directory that cannot be
+written as a qualifier is refused when the program is loaded, **E3182**: one whose name is not an
+identifier, such as `my-dir`, and a top-level one named `export`, `stdlib`, `runtime`, `scriptlib` or a
+keyword.
 
 ### Bare Names and Ambiguity
 

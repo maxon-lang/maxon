@@ -97,6 +97,22 @@ let StagedCacheDirName = "cache"
 // directory, so `stageCase` clears the previous run's files out of it too.
 let StagedHomeDirName = "home"
 
+let StagedTierDirName = "tier"
+let StagedTierBinDirName = "bin"
+let StageLibraryTierCommandName = "stage-library-tier"
+let CompilerBaseName = "maxon"
+let ScriptlibDirName = "scriptlib"
+
+export let GreetingPackageName = "greeting"
+export let GreetingPackageFileName = "Greeting.maxon"
+export let ScriptlibGreeting = "hello from scriptlib"
+export let ScriptFileName = "script.maxon"
+export let MintProbePackageName = "pkg"
+export let MintProbePackageFileName = "Pkg.maxon"
+export let GreetingFunctionName = "greeting"
+export let ShadowedClockTypeName = "Clock"
+let ShebangLine = "#!/usr/bin/env maxon"
+
 // The layout the driver keeps its slots in, which is the whole of how a case finds one without respelling
 // the key rule: `<cache>/maxon/run/<one directory per program>`.
 let CacheVendorDirName = "maxon"
@@ -143,13 +159,15 @@ typealias StreamingChildArray = Array with StreamingSubprocess
 // STAGING
 // ============================================================================================
 
-// One case's tree: the program's sources, and the build cache that run is confined to.
+// One case's tree: the program's sources, the build cache that run is confined to, and the compiler it
+// runs.
 export type StagedCase
 	export let sources as FilePath
 	export let cache as FilePath
+	export let compiler as FilePath
 
-	static function create(sources FilePath, cache FilePath) returns StagedCase
-		return Self{sources: sources, cache: cache}
+	static function create(sources FilePath, cache FilePath, compiler FilePath) returns StagedCase
+		return Self{sources: sources, cache: cache, compiler: compiler}
 	end 'create'
 end 'StagedCase'
 
@@ -160,11 +178,8 @@ end 'StagedCase'
 // The FIXTURE is a required parameter and is not the case label: several cases stage `hello` and each
 // needs a tree of its own.
 export function stageCase(caseLabel String, fixture String) returns StagedCase
-	let root = stagingDir("{StagingRootDirName}{PathSeparator}{caseLabel}")
-	clearStagedFiles(root)
-
-	let sources = stagingDir("{StagingRootDirName}{PathSeparator}{caseLabel}{PathSeparator}{StagedSourcesDirName}")
-	let cache = stagingDir("{StagingRootDirName}{PathSeparator}{caseLabel}{PathSeparator}{StagedCacheDirName}")
+	let cleared = clearedCase(caseLabel)
+	let sources = cleared.sources
 
 	var staged = 0 as StagedFileTally
 
@@ -177,7 +192,7 @@ export function stageCase(caseLabel String, fixture String) returns StagedCase
 
 		let body = try File.readText(entry) otherwise panic("run tests: the gate could not run — could not read the stored fixture {entry.toString()}.")
 		let liveName = name.replace(StoredFixtureSuffix, with: "")
-		try File.writeText(sources.join("{liveName}"), content: body) otherwise panic("run tests: the gate could not run — could not stage {liveName} into {sources.toString()}.")
+		_ = writeStagedFile(sources, fileName: liveName, content: body)
 		staged = staged + 1
 	end 'eachStoredFile'
 
@@ -185,8 +200,78 @@ export function stageCase(caseLabel String, fixture String) returns StagedCase
 		panic("run tests: the gate could not run — the '{fixture}' fixture staged no file. Every fixture directory holds at least one `<name>{StoredFixtureSuffix}`, and a case that staged nothing would run whatever the last one left behind.")
 	end 'anEmptyFixture'
 
-	return StagedCase.create(sources, cache: cache)
+	return cleared
 end 'stageCase'
+
+function clearedCase(caseLabel String) returns StagedCase
+	clearStagedFiles(stagingDir(caseDirSpelling(caseLabel)))
+
+	let sources = stagingDir("{caseDirSpelling(caseLabel)}{PathSeparator}{StagedSourcesDirName}")
+	let cache = stagingDir("{caseDirSpelling(caseLabel)}{PathSeparator}{StagedCacheDirName}")
+
+	return StagedCase.create(sources, cache: cache, compiler: requireTestedCompiler())
+end 'clearedCase'
+
+export function stageScriptlibCase(caseLabel String) returns StagedCase
+	let cleared = clearedCase(caseLabel)
+	let tier = stagingDir("{caseDirSpelling(caseLabel)}{PathSeparator}{StagedTierDirName}")
+
+	var arguments = StringArray.create()
+	arguments.push(StageLibraryTierCommandName)
+	arguments.push(tier.toString())
+
+	var config = Configuration.create(Executable.path(cleared.compiler))
+	config.arguments = arguments
+	config.workingDirectory = cleared.sources
+
+	let stager = try config.run() otherwise (e) 'spawnFailed'
+		panic("run tests: the gate could not run — could not spawn `{StageLibraryTierCommandName}` ({e.displayReason()}).")
+	end 'spawnFailed'
+
+	if stager.exitCode() != 0 'didNotStage'
+		panic("run tests: the gate could not run — `{StageLibraryTierCommandName} {tier.toString()}` exited {stager.exitCode()}. It wrote to stderr: {stager.stderr}")
+	end 'didNotStage'
+
+	return StagedCase.create(cleared.sources, cache: cleared.cache, compiler: tier.join(StagedTierBinDirName).join("{CompilerBaseName}{executableSuffix()}"))
+end 'stageScriptlibCase'
+
+export function writeScriptlibPackageFile(caseLabel String, package String, fileName String, content String)
+	_ = writeStagedFile(stagingDir("{scriptlibDirSpelling(caseLabel)}{PathSeparator}{package}"), fileName: fileName, content: content)
+end 'writeScriptlibPackageFile'
+
+export function writeLooseScriptlibFile(caseLabel String, fileName String, content String)
+	_ = writeStagedFile(stagingDir(scriptlibDirSpelling(caseLabel)), fileName: fileName, content: content)
+end 'writeLooseScriptlibFile'
+
+export function writeStagedFile(dir FilePath, fileName String, content String) returns FilePath
+	let path = dir.join(fileName)
+	try File.writeText(path, content: content) otherwise panic("run tests: the gate could not run — could not write {path.toString()}.")
+	return path
+end 'writeStagedFile'
+
+function caseDirSpelling(caseLabel String) returns String
+	return "{StagingRootDirName}{PathSeparator}{caseLabel}"
+end 'caseDirSpelling'
+
+function scriptlibDirSpelling(caseLabel String) returns String
+	return "{caseDirSpelling(caseLabel)}{PathSeparator}{StagedTierDirName}{PathSeparator}{ScriptlibDirName}"
+end 'scriptlibDirSpelling'
+
+export function greetingPackageSource(answer String) returns String
+	return "public function greeting() returns String\n\treturn \"{answer}\"\nend 'greeting'\n"
+end 'greetingPackageSource'
+
+export function shadowingScriptSource(shadowedType String, packageFunction String) returns String
+	return "type {shadowedType}\n\texport var y as Count\nend '{shadowedType}'\n\n{printingMainSource(packageFunction)}"
+end 'shadowingScriptSource'
+
+export function greetingScriptSource() returns String
+	return "{ShebangLine}{LineFeed}{LineFeed}{printingMainSource(GreetingFunctionName)}"
+end 'greetingScriptSource'
+
+export function printingMainSource(packageFunction String) returns String
+	return "function main() returns ExitCode\n\tprint(\"\{{packageFunction}()\}\\n\")\n\treturn 0\nend 'main'\n"
+end 'printingMainSource'
 
 // The staged program's entry file, which is what a FILE case hands the driver.
 export function stagedMain(staged StagedCase) returns FilePath
@@ -247,7 +332,7 @@ end 'spawnDriverWithHome'
 // A binary that is not there and a spawn that never happened both stop a case running at all, so both
 // panic naming what was being asked for.
 function spawnDriverIn(staged StagedCase, arguments StringArray, standardInput InputSource, environment Environment) returns CollectedOutput
-	var config = Configuration.create(Executable.path(requireTestedCompiler()))
+	var config = Configuration.create(Executable.path(staged.compiler))
 	config.arguments = arguments
 	config.workingDirectory = staged.sources
 	config.standardInput = standardInput
@@ -336,7 +421,7 @@ export typealias ConcurrentRunArray = Array with ConcurrentRun
 // buffer the OS chooses, so a child left unread while its sibling is waited on could fill one and block
 // forever; these children write one line and nothing.
 export function spawnConcurrentRuns(staged StagedCase, program FilePath, howMany ConcurrentRunTally) returns ConcurrentRunArray
-	let binary = requireTestedCompiler()
+	let binary = staged.compiler
 	let arguments = runArguments(program)
 	let environment = Environment.inheritUpdating([CacheRootVariable: staged.cache.toString()])
 

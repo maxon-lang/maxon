@@ -1,0 +1,22 @@
+let PackageCallCaseLabel = "scriptlib-package-call"
+let UnusedPackageName = "unused"
+let UnusedPackageFileName = "Unused.maxon"
+let UnusedPackageSource = "public function neverCalled() returns Count\n\treturn 0\nend 'neverCalled'\n"
+
+test 'a script calls a function a scriptlib package declares, and an unused package beside it costs nothing'
+	let staged = stageScriptlibCase(PackageCallCaseLabel)
+	writeScriptlibPackageFile(PackageCallCaseLabel, package: GreetingPackageName, fileName: GreetingPackageFileName, content: greetingPackageSource(ScriptlibGreeting))
+	writeScriptlibPackageFile(PackageCallCaseLabel, package: UnusedPackageName, fileName: UnusedPackageFileName, content: UnusedPackageSource)
+	let script = writeStagedFile(staged.sources, fileName: ScriptFileName, content: greetingScriptSource())
+
+	let run = runProgram(staged, program: script)
+
+	let observedExit = run.exitCode()
+	Expect.equal(observedExit, expected: 0, message: "a script calling `greeting()`, which `scriptlib/{GreetingPackageName}/{GreetingPackageFileName}` declares `public`, did not run. It said: {run.stdout}{run.stderr}")
+
+	let observedStdout = withoutCarriageReturns(run.stdout)
+	Expect.equal(observedStdout, expected: "{ScriptlibGreeting}{LineFeed}", message: "the script did not print the answer the scriptlib package returns")
+
+	let observedStderr = withoutCarriageReturns(run.stderr)
+	Expect.equal(observedStderr, expected: "", message: "the run wrote to stderr, and neither the script nor the package beside it writes anything there")
+end 'a script calls a function a scriptlib package declares, and an unused package beside it costs nothing'

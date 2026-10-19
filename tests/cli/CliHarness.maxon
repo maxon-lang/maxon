@@ -130,6 +130,9 @@ export let InstallScriptAddress = "maxon.dev/install"
 // The library root the compiler loads beside `stdlib/`, copied with it into an install-shaped stage.
 let RuntimeDirName = "runtime"
 
+let ScriptlibDirName = "scriptlib"
+let CheckScriptlibCommandWord = "check-scriptlib"
+
 // Where a case keeps the cache it is about, under its own staging directory, and the program it caches a
 // build of. The program is never inspected — only compiled, so that a build exists to be removed.
 let CaseCacheDirName = "cache"
@@ -408,6 +411,14 @@ end 'requireHeldInAnInstallOutsideCheckout'
 export function installedCompilerIn(installDir FilePath) returns FilePath
 	return installDir.join(ScriptInstallBinDirName).join("{CompilerBaseName}{executableSuffix()}")
 end 'installedCompilerIn'
+
+export function writeScriptlibPackageFile(installDir FilePath, package String, fileName String, content String)
+	writeStagedFile(createdStagedDirectory(installDir.join(ScriptlibDirName).join(package)).join(fileName), content: content)
+end 'writeScriptlibPackageFile'
+
+export function runCheckScriptlib(installDir FilePath) returns CollectedOutput
+	return runWithCacheRoot([CheckScriptlibCommandWord], cacheRoot: cacheRootIn(installDir), workingDirectory: installDir, binary: installedCompilerIn(installDir))
+end 'runCheckScriptlib'
 
 export function createdStagedDirectory(path FilePath) returns FilePath
 	if not Directory.create(path) 'couldNotCreate'
@@ -1007,8 +1018,12 @@ export function cliReferenceText() returns String
 	let path = try FilePath.from(CliReferenceDocument) otherwise panic("CliHarness: the gate could not run - '{CliReferenceDocument}' is not a spellable path")
 	let text = try File.readText(path) otherwise panic("CliHarness: the gate could not run - could not read '{CliReferenceDocument}'. This corpus's paths are relative to the CHECKOUT ROOT; run it from there.")
 
-	return text.replace(CarriageReturn, with: "")
+	return withoutCarriageReturns(text)
 end 'cliReferenceText'
+
+export function withoutCarriageReturns(text String) returns String
+	return text.replace(CarriageReturn, with: "")
+end 'withoutCarriageReturns'
 
 // ⭐ **THE COMMANDS THE FULL REFERENCE HAS A SECTION FOR**, read off ITS layout: a section label is the
 // only thing at the left margin apart from the `Usage:` line.

@@ -49,6 +49,11 @@ let TestedCompilerStem = "maxon-bin/.maxon/maxon"
 // tests run under either runner against one server.
 let LspServerCommandName = "lsp-server"
 
+let StageLibraryTierCommandName = "stage-library-tier"
+let StagedTierDirName = "tier"
+let StagedTierBinDirName = "bin"
+let ScriptlibDirName = "scriptlib"
+
 // How long the server is given to exit once its stdin is closed or `exit` has been sent. It is well
 // under `maxon test`'s 5000 ms shard deadline on purpose: a server that hangs should be reported by this
 // client, naming the request, rather than by the harness killing the whole file.
@@ -524,9 +529,7 @@ public type LspClient
 	//
 	// ⛔ Everything that would stop the session happening at all PANICS rather than throwing: neither a
 	// missing binary nor a refused spawn is the server answering wrongly.
-	public static function start() returns LspClient
-		let binary = testedServerPath()
-
+	public static function start(binary FilePath = testedServerPath()) returns LspClient
 		if not File.exists(binary) 'noBinary'
 			panic("LspClient: the test could not run — there is no compiler at {binary.toString()}. Paths here are relative to the CHECKOUT ROOT, which is the working directory a test binary inherits from `maxon test`; run it from there, and build `{TestedCompilerStem}` first.")
 		end 'noBinary'
@@ -535,7 +538,7 @@ public type LspClient
 		argv.push(LspServerCommandName)
 
 		let spawned = try StreamingSubprocess.spawn(Executable.path(binary), arguments: argv) otherwise (e) 'spawnFailed'
-			panic("LspClient: the test could not run — `{TestedCompilerStem} {LspServerCommandName}` did not spawn ({e.displayReason()}).")
+			panic("LspClient: the test could not run — `{binary.toString()} {LspServerCommandName}` did not spawn ({e.displayReason()}).")
 		end 'spawnFailed'
 
 		return Self{server: spawned, nextRequestId: FirstRequestId, notifications: StringArray.create()}
@@ -1228,6 +1231,35 @@ export function testedServerPath() returns FilePath
 
 	return try FilePath.from(spelled) otherwise panic("LspClient: the test could not run — '{TestedCompilerStem}' is not a spellable path")
 end 'testedServerPath'
+
+export function stagedLibraryTierCompiler(dir FilePath) returns FilePath
+	let tier = dir.join(StagedTierDirName)
+
+	var config = Configuration.create(Executable.path(testedServerPath().resolve(Directory.currentPath())))
+	config.arguments = [StageLibraryTierCommandName, tier.toString()]
+	config.workingDirectory = dir
+
+	let stager = try config.run() otherwise (e) 'spawnFailed'
+		panic("LspClient: the test could not run — `{StageLibraryTierCommandName}` did not spawn ({e.displayReason()}).")
+	end 'spawnFailed'
+
+	if stager.exitCode() != 0 'didNotStage'
+		panic("LspClient: the test could not run — `{StageLibraryTierCommandName} {tier.toString()}` exited {stager.exitCode()}. It wrote to stderr: {stager.stderr}")
+	end 'didNotStage'
+
+	return tier.join(StagedTierBinDirName).join(testedServerPath().filename())
+end 'stagedLibraryTierCompiler'
+
+export function writeScriptlibPackageFile(dir FilePath, package String, fileName String, content String)
+	let packageDir = dir.join(StagedTierDirName).join(ScriptlibDirName).join(package)
+
+	if not Directory.create(packageDir) 'couldNotCreate'
+		panic("LspClient: the test could not run — could not create {packageDir.toString()}.")
+	end 'couldNotCreate'
+
+	let file = packageDir.join(fileName)
+	try File.writeText(file, content: content) otherwise panic("LspClient: the test could not run — could not write {file.toString()}.")
+end 'writeScriptlibPackageFile'
 
 export function fileUriOf(file FilePath) returns String
 	let slashed = file.toString().replace(WindowsPathSeparator, with: UriPathSeparator)

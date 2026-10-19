@@ -416,6 +416,9 @@ tests/
     build-a-case-renamed-source-recompiles.maxtest          a source renamed only by case is compiled again, naming `source added` (it discriminates on Windows only)
     execute-a-unicode-table-edit-recompiles.maxtest         an install-shaped `maxon execute` of a program is compiled again after a Unicode table the compiler embeds in it changed
     build-of-a-missing-source-reports-it-once.maxtest       a build of a source that does not exist says `file not found` once, with a non-zero exit
+    build-a-file-sees-scriptlib.maxtest                     an install-shaped `build <file>` compiles the `scriptlib/` package the file calls, and the executable prints its answer
+    check-scriptlib-reports-a-broken-package.maxtest        `check-scriptlib` builds a package body nothing calls, exits 1 and names `bad/Bad.maxon`
+    check-scriptlib-passes-clean-packages.maxtest           `check-scriptlib` over two clean packages and no `main` exits 0 with nothing on stderr
   profile/
     ProfileHarness.maxon                    the shared half: the spawn, the staging, the report readers
     profile-hot-ordering.maxtest            the busier function ranks first in every section
@@ -438,8 +441,20 @@ tests/
     cache-sweeps-older-formats.maxtest      a published build discards an older cache format's builds and keeps a newer one's
     concurrent.maxtest                      simultaneous cold runs of one program each behave like the only one
     directory.maxtest                       a directory is compiled as ONE project
-    wordless.maxtest                        a `.maxon` first argument IS `run` - the shebang door
+    wordless.maxtest                        a `.maxon` first argument IS `execute` - the shebang door
     missing-path.maxtest                    a path naming nothing is refused at both doors
+    scriptlib-package-call.maxtest          a script calls a `scriptlib/` package's `public` function bare, beside an unused package, and stderr stays empty
+    scriptlib-loose-file-is-never-loaded.maxtest   a `.maxon` directly in `scriptlib/` that does not compile is never read
+    scriptlib-edit-recompiles.maxtest       an edit to a package the script calls runs the edited answer
+    scriptlib-directory-program-ignores-it.maxtest   a directory program calling a package function is refused with E3004
+    scriptlib-a-typed-mint-call-is-refused.maxtest   a package calling `__Clock.nowMs()` beside a script declaring `type Clock` is refused with E3004, naming the package file
+    scriptlib-a-typed-mint-declaration-is-refused.maxtest   a package declaring `function __Clock()` beside that script is refused with E2051, naming the package file
+    scriptlib-a-shadowed-library-type-still-serves-its-package.maxtest   a package's `Clock.nowMs()` beside that script still compiles, prints `1`, and stderr stays empty
+    scriptlib-an-async-call-on-a-shadowed-library-type-compiles.maxtest   the same with `await async Clock.nowMs()`
+    scriptlib-a-qualified-library-type-head-compiles.maxtest   the same with `stdlib.Clock.nowMs()`
+    scriptlib-a-package-member-named-like-a-shadowed-type-is-refused.maxtest   a package method named `Clock` beside that script is refused with E3112, naming scriptlib
+    scriptlib-a-package-names-another-packages-type-by-its-qualified-name.maxtest   a package builds `scriptlib.shapes.Square` from another package, and the script prints `9`
+    scriptlib-a-script-shadowing-a-package-type-leaves-the-package-whole.maxtest   a script declaring `type Widget` beside a package whose `use()` reads its own `Widget.make()` prints `7`
     fixtures/<program>/main.maxon.fixture   stored names only - see rule 1
   console-write/
     console-write-imports.maxtest           which console API an emitted x64-windows image imports
@@ -709,7 +724,8 @@ exit code and output. The shared half is `SpecHarness.maxon`.
   starting from the library cache the first run wrote, a library diagnostic respelled by that warm run
   exactly as the cold run respelled it, the two marker shapes the reference grammar reads, an
   `AsyncTrace` case passing on ids that differ from the run's but name the same threads and failing on a
-  trace that names different ones, and a
+  trace that names different ones, a `scriptlib/` package beside the compiler that does not parse leaving
+  every case untouched, and a
   `--result-json` document holding every case in run order with its verdict, a failure's reason, and the
   counts.
   Each fixture's own preamble says what its test asserts.
@@ -990,7 +1006,7 @@ directory under `temp/profile/`), and it keeps rule 5: one spawning `test`, one 
 
 ## `execute/` — compile a program and run it, and do not compile it again
 
-Sixteen cases in fifteen files over one subject: `maxon execute <file|directory> [args...]` compiles a program (or reuses a
+Twenty-eight cases in twenty-seven files over one subject: `maxon execute <file|directory> [args...]` compiles a program (or reuses a
 cached build of it) and runs it, forwarding stdin, stdout, stderr and the exit code. The shared half —
 the driver stem, the staging, the per-case cache root, the two spawners and the slot readers — lives in
 `ExecuteHarness.maxon`; see the note under `debug/`.

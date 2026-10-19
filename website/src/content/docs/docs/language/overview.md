@@ -41,7 +41,8 @@ standard error and exits with code 2 before `main` runs.
 - A file's namespace comes from its directory (see [Namespaces](/docs/language/namespaces/)).
 - Declarations are private to their file unless marked `export`, `public` or `module`.
 - Declaration order does not matter: a function may call one declared later or in another file.
-- The standard library is available to every file.
+- The standard library is available to every file. A program that is one file also compiles your
+  scriptlib packages ([The scriptlib directory](/docs/cli/#the-scriptlib-directory)).
 
 ### Blocks and Labels
 

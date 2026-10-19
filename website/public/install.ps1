@@ -124,8 +124,8 @@ function Install-Maxon {
         $errors = $process.StandardError.ReadToEndAsync()
         $output = $process.StandardOutput.ReadToEnd()
         $process.WaitForExit()
-        $null = $errors.Result
-        return @{ ExitCode = $process.ExitCode; Output = $output }
+        $errorText = $errors.Result
+        return @{ ExitCode = $process.ExitCode; Output = $output; Errors = $errorText }
     }
 
     # The version an installed compiler reports, or $null when there is none or it answers in a form
@@ -259,6 +259,33 @@ function Install-Maxon {
         if ($null -ne $aside) {
             Clear-Leftover $aside
         }
+    }
+
+    # Notifies and never throws: the exit status is the contract `maxon upgrade` reads, and a package
+    # this release rejects is the user's to update. The `help` probe skips a release that predates the
+    # command.
+    function Test-Scriptlib([string]$root, [string]$exe, [string]$release) {
+        if (-not (Test-Path -LiteralPath (Join-Path $root 'scriptlib') -PathType Container)) {
+            return
+        }
+        try {
+            $known = Invoke-Captured $exe 'help check-scriptlib'
+            if ($known.ExitCode -ne 0) {
+                return
+            }
+            $checked = Invoke-Captured $exe 'check-scriptlib'
+        } catch {
+            return
+        }
+        if ($checked.ExitCode -eq 0) {
+            return
+        }
+        foreach ($text in @($checked.Output, $checked.Errors)) {
+            if (-not [string]::IsNullOrWhiteSpace($text)) {
+                Write-Host $text.TrimEnd()
+            }
+        }
+        Say "$root\scriptlib needs updating for Maxon ${release}: the packages above do not compile with this release. The install itself is complete."
     }
 
     function Add-ToUserPath([string]$dir) {
@@ -420,6 +447,7 @@ function Install-Maxon {
             throw "the installed compiler reports $reported, not $release"
         }
         Say "installed Maxon $release in $root"
+        Test-Scriptlib $root $exe $release
     }
 
     $onSessionPath = $false
