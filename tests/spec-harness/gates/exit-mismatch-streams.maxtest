@@ -1,0 +1,50 @@
+let ExitMismatchSpecName = "exit-mismatch-streams"
+let ExitMismatchHeadline = "exit code mismatch: expected 1, got 3"
+let ExitMismatchOmittedHeadline = "child stderr (last 40 of 50 lines):"
+
+test 'an exit-code mismatch carries the stdout and stderr of the child, bounded to its last lines'
+	let said = saidByOneGateRun()
+	let short = testLabel(ExitMismatchSpecName, testName: "exit-mismatch-streams.short")
+	let long = testLabel(ExitMismatchSpecName, testName: "exit-mismatch-streams.long")
+	let agrees = testLabel(ExitMismatchSpecName, testName: "exit-mismatch-streams.agrees")
+
+	var broken = StringArray.create()
+
+	if not said.contains("{failVerdictPrefix(short)}{ExitMismatchHeadline}") 'shortDidNotFail'
+		broken.push("'{short}' exits 3 against a pinned 1 and did not FAIL with '{ExitMismatchHeadline}'. The run said:\n{said}\n")
+	end 'shortDidNotFail'
+
+	if not said.contains("child stdout:\nstdout-marker") 'stdoutMissing'
+		broken.push("'{short}' printed 'stdout-marker' on stdout and its failure does not carry it under 'child stdout:'. The run said:\n{said}\n")
+	end 'stdoutMissing'
+
+	if not said.contains("child stderr:\nstderr-marker") 'stderrMissing'
+		broken.push("'{short}' printed 'stderr-marker' on stderr and its failure does not carry it under 'child stderr:'. The run said:\n{said}\n")
+	end 'stderrMissing'
+
+	if not said.contains("{failVerdictPrefix(long)}{ExitMismatchHeadline}") 'longDidNotFail'
+		broken.push("'{long}' exits 3 against a pinned 1 and did not FAIL with '{ExitMismatchHeadline}'. The run said:\n{said}\n")
+	end 'longDidNotFail'
+
+	if not said.contains("child stdout: (empty)") 'emptyUnsaid'
+		broken.push("'{long}' printed nothing on stdout and its failure does not say 'child stdout: (empty)'. The run said:\n{said}\n")
+	end 'emptyUnsaid'
+
+	if not said.contains(ExitMismatchOmittedHeadline) 'boundUnsaid'
+		broken.push("'{long}' printed 50 stderr lines and its failure does not say '{ExitMismatchOmittedHeadline}'. The run said:\n{said}\n")
+	end 'boundUnsaid'
+
+	if not said.contains("tail-line-59") 'tailMissing'
+		broken.push("'{long}' printed 'tail-line-59' last and its failure does not carry it. The run said:\n{said}\n")
+	end 'tailMissing'
+
+	if said.contains("tail-line-19") 'headKept'
+		broken.push("'{long}' printed 'tail-line-19' among its first ten lines and its failure carries it: the tail is not bounded. The run said:\n{said}\n")
+	end 'headKept'
+
+	if not said.contains(passVerdictLine(agrees)) 'controlDidNotPass'
+		broken.push("'{agrees}' exits with the pinned code and did not PASS. The run said:\n{said}\n")
+	end 'controlDidNotPass'
+
+	requireNothingBroken(broken, headline: "the exit-mismatch streams gate")
+end 'an exit-code mismatch carries the stdout and stderr of the child, bounded to its last lines'

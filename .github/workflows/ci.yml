@@ -123,6 +123,35 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Runner CPU
+        if: matrix.target == 'x64-windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          try {
+            (Get-CimInstance Win32_Processor | Select-Object -First 1 Name, NumberOfLogicalProcessors, Description | Format-List | Out-String).Trim()
+            $signature = @(
+              '[DllImport("kernel32.dll")] public static extern bool IsProcessorFeaturePresent(uint feature);',
+              '[DllImport("kernel32.dll")] public static extern ulong GetEnabledXStateFeatures();',
+              '[DllImport("kernel32.dll", SetLastError = true)] public static extern bool InitializeContext(IntPtr buffer, uint flags, out IntPtr context, ref uint length);',
+              '[DllImport("kernel32.dll")] public static extern bool IsUserCetAvailableInEnvironment(uint environment);'
+            ) -join [Environment]::NewLine
+            $native = Add-Type -MemberDefinition $signature -Name CpuProbe -Namespace Runner -PassThru
+            $features = $native::GetEnabledXStateFeatures()
+            "enabled xstate features: 0x{0:x}" -f $features
+            "AVX2={0} AVX512F={1} XSAVE={2}" -f $native::IsProcessorFeaturePresent(40), $native::IsProcessorFeaturePresent(41), $native::IsProcessorFeaturePresent(17)
+            "AVX512 state (opmask/ZMM_Hi256/Hi16_ZMM)={0} AMX tile state (bits 17/18)={1} CET user/supervisor state (bits 11/12)={2}" -f
+              ((($features -shr 5) -band 7) -eq 7), ((($features -shr 17) -band 3) -eq 3), ((($features -shr 11) -band 3) -ne 0)
+            try { "user shadow stack available={0}" -f $native::IsUserCetAvailableInEnvironment(0) } catch { "user shadow stack probe unavailable: $_" }
+            $length = [uint32]0
+            $context = [IntPtr]::Zero
+            [void]$native::InitializeContext([IntPtr]::Zero, 0x10004B, [ref]$context, [ref]$length)
+            "CONTEXT with XSTATE size={0} bytes" -f $length
+          } catch {
+            "CPU probe failed: $_"
+          }
+          exit 0
+
       - name: Library cache codecs
         if: matrix.target == 'x64-linux'
         run: python3 scripts/library-cache/generate-codecs.py --check

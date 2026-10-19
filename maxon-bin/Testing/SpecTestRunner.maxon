@@ -4929,7 +4929,8 @@ function runAssertions(expected SpecExitCode, stderr SpecStderr, stdout SpecStdo
 	let exitOutcome = checkRunExitCode(expected, actual: run.exitCode)
 
 	if not exitOutcome.isPass() 'exitDisagreed'
-		return withMonitorStderr(exitOutcome, traceCapture: traceCapture, monitorStderr: run.stderr)
+		let withStreams = withChildStreams(exitOutcome, stdout: childStdoutOf(run.stdout, traceCapture: traceCapture), stderr: childStderrOf(run.stderr, traceCapture: traceCapture))
+		return withMonitorStderr(withStreams, traceCapture: traceCapture, monitorStderr: run.stderr)
 	end 'exitDisagreed'
 
 	// ⭐⭐ **THE TRACE IS CHECKED AFTER THE EXIT CODE AND BEFORE THE STREAMS, AND THE ORDER IS THE POINT.**
@@ -5119,6 +5120,36 @@ function exitCodeOutcome(expected ExitCodeValue, actual ExitCodeValue) returns T
 
 	return TestOutcome.pass
 end 'exitCodeOutcome'
+
+let ChildOutputTailLines = 40
+
+// An exit-code mismatch carries both of the child's streams, an empty one printed as `(empty)`: a crash whose
+// handler never ran (no panic line) is then told apart from one that ran and exited wrong.
+function withChildStreams(outcome TestOutcome, stdout String, stderr String) returns TestOutcome
+	return match outcome 'verdict'
+		fail(reason) gives TestOutcome.fail("{reason}\n{childStreamReport(StdoutStreamName, text: stdout)}\n{childStreamReport(StderrStreamName, text: stderr)}")
+		pass or
+		skipped or
+		notRunHere gives outcome
+	end 'verdict'
+end 'withChildStreams'
+
+function childStreamReport(streamName String, text String) returns String
+	let trimmed = text.trim()
+
+	if trimmed.isEmpty() 'silent'
+		return "child {streamName}: (empty)"
+	end 'silent'
+
+	let lines = trimmed.split(LineSeparator)
+
+	if lines.count() <= ChildOutputTailLines 'whole'
+		return "child {streamName}:\n{trimmed}"
+	end 'whole'
+
+	let omitted = lines.count() - ChildOutputTailLines
+	return "child {streamName} (last {ChildOutputTailLines} of {lines.count()} lines):\n{joinFrom(lines, first: omitted, separator: LineSeparator)}"
+end 'childStreamReport'
 
 function checkRunStdout(stdout SpecStdout, actual String) returns TestOutcome
 	let cleaned = actual.trim()

@@ -725,7 +725,7 @@ exit code and output. The shared half is `SpecHarness.maxon`.
   exactly as the cold run respelled it, the two marker shapes the reference grammar reads, an
   `AsyncTrace` case passing on ids that differ from the run's but name the same threads and failing on a
   trace that names different ones, a `scriptlib/` package beside the compiler that does not parse leaving
-  every case untouched, and a
+  every case untouched, an exit-code mismatch reporting the child's stdout and stderr, and a
   `--result-json` document holding every case in run order with its verdict, a failure's reason, and the
   counts.
   Each fixture's own preamble says what its test asserts.
