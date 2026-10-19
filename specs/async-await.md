@@ -1773,19 +1773,34 @@ end 'main'
 error E2015: specs/async-await/async-await.error.qualified-spawn-container-alias-static.maxon:6:16: Unsupported: `async TallyArray.…` — a static on this type is served by a runtime entry the compiler emits rather than by a function the program declares, and a spawn hands the scheduler the ADDRESS of a linked function. Call it directly, or spawn a function of your own that wraps it
 ```
 
-<!-- test: async-await.error.qualified-spawn-primitive-static -->
-A primitive's static resolves to a compiler-MINTED callee, and an `asyncCall` carries no mint field —
-every reader downstream would judge `__int_fromString` as a name the author wrote. The refusal keeps
-"a spawn's callee is the one the author wrote" true by construction.
+<!-- test: async-await.qualified-spawn-primitive-static -->
+A primitive's static spawns like any other: `async int.fromString(s)` hands the scheduler the
+compiler-minted `__int_fromString`, and the spawn carries that mint as a direct call does, so every
+reader downstream judges it as the compiler's name, not one the author wrote.
 ```maxon
 function main() returns ExitCode
 	let s = "41"
 	let p = async int.fromString(s)
-	return await p
+	let n = try await p otherwise 0
+	return (n + 1) as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E2015: specs/async-await/async-await.error.qualified-spawn-primitive-static.maxon:4:20: Unsupported: `async int.fromString(…)` — a primitive's static resolves to the compiler-minted callee `__int_fromString`, and a spawn records no callee but the one the author wrote. Call it directly
+```exitcode
+42
+```
+
+<!-- test: async-await.qualified-spawn-primitive-static-throws-through-the-promise -->
+The spawned static's error reaches the awaiting caller: `"x"` does not parse, so `try await` takes the
+`otherwise` arm.
+```maxon
+function main() returns ExitCode
+	let p = async int.fromString("x")
+	let n = try await p otherwise 7
+	return n as ExitCode
+end 'main'
+```
+```exitcode
+7
 ```
 
 <!-- test: async-await.error.qualified-spawn-instance-receiver -->

@@ -100345,7 +100345,7 @@ export type Parser
 		self.advance()
 
 		match try self.qualifiedStaticCallee(typeTok, memberTok: memberTok, aliasName: aliasName) 'callee'
-			minted(mintedCallee) then throw SourceParseError.unsupported("`async {String.from(typeTok.value)}.{String.from(memberTok.value)}(…)` — a primitive's static resolves to the compiler-minted callee `{String.from(mintedCallee)}`, and a spawn records no callee but the one the author wrote. Call it directly", line: memberTok.line, column: memberTok.column)
+			minted(mintedCallee) then return try self.declaredStaticAsyncSpawnCallee(mintedCallee, aliasName: aliasName, typeTok: typeTok, memberTok: memberTok, mint: CalleeMint.primitiveStatic)
 			namespaceQualifiedFree(free) then return AsyncSpawnCallee.create(free, anchor: memberTok, mint: CalleeMint.notMinted)
 			declared(callee) then return try self.declaredStaticAsyncSpawnCallee(callee, aliasName: aliasName, typeTok: typeTok, memberTok: memberTok, mint: self.staticCallHeadMint(baseIndex, typeTok: typeTok))
 		end 'callee'
