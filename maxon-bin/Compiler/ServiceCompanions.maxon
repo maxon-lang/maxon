@@ -1514,7 +1514,7 @@ end 'buildServiceHandleStruct'
 // of types some candidate named.
 module function serviceSpawnSiteOf(signatures ProgramSignatures, typeName ByteArray) returns ServiceSpawnCandidate
 	for candidate in signatures.serviceSpawnCandidates() 'eachCandidate'
-		if candidate.typeName.equals(typeName) 'theFirstSpawnOfThisType'
+		if spawnedTypeNameOf(signatures, candidate: candidate).equals(typeName) 'theFirstSpawnOfThisType'
 			return candidate
 		end 'theFirstSpawnOfThisType'
 	end 'eachCandidate'
@@ -1714,26 +1714,39 @@ function serviceRosterOf(signatures ProgramSignatures, liveOnly bool) returns Na
 	var services = NameRoster.create()
 
 	for candidate in signatures.serviceSpawnCandidates() 'eachCandidate'
-		if not candidateStartsAService(signatures, candidate: candidate, liveOnly: liveOnly) 'notAService'
+		let typeName = spawnedTypeNameOf(signatures, candidate: candidate)
+
+		if not candidateStartsAService(signatures, candidate: candidate, typeName: typeName, liveOnly: liveOnly) 'notAService'
 			continue
 		end 'notAService'
 
-		if serviceNameAlreadyListed(services, typeName: candidate.typeName) 'aSecondSpawnOfOneType'
+		if serviceNameAlreadyListed(services, typeName: typeName) 'aSecondSpawnOfOneType'
 			continue
 		end 'aSecondSpawnOfOneType'
 
-		services.push(candidate.typeName)
+		services.push(typeName)
 	end 'eachCandidate'
 
 	return services
 end 'serviceRosterOf'
 
-function candidateStartsAService(signatures ProgramSignatures, candidate ServiceSpawnCandidate, liveOnly bool) returns bool
+// A candidate records the target as written, `stdlib.Range` or `sub.Calc`. It resolves through
+// `qualifiedNominalOf`, the table the parser's qualifier collapse reads, so the companions minted here
+// carry the name `Parser.parseSpawn` asks for; a candidate compared by its written spelling misses them.
+function spawnedTypeNameOf(signatures ProgramSignatures, candidate ServiceSpawnCandidate) returns ByteArray
+	if let nominal = try signatures.qualifiedNominalOf(candidate.typeName) 'aQualifiedSpelling'
+		return nominal.name.clone()
+	end 'aQualifiedSpelling'
+
+	return candidate.typeName.clone()
+end 'spawnedTypeNameOf'
+
+function candidateStartsAService(signatures ProgramSignatures, candidate ServiceSpawnCandidate, typeName ByteArray, liveOnly bool) returns bool
 	if liveOnly and not signatures.spawnGateIsOpen(candidate.gate) 'aDefaultNothingBuilds'
 		return false
 	end 'aDefaultNothingBuilds'
 
-	return match classifyServiceTarget(signatures, typeName: candidate.typeName, member: candidate.member) 'verdict'
+	return match classifyServiceTarget(signatures, typeName: typeName, member: candidate.member) 'verdict'
 		// Refused at the `spawn` by `Parser.parseSpawn`, which asks this same classification. Nothing is
 		// minted for any of them — see this file's header for why the sweep never reports.
 		typeIsNotAStruct or

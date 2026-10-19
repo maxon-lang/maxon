@@ -294,7 +294,9 @@ end 'main'
   Dropping the last handle does the same. A
   queued message always runs, so a reply always resolves.
 - **The target** of `spawn` must be a static factory that returns its own type; anything else — including a
-  bare `spawn f()` — is **E3134**.
+  bare `spawn f()`, or a qualified chain that names no type — is **E3134**. The type may be
+  [qualified](/docs/language/namespaces/#qualified-names): `spawn sub.Calc.create()` starts a type declared in `sub/`, and
+  `spawn stdlib.Range.create(1, finish: 4)` the library's `Range` in a program that declares its own.
 - **Generic services.** A generic type can be spawned; its handle type is spelled through an alias,
   `typealias StringBoxHandle = Box.handle with String`.
 - Services that `await` each other in a cycle are **E3139**.

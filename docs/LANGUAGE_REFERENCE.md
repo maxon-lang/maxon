@@ -4633,9 +4633,9 @@ end 'main'
 
 Qualification works for functions and for every kind of type name — typealiases, types, enums, unions and
 interfaces (`lib.fmt.format(x)`, `50 as api.Score`, `api.Point.origin()`) — at every position a type name
-is written: a declaration, a cast, a construction, a static call's base, a `throws`, `implements`, `where`
-or `extends` clause, and the head of a top-level constant's initializer. It never bypasses visibility: a
-type the referring file may not name is refused qualified exactly as it is bare.
+is written: a declaration, a cast, a construction, a static call's base, a `spawn`'s target, a `throws`,
+`implements`, `where` or `extends` clause, and the head of a top-level constant's initializer. It never
+bypasses visibility: a type the referring file may not name is refused qualified exactly as it is bare.
 
 Three qualifiers are reserved. `export.X` names a declaration at the project root, `stdlib.X` one in the
 standard library, and `scriptlib.<package>.X` one in a scriptlib package. A source directory that cannot be
@@ -5024,7 +5024,9 @@ end 'main'
   Dropping the last handle does the same. A
   queued message always runs, so a reply always resolves.
 - **The target** of `spawn` must be a static factory that returns its own type; anything else — including a
-  bare `spawn f()` — is **E3134**.
+  bare `spawn f()`, or a qualified chain that names no type — is **E3134**. The type may be
+  [qualified](#qualified-names): `spawn sub.Calc.create()` starts a type declared in `sub/`, and
+  `spawn stdlib.Range.create(1, finish: 4)` the library's `Range` in a program that declares its own.
 - **Generic services.** A generic type can be spawned; its handle type is spelled through an alias,
   `typealias StringBoxHandle = Box.handle with String`.
 - Services that `await` each other in a cycle are **E3139**.

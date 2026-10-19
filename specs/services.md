@@ -285,6 +285,35 @@ end 'main'
 1
 ```
 
+<!-- test: a-spawn-of-a-type-in-another-directory-by-its-qualified-name -->
+`Calc` is declared in `sub/`, so `main` names it `sub.Calc`, the spelling a direct call and an `async` accept,
+and the spawn starts that type as a service.
+```maxon
+// --- file: sub/calc.maxon
+export type Calc
+	var count as Integer
+
+	export static function create() returns Self
+		return Self{count: 7}
+	end 'create'
+
+	export function total() returns Integer
+		return self.count
+	end 'total'
+end 'Calc'
+
+export typealias Integer = int(i64.min to i64.max)
+// --- file: main.maxon
+function main() returns ExitCode
+	let h = spawn sub.Calc.create()
+	let total = try await h.total() otherwise 0
+	return total as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
 <!-- test: error.spawn-of-a-bare-function-refused -->
 ⚖ There is no unstructured green thread in this language. `spawn work()` names no type, so it starts no
 service, and the refusal teaches the one form rather than reporting a syntax error.
@@ -313,6 +342,18 @@ end 'main'
 ```
 ```maxoncstderr
 error E3134: <fragment>:3:10: `spawn Calc.create(…)` does not start a service: nothing declares `type Calc`. `spawn` starts a SERVICE from a static factory of a declared type that returns that type, e.g. `spawn Calc.create()`
+```
+
+<!-- test: error.spawn-of-a-chain-naming-no-type-refused -->
+Nothing declares `foo`, so the qualified chain `foo.bar` names no type to be a service.
+```maxon
+function main() returns ExitCode
+	let h = spawn foo.bar.baz()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3134: <fragment>:3:10: `spawn foo.bar.baz(…)` does not start a service: nothing declares `type foo.bar`. `spawn` starts a SERVICE from a static factory of a declared type that returns that type, e.g. `spawn Calc.create()`
 ```
 
 <!-- test: error.spawn-of-an-instance-method-refused -->

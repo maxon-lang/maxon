@@ -962,8 +962,9 @@ cancel_expr   = expression '.' 'cancel' '(' ')'            (* cancel a coroutine
 ### 6.7 Spawn Expressions
 
 ```
-spawn_expr    = 'spawn' [ spawn_capacity ] IDENTIFIER '.' IDENTIFIER '(' [ arg_list ] ')'
-                                                         (* start a service, returns <type>.handle *)
+spawn_expr    = 'spawn' [ spawn_capacity ] IDENTIFIER { '.' IDENTIFIER } '.' IDENTIFIER '(' [ arg_list ] ')'
+                                                         (* start a service, returns <type>.handle;
+                                                            the type may be qualified *)
 spawn_capacity = '(' 'capacity' ':' expression ')'     (* the mailbox's capacity, a MailboxCapacity *)
 ```
 

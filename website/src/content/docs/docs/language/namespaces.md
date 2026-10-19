@@ -148,9 +148,9 @@ end 'main'
 
 Qualification works for functions and for every kind of type name — typealiases, types, enums, unions and
 interfaces (`lib.fmt.format(x)`, `50 as api.Score`, `api.Point.origin()`) — at every position a type name
-is written: a declaration, a cast, a construction, a static call's base, a `throws`, `implements`, `where`
-or `extends` clause, and the head of a top-level constant's initializer. It never bypasses visibility: a
-type the referring file may not name is refused qualified exactly as it is bare.
+is written: a declaration, a cast, a construction, a static call's base, a `spawn`'s target, a `throws`,
+`implements`, `where` or `extends` clause, and the head of a top-level constant's initializer. It never
+bypasses visibility: a type the referring file may not name is refused qualified exactly as it is bare.
 
 Three qualifiers are reserved. `export.X` names a declaration at the project root, `stdlib.X` one in the
 standard library, and `scriptlib.<package>.X` one in a scriptlib package. A source directory that cannot be
