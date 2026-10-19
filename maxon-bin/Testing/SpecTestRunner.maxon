@@ -3310,15 +3310,8 @@ end 'applyOverlaySections'
 // rather than silently stacked on top of the first. A Set because membership is the only question.
 typealias StagedSectionNameSet = Set with String
 
-// Remove every FILE under `dir`, depth-first. The stdlib has no directory-remove, so empty
-// subdirectories survive — which is harmless: nothing here reads a directory's existence, only its
-// files. Three callers, one rule — a multi-file test's staged sources, a `stdlib-overlay` case's
-// private checkout, and the batch's spent capture files — because "whatever this run did not write,
-// this run removes" is one sentence, not three.
-// ⚠ **EXPORTED FOR ITS SECOND CALLER (`TestDispatcher.stageTestBuild`) RATHER THAN COPIED THERE.** Both
-// stage a generated tree into a directory that may hold the last run's leftovers, and both need the same
-// answer — "whatever this run did not write, this run removes". A second spelling of a recursive delete is
-// the last thing this tree needs two of.
+// Empty subdirectories survive, which is harmless: no caller reads a directory's existence, only
+// its files.
 export function purgeFilesIn(dir FilePath)
 	let entries = try Directory.list(dir) otherwise return
 
