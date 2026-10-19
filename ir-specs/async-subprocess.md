@@ -147,14 +147,14 @@ func @main {
   __rc_ok:
     x64.epilogue 32
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_3]  ; "panic at async-subprocess.posix-an-already-exited-child-gets-no-record.test:7: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @__np_child_open {
@@ -302,13 +302,13 @@ func @main {
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.epilogue 16
-    arm64.ret
+    arm64.retIndirect
   __rc_panic:
     arm64.leaRdata x0, __str_blob_3  ; "panic at async-subprocess.posix-an-already-exited-child-gets-no-record.test:7: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.epilogue 16
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @__np_child_open {
@@ -455,13 +455,13 @@ func @main {
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.epilogue 16
-    arm64.ret
+    arm64.retIndirect
   __rc_panic:
     arm64.leaRdata x0, __str_blob_3  ; "panic at async-subprocess.posix-an-already-exited-child-gets-no-record.test:7: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
     arm64.movImm x0, 0
     arm64.epilogue 16
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @__np_child_open {

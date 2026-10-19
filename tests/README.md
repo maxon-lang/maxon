@@ -218,6 +218,7 @@ tests/
     next-from-inside-a-prologue-stays-in-the-frame.maxtest      a `next` from inside a prologue lands on the first positioned row of that same frame
     next-out-of-a-shared-exit-cascade-never-reports-an-untaken-return.maxtest      a walk through a `return` into the shared exit cascade never stops on the line of a `return` that did not run
     finish-from-inside-a-prologue-returns-to-the-caller.maxtest      a `finish` from inside a prologue returns to the caller
+    step-and-finish-out-of-a-function-that-parks-return-to-the-caller.maxtest      a `next` and a `finish` out of a function that parks land at the call in its caller
     next-over-a-recursive-call-returns-to-its-own-frame.maxtest      a `next` over a recursive call lands in the frame it was issued from
     next-over-a-call-another-thread-returns-through.maxtest      a `next` over a call other green threads also return through lands on the thread that issued it
     next-over-a-call-that-grows-the-green-thread-stack.maxtest      a `next` over a call that moves the green thread's stack lands on the next line

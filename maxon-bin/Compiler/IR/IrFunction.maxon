@@ -3138,6 +3138,9 @@ export type IrFunction
 	// `GtGuardSite.runtimeEntry`.
 	export var pinsItsThread as bool
 
+	// Set by `markIndirectJumpReturns`, which owns the rule.
+	export var returnsByIndirectJump as bool
+
 	// ⭐⭐ **THIS FUNCTION HAS NO FRAME WORTH KEEPING, so the inliner must splice it into every one of its
 	// call sites whatever its size.** It is what lets a family that used to be emitted INLINE by a builder
 	// live in `runtime/` source instead: a builder spliced its code at each site, and a tier body reached by
@@ -3483,6 +3486,7 @@ export type IrFunction
 			closureStoreSites: ClosureStoreSiteArray.create(),
 			keepsItsOwnFrame: false,
 			pinsItsThread: false,
+			returnsByIndirectJump: false,
 			mustBeSplicedAtEverySite: false,
 			sourceFilePath: declaredAt.filePath,
 			paramCount: paramCount,
@@ -3567,6 +3571,7 @@ export type IrFunction
 			closureStoreSites: ClosureStoreSiteArray.create(),
 			keepsItsOwnFrame: false,
 			pinsItsThread: pinsItsThread,
+			returnsByIndirectJump: false,
 			mustBeSplicedAtEverySite: false,
 			sourceFilePath: declaredAt.filePath,
 			paramCount: paramCount,
@@ -3639,6 +3644,7 @@ export type IrFunction
 			closureStoreSites: src.closureStoreSites,
 			keepsItsOwnFrame: src.keepsItsOwnFrame,
 			pinsItsThread: src.pinsItsThread,
+			returnsByIndirectJump: src.returnsByIndirectJump,
 			mustBeSplicedAtEverySite: src.mustBeSplicedAtEverySite,
 			sourceFilePath: src.sourceFilePath,
 			paramCount: src.paramCount,
@@ -3987,6 +3993,7 @@ export type IrFunction
 		writer.flag(self.needsGreenThreadStackGuard)
 		writer.flag(self.keepsItsOwnFrame)
 		writer.flag(self.pinsItsThread)
+		writer.flag(self.returnsByIndirectJump)
 		writer.flag(self.mustBeSplicedAtEverySite)
 		cacheWriteClosureCaptureSource(writer, value: self.closureLayout)
 		cacheWriteClosureCaptureSource(writer, value: self.closureFixedElementCount)
@@ -4049,6 +4056,7 @@ export type IrFunction
 		let f_needsGreenThreadStackGuard = try reader.flag()
 		let f_keepsItsOwnFrame = try reader.flag()
 		let f_pinsItsThread = try reader.flag()
+		let f_returnsByIndirectJump = try reader.flag()
 		let f_mustBeSplicedAtEverySite = try reader.flag()
 		let f_closureLayout = try cacheReadClosureCaptureSource(reader)
 		let f_closureFixedElementCount = try cacheReadClosureCaptureSource(reader)
@@ -4096,11 +4104,11 @@ export type IrFunction
 		let f_debugLocalLocations = try cacheReadDebugValueLocationArray(reader)
 		let f_debugLocalRanges = try cacheReadDebugValueRangeArray(reader)
 
-		return Self{name: f_name, visibility: f_visibility, sourceFilePath: f_sourceFilePath, paramCount: f_paramCount, blockRefs: f_blockRefs, nextBlockId: f_nextBlockId, nameLine: f_nameLine, nameColumn: f_nameColumn, closeLine: f_closeLine, closeColumn: f_closeColumn, needsGreenThreadStackGuard: f_needsGreenThreadStackGuard, keepsItsOwnFrame: f_keepsItsOwnFrame, pinsItsThread: f_pinsItsThread, mustBeSplicedAtEverySite: f_mustBeSplicedAtEverySite, closureLayout: f_closureLayout, closureFixedElementCount: f_closureFixedElementCount, closureEnvFields: f_closureEnvFields, closureStoreSites: f_closureStoreSites, maxonReturnType: f_maxonReturnType, maxonParamTypes: f_maxonParamTypes, valueTags: f_valueTags, valueNameIds: f_valueNameIds, valueBrandIds: f_valueBrandIds, valueMintedSole: f_valueMintedSole, filedProvenance: f_filedProvenance, valueColumnsArePrivate: f_valueColumnsArePrivate, valueWitnessIds: f_valueWitnessIds, valueExistentialInstances: f_valueExistentialInstances, valueCallInstances: f_valueCallInstances, literalCastArguments: f_literalCastArguments, deferredArgumentBindings: f_deferredArgumentBindings, conditionalOps: f_conditionalOps, conditionalRefusals: f_conditionalRefusals, existentialFieldStores: f_existentialFieldStores, throwsTypeName: f_throwsTypeName, scope: f_scope, returnType: f_returnType, paramTypes: f_paramTypes, varSlotCount: f_varSlotCount, stackSize: f_stackSize, outgoingArgSize: f_outgoingArgSize, closureSubCounter: f_closureSubCounter, writtenParamMask: f_writtenParamMask, writesThroughParamMask: f_writesThroughParamMask, brandOriginValues: f_brandOriginValues, brandOriginKeys: f_brandOriginKeys, writesModuleStorage: f_writesModuleStorage, bodyWasSkippedAsUnreached: f_bodyWasSkippedAsUnreached, bodySplicedAway: f_bodySplicedAway, usesValueTupleReturn: f_usesValueTupleReturn, reassignedParamMask: f_reassignedParamMask, argumentOverlaps: f_argumentOverlaps, letCastReads: f_letCastReads, paramGuards: f_paramGuards, inlineSites: f_inlineSites, debugLocals: f_debugLocals, ownsItsDebugLocals: f_ownsItsDebugLocals, debugLocalLocations: f_debugLocalLocations, debugLocalRanges: f_debugLocalRanges}
+		return Self{name: f_name, visibility: f_visibility, sourceFilePath: f_sourceFilePath, paramCount: f_paramCount, blockRefs: f_blockRefs, nextBlockId: f_nextBlockId, nameLine: f_nameLine, nameColumn: f_nameColumn, closeLine: f_closeLine, closeColumn: f_closeColumn, needsGreenThreadStackGuard: f_needsGreenThreadStackGuard, keepsItsOwnFrame: f_keepsItsOwnFrame, pinsItsThread: f_pinsItsThread, returnsByIndirectJump: f_returnsByIndirectJump, mustBeSplicedAtEverySite: f_mustBeSplicedAtEverySite, closureLayout: f_closureLayout, closureFixedElementCount: f_closureFixedElementCount, closureEnvFields: f_closureEnvFields, closureStoreSites: f_closureStoreSites, maxonReturnType: f_maxonReturnType, maxonParamTypes: f_maxonParamTypes, valueTags: f_valueTags, valueNameIds: f_valueNameIds, valueBrandIds: f_valueBrandIds, valueMintedSole: f_valueMintedSole, filedProvenance: f_filedProvenance, valueColumnsArePrivate: f_valueColumnsArePrivate, valueWitnessIds: f_valueWitnessIds, valueExistentialInstances: f_valueExistentialInstances, valueCallInstances: f_valueCallInstances, literalCastArguments: f_literalCastArguments, deferredArgumentBindings: f_deferredArgumentBindings, conditionalOps: f_conditionalOps, conditionalRefusals: f_conditionalRefusals, existentialFieldStores: f_existentialFieldStores, throwsTypeName: f_throwsTypeName, scope: f_scope, returnType: f_returnType, paramTypes: f_paramTypes, varSlotCount: f_varSlotCount, stackSize: f_stackSize, outgoingArgSize: f_outgoingArgSize, closureSubCounter: f_closureSubCounter, writtenParamMask: f_writtenParamMask, writesThroughParamMask: f_writesThroughParamMask, brandOriginValues: f_brandOriginValues, brandOriginKeys: f_brandOriginKeys, writesModuleStorage: f_writesModuleStorage, bodyWasSkippedAsUnreached: f_bodyWasSkippedAsUnreached, bodySplicedAway: f_bodySplicedAway, usesValueTupleReturn: f_usesValueTupleReturn, reassignedParamMask: f_reassignedParamMask, argumentOverlaps: f_argumentOverlaps, letCastReads: f_letCastReads, paramGuards: f_paramGuards, inlineSites: f_inlineSites, debugLocals: f_debugLocals, ownsItsDebugLocals: f_ownsItsDebugLocals, debugLocalLocations: f_debugLocalLocations, debugLocalRanges: f_debugLocalRanges}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize472
-		return sizeof(IrFunction) as CacheSize472
+	static function cacheLayoutBytes() returns CacheSize480
+		return sizeof(IrFunction) as CacheSize480
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end

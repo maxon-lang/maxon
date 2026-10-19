@@ -961,6 +961,13 @@ function arm64MulHighOpName(signedness IntegerSignedness) returns String
 	end 's'
 end 'arm64MulHighOpName'
 
+function returnMnemonic(transfer ReturnTransfer) returns String
+	return match transfer 'transfer'
+		returnInstruction gives "ret"
+		indirectJump gives "retIndirect"
+	end 'transfer'
+end 'returnMnemonic'
+
 // Render one TargetOp as `<mnemonic> <operands>` (the ISA namespace is added by the caller).
 // EXHAUSTIVE over every TargetOp variant — see the file header: no bare `default`, so a new variant is
 // a compile error here, not a silent `??`. `cpu` names the module's ISA so the SHARED ops render their
@@ -970,8 +977,8 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch, globalD
 	return match op 'op'
 		prologue(stackSize) gives "prologue {stackSize}"
 		epilogue(stackSize) gives "epilogue {stackSize}"
-		ret or
-		arm64Ret gives "ret"
+		ret(transfer) gives returnMnemonic(transfer)
+		arm64Ret(transfer) gives returnMnemonic(transfer)
 		jmp(targetBlockId) gives "jmp {blockPrintName(targetBlockId, names: names)}"
 		jcc(cond, targetBlockId) gives "jcc {condCodeName(cond)}, {blockPrintName(targetBlockId, names: names)}"
 		movRegImm(dest, value) gives "movRegImm {vregName(dest)}, {value}"

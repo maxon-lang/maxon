@@ -402,7 +402,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   tryerr:
     x64.leaRegRdata rcx, [rip + __str_blob_85]  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:11: /bin/sh runs on every POSIX lane\x0a"
     x64.callDirect mrt_panic
@@ -414,7 +414,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_264]  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
@@ -426,7 +426,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @__np_pd_wait_any {
@@ -605,7 +605,7 @@ func @__np_pd_wait_any {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   npgaclearbody:
     x64.imulRegRegImm32 rax, r13, 16
     x64.leaRegRegImm32 rax, rax, 32
@@ -665,7 +665,7 @@ func @__np_pd_wait_any {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   npholdlost:
     x64.leaRegRdata rcx, [rip + __abort_msg_115]  ; "fatal error: runtime abort 115 (netpollHoldLost)\x0a"
     x64.movRegImm32 rdx, 49
@@ -679,7 +679,7 @@ func @__np_pd_wait_any {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   npgaclearnext:
     x64.leaRegRegImm32 r13, r13, 1
     x64.jmp npgaclearhdr
@@ -696,7 +696,7 @@ func @__np_pd_wait_any {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   npgamarkbody:
     x64.imulRegRegImm32 rax, r13, 16
     x64.leaRegRegImm32 rax, rax, 32
@@ -732,7 +732,7 @@ func @__np_pd_wait_any {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   npgalookbody:
     x64.imulRegRegImm32 rax, r13, 16
     x64.leaRegRegImm32 rax, rax, 32
@@ -802,7 +802,7 @@ func @__np_pd_wait_any {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   npwsnotready:
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, npwsdouble
@@ -822,7 +822,7 @@ func @__np_pd_wait_any {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   npnopd#26:
     x64.leaRegRdata rcx, [rip + __abort_msg_104]  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
     x64.movRegImm32 rdx, 54
@@ -836,7 +836,7 @@ func @__np_pd_wait_any {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   npgalifebody:
     x64.imulRegRegImm32 rax, r13, 16
     x64.leaRegRegImm32 rax, rax, 32
@@ -910,7 +910,7 @@ func @__np_pd_wait_any {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   npnopd#25:
     x64.leaRegRdata rcx, [rip + __abort_msg_104]  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
     x64.movRegImm32 rdx, 54
@@ -924,7 +924,7 @@ func @__np_pd_wait_any {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   __rl_slow#37:
     x64.callDirect __rtlock_enter_slow
     x64.jmp __rl_cont#35
@@ -1269,7 +1269,7 @@ func @main {
     arm64.loadRegSlot x27, slot24
     arm64.loadRegSlot x28, slot25
     arm64.epilogue 224
-    arm64.ret
+    arm64.retIndirect
   tryerr:
     arm64.leaRdata x0, __str_blob_85  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:11: /bin/sh runs on every POSIX lane\x0a"
     arm64.bl mrt_panic
@@ -1285,7 +1285,7 @@ func @main {
     arm64.loadRegSlot x27, slot24
     arm64.loadRegSlot x28, slot25
     arm64.epilogue 224
-    arm64.ret
+    arm64.retIndirect
   __rc_panic:
     arm64.leaRdata x0, __str_blob_264  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
@@ -1301,7 +1301,7 @@ func @main {
     arm64.loadRegSlot x27, slot24
     arm64.loadRegSlot x28, slot25
     arm64.epilogue 224
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @__np_pd_wait_any {
@@ -1503,7 +1503,7 @@ func @__np_pd_wait_any {
     arm64.loadRegSlot x22, slot4
     arm64.loadRegSlot x23, slot5
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   npgaclearbody:
     arm64.lsl x0, x21, 4
     arm64.add x0, x0, 32
@@ -1563,7 +1563,7 @@ func @__np_pd_wait_any {
     arm64.loadRegSlot x22, slot4
     arm64.loadRegSlot x23, slot5
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   npholdlost:
     arm64.leaRdata x0, __abort_msg_115  ; "fatal error: runtime abort 115 (netpollHoldLost)\x0a"
     arm64.movImm x1, 49
@@ -1576,7 +1576,7 @@ func @__np_pd_wait_any {
     arm64.loadRegSlot x22, slot4
     arm64.loadRegSlot x23, slot5
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   npgaclearnext:
     arm64.add x21, x21, 1
     arm64.b npgaclearhdr
@@ -1592,7 +1592,7 @@ func @__np_pd_wait_any {
     arm64.loadRegSlot x22, slot4
     arm64.loadRegSlot x23, slot5
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   npgamarkbody:
     arm64.lsl x0, x21, 4
     arm64.add x0, x0, 32
@@ -1624,7 +1624,7 @@ func @__np_pd_wait_any {
     arm64.loadRegSlot x22, slot4
     arm64.loadRegSlot x23, slot5
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   npgalookbody:
     arm64.lsl x0, x21, 4
     arm64.add x0, x0, 32
@@ -1696,7 +1696,7 @@ func @__np_pd_wait_any {
     arm64.loadRegSlot x22, slot4
     arm64.loadRegSlot x23, slot5
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   npwsnotready:
     arm64.cmp x1, 0
     arm64.b.ne npwsdouble
@@ -1715,7 +1715,7 @@ func @__np_pd_wait_any {
     arm64.loadRegSlot x22, slot4
     arm64.loadRegSlot x23, slot5
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   npnopd#26:
     arm64.leaRdata x0, __abort_msg_104  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
     arm64.movImm x1, 54
@@ -1728,7 +1728,7 @@ func @__np_pd_wait_any {
     arm64.loadRegSlot x22, slot4
     arm64.loadRegSlot x23, slot5
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   npgalifebody:
     arm64.lsl x0, x21, 4
     arm64.add x0, x0, 32
@@ -1803,7 +1803,7 @@ func @__np_pd_wait_any {
     arm64.loadRegSlot x22, slot4
     arm64.loadRegSlot x23, slot5
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   npnopd#25:
     arm64.leaRdata x0, __abort_msg_104  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
     arm64.movImm x1, 54
@@ -1816,7 +1816,7 @@ func @__np_pd_wait_any {
     arm64.loadRegSlot x22, slot4
     arm64.loadRegSlot x23, slot5
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   __rl_slow#37:
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_enter_slow
@@ -2169,7 +2169,7 @@ func @main {
     arm64.loadRegSlot x27, slot24
     arm64.loadRegSlot x28, slot25
     arm64.epilogue 224
-    arm64.ret
+    arm64.retIndirect
   tryerr:
     arm64.leaRdata x0, __str_blob_85  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:11: /bin/sh runs on every POSIX lane\x0a"
     arm64.bl mrt_panic
@@ -2185,7 +2185,7 @@ func @main {
     arm64.loadRegSlot x27, slot24
     arm64.loadRegSlot x28, slot25
     arm64.epilogue 224
-    arm64.ret
+    arm64.retIndirect
   __rc_panic:
     arm64.leaRdata x0, __str_blob_264  ; "panic at subprocess-builtins.posix-a-collected-child-costs-no-timer-poll.test:18: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
@@ -2201,7 +2201,7 @@ func @main {
     arm64.loadRegSlot x27, slot24
     arm64.loadRegSlot x28, slot25
     arm64.epilogue 224
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @__np_pd_wait_any {
@@ -2403,7 +2403,7 @@ func @__np_pd_wait_any {
     arm64.loadRegSlot x22, slot4
     arm64.loadRegSlot x23, slot5
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   npgaclearbody:
     arm64.lsl x0, x21, 4
     arm64.add x0, x0, 32
@@ -2463,7 +2463,7 @@ func @__np_pd_wait_any {
     arm64.loadRegSlot x22, slot4
     arm64.loadRegSlot x23, slot5
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   npholdlost:
     arm64.leaRdata x0, __abort_msg_115  ; "fatal error: runtime abort 115 (netpollHoldLost)\x0a"
     arm64.movImm x1, 49
@@ -2476,7 +2476,7 @@ func @__np_pd_wait_any {
     arm64.loadRegSlot x22, slot4
     arm64.loadRegSlot x23, slot5
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   npgaclearnext:
     arm64.add x21, x21, 1
     arm64.b npgaclearhdr
@@ -2492,7 +2492,7 @@ func @__np_pd_wait_any {
     arm64.loadRegSlot x22, slot4
     arm64.loadRegSlot x23, slot5
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   npgamarkbody:
     arm64.lsl x0, x21, 4
     arm64.add x0, x0, 32
@@ -2524,7 +2524,7 @@ func @__np_pd_wait_any {
     arm64.loadRegSlot x22, slot4
     arm64.loadRegSlot x23, slot5
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   npgalookbody:
     arm64.lsl x0, x21, 4
     arm64.add x0, x0, 32
@@ -2596,7 +2596,7 @@ func @__np_pd_wait_any {
     arm64.loadRegSlot x22, slot4
     arm64.loadRegSlot x23, slot5
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   npwsnotready:
     arm64.cmp x1, 0
     arm64.b.ne npwsdouble
@@ -2615,7 +2615,7 @@ func @__np_pd_wait_any {
     arm64.loadRegSlot x22, slot4
     arm64.loadRegSlot x23, slot5
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   npnopd#26:
     arm64.leaRdata x0, __abort_msg_104  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
     arm64.movImm x1, 54
@@ -2628,7 +2628,7 @@ func @__np_pd_wait_any {
     arm64.loadRegSlot x22, slot4
     arm64.loadRegSlot x23, slot5
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   npgalifebody:
     arm64.lsl x0, x21, 4
     arm64.add x0, x0, 32
@@ -2703,7 +2703,7 @@ func @__np_pd_wait_any {
     arm64.loadRegSlot x22, slot4
     arm64.loadRegSlot x23, slot5
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   npnopd#25:
     arm64.leaRdata x0, __abort_msg_104  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
     arm64.movImm x1, 54
@@ -2716,7 +2716,7 @@ func @__np_pd_wait_any {
     arm64.loadRegSlot x22, slot4
     arm64.loadRegSlot x23, slot5
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   __rl_slow#37:
     arm64.movRegReg x1, x2
     arm64.bl __rtlock_enter_slow

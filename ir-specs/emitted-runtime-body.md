@@ -5817,7 +5817,7 @@ func @deepRecurse {
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   ifcont:
     x64.leaRegRegImm32 rcx, rbx, -1
     x64.callDirect deepRecurse
@@ -5825,7 +5825,7 @@ func @deepRecurse {
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @main {
@@ -5855,7 +5855,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at stack-growth-chunk.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
@@ -5864,7 +5864,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 chunk @__gt_morestack {
@@ -5994,7 +5994,7 @@ func @deepRecurse {
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   ifcont:
     x64.leaRegRegImm32 rcx, rbx, -1
     x64.callDirect deepRecurse
@@ -6002,7 +6002,7 @@ func @deepRecurse {
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @main {
@@ -6031,7 +6031,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at stack-growth-chunk.test:13: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
@@ -6040,7 +6040,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 chunk @__gt_morestack {
@@ -6286,7 +6286,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
@@ -6315,7 +6315,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @Counter.__loop {
@@ -6342,7 +6342,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
@@ -6353,7 +6353,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -6947,7 +6947,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
@@ -6978,7 +6978,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @Counter.__loop {
@@ -7002,7 +7002,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
@@ -7012,7 +7012,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -7631,7 +7631,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
@@ -7660,7 +7660,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @Counter.__loop {
@@ -7687,7 +7687,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
@@ -7698,7 +7698,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -7869,7 +7869,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
@@ -7898,7 +7898,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @Counter.__loop {
@@ -7925,7 +7925,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
@@ -7936,7 +7936,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -8105,7 +8105,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
@@ -8136,7 +8136,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @Counter.__loop {
@@ -8160,7 +8160,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
@@ -8170,7 +8170,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -8340,7 +8340,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
@@ -8371,7 +8371,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @Counter.__loop {
@@ -8395,7 +8395,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
@@ -8405,7 +8405,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -8624,7 +8624,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
@@ -8655,7 +8655,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @Counter.__loop {
@@ -8679,7 +8679,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
@@ -8689,7 +8689,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -8864,7 +8864,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
@@ -8895,7 +8895,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @Counter.__loop {
@@ -8919,7 +8919,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
@@ -8929,7 +8929,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -9154,7 +9154,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
@@ -9183,7 +9183,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @Counter.__loop {
@@ -9210,7 +9210,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
@@ -9221,7 +9221,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -9395,7 +9395,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
@@ -9426,7 +9426,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @Counter.__loop {
@@ -9450,7 +9450,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
@@ -9460,7 +9460,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -13004,7 +13004,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
@@ -13033,7 +13033,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @Counter.__loop {
@@ -13060,7 +13060,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
@@ -13071,7 +13071,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -13219,7 +13219,7 @@ func @__mbox_send {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendwakenotstopped:
     x64.cmpRegImm32 rax, 4
     x64.setccReg equal, rcx
@@ -13298,7 +13298,7 @@ func @__mbox_send {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendqueue:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.cmpRegImm32 rcx, 0
@@ -13537,7 +13537,7 @@ func @__mbox_send {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   cpyftb#33:
     x64.loadRegSlot rsi, slot0
     x64.leaRegRegReg rsi, rsi, rdx
@@ -13592,7 +13592,7 @@ func @__mbox_send {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendstagingmismatch:
     x64.leaRegRdata rcx, [rip + __abort_msg_98]  ; "fatal error: runtime abort 98 (serviceSendProtocolBroken)\x0a"
     x64.movRegImm32 rdx, 58
@@ -13606,7 +13606,7 @@ func @__mbox_send {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendfull:
     x64.movRegImm32 rdx, 0
     x64.loadRegSlot rax, slot1
@@ -13644,7 +13644,7 @@ func @__mbox_send {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendclosed:
     x64.movRegImm32 rdx, 0
     x64.loadRegSlot rax, slot1
@@ -13682,7 +13682,7 @@ func @__mbox_send {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 ```
 ```TargetIr:x64-linux
@@ -13838,7 +13838,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
@@ -13867,7 +13867,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @Counter.__loop {
@@ -13894,7 +13894,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
@@ -13905,7 +13905,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -14053,7 +14053,7 @@ func @__mbox_send {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendwakenotstopped:
     x64.cmpRegImm32 rax, 4
     x64.setccReg equal, rcx
@@ -14132,7 +14132,7 @@ func @__mbox_send {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendqueue:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.cmpRegImm32 rcx, 0
@@ -14371,7 +14371,7 @@ func @__mbox_send {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   cpyftb#33:
     x64.loadRegSlot rsi, slot0
     x64.leaRegRegReg rsi, rsi, rdx
@@ -14426,7 +14426,7 @@ func @__mbox_send {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendstagingmismatch:
     x64.leaRegRdata rcx, [rip + __abort_msg_98]  ; "fatal error: runtime abort 98 (serviceSendProtocolBroken)\x0a"
     x64.movRegImm32 rdx, 58
@@ -14440,7 +14440,7 @@ func @__mbox_send {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendfull:
     x64.movRegImm32 rdx, 0
     x64.loadRegSlot rax, slot1
@@ -14478,7 +14478,7 @@ func @__mbox_send {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendclosed:
     x64.movRegImm32 rdx, 0
     x64.loadRegSlot rax, slot1
@@ -14516,7 +14516,7 @@ func @__mbox_send {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 ```
 ```TargetIr:arm64-macos
@@ -14666,7 +14666,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
@@ -14697,7 +14697,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @Counter.__loop {
@@ -14721,7 +14721,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
@@ -14731,7 +14731,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -14892,7 +14892,7 @@ func @__mbox_send {
     arm64.loadRegSlot x25, slot7
     arm64.loadRegSlot x26, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   sendwakenotstopped:
     arm64.cmp x0, 4
     arm64.cset x1, eq
@@ -14986,7 +14986,7 @@ func @__mbox_send {
     arm64.loadRegSlot x25, slot7
     arm64.loadRegSlot x26, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   sendqueue:
     arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.cmp x1, 0
@@ -15227,7 +15227,7 @@ func @__mbox_send {
     arm64.loadRegSlot x25, slot7
     arm64.loadRegSlot x26, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   cpyftb#33:
     arm64.add x3, x20, x2
     arm64.loadRegBaseDisp.byte x3, [x3 + 0]
@@ -15281,7 +15281,7 @@ func @__mbox_send {
     arm64.loadRegSlot x25, slot7
     arm64.loadRegSlot x26, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   sendstagingmismatch:
     arm64.leaRdata x0, __abort_msg_98  ; "fatal error: runtime abort 98 (serviceSendProtocolBroken)\x0a"
     arm64.movImm x1, 58
@@ -15297,7 +15297,7 @@ func @__mbox_send {
     arm64.loadRegSlot x25, slot7
     arm64.loadRegSlot x26, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   sendfull:
     arm64.movImm x0, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x23], x0
@@ -15343,7 +15343,7 @@ func @__mbox_send {
     arm64.loadRegSlot x25, slot7
     arm64.loadRegSlot x26, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   sendclosed:
     arm64.movImm x0, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x23], x0
@@ -15389,7 +15389,7 @@ func @__mbox_send {
     arm64.loadRegSlot x25, slot7
     arm64.loadRegSlot x26, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
 }
 ```
 ```TargetIr:arm64-linux
@@ -15543,7 +15543,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
@@ -15574,7 +15574,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @Counter.__loop {
@@ -15598,7 +15598,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
@@ -15608,7 +15608,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -15769,7 +15769,7 @@ func @__mbox_send {
     arm64.loadRegSlot x25, slot7
     arm64.loadRegSlot x26, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   sendwakenotstopped:
     arm64.cmp x0, 4
     arm64.cset x1, eq
@@ -15863,7 +15863,7 @@ func @__mbox_send {
     arm64.loadRegSlot x25, slot7
     arm64.loadRegSlot x26, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   sendqueue:
     arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.cmp x1, 0
@@ -16104,7 +16104,7 @@ func @__mbox_send {
     arm64.loadRegSlot x25, slot7
     arm64.loadRegSlot x26, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   cpyftb#33:
     arm64.add x3, x20, x2
     arm64.loadRegBaseDisp.byte x3, [x3 + 0]
@@ -16158,7 +16158,7 @@ func @__mbox_send {
     arm64.loadRegSlot x25, slot7
     arm64.loadRegSlot x26, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   sendstagingmismatch:
     arm64.leaRdata x0, __abort_msg_98  ; "fatal error: runtime abort 98 (serviceSendProtocolBroken)\x0a"
     arm64.movImm x1, 58
@@ -16174,7 +16174,7 @@ func @__mbox_send {
     arm64.loadRegSlot x25, slot7
     arm64.loadRegSlot x26, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   sendfull:
     arm64.movImm x0, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x23], x0
@@ -16220,7 +16220,7 @@ func @__mbox_send {
     arm64.loadRegSlot x25, slot7
     arm64.loadRegSlot x26, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   sendclosed:
     arm64.movImm x0, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x23], x0
@@ -16266,7 +16266,7 @@ func @__mbox_send {
     arm64.loadRegSlot x25, slot7
     arm64.loadRegSlot x26, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
 }
 ```
 
@@ -16483,7 +16483,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
@@ -16512,7 +16512,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @Counter.__loop {
@@ -16539,7 +16539,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
@@ -16550,7 +16550,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -16911,7 +16911,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
@@ -16940,7 +16940,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @Counter.__loop {
@@ -16967,7 +16967,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
@@ -16978,7 +16978,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -17333,7 +17333,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
@@ -17364,7 +17364,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @Counter.__loop {
@@ -17388,7 +17388,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
@@ -17398,7 +17398,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -17774,7 +17774,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
@@ -17805,7 +17805,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @Counter.__loop {
@@ -17829,7 +17829,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
@@ -17839,7 +17839,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -18275,7 +18275,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
@@ -18304,7 +18304,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @Counter.__loop {
@@ -18331,7 +18331,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
@@ -18342,7 +18342,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -18424,7 +18424,7 @@ func @__mbox_recv {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   recvdrained:
     x64.movRegImm32 rdx, 0
     x64.xchg8 [r12], rdx <- rdx
@@ -18457,7 +18457,7 @@ func @__mbox_recv {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   recvpop:
     x64.loadRegBaseDisp.word64 r13, [rbx + 0]
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
@@ -18836,7 +18836,7 @@ func @__mbox_recv {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   tmadvance:
     x64.leaRegRegImm32 rsi, rsi, 1
     x64.jmp tmscanhdr
@@ -18908,7 +18908,7 @@ func @__mbox_recv {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   cpyftb#22:
     x64.leaRegRegReg r10, rdi, r9
     x64.loadRegBaseDisp.byte r10, [r10 + 0]
@@ -19112,7 +19112,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
@@ -19141,7 +19141,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @Counter.__loop {
@@ -19168,7 +19168,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
@@ -19179,7 +19179,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -19261,7 +19261,7 @@ func @__mbox_recv {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   recvdrained:
     x64.movRegImm32 rdx, 0
     x64.xchg8 [r12], rdx <- rdx
@@ -19294,7 +19294,7 @@ func @__mbox_recv {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   recvpop:
     x64.loadRegBaseDisp.word64 r13, [rbx + 0]
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
@@ -19673,7 +19673,7 @@ func @__mbox_recv {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   tmadvance:
     x64.leaRegRegImm32 rsi, rsi, 1
     x64.jmp tmscanhdr
@@ -19745,7 +19745,7 @@ func @__mbox_recv {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   cpyftb#22:
     x64.leaRegRegReg r10, rdi, r9
     x64.loadRegBaseDisp.byte r10, [r10 + 0]
@@ -19943,7 +19943,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
@@ -19974,7 +19974,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @Counter.__loop {
@@ -19998,7 +19998,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
@@ -20008,7 +20008,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -20105,7 +20105,7 @@ func @__mbox_recv {
     arm64.loadRegSlot x24, slot7
     arm64.loadRegSlot x25, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   recvdrained:
     arm64.movImm x0, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x20], x0
@@ -20147,7 +20147,7 @@ func @__mbox_recv {
     arm64.loadRegSlot x24, slot7
     arm64.loadRegSlot x25, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   recvpop:
     arm64.loadRegBaseDisp.word64 x22, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x19 + 16]
@@ -20527,7 +20527,7 @@ func @__mbox_recv {
     arm64.loadRegSlot x24, slot7
     arm64.loadRegSlot x25, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   tmadvance:
     arm64.add x3, x3, 1
     arm64.b tmscanhdr
@@ -20603,7 +20603,7 @@ func @__mbox_recv {
     arm64.loadRegSlot x24, slot7
     arm64.loadRegSlot x25, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   cpyftb#22:
     arm64.add x7, x4, x6
     arm64.loadRegBaseDisp.byte x7, [x7 + 0]
@@ -20803,7 +20803,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
@@ -20834,7 +20834,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @Counter.__loop {
@@ -20858,7 +20858,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
@@ -20868,7 +20868,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -20965,7 +20965,7 @@ func @__mbox_recv {
     arm64.loadRegSlot x24, slot7
     arm64.loadRegSlot x25, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   recvdrained:
     arm64.movImm x0, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x20], x0
@@ -21007,7 +21007,7 @@ func @__mbox_recv {
     arm64.loadRegSlot x24, slot7
     arm64.loadRegSlot x25, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   recvpop:
     arm64.loadRegBaseDisp.word64 x22, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x19 + 16]
@@ -21387,7 +21387,7 @@ func @__mbox_recv {
     arm64.loadRegSlot x24, slot7
     arm64.loadRegSlot x25, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   tmadvance:
     arm64.add x3, x3, 1
     arm64.b tmscanhdr
@@ -21463,7 +21463,7 @@ func @__mbox_recv {
     arm64.loadRegSlot x24, slot7
     arm64.loadRegSlot x25, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   cpyftb#22:
     arm64.add x7, x4, x6
     arm64.loadRegBaseDisp.byte x7, [x7 + 0]
@@ -21722,7 +21722,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
@@ -21751,7 +21751,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @Counter.__loop {
@@ -21778,7 +21778,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
@@ -21789,7 +21789,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -21937,7 +21937,7 @@ func @__mbox_send {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendwakenotstopped:
     x64.cmpRegImm32 rax, 4
     x64.setccReg equal, rcx
@@ -22016,7 +22016,7 @@ func @__mbox_send {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendqueue:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.cmpRegImm32 rcx, 0
@@ -22255,7 +22255,7 @@ func @__mbox_send {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   cpyftb#33:
     x64.loadRegSlot rsi, slot0
     x64.leaRegRegReg rsi, rsi, rdx
@@ -22310,7 +22310,7 @@ func @__mbox_send {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendstagingmismatch:
     x64.leaRegRdata rcx, [rip + __abort_msg_98]  ; "fatal error: runtime abort 98 (serviceSendProtocolBroken)\x0a"
     x64.movRegImm32 rdx, 58
@@ -22324,7 +22324,7 @@ func @__mbox_send {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendfull:
     x64.movRegImm32 rdx, 0
     x64.loadRegSlot rax, slot1
@@ -22362,7 +22362,7 @@ func @__mbox_send {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendclosed:
     x64.movRegImm32 rdx, 0
     x64.loadRegSlot rax, slot1
@@ -22400,7 +22400,7 @@ func @__mbox_send {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @__mbox_recv {
@@ -22472,7 +22472,7 @@ func @__mbox_recv {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   recvdrained:
     x64.movRegImm32 rdx, 0
     x64.xchg8 [r12], rdx <- rdx
@@ -22505,7 +22505,7 @@ func @__mbox_recv {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   recvpop:
     x64.loadRegBaseDisp.word64 r13, [rbx + 0]
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
@@ -22884,7 +22884,7 @@ func @__mbox_recv {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   tmadvance:
     x64.leaRegRegImm32 rsi, rsi, 1
     x64.jmp tmscanhdr
@@ -22956,7 +22956,7 @@ func @__mbox_recv {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   cpyftb#22:
     x64.leaRegRegReg r10, rdi, r9
     x64.loadRegBaseDisp.byte r10, [r10 + 0]
@@ -23160,7 +23160,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
@@ -23189,7 +23189,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @Counter.__loop {
@@ -23216,7 +23216,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
@@ -23227,7 +23227,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -23375,7 +23375,7 @@ func @__mbox_send {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendwakenotstopped:
     x64.cmpRegImm32 rax, 4
     x64.setccReg equal, rcx
@@ -23454,7 +23454,7 @@ func @__mbox_send {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendqueue:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.cmpRegImm32 rcx, 0
@@ -23693,7 +23693,7 @@ func @__mbox_send {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   cpyftb#33:
     x64.loadRegSlot rsi, slot0
     x64.leaRegRegReg rsi, rsi, rdx
@@ -23748,7 +23748,7 @@ func @__mbox_send {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendstagingmismatch:
     x64.leaRegRdata rcx, [rip + __abort_msg_98]  ; "fatal error: runtime abort 98 (serviceSendProtocolBroken)\x0a"
     x64.movRegImm32 rdx, 58
@@ -23762,7 +23762,7 @@ func @__mbox_send {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendfull:
     x64.movRegImm32 rdx, 0
     x64.loadRegSlot rax, slot1
@@ -23800,7 +23800,7 @@ func @__mbox_send {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendclosed:
     x64.movRegImm32 rdx, 0
     x64.loadRegSlot rax, slot1
@@ -23838,7 +23838,7 @@ func @__mbox_send {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @__mbox_recv {
@@ -23910,7 +23910,7 @@ func @__mbox_recv {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   recvdrained:
     x64.movRegImm32 rdx, 0
     x64.xchg8 [r12], rdx <- rdx
@@ -23943,7 +23943,7 @@ func @__mbox_recv {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   recvpop:
     x64.loadRegBaseDisp.word64 r13, [rbx + 0]
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
@@ -24322,7 +24322,7 @@ func @__mbox_recv {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   tmadvance:
     x64.leaRegRegImm32 rsi, rsi, 1
     x64.jmp tmscanhdr
@@ -24394,7 +24394,7 @@ func @__mbox_recv {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   cpyftb#22:
     x64.leaRegRegReg r10, rdi, r9
     x64.loadRegBaseDisp.byte r10, [r10 + 0]
@@ -24592,7 +24592,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
@@ -24623,7 +24623,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @Counter.__loop {
@@ -24647,7 +24647,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
@@ -24657,7 +24657,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -24818,7 +24818,7 @@ func @__mbox_send {
     arm64.loadRegSlot x25, slot7
     arm64.loadRegSlot x26, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   sendwakenotstopped:
     arm64.cmp x0, 4
     arm64.cset x1, eq
@@ -24912,7 +24912,7 @@ func @__mbox_send {
     arm64.loadRegSlot x25, slot7
     arm64.loadRegSlot x26, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   sendqueue:
     arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.cmp x1, 0
@@ -25153,7 +25153,7 @@ func @__mbox_send {
     arm64.loadRegSlot x25, slot7
     arm64.loadRegSlot x26, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   cpyftb#33:
     arm64.add x3, x20, x2
     arm64.loadRegBaseDisp.byte x3, [x3 + 0]
@@ -25207,7 +25207,7 @@ func @__mbox_send {
     arm64.loadRegSlot x25, slot7
     arm64.loadRegSlot x26, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   sendstagingmismatch:
     arm64.leaRdata x0, __abort_msg_98  ; "fatal error: runtime abort 98 (serviceSendProtocolBroken)\x0a"
     arm64.movImm x1, 58
@@ -25223,7 +25223,7 @@ func @__mbox_send {
     arm64.loadRegSlot x25, slot7
     arm64.loadRegSlot x26, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   sendfull:
     arm64.movImm x0, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x23], x0
@@ -25269,7 +25269,7 @@ func @__mbox_send {
     arm64.loadRegSlot x25, slot7
     arm64.loadRegSlot x26, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   sendclosed:
     arm64.movImm x0, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x23], x0
@@ -25315,7 +25315,7 @@ func @__mbox_send {
     arm64.loadRegSlot x25, slot7
     arm64.loadRegSlot x26, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @__mbox_recv {
@@ -25400,7 +25400,7 @@ func @__mbox_recv {
     arm64.loadRegSlot x24, slot7
     arm64.loadRegSlot x25, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   recvdrained:
     arm64.movImm x0, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x20], x0
@@ -25442,7 +25442,7 @@ func @__mbox_recv {
     arm64.loadRegSlot x24, slot7
     arm64.loadRegSlot x25, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   recvpop:
     arm64.loadRegBaseDisp.word64 x22, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x19 + 16]
@@ -25822,7 +25822,7 @@ func @__mbox_recv {
     arm64.loadRegSlot x24, slot7
     arm64.loadRegSlot x25, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   tmadvance:
     arm64.add x3, x3, 1
     arm64.b tmscanhdr
@@ -25898,7 +25898,7 @@ func @__mbox_recv {
     arm64.loadRegSlot x24, slot7
     arm64.loadRegSlot x25, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   cpyftb#22:
     arm64.add x7, x4, x6
     arm64.loadRegBaseDisp.byte x7, [x7 + 0]
@@ -26098,7 +26098,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
@@ -26129,7 +26129,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @Counter.__loop {
@@ -26153,7 +26153,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
@@ -26163,7 +26163,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -26324,7 +26324,7 @@ func @__mbox_send {
     arm64.loadRegSlot x25, slot7
     arm64.loadRegSlot x26, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   sendwakenotstopped:
     arm64.cmp x0, 4
     arm64.cset x1, eq
@@ -26418,7 +26418,7 @@ func @__mbox_send {
     arm64.loadRegSlot x25, slot7
     arm64.loadRegSlot x26, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   sendqueue:
     arm64.loadRegBaseDisp.word64 x1, [x19 + 0]
     arm64.cmp x1, 0
@@ -26659,7 +26659,7 @@ func @__mbox_send {
     arm64.loadRegSlot x25, slot7
     arm64.loadRegSlot x26, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   cpyftb#33:
     arm64.add x3, x20, x2
     arm64.loadRegBaseDisp.byte x3, [x3 + 0]
@@ -26713,7 +26713,7 @@ func @__mbox_send {
     arm64.loadRegSlot x25, slot7
     arm64.loadRegSlot x26, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   sendstagingmismatch:
     arm64.leaRdata x0, __abort_msg_98  ; "fatal error: runtime abort 98 (serviceSendProtocolBroken)\x0a"
     arm64.movImm x1, 58
@@ -26729,7 +26729,7 @@ func @__mbox_send {
     arm64.loadRegSlot x25, slot7
     arm64.loadRegSlot x26, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   sendfull:
     arm64.movImm x0, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x23], x0
@@ -26775,7 +26775,7 @@ func @__mbox_send {
     arm64.loadRegSlot x25, slot7
     arm64.loadRegSlot x26, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   sendclosed:
     arm64.movImm x0, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x23], x0
@@ -26821,7 +26821,7 @@ func @__mbox_send {
     arm64.loadRegSlot x25, slot7
     arm64.loadRegSlot x26, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @__mbox_recv {
@@ -26906,7 +26906,7 @@ func @__mbox_recv {
     arm64.loadRegSlot x24, slot7
     arm64.loadRegSlot x25, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   recvdrained:
     arm64.movImm x0, 0
     arm64.arm64AtomicRmw.exchangeByte x1, [x20], x0
@@ -26948,7 +26948,7 @@ func @__mbox_recv {
     arm64.loadRegSlot x24, slot7
     arm64.loadRegSlot x25, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   recvpop:
     arm64.loadRegBaseDisp.word64 x22, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x1, [x19 + 16]
@@ -27328,7 +27328,7 @@ func @__mbox_recv {
     arm64.loadRegSlot x24, slot7
     arm64.loadRegSlot x25, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   tmadvance:
     arm64.add x3, x3, 1
     arm64.b tmscanhdr
@@ -27404,7 +27404,7 @@ func @__mbox_recv {
     arm64.loadRegSlot x24, slot7
     arm64.loadRegSlot x25, slot8
     arm64.epilogue 96
-    arm64.ret
+    arm64.retIndirect
   cpyftb#22:
     arm64.add x7, x4, x6
     arm64.loadRegBaseDisp.byte x7, [x7 + 0]
@@ -27659,7 +27659,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
@@ -27688,7 +27688,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @Counter.__loop {
@@ -27715,7 +27715,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
@@ -27726,7 +27726,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -28511,7 +28511,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
@@ -28540,7 +28540,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @Counter.__loop {
@@ -28567,7 +28567,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
@@ -28578,7 +28578,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -29233,7 +29233,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
@@ -29262,7 +29262,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @Counter.__loop {
@@ -29289,7 +29289,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
@@ -29300,7 +29300,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -29951,7 +29951,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
@@ -29982,7 +29982,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @Counter.__loop {
@@ -30006,7 +30006,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
@@ -30016,7 +30016,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -30748,7 +30748,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
@@ -30779,7 +30779,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @Counter.__loop {
@@ -30803,7 +30803,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
@@ -30813,7 +30813,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -31592,7 +31592,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
@@ -31621,7 +31621,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @Counter.__loop {
@@ -31648,7 +31648,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
@@ -31659,7 +31659,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -31862,7 +31862,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
@@ -31891,7 +31891,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @Counter.__loop {
@@ -31918,7 +31918,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
@@ -31929,7 +31929,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -32126,7 +32126,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
@@ -32157,7 +32157,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @Counter.__loop {
@@ -32181,7 +32181,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
@@ -32191,7 +32191,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -32390,7 +32390,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
@@ -32421,7 +32421,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @Counter.__loop {
@@ -32445,7 +32445,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
@@ -32455,7 +32455,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -32731,7 +32731,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
@@ -32760,7 +32760,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @Counter.__loop {
@@ -32787,7 +32787,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
@@ -32798,7 +32798,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -33676,7 +33676,7 @@ func @__gt_run_strand {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   strandsort:
     x64.cmpRegImm32 r15, -1
     x64.jcc equal, strandhandedoff
@@ -33905,7 +33905,7 @@ func @__gt_run_strand {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   strandnotpreempt:
     x64.cmpRegImm32 rax, 4
     x64.jcc notEqual, strandnotmailbox
@@ -34146,7 +34146,7 @@ func @__gt_run_strand {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @__gt_register_park {
@@ -34767,7 +34767,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
@@ -34796,7 +34796,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @Counter.__loop {
@@ -34823,7 +34823,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
@@ -34834,7 +34834,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -35708,7 +35708,7 @@ func @__gt_run_strand {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   strandsort:
     x64.cmpRegImm32 r15, -1
     x64.jcc equal, strandhandedoff
@@ -35937,7 +35937,7 @@ func @__gt_run_strand {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   strandnotpreempt:
     x64.cmpRegImm32 rax, 4
     x64.jcc notEqual, strandnotmailbox
@@ -36178,7 +36178,7 @@ func @__gt_run_strand {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @__gt_register_park {
@@ -36793,7 +36793,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
@@ -36824,7 +36824,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @Counter.__loop {
@@ -36848,7 +36848,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
@@ -36858,7 +36858,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -37839,7 +37839,7 @@ func @__gt_run_strand {
     arm64.loadRegSlot x25, slot6
     arm64.loadRegSlot x26, slot7
     arm64.epilogue 80
-    arm64.ret
+    arm64.retIndirect
   strandsort:
     arm64.cmp x23, -1
     arm64.b.eq strandhandedoff
@@ -38090,7 +38090,7 @@ func @__gt_run_strand {
     arm64.loadRegSlot x25, slot6
     arm64.loadRegSlot x26, slot7
     arm64.epilogue 80
-    arm64.ret
+    arm64.retIndirect
   strandnotpreempt:
     arm64.cmp x0, 4
     arm64.b.ne strandnotmailbox
@@ -38362,7 +38362,7 @@ func @__gt_run_strand {
     arm64.loadRegSlot x25, slot6
     arm64.loadRegSlot x26, slot7
     arm64.epilogue 80
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @__gt_register_park {
@@ -39018,7 +39018,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
@@ -39049,7 +39049,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @Counter.__loop {
@@ -39073,7 +39073,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
@@ -39083,7 +39083,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -40064,7 +40064,7 @@ func @__gt_run_strand {
     arm64.loadRegSlot x25, slot6
     arm64.loadRegSlot x26, slot7
     arm64.epilogue 80
-    arm64.ret
+    arm64.retIndirect
   strandsort:
     arm64.cmp x23, -1
     arm64.b.eq strandhandedoff
@@ -40315,7 +40315,7 @@ func @__gt_run_strand {
     arm64.loadRegSlot x25, slot6
     arm64.loadRegSlot x26, slot7
     arm64.epilogue 80
-    arm64.ret
+    arm64.retIndirect
   strandnotpreempt:
     arm64.cmp x0, 4
     arm64.b.ne strandnotmailbox
@@ -40587,7 +40587,7 @@ func @__gt_run_strand {
     arm64.loadRegSlot x25, slot6
     arm64.loadRegSlot x26, slot7
     arm64.epilogue 80
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @__gt_register_park {
@@ -41300,7 +41300,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
@@ -41329,7 +41329,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @Counter.__loop {
@@ -41356,7 +41356,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
@@ -41367,7 +41367,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -41559,7 +41559,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
@@ -41588,7 +41588,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @Counter.__loop {
@@ -41615,7 +41615,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
@@ -41626,7 +41626,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -41812,7 +41812,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
@@ -41843,7 +41843,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @Counter.__loop {
@@ -41867,7 +41867,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
@@ -41877,7 +41877,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -42066,7 +42066,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
@@ -42097,7 +42097,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @Counter.__loop {
@@ -42121,7 +42121,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
@@ -42131,7 +42131,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -42381,7 +42381,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
@@ -42410,7 +42410,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @Counter.__loop {
@@ -42437,7 +42437,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
@@ -42448,7 +42448,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -43250,7 +43250,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
@@ -43279,7 +43279,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @Counter.__loop {
@@ -43306,7 +43306,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
@@ -43317,7 +43317,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -44113,7 +44113,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
@@ -44144,7 +44144,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @Counter.__loop {
@@ -44168,7 +44168,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
@@ -44178,7 +44178,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -45055,7 +45055,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
@@ -45086,7 +45086,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @Counter.__loop {
@@ -45110,7 +45110,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
@@ -45120,7 +45120,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -46072,7 +46072,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
@@ -46101,7 +46101,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @Counter.__loop {
@@ -46128,7 +46128,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
@@ -46139,7 +46139,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -47401,7 +47401,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
@@ -47430,7 +47430,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @Counter.__loop {
@@ -47457,7 +47457,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
@@ -47468,7 +47468,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -48726,7 +48726,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
@@ -48757,7 +48757,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @Counter.__loop {
@@ -48781,7 +48781,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
@@ -48791,7 +48791,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -50201,7 +50201,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
@@ -50232,7 +50232,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @Counter.__loop {
@@ -50256,7 +50256,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
@@ -50266,7 +50266,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -51740,7 +51740,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
@@ -51769,7 +51769,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @Counter.__loop {
@@ -51796,7 +51796,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
@@ -51807,7 +51807,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -52457,7 +52457,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
@@ -52486,7 +52486,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @Counter.__loop {
@@ -52513,7 +52513,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
@@ -52524,7 +52524,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -53168,7 +53168,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
@@ -53199,7 +53199,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @Counter.__loop {
@@ -53223,7 +53223,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
@@ -53233,7 +53233,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -53897,7 +53897,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
@@ -53928,7 +53928,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @Counter.__loop {
@@ -53952,7 +53952,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
@@ -53962,7 +53962,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -54678,7 +54678,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
@@ -54707,7 +54707,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @Counter.__loop {
@@ -54734,7 +54734,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
@@ -54745,7 +54745,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -54815,7 +54815,7 @@ func @__svc_spawn {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @__mbox_handle_destruct {
@@ -55045,7 +55045,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
@@ -55074,7 +55074,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @Counter.__loop {
@@ -55101,7 +55101,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
@@ -55112,7 +55112,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -55182,7 +55182,7 @@ func @__svc_spawn {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @__mbox_handle_destruct {
@@ -55406,7 +55406,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
@@ -55437,7 +55437,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @Counter.__loop {
@@ -55461,7 +55461,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
@@ -55471,7 +55471,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -55536,7 +55536,7 @@ func @__svc_spawn {
     arm64.loadRegSlot x22, slot3
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @__mbox_handle_destruct {
@@ -55763,7 +55763,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
@@ -55794,7 +55794,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @Counter.__loop {
@@ -55818,7 +55818,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
@@ -55828,7 +55828,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -55893,7 +55893,7 @@ func @__svc_spawn {
     arm64.loadRegSlot x22, slot3
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @__mbox_handle_destruct {
@@ -56107,7 +56107,7 @@ func @twice {
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @main {
@@ -56137,7 +56137,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-spawn-from-a-record-with-a-stack-allocates-none.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
@@ -56146,7 +56146,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @__gt_free_get {
@@ -56669,7 +56669,7 @@ func @__gt_spawn {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   spawnpreempt:
     x64.storeSlotReg slot0, r8
     x64.callDirect __gt_preempt
@@ -56771,7 +56771,7 @@ func @twice {
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @main {
@@ -56800,7 +56800,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-spawn-from-a-record-with-a-stack-allocates-none.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
@@ -56809,7 +56809,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @__gt_free_get {
@@ -57334,7 +57334,7 @@ func @__gt_spawn {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   spawnpreempt:
     x64.storeSlotReg slot0, r8
     x64.callDirect __gt_preempt
@@ -57430,7 +57430,7 @@ func @twice {
     arm64.lsl x0, x19, 1
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @main {
@@ -57456,7 +57456,7 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-spawn-from-a-record-with-a-stack-allocates-none.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
@@ -57464,7 +57464,7 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @__gt_free_get {
@@ -58065,7 +58065,7 @@ func @__gt_spawn {
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
     arm64.epilogue 48
-    arm64.ret
+    arm64.retIndirect
   spawnpreempt:
     arm64.storeSlotReg slot0, x4
     arm64.bl __gt_preempt
@@ -58164,7 +58164,7 @@ func @twice {
     arm64.lsl x0, x19, 1
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @main {
@@ -58190,7 +58190,7 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-spawn-from-a-record-with-a-stack-allocates-none.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
@@ -58198,7 +58198,7 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @__gt_free_get {
@@ -58799,7 +58799,7 @@ func @__gt_spawn {
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
     arm64.epilogue 48
-    arm64.ret
+    arm64.retIndirect
   spawnpreempt:
     arm64.storeSlotReg slot0, x4
     arm64.bl __gt_preempt
@@ -59024,7 +59024,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
@@ -59053,7 +59053,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @Counter.__loop {
@@ -59080,7 +59080,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
@@ -59091,7 +59091,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -59858,7 +59858,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
@@ -59887,7 +59887,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @Counter.__loop {
@@ -59914,7 +59914,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
@@ -59925,7 +59925,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -60691,7 +60691,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
@@ -60722,7 +60722,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @Counter.__loop {
@@ -60746,7 +60746,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
@@ -60756,7 +60756,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -61600,7 +61600,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
@@ -61631,7 +61631,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @Counter.__loop {
@@ -61655,7 +61655,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
@@ -61665,7 +61665,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -62499,7 +62499,7 @@ func @twice {
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @main {
@@ -62529,7 +62529,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-completion-steps-no-global-counter-for-the-seed-or-the-trace.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
@@ -62538,7 +62538,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @__gt_spawn {
@@ -62601,7 +62601,7 @@ func @__gt_spawn {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   spawnpreempt:
     x64.storeSlotReg slot0, r8
     x64.callDirect __gt_preempt
@@ -63414,7 +63414,7 @@ func @twice {
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @main {
@@ -63443,7 +63443,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-completion-steps-no-global-counter-for-the-seed-or-the-trace.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
@@ -63452,7 +63452,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @__gt_spawn {
@@ -63515,7 +63515,7 @@ func @__gt_spawn {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   spawnpreempt:
     x64.storeSlotReg slot0, r8
     x64.callDirect __gt_preempt
@@ -64322,7 +64322,7 @@ func @twice {
     arm64.lsl x0, x19, 1
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @main {
@@ -64348,7 +64348,7 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-completion-steps-no-global-counter-for-the-seed-or-the-trace.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
@@ -64356,7 +64356,7 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @__gt_spawn {
@@ -64424,7 +64424,7 @@ func @__gt_spawn {
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
     arm64.epilogue 48
-    arm64.ret
+    arm64.retIndirect
   spawnpreempt:
     arm64.storeSlotReg slot0, x4
     arm64.bl __gt_preempt
@@ -65303,7 +65303,7 @@ func @twice {
     arm64.lsl x0, x19, 1
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @main {
@@ -65329,7 +65329,7 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-completion-steps-no-global-counter-for-the-seed-or-the-trace.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
@@ -65337,7 +65337,7 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @__gt_spawn {
@@ -65405,7 +65405,7 @@ func @__gt_spawn {
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
     arm64.epilogue 48
-    arm64.ret
+    arm64.retIndirect
   spawnpreempt:
     arm64.storeSlotReg slot0, x4
     arm64.bl __gt_preempt
@@ -66395,7 +66395,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
@@ -66424,7 +66424,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @Counter.__loop {
@@ -66451,7 +66451,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
@@ -66462,7 +66462,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -67126,7 +67126,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
@@ -67155,7 +67155,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @Counter.__loop {
@@ -67182,7 +67182,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_4
@@ -67193,7 +67193,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]
@@ -67855,7 +67855,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
@@ -67886,7 +67886,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @Counter.__loop {
@@ -67910,7 +67910,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
@@ -67920,7 +67920,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -68655,7 +68655,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   sendrefused:
     arm64.storeSlotReg slot0, x0
     arm64.movRegReg x0, x21
@@ -68686,7 +68686,7 @@ func @main {
     arm64.loadRegSlot x21, slot3
     arm64.loadRegSlot x22, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @Counter.__loop {
@@ -68710,7 +68710,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=unknowntag [[0]=next] @__jumptable_4
@@ -68720,7 +68720,7 @@ func @Counter.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   next:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 8]
     arm64.loadRegBaseDisp.word64 x0, [x0 + 16]
@@ -69440,7 +69440,7 @@ func @twice {
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @main {
@@ -69470,7 +69470,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-completion-readies-its-strands-owner-with-no-record-lock.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
@@ -69479,7 +69479,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @__gt_runner_done {
@@ -70211,7 +70211,7 @@ func @twice {
     x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @main {
@@ -70240,7 +70240,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_1]  ; "panic at a-completion-readies-its-strands-owner-with-no-record-lock.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
     x64.callDirect mrt_panic
@@ -70249,7 +70249,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @__gt_runner_done {
@@ -70975,7 +70975,7 @@ func @twice {
     arm64.lsl x0, x19, 1
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @main {
@@ -71001,7 +71001,7 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-completion-readies-its-strands-owner-with-no-record-lock.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
@@ -71009,7 +71009,7 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @__gt_runner_done {
@@ -71814,7 +71814,7 @@ func @twice {
     arm64.lsl x0, x19, 1
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @main {
@@ -71840,7 +71840,7 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   __rc_panic:
     arm64.leaRdata x0, __str_blob_1  ; "panic at a-completion-readies-its-strands-owner-with-no-record-lock.test:14: Range check failed: value outside typealias 'ExitCode'\x0a"
     arm64.bl mrt_panic
@@ -71848,7 +71848,7 @@ func @main {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @__gt_runner_done {
@@ -72775,7 +72775,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendrefused:
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r13
@@ -72804,7 +72804,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @Counter.__loop {
@@ -72831,7 +72831,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=unknowntag [[0]=next] @__jumptable_6
@@ -72842,7 +72842,7 @@ func @Counter.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   next:
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.loadRegBaseDisp.word64 rcx, [r8 + 16]

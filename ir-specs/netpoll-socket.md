@@ -191,7 +191,7 @@ func @holdSilently {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   tryok#1:
     x64.movRegImm32 rdx, 1024
     x64.movRegReg rcx, rbx
@@ -210,7 +210,7 @@ func @holdSilently {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @readPastTheDeadline {
@@ -241,7 +241,7 @@ func @readPastTheDeadline {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   __il_cont#13:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r8
@@ -259,7 +259,7 @@ func @readPastTheDeadline {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   tryok#1:
     x64.movRegImm32 rdx, 300
     x64.movRegReg rcx, rbx
@@ -279,7 +279,7 @@ func @readPastTheDeadline {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   tryok#3:
     x64.movRegImm32 r12, 0
     x64.callDirect Clock.nowMs
@@ -308,7 +308,7 @@ func @readPastTheDeadline {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   tryok#6:
     x64.movRegReg rcx, r8
     x64.callDirect __str_decref
@@ -435,7 +435,7 @@ func @readPastTheDeadline {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_33]  ; "panic at Clock.maxon:52: Range check failed: value outside typealias 'DurationMs'\x0a"
     x64.callDirect mrt_panic
@@ -448,7 +448,7 @@ func @readPastTheDeadline {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @main {
@@ -472,7 +472,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   __il_body:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_own
@@ -508,7 +508,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   __il_cont:
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_TcpListener
@@ -518,7 +518,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @__np_pd_mark_timed_out {
@@ -727,7 +727,7 @@ func @holdSilently {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   tryok#1:
     x64.movRegImm32 rdx, 1024
     x64.movRegReg rcx, rbx
@@ -746,7 +746,7 @@ func @holdSilently {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @readPastTheDeadline {
@@ -777,7 +777,7 @@ func @readPastTheDeadline {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   __il_cont#13:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r8
@@ -795,7 +795,7 @@ func @readPastTheDeadline {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   tryok#1:
     x64.movRegImm32 rdx, 300
     x64.movRegReg rcx, rbx
@@ -815,7 +815,7 @@ func @readPastTheDeadline {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   tryok#3:
     x64.movRegImm32 r12, 0
     x64.callDirect Clock.nowMs
@@ -844,7 +844,7 @@ func @readPastTheDeadline {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   tryok#6:
     x64.movRegReg rcx, r8
     x64.callDirect __str_decref
@@ -971,7 +971,7 @@ func @readPastTheDeadline {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   __rc_panic:
     x64.leaRegRdata rcx, [rip + __str_blob_33]  ; "panic at Clock.maxon:52: Range check failed: value outside typealias 'DurationMs'\x0a"
     x64.callDirect mrt_panic
@@ -984,7 +984,7 @@ func @readPastTheDeadline {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @main {
@@ -1008,7 +1008,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   __il_body:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_own
@@ -1044,7 +1044,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   __il_cont:
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_TcpListener
@@ -1054,7 +1054,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @__np_pd_mark_timed_out {
@@ -1257,7 +1257,7 @@ func @holdSilently {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   tryok#1:
     arm64.movImm x1, 1024
     arm64.movRegReg x0, x19
@@ -1274,7 +1274,7 @@ func @holdSilently {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @readPastTheDeadline {
@@ -1313,7 +1313,7 @@ func @readPastTheDeadline {
     arm64.loadRegSlot x27, slot12
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
-    arm64.ret
+    arm64.retIndirect
   __il_cont#13:
     arm64.movRegReg x0, x19
     arm64.bl TcpClient.connect
@@ -1334,7 +1334,7 @@ func @readPastTheDeadline {
     arm64.loadRegSlot x27, slot12
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
-    arm64.ret
+    arm64.retIndirect
   tryok#1:
     arm64.movImm x1, 300
     arm64.movRegReg x0, x19
@@ -1358,7 +1358,7 @@ func @readPastTheDeadline {
     arm64.loadRegSlot x27, slot12
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
-    arm64.ret
+    arm64.retIndirect
   tryok#3:
     arm64.movImm x20, 0
     arm64.bl Clock.nowMs
@@ -1391,7 +1391,7 @@ func @readPastTheDeadline {
     arm64.loadRegSlot x27, slot12
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
-    arm64.ret
+    arm64.retIndirect
   tryok#6:
     arm64.bl __str_decref
   __il_body#20:
@@ -1517,7 +1517,7 @@ func @readPastTheDeadline {
     arm64.loadRegSlot x27, slot12
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
-    arm64.ret
+    arm64.retIndirect
   __rc_panic:
     arm64.leaRdata x0, __str_blob_33  ; "panic at Clock.maxon:52: Range check failed: value outside typealias 'DurationMs'\x0a"
     arm64.bl mrt_panic
@@ -1534,7 +1534,7 @@ func @readPastTheDeadline {
     arm64.loadRegSlot x27, slot12
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @main {
@@ -1555,7 +1555,7 @@ func @main {
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.epilogue 48
-    arm64.ret
+    arm64.retIndirect
   __il_body:
     arm64.movRegReg x0, x19
     arm64.bl __mm_own
@@ -1590,7 +1590,7 @@ func @main {
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.epilogue 48
-    arm64.ret
+    arm64.retIndirect
   __il_cont:
     arm64.movRegReg x0, x19
     arm64.bl __destruct_TcpListener
@@ -1599,7 +1599,7 @@ func @main {
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.epilogue 48
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @__np_pd_mark_timed_out {
@@ -1816,7 +1816,7 @@ func @holdSilently {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   tryok#1:
     arm64.movImm x1, 1024
     arm64.movRegReg x0, x19
@@ -1833,7 +1833,7 @@ func @holdSilently {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @readPastTheDeadline {
@@ -1872,7 +1872,7 @@ func @readPastTheDeadline {
     arm64.loadRegSlot x27, slot12
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
-    arm64.ret
+    arm64.retIndirect
   __il_cont#13:
     arm64.movRegReg x0, x19
     arm64.bl TcpClient.connect
@@ -1893,7 +1893,7 @@ func @readPastTheDeadline {
     arm64.loadRegSlot x27, slot12
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
-    arm64.ret
+    arm64.retIndirect
   tryok#1:
     arm64.movImm x1, 300
     arm64.movRegReg x0, x19
@@ -1917,7 +1917,7 @@ func @readPastTheDeadline {
     arm64.loadRegSlot x27, slot12
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
-    arm64.ret
+    arm64.retIndirect
   tryok#3:
     arm64.movImm x20, 0
     arm64.bl Clock.nowMs
@@ -1950,7 +1950,7 @@ func @readPastTheDeadline {
     arm64.loadRegSlot x27, slot12
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
-    arm64.ret
+    arm64.retIndirect
   tryok#6:
     arm64.bl __str_decref
   __il_body#20:
@@ -2076,7 +2076,7 @@ func @readPastTheDeadline {
     arm64.loadRegSlot x27, slot12
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
-    arm64.ret
+    arm64.retIndirect
   __rc_panic:
     arm64.leaRdata x0, __str_blob_33  ; "panic at Clock.maxon:52: Range check failed: value outside typealias 'DurationMs'\x0a"
     arm64.bl mrt_panic
@@ -2093,7 +2093,7 @@ func @readPastTheDeadline {
     arm64.loadRegSlot x27, slot12
     arm64.loadRegSlot x28, slot13
     arm64.epilogue 128
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @main {
@@ -2114,7 +2114,7 @@ func @main {
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.epilogue 48
-    arm64.ret
+    arm64.retIndirect
   __il_body:
     arm64.movRegReg x0, x19
     arm64.bl __mm_own
@@ -2149,7 +2149,7 @@ func @main {
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.epilogue 48
-    arm64.ret
+    arm64.retIndirect
   __il_cont:
     arm64.movRegReg x0, x19
     arm64.bl __destruct_TcpListener
@@ -2158,7 +2158,7 @@ func @main {
     arm64.loadRegSlot x20, slot1
     arm64.loadRegSlot x21, slot2
     arm64.epilogue 48
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @__np_pd_mark_timed_out {
@@ -2460,7 +2460,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   tryok#1:
     x64.leaRegRdata r12, [rip + __str_rec_16]  ; "127.0.0.1"
   __il_body#31:
@@ -2480,7 +2480,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   __il_cont#30:
     x64.loadRegBaseDisp.word64 r13, [r12 + 0]
     x64.loadRegBaseDisp.word64 r12, [r12 + 8]
@@ -2598,7 +2598,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   __il_body#37:
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.callDirect __ms_close
@@ -2812,7 +2812,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   tryerr#21:
     x64.leaRegRdata rcx, [rip + __str_blob_20]  ; "panic at netpoll-socket.a-send-the-kernel-finished-is-not-sent-again-past-its-deadline.test:23: unreachable: the sending side is still open\x0a"
     x64.callDirect mrt_panic
@@ -2824,7 +2824,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @__ms_send_from {
@@ -2856,7 +2856,7 @@ func @__ms_send_from {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   mschkoff:
     x64.cmpRegImm32 r12, 0
     x64.jcc less, msoob
@@ -2920,7 +2920,7 @@ func @__ms_send_from {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   mssend:
     x64.callDirect __gt_io_park
     x64.cmpRegImm32 r8, 0
@@ -3040,7 +3040,7 @@ func @__ms_send_from {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   mslatecollected:
     x64.loadRegSlot rax, slot0
     x64.loadRegBaseDisp.word64 rcx, [rax + 208]
@@ -3069,7 +3069,7 @@ func @__ms_send_from {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   msstalecollect:
     x64.callDirect __np_op_settle
     x64.movRegReg rbx, r8
@@ -3101,7 +3101,7 @@ func @__ms_send_from {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   mscompleted:
     x64.loadRegSlot rax, slot0
     x64.loadRegBaseDisp.word64 rbx, [rax + 208]
@@ -3132,7 +3132,7 @@ func @__ms_send_from {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   msnostart:
     x64.callDirect __np_op_clear
     x64.movRegReg rcx, r12
@@ -3147,7 +3147,7 @@ func @__ms_send_from {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 ```
 
@@ -3257,7 +3257,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   tryok#1:
     x64.leaRegRdata r12, [rip + __str_rec_16]  ; "127.0.0.1"
   __il_body#31:
@@ -3277,7 +3277,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   __il_cont#30:
     x64.loadRegBaseDisp.word64 r13, [r12 + 0]
     x64.loadRegBaseDisp.word64 r12, [r12 + 8]
@@ -3395,7 +3395,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   __il_body#37:
     x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
     x64.callDirect __ms_close
@@ -3609,7 +3609,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   tryerr#21:
     x64.leaRegRdata rcx, [rip + __str_blob_20]  ; "panic at netpoll-socket.a-send-the-kernel-finished-is-not-sent-again-past-its-deadline.test:23: unreachable: the sending side is still open\x0a"
     x64.callDirect mrt_panic
@@ -3621,7 +3621,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @__ms_send_from {
@@ -3653,7 +3653,7 @@ func @__ms_send_from {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   mschkoff:
     x64.cmpRegImm32 r12, 0
     x64.jcc less, msoob
@@ -3717,7 +3717,7 @@ func @__ms_send_from {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   mssend:
     x64.callDirect __gt_io_park
     x64.cmpRegImm32 r8, 0
@@ -3776,7 +3776,7 @@ func @__ms_send_from {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   msfail:
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 4
@@ -3787,7 +3787,7 @@ func @__ms_send_from {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   msdone:
     x64.movRegImm32 r10, 0
     x64.movRegReg r8, rax
@@ -3798,7 +3798,7 @@ func @__ms_send_from {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 ```
 
@@ -3912,7 +3912,7 @@ func @main {
     arm64.loadRegSlot x27, slot22
     arm64.loadRegSlot x28, slot23
     arm64.epilogue 208
-    arm64.ret
+    arm64.retIndirect
   tryok#1:
     arm64.leaRdata x20, __str_rec_16  ; "127.0.0.1"
   __il_body#31:
@@ -3936,7 +3936,7 @@ func @main {
     arm64.loadRegSlot x27, slot22
     arm64.loadRegSlot x28, slot23
     arm64.epilogue 208
-    arm64.ret
+    arm64.retIndirect
   __il_cont#30:
     arm64.loadRegBaseDisp.word64 x22, [x20 + 0]
     arm64.loadRegBaseDisp.word64 x20, [x20 + 8]
@@ -4057,7 +4057,7 @@ func @main {
     arm64.loadRegSlot x27, slot22
     arm64.loadRegSlot x28, slot23
     arm64.epilogue 208
-    arm64.ret
+    arm64.retIndirect
   __il_body#37:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.bl __ms_close
@@ -4264,7 +4264,7 @@ func @main {
     arm64.loadRegSlot x27, slot22
     arm64.loadRegSlot x28, slot23
     arm64.epilogue 208
-    arm64.ret
+    arm64.retIndirect
   tryerr#21:
     arm64.leaRdata x0, __str_blob_20  ; "panic at netpoll-socket.a-send-the-kernel-finished-is-not-sent-again-past-its-deadline.test:23: unreachable: the sending side is still open\x0a"
     arm64.bl mrt_panic
@@ -4280,7 +4280,7 @@ func @main {
     arm64.loadRegSlot x27, slot22
     arm64.loadRegSlot x28, slot23
     arm64.epilogue 208
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @__ms_send_from {
@@ -4308,7 +4308,7 @@ func @__ms_send_from {
     arm64.loadRegSlot x22, slot3
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   mschkoff:
     arm64.cmp x20, 0
     arm64.b.lt msoob
@@ -4369,7 +4369,7 @@ func @__ms_send_from {
     arm64.loadRegSlot x22, slot3
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   mssend:
     arm64.bl __gt_io_park
     arm64.cmp x0, 0
@@ -4425,7 +4425,7 @@ func @__ms_send_from {
     arm64.loadRegSlot x22, slot3
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   msfail:
     arm64.movImm x0, 0
     arm64.movImm x9, 4
@@ -4435,7 +4435,7 @@ func @__ms_send_from {
     arm64.loadRegSlot x22, slot3
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   msdone:
     arm64.movImm x9, 0
     arm64.loadRegSlot x19, slot0
@@ -4444,7 +4444,7 @@ func @__ms_send_from {
     arm64.loadRegSlot x22, slot3
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
 }
 ```
 
@@ -4562,7 +4562,7 @@ func @main {
     arm64.loadRegSlot x27, slot22
     arm64.loadRegSlot x28, slot23
     arm64.epilogue 208
-    arm64.ret
+    arm64.retIndirect
   tryok#1:
     arm64.leaRdata x20, __str_rec_16  ; "127.0.0.1"
   __il_body#31:
@@ -4586,7 +4586,7 @@ func @main {
     arm64.loadRegSlot x27, slot22
     arm64.loadRegSlot x28, slot23
     arm64.epilogue 208
-    arm64.ret
+    arm64.retIndirect
   __il_cont#30:
     arm64.loadRegBaseDisp.word64 x22, [x20 + 0]
     arm64.loadRegBaseDisp.word64 x20, [x20 + 8]
@@ -4707,7 +4707,7 @@ func @main {
     arm64.loadRegSlot x27, slot22
     arm64.loadRegSlot x28, slot23
     arm64.epilogue 208
-    arm64.ret
+    arm64.retIndirect
   __il_body#37:
     arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
     arm64.bl __ms_close
@@ -4914,7 +4914,7 @@ func @main {
     arm64.loadRegSlot x27, slot22
     arm64.loadRegSlot x28, slot23
     arm64.epilogue 208
-    arm64.ret
+    arm64.retIndirect
   tryerr#21:
     arm64.leaRdata x0, __str_blob_20  ; "panic at netpoll-socket.a-send-the-kernel-finished-is-not-sent-again-past-its-deadline.test:23: unreachable: the sending side is still open\x0a"
     arm64.bl mrt_panic
@@ -4930,7 +4930,7 @@ func @main {
     arm64.loadRegSlot x27, slot22
     arm64.loadRegSlot x28, slot23
     arm64.epilogue 208
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @__ms_send_from {
@@ -4958,7 +4958,7 @@ func @__ms_send_from {
     arm64.loadRegSlot x22, slot3
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   mschkoff:
     arm64.cmp x20, 0
     arm64.b.lt msoob
@@ -5019,7 +5019,7 @@ func @__ms_send_from {
     arm64.loadRegSlot x22, slot3
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   mssend:
     arm64.bl __gt_io_park
     arm64.cmp x0, 0
@@ -5076,7 +5076,7 @@ func @__ms_send_from {
     arm64.loadRegSlot x22, slot3
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   msfail:
     arm64.movImm x0, 0
     arm64.movImm x9, 4
@@ -5086,7 +5086,7 @@ func @__ms_send_from {
     arm64.loadRegSlot x22, slot3
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
   msdone:
     arm64.movImm x9, 0
     arm64.loadRegSlot x19, slot0
@@ -5095,6 +5095,6 @@ func @__ms_send_from {
     arm64.loadRegSlot x22, slot3
     arm64.loadRegSlot x23, slot4
     arm64.epilogue 64
-    arm64.ret
+    arm64.retIndirect
 }
 ```

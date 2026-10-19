@@ -1425,9 +1425,27 @@ end 'encodeMovsxdRegBaseIndexScale4'
 
 // `jmp r/m64` (FF /4, mod=11) — the jump table's register-indirect branch to the computed target address.
 // The twin of `encodeCallReg` (FF /2) with the jump opcode extension.
-function encodeJmpReg(code ByteArray, reg X64Register)
+export function encodeJmpReg(code ByteArray, reg X64Register)
 	encodeModRmExtDirect(code, opcode: OpcodeCallIndirect, ext: Grp5ExtJmp, rmField: reg)
 end 'encodeJmpReg'
+
+// Dead at every compiled return: Maxon returns in r8, r10 and xmm0. The entry stubs keep `ret`: the OS
+// calls them, and under its ABI rax is the return value.
+export let X64ReturnJumpScratchReg = X64Register.rax
+
+// `pop; jmp` in place of `ret`. Sound only while the image opts into no shadow stack: a jump leaves the
+// shadow stack's entry for this return unpopped, and the next checked `ret` faults.
+export function encodeIndirectReturn(code ByteArray, scratch X64Register)
+	encodePopReg(code, reg: scratch)
+	encodeJmpReg(code, reg: scratch)
+end 'encodeIndirectReturn'
+
+function encodeReturnTransfer(code ByteArray, transfer ReturnTransfer)
+	match transfer 'transfer'
+		returnInstruction then code.push(OpcodeRet)
+		indirectJump then encodeIndirectReturn(code, scratch: X64ReturnJumpScratchReg)
+	end 'transfer'
+end 'encodeReturnTransfer'
 
 // ⭐ **THE JUMP-TABLE SEQUENCE.** `cmp idx, N` / `jae default` (UNSIGNED, so a wrapped negative index hits
 // the default); `lea r10, [rip + table]`; `movsxd r11, [r10 + idx*4]`; `lea r10, [r10 + r11]` (the `add` as a
@@ -2155,7 +2173,7 @@ function emitTargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffsetArra
 		// is a fixed 0x20).
 		prologue(stackSize) then encodePrologue(code, stackSize: stackSize, probeScratchIsFree: true)
 		epilogue(stackSize) then encodeEpilogue(code, stackSize: stackSize)
-		ret then code.push(OpcodeRet)
+		ret(transfer) then encodeReturnTransfer(code, transfer: transfer)
 		jmp(targetBlockId) then encodeJmp(code, rel32Fixups: rel32Fixups, targetBlockId: targetBlockId)
 		jcc(cond, targetBlockId) then encodeJcc(code, rel32Fixups: rel32Fixups, cond: cond, targetBlockId: targetBlockId)
 		movRegImm(dest, value) then encodeMovRegImm64(code, dest: resolveGpr(dest), value: value)

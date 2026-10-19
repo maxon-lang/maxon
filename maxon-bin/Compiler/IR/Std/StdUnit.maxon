@@ -23,8 +23,9 @@
 // copy, and the function is walked once.
 //
 // ⚠ **WHAT THE UNIT DOES NOT CARRY IS AS DELIBERATE AS WHAT IT DOES.** The twelve passes read `blockRefs`,
-// `nextBlockId`, `name` and `stackSize` of their function, and the isel reads its `returnType` and
-// `paramTypes` besides; nothing on a pool reads any other column — the value columns, the parameter masks,
+// `nextBlockId`, `name` and `stackSize` of their function, and the isel reads its `returnType`,
+// `paramTypes` and `returnsByIndirectJump` besides; nothing on a pool reads any other column — the
+// value columns, the parameter masks,
 // the guard and inline-site tables are all read by passes on either side of the fan-outs, and they stay on
 // the REAL function, which is mutated in place at the splice. Carrying a column nothing reads would be a
 // second home for it.
@@ -92,6 +93,7 @@ export function extractUnitModule(module StdModule, func IrFunction) returns Std
 	// function keeps its own and the unit must own everything it reaches.
 	var unitFunc = IrFunction.createFromStd(func.name.clone(), returnType: func.returnType.clone(), paramCount: func.paramCount, paramTypes: func.paramTypes.clone())
 	unitFunc.stackSize = func.stackSize
+	unitFunc.returnsByIndirectJump = func.returnsByIndirectJump
 	unitFunc.nextBlockId = func.nextBlockId
 	unitFunc.blockRefs.reserve(func.blockRefs.count())
 	unitModule.blocks.reserve(func.blockRefs.count())

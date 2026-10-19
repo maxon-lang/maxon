@@ -5682,10 +5682,12 @@ export type StdToX64Lowering
 	// pass. `asTerminator` toggles setTerminator (block-final) vs appendOp (the rare
 	// mid-block ret the Maxon tier can emit for a partially-terminated block).
 	function emitRet(dstBlock IrBlock, asTerminator bool)
+		let transfer = unitReturnTransfer(self.stdModule)
+
 		if asTerminator 'asTerm'
-			self.targetModule.setTerminator(dstBlock, op: TargetOp.ret)
+			self.targetModule.setTerminator(dstBlock, op: TargetOp.ret(transfer))
 		end 'asTerm' else 'asBody'
-			self.targetModule.appendOp(dstBlock, op: TargetOp.ret)
+			self.targetModule.appendOp(dstBlock, op: TargetOp.ret(transfer))
 		end 'asBody'
 	end 'emitRet'
 

@@ -309,8 +309,9 @@ Every instruction is four bytes, and the classes are the same numbers; arm64 con
 5, 6, 7 and 8.
 
 - `cond` is the condition code of a `b.<cond>`, and `none` on every other instruction.
-- `reg` is the register control leaves through on 7 and 8, and the register a compare-and-branch tests on
-  5; an instruction that names neither answers `none`.
+- `reg` is the register control leaves through on 6, 7 and 8, and the register a compare-and-branch tests
+  on 5; an instruction that names neither answers `none`. A `br x30` is a return, 6, as `ret` is: it is
+  how a function whose frame can resume after a green-thread switch returns.
 - `frame` is what the instruction does to the frame, which the stack unwinder reads: `opens-record` for an
   `stp` that pre-indexes `sp`, `reserves` for a `sub sp, sp, #imm`, `stores-record` for an `stp` at an
   offset from `sp`, `sets-pointer` for an `add x29, sp, #imm`, and `none` for anything else.

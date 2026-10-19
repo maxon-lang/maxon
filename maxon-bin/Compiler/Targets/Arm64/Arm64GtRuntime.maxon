@@ -5,7 +5,7 @@
 //
 //   • `__gt_context_switch` — moves SP between two green threads' stacks and saves the physical
 //     callee-saved file by hand.
-//   • `__gt_trampoline` — entered by a `ret` into a frame nothing established.
+//   • `__gt_trampoline` — entered by the switch's branch into a frame nothing established.
 //   • `__gt_guard_tripped` — honours a preemption request on the thread's own stack, below a frame that does
 //     not exist yet.
 //   • `__gt_morestack` — runs on the M's system stack, which it switches to itself.
@@ -25,8 +25,8 @@
 //      call PROBES those two words and faults when RSP is outside them. Darwin has no such contract, so
 //      `GtOffTibStackBase`/`GtOffTibStackLimit` are never read or written on this lane and `__gt_spawn`
 //      does not seed them (see `GtRuntime.buildGtSpawn`'s per-target arm).
-//   2. **THE RETURN ADDRESS IS A REGISTER, NOT A STACK WORD.** x64's switch ends in `ret`, which POPS
-//      the resumed thread's continuation; AArch64's `ret` branches to x30. So a fresh green thread's
+//   2. **THE RETURN ADDRESS IS A REGISTER, NOT A STACK WORD.** x64's switch ends in `pop; jmp`, which
+//      POPS the resumed thread's continuation; AArch64's ends in `br x30`. So a fresh green thread's
 //      seed frame must place `&__gt_trampoline` in the x29/x30 PAIR the switch pops last, which is why
 //      the frame is laid from the TOP DOWN in pre-indexed pairs and the LR lands at `frame_base + 8`
 //      rather than at `stackTop - 8`. That is a STRUCTURAL difference in `__gt_spawn`, not a number.
@@ -56,7 +56,7 @@
 
 // ⭐⭐ **THE ONE FACT THE Std TIER AND THIS ONE SHARE: a fresh green thread's initial frame is every
 // callee-saved register plus the frame record.** `__gt_spawn` lays `gtInitialFrameBytes(target)` bytes and
-// this chunk pops exactly that many; a mismatch is not a compile error but a `ret` into a wild address on
+// this chunk pops exactly that many; a mismatch is not a compile error but a branch to a wild address on
 // the very first switch-in. So the size is DERIVED here from the four bounds the prologue pass exports and
 // CHECKED against the Std constant (feedback: DERIVE > CHECK > COMMENT), which is what makes adding a
 // callee-saved register a panic on the next async compile rather than a corrupted stack.
@@ -121,8 +121,9 @@ let Arm64GtTrampArgBufReg = Arm64Register.x11
 // ==========================================================================
 
 // Save the current green thread's callee-saved register + SP/FP state into `from`, restore `to`'s, and
-// `ret` — which on AArch64 branches to the x30 the last `ldp` restored: a resumed thread's await-loop
-// continuation, or, for a fresh one, `__gt_trampoline`. No frame, no `.data`, no OS call.
+// `br x30` to the x30 the last `ldp` restored: a resumed thread's await-loop continuation, or, for a
+// fresh one, `__gt_trampoline`. No frame, no `.data`, no OS call. Not a `ret`, for the reason
+// `markIndirectJumpReturns` gives.
 // On Linux the OS thread's errno slot moves with them (`GtRuntime.GtOffLastError`); Darwin carries
 // nothing, its failure arms stash instead.
 //
@@ -149,7 +150,7 @@ function buildArm64GtContextSwitchChunk(target Target) returns FunctionCodeChunk
 	emitArm64GtCarryLastError(asm, gtReg: Arm64GtSwitchToReg, os: target.os, direction: GtLastErrorDirection.fromGt)
 
 	emitArm64GtSavedBlock(asm, direction: Arm64GtBlockDirection.pop)
-	arm64EmitRet(asm.code)
+	arm64EmitReturnTransfer(asm.code, transfer: ReturnTransfer.indirectJump)
 
 	var chunk = asm.finishChunk(GtContextSwitchName)
 	chunk.leavesCallerStack(gtInitialFrameBytes(target) as StackSize)
@@ -287,7 +288,7 @@ end 'arm64GtAppendPairs'
 // `__gt_trampoline`
 // ==========================================================================
 
-// The entry a FRESH green thread `ret`s into on its first switch-in. NOT a normal call: no incoming
+// The entry a FRESH green thread branches into on its first switch-in. NOT a normal call: no incoming
 // register arguments, no prologue, and x29 is the seed frame's zero — which is what stops the panic
 // backtrace at a green thread's boundary instead of walking into the scheduler context that switched it in.
 //
@@ -976,7 +977,7 @@ function arm64GtPreemptArmStackBytes() returns StackSize
 	return Arm64GuardSaveBytes + buildArm64GtPreemptArm().stackBytesPerCall()
 end 'arm64GtPreemptArmStackBytes'
 
-// The arm as a framed fragment, closed with its own `ret`, for `__gt_guard_tripped` to splice in. The frame
+// The arm as a framed fragment, closed with its own `br x30`, for `__gt_guard_tripped` to splice in. The frame
 // record sits at SP, so the locals' SP displacements are their x29 ones.
 function buildArm64GtPreemptArm() returns Arm64RuntimeAsm
 	var arm = Arm64RuntimeAsm.beginFunction(arm64GtPreemptArmSlots())
@@ -985,7 +986,7 @@ function buildArm64GtPreemptArm() returns Arm64RuntimeAsm
 	arm64EmitMovRuntimeReg(arm, dest: arm64ArgRegisterAt(0), src: Arm64MorestackEntryGtReg)
 	arm64EmitBranchLink(arm.code, callFixups: arm.callFixups, targetName: GtPreemptName)
 	emitArm64RegisterBlock(arm, gprs: arm64ArgRegisters, base: locals, direction: Arm64GtBlockDirection.pop)
-	arm.closeFrame()
+	arm.closeFrame(ReturnTransfer.indirectJump)
 	return arm
 end 'buildArm64GtPreemptArm'
 

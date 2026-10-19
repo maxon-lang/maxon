@@ -269,7 +269,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendrefused:
     x64.movRegReg rcx, rbx
     x64.callDirect __mbox_reply_refused
@@ -284,7 +284,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @Ping.__loop {
@@ -311,7 +311,7 @@ func @Ping.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=unknowntag [[0]=hit] @__jumptable_6
@@ -322,7 +322,7 @@ func @Ping.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   hit:
     x64.loadRegBaseDisp.word64 rcx, [r8 + 8]
   __il_body:
@@ -636,7 +636,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   sendrefused:
     x64.movRegReg rcx, rbx
     x64.callDirect __mbox_reply_refused
@@ -651,7 +651,7 @@ func @main {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 
 func @Ping.__loop {
@@ -678,7 +678,7 @@ func @Ping.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   dispatch:
     x64.loadRegBaseDisp.word64 rax, [r8 + 0]
     x64.jumpTable rax, default=unknowntag [[0]=hit] @__jumptable_6
@@ -689,7 +689,7 @@ func @Ping.__loop {
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
   hit:
     x64.loadRegBaseDisp.word64 rcx, [r8 + 8]
   __il_body:
@@ -997,7 +997,7 @@ func @main {
     arm64.loadRegSlot x25, slot6
     arm64.loadRegSlot x26, slot7
     arm64.epilogue 80
-    arm64.ret
+    arm64.retIndirect
   sendrefused:
     arm64.movRegReg x0, x19
     arm64.bl __mbox_reply_refused
@@ -1014,7 +1014,7 @@ func @main {
     arm64.loadRegSlot x25, slot6
     arm64.loadRegSlot x26, slot7
     arm64.epilogue 80
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @Ping.__loop {
@@ -1038,7 +1038,7 @@ func @Ping.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=unknowntag [[0]=hit] @__jumptable_6
@@ -1048,7 +1048,7 @@ func @Ping.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   hit:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
   __il_body:
@@ -1356,7 +1356,7 @@ func @main {
     arm64.loadRegSlot x25, slot6
     arm64.loadRegSlot x26, slot7
     arm64.epilogue 80
-    arm64.ret
+    arm64.retIndirect
   sendrefused:
     arm64.movRegReg x0, x19
     arm64.bl __mbox_reply_refused
@@ -1373,7 +1373,7 @@ func @main {
     arm64.loadRegSlot x25, slot6
     arm64.loadRegSlot x26, slot7
     arm64.epilogue 80
-    arm64.ret
+    arm64.retIndirect
 }
 
 func @Ping.__loop {
@@ -1397,7 +1397,7 @@ func @Ping.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   dispatch:
     arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
     arm64.jumpTable x1, default=unknowntag [[0]=hit] @__jumptable_6
@@ -1407,7 +1407,7 @@ func @Ping.__loop {
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
-    arm64.ret
+    arm64.retIndirect
   hit:
     arm64.loadRegBaseDisp.word64 x0, [x0 + 8]
   __il_body:

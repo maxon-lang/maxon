@@ -126,6 +126,10 @@ export function buildBackend(stdModule StdModule, target Target, globalData Glob
 	try requireAlwaysSplicedBodiesAreGone(project, module: stdModule, byName: funcNames)
 	recordPhase(project, phase: CompilePhase.alwaysSplicedGate, probe: splicedProbe)
 
+	if usage.usesGt 'indirectJumpReturns'
+		markIndirectJumpReturns(stdModule, byName: funcNames.byName)
+	end 'indirectJumpReturns'
+
 	// ⭐⭐ **THE `.data` SECTION IS LAID OUT HERE, AFTER THE PRUNE, BECAUSE THE PRUNE IS WHAT SAYS WHICH
 	// RUNTIME WORDS ARE READ.** Nothing between here and the encoders asks for an offset — the three
 	// `dataSectionOffsetOf` readers are all encode-stage — and nothing after `compileToCodeResult` registers
@@ -529,7 +533,7 @@ function prependEntryStub(module TargetModule, target Target, checkLeaks bool, i
 	module.appendOp(block, op: win64ProcessExitOp(drainGreenThreads, target: target))
 	module.appendOp(block, op: TargetOp.epilogue(EntryStubFrameBytes))
 	module.appendOp(block, op: TargetOp.popReg(X64Register.rbp))
-	module.setTerminator(block, op: TargetOp.ret)
+	module.setTerminator(block, op: TargetOp.ret(ReturnTransfer.returnInstruction))
 
 	prependFunction(module, func: func)
 end 'prependEntryStub'
@@ -569,7 +573,7 @@ function prependMainThreadEntry(module TargetModule, initGlobals bool, entryFunc
 	module.appendOp(block, op: TargetOp.prologue(MainThreadEntryFrameBytes))
 	appendMainCall(module, block: block, initGlobals: initGlobals, releasesGlobals: false, entryFunction: entryFunction)
 	module.appendOp(block, op: TargetOp.epilogue(MainThreadEntryFrameBytes))
-	module.setTerminator(block, op: TargetOp.ret)
+	module.setTerminator(block, op: TargetOp.ret(ReturnTransfer.returnInstruction))
 
 	prependFunction(module, func: func)
 end 'prependMainThreadEntry'
@@ -757,7 +761,7 @@ function prependLinuxEntryStub(module TargetModule, checkLeaks bool, initGlobals
 	// clears the high half.
 	module.appendOp(block, op: TargetOp.movReg32Reg32(x64PhysReg(X64Register.rdi), srcReg: x64PhysReg(X64Register.r8)))
 	module.appendOp(block, op: TargetOp.x64Syscall(X64LinuxSyscallExitGroup))
-	module.setTerminator(block, op: TargetOp.ret)
+	module.setTerminator(block, op: TargetOp.ret(ReturnTransfer.returnInstruction))
 
 	prependFunction(module, func: func)
 end 'prependLinuxEntryStub'

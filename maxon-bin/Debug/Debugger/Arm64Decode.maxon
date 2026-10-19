@@ -222,10 +222,22 @@ function arm64RegisterBranchInstruction(insn DebuggeeWord) returns Arm64Instruct
 		throw Arm64DecodeError.notAnInstructionThisBuildDecodes
 	end 'notAPlainRegisterBranch'
 
-	let instructionClass = try arm64RegisterBranchClass((insn shr Arm64BranchRegisterOpcShift) and Arm64BranchRegisterOpcMask)
+	let controlRegister = arm64RegisterAt(insn, shift: Arm64RnShift)
+	var instructionClass = try arm64RegisterBranchClass((insn shr Arm64BranchRegisterOpcShift) and Arm64BranchRegisterOpcMask)
 
-	return Arm64Instruction.create(Arm64InstructionBytes as DecodedLength, instructionClass: instructionClass, condition: Arm64ConditionLookup.none, target: DecodedTarget.none, controlRegister: arm64RegisterAt(insn, shift: Arm64RnShift))
+	if instructionClass == (DbgClassIndirectJump as DecodedClass) and arm64HoldsTheLinkRegister(controlRegister) 'aReturnSpelledAsAJump'
+		instructionClass = DbgClassReturn as DecodedClass
+	end 'aReturnSpelledAsAJump'
+
+	return Arm64Instruction.create(Arm64InstructionBytes as DecodedLength, instructionClass: instructionClass, condition: Arm64ConditionLookup.none, target: DecodedTarget.none, controlRegister: controlRegister)
 end 'arm64RegisterBranchInstruction'
+
+function arm64HoldsTheLinkRegister(lookup DecodedRegisterLookup) returns bool
+	return match lookup 'held'
+		none gives false
+		register(number) gives number == Arm64Lr
+	end 'held'
+end 'arm64HoldsTheLinkRegister'
 
 function arm64RegisterBranchClass(opc DebuggeeWord) returns DecodedClass throws Arm64DecodeError
 	if opc == Arm64OpcBranchRegister 'anIndirectJump'

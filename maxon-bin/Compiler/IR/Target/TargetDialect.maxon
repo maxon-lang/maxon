@@ -436,7 +436,10 @@ export union TargetOp
 	// into the pool safely — forbiddenPhys proves nothing is live across the `mov
 	// r8, retval` return move. (A union-backing literal cannot reference a named
 	// `let`, so the mask is written inline.)
-	ret = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0x100, implicitDefs: 0}
+	//
+	// implicitDefs stays 0 although an `indirectJump` return writes rax: a clobbering terminator would be
+	// a cold-block run op, which `ColdBlockRuns.rebuild` refuses, and nothing is live after a return.
+	ret(transfer ReturnTransfer) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0x100, implicitDefs: 0}
 
 	// Unconditional near jump to a block (`jmp rel32`, 0xE9). `targetBlockId` names a
 	// function-local block; emitFunctionChunk resolves it to a chunk-local rel32 (a
@@ -1081,7 +1084,7 @@ export union TargetOp
 	// `ret` — return to caller. implicitUses = 0x1 (the x0 bit): arm64 returns its primary value in
 	// x0, which is what lets the allocator admit x0 into the pool (nothing is live across
 	// `mov x0, retval; ret`). The target-dispatched counterpart of the x64 `ret`'s R8 (0x100).
-	arm64Ret = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0x1, implicitDefs: 0}
+	arm64Ret(transfer ReturnTransfer) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0x1, implicitDefs: 0}
 
 	// Unconditional branch `b` to a function-local block.
 	arm64Branch(targetBlockId BlockId) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
@@ -2058,6 +2061,13 @@ export enum FloatMinMaxKind
 	min
 	max
 end 'FloatMinMaxKind'
+
+// `indirectJump` is for a function whose frame can resume after a green-thread switch; see
+// `markIndirectJumpReturns`.
+export enum ReturnTransfer
+	returnInstruction
+	indirectJump
+end 'ReturnTransfer'
 
 // TargetModule — the Target-dialect instantiation of the generic IrModule
 // container; holds a whole program's Target-tier ops/blocks/functions. A plain

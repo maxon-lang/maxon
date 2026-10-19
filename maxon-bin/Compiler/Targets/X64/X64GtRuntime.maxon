@@ -2,7 +2,7 @@
 // Everything else in the scheduler is a builder-built `StdModule` (Runtime/GtRuntime.maxon). Standalone
 // `FunctionCodeChunk`s — `__gt_context_switch`, `__gt_trampoline`, `__gt_guard_tripped`, the stack grower
 // `__gt_morestack` and `__gt_stack_relocate` — manipulate rsp/rbp and physical callee-saved registers, rewrite a stack's frame-pointer
-// chain, or are entered by a `ret` into a frame no prologue built; plus the INLINE syscall shim
+// chain, or are entered by a jump into a frame no prologue built; plus the INLINE syscall shim
 // (`emitGtShimmedIatCall`) that X64Backend wraps around every `iatCall` of a GT module.
 // None is expressible in Std (no register/rsp/gs-segment spelling), so all are built by calling X64Backend's
 // encoders directly, like the `mrt_*` panic runtime (X64Runtime.maxon).
@@ -35,7 +35,7 @@
 // preserves EXACTLY what any call preserves, from two shared lists rather than second copies. Their sizes are
 // the contract `__gt_spawn`'s initial frame layout byte-matches: `GtInitialFrameBytes` = the GPR words + the
 // XMM words + the return-address word, and the trampoline address sits in that top word so the first
-// switch-in's `ret` enters the trampoline. `assertGtFrameConsistent` (below) enforces that byte-match at
+// switch-in's jump enters the trampoline. `assertGtFrameConsistent` (below) enforces that byte-match at
 // chunk-build time, deriving it from BOTH lists.
 //
 // ⚠ ONE `XmmSaveSlotBytes` WORD PER XMM — the SAME constant the prologue's slots stride by, not a second 8
@@ -173,7 +173,7 @@ end 'gtXmmSaveAreaBytes'
 // and this Target-tier byte code SHARE: a fresh GT's initial context-switch frame is every callee-saved
 // register plus one return-address word. If a register is added to or removed from EITHER callee-saved list
 // without moving `GtInitialFrameBytes` in lockstep, the first switch-in pops the wrong number of bytes and
-// `ret`s into a WILD address. This turns that silent cross-tier drift into a compile-time panic on every
+// jumps to a WILD address. This turns that silent cross-tier drift into a compile-time panic on every
 // async compile.
 //
 // ⚠⚠ IT IS DERIVED FROM **BOTH** LISTS. The GPRs are pushed words; the XMMs are `movsd` words in a `sub rsp`
@@ -195,8 +195,10 @@ function assertGtFrameConsistent(target Target)
 end 'assertGtFrameConsistent'
 
 // `__gt_context_switch(from = rcx, to = rdx)` — save the current GT's callee-saved register + rsp/rbp state
-// into `from`, restore `to`'s, and `ret` into `to`'s saved return address (a resumed GT's await-loop
-// continuation, or — for a fresh GT — the trampoline). No frame, no `.data`.
+// into `from`, restore `to`'s, and jump to `to`'s saved return address (a resumed GT's await-loop
+// continuation, or — for a fresh GT — the trampoline). No frame, no `.data`. A `ret` here would
+// pop a return-stack entry the other context's call pushed and mispredict on every switch; see
+// `markIndirectJumpReturns`.
 // The OS thread's last error is saved into `from` and restored from `to` with them
 // (`GtRuntime.GtOffLastError`): the TEB's 32-bit `LastErrorValue` on Windows, the errno slot on
 // Linux.
@@ -268,27 +270,27 @@ function buildGtContextSwitchChunk(target Target) returns FunctionCodeChunk
 
 	encodeEpilogue(code, stackSize: gtXmmSaveAreaBytes())
 
-	// Restore callee-saved from the new stack, in reverse push order, then `ret` into to's saved return addr.
+	// Restore callee-saved from the new stack, in reverse push order, then jump to to's saved return addr.
 	for i in 0 upto calleeSavedOrder.count() 'pop'
 		let reg = try calleeSavedOrder.get(calleeSavedOrder.count() - 1 - i) otherwise panic("buildGtContextSwitchChunk: pop index derived from count is in range")
 		encodePopReg(code, reg: reg)
 	end 'pop'
 
-	code.push(OpcodeRet)
+	encodeIndirectReturn(code, scratch: X64ReturnJumpScratchReg)
 
 	var chunk = FunctionCodeChunk.createWith(GtContextSwitchName, code: code, callFixups: CallFixupArray.create(), rdataRelocs: RdataRelocationArray.create(), iatRelocs: RelocationArray.create())
 	chunk.leavesCallerStack(gtInitialFrameBytes(target) as StackSize)
 	return chunk
 end 'buildGtContextSwitchChunk'
 
-// `__gt_trampoline` — the entry a FRESH green thread `ret`s into on its first switch-in. NOT a normal call:
+// `__gt_trampoline` — the entry a FRESH green thread jumps into on its first switch-in. NOT a normal call:
 // no incoming register arguments and no prologue built for it. It reads its own GT from rdx (which the
 // context switch left holding `to`), loads the async function + arg buffer from the GT, loads all
 // MaxAsyncArgs argument slots into the ABI argument registers, calls the function, captures its R8 result
 // and marks the GT completed, then context-switches to the GT's waiter (always set by the strand runner that
 // switched it in).
 //
-// The stack is 16-aligned on entry (`__gt_spawn` lays `gt.sp` so the switch-in `ret` lands with rsp = stack
+// The stack is 16-aligned on entry (`__gt_spawn` lays `gt.sp` so the switch-in's jump lands with rsp = stack
 // top, a page boundary), so `sub rsp, ShadowSpaceBytes` — a multiple of 16 — keeps every `call` below aligned
 // while reserving the Win64 shadow space the user call may clobber.
 function buildGtTrampolineChunk() returns FunctionCodeChunk
@@ -1798,7 +1800,9 @@ end 'buildGtGuardTrippedChunk'
 // function-entry guard only, so the guarded function has established nothing: every incoming argument is still in
 // its register and every callee-saved register still holds the caller's value. The arm saves the argument
 // registers — `argRegisters` and `argFpRegisters`, the backend's own tables — and `__gt_preempt`, an ordinary
-// callee, preserves the rest. It returns to the guard, whose jump back re-runs the whole check.
+// callee, preserves the rest. It returns to the guard, whose jump back re-runs the whole check. The
+// return jump goes through r11 because the guard reloads r11 on that retry; every argument register
+// still holds a live argument.
 //
 // ⚠ **IT ALIGNS rsp ITSELF**, so its calls are aligned whatever parity it is entered at. The frame pointer it
 // pushes to undo that keeps the saved-rbp chain whole, so a stack moved while the thread is parked
@@ -1819,7 +1823,7 @@ function emitGtPreemptArm(code ByteArray, callFixups CallFixupArray) returns Sta
 	_ = emitGtRegisterBlock(code, gprs: argRegisters, stackedBytes: 0, direction: GtRegisterBlockDirection.restore)
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rsp, src: X64Register.rbp, wide: true)
 	encodePopReg(code, reg: X64Register.rbp)
-	code.push(OpcodeRet)
+	encodeIndirectReturn(code, scratch: ShimGtReg)
 
 	return (StackWordBytes + (StackFrameAlignment - StackWordBytes)) as StackSize + blockBytes
 end 'emitGtPreemptArm'
@@ -2150,6 +2154,9 @@ function emitAsyncPreemptBody(code ByteArray, callFixups CallFixupArray) returns
 	encodeLeaRegRegImm32(code, dest: X64Register.rsp, base: X64Register.rbp, disp: -(StackWordBytes as Imm32))
 	code.push(OpcodePopfq)
 	encodePopReg(code, reg: X64Register.rbp)
+
+	// A `ret`, unlike the preempt arm's return jump: every register is the interrupted function's again,
+	// so none is free to carry the target.
 	code.push(OpcodeRet)
 
 	// The pushed rbp and flags, the most the alignment can drop from a word-aligned rsp, and the block.

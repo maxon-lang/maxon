@@ -148,11 +148,11 @@ export type Arm64RuntimeAsm
 		return self.finishChunk(name)
 	end 'finishFunction'
 
-	// The epilogue and the `ret` alone — `finishFunction`'s return, for a framed FRAGMENT another chunk splices in
+	// The epilogue and the return alone — `finishFunction`'s return, for a framed FRAGMENT another chunk splices in
 	// (`arm64AppendResolvedFragment`) rather than a chunk of its own.
-	export function closeFrame()
+	export function closeFrame(transfer ReturnTransfer = ReturnTransfer.returnInstruction)
 		arm64EmitEpilogue(self.code, frameSize: self.frameBytes, recordOffset: self.outgoingArgBytes)
-		arm64EmitRet(self.code)
+		arm64EmitReturnTransfer(self.code, transfer: transfer)
 	end 'closeFrame'
 
 	// Resolve the branches and seal the chunk — the tail `finishFunction` runs after its epilogue, and

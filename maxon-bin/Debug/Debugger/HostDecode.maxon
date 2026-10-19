@@ -14,6 +14,10 @@ module function hostInstructionWidth() returns HostInstructionWidth
 end 'hostInstructionWidth'
 
 module function hostDecodedAt(code ByteArray, at DecodedOffset, address DecodedAddress) returns DecodedLookup
+	if hostIndirectReturnStartsAt(code, at: at) 'aReturnByIndirectJump'
+		return DecodedLookup.decoded(DecodedInstruction.create(x64IndirectReturnLength(), instructionClass: DbgClassReturn as DecodedClass, target: DecodedTarget.none, callOperand: DecodedCallOperand.none))
+	end 'aReturnByIndirectJump'
+
 	#if arch(arm64)
 		return match decodeArm64Instruction(code, at: at, address: address) 'decoded'
 			unclassified gives DecodedLookup.unclassified
@@ -28,6 +32,24 @@ module function hostDecodedAt(code ByteArray, at DecodedOffset, address DecodedA
 		end 'decoded'
 	#endif
 end 'hostDecodedAt'
+
+function hostReturnsByPopAndJump() returns bool
+	#if arch(arm64)
+		return false
+	#endif
+
+	#if not arch(arm64)
+		return true
+	#endif
+end 'hostReturnsByPopAndJump'
+
+function hostIndirectReturnStartsAt(code ByteArray, at DecodedOffset) returns bool
+	return hostReturnsByPopAndJump() and x64IndirectReturnAt(code, at: at)
+end 'hostIndirectReturnStartsAt'
+
+module function hostInstructionIsTheJumpOfAReturn(code ByteArray, at DecodedOffset) returns bool
+	return hostReturnsByPopAndJump() and x64IndirectReturnJumpAt(code, at: at)
+end 'hostInstructionIsTheJumpOfAReturn'
 
 #if arch(arm64)
 	function arm64CallOperandOf(instruction Arm64Instruction) returns DecodedCallOperand

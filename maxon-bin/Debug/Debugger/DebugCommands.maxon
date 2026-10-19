@@ -1394,16 +1394,14 @@ export type DebugConversation
 		match self.unchainedReturnOf(record) 'unchained'
 			none then return DebugEntryCaller.none
 			inTheLinkRegister then return self.returnAddressInTheLinkRegister()
+			inTheReturnScratch then return self.returnAddressInTheReturnScratch()
 			onTheStack(bytesAbove, _) then return self.returnAddressOnTheStack(record, bytesAbove: bytesAbove)
 		end 'unchained'
 	end 'entryCallerOf'
 
 	function returnAddressInTheLinkRegister() returns DebugEntryCaller
 		#if arch(arm64)
-			return match debugUserSpaceAddress(self.engine.registerValue(BackendRegSlotLink as EngineRegisterNumber)) 'held'
-				unresolved gives DebugEntryCaller.none
-				at(address) gives DebugEntryCaller.at(address)
-			end 'held'
+			return self.returnAddressHeldIn(BackendRegSlotLink as EngineRegisterNumber)
 		#endif
 
 		#if not arch(arm64)
@@ -1411,12 +1409,32 @@ export type DebugConversation
 		#endif
 	end 'returnAddressInTheLinkRegister'
 
-	// Inside a prologue before `mov rbp, rsp`, or at a `ret`, rbp still holds the caller's frame, so
+	function returnAddressInTheReturnScratch() returns DebugEntryCaller
+		#if not arch(arm64)
+			let scratch = X64ReturnJumpScratchReg
+
+			return self.returnAddressHeldIn(scratch.rawValue as EngineRegisterNumber)
+		#endif
+
+		#if arch(arm64)
+			panic("DebugConversation.returnAddressInTheReturnScratch: this architecture returns through its link register, so its prologue scan never reports a popped return address — only x64's `pop; jmp` return answers `inTheReturnScratch`")
+		#endif
+	end 'returnAddressInTheReturnScratch'
+
+	function returnAddressHeldIn(register EngineRegisterNumber) returns DebugEntryCaller
+		return match debugUserSpaceAddress(self.engine.registerValue(register)) 'held'
+			unresolved gives DebugEntryCaller.none
+			at(address) gives DebugEntryCaller.at(address)
+		end 'held'
+	end 'returnAddressHeldIn'
+
+	// Inside a prologue before `mov rbp, rsp`, or at a return, rbp still holds the caller's frame, so
 	// the stopped frame's address is derived from the stack pointer instead.
 	function frameOf(record EngineStop) returns DebugAddress
 		match self.unchainedReturnOf(record) 'unchained'
 			none then return record.framePointer
 			inTheLinkRegister(frame) then return prologueFrameAddress(record, frame: frame)
+			inTheReturnScratch(frame) then return prologueFrameAddress(record, frame: frame)
 			onTheStack(_, frame) then return prologueFrameAddress(record, frame: frame)
 		end 'unchained'
 	end 'frameOf'
@@ -1693,7 +1711,8 @@ export type DebugConversation
 
 		match self.unchainedReturnOf(stop) 'unchained'
 			onTheStack(bytesAbove, _) then return self.plantedOnTheReturnAbove(stop, bytesAbove: bytesAbove)
-			inTheLinkRegister then return self.plantedOnTheLinkRegister(stop)
+			inTheLinkRegister then return self.plantedOnTheCaller(stop, caller: self.returnAddressInTheLinkRegister())
+			inTheReturnScratch then return self.plantedOnTheCaller(stop, caller: self.returnAddressInTheReturnScratch())
 			none then break
 		end 'unchained'
 
@@ -1717,12 +1736,12 @@ export type DebugConversation
 		end 'caller'
 	end 'plantedOnTheReturnAbove'
 
-	function plantedOnTheLinkRegister(stop EngineStop) returns ReturnPlanting
-		return match self.returnAddressInTheLinkRegister() 'caller'
+	function plantedOnTheCaller(stop EngineStop, caller DebugEntryCaller) returns ReturnPlanting
+		return match caller 'caller'
 			none gives ReturnPlanting.declined
 			at(returnAddress) gives self.plantedAt(DebugReturnPoint.create(returnAddress, framePointer: stop.framePointer, greenThread: stop.greenThread, kind: DebugReturnKind.callReturn))
 		end 'caller'
-	end 'plantedOnTheLinkRegister'
+	end 'plantedOnTheCaller'
 
 	function plantedPastTheSplice(stop EngineStop, mode DebugWalkMode) returns ReturnPlanting
 		match self.symbols.spliceExitAt(stop.pc - self.engine.imageTextBase()) 'exit'

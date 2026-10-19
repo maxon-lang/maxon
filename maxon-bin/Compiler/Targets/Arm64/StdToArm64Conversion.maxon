@@ -1842,10 +1842,12 @@ export type StdToArm64Lowering
 	end 'lowerVoidReturn'
 
 	function emitRet(dstRef ElementIndex, asTerminator bool)
+		let transfer = unitReturnTransfer(self.stdModule)
+
 		if asTerminator 'asTerm'
-			self.emitTerminator(dstRef, op: TargetOp.arm64Ret)
+			self.emitTerminator(dstRef, op: TargetOp.arm64Ret(transfer))
 		end 'asTerm' else 'asBody'
-			self.emit(dstRef, op: TargetOp.arm64Ret)
+			self.emit(dstRef, op: TargetOp.arm64Ret(transfer))
 		end 'asBody'
 	end 'emitRet'
 

@@ -41,7 +41,7 @@ let Arm64SpBaseField = 31
 // would be this fact written down twice.
 let Arm64Fp = 29
 export let Arm64FramePointerRegNum = Arm64Fp as RegNum
-let Arm64Lr = 30
+export let Arm64Lr = 30
 
 // ⭐⭐⭐ **x15 — THE ONE REGISTER HELD BACK FROM THE ALLOCATOR SO A STOPPED THREAD CAN BE PUT BACK WHERE IT
 // STOOD.** AArch64 has no stack-popping return: `__gt_async_preempt` must set the program counter through a
@@ -1682,7 +1682,7 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, covOffsets CovPointOffse
 		// `minsd`/`maxsd` are inside the range above; the arm64 spelling of `min`/`max` is `fcmp` +
 		// `fcsel`, not one op.
 		// --- arm64 band ---
-		arm64Ret then emitArm64Insn(code, insn: Arm64OpRet)
+		arm64Ret(transfer) then arm64EmitReturnTransfer(code, transfer: transfer)
 		arm64Branch(targetBlockId) then arm64EmitBranch(code, fixups: branchFixups, targetBlock: targetBlockId)
 		arm64CondBranch(cond, targetBlockId) then arm64EmitCondBranch(code, fixups: branchFixups, cond: cond, targetBlock: targetBlockId)
 		arm64Cbz(reg, targetBlockId) then arm64EmitCbz(code, fixups: branchFixups, reg: arm64GprField(reg), targetBlock: targetBlockId)
@@ -2393,6 +2393,15 @@ end 'arm64EmitAddLsrReg'
 export function arm64EmitRet(code ByteArray)
 	emitArm64Insn(code, insn: Arm64OpRet)
 end 'arm64EmitRet'
+
+// `br x30` is sound only while this backend emits no BTI and no PAC: a BTI-guarded return address is no
+// landing pad for a `br`, and a signed x30 must be authenticated first.
+export function arm64EmitReturnTransfer(code ByteArray, transfer ReturnTransfer)
+	match transfer 'transfer'
+		returnInstruction then arm64EmitRet(code)
+		indirectJump then arm64EmitBranchReg(code, reg: Arm64Lr)
+	end 'transfer'
+end 'arm64EmitReturnTransfer'
 
 // BRK #0 — the entry stub's trap after the exit primitive, in case it ever returns (it does not).
 export function arm64EmitBrk(code ByteArray)

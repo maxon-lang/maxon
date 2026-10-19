@@ -1,0 +1,53 @@
+// A function whose frame can resume after a green-thread switch returns by indirect jump. Its `ret`
+// would pop a return-stack entry pushed by the context that ran before the switch, so it mispredicts on
+// nearly every resume, where an indirect jump is predicted from its own history. Those frames are the
+// direct-call (`call`/`tryCall`) closure of `__gt_context_switch`, user functions included.
+//
+// Indirect and witness calls add no edge: marking through them flags hot callees whose returns predict
+// well and slows every program. Correctness never depends on the flag, so a frame missed here still
+// returns correctly.
+export function markIndirectJumpReturns(module StdModule, byName FuncIndexByName)
+	let functionCount = module.funcCount()
+	var call = StdCallOperands.create()
+	var liveOps = OpIndexArray.create()
+	var calleeIndices = CsrColumn.create()
+	var callerIndices = CsrColumn.create()
+	var switchSeeds = BoolArray.create()
+	switchSeeds.resize(functionCount)
+
+	for funcIndex in 0 upto functionCount 'eachFunction'
+		view func = module.getFunc(funcIndex)
+		module.collectLiveOpIndices(func, into: liveOps)
+
+		for opIdx in liveOps 'eachOp'
+			view op = try module.ops.get(opIdx) otherwise panic("markIndirectJumpReturns: live op index {opIdx} not in module.ops")
+			classifyCallOperands(op, call: call)
+
+			if not call.namesACallee() 'namesNoFunction'
+				continue
+			end 'namesNoFunction'
+
+			let calleeIndex = try byName.get(call.callee) otherwise 'aChunk'
+				if call.callee.equals(GtContextSwitchName) 'theSwitch'
+					try switchSeeds.set(funcIndex, value: true) otherwise panic("markIndirectJumpReturns: function {funcIndex} is past the {functionCount} the seed column spans")
+				end 'theSwitch'
+
+				continue
+			end 'aChunk'
+
+			calleeIndices.push(calleeIndex as CsrIndex)
+			callerIndices.push(funcIndex as CsrIndex)
+		end 'eachOp'
+	end 'eachFunction'
+
+	let resumedAfterASwitch = reverseReachabilityMark(buildCsr(calleeIndices, to: callerIndices, nodeCount: functionCount as CsrIndex), seeds: switchSeeds)
+
+	for funcIndex in 0 upto functionCount 'eachMarked'
+		if not (try resumedAfterASwitch.get(funcIndex) otherwise panic("markIndirectJumpReturns: function {funcIndex} is past the {functionCount} the closure spans")) 'staysAMatchedReturn'
+			continue
+		end 'staysAMatchedReturn'
+
+		var func = module.getFunc(funcIndex)
+		func.returnsByIndirectJump = true
+	end 'eachMarked'
+end 'markIndirectJumpReturns'

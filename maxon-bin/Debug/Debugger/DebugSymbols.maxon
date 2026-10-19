@@ -10,7 +10,9 @@ export union DebugEntryCaller
 end 'DebugEntryCaller'
 
 // A return address the frame-pointer chain does not reach: from the function's entry, through its
-// green-thread stack guard and its prologue, up to `mov rbp, rsp`, or at a `ret`. `wordsAbove` counts the words pushed over it and `frame` the words the prologue
+// green-thread stack guard and its prologue, up to `mov rbp, rsp`, or at a return — at the `jmp` of
+// x64's `pop; jmp` the address is already popped into the return scratch. `bytesAbove` counts the
+// bytes pushed over it and `frame` the words the prologue
 // pushes before `mov rbp, rsp`, which places the frame pointer the function's body runs under.
 export typealias DebugFrameShift = int(-0x1000000 to 0x1000000)
 export typealias DebugFrameReach = int(0 to 0x1000000)
@@ -18,6 +20,7 @@ export typealias DebugFrameReach = int(0 to 0x1000000)
 export union DebugUnchainedReturn
 	none
 	inTheLinkRegister(frame DebugPrologueFrame)
+	inTheReturnScratch(frame DebugPrologueFrame)
 	onTheStack(bytesAbove DebugFrameReach, frame DebugPrologueFrame)
 end 'DebugUnchainedReturn'
 
@@ -474,6 +477,10 @@ export type DebugSymbols
 		if hostInstructionIsAReturn(self.code, at: offset) or offset <= prologueStartOf(fn) 'nothingPushedAboveIt'
 			return prologue.atEntry
 		end 'nothingPushedAboveIt'
+
+		if hostInstructionIsTheJumpOfAReturn(self.code, at: offset) 'theAddressIsAlreadyPopped'
+			return prologue.atReturnJump
+		end 'theAddressIsAlreadyPopped'
 
 		for step in prologue.steps 'eachStep'
 			if step.endOffset == offset 'justPastThisOne'
@@ -1466,9 +1473,10 @@ typealias DebugPrologueStepArray = Array with DebugPrologueStep
 type DebugPrologue
 	export let steps as DebugPrologueStepArray
 	export let atEntry as DebugUnchainedReturn
+	export let atReturnJump as DebugUnchainedReturn
 
-	static function create(steps DebugPrologueStepArray, atEntry DebugUnchainedReturn) returns DebugPrologue
-		return Self{steps: steps, atEntry: atEntry}
+	static function create(steps DebugPrologueStepArray, atEntry DebugUnchainedReturn, atReturnJump DebugUnchainedReturn) returns DebugPrologue
+		return Self{steps: steps, atEntry: atEntry, atReturnJump: atReturnJump}
 	end 'create'
 end 'DebugPrologue'
 
@@ -1510,7 +1518,7 @@ function scannedX64Prologue(code ByteArray, fn MxdbgFunctionInfo) returns DebugP
 		steps.push(DebugPrologueStep.create(pushEnd, unchained: DebugUnchainedReturn.onTheStack(above, frame: x64FrameAt((above as DebugFrameShift) - pushed, setsTheFrame: setsTheFrame))))
 	end 'eachPush'
 
-	return DebugPrologue.create(steps, atEntry: DebugUnchainedReturn.onTheStack(0, frame: x64FrameAt(0 - pushed, setsTheFrame: setsTheFrame)))
+	return DebugPrologue.create(steps, atEntry: DebugUnchainedReturn.onTheStack(0, frame: x64FrameAt(0 - pushed, setsTheFrame: setsTheFrame)), atReturnJump: DebugUnchainedReturn.inTheReturnScratch(x64FrameAt((0 - pushed) - (DebuggeeWordBytes as DebugFrameShift), setsTheFrame: setsTheFrame)))
 end 'scannedX64Prologue'
 
 function x64FrameAt(delta DebugFrameShift, setsTheFrame bool) returns DebugPrologueFrame
@@ -1601,7 +1609,7 @@ function scannedArm64Prologue(code ByteArray, fn MxdbgFunctionInfo) returns Debu
 		steps.push(DebugPrologueStep.create(boundary.endOffset, unchained: arm64UnchainedAt(boundary.droppedBytes, recordIsStored: boundary.recordIsStored, scan: scan)))
 	end 'eachBoundary'
 
-	return DebugPrologue.create(steps, atEntry: arm64UnchainedAt(0, recordIsStored: false, scan: scan))
+	return DebugPrologue.create(steps, atEntry: arm64UnchainedAt(0, recordIsStored: false, scan: scan), atReturnJump: DebugUnchainedReturn.none)
 end 'scannedArm64Prologue'
 
 function arm64UnchainedAt(droppedBytes Arm64FrameBytes, recordIsStored bool, scan Arm64PrologueScan) returns DebugUnchainedReturn

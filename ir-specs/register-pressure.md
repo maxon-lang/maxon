@@ -7363,7 +7363,7 @@ func @main {
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 ```
 
@@ -7458,6 +7458,6 @@ func @main {
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg rbp
-    x64.ret
+    x64.retIndirect
 }
 ```
