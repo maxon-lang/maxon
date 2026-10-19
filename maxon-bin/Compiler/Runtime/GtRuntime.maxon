@@ -433,9 +433,10 @@ let SelectReadied = 1
 // one link.
 let GtOffRunqNext = GtOffSelectDone + PointerFieldBytes
 
-// ⭐⭐ **THE TWO STACK MARKS (`GtStackMarkResized`, `GtStackMarkGrew`)** — what a spawn and a grow can afford to
-// record, one store and no clock read. The park door turns `resized` into `GtOffStackResizedAt`; the finish reads
-// `grew` to choose the adaptive seed's sample. Touched only by the thread itself and by the machine running its
+// ⭐⭐ **THE THREE STACK MARKS (`GtStackMarkResized`, `GtStackMarkGrew`, `GtStackMarkParked`)** — what a spawn, a
+// grow and a park can afford to record, one store and no clock read. The park door sets `parked` and turns
+// `resized` into `GtOffStackResizedAt`; the finish reads `grew` and `parked` to choose the adaptive seed's sample,
+// or to take none. Touched only by the thread itself and by the machine running its
 // strand, one at a time, so it takes no atomic. EXPORTED because both morestack chunks store it.
 export let GtOffStackMarks = GtOffRunqNext + PointerFieldBytes
 
@@ -445,9 +446,8 @@ export let GtOffStackMarks = GtOffRunqNext + PointerFieldBytes
 let GtOffStackResizedAt = GtOffStackMarks + PointerFieldBytes
 
 // ⭐ **THE DEEPEST `top - sp` A PARK DOOR HAS SEEN ON THIS THREAD** — the only depth the runtime observes on a
-// thread that never grew, since the prologue guard reports only an overflow. Recorded by `__gt_stack_shrink`, so a
-// thread that has only ever been at the floor leaves it 0; read by the finish as the sample of a thread that never
-// needed to grow.
+// thread that never grew, since the prologue guard reports only an overflow. Raised at every park
+// (`emitGtNoteStackDepth`); read by the finish as the sample of a thread that parked and never needed to grow.
 let GtOffStackHighWater = GtOffStackResizedAt + PointerFieldBytes
 
 // ⭐⭐ **ON A STRAND's OWNER: THE MEMBER THE STRAND RUNS NEXT — OR 0** — a member a preemption
@@ -653,13 +653,16 @@ let GtSeedWindowMask = GtSeedWindowSamples - 1
 // ten thousand concurrent threads commit 640 MB at most.
 let GtSeedMaxBytes = 0x10000 as FullRangeInt
 
-// `GtOffStackMarks`' two bits. `resized`: the size was chosen since the thread last parked — set by the spawn and by
-// every grow, cleared by the park that stamps the time. `grew`: `__gt_morestack` has run for this thread — set by
-// every grow and never cleared.
+// `GtOffStackMarks`' three bits. `resized`: the size was chosen since the thread last parked — set by the spawn and
+// by every grow, cleared by the park that stamps the time. `grew`: `__gt_morestack` has run for this thread — set by
+// every grow and never cleared. `parked`: the park door has seen this thread's depth — set by every park; a grow's
+// store clears it, which is harmless because `grew` then selects the sample.
 let GtStackMarkResized = 1 as FullRangeInt
 let GtStackMarkGrew = 2 as FullRangeInt
+let GtStackMarkParked = 4 as FullRangeInt
+let GtStackMarksOfAnObservation = GtStackMarkGrew or GtStackMarkParked
 
-// What a grow stores: both marks. EXPORTED for the morestack chunks.
+// What a grow stores: `resized` and `grew`. EXPORTED for the morestack chunks.
 export let GtStackMarksOfAGrow = GtStackMarkResized or GtStackMarkGrew
 
 // ⭐⭐ **WHERE THE OS WRITES A HARDWARE FAULT'S FRAME WHEN A GREEN THREAD FAULTS.** A fault's frame is not a
@@ -6179,6 +6182,7 @@ function buildGtRunnerDone(module StdModule, target Target)
 	var wake = module.addBlock(func, label: b"runnerwake", heat: BlockHeat.normal)
 	var stackCheck = module.addBlock(func, label: b"runnerstackcheck", heat: BlockHeat.normal)
 	var releaseStack = module.addBlock(func, label: b"runnerreleasestack", heat: BlockHeat.normal)
+	var sampleKind = module.addBlock(func, label: b"runnersamplekind", heat: BlockHeat.normal)
 	var sampleDepth = module.addBlock(func, label: b"runnersampledepth", heat: BlockHeat.normal)
 	var sampled = module.addBlock(func, label: b"runnersampled", heat: BlockHeat.normal)
 	var haveOffset = module.addBlock(func, label: b"runnersampleoffset", heat: BlockHeat.normal)
@@ -6249,16 +6253,24 @@ function buildGtRunnerDone(module StdModule, target Target)
 
 	// ⭐⭐ **THE ADAPTIVE SEED's SAMPLE IS THE STACK THIS THREAD NEEDED, NOT THE ONE IT WAS GIVEN** — Go averages the
 	// stack a goroutine is USING. A thread that grew needed its final size. One that never grew needed AT LEAST its
-	// deepest observed park plus the guard height (`GtOffStackHighWater`, 0 for a thread that never reached the
-	// door), and that least is its sample. Completion observes nothing, its stack being empty by then. Sampling the
-	// seed it was handed would let one burst of deep threads hold every later spawn at that seed, since a
-	// short-lived thread never shrinks. Adding the prologue's margin, as the shrink rule does, would count the park's
-	// own frames twice, since they ride in that margin, and on a lane whose floor leaves little above the guard it
-	// would lift every thread that parks off the floor.
-	let stackSize = emitLoadField(module, block: releaseStack, record: gt, offset: GtOffStackSize, ids: ids)
-	let grew = emitGtHasStackMark(module, block: releaseStack, marks: emitLoadField(module, block: releaseStack, record: gt, offset: GtOffStackMarks, ids: ids), mark: GtStackMarkGrew, ids: ids)
-	module.setTerminator(releaseStack, op: StdOp.condBranch(grew, thenBlockId: sampled.id, elseBlockId: sampleDepth.id))
-	releaseStack.branchEdges.push(BranchEdge.create(sampled.id, argIds: argsOf(stackSize)))
+	// deepest observed park plus the guard height (`GtOffStackHighWater`), and that least is its sample. Completion
+	// observes nothing, its stack being empty by then. Sampling the seed it was handed would let one burst of deep
+	// threads hold every later spawn at that seed, since a short-lived thread never shrinks. Adding the prologue's
+	// margin, as the shrink rule does, would count the park's own frames twice, since they ride in that margin, and
+	// on a lane whose floor leaves little above the guard it would lift every thread that parks off the floor.
+	//
+	// A thread that neither parked nor grew was seen at no depth, so it samples nothing and advances no window, and
+	// a stretch of such threads leaves the seed where it is. Sampling it at the guard height pulls the seed to the
+	// floor, where the next threads grow and push it back up, and each flip frees and reallocates the kept stacks
+	// of recycled records. After a deep burst, short threads that never park leave the seed high.
+	let stackMarks = emitLoadField(module, block: releaseStack, record: gt, offset: GtOffStackMarks, ids: ids)
+	let observed = emitGtHasStackMark(module, block: releaseStack, marks: stackMarks, mark: GtStackMarksOfAnObservation, ids: ids)
+	module.setTerminator(releaseStack, op: StdOp.condBranch(observed, thenBlockId: sampleKind.id, elseBlockId: keepStack.id))
+
+	let stackSize = emitLoadField(module, block: sampleKind, record: gt, offset: GtOffStackSize, ids: ids)
+	let grew = emitGtHasStackMark(module, block: sampleKind, marks: stackMarks, mark: GtStackMarkGrew, ids: ids)
+	module.setTerminator(sampleKind, op: StdOp.condBranch(grew, thenBlockId: sampled.id, elseBlockId: sampleDepth.id))
+	sampleKind.branchEdges.push(BranchEdge.create(sampled.id, argIds: argsOf(stackSize)))
 
 	let highWater = emitLoadField(module, block: sampleDepth, record: gt, offset: GtOffStackHighWater, ids: ids)
 	let depthNeeded = emitBin(module, block: sampleDepth, a: highWater, b: emitConst(module, block: sampleDepth, value: gtStackGuardHeight(target), ids: ids), opcode: StdBinOpcode.add, ids: ids)
@@ -6824,6 +6836,7 @@ function buildGtRunStrand(module StdModule, target Target)
 	var dropPin = module.addBlock(func, label: b"stranddroppin", heat: BlockHeat.cold)
 	var reapMember = module.addBlock(func, label: b"strandreap", heat: BlockHeat.normal)
 	var parked = module.addBlock(func, label: b"strandparked", heat: BlockHeat.normal)
+	var judged = module.addBlock(func, label: b"strandjudged", heat: BlockHeat.normal)
 	var shrink = module.addBlock(func, label: b"strandshrink", heat: BlockHeat.normal)
 	var dispatch = module.addBlock(func, label: b"stranddispatch", heat: BlockHeat.normal)
 	var register = module.addBlock(func, label: b"strandregister", heat: BlockHeat.normal)
@@ -6884,9 +6897,9 @@ function buildGtRunStrand(module StdModule, target Target)
 
 	// ⭐⭐ **THE ONE DOOR EVERY PARK PASSES WHILE THE THREAD IS STOPPED AND REACHABLE BY NOBODY ELSE** — its
 	// registers are saved and it is on no store and no queue yet, or, as a mailbox receiver, on one no waker
-	// can reach until the commit below leaves the mailbox lock — so it is where a stack may move
-	// (`__gt_stack_shrink`). A stack at the floor has nothing to give back, and that load and compare is all a
-	// park of one pays.
+	// can reach until the commit below leaves the mailbox lock — so it is where a stack's depth is noted
+	// (`emitGtNoteStackDepth`) and where a stack may move (`__gt_stack_shrink`). A stack at the floor has nothing
+	// to give back, and the depth note, a load and a compare is all a park of one pays.
 	// ⛔⛔ **A THREAD THAT DID NOT ASK TO STOP KEEPS ITS STACK WHERE IT IS — Go's rule, and the reason is what
 	// a MOVE can and cannot rebase.** `__gt_stack_relocate` rebases `gt.sp`, `gt.fp` and the saved
 	// frame-pointer chain; a REGISTER holding an address inside the stack is rebased by nothing. At a
@@ -6895,11 +6908,13 @@ function buildGtRunStrand(module StdModule, target Target)
 	// register file spilled verbatim, and a promoted stack record's address in any of those registers would
 	// come back naming freed pages. Go never shrinks at a preemption either (`gopreempt_m` goes through
 	// `goschedImpl`, which does not call `shrinkstack`) and refuses outright at an async safe point.
-	let size = emitLoadField(module, block: parked, record: member, offset: GtOffStackSize, ids: ids)
-	let aboveFloor = emitCompareWithConstant(module, block: parked, value: size, pred: StdCmpPred.gt, against: gtSeedStackBytes(target), ids: ids)
-	let stopped = emitCompareWithConstant(module, block: parked, value: emitLoadField(module, block: parked, record: member, offset: GtOffParkKind, ids: ids), pred: StdCmpPred.ne, against: GtParkKind.preempt.rawValue, ids: ids)
-	let mayShrink = emitBin(module, block: parked, a: aboveFloor, b: stopped, opcode: StdBinOpcode.bitAnd, ids: ids)
-	module.setTerminator(parked, op: StdOp.condBranch(mayShrink, thenBlockId: shrink.id, elseBlockId: dispatch.id))
+	emitGtNoteStackDepth(module, func: func, cur: parked, gt: member, cont: judged, ids: ids)
+
+	let size = emitLoadField(module, block: judged, record: member, offset: GtOffStackSize, ids: ids)
+	let aboveFloor = emitCompareWithConstant(module, block: judged, value: size, pred: StdCmpPred.gt, against: gtSeedStackBytes(target), ids: ids)
+	let stopped = emitCompareWithConstant(module, block: judged, value: emitLoadField(module, block: judged, record: member, offset: GtOffParkKind, ids: ids), pred: StdCmpPred.ne, against: GtParkKind.preempt.rawValue, ids: ids)
+	let mayShrink = emitBin(module, block: judged, a: aboveFloor, b: stopped, opcode: StdBinOpcode.bitAnd, ids: ids)
+	module.setTerminator(judged, op: StdOp.condBranch(mayShrink, thenBlockId: shrink.id, elseBlockId: dispatch.id))
 
 	module.appendOp(shrink, op: StdOp.call(ids.mint(), callee: GtStackShrinkName, args: argsOf(member)))
 	module.setTerminator(shrink, op: StdOp.branch(dispatch.id))
@@ -6965,8 +6980,7 @@ end 'emitStrandRunReturn'
 // ⭐⭐⭐ **`__gt_stack_shrink(gt)` — Go's `shrinkstack`: HALVE A PARKED THREAD's STACK WHEN LESS THAN A QUARTER OF IT
 // IS IN USE.** Its one caller is the strand runner's park door, for a stack above the floor, on the machine's
 // scheduler context: the thread is stopped, its registers are saved on its own stack, and it is on no store and
-// no queue yet, so nothing but this machine can reach it until the park is registered. Every visit also records
-// the depth it finds (`GtOffStackHighWater`).
+// no queue yet, so nothing but this machine can reach it until the park is registered.
 //
 // ⭐⭐ **GO's `isShrinkStackSafe` REFUSALS HAVE NO SUBJECT HERE.** A park never happens inside a kernel call — the
 // syscall shim runs the call on the machine's system stack and comes back to the thread before anything can
@@ -6985,7 +6999,7 @@ end 'emitStrandRunReturn'
 //
 // ⭐⭐ **THE TESTS RUN CHEAPEST FIRST, AND THE CLOCK IS READ ONLY WHEN ITS ANSWER DECIDES SOMETHING** — at the park
 // that stamps a fresh size, and for a stack the quarter rule would halve. A park that does neither costs the
-// door's compare, this call, five loads and three tests. `__gt_now_ns` is a kernel call on some lanes; a thread
+// door's depth note and compare, this call, five loads and two tests. `__gt_now_ns` is a kernel call on some lanes; a thread
 // the quarter rule would halve pays it at each park only until the window lets the halving happen, and that ends
 // at the floor.
 //
@@ -6995,8 +7009,6 @@ function buildGtStackShrink(module StdModule, target Target)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var deeper = module.addBlock(func, label: b"shrinkdeeper", heat: BlockHeat.normal)
-	var marks = module.addBlock(func, label: b"shrinkmarks", heat: BlockHeat.normal)
 	var stamp = module.addBlock(func, label: b"shrinkstamp", heat: BlockHeat.normal)
 	var measure = module.addBlock(func, label: b"shrinkmeasure", heat: BlockHeat.normal)
 	var window = module.addBlock(func, label: b"shrinkwindow", heat: BlockHeat.normal)
@@ -7008,20 +7020,15 @@ function buildGtStackShrink(module StdModule, target Target)
 	let gt = 0
 
 	let size = emitLoadField(module, block: entry, record: gt, offset: GtOffStackSize, ids: ids)
-	let top = emitBin(module, block: entry, a: emitLoadField(module, block: entry, record: gt, offset: GtOffStackBase, ids: ids), b: size, opcode: StdBinOpcode.add, ids: ids)
-	let used = emitBin(module, block: entry, a: top, b: emitLoadField(module, block: entry, record: gt, offset: GtOffSp, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
-	emitBranchOnCompareValues(module, block: entry, a: used, pred: StdCmpPred.gt, b: emitLoadField(module, block: entry, record: gt, offset: GtOffStackHighWater, ids: ids), whenTrue: deeper, whenFalse: marks, ids: ids)
+	let used = emitGtStackUsed(module, block: entry, gt: gt, ids: ids)
 
-	emitStoreField(module, block: deeper, record: gt, offset: GtOffStackHighWater, value: used)
-	module.setTerminator(deeper, op: StdOp.branch(marks.id))
+	let stackMarks = emitLoadField(module, block: entry, record: gt, offset: GtOffStackMarks, ids: ids)
+	let resized = emitGtHasStackMark(module, block: entry, marks: stackMarks, mark: GtStackMarkResized, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(resized, thenBlockId: stamp.id, elseBlockId: measure.id))
 
-	let stackMarks = emitLoadField(module, block: marks, record: gt, offset: GtOffStackMarks, ids: ids)
-	let resized = emitGtHasStackMark(module, block: marks, marks: stackMarks, mark: GtStackMarkResized, ids: ids)
-	module.setTerminator(marks, op: StdOp.condBranch(resized, thenBlockId: stamp.id, elseBlockId: measure.id))
-
-	// `grew` outlives the park: the finish reads it.
+	// `grew` and `parked` outlive the park: the finish reads them.
 	emitStoreField(module, block: stamp, record: gt, offset: GtOffStackResizedAt, value: emitGtNowNs(module, block: stamp, ids: ids))
-	emitStoreField(module, block: stamp, record: gt, offset: GtOffStackMarks, value: emitBin(module, block: stamp, a: stackMarks, b: emitConst(module, block: stamp, value: GtStackMarkGrew, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids))
+	emitStoreField(module, block: stamp, record: gt, offset: GtOffStackMarks, value: emitBin(module, block: stamp, a: stackMarks, b: emitConst(module, block: stamp, value: GtStackMarksOfAnObservation, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids))
 	module.setTerminator(stamp, op: StdOp.retVoid)
 
 	let slack = emitConst(module, block: measure, value: gtStackGuardHeight(target) + gtStackGuardMargin(target), ids: ids)
@@ -7467,6 +7474,28 @@ function emitGtHasStackMark(module StdModule, block IrBlock, marks ValueId, mark
 	let bit = emitBin(module, block: block, a: marks, b: emitConst(module, block: block, value: mark, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
 	return emitCompareWithConstant(module, block: block, value: bit, pred: StdCmpPred.ne, against: 0, ids: ids)
 end 'emitGtHasStackMark'
+
+function emitGtStackUsed(module StdModule, block IrBlock, gt ValueId, ids ValueMinter) returns ValueId
+	let top = emitBin(module, block: block, a: emitLoadField(module, block: block, record: gt, offset: GtOffStackBase, ids: ids), b: emitLoadField(module, block: block, record: gt, offset: GtOffStackSize, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	return emitBin(module, block: block, a: top, b: emitLoadField(module, block: block, record: gt, offset: GtOffSp, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+end 'emitGtStackUsed'
+
+// Called at the park door for every park kind, preemption included: a thread at the floor never reaches
+// `__gt_stack_shrink`, so this is the only place its depth is seen, and without it its finish samples nothing.
+function emitGtNoteStackDepth(module StdModule, func IrFunction, cur IrBlock, gt ValueId, cont IrBlock, ids ValueMinter)
+	var deeper = module.addBlock(func, label: b"stacknotedeeper", heat: BlockHeat.normal)
+	var mark = module.addBlock(func, label: b"stacknotemark", heat: BlockHeat.normal)
+
+	let used = emitGtStackUsed(module, block: cur, gt: gt, ids: ids)
+	emitBranchOnCompareValues(module, block: cur, a: used, pred: StdCmpPred.gt, b: emitLoadField(module, block: cur, record: gt, offset: GtOffStackHighWater, ids: ids), whenTrue: deeper, whenFalse: mark, ids: ids)
+
+	emitStoreField(module, block: deeper, record: gt, offset: GtOffStackHighWater, value: used)
+	module.setTerminator(deeper, op: StdOp.branch(mark.id))
+
+	let stackMarks = emitLoadField(module, block: mark, record: gt, offset: GtOffStackMarks, ids: ids)
+	emitStoreField(module, block: mark, record: gt, offset: GtOffStackMarks, value: emitBin(module, block: mark, a: stackMarks, b: emitConst(module, block: mark, value: GtStackMarkParked, ids: ids), opcode: StdBinOpcode.bitOr, ids: ids))
+	module.setTerminator(mark, op: StdOp.branch(cont.id))
+end 'emitGtNoteStackDepth'
 
 // `size shr 2` and `size shr 1` — a quarter and a half of a power-of-two stack.
 let GtStackQuarterShift = 2
