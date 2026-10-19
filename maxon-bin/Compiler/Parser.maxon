@@ -41931,21 +41931,21 @@ export type Parser
 	// knows, because it knows which of its own two doors the name came through — so the fix is to close the
 	// door.
 	//
-	// ⭐⭐ **THE DOOR IS AJAR FOR EXACTLY ONE FILE, AND FOR EXACTLY THE NAMES THAT FILE DECLARES.**
-	// `stdlib/Builtins.maxon` — the module that DECLARES the reserved space rather than merely using it — is let
-	// past `requireUnreservedName` on the DECLARATION side, and the CALL side reads the
-	// same one bit the declaration side does (`declaresCompilerInternalNames`, an identity compare against each
-	// exempt module's `<stdlibDir>/<name>` — never a basename, see `Queries.declaresCompilerInternalNames`).
-	// A rule stated on one side of a name lapses on the other: the module could
-	// declare `__int_fromString` at `:214` and then not call it at `:322`.
+	// The door is ajar for the files that declare the reserved space, and only for names some file
+	// declares. Those files, the `runtime/` tier and the stdlib modules
+	// `Queries.declaresCompilerInternalNames` names, are let past `requireUnreservedName` on the
+	// DECLARATION side, and the CALL side reads the same one bit the declaration side does
+	// (`declaresCompilerInternalNames`, an identity compare against each exempt module's
+	// `<stdlibDir>/<name>` — never a basename). A rule stated on one side of a name lapses on the
+	// other: `stdlib/Builtins.maxon` could declare `__int_fromString` and then not call it.
 	//
 	// ⚠ **THE `declaresCallee` CLAUSE IS THE OTHER HALF, AND WITHOUT IT THE EXEMPTION IS FAR WIDER THAN THE
 	// DECLARATION SIDE'S.**
-	// The declaration exemption admits the names that module WRITES; a bare file test here would admit every
-	// name it does not — `__mm_free()`, `__gt_spawn()`, `__nosuch()` — none of which any file declares, all of
+	// The declaration exemption admits the names those files WRITE; a bare file test here would admit every
+	// name they do not — `__mm_free()`, `__gt_spawn()`, `__nosuch()` — none of which any file declares, all of
 	// which would then sail past SemanticCheck (nothing to look up) into the backend. So the exemption is "a
-	// name some file declares", which is the call-side dual of the declaration exemption, and a typo in that module gets
-	// the positioned E3004 below instead of the linker panic this whole check exists to replace.
+	// name some file declares", which is the call-side dual of the declaration exemption, and a typo in one of
+	// those files gets the positioned E3004 below instead of the linker panic this whole check exists to replace.
 	//
 	// ⚠ This door asks `ProgramSignatures` (swept from every file's tokens; a parser holds no
 	// `Project`), and `SemanticCheck.validateCall` asks `project.funcSignatures` (folded from parsed

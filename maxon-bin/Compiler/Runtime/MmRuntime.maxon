@@ -490,13 +490,14 @@ end 'isRuntimeCallee'
 // ⭐ **THE RESERVATION IS ENFORCED AT BOTH ENDS, AND IT TAKES BOTH.**
 // Two separate rules bound what a `__` callee can be:
 //
-//   1. **No `__` name may be DECLARED, outside the ONE module that declares the reserved space** —
+//   1. **No `__` name may be DECLARED, outside the files that declare the reserved space**
+//      (`Queries.declaresCompilerInternalNames`) —
 //      E2051, `Parser.requireUnreservedName`, at all eight binding sites, pinned by
 //      `reserved-double-underscore.md`. Without it a user could declare and call a `__`-prefixed
 //      function, and this predicate would route that call past `validateCall`'s arity/label checks — a
 //      silent miscompile.
-//   2. **No `__` name may be CALLED from source unless it names a recognized intrinsic — or the module
-//      that declares the reserved space is calling a name it declares** — E3004,
+//   2. **No `__` name may be CALLED from source unless it names a recognized intrinsic — or a file
+//      that declares the reserved space is calling a name some file declares** — E3004,
 //      `Parser.requireCalleeIsNotReservedName`, at the two source call doors (`emitCall`,
 //      `emitAsyncCall`), pinned by `builtins-clock.md` and `reserved-double-underscore.md`.
 //
