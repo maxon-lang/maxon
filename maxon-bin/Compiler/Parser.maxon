@@ -41966,22 +41966,13 @@ export type Parser
 	// at one of the two SOURCE call doors (`emitCall`, `emitAsyncCall`) either matched the intrinsic table
 	// above — in which case it was already lowered and never reached this — or names nothing at all.
 	//
-	// ⚠ **THE CHECK IS HERE AND NOT IN SemanticCheck, AND THAT IS THE WHOLE REPAIR.**
-	// `SemanticCheck.validateCall` RETURNS EARLY on any `__` callee, on the premise that "no user name can be
-	// DECLARED with this prefix, so a `__` CALLEE is provably compiler-owned". The premise is about
-	// DECLARATIONS and the conclusion is about CALLEES, and a callee need not be declared anywhere — so a
-	// source-written `__foo()` sailed past E3004, past the arity/label/type checks, past lowering, and died in
-	// the LINKER with neither a file nor a line:
-	//
-	//   panic at X64Backend.maxon:1781: resolveCallFixups: call to unknown function '__Builtins.currentTimeMs'
-	//   panic at LowerMaxonToStd.maxon:1336: lowerAsyncCall: async callee '__whatever' has no signature
-	//   panic at LowerMaxonToStd.maxon:108:  valueTagToStdType: an `unresolved` tag reached lowering
-	//
-	// (all three measured, all three on plain user code). SemanticCheck cannot make this check itself: by the
-	// time it runs, a `call __mm_decref` the parser emitted and a `call __whatever` the user wrote are the same
-	// `MaxonOp.call`, and nothing in the Maxon tier records which is which. The PARSER is the one tier that
-	// knows, because it knows which of its own two doors the name came through — so the fix is to close the
-	// door.
+	// ⚠ The check is here and not in SemanticCheck because only the parser knows which of its doors
+	// a name came through: by the time SemanticCheck runs, a `call __mm_decref` the parser emitted
+	// and a `call __whatever` the user wrote are the same `MaxonOp.call`.
+	// `SemanticCheck.validateCall` returns early on a signatureless `__` callee
+	// (`calleeIsBuilderBuilt`) unless it is a member of a minted library type
+	// (`ProgramSignatures.isMemberOfAMintedLibraryType`), which it reports as E4006. Any other `__`
+	// callee this door admits reaches lowering unvalidated and fails there with no file or line.
 	//
 	// The door is ajar for the files that declare the reserved space, and only for names some file
 	// declares. Those files, the `runtime/` tier and the stdlib modules
@@ -41997,7 +41988,7 @@ export type Parser
 	// name they do not — `__mm_free()`, `__gt_spawn()`, `__nosuch()` — none of which any file declares, all of
 	// which would then sail past SemanticCheck (nothing to look up) into the backend. So the exemption is "a
 	// name some file declares", which is the call-side dual of the declaration exemption, and a typo in one of
-	// those files gets the positioned E3004 below instead of the linker panic this whole check exists to replace.
+	// those files gets the positioned E3004 below rather than a backend panic with no position.
 	//
 	// ⚠ This door asks `ProgramSignatures` (swept from every file's tokens; a parser holds no
 	// `Project`), and `SemanticCheck.validateCall` asks `project.funcSignatures` (folded from parsed
