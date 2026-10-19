@@ -79,6 +79,29 @@ the class that has actually bitten this project:
 Ask of every helper: **could a future edit to one copy silently diverge from the other, and what would
 that look like at runtime?** If the answer is "a wrong answer, not a compile error," fix it.
 
+### ⭐ The same DECISION made in two places is duplication too, and the copies need not look alike
+
+Duplicated *code* shows in a diff. A duplicated *decision* does not: two consumers answer one question
+about the program — which declaration a name resolves to, whether a head is a value or a type, a type's
+identity, a declaration's visibility, whether a file is library tier — each in its own words, over its
+own inputs. Nothing textual repeats, and nothing makes the answers agree.
+
+**Ask of every change: does it answer a question some other part of the compiler already answers?**
+Look hardest at a fix that teaches ONE consumer something — "the async path now consults the
+qualifier", "discovery now reads the chain" — because it says other consumers ask the same question.
+Find them all, name them with `file:line`, and say whether they share one source.
+
+- **One source, every consumer asks it:** no finding.
+- **Each consumer answers for itself:** that is the finding, even when this diff only touched one of them
+  and every copy agrees today. The fix is one source every consumer asks, never one more consumer taught
+  the rule. ⚠ It is a DESIGN finding: report it as one, with the full consumer list, so the caller can
+  take it to the user. Do not file it as one more per-site follow-up.
+
+MEASURED, 2026-10-18: a qualified chain (`stdlib.Range.create`, `sub.Calc.create`) was resolved by the
+parser's token collapse, then re-derived by the async door, `spawn`, `default`, service discovery and the
+E3112 census. Five `/land`s fixed it one consumer at a time, and six reviews each merged the copies inside
+their own diff without asking why the next consumer needed the same fix.
+
 ## 4. Latent bugs — not just style
 
 - **Resource release on EVERY path**, including throw/panic/abort. (Two `StreamingSubprocess` handle

@@ -610,6 +610,16 @@ the way — strike it with the sha that fixed it.
 - **An entry that needs a design ruling is a question** to the user, asked when its turn comes — never
   a skipped entry.
 
+> ### ⛔ AN ENTRY THAT REPEATS A LANDED FIX IS A DESIGN QUESTION, NOT A FOLLOW-UP
+> Before writing an entry, and again before landing one, ask: **has a fix of this same kind already
+> landed, or does another entry name the same question at a different site?** Examples: "the async
+> path does not consult X", after "the spawn path did not consult X"; or a second consumer that
+> disagrees with a third about one fact. If so, the fixes are treating symptoms: several consumers
+> answer one question each for themselves (`code-review` §3, "the same DECISION made in two places").
+> **HALT and take it to the user**, naming every consumer with `file:line` and the landed fixes by sha.
+> The remedy is one source every consumer asks, through `/plan-and-land`. ⛔ Never land the next
+> per-site fix while that question is open.
+
 ## ⛔ HALT AND ASK
 
 Everything above runs unattended. Stop and report, without landing, when:
@@ -621,6 +631,7 @@ Everything above runs unattended. Stop and report, without landing, when:
 - **A case would have to be removed or excluded**, or **an existing `specs` expectation rewritten**. The first
   is the failure mode this whole process exists to prevent; the second has a blast radius beyond your
   change and belongs to whoever owns that behaviour.
+- **A finding or ledger entry repeats a fix already landed, at another consumer of the same fact** (§10).
 
 **Each of those is a QUESTION, answered in place — never a reroute.** You stop, report, and wait; you do
 not open a worktree, or hand the work to another process. When the answer comes you carry
