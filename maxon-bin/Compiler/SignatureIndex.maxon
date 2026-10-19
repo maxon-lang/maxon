@@ -4294,17 +4294,6 @@ union ExistentialOwnershipProtocol
 	// `byteRecord to greenThread`, and a case placed inside it would silently join a set that is about
 	// something else.
 	bufferRecord
-
-	// ⭐⭐ **A SERVICE'S `<T>.handle` — RELEASED THROUGH MORE THAN ITS BOX, SO RETAINED THROUGH MORE THAN AN
-	// INCREF.** `__mbox_handle_drop_box` steps a mailbox `handles` share, a mailbox `refs` share AND the box;
-	// the `aggregate` retain steps only the box, so a handle reaching that arm makes the two sides of one
-	// ownership asymmetric — the mailbox's handle count reaches zero under a live handle, the service drains,
-	// and the next send is refused as stopped. It earns an arm here rather than at each door
-	// because a descriptor's `retainFunc@64` and a witness table's `retainFunc@16` are stamped from this
-	// answer, and their drop twins already route a handle to the mailbox entry.
-	//
-	// ⚠ APPENDED, for the reason the arm above states.
-	serviceHandle
 	sharedValue
 end 'ExistentialOwnershipProtocol'
 
@@ -4324,10 +4313,6 @@ function retainCalleeForProtocol(protocol ExistentialOwnershipProtocol) returns 
 
 		// The one arm whose answer is neither a copy nor a plain incref: see the case's own note.
 		bufferRecord then return OwnershipCallee.named(ManagedRetainName)
-
-		// The mailbox entry, which is `__mbox_handle_drop_box` read backwards — see the case's own note for
-		// the drain a plain box retain costs.
-		serviceHandle then return OwnershipCallee.named(MboxHandleRetainBoxName)
 		sharedValue then return OwnershipCallee.named(SharedValueBoxRetainName)
 
 		// A green thread is never co-owned — see the arm's own note.
@@ -7945,11 +7930,9 @@ export function managedFieldDropCallee(signatures ProgramSignatures, typeNames T
 end 'managedFieldDropCallee'
 
 // ⭐⭐⭐ **HOW A VALUE OF THIS DECLARED TYPE IS RETAINED — THE DUAL OF `managedNameDropCallee`.** A
-// managed record is not always retained by an incref of its box: a `<T>.handle` box names a mailbox
-// whose `handles` and `refs` counts its drop steps DOWN, so a retain that stepped neither would
-// make the two sides of one ownership asymmetric — the mailbox freed while a live handle still
-// named it, then freed again. `Runtime/MailboxRuntime.MboxHandleRetainBoxName` carries the
-// measurement.
+// retain must acquire exactly what the matching drop releases. A `<T>.handle` box owns its mailbox
+// share and gives it back from its own destructor (`MailboxRuntime.MboxHandleDestructName`), so its
+// retain is the plain box incref.
 //
 // ⭐⭐ **THE THREE OS-HANDLE AGGREGATES TAKE THE PLAIN BOX INCREF, AND THAT IS SYMMETRIC.** They are
 // co-owned in ordinary programs (`file-io`, `managed-file`, `managed-directory`, `tcp-client`,
@@ -7961,9 +7944,6 @@ end 'managedFieldDropCallee'
 // steps the count down and closes the handle only at zero, so one `__mm_incref` per co-owner is exactly its
 // dual. Closing twice needs a drop that closes UNCONDITIONALLY, which none of these three has.
 //
-// ⇒ what made `<T>.handle` different was never "it owns a handle" — it was that
-// `__mbox_handle_drop_box` steps **three** things down (a `handles` share, a `refs` share, and the box) while
-// a bare `__mm_incref` stepped only the box. That asymmetry is the bug; a refcount-checked close is not one.
 // A future aggregate whose drop releases more than the box owes an arm here, and it earns one by having that
 // shape — not by owning an OS handle.
 function managedNameRetainCallee(signatures ProgramSignatures, declaredName ByteArray, result RetainResult) returns ByteArray
@@ -7976,11 +7956,8 @@ function managedNameRetainCallee(signatures ProgramSignatures, declaredName Byte
 		managedSocket or
 		managedPages or
 		managedHandle or
+		serviceHandle or
 		userDeclared gives plainBoxRetainCallee(result)
-
-		// ONE entry for both shapes: it hands the box back (`MailboxRuntime.buildMboxHandleRetainBox`), so a
-		// caller wanting a fresh name uses the result and a caller retaining in place ignores it.
-		serviceHandle gives MboxHandleRetainBoxName
 	end 'compilerOwned'
 end 'managedNameRetainCallee'
 
@@ -7989,8 +7966,7 @@ end 'managedNameRetainCallee'
 // FRESH SSA NAME of the same box, which is what a borrow promoted to an owned binding needs
 // (`Parser.retainBorrowedAggregate`), or for a SHARED READ, whose caller uses the result as its own
 // reference to a value that may be an immortal record. Which FAMILY of entries a value takes is one
-// decision; which shape it is wanted in is another, and a second selector would let the returning
-// door spell `__mm_retain` for a handle and free a live mailbox out from under an array's handle.
+// decision; which shape it is wanted in is another.
 export enum RetainResult
 	discarded
 	freshName
@@ -8062,14 +8038,10 @@ function managedNameDropCallee(signatures ProgramSignatures, declaredName ByteAr
 		managedPages then return ProfilePagesDestructName
 		managedHandle then return ProfileHandleDestructName
 
-		//   • **A `<T>.handle` OWNS A SHARE OF A MAILBOX AND A GREEN THREAD, WHICH IS NOT MEMORY EITHER**.
-		//     Its box holds one scalar word, so `structFieldIsManaged` is false and `installStructDestructors`
-		//     skips the type outright — the file bullet's shape exactly. `MmDecrefName` here would free the eight
-		//     bytes and leave the service's green thread parked forever on a mailbox with no live handle: not a
-		//     leak the exit-101 gate can see, but a process that never exits. `__mbox_handle_drop_box` steps the
-		//     handle count (closing the mailbox when it was the last), steps the reference count (freeing it when
-		//     it was the last owner) and then takes the ordinary decref of the box.
-		serviceHandle then return MboxHandleDropBoxName
+		//   • A `<T>.handle` takes the plain decref: its box is minted with `__mbox_handle_destruct` as its
+		//     destructor, which steps the mailbox's `handles` and `refs` shares when the box's own count reaches
+		//     zero.
+		serviceHandle then return MmDecrefName
 		userDeclared then break
 	end 'compilerOwned'
 
@@ -8275,7 +8247,7 @@ module function serviceHandleCascadeCallee(action CascadeAction, clone ByteArray
 	end 'action'
 end 'serviceHandleCascadeCallee'
 
-function serviceHandleClonerOf(signatures ProgramSignatures, handleName ByteArray) returns ByteArray
+module function serviceHandleClonerOf(signatures ProgramSignatures, handleName ByteArray) returns ByteArray
 	return MboxInterfaceCloneBoxName if signatures.isInterfaceHandle(handleName) else MboxHandleCloneBoxName
 end 'serviceHandleClonerOf'
 
@@ -19536,17 +19508,12 @@ export type ProgramSignatures
 	end 'registryValueKindOf'
 
 	// ⭐⭐⭐ **WHICH RUNTIME ENTRY TAKES A SECOND OWNER OF A VALUE — the retain side of
-	// `managedNameDropCallee`.** Almost every managed value answers the plain box incref; a
-	// `<T>.handle` does not, because its box stands for a share of a mailbox's `handles`/`refs` pair
-	// that its DROP steps down. A retain that only increfs the box leaves one share owned by two
-	// references, and the second release frees a live mailbox — exit 89, or a segfault above one
-	// processor.
+	// `managedNameDropCallee`.** Almost every managed value answers the plain box incref; the arms below
+	// name the records that do not.
 	//
 	// ⚠ **THE TAG IS TESTED FIRST AND IT IS NOT A MICRO-OPTIMIZATION.** `nameId` is only meaningful
 	// for a value that HAS a declared nominal type; asking it of an integer or a String would be
-	// reading a field that means nothing there. A handle value carries its companion's name on one of
-	// TWO tags — `structRef` for a monomorphic service, `genericInstance` for a generic one, whose
-	// instantiation rides the type — so both are asked.
+	// reading a field that means nothing there.
 	export function retainCalleeOf(tag ValueTypeTag, nameId TypeNameId, from TypeNameInterner, result RetainResult) returns ByteArray
 		// ⚠ Only a shared read takes `__str_retain`, which answers a CLONE of an immortal `.rdata` record
 		// — a different pointer. Every in-place door keeps the plain box retain, which on an immortal
@@ -19566,15 +19533,6 @@ export type ProgramSignatures
 		if self.isArrayInstanceAt(tag, nameId: nameId) 'bufferRecord'
 			return managedRecordRetainCallee(result)
 		end 'bufferRecord'
-
-		// ⭐⭐ **A GENERIC SERVICE'S HANDLE RETAINS THROUGH THE MAILBOX, AND IT REACHES THIS DOOR ON THE
-		// OTHER TAG.** Its instantiation rides the handle's type, so the nominal router below never sees
-		// it — while its DROP is still `__mbox_handle_drop_box`. A plain incref here would let the
-		// mailbox's handle count reach zero under a live handle: the service drains, and the next send is
-		// refused as stopped.
-		if tag == ValueTypeTag.genericInstance and self.instanceBaseIsServiceHandle(nameId as GenericInstanceId) 'aGenericServicesHandle'
-			return MboxHandleRetainBoxName
-		end 'aGenericServicesHandle'
 
 		if self.isSharedValueInstanceAt(tag, nameId: nameId) 'aSharedValue'
 			return SharedValueBoxRetainName
@@ -19717,10 +19675,8 @@ export type ProgramSignatures
 	end 'declaresACompanionType'
 
 	// ⭐⭐ **IS THIS INSTANCE'S BASE A SERVICE HANDLE? — THE INSTANCE ROAD'S ONE HOME, and it exists for the
-	// reason `compilerOwnedAggregateOf` exists one tier over.** The drop, the clone and the retain of a value
-	// are TAG-routed: a `genericInstance` reaches none of the name-routed doors, so each of the three had to
-	// ask this for itself — and they came apart exactly once, with retain answering a plain box incref while
-	// drop answered `__mbox_handle_drop_box`, which steps two mailbox shares as well as the box.
+	// reason `compilerOwnedAggregateOf` exists one tier over.** The drop and the clone of a value are
+	// TAG-routed: a `genericInstance` reaches none of the name-routed doors, so each asks this for itself.
 	export function instanceBaseIsServiceHandle(id GenericInstanceId) returns bool
 		return self.isServiceHandle(self.genericInstanceBaseName(id))
 	end 'instanceBaseIsServiceHandle'
@@ -40334,7 +40290,6 @@ export type ProgramSignatures
 			aggregate or
 			greenThread or
 			bufferRecord or
-			serviceHandle or
 			sharedValue gives true
 		end 'protocol'
 	end 'instanceArgOwesDrop'
@@ -41282,14 +41237,12 @@ export type ProgramSignatures
 			return ListNodeDecrefName
 		end 'managedListNode'
 
-		// ⭐⭐ **A SERVICE HANDLE RELEASES THE MAILBOX, AND A GENERIC SERVICE'S HANDLE REACHES THIS ROUTER
-		// RATHER THAN THE NAME ONE** — it carries its instantiation, so the TAG decides and no name is ever
-		// asked. `__mm_decref` here would free the 8-byte box while stepping neither mailbox count, leaving
-		// the service's green thread parked for ever: the process that never exits `managedNameDropCallee`'s
-		// handle arm exists to prevent. Placed below the container arms so the common `Array` drop pays no
-		// extra probe for it.
+		// ⭐⭐ **A GENERIC SERVICE'S HANDLE REACHES THIS ROUTER RATHER THAN THE NAME ONE** — it carries its
+		// instantiation, so the TAG decides and no name is ever asked. Its box's destructor releases the
+		// mailbox, so the drop is the plain decref, as `managedNameDropCallee`'s handle arm answers. Placed
+		// below the container arms so the common `Array` drop pays no extra probe for it.
 		if self.instanceBaseIsServiceHandle(id) 'serviceHandle'
-			return MboxHandleDropBoxName
+			return MmDecrefName
 		end 'serviceHandle'
 
 		if self.instanceBaseIsSharedValue(id) 'sharedValue'
@@ -41940,12 +41893,6 @@ export type ProgramSignatures
 			return ExistentialOwnershipProtocol.none
 		end 'ownsNothing'
 
-		// Asked through `denotedAggregateName` because the destroy door below resolves the name that way, and
-		// the two words come off this one answer.
-		if self.isAnyServiceHandle(self.denotedAggregateName(typeName)) 'aServiceHandle'
-			return ExistentialOwnershipProtocol.serviceHandle
-		end 'aServiceHandle'
-
 		return ExistentialOwnershipProtocol.aggregate
 	end 'existentialOwnershipProtocol'
 
@@ -41968,7 +41915,6 @@ export type ProgramSignatures
 			// what an Array record's drop IS is exactly what an aggregate's is.
 			aggregate or
 			bufferRecord or
-			serviceHandle or
 			sharedValue then return OwnershipCallee.named(managedNameDropCallee(self, declaredName: self.denotedAggregateName(typeName)))
 
 			// A conformer whose value half is a green thread releases it the one way a green thread is
@@ -42039,7 +41985,6 @@ export type ProgramSignatures
 			aggregate or
 			greenThread or
 			bufferRecord or
-			serviceHandle or
 			sharedValue gives OwnershipCallee.named(managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: MaxonType.genericInstance(id)))
 		end 'protocol'
 	end 'instanceDropCallee'
@@ -42066,7 +42011,6 @@ export type ProgramSignatures
 			greenThread then return OwnershipCallee.named(cascadeUnsupportedEntry(action))
 			aggregate or
 			bufferRecord or
-			serviceHandle or
 			sharedValue then return OwnershipCallee.named(self.aggregateConformerCascadeCallee(self.denotedAggregateName(typeName), action: action))
 		end 'protocol'
 	end 'existentialCascadeCallee'
@@ -42091,7 +42035,6 @@ export type ProgramSignatures
 			byteRecord or
 			aggregate or
 			bufferRecord or
-			serviceHandle or
 			sharedValue then return OwnershipCallee.named(self.instanceConformerCascadeCallee(id, action: action))
 		end 'protocol'
 	end 'instanceExistentialCascadeCallee'
@@ -42172,7 +42115,6 @@ export type ProgramSignatures
 			aggregate or
 			greenThread or
 			bufferRecord or
-			serviceHandle or
 			sharedValue gives OwnershipCallee.named(managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: self.canonicalInstanceArg(id, position: position)))
 		end 'protocol'
 	end 'typeParamDropCallee'
@@ -42242,15 +42184,7 @@ export type ProgramSignatures
 		// ALIAS — `ByteArray` is a `named` leaf, not a `genericInstance` — and the tag test MEASURED as an
 		// access violation on exactly that spelling: the compiler's own `TypeNameInterner`'s `Map with
 		// (ByteArray, TypeNameId)` retained a `.rdata` key through `__retain_type_param` during a rehash.
-		let denoted = try self.denotedInstance(t) otherwise return ExistentialOwnershipProtocol.serviceHandle if self.declaredTypeNamesAServiceHandle(t) else ExistentialOwnershipProtocol.aggregate
-
-		// ⭐ **BOTH SPELLINGS OF A SERVICE HANDLE NARROW THE AGGREGATE ANSWER, AND FOR THE `Array` ARM'S
-		// REASON**: the record is a box, and what it OWNS beyond that box is what its retain has to step. A
-		// generic service's handle stands at `<T>.handle with <Args>` and reaches here as an instance; a
-		// monomorphic one names the companion and reaches the `otherwise` above.
-		if self.instanceBaseIsServiceHandle(denoted) 'aServiceHandle'
-			return ExistentialOwnershipProtocol.serviceHandle
-		end 'aServiceHandle'
+		let denoted = try self.denotedInstance(t) otherwise return ExistentialOwnershipProtocol.aggregate
 
 		if self.instanceBaseIsSharedValue(denoted) 'aSharedValue'
 			return ExistentialOwnershipProtocol.sharedValue
@@ -42262,19 +42196,6 @@ export type ProgramSignatures
 
 		return ExistentialOwnershipProtocol.aggregate
 	end 'typeOwnershipProtocol'
-
-	// Does `t` NAME a service's handle companion outright — the monomorphic spelling, which denotes no
-	// instance for the road above to read it off? `<T>.handle` is a declared struct like any other, so it
-	// arrives `structRef`, or as a `named` alias resolved through the door the drop twin resolves at.
-	function declaredTypeNamesAServiceHandle(t MaxonType) returns bool
-		let tag = maxonTypeTag(t)
-
-		if not (tagNamesADeclaredType(tag) or tag == ValueTypeTag.named) 'namesNoDeclaration'
-			return false
-		end 'namesNoDeclaration'
-
-		return self.isAnyServiceHandle(self.denotedAggregateName(self.nameOfId(typeNameIdOf(t))))
-	end 'declaredTypeNamesAServiceHandle'
 
 	// Is `t` a value held at an INTERFACE type — a two-word fat pointer whose retain and release are its
 	// WITNESS's and not any name a descriptor word can hold? BOTH spellings, because a generic type ARGUMENT

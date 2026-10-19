@@ -6231,7 +6231,7 @@ func @main {
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -6273,7 +6273,7 @@ func @main {
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r12
-    x64.callDirect __mbox_handle_drop_box
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 48
     x64.popReg r14
@@ -6892,7 +6892,7 @@ func @main {
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __mbox_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -6934,7 +6934,7 @@ func @main {
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x20
-    arm64.bl __mbox_handle_drop_box
+    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -7573,7 +7573,7 @@ func @main {
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -7616,7 +7616,7 @@ func @main {
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r12
-    x64.callDirect __mbox_handle_drop_box
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 48
     x64.popReg r14
@@ -7811,7 +7811,7 @@ func @main {
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -7853,7 +7853,7 @@ func @main {
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r12
-    x64.callDirect __mbox_handle_drop_box
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 48
     x64.popReg r14
@@ -8047,7 +8047,7 @@ func @main {
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __mbox_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -8089,7 +8089,7 @@ func @main {
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x20
-    arm64.bl __mbox_handle_drop_box
+    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -8281,7 +8281,7 @@ func @main {
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __mbox_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -8323,7 +8323,7 @@ func @main {
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x20
-    arm64.bl __mbox_handle_drop_box
+    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -8564,7 +8564,7 @@ func @main {
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __mbox_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -8606,7 +8606,7 @@ func @main {
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x20
-    arm64.bl __mbox_handle_drop_box
+    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -8803,7 +8803,7 @@ func @main {
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __mbox_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -8845,7 +8845,7 @@ func @main {
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x20
-    arm64.bl __mbox_handle_drop_box
+    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -9091,7 +9091,7 @@ func @main {
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -9133,7 +9133,7 @@ func @main {
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r12
-    x64.callDirect __mbox_handle_drop_box
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 48
     x64.popReg r14
@@ -9332,7 +9332,7 @@ func @main {
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __mbox_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -9374,7 +9374,7 @@ func @main {
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x20
-    arm64.bl __mbox_handle_drop_box
+    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -12938,7 +12938,7 @@ func @main {
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -12981,7 +12981,7 @@ func @main {
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r12
-    x64.callDirect __mbox_handle_drop_box
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 48
     x64.popReg r14
@@ -13772,7 +13772,7 @@ func @main {
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -13814,7 +13814,7 @@ func @main {
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r12
-    x64.callDirect __mbox_handle_drop_box
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 48
     x64.popReg r14
@@ -14600,7 +14600,7 @@ func @main {
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __mbox_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -14642,7 +14642,7 @@ func @main {
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x20
-    arm64.bl __mbox_handle_drop_box
+    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -15476,7 +15476,7 @@ func @main {
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __mbox_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -15518,7 +15518,7 @@ func @main {
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x20
-    arm64.bl __mbox_handle_drop_box
+    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -16413,7 +16413,7 @@ func @main {
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -16456,7 +16456,7 @@ func @main {
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r12
-    x64.callDirect __mbox_handle_drop_box
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 48
     x64.popReg r14
@@ -16845,7 +16845,7 @@ func @main {
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -16887,7 +16887,7 @@ func @main {
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r12
-    x64.callDirect __mbox_handle_drop_box
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 48
     x64.popReg r14
@@ -17271,7 +17271,7 @@ func @main {
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __mbox_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -17313,7 +17313,7 @@ func @main {
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x20
-    arm64.bl __mbox_handle_drop_box
+    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -17715,7 +17715,7 @@ func @main {
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __mbox_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -17757,7 +17757,7 @@ func @main {
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x20
-    arm64.bl __mbox_handle_drop_box
+    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -18217,7 +18217,7 @@ func @main {
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -18260,7 +18260,7 @@ func @main {
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r12
-    x64.callDirect __mbox_handle_drop_box
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 48
     x64.popReg r14
@@ -19054,7 +19054,7 @@ func @main {
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -19096,7 +19096,7 @@ func @main {
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r12
-    x64.callDirect __mbox_handle_drop_box
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 48
     x64.popReg r14
@@ -19885,7 +19885,7 @@ func @main {
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __mbox_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -19927,7 +19927,7 @@ func @main {
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x20
-    arm64.bl __mbox_handle_drop_box
+    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -20744,7 +20744,7 @@ func @main {
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __mbox_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -20786,7 +20786,7 @@ func @main {
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x20
-    arm64.bl __mbox_handle_drop_box
+    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -21660,7 +21660,7 @@ func @main {
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -21703,7 +21703,7 @@ func @main {
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r12
-    x64.callDirect __mbox_handle_drop_box
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 48
     x64.popReg r14
@@ -23098,7 +23098,7 @@ func @main {
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -23140,7 +23140,7 @@ func @main {
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r12
-    x64.callDirect __mbox_handle_drop_box
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 48
     x64.popReg r14
@@ -24530,7 +24530,7 @@ func @main {
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __mbox_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -24572,7 +24572,7 @@ func @main {
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x20
-    arm64.bl __mbox_handle_drop_box
+    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -26035,7 +26035,7 @@ func @main {
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __mbox_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -26077,7 +26077,7 @@ func @main {
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x20
-    arm64.bl __mbox_handle_drop_box
+    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -27593,7 +27593,7 @@ func @main {
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -27636,7 +27636,7 @@ func @main {
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r12
-    x64.callDirect __mbox_handle_drop_box
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 48
     x64.popReg r14
@@ -28444,7 +28444,7 @@ func @main {
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -28487,7 +28487,7 @@ func @main {
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r12
-    x64.callDirect __mbox_handle_drop_box
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 48
     x64.popReg r14
@@ -29241,7 +29241,7 @@ func @main {
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -29283,7 +29283,7 @@ func @main {
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r12
-    x64.callDirect __mbox_handle_drop_box
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 48
     x64.popReg r14
@@ -30034,7 +30034,7 @@ func @main {
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __mbox_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -30076,7 +30076,7 @@ func @main {
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x20
-    arm64.bl __mbox_handle_drop_box
+    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -30903,7 +30903,7 @@ func @main {
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __mbox_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -30945,7 +30945,7 @@ func @main {
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x20
-    arm64.bl __mbox_handle_drop_box
+    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -31817,7 +31817,7 @@ func @main {
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -31860,7 +31860,7 @@ func @main {
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r12
-    x64.callDirect __mbox_handle_drop_box
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 48
     x64.popReg r14
@@ -32087,7 +32087,7 @@ func @main {
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -32129,7 +32129,7 @@ func @main {
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r12
-    x64.callDirect __mbox_handle_drop_box
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 48
     x64.popReg r14
@@ -32351,7 +32351,7 @@ func @main {
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __mbox_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -32393,7 +32393,7 @@ func @main {
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x20
-    arm64.bl __mbox_handle_drop_box
+    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -32614,7 +32614,7 @@ func @main {
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __mbox_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -32656,7 +32656,7 @@ func @main {
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x20
-    arm64.bl __mbox_handle_drop_box
+    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -32952,7 +32952,7 @@ func @main {
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -32995,7 +32995,7 @@ func @main {
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r12
-    x64.callDirect __mbox_handle_drop_box
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 48
     x64.popReg r14
@@ -34990,7 +34990,7 @@ func @main {
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -35032,7 +35032,7 @@ func @main {
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r12
-    x64.callDirect __mbox_handle_drop_box
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 48
     x64.popReg r14
@@ -37018,7 +37018,7 @@ func @main {
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __mbox_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -37060,7 +37060,7 @@ func @main {
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x20
-    arm64.bl __mbox_handle_drop_box
+    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -39247,7 +39247,7 @@ func @main {
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __mbox_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -39289,7 +39289,7 @@ func @main {
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x20
-    arm64.bl __mbox_handle_drop_box
+    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -41531,7 +41531,7 @@ func @main {
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -41574,7 +41574,7 @@ func @main {
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r12
-    x64.callDirect __mbox_handle_drop_box
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 48
     x64.popReg r14
@@ -41790,7 +41790,7 @@ func @main {
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -41832,7 +41832,7 @@ func @main {
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r12
-    x64.callDirect __mbox_handle_drop_box
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 48
     x64.popReg r14
@@ -42043,7 +42043,7 @@ func @main {
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __mbox_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -42085,7 +42085,7 @@ func @main {
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x20
-    arm64.bl __mbox_handle_drop_box
+    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -42296,7 +42296,7 @@ func @main {
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __mbox_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -42338,7 +42338,7 @@ func @main {
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x20
-    arm64.bl __mbox_handle_drop_box
+    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -42608,7 +42608,7 @@ func @main {
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -42651,7 +42651,7 @@ func @main {
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r12
-    x64.callDirect __mbox_handle_drop_box
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 48
     x64.popReg r14
@@ -43495,7 +43495,7 @@ func @main {
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -43537,7 +43537,7 @@ func @main {
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r12
-    x64.callDirect __mbox_handle_drop_box
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 48
     x64.popReg r14
@@ -44376,7 +44376,7 @@ func @main {
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __mbox_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -44418,7 +44418,7 @@ func @main {
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x20
-    arm64.bl __mbox_handle_drop_box
+    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -45323,7 +45323,7 @@ func @main {
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __mbox_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -45365,7 +45365,7 @@ func @main {
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x20
-    arm64.bl __mbox_handle_drop_box
+    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -46344,7 +46344,7 @@ func @main {
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -46387,7 +46387,7 @@ func @main {
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r12
-    x64.callDirect __mbox_handle_drop_box
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 48
     x64.popReg r14
@@ -47756,7 +47756,7 @@ func @main {
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -47798,7 +47798,7 @@ func @main {
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r12
-    x64.callDirect __mbox_handle_drop_box
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 48
     x64.popReg r14
@@ -49164,7 +49164,7 @@ func @main {
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __mbox_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -49206,7 +49206,7 @@ func @main {
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x20
-    arm64.bl __mbox_handle_drop_box
+    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -50709,7 +50709,7 @@ func @main {
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __mbox_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -50751,7 +50751,7 @@ func @main {
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x20
-    arm64.bl __mbox_handle_drop_box
+    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -52316,7 +52316,7 @@ func @main {
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -52359,7 +52359,7 @@ func @main {
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r12
-    x64.callDirect __mbox_handle_drop_box
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 48
     x64.popReg r14
@@ -53033,7 +53033,7 @@ func @main {
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -53075,7 +53075,7 @@ func @main {
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r12
-    x64.callDirect __mbox_handle_drop_box
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 48
     x64.popReg r14
@@ -53744,7 +53744,7 @@ func @main {
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __mbox_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -53786,7 +53786,7 @@ func @main {
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x20
-    arm64.bl __mbox_handle_drop_box
+    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -54472,7 +54472,7 @@ func @main {
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __mbox_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -54514,7 +54514,7 @@ func @main {
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x20
-    arm64.bl __mbox_handle_drop_box
+    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -55104,7 +55104,7 @@ func @__mbox_close {
 **A MAILBOX's LOCK NEEDS NO INIT AND NO DESTROY, BECAUSE A ZERO WORD IS A FREE LOCK, AS GO's `hchan.lock`
 IS.** `__svc_spawn` takes the mailbox's region from `__slab_alloc`, which zeroes it, so the mailbox's lock
 is free the moment the region exists, and the spawn stores only the words a zero would be wrong for. When
-the last reference goes, the free roads of `__mbox_handle_drop_box` and `__mbox_service_exit` hand the
+the last reference goes, the free roads of `__mbox_handle_destruct` and `__mbox_service_exit` hand the
 region to `__slab_free`, and the message ring when a message was ever queued to `__slab_free_scaffold`, the
 uncounted door the ring was cut through, and to nothing else: a free lock word holds no OS object to release.
 
@@ -55143,7 +55143,7 @@ end 'main'
 ```
 ```RequiredRuntime
 __svc_spawn
-__mbox_handle_drop_box
+__mbox_handle_destruct
 __mbox_service_exit
 ```
 ```TargetIr:x64-windows
@@ -55250,7 +55250,7 @@ func @main {
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -55293,7 +55293,7 @@ func @main {
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r12
-    x64.callDirect __mbox_handle_drop_box
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 48
     x64.popReg r14
@@ -55441,44 +55441,38 @@ func @__svc_spawn {
     x64.ret
 }
 
-func @__mbox_handle_drop_box {
+func @__mbox_handle_destruct {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.loadRegBaseDisp.word64 r12, [rbx + 0]
-    x64.leaRegRegImm32 rax, r12, 48
+    x64.prologue 40
+    x64.loadRegBaseDisp.word64 rbx, [rcx + 0]
+    x64.leaRegRegImm32 rax, rbx, 48
     x64.movRegImm rcx, 18446744073709551615
     x64.lock xadd [rax], rcx <- rcx
     x64.cmpRegImm32 rcx, 1
-    x64.jcc notEqual, droprelease
-  dropclose:
-    x64.movRegReg rcx, r12
+    x64.jcc notEqual, destructrelease
+  destructclose:
+    x64.movRegReg rcx, rbx
     x64.callDirect __mbox_close
-  droprelease:
-    x64.leaRegRegImm32 rax, r12, 56
+  destructrelease:
+    x64.leaRegRegImm32 rax, rbx, 56
     x64.movRegImm rcx, 18446744073709551615
     x64.lock xadd [rax], rcx <- rcx
     x64.cmpRegImm32 rcx, 1
-    x64.jcc notEqual, dropdone
-  dropfree:
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.jcc notEqual, destructdone
+  destructfree:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, mboxfreeregion
   mboxfreering:
     x64.callDirect __slab_free_scaffold
   mboxfreeregion:
-    x64.movRegReg rcx, r12
-    x64.callDirect __slab_free
-  dropdone:
     x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
+    x64.callDirect __slab_free
+  destructdone:
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -55623,7 +55617,7 @@ func @main {
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -55665,7 +55659,7 @@ func @main {
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r12
-    x64.callDirect __mbox_handle_drop_box
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 48
     x64.popReg r14
@@ -55813,44 +55807,38 @@ func @__svc_spawn {
     x64.ret
 }
 
-func @__mbox_handle_drop_box {
+func @__mbox_handle_destruct {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.loadRegBaseDisp.word64 r12, [rbx + 0]
-    x64.leaRegRegImm32 rax, r12, 48
+    x64.prologue 40
+    x64.loadRegBaseDisp.word64 rbx, [rcx + 0]
+    x64.leaRegRegImm32 rax, rbx, 48
     x64.movRegImm rcx, 18446744073709551615
     x64.lock xadd [rax], rcx <- rcx
     x64.cmpRegImm32 rcx, 1
-    x64.jcc notEqual, droprelease
-  dropclose:
-    x64.movRegReg rcx, r12
+    x64.jcc notEqual, destructrelease
+  destructclose:
+    x64.movRegReg rcx, rbx
     x64.callDirect __mbox_close
-  droprelease:
-    x64.leaRegRegImm32 rax, r12, 56
+  destructrelease:
+    x64.leaRegRegImm32 rax, rbx, 56
     x64.movRegImm rcx, 18446744073709551615
     x64.lock xadd [rax], rcx <- rcx
     x64.cmpRegImm32 rcx, 1
-    x64.jcc notEqual, dropdone
-  dropfree:
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.jcc notEqual, destructdone
+  destructfree:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, mboxfreeregion
   mboxfreering:
     x64.callDirect __slab_free_scaffold
   mboxfreeregion:
-    x64.movRegReg rcx, r12
-    x64.callDirect __slab_free
-  dropdone:
     x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg rax, r8
-    x64.epilogue 32
-    x64.popReg r12
+    x64.callDirect __slab_free
+  destructdone:
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -55990,7 +55978,7 @@ func @main {
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __mbox_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -56032,7 +56020,7 @@ func @main {
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x20
-    arm64.bl __mbox_handle_drop_box
+    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -56172,42 +56160,36 @@ func @__svc_spawn {
     arm64.ret
 }
 
-func @__mbox_handle_drop_box {
+func @__mbox_handle_destruct {
   entry:
     arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.loadRegBaseDisp.word64 x20, [x19 + 0]
-    arm64.add x0, x20, 48
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.add x0, x19, 48
     arm64.movImm x1, 18446744073709551615
     arm64.arm64AtomicRmw.add x0, [x0], x1
     arm64.cmp x0, 1
-    arm64.b.ne droprelease
-  dropclose:
-    arm64.movRegReg x0, x20
+    arm64.b.ne destructrelease
+  destructclose:
+    arm64.movRegReg x0, x19
     arm64.bl __mbox_close
-  droprelease:
-    arm64.add x0, x20, 56
+  destructrelease:
+    arm64.add x0, x19, 56
     arm64.movImm x1, 18446744073709551615
     arm64.arm64AtomicRmw.add x0, [x0], x1
     arm64.cmp x0, 1
-    arm64.b.ne dropdone
-  dropfree:
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.b.ne destructdone
+  destructfree:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
     arm64.b.eq mboxfreeregion
   mboxfreering:
     arm64.bl __slab_free_scaffold
   mboxfreeregion:
-    arm64.movRegReg x0, x20
-    arm64.bl __slab_free
-  dropdone:
     arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x1, x0
+    arm64.bl __slab_free
+  destructdone:
     arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
 }
@@ -56352,7 +56334,7 @@ func @main {
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __mbox_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -56394,7 +56376,7 @@ func @main {
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x20
-    arm64.bl __mbox_handle_drop_box
+    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -56534,42 +56516,36 @@ func @__svc_spawn {
     arm64.ret
 }
 
-func @__mbox_handle_drop_box {
+func @__mbox_handle_destruct {
   entry:
     arm64.prologue 32
-    arm64.storeSlotReg slot1, x20
     arm64.storeSlotReg slot0, x19
-    arm64.movRegReg x19, x0
-    arm64.loadRegBaseDisp.word64 x20, [x19 + 0]
-    arm64.add x0, x20, 48
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.add x0, x19, 48
     arm64.movImm x1, 18446744073709551615
     arm64.arm64AtomicRmw.add x0, [x0], x1
     arm64.cmp x0, 1
-    arm64.b.ne droprelease
-  dropclose:
-    arm64.movRegReg x0, x20
+    arm64.b.ne destructrelease
+  destructclose:
+    arm64.movRegReg x0, x19
     arm64.bl __mbox_close
-  droprelease:
-    arm64.add x0, x20, 56
+  destructrelease:
+    arm64.add x0, x19, 56
     arm64.movImm x1, 18446744073709551615
     arm64.arm64AtomicRmw.add x0, [x0], x1
     arm64.cmp x0, 1
-    arm64.b.ne dropdone
-  dropfree:
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.b.ne destructdone
+  destructfree:
+    arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.cmp x0, 0
     arm64.b.eq mboxfreeregion
   mboxfreering:
     arm64.bl __slab_free_scaffold
   mboxfreeregion:
-    arm64.movRegReg x0, x20
-    arm64.bl __slab_free
-  dropdone:
     arm64.movRegReg x0, x19
-    arm64.bl __mm_decref
-    arm64.movRegReg x1, x0
+    arm64.bl __slab_free
+  destructdone:
     arm64.loadRegSlot x19, slot0
-    arm64.loadRegSlot x20, slot1
     arm64.epilogue 32
     arm64.ret
 }
@@ -59820,7 +59796,7 @@ func @main {
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -59863,7 +59839,7 @@ func @main {
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r12
-    x64.callDirect __mbox_handle_drop_box
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 48
     x64.popReg r14
@@ -60654,7 +60630,7 @@ func @main {
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -60696,7 +60672,7 @@ func @main {
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r12
-    x64.callDirect __mbox_handle_drop_box
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 48
     x64.popReg r14
@@ -61487,7 +61463,7 @@ func @main {
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __mbox_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -61529,7 +61505,7 @@ func @main {
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x20
-    arm64.bl __mbox_handle_drop_box
+    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -62395,7 +62371,7 @@ func @main {
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __mbox_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -62437,7 +62413,7 @@ func @main {
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x20
-    arm64.bl __mbox_handle_drop_box
+    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -67179,7 +67155,7 @@ func @main {
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -67222,7 +67198,7 @@ func @main {
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r12
-    x64.callDirect __mbox_handle_drop_box
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 48
     x64.popReg r14
@@ -67975,7 +67951,7 @@ func @main {
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -68017,7 +67993,7 @@ func @main {
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r12
-    x64.callDirect __mbox_handle_drop_box
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 48
     x64.popReg r14
@@ -68769,7 +68745,7 @@ func @main {
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __mbox_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -68811,7 +68787,7 @@ func @main {
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x20
-    arm64.bl __mbox_handle_drop_box
+    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -69633,7 +69609,7 @@ func @main {
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __mbox_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -69675,7 +69651,7 @@ func @main {
     arm64.b.gt __rc_panic
   __rc_ok:
     arm64.movRegReg x0, x20
-    arm64.bl __mbox_handle_drop_box
+    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot1
     arm64.loadRegSlot x20, slot2
@@ -73855,7 +73831,7 @@ func @main {
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeBaseDispReg.word64 [r12 + 0], rbx
@@ -73902,7 +73878,7 @@ func @main {
     x64.jcc greater, __rc_panic
   __rc_ok:
     x64.movRegReg rcx, r12
-    x64.callDirect __mbox_handle_drop_box
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 48
     x64.popReg r14

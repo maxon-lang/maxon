@@ -10126,12 +10126,10 @@ typealias Small = int(0 to 100)
 
 <!-- test: a-monomorphic-handle-is-co-owned-in-a-struct-field -->
 ⚠ **NOT A GENERIC PROGRAM, AND THAT IS THE POINT.** `a-generic-service-handle-lives-in-a-struct-field`
-above pins the generic retain router; the monomorphic road into the same co-owning store is this case's.
-`__mbox_handle_retain_box` increfs the handle box
-inside its own Std body, which the Maxon-module usage scan cannot see, so a program whose ONLY incref comes
-from a handle retain must still install `__mm_incref`, or it dies at `resolveCallFixups: call to unknown
-function '__mm_incref'`. Nothing here
-allocates but the handle, which is what makes the case discriminating.
+above pins the generic road; the monomorphic road into the same co-owning store is this case's. The field
+co-owns the handle box through a plain `__mm_incref`, so a program whose ONLY incref comes from a handle
+retain must still install `__mm_incref`. Nothing here allocates but the handle, which is what makes the
+case discriminating.
 ```maxon
 type Calc
 	var count as Whole

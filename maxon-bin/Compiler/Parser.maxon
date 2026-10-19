@@ -29912,7 +29912,11 @@ export type Parser
 
 	function emitServiceRegistration(slot ValueId, handleType MaxonType, given ValueId, replacement RegistryReplacement, argTok Token, range SourceRange) returns ValueId throws SourceParseError
 		let handle = try self.registryHandleOf(given, handleType: handleType, argTok: argTok)
-		let stored = self.coOwnConcreteRecordForSink(handle, range: range)
+
+		// A clone, so the slot holds a box only the registry owns: the slot's box is released on whichever
+		// thread replaces it, while the caller's box takes a plain unshared decrement. A box both held would
+		// lose a count update, and that count alone decides when the mailbox closes and is freed.
+		let stored = self.emitRuntimeCall(serviceHandleClonerOf(self.signatures, handleName: self.valueTypeName(handle)), args: singletonArgs(handle), resultTag: self.tagOf(handle), resultNameId: self.valueNameId(handle), range: range)
 
 		return match replacement 'replacement'
 			unconditional gives self.emitRuntimeCall(RegistryServiceRegisterName, args: pairArgs(slot, second: stored), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
@@ -51695,11 +51699,11 @@ export type Parser
 		end 'bufferRecord'
 
 		// ⭐⭐⭐ **A SERVICE HANDLE IS `structRef`-TAGGED AND IS NOT A PLAIN STRUCT BOX — a durable sink takes
-		// a SHARE of it, never a copy.** A handle's identity IS the mailbox it names, and its release
-		// (`__mbox_handle_drop_box`) steps a `handles` share, a `refs` share and the box. `__mm_own`'s copy
-		// arm allocates a second box and blits the mailbox pointer into it, so two handles would name one
-		// mailbox holding ONE share: the original's drop takes that share to zero, the service drains, and
-		// the next send is refused as stopped. MEASURED as exit 0 where the answer is 3.
+		// a SHARE of it, never a copy.** A handle's identity IS the mailbox it names, and each handle box owns
+		// one share of the mailbox, given back by its destructor (`__mbox_handle_destruct`). `__mm_own`'s copy
+		// arm allocates a second box and blits the mailbox pointer into it without taking a share, so two
+		// boxes would give back ONE share: the first drop closes the mailbox, the service drains, and the next
+		// send is refused as stopped.
 		//
 		// ⚠ It is `emitIncref`, which asks `retainCalleeOf` — so the reference a sink takes and the
 		// reference a scope-exit drop releases are the SAME answer, and stay duals by construction.
@@ -64727,11 +64731,13 @@ export type Parser
 	//      stops owing its drop. A refusal here leaves nothing behind, which is `emitBinOp`'s ordering rule.
 	//   2. **`serviceSpawn` answers the MAILBOX**, a bare machine word, because that is all the runtime has
 	//      to hand back: it created the mailbox and the green thread, and neither is a managed record.
-	//   3. **The handle BOX is minted here and not in the runtime.** `emitBoxAlloc` is the one `__mm_alloc`
-	//      door — it is where a box's destructor argument is decided — and enrolling the result through
-	//      `trackOwnedTemp` is what makes a handle an ORDINARY owned value: `let h = …` binds it, a second
-	//      read after a move is E3102, an array element drop reaches it, and its scope-exit drop is what
-	//      shuts the service down. A runtime-minted box would need every one of those taught to it.
+	//   3. **The handle BOX is minted here and not in the runtime.** `emitBoxAllocWithDestructor` is the one
+	//      `__mm_alloc` door — it is where a box's destructor argument is decided, and this box's
+	//      (`__mbox_handle_destruct`) gives back the mailbox share the spawn's initial counts hold. Enrolling
+	//      the result through `trackOwnedTemp` is what makes a handle an ORDINARY owned value: `let h = …`
+	//      binds it, a second read after a move is E3102, an array element drop reaches it, and its
+	//      scope-exit drop is what shuts the service down. A runtime-minted box would need every one of
+	//      those taught to it.
 	function emitServiceSpawn(typeName ByteArray, member ByteArray, state ValueId, capacity ValueId, instance ServiceStateInstance, spawnTok Token, memberTok Token) returns ValueId throws SourceParseError
 		let range = SourceRange.between(spawnTok, last: memberTok)
 		let moved = try self.handOff(SoleHandedOffPosition, value: state, door: ThreadHandOffDoor.message(serviceSpawnStateBlame(typeName, member: member), argumentOf: serviceSpawnStateOf(typeName, member: member)), anchor: memberTok)
@@ -64741,7 +64747,7 @@ export type Parser
 
 		view handle = self.serviceHandleLayout(typeName)
 		let handleType = self.serviceHandleValueType(handle, instance: instance)
-		let box = self.emitBoxAlloc(self.emitLiteral(handle.sizeBytes() as FullRangeInt, valueType: MaxonType.integer, range: range), resultTag: maxonTypeTag(handleType), resultNameId: typeNameIdOf(handleType), range: range)
+		let box = self.emitBoxAllocWithDestructor(self.emitLiteral(handle.sizeBytes() as FullRangeInt, valueType: MaxonType.integer, range: range), destructor: self.emitCodeAddress(MboxHandleDestructName, range: range), resultTag: maxonTypeTag(handleType), resultNameId: typeNameIdOf(handleType), range: range, tag: MmTag.Untagged)
 		self.trackOwnedTemp(box, exclusivity: OwnedHeapExclusivity.sole)
 		self.emitIndirectStore(box, offset: ServiceHandleMailboxOffset, value: mailbox, storageType: MaxonType.integer, range: range)
 		return box

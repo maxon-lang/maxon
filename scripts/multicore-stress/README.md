@@ -90,6 +90,13 @@ family a program is in decides what its rows mean**, so it is the first column h
   handlers, which is what makes the reading sound above one P without a cross-thread flag.
   Its `remoteFrees=` is the stronger of the two: every payload but the last has already crossed by
   the time it reports.
+- **`registry-replace-torture.maxon`** — one service and `main` register and conditionally replace
+  ONE service key 20,000 times each, from different Ms, while `main` also sends through
+  `current()`. A registry slot holds a handle box only the registry owns, so a register on one thread
+  and a replace on another step different box counts; a slot sharing the registering frame's box
+  loses a decrement across the two threads, which is 101 at the leak gate or a mailbox closed under a
+  live holder. ⚠ `aggregate=` is the same in passing and failing runs — **the exit code is the
+  discriminator**.
 - **`syscall-stack-torture.maxon`** — the only program that puts more than one M inside the **syscall
   shim** at once. Twelve services make ~24,000 real kernel calls: `File.exists`
   (`FindFirstFileW`, no stack arguments — the pure stack switch at the highest frequency

@@ -175,29 +175,11 @@ export let MboxSendAbandonName = b"__mbox_send_abandon"
 // service. Exported because `SignatureIndex.managedNameCascadeStrategy` routes `<T>.handle`'s clone here.
 export let MboxHandleCloneBoxName = b"__mbox_handle_clone_box"
 
-// `__mbox_handle_drop_box(handleBox)` — one handle goes; the LAST one closes the mailbox. Exported because
-// `SignatureIndex.managedNameDropCallee` routes `<T>.handle`'s drop here, which is what makes an ordinary
-// scope exit, an array element drop and a struct-field cascade all shut a service down.
-export let MboxHandleDropBoxName = b"__mbox_handle_drop_box"
-
-// ⭐⭐⭐ **`__mbox_handle_retain_box(handleBox)` — THE EXACT MIRROR OF THE DROP.** A `<T>.handle`
-// value owns THREE things — a share of the mailbox's `handles` count, a share of its `refs` count,
-// and a reference to the little box that names it — and `__mbox_handle_drop_box` releases all
-// three, so a retain acquires all three. A bare `__mm_incref` of the box, which a generic co-own
-// path emits for an ordinary managed record, acquires only the third.
-//
-// ⇒ **TWO OWNERS, ONE SHARE, TWO RELEASES.** Under a bare incref, `let w = spawn T.create()` then
-// `arr.push(w)` increfs the box to 2, and each of the two eventual drops steps `handles` and `refs`
-// DOWN — so the mailbox is closed and **FREED while the array's handle still names it**, and the
-// second drop frees it again: exit 89 (`RuntimeAbort.slabFreeOfParkedSpan`), 101 or a segfault,
-// depending on the processor count. `arr.push(spawn T.create())` cannot show it, because a
-// temporary's one reference is MOVED and never increfed.
-//
-// ⚠ **SO THE INVARIANT IS: EVERY REFERENCE TO A HANDLE BOX OWNS ONE SHARE OF EACH COUNT.** A clone takes a
-// FRESH box and one share of each (`__mbox_handle_clone_box`); a retain takes a SECOND REFERENCE to an
-// existing box and one share of each; a drop gives back one of each. All three step the pair, and the pair
-// is what decides when the service stops and when its record is freed.
-export let MboxHandleRetainBoxName = b"__mbox_handle_retain_box"
+// `__mbox_handle_destruct(handleBox)` — the destructor every handle box is minted with. The BOX owns one
+// share of the mailbox's `handles` and `refs`, not each reference to it, so a handle is retained and
+// dropped by the plain box incref and decref, and only the box's last reference steps the pair. Exported
+// because `Parser.emitServiceSpawn` mints the spawned handle's box with it.
+export let MboxHandleDestructName = b"__mbox_handle_destruct"
 
 // `__mbox_service_exit(mbox)` — the loop's last act. Exported because `ServiceLoop` emits the call as the
 // tail of every synthesized `<T>.__loop`.
@@ -225,8 +207,7 @@ export function installMailboxRuntime(module StdModule, requestStagingBytes Byte
 	buildMboxClose(module)
 	buildMboxSendAbandon(module)
 	buildMboxHandleCloneBox(module)
-	buildMboxHandleRetainBox(module)
-	buildMboxHandleDropBox(module)
+	buildMboxHandleDestruct(module)
 	buildMboxServiceExit(module)
 	buildMboxReplyRefused(module)
 	buildMboxUnknownTag(module)
@@ -292,14 +273,22 @@ module function emitMailboxShareTaken(module StdModule, block IrBlock, mbox Valu
 end 'emitMailboxShareTaken'
 
 module function emitInterfaceHandleBoxHolding(module StdModule, block IrBlock, mbox ValueId, table ValueId, ids ValueMinter) returns ValueId
-	let boxBytes = emitConst(module, block: block, value: InterfaceHandleBoxSize, ids: ids)
-	let trivial = emitConst(module, block: block, value: TrivialDestructor, ids: ids)
-	let box = ids.mint()
-	emitMmAllocCall(module, block: block, result: box, size: boxBytes, destructor: trivial, tag: mmTagIndex(MmTag.Untagged), ids: ids)
-	emitStoreField(module, block: block, record: box, offset: ServiceHandleMailboxOffset, value: mbox)
+	let box = emitHandleBoxHolding(module, block: block, mbox: mbox, boxBytes: InterfaceHandleBoxSize, ids: ids)
 	emitStoreField(module, block: block, record: box, offset: InterfaceHandleTableOffset, value: table)
 	return box
 end 'emitInterfaceHandleBoxHolding'
+
+// Every caller takes the mailbox share first (`emitMailboxShareTaken`): the destructor stamped here gives
+// one back, so a box minted without it closes and frees the mailbox under a live handle.
+function emitHandleBoxHolding(module StdModule, block IrBlock, mbox ValueId, boxBytes FullRangeInt, ids ValueMinter) returns ValueId
+	let size = emitConst(module, block: block, value: boxBytes, ids: ids)
+	let destructor = ids.mint()
+	module.appendOp(block, op: StdOp.funcAddr(destructor, funcName: MboxHandleDestructName))
+	let box = ids.mint()
+	emitMmAllocCall(module, block: block, result: box, size: size, destructor: destructor, tag: mmTagIndex(MmTag.Untagged), ids: ids)
+	emitStoreField(module, block: block, record: box, offset: ServiceHandleMailboxOffset, value: mbox)
+	return box
+end 'emitHandleBoxHolding'
 
 function buildMboxInterfaceSend(module StdModule)
 	var func = IrFunction.createFromStd(MboxInterfaceSendName, returnType: StdReturnType.value(StdType.i64), paramCount: 5, paramTypes: fiveI64Params())
@@ -999,75 +988,27 @@ function buildMboxHandleCloneBox(module StdModule)
 	let handleBox = 0
 
 	let mbox = emitLoadField(module, block: entry, record: handleBox, offset: ServiceHandleMailboxOffset, ids: ids)
-	_ = emitMboxCountStep(module, block: entry, mbox: mbox, offset: MboxOffHandles, delta: MboxCountUp, ids: ids)
-	_ = emitMboxCountStep(module, block: entry, mbox: mbox, offset: MboxOffRefs, delta: MboxCountUp, ids: ids)
-
-	// A FRESH box, on the same `__mm_alloc` contract every handle box is born through — a clone that answered
-	// the same box would make the drop of either free a record the other still names.
-	//
-	// ⛔⛔ **THROUGH `emitMmAllocCall`, BECAUSE `__mm_alloc`'s ARITY IS `--debugstream`'s.** A hand-written
-	// two-argument call here is a call one argument short of the callee a traced build defines, which is what
-	// that function's header predicts of any site that spells the call itself.
-	//
-	// ⭐ The tag is `Untagged` because THIS body has no type to name: one Std-tier entry serves every service,
-	// and the handle's companion struct is not reachable from it — the same answer, for the same reason, as
-	// `__mm_retain`'s box copy.
-	let boxBytes = emitConst(module, block: entry, value: ServiceHandleBoxSize, ids: ids)
-	let trivial = emitConst(module, block: entry, value: TrivialDestructor, ids: ids)
-	let cloned = ids.mint()
-	emitMmAllocCall(module, block: entry, result: cloned, size: boxBytes, destructor: trivial, tag: mmTagIndex(MmTag.Untagged), ids: ids)
-	emitStoreField(module, block: entry, record: cloned, offset: ServiceHandleMailboxOffset, value: mbox)
-	module.setTerminator(entry, op: StdOp.ret(cloned))
+	emitMailboxShareTaken(module, block: entry, mbox: mbox, ids: ids)
+	module.setTerminator(entry, op: StdOp.ret(emitHandleBoxHolding(module, block: entry, mbox: mbox, boxBytes: ServiceHandleBoxSize, ids: ids)))
 
 	module.functions.push(func)
 end 'buildMboxHandleCloneBox'
 
-// `__mbox_handle_retain_box(handleBox) -> handleBox`. See `MboxHandleRetainBoxName` for the double free its
-// absence was.
-//
-// ⚠ **IT IS THE DROP READ BACKWARDS, INCLUDING THE ORDER.** The drop is close-then-release because
-// `__mbox_close` reads the record and needs `refs` to still be holding it; going up there is no such
-// hazard — nothing is freed on this road — so the two steps are simply both taken before the box's own
-// incref. What matters is that the SET is the same set: miss either count here and the drop's matching step
-// runs one time too many, which is the failure this function exists to prevent.
-//
-// ⭐ **IT HANDS THE BOX BACK, WHICH IS WHAT LETS ONE ENTRY SERVE BOTH RETAIN SHAPES.** The plain-box family
-// needs two entries — `__mm_incref` where the caller already holds the ValueId, `__mm_retain` where a FRESH
-// SSA name for the same box is what it needs — and a second handle entry would be the `handles`/`refs` pair
-// written down twice. A caller that wants no name ignores the result, exactly as it ignores `__mm_alloc`'s
-// when it is emitting for effect.
-function buildMboxHandleRetainBox(module StdModule)
-	var func = IrFunction.createFromStd(MboxHandleRetainBoxName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
-
-	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	emitParams(module, block: entry, count: 1)
-	let handleBox = 0 as ValueId
-
-	let mbox = emitLoadField(module, block: entry, record: handleBox, offset: ServiceHandleMailboxOffset, ids: ids)
-	_ = emitMboxCountStep(module, block: entry, mbox: mbox, offset: MboxOffHandles, delta: MboxCountUp, ids: ids)
-	_ = emitMboxCountStep(module, block: entry, mbox: mbox, offset: MboxOffRefs, delta: MboxCountUp, ids: ids)
-	module.appendOp(entry, op: StdOp.call(ids.mint(), callee: MmIncrefName, args: argsOf(handleBox)))
-	module.setTerminator(entry, op: StdOp.ret(handleBox))
-
-	module.functions.push(func)
-end 'buildMboxHandleRetainBox'
-
-// `__mbox_handle_drop_box(handleBox)`. See `MboxHandleDropBoxName`.
+// `__mbox_handle_destruct(handleBox)`. See `MboxHandleDestructName`.
 //
 // ⭐⭐ **THE ORDER IS CLOSE-THEN-RELEASE, AND REVERSING IT IS A USE-AFTER-FREE.** `__mbox_close` reads and
 // writes the record, so the reference this frame holds has to outlive it — which is exactly what `refs`
 // counts. So: step `handles` and close if this was the last namer; only THEN step `refs` and free if this
 // was the last owner.
-function buildMboxHandleDropBox(module StdModule)
-	var func = IrFunction.createFromStd(MboxHandleDropBoxName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+function buildMboxHandleDestruct(module StdModule)
+	var func = IrFunction.createFromStd(MboxHandleDestructName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
-	var closeIt = module.addBlock(func, label: b"dropclose", heat: BlockHeat.normal)
-	var releaseRef = module.addBlock(func, label: b"droprelease", heat: BlockHeat.normal)
-	var freeMbox = module.addBlock(func, label: b"dropfree", heat: BlockHeat.normal)
-	var doneBlock = module.addBlock(func, label: b"dropdone", heat: BlockHeat.normal)
+	var closeIt = module.addBlock(func, label: b"destructclose", heat: BlockHeat.normal)
+	var releaseRef = module.addBlock(func, label: b"destructrelease", heat: BlockHeat.normal)
+	var freeMbox = module.addBlock(func, label: b"destructfree", heat: BlockHeat.normal)
+	var doneBlock = module.addBlock(func, label: b"destructdone", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let handleBox = 0
@@ -1087,13 +1028,10 @@ function buildMboxHandleDropBox(module StdModule)
 	var regionFreed = emitMboxFreeRegion(module, func: func, cur: freeMbox, mbox: mbox, ids: ids)
 	module.setTerminator(regionFreed, op: StdOp.branch(doneBlock.id))
 
-	// The handle BOX itself is an ordinary managed record with a trivial destructor, so it goes back through
-	// the ordinary decref — the mailbox above is what this entry exists to say something extra about.
-	module.appendOp(doneBlock, op: StdOp.call(ids.mint(), callee: MmDecrefName, args: argsOf(handleBox)))
 	module.setTerminator(doneBlock, op: StdOp.retVoid)
 
 	module.functions.push(func)
-end 'buildMboxHandleDropBox'
+end 'buildMboxHandleDestruct'
 
 // `__mbox_service_exit(mbox)` — the loop's last act. See `MboxServiceExitName`.
 //

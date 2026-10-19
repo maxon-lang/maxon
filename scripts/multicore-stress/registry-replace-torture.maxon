@@ -1,0 +1,101 @@
+typealias Integer = int(i64.min to i64.max)
+
+// Also every reachable mailbox's capacity: at one processor `main` never yields, so a default-capacity
+// mailbox fills and a send panics.
+let rounds = 20000
+
+interface Slot
+	function bump(by Integer)
+end 'Slot'
+
+type Alpha implements Slot
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function bump(by Integer)
+		self.n = self.n + by
+	end 'bump'
+end 'Alpha'
+
+type Beta implements Slot
+	var n as Integer
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function bump(by Integer)
+		self.n = self.n + by
+	end 'bump'
+end 'Beta'
+
+default Slot = spawn(capacity: rounds) Alpha.create()
+
+type Replacer
+	var registered as Integer
+
+	static function create() returns Self
+		return Self{registered: 0}
+	end 'create'
+
+	export function churn(count Integer)
+		let mine = spawn(capacity: rounds) Beta.create()
+		var r = 0 as Integer
+
+		while r < count 'eachRound'
+			Slot.register(mine)
+			_ = Slot.register(mine, replacing: Slot.current())
+			self.registered = self.registered + 1
+			r = r + 1
+		end 'eachRound'
+	end 'churn'
+
+	export function total() returns Integer
+		return self.registered
+	end 'total'
+end 'Replacer'
+
+function main() returns ExitCode
+	let replacer = spawn Replacer.create()
+	let mine = spawn(capacity: rounds) Alpha.create()
+
+	try replacer.churn(rounds) otherwise panic("registry-replace-torture: a fresh replacer refused its first message")
+
+	let waitVerdict = "ok" if awaitWorkerArrival() else "timeout"
+
+	var sent = 0 as Integer
+	var r = 0 as Integer
+
+	while r < rounds 'eachRound'
+		Slot.register(mine)
+		_ = Slot.register(mine, replacing: Slot.current())
+		try Slot.current().bump(1) otherwise panic("registry-replace-torture: the registered service refused a bump")
+		sent = sent + 1
+		r = r + 1
+	end 'eachRound'
+
+	let registered = try await replacer.total() otherwise panic("registry-replace-torture: the replacer refused its total")
+
+	let counters = Scheduler.counters()
+	let workers = counters.maxActiveWorkers
+	let steals = counters.steals
+	let cpus = Scheduler.machineCpuCount()
+	let procs = Scheduler.processorCount()
+	let remoteFrees = HeapStats.slab().remoteFrees
+	let monitor = monitorActions()
+	let aggregate = sent + registered
+
+	print("aggregate={aggregate}\n")
+	print("workerwait={waitVerdict}\n")
+	print("workers={workers}\n")
+	print("steals={steals}\n")
+	print("monitor={monitor}\n")
+	print("procs={procs}\n")
+	print("remoteFrees={remoteFrees}\n")
+	print("cpucount={cpus}\n")
+
+	return 42
+end 'main'

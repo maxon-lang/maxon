@@ -320,7 +320,7 @@ effective_count() {
 		echo "$HOST_CPUS"
 	fi
 }
-PROGRAMS="${PROGRAMS:-steal-torture drop-running-torture drop-sleeping-torture park-torture alloc-torture remote-free-torture refcount-torture service-torture service-fanin-torture syscall-stack-torture}"
+PROGRAMS="${PROGRAMS:-steal-torture drop-running-torture drop-sleeping-torture park-torture alloc-torture remote-free-torture refcount-torture service-torture service-fanin-torture registry-replace-torture syscall-stack-torture}"
 
 # The programs whose `leaked=` is their assertion (3).
 LEAK_READING_PROGRAMS="${LEAK_READING_PROGRAMS:-drop-running-torture drop-sleeping-torture}"

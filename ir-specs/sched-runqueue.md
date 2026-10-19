@@ -187,7 +187,7 @@ func @main {
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeSlotReg slot0, r12
@@ -259,7 +259,7 @@ func @main {
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
     x64.loadRegSlot rcx, slot0
-    x64.callDirect __mbox_handle_drop_box
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 56
     x64.popReg r15
@@ -553,7 +553,7 @@ func @main {
     x64.callDirect __svc_spawn
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
+    x64.leaRegFunc rdx, [rip + __mbox_handle_destruct]
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeSlotReg slot0, r12
@@ -625,7 +625,7 @@ func @main {
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
     x64.loadRegSlot rcx, slot0
-    x64.callDirect __mbox_handle_drop_box
+    x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
     x64.epilogue 56
     x64.popReg r15
@@ -915,7 +915,7 @@ func @main {
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __mbox_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -983,7 +983,7 @@ func @main {
     arm64.bl __str_decref
     arm64.movImm x19, 0
     arm64.movRegReg x0, x20
-    arm64.bl __mbox_handle_drop_box
+    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -1273,7 +1273,7 @@ func @main {
     arm64.bl __svc_spawn
     arm64.movRegReg x19, x0
     arm64.movImm x0, 8
-    arm64.movImm x1, 0
+    arm64.leaFuncAddr x1, __mbox_handle_destruct
     arm64.bl __mm_alloc
     arm64.movRegReg x20, x0
     arm64.storeBaseDispReg.word64 [x20 + 0], x19
@@ -1341,7 +1341,7 @@ func @main {
     arm64.bl __str_decref
     arm64.movImm x19, 0
     arm64.movRegReg x0, x20
-    arm64.bl __mbox_handle_drop_box
+    arm64.bl __mm_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1

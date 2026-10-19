@@ -444,7 +444,7 @@ function buildRegistryServiceRegister(module StdModule, released ByteArray)
 	var live = emitHeldOrPanic(module, func: func, block: entry, held: replaced, released: released, holdsRegistryLock: true, ids: ids)
 	emitStoreField(module, block: live, record: slot, offset: SharedValueHolderCellOffset, value: handle)
 	emitLockWordLeave(module, block: live, label: RegistryLockLabel, kind: RuntimeLockKind.exclusive, ids: ids)
-	module.appendOp(live, op: StdOp.call(ids.mint(), callee: MboxHandleDropBoxName, args: argsOf(replaced)))
+	module.appendOp(live, op: StdOp.call(ids.mint(), callee: MmDecrefName, args: argsOf(replaced)))
 	module.setTerminator(live, op: StdOp.retVoid)
 	module.functions.push(func)
 end 'buildRegistryServiceRegister'
@@ -476,7 +476,7 @@ function buildRegistryServiceRelease(module StdModule)
 	emitLockWordLeave(module, block: entry, label: RegistryLockLabel, kind: RuntimeLockKind.exclusive, ids: ids)
 	emitBranchOnCompare(module, block: entry, value: held, pred: StdCmpPred.eq, against: ReleasedHolder, whenTrue: done, whenFalse: dropIt, ids: ids)
 
-	module.appendOp(dropIt, op: StdOp.call(ids.mint(), callee: MboxHandleDropBoxName, args: argsOf(held)))
+	module.appendOp(dropIt, op: StdOp.call(ids.mint(), callee: MmDecrefName, args: argsOf(held)))
 	module.setTerminator(dropIt, op: StdOp.branch(done.id))
 
 	module.setTerminator(done, op: StdOp.retVoid)
@@ -503,11 +503,11 @@ function buildRegistryServiceReplace(module StdModule, released ByteArray)
 
 	emitStoreField(module, block: swap, record: slot, offset: SharedValueHolderCellOffset, value: handle)
 	emitLockWordLeave(module, block: swap, label: RegistryLockLabel, kind: RuntimeLockKind.exclusive, ids: ids)
-	module.appendOp(swap, op: StdOp.call(ids.mint(), callee: MboxHandleDropBoxName, args: argsOf(held)))
+	module.appendOp(swap, op: StdOp.call(ids.mint(), callee: MmDecrefName, args: argsOf(held)))
 	module.setTerminator(swap, op: StdOp.ret(emitConst(module, block: swap, value: PublishedAnswer, ids: ids)))
 
 	emitLockWordLeave(module, block: decline, label: RegistryLockLabel, kind: RuntimeLockKind.exclusive, ids: ids)
-	module.appendOp(decline, op: StdOp.call(ids.mint(), callee: MboxHandleDropBoxName, args: argsOf(handle)))
+	module.appendOp(decline, op: StdOp.call(ids.mint(), callee: MmDecrefName, args: argsOf(handle)))
 	module.setTerminator(decline, op: StdOp.ret(emitConst(module, block: decline, value: DeclinedAnswer, ids: ids)))
 	module.functions.push(func)
 end 'buildRegistryServiceReplace'

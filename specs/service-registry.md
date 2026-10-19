@@ -457,6 +457,82 @@ typealias Integer = int(i64.min to i64.max)
 79
 ```
 
+<!-- test: a-registered-handle-is-a-box-only-the-registry-owns -->
+<!-- procs: 1 -->
+The registry slot holds a handle box of its own, with its own share of the mailbox, so the registering
+frame's drop of its reference and any thread's replace or release of the slot step different counts.
+<!-- MmTrace -->
+```maxon
+interface Greeter
+	function greet() returns Integer
+end 'Greeter'
+
+type Polite implements Greeter
+	var calls as Integer
+
+	static function create() returns Self
+		return Self{calls: 0}
+	end 'create'
+
+	export function greet() returns Integer
+		self.calls = self.calls + 1
+		return 7
+	end 'greet'
+end 'Polite'
+
+type Rude implements Greeter
+	var calls as Integer
+
+	static function create() returns Self
+		return Self{calls: 0}
+	end 'create'
+
+	export function greet() returns Integer
+		self.calls = self.calls + 1
+		return 9
+	end 'greet'
+end 'Rude'
+
+default Greeter = spawn Polite.create()
+
+function main() returns ExitCode
+	let rude = spawn Rude.create()
+	Greeter.register(rude)
+	let answer = try await Greeter.current().greet() otherwise 0
+	return answer as ExitCode
+end 'main'
+typealias Integer = int(i64.min to i64.max)
+```
+```exitcode
+9
+```
+```mm-trace
+mm_alloc Polite #1 size=8
+mm_alloc Polite.handle #2 size=8
+mm_alloc tag=0 #3 size=16
+mm_decref Polite.handle #2 rc=0
+mm_free Polite.handle #2
+mm_alloc Rude #4 size=8
+mm_alloc Rude.handle #5 size=8
+mm_alloc tag=0 #6 size=16
+mm_alloc tag=0 #7 size=16
+mm_decref tag=0 #3 rc=0
+mm_free tag=0 #3
+mm_decref tag=0 #6 rc=0
+mm_free tag=0 #6
+mm_alloc tag=0 #8 size=16
+mm_decref tag=0 #8 rc=0
+mm_free tag=0 #8
+mm_decref Rude.handle #5 rc=0
+mm_free Rude.handle #5
+mm_decref Polite #1 rc=0
+mm_free Polite #1
+mm_decref tag=0 #7 rc=0
+mm_free tag=0 #7
+mm_decref Rude #4 rc=0
+mm_free Rude #4
+```
+
 <!-- test: a-conditional-register-fails-when-the-value-moved -->
 `register(new, replacing: old)` publishes only while `old` is still current: after `a` was replaced by the
 value 3 it answers `false` and 3 stays; replacing the current value answers `true`.
