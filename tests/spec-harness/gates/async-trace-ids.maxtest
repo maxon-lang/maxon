@@ -1,0 +1,24 @@
+let AsyncTraceIdsSpecName = "async-trace-ids"
+let AsyncTraceIdsStderrMismatch = "stderr mismatch"
+
+test 'an async-trace case pins the identity of each thread, not its id value'
+	let said = saidByOneGateRun()
+	let renumbered = testLabel(AsyncTraceIdsSpecName, testName: "async-trace-ids.renumbered")
+	let wrongIdentity = testLabel(AsyncTraceIdsSpecName, testName: "async-trace-ids.wrong-identity")
+
+	var broken = StringArray.create()
+
+	if not said.contains(passVerdictLine(renumbered)) 'renumberedDidNotPass'
+		broken.push("'{renumbered}' pins ids that differ from the run's but name the same threads, and did not PASS. The run said:\n{said}\n")
+	end 'renumberedDidNotPass'
+
+	if not said.contains(failVerdictPrefix(wrongIdentity)) 'controlDidNotFail'
+		broken.push("'{wrongIdentity}' pins a different thread on its io_yield line than on its spawn line, and did not FAIL: the renumbering has made the comparison vacuous. The run said:\n{said}\n")
+	end 'controlDidNotFail'
+
+	if not said.contains(AsyncTraceIdsStderrMismatch) 'controlFailedForAnotherReason'
+		broken.push("'{wrongIdentity}' failed, but not with a `{AsyncTraceIdsStderrMismatch}`. The run said:\n{said}\n")
+	end 'controlFailedForAnotherReason'
+
+	requireNothingBroken(broken, headline: "the async-trace ids gate")
+end 'an async-trace case pins the identity of each thread, not its id value'

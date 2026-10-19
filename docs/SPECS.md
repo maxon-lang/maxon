@@ -311,7 +311,7 @@ line:
 | `<!-- targets: ... -->` | Retired. The parser refuses it: nothing reads it, so a case carrying it would run everywhere. Spell the lanes that cannot serve the case with `unsupported-targets:` instead |
 | `<!-- MmTrace -->` | Enable mm-trace capture mode (see below): the program is built with `--debugstream`, run under `maxon monitor --filter=mm`, and its normalized trace compared to the ` ```mm-trace ` block. Equivalent to adding the block |
 | `<!-- LogTrace -->` | The same capture mode for the other family of the debug stream — the events the program writes through `__DebugStream` — compared to a ` ```log-trace ` block. A case selects one family, never both |
-| `<!-- AsyncTrace -->` | Compile with `--async-trace` and compare stderr after both sides are normalized for the green-thread trace |
+| `<!-- AsyncTrace -->` | Compile with `--async-trace` and compare stderr after both sides have their `#<id>` green-thread ids densely renumbered in order of first appearance, so the block pins which thread each line names and not the id value, which depends on which processor's id batch the spawn drew from |
 | `<!-- DebugInfo -->` | Compile this case with debug info on, the way `maxon build` does; every other case compiles with it off |
 | `<!-- network: live -->` | The case opens a socket to a real external host. It is left out of a default run and runs only under `--network`; `live` is the only value |
 | `<!-- procs: N -->` | Run the program with `MAXON_MAX_PROCS=N` in its environment, pinning the scheduler's processor count; `N` is decimal digits with an optional leading `+`, from 1 to 2147483647, the same values the scheduler honours |
