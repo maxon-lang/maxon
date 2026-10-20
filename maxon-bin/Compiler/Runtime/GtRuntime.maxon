@@ -79,7 +79,7 @@ export let PointerFieldBytes = 8
 // ⭐⭐ **THE RECORD LOCK — FIRST IN THE RECORD AND OUTSIDE EVERY ZEROING.** It is a recursive runtime
 // lock (`RuntimeLock`), free in the zeroed pages the arena carves a record or a cell from, and stays
 // live across every reuse: `__gt_spawn` zeroes only the fields `gtFieldRoster` marks for it, and
-// `__gt_cell_alloc` from `GtOffStackBase` up to `GtCellBytes`. On a
+// `__gt_cell_put` from `GtOffStackBase` up to `GtCellBytes`. On a
 // green thread it is the strand lock over the strand queue (`GtOffCoroHead`). On a coroutine or a
 // reply cell it is the promise lock, where await, awaitAny and the completer meet over
 // `GtOffAwaiter` — Go's `hchan.lock`. The two roles never fall on one record.
@@ -5472,6 +5472,14 @@ function emitGtPublishCompleted(module StdModule, block IrBlock, gt ValueId, ids
 	module.appendOp(block, op: StdOp.storeRelease(gt, offset: GtOffStatus, valueId: completed, valueType: StdType.i64))
 end 'emitGtPublishCompleted'
 
+// The fill zeroes the status word, and `completed` is republished after it: a stale `awaitAny` or
+// `gtIsComplete` through a spent handle reads this cell's status and must still find it answered.
+export function emitGtCellScrub(module StdModule, block IrBlock, cell ValueId, ids ValueMinter)
+	let start = emitFieldAddr(module, block: block, record: cell, offset: GtOffStackBase, ids: ids)
+	module.appendOp(block, op: StdOp.memFill(start, byteCountId: emitConst(module, block: block, value: GtCellBytes - GtOffStackBase, ids: ids), value: 0))
+	emitGtPublishCompleted(module, block: block, gt: cell, ids: ids)
+end 'emitGtCellScrub'
+
 // ⭐⭐⭐ **OBSERVE A GREEN THREAD'S STATUS — the ACQUIRE half of the publication above, and the only
 // spelling of a read that a `completed` answer can come out of.**
 //
@@ -5796,9 +5804,6 @@ function buildGtCellAlloc(module StdModule)
 
 	let cell = ids.mint()
 	module.appendOp(entry, op: StdOp.call(cell, callee: GtCellGetName, args: ValueIdArray.create()))
-
-	let fieldsStart = emitFieldAddr(module, block: entry, record: cell, offset: GtOffStackBase, ids: ids)
-	module.appendOp(entry, op: StdOp.memFill(fieldsStart, byteCountId: emitConst(module, block: entry, value: GtCellBytes - GtOffStackBase, ids: ids), value: 0))
 
 	emitGtMarkWaiting(module, block: entry, gt: cell, ids: ids)
 	let owner = emitLoadField(module, block: entry, record: emitLoadCurrentGt(module, block: entry, ids: ids), offset: GtOffOwner, ids: ids)

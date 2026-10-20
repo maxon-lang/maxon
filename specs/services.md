@@ -11377,7 +11377,8 @@ sabotage, carving more records than a sound runtime does.
 ⭐ **THE SCHEDULER'S RECORD-CARVE COUNT IS THE INSTRUMENT THAT SEES A STRANDED RECORD.**
 `scripts/multicore-stress/service-async-strand-torture.maxon` runs this shape in batches of twenty services.
 A runtime that reclaims every record carves no more than two batches' records plus fewer than 64 on each of
-every other processor's two free lists, one of records and one of reply cells, however many rounds run, and the torture runs until one record lost per round
+every other processor's two free lists, one of records and one of reply cells, plus the thirty-one spare cells
+one reply-cell carve leaves on the carving processor's own list, however many rounds run, and the torture runs until one record lost per round
 would carry `Scheduler.counters().threadRecordsCarved` to twice that bound. Every round reaches the shape (`parked=`
 equals the rounds) and the count stays under the bound at `MAXON_MAX_PROCS` 1, 4 and 16 — where the
 sabotaged runtime above exceeds it and exits 101. The

@@ -39,8 +39,8 @@
 //
 // ring, ringSlots, head, count, parkedGt, closed, receiver and the sender queue are read and
 // written only under the mailbox lock, because `__mbox_recv`'s decision to park rests on "empty,
-// open and nobody parked" being one instant across three words. The two counts are `lock xadd`
-// instead: each is one word whose transaction is exactly its own increment.
+// open and nobody parked" being one instant across three words. The two counts share one atomic
+// word outside the lock (`MboxOffShares`).
 let MboxOffRing = 0x00
 let MboxOffRingSlots = 0x08
 let MboxOffHead = 0x10
@@ -58,13 +58,15 @@ let MboxOffParkedGt = 0x20
 // one answers 0, which is how the loop learns to exit.
 let MboxOffClosed = 0x28
 
-let MboxOffHandles = 0x30
-let MboxOffRefs = 0x38
+// `handles` in the high 32 bits and `refs` in the low 32, so a mint steps both in one `lock xadd` of
+// `MboxShareUnit`. The loop's exit frees on a prior of exactly `MboxLastRefOnly`, which any live
+// handle's bits rule out.
+let MboxOffShares = 0x30
 
 // The concrete service's request-union size, stored at spawn: the ring's stride and a receive's
 // copy length. A send copies only its own `bytes`, which an interface send can make smaller, so
 // `bytes` is never the stride.
-let MboxOffSlotBytes = 0x40
+let MboxOffSlotBytes = 0x38
 
 // The `spawn`'s capacity above the initial ring size, in one word so the header keeps the
 // region in its slab class. The capacity need not be a power of two: `full` compares `count`
@@ -72,19 +74,19 @@ let MboxOffSlotBytes = 0x40
 // exceed it. The initial ring size, the low `mboxInitialSlotsBits()` bits, is what a first ring
 // seeds and a drained grown ring shrinks back to: the smallest power of two at or above the
 // capacity, capped at `MboxInitialSlots`.
-let MboxOffSizing = 0x48
+let MboxOffSizing = 0x40
 
 // A `MboxReceiverState`. The inbox belongs to the receiver from a receive's return until its
 // next receive, and every receive holds the lock until it returns or commits a park, so with no
 // receiver parked the inbox is free to fill only while `fresh`: the receiver has never entered
 // `__mbox_recv`. While `inboxQueued`, `count` includes the inbox message and the ring holds
 // `count - 1`.
-let MboxOffReceiver = 0x50
+let MboxOffReceiver = 0x48
 
 // The sender queue's root: `mbox + MboxSendRootBias` reads as a GT whose `GtOffSendNext` and
 // `GtOffSendPrev` are these two words, so the circular list has no empty case. ⚠ The two must stay
 // one word apart, as the GT's pair is, or a link store through the root lands in another field.
-let MboxOffSendNext = 0x58
+let MboxOffSendNext = 0x50
 let MboxOffSendPrev = MboxOffSendNext + PointerFieldBytes
 let MboxSendRootBias = MboxOffSendNext - GtOffSendNext
 
@@ -111,13 +113,13 @@ end 'MboxReceiverState'
 // rule: one handle names the mailbox, and the loop is the second thing that keeps it alive.
 let MboxInitialHandles = 1
 let MboxInitialRefs = 2
-
-// A count step, as the `lock xadd` operand. `xadd` answers the PRIOR value, so "I was the last" is
-// `prior == 1` — read off the displaced value rather than from a re-read, which is the same discipline
-// `MmRuntime.emitRefcountCheckToLastOwner` states for a decref.
-let MboxCountUp = 1
-let MboxCountDown = -1
-let MboxLastOwner = 1
+let MboxHandleShift = 32 as FullRangeInt
+let MboxHandleUnit = 1 shl MboxHandleShift
+let MboxRefUnit = 1
+module let MboxShareUnit = MboxHandleUnit + MboxRefUnit
+let MboxInitialShares = MboxInitialHandles * MboxHandleUnit + MboxInitialRefs * MboxRefUnit
+let MboxLastRefOnly = MboxRefUnit
+let MboxSoleHandle = 1
 
 // The value stored into `closed`. Any non-zero would do; the constant is what stops a reader spelling `1`
 // and a writer spelling something else.
@@ -278,14 +280,9 @@ function buildMboxInterfaceCloneBox(module StdModule)
 end 'buildMboxInterfaceCloneBox'
 
 function emitInterfaceHandleBox(module StdModule, block IrBlock, mbox ValueId, table ValueId, ids ValueMinter) returns ValueId
-	emitMailboxShareTaken(module, block: block, mbox: mbox, ids: ids)
+	_ = emitMboxSharesStep(module, block: block, mbox: mbox, delta: MboxShareUnit, ids: ids)
 	return emitInterfaceHandleBoxHolding(module, block: block, mbox: mbox, table: table, ids: ids)
 end 'emitInterfaceHandleBox'
-
-module function emitMailboxShareTaken(module StdModule, block IrBlock, mbox ValueId, ids ValueMinter)
-	_ = emitMboxCountStep(module, block: block, mbox: mbox, offset: MboxOffHandles, delta: MboxCountUp, ids: ids)
-	_ = emitMboxCountStep(module, block: block, mbox: mbox, offset: MboxOffRefs, delta: MboxCountUp, ids: ids)
-end 'emitMailboxShareTaken'
 
 module function emitInterfaceHandleBoxHolding(module StdModule, block IrBlock, mbox ValueId, table ValueId, ids ValueMinter) returns ValueId
 	let box = emitHandleBoxHolding(module, block: block, mbox: mbox, boxBytes: InterfaceHandleBoxSize, ids: ids)
@@ -293,8 +290,9 @@ module function emitInterfaceHandleBoxHolding(module StdModule, block IrBlock, m
 	return box
 end 'emitInterfaceHandleBoxHolding'
 
-// Every caller takes the mailbox share first (`emitMailboxShareTaken`): the destructor stamped here gives
-// one back, so a box minted without it closes and frees the mailbox under a live handle.
+// Every caller takes the mailbox share first (`emitMboxSharesStep` by `MboxShareUnit`): the
+// destructor stamped here gives one back, so a box minted without it closes and frees the mailbox
+// under a live handle.
 function emitHandleBoxHolding(module StdModule, block IrBlock, mbox ValueId, boxBytes FullRangeInt, ids ValueMinter) returns ValueId
 	let size = emitConst(module, block: block, value: boxBytes, ids: ids)
 	let destructor = ids.mint()
@@ -641,21 +639,11 @@ function emitMboxFreeRegion(module StdModule, func IrFunction, cur IrBlock, mbox
 	return freeRegion
 end 'emitMboxFreeRegion'
 
-// One count stepped by `delta`, answering whether the caller was the LAST owner — `prior == 1` on a step
-// down. Both counts are read this way and neither is ever re-read, which is what makes "was I the last?"
-// a property of the instruction rather than of two loads with a window between them.
-function emitMboxCountStep(module StdModule, block IrBlock, mbox ValueId, offset ByteOffset, delta FullRangeInt, ids ValueMinter) returns ValueId
-	let addr = emitFieldAddr(module, block: block, record: mbox, offset: offset, ids: ids)
-	let step = emitConst(module, block: block, value: delta, ids: ids)
-	let prior = ids.mint()
-	module.appendOp(block, op: StdOp.atomicRmw(prior, addrId: addr, operandId: step, opcode: StdAtomicRmwOpcode.add))
-	return prior
-end 'emitMboxCountStep'
-
-// Was the step this caller just made the last one — i.e. did the count go 1 -> 0?
-function emitMboxWasLastOwner(module StdModule, block IrBlock, prior ValueId, ids ValueMinter) returns ValueId
-	return emitCompareWithConstant(module, block: block, value: prior, pred: StdCmpPred.eq, against: MboxLastOwner, ids: ids)
-end 'emitMboxWasLastOwner'
+// Answers the PRIOR word. "Was I the last" is read off it and never off a re-load, which a
+// concurrent drop could already have moved.
+module function emitMboxSharesStep(module StdModule, block IrBlock, mbox ValueId, delta FullRangeInt, ids ValueMinter) returns ValueId
+	return emitFieldAccumulate(module, block: block, record: mbox, offset: MboxOffShares, delta: emitConst(module, block: block, value: delta, ids: ids), multiM: true, ids: ids)
+end 'emitMboxSharesStep'
 
 // `__svc_spawn(loopPtr, state, slotBytes, capacity) -> mbox`. See `SvcSpawnName`.
 function buildSvcSpawn(module StdModule)
@@ -676,8 +664,7 @@ function buildSvcSpawn(module StdModule)
 	let mbox = ids.mint()
 	module.appendOp(entry, op: StdOp.call(mbox, callee: SlabAllocName, args: argsOf(mboxBytes)))
 	emitStoreField(module, block: entry, record: mbox, offset: MboxOffSlotBytes, value: slotBytes)
-	emitStoreField(module, block: entry, record: mbox, offset: MboxOffHandles, value: emitConst(module, block: entry, value: MboxInitialHandles, ids: ids))
-	emitStoreField(module, block: entry, record: mbox, offset: MboxOffRefs, value: emitConst(module, block: entry, value: MboxInitialRefs, ids: ids))
+	emitStoreField(module, block: entry, record: mbox, offset: MboxOffShares, value: emitConst(module, block: entry, value: MboxInitialShares, ids: ids))
 	emitStoreField(module, block: entry, record: mbox, offset: MboxOffSizing, value: emitMboxPackSizing(module, block: entry, capacity: capacity, initialSlots: emitMboxInitialSlots(module, block: entry, capacity: capacity, ids: ids), ids: ids))
 	let sendRoot = emitMboxSendRoot(module, block: entry, mbox: mbox, ids: ids)
 	emitStoreField(module, block: entry, record: mbox, offset: MboxOffSendNext, value: sendRoot)
@@ -1094,7 +1081,7 @@ end 'buildMboxSendAbandon'
 
 // `__mbox_handle_clone_box(handleBox) -> handleBox`. See `MboxHandleCloneBoxName`.
 //
-// ⚠ **BOTH COUNTS GO UP, AND THE SECOND IS NOT REDUNDANT.** `handles` decides when the mailbox CLOSES and
+// ⚠ **BOTH COUNTS GO UP, AND `refs` IS NOT REDUNDANT.** `handles` decides when the mailbox CLOSES and
 // `refs` when it is FREED; a clone adds a namer of the mailbox and therefore one of each. Stepping only
 // `handles` would let the drop of the original free a record its clone still points at.
 function buildMboxHandleCloneBox(module StdModule)
@@ -1106,7 +1093,7 @@ function buildMboxHandleCloneBox(module StdModule)
 	let handleBox = 0
 
 	let mbox = emitLoadField(module, block: entry, record: handleBox, offset: ServiceHandleMailboxOffset, ids: ids)
-	emitMailboxShareTaken(module, block: entry, mbox: mbox, ids: ids)
+	_ = emitMboxSharesStep(module, block: entry, mbox: mbox, delta: MboxShareUnit, ids: ids)
 	module.setTerminator(entry, op: StdOp.ret(emitHandleBoxHolding(module, block: entry, mbox: mbox, boxBytes: ServiceHandleBoxSize, ids: ids)))
 
 	module.functions.push(func)
@@ -1116,15 +1103,22 @@ end 'buildMboxHandleCloneBox'
 //
 // ⭐⭐ **THE ORDER IS CLOSE-THEN-RELEASE, AND REVERSING IT IS A USE-AFTER-FREE.** `__mbox_close` reads and
 // writes the record, so the reference this frame holds has to outlive it — which is exactly what `refs`
-// counts. So: step `handles` and close if this was the last namer; only THEN step `refs` and free if this
-// was the last owner.
+// counts. So the sole handle closes first and only then gives its share back, freeing on a prior of
+// `MboxShareUnit`. One combined step before the close would give up this frame's ref first, and the
+// loop's exit could free the record under the close.
+//
+// The sole-handle test is one load, and its answer cannot go stale: a box being destroyed has
+// refcount 0, so nothing mints a handle from it, and a registry slot holds a counted box. Any other
+// drop gives its share back by a CAS that retries from the load, because a concurrent drop can make
+// this one the sole handle.
 function buildMboxHandleDestruct(module StdModule)
 	var func = IrFunction.createFromStd(MboxHandleDestructName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
+	var inspect = module.addBlock(func, label: b"destructinspect", heat: BlockHeat.normal)
+	var dropShare = module.addBlock(func, label: b"destructdrop", heat: BlockHeat.normal)
 	var closeIt = module.addBlock(func, label: b"destructclose", heat: BlockHeat.normal)
-	var releaseRef = module.addBlock(func, label: b"destructrelease", heat: BlockHeat.normal)
 	var freeMbox = module.addBlock(func, label: b"destructfree", heat: BlockHeat.normal)
 	var doneBlock = module.addBlock(func, label: b"destructdone", heat: BlockHeat.normal)
 
@@ -1132,16 +1126,20 @@ function buildMboxHandleDestruct(module StdModule)
 	let handleBox = 0
 
 	let mbox = emitLoadField(module, block: entry, record: handleBox, offset: ServiceHandleMailboxOffset, ids: ids)
-	let priorHandles = emitMboxCountStep(module, block: entry, mbox: mbox, offset: MboxOffHandles, delta: MboxCountDown, ids: ids)
-	let wasLastHandle = emitMboxWasLastOwner(module, block: entry, prior: priorHandles, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(wasLastHandle, thenBlockId: closeIt.id, elseBlockId: releaseRef.id))
+	module.setTerminator(entry, op: StdOp.branch(inspect.id))
+
+	let shares = emitLoadAcquireField(module, block: inspect, record: mbox, offset: MboxOffShares, ids: ids)
+	let handles = emitBin(module, block: inspect, a: shares, b: emitConst(module, block: inspect, value: MboxHandleShift, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
+	emitBranchOnCompare(module, block: inspect, value: handles, pred: StdCmpPred.eq, against: MboxSoleHandle, whenTrue: closeIt, whenFalse: dropShare, ids: ids)
+
+	let remaining = emitBin(module, block: dropShare, a: shares, b: emitConst(module, block: dropShare, value: MboxShareUnit, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
+	let dropped = emitCasField(module, block: dropShare, record: mbox, offset: MboxOffShares, expected: shares, replacement: remaining, ids: ids)
+	emitBranchOnCasLost(module, block: dropShare, result: dropped, lost: inspect, won: doneBlock, ids: ids)
 
 	module.appendOp(closeIt, op: StdOp.call(ids.mint(), callee: MboxCloseName, args: argsOf(mbox)))
-	module.setTerminator(closeIt, op: StdOp.branch(releaseRef.id))
-
-	let priorRefs = emitMboxCountStep(module, block: releaseRef, mbox: mbox, offset: MboxOffRefs, delta: MboxCountDown, ids: ids)
-	let wasLastRef = emitMboxWasLastOwner(module, block: releaseRef, prior: priorRefs, ids: ids)
-	module.setTerminator(releaseRef, op: StdOp.condBranch(wasLastRef, thenBlockId: freeMbox.id, elseBlockId: doneBlock.id))
+	let priorShares = emitMboxSharesStep(module, block: closeIt, mbox: mbox, delta: -MboxShareUnit, ids: ids)
+	let wasLastShare = emitCompareWithConstant(module, block: closeIt, value: priorShares, pred: StdCmpPred.eq, against: MboxShareUnit, ids: ids)
+	module.setTerminator(closeIt, op: StdOp.condBranch(wasLastShare, thenBlockId: freeMbox.id, elseBlockId: doneBlock.id))
 
 	var regionFreed = emitMboxFreeRegion(module, func: func, cur: freeMbox, mbox: mbox, ids: ids)
 	module.setTerminator(regionFreed, op: StdOp.branch(doneBlock.id))
@@ -1182,8 +1180,8 @@ function buildMboxServiceExit(module StdModule)
 	let mbox = 0
 	let selfGt = emitLoadCurrentGt(module, block: entry, ids: ids)
 
-	let priorRefs = emitMboxCountStep(module, block: entry, mbox: mbox, offset: MboxOffRefs, delta: MboxCountDown, ids: ids)
-	let wasLastRef = emitMboxWasLastOwner(module, block: entry, prior: priorRefs, ids: ids)
+	let priorShares = emitMboxSharesStep(module, block: entry, mbox: mbox, delta: -MboxRefUnit, ids: ids)
+	let wasLastRef = emitCompareWithConstant(module, block: entry, value: priorShares, pred: StdCmpPred.eq, against: MboxLastRefOnly, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(wasLastRef, thenBlockId: freeMbox.id, elseBlockId: doneBlock.id))
 
 	var regionFreed = emitMboxFreeRegion(module, func: func, cur: freeMbox, mbox: mbox, ids: ids)

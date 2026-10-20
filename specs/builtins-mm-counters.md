@@ -449,7 +449,7 @@ type Counter
 	end 'next'
 end 'Counter'
 
-let mailboxRecordBytes = 104
+let mailboxRecordBytes = 96
 let lockWordBytes = 8
 let requestSlotBytes = 24
 

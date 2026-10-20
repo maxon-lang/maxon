@@ -143,8 +143,9 @@ let MspanRemoteHeadOffset = 56
 // it and a queued slot arrived from a thread that was not it — so a census reading `total - free_count`
 // alone reports a queued slot as live, and a span whose queue nobody has collected as fully in use.
 //
-// ⚠ It is stepped by the same push that moves the head, so the two are consistent for any reader holding
-// `__slab_lock`. A reader without the lock can see the count and the chain disagree by one.
+// ⚠ A push steps it up before it moves the head, and a collect steps it down by a whole detached chain
+// before replaying it, so a reader can find it short of the slots in flight but never counting one twice.
+// A census under `__slab_lock` with no free or collect in flight is exact.
 let MspanRemoteCountOffset = 64 as ByteOffset
 
 // ⭐ **THE RECORD'S WIDTH, DERIVED FROM ITS LAST FIELD — and stated HERE rather than at the check that
@@ -2685,6 +2686,10 @@ end 'buildSlabFreeToSpan'
 // the per-slot pushes are the ordinary single-writer ones. Popping node by node would need a CAS per slot
 // and would reintroduce the ABA problem a whole-chain detach does not have.
 //
+// The chain's length leaves `MspanRemoteCountOffset` in one step, before the replay: every node was
+// counted before its push's CAS, so subtracting first can only undercount, and a census never sees a
+// slot both queued and free.
+//
 // ⚠ `next` is read before the push, because the push writes the free-list link over the node's first word
 // — the same word the queue's link lives in. Reading it afterwards follows the span's free list out of the
 // chain being walked.
@@ -2701,6 +2706,9 @@ function buildSlabCollectRemote(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var swap = module.addBlock(func, label: b"swap", heat: BlockHeat.normal)
+	var tally = module.addBlock(func, label: b"tally", heat: BlockHeat.normal)
+	var tallyStep = module.addBlock(func, label: b"tallystep", heat: BlockHeat.normal)
+	var uncount = module.addBlock(func, label: b"uncount", heat: BlockHeat.normal)
 	var walk = module.addBlock(func, label: b"walk", heat: BlockHeat.normal)
 	var replay = module.addBlock(func, label: b"replay", heat: BlockHeat.normal)
 	var done = module.addBlock(func, label: b"done", heat: BlockHeat.normal)
@@ -2720,16 +2728,30 @@ function buildSlabCollectRemote(module StdModule)
 
 	let won = ids.mint()
 	module.appendOp(detach, op: StdOp.atomicCas(won, addrId: headAddr, expectedId: head, replacementId: emptyQueue))
-	emitBranchOnCasLost(module, block: detach, result: won, lost: swap, won: walk, ids: ids)
-	detach.branchEdges.push(BranchEdge.create(walk.id, argIds: argsOf(head)))
+	let nothingCounted = emitConst(module, block: detach, value: 0, ids: ids)
+	emitBranchOnCasLost(module, block: detach, result: won, lost: swap, won: tally, ids: ids)
+	detach.branchEdges.push(BranchEdge.create(tally.id, argIds: twoArgs(head, second: nothingCounted)))
+
+	let counting = ids.mint()
+	let counted = ids.mint()
+	tally.blockArgs.push(IrBlockArg.create(counting, argType: StdType.i64))
+	tally.blockArgs.push(IrBlockArg.create(counted, argType: StdType.i64))
+	emitBranchOnCompare(module, block: tally, value: counting, pred: StdCmpPred.eq, against: 0, whenTrue: uncount, whenFalse: tallyStep, ids: ids)
+
+	let nextCounting = emitLoadField(module, block: tallyStep, record: counting, offset: 0, ids: ids)
+	let nextCounted = emitBin(module, block: tallyStep, a: counted, b: emitConst(module, block: tallyStep, value: OneMore, ids: ids), opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(tallyStep, op: StdOp.branch(tally.id))
+	tallyStep.branchEdges.push(BranchEdge.create(tally.id, argIds: twoArgs(nextCounting, second: nextCounted)))
+
+	let queuedOut = emitBin(module, block: uncount, a: emitConst(module, block: uncount, value: 0, ids: ids), b: counted, opcode: StdBinOpcode.sub, ids: ids)
+	_ = emitFieldAccumulate(module, block: uncount, record: span, offset: MspanRemoteCountOffset, delta: queuedOut, multiM: true, ids: ids)
+	emitBranchCarrying(module, from: uncount, to: walk, value: head)
 
 	let node = ids.mint()
 	walk.blockArgs.push(IrBlockArg.create(node, argType: StdType.i64))
 	emitBranchOnCompare(module, block: walk, value: node, pred: StdCmpPred.eq, against: 0, whenTrue: done, whenFalse: replay, ids: ids)
 
 	let following = emitLoadField(module, block: replay, record: node, offset: 0, ids: ids)
-	let oneFewer = emitConst(module, block: replay, value: OneFewer, ids: ids)
-	_ = emitFieldAccumulate(module, block: replay, record: span, offset: MspanRemoteCountOffset, delta: oneFewer, multiM: true, ids: ids)
 	module.appendOp(replay, op: StdOp.call(ids.mint(), callee: SlabFreeToSpanName, args: twoArgs(node, second: span)))
 	module.setTerminator(replay, op: StdOp.branch(walk.id))
 	replay.branchEdges.push(BranchEdge.create(walk.id, argIds: argsOf(following)))
