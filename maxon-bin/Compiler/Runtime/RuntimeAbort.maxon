@@ -18,8 +18,8 @@
 // already use 1/2/3/4/5/25/45/123 — so an abort down there is indistinguishable from a program that
 // simply returned. (`runProcess`'s two failures THROW `RunProcessError` for that reason, and no abort sits
 // below 70.)
-// 101 is the one code the compiler already spends outside this band and it is declared here so the
-// enum's own duplicate check covers it.
+// 101 (`leakDetected`) is inside it; `maxon test`, the MCP tools and the spec worker pool read it as a
+// leak through `isLeakDetectedExit`.
 //
 // ⚠ **134 IS NOT HERE, AND ITS ABSENCE IS DELIBERATE.** A user `panic("…")` routes to the SAME `mrt_panic`
 // runtime the range-check guard uses (`StdOp.osPanic`), which exits `PanicExitCode`, so nothing emits 134.
@@ -31,7 +31,7 @@
 // `try byteAt(index) otherwise panic("String.byteAtOrPanic: index out of bounds — …")`: ordinary Maxon
 // reaching `osPanic` with a real line and a real message. Only a SYNTHESIZED runtime function, which has no
 // source line and no message to bake, needs a number instead.
-// ⇒ **THE NUMBERED ABORTS ARE CLOSED: 71 TO 126 ARE TAKEN BUT FOR 76, 80 AND 108, WHICH ARE VACANT
+// ⇒ **THE NUMBERED ABORTS ARE CLOSED: 71 TO 126 ARE TAKEN BUT FOR 76, 80, 94 AND 108, WHICH ARE VACANT
 // AND STAY SO.** Reserving a vacated number would be this space defending against a claimant that
 // no longer exists — the very thing the paragraph above rejects. A new runtime invariant check is a
 // `RuntimeFatal` case instead: every one exits `runtimeFatal` (70) and is told apart by its
@@ -249,20 +249,6 @@ export enum RuntimeAbort
 	// ⛔ The kinds are enumerated by NAME rather than counted, so that the next one has to be spelled here to
 	// be believed; do not reintroduce a bare number.
 	schedulerUnknownParkKind = 93
-
-	// ⛔⛔ `__gt_promise_drop`: a PROMISE named a green thread parked in `__mbox_recv`. Its `waiting` road
-	// deregisters the timer, process and in-flight-read stores and there is nothing anywhere that clears
-	// `mbox.parkedGt` but the waker's own store, so falling through it would free a thread the mailbox still
-	// points at — after which the next `__mbox_send` writes its request into freed memory and publishes a
-	// freed GT. It is a COMPILER bug rather than a program's: a service's reply cell is a promise but runs
-	// nothing (`funcPtr == 0`), and `__mbox_recv`'s only callers are inside `<T>.__loop`, whose green
-	// thread no promise names — `buildGtPromiseDrop` re-derives that at the site.
-	//
-	// ⚠ **IT IS A SEPARATE CODE FROM `schedulerUnknownParkKind` (93), WHICH IS THE NEIGHBOURING FAULT AND NOT
-	// THIS ONE.** 93 is a park note carrying a kind no site writes; this is a kind four sites DO write,
-	// reaching a reclamation path that has no answer for it. This registry's founding rule: two different
-	// faults may not report one number.
-	schedulerPromiseParkedOnAMailbox = 94
 
 	// ⛔⛔⛔ `emitSchedPidlePutLocked`: a processor was being put on `__sched_pidle` WITH A NON-EMPTY RUN
 	// QUEUE — `runqhead != runqtail`. **This is Go's own assertion, ported with the code it guards**

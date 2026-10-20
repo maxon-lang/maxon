@@ -23829,7 +23829,8 @@ func @__gt_free_get {
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 64
-    x64.movRegReg rbx, rcx
+    x64.leaRegGlobal rax, __gt_seed_bytes
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.cmpRegImm32 rax, 0
@@ -24548,7 +24549,8 @@ func @__gt_free_get {
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 64
-    x64.movRegReg rbx, rcx
+    x64.leaRegGlobal rax, __gt_seed_bytes
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.cmpRegImm32 rax, 0
@@ -25261,7 +25263,8 @@ func @__gt_free_get {
     arm64.prologue 64
     arm64.storeSlotReg slot4, x20
     arm64.storeSlotReg slot3, x19
-    arm64.movRegReg x19, x0
+    arm64.leaGlobal x0, __gt_seed_bytes
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.cmp x0, 0
@@ -26060,7 +26063,8 @@ func @__gt_free_get {
     arm64.prologue 64
     arm64.storeSlotReg slot4, x20
     arm64.storeSlotReg slot3, x19
-    arm64.movRegReg x19, x0
+    arm64.leaGlobal x0, __gt_seed_bytes
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.cmp x0, 0
@@ -41396,7 +41400,8 @@ func @__gt_free_get {
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 64
-    x64.movRegReg rbx, rcx
+    x64.leaRegGlobal rax, __gt_seed_bytes
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.cmpRegImm32 rax, 0
@@ -42732,7 +42737,8 @@ func @__gt_free_get {
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 64
-    x64.movRegReg rbx, rcx
+    x64.leaRegGlobal rax, __gt_seed_bytes
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.cmpRegImm32 rax, 0
@@ -44062,7 +44068,8 @@ func @__gt_free_get {
     arm64.prologue 64
     arm64.storeSlotReg slot4, x20
     arm64.storeSlotReg slot3, x19
-    arm64.movRegReg x19, x0
+    arm64.leaGlobal x0, __gt_seed_bytes
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.cmp x0, 0
@@ -45544,7 +45551,8 @@ func @__gt_free_get {
     arm64.prologue 64
     arm64.storeSlotReg slot4, x20
     arm64.storeSlotReg slot3, x19
-    arm64.movRegReg x19, x0
+    arm64.leaGlobal x0, __gt_seed_bytes
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.cmp x0, 0
@@ -51204,18 +51212,19 @@ func @__mbox_service_exit {
 current seed size, exactly as `gfput` keeps a `g`'s stack when it equals `startingStackSize`; a stack of any
 other size, grown or shrunk, goes back to the stack pool as the thread's runner finishes with it
 (`__gt_runner_done`), before the record is put on a free list.
-`__gt_free_get` is handed the seed size the spawn wants and drops the stack of a record that carries another
+`__gt_free_get` loads the seed size on entry and drops the stack of a record that carries another
 size, so what it returns either carries a stack of the seed size or none. A recycled record with none, and a
 freshly carved record, are given a stack by `__gt_free_get` itself, as `gfget` and `malg` attach one before
 `newproc1` goes on, so a carved record's first touch is `__gt_free_get`'s write of its stack words and not a
 read of its fresh arena page that the write then faults a second time.
 
-What this pin shows is `__gt_spawn`. The seed word is loaded once, before the record is taken, and is passed
-to `__gt_free_get`. The record's two stack words are not zeroed: the spawn's zero stores name only words
-past the stack size that a reader can reach before the new thread writes them, and the stack base is loaded
-only after them, to lay the first frame. `__gt_spawn` calls no `__gt_stack_alloc` and has no refused-seed
-abort; both are `__gt_free_get`'s (`gfgneedstack`). A zero store to either of the two words would zero the
-stack `__gt_free_get` attached, and the first frame would be laid one seed size above address 0.
+What this pin shows is `__gt_spawn`. It loads no seed word: `__gt_free_get` takes none and loads the seed once
+itself, and the spawn reads the stack size from the record. The record's two stack words are not zeroed: the
+spawn's zero stores name only words past the stack size that a reader can reach before the new thread writes
+them, and the stack base is loaded only after them, to lay the first frame. `__gt_spawn` calls no
+`__gt_stack_alloc` and has no refused-seed abort; both are `__gt_free_get`'s (`gfgneedstack`). A zero store
+to either of the two words would zero the stack `__gt_free_get` attached, and the first frame would be laid
+outside it.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -51383,7 +51392,8 @@ func @__gt_free_get {
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 64
-    x64.movRegReg rbx, rcx
+    x64.leaRegGlobal rax, __gt_seed_bytes
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.cmpRegImm32 rax, 0
@@ -51841,12 +51851,8 @@ func @__gt_spawn {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 48
+    x64.prologue 40
     x64.movRegReg rbx, rcx
-    x64.leaRegGlobal rax, __gt_seed_bytes
-    x64.loadRegBaseDisp.word64 r12, [rax + 0]
-    x64.movRegReg rcx, r12
     x64.callDirect __gt_free_get
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r8 + 48], rax
@@ -51879,10 +51885,11 @@ func @__gt_spawn {
     x64.leaRegRegImm32 rax, rax, 408
     x64.lock add [rax], rcx
     x64.loadRegBaseDisp.word64 rsi, [r8 + 24]
+    x64.loadRegBaseDisp.word64 rax, [r8 + 32]
     x64.storeBaseDispReg.word64 [r8 + 72], rbx
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 432], rax
-    x64.leaRegRegReg r9, rsi, r12
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [r8 + 432], rcx
+    x64.leaRegRegReg r9, rsi, rax
     x64.loadRegBaseDisp.word64 rax, [r8 + 24]
     x64.leaRegRegImm32 rax, rax, 5536
     x64.storeBaseDispReg.word64 [r8 + 40], rax
@@ -51909,8 +51916,7 @@ func @__gt_spawn {
     x64.cmpRegImm32 rax, -1314
     x64.jcc equal, spawnpreempt
   spawnresume:
-    x64.epilogue 48
-    x64.popReg r12
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.retIndirect
@@ -52062,7 +52068,8 @@ func @__gt_free_get {
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 64
-    x64.movRegReg rbx, rcx
+    x64.leaRegGlobal rax, __gt_seed_bytes
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.cmpRegImm32 rax, 0
@@ -52522,12 +52529,8 @@ func @__gt_spawn {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 48
+    x64.prologue 40
     x64.movRegReg rbx, rcx
-    x64.leaRegGlobal rax, __gt_seed_bytes
-    x64.loadRegBaseDisp.word64 r12, [rax + 0]
-    x64.movRegReg rcx, r12
     x64.callDirect __gt_free_get
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r8 + 48], rax
@@ -52560,10 +52563,11 @@ func @__gt_spawn {
     x64.leaRegRegImm32 rax, rax, 408
     x64.lock add [rax], rcx
     x64.loadRegBaseDisp.word64 rsi, [r8 + 24]
+    x64.loadRegBaseDisp.word64 rax, [r8 + 32]
     x64.storeBaseDispReg.word64 [r8 + 72], rbx
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 432], rax
-    x64.leaRegRegReg r9, rsi, r12
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [r8 + 432], rcx
+    x64.leaRegRegReg r9, rsi, rax
     x64.loadRegBaseDisp.word64 rax, [r8 + 24]
     x64.leaRegRegImm32 rax, rax, 928
     x64.storeBaseDispReg.word64 [r8 + 40], rax
@@ -52590,8 +52594,7 @@ func @__gt_spawn {
     x64.cmpRegImm32 rax, -1314
     x64.jcc equal, spawnpreempt
   spawnresume:
-    x64.epilogue 48
-    x64.popReg r12
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.retIndirect
@@ -52731,7 +52734,8 @@ func @__gt_free_get {
     arm64.prologue 64
     arm64.storeSlotReg slot4, x20
     arm64.storeSlotReg slot3, x19
-    arm64.movRegReg x19, x0
+    arm64.leaGlobal x0, __gt_seed_bytes
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.cmp x0, 0
@@ -53261,13 +53265,9 @@ func @__gt_free_get {
 
 func @__gt_spawn {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x20
+    arm64.prologue 32
     arm64.storeSlotReg slot1, x19
     arm64.movRegReg x19, x0
-    arm64.leaGlobal x0, __gt_seed_bytes
-    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
-    arm64.movRegReg x0, x20
     arm64.bl __gt_free_get
     arm64.movRegReg x4, x0
     arm64.movImm x0, 0
@@ -53306,10 +53306,11 @@ func @__gt_spawn {
     arm64.add x0, x0, 408
     arm64.arm64AtomicRmw.add x0, [x0], x1
     arm64.loadRegBaseDisp.word64 x0, [x4 + 24]
+    arm64.loadRegBaseDisp.word64 x1, [x4 + 32]
     arm64.storeBaseDispReg.word64 [x4 + 72], x19
-    arm64.movImm x1, 1
-    arm64.storeBaseDispReg.word64 [x4 + 432], x1
-    arm64.add x0, x0, x20
+    arm64.movImm x2, 1
+    arm64.storeBaseDispReg.word64 [x4 + 432], x2
+    arm64.add x0, x0, x1
     arm64.loadRegBaseDisp.word64 x1, [x4 + 24]
     arm64.add x1, x1, 928
     arm64.storeBaseDispReg.word64 [x4 + 40], x1
@@ -53346,8 +53347,7 @@ func @__gt_spawn {
   spawnresume:
     arm64.movRegReg x0, x4
     arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.epilogue 48
+    arm64.epilogue 32
     arm64.retIndirect
   spawnpreempt:
     arm64.storeSlotReg slot0, x4
@@ -53488,7 +53488,8 @@ func @__gt_free_get {
     arm64.prologue 64
     arm64.storeSlotReg slot4, x20
     arm64.storeSlotReg slot3, x19
-    arm64.movRegReg x19, x0
+    arm64.leaGlobal x0, __gt_seed_bytes
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.cmp x0, 0
@@ -54018,13 +54019,9 @@ func @__gt_free_get {
 
 func @__gt_spawn {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x20
+    arm64.prologue 32
     arm64.storeSlotReg slot1, x19
     arm64.movRegReg x19, x0
-    arm64.leaGlobal x0, __gt_seed_bytes
-    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
-    arm64.movRegReg x0, x20
     arm64.bl __gt_free_get
     arm64.movRegReg x4, x0
     arm64.movImm x0, 0
@@ -54063,10 +54060,11 @@ func @__gt_spawn {
     arm64.add x0, x0, 408
     arm64.arm64AtomicRmw.add x0, [x0], x1
     arm64.loadRegBaseDisp.word64 x0, [x4 + 24]
+    arm64.loadRegBaseDisp.word64 x1, [x4 + 32]
     arm64.storeBaseDispReg.word64 [x4 + 72], x19
-    arm64.movImm x1, 1
-    arm64.storeBaseDispReg.word64 [x4 + 432], x1
-    arm64.add x0, x0, x20
+    arm64.movImm x2, 1
+    arm64.storeBaseDispReg.word64 [x4 + 432], x2
+    arm64.add x0, x0, x1
     arm64.loadRegBaseDisp.word64 x1, [x4 + 24]
     arm64.add x1, x1, 928
     arm64.storeBaseDispReg.word64 [x4 + 40], x1
@@ -54103,8 +54101,7 @@ func @__gt_spawn {
   spawnresume:
     arm64.movRegReg x0, x4
     arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.epilogue 48
+    arm64.epilogue 32
     arm64.retIndirect
   spawnpreempt:
     arm64.storeSlotReg slot0, x4
@@ -57848,12 +57845,8 @@ func @__gt_spawn {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 48
+    x64.prologue 40
     x64.movRegReg rbx, rcx
-    x64.leaRegGlobal rax, __gt_seed_bytes
-    x64.loadRegBaseDisp.word64 r12, [rax + 0]
-    x64.movRegReg rcx, r12
     x64.callDirect __gt_free_get
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r8 + 48], rax
@@ -57886,10 +57879,11 @@ func @__gt_spawn {
     x64.leaRegRegImm32 rax, rax, 408
     x64.lock add [rax], rcx
     x64.loadRegBaseDisp.word64 rsi, [r8 + 24]
+    x64.loadRegBaseDisp.word64 rax, [r8 + 32]
     x64.storeBaseDispReg.word64 [r8 + 72], rbx
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 432], rax
-    x64.leaRegRegReg r9, rsi, r12
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [r8 + 432], rcx
+    x64.leaRegRegReg r9, rsi, rax
     x64.loadRegBaseDisp.word64 rax, [r8 + 24]
     x64.leaRegRegImm32 rax, rax, 5536
     x64.storeBaseDispReg.word64 [r8 + 40], rax
@@ -57916,8 +57910,7 @@ func @__gt_spawn {
     x64.cmpRegImm32 rax, -1314
     x64.jcc equal, spawnpreempt
   spawnresume:
-    x64.epilogue 48
-    x64.popReg r12
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.retIndirect
@@ -58786,12 +58779,8 @@ func @__gt_spawn {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 48
+    x64.prologue 40
     x64.movRegReg rbx, rcx
-    x64.leaRegGlobal rax, __gt_seed_bytes
-    x64.loadRegBaseDisp.word64 r12, [rax + 0]
-    x64.movRegReg rcx, r12
     x64.callDirect __gt_free_get
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r8 + 48], rax
@@ -58824,10 +58813,11 @@ func @__gt_spawn {
     x64.leaRegRegImm32 rax, rax, 408
     x64.lock add [rax], rcx
     x64.loadRegBaseDisp.word64 rsi, [r8 + 24]
+    x64.loadRegBaseDisp.word64 rax, [r8 + 32]
     x64.storeBaseDispReg.word64 [r8 + 72], rbx
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r8 + 432], rax
-    x64.leaRegRegReg r9, rsi, r12
+    x64.movRegImm32 rcx, 1
+    x64.storeBaseDispReg.word64 [r8 + 432], rcx
+    x64.leaRegRegReg r9, rsi, rax
     x64.loadRegBaseDisp.word64 rax, [r8 + 24]
     x64.leaRegRegImm32 rax, rax, 928
     x64.storeBaseDispReg.word64 [r8 + 40], rax
@@ -58854,8 +58844,7 @@ func @__gt_spawn {
     x64.cmpRegImm32 rax, -1314
     x64.jcc equal, spawnpreempt
   spawnresume:
-    x64.epilogue 48
-    x64.popReg r12
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.retIndirect
@@ -59711,13 +59700,9 @@ func @main {
 
 func @__gt_spawn {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x20
+    arm64.prologue 32
     arm64.storeSlotReg slot1, x19
     arm64.movRegReg x19, x0
-    arm64.leaGlobal x0, __gt_seed_bytes
-    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
-    arm64.movRegReg x0, x20
     arm64.bl __gt_free_get
     arm64.movRegReg x4, x0
     arm64.movImm x0, 0
@@ -59756,10 +59741,11 @@ func @__gt_spawn {
     arm64.add x0, x0, 408
     arm64.arm64AtomicRmw.add x0, [x0], x1
     arm64.loadRegBaseDisp.word64 x0, [x4 + 24]
+    arm64.loadRegBaseDisp.word64 x1, [x4 + 32]
     arm64.storeBaseDispReg.word64 [x4 + 72], x19
-    arm64.movImm x1, 1
-    arm64.storeBaseDispReg.word64 [x4 + 432], x1
-    arm64.add x0, x0, x20
+    arm64.movImm x2, 1
+    arm64.storeBaseDispReg.word64 [x4 + 432], x2
+    arm64.add x0, x0, x1
     arm64.loadRegBaseDisp.word64 x1, [x4 + 24]
     arm64.add x1, x1, 928
     arm64.storeBaseDispReg.word64 [x4 + 40], x1
@@ -59796,8 +59782,7 @@ func @__gt_spawn {
   spawnresume:
     arm64.movRegReg x0, x4
     arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.epilogue 48
+    arm64.epilogue 32
     arm64.retIndirect
   spawnpreempt:
     arm64.storeSlotReg slot0, x4
@@ -60723,13 +60708,9 @@ func @main {
 
 func @__gt_spawn {
   entry:
-    arm64.prologue 48
-    arm64.storeSlotReg slot2, x20
+    arm64.prologue 32
     arm64.storeSlotReg slot1, x19
     arm64.movRegReg x19, x0
-    arm64.leaGlobal x0, __gt_seed_bytes
-    arm64.loadRegBaseDisp.word64 x20, [x0 + 0]
-    arm64.movRegReg x0, x20
     arm64.bl __gt_free_get
     arm64.movRegReg x4, x0
     arm64.movImm x0, 0
@@ -60768,10 +60749,11 @@ func @__gt_spawn {
     arm64.add x0, x0, 408
     arm64.arm64AtomicRmw.add x0, [x0], x1
     arm64.loadRegBaseDisp.word64 x0, [x4 + 24]
+    arm64.loadRegBaseDisp.word64 x1, [x4 + 32]
     arm64.storeBaseDispReg.word64 [x4 + 72], x19
-    arm64.movImm x1, 1
-    arm64.storeBaseDispReg.word64 [x4 + 432], x1
-    arm64.add x0, x0, x20
+    arm64.movImm x2, 1
+    arm64.storeBaseDispReg.word64 [x4 + 432], x2
+    arm64.add x0, x0, x1
     arm64.loadRegBaseDisp.word64 x1, [x4 + 24]
     arm64.add x1, x1, 928
     arm64.storeBaseDispReg.word64 [x4 + 40], x1
@@ -60808,8 +60790,7 @@ func @__gt_spawn {
   spawnresume:
     arm64.movRegReg x0, x4
     arm64.loadRegSlot x19, slot1
-    arm64.loadRegSlot x20, slot2
-    arm64.epilogue 48
+    arm64.epilogue 32
     arm64.retIndirect
   spawnpreempt:
     arm64.storeSlotReg slot0, x4
@@ -61894,7 +61875,8 @@ func @__gt_free_get {
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 64
-    x64.movRegReg rbx, rcx
+    x64.leaRegGlobal rax, __gt_seed_bytes
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.cmpRegImm32 rax, 0
@@ -62624,7 +62606,8 @@ func @__gt_free_get {
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 64
-    x64.movRegReg rbx, rcx
+    x64.leaRegGlobal rax, __gt_seed_bytes
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.leaRegGlobal rax, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rax, [rax + 0]
     x64.cmpRegImm32 rax, 0
@@ -63350,7 +63333,8 @@ func @__gt_free_get {
     arm64.prologue 64
     arm64.storeSlotReg slot4, x20
     arm64.storeSlotReg slot3, x19
-    arm64.movRegReg x19, x0
+    arm64.leaGlobal x0, __gt_seed_bytes
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.cmp x0, 0
@@ -64149,7 +64133,8 @@ func @__gt_free_get {
     arm64.prologue 64
     arm64.storeSlotReg slot4, x20
     arm64.storeSlotReg slot3, x19
-    arm64.movRegReg x19, x0
+    arm64.leaGlobal x0, __gt_seed_bytes
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
     arm64.leaGlobal x0, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
     arm64.cmp x0, 0

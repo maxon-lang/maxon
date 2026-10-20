@@ -1810,14 +1810,14 @@ let GtRunQueueTailLabel = b"__gt_run_queue_tail"
 export let GtQuiesceName = b"__gt_quiesce"
 export let GtQuiesceWaiterLabel = b"__gt_quiesce_waiter"
 
-// ⭐⭐ **THE ADAPTIVE SEED — Go's `startingStackSize`.** The size `__gt_spawn` asks
-// `__gt_free_get` for a new thread's stack: the smallest power of two in [`gtSeedStackBytes`,
+// ⭐⭐ **THE ADAPTIVE SEED — Go's `startingStackSize`.** The size `__gt_free_get` gives a new
+// thread's stack: the smallest power of two in [`gtSeedStackBytes`,
 // `GtSeedMaxBytes`] that holds the average stack the threads that finished in the last window
 // needed (`__gt_seed_adapt`, `GtSeedWindowShift`). Starting at the average costs at most twice the
 // space an oracle would, and a thread that needs more still grows. `MultiMSharing.lastWriterWins`:
 // the adapt writes it under `__gt_seed_guard` and a spawn reads it without, and every value a spawn
 // can read is a seed some window chose.
-let GtSeedBytesLabel = b"__gt_seed_bytes"
+export let GtSeedBytesLabel = b"__gt_seed_bytes"
 
 // The summed per-P sample counters (`POffStackSampleSum`, `POffStackSampleCount`) as the last window close
 // read them, touched only inside `__gt_seed_guard`'s claim (`__gt_seed_adapt`).
@@ -2465,6 +2465,7 @@ enum GtFieldRule
 	setBeforeRead
 	zeroedBySpawn
 	zeroedBySpawnOfStrandOwners
+	zeroedBySpawnOfGreenThread
 	zeroedBySpawnOfMain
 	zeroedByReclaim
 end 'GtFieldRule'
@@ -2528,7 +2529,7 @@ function gtFieldRoster() returns GtFieldArray
 	fields.push(GtField.create("GtOffThreadFrees", offset: GtOffThreadFrees, width: PointerFieldBytes, rule: GtFieldRule.zeroedBySpawn))
 	fields.push(GtField.create("GtOffThreadAllocBytes", offset: GtOffThreadAllocBytes, width: PointerFieldBytes, rule: GtFieldRule.zeroedBySpawn))
 	fields.push(GtField.create("GtOffCpuOffset", offset: GtOffCpuOffset, width: PointerFieldBytes, rule: GtFieldRule.zeroedBySpawn))
-	fields.push(GtField.create("GtOffIsMainThread", offset: GtOffIsMainThread, width: PointerFieldBytes, rule: GtFieldRule.zeroedBySpawnOfStrandOwners))
+	fields.push(GtField.create("GtOffIsMainThread", offset: GtOffIsMainThread, width: PointerFieldBytes, rule: GtFieldRule.zeroedBySpawnOfGreenThread))
 	fields.push(GtField.create("GtOffStrandHolder", offset: GtOffStrandHolder, width: PointerFieldBytes, rule: GtFieldRule.zeroedBySpawnOfMain))
 	fields.push(GtField.create("GtOffStrandRefs", offset: GtOffStrandRefs, width: PointerFieldBytes, rule: GtFieldRule.setBySpawnOfStrandOwners))
 	fields.push(GtField.create("GtOffSelectDone", offset: GtOffSelectDone, width: PointerFieldBytes, rule: GtFieldRule.setBeforeRead))
@@ -2593,6 +2594,7 @@ function gtFieldIsZeroedBySpawn(rule GtFieldRule, kind GtSpawnKind) returns bool
 	return match rule 'rule'
 		zeroedBySpawn gives true
 		zeroedBySpawnOfStrandOwners gives kind != GtSpawnKind.coroutine
+		zeroedBySpawnOfGreenThread gives kind == GtSpawnKind.greenThread
 		zeroedBySpawnOfMain gives kind == GtSpawnKind.mainThread
 		keptAcrossReuse or
 		setByFreeGet or
@@ -2835,9 +2837,8 @@ function buildGtSpawn(module StdModule, kind GtSpawnKind, tracing GtTracing, tar
 	emitParams(module, block: initBlock, count: 1)
 	let funcPtr = 0 as ValueId
 
-	let stackSizeVal = emitLoadGlobalWord(module, block: initBlock, label: GtSeedBytesLabel, ids: ids)
 	let gt = ids.mint()
-	module.appendOp(initBlock, op: StdOp.call(gt, callee: GtFreeGetName, args: argsOf(stackSizeVal)))
+	module.appendOp(initBlock, op: StdOp.call(gt, callee: GtFreeGetName, args: ValueIdArray.create()))
 
 	emitGtSpawnZeroing(module, block: initBlock, gt: gt, kind: kind, ids: ids)
 
@@ -2885,6 +2886,9 @@ function buildGtSpawn(module StdModule, kind GtSpawnKind, tracing GtTracing, tar
 	end 'markMain'
 
 	let stackBase = emitLoadField(module, block: initBlock, record: gt, offset: GtOffStackBase, ids: ids)
+	// The record's size, not `__gt_seed_bytes`: the seed can move after `__gt_free_get` read it, and a
+	// top computed from the new value would lay the first frame outside this stack.
+	let stackSizeVal = emitLoadField(module, block: initBlock, record: gt, offset: GtOffStackSize, ids: ids)
 	module.appendOp(initBlock, op: StdOp.storeIndirect(gt, offset: GtOffFuncPtr, valueId: funcPtr, valueType: StdType.i64))
 
 	// A seed above the floor is a size chosen now, and its first park must not halve it before the thread has had
@@ -5271,9 +5275,9 @@ function emitGtArriveAndReclaimIfSecond(module StdModule, func IrFunction, cur I
 	return arrived
 end 'emitGtArriveAndReclaimIfSecond'
 
-// A record keeps a stack only of the size `kept` names: `__gt_free_get` hands a kept stack to a
-// spawn as a seed of the size it asked for, so one of any other size would be recorded, framed and
-// freed at the wrong size. The seed can move while a record waits, so `__gt_runner_done`,
+// A record keeps a stack only of the size `kept` names: `__gt_free_get` hands a kept stack out as
+// one of the seed's size, so one of any other size would be recorded, framed and freed at the wrong
+// size. The seed can move while a record waits, so `__gt_runner_done`,
 // `__gt_reclaim` and `__gt_free_get` each check against the size current there.
 export function emitGtDropStackUnlessSized(module StdModule, func IrFunction, cur IrBlock, record ValueId, kept ValueId, cont IrBlock, ids ValueMinter)
 	var checkSize = module.addBlock(func, label: b"stackkeepcheck", heat: BlockHeat.normal)
@@ -5910,8 +5914,6 @@ function buildGtPromiseDrop(module StdModule)
 	var notAReplyCell = module.addBlock(func, label: b"notreplycell", heat: BlockHeat.normal)
 	var strandHeld = module.addBlock(func, label: b"dropstrandheld", heat: BlockHeat.normal)
 	var strandNotHeld = module.addBlock(func, label: b"dropstrandnotheld", heat: BlockHeat.cold)
-	var mailboxParked = module.addBlock(func, label: b"droppedmailboxpark", heat: BlockHeat.normal)
-	var notMailbox = module.addBlock(func, label: b"droppednotmailbox", heat: BlockHeat.normal)
 	var sendParked = module.addBlock(func, label: b"droppedsendpark", heat: BlockHeat.normal)
 	var sendWake = module.addBlock(func, label: b"droppedsendwake", heat: BlockHeat.normal)
 	var notSendParked = module.addBlock(func, label: b"droppednotsendpark", heat: BlockHeat.normal)
@@ -5962,35 +5964,8 @@ function buildGtPromiseDrop(module StdModule)
 	module.setTerminator(strandHeld, op: StdOp.condBranch(isWaiting, thenBlockId: waitingArm.id, elseBlockId: queuedArm.id))
 
 	// waiting arm: the park kind decides which store has to be emptied before the thread can be given up.
-	//
-	// ⛔⛔⛔ **THE MAILBOX PARK KIND IS ANSWERED HERE, AND THE ANSWER IS AN ABORT.**
-	// A park is registered on the TIMER or the POLLER by `__gt_register_park`, or on a MAILBOX by
-	// `__mbox_recv`, which stores the GT into `mbox.parkedGt`. The road below empties the timer and poller
-	// stores, and NOTHING anywhere clears `mbox.parkedGt` but the waker's own store — so a mailbox-parked GT
-	// given up by this call would be reclaimed while `mbox.parkedGt` still pointed at it. The next
-	// `__mbox_send` / `__mbox_close` would then store into freed memory and publish a freed GT: a
-	// cross-green-thread use-after-free.
-	//
-	// ⭐⭐ **IT IS AN ABORT RATHER THAN A THIRD DEREGISTRATION BECAUSE NOTHING IN THE LANGUAGE CAN REACH IT.**
-	// `__mbox_recv` — the ONE producer of a mailbox park — has exactly two callers, both inside the synthesized
-	// `<T>.__loop`: a reply cell has `funcPtr == 0` and is never enqueued, so it can execute nothing and can
-	// never call `__mbox_recv`; `<T>.__loop` is reached only by `__gt_spawn_green` from `__svc_spawn`, which
-	// hands back a mailbox rather than a promise; and no `async` can spawn `<T>.__loop`, whose symbol
-	// (`serviceLoopSymbol`) is `__`-prefixed and unspellable in source (E2051). ⇒ **the only GT that can be
-	// mailbox-parked is a service's own green thread, and nothing in the language names one with a
-	// `Promise`.**
-	//
-	// ⇒ **What is written here is the STOP, not a repair.** A third deregistration would be emitter code
-	// nothing in this tree can execute, in a reclamation path, deciding a question the design has not
-	// answered — what a service whose loop is freed mid-`recv` owes its mailbox's `refs` and its state. The
-	// abort turns a silent use-after-free into a named exit at the instruction that caused it, and it is
-	// SABOTAGE-PROVABLE where a deregistration would not be: point the compare at `GtParkKind.timer` and a
-	// dropped sleeping promise exits 94.
 	let parkKind = emitLoadField(module, block: waitingArm, record: gt, offset: GtOffParkKind, ids: ids)
-	emitBranchOnCompare(module, block: waitingArm, value: parkKind, pred: StdCmpPred.eq, against: GtParkKind.mailbox.rawValue, whenTrue: mailboxParked, whenFalse: notMailbox, ids: ids)
-	emitRuntimeAbort(module, func: func, block: mailboxParked, abort: RuntimeAbort.schedulerPromiseParkedOnAMailbox, ids: ids)
-
-	emitBranchOnCompare(module, block: notMailbox, value: parkKind, pred: StdCmpPred.eq, against: GtParkKind.mailboxSend.rawValue, whenTrue: sendParked, whenFalse: notSendParked, ids: ids)
+	emitBranchOnCompare(module, block: waitingArm, value: parkKind, pred: StdCmpPred.eq, against: GtParkKind.mailboxSend.rawValue, whenTrue: sendParked, whenFalse: notSendParked, ids: ids)
 
 	let abandonDebt = ids.mint()
 	module.appendOp(sendParked, op: StdOp.call(abandonDebt, callee: MboxSendAbandonName, args: argsOf(gt)))
@@ -6080,6 +6055,8 @@ function buildGtPromiseDrop(module StdModule)
 	module.setTerminator(parkMissed, op: StdOp.branch(queuedArm.id))
 
 	emitBranchOnCompare(module, block: notTimerPark, value: parkKind, pred: StdCmpPred.eq, against: GtParkKind.quiesce.rawValue, whenTrue: quiesceParked, whenFalse: unknownPark, ids: ids)
+	// A `mailbox` park lands here too, and is unreachable: only `<T>.__loop` calls `__mbox_recv` (its
+	// symbol is `__`-prefixed, E2051), no promise names that thread, and a reply cell runs nothing.
 	emitRuntimeFatal(module, func: func, block: unknownPark, fatal: RuntimeFatal.promiseDroppedInAnUnknownPark, ids: ids)
 
 	let quiesceClaim = emitCasGlobalWord(module, block: quiesceParked, label: GtQuiesceWaiterLabel, expected: gt, replacement: emitConst(module, block: quiesceParked, value: 0, ids: ids), ids: ids)

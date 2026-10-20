@@ -1967,8 +1967,9 @@ export let GtFreePutName = b"__gt_free_put"
 export let GtCellPutName = b"__gt_cell_put"
 export let GtCellGetName = b"__gt_cell_get"
 
-// ⭐⭐⭐ **`__gt_free_get(wantedSize) -> gt` — Go's `gfget` plus `malg`'s allocation: the ONE door a
-// GT record is taken through**, by `__gt_spawn` with the seed's size. It
+// ⭐⭐⭐ **`__gt_free_get() -> gt` — Go's `gfget` plus `malg`'s allocation: the ONE door a
+// GT record is taken through**, by `__gt_spawn`. It reads the seed's size (`__gt_seed_bytes`) once, on
+// entry, and calls it `wantedSize`. It
 // pops the current P's list, refilling up to `GtFreeLocalLow` from the global lists when the local one
 // is empty; a thread holding no P pops the global lists. A
 // record whose kept stack is not `wantedSize` has it freed before it is handed back
@@ -5660,8 +5661,8 @@ end 'emitGtFreeAcquire'
 
 // See `GtFreeGetName`.
 function buildGtFreeGet(module StdModule)
-	var func = IrFunction.createFromStd(GtFreeGetName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param())
-	var ids = ValueMinter.create(1)
+	var func = IrFunction.createFromStd(GtFreeGetName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create())
+	var ids = ValueMinter.create(0)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
 	var recycle = module.addBlock(func, label: b"gfgrecycle", heat: BlockHeat.normal)
@@ -5672,8 +5673,7 @@ function buildGtFreeGet(module StdModule)
 	var handBack = module.addBlock(func, label: b"gfghandback", heat: BlockHeat.normal)
 	var carve = module.addBlock(func, label: b"gfgcarve", heat: BlockHeat.normal)
 
-	emitParams(module, block: entry, count: 1)
-	let wantedSize = 0
+	let wantedSize = emitLoadGlobalWord(module, block: entry, label: GtSeedBytesLabel, ids: ids)
 
 	let record = ids.mint()
 	recycle.blockArgs.push(IrBlockArg.create(record, argType: StdType.i64))
