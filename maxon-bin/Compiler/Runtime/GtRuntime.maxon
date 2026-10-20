@@ -730,10 +730,13 @@ end 'gtStackSystemBytes'
 // builds the exception record, the CONTEXT with its XSAVE area and the dispatcher's frames on the faulting
 // stack, and the XSAVE area grows with the host's vector state. A fault can land with only the guard height
 // left under the stack pointer, so the sum of those parts at their widest (AVX-512) plus the diagnostic chain
-// that rides the margin (`X64Runtime.UnguardedDiagnosticChainBytes`) must fit in the margin plus this reserve,
-// and `requireWindowsDispatchFitsItsReserve` refuses a build where it would not; too little room ends the
-// process with the fault's own status (0xC0000005) instead of the runtime's report. Go reserves 4096 here,
-// which does not hold this sum; 0x1200 holds it with little slack, so widening either part can fail the check.
+// (`X64Runtime.UnguardedDiagnosticChainBytes`, of which only the handler's own frame lands here: it
+// prints from the machine's system stack) must fit in the margin plus this reserve, and
+// `requireWindowsDispatchFitsItsReserve` refuses a build where it would not. A dispatch that still lands
+// below the stack's bottom is `RuntimeFatal.exceptionDispatchedBelowGreenThreadStackBottom` when the handler
+// runs, and ends the process with the fault's own status (0xC0000005) when the kernel cannot build its frame.
+// Go reserves 4096 here, which does not hold this sum; 0x1200 holds it with little slack, so widening either
+// part can fail the check.
 let WindowsPageBytes = 0x1000 as FullRangeInt
 let GtWindowsExceptionDispatchBytes = 0x1200 as FullRangeInt
 let WindowsContextRecordBytes = 1232 as FullRangeInt
@@ -808,7 +811,7 @@ end 'arm64SystemStackGuardRegionBytes'
 
 let WindowsSystemStackHeadroomBytes = (WindowsWidestDispatchBytes + UnguardedDiagnosticChainBytes + WindowsPageBytes - 1) and not (WindowsPageBytes - 1)
 let WindowsSystemStackGuardPageBytes = 0x1000 as FullRangeInt
-let WindowsSystemStackGuardRegionBytes = WindowsSystemStackHeadroomBytes + WindowsSystemStackGuardPageBytes
+export let WindowsSystemStackGuardRegionBytes = WindowsSystemStackHeadroomBytes + WindowsSystemStackGuardPageBytes
 let X64LinuxSystemStackGuardRegionBytes = 0x1000 as FullRangeInt
 let Arm64MacosSystemStackGuardRegionBytes = 0x4000 as FullRangeInt
 let Arm64LinuxSystemStackGuardRegionBytes = 0x10000 as FullRangeInt

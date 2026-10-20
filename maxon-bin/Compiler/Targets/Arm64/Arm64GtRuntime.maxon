@@ -381,29 +381,29 @@ module function emitArm64LoadCurrentGtOrBail(asm Arm64RuntimeAsm, mDest Arm64Reg
 	arm64EmitCbzTo(asm, reg: gtDest, label: bail)
 end 'emitArm64LoadCurrentGtOrBail'
 
-// Branch to `bail` unless `addr` lies inside `gt`'s own stack, `[stackBase, stackBase + stackSize)`; a
-// `stackBase` of 0 — an M's scheduler context, on a real OS-thread stack — bails too. Past both bails `scratch`
-// holds the stack's top and `gt` its size. UNSIGNED compares: these are addresses. The twin of
-// `X64GtRuntime.emitGtBailUnlessOnItsOwnStack`.
-module function emitArm64GtBailUnlessOnItsOwnStack(asm Arm64RuntimeAsm, gt Arm64Register, scratch Arm64Register, addr Arm64Register, bail BlockId)
+// Branch unless `addr` lies inside `gt`'s own stack, `[stackBase, stackBase + stackSize)`: to `onOsStack` for a
+// `stackBase` of 0 — an M's scheduler context, on a real OS-thread stack — and to `elsewhere` for an address off
+// a stack the green thread owns. Past both bails `scratch` holds the stack's top and `gt` its size. UNSIGNED
+// compares: these are addresses. The twin of `X64GtRuntime.emitGtBailUnlessOnItsOwnStack`.
+module function emitArm64GtBailUnlessOnItsOwnStack(asm Arm64RuntimeAsm, gt Arm64Register, scratch Arm64Register, addr Arm64Register, onOsStack BlockId, elsewhere BlockId)
 	arm64EmitLoadWord64At(asm, dest: scratch, base: gt, byteOffset: GtOffStackBase)
-	arm64EmitCbzTo(asm, reg: scratch, label: bail)
+	arm64EmitCbzTo(asm, reg: scratch, label: onOsStack)
 	arm64EmitCmpRuntimeReg(asm, lhs: addr, rhs: scratch)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lo, label: bail)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.lo, label: elsewhere)
 	arm64EmitLoadWord64At(asm, dest: gt, base: gt, byteOffset: GtOffStackSize)
 	arm64EmitAddRuntimeReg(asm, dest: scratch, lhs: scratch, rhs: gt)
 	arm64EmitCmpRuntimeReg(asm, lhs: addr, rhs: scratch)
-	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.hs, label: bail)
+	arm64EmitCondBranchTo(asm, cond: Arm64CondCode.hs, label: elsewhere)
 end 'emitArm64GtBailUnlessOnItsOwnStack'
 
-function emitArm64DarwinLoadMachineOnItsOwnStackOrBail(asm Arm64RuntimeAsm, bail BlockId)
+function emitArm64DarwinLoadMachineOnItsOwnStackOrBail(asm Arm64RuntimeAsm, bail BlockId, elsewhere BlockId)
 	emitArm64LoadCurrentGtOrBail(asm, mDest: Arm64DoorMReg, gtDest: Arm64DoorGtReg, scratch: Arm64DoorSpReg, bail: bail, os: Os.macos)
 	arm64EmitMovFromSp(asm.code, dest: arm64RuntimeReg(Arm64DoorSpReg))
-	emitArm64GtBailUnlessOnItsOwnStack(asm, gt: Arm64DoorGtReg, scratch: Arm64DoorLowReg, addr: Arm64DoorSpReg, bail: bail)
+	emitArm64GtBailUnlessOnItsOwnStack(asm, gt: Arm64DoorGtReg, scratch: Arm64DoorLowReg, addr: Arm64DoorSpReg, onOsStack: bail, elsewhere: elsewhere)
 end 'emitArm64DarwinLoadMachineOnItsOwnStackOrBail'
 
 module function emitArm64DarwinLoadGtOnItsOwnStackOrBail(asm Arm64RuntimeAsm, bail BlockId)
-	emitArm64DarwinLoadMachineOnItsOwnStackOrBail(asm, bail: bail)
+	emitArm64DarwinLoadMachineOnItsOwnStackOrBail(asm, bail: bail, elsewhere: bail)
 	arm64EmitLoadWord64At(asm, dest: Arm64DoorGtReg, base: Arm64DoorMReg, byteOffset: MOffCurrentGt as MachineWord)
 end 'emitArm64DarwinLoadGtOnItsOwnStackOrBail'
 
@@ -1025,7 +1025,10 @@ end 'emitArm64LoadCurrentMOrBailless'
 // system stack's TOP, which is sound only when nothing is live there — true of a green thread's call, and
 // false for two callers that run with a green thread current and SP elsewhere: `__gt_morestack`, whose own
 // frame is on the system stack, and the fault handler, on the signal stack. Both take the direct road, as do
-// an M's scheduler context (`stackBase` 0, a real OS-thread stack) and a thread that is no M at all.
+// an M's scheduler context (`stackBase` 0, a real OS-thread stack) and a thread that is no M at all. SP
+// anywhere else is `RuntimeFatal.systemCallFromOutsideEveryKnownStack` unless it is on the system
+// stack or the signal stack (`emitArm64DarwinBranchUnlessOnTheSignalStack`). The twin of
+// `X64GtRuntime.emitGtShimmedIatCall`'s guard, which states why the rest is refused.
 //
 // ⚠ **NO NESTING.** A libSystem call is a leaf that never re-enters Maxon code, and an OS thread runs one
 // thing at a time, so no second door call can reach the same system stack while this one is on it.
@@ -1044,9 +1047,12 @@ let DarwinLibcCallName = b"mrt_darwin_libc_call"
 export function buildArm64DarwinLibcCallChunk(greenThreads bool) returns FunctionCodeChunk
 	var asm = Arm64RuntimeAsm.beginRawFunction()
 	let direct = asm.newLabel()
+	let elsewhere = asm.newLabel()
+	let notOnTheSystemStack = asm.newLabel()
+	let offEveryStack = asm.newLabel()
 
 	if greenThreads 'mayRunOnAGreenThread'
-		emitArm64DarwinLoadMachineOnItsOwnStackOrBail(asm, bail: direct)
+		emitArm64DarwinLoadMachineOnItsOwnStackOrBail(asm, bail: direct, elsewhere: elsewhere)
 
 		// ⭐⭐ **THE SAME WINDOW x64's IMPORT SHIM HAS, AND HERE IT CANNOT FIRE — WHICH IS NOT THE SAME FACT
 		// AND MUST NOT READ AS THOUGH IT WERE.** A machine cached in a register while SP is still on the
@@ -1088,6 +1094,23 @@ export function buildArm64DarwinLibcCallChunk(greenThreads bool) returns Functio
 		arm64EmitPopPairGpr(asm.code, rt1: arm64RuntimeReg(Arm64DoorSpReg), rt2: arm64RuntimeReg(Arm64DoorLowReg))
 		arm64EmitMovToSp(asm.code, src: arm64RuntimeReg(Arm64DoorSpReg))
 		arm64EmitRet(asm.code)
+
+		asm.placeLabel(elsewhere)
+		arm64EmitLoadWord64At(asm, dest: Arm64DoorLowReg, base: Arm64DoorMReg, byteOffset: MOffSystemStackSP as MachineWord)
+		arm64EmitCmpRuntimeReg(asm, lhs: Arm64DoorSpReg, rhs: Arm64DoorLowReg)
+		arm64EmitCondBranchTo(asm, cond: Arm64CondCode.hs, label: notOnTheSystemStack)
+		arm64EmitAddSubImmWide(asm.code, opcode: Arm64OpSubImm, rd: arm64RuntimeReg(Arm64DoorLowReg), rn: arm64RuntimeReg(Arm64DoorLowReg), imm: GtSystemStackSize as MachineWord)
+		arm64EmitCmpRuntimeReg(asm, lhs: Arm64DoorSpReg, rhs: Arm64DoorLowReg)
+		arm64EmitCondBranchTo(asm, cond: Arm64CondCode.hs, label: direct)
+
+		asm.placeLabel(notOnTheSystemStack)
+		emitArm64DarwinBranchUnlessOnTheSignalStack(asm, onIt: direct, notOnIt: offEveryStack)
+
+		asm.placeLabel(offEveryStack)
+		emitArm64LoadCurrentMOrBailless(asm, dest: Arm64DoorMReg, scratch: Arm64DoorSpReg, os: Os.macos)
+		arm64EmitLoadWord64At(asm, dest: Arm64DoorLowReg, base: Arm64DoorMReg, byteOffset: MOffSystemStackSP as MachineWord)
+		arm64EmitMovToSp(asm.code, src: arm64RuntimeReg(Arm64DoorLowReg))
+		arm64EmitTailBranch(asm.code, callFixups: asm.callFixups, targetName: GtCallFromOffEveryStackFatalName)
 	end 'mayRunOnAGreenThread'
 
 	// The direct road is a tail call: the callee returns straight to the caller through the untouched x30.
@@ -1098,6 +1121,50 @@ export function buildArm64DarwinLibcCallChunk(greenThreads bool) returns Functio
 	chunk.leavesCallerStack(Arm64ImportCallGtStackBytes)
 	return chunk
 end 'buildArm64DarwinLibcCallChunk'
+
+let DarwinSigstackOnStack = 1
+let DarwinStackTBytes = 32
+
+// Asked of the kernel (`sigaltstack` reports `SS_ONSTACK` while the thread runs on it) because no M
+// records the signal stack's range: the main thread's is installed by `mrt_runtime_init` before that
+// thread becomes an M. A system call, so it is asked only after the system stack's range test fails.
+function emitArm64DarwinBranchUnlessOnTheSignalStack(asm Arm64RuntimeAsm, onIt BlockId, notOnIt BlockId)
+	arm64EmitPushPairGpr(asm.code, rt1: arm64RuntimeReg(Arm64Register.x0), rt2: arm64RuntimeReg(Arm64Register.x1))
+	arm64EmitPushPairGpr(asm.code, rt1: arm64RuntimeReg(Arm64Register.x2), rt2: arm64RuntimeReg(Arm64Register.x3))
+	arm64EmitPushPairGpr(asm.code, rt1: arm64RuntimeReg(Arm64Register.x4), rt2: arm64RuntimeReg(Arm64Register.x5))
+	arm64EmitPushPairGpr(asm.code, rt1: arm64RuntimeReg(Arm64Register.x6), rt2: arm64RuntimeReg(Arm64Register.x7))
+	arm64EmitPushPairGpr(asm.code, rt1: arm64RuntimeReg(Arm64Register.x16), rt2: arm64RuntimeReg(Arm64Register.x30))
+	arm64EmitStackAlloc(asm.code, amount: DarwinStackTBytes)
+
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x0, value: 0)
+	arm64EmitMovFromSp(asm.code, dest: arm64RuntimeReg(Arm64Register.x1))
+	arm64EmitLoadImportAddress(asm.code, iatRelocs: asm.iatRelocs, slotIndex: osImportSlotIndex(OsImportSlot.sigaltstack))
+	arm64EmitBranchLinkReg(asm.code, reg: Arm64ImportAddressReg)
+
+	arm64EmitMovFromSp(asm.code, dest: arm64RuntimeReg(Arm64Register.x9))
+	arm64EmitLoadWord32At(asm, dest: Arm64Register.x11, base: Arm64Register.x9, byteOffset: DarwinSigstackOffFlags as MachineWord)
+	arm64EmitMovRuntimeImm(asm, dest: Arm64Register.x12, value: DarwinSigstackOnStack)
+	arm64EmitRuntimeRrr(asm, opcode: Arm64OpAnd, dest: Arm64Register.x11, lhs: Arm64Register.x11, rhs: Arm64Register.x12)
+	arm64EmitCbzTo(asm, reg: Arm64Register.x11, label: notOnIt)
+
+	arm64EmitStackFree(asm.code, amount: DarwinStackTBytes)
+	arm64EmitPopPairGpr(asm.code, rt1: arm64RuntimeReg(Arm64Register.x16), rt2: arm64RuntimeReg(Arm64Register.x30))
+	arm64EmitPopPairGpr(asm.code, rt1: arm64RuntimeReg(Arm64Register.x6), rt2: arm64RuntimeReg(Arm64Register.x7))
+	arm64EmitPopPairGpr(asm.code, rt1: arm64RuntimeReg(Arm64Register.x4), rt2: arm64RuntimeReg(Arm64Register.x5))
+	arm64EmitPopPairGpr(asm.code, rt1: arm64RuntimeReg(Arm64Register.x2), rt2: arm64RuntimeReg(Arm64Register.x3))
+	arm64EmitPopPairGpr(asm.code, rt1: arm64RuntimeReg(Arm64Register.x0), rt2: arm64RuntimeReg(Arm64Register.x1))
+	arm64EmitBranchTo(asm, label: onIt)
+end 'emitArm64DarwinBranchUnlessOnTheSignalStack'
+
+module function buildArm64GtSystemStackFatalChunk(globalData GlobalDataTable, os Os) returns FunctionCodeChunk
+	var asm = Arm64RuntimeAsm.beginFunction(0)
+	let reason = RuntimeAbortReason.fatal(RuntimeFatal.systemCallFromOutsideEveryKnownStack)
+
+	arm64EmitPrintConstant(asm, globalData: globalData, bytes: reason.message())
+	arm64EmitProcessExit(asm, os: os, exitCode: reason.exitCode() as MachineWord)
+
+	return asm.finishChunk(GtCallFromOffEveryStackFatalName)
+end 'buildArm64GtSystemStackFatalChunk'
 
 // `[m + MOffLocks] += delta` — the bracket over the window where `m` names a machine this thread may stop
 // belonging to.

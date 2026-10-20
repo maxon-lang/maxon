@@ -1412,11 +1412,33 @@ Stack trace:
 <!-- test: force-segfault-on-a-green-thread -->
 <!-- tier: stdlib -->
 ### A fault on a green thread walks that thread's own stack
-The fault happens on a coroutine's stack while the handler runs elsewhere — Windows's vectored handler below
-the fault on that same stack, with the TIB describing it; a POSIX lane's on the machine's signal stack — and the
-walk is bounded by the green thread's own stack, ending at its trampoline.
+The fault happens on a coroutine's stack while the handler runs elsewhere — on the machine's system stack on
+Windows, and on the machine's signal stack on a POSIX lane — and the walk is bounded by the green thread's own
+stack, ending at its trampoline.
+
+⚠ **THE COROUTINE GROWS ITS STACK BEFORE IT FAULTS.** The kernel's dispatch of a hardware exception puts the
+processor's saved state on the faulting stack below the fault — over 12 KB on a host with AMX — and the seed
+stack of an x64-windows green thread is 8 KiB. A dispatch that does not fit above the stack's bottom is a fatal
+error of its own, so the case recurses first: the stack is grown, and not shrunk before the thread next parks, by
+the time the fault is raised from a shallow frame, and the dispatch fits on every host.
 ```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function descend(depth Integer) returns Integer
+	Scheduler.yield()
+
+	if depth == 0 'bottom'
+		return 0
+	end 'bottom'
+
+	return descend(depth - 1) + 1
+end 'descend'
+
 function faultOnAGreenThread() returns ExitCode
+	if descend(1000) != 1000 'grownWrongly'
+		return 2
+	end 'grownWrongly'
+
 	__Builtins.forceSegfault()
 	return 0
 end 'faultOnAGreenThread'

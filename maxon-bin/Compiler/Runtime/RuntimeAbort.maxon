@@ -596,6 +596,8 @@ export enum RuntimeFatal
 	mailboxReceiverStateOutOfDomain
 	mailboxTakeSourceOutOfDomain
 	startmCreditOnASpinningMachine
+	exceptionDispatchedBelowGreenThreadStackBottom
+	systemCallFromOutsideEveryKnownStack
 end 'RuntimeFatal'
 
 export union RuntimeAbortReason
@@ -609,7 +611,7 @@ export union RuntimeAbortReason
 		end 'which'
 	end 'slot'
 
-	function exitCode() returns FullRangeInt
+	export function exitCode() returns FullRangeInt
 		return match self 'which'
 			abort(cause) gives cause.rawValue
 			fatal gives RuntimeAbort.runtimeFatal.rawValue
@@ -623,7 +625,7 @@ export union RuntimeAbortReason
 		end 'which'
 	end 'messageLabel'
 
-	function message() returns ByteArray
+	export function message() returns ByteArray
 		return match self 'which'
 			abort(cause) gives "fatal error: runtime abort {cause.rawValue} ({cause.name})\n".toByteArray()
 			fatal(cause) gives "fatal error: {runtimeFatalReason(cause)}\n".toByteArray()
@@ -658,6 +660,8 @@ function runtimeFatalReason(fatal RuntimeFatal) returns String
 		mailboxReceiverStateOutOfDomain gives "mailbox receiver state is not fresh, inbox-queued or started"
 		mailboxTakeSourceOutOfDomain gives "mailbox take source is not the ring or the inbox"
 		startmCreditOnASpinningMachine gives "startm: spinning credit handed to a machine that already holds one"
+		exceptionDispatchedBelowGreenThreadStackBottom gives "exception dispatched below green thread stack bottom"
+		systemCallFromOutsideEveryKnownStack gives "an OS call ran on no known stack"
 	end 'reason'
 end 'runtimeFatalReason'
 

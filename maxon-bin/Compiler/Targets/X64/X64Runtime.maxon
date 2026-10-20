@@ -37,7 +37,7 @@
 //   - No RE-ENTRANCY GUARD. A fault inside the diagnostic would re-enter this handler as an
 //     access violation, so the diagnostic must not fault: it divides nothing, and the one
 //     reader of memory it did not lay out — the frame walker — believes only frames inside
-//     the stack the TIB describes (`emitWalkStackBounds`).
+//     the stack the TIB or the green thread's own record describes (`emitWalkStackBounds`).
 //   - No `recover()`. A converted fault is terminal, so the handler exits the process.
 //
 // CALLING CONVENTION. Every function here uses the Win64 ABI (args in RCX/RDX/R8/R9),
@@ -557,9 +557,8 @@ export function encodeX64ProcessExit(code ByteArray, iatRelocs RelocationArray, 
 end 'encodeX64ProcessExit'
 
 // Windows: `ExitProcess(exitCode)` through the IAT, behind the green-thread shim in a program that has one. A
-// diagnostic raised on a green thread runs on that thread's few-kilobyte stack — below the vectored handler's
-// dispatch frames when it is a fault — and `ExitProcess` outruns what is left of it, faulting again inside
-// the exit. Never returns, so nothing follows it.
+// diagnostic raised on a green thread runs on that thread's few-kilobyte stack, and `ExitProcess` outruns what
+// is left of it, faulting again inside the exit. Never returns, so nothing follows it.
 function encodeWin64ProcessExit(code ByteArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, callFixups CallFixupArray, exitCode MachineWord, usesGt bool, target Target)
 	encodeMovRegImm32(code, dest: X64Register.rcx, value: exitCode)
 
@@ -665,7 +664,9 @@ let ChunkEntryWordsBytes = 2 * StackWordBytes
 // ⭐⭐ **WHAT THE REST OF THE UN-GUARDED CHAIN ALREADY SPENDS.** The deepest chain of un-guarded frames on
 // this lane is the fault diagnostic — `mrt_fault_thunk` → `mrt_fault_backtrace` → `mrt_panic_walk_frames` →
 // `mrt_panic_print_frame` → `mrt_write_hex64` → `mrt_write_cstr_stderr` → `mrt_write_stream` — and each frame
-// costs `beginFunction`'s reservation plus `ChunkEntryWordsBytes`: 96 + 96 + 96 + 96 + 96 + 48 = 528.
+// costs `beginFunction`'s reservation plus `ChunkEntryWordsBytes`: 96 + 96 + 96 + 96 + 96 + 48 = 528. A fault
+// on a green thread runs that chain on the machine's system stack, whose headroom is sized from this number;
+// `mrt_panic` spends the same frames, less the thunk's, on the green thread's margin.
 // The green-thread syscall shim adds at most 56 more on the GT stack across a call (the pushed r10 and
 // `emitGtExitSyscall`'s slow frame), which no chunk's own frame accounts for.
 //
@@ -1339,35 +1340,50 @@ end 'buildWalkFramesChunk'
 // on, into `lowSlot` and `ceilingSlot` (the highest frame pointer that stack admits). Only the top is looked
 // up — `stack_low` is a live address the caller vouches for, so it names the stack and bounds it from below.
 //
-// ⭐ **WHERE THE TOP COMES FROM IS AN OS FACT.** On Windows the TIB holds the running stack's bounds for EVERY
-// stack a thread runs on — its own, a green thread's, the system stack under a shimmed call — because the
-// kernel probes them and this runtime keeps them current (`x64OsProbesStackBounds`). Linux has no such pair,
-// so there only a green thread's own record bounds the walk, read through the loads the prologue guard makes.
-// Both are cheap and safe inside a fault handler: plain loads that take no lock, allocate nothing and read
-// only what the running thread keeps alive. A `stack_low` on neither — or a thread that is no M, or an M
-// between threads — gets the `StackWindowBytes` window.
+// ⭐ **WHERE THE TOP COMES FROM IS AN OS FACT.** On Windows the TIB holds the RUNNING stack's bounds — the
+// thread's own, a green thread's, the system stack under a shimmed call or a fault handler — because the kernel
+// probes them and this runtime keeps them current (`x64OsProbesStackBounds`). A walk that starts on a green
+// thread's stack while the handler runs on the system stack finds a different stack in the TIB, and takes the
+// green thread's own record instead, as the only arm does where there is no such pair (Linux), read through the
+// loads the prologue guard makes. Both are cheap and safe inside a fault handler: plain loads that take no lock,
+// allocate nothing and read only what the running thread keeps alive. A `stack_low` on neither — or a thread
+// that is no M, or an M between threads — gets the `StackWindowBytes` window.
 function emitWalkStackBounds(asm X64RuntimeAsm, usesGt bool, os Os, lowSlot StackSize, ceilingSlot StackSize)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(lowSlot), srcReg: X64Register.rdx, wide: true)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rdx, disp: StackWindowBytes - FrameRecordBytes)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(ceilingSlot), srcReg: X64Register.rax, wide: true)
 
 	let windowed = asm.newLabel()
+	let greenThreadBounds = asm.newLabel()
+	let haveTop = asm.newLabel()
 
-	// Each arm leaves the stack's top in r8, or branches to `windowed`.
-	if x64OsProbesStackBounds(os) 'threadBounds'
-		encodeMovRegSegAbs(asm.code, dest: X64Register.r8, disp: TibStackLimitDisp, wide: true, segment: TibSegment)
-		encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rdx, src: X64Register.r8, wide: true)
-		encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.below, targetBlockId: windowed)
-		encodeMovRegSegAbs(asm.code, dest: X64Register.r8, disp: TibStackBaseDisp, wide: true, segment: TibSegment)
-		encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rdx, src: X64Register.r8, wide: true)
-		encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.aboveEqual, targetBlockId: windowed)
-	end 'threadBounds' else if usesGt 'greenThreadBounds'
-		emitLoadCurrentGtOrBail(asm.code, rdataRelocs: asm.rdataRelocs, fixups: asm.rel32Fixups, mDest: X64Register.rax, gtDest: X64Register.rax, bail: windowed, os: os)
-		emitGtBailUnlessOnItsOwnStack(asm.code, fixups: asm.rel32Fixups, gt: X64Register.rax, scratch: X64Register.r8, addr: X64Register.rdx, bail: windowed)
-	end 'greenThreadBounds' else 'windowOnly'
+	if not (x64OsProbesStackBounds(os) or usesGt) 'windowOnly'
 		return
 	end 'windowOnly'
 
+	// Each arm leaves the stack's top in r8, or branches to the next arm and finally to `windowed`.
+	if x64OsProbesStackBounds(os) 'threadBounds'
+		let missed = windowed if not usesGt else greenThreadBounds
+		encodeMovRegSegAbs(asm.code, dest: X64Register.r8, disp: TibStackLimitDisp, wide: true, segment: TibSegment)
+		encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rdx, src: X64Register.r8, wide: true)
+		encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.below, targetBlockId: missed)
+		encodeMovRegSegAbs(asm.code, dest: X64Register.r8, disp: TibStackBaseDisp, wide: true, segment: TibSegment)
+		encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rdx, src: X64Register.r8, wide: true)
+		encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.aboveEqual, targetBlockId: missed)
+
+		if usesGt 'skipTheGreenThreadArm'
+			encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: haveTop)
+		end 'skipTheGreenThreadArm'
+	end 'threadBounds'
+
+	asm.placeLabel(greenThreadBounds)
+
+	if usesGt 'greenThreadBoundsArm'
+		emitLoadCurrentGtOrBail(asm.code, rdataRelocs: asm.rdataRelocs, fixups: asm.rel32Fixups, mDest: X64Register.rax, gtDest: X64Register.rax, bail: windowed, os: os)
+		emitGtBailUnlessOnItsOwnStack(asm.code, fixups: asm.rel32Fixups, gt: X64Register.rax, scratch: X64Register.r8, addr: X64Register.rdx, onOsStack: windowed, below: windowed, above: windowed)
+	end 'greenThreadBoundsArm'
+
+	asm.placeLabel(haveTop)
 	encodeLeaRegRegImm32(asm.code, dest: X64Register.r8, base: X64Register.r8, disp: -FrameRecordBytes)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(ceilingSlot), srcReg: X64Register.r8, wide: true)
 
@@ -1489,6 +1505,51 @@ function emitClassifiedFault(asm X64RuntimeAsm, kind HardwareFaultKind, scratch 
 	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: classified)
 end 'emitClassifiedFault'
 
+// Where Windows dispatched the fault decides where the handler runs. With no M or no current green
+// thread, in the scheduler context and on this M's system stack (its headroom included) the OS
+// thread's own stack holds the dispatch, so the handler runs in place; on the system stack a switch to
+// its top would also overwrite the faulting frames the backtrace walks. Under the green thread's bottom
+// the kernel has already written the dispatch onto memory that thread does not own, so that is a
+// fatal. Anywhere else the handler leaves for the system stack before it prints, so the diagnostic
+// chain never spends the green stack's room under the dispatch. The system stack is tested first: it
+// can sit below a green stack, where the below-bottom compare would call it fatal.
+function emitClassifyDispatchStack(asm X64RuntimeAsm, leaveTheStackSlot StackSize)
+	let inPlace = asm.newLabel()
+	let notOnTheSystemStack = asm.newLabel()
+	let belowTheBottom = asm.newLabel()
+	let leave = asm.newLabel()
+
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(leaveTheStackSlot), srcReg: X64Register.rax, wide: true)
+
+	emitLoadCurrentGtOrBail(asm.code, rdataRelocs: asm.rdataRelocs, fixups: asm.rel32Fixups, mDest: X64Register.rax, gtDest: X64Register.r11, bail: inPlace, os: Os.windows)
+	emitBailUnlessOnTheSystemStack(asm.code, fixups: asm.rel32Fixups, m: X64Register.rax, scratch: X64Register.r8, addr: X64Register.rsp, outside: notOnTheSystemStack)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: inPlace)
+
+	asm.placeLabel(belowTheBottom)
+	encodeJmpDirect(asm.code, callFixups: asm.callFixups, targetName: GtDispatchBelowStackBottomFatalName)
+
+	asm.placeLabel(notOnTheSystemStack)
+	emitGtBailUnlessOnItsOwnStack(asm.code, fixups: asm.rel32Fixups, gt: X64Register.r11, scratch: X64Register.r8, addr: X64Register.rsp, onOsStack: inPlace, below: belowTheBottom, above: leave)
+
+	asm.placeLabel(leave)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: 1)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(leaveTheStackSlot), srcReg: X64Register.rax, wide: true)
+
+	asm.placeLabel(inPlace)
+end 'emitClassifyDispatchStack'
+
+function emitLeaveTheDispatchStack(asm X64RuntimeAsm, leaveTheStackSlot StackSize)
+	let stay = asm.newLabel()
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(leaveTheStackSlot), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeTestRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: stay)
+	emitSwitchToTheSystemStack(asm.code, rdataRelocs: asm.rdataRelocs, rspBelowTop: -(ShadowSpaceBytes as Imm32))
+
+	asm.placeLabel(stay)
+end 'emitLeaveTheDispatchStack'
+
 // The callback `AddVectoredExceptionHandler` invokes on a hardware fault, BEFORE the OS
 // applies its default disposition. Win64 ABI: the EXCEPTION_POINTERS in RCX, a LONG back
 // in EAX.
@@ -1498,19 +1559,25 @@ end 'emitClassifiedFault'
 // was not asked about would turn every unrelated crash into this one's diagnostic. A stack overflow
 // runs this handler in the room `mrt_runtime_init` guaranteed.
 //
-// Slots: 0 = EXCEPTION_POINTERS*, 1 = fault_rip, 2 = fault_rbp, 3 = fault_rsp, 4 = panic prefix.
+// Slots: 0 = EXCEPTION_POINTERS*, 1 = fault_rip, 2 = fault_rbp, 3 = fault_rsp, 4 = panic prefix,
+// 5 = whether the handler leaves the stack it was dispatched on for the machine's system stack.
 function buildFaultThunkChunk(usesGt bool, target Target, context HostContextLayout) returns FunctionCodeChunk
 	let SlotExcPtrs = 0
 	let SlotFaultRip = 1
 	let SlotFaultRbp = 2
 	let SlotFaultRsp = 3
 	let SlotPanicPrefix = 4
-	var asm = X64RuntimeAsm.beginFunction(5)
+	let SlotLeaveTheStack = 5
+	var asm = X64RuntimeAsm.beginFunction(6)
 
 	let continueSearch = asm.newLabel()
 	let classified = asm.newLabel()
 
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotExcPtrs), srcReg: X64Register.rcx, wide: true)
+
+	if usesGt 'classifyTheDispatchStack'
+		emitClassifyDispatchStack(asm, leaveTheStackSlot: SlotLeaveTheStack)
+	end 'classifyTheDispatchStack'
 
 	// code = *(u32*)(p->ExceptionRecord), then one arm per code we convert. An arm that matches
 	// leaves its panic prefix in `SlotPanicPrefix` and jumps to `classified`; falling out of the last
@@ -1529,8 +1596,8 @@ function buildFaultThunkChunk(usesGt bool, target Target, context HostContextLay
 	asm.placeLabel(classified)
 
 	// Stash the faulting Rip/Rbp/Rsp. The faulted frames are still mapped and untouched —
-	// the handler runs on the same thread, BELOW the faulting RSP — so this chain is walkable
-	// exactly as it stands.
+	// the handler runs on the same thread, below the faulting RSP or on the machine's system stack — so this
+	// chain is walkable exactly as it stands.
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotExcPtrs), wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: ExcPtrsOffContextRecord, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rax, disp: context.contextRipOffset as Imm32, wide: true)
@@ -1539,6 +1606,10 @@ function buildFaultThunkChunk(usesGt bool, target Target, context HostContextLay
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRbp), srcReg: X64Register.rdx, wide: true)
 	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rax, disp: context.contextRspOffset as Imm32, wide: true)
 	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRsp), srcReg: X64Register.rdx, wide: true)
+
+	if usesGt 'leaveTheGreenStack'
+		emitLeaveTheDispatchStack(asm, leaveTheStackSlot: SlotLeaveTheStack)
+	end 'leaveTheGreenStack'
 
 	// The panic line opens with whichever prefix the classification chose; the rest of the diagnostic
 	// is the OS-neutral one. The harness strips the addresses, an operator reads them.
@@ -2085,6 +2156,11 @@ function appendX64WindowsRuntimeChunks(chunks FunctionCodeChunkArray, exitRoute 
 	chunks.push(buildWriteStreamChunk(usesGt, target: target))
 	chunks.push(buildWriteStderrChunk())
 	appendX64SharedRuntimeChunks(chunks, exitRoute: exitRoute, dumpCoverage: dumpCoverage, usesGt: usesGt, target: target)
+
+	if usesGt 'greenThreads'
+		chunks.push(buildGtSystemStackFatalChunk(GtDispatchBelowStackBottomFatalName, fatal: RuntimeFatal.exceptionDispatchedBelowGreenThreadStackBottom, exitRoute: exitRoute, target: target))
+		chunks.push(buildGtSystemStackFatalChunk(GtCallFromOffEveryStackFatalName, fatal: RuntimeFatal.systemCallFromOutsideEveryKnownStack, exitRoute: exitRoute, target: target))
+	end 'greenThreads'
 end 'appendX64WindowsRuntimeChunks'
 
 export let WindowsProcessNamespaceName = b"mrt_win_proc_ns"

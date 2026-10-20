@@ -1405,6 +1405,8 @@ Frames are listed innermost first, by function name only, down to the program's 
 At most 100 frames are printed; a deeper chain
 ends with an `...additional frames elided...` line. A processor fault has no source position, for example
 `panic: nil pointer or invalid memory access` or `panic: stack overflow`, followed by the same stack trace.
+On x64-windows, a fault on a green thread whose stack has no room left for the operating system's exception
+dispatch ends with `fatal error: exception dispatched below green thread stack bottom` and exit code 70.
 
 A `wasm32-wasi` program panics the same way: the same message, the same trace with the same function
 names, and exit code 1. A memory fault or a stack overflow there is a trap in the WebAssembly runtime,
