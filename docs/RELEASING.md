@@ -177,7 +177,7 @@ scripts/release.sh --package                      # this host's target
 scripts/release.sh --package --target=arm64-linux # cross-build another
 ```
 
-It builds, **runs the whole suite**, stages `maxon` + `stdlib/` + `runtime/` + `examples/` + both
+It builds, **runs the whole suite**, stages `maxon` + `stdlib/` + `runtime/` + `examples/` + `docs/` (WRITING_MAXON_CODE.md and every document it links) + both
 licences + a generated `INSTALL.md`, and archives the result into `dist/`.
 
 ⛔ **`stdlib/` AND `runtime/` BOTH SHIP, AS SIBLINGS OF THE BINARY.** The compiler resolves `stdlib/` by
@@ -241,7 +241,8 @@ deploy, as `text/plain` (`website/public/_headers`). They read the newest versio
 `~/.maxon`. So a release is installable by script the moment it is published, with nothing to
 regenerate.
 
-The swap replaces `bin/`, `stdlib/`, `runtime/` and `examples/`, and `~/.maxon/scriptlib/`, the user's
+The swap replaces `bin/`, `stdlib/`, `runtime/`, `examples/` and `docs/` (a release that ships no `docs/`
+leaves none), and `~/.maxon/scriptlib/`, the user's
 own packages, stays as it is. After a successful swap each script runs the new compiler's
 `check-scriptlib` when that directory exists and the compiler lists the command
 (`help check-scriptlib`); a failing check prints its diagnostics and a `scriptlib needs updating`

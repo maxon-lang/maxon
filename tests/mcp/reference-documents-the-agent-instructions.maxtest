@@ -1,0 +1,54 @@
+// reference-documents-the-agent-instructions.maxtest — the `instructions` the `initialize` result
+// carries are `docs/WRITING_MAXON_CODE.md`'s preamble and its `## Scripts and scriptlib` section,
+// each trimmed and without its closing `---`, joined by a blank line.
+//
+// `website/scripts/sync-docs.mjs` builds that text by its own extraction. The rule is restated here
+// rather than read from the generated file, so the two drifting apart fails this case.
+
+let AgentRulesDocument = "docs/WRITING_MAXON_CODE.md"
+let ScriptsSectionHeading = "## Scripts and scriptlib"
+let TitleHeadingPrefix = "# "
+let ClosingBreak = "---"
+let InstructionsKey = "instructions"
+
+test 'the initialize instructions are the agent rules preamble and the scripts section'
+	let docs = responseDocs(runMcpSingle(initRequest(1)))
+	Expect.equal(docs.count(), expected: 1, message: "expected 1 response line to initialize")
+
+	let doc = try docs.get(0) otherwise panic("no response to initialize")
+	let resultId = resultNode(doc)
+	Expect.isTrue(hasChildKey(doc, parent: resultId, key: InstructionsKey), message: "the initialize result has no `{InstructionsKey}`: {Json.stringify(doc)}")
+
+	let instructions = try doc.getString(resultId, key: InstructionsKey) otherwise panic("the initialize result's `{InstructionsKey}` is not a string: {Json.stringify(doc)}")
+	let document = checkoutDocumentText(AgentRulesDocument)
+
+	let preamble = partText(preambleOf(document))
+	Expect.isFalse(preamble.isEmpty(), message: "{AgentRulesDocument} has no preamble between its `{TitleHeadingPrefix}` title line and its first `{TopLevelHeadingPrefix}` heading")
+
+	let scripts = partText(sectionOf(document, heading: ScriptsSectionHeading))
+	Expect.isFalse(scripts.isEmpty(), message: "{AgentRulesDocument} has no `{ScriptsSectionHeading}` section, so there is nothing for the instructions to carry")
+
+	Expect.equal(instructions, expected: "{preamble}{LineFeed}{LineFeed}{scripts}", message: "the initialize instructions are not {AgentRulesDocument}'s preamble and its `{ScriptsSectionHeading}` section; run `node website/scripts/sync-docs.mjs` and rebuild the compiler")
+end 'the initialize instructions are the agent rules preamble and the scripts section'
+
+function preambleOf(document String) returns String
+	for line in document.split(LineFeed) 'eachLine'
+		if line.startsWith(TitleHeadingPrefix) 'title'
+			return sectionOf(document, heading: line).replaceFirst("{line}{LineFeed}", with: "")
+		end 'title'
+	end 'eachLine'
+
+	panic("{AgentRulesDocument} has no `{TitleHeadingPrefix}` title line")
+end 'preambleOf'
+
+function partText(text String) returns String
+	let trimmed = text.trim()
+
+	if not trimmed.endsWith("{LineFeed}{ClosingBreak}") 'open'
+		return trimmed
+	end 'open'
+
+	let breakAt = try trimmed.findLast(ClosingBreak) otherwise panic("'{trimmed}' ends with `{ClosingBreak}` but holds none")
+
+	return trimmed.slice(trimmed.startIndex(), endIndex: breakAt).trim()
+end 'partText'

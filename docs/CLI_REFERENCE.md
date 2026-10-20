@@ -2451,7 +2451,9 @@ host or interface spelling such as `--http=0.0.0.0:80` is refused the same way.
 
 The stdio server reads newline-delimited JSON-RPC 2.0 messages on stdin and writes responses to stdout. It
 implements `initialize` (protocol version `2024-11-05`, server name `maxon`), `tools/list` and
-`tools/call`.
+`tools/call`. The `initialize` result carries `instructions`, the agent rules in
+[WRITING_MAXON_CODE.md](WRITING_MAXON_CODE.md) (its preamble and its Scripts and scriptlib section),
+generated from that document and compiled into the server.
 
 | Mode | Invocation | Tools |
 |------|------------|-------|

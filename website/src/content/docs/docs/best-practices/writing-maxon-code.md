@@ -5,7 +5,8 @@ sidebar:
   order: 1
 ---
 
-ALWAYS read this document before writing or modifying Maxon code.
+ALWAYS read this document, `WRITING_MAXON_CODE.md`, before writing or modifying Maxon code. An install
+holds it in `docs/`, beside `stdlib/`, with the documents it links.
 For the full specification see [LANGUAGE_REFERENCE.md](/docs/language/overview/) and [BNF_SYNTAX.md](/docs/spec/bnf-syntax/);
 for the standard library's API see [STDLIB_REFERENCE.md](/docs/stdlib/).
 
@@ -1235,3 +1236,15 @@ The full rules are in the language reference's [Testing](/docs/language/testing/
 - `let` by default; `var` only where the value is reassigned or mutated.
 - `panic` / `default panic` for a branch that is a programming error; `throw` / `default throws` for a
   recoverable one.
+
+## Scripts and scriptlib
+
+Put a helper in a **scriptlib** package only when two or more single-file scripts need it. Keep out of
+scriptlib:
+
+- Code only one script uses: keep it in that script.
+- Code for a directory project: put it in the project's own files.
+- Anything meant to ship to everyone: that belongs in the standard library (`stdlib/`).
+
+Lay out, write and call a package as [The scriptlib directory](/docs/cli/#the-scriptlib-directory)
+says, and run [`maxon check-scriptlib`](/docs/cli/#maxon-check-scriptlib) after editing one.

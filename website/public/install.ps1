@@ -11,8 +11,8 @@
 #   & ([scriptblock]::Create((irm https://maxon.dev/install.ps1))) -Version 0.1.1
 #
 # Downloads the x64 Windows release from GitHub, checks it against the release's SHA256SUMS, and
-# installs it into %USERPROFILE%\.maxon: the compiler in .maxon\bin, the standard library in
-# .maxon\stdlib and the language runtime in .maxon\runtime. Adds .maxon\bin to the user PATH and to
+# installs it into %USERPROFILE%\.maxon: the compiler in .maxon\bin, beside the release's stdlib\,
+# runtime\, examples\ and docs\. Adds .maxon\bin to the user PATH and to
 # the PATH of the session it runs in; no administrator rights are needed. Running it again installs the
 # latest release, or says the install is current.
 #
@@ -58,6 +58,7 @@ function Install-Maxon {
     $ProgressPreference = 'SilentlyContinue'
     $repo = 'maxon-lang/maxon'
     $target = 'x64-windows'
+    $installEntries = @('stdlib', 'runtime', 'examples', 'docs')
 
     function Say([string]$message) { Write-Host "maxon-install: $message" }
 
@@ -204,7 +205,7 @@ function Install-Maxon {
     }
 
     # A running maxon.exe cannot be replaced or deleted, but it can be renamed, and bin\ itself cannot
-    # be renamed while it runs. So stdlib\, runtime\ and examples\ are swapped whole, the old exe is
+    # be renamed while it runs. So each of $installEntries is swapped whole, the old exe is
     # renamed aside, and the new one moved into its place.
     function Install-Release([string]$root, [string]$unpacked, [string]$id) {
         $bin = Join-Path $root 'bin'
@@ -217,7 +218,7 @@ function Install-Maxon {
         try {
             # THE ARCHIVE DECIDES WHICH TIERS EXIST. `runtime\` is absent from releases that predate it,
             # and this script installs any version, so an entry the archive does not carry is only retired.
-            foreach ($entry in @('stdlib', 'runtime', 'examples')) {
+            foreach ($entry in $installEntries) {
                 $current = Join-Path $root $entry
                 if (Test-Path -LiteralPath $current) {
                     Move-Entry $current (Join-Path $retired $entry)
@@ -245,7 +246,7 @@ function Install-Maxon {
             for ($i = $placed.Count - 1; $i -ge 0; $i--) {
                 Remove-Item -LiteralPath (Join-Path $root $placed[$i]) -Recurse -Force
             }
-            foreach ($entry in @('stdlib', 'runtime', 'examples')) {
+            foreach ($entry in $installEntries) {
                 $saved = Join-Path $retired $entry
                 if (Test-Path -LiteralPath $saved) {
                     Move-Entry $saved (Join-Path $root $entry)
@@ -385,9 +386,9 @@ function Install-Maxon {
             Say "Maxon $release, the latest release, is already installed in $root (-Force reinstalls it)"
         }
     } else {
-        # A directory that already holds a stdlib\, runtime\ or examples\ of its own is not ours to replace.
+        # A directory that already holds any of $installEntries of its own is not ours to replace.
         if (-not (Test-Path -LiteralPath $exe)) {
-            foreach ($entry in @('stdlib', 'runtime', 'examples')) {
+            foreach ($entry in $installEntries) {
                 if (Test-Path -LiteralPath (Join-Path $root $entry)) {
                     throw "$root\$entry exists and $root holds no bin\maxon.exe, so it is not a Maxon install; set MAXON_INSTALL to a new directory"
                 }

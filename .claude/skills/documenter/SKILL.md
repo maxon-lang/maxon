@@ -325,10 +325,11 @@ AFTER
 
 Sentence 1 fails Gate 1. The rest is provenance and an extraction rationale.
 
-### Two surfaces this pass AUTHORS, not merely tidies
+### Three surfaces this pass AUTHORS, not merely tidies
 
-Code is written with no comments, so these two arrive empty and are work items here. Neither is a code
-comment, and the allow-list does not apply to them — they are prose for a reader outside this file.
+Code is written with no comments, so the first two arrive empty and are work items here, and the third
+is prose only this pass keeps true. None is a code comment, and the allow-list does not apply to them —
+they are prose for a reader outside this file.
 
 1. ⭐ **A new `ErrorCodeRegistry.maxon` case with no doc comment.** The `//` block immediately above a
    case is the text `lookup_error_code` serves at runtime and the body of the generated Error Codes
@@ -339,6 +340,14 @@ comment, and the allow-list does not apply to them — they are prose for a read
 2. **`///` doc comments on newly exported functions**, which the language server renders in
    `textDocument/hover` — what a reader sees in an editor. Tighten the prose of an existing one; never
    delete it.
+3. **How an agent should use Maxon.** A change to a command, workflow, tier or rule an agent follows
+   updates `docs/WRITING_MAXON_CODE.md`'s preamble (the lines between its `# ` title and its first `## `)
+   or its `## Scripts and scriptlib` section, then `node website/scripts/sync-docs.mjs` regenerates
+   `maxon-bin/Compiler/Mcp/McpInstructionsGenerated.maxon`, the text `maxon mcp-server` serves as
+   `instructions` in its `initialize` result. State only what an agent decides and link the owning
+   `docs/` section for mechanics, so no fact is written in two places. `sync-docs.mjs --check` fails when
+   the generated file drifts from the document, and `tests/mcp --filter=reference-documents` fails when
+   the compiled text and the document disagree.
 
 ## The documentation pass
 

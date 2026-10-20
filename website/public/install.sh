@@ -5,8 +5,8 @@
 #   curl -fsSL https://maxon.dev/install.sh | sh
 #
 # Downloads the release archive for this machine from GitHub, checks it against the release's
-# SHA256SUMS, and installs it into ~/.maxon: the compiler in ~/.maxon/bin, the standard library in
-# ~/.maxon/stdlib and the language runtime in ~/.maxon/runtime. Running it again installs the latest
+# SHA256SUMS, and installs it into ~/.maxon: the compiler in ~/.maxon/bin, beside the release's
+# stdlib/, runtime/, examples/ and docs/. Running it again installs the latest
 # release, or says the install is current.
 # `usage` below lists the options.
 #
@@ -23,6 +23,7 @@ main() {
 	set -eu
 
 	repo="maxon-lang/maxon"
+	install_entries="stdlib runtime examples docs"
 	version=""
 	modify_path=1
 	force=0
@@ -74,9 +75,9 @@ main() {
 		return 0
 	fi
 
-	# A directory that already holds a stdlib/, runtime/ or examples/ of its own is not ours to replace.
+	# A directory that already holds any of $install_entries of its own is not ours to replace.
 	if [ ! -e "$bin_dir/maxon" ]; then
-		for entry in stdlib runtime examples; do
+		for entry in $install_entries; do
 			if [ -e "$root/$entry" ]; then
 				fail "$root/$entry exists and $root holds no bin/maxon, so it is not a Maxon install; set MAXON_INSTALL to a new directory"
 			fi
@@ -205,7 +206,7 @@ swap_in() {
 	retired="$3"
 	# ⚠ THE ARCHIVE DECIDES WHICH TIERS EXIST. `runtime/` is absent from releases that predate it, and
 	# this script installs any version, so an entry the archive does not carry is only retired.
-	for entry in stdlib runtime examples; do
+	for entry in $install_entries; do
 		if [ -e "$root/$entry" ]; then
 			mv "$root/$entry" "$retired/$entry" || return 1
 		fi
@@ -234,7 +235,7 @@ check_scriptlib() {
 roll_back() {
 	root="$1"
 	retired="$2"
-	for entry in examples runtime stdlib; do
+	for entry in $install_entries; do
 		if [ -e "$retired/$entry.placed" ]; then
 			rm -rf "${root:?}/$entry"
 		fi

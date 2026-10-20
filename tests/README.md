@@ -515,6 +515,7 @@ tests/
     rebuild-over-a-running-previous.maxtest      a self-rebuild succeeds while a server runs its `.previous`
     rebuild-with-a-compile-error.maxtest         a self-rebuild that fails to compile leaves the slot untouched
     reference-documents-every-tool.maxtest       docs/CLI_REFERENCE.md's `## MCP Server` section names every tool and argument `--dev` advertises
+    reference-documents-the-agent-instructions.maxtest       `initialize`'s `instructions` are docs/WRITING_MAXON_CODE.md's preamble and its `## Scripts and scriptlib` section
     check-reports-a-type-error-and-writes-nothing.maxtest      `check` answers a type error's code, is not the warm-rebuild gate, and writes nothing
     dump-ir-answers-the-ir-text.maxtest          `dump_ir` answers the IR of `main` as text, and writes nothing
     two-sessions-debug-one-source.maxtest        two debug sessions of one source each debug a build of their own, and a closed session's build is gone
@@ -1399,6 +1400,11 @@ as an MCP server on either transport, exchanging JSON-RPC messages, and inspecti
   `docs/CLI_REFERENCE.md`'s `## MCP Server` section (its heading line up to the next `## ` line) to naming
   every tool and every argument as a whole word. A document with no such section fails naming the whole
   roster, tool by tool.
+- `reference-documents-the-agent-instructions.maxtest` reads `docs/WRITING_MAXON_CODE.md` and holds the
+  `initialize` result's `instructions` string equal to the document's preamble (between its `# ` title line
+  and its first `## ` heading) and its `## Scripts and scriptlib` section (its heading line up to the next
+  `## ` line), each trimmed and without its closing `---`, joined by a blank line. A document missing either
+  fails saying so. Both cases share `sectionOf` and `checkoutDocumentText` from `McpHarness.maxon`.
 
 ⛔ **EVERY REBUILD CASE STAGES ITS OWN COPY OF THE COMPILER AND REPLACES THAT.** Driving a real
 `build maxon-bin` would rebuild the tree's compiler as a side effect of running the corpus. Testing

@@ -10,10 +10,7 @@
 
 let CliReferenceDocument = "docs/CLI_REFERENCE.md"
 let McpSectionHeading = "## MCP Server"
-let TopLevelHeadingPrefix = "## "
 let WordUnderscore = "_"
-let CarriageReturn = "\r"
-let LineFeed = "\n"
 
 test 'the CLI reference MCP section names every tool and every argument'
 	let tools = listTools(true)
@@ -34,9 +31,7 @@ test 'the CLI reference MCP section names every tool and every argument'
 		roster.push("{tool}({spaced(properties)})")
 	end 'eachTool'
 
-	let path = try FilePath.from(CliReferenceDocument) otherwise panic("reference-documents-every-tool: '{CliReferenceDocument}' is not a spellable path")
-	let document = try File.readText(path) otherwise panic("reference-documents-every-tool: could not read '{CliReferenceDocument}'. This corpus's paths are relative to the CHECKOUT ROOT; run it from there.")
-	let section = sectionOf(document.replace(CarriageReturn, with: ""))
+	let section = sectionOf(checkoutDocumentText(CliReferenceDocument), heading: McpSectionHeading)
 
 	Expect.isFalse(section.isEmpty(), message: "{CliReferenceDocument} has no `{McpSectionHeading}` section. It must exist and name every tool and argument the server declares: {spaced(roster)}")
 
@@ -51,32 +46,6 @@ test 'the CLI reference MCP section names every tool and every argument'
 
 	Expect.isEmpty(spaced(missing), message: "{CliReferenceDocument}'s `{McpSectionHeading}` section does not name these tools or arguments: {spaced(missing)}")
 end 'the CLI reference MCP section names every tool and every argument'
-
-// The section's text from its heading on, so it is empty exactly when the document has no such heading.
-function sectionOf(document String) returns String
-	var section = ""
-	var inSection = false
-
-	for line in document.split(LineFeed) 'eachLine'
-		if line == McpSectionHeading 'opens'
-			inSection = true
-			section.append("{line}{LineFeed}")
-			continue
-		end 'opens'
-
-		if not inSection 'notYet'
-			continue
-		end 'notYet'
-
-		if line.startsWith(TopLevelHeadingPrefix) 'closes'
-			break
-		end 'closes'
-
-		section.append("{line}{LineFeed}")
-	end 'eachLine'
-
-	return section
-end 'sectionOf'
 
 function wordsIn(text String) returns StringArray
 	var words = StringArray.create()

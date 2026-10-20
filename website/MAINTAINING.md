@@ -149,6 +149,7 @@ This is the one map of where the site's documentation comes from.
 | Target support | `docs/CLI_REFERENCE.md`, Targets |
 | Language server or VS Code behaviour | `docs/CLI_REFERENCE.md`, Editor Support, and `vscode-extension/README.md` |
 | An MCP tool or its arguments | `docs/CLI_REFERENCE.md`, MCP Server |
+| How an agent should use Maxon (MCP `instructions`) | `docs/WRITING_MAXON_CODE.md` (the preamble and Scripts and scriptlib) — the sync also writes `maxon-bin/Compiler/Mcp/McpInstructionsGenerated.maxon`, which `maxon mcp-server` serves |
 | The install scripts | `public/install.sh` / `public/install.ps1`, and the pages listed under [Install and build instructions](#install-and-build-instructions-follow-the-scripts-and-the-repository) |
 | The syntax grammar | `vscode-extension/syntaxes/maxon.tmLanguage.json`, then copy it to `src/grammars/maxon.tmLanguage.json` **by hand** |
 | How a part of the compiler works inside | its page in `docs/internals/`, which the site reads directly — see [Shared pages](#shared-pages-docsinternals) |
@@ -165,6 +166,8 @@ and have no upstream source.
   the driver has;
 - `tests/mcp/reference-documents-every-tool.maxtest` — its MCP Server section names every tool the
   server advertises and every argument each declares;
+- `tests/mcp/reference-documents-the-agent-instructions.maxtest` — the MCP `initialize` result's
+  `instructions` are `docs/WRITING_MAXON_CODE.md`'s preamble and its Scripts and scriptlib section;
 - `tests/docs/stdlib-reference-documents-every-public-api.maxtest` — `docs/STDLIB_REFERENCE.md` names
   every `public` declaration in `stdlib/`.
 

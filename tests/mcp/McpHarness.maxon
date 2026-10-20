@@ -421,6 +421,42 @@ export function payloadInt(doc JsonDoc, key String) returns JsonInt
 	return try payload.getInt(payload.root, key: key) otherwise panic("tool payload has no number `{key}`: {toolCallText(doc)}")
 end 'payloadInt'
 
+let CarriageReturn = "\r"
+export let TopLevelHeadingPrefix = "## "
+
+export function checkoutDocumentText(spelled String) returns String
+	let path = try FilePath.from(spelled) otherwise panic("McpHarness: '{spelled}' is not a spellable path")
+	let document = try File.readText(path) otherwise panic("McpHarness: could not read '{spelled}'. This corpus's paths are relative to the CHECKOUT ROOT; run it from there.")
+
+	return document.replace(CarriageReturn, with: "")
+end 'checkoutDocumentText'
+
+// The section's text from its heading on, so it is empty exactly when the document has no such heading.
+export function sectionOf(document String, heading String) returns String
+	var section = ""
+	var inSection = false
+
+	for line in document.split(LineFeed) 'eachLine'
+		if not inSection and line == heading 'opens'
+			inSection = true
+			section.append("{line}{LineFeed}")
+			continue
+		end 'opens'
+
+		if not inSection 'notYet'
+			continue
+		end 'notYet'
+
+		if line.startsWith(TopLevelHeadingPrefix) 'closes'
+			break
+		end 'closes'
+
+		section.append("{line}{LineFeed}")
+	end 'eachLine'
+
+	return section
+end 'sectionOf'
+
 let SpecFileExtension = ".md"
 
 export function printingSpecCase(name String, mainBody String, expectedStdout String) returns String
@@ -569,7 +605,7 @@ let RecvAttemptBudget = 4096
 let ServerExitDeadlineMs = 5000
 let TerminateWaitMs = 1
 let AnchorMarker = "// anchor: "
-let LineFeed = "\n"
+export let LineFeed = "\n"
 let ContentLengthHeaderName = "content-length"
 let NoContentStatus = 204
 let NotModifiedStatus = 304
