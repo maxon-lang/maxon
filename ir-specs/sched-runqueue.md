@@ -366,8 +366,13 @@ func @__sched_steal {
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, sfail
   sslotbusy:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 72]
-    x64.cmpRegImm32 rax, 1
+    x64.loadRegBaseDisp.word64 rax, [r12 + 176]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, sslottake
+  sslotmachine:
+    x64.loadRegBaseDisp.word64 rax, [rax + 608]
+    x64.andRegImm32 rax, rax, 1
+    x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, sslottake
   sslotbackoff:
     x64.movRegImm32 rax, 3
@@ -732,8 +737,13 @@ func @__sched_steal {
     x64.cmpRegImm32 rax, 0
     x64.jcc equal, sfail
   sslotbusy:
-    x64.loadRegBaseDisp.word64 rax, [r12 + 72]
-    x64.cmpRegImm32 rax, 1
+    x64.loadRegBaseDisp.word64 rax, [r12 + 176]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, sslottake
+  sslotmachine:
+    x64.loadRegBaseDisp.word64 rax, [rax + 608]
+    x64.andRegImm32 rax, rax, 1
+    x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, sslottake
   sslotbackoff:
     x64.movRegImm32 rcx, 3
@@ -1091,8 +1101,13 @@ func @__sched_steal {
     arm64.and x0, x0, x1
     arm64.cbz x0, sfail
   sslotbusy:
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 72]
-    arm64.cmp x0, 1
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 176]
+    arm64.cmp x0, 0
+    arm64.b.eq sslottake
+  sslotmachine:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 608]
+    arm64.and x0, x0, 1
+    arm64.cmp x0, 0
     arm64.b.ne sslottake
   sslotbackoff:
     arm64.movImm x0, 3
@@ -1449,8 +1464,13 @@ func @__sched_steal {
     arm64.and x0, x0, x1
     arm64.cbz x0, sfail
   sslotbusy:
-    arm64.loadRegBaseDisp.word64 x0, [x20 + 72]
-    arm64.cmp x0, 1
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 176]
+    arm64.cmp x0, 0
+    arm64.b.eq sslottake
+  sslotmachine:
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 608]
+    arm64.and x0, x0, 1
+    arm64.cmp x0, 0
     arm64.b.ne sslottake
   sslotbackoff:
     arm64.movImm x0, 3

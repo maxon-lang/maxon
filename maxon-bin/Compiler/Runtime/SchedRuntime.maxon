@@ -1125,7 +1125,7 @@ let StealRounds = 4 as FullRangeInt
 // then. Derived from the round count so the two cannot disagree.
 let StealRunNextRound = StealRounds - 1
 
-// ⭐ **HOW LONG A THIEF BACKS OFF BEFORE TAKING A RUNNING VICTIM'S `runnext` — Go's `usleep(3)`
+// ⭐ **HOW LONG A THIEF BACKS OFF BEFORE TAKING A HELD VICTIM'S `runnext` — Go's `usleep(3)`
 // (`proc.go:7714`).** The shape it exists for is a thread that readies a peer and blocks an instant later: the
 // pause gives the victim's machine time to reach its own scheduler and run the thread itself, rather than
 // having it thrashed to another processor. Go's own margin: a channel hand-off is ~50 ns, so 3 µs overshoots
@@ -3981,6 +3981,7 @@ function buildSchedSteal(module StdModule)
 	var grabHdr = module.addBlock(func, label: b"sgrab", heat: BlockHeat.normal)
 	var slotArm = module.addBlock(func, label: b"sslot", heat: BlockHeat.normal)
 	var slotBusy = module.addBlock(func, label: b"sslotbusy", heat: BlockHeat.normal)
+	var slotMachine = module.addBlock(func, label: b"sslotmachine", heat: BlockHeat.normal)
 	var slotBackoff = module.addBlock(func, label: b"sslotbackoff", heat: BlockHeat.normal)
 	var slotTake = module.addBlock(func, label: b"sslottake", heat: BlockHeat.normal)
 	var slotTook = module.addBlock(func, label: b"sslottook", heat: BlockHeat.normal)
@@ -4024,11 +4025,18 @@ function buildSchedSteal(module StdModule)
 	let worthTaking = emitBin(module, block: slotArm, a: mayTakeSlot, b: slotHasOne, opcode: StdBinOpcode.bitAnd, ids: ids)
 	module.setTerminator(slotArm, op: StdOp.condBranch(worthTaking, thenBlockId: slotBusy.id, elseBlockId: failBlock.id))
 
-	// ⭐⭐ **A VICTIM WITH A MACHINE ON IT IS GIVEN A PAUSE FIRST — Go's `usleep(3)` at the same line.** The
-	// shape this exists for is a thread that readies a peer into the slot and blocks an instant later: without
-	// the pause a thief takes the peer in that window and the pair is thrashed between processors for as long
-	// as it bounces. A victim NO machine holds cannot be about to run it, so there is nothing to wait for.
-	emitBranchOnCompare(module, block: slotBusy, value: emitLoadField(module, block: slotBusy, record: victim, offset: POffStatus, ids: ids), pred: StdCmpPred.eq, against: PStatusActive, whenTrue: slotBackoff, whenFalse: slotTake, ids: ids)
+	// ⭐⭐ **A VICTIM HELD BY A MACHINE OUTSIDE A KERNEL CALL IS GIVEN A PAUSE FIRST — Go's `usleep(3)` at the
+	// same line.** `POffM` is non-zero exactly while a machine holds the processor (Go's `_Prunning` with
+	// `pp.m`), and the in-call bit is Go's `_Gsyscall`. The shape this exists for is a thread that readies a peer
+	// into the slot and blocks an instant later: without the pause a thief takes the peer in that window and the
+	// pair is thrashed between processors for as long as it bounces. A victim no machine holds, or whose machine
+	// sits in a bracketed kernel call, cannot be about to run it. Both reads are unlocked: machines are never
+	// freed, and a stale answer costs one pause or an early steal, since the take below decides.
+	let victimMachine = emitLoadField(module, block: slotBusy, record: victim, offset: POffM, ids: ids)
+	emitBranchOnCompare(module, block: slotBusy, value: victimMachine, pred: StdCmpPred.eq, against: 0, whenTrue: slotTake, whenFalse: slotMachine, ids: ids)
+
+	let machineInCall = emitBin(module, block: slotMachine, a: emitLoadField(module, block: slotMachine, record: victimMachine, offset: MOffSyscallState, ids: ids), b: emitConst(module, block: slotMachine, value: MSyscallInCall, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
+	emitBranchOnCompare(module, block: slotMachine, value: machineInCall, pred: StdCmpPred.eq, against: 0, whenTrue: slotBackoff, whenFalse: slotTake, ids: ids)
 
 	_ = emitNetpoll(module, block: slotBackoff, verb: NetpollVerb.shortSleep, operands: argsOf(emitConst(module, block: slotBackoff, value: StealRunNextBackoffUs, ids: ids)), ids: ids)
 	module.setTerminator(slotBackoff, op: StdOp.branch(slotTake.id))
