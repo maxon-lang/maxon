@@ -20022,7 +20022,7 @@ export type Parser
 		var salvaged = FileParseArtifact.create(self.job.path, livesUnderStdlibDirectory: self.job.livesUnderStdlibDirectory, sourceBytes: sourceByteCountOf(self.tokens))
 
 		for decl in self.artifact.typeNameDecls 'eachDecl'
-			salvaged.recordTypeNameDecl(decl)
+			salvaged.typeNameDecls.push(decl)
 		end 'eachDecl'
 
 		for instance in self.artifact.genericInstanceRequests 'eachRequest'
@@ -29116,7 +29116,7 @@ export type Parser
 	// it is a member of a type, not a declaration of a file, and its uses are the type's.
 	function recordTypeName(nameIndex ElementIndex, kind TypeDeclKind, visibility Visibility)
 		let nameTok = self.tokenAt(nameIndex)
-		self.artifact.recordTypeNameDecl(TypeNameDecl.create(nameTok.value, claim: TypeNameClaim.create(kind, declFilePath: self.job.path, visibility: visibility, declaredByTheCorpus: self.job.isStdlibSource), nameLine: nameTok.line, nameColumn: nameTok.column))
+		self.artifact.typeNameDecls.push(TypeNameDecl.create(nameTok.value, claim: TypeNameClaim.create(kind, declFilePath: self.job.path, visibility: visibility, declaredByTheCorpus: self.job.isStdlibSource), nameLine: nameTok.line, nameColumn: nameTok.column))
 
 		// ⚠ The library declares no candidate: "is this alias used?" would be answered by WHICH PROGRAM is
 		// being compiled, and a per-file check whose answer moves with the caller is not a check. The same
@@ -29475,7 +29475,7 @@ export type Parser
 
 		let initializerIndex = self.artifact.module.funcCount()
 		self.artifact.module.pushFunc(initializer)
-		self.artifact.setCurrentFuncIndex(initializerIndex)
+		self.artifact.currentFuncIndex = initializerIndex
 
 		var entry = self.artifact.module.addBlock(initializer, label: b"entry", heat: BlockHeat.normal)
 		self.bodyState.currentBlock = entry
@@ -34760,9 +34760,9 @@ export type Parser
 		// pushing at the end for every closure-free program.
 		let funcIndex = self.artifact.module.funcCount()
 		self.artifact.module.pushFunc(func)
-		self.artifact.setCurrentFuncIndex(funcIndex)
+		self.artifact.currentFuncIndex = funcIndex
 
-		// Every hidden parameter's origin is filed after `setCurrentFuncIndex`: `recordParamOrigin` files
+		// Every hidden parameter's origin is filed after the stamp above: `recordParamOrigin` files
 		// under `artifact.currentFuncIndex`, so filed above it a hidden slot lands under the PREVIOUS
 		// function and resolves to no source span here, which `RegisterPressureDiagnostic` aborts on as a
 		// compiler-introduced value blocking an allocation. The columns are seeded in ABI order,
@@ -34844,7 +34844,7 @@ export type Parser
 		// body reference resolves straight to the parameter's SSA value — the same
 		// value-substitution model `let`/`var` bindings use. Parameters are immutable
 		// (a reassignment is E2013); mutating a parameter needs a local shadow. Runs after the push +
-		// `setCurrentFuncIndex` above so each parameter's `recordParamOrigin` is filed under this
+		// `currentFuncIndex` stamp above so each parameter's `recordParamOrigin` is filed under this
 		// function's real index.
 		// `sourceName`, not `name`: the declaration sweep publishes the parameters' ownership facts under
 		// the name the source wrote, never an overload's registration name. `requireOverloadableName`
@@ -36528,10 +36528,10 @@ export type Parser
 
 		let helperIndex = self.artifact.module.funcCount()
 		self.artifact.module.pushFunc(helper)
-		self.artifact.setCurrentFuncIndex(helperIndex)
+		self.artifact.currentFuncIndex = helperIndex
 
 		// The hidden layout slot's value columns, seeded exactly as `parseFunction` seeds its own and at the
-		// same point in the sequence — after `setCurrentFuncIndex`, so the origin is filed under THIS function
+		// same point in the sequence — after the stamp, so the origin is filed under THIS function
 		// (see the block in `parseFunction` for the abort a misfiled hidden origin produces). An i64
 		// pointer, unnamed — nothing binds it, only the opaque-`Array` create and the `sizeof(T)` lowering read
 		// it, by position — with the default expression's first token as its span, since no source token
@@ -68608,7 +68608,7 @@ export type Parser
 		end 'singleElement'
 
 		let tupleName = (try self.internTupleLayout(elements, brands: brands, anchor: openTok)).name
-		self.artifact.recordWrittenTupleType(WrittenTupleType.create(tupleName.clone(), filePath: self.job.path, sites: sites))
+		self.artifact.writtenTupleTypes.push(WrittenTupleType.create(tupleName.clone(), filePath: self.job.path, sites: sites))
 
 		return MaxonType.structRef(self.artifact.typeNames.intern(tupleName))
 	end 'parseTupleTypeReference'
@@ -75043,7 +75043,7 @@ export type Parser
 		// by nobody: E3017 goes unraised and the program reaches `witnessSlotImpl` with no conformance
 		// selected. That door's header records the same hole closing twice already, each time because a NEW
 		// way to mint an instance did not record one.
-		self.artifact.recordInferredInstantiationSite(GenericInstantiationSite.create(gid, nameLine: anchor.line, nameColumn: anchor.column, filePath: self.job.path))
+		self.artifact.inferredInstantiationSites.push(GenericInstantiationSite.create(gid, nameLine: anchor.line, nameColumn: anchor.column, filePath: self.job.path))
 		return ConstructorInstance.instance(gid)
 	end 'spawnFactoryConstructorInstance'
 
@@ -81705,7 +81705,7 @@ export type Parser
 		// with no `with <Key>` to anchor an E3017 on — `gateMapLiteralColumns`' arm, for its reason. The
 		// verdict is `Set`'s own `where Element is Hashable and Equatable`, taken whole-program by
 		// `checkWhereConstraints` where the conformance store is complete.
-		self.artifact.recordInferredInstantiationSite(GenericInstantiationSite.create(giid, nameLine: setTok.line, nameColumn: setTok.column, filePath: self.job.path))
+		self.artifact.inferredInstantiationSites.push(GenericInstantiationSite.create(giid, nameLine: setTok.line, nameColumn: setTok.column, filePath: self.job.path))
 
 		let set = try self.emitContainerLiteralCreate(SetBuiltinBaseName, giid: giid, anchor: setTok, range: range)
 		try self.emitContainerLiteralElement(SetBuiltinBaseName, method: InsertMethod, container: set, value: first, anchor: setTok, range: range)
@@ -81797,7 +81797,7 @@ export type Parser
 		// bare binding, so it can never be the subject of an E3159 blame.
 		pushCallArg(args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, value: value, label: EmptySourceText, range: SourceRange.ofToken(literalTok), immutableName: WriteBlame.unblamed, anchorIndex: literalStart)
 
-		self.artifact.recordLiteralInitSite(LiteralInitSite.create(typeTok.value, interfaceName: literalInitInterfaceName(form), nameLine: typeTok.line, nameColumn: typeTok.column, filePath: self.job.path))
+		self.artifact.literalInitSites.push(LiteralInitSite.create(typeTok.value, interfaceName: literalInitInterfaceName(form), nameLine: typeTok.line, nameColumn: typeTok.column, filePath: self.job.path))
 
 		// `rparenTok` is the LITERAL — this form writes no parenthesis, and that token is what a diagnostic
 		// about the call's tail must point at. `resultUsed: true` because a construction is an expression:
@@ -81942,7 +81942,7 @@ export type Parser
 	// so the answer at this cursor depends on which file came first — `checkLiteralInitConformance`'s reason,
 	// one door over, for the identical deferral.
 	function gateMapLiteralColumns(giid GenericInstanceId, tok Token)
-		self.artifact.recordInferredInstantiationSite(GenericInstantiationSite.create(giid, nameLine: tok.line, nameColumn: tok.column, filePath: self.job.path))
+		self.artifact.inferredInstantiationSites.push(GenericInstantiationSite.create(giid, nameLine: tok.line, nameColumn: tok.column, filePath: self.job.path))
 	end 'gateMapLiteralColumns'
 
 	// ⚠⚠ **A MAP LITERAL'S COLUMN VALUES ARE NOT MOVED AT THE PARSE.** The corpus `Map.upsert` declares its
@@ -82786,7 +82786,7 @@ export type Parser
 		// ⭐ **THE LITERAL RECORDS ITS OWN INSTANTIATION**, because it is the one door a `List` is born through
 		// with no `with <Element>` to anchor a diagnostic on — `parseSetMemberList`'s arm, for its reason. An alias
 		// head's instantiation is its declaration's site.
-		self.artifact.recordInferredInstantiationSite(GenericInstantiationSite.create(giid, nameLine: listTok.line, nameColumn: listTok.column, filePath: self.job.path))
+		self.artifact.inferredInstantiationSites.push(GenericInstantiationSite.create(giid, nameLine: listTok.line, nameColumn: listTok.column, filePath: self.job.path))
 		return giid
 	end 'listFromInstance'
 
@@ -92223,7 +92223,7 @@ export type Parser
 			self.bodyState.referencedNames.push(capturedName)
 		end 'eachCapture'
 
-		self.artifact.setCurrentFuncIndex(savedFuncIndex)
+		self.artifact.currentFuncIndex = savedFuncIndex
 
 		if captureCount == 0 'capturesNothing'
 			return self.emitImmortalFunctionRef(closureName, anchor: functionTok)
@@ -92275,7 +92275,7 @@ export type Parser
 
 		let index = self.artifact.module.funcCount()
 		self.artifact.module.pushFunc(lifted)
-		self.artifact.setCurrentFuncIndex(index)
+		self.artifact.currentFuncIndex = index
 		self.bodyState.currentBlock = self.artifact.module.addBlock(lifted, label: b"entry", heat: BlockHeat.normal)
 		return lifted
 	end 'pushLiftedFunction'
@@ -92576,7 +92576,7 @@ export type Parser
 		self.fileDeferredProvenance(drop)
 
 		self.bodyState = savedBody
-		self.artifact.setCurrentFuncIndex(savedFuncIndex)
+		self.artifact.currentFuncIndex = savedFuncIndex
 		return dropName
 	end 'buildClosureEnvDrop'
 

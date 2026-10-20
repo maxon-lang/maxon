@@ -620,6 +620,10 @@ export type FileParseArtifact
 	// ⚠ It is a SEPARATE array and not a position bolted onto the five arrays above, because the fact
 	// it holds is one none of them can hold: they are five arrays, so which of a file's `type Box` and
 	// `typealias Box` came SECOND is nowhere in them, and a collision must blame the later one.
+	//
+	// Its order is source order only because `Parser.dispatchTopLevel`, the one site that sees all
+	// five keywords, is the only one that pushes; a push from anywhere else blames the wrong
+	// declaration.
 	export var typeNameDecls as TypeNameDeclArray
 
 	export var genericInstanceRequests = GenericFunctionInstanceArray.create()
@@ -928,14 +932,6 @@ export type FileParseArtifact
 		self.deferralSources.record(self.currentFuncIndex, valueId: valueId, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId, chainCalls: chainCalls)
 	end 'recordDeferralSource'
 
-	// Stamp the local index of the function whose body the parser is about to emit into — the value
-	// `recordValueOrigin`/`recordParamOrigin` file every origin under. `parseFunction` calls this with the
-	// index the function was just pushed at; `parseClosureExpression` saves the current value, sets the
-	// lifted closure's index for the body, and restores it afterwards.
-	export function setCurrentFuncIndex(index ElementIndex)
-		self.currentFuncIndex = index
-	end 'setCurrentFuncIndex'
-
 	// Record a function's parameter signature and return type as this file's contribution to
 	// the project-wide `funcSignatures` and `funcReturnTypes` registries. Called by the parser
 	// after it builds a function — NEVER touching `Project`. The name's source position
@@ -1014,10 +1010,6 @@ export type FileParseArtifact
 		self.structTypes.push(layout.clone())
 	end 'recordStructType'
 
-	export function recordWrittenTupleType(written WrittenTupleType)
-		self.writtenTupleTypes.push(written)
-	end 'recordWrittenTupleType'
-
 	// Record a declared enum/union type as this file's contribution to the project-wide `enumTypes`
 	// registry — the same NEVER-touch-Project discipline every `record*` above follows.
 	//
@@ -1057,28 +1049,11 @@ export type FileParseArtifact
 		throw AbsentError.absent
 	end 'requestedGenericInstanceSiteKey'
 
-	// Record that a top-level declaration minted a TYPE NAME — the same NEVER-touch-Project discipline
-	// every `record*` above follows. Called from `Parser.dispatchTopLevel`, the ONE place that sees all
-	// five declaring keywords, so this array's order IS the file's source order across kinds.
-	export function recordTypeNameDecl(decl TypeNameDecl)
-		self.typeNameDecls.push(decl)
-	end 'recordTypeNameDecl'
-
 	// Record a `type X implements …` conformance as this file's contribution to `project.conformances`.
 	// The type-name position travels with it so `checkConformance` anchors on the name.
 	export function recordConformance(conformance ConformanceDecl)
 		self.conformances.push(conformance.clone())
 	end 'recordConformance'
-
-	// Record a `<Type> from "…"` construction as this file's contribution to `project.literalInitSites`.
-	export function recordLiteralInitSite(site LiteralInitSite)
-		self.literalInitSites.push(site)
-	end 'recordLiteralInitSite'
-
-	// Record an instantiation a bracketed literal inferred — see `inferredInstantiationSites`.
-	export function recordInferredInstantiationSite(site GenericInstantiationSite)
-		self.inferredInstantiationSites.push(site)
-	end 'recordInferredInstantiationSite'
 
 	// Record a function VALUE meeting a function-typed PLACE (see PendingFunctionTypeDoor).
 	export function recordFunctionTypeDoor(door PendingFunctionTypeDoor)
