@@ -861,9 +861,9 @@ let POffReservedPendingWaiter = 0x50 as ByteOffset
 // ⛔⛔ **A THREAD TAKEN FROM THE SLOT INHERITS THE TIME SLICE AND MUST NOT STEP `POffSchedTick`** (Go's
 // `inheritTime`). Two threads readying each other hand the processor back and forth through this slot;
 // charging each hand-off a schedule of its own would keep the pair permanently un-overdue to `__sysmon`, which
-// is the one party that can break a chain apart on its own. And the ring behind such a pair is reached by no
-// schedule at all — the 61-schedule fairness check does not rescue it, because that consults the GLOBAL queue
-// — so `RunnextStreakLimit` is what bounds the wait there.
+// is the one party that can break a chain apart on its own: it re-sends its request every lap the slice stays
+// overdue, and the pair honours it at its next message send or receive, `await`, spawn or guarded prologue
+// (`GtRuntime.emitGtHonourPreemptRequest`), which parks the thread on the GLOBAL queue.
 //
 // ⚠ **ONLY THE OWNING MACHINE FILLS IT AND EITHER SIDE MAY EMPTY IT, SO EVERY ACCESS IS A CAS.**
 // `__sched_runq_put` stores, `__sched_runq_next` and a thief's last steal round each take by compare-and-swap,
@@ -1044,19 +1044,10 @@ let RunqIndexMask = RunqSlots - 1
 // would be the same fact converted four times.
 let RunqHalfSlots = RunqSlots shr 1
 
-// ⭐⭐⭐ **HOW MANY SCHEDULES IN A ROW THIS PROCESSOR HAS TAKEN OUT OF ITS `runnext` SLOT — the ring's
-// fairness counter, and the one word `RunnextStreakLimit` is compared against.** Written by
-// `__sched_find_runnable` alone, on the machine holding this processor, so a plain load/add/store; a per-P word
-// for `POffStealCount`'s reason.
-//
-// ⚠ **IT IS NOT `POffSchedTick` AND CANNOT BE.** That counter is DELIBERATELY frozen for the whole of a slot
-// chain (`POffRunnext`), which is exactly the interval this one has to measure.
-let POffRunnextStreak = POffSyscallCount + PointerSlotBytes
-
 // The stack cache (`GtRuntime.buildGtStackAlloc`), the adaptive seed's samples (`GtRuntime.buildGtSeedAdapt`,
 // which reads every processor's unlocked) and the trace-id batch (`GtRuntime.GtTraceCounterLabel`). The
 // machine holding this processor is their only writer, so none takes a lock.
-export let POffStackCache = POffRunnextStreak + PointerSlotBytes
+export let POffStackCache = POffSyscallCount + PointerSlotBytes
 
 export let POffStackSampleSum = POffStackCache + (GtStackCacheBytes as ByteOffset)
 export let POffStackSampleCount = POffStackSampleSum + PointerSlotBytes
@@ -1088,31 +1079,7 @@ let PStructSize = ((POffRunqBase + (RunqSlots as ByteOffset) * PointerSlotBytes)
 // its very first schedule a global check; here that would be a special case with no reader, since the global
 // queue is empty before anything has overflowed into it. The property both spell is the one that matters —
 // nothing waits in the global queue for more than 61 schedules.
-let GtFairnessInterval = 61 as FullRangeInt
-
-// ⛔⛔⛔ **HOW MANY SCHEDULES IN A ROW MAY COME OUT OF THE `runnext` SLOT WHILE ANOTHER TIER HOLDS WORK — THE
-// LOCAL TIER'S `GtFairnessInterval`, AND THE ONE PIECE OF THIS SLOT GO DOES NOT HAVE.**
-//
-// ⛔⛔ **THE BOUND IS HERE BECAUSE A COOPERATIVE PREEMPTION REQUEST CANNOT LAND IN A FRAMELESS TURN.** Two
-// threads readying each other — a green thread awaiting a service, and the service replying — refill the slot
-// before it is emptied, so nothing but this bound ever reaches the ring behind them. `__sysmon` is the party
-// that breaks such a pair apart, and the only channel it has is the running thread's stack guard, which ONLY A
-// FUNCTION THAT RESERVES A FRAME reads (`X64Backend.emitFunctionChunk` emits the check for a non-zero frame and
-// for nothing else). A turn spent in runtime scaffolding and frameless leaf methods reads the guard at no point
-// and ends in a park, and `__sched_execute` restores the guard on the way back in — so the request is dropped
-// unhonoured however many times it is sent. **MEASURED** on a `main`-awaits-a-service pair with two services
-// waiting in the ring: **20,000,000 schedules, 29 preemption requests written, 0 honoured, and neither ring
-// thread ever ran.**
-//
-// ⇒ **Go needs no such bound because its backstop is ASYNCHRONOUS preemption, which signals a thread wherever
-// it is rather than waiting for it to ask.** Every scheduler lane here has that backstop too
-// (`targetPreemptDelivery`), and the bound stays because neither channel reaches a frameless pair: the
-// cooperative request is read only by a frame-reserving prologue, and the asynchronous stop lands only at a
-// safe point inside a USER frame (`__gt_preempt_safe`), which a turn spent in runtime scaffolding and
-// frameless leaf methods never passes. `MAXON_PREEMPT=off` withdraws both channels outright. So the local
-// ring gets the same guarantee the global queue already has, at the same interval and for the same reason:
-// nothing waits behind a pair that respawn each other for more than this many schedules.
-let RunnextStreakLimit = GtFairnessInterval
+let GtFairnessInterval = 61
 
 // ⭐ **FOUR ROUNDS OF STEALING BEFORE A P GIVES UP — Go's `stealTries` (`proc.go:3849`).** More than one
 // because a victim that is momentarily empty may be about to publish; bounded because a P that finds nothing
@@ -2614,9 +2581,17 @@ end 'emitSchedWakeMachine'
 // other order would leave an instant holding the lock with a zero count, which is exactly the
 // instant a stop would wedge every other machine.
 export function emitLockEnterAt(module StdModule, block IrBlock, lock ValueId, kind RuntimeLockKind, ids ValueMinter)
-	emitSchedStepLockDepth(module, block: block, delta: OneMore, ids: ids)
-	emitRuntimeLockMark(module, block: block, lock: lock, mark: runtimeLockMarkOf(kind, entering: true), ids: ids)
+	emitLockEnterWithDepth(module, block: block, lock: lock, kind: kind, depthAddr: emitSchedLockDepthAddr(module, block: block, ids: ids), ids: ids)
 end 'emitLockEnterAt'
+
+export function emitLockEnterOnMachine(module StdModule, block IrBlock, lock ValueId, kind RuntimeLockKind, machine ValueId, ids ValueMinter)
+	emitLockEnterWithDepth(module, block: block, lock: lock, kind: kind, depthAddr: emitFieldAddr(module, block: block, record: machine, offset: MOffLocks, ids: ids), ids: ids)
+end 'emitLockEnterOnMachine'
+
+function emitLockEnterWithDepth(module StdModule, block IrBlock, lock ValueId, kind RuntimeLockKind, depthAddr ValueId, ids ValueMinter)
+	emitStepLockDepthAt(module, block: block, depthAddr: depthAddr, delta: OneMore, ids: ids)
+	emitRuntimeLockMark(module, block: block, lock: lock, mark: runtimeLockMarkOf(kind, entering: true), ids: ids)
+end 'emitLockEnterWithDepth'
 
 export function emitLockLeaveAt(module StdModule, block IrBlock, lock ValueId, kind RuntimeLockKind, ids ValueMinter)
 	emitRuntimeLockMark(module, block: block, lock: lock, mark: runtimeLockMarkOf(kind, entering: false), ids: ids)
@@ -4931,9 +4906,7 @@ end 'emitUnsignedMod'
 // stealing):
 //
 //   1. **every 61st schedule, the GLOBAL queue first** — otherwise a local queue that keeps refilling starves it;
-//   2. **this P's `runnext` slot** (`__sched_runq_next`), whose thread inherits the running slice — unless the
-//      chain has run `RunnextStreakLimit` schedules with another tier waiting, which is the local ring's own
-//      fairness bound;
+//   2. **this P's `runnext` slot** (`__sched_runq_next`), whose thread inherits the running slice;
 //   3. **this P's own ring** (`__sched_runq_get`, a CAS on the head);
 //   4. **a BATCH off the global queue** into this ring, so one lock acquisition serves many schedules;
 //   5. **four rounds of STEALING**, each visiting every other active P once from a random start — only as a
@@ -4970,8 +4943,6 @@ function buildSchedFindRunnable(module StdModule)
 	var fairPeek = module.addBlock(func, label: b"frfairpeek", heat: BlockHeat.normal)
 	var fairTake = module.addBlock(func, label: b"frfairtake", heat: BlockHeat.normal)
 	var localPop = module.addBlock(func, label: b"frlocal", heat: BlockHeat.normal)
-	var localSlot = module.addBlock(func, label: b"frlocalslot", heat: BlockHeat.normal)
-	var localTook = module.addBlock(func, label: b"frlocaltook", heat: BlockHeat.normal)
 	var localRing = module.addBlock(func, label: b"frlocalring", heat: BlockHeat.normal)
 	var globalPeek = module.addBlock(func, label: b"frglobalpeek", heat: BlockHeat.normal)
 	var batchStart = module.addBlock(func, label: b"frbatch", heat: BlockHeat.normal)
@@ -5030,38 +5001,16 @@ function buildSchedFindRunnable(module StdModule)
 
 	// ⭐⭐ **THE `runnext` SLOT IS CONSULTED BEFORE THE RING — Go's `runqget`, whose first arm this is — AND IT
 	// IS THE ONE SOURCE WHOSE THREAD INHERITS THE RUNNING SLICE.** `POffRunnext` carries what charging it a tick
-	// would cost. It sits BEHIND the 61-schedule fairness check above, as Go's does: a pair handing the slot back
-	// and forth must still reach the global queue.
-	//
-	// ⭐⭐ **AND THIS BLOCK IS THE FAIRNESS BOUND ON THE CHAIN — `RunnextStreakLimit`'s whole subject.** The
-	// chain is cut only when there is somewhere else to look, so a pair with the box to itself pays nothing and
-	// never spends a lap finding two empty tiers. The ring's counters and the global head are read plainly: a
-	// thief only ever makes the ring emptier, so a stale *"it holds work"* costs one turn of the slot and a
-	// stale *"it is empty"* cannot happen, and the global head is `emitSchedGlobalQueueIs`'s stated unlocked
-	// peek.
+	// would cost. It sits BEHIND the 61-schedule fairness check above, as Go's does, but that check cannot cut a
+	// pair handing the slot back and forth, because a slot take steps no tick; the preemption request does.
 	//
 	// ⚠ It is also the RETRY target after a reclaimed thread: the fairness tick has already been spent, and the
 	// global queue has already been consulted on the arm that led here.
-	let streak = emitLoadField(module, block: localPop, record: p, offset: POffRunnextStreak, ids: ids)
-	let streakSpent = emitCompareWithConstant(module, block: localPop, value: streak, pred: StdCmpPred.ge, against: RunnextStreakLimit, ids: ids)
-	let ringWaiting = emitCmp(module, block: localPop, a: emitLoadAcquireField(module, block: localPop, record: p, offset: POffRunqTail, ids: ids), b: emitLoadAcquireField(module, block: localPop, record: p, offset: POffRunqHead, ids: ids), pred: StdCmpPred.ne, ids: ids)
-	let globalWaiting = emitSchedGlobalQueueIs(module, block: localPop, pred: StdCmpPred.ne, ids: ids)
-
-	// Every operand is a `cmp` result, so each is 0 or 1 and the bitwise operators are the logical ones.
-	let somebodyWaiting = emitBin(module, block: localPop, a: ringWaiting, b: globalWaiting, opcode: StdBinOpcode.bitOr, ids: ids)
-	let chainIsSpent = emitBin(module, block: localPop, a: streakSpent, b: somebodyWaiting, opcode: StdBinOpcode.bitAnd, ids: ids)
-	module.setTerminator(localPop, op: StdOp.condBranch(chainIsSpent, thenBlockId: localRing.id, elseBlockId: localSlot.id))
-
 	let slotGt = ids.mint()
-	module.appendOp(localSlot, op: StdOp.call(slotGt, callee: SchedRunqNextName, args: argsOf(p)))
-	emitBranchOnCompare(module, block: localSlot, value: slotGt, pred: StdCmpPred.eq, against: 0, whenTrue: localRing, whenFalse: localTook, ids: ids)
+	module.appendOp(localPop, op: StdOp.call(slotGt, callee: SchedRunqNextName, args: argsOf(p)))
+	emitBranchOnCompare(module, block: localPop, value: slotGt, pred: StdCmpPred.eq, against: 0, whenTrue: localRing, whenFalse: candidate, ids: ids)
+	localPop.branchEdges.push(BranchEdge.create(candidate.id, argIds: twoArgs(slotGt, second: emitConst(module, block: localPop, value: SchedSliceInherited, ids: ids))))
 
-	emitStoreField(module, block: localTook, record: p, offset: POffRunnextStreak, value: emitBin(module, block: localTook, a: streak, b: emitConst(module, block: localTook, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids))
-	module.setTerminator(localTook, op: StdOp.branch(candidate.id))
-	localTook.branchEdges.push(BranchEdge.create(candidate.id, argIds: twoArgs(slotGt, second: emitConst(module, block: localTook, value: SchedSliceInherited, ids: ids))))
-
-	// Every road to the ring ends a chain, whether the bound cut it short or the slot simply ran dry.
-	emitStoreField(module, block: localRing, record: p, offset: POffRunnextStreak, value: emitConst(module, block: localRing, value: 0, ids: ids))
 	let localGt = ids.mint()
 	module.appendOp(localRing, op: StdOp.call(localGt, callee: SchedRunqGetName, args: argsOf(p)))
 	emitBranchOnCompare(module, block: localRing, value: localGt, pred: StdCmpPred.eq, against: 0, whenTrue: globalPeek, whenFalse: candidate, ids: ids)

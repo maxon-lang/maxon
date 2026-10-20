@@ -994,7 +994,7 @@ end 'each'
 - `spawn(capacity: n) T.create()` sets the mailbox's capacity, a `MailboxCapacity` (`int(1 to 2^31)`); a bare `spawn` takes `DefaultMailboxCapacity` (1024). `h.shutdown()` lets the queued messages run, then stops the service; later sends fail `serviceStopped`
 - Green threads run on the four native lanes; `wasm32-wasi` has none at all and refuses `async` and `sleep` with **E3104**
 - Every wait PARKS: the waiter gives its machine back to the scheduler and whoever completes the wait readies it. A coroutine hands over at `await` points, `sleep` calls, `Scheduler.yield()`, I/O and a send given `sendTimeout:` to a full mailbox, and only there
-- A green thread that has held its processor for 10 ms is preempted at its next function entry, `spawn` or `async` call and may resume on another OS thread
+- A green thread that has held its processor for 10 ms is preempted at its next function entry, `spawn`, `async` call, service send, `await` or `awaitAny`, or when a service takes its next message, and may resume on another OS thread
 - Reference counting is plain, not atomic — a green thread and its coroutines are one strand, and at most one machine runs a strand's members at a time
 - Growable stacks, `main` included: a thread starts on 2 KiB, or 8 KiB on x64-Windows, whose fault frames land on the faulting stack. Each time at least 64 more threads have finished, the starting size becomes the smallest power of two from that floor up to 64 KiB that holds the average stack those threads needed. A stack doubles until the frame fits, up to 1 GiB
 - Throwing async functions require `try await` (not plain `await`), except inside a `try` block or a `test` body

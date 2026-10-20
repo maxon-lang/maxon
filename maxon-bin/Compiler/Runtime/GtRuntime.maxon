@@ -1205,7 +1205,8 @@ export let GtSystemStackAllocName = b"__gt_system_stack_alloc"
 let GtStackShrinkName = b"__gt_stack_shrink"
 
 // ⭐⭐ **`__gt_preempt(gt)` — HONOUR A PREEMPTION REQUEST: Go's `newstack` preempt arm and `gopreempt_m`.** See
-// `buildGtPreempt`. Called by every spawn (`emitGtHonourPreemptRequest`) and by `__gt_guard_tripped`'s preempt
+// `buildGtPreempt`. Called at the entry of every spawn, message send and receive, `await` and `awaitAny`
+// (`emitGtHonourPreemptRequest`), by `__gt_async_preempt_park`, and by `__gt_guard_tripped`'s preempt
 // arm, a hand-assembled chunk on both ISAs, so EXPORTED
 // for the root that keeps it alive (`DeadFunctionElimination.seedRoots`), for both arms and for the backends,
 // which certify the depth of its call tree against the guard margin.
@@ -2927,17 +2928,39 @@ function buildGtSpawn(module StdModule, kind GtSpawnKind, tracing GtTracing, tar
 end 'buildGtSpawn'
 
 function emitGtHonourPreemptRequest(module StdModule, func IrFunction, block IrBlock, ids ValueMinter) returns IrBlock
-	var honour = module.addBlock(func, label: b"spawnpreempt", heat: BlockHeat.cold)
-	var resume = module.addBlock(func, label: b"spawnresume", heat: BlockHeat.normal)
+	var honour = module.addBlock(func, label: b"honourpreempt", heat: BlockHeat.cold)
+	var resume = module.addBlock(func, label: b"honourresume", heat: BlockHeat.normal)
 
-	let gt = emitLoadCurrentGt(module, block: block, ids: ids)
-	emitBranchOnPreemptRequest(module, block: block, gt: gt, requested: honour, notRequested: resume, ids: ids)
-
-	module.appendOp(honour, op: StdOp.call(ids.mint(), callee: GtPreemptName, args: argsOf(gt)))
+	emitHonourPreemptSplit(module, block: block, machine: emitLoadCurrentM(module, block: block, ids: ids), honour: honour, resume: resume, ids: ids)
 	module.setTerminator(honour, op: StdOp.branch(resume.id))
 
 	return resume
 end 'emitGtHonourPreemptRequest'
+
+export function emitGtHonourPreemptRequestOnMachine(module StdModule, func IrFunction, block IrBlock, machine ValueId, ids ValueMinter) returns IrBlock
+	var honour = module.addBlock(func, label: b"honourpreempt", heat: BlockHeat.cold)
+	var resume = module.addBlock(func, label: b"honourresume", heat: BlockHeat.normal)
+	resume.blockArgs.push(IrBlockArg.create(machine, argType: StdType.i64))
+
+	let before = emitLoadCurrentM(module, block: block, ids: ids)
+	emitHonourPreemptSplit(module, block: block, machine: before, honour: honour, resume: resume, ids: ids)
+	block.branchEdges.push(BranchEdge.create(resume.id, argIds: argsOf(before)))
+
+	// The park in `__gt_preempt` may resume this thread on another machine, and the caller steps the lock
+	// depth of the machine this hands it.
+	let after = emitLoadCurrentM(module, block: honour, ids: ids)
+	module.setTerminator(honour, op: StdOp.branch(resume.id))
+	honour.branchEdges.push(BranchEdge.create(resume.id, argIds: argsOf(after)))
+
+	return resume
+end 'emitGtHonourPreemptRequestOnMachine'
+
+function emitHonourPreemptSplit(module StdModule, block IrBlock, machine ValueId, honour IrBlock, resume IrBlock, ids ValueMinter)
+	let gt = emitLoadField(module, block: block, record: machine, offset: MOffCurrentGt, ids: ids)
+	emitBranchOnPreemptRequest(module, block: block, gt: gt, requested: honour, notRequested: resume, ids: ids)
+
+	module.appendOp(honour, op: StdOp.call(ids.mint(), callee: GtPreemptName, args: argsOf(gt)))
+end 'emitHonourPreemptSplit'
 
 export function emitBranchOnPreemptRequest(module StdModule, block IrBlock, gt ValueId, requested IrBlock, notRequested IrBlock, ids ValueMinter)
 	let guard = emitLoadField(module, block: block, record: gt, offset: GtOffStackGuard, ids: ids)
@@ -4882,6 +4905,9 @@ function buildGtAwaitAny(module StdModule)
 
 	emitParams(module, block: entry, count: 1)
 	let record = 0
+
+	entry = emitGtHonourPreemptRequest(module, func: func, block: entry, ids: ids)
+
 	module.setTerminator(entry, op: StdOp.branch(scan.id))
 
 	let index = emitAnyCompletedIndex(module, block: scan, record: record, ids: ids)
@@ -5080,6 +5106,8 @@ function buildGtAwait(module StdModule, name ByteArray, throwing bool, arrival G
 
 	emitParams(module, block: entry, count: 1)
 	let promise = 0 as ValueId
+
+	entry = emitGtHonourPreemptRequest(module, func: func, block: entry, ids: ids)
 
 	// ⭐ THE `[immediate]` / `[yield]` DISTINCTION IS DECIDED ON THE WAY IN, BECAUSE AFTERWARDS IT IS GONE. A
 	// promise already `completed` when we arrived is `[immediate]`; anything else had to wait and is `[yield]`.
@@ -7969,18 +7997,19 @@ function buildGtResched(module StdModule)
 	module.functions.push(func)
 end 'buildGtResched'
 
-// `__gt_preempt(gt)` — see `GtPreemptName`. `gt` is the running thread, stopped at a prologue guard that found
-// `GtStackGuardPreempt` in its guard word.
+// `__gt_preempt(gt)` — see `GtPreemptName`. `gt` is the running thread, whose guard word holds
+// `GtStackGuardPreempt`.
 //
-// ⭐⭐ **IT RUNS ON THE THREAD's OWN STACK, BELOW A FRAME THAT DOES NOT EXIST YET**, so its whole
-// call tree — `__gt_guard_tripped`'s preempt arm, this function and the park's switch — rides the
-// guard margin the way every un-guarded runtime frame does. Each native backend adds that tree up
-// from the frames it laid out and refuses the build if it outgrows the margin
+// ⭐⭐ **IT RUNS ON THE THREAD's OWN STACK, UNGUARDED**, so its whole call tree — the unguarded
+// caller (`__gt_guard_tripped`'s preempt arm below a frame that does not exist yet, or a runtime
+// entry), this function and the park's switch — rides the guard margin the way every un-guarded
+// runtime frame does. Each native backend adds that tree up from the frames it laid out and
+// refuses the build if it outgrows the margin
 // (`UnguardedChains.requireUnguardedChainsFitTheGuardMargin`, E5004).
 //
-// ⭐ **ONLY A FUNCTION-ENTRY GUARD REACHES IT** (`GtGuardSite.functionEntry`), and it still asks
-// Go's `newstack` question of `m.locks`: a thread holding a runtime lock returns without parking,
-// because a park there might never end.
+// ⭐ **OF THE PROLOGUE GUARDS, ONLY A FUNCTION-ENTRY GUARD REACHES IT** (`GtGuardSite.functionEntry`),
+// and every caller still gets Go's `newstack` question of `m.locks`: a thread holding a runtime lock
+// returns without parking, because a park there might never end.
 //
 // The guard word is restored before anything else, so the request is answered once, parked or
 // declined; the count is stepped on the processor this thread is leaving.

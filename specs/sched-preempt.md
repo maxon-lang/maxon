@@ -14,7 +14,9 @@ has run for 10 ms without passing through the scheduler and asks it to stop: it 
 stack guard, so the next function prologue's overflow check fails, and `morestack` sees the poison and
 yields instead of growing (`vendor/go/src/runtime/proc.go`, `retake` and `preemptone`;
 `vendor/go/src/runtime/stack.go`, `newstack`). A CPU-bound green thread here is asked the same way, through
-the prologue check its stack growth already uses.
+the prologue check its stack growth already uses. A spawn, an `async` call, a service send, an `await` or
+`awaitAny`, and a service taking its next message check the request on entry as well, so two services that
+keep readying each other give up the processor too (`specs/sched-runqueue.md`).
 
 `Scheduler.counters().preempts` counts the preemption requests green threads have honoured.
 

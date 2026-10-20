@@ -320,41 +320,47 @@ first=2 sum=6
 
 <!-- test: sched-runqueue.a-runnext-ping-pong-pair-cannot-starve-a-bystander -->
 <!-- procs: 1 -->
-⭐ **THE SLOT MUST NOT LET TWO THREADS KEEP ONE PROCESSOR BETWEEN THEM.** Each bounce readies its peer into
+⭐ **TWO THREADS THAT READY EACH OTHER CANNOT KEEP ONE PROCESSOR FOR EVER.** Each bounce readies its peer into
 the slot, so scheduling alone never reaches the ring, where the bystander waits. The spawn order is what
 puts it there: a `spawn` readies at once, so `Pong`, spawned last, holds the slot and the ring reads
-`[Ping, Bystander]` — the pair starts bouncing before the bystander's turn comes, and only cutting the
-chain lets it in. A send to a service that has not run yet fills a mailbox and readies nothing, so the
-kick and the poke do not reorder anything.
+`[Ping, Bystander]` — the pair starts bouncing before the bystander's turn comes, and only the monitor's
+preemption request lets it in. A thread taken from the slot inherits the slice instead of counting a schedule
+of its own, so the pair reads to the monitor as one long slice and is asked to yield every lap
+(`specs/sched-preempt.md`). The request is honoured at the pair's next mailbox entry, which parks the thread on
+the global queue as a function-entry guard would, so its peer finds no one to ready and the ring behind the
+pair runs.
 
-⭐ **TWO MECHANISMS CUT THE CHAIN, AND IT TAKES BOTH TO STARVE THE BYSTANDER** — with either one
-alone the case still passes, and it goes red only when both are gone (`pingpong-done` then
-`bystander-ran`). A thread taken from the slot inherits the slice instead of counting a schedule of its
-own, so the pair reads to the monitor as one long slice and is asked to yield (`specs/sched-preempt.md`);
-and a chain of slot handoffs is cut on its own count once it has run long enough.
+⭐ **THE PROPERTY IS "THE BYSTANDER RUNS WHILE THE PAIR IS STILL BOUNCING", NOT AN ORDER INSIDE A FIXED
+WINDOW.** A request takes effect only if it lands before the thread's last honour check of its turn, runtime
+code included, so how many laps it takes is chance. The pair therefore bounces until the bystander has run:
+`poke` sends `Ping` a `stop`, and the first hit `Ping` takes after it ends the exchange. `totalBounces` is only the failure bound — seconds of bouncing — and a pair
+that is never preempted reaches it, prints `pingpong-done` first and fails the order below.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-let totalBounces = 200000
+let totalBounces = 30000000
 
 type Ping
 	var seen as Integer
+	var stopped as bool
 
 	static function create() returns Self
-		return Self{seen: 0}
+		return Self{seen: 0, stopped: false}
 	end 'create'
 
 	export function hit(pong Pong.handle, me Ping.handle, n Integer)
 		self.seen = self.seen + 1
 
-		if n > 0 'bounce'
+		if n > 0 and not self.stopped 'bounce'
 			try pong.hit(me.clone(), pong: pong.clone(), n: n - 1) otherwise panic("a bounce finds room in the peer's mailbox")
-		end 'bounce'
-
-		if n == 0 'last'
+		end 'bounce' else 'last'
 			print("pingpong-done\n")
 		end 'last'
 	end 'hit'
+
+	export function stop()
+		self.stopped = true
+	end 'stop'
 end 'Ping'
 
 type Pong
@@ -380,9 +386,10 @@ type Bystander
 		return Self{poked: 0}
 	end 'create'
 
-	export function poke()
+	export function poke(ping Ping.handle)
 		self.poked = self.poked + 1
 		print("bystander-ran\n")
+		try ping.stop() otherwise panic("an open mailbox with room takes the stop")
 	end 'poke'
 end 'Bystander'
 
@@ -393,7 +400,7 @@ function main() returns ExitCode
 
 	try ping.hit(pong.clone(), me: ping.clone(), n: totalBounces) otherwise panic("an open mailbox with room takes the send")
 
-	try idle.poke() otherwise panic("an open mailbox with room takes the send")
+	try idle.poke(ping.clone()) otherwise panic("an open mailbox with room takes the send")
 
 	return 42
 end 'main'
@@ -1137,11 +1144,7 @@ is that witness: `pushed=true` means the overflow really did put threads on the 
 reading below is about the check. A `pushed=false` reading is the setup having dissolved, and it fails
 this case rather than passing it quietly.
 
-⭐ **BOTH READINGS.** Healthy, an instrumented copy prints `S1-S0` of 2 — the first
-consult after the burst happens to fall three slices away, and the property is the bound of 61 rather than
-that phase. With the check disabled (`atFairness` compared against `GtFairnessInterval`, a value
-`tick mod 61` can never take) it prints 172, and this case reads `within=false`. Identical on all four
-native lanes, with and without a preemption during the spawn loop.
+⭐ **THE PROPERTY IS THE BOUND OF 61**, not the phase at which the first consult after the burst falls.
 
 ⛔⛔ **THE SEQUENCE IS A SERVICE'S MAILBOX AND NOT A MODULE-LEVEL `var`, WHICH `green-thread-globals.md`
 REFUSES.** This case's subject is an ORDER ACROSS SERVICES, so its tally cannot live in any one leaf's
@@ -1151,14 +1154,16 @@ threads both step.
 
 ⚠ **THE BOUNDED DRAIN SURVIVES, AND SO DOES ITS REASON.** `main` asks `Tally` for the count rather than
 reading a word, and the loop is bounded, so a leaf the overflow dropped leaves `runCount` short and prints
-a wrong answer rather than wedging.
+a wrong answer rather than wedging. `main` sleeps between asks: back to back, ask and reply would keep `main`
+and `Tally` handing the `runnext` slot to each other, which `preempt: off` leaves nothing to break.
 ```maxon
 typealias LeafHandleArray = Array with Leaf.handle
 
 let leafCount = 300
 let fairnessInterval = 61
 let parkBarrierMs = 50
-let drainSpinLimit = 200000
+let drainPollMs = 1
+let drainPollLimit = 5000
 
 // The 301st service, and the only shared sequence in the program. A send is an ENQUEUE, so the order these
 // arrive in is the order the leaves ran — with no word two green threads both step.
@@ -1231,10 +1236,11 @@ function main() returns ExitCode
 	let burstPushes = Scheduler.counters().globalPushes - pushedBefore
 
 	var runCount = 0 as Integer
-	var spins = 0 as Integer
-	while runCount < leafCount and spins < drainSpinLimit 'drain'
+	var polls = 0 as Integer
+	while runCount < leafCount and polls < drainPollLimit 'drain'
+		sleep(drainPollMs)
 		runCount = try await tally.count() otherwise 0
-		spins = spins + 1
+		polls = polls + 1
 	end 'drain'
 
 	let waited = try await tally.slicesWaited() otherwise 0 - 1
@@ -1285,8 +1291,11 @@ order — the same discrimination a shared word would make, through a channel wi
 
 ⚠ **`Tally` IS SPAWNED THIRD, AFTER `y` AND `s`.** Both of those keep the publication slots the argument
 above turns on; a collector spawned ahead of them would take `y`'s.
+
+`main` sleeps between its asks for the count, for the fairness case's reason above.
 ```maxon
-let drainSpinLimit = 200000
+let drainPollMs = 1
+let drainPollLimit = 5000
 
 let spawneeId = 1
 let yielderId = 2
@@ -1370,10 +1379,11 @@ function main() returns ExitCode
 	try s.go(tally.clone()) otherwise panic("an open mailbox with room takes the send")
 
 	var order = 0 as Integer
-	var spins = 0 as Integer
-	while order < 2 and spins < drainSpinLimit 'drain'
+	var polls = 0 as Integer
+	while order < 2 and polls < drainPollLimit 'drain'
+		sleep(drainPollMs)
 		order = try await tally.count() otherwise 0
-		spins = spins + 1
+		polls = polls + 1
 	end 'drain'
 
 	let sPos = try await tally.spawneePosition() otherwise 0

@@ -420,12 +420,20 @@ function buildInterfaceSendStub(module StdModule, name ByteArray, serviceTag Ful
 	module.functions.push(func)
 end 'buildInterfaceSendStub'
 
+function emitMboxLockAddr(module StdModule, block IrBlock, mbox ValueId, ids ValueMinter) returns ValueId
+	return emitFieldAddr(module, block: block, record: mbox, offset: MboxOffLock, ids: ids)
+end 'emitMboxLockAddr'
+
 function emitMboxLockEnter(module StdModule, block IrBlock, mbox ValueId, ids ValueMinter)
-	emitLockEnterAt(module, block: block, lock: emitFieldAddr(module, block: block, record: mbox, offset: MboxOffLock, ids: ids), kind: RuntimeLockKind.exclusive, ids: ids)
+	emitLockEnterAt(module, block: block, lock: emitMboxLockAddr(module, block: block, mbox: mbox, ids: ids), kind: RuntimeLockKind.exclusive, ids: ids)
 end 'emitMboxLockEnter'
 
+function emitMboxLockEnterOnMachine(module StdModule, block IrBlock, mbox ValueId, machine ValueId, ids ValueMinter)
+	emitLockEnterOnMachine(module, block: block, lock: emitMboxLockAddr(module, block: block, mbox: mbox, ids: ids), kind: RuntimeLockKind.exclusive, machine: machine, ids: ids)
+end 'emitMboxLockEnterOnMachine'
+
 function emitMboxLockLeave(module StdModule, block IrBlock, mbox ValueId, ids ValueMinter)
-	emitLockLeaveAt(module, block: block, lock: emitFieldAddr(module, block: block, record: mbox, offset: MboxOffLock, ids: ids), kind: RuntimeLockKind.exclusive, ids: ids)
+	emitLockLeaveAt(module, block: block, lock: emitMboxLockAddr(module, block: block, mbox: mbox, ids: ids), kind: RuntimeLockKind.exclusive, ids: ids)
 end 'emitMboxLockLeave'
 
 function emitMboxBranchOnParkedReceiver(module StdModule, cur IrBlock, mbox ValueId, noReceiver IrBlock, handoff IrBlock, ids ValueMinter) returns ValueId
@@ -813,7 +821,14 @@ function buildMboxSend(module StdModule)
 	let bytes = 2
 	let timeoutMs = 3
 
-	emitMboxLockEnter(module, block: entry, mbox: mbox, ids: ids)
+	let machine = ids.mint()
+
+	// A turn spent in runtime code and frameless leaves reads no prologue guard, so a pair readying each other
+	// through mailboxes is preempted at a send or receive entry. Asked before the lock enter: `__gt_preempt`
+	// declines under a runtime lock.
+	entry = emitGtHonourPreemptRequestOnMachine(module, func: func, block: entry, machine: machine, ids: ids)
+
+	emitMboxLockEnterOnMachine(module, block: entry, mbox: mbox, machine: machine, ids: ids)
 	module.setTerminator(entry, op: StdOp.branch(attempt.id))
 
 	let closed = emitLoadField(module, block: attempt, record: mbox, offset: MboxOffClosed, ids: ids)
@@ -974,12 +989,20 @@ function buildMboxRecv(module StdModule)
 	var park = module.addBlock(func, label: b"recvpark", heat: BlockHeat.normal)
 	var resumed = module.addBlock(func, label: b"recvresumed", heat: BlockHeat.normal)
 	var delivered = module.addBlock(func, label: b"recvdelivered", heat: BlockHeat.normal)
+	var retry = module.addBlock(func, label: b"recvretry", heat: BlockHeat.normal)
 
 	emitParams(module, block: entry, count: 1)
 	let mbox = 0
-	module.setTerminator(entry, op: StdOp.branch(attempt.id))
+	let machine = ids.mint()
+	let attemptMachine = ids.mint()
+	attempt.blockArgs.push(IrBlockArg.create(attemptMachine, argType: StdType.i64))
 
-	emitMboxLockEnter(module, block: attempt, mbox: mbox, ids: ids)
+	entry = emitGtHonourPreemptRequestOnMachine(module, func: func, block: entry, machine: machine, ids: ids)
+
+	module.setTerminator(entry, op: StdOp.branch(attempt.id))
+	entry.branchEdges.push(BranchEdge.create(attempt.id, argIds: argsOf(machine)))
+
+	emitMboxLockEnterOnMachine(module, block: attempt, mbox: mbox, machine: attemptMachine, ids: ids)
 	let receiver = emitLoadField(module, block: attempt, record: mbox, offset: MboxOffReceiver, ids: ids)
 	emitMboxDispatchReceiverState(module, func: func, cur: attempt, receiver: receiver, started: counted, fresh: startFresh, inboxQueued: takeInbox, ids: ids)
 
@@ -1030,9 +1053,14 @@ function buildMboxRecv(module StdModule)
 	emitGtPark(module, ids: ids, cur: park, kind: GtParkKind.mailbox.rawValue, arg: mbox, cont: resumed)
 
 	let handed = emitLoadField(module, block: resumed, record: selfGt, offset: GtOffParkArg, ids: ids)
-	emitBranchOnCompare(module, block: resumed, value: handed, pred: StdCmpPred.ne, against: MboxNoHandedMessage, whenTrue: delivered, whenFalse: attempt, ids: ids)
+	emitBranchOnCompare(module, block: resumed, value: handed, pred: StdCmpPred.ne, against: MboxNoHandedMessage, whenTrue: delivered, whenFalse: retry, ids: ids)
 
 	module.setTerminator(delivered, op: StdOp.ret(emitMboxInboxAddr(module, block: delivered, mbox: mbox, ids: ids)))
+
+	// The park may resume this thread on another machine, whose lock depth the retry's lock enter steps.
+	let resumedMachine = emitLoadCurrentM(module, block: retry, ids: ids)
+	module.setTerminator(retry, op: StdOp.branch(attempt.id))
+	retry.branchEdges.push(BranchEdge.create(attempt.id, argIds: argsOf(resumedMachine)))
 
 	module.functions.push(func)
 end 'buildMboxRecv'
