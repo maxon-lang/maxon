@@ -430,8 +430,10 @@ literal passed for a `float` payload widens to the float: `Reading.celsius(21)` 
 
 A payload declared `let` is read-only for the whole life of the value, like a `let` field (see
 [Read-Only Values](/docs/language/memory-model/#read-only-values)). A value stored into it must be read-only, a value type, or moved in
-(**E3078** otherwise); a match binding of it is read-only, and a write through it is **E3159**. A union whose
-payloads are all `let` and all value types is itself a value type.
+(**E3078** otherwise); a match binding of it is read-only, and a write through it is **E3159**. Every payload
+of a read-only union value — one held by a `let` binding, a `let` field or a module-level `let` — is read-only
+too, whatever the payload's own declaration, so binding a record out of it to a `var` is **E3078**. A
+union whose payloads are all `let` and all value types is itself a value type.
 
 ```maxon
 typealias Weight = int(0 to 100)
@@ -498,7 +500,8 @@ end 'main'
 ```
 
 When the matched value is a `let`, the bindings are immutable and assigning to one is **E2013**. They are
-also [read-only](/docs/language/memory-model/#read-only-values) all the way down, so a write through one is **E3159**.
+also [read-only](/docs/language/memory-model/#read-only-values) all the way down, whatever each payload's own declaration, so a write
+through one is **E3159** and binding a record out of one to a `var` is **E3078**.
 
 ### Comparing Union Values
 

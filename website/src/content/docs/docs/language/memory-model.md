@@ -29,7 +29,7 @@ Three mechanisms carry this:
 
 | Hazard | What Maxon does |
 |--------|-----------------|
-| Use after free, double free | Reference counting; a read that could outlive its owner takes its own reference |
+| Use after free, double free | Reference counting; a read that could outlive its owner takes its own reference, including across the rest of its statement |
 | Iterator invalidation | A `for` loop or cursor holds a counted reference to its source |
 | Out-of-range collection index | `get`/`set` throw `ArrayError.indexOutOfBounds`; there is no unchecked access |
 | Raw memory | Reachable only from the library tier (**E3185**) |
@@ -99,8 +99,11 @@ Every record carries a reference count and is freed when the count reaches zero.
 counts are needed. A mistake in that analysis can only add a count, so it costs speed, never safety.
 
 - **Counted reads.** A value read out of a collection (`get`, `first`, a cursor) or out of a field takes its own
-  reference whenever something before its last use could release the record it came from. Mutating a
-  collection while an element read from it is still in use is therefore safe.
+  reference whenever something before its last use could release the record it came from. That includes
+  whatever its own statement evaluates after it: a later operand, argument or literal element, the right-hand
+  side of its own write (`x.a.b = x.dropA()`), a default argument filled after the last written one, and the
+  arguments of a method called on it (`x.items.push(x.reset())`). Mutating a collection while an element read
+  from it is still in use is therefore safe.
 - **Loops hold their source.** A `for` loop or cursor holds a counted reference to the collection it walks, so a
   write to that collection inside the loop cannot free the elements being visited.
 - **Moves.** A move hands the reference over without changing the count, and consumes the source binding.
@@ -129,7 +132,8 @@ The rules:
 - **No write through a read-only value.** A field store, a method that writes its receiver, or an argument the
   callee writes is **E3159**. The diagnostic names the read-only root.
 - **No mutable alias of a read-only value.** Binding a read-only value to a `var` is **E3078**, and so is a module
-  `var` initializer that may take a module-level `let`'s record. Storing a read-only value into a `var` field, a
+  `var` initializer that may take a module-level `let`'s record. A module-level `let`'s record reaching a `var`
+  through a ternary, a `match … gives` or a `try … otherwise` is the same **E3078**. Storing a read-only value into a `var` field, a
   mutable container element or module storage, or passing it to a parameter that keeps it where something may
   write it, is **E3078** too. A `let` bound to a fresh record is the one exception, at its last use: the store
   consumes the name, so no `let` sees what the new holder writes. Stored there and read again afterwards, it is

@@ -95,16 +95,27 @@ end 'ClosureEnclosingFrame'
 typealias ClosureEnclosingFrameArray = Array with ClosureEnclosingFrame
 
 enum ValueCarryPath
-	promotion
-	retain
+	value
 	capture
 	cellStore
 	cellLoad
+	part
+	copy
 end 'ValueCarryPath'
+
+function pathKeepsTheRecord(path ValueCarryPath) returns bool
+	return match path 'path'
+		value or
+		capture gives true
+		cellStore or
+		cellLoad or
+		copy or
+		part gives false
+	end 'path'
+end 'pathKeepsTheRecord'
 
 enum ValueFact
 	unprovenAlias
-	immutableGlobalRead
 	aboveSignedMax
 	bufferSurface
 	sizedContainerBuffer
@@ -117,7 +128,6 @@ function factCrossesPath(fact ValueFact, path ValueCarryPath) returns bool
 		bufferSurface or
 		sizedContainerBuffer or
 		bufferElements gives true
-		immutableGlobalRead gives path != ValueCarryPath.promotion
 		aboveSignedMax gives path == ValueCarryPath.capture
 	end 'fact'
 end 'factCrossesPath'
@@ -125,7 +135,6 @@ end 'factCrossesPath'
 function bodyHoldsFact(body FunctionBodyState, fact ValueFact, value ValueId) returns bool
 	return match fact 'fact'
 		unprovenAlias gives try body.aliasUnprovenMarks.get(value) otherwise panic("bodyHoldsFact: v{value} has no alias-proof slot — every SSA value is minted through mintValue, which seeds the column")
-		immutableGlobalRead gives valueIsMarked(body.immutableGlobalReads, value: value)
 		aboveSignedMax gives valueIsMarked(body.unsignedMaxLiterals, value: value)
 		bufferSurface gives valueIsMarked(body.bufferSurfaceValues, value: value)
 		sizedContainerBuffer gives valueIsMarked(body.sizedContainerBufferValues, value: value)
@@ -3713,6 +3722,13 @@ let noHoldKinds = HoldKindColumn.unwritten
 union HoldKindLookup
 	none
 	found(kind HoldKind)
+
+	function has(policy HoldPolicy) returns bool
+		return match self 'lookup'
+			none gives false
+			found(kind) gives kind.has(policy)
+		end 'lookup'
+	end 'has'
 end 'HoldKindLookup'
 
 type HoldRetainPlan
@@ -4113,6 +4129,14 @@ function removeMark(marked ValueMarkSet, value ValueId)
 	var target = marked
 	_ = target.remove(value)
 end 'removeMark'
+
+function withMarkCarried(destination ValueMarkColumn, to ValueId, source ValueMarkColumn, from ValueId) returns ValueMarkColumn
+	if not valueIsMarked(source, value: from) 'nothingToCarry'
+		return destination
+	end 'nothingToCarry'
+
+	return withValueMarked(destination, value: to)
+end 'withMarkCarried'
 
 // Drop `value`'s mark. A column nothing has written holds no mark to drop, so the answer needs no
 // installation and the caller needs no column back.
@@ -5184,6 +5208,95 @@ let ReceiverCallHop = 3
 
 let WitnessDispatchDestination = b"<witness dispatch>"
 
+enum OperandSuccession
+	beforeComma
+	receiverBeforeArguments
+	memberReceiverBeforeArguments
+	alwaysFollowed
+end 'OperandSuccession'
+
+enum ReadOnlyMark
+	immutableGlobal
+	field
+	element
+	letPayload
+	storedMapKey
+	storedSetElement
+	sharedView
+
+	// A MUST fact where the other marks are MAY: the value is an immortal image record on every path, and
+	// hold elision (`valueNeedsNoHold`) rests on it. So it is set only at an image read, a record read out
+	// of one, a carry that keeps the record (`pathKeepsTheRecord`) and a merge whose every edge has it.
+	imageRecord
+
+	function isIn(class ReadOnlyClass) returns bool
+		return match self 'mark'
+			field or
+			element or
+			letPayload gives true
+			immutableGlobal gives class != ReadOnlyClass.fieldRead
+			sharedView gives class == ReadOnlyClass.permanent
+			imageRecord or
+			storedMapKey or
+			storedSetElement gives false
+		end 'mark'
+	end 'isIn'
+end 'ReadOnlyMark'
+
+enum ReadOnlyClass
+	readOnly
+	fieldRead
+	permanent
+end 'ReadOnlyClass'
+
+let ReadOnlyMarkRoster = [ReadOnlyMark.immutableGlobal, ReadOnlyMark.field, ReadOnlyMark.element, ReadOnlyMark.letPayload, ReadOnlyMark.storedMapKey, ReadOnlyMark.storedSetElement, ReadOnlyMark.sharedView, ReadOnlyMark.imageRecord]
+
+function readOnlyRosterAgrees() returns bool
+	let declared = ReadOnlyMark.allCases
+
+	if ReadOnlyMarkRoster.count() != declared.count() 'differentCount'
+		return false
+	end 'differentCount'
+
+	for position in 0 upto declared.count() 'eachCase'
+		let listed = try ReadOnlyMarkRoster.get(position) otherwise return false
+		let expected = try declared.get(position) otherwise return false
+
+		if listed != expected 'anotherCase'
+			return false
+		end 'anotherCase'
+	end 'eachCase'
+
+	return true
+end 'readOnlyRosterAgrees'
+
+function readOnlyMarkColumnIn(body FunctionBodyState, mark ReadOnlyMark) returns ValueMarkColumn
+	return match mark 'mark'
+		immutableGlobal gives body.immutableGlobalReads
+		field gives body.readOnlyFieldReads
+		element gives body.readOnlyElementReads
+		letPayload gives body.letPayloadReads
+		storedMapKey gives body.storedMapKeyReads
+		storedSetElement gives body.storedSetElementReads
+		sharedView gives body.sharedViewReads
+		imageRecord gives body.imageRecordReads
+	end 'mark'
+end 'readOnlyMarkColumnIn'
+
+enum OperandPassing
+	asValue
+	intoPlace
+	converted
+end 'OperandPassing'
+
+function operandHoldKindOf(passing OperandPassing, valueKind HoldKind) returns HoldKind
+	return match passing 'passing'
+		asValue gives valueKind
+		intoPlace gives HoldKind.placeOperand
+		converted gives HoldKind.convertedOperand
+	end 'passing'
+end 'operandHoldKindOf'
+
 union CallArgTarget
 	witnessDispatch(declarations DeclarationFactsArray)
 	callee(let name ByteArray)
@@ -5220,6 +5333,14 @@ union CallArgTarget
 			callee gives true
 		end 'target'
 	end 'namesACallee'
+
+	function operandHoldKind(permanentlyReadOnly bool) returns HoldKind
+		return match self 'target'
+			witnessDispatch or
+			callee gives HoldKind.callOperand
+			movedInto gives HoldKind.sharedOperand if permanentlyReadOnly else HoldKind.handedOffOperand
+		end 'target'
+	end 'operandHoldKind'
 
 	function declaredName() returns ByteArray throws AbsentError
 		match self 'target'
@@ -5837,6 +5958,10 @@ type MethodReceiver
 	static function create(value ValueId, tag ValueTypeTag, nameId TypeNameId, anchor Token, immutableName WriteBlame, subjectName StorageSubject, owner ParamPositionMask, selfFieldName SelfFieldAlias) returns MethodReceiver
 		return Self{value: value, tag: tag, nameId: nameId, anchor: anchor, immutableName: immutableName, subjectName: subjectName, owner: owner, selfFieldName: selfFieldName}
 	end 'create'
+
+	function withValue(replacement ValueId) returns MethodReceiver
+		return Self{value: replacement, tag: self.tag, nameId: self.nameId, anchor: self.anchor, immutableName: self.immutableName, subjectName: self.subjectName, owner: self.owner, selfFieldName: self.selfFieldName}
+	end 'withValue'
 end 'MethodReceiver'
 
 // **THE ONE SENTENCE THAT REFUSES AN AGGREGATE-TYPED SELF-FIELD ALIAS AS A BASE**, asked by the two doors
@@ -11530,6 +11655,10 @@ let MapUpsertValueArgSlot = 2 as FieldIndex
 export let NoDefaultArgSlots = ParamCountArray.create()
 
 let NoReceiverSlots = 0
+
+function omittedParametersRemain(declared Count, written Count, receiverSlots ParamCount) returns bool
+	return written + receiverSlots < declared
+end 'omittedParametersRemain'
 
 // The name an E3159 would blame for argument `index` of a call, or `unblamed`. Decodes BOTH shapes
 // of the column — parallel-to-`args`, or the shared empty one above — so no reader has to know
@@ -18171,6 +18300,7 @@ type FunctionBodyState
 	// K = 16,000), so `scale-test` is structurally blind to it and it had to be found by reading.
 	export var immutableGlobalReads as ValueMarkColumn
 	export var derivedImmutableGlobalReads as ValueMarkColumn
+	export var imageRecordReads as ValueMarkColumn
 	export var readOnlyFieldReads as ValueMarkColumn
 	export var readOnlyElementReads as ValueMarkColumn
 	export var storedMapKeyReads as ValueMarkColumn
@@ -18744,6 +18874,7 @@ type FunctionBodyState
 			immutableGlobalReads: noValueMarks,
 			derivedImmutableGlobalReads: noValueMarks,
 			readOnlyFieldReads: noValueMarks,
+			imageRecordReads: noValueMarks,
 			readOnlyElementReads: noValueMarks,
 			storedMapKeyReads: noValueMarks,
 			storedSetElementReads: noValueMarks,
@@ -19791,6 +19922,10 @@ export type Parser
 	end 'structuralReader'
 
 	export static function createOverPreparedTokens(prepared PreparedTokens, job ParseJob, signatures ProgramSignatures, anchors ParserAnchors) returns Parser
+		if not readOnlyRosterAgrees() 'theRosterMissesAMark'
+			panic("ReadOnlyMarkRoster does not list the cases of `ReadOnlyMark` one for one, in order — a mark missing from the roster is never queried, carried across a hold or found by a read-only check")
+		end 'theRosterMissesAMark'
+
 		return Self{
 			tokens: prepared.tokens,
 			respelledStarts: prepared.respelledStarts,
@@ -25236,7 +25371,7 @@ export type Parser
 	end 'opaqueBareFieldReadAt'
 
 	function opaqueFieldValueIsReadAt(nameAt ElementIndex) returns bool
-		if self.kindAt(nameAt + 1) == TokenKind.equals or self.kindAt(nameAt + 1) == TokenKind.dot 'notAFieldValueRead'
+		if self.kindAt(nameAt + 1) == TokenKind.equals 'notAFieldValueRead'
 			return false
 		end 'notAFieldValueRead'
 
@@ -29559,7 +29694,7 @@ export type Parser
 
 		if self.valueIsManagedHeap(result) 'aCountedReference'
 			self.trackOwnedTemp(result, exclusivity: OwnedHeapExclusivity.coOwned)
-			self.bodyState.sharedViewReads = withValueMarked(self.bodyState.sharedViewReads, value: result)
+			self.markReadOnly(result, mark: ReadOnlyMark.sharedView)
 		end 'aCountedReference'
 
 		if self.bodyState.deferredProvenance is not self.anchors.noDeferredProvenance 'inABody'
@@ -39114,7 +39249,7 @@ export type Parser
 	end 'valueIsAnImmutableAggregate'
 
 	function bindingHoldsAStorageRead(value ValueId, boundValue ValueId, sourceReadsAField bool, sourceName SourceBinding) returns bool
-		if self.valueIsOwnedHeap(boundValue) or valueIsMarked(self.bodyState.immutableGlobalReads, value: value) or valueIsMarked(self.bodyState.derivedImmutableGlobalReads, value: value) 'nothingToHold'
+		if self.valueIsOwnedHeap(boundValue) or self.valueNeedsNoHold(value) 'nothingToHold'
 			return false
 		end 'nothingToHold'
 
@@ -39126,14 +39261,14 @@ export type Parser
 	end 'bindingHoldsAStorageRead'
 
 	function holdBindingRead(value ValueId, name ByteArray, range SourceRange) returns ValueId
-		if self.valueIsImmortalFunction(value) 'nothingToHold'
+		if self.valueNeedsNoHold(value) 'nothingToHold'
 			return value
 		end 'nothingToHold'
 
 		let held = self.emitHoldMarker(value, kind: HoldKind.binding, range: range)
 
 		if self.holdReplacesItsSource(value) 'theBindingNamesTheReference'
-			self.noteReadHeld(value)
+			self.noteReadHeldByABinding(value)
 			return held
 		end 'theBindingNamesTheReference'
 
@@ -39148,11 +39283,15 @@ export type Parser
 
 	function enrolHeldRead(value ValueId, held ValueId, name ByteArray)
 		self.enrolOwnedBinding(VarInfo.createValueBinding(name, varType: self.typeOf(held), kind: BindingKind.let, boundValue: held))
-		self.noteReadHeld(value)
+		self.noteReadHeldByABinding(value)
 	end 'enrolHeldRead'
 
-	function noteReadHeld(value ValueId)
+	function noteReadHeldByABinding(value ValueId)
 		unmarkValue(self.bodyState.elementReads, value: value)
+		self.noteReadHeld(value)
+	end 'noteReadHeldByABinding'
+
+	function noteReadHeld(value ValueId)
 		self.bodyState.heldReads = withValueMarked(self.bodyState.heldReads, value: value)
 	end 'noteReadHeld'
 
@@ -39172,7 +39311,7 @@ export type Parser
 	end 'demandDescriptorForAnUncountedOpaqueRead'
 
 	function holdIsOwed(value ValueId) returns bool
-		if self.valueIsImmortalFunction(value) or self.valueIsOwnedHeap(value) or self.readIsHeld(value) 'nothingToHold'
+		if self.valueNeedsNoHold(value) or self.valueIsOwnedHeap(value) or self.readIsHeld(value) 'nothingToHold'
 			return false
 		end 'nothingToHold'
 
@@ -39189,6 +39328,7 @@ export type Parser
 
 		self.markValueOwnsHeap(held, exclusivity: OwnedHeapExclusivity.coOwned)
 		self.carryInterfaceWitness(held, from: source)
+		self.carryFromSharedRecord(held, from: source, source: self.bodyState, path: ValueCarryPath.value)
 		self.holdKindsForWrite().upsert(held, value: kind)
 		self.artifact.emitOp(self.bodyState.currentBlock, op: MaxonOp.holdValue(held, held: source, callee: plan.callee, args: plan.args, kind: kind), range: range)
 		return held
@@ -39668,11 +39808,11 @@ export type Parser
 	end 'requireMutableBindingSource'
 
 	function refuseReadOnlyRecordIntoName(nameTok Token, value ValueId, bindingCopiesIt bool) throws SourceParseError
-		if not self.valueIsReadOnlyMarked(value) or bindingCopiesIt 'nothingReadOnlyToAlias'
+		if not self.valueIsReadOnlyIn(value, class: ReadOnlyClass.readOnly) or bindingCopiesIt 'nothingReadOnlyToAlias'
 			return
 		end 'nothingReadOnlyToAlias'
 
-		let holder = WriteBlameHolder.moduleLet if valueIsMarked(self.bodyState.immutableGlobalReads, value: value) else self.readOnlyFieldHolderOf(value)
+		let holder = WriteBlameHolder.moduleLet if self.valueMayAliasAnImmutableGlobal(value) else self.readOnlyFieldHolderOf(value)
 		throw SourceParseError.deepLet(ErrorCode.semanticVarFromImmutable, message: deepLetBindMessage("a value read out of {readOnlyRootDescription(rootKindOfHolder(holder))}", binding: String.from(nameTok.value)), line: nameTok.line, column: nameTok.column)
 	end 'refuseReadOnlyRecordIntoName'
 
@@ -40339,7 +40479,7 @@ export type Parser
 	// `try … otherwise` fallback).
 	// ⚠ `transferConsumedArg` is a THIRD borrowed-managed decider that does NOT ask this and REFUSES a
 	// borrowed trivial tuple at a consuming argument position, where the move-in one call away copies it.
-	// Pre-existing, and a refusal rather than a wrong answer, so it is filed rather than widened here.
+	// The disagreement costs a refusal, never a wrong answer.
 	//
 	// The managed probe is asked through `structHasManagedField`, the SAME predicate the destructor synthesis
 	// gates on, so "this tuple needs no deep clone" and "this tuple needs no drop cascade" are one answer.
@@ -40373,7 +40513,7 @@ export type Parser
 			self.emitFieldStore(box, layout: layout, index: i, value: self.emitFieldLoad(value, layout: layout, index: i, range: range), range: range)
 		end 'eachElement'
 
-		self.carryValueFacts(box, from: value, source: self.bodyState, path: ValueCarryPath.retain)
+		self.carryValueFacts(box, from: value, source: self.bodyState, path: ValueCarryPath.value)
 		return box
 	end 'copyTupleValue'
 
@@ -40991,7 +41131,7 @@ export type Parser
 		// The FIRST value into a cell hands it the occupant's facts and the incoming value's brand. The brand is
 		// asked of `value` rather than of `stored`, because the ownership move above mints the occupant.
 		self.wearBrandIfUnbranded(cell, brand: self.brandIdOf(value))
-		self.carryValueFacts(cell, from: stored, source: self.bodyState, path: ValueCarryPath.cellStore)
+		self.carryFromSharedRecord(cell, from: stored, source: self.bodyState, path: ValueCarryPath.cellStore)
 
 		self.markValueOwnsHeap(cell, exclusivity: OwnedHeapExclusivity.sole)
 		return FilledCell.create(cell, epoch: self.mintCellEpoch(self.storedOccupantExclusivity(stored)))
@@ -41097,7 +41237,7 @@ export type Parser
 		end 'ownsNothing'
 
 		let taken = try self.ownedValueACellTakes(value, varType: varType, rhsWasBareLocal: rhsWasBareLocal, anchor: anchor)
-		self.carryValueFacts(taken, from: value, source: self.bodyState, path: ValueCarryPath.retain)
+		self.carryValueFacts(taken, from: value, source: self.bodyState, path: ValueCarryPath.value)
 		return taken
 	end 'valueACellTakes'
 
@@ -41579,32 +41719,84 @@ export type Parser
 		return not self.readOnlyBlameOfBinding(binding, name: binding.name).isBlamed()
 	end 'instanceAcceptsAWriteThrough'
 
-	function valueReadsAModuleLet(value ValueId) returns bool
-		return valueIsMarked(self.bodyState.immutableGlobalReads, value: value)
-	end 'valueReadsAModuleLet'
+	function installReadOnlyMarkColumn(mark ReadOnlyMark, column ValueMarkColumn)
+		match mark 'mark'
+			immutableGlobal then self.bodyState.immutableGlobalReads = column
+			field then self.bodyState.readOnlyFieldReads = column
+			element then self.bodyState.readOnlyElementReads = column
+			letPayload then self.bodyState.letPayloadReads = column
+			storedMapKey then self.bodyState.storedMapKeyReads = column
+			storedSetElement then self.bodyState.storedSetElementReads = column
+			sharedView then self.bodyState.sharedViewReads = column
+			imageRecord then self.bodyState.imageRecordReads = column
+		end 'mark'
+	end 'installReadOnlyMarkColumn'
 
-	function valueIsReadOnlyMarked(value ValueId) returns bool
-		return valueIsMarked(self.bodyState.immutableGlobalReads, value: value) or self.valueIsReadOnlyFieldMarked(value)
-	end 'valueIsReadOnlyMarked'
+	function valueHasReadOnlyMark(value ValueId, mark ReadOnlyMark) returns bool
+		return valueIsMarked(readOnlyMarkColumnIn(self.bodyState, mark: mark), value: value)
+	end 'valueHasReadOnlyMark'
 
-	function valueIsReadOnlyFieldMarked(value ValueId) returns bool
-		return valueIsMarked(self.bodyState.readOnlyFieldReads, value: value) or valueIsMarked(self.bodyState.readOnlyElementReads, value: value) or valueIsMarked(self.bodyState.letPayloadReads, value: value)
-	end 'valueIsReadOnlyFieldMarked'
+	function markReadOnly(value ValueId, mark ReadOnlyMark)
+		self.installReadOnlyMarkColumn(mark, column: withValueMarked(readOnlyMarkColumnIn(self.bodyState, mark: mark), value: value))
+	end 'markReadOnly'
+
+	function valueIsReadOnlyIn(value ValueId, class ReadOnlyClass) returns bool
+		for mark in ReadOnlyMarkRoster 'eachMark'
+			if mark.isIn(class) and self.valueHasReadOnlyMark(value, mark: mark) 'marked'
+				return true
+			end 'marked'
+		end 'eachMark'
+
+		return false
+	end 'valueIsReadOnlyIn'
+
+	function forgetReadOnlyProvenance(value ValueId)
+		for mark in ReadOnlyMarkRoster 'eachMark'
+			unmarkValue(readOnlyMarkColumnIn(self.bodyState, mark: mark), value: value)
+		end 'eachMark'
+
+		unmarkValue(self.bodyState.derivedImmutableGlobalReads, value: value)
+	end 'forgetReadOnlyProvenance'
+
+	function carryReadOnlyProvenance(to ValueId, from ValueId, source FunctionBodyState, path ValueCarryPath)
+		let sameImageRecord = pathKeepsTheRecord(path) and not tagIsByteRecord(self.tagOf(to))
+
+		for mark in ReadOnlyMarkRoster 'eachMark'
+			if mark == ReadOnlyMark.imageRecord and not sameImageRecord 'notTheSameImage'
+				continue
+			end 'notTheSameImage'
+
+			self.installReadOnlyMarkColumn(mark, column: withMarkCarried(readOnlyMarkColumnIn(self.bodyState, mark: mark), to: to, source: readOnlyMarkColumnIn(source, mark: mark), from: from))
+		end 'eachMark'
+	end 'carryReadOnlyProvenance'
+
+	function valueMayAliasAnImmutableGlobal(value ValueId) returns bool
+		return self.valueHasReadOnlyMark(value, mark: ReadOnlyMark.immutableGlobal)
+	end 'valueMayAliasAnImmutableGlobal'
+
+	function valueIsAnImmortalImageRecord(value ValueId) returns bool
+		return self.valueHasReadOnlyMark(value, mark: ReadOnlyMark.imageRecord)
+	end 'valueIsAnImmortalImageRecord'
+
+	function markImageRecordRead(value ValueId)
+		self.markReadOnly(value, mark: ReadOnlyMark.immutableGlobal)
+		self.markReadOnly(value, mark: ReadOnlyMark.imageRecord)
+	end 'markImageRecordRead'
 
 	function readOnlyFieldHolderOf(value ValueId) returns WriteBlameHolder
-		if valueIsMarked(self.bodyState.storedMapKeyReads, value: value) 'aMapKey'
+		if self.valueHasReadOnlyMark(value, mark: ReadOnlyMark.storedMapKey) 'aMapKey'
 			return WriteBlameHolder.storedMapKey
 		end 'aMapKey'
 
-		if valueIsMarked(self.bodyState.storedSetElementReads, value: value) 'aSetElement'
+		if self.valueHasReadOnlyMark(value, mark: ReadOnlyMark.storedSetElement) 'aSetElement'
 			return WriteBlameHolder.storedSetElement
 		end 'aSetElement'
 
-		if valueIsMarked(self.bodyState.readOnlyElementReads, value: value) 'anElement'
+		if self.valueHasReadOnlyMark(value, mark: ReadOnlyMark.element) 'anElement'
 			return WriteBlameHolder.readOnlyElement
 		end 'anElement'
 
-		if valueIsMarked(self.bodyState.letPayloadReads, value: value) 'aPayload'
+		if self.valueHasReadOnlyMark(value, mark: ReadOnlyMark.letPayload) 'aPayload'
 			return WriteBlameHolder.letPayload
 		end 'aPayload'
 
@@ -41612,11 +41804,11 @@ export type Parser
 	end 'readOnlyFieldHolderOf'
 
 	function readOnlyMarkBlame(value ValueId, name ByteArray) returns WriteBlame
-		if valueIsMarked(self.bodyState.immutableGlobalReads, value: value) 'aGlobalsRecord'
+		if self.valueMayAliasAnImmutableGlobal(value) 'aGlobalsRecord'
 			return WriteBlame.blamed(name, holder: WriteBlameHolder.moduleLet)
 		end 'aGlobalsRecord'
 
-		if self.valueIsReadOnlyFieldMarked(value) 'aLetFieldsRecord'
+		if self.valueIsReadOnlyIn(value, class: ReadOnlyClass.fieldRead) 'aLetFieldsRecord'
 			return WriteBlame.blamed(name, holder: self.readOnlyFieldHolderOf(value))
 		end 'aLetFieldsRecord'
 
@@ -46286,6 +46478,7 @@ export type Parser
 		end 'enrolPhi'
 
 		self.markPhiImmortalIfEveryEdgeIs(phiId, edges: contEdges)
+		self.carryProvenanceFromArms(phiId, arms: contEdges)
 
 		if phiOwnsAGreenThread 'enrolThreadPhi'
 			self.bodyState.pendingTempDrops.push(phiId)
@@ -50465,7 +50658,7 @@ export type Parser
 	// ⭐⭐ **WHAT A RESULT PHI INHERITS FROM ITS EDGES — sole ONLY if every edge is.** A phi is one name for a
 	// value several paths produced, so a destructive move-out through it is sound only where it is sound on ALL
 	// of them; one co-owning edge makes the whole merge a co-owner. That is the same conservative direction
-	// `propagateImmutableGlobalReadToPhi` takes at the same two merges and for the same structural reason — the
+	// `carryProvenanceFromArms` takes at the same two merges and for the same structural reason — the
 	// alternative licenses the theft on precisely the path that shares the box.
 	//
 	// Its two callers are the two constructs that merge an OWNED value: a `match`/ternary result
@@ -50512,14 +50705,26 @@ export type Parser
 	end 'valueIsOpaqueOwned'
 
 	function markPhiImmortalIfEveryEdgeIs(phi ValueId, edges ValueIdArray)
+		var everyEdgeIsAFunction = not edges.isEmpty()
+		var everyEdgeIsAnImageRecord = not edges.isEmpty()
+
 		for edge in edges 'eachEdge'
-			if not self.valueIsImmortalFunction(edge) 'aCountedRecord'
-				return
-			end 'aCountedRecord'
+			everyEdgeIsAFunction = everyEdgeIsAFunction and self.valueIsImmortalFunction(edge)
+			everyEdgeIsAnImageRecord = everyEdgeIsAnImageRecord and self.valueIsAnImmortalImageRecord(edge)
 		end 'eachEdge'
 
-		self.markImmortalFunction(phi)
+		if everyEdgeIsAFunction 'everyEdgeIsAnImmortalFunction'
+			self.markImmortalFunction(phi)
+		end 'everyEdgeIsAnImmortalFunction'
+
+		if everyEdgeIsAnImageRecord 'everyEdgeIsAnImageRecordRead'
+			self.markReadOnly(phi, mark: ReadOnlyMark.imageRecord)
+		end 'everyEdgeIsAnImageRecordRead'
 	end 'markPhiImmortalIfEveryEdgeIs'
+
+	function valueNeedsNoHold(value ValueId) returns bool
+		return self.valueIsImmortalFunction(value) or self.valueIsAnImmortalImageRecord(value)
+	end 'valueNeedsNoHold'
 
 	function markImmortalFunction(value ValueId)
 		self.bodyState.immortalFunctionValues = withValueMarked(self.bodyState.immortalFunctionValues, value: value)
@@ -50551,13 +50756,14 @@ export type Parser
 	// factory, or the temporary a field argument was borrowed out of (`giveTemporaryScopeLifetime` holds that one
 	// to the SCOPE's exit). Nothing reads either once the calls that took them have returned, so both are
 	// released here, where the statement's end or the scope's would leave them a second owner while the service
-	// runs. The handed-off values themselves stay pending: their doors move them.
+	// runs. The handed-off values themselves stay pending: their doors move them. So does a hold on a
+	// handed-off operand (`HoldPolicy.survivesTheHandOff`), because the transfer reads it after this release.
 	function releaseHandOffBuildTemps(tempFloor ElementIndex, ownedFloor ElementIndex, handedOff ValueIdArray, anchor Token)
 		var kept = ValueIdArray.create()
 		var released = ValueIdArray.create()
 
 		for (iter, pending) in self.bodyState.pendingTempDrops.withIterator() 'each'
-			if iter.index() < tempFloor or handedOff.contains(pending) 'stillOwed'
+			if iter.index() < tempFloor or handedOff.contains(pending) or self.holdKindOf(pending).has(HoldPolicy.survivesTheHandOff) 'stillOwed'
 				kept.push(pending)
 			end 'stillOwed' else 'deadAfterItsCall'
 				released.push(pending)
@@ -50939,7 +51145,7 @@ export type Parser
 	end 'requireConsumedPromiseIsOwned'
 
 	function requireConsumedSlotIsWritable(promise ValueId, anchor Token, door ByteArray) throws SourceParseError
-		if not self.promiseValueCarriesAContainerSlot(promise) or not self.valueIsReadOnlyFieldMarked(promise) 'slotIsWritable'
+		if not self.promiseValueCarriesAContainerSlot(promise) or not self.valueIsReadOnlyIn(promise, class: ReadOnlyClass.fieldRead) 'slotIsWritable'
 			return
 		end 'slotIsWritable'
 
@@ -51379,7 +51585,7 @@ export type Parser
 		// the source was never sole anyway, so the mark is true either way and the parser need not know which ran.
 		self.markValueCoOwnsHeap(source)
 		self.markValueOwnsHeap(retained, exclusivity: OwnedHeapExclusivity.coOwned)
-		self.carryValueFacts(retained, from: source, source: self.bodyState, path: ValueCarryPath.retain)
+		self.carryFromSharedRecord(retained, from: source, source: self.bodyState, path: ValueCarryPath.copy)
 		return retained
 	end 'retainBorrowedByteRecord'
 
@@ -51406,10 +51612,14 @@ export type Parser
 		end 'declaredAtAClaim'
 	end 'carryInterfaceWitness'
 
+	function carryFromSharedRecord(to ValueId, from ValueId, source FunctionBodyState, path ValueCarryPath)
+		self.carryValueFacts(to, from: from, source: source, path: path)
+		self.carryReadOnlyProvenance(to, from: from, source: source, path: path)
+	end 'carryFromSharedRecord'
+
 	function carryValueFacts(to ValueId, from ValueId, source FunctionBodyState, path ValueCarryPath)
 		self.carryBrand(to, from: from, source: source, path: path)
 		self.carryFact(ValueFact.unprovenAlias, to: to, from: from, source: source, path: path)
-		self.carryFact(ValueFact.immutableGlobalRead, to: to, from: from, source: source, path: path)
 		self.carryFact(ValueFact.aboveSignedMax, to: to, from: from, source: source, path: path)
 		self.carryFact(ValueFact.bufferSurface, to: to, from: from, source: source, path: path)
 		self.carryFact(ValueFact.sizedContainerBuffer, to: to, from: from, source: source, path: path)
@@ -51444,7 +51654,6 @@ export type Parser
 	function applyFact(fact ValueFact, to ValueId, from ValueId, source FunctionBodyState)
 		match fact 'fact'
 			unprovenAlias then try self.bodyState.aliasUnprovenMarks.set(to, value: true) otherwise panic("applyFact: v{to} has no alias-proof slot — every SSA value must be minted through mintValue, which seeds the column")
-			immutableGlobalRead then self.markImmutableGlobalRead(to)
 			aboveSignedMax then self.markAboveSignedMax(to)
 			bufferSurface then self.markBufferSurface(to, origin: self.internedName(self.brandIdIn(source, value: from)))
 			sizedContainerBuffer then self.markSizedContainerBuffer(to, origin: self.internedName(self.brandIdIn(source, value: from)))
@@ -51504,7 +51713,7 @@ export type Parser
 		if self.valueIsImmortalFunction(source) 'anImmortalRecord'
 			let copy = self.emitRetaggedCastValue(source, targetType: self.valueMaxonType(source), range: range)
 			self.markImmortalFunction(copy)
-			self.carryValueFacts(copy, from: source, source: self.bodyState, path: ValueCarryPath.retain)
+			self.carryFromSharedRecord(copy, from: source, source: self.bodyState, path: ValueCarryPath.value)
 			return copy
 		end 'anImmortalRecord'
 
@@ -51512,7 +51721,7 @@ export type Parser
 		// downgraded here for the identical reason — see `markValueCoOwnsHeap`.
 		self.markValueCoOwnsHeap(source)
 		let retained = self.emitRuntimeCall(self.signatures.retainCalleeOf(self.tagOf(source), nameId: self.valueNameId(source), from: self.artifact.typeNames, result: RetainResult.freshName), args: singletonArgs(source), resultTag: self.tagOf(source), resultNameId: self.valueNameId(source), range: range)
-		self.carryValueFacts(retained, from: source, source: self.bodyState, path: ValueCarryPath.retain)
+		self.carryFromSharedRecord(retained, from: source, source: self.bodyState, path: ValueCarryPath.copy)
 		return retained
 	end 'emitRetainCall'
 
@@ -51528,7 +51737,7 @@ export type Parser
 		self.markValueCoOwnsHeap(source)
 		let retained = self.emitRuntimeCall(RetainExistentialName, args: pairArgs(self.witnessOfValue(source), second: source), resultTag: self.tagOf(source), resultNameId: self.valueNameId(source), range: range)
 		self.carryInterfaceWitness(retained, from: source)
-		self.carryValueFacts(retained, from: source, source: self.bodyState, path: ValueCarryPath.retain)
+		self.carryFromSharedRecord(retained, from: source, source: self.bodyState, path: ValueCarryPath.copy)
 		return retained
 	end 'emitRetainExistentialCall'
 
@@ -51708,7 +51917,9 @@ export type Parser
 	// The result is a distinct ValueId either way, which the sink needs for `emitRetainCall`'s reason.
 	function emitOwnBoxForSink(value ValueId, range SourceRange) returns ValueId
 		self.markValueCoOwnsHeap(value)
-		return self.emitRuntimeCall(MmOwnName, args: singletonArgs(value), resultTag: self.tagOf(value), resultNameId: self.valueNameId(value), range: range)
+		let owned = self.emitRuntimeCall(MmOwnName, args: singletonArgs(value), resultTag: self.tagOf(value), resultNameId: self.valueNameId(value), range: range)
+		self.carryFromSharedRecord(owned, from: value, source: self.bodyState, path: ValueCarryPath.copy)
+		return owned
 	end 'emitOwnBoxForSink'
 
 	// ⭐⭐ **THE RETURNING `__mm_own_deep` A BOX WITH POINTER SLOTS OWES — `emitOwnBoxForSink`'s twin over the
@@ -51726,7 +51937,7 @@ export type Parser
 		self.markValueCoOwnsHeap(value)
 		let cloner = self.emitCodeAddress(self.deepBoxCloneCallee(value), range: range)
 		let copy = self.emitRuntimeCall(MmOwnDeepName, args: pairArgs(value, second: cloner), resultTag: self.tagOf(value), resultNameId: self.valueNameId(value), range: range)
-		self.carryValueFacts(copy, from: value, source: self.bodyState, path: ValueCarryPath.retain)
+		self.carryFromSharedRecord(copy, from: value, source: self.bodyState, path: ValueCarryPath.copy)
 		return copy
 	end 'emitOwnDeepBoxCopy'
 
@@ -51745,7 +51956,7 @@ export type Parser
 		self.removeFromPendingTemps(value)
 
 		let unshared = self.emitOwnedRuntimeResult(StrUnshareName, args: singletonArgs(value), resultTag: self.tagOf(value), resultNameId: self.valueNameId(value), range: range)
-		self.carryValueFacts(unshared, from: value, source: self.bodyState, path: ValueCarryPath.promotion)
+		self.carryValueFacts(unshared, from: value, source: self.bodyState, path: ValueCarryPath.value)
 
 		return unshared
 	end 'unsharedByteRecord'
@@ -51810,20 +52021,100 @@ export type Parser
 		return owned
 	end 'coOwnAggregateAsTemp'
 
-	function holdStorageReadForStatement(value ValueId, kind HoldKind, range SourceRange, mayReplace bool) returns ValueId
-		if not self.valueIsAStorageRead(value) or not self.holdIsOwed(value) 'nothingToHold'
+	function operandIsFollowed(position OperandSuccession) returns bool
+		return match position 'position'
+			alwaysFollowed gives true
+			beforeComma gives self.kindAt(self.indexPastNewlines(self.pos)) == TokenKind.comma
+			receiverBeforeArguments gives self.kindAt(self.indexPastNewlines(self.pos)) != TokenKind.rightParen
+			memberReceiverBeforeArguments gives self.memberCallFollows(self.pos) and self.kindAt(self.indexPastNewlines(self.pos + ReceiverDotBeforeArgumentList)) != TokenKind.rightParen
+		end 'position'
+	end 'operandIsFollowed'
+
+	function callSuccession(base OperandSuccession, target CallArgTarget, rule ArgLabelRule, written Count) returns OperandSuccession
+		if target.runsUserCode() or self.calleeFillsDefaultsAfter(target, rule: rule, written: written) 'somethingRunsAfterTheLastOperand'
+			return OperandSuccession.alwaysFollowed
+		end 'somethingRunsAfterTheLastOperand'
+
+		return base
+	end 'callSuccession'
+
+	function calleeFillsDefaultsAfter(target CallArgTarget, rule ArgLabelRule, written Count) returns bool
+		let callee = try target.declaredName() otherwise panic("calleeFillsDefaultsAfter: a witness dispatch names no callee, and `callSuccession` answers it from `runsUserCode` before asking")
+		let receiverSlots = self.serviceMessageFirstParam(callee) if rule == ArgLabelRule.messageSend else NoReceiverSlots
+
+		// Asked before inference picks a template, so any template that would fill a default counts: an
+		// unheld last argument is freed by a default that runs after it.
+		if self.signatures.isGenericFunctionKey(callee) and self.anyGenericTemplateOmitsAParameter(callee, written: written, receiverSlots: receiverSlots) 'aTemplateMayOmitAParameter'
+			return true
+		end 'aTemplateMayOmitAParameter'
+
+		if not self.signatures.declaresParamDefaults(callee) 'everyParameterRequired'
+			return false
+		end 'everyParameterRequired'
+
+		return match self.signatures.defaultsOf(callee) 'defaults'
+			allRequired gives false
+			defaults(info) gives omittedParametersRemain(info.paramNames.count(), written: written, receiverSlots: receiverSlots)
+		end 'defaults'
+	end 'calleeFillsDefaultsAfter'
+
+	function anyGenericTemplateOmitsAParameter(callee ByteArray, written Count, receiverSlots ParamCount) returns bool
+		for template in self.genericTemplatesNameableHere(callee) 'eachTemplate'
+			if omittedParametersRemain(sweptParamNamesFor(template.paramNames, takesReceiver: template.takesReceiver).count(), written: written, receiverSlots: receiverSlots) 'moreDeclared'
+				return true
+			end 'moreDeclared'
+		end 'eachTemplate'
+
+		return false
+	end 'anyGenericTemplateOmitsAParameter'
+
+	function literalSuccession(layout StructLayout, filled BoolArray, current FieldIndex) returns OperandSuccession
+		for i in 0 upto layout.fieldCount() 'eachField'
+			if i == current or (try filled.get(i) otherwise panic("literalSuccession: filled.get OOB at {i} — the column is sized to the layout's field count")) 'notOmitted'
+				continue
+			end 'notOmitted'
+
+			match fieldDefaultFill(layout, index: i) 'declared'
+				none or
+				literal then continue
+				callsHelper then return OperandSuccession.alwaysFollowed
+			end 'declared'
+		end 'eachField'
+
+		return OperandSuccession.beforeComma
+	end 'literalSuccession'
+
+	function holdIsOwedAt(value ValueId, position OperandSuccession) returns bool
+		return self.operandIsFollowed(position) and self.valueIsAStorageRead(value) and self.holdIsOwed(value)
+	end 'holdIsOwedAt'
+
+	function holdStorageReadForStatement(value ValueId, kind HoldKind, range SourceRange, position OperandSuccession) returns ValueId
+		if not self.holdIsOwedAt(value, position: position) 'nothingToHold'
 			return value
 		end 'nothingToHold'
 
-		if self.holdReplacesItsSource(value) and not mayReplace 'theDoorCannotNameTheHeldReference'
+		return self.emitOperandHold(value, kind: kind, range: range)
+	end 'holdStorageReadForStatement'
+
+	function holdCallOperand(value ValueId, target CallArgTarget, passing OperandPassing, range SourceRange, position OperandSuccession) returns ValueId
+		if not self.holdIsOwedAt(value, position: position) 'nothingToHold'
+			return value
+		end 'nothingToHold'
+
+		return self.emitOperandHold(value, kind: operandHoldKindOf(passing, valueKind: target.operandHoldKind(self.valueIsReadOnlyIn(value, class: ReadOnlyClass.permanent))), range: range)
+	end 'holdCallOperand'
+
+	function emitOperandHold(value ValueId, kind HoldKind, range SourceRange) returns ValueId
+		if self.holdReplacesItsSource(value) and not kind.mayReplaceItsSource() 'theDoorCannotNameTheHeldReference'
 			self.demandDescriptorForAnUncountedOpaqueRead(value)
 			return value
 		end 'theDoorCannotNameTheHeldReference'
 
 		let held = self.emitHoldMarker(value, kind: kind, range: range)
 		self.trackOwnedTemp(held, exclusivity: OwnedHeapExclusivity.coOwned)
+		self.noteReadHeld(value)
 		return held if self.holdReplacesItsSource(value) else value
-	end 'holdStorageReadForStatement'
+	end 'emitOperandHold'
 
 	// ⭐ **MAKE A BORROWED MANAGED VALUE OWNED — the ONE `String`-copy-vs-aggregate-retain decision every site
 	// that needs an owned value out of a borrowed one must make.** A borrowed value cannot be enrolled as
@@ -51866,7 +52157,7 @@ export type Parser
 	// roster. One line at the door rather than one per arm.
 	function promoteBorrowedToOwned(value ValueId, door BorrowLaunderDoor, range SourceRange) returns ValueId throws SourceParseError
 		let promoted = try self.ownedFormOfBorrowedValue(value, door: door, range: range)
-		self.carryValueFacts(promoted, from: value, source: self.bodyState, path: ValueCarryPath.promotion)
+		self.carryValueFacts(promoted, from: value, source: self.bodyState, path: ValueCarryPath.value)
 		return promoted
 	end 'promoteBorrowedToOwned'
 
@@ -51999,15 +52290,9 @@ export type Parser
 			// be published against — the value would escape into a caller with no idea what it holds, and the
 			// original refusal is what stops it. That fallback is what lets the sweep be narrow: a shape it
 			// misses costs this refusal, never a silent acceptance.
-			if valueIsMarked(self.bodyState.immutableGlobalReads, value: value) 'immutableSource'
-				if door == BorrowLaunderDoor.returned and not self.bodyState.enclosingFunctionMayReturnAGlobalAlias and not valueIsMarked(self.bodyState.derivedImmutableGlobalReads, value: value) 'escapesUntracked'
-					throw SourceParseError.unsupported(borrowLaunderRefusal(door), line: range.line, column: range.column)
-				end 'escapesUntracked'
-
-				let owned = self.retainBorrowedAggregate(value, range: range)
-				self.markImmutableGlobalRead(owned)
-				return owned
-			end 'immutableSource'
+			if self.valueMayAliasAnImmutableGlobal(value) and door == BorrowLaunderDoor.returned and not self.bodyState.enclosingFunctionMayReturnAGlobalAlias and not valueIsMarked(self.bodyState.derivedImmutableGlobalReads, value: value) 'escapesUntracked'
+				throw SourceParseError.unsupported(borrowLaunderRefusal(door), line: range.line, column: range.column)
+			end 'escapesUntracked'
 
 			return self.retainBorrowedAggregate(value, range: range)
 		end 'aggregate'
@@ -54599,14 +54884,14 @@ export type Parser
 		end 'discardsThisPosition'
 
 		if readOnlyElement 'anElementOfAReadOnlyContainer'
-			self.markReadOnlyElementRead(value)
+			self.markReadOnlyRecord(value, mark: ReadOnlyMark.element)
 		end 'anElementOfAReadOnlyContainer'
 
 		self.markStoredKeyRead(value, cursor: storedKey)
 
 		var loopBinding = try self.bodyState.scope.declareValueBinding(nameTok.value, varType: self.typeOf(value), kind: BindingKind.let, value: value, brandId: self.brandIdOf(value)) otherwise throw SourceParseError.localShadowsSelfField(String.from(nameTok.value), typeName: String.from(self.enclosingTypeName()), line: nameTok.line, column: nameTok.column)
 		self.bodyState.unusedCandidates.push(UnusedBindingCandidate.create(loopBinding, nameRange: SourceRange.ofToken(nameTok), kind: UnusedBindingKind.loopVariable, declToken: self.pos))
-		let elementsMayBeWritten = writable and storedKey == StoredKeyCursor.neither and not self.valueIsReadOnlyMarked(value)
+		let elementsMayBeWritten = writable and storedKey == StoredKeyCursor.neither and not self.valueIsReadOnlyIn(value, class: ReadOnlyClass.readOnly)
 		loopBinding.rootKind = self.loopVariableRootKind(value)
 		loopBinding.elementWritable = elementsMayBeWritten
 
@@ -55216,11 +55501,11 @@ export type Parser
 			return topLevel
 		end 'anImmutableTopLevelBase'
 
-		if valueIsMarked(self.bodyState.immutableGlobalReads, value: receiver) 'aRecordOutOfAnImmutableGlobal'
+		if self.valueMayAliasAnImmutableGlobal(receiver) 'aRecordOutOfAnImmutableGlobal'
 			return WriteBlame.blamed(self.tokenAt(baseIndex).value, holder: WriteBlameHolder.moduleLet)
 		end 'aRecordOutOfAnImmutableGlobal'
 
-		if self.valueIsReadOnlyFieldMarked(receiver) 'aRecordOutOfALetField'
+		if self.valueIsReadOnlyIn(receiver, class: ReadOnlyClass.fieldRead) 'aRecordOutOfALetField'
 			return WriteBlame.blamed(self.tokenAt(baseIndex).value, holder: self.readOnlyFieldHolderOf(receiver))
 		end 'aRecordOutOfALetField'
 
@@ -57404,7 +57689,7 @@ export type Parser
 			// ⛔ MEASURED without this line: `var b = ["q"]` + `for _ in 0 upto 2  b = expose()  end` +
 			// `grow(b)` compiled and grew a `let`-declared global (exit 6), while the same rebind under an `if`
 			// was already refused. The `if` half and this one are the same defect at two merge shapes.
-			self.carryImmutableGlobalMark(self.bodyState.immutableGlobalReads, from: carried, to: pv.phiId)
+			self.carryProvenanceFromArms(pv.phiId, arms: singletonArgs(carried))
 		end 'each'
 
 		return vals
@@ -58742,7 +59027,7 @@ export type Parser
 			// block establishes; whether anything ELSE still owns the allocation is a question about the ARMS —
 			// `promoteBorrowedGive` promotes a borrowed give by `__mm_incref`, so `pick if c else h.ty` reaches
 			// here holding a box the struct field also holds. So the claim is asked of the edges
-			// (`mergedHeapExclusivity`), which is also the direction `propagateImmutableGlobalReadToPhi` takes
+			// (`mergedHeapExclusivity`), which is also the direction `carryProvenanceFromArms` takes
 			// four lines down.
 			if resultOwned 'ownedResultPhi'
 				self.enrolOwnedPhi(phiId, edges: finalGives)
@@ -58761,7 +59046,7 @@ export type Parser
 			// if even one path can reach it holding an immutable global's record. That is the conservative
 			// direction, and it is the only sound one here — the alternative refuses nothing on the path that
 			// actually aliases.
-			self.propagateImmutableGlobalReadToPhi(phiId, gives: finalGives)
+			self.carryProvenanceFromArms(phiId, arms: finalGives)
 
 			// ⭐ **AND THE BUFFER-SURFACE FAMILY, at this merge and at `finishValueTry`'s** — the same rule for
 			// the same reason, with its own two measurements in its header.
@@ -58789,7 +59074,7 @@ export type Parser
 				self.bodyState.undecidedMerges = withValueMarked(self.bodyState.undecidedMerges, value: phiId)
 			end 'anArmOfUnknownType'
 
-			// ⭐⭐ **AN E3159 BLAME SURVIVES THE MERGE, on the same reasoning `propagateImmutableGlobalReadToPhi`
+			// ⭐⭐ **AN E3159 BLAME SURVIVES THE MERGE, on the same reasoning `carryProvenanceFromArms`
 			// above rests on and for the same construct pair.** `grow(g)` on a `let` is refused, so
 			// `grow(g if flag else g)` must be too — the merge copies nothing, so the record a callee writes
 			// through the phi IS the record the binding names. ANY blamed arm blames the phi, exactly as any
@@ -59070,7 +59355,7 @@ export type Parser
 	// ⚠ **THAT — AND ONLY THAT — IS WHY THE CLAUSE EXISTS.** The aggregate arm does not refuse an immutable global's record
 	// (the rule is enforced at the write), so nothing else depends on the clause.
 	// Skipping the promotion does not lose the mark: the
-	// give reaches the phi unchanged, and `propagateImmutableGlobalReadToPhi` reads the marks off the gives.
+	// give reaches the phi unchanged, and `carryProvenanceFromArms` reads the marks off the gives.
 	//
 	// An arm holding NOTHING (the overwhelming majority) reaches the two doors below: an outliving
 	// IMMUTABLE binding's value is co-owned (`giveAliasesAnOutlivingImmutableBinding`), and everything
@@ -59108,7 +59393,7 @@ export type Parser
 			return false
 		end 'armHoldsNothing'
 
-		return self.valueIsManagedHeap(give) and not self.valueIsOwnedHeap(give) and not valueIsMarked(self.bodyState.immutableGlobalReads, value: give)
+		return self.valueIsManagedHeap(give) and not self.valueIsOwnedHeap(give) and not self.valueNeedsNoHold(give)
 	end 'giveBorrowsIntoDyingRecords'
 
 	// ⭐⭐ **DOES THIS GIVE NAME A VALUE AN IMMUTABLE BINDING GOES ON OWNING PAST THE MERGE?** The three
@@ -59167,18 +59452,9 @@ export type Parser
 		self.moveOwnedValueOut(give)
 	end 'transferGiveToPhi'
 
-	// Decide whether an expression match's result phi OWNS its value, and make every arm's give owned so it
-	// does. The phi is owned iff any reaching arm gives an owned value (`finalizeMatchMerge` then marks it an
-	// owned temp); when it is, each arm that gives a BORROWED value is made owned by `promoteBorrowedGive`
-	// (a borrowed String is copied; a borrowed non-text aggregate has no cheap copy and is E2015-refused)
-	// so the phi is uniformly owned across all edges. A statement match, or an expression match whose arms
-	// all give scalars / immortal rdata, keeps a borrowed phi (returns false).
-	//
-	// The per-arm give value the merge should use — after any promotion — is collected into `finalGives`
-	// (one entry per reaching arm, in order) rather than written back onto the `MatchArmExit`, so nothing
-	// here mutates the arm records the caller still reads. `finalGives` is empty for a statement match.
-	// Carry the immutable-global-read mark from a merge's arms onto its result phi — see the
-	// call site in `finalizeMatchMerge` for why the phi must inherit it at all.
+	// Carry the immutable-global mark from a merge's arms onto the merged value — see the call site in
+	// `finalizeMatchMerge` for why the phi must inherit it at all. Only that mark crosses a merge: a merge
+	// shares a String by hand-off, and carrying the whole read-only roster refuses legal programs.
 	//
 	// ⭐ **IT READS THE FINAL GIVES (post-`resolveGivesOwnership`) — the values the phi genuinely joins — AND
 	// THAT IS LOAD-BEARING RATHER THAN MERELY TIDY.** A marked value is a borrowed non-text AGGREGATE
@@ -59193,31 +59469,32 @@ export type Parser
 	// nothing, because writing the copy cannot reach the global. Only the INCREF arm hands back the SAME box,
 	// which is why only it is refused. So an owned phi may hold an unmarked COPY of a marked arm's record,
 	// which is right, and can never hold the record itself, which is the property this rests on.
-	function propagateImmutableGlobalReadToPhi(phi ValueId, gives ValueIdArray)
+	function carryProvenanceFromArms(to ValueId, arms ValueIdArray)
 		var marked = false
 		var everyMarkedArmIsDerived = true
 
-		for give in gives 'eachGive'
-			if valueIsMarked(self.bodyState.immutableGlobalReads, value: give) 'markedArm'
+		for arm in arms 'eachArm'
+			if self.valueMayAliasAnImmutableGlobal(arm) 'markedArm'
 				marked = true
 
-				if not valueIsMarked(self.bodyState.derivedImmutableGlobalReads, value: give) 'aDirectRead'
+				if not valueIsMarked(self.bodyState.derivedImmutableGlobalReads, value: arm) 'aDirectRead'
 					everyMarkedArmIsDerived = false
 				end 'aDirectRead'
 			end 'markedArm'
-		end 'eachGive'
+		end 'eachArm'
 
 		if not marked 'noMarkedArm'
 			return
 		end 'noMarkedArm'
 
 		if everyMarkedArmIsDerived 'derivedThroughout'
-			self.markDerivedImmutableGlobalRead(phi)
-			return
+			self.markDerivedImmutableGlobalRead(to)
 		end 'derivedThroughout'
 
-		self.markImmutableGlobalRead(phi)
-	end 'propagateImmutableGlobalReadToPhi'
+		if not everyMarkedArmIsDerived 'someArmIsADirectRead'
+			self.markReadOnly(to, mark: ReadOnlyMark.immutableGlobal)
+		end 'someArmIsADirectRead'
+	end 'carryProvenanceFromArms'
 
 	// ⭐⭐ **THE BUFFER-SURFACE FAMILY SURVIVES A MERGE TOO.**
 	// The sibling above's twin, at the same two merges and for the identical structural reason: these facts
@@ -59235,7 +59512,7 @@ export type Parser
 	//     reached by a ternary and by a `try` fallback with every other door already shut.
 	//
 	// ⚠ **ANY MARKED EDGE MARKS THE PHI, which is the conservative direction and the only sound one** —
-	// `propagateImmutableGlobalReadToPhi`'s argument word for word: the phi is one value standing for every
+	// `carryProvenanceFromArms`'s argument word for word: the phi is one value standing for every
 	// edge's, so it must answer for the strongest claim any path can reach it holding. The arms do not chain:
 	// one arm per carrier, so no column's carry is conditional on another's. (`markSizedContainerBuffer` takes
 	// the buffer mark as well — that is its door invariant, not this loop's business.)
@@ -59274,6 +59551,16 @@ export type Parser
 		return WriteBlame.unblamed
 	end 'firstArmBlame'
 
+	// Decide whether an expression match's result phi OWNS its value, and make every arm's give owned so it
+	// does. The phi is owned iff any reaching arm gives an owned value (`finalizeMatchMerge` then marks it an
+	// owned temp); when it is, each arm that gives a BORROWED value is made owned by `promoteBorrowedGive`
+	// (a borrowed String is copied; a borrowed non-text aggregate has no cheap copy and is E2015-refused)
+	// so the phi is uniformly owned across all edges. A statement match, or an expression match whose arms
+	// all give scalars / immortal rdata, keeps a borrowed phi (returns false).
+	//
+	// The per-arm give value the merge should use — after any promotion — is collected into `finalGives`
+	// (one entry per reaching arm, in order) rather than written back onto the `MatchArmExit`, so nothing
+	// here mutates the arm records the caller still reads. `finalGives` is empty for a statement match.
 	function resolveGivesOwnership(reachingArms MatchArmExitArray, isExpression bool, matchTok Token, finalGives ValueIdArray) returns bool throws SourceParseError
 		if not isExpression 'statementMatch'
 			return false
@@ -60769,6 +61056,11 @@ export type Parser
 			let loaded = self.emitUnionPayloadLoad(scrutBox, field: binding.field, offset: offset, valueType: payloadValueTypeOf(class, declared: declared), storage: storage, range: range)
 			self.wearIndexSpaceAlias(loaded, declared: binding.field.declaredType, scopeFilePath: layout.declFilePath)
 
+			// Whatever the payload's own mutability: a read-only scrutinee is read-only all the way down.
+			if self.valueMayNameARecord(loaded) or self.valueIsPromise(loaded) 'payloadOwnsARecord'
+				self.carryReadOnlyProvenance(loaded, from: scrutBox, source: self.bodyState, path: ValueCarryPath.part)
+			end 'payloadOwnsARecord'
+
 			if binding.field.isLet 'aLetPayload'
 				self.carryLetPayloadMark(scrutBox, read: loaded)
 			end 'aLetPayload'
@@ -61833,7 +62125,7 @@ export type Parser
 		// last); the others arrive as edge args, which is why the twin below carries from each of them. Both are
 		// needed and neither is redundant: this one covers a phi whose edges are pushed BEFORE it exists (the
 		// loop join), the other covers a phi minted before its edges are known (the `if` continuation).
-		self.carryImmutableGlobalMark(self.bodyState.immutableGlobalReads, from: binding.boundValue, to: phiId)
+		self.carryProvenanceFromArms(phiId, arms: singletonArgs(binding.boundValue))
 
 		// ⭐⭐ **AN EXISTENTIAL BINDING MERGES AS TWO PHIS, BECAUSE IT IS TWO VALUES.**
 		// The witness half is not derivable at the merge — two arms may carry
@@ -61895,12 +62187,7 @@ export type Parser
 		// same census argument its header already makes about the witness half. `binding.boundValue` is the
 		// merged name's settled value at each of these call sites (the continuation phi at an `if`/`match`, the
 		// exit phi at a loop), so a marked incoming makes the merged name marked.
-		//
-		// ⛔ **WITHOUT IT A BRANCH OR A LOOP LAUNDERED THE TAINT, MEASURED** (exit 6): `var b = ["q"]` +
-		// `for _ in 0 upto 2  b = expose()  end` + `grow(b)` compiled and grew a `let`-declared global, where
-		// the same rebind outside a loop is refused. The value-producing merges were already covered
-		// (`propagateImmutableGlobalReadToPhi`); the merges that REBIND A NAME were not.
-		self.carryImmutableGlobalMark(self.bodyState.immutableGlobalReads, from: value, to: binding.boundValue)
+		self.carryProvenanceFromArms(binding.boundValue, arms: singletonArgs(value))
 
 		// ⭐⭐ **THE OWNERSHIP HALF OF THE SAME TWINNING** (see `mintPhiForBinding`). The mint stamped the phi
 		// from ONE incoming; these are the others, and they must answer the same. They do, and the reason is
@@ -63057,14 +63344,14 @@ export type Parser
 					self.advance()
 				end 'isNot'
 
-				_ = self.holdStorageReadForStatement(left, kind: HoldKind.binaryOperand, range: SourceRange.ofToken(opTok), mayReplace: false)
+				_ = self.holdStorageReadForStatement(left, kind: HoldKind.identityOperand, range: SourceRange.ofToken(opTok), position: OperandSuccession.alwaysFollowed)
 				let other = try self.parseUnclaimedBinary(func, minPrec: prec + 1)
 				left = try self.emitReferenceIdentity(left, rhs: other, negate: negate, opTok: opTok)
 				continue
 			end 'referenceIdentity'
 
 			self.advance()
-			left = self.holdStorageReadForStatement(left, kind: HoldKind.binaryOperand, range: SourceRange.ofToken(opTok), mayReplace: true)
+			left = self.holdStorageReadForStatement(left, kind: HoldKind.binaryOperand, range: SourceRange.ofToken(opTok), position: OperandSuccession.alwaysFollowed)
 
 			// The right operand's token span, remembered BEFORE it is parsed and read back after.
 			// It is not what the shift rule ASKS — that is the constant folder's job — but it is
@@ -68368,7 +68655,7 @@ export type Parser
 		try requireMemberCount(elementValues.count() + 1, limit: MaxDeclaredMembers, members: "tuple elements", anchor: self.tokenAt(valueStart))
 		elementTypes.push(self.tupleElementColumnType(value, target: target, column: elementValues.count() as FieldIndex, anchor: self.tokenAt(valueStart)))
 		elementBrands.push(self.tupleElementColumnBrand(value, target: target, column: elementValues.count() as FieldIndex))
-		elementValues.push(value)
+		elementValues.push(self.holdStorageReadForStatement(value, kind: HoldKind.listOperand, range: SourceRange.ofToken(self.tokenAt(valueStart)), position: OperandSuccession.beforeComma))
 		elementBareLocal.push(self.rhsWasBareLocalReference(valueStart))
 	end 'collectTupleElement'
 
@@ -70442,13 +70729,16 @@ export type Parser
 			let value = try self.requireFieldType(layout, index: index, fieldType: fieldType, value: parsed, valueStart: valueStart, anchor: nameTok)
 			try self.rejectDoubleOwningStore(movedOwningValues, value: parsed, valueStart: valueStart)
 
-			try fieldValues.set(index, value: value) otherwise panic("parseStructLiteralFields: fieldValues.set OOB at {index} — the columns are sized to the layout's field count")
-			try filled.set(index, value: true) otherwise panic("parseStructLiteralFields: filled.set OOB at {index} — the columns are sized to the layout's field count")
-			try fieldBareLocal.set(index, value: self.rhsWasBareLocalReference(valueStart)) otherwise panic("parseStructLiteralFields: fieldBareLocal.set OOB at {index} — the columns are sized to the layout's field count")
+			let bareLocal = self.rhsWasBareLocalReference(valueStart)
 
 			// AFTER `rhsWasBareLocalReference` reads `[valueStart, self.pos)` — skipping here first would widen
 			// that window past the single-identifier value and silently mis-decide a managed field's move-in.
 			self.skipNewlines()
+			let held = self.holdStorageReadForStatement(value, kind: HoldKind.listOperand, range: SourceRange.ofToken(nameTok), position: self.literalSuccession(layout, filled: filled, current: index))
+
+			try fieldValues.set(index, value: held) otherwise panic("parseStructLiteralFields: fieldValues.set OOB at {index} — the columns are sized to the layout's field count")
+			try filled.set(index, value: true) otherwise panic("parseStructLiteralFields: filled.set OOB at {index} — the columns are sized to the layout's field count")
+			try fieldBareLocal.set(index, value: bareLocal) otherwise panic("parseStructLiteralFields: fieldBareLocal.set OOB at {index} — the columns are sized to the layout's field count")
 
 			if not self.at(TokenKind.comma) 'endFields'
 				break
@@ -70542,12 +70832,12 @@ export type Parser
 		end 'nothingToAlias'
 
 		let place = "{String.from(layout.name)}.{String.from(anchor.value)}"
-		let readOnly = self.valueIsReadOnlyMarked(value)
+		let readOnly = self.valueIsReadOnlyIn(value, class: ReadOnlyClass.readOnly)
 
 		if layout.fieldIsMutable(index) 'aVarField'
 			if readOnly and self.valueIsOpaque(value) 'decidedWhereItIsInstantiated'
 				self.noteLetFieldValueSite(value, destination: place, into: ReadOnlyRootKind.letField, anchor: anchor)
-			end 'decidedWhereItIsInstantiated' else if readOnly and not self.valueReadsAModuleLet(value) 'aReadOnlyValueIntoAVar'
+			end 'decidedWhereItIsInstantiated' else if readOnly and not self.valueMayAliasAnImmutableGlobal(value) 'aReadOnlyValueIntoAVar'
 				try self.refuseStoreOfReadOnly(value, place: place, anchor: anchor)
 			end 'aReadOnlyValueIntoAVar' else 'aWritableValueIntoAVar'
 				self.noteMutableStoreSite(value, valueStart: valueStart, place: place, anchor: anchor)
@@ -70573,7 +70863,7 @@ export type Parser
 	end 'valueIsARecordAStoreAliases'
 
 	function requireValueMeetsLetFieldRules(value ValueId, valueStart ElementIndex, place String, into ReadOnlyRootKind, anchor Token) throws SourceParseError
-		if self.valueIsReadOnlyMarked(value) 'readOnlyIntoALetField'
+		if self.valueIsReadOnlyIn(value, class: ReadOnlyClass.readOnly) 'readOnlyIntoALetField'
 			return
 		end 'readOnlyIntoALetField'
 
@@ -70670,7 +70960,7 @@ export type Parser
 	end 'noteLetFieldMove'
 
 	function refuseStoreOfReadOnly(value ValueId, place String, anchor Token) throws SourceParseError
-		let kind = ReadOnlyRootKind.moduleLet if valueIsMarked(self.bodyState.immutableGlobalReads, value: value) else rootKindOfHolder(self.readOnlyFieldHolderOf(value))
+		let kind = ReadOnlyRootKind.moduleLet if self.valueMayAliasAnImmutableGlobal(value) else rootKindOfHolder(self.readOnlyFieldHolderOf(value))
 		throw SourceParseError.deepLet(ErrorCode.semanticVarFromImmutable, message: deepLetStoreMessage("a value read out of {readOnlyRootDescription(kind)}", place: place), line: anchor.line, column: anchor.column)
 	end 'refuseStoreOfReadOnly'
 
@@ -72887,7 +73177,8 @@ export type Parser
 			// the argument anchors that argument's own TYPE refusal, exactly as `parsePayloadArgs` does.
 			let valueStart = self.pos
 			self.stateDeclaredLiteralTarget(self.signatures.payloadTypeOf(try payloads.get(slotValues.count()) otherwise panic("parseEnumFromNameCase: payloads.get OOB at {slotValues.count()} — the loop runs once per declared payload"), layout: layout, into: self.artifact.typeNames), scopeFilePath: layout.declFilePath, valueStart: valueStart)
-			slotValues.push(try self.parseValueExpression(func))
+			let value = try self.parseValueExpression(func)
+			slotValues.push(self.holdStorageReadForStatement(value, kind: HoldKind.listOperand, range: SourceRange.ofToken(nameTok), position: OperandSuccession.beforeComma))
 			slotBareLocal.push(self.rhsWasBareLocalReference(valueStart))
 			slotAnchors.push(self.pos)
 		end 'eachSlot'
@@ -73100,7 +73391,7 @@ export type Parser
 			// cursor nothing pins between them; one binding makes it structural.
 			let afterArg = self.pos
 
-			try slotValues.set(slot, value: value) otherwise panic("parsePayloadArgs: slotValues.set OOB at slot {slot} — the columns are sized to the case's arity")
+			try slotValues.set(slot, value: self.holdStorageReadForStatement(value, kind: HoldKind.listOperand, range: SourceRange.ofToken(labelTok), position: OperandSuccession.beforeComma)) otherwise panic("parsePayloadArgs: slotValues.set OOB at slot {slot} — the columns are sized to the case's arity")
 			try filled.set(slot, value: true) otherwise panic("parsePayloadArgs: filled.set OOB at slot {slot} — the columns are sized to the case's arity")
 			try slotBareLocal.set(slot, value: self.rhsWasBareLocalReference(valueStart)) otherwise panic("parsePayloadArgs: slotBareLocal.set OOB at slot {slot} — the columns are sized to the case's arity")
 			try slotAnchors.set(slot, value: afterArg) otherwise panic("parsePayloadArgs: slotAnchors.set OOB at slot {slot} — the columns are sized to the case's arity")
@@ -73560,11 +73851,7 @@ export type Parser
 			// A RECORD slot makes the record the reference's owner, so it owes the release if IT is dropped here —
 			// recorded at the one line that takes the reference, which is what makes the store half and the drop
 			// half one act rather than two that agree. A CELL releases its occupant itself (`cellOwnsItsOccupant`).
-			match slot 'owner'
-				inRecord(box) then self.markRecordOwningOpaqueSlots(box)
-				inCell then break
-			end 'owner'
-
+			self.markOpaqueSlotOwner(slot)
 			return self.coOwnBorrowedOpaque(arg, range: range)
 		end 'referenceThroughTheDescriptor'
 
@@ -73574,10 +73861,23 @@ export type Parser
 		// frame's to give away.
 		if self.valueIsOpaqueOwned(arg) 'thisFrameStopsOwningIt'
 			self.transferOwnedInto(arg, argBareLocal: argBareLocal)
+
+			// A held operand's reference is adopted by the slot, so the record owes its release as above: a
+			// record dropped inside the shared generic body releases its `T` slot only through the descriptor.
+			if self.holdKindOf(arg).has(HoldPolicy.adoptedByAnOpaqueSlot) and self.signatures.typeParamOwnerIsInstantiated(self.valueTypeParamId(arg)) 'aHeldReferenceIsAdopted'
+				self.markOpaqueSlotOwner(slot)
+			end 'aHeldReferenceIsAdopted'
 		end 'thisFrameStopsOwningIt'
 
 		return arg
 	end 'moveOpaqueValueInto'
+
+	function markOpaqueSlotOwner(slot DurableOpaqueSlot)
+		match slot 'owner'
+			inRecord(box) then self.markRecordOwningOpaqueSlots(box)
+			inCell then break
+		end 'owner'
+	end 'markOpaqueSlotOwner'
 
 	// ⭐⭐ **DOES AN OPAQUE `T` DESTINATION TAKE ITS OWN REFERENCE TO `value`, OR INHERIT THE ONE THIS FRAME
 	// HOLDS? — THE one home of that routing question, because THREE doors ask it and a disagreement between them
@@ -73671,7 +73971,9 @@ export type Parser
 		// managed instantiation, and inert for a trivial one — so a second owner either exists or there is
 		// nothing to own, and neither case licenses a destructive write through `value`.
 		self.markValueCoOwnsHeap(value)
-		return self.emitRuntimeCall(RetainTypeParamName, args: singletonArgs(value), resultTag: self.tagOf(value), resultNameId: self.valueNameId(value), range: range)
+		let retained = self.emitRuntimeCall(RetainTypeParamName, args: singletonArgs(value), resultTag: self.tagOf(value), resultNameId: self.valueNameId(value), range: range)
+		self.carryFromSharedRecord(retained, from: value, source: self.bodyState, path: ValueCarryPath.copy)
+		return retained
 	end 'coOwnBorrowedOpaque'
 
 	// ⭐ **STORE AN ALREADY-CLASSIFIED-MANAGED VALUE INTO DURABLE STORAGE** — the core of `moveInPayload`,
@@ -75510,10 +75812,20 @@ export type Parser
 	function dispatchMethodOnReceiver(func IrFunction, recv MethodReceiver, resultUsed bool) returns ValueId throws SourceParseError
 		var enclosingDestination = self.elementStoreDestination
 		self.elementStoreDestination = self.elementStoreDestinationOf(recv)
-		let result = try self.dispatchReceiverMember(func, recv: recv, resultUsed: resultUsed)
+		let result = try self.dispatchReceiverMember(func, recv: self.receiverHeldAcrossItsArguments(recv), resultUsed: resultUsed)
 		self.elementStoreDestination = enclosingDestination
 		return result
 	end 'dispatchMethodOnReceiver'
+
+	function receiverHeldAcrossItsArguments(recv MethodReceiver) returns MethodReceiver
+		let held = self.holdStorageReadForStatement(recv.value, kind: HoldKind.callOperand, range: SourceRange.ofToken(recv.anchor), position: OperandSuccession.memberReceiverBeforeArguments)
+
+		if held == recv.value 'nothingReplaced'
+			return recv
+		end 'nothingReplaced'
+
+		return recv.withValue(held)
+	end 'receiverHeldAcrossItsArguments'
 
 	function dispatchReceiverMember(func IrFunction, recv MethodReceiver, resultUsed bool) returns ValueId throws SourceParseError
 		self.noteMethodCallMutabilityUses(recv)
@@ -79029,11 +79341,13 @@ export type Parser
 	function emitBuiltinConformanceCall(func IrFunction, receiver ValueId, target DirectConformanceTarget, method InterfaceMethodSig, baseTok Token, methodTok Token) returns ValueId throws SourceParseError
 		try self.consume(TokenKind.leftParen)
 		var args = ValueIdArray.create()
-		args.push(receiver)
+		args.push(self.holdStorageReadForStatement(receiver, kind: HoldKind.callOperand, range: SourceRange.ofToken(baseTok), position: OperandSuccession.receiverBeforeArguments))
 
 		if not self.at(TokenKind.rightParen) 'hasArgs'
 			while true 'argLoop'
-				args.push(try self.parseValueExpression(func))
+				let argTok = self.current()
+				let arg = try self.parseValueExpression(func)
+				args.push(self.holdStorageReadForStatement(arg, kind: HoldKind.callOperand, range: SourceRange.ofToken(argTok), position: OperandSuccession.beforeComma))
 
 				if not self.at(TokenKind.comma) 'endArgs'
 					break
@@ -79759,7 +80073,7 @@ export type Parser
 			return
 		end 'nothingToJudgeHere'
 
-		if self.valueIsReadOnlyMarked(value) and not self.valueReadsAModuleLet(value) 'aReadOnlyValueIntoAnElement'
+		if self.valueIsReadOnlyIn(value, class: ReadOnlyClass.readOnly) and not self.valueMayAliasAnImmutableGlobal(value) 'aReadOnlyValueIntoAnElement'
 			try self.refuseStoreOfReadOnly(value, place: ArrayLiteralElementPlace, anchor: elemTok)
 		end 'aReadOnlyValueIntoAnElement'
 
@@ -81786,6 +82100,7 @@ export type Parser
 		let keyType = try self.literalColumnTypeFor(firstKey, literalKind: MapLiteralSubject, columnNoun: HashTableKeyColumnNoun, valueTok: firstKeyTok)
 
 		try self.consumePairSeparator()
+		let heldFirstKey = self.holdStorageReadForStatement(firstKey, kind: HoldKind.callOperand, range: SourceRange.ofToken(firstKeyTok), position: OperandSuccession.alwaysFollowed)
 		let firstValueTok = self.current()
 		let firstValue = try self.parseExpression(func, block: self.bodyState.currentBlock)
 
@@ -81814,7 +82129,7 @@ export type Parser
 		var valueBounds = self.boundsOfValue(firstValue)
 		var keySigns = try self.foldColumnSign(ColumnSigns.unseen, value: firstKey, anchor: firstKeyTok)
 		var valueSigns = try self.foldColumnSign(ColumnSigns.unseen, value: firstValue, anchor: firstValueTok)
-		try self.emitMapLiteralUpsert(map, key: firstKey, value: firstValue, anchor: firstKeyTok, range: range)
+		try self.emitMapLiteralUpsert(map, key: heldFirstKey, value: firstValue, anchor: firstKeyTok, range: range)
 
 		while try self.atAnotherLiteralEntry() 'morePairs'
 			// Every later pair is checked AGAINST the first's columns — the map-literal twin of
@@ -81831,6 +82146,7 @@ export type Parser
 			end 'aDeferredKey'
 
 			try self.consumePairSeparator()
+			let heldKey = self.holdStorageReadForStatement(key, kind: HoldKind.callOperand, range: SourceRange.ofToken(keyTok), position: OperandSuccession.alwaysFollowed)
 			let valueTok = self.current()
 			let value = try self.parseMapColumnValue(func, giid: giid, position: MapValueArgPosition, columnNoun: HashTableValueColumnNoun, consume: false)
 
@@ -81842,7 +82158,7 @@ export type Parser
 			valueSigns = try self.foldColumnSign(valueSigns, value: value, anchor: valueTok)
 			keyBounds = keyBounds.joinedWith(self.boundsOfValue(key))
 			valueBounds = valueBounds.joinedWith(self.boundsOfValue(value))
-			try self.emitMapLiteralUpsert(map, key: key, value: value, anchor: firstKeyTok, range: range)
+			try self.emitMapLiteralUpsert(map, key: heldKey, value: value, anchor: firstKeyTok, range: range)
 		end 'morePairs'
 
 		try self.consume(TokenKind.rightBracket)
@@ -82872,13 +83188,17 @@ export type Parser
 		return self.readOnlyBlameOfBinding(binding, name: baseTok.value)
 	end 'immutableReceiverNameOf'
 
+	function blameOfAnOccupant(binding VarInfo, name ByteArray, holder WriteBlameHolder) returns WriteBlame
+		return WriteBlame.writeOnly(name, holder: holder) if binding.isMutable() else WriteBlame.blamed(name, holder: holder)
+	end 'blameOfAnOccupant'
+
 	function readOnlyBlameOfBinding(binding VarInfo, name ByteArray) returns WriteBlame
 		if self.bindingAliasesAnImmutableGlobal(binding) 'aliasesAnImmutableGlobal'
-			return WriteBlame.blamed(name, holder: WriteBlameHolder.moduleLet)
+			return self.blameOfAnOccupant(binding, name: name, holder: WriteBlameHolder.moduleLet)
 		end 'aliasesAnImmutableGlobal'
 
-		if self.valueIsReadOnlyFieldMarked(binding.boundValue) and not binding.isSelfField 'aliasesALetFieldsRecord'
-			return WriteBlame.blamed(name, holder: self.readOnlyFieldHolderOf(binding.boundValue))
+		if self.valueIsReadOnlyIn(binding.boundValue, class: ReadOnlyClass.fieldRead) and not binding.isSelfField 'aliasesALetFieldsRecord'
+			return self.blameOfAnOccupant(binding, name: name, holder: self.readOnlyFieldHolderOf(binding.boundValue))
 		end 'aliasesALetFieldsRecord'
 
 		if binding.isMutable() or binding.isParameter 'rebindable'
@@ -82893,9 +83213,9 @@ export type Parser
 	end 'readOnlyBlameOfBinding'
 
 	// ⭐⭐ **DOES THE VALUE THIS NAME DENOTES MAY-ALIAS A `let`-DECLARED TOP-LEVEL GLOBAL'S RECORD?**
-	// The ONE home of the taint question the write doors ask, over the mark `markImmutableGlobalRead` maintains
+	// The ONE home of the taint question the write doors ask, over the `ReadOnlyMark.immutableGlobal` mark
 	// — which by the time a binding exists covers a direct read of the global, an owned promotion of one
-	// (`ownedFormOfBorrowedValue` carries it), a merge that joined one (`propagateImmutableGlobalReadToPhi`)
+	// (`ownedFormOfBorrowedValue` carries it), a merge that joined one (`carryProvenanceFromArms`)
 	// and the result of a call to a function the sweep published as returning one.
 	//
 	// ⛔⛔ **IT IS DELIBERATELY *NOT* FOLDED INTO `bindingStorageIsWritable`, AND THAT IS A DISTINCTION THE
@@ -82907,10 +83227,10 @@ export type Parser
 	//
 	// ⚠ A self-field alias's `boundValue` is 0 and 0 is `self`'s own id (`createSelfField` leaves it so), which
 	// is harmless here for a reason worth stating rather than relying on: ValueId 0 is a PARAMETER, and
-	// `markImmutableGlobalRead`'s only producers are a global load, a promotion of one and a call result — all
+	// the mark's only producers are a global load, a promotion of one and a call result — all
 	// of them minted above the parameter block, so 0 is never in the set and the coincidence cannot fire.
 	function bindingAliasesAnImmutableGlobal(binding VarInfo) returns bool
-		return valueIsMarked(self.bodyState.immutableGlobalReads, value: binding.boundValue)
+		return self.valueMayAliasAnImmutableGlobal(binding.boundValue)
 	end 'bindingAliasesAnImmutableGlobal'
 
 	// ⭐⭐ **MAY THE STORAGE THIS NAME DENOTES BE WRITTEN THROUGH?** — and it is NOT `binding.isMutable()`,
@@ -86134,7 +86454,7 @@ export type Parser
 		self.carryReadOnlyFieldMark(container, read: result, fromALetField: false)
 
 		if self.signatures.containerElementIsReadOnly(giid) 'aReadOnlyElementType'
-			self.markReadOnlyElementRead(result)
+			self.markReadOnlyRecord(result, mark: ReadOnlyMark.element)
 		end 'aReadOnlyElementType'
 
 		// An element read wears the brand the instantiation spelled its element with (`Rows = Array with Row`).
@@ -86649,7 +86969,7 @@ export type Parser
 	function requireContainerElementType(func IrFunction, giid GenericInstanceId, value ValueId, valueStart ElementIndex, methodTok Token) returns ValueId throws SourceParseError
 		if self.signatures.containerElementIsReadOnly(giid) and self.valueIsARecordAStoreAliases(value) 'storesIntoAReadOnlyElementType'
 			try self.requireValueMeetsLetFieldRules(value, valueStart: valueStart, place: String.from(methodTok.value), into: ReadOnlyRootKind.readOnlyElement, anchor: methodTok)
-		end 'storesIntoAReadOnlyElementType' else if self.valueIsReadOnlyMarked(value) and not self.valueReadsAModuleLet(value) and self.valueIsARecordAStoreAliases(value) and not self.valueIsOpaque(value) 'aReadOnlyElement'
+		end 'storesIntoAReadOnlyElementType' else if self.valueIsReadOnlyIn(value, class: ReadOnlyClass.readOnly) and not self.valueMayAliasAnImmutableGlobal(value) and self.valueIsARecordAStoreAliases(value) and not self.valueIsOpaque(value) 'aReadOnlyElement'
 			try self.refuseStoreOfReadOnly(value, place: "an element of the container {String.from(methodTok.value)} writes", anchor: methodTok)
 		end 'aReadOnlyElement' else 'aWritableElement'
 			self.noteMutableStoreSite(value, valueStart: valueStart, place: "an element of the container {String.from(methodTok.value)} writes", anchor: methodTok)
@@ -87509,7 +87829,7 @@ export type Parser
 
 		let site = CellArgumentToken.at(fieldIndex)
 
-		if self.cellWasRequestedAt(site) and self.mayHandOverFieldAt(site, box: step.box, layout: step.layout, index: index, writableHere: self.instanceAcceptsAWriteThrough(step.baseBinding) and not self.valueIsReadOnlyMarked(step.box)) 'handOverTheSlot'
+		if self.cellWasRequestedAt(site) and self.mayHandOverFieldAt(site, box: step.box, layout: step.layout, index: index, writableHere: self.instanceAcceptsAWriteThrough(step.baseBinding) and not self.valueIsReadOnlyIn(step.box, class: ReadOnlyClass.readOnly)) 'handOverTheSlot'
 			self.markMutabilityExercised(step.baseBinding)
 			return self.handOverFieldStorage(step.box, layout: step.layout, index: index, range: range)
 		end 'handOverTheSlot'
@@ -87740,7 +88060,7 @@ export type Parser
 	// An immutable slot's base is marked as a bare read of it is, so a field read through it into a
 	// `var` (`var m = H.index`) is E3078 rather than a second, writable name for the `let`'s record.
 	function resolveGlobalFieldChain(baseTok Token, label ByteArray, valueType MaxonType, mutable bool) returns FieldChainStep throws SourceParseError
-		let loaded = self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(baseTok))
+		let loaded = self.emitGlobalReceiverLoad(label, valueType: valueType, mutable: mutable, tok: baseTok)
 		return try self.resolveValueFieldChain(baseTok, value: loaded if mutable else self.recordImmutableSlotRead(baseTok, value: loaded), valueType: valueType, mutable: mutable)
 	end 'resolveGlobalFieldChain'
 
@@ -88383,6 +88703,7 @@ export type Parser
 		let valueStart = self.pos
 		let storedType = self.storedFieldType(step.box, layout: step.layout, index: index)
 		self.stateDeclaredLiteralTarget(storedType, scopeFilePath: step.layout.declFilePath, valueStart: valueStart)
+		let target = self.holdStorageReadForStatement(step.box, kind: HoldKind.writeTarget, range: SourceRange.between(step.baseTok, last: step.lastFieldTok), position: OperandSuccession.alwaysFollowed)
 		let parsed = try self.parseExpression(func, block: block)
 
 		// The COERCED value is what the store writes — `p.v = 3` into a `float` field stores the widened
@@ -88392,7 +88713,7 @@ export type Parser
 		self.noteClosureStoreSite(ClosureStoreDestination.field(step.box, base: ClosureStoreBase.spelled(step.baseBinding.boundValue, name: step.baseBinding.name)), value: value, at: self.tokenAt(valueStart))
 
 		self.noteWriteThroughAField(func, target: step.box, stored: value, fieldName: step.lastFieldTok.value, baseIndex: baseIndex, lastDotIndex: lastDotIndex, anchor: step.baseTok)
-		try self.emitFieldWrite(step.box, layout: step.layout, index: index, value: value, argBareLocal: self.rhsWasBareLocalReference(valueStart), anchor: step.lastFieldTok, range: SourceRange.between(step.baseTok, last: step.lastFieldTok))
+		try self.emitFieldWrite(target, layout: step.layout, index: index, value: value, argBareLocal: self.rhsWasBareLocalReference(valueStart), anchor: step.lastFieldTok, range: SourceRange.between(step.baseTok, last: step.lastFieldTok))
 	end 'parseResolvedFieldAssignment'
 
 	// ⭐ **A FIELD WRITE WRITES THE RECORD BEFORE ITS LAST `.`** — `box.item.x = 9` writes the record `box.item`, and
@@ -89756,8 +90077,8 @@ export type Parser
 		// frame and not in the CALLEE's: the callee runs with the pointer in hand and may drop the very slot
 		// it came out of, and then read it. MEASURED on `clobber(b, borrowed: b.s)` whose body assigns `c.s`
 		// — exit **82 `slabOsAllocFailed`**, and `panic: Range check failed` on the `byteLength()` spelling of
-		// the same program. `parseCallArgs` holds such an argument, and the prepended receiver, across a call
-		// that runs user code (`holdStorageReadForStatement`, `HoldKind.callOperand`).
+		// the same program. `parseCallArgs` holds such an argument, and the prepended receiver, whenever
+		// anything in the statement evaluates after it (`holdIsOwedAt`).
 		//
 		// It sits at THIS mint rather than at the doors that reach it, for `markDeclaredSurface`'s reason
 		// stated two lines up: every field read in the language funnels through this line, and a per-door mark
@@ -89781,70 +90102,64 @@ export type Parser
 			return
 		end 'ownsNoRecord'
 
-		if valueIsMarked(self.bodyState.readOnlyElementReads, value: box) 'readThroughAnElement'
-			self.markReadOnlyElementRead(read)
+		if self.valueHasReadOnlyMark(box, mark: ReadOnlyMark.element) 'readThroughAnElement'
+			self.markReadOnlyRecord(read, mark: ReadOnlyMark.element)
 			return
 		end 'readThroughAnElement'
 
-		if valueIsMarked(self.bodyState.letPayloadReads, value: box) 'readThroughALetPayload'
-			self.markLetPayloadRead(read)
+		if self.valueHasReadOnlyMark(box, mark: ReadOnlyMark.letPayload) 'readThroughALetPayload'
+			self.markReadOnlyRecord(read, mark: ReadOnlyMark.letPayload)
 			return
 		end 'readThroughALetPayload'
 
-		if fromALetField or valueIsMarked(self.bodyState.readOnlyFieldReads, value: box) 'readThroughAReadOnlyRecord'
-			self.bodyState.readOnlyFieldReads = withValueMarked(self.bodyState.readOnlyFieldReads, value: read)
+		if fromALetField or self.valueHasReadOnlyMark(box, mark: ReadOnlyMark.field) 'readThroughAReadOnlyRecord'
+			self.markReadOnly(read, mark: ReadOnlyMark.field)
 		end 'readThroughAReadOnlyRecord'
 	end 'carryReadOnlyFieldMark'
 
 	function carryLetPayloadMark(box ValueId, read ValueId)
-		if valueIsMarked(self.bodyState.readOnlyElementReads, value: box) 'readThroughAnElement'
-			self.markReadOnlyElementRead(read)
+		if self.valueHasReadOnlyMark(box, mark: ReadOnlyMark.element) 'readThroughAnElement'
+			self.markReadOnlyRecord(read, mark: ReadOnlyMark.element)
 			return
 		end 'readThroughAnElement'
 
-		self.markLetPayloadRead(read)
+		self.markReadOnlyRecord(read, mark: ReadOnlyMark.letPayload)
 	end 'carryLetPayloadMark'
 
-	function markLetPayloadRead(read ValueId)
+	function markReadOnlyRecord(read ValueId, mark ReadOnlyMark)
 		if self.valueMayNameARecord(read) 'ownsARecord'
-			self.bodyState.letPayloadReads = withValueMarked(self.bodyState.letPayloadReads, value: read)
+			self.markReadOnly(read, mark: mark)
 		end 'ownsARecord'
-	end 'markLetPayloadRead'
-
-	function markReadOnlyElementRead(read ValueId)
-		if self.valueMayNameARecord(read) 'ownsARecord'
-			self.bodyState.readOnlyElementReads = withValueMarked(self.bodyState.readOnlyElementReads, value: read)
-		end 'ownsARecord'
-	end 'markReadOnlyElementRead'
+	end 'markReadOnlyRecord'
 
 	function markStoredKeyRead(read ValueId, cursor StoredKeyCursor)
 		if cursor == StoredKeyCursor.neither 'notAStoredKey'
 			return
 		end 'notAStoredKey'
 
-		self.markReadOnlyElementRead(read)
+		self.markReadOnlyRecord(read, mark: ReadOnlyMark.element)
 
 		if not self.valueMayNameARecord(read) 'ownsNoRecord'
 			return
 		end 'ownsNoRecord'
 
 		match cursor 'cursor'
-			mapEntries then self.bodyState.storedMapKeyReads = withValueMarked(self.bodyState.storedMapKeyReads, value: read)
-			setElements then self.bodyState.storedSetElementReads = withValueMarked(self.bodyState.storedSetElementReads, value: read)
+			mapEntries then self.markReadOnly(read, mark: ReadOnlyMark.storedMapKey)
+			setElements then self.markReadOnly(read, mark: ReadOnlyMark.storedSetElement)
 			neither then return
 		end 'cursor'
 	end 'markStoredKeyRead'
 
 	function loopVariableRootKind(value ValueId) returns ReadOnlyRootKind
-		if valueIsMarked(self.bodyState.storedMapKeyReads, value: value) 'aMapKey'
+		if self.valueHasReadOnlyMark(value, mark: ReadOnlyMark.storedMapKey) 'aMapKey'
 			return ReadOnlyRootKind.storedMapKey
 		end 'aMapKey'
 
-		if valueIsMarked(self.bodyState.storedSetElementReads, value: value) 'aSetElement'
+		if self.valueHasReadOnlyMark(value, mark: ReadOnlyMark.storedSetElement) 'aSetElement'
 			return ReadOnlyRootKind.storedSetElement
 		end 'aSetElement'
 
-		return ReadOnlyRootKind.readOnlyElement if self.valueIsReadOnlyMarked(value) else ReadOnlyRootKind.forElement
+		return ReadOnlyRootKind.readOnlyElement if self.valueIsReadOnlyIn(value, class: ReadOnlyClass.readOnly) else ReadOnlyRootKind.forElement
 	end 'loopVariableRootKind'
 
 	function carryStorageReadMarks(box ValueId, read ValueId)
@@ -90192,7 +90507,7 @@ export type Parser
 	function emitCellLoad(cellVarType MaxonType, box ValueId, range SourceRange) returns ValueId
 		let loaded = self.loadCellOccupant(cellVarType, box: box, range: range)
 		self.wearAliasOf(loaded, source: box)
-		self.carryValueFacts(loaded, from: box, source: self.bodyState, path: ValueCarryPath.cellLoad)
+		self.carryFromSharedRecord(loaded, from: box, source: self.bodyState, path: ValueCarryPath.cellLoad)
 
 		if self.valueMayNameARecord(loaded) 'managedOccupant'
 			self.markOverwritableSlotRead(loaded)
@@ -90211,17 +90526,16 @@ export type Parser
 	// not a `Scope.setValue`. That is the whole of what makes a caller observe a callee's `x = 99`.
 	function emitCellStore(binding VarInfo, value ValueId, range SourceRange)
 		self.storeCellOccupant(binding.boundValue, cellType: binding.varType, value: value, range: range)
-		self.carryValueFacts(binding.boundValue, from: value, source: self.bodyState, path: ValueCarryPath.cellStore)
+		self.forgetReadOnlyProvenance(binding.boundValue)
+		self.carryFromSharedRecord(binding.boundValue, from: value, source: self.bodyState, path: ValueCarryPath.cellStore)
 
 		// ⭐ **THE CELL ITSELF CARRIES THE IMMUTABLE-GLOBAL MARK** — put on the BOX rather than on the occupant,
 		// because the occupant is a value this frame may never name again while the cell is what every later
 		// read, every capture and every write door (`bindingAliasesAnImmutableGlobal` reads `boundValue`, which
 		// for a cell binding IS the cell) has in hand.
 		//
-		// ⚠ **MONOTONE ON PURPOSE: a later clean store does not CLEAR it.** A cell is written by reference, so
-		// the tainted store and the clean one may reach any given read in either order at run time; keeping the
-		// mark costs a false REJECT on a rebound-then-written cell and dropping it would cost a silent
-		// acceptance, which is the direction this whole rule refuses to err in.
+		// The marks describe the CURRENT occupant, so a store replaces them. A by-reference callee that writes
+		// through a read-only occupant is refused (`WriteBlame.writeOnly`).
 	end 'emitCellStore'
 
 	function loadCellOccupant(cellVarType MaxonType, box ValueId, range SourceRange) returns ValueId
@@ -90581,7 +90895,7 @@ export type Parser
 			self.bodyState.capturedPromiseReads = withValueMarked(self.bodyState.capturedPromiseReads, value: captured)
 		end 'aCapturedPromise'
 
-		self.carryValueFacts(captured, from: binding.boundValue, source: self.capturedFrame(frame).body, path: ValueCarryPath.capture)
+		self.carryFromSharedRecord(captured, from: binding.boundValue, source: self.capturedFrame(frame).body, path: ValueCarryPath.capture)
 		self.carryCapturedDeferral(binding, frame: frame, captured: captured)
 		self.wearCapturedFloatAlias(captured, binding: binding, frame: frame)
 		return self.readOfAnUnadoptedLocal(binding, value: captured)
@@ -90601,36 +90915,18 @@ export type Parser
 		end 'theBindingWearsOne'
 	end 'wearCapturedFloatAlias'
 
-	// ⭐⭐ **THE ONE SPELLING OF "THIS VALUE DENOTES THE SAME RECORD AS THAT ONE, SO IT INHERITS THE MARK".**
-	// Four sites move a may-alias-an-immutable-global record from one SSA name to another
-	// without going through a promotion — the two capture reads above, and the cell store/load pair — and each
-	// of them is a place the taint would be silently DROPPED without it. One function so that a fifth such
-	// carrier is a call rather than a fourth copy of the test.
-	//
-	// ⚠ **`marks` IS A PARAMETER BECAUSE THE SOURCE SET IS NOT ALWAYS THIS FUNCTION'S.** A capture reads the
-	// ENCLOSING frame's marks (a closure body's ids are its own SSA space); a cell load reads this one's. The
-	// DESTINATION is always this function's, which is why only the source is passed.
-	//
-	// ⚡ Both sets are the shared empty one for every program that declares no aggregate `let` global, so this
-	// is a membership test on an empty set.
-	function carryImmutableGlobalMark(marks ValueMarkColumn, from ValueId, to ValueId)
-		if valueIsMarked(marks, value: from) 'sourceMayAliasAnImmutableGlobal'
-			self.markImmutableGlobalRead(to)
-
-			if valueIsMarked(self.bodyState.derivedImmutableGlobalReads, value: from) 'aDerivedRead'
-				self.markDerivedImmutableGlobalRead(to)
-			end 'aDerivedRead'
-		end 'sourceMayAliasAnImmutableGlobal'
-	end 'carryImmutableGlobalMark'
-
 	function carryImmutableGlobalMarkToRead(source ValueId, read ValueId)
-		if valueIsMarked(self.bodyState.immutableGlobalReads, value: source) and self.valueIsNonTextAggregate(read) 'aRecordOutOfAnImmutableGlobal'
+		if self.valueMayAliasAnImmutableGlobal(source) and self.valueIsNonTextAggregate(read) 'aRecordOutOfAnImmutableGlobal'
 			self.markDerivedImmutableGlobalRead(read)
+
+			if self.valueIsAnImmortalImageRecord(source) 'outOfAnImageRecord'
+				self.markReadOnly(read, mark: ReadOnlyMark.imageRecord)
+			end 'outOfAnImageRecord'
 		end 'aRecordOutOfAnImmutableGlobal'
 	end 'carryImmutableGlobalMarkToRead'
 
 	function markDerivedImmutableGlobalRead(value ValueId)
-		self.markImmutableGlobalRead(value)
+		self.markReadOnly(value, mark: ReadOnlyMark.immutableGlobal)
 		self.bodyState.derivedImmutableGlobalReads = withValueMarked(self.bodyState.derivedImmutableGlobalReads, value: value)
 	end 'markDerivedImmutableGlobalRead'
 
@@ -90826,7 +91122,7 @@ export type Parser
 			containerBox(nodes, root) then self.artifact.emitOp(self.bodyState.currentBlock, op: MaxonOp.immortalStructRecord(result, nodes: nodes, root: root), range: range)
 		end 'shape'
 
-		self.markImmutableGlobalRead(result)
+		self.markImageRecordRead(result)
 		return result
 	end 'emitImageRecordRead'
 
@@ -90872,7 +91168,7 @@ export type Parser
 		self.artifact.emitOp(self.bodyState.currentBlock, op: MaxonOp.immortalStructRecord(result, nodes: nodes, root: root), range: range)
 
 		if not self.valueIsAnImageUnionCase(result) 'aBoxWithFieldsToGuard'
-			self.markImmutableGlobalRead(result)
+			self.markImageRecordRead(result)
 		end 'aBoxWithFieldsToGuard'
 
 		return result
@@ -91013,7 +91309,7 @@ export type Parser
 	// Mark a global read that came out of an IMMUTABLE slot, and hand the value straight back.
 	// It is only the READ path that marks: a receiver load (`parseMethodCall`'s stored-binding arm) is
 	// consumed by the dispatch on the spot, where `noteReceiverWrite` already refuses a write through
-	// an immutable binding, and it can never reach a `var`'s initializer.
+	// an immutable binding.
 	function recordGlobalReadValue(tok Token, value ValueId, mutable bool) returns ValueId
 		// The blame name rides the same mutability answer (a top-level `let` refuses a write through it
 		// exactly as a `let` local does), published here so the constant and the slot-backed halves of a
@@ -91037,15 +91333,9 @@ export type Parser
 	end 'recordGlobalReadValue'
 
 	function recordImmutableSlotRead(tok Token, value ValueId) returns ValueId
-		self.markImmutableGlobalRead(value)
+		self.markImageRecordRead(value)
 		return self.recordModuleLetRoot(value, name: tok.value, image: false)
 	end 'recordImmutableSlotRead'
-
-	// ⭐ **THE ONE WRITER OF `immutableGlobalReads`** — the read that mints a mark and the merge that
-	// PROPAGATES one both come through here, so the install-on-first-mark is stated once.
-	function markImmutableGlobalRead(value ValueId)
-		self.bodyState.immutableGlobalReads = withValueMarked(self.bodyState.immutableGlobalReads, value: value)
-	end 'markImmutableGlobalRead'
 
 	// ⭐⭐ **DID THE WHOLE-PROGRAM SWEEP PUBLISH THIS NAME AS ONE WHOSE RESULT MAY ALIAS A `let`-DECLARED
 	// GLOBAL'S RECORD?** — THE one composition, spent at three doors: the declaration being entered
@@ -91064,7 +91354,7 @@ export type Parser
 		return self.signatures.programReturnsAnImmutableGlobalAlias() and self.signatures.returnsImmutableGlobalAlias(name)
 	end 'functionMayReturnAGlobalAlias'
 
-	// ⭐ **THE ONE WRITER OF `mergeImmutableBlame`** — `markImmutableGlobalRead`'s twin, for the identical
+	// ⭐ **THE ONE WRITER OF `mergeImmutableBlame`** — `markReadOnly`'s twin, for the identical
 	// copy-on-write reason and through the same one home for it. An `unblamed` merge is not recorded:
 	// absence is what "this merge blames nothing" means, and a stored `unblamed` would make the reader
 	// answer the same question twice.
@@ -91083,7 +91373,7 @@ export type Parser
 		end 'function'
 	end 'mergeBlameOf'
 
-	// ⭐⭐ **THE ONE WRITER OF `overwritableSlotReads`** — `markImmutableGlobalRead`'s twin, through the
+	// ⭐⭐ **THE ONE WRITER OF `overwritableSlotReads`** — `markReadOnly`'s twin, through the
 	// same install door discipline (`ValueMarkColumn`).
 	//
 	// Its THREE producers are the three ways a managed value comes out of storage a later statement can
@@ -91135,7 +91425,7 @@ export type Parser
 		end 'anElementRead'
 	end 'propagateSlotReadMarkFrom'
 
-	// ⭐ **THE ONE WRITER OF `bufferSurfaceValues`** — `markImmutableGlobalRead`'s twin, through the
+	// ⭐ **THE ONE WRITER OF `bufferSurfaceValues`** — `markReadOnly`'s twin, through the
 	// same install door discipline (`ValueMarkColumn`). Its callers are the producers of a buffer VALUE and
 	// `markDeclaredSurface` below; read them off `grep -n 'self.markBufferSurface('`, never off a list here.
 	// ⚠ The CHAINED `.managed` (`arr.managed.setLength(2)`) mints NO value to mark, and it passes the surface
@@ -93169,7 +93459,7 @@ export type Parser
 	function appendConstFactoryArgDefaults(info ParamDefaultInfo, calls ConstFactoryCallArray, anchor Token, args ConstFactoryArgumentArray)
 		let paramCount = info.paramNames.count()
 
-		if args.count() >= paramCount 'nothingOmitted'
+		if not omittedParametersRemain(paramCount, written: args.count(), receiverSlots: NoReceiverSlots) 'nothingOmitted'
 			return
 		end 'nothingOmitted'
 
@@ -97719,9 +98009,11 @@ export type Parser
 		for i in 0 upto receiverArgs 'eachReceiver'
 			let receiver = try args.get(i) otherwise panic("parseCallArgs: args.get OOB at {i} inside the receiver count")
 
-			if target.runsUserCode() 'aCalleeRunsUserCode'
-				try args.set(i, value: self.holdStorageReadForStatement(receiver, kind: HoldKind.callOperand, range: try argRanges.get(i) otherwise panic("parseCallArgs: argRanges.get OOB at {i} — the argument columns are parallel by construction"), mayReplace: true)) otherwise panic("parseCallArgs: args.set OOB at {i} inside the receiver count")
-			end 'aCalleeRunsUserCode'
+			let heldReceiver = self.holdCallOperand(receiver, target: target, passing: OperandPassing.asValue, range: try argRanges.get(i) otherwise panic("parseCallArgs: argRanges.get OOB at {i} — the argument columns are parallel by construction"), position: self.callSuccession(OperandSuccession.receiverBeforeArguments, target: target, rule: rule, written: args.count()))
+
+			if heldReceiver != receiver 'theCallPassesTheReference'
+				try args.set(i, value: heldReceiver) otherwise panic("parseCallArgs: args.set OOB at {i} inside the receiver count")
+			end 'theCallPassesTheReference'
 
 			if self.valueIsManagedHeap(receiver) 'aManagedReceiver'
 				managedColumns = maskWithParam(managedColumns, param: i as ParamCount)
@@ -97822,14 +98114,13 @@ export type Parser
 				// naming its closure record, so it travels as any argument does. (A capturing closure at a
 				// NON-function parameter is a type error caught by SemanticCheck.)
 				var heldPassed = passed
+				let held = self.holdCallOperand(value, target: target, passing: OperandPassing.intoPlace if byRefPosition else OperandPassing.converted if passed != value else OperandPassing.asValue, range: SourceRange.ofToken(argFirstTok), position: self.callSuccession(OperandSuccession.beforeComma, target: target, rule: rule, written: args.count() + 1))
+
+				if held != value 'theCallPassesTheReference'
+					heldPassed = held
+				end 'theCallPassesTheReference'
 
 				if target.runsUserCode() 'aCalleeRunsUserCode'
-					let held = self.holdStorageReadForStatement(value, kind: HoldKind.callOperand, range: SourceRange.ofToken(argFirstTok), mayReplace: not byRefPosition and passed == value)
-
-					if held != value 'theCallPassesTheReference'
-						heldPassed = held
-					end 'theCallPassesTheReference'
-
 					if let name = try self.bareBindingNamedBy(valueStart).localName() 'aNamedLocalToACallee'
 						self.noteKeptArgumentSite(func, value: heldPassed, callee: target.dispatchedName(), anchor: anchor, name: name)
 					end 'aNamedLocalToACallee'
@@ -98449,7 +98740,7 @@ export type Parser
 		// reconstructing the source text of the expression would be a second renderer of what the author wrote.
 		// The sentence it lands in — "cannot pass '…' to function that mutates parameter 'b'" — is true of the
 		// noun, and the LINE is the call's own.
-		if valueIsMarked(self.bodyState.immutableGlobalReads, value: value) 'aliasesAnImmutableGlobal'
+		if self.valueMayAliasAnImmutableGlobal(value) 'aliasesAnImmutableGlobal'
 			if self.argWasFieldChain(valueTok, valueStart: valueStart) 'aChainOffAName'
 				return WriteBlame.blamed(valueTok.value, holder: WriteBlameHolder.moduleLet)
 			end 'aChainOffAName'
@@ -98457,7 +98748,7 @@ export type Parser
 			return WriteBlame.blamed(EmptySourceText, holder: WriteBlameHolder.moduleLet)
 		end 'aliasesAnImmutableGlobal'
 
-		if self.valueIsReadOnlyFieldMarked(value) 'aliasesALetFieldsRecord'
+		if self.valueIsReadOnlyIn(value, class: ReadOnlyClass.fieldRead) 'aliasesALetFieldsRecord'
 			if self.argWasFieldChain(valueTok, valueStart: valueStart) 'aChainOffAName'
 				return WriteBlame.blamed(valueTok.value, holder: self.readOnlyFieldHolderOf(value))
 			end 'aChainOffAName'
@@ -98646,7 +98937,7 @@ export type Parser
 		// carry the same mark `f(A)` carries: `emitDefaultArgValue` fills the omitted argument through this
 		// very door with the helper's name in hand.
 		if self.functionMayReturnAGlobalAlias(callee) 'mayAliasAnImmutableGlobal'
-			self.markImmutableGlobalRead(result)
+			self.markReadOnly(result, mark: ReadOnlyMark.immutableGlobal)
 		end 'mayAliasAnImmutableGlobal'
 
 		// ⭐⭐ **AND THE OPPOSITE FACT ABOUT THE SAME HAND-OFF, HERE FOR THE TWO LINES ABOVE'S REASON.** The mark above
@@ -99453,7 +99744,7 @@ export type Parser
 	function fillArgsFromParamDefaults(info ParamDefaultInfo, anchor Token, args ValueIdArray, argLabels NameRoster, argRanges SourceRangeArray, receiverSlots ParamCount) returns ParamCountArray throws SourceParseError
 		let paramCount = info.paramNames.count()
 
-		if args.count() + receiverSlots >= paramCount 'nothingOmitted'
+		if not omittedParametersRemain(paramCount, written: args.count(), receiverSlots: receiverSlots) 'nothingOmitted'
 			return NoDefaultArgSlots
 		end 'nothingOmitted'
 
@@ -99633,7 +99924,7 @@ export type Parser
 		let position = try typeParamPositionIn(typeParamIdOf(returned), declarationName: base, paramNames: self.signatures.structTypeParamsOf(base)) otherwise return
 
 		if self.signatures.genericInstanceArgIsReadOnly(instance, position: position) 'aReadOnlyPosition'
-			self.markReadOnlyElementRead(result)
+			self.markReadOnlyRecord(result, mark: ReadOnlyMark.element)
 		end 'aReadOnlyPosition'
 	end 'markReadOnlyElementResult'
 
@@ -101648,7 +101939,7 @@ export type Parser
 			closureCapture then return false
 		end 'door'
 
-		if self.valueIsReadOnlyMarked(argument.value) or valueIsMarked(self.bodyState.sharedViewReads, value: argument.value) 'aPermanentReadOnlyRoot'
+		if self.valueIsReadOnlyIn(argument.value, class: ReadOnlyClass.permanent) 'aPermanentReadOnlyRoot'
 			return true
 		end 'aPermanentReadOnlyRoot'
 
@@ -102934,7 +103225,7 @@ export type Parser
 			self.cellArgumentToken = CellArgumentToken.none
 			self.cellArgumentWantsAPlace = false
 			view handedPlace = self.takeHandedPlaceStorage()
-			args.push(value)
+			args.push(self.holdStorageReadForStatement(value, kind: operandHoldKindOf(OperandPassing.intoPlace if readsAPlace else OperandPassing.asValue, valueKind: HoldKind.callOperand), range: SourceRange.ofToken(valueTok), position: OperandSuccession.alwaysFollowed))
 			names.push(self.expressionImmutableBlame(valueTok, valueStart: valueStart, value: value))
 
 			if let name = try self.bareBindingNamedBy(valueStart).localName() 'aNamedLocalToAFunctionValue'

@@ -6194,7 +6194,9 @@ function checkImmutableArgToMutatingParam(project Project, func IrFunction, call
 		end 'refusedWhereItIsKept'
 
 		let named = immutableArgNameAt(argImmutableNames, index: i as ParamCount)
-		_ = refuseImmutableArgAtWrittenParam(project, func: func, argId: argId, namedBlame: blameOfAWrittenArgument(named, rebindsIt: named.isRebindOnly() and programSignaturesIn(project, asker: "checkImmutableArgToMutatingParam").paramIsByRef(callee, index: pos)), parameter: ArgumentParameter.named(paramName.clone()), asksWrittenArguments: asksWrittenArguments, provenance: provenance, callRange: callRange, filePath: filePath, report: ReportSite.atTheCall)
+		let byRef = programSignaturesIn(project, asker: "checkImmutableArgToMutatingParam").paramIsByRef(callee, index: pos)
+		let blame = blameOfAWrittenArgument(named, rebindsIt: named.isRebindOnly() and byRef)
+		_ = refuseImmutableArgAtWrittenParam(project, func: func, argId: argId, namedBlame: blame.whenOnlyRebound() if byRef and not maskHasParam(recordWriteMask, param: pos) else blame, parameter: ArgumentParameter.named(paramName.clone()), asksWrittenArguments: asksWrittenArguments, provenance: provenance, callRange: callRange, filePath: filePath, report: ReportSite.atTheCall)
 	end 'eachArg'
 end 'checkImmutableArgToMutatingParam'
 

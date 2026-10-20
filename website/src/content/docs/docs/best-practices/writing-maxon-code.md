@@ -1159,13 +1159,15 @@ Operators: `and`, `or`, `not`, plus parentheses for grouping.
 
 - Primitives: copied by value
 - Structs: shared by reference when stored or passed. Use `.clone()` for independent copy
-- Reference counting: automatic scope cleanup. A read that could outlive its owner is counted, and a `for`
-  loop holds its source, so mutating a collection while an element read from it is in use is safe
+- Reference counting: automatic scope cleanup. A read that could outlive its owner is counted, across the rest
+  of its statement too (`x.a.b = x.dropA()`, `x.items.push(x.reset())`), and a `for` loop holds its source, so
+  mutating a collection while an element read from it is in use is safe
 - `@heap let p = Point.create(0.0, y: 0.0)` forces heap allocation
-- `let` is read-only all the way down: a `let` binding, `let` field, `let` payload, module-level `let`,
-  `SharedValue` or registry read, stored `Map` key or `Set` element, and `readonly` element. A write through
-  one is **E3159**; binding one to a `var` or storing it where something may write it is **E3078**, except a
-  `let` of a fresh record at its last use, which the store consumes.
+- `let` is read-only all the way down: a `let` binding, `let` field, `let` payload, any payload of a union read
+  through one of these, module-level `let`, `SharedValue` or registry read, stored `Map` key or `Set` element,
+  and `readonly` element. A write through one is **E3159**; binding one to a `var` or storing it where
+  something may write it is **E3078**, except a `let` of a fresh record at its last use, which the store
+  consumes.
 - A `let` binds only a fresh record, a read-only value, or a part of a parameter. A `let` of state something
   may still write (a field of a writable `self`, an element of a `var` container, a getter's result on a `var`)
   is **E3188**: write `view x = …` to read it, `var` to write it, or `let` a `.clone()`.

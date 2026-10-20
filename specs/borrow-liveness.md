@@ -3617,3 +3617,2447 @@ end 'main'
 ```stdout
 [third 44 padded out long enough for the heap] [replacement 9 padded out long enough for the heap] [filler 3 padded out long enough for the heap]
 ```
+
+<!-- test: a-field-write-target-survives-its-right-hand-side-rebinding-the-chain -->
+### A field write's target survives a right-hand side that rebinds the record it writes into
+`x.inner` is read as the write's target before `x.dropInner()` runs; the store lands in the `Inner` it
+read, which `dropInner` has already replaced, so the new `x.inner` keeps its own name.
+```maxon
+type Inner
+	export var name as String
+
+	static function create(name String) returns Self
+		return Self{name: name}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export var inner as Inner
+
+	static function create(name String) returns Self
+		return Self{inner: Inner.create(name)}
+	end 'create'
+
+	function dropInner() returns String
+		self.inner = Inner.create("replacement {7} padded out long enough for the heap")
+		return "stored {5} padded out long enough for the heap"
+	end 'dropInner'
+end 'Outer'
+
+function main() returns ExitCode
+	var x = Outer.create("original {40 + 2} padded out long enough for the heap")
+	x.inner.name = x.dropInner()
+	let filler = Inner.create("filler {1} padded out long enough for the heap")
+	let filler2 = Inner.create("filler {2} padded out long enough for the heap")
+	print("[{x.inner.name}] [{filler.name}] [{filler2.name}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[replacement 7 padded out long enough for the heap] [filler 1 padded out long enough for the heap] [filler 2 padded out long enough for the heap]
+```
+
+<!-- test: a-two-hop-field-write-target-survives-its-right-hand-side-rebinding-the-middle-hop -->
+### … and through two hops, when the right-hand side rebinds the middle one
+```maxon
+type Leaf
+	export var name as String
+
+	static function create(name String) returns Self
+		return Self{name: name}
+	end 'create'
+end 'Leaf'
+
+type Middle
+	export var leaf as Leaf
+
+	static function create(name String) returns Self
+		return Self{leaf: Leaf.create(name)}
+	end 'create'
+end 'Middle'
+
+type Outer
+	export var middle as Middle
+
+	static function create(name String) returns Self
+		return Self{middle: Middle.create(name)}
+	end 'create'
+
+	function dropLeaf() returns String
+		self.middle.leaf = Leaf.create("replacement {7} padded out long enough for the heap")
+		return "stored {5} padded out long enough for the heap"
+	end 'dropLeaf'
+end 'Outer'
+
+function main() returns ExitCode
+	var x = Outer.create("original {40 + 2} padded out long enough for the heap")
+	x.middle.leaf.name = x.dropLeaf()
+	let filler = Leaf.create("filler {1} padded out long enough for the heap")
+	let filler2 = Leaf.create("filler {2} padded out long enough for the heap")
+	print("[{x.middle.leaf.name}] [{filler.name}] [{filler2.name}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[replacement 7 padded out long enough for the heap] [filler 1 padded out long enough for the heap] [filler 2 padded out long enough for the heap]
+```
+
+<!-- test: a-field-write-rooted-at-a-module-var-survives-its-right-hand-side-rebinding-the-var -->
+### … and from a module-level `var`, when the right-hand side rebinds the `var`
+```maxon
+type Inner
+	export var name as String
+
+	static function create(name String) returns Self
+		return Self{name: name}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export var inner as Inner
+
+	static function create(name String) returns Self
+		return Self{inner: Inner.create(name)}
+	end 'create'
+end 'Outer'
+
+var current = Outer.create("placeholder")
+
+function rebindCurrent() returns String
+	current = Outer.create("replacement {7} padded out long enough for the heap")
+	return "stored {5} padded out long enough for the heap"
+end 'rebindCurrent'
+
+function main() returns ExitCode
+	current = Outer.create("original {40 + 2} padded out long enough for the heap")
+	current.inner.name = rebindCurrent()
+	let filler = Inner.create("filler {1} padded out long enough for the heap")
+	let filler2 = Outer.create("filler {2} padded out long enough for the heap")
+	print("[{current.inner.name}] [{filler.name}] [{filler2.inner.name}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[replacement 7 padded out long enough for the heap] [filler 1 padded out long enough for the heap] [filler 2 padded out long enough for the heap]
+```
+
+<!-- test: a-union-payload-read-survives-a-later-payload-reassigning-the-field -->
+### A field read as a union payload survives a later payload that reassigns the field
+`x.label` is read before `x.reset()` runs; the payload holds its own reference, so the reassignment's
+release of the old label leaves the case's first payload intact.
+```maxon
+union Pair
+	both(first String, second String)
+	none
+end 'Pair'
+
+type Holder
+	export var label as String
+
+	static function create(label String) returns Self
+		return Self{label: label}
+	end 'create'
+
+	function reset() returns String
+		self.label = "replacement {7} padded out long enough for the heap"
+		return "second {5} padded out long enough for the heap"
+	end 'reset'
+end 'Holder'
+
+function describe(p Pair) returns String
+	return match p 'm'
+		both(first, second) gives "[{first}] [{second}]"
+		none gives "none"
+	end 'm'
+end 'describe'
+
+function main() returns ExitCode
+	var x = Holder.create("original {40 + 2} padded out long enough for the heap")
+	let p = Pair.both(x.label, second: x.reset())
+	let filler = "filler {1} padded out long enough for the heap"
+	print("{describe(p)} [{x.label}] [{filler}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[original 42 padded out long enough for the heap] [second 5 padded out long enough for the heap] [replacement 7 padded out long enough for the heap] [filler 1 padded out long enough for the heap]
+```
+
+<!-- test: a-struct-literal-field-read-survives-a-later-field-reassigning-it -->
+### … as a struct literal's field, beside a later field that reassigns it
+```maxon
+type Holder
+	var first as String
+	var second as String
+
+	static function create(label String) returns Self
+		return Self{first: label, second: "unset"}
+	end 'create'
+
+	function reset() returns String
+		self.first = "replacement {7} padded out long enough for the heap"
+		return "second {5} padded out long enough for the heap"
+	end 'reset'
+
+	function snapshot() returns Self
+		return Self{first: self.first, second: self.reset()}
+	end 'snapshot'
+
+	function describe() returns String
+		return "[{self.first}] [{self.second}]"
+	end 'describe'
+end 'Holder'
+
+function main() returns ExitCode
+	var x = Holder.create("original {40 + 2} padded out long enough for the heap")
+	let copy = x.snapshot()
+	let filler = "filler {1} padded out long enough for the heap"
+	print("{copy.describe()} {x.describe()} [{filler}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[original 42 padded out long enough for the heap] [second 5 padded out long enough for the heap] [replacement 7 padded out long enough for the heap] [unset] [filler 1 padded out long enough for the heap]
+```
+
+<!-- test: a-tuple-element-read-survives-a-later-element-reassigning-the-field -->
+### … as a tuple element, beside a later element that reassigns it
+```maxon
+type Holder
+	export var label as String
+
+	static function create(label String) returns Self
+		return Self{label: label}
+	end 'create'
+
+	function reset() returns String
+		self.label = "replacement {7} padded out long enough for the heap"
+		return "second {5} padded out long enough for the heap"
+	end 'reset'
+end 'Holder'
+
+function main() returns ExitCode
+	var x = Holder.create("original {40 + 2} padded out long enough for the heap")
+	let pair = (x.label, x.reset())
+	let filler = "filler {1} padded out long enough for the heap"
+	print("[{pair.0}] [{pair.1}] [{x.label}] [{filler}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[original 42 padded out long enough for the heap] [second 5 padded out long enough for the heap] [replacement 7 padded out long enough for the heap] [filler 1 padded out long enough for the heap]
+```
+
+<!-- test: an-indirect-call-argument-read-survives-a-later-argument-reassigning-the-field -->
+### … as an argument of a call through a function value, beside a later argument that reassigns it
+```maxon
+typealias Joiner = function(String, String) returns String
+
+type Holder
+	export var label as String
+
+	static function create(label String) returns Self
+		return Self{label: label}
+	end 'create'
+
+	function reset() returns String
+		self.label = "replacement {7} padded out long enough for the heap"
+		return "second {5} padded out long enough for the heap"
+	end 'reset'
+end 'Holder'
+
+function join(first String, second String) returns String
+	let filler = "filler {1} padded out long enough for the heap"
+	return "[{first}] [{second}] [{filler}]"
+end 'join'
+
+function combine(x Holder, f Joiner) returns String
+	return f(x.label, x.reset())
+end 'combine'
+
+function main() returns ExitCode
+	var x = Holder.create("original {40 + 2} padded out long enough for the heap")
+	print("{combine(x, f: join)} [{x.label}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[original 42 padded out long enough for the heap] [second 5 padded out long enough for the heap] [filler 1 padded out long enough for the heap] [replacement 7 padded out long enough for the heap]
+```
+
+<!-- test: an-async-argument-read-survives-a-later-argument-reassigning-the-field -->
+### … as an argument of an `async` call, beside a later argument that reassigns it
+```maxon
+type Holder
+	export var label as String
+
+	static function create(label String) returns Self
+		return Self{label: label}
+	end 'create'
+
+	function reset() returns String
+		self.label = "replacement {7} padded out long enough for the heap"
+		return "second {5} padded out long enough for the heap"
+	end 'reset'
+end 'Holder'
+
+function join(first String, second String) returns String
+	let filler = "filler {1} padded out long enough for the heap"
+	return "[{first}] [{second}] [{filler}]"
+end 'join'
+
+function main() returns ExitCode
+	var x = Holder.create("original {40 + 2} padded out long enough for the heap")
+	let p = async join(x.label, second: x.reset())
+	let text = await p
+	print("{text} [{x.label}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[original 42 padded out long enough for the heap] [second 5 padded out long enough for the heap] [filler 1 padded out long enough for the heap] [replacement 7 padded out long enough for the heap]
+```
+
+<!-- test: a-service-send-argument-read-survives-a-later-argument-reassigning-the-field -->
+### … as an argument of a message to a service, beside a later argument that reassigns it
+```maxon
+type Holder
+	export var label as String
+
+	static function create(label String) returns Self
+		return Self{label: label}
+	end 'create'
+
+	function reset() returns String
+		self.label = "replacement {7} padded out long enough for the heap"
+		return "second {5} padded out long enough for the heap"
+	end 'reset'
+end 'Holder'
+
+type Joiner
+	var seen as String
+
+	static function create() returns Self
+		return Self{seen: "none"}
+	end 'create'
+
+	export function take(first String, second String) returns String
+		let filler = "filler {1} padded out long enough for the heap"
+		return "[{first}] [{second}] [{filler}]"
+	end 'take'
+end 'Joiner'
+
+function main() returns ExitCode
+	let h = spawn Joiner.create()
+	var x = Holder.create("original {40 + 2} padded out long enough for the heap")
+	let text = try await h.take(x.label, second: x.reset()) otherwise "failed"
+	print("{text} [{x.label}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[original 42 padded out long enough for the heap] [second 5 padded out long enough for the heap] [filler 1 padded out long enough for the heap] [replacement 7 padded out long enough for the heap]
+```
+
+<!-- test: a-field-read-as-an-equals-receiver-survives-its-argument-reassigning-the-field -->
+### A field read as the receiver of `equals` survives an argument that reassigns the field
+`self.name` is read before `self.swapName()` runs; the comparison sees the original name, which differs
+from the text `swapName` returns.
+```maxon
+type Person
+	var name as String
+
+	static function create(name String) returns Self
+		return Self{name: name}
+	end 'create'
+
+	function current() returns String
+		return name
+	end 'current'
+
+	function swapName() returns String
+		self.name = "swapped {40 + 2} value long enough for a heap record"
+		return "returned {40 + 2} value long enough for a heap record"
+	end 'swapName'
+
+	function keptOriginal() returns bool
+		return self.name.equals(self.swapName())
+	end 'keptOriginal'
+end 'Person'
+
+function main() returns ExitCode
+	var p = Person.create("original {40 + 2} value long enough for a heap record")
+	print("{p.keptOriginal()}\n")
+	let filler = "filler {1} value long enough for a heap record"
+	print("[{p.current()}] [{filler}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+false
+[swapped 42 value long enough for a heap record] [filler 1 value long enough for a heap record]
+```
+
+<!-- test: an-indirect-call-last-argument-read-survives-the-callee-reassigning-the-field -->
+### A field read as the last argument of a call through a function value survives the callee reassigning the field
+`x.label` is the last argument, so no later argument frees it; the callee does, by resetting
+`h.label` before it reads `s`. The argument holds its own reference, so `s` is still the original label.
+```maxon
+typealias Reader = function(Holder, String) returns String
+
+type Holder
+	export var label as String
+
+	static function create(label String) returns Self
+		return Self{label: label}
+	end 'create'
+
+	function reset()
+		self.label = "replacement {7} padded out long enough for the heap"
+	end 'reset'
+end 'Holder'
+
+function clobberThenRead(h Holder, s String) returns String
+	h.reset()
+	let filler = "filler {1} padded out long enough for the heap"
+	return "[{s}] [{filler}]"
+end 'clobberThenRead'
+
+function readThrough(x Holder, f Reader) returns String
+	return f(x, x.label)
+end 'readThrough'
+
+function main() returns ExitCode
+	var x = Holder.create("original {40 + 2} padded out long enough for the heap")
+	print("{readThrough(x, f: clobberThenRead)} [{x.label}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[original 42 padded out long enough for the heap] [filler 1 padded out long enough for the heap] [replacement 7 padded out long enough for the heap]
+```
+
+<!-- test: a-generic-field-read-as-a-tuple-element-survives-a-later-element-reassigning-it -->
+### A field of an opaque type read as a tuple element survives a later element that reassigns it
+`self.item` is a `T`, instantiated here at `String`; it is read before `self.store` replaces it, and the
+tuple keeps the original.
+```maxon
+type Box uses T
+	var item as T
+
+	static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	function store(replacement T) returns bool
+		self.item = replacement
+		return true
+	end 'store'
+
+	function snapshot(replacement T) returns (T, bool)
+		return (self.item, self.store(replacement))
+	end 'snapshot'
+
+	function current() returns T
+		return self.item
+	end 'current'
+end 'Box'
+
+typealias StringBox = Box with String
+
+function main() returns ExitCode
+	var b = StringBox.create("original {40 + 2} padded out long enough for the heap")
+	view pair = b.snapshot("replacement {7} padded out long enough for the heap")
+	let filler = "filler {1} padded out long enough for the heap"
+	print("[{pair.0}] [{pair.1}] [{b.current()}] [{filler}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[original 42 padded out long enough for the heap] [true] [replacement 7 padded out long enough for the heap] [filler 1 padded out long enough for the heap]
+```
+
+<!-- test: a-map-literal-key-read-survives-its-value-reassigning-the-field -->
+### A field read as a map literal's key survives its value reassigning the field
+```maxon
+type Holder
+	export var label as String
+
+	static function create(label String) returns Self
+		return Self{label: label}
+	end 'create'
+
+	function reset() returns String
+		self.label = "replacement {7} padded out long enough for the heap"
+		return "second {5} padded out long enough for the heap"
+	end 'reset'
+end 'Holder'
+
+function main() returns ExitCode
+	var x = Holder.create("original {40 + 2} padded out long enough for the heap")
+	let m = [x.label: x.reset()]
+	let filler = "filler {1} padded out long enough for the heap"
+	let found = try m.get("original {40 + 2} padded out long enough for the heap") otherwise "missing"
+	print("[{found}] [{x.label}] [{filler}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[second 5 padded out long enough for the heap] [replacement 7 padded out long enough for the heap] [filler 1 padded out long enough for the heap]
+```
+
+<!-- test: an-array-push-receiver-read-survives-its-argument-reassigning-the-field -->
+### A field read as the receiver of `push` survives an argument that reassigns the field
+```maxon
+typealias StringArray = Array with String
+
+type Holder
+	export var items as StringArray
+
+	static function create() returns Self
+		var items = StringArray.create()
+		items.push("original {40 + 2} padded out long enough for the heap")
+		return Self{items: items}
+	end 'create'
+
+	function reset() returns String
+		var fresh = StringArray.create()
+		fresh.push("replacement {7} padded out long enough for the heap")
+		self.items = fresh
+		return "pushed {5} padded out long enough for the heap"
+	end 'reset'
+end 'Holder'
+
+function main() returns ExitCode
+	var x = Holder.create()
+	x.items.push(x.reset())
+	var filler = StringArray.create()
+	filler.push("filler {1} padded out long enough for the heap")
+	filler.push("filler {2} padded out long enough for the heap")
+	print("{x.items.count()} [{try x.items.get(0) otherwise "none"}] [{try filler.get(0) otherwise "none"}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 [replacement 7 padded out long enough for the heap] [filler 1 padded out long enough for the heap]
+```
+
+<!-- test: an-interface-field-read-as-a-struct-literal-field-survives-a-later-field-reassigning-it -->
+### An interface-typed field read as a struct literal's field survives a later field that reassigns it
+```maxon
+interface Named
+	function name() returns String
+end 'Named'
+
+type Tag
+	export var text as String
+
+	static function create(text String) returns Self
+		return Self{text: text}
+	end 'create'
+end 'Tag'
+
+extension Tag implements Named
+	function name() returns String
+		return self.text
+	end 'name'
+end 'Tag'
+
+type Holder
+	var shown as Named
+	var note as String
+
+	static function create(text String) returns Self
+		return Self{shown: Tag.create(text), note: "unset"}
+	end 'create'
+
+	function reset() returns String
+		self.shown = Tag.create("replacement {7} padded out long enough for the heap")
+		return "second {5} padded out long enough for the heap"
+	end 'reset'
+
+	function snapshot() returns Self
+		return Self{shown: self.shown, note: self.reset()}
+	end 'snapshot'
+
+	function describe() returns String
+		return "[{self.shown.name()}] [{self.note}]"
+	end 'describe'
+end 'Holder'
+
+function main() returns ExitCode
+	var x = Holder.create("original {40 + 2} padded out long enough for the heap")
+	view copy = x.snapshot()
+	let filler = Tag.create("filler {1} padded out long enough for the heap")
+	print("{copy.describe()} {x.describe()} [{filler.name()}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[original 42 padded out long enough for the heap] [second 5 padded out long enough for the heap] [replacement 7 padded out long enough for the heap] [unset] [filler 1 padded out long enough for the heap]
+```
+
+<!-- test: a-service-send-interface-let-field-read-through-a-var-field-survives-a-later-argument-rebinding-it -->
+### An interface-typed `let` field read through a `var` field as a service message's argument survives a later argument that rebinds the `var` field
+```maxon
+interface Named
+	function name() returns String
+end 'Named'
+
+type Tag
+	let text as String
+
+	static function create(text String) returns Self
+		return Self{text: text}
+	end 'create'
+end 'Tag'
+
+extension Tag implements Named
+	function name() returns String
+		return self.text
+	end 'name'
+end 'Tag'
+
+type Inner
+	export let shape as Named
+
+	static function create(text String) returns Self
+		return Self{shape: Tag.create(text)}
+	end 'create'
+end 'Inner'
+
+type Holder
+	export var inner as Inner
+
+	static function create(text String) returns Self
+		return Self{inner: Inner.create(text)}
+	end 'create'
+
+	function reset() returns String
+		self.inner = Inner.create("replacement {7} padded out long enough for the heap")
+		return "second {5} padded out long enough for the heap"
+	end 'reset'
+end 'Holder'
+
+type Joiner
+	var seen as String
+
+	static function create() returns Self
+		return Self{seen: "none"}
+	end 'create'
+
+	export function take(first Named, second String) returns String
+		let filler = Tag.create("filler {1} padded out long enough for the heap")
+		return "[{first.name()}] [{second}] [{filler.name()}]"
+	end 'take'
+end 'Joiner'
+
+function main() returns ExitCode
+	let h = spawn Joiner.create()
+	var x = Holder.create("original {40 + 2} padded out long enough for the heap")
+	let text = try await h.take(x.inner.shape, second: x.reset()) otherwise "failed"
+	print("{text} [{x.inner.shape.name()}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[original 42 padded out long enough for the heap] [second 5 padded out long enough for the heap] [filler 1 padded out long enough for the heap] [replacement 7 padded out long enough for the heap]
+```
+
+<!-- test: an-async-last-argument-read-survives-a-default-argument-rebinding-its-storage -->
+### An `async` call's last argument survives a default argument that rebinds the storage it was read from
+`current.label` is the last argument written, but `second`'s default runs after it and replaces `current`.
+```maxon
+type Holder
+	export var label as String
+
+	static function create(label String) returns Self
+		return Self{label: label}
+	end 'create'
+end 'Holder'
+
+var current = Holder.create("placeholder")
+
+function rebindCurrent() returns String
+	current = Holder.create("replacement {7} padded out long enough for the heap")
+	return "second {5} padded out long enough for the heap"
+end 'rebindCurrent'
+
+function join(first String, second String = rebindCurrent()) returns String
+	let filler = "filler {1} padded out long enough for the heap"
+	return "[{first}] [{second}] [{filler}]"
+end 'join'
+
+function main() returns ExitCode
+	current = Holder.create("original {40 + 2} padded out long enough for the heap")
+	let p = async join(current.label)
+	let text = await p
+	print("{text} [{current.label}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[original 42 padded out long enough for the heap] [second 5 padded out long enough for the heap] [filler 1 padded out long enough for the heap] [replacement 7 padded out long enough for the heap]
+```
+
+<!-- test: a-bound-read-only-interface-field-is-shared-with-a-service-as-its-struct-twin-is -->
+### A `let` interface field bound through a `var` root is shared with a service, as the struct-typed twin below is
+```maxon
+interface Named
+	function name() returns String
+end 'Named'
+
+type Tag
+	let text as String
+
+	static function create(text String) returns Self
+		return Self{text: text}
+	end 'create'
+end 'Tag'
+
+extension Tag implements Named
+	function name() returns String
+		return self.text
+	end 'name'
+end 'Tag'
+
+type Inner
+	export let shape as Named
+
+	static function create(text String) returns Self
+		return Self{shape: Tag.create(text)}
+	end 'create'
+end 'Inner'
+
+type Holder
+	export var inner as Inner
+
+	static function create(text String) returns Self
+		return Self{inner: Inner.create(text)}
+	end 'create'
+
+	function reset() returns String
+		self.inner = Inner.create("replacement {7} padded out long enough for the heap")
+		return "second {5} padded out long enough for the heap"
+	end 'reset'
+end 'Holder'
+
+type Joiner
+	var seen as String
+
+	static function create() returns Self
+		return Self{seen: "none"}
+	end 'create'
+
+	export function take(first Named, second String) returns String
+		return "[{first.name()}] [{second}]"
+	end 'take'
+end 'Joiner'
+
+function main() returns ExitCode
+	let h = spawn Joiner.create()
+	var x = Holder.create("original {40 + 2} padded out long enough for the heap")
+	let v = x.inner.shape
+	let text = try await h.take(v, second: x.reset()) otherwise "failed"
+	print("{text} [{x.inner.shape.name()}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[original 42 padded out long enough for the heap] [second 5 padded out long enough for the heap] [replacement 7 padded out long enough for the heap]
+```
+
+<!-- test: a-bound-read-only-struct-field-is-shared-with-a-service -->
+### … the struct-typed twin
+```maxon
+type Tag
+	let text as String
+
+	static function create(text String) returns Self
+		return Self{text: text}
+	end 'create'
+
+	function name() returns String
+		return self.text
+	end 'name'
+end 'Tag'
+
+type Inner
+	export let shape as Tag
+
+	static function create(text String) returns Self
+		return Self{shape: Tag.create(text)}
+	end 'create'
+end 'Inner'
+
+type Holder
+	export var inner as Inner
+
+	static function create(text String) returns Self
+		return Self{inner: Inner.create(text)}
+	end 'create'
+
+	function reset() returns String
+		self.inner = Inner.create("replacement {7} padded out long enough for the heap")
+		return "second {5} padded out long enough for the heap"
+	end 'reset'
+end 'Holder'
+
+type Joiner
+	var seen as String
+
+	static function create() returns Self
+		return Self{seen: "none"}
+	end 'create'
+
+	export function take(first Tag, second String) returns String
+		return "[{first.name()}] [{second}]"
+	end 'take'
+end 'Joiner'
+
+function main() returns ExitCode
+	let h = spawn Joiner.create()
+	var x = Holder.create("original {40 + 2} padded out long enough for the heap")
+	let v = x.inner.shape
+	let text = try await h.take(v, second: x.reset()) otherwise "failed"
+	print("{text} [{x.inner.shape.name()}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[original 42 padded out long enough for the heap] [second 5 padded out long enough for the heap] [replacement 7 padded out long enough for the heap]
+```
+
+<!-- test: a-merged-tuple-copy-of-a-module-let-field-is-writable -->
+### A trivial tuple read out of a module `let` and copied at a merge is a fresh, writable record
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Pairing
+	export var pair as (Num, Num)
+
+	static function create() returns Self
+		return Self{pair: (1, 2)}
+	end 'create'
+end 'Pairing'
+
+let Shared = Pairing.create()
+
+function fallback() returns (Num, Num)
+	return (7, 8)
+end 'fallback'
+
+function pick(c bool) returns Num
+	var t = Shared.pair if c else fallback()
+	t.1 = 99
+	return t.1
+end 'pick'
+
+function main() returns ExitCode
+	let n = pick(true)
+	print("t.1={n} shared.1={Shared.pair.1}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+t.1=99 shared.1=2
+```
+
+<!-- test: a-merged-tuple-copy-of-a-let-field-is-writable -->
+### A trivial tuple read out of a `let` field and copied at a merge is a fresh, writable record
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Pairing
+	export let pair as (Num, Num)
+
+	static function create() returns Self
+		return Self{pair: (1, 2)}
+	end 'create'
+end 'Pairing'
+
+function fallback() returns (Num, Num)
+	return (7, 8)
+end 'fallback'
+
+function pick(p Pairing, c bool) returns Num
+	var t = p.pair if c else fallback()
+	t.1 = 99
+	return t.1
+end 'pick'
+
+function main() returns ExitCode
+	let p = Pairing.create()
+	let n = pick(p, c: true)
+	print("t.1={n} p.1={p.pair.1}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+t.1=99 p.1=2
+```
+
+<!-- test: a-merged-tuple-copy-of-a-module-let-field-reassigned-is-writable -->
+### … and assigned to an existing `var` rather than declaring one
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Pairing
+	export var pair as (Num, Num)
+
+	static function create() returns Self
+		return Self{pair: (1, 2)}
+	end 'create'
+end 'Pairing'
+
+let Shared = Pairing.create()
+
+function fallback() returns (Num, Num)
+	return (7, 8)
+end 'fallback'
+
+function pick(c bool) returns Num
+	var t = fallback()
+	t = Shared.pair if c else fallback()
+	t.1 = 99
+	return t.1
+end 'pick'
+
+function main() returns ExitCode
+	let n = pick(true)
+	print("t.1={n} shared.1={Shared.pair.1}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+t.1=99 shared.1=2
+```
+
+<!-- test: a-let-field-array-through-a-merge-into-a-writing-callee-is-refused -->
+### A `let` field's array handed through a merge to a callee that writes it is refused, as the bare read is
+```maxon
+typealias Count = int(0 to 1000)
+typealias CountArray = Array with Count
+
+type Holder
+	export let items as CountArray
+
+	static function create() returns Self
+		return Self{items: [1]}
+	end 'create'
+end 'Holder'
+
+function grow(a CountArray)
+	a.push(2)
+end 'grow'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	var other = CountArray.create()
+	let c = h.items.count() == 1
+	grow(h.items if c else other)
+	print("{h.items.count()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:21:2: cannot pass 'h', which is read-only (a `let` binding), to a function that writes parameter 'a' (in main); pass a clone()
+```
+
+<!-- test: a-generic-async-last-argument-read-survives-a-default-argument-rebinding-its-storage -->
+### A generic function's `async` last argument survives a default argument that rebinds the storage it was read from
+```maxon
+type Holder
+	export var label as String
+
+	static function create(label String) returns Self
+		return Self{label: label}
+	end 'create'
+end 'Holder'
+
+var current = Holder.create("placeholder")
+
+function rebindCurrent() returns String
+	current = Holder.create("replacement {7} padded out long enough for the heap")
+	return "second {5} padded out long enough for the heap"
+end 'rebindCurrent'
+
+function join(first T, second String = rebindCurrent()) uses T returns T where T is Comparable
+	let filler = "filler {1} padded out long enough for the heap"
+
+	if filler.byteLength() == 0 'never'
+		print(second)
+	end 'never'
+
+	return first
+end 'join'
+
+function main() returns ExitCode
+	current = Holder.create("original {40 + 2} padded out long enough for the heap")
+	let p = async join(current.label)
+	let text = await p
+	print("[{text}] [{current.label}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[original 42 padded out long enough for the heap] [replacement 7 padded out long enough for the heap]
+```
+
+<!-- test: a-let-fields-record-merged-into-a-var-is-not-writable -->
+### A `let` field's record merged into a `var` is not a writable name for it
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Inner
+	export var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export let inner as Inner
+
+	static function create() returns Self
+		return Self{inner: Inner.create(1)}
+	end 'create'
+end 'Outer'
+
+function fresh() returns Inner
+	return Inner.create(7)
+end 'fresh'
+
+function main() returns ExitCode
+	let h = Outer.create()
+	let c = h.inner.n == 1
+	var t = h.inner if c else fresh()
+	t.n = 5
+	print("{h.inner.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:27:6: cannot assign a value, which may share storage with a `let` field, to mutable binding 't'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: a-module-let-fields-record-returned-through-a-merge-is-not-writable -->
+### A module `let`'s field record returned through a merge is not writable by the caller
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Inner
+	export var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export let inner as Inner
+
+	static function create() returns Self
+		return Self{inner: Inner.create(1)}
+	end 'create'
+end 'Outer'
+
+let Shared = Outer.create()
+
+function fresh() returns Inner
+	return Inner.create(7)
+end 'fresh'
+
+function pick(c bool) returns Inner
+	let v = Shared.inner if c else fresh()
+	return v
+end 'pick'
+
+function main() returns ExitCode
+	var r = pick(true)
+	r.n = 5
+	print("{Shared.inner.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:32:6: cannot assign a value, which may share storage with a `let` field, to mutable binding 'r'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: a-let-fields-record-returned-through-a-merge-is-not-writable -->
+### A `let` field's record returned through a merge is not writable by the caller
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Inner
+	export var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export let inner as Inner
+
+	static function create() returns Self
+		return Self{inner: Inner.create(1)}
+	end 'create'
+end 'Outer'
+
+function fresh() returns Inner
+	return Inner.create(7)
+end 'fresh'
+
+function pick(h Outer, c bool) returns Inner
+	return h.inner if c else fresh()
+end 'pick'
+
+function main() returns ExitCode
+	let h = Outer.create()
+	var r = pick(h, c: true)
+	r.n = 5
+	print("{h.inner.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:30:6: cannot assign a value, which may share storage with a `let` field, to mutable binding 'r'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: a-let-fields-record-held-as-a-struct-literal-field-into-a-var-field-is-refused -->
+### A `let` field's record held across a struct literal and stored into a `var` field is refused, as the bare store is
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Inner
+	export var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export let inner as Inner
+
+	static function create() returns Self
+		return Self{inner: Inner.create(1)}
+	end 'create'
+end 'Outer'
+
+function label() returns String
+	return "x"
+end 'label'
+
+type Pair
+	export var first as Inner
+	export var label as String
+
+	static function from(h Outer) returns Self
+		return Self{first: h.inner, label: label()}
+	end 'from'
+end 'Pair'
+
+function main() returns ExitCode
+	let h = Outer.create()
+	var p = Pair.from(h)
+	p.first.n = 5
+	print("{h.inner.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:29:15: cannot store a value read out of a `let` field into mutable place 'Pair.first'; use clone()
+```
+
+<!-- test: a-let-fields-string-merged-into-a-var-is-a-writable-copy -->
+### A `let` field's `String` merged into a `var` is a copy the `var` may grow
+```maxon
+type Holder
+	export let text as String
+
+	static function create(text String) returns Self
+		return Self{text: text}
+	end 'create'
+end 'Holder'
+
+function fresh() returns String
+	return "fresh {7}"
+end 'fresh'
+
+function pick(h Holder, c bool) returns String
+	return h.text if c else fresh()
+end 'pick'
+
+function main() returns ExitCode
+	let h = Holder.create("original {42}")
+	let c = h.text.byteLength() > 0
+	var s = h.text if c else fresh()
+	s.append("!")
+	var r = pick(h, c: c)
+	r.append("?")
+	print("{s} {r} {h.text}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+original 42! original 42? original 42
+```
+
+<!-- test: a-module-let-record-merged-into-a-let-is-readable-and-passed-on -->
+### A module `let`'s record merged into a `let` reads and passes to a reading callee
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Inner
+	export var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export let inner as Inner
+
+	static function create() returns Self
+		return Self{inner: Inner.create(1)}
+	end 'create'
+end 'Outer'
+
+let Shared = Outer.create()
+
+function fresh() returns Inner
+	return Inner.create(7)
+end 'fresh'
+
+function show(i Inner) returns Num
+	return i.n
+end 'show'
+
+function pick(c bool) returns Inner
+	return Shared.inner if c else fresh()
+end 'pick'
+
+function main() returns ExitCode
+	let c = Shared.inner.n == 1
+	let v = Shared.inner if c else fresh()
+	let w = pick(c)
+	print("{show(v)} {show(w)} {show(pick(not c))}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 1 7
+```
+
+<!-- test: let-field-string-rebound-into-a-by-reference-var-may-grow -->
+### Review: a `let` field's `String` rebound into a by-reference `var` is a copy the `var` may grow
+```maxon
+type Holder
+	export let text as String
+
+	static function create(text String) returns Self
+		return Self{text: text}
+	end 'create'
+end 'Holder'
+
+function replace(s String)
+	s = "{s}+"
+end 'replace'
+
+function main() returns ExitCode
+	let h = Holder.create("original {42}")
+	var s = "start {0}"
+	replace(s)
+	s = h.text
+	s.append("!")
+	replace(s)
+	print("{s} {h.text}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+original 42!+ original 42
+```
+
+<!-- test: module-let-string-rebound-into-a-by-reference-var-may-grow -->
+### Review: a module `let`'s `String` field rebound into a by-reference `var` is a copy the `var` may grow
+```maxon
+type Holder
+	export let text as String
+
+	static function create(text String) returns Self
+		return Self{text: text}
+	end 'create'
+end 'Holder'
+
+let Shared = Holder.create("original 42")
+
+function replace(s String)
+	s = "{s}+"
+end 'replace'
+
+function main() returns ExitCode
+	var s = "start {0}"
+	replace(s)
+	s = Shared.text
+	s.append("!")
+	replace(s)
+	print("{s} {Shared.text}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+original 42!+ original 42
+```
+
+<!-- test: let-field-immutable-record-rebound-into-a-by-reference-var-may-be-rebound -->
+### Review: a `let` field's immutable record rebound into a by-reference `var` may be rebound by the callee
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Point
+	export let n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Point'
+
+type Outer
+	export let inner as Point
+
+	static function create() returns Self
+		return Self{inner: Point.create(1)}
+	end 'create'
+end 'Outer'
+
+function bump(p Point)
+	p = Point.create(p.n + 1)
+end 'bump'
+
+function main() returns ExitCode
+	let h = Outer.create()
+	var q = Point.create(0)
+	bump(q)
+	q = h.inner
+	bump(q)
+	print("{q.n} {h.inner.n}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 1
+```
+
+<!-- test: module-let-immutable-record-rebound-into-a-by-reference-var-may-be-rebound -->
+### Review: a module `let`'s immutable record rebound into a by-reference `var` may be rebound by the callee
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Point
+	export let n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Point'
+
+let Origin = Point.create(1)
+
+function bump(p Point)
+	p = Point.create(p.n + 1)
+end 'bump'
+
+function main() returns ExitCode
+	var q = Point.create(0)
+	bump(q)
+	q = Origin
+	bump(q)
+	print("{q.n} {Origin.n}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 1
+```
+
+<!-- test: a-var-cannot-take-a-let-fields-writable-record-so-no-by-reference-callee-writes-through-it -->
+### A `var` is refused a `let` field's writable record at the rebind, before any by-reference callee could write through it
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Point
+	export var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Point'
+
+type Outer
+	export let inner as Point
+
+	static function create() returns Self
+		return Self{inner: Point.create(1)}
+	end 'create'
+end 'Outer'
+
+function overwrite(p Point)
+	p.n = 9
+	p = Point.create(p.n + 1)
+end 'overwrite'
+
+function main() returns ExitCode
+	let h = Outer.create()
+	var q = Point.create(0)
+	overwrite(q)
+	q = h.inner
+	overwrite(q)
+	print("{q.n} {h.inner.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:29:2: cannot assign a value read out of a `let` field to mutable binding 'q'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: module-let-merged-into-a-var-then-a-field-bound-survives-the-var-rebinding -->
+### Review r8: a field of a `var` merged from a module `let` or a fresh record survives the `var` being rebound
+```maxon
+type Item
+	export let text as String
+
+	static function create(text String) returns Self
+		return Self{text: text}
+	end 'create'
+end 'Item'
+
+type Wrap
+	export let item as Item
+
+	static function create(text String) returns Self
+		return Self{item: Item.create(text)}
+	end 'create'
+end 'Wrap'
+
+let Origin = Wrap.create("origin")
+
+function main() returns ExitCode
+	let c = Origin.item.text.byteLength() == 99
+	var w = Origin if c else Wrap.create("fresh {7} padded out long enough for the heap")
+	let e = w.item
+	w = Wrap.create("replacement {8} padded out long enough for the heap")
+	print("{e.text} {w.item.text}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+fresh 7 padded out long enough for the heap replacement 8 padded out long enough for the heap
+```
+
+<!-- test: by-reference-var-whose-later-arm-stores-a-module-let-then-a-field-bound-survives-the-rebind -->
+### Review r8: a by-reference `var` whose LATER arm stores a module `let`'s record keeps a bound field alive across a rebind
+```maxon
+type Item
+	export let text as String
+
+	static function create(text String) returns Self
+		return Self{text: text}
+	end 'create'
+end 'Item'
+
+type Wrap
+	export let item as Item
+
+	static function create(text String) returns Self
+		return Self{item: Item.create(text)}
+	end 'create'
+end 'Wrap'
+
+let Origin = Wrap.create("origin")
+
+function rebind(w Wrap)
+	w = Wrap.create("rebound {3} padded out long enough for the heap")
+end 'rebind'
+
+function main() returns ExitCode
+	let c = Origin.item.text.byteLength() == 6
+	var w = Wrap.create("start {0} padded out long enough for the heap")
+	rebind(w)
+
+	if c 'fresh'
+		w = Wrap.create("fresh {7} padded out long enough for the heap")
+	end 'fresh' else 'shared'
+		w = Origin
+	end 'shared'
+
+	let e = w.item
+	w = Wrap.create("replacement {8} padded out long enough for the heap")
+	print("{e.text} {w.item.text}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+fresh 7 padded out long enough for the heap replacement 8 padded out long enough for the heap
+```
+
+<!-- test: by-reference-var-whose-later-arm-stores-a-module-let-in-a-loop-then-a-field-bound-survives-the-rebind -->
+### Review r8: … and when the stores sit in a loop body
+```maxon
+type Item
+	export let text as String
+
+	static function create(text String) returns Self
+		return Self{text: text}
+	end 'create'
+end 'Item'
+
+type Wrap
+	export let item as Item
+
+	static function create(text String) returns Self
+		return Self{item: Item.create(text)}
+	end 'create'
+end 'Wrap'
+
+let Origin = Wrap.create("origin")
+
+function rebind(w Wrap)
+	w = Wrap.create("rebound {3} padded out long enough for the heap")
+end 'rebind'
+
+function main() returns ExitCode
+	var w = Wrap.create("start {0} padded out long enough for the heap")
+	rebind(w)
+
+	for i in 0 upto 2 'each'
+		if i == 1 'last'
+			w = Wrap.create("fresh {7} padded out long enough for the heap")
+		end 'last' else 'first'
+			w = Origin
+		end 'first'
+	end 'each'
+
+	let e = w.item
+	w = Wrap.create("replacement {8} padded out long enough for the heap")
+	print("{e.text} {w.item.text}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+fresh 7 padded out long enough for the heap replacement 8 padded out long enough for the heap
+```
+
+<!-- test: let-field-string-in-one-arm-of-a-by-reference-var-grown-by-a-callee -->
+### Review r8: a `let` field's `String` stored into a by-reference `var` on the LATER arm is a copy a callee may grow
+```maxon
+type Holder
+	export let text as String
+
+	static function create(text String) returns Self
+		return Self{text: text}
+	end 'create'
+end 'Holder'
+
+function grow(s String)
+	s.append("+")
+end 'grow'
+
+function main() returns ExitCode
+	let h = Holder.create("original {42} padded out long enough for the heap")
+	let c = h.text.byteLength() == 0
+	var s = "start {0}"
+	grow(s)
+
+	if c 'fresh'
+		s = "fresh {7}"
+	end 'fresh' else 'shared'
+		s = h.text
+	end 'shared'
+
+	grow(s)
+	print("{s} | {h.text}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+original 42 padded out long enough for the heap+ | original 42 padded out long enough for the heap
+```
+
+<!-- test: let-field-string-in-the-earlier-arm-of-a-by-reference-var-grown-by-a-callee -->
+### Review r8: … and on the EARLIER arm, with a clean store after it
+```maxon
+type Holder
+	export let text as String
+
+	static function create(text String) returns Self
+		return Self{text: text}
+	end 'create'
+end 'Holder'
+
+function grow(s String)
+	s.append("+")
+end 'grow'
+
+function main() returns ExitCode
+	let h = Holder.create("original {42} padded out long enough for the heap")
+	let c = h.text.byteLength() > 0
+	var s = "start {0}"
+	grow(s)
+
+	if c 'shared'
+		s = h.text
+	end 'shared' else 'fresh'
+		s = "fresh {7}"
+	end 'fresh'
+
+	grow(s)
+	print("{s} | {h.text}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+original 42 padded out long enough for the heap+ | original 42 padded out long enough for the heap
+```
+
+<!-- test: module-let-string-in-the-earlier-arm-of-a-by-reference-var-grown-by-a-callee -->
+### Review r8: a module `let`'s `String` on the EARLIER arm of a by-reference `var`, grown by a callee
+```maxon
+type Holder
+	export let text as String
+
+	static function create(text String) returns Self
+		return Self{text: text}
+	end 'create'
+end 'Holder'
+
+let Shared = Holder.create("original 42 padded out long enough for the heap")
+
+function grow(s String)
+	s.append("+")
+end 'grow'
+
+function main() returns ExitCode
+	let c = Shared.text.byteLength() > 0
+	var s = "start {0}"
+	grow(s)
+
+	if c 'shared'
+		s = Shared.text
+	end 'shared' else 'fresh'
+		s = "fresh {7}"
+	end 'fresh'
+
+	grow(s)
+	print("{s} | {Shared.text}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+original 42 padded out long enough for the heap+ | original 42 padded out long enough for the heap
+```
+
+<!-- test: control-two-fresh-records-merged-into-a-var-then-a-field-bound-survives-the-var-rebinding -->
+### Review r8: control — two fresh records merged into a `var`, a bound field survives the `var` being rebound
+```maxon
+type Item
+	export let text as String
+
+	static function create(text String) returns Self
+		return Self{text: text}
+	end 'create'
+end 'Item'
+
+type Wrap
+	export let item as Item
+
+	static function create(text String) returns Self
+		return Self{item: Item.create(text)}
+	end 'create'
+end 'Wrap'
+
+function main() returns ExitCode
+	let probe = Wrap.create("origin")
+	let c = probe.item.text.byteLength() == 99
+	var w = Wrap.create("other {1} padded out long enough for the heap") if c else Wrap.create("fresh {7} padded out long enough for the heap")
+	let e = w.item
+	w = Wrap.create("replacement {8} padded out long enough for the heap")
+	print("{e.text} {w.item.text}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+fresh 7 padded out long enough for the heap replacement 8 padded out long enough for the heap
+```
+
+<!-- test: module-let-rebound-into-a-var-under-an-if-then-a-field-bound-survives-the-var-rebinding -->
+### Review r8: a `var` rebound to a module `let`'s record under an `if`, a bound field survives the `var` being rebound
+```maxon
+type Item
+	export let text as String
+
+	static function create(text String) returns Self
+		return Self{text: text}
+	end 'create'
+end 'Item'
+
+type Wrap
+	export let item as Item
+
+	static function create(text String) returns Self
+		return Self{item: Item.create(text)}
+	end 'create'
+end 'Wrap'
+
+let Origin = Wrap.create("origin")
+
+function main() returns ExitCode
+	let c = Origin.item.text.byteLength() == 99
+	var w = Wrap.create("fresh {7} padded out long enough for the heap")
+
+	if c 'shared'
+		w = Origin
+	end 'shared'
+
+	let e = w.item
+	w = Wrap.create("replacement {8} padded out long enough for the heap")
+	print("{e.text} {w.item.text}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+fresh 7 padded out long enough for the heap replacement 8 padded out long enough for the heap
+```
+
+<!-- test: module-let-writable-record-on-one-arm-of-a-by-reference-var-is-refused -->
+### Review r8: a module `let`'s writable record stored into a by-reference `var` on the EARLIER arm is refused at the store
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Point
+	export var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Point'
+
+let Origin = Point.create(1)
+
+function overwrite(p Point)
+	p.n = 9
+	p = Point.create(p.n + 1)
+end 'overwrite'
+
+function main() returns ExitCode
+	let c = Origin.n == 1
+	var q = Point.create(0)
+	overwrite(q)
+
+	if c 'shared'
+		q = Origin
+	end 'shared' else 'fresh'
+		q = Point.create(2)
+	end 'fresh'
+
+	overwrite(q)
+	print("{q.n} {Origin.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:25:3: cannot assign a value read out of a module-level `let` to mutable binding 'q'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: let-payload-record-on-one-arm-of-a-by-reference-var-is-refused -->
+### Review r8: a `let` union payload's writable record stored into a by-reference `var` on the EARLIER arm is refused at the store
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Point
+	export var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Point'
+
+union Slot
+	full(point Point)
+	empty
+end 'Slot'
+
+type Holder
+	export let slot as Slot
+
+	static function create() returns Self
+		return Self{slot: Slot.full(Point.create(1))}
+	end 'create'
+end 'Holder'
+
+function overwrite(p Point)
+	p.n = 9
+	p = Point.create(p.n + 1)
+end 'overwrite'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	var q = Point.create(0)
+	overwrite(q)
+
+	match h.slot 'slot'
+		full(point) then q = point
+		empty then q = Point.create(2)
+	end 'slot'
+
+	overwrite(q)
+
+	match h.slot 'after'
+		full(point) then print("{q.n} {point.n}\n")
+		empty then print("empty\n")
+	end 'after'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:36:20: cannot assign a value read out of a `let` field to mutable binding 'q'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: let-payload-record-on-the-later-arm-of-a-by-reference-var-is-refused -->
+### Review r8: … and on the LATER arm, with the clean store before it
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Point
+	export var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Point'
+
+union Slot
+	full(point Point)
+	empty
+end 'Slot'
+
+type Holder
+	export let slot as Slot
+
+	static function create() returns Self
+		return Self{slot: Slot.full(Point.create(1))}
+	end 'create'
+end 'Holder'
+
+function overwrite(p Point)
+	p.n = 9
+	p = Point.create(p.n + 1)
+end 'overwrite'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	var q = Point.create(0)
+	overwrite(q)
+
+	match h.slot 'slot'
+		empty then q = Point.create(2)
+		full(point) then q = point
+	end 'slot'
+
+	overwrite(q)
+
+	match h.slot 'after'
+		full(point) then print("{q.n} {point.n}\n")
+		empty then print("empty\n")
+	end 'after'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:37:20: cannot assign a value read out of a `let` field to mutable binding 'q'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: let-payload-record-into-a-plain-var-then-written -->
+### Review r8: a `let` field's union payload record assigned to a plain `var` in a `match` arm, then written through the `var`
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Point
+	export var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Point'
+
+union Slot
+	full(point Point)
+	empty
+end 'Slot'
+
+type Holder
+	export let slot as Slot
+
+	static function create() returns Self
+		return Self{slot: Slot.full(Point.create(1))}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	var q = Point.create(0)
+
+	match h.slot 'slot'
+		full(point) then q = point
+		empty then q = Point.create(2)
+	end 'slot'
+
+	q.n = 9
+
+	match h.slot 'after'
+		full(point) then print("{q.n} {point.n}\n")
+		empty then print("empty\n")
+	end 'after'
+
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:30:20: cannot assign a value read out of a `let` field to mutable binding 'q'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: let-field-array-element-into-a-by-reference-var-written-by-a-callee -->
+### Review r8: an element of a `let` field's array assigned to a by-reference `var` in a loop, then written by a callee
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Point
+	export var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Point'
+
+typealias Points = Array with Point
+
+type Holder
+	export let points as Points
+
+	static function create() returns Self
+		var points = Points.create()
+		points.push(Point.create(1))
+		return Self{points: points}
+	end 'create'
+end 'Holder'
+
+function overwrite(p Point)
+	p.n = 9
+	p = Point.create(p.n + 1)
+end 'overwrite'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	var q = Point.create(0)
+	overwrite(q)
+
+	for point in h.points 'each'
+		q = point
+	end 'each'
+
+	overwrite(q)
+	let first = try h.points.get(0) otherwise panic("one point")
+	print("{q.n} {first.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:35:3: cannot assign a value read out of a `let` field to mutable binding 'q'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: view-of-a-let-field-into-a-by-reference-var-written-by-a-callee -->
+### Review r8: a `view` of a `let` field's record assigned to a by-reference `var`, then written by a callee
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Point
+	export var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Point'
+
+type Holder
+	export let inner as Point
+
+	static function create() returns Self
+		return Self{inner: Point.create(1)}
+	end 'create'
+end 'Holder'
+
+function overwrite(p Point)
+	p.n = 9
+	p = Point.create(p.n + 1)
+end 'overwrite'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	var q = Point.create(0)
+	overwrite(q)
+	view v = h.inner
+	q = v
+	overwrite(q)
+	print("{q.n} {h.inner.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:30:2: cannot assign a value read out of a `let` field to mutable binding 'q'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: match-merge-of-a-module-let-and-a-fresh-record-field-survives-the-rebind -->
+### Review r9: a field of a `var` merged by a `match` from a module `let` or a fresh record survives the `var` being rebound
+```maxon
+enum Pick
+	first
+	second
+end 'Pick'
+
+type Item
+	export let text as String
+
+	static function create(text String) returns Self
+		return Self{text: text}
+	end 'create'
+end 'Item'
+
+type Wrap
+	export let item as Item
+
+	static function create(text String) returns Self
+		return Self{item: Item.create(text)}
+	end 'create'
+end 'Wrap'
+
+let Origin = Wrap.create("origin")
+
+function choose(fresh bool) returns Pick
+	return Pick.second if fresh else Pick.first
+end 'choose'
+
+function main() returns ExitCode
+	let c = Origin.item.text.byteLength() == 6
+	var w = match choose(c) 'pick'
+		first gives Origin
+		second gives Wrap.create("fresh {7} padded out long enough for the heap")
+	end 'pick'
+	let e = w.item
+	w = Wrap.create("replacement {8} padded out long enough for the heap")
+	print("{e.text} {w.item.text}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+fresh 7 padded out long enough for the heap replacement 8 padded out long enough for the heap
+```
+
+<!-- test: try-otherwise-merge-of-a-fresh-record-and-a-module-let-field-survives-the-rebind -->
+### Review r9: a field of a `var` merged by `try … otherwise` from a fresh record or a module `let` survives the `var` being rebound
+```maxon
+enum Boom implements Error
+	bad
+end 'Boom'
+
+type Item
+	export let text as String
+
+	static function create(text String) returns Self
+		return Self{text: text}
+	end 'create'
+end 'Item'
+
+type Wrap
+	export let item as Item
+
+	static function create(text String) returns Self
+		return Self{item: Item.create(text)}
+	end 'create'
+end 'Wrap'
+
+let Origin = Wrap.create("origin")
+
+function make(fail bool) returns Wrap throws Boom
+	if fail 'boom'
+		throw Boom.bad
+	end 'boom'
+
+	return Wrap.create("fresh {7} padded out long enough for the heap")
+end 'make'
+
+function main() returns ExitCode
+	let c = Origin.item.text.byteLength() == 99
+	var w = try make(c) otherwise Origin
+	let e = w.item
+	w = Wrap.create("replacement {8} padded out long enough for the heap")
+	print("{e.text} {w.item.text}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+fresh 7 padded out long enough for the heap replacement 8 padded out long enough for the heap
+```
+
+<!-- test: ternary-of-two-module-lets-field-survives-the-rebind -->
+### Review r9: a field of a `var` merged from two module `let`s survives the `var` being rebound
+```maxon
+type Item
+	export let text as String
+
+	static function create(text String) returns Self
+		return Self{text: text}
+	end 'create'
+end 'Item'
+
+type Wrap
+	export let item as Item
+
+	static function create(text String) returns Self
+		return Self{item: Item.create(text)}
+	end 'create'
+end 'Wrap'
+
+let Origin = Wrap.create("origin")
+let Other = Wrap.create("other")
+
+function main() returns ExitCode
+	let c = Origin.item.text.byteLength() == 6
+	var w = Origin if c else Other
+	let e = w.item
+	w = Wrap.create("replacement {8} padded out long enough for the heap")
+	print("{e.text} {w.item.text}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+origin replacement 8 padded out long enough for the heap
+```
+
+<!-- test: match-merge-of-a-module-let-into-a-var-then-written-is-refused -->
+### Review r9: a `match` merge of a module `let`'s writable record into a `var`, then written through the `var`, is refused
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+enum Pick
+	first
+	second
+end 'Pick'
+
+type Point
+	export var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Point'
+
+let Origin = Point.create(1)
+
+function choose(fresh bool) returns Pick
+	return Pick.second if fresh else Pick.first
+end 'choose'
+
+function main() returns ExitCode
+	let c = Origin.n == 7
+	var q = match choose(c) 'pick'
+		first gives Origin
+		second gives Point.create(2)
+	end 'pick'
+	q.n = 9
+	print("{q.n} {Origin.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:25:6: cannot assign a value read out of a module-level `let` to mutable binding 'q'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: try-otherwise-merge-of-a-module-let-into-a-var-then-written-is-refused -->
+### Review r9: a `try … otherwise` merge of a module `let`'s writable record into a `var`, then written through the `var`, is refused
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+enum Boom implements Error
+	bad
+end 'Boom'
+
+type Point
+	export var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Point'
+
+let Origin = Point.create(1)
+
+function make(fail bool) returns Point throws Boom
+	if fail 'boom'
+		throw Boom.bad
+	end 'boom'
+
+	return Point.create(2)
+end 'make'
+
+function main() returns ExitCode
+	let c = Origin.n == 1
+	var q = try make(c) otherwise Origin
+	q.n = 9
+	print("{q.n} {Origin.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:28:6: cannot assign a value read out of a module-level `let` to mutable binding 'q'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: statement-match-rebinding-a-var-to-a-module-let-or-a-fresh-record-field-survives-the-rebind -->
+### Review r9: a `var` rebound by a statement `match` to a module `let` or a fresh record, a bound field survives the `var` being rebound
+```maxon
+enum Pick
+	first
+	second
+end 'Pick'
+
+type Item
+	export let text as String
+
+	static function create(text String) returns Self
+		return Self{text: text}
+	end 'create'
+end 'Item'
+
+type Wrap
+	export let item as Item
+
+	static function create(text String) returns Self
+		return Self{item: Item.create(text)}
+	end 'create'
+end 'Wrap'
+
+let Origin = Wrap.create("origin")
+
+function choose(fresh bool) returns Pick
+	return Pick.second if fresh else Pick.first
+end 'choose'
+
+function main() returns ExitCode
+	let c = Origin.item.text.byteLength() == 6
+	var w = Wrap.create("start {0} padded out long enough for the heap")
+
+	match choose(c) 'pick'
+		first then w = Origin
+		second then w = Wrap.create("fresh {7} padded out long enough for the heap")
+	end 'pick'
+
+	let e = w.item
+	w = Wrap.create("replacement {8} padded out long enough for the heap")
+	print("{e.text} {w.item.text}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+fresh 7 padded out long enough for the heap replacement 8 padded out long enough for the heap
+```
+
+<!-- test: try-otherwise-merge-of-a-module-let-element-and-a-fresh-record-into-a-let-runs -->
+### Review r10: the same merge into a `let` is accepted and reads the element on the OK edge and the fallback on the error edge
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Point
+	export var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Point'
+
+let Origins = [Point.create(1)]
+
+function pick(index ElementIndex) returns Num
+	let found = try Origins.get(index) otherwise Point.create(2)
+	return found.n
+end 'pick'
+
+function main() returns ExitCode
+	print("{pick(0)} {pick(5)} {Origins.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 2 1
+```
+
+<!-- test: for-in-element-of-a-module-let-array-into-a-var-then-written-is-refused -->
+### Review r10: an element of a module `let` array bound by `for … in`, assigned to a `var` and written, is refused
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Point
+	export var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Point'
+
+let Origins = [Point.create(1)]
+
+function main() returns ExitCode
+	var q = Point.create(0)
+
+	for point in Origins 'each'
+		q = point
+	end 'each'
+
+	q.n = 9
+	print("{q.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:18:3: cannot assign a value read out of a module-level `let` to mutable binding 'q'; use 'let' instead of 'var', or use clone()
+```

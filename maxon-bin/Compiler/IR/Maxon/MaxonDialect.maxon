@@ -1485,10 +1485,55 @@ export enum HoldKind
 	loopElement
 	interpolationPart
 	binaryOperand
+	listOperand
+	writeTarget
+	handedOffOperand
+	identityOperand
+	placeOperand
+	convertedOperand
+	sharedOperand
+
+	export function mayReplaceItsSource() returns bool
+		return match self 'kind'
+			callOperand or
+			binaryOperand or
+			listOperand or
+			sharedOperand gives true
+			writeTarget or
+			handedOffOperand or
+			identityOperand or
+			placeOperand or
+			convertedOperand gives false
+			binding or
+			calleeValue or
+			loopSource or
+			loopElement or
+			interpolationPart panic("HoldKind.mayReplaceItsSource: a {self.name} hold is minted by its own door, never by an operand list")
+		end 'kind'
+	end 'mayReplaceItsSource'
+
+	export function has(policy HoldPolicy) returns bool
+		return match self 'kind'
+			handedOffOperand or
+			sharedOperand gives policy == HoldPolicy.survivesTheHandOff
+			listOperand gives policy == HoldPolicy.adoptedByAnOpaqueSlot
+			binding or
+			callOperand or
+			calleeValue or
+			loopSource or
+			loopElement or
+			interpolationPart or
+			binaryOperand or
+			writeTarget or
+			identityOperand or
+			placeOperand or
+			convertedOperand gives false
+		end 'kind'
+	end 'has'
 end 'HoldKind'
 
 // @generated library-cache begin
-let CacheCasesHoldKind = [HoldKind.binding, HoldKind.callOperand, HoldKind.calleeValue, HoldKind.loopSource, HoldKind.loopElement, HoldKind.interpolationPart, HoldKind.binaryOperand]
+let CacheCasesHoldKind = [HoldKind.binding, HoldKind.callOperand, HoldKind.calleeValue, HoldKind.loopSource, HoldKind.loopElement, HoldKind.interpolationPart, HoldKind.binaryOperand, HoldKind.listOperand, HoldKind.writeTarget, HoldKind.handedOffOperand, HoldKind.identityOperand, HoldKind.placeOperand, HoldKind.convertedOperand, HoldKind.sharedOperand]
 
 function cacheReadHoldKind(reader LibraryCacheReader) returns HoldKind throws LibraryCacheDamage
 	let ordinal = try reader.unsigned()
@@ -1552,6 +1597,11 @@ export function cacheEnumTablesAgreeInCompilerIRMaxonMaxonDialect() returns bool
 end 'cacheEnumTablesAgreeInCompilerIRMaxonMaxonDialect'
 
 // @generated library-cache end
+
+export enum HoldPolicy
+	survivesTheHandOff
+	adoptedByAnOpaqueSlot
+end 'HoldPolicy'
 
 // ⭐⭐ **WHICH IMAGE OBJECT ONE POINTER SLOT OF AN IMAGED BOX ADDRESSES.** A slot's bytes are an ADDRESS,
 // and the address of one `.rdata` object written into another is a data-to-data relocation — so a slot is
@@ -3433,11 +3483,16 @@ export union WriteBlame
 	// (`whenRebinding`).
 	rebindOnly(let name ByteArray, holder WriteBlameHolder)
 
+	// A `var` cell whose occupant is read-only: a callee that writes through the record is blamed, and
+	// one that only rebinds its by-reference parameter is not (`whenOnlyRebound`).
+	writeOnly(let name ByteArray, holder WriteBlameHolder)
+
 	export function isBlamed() returns bool
 		return match self 'blame'
 			unblamed or
 			rebindOnly gives false
-			blamed gives true
+			blamed or
+			writeOnly gives true
 		end 'blame'
 	end 'isBlamed'
 
@@ -3446,6 +3501,7 @@ export union WriteBlame
 			unblamed or
 			rebindOnly gives false
 			blamed(_, holder) gives holder == WriteBlameHolder.closure
+			writeOnly(_, holder) gives holder == WriteBlameHolder.closure
 		end 'blame'
 	end 'isHeldByAClosure'
 
@@ -3454,6 +3510,7 @@ export union WriteBlame
 			unblamed or
 			rebindOnly then throw WriteBlameError.unblamed
 			blamed(name, _) then return name
+			writeOnly(name, _) then return name
 		end 'blame'
 	end 'blamedName'
 
@@ -3462,13 +3519,15 @@ export union WriteBlame
 			unblamed or
 			rebindOnly then throw WriteBlameError.unblamed
 			blamed(_, holder) then return holder
+			writeOnly(_, holder) then return holder
 		end 'blame'
 	end 'blamedHolder'
 
 	export function isRebindOnly() returns bool
 		return match self 'blame'
 			unblamed or
-			blamed gives false
+			blamed or
+			writeOnly gives false
 			rebindOnly gives true
 		end 'blame'
 	end 'isRebindOnly'
@@ -3479,9 +3538,19 @@ export union WriteBlame
 		return match self 'blame'
 			unblamed gives WriteBlame.unblamed
 			blamed(name, holder) gives WriteBlame.blamed(name, holder: holder)
+			writeOnly(name, holder) gives WriteBlame.blamed(name, holder: holder)
 			rebindOnly(name, holder) gives WriteBlame.blamed(name, holder: WriteBlameHolder.loopVariable if holder == WriteBlameHolder.forElement else holder)
 		end 'blame'
 	end 'whenRebinding'
+
+	export function whenOnlyRebound() returns WriteBlame
+		return match self 'blame'
+			writeOnly gives WriteBlame.unblamed
+			unblamed or
+			blamed or
+			rebindOnly gives self
+		end 'blame'
+	end 'whenOnlyRebound'
 end 'WriteBlame'
 
 // @generated library-cache begin
@@ -3492,6 +3561,7 @@ export function cacheWriteWriteBlame(writer LibraryCacheWriter, value WriteBlame
 		unblamed then break
 		blamed(a0, a1) then cacheWriteWriteBlameBlamed(writer, a0: a0, a1: a1)
 		rebindOnly(a0, a1) then cacheWriteWriteBlameRebindOnly(writer, a0: a0, a1: a1)
+		writeOnly(a0, a1) then cacheWriteWriteBlameWriteOnly(writer, a0: a0, a1: a1)
 	end 'payload'
 end 'cacheWriteWriteBlame'
 
@@ -3505,6 +3575,11 @@ function cacheWriteWriteBlameRebindOnly(writer LibraryCacheWriter, a0 ByteArray,
 	writer.unsigned(a1.ordinal as CacheUnsigned)
 end 'cacheWriteWriteBlameRebindOnly'
 
+function cacheWriteWriteBlameWriteOnly(writer LibraryCacheWriter, a0 ByteArray, a1 WriteBlameHolder)
+	writer.bytes(a0)
+	writer.unsigned(a1.ordinal as CacheUnsigned)
+end 'cacheWriteWriteBlameWriteOnly'
+
 export function cacheReadWriteBlame(reader LibraryCacheReader) returns WriteBlame throws LibraryCacheDamage
 	let tag = try reader.unsigned()
 
@@ -3512,6 +3587,7 @@ export function cacheReadWriteBlame(reader LibraryCacheReader) returns WriteBlam
 		0 gives WriteBlame.unblamed
 		1 gives try cacheReadWriteBlameBlamed(reader)
 		2 gives try cacheReadWriteBlameRebindOnly(reader)
+		3 gives try cacheReadWriteBlameWriteOnly(reader)
 		default throws LibraryCacheDamage.unknownTag(tag)
 	end 'case'
 end 'cacheReadWriteBlame'
@@ -3529,6 +3605,13 @@ function cacheReadWriteBlameRebindOnly(reader LibraryCacheReader) returns WriteB
 
 	return WriteBlame.rebindOnly(a0, holder: a1)
 end 'cacheReadWriteBlameRebindOnly'
+
+function cacheReadWriteBlameWriteOnly(reader LibraryCacheReader) returns WriteBlame throws LibraryCacheDamage
+	let a0 = try reader.bytes()
+	let a1 = try cacheReadWriteBlameHolder(reader)
+
+	return WriteBlame.writeOnly(a0, holder: a1)
+end 'cacheReadWriteBlameWriteOnly'
 
 // @generated library-cache end
 
