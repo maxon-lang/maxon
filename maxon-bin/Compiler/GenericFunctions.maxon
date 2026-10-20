@@ -481,21 +481,38 @@ end 'cacheReadGenericFunctionInstancesBySite'
 
 // @generated library-cache end
 
+// A requested instance is parsed in a later fold round by a fresh index, which knows only the
+// tuples a declaration spells; a tuple only a body spells reaches it through this, whatever order
+// the files parse in.
+export type RequestedTupleTypes
+	export let layouts as StructLayoutArray
+	export let footprint as ParseFootprint
+
+	export static function create(layouts StructLayoutArray, footprint ParseFootprint) returns Self
+		return Self{layouts: layouts, footprint: footprint}
+	end 'create'
+end 'RequestedTupleTypes'
+
+export typealias RequestedTupleTypesMap = Map with (ByteArray, RequestedTupleTypes)
+
 export type RequestedGenericInstances
 	export var byName as GenericFunctionInstanceMap
 	export var filed as InstantiatedByAParse
+	export var tuples as RequestedTupleTypesMap
 
 	export static function create() returns RequestedGenericInstances
-		return Self{byName: GenericFunctionInstanceMap.create(), filed: InstantiatedByAParse.create()}
+		return Self{byName: GenericFunctionInstanceMap.create(), filed: InstantiatedByAParse.create(), tuples: RequestedTupleTypesMap.create()}
 	end 'create'
 
-	export function file(instance GenericFunctionInstance)
+	export function file(instance GenericFunctionInstance, tupleTypes RequestedTupleTypes)
 		self.filed.file(instance.instanceName)
 		self.byName.upsert(instance.instanceName, value: instance)
+		self.tuples.upsert(instance.instanceName.clone(), value: tupleTypes)
 	end 'file'
 
 	export function drop(name ByteArray)
 		self.filed.drop(name)
+		_ = self.tuples.remove(name)
 
 		if not self.byName.remove(name) 'filedWithoutAnInstance'
 			panic("RequestedGenericInstances.drop: '{String.from(name)}' is filed with no instance beside it — `file` records both")

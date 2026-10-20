@@ -234,6 +234,7 @@ function handOffIsAClosureCapture(door ThreadHandOffDoor) returns bool
 	return match door 'door'
 		closureCapture gives true
 		message or
+		spawnFactory or
 		publish or
 		coroutine gives false
 	end 'door'
@@ -3799,6 +3800,7 @@ union HandOffTake
 	promiseMovedIn
 	promotedLiteral
 	aReferenceOfItsOwn
+	aCopyOfItsOwn
 	anOpaqueReference
 	sharedReadOnly
 end 'HandOffTake'
@@ -3829,6 +3831,7 @@ function handOffTakeEndsTheWriteBlame(take HandOffTake) returns bool
 		promiseMovedIn or
 		promotedLiteral or
 		aReferenceOfItsOwn or
+		aCopyOfItsOwn or
 		anOpaqueReference or
 		sharedReadOnly gives false
 	end 'take'
@@ -3842,6 +3845,7 @@ function handOffTakeMovesTheRecord(take HandOffTake) returns bool
 		copied or
 		promotedLiteral or
 		aReferenceOfItsOwn or
+		aCopyOfItsOwn or
 		anOpaqueReference or
 		sharedReadOnly gives false
 	end 'take'
@@ -10360,6 +10364,7 @@ end 'GreenThreadHandOff'
 
 union ThreadHandOffDoor
 	message(blame String, argumentOf String)
+	spawnFactory(let blame String)
 	publish(let key ByteArray)
 	coroutine(let callee ByteArray)
 	closureCapture(let name ByteArray)
@@ -10368,6 +10373,7 @@ end 'ThreadHandOffDoor'
 function handOffDoorBlame(door ThreadHandOffDoor) returns String
 	return match door 'door'
 		message(blame, _) gives blame
+		spawnFactory(blame) gives blame
 		publish(key) gives "the value published to `{String.from(key)}`"
 		coroutine(callee) gives "the value handed to `async {String.from(callee)}(…)`"
 		closureCapture(name) gives "the value of `{String.from(name)}` a closure captures"
@@ -10377,6 +10383,7 @@ end 'handOffDoorBlame'
 function handOffDoorKind(door ThreadHandOffDoor) returns GreenThreadHandOff
 	return match door 'door'
 		message or
+		spawnFactory or
 		coroutine or
 		closureCapture gives GreenThreadHandOff.move
 		publish gives GreenThreadHandOff.share
@@ -10387,6 +10394,7 @@ function handOffSharesWithTheCaller(door ThreadHandOffDoor) returns bool
 	return match door 'door'
 		coroutine gives true
 		message or
+		spawnFactory or
 		publish or
 		closureCapture gives false
 	end 'door'
@@ -10395,11 +10403,34 @@ end 'handOffSharesWithTheCaller'
 function handOffLeavesThisGreenThread(door ThreadHandOffDoor) returns bool
 	return match door 'door'
 		message or
+		spawnFactory or
 		publish gives true
 		coroutine or
 		closureCapture gives false
 	end 'door'
 end 'handOffLeavesThisGreenThread'
+
+// A `spawn`'s factory argument gets no proof of its own: it travels inside the service's
+// state, whose hand-off in `Parser.emitServiceSpawn` walks the whole graph once.
+function handOffProvesItsGraph(door ThreadHandOffDoor) returns bool
+	return match door 'door'
+		message or
+		publish gives true
+		spawnFactory or
+		coroutine or
+		closureCapture gives false
+	end 'door'
+end 'handOffProvesItsGraph'
+
+function handOffMayBeSharedReadOnly(door ThreadHandOffDoor) returns bool
+	return match door 'door'
+		message gives true
+		spawnFactory or
+		publish or
+		coroutine or
+		closureCapture gives false
+	end 'door'
+end 'handOffMayBeSharedReadOnly'
 
 union OccupantHandOffRefusal
 	from(threshold CellOccupantExclusivity)
@@ -10409,6 +10440,7 @@ end 'OccupantHandOffRefusal'
 function handOffRefusesOccupantFrom(door ThreadHandOffDoor) returns OccupantHandOffRefusal
 	return match door 'door'
 		message or
+		spawnFactory or
 		publish gives OccupantHandOffRefusal.from(CellOccupantExclusivity.coOwned)
 		coroutine or
 		closureCapture gives OccupantHandOffRefusal.never
@@ -10444,10 +10476,6 @@ let TokenSpanOpenEnd = u64.max as ElementIndex
 function serviceArgumentRefusalMessage(blame String, borrowed bool, sourceClause String) returns String
 	return serviceBorrowedTransferMessage(blame, sourceClause: sourceClause) if borrowed else sharedTransferMessage(blame, sourceClause: sourceClause, lesson: ServiceTransferLesson)
 end 'serviceArgumentRefusalMessage'
-
-function serviceArgumentRefusal(blame String, borrowed bool, sourceClause String, at SourceRange) returns SourceParseError
-	return SourceParseError.serviceArgumentNotUnique(serviceArgumentRefusalMessage(blame, borrowed: borrowed, sourceClause: sourceClause), line: at.line, column: at.column)
-end 'serviceArgumentRefusal'
 
 function registryNotSolelyOwnedExplanation(key ByteArray) returns String
 	return "the value published to `{String.from(key)}` is not solely owned here — publish a `.clone()`"
@@ -40365,12 +40393,13 @@ export type Parser
 	// ⭐ **IS `value` A TUPLE THIS RUNG MAY COPY?** — a tuple `structRef` none of whose elements owns heap.
 	// THE one gate on the value-semantics copy, so its askers cannot come to disagree about which tuples have
 	// value semantics — a disagreement that would not be a missed case but a record freed twice or not at all.
-	// Its askers are the durable-storage move-in (`moveManagedValueInto`) and `promoteBorrowedToOwned`, which
-	// asks it for the whole HAND-OFF family at once (a `return`, a closure `gives`, a `match`/ternary arm, a
-	// `try … otherwise` fallback).
-	// ⚠ `transferConsumedArg` is a THIRD borrowed-managed decider that does NOT ask this and REFUSES a
-	// borrowed trivial tuple at a consuming argument position, where the move-in one call away copies it.
-	// The disagreement costs a refusal, never a wrong answer.
+	// Its askers are the durable-storage move-in (`moveManagedValueInto`),
+	// `promoteBorrowedToOwned`, which asks it for the whole HAND-OFF family at once (a `return`, a
+	// closure `gives`, a `match`/ternary arm, a `try … otherwise` fallback), and `greenThreadTakeOf`,
+	// which copies a trivial tuple leaving this green thread.
+	// ⚠ `transferConsumedArg` deliberately does NOT ask this: a consuming argument stays on this
+	// green thread and co-owns a borrowed trivial tuple, because a tuple aliases at a binding
+	// (`var q = t; q.1 = 55` writes through `t`, and a closure capturing `t` sees the write).
 	//
 	// The managed probe is asked through `structHasManagedField`, the SAME predicate the destructor synthesis
 	// gates on, so "this tuple needs no deep clone" and "this tuple needs no drop cascade" are one answer.
@@ -40407,6 +40436,14 @@ export type Parser
 		self.carryValueFacts(box, from: value, source: self.bodyState, path: ValueCarryPath.value)
 		return box
 	end 'copyTupleValue'
+
+	// De-listed from the statement's pending drops: the sink owns the copy, and a statement-end
+	// `__mm_decref` on it would free a record the sink still holds.
+	function copyTupleForSink(value ValueId, range SourceRange) returns ValueId
+		let copied = self.copyTupleValue(value, range: range)
+		self.removeFromPendingTemps(copied)
+		return copied
+	end 'copyTupleForSink'
 
 	// The interned TYPE NAME a `structRef`/`named`-tagged value carries — the pair `internedName` and
 	// `valueNameId` spell together, wherever a value's NOMINAL identity is what decides something.
@@ -73541,6 +73578,7 @@ export type Parser
 				promiseMovedIn or
 				promotedLiteral or
 				aReferenceOfItsOwn or
+				aCopyOfItsOwn or
 				anOpaqueReference then continue
 			end 'take'
 		end 'eachPlan'
@@ -73580,8 +73618,9 @@ export type Parser
 		match argument.door 'door'
 			message(_, argumentOf) then self.noteHandedOffSite(argument, destination: argumentOf.toByteArray(), kind: MoveDestinationKind.sentMessage)
 			publish(key) then self.noteHandedOffSite(argument, destination: key, kind: MoveDestinationKind.publishedValue)
+			spawnFactory or
 			coroutine or
-			closureCapture then panic("fileHandedOffSite: a door that stays on this green thread has no view to refuse")
+			closureCapture then panic("fileHandedOffSite: a door whose graph is not proved at the hand-over has no view to refuse")
 		end 'door'
 
 		return FiledSite.at(self.bodyState.deferredProvenance.moveSites.count() - 1)
@@ -73949,13 +73988,8 @@ export type Parser
 		// the other side. A managed-element tuple therefore keeps the struct rules below (share one record,
 		// co-own it) until it has a DEEP clone, the only copy that would mean what a tuple
 		// means.
-		// The copy is de-listed from the statement's pending drops for the promoted String's reason one branch
-		// down: the durable slot owns it now, and a statement-end `__mm_decref` on it would free a record the
-		// box still holds.
 		if self.valueIsCopyableTuple(arg) 'copyTuple'
-			let copied = self.copyTupleValue(arg, range: range)
-			self.removeFromPendingTemps(copied)
-			return copied
+			return self.copyTupleForSink(arg, range: range)
 		end 'copyTuple'
 
 		if isString 'string'
@@ -80184,7 +80218,7 @@ export type Parser
 		end 'noLiteralToType'
 
 		let callee = try target.declaredName() otherwise return DeclaredArrayInstance.none
-		let receiver = try self.callReceiverInstance(args, receiverArgs: receiverArgs) otherwise return self.signatures.arrayInstanceDeclaredAtParam(callee, sourceIndex: sourceIndex, label: label)
+		let receiver = try self.callReceiverInstance(args, receiverArgs: receiverArgs) otherwise return self.signatures.arrayInstanceDeclaredAtParam(callee, sourceIndex: sourceIndex, label: label, readerFilePath: self.job.path)
 		return self.signatures.arrayInstanceDeclaredAtParamOfReceiver(callee, sourceIndex: sourceIndex, label: label, receiver: receiver, readerFilePath: self.job.path)
 	end 'arrayTargetForArgument'
 
@@ -80210,11 +80244,11 @@ export type Parser
 		let callee = try target.declaredName() otherwise return NoDeclaredTupleTarget
 
 		if let instance = try self.callInstanceOf(args, receiverArgs: receiverArgs, constructorInstance: constructorInstance) 'declaredThroughTheCallsInstance'
-			let named = try self.signatures.tupleTypeNameDeclaredAtParamOfReceiver(callee, sourceIndex: sourceIndex, label: label, receiver: instance) otherwise return NoDeclaredTupleTarget
+			let named = try self.signatures.tupleTypeNameDeclaredAtParamOfReceiver(callee, sourceIndex: sourceIndex, label: label, receiver: instance, readerFilePath: self.job.path) otherwise return NoDeclaredTupleTarget
 			return tupleTargetNamed(named)
 		end 'declaredThroughTheCallsInstance'
 
-		view name = try self.signatures.tupleTypeNameDeclaredAtParam(callee, sourceIndex: sourceIndex, label: label) otherwise return NoDeclaredTupleTarget
+		view name = try self.signatures.tupleTypeNameDeclaredAtParam(callee, sourceIndex: sourceIndex, label: label, readerFilePath: self.job.path) otherwise return NoDeclaredTupleTarget
 		return tupleTargetNamed(name)
 	end 'tupleTargetForArgument'
 
@@ -93227,7 +93261,7 @@ export type Parser
 	// parameter that declares no array alias states nothing, and the literal is typed from its elements as a
 	// body's is.
 	function evalConstInitArrayOperand(typeTok Token, callee ByteArray, calls ConstFactoryCallArray, stack TopLevelDeclIndexArray) returns ConstFactoryArgumentValue throws ConstEvalError
-		match self.signatures.arrayInstanceDeclaredAtParam(callee, sourceIndex: 0, label: EmptySourceText) 'declared'
+		match self.signatures.arrayInstanceDeclaredAtParam(callee, sourceIndex: 0, label: EmptySourceText, readerFilePath: self.job.path) 'declared'
 			none then return try self.evalConstNodeValue(calls, stack: stack)
 			instance(giid) then return ConstFactoryArgumentValue.call(try self.evalConstArrayLiteralAtInstanceInto(calls, stack: stack, giid: giid, typeTok: typeTok))
 		end 'declared'
@@ -99929,7 +99963,7 @@ export type Parser
 
 		if tagNamesADeclaredType(tag) 'aStructRef'
 			let name = self.internedName(typeNameIdOf(t))
-			return isTupleTypeName(name) and self.signatures.tupleCarriesAGreenThreadHandle(self.signatures.canonicalTupleName(name))
+			return isTupleTypeName(name) and self.signatures.tupleCarriesAGreenThreadHandle(self.signatures.canonicalNameOfStruct(name))
 		end 'aStructRef'
 
 		if tag != ValueTypeTag.genericInstance 'notAView'
@@ -101284,7 +101318,7 @@ export type Parser
 			return self.coOwnBorrowedOpaque(argValue, range: SourceRange.ofToken(anchor))
 		end 'anOpaqueBinding'
 
-		return self.transferConsumedArg(argValue, anchor: anchor, spawned: false)
+		return self.transferConsumedArg(argValue, anchor: anchor)
 	end 'transferOnHandoff'
 
 	function handPromiseOnHandoff(promise ValueId, anchor Token, handoff ArgumentHandoff)
@@ -101361,33 +101395,29 @@ export type Parser
 			try self.takePromiseIntoCallee(argValue, column: column, args: args, argRanges: argRanges, anchor: anchor)
 		end 'aPromiseTheCalleeTakes'
 
-		if not self.argIsConsumedAt(info, position: position, constructorInstance: constructorInstance) and not self.isOpaqueOwnedFeedArg(info, position: position, argValue: argValue) 'borrowed'
+		let range = try argRanges.get(column) otherwise panic("transferConsumedColumn: argRanges.get OOB at {column} — args and argRanges are pushed in lockstep")
+		let consumed = self.argIsConsumedAt(info, position: position, constructorInstance: constructorInstance) or self.isOpaqueOwnedFeedArg(info, position: position, argValue: argValue)
+		let spawnedStateKeepsIt = spawned and self.valueIsManagedHeap(argValue) and (consumed or info.typeParamFeedOf(position).isFeed())
+
+		if not consumed and not spawnedStateKeepsIt 'borrowed'
 			try args.set(column, value: self.handleEscapingBorrowFeed(info, position: position, argValue: argValue, anchor: anchor)) otherwise panic("transferConsumedColumn: args.set OOB at {column}")
 			return
 		end 'borrowed'
 
-		let range = try argRanges.get(column) otherwise panic("transferConsumedColumn: argRanges.get OOB at {column} — args and argRanges are pushed in lockstep")
 		try self.requireConsumedArgumentStillOwned(argValue, consumedOwned: consumedOwned, range: range)
 
-		if spawned 'aServicesState'
-			try self.requireSpawnedArgumentIsOneThisFrameOwns(argValue, blame: serviceFactoryArgumentBlame(callee, paramName: try info.paramNames.get(position) otherwise panic("transferConsumedColumn: paramNames.get OOB at {position}")), range: range)
-		end 'aServicesState'
+		if spawnedStateKeepsIt 'aStateTheServiceKeeps'
+			let blame = serviceFactoryArgumentBlame(callee, paramName: try info.paramNames.get(position) otherwise panic("transferConsumedColumn: paramNames.get OOB at {position}"))
+			let handed = try self.handOff(SoleHandedOffPosition, value: argValue, door: ThreadHandOffDoor.spawnFactory(blame), anchor: self.tokenAt(self.argumentFirstTokenIndex(range)))
+			try args.set(column, value: handed) otherwise panic("transferConsumedColumn: args.set OOB at {column}")
+			return
+		end 'aStateTheServiceKeeps'
 
-		let transferred = self.transferConsumedArg(argValue, anchor: anchor, spawned: spawned)
+		let transferred = self.transferConsumedArg(argValue, anchor: anchor)
 		try args.set(column, value: transferred) otherwise panic("transferConsumedColumn: args.set OOB at {column}")
 	end 'transferConsumedColumn'
 
-	function requireSpawnedArgumentIsOneThisFrameOwns(argValue ValueId, blame String, range SourceRange) throws SourceParseError
-		if not self.valueIsManagedHeap(argValue) or self.valueIsOwnedHeap(argValue) or tagIsByteRecord(self.tagOf(argValue)) or valueIsMarked(self.bodyState.temporaryFieldReads, value: argValue) 'crossesAsItIs'
-			return
-		end 'crossesAsItIs'
-
-		throw serviceArgumentRefusal(blame, borrowed: true, sourceClause: self.transferSourceClause(argValue), at: range)
-	end 'requireSpawnedArgumentIsOneThisFrameOwns'
-
-	// Read off the source, not off the binding that holds the value: an alias and its original share one
-	// value, and E3102 names the one written at this argument (`specs/async-promise-drop.md` pins both orders).
-	function writtenArgumentName(range SourceRange) returns ByteArray
+	function argumentFirstTokenIndex(range SourceRange) returns ElementIndex
 		var index = self.pos
 
 		while index > 0 and (index >= self.tokens.count() or not tokenStartsAt(self.tokenAt(index), range: range)) 'backToTheArgument'
@@ -101395,8 +101425,16 @@ export type Parser
 		end 'backToTheArgument'
 
 		if not tokenStartsAt(self.tokenAt(index), range: range) 'noTokenThere'
-			panic("writtenArgumentName: no token of this file stands at {range.line}:{range.column} — an argument range is the range of its first token")
+			panic("argumentFirstTokenIndex: no token of this file stands at {range.line}:{range.column} — an argument range is the range of its first token")
 		end 'noTokenThere'
+
+		return index
+	end 'argumentFirstTokenIndex'
+
+	// Read off the source, not off the binding that holds the value: an alias and its original share one
+	// value, and E3102 names the one written at this argument (`specs/async-promise-drop.md` pins both orders).
+	function writtenArgumentName(range SourceRange) returns ByteArray
+		var index = self.argumentFirstTokenIndex(range)
 
 		if self.kindAt(index + 1) == TokenKind.colon 'aLabel'
 			index = index + 2
@@ -101571,7 +101609,7 @@ export type Parser
 	// Hand one consumed argument to the callee, returning the value the call must actually carry. A
 	// SCALAR argument owns no heap and the consume is inert (returns itself). An OWNED CONCRETE managed value
 	// held by a live BINDING is CO-OWNED (the durable-sink ruling — the binding stays live and keeps its own
-	// scope-exit drop), except a `spawn`'s, which is moved; an owned TEMPORARY is ADOPTED, drained from the
+	// scope-exit drop); an owned TEMPORARY is ADOPTED, drained from the
 	// statement's pending drops because the callee owns it now. Both go through the shared sink door
 	// (`storeOwnedValueIntoDurableSink`), which is where that split and its ruling live. A BORROWED
 	// STRING (a long rdata literal, or a borrowed String parameter/field) has a cheap owning copy, so it is
@@ -101581,7 +101619,7 @@ export type Parser
 	// (`coOwnBorrowedForConsume`) — the transitive-consume case, and what it is answered with. Its RESULT
 	// replaces the argument too: an existential's reference is taken through the witness, and a byte-record
 	// conformer's protocol there is the same COPY the concrete arm above takes.
-	function transferConsumedArg(argValue ValueId, anchor Token, spawned bool) returns ValueId
+	function transferConsumedArg(argValue ValueId, anchor Token) returns ValueId
 		// ⭐ AN OPAQUE OWNED type-parameter binding forwarded to a consuming sibling feed position:
 		// the callee takes ownership, so MOVE it — poison the source binding so a second use is E3102 and
 		// this frame does not drop it too. Its `typeParameter` tag fails `valueIsManagedHeap` below (opaque here),
@@ -101622,14 +101660,6 @@ export type Parser
 			return self.coOwnBorrowedForConsume(argValue, range: SourceRange.ofToken(anchor))
 		end 'borrowedManaged'
 
-		// A `spawn`'s factory stores the argument in a state another green thread runs on, so it is
-		// MOVED: a binding left co-owning it is a second owner, and the spawn's soleness walk aborts
-		// on it (exit 96).
-		if spawned and self.ownedValueLeavesThisFrame(argValue) 'movedIntoTheServiceState'
-			self.moveOwnedValueOut(argValue)
-			return argValue
-		end 'movedIntoTheServiceState'
-
 		// ⭐⭐ **A CONSUMING ARGUMENT IS A DURABLE SINK, SO IT CO-OWNS RATHER THAN MOVING (⚖ user ruling).**
 		// The callee stores what it is handed, which is exactly the obligation the DIRECT store
 		// door discharges one frame in — so both go through the ONE sink door
@@ -101640,23 +101670,34 @@ export type Parser
 	end 'transferConsumedArg'
 
 	// ⭐⭐⭐ **HAND ONE VALUE THROUGH A `ThreadHandOffDoor`** — a message argument (and a `spawn`'s
-	// state), a published value, an `async` argument or a closure capture. A door that LEAVES this
-	// green thread hands the value to code that may run on another OS thread, and a counted record's
-	// count steps PLAIN (`MmRuntime.emitAdjustRefcount`) because one green thread owns it.
+	// state), a `spawn`'s factory argument the service keeps, a published value, an `async`
+	// argument or a closure capture. A door that LEAVES this green thread hands the value to code
+	// that may run on another OS thread, and a counted record's count steps PLAIN
+	// (`MmRuntime.emitAdjustRefcount`) because one green thread owns it.
 	//
-	// ⇒ **AT A DOOR THAT LEAVES THIS GREEN THREAD, THREE ANSWERS, AND EVERYTHING ELSE IS REFUSED** as
-	// **`SemanticServiceArgumentNotUnique`**, naming the value and the `.clone()` cure:
+	// ⇒ **AT A DOOR THAT LEAVES THIS GREEN THREAD, FIVE ANSWERS, AND EVERYTHING ELSE IS REFUSED** as
+	// **`SemanticServiceArgumentNotUnique`**, naming the value and the `.clone()` cure (a cell's
+	// occupant is answered first, by `takeableCellOccupantOf`):
 	//
 	//   • a SCALAR owns no record and crosses as a machine word;
-	//   • a STRING LITERAL this parse minted is PROMOTED to a fresh sole copy — its record is immortal `.rdata`,
-	//     nobody owns it, and the copy materializes the only owned record there will be. Only a literal: a
-	//     borrowed parameter, field or element is refused whatever its type, because the cure a refusal teaches
-	//     — `.clone()` — IS that allocation, spelled by the author at the site that pays for it (⚖ user ruling);
+	//   • a BORROWED STRING — an immortal `.rdata` literal, a parameter, a field — is PROMOTED to a
+	//     fresh sole copy, the only owned record there will be. Any other borrowed value is refused
+	//     whatever its type, because the cure a refusal teaches — `.clone()` — IS that allocation,
+	//     spelled by the author at the site that pays for it (⚖ user ruling);
+	//   • a READ-ONLY value is SHARED, its graph proved for `GreenThreadHandOff.share`: at a
+	//     message, a permanent read-only root or a parameter the sender never writes
+	//     (`argumentMessageMayShare`); at a message or a publish, an all-`let` record this frame
+	//     does not solely own (`immutableRecordIsSharedNotMoved`);
 	//   • an OWNED value this frame solely owns is MOVED — the source binding poisoned (E3102 on a later read) or
 	//     the temporary drained. **No incref: the frame's own `+1` rides into the mailbox**, which is what makes
-	//     the service the record's one owner rather than its second.
+	//     the service the record's one owner rather than its second;
+	//   • a TRIVIAL TUPLE (`valueIsCopyableTuple`) this frame does not solely own is COPIED — it
+	//     has no identity, so the fresh record is the receiver's alone and the caller keeps its own.
 	//
-	// A `publish` door (`Key.register`, `SharedValue.publish`) takes the same three answers and
+	// A `spawn`'s factory argument departs from this in `unprovenOwnerTakeOf` and
+	// `spawnReleasesTheReadsOf`.
+	//
+	// A `publish` door (`Key.register`, `SharedValue.publish`) takes the same answers and
 	// refuses as E3174; its graph is proved for SHARING rather than for a move, because every thread
 	// reads a published value at once.
 	//
@@ -101782,12 +101823,21 @@ export type Parser
 		let door = argument.door
 		let anchor = argument.anchor
 
+		if self.valueIsCopyableTuple(value) and not self.valueIsSolelyOwnedHere(value) 'aValueWithNoIdentity'
+			try self.requireHandedOffGraphWalkable(value, door: door, anchor: anchor)
+			return HandOffTake.aCopyOfItsOwn
+		end 'aValueWithNoIdentity'
+
 		if self.argumentIsSharedReadOnly(argument) 'readOnlyToEveryHolder'
 			try self.requireTransferGraphWalkable(value, handOff: GreenThreadHandOff.share, door: door, anchor: anchor)
 			return HandOffTake.sharedReadOnly
 		end 'readOnlyToEveryHolder'
 
 		if not self.valueIsOwnedHeap(value) 'borrowed'
+			if self.spawnReleasesTheReadsOf(value, door: door) 'readOffATemporaryTheSpawnReleases'
+				return HandOffTake.aReferenceOfItsOwn
+			end 'readOffATemporaryTheSpawnReleases'
+
 			if not tagIsByteRecord(self.tagOf(value)) 'someoneElseMayOwnIt'
 				throw self.handOffRefusal(door, value: value, anchor: anchor, borrowed: true)
 			end 'someoneElseMayOwnIt'
@@ -101802,19 +101852,49 @@ export type Parser
 		end 'nothingCanWriteIt'
 
 		if not self.valueIsSolelyOwnedHere(value) 'aSecondOwnerMayExist'
-			return try self.refusedHandOffTake(argument, filed: filed)
+			return try self.unprovenOwnerTakeOf(argument, filed: filed)
 		end 'aSecondOwnerMayExist'
 
 		try self.requireHandedOffGraphWalkable(value, door: door, anchor: anchor)
 		return HandOffTake.movedOut(true)
 	end 'greenThreadTakeOf'
 
+	// A `spawn`'s factory argument with a possible second owner is not refused: the state that
+	// holds it is handed off in `emitServiceSpawn`, whose run-time soleness walk aborts on that
+	// owner (exit 96).
+	function unprovenOwnerTakeOf(argument HandedOffArgument, filed FiledSite) returns HandOffTake throws SourceParseError
+		match argument.door 'door'
+			spawnFactory then break
+			message or
+			publish then return try self.refusedHandOffTake(argument, filed: filed)
+			coroutine or
+			closureCapture then panic("unprovenOwnerTakeOf: a door that stays on this green thread never reaches the leaving-door decision")
+		end 'door'
+
+		if self.ownedValueLeavesThisFrame(argument.value) 'thisFramesToGive'
+			return HandOffTake.movedOut(false)
+		end 'thisFramesToGive'
+
+		return HandOffTake.aReferenceOfItsOwn
+	end 'unprovenOwnerTakeOf'
+
+	function spawnReleasesTheReadsOf(value ValueId, door ThreadHandOffDoor) returns bool
+		return match door 'door'
+			spawnFactory gives valueIsMarked(self.bodyState.temporaryFieldReads, value: value)
+			message or
+			publish or
+			coroutine or
+			closureCapture gives false
+		end 'door'
+	end 'spawnReleasesTheReadsOf'
+
 	function handOver(argument HandedOffArgument, take HandOffTake) returns ValueId
 		let value = argument.value
 
 		match take 'take'
 			copied then return value
-			aReferenceOfItsOwn then return self.transferConsumedArg(value, anchor: argument.anchor, spawned: false)
+			aReferenceOfItsOwn then return self.transferConsumedArg(value, anchor: argument.anchor)
+			aCopyOfItsOwn then return self.handOverCopy(argument)
 			anOpaqueReference then return self.coOwnBorrowedOpaque(value, range: SourceRange.ofToken(argument.anchor))
 			promotedLiteral then return self.handOverPromotedLiteral(value, door: argument.door, anchor: argument.anchor)
 			cellOccupant(read, exclusivity) then return self.handCellOccupantOver(read, exclusivity: exclusivity, argument: argument)
@@ -101829,14 +101909,16 @@ export type Parser
 		return value
 	end 'handOver'
 
-	function argumentMessageMayShare(argument HandedOffArgument) returns bool
-		match argument.door 'door'
-			message then break
+	function handOverCopy(argument HandedOffArgument) returns ValueId
+		let copied = self.copyTupleForSink(argument.value, range: SourceRange.ofToken(argument.anchor))
+		self.emitHandedOffGraphProof(copied, door: argument.door, anchor: argument.anchor, exclusivity: CellOccupantExclusivity.sole)
+		return copied
+	end 'handOverCopy'
 
-			publish or
-			coroutine or
-			closureCapture then return false
-		end 'door'
+	function argumentMessageMayShare(argument HandedOffArgument) returns bool
+		if not handOffMayBeSharedReadOnly(argument.door) 'aDoorThatNeverShares'
+			return false
+		end 'aDoorThatNeverShares'
 
 		if self.valueIsReadOnlyIn(argument.value, class: ReadOnlyClass.permanent) 'aPermanentReadOnlyRoot'
 			return true
@@ -101852,7 +101934,7 @@ export type Parser
 
 	function shareReadOnlyWithTheService(argument HandedOffArgument) returns ValueId
 		self.emitTransferGraphProof(argument.value, handOff: GreenThreadHandOff.share, root: TransferRootProof.provedAtRunTime, anchor: argument.anchor)
-		return self.transferConsumedArg(argument.value, anchor: argument.anchor, spawned: false)
+		return self.transferConsumedArg(argument.value, anchor: argument.anchor)
 	end 'shareReadOnlyWithTheService'
 
 	function handPromiseIntoClosure(promise ValueId, anchor Token) returns ValueId
@@ -101955,7 +102037,7 @@ export type Parser
 	end 'handCellOccupantOver'
 
 	function requireHandedOffGraphWalkable(value ValueId, door ThreadHandOffDoor, anchor Token) throws SourceParseError
-		if handOffLeavesThisGreenThread(door) 'provedBeforeItCrosses'
+		if handOffProvesItsGraph(door) 'provedBeforeItCrosses'
 			try self.requireTransferGraphWalkable(value, handOff: handOffDoorKind(door), door: door, anchor: anchor)
 		end 'provedBeforeItCrosses'
 	end 'requireHandedOffGraphWalkable'
@@ -101968,7 +102050,7 @@ export type Parser
 	end 'requirePublishedGraphWalkable'
 
 	function emitHandedOffGraphProof(value ValueId, door ThreadHandOffDoor, anchor Token, exclusivity CellOccupantExclusivity)
-		if handOffLeavesThisGreenThread(door) 'provedBeforeItCrosses'
+		if handOffProvesItsGraph(door) 'provedBeforeItCrosses'
 			self.emitTransferGraphProof(value, handOff: handOffDoorKind(door), root: occupantRootProof(exclusivity), anchor: anchor)
 		end 'provedBeforeItCrosses'
 	end 'emitHandedOffGraphProof'
@@ -102008,7 +102090,7 @@ export type Parser
 	end 'repeatedHandOffRefusal'
 
 	function handOffMayMeetAView(argument HandedOffArgument) returns bool
-		return handOffLeavesThisGreenThread(argument.door) and self.bodyState.declaredAView and self.bodyState.deferredProvenance is not self.anchors.noDeferredProvenance and self.valueHasACapability(argument.value) and not self.argumentIsSharedReadOnly(argument) and not self.immutableRecordIsSharedNotMoved(argument)
+		return handOffProvesItsGraph(argument.door) and self.bodyState.declaredAView and self.bodyState.deferredProvenance is not self.anchors.noDeferredProvenance and self.valueHasACapability(argument.value) and not self.argumentIsSharedReadOnly(argument) and not self.immutableRecordIsSharedNotMoved(argument)
 	end 'handOffMayMeetAView'
 
 	function immutableRecordIsSharedNotMoved(argument HandedOffArgument) returns bool
@@ -102019,6 +102101,7 @@ export type Parser
 		return match argument.door 'door'
 			message or
 			publish gives not self.valueIsSolelyOwnedHere(argument.value)
+			spawnFactory or
 			coroutine or
 			closureCapture gives false
 		end 'door'
@@ -102039,7 +102122,8 @@ export type Parser
 
 	function handOffRefusalText(door ThreadHandOffDoor, value ValueId, borrowed bool) returns String
 		return match door 'door'
-			message(blame, _) gives serviceArgumentRefusalMessage(blame, borrowed: borrowed, sourceClause: self.transferSourceClause(value))
+			message or
+			spawnFactory gives serviceArgumentRefusalMessage(handOffDoorBlame(door), borrowed: borrowed, sourceClause: self.transferSourceClause(value))
 			publish(key) gives registryNotSolelyOwnedExplanation(key)
 			coroutine or
 			closureCapture panic("handOffRefusalText: a door that stays on this green thread takes every value it is given — `handOffTakeOf` answers it a reference, a move or a copy, and never a refusal")
@@ -102048,7 +102132,8 @@ export type Parser
 
 	function handOffRefusal(door ThreadHandOffDoor, value ValueId, anchor Token, borrowed bool = false) returns SourceParseError
 		return match door 'door'
-			message(blame, _) gives serviceArgumentRefusal(blame, borrowed: borrowed, sourceClause: self.transferSourceClause(value), at: SourceRange.ofToken(anchor))
+			message or
+			spawnFactory gives SourceParseError.serviceArgumentNotUnique(self.handOffRefusalText(door, value: value, borrowed: borrowed), line: anchor.line, column: anchor.column)
 			publish(key) gives registryNotSolelyOwnedError(key, anchor: anchor)
 			coroutine or
 			closureCapture panic("handOffRefusal: a door that stays on this green thread never refuses")

@@ -1705,7 +1705,9 @@ export enum ErrorCode
 	// registry read, or a parameter the sending function never writes -- is SHARED instead: its graph is marked shared, so every count on it
 	// steps atomically, and nothing on either side may write it. Refused on that road: a parameter the
 	// sending function writes, and any shared value whose receiving handler writes or keeps its parameter.
-	// A borrowed `String` is copied at the send.
+	// A borrowed `String` is copied at the send. So is a tuple none of whose elements owns heap,
+	// wherever this frame is not its one owner: it is a value, so the copy crosses and the sender
+	// keeps its own.
 	// Three shapes fail the move, and E3135 is the neighbouring rule about the argument's TYPE rather than its
 	// ownership. The first is an OWNED value this frame has already taken a second reference to -- a value
 	// pushed into a container, handed to another consuming call, or the source of a `for` loop the send sits in.
@@ -1719,8 +1721,11 @@ export enum ErrorCode
 	// `var` a fresh record makes it sendable again. A record whose fields are all `let` is written by nothing,
 	// so it is shared instead and the view stays valid.
 	// A `spawn`'s factory argument that the factory keeps moves into the service's state on the same terms,
-	// so a borrowed one is refused, naming the argument and the `spawn`. A field read off a temporary built in
-	// the factory call's own argument list crosses, because the `spawn` releases that temporary.
+	// so a borrowed one is refused, naming the argument and the `spawn` -- a generic factory's
+	// argument at a type parameter included. An owned one this frame also shares is caught by the
+	// run-time walk of the service's state described below (exit 96). A field read off a temporary
+	// built in the factory call's own argument list crosses, because the `spawn` releases that
+	// temporary.
 	// The THIRD is about what the record HOLDS rather than about the record: SOLENESS IS NOT TRANSITIVE.
 	// A box this frame owns alone may point at a record a second owner holds too, because every co-owning
 	// store (a struct-field or union-payload move-in of a borrow, a consuming call, a container push) takes
@@ -2156,7 +2161,8 @@ export enum ErrorCode
 	// earlier in the function may reach it (a record whose fields are all `let` is shared and published as
 	// it is, and the view stays valid). A published value is read by
 	// every thread at once and freed only when no reader can hold it, so no one may write or free it
-	// behind the registry. Reported at the argument. Publish a `.clone()`.
+	// behind the registry. Reported at the argument. Publish a `.clone()`. A tuple none of whose
+	// elements owns heap is copied and the copy published.
 	registryPublishedValueNotSolelyOwned = "E3174"
 
 	// A type that is a `default` key declares its own static `current` or `register`. On a key,

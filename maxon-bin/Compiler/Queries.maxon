@@ -465,6 +465,7 @@ function adoptProgramFacts(project Project, signatures ProgramSignatures)
 	project.typeNames.reserveForSource(programSourceByteCount(project))
 	signatures.adoptInstantiatedByAParse(project.db.instantiatedByAParse)
 	signatures.adoptGenericFunctionInstances(project.db.genericInstances)
+	signatures.adoptRequestedTupleLayouts(project.db.genericInstances.tuples, from: project.typeNames)
 	signatures.adoptLiveDefaultKeys(project.db.liveDefaultKeys)
 end 'adoptProgramFacts'
 
@@ -2548,7 +2549,7 @@ function foldVerdict(project Project, pool FrontEndPool, signatures ProgramSigna
 	for (name, instance) in requested 'eachRequested'
 		if not project.db.genericInstances.byName.contains(name) 'notFiledYet'
 			noteMoved(moved, name: name)
-			project.db.genericInstances.file(instance)
+			project.db.genericInstances.file(instance, tupleTypes: requestedTupleTypesOf(project, signatures: signatures, instance: instance))
 			newlyRequested = true
 		end 'notFiledYet'
 	end 'eachRequested'
@@ -2593,6 +2594,83 @@ function foldVerdict(project Project, pool FrontEndPool, signatures ProgramSigna
 
 	return FoldVerdict.answersMoved if rowSetAnswersMoved(project, artifacts: artifacts, signatures: signatures) else FoldVerdict.stands
 end 'foldVerdict'
+
+function requestedTupleTypesOf(project Project, signatures ProgramSignatures, instance GenericFunctionInstance) returns RequestedTupleTypes
+	var layouts = StructLayoutArray.create()
+
+	for argument in instance.arguments 'eachArgument'
+		if argument.kind == GenericArgumentKind.record and isTupleTypeName(argument.name) 'aTupleArgument'
+			collectRequestedTupleLayout(project, name: argument.name, into: layouts)
+		end 'aTupleArgument'
+	end 'eachArgument'
+
+	if layouts.isEmpty() 'noTupleTravels'
+		return RequestedTupleTypes.create(layouts, footprint: ParseFootprint.create())
+	end 'noTupleTravels'
+
+	var footprint = ParseFootprint.create()
+	var grew = true
+
+	while grew 'untilNoTupleIsLeftBehind'
+		let before = layouts.count()
+		footprint = signatures.footprintOf(instancesHeldBy(layouts), names: ObservedNameSet.create(), dispatchedInterfaces: ObservedInterfaceSet.create())
+
+		for row in footprint.rows 'eachInstanceRow'
+			for argument in row.args 'eachInstanceArgument'
+				if maxonTypeTag(argument) != ValueTypeTag.structRef 'notARecord'
+					continue
+				end 'notARecord'
+
+				let nested = try signatures.typeNameTable().nameOf(typeNameIdOf(argument)) otherwise panic("requestedTupleTypesOf: a footprint row names type id {typeNameIdOf(argument)}, which the index that built it does not hold")
+
+				if isTupleTypeName(nested) 'aTupleInsideAnInstance'
+					collectRequestedTupleLayout(project, name: nested, into: layouts)
+				end 'aTupleInsideAnInstance'
+			end 'eachInstanceArgument'
+		end 'eachInstanceRow'
+
+		grew = layouts.count() != before
+	end 'untilNoTupleIsLeftBehind'
+
+	return RequestedTupleTypes.create(layouts, footprint: footprint)
+end 'requestedTupleTypesOf'
+
+function instancesHeldBy(layouts StructLayoutArray) returns GenericInstanceIdSet
+	var held = GenericInstanceIdSet.create()
+
+	for layout in layouts 'eachLayout'
+		for element in layout.fieldTypes 'eachElement'
+			if maxonTypeTag(element) == ValueTypeTag.genericInstance 'anInstance'
+				held.insert(genericInstanceIdOf(element))
+			end 'anInstance'
+		end 'eachElement'
+	end 'eachLayout'
+
+	return held
+end 'instancesHeldBy'
+
+function collectRequestedTupleLayout(project Project, name ByteArray, into StructLayoutArray)
+	for filed in into 'eachFiled'
+		if filed.name.equals(name) 'alreadyFiled'
+			return
+		end 'alreadyFiled'
+	end 'eachFiled'
+
+	view layout = try project.structTypes.get(name) otherwise panic("collectRequestedTupleLayout: the tuple `{String.from(name)}` is named by a requested generic instance and no merged artifact committed its layout — every tuple a body mints is filed by `Parser.internTupleLayout` and committed by `commitStructTypes` before `foldVerdict` reads the requests")
+	into.push(layout.clone())
+
+	for element in layout.fieldTypes 'eachNestedElement'
+		if maxonTypeTag(element) != ValueTypeTag.structRef 'notARecord'
+			continue
+		end 'notARecord'
+
+		let nested = try project.typeNames.nameOf(typeNameIdOf(element)) otherwise panic("collectRequestedTupleLayout: element id {typeNameIdOf(element)} of `{String.from(name)}` is not in the project's interner, which every committed layout's ids index")
+
+		if isTupleTypeName(nested) 'aNestedTuple'
+			collectRequestedTupleLayout(project, name: nested, into: into)
+		end 'aNestedTuple'
+	end 'eachNestedElement'
+end 'collectRequestedTupleLayout'
 
 function genericInstancesRequestedBy(artifacts FileParseArtifactArray) returns GenericFunctionInstanceMap
 	var requested = GenericFunctionInstanceMap.create()

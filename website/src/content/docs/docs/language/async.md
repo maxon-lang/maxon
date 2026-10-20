@@ -318,10 +318,15 @@ either side could write, because the two green threads may run at the same time 
   count on it steps atomically, and neither side may write it. Sending a parameter the sending function
   writes, or any shared value the handler writes or keeps, is **E3138**. A borrowed `String` is copied at the
   send.
+- A tuple none of whose elements owns heap — `(Amount, Amount)`, say — is a value. When the sender is not its
+  one owner, it is copied wherever it crosses: a send, a factory argument the factory keeps,
+  `SharedValue.publish` or `Key.register`. The service gets the copy and the sender keeps its own.
 - A value with an owner besides the sender that is not read-only — held in a container, read out of a field
-  or an element of a `var`, or the source of an enclosing `for` loop — is **E3138**; send a `.clone()`. A factory
-  argument the factory keeps follows the same rule, and a field read off a temporary built inside the
-  factory call's own argument list crosses, because the `spawn` releases that temporary.
+  or an element of a `var`, or the source of an enclosing `for` loop — is **E3138**; send a `.clone()`. A
+  borrowed factory argument the factory keeps is **E3138** too, a generic factory's argument at a type
+  parameter included; one the sender owns but also shares is caught by the run-time check of the
+  service's state below (exit code **96**). A field read off a temporary built inside the factory call's own
+  argument list crosses, because the `spawn` releases that temporary.
 - A `spawn` of a factory declared more than once, whose declarations keep an argument differently, is
   **E2015**; give the factories distinct names.
 - A parameter type that cannot cross at all — a promise, a function value, an opaque type parameter — is
@@ -568,7 +573,8 @@ end 'main'
 - **A service lookup is a snapshot.** A handle taken before a `register` keeps reaching the service it was
   taken from; that service runs until its last holder drops it, then drains its queue and exits.
 - **A value lookup is lock-free**, at the cost of reading a module `let`. A registered value must be solely
-  owned by the caller ([E3174](/docs/cli/error-codes/#e3174--registrypublishedvaluenotsolelyowned); publish a `.clone()`),
+  owned by the caller ([E3174](/docs/cli/error-codes/#e3174--registrypublishedvaluenotsolelyowned); publish a `.clone()`)
+  or a tuple of heap-free elements, which is copied ([Moves and Sharing](/docs/language/memory-model/#moves-and-sharing)),
   and it is marked shared before any other thread can read it. A value a reader already holds stays valid
   after it is replaced.
 - **`Key.register(new, replacing: old)`** publishes `new` only while `old` is still the current value, and
@@ -630,7 +636,8 @@ end 'main'
 - Readers take a read-only snapshot and a writer publishes a whole new value, so a value a reader holds
   stays valid across later publishes. A value `current()` returns is read-only all the way down, as a value
   key's is. A published value must be solely owned
-  ([E3174](/docs/cli/error-codes/#e3174--registrypublishedvaluenotsolelyowned)).
+  ([E3174](/docs/cli/error-codes/#e3174--registrypublishedvaluenotsolelyowned)) or a tuple of heap-free elements, which is
+  copied ([Moves and Sharing](/docs/language/memory-model/#moves-and-sharing)).
 - The cell is shared by reference: `clone()` hands out another reference to the same value, and a cell
   crosses a message like a service handle.
 

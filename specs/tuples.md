@@ -3070,3 +3070,433 @@ end 'main'
 ```maxoncstderr
 error E3005: <fragment>:8:2: cannot assign a value of type '(Ys, Item)' to variable 'pair', which holds '(Xs, Item)'
 ```
+
+<!-- test: a-borrowed-trivial-tuple-starts-a-service-as-a-copy -->
+A tuple none of whose elements owns heap has value semantics, so a borrowed one handed to a service's
+factory is copied in rather than refused: the service's copy and the caller's are two values. Returns 43.
+```maxon
+typealias Num = int(0 to 1000)
+typealias Pair = (Num, Num)
+
+type Keeper
+	var pair as Pair
+
+	static function create(pair Pair) returns Self
+		return Self{pair: pair}
+	end 'create'
+
+	export function total() returns Num
+		return self.pair.0 + self.pair.1
+	end 'total'
+end 'Keeper'
+
+function launch(p Pair) returns Num
+	let k = spawn Keeper.create(p)
+	let t = try await k.total() otherwise panic("the keeper is running")
+	k.shutdown()
+	return t
+end 'launch'
+
+function main() returns ExitCode
+	let p = (3 as Num, 40 as Num)
+	return launch(p) + p.0 - 3
+end 'main'
+```
+```exitcode
+43
+```
+
+<!-- test: a-trivial-tuple-read-out-of-a-field-is-sent-as-a-copy -->
+A trivial tuple read out of a field is sent to a service as a copy: the message carries its own value and the
+field keeps the caller's. Returns 43.
+```maxon
+typealias Num = int(0 to 1000)
+typealias Pair = (Num, Num)
+
+type Spot
+	export var pair as Pair
+
+	static function create(pair Pair) returns Self
+		return Self{pair: pair}
+	end 'create'
+end 'Spot'
+
+type Tally
+	var sum as Num
+
+	static function create() returns Self
+		return Self{sum: 0}
+	end 'create'
+
+	export function take(pair Pair)
+		self.sum = pair.0 + pair.1
+	end 'take'
+
+	export function total() returns Num
+		return self.sum
+	end 'total'
+end 'Tally'
+
+function main() returns ExitCode
+	var spot = Spot.create((3 as Num, 40 as Num))
+	let t = spawn Tally.create()
+	try t.take(spot.pair) otherwise panic("an open mailbox with room takes the send")
+	let sum = try await t.total() otherwise panic("the tally is running")
+	t.shutdown()
+	return sum + spot.pair.0 - 3
+end 'main'
+```
+```exitcode
+43
+```
+
+<!-- test: a-tuple-alias-message-parameter-names-its-own-modules-alias-beside-a-sibling-of-the-same-name -->
+Two sibling directories each declare their own `Num` and `Pair`. `Tally.take`'s message carries the second
+directory's `Pair`, so the tuple sent is the one the message holds. Returns 46.
+```maxon
+// --- file: first/first.maxon
+typealias Num = int(0 to 1000)
+typealias Pair = (Num, Num)
+
+function pick(p Pair) returns Num
+	return p.0
+end 'pick'
+
+export function first() returns ExitCode
+	return pick((3 as Num, 40 as Num))
+end 'first'
+
+// --- file: second/second.maxon
+typealias Num = int(0 to 1000)
+typealias Pair = (Num, Num)
+
+type Tally
+	var sum as Num
+
+	static function create() returns Self
+		return Self{sum: 0}
+	end 'create'
+
+	export function take(pair Pair)
+		self.sum = pair.0 + pair.1
+	end 'take'
+
+	export function total() returns Num
+		return self.sum
+	end 'total'
+end 'Tally'
+
+export function second() returns ExitCode
+	let t = spawn Tally.create()
+	try t.take((3 as Num, 40 as Num)) otherwise panic("an open mailbox with room takes the send")
+	let sum = try await t.total() otherwise panic("the tally is running")
+	t.shutdown()
+	return sum
+end 'second'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return first() + second()
+end 'main'
+```
+```exitcode
+46
+```
+
+<!-- test: a-closure-capturing-a-borrowed-tuple-sees-a-write-through-an-alias -->
+A closure that captures a borrowed tuple holds a reference to the caller's record, as a binding does, so a
+write through `var q = t` is what the closure reads. Returns 55.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+function capture(t (Num, Num)) returns Num
+	let r = function() gives t.1
+	var q = t
+	q.1 = 55
+	return r()
+end 'capture'
+
+function main() returns ExitCode
+	var g = (1 as Num, 2 as Num)
+	return capture(g) as ExitCode
+end 'main'
+```
+```exitcode
+55
+```
+
+<!-- test: a-message-parameter-of-a-generic-alias-names-its-own-modules-alias-beside-a-sibling-of-the-same-name -->
+Two sibling directories each declare their own `Num` and `Nums`. `Tally.take`'s message carries the second
+directory's `Nums`, so the array sent is the one the message holds. Returns 46.
+```maxon
+// --- file: first/first.maxon
+typealias Num = int(0 to 1000)
+typealias Nums = Array with Num
+
+function head(xs Nums) returns Num
+	return try xs.get(0) otherwise 0
+end 'head'
+
+export function first() returns ExitCode
+	return head([3 as Num])
+end 'first'
+
+// --- file: second/second.maxon
+typealias Num = int(0 to 1000)
+typealias Nums = Array with Num
+
+type Tally
+	var sum as Num
+
+	static function create() returns Self
+		return Self{sum: 0}
+	end 'create'
+
+	export function take(items Nums)
+		self.sum = try items.get(0) otherwise 0
+	end 'take'
+
+	export function total() returns Num
+		return self.sum
+	end 'total'
+end 'Tally'
+
+export function second() returns ExitCode
+	let t = spawn Tally.create()
+	try t.take([43 as Num]) otherwise panic("an open mailbox with room takes the send")
+	let sum = try await t.total() otherwise panic("the tally is running")
+	t.shutdown()
+	return sum
+end 'second'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return first() + second()
+end 'main'
+```
+```exitcode
+46
+```
+
+<!-- test: a-borrowed-trivial-tuple-starts-a-generic-service-as-a-copy -->
+`Box with Pair` keeps its factory's `item` in its state; a borrowed trivial tuple handed to that factory is
+copied in, so the service owns its state alone. Returns 43.
+```maxon
+typealias Num = int(0 to 1000)
+typealias Pair = (Num, Num)
+
+type Box uses T
+	var item as T
+	var tag as Num
+
+	static function create(item T, tag Num) returns Self
+		return Self{item: item, tag: tag}
+	end 'create'
+
+	export function tagOf() returns Num
+		return self.tag
+	end 'tagOf'
+end 'Box'
+
+function launch(p Pair) returns Num
+	let h = spawn Box.create(p, tag: 43)
+	let t = try await h.tagOf() otherwise panic("the box is running")
+	h.shutdown()
+	return t
+end 'launch'
+
+function main() returns ExitCode
+	return launch((3 as Num, 40 as Num))
+end 'main'
+```
+```exitcode
+43
+```
+
+<!-- test: a-trivial-tuple-a-call-handed-back-is-sent-as-a-copy -->
+`echo` hands back a tuple the compiler cannot prove this frame owns alone; a trivial tuple has no identity,
+so it is sent as a copy and `b` keeps its value. Returns 43.
+```maxon
+typealias Num = int(0 to 1000)
+typealias Pair = (Num, Num)
+
+function echo(p Pair) returns Pair
+	return p
+end 'echo'
+
+type Tally
+	var sum as Num
+
+	static function create() returns Self
+		return Self{sum: 0}
+	end 'create'
+
+	export function take(pair Pair)
+		self.sum = pair.0 + pair.1
+	end 'take'
+
+	export function total() returns Num
+		return self.sum
+	end 'total'
+end 'Tally'
+
+function main() returns ExitCode
+	var b = echo((3 as Num, 1 as Num))
+	b.1 = 40
+	let t = spawn Tally.create()
+	try t.take(b) otherwise panic("an open mailbox with room takes the send")
+	let sum = try await t.total() otherwise panic("the tally is running")
+	t.shutdown()
+	return sum + b.0 - 3
+end 'main'
+```
+```exitcode
+43
+```
+
+<!-- test: a-borrowed-trivial-tuple-starts-a-generic-service-from-a-generic-body-as-a-copy -->
+`launch` is generic, so inside it `x` is a `T`; called with a trivial tuple, the service's factory is still
+handed a copy. Returns 43.
+```maxon
+typealias Num = int(0 to 1000)
+
+type Box uses T
+	var item as T
+	var tag as Num
+
+	static function create(item T, tag Num) returns Self
+		return Self{item: item, tag: tag}
+	end 'create'
+
+	export function tagOf() returns Num
+		return self.tag
+	end 'tagOf'
+end 'Box'
+
+function launch(x T) uses T returns Num
+	let h = spawn Box.create(x, tag: 43)
+	let t = try await h.tagOf() otherwise panic("the box is running")
+	h.shutdown()
+	return t
+end 'launch'
+
+function main() returns ExitCode
+	let p = (3 as Num, 40 as Num)
+	return launch(p)
+end 'main'
+```
+```exitcode
+43
+```
+
+<!-- test: a-generic-function-declared-before-the-body-that-mints-its-tuple-argument-compiles -->
+`launch`'s instance takes a tuple only `main`'s body spells, and `launch` is declared first; the instance
+still knows the tuple's layout. Returns 43.
+```maxon
+typealias Num = int(0 to 1000)
+
+function launch(x T) uses T returns Num
+	return x.0 + x.1
+end 'launch'
+
+function main() returns ExitCode
+	return launch((3 as Num, 40 as Num))
+end 'main'
+```
+```exitcode
+43
+```
+
+<!-- test: a-generic-function-declared-before-the-body-that-mints-its-tuple-of-an-array-compiles -->
+The same, with a tuple whose first element is an array. Returns 43.
+```maxon
+typealias Num = int(0 to 1000)
+
+function launch(x T) uses T returns Num
+	return x.0.count() as Num + x.1
+end 'launch'
+
+function main() returns ExitCode
+	let xs = [1 as Num, 2 as Num, 3 as Num]
+	return launch((xs, 40 as Num))
+end 'main'
+```
+```exitcode
+43
+```
+
+<!-- test: a-tuple-literal-argument-is-typed-by-the-declaration-its-reader-can-see -->
+Two sibling directories each declare a `launch`. The second's is generic, so the tuple literal it is called
+with is typed by that one, not by the first directory's `launch(p Pair)`, which it cannot see. Returns 46.
+```maxon
+// --- file: first/first.maxon
+typealias Num = int(0 to 1000)
+typealias Pair = (Num, Num)
+
+function launch(p Pair) returns Num
+	return p.0
+end 'launch'
+
+export function first() returns ExitCode
+	return launch((3 as Num, 40 as Num))
+end 'first'
+
+// --- file: second/second.maxon
+typealias Num = int(0 to 1000)
+
+function launch(x T) uses T returns Num
+	return x.0 + x.1
+end 'launch'
+
+export function second() returns ExitCode
+	return launch((3 as Num, 40 as Num))
+end 'second'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return first() + second()
+end 'main'
+```
+```exitcode
+46
+```
+
+<!-- test: a-generic-function-declared-before-the-body-that-mints-a-tuple-of-an-array-of-a-tuple-compiles -->
+A tuple inside an array inside the tuple argument: every layout the instance needs travels with it.
+Returns 43.
+```maxon
+typealias Num = int(0 to 1000)
+
+function launch(x T) uses T returns Num
+	return x.0.count() as Num + x.1 + 2
+end 'launch'
+
+function main() returns ExitCode
+	return launch(([(3 as Num, 1 as Num)], 40 as Num))
+end 'main'
+```
+```exitcode
+43
+```
+
+<!-- test: a-generic-function-handed-a-tuple-only-another-instance-spells-compiles -->
+`launch`'s instance takes the tuple `wrap`'s instance returns; no body outside an instance writes that tuple.
+Returns 43.
+```maxon
+typealias Num = int(0 to 1000)
+
+function wrap(x T) uses T returns (T, Num)
+	return (x, 40)
+end 'wrap'
+
+function launch(x T) uses T returns Num
+	return x.0 + x.1
+end 'launch'
+
+function main() returns ExitCode
+	return launch(wrap(3 as Num))
+end 'main'
+```
+```exitcode
+43
+```

@@ -235,7 +235,8 @@ A value `current()` returns, like a registry `default`'s, is read-only all the w
 [E3159](/docs/cli/error-codes/#e3159--semanticwritethroughimmutablerecord) and binding it to a `var` is
 [E3078](/docs/cli/error-codes/#e3078--semanticvarfromimmutable); `clone()` gives a mutable copy. `publish` takes a
 value with no other owner ([E3174](/docs/cli/error-codes/#e3174--registrypublishedvaluenotsolelyowned)); publish a fresh value
-or a `clone()`.
+or a `clone()`. A tuple of heap-free elements is published as a copy
+([Moves and Sharing](/docs/language/memory-model/#moves-and-sharing)).
 
 | Member | Returns | Description |
 |--------|---------|-------------|

@@ -3059,7 +3059,8 @@ A value `current()` returns, like a registry `default`'s, is read-only all the w
 [E3159](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3159) and binding it to a `var` is
 [E3078](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3078); `clone()` gives a mutable copy. `publish` takes a
 value with no other owner ([E3174](../maxon-bin/Compiler/ErrorCodeRegistry.maxon#e3174)); publish a fresh value
-or a `clone()`.
+or a `clone()`. A tuple of heap-free elements is published as a copy
+([Moves and Sharing](LANGUAGE_REFERENCE.md#moves-and-sharing)).
 
 | Member | Returns | Description |
 |--------|---------|-------------|

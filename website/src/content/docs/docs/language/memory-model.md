@@ -217,8 +217,9 @@ end 'main'
 | an argument to a [`sole`](/docs/language/functions/#capability-qualifiers-keep-sole-returns-readonly) parameter | moves: a fresh value, or a `let` or `var` at its last use |
 | an [`async`](/docs/language/async/#starting-a-coroutine) call argument | shared like an ordinary call argument: the coroutine runs on the caller's green thread; a parameter the coroutine reassigns gets storage the coroutine owns; a promise moves to the coroutine |
 | a [closure](/docs/language/functions/#closures) capture | the captured local moves into the closure; reading it afterwards is **E3102** |
-| a [service](/docs/language/async/#services--spawn) message or `spawn` factory argument | a mutable value moves to the service; a read-only value the sender does not own is shared; a view, or a record a view declared earlier may reach, is **E3138** |
-| `SharedValue.publish`, `Key.register` | the value must be solely owned (**E3174**), and every reader sees it read-only |
+| a [service](/docs/language/async/#services--spawn) message | a mutable value moves to the service; a read-only value the sender does not own is shared; a tuple of heap-free elements the sender does not solely own is copied; a view, or a record a view declared earlier may reach, is **E3138** |
+| a `spawn` factory argument the factory keeps | moves into the service's state; a borrowed `String` or a tuple of heap-free elements the sender does not solely own is copied, and any other borrowed value is **E3138** |
+| `SharedValue.publish`, `Key.register` | the value must be solely owned (**E3174**) or a tuple of heap-free elements, which is copied; every reader sees it read-only |
 
 ### Aliasing Between Arguments
 

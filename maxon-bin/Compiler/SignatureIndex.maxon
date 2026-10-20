@@ -10943,6 +10943,14 @@ function tupleStructLayout(name ByteArray, elements MaxonTypeArray, brands NameR
 	return layout
 end 'tupleStructLayout'
 
+function rowMentions(baseId TypeNameId, args MaxonTypeArray) returns TypeIdRemap
+	var watcher = TypeIdRemap.watching(i64.max)
+	_ = remapMaxonTypes(args, remap: watcher)
+	watcher.seenNames.insert(baseId)
+
+	return watcher
+end 'rowMentions'
+
 function instanceBrandsOf(elements MaxonTypeArray, written NameRoster) returns NameRoster
 	var brands = NameRoster.create()
 
@@ -18441,6 +18449,8 @@ export type ProgramSignatures
 
 	export var inlineGeometrySettled = false
 
+	export var rangeContestsSettled = false
+
 	// ⭐ **IS THE PROJECT ROOT ITSELF UNDER `stdlib/`?** A per-COMPILE fact, probed once by
 	// `Queries.queryProgramSignatures` and read at every `Parser.create` to derive that parser's
 	// `livesUnderStdlibDirectory` — see `Queries.livesUnderStdlibDirectory` for the derivation, its proof and
@@ -18682,10 +18692,7 @@ export type ProgramSignatures
 		while cursor < pending.count() 'untilTheClosure'
 			let id = try pending.get(cursor) otherwise panic("ProgramSignatures.footprintOf: pending.get OOB at {cursor} below count {pending.count()}")
 			cursor = cursor + 1
-			names.insert(self.genericInstances.instanceBaseId(id))
-
-			var watcher = TypeIdRemap.watching(i64.max)
-			_ = remapMaxonTypes(self.genericInstances.instanceArgs(id), remap: watcher)
+			let watcher = rowMentions(self.genericInstances.instanceBaseId(id), args: self.genericInstances.instanceArgs(id))
 
 			for nested in watcher.seenInstances 'eachNested'
 				if not instances.contains(nested) 'aNewRow'
@@ -18727,6 +18734,16 @@ export type ProgramSignatures
 		return footprint
 	end 'footprintOf'
 
+	function footprintRemap(names NameIdMap, highest TypeNameId, instances GenericInstanceIdMap) returns TypeIdRemap
+		var dense = TypeNameIdArray.create()
+
+		for id in 0 to highest 'eachSlot'
+			dense.push(try names.get(id) otherwise id)
+		end 'eachSlot'
+
+		return TypeIdRemap.create(dense, namesBase: 0, instances: instances)
+	end 'footprintRemap'
+
 	export function rebaseFor(footprint ParseFootprint) returns ParseRebase throws SharedMemoMiss
 		self.requireAtBaseline("the rebase of a shared library parse")
 		var names = NameIdMap.create()
@@ -18741,14 +18758,8 @@ export type ProgramSignatures
 			end 'aNewHighest'
 		end 'eachName'
 
-		var dense = TypeNameIdArray.create()
-
-		for id in 0 to highest 'eachSlot'
-			dense.push(try names.get(id) otherwise id)
-		end 'eachSlot'
-
 		var instances = GenericInstanceIdMap.create()
-		var remap = TypeIdRemap.create(dense, namesBase: 0, instances: instances)
+		var remap = self.footprintRemap(names, highest: highest, instances: instances)
 
 		for row in footprint.rows 'eachRow'
 			let current = try self.genericInstances.find(remap.applyName(row.baseId), args: remapMaxonTypes(row.args, remap: remap), shape: row.shape) otherwise throw SharedMemoMiss.footprintMoved
@@ -28411,13 +28422,13 @@ export type ProgramSignatures
 	// CONST-FOLD path (`constArrayValueType`, from the first element's kind) and never by `parseArrayLiteral`
 	// — so no receiving slot is ever asked. Curing it belongs where that path already draws the same line
 	// (`constValueInfersItsInstance`), not here: this door has no const-evaluator caller to serve.
-	export function arrayInstanceDeclaredAtParam(callee ByteArray, sourceIndex ParamCount, label ByteArray) returns DeclaredArrayInstance
-		let param = try self.soleDeclaredParam(callee, sourceIndex: sourceIndex, label: label) otherwise return DeclaredArrayInstance.none
+	export function arrayInstanceDeclaredAtParam(callee ByteArray, sourceIndex ParamCount, label ByteArray, readerFilePath FilePath) returns DeclaredArrayInstance
+		let param = try self.soleDeclaredParam(callee, sourceIndex: sourceIndex, label: label, readerFilePath: readerFilePath) otherwise return DeclaredArrayInstance.none
 		return self.arrayInstanceOfDeclaredType(param.declared, interner: self.typeNames, readerFilePath: param.declFilePath)
 	end 'arrayInstanceDeclaredAtParam'
 
 	export function arrayInstanceDeclaredAtParamOfReceiver(callee ByteArray, sourceIndex ParamCount, label ByteArray, receiver GenericInstanceId, readerFilePath FilePath) returns DeclaredArrayInstance
-		let param = try self.soleDeclaredParam(callee, sourceIndex: sourceIndex, label: label) otherwise return DeclaredArrayInstance.none
+		let param = try self.soleDeclaredParam(callee, sourceIndex: sourceIndex, label: label, readerFilePath: readerFilePath) otherwise return DeclaredArrayInstance.none
 		let substituted = self.substituteThroughInstanceInterned(param.declared, id: receiver, interner: self.typeNames)
 
 		if maxonTypesDenoteSame(substituted, b: param.declared) 'theReceiverFixesNothing'
@@ -28427,8 +28438,8 @@ export type ProgramSignatures
 		return self.arrayInstanceOfDeclaredType(substituted, interner: self.typeNames, readerFilePath: readerFilePath)
 	end 'arrayInstanceDeclaredAtParamOfReceiver'
 
-	export function tupleTypeNameDeclaredAtParam(callee ByteArray, sourceIndex ParamCount, label ByteArray) returns ByteArray throws AbsentError
-		let param = try self.soleDeclaredParam(callee, sourceIndex: sourceIndex, label: label)
+	export function tupleTypeNameDeclaredAtParam(callee ByteArray, sourceIndex ParamCount, label ByteArray, readerFilePath FilePath) returns ByteArray throws AbsentError
+		let param = try self.soleDeclaredParam(callee, sourceIndex: sourceIndex, label: label, readerFilePath: readerFilePath)
 
 		let resolved = self.declaredSlotType(param.declared, into: self.typeNames, slotScopeFilePath: param.declFilePath)
 
@@ -28443,8 +28454,8 @@ export type ProgramSignatures
 		return self.indexSpaceTypeName(resolved)
 	end 'tupleTypeNameDeclaredAtParam'
 
-	export function tupleTypeNameDeclaredAtParamOfReceiver(callee ByteArray, sourceIndex ParamCount, label ByteArray, receiver GenericInstanceId) returns ByteArray throws AbsentError
-		let param = try self.soleDeclaredParam(callee, sourceIndex: sourceIndex, label: label)
+	export function tupleTypeNameDeclaredAtParamOfReceiver(callee ByteArray, sourceIndex ParamCount, label ByteArray, receiver GenericInstanceId, readerFilePath FilePath) returns ByteArray throws AbsentError
+		let param = try self.soleDeclaredParam(callee, sourceIndex: sourceIndex, label: label, readerFilePath: readerFilePath)
 		let substituted = self.substituteThroughInstanceInterned(param.declared, id: receiver, interner: self.typeNames)
 
 		if maxonTypeTag(substituted) != ValueTypeTag.structRef 'notARecord'
@@ -28454,18 +28465,24 @@ export type ProgramSignatures
 		return self.indexSpaceTypeName(substituted)
 	end 'tupleTypeNameDeclaredAtParamOfReceiver'
 
-	function soleDeclaredParam(callee ByteArray, sourceIndex ParamCount, label ByteArray) returns DeclaredParam throws AbsentError
+	function soleDeclaredParam(callee ByteArray, sourceIndex ParamCount, label ByteArray, readerFilePath FilePath) returns DeclaredParam throws AbsentError
 		if not self.allFilesFolded 'theAliasRegistriesAreStillFilling'
 			throw AbsentError.absent
 		end 'theAliasRegistriesAreStillFilling'
 
-		let declarations = self.overloadedDeclsOf(callee)
+		var visible = OverloadedDeclArray.create()
 
-		if declarations.count() != 1 'noSingleDeclaration'
+		for declaration in self.overloadedDeclsOf(callee) 'eachDeclaration'
+			if self.isVisibleFrom(declaration.visibility, declFilePath: declaration.declFilePath, readerFilePath: readerFilePath) 'thisReaderMeansIt'
+				visible.push(declaration)
+			end 'thisReaderMeansIt'
+		end 'eachDeclaration'
+
+		if visible.count() != 1 'noSingleDeclaration'
 			throw AbsentError.absent
 		end 'noSingleDeclaration'
 
-		let decl = try declarations.get(0) otherwise panic("ProgramSignatures.soleDeclaredParam: get(0) on the one-element array the line above tested for")
+		let decl = try visible.get(0) otherwise panic("ProgramSignatures.soleDeclaredParam: get(0) on the one-element array the line above tested for")
 		let slot = try argSlotPosition(decl.paramNames, argIndex: sourceIndex, label: label) otherwise throw AbsentError.absent
 		let declared = try decl.paramTypes.get(slot) otherwise panic("ProgramSignatures.soleDeclaredParam: paramTypes.get OOB at {slot} — the sweep records one type per parameter name")
 		return DeclaredParam.create(declared, declFilePath: decl.declFilePath)
@@ -31956,7 +31973,7 @@ export type ProgramSignatures
 	// is minted through — a `(a, b)` literal, a `(T, U)` type annotation, a `typealias Pair = (…)` — so every
 	// spelling of one tuple type lands on ONE layout.
 	//
-	// ⭐⭐ **IT CANONICALIZES, AND ONLY ONCE THE WHOLE PROGRAM IS FOLDED.** A ranged alias is keyed
+	// ⭐⭐ **IT CANONICALIZES, AND ONLY ONCE `tupleNamesAreCanonical`.** A ranged alias is keyed
 	// on the declaration its spelling's file sees (`canonicalTupleElement`). It cannot be done
 	// during the SWEEP: `Integer`'s own declaration may be below the function, or in a file not yet
 	// folded, so the alias registry has no answer yet. A sweep-minted name is therefore the SOURCE spelling
@@ -31982,7 +31999,7 @@ export type ProgramSignatures
 		for i in 0 upto elements.count() 'eachElement'
 			let adopted = self.adoptTypeFrom(try elements.get(i) otherwise panic("internTupleType: elements.get OOB at {i} below count {elements.count()}"), from: from)
 
-			if not self.allFilesFolded 'tolerantSweep'
+			if not self.tupleNamesAreCanonical() 'tolerantSweep'
 				interned.push(adopted)
 				continue
 			end 'tolerantSweep'
@@ -32059,10 +32076,14 @@ export type ProgramSignatures
 
 		// The layout owns its copies: a parse hands in its own types and path, and a layout the journal later removes stays
 		// in its map slot.
-		self.addRegisteredLayout(tupleStructLayout(name, elements: elements.clone(), brands: self.tupleElementBrands(elements, instanceBrands: instanceBrands, declFilePath: declFilePath), declFilePath: declFilePath.clone()))
+		self.registerTupleLayoutAs(name, elements: elements.clone(), brands: self.tupleElementBrands(elements, instanceBrands: instanceBrands, declFilePath: declFilePath), instanceBrands: instanceBrands, declFilePath: declFilePath.clone())
+	end 'mintTupleLayout'
+
+	function registerTupleLayoutAs(name ByteArray, elements MaxonTypeArray, brands NameRoster, instanceBrands NameRoster, declFilePath FilePath)
+		self.addRegisteredLayout(tupleStructLayout(name, elements: elements, brands: brands, declFilePath: declFilePath))
 		self.recordTupleElementToken(name)
 		self.recordSeparatorBearingElementTokens(elements, instanceBrands: instanceBrands)
-	end 'mintTupleLayout'
+	end 'registerTupleLayoutAs'
 
 	export function settleSweptTupleElementBrands()
 		for (name, slot) in self.structSlots 'eachLayout'
@@ -32293,7 +32314,7 @@ export type ProgramSignatures
 	// lines of loop around two different questions, so they are not merged. A change to the JOIN belongs
 	// there and reaches both.
 	function sweepScopedTupleName(name ByteArray, declFilePath FilePath) returns ByteArray
-		if self.allFilesFolded 'aCanonicalIdentity'
+		if self.tupleNamesAreCanonical() 'aCanonicalIdentity'
 			return name
 		end 'aCanonicalIdentity'
 
@@ -32482,10 +32503,10 @@ export type ProgramSignatures
 	end 'canonicalTupleStructRef'
 
 	// ⭐ **THE CANONICAL TUPLE NAME FOR A NAME THE SWEEP MINTED.** Re-canonicalizes the registered layout's
-	// element list now that every declaration is folded, registers the canonical layout if it is new, and
+	// element list under `tupleNamesAreCanonical`, registers the canonical layout if it is new, and
 	// MEMOIZES — so the rewrite `adoptType` performs at every read costs one map hit after the first.
 	// A name that is already canonical maps to itself, which is what makes the memo cover both directions.
-	export function canonicalTupleName(name ByteArray) returns ByteArray
+	function canonicalTupleName(name ByteArray) returns ByteArray
 		if let memoized = try self.tupleCanonicalNames.get(name) 'alreadyDerived'
 			return name if memoized.isEmpty() else memoized
 		end 'alreadyDerived'
@@ -36063,6 +36084,7 @@ export type ProgramSignatures
 	//      `fileScopedInstance` is a pure lookup from every parallel per-file parse.
 	export function settleRangeScopedInstances()
 		self.mainThreadSettled().typeAliases.settleRangeContests(self.crossKindScopedAliasNames())
+		self.rangeContestsSettled = true
 
 		if not self.anythingNeedsScoping() 'nothingInThisProgramNeedsScoping'
 			return
@@ -45165,18 +45187,24 @@ export type ProgramSignatures
 	end 'mixGenericInstance'
 
 	// A struct name as a READER outside this index must see it: a TUPLE name is canonicalized, every
-	// other name is itself. Split out of `adoptType`'s arm so the `__Tuple` prefix test — which every
-	// `structRef` crossing pays — is one `bytesStartWith` and states why it is there.
-	//
-	// The `allFilesFolded` gate is the same one every whole-program answer is behind: before it, a tuple's
-	// canonical form is not yet computable and the sweep's own reads must see the spelling the sweep minted.
+	// other name is itself. Before `tupleNamesAreCanonical`, every read sees the spelling the sweep
+	// minted.
 	export function canonicalNameOfStruct(name ByteArray) returns ByteArray
-		if not self.allFilesFolded or not isTupleTypeName(name) 'notACanonicalizableTuple'
+		if not self.tupleNamesAreCanonical() or not isTupleTypeName(name) 'notACanonicalizableTuple'
 			return name
 		end 'notACanonicalizableTuple'
 
 		return self.canonicalTupleName(name)
 	end 'canonicalNameOfStruct'
+
+	// Before `allFilesFolded` a tuple's canonical form is not computable. Before
+	// `settleRangeScopedInstances` it is computable but can be wrong: which declaration of a contested
+	// ranged alias a file means is not settled, and the service companions
+	// `Queries.closeDeclarationFold` synthesizes in between would canonicalize, and memoize, a
+	// message parameter's tuple over a sibling module's elements.
+	function tupleNamesAreCanonical() returns bool
+		return self.allFilesFolded and self.rangeContestsSettled
+	end 'tupleNamesAreCanonical'
 
 	function nameOfId(id TypeNameId) returns ByteArray
 		return try self.typeNames.nameOf(id) otherwise panic("ProgramSignatures: type-name id {id} is not in this index's own interner — every id it stores was minted by foldFile's fold into that table")
@@ -45214,7 +45242,7 @@ export type ProgramSignatures
 	end 'adopting'
 
 	static function reassembled(template ProgramSignatures, own SettledDeclarations, shared SettledDeclarations, readsPublishedView bool) returns ProgramSignatures
-		return Self{ownSettled: own, sharedSettled: shared, readsPublishedView: readsPublishedView, structSlots: template.structSlots, mintedTupleLayouts: template.mintedTupleLayouts, published: template.published, genericInstances: template.genericInstances, compiledInstanceNames: template.compiledInstanceNames, canonicalInstanceNames: template.canonicalInstanceNames, substitutedInstanceOrigins: template.substitutedInstanceOrigins, canonicalInstanceNameIndex: template.canonicalInstanceNameIndex, canonicalNamesIndexedThrough: template.canonicalNamesIndexedThrough, tupleCanonicalNames: template.tupleCanonicalNames, tupleElementTokens: template.tupleElementTokens, tupleElementTokenOwners: template.tupleElementTokenOwners, tupleAliases: template.tupleAliases, multiplyDeclaredTupleAliases: template.multiplyDeclaredTupleAliases, sawAggregateArrayLiteral: template.sawAggregateArrayLiteral, sawListFromConstruction: template.sawListFromConstruction, sawEnumAllCasesAccess: template.sawEnumAllCasesAccess, sawIntArrayLiteral: template.sawIntArrayLiteral, sawByteStringLiteral: template.sawByteStringLiteral, sawStringArrayLiteral: template.sawStringArrayLiteral, sawSetFromConstruction: template.sawSetFromConstruction, sawManagedFileProducer: template.sawManagedFileProducer, sawManagedDirectoryProducer: template.sawManagedDirectoryProducer, sawManagedSocketProducer: template.sawManagedSocketProducer, sawManagedHostResourceProducer: template.sawManagedHostResourceProducer, divergedGenericAliasDecl: template.divergedGenericAliasDecl, cascadeWalkRoots: template.cascadeWalkRoots, cascadeBreakReached: template.cascadeBreakReached, interfaceCloneAnswers: template.interfaceCloneAnswers, someRecordHoldsAnInterfaceValue: template.someRecordHoldsAnInterfaceValue, recordsHoldingAnInterfaceValueCounted: template.recordsHoldingAnInterfaceValueCounted, typeNames: template.typeNames, crossFileConstantReads: template.crossFileConstantReads, sawParamReassignment: template.sawParamReassignment, byRefForwardingClosed: template.byRefForwardingClosed, sawGlobalNameReturn: template.sawGlobalNameReturn, globalAliasReturnsClosed: template.globalAliasReturnsClosed, deepCloneAnswers: template.deepCloneAnswers, deepCloneWalkReadInstances: template.deepCloneWalkReadInstances, transferWalkAnswers: template.transferWalkAnswers, freshReturnForwardsClosed: template.freshReturnForwardsClosed, hash: template.hash, hashSource: template.hashSource, authorChainState: template.authorChainState, libraryChainState: template.libraryChainState, wholeChainState: template.wholeChainState, libraryHash: template.libraryHash, libraryParseSharing: template.libraryParseSharing, authorNameMeantByTheLibrary: template.authorNameMeantByTheLibrary, storedGlobalCount: template.storedGlobalCount, allFilesFolded: template.allFilesFolded, inlineGeometrySettled: template.inlineGeometrySettled, rootIsUnderStdlibDirectory: template.rootIsUnderStdlibDirectory, projectRootModuleDirectory: template.projectRootModuleDirectory, arrayByteInstance: template.arrayByteInstance, arrayByteInstanceComputed: template.arrayByteInstanceComputed, spawnsAnyServiceSettled: template.spawnsAnyServiceSettled, spawnsAnyServiceAnswer: template.spawnsAnyServiceAnswer, byRefMasksSettled: template.byRefMasksSettled, byRefMaskColumn: template.byRefMaskColumn, witnessByRefMasks: template.witnessByRefMasks, byRefConventionDigestAnswer: template.byRefConventionDigestAnswer, functionValuedFieldNames: template.functionValuedFieldNames, liveDefaultKeyNames: template.liveDefaultKeyNames, liveKeyAdoptions: template.liveKeyAdoptions, hasNonCorpusArrayConformer: template.hasNonCorpusArrayConformer, recordsTypeClaims: template.recordsTypeClaims, baseline: template.baseline, journal: template.journal, rowSetLog: RowSetLog.closed(), holdsAMerge: template.holdsAMerge, genericInstancesDigest: template.genericInstancesDigest}
+		return Self{ownSettled: own, sharedSettled: shared, readsPublishedView: readsPublishedView, structSlots: template.structSlots, mintedTupleLayouts: template.mintedTupleLayouts, published: template.published, genericInstances: template.genericInstances, compiledInstanceNames: template.compiledInstanceNames, canonicalInstanceNames: template.canonicalInstanceNames, substitutedInstanceOrigins: template.substitutedInstanceOrigins, canonicalInstanceNameIndex: template.canonicalInstanceNameIndex, canonicalNamesIndexedThrough: template.canonicalNamesIndexedThrough, tupleCanonicalNames: template.tupleCanonicalNames, tupleElementTokens: template.tupleElementTokens, tupleElementTokenOwners: template.tupleElementTokenOwners, tupleAliases: template.tupleAliases, multiplyDeclaredTupleAliases: template.multiplyDeclaredTupleAliases, sawAggregateArrayLiteral: template.sawAggregateArrayLiteral, sawListFromConstruction: template.sawListFromConstruction, sawEnumAllCasesAccess: template.sawEnumAllCasesAccess, sawIntArrayLiteral: template.sawIntArrayLiteral, sawByteStringLiteral: template.sawByteStringLiteral, sawStringArrayLiteral: template.sawStringArrayLiteral, sawSetFromConstruction: template.sawSetFromConstruction, sawManagedFileProducer: template.sawManagedFileProducer, sawManagedDirectoryProducer: template.sawManagedDirectoryProducer, sawManagedSocketProducer: template.sawManagedSocketProducer, sawManagedHostResourceProducer: template.sawManagedHostResourceProducer, divergedGenericAliasDecl: template.divergedGenericAliasDecl, cascadeWalkRoots: template.cascadeWalkRoots, cascadeBreakReached: template.cascadeBreakReached, interfaceCloneAnswers: template.interfaceCloneAnswers, someRecordHoldsAnInterfaceValue: template.someRecordHoldsAnInterfaceValue, recordsHoldingAnInterfaceValueCounted: template.recordsHoldingAnInterfaceValueCounted, typeNames: template.typeNames, crossFileConstantReads: template.crossFileConstantReads, sawParamReassignment: template.sawParamReassignment, byRefForwardingClosed: template.byRefForwardingClosed, sawGlobalNameReturn: template.sawGlobalNameReturn, globalAliasReturnsClosed: template.globalAliasReturnsClosed, deepCloneAnswers: template.deepCloneAnswers, deepCloneWalkReadInstances: template.deepCloneWalkReadInstances, transferWalkAnswers: template.transferWalkAnswers, freshReturnForwardsClosed: template.freshReturnForwardsClosed, hash: template.hash, hashSource: template.hashSource, authorChainState: template.authorChainState, libraryChainState: template.libraryChainState, wholeChainState: template.wholeChainState, libraryHash: template.libraryHash, libraryParseSharing: template.libraryParseSharing, authorNameMeantByTheLibrary: template.authorNameMeantByTheLibrary, storedGlobalCount: template.storedGlobalCount, allFilesFolded: template.allFilesFolded, inlineGeometrySettled: template.inlineGeometrySettled, rangeContestsSettled: template.rangeContestsSettled, rootIsUnderStdlibDirectory: template.rootIsUnderStdlibDirectory, projectRootModuleDirectory: template.projectRootModuleDirectory, arrayByteInstance: template.arrayByteInstance, arrayByteInstanceComputed: template.arrayByteInstanceComputed, spawnsAnyServiceSettled: template.spawnsAnyServiceSettled, spawnsAnyServiceAnswer: template.spawnsAnyServiceAnswer, byRefMasksSettled: template.byRefMasksSettled, byRefMaskColumn: template.byRefMaskColumn, witnessByRefMasks: template.witnessByRefMasks, byRefConventionDigestAnswer: template.byRefConventionDigestAnswer, functionValuedFieldNames: template.functionValuedFieldNames, liveDefaultKeyNames: template.liveDefaultKeyNames, liveKeyAdoptions: template.liveKeyAdoptions, hasNonCorpusArrayConformer: template.hasNonCorpusArrayConformer, recordsTypeClaims: template.recordsTypeClaims, baseline: template.baseline, journal: template.journal, rowSetLog: RowSetLog.closed(), holdsAMerge: template.holdsAMerge, genericInstancesDigest: template.genericInstancesDigest}
 	end 'reassembled'
 
 	export function releaseTypeNameViews()
@@ -45300,6 +45328,83 @@ export type ProgramSignatures
 		ownDeclarations.genericInstancesByName = byName
 		self.genericInstancesDigest = filed.filed.digest
 	end 'adoptGenericFunctionInstances'
+
+	export function adoptRequestedTupleLayouts(filed RequestedTupleTypesMap, from TypeNameInterner)
+		for (_, tupleTypes) in filed 'eachInstance'
+			if not self.holdsAnUnregisteredLayout(tupleTypes.layouts) 'everyTupleIsHere'
+				continue
+			end 'everyTupleIsHere'
+
+			let instances = self.internFootprintInstances(tupleTypes.footprint)
+
+			for layout in tupleTypes.layouts 'eachLayout'
+				if self.hasRegisteredLayout(layout.name) 'alreadyRegistered'
+					continue
+				end 'alreadyRegistered'
+
+				var elements = MaxonTypeArray.create()
+
+				for element in layout.fieldTypes 'eachElement'
+					elements.push(self.adoptRequestedTupleElement(element, from: from, instances: instances))
+				end 'eachElement'
+
+				self.registerTupleLayoutAs(layout.name, elements: elements, brands: layout.fieldDeclaredBrands, instanceBrands: instanceBrandsOf(elements, written: layout.fieldDeclaredBrands), declFilePath: layout.declFilePath)
+			end 'eachLayout'
+		end 'eachInstance'
+	end 'adoptRequestedTupleLayouts'
+
+	function holdsAnUnregisteredLayout(layouts StructLayoutArray) returns bool
+		for layout in layouts 'eachLayout'
+			if not self.hasRegisteredLayout(layout.name) 'notRegistered'
+				return true
+			end 'notRegistered'
+		end 'eachLayout'
+
+		return false
+	end 'holdsAnUnregisteredLayout'
+
+	function adoptRequestedTupleElement(element MaxonType, from TypeNameInterner, instances GenericInstanceIdMap) returns MaxonType
+		if maxonTypeTag(element) != ValueTypeTag.genericInstance 'notAnInstance'
+			return self.adoptTypeFrom(element, from: from)
+		end 'notAnInstance'
+
+		return MaxonType.genericInstance(try instances.get(genericInstanceIdOf(element)) otherwise panic("ProgramSignatures.adoptRequestedTupleElement: instance {genericInstanceIdOf(element)} is in no row of the footprint filed beside its layout — `footprintOf` closes over every instance the layouts hold"))
+	end 'adoptRequestedTupleElement'
+
+	// Each row is re-interned through its names: `row.id` and the ids in its args belong to the
+	// index that built the footprint, and mean another instance, or none, in this one.
+	function internFootprintInstances(footprint ParseFootprint) returns GenericInstanceIdMap
+		var names = NameIdMap.create()
+		var highest = 0 as TypeNameId
+
+		for (position, id) in footprint.nameIds.withIterator() 'eachName'
+			names.upsert(id, value: self.typeNames.intern(try footprint.nameBytes.get(position.index()) otherwise panic("ProgramSignatures.internFootprintInstances: nameBytes.get OOB at {position.index()} — the footprint's two name columns are filled together")))
+
+			if id > highest 'aNewHighest'
+				highest = id
+			end 'aNewHighest'
+		end 'eachName'
+
+		var instances = GenericInstanceIdMap.create()
+		var remap = self.footprintRemap(names, highest: highest, instances: instances)
+
+		for row in footprint.rows 'eachRow'
+			self.requireRowNamesAreListed(row, names: names)
+			instances.upsert(row.id, value: self.genericInstances.intern(remap.applyName(row.baseId), args: remapMaxonTypes(row.args, remap: remap), shape: row.shape, asSpeculative: row.speculative))
+		end 'eachRow'
+
+		return instances
+	end 'internFootprintInstances'
+
+	function requireRowNamesAreListed(row FootprintRow, names NameIdMap)
+		let watcher = rowMentions(row.baseId, args: row.args)
+
+		for id in watcher.seenNames 'eachName'
+			if not names.contains(id) 'anUnlistedName'
+				panic("ProgramSignatures.requireRowNamesAreListed: instance row {row.id} mentions type name id {id}, which its footprint's name table does not list — `footprintOf` files every name its rows mention, and `footprintRemap` would hand an unlisted id back unmoved")
+			end 'anUnlistedName'
+		end 'eachName'
+	end 'requireRowNamesAreListed'
 
 	export function genericTemplateKeys() returns NameRoster
 		var keys = NameRoster.create()
@@ -46026,6 +46131,7 @@ export type ProgramSignatures
 		fingerprint.note("storedGlobalCount", value: self.storedGlobalCount as EntryCount)
 		fingerprint.note("corpusSlotInitCallees", value: declarations.corpusSlotInitCallees.count())
 		fingerprint.noteFlag("allFilesFolded", flag: self.allFilesFolded)
+		fingerprint.noteFlag("rangeContestsSettled", flag: self.rangeContestsSettled)
 		fingerprint.noteFlag("rootIsUnderStdlibDirectory", flag: self.rootIsUnderStdlibDirectory)
 		fingerprint.note("constInitializerTypeNames", value: declarations.constInitializerTypeNames.count())
 		fingerprint.note("constInitializerTypeSites", value: declarations.constInitializerTypeSites.count() as EntryCount)
@@ -46144,6 +46250,7 @@ export type ProgramSignatures
 		writer.unsigned(self.storedGlobalCount as CacheUnsigned)
 		writer.flag(self.allFilesFolded)
 		writer.flag(self.inlineGeometrySettled)
+		writer.flag(self.rangeContestsSettled)
 		writer.flag(self.rootIsUnderStdlibDirectory)
 		writer.text(self.projectRootModuleDirectory)
 		writer.unsigned(self.arrayByteInstance as CacheUnsigned)
@@ -46215,6 +46322,7 @@ export type ProgramSignatures
 		let f_storedGlobalCount = (try reader.unsigned()) as StoredGlobalCount
 		let f_allFilesFolded = try reader.flag()
 		let f_inlineGeometrySettled = try reader.flag()
+		let f_rangeContestsSettled = try reader.flag()
 		let f_rootIsUnderStdlibDirectory = try reader.flag()
 		let f_projectRootModuleDirectory = try reader.text()
 		let f_arrayByteInstance = (try reader.unsigned()) as GenericInstanceId
@@ -46233,11 +46341,11 @@ export type ProgramSignatures
 		let f_holdsAMerge = try reader.flag()
 		let f_genericInstancesDigest = (try reader.unsigned()) as HashDigest
 
-		return Self{ownSettled: f_ownSettled, sharedSettled: SettledDeclarations.unused(), readsPublishedView: false, structSlots: f_structSlots, mintedTupleLayouts: StructLayoutArray.create(), published: SettledCellArray.create(), genericInstances: f_genericInstances, compiledInstanceNames: f_compiledInstanceNames, canonicalInstanceNames: f_canonicalInstanceNames, substitutedInstanceOrigins: f_substitutedInstanceOrigins, canonicalInstanceNameIndex: f_canonicalInstanceNameIndex, canonicalNamesIndexedThrough: f_canonicalNamesIndexedThrough, tupleCanonicalNames: f_tupleCanonicalNames, tupleElementTokens: f_tupleElementTokens, tupleElementTokenOwners: f_tupleElementTokenOwners, tupleAliases: f_tupleAliases, multiplyDeclaredTupleAliases: f_multiplyDeclaredTupleAliases, sawAggregateArrayLiteral: f_sawAggregateArrayLiteral, sawListFromConstruction: f_sawListFromConstruction, sawEnumAllCasesAccess: f_sawEnumAllCasesAccess, sawIntArrayLiteral: f_sawIntArrayLiteral, sawByteStringLiteral: f_sawByteStringLiteral, sawStringArrayLiteral: f_sawStringArrayLiteral, sawSetFromConstruction: f_sawSetFromConstruction, sawManagedFileProducer: f_sawManagedFileProducer, sawManagedDirectoryProducer: f_sawManagedDirectoryProducer, sawManagedSocketProducer: f_sawManagedSocketProducer, sawManagedHostResourceProducer: f_sawManagedHostResourceProducer, divergedGenericAliasDecl: f_divergedGenericAliasDecl, cascadeWalkRoots: f_cascadeWalkRoots, cascadeBreakReached: f_cascadeBreakReached, interfaceCloneAnswers: f_interfaceCloneAnswers, someRecordHoldsAnInterfaceValue: f_someRecordHoldsAnInterfaceValue, recordsHoldingAnInterfaceValueCounted: f_recordsHoldingAnInterfaceValueCounted, typeNames: f_typeNames, crossFileConstantReads: f_crossFileConstantReads, sawParamReassignment: f_sawParamReassignment, byRefForwardingClosed: f_byRefForwardingClosed, sawGlobalNameReturn: f_sawGlobalNameReturn, globalAliasReturnsClosed: f_globalAliasReturnsClosed, deepCloneAnswers: f_deepCloneAnswers, deepCloneWalkReadInstances: f_deepCloneWalkReadInstances, transferWalkAnswers: f_transferWalkAnswers, freshReturnForwardsClosed: f_freshReturnForwardsClosed, hash: f_hash, hashSource: f_hashSource, authorChainState: f_authorChainState, libraryChainState: f_libraryChainState, wholeChainState: f_wholeChainState, libraryHash: f_libraryHash, libraryParseSharing: f_libraryParseSharing, authorNameMeantByTheLibrary: f_authorNameMeantByTheLibrary, storedGlobalCount: f_storedGlobalCount, allFilesFolded: f_allFilesFolded, inlineGeometrySettled: f_inlineGeometrySettled, rootIsUnderStdlibDirectory: f_rootIsUnderStdlibDirectory, projectRootModuleDirectory: f_projectRootModuleDirectory, arrayByteInstance: f_arrayByteInstance, arrayByteInstanceComputed: f_arrayByteInstanceComputed, spawnsAnyServiceSettled: f_spawnsAnyServiceSettled, spawnsAnyServiceAnswer: f_spawnsAnyServiceAnswer, byRefMasksSettled: f_byRefMasksSettled, byRefMaskColumn: f_byRefMaskColumn, functionValuedFieldNames: f_functionValuedFieldNames, witnessByRefMasks: f_witnessByRefMasks, byRefConventionDigestAnswer: f_byRefConventionDigestAnswer, liveDefaultKeyNames: f_liveDefaultKeyNames, liveKeyAdoptions: f_liveKeyAdoptions, hasNonCorpusArrayConformer: f_hasNonCorpusArrayConformer, recordsTypeClaims: f_recordsTypeClaims, baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed(), holdsAMerge: f_holdsAMerge, genericInstancesDigest: f_genericInstancesDigest}
+		return Self{ownSettled: f_ownSettled, sharedSettled: SettledDeclarations.unused(), readsPublishedView: false, structSlots: f_structSlots, mintedTupleLayouts: StructLayoutArray.create(), published: SettledCellArray.create(), genericInstances: f_genericInstances, compiledInstanceNames: f_compiledInstanceNames, canonicalInstanceNames: f_canonicalInstanceNames, substitutedInstanceOrigins: f_substitutedInstanceOrigins, canonicalInstanceNameIndex: f_canonicalInstanceNameIndex, canonicalNamesIndexedThrough: f_canonicalNamesIndexedThrough, tupleCanonicalNames: f_tupleCanonicalNames, tupleElementTokens: f_tupleElementTokens, tupleElementTokenOwners: f_tupleElementTokenOwners, tupleAliases: f_tupleAliases, multiplyDeclaredTupleAliases: f_multiplyDeclaredTupleAliases, sawAggregateArrayLiteral: f_sawAggregateArrayLiteral, sawListFromConstruction: f_sawListFromConstruction, sawEnumAllCasesAccess: f_sawEnumAllCasesAccess, sawIntArrayLiteral: f_sawIntArrayLiteral, sawByteStringLiteral: f_sawByteStringLiteral, sawStringArrayLiteral: f_sawStringArrayLiteral, sawSetFromConstruction: f_sawSetFromConstruction, sawManagedFileProducer: f_sawManagedFileProducer, sawManagedDirectoryProducer: f_sawManagedDirectoryProducer, sawManagedSocketProducer: f_sawManagedSocketProducer, sawManagedHostResourceProducer: f_sawManagedHostResourceProducer, divergedGenericAliasDecl: f_divergedGenericAliasDecl, cascadeWalkRoots: f_cascadeWalkRoots, cascadeBreakReached: f_cascadeBreakReached, interfaceCloneAnswers: f_interfaceCloneAnswers, someRecordHoldsAnInterfaceValue: f_someRecordHoldsAnInterfaceValue, recordsHoldingAnInterfaceValueCounted: f_recordsHoldingAnInterfaceValueCounted, typeNames: f_typeNames, crossFileConstantReads: f_crossFileConstantReads, sawParamReassignment: f_sawParamReassignment, byRefForwardingClosed: f_byRefForwardingClosed, sawGlobalNameReturn: f_sawGlobalNameReturn, globalAliasReturnsClosed: f_globalAliasReturnsClosed, deepCloneAnswers: f_deepCloneAnswers, deepCloneWalkReadInstances: f_deepCloneWalkReadInstances, transferWalkAnswers: f_transferWalkAnswers, freshReturnForwardsClosed: f_freshReturnForwardsClosed, hash: f_hash, hashSource: f_hashSource, authorChainState: f_authorChainState, libraryChainState: f_libraryChainState, wholeChainState: f_wholeChainState, libraryHash: f_libraryHash, libraryParseSharing: f_libraryParseSharing, authorNameMeantByTheLibrary: f_authorNameMeantByTheLibrary, storedGlobalCount: f_storedGlobalCount, allFilesFolded: f_allFilesFolded, inlineGeometrySettled: f_inlineGeometrySettled, rangeContestsSettled: f_rangeContestsSettled, rootIsUnderStdlibDirectory: f_rootIsUnderStdlibDirectory, projectRootModuleDirectory: f_projectRootModuleDirectory, arrayByteInstance: f_arrayByteInstance, arrayByteInstanceComputed: f_arrayByteInstanceComputed, spawnsAnyServiceSettled: f_spawnsAnyServiceSettled, spawnsAnyServiceAnswer: f_spawnsAnyServiceAnswer, byRefMasksSettled: f_byRefMasksSettled, byRefMaskColumn: f_byRefMaskColumn, functionValuedFieldNames: f_functionValuedFieldNames, witnessByRefMasks: f_witnessByRefMasks, byRefConventionDigestAnswer: f_byRefConventionDigestAnswer, liveDefaultKeyNames: f_liveDefaultKeyNames, liveKeyAdoptions: f_liveKeyAdoptions, hasNonCorpusArrayConformer: f_hasNonCorpusArrayConformer, recordsTypeClaims: f_recordsTypeClaims, baseline: IndexBaseline.unsettled(), journal: IndexJournal.create(), rowSetLog: RowSetLog.closed(), holdsAMerge: f_holdsAMerge, genericInstancesDigest: f_genericInstancesDigest}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize600
-		return sizeof(ProgramSignatures) as CacheSize600
+	static function cacheLayoutBytes() returns CacheSize608
+		return sizeof(ProgramSignatures) as CacheSize608
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
