@@ -316,14 +316,23 @@ jobs:
           custom="$(mktemp -d)/maxon"
           MAXON_INSTALL="$custom" sh -s -- --no-modify-path < website/public/install.sh
           "$custom/bin/maxon" version
-          for entry in stdlib runtime examples docs; do
+          snapshot() { (cd "$1" && find . | sort && find . -type f -exec cksum {} + | sort); }
+          entries="$(sed -n 's/^[[:space:]]*install_entries="\([^"]*\)"[[:space:]]*$/\1/p' website/public/install.sh)"
+          [ "$(printf '%s\n' "$entries" | wc -l)" -eq 1 ] && [ -n "$entries" ] || { echo "::error::install.sh has no single install_entries=\"…\" assignment"; exit 1; }
+          for entry in $entries; do
             foreign="$(mktemp -d)"
             mkdir "$foreign/$entry"
-            if MAXON_INSTALL="$foreign" sh -s -- --no-modify-path < website/public/install.sh; then
-              echo "::error::a directory with its own $entry/ was installed over"
-              exit 1
-            fi
-            [ -z "$(ls -A "$foreign/$entry")" ] || { echo "::error::the foreign $entry/ was touched"; exit 1; }
+            printf 'not ours\n' > "$foreign/$entry/keep"
+            before="$(snapshot "$foreign")"
+            status=0
+            out="$(MAXON_INSTALL="$foreign" sh -s -- --no-modify-path < website/public/install.sh 2>&1)" || status=$?
+            echo "$out"
+            [ "$status" -eq 1 ] || { echo "::error::a directory with its own $entry/ exited $status, not 1"; exit 1; }
+            case "$out" in
+              *"$entry exists and "*"holds no bin/maxon"*) ;;
+              *) echo "::error::the refusal over its own $entry/ did not say why"; exit 1 ;;
+            esac
+            [ "$(snapshot "$foreign")" = "$before" ] || { echo "::error::the foreign $entry/ was touched"; exit 1; }
           done
 
       # ⛔ THE REFUSAL IS THE SCRIPT'S ONE SECURITY CLAIM, SO IT IS MADE TO FIRE. The real archive is
@@ -629,6 +638,42 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'the custom install failed' }
           & "$env:MAXON_INSTALL\bin\maxon.exe" version
           if ([Environment]::GetEnvironmentVariable('Path', 'User') -ne $before) { throw '-NoPathUpdate changed the user Path' }
+
+      # The script runs in a child PowerShell, so its stderr and exit code are read as a caller reads them.
+      - name: MAXON_INSTALL refuses a directory that is not an install, and leaves what it holds untouched
+        run: |
+          $script = (Resolve-Path website/public/install.ps1).Path
+          $command = "& ([scriptblock]::Create((Get-Content -Raw '$script'))) -NoPathUpdate; exit `$LASTEXITCODE"
+          $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+          function Get-Snapshot($dir) {
+            Get-ChildItem -LiteralPath $dir -Recurse -Force | Sort-Object FullName | ForEach-Object {
+              $relative = $_.FullName.Substring($dir.Length)
+              if ($_.PSIsContainer) { "$relative\" } else { "$relative $((Get-FileHash -LiteralPath $_.FullName).Hash)" }
+            }
+          }
+          $assignment = @(Select-String -LiteralPath $script -Pattern '^\s*\$installEntries\s*=\s*@\(((\s*''[^'']+''\s*,?)+)\)\s*$')
+          if ($assignment.Count -ne 1) { throw 'install.ps1 has no single $installEntries = @(...) assignment' }
+          $entries = @([regex]::Matches($assignment[0].Matches[0].Groups[1].Value, '''([^'']+)''') | ForEach-Object { $_.Groups[1].Value })
+          if ($entries.Count -eq 0) { throw 'install.ps1''s $installEntries is empty' }
+          $entries
+          foreach ($entry in $entries) {
+            $foreign = (New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP "foreign-$entry")).FullName
+            $null = New-Item -ItemType Directory -Path "$foreign\$entry"
+            Set-Content -LiteralPath "$foreign\$entry\keep" -Encoding ascii -Value 'not ours'
+            $before = (Get-Snapshot $foreign) -join "`n"
+            $env:MAXON_INSTALL = $foreign
+            $info = New-Object Diagnostics.ProcessStartInfo 'powershell.exe', "-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encoded"
+            $info.UseShellExecute = $false
+            $info.RedirectStandardError = $true
+            $child = [Diagnostics.Process]::Start($info)
+            $err = $child.StandardError.ReadToEnd()
+            $child.WaitForExit()
+            $err
+            if ($child.ExitCode -ne 1) { throw "a directory with its own $entry\ exited $($child.ExitCode), not 1" }
+            if ($err -notmatch "$([regex]::Escape($entry)) exists and .*holds no bin\\maxon\.exe") { throw "the refusal over its own $entry\ did not say why" }
+            if (((Get-Snapshot $foreign) -join "`n") -ne $before) { throw "the foreign $entry\ was touched" }
+          }
+          Remove-Item Env:MAXON_INSTALL
 
       # The exact shape `maxon upgrade` runs, reading success and failure from the exit code alone.
       - name: The upgrade invocation reports its outcome in its exit code
