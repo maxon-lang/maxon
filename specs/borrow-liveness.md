@@ -4929,7 +4929,7 @@ end 'main'
 ```
 
 <!-- test: let-field-string-rebound-into-a-by-reference-var-may-grow -->
-### Review: a `let` field's `String` rebound into a by-reference `var` is a copy the `var` may grow
+### a `let` field's `String` rebound into a by-reference `var` is a copy the `var` may grow
 ```maxon
 type Holder
 	export let text as String
@@ -4962,7 +4962,7 @@ original 42!+ original 42
 ```
 
 <!-- test: module-let-string-rebound-into-a-by-reference-var-may-grow -->
-### Review: a module `let`'s `String` field rebound into a by-reference `var` is a copy the `var` may grow
+### a module `let`'s `String` field rebound into a by-reference `var` is a copy the `var` may grow
 ```maxon
 type Holder
 	export let text as String
@@ -4996,7 +4996,7 @@ original 42!+ original 42
 ```
 
 <!-- test: let-field-immutable-record-rebound-into-a-by-reference-var-may-be-rebound -->
-### Review: a `let` field's immutable record rebound into a by-reference `var` may be rebound by the callee
+### a `let` field's immutable record rebound into a by-reference `var` may be rebound by the callee
 ```maxon
 typealias Num = int(i64.min to i64.max)
 
@@ -5038,7 +5038,7 @@ end 'main'
 ```
 
 <!-- test: module-let-immutable-record-rebound-into-a-by-reference-var-may-be-rebound -->
-### Review: a module `let`'s immutable record rebound into a by-reference `var` may be rebound by the callee
+### a module `let`'s immutable record rebound into a by-reference `var` may be rebound by the callee
 ```maxon
 typealias Num = int(i64.min to i64.max)
 
@@ -5113,7 +5113,7 @@ error E3078: <fragment>:29:2: cannot assign a value read out of a `let` field to
 ```
 
 <!-- test: module-let-merged-into-a-var-then-a-field-bound-survives-the-var-rebinding -->
-### Review r8: a field of a `var` merged from a module `let` or a fresh record survives the `var` being rebound
+### a field of a `var` merged from a module `let` or a fresh record survives the `var` being rebound
 ```maxon
 type Item
 	export let text as String
@@ -5150,7 +5150,7 @@ fresh 7 padded out long enough for the heap replacement 8 padded out long enough
 ```
 
 <!-- test: by-reference-var-whose-later-arm-stores-a-module-let-then-a-field-bound-survives-the-rebind -->
-### Review r8: a by-reference `var` whose LATER arm stores a module `let`'s record keeps a bound field alive across a rebind
+### a by-reference `var` whose LATER arm stores a module `let`'s record keeps a bound field alive across a rebind
 ```maxon
 type Item
 	export let text as String
@@ -5199,7 +5199,7 @@ fresh 7 padded out long enough for the heap replacement 8 padded out long enough
 ```
 
 <!-- test: by-reference-var-whose-later-arm-stores-a-module-let-in-a-loop-then-a-field-bound-survives-the-rebind -->
-### Review r8: … and when the stores sit in a loop body
+### … and when the stores sit in a loop body
 ```maxon
 type Item
 	export let text as String
@@ -5249,7 +5249,7 @@ fresh 7 padded out long enough for the heap replacement 8 padded out long enough
 ```
 
 <!-- test: let-field-string-in-one-arm-of-a-by-reference-var-grown-by-a-callee -->
-### Review r8: a `let` field's `String` stored into a by-reference `var` on the LATER arm is a copy a callee may grow
+### a `let` field's `String` stored into a by-reference `var` on the LATER arm is a copy a callee may grow
 ```maxon
 type Holder
 	export let text as String
@@ -5288,7 +5288,7 @@ original 42 padded out long enough for the heap+ | original 42 padded out long e
 ```
 
 <!-- test: let-field-string-in-the-earlier-arm-of-a-by-reference-var-grown-by-a-callee -->
-### Review r8: … and on the EARLIER arm, with a clean store after it
+### … and on the EARLIER arm, with a clean store after it
 ```maxon
 type Holder
 	export let text as String
@@ -5327,7 +5327,7 @@ original 42 padded out long enough for the heap+ | original 42 padded out long e
 ```
 
 <!-- test: module-let-string-in-the-earlier-arm-of-a-by-reference-var-grown-by-a-callee -->
-### Review r8: a module `let`'s `String` on the EARLIER arm of a by-reference `var`, grown by a callee
+### a module `let`'s `String` on the EARLIER arm of a by-reference `var`, grown by a callee
 ```maxon
 type Holder
 	export let text as String
@@ -5367,7 +5367,7 @@ original 42 padded out long enough for the heap+ | original 42 padded out long e
 ```
 
 <!-- test: control-two-fresh-records-merged-into-a-var-then-a-field-bound-survives-the-var-rebinding -->
-### Review r8: control — two fresh records merged into a `var`, a bound field survives the `var` being rebound
+### control — two fresh records merged into a `var`, a bound field survives the `var` being rebound
 ```maxon
 type Item
 	export let text as String
@@ -5403,7 +5403,7 @@ fresh 7 padded out long enough for the heap replacement 8 padded out long enough
 ```
 
 <!-- test: module-let-rebound-into-a-var-under-an-if-then-a-field-bound-survives-the-var-rebinding -->
-### Review r8: a `var` rebound to a module `let`'s record under an `if`, a bound field survives the `var` being rebound
+### a `var` rebound to a module `let`'s record under an `if`, a bound field survives the `var` being rebound
 ```maxon
 type Item
 	export let text as String
@@ -5445,7 +5445,7 @@ fresh 7 padded out long enough for the heap replacement 8 padded out long enough
 ```
 
 <!-- test: module-let-writable-record-on-one-arm-of-a-by-reference-var-is-refused -->
-### Review r8: a module `let`'s writable record stored into a by-reference `var` on the EARLIER arm is refused at the store
+### a module `let`'s writable record stored into a by-reference `var` on the EARLIER arm is refused at the store
 ```maxon
 typealias Num = int(i64.min to i64.max)
 
@@ -5485,7 +5485,7 @@ error E3078: <fragment>:25:3: cannot assign a value read out of a module-level `
 ```
 
 <!-- test: let-payload-record-on-one-arm-of-a-by-reference-var-is-refused -->
-### Review r8: a `let` union payload's writable record stored into a by-reference `var` on the EARLIER arm is refused at the store
+### a `let` union payload's writable record stored into a by-reference `var` on the EARLIER arm is refused at the store
 ```maxon
 typealias Num = int(i64.min to i64.max)
 
@@ -5540,7 +5540,7 @@ error E3078: <fragment>:36:20: cannot assign a value read out of a `let` field t
 ```
 
 <!-- test: let-payload-record-on-the-later-arm-of-a-by-reference-var-is-refused -->
-### Review r8: … and on the LATER arm, with the clean store before it
+### … and on the LATER arm, with the clean store before it
 ```maxon
 typealias Num = int(i64.min to i64.max)
 
@@ -5595,7 +5595,7 @@ error E3078: <fragment>:37:20: cannot assign a value read out of a `let` field t
 ```
 
 <!-- test: let-payload-record-into-a-plain-var-then-written -->
-### Review r8: a `let` field's union payload record assigned to a plain `var` in a `match` arm, then written through the `var`
+### a `let` field's union payload record assigned to a plain `var` in a `match` arm, then written through the `var`
 ```maxon
 typealias Num = int(i64.min to i64.max)
 
@@ -5644,7 +5644,7 @@ error E3078: <fragment>:30:20: cannot assign a value read out of a `let` field t
 ```
 
 <!-- test: let-field-array-element-into-a-by-reference-var-written-by-a-callee -->
-### Review r8: an element of a `let` field's array assigned to a by-reference `var` in a loop, then written by a callee
+### an element of a `let` field's array assigned to a by-reference `var` in a loop, then written by a callee
 ```maxon
 typealias Num = int(i64.min to i64.max)
 
@@ -5693,7 +5693,7 @@ error E3078: <fragment>:35:3: cannot assign a value read out of a `let` field to
 ```
 
 <!-- test: view-of-a-let-field-into-a-by-reference-var-written-by-a-callee -->
-### Review r8: a `view` of a `let` field's record assigned to a by-reference `var`, then written by a callee
+### a `view` of a `let` field's record assigned to a by-reference `var`, then written by a callee
 ```maxon
 typealias Num = int(i64.min to i64.max)
 
@@ -5734,7 +5734,7 @@ error E3078: <fragment>:30:2: cannot assign a value read out of a `let` field to
 ```
 
 <!-- test: match-merge-of-a-module-let-and-a-fresh-record-field-survives-the-rebind -->
-### Review r9: a field of a `var` merged by a `match` from a module `let` or a fresh record survives the `var` being rebound
+### a field of a `var` merged by a `match` from a module `let` or a fresh record survives the `var` being rebound
 ```maxon
 enum Pick
 	first
@@ -5783,7 +5783,7 @@ fresh 7 padded out long enough for the heap replacement 8 padded out long enough
 ```
 
 <!-- test: try-otherwise-merge-of-a-fresh-record-and-a-module-let-field-survives-the-rebind -->
-### Review r9: a field of a `var` merged by `try … otherwise` from a fresh record or a module `let` survives the `var` being rebound
+### a field of a `var` merged by `try … otherwise` from a fresh record or a module `let` survives the `var` being rebound
 ```maxon
 enum Boom implements Error
 	bad
@@ -5832,7 +5832,7 @@ fresh 7 padded out long enough for the heap replacement 8 padded out long enough
 ```
 
 <!-- test: ternary-of-two-module-lets-field-survives-the-rebind -->
-### Review r9: a field of a `var` merged from two module `let`s survives the `var` being rebound
+### a field of a `var` merged from two module `let`s survives the `var` being rebound
 ```maxon
 type Item
 	export let text as String
@@ -5870,7 +5870,7 @@ origin replacement 8 padded out long enough for the heap
 ```
 
 <!-- test: match-merge-of-a-module-let-into-a-var-then-written-is-refused -->
-### Review r9: a `match` merge of a module `let`'s writable record into a `var`, then written through the `var`, is refused
+### a `match` merge of a module `let`'s writable record into a `var`, then written through the `var`, is refused
 ```maxon
 typealias Num = int(i64.min to i64.max)
 
@@ -5909,7 +5909,7 @@ error E3078: <fragment>:25:6: cannot assign a value read out of a module-level `
 ```
 
 <!-- test: try-otherwise-merge-of-a-module-let-into-a-var-then-written-is-refused -->
-### Review r9: a `try … otherwise` merge of a module `let`'s writable record into a `var`, then written through the `var`, is refused
+### a `try … otherwise` merge of a module `let`'s writable record into a `var`, then written through the `var`, is refused
 ```maxon
 typealias Num = int(i64.min to i64.max)
 
@@ -5948,7 +5948,7 @@ error E3078: <fragment>:28:6: cannot assign a value read out of a module-level `
 ```
 
 <!-- test: statement-match-rebinding-a-var-to-a-module-let-or-a-fresh-record-field-survives-the-rebind -->
-### Review r9: a `var` rebound by a statement `match` to a module `let` or a fresh record, a bound field survives the `var` being rebound
+### a `var` rebound by a statement `match` to a module `let` or a fresh record, a bound field survives the `var` being rebound
 ```maxon
 enum Pick
 	first
@@ -6000,7 +6000,7 @@ fresh 7 padded out long enough for the heap replacement 8 padded out long enough
 ```
 
 <!-- test: try-otherwise-merge-of-a-module-let-element-and-a-fresh-record-into-a-let-runs -->
-### Review r10: the same merge into a `let` is accepted and reads the element on the OK edge and the fallback on the error edge
+### the same merge into a `let` is accepted and reads the element on the OK edge and the fallback on the error edge
 ```maxon
 typealias Num = int(i64.min to i64.max)
 
@@ -6032,7 +6032,7 @@ end 'main'
 ```
 
 <!-- test: for-in-element-of-a-module-let-array-into-a-var-then-written-is-refused -->
-### Review r10: an element of a module `let` array bound by `for … in`, assigned to a `var` and written, is refused
+### an element of a module `let` array bound by `for … in`, assigned to a `var` and written, is refused
 ```maxon
 typealias Num = int(i64.min to i64.max)
 
@@ -6060,4 +6060,568 @@ end 'main'
 ```
 ```maxoncstderr
 error E3078: <fragment>:18:3: cannot assign a value read out of a module-level `let` to mutable binding 'q'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: try-otherwise-merge-of-a-module-let-element-on-the-ok-edge-into-a-var-then-written-is-refused -->
+a `try … otherwise` whose OK edge reads a module `let`'s element record, merged with a fresh fallback into a `var` and written, is refused
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Point
+	export var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Point'
+
+let Origins = [Point.create(1)]
+
+function main() returns ExitCode
+	var q = try Origins.get(0) otherwise Point.create(2)
+	q.n = 9
+	print("{q.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:15:6: cannot assign a value read out of a module-level `let` to mutable binding 'q'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: try-otherwise-diverging-read-of-a-module-let-element-into-a-var-then-written-is-refused -->
+a `try … otherwise panic` read of a module `let`'s element record into a `var`, then written, is refused
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Point
+	export var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Point'
+
+let Origins = [Point.create(1)]
+
+function main() returns ExitCode
+	var q = try Origins.get(0) otherwise panic("one point")
+	q.n = 9
+	print("{q.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:15:6: cannot assign a value read out of a module-level `let` to mutable binding 'q'; use 'let' instead of 'var', or use clone()
+```
+
+
+<!-- test: try-otherwise-diverging-first-of-a-module-let-into-a-var-then-written-is-refused -->
+`first` hands back the module `let`'s element record as surely as `get` does, so the `var` that takes it is
+refused.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Point
+	export var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Point'
+
+let Origins = [Point.create(1)]
+
+function main() returns ExitCode
+	var q = try Origins.first() otherwise panic("one point")
+	q.n = 9
+	print("{q.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:15:6: cannot assign a value read out of a module-level `let` to mutable binding 'q'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: try-otherwise-diverging-map-get-of-a-module-let-into-a-var-then-written-is-refused -->
+A module `let` map's value record is read-only as well: `get` hands back the record the map holds.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Point
+	export var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Point'
+
+let Places = ["home": Point.create(1)]
+
+function main() returns ExitCode
+	var q = try Places.get("home") otherwise panic("one place")
+	q.n = 9
+	print("{q.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:15:6: cannot assign a value read out of a module-level `let` to mutable binding 'q'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: try-otherwise-diverging-last-of-a-module-let-into-a-var-then-written-is-refused -->
+`last` hands back the module `let`'s element record as `first` does.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Point
+	export var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Point'
+
+let Origins = [Point.create(1)]
+
+function main() returns ExitCode
+	var q = try Origins.last() otherwise panic("one point")
+	q.n = 9
+	print("{q.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:15:6: cannot assign a value read out of a module-level `let` to mutable binding 'q'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: a-clone-of-a-module-let-element-into-a-var-is-written-and-runs -->
+A clone of the module `let`'s element is a record of its own, so the `var` that takes it may write it.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Point
+	export var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Point'
+
+let Origins = [Point.create(1)]
+
+function main() returns ExitCode
+	let held = try Origins.get(0) otherwise panic("one point")
+	var q = held.clone()
+	q.n = 9
+	let first = try Origins.get(0) otherwise panic("one point")
+	print("{q.n} {first.n}\n")
+	return 0
+end 'main'
+```
+```stdout
+9 1
+```
+
+<!-- test: a-generic-method-of-a-module-let-returning-its-argument-into-a-var-runs -->
+`echo` returns `T`, but the value it returns is its argument, a record `main` built, not one the module `let`
+holds, so the `var` that takes it may write it.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Point
+	export var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Point'
+
+type Box uses T
+	export var calls as Num
+
+	static function create() returns Self
+		return Self{calls: 0}
+	end 'create'
+
+	function echo(v T) returns T
+		return v
+	end 'echo'
+end 'Box'
+
+typealias PointBox = Box with Point
+
+let Shelf = PointBox.create()
+
+function main() returns ExitCode
+	var q = Shelf.echo(Point.create(2))
+	q.n = 9
+	print("{q.n} {Shelf.calls}\n")
+	return 0
+end 'main'
+```
+```stdout
+9 0
+```
+
+<!-- test: a-user-container-element-of-a-module-let-into-a-var-then-written-is-refused -->
+`Shelf.get` hands back an element of the array the module `let` holds, so the `var` that takes it is refused
+as a library accessor's result is.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Point
+	export var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Point'
+
+type Shelf uses T
+	export typealias Items = Array with T
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	function get(index ElementIndex) returns T throws ArrayError
+		return try self.items.get(index)
+	end 'get'
+end 'Shelf'
+
+typealias PointShelf = Shelf with Point
+
+let Racks = PointShelf.create()
+
+function main() returns ExitCode
+	var q = try Racks.get(0) otherwise Point.create(5)
+	q.n = 9
+	print("{q.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:30:6: cannot assign a value, which may share storage with a field of an immutable variable, to mutable binding 'q'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: an-array-extension-element-of-a-module-let-into-a-var-then-written-is-refused -->
+A member an `extension Array` declares hands back the module `let`'s element record as the library's own
+accessors do.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Point
+	export var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Point'
+
+extension Array
+	function head() returns Element throws ArrayError
+		return try self.get(0)
+	end 'head'
+end 'Array'
+
+let Origins = [Point.create(1)]
+
+function main() returns ExitCode
+	var q = try Origins.head() otherwise panic("one point")
+	q.n = 9
+	print("{q.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:21:6: cannot assign the result of 'head', which may share storage with immutable variable 'Origins', to mutable binding 'q'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: a-list-first-of-a-module-let-into-a-var-then-written-is-refused -->
+`List.first` hands back the element record the module `let` list holds.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Point
+	export var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Point'
+
+typealias Points = List with Point
+
+let Queue = Points.create()
+
+function main() returns ExitCode
+	var q = try Queue.first() otherwise Point.create(5)
+	q.n = 9
+	print("{q.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:17:6: cannot assign a value read out of a module-level `let` to mutable binding 'q'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: an-array-extension-returning-its-argument-on-a-let-of-read-only-elements-into-a-var-runs -->
+`echo` returns `Element`, but what it returns is its argument, a record `main` built, so the `var` that takes
+it may write it even though the array's elements are read-only.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Point
+	export var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Point'
+
+extension Array
+	function echo(v Element) returns Element
+		return v
+	end 'echo'
+end 'Array'
+
+typealias Points = Array with readonly Point
+
+function main() returns ExitCode
+	let ps = Points.create()
+	var q = ps.echo(Point.create(2))
+	q.n = 9
+	print("{q.n}\n")
+	return 0
+end 'main'
+```
+```stdout
+9
+```
+
+<!-- test: a-read-only-list-element-returned-through-a-cursor-into-a-var-then-written-is-refused -->
+`pick` hands back an element of a list whose elements are read-only, reached through the list's cursor, so
+the `var` that takes it may not write it.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Point
+	export var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Point'
+
+typealias Points = List with readonly Point
+
+function pick(ps Points, fallback Point) returns Point
+	for p in ps 'each'
+		return p
+	end 'each'
+
+	return fallback
+end 'pick'
+
+function main() returns ExitCode
+	var ps = Points.create()
+	ps.append(Point.create(1))
+	var q = pick(ps, fallback: Point.create(2))
+	q.n = 9
+	print("{q.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:25:6: cannot assign a value, which may share storage with a `readonly` element, to mutable binding 'q'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: an-array-extension-element-of-read-only-elements-into-a-var-then-written-is-refused -->
+`head` hands back the array's stored element, and the array's elements are read-only, so the `var` that
+takes it may not write through it, whoever declared the member.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Point
+	export var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Point'
+
+extension Array
+	function head() returns Element throws ArrayError
+		return try self.get(0)
+	end 'head'
+end 'Array'
+
+typealias Points = Array with readonly Point
+
+function main() returns ExitCode
+	var ps = Points.create()
+	ps.push(Point.create(1))
+	var q = try ps.head() otherwise panic("one point")
+	q.n = 9
+	print("{q.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:24:2: cannot write through 'q', which may be a record read out of a `readonly` element that a call or a merge handed back; nothing reachable through a `readonly` element may be written; use clone()
+```
+
+<!-- test: a-clone-of-a-module-let-array-is-pushed-and-runs -->
+A method call on a module `let` reads it as a receiver; a clone it returns is an array of its own that a
+`var` may grow.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Point
+	export var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Point'
+
+let Origins = [Point.create(1)]
+
+function main() returns ExitCode
+	var c = Origins.clone()
+	c.push(Point.create(2))
+	print("{c.count()} {Origins.count()}\n")
+	return 0
+end 'main'
+```
+```stdout
+2 1
+```
+
+<!-- test: a-user-member-returning-a-stored-element-from-a-loop-on-a-module-let-into-a-var-is-refused -->
+`pick` returns either an element of the array the module `let` holds or its argument, so the `var` that takes
+its result may be handed the `let`'s record.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Point
+	export var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Point'
+
+type Shelf uses T
+	export typealias Items = Array with T
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	function pick(fallback T) returns T
+		for p in self.items 'each'
+			return p
+		end 'each'
+
+		return fallback
+	end 'pick'
+end 'Shelf'
+
+typealias PointShelf = Shelf with Point
+
+let Racks = PointShelf.create()
+
+function main() returns ExitCode
+	var q = Racks.pick(Point.create(2))
+	q.n = 9
+	print("{q.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:34:6: cannot assign the result of 'pick', which may share storage with immutable variable 'Racks', to mutable binding 'q'; use 'let' instead of 'var', or use clone()
+```
+
+<!-- test: an-array-extension-forwarding-a-stored-element-of-read-only-elements-is-not-written-through -->
+`front` returns what `head` returns, an element of the array whose elements are read-only, so nothing may be
+written through the `var` that takes it.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Point
+	export var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Point'
+
+extension Array
+	function head() returns Element throws ArrayError
+		return try self.get(0)
+	end 'head'
+
+	function front() returns Element throws ArrayError
+		return try self.head()
+	end 'front'
+end 'Array'
+
+typealias Points = Array with readonly Point
+
+function main() returns ExitCode
+	var ps = Points.create()
+	ps.push(Point.create(1))
+	var q = try ps.front() otherwise panic("one point")
+	q.n = 9
+	print("{q.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3159: <fragment>:28:2: cannot write through 'q', which may be a record read out of a `readonly` element that a call or a merge handed back; nothing reachable through a `readonly` element may be written; use clone()
+```
+
+<!-- test: a-user-member-merging-a-stored-element-with-its-argument-on-a-module-let-into-a-var-is-refused -->
+`getOr` returns either the module `let`'s element or its argument, so the `var` that takes its result is
+refused, as `try Origins.get(0) otherwise Point.create(2)` is.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Point
+	export var n as Num
+
+	static function create(n Num) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Point'
+
+type Shelf uses T
+	export typealias Items = Array with T
+	var items as Items
+
+	static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	function getOr(index ElementIndex, fallback T) returns T
+		return try self.items.get(index) otherwise fallback
+	end 'getOr'
+end 'Shelf'
+
+typealias PointShelf = Shelf with Point
+
+let Racks = PointShelf.create()
+
+function main() returns ExitCode
+	var q = Racks.getOr(5, fallback: Point.create(3))
+	q.n = 9
+	print("{q.n}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3078: <fragment>:30:6: cannot assign the result of 'getOr', which may share storage with immutable variable 'Racks', to mutable binding 'q'; use 'let' instead of 'var', or use clone()
 ```

@@ -43669,7 +43669,7 @@ export type Parser
 			return EmptySourceText
 		end 'noSingleElementPosition'
 
-		return self.signatures.instanceArgBrand(giid, position: 0)
+		return self.signatures.instanceArgBrand(giid, position: ContainerElementArgPosition)
 	end 'elementBrandOf'
 
 	// ⭐ **THE INTERNED NAME OF THE DECLARED AGGREGATE A (tag, nameId) PAIR DENOTES, OR
@@ -86333,12 +86333,7 @@ export type Parser
 		let resultType = self.elementAccessorResultType(giid)
 		let result = self.emitRuntimeCall(callee, args: args, resultTag: maxonTypeTag(resultType), resultNameId: typeNameIdOf(resultType), range: range)
 		self.markElementReadSurface(result, container: container)
-		self.carryImmutableGlobalMarkToRead(container, read: result)
-		self.carryReadOnlyFieldMark(container, read: result, fromALetField: false)
-
-		if self.signatures.containerElementIsReadOnly(giid) 'aReadOnlyElementType'
-			self.markReadOnlyRecord(result, mark: ReadOnlyMark.element)
-		end 'aReadOnlyElementType'
+		self.markStoredElementRead(result, container: container, elementIsReadOnly: self.signatures.containerElementIsReadOnly(giid))
 
 		// An element read wears the brand the instantiation spelled its element with (`Rows = Array with Row`).
 		self.brandValue(result, brand: self.elementBrandOf(giid))
@@ -87944,7 +87939,7 @@ export type Parser
 	// `var` (`var m = H.index`) is E3078 rather than a second, writable name for the `let`'s record.
 	function resolveGlobalFieldChain(baseTok Token, label ByteArray, valueType MaxonType, mutable bool) returns FieldChainStep throws SourceParseError
 		let loaded = self.emitGlobalReceiverLoad(label, valueType: valueType, mutable: mutable, tok: baseTok)
-		return try self.resolveValueFieldChain(baseTok, value: loaded if mutable else self.recordImmutableSlotRead(baseTok, value: loaded), valueType: valueType, mutable: mutable)
+		return try self.resolveValueFieldChain(baseTok, value: loaded, valueType: valueType, mutable: mutable)
 	end 'resolveGlobalFieldChain'
 
 	// ⭐ **THE CHAIN ITSELF, FROM A BASE THIS FRAME ALREADY HOLDS** — a `.data` slot's occupant above, and an
@@ -90868,7 +90863,7 @@ export type Parser
 	end 'topLevelBindingReference'
 
 	// Publish a top-level constant read's blame name and hand the value straight back —
-	// `recordGlobalReadValue`'s shape, for its reason: the two arms above differ only in how the value is
+	// `recordSlotRead`'s shape, for its reason: the two arms above differ only in how the value is
 	// materialized, and a `let` is immutable in both.
 	function readFoldedConstant(tok Token, payload FullRangeInt, tag ValueTypeTag, typeName ByteArray) returns ValueId
 		self.noteModuleLetCastRead(tok, typeName: typeName)
@@ -91128,7 +91123,7 @@ export type Parser
 	end 'globalMapColumnsAnswerFor'
 
 	// What `mutable` decides depends on which arm is taken: on the load it is whether the borrowed occupant
-	// may become a mutable ALIAS (`recordGlobalReadValue`), and on the hand-over it is the write permission
+	// may become a mutable ALIAS (`recordSlotRead`), and on the hand-over it is the write permission
 	// itself — the callee stores through the address, which a `let` slot must refuse exactly as `G = v` does.
 	function moduleSlotReference(func IrFunction, tok Token, site CellArgumentToken, label ByteArray, valueType MaxonType, brand ByteArray, mutable bool) returns ValueId
 		if self.mayHandOverStorageAt(site, writableHere: mutable, slotType: valueType) 'handOverTheSlot'
@@ -91145,18 +91140,13 @@ export type Parser
 
 		let loaded = self.brandedGlobalLoad(label, valueType: valueType, brand: brand, tok: tok, mutable: mutable)
 
-		if not mutable and self.signatures.globalIsAPayloadFreeUnionCase(tok.value, readerFilePath: self.job.path) 'anInertCase'
-			self.publishBareBindingName(tok, holder: WriteBlameHolder.moduleLet, blamed: false)
-			return loaded
-		end 'anInertCase'
-
-		return self.recordGlobalReadValue(tok, value: loaded, mutable: mutable)
+		return self.recordSlotRead(loaded, tok: tok, mutable: mutable, publishesBlame: true)
 	end 'moduleSlotReference'
 
 	// Recorded as a WRITE of the slot, because that is what the callee does through this address — the same
 	// two marks `storeToGlobal` leaves, so the module-var census and E3064's effect summary see the write
 	// whichever spelling performs it. Nothing marks a borrowed occupant here: none was loaded, so there is no
-	// value for `recordGlobalReadValue`'s rebindable-slot rule to guard.
+	// value for `recordSlotRead`'s rebindable-slot rule to guard.
 	function moduleSlotCellAddress(func IrFunction, tok Token, label ByteArray, valueType MaxonType, brand ByteArray) returns ValueId
 		func.writesModuleStorage = true
 
@@ -91189,15 +91179,17 @@ export type Parser
 		return loaded
 	end 'brandedGlobalLoad'
 
-	// Mark a global read that came out of an IMMUTABLE slot, and hand the value straight back.
-	// It is only the READ path that marks: a receiver load (`parseMethodCall`'s stored-binding arm) is
-	// consumed by the dispatch on the spot, where `noteReceiverWrite` already refuses a write through
-	// an immutable binding.
-	function recordGlobalReadValue(tok Token, value ValueId, mutable bool) returns ValueId
+	// The one slot-read door for a module global, taken by the bare read and the receiver load alike: a
+	// `let` receiver left unmarked lets `var q = Origins.get(0)` write the `let`'s record through `q`.
+	function recordSlotRead(value ValueId, tok Token, mutable bool, publishesBlame bool) returns ValueId
+		let inert = not mutable and self.signatures.globalIsAPayloadFreeUnionCase(tok.value, readerFilePath: self.job.path)
+
 		// The blame name rides the same mutability answer (a top-level `let` refuses a write through it
 		// exactly as a `let` local does), published here so the constant and the slot-backed halves of a
 		// top-level read reach `lastBareBindingImmutableName` through one decision each.
-		self.publishBareBindingName(tok, holder: WriteBlameHolder.moduleLet, blamed: not mutable)
+		if publishesBlame 'aBareRead'
+			self.publishBareBindingName(tok, holder: WriteBlameHolder.moduleLet, blamed: not mutable and not inert)
+		end 'aBareRead'
 
 		// ⭐ **THE WRITABLE ARM IS NOT "NOTHING TO RECORD".** A `var` global's slot is rebindable
 		// storage exactly as a `var` field is, and `emitCheckedGlobalStore` decrefs the old occupant on the
@@ -91212,13 +91204,13 @@ export type Parser
 			return value
 		end 'writableSlot'
 
-		return self.recordImmutableSlotRead(tok, value: value)
-	end 'recordGlobalReadValue'
+		if inert 'noRecordToMark'
+			return value
+		end 'noRecordToMark'
 
-	function recordImmutableSlotRead(tok Token, value ValueId) returns ValueId
 		self.markImageRecordRead(value)
 		return self.recordModuleLetRoot(value, name: tok.value, image: false)
-	end 'recordImmutableSlotRead'
+	end 'recordSlotRead'
 
 	// ⭐⭐ **DID THE WHOLE-PROGRAM SWEEP PUBLISH THIS NAME AS ONE WHOSE RESULT MAY ALIAS A `let`-DECLARED
 	// GLOBAL'S RECORD?** — THE one composition, spent at three doors: the declaration being entered
@@ -91256,12 +91248,17 @@ export type Parser
 		end 'function'
 	end 'mergeBlameOf'
 
+	function emitGlobalReceiverLoad(label ByteArray, valueType MaxonType, mutable bool, tok Token) returns ValueId
+		let loaded = self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(tok))
+		return self.recordSlotRead(loaded, tok: tok, mutable: mutable, publishesBlame: false)
+	end 'emitGlobalReceiverLoad'
+
 	// ⭐⭐ **THE ONE WRITER OF `overwritableSlotReads`** — `markReadOnly`'s twin, through the
 	// same install door discipline (`ValueMarkColumn`).
 	//
 	// Its THREE producers are the three ways a managed value comes out of storage a later statement can
 	// overwrite: `emitFieldLoad` (every `self.items`, `h.items` and chain hop funnels through it),
-	// `recordGlobalReadValue`'s WRITABLE arm (the exact complement of the immutable arm one function up), and
+	// `recordSlotRead`'s WRITABLE arm (the exact complement of its immutable arm), and
 	// `emitCellLoad` (the by-reference parameter and cell-resident `var`, whose store decrefs the
 	// occupant it displaces exactly as the other two do). All three gate on the value being MANAGED, so a
 	// scalar field — which owns no heap and can be freed by nothing — never enters the set and never costs a
@@ -91270,16 +91267,6 @@ export type Parser
 	// ⚠ **A LIST OF "TWO" WENT STALE WHILE A THIRD SLOT KIND EXISTED AND DANGLED.** It is
 	// DERIVED by grepping `self.markOverwritableSlotRead(` rather than remembered — the census
 	// `markBufferSurface` keeps two functions down, for this reason.
-	function emitGlobalReceiverLoad(label ByteArray, valueType MaxonType, mutable bool, tok Token) returns ValueId
-		let loaded = self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(tok))
-
-		if mutable and self.valueMayNameARecord(loaded) 'rebindableOccupant'
-			self.markOverwritableSlotRead(loaded)
-		end 'rebindableOccupant'
-
-		return loaded
-	end 'emitGlobalReceiverLoad'
-
 	function markOverwritableSlotRead(value ValueId)
 		self.bodyState.overwritableSlotReads = withValueMarked(self.bodyState.overwritableSlotReads, value: value)
 	end 'markOverwritableSlotRead'
@@ -99777,39 +99764,37 @@ export type Parser
 		// known, so here is where a member that hands back a BORROWED promise element, or a copy of a
 		// receiver holding one, is refused.
 		match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'declared'
-			declared(returnType) then break
+			declared(returnType) then return try self.retypeDeclaredMethodResult(result, callee: callee, args: args, receiver: receiver, returnType: returnType, anchor: anchor)
 			undeclared then return OpaqueWordReading.asItStands
 		end 'declared'
-
-		let declaredReturn = match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'again'
-			declared(returnType) gives returnType
-			undeclared gives MaxonReturnType.void
-		end 'again'
-
-		self.markReadOnlyElementResult(result, receiver: receiver, returnType: declaredReturn)
-		try self.requireCorpusCopyHoldsNoGreenThread(callee, receiver: receiver, anchor: anchor)
-		try self.settleCorpusPromiseRead(result, callee: callee, args: args, returnType: declaredReturn, anchor: anchor)
-		return self.retypeOpaqueReturn(result, receiver: receiver, returnType: declaredReturn, scopeFilePath: self.signatures.recordedReturnDeclFileOf(callee))
 	end 'retypeOpaqueMethodResult'
 
-	function markReadOnlyElementResult(result ValueId, receiver ValueId, returnType MaxonReturnType)
-		let returned = match returnType 'returned'
-			void gives MaxonType.unresolved
-			value(inner) gives inner
-		end 'returned'
+	function retypeDeclaredMethodResult(result ValueId, callee ByteArray, args ValueIdArray, receiver ValueId, returnType MaxonReturnType, anchor Token) returns OpaqueWordReading throws SourceParseError
+		try self.requireCorpusCopyHoldsNoGreenThread(callee, receiver: receiver, anchor: anchor)
+		try self.settleCorpusPromiseRead(result, callee: callee, args: args, returnType: returnType, anchor: anchor)
+		let reading = self.retypeOpaqueReturn(result, receiver: receiver, returnType: returnType, scopeFilePath: self.signatures.recordedReturnDeclFileOf(callee))
 
-		if maxonTypeTag(returned) != ValueTypeTag.typeParameter 'notAnElement'
-			return
-		end 'notAnElement'
+		// After the retype: the result is tagged `typeParameter` until then, and the module-`let` carry marks
+		// only a non-text aggregate, so marking first leaves the `let`'s element writable through a `var`.
+		self.markStoredElementResult(result, receiver: receiver, callee: callee, returnType: returnType)
+		return reading
+	end 'retypeDeclaredMethodResult'
 
+	function markStoredElementResult(result ValueId, receiver ValueId, callee ByteArray, returnType MaxonReturnType)
 		let instance = self.valueInstanceId(receiver)
-		let base = self.signatures.genericInstanceBaseName(instance)
-		let position = try typeParamPositionIn(typeParamIdOf(returned), declarationName: base, paramNames: self.signatures.structTypeParamsOf(base)) otherwise return
+		let declared = try valueTypeOfReturn(returnType) otherwise return
+		let position = try self.signatures.storedElementPositionOf(callee, instance: instance, declared: declared) otherwise return
+		self.markStoredElementRead(result, container: receiver, elementIsReadOnly: self.signatures.genericInstanceArgIsReadOnly(instance, position: position))
+	end 'markStoredElementResult'
 
-		if self.signatures.genericInstanceArgIsReadOnly(instance, position: position) 'aReadOnlyPosition'
+	function markStoredElementRead(result ValueId, container ValueId, elementIsReadOnly bool)
+		self.carryImmutableGlobalMarkToRead(container, read: result)
+		self.carryReadOnlyFieldMark(container, read: result, fromALetField: false)
+
+		if elementIsReadOnly 'aReadOnlyElementType'
 			self.markReadOnlyRecord(result, mark: ReadOnlyMark.element)
-		end 'aReadOnlyPosition'
-	end 'markReadOnlyElementResult'
+		end 'aReadOnlyElementType'
+	end 'markStoredElementRead'
 
 	function requireCorpusCopyHoldsNoGreenThread(callee ByteArray, receiver ValueId, anchor Token) throws SourceParseError
 		if not self.calleeCopiesItsNonArrayReceiver(callee, receiver: receiver) 'notACorpusCopy'

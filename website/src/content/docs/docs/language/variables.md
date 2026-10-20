@@ -238,7 +238,8 @@ end 'main'
   a record built fresh from numbers read out of a `let` is legal.
 - A module-level `let` is [read-only](/docs/language/memory-model/#read-only-values) through everything it reaches, for the program's whole
   life. A write through it, or through a record a call handed back out of it, is **E3159**; binding it, a field
-  of it (`var m = H.index`) or such a call result to a `var` is **E3078**. Read it through a `let`, or bind a
+  of it (`var m = H.index`) or such a call result, an element accessor's included (`var p = Origins.get(0)`),
+  to a `var` is **E3078**. Read it through a `let`, or bind a
   `clone()`. Storing its record anywhere something may write it — pushing it into a container, local or
   module-level, storing it into a `var` field, putting it in an array literal or a map value, or handing it to
   a function that keeps its parameter — is **E3078** too; store a `clone()`.

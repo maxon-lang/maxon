@@ -380,7 +380,6 @@ let HandedOffRecordColumns = [ProvenanceColumn.identity, ProvenanceColumn.holds,
 let LetReachColumns = [ProvenanceColumn.identity, ProvenanceColumn.inside, ProvenanceColumn.holds, ProvenanceColumn.storedHolds, ProvenanceColumn.deepHolds, ProvenanceColumn.holdsWithin]
 let ModuleVariableSubject = "a module variable"
 let MaxFreshRounds = 16
-let ContainerElementArgPosition = 0
 let HiddenViewRankCount = 3
 let LetFieldSlotNameShift = 24 as StoreSlotKey
 let SlotAccessFunctionShift = 32 as StoreSlotKey
@@ -2344,20 +2343,12 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			return NoParamPositions
 		end 'storesNothingReadOnly'
 
-		let base = self.signatures.genericInstanceBaseName(instance)
-		view owners = self.signatures.structTypeParamsOf(base)
 		var stored = NoParamPositions
 
 		for position in 0 upto sig.paramCount() 'eachParameter'
 			let declared = try sig.paramTypes.get(position) otherwise panic("ProvenanceTracer.readOnlyElementParameters: paramTypes.get OOB at {position} below paramCount")
 
-			if maxonTypeTag(declared) != ValueTypeTag.typeParameter 'notAnElementParameter'
-				continue
-			end 'notAnElementParameter'
-
-			let argPosition = try typeParamPositionIn(typeParamIdOf(declared), declarationName: base, paramNames: owners) otherwise continue
-
-			if self.signatures.genericInstanceArgIsReadOnly(instance, position: argPosition) 'storedReadOnly'
+			if self.signatures.typeParameterIsReadOnlyIn(instance, declared: declared) 'storedReadOnly'
 				stored = maskWithParam(stored, param: position)
 			end 'storedReadOnly'
 		end 'eachParameter'
@@ -8861,22 +8852,26 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 			return false
 		end 'notAContainerInstance'
 
+		let instance = self.instanceIdOf(func, value: receiver)
+
 		if indexedElementReadCallee(callee) 'aRuntimeElementRead'
-			return self.signatures.genericInstanceArgIsReadOnly(self.instanceIdOf(func, value: receiver), position: ContainerElementArgPosition)
+			return self.signatures.containerElementIsReadOnly(instance)
 		end 'aRuntimeElementRead'
 
-		let returned = match self.signatures.returnTypeOf(callee, into: self.project.typeNames) 'callee'
-			declared(returnType) gives returnType
-			undeclared gives MaxonReturnType.void
-		end 'callee'
+		let declared = try self.signatures.declaredValueReturnOf(callee, into: self.project.typeNames) otherwise return false
 
-		let element = match returned 'returned'
-			void gives MaxonType.unresolved
-			value(inner) gives inner
-		end 'returned'
+		if not self.signatures.typeParameterIsReadOnlyIn(instance, declared: declared) 'notAReadOnlyElementType'
+			return false
+		end 'notAReadOnlyElementType'
 
-		return self.elementParameterIsReadOnlyInReceiver(func, declared: element, receiver: receiver)
+		_ = try self.signatures.storedElementPositionOf(callee, instance: instance, declared: declared) otherwise return self.resultLiesWithinTheReceiver(callee)
+		return true
 	end 'callReadsAReadOnlyInstanceElement'
+
+	function resultLiesWithinTheReceiver(callee ByteArray) returns bool
+		let calleeIndex = try self.calls.resolution.summarizedCalleeIndex(callee) otherwise return false
+		return maskHasParam(self.summary.insideAt(calleeIndex), param: ReceiverParamPosition)
+	end 'resultLiesWithinTheReceiver'
 
 	module function settlePermanentReturns(funcNames FunctionNameIndex)
 		self.settlePermanence(funcNames, mode: PermanenceSettling.strict)
@@ -9762,14 +9757,11 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
 	end 'judgeInstantiation'
 
 	function elementParameterIsReadOnlyInReceiver(func IrFunction, declared MaxonType, receiver ValueId) returns bool
-		if valueTagOf(func, value: receiver) != ValueTypeTag.genericInstance or maxonTypeTag(declared) != ValueTypeTag.typeParameter 'notAnElementOfAnInstance'
+		if valueTagOf(func, value: receiver) != ValueTypeTag.genericInstance 'notAnInstance'
 			return false
-		end 'notAnElementOfAnInstance'
+		end 'notAnInstance'
 
-		let instance = self.instanceIdOf(func, value: receiver)
-		let base = self.signatures.genericInstanceBaseName(instance)
-		let position = try typeParamPositionIn(typeParamIdOf(declared), declarationName: base, paramNames: self.signatures.structTypeParamsOf(base)) otherwise return false
-		return self.signatures.genericInstanceArgIsReadOnly(instance, position: position)
+		return self.signatures.typeParameterIsReadOnlyIn(self.instanceIdOf(func, value: receiver), declared: declared)
 	end 'elementParameterIsReadOnlyInReceiver'
 
 	function valueIsAnInstanceOfTheOwner(func IrFunction, value ValueId, calleeFunc IrFunction) returns bool

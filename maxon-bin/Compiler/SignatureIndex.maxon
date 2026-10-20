@@ -3963,6 +3963,13 @@ function recordSlotGlobalPanic(name ByteArray, tag ValueTypeTag) returns String
 	return "globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — a record-valued global's slot holds a POINTER `__module_init` fills, so it is typed by `recordPointerSlotType`; this door answers only for a global whose `.data` bytes ARE its value"
 end 'recordSlotGlobalPanic'
 
+export function valueTypeOfReturn(returnType MaxonReturnType) returns MaxonType throws AbsentError
+	match returnType 'returned'
+		value(inner) then return inner
+		void then throw AbsentError.absent
+	end 'returned'
+end 'valueTypeOfReturn'
+
 // What the index knows about a callee — the TWO outcomes the old `MaxonType.unresolved` sentinel
 // collapsed into one, plus the third (`void`) that it dropped on the floor.
 export union CalleeReturn
@@ -8941,13 +8948,12 @@ export let MapBuiltinBaseName = b"Map"
 // and a `Map with (Key, Value)` both put the key first, and three doors depend on it being the same 0:
 // `Parser.requireContainerColumnTypes`' gates (the `List` arm's and, through
 // `Parser.parseMapColumnValue`'s key half, `ProgramSignatures.setKeyType` and `mapKeyType`. So it is ONE
-// exported constant those read — it was briefly two, a `Map`-named one here and a file-private `Set`-named
-// copy in `LowerMaxonToStd`, which made the shared invariant something this header ASSERTED while the code
-// that depended on it read a different name.
+// exported constant those read.
 //
 // The VALUE position stays `Map`-only, because only a `Map` has a second column.
 export let HashTableKeyArgPosition = 0 as ElementIndex
 export let MapValueArgPosition = 1 as ElementIndex
+export let ContainerElementArgPosition = 0 as ElementIndex
 
 // ⭐⭐ **THE SPELLING `List` IS COMPOSED FROM — NOT A SYNTHESIZED CONTAINER.** `stdlib/List.maxon`
 // declares `type List uses Element`, so a `List with T` is an ordinary declared generic instance: its box is
@@ -19530,7 +19536,7 @@ export type ProgramSignatures
 	end 'retainCalleeOf'
 
 	export function sharedValueElementOf(id GenericInstanceId) returns MaxonType
-		return self.substitutedInstanceArg(id, position: 0)
+		return self.substitutedInstanceArg(id, position: ContainerElementArgPosition)
 	end 'sharedValueElementOf'
 
 	export function instanceBaseIsSharedValue(id GenericInstanceId) returns bool
@@ -29877,7 +29883,7 @@ export type ProgramSignatures
 	end 'genericAliasMintDeclaringFiles'
 
 	function instanceArgShownName(gid GenericInstanceId) returns String
-		let arg = self.substitutedInstanceArg(gid, position: 0)
+		let arg = self.substitutedInstanceArg(gid, position: ContainerElementArgPosition)
 
 		if maxonTypeTag(arg) == ValueTypeTag.named 'aNamedElement'
 			return self.aliasIdentityDisplay(self.nameOfId(typeNameIdOf(arg)))
@@ -31478,12 +31484,46 @@ export type ProgramSignatures
 		return self.genericInstances.instanceShape(gid).argIsReadOnly(position)
 	end 'genericInstanceArgIsReadOnly'
 
+	export function typeParameterPositionIn(instance GenericInstanceId, declared MaxonType) returns ElementIndex throws AbsentError
+		if maxonTypeTag(declared) != ValueTypeTag.typeParameter 'notATypeParameter'
+			throw AbsentError.absent
+		end 'notATypeParameter'
+
+		let base = self.genericInstanceBaseName(instance)
+		return try typeParamPositionIn(typeParamIdOf(declared), declarationName: base, paramNames: self.structTypeParamsOf(base)) otherwise throw AbsentError.absent
+	end 'typeParameterPositionIn'
+
+	export function typeParameterIsReadOnlyIn(instance GenericInstanceId, declared MaxonType) returns bool
+		let position = try self.typeParameterPositionIn(instance, declared: declared) otherwise return false
+		return self.genericInstanceArgIsReadOnly(instance, position: position)
+	end 'typeParameterIsReadOnlyIn'
+
+	export function declaredValueReturnOf(callee ByteArray, into TypeNameInterner) returns MaxonType throws AbsentError
+		match self.returnTypeOf(callee, into: into) 'callee'
+			declared(returnType) then return try valueTypeOfReturn(returnType)
+			undeclared then throw AbsentError.absent
+		end 'callee'
+	end 'declaredValueReturnOf'
+
+	// Library members only: a user member whose declared return is a type parameter may hand back its
+	// argument (`echo`) rather than an element, so the declared shape alone would refuse a legal program.
+	// `ProvenanceTracer.callReadsAReadOnlyInstanceElement` answers user members from their body summaries.
+	export function storedElementPositionOf(callee ByteArray, instance GenericInstanceId, declared MaxonType) returns ElementIndex throws AbsentError
+		let position = try self.typeParameterPositionIn(instance, declared: declared)
+
+		if not self.declaredByTheCorpus(self.declaringFileOf(callee)) 'aMemberTheLibraryDidNotWrite'
+			throw AbsentError.absent
+		end 'aMemberTheLibraryDidNotWrite'
+
+		return position
+	end 'storedElementPositionOf'
+
 	export function genericInstanceSpellsReadOnly(gid GenericInstanceId) returns bool
 		return self.genericInstances.instanceShape(gid).isReadOnlyQualified()
 	end 'genericInstanceSpellsReadOnly'
 
 	export function containerElementIsReadOnly(id GenericInstanceId) returns bool
-		return self.genericInstanceArgIsReadOnly(id, position: HashTableKeyArgPosition)
+		return self.genericInstanceArgIsReadOnly(id, position: ContainerElementArgPosition)
 	end 'containerElementIsReadOnly'
 
 	// Is `name` a declared `type` — the `bool` half of `structOf`, and a HOT-PATH allocation guard, the
@@ -33423,11 +33463,8 @@ export type ProgramSignatures
 	// `Array with Tagged` and an `Array` of the same tuple minted from a literal do not unify, reported as an
 	// honest argument-type mismatch naming both spellings. Unifying them means MERGING two gids in the
 	// registry, which is a change to instance identity itself and not something a read door may make.
-	// ⚠ The SOLE argument's position is spelled `0` here as it is at every other one-parameter-container door:
-	// the header above says "its sole type argument", so the number is the sentence rather than a magic value,
-	// and `substitutedInstanceArg`'s own bounds panic names the arity that makes it safe.
 	export function containerElementType(id GenericInstanceId) returns MaxonType
-		return self.canonicalInstanceArg(id, position: 0)
+		return self.canonicalInstanceArg(id, position: ContainerElementArgPosition)
 	end 'containerElementType'
 
 	// ⭐ **THE CANONICAL CONFORMER NAME OF A CONTAINER'S ELEMENT** — the key its conformance answer
@@ -33502,7 +33539,7 @@ export type ProgramSignatures
 	function opaqueElementConstraintCheck(id GenericInstanceId, elementType MaxonType, clauseInterfaces NameRoster) returns ExtensionConstraintCheck
 		for interfaceName in clauseInterfaces 'eachConstraint'
 			if not opaqueConstraintIsDischarged(opaqueParamDischarge(self, interfaces: self.interfaceMap(), token: typeParamIdOf(elementType), interfaceName: interfaceName)) 'unpromised'
-				return ExtensionConstraintCheck.unmet(interfaceName, bindingName: self.instanceArgDisplayName(id, position: 0))
+				return ExtensionConstraintCheck.unmet(interfaceName, bindingName: self.instanceArgDisplayName(id, position: ContainerElementArgPosition))
 			end 'unpromised'
 		end 'eachConstraint'
 
@@ -39318,16 +39355,10 @@ export type ProgramSignatures
 			return InstanceShape.unsized
 		end 'nothingToCarry'
 
-		let owner = self.genericInstanceBaseName(through)
-		view ownerParams = self.structTypeParamsOf(owner)
 		var carried = NoReadOnlyArgs
 
 		for (iter, arg) in self.genericInstances.instanceArgs(nested).withIterator() 'eachArg'
-			if maxonTypeTag(arg) != ValueTypeTag.typeParameter 'notAParameterOfTheOwner'
-				continue
-			end 'notAParameterOfTheOwner'
-
-			let position = try typeParamPositionIn(typeParamIdOf(arg), declarationName: owner, paramNames: ownerParams) otherwise continue
+			let position = try self.typeParameterPositionIn(through, declared: arg) otherwise continue
 
 			if viewed.argIsReadOnly(position) 'boundToAReadOnlyArgument'
 				carried = spelledReadOnlyAt(carried, position: iter.index() as FieldIndex)
