@@ -68526,7 +68526,7 @@ export type Parser
 		end 'eachElement'
 
 		let closeTok = try self.consume(TokenKind.rightParen)
-		view layout = try self.internTupleLayout(elementTypes, brands: elementBrands, sites: self.anchors.functions.noTypeSites, anchor: openTok)
+		view layout = try self.internTupleLayout(elementTypes, brands: elementBrands, anchor: openTok)
 		try self.requireAliasedTupleColumns(layout, elementValues: elementValues, elementStarts: elementStarts, anchor: openTok)
 
 		let literal = try self.emitStructLiteral(layout, fieldValues: elementValues, fieldBareLocal: elementBareLocal, anchor: openTok, range: SourceRange.between(openTok, last: closeTok))
@@ -68607,7 +68607,10 @@ export type Parser
 			throw SourceParseError.unsupported("a one-element tuple type (a tuple has at least {MinTupleArity} elements, and parentheses around a single type would be indistinguishable from grouping)", line: openTok.line, column: openTok.column)
 		end 'singleElement'
 
-		return MaxonType.structRef(self.artifact.typeNames.intern((try self.internTupleLayout(elements, brands: brands, sites: sites, anchor: openTok)).name))
+		let tupleName = (try self.internTupleLayout(elements, brands: brands, anchor: openTok)).name
+		self.artifact.recordWrittenTupleType(WrittenTupleType.create(tupleName.clone(), filePath: self.job.path, sites: sites))
+
+		return MaxonType.structRef(self.artifact.typeNames.intern(tupleName))
 	end 'parseTupleTypeReference'
 
 	// ⭐ **THE ONE DOOR A TUPLE TYPE IS MINTED THROUGH** — a literal, a type annotation, a `typealias` RHS.
@@ -68622,8 +68625,8 @@ export type Parser
 	// resolves them against the index's interner (`ProgramSignatures.fieldTypeOf`'s precondition). Read that
 	// way, a sweep-minted `named` element denotes whichever name the index numbered alike — a record element
 	// classified scalar is stored raw and released at scope exit.
-	function internTupleLayout(elements MaxonTypeArray, brands NameRoster, sites DeclaredTypeSites, anchor Token) returns StructLayout throws SourceParseError
-		let name = try self.signatures.internTupleType(elements, written: brands, from: self.artifact.typeNames, slotScopeFilePath: self.job.path, sites: sites) otherwise (rejection) 'rejected'
+	function internTupleLayout(elements MaxonTypeArray, brands NameRoster, anchor Token) returns StructLayout throws SourceParseError
+		let name = try self.signatures.internTupleType(elements, written: brands, from: self.artifact.typeNames, slotScopeFilePath: self.job.path) otherwise (rejection) 'rejected'
 			throw self.tupleElementError(rejection, anchor: anchor)
 		end 'rejected'
 

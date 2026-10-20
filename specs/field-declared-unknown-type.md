@@ -285,6 +285,91 @@ end 'main'
 error E3011: <fragment>:5:18: Unknown type 'NoSuchElementType'
 ```
 
+<!-- test: tuple-element-unknown-type-at-each-declaration -->
+The same tuple type written in two declarations is reported at each one: a declaration's element
+position belongs to that declaration, not to the first that spelled the tuple.
+```maxon
+
+typealias Small = int(0 to 100)
+
+function take(p (NoSuchElementType, Small), q (NoSuchElementType, Small)) returns ExitCode
+	_ = p
+	_ = q
+	return 0
+end 'take'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3011: <fragment>:5:18: Unknown type 'NoSuchElementType'
+error E3011: <fragment>:5:48: Unknown type 'NoSuchElementType'
+```
+
+<!-- test: tuple-alias-element-unknown-type -->
+A tuple typealias is the declaration that writes the tuple, so its unknown element is reported inside the alias and not at a use of it.
+```maxon
+
+typealias Small = int(0 to 100)
+typealias P = (NoSuchElementType, Small)
+
+function take(p P) returns ExitCode
+	_ = p
+	return 0
+end 'take'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3011: <fragment>:4:16: Unknown type 'NoSuchElementType'
+```
+
+<!-- test: nested-tuple-element-unknown-type -->
+A tuple inside a tuple reports its own unknown element; the outer element, the inner tuple, resolves.
+```maxon
+
+typealias Small = int(0 to 100)
+
+function take(p ((NoSuchElementType, Small), Small)) returns ExitCode
+	_ = p
+	return 0
+end 'take'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3011: <fragment>:5:19: Unknown type 'NoSuchElementType'
+```
+
+<!-- test: tuple-element-unknown-type-in-a-field-and-a-parameter -->
+The same tuple spelled by a field and by a parameter is reported at each spelling.
+```maxon
+
+typealias Small = int(0 to 100)
+
+type Holder
+	export let pair as (NoSuchElementType, Small)
+end 'Holder'
+
+function take(p (NoSuchElementType, Small)) returns ExitCode
+	_ = p
+	return 0
+end 'take'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3011: <fragment>:6:22: Unknown type 'NoSuchElementType'
+error E3011: <fragment>:9:18: Unknown type 'NoSuchElementType'
+```
+
 <!-- test: compiler-reserved-base-type-is-nameable-at-a-parameter -->
 ⭐⭐ **A NAME THE COMPILER RESERVES IS NOT AN UNDECLARED NAME — AND IT IS NOT AN UNNAMEABLE ONE
 EITHER.** `CharacterSet` is reserved: `isCompilerOwnedTypeName`, keyed by `CharacterSetBuiltinName`, stops a

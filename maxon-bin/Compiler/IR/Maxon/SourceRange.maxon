@@ -147,6 +147,66 @@ export type DeclaredTypeSites
 	// @generated library-cache end
 end 'DeclaredTypeSites'
 
+// A tuple layout is interned once and shared by every declaration that writes its element list, so
+// each written occurrence carries its own element sites. Sites kept on the layout would place every
+// declaration's E3011 at the first one, and report the rest nowhere.
+export type WrittenTupleType
+	export let tupleName as ByteArray
+	export let filePath as FilePath
+	export let sites as DeclaredTypeSites
+
+	export static function create(tupleName ByteArray, filePath FilePath, sites DeclaredTypeSites) returns WrittenTupleType
+		return Self{tupleName: tupleName, filePath: filePath, sites: sites}
+	end 'create'
+
+	// @generated library-cache begin
+	function cacheWrite(writer LibraryCacheWriter)
+		writer.bytes(self.tupleName)
+		writer.text(self.filePath.toString())
+		self.sites.cacheWrite(writer)
+	end 'cacheWrite'
+
+	static function cacheRead(reader LibraryCacheReader) returns WrittenTupleType throws LibraryCacheDamage
+		let f_tupleName = try reader.bytes()
+		let f_filePath = try reader.path()
+		let f_sites = try DeclaredTypeSites.cacheRead(reader)
+
+		return Self{tupleName: f_tupleName, filePath: f_filePath, sites: f_sites}
+	end 'cacheRead'
+
+	static function cacheLayoutBytes() returns CacheSize24
+		return sizeof(WrittenTupleType) as CacheSize24
+	end 'cacheLayoutBytes'
+
+	// @generated library-cache end
+end 'WrittenTupleType'
+
+export typealias WrittenTupleTypeArray = Array with WrittenTupleType
+
+// @generated library-cache begin
+export function cacheWriteWrittenTupleTypeArray(writer LibraryCacheWriter, value WrittenTupleTypeArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		item.cacheWrite(writer)
+	end 'eachItem'
+end 'cacheWriteWrittenTupleTypeArray'
+
+export function cacheReadWrittenTupleTypeArray(reader LibraryCacheReader) returns WrittenTupleTypeArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = WrittenTupleTypeArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try WrittenTupleType.cacheRead(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadWrittenTupleTypeArray'
+
+// @generated library-cache end
+
 export union OpPlacement
 	unplaced
 	at(line LineNumber, column ColumnNumber)

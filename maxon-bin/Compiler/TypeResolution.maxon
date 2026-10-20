@@ -366,6 +366,7 @@ module function resolveTypes(project Project, module MaxonModule)
 		syncResolvedSignature(project, func: func)
 	end 'eachFunc'
 
+	checkWrittenTupleTypes(project, signatures: signatures)
 	checkStructFieldTypes(project, signatures: signatures)
 	checkEnumPayloadTypes(project, signatures: signatures)
 	project.functionAliasShapes = functionAliasShapesIn(project, signatures: signatures, form: FunctionAliasShapeForm.resolved)
@@ -1038,12 +1039,25 @@ function checkStructFieldTypes(project Project, signatures ProgramSignatures)
 	end 'eachDeclaredStruct'
 
 	for layout in layouts 'eachStruct'
-		for position in 0 upto layout.fieldTypes.count() 'eachField'
-			let declared = try layout.fieldTypes.get(position) otherwise panic("checkStructFieldTypes: fieldTypes.get OOB at {position} below its own count")
-			_ = resolveType(project, signatures: signatures, t: declared, readerFilePath: layout.declFilePath, site: layout.fieldTypeSites.siteAt(position), declaration: layout.name)
-		end 'eachField'
+		checkLayoutFieldTypes(project, signatures: signatures, layout: layout, readerFilePath: layout.declFilePath, sites: layout.fieldTypeSites)
 	end 'eachStruct'
 end 'checkStructFieldTypes'
+
+// `checkStructFieldTypes` meets the same tuple layouts with no positions, so an unknown element it
+// finds is owed a report from one of these occurrences (`requireUnplacedUnknownTypesWereReported`).
+function checkWrittenTupleTypes(project Project, signatures ProgramSignatures)
+	for written in project.writtenTupleTypes 'eachWrittenTuple'
+		view layout = try project.structTypes.get(written.tupleName) otherwise panic("checkWrittenTupleTypes: the tuple `{String.from(written.tupleName)}` written in '{written.filePath.toString()}' is not in project.structTypes — the parser files the layout in the same call that records the written type")
+		checkLayoutFieldTypes(project, signatures: signatures, layout: layout, readerFilePath: written.filePath, sites: written.sites)
+	end 'eachWrittenTuple'
+end 'checkWrittenTupleTypes'
+
+function checkLayoutFieldTypes(project Project, signatures ProgramSignatures, layout StructLayout, readerFilePath FilePath, sites DeclaredTypeSites)
+	for position in 0 upto layout.fieldTypes.count() 'eachField'
+		let declared = try layout.fieldTypes.get(position) otherwise panic("checkLayoutFieldTypes: fieldTypes.get OOB at {position} below its own count")
+		_ = resolveType(project, signatures: signatures, t: declared, readerFilePath: readerFilePath, site: sites.siteAt(position), declaration: layout.name)
+	end 'eachField'
+end 'checkLayoutFieldTypes'
 
 function checkEnumPayloadTypes(project Project, signatures ProgramSignatures)
 	var layouts = EnumLayoutArray.create()

@@ -601,6 +601,8 @@ export type FileParseArtifact
 	// This file's declared struct types (`type Point`), in declaration order.
 	export var structTypes as StructLayoutArray
 
+	export var writtenTupleTypes as WrittenTupleTypeArray
+
 	// This file's declared enum/union types, in declaration order. The twin of `structTypes`: a payload field's
 	// declared type carries ids, which `rewriteTypeIds` renumbers.
 	export var enumTypes as EnumLayoutArray
@@ -745,6 +747,7 @@ export type FileParseArtifact
 			typeAliases: RangedTypeAliasArray.create(),
 			functionTypeAliases: FunctionTypeAliasArray.create(),
 			structTypes: StructLayoutArray.create(),
+			writtenTupleTypes: WrittenTupleTypeArray.create(),
 			enumTypes: EnumLayoutArray.create(),
 			interfaces: IrInterfaceArray.create(),
 			typeNameDecls: TypeNameDeclArray.create(),
@@ -1011,6 +1014,10 @@ export type FileParseArtifact
 		self.structTypes.push(layout.clone())
 	end 'recordStructType'
 
+	export function recordWrittenTupleType(written WrittenTupleType)
+		self.writtenTupleTypes.push(written)
+	end 'recordWrittenTupleType'
+
 	// Record a declared enum/union type as this file's contribution to the project-wide `enumTypes`
 	// registry — the same NEVER-touch-Project discipline every `record*` above follows.
 	//
@@ -1122,6 +1129,7 @@ export type FileParseArtifact
 		cacheWriteRangedTypeAliasArray(writer, value: self.typeAliases)
 		cacheWriteFunctionTypeAliasArray(writer, value: self.functionTypeAliases)
 		cacheWriteStructLayoutArray(writer, value: self.structTypes)
+		cacheWriteWrittenTupleTypeArray(writer, value: self.writtenTupleTypes)
 		cacheWriteEnumLayoutArray(writer, value: self.enumTypes)
 		cacheWriteIrInterfaceArray(writer, value: self.interfaces)
 		cacheWriteTypeNameDeclArray(writer, value: self.typeNameDecls)
@@ -1167,6 +1175,7 @@ export type FileParseArtifact
 		let f_typeAliases = try cacheReadRangedTypeAliasArray(reader)
 		let f_functionTypeAliases = try cacheReadFunctionTypeAliasArray(reader)
 		let f_structTypes = try cacheReadStructLayoutArray(reader)
+		let f_writtenTupleTypes = try cacheReadWrittenTupleTypeArray(reader)
 		let f_enumTypes = try cacheReadEnumLayoutArray(reader)
 		let f_interfaces = try cacheReadIrInterfaceArray(reader)
 		let f_typeNameDecls = try cacheReadTypeNameDeclArray(reader)
@@ -1186,11 +1195,11 @@ export type FileParseArtifact
 		let f_parseMints = try cacheReadParseMints(reader)
 		let f_instanceIdsInUse = try cacheReadGenericInstanceIdArray(reader)
 
-		return Self{filePath: f_filePath, livesUnderStdlibDirectory: f_livesUnderStdlibDirectory, typeIdsAreProjectGlobal: f_typeIdsAreProjectGlobal, module: f_module, opRanges: f_opRanges, covPoints: f_covPoints, asyncSpawnSites: f_asyncSpawnSites, serviceAwaitSites: f_serviceAwaitSites, registryUseSites: f_registryUseSites, allocTagSites: f_allocTagSites, debugStreamNameSites: f_debugStreamNameSites, immortalConstArraySites: f_immortalConstArraySites, valueOrigins: f_valueOrigins, deferralSources: f_deferralSources, funcSignatures: f_funcSignatures, overloadSets: f_overloadSets, pendingFnMergeChecks: f_pendingFnMergeChecks, pendingFunctionTypeDoors: f_pendingFunctionTypeDoors, pendingBrandRecords: f_pendingBrandRecords, pendingDiscardedResults: f_pendingDiscardedResults, rangeChecks: f_rangeChecks, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, structTypes: f_structTypes, enumTypes: f_enumTypes, interfaces: f_interfaces, typeNameDecls: f_typeNameDecls, genericInstanceRequests: f_genericInstanceRequests, usedTypeNames: f_usedTypeNames, memberAccessedTypeNames: f_memberAccessedTypeNames, conformances: f_conformances, literalInitSites: f_literalInitSites, inferredInstantiationSites: f_inferredInstantiationSites, typeNames: f_typeNames, currentFuncIndex: f_currentFuncIndex, diagnostics: f_diagnostics, unusedTypeAliases: f_unusedTypeAliases, hiddenTypeNames: f_hiddenTypeNames, deferredParseErrors: f_deferredParseErrors, bindingHygieneDiagnostics: f_bindingHygieneDiagnostics, parseMints: f_parseMints, instanceIdsInUse: f_instanceIdsInUse}
+		return Self{filePath: f_filePath, livesUnderStdlibDirectory: f_livesUnderStdlibDirectory, typeIdsAreProjectGlobal: f_typeIdsAreProjectGlobal, module: f_module, opRanges: f_opRanges, covPoints: f_covPoints, asyncSpawnSites: f_asyncSpawnSites, serviceAwaitSites: f_serviceAwaitSites, registryUseSites: f_registryUseSites, allocTagSites: f_allocTagSites, debugStreamNameSites: f_debugStreamNameSites, immortalConstArraySites: f_immortalConstArraySites, valueOrigins: f_valueOrigins, deferralSources: f_deferralSources, funcSignatures: f_funcSignatures, overloadSets: f_overloadSets, pendingFnMergeChecks: f_pendingFnMergeChecks, pendingFunctionTypeDoors: f_pendingFunctionTypeDoors, pendingBrandRecords: f_pendingBrandRecords, pendingDiscardedResults: f_pendingDiscardedResults, rangeChecks: f_rangeChecks, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, structTypes: f_structTypes, writtenTupleTypes: f_writtenTupleTypes, enumTypes: f_enumTypes, interfaces: f_interfaces, typeNameDecls: f_typeNameDecls, genericInstanceRequests: f_genericInstanceRequests, usedTypeNames: f_usedTypeNames, memberAccessedTypeNames: f_memberAccessedTypeNames, conformances: f_conformances, literalInitSites: f_literalInitSites, inferredInstantiationSites: f_inferredInstantiationSites, typeNames: f_typeNames, currentFuncIndex: f_currentFuncIndex, diagnostics: f_diagnostics, unusedTypeAliases: f_unusedTypeAliases, hiddenTypeNames: f_hiddenTypeNames, deferredParseErrors: f_deferredParseErrors, bindingHygieneDiagnostics: f_bindingHygieneDiagnostics, parseMints: f_parseMints, instanceIdsInUse: f_instanceIdsInUse}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize336
-		return sizeof(FileParseArtifact) as CacheSize336
+	static function cacheLayoutBytes() returns CacheSize344
+		return sizeof(FileParseArtifact) as CacheSize344
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -1332,6 +1341,7 @@ function commitArtifactRegistries(project Project, artifact FileParseArtifact, o
 	commitTypeAliases(project, artifact: artifact)
 	commitFunctionTypeAliases(project, artifact: artifact, signatures: signatures)
 	commitStructTypes(project, artifact: artifact)
+	commitWrittenTupleTypes(project, artifact: artifact)
 	commitEnumTypes(project, artifact: artifact)
 	commitInterfaces(project, artifact: artifact)
 	commitConformances(project, artifact: artifact)
@@ -1875,6 +1885,12 @@ function commitStructTypes(project Project, artifact FileParseArtifact)
 		project.structTypes.upsert(layout.name, value: layout)
 	end 'each'
 end 'commitStructTypes'
+
+function commitWrittenTupleTypes(project Project, artifact FileParseArtifact)
+	for written in artifact.writtenTupleTypes 'each'
+		project.writtenTupleTypes.push(written)
+	end 'each'
+end 'commitWrittenTupleTypes'
 
 // Commit the artifact's declared enum/union types into the project registry — the registry
 // `TypeResolution.resolveNamedType` reads to resolve a `MaxonType.named` naming a declared
