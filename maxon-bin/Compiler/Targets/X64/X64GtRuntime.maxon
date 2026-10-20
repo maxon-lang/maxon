@@ -426,8 +426,9 @@ let ShimElsewhereLabel = 3
 //     `gs:[0]` is `NT_TIB.ExceptionList`, a NON-NULL pointer, so an unchecked read hands back garbage and the
 //     next field load faults. This is reachable: the prologue guard runs inside `main` before the first
 //     `async`.
-//   * a ZERO M means this OS thread is not one. That is reachable too, by a thread that runs real code: the
-//     system monitor never becomes an M and takes `__sched_lock` — whose take is a shimmed `iatCall`.
+//   * a ZERO M means this OS thread has not published one. That is reachable too, by a thread that runs real
+//     code: the main thread inside `__sched_init_procs` takes `__sched_lock` — whose take is a shimmed
+//     `iatCall` — before `emitSchedBecomeM` publishes its slot.
 //
 // **THE THIRD IS THE GREEN THREAD ITSELF**, and it is inside this helper rather than at each caller for the
 // same reason the other two are: every caller asks it and bails on it, and the version where one of them
@@ -480,8 +481,10 @@ end 'emitLoadCurrentMOrBail'
 //     before `__sched_init_procs` publishes the offset word the FIRST test above reads, so every instant
 //     before the block exists is one that test already covers;
 //   * a WORKER M, which gets one through `CLONE_SETTLS` before it executes an instruction.
-// There is no third on this lane, where the system monitor is the only OS thread that never becomes an M —
-// which is exactly the thread the Windows arm's second null test exists for.
+// There is no third on this lane: the system monitor gets a slot block through `CLONE_SETTLS` like a worker
+// and publishes an M record of its own as its first act. The Windows arm's second null test serves the main
+// thread inside `__sched_init_procs`, the monitor's own `TlsSetValue` before it publishes, and
+// `__np_child_fired`'s `PostQueuedCompletionStatus` on a thread-pool thread.
 //
 // ⚠ **AND IF THAT ARGUMENT WERE EVER FALSIFIED, THE FAILURE IS DIAGNOSABLE RATHER THAN SILENT.** A slot read
 // with FS base 0 is a load at `key * 8` — inside the unmapped null page — so it faults at the instruction
@@ -1272,7 +1275,7 @@ function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRe
 	emitLoadCurrentMOrBailless(code, rdataRelocs: rdataRelocs, dest: X64Register.rax, os: Os.windows)
 	emitBailUnlessOnTheSystemStack(code, fixups: shimFixups, m: X64Register.rax, scratch: ShimGtReg, addr: X64Register.rsp, outside: ShimFatalLabel)
 
-	// direct: the non-switched call (an M's scheduler context, the system stack, or no M at all).
+	// direct: the non-switched call (an M's scheduler context, the system stack, an M running no green thread, or no M at all).
 	shimLabels.place(ShimDirectLabel, value: codeHere(code))
 	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: slotIndex)
 
@@ -2062,9 +2065,9 @@ end 'buildPreemptSelfRegisterChunk'
 // preempted again. Only the road that reaches `SetThreadContext` successfully leaves it raised,
 // because only then does a trampoline run and clear it.
 //
-// The import calls are direct, not shimmed: `__sysmon` is this chunk's only caller and it is not a
-// machine (`SchedRuntime.buildSysmon`), so it runs on a real OS-thread stack with no processor to
-// hand away.
+// The import calls are direct, not shimmed: `__sysmon` is this chunk's only caller and its M record
+// runs no green thread (`SchedRuntime.buildSysmon`), so it runs on a real OS-thread stack with no
+// processor to hand away.
 function buildPreemptMachineChunk(context HostContextLayout) returns FunctionCodeChunk
 	let SlotMachine = 0
 	let SlotHandle = 1

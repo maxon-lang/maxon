@@ -644,8 +644,8 @@ let MOffRegainNext = MOffParkWakes + PointerSlotBytes
 // safe-point predicate able to say NO to a thread that is otherwise perfectly stoppable.** An asynchronous
 // stop parks the green thread where it stands, and a park takes `__sched_lock`; a thread stopped while it
 // already holds that lock would carry it into a context switch and never come back to release it, wedging
-// every other machine. So the count is stepped at `emitSchedLockEnter`/`emitSchedLockLeave` and at the
-// slab's own lock pair, and a non-zero count is a refusal.
+// every other machine. So every runtime lock, the slab's included, steps the count around its hold
+// (`emitLockEnterWithDepth`/`emitLockLeaveWithDepth`), and a non-zero count is a refusal.
 //
 // The step is a plain read-modify-write, because no other thread observes it running. Only this
 // machine's own thread writes it, and its readers run on that same thread (`__gt_preempt`, and
@@ -653,7 +653,8 @@ let MOffRegainNext = MOffParkWakes + PointerSlotBytes
 // (`__gt_preempt_safe` on the monitor), so program order is all either needs. A reader on a running
 // thread elsewhere would need a fenced step.
 //
-// ⚠ **A THREAD WITH NO MACHINE STEPS `SchedLockDepthSinkLabel` INSTEAD** — see `emitSchedLockDepthAddr`.
+// ⚠ **A THREAD THAT HAS NOT PUBLISHED ITS MACHINE YET STEPS `SchedLockDepthSinkLabel` INSTEAD** — see
+// `emitLockDepthAddrOrSink`.
 export let MOffLocks = MOffRegainNext + PointerSlotBytes
 
 // ⭐ **THE OS THREAD ID THIS MACHINE RUNS ON**, recorded by the thread itself at `emitSchedBecomeM`. Windows
@@ -731,11 +732,13 @@ export let MOffHeldStrand = MOffLockRand + PointerSlotBytes
 // idle), and the exit leak gate after the workers are joined.
 let MOffGtLive = MOffHeldStrand + PointerSlotBytes
 
+let MOffPreemptOff = MOffGtLive + PointerSlotBytes
+
 // The three head scalars, the inline GT, the idle tail, the syscall bracket's three, the idle
 // back-link, the wake count, the regain link, asynchronous preemption's four, the pinned thread's
-// three, the lock sleeper's three, the held strand and the live count. Derived, never written down as a
-// number, for `PStructSize`'s reason.
-let MStructSize = ((MOffGtLive + PointerSlotBytes) as FullRangeInt)
+// three, the lock sleeper's three, the held strand, the live count and the monitor's preemption switch.
+// Derived, never written down as a number, for `PStructSize`'s reason.
+let MStructSize = ((MOffPreemptOff + PointerSlotBytes) as FullRangeInt)
 
 // ==========================================================================
 // The ProcContext (P) struct
@@ -1584,10 +1587,10 @@ export let SchedLockLabel = b"__sched_lock"
 
 export let GtFreeLockLabel = b"__gt_gfree_lock"
 
-// ⭐ **WHERE A THREAD WITH NO MACHINE KEEPS ITS LOCK DEPTH** — see `emitSchedLockDepthAddr`. The monitor takes
-// `__sched_lock` and is not a machine; it runs no green thread, so the number it leaves here is read by nobody
-// and the word exists only so the step has an address that is not zero.
-// `lastWriterWins`: machine-less threads step it plainly and may lose each other's steps, and
+// ⭐ **WHERE A THREAD THAT HAS NOT PUBLISHED ITS MACHINE KEEPS ITS LOCK DEPTH** — see
+// `emitLockDepthAddrOrSink`. The number left here is read by nobody and the word exists only so the step has
+// an address that is not zero.
+// `lastWriterWins`: such threads step it plainly and may lose each other's steps, and
 // nothing reads it.
 let SchedLockDepthSinkLabel = b"__sched_lock_depth_sink"
 
@@ -1963,7 +1966,7 @@ export let GtFreeGetName = b"__gt_free_get"
 
 // ⭐⭐ `__sched_arena_carve(bytes) -> address` — the scheduler's uncounted arena, which GT records and machines are
 // carved from. See `buildSchedArenaCarve`.
-export let SchedArenaCarveName = b"__sched_arena_carve"
+let SchedArenaCarveName = b"__sched_arena_carve"
 
 // ⭐⭐ **THE PER-P COUNTER SUMS — `buildSchedPerProcSum`'s names:** one body, one walk of `__sched_procs`,
 // one field offset each. That builder refuses a name that is not here, and `isSchedSubstrateQueryCallee`
@@ -1998,8 +2001,8 @@ end 'isSchedSubstrateQueryCallee'
 // source `__sched_find_runnable` consults, so a work source added there without an arm here is work stranded
 // on a processor nobody is looking at.
 //
-// ⚠ **IT IS CALLED WITH NO PROCESSOR AND NO MACHINE OF ITS OWN**, from the sysmon thread, which is why it may
-// take `__sched_lock` freely and why it must not touch TLS.
+// ⚠ **IT IS CALLED WITH NO PROCESSOR AND NO ROSTER MACHINE OF ITS OWN**, from the sysmon thread, which is why
+// it may take `__sched_lock` freely and why it must not assume the calling machine holds a processor.
 let SchedHandoffPName = b"__sched_handoffp"
 
 // ⭐⭐ `__sched_retake(now, preemptOff) -> how many processors this pass took` — Go's `retake` (`proc.go:6682`):
@@ -2013,8 +2016,9 @@ let SchedRetakeName = b"__sched_retake"
 // word. See `buildSchedPreemptOne`.
 let SchedPreemptOneName = b"__sched_preemptone"
 
-// ⭐⭐ `__sysmon(arg) -> 0` — the monitor thread's whole life. **No processor, no M, allocation-free after
-// start, and it never runs Maxon user code.** Started once, at bring-up; see `emitSchedSysmonStart`.
+// ⭐⭐ `__sysmon(arg) -> 0` — the monitor thread's whole life. `arg` is the M record `emitSchedSysmonStart`
+// carved for it. **No processor, no roster entry, allocation-free after start, and it never runs Maxon user
+// code.** Started once, at bring-up; see `emitSchedSysmonStart`.
 export let SchedSysmonName = b"__sysmon"
 
 // ⭐⭐⭐ `__sched_syscall_regain()` — **"sysmon took my processor while I was in the kernel; get me another
@@ -2063,11 +2067,14 @@ export let SchedExitSyscallName = b"__sched_exit_syscall"
 // Neither is tested here — this door is straight-line by design — so a caller that cannot rule both out
 // takes `emitLoadCurrentGtAndProcIdOrZero` below, or tests what it must, as `__sched_runq_put` does.
 export function emitLoadCurrentM(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
-	let tebOffset = emitLoadGlobalWord(module, block: block, label: SchedTlsTebOffsetLabel, ids: ids)
+	return emitLoadMThroughOffset(module, block: block, tebOffset: emitLoadGlobalWord(module, block: block, label: SchedTlsTebOffsetLabel, ids: ids), ids: ids)
+end 'emitLoadCurrentM'
+
+function emitLoadMThroughOffset(module StdModule, block IrBlock, tebOffset ValueId, ids ValueMinter) returns ValueId
 	let m = ids.mint()
 	module.appendOp(block, op: StdOp.tlsSlotLoad(m, tebOffsetId: tebOffset))
 	return m
-end 'emitLoadCurrentM'
+end 'emitLoadMThroughOffset'
 
 // ⭐⭐⭐ **THE GUARDED WALK TO A USABLE M — THE OFFSET TEST, THE SLOT LOAD, THE M TEST — WRITTEN ONCE.** Every
 // walk to the current M that cannot promise the scheduler exists and this OS thread has an M comes through
@@ -2088,8 +2095,7 @@ export function emitLoadCurrentMOrBail(module StdModule, cur IrBlock, haveOffset
 	let tebOffset = emitLoadGlobalWord(module, block: cur, label: SchedTlsTebOffsetLabel, ids: ids)
 	emitBailIfZero(module, block: cur, tested: tebOffset, bail: bail, bailValues: bailValues, otherwise: haveOffset, ids: ids)
 
-	let m = ids.mint()
-	module.appendOp(haveOffset, op: StdOp.tlsSlotLoad(m, tebOffsetId: tebOffset))
+	let m = emitLoadMThroughOffset(module, block: haveOffset, tebOffset: tebOffset, ids: ids)
 	emitBailIfZero(module, block: haveOffset, tested: m, bail: bail, bailValues: bailValues, otherwise: haveMachine, ids: ids)
 
 	return m
@@ -2166,7 +2172,8 @@ end 'emitLoadCurrentGt'
 // the third is this function's own:
 //   * a zero TEB OFFSET means `__sched_init_procs` has not run — and `gs:[0]` is `NT_TIB.ExceptionList`, a
 //     non-null pointer, so reading through it is a wild load rather than a null one.
-//   * a zero M means this OS thread has none, which the system monitor does for its whole life.
+//   * a zero M means this OS thread has none: the main thread inside `__sched_init_procs`, or a worker before
+//     `emitSchedBecomeM` publishes its slot.
 //   * ⭐ **a zero `currentP` is the THIRD**: an M that holds no processor is every parked worker, for the
 //     whole of its park, so any program whose workers go idle reaches this arm. A walk reading `P->id`
 //     without asking would fault there. It answers the green thread it really found beside a zero processor
@@ -2585,22 +2592,38 @@ end 'emitSchedWakeMachine'
 // other order would leave an instant holding the lock with a zero count, which is exactly the
 // instant a stop would wedge every other machine.
 export function emitLockEnterAt(module StdModule, block IrBlock, lock ValueId, kind RuntimeLockKind, ids ValueMinter)
-	emitLockEnterWithDepth(module, block: block, lock: lock, kind: kind, depthAddr: emitSchedLockDepthAddr(module, block: block, ids: ids), ids: ids)
+	emitLockEnterOnMachine(module, block: block, lock: lock, kind: kind, machine: emitLoadCurrentM(module, block: block, ids: ids), ids: ids)
 end 'emitLockEnterAt'
 
 export function emitLockEnterOnMachine(module StdModule, block IrBlock, lock ValueId, kind RuntimeLockKind, machine ValueId, ids ValueMinter)
-	emitLockEnterWithDepth(module, block: block, lock: lock, kind: kind, depthAddr: emitFieldAddr(module, block: block, record: machine, offset: MOffLocks, ids: ids), ids: ids)
+	emitLockEnterWithDepth(module, block: block, lock: lock, kind: kind, depthRecord: machine, depthOffset: MOffLocks, ids: ids)
 end 'emitLockEnterOnMachine'
 
-function emitLockEnterWithDepth(module StdModule, block IrBlock, lock ValueId, kind RuntimeLockKind, depthAddr ValueId, ids ValueMinter)
-	emitStepLockDepthAt(module, block: block, depthAddr: depthAddr, delta: OneMore, ids: ids)
+export function emitLockLeaveAt(module StdModule, block IrBlock, lock ValueId, kind RuntimeLockKind, ids ValueMinter)
+	emitLockLeaveOnMachine(module, block: block, lock: lock, kind: kind, machine: emitLoadCurrentM(module, block: block, ids: ids), ids: ids)
+end 'emitLockLeaveAt'
+
+export function emitLockLeaveOnMachine(module StdModule, block IrBlock, lock ValueId, kind RuntimeLockKind, machine ValueId, ids ValueMinter)
+	emitLockLeaveWithDepth(module, block: block, lock: lock, kind: kind, depthRecord: machine, depthOffset: MOffLocks, ids: ids)
+end 'emitLockLeaveOnMachine'
+
+export function emitLockEnterBeforeMachine(module StdModule, block IrBlock, lock ValueId, kind RuntimeLockKind, ids ValueMinter)
+	emitLockEnterWithDepth(module, block: block, lock: lock, kind: kind, depthRecord: emitLockDepthAddrOrSink(module, block: block, ids: ids), depthOffset: 0, ids: ids)
+end 'emitLockEnterBeforeMachine'
+
+export function emitLockLeaveBeforeMachine(module StdModule, block IrBlock, lock ValueId, kind RuntimeLockKind, ids ValueMinter)
+	emitLockLeaveWithDepth(module, block: block, lock: lock, kind: kind, depthRecord: emitLockDepthAddrOrSink(module, block: block, ids: ids), depthOffset: 0, ids: ids)
+end 'emitLockLeaveBeforeMachine'
+
+export function emitLockEnterWithDepth(module StdModule, block IrBlock, lock ValueId, kind RuntimeLockKind, depthRecord ValueId, depthOffset ByteOffset, ids ValueMinter)
+	emitStepLockDepth(module, block: block, record: depthRecord, offset: depthOffset, delta: OneMore, ids: ids)
 	emitRuntimeLockMark(module, block: block, lock: lock, mark: runtimeLockMarkOf(kind, entering: true), ids: ids)
 end 'emitLockEnterWithDepth'
 
-export function emitLockLeaveAt(module StdModule, block IrBlock, lock ValueId, kind RuntimeLockKind, ids ValueMinter)
+export function emitLockLeaveWithDepth(module StdModule, block IrBlock, lock ValueId, kind RuntimeLockKind, depthRecord ValueId, depthOffset ByteOffset, ids ValueMinter)
 	emitRuntimeLockMark(module, block: block, lock: lock, mark: runtimeLockMarkOf(kind, entering: false), ids: ids)
-	emitSchedStepLockDepth(module, block: block, delta: OneFewer, ids: ids)
-end 'emitLockLeaveAt'
+	emitStepLockDepth(module, block: block, record: depthRecord, offset: depthOffset, delta: OneFewer, ids: ids)
+end 'emitLockLeaveWithDepth'
 
 function emitGlobalLockAddr(module StdModule, block IrBlock, label ByteArray, ids ValueMinter) returns ValueId
 	let lock = ids.mint()
@@ -2616,6 +2639,14 @@ export function emitLockWordLeave(module StdModule, block IrBlock, label ByteArr
 	emitLockLeaveAt(module, block: block, lock: emitGlobalLockAddr(module, block: block, label: label, ids: ids), kind: kind, ids: ids)
 end 'emitLockWordLeave'
 
+function emitLockWordEnterBeforeMachine(module StdModule, block IrBlock, label ByteArray, kind RuntimeLockKind, ids ValueMinter)
+	emitLockEnterBeforeMachine(module, block: block, lock: emitGlobalLockAddr(module, block: block, label: label, ids: ids), kind: kind, ids: ids)
+end 'emitLockWordEnterBeforeMachine'
+
+function emitLockWordLeaveBeforeMachine(module StdModule, block IrBlock, label ByteArray, kind RuntimeLockKind, ids ValueMinter)
+	emitLockLeaveBeforeMachine(module, block: block, lock: emitGlobalLockAddr(module, block: block, label: label, ids: ids), kind: kind, ids: ids)
+end 'emitLockWordLeaveBeforeMachine'
+
 export function emitSchedLockEnter(module StdModule, block IrBlock, ids ValueMinter)
 	emitLockWordEnter(module, block: block, label: SchedLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
 end 'emitSchedLockEnter'
@@ -2624,38 +2655,34 @@ export function emitSchedLockLeave(module StdModule, block IrBlock, ids ValueMin
 	emitLockWordLeave(module, block: block, label: SchedLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
 end 'emitSchedLockLeave'
 
-// ⭐⭐ **STEP THE CALLING MACHINE'S RUNTIME-LOCK DEPTH — `MOffLocks`.** The allocator's lock pair steps the
-// same word through `emitStepLockDepthAt`: a thread holding the ALLOCATOR's slow-path lock is as
-// unstoppable as one holding `__sched_lock`, and two mechanisms writing one word through two spellings is
-// the shape this file's header refuses.
-function emitSchedStepLockDepth(module StdModule, block IrBlock, delta FullRangeInt, ids ValueMinter)
-	emitStepLockDepthAt(module, block: block, depthAddr: emitSchedLockDepthAddr(module, block: block, ids: ids), delta: delta, ids: ids)
-end 'emitSchedStepLockDepth'
+// ⭐⭐ **STEP A RUNTIME-LOCK DEPTH WORD — `MOffLocks` OF A MACHINE, OR THE ADDRESS A WALK RESOLVED.** The
+// allocator's lock pair steps the same word through `emitLockEnterWithDepth`/`emitLockLeaveWithDepth`, with
+// the address its own walk resolved (`SlabRuntime.emitSlabResolveShard` has no `.data` teb offset to read in
+// a program without a scheduler): a thread holding the ALLOCATOR's slow-path lock is as unstoppable as one
+// holding `__sched_lock`, and two mechanisms writing one word through two spellings is the shape this
+// file's header refuses.
+function emitStepLockDepth(module StdModule, block IrBlock, record ValueId, offset ByteOffset, delta FullRangeInt, ids ValueMinter)
+	_ = emitFieldAccumulate(module, block: block, record: record, offset: offset, delta: emitConst(module, block: block, value: delta, ids: ids), multiM: false, ids: ids)
+end 'emitStepLockDepth'
 
-// The step itself, for a caller that resolved the depth word by its own walk — the allocator's, which has
-// no `.data` teb offset to read in a program without a scheduler (`SlabRuntime.emitSlabResolveShard`).
-export function emitStepLockDepthAt(module StdModule, block IrBlock, depthAddr ValueId, delta FullRangeInt, ids ValueMinter)
-	_ = emitFieldAccumulate(module, block: block, record: depthAddr, offset: 0, delta: emitConst(module, block: block, value: delta, ids: ids), multiM: false, ids: ids)
-end 'emitStepLockDepthAt'
-
-// ⭐⭐ **WHERE THE CALLING THREAD KEEPS ITS LOCK DEPTH: ITS OWN MACHINE'S WORD, OR THE SINK IF IT HAS NO
-// MACHINE.** The monitor thread takes `__sched_lock` and has no M (`buildSysmon`'s header), and it runs no
-// green thread, so nothing ever reads the depth it keeps — what it needs is somewhere to keep it that is not
-// address zero.
+// ⭐⭐ **WHERE A THREAD THAT MAY NOT YET BE AN M KEEPS ITS LOCK DEPTH: ITS MACHINE'S WORD, OR THE SINK.** Every
+// other lock site but the allocator's (its own walk, see `emitStepLockDepth`) runs on a thread that has
+// published its M, and reads that M unguarded. The sites that come here are the ones taken before this
+// thread's M is published: the debug stream's ring lock, which an allocation event takes before
+// `__sched_init_procs` has published the TEB offset, and `__sched_init_procs`'s adopt block, whose
+// `__sched_lock` hold and M carve run before `emitSchedBecomeM` publishes the slot. Nothing reads the sink.
 //
-// ⛔ **IT IS A BRANCHLESS SELECT, BECAUSE THE CALLERS ARE EXPRESSIONS RATHER THAN GRAPHS.** Every
-// `emitSchedLockEnter` site appends into a block it did not create and cannot split, so a test here would
-// have to become a call, and a call at every lock edge is a frame on paths that have none to spare. The
-// mask is all-ones exactly when there is a machine, so one of the two `and`s is always zero.
+// ⛔ **IT IS A BRANCHLESS SELECT, BECAUSE THE CALLERS ARE EXPRESSIONS RATHER THAN GRAPHS.** Every lock site
+// appends into a block it did not create and cannot split, so a test here would have to become a call, and a
+// call at every lock edge is a frame on paths that have none to spare. The mask is all-ones exactly when
+// there is a machine, so one of the two `and`s is always zero.
 // ⛔⛔ **AND THE TEB OFFSET IS TESTED TOO, BECAUSE A ZERO OFFSET MAKES THE SLOT LOAD READ `gs:[0]`.** That is
 // `NT_TIB.ExceptionList`, a NON-NULL pointer, and a machine test alone would take it for an M and step a word
-// inside it — a wild write. The allocator's slow-path lock is taken during bring-up, BEFORE
-// `__sched_init_procs` publishes the offset, so this is a state the runtime really reaches.
-// `emitLoadCurrentMOrBail` is the guarded walk that answers both questions, and it cannot be used here: it
-// needs blocks the lock sites have no way to give it.
-export function emitSchedLockDepthAddr(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
+// inside it — a wild write. `emitLoadCurrentMOrBail` is the guarded walk that answers both questions, and it
+// cannot be used here: it needs blocks the lock sites have no way to give it.
+function emitLockDepthAddrOrSink(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	let tebOffset = emitLoadGlobalWord(module, block: block, label: SchedTlsTebOffsetLabel, ids: ids)
-	let m = emitLoadCurrentM(module, block: block, ids: ids)
+	let m = emitLoadMThroughOffset(module, block: block, tebOffset: tebOffset, ids: ids)
 	let scheduled = emitCompareWithConstant(module, block: block, value: tebOffset, pred: StdCmpPred.ne, against: 0, ids: ids)
 	let hasMachine = emitCompareWithConstant(module, block: block, value: m, pred: StdCmpPred.ne, against: 0, ids: ids)
 	let onMachine = emitBin(module, block: block, a: scheduled, b: hasMachine, opcode: StdBinOpcode.bitAnd, ids: ids)
@@ -2667,7 +2694,7 @@ export function emitSchedLockDepthAddr(module StdModule, block IrBlock, ids Valu
 	let mineBits = emitBin(module, block: block, a: mine, b: mineMask, opcode: StdBinOpcode.bitAnd, ids: ids)
 	let sinkBits = emitBin(module, block: block, a: sink, b: sinkMask, opcode: StdBinOpcode.bitAnd, ids: ids)
 	return emitBin(module, block: block, a: mineBits, b: sinkBits, opcode: StdBinOpcode.bitOr, ids: ids)
-end 'emitSchedLockDepthAddr'
+end 'emitLockDepthAddrOrSink'
 
 // ==========================================================================
 // ⭐⭐⭐ THE SINGLY LINKED INTRUSIVE LISTS
@@ -3101,10 +3128,10 @@ function buildSchedInitProcs(module StdModule, target Target)
 	// rule whole: every M is on `__sched_allm` before anything can look for it. M0's handle is 0
 	// because this runtime never created the thread, the same 0 the teardown's join tests for. The
 	// lock is taken though nothing contends, because `emitSchedAllocM` requires its caller to hold it.
-	emitSchedLockEnter(module, block: adopt, ids: ids)
+	emitLockWordEnterBeforeMachine(module, block: adopt, label: SchedLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
 	let zeroIndex = emitConst(module, block: adopt, value: 0, ids: ids)
 	let p0 = emitLoadProc(module, block: adopt, index: zeroIndex, ids: ids)
-	let m0 = emitSchedAllocM(module, block: adopt, nextP: p0, ids: ids)
+	let m0 = emitSchedAllocM(module, block: adopt, nextP: p0, caller: CallerMachine.notYetPublished, ids: ids)
 	emitSchedRegisterMLocked(module, block: adopt, m: m0, ids: ids)
 	emitStoreGlobalWord(module, block: adopt, label: SchedMainMLabel, value: m0, ids: ids)
 
@@ -3113,7 +3140,7 @@ function buildSchedInitProcs(module StdModule, target Target)
 	// since the count is the list's, and the claim is inside this critical section like every other
 	// writer of the word.
 	emitSchedPidleClaimLocked(module, block: adopt, p: p0, ids: ids)
-	emitSchedLockLeave(module, block: adopt, ids: ids)
+	emitLockWordLeaveBeforeMachine(module, block: adopt, label: SchedLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
 	emitSchedBecomeM(module, block: adopt, m: m0, target: target, ids: ids)
 
 	// The main thread takes P[0] directly rather than through `MOffNextP`: it is not waking from a park, and
@@ -3165,12 +3192,8 @@ end 'buildSchedInitProcs'
 // across `osThreadCreate` for exactly this reason, and `__sched_stop_workers` sets the shutdown flag inside
 // the same critical section — which is what makes *"no machine is created after the flag is set"* a fact
 // rather than a small window.
-function emitSchedAllocM(module StdModule, block IrBlock, nextP ValueId, ids ValueMinter) returns ValueId
-	let structBytes = emitConst(module, block: block, value: MStructSize, ids: ids)
-	let m = ids.mint()
-	emitLockWordEnter(module, block: block, label: GtFreeLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
-	module.appendOp(block, op: StdOp.call(m, callee: SchedArenaCarveName, args: argsOf(structBytes)))
-	emitLockWordLeave(module, block: block, label: GtFreeLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
+function emitSchedAllocM(module StdModule, block IrBlock, nextP ValueId, caller CallerMachine, ids ValueMinter) returns ValueId
+	let m = emitSchedCarveLocked(module, block: block, bytes: MStructSize, caller: caller, ids: ids)
 
 	// The park. AUTO-reset, so a `__sched_startm` that signals between this machine's lock release and its
 	// `osWaitHandle` leaves the event signalled and the wait returns at once — see `MOffParkEvent`, which is
@@ -3186,6 +3209,32 @@ function emitSchedAllocM(module StdModule, block IrBlock, nextP ValueId, ids Val
 	// cannot be mistaken for one it has been watching (`MOffSysmonWord`).
 	return m
 end 'emitSchedAllocM'
+
+export enum CallerMachine
+	published
+	notYetPublished
+end 'CallerMachine'
+
+export function emitSchedCarveLocked(module StdModule, block IrBlock, bytes FullRangeInt, caller CallerMachine, ids ValueMinter) returns ValueId
+	let depthRecord = match caller 'depthRecord'
+		published gives emitLoadCurrentM(module, block: block, ids: ids)
+		notYetPublished gives emitLockDepthAddrOrSink(module, block: block, ids: ids)
+	end 'depthRecord'
+
+	let depthOffset = match caller 'depthOffset'
+		published gives MOffLocks
+		notYetPublished gives 0 as ByteOffset
+	end 'depthOffset'
+
+	let lock = emitGlobalLockAddr(module, block: block, label: GtFreeLockLabel, ids: ids)
+	emitLockEnterWithDepth(module, block: block, lock: lock, kind: RuntimeLockKind.recursive, depthRecord: depthRecord, depthOffset: depthOffset, ids: ids)
+
+	let carved = ids.mint()
+	module.appendOp(block, op: StdOp.call(carved, callee: SchedArenaCarveName, args: argsOf(emitConst(module, block: block, value: bytes, ids: ids))))
+	emitLockLeaveWithDepth(module, block: block, lock: lock, kind: RuntimeLockKind.recursive, depthRecord: depthRecord, depthOffset: depthOffset, ids: ids)
+
+	return carved
+end 'emitSchedCarveLocked'
 
 // ⭐⭐ **"THIS OS THREAD IS NOW THAT M" — the far half, run by the thread itself.** It commits the 64 KB
 // syscall stack, makes the M's inline scheduler GT its own current green thread, and publishes the M in this
@@ -3221,8 +3270,7 @@ function emitSchedBecomeM(module StdModule, block IrBlock, m ValueId, target Tar
 	emitStoreField(module, block: block, record: m, offset: MOffCurrentGt, value: schedulerContext)
 	emitStoreField(module, block: block, record: schedulerContext, offset: GtOffOwner, value: schedulerContext)
 
-	let tlsIndex = emitLoadGlobalWord(module, block: block, label: SchedTlsIndexLabel, ids: ids)
-	module.appendOp(block, op: StdOp.tlsSetValue(tlsIndex, valueId: m))
+	emitSchedPublishM(module, block: block, m: m, ids: ids)
 
 	// ⭐⭐ **WHAT ONLY THIS THREAD CAN LEARN ABOUT ITSELF, FOR THE MONITOR TO STOP IT BY LATER** — its OS
 	// thread id and, on Windows, a handle that can suspend it. Neither is knowable on the creating side:
@@ -3238,6 +3286,11 @@ function emitSchedBecomeM(module StdModule, block IrBlock, m ValueId, target Tar
 		module.appendOp(block, op: StdOp.call(ids.mint(), callee: PreemptSelfRegisterName, args: argsOf(m)))
 	end 'itCanBeStopped'
 end 'emitSchedBecomeM'
+
+function emitSchedPublishM(module StdModule, block IrBlock, m ValueId, ids ValueMinter)
+	let tlsIndex = emitLoadGlobalWord(module, block: block, label: SchedTlsIndexLabel, ids: ids)
+	module.appendOp(block, op: StdOp.tlsSetValue(tlsIndex, valueId: m))
+end 'emitSchedPublishM'
 
 // ⭐⭐ **"THIS M NOW HOLDS THIS P" — the two stores that are the whole of adoption once the M exists.** The
 // processor names the machine (`POffM`), then the machine points at the processor. Every road that hands a
@@ -3603,7 +3656,7 @@ end 'emitSchedAnyRunnable'
 //
 // ⚠⚠ **ONLY THE OWNING P's M MAY PUSH A RING, which is what makes the tail a single-writer word and the
 // push three instructions — AND THE RULE IS ENFORCED HERE RATHER THAN OWED BY EVERY CALLER.** The
-// system monitor has no M and therefore no P: `emitLoadCurrentMOrBail` answers 0 for it, and a ring push
+// system monitor's M holds no P: `emitLoadCurrentPOrBail` answers 0 for it, and a ring push
 // through a null P would store `gt` at offset `POffRunqBase` of address 0. So the no-ring arm below routes a
 // publish to the GLOBAL queue — the tier that is everybody's and is behind a lock — and no caller has to
 // remember which kind of thread it is on.
@@ -3646,10 +3699,10 @@ function buildSchedRunqPut(module StdModule)
 	let pushGt = ids.mint()
 	retry.blockArgs.push(IrBlockArg.create(pushGt, argType: StdType.i64))
 
-	// ⭐⭐ **THE THREE WAYS TO HAVE NO RING ALL REACH THE SAME ARM.** This caller really does run on a thread
-	// with NO M — the system monitor, through `__gt_ready_locked` — and an M holding no processor
-	// is the state a handoff produces; a thread with no ring of its own belongs on the global queue whichever
-	// of the three reasons put it there.
+	// ⭐⭐ **THE THREE WAYS TO HAVE NO RING ALL REACH THE SAME ARM.** This caller really does run on an M that
+	// holds no processor — the system monitor's, through `__gt_ready_locked`, and a handoff produces the same
+	// state; a thread with no ring of its own belongs on the global queue whichever of the three reasons put it
+	// there.
 	let p = emitLoadCurrentPOrBail(module, cur: entry, haveOffset: haveOffset, haveMachine: haveMachine, haveProc: slotPut, noProc: globalOnly, ids: ids)
 
 	// globalOnly: this OS thread owns no P, so it has no ring to push — the global queue is where a
@@ -5709,11 +5762,11 @@ end 'emitGtArenaCarve'
 
 // ⭐⭐ **`__sched_arena_carve(bytes) -> address` — CARVE `bytes` FROM THE SCHEDULER's ARENA.** It
 // takes no lock: every caller holds `__gt_gfree_lock` (`__gt_free_get` across its consult and
-// carve, `emitSchedAllocM` around the call, under `__sched_lock`, and `__mbox_staging` around the
-// call), so every carve shares one cursor. The carve is the `bytes` at `__sched_arena_cursor`; when
-// the current chunk has no room for them, a new chunk of `SchedArenaChunkBytes` is mapped and the
-// old one's tail is abandoned. A chunk's pages arrive zeroed and nothing is carved twice or ever
-// returned, so a carve needs no `memFill` and is never freed.
+// carve, and `emitSchedCarveLocked` around the call for `emitSchedAllocM`'s machines, the monitor's
+// M and `__mbox_staging`), so every carve shares one cursor. The carve is the `bytes` at
+// `__sched_arena_cursor`; when the current chunk has no room for them, a new chunk of
+// `SchedArenaChunkBytes` is mapped and the old one's tail is abandoned. A chunk's pages arrive zeroed
+// and nothing is carved twice or ever returned, so a carve needs no `memFill` and is never freed.
 //
 // ⭐⭐ **THE ARENA IS SCHEDULER SCAFFOLDING, LIKE THE STACKS, AND IS NEVER THE COUNTED SLAB.** It
 // holds the GT records (`__gt_free_get`), the machines (`emitSchedAllocM`) and the message staging
@@ -6069,7 +6122,7 @@ function buildSchedStartM(module StdModule, target Target)
 	// ⭐⭐ **AND A RESERVED CREDIT IS HANDED TO THE NEW MACHINE BEFORE ITS THREAD EXISTS — Go's `newm` with
 	// `mspinning`.** The machine is born spinning, so the unit stays counted for the whole of its creation and
 	// `osThreadCreate` is the only place it can still go wrong: a failed creation gives it back at `smspawnfailed`.
-	let newMachine = emitSchedAllocM(module, block: spawnStart, nextP: chosenProc, ids: ids)
+	let newMachine = emitSchedAllocM(module, block: spawnStart, nextP: chosenProc, caller: CallerMachine.published, ids: ids)
 	emitBranchOnCompare(module, block: spawnStart, value: credit, pred: StdCmpPred.eq, against: SchedStartMCredit.unreserved.rawValue, whenTrue: spawnCreate, whenFalse: spawnSpin, ids: ids)
 
 	emitSchedHandOverCredit(module, func: func, cur: spawnSpin, m: newMachine, cont: spawnCreate, ids: ids)
@@ -7999,14 +8052,14 @@ end 'buildGtAsyncPreemptPark'
 // `async`-only program's coroutines included — so there is no later event that would make the monitor worth
 // starting, and no earlier one where it could run. Nothing ever joins it, so the handle is only tested.
 //
-// ⭐ **THE PREEMPTION SWITCH RIDES THE THREAD'S ARGUMENT.** `MAXON_PREEMPT` is resolved here, on the main
-// thread, once (`emitResolvePreemptSwitch`), and reaches `__sysmon` as its `lpParameter` rather than as a
-// `.data` word, which would shift every later word's offset in every green-thread image. With it
-// off the monitor still reads the shutdown flag, sleeps deeply on an all-idle scheduler, takes the
-// stale netpoll look and starts a machine for an overdue timer on an idle processor; what it stops
-// doing is taking a processor from the thread holding it (`buildSchedRetake`) — so a CPU-bound
-// strand then starves `main` at one processor, which is the cost a case carrying
-// `<!-- preempt: off -->` accepts.
+// ⭐ **THE PREEMPTION SWITCH RIDES THE MONITOR'S M RECORD, WHICH IS THE THREAD'S ARGUMENT.** `MAXON_PREEMPT` is
+// resolved here, on the main thread, once (`emitResolvePreemptSwitch`), and reaches `__sysmon` in
+// `MOffPreemptOff` of the record carved for it rather than as a `.data` word, which would shift every later
+// word's offset in every green-thread image. With it off the monitor still reads the shutdown flag,
+// sleeps deeply on an all-idle scheduler, takes the stale netpoll look and starts a machine for an
+// overdue timer on an idle processor; what it stops doing is taking a processor from the thread holding
+// it (`buildSchedRetake`) — so a CPU-bound strand then starves `main` at one processor, which is the cost
+// a case carrying `<!-- preempt: off -->` accepts.
 //
 // ⛔ **GATE SITE 2 OF 4 — see `targetBracketsBlockingSyscalls`.** On a lane with no bracket the monitor is not
 // built at all (gate site 1), so there is nothing to start: `cur` falls straight through to `cont`.
@@ -8023,10 +8076,13 @@ export function emitSchedSysmonStart(module StdModule, func IrFunction, cur IrBl
 	switchKnown.blockArgs.push(IrBlockArg.create(preemptOff, argType: StdType.i64))
 	emitResolvePreemptSwitch(module, func: func, cur: cur, settled: switchKnown, ids: ids)
 
+	let monitorMachine = emitSchedCarveLocked(module, block: switchKnown, bytes: MStructSize, caller: CallerMachine.published, ids: ids)
+	emitStoreField(module, block: switchKnown, record: monitorMachine, offset: MOffPreemptOff, value: preemptOff)
+
 	let monitorEntry = ids.mint()
 	module.appendOp(switchKnown, op: StdOp.funcAddr(monitorEntry, funcName: SchedSysmonName))
 	let monitorHandle = ids.mint()
-	module.appendOp(switchKnown, op: StdOp.osThreadCreate(monitorHandle, entryPtrId: monitorEntry, argId: preemptOff))
+	module.appendOp(switchKnown, op: StdOp.osThreadCreate(monitorHandle, entryPtrId: monitorEntry, argId: monitorMachine))
 	emitBranchOnCompare(module, block: switchKnown, value: monitorHandle, pred: StdCmpPred.eq, against: 0, whenTrue: unstarted, whenFalse: cont, ids: ids)
 
 	emitRuntimeAbort(module, func: func, block: unstarted, abort: RuntimeAbort.schedulerMonitorUnstarted, ids: ids)
@@ -8036,13 +8092,17 @@ end 'emitSchedSysmonStart'
 // while every processor is idle (`SchedSysmonWaitLabel`), take a non-blocking look at the poller when nobody has
 // for `SysmonPollStaleNs`, start a machine for an overdue timer nobody is placed to fire, and retake.
 //
-// ⭐ **IT IS NOT AN M AND MUST NOT BECOME ONE.** It never calls `emitSchedBecomeM`, so its TLS slot stays 0
-// for its whole life — which is what makes the syscall shim take its DIRECT arm on every kernel call this
-// thread makes (`emitLoadCurrentGtOrBail`'s first test), what routes every allocation `__sched_startm` makes
-// on its behalf to the allocator's raw shard (`SlabRuntime.emitSlabResolveShard`'s bail), and what keeps it off
-// `__sched_allm` and `__sched_mcount` — so `__sched_checkdead` never counts it as a running machine and
-// `__sched_stop_workers` never tries to join it. **Those three are one property, stated once here rather than
-// arranged for three times.**
+// ⭐ **IT RUNS ON AN M RECORD OF ITS OWN, AND THAT RECORD IS NOT A MACHINE OF THE ROSTER AND MUST NOT BECOME
+// ONE** — Go's `sysmon` runs on an M started with `newm(sysmon, nil, -1)` and is kept out of `checkdead` by
+// `sched.nmsys`. `emitSchedSysmonStart` carves the record and the monitor publishes it in its TLS slot as its
+// first act, so every runtime lock steps `MOffLocks` through `emitLoadCurrentM` here as on a worker. It never
+// calls `emitSchedBecomeM`, and three facts about the record carry the rest:
+//   * `currentGt` is 0, so the syscall shim takes its DIRECT arm on every kernel call this thread makes
+//     (`emitLoadCurrentGtOrBail`'s current-GT test) and `__gt_preempt_safe` refuses it;
+//   * `currentP` is 0, so every allocation `__sched_startm` makes on its behalf goes to the allocator's raw
+//     shard (`SlabRuntime.emitSlabResolveShard`'s P-less-M arm);
+//   * it is never registered, so it stays off `__sched_allm` and `__sched_mcount` — `__sched_checkdead`
+//     never counts it as a running machine and `__sched_stop_workers` never tries to join it.
 //
 // ⚠ **NOTHING JOINS IT AT TEARDOWN.** It reads the shutdown flag at the top of every lap and returns from its
 // thread procedure; one asleep on an all-idle scheduler holds nothing anybody needs, and the process exit ends
@@ -8074,11 +8134,13 @@ function buildSysmon(module StdModule, target Target)
 	var keepPace = module.addBlock(func, label: b"smonkeep", heat: BlockHeat.normal)
 	var exitBlock = module.addBlock(func, label: b"smonexit", heat: BlockHeat.normal)
 
-	// The `lpParameter` `osThreadCreate` hands this thread is the resolved `MAXON_PREEMPT` switch
-	// (`emitSchedSysmonStart`): 1 for `off`. The rest of the monitor's state is the block args below plus what
-	// it reads out of the roster.
+	// The `lpParameter` `osThreadCreate` hands this thread is its M record (`emitSchedSysmonStart`), whose
+	// `MOffPreemptOff` holds the resolved `MAXON_PREEMPT` switch: 1 for `off`. The rest of the monitor's state
+	// is the block args below plus what it reads out of the roster.
 	emitParams(module, block: entry, count: 1)
-	let preemptOff = 0
+	let monitorMachine = 0
+	let preemptOff = emitLoadField(module, block: entry, record: monitorMachine, offset: MOffPreemptOff, ids: ids)
+	emitSchedPublishM(module, block: entry, m: monitorMachine, ids: ids)
 
 	// Its sleep's timer and its deep sleep's event, both its own.
 	let timer = ids.mint()

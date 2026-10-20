@@ -1311,8 +1311,9 @@ end 'ownSoleEdgeArgs'
 //   * scheduler word 0 — no scheduler has ever existed, this is the lone main thread: the raw row, sole
 //     writer, plain counters, no lock.
 //   * a machine holding a P whose id is an ordinary row: that row, sole writer.
-//   * a P whose id clamps to the raw row, a machine holding no P, or no machine at all (the system monitor, a
-//     worker between its birth and its slot store): the raw row, serialised.
+//   * a P whose id clamps to the raw row, a machine holding no P (the system monitor's), or no machine at all
+//     (the main thread inside `__sched_init_procs`, a worker between its birth and its slot store): the raw
+//     row, serialised.
 //
 // ⛔⛔ **NEITHER ZERO TEST IS DEFENSIVE.** Before `__sched_init_procs` runs the offset word is 0 and
 // `gs:[0]` is `NT_TIB.ExceptionList` — a NON-NULL pointer — so reading through it hands back a garbage
@@ -1477,13 +1478,11 @@ end 'emitSlabLockAddr'
 // as `SchedRuntime.emitSchedLockEnter` — up before the acquire, down after the release. On wasm the
 // lock marks are dropped (`expandRuntimeLocks`) and the depth step lands on the sink.
 function emitSlabLockEnter(module StdModule, block IrBlock, state ValueId, depthAddr ValueId, ids ValueMinter)
-	emitStepLockDepthAt(module, block: block, depthAddr: depthAddr, delta: OneMore, ids: ids)
-	emitRuntimeLockMark(module, block: block, lock: emitSlabLockAddr(module, block: block, state: state, ids: ids), mark: RuntimeLockMark.enterRecursive, ids: ids)
+	emitLockEnterWithDepth(module, block: block, lock: emitSlabLockAddr(module, block: block, state: state, ids: ids), kind: RuntimeLockKind.recursive, depthRecord: depthAddr, depthOffset: 0, ids: ids)
 end 'emitSlabLockEnter'
 
 function emitSlabLockLeave(module StdModule, block IrBlock, state ValueId, depthAddr ValueId, ids ValueMinter)
-	emitRuntimeLockMark(module, block: block, lock: emitSlabLockAddr(module, block: block, state: state, ids: ids), mark: RuntimeLockMark.leaveRecursive, ids: ids)
-	emitStepLockDepthAt(module, block: block, depthAddr: depthAddr, delta: OneFewer, ids: ids)
+	emitLockLeaveWithDepth(module, block: block, lock: emitSlabLockAddr(module, block: block, state: state, ids: ids), kind: RuntimeLockKind.recursive, depthRecord: depthAddr, depthOffset: 0, ids: ids)
 end 'emitSlabLockLeave'
 
 // --- The traffic columns ---

@@ -6943,11 +6943,11 @@ function buildGtRunStrand(module StdModule, target Target)
 	// After the shrink, never before: once either mailbox commit leaves the mailbox lock a waker can ready the
 	// member on another M, and a shrink then would relocate a stack that is running. Each commit also runs
 	// before `__gt_strand_next`, so this OS thread runs no other green thread while the park's hold is open.
-	emitMboxParkCommit(module, block: mailboxCommit, gt: member, mbox: emitLoadField(module, block: mailboxCommit, record: member, offset: GtOffParkArg, ids: ids), ids: ids)
+	emitMboxParkCommit(module, block: mailboxCommit, machine: m, gt: member, mbox: emitLoadField(module, block: mailboxCommit, record: member, offset: GtOffParkArg, ids: ids), ids: ids)
 	module.setTerminator(mailboxCommit, op: StdOp.branch(next.id))
 	mailboxCommit.branchEdges.push(BranchEdge.create(next.id, argIds: argsOf(zero)))
 
-	var sendCommitted = emitMboxSendParkCommit(module, func: func, block: mailboxSendCommit, gt: member, mbox: emitLoadField(module, block: mailboxSendCommit, record: member, offset: GtOffParkArg, ids: ids), ids: ids)
+	var sendCommitted = emitMboxSendParkCommit(module, func: func, block: mailboxSendCommit, machine: m, gt: member, mbox: emitLoadField(module, block: mailboxSendCommit, record: member, offset: GtOffParkArg, ids: ids), ids: ids)
 	module.setTerminator(sendCommitted, op: StdOp.branch(next.id))
 	sendCommitted.branchEdges.push(BranchEdge.create(next.id, argIds: argsOf(zero)))
 
@@ -8026,7 +8026,7 @@ function buildGtPreempt(module StdModule, target Target)
 	let gt = 0
 
 	emitGtRestoreStackGuard(module, block: entry, gt: gt, target: target, ids: ids)
-	let locksHeld = emitLoadField(module, block: entry, record: emitSchedLockDepthAddr(module, block: entry, ids: ids), offset: 0, ids: ids)
+	let locksHeld = emitLoadField(module, block: entry, record: emitLoadCurrentM(module, block: entry, ids: ids), offset: MOffLocks, ids: ids)
 	emitBranchOnCompare(module, block: entry, value: locksHeld, pred: StdCmpPred.eq, against: 0, whenTrue: park, whenFalse: declined, ids: ids)
 
 	module.setTerminator(declined, op: StdOp.retVoid)

@@ -387,8 +387,8 @@ function buildRtLockAcquire(module StdModule, kind RuntimeLockKind)
 	_ = emitNetpoll(module, block: passive, verb: NetpollVerb.yieldThread, operands: ValueIdArray.create(), ids: ids)
 	emitRtLockEdge(module, from: passive, to: again, args: threeArgs(i, second: weDecide, third: tail))
 
-	// A thread with no M, such as `__sysmon`, has no semaphore to sleep on, so it yields and retries
-	// until the lock comes free.
+	// A thread that has not published an M, such as the main thread inside `__sched_init_procs`, has no
+	// semaphore to sleep on, so it yields and retries until the lock comes free.
 	let m = emitLoadCurrentMOrBail(module, cur: sleep, haveOffset: haveOffset, haveMachine: haveMachine, bail: noMachine, bailValues: FullRangeIntArray.create(), ids: ids)
 
 	_ = emitNetpoll(module, block: noMachine, verb: NetpollVerb.yieldThread, operands: ValueIdArray.create(), ids: ids)

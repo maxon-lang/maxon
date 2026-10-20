@@ -432,8 +432,21 @@ function emitMboxLockEnterOnMachine(module StdModule, block IrBlock, mbox ValueI
 	emitLockEnterOnMachine(module, block: block, lock: emitMboxLockAddr(module, block: block, mbox: mbox, ids: ids), kind: RuntimeLockKind.exclusive, machine: machine, ids: ids)
 end 'emitMboxLockEnterOnMachine'
 
-function emitMboxLockLeave(module StdModule, block IrBlock, mbox ValueId, ids ValueMinter)
-	emitLockLeaveAt(module, block: block, lock: emitMboxLockAddr(module, block: block, mbox: mbox, ids: ids), kind: RuntimeLockKind.exclusive, ids: ids)
+// `machine(m)` must be the M whose `MOffLocks` the matching enter stepped, and the M this thread still is:
+// a leave on any other M leaves two depth counts wrong. No green thread resumes between the two, because a
+// park commit leaves on the parking M before `__gt_strand_next` (`buildGtRunStrand`).
+union MboxLockHolder
+	currentMachine
+	machine(m ValueId)
+end 'MboxLockHolder'
+
+function emitMboxLockLeave(module StdModule, block IrBlock, mbox ValueId, holder MboxLockHolder, ids ValueMinter)
+	let lock = emitMboxLockAddr(module, block: block, mbox: mbox, ids: ids)
+
+	match holder 'holder'
+		currentMachine then emitLockLeaveAt(module, block: block, lock: lock, kind: RuntimeLockKind.exclusive, ids: ids)
+		machine(m) then emitLockLeaveOnMachine(module, block: block, lock: lock, kind: RuntimeLockKind.exclusive, machine: m, ids: ids)
+	end 'holder'
 end 'emitMboxLockLeave'
 
 function emitMboxBranchOnParkedReceiver(module StdModule, cur IrBlock, mbox ValueId, noReceiver IrBlock, handoff IrBlock, ids ValueMinter) returns ValueId
@@ -443,10 +456,10 @@ function emitMboxBranchOnParkedReceiver(module StdModule, cur IrBlock, mbox Valu
 	return parked
 end 'emitMboxBranchOnParkedReceiver'
 
-function emitMboxWakeParked(module StdModule, func IrFunction, cur IrBlock, mbox ValueId, parked ValueId, handed ValueId, cont IrBlock, ids ValueMinter)
+function emitMboxWakeParked(module StdModule, func IrFunction, cur IrBlock, mbox ValueId, holder MboxLockHolder, parked ValueId, handed ValueId, cont IrBlock, ids ValueMinter)
 	emitStoreField(module, block: cur, record: parked, offset: GtOffParkArg, value: handed)
 	emitStoreField(module, block: cur, record: mbox, offset: MboxOffParkedGt, value: emitConst(module, block: cur, value: 0, ids: ids))
-	emitMboxLockLeave(module, block: cur, mbox: mbox, ids: ids)
+	emitMboxLockLeave(module, block: cur, mbox: mbox, holder: holder, ids: ids)
 	emitGtReadyParkedService(module, func: func, cur: cur, service: parked, cont: cont, ids: ids)
 end 'emitMboxWakeParked'
 
@@ -525,7 +538,7 @@ end 'emitMboxReadyClaimedSender'
 
 function emitMboxHandOffClaimedSender(module StdModule, func IrFunction, cur IrBlock, mbox ValueId, sender ValueId, cont IrBlock, ids ValueMinter)
 	emitMboxSendUnlink(module, block: cur, sender: sender, ids: ids)
-	emitMboxLockLeave(module, block: cur, mbox: mbox, ids: ids)
+	emitMboxLockLeave(module, block: cur, mbox: mbox, holder: MboxLockHolder.currentMachine, ids: ids)
 	emitMboxReadyClaimedSender(module, func: func, cur: cur, sender: sender, cont: cont, ids: ids)
 end 'emitMboxHandOffClaimedSender'
 
@@ -564,10 +577,10 @@ function emitMboxBranchOnFull(module StdModule, block IrBlock, mbox ValueId, inb
 	return ringCount
 end 'emitMboxBranchOnFull'
 
-function emitMboxInboxFirst(module StdModule, func IrFunction, cur IrBlock, mbox ValueId, msg ValueId, byteCount ValueId, done IrBlock, ids ValueMinter)
+function emitMboxInboxFirst(module StdModule, func IrFunction, cur IrBlock, mbox ValueId, holder MboxLockHolder, msg ValueId, byteCount ValueId, done IrBlock, ids ValueMinter)
 	var filled = emitMboxFillInbox(module, func: func, cur: cur, mbox: mbox, msg: msg, byteCount: byteCount, ids: ids)
 	emitMboxSetReceiver(module, block: filled, mbox: mbox, state: MboxReceiverState.inboxQueued, ids: ids)
-	emitMboxLockLeave(module, block: filled, mbox: mbox, ids: ids)
+	emitMboxLockLeave(module, block: filled, mbox: mbox, holder: holder, ids: ids)
 	module.setTerminator(filled, op: StdOp.branch(done.id))
 end 'emitMboxInboxFirst'
 
@@ -581,10 +594,10 @@ function emitMboxBranchOnRingRoom(module StdModule, func IrFunction, cur IrBlock
 	emitBranchOnCompareValues(module, block: haveRing, a: ringCount, pred: StdCmpPred.eq, b: ringSlots, whenTrue: noRoom, whenFalse: room, ids: ids)
 end 'emitMboxBranchOnRingRoom'
 
-function emitMboxRingPlace(module StdModule, func IrFunction, cur IrBlock, mbox ValueId, ringCount ValueId, msg ValueId, byteCount ValueId, done IrBlock, ids ValueMinter)
+function emitMboxRingPlace(module StdModule, func IrFunction, cur IrBlock, mbox ValueId, holder MboxLockHolder, ringCount ValueId, msg ValueId, byteCount ValueId, done IrBlock, ids ValueMinter)
 	emitStoreField(module, block: cur, record: mbox, offset: MboxOffCount, value: emitBin(module, block: cur, a: ringCount, b: emitConst(module, block: cur, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids))
 	var stored = emitMboxRingStoreTail(module, func: func, cur: cur, mbox: mbox, ringCount: ringCount, msg: msg, byteCount: byteCount, ids: ids)
-	emitMboxLockLeave(module, block: stored, mbox: mbox, ids: ids)
+	emitMboxLockLeave(module, block: stored, mbox: mbox, holder: holder, ids: ids)
 	module.setTerminator(stored, op: StdOp.branch(done.id))
 end 'emitMboxRingPlace'
 
@@ -785,10 +798,7 @@ function buildMboxStaging(module StdModule, bytes ByteOffset)
 
 	module.setTerminator(have, op: StdOp.ret(staging))
 
-	emitLockWordEnter(module, block: carve, label: GtFreeLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
-	let carved = ids.mint()
-	module.appendOp(carve, op: StdOp.call(carved, callee: SchedArenaCarveName, args: argsOf(emitConst(module, block: carve, value: bytes as FullRangeInt, ids: ids))))
-	emitLockWordLeave(module, block: carve, label: GtFreeLockLabel, kind: RuntimeLockKind.recursive, ids: ids)
+	let carved = emitSchedCarveLocked(module, block: carve, bytes: bytes as FullRangeInt, caller: CallerMachine.published, ids: ids)
 	emitStoreField(module, block: carve, record: selfGt, offset: GtOffStaging as ByteOffset, value: carved)
 	module.setTerminator(carve, op: StdOp.ret(carved))
 
@@ -832,25 +842,25 @@ function buildMboxSend(module StdModule)
 	let closed = emitLoadField(module, block: attempt, record: mbox, offset: MboxOffClosed, ids: ids)
 	emitBranchOnCompare(module, block: attempt, value: closed, pred: StdCmpPred.eq, against: 0, whenTrue: route, whenFalse: refuseClosed, ids: ids)
 
-	emitMboxRefuse(module, block: refuseClosed, mbox: mbox, status: MboxSendStatus.stopped, ids: ids)
+	emitMboxRefuse(module, block: refuseClosed, mbox: mbox, holder: MboxLockHolder.machine(machine), status: MboxSendStatus.stopped, ids: ids)
 
 	// Handing past the ring keeps FIFO order only because a receiver parks on an empty, open mailbox
 	// alone, so a non-zero `parkedGt` under the lock means nothing is queued ahead of this request.
 	let parked = emitMboxBranchOnParkedReceiver(module, cur: route, mbox: mbox, noReceiver: firstCheck, handoff: handoff, ids: ids)
 
 	var delivered = emitMboxFillInbox(module, func: func, cur: handoff, mbox: mbox, msg: msg, byteCount: bytes, ids: ids)
-	emitMboxWakeParked(module, func: func, cur: delivered, mbox: mbox, parked: parked, handed: emitConst(module, block: delivered, value: MboxHandedMessage, ids: ids), cont: doneBlock, ids: ids)
+	emitMboxWakeParked(module, func: func, cur: delivered, mbox: mbox, holder: MboxLockHolder.machine(machine), parked: parked, handed: emitConst(module, block: delivered, value: MboxHandedMessage, ids: ids), cont: doneBlock, ids: ids)
 
 	let receiver = emitLoadField(module, block: firstCheck, record: mbox, offset: MboxOffReceiver, ids: ids)
 	emitMboxDispatchReceiverState(module, func: func, cur: firstCheck, receiver: receiver, started: append, fresh: inboxFirst, inboxQueued: queueing, ids: ids)
 
-	emitMboxInboxFirst(module, func: func, cur: inboxFirst, mbox: mbox, msg: msg, byteCount: bytes, done: doneBlock, ids: ids)
+	emitMboxInboxFirst(module, func: func, cur: inboxFirst, mbox: mbox, holder: MboxLockHolder.machine(machine), msg: msg, byteCount: bytes, done: doneBlock, ids: ids)
 
 	let ringCount = emitMboxBranchOnFull(module, block: append, mbox: mbox, inboxHolds: false, full: queueing, room: ringRoom, ids: ids)
 
 	emitMboxBranchOnRingRoom(module, func: func, cur: ringRoom, mbox: mbox, ringCount: ringCount, room: fitted, noRoom: queueing, ids: ids)
 
-	emitMboxRingPlace(module, func: func, cur: fitted, mbox: mbox, ringCount: ringCount, msg: msg, byteCount: bytes, done: doneBlock, ids: ids)
+	emitMboxRingPlace(module, func: func, cur: fitted, mbox: mbox, holder: MboxLockHolder.machine(machine), ringCount: ringCount, msg: msg, byteCount: bytes, done: doneBlock, ids: ids)
 
 	let status = ids.mint()
 	module.appendOp(queueing, op: StdOp.call(status, callee: MboxSendQueueName, args: fourArgs(mbox, second: msg, third: bytes, fourth: timeoutMs)))
@@ -900,7 +910,7 @@ function buildMboxSendQueue(module StdModule)
 
 	emitBranchOnCompare(module, block: roomGate, value: timeoutMs, pred: StdCmpPred.eq, against: 0, whenTrue: refuseFull, whenFalse: waitCheck, ids: ids)
 
-	emitMboxRefuse(module, block: refuseFull, mbox: mbox, status: MboxSendStatus.full, ids: ids)
+	emitMboxRefuse(module, block: refuseFull, mbox: mbox, holder: MboxLockHolder.currentMachine, status: MboxSendStatus.full, ids: ids)
 
 	// A scheduler context has no green thread to park, and a renounced coroutine is never awaited, so
 	// both answer `full` at once. No drop can land between this read and the park commit: a dropper
@@ -949,20 +959,20 @@ function buildMboxSendQueue(module StdModule)
 	emitMboxSendUnlink(module, block: timedOut, sender: selfGt, ids: ids)
 	module.setTerminator(timedOut, op: StdOp.branch(wakeUnlocked.id))
 
-	emitMboxRefuse(module, block: wakeUnlocked, mbox: mbox, status: MboxSendStatus.full, ids: ids)
+	emitMboxRefuse(module, block: wakeUnlocked, mbox: mbox, holder: MboxLockHolder.currentMachine, status: MboxSendStatus.full, ids: ids)
 
 	emitRuntimeAbort(module, func: func, block: wakeUnexpected, abort: RuntimeAbort.serviceSendProtocolBroken, ids: ids)
 
 	let ringCount = emitLoadField(module, block: queue, record: mbox, offset: MboxOffCount, ids: ids)
 	var reserved = emitMboxRingReserve(module, func: func, cur: queue, mbox: mbox, ringCount: ringCount, ids: ids)
-	emitMboxRingPlace(module, func: func, cur: reserved, mbox: mbox, ringCount: ringCount, msg: msg, byteCount: bytes, done: doneBlock, ids: ids)
+	emitMboxRingPlace(module, func: func, cur: reserved, mbox: mbox, holder: MboxLockHolder.currentMachine, ringCount: ringCount, msg: msg, byteCount: bytes, done: doneBlock, ids: ids)
 
 	module.setTerminator(doneBlock, op: StdOp.ret(emitConst(module, block: doneBlock, value: MboxSendStatus.delivered.rawValue, ids: ids)))
 	module.functions.push(func)
 end 'buildMboxSendQueue'
 
-function emitMboxRefuse(module StdModule, block IrBlock, mbox ValueId, status MboxSendStatus, ids ValueMinter)
-	emitMboxLockLeave(module, block: block, mbox: mbox, ids: ids)
+function emitMboxRefuse(module StdModule, block IrBlock, mbox ValueId, holder MboxLockHolder, status MboxSendStatus, ids ValueMinter)
+	emitMboxLockLeave(module, block: block, mbox: mbox, holder: holder, ids: ids)
 	emitConstReturn(module, block: block, value: status.rawValue, ids: ids)
 end 'emitMboxRefuse'
 
@@ -1012,7 +1022,7 @@ function buildMboxRecv(module StdModule)
 	_ = emitMboxBranchOnSenders(module, block: takeInbox, root: emitMboxSendRoot(module, block: takeInbox, mbox: mbox, ids: ids), waiting: takeInboxContended, none: takeInboxAlone, ids: ids)
 
 	emitMboxSetReceiver(module, block: takeInboxAlone, mbox: mbox, state: MboxReceiverState.started, ids: ids)
-	emitMboxLockLeave(module, block: takeInboxAlone, mbox: mbox, ids: ids)
+	emitMboxLockLeave(module, block: takeInboxAlone, mbox: mbox, holder: MboxLockHolder.machine(attemptMachine), ids: ids)
 	module.setTerminator(takeInboxAlone, op: StdOp.ret(emitMboxInboxAddr(module, block: takeInboxAlone, mbox: mbox, ids: ids)))
 
 	emitMboxTakeCall(module, block: takeInboxContended, mbox: mbox, source: MboxTakeSource.inbox, ids: ids)
@@ -1027,7 +1037,7 @@ function buildMboxRecv(module StdModule)
 	module.setTerminator(popFit, op: StdOp.condBranch(lastOfGrown, thenBlockId: takeRing.id, elseBlockId: popNow.id))
 
 	var popped = emitMboxRingPop(module, func: func, cur: popNow, mbox: mbox, remaining: emitBin(module, block: popNow, a: queued, b: emitConst(module, block: popNow, value: 1, ids: ids), opcode: StdBinOpcode.sub, ids: ids), ids: ids)
-	emitMboxLockLeave(module, block: popped, mbox: mbox, ids: ids)
+	emitMboxLockLeave(module, block: popped, mbox: mbox, holder: MboxLockHolder.machine(attemptMachine), ids: ids)
 	module.setTerminator(popped, op: StdOp.ret(emitMboxInboxAddr(module, block: popped, mbox: mbox, ids: ids)))
 
 	emitMboxTakeCall(module, block: takeRing, mbox: mbox, source: MboxTakeSource.ring, ids: ids)
@@ -1038,7 +1048,7 @@ function buildMboxRecv(module StdModule)
 	let closed = emitLoadField(module, block: emptyQueue, record: mbox, offset: MboxOffClosed, ids: ids)
 	emitBranchOnCompare(module, block: emptyQueue, value: closed, pred: StdCmpPred.eq, against: 0, whenTrue: park, whenFalse: drained, ids: ids)
 
-	emitMboxLockLeave(module, block: drained, mbox: mbox, ids: ids)
+	emitMboxLockLeave(module, block: drained, mbox: mbox, holder: MboxLockHolder.machine(attemptMachine), ids: ids)
 	emitConstReturn(module, block: drained, value: MboxClosedAndDrained, ids: ids)
 
 	// The hold that read "empty and open" stays open through the park (see the file header), so no
@@ -1139,7 +1149,7 @@ function buildMboxRecvTake(module StdModule)
 	emitStoreField(module, block: shrink, record: mbox, offset: MboxOffHead, value: emitConst(module, block: shrink, value: MboxRingHeadReset, ids: ids))
 	module.setTerminator(shrink, op: StdOp.branch(noSender.id))
 
-	emitMboxLockLeave(module, block: noSender, mbox: mbox, ids: ids)
+	emitMboxLockLeave(module, block: noSender, mbox: mbox, holder: MboxLockHolder.currentMachine, ids: ids)
 	module.setTerminator(noSender, op: StdOp.ret(emitMboxInboxAddr(module, block: noSender, mbox: mbox, ids: ids)))
 
 	let wakeDebt = ids.mint()
@@ -1191,9 +1201,9 @@ function buildMboxClose(module StdModule)
 	emitBranchCarrying(module, from: stopSender, to: drainSenders, value: waiting)
 
 	let parked = emitMboxBranchOnParkedReceiver(module, cur: sendersDrained, mbox: mbox, noReceiver: nobodyParked, handoff: handoff, ids: ids)
-	emitMboxWakeParked(module, func: func, cur: handoff, mbox: mbox, parked: parked, handed: emitConst(module, block: handoff, value: MboxNoHandedMessage, ids: ids), cont: doneBlock, ids: ids)
+	emitMboxWakeParked(module, func: func, cur: handoff, mbox: mbox, holder: MboxLockHolder.currentMachine, parked: parked, handed: emitConst(module, block: handoff, value: MboxNoHandedMessage, ids: ids), cont: doneBlock, ids: ids)
 
-	emitMboxLockLeave(module, block: nobodyParked, mbox: mbox, ids: ids)
+	emitMboxLockLeave(module, block: nobodyParked, mbox: mbox, holder: MboxLockHolder.currentMachine, ids: ids)
 	module.setTerminator(nobodyParked, op: StdOp.branch(doneBlock.id))
 
 	module.setTerminator(doneBlock, op: StdOp.branch(readyLoop.id))
@@ -1245,7 +1255,7 @@ function buildMboxSendAbandon(module StdModule)
 	woken.blockArgs.push(IrBlockArg.create(debt, argType: StdType.i64))
 	module.setTerminator(woken, op: StdOp.ret(debt))
 
-	emitMboxLockLeave(module, block: gone, mbox: mbox, ids: ids)
+	emitMboxLockLeave(module, block: gone, mbox: mbox, holder: MboxLockHolder.currentMachine, ids: ids)
 	emitConstReturn(module, block: gone, value: WakeDebtNone, ids: ids)
 
 	module.functions.push(func)
@@ -1394,19 +1404,19 @@ end 'buildMboxUnknownTag'
 // thread. Both stores precede the leave: a send marks `GtOffParkArg` and readies the thread as soon
 // as it takes the lock, and a store after that would erase the mark or make a readied thread
 // `waiting`.
-export function emitMboxParkCommit(module StdModule, block IrBlock, gt ValueId, mbox ValueId, ids ValueMinter)
+export function emitMboxParkCommit(module StdModule, block IrBlock, machine ValueId, gt ValueId, mbox ValueId, ids ValueMinter)
 	emitStoreField(module, block: block, record: gt, offset: GtOffParkArg, value: emitConst(module, block: block, value: MboxNoHandedMessage, ids: ids))
-	emitMboxParkWaiting(module, block: block, gt: gt, mbox: mbox, ids: ids)
+	emitMboxParkWaiting(module, block: block, machine: machine, gt: gt, mbox: mbox, ids: ids)
 end 'emitMboxParkCommit'
 
-function emitMboxParkWaiting(module StdModule, block IrBlock, gt ValueId, mbox ValueId, ids ValueMinter)
+function emitMboxParkWaiting(module StdModule, block IrBlock, machine ValueId, gt ValueId, mbox ValueId, ids ValueMinter)
 	emitGtMarkWaiting(module, block: block, gt: gt, ids: ids)
-	emitMboxLockLeave(module, block: block, mbox: mbox, ids: ids)
+	emitMboxLockLeave(module, block: block, mbox: mbox, holder: MboxLockHolder.machine(machine), ids: ids)
 end 'emitMboxParkWaiting'
 
 // The second half of `__mbox_send_queue`'s park, run as `emitMboxParkCommit` is. `waiting` and the
 // timer precede the leave, because a waker that takes the lock may release the sender at once.
-export function emitMboxSendParkCommit(module StdModule, func IrFunction, block IrBlock, gt ValueId, mbox ValueId, ids ValueMinter) returns IrBlock
+export function emitMboxSendParkCommit(module StdModule, func IrFunction, block IrBlock, machine ValueId, gt ValueId, mbox ValueId, ids ValueMinter) returns IrBlock
 	var arm = module.addBlock(func, label: b"sendparkarm", heat: BlockHeat.normal)
 	var unbounded = module.addBlock(func, label: b"sendparkunbounded", heat: BlockHeat.normal)
 	var committed = module.addBlock(func, label: b"sendparkcommitted", heat: BlockHeat.normal)
@@ -1415,10 +1425,10 @@ export function emitMboxSendParkCommit(module StdModule, func IrFunction, block 
 	emitBranchOnCompare(module, block: block, value: deadline, pred: StdCmpPred.eq, against: GtDeadlineMaxNs, whenTrue: unbounded, whenFalse: arm, ids: ids)
 
 	var armed = emitGtArmTimerDeadline(module, func: func, cur: arm, gt: gt, deadline: deadline, tag: TimerTagSend, ids: ids)
-	emitMboxLockLeave(module, block: armed, mbox: mbox, ids: ids)
+	emitMboxLockLeave(module, block: armed, mbox: mbox, holder: MboxLockHolder.machine(machine), ids: ids)
 	module.setTerminator(armed, op: StdOp.branch(committed.id))
 
-	emitMboxParkWaiting(module, block: unbounded, gt: gt, mbox: mbox, ids: ids)
+	emitMboxParkWaiting(module, block: unbounded, machine: machine, gt: gt, mbox: mbox, ids: ids)
 	module.setTerminator(unbounded, op: StdOp.branch(committed.id))
 
 	return committed

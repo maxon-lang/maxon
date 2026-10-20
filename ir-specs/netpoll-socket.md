@@ -525,28 +525,13 @@ func @__np_pd_mark_timed_out {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.prologue 40
+    x64.prologue 56
     x64.movRegReg rbx, rdx
     x64.leaRegGlobal rax, __sched_lock
     x64.leaRegGlobal rdx, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rdx, [rdx + 0]
-    x64.leaRegGlobal rsi, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rsi, [rsi + 0]
-    x64.mov rsi, gs:[rsi]
-    x64.cmpRegImm32 rdx, 0
-    x64.setccReg notEqual, rdx
-    x64.cmpRegImm32 rsi, 0
-    x64.setccReg notEqual, rdi
-    x64.andRegReg rdx, rdx, rdi
-    x64.movRegImm32 rdi, 0
-    x64.subRegReg rdi, rdi, rdx
-    x64.leaRegRegImm32 rdx, rdx, -1
-    x64.leaRegRegImm32 rsi, rsi, 656
-    x64.leaRegGlobal r8, __sched_lock_depth_sink
-    x64.andRegReg rsi, rsi, rdi
-    x64.andRegReg r8, r8, rdx
-    x64.orRegReg rsi, rsi, r8
-    x64.aluBaseDispImm32.add [rsi + 0], 1
+    x64.mov rdx, gs:[rdx]
+    x64.aluBaseDispImm32.add [rdx + 656], 1
     x64.movRegImm32 rdx, 48
     x64.mov rdx, gs:[rdx]
     x64.movRegImm32 rsi, 1
@@ -568,41 +553,26 @@ func @__np_pd_mark_timed_out {
     x64.storeBaseDispReg.word64 [r8 + 40], rax
   npmtdone:
     x64.leaRegGlobal rcx, __sched_lock
-    x64.loadRegBaseDisp.word64 rax, [rcx + 16]
-    x64.cmpRegImm32 rax, 0
+    x64.leaRegGlobal rax, __sched_tls_teb_offset
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.mov rax, gs:[rax]
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 16]
+    x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, __rl_nested
   __rl_outermost:
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.movRegImm32 rdx, 0
+    x64.storeBaseDispReg.word64 [rcx + 8], rdx
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
     x64.jcc equal, __rl_cont#8
     x64.jmp __rl_slow#11
   __rl_nested:
-    x64.leaRegRegImm32 rax, rax, -1
-    x64.storeBaseDispReg.word64 [rcx + 16], rax
+    x64.leaRegRegImm32 rdx, rdx, -1
+    x64.storeBaseDispReg.word64 [rcx + 16], rdx
   __rl_cont#8:
-    x64.leaRegGlobal rax, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.leaRegGlobal rcx, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-    x64.mov rcx, gs:[rcx]
-    x64.cmpRegImm32 rax, 0
-    x64.setccReg notEqual, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.setccReg notEqual, rdx
-    x64.andRegReg rax, rax, rdx
-    x64.movRegImm32 rdx, 0
-    x64.subRegReg rdx, rdx, rax
-    x64.leaRegRegImm32 rax, rax, -1
-    x64.leaRegRegImm32 rcx, rcx, 656
-    x64.leaRegGlobal rsi, __sched_lock_depth_sink
-    x64.andRegReg rcx, rcx, rdx
-    x64.andRegReg rsi, rsi, rax
-    x64.orRegReg rcx, rcx, rsi
-    x64.aluBaseDispImm32.add [rcx + 0], -1
-    x64.epilogue 40
+    x64.aluBaseDispImm32.add [rax + 656], -1
+    x64.epilogue 56
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -612,7 +582,7 @@ func @__np_pd_mark_timed_out {
     x64.movRegImm32 rax, 104
     x64.callDirect __rt_abort
     x64.movRegReg rax, r8
-    x64.epilogue 40
+    x64.epilogue 56
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -624,7 +594,9 @@ func @__np_pd_mark_timed_out {
     x64.loadRegSlot rcx, slot0
     x64.jmp __rl_cont#5
   __rl_slow#11:
+    x64.storeSlotReg slot1, rax
     x64.callDirect __rtlock_release
+    x64.loadRegSlot rax, slot1
     x64.jmp __rl_cont#8
 }
 ```
@@ -1060,28 +1032,13 @@ func @__np_pd_mark_timed_out {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.prologue 40
+    x64.prologue 56
     x64.movRegReg rbx, rdx
     x64.leaRegGlobal rax, __sched_lock
     x64.leaRegGlobal rdx, __sched_tls_teb_offset
     x64.loadRegBaseDisp.word64 rdx, [rdx + 0]
-    x64.leaRegGlobal rsi, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rsi, [rsi + 0]
-    x64.mov rsi, gs:[rsi]
-    x64.cmpRegImm32 rdx, 0
-    x64.setccReg notEqual, rdx
-    x64.cmpRegImm32 rsi, 0
-    x64.setccReg notEqual, rdi
-    x64.andRegReg rdx, rdx, rdi
-    x64.movRegImm32 rdi, 0
-    x64.subRegReg rdi, rdi, rdx
-    x64.leaRegRegImm32 rdx, rdx, -1
-    x64.leaRegRegImm32 rsi, rsi, 656
-    x64.leaRegGlobal r8, __sched_lock_depth_sink
-    x64.andRegReg rsi, rsi, rdi
-    x64.andRegReg r8, r8, rdx
-    x64.orRegReg rsi, rsi, r8
-    x64.aluBaseDispImm32.add [rsi + 0], 1
+    x64.mov rdx, gs:[rdx]
+    x64.aluBaseDispImm32.add [rdx + 656], 1
     x64.movRegImm32 rdx, 4088
     x64.mov rdx, gs:[rdx]
     x64.movRegImm32 rsi, 1
@@ -1103,41 +1060,26 @@ func @__np_pd_mark_timed_out {
     x64.storeBaseDispReg.word64 [r8 + 40], rax
   npmtdone:
     x64.leaRegGlobal rcx, __sched_lock
-    x64.loadRegBaseDisp.word64 rax, [rcx + 16]
-    x64.cmpRegImm32 rax, 0
+    x64.leaRegGlobal rax, __sched_tls_teb_offset
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.mov rax, gs:[rax]
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 16]
+    x64.cmpRegImm32 rdx, 0
     x64.jcc notEqual, __rl_nested
   __rl_outermost:
-    x64.movRegImm32 rax, 0
-    x64.storeBaseDispReg.word64 [rcx + 8], rax
+    x64.movRegImm32 rdx, 0
+    x64.storeBaseDispReg.word64 [rcx + 8], rdx
     x64.movRegImm32 rdx, 0
     x64.xchg8 [rcx], rdx <- rdx
     x64.cmpRegImm32 rdx, 1
     x64.jcc equal, __rl_cont#8
     x64.jmp __rl_slow#11
   __rl_nested:
-    x64.leaRegRegImm32 rax, rax, -1
-    x64.storeBaseDispReg.word64 [rcx + 16], rax
+    x64.leaRegRegImm32 rdx, rdx, -1
+    x64.storeBaseDispReg.word64 [rcx + 16], rdx
   __rl_cont#8:
-    x64.leaRegGlobal rax, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rax, [rax + 0]
-    x64.leaRegGlobal rcx, __sched_tls_teb_offset
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-    x64.mov rcx, gs:[rcx]
-    x64.cmpRegImm32 rax, 0
-    x64.setccReg notEqual, rax
-    x64.cmpRegImm32 rcx, 0
-    x64.setccReg notEqual, rdx
-    x64.andRegReg rax, rax, rdx
-    x64.movRegImm32 rdx, 0
-    x64.subRegReg rdx, rdx, rax
-    x64.leaRegRegImm32 rax, rax, -1
-    x64.leaRegRegImm32 rcx, rcx, 656
-    x64.leaRegGlobal rsi, __sched_lock_depth_sink
-    x64.andRegReg rcx, rcx, rdx
-    x64.andRegReg rsi, rsi, rax
-    x64.orRegReg rcx, rcx, rsi
-    x64.aluBaseDispImm32.add [rcx + 0], -1
-    x64.epilogue 40
+    x64.aluBaseDispImm32.add [rax + 656], -1
+    x64.epilogue 56
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -1147,7 +1089,7 @@ func @__np_pd_mark_timed_out {
     x64.movRegImm32 rax, 104
     x64.callDirect __rt_abort
     x64.movRegReg rax, r8
-    x64.epilogue 40
+    x64.epilogue 56
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -1159,7 +1101,9 @@ func @__np_pd_mark_timed_out {
     x64.loadRegSlot rcx, slot0
     x64.jmp __rl_cont#5
   __rl_slow#11:
+    x64.storeSlotReg slot1, rax
     x64.callDirect __rtlock_release
+    x64.loadRegSlot rax, slot1
     x64.jmp __rl_cont#8
 }
 ```
@@ -1601,36 +1545,21 @@ func @main {
 
 func @__np_pd_mark_timed_out {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x19
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x19
     arm64.movRegReg x19, x1
     arm64.leaGlobal x1, __sched_lock
     arm64.leaGlobal x2, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
-    arm64.leaGlobal x3, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x3, [x3 + 0]
     arm64.arm64ThreadPointer x16, darwinMaskedReadOnly
-    arm64.add x16, x16, x3
-    arm64.cmp x3, 0
+    arm64.add x16, x16, x2
+    arm64.cmp x2, 0
     arm64.cset x17, ne
     arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x3, x16, x17
-    arm64.cmp x2, 0
-    arm64.cset x2, ne
-    arm64.cmp x3, 0
-    arm64.cset x4, ne
-    arm64.and x2, x2, x4
-    arm64.movImm x4, 0
-    arm64.sub x4, x4, x2
-    arm64.sub x2, x2, 1
-    arm64.add x3, x3, 656
-    arm64.leaGlobal x5, __sched_lock_depth_sink
-    arm64.and x3, x3, x4
-    arm64.and x2, x5, x2
-    arm64.orr x2, x3, x2
-    arm64.loadRegBaseDisp.word64 x3, [x2 + 0]
+    arm64.mul x2, x16, x17
+    arm64.loadRegBaseDisp.word64 x3, [x2 + 656]
     arm64.add x3, x3, 1
-    arm64.storeBaseDispReg.word64 [x2 + 0], x3
+    arm64.storeBaseDispReg.word64 [x2 + 656], x3
     arm64.arm64ThreadPointer x2, darwinMaskedReadOnly
     arm64.movImm x3, 1
     arm64.arm64AtomicRmw.exchangeByte x3, [x1], x3
@@ -1651,49 +1580,34 @@ func @__np_pd_mark_timed_out {
     arm64.storeBaseDispReg.word64 [x0 + 40], x1
   npmtdone:
     arm64.leaGlobal x0, __sched_lock
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
+    arm64.leaGlobal x1, __sched_tls_teb_offset
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.arm64ThreadPointer x16, darwinMaskedReadOnly
+    arm64.add x16, x16, x1
     arm64.cmp x1, 0
+    arm64.cset x17, ne
+    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
+    arm64.mul x1, x16, x17
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 16]
+    arm64.cmp x2, 0
     arm64.b.ne __rl_nested
   __rl_outermost:
-    arm64.movImm x1, 0
-    arm64.storeBaseDispReg.word64 [x0 + 8], x1
-    arm64.movImm x1, 0
-    arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
-    arm64.cmp x1, 1
+    arm64.movImm x2, 0
+    arm64.storeBaseDispReg.word64 [x0 + 8], x2
+    arm64.movImm x2, 0
+    arm64.arm64AtomicRmw.exchangeByte x2, [x0], x2
+    arm64.cmp x2, 1
     arm64.b.eq __rl_cont#8
     arm64.b __rl_slow#11
   __rl_nested:
-    arm64.add x1, x1, -1
-    arm64.storeBaseDispReg.word64 [x0 + 16], x1
-  __rl_cont#8:
-    arm64.leaGlobal x1, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
-    arm64.leaGlobal x2, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
-    arm64.arm64ThreadPointer x16, darwinMaskedReadOnly
-    arm64.add x16, x16, x2
-    arm64.cmp x2, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x2, x16, x17
-    arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cmp x2, 0
-    arm64.cset x3, ne
-    arm64.and x1, x1, x3
-    arm64.movImm x3, 0
-    arm64.sub x3, x3, x1
-    arm64.sub x1, x1, 1
-    arm64.add x2, x2, 656
-    arm64.leaGlobal x4, __sched_lock_depth_sink
-    arm64.and x2, x2, x3
-    arm64.and x1, x4, x1
-    arm64.orr x1, x2, x1
-    arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
     arm64.add x2, x2, -1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x2
-    arm64.loadRegSlot x19, slot1
-    arm64.epilogue 32
+    arm64.storeBaseDispReg.word64 [x0 + 16], x2
+  __rl_cont#8:
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 656]
+    arm64.add x2, x2, -1
+    arm64.storeBaseDispReg.word64 [x1 + 656], x2
+    arm64.loadRegSlot x19, slot2
+    arm64.epilogue 48
     arm64.ret
   npnopd:
     arm64.leaRdata x0, __abort_msg_104  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
@@ -1701,8 +1615,8 @@ func @__np_pd_mark_timed_out {
     arm64.movImm x2, 104
     arm64.bl __rt_abort
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x19, slot2
+    arm64.epilogue 48
     arm64.ret
   __rl_slow#7:
     arm64.storeSlotReg slot0, x0
@@ -1713,7 +1627,10 @@ func @__np_pd_mark_timed_out {
     arm64.loadRegSlot x0, slot0
     arm64.b __rl_cont#5
   __rl_slow#11:
+    arm64.storeSlotReg slot1, x1
+    arm64.movRegReg x1, x2
     arm64.bl __rtlock_release
+    arm64.loadRegSlot x1, slot1
     arm64.b __rl_cont#8
 }
 ```
@@ -2159,36 +2076,21 @@ func @main {
 
 func @__np_pd_mark_timed_out {
   entry:
-    arm64.prologue 32
-    arm64.storeSlotReg slot1, x19
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x19
     arm64.movRegReg x19, x1
     arm64.leaGlobal x1, __sched_lock
     arm64.leaGlobal x2, __sched_tls_teb_offset
     arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
-    arm64.leaGlobal x3, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x3, [x3 + 0]
     arm64.arm64ThreadPointer x16, linuxWritable
-    arm64.add x16, x16, x3
-    arm64.cmp x3, 0
+    arm64.add x16, x16, x2
+    arm64.cmp x2, 0
     arm64.cset x17, ne
     arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x3, x16, x17
-    arm64.cmp x2, 0
-    arm64.cset x2, ne
-    arm64.cmp x3, 0
-    arm64.cset x4, ne
-    arm64.and x2, x2, x4
-    arm64.movImm x4, 0
-    arm64.sub x4, x4, x2
-    arm64.sub x2, x2, 1
-    arm64.add x3, x3, 656
-    arm64.leaGlobal x5, __sched_lock_depth_sink
-    arm64.and x3, x3, x4
-    arm64.and x2, x5, x2
-    arm64.orr x2, x3, x2
-    arm64.loadRegBaseDisp.word64 x3, [x2 + 0]
+    arm64.mul x2, x16, x17
+    arm64.loadRegBaseDisp.word64 x3, [x2 + 656]
     arm64.add x3, x3, 1
-    arm64.storeBaseDispReg.word64 [x2 + 0], x3
+    arm64.storeBaseDispReg.word64 [x2 + 656], x3
     arm64.arm64ThreadPointer x2, linuxWritable
     arm64.movImm x3, 1
     arm64.arm64AtomicRmw.exchangeByte x3, [x1], x3
@@ -2209,49 +2111,34 @@ func @__np_pd_mark_timed_out {
     arm64.storeBaseDispReg.word64 [x0 + 40], x1
   npmtdone:
     arm64.leaGlobal x0, __sched_lock
-    arm64.loadRegBaseDisp.word64 x1, [x0 + 16]
+    arm64.leaGlobal x1, __sched_tls_teb_offset
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.arm64ThreadPointer x16, linuxWritable
+    arm64.add x16, x16, x1
     arm64.cmp x1, 0
+    arm64.cset x17, ne
+    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
+    arm64.mul x1, x16, x17
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 16]
+    arm64.cmp x2, 0
     arm64.b.ne __rl_nested
   __rl_outermost:
-    arm64.movImm x1, 0
-    arm64.storeBaseDispReg.word64 [x0 + 8], x1
-    arm64.movImm x1, 0
-    arm64.arm64AtomicRmw.exchangeByte x1, [x0], x1
-    arm64.cmp x1, 1
+    arm64.movImm x2, 0
+    arm64.storeBaseDispReg.word64 [x0 + 8], x2
+    arm64.movImm x2, 0
+    arm64.arm64AtomicRmw.exchangeByte x2, [x0], x2
+    arm64.cmp x2, 1
     arm64.b.eq __rl_cont#8
     arm64.b __rl_slow#11
   __rl_nested:
-    arm64.add x1, x1, -1
-    arm64.storeBaseDispReg.word64 [x0 + 16], x1
-  __rl_cont#8:
-    arm64.leaGlobal x1, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
-    arm64.leaGlobal x2, __sched_tls_teb_offset
-    arm64.loadRegBaseDisp.word64 x2, [x2 + 0]
-    arm64.arm64ThreadPointer x16, linuxWritable
-    arm64.add x16, x16, x2
-    arm64.cmp x2, 0
-    arm64.cset x17, ne
-    arm64.loadRegBaseDisp.word64 x16, [x16 + 0]
-    arm64.mul x2, x16, x17
-    arm64.cmp x1, 0
-    arm64.cset x1, ne
-    arm64.cmp x2, 0
-    arm64.cset x3, ne
-    arm64.and x1, x1, x3
-    arm64.movImm x3, 0
-    arm64.sub x3, x3, x1
-    arm64.sub x1, x1, 1
-    arm64.add x2, x2, 656
-    arm64.leaGlobal x4, __sched_lock_depth_sink
-    arm64.and x2, x2, x3
-    arm64.and x1, x4, x1
-    arm64.orr x1, x2, x1
-    arm64.loadRegBaseDisp.word64 x2, [x1 + 0]
     arm64.add x2, x2, -1
-    arm64.storeBaseDispReg.word64 [x1 + 0], x2
-    arm64.loadRegSlot x19, slot1
-    arm64.epilogue 32
+    arm64.storeBaseDispReg.word64 [x0 + 16], x2
+  __rl_cont#8:
+    arm64.loadRegBaseDisp.word64 x2, [x1 + 656]
+    arm64.add x2, x2, -1
+    arm64.storeBaseDispReg.word64 [x1 + 656], x2
+    arm64.loadRegSlot x19, slot2
+    arm64.epilogue 48
     arm64.ret
   npnopd:
     arm64.leaRdata x0, __abort_msg_104  ; "fatal error: runtime abort 104 (netpollUnknownSource)\x0a"
@@ -2259,8 +2146,8 @@ func @__np_pd_mark_timed_out {
     arm64.movImm x2, 104
     arm64.bl __rt_abort
     arm64.movRegReg x1, x0
-    arm64.loadRegSlot x19, slot1
-    arm64.epilogue 32
+    arm64.loadRegSlot x19, slot2
+    arm64.epilogue 48
     arm64.ret
   __rl_slow#7:
     arm64.storeSlotReg slot0, x0
@@ -2271,7 +2158,10 @@ func @__np_pd_mark_timed_out {
     arm64.loadRegSlot x0, slot0
     arm64.b __rl_cont#5
   __rl_slow#11:
+    arm64.storeSlotReg slot1, x1
+    arm64.movRegReg x1, x2
     arm64.bl __rtlock_release
+    arm64.loadRegSlot x1, slot1
     arm64.b __rl_cont#8
 }
 ```
