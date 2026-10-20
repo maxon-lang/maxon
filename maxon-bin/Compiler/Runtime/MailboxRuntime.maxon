@@ -673,7 +673,7 @@ function emitMboxRingReserve(module StdModule, func IrFunction, cur IrBlock, mbo
 	emitStoreField(module, block: copiedHeadRun, record: mbox, offset: MboxOffRing, value: grown)
 	emitStoreField(module, block: copiedHeadRun, record: mbox, offset: MboxOffRingSlots, value: grownSlots)
 	emitStoreField(module, block: copiedHeadRun, record: mbox, offset: MboxOffHead, value: emitConst(module, block: copiedHeadRun, value: MboxRingHeadReset, ids: ids))
-	emitSlabScaffoldFree(module, block: copiedHeadRun, ptr: oldRing, ids: ids)
+	emitSlabFree(module, block: copiedHeadRun, ptr: oldRing, kind: SlabBufferKind.mailboxRing, ids: ids)
 	module.setTerminator(copiedHeadRun, op: StdOp.branch(place.id))
 
 	return place
@@ -698,12 +698,11 @@ function emitMboxAdmitClaimedSender(module StdModule, func IrFunction, cur IrBlo
 	emitMboxHandOffClaimedSender(module, func: func, cur: placed, mbox: mbox, sender: sender, cont: cont, ids: ids)
 end 'emitMboxAdmitClaimedSender'
 
-// The ring takes the scaffold door (`SlabRuntime.SlabScaffoldAllocName`, for its reason) where the
-// mailbox region beside it is counted: the region is cut once per spawn, while whether a ring is
-// cut, grown or shrunk follows the schedule.
+// The ring is scaffolding (`SlabRuntime.slabCountingOf`, for its reason) where the mailbox region
+// beside it is counted: the region is cut once per spawn, while whether a ring is cut, grown or
+// shrunk follows the schedule.
 function emitMboxRingAlloc(module StdModule, block IrBlock, slotBytes ValueId, slots ValueId, ids ValueMinter) returns ValueId
-	let ring = ids.mint()
-	module.appendOp(block, op: StdOp.call(ring, callee: SlabScaffoldAllocName, args: argsOf(emitBin(module, block: block, a: slots, b: slotBytes, opcode: StdBinOpcode.mul, ids: ids))))
+	let ring = emitSlabAlloc(module, block: block, bytes: emitBin(module, block: block, a: slots, b: slotBytes, opcode: StdBinOpcode.mul, ids: ids), kind: SlabBufferKind.mailboxRing, ids: ids)
 	return ring
 end 'emitMboxRingAlloc'
 
@@ -714,10 +713,10 @@ function emitMboxFreeRegion(module StdModule, func IrFunction, cur IrBlock, mbox
 	let ring = emitLoadField(module, block: cur, record: mbox, offset: MboxOffRing, ids: ids)
 	emitBranchOnCompare(module, block: cur, value: ring, pred: StdCmpPred.ne, against: 0, whenTrue: freeRing, whenFalse: freeRegion, ids: ids)
 
-	emitSlabScaffoldFree(module, block: freeRing, ptr: ring, ids: ids)
+	emitSlabFree(module, block: freeRing, ptr: ring, kind: SlabBufferKind.mailboxRing, ids: ids)
 	module.setTerminator(freeRing, op: StdOp.branch(freeRegion.id))
 
-	emitSlabFree(module, block: freeRegion, ptr: mbox, ids: ids)
+	emitSlabFree(module, block: freeRegion, ptr: mbox, kind: SlabBufferKind.mailboxRecord, ids: ids)
 
 	return freeRegion
 end 'emitMboxFreeRegion'
@@ -744,8 +743,7 @@ function buildSvcSpawn(module StdModule)
 	// (`MboxReceiverState.fresh`) are already their correct initial state and only the words a
 	// zero would be wrong for are stored.
 	let mboxBytes = emitBin(module, block: entry, a: slotBytes, b: emitConst(module, block: entry, value: MboxHeaderBytes, ids: ids), opcode: StdBinOpcode.add, ids: ids)
-	let mbox = ids.mint()
-	module.appendOp(entry, op: StdOp.call(mbox, callee: SlabAllocName, args: argsOf(mboxBytes)))
+	let mbox = emitSlabAlloc(module, block: entry, bytes: mboxBytes, kind: SlabBufferKind.mailboxRecord, ids: ids)
 	emitStoreField(module, block: entry, record: mbox, offset: MboxOffSlotBytes, value: slotBytes)
 	emitStoreField(module, block: entry, record: mbox, offset: MboxOffShares, value: emitConst(module, block: entry, value: MboxInitialShares, ids: ids))
 	emitStoreField(module, block: entry, record: mbox, offset: MboxOffCapacity, value: capacity)
@@ -1135,7 +1133,7 @@ function buildMboxRecvTake(module StdModule)
 	let initialSlots = emitConst(module, block: shrink, value: MboxInitialSlots, ids: ids)
 	let ring = emitLoadField(module, block: shrink, record: mbox, offset: MboxOffRing, ids: ids)
 	let fresh = emitMboxRingAlloc(module, block: shrink, slotBytes: emitLoadField(module, block: shrink, record: mbox, offset: MboxOffSlotBytes, ids: ids), slots: initialSlots, ids: ids)
-	emitSlabScaffoldFree(module, block: shrink, ptr: ring, ids: ids)
+	emitSlabFree(module, block: shrink, ptr: ring, kind: SlabBufferKind.mailboxRing, ids: ids)
 	emitStoreField(module, block: shrink, record: mbox, offset: MboxOffRing, value: fresh)
 	emitStoreField(module, block: shrink, record: mbox, offset: MboxOffRingSlots, value: initialSlots)
 	emitStoreField(module, block: shrink, record: mbox, offset: MboxOffHead, value: emitConst(module, block: shrink, value: MboxRingHeadReset, ids: ids))

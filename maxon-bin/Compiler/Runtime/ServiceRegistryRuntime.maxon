@@ -180,8 +180,7 @@ function emitChainReplaced(module StdModule, func IrFunction, block IrBlock, cel
 	let dropFn = emitLoadField(module, block: block, record: cell, offset: SharedValueCellDropOffset, ids: ids)
 	emitBranchOnCompare(module, block: block, value: dropFn, pred: StdCmpPred.eq, against: NoRuntimeFunction, whenTrue: chained, whenFalse: chainIt, ids: ids)
 
-	let node = ids.mint()
-	module.appendOp(chainIt, op: StdOp.call(node, callee: SlabAllocName, args: argsOf(emitConst(module, block: chainIt, value: SharedValueChainNodeBytes, ids: ids))))
+	let node = emitSlabAlloc(module, block: chainIt, bytes: emitConst(module, block: chainIt, value: SharedValueChainNodeBytes, ids: ids), kind: SlabBufferKind.sharedValue, ids: ids)
 	emitStoreField(module, block: chainIt, record: node, offset: SharedValueChainValueOffset, value: replaced)
 	let chainAddr = emitFieldAddr(module, block: chainIt, record: cell, offset: SharedValueCellChainOffset, ids: ids)
 	module.setTerminator(chainIt, op: StdOp.branch(retry.id))
@@ -204,8 +203,7 @@ function buildSharedValueNew(module StdModule)
 	let dropFn = 1
 	let retainFn = 2
 
-	let cell = ids.mint()
-	module.appendOp(entry, op: StdOp.call(cell, callee: SlabAllocName, args: argsOf(emitConst(module, block: entry, value: SharedValueCellBytes, ids: ids))))
+	let cell = emitSlabAlloc(module, block: entry, bytes: emitConst(module, block: entry, value: SharedValueCellBytes, ids: ids), kind: SlabBufferKind.sharedValue, ids: ids)
 	emitStoreField(module, block: entry, record: cell, offset: SharedValueCellRefsOffset, value: emitConst(module, block: entry, value: SharedValueInitialRefs, ids: ids))
 	emitStoreField(module, block: entry, record: cell, offset: SharedValueCellDropOffset, value: dropFn)
 	emitStoreField(module, block: entry, record: cell, offset: SharedValueCellRetainOffset, value: retainFn)
@@ -340,11 +338,11 @@ function buildSharedValueReleaseCell(module StdModule)
 
 	emitStoreField(module, block: dropNode, record: cell, offset: SharedValueCellChainOffset, value: emitLoadField(module, block: dropNode, record: node, offset: SharedValueChainNextOffset, ids: ids))
 	let chainedValue = emitLoadField(module, block: dropNode, record: node, offset: SharedValueChainValueOffset, ids: ids)
-	emitSlabFree(module, block: dropNode, ptr: node, ids: ids)
+	emitSlabFree(module, block: dropNode, ptr: node, kind: SlabBufferKind.sharedValue, ids: ids)
 	var afterChained = emitCallIfPresent(module, func: func, block: dropNode, fn: dropFn, argument: chainedValue, ids: ids, label: b"shvdropchained")
 	module.setTerminator(afterChained, op: StdOp.branch(walkChain.id))
 
-	emitSlabFree(module, block: freeCell, ptr: cell, ids: ids)
+	emitSlabFree(module, block: freeCell, ptr: cell, kind: SlabBufferKind.sharedValue, ids: ids)
 	module.setTerminator(freeCell, op: StdOp.branch(done.id))
 
 	module.setTerminator(done, op: StdOp.retVoid)

@@ -1152,8 +1152,7 @@ end 'emitLiteralCString'
 
 export function emitLiteralInSlab(module StdModule, block IrBlock, ids ValueMinter, text ByteArray, byteCount FullRangeInt) returns ValueId
 	let sizeConst = emitConst(module, block: block, value: byteCount, ids: ids)
-	let buf = ids.mint()
-	module.appendOp(block, op: StdOp.call(buf, callee: SlabAllocName, args: argsOf(sizeConst)))
+	let buf = emitSlabAlloc(module, block: block, bytes: sizeConst, kind: SlabBufferKind.hostText, ids: ids)
 	emitStoreLiteralBytes(module, block: block, base: buf, offset: 0, text: text, ids: ids)
 	return buf
 end 'emitLiteralInSlab'
@@ -1566,8 +1565,7 @@ function buildMmAlloc(module StdModule, model MachineModel)
 	module.appendOp(block, op: StdOp.const(headerConst, value: boxPrefixBytes(debugStream), valueType: StdType.i64))
 	let total = ids.mint()
 	module.appendOp(block, op: StdOp.binOp(total, lhs: size, rhs: headerConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	let allocation = ids.mint()
-	module.appendOp(block, op: StdOp.call(allocation, callee: SlabAllocName, args: argsOf(total)))
+	let allocation = emitSlabAlloc(module, block: block, bytes: total, kind: SlabBufferKind.managedBox, ids: ids)
 
 	// The DebugStream prefix word, when this build has one: `(alloc_id << 16) | tag_index`, stamped once
 	// here and read back by every later event on this box. `alloc_id` PRE-increments a monotonic counter,
@@ -2645,7 +2643,7 @@ function buildMmFree(module StdModule, model MachineModel)
 	// answered, which is what `__slab_free` requires (it threads the free list through the SLOT's first
 	// word, so an interior pointer would corrupt the slot it landed in and then be handed out as a base).
 	let slot = emitBoxAllocationBase(module, block: entry, headerBase: header, ids: ids)
-	emitSlabFree(module, block: entry, ptr: slot, ids: ids)
+	emitSlabFree(module, block: entry, ptr: slot, kind: SlabBufferKind.managedBox, ids: ids)
 	module.setTerminator(entry, op: StdOp.retVoid)
 
 	module.functions.push(func)

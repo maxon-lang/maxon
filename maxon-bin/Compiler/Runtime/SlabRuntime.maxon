@@ -383,8 +383,7 @@ let SlabNoProcessor = SpanOwnerState.none
 
 // --- Entry points ---
 
-// The public allocator door. Exported because `__mm_alloc` and every runtime scratch buffer call it.
-export let SlabAllocName = b"__slab_alloc"
+let SlabAllocName = b"__slab_alloc"
 
 // ⭐ **THE NON-ZEROING DOOR — Go's `mallocgc(…, needzero: false)`.**
 //
@@ -405,12 +404,9 @@ let SlabAllocRawName = b"__slab_alloc_raw"
 let SlabFreeName = b"__slab_free"
 
 // `__slab_alloc_scaffold(size) -> ptr` and `__slab_free_scaffold(ptr)` — the zeroing door and its
-// free, crediting neither the raw row nor the calling green thread's columns. They serve runtime
-// scaffolding whose allocation depends on the schedule, a mailbox's ring among them: through a
-// counted door that timing would reach the allocation counts `scale-test` requires to be identical
-// between two compiles of one program. A region goes back through the free of the family that cut
-// it, or a frees column drifts from its total.
-export let SlabScaffoldAllocName = b"__slab_alloc_scaffold"
+// free, crediting neither the raw row nor the calling green thread's columns. `slabCountingOf`
+// decides which buffers take them.
+let SlabScaffoldAllocName = b"__slab_alloc_scaffold"
 let SlabScaffoldFreeName = b"__slab_free_scaffold"
 
 let SlabRoundedSizeName = b"__slab_rounded_size"
@@ -451,19 +447,58 @@ enum SlabCounting
 	scaffolding
 end 'SlabCounting'
 
-function slabAllocOversizeNameOf(counting SlabCounting) returns ByteArray
-	return match counting 'counting'
-		counted gives SlabAllocOversizeName
-		scaffolding gives SlabScaffoldAllocOversizeName
-	end 'counting'
-end 'slabAllocOversizeNameOf'
+export enum SlabBufferKind
+	managedBox
+	mailboxRecord
+	processorState
+	environmentValue
+	sharedValue
+	hostText
+	subprocessState
+	awaitAnyScratch
+	mailboxRing
+	timerStore
+	subprocessTable
+	subprocessSlotBuffer
+	netpollTable
+	netpollDescriptor
+end 'SlabBufferKind'
 
-function slabFreeOversizeNameOf(counting SlabCounting) returns ByteArray
-	return match counting 'counting'
-		counted gives SlabFreeOversizeName
-		scaffolding gives SlabScaffoldFreeOversizeName
-	end 'counting'
-end 'slabFreeOversizeNameOf'
+// A buffer whose allocation count follows the schedule or the environment is scaffolding: through a
+// counted door it would reach the allocation counts `scale-test` and `tests/parallelCompile` require
+// to be identical between two compiles of one program.
+function slabCountingOf(kind SlabBufferKind) returns SlabCounting
+	return match kind 'kind'
+		managedBox or
+		mailboxRecord or
+		processorState or
+		environmentValue or
+		sharedValue or
+		hostText or
+		subprocessState gives SlabCounting.counted
+		awaitAnyScratch or
+		mailboxRing or
+		timerStore or
+		subprocessTable or
+		subprocessSlotBuffer or
+		netpollTable or
+		netpollDescriptor gives SlabCounting.scaffolding
+	end 'kind'
+end 'slabCountingOf'
+
+type SlabDoors
+	module let alloc as ByteArray
+	module let free as ByteArray
+	module let allocOversize as ByteArray
+	module let freeOversize as ByteArray
+
+	static function of(counting SlabCounting) returns SlabDoors
+		return match counting 'counting'
+			counted gives Self{alloc: SlabAllocName, free: SlabFreeName, allocOversize: SlabAllocOversizeName, freeOversize: SlabFreeOversizeName}
+			scaffolding gives Self{alloc: SlabScaffoldAllocName, free: SlabScaffoldFreeName, allocOversize: SlabScaffoldAllocOversizeName, freeOversize: SlabScaffoldFreeOversizeName}
+		end 'counting'
+	end 'of'
+end 'SlabDoors'
 
 function slabThreadTrafficOf(counting SlabCounting, traffic ThreadTraffic) returns ThreadTraffic
 	return match counting 'counting'
@@ -642,21 +677,28 @@ export function installSlabRuntime(module StdModule, globalData GlobalDataTable,
 	buildSlabCollectRemote(module)
 	buildSlabRoundedSize(module)
 	buildSlabRefill(module, model: model)
-	buildSlabAllocEntry(module, name: SlabAllocName, zeroed: true, counting: SlabCounting.counted, model: model)
+
+	for counting in SlabCounting.allCases 'eachAllocDoor'
+		buildSlabAllocEntry(module, name: SlabDoors.of(counting).alloc, zeroed: true, counting: counting, model: model)
+	end 'eachAllocDoor'
+
 	buildSlabAllocEntry(module, name: SlabAllocRawName, zeroed: false, counting: SlabCounting.counted, model: model)
-	buildSlabAllocEntry(module, name: SlabScaffoldAllocName, zeroed: true, counting: SlabCounting.scaffolding, model: model)
 	guardSlabStateBase(module)
-	buildSlabAllocOversize(module, counting: SlabCounting.counted, model: model)
-	buildSlabAllocOversize(module, counting: SlabCounting.scaffolding, model: model)
-	buildSlabFreeOversize(module, counting: SlabCounting.counted, model: model)
-	buildSlabFreeOversize(module, counting: SlabCounting.scaffolding, model: model)
+
+	for counting in SlabCounting.allCases 'eachOversizeDoor'
+		buildSlabAllocOversize(module, counting: counting, model: model)
+		buildSlabFreeOversize(module, counting: counting, model: model)
+	end 'eachOversizeDoor'
+
 	buildSlabSpanDestroy(module)
 	buildSlabFreeToFull(module)
 	buildSlabFreeToRaw(module)
 	buildSlabScavenge(module, model: model)
 	buildSlabFreeToSpan(module)
-	buildSlabFree(module, name: SlabFreeName, counting: SlabCounting.counted, model: model)
-	buildSlabFree(module, name: SlabScaffoldFreeName, counting: SlabCounting.scaffolding, model: model)
+
+	for counting in SlabCounting.allCases 'eachFreeDoor'
+		buildSlabFree(module, counting: counting, model: model)
+	end 'eachFreeDoor'
 
 	buildSlabCensusEntry(module, name: SlabLiveBytesName, callee: SlabCensusName, argument: SlabCensusArgument.constant(SlabCensusLiveBytes), model: model)
 	buildSlabCensusEntry(module, name: SlabFreeBytesName, callee: SlabCensusName, argument: SlabCensusArgument.constant(SlabCensusFreeBytes), model: model)
@@ -2247,7 +2289,7 @@ function buildSlabAllocEntry(module StdModule, name ByteArray, zeroed bool, coun
 	// THE HIT PATH** rather than between the entry and the class lookup every small request runs through.
 	var osDirect = module.addBlock(func, label: b"osdirect", heat: BlockHeat.cold)
 	let oversized = ids.mint()
-	module.appendOp(osDirect, op: StdOp.call(oversized, callee: slabAllocOversizeNameOf(counting), args: argsOf(size)))
+	module.appendOp(osDirect, op: StdOp.call(oversized, callee: SlabDoors.of(counting).allocOversize, args: argsOf(size)))
 	module.setTerminator(osDirect, op: StdOp.ret(oversized))
 
 	emitSlabSizeRouting(module, block: entry, size: size, osDirect: osDirect, small: small, ids: ids)
@@ -2276,7 +2318,7 @@ end 'guardSlabStateBase'
 // at all: one `osAllocPages`, two stores into pages nobody else can name yet. So the walk here resolves the
 // shard only as far as the row it must credit.
 function buildSlabAllocOversize(module StdModule, counting SlabCounting, model MachineModel)
-	var func = IrFunction.createFromStd(slabAllocOversizeNameOf(counting), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true, pinsItsThread: true)
+	var func = IrFunction.createFromStd(SlabDoors.of(counting).allocOversize, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true, pinsItsThread: true)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2808,8 +2850,8 @@ end 'buildSlabCollectRemote'
 // the slot's first word, so an INTERIOR pointer would corrupt the slot it lands in and then be
 // handed out as a slot base. Every caller passes back exactly what its alloc door answered
 // (`__mm_free` passes the box HEADER base, which is that pointer).
-function buildSlabFree(module StdModule, name ByteArray, counting SlabCounting, model MachineModel)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
+function buildSlabFree(module StdModule, counting SlabCounting, model MachineModel)
+	var func = IrFunction.createFromStd(SlabDoors.of(counting).free, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2933,7 +2975,7 @@ function buildSlabFree(module StdModule, name ByteArray, counting SlabCounting, 
 	// road every slot free takes.
 	var osDirect = module.addBlock(func, label: b"osdirect", heat: BlockHeat.cold)
 
-	module.appendOp(osDirect, op: StdOp.call(ids.mint(), callee: slabFreeOversizeNameOf(counting), args: argsOf(ptr)))
+	module.appendOp(osDirect, op: StdOp.call(ids.mint(), callee: SlabDoors.of(counting).freeOversize, args: argsOf(ptr)))
 	module.setTerminator(osDirect, op: StdOp.retVoid)
 
 	module.setTerminator(mapped, op: StdOp.condBranch(unmapped, thenBlockId: osDirect.id, elseBlockId: toSpan.id))
@@ -2942,7 +2984,7 @@ function buildSlabFree(module StdModule, name ByteArray, counting SlabCounting, 
 end 'buildSlabFree'
 
 function buildSlabFreeOversize(module StdModule, counting SlabCounting, model MachineModel)
-	var func = IrFunction.createFromStd(slabFreeOversizeNameOf(counting), returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true, pinsItsThread: true)
+	var func = IrFunction.createFromStd(SlabDoors.of(counting).freeOversize, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), needsGreenThreadStackGuard: true, pinsItsThread: true)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry", heat: BlockHeat.normal)
@@ -2962,14 +3004,21 @@ function buildSlabFreeOversize(module StdModule, counting SlabCounting, model Ma
 	module.functions.push(func)
 end 'buildSlabFreeOversize'
 
-// Give one region back to `__slab_free`. `ptr` must be exactly what `__slab_alloc` answered, and never 0.
-export function emitSlabFree(module StdModule, block IrBlock, ptr ValueId, ids ValueMinter)
-	module.appendOp(block, op: StdOp.call(ids.mint(), callee: SlabFreeName, args: argsOf(ptr)))
+// `ptr` must be exactly what `emitSlabAlloc` answered for the same `kind`, and never 0: a region
+// freed under another kind's counting drifts a frees column from its total.
+export function emitSlabFree(module StdModule, block IrBlock, ptr ValueId, kind SlabBufferKind, ids ValueMinter)
+	module.appendOp(block, op: StdOp.call(ids.mint(), callee: SlabDoors.of(slabCountingOf(kind)).free, args: argsOf(ptr)))
 end 'emitSlabFree'
 
-export function emitSlabScaffoldFree(module StdModule, block IrBlock, ptr ValueId, ids ValueMinter)
-	module.appendOp(block, op: StdOp.call(ids.mint(), callee: SlabScaffoldFreeName, args: argsOf(ptr)))
-end 'emitSlabScaffoldFree'
+export function emitSlabAlloc(module StdModule, block IrBlock, bytes ValueId, kind SlabBufferKind, ids ValueMinter) returns ValueId
+	let region = ids.mint()
+	emitSlabAllocInto(module, block: block, result: region, bytes: bytes, kind: kind)
+	return region
+end 'emitSlabAlloc'
+
+export function emitSlabAllocInto(module StdModule, block IrBlock, result ValueId, bytes ValueId, kind SlabBufferKind)
+	module.appendOp(block, op: StdOp.call(result, callee: SlabDoors.of(slabCountingOf(kind)).alloc, args: argsOf(bytes)))
+end 'emitSlabAllocInto'
 
 let SpanOwnerCheckName = "assertSpanOwnerAccessIsOrdered"
 

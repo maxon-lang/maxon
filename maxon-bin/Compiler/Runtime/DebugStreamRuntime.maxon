@@ -747,8 +747,8 @@ export let DebugStreamFlag = "--debugstream"
 // number: a stub that calls an `__ds_init` nothing installed fails to link, and slots laid out for a
 // producer that was never built are `.data` a program pays for and never touches.
 //
-// ⚠ **`usesHeap` IS HALF OF IT, AND NOT A SHORTCUT.** The init path needs `__slab_alloc` for its two scratch
-// regions, and a heapless program has no event to emit: it allocates nothing, and a program with a
+// ⚠ **`usesHeap` IS HALF OF IT, AND NOT A SHORTCUT.** The init path needs `__slab_alloc` for its scratch
+// region, and a heapless program has no event to emit: it allocates nothing, and a program with a
 // scheduler always uses the heap (`RuntimeUsage` sets both bits together). A `--debugstream` build of a
 // heapless program therefore carries nothing and traces nothing, which is the correct answer rather than an
 // omission.
@@ -828,8 +828,7 @@ function buildDsInit(module StdModule, envNameLabel ByteArray)
 	// which is what lets the env lookup below need no "was it set?" branch: an absent variable leaves the
 	// buffer naming the EMPTY string, and `OpenFileMappingW("")` fails exactly as a missing segment does.
 	let envBufSize = emitConst(module, block: entry, value: DsEnvBufferBytes, ids: ids)
-	let envBuf = ids.mint()
-	module.appendOp(entry, op: StdOp.call(envBuf, callee: SlabAllocName, args: argsOf(emitByteCountOfUnits(module, block: entry, units: envBufSize, encoding: module.hostText, ids: ids))))
+	let envBuf = emitSlabAlloc(module, block: entry, bytes: emitByteCountOfUnits(module, block: entry, units: envBufSize, encoding: module.hostText, ids: ids), kind: SlabBufferKind.environmentValue, ids: ids)
 	let envName = ids.mint()
 	module.appendOp(entry, op: StdOp.rdataAddr(envName, label: envNameLabel))
 	let handle = ids.mint()
@@ -843,7 +842,7 @@ function buildDsInit(module StdModule, envNameLabel ByteArray)
 	// buffer is spent for the same reason — the open resolved it — and it is released here rather than on each
 	// of the four exits below, all of which pass through this block.
 	module.appendOp(entry, op: StdOp.osCloseHandle(handle))
-	emitSlabFree(module, block: entry, ptr: envBuf, ids: ids)
+	emitSlabFree(module, block: entry, ptr: envBuf, kind: SlabBufferKind.environmentValue, ids: ids)
 	emitBranchOnCompare(module, block: entry, value: base, pred: StdCmpPred.ne, against: 0, whenTrue: checkMagic, whenFalse: dark, ids: ids)
 
 	// `base` is defined in `entry`, which dominates every block below it, so it is read directly rather

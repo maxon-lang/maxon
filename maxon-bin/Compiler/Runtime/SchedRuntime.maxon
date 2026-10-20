@@ -3044,8 +3044,7 @@ function buildSchedInitProcs(module StdModule, target Target)
 	// rather than as garbage — which matters only until the loop fills every one, and costs nothing.
 	let arrayStride = emitConst(module, block: settled, value: PointerSlotBytes as FullRangeInt, ids: ids)
 	let arrayBytes = emitBin(module, block: settled, a: numProcs, b: arrayStride, opcode: StdBinOpcode.mul, ids: ids)
-	let procs = ids.mint()
-	module.appendOp(settled, op: StdOp.call(procs, callee: SlabAllocName, args: argsOf(arrayBytes)))
+	let procs = emitSlabAlloc(module, block: settled, bytes: arrayBytes, kind: SlabBufferKind.processorState, ids: ids)
 	emitStoreGlobalWord(module, block: settled, label: SchedProcsLabel, value: procs, ids: ids)
 
 	// The build loop. Its index is the header's phi — the on-the-fly SSA shape every runtime builder here
@@ -3062,8 +3061,7 @@ function buildSchedInitProcs(module StdModule, target Target)
 
 	// P[i] = a fresh zeroed struct, plus the four fields a zero would be wrong for.
 	let structBytes = emitConst(module, block: loopBody, value: PStructSize, ids: ids)
-	let p = ids.mint()
-	module.appendOp(loopBody, op: StdOp.call(p, callee: SlabAllocName, args: argsOf(structBytes)))
+	let p = emitSlabAlloc(module, block: loopBody, bytes: structBytes, kind: SlabBufferKind.processorState, ids: ids)
 	emitStoreField(module, block: loopBody, record: emitProcSlotAddr(module, block: loopBody, index: iterId, ids: ids), offset: 0, value: p)
 	emitStoreField(module, block: loopBody, record: p, offset: POffId, value: iterId)
 	let one = emitConst(module, block: loopBody, value: 1, ids: ids)
@@ -3098,12 +3096,6 @@ function buildSchedInitProcs(module StdModule, target Target)
 	// syscall stack, a scheduler context and a TLS identity; taking a P gives it a run queue and an
 	// allocator shard. A handoff must be able to undo the second without the first, so they are not
 	// one store sequence.
-	//
-	// The allocations inside the M's construction run with no M at all: `__sched_tls_teb_offset` is
-	// published while this thread's TLS slot still reads 0, so the M struct's `__slab_alloc` takes
-	// `SlabRawShardRow` through `emitSlabResolveShard`'s no-M arm (`emitSchedBecomeM` publishes the
-	// slot last). That is not coverage of the P-less-M arm, which a parked worker with
-	// `M->currentP == 0` running its timer poll reaches.
 	//
 	// M0 is allocated and registered on the thread that then becomes it, which keeps the roster's
 	// rule whole: every M is on `__sched_allm` before anything can look for it. M0's handle is 0
@@ -3320,23 +3312,23 @@ function emitResolveMaxProcs(module StdModule, func IrFunction, cur IrBlock, set
 
 	// A too-small read answers the size the value needs, terminator included, so one re-read at that size
 	// fits unless the environment changed in between.
-	emitSlabFree(module, block: reread, ptr: read.buf, ids: ids)
+	emitSlabFree(module, block: reread, ptr: read.buf, kind: SlabBufferKind.environmentValue, ids: ids)
 	let fullRead = emitReadSchedEnvValue(module, block: reread, name: MaxProcsEnvName, capacity: read.written, ids: ids)
 	emitBranchOnCompareValues(module, block: reread, a: fullRead.written, pred: StdCmpPred.lt, b: fullRead.capacity, whenTrue: parseStart, whenFalse: unfit, ids: ids)
 	reread.branchEdges.push(BranchEdge.create(parseStart.id, argIds: argsOf(fullRead.buf)))
 
-	emitSlabFree(module, block: unfit, ptr: fullRead.buf, ids: ids)
+	emitSlabFree(module, block: unfit, ptr: fullRead.buf, kind: SlabBufferKind.environmentValue, ids: ids)
 	module.setTerminator(unfit, op: StdOp.branch(rejected.id))
 
 	let requested = ids.mint()
 	parsedCount.blockArgs.push(IrBlockArg.create(requested, argType: StdType.i64))
 	emitParseRequestedProcessorCount(module, func: func, cur: parseStart, cstr: valueBuf, accepted: parsedCount, rejected: parseRefused, ids: ids)
 
-	emitSlabFree(module, block: parsedCount, ptr: valueBuf, ids: ids)
+	emitSlabFree(module, block: parsedCount, ptr: valueBuf, kind: SlabBufferKind.environmentValue, ids: ids)
 	module.setTerminator(parsedCount, op: StdOp.branch(settled.id))
 	parsedCount.branchEdges.push(BranchEdge.create(settled.id, argIds: argsOf(requested)))
 
-	emitSlabFree(module, block: parseRefused, ptr: valueBuf, ids: ids)
+	emitSlabFree(module, block: parseRefused, ptr: valueBuf, kind: SlabBufferKind.environmentValue, ids: ids)
 	module.setTerminator(parseRefused, op: StdOp.branch(rejected.id))
 
 	module.setTerminator(rejected, op: StdOp.branch(settled.id))
@@ -3360,10 +3352,9 @@ end 'SchedEnvRead'
 // NUL-terminated and a byte walk that reads at most `capacity` bytes stays in bounds whatever the OS wrote.
 function emitReadSchedEnvValue(module StdModule, block IrBlock, name ByteArray, capacity ValueId, ids ValueMinter) returns SchedEnvRead
 	let nameBuf = emitLiteralHostString(module, block: block, ids: ids, text: name)
-	let buf = ids.mint()
-	module.appendOp(block, op: StdOp.call(buf, callee: SlabAllocName, args: argsOf(capacity)))
+	let buf = emitSlabAlloc(module, block: block, bytes: capacity, kind: SlabBufferKind.environmentValue, ids: ids)
 	let written = emitHostEnvReadAscii(module, block: block, name: nameBuf, valueBuf: buf, capacity: capacity, ids: ids)
-	emitSlabFree(module, block: block, ptr: nameBuf, ids: ids)
+	emitSlabFree(module, block: block, ptr: nameBuf, kind: SlabBufferKind.hostText, ids: ids)
 
 	return SchedEnvRead.create(written, buf: buf, capacity: capacity)
 end 'emitReadSchedEnvValue'
@@ -3409,7 +3400,7 @@ function emitResolvePreemptSwitch(module StdModule, func IrFunction, cur IrBlock
 	let read = emitReadSchedEnvValue(module, block: cur, name: PreemptEnvName, capacity: capacity, ids: ids)
 	let isOff = emitCStringEqualsLiteral(module, block: cur, cstr: read.buf, literal: PreemptEnvOffValue, ids: ids)
 	let isOn = emitCStringEqualsLiteral(module, block: cur, cstr: read.buf, literal: PreemptEnvOnValue, ids: ids)
-	emitSlabFree(module, block: cur, ptr: read.buf, ids: ids)
+	emitSlabFree(module, block: cur, ptr: read.buf, kind: SlabBufferKind.environmentValue, ids: ids)
 	emitBranchOnCompareValues(module, block: cur, a: read.written, pred: StdCmpPred.ge, b: read.capacity, whenTrue: unreadable, whenFalse: lengthOk, ids: ids)
 
 	let zero = emitConst(module, block: lengthOk, value: 0, ids: ids)

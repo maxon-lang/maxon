@@ -376,8 +376,7 @@ let DecimalDigitsMax = 24
 // file's walks allocate their state, and each walk gives it back on every road out of its function.
 function emitSubpScratch(module StdModule, block IrBlock, ids ValueMinter, size FullRangeInt) returns ValueId
 	let sizeConst = emitConst(module, block: block, value: size, ids: ids)
-	let rec = ids.mint()
-	module.appendOp(block, op: StdOp.call(rec, callee: SlabAllocName, args: argsOf(sizeConst)))
+	let rec = emitSlabAlloc(module, block: block, bytes: sizeConst, kind: SlabBufferKind.subprocessState, ids: ids)
 	return rec
 end 'emitSubpScratch'
 
@@ -544,7 +543,7 @@ end 'emitSubpShellVectorCall'
 export function emitSubpReleaseCommandFromLine(module StdModule, block IrBlock, ids ValueMinter, shape SubprocessCommandShape, command ValueId, encoding HostTextEncoding)
 	match shape 'shape'
 		commandLine then emitReleaseHostCopy(module, block: block, copy: command, encoding: encoding, ids: ids)
-		argumentVector then emitSlabFree(module, block: block, ptr: command, ids: ids)
+		argumentVector then emitSlabFree(module, block: block, ptr: command, kind: SlabBufferKind.subprocessState, ids: ids)
 	end 'shape'
 end 'emitSubpReleaseCommandFromLine'
 
@@ -574,8 +573,7 @@ function buildSubpShellCommand(module StdModule)
 	let flagOffset = slotBytes + ((ShellPathBytes.count() + TrailingNulBytes) as ByteOffset)
 	let regionBytes = flagOffset + ((ShellCommandFlagBytes.count() + TrailingNulBytes) as ByteOffset)
 	let vecSize = emitConst(module, block: entry, value: regionBytes as FullRangeInt, ids: ids)
-	let vec = ids.mint()
-	module.appendOp(entry, op: StdOp.call(vec, callee: SlabAllocName, args: argsOf(vecSize)))
+	let vec = emitSlabAlloc(module, block: entry, bytes: vecSize, kind: SlabBufferKind.subprocessState, ids: ids)
 
 	emitStoreLiteralBytes(module, block: entry, base: vec, offset: slotBytes, text: ShellPathBytes, ids: ids)
 	let shellPath = emitFieldAddr(module, block: entry, record: vec, offset: slotBytes, ids: ids)
@@ -628,8 +626,7 @@ function buildSubpArgvVector(module StdModule)
 	let slots = emitBin(module, block: entry, a: argc, b: slotBytes, opcode: StdBinOpcode.mul, ids: ids)
 	let terminatorRoom = emitConst(module, block: entry, value: PointerFieldBytes as FullRangeInt, ids: ids)
 	let vecSize = emitBin(module, block: entry, a: slots, b: terminatorRoom, opcode: StdBinOpcode.add, ids: ids)
-	let vec = ids.mint()
-	module.appendOp(entry, op: StdOp.call(vec, callee: SlabAllocName, args: argsOf(vecSize)))
+	let vec = emitSlabAlloc(module, block: entry, bytes: vecSize, kind: SlabBufferKind.subprocessState, ids: ids)
 	emitStoreField(module, block: entry, record: state, offset: AvVec, value: vec)
 	module.setTerminator(entry, op: StdOp.branch(argHdr.id))
 
@@ -666,7 +663,7 @@ function buildSubpArgvVector(module StdModule)
 	module.setTerminator(scanDone, op: StdOp.branch(argHdr.id))
 
 	let vecF = emitLoadField(module, block: finish, record: state, offset: AvVec, ids: ids)
-	emitSlabFree(module, block: finish, ptr: state, ids: ids)
+	emitSlabFree(module, block: finish, ptr: state, kind: SlabBufferKind.subprocessState, ids: ids)
 	module.setTerminator(finish, op: StdOp.ret(vecF))
 
 	module.functions.push(func)
@@ -766,8 +763,7 @@ function buildSubpEnvVector(module StdModule)
 	let slots = emitBin(module, block: sizeVector, a: entries, b: terminatorRoom, opcode: StdBinOpcode.add, ids: ids)
 	let slotBytes = emitConst(module, block: sizeVector, value: PointerFieldBytes as FullRangeInt, ids: ids)
 	let vecSize = emitBin(module, block: sizeVector, a: slots, b: slotBytes, opcode: StdBinOpcode.mul, ids: ids)
-	let vec = ids.mint()
-	module.appendOp(sizeVector, op: StdOp.call(vec, callee: SlabAllocName, args: argsOf(vecSize)))
+	let vec = emitSlabAlloc(module, block: sizeVector, bytes: vecSize, kind: SlabBufferKind.subprocessState, ids: ids)
 	emitStoreField(module, block: sizeVector, record: state, offset: EvVec, value: vec)
 	let restart = emitConst(module, block: sizeVector, value: 0, ids: ids)
 	emitStoreField(module, block: sizeVector, record: state, offset: EvPos, value: restart)
@@ -775,7 +771,7 @@ function buildSubpEnvVector(module StdModule)
 	module.setTerminator(sizeVector, op: StdOp.branch(hdr.id))
 
 	let vecF = emitLoadField(module, block: finish, record: state, offset: EvVec, ids: ids)
-	emitSlabFree(module, block: finish, ptr: state, ids: ids)
+	emitSlabFree(module, block: finish, ptr: state, kind: SlabBufferKind.subprocessState, ids: ids)
 	module.setTerminator(finish, op: StdOp.ret(vecF))
 
 	module.functions.push(func)
@@ -842,8 +838,7 @@ function buildSubpArgvCmdline(module StdModule)
 	let bodyRoom = emitBin(module, block: entry, a: byteRoom, b: argRoom, opcode: StdBinOpcode.add, ids: ids)
 	let oneMore = emitConst(module, block: entry, value: 1, ids: ids)
 	let outSize = emitBin(module, block: entry, a: bodyRoom, b: oneMore, opcode: StdBinOpcode.add, ids: ids)
-	let outBuf = ids.mint()
-	module.appendOp(entry, op: StdOp.call(outBuf, callee: SlabAllocName, args: argsOf(outSize)))
+	let outBuf = emitSlabAlloc(module, block: entry, bytes: outSize, kind: SlabBufferKind.subprocessState, ids: ids)
 	emitStoreField(module, block: entry, record: state, offset: ClOut, value: outBuf)
 	module.setTerminator(entry, op: StdOp.branch(argHdr.id))
 
@@ -941,7 +936,7 @@ function buildSubpArgvCmdline(module StdModule)
 	let lenF = emitLoadField(module, block: finish, record: state, offset: ClOutLen, ids: ids)
 	let zeroF = emitConst(module, block: finish, value: 0, ids: ids)
 	emitStoreByte(module, block: finish, base: outF, index: lenF, value: zeroF, ids: ids)
-	emitSlabFree(module, block: finish, ptr: state, ids: ids)
+	emitSlabFree(module, block: finish, ptr: state, kind: SlabBufferKind.subprocessState, ids: ids)
 	module.setTerminator(finish, op: StdOp.ret(outF))
 
 	module.functions.push(func)
@@ -1134,8 +1129,8 @@ function emitSubpSpawnAndAnswer(module StdModule, func IrFunction, ids ValueMint
 	module.appendOp(spawn, op: StdOp.call(handle, callee: SubpSpawnCoreName, args: argsOf(req)))
 	let cmdline = emitLoadField(module, block: spawn, record: req, offset: SubpReqCmdline, ids: ids)
 	let envPtr = emitLoadField(module, block: spawn, record: req, offset: SubpReqEnv, ids: ids)
-	emitSlabFree(module, block: spawn, ptr: req, ids: ids)
-	emitSlabFree(module, block: spawn, ptr: cmdline, ids: ids)
+	emitSlabFree(module, block: spawn, ptr: req, kind: SlabBufferKind.subprocessState, ids: ids)
+	emitSlabFree(module, block: spawn, ptr: cmdline, kind: SlabBufferKind.subprocessState, ids: ids)
 
 	var answer = match shape 'shape'
 		nulSeparatedBlock gives spawn
@@ -1153,7 +1148,7 @@ function emitSubpReleaseEnvVector(module StdModule, func IrFunction, ids ValueMi
 
 	emitBranchOnCompare(module, block: cur, value: envPtr, pred: StdCmpPred.eq, against: 0, whenTrue: cont, whenFalse: release, ids: ids)
 
-	emitSlabFree(module, block: release, ptr: envPtr, ids: ids)
+	emitSlabFree(module, block: release, ptr: envPtr, kind: SlabBufferKind.subprocessState, ids: ids)
 	module.setTerminator(release, op: StdOp.branch(cont.id))
 	return cont
 end 'emitSubpReleaseEnvVector'
@@ -1750,7 +1745,7 @@ function buildSubpWaitCollect(module StdModule, target Target)
 	emitRawFree(module, block: abandon, ptr: emitLoadField(module, block: abandon, record: state, offset: WcOutBuf, ids: ids), ids: ids)
 	emitRawFree(module, block: abandon, ptr: emitLoadField(module, block: abandon, record: state, offset: WcErrBuf, ids: ids), ids: ids)
 	emitSubpCollectorFree(module, block: abandon, slot: emitSubpSlotOf(module, block: abandon, ids: ids, handle: emitLoadField(module, block: abandon, record: state, offset: WcHandle, ids: ids)), ids: ids)
-	emitSlabFree(module, block: abandon, ptr: state, ids: ids)
+	emitSlabFree(module, block: abandon, ptr: state, kind: SlabBufferKind.subprocessState, ids: ids)
 	module.setTerminator(abandon, op: StdOp.ret(emitConst(module, block: abandon, value: SubpFailure, ids: ids)))
 
 	// idleCheck: a pass that moved bytes goes straight round again; one that moved none yields.
@@ -1800,7 +1795,7 @@ function buildSubpWaitCollect(module StdModule, target Target)
 	let errLenF = emitLoadField(module, block: reap, record: state, offset: WcErrLen, ids: ids)
 	emitStoreField(module, block: reap, record: result, offset: ResErrBuf, value: errBufF)
 	emitStoreField(module, block: reap, record: result, offset: ResErrLen, value: errLenF)
-	emitSlabFree(module, block: reap, ptr: state, ids: ids)
+	emitSlabFree(module, block: reap, ptr: state, kind: SlabBufferKind.subprocessState, ids: ids)
 	emitSubpCollectorFree(module, block: reap, slot: slotF, ids: ids)
 	module.setTerminator(reap, op: StdOp.ret(result))
 
@@ -2541,8 +2536,7 @@ function buildSubpLastError(module StdModule)
 	// the length it wrote — then copied out once, and the scratch given back.
 	let prefixBytes = SubpErrorPrefix.count() as ByteOffset
 	let scratchSize = emitConst(module, block: render, value: (SubpErrorPrefix.count() + DecimalDigitsMax) as FullRangeInt, ids: ids)
-	let scratch = ids.mint()
-	module.appendOp(render, op: StdOp.call(scratch, callee: SlabAllocName, args: argsOf(scratchSize)))
+	let scratch = emitSlabAlloc(module, block: render, bytes: scratchSize, kind: SlabBufferKind.subprocessState, ids: ids)
 	emitStoreLiteralBytes(module, block: render, base: scratch, offset: 0, text: SubpErrorPrefix, ids: ids)
 	let slotAddr2 = ids.mint()
 	module.appendOp(render, op: StdOp.globalAddr(slotAddr2, label: SubpLastErrorLabel))
@@ -2555,7 +2549,7 @@ function buildSubpLastError(module StdModule)
 
 	let record = ids.mint()
 	var copied = emitSubpOwnedByteCopy(module, func: func, ids: ids, cur: render, record: record, srcBuf: scratch, srcLen: total)
-	emitSlabFree(module, block: copied, ptr: scratch, ids: ids)
+	emitSlabFree(module, block: copied, ptr: scratch, kind: SlabBufferKind.subprocessState, ids: ids)
 	module.setTerminator(copied, op: StdOp.ret(record))
 
 	module.functions.push(func)
@@ -2712,7 +2706,7 @@ function buildSubpEnvEntryFromBlock(module StdModule)
 	emitBranchOnCompare(module, block: entry, value: block, pred: StdCmpPred.eq, against: 0, whenTrue: noBlock, whenFalse: scan, ids: ids)
 
 	// `GetEnvironmentStringsW` failed, so there is no snapshot to release and no answer to give.
-	emitSlabFree(module, block: noBlock, ptr: state, ids: ids)
+	emitSlabFree(module, block: noBlock, ptr: state, kind: SlabBufferKind.subprocessState, ids: ids)
 	let noneRecord = emitSubpEnvUnreadable(module, block: noBlock, ids: ids)
 	module.setTerminator(noBlock, op: StdOp.ret(noneRecord))
 
@@ -2763,7 +2757,7 @@ end 'buildSubpEnvEntryFromBlock'
 function emitSubpReleaseEnvSnapshot(module StdModule, block IrBlock, state ValueId, ids ValueMinter)
 	let snapshot = emitLoadField(module, block: block, record: state, offset: EnvBlock, ids: ids)
 	module.appendOp(block, op: StdOp.osEnvBlockFree(snapshot))
-	emitSlabFree(module, block: block, ptr: state, ids: ids)
+	emitSlabFree(module, block: block, ptr: state, kind: SlabBufferKind.subprocessState, ids: ids)
 end 'emitSubpReleaseEnvSnapshot'
 
 // `__gt_subp_resolve_path(name) -> ownedManagedMemory` — `__Builtins.subprocessResolveOnPath()`:
@@ -2822,8 +2816,7 @@ function buildSubpResolvePath(module StdModule, shape PathSearchShape)
 	let sumC = emitBin(module, block: measuredExts, a: sumB, b: rungBytes, opcode: StdBinOpcode.add, ids: ids)
 	let slackConst = emitConst(module, block: measuredExts, value: CandidateSlackBytes, ids: ids)
 	let candSize = emitBin(module, block: measuredExts, a: sumC, b: slackConst, opcode: StdBinOpcode.add, ids: ids)
-	let candBuf = ids.mint()
-	module.appendOp(measuredExts, op: StdOp.call(candBuf, callee: SlabAllocName, args: argsOf(candSize)))
+	let candBuf = emitSlabAlloc(module, block: measuredExts, bytes: candSize, kind: SlabBufferKind.subprocessState, ids: ids)
 	emitStoreField(module, block: measuredExts, record: state, offset: RpCand, value: candBuf)
 	module.setTerminator(measuredExts, op: StdOp.branch(dirHdr.id))
 
@@ -2969,16 +2962,16 @@ end 'emitSubpAnswerFullPath'
 // Each buffer the state names holds exactly one region on every road out, a refused Windows
 // directory query included, so each is freed unconditionally. The name is the caller's.
 function emitSubpReleasePathWalk(module StdModule, block IrBlock, state ValueId, ids ValueMinter, shape PathSearchShape)
-	emitSlabFree(module, block: block, ptr: emitLoadField(module, block: block, record: state, offset: RpCand, ids: ids), ids: ids)
-	emitSlabFree(module, block: block, ptr: emitLoadField(module, block: block, record: state, offset: RpPath, ids: ids), ids: ids)
-	emitSlabFree(module, block: block, ptr: emitLoadField(module, block: block, record: state, offset: RpExts, ids: ids), ids: ids)
+	emitSlabFree(module, block: block, ptr: emitLoadField(module, block: block, record: state, offset: RpCand, ids: ids), kind: SlabBufferKind.subprocessState, ids: ids)
+	emitSlabFree(module, block: block, ptr: emitLoadField(module, block: block, record: state, offset: RpPath, ids: ids), kind: SlabBufferKind.hostText, ids: ids)
+	emitSlabFree(module, block: block, ptr: emitLoadField(module, block: block, record: state, offset: RpExts, ids: ids), kind: SlabBufferKind.hostText, ids: ids)
 
 	match shape 'shape'
 		windowsPathExt then emitSubpReleaseSearchDirectories(module, block: block, state: state, ids: ids)
 		posix then break
 	end 'shape'
 
-	emitSlabFree(module, block: block, ptr: state, ids: ids)
+	emitSlabFree(module, block: block, ptr: state, kind: SlabBufferKind.subprocessState, ids: ids)
 end 'emitSubpReleasePathWalk'
 
 function emitSubpReleaseSearchDirectories(module StdModule, block IrBlock, state ValueId, ids ValueMinter)
@@ -3021,11 +3014,10 @@ function emitSubpReadEnvInto(module StdModule, func IrFunction, ids ValueMinter,
 
 	let nameBuf = emitLiteralHostString(module, block: cur, ids: ids, text: varName)
 	let firstSize = emitConst(module, block: cur, value: EnvFirstGuessBytes, ids: ids)
-	let firstBuf = ids.mint()
-	module.appendOp(cur, op: StdOp.call(firstBuf, callee: SlabAllocName, args: argsOf(emitByteCountOfUnits(module, block: cur, units: firstSize, encoding: module.hostText, ids: ids))))
+	let firstBuf = emitSlabAlloc(module, block: cur, bytes: emitByteCountOfUnits(module, block: cur, units: firstSize, encoding: module.hostText, ids: ids), kind: SlabBufferKind.hostText, ids: ids)
 	let written = ids.mint()
 	module.appendOp(cur, op: StdOp.osEnvRead(written, namePtrId: nameBuf, bufPtrId: firstBuf, bufLenId: firstSize))
-	emitSlabFree(module, block: cur, ptr: nameBuf, ids: ids)
+	emitSlabFree(module, block: cur, ptr: nameBuf, kind: SlabBufferKind.hostText, ids: ids)
 	emitStoreField(module, block: cur, record: state, offset: outOffset, value: firstBuf)
 
 	// The three answers, classified in the order `emitFilledBufferVerdict` states: 0 is "unset", `< size` is
@@ -3039,16 +3031,15 @@ function emitSubpReadEnvInto(module StdModule, func IrFunction, ids ValueMinter,
 	// The size Win32 named INCLUDES the terminator, so it is exactly the units to allocate. The first
 	// guess is replaced, so it goes back.
 	let nameBuf2 = emitLiteralHostString(module, block: retry, ids: ids, text: varName)
-	let bigBuf = ids.mint()
-	module.appendOp(retry, op: StdOp.call(bigBuf, callee: SlabAllocName, args: argsOf(emitByteCountOfUnits(module, block: retry, units: written, encoding: module.hostText, ids: ids))))
+	let bigBuf = emitSlabAlloc(module, block: retry, bytes: emitByteCountOfUnits(module, block: retry, units: written, encoding: module.hostText, ids: ids), kind: SlabBufferKind.hostText, ids: ids)
 	let written2 = ids.mint()
 	module.appendOp(retry, op: StdOp.osEnvRead(written2, namePtrId: nameBuf2, bufPtrId: bigBuf, bufLenId: written))
-	emitSlabFree(module, block: retry, ptr: nameBuf2, ids: ids)
-	emitSlabFree(module, block: retry, ptr: emitLoadField(module, block: retry, record: state, offset: outOffset, ids: ids), ids: ids)
+	emitSlabFree(module, block: retry, ptr: nameBuf2, kind: SlabBufferKind.hostText, ids: ids)
+	emitSlabFree(module, block: retry, ptr: emitLoadField(module, block: retry, record: state, offset: outOffset, ids: ids), kind: SlabBufferKind.hostText, ids: ids)
 	emitStoreField(module, block: retry, record: state, offset: outOffset, value: bigBuf)
 	module.setTerminator(retry, op: StdOp.branch(readyId))
 
-	emitSlabFree(module, block: useFallback, ptr: emitLoadField(module, block: useFallback, record: state, offset: outOffset, ids: ids), ids: ids)
+	emitSlabFree(module, block: useFallback, ptr: emitLoadField(module, block: useFallback, record: state, offset: outOffset, ids: ids), kind: SlabBufferKind.hostText, ids: ids)
 	let fallbackBuf = emitLiteralCString(module, block: useFallback, ids: ids, text: fallback)
 	emitStoreField(module, block: useFallback, record: state, offset: outOffset, value: fallbackBuf)
 	module.setTerminator(useFallback, op: StdOp.branch(cont.id))
@@ -3060,7 +3051,7 @@ function emitSubpEnvValueToUtf8(module StdModule, block IrBlock, ids ValueMinter
 	let units = emitTextLength(module, block: block, text: wide, encoding: HostTextEncoding.utf16, ids: ids)
 	let utf8 = ids.mint()
 	emitHostTextToUtf8(module, block: block, host: wide, units: units, buffer: utf8, byteLength: ids.mint(), allocation: TextAllocation.slab, ids: ids)
-	emitSlabFree(module, block: block, ptr: wide, ids: ids)
+	emitSlabFree(module, block: block, ptr: wide, kind: SlabBufferKind.hostText, ids: ids)
 	emitStoreField(module, block: block, record: state, offset: outOffset, value: utf8)
 	module.setTerminator(block, op: StdOp.branch(cont.id))
 end 'emitSubpEnvValueToUtf8'
@@ -3164,7 +3155,7 @@ function emitSubpWindowsNameRules(module StdModule, func IrFunction, ids ValueMi
 	let noBuffer = emitConst(module, block: cwdRule, value: 0, ids: ids)
 	let needed = ids.mint()
 	module.appendOp(cwdRule, op: StdOp.osEnvRead(needed, namePtrId: varName, bufPtrId: noBuffer, bufLenId: noBuffer))
-	emitSlabFree(module, block: cwdRule, ptr: varName, ids: ids)
+	emitSlabFree(module, block: cwdRule, ptr: varName, kind: SlabBufferKind.hostText, ids: ids)
 	emitBranchOnCompare(module, block: cwdRule, value: needed, pred: StdCmpPred.eq, against: 0, whenTrue: searchCwd, whenFalse: cont, ids: ids)
 
 	emitSubpStoreFlag(module, block: searchCwd, ids: ids, state: state, offset: RpSearchesCwd, set: true)
@@ -3293,7 +3284,7 @@ function emitSubpBuildLegacySystemDir(module StdModule, func IrFunction, ids Val
 	emitStoreByte(module, block: afterWindows, base: legacy, index: windowsLen, value: separator, ids: ids)
 	let subdirectoryDst = emitBin(module, block: afterWindows, a: legacy, b: prefixLen, opcode: StdBinOpcode.add, ids: ids)
 	var afterSubdirectory = emitForwardCopy(module, func: func, cur: afterWindows, dest: subdirectoryDst, src: subdirectory, byteCount: subdirectoryLen, ids: ids)
-	emitSlabFree(module, block: afterSubdirectory, ptr: subdirectory, ids: ids)
+	emitSlabFree(module, block: afterSubdirectory, ptr: subdirectory, kind: SlabBufferKind.hostText, ids: ids)
 	return afterSubdirectory
 end 'emitSubpBuildLegacySystemDir'
 

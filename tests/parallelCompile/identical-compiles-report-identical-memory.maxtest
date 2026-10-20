@@ -1,12 +1,7 @@
 let RegAllocRowKind = "regalloc"
 let FreesColumn = "frees"
 let BytesColumn = "bytes"
-let LiveBytesColumn = "livebytes"
-let FreeBytesColumn = "freebytes"
-let CachedFreeBytesColumn = "cachedfreebytes"
-let ParkedBytesColumn = "parkedbytes"
-let CommittedBytesColumn = "committedbytes"
-let UnallocatedCell = "0"
+let ZeroCell = "0"
 let ReadingSeparator = " "
 let ReadingValueOpener = "="
 let ReadingPairSeparator = " vs "
@@ -31,14 +26,15 @@ export function requireIdenticalMemory(first MetricsTable, second MetricsTable, 
 
 	try Expect.isTrue(carriesKind(first, kind: PhaseRowKind), message: "the first {kind} build's metrics table carries no `{PhaseRowKind}` row, so there is nothing to compare and two such tables would agree.")
 	try Expect.isTrue(carriesKind(first, kind: RegAllocRowKind), message: "the first {kind} build's metrics table carries no `{RegAllocRowKind}` row, so the allocator's own sub-phases are not compared and two such tables would agree.")
-	try Expect.isTrue(anyAllocationReported(first), message: "every compared row of the first {kind} build's metrics table reports zero allocations, so the two tables would agree whether or not the compiler's memory accounting is deterministic.")
+	let silent = silentColumns(first)
+	try Expect.isEmpty(silent, message: "every compared row of the first {kind} build's metrics table reports 0 in these columns, so the two tables would agree on them whether or not the compiler's memory accounting is deterministic:{silent}")
 
 	let differing = differingReadings(firstReadings, second: secondReadings)
-	try Expect.isEmpty(differing, message: "two {kind} compiles of one program, at one processor count, with one command line, reported different memory for these rows (first vs second). A phase's allocation counts and residency must not depend on which worker ran which function, or in what order the pool finished:{differing}")
+	try Expect.isEmpty(differing, message: "two {kind} compiles of one program, at one processor count, with one command line, reported different memory for these rows (first vs second). A phase's allocation counts and bytes must not depend on which worker ran which function, or in what order the pool finished:{differing}")
 end 'requireIdenticalMemory'
 
 function comparedColumns() returns StringArray
-	return [AllocsColumn, FreesColumn, BytesColumn, LiveBytesColumn, FreeBytesColumn, CachedFreeBytesColumn, ParkedBytesColumn, CommittedBytesColumn]
+	return [AllocsColumn, FreesColumn, BytesColumn]
 end 'comparedColumns'
 
 function isComparedKind(kind String) returns bool
@@ -82,18 +78,30 @@ function carriesKind(table MetricsTable, kind String) returns bool
 	return false
 end 'carriesKind'
 
-function anyAllocationReported(table MetricsTable) returns bool
+function silentColumns(table MetricsTable) returns String
+	var silent = StringArray.create()
+
+	for heading in comparedColumns() 'eachColumn'
+		if not anyRowReports(table, heading: heading) 'silentColumn'
+			silent.push(heading)
+		end 'silentColumn'
+	end 'eachColumn'
+
+	return listedLines(silent)
+end 'silentColumns'
+
+function anyRowReports(table MetricsTable, heading String) returns bool
 	let kindColumn = table.column(MetricsKindColumn)
-	let allocsColumn = table.column(AllocsColumn)
+	let column = table.column(heading)
 
 	for row in table.rows 'eachRow'
-		if isComparedKind(row.cell(kindColumn)) and row.cell(allocsColumn) != UnallocatedCell 'allocated'
+		if isComparedKind(row.cell(kindColumn)) and row.cell(column) != ZeroCell 'reported'
 			return true
-		end 'allocated'
+		end 'reported'
 	end 'eachRow'
 
 	return false
-end 'anyAllocationReported'
+end 'anyRowReports'
 
 function differingReadings(first StringArray, second StringArray) returns String
 	var differing = StringArray.create()

@@ -978,7 +978,7 @@ export let StackWordBytes = 8
 // counter stamped into each entry as it is armed, and the key is the PAIR `(deadline, seq)`, which is total:
 // earlier deadline first, and among equal deadlines the one armed first.
 //
-// The heap region itself is `__slab_alloc`'d once in `__gt_init` (a zeroed block) rather than a `.data`
+// The heap region itself is slab-allocated once in `__gt_init` (a zeroed block) rather than a `.data`
 // reservation, because `.data` entries are single scalar slots.
 let TimerHeapCapacity = 256
 let TimerEntrySize = 32
@@ -1835,7 +1835,7 @@ let GtKeepsCpuClockLabel = b"__gt_keeps_cpu_clock"
 let GtCpuClockUnkept = 0 as FullRangeInt
 let GtCpuClockKept = 1 as FullRangeInt
 
-// The timer store: the live entry COUNT and the base address of the `__slab_alloc`'d heap region (both 0
+// The timer store: the live entry COUNT and the base address of the slab-allocated heap region (both 0
 // until `__gt_init` allocates the region and seeds the base). The count is read under the lock, by the store's
 // own walks and by `__sched_checkdead` (`emitGtStoresPending`).
 let GtTimerCountLabel = b"__gt_timer_count"
@@ -2763,13 +2763,12 @@ function buildGtInit(module StdModule)
 	let schedInitResult = ids.mint()
 	module.appendOp(entry, op: StdOp.call(schedInitResult, callee: SchedInitProcsName, args: ValueIdArray.create()))
 
-	// The timer store's heap region: one `__slab_alloc` of TimerHeapBytes (slab-zeroed, so count starts at 0
+	// The timer store's heap region: one slab allocation of TimerHeapBytes (slab-zeroed, so count starts at 0
 	// entries), its base published to `__gt_timer_heap_base`. Done here rather than lazily in `__gt_timer_add`
 	// so the add path stays a straight append with no allocation check.
 	let heapSizeConst = ids.mint()
 	module.appendOp(entry, op: StdOp.const(heapSizeConst, value: TimerHeapBytes, valueType: StdType.i64))
-	let heapBase = ids.mint()
-	module.appendOp(entry, op: StdOp.call(heapBase, callee: SlabAllocName, args: argsOf(heapSizeConst)))
+	let heapBase = emitSlabAlloc(module, block: entry, bytes: heapSizeConst, kind: SlabBufferKind.timerStore, ids: ids)
 	let heapBaseAddr = ids.mint()
 	module.appendOp(entry, op: StdOp.globalAddr(heapBaseAddr, label: GtTimerHeapBaseLabel))
 	module.appendOp(entry, op: StdOp.storeIndirect(heapBaseAddr, offset: 0, valueId: heapBase, valueType: StdType.i64))
@@ -4286,7 +4285,7 @@ end 'siftWordOf'
 // than a bound anything outside it imposes, so refusing at it would be inventing a limit rather than reporting
 // one — and `sleep` has nowhere to report one anyway (`stdlib/Sleep.maxon` declares it with no `throws`
 // clause). ⇒ **The store DOUBLES**: a fresh
-// `__slab_alloc`, the live entries copied across, the base and capacity republished, and the old region handed
+// slab region, the live entries copied across, the base and capacity republished, and the old region handed
 // back. The free is AFTER the copy, and nothing else holds a pointer into the store: every walk re-reads
 // `__gt_timer_heap_base` under the lock, which is what makes the base a `.data` word rather than a value
 // anybody caches.
@@ -4338,8 +4337,7 @@ function buildGtTimerAdd(module StdModule)
 	module.appendOp(grow, op: StdOp.const(growEntrySize, value: TimerEntrySize, valueType: StdType.i64))
 	let newBytes = ids.mint()
 	module.appendOp(grow, op: StdOp.binOp(newBytes, lhs: newCapacity, rhs: growEntrySize, opcode: StdBinOpcode.mul, operandType: StdType.i64))
-	let newBase = ids.mint()
-	module.appendOp(grow, op: StdOp.call(newBase, callee: SlabAllocName, args: argsOf(newBytes)))
+	let newBase = emitSlabAlloc(module, block: grow, bytes: newBytes, kind: SlabBufferKind.timerStore, ids: ids)
 	let growBaseAddr = ids.mint()
 	module.appendOp(grow, op: StdOp.globalAddr(growBaseAddr, label: GtTimerHeapBaseLabel))
 	let oldBase = ids.mint()
@@ -4353,7 +4351,7 @@ function buildGtTimerAdd(module StdModule)
 	// The republished base is what every reader consults, so the old region is unreachable the instant the
 	// store above lands — and on the FIRST grow `oldBase` is a real `__gt_init` region, never null, because the
 	// store is allocated eagerly there rather than lazily here.
-	emitSlabFree(module, block: copied, ptr: oldBase, ids: ids)
+	emitSlabFree(module, block: copied, ptr: oldBase, kind: SlabBufferKind.timerStore, ids: ids)
 	module.setTerminator(copied, op: StdOp.branch(doAdd.id))
 
 	let heapBase = emitLoadGlobalWord(module, block: doAdd, label: GtTimerHeapBaseLabel, ids: ids)
@@ -4707,8 +4705,7 @@ function buildGtAnyLock(module StdModule)
 	let length = emitLoadField(module, block: entry, record: record, offset: ManagedRecordLengthOffset, ids: ids)
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 	let scratchBytes = emitBin(module, block: entry, a: emitIndexStep(module, block: entry, index: length, delta: OneMore, ids: ids), b: emitConst(module, block: entry, value: PointerFieldBytes, ids: ids), opcode: StdBinOpcode.mul, ids: ids)
-	let scratch = ids.mint()
-	module.appendOp(entry, op: StdOp.call(scratch, callee: SlabAllocName, args: argsOf(scratchBytes)))
+	let scratch = emitSlabAlloc(module, block: entry, bytes: scratchBytes, kind: SlabBufferKind.awaitAnyScratch, ids: ids)
 	module.setTerminator(entry, op: StdOp.branch(gatherHdr.id))
 	entry.branchEdges.push(BranchEdge.create(gatherHdr.id, argIds: twoArgs(zero, second: zero)))
 
@@ -4804,7 +4801,7 @@ function buildGtAnyUnlock(module StdModule)
 	module.setTerminator(unlockBody, op: StdOp.branch(unlockHdr.id))
 	unlockBody.branchEdges.push(BranchEdge.create(unlockHdr.id, argIds: argsOf(index)))
 
-	emitSlabFree(module, block: unlocked, ptr: scratch, ids: ids)
+	emitSlabFree(module, block: unlocked, ptr: scratch, kind: SlabBufferKind.awaitAnyScratch, ids: ids)
 	module.setTerminator(unlocked, op: StdOp.retVoid)
 	module.functions.push(func)
 end 'buildGtAnyUnlock'
@@ -6512,7 +6509,7 @@ end 'buildGtSleep'
 // ⚠ **CAPACITY: `__gt_timer_add`'s grow arm assumes a SEEDED store, and nothing on this path seeds one.**
 // Both callers (`__gt_sleep`, `__gt_io_park`) are entered only after `__gt_init` has run — `__gt_init`
 // commits the seed capacity — so the grow arm always doubles a non-zero capacity. Reached from anywhere that
-// has not run `__gt_init`, capacity 0 would land on `__slab_alloc(0)`.
+// has not run `__gt_init`, capacity 0 would grow the store into a zero-byte allocation.
 //
 // Returns the block control reaches once the GT is running again. The CALLER terminates that block.
 function emitGtParkOnDeadline(module StdModule, func IrFunction, cur IrBlock, deadline ValueId, ids ValueMinter) returns IrBlock
@@ -8076,19 +8073,16 @@ function buildGtProcessRun(module StdModule, commandShape SubprocessCommandShape
 	// not.
 	let startupSizeConst = ids.mint()
 	module.appendOp(entry, op: StdOp.const(startupSizeConst, value: StartupInfoSize, valueType: StdType.i64))
-	let startupPtr = ids.mint()
-	module.appendOp(entry, op: StdOp.call(startupPtr, callee: SlabAllocName, args: argsOf(startupSizeConst)))
+	let startupPtr = emitSlabAlloc(module, block: entry, bytes: startupSizeConst, kind: SlabBufferKind.subprocessState, ids: ids)
 	module.appendOp(entry, op: StdOp.storeIndirect(startupPtr, offset: StartupInfoCbOffset, valueId: startupSizeConst, valueType: StdType.i64))
 	let procInfoSizeConst = ids.mint()
 	module.appendOp(entry, op: StdOp.const(procInfoSizeConst, value: ProcInfoSize, valueType: StdType.i64))
-	let procInfoPtr = ids.mint()
-	module.appendOp(entry, op: StdOp.call(procInfoPtr, callee: SlabAllocName, args: argsOf(procInfoSizeConst)))
+	let procInfoPtr = emitSlabAlloc(module, block: entry, bytes: procInfoSizeConst, kind: SlabBufferKind.subprocessState, ids: ids)
 	let oneConst = ids.mint()
 	module.appendOp(entry, op: StdOp.const(oneConst, value: TrailingNulBytes, valueType: StdType.i64))
 	let cmBufSize = ids.mint()
 	module.appendOp(entry, op: StdOp.binOp(cmBufSize, lhs: cmdlineLen, rhs: oneConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	let cmBuf = ids.mint()
-	module.appendOp(entry, op: StdOp.call(cmBuf, callee: SlabAllocName, args: argsOf(cmBufSize)))
+	let cmBuf = emitSlabAlloc(module, block: entry, bytes: cmBufSize, kind: SlabBufferKind.subprocessState, ids: ids)
 
 	// ⭐ **THE COPY IS `emitForwardCopy`, NOT A THIRD HAND-ROLLED BYTE LOOP.** This function and
 	// `__gt_io_read` each carried their own header+body copy blocks, byte for byte the loop
@@ -8129,7 +8123,7 @@ function buildGtProcessRun(module StdModule, commandShape SubprocessCommandShape
 	let runTreeObject = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.loadIndirect(runTreeObject, addrId: procInfoPtr, offset: ProcInfoTreeObjectOffset, valueType: StdType.i64))
 	emitSubpReleaseCommandFromLine(module, block: afterCopy, ids: ids, shape: commandShape, command: command, encoding: module.hostText)
-	emitSlabFree(module, block: afterCopy, ptr: cmBuf, ids: ids)
+	emitSlabFree(module, block: afterCopy, ptr: cmBuf, kind: SlabBufferKind.subprocessState, ids: ids)
 	emitSubpFreeLaunchRecords(module, block: afterCopy, startupPtr: startupPtr, procInfoPtr: procInfoPtr, ids: ids)
 	afterCopy = emitSubpCloseTreeObject(module, func: func, ids: ids, cur: afterCopy, treeObject: runTreeObject)
 	let spawnZeroConst = ids.mint()
@@ -8181,12 +8175,11 @@ function buildGtProcessRun(module StdModule, commandShape SubprocessCommandShape
 	// cast the runtime builder cannot spell). A fresh slab slot supplies that.
 	let codeSizeConst = ids.mint()
 	module.appendOp(reapExit, op: StdOp.const(codeSizeConst, value: ExitCodeSlotBytes, valueType: StdType.i64))
-	let codePtr = ids.mint()
-	module.appendOp(reapExit, op: StdOp.call(codePtr, callee: SlabAllocName, args: argsOf(codeSizeConst)))
+	let codePtr = emitSlabAlloc(module, block: reapExit, bytes: codeSizeConst, kind: SlabBufferKind.subprocessState, ids: ids)
 	module.appendOp(reapExit, op: StdOp.osProcessExitCode(hProcess, codePtrId: codePtr))
 	let code = ids.mint()
 	module.appendOp(reapExit, op: StdOp.loadIndirect(code, addrId: codePtr, offset: 0, valueType: StdType.i64))
-	emitSlabFree(module, block: reapExit, ptr: codePtr, ids: ids)
+	emitSlabFree(module, block: reapExit, ptr: codePtr, kind: SlabBufferKind.subprocessState, ids: ids)
 	module.appendOp(reapExit, op: StdOp.osCloseHandle(hProcess))
 
 	// A THROWING function's successful exit still writes BOTH registers — the child's exit code in the
@@ -8375,11 +8368,10 @@ function buildGtIoRead(module StdModule, commandShape SubprocessCommandShape)
 
 	let slotsSizeConst = ids.mint()
 	module.appendOp(afterName, op: StdOp.const(slotsSizeConst, value: SubpPipeScratchBytes as FullRangeInt, valueType: StdType.i64))
-	let scratch = ids.mint()
-	module.appendOp(afterName, op: StdOp.call(scratch, callee: SlabAllocName, args: argsOf(slotsSizeConst)))
+	let scratch = emitSlabAlloc(module, block: afterName, bytes: slotsSizeConst, kind: SlabBufferKind.subprocessState, ids: ids)
 	var pipeFail = module.addBlock(func, label: b"pipefail", heat: BlockHeat.normal)
 	afterName = emitSubpCreateReadPipe(module, func: func, ids: ids, cur: afterName, namePtr: namePtr, saPtr: saPtr, scratch: scratch, whenFailed: pipeFail)
-	emitSlabFree(module, block: pipeFail, ptr: saPtr, ids: ids)
+	emitSlabFree(module, block: pipeFail, ptr: saPtr, kind: SlabBufferKind.subprocessState, ids: ids)
 	module.setTerminator(pipeFail, op: StdOp.ret(zeroConst))
 	let readEnd = emitLoadField(module, block: afterName, record: scratch, offset: 0, ids: ids)
 	let writeEnd = emitLoadField(module, block: afterName, record: scratch, offset: SubpPipeScratchSecondWord as ByteOffset, ids: ids)
@@ -8388,7 +8380,7 @@ function buildGtIoRead(module StdModule, commandShape SubprocessCommandShape)
 	// name has been resolved to a kernel object, the SECURITY_ATTRIBUTES was read by the create, and the
 	// out-param block has been emptied.
 	emitSubpFreePipeScratch(module, block: afterName, name: namePtr, scratch: scratch, ids: ids)
-	emitSlabFree(module, block: afterName, ptr: saPtr, ids: ids)
+	emitSlabFree(module, block: afterName, ptr: saPtr, kind: SlabBufferKind.subprocessState, ids: ids)
 
 	// The mutable NUL-terminated cmdline copy (CreateProcessW may write to lpCommandLine; the .rdata String blob is
 	// neither writable nor NUL-terminated).
@@ -8400,8 +8392,7 @@ function buildGtIoRead(module StdModule, commandShape SubprocessCommandShape)
 	module.appendOp(afterName, op: StdOp.const(cmBufNulConst, value: TrailingNulBytes as FullRangeInt, valueType: StdType.i64))
 	let cmBufSize = ids.mint()
 	module.appendOp(afterName, op: StdOp.binOp(cmBufSize, lhs: cmdlineLen, rhs: cmBufNulConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	let cmBuf = ids.mint()
-	module.appendOp(afterName, op: StdOp.call(cmBuf, callee: SlabAllocName, args: argsOf(cmBufSize)))
+	let cmBuf = emitSlabAlloc(module, block: afterName, bytes: cmBufSize, kind: SlabBufferKind.subprocessState, ids: ids)
 
 	// The shared byte-copy loop — see `__gt_process_run`, which reaches the same helper for the same reason.
 	var afterCopy = emitForwardCopy(module, func: func, cur: afterName, dest: cmBuf, src: cmdlinePtr, byteCount: cmdlineLen, ids: ids)
@@ -8417,8 +8408,7 @@ function buildGtIoRead(module StdModule, commandShape SubprocessCommandShape)
 	module.appendOp(afterCopy, op: StdOp.storeIndirect(startupPtr, offset: StartupInfoHStdErrorOffset, valueId: writeEnd, valueType: StdType.i64))
 	let procInfoSizeConst = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.const(procInfoSizeConst, value: ProcInfoSize as FullRangeInt, valueType: StdType.i64))
-	let procInfoPtr = ids.mint()
-	module.appendOp(afterCopy, op: StdOp.call(procInfoPtr, callee: SlabAllocName, args: argsOf(procInfoSizeConst)))
+	let procInfoPtr = emitSlabAlloc(module, block: afterCopy, bytes: procInfoSizeConst, kind: SlabBufferKind.subprocessState, ids: ids)
 
 	// The one-shot read probe configures neither cwd nor creation flags — see `__gt_process_run`'s twin note.
 	let probeSpawnDefaults = emitConst(module, block: afterCopy, value: 0, ids: ids)
@@ -8438,7 +8428,7 @@ function buildGtIoRead(module StdModule, commandShape SubprocessCommandShape)
 	let probeTreeObject = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.loadIndirect(probeTreeObject, addrId: procInfoPtr, offset: ProcInfoTreeObjectOffset, valueType: StdType.i64))
 	emitSubpReleaseCommandFromLine(module, block: afterCopy, ids: ids, shape: commandShape, command: probeCommand, encoding: module.hostText)
-	emitSlabFree(module, block: afterCopy, ptr: cmBuf, ids: ids)
+	emitSlabFree(module, block: afterCopy, ptr: cmBuf, kind: SlabBufferKind.subprocessState, ids: ids)
 	afterCopy = emitSubpReleaseSpawnAttributeList(module, func: func, ids: ids, cur: afterCopy, startupPtr: startupPtr)
 	emitSubpFreeLaunchRecords(module, block: afterCopy, startupPtr: startupPtr, procInfoPtr: procInfoPtr, ids: ids)
 	afterCopy = emitSubpCloseTreeObject(module, func: func, ids: ids, cur: afterCopy, treeObject: probeTreeObject)
@@ -8465,8 +8455,7 @@ function buildGtIoRead(module StdModule, commandShape SubprocessCommandShape)
 	// unwinds, so no second party ever has to reach it.
 	let scratchSizeConst = ids.mint()
 	module.appendOp(spawnOk, op: StdOp.const(scratchSizeConst, value: IoReadScratchBytes as FullRangeInt, valueType: StdType.i64))
-	let scratch = ids.mint()
-	module.appendOp(spawnOk, op: StdOp.call(scratch, callee: SlabAllocName, args: argsOf(scratchSizeConst)))
+	let scratch = emitSlabAlloc(module, block: spawnOk, bytes: scratchSizeConst, kind: SlabBufferKind.subprocessState, ids: ids)
 	let readBufOffConst = ids.mint()
 	module.appendOp(spawnOk, op: StdOp.const(readBufOffConst, value: IoReadBufferOffset as FullRangeInt, valueType: StdType.i64))
 	let readBuf = ids.mint()
@@ -8487,7 +8476,7 @@ function buildGtIoRead(module StdModule, commandShape SubprocessCommandShape)
 	module.appendOp(spawnOk, op: StdOp.osCloseHandle(readEnd))
 
 	// The read is over — the pipe is closed and the kernel is done with the buffer, so it goes back.
-	emitSlabFree(module, block: spawnOk, ptr: scratch, ids: ids)
+	emitSlabFree(module, block: spawnOk, ptr: scratch, kind: SlabBufferKind.subprocessState, ids: ids)
 
 	// ⭐ **THE PROBE ANSWERS A COUNT, SO A FAILED READ IS 0 HERE.** `spawnReadLine(cmd)`'s whole contract is
 	// *"an environment error reads as EOF"*, and it has nowhere to carry the difference; the STREAMING API
@@ -8755,7 +8744,7 @@ end 'isSubprocessRuntimeCallee'
 
 // The `.data` slots the streaming runtime owns, each laid out where a surviving body names it
 // (`DataReach.walked`). Just the table pointer and the last error; the table itself and every buffer are
-// `__slab_alloc`'d lazily.
+// slab-allocated lazily.
 export function subpRuntimeGlobals() returns DataSectionEntryArray
 	var out = DataSectionEntryArray.create()
 
@@ -8948,20 +8937,29 @@ function emitSubpHandleGeneration(module StdModule, block IrBlock, ids ValueMint
 	return emitBin(module, block: block, a: handle, b: emitSubpHandleGenerationShift(module, block: block, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
 end 'emitSubpHandleGeneration'
 
-// If `record[fieldOffset]` is 0 (a per-slot buffer never allocated on a FRESH slot), `__slab_alloc(size)` it and
-// store the pointer (and `size` into `capField`); else reuse the buffer persisted from a prior use. Returns the
-// continuation block. This is the per-HANDLE reuse that bounds a spawn/read/release loop's memory.
-function emitEnsureSlotBuffer(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, record ValueId, fieldOffset ByteOffset, size FullRangeInt, capField ByteOffset) returns IrBlock
+union SlotCapacity
+	recorded(field ByteOffset)
+	fixed
+end 'SlotCapacity'
+
+// If `record[fieldOffset]` is 0 (a per-slot buffer never allocated on a FRESH slot), allocate `size` bytes and
+// store the pointer (and `size` into a `SlotCapacity.recorded` field); else reuse the buffer persisted from a
+// prior use. Returns the continuation block. This is the per-HANDLE reuse that bounds a spawn/read/release loop's memory.
+function emitEnsureSlotBuffer(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, record ValueId, fieldOffset ByteOffset, size FullRangeInt, capacity SlotCapacity) returns IrBlock
 	var doAlloc = module.addBlock(func, label: b"subpalloc", heat: BlockHeat.normal)
 	var cont = module.addBlock(func, label: b"subpallocd", heat: BlockHeat.normal)
 	let existing = emitLoadField(module, block: cur, record: record, offset: fieldOffset, ids: ids)
 	emitBranchOnCompare(module, block: cur, value: existing, pred: StdCmpPred.eq, against: 0, whenTrue: doAlloc, whenFalse: cont, ids: ids)
 
 	let sizeConst = emitConst(module, block: doAlloc, value: size, ids: ids)
-	let buf = ids.mint()
-	module.appendOp(doAlloc, op: StdOp.call(buf, callee: SlabAllocName, args: argsOf(sizeConst)))
+	let buf = emitSlabAlloc(module, block: doAlloc, bytes: sizeConst, kind: SlabBufferKind.subprocessSlotBuffer, ids: ids)
 	emitStoreField(module, block: doAlloc, record: record, offset: fieldOffset, value: buf)
-	emitStoreField(module, block: doAlloc, record: record, offset: capField, value: sizeConst)
+
+	match capacity 'capacity'
+		recorded(field) then emitStoreField(module, block: doAlloc, record: record, offset: field, value: sizeConst)
+		fixed then break
+	end 'capacity'
+
 	module.setTerminator(doAlloc, op: StdOp.branch(cont.id))
 	return cont
 end 'emitEnsureSlotBuffer'
@@ -9165,36 +9163,19 @@ function buildSubpStrFromBytes(module StdModule)
 	module.functions.push(func)
 end 'buildSubpStrFromBytes'
 
-// The cap-free twin of `emitEnsureSlotBuffer` — for the `bytesOut` out-param slot, a fixed 8 bytes with no grow, so
-// there is no capacity slot to write. Alloc-if-zero then reuse across the handle's life.
-function emitEnsureSlotPtr(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, record ValueId, fieldOffset ByteOffset, size FullRangeInt) returns IrBlock
-	var doAlloc = module.addBlock(func, label: b"subpptr", heat: BlockHeat.normal)
-	var cont = module.addBlock(func, label: b"subpptrd", heat: BlockHeat.normal)
-	let existing = emitLoadField(module, block: cur, record: record, offset: fieldOffset, ids: ids)
-	emitBranchOnCompare(module, block: cur, value: existing, pred: StdCmpPred.eq, against: 0, whenTrue: doAlloc, whenFalse: cont, ids: ids)
-
-	let sizeConst = emitConst(module, block: doAlloc, value: size, ids: ids)
-	let buf = ids.mint()
-	module.appendOp(doAlloc, op: StdOp.call(buf, callee: SlabAllocName, args: argsOf(sizeConst)))
-	emitStoreField(module, block: doAlloc, record: record, offset: fieldOffset, value: buf)
-	module.setTerminator(doAlloc, op: StdOp.branch(cont.id))
-	return cont
-end 'emitEnsureSlotPtr'
-
 // `__slab_alloc` a fresh (prefix + hex)*2 + NUL wide-char pipe-name buffer and return its pointer — the buffer
 // `buildPipeName` formats a unique `\\.\pipe\<hex>` name into. Spelled once for the probe read and the three
 // streaming pipes rather than repeating the size arithmetic at each site.
 function emitSubpAllocPipeName(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	let nameSize = emitConst(module, block: block, value: ((PipeNamePrefixWchars + PipeNameHexDigits) * WideCharBytes + PipeNameTrailingNulBytes) as FullRangeInt, ids: ids)
-	let nameBuf = ids.mint()
-	module.appendOp(block, op: StdOp.call(nameBuf, callee: SlabAllocName, args: argsOf(nameSize)))
+	let nameBuf = emitSlabAlloc(module, block: block, bytes: nameSize, kind: SlabBufferKind.subprocessState, ids: ids)
 	return nameBuf
 end 'emitSubpAllocPipeName'
 
 // The two regions one pipe's creation reads, dead once both of its ends are out of the scratch.
 function emitSubpFreePipeScratch(module StdModule, block IrBlock, name ValueId, scratch ValueId, ids ValueMinter)
-	emitSlabFree(module, block: block, ptr: name, ids: ids)
-	emitSlabFree(module, block: block, ptr: scratch, ids: ids)
+	emitSlabFree(module, block: block, ptr: name, kind: SlabBufferKind.subprocessState, ids: ids)
+	emitSlabFree(module, block: block, ptr: scratch, kind: SlabBufferKind.subprocessState, ids: ids)
 end 'emitSubpFreePipeScratch'
 
 // A failed creation leaves both words 0, having closed any end it made. Nothing is closed here:
@@ -9294,8 +9275,7 @@ function emitSubpAllocStartupInfo(module StdModule, block IrBlock, ids ValueMint
 		recordBytes = startupBytes + SubpAttributeCellsBytes
 	end 'withCells'
 
-	let startupPtr = ids.mint()
-	module.appendOp(block, op: StdOp.call(startupPtr, callee: SlabAllocName, args: argsOf(emitConst(module, block: block, value: recordBytes, ids: ids))))
+	let startupPtr = emitSlabAlloc(module, block: block, bytes: emitConst(module, block: block, value: recordBytes, ids: ids), kind: SlabBufferKind.subprocessState, ids: ids)
 	module.appendOp(block, op: StdOp.storeIndirect(startupPtr, offset: StartupInfoCbOffset, valueId: emitConst(module, block: block, value: startupBytes, ids: ids), valueType: StdType.i64))
 	module.appendOp(block, op: StdOp.storeIndirect(startupPtr, offset: StartupInfoDwFlagsOffset, valueId: emitConst(module, block: block, value: StartfUseStdHandles as FullRangeInt, ids: ids), valueType: StdType.i64))
 	return startupPtr
@@ -9326,8 +9306,7 @@ function emitSubpSpawnInheriting(module StdModule, func IrFunction, ids ValueMin
 	_ = emitNetpoll(module, block: cur, verb: NetpollVerb.spawnAttributesInit, operands: twoArgs(none, second: sizeCell), ids: ids)
 	let listBytes = emitLoadField(module, block: cur, record: startupPtr, offset: SubpAttributeSizeCell as ByteOffset, ids: ids)
 	let totalBytes = emitBin(module, block: cur, a: listBytes, b: emitConst(module, block: cur, value: SubpAttributeBlockHeaderBytes, ids: ids), opcode: StdBinOpcode.add, ids: ids)
-	let block = ids.mint()
-	module.appendOp(cur, op: StdOp.call(block, callee: SlabAllocName, args: argsOf(totalBytes)))
+	let block = emitSlabAlloc(module, block: cur, bytes: totalBytes, kind: SlabBufferKind.subprocessState, ids: ids)
 	emitStoreField(module, block: cur, record: startupPtr, offset: SubpAttributeBlockCell as ByteOffset, value: block)
 	let list = emitSubpAttributeListOf(module, block: cur, attributeBlock: block, ids: ids)
 	let initialised = emitNetpoll(module, block: cur, verb: NetpollVerb.spawnAttributesInit, operands: twoArgs(list, second: sizeCell), ids: ids)
@@ -9382,7 +9361,7 @@ function emitSubpReleaseSpawnAttributeList(module StdModule, func IrFunction, id
 	_ = emitNetpoll(module, block: initialised, verb: NetpollVerb.spawnAttributesDelete, operands: argsOf(list), ids: ids)
 	module.setTerminator(initialised, op: StdOp.branch(freed.id))
 
-	emitSlabFree(module, block: freed, ptr: block, ids: ids)
+	emitSlabFree(module, block: freed, ptr: block, kind: SlabBufferKind.subprocessState, ids: ids)
 	return freed
 end 'emitSubpReleaseSpawnAttributeList'
 
@@ -9479,8 +9458,7 @@ end 'emitSubpCreateReadPipe'
 // inheritable SA every child-facing pipe end is created with, spelled once for every spawn that creates a pipe.
 function emitSubpSecurityAttributes(module StdModule, block IrBlock, ids ValueMinter) returns ValueId
 	let saSizeConst = emitConst(module, block: block, value: SecurityAttributesSize as FullRangeInt, ids: ids)
-	let saPtr = ids.mint()
-	module.appendOp(block, op: StdOp.call(saPtr, callee: SlabAllocName, args: argsOf(saSizeConst)))
+	let saPtr = emitSlabAlloc(module, block: block, bytes: saSizeConst, kind: SlabBufferKind.subprocessState, ids: ids)
 	let saLenConst = emitConst(module, block: block, value: SecurityAttributesSize as FullRangeInt, ids: ids)
 	module.appendOp(block, op: StdOp.storeIndirect(saPtr, offset: SecurityAttributesNLengthOffset, valueId: saLenConst, valueType: StdType.i64))
 	let saInheritConst = emitConst(module, block: block, value: SecurityAttributesInheritable as FullRangeInt, ids: ids)
@@ -9639,12 +9617,11 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 
 	// The slab zeroes the region, which is every slot's free state: `inUse` 0 and null buffers.
 	let tblSize = emitConst(module, block: allocTbl, value: (SubpMaxHandles * SubpSlotBytes) as FullRangeInt, ids: ids)
-	let newTable = ids.mint()
-	module.appendOp(allocTbl, op: StdOp.call(newTable, callee: SlabAllocName, args: argsOf(tblSize)))
+	let newTable = emitSlabAlloc(module, block: allocTbl, bytes: tblSize, kind: SlabBufferKind.subprocessTable, ids: ids)
 	let tablePublished = emitCasGlobalWord(module, block: allocTbl, label: SubpTableLabel, expected: zeroE, replacement: newTable, ids: ids)
 	emitBranchOnCasLost(module, block: allocTbl, result: tablePublished, lost: dropTbl, won: haveTbl, ids: ids)
 
-	emitSlabFree(module, block: dropTbl, ptr: newTable, ids: ids)
+	emitSlabFree(module, block: dropTbl, ptr: newTable, kind: SlabBufferKind.subprocessTable, ids: ids)
 	module.setTerminator(dropTbl, op: StdOp.branch(haveTbl.id))
 
 	let table = emitLoadAcquireGlobalWord(module, block: haveTbl, label: SubpTableLabel, ids: ids)
@@ -9686,8 +9663,7 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	emitStoreField(module, block: gotSlot, record: probeSlot, offset: SubpSlotGeneration, value: nextGeneration)
 	let saPtr = emitSubpSecurityAttributes(module, block: gotSlot, ids: ids)
 	let childScratchSizeConst = emitConst(module, block: gotSlot, value: SubpChildScratchBytes as FullRangeInt, ids: ids)
-	let childScratch = ids.mint()
-	module.appendOp(gotSlot, op: StdOp.call(childScratch, callee: SlabAllocName, args: argsOf(childScratchSizeConst)))
+	let childScratch = emitSlabAlloc(module, block: gotSlot, bytes: childScratchSizeConst, kind: SlabBufferKind.subprocessState, ids: ids)
 	let nulName = emitLiteralCString(module, block: gotSlot, ids: ids, text: subpNullDeviceName(commandShape))
 
 	// ⚠ **THE FAILURE EXITS ARE CREATED BEFORE THE STDIO SETUP BECAUSE THE SETUP CAN REACH THEM.** A `file` or
@@ -9711,7 +9687,7 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 		var dropPath = module.addBlock(func, label: b"streamdrop", heat: BlockHeat.normal)
 		let failedPath = emitLoadField(module, block: streamFail, record: childScratch, offset: SubpChildFailedPathOff, ids: ids)
 		emitBranchOnCompare(module, block: streamFail, value: failedPath, pred: StdCmpPred.ne, against: 0, whenTrue: dropPath, whenFalse: spawnFail, ids: ids)
-		emitSlabFree(module, block: dropPath, ptr: failedPath, ids: ids)
+		emitSlabFree(module, block: dropPath, ptr: failedPath, kind: SlabBufferKind.hostText, ids: ids)
 		module.setTerminator(dropPath, op: StdOp.branch(spawnFail.id))
 	end 'wideRedirect' else 'narrowRedirect'
 		module.setTerminator(streamFail, op: StdOp.branch(spawnFail.id))
@@ -9730,8 +9706,7 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	let hStdErr = emitLoadField(module, block: afterStderr, record: childScratch, offset: SubpChildStderrWriteOff, ids: ids)
 	module.appendOp(afterStderr, op: StdOp.storeIndirect(startupPtr, offset: StartupInfoHStdErrorOffset, valueId: hStdErr, valueType: StdType.i64))
 	let procInfoSizeConst = emitConst(module, block: afterStderr, value: ProcInfoSize as FullRangeInt, ids: ids)
-	let procInfoPtr = ids.mint()
-	module.appendOp(afterStderr, op: StdOp.call(procInfoPtr, callee: SlabAllocName, args: argsOf(procInfoSizeConst)))
+	let procInfoPtr = emitSlabAlloc(module, block: afterStderr, bytes: procInfoSizeConst, kind: SlabBufferKind.subprocessState, ids: ids)
 	emitSubpWideRequestStep(module, block: afterStderr, req: req, step: SubpWideRequestStep.widen, ids: ids)
 	let cmdlinePtr = emitLoadField(module, block: afterStderr, record: req, offset: subpSpawnOperandOffset(module, utf8: SubpReqCmdline, wide: SubpReqWideCmdline), ids: ids)
 	let cwdPtr = emitLoadField(module, block: afterStderr, record: req, offset: subpSpawnOperandOffset(module, utf8: SubpReqCwd, wide: SubpReqWideCwd), ids: ids)
@@ -9807,10 +9782,10 @@ function buildSubpSpawnCore(module StdModule, commandShape SubprocessCommandShap
 	let stderrStream = emitBin(module, block: spawnOk, a: slot, b: stderrBaseConst, opcode: StdBinOpcode.add, ids: ids)
 	emitStoreField(module, block: spawnOk, record: stderrStream, offset: SubpStreamBufLen, value: zeroB)
 	emitStoreField(module, block: spawnOk, record: stderrStream, offset: SubpStreamStateWord, value: openState)
-	var afterStdoutBuf = emitEnsureSlotBuffer(module, func: func, ids: ids, cur: spawnOk, record: stdoutStream, fieldOffset: SubpStreamBufPtr, size: SubpInitialLineBufBytes as FullRangeInt, capField: SubpStreamBufCap)
-	var afterStderrBuf = emitEnsureSlotBuffer(module, func: func, ids: ids, cur: afterStdoutBuf, record: stderrStream, fieldOffset: SubpStreamBufPtr, size: SubpInitialLineBufBytes as FullRangeInt, capField: SubpStreamBufCap)
-	var afterWriteBuf = emitEnsureSlotBuffer(module, func: func, ids: ids, cur: afterStderrBuf, record: slot, fieldOffset: SubpSlotWriteBuf, size: SubpInitialLineBufBytes as FullRangeInt, capField: SubpSlotWriteCap)
-	var afterBytesOut = emitEnsureSlotPtr(module, func: func, ids: ids, cur: afterWriteBuf, record: slot, fieldOffset: SubpSlotBytesOut, size: SubpBytesOutBytes as FullRangeInt)
+	var afterStdoutBuf = emitEnsureSlotBuffer(module, func: func, ids: ids, cur: spawnOk, record: stdoutStream, fieldOffset: SubpStreamBufPtr, size: SubpInitialLineBufBytes as FullRangeInt, capacity: SlotCapacity.recorded(SubpStreamBufCap))
+	var afterStderrBuf = emitEnsureSlotBuffer(module, func: func, ids: ids, cur: afterStdoutBuf, record: stderrStream, fieldOffset: SubpStreamBufPtr, size: SubpInitialLineBufBytes as FullRangeInt, capacity: SlotCapacity.recorded(SubpStreamBufCap))
+	var afterWriteBuf = emitEnsureSlotBuffer(module, func: func, ids: ids, cur: afterStderrBuf, record: slot, fieldOffset: SubpSlotWriteBuf, size: SubpInitialLineBufBytes as FullRangeInt, capacity: SlotCapacity.recorded(SubpSlotWriteCap))
+	var afterBytesOut = emitEnsureSlotBuffer(module, func: func, ids: ids, cur: afterWriteBuf, record: slot, fieldOffset: SubpSlotBytesOut, size: SubpBytesOutBytes as FullRangeInt, capacity: SlotCapacity.fixed)
 
 	// ⭐ This is the point the slot becomes a live HANDLE: `SubpSlotLive` is published after every
 	// set-up store above, so a guard that finds it sees them all. The handle packs the generation
@@ -9848,16 +9823,16 @@ end 'buildSubpSpawnCore'
 // The two records the launch reads and writes, dead once `hProcess`, `hThread`, the pid and the failed step
 // are out of them.
 function emitSubpFreeLaunchRecords(module StdModule, block IrBlock, startupPtr ValueId, procInfoPtr ValueId, ids ValueMinter)
-	emitSlabFree(module, block: block, ptr: startupPtr, ids: ids)
-	emitSlabFree(module, block: block, ptr: procInfoPtr, ids: ids)
+	emitSlabFree(module, block: block, ptr: startupPtr, kind: SlabBufferKind.subprocessState, ids: ids)
+	emitSlabFree(module, block: block, ptr: procInfoPtr, kind: SlabBufferKind.subprocessState, ids: ids)
 end 'emitSubpFreeLaunchRecords'
 
 // The three regions the stdio setup reads, dead once the launch has been attempted — the child-handle
 // scratch only after its owned ends are closed.
 function emitSubpFreeSetupScratch(module StdModule, block IrBlock, saPtr ValueId, childScratch ValueId, nulName ValueId, ids ValueMinter)
-	emitSlabFree(module, block: block, ptr: saPtr, ids: ids)
-	emitSlabFree(module, block: block, ptr: childScratch, ids: ids)
-	emitSlabFree(module, block: block, ptr: nulName, ids: ids)
+	emitSlabFree(module, block: block, ptr: saPtr, kind: SlabBufferKind.subprocessState, ids: ids)
+	emitSlabFree(module, block: block, ptr: childScratch, kind: SlabBufferKind.subprocessState, ids: ids)
+	emitSlabFree(module, block: block, ptr: nulName, kind: SlabBufferKind.hostText, ids: ids)
 end 'emitSubpFreeSetupScratch'
 
 // `"NUL"` in a fresh slab buffer, as a NUL-terminated UTF-8 path. Three stores and a
@@ -9940,7 +9915,7 @@ function emitSubpNonPipeChildHandle(module StdModule, func IrFunction, ids Value
 		emitStoreField(module, block: keepPath, record: childScratch, offset: SubpChildFailedPathOff, value: hostPath)
 		module.setTerminator(keepPath, op: StdOp.branch(whenFailed.id))
 
-		emitSlabFree(module, block: dropPath, ptr: hostPath, ids: ids)
+		emitSlabFree(module, block: dropPath, ptr: hostPath, kind: SlabBufferKind.hostText, ids: ids)
 		module.setTerminator(dropPath, op: StdOp.branch(openOk.id))
 	end 'wideOpen'
 
@@ -10014,8 +9989,7 @@ function emitSubpStdinSetup(module StdModule, func IrFunction, ids ValueMinter, 
 	buildPipeName(module, func: func, ids: ids, startBlock: pipeArm, bufPtr: name, cont: pipeMake)
 
 	let scratchSizeConst = emitConst(module, block: pipeMake, value: SubpPipeScratchBytes as FullRangeInt, ids: ids)
-	let scratch = ids.mint()
-	module.appendOp(pipeMake, op: StdOp.call(scratch, callee: SlabAllocName, args: argsOf(scratchSizeConst)))
+	let scratch = emitSlabAlloc(module, block: pipeMake, bytes: scratchSizeConst, kind: SlabBufferKind.subprocessState, ids: ids)
 	let eight = emitConst(module, block: pipeMake, value: SubpPipeScratchSecondWord, ids: ids)
 	let scratchB = emitBin(module, block: pipeMake, a: scratch, b: eight, opcode: StdBinOpcode.add, ids: ids)
 
@@ -10073,8 +10047,7 @@ function emitSubpOutputSetup(module StdModule, func IrFunction, ids ValueMinter,
 	buildPipeName(module, func: func, ids: ids, startBlock: pipeArm, bufPtr: name, cont: pipeMake)
 
 	let scratchSizeConst = emitConst(module, block: pipeMake, value: SubpPipeScratchBytes as FullRangeInt, ids: ids)
-	let scratch = ids.mint()
-	module.appendOp(pipeMake, op: StdOp.call(scratch, callee: SlabAllocName, args: argsOf(scratchSizeConst)))
+	let scratch = emitSlabAlloc(module, block: pipeMake, bytes: scratchSizeConst, kind: SlabBufferKind.subprocessState, ids: ids)
 	pipeMake = emitSubpCreateReadPipe(module, func: func, ids: ids, cur: pipeMake, namePtr: name, saPtr: saPtr, scratch: scratch, whenFailed: whenFailed)
 	let parentRead = emitLoadField(module, block: pipeMake, record: scratch, offset: 0, ids: ids)
 	let slotP = emitSubpSlotAddr(module, block: pipeMake, ids: ids, table: table, slotIdx: slotIdx)
@@ -10125,8 +10098,7 @@ function buildSubpSpawn(module StdModule, commandShape SubprocessCommandShape)
 	let cmdLen = emitLoadField(module, block: entry, record: cmdStrPtr, offset: StringLengthOffset, ids: ids)
 	let nulBytes = emitConst(module, block: entry, value: TrailingNulBytes as FullRangeInt, ids: ids)
 	let cmBufSize = emitBin(module, block: entry, a: cmdLen, b: nulBytes, opcode: StdBinOpcode.add, ids: ids)
-	let cmBuf = ids.mint()
-	module.appendOp(entry, op: StdOp.call(cmBuf, callee: SlabAllocName, args: argsOf(cmBufSize)))
+	let cmBuf = emitSlabAlloc(module, block: entry, bytes: cmBufSize, kind: SlabBufferKind.subprocessState, ids: ids)
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 	module.setTerminator(entry, op: StdOp.branch(copyHdr.id))
 	entry.branchEdges.push(BranchEdge.create(copyHdr.id, argIds: argsOf(zero)))
@@ -10165,9 +10137,9 @@ function buildSubpSpawn(module StdModule, commandShape SubprocessCommandShape)
 	module.appendOp(afterCopy, op: StdOp.call(handle, callee: SubpSpawnCoreName, args: argsOf(req)))
 
 	// The core has read the request and the command whichever way it answered.
-	emitSlabFree(module, block: afterCopy, ptr: req, ids: ids)
+	emitSlabFree(module, block: afterCopy, ptr: req, kind: SlabBufferKind.subprocessState, ids: ids)
 	emitSubpReleaseCommandFromLine(module, block: afterCopy, ids: ids, shape: commandShape, command: command, encoding: HostTextEncoding.utf8)
-	emitSlabFree(module, block: afterCopy, ptr: cmBuf, ids: ids)
+	emitSlabFree(module, block: afterCopy, ptr: cmBuf, kind: SlabBufferKind.subprocessState, ids: ids)
 	module.setTerminator(afterCopy, op: StdOp.ret(handle))
 
 	module.functions.push(func)
@@ -10233,7 +10205,7 @@ function emitSubpWideOperandStep(module StdModule, func IrFunction, cur IrBlock,
 
 	match step 'act'
 		widen then emitStoreField(module, block: present, record: req, offset: wide, value: emitUtf8ToWide(module, block: present, source: operand, extent: extent, ids: ids))
-		release then emitSlabFree(module, block: present, ptr: operand, ids: ids)
+		release then emitSlabFree(module, block: present, ptr: operand, kind: SlabBufferKind.hostText, ids: ids)
 	end 'act'
 
 	module.setTerminator(present, op: StdOp.branch(joined.id))
@@ -10246,8 +10218,7 @@ end 'emitSubpWideOperandStep'
 // slab's zeroing contract supplies for free. Callers overwrite exactly the fields they mean to change.
 export function emitSubpNewRequest(module StdModule, block IrBlock, ids ValueMinter, cmdline ValueId) returns ValueId
 	let sizeConst = emitConst(module, block: block, value: SubpReqBytes, ids: ids)
-	let req = ids.mint()
-	module.appendOp(block, op: StdOp.call(req, callee: SlabAllocName, args: argsOf(sizeConst)))
+	let req = emitSlabAlloc(module, block: block, bytes: sizeConst, kind: SlabBufferKind.subprocessState, ids: ids)
 	emitStoreField(module, block: block, record: req, offset: SubpReqCmdline, value: cmdline)
 	return req
 end 'emitSubpNewRequest'
@@ -10402,8 +10373,7 @@ function emitSubpTopUpStream(module StdModule, func IrFunction, ids ValueMinter,
 	// doGrow: newCap = needed*2 ; copy the buffered bytes into the fresh buffer (PRESERVE) ; update ptr + cap.
 	let twoConst = emitConst(module, block: doGrow, value: 2, ids: ids)
 	let newCap = emitBin(module, block: doGrow, a: needed, b: twoConst, opcode: StdBinOpcode.mul, ids: ids)
-	let newBuf = ids.mint()
-	module.appendOp(doGrow, op: StdOp.call(newBuf, callee: SlabAllocName, args: argsOf(newCap)))
+	let newBuf = emitSlabAlloc(module, block: doGrow, bytes: newCap, kind: SlabBufferKind.subprocessSlotBuffer, ids: ids)
 	let oldBuf = emitLoadField(module, block: doGrow, record: streamPtr, offset: SubpStreamBufPtr, ids: ids)
 	let grownCopy = ids.mint()
 	module.appendOp(doGrow, op: StdOp.call(grownCopy, callee: StrCopyName, args: threeArgs(newBuf, second: oldBuf, third: bufLenC)))
@@ -10782,8 +10752,7 @@ function buildSubpWriteLine(module StdModule)
 
 	let twoConst = emitConst(module, block: doGrow, value: 2, ids: ids)
 	let newCap = emitBin(module, block: doGrow, a: needed, b: twoConst, opcode: StdBinOpcode.mul, ids: ids)
-	let newBuf = ids.mint()
-	module.appendOp(doGrow, op: StdOp.call(newBuf, callee: SlabAllocName, args: argsOf(newCap)))
+	let newBuf = emitSlabAlloc(module, block: doGrow, bytes: newCap, kind: SlabBufferKind.subprocessSlotBuffer, ids: ids)
 	emitStoreField(module, block: doGrow, record: slot, offset: SubpSlotWriteBuf, value: newBuf)
 	emitStoreField(module, block: doGrow, record: slot, offset: SubpSlotWriteCap, value: newCap)
 	module.setTerminator(doGrow, op: StdOp.branch(doWrite.id))

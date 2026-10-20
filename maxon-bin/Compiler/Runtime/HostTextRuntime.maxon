@@ -112,7 +112,7 @@ end 'Utf8Extent'
 
 function emitTextAllocInto(module StdModule, block IrBlock, result ValueId, byteCount ValueId, allocation TextAllocation, ids ValueMinter)
 	match allocation 'allocation'
-		slab then module.appendOp(block, op: StdOp.call(result, callee: SlabAllocName, args: argsOf(byteCount)))
+		slab then emitSlabAllocInto(module, block: block, result: result, bytes: byteCount, kind: SlabBufferKind.hostText)
 		raw then emitRawAllocInto(module, block: block, result: result, byteCount: byteCount, ids: ids)
 	end 'allocation'
 end 'emitTextAllocInto'
@@ -149,7 +149,7 @@ end 'emitHostCString'
 
 export function emitReleaseHostCopy(module StdModule, block IrBlock, copy ValueId, encoding HostTextEncoding, ids ValueMinter)
 	if encoding == HostTextEncoding.utf16 'owned'
-		emitSlabFree(module, block: block, ptr: copy, ids: ids)
+		emitSlabFree(module, block: block, ptr: copy, kind: SlabBufferKind.hostText, ids: ids)
 	end 'owned'
 end 'emitReleaseHostCopy'
 
@@ -284,11 +284,10 @@ export function emitHostEnvReadAscii(module StdModule, block IrBlock, name Value
 	end 'narrow'
 
 	let wideBytes = emitByteCountOfUnits(module, block: block, units: capacity, encoding: module.hostText, ids: ids)
-	let wide = ids.mint()
-	module.appendOp(block, op: StdOp.call(wide, callee: SlabAllocName, args: argsOf(wideBytes)))
+	let wide = emitSlabAlloc(module, block: block, bytes: wideBytes, kind: SlabBufferKind.environmentValue, ids: ids)
 	module.appendOp(block, op: StdOp.osEnvRead(written, namePtrId: name, bufPtrId: wide, bufLenId: capacity))
 	module.appendOp(block, op: StdOp.call(ids.mint(), callee: NarrowAsciiName, args: fourArgs(wide, second: written, third: valueBuf, fourth: capacity)))
-	emitSlabFree(module, block: block, ptr: wide, ids: ids)
+	emitSlabFree(module, block: block, ptr: wide, kind: SlabBufferKind.environmentValue, ids: ids)
 
 	return written
 end 'emitHostEnvReadAscii'

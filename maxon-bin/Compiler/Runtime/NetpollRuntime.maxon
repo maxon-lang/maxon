@@ -1094,8 +1094,7 @@ function buildNetpollPdAdopt(module StdModule)
 
 	let slotBytes = emitConst(module, block: growDo, value: PdTableSlotBytes, ids: ids)
 	let newBytes = emitBin(module, block: growDo, a: candidate, b: slotBytes, opcode: StdBinOpcode.mul, ids: ids)
-	let newBase = ids.mint()
-	module.appendOp(growDo, op: StdOp.call(newBase, callee: SlabAllocName, args: argsOf(newBytes)))
+	let newBase = emitSlabAlloc(module, block: growDo, bytes: newBytes, kind: SlabBufferKind.netpollTable, ids: ids)
 	let oldBase = emitLoadGlobalWord(module, block: growDo, label: NetpollPdTableLabel, ids: ids)
 	let liveBytes = emitBin(module, block: growDo, a: capBefore, b: slotBytes, opcode: StdBinOpcode.mul, ids: ids)
 	var copied = emitForwardCopy(module, func: func, cur: growDo, dest: newBase, src: oldBase, byteCount: liveBytes, ids: ids)
@@ -1106,7 +1105,7 @@ function buildNetpollPdAdopt(module StdModule)
 	// The FIRST grow has no region to hand back: the table is born here rather than in `__gt_init`, because a
 	// program that opens no socket must not pay for one.
 	emitBranchOnCompare(module, block: freeCheck, value: oldBase, pred: StdCmpPred.ne, against: 0, whenTrue: freeOld, whenFalse: haveSlot, ids: ids)
-	emitSlabFree(module, block: freeOld, ptr: oldBase, ids: ids)
+	emitSlabFree(module, block: freeOld, ptr: oldBase, kind: SlabBufferKind.netpollTable, ids: ids)
 	module.setTerminator(freeOld, op: StdOp.branch(haveSlot.id))
 
 	let slotAddr = emitNetpollPdSlotAddr(module, block: haveSlot, fd: fd, ids: ids)
@@ -1114,8 +1113,7 @@ function buildNetpollPdAdopt(module StdModule)
 	emitBranchOnCompare(module, block: haveSlot, value: existing, pred: StdCmpPred.eq, against: 0, whenTrue: carve, whenFalse: reset, ids: ids)
 	haveSlot.branchEdges.push(BranchEdge.create(reset.id, argIds: argsOf(existing)))
 
-	let carved = ids.mint()
-	module.appendOp(carve, op: StdOp.call(carved, callee: SlabAllocName, args: argsOf(emitConst(module, block: carve, value: PdBytes, ids: ids))))
+	let carved = emitSlabAlloc(module, block: carve, bytes: emitConst(module, block: carve, value: PdBytes, ids: ids), kind: SlabBufferKind.netpollDescriptor, ids: ids)
 	emitStoreField(module, block: carve, record: slotAddr, offset: 0, value: carved)
 	module.setTerminator(carve, op: StdOp.branch(reset.id))
 	carve.branchEdges.push(BranchEdge.create(reset.id, argIds: argsOf(carved)))
@@ -1204,7 +1202,7 @@ function emitNetpollPdClear(module StdModule, block IrBlock, pd ValueId, ids Val
 
 	// The record's next life starts here, so a thread that parked on its previous one stops owning these words
 	// — see `PdOffGen`. It is BUMPED and not zeroed because a snapshot can only tell one life from the next by
-	// a value that DIFFERS between them, which a constant never would. A carve reaches here on `__slab_alloc`'s
+	// a value that DIFFERS between them, which a constant never would. A carve reaches here on the slab's
 	// zeroed bytes, which is also what lets the readies above read `PdNil` from a record nothing has written.
 	let born = emitLoadField(module, block: block, record: pd, offset: PdOffGen, ids: ids)
 	emitStoreField(module, block: block, record: pd, offset: PdOffGen, value: emitBin(module, block: block, a: born, b: emitConst(module, block: block, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids))

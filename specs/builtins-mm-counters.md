@@ -87,17 +87,19 @@ can say whether a header-free BUFFER leaked:
 - **TRACKED.** An element buffer here is an ordinary `__mm_alloc` box with a header and a
   destructor, so this layer covers the header-carrying records (a struct, a String record, an
   array's outer handle) and the header-free buffers behind them alike.
-- **RAW.** Beneath the boxes sits `__slab_alloc`, whose direct callers are the scheduler's tables (its
-  machines, processors, lock and park stores), the service mailboxes, the
-  subprocess scratch buffers and the DebugStream ring. A green thread is not among them: its STACK comes
-  from `osAllocPages`, and its RECORD from the scheduler's own record arena, which is carved from
-  `osAllocPages` chunks — scaffolding like the stack, invisible to both layers. A mailbox's MESSAGE RING
-  is scaffolding of the same kind, and so is a green thread's staging buffer: whether a message is queued
-  at all depends on whether its receiver was parked when it arrived, so a ring cut, grown or shrunk in
-  these columns would make two identical runs report different counts. The ring comes from the slab's
-  uncounted door (`__slab_alloc_scaffold`, freed by `__slab_free_scaffold`) and the staging buffer from
-  the scheduler's arena; neither is credited to either layer. The slab's other callers are genuinely
-  header-free and no `__mm_alloc` counter can see them, so they are what the RAW columns report.
+- **RAW.** Beneath the boxes sits `__slab_alloc`, whose direct callers are the scheduler's processors,
+  the service mailboxes' records, shared-value cells, environment-variable and host-text copies, and the
+  subprocess scratch buffers. A green thread is not among them: its STACK comes from `osAllocPages`, and
+  its RECORD from the scheduler's own record arena, which is carved from `osAllocPages` chunks —
+  scaffolding like the stack, invisible to both layers. A runtime buffer whose allocation count follows
+  the schedule or the environment is scaffolding of the same kind: a mailbox's MESSAGE RING, the timer
+  store, an `awaitAny`'s scratch, the subprocess table and its per-slot buffers, and the poller's table
+  and descriptors. Whether a message is queued at all, for one, depends on whether its receiver was
+  parked when it arrived, so a ring cut, grown or shrunk in these columns would make two identical runs
+  report different counts. These come from the slab's uncounted door (`__slab_alloc_scaffold`, freed by
+  `__slab_free_scaffold`), and a green thread's staging buffer from the scheduler's arena; none is
+  credited to either layer. The slab's other callers are genuinely header-free and no `__mm_alloc`
+  counter can see them, so they are what the RAW columns report.
 
 ⇒ **A case that reads ONE layer is reading a runtime-internal fact; a case that reads the SUM is
 reading the contract.** `bytes-scale-with-the-request` below is written on the sum for exactly this
