@@ -255,7 +255,9 @@ with nothing said anywhere. The two are not two spellings of one fact — one is
 the fact made invisible. So async, the clock, argv, file and directory IO and console stdin carry NO
 marker on wasm: every one of those skips is a case a reader can count. A marker is for a case that would
 otherwise go RED — an ISA-specific codegen reading, a POSIX/Windows shell spelling, a diagnostic
-displaced by E3104 — and it states its reason.
+displaced by E3104 — and it states its reason. E3104 waits for the Maxon-tier checks, so only a
+diagnostic decided after them (`InsertRangeChecks`' E3005, the backend's, a missing intrinsic's E3004)
+is displaced by it.
 
 ⚠ **SUBPROCESS IS THE EXCEPTION, AND NEEDS THE MARKER.** A target that can never host a child process
 answers **E3074** ahead of E3104 (`requireTargetSupportsCallee`), and the harness counts only E3104 as a

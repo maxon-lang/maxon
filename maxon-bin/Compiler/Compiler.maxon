@@ -867,6 +867,7 @@ function lowerTheProgram(project Project, passes PassKindArray) returns LoweredP
 	// (`queryParseOps`, "only cache a clean parse"), and every later check re-runs over the re-folded
 	// module below.
 	project.diagnostics.clear()
+	project.targetRefusalDiagnostics.clear()
 
 	// Fresh per compile, because a warm project lowers again. Sound only while nothing in the front end,
 	// whose results outlive a compile, writes either.
@@ -1907,18 +1908,12 @@ end 'codeResultOf'
 // ⚠ **THE GATE IS NOT REDUNDANT, THOUGH NOTHING CAN TRIP IT FROM HERE TODAY.** Both callers reach this
 // call only once every stage before it has passed its error gate, so the sink is empty — but that is a
 // property of the CALLERS, and a hygiene diagnostic stacked on top of a real one is precisely the defect
-// this deferral exists to prevent. The rule is written where the rule is, not left resting on the control
-// flow above it.
+// this deferral exists to prevent. The rule is written in `reportDeferredUnlessErrors`, not left resting on
+// the control flow above it.
 function reportBindingHygieneDiagnostics(project Project) throws CompileError
-	if project.bindingHygieneDiagnostics.count() == 0 or projectHasErrors(project) 'nothingToSayOrSomethingRealerSaidIt'
-		return
-	end 'nothingToSayOrSomethingRealerSaidIt'
-
-	for hygieneIndex in 0 upto project.bindingHygieneDiagnostics.count() 'each'
-		reportDiagnostic(project, diagnostic: try project.bindingHygieneDiagnostics.get(hygieneIndex) otherwise panic("reportBindingHygieneDiagnostics: hygieneIndex {hygieneIndex} is below project.bindingHygieneDiagnostics.count()"))
-	end 'each'
-
-	try refuseCompile(project)
+	if reportDeferredUnlessErrors(project, deferred: project.bindingHygieneDiagnostics) 'reported'
+		try refuseCompile(project)
+	end 'reported'
 end 'reportBindingHygieneDiagnostics'
 
 // --- Source loading ---

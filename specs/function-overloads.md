@@ -1939,8 +1939,7 @@ end 'main'
 ```
 
 <!-- test: error.a-promise-handed-to-the-overload-that-takes-it-cannot-be-awaited-again -->
-<!-- unsupported-targets: wasm32-wasi -->
-A call selecting the overload that hands the promise back moves it, so awaiting the original binding again is refused. On wasm32-wasi the spawned `work`'s `Scheduler.yield` answers E3104 beside the E3102 this case pins.
+A call selecting the overload that hands the promise back moves it, so awaiting the original binding again is refused.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntPromise = Promise with Integer

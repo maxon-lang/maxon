@@ -1789,9 +1789,6 @@ error E3102: <fragment>:21:10: use of moved value 'p': it was moved in an earlie
 ```
 
 <!-- test: async-promise-drop.error.a-slot-read-awaited-inside-a-loop-it-was-read-outside -->
-<!-- unsupported-targets: wasm32-wasi -->
-On wasm32-wasi this case's expected diagnostic is displaced by E3104 ('File.exists' lowers to the runtime entry '__mf_exists', which has no wasm32-wasi implementation), so the lane is excluded.
-
 **CONTROL for the refusal above.** The await twin of the same mistake is caught by a DIFFERENT road and must
 go on being caught by it: linearity is decided on the IR, where the await is reachable from itself across the
 back edge without re-passing an `async` that would re-arm the thread. Its sentence names the rule the author
@@ -2741,9 +2738,7 @@ error E3141: <fragment>:31:22: a promise cannot be borrowed through 'watch': it 
 ```
 
 <!-- test: async-promise-drop.error.an-undeclared-async-callee-is-undefined-not-a-borrowed-promise -->
-<!-- unsupported-targets: wasm32-wasi -->
-A callee nothing declares has no parameters to take a promise, so the call is refused for what it is. The
-coroutine must yield to be spawned at all, and wasm32-wasi refuses the yield first (E3104).
+A callee nothing declares has no parameters to take a promise, so the call is refused for what it is.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

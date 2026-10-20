@@ -4891,14 +4891,16 @@ end 'reportSpawnOfNonYielding'
 // ⭐⭐ **THE SPAWN'S TARGET REFUSAL, AND IT IS A BACKSTOP RATHER THAN A GATE — WHICH IS WHY IT SPEAKS ONLY
 // INTO A COMPILE THAT WOULD OTHERWISE REACH THE BACKEND.** Its whole job is to turn a backend panic into a
 // diagnostic; a program already carrying a diagnostic never reaches a backend, so there is no panic left to
-// pre-empt and a second line would only make one rejection read as two.
+// pre-empt and a second line would only make one rejection read as two. A refusal parked on
+// `project.targetRefusalDiagnostics` counts the same way: it is reported unless something else is, and
+// either way the backend is not reached.
 //
 // ⚠ MEASURED, both directions: without the guard, `await-any.md`'s and `promise-peek.md`'s wasm refusal
 // cases — each of which pins the ONE E3104 its own construct earns — grew a second line about the spawn
 // beneath it; with it, `async compute()` on `--target=x64-linux` answers E3104 rather than dying
 // at `StdToX64Conversion.lowerTlsAlloc`.
 function requireTargetHostsSpawn(project Project, func IrFunction, opIndex ElementIndex)
-	if projectHasErrors(project) 'alreadyRefused'
+	if projectHasErrors(project) or project.targetRefusalDiagnostics.count() > 0 'alreadyRefused'
 		return
 	end 'alreadyRefused'
 
@@ -5891,7 +5893,7 @@ function requireTargetSupportsCallee(project Project, func IrFunction, opIndex E
 		// program with several has to be told which one each report is about.
 		if isSubprocessRuntimeCallee(entry) and not targetCanHostSubprocess(project.target) 'noProcessSpawnPrimitive'
 			let callRange = project.opRanges.get(opIndex)
-			reportPositioned(project, code: ErrorCode.semanticSubprocessUnsupportedTarget, message: "Subprocess is not supported on {targetToString(project.target)} (no process-spawn primitive); guard the call with #if not os(Wasi).", line: callRange.line, column: callRange.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
+			deferTargetRefusal(project, code: ErrorCode.semanticSubprocessUnsupportedTarget, message: "Subprocess is not supported on {targetToString(project.target)} (no process-spawn primitive); guard the call with #if not os(Wasi).", line: callRange.line, column: callRange.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
 			return
 		end 'noProcessSpawnPrimitive'
 
@@ -5946,7 +5948,7 @@ end 'requireTargetSupportsServiceEntry'
 // same crossing — only the noun differs.
 function reportRawIntrinsicUnsupported(project Project, func IrFunction, opIndex ElementIndex, subject String, intrinsic RawIntrinsic)
 	let callRange = project.opRanges.get(opIndex)
-	reportPositioned(project, code: ErrorCode.targetUnsupportedConstruct, message: "{subject} reaches '{String.from(rawIntrinsicCalleeName(intrinsic))}', a raw machine operation the {targetToString(project.target)} lane does not provide", line: callRange.line, column: callRange.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
+	deferTargetRefusal(project, code: ErrorCode.targetUnsupportedConstruct, message: "{subject} reaches '{String.from(rawIntrinsicCalleeName(intrinsic))}', a raw machine operation the {targetToString(project.target)} lane does not provide", line: callRange.line, column: callRange.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
 end 'reportRawIntrinsicUnsupported'
 
 // The one wire format of E3104 for a callee, so the two subjects cannot drift into two spellings of one
@@ -5954,8 +5956,12 @@ end 'reportRawIntrinsicUnsupported'
 // heap `SourceRange` and this is the cold path — the gate itself runs over every call op of every function.
 function reportTargetUnsupportedCallee(project Project, func IrFunction, opIndex ElementIndex, subject String, entry ByteArray)
 	let callRange = project.opRanges.get(opIndex)
-	reportPositioned(project, code: ErrorCode.targetUnsupportedConstruct, message: "{subject} lowers to the runtime entry '{String.from(entry)}', which has no {targetToString(project.target)} implementation", line: callRange.line, column: callRange.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
+	deferTargetRefusal(project, code: ErrorCode.targetUnsupportedConstruct, message: "{subject} lowers to the runtime entry '{String.from(entry)}', which has no {targetToString(project.target)} implementation", line: callRange.line, column: callRange.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
 end 'reportTargetUnsupportedCallee'
+
+module function reportTargetRefusals(project Project)
+	_ = reportDeferredUnlessErrors(project, deferred: project.targetRefusalDiagnostics)
+end 'reportTargetRefusals'
 
 // What this pass has to say about taking a named function's ADDRESS: the target gate every call op gets, and
 // the uniform-ABI rule below that only a function VALUE is subject to.

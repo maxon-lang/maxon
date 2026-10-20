@@ -770,9 +770,6 @@ dirIsDirectory=1
 
 <!-- test: managed-file.open-read-without-try -->
 <!-- tier: stdlib -->
-<!-- unsupported-targets: wasm32-wasi -->
-On wasm32-wasi this case's expected diagnostic is displaced by E3104 (this construct lowers to the runtime entry '__mf_open_read', which has no wasm32-wasi implementation), so the lane is excluded.
-
 
 ⭐ **E3057 MUST NAME THE CONSTRUCT THE AUTHOR WROTE (D12).** `openRead` throws, so a bare call branches on
 nothing and its error flag is discarded — the same defect `managed-directory.next-without-try` pins for the
@@ -793,9 +790,6 @@ error E3057: specs/managed-file/managed-file.open-read-without-try.maxon:3:6: th
 
 <!-- test: managed-file.open-write-executable-without-try -->
 <!-- tier: stdlib -->
-<!-- unsupported-targets: wasm32-wasi -->
-On wasm32-wasi this case's expected diagnostic is displaced by E3104 (this construct lowers to the runtime entry '__mf_open_write_exec', which has no wasm32-wasi implementation), so the lane is excluded.
-
 
 ⭐⭐ **THE CALLEE NAMES THE METHOD THAT WAS WRITTEN.** A POSIX lane makes the 0755 bit OBSERVABLE — an
 executable written without it exists, holds the right bytes and cannot be run — so `openWriteExecutable` has

@@ -804,9 +804,6 @@ error E3142: specs/async-await/async-await.error.double-await.maxon:10:17: this 
 ```
 
 <!-- test: async-await.error.double-await-in-loop -->
-<!-- unsupported-targets: wasm32-wasi -->
-On wasm32-wasi this case's expected diagnostic is displaced by E3104 ('File.exists' lowers to the runtime entry '__mf_exists', which has no wasm32-wasi implementation), so the lane is excluded.
-
 The linear-await check is FLOW-SENSITIVE, and this is why it has to be. There is exactly ONE
 `await` here lexically, so a "have I seen this promise awaited before?" check finds nothing — but
 it sits in a loop over a promise spawned OUTSIDE the loop, so it awaits the same green thread on
@@ -2240,9 +2237,7 @@ hello padded out long enough to heap allocate 1!
 ```
 
 <!-- test: async-await.error.a-let-handed-to-async-cannot-be-written-by-the-coroutine -->
-<!-- unsupported-targets: wasm32-wasi -->
 A `let` handed to `async` is shared read-only, so a target that writes its parameter may not be handed it.
-wasm32-wasi has no coroutines, so it answers `E3104` for the `async` before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2628,9 +2623,6 @@ end 'main'
 ```
 
 <!-- test: async-await.error.a-match-payload-of-a-let-union-cannot-be-written-by-a-coroutine -->
-<!-- unsupported-targets: wasm32-wasi -->
-On wasm32-wasi this case's expected diagnostic is displaced by E3104 ('Scheduler.yield' lowers to the runtime entry '__gt_resched', which has no wasm32-wasi implementation), so the lane is excluded.
-
 `b` is bound out of `w`, which is a `let`, so `b` is read-only and a coroutine that writes its parameter may not
 be handed it.
 ```maxon
@@ -2671,9 +2663,6 @@ error E3159: <fragment>:27:36: cannot pass 'b', which is read-only (a `match` bi
 ```
 
 <!-- test: async-await.error.an-element-the-array-still-holds-cannot-be-written-by-a-coroutine -->
-<!-- unsupported-targets: wasm32-wasi -->
-On wasm32-wasi this case's expected diagnostic is displaced by E3104 ('Scheduler.yield' lowers to the runtime entry '__gt_resched', which has no wasm32-wasi implementation), so the lane is excluded.
-
 `a` is a `let` holding an element `items` still holds, so `a` is read-only and a coroutine that writes its
 parameter may not be handed it.
 ```maxon
@@ -2839,9 +2828,6 @@ end 'main'
 ```
 
 <!-- test: async-await.error.an-immutable-global-returned-by-a-call-cannot-be-written-by-a-coroutine -->
-<!-- unsupported-targets: wasm32-wasi -->
-On wasm32-wasi this case's expected diagnostic is displaced by E3104 ('Scheduler.yield' lowers to the runtime entry '__gt_resched', which has no wasm32-wasi implementation), so the lane is excluded.
-
 `Box.get()` hands back the record the module-level `let G` holds, so a coroutine that writes its parameter may
 not be handed it, exactly as the direct call `poke(Box.get())` may not.
 ```maxon
@@ -2878,10 +2864,8 @@ error E3159: <fragment>:25:22: cannot pass a value read out of a module-level `l
 ```
 
 <!-- test: async-await.error.a-let-naming-an-immutable-global-is-handed-to-neither-a-reassigning-function-nor-a-coroutine -->
-<!-- unsupported-targets: wasm32-wasi -->
 `b` is a `let` naming the record the module-level `let G` holds, so it is read-only: neither `bump`,
 which reassigns its parameter, nor a coroutine that writes its parameter may be handed it.
-wasm32-wasi has no coroutines, so it answers `E3104` for the `async` before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2923,10 +2907,8 @@ error E3159: <fragment>:31:22: cannot pass 'b', which is read-only (a module-lev
 ```
 
 <!-- test: async-await.error.an-immutable-global-in-a-let-cannot-be-written-by-a-coroutine -->
-<!-- unsupported-targets: wasm32-wasi -->
 `b` is a `let` naming the record the module-level `let G` holds, so a coroutine that writes its parameter may
 not be handed it.
-wasm32-wasi has no coroutines, so it answers `E3104` for the `async` before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

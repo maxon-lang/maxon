@@ -920,16 +920,9 @@ error E3005: <fragment>:3:13: '__Builtins.runProcess' requires a String, but its
 
 <!-- test: async-subprocess.error.bare-call-requires-try -->
 <!-- tier: stdlib -->
-<!-- unsupported-targets: wasm32-wasi -->
 `__Builtins.runProcess` is a throwing builtin, so a bare call that drops its error flag is refused
 (E3057) — the exact mirror of the throwing-array-accessor rule. A bare call would read only the exit code (R8)
 and silently drop the spawn-failure flag (R10), so the compiler forces a `try`.
-
-⚠ **THE RULE IS TARGET-NEUTRAL AND THE CASE IS NOT, WHICH IS A CONSEQUENCE OF THE SUBSTRATE GATE.**
-`__gt_process_run` needs `HostFacility.subprocess` (`TargetFacilities.calleeHostFacility`), so on a lane that
-does not provide one this program is refused FIRST, with E3104 naming that entry — a correct refusal about a
-different property, and one no single pinned text can express alongside this one. The twin below pins that
-half.
 ```maxon
 function main() returns ExitCode
 	let code = __Builtins.runProcess("cmd /c exit 1")

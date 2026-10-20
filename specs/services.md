@@ -105,9 +105,9 @@ naming the case. A marker would restate that and take the case out of the run in
 `specs/async-scheduler.md`'s Targets section for the one statement of it.
 
 ⛔ **THE REFUSALS THAT DO EXCLUDE wasm32-wasi ARE EXCLUDED FOR THEIR DIAGNOSTIC, NOT FOR THEIR
-RULE.** Each is target-neutral and would be reached on every lane, but on wasm the same program earns
-E3104 for `__svc_spawn` / `__mbox_send` FIRST, so the stderr they pin is not what the compiler emits
-there. They expire when wasm grows a service substrate, not when the
+RULE.** Each is target-neutral and would be reached on every lane, but it is decided after the Maxon tier,
+and on wasm the same program is stopped there by E3104 for `__svc_spawn` / `__mbox_send`, so the stderr they
+pin is not what the compiler emits there. They expire when wasm grows a service substrate, not when the
 rule moves — which is why the reason is written here rather than left to the marker.
 
 ⚠ **Almost every REFUSAL in this file is unmarked, and that is the same rule read from the other end.** A
@@ -116,19 +116,14 @@ target-neutral by construction, so a marker on one would hide a green lane rathe
 `spawn-is-not-a-keyword` is unmarked for the neighbouring reason: it RUNS, but it starts no service and
 reaches no scheduler at all.
 
-⛔⛔ **THE DISCRIMINATOR IS *WHO REACHES THE VERDICT FIRST*, NOT *IS THE RULE TARGET-NEUTRAL*.** A parse
-refusal THROWS and the compile
-stops, so the fragment's only diagnostic is the one the case pins. A verdict from a whole-program
-`SemanticCheck` pass — **E3139**'s cycle graph and **E3100**'s await linearity — does not: `checkCalls` has
-already recorded an **E3104** for every `spawn`, every send and every reply cell in the program, and the
-case's own program contains all three. On `--target=wasm32-wasi`,
-`error.two-services-that-await-each-other-are-refused`, `error.double-await-of-a-reply`,
-`cycle-through-a-free-function-is-refused` and `cycle-same-type-self-edge-is-refused` print E3104
-lines ahead of the diagnostic they pin. They carry the marker — the
-rule they pin is target-neutral and the x64 lane pins it; what is not target-neutral is the SCAFFOLDING they
-need to reach it. A ranged-literal **E3005** the parser defers to `InsertRangeChecks` is later still: that
-pass runs after lowering, which the E3104s stop, so on wasm it never prints at all. ⇒ **a case whose
-refusal is not a parse throw needs the marker, however target-neutral the rule.**
+⛔⛔ **THE DISCRIMINATOR IS *WHICH STAGE REACHES THE VERDICT*, NOT *IS THE RULE TARGET-NEUTRAL*.** E3104 is
+reported only for a program the Maxon tier otherwise accepts: `checkCalls` files one for every `spawn`, every
+send and every reply cell, and they are printed only when no other diagnostic was reported. A verdict from the
+parse or from a whole-program `SemanticCheck` pass — **E3139**'s cycle graph, **E3100**'s await linearity,
+**E3138**'s soleness walk — therefore prints alone on `--target=wasm32-wasi`, exactly as it does on a native
+lane, and its case is unmarked. A ranged-literal **E3005** the parser defers to `InsertRangeChecks` is
+decided after lowering, which the E3104s stop, so on wasm it never prints at all. ⇒ **a case whose
+refusal is decided after the Maxon tier needs the marker, however target-neutral the rule.**
 
 ⚠ **THE TWO E3104 CASES ARE THE EXCEPTION, AND THEY ARE MARKED WITH THE TARGET THEY REFUSE.** A refusal
 whose whole subject is *"this target has no substrate for it"* is the one verdict in this file that is not
@@ -2501,10 +2496,8 @@ kept s1
 ```
 
 <!-- test: error.a-throws-clause-over-a-send-whose-error-is-handled-never-throws -->
-<!-- unsupported-targets: wasm32-wasi -->
 A send's error caught with `otherwise` leaves nothing for the declared clause to carry, so the clause is
 refused as one the body can never throw.
-wasm32-wasi has no services, so it answers `E3104` for the send and the `spawn` beside this refusal; the case is pinned on the native lanes.
 ```maxon
 type Store
 	var n as Integer
@@ -4402,10 +4395,8 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: error.a-borrowed-parameter-the-sender-writes-may-not-be-sent -->
-<!-- unsupported-targets: wasm32-wasi -->
 `forward` writes `p`, so the record is not read-only for the thread that sends it: the service would read it
 while `forward` changes it.
-wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
 type Payload
 	export var n as Integer
@@ -4445,10 +4436,8 @@ error E3138: <fragment>:25:26: argument `p` of the message `Store.keep` is a PAR
 ```
 
 <!-- test: error.a-borrowed-parameter-the-handler-writes-may-not-be-sent -->
-<!-- unsupported-targets: wasm32-wasi -->
 The handler writes its parameter, so a record both threads reach would be written by the service while the sender
 reads it.
-wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
 type Payload
 	export var n as Integer
@@ -4488,10 +4477,8 @@ error E3138: <fragment>:25:26: argument `p` of the message `Store.bump` is a PAR
 ```
 
 <!-- test: error.a-var-read-again-is-not-handed-to-a-function-that-sends-it-shared -->
-<!-- unsupported-targets: wasm32-wasi -->
 `forward` shares its parameter with the service, so the value a caller hands it must have no other writer. A `var`
 the caller reads again has one.
-wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
 type Payload
 	export var n as Integer
@@ -4624,10 +4611,8 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: error.a-module-let-record-the-handler-writes-may-not-be-sent -->
-<!-- unsupported-targets: wasm32-wasi -->
 The handler writes its parameter, so a record both threads reach would be written by the service while the sender
 and every other reader of the module-level `let` see it. A read-only value is shared only with a handler that reads.
-wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
 type Payload
 	export var n as Integer
@@ -4706,10 +4691,8 @@ typealias ConfigCell = SharedValue with Config
 ```
 
 <!-- test: error.a-shared-value-read-the-handler-writes-may-not-be-sent -->
-<!-- unsupported-targets: wasm32-wasi -->
 The handler writes its parameter, so the record the cell hands every reader would be written by the service while the
 cell's other readers see it.
-wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
 type Config
 	export var n as Integer
@@ -9060,10 +9043,8 @@ end 'main'
 ```
 
 <!-- test: error.a-read-of-the-field-between-the-swap-load-and-store-keeps-the-reply-aliased -->
-<!-- unsupported-targets: wasm32-wasi -->
 A read of `self.items` between the load and the store may hand the record to a second holder, so the swap no
 longer proves `old` is the only one and the reply is refused.
-wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Items = Array with Integer
@@ -9101,10 +9082,8 @@ note: <fragment>:25:10: the `spawn` that makes `Store` a service
 ```
 
 <!-- test: error.a-field-another-store-fills-with-a-borrowed-record-is-not-swapped-out -->
-<!-- unsupported-targets: wasm32-wasi -->
 `replace` stores a record it was handed into `items`, so the record `old` holds may be one its sender still names.
 The swap in `take` does not prove `old` is the only holder, and the reply is refused.
-wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Items = Array with Integer
@@ -9222,9 +9201,6 @@ shelf of 4
 ```
 
 <!-- test: error.two-services-that-await-each-other-are-refused -->
-<!-- unsupported-targets: wasm32-wasi -->
-On wasm32-wasi this case's expected diagnostic is displaced by E3104 (an awaited message send lowers to the runtime entry '__gt_cell_alloc', which has no wasm32-wasi implementation), so the lane is excluded.
-
 Mutual reentrancy is made unrepresentable rather than diagnosed at run time.
 ```maxon
 type A
@@ -9741,9 +9717,6 @@ error E3140: <fragment>:19:10: the message `Store.wipe` declares a reply that th
 ```
 
 <!-- test: cycle-through-a-free-function-is-refused -->
-<!-- unsupported-targets: wasm32-wasi -->
-On wasm32-wasi this case's expected diagnostic is displaced by E3104 (an awaited message send lowers to the runtime entry '__gt_cell_alloc', which has no wasm32-wasi implementation), so the lane is excluded.
-
 An edge is transitive through ordinary functions: `A.ping` calls `relay`, which awaits a `B.handle`, so the
 edge `A → B` exists even though `A`'s own body names no `B` message.
 
@@ -9797,9 +9770,6 @@ error E3139: <fragment>:3:13: service call cycle — these messages can deadlock
 ```
 
 <!-- test: cycle-same-type-self-edge-is-refused -->
-<!-- unsupported-targets: wasm32-wasi -->
-On wasm32-wasi this case's expected diagnostic is displaced by E3104 (an awaited message send lowers to the runtime entry '__gt_cell_alloc', which has no wasm32-wasi implementation), so the lane is excluded.
-
 ⚠ **A SELF-EDGE IS A CYCLE, AND THIS IS THE ONE USERS WILL HIT.** Two instances of the same service could not
 actually deadlock, but edges are by TYPE — which is what makes them statically knowable at all — so the
 analysis cannot tell the instances apart and must be conservative. The message says the workaround.
@@ -9834,9 +9804,6 @@ error E3139: <fragment>:10:14: service call cycle — these messages can deadloc
 ```
 
 <!-- test: cycle-behind-a-second-await-is-still-refused -->
-<!-- unsupported-targets: wasm32-wasi -->
-On wasm32-wasi this case's expected diagnostic is displaced by E3104 (an awaited message send lowers to the runtime entry '__gt_cell_alloc', which has no wasm32-wasi implementation), so the lane is excluded.
-
 ⛔⛔ **ONE MESSAGE OWES AN EDGE PER SERVICE IT AWAITS, NOT ONE EDGE.** `A.ping` awaits `B` and then `C`; the
 `A → B` half is what closes the ring `A.ping → B.pong → A.ack`, and the `A → C` half is innocent. This case
 is `error.two-services-that-await-each-other-are-refused` with **one extra, unrelated `await` appended**; a
@@ -11247,19 +11214,8 @@ error E2004: <fragment>:17:17: Cannot operate on struct and int
 ```
 
 <!-- test: error.a-reply-in-an-integer-parameter -->
-<!-- unsupported-targets: wasm32-wasi -->
 An `Integer` parameter does not take a reply. The cure is to `await` it and pass the RESULT — which is also
 the only spelling that keeps the cell's one owner intact. A reply renders as a `Promise` instance over its result.
-
-⚠ **THIS IS THE ONE REPLY-TYPING REFUSAL THAT CARRIES THE MARKER, AND THE REASON IS *WHO REACHES THE
-VERDICT FIRST* — the discriminator this file's Targets section states.** Its four siblings (return,
-arithmetic, `clone`, storage) are PARSE throws: the compile stops, so the fragment's only diagnostic is the
-one they pin, and they are unmarked and green on every lane. An ARGUMENT type mismatch is not — it is a
-whole-program `SemanticCheck` verdict (`argTypeMismatchSentence`), and by the time it is reached
-`checkCalls` has already recorded an **E3104** for this program's `spawn`, its `__gt_cell_alloc` and its
-`__mbox_send`. On `--target=wasm32-wasi` the E3005 is produced, correctly and last, behind three
-E3104 lines. The rule is target-neutral and the x64 lane pins it; what is not target-neutral is the
-SCAFFOLDING needed to reach it.
 ```maxon
 type Calc
 	var count as Integer
@@ -13520,10 +13476,8 @@ end 'main'
 ```
 
 <!-- test: error.a-message-argument-that-does-not-implement-the-interface -->
-<!-- unsupported-targets: wasm32-wasi -->
 A message argument at an interface-typed parameter widens as a call argument does, so a value whose type does
-not conform is refused. On wasm32-wasi the send's E3104 is reported first, so the case is pinned on the
-native lanes.
+not conform is refused.
 ```maxon
 typealias Tally = int(0 to u64.max)
 
@@ -15547,9 +15501,6 @@ error E3138: <fragment>:41:27: argument `v` of the message `Store.show` is a `vi
 ```
 
 <!-- test: services.error.a-var-sent-after-it-has-been-viewed-is-refused -->
-<!-- unsupported-targets: wasm32-wasi -->
-On wasm32-wasi this case's expected diagnostic is displaced by E3104 ('spawn' lowers to the runtime entry '__svc_spawn', which has no wasm32-wasi implementation), so the lane is excluded.
-
 Once `w` has viewed `b`, its reference is a second owner for the rest of the function, so `b` cannot be moved to the service, even though `w` is not read again.
 
 ```maxon
@@ -15592,9 +15543,6 @@ error E3138: <fragment>:31:27: argument `b` of the message `Store.keep` has been
 ```
 
 <!-- test: services.error.a-var-sent-after-it-has-been-viewed-and-read-afterwards-is-refused -->
-<!-- unsupported-targets: wasm32-wasi -->
-On wasm32-wasi this case's expected diagnostic is displaced by E3104 ('spawn' lowers to the runtime entry '__svc_spawn', which has no wasm32-wasi implementation), so the lane is excluded.
-
 `w` has viewed `b` and is read after the send, so it would read a record the service now owns and writes.
 
 ```maxon
@@ -15682,9 +15630,6 @@ hello ada 3
 ```
 
 <!-- test: services.error.a-var-sent-after-a-field-of-it-has-been-viewed-is-refused -->
-<!-- unsupported-targets: wasm32-wasi -->
-On wasm32-wasi this case's expected diagnostic is displaced by E3104 ('spawn' lowers to the runtime entry '__svc_spawn', which has no wasm32-wasi implementation), so the lane is excluded.
-
 `w` views a field of `b`, so its reference co-owns part of `b`'s graph for the rest of the function, and `b` cannot be moved to the service.
 
 ```maxon
@@ -15734,9 +15679,6 @@ error E3138: <fragment>:38:27: argument `b` of the message `Store.keep` has been
 ```
 
 <!-- test: services.error.a-var-a-ternary-view-may-name-sent-is-refused -->
-<!-- unsupported-targets: wasm32-wasi -->
-On wasm32-wasi this case's expected diagnostic is displaced by E3104 ('spawn' lowers to the runtime entry '__svc_spawn', which has no wasm32-wasi implementation), so the lane is excluded.
-
 `w` names `b` or `c` depending on the comparison, so its reference may co-own `c`'s record, and `c` cannot be moved to the service.
 
 ```maxon
@@ -15780,9 +15722,6 @@ error E3138: <fragment>:32:27: argument `c` of the message `Store.keep` has been
 ```
 
 <!-- test: services.error.a-var-an-otherwise-view-may-name-sent-is-refused -->
-<!-- unsupported-targets: wasm32-wasi -->
-On wasm32-wasi this case's expected diagnostic is displaced by E3104 ('spawn' lowers to the runtime entry '__svc_spawn', which has no wasm32-wasi implementation), so the lane is excluded.
-
 `w` names `spare` when the array has no element 0, so its reference may co-own `spare`'s record.
 
 ```maxon
@@ -15827,9 +15766,6 @@ error E3138: <fragment>:33:27: argument `spare` of the message `Store.keep` has 
 ```
 
 <!-- test: services.error.a-var-a-view-of-a-calls-result-may-name-sent-is-refused -->
-<!-- unsupported-targets: wasm32-wasi -->
-On wasm32-wasi this case's expected diagnostic is displaced by E3104 ('spawn' lowers to the runtime entry '__svc_spawn', which has no wasm32-wasi implementation), so the lane is excluded.
-
 `pick` hands back its argument, so the record `w` views is `b`'s.
 
 ```maxon
@@ -15875,9 +15811,6 @@ error E3138: <fragment>:34:27: argument `b` of the message `Store.keep` has been
 ```
 
 <!-- test: services.error.a-var-a-view-of-a-methods-result-may-name-sent-is-refused -->
-<!-- unsupported-targets: wasm32-wasi -->
-On wasm32-wasi this case's expected diagnostic is displaced by E3104 ('spawn' lowers to the runtime entry '__svc_spawn', which has no wasm32-wasi implementation), so the lane is excluded.
-
 The same through a method: `c.pick(b)` hands back `b`, not something of `c`'s.
 
 ```maxon
@@ -15932,9 +15865,6 @@ error E3138: <fragment>:43:27: argument `b` of the message `Store.keep` has been
 ```
 
 <!-- test: services.error.a-var-a-match-view-may-name-sent-is-refused -->
-<!-- unsupported-targets: wasm32-wasi -->
-On wasm32-wasi this case's expected diagnostic is displaced by E3104 ('spawn' lowers to the runtime entry '__svc_spawn', which has no wasm32-wasi implementation), so the lane is excluded.
-
 One arm of the `match` gives `b`, so the record `w` views may be `b`'s.
 
 ```maxon
@@ -15989,9 +15919,6 @@ error E3138: <fragment>:43:27: argument `b` of the message `Store.keep` has been
 ```
 
 <!-- test: services.error.an-array-an-element-view-reaches-sent-is-refused -->
-<!-- unsupported-targets: wasm32-wasi -->
-On wasm32-wasi this case's expected diagnostic is displaced by E3104 ('spawn' lowers to the runtime entry '__svc_spawn', which has no wasm32-wasi implementation), so the lane is excluded.
-
 `e` views an element of `boxes`, so its reference co-owns part of the array's graph, and the array cannot be moved to the service.
 
 ```maxon
@@ -16034,9 +15961,6 @@ error E3138: <fragment>:31:30: argument `boxes` of the message `Store.keepAll` h
 ```
 
 <!-- test: services.error.an-array-an-if-view-reached-sent-later-is-refused -->
-<!-- unsupported-targets: wasm32-wasi -->
-On wasm32-wasi this case's expected diagnostic is displaced by E3104 ('spawn' lowers to the runtime entry '__svc_spawn', which has no wasm32-wasi implementation), so the lane is excluded.
-
 The `if view` binder views an element of `boxes`, and a view counts for the rest of the function, so the send after the `if` is refused too.
 
 ```maxon
@@ -16083,9 +16007,6 @@ error E3138: <fragment>:35:30: argument `boxes` of the message `Store.keepAll` h
 ```
 
 <!-- test: services.error.a-var-viewed-earlier-in-a-loop-body-sent-later-in-it-is-refused -->
-<!-- unsupported-targets: wasm32-wasi -->
-On wasm32-wasi this case's expected diagnostic is displaced by E3104 ('spawn' lowers to the runtime entry '__svc_spawn', which has no wasm32-wasi implementation), so the lane is excluded.
-
 Inside one trip of the loop, `w` views `b` before the send, so the send is refused on every trip.
 
 ```maxon
@@ -16132,9 +16053,6 @@ error E3138: <fragment>:33:28: argument `b` of the message `Store.keep` has been
 ```
 
 <!-- test: services.error.a-var-viewed-then-handed-to-spawn-as-state-is-refused -->
-<!-- unsupported-targets: wasm32-wasi -->
-On wasm32-wasi this case's expected diagnostic is displaced by E3104 ('spawn' lowers to the runtime entry '__svc_spawn', which has no wasm32-wasi implementation), so the lane is excluded.
-
 The state `spawn` starts the service with is moved into it, so a `var` a view has seen cannot be that state.
 
 ```maxon
@@ -16365,9 +16283,6 @@ end 'main'
 ```
 
 <!-- test: services.error.a-viewed-var-sent-and-read-afterwards-reports-the-send -->
-<!-- unsupported-targets: wasm32-wasi -->
-On wasm32-wasi this case's expected diagnostic is displaced by E3104 ('spawn' lowers to the runtime entry '__svc_spawn', which has no wasm32-wasi implementation), so the lane is excluded.
-
 `w` views the array that holds `b`'s record, so the send is refused; the read of `b` after it is not reported as a use of a moved value, because a refused send moves nothing.
 
 ```maxon

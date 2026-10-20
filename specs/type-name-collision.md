@@ -3262,9 +3262,6 @@ end 'main'
 ```
 
 <!-- test: error.a-service-throws-the-alias-its-own-directory-declares -->
-<!-- unsupported-targets: wasm32-wasi -->
-On wasm32-wasi the expected diagnostic is followed by an extra E3104 ('spawn' lowers to the runtime entry '__svc_spawn', which has no wasm32-wasi implementation) that the pinned output does not list, so the lane is excluded.
-
 The same pair, with the message's clause naming `calc.Fault` — the ranged alias. That names no enum or union,
 so the clause is refused, whatever `faults/` declares under the same name.
 ```maxon

@@ -32,6 +32,11 @@ export union PassKind
 	// structural gate for free (see UnusedExportCheck's header).
 	checkUnusedExports
 
+	// The last Maxon-tier pass, so every language check has spoken before a deferred target refusal
+	// is reported. ⚠ A diagnostic a later pass would decide (InsertRangeChecks' E3005, the backend's,
+	// a missing wasm intrinsic's E3004) is never reached: the refusal stops the compile first.
+	reportTargetRefusals
+
 	// Phase 3: Maxon → Std.
 	lowerMaxonToStd
 
@@ -289,6 +294,7 @@ function classifyPass(pass PassKind) returns PassClassification
 
 		// Whole-module by nature: "does any OTHER file name this?" cannot be answered per function.
 		checkUnusedExports gives PassClassification.wholeModule
+		reportTargetRefusals gives PassClassification.wholeModule
 
 		// Intra-function, and it reads the Maxon module and the project's registries to produce the Std one.
 		lowerMaxonToStd gives PassClassification.perFunctionOnTheProject
@@ -411,6 +417,7 @@ module function compilePhaseOfPass(pass PassKind) returns CompilePhase
 		resolveTypes gives CompilePhase.resolveTypes
 		semanticCheck gives CompilePhase.semanticCheck
 		checkUnusedExports gives CompilePhase.checkUnusedExports
+		reportTargetRefusals gives CompilePhase.reportTargetRefusals
 		lowerMaxonToStd gives CompilePhase.lowerMaxonToStd
 		insertRangeChecks gives CompilePhase.insertRangeChecks
 		inlineManagedPrimitives gives CompilePhase.inlineManagedPrimitives
@@ -443,6 +450,7 @@ function passKindToString(pass PassKind) returns String
 		resolveTypes gives "resolveTypes"
 		semanticCheck gives "semanticCheck"
 		checkUnusedExports gives "checkUnusedExports"
+		reportTargetRefusals gives "reportTargetRefusals"
 		lowerMaxonToStd gives "lowerMaxonToStd"
 		insertRangeChecks gives "insertRangeChecks"
 		inlineManagedPrimitives gives "inlineManagedPrimitives"
@@ -511,6 +519,7 @@ export function buildMaxonTierPasses() returns PassKindArray
 	passes.push(PassKind.resolveTypes)
 	passes.push(PassKind.semanticCheck)
 	passes.push(PassKind.checkUnusedExports)
+	passes.push(PassKind.reportTargetRefusals)
 	return passes
 end 'buildMaxonTierPasses'
 
@@ -814,6 +823,7 @@ export type PassPipeline
 			resolveTypes then resolveTypes(self.project, module: self.maxonModule)
 			semanticCheck then try semanticCheck(self.project, module: self.maxonModule, signatures: self.signatures, funcNames: self.funcNames)
 			checkUnusedExports then try checkUnusedExports(self.project, module: self.maxonModule, signatures: self.signatures)
+			reportTargetRefusals then reportTargetRefusals(self.project)
 			lowerMaxonToStd then self.stdModule = try lowerMaxonToStd(self.maxonModule, project: self.project, funcNames: self.funcNames)
 			insertRangeChecks then insertRangeChecks(self.project, module: self.stdModule)
 			inlineManagedPrimitives then inlineManagedPrimitives(self.project, module: self.stdModule, usesGreenThreads: self.usesGreenThreads)

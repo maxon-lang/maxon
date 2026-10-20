@@ -4772,11 +4772,9 @@ end 'main'
 ```
 
 <!-- test: error.a-let-initializer-may-not-read-a-managed-var-beside-a-spawn -->
-<!-- unsupported-targets: wasm32-wasi -->
 **A `let` THAT HOLDS WHAT A `var` OWNS CANNOT BE MARKED SHARED.** `l` is the record `g` owns, so marking `l`'s
 graph before `main` would meet an owner no `let` holds. The program is refused at compile time rather than
-stopping before `main` runs. The wasm lane cannot host the `spawn` the program makes, and it would answer that
-before this refusal.
+stopping before `main` runs.
 ```maxon
 type Box
 	export var n as Integer
@@ -4820,10 +4818,8 @@ note: <fragment>:14:5: `g` is declared here
 ```
 
 <!-- test: error.a-var-initializer-may-not-take-a-lets-record-beside-a-spawn -->
-<!-- unsupported-targets: wasm32-wasi -->
 **AND A `var` MAY NOT TAKE WHAT A `let` HOLDS.** `v` would be an owner of `a`'s record that no `let` is, so marking
-`a` shared before `main` would meet it. Refused at compile time. The wasm lane cannot host the `spawn` the program
-makes, and it would answer that before this refusal.
+`a` shared before `main` would meet it. Refused at compile time.
 ```maxon
 type Box
 	export var n as Integer

@@ -405,7 +405,7 @@ an `async f()` call targets a function that never yields (contains no await / I/
 
 ### E3074 — `semanticSubprocessUnsupportedTarget`
 
-A user program targeting wasm32-wasi reaches the 'Subprocess' API (transitively calling a `__gt_subp_` runtime entry). WASI has no process-spawn primitive, so subprocess cannot exist on that target -- rather than silently throwing 'spawnFailed' at runtime, the call is rejected at compile time. Guard the call with `#if not os(Wasi)` to exclude it from the wasm build. Raised from `SemanticCheck.requireTargetSupportsCallee`, at the first call from USER code into a `stdlib/Subprocess.maxon` entry point, where E3104 would otherwise be raised.
+A user program targeting wasm32-wasi reaches the 'Subprocess' API (transitively calling a `__gt_subp_` runtime entry). WASI has no process-spawn primitive, so subprocess cannot exist on that target -- rather than silently throwing 'spawnFailed' at runtime, the call is rejected at compile time. Guard the call with `#if not os(Wasi)` to exclude it from the wasm build. Raised from `SemanticCheck.requireTargetSupportsCallee`, at the first call from USER code into a `stdlib/Subprocess.maxon` entry point, where E3104 would otherwise be raised. Reported only when the language checks find no other error in the program.
 
 ### E3075 — `matchQualifiedCaseName`
 
@@ -505,7 +505,7 @@ A `/` or `mod` has a divisor the compiler holds as the constant 0 (`a / 0`, `a m
 
 ### E3104 — `targetUnsupportedConstruct`
 
-A construct is reached by a program compiled for a target whose backend has not lowered the runtime entry it needs. Which host facility each entry needs and which targets provide it are the two halves of `TargetFacilities`; wasm32-wasi is the lane that still lacks facilities, so `sleep`, `__Builtins.runProcess`, the streaming-subprocess builtins, the `__Builtins` clock intrinsics and the file/socket/argv/stdin surfaces are all refused there. The call is refused at ITS SOURCE SPAN, naming the runtime entry that has no lowering. Distinct from E3074, the subprocess-specific WASI rejection: that one says subprocess can NEVER exist on wasm32-wasi -- a permanent property of the platform -- while this one says the target has not lowered the entry, a statement about this compiler's progress. Before it, every such program PANICKED three tiers down in StdToWasm/StdToArm64 with no file and no line -- a compiler crash where a diagnostic was owed.
+A construct is reached by a program compiled for a target whose backend has not lowered the runtime entry it needs. Which host facility each entry needs and which targets provide it are the two halves of `TargetFacilities`; wasm32-wasi is the lane that still lacks facilities, so `sleep`, `__Builtins.runProcess`, the streaming-subprocess builtins, the `__Builtins` clock intrinsics and the file/socket/argv/stdin surfaces are all refused there. The call is refused at ITS SOURCE SPAN, naming the runtime entry that has no lowering. Distinct from E3074, the subprocess-specific WASI rejection: that one says subprocess can NEVER exist on wasm32-wasi -- a permanent property of the platform -- while this one says the target has not lowered the entry, a statement about this compiler's progress. Reported only when the language checks find no other error in the program.
 
 ### E3106 — `semanticArrayResizeManagedElement`
 

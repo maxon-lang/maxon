@@ -81,19 +81,17 @@ the answer does not depend on how many processors serviced the work (`specs/sche
 | a `var` only `main` and the functions it calls touch, in a program that spawns | **legal** — no other thread can reach it |
 | the same `var` read or written by a handler, or by a function a handler reaches | **refused** (E3143) |
 
-⚠ **THE `error.*` CASES EXCLUDE wasm32-wasi FOR A REASON ABOUT THE DIAGNOSTIC, NOT THE RULE.** On wasm the
-same program earns E3104 for `__svc_spawn` and `__mbox_send` first, so the pinned stderr is not what the
-compiler emits there. Every accepted case that spawns is left unmarked: wasm32-wasi answers it with E3104,
-which the harness counts as a SKIP naming the case.
+⚠ **NO CASE HERE IS MARKED FOR wasm32-wasi.** E3104 for `__svc_spawn` and `__mbox_send` is reported only when
+the program has no other diagnostic, so an `error.*` case prints its pinned stderr alone on wasm as on every
+native lane. Every accepted case that spawns is answered with E3104, which the harness counts as a SKIP naming
+the case.
 
 ## Tests
 
 <!-- test: error.a-module-var-a-handler-writes -->
-<!-- unsupported-targets: wasm32-wasi -->
 **THE WRITE HAZARD'S PROGRAM.** `Counter.add` is a message, and `total = total + by` is the load/add/store
 two Ms can interleave. The refusal is anchored at the ACCESS — the line the cure changes — and the
 `spawn` rides as the note, because it is what makes `Counter` a service.
-wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
 var total = 0 as Integer
 
@@ -122,10 +120,8 @@ note: <fragment>:17:10: the `spawn` that makes `Counter` a service
 ```
 
 <!-- test: error.a-module-var-a-function-called-by-a-handler-writes -->
-<!-- unsupported-targets: wasm32-wasi -->
 `Counter.add` names no global; it calls `record`, and `record` stores. The refusal names the message that
 reaches the access: the race does not care which frame the store sits in.
-wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
 var total = 0 as Integer
 
@@ -158,12 +154,10 @@ note: <fragment>:21:10: the `spawn` that makes `Counter` a service
 ```
 
 <!-- test: error.a-module-var-only-a-closure-call-in-a-handler-could-reach -->
-<!-- unsupported-targets: wasm32-wasi -->
 `Counter.add` calls a closure value through `callIndirect`, and `bookKeeping`, whose address `main` takes,
 writes `ledger`. No named call runs from the message to the write, and the program is refused all the same:
 a target chosen at run time may land on any function whose address the program takes, so the rule reads the
 message as reaching all of them.
-wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
 var ledger = 0 as Integer
 
@@ -205,11 +199,9 @@ note: <fragment>:28:10: the `spawn` that makes `Counter` a service
 ```
 
 <!-- test: error.a-module-var-a-handler-reads -->
-<!-- unsupported-targets: wasm32-wasi -->
 **THE READ HAZARD'S PROGRAM.** Twelve `Reader.size` messages spin on `label.count()` while `main` stores
 four thousand interpolated strings into `label`; at `MAXON_MAX_PROCS=16` the program would exit 139 reading
 records the stores freed. A READ is refused like a write.
-wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
 typealias ReaderHandleArray = Array with Reader.handle
 typealias IntPromise = Promise with Integer
@@ -283,12 +275,10 @@ note: <fragment>:33:11: the `spawn` that makes `Reader` a service
 ```
 
 <!-- test: error.a-module-var-used-as-a-shared-empty-anchor -->
-<!-- unsupported-targets: wasm32-wasi -->
 **THE SHAPE A COPY-ON-WRITE ANCHOR TAKES.** `holdsNothing` asks whether a column IS the shared empty
 `noEntries` — an identity test, which reads the slot — two calls below a message. In a service program the
 anchor belongs to the work rather than the module, which is why the compiler's own parser holds its anchors
 per parser (`ParserAnchors`).
-wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
 var noEntries = IntArray.create()
 
@@ -543,9 +533,6 @@ held=1600000 names=4
 ```
 
 <!-- test: error.a-message-may-not-read-a-let-no-share-walk-can-mark -->
-<!-- unsupported-targets: wasm32-wasi -->
-On wasm32-wasi this case's expected diagnostic is displaced by E3104 ('TcpListener.bind' lowers to the runtime entry '__ml_bind', which has no wasm32-wasi implementation), so the lane is excluded.
-
 **AND A `let` THE MARK CANNOT REACH IS REFUSED WHERE A MESSAGE READS IT.** An OS handle has a destructor and no
 walk, so nothing can make the counts on a record holding one atomic. The refusal sits at the read the message
 reaches, and the note is the declaration.
@@ -696,9 +683,6 @@ n=10
 ```
 
 <!-- test: error.a-spawn-a-global-initializer-reaches-is-refused -->
-<!-- unsupported-targets: wasm32-wasi -->
-On wasm32-wasi this case's expected diagnostic is displaced by E3104 ('spawn' lowers to the runtime entry '__svc_spawn', which has no wasm32-wasi implementation), so the lane is excluded.
-
 **A GLOBAL INITIALIZER MAY NOT START A SERVICE.** `Box.start` spawns `Reader` while `box` is being built, before
 `roster` is marked shared, so `Reader.read` could step `roster`'s plain count from another OS thread.
 ```maxon
@@ -802,10 +786,8 @@ ledger=15 count=5
 ```
 
 <!-- test: error.the-same-module-var-read-by-a-handler-in-a-service-program -->
-<!-- unsupported-targets: wasm32-wasi -->
 **THE REFUSED TWIN OF THE CASE ABOVE.** The program differs only in `total`, which now reads `ledger`: a message
 runs on a green thread the scheduler may put on any OS thread, while `main` writes the same word.
-wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
 var ledger = 0 as Integer
 
@@ -972,10 +954,8 @@ n=5 l=1
 ```
 
 <!-- test: error.a-module-var-a-witness-member-writes -->
-<!-- unsupported-targets: wasm32-wasi -->
 The handler dispatches `greet` through an interface value, and `Loud.greet` writes `greetings`. The refusal
 names the member the dispatch could land on, as for every other road to the `var`.
-wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
 var greetings = 0 as Integer
 
@@ -1240,10 +1220,8 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: error.a-static-var-a-handler-reads -->
-<!-- unsupported-targets: wasm32-wasi -->
 The refused twin: a handler reads the `static var`, so it is one word another OS thread uses, and it is named
 with its type.
-wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
 type Counter
 	static var created = 0 as Integer
@@ -1304,10 +1282,8 @@ typealias Integer = int(i64.min to i64.max)
 ```
 
 <!-- test: error.a-registry-default-that-spawns-is-refused-when-its-message-touches-the-var -->
-<!-- unsupported-targets: wasm32-wasi -->
 A `default` whose value is a `spawn` starts its service before `main`, so a module `var` the service's own message
 touches is shared by two threads. The note points at the `spawn` inside the `default`.
-wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
 var lookups = 0 as Integer
 
@@ -1343,10 +1319,8 @@ note: <fragment>:22:19: the `spawn` that makes `Polite` a service
 ```
 
 <!-- test: error.a-log-sink-default-that-spawns-is-refused-when-its-handler-touches-the-var -->
-<!-- unsupported-targets: wasm32-wasi -->
 A program that logs spawns the handler the `LogSink` `default` names. A module `var` that handler's own message
 touches is shared by two threads, and the note points at the `spawn` inside the `default`.
-wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
 var calls = 0 as Integer
 
@@ -1378,10 +1352,8 @@ note: <fragment>:18:34: the `spawn` that makes `CountingHandler` a service
 ```
 
 <!-- test: error.a-coroutine-a-handler-starts-shares-the-handlers-strand -->
-<!-- unsupported-targets: wasm32-wasi -->
 A handler that runs `async` work starts a coroutine on the handler's own strand, so a module `var` the coroutine
 touches is reached by a message and is refused.
-wasm32-wasi has no services, so it answers `E3104` for the `spawn` and the sends before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
 var ledger = 0 as Integer
 

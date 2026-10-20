@@ -776,6 +776,27 @@ export function reportPositioned(project Project, code ErrorCode, message String
 	reportDiagnostic(project, diagnostic: Diagnostic.create(code, message: message, line: line, column: column, filePath: filePath).withCause(cause))
 end 'reportPositioned'
 
+// A target refusal is about the target, not the program, and a language error is the author's to fix
+// first: parked here, it is reported by `SemanticCheck.reportTargetRefusals` only into a program with no
+// other diagnostic.
+export function deferTargetRefusal(project Project, code ErrorCode, message String, line LineNumber, column ColumnNumber, filePath FilePath)
+	project.targetRefusalDiagnostics.push(Diagnostic.create(code, message: message, line: line, column: column, filePath: filePath))
+end 'deferTargetRefusal'
+
+// The one rule for every deferred list: stacked on a real complaint, a deferred diagnostic would make one
+// mistake read as two.
+module function reportDeferredUnlessErrors(project Project, deferred DiagnosticArray) returns bool
+	if deferred.count() == 0 or projectHasErrors(project) 'nothingToSayOrSomethingRealerSaidIt'
+		return false
+	end 'nothingToSayOrSomethingRealerSaidIt'
+
+	for diagnostic in deferred 'each'
+		reportDiagnostic(project, diagnostic: diagnostic)
+	end 'each'
+
+	return true
+end 'reportDeferredUnlessErrors'
+
 export function reportAtFunctionName(project Project, func IrFunction, code ErrorCode, message String)
 	reportPositioned(project, code: code, message: message, line: func.nameLine, column: func.nameColumn, filePath: func.sourceFilePath)
 end 'reportAtFunctionName'

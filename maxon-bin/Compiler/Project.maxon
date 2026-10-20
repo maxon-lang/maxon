@@ -11947,6 +11947,8 @@ export type Project
 	// is the drain's one rule (see there for why the suppression is whole-program rather than per function).
 	export var bindingHygieneDiagnostics as DiagnosticArray
 
+	export var targetRefusalDiagnostics as DiagnosticArray
+
 	// ⭐ Every declaration a type-name COLLISION was reported for (E3061/E3006,
 	// `reportTypeNameCollision`) — the suppression set the unused-typealias drain reads, so one mistake
 	// earns one diagnostic. Keyed by `fileScopedDeclKey`, per DECLARING FILE: a bare name would let one
@@ -12434,6 +12436,7 @@ export type Project
 			deferredParseErrors: DeferredParseErrorArray.create(),
 			genericAliasNamesWrittenByAFile: UsedTypeNameSet.create(),
 			bindingHygieneDiagnostics: DiagnosticArray.create(),
+			targetRefusalDiagnostics: DiagnosticArray.create(),
 			collidedTypeNames: CollidedTypeNameSet.create(),
 			pendingFunctionTypeDoors: PendingFunctionTypeDoorArray.create(),
 			pendingBrandRecords: PendingBrandRecordArray.create(),
@@ -12644,8 +12647,9 @@ end 'rootIsASingleFile'
 //
 // ⭐ **IT IS THE ONLY DOOR INTO `project.diagnostics`, and the lists that look
 // like a second one are not.** `ParseStaging.commitDiagnostics` folds the
-// parser's own into this function; `Compiler.reportBindingHygieneDiagnostics`
-// drains the hygiene list through it as well; and the deferred name diagnostics
+// parser's own into this function; `Diagnostics.reportDeferredUnlessErrors`
+// drains the hygiene list and the deferred target refusals through it as well;
+// and the deferred name diagnostics
 // reach it via `TypeResolution.reportDeferredNameDiagnostics` calling
 // `reportPositioned`.
 //

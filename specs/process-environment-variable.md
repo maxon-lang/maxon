@@ -47,8 +47,9 @@ is `=C:`; splitting at byte 0 would give every one of them the empty name.
 The walk reaches the environment through `__gt_subp_env_entry`, which sits behind the subprocess
 band's runtime prefix, so a program naming it is refused on that lane at compile time with **E3074**
 (`subprocess-unsupported.md` pins that refusal). E3074 is NOT the target refusal the harness folds
-into a counted skip — only E3104 is — so each case below carries an `unsupported-targets:` marker
-excluding that lane alone, exactly as `subprocess.md`'s do.
+into a counted skip — only E3104 is — so each case below that builds and runs carries an `unsupported-targets:`
+marker excluding that lane alone, exactly as `subprocess.md`'s do. The case that pins a language refusal carries
+none: E3074 is reported only when the program has no other diagnostic.
 
 ## Tests
 
@@ -132,7 +133,6 @@ child said a=b
 ```
 
 <!-- test: process-environment-variable.the-environment-walk-is-a-throwing-call -->
-<!-- unsupported-targets: wasm32-wasi -->
 ⛔ **THE WALK THROWS, SO A CALL WITHOUT `try` IS REFUSED.** A producer that fails partway through the
 environment is distinguishable from the end of it, and the walk reports it rather than answering the
 entries it had read so far as though they were all of them. The refusal is what proves the signature

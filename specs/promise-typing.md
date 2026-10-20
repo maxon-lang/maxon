@@ -24,14 +24,6 @@ exist rather than a new roster: a promise is not an `Integer`, so every position
 already knows how to say no. **The roster of refusals is DERIVED, not enumerated** — which is the point.
 There is no list to keep in step with the language.
 
-⚠ **THESE REFUSALS ARE PINNED TO `x64-windows`, AND THE REASON IS THE THUNK RATHER THAN THE RULE.** The
-rules themselves are target-neutral — nothing about "a promise is not an `Integer`" depends on a backend.
-But an `async` thunk must have a yield point or **E3073** refuses the spawn outright (*"function never
-yields"*), and the yield points available lower to runtime entries `wasm32-wasi` does not
-have: `File.exists` reaches `__mf_exists` and raises **E3104** there. Either way the case's own subject is
-MASKED by an error about the thunk. Dropping the marker to win the lane simply trades E3104 for E3073,
-so the case is pinned instead of quietly testing something else.
-
 ⚠ **ON THE SPELLINGS IN THESE DIAGNOSTICS.** Two are the compiler's existing renderings rather than
 anything this rule chose, and both are worth knowing. A refusal taken at the TAG arm prints the tag word
 (`struct`), because at that point the check has compared classes and not names. And an instance no
@@ -95,9 +87,6 @@ error E2004: <fragment>:11:18: Cannot operate on struct and int
 ```
 
 <!-- test: promise-typing.error.a-promise-in-an-integer-parameter -->
-<!-- unsupported-targets: wasm32-wasi -->
-On wasm32-wasi this case's expected diagnostic is displaced by E3104 ('File.exists' lowers to the runtime entry '__mf_exists', which has no wasm32-wasi implementation), so the lane is excluded.
-
 An `Integer` parameter does not take a promise. The cure is to `await` it and pass the RESULT — which is
 also the only spelling that keeps the thread's one owner intact.
 ```maxon

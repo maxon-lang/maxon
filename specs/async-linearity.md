@@ -57,12 +57,11 @@ the linearity rule is structural and fires identically for a scalar promise.
 statement of it.** These cases spawn and await, so they reach the scheduler's entries, which every native
 lane provides and wasm32-wasi refuses with `E3104`.
 
-⚠⚠ **THE RULE IS TARGET-NEUTRAL, BUT A CASE WHOSE ERROR IS DECIDED AFTER THE TARGET GATE IS NOT.** A legal
-`async` spawn needs a callee that YIELDS (`E3073` otherwise), the only yield primitive is
-`Scheduler.yield()`, and that lowers to `__gt_resched`. So on wasm32-wasi the thunk reaches a gated
-construct no matter how it is written, `E3104` is raised at the thunk and — the compiler reporting the
-FIRST error — MASKS an `E3100` the case exists to pin. That case carries the `wasm32-wasi` marker; the
-refusals decided before lowering (`E3142`, `E3102`) are target-neutral and carry none.
+⚠⚠ **THE RULE IS TARGET-NEUTRAL, AND SO IS EVERY CASE.** A legal `async` spawn needs a callee that YIELDS
+(`E3073` otherwise), the only yield primitive is `Scheduler.yield()`, and that lowers to `__gt_resched`. So on
+wasm32-wasi the thunk reaches a gated construct no matter how it is written, but `E3104` is reported only when
+the program has no other diagnostic, so the `E3100` a case exists to pin prints alone and no case carries a
+marker.
 
 ## Tests
 
@@ -87,9 +86,6 @@ error E3142: <fragment>:10:16: this promise was already consumed by an earlier '
 ```
 
 <!-- test: async-linearity.error.double-await-in-loop -->
-<!-- unsupported-targets: wasm32-wasi -->
-On wasm32-wasi this case's expected diagnostic is displaced by E3104 ('Scheduler.yield' lowers to the runtime entry '__gt_resched', which has no wasm32-wasi implementation), so the lane is excluded.
-
 The check is flow-sensitive, and this is why it must be. There is exactly ONE `await` here lexically, so
 a "have I seen this promise awaited before?" check finds nothing — but it sits in a loop over a promise
 spawned OUTSIDE the loop, so it awaits the same green thread every iteration. Reachability catches it:

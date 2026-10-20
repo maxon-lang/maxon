@@ -210,10 +210,8 @@ error E3159: specs/parameter-mutation/transitive-let-field-write-error.maxon:22:
 ```
 
 <!-- test: async-transitive-let-array-error -->
-<!-- unsupported-targets: wasm32-wasi -->
 The same mutation, one `async` further away: a spawn hands the coroutine a reference to what its caller was
-handed, so `outer` writes `d` whether the write runs before the await or after it. Async is unsupported on
-wasm32-wasi.
+handed, so `outer` writes `d` whether the write runs before the await or after it.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)

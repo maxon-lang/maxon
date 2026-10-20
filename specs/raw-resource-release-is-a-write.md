@@ -21,9 +21,7 @@ value in a `var` and closes it there; a resource that no one closed is released 
 ## Tests
 
 <!-- test: error.a-let-segment-cannot-be-closed -->
-<!-- unsupported-targets: wasm32-wasi -->
 A `let` segment is read-only, so the call that unmaps it is refused.
-wasm32-wasi has no shared memory segments, so it answers `E3104` for `SharedSegment` before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
 function main() returns ExitCode
 	let segment = try SharedSegment.create("maxon-spec-raw-let", bytes: 4096) otherwise return 1
@@ -36,9 +34,7 @@ error E3159: <fragment>:4:10: cannot pass 'segment', which is read-only (a `let`
 ```
 
 <!-- test: error.a-registry-segment-cannot-be-closed-by-a-reader -->
-<!-- unsupported-targets: wasm32-wasi -->
 Every thread reads a registry `default`, so no thread may unmap it under the others.
-wasm32-wasi has no shared memory segments, so it answers `E3104` for `SharedSegment` before it reaches this refusal; the case is pinned on the native lanes.
 ```maxon
 default SharedSegment = try SharedSegment.create("maxon-spec-raw-registry", bytes: 4096) otherwise panic("no segment")
 

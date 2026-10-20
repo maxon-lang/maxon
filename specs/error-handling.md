@@ -576,10 +576,8 @@ error E3168: <fragment>:15:11: 'throws Failure' is declared but nothing in the b
 ```
 
 <!-- test: error.throws-service-message-can-never-throw -->
-<!-- unsupported-targets: wasm32-wasi -->
 A service message is checked like any other function. A `throws` clause gives the message a reply slot, but a
-body that cannot throw still makes the clause false. wasm32-wasi is excluded for the diagnostic, not the rule:
-it has no service substrate, so the spawn earns E3104 first.
+body that cannot throw still makes the clause false.
 ```maxon
 enum Failure implements Error
 	broken

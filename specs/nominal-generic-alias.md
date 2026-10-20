@@ -2574,9 +2574,6 @@ error E3005: <fragment>:22:13: argument type mismatch for 'ys': expected 'Ys', g
 ```
 
 <!-- test: error.a-service-message-argument-adopted-later-is-judged-against-the-parameter-brand -->
-<!-- unsupported-targets: wasm32-wasi -->
-On wasm32-wasi the expected diagnostic is followed by an extra E3104 ('spawn' lowers to the runtime entry '__svc_spawn', which has no wasm32-wasi implementation) that the pinned output does not list, so the lane is excluded.
-
 `a` takes the brand `Xs` from the call that follows its creation, and the message parameter is a `Ys`.
 ```maxon
 typealias Xs = Array with String
