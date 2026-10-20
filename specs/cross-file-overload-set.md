@@ -565,3 +565,361 @@ end 'main'
 ```exitcode
 91
 ```
+
+
+<!-- test: a-function-value-of-a-file-private-overload-keeps-its-parameters -->
+Two files of one directory each declare a file-private `bump`, with different parameters. Taken as a value in
+`main.maxon`, `bump` is the one that file declares, with its by-reference parameter, so the call writes `v`.
+Returns 16.
+```maxon
+// --- file: alias.maxon
+public typealias Small = int(1 to 100)
+public typealias Medium = int(1 to 200)
+
+// --- file: main.maxon
+function bump(n Small)
+	n = 7
+end 'bump'
+
+function main() returns ExitCode
+	var v = 3 as Small
+	let f = bump
+	f(v)
+	return ((v as Medium) + other()) as ExitCode
+end 'main'
+
+// --- file: other.maxon
+function bump(n Medium)
+	n = 9
+end 'bump'
+
+export function other() returns Medium
+	var w = 1 as Medium
+	bump(w)
+	return w
+end 'other'
+```
+```exitcode
+16
+```
+
+
+<!-- test: a-module-level-function-value-of-a-file-private-overload-keeps-its-parameters -->
+The same overload set, with `bump` taken as a value at the top level of `main.maxon`: the file declares one
+`bump`, and the module-level value is that one, as the value in a body is. Returns 16.
+```maxon
+// --- file: alias.maxon
+public typealias Small = int(1 to 100)
+public typealias Medium = int(1 to 200)
+
+// --- file: main.maxon
+let f = bump
+
+function bump(n Small)
+	n = 7
+end 'bump'
+
+function main() returns ExitCode
+	var v = 3 as Small
+	f(v)
+	return ((v as Medium) + other()) as ExitCode
+end 'main'
+
+// --- file: other.maxon
+function bump(n Medium)
+	n = 9
+end 'bump'
+
+export function other() returns Medium
+	var w = 1 as Medium
+	bump(w)
+	return w
+end 'other'
+```
+```exitcode
+16
+```
+
+<!-- test: a-rebound-function-value-of-a-file-private-overload-keeps-its-parameters -->
+A `var` holding the value, rebound on one path, still names the one `bump` this file declares. Returns 16.
+```maxon
+// --- file: alias.maxon
+public typealias Small = int(1 to 100)
+public typealias Medium = int(1 to 200)
+
+// --- file: main.maxon
+function bump(n Small)
+	n = 7
+end 'bump'
+
+function main() returns ExitCode
+	var v = 3 as Small
+	var f = bump
+
+	if v > 0 'rebind'
+		f = bump
+	end 'rebind'
+
+	f(v)
+	return ((v as Medium) + other()) as ExitCode
+end 'main'
+
+// --- file: other.maxon
+function bump(n Medium)
+	n = 9
+end 'bump'
+
+export function other() returns Medium
+	var w = 1 as Medium
+	bump(w)
+	return w
+end 'other'
+```
+```exitcode
+16
+```
+
+<!-- test: a-typed-function-value-of-a-file-private-overload-keeps-its-parameters -->
+The value bound through a function typealias is the same `bump`. Returns 16.
+```maxon
+// --- file: alias.maxon
+public typealias Small = int(1 to 100)
+public typealias Medium = int(1 to 200)
+
+// --- file: main.maxon
+typealias BumpFn = function(n Small)
+
+function bump(n Small)
+	n = 7
+end 'bump'
+
+function main() returns ExitCode
+	var v = 3 as Small
+	let f = bump as BumpFn
+	f(v)
+	return ((v as Medium) + other()) as ExitCode
+end 'main'
+
+// --- file: other.maxon
+function bump(n Medium)
+	n = 9
+end 'bump'
+
+export function other() returns Medium
+	var w = 1 as Medium
+	bump(w)
+	return w
+end 'other'
+```
+```exitcode
+16
+```
+
+
+<!-- test: a-function-value-of-a-file-private-overload-taking-a-byte-array-keeps-its-parameters -->
+The visible `bump` takes a `ByteArray`, which the declaration sweep spells by its generic base; the value
+still names that one declaration. Returns 3.
+```maxon
+// --- file: alias.maxon
+public typealias Medium = int(1 to 200)
+
+// --- file: main.maxon
+function bump(b ByteArray) returns Medium
+	return b.count() as Medium
+end 'bump'
+
+function main() returns ExitCode
+	let f = bump
+	let bytes = "abc".toByteArray()
+	return (f(bytes) + other() - 9) as ExitCode
+end 'main'
+
+// --- file: other.maxon
+function bump(n Medium) returns Medium
+	return n + 8
+end 'bump'
+
+export function other() returns Medium
+	return bump(1)
+end 'other'
+```
+```exitcode
+3
+```
+
+<!-- test: a-function-value-of-a-file-private-overload-taking-a-tuple-keeps-its-parameters -->
+The visible `bump` takes a tuple of aliases, which the declaration sweep spells by its elements' source
+names; the value still names that one declaration. Returns 7.
+```maxon
+// --- file: alias.maxon
+public typealias Small = int(1 to 100)
+public typealias Medium = int(1 to 200)
+
+// --- file: main.maxon
+function bump(p (Small, Small)) returns Medium
+	return (p.0 + p.1) as Medium
+end 'bump'
+
+function main() returns ExitCode
+	let f = bump
+	return (f((3 as Small, 4 as Small)) + other() - 9) as ExitCode
+end 'main'
+
+// --- file: other.maxon
+function bump(n Medium) returns Medium
+	return n + 8
+end 'bump'
+
+export function other() returns Medium
+	return bump(1)
+end 'other'
+```
+```exitcode
+7
+```
+
+
+<!-- test: error.a-function-value-of-a-visible-overload-returning-an-interface-is-refused -->
+The `make` visible from `main.maxon` returns an interface, so a value of it is refused as a single
+interface-returning function's is, although the file-private `make` in `other.maxon` returns an integer.
+```maxon
+// --- file: main.maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Producer
+	function produce() returns Integer
+end 'Producer'
+
+type Widget implements Producer
+	export var seed as Integer
+
+	static function create(seed Integer) returns Widget
+		return Widget{seed: seed}
+	end 'create'
+
+	function produce() returns Integer
+		return self.seed
+	end 'produce'
+end 'Widget'
+
+function make(seed Integer) returns Producer
+	return Widget.create(seed)
+end 'make'
+
+function consume(p Producer) returns Integer
+	return p.produce()
+end 'consume'
+
+function main() returns ExitCode
+	let f = make
+	return consume(f(42)) as ExitCode
+end 'main'
+
+// --- file: other.maxon
+typealias Integer = int(i64.min to i64.max)
+
+function make(seed Integer, extra Integer) returns Integer
+	return seed + extra
+end 'make'
+
+export function other() returns ExitCode
+	return make(1, extra: 2) as ExitCode
+end 'other'
+```
+```maxoncstderr
+error E2015: <fragment>:30:10: Unsupported: a function value's return type declared at the interface type 'Producer' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a call through a function value carries its whole signature on the call op (`callIndirect`), where there is room for ONE result — so the second register is never read and the witness half is dropped. Declare the return at a concrete type, or hand the interface back from a NAMED function called DIRECTLY, whose second return register carries the witness half
+```
+
+
+<!-- test: error.a-refused-initializer-call-to-a-name-only-hidden-cross-file-overloads-carry -->
+Two files of the directory each declare a file-private `pick`, so `main.maxon` can name neither, and its
+initializer is refused as a body call naming `pick` is.
+```maxon
+// --- file: a.maxon
+export typealias Integer = int(i64.min to i64.max)
+
+function pick(x Integer) returns Integer
+	return x
+end 'pick'
+
+export function useA() returns Integer
+	return pick(1)
+end 'useA'
+
+// --- file: b.maxon
+function pick(s String) returns Integer
+	return s.byteLength() as Integer
+end 'pick'
+
+export function useB() returns Integer
+	return pick("ab")
+end 'useB'
+
+// --- file: main.maxon
+let G = pick(3)
+
+function main() returns ExitCode
+	return (G + useA() + useB()) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3008: <fragment>:23:9: function 'pick' is not exported
+```
+
+<!-- test: a-generic-function-named-like-a-math-builtin-is-the-one-called -->
+A file that declares `abs` means its own: the math builtin is the compiler's only while no file declares the
+name. Returns 7.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function abs(x T) uses T returns T
+	return x
+end 'abs'
+
+function main() returns ExitCode
+	return (abs(0 - 3 as Integer) + 10) as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+
+<!-- test: a-function-value-of-a-label-distinguished-overload-member-names-the-visible-one -->
+`a.maxon` declares two `pick`s with the same types and different labels, one of them file-private, and
+`b.maxon` declares a third; from `main.maxon` the one visible `pick` is the exported one, and the value names
+it. Returns 9.
+```maxon
+// --- file: a.maxon
+export typealias Integer = int(i64.min to i64.max)
+
+function pick(start Integer, endIndex Integer) returns Integer
+	return endIndex - start
+end 'pick'
+
+export function pick(start Integer, length Integer) returns Integer
+	return start + length
+end 'pick'
+
+export function useA() returns Integer
+	return pick(1, endIndex: 2)
+end 'useA'
+
+// --- file: b.maxon
+function pick(s String) returns Integer
+	return s.byteLength() as Integer
+end 'pick'
+
+export function useB() returns Integer
+	return pick("ab")
+end 'useB'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	let f = pick
+	return (f(3, 4) + useB() + useA() - 1) as ExitCode
+end 'main'
+```
+```exitcode
+9
+```

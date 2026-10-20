@@ -131,6 +131,11 @@ export enum ErrorCode
 	matchMismatchedBlockId = "E2043"
 
 	// A top-level constant's initializer is not a compile-time constant.
+	// A call in a top-level or `static` initializer is reported here when it names a function the file can
+	// see but the initializer cannot hold: a free function or sibling `static` returning a scalar, an
+	// instance method called bare, a generic function, a builtin, or a function-typed binding. A call to a
+	// function that does not exist, that the file cannot see, or that several directories declare is E3004,
+	// E3008 or E3088, or E3095, as in a function body. Make the call inside a function.
 	parserNonConstantInitializer = "E2045"
 
 	// A match over an enum may only carry a 'default' arm if that arm throws.
@@ -443,6 +448,7 @@ export enum ErrorCode
 	// top-level constant, is reported here when its qualifier names no binding, directory or type
 	// (`foo.bar.baz()`: nothing declares `foo.bar`). Correct the qualifier to the directory or type
 	// that declares the function.
+	// A bare call in a top-level or `static` initializer is reported here as it is in a function body.
 	// A member called on its result has parameters no declaration states, so it accepts any
 	// argument labels and an untyped closure argument; errors inside its arguments are reported
 	// as usual.
@@ -527,7 +533,8 @@ export enum ErrorCode
 	// It covers a function, a static member, a type and a typealias -- a type body's inner `typealias` too,
 	// which is file-private unless it carries its own modifier, and is refused written bare or qualified
 	// (`Holder.Inner`) -- at every position a name can be written in: a type annotation, a cast target, a construction or static call head, an `implements`,
-	// `extends`, `where` or `throws` clause, a `from` head, and a top-level initializer. A type the reading
+	// `extends`, `where` or `throws` clause, a `from` head, a `spawn`'s factory, and a top-level or `static`
+	// initializer. A type the reading
 	// file may not name hides its members too: its fields, methods, extension methods, accessors and
 	// statics are refused through a value of it that reached the file, and so are the calls the compiler
 	// makes on that value's behalf -- interpolation, `==` and ordering operators, `for` iteration, and a
@@ -985,10 +992,11 @@ export enum ErrorCode
 	// door a bare function name is written at — a call, a function value (`let f = helper`) and a
 	// function-backed enum case (`op = helper`) — and each accepts the directory-qualified form
 	// (`beta.helper`) as the remedy. A call is refused in every form it takes: as a statement or with
-	// its result used, under `try` or `if let … = try`, and spawned with `async`, awaited or stored.
-	// An enum case refused here is reported once, in the file that declares the enum, whichever file
-	// calls through it. Decided by `ProgramSignatures.resolveFunctionName`; a call is reported by
-	// `SemanticCheck.validateCall`, the other two doors by the parser.
+	// its result used, under `try` or `if let … = try`, spawned with `async`, awaited or stored, and in a
+	// top-level or `static` initializer. An enum case refused here is reported once, in the file that
+	// declares the enum, whichever file calls through it. Decided by `ProgramSignatures.resolveFunctionName`;
+	// a call is reported by `SemanticCheck` (`validateCall` in a body, `checkInitializerCalls` in an
+	// initializer), the other two doors by the parser.
 	semanticAmbiguousCrossFileCall = "E3095"
 
 	// `==`/`!=` against an enum/union value's `.name`, `.ordinal`, or

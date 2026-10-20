@@ -788,6 +788,11 @@ export type PassPipeline
 		end 'eachPass'
 	end 'run'
 
+	function reportInitializerCallsAndDeferredNames()
+		checkInitializerCalls(self.project, signatures: self.signatures)
+		reportDeferredNameDiagnostics(self.project, signatures: self.signatures)
+	end 'reportInitializerCallsAndDeferredNames'
+
 	// One arm per PassKind. Each reads the incoming module off `self`, runs the
 	// standalone pass algorithm, and writes the result back. The pass algorithms
 	// stay free functions (reusable outside the pipeline); dispatch just wires
@@ -804,7 +809,7 @@ export type PassPipeline
 		let probe = PhaseProbe.beginPhase(self.project, phase: compilePhaseOfPass(pass))
 
 		match pass 'dispatch'
-			reportDeferredNames then reportDeferredNameDiagnostics(self.project, signatures: self.signatures)
+			reportDeferredNames then self.reportInitializerCallsAndDeferredNames()
 			checkSignatureVisibility then checkSignatureVisibility(self.project, module: self.maxonModule, signatures: self.signatures)
 			resolveTypes then resolveTypes(self.project, module: self.maxonModule)
 			semanticCheck then try semanticCheck(self.project, module: self.maxonModule, signatures: self.signatures, funcNames: self.funcNames)

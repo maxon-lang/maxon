@@ -975,11 +975,6 @@ export union SourceParseError implements Error
 	// E2012, positioned at the LAST-DECLARED member's name — see `ProgramSignatures.recordCycle`.
 	circularConstants(names String, line LineNumber, column ColumnNumber)
 
-	// A CALL in a top-level constant's initializer (`let RESULT = compute()`). Renders as E2045,
-	// positioned at the callee's name. A call is not a constant expression: its answer needs the
-	// program to be RUNNING, and a top-level `let` is folded before any of it exists.
-	functionCallInConstant(callee String, line LineNumber, column ColumnNumber)
-
 	// A top-level constant's initializer that the evaluator folded only in PART — it stopped at a
 	// token it could not evaluate, with more of the line still to go. Renders as E2045, positioned at
 	// the first token it could not fold.
@@ -1989,16 +1984,10 @@ export union SourceParseError implements Error
 	// more ABI slots than its caller passes — see `ClosureParamOffer`.
 	uninferrableClosureParam(paramName String, line LineNumber, column ColumnNumber)
 
-	// ⭐⭐ **A TOP-LEVEL INITIALIZER NAMING A STATIC ITS FILE MAY NOT SEE** — `var db = Database.create()`
-	// against a `static function create` that is not exported. Renders as **E3008** or **E3088** by TIER,
-	// with the wording `SemanticCheck.reportCalleeNotVisible` gives the same mistake in a function BODY,
-	// through the one producer both call (`hiddenCalleeDiagnostic`).
-	//
-	// ⚠ **IT IS RAISED IN THE PARSER FOR `unknownTypeName`'S REASON, not by preference.** A top-level
-	// initializer is walked inside `queryProgramSignatures`, before any file is parsed and long before
-	// `FunctionNameIndex` exists — so the pass that owns this refusal for every other call cannot reach this
-	// one, and without an arm here the call was admitted silently (MEASURED: a cross-file file-private
-	// `Database.create` built and ran, where the byte-identical call from a function body is E3008).
+	// ⭐⭐ **A NAME ITS FILE MAY NOT SEE, REFUSED WHILE THE FILE IS PARSED** — a hidden type, a hidden static
+	// member, a `spawn` of a factory no visible declaration provides. Renders as **E3008** or **E3088** by
+	// TIER, with the wording `SemanticCheck.reportCalleeNotVisible` gives a hidden callee in a function BODY,
+	// through the one producer both call (`hiddenSymbolDiagnostic`).
 	//
 	// The TIER rides because it picks the code and the sentence, and the parser has it in hand from the
 	// sweep's own column — re-deriving it in the renderer would need the index the renderer has no handle to.
@@ -6877,15 +6866,25 @@ function overloadMemberHoldingSignature(members OverloadMemberArray, typeSuffix 
 	return OverloadRedeclaration.newSignature
 end 'overloadMemberHoldingSignature'
 
-function overloadMembersHoldTypeSuffix(members OverloadMemberArray, typeSuffix ByteArray) returns bool
+function overloadMemberTypeSuffixes(members OverloadMemberArray) returns NameRoster
+	var suffixes = NameRoster.create()
+
 	for member in members 'each'
-		if member.typeSuffix.equals(typeSuffix) 'same'
-			return true
-		end 'same'
+		suffixes.push(member.typeSuffix)
 	end 'each'
 
-	return false
-end 'overloadMembersHoldTypeSuffix'
+	return suffixes
+end 'overloadMemberTypeSuffixes'
+
+function overloadSuffixAmong(typeSuffix ByteArray, labelSuffix ByteArray, held NameRoster) returns ByteArray
+	for heldSuffix in held 'each'
+		if heldSuffix.equals(typeSuffix) 'sharesTheTypeSuffix'
+			return labelDistinguishedSuffix(typeSuffix, labelSuffix: labelSuffix)
+		end 'sharesTheTypeSuffix'
+	end 'each'
+
+	return typeSuffix
+end 'overloadSuffixAmong'
 
 // The members' registration names, in declaration order — the artifact's whole contribution, DERIVED from
 // the member records rather than accumulated beside them, so the two cannot fall out of step.
@@ -7756,7 +7755,7 @@ let EmptyConstArrayLiteralMessage = "an empty array literal `[]` as a top-level 
 // nothing else that follows — the visibility rule, the return rule, the argument walk and the arena entry
 // are the same for both, because a global's slot does not care which syntax named its filler.
 type ConstInitializerCallee
-	// The mangled `Type.method` (`qualifiedMethodName`) or the bare function name — the key the signature
+	// The mangled `Type.method` (`qualifiedMethodName`) or the name a bare call binds — the key the signature
 	// registry files the declaration under and the callee `__module_init`'s `call` op carries.
 	export let name as ByteArray
 
@@ -7767,10 +7766,20 @@ type ConstInitializerCallee
 	// so the sentences below cannot come to disagree about which token a top-level factory blames.
 	export let anchor as Token
 
-	static function create(name ByteArray, display String, anchor Token) returns ConstInitializerCallee
-		return Self{name: name, display: display, anchor: anchor}
+	// A top-level binding this file sees shares the bare name. Whether it is function-typed, and so the
+	// callee a body call would bind, is known only once binding types settle, so the fold is recorded
+	// `provisional` and the declaration's defects are carried for `SemanticCheck.checkInitializerCalls`.
+	export let contestedByABinding as bool
+
+	static function create(name ByteArray, display String, anchor Token, contestedByABinding bool) returns ConstInitializerCallee
+		return Self{name: name, display: display, anchor: anchor, contestedByABinding: contestedByABinding}
 	end 'create'
 end 'ConstInitializerCallee'
+
+union ConstBareCallee
+	claimed(let key ByteArray)
+	unclaimed
+end 'ConstBareCallee'
 
 function factoryReturnRefusal(callee ConstInitializerCallee, message String) returns ConstEvalError
 	return ConstEvalError.defective(SourceParseError.unsupported(message, line: callee.anchor.line, column: callee.anchor.column))
@@ -9118,21 +9127,81 @@ end 'mathBuiltinHelp'
 // ('does this name take labels', 'which op does it emit', 'what does an editor show for it') stay
 // distinct; what is shared is the one thing that must not be written twice, the SET.
 //
-// A builtin can still be a bare builtin without being here — EIGHT are: `spawnReadLine` and the seven
-// `subp*` streaming-subprocess builtins. Every one of them is a stand-in for a declaration that does not
-// exist yet, which is exactly why they keep the ordinary label rule. (`runProcess` is
-// `__Builtins.runProcess`; a `__Builtins.`-qualified name is not a bare builtin and takes
-// the `isBuiltinsIntrinsicCallee` half of the rule above instead.)
-//
-// ⚠ **THAT COUNT IS A PROSE COPY OF `parseCallNamed`'s CHAIN AND CAN GO WRONG**, which is
-// the very failure `StdlibLoader`'s collision rule tells a maintainer to guard against by reading the
-// CHAIN and never a list; if you are here to check whether a name is claimed, go read the chain anyway.
+// A builtin can still be a bare builtin without being here: the rest are `ProcessBuiltin`'s. Every one of
+// them is a stand-in for a declaration that does not exist yet, which is exactly why they keep the
+// ordinary label rule. (`runProcess` is `__Builtins.runProcess`; a `__Builtins.`-qualified name is not a
+// bare builtin and takes the `isBuiltinsIntrinsicCallee` half of the rule above instead.)
 function calleeTakesPositionalArgsOnly(callee ByteArray) returns bool
 	match mathBuiltinNamed(callee) 'roster'
 		found then return true
 		absent then return false
 	end 'roster'
 end 'calleeTakesPositionalArgsOnly'
+
+enum ProcessBuiltin
+	spawnReadLine
+	subpSpawn
+	subpReadLine
+	subpReadErrLine
+	subpWriteLine
+	subpCloseStdin
+	subpWait
+	subpRelease
+end 'ProcessBuiltin'
+
+union ProcessBuiltinLookup
+	found(builtin ProcessBuiltin)
+	absent
+end 'ProcessBuiltinLookup'
+
+function processBuiltinNamed(callee ByteArray) returns ProcessBuiltinLookup
+	if callee.equals(SpawnReadLineBuiltinName) 'spawnReadLineName'
+		return ProcessBuiltinLookup.found(ProcessBuiltin.spawnReadLine)
+	end 'spawnReadLineName'
+
+	if callee.equals(SubpSpawnBuiltinName) 'subpSpawnName'
+		return ProcessBuiltinLookup.found(ProcessBuiltin.subpSpawn)
+	end 'subpSpawnName'
+
+	if callee.equals(SubpReadLineBuiltinName) 'subpReadLineName'
+		return ProcessBuiltinLookup.found(ProcessBuiltin.subpReadLine)
+	end 'subpReadLineName'
+
+	if callee.equals(SubpReadErrLineBuiltinName) 'subpReadErrLineName'
+		return ProcessBuiltinLookup.found(ProcessBuiltin.subpReadErrLine)
+	end 'subpReadErrLineName'
+
+	if callee.equals(SubpWriteLineBuiltinName) 'subpWriteLineName'
+		return ProcessBuiltinLookup.found(ProcessBuiltin.subpWriteLine)
+	end 'subpWriteLineName'
+
+	if callee.equals(SubpCloseStdinBuiltinName) 'subpCloseStdinName'
+		return ProcessBuiltinLookup.found(ProcessBuiltin.subpCloseStdin)
+	end 'subpCloseStdinName'
+
+	if callee.equals(SubpWaitBuiltinName) 'subpWaitName'
+		return ProcessBuiltinLookup.found(ProcessBuiltin.subpWait)
+	end 'subpWaitName'
+
+	if callee.equals(SubpReleaseBuiltinName) 'subpReleaseName'
+		return ProcessBuiltinLookup.found(ProcessBuiltin.subpRelease)
+	end 'subpReleaseName'
+
+	return ProcessBuiltinLookup.absent
+end 'processBuiltinNamed'
+
+// Must hold every bare builtin `parseCallNamed` emits: one it omits classifies as undeclared, so an
+// initializer calling it is refused as E3004 rather than E2045.
+module function isBareBuiltinCallee(callee ByteArray) returns bool
+	if calleeTakesPositionalArgsOnly(callee) 'aMathIntrinsic'
+		return true
+	end 'aMathIntrinsic'
+
+	return match processBuiltinNamed(callee) 'process'
+		found gives true
+		absent gives false
+	end 'process'
+end 'isBareBuiltinCallee'
 
 // ⭐ **THE `__Builtins` INTRINSIC TABLE — THE ONE PLACE THE RECOGNIZED SET IS STATED.**
 //
@@ -13945,6 +14014,7 @@ union ManagedReceiverBinding
 	// bytes, its type NAME and the tag its value stands at rather than a record description: a box has no
 	// stride, count or element destructor to describe.
 	imageBox(nodes ImmortalBoxNodeArray, root ElementIndex, let typeName ByteArray, tag ValueTypeTag)
+	poisoned
 end 'ManagedReceiverBinding'
 
 // ⭐ **DID A TOP-LEVEL MANAGED RECEIVER ANSWER THIS CALL?** — `dispatchOnManagedTopLevelReceiver`'s two
@@ -19595,6 +19665,8 @@ export type Parser
 	// and a closure value is only ever CALLED within its own defining function (returning one out hands
 	// the caller a function-ALIAS-typed value, whose return comes from the alias, not from here).
 	var closureShapes as FunctionValueShapeMap
+	var initializerCalls as InitializerCallSiteArray
+	var constInitializerEnd as ElementIndex
 	var instanceViewAliasAt as InstanceViewAliasIndexMap
 	var functionHoldings as FunctionHoldingAnswers
 	var imageableVerdicts as ImageableVerdictMap
@@ -19943,6 +20015,8 @@ export type Parser
 			mintedTests: MintedTestArray.create(),
 			deferredPatternBindings: TokenArray.create(),
 			closureShapes: FunctionValueShapeMap.create(),
+			initializerCalls: InitializerCallSiteArray.create(),
+			constInitializerEnd: 0,
 			instanceViewAliasAt: InstanceViewAliasIndexMap.create(),
 			functionHoldings: FunctionHoldingAnswers.create(),
 			imageableVerdicts: ImageableVerdictMap.create(),
@@ -26692,7 +26766,7 @@ export type Parser
 
 		var members = self.overloadMembersOf(self.signatures.memberRegistrationKey(base, takesReceiver: takesReceiver))
 		try self.requireOverloadableName(base, nameTok: nameTok)
-		let typeSuffix = self.overloadTypeSuffix(paramTypes, takesReceiver: takesReceiver)
+		let typeSuffix = self.mintedTypeSuffix(registrationBase, paramTypes: paramTypes, takesReceiver: takesReceiver, nameTok: nameTok)
 		let labelSuffix = overloadLabelSuffix(paramNames, takesReceiver: takesReceiver)
 
 		match overloadMemberHoldingSignature(members, typeSuffix: typeSuffix, labelSuffix: labelSuffix) 'redeclaration'
@@ -26700,7 +26774,7 @@ export type Parser
 			newSignature then break
 		end 'redeclaration'
 
-		let suffix = labelDistinguishedSuffix(typeSuffix, labelSuffix: labelSuffix) if overloadMembersHoldTypeSuffix(members, typeSuffix: typeSuffix) else typeSuffix
+		let suffix = overloadSuffixAmong(typeSuffix, labelSuffix: labelSuffix, held: overloadMemberTypeSuffixes(members))
 		let registered = self.unclaimedRegistrationName(registrationBase, suffix: suffix)
 		self.claimFuncName(registered)
 		let member = OverloadMember.create(registered, typeSuffix: typeSuffix, labelSuffix: labelSuffix)
@@ -40320,7 +40394,8 @@ export type Parser
 	function rebindTupleAssignTarget(func IrFunction, nameTok Token, element ValueId) throws SourceParseError
 		if not self.bodyState.scope.contains(nameTok.value) 'notALocal'
 			match self.signatures.globalDeclFor(nameTok.value, readerFilePath: self.job.path, into: self.artifact.typeNames) 'global'
-				found then throw SourceParseError.unsupported("a tuple-assignment target naming the module-scope binding '{String.from(nameTok.value)}' (a module binding is written through a different store, which parses its own right-hand side; assign the element to a local and store that)", line: nameTok.line, column: nameTok.column)
+				found or
+				poisoned then throw SourceParseError.unsupported("a tuple-assignment target naming the module-scope binding '{String.from(nameTok.value)}' (a module binding is written through a different store, which parses its own right-hand side; assign the element to a local and store that)", line: nameTok.line, column: nameTok.column)
 				notFound then try self.rejectNonGlobalAssignment(nameTok)
 			end 'global'
 		end 'notALocal'
@@ -41478,6 +41553,7 @@ export type Parser
 		match self.signatures.globalDeclFor(nameTok.value, readerFilePath: self.job.path, into: self.artifact.typeNames) 'global'
 			found(label, valueType, brand, mutable) then try self.storeToGlobal(func, block: block, nameTok: nameTok, label: label, valueType: valueType, brand: brand, mutable: mutable)
 			notFound then try self.rejectNonGlobalAssignment(nameTok)
+			poisoned then _ = try self.parseExpression(func, block: block)
 		end 'global'
 	end 'parseTopLevelAssignment'
 
@@ -44135,7 +44211,8 @@ export type Parser
 			found or
 			foundManaged or
 			foundImageRecord or
-			foundImageBox then throw assignToImmutableError(nameTok)
+			foundImageBox or
+			poisoned then throw assignToImmutableError(nameTok)
 			notFound then throw SourceParseError.undefinedVariable(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
 		end 'constant'
 	end 'rejectNonGlobalAssignment'
@@ -55486,7 +55563,8 @@ export type Parser
 			found or
 			foundManaged or
 			foundImageRecord or
-			foundImageBox gives true
+			foundImageBox or
+			poisoned gives true
 			notFound gives false
 		end 'constant'
 
@@ -55496,7 +55574,8 @@ export type Parser
 
 		return match self.signatures.globalDeclFor(name, readerFilePath: self.job.path, into: self.artifact.typeNames) 'global'
 			found(_, _, _, mutable) gives not mutable
-			notFound gives false
+			notFound or
+			poisoned gives false
 		end 'global'
 	end 'namesImmutableTopLevelBinding'
 
@@ -55552,7 +55631,8 @@ export type Parser
 
 		return match self.signatures.globalDeclFor(name, readerFilePath: self.job.path, into: self.artifact.typeNames) 'global'
 			found(_, _, _, mutable) gives mutable
-			notFound gives false
+			notFound or
+			poisoned gives false
 		end 'global'
 	end 'namesWritableModuleStorage'
 
@@ -55594,7 +55674,8 @@ export type Parser
 	function moduleStorageTypeOf(subjectName ByteArray) returns MaxonType
 		match self.signatures.globalDeclFor(subjectName, readerFilePath: self.job.path, into: self.artifact.typeNames) 'global'
 			found(_, valueType, _, _) then return valueType
-			notFound then panic("moduleStorageTypeOf: '{String.from(subjectName)}' is not a top-level binding — a subject name reaches here only past `namesWritableModuleStorage`, which asks this same lookup")
+			notFound or
+			poisoned then panic("moduleStorageTypeOf: '{String.from(subjectName)}' is not a top-level binding with a value — a subject name reaches here only past `namesWritableModuleStorage`, which asks this same lookup")
 		end 'global'
 	end 'moduleStorageTypeOf'
 
@@ -64824,6 +64905,7 @@ export type Parser
 			foundManaged or
 			foundImageRecord or
 			foundImageBox or
+			poisoned or
 			notFound panic("emitDefaultMailboxCapacity: `{String.from(DefaultMailboxCapacityName)}` is not an integer constant beside `{String.from(MailboxCapacityAliasName)}` in stdlib/Builtins.maxon")
 		end 'constant'
 	end 'emitDefaultMailboxCapacity'
@@ -68006,10 +68088,7 @@ export type Parser
 			notCaptured then break
 		end 'captured'
 
-		return match self.signatures.globalDeclFor(name, readerFilePath: self.job.path, into: self.artifact.typeNames) 'global'
-			found(_, valueType, _, _) gives maxonTypeTag(valueType) == ValueTypeTag.function
-			notFound gives false
-		end 'global'
+		return self.signatures.functionTypedBindingVisibleFrom(name, readerFilePath: self.job.path, into: self.artifact.typeNames)
 	end 'calleeIsFunctionTypedLocal'
 
 	// A primary expression: an integer literal, a `true`/`false` literal, a CHARACTER literal,
@@ -68733,14 +68812,6 @@ export type Parser
 	function slotSurfaceOf(value ValueId) returns DeclaredSurface
 		return bodySlotSurface(self.bodyState, value: value)
 	end 'slotSurfaceOf'
-
-	// Does the declaration being parsed declare a member called `name`?
-	function siblingReceiverDeclared(name ByteArray) returns bool
-		match self.siblingReceivers 'declaration'
-			unwritten then return false
-			entries(members) then return members.contains(name)
-		end 'declaration'
-	end 'siblingReceiverDeclared'
 
 	// Does that member take a receiver?
 	function siblingReceiverTakesReceiver(name ByteArray) returns bool throws MapError
@@ -72446,7 +72517,8 @@ export type Parser
 			found or
 			foundManaged or
 			foundImageRecord or
-			foundImageBox gives true
+			foundImageBox or
+			poisoned gives true
 			notFound gives false
 		end 'constant'
 
@@ -72455,7 +72527,8 @@ export type Parser
 		end 'inlined'
 
 		return match self.signatures.globalDeclFor(name, readerFilePath: self.job.path, into: self.artifact.typeNames) 'global'
-			found gives true
+			found or
+			poisoned gives true
 			notFound gives false
 		end 'global'
 	end 'namesTopLevelBinding'
@@ -74818,7 +74891,7 @@ export type Parser
 	function bareGenericBaseIsFedAnEnclosingParameter(base ByteArray, callee ByteArray, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray) returns bool
 		var anyMemberFills = false
 
-		for decl in self.signatures.overloadedDeclsOf(callee) 'eachMember'
+		for decl in self.signatures.declarationsVisibleFrom(callee, readerFilePath: self.job.path) 'eachMember'
 			let feed = self.memberFeed(base, decl: decl, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots)
 
 			if feed == MemberFeed.notFed 'thisMemberIsNotFed'
@@ -75034,13 +75107,21 @@ export type Parser
 		//
 		// ⇒ **REFUSED HERE RATHER THAN GUESSED.** The `spawn` road says so with a sentence; the ordinary road
 		// keeps the base `structRef` it had before this inference existed, so nothing legal is lost either way.
-		view decls = self.signatures.overloadedDeclsOf(callee)
+		view visible = self.signatures.declarationsVisibleFrom(callee, readerFilePath: self.job.path)
 
-		if decls.count() > 1 'anOverloadedFactory'
-			return try self.uninferredFactoryInstance(supplied, reason: UninferredFactoryReason.theFactoryIsOverloaded(decls.count()), typeName: base, callee: callee, anchor: anchor, spawned: spawned)
+		if visible.isEmpty() and spawned 'noDeclarationIsNameable'
+			throw self.unnameableFactoryRefusal(callee, anchor: anchor)
+		end 'noDeclarationIsNameable'
+
+		if visible.isEmpty() 'anOrdinaryCallOfAnUnnameableFactory'
+			return supplied
+		end 'anOrdinaryCallOfAnUnnameableFactory'
+
+		if visible.count() > 1 'anOverloadedFactory'
+			return try self.uninferredFactoryInstance(supplied, reason: UninferredFactoryReason.theFactoryIsOverloaded(self.signatures.overloadedDeclsOf(callee).count()), typeName: base, callee: callee, anchor: anchor, spawned: spawned)
 		end 'anOverloadedFactory'
 
-		let decl = serviceFirstDeclOf(decls, key: callee)
+		let decl = serviceFirstDeclOf(visible, key: callee)
 		var typeArgs = MaxonTypeArray.create()
 
 		for position in 0 upto params.count() 'eachTypeParam'
@@ -75080,6 +75161,13 @@ export type Parser
 		self.artifact.inferredInstantiationSites.push(GenericInstantiationSite.create(gid, nameLine: anchor.line, nameColumn: anchor.column, filePath: self.job.path))
 		return ConstructorInstance.instance(gid)
 	end 'spawnFactoryConstructorInstance'
+
+	function unnameableFactoryRefusal(callee ByteArray, anchor Token) returns SourceParseError
+		return match self.signatures.calleeVisibilityFrom(callee, readerFilePath: self.job.path) 'visibility'
+			hidden(tier) gives SourceParseError.symbolNotVisible(HiddenSymbolKind.functionDeclaration, symbol: String.from(callee), tier: tier, line: anchor.line, column: anchor.column)
+			visible panic("unnameableFactoryRefusal: '{String.from(callee)}' has no declaration this file may name yet its site says visible — an undeclared member is `classifyServiceTarget`'s E3134, which the `spawn` door asks before this one")
+		end 'visibility'
+	end 'unnameableFactoryRefusal'
 
 	// A value held at an interface type fixes no instantiation on either road: the instance would stand a fat
 	// pointer in a one-word slot, and no descriptor or layout can be built for one.
@@ -75422,7 +75510,8 @@ export type Parser
 			global(label, valueType, mutable) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: self.noteGlobalLetMapColumns(self.emitGlobalReceiverLoad(label, valueType: valueType, mutable: mutable, tok: tok), tok: tok, mutable: mutable), varType: valueType, mutable: mutable, resultUsed: resultUsed))
 			imageRecord(image) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: self.recordModuleLetRoot(self.emitImageRecordRead(image, range: SourceRange.ofToken(tok)), name: tok.value, image: true), varType: image.valueType, mutable: false, resultUsed: resultUsed))
 			imageBox(nodes, root, typeName, tag) then return ManagedTopLevelDispatch.dispatched(try self.dispatchOnManagedReceiver(func, baseTok: tok, value: self.recordModuleLetRoot(self.emitImageBoxRead(nodes, root: root, typeName: typeName, tag: tag, range: SourceRange.ofToken(tok)), name: tok.value, image: true), varType: self.imageBoxType(typeName, tag: tag), mutable: false, resultUsed: resultUsed))
-			none then return ManagedTopLevelDispatch.notAManagedReceiver
+			none or
+			poisoned then return ManagedTopLevelDispatch.notAManagedReceiver
 		end 'binding'
 	end 'dispatchOnManagedTopLevelReceiver'
 
@@ -76369,11 +76458,13 @@ export type Parser
 			foundImageRecord(image) then return ManagedReceiverBinding.imageRecord(image)
 			foundImageBox(nodes, root, typeName, tag) then return ManagedReceiverBinding.imageBox(nodes, root: root, typeName: typeName, tag: tag)
 			notFound then break
+			poisoned then return ManagedReceiverBinding.poisoned
 		end 'constant'
 
 		return match self.signatures.globalDeclFor(tok.value, readerFilePath: self.job.path, into: self.artifact.typeNames) 'global'
 			found(label, valueType, _, mutable) gives ManagedReceiverBinding.global(label, valueType: valueType, mutable: mutable)
 			notFound gives ManagedReceiverBinding.none
+			poisoned gives ManagedReceiverBinding.poisoned
 		end 'global'
 	end 'managedReceiverBindingOf'
 
@@ -80319,11 +80410,7 @@ export type Parser
 		let callee = try target.declaredName() otherwise return noClosureParamOffer
 		var offered = OfferedFunctionAlias.none
 
-		for candidate in self.signatures.overloadedDeclsOf(callee) 'eachCandidate'
-			if not self.signatures.isVisibleFrom(candidate.visibility, declFilePath: candidate.declFilePath, readerFilePath: self.job.path) 'notNameableFromHere'
-				continue
-			end 'notNameableFromHere'
-
+		for candidate in self.signatures.declarationsVisibleFrom(callee, readerFilePath: self.job.path) 'eachCandidate'
 			let slot = try argSlotPosition(candidate.paramNames, argIndex: sourceIndex, label: label) otherwise continue
 			let swept = try candidate.paramTypes.get(slot) otherwise panic("closureParamOfferAt: paramTypes.get OOB at {slot} — the sweep records one type per parameter name")
 			let slotType = self.slotTypeThroughCallReceiver(self.repairSweptType(self.signatures.adoptType(swept, into: self.artifact.typeNames), scopeFilePath: candidate.declFilePath), args: args, receiverArgs: receiverArgs, scopeFilePath: candidate.declFilePath)
@@ -81356,8 +81443,8 @@ export type Parser
 	//   * **IT MUST EXIST.** `Base.create` is the name the emitted call carries
 	//     (`declaredInstanceCreateCallee`); a generic that declares no `create()` would emit a call to nothing
 	//     and die at the backend's unresolved symbol, so it is refused here with the base named.
-	//   * **IT MUST BE NAMEABLE FROM THIS FILE** — `requireGlobalInitCalleeIsVisible`'s rule, which the user
-	//     factory form asks too and which carries the measurement for both.
+	//   * **IT MUST BE NAMEABLE FROM THIS FILE** — recorded as a foldable initializer call, as the user factory
+	//     form records its callee, and held to the callee's tier by `SemanticCheck.checkInitializerCalls`.
 	//   * **IT MUST RETURN ITS OWN TYPE.** The slot is typed `genericInstance(giid)` and the record's layout
 	//     descriptor and constraint witnesses are sourced from the call's RESULT (`hiddenArgumentSourceOf` takes a recorded call qualifier first, and `__module_init`'s call records none), which is the concrete
 	//     instance only for a `Self`-returning static (`ProgramSignatures.calleeReturnsItsDeclaringType`, whose
@@ -81394,37 +81481,12 @@ export type Parser
 			throw SourceParseError.unsupported("a top-level `{String.from(aliasTok.value)}.{String.from(CreateMethod)}()` — `{String.from(aliasTok.value)}` instantiates the generic `{String.from(baseName)}`, which declares no `{String.from(CreateMethod)}()` static, so `__module_init` has nothing to call before `main`. Give `{String.from(baseName)}` one, or build the value inside a function", line: aliasTok.line, column: aliasTok.column)
 		end 'noCreateStatic'
 
-		try self.requireGlobalInitCalleeIsVisible(callee, anchor: aliasTok)
-
 		if not self.signatures.calleeReturnsItsDeclaringType(callee) 'notAConstructor'
 			throw SourceParseError.unsupported("a top-level `{String.from(aliasTok.value)}.{String.from(CreateMethod)}()` — `{String.from(baseName)}.{String.from(CreateMethod)}` does not return `Self`, and a global declared this way holds the INSTANCE its alias names. A generic's layout descriptor and witnesses are read off what its `{String.from(CreateMethod)}()` hands back, so only a `Self`-returning one can build `{String.from(aliasTok.value)}`. Build the value inside a function", line: aliasTok.line, column: aliasTok.column)
 		end 'notAConstructor'
-	end 'requireDeclaredGenericGlobalCreate'
 
-	// ⭐⭐ **MAY THE DECLARING FILE NAME A FUNCTION `__module_init` WILL CALL ON ITS BEHALF? — the ONE home,
-	// asked by BOTH calling initializer forms.** A body's call site gets this from
-	// `SemanticCheck.calleeVisibleFrom`; this position cannot, because `__module_init` is a function no file
-	// wrote and that pass therefore EXEMPTS every call it makes — there is no reader path to hold them to
-	// (see `SemanticCheck.calleeVisibleFrom`'s synthesized-caller arm, which names both doors). Without the
-	// question asked here, an exported type's file-private `static` would be reachable from any file that
-	// writes `var db = Database.create()`. MEASURED before the guard existed: a cross-file file-private
-	// `Database.create` built and returned 7, where the byte-identical call from inside a function is E3008.
-	//
-	// It is asked HERE, where the reader file is known exactly, against the sweep's own visibility column and
-	// through the very same `isVisibleFrom` the body door uses — so the two askers can disagree about no
-	// declaration they both see. The refusing TIER rides back with the verdict because it picks the CODE
-	// (E3008 vs E3088).
-	//
-	// ⚠ **ONE RULE, TWO ANCHORS.** The factory form blames the METHOD token it wrote; the container form has
-	// no method token worth blaming — `create` is the only static that door admits — so it blames the ALIAS,
-	// which is where every other refusal on that path is anchored. That is why the anchor is the caller's and
-	// the rule is not.
-	function requireGlobalInitCalleeIsVisible(callee ByteArray, anchor Token) throws SourceParseError
-		match self.signatures.calleeVisibilityFrom(callee, readerFilePath: self.job.path) 'calleeVisibility'
-			visible then return
-			hidden(tier) then throw SourceParseError.symbolNotVisible(HiddenSymbolKind.functionDeclaration, symbol: String.from(callee), tier: tier, line: anchor.line, column: anchor.column)
-		end 'calleeVisibility'
-	end 'requireGlobalInitCalleeIsVisible'
+		self.noteFoldableInitializerCall(callee, anchor: aliasTok)
+	end 'requireDeclaredGenericGlobalCreate'
 
 	// ⭐ **THE ELEMENT/COLUMN GATE ONE CONTAINER'S `create` PASSES.** Its caller has already established that
 	// the instance is a builtin container with a `create`, so this is a TOTAL router over the THREE that have
@@ -84714,7 +84776,7 @@ export type Parser
 			return false
 		end 'noIndexParameter'
 
-		let decl = try self.signatures.singleDeclarationOf(qualifiedMethodName(typeName, methodName: member)) otherwise return false
+		let decl = try self.signatures.soleVisibleDeclarationOf(qualifiedMethodName(typeName, methodName: member), readerFilePath: self.job.path) otherwise return false
 
 		return match self.signatures.declaredParamAliasAt(decl, position: 0) 'indexType'
 			declared(alias) gives maxonTypeTag(alias.underlying) != ValueTypeTag.integer
@@ -87945,6 +88007,7 @@ export type Parser
 				// QUALIFIED name because that is what this chain is rooted at.
 				constant or
 				none then break
+				poisoned then panic("resolveFieldChain: a poisoned base is answered by `chainBaseDeferralSource` before the chain is resolved, in both the read and the write door")
 				global(label, valueType, mutable) then return try self.resolveGlobalFieldChain(nameTok, label: label, valueType: valueType, mutable: mutable)
 				imageBox(nodes, root, typeName, tag) then return try self.resolveValueFieldChain(nameTok, value: self.recordModuleLetRoot(self.emitImageBoxRead(nodes, root: root, typeName: typeName, tag: tag, range: SourceRange.ofToken(nameTok)), name: nameTok.value, image: true), valueType: self.imageBoxType(typeName, tag: tag), mutable: false)
 				imageRecord(image) then return try self.resolveValueFieldChain(nameTok, value: self.recordModuleLetRoot(self.emitImageRecordRead(image, range: SourceRange.ofToken(nameTok)), name: nameTok.value, image: true), valueType: image.valueType, mutable: false)
@@ -87973,6 +88036,7 @@ export type Parser
 				// chain's own diagnostic rather than a claim that the base does not exist.
 				constant or
 				none then break
+				poisoned then panic("resolveFieldChain: a poisoned base is answered by `chainBaseDeferralSource` before the chain is resolved, in both the read and the write door")
 				global(label, valueType, mutable) then return try self.resolveGlobalFieldChain(baseTok, label: label, valueType: valueType, mutable: mutable)
 				imageBox(nodes, root, typeName, tag) then return try self.resolveValueFieldChain(baseTok, value: self.recordModuleLetRoot(self.emitImageBoxRead(nodes, root: root, typeName: typeName, tag: tag, range: SourceRange.ofToken(baseTok)), name: baseTok.value, image: true), valueType: self.imageBoxType(typeName, tag: tag), mutable: false)
 				imageRecord(image) then return try self.resolveValueFieldChain(baseTok, value: self.recordModuleLetRoot(self.emitImageRecordRead(image, range: SourceRange.ofToken(baseTok)), name: baseTok.value, image: true), valueType: image.valueType, mutable: false)
@@ -90903,6 +90967,7 @@ export type Parser
 			foundManaged(bytes, kind) then return self.recordImmutableConstantRead(tok, value: try self.emitManagedConstant(bytes, kind: kind, range: SourceRange.ofToken(tok)))
 			foundImageRecord(image) then return self.recordImmutableConstantRead(tok, value: self.emitImageRecordRead(image, range: SourceRange.ofToken(tok)))
 			foundImageBox(nodes, root, typeName, tag) then return self.recordImmutableConstantRead(tok, value: self.emitImageBoxRead(nodes, root: root, typeName: typeName, tag: tag, range: SourceRange.ofToken(tok)))
+			poisoned then return self.mintDeferredValue()
 			notFound then break
 		end 'constant'
 
@@ -91138,6 +91203,7 @@ export type Parser
 		match self.signatures.globalDeclFor(tok.value, readerFilePath: self.job.path, into: self.artifact.typeNames) 'global'
 			found(label, valueType, brand, mutable) then return self.noteGlobalLetMapColumns(self.moduleSlotReference(func, tok: tok, site: site, label: label, valueType: valueType, brand: brand, mutable: mutable), tok: tok, mutable: mutable)
 			notFound then return try self.emitFunctionRef(tok)
+			poisoned then return self.mintDeferredValue()
 		end 'global'
 	end 'topLevelGlobalRead'
 
@@ -91868,7 +91934,7 @@ export type Parser
 			// named function becomes a value through. The THROWING half is refused just below;
 			// the INTERFACE-RETURNING half is the same ABI fact and would otherwise reach
 			// `witnessOfValue` with a call result nothing paired — MEASURED, `let f = make` then `f(42)`.
-			declared(returnType) then try self.requireFunctionValueReturnHasRoom(returnType, tok: tok)
+			declared(returnType) then try self.requireFunctionValueReturnHasRoom(self.returnTypeBehindFunctionValue(funcName, tabulated: returnType), tok: tok)
 			undeclared then throw SourceParseError.undefinedVariable(String.from(tok.value), line: tok.line, column: tok.column)
 		end 'callee'
 
@@ -91911,8 +91977,83 @@ export type Parser
 	// written, which every refusal quotes, and anchors it.
 	function emitNamedFunctionRef(tok Token, funcName ByteArray) returns ValueId throws SourceParseError
 		try self.requireNameIsUsableAsFunctionValue(tok, funcName: funcName)
-		return self.emitImmortalFunctionRef(funcName, anchor: tok)
+		return self.emitImmortalFunctionRef(self.functionValueTarget(funcName), anchor: tok)
 	end 'emitNamedFunctionRef'
+
+	function functionValueMember(key ByteArray) returns OverloadedDecl throws AbsentError
+		if self.signatures.overloadedDeclsOf(key).count() < 2 'aSingleDeclaration'
+			throw AbsentError.absent
+		end 'aSingleDeclaration'
+
+		return try self.signatures.soleVisibleDeclarationOf(key, readerFilePath: self.job.path) otherwise throw AbsentError.absent
+	end 'functionValueMember'
+
+	function returnTypeBehindFunctionValue(key ByteArray, tabulated MaxonReturnType) returns MaxonReturnType
+		let member = try self.functionValueMember(key) otherwise return tabulated
+		return self.signatures.adoptReturnType(member.returnType, into: self.artifact.typeNames)
+	end 'returnTypeBehindFunctionValue'
+
+	function functionValueTarget(key ByteArray) returns ByteArray
+		let member = try self.functionValueMember(key) otherwise return key
+
+		if not self.signatures.isCrossFileOverloadedFreeFunctionAt(key, declFilePath: member.declFilePath) 'notMintedPerFile'
+			return key
+		end 'notMintedPerFile'
+
+		return self.registeredNameOfDeclaration(key, decl: member)
+	end 'functionValueTarget'
+
+	// The name the declaring file's parse registered `decl` under, recomputed from another file: the held
+	// suffixes are those of the members declared before it in that file, as at the mint. A name that differs
+	// is a function value of a symbol nothing defines.
+	function registeredNameOfDeclaration(base ByteArray, decl OverloadedDecl) returns ByteArray
+		var held = NameRoster.create()
+
+		for other in self.signatures.overloadedDeclsOf(base) 'eachDeclaration'
+			if other.site.equals(decl.site) 'reachedThisDeclaration'
+				break
+			end 'reachedThisDeclaration'
+
+			if other.declFilePath.equals(decl.declFilePath) 'earlierInTheSameFile'
+				held.push(self.overloadSuffixOfDeclaration(other))
+			end 'earlierInTheSameFile'
+		end 'eachDeclaration'
+
+		return overloadRegistrationName(base, suffix: overloadSuffixAmong(self.overloadSuffixOfDeclaration(decl), labelSuffix: overloadLabelSuffix(decl.paramNames, takesReceiver: decl.takesReceiver), held: held))
+	end 'registeredNameOfDeclaration'
+
+	function overloadSuffixOfDeclaration(decl OverloadedDecl) returns ByteArray
+		var adopted = MaxonTypeArray.create()
+
+		for swept in decl.paramTypes 'eachParam'
+			adopted.push(self.sweptParamType(swept, scopeFilePath: decl.declFilePath))
+		end 'eachParam'
+
+		return self.overloadTypeSuffix(adopted, takesReceiver: decl.takesReceiver)
+	end 'overloadSuffixOfDeclaration'
+
+	// A cross-file overloaded free function's suffix is read off the swept declaration, the input another
+	// file's function value recomputes it from (`registeredNameOfDeclaration`).
+	function mintedTypeSuffix(registrationBase ByteArray, paramTypes MaxonTypeArray, takesReceiver bool, nameTok Token) returns ByteArray
+		if not self.namesACrossFileOverloadedFreeFunction(nameTok) 'notReadBackThroughTheIndex'
+			return self.overloadTypeSuffix(paramTypes, takesReceiver: takesReceiver)
+		end 'notReadBackThroughTheIndex'
+
+		let decl = try self.signatures.overloadedDeclAt(registrationBase, site: declarationSiteKey(self.job.path, line: nameTok.line, column: nameTok.column)) otherwise panic("mintedTypeSuffix: the sweep filed no declaration of '{String.from(registrationBase)}' at {nameTok.line}:{nameTok.column} — it records every function declaration it parses")
+		return self.overloadSuffixOfDeclaration(decl)
+	end 'mintedTypeSuffix'
+
+	function overloadMemberDeclaredAs(registered ByteArray) returns OverloadedDecl throws AbsentError
+		let base = overloadRegistrationBaseName(registered)
+
+		for decl in self.signatures.overloadedDeclsOf(base) 'eachDeclaration'
+			if self.registeredNameOfDeclaration(base, decl: decl).equals(registered) 'thisOne'
+				return decl
+			end 'thisOne'
+		end 'eachDeclaration'
+
+		throw AbsentError.absent
+	end 'overloadMemberDeclaredAs'
 
 	function emitFunctionRefOp(funcName ByteArray, anchor Token) returns ValueId
 		let result = self.mintValue(ValueTypeTag.function, nameId: self.artifact.typeNames.intern(funcName))
@@ -92739,6 +92880,7 @@ export type Parser
 	// from a scalar one in exactly what its VALUE is (bytes, not a number).
 	export function evalConstInitializer(decl TopLevelDecl, stack TopLevelDeclIndexArray) returns ConstInitializerValue throws ConstEvalError
 		self.pos = decl.initStart
+		self.constInitializerEnd = decl.initEnd
 		self.seatInDeclaringTypeBody(decl)
 		try self.enterConstTypeHead(TypeNameHeadForm.construction)
 		try self.enterConstChain()
@@ -92896,8 +93038,9 @@ export type Parser
 	// ⭐⭐ **DOES THE CURSOR SIT ON A CALL A GLOBAL'S INITIALIZER DEFERS TO `__module_init` — either
 	// `<TypeName>.<method>(` or a bare `<function>(`?** One question in two spellings, and the decisive
 	// token is the LAST of the lookahead: what makes either form recognizable is that some file DECLARES a
-	// function under that name, which is exactly the question the call site asks
-	// (`Parser.staticCallClaimsBase`) and exactly the key the signature index files a declaration under.
+	// function under the name the call binds, which is exactly the question the call site asks
+	// (`Parser.staticCallClaimsBase`) and exactly the key the signature index files a declaration under. The
+	// bare form binds its name through `claimedConstBareCallee`, the classifier a body call is dispatched by.
 	// Asking anything weaker — "does the head start with a capital?", "is the member `create`?" — would be a
 	// second, weaker reading of what a call IS.
 	//
@@ -92913,13 +93056,13 @@ export type Parser
 	//     `<identifier> .` as a ranged-type bound (`i64.min`) and fails at the `(` — so claiming it whole and
 	//     then EXPLAINING the refusal (`requireFactoryReturnsARecord`) is strictly better than any message
 	//     the bound reader could give.
-	//   * a bare `<name>(` is already owned, precisely worded, by the fold's own call rejection
-	//     (`evalConstNamed` → E2045 *"Function calls are not allowed in global variable initializers"*),
-	//     which `specs/top-level-let.md` and
-	//     `specs/static-variables.md` pin verbatim on `compute()` and `getDefault()`. Both of those return a
-	//     SCALAR, and a scalar global's value is written into the `.data` image before any code runs — so the
-	//     canonical sentence is exactly true of every bare call this test declines, and claiming those here
-	//     would only re-word a refusal two canonical specs already fix.
+	//   * a bare `<name>(` this test declines is recorded as an unclaimed initializer call (`evalConstNamed`),
+	//     and `SemanticCheck.checkInitializerCalls` gives it a body call's verdict — for a declared callee
+	//     returning a SCALAR, E2045 *"Function calls are not allowed in global variable initializers"*, which
+	//     `specs/top-level-let.md` and `specs/static-variables.md` pin verbatim on `compute()` and
+	//     `getDefault()`. A scalar global's value is written into the `.data` image before any code runs, so
+	//     that sentence is exactly true of such a call, and claiming it here would only re-word a refusal two
+	//     canonical specs already fix.
 	//
 	// ⇒ **The admitted set is the same in both shapes** — a declared callee returning a record — and only
 	// the REFUSAL differs, which is the same split `requireFactoryReturnsARecord`'s sentence table already
@@ -92934,15 +93077,48 @@ export type Parser
 				return false
 			end 'notACall'
 
-			return self.signatures.declaresCallee(qualifiedMethodName(self.current().value, methodName: self.tokenAt(self.pos + 2).value))
+			return self.signatures.declaresCallee(self.constQualifiedCalleeKey(self.current(), methodTok: self.tokenAt(self.pos + 2)))
 		end 'qualified'
 
 		if self.peekKind() != TokenKind.leftParen 'notACall'
 			return false
 		end 'notACall'
 
-		return self.signatures.globalFactoryReturnsARecord(self.current().value)
+		return match self.claimedConstBareCallee(self.current().value) 'callee'
+			claimed(key) gives self.signatures.globalFactoryReturnsARecord(key)
+			unclaimed gives false
+		end 'callee'
 	end 'atConstInitializerCall'
+
+	function claimedConstBareCallee(written ByteArray) returns ConstBareCallee
+		let enclosing = self.enclosingTypeNameOrEmpty()
+		let kind = self.signatures.bareCallKindFrom(written, readerFilePath: self.job.path, enclosingTypeName: enclosing, mayUseReserved: self.fileMayUseReservedNames(), bindings: BindingTypes.unsettled)
+
+		return match kind 'kind'
+			staticSibling gives ConstBareCallee.claimed(qualifiedMethodName(enclosing, methodName: written))
+			declaredVisible gives ConstBareCallee.claimed(self.signatures.nameABareCallBinds(written, readerFilePath: self.job.path))
+			topLevelBinding or
+			instanceSibling or
+			reserved or
+			ambiguous or
+			genericTemplate or
+			builtin or
+			declaredHidden or
+			undeclared gives ConstBareCallee.unclaimed
+		end 'kind'
+	end 'claimedConstBareCallee'
+
+	function enclosingTypeNameOrEmpty() returns ByteArray
+		return try self.enclosingType.typeName() otherwise EmptySourceText
+	end 'enclosingTypeNameOrEmpty'
+
+	function constQualifiedCalleeKey(headTok Token, methodTok Token) returns ByteArray
+		return match self.signatures.resolveFunctionName(joinQualifiedName(headTok.value, member: methodTok.value), readerFilePath: self.job.path) 'resolution'
+			declaration(name) gives name
+			undeclared gives qualifiedMethodName(headTok.value, methodName: methodTok.value)
+			ambiguous panic("constQualifiedCalleeKey: a qualified function name resolves to a declaration or to nothing — `resolveQualifiedFunctionName` has no ambiguous answer, and only a bare name can have several visible candidates")
+		end 'resolution'
+	end 'constQualifiedCalleeKey'
 
 	// ⭐⭐ **SEAT THIS THROWAWAY EVALUATOR IN THE BODY THE DECLARATION WAS WRITTEN IN.** The evaluator is
 	// a `Parser` built per DECL over a token range (`ProgramSignatures.walkConstInitializer`), so it starts at
@@ -93182,7 +93358,7 @@ export type Parser
 		end 'unusable'
 
 		self.advance()
-		return self.pushConstNode(calls, node: ConstFactoryCall.functionValue(funcName))
+		return self.pushConstNode(calls, node: ConstFactoryCall.functionValue(self.functionValueTarget(funcName)))
 	end 'evalConstFunctionReferenceInto'
 
 	// ⭐⭐ **`FilePath from ""` AS AN INITIALIZER — recorded as the CALL it already is.** The body form is a
@@ -93196,10 +93372,10 @@ export type Parser
 	// rather than a nested `call` because a literal runs no user code; that is the whole of the difference
 	// between this arm and the one below it.
 	//
-	// ⛔⛔ **IT ASKS WHETHER THE `init` EXISTS, AND DELIBERATELY NOT WHETHER IT IS EXPORTED.**
-	// `requireGlobalInitCalleeIsVisible` — the door the qualified factory form takes — refuses this
-	// compiler's own `Project.maxon:381` with `E3008 function 'FilePath.init' is not exported`. That
-	// is the right question for `Database.create(…)`, where the author NAMED the method, and the wrong
+	// ⛔⛔ **IT ASKS WHETHER THE `init` EXISTS, AND DELIBERATELY NOT WHETHER IT IS EXPORTED.** Recorded the
+	// way the qualified factory form records its callee, `SemanticCheck.checkInitializerCalls` would refuse
+	// this compiler's own `FilePath from` initializers with `E3008 function 'FilePath.init' is not exported`.
+	// That is the right question for `Database.create(…)`, where the author NAMED the method, and the wrong
 	// one here: this construction reaches `init` through the type's CONFORMANCE and never spells it,
 	// which is exactly why the body form (`parseStringLiteralInitConstruction`) does not ask it
 	// either. Asking existence keeps the arm honest about what it is recording — a call
@@ -93272,8 +93448,8 @@ export type Parser
 	// `atConstInitializerCall` has already established that some file declares this callee.
 	//
 	// ⭐ **THIS IS THE ONE INITIALIZER FORM THAT RUNS USER CODE, AND EVERYTHING ELSE ABOUT IT FOLLOWS FROM
-	// THAT.** `evalConstNamed` refuses `f()` because a call's answer needs the program to be RUNNING — still
-	// true, and still nothing is folded here. What the walk produces is the CALL, which `__module_init`
+	// THAT.** A call the evaluator declines is refused because its answer needs the program to be RUNNING —
+	// still true, and still nothing is folded here. What the walk produces is the CALL, which `__module_init`
 	// makes before `main`, so the answer exists by the time any user code can read the slot.
 	//
 	// ⚠ **THE FACTORY MAY NOT READ ANOTHER GLOBAL — and that is a property of the ARGUMENTS, not a rule this
@@ -93300,17 +93476,13 @@ export type Parser
 	// ⚠ **`nested` DECIDES WHICH RETURN RULE APPLIES, AND ONLY THAT.** Both positions demand a record and
 	// neither demands anything else — the visibility of the type, the visibility of the callee and the
 	// E3062 name recording are the same three checks wherever the call is written, which is why they are
-	// asked here once rather than by two callers.
+	// asked (the callee's, recorded) here once rather than by two callers.
 	function evalConstFactoryCallInto(calls ConstFactoryCallArray, stack TopLevelDeclIndexArray, nested bool) returns ElementIndex throws ConstEvalError
 		let callee = try self.consumeConstInitializerCallee()
 
-		// THE CALLEE'S OWN VISIBILITY, anchored at the name the author wrote. The rule itself is
-		// `requireGlobalInitCalleeIsVisible`'s — see there for why this position has to ask it at all.
-		try self.requireGlobalInitCalleeIsVisible(callee.name, anchor: callee.anchor) otherwise (err) 'hiddenFactoryMethod'
-			throw ConstEvalError.defective(err)
-		end 'hiddenFactoryMethod'
-
-		try self.requireFactoryReturnsARecord(callee, nested: nested)
+		try self.requireFactoryReturnsARecord(callee, nested: nested) otherwise (err) 'theDeclarationRefusesIt'
+			throw self.carriedOrRaised(callee, error: err)
+		end 'theDeclarationRefusesIt'
 
 		try self.consumeConstToken(TokenKind.leftParen)
 		var args = ConstFactoryArgumentArray.create()
@@ -93328,15 +93500,45 @@ export type Parser
 		end 'hasArguments'
 
 		try self.consumeConstToken(TokenKind.rightParen)
-		try self.requireConstFactoryFirstArgNameHasDefault(callee, args: args, argTokens: argTokens)
-		try self.requireConstFactoryArgumentsFit(callee, args: args, argTokens: argTokens)
+		try self.requireConstFactoryFirstArgNameHasDefault(callee, args: args, argTokens: argTokens) otherwise (err) 'theDeclarationRefusesTheLabel'
+			throw self.carriedOrRaised(callee, error: err)
+		end 'theDeclarationRefusesTheLabel'
+
+		try self.requireConstFactoryArgumentsFit(callee, args: args, argTokens: argTokens) otherwise (err) 'theDeclarationRefusesTheArguments'
+			throw self.carriedOrRaised(callee, error: err)
+		end 'theDeclarationRefusesTheArguments'
 
 		self.fillConstFactoryArgDefaults(calls, callee: callee, args: args)
 
-		var node = try self.constFactoryNode(callee, args: args, calls: calls)
+		var node = try self.constFactoryNode(callee, args: args, calls: calls) otherwise (err) 'theDeclarationRefusesTheNode'
+			throw self.carriedOrRaised(callee, error: err)
+		end 'theDeclarationRefusesTheNode'
+
+		if callee.contestedByABinding 'maybeTheBindingsCall'
+			self.initializerCalls.push(InitializerCallSite.provisional(callee.name, written: callee.anchor.value, defect: CarriedDefect.none, readerFilePath: self.job.path, range: SourceRange.ofToken(callee.anchor)))
+		end 'maybeTheBindingsCall' else 'aFactoryNoBindingContests'
+			self.noteFoldableInitializerCall(callee.name, anchor: callee.anchor)
+		end 'aFactoryNoBindingContests'
 
 		return self.pushConstNode(calls, node: node)
 	end 'evalConstFactoryCallInto'
+
+	function carriedOrRaised(callee ConstInitializerCallee, error ConstEvalError) returns ConstEvalError
+		if not callee.contestedByABinding 'nothingContestsTheClaim'
+			return error
+		end 'nothingContestsTheClaim'
+
+		return match error 'kind'
+			defective(defect) gives self.carriedDefect(callee, defect: defect)
+			dependencyFailed or
+			deferred gives error
+		end 'kind'
+	end 'carriedOrRaised'
+
+	function carriedDefect(callee ConstInitializerCallee, defect SourceParseError) returns ConstEvalError
+		self.initializerCalls.push(InitializerCallSite.provisional(callee.name, written: callee.anchor.value, defect: CarriedDefect.carried(defect.clone()), readerFilePath: self.job.path, range: SourceRange.ofToken(callee.anchor)))
+		return ConstEvalError.deferred
+	end 'carriedDefect'
 
 	function requireConstFactoryFirstArgNameHasDefault(callee ConstInitializerCallee, args ConstFactoryArgumentArray, argTokens TokenArray) throws ConstEvalError
 		let first = try args.get(0) otherwise return
@@ -93348,7 +93550,7 @@ export type Parser
 	end 'requireConstFactoryFirstArgNameHasDefault'
 
 	function requireConstFactoryArgumentsFit(callee ConstInitializerCallee, args ConstFactoryArgumentArray, argTokens TokenArray) throws ConstEvalError
-		let decl = try self.signatures.singleDeclarationOf(callee.name) otherwise return
+		let decl = try self.signatures.soleVisibleDeclarationOf(callee.name, readerFilePath: self.job.path) otherwise return
 
 		for i in 0 upto args.count() 'eachArgument'
 			let arg = try args.get(i) otherwise panic("requireConstFactoryArgumentsFit: args.get OOB at {i} below count {args.count()}")
@@ -93462,7 +93664,7 @@ export type Parser
 			return ConstFactoryCall.call(callee.name, args: args)
 		end 'notAFoldableFactory'
 
-		match self.signatures.constFactoryConstructionOf(callee.name) 'known'
+		match self.signatures.constFactoryConstructionAmong(self.signatures.declarationsVisibleFrom(callee.name, readerFilePath: self.job.path)) 'known'
 			unfoldable then return ConstFactoryCall.call(callee.name, args: args)
 			folds(layout, paramNames) then return try self.constFactoryConstruction(callee, args: args, calls: calls, layout: layout, paramNames: paramNames)
 		end 'known'
@@ -93529,7 +93731,11 @@ export type Parser
 	function consumeConstInitializerCallee() returns ConstInitializerCallee throws ConstEvalError
 		if self.peekKind() != TokenKind.dot 'aFreeFunction'
 			let calleeTok = try self.consumeConst(TokenKind.identifier)
-			return ConstInitializerCallee.create(calleeTok.value, display: String.from(calleeTok.value), anchor: calleeTok)
+
+			return match self.claimedConstBareCallee(calleeTok.value) 'callee'
+				claimed(key) gives ConstInitializerCallee.create(key, display: String.from(calleeTok.value), anchor: calleeTok, contestedByABinding: self.signatures.topLevelBindingVisibleFrom(calleeTok.value, readerFilePath: self.job.path))
+				unclaimed panic("consumeConstInitializerCallee: a bare call no declaration claims is never consumed here — `atConstInitializerCall` answers false for it, and its refusal is `SemanticCheck.checkInitializerCalls`'s")
+			end 'callee'
 		end 'aFreeFunction'
 
 		let typeHead = try self.consumeConstTypeNameHead(TypeNameHeadForm.reference)
@@ -93537,7 +93743,7 @@ export type Parser
 		try self.consumeConstToken(TokenKind.dot)
 		let methodTok = try self.consumeConst(TokenKind.identifier)
 
-		return ConstInitializerCallee.create(qualifiedMethodName(headTok.value, methodName: methodTok.value), display: "{String.from(headTok.value)}.{String.from(methodTok.value)}", anchor: methodTok)
+		return ConstInitializerCallee.create(self.constQualifiedCalleeKey(headTok, methodTok: methodTok), display: "{String.from(headTok.value)}.{String.from(methodTok.value)}", anchor: methodTok, contestedByABinding: false)
 	end 'consumeConstInitializerCallee'
 
 	// ⭐⭐ **A TOP-LEVEL FACTORY MUST HAND BACK A RECORD, WHEREVER THE CALL WAS WRITTEN — ONE MATCH, TWO
@@ -95302,17 +95508,41 @@ export type Parser
 		return value
 	end 'evalConstGroup'
 
-	// An identifier in a constant: a CALL (rejected), a type-qualified bound (`u16.max`), or a
+	function noteUnclaimedInitializerCall(calleeTok Token)
+		self.initializerCalls.push(InitializerCallSite.unclaimed(calleeTok.value, enclosingTypeName: self.enclosingTypeNameOrEmpty(), mayUseReserved: self.fileMayUseReservedNames(), readerFilePath: self.job.path, range: SourceRange.ofToken(calleeTok)))
+	end 'noteUnclaimedInitializerCall'
+
+	// The walk stops at a deferred call, so the names written after it are recorded here; a typealias only
+	// they name would otherwise be reported unused (E3062).
+	export function recordUnwalkedInitializerTypeNames()
+		for q in self.pos upto self.constInitializerEnd 'eachUnwalkedToken'
+			if self.kindAt(q) == TokenKind.identifier and self.kindAt(q + 1) != TokenKind.colon and self.kindAt(q - 1) != TokenKind.dot 'aWrittenName'
+				self.recordWrittenTypeName(self.tokenAt(q).value)
+			end 'aWrittenName'
+		end 'eachUnwalkedToken'
+	end 'recordUnwalkedInitializerTypeNames'
+
+	function noteFoldableInitializerCall(key ByteArray, anchor Token)
+		self.initializerCalls.push(InitializerCallSite.foldable(key, readerFilePath: self.job.path, range: SourceRange.ofToken(anchor)))
+	end 'noteFoldableInitializerCall'
+
+	export function recordedInitializerCalls() returns InitializerCallSiteArray
+		return self.initializerCalls
+	end 'recordedInitializerCalls'
+
+	// An identifier in a constant: a CALL (deferred), a type-qualified bound (`u16.max`), or a
 	// reference to another top-level constant. The same two one-token lookaheads `parsePrimary`
 	// splits these three forms with.
 	function evalConstNamed(stack TopLevelDeclIndexArray) returns ConstValue throws ConstEvalError
 		let tok = self.current()
 
-		// ⚠ REJECTED BEFORE THE CALL IS READ, not after. A call's answer needs the program to be RUNNING,
-		// and a top-level `let` is folded before any of it exists — so there is nothing to fold and no
-		// later pass that could supply one.
+		// ⚠ DEFERRED BEFORE THE CALL IS READ, not after. A call's answer needs the program to be RUNNING,
+		// and a top-level `let` is folded before any of it exists — so there is nothing to fold. Which
+		// refusal the call earns needs settled declarations and binding types, so it is recorded for
+		// `SemanticCheck.checkInitializerCalls`, which gives it a body call's verdict.
 		if self.peekKind() == TokenKind.leftParen 'call'
-			throw ConstEvalError.defective(SourceParseError.functionCallInConstant(String.from(tok.value), line: tok.line, column: tok.column))
+			self.noteUnclaimedInitializerCall(tok)
+			throw ConstEvalError.deferred
 		end 'call'
 
 		// ⭐⭐ **THE SIZED-BOUND READING IS CLAIMED ONLY BY A SIZED TYPE, AND THAT ORDER IS WHAT KEEPS A
@@ -95528,16 +95758,23 @@ export type Parser
 	// then pays one join and one map probe — linear in call sites, and the answer it buys is the difference
 	// between resolving and E3004.
 	function isImplicitSelfMethod(name ByteArray) returns bool
-		let typeName = try self.enclosingType.typeName() otherwise return false
+		if not self.enclosingType.isType() 'noEnclosingType'
+			return false
+		end 'noEnclosingType'
 
 		self.ensureSiblingReceivers()
 
-		if self.siblingReceiverDeclared(name) 'declaredInTheBodyBeingParsed'
-			return true
-		end 'declaredInTheBodyBeingParsed'
-
-		return self.signatures.declaresCallee(qualifiedMethodName(typeName, methodName: name))
+		return self.siblingKindOf(name) != SiblingKind.notASibling
 	end 'isImplicitSelfMethod'
+
+	function siblingKindOf(name ByteArray) returns SiblingKind
+		return self.signatures.siblingKindFrom(name, enclosingTypeName: self.enclosingTypeNameOrEmpty(), walked: self.walkedSiblingOf(name))
+	end 'siblingKindOf'
+
+	function walkedSiblingOf(name ByteArray) returns WalkedSibling
+		let takesReceiver = try self.siblingReceiverTakesReceiver(name) otherwise return WalkedSibling.notWalked
+		return WalkedSibling.takesReceiver if takesReceiver else WalkedSibling.takesNoReceiver
+	end 'walkedSiblingOf'
 
 	// ⭐⭐ **WHICH COMPILER-OWNED ROSTER SERVES MEMBER `name` OF THE ENCLOSING TYPE — the ONE spelling of it.**
 	// `parseCall` asks it for an implicit-self call (see its arm for why the roster outranks the declaration) and
@@ -95595,7 +95832,7 @@ export type Parser
 	function implicitSelfReceiver(name ByteArray, anchor Token) returns ReceiverArg throws SourceParseError
 		self.ensureSiblingReceivers()
 
-		if not self.siblingTakesReceiver(name) 'staticSibling'
+		if self.siblingKindOf(name) != SiblingKind.instanceSibling 'staticSibling'
 			return ReceiverArg.none
 		end 'staticSibling'
 
@@ -95620,19 +95857,6 @@ export type Parser
 		return ReceiverArg.value(try self.requireReceiverValue(anchor), immutableName: WriteBlame.unblamed, anchor: anchor)
 	end 'implicitSelfReceiver'
 
-	// Does the sibling `name` carry a hidden `self`? — the receiver half of the resolution `isImplicitSelfMethod`
-	// admitted, and it answers from the SAME two sources in the SAME priority, which is the whole reason it is
-	// written here rather than inline: an admission that came from the index and a receiver read off the walk
-	// would be two readings of one declaration, and the pair that disagreed would call a `static` on an instance.
-	// The caller has already established that one of the two answers exists.
-	function siblingTakesReceiver(name ByteArray) returns bool
-		if let takesReceiver = try self.siblingReceiverTakesReceiver(name) 'declaredInTheBodyBeingParsed'
-			return takesReceiver
-		end 'declaredInTheBodyBeingParsed'
-
-		return self.signatures.declaredMethodTakesReceiver(qualifiedMethodName(self.enclosingTypeName(), methodName: name))
-	end 'siblingTakesReceiver'
-
 	// Populate `siblingReceivers` (the members of the DECLARATION BEING PARSED, bare name -> takesReceiver)
 	// unless it is already built for this type. It is not the whole sibling set — a method declared by another
 	// declaration of the same type is reached through the index instead (`isImplicitSelfMethod`) — because a
@@ -95642,8 +95866,8 @@ export type Parser
 	// sibling regardless of declaration order: a forward reference resolves exactly as a backward one, and
 	// recursion sees the method itself. It is the ONE source of both "is this a sibling?" (`contains`) and
 	// "does it take a receiver?" (the value) FOR THE MEMBERS IT CARRIES, so those two facts cannot drift
-	// apart — and the index behind it is asked for both in the same one place (`siblingTakesReceiver`), for
-	// that same reason.
+	// apart — and the index behind it is asked for both in the same one place
+	// (`ProgramSignatures.siblingKindFrom`), for that same reason.
 	//
 	// ⚠⚠ **AN `enum`/`union` BODY'S MEMBER LIST IS NOT BLOCK STRUCTURE, AND A CASE MAY BE SPELLED WITH A
 	// KEYWORD** — the rule the depth-0 arm below applies, and the one `keywordIsANameAt`'s case-list
@@ -95801,6 +96025,27 @@ export type Parser
 		return try self.parseCallNamed(func, callee: self.signatures.nameABareCallBinds(calleeTok.value, readerFilePath: self.job.path), anchor: calleeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
 	end 'parseCall'
 
+	// `spawnReadLine(cmd)` — the IOCP overlapped-read PROBE: `__gt_io_read` spawns the
+	// command with stdout → a fresh overlapped pipe, issues a YIELDING overlapped read and returns the byte
+	// count. NON-throwing (a plain integer, not the dual-register error ABI), so a bare call needs no `try`.
+	//
+	// The seven streaming subprocess builtins. Each is recognized by name after its arguments
+	// are parsed, exactly like `spawnReadLine`, and routes to a `__gt_subp_*` runtime entry.
+	// `subpSpawn(cmd)` — `__gt_subp_spawn` creates three pipes, spawns the child and returns a
+	// non-negative handle (or -1), which the six `subp*` handle doors take as their argument.
+	function emitProcessBuiltin(builtin ProcessBuiltin, args ValueIdArray, resultUsed bool, calleeTok Token) returns ValueId throws SourceParseError
+		match builtin 'builtin'
+			spawnReadLine then return try self.emitCommandLineRuntimeCall(args, runtimeName: IoReadName, builtinName: SpawnReadLineBuiltinName, arity: SpawnReadLineArity, calleeTok: calleeTok)
+			subpSpawn then return try self.emitCommandLineRuntimeCall(args, runtimeName: SubpSpawnName, builtinName: SubpSpawnBuiltinName, arity: SubpSpawnArity, calleeTok: calleeTok)
+			subpReadLine then return try self.emitSubpReadLine(args, runtimeName: SubpReadLineName, builtinName: SubpReadLineBuiltinName, calleeTok: calleeTok)
+			subpReadErrLine then return try self.emitSubpReadLine(args, runtimeName: SubpReadErrLineName, builtinName: SubpReadErrLineBuiltinName, calleeTok: calleeTok)
+			subpWriteLine then return try self.emitSubpWriteLine(args, calleeTok: calleeTok)
+			subpCloseStdin then return try self.emitSubpHandleOp(args, runtimeName: SubpCloseStdinName, builtinName: SubpCloseStdinBuiltinName, resultTag: ValueTypeTag.void, resultUsed: resultUsed, calleeTok: calleeTok)
+			subpWait then return try self.emitSubpHandleOp(args, runtimeName: SubpWaitName, builtinName: SubpWaitBuiltinName, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: calleeTok)
+			subpRelease then return try self.emitSubpHandleOp(args, runtimeName: SubpReleaseName, builtinName: SubpReleaseBuiltinName, resultTag: ValueTypeTag.void, resultUsed: resultUsed, calleeTok: calleeTok)
+		end 'builtin'
+	end 'emitProcessBuiltin'
+
 	// The call parser proper, taking the callee's NAME rather than reading it — because two call
 	// syntaxes produce one call, and only the name differs. `greet()` is its own token's text;
 	// `Point.create(…)` is `Point.create`, mangled by `parseQualifiedCall` from two tokens plus a
@@ -95901,24 +96146,23 @@ export type Parser
 		// door that asks which label regime the callee takes. The question is asked HERE, from the name
 		// alone, because the builtin check below runs only AFTER the arguments are parsed — and the label
 		// rule fires during that parse. See `argLabelRuleForCallee`.
-		// ⭐⭐ **A BARE-NAME BUILTIN IS THE COMPILER'S ONLY WHILE NO FILE DECLARES THAT NAME.** Asked here,
-		// once, because both halves below read it and they must not disagree: the LABEL RULE fires inside
-		// `parseCallArgs`, and the EMIT is chosen after the arguments are parsed. `declaresCallee` is the
-		// whole-program declaration index's `bool` door — allocation-free, and already on this per-call path
-		// for the reserved-callee question.
-		let shadowedByADeclaration = self.signatures.declaresCalleeVisibleFrom(callee, readerFilePath: self.job.path)
+		// ⭐⭐ **A BARE-NAME BUILTIN IS THE COMPILER'S ONLY WHILE NO DECLARATION THIS FILE CAN SEE, A GENERIC
+		// TEMPLATE'S INCLUDED, HAS THAT NAME.** Asked here, once, because both halves below read it and they
+		// must not disagree: the LABEL RULE fires inside `parseCallArgs`, and the EMIT is chosen after the
+		// arguments are parsed. `bareNameKindFrom` is the classifier an initializer's call is judged by too.
+		let shadowedByADeclaration = self.signatures.bareNameKindFrom(callee, readerFilePath: self.job.path).namesAVisibleFunction()
 
 		let places = try self.parseCallArgs(func, target: CallArgTarget.callee(callee), anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argAnchors: argAnchors, rule: argLabelRuleForCallee(callee, shadowedByADeclaration: shadowedByADeclaration), constructorInstance: constructorInstance)
 
 		let rparenTok = try self.consume(TokenKind.rightParen)
 
-		// ⭐⭐ **THE BARE-NAME BUILTINS, AND THEY ARE ONLY REACHED WHEN NO FILE DECLARES THE NAME.** A bare
-		// builtin has no declaration, so nothing downstream could ever notice that a user's `function round`
-		// was never linked: the call emitted a machine instruction and the declaration sat unreachable, with
-		// no diagnostic anywhere. The declaration wins, and the whole run is gated on that one question
-		// rather than each arm asking it — nine copies of one rule is how an arm added later would keep the
-		// old answer. A QUALIFIED callee reaches none of these anyway (`Point.trunc` is not `trunc`), so a
-		// static method of the name was always linked.
+		// ⭐⭐ **THE BARE-NAME BUILTINS, AND THEY ARE ONLY REACHED WHEN NO VISIBLE DECLARATION HAS THE
+		// NAME.** A bare builtin has no declaration, so nothing downstream could ever notice that a user's
+		// `function round` was never linked: the call emitted a machine instruction and the declaration sat
+		// unreachable, with no diagnostic anywhere. The declaration wins, and the whole run is gated on that
+		// one question rather than each arm asking it — nine copies of one rule is how an arm added later
+		// would keep the old answer. A QUALIFIED callee reaches none of these anyway (`Point.trunc` is not
+		// `trunc`), so a static method of the name was always linked.
 		if not shadowedByADeclaration 'noFileOwnsThisName'
 			// A BUILTIN is recognized by name, AFTER its arguments are parsed — so it takes the
 			// ordinary call syntax and the ordinary argument rules, and only the emit differs. The
@@ -95945,44 +96189,10 @@ export type Parser
 				return try self.emitPositionalMathBuiltin(args, callee: callee, calleeTok: anchor)
 			end 'mathBuiltin'
 
-			// `spawnReadLine(cmd)` — the IOCP overlapped-read PROBE: `__gt_io_read` spawns the
-			// command with stdout → a fresh overlapped pipe, issues a YIELDING overlapped read and returns the byte
-			// count. NON-throwing (a plain integer, not the dual-register error ABI), so a bare call needs no `try`.
-			if callee.equals(SpawnReadLineBuiltinName) 'spawnReadLineBuiltin'
-				return try self.emitCommandLineRuntimeCall(args, runtimeName: IoReadName, builtinName: SpawnReadLineBuiltinName, arity: SpawnReadLineArity, calleeTok: anchor)
-			end 'spawnReadLineBuiltin'
-
-			// The seven streaming subprocess builtins. Each is recognized by name after its arguments
-			// are parsed, exactly like `spawnReadLine`, and routes to a `__gt_subp_*` runtime entry.
-			// `subpSpawn(cmd)` — `__gt_subp_spawn` creates three pipes, spawns the child and returns a
-			// non-negative handle (or -1), which the six `subp*` handle doors below take as their argument.
-			if callee.equals(SubpSpawnBuiltinName) 'subpSpawnBuiltin'
-				return try self.emitCommandLineRuntimeCall(args, runtimeName: SubpSpawnName, builtinName: SubpSpawnBuiltinName, arity: SubpSpawnArity, calleeTok: anchor)
-			end 'subpSpawnBuiltin'
-
-			if callee.equals(SubpReadLineBuiltinName) 'subpReadLineBuiltin'
-				return try self.emitSubpReadLine(args, runtimeName: SubpReadLineName, builtinName: SubpReadLineBuiltinName, calleeTok: anchor)
-			end 'subpReadLineBuiltin'
-
-			if callee.equals(SubpReadErrLineBuiltinName) 'subpReadErrLineBuiltin'
-				return try self.emitSubpReadLine(args, runtimeName: SubpReadErrLineName, builtinName: SubpReadErrLineBuiltinName, calleeTok: anchor)
-			end 'subpReadErrLineBuiltin'
-
-			if callee.equals(SubpWriteLineBuiltinName) 'subpWriteLineBuiltin'
-				return try self.emitSubpWriteLine(args, calleeTok: anchor)
-			end 'subpWriteLineBuiltin'
-
-			if callee.equals(SubpCloseStdinBuiltinName) 'subpCloseStdinBuiltin'
-				return try self.emitSubpHandleOp(args, runtimeName: SubpCloseStdinName, builtinName: SubpCloseStdinBuiltinName, resultTag: ValueTypeTag.void, resultUsed: resultUsed, calleeTok: anchor)
-			end 'subpCloseStdinBuiltin'
-
-			if callee.equals(SubpWaitBuiltinName) 'subpWaitBuiltin'
-				return try self.emitSubpHandleOp(args, runtimeName: SubpWaitName, builtinName: SubpWaitBuiltinName, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, calleeTok: anchor)
-			end 'subpWaitBuiltin'
-
-			if callee.equals(SubpReleaseBuiltinName) 'subpReleaseBuiltin'
-				return try self.emitSubpHandleOp(args, runtimeName: SubpReleaseName, builtinName: SubpReleaseBuiltinName, resultTag: ValueTypeTag.void, resultUsed: resultUsed, calleeTok: anchor)
-			end 'subpReleaseBuiltin'
+			match processBuiltinNamed(callee) 'processBuiltin'
+				found(builtin) then return try self.emitProcessBuiltin(builtin, args: args, resultUsed: resultUsed, calleeTok: anchor)
+				absent then break
+			end 'processBuiltin'
 		end 'noFileOwnsThisName'
 
 		// ⚠ **THE MATH INTRINSICS ARE DISPATCHED FROM THE ONE ROSTER READ AT THE TOP OF THIS CHAIN**
@@ -98445,11 +98655,11 @@ export type Parser
 
 		var conventions = ByRefConventionArray.create()
 
-		if not self.nonGenericDeclarationsCallableHere(callee).isEmpty() 'aNonGenericDeclarationToo'
+		if self.signatures.declaresAFunctionVisibleFrom(callee, readerFilePath: self.job.path) 'aNonGenericDeclarationToo'
 			conventions.append(conventionsOf(self.nonGenericDeclarationFacts(callee)))
 		end 'aNonGenericDeclarationToo'
 
-		for template in self.genericTemplatesVisibleHere(callee) 'eachTemplate'
+		for template in self.signatures.genericTemplatesVisibleFrom(callee, readerFilePath: self.job.path) 'eachTemplate'
 			conventions.push(self.signatures.byRefOfDeclaration(template.siteKey()).clone())
 		end 'eachTemplate'
 
@@ -98510,7 +98720,7 @@ export type Parser
 			return OverloadedDeclArray.create()
 		end 'notASet'
 
-		return self.nonGenericDeclarationsCallableHere(callee)
+		return self.signatures.declarationsVisibleFrom(callee, readerFilePath: self.job.path)
 	end 'callableMembersOfASet'
 
 	function factsOfDeclarations(decls OverloadedDeclArray) returns DeclarationFactsArray
@@ -99012,34 +99222,10 @@ export type Parser
 		return instance.instanceName
 	end 'genericInstanceCallee'
 
-	function nonGenericDeclarationsCallableHere(callee ByteArray) returns OverloadedDeclArray
-		var callable = OverloadedDeclArray.create()
-
-		for decl in self.signatures.overloadedDeclsOf(callee) 'eachDeclaration'
-			if self.signatures.isVisibleFrom(decl.visibility, declFilePath: decl.declFilePath, readerFilePath: self.job.path) 'callableFromHere'
-				callable.push(decl)
-			end 'callableFromHere'
-		end 'eachDeclaration'
-
-		return callable
-	end 'nonGenericDeclarationsCallableHere'
-
-	function genericTemplatesVisibleHere(callee ByteArray) returns GenericFunctionTemplateArray
-		var visible = GenericFunctionTemplateArray.create()
-
-		for template in self.signatures.genericTemplatesOf(callee) 'eachTemplate'
-			if self.signatures.isVisibleFrom(template.visibility, declFilePath: template.declFilePath, readerFilePath: self.job.path) 'visible'
-				visible.push(template)
-			end 'visible'
-		end 'eachTemplate'
-
-		return visible
-	end 'genericTemplatesVisibleHere'
-
 	// With none visible every template is kept, so the call still binds an instance and E3008 refuses
 	// it rather than E3004.
 	function genericTemplatesNameableHere(callee ByteArray) returns GenericFunctionTemplateArray
-		let nameable = self.genericTemplatesVisibleHere(callee)
+		let nameable = self.signatures.genericTemplatesVisibleFrom(callee, readerFilePath: self.job.path)
 		return self.signatures.genericTemplatesOf(callee) if nameable.isEmpty() else nameable
 	end 'genericTemplatesNameableHere'
 
@@ -99070,7 +99256,7 @@ export type Parser
 	end 'nearestGenericInstances'
 
 	function nonGenericDeclarationFitsExactly(callee ByteArray, args ValueIdArray, argLabels NameRoster) returns bool
-		for decl in self.nonGenericDeclarationsCallableHere(callee) 'eachDeclaration'
+		for decl in self.signatures.declarationsVisibleFrom(callee, readerFilePath: self.job.path) 'eachDeclaration'
 			if self.declarationFitsExactly(decl, args: args, argLabels: argLabels) 'exact'
 				return true
 			end 'exact'
@@ -100790,13 +100976,7 @@ export type Parser
 	end 'handOffArgumentAnchor'
 
 	function declaredInterfaceParamAt(callee ByteArray, argIndex ParamCount, label ByteArray) returns InterfaceParam throws MapError
-		view decls = self.signatures.overloadedDeclsOf(callee)
-
-		if decls.count() != 1 'notOneDeclaration'
-			throw MapError.keyNotFound
-		end 'notOneDeclaration'
-
-		let decl = try decls.get(0) otherwise panic("declaredInterfaceParamAt: one declaration was just counted")
+		let decl = try self.signatures.soleVisibleDeclarationOf(callee, readerFilePath: self.job.path)
 		let position = try argSlotPosition(decl.paramNames, argIndex: argIndex, label: label)
 		let swept = try decl.paramTypes.get(position) otherwise panic("declaredInterfaceParamAt: paramTypes.get OOB at {position} — a declaration's parameter columns are built in lockstep")
 		let name = try decl.paramNames.get(position) otherwise panic("declaredInterfaceParamAt: paramNames.get OOB at {position} — a declaration's parameter columns are built in lockstep")
@@ -101991,7 +102171,7 @@ export type Parser
 	function noteCellHandOverTarget(target CallArgTarget, name ByteArray, column ParamCount, label ByteArray)
 		let callee = try target.calleeName() otherwise return
 
-		for declaration in self.signatures.overloadedDeclsOf(callee) 'eachDeclaration'
+		for declaration in self.signatures.declarationsVisibleFrom(callee, readerFilePath: self.job.path) 'eachDeclaration'
 			let position = try argSlotPosition(declaration.paramNames, argIndex: column, label: label) otherwise continue
 			let parameter = displayParamName(try declaration.paramNames.get(position) otherwise panic("noteCellHandOverTarget: paramNames.get OOB at {position} — the position came from `argSlotPosition` over this very column"))
 
@@ -102332,8 +102512,8 @@ export type Parser
 	// publish, and that one sees the real signatures a pass later.
 	//
 	// ⚠⚠ **THE TWO DECIDERS DIFFER IN THEIR CANDIDATE SET, NOT ONLY IN SCORING AND SOURCE — say so before
-	// reading the paragraph below as a claim that they agree.** This door filters by `isVisibleFrom`;
-	// `SemanticCheck.overloadCandidates` filters only on "did the member survive to `funcSignatures`" and
+	// reading the paragraph below as a claim that they agree.** This door filters by
+	// `declarationsVisibleFrom`; `SemanticCheck.overloadCandidates` filters only on "did the member survive to `funcSignatures`" and
 	// applies no visibility rule at all, so that pass may select a member the calling file cannot NAME — which
 	// is caught afterwards by `calleeVisibilityFrom` (E3008/E3088), a refusal rather than a privacy hole. What
 	// the two share is the ORDER; where their candidate sets part, this door's answer is the narrower one and
@@ -102376,11 +102556,11 @@ export type Parser
 			return sharedUndecidedDeclarationPick
 		end 'oneAnswerHoweverItResolves'
 
-		return self.sweptOverloadAmong(candidates, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots)
+		return self.sweptOverloadAmong(self.signatures.declarationsVisibleFrom(callee, readerFilePath: self.job.path), args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots)
 	end 'returnDecidingDeclaration'
 
 	function sweptDeclarationOf(callee ByteArray, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray) returns SweptDeclarationPick
-		view candidates = self.signatures.overloadedDeclsOf(callee)
+		view candidates = self.signatures.declarationsVisibleFrom(callee, readerFilePath: self.job.path)
 
 		if candidates.count() == 1 'oneDeclaration'
 			return SweptDeclarationPick.chosen(try candidates.get(0) otherwise panic("sweptDeclarationOf: one declaration was just counted"))
@@ -102395,10 +102575,6 @@ export type Parser
 		var holdingBest = 0 as OverloadCandidateCount
 
 		for candidate in candidates 'eachCandidate'
-			if not self.signatures.isVisibleFrom(candidate.visibility, declFilePath: candidate.declFilePath, readerFilePath: self.job.path) 'notNameableFromHere'
-				continue
-			end 'notNameableFromHere'
-
 			var score = NoCompatibleOverloadScore
 
 			match self.sweptOverloadFit(candidate, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) 'fit'
@@ -102690,9 +102866,58 @@ export type Parser
 			thisFrame then return self.deferralSourceOfBinding(self.thisFrameBindingOf(self.current()), frame: self.artifact.currentFuncIndex)
 			captured(frame) then return self.deferralSourceOfBinding(self.capturedBindingOf(self.current(), frame: frame), frame: self.capturedFrame(frame).funcIndex)
 			unbound or
-			alwaysAType then return DeferralSource.none
+			alwaysAType then return self.deferralOfAPoisonedChainBase()
 		end 'base'
 	end 'chainBaseDeferralSource'
+
+	function deferralOfAPoisonedChainBase() returns DeferralSource
+		let plain = self.deferralOfAPoisonedBase(self.current())
+
+		if plain.isDeferred() 'aPoisonedGlobal'
+			return plain
+		end 'aPoisonedGlobal'
+
+		return self.deferralOfAPoisonedStaticMember()
+	end 'deferralOfAPoisonedChainBase'
+
+	function deferralOfAPoisonedBase(baseTok Token) returns DeferralSource
+		if not self.signatures.topLevelBindingVisibleFrom(baseTok.value, readerFilePath: self.job.path) 'noBindingOfThisName'
+			return DeferralSource.none
+		end 'noBindingOfThisName'
+
+		return self.deferralOfAPoisonedBinding(baseTok)
+	end 'deferralOfAPoisonedBase'
+
+	function deferralOfAPoisonedBinding(bindingTok Token) returns DeferralSource
+		if not self.bindingIsPoisoned(bindingTok) 'notPoisoned'
+			return DeferralSource.none
+		end 'notPoisoned'
+
+		return DeferralSource.value(self.artifact.currentFuncIndex, valueId: self.mintDeferredValue())
+	end 'deferralOfAPoisonedBinding'
+
+	function deferralOfAPoisonedStaticMember() returns DeferralSource
+		let typeTok = try self.staticBaseTokenAt(self.pos) otherwise return DeferralSource.none
+		let memberIndex = self.pos + TokensPerQualifierSegment
+
+		if not self.namesStaticMemberAt(typeTok, memberIndex: memberIndex) 'notAStaticMember'
+			return DeferralSource.none
+		end 'notAStaticMember'
+
+		return self.deferralOfAPoisonedBinding(self.staticMemberNameToken(typeTok, memberTok: self.tokenAt(memberIndex)))
+	end 'deferralOfAPoisonedStaticMember'
+
+	function bindingIsPoisoned(bindingTok Token) returns bool
+		return match self.managedReceiverBindingOf(bindingTok) 'binding'
+			poisoned gives true
+			inlineWord or
+			constant or
+			global or
+			imageRecord or
+			imageBox or
+			none gives false
+		end 'binding'
+	end 'bindingIsPoisoned'
 
 	// The result of a call to a callee some file DOES declare — where the void/value split is
 	// finally a split and not a sentinel.
@@ -103294,7 +103519,7 @@ export type Parser
 		// name (`functionValueShape` proved it resolvable to reach the `void` arm), the E2004 spelling
 		// `mintDeclaredCallResult` renders for a void direct call.
 		if resultUsed 'noValueToUse'
-			throw SourceParseError.voidCallResultUsed(String.from(self.internedName(self.valueNameId(callee))), line: anchor.line, column: anchor.column)
+			throw SourceParseError.voidCallResultUsed(String.from(overloadRegistrationBaseName(self.internedName(self.valueNameId(callee)))), line: anchor.line, column: anchor.column)
 		end 'noValueToUse'
 
 		return self.mintValue(ValueTypeTag.void, nameId: UnnamedTypeId)
@@ -103337,10 +103562,13 @@ export type Parser
 			undeclared then break
 		end 'alias'
 
-		match self.signatures.returnTypeOf(name, into: self.artifact.typeNames) 'fn'
-			declared(returnType) then return FunctionValueShape.create(self.declaredFunctionParamTypes(name), returnType: returnType, scopeFilePath: self.signatures.recordedReturnDeclFileOf(name))
-			undeclared then break
-		end 'fn'
+		if self.signatures.declaresCallee(name) 'aDeclaredFunction'
+			return self.functionValueShapeOf(self.declarationBehindFunctionValue(name))
+		end 'aDeclaredFunction'
+
+		if let member = try self.overloadMemberDeclaredAs(name) 'aMemberOfAnOverloadSet'
+			return self.functionValueShapeOf(member)
+		end 'aMemberOfAnOverloadSet'
 
 		// A function-backed enum's `.rawValue` is the one mint whose name is not checked in the reading
 		// file. When the declaring file refused the case (E3095, E2004), the call defers and that refusal
@@ -103362,22 +103590,29 @@ export type Parser
 		return paramTypes
 	end 'aliasParamTypes'
 
-	function declaredFunctionParamTypes(name ByteArray) returns MaxonTypeArray
+	function declarationBehindFunctionValue(name ByteArray) returns OverloadedDecl
+		if let member = try self.functionValueMember(name) 'theOneThisFileNames'
+			return member
+		end 'theOneThisFileNames'
+
+		view declarations = self.signatures.overloadedDeclsOf(name)
+
+		if declarations.count() != 1 'noSingleDeclaration'
+			panic("declarationBehindFunctionValue: '{String.from(name)}' has {declarations.count()} declarations and this file means none of them alone — `resolvedFunctionValueName` refuses an ambiguous name and `requireNameIsUsableAsFunctionValue` an invisible one before a value is minted")
+		end 'noSingleDeclaration'
+
+		return try declarations.get(0) otherwise panic("declarationBehindFunctionValue: '{String.from(name)}' is a declared function, and `ProgramSignatures.record` files every declaration under `overloadedDecls` in the same act as `returnTypes`")
+	end 'declarationBehindFunctionValue'
+
+	function functionValueShapeOf(decl OverloadedDecl) returns FunctionValueShape
 		var paramTypes = MaxonTypeArray.create()
-		view decls = self.signatures.overloadedDeclsOf(name)
-
-		if decls.count() != 1 'notOneDeclaration'
-			return paramTypes
-		end 'notOneDeclaration'
-
-		let decl = try decls.get(0) otherwise panic("declaredFunctionParamTypes: one declaration was just counted")
 
 		for swept in decl.paramTypes 'eachParam'
 			paramTypes.push(self.sweptParamType(swept, scopeFilePath: decl.declFilePath))
 		end 'eachParam'
 
-		return paramTypes
-	end 'declaredFunctionParamTypes'
+		return FunctionValueShape.create(paramTypes, returnType: self.signatures.adoptReturnType(decl.returnType, into: self.artifact.typeNames), scopeFilePath: decl.declFilePath)
+	end 'functionValueShapeOf'
 
 	// Parse an integer literal token into a `literal` op, and return the value it defines.
 	// The token's text becomes a number through the shared `intLiteralValue`, so a literal
@@ -105495,7 +105730,8 @@ export type Parser
 			inlineWord or
 			imageRecord or
 			imageBox gives true
-			none gives false
+			none or
+			poisoned gives false
 		end 'managed'
 	end 'methodCallsAt'
 

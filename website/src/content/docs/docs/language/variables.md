@@ -218,6 +218,10 @@ end 'main'
   name (`let step = countdown`). The type at the head may be qualified (`lib.Cache.create()`). A free function
   call returning a scalar, and any other call, is **E2045** (`Function calls are not allowed in global
   variable initializers`).
+- A call in an initializer names its function as a call in a function body does: a name nothing declares is
+  **E3004**, one the file cannot see is **E3008** (**E3088** for a `module` one), and one several directories
+  declare is **E3095**. That one diagnostic covers every read and assignment of the binding; a tuple
+  assignment naming the binding is **E2015** as well.
 - Every initializer runs **before `main`**, once, in dependency order, whether or not anything reads the
   binding. Initializers that depend on each other in a cycle are **E2012**. A `let` whose value is decided at
   compile time is image data, laid down in read-only memory with nothing to run; anything else runs in the

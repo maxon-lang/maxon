@@ -1985,14 +1985,18 @@ end 'landParseOutcome'
 // A failed parse is never cached. What IS returned carries only the type names the file had declared before it
 // stopped — see `Parser.abortedParseArtifact` for why that one registry crosses an abort and the rest cannot.
 function reportFailedParse(project Project, path FilePath, error SourceParseError, blame LibraryBlame, salvaged FileParseArtifact) returns FileParseArtifact
+	reportParseFailure(project, path: path, error: error, blame: blame)
+	return salvaged
+end 'reportFailedParse'
+
+module function reportParseFailure(project Project, path FilePath, error SourceParseError, blame LibraryBlame)
 	// The only span in the compiler over which `project.libraryBlame` is set, exactly one reporting
 	// call wide — written where the diagnostic is stored rather than at each of
 	// `parseErrorDiagnostic`'s match arms.
 	project.libraryBlame = blameOutsideTheLibrary(project, blame: blame)
 	reportParseErrorBesideAMisclosedBlock(project, path: path, error: error)
 	project.libraryBlame = LibraryBlame.unblamed
-	return salvaged
-end 'reportFailedParse'
+end 'reportParseFailure'
 
 // A declaration whose closing `end` names another label (`Parser.noteDeclarationCloser`) leaves the
 // sweep's reading of every name declared from its body on suspect, so a parse error may be its
@@ -3308,7 +3312,7 @@ end 'reportDirectiveError'
 // ⭐ **THE LEAD IS THE POSITION'S AND THE REST IS THIS CLASSIFIER'S**, so the CALL door (E3004) and the
 // VALUE door (E3155) explain one refusal with one text. Both leads say "undefined function" because both
 // state the same thing about the name; only the verb a reader can see on the line differs.
-function reservedNameReason(name String, reason ReservedCalleeReason) returns String
+module function reservedNameReason(name String, reason ReservedCalleeReason) returns String
 	return match reason 'reason'
 		compilerInternalPrefix gives "the '__' prefix names a compiler intrinsic, and no intrinsic of that name exists"
 		synthesizedConformanceImpl gives "that name is the symbol the compiler synthesizes for the builtin's conformance, which a program reaches through a value of the type (`value.method()`) and never by naming the symbol"
@@ -3545,7 +3549,6 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		// The three top-level-constant arms are pinned byte-for-byte by `specs/top-level-let.md`,
 		// and both suites compare this stderr exactly.
 		circularConstants(names, line, column) gives Diagnostic.create(ErrorCode.parserCircularDependency, message: "Circular dependency detected among global constants: {names}", line: line, column: column, filePath: path)
-		functionCallInConstant(callee, line, column) gives Diagnostic.create(ErrorCode.parserNonConstantInitializer, message: "Function calls are not allowed in global variable initializers; '{callee}()' is not a constant expression", line: line, column: column, filePath: path)
 		nonConstantInitializer(name, leftover, line, column) gives Diagnostic.create(ErrorCode.parserNonConstantInitializer, message: "Global initializer for '{name}' is not a constant expression: '{leftover}' cannot be evaluated at compile time", line: line, column: column, filePath: path)
 		undefinedConstant(name, line, column) gives Diagnostic.create(ErrorCode.parserExpressionError, message: "Undefined constant '{name}'", line: line, column: column, filePath: path)
 		constantDivisionByZero(op, line, column) gives Diagnostic.create(ErrorCode.parserNonConstantInitializer, message: "'{op}' by zero has no value: a global initializer is folded at compile time, so there is no run time for it to trap in", line: line, column: column, filePath: path)
@@ -3767,7 +3770,7 @@ module function parseErrorDiagnostic(error SourceParseError, path FilePath, keyw
 		// every refusal it was about a `__` prefix — which is false for a synthesized conformance impl
 		// that wears no prefix at all. Both clauses forbid a DECLARATION as well as a call, so neither
 		// reading sends the author off to define the function.
-		unknownCompilerIntrinsic(callee, reason, line, column) gives Diagnostic.create(ErrorCode.callUnknownFunction, message: "call to undefined function '{callee}': {reservedNameReason(callee, reason: reason)}", line: line, column: column, filePath: path)
+		unknownCompilerIntrinsic(callee, reason, line, column) gives Diagnostic.create(ErrorCode.callUnknownFunction, message: reservedFunctionUndefinedMessage(callee, reason: reason), line: line, column: column, filePath: path)
 
 		undefinedQualifiedFunction(callee, qualifier, line, column) gives Diagnostic.create(ErrorCode.callUnknownFunction, message: "call to undefined function '{callee}': {chainNamesNothingText(qualifier.toByteArray())}", line: line, column: column, filePath: path)
 

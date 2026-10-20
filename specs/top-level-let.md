@@ -646,3 +646,643 @@ end 'main'
 ```exitcode
 42
 ```
+
+
+<!-- test: error.a-call-through-a-module-function-value-in-a-constant-is-not-a-constant -->
+`doubler` is a module-level function value; calling it in another top-level `let`'s initializer is a call,
+not a constant, and it is refused as one rather than as an undefined function.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function twice(n Integer) returns Integer
+	return n * 2
+end 'twice'
+
+let doubler = twice
+let six = doubler(3)
+
+function main() returns ExitCode
+	return six as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2045: <fragment>:9:11: Function calls are not allowed in global variable initializers; 'doubler()' is not a constant expression
+```
+
+<!-- test: error.a-static-initializer-calling-a-sibling-static-is-not-a-constant -->
+A type's `static let` initializer calling a sibling static by its bare name is a call, not a constant, and
+it is refused as one rather than as an undefined function.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Registry
+	static let seed = makeSeed()
+
+	static function makeSeed() returns Integer
+		return 4
+	end 'makeSeed'
+
+	export static function value() returns Integer
+		return Registry.seed
+	end 'value'
+end 'Registry'
+
+function main() returns ExitCode
+	return Registry.value() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2045: <fragment>:5:20: Function calls are not allowed in global variable initializers; 'makeSeed()' is not a constant expression
+```
+
+<!-- test: error.a-generic-call-in-a-constant-is-not-a-constant -->
+A generic function's call in a top-level `let`'s initializer is a call, not a constant, and it is refused
+as one rather than as an undefined function.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function larger(a T, b T) uses T returns T where T is Comparable
+	return a if a > b else b
+end 'larger'
+
+let big = larger(1 as Integer, b: 2 as Integer)
+
+function main() returns ExitCode
+	return big as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2045: <fragment>:8:11: Function calls are not allowed in global variable initializers; 'larger()' is not a constant expression
+```
+
+
+<!-- test: error.a-static-initializer-calling-a-sibling-static-past-a-hidden-free-function-is-not-a-constant -->
+Another file of the directory declares a file-private free `makeSeed`; inside `Registry` the bare call means
+the sibling static, as a body call would, so it is refused as a call rather than as a hidden function.
+```maxon
+// --- file: hidden.maxon
+export typealias Integer = int(i64.min to i64.max)
+
+function makeSeed() returns Integer
+	return 9
+end 'makeSeed'
+
+export function hiddenSeed() returns Integer
+	return makeSeed()
+end 'hiddenSeed'
+
+// --- file: main.maxon
+type Registry
+	static let seed = makeSeed()
+
+	static function makeSeed() returns Integer
+		return 4
+	end 'makeSeed'
+
+	export static function value() returns Integer
+		return Registry.seed
+	end 'value'
+end 'Registry'
+
+function main() returns ExitCode
+	return (Registry.value() + hiddenSeed()) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2045: <fragment>:15:20: Function calls are not allowed in global variable initializers; 'makeSeed()' is not a constant expression
+```
+
+
+<!-- test: error.a-builtin-call-past-a-hidden-same-name-declaration-is-not-a-constant -->
+Another file declares a file-private `sqrt`; from `main.maxon` the bare call means the math builtin, as a
+body call does, so the initializer is refused as a call rather than as a hidden function.
+```maxon
+// --- file: main.maxon
+public typealias Real = float(0.0 to 10.0)
+public typealias Digit = int(0 to 9)
+
+let R = sqrt(4.0)
+
+function main() returns ExitCode
+	return (R as Digit) as ExitCode
+end 'main'
+
+// --- file: a.maxon
+function sqrt(x Real) returns Real
+	return x
+end 'sqrt'
+
+export function useSqrt() returns Real
+	return sqrt(1.0)
+end 'useSqrt'
+```
+```maxoncstderr
+error E2045: <fragment>:6:9: Function calls are not allowed in global variable initializers; 'sqrt()' is not a constant expression
+```
+
+<!-- test: error.a-refused-initializer-call-beside-an-unused-typealias-reports-both -->
+A refused initializer call does not hide an unrelated diagnostic in another file.
+```maxon
+// --- file: main.maxon
+let G = nothere(7)
+
+function main() returns ExitCode
+	return 0
+end 'main'
+
+// --- file: other.maxon
+typealias Unused = int(0 to 5)
+```
+```maxoncstderr
+error E3004: <fragment>:3:9: call to undefined function 'nothere'
+error E3062: <fragment>:10:11: unused typealias: 'Unused'
+```
+
+<!-- test: error.a-constant-reading-a-refused-call-constant-reports-the-call-once -->
+`H` reads `G`, whose initializer is a refused call: the call is reported once, and `H` is not given a value.
+```maxon
+let H = G + 1
+let G = nothere(7)
+
+function main() returns ExitCode
+	return H as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:9: call to undefined function 'nothere'
+```
+
+<!-- test: error.a-constant-read-after-a-refused-call-constant-reports-the-call-once -->
+The same, with `G` declared first.
+```maxon
+let G = nothere(7)
+let H = G + 1
+
+function main() returns ExitCode
+	return H as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:2:9: call to undefined function 'nothere'
+```
+
+<!-- test: error.a-static-initializer-calling-a-sibling-instance-method-bare-is-not-a-constant -->
+`fresh` is an instance method, so a `static var` initializer calling it bare has no receiver to call it on.
+```maxon
+typealias Digit = int(0 to 9)
+
+type Holder
+	export var n as Digit
+
+	static var shared = fresh()
+
+	function fresh() returns Holder
+		return Holder{n: 1}
+	end 'fresh'
+
+	static function value() returns Digit
+		return Holder.shared.n
+	end 'value'
+end 'Holder'
+
+function main() returns ExitCode
+	return Holder.value() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2045: <fragment>:7:22: Function calls are not allowed in global variable initializers; 'fresh()' is not a constant expression
+```
+
+
+<!-- test: error.a-field-read-of-a-refused-call-constant-reports-the-call-once -->
+`G`'s initializer is a refused call, so a read of one of its fields is not reported again.
+```maxon
+let G = nothere(7)
+
+function main() returns ExitCode
+	return G.n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:2:9: call to undefined function 'nothere'
+```
+
+<!-- test: error.a-method-call-on-a-refused-call-constant-reports-the-call-once -->
+A method called on `G` is not reported again either.
+```maxon
+let G = nothere(7)
+
+function main() returns ExitCode
+	return G.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:2:9: call to undefined function 'nothere'
+```
+
+
+<!-- test: error.a-call-through-a-refused-call-constant-reports-the-call-once -->
+`f`'s initializer is a refused call, so calling `f` is not reported again.
+```maxon
+let f = nothere(7)
+
+function main() returns ExitCode
+	return f(3) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:2:9: call to undefined function 'nothere'
+```
+
+<!-- test: error.an-assignment-to-a-refused-call-var-reports-the-call-once -->
+`G`'s initializer is a refused call, so assigning `G` is not reported again.
+```maxon
+typealias Digit = int(0 to 9)
+
+var G = nothere(7)
+
+function main() returns ExitCode
+	G = 3 as Digit
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:4:9: call to undefined function 'nothere'
+```
+
+<!-- test: error.a-type-read-after-a-refused-call-constant-is-used -->
+`H` stops at its read of `G`, whose initializer is a refused call; `Small`, named after that read, still
+counts as used.
+```maxon
+typealias Small = int(0 to 9)
+
+let G = nothere(7)
+let H = G + (1 as Small)
+
+function main() returns ExitCode
+	return H as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:4:9: call to undefined function 'nothere'
+```
+
+
+<!-- test: error.a-field-assignment-through-a-refused-call-var-reports-the-call-once -->
+`G`'s initializer is a refused call, so writing one of its fields is not reported again.
+```maxon
+typealias Digit = int(0 to 9)
+
+var G = nothere(7)
+
+function main() returns ExitCode
+	G.n = 3 as Digit
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:4:9: call to undefined function 'nothere'
+```
+
+<!-- test: a-factory-initializer-past-a-same-named-constant-in-another-file-folds -->
+`make` names a constant in `other.maxon`, which `main.maxon` cannot see, and a factory `main.maxon`
+declares; the initializer's call means the factory, as a body call would. Returns 7.
+```maxon
+// --- file: main.maxon
+typealias Digit = int(0 to 9)
+
+type Box
+	export var n as Digit
+
+	static function create(n Digit) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+function make() returns Box
+	return Box.create(7)
+end 'make'
+
+let G = make()
+
+function main() returns ExitCode
+	if other() == 0 'zero'
+		return G.n as ExitCode
+	end 'zero'
+
+	return 1
+end 'main'
+
+// --- file: other.maxon
+export typealias Zero = int(0 to 0)
+
+let make = 0
+
+export function other() returns Zero
+	return make
+end 'other'
+```
+```exitcode
+7
+```
+
+
+<!-- test: error.a-field-assignment-through-a-refused-call-static-var-reports-the-call-once -->
+`Holder.shared`'s initializer is a refused call, so writing one of its fields is not reported again.
+```maxon
+typealias Digit = int(0 to 9)
+
+type Holder
+	export var n as Digit
+
+	static var shared = nothere(7)
+
+	static function reset()
+		Holder.shared.n = 3 as Digit
+	end 'reset'
+end 'Holder'
+
+function main() returns ExitCode
+	Holder.reset()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:7:22: call to undefined function 'nothere'
+```
+
+
+<!-- test: a-static-initializer-folds-its-sibling-factory-past-a-same-named-constant -->
+A top-level constant named `make` is not a function, so inside `Box` the bare call means the sibling
+factory, as a body call would. Returns 7.
+```maxon
+typealias Digit = int(0 to 9)
+
+let make = 3 as Digit
+
+type Box
+	export var n as Digit
+
+	static let origin = make()
+
+	static function make() returns Box
+		return Box{n: 7}
+	end 'make'
+
+	static function originOf() returns Digit
+		return Box.origin.n
+	end 'originOf'
+end 'Box'
+
+function main() returns ExitCode
+	if make == 3 'three'
+		return Box.originOf() as ExitCode
+	end 'three'
+
+	return 1
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: error.a-static-initializer-calling-a-generic-sibling-is-not-a-constant -->
+`pick` is a generic sibling static, so the initializer's bare call means it and is refused as a call.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Registry
+	static let seed = pick(1 as Integer, b: 2 as Integer)
+
+	static function pick(a T, b T) uses T returns T where T is Comparable
+		return a if a > b else b
+	end 'pick'
+
+	static function value() returns Integer
+		return Registry.seed
+	end 'value'
+end 'Registry'
+
+function main() returns ExitCode
+	return Registry.value() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2045: <fragment>:5:20: Function calls are not allowed in global variable initializers; 'pick()' is not a constant expression
+```
+
+<!-- test: error.a-top-level-initializer-call-to-a-hidden-generic-is-not-exported -->
+The only `larger` is a file-private generic in `other.maxon`, so `main.maxon` cannot name it.
+```maxon
+// --- file: main.maxon
+let big = larger(1 as Integer, b: 2 as Integer)
+
+function main() returns ExitCode
+	return (big + useLarger()) as ExitCode
+end 'main'
+
+// --- file: other.maxon
+export typealias Integer = int(i64.min to i64.max)
+
+function larger(a T, b T) uses T returns T where T is Comparable
+	return a if a > b else b
+end 'larger'
+
+export function useLarger() returns Integer
+	return larger(1 as Integer, b: 2 as Integer)
+end 'useLarger'
+```
+```maxoncstderr
+error E3008: <fragment>:3:11: function 'larger' is not exported
+```
+
+<!-- test: error.a-tuple-assignment-to-a-refused-call-var-reports-both -->
+`G`'s initializer is a refused call, and a tuple assignment naming a module `var` is refused whatever
+its value: both are reported.
+```maxon
+typealias Digit = int(0 to 9)
+
+var G = nothere(7)
+
+function pair() returns (Digit, Digit)
+	return (1 as Digit, 2 as Digit)
+end 'pair'
+
+function main() returns ExitCode
+	var y = 0 as Digit
+	(G, y) = pair()
+	return y as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:12:3: Unsupported: a tuple-assignment target naming the module-scope binding 'G' (a module binding is written through a different store, which parses its own right-hand side; assign the element to a local and store that)
+error E3004: <fragment>:4:9: call to undefined function 'nothere'
+```
+
+<!-- test: error.a-refused-call-inside-a-record-literal-reports-only-the-call -->
+The refused call sits inside a record literal; the type names written before it still count as used.
+```maxon
+typealias Small = int(0 to 9)
+
+type Pair
+	export var a as Small
+	export var b as Small
+
+	static function create(a Small, b Small) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+end 'Pair'
+
+let G = Pair.create(1 as Small, b: nothere(2))
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:13:36: call to undefined function 'nothere'
+```
+
+<!-- test: error.uses-of-a-refused-call-constant-report-the-call-once -->
+Every use of `G` below meets a constant whose initializer is a refused call: only the call is reported.
+```maxon
+typealias Digit = int(0 to 9)
+
+var G = nothere(7)
+
+function use(n Digit) returns Digit
+	return n
+end 'use'
+
+function main() returns ExitCode
+	G.push(1)
+
+	for x in G 'each'
+		print("{x}\n")
+	end 'each'
+
+	print("{G}\n")
+	let b = use(G)
+	let read = function() gives G
+	print("{b} {read()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:4:9: call to undefined function 'nothere'
+```
+
+
+<!-- test: error.a-static-initializer-calling-a-function-valued-binding-past-a-sibling-is-not-a-constant -->
+`make` is a top-level binding holding a function value a call built; a body call `make()` inside `Box`
+calls it, so the initializer means it too and is refused as a call, not folded to the sibling factory.
+```maxon
+typealias Digit = int(0 to 9)
+typealias Maker = function() returns Box
+
+function other() returns Box
+	return Box.make()
+end 'other'
+
+function makerOf() returns Maker
+	return other
+end 'makerOf'
+
+let make = makerOf()
+
+type Box
+	export var n as Digit
+
+	static let origin = make()
+
+	static function make() returns Box
+		return Box{n: 7}
+	end 'make'
+
+	static function originOf() returns Digit
+		return Box.origin.n
+	end 'originOf'
+end 'Box'
+
+function main() returns ExitCode
+	return Box.originOf() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2045: <fragment>:18:22: Function calls are not allowed in global variable initializers; 'make()' is not a constant expression
+```
+
+
+<!-- test: error.a-static-initializer-calling-a-function-valued-binding-past-a-sibling-with-a-parameter-is-not-a-constant -->
+The sibling `make` takes a `Digit` the argument does not fit, but the call means the function-valued
+binding, as a body call would, so the refusal is the call's, not the sibling's parameter's.
+```maxon
+typealias Digit = int(0 to 9)
+typealias Maker = function() returns Box
+
+function other() returns Box
+	return Box.make(7 as Digit)
+end 'other'
+
+function makerOf() returns Maker
+	return other
+end 'makerOf'
+
+let make = makerOf()
+
+type Box
+	export var n as Digit
+
+	static let origin = make(42)
+
+	static function make(n Digit) returns Box
+		return Box{n: n}
+	end 'make'
+
+	static function originOf() returns Digit
+		return Box.origin.n
+	end 'originOf'
+end 'Box'
+
+function main() returns ExitCode
+	return Box.originOf() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2045: <fragment>:18:22: Function calls are not allowed in global variable initializers; 'make()' is not a constant expression
+```
+
+
+<!-- test: error.a-static-initializer-calling-a-sibling-past-a-same-named-constant-reports-the-siblings-defect -->
+`make` names a constant that is not a function, so the call means the sibling factory, and its argument's
+range is refused exactly as it is with no constant of that name.
+```maxon
+typealias Digit = int(0 to 9)
+
+let make = 0
+
+type Box
+	export var n as Digit
+
+	static let origin = make(42)
+
+	static function make(n Digit) returns Box
+		return Box{n: n}
+	end 'make'
+
+	static function originOf() returns Digit
+		return Box.origin.n
+	end 'originOf'
+end 'Box'
+
+function main() returns ExitCode
+	if make == 0 'zero'
+		return Box.originOf() as ExitCode
+	end 'zero'
+
+	return 1
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:9:27: Value 42 is outside the range of 'Digit' (int(0 to 9))
+```

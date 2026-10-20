@@ -280,7 +280,8 @@ Choose the rounding explicitly:
 an integer from those. Its result is a `FullRangeInt` (`int(i64.min to i64.max)`); cast it to reach a
 narrower alias. `round`, `floor`, `ceil`, `sqrt`, `abs` and the float `min` and `max` also accept a value of
 an integer alias, which they convert. A float result whose range the compiler knows carries that range and
-fits any float alias admitting it; any other is a `FullRangeFloat`.
+fits any float alias admitting it; any other is a `FullRangeFloat`. A function the file can see that shares
+one of these names, a generic one included, is the function a bare call of that name runs.
 
 ### Implicit Conversions
 

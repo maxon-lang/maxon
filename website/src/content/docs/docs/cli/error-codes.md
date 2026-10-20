@@ -117,7 +117,7 @@ A match arm's block label does not match the label its arm opened.
 
 ### E2045 — `parserNonConstantInitializer`
 
-A top-level constant's initializer is not a compile-time constant.
+A top-level constant's initializer is not a compile-time constant. A call in a top-level or `static` initializer is reported here when it names a function the file can see but the initializer cannot hold: a free function or sibling `static` returning a scalar, an instance method called bare, a generic function, a builtin, or a function-typed binding. A call to a function that does not exist, that the file cannot see, or that several directories declare is E3004, E3008 or E3088, or E3095, as in a function body. Make the call inside a function.
 
 ### E2046 — `matchDefaultEnumMustThrow`
 
@@ -249,7 +249,7 @@ The program declares no 'main' function.
 
 ### E3004 — `callUnknownFunction`
 
-A call names a function that does not exist -- a typo, or a callee not visible from here. A dotted call, whether written as an expression, a statement, under `try` or `async`, or in a top-level constant, is reported here when its qualifier names no binding, directory or type (`foo.bar.baz()`: nothing declares `foo.bar`). Correct the qualifier to the directory or type that declares the function. A member called on its result has parameters no declaration states, so it accepts any argument labels and an untyped closure argument; errors inside its arguments are reported as usual.
+A call names a function that does not exist -- a typo, or a callee not visible from here. A dotted call, whether written as an expression, a statement, under `try` or `async`, or in a top-level constant, is reported here when its qualifier names no binding, directory or type (`foo.bar.baz()`: nothing declares `foo.bar`). Correct the qualifier to the directory or type that declares the function. A bare call in a top-level or `static` initializer is reported here as it is in a function body. A member called on its result has parameters no declaration states, so it accepts any argument labels and an untyped closure argument; errors inside its arguments are reported as usual.
 
 ### E3005 — `typeMismatch`
 
@@ -265,7 +265,7 @@ A call cannot pick a unique overload: two or more candidates match it indistingu
 
 ### E3008 — `symbolNotExported`
 
-A symbol is referenced from another file but is not declared 'export'. It covers a function, a static member, a type and a typealias -- a type body's inner `typealias` too, which is file-private unless it carries its own modifier, and is refused written bare or qualified (`Holder.Inner`) -- at every position a name can be written in: a type annotation, a cast target, a construction or static call head, an `implements`, `extends`, `where` or `throws` clause, a `from` head, and a top-level initializer. A type the reading file may not name hides its members too: its fields, methods, extension methods, accessors and statics are refused through a value of it that reached the file, and so are the calls the compiler makes on that value's behalf -- interpolation, `==` and ordering operators, `for` iteration, and a `match` over a hidden enum or union. A value of a hidden interface type exposes none of its requirements. A value held at an exported interface answers that interface's requirements whatever type stands behind it, and so does a library witness dispatch such as a sort's comparison. Export the declaration, or reach it through an exported function or interface.
+A symbol is referenced from another file but is not declared 'export'. It covers a function, a static member, a type and a typealias -- a type body's inner `typealias` too, which is file-private unless it carries its own modifier, and is refused written bare or qualified (`Holder.Inner`) -- at every position a name can be written in: a type annotation, a cast target, a construction or static call head, an `implements`, `extends`, `where` or `throws` clause, a `from` head, a `spawn`'s factory, and a top-level or `static` initializer. A type the reading file may not name hides its members too: its fields, methods, extension methods, accessors and statics are refused through a value of it that reached the file, and so are the calls the compiler makes on that value's behalf -- interpolation, `==` and ordering operators, `for` iteration, and a `match` over a hidden enum or union. A value of a hidden interface type exposes none of its requirements. A value held at an exported interface answers that interface's requirements whatever type stands behind it, and so does a library witness dispatch such as a sort's comparison. Export the declaration, or reach it through an exported function or interface.
 
 ### E3009 — `semanticUnsafeCast`
 
@@ -473,7 +473,7 @@ A 'module' symbol is never referenced outside its declaring file. It could be fi
 
 ### E3095 — `semanticAmbiguousCrossFileCall`
 
-A bare function name has more than one reachable definition; qualify it as 'dir.name'. Two or more directories declare a free function of the name and this file may name more than one of those declarations, each in a directory other than its own or the root. It is refused at each door a bare function name is written at — a call, a function value (`let f = helper`) and a function-backed enum case (`op = helper`) — and each accepts the directory-qualified form (`beta.helper`) as the remedy. A call is refused in every form it takes: as a statement or with its result used, under `try` or `if let … = try`, and spawned with `async`, awaited or stored. An enum case refused here is reported once, in the file that declares the enum, whichever file calls through it. Decided by `ProgramSignatures.resolveFunctionName`; a call is reported by `SemanticCheck.validateCall`, the other two doors by the parser.
+A bare function name has more than one reachable definition; qualify it as 'dir.name'. Two or more directories declare a free function of the name and this file may name more than one of those declarations, each in a directory other than its own or the root. It is refused at each door a bare function name is written at — a call, a function value (`let f = helper`) and a function-backed enum case (`op = helper`) — and each accepts the directory-qualified form (`beta.helper`) as the remedy. A call is refused in every form it takes: as a statement or with its result used, under `try` or `if let … = try`, spawned with `async`, awaited or stored, and in a top-level or `static` initializer. An enum case refused here is reported once, in the file that declares the enum, whichever file calls through it. Decided by `ProgramSignatures.resolveFunctionName`; a call is reported by `SemanticCheck` (`validateCall` in a body, `checkInitializerCalls` in an initializer), the other two doors by the parser.
 
 ### E3097 — `semanticEnumAccessorComparison`
 

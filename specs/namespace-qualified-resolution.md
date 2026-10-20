@@ -1089,6 +1089,210 @@ end 'main'
 ```
 
 
+<!-- test: a-top-level-initializer-call-resolves-past-an-invisible-root-competitor -->
+A top-level `let`'s initializer resolves its bare call the way a body does: the root's `make` is
+file-private, so it is no candidate in `app/`, and beta's exported declaration is the one meant.
+```maxon
+// --- file: r.maxon
+public typealias Integer = int(0 to 125)
+
+public type Box
+	export var n as Integer
+
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+function make(n Integer) returns Box
+	return Box.create(n + 2)
+end 'make'
+
+public function useRoot() returns Integer
+	return make(1).n
+end 'useRoot'
+
+// --- file: beta/b.maxon
+export function make(n Integer) returns Box
+	return Box.create(n)
+end 'make'
+
+// --- file: app/main.maxon
+let G = make(7)
+
+function main() returns ExitCode
+	return (useRoot() * 10 + G.n) as ExitCode
+end 'main'
+```
+```exitcode
+37
+```
+
+
+<!-- test: a-top-level-initializer-call-resolves-to-its-one-visible-contested-declaration -->
+Two sibling directories declare `make`; `alpha`'s is file-private, so `beta`'s is the one visible from
+`app/`, and a top-level `let`'s initializer means it as a body call would. Returns 37.
+```maxon
+// --- file: r.maxon
+public typealias Integer = int(0 to 125)
+
+public type Box
+	export var n as Integer
+
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+// --- file: alpha/a.maxon
+function make(n Integer) returns Box
+	return Box.create(n + 2)
+end 'make'
+
+export function useAlpha() returns Integer
+	return make(1).n
+end 'useAlpha'
+
+// --- file: beta/b.maxon
+export function make(n Integer) returns Box
+	return Box.create(n)
+end 'make'
+
+// --- file: app/main.maxon
+let G = make(7)
+
+function main() returns ExitCode
+	return (useAlpha() * 10 + G.n) as ExitCode
+end 'main'
+```
+```exitcode
+37
+```
+
+
+<!-- test: a-top-level-initializer-call-named-by-its-directory-resolves -->
+A top-level `let`'s initializer may name the callee by its directory, as a body call may. Returns 7.
+```maxon
+// --- file: r.maxon
+public typealias Integer = int(0 to 125)
+
+public type Box
+	export var n as Integer
+
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+// --- file: alpha/a.maxon
+export function make(n Integer) returns Box
+	return Box.create(n + 2)
+end 'make'
+
+// --- file: beta/b.maxon
+export function make(n Integer) returns Box
+	return Box.create(n)
+end 'make'
+
+// --- file: app/main.maxon
+let G = beta.make(7)
+
+function main() returns ExitCode
+	return (alpha.make(1).n * 10 + G.n) as ExitCode
+end 'main'
+```
+```exitcode
+37
+```
+
+<!-- test: error.an-ambiguous-top-level-initializer-call-is-ambiguous -->
+Two sibling directories export `make` and the initializer names neither, so it is ambiguous as a body call
+would be.
+```maxon
+// --- file: r.maxon
+public typealias Integer = int(0 to 125)
+
+public type Box
+	export var n as Integer
+
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Box'
+
+// --- file: alpha/a.maxon
+export function make(n Integer) returns Box
+	return Box.create(n + 2)
+end 'make'
+
+// --- file: beta/b.maxon
+export function make(n Integer) returns Box
+	return Box.create(n)
+end 'make'
+
+// --- file: app/main.maxon
+let G = make(7)
+
+function main() returns ExitCode
+	return G.n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3095: app/<fragment>:24:9: Ambiguous bare-name call to 'make': more than one visible declaration matches it. Qualify it as one of: alpha.make, beta.make
+```
+
+<!-- test: error.an-undeclared-top-level-initializer-call-is-refused-as-a-body-call-is -->
+An initializer calling a function nobody declares is refused as a body call naming it is.
+```maxon
+public typealias Integer = int(0 to 125)
+
+let G = nothere(7)
+
+function main() returns ExitCode
+	return G as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:4:9: call to undefined function 'nothere'
+```
+
+
+<!-- test: error.a-top-level-initializer-call-to-a-name-only-invisible-declarations-carry -->
+The root's and `alpha`'s `make` are both file-private, so `app/` can name neither; the initializer is
+refused as a body call naming it is.
+```maxon
+// --- file: r.maxon
+public typealias Integer = int(0 to 125)
+
+function make(n Integer) returns Integer
+	return n + 1
+end 'make'
+
+public function useRoot() returns Integer
+	return make(1)
+end 'useRoot'
+
+// --- file: alpha/a.maxon
+function make(n Integer) returns Integer
+	return n + 2
+end 'make'
+
+export function useAlpha() returns Integer
+	return make(1)
+end 'useAlpha'
+
+// --- file: app/main.maxon
+let G = make(7)
+
+function main() returns ExitCode
+	return (useRoot() + useAlpha() + G) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3008: app/<fragment>:23:9: function 'make' is not exported
+```
+
+
 <!-- test: contested-bare-call-resolves-past-an-invisible-same-directory-competitor -->
 The caller's OWN directory declares the name, but in another file and file-private, so the local tier
 has nothing this file may name and the one visible declaration elsewhere is the answer.

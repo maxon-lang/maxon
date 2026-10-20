@@ -631,7 +631,8 @@ Choose the rounding explicitly:
 an integer from those. Its result is a `FullRangeInt` (`int(i64.min to i64.max)`); cast it to reach a
 narrower alias. `round`, `floor`, `ceil`, `sqrt`, `abs` and the float `min` and `max` also accept a value of
 an integer alias, which they convert. A float result whose range the compiler knows carries that range and
-fits any float alias admitting it; any other is a `FullRangeFloat`.
+fits any float alias admitting it; any other is a `FullRangeFloat`. A function the file can see that shares
+one of these names, a generic one included, is the function a bare call of that name runs.
 
 #### Implicit Conversions
 
@@ -2840,6 +2841,10 @@ end 'main'
   name (`let step = countdown`). The type at the head may be qualified (`lib.Cache.create()`). A free function
   call returning a scalar, and any other call, is **E2045** (`Function calls are not allowed in global
   variable initializers`).
+- A call in an initializer names its function as a call in a function body does: a name nothing declares is
+  **E3004**, one the file cannot see is **E3008** (**E3088** for a `module` one), and one several directories
+  declare is **E3095**. That one diagnostic covers every read and assignment of the binding; a tuple
+  assignment naming the binding is **E2015** as well.
 - Every initializer runs **before `main`**, once, in dependency order, whether or not anything reads the
   binding. Initializers that depend on each other in a cycle are **E2012**. A `let` whose value is decided at
   compile time is image data, laid down in read-only memory with nothing to run; anything else runs in the
@@ -4704,7 +4709,9 @@ calls the nearer one cannot take.
 **Only a declaration the file can see counts**, for every kind of name. A project type named like a
 primitive (`byte`, say) and declared where a file cannot see it leaves that name the primitive in that file.
 What a call knows about its callee comes from the declaration it binds, too: whether the callee never
-returns (its body ends in `panic`) or can only throw, and which generic template it instantiates.
+returns (its body ends in `panic`) or can only throw, and which generic template it instantiates. A function
+value (`let f = helper`) is the one declaration of its name the file can see, with that declaration's
+parameters and return type, whatever other files declare under the name.
 
 **Every candidate is nameable.** Two type declarations of one name that can both be named from outside
 their files may not share a directory: two typealiases are **E3061** and a pair involving a type, enum,
@@ -5045,7 +5052,7 @@ end 'main'
   **E3134**, in a `default` as anywhere else. The type may be [qualified](#qualified-names), at any length:
   `spawn sub.Calc.create()` starts a type declared in `sub/`, `spawn outer.inner.Calc.create()` one two
   directories down, and `spawn stdlib.Range.create(1, finish: 4)` the library's `Range` in a program that
-  declares its own.
+  declares its own. A factory the spawning file cannot see is **E3008** (**E3088** for a `module` one).
 - **Generic services.** A generic type can be spawned; its handle type is spelled through an alias,
   `typealias StringBoxHandle = Box.handle with String`.
 - Services that `await` each other in a cycle are **E3139**.

@@ -1001,7 +1001,8 @@ export union TopLevelConstant
 	// user actually wrote rather than a name some other file mentioned.
 	failed(error SourceParseError)
 
-	// It has no value only because a constant it READS has none. Silent by design: a second
+	// It has no value because a constant it READS has none, or because its initializer stopped at a call
+	// `SemanticCheck.checkInitializerCalls` reports (`ConstEvalError.deferred`). Silent by design: a second
 	// diagnostic here would name a line whose only fault is mentioning a broken name.
 	poisoned
 
@@ -3614,7 +3615,232 @@ export union ConstEvalError implements Error
 	// A constant this one READS has already been diagnosed. Carries no diagnostic of its own — see
 	// `TopLevelConstant.poisoned`.
 	dependencyFailed
+
+	// THIS initializer stopped at a call recorded for `SemanticCheck.checkInitializerCalls`, which reports it.
+	// Carries no diagnostic of its own, and poisons the binding as `dependencyFailed` does.
+	deferred
 end 'ConstEvalError'
+
+export union BindingTypes
+	unsettled
+	settled(into TypeNameInterner)
+
+	function aFunctionTypedBindingIsCalled(index ProgramSignatures, name ByteArray, readerFilePath FilePath) returns bool
+		return match self 'bindings'
+			unsettled gives false
+			settled(into) gives index.functionTypedBindingVisibleFrom(name, readerFilePath: readerFilePath, into: into)
+		end 'bindings'
+	end 'aFunctionTypedBindingIsCalled'
+end 'BindingTypes'
+
+export enum WalkedSibling
+	notWalked
+	takesReceiver
+	takesNoReceiver
+end 'WalkedSibling'
+
+export enum SiblingKind
+	notASibling
+	staticSibling
+	instanceSibling
+end 'SiblingKind'
+
+export enum BareCallKind
+	topLevelBinding
+	staticSibling
+	instanceSibling
+	reserved
+	ambiguous
+	genericTemplate
+	declaredVisible
+	builtin
+	declaredHidden
+	undeclared
+
+	export function namesAVisibleFunction() returns bool
+		return match self 'kind'
+			declaredVisible or
+			genericTemplate or
+			ambiguous gives true
+			topLevelBinding or
+			staticSibling or
+			instanceSibling or
+			reserved or
+			builtin or
+			declaredHidden or
+			undeclared gives false
+		end 'kind'
+	end 'namesAVisibleFunction'
+end 'BareCallKind'
+
+export union CarriedDefect
+	none
+	carried(let error SourceParseError)
+end 'CarriedDefect'
+
+// @generated library-cache begin
+function cacheWriteCarriedDefect(writer LibraryCacheWriter, value CarriedDefect)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		none then break
+		carried(a0) then cacheWriteCarriedDefectCarried(writer, a0: a0)
+	end 'payload'
+end 'cacheWriteCarriedDefect'
+
+function cacheWriteCarriedDefectCarried(writer LibraryCacheWriter, a0 SourceParseError)
+	cacheWriteSourceParseError(writer, value: a0)
+end 'cacheWriteCarriedDefectCarried'
+
+function cacheReadCarriedDefect(reader LibraryCacheReader) returns CarriedDefect throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives CarriedDefect.none
+		1 gives try cacheReadCarriedDefectCarried(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadCarriedDefect'
+
+function cacheReadCarriedDefectCarried(reader LibraryCacheReader) returns CarriedDefect throws LibraryCacheDamage
+	let a0 = try cacheReadSourceParseError(reader)
+
+	return CarriedDefect.carried(a0)
+end 'cacheReadCarriedDefectCarried'
+
+// @generated library-cache end
+
+// A call in a top-level or `static` initializer. The sweep cannot judge it — binding types are not settled
+// and `__module_init`'s calls are exempt from the body check — so `SemanticCheck.checkInitializerCalls` does.
+export union InitializerCallSite
+	foldable(let key ByteArray, let readerFilePath FilePath, range SourceRange)
+	provisional(let key ByteArray, let written ByteArray, defect CarriedDefect, let readerFilePath FilePath, range SourceRange)
+	unclaimed(let written ByteArray, let enclosingTypeName ByteArray, mayUseReserved bool, let readerFilePath FilePath, range SourceRange)
+
+	export function callee() returns ByteArray
+		return match self 'site'
+			foldable(key, _, _) gives key
+			provisional(key, _, _, _, _) gives key
+			unclaimed(written, _, _, _, _) gives written
+		end 'site'
+	end 'callee'
+
+	export function readerFilePath() returns FilePath
+		return match self 'site'
+			foldable(_, path, _) gives path
+			provisional(_, _, _, path, _) gives path
+			unclaimed(_, _, _, path, _) gives path
+		end 'site'
+	end 'readerFilePath'
+
+	export function range() returns SourceRange
+		return match self 'site'
+			foldable(_, _, range) gives range
+			provisional(_, _, _, _, range) gives range
+			unclaimed(_, _, _, _, range) gives range
+		end 'site'
+	end 'range'
+end 'InitializerCallSite'
+
+// @generated library-cache begin
+function cacheWriteInitializerCallSite(writer LibraryCacheWriter, value InitializerCallSite)
+	writer.unsigned(value.ordinal as CacheUnsigned)
+
+	match value 'payload'
+		foldable(a0, a1, a2) then cacheWriteInitializerCallSiteFoldable(writer, a0: a0, a1: a1, a2: a2)
+		provisional(a0, a1, a2, a3, a4) then cacheWriteInitializerCallSiteProvisional(writer, a0: a0, a1: a1, a2: a2, a3: a3, a4: a4)
+		unclaimed(a0, a1, a2, a3, a4) then cacheWriteInitializerCallSiteUnclaimed(writer, a0: a0, a1: a1, a2: a2, a3: a3, a4: a4)
+	end 'payload'
+end 'cacheWriteInitializerCallSite'
+
+function cacheWriteInitializerCallSiteFoldable(writer LibraryCacheWriter, a0 ByteArray, a1 FilePath, a2 SourceRange)
+	writer.bytes(a0)
+	writer.text(a1.toString())
+	a2.cacheWrite(writer)
+end 'cacheWriteInitializerCallSiteFoldable'
+
+function cacheWriteInitializerCallSiteProvisional(writer LibraryCacheWriter, a0 ByteArray, a1 ByteArray, a2 CarriedDefect, a3 FilePath, a4 SourceRange)
+	writer.bytes(a0)
+	writer.bytes(a1)
+	cacheWriteCarriedDefect(writer, value: a2)
+	writer.text(a3.toString())
+	a4.cacheWrite(writer)
+end 'cacheWriteInitializerCallSiteProvisional'
+
+function cacheWriteInitializerCallSiteUnclaimed(writer LibraryCacheWriter, a0 ByteArray, a1 ByteArray, a2 bool, a3 FilePath, a4 SourceRange)
+	writer.bytes(a0)
+	writer.bytes(a1)
+	writer.flag(a2)
+	writer.text(a3.toString())
+	a4.cacheWrite(writer)
+end 'cacheWriteInitializerCallSiteUnclaimed'
+
+function cacheReadInitializerCallSite(reader LibraryCacheReader) returns InitializerCallSite throws LibraryCacheDamage
+	let tag = try reader.unsigned()
+
+	return match tag 'case'
+		0 gives try cacheReadInitializerCallSiteFoldable(reader)
+		1 gives try cacheReadInitializerCallSiteProvisional(reader)
+		2 gives try cacheReadInitializerCallSiteUnclaimed(reader)
+		default throws LibraryCacheDamage.unknownTag(tag)
+	end 'case'
+end 'cacheReadInitializerCallSite'
+
+function cacheReadInitializerCallSiteFoldable(reader LibraryCacheReader) returns InitializerCallSite throws LibraryCacheDamage
+	let a0 = try reader.bytes()
+	let a1 = try reader.path()
+	let a2 = try SourceRange.cacheRead(reader)
+
+	return InitializerCallSite.foldable(a0, readerFilePath: a1, range: a2)
+end 'cacheReadInitializerCallSiteFoldable'
+
+function cacheReadInitializerCallSiteProvisional(reader LibraryCacheReader) returns InitializerCallSite throws LibraryCacheDamage
+	let a0 = try reader.bytes()
+	let a1 = try reader.bytes()
+	let a2 = try cacheReadCarriedDefect(reader)
+	let a3 = try reader.path()
+	let a4 = try SourceRange.cacheRead(reader)
+
+	return InitializerCallSite.provisional(a0, written: a1, defect: a2, readerFilePath: a3, range: a4)
+end 'cacheReadInitializerCallSiteProvisional'
+
+function cacheReadInitializerCallSiteUnclaimed(reader LibraryCacheReader) returns InitializerCallSite throws LibraryCacheDamage
+	let a0 = try reader.bytes()
+	let a1 = try reader.bytes()
+	let a2 = try reader.flag()
+	let a3 = try reader.path()
+	let a4 = try SourceRange.cacheRead(reader)
+
+	return InitializerCallSite.unclaimed(a0, enclosingTypeName: a1, mayUseReserved: a2, readerFilePath: a3, range: a4)
+end 'cacheReadInitializerCallSiteUnclaimed'
+
+// @generated library-cache end
+
+export typealias InitializerCallSiteArray = Array with InitializerCallSite
+
+// @generated library-cache begin
+function cacheWriteInitializerCallSiteArray(writer LibraryCacheWriter, value InitializerCallSiteArray)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		cacheWriteInitializerCallSite(writer, value: item)
+	end 'eachItem'
+end 'cacheWriteInitializerCallSiteArray'
+
+function cacheReadInitializerCallSiteArray(reader LibraryCacheReader) returns InitializerCallSiteArray throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = InitializerCallSiteArray.create()
+	result.reserve(count)
+
+	for _ in 0 upto count 'eachItem'
+		let item = try cacheReadInitializerCallSite(reader)
+		result.push(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadInitializerCallSiteArray'
+
+// @generated library-cache end
 
 // The outcome of a USE-SITE constant lookup, after evaluation has finished. Deliberately NOT
 // `ConstEvalOutcome`: a use site cannot trigger an evaluation (they are all done by then) and must
@@ -3658,6 +3884,10 @@ export union TopLevelConstantLookup
 	// between a value the reading file can mint and a panic: every `structRef` and `named` id is minted from
 	// the FILE's own interner, and an id minted here names something else there.
 	foundImageBox(nodes ImmortalBoxNodeArray, root ElementIndex, let typeName ByteArray, tag ValueTypeTag)
+
+	// The binding's initializer, or one it reads, owns a diagnostic already (`TopLevelConstant.poisoned`). A
+	// read mints a deferred value, so that diagnostic is not repeated at every use.
+	poisoned
 end 'TopLevelConstantLookup'
 
 // ⭐⭐ **EVERYTHING A USE SITE NEEDS TO MATERIALIZE AN IMAGE-DATA `let`** — the record's SHAPE, its payload
@@ -3703,6 +3933,9 @@ export union TopLevelGlobalLookup
 	// `brand` is the generic-instance alias the initializer spelled (`Xs.create()`), or empty.
 	found(let label ByteArray, valueType MaxonType, let brand ByteArray, mutable bool)
 	notFound
+
+	// `TopLevelConstantLookup.poisoned`, for a binding with a slot.
+	poisoned
 end 'TopLevelGlobalLookup'
 
 // Which kind of top-level declaration a lookup is asking for. The two are resolved by ONE probe
@@ -16144,7 +16377,7 @@ end 'cacheReadFunctionDeclSiteMap'
 //
 // ⚠ **A PARAMETER THE SWEEP COULD NOT READ IS `MaxonType.unresolved`** (`Parser.sweptParamTypeAt`), and a
 // declaration carrying one is UNSCOREABLE rather than matching. See `overloadReturnTypeFor`.
-// ⭐ **THE ANSWER `ProgramSignatures.constFactoryConstructionOf` GIVES — a factory the const evaluator may
+// ⭐ **THE ANSWER `ProgramSignatures.constFactoryConstructionAmong` GIVES — a factory the const evaluator may
 // rewrite into a construction, with the two facts that rewriting needs, or nothing.** One union
 // rather than two accessors because the layout and the parameter names are only meaningful together: the
 // fold maps argument `k` onto the field named after parameter `k`, so a caller holding one of them holds
@@ -17365,12 +17598,11 @@ export type SettledDeclarations
 	// describes.
 	module var funcReturnDeclFiles as FuncReturnDeclFileMap
 
-	// ⭐⭐ **EVERY DECLARED FUNCTION'S TIER AND DECLARING FILE (the top-level factory's visibility half).**
-	// `SemanticCheck.calleeVisibleFrom` answers the same question for a call in a BODY, off `FunctionNameIndex`
-	// — but that index is built long after the constant evaluator has run, and a top-level initializer's call
-	// is decided during `queryProgramSignatures`, before any file is parsed. So the sweep publishes the two
-	// facts here and `Parser.evalConstFactoryCallInto` asks them through the very same `isVisibleFrom`: two
-	// SOURCES for one declaration, never two RULES.
+	// ⭐⭐ **EVERY DECLARED FUNCTION'S TIER AND DECLARING FILE, under its registration key.**
+	// `SemanticCheck.calleeVisibleFrom` answers the same question for a call in a BODY, off `FunctionNameIndex`;
+	// the sweep publishes the two facts here for the askers that index does not serve
+	// (`calleeVisibilityFrom`), and both feed them to the very same `isVisibleFrom`: two SOURCES for one
+	// declaration, never two RULES.
 	//
 	// ⚠ Written UNCONDITIONALLY by `record` — `returnTypes`' discipline rather than
 	// `funcReturnDeclFiles`', because "no entry" has to mean "no file declares this name" for the answer to
@@ -17753,6 +17985,7 @@ export type SettledDeclarations
 	module var genericTemplates = GenericFunctionTemplateMap.create()
 	module var genericInstancesBySite = GenericFunctionInstancesBySite.create()
 	module var genericInstancesByName = GenericFunctionInstanceMap.create()
+	module var initializerCallSites = InitializerCallSiteArray.create()
 
 	export static function create(os Os) returns SettledDeclarations
 		let interfaces = IrInterfaceMap.create()
@@ -17919,6 +18152,7 @@ export type SettledDeclarations
 		cacheWriteGenericFunctionTemplateMap(writer, value: self.genericTemplates)
 		cacheWriteGenericFunctionInstancesBySite(writer, value: self.genericInstancesBySite)
 		cacheWriteGenericFunctionInstanceMap(writer, value: self.genericInstancesByName)
+		cacheWriteInitializerCallSiteArray(writer, value: self.initializerCallSites)
 	end 'cacheWrite'
 
 	static function cacheRead(reader LibraryCacheReader) returns SettledDeclarations throws LibraryCacheDamage
@@ -18075,12 +18309,13 @@ export type SettledDeclarations
 		let f_genericTemplates = try cacheReadGenericFunctionTemplateMap(reader)
 		let f_genericInstancesBySite = try cacheReadGenericFunctionInstancesBySite(reader)
 		let f_genericInstancesByName = try cacheReadGenericFunctionInstanceMap(reader)
+		let f_initializerCallSites = try cacheReadInitializerCallSiteArray(reader)
 
-		return Self{misclosedBlocks: f_misclosedBlocks, returnTypes: f_returnTypes, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, nestedFunctionAliasMembers: f_nestedFunctionAliasMembers, pendingImplementsClauses: f_pendingImplementsClauses, implementsParents: f_implementsParents, implementsVerdicts: f_implementsVerdicts, structLayouts: f_structLayouts, structNamesInDeclOrder: f_structNamesInDeclOrder, enumTypes: f_enumTypes, genericAliasDecls: f_genericAliasDecls, genericAliasDeclIndexByName: f_genericAliasDeclIndexByName, genericAliasDeclsIndexedThrough: f_genericAliasDeclsIndexedThrough, instanceDisplayNames: f_instanceDisplayNames, funcReturnAliasNames: f_funcReturnAliasNames, typeParamOwners: f_typeParamOwners, crossKindContests: f_crossKindContests, typeNameClaimIndex: f_typeNameClaimIndex, vectorFromSizes: f_vectorFromSizes, fromHeadNames: f_fromHeadNames, genericAliases: f_genericAliases, interfaceAliases: f_interfaceAliases, interfaceAliasOwners: f_interfaceAliasOwners, contestedGenericAliases: f_contestedGenericAliases, multiplyDeclaredGenericAliases: f_multiplyDeclaredGenericAliases, sharedInstanceGenericAliases: f_sharedInstanceGenericAliases, genericAliasMints: f_genericAliasMints, runtimeFilePaths: f_runtimeFilePaths, scriptlibFilePaths: f_scriptlibFilePaths, genericAliasSites: f_genericAliasSites, constLiteralSites: f_constLiteralSites, innerAliases: f_innerAliases, extensionInnerAliasMembers: f_extensionInnerAliasMembers, droppedSignatures: f_droppedSignatures, methodInnerAliasParams: f_methodInnerAliasParams, interfaces: f_interfaces, interfaceNamesInDeclOrder: f_interfaceNamesInDeclOrder, interfaceDeclIndexByName: f_interfaceDeclIndexByName, interfaceDeclSites: f_interfaceDeclSites, interfaceDeclSiteNames: f_interfaceDeclSiteNames, interfaceDeclSiteIndexByName: f_interfaceDeclSiteIndexByName, interfaceDeclSitesIndexedThrough: f_interfaceDeclSitesIndexedThrough, extensionDeclSites: f_extensionDeclSites, conformanceClauseSites: f_conformanceClauseSites, descriptorScanSites: f_descriptorScanSites, descriptorNeeds: f_descriptorNeeds, speculativeDescriptorNeeds: f_speculativeDescriptorNeeds, fixedElementCountNeeds: f_fixedElementCountNeeds, conditionalExtensionSkips: f_conditionalExtensionSkips, associatedTypeHoldings: f_associatedTypeHoldings, sweptConformances: f_sweptConformances, sweptConformancesBuilt: f_sweptConformancesBuilt, conformerIndex: f_conformerIndex, extensionDeclaredConformances: f_extensionDeclaredConformances, extensionMethodConstraints: f_extensionMethodConstraints, unconstrainedExtensionMethods: f_unconstrainedExtensionMethods, decls: f_decls, declIndex: f_declIndex, funcParamConsumes: f_funcParamConsumes, declParamConsumes: f_declParamConsumes, funcParamReassigns: f_funcParamReassigns, byRefSitesOfKey: f_byRefSitesOfKey, byRefForwardingLive: f_byRefForwardingLive, funcGlobalAliasReturns: f_funcGlobalAliasReturns, globalAliasReturnKeys: f_globalAliasReturnKeys, byRefBareNames: f_byRefBareNames, opaqueByRefBareNames: f_opaqueByRefBareNames, calleeBareNames: f_calleeBareNames, genericInstanceNameMarker: genericInstanceNameMarker(), funcThrows: f_funcThrows, disagreeingThrows: f_disagreeingThrows, funcThrowingDeclarationCounts: f_funcThrowingDeclarationCounts, funcDiverges: f_funcDiverges, funcDivergingDeclarationCounts: f_funcDivergingDeclarationCounts, funcAlwaysThrows: f_funcAlwaysThrows, funcAlwaysThrowingDeclarationCounts: f_funcAlwaysThrowingDeclarationCounts, funcReturnsFreshRecord: f_funcReturnsFreshRecord, funcFreshReturnForwards: f_funcFreshReturnForwards, funcFreshReturningDeclarationCounts: f_funcFreshReturningDeclarationCounts, funcConstructsFromParams: f_funcConstructsFromParams, funcConstructingDeclarationCounts: f_funcConstructingDeclarationCounts, funcReturnsReceiverField: f_funcReturnsReceiverField, funcReceiverFieldReturningDeclarationCounts: f_funcReceiverFieldReturningDeclarationCounts, interfaceRequirementNames: f_interfaceRequirementNames, funcParamDefaults: f_funcParamDefaults, funcOpaqueParams: f_funcOpaqueParams, contestedOpaqueParams: f_contestedOpaqueParams, disagreeingParamDefaults: f_disagreeingParamDefaults, funcDeclarationCounts: f_funcDeclarationCounts, funcDefaultingDeclarationCounts: f_funcDefaultingDeclarationCounts, declaredReturnSurfaces: f_declaredReturnSurfaces, funcReturnDeclFiles: f_funcReturnDeclFiles, funcDeclSites: f_funcDeclSites, overloadedDecls: f_overloadedDecls, bufferElementAliases: f_bufferElementAliases, bufferSurfaceAliases: f_bufferSurfaceAliases, extensionPublishedMethods: f_extensionPublishedMethods, extensionShadowedMethods: f_extensionShadowedMethods, extensionMethodDeclFiles: f_extensionMethodDeclFiles, contestedExtensionMethods: f_contestedExtensionMethods, interfaceExtensionMembers: f_interfaceExtensionMembers, stdlibPublishedExtensionMethods: f_stdlibPublishedExtensionMethods, stdlibExtensionMethodsBeatenByUser: f_stdlibExtensionMethodsBeatenByUser, staticInstanceContests: f_staticInstanceContests, authorDeclaredNames: f_authorDeclaredNames, libraryMeantNames: f_libraryMeantNames, managedTopLevelNames: f_managedTopLevelNames, corpusSlotInitCallees: f_corpusSlotInitCallees, inlineRecordByTypeNameId: f_inlineRecordByTypeNameId, defineProblems: f_defineProblems, constInitializerTypeNames: f_constInitializerTypeNames, constInitializerTypeSites: f_constInitializerTypeSites, bareTypeParamReturnerNames: f_bareTypeParamReturnerNames, bareTypeParamReturnerNamesComputed: f_bareTypeParamReturnerNamesComputed, typeParamFeederNames: f_typeParamFeederNames, typeParamFeederNamesComputed: f_typeParamFeederNamesComputed, userDeclaredTypeNames: f_userDeclaredTypeNames, stdlibDeclaredTypeNames: f_stdlibDeclaredTypeNames, arrayLiteralConformers: f_arrayLiteralConformers, serviceSpawnCandidateList: f_serviceSpawnCandidateList, serviceSpawnCandidateKeys: f_serviceSpawnCandidateKeys, serviceHandleOwners: f_serviceHandleOwners, defaultDeclarationList: f_defaultDeclarationList, serviceMessages: f_serviceMessages, interfaceHandleOwners: f_interfaceHandleOwners, interfaceHandleRepresentatives: f_interfaceHandleRepresentatives, interfaceHandleOrder: f_interfaceHandleOrder, serviceSendErrorNames: f_serviceSendErrorNames, corpusArrayRecordName: f_corpusArrayRecordName, shadowRoster: f_shadowRoster, qualifiedTypeClaims: f_qualifiedTypeClaims, typeHeadClaims: f_typeHeadClaims, topLevelBindingSites: f_topLevelBindingSites, writtenTypeClaims: f_writtenTypeClaims, claimedTypeClaims: f_claimedTypeClaims, aliasFamiliesBesideNominals: f_aliasFamiliesBesideNominals, headerTypeNameDecls: f_headerTypeNameDecls, nominalNameCollisions: f_nominalNameCollisions, fileModuleDirectories: f_fileModuleDirectories, namespaceQualifiers: f_namespaceQualifiers, libraryFilePaths: f_libraryFilePaths, declTokenStreams: DeclTokenStreamMap.create(), declaredTests: f_declaredTests, namespaceQualifiedFunctions: f_namespaceQualifiedFunctions, freeFunctionDirectories: f_freeFunctionDirectories, contestedFreeFunctions: f_contestedFreeFunctions, contestedRegistrationNames: f_contestedRegistrationNames, contestedKeysAnotherDeclarationHolds: f_contestedKeysAnotherDeclarationHolds, freeFunctionDeclFiles: f_freeFunctionDeclFiles, crossFileOverloadedFreeFunctions: f_crossFileOverloadedFreeFunctions, instantiatedByAParse: f_instantiatedByAParse, genericTemplates: f_genericTemplates, genericInstancesBySite: f_genericInstancesBySite, genericInstancesByName: f_genericInstancesByName}
+		return Self{misclosedBlocks: f_misclosedBlocks, returnTypes: f_returnTypes, typeAliases: f_typeAliases, functionTypeAliases: f_functionTypeAliases, nestedFunctionAliasMembers: f_nestedFunctionAliasMembers, pendingImplementsClauses: f_pendingImplementsClauses, implementsParents: f_implementsParents, implementsVerdicts: f_implementsVerdicts, structLayouts: f_structLayouts, structNamesInDeclOrder: f_structNamesInDeclOrder, enumTypes: f_enumTypes, genericAliasDecls: f_genericAliasDecls, genericAliasDeclIndexByName: f_genericAliasDeclIndexByName, genericAliasDeclsIndexedThrough: f_genericAliasDeclsIndexedThrough, instanceDisplayNames: f_instanceDisplayNames, funcReturnAliasNames: f_funcReturnAliasNames, typeParamOwners: f_typeParamOwners, crossKindContests: f_crossKindContests, typeNameClaimIndex: f_typeNameClaimIndex, vectorFromSizes: f_vectorFromSizes, fromHeadNames: f_fromHeadNames, genericAliases: f_genericAliases, interfaceAliases: f_interfaceAliases, interfaceAliasOwners: f_interfaceAliasOwners, contestedGenericAliases: f_contestedGenericAliases, multiplyDeclaredGenericAliases: f_multiplyDeclaredGenericAliases, sharedInstanceGenericAliases: f_sharedInstanceGenericAliases, genericAliasMints: f_genericAliasMints, runtimeFilePaths: f_runtimeFilePaths, scriptlibFilePaths: f_scriptlibFilePaths, genericAliasSites: f_genericAliasSites, constLiteralSites: f_constLiteralSites, innerAliases: f_innerAliases, extensionInnerAliasMembers: f_extensionInnerAliasMembers, droppedSignatures: f_droppedSignatures, methodInnerAliasParams: f_methodInnerAliasParams, interfaces: f_interfaces, interfaceNamesInDeclOrder: f_interfaceNamesInDeclOrder, interfaceDeclIndexByName: f_interfaceDeclIndexByName, interfaceDeclSites: f_interfaceDeclSites, interfaceDeclSiteNames: f_interfaceDeclSiteNames, interfaceDeclSiteIndexByName: f_interfaceDeclSiteIndexByName, interfaceDeclSitesIndexedThrough: f_interfaceDeclSitesIndexedThrough, extensionDeclSites: f_extensionDeclSites, conformanceClauseSites: f_conformanceClauseSites, descriptorScanSites: f_descriptorScanSites, descriptorNeeds: f_descriptorNeeds, speculativeDescriptorNeeds: f_speculativeDescriptorNeeds, fixedElementCountNeeds: f_fixedElementCountNeeds, conditionalExtensionSkips: f_conditionalExtensionSkips, associatedTypeHoldings: f_associatedTypeHoldings, sweptConformances: f_sweptConformances, sweptConformancesBuilt: f_sweptConformancesBuilt, conformerIndex: f_conformerIndex, extensionDeclaredConformances: f_extensionDeclaredConformances, extensionMethodConstraints: f_extensionMethodConstraints, unconstrainedExtensionMethods: f_unconstrainedExtensionMethods, decls: f_decls, declIndex: f_declIndex, funcParamConsumes: f_funcParamConsumes, declParamConsumes: f_declParamConsumes, funcParamReassigns: f_funcParamReassigns, byRefSitesOfKey: f_byRefSitesOfKey, byRefForwardingLive: f_byRefForwardingLive, funcGlobalAliasReturns: f_funcGlobalAliasReturns, globalAliasReturnKeys: f_globalAliasReturnKeys, byRefBareNames: f_byRefBareNames, opaqueByRefBareNames: f_opaqueByRefBareNames, calleeBareNames: f_calleeBareNames, genericInstanceNameMarker: genericInstanceNameMarker(), funcThrows: f_funcThrows, disagreeingThrows: f_disagreeingThrows, funcThrowingDeclarationCounts: f_funcThrowingDeclarationCounts, funcDiverges: f_funcDiverges, funcDivergingDeclarationCounts: f_funcDivergingDeclarationCounts, funcAlwaysThrows: f_funcAlwaysThrows, funcAlwaysThrowingDeclarationCounts: f_funcAlwaysThrowingDeclarationCounts, funcReturnsFreshRecord: f_funcReturnsFreshRecord, funcFreshReturnForwards: f_funcFreshReturnForwards, funcFreshReturningDeclarationCounts: f_funcFreshReturningDeclarationCounts, funcConstructsFromParams: f_funcConstructsFromParams, funcConstructingDeclarationCounts: f_funcConstructingDeclarationCounts, funcReturnsReceiverField: f_funcReturnsReceiverField, funcReceiverFieldReturningDeclarationCounts: f_funcReceiverFieldReturningDeclarationCounts, interfaceRequirementNames: f_interfaceRequirementNames, funcParamDefaults: f_funcParamDefaults, funcOpaqueParams: f_funcOpaqueParams, contestedOpaqueParams: f_contestedOpaqueParams, disagreeingParamDefaults: f_disagreeingParamDefaults, funcDeclarationCounts: f_funcDeclarationCounts, funcDefaultingDeclarationCounts: f_funcDefaultingDeclarationCounts, declaredReturnSurfaces: f_declaredReturnSurfaces, funcReturnDeclFiles: f_funcReturnDeclFiles, funcDeclSites: f_funcDeclSites, overloadedDecls: f_overloadedDecls, bufferElementAliases: f_bufferElementAliases, bufferSurfaceAliases: f_bufferSurfaceAliases, extensionPublishedMethods: f_extensionPublishedMethods, extensionShadowedMethods: f_extensionShadowedMethods, extensionMethodDeclFiles: f_extensionMethodDeclFiles, contestedExtensionMethods: f_contestedExtensionMethods, interfaceExtensionMembers: f_interfaceExtensionMembers, stdlibPublishedExtensionMethods: f_stdlibPublishedExtensionMethods, stdlibExtensionMethodsBeatenByUser: f_stdlibExtensionMethodsBeatenByUser, staticInstanceContests: f_staticInstanceContests, authorDeclaredNames: f_authorDeclaredNames, libraryMeantNames: f_libraryMeantNames, managedTopLevelNames: f_managedTopLevelNames, corpusSlotInitCallees: f_corpusSlotInitCallees, inlineRecordByTypeNameId: f_inlineRecordByTypeNameId, defineProblems: f_defineProblems, constInitializerTypeNames: f_constInitializerTypeNames, constInitializerTypeSites: f_constInitializerTypeSites, bareTypeParamReturnerNames: f_bareTypeParamReturnerNames, bareTypeParamReturnerNamesComputed: f_bareTypeParamReturnerNamesComputed, typeParamFeederNames: f_typeParamFeederNames, typeParamFeederNamesComputed: f_typeParamFeederNamesComputed, userDeclaredTypeNames: f_userDeclaredTypeNames, stdlibDeclaredTypeNames: f_stdlibDeclaredTypeNames, arrayLiteralConformers: f_arrayLiteralConformers, serviceSpawnCandidateList: f_serviceSpawnCandidateList, serviceSpawnCandidateKeys: f_serviceSpawnCandidateKeys, serviceHandleOwners: f_serviceHandleOwners, defaultDeclarationList: f_defaultDeclarationList, serviceMessages: f_serviceMessages, interfaceHandleOwners: f_interfaceHandleOwners, interfaceHandleRepresentatives: f_interfaceHandleRepresentatives, interfaceHandleOrder: f_interfaceHandleOrder, serviceSendErrorNames: f_serviceSendErrorNames, corpusArrayRecordName: f_corpusArrayRecordName, shadowRoster: f_shadowRoster, qualifiedTypeClaims: f_qualifiedTypeClaims, typeHeadClaims: f_typeHeadClaims, topLevelBindingSites: f_topLevelBindingSites, writtenTypeClaims: f_writtenTypeClaims, claimedTypeClaims: f_claimedTypeClaims, aliasFamiliesBesideNominals: f_aliasFamiliesBesideNominals, headerTypeNameDecls: f_headerTypeNameDecls, nominalNameCollisions: f_nominalNameCollisions, fileModuleDirectories: f_fileModuleDirectories, namespaceQualifiers: f_namespaceQualifiers, libraryFilePaths: f_libraryFilePaths, declTokenStreams: DeclTokenStreamMap.create(), declaredTests: f_declaredTests, namespaceQualifiedFunctions: f_namespaceQualifiedFunctions, freeFunctionDirectories: f_freeFunctionDirectories, contestedFreeFunctions: f_contestedFreeFunctions, contestedRegistrationNames: f_contestedRegistrationNames, contestedKeysAnotherDeclarationHolds: f_contestedKeysAnotherDeclarationHolds, freeFunctionDeclFiles: f_freeFunctionDeclFiles, crossFileOverloadedFreeFunctions: f_crossFileOverloadedFreeFunctions, instantiatedByAParse: f_instantiatedByAParse, genericTemplates: f_genericTemplates, genericInstancesBySite: f_genericInstancesBySite, genericInstancesByName: f_genericInstancesByName, initializerCallSites: f_initializerCallSites}
 	end 'cacheRead'
 
-	static function cacheLayoutBytes() returns CacheSize1240
-		return sizeof(SettledDeclarations) as CacheSize1240
+	static function cacheLayoutBytes() returns CacheSize1248
+		return sizeof(SettledDeclarations) as CacheSize1248
 	end 'cacheLayoutBytes'
 
 	// @generated library-cache end
@@ -23400,11 +23635,11 @@ export type ProgramSignatures
 
 		let local = freeFunctionRegistrationName(bareName, moduleDirectory: self.moduleDirectoryOf(readerFilePath))
 
-		if self.keyDeclaresAFunctionVisibleFrom(local, readerFilePath: readerFilePath) 'theReadersOwnDirectory'
+		if self.declaresAFunctionVisibleFrom(local, readerFilePath: readerFilePath) 'theReadersOwnDirectory'
 			return FunctionNameResolution.declaration(local)
 		end 'theReadersOwnDirectory'
 
-		if self.keyDeclaresAFunctionVisibleFrom(bareName, readerFilePath: readerFilePath) 'theRoot'
+		if self.declaresAFunctionVisibleFrom(bareName, readerFilePath: readerFilePath) 'theRoot'
 			return FunctionNameResolution.declaration(bareName)
 		end 'theRoot'
 
@@ -23505,7 +23740,7 @@ export type ProgramSignatures
 
 			seen.insert(spelling)
 
-			if self.keyDeclaresAFunctionVisibleFrom(spelling, readerFilePath: readerFilePath) 'nameableHere'
+			if self.declaresAFunctionVisibleFrom(spelling, readerFilePath: readerFilePath) 'nameableHere'
 				// A parse artifact leaves the FrontEndWorker that keeps this index, so it may hold no record
 				// the index holds.
 				visible.push(spelling.clone())
@@ -23514,18 +23749,6 @@ export type ProgramSignatures
 
 		return visible
 	end 'visibleContestedFreeFunctionSpellings'
-
-	// Does any declaration filed under `key` admit `readerFilePath`? Every declaration rather than the last,
-	// because the members of one key may state different tiers.
-	function keyDeclaresAFunctionVisibleFrom(key ByteArray, readerFilePath FilePath) returns bool
-		for decl in self.overloadedDeclsOf(key) 'eachDeclaration'
-			if self.isVisibleFrom(decl.visibility, declFilePath: decl.declFilePath, readerFilePath: readerFilePath) 'nameableHere'
-				return true
-			end 'nameableHere'
-		end 'eachDeclaration'
-
-		return false
-	end 'keyDeclaresAFunctionVisibleFrom'
 
 	// ⭐ **THE NAME A FREE FUNCTION DECLARED IN `moduleDirectory` IS REGISTERED UNDER once its bare name is
 	// contested** — and the BARE name when that directory is the root, which is not a fallback but the rule:
@@ -24120,9 +24343,12 @@ export type ProgramSignatures
 		let stream = self.declTokenStreamOf(decl)
 		var parser = Parser.createOverPreparedTokens(stream.prepared, job: stream.job.forConstantInitializer(), signatures: self, anchors: anchors)
 		var folded = try parser.evalConstInitializer(decl, stack: stack) otherwise (err) 'noValue'
+			parser.recordUnwalkedInitializerTypeNames()
+			self.noteInitializerCalls(parser.recordedInitializerCalls())
 			return self.recordFailure(decl, error: err)
 		end 'noValue'
 
+		self.noteInitializerCalls(parser.recordedInitializerCalls())
 		decl.letCast = parser.recordedConstLetCast(decl)
 
 		match folded 'kind'
@@ -24137,6 +24363,16 @@ export type ProgramSignatures
 			factoryCall(calls, root) then return self.settleConstFactoryCall(decl, calls: calls, root: root)
 		end 'kind'
 	end 'walkConstInitializer'
+
+	function noteInitializerCalls(sites InitializerCallSiteArray)
+		for site in sites 'eachSite'
+			self.mainThreadSettled().initializerCallSites.push(site)
+		end 'eachSite'
+	end 'noteInitializerCalls'
+
+	export function initializerCalls() returns InitializerCallSiteArray
+		return self.settledDeclarations().initializerCallSites
+	end 'initializerCalls'
 
 	function settleConstFactoryCall(decl TopLevelDecl, calls ConstFactoryCallArray, root ElementIndex) returns ConstEvalOutcome
 		let node = factoryCallAt(calls, id: root)
@@ -24730,7 +24966,7 @@ export type ProgramSignatures
 			return false
 		end 'createComputes'
 
-		match self.constFactoryConstructionOf(create) 'known'
+		match self.constFactoryConstructionAmong(self.overloadedDeclsOf(create)) 'known'
 			unfoldable then return false
 			folds(layout, paramNames) then return paramNames.count() == 0 and self.everyContainerSlotIsImageData(giid, layout: layout)
 		end 'known'
@@ -24922,7 +25158,7 @@ export type ProgramSignatures
 	function nullaryFactoryLayoutOf(declared MaxonType) returns StructLayout throws AbsentError
 		let name = try self.typeNames.nameOf(typeNameIdOf(declared)) otherwise throw AbsentError.absent
 
-		match self.constFactoryConstructionOf(qualifiedMethodName(name, methodName: CreateMethod)) 'known'
+		match self.constFactoryConstructionAmong(self.overloadedDeclsOf(qualifiedMethodName(name, methodName: CreateMethod))) 'known'
 			folds(layout, paramNames) then return try self.nullaryLayout(layout, paramNames: paramNames)
 			unfoldable then throw AbsentError.absent
 		end 'known'
@@ -25111,7 +25347,8 @@ export type ProgramSignatures
 	function recordFailure(decl TopLevelDecl, error ConstEvalError) returns ConstEvalOutcome
 		match error 'kind'
 			defective(parseError) then decl.outcome = TopLevelConstant.failed(parseError)
-			dependencyFailed then self.poisonIfUndecided(decl)
+			dependencyFailed or
+			deferred then self.poisonIfUndecided(decl)
 		end 'kind'
 
 		return ConstEvalOutcome.failed
@@ -25255,7 +25492,8 @@ export type ProgramSignatures
 			foundManaged or
 			foundImageRecord or
 			foundImageBox then panic("ProgramSignatures.integerConstantIn: '{name}' in {filePath.toString()} is a managed or imaged constant, and the caller asked for a number")
-			notFound then panic("ProgramSignatures.integerConstantIn: {filePath.toString()} declares no constant '{name}' that file can read")
+			notFound or
+			poisoned then panic("ProgramSignatures.integerConstantIn: {filePath.toString()} declares no constant '{name}' with a value that file can read")
 		end 'lookup'
 	end 'integerConstantIn'
 
@@ -25265,7 +25503,8 @@ export type ProgramSignatures
 			found or
 			foundImageRecord or
 			foundImageBox then panic("ProgramSignatures.byteConstantIn: '{name}' in {filePath.toString()} is not a text constant, and the caller asked for its bytes")
-			notFound then panic("ProgramSignatures.byteConstantIn: {filePath.toString()} declares no constant '{name}' that file can read")
+			notFound or
+			poisoned then panic("ProgramSignatures.byteConstantIn: {filePath.toString()} declares no constant '{name}' with a value that file can read")
 		end 'lookup'
 	end 'byteConstantIn'
 
@@ -25398,8 +25637,8 @@ export type ProgramSignatures
 			// records, avoided at the source: an id minted in the INDEX's table panics the first door a file's
 			// parse resolves it through (`slotStorageType` on a read, `foreignNameOf` on a store).
 			value(_, tag, typeName) then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: constantValueTypeIn(tag, typeName: typeName, into: into), brand: EmptySourceText, mutable: decl.mutable)
-			failed or
-			poisoned then return TopLevelGlobalLookup.notFound
+			failed then return TopLevelGlobalLookup.notFound
+			poisoned then return TopLevelGlobalLookup.poisoned
 
 			// ⭐ A MANAGED `var` reads exactly as a scalar one does — the slot is real, it
 			// is just a POINTER rather than a value. Its type is the literal's own, so a read of the name
@@ -27144,8 +27383,8 @@ export type ProgramSignatures
 		match decl.outcome 'state'
 			value(payload, tag, typeName) then return TopLevelConstantLookup.found(payload, tag: tag, typeName: typeName)
 			managedValue(bytes, kind) then return TopLevelConstantLookup.foundManaged(bytes, kind: kind)
-			failed or
-			poisoned then return TopLevelConstantLookup.notFound
+			failed then return TopLevelConstantLookup.notFound
+			poisoned then return TopLevelConstantLookup.poisoned
 
 			// ⭐ **A RECORD BINDING IS A CONSTANT A USE CAN INLINE EXACTLY WHEN IT WAS IMAGED**, and this door
 			// is only ever asked about a binding with NO STORAGE (`constantDeclFor` filters on
@@ -27353,7 +27592,7 @@ export type ProgramSignatures
 	// The base layout an imaged container's box is described by — read back through the SAME door the
 	// admission read it through, so the fold's proof and the image's field walk cannot be about two layouts.
 	function containerBoxLayoutOf(giid GenericInstanceId) returns StructLayout
-		match self.constFactoryConstructionOf(qualifiedMethodName(self.genericInstanceBaseName(giid), methodName: CreateMethod)) 'known'
+		match self.constFactoryConstructionAmong(self.overloadedDeclsOf(qualifiedMethodName(self.genericInstanceBaseName(giid), methodName: CreateMethod))) 'known'
 			folds(layout, _) then return layout
 			unfoldable then panic("ProgramSignatures.containerBoxLayoutOf: generic instance {giid} is imaged but its base declares no foldable `{String.from(CreateMethod)}` — `declaredContainerBoxIsImageData` answers false for exactly that, and it is the one thing that decides imaging")
 		end 'known'
@@ -27819,8 +28058,8 @@ export type ProgramSignatures
 			// payload alone, and a file edited from one to the other would be answered from the other's parse.
 			// That is exactly the failure this function's own header names two arms down.
 			named then return mixBytes(Hasher.combined(state, value: TypeShapeNamed), bytes: typeName)
-			exitCode or
 			unresolved or
+			exitCode or
 			void then panic("ProgramSignatures.mixValueTag: a folded literal is tagged '{typeTagName(tag)}' — the evaluator folds integers, bools and floats only")
 
 			// Only an INLINE PACKED record reaches this arm: `settleConstFactoryCall` folds a heap record to
@@ -28297,6 +28536,8 @@ export type ProgramSignatures
 		return self.declaredParamAliasAt(decl, position: 0)
 	end 'firstParamAliasOf'
 
+	// Program-wide, unlike `soleVisibleDeclarationOf`: its callers use a miss only to decline an alias claim,
+	// and an answer filtered by the reader's visibility makes them report casts the program needs (E3010).
 	export function singleDeclarationOf(callee ByteArray) returns OverloadedDecl throws MapError
 		let declarations = self.overloadedDeclsOf(callee)
 
@@ -28470,19 +28711,7 @@ export type ProgramSignatures
 			throw AbsentError.absent
 		end 'theAliasRegistriesAreStillFilling'
 
-		var visible = OverloadedDeclArray.create()
-
-		for declaration in self.overloadedDeclsOf(callee) 'eachDeclaration'
-			if self.isVisibleFrom(declaration.visibility, declFilePath: declaration.declFilePath, readerFilePath: readerFilePath) 'thisReaderMeansIt'
-				visible.push(declaration)
-			end 'thisReaderMeansIt'
-		end 'eachDeclaration'
-
-		if visible.count() != 1 'noSingleDeclaration'
-			throw AbsentError.absent
-		end 'noSingleDeclaration'
-
-		let decl = try visible.get(0) otherwise panic("ProgramSignatures.soleDeclaredParam: get(0) on the one-element array the line above tested for")
+		let decl = try self.soleVisibleDeclarationOf(callee, readerFilePath: readerFilePath) otherwise throw AbsentError.absent
 		let slot = try argSlotPosition(decl.paramNames, argIndex: sourceIndex, label: label) otherwise throw AbsentError.absent
 		let declared = try decl.paramTypes.get(slot) otherwise panic("ProgramSignatures.soleDeclaredParam: paramTypes.get OOB at {slot} — the sweep records one type per parameter name")
 		return DeclaredParam.create(declared, declFilePath: decl.declFilePath)
@@ -30646,20 +30875,18 @@ export type ProgramSignatures
 	// which one the sweep proved — and `functionConstructsFromParams`' own collide test already answers false
 	// there. This refuses a second time rather than trusting that, because what it would hand back is a
 	// parameter list, and the wrong member's list is a silently wrong field mapping.
-	export function constFactoryConstructionOf(callee ByteArray) returns ConstFactoryConstruction
-		view overloads = self.overloadedDeclsOf(callee)
-
+	export function constFactoryConstructionAmong(overloads OverloadedDeclArray) returns ConstFactoryConstruction
 		if overloads.count() != 1 'notExactlyOneDeclaration'
 			return ConstFactoryConstruction.unfoldable
 		end 'notExactlyOneDeclaration'
 
-		let decl = try overloads.get(0) otherwise panic("ProgramSignatures.constFactoryConstructionOf: overloads.get(0) OOB on an array whose count was just compared to 1")
+		let decl = try overloads.get(0) otherwise panic("ProgramSignatures.constFactoryConstructionAmong: overloads.get(0) OOB on an array whose count was just compared to 1")
 
 		match self.declaredFactoryStruct(decl.returnType) 'declared'
 			declared(layout) then return ConstFactoryConstruction.folds(layout, paramNames: decl.paramNames)
 			undeclared then return ConstFactoryConstruction.unfoldable
 		end 'declared'
-	end 'constFactoryConstructionOf'
+	end 'constFactoryConstructionAmong'
 
 	// The declared `type` a factory's return type names, or `undeclared` for anything else. `structRef` is
 	// the only tag that can answer: `RecordedReturnTypeRule.declaredStruct` has already rewritten every
@@ -35467,19 +35694,6 @@ export type ProgramSignatures
 		return qualifiedMethodName(self.genericInstanceBaseName(id), methodName: CreateMethod)
 	end 'declaredInstanceCreateCallee'
 
-	// ⭐⭐ **MAY `readerFilePath` NAME `callee`?** The function half of `Visibility`, answered where a call in a
-	// FUNCTION BODY cannot ask it: a top-level initializer's call is decided inside `queryProgramSignatures`,
-	// before any file is parsed and long before `FunctionNameIndex` — which is what
-	// `SemanticCheck.calleeVisibleFrom` reads — exists. The tier and the declaring file come from the SWEEP's
-	// own column, and the rule they are fed to is the one `isVisibleFrom` already owns, so the two askers can
-	// disagree about no declaration they both see.
-	//
-	// A callee no file declares is VISIBLE: "there is no such function" is a different mistake, and the
-	// caller's own `globalFactoryReturn` reports it with the right sentence.
-	//
-	// The refusing TIER rides back with the verdict because the diagnostic's CODE is chosen by it (E3008 vs
-	// E3088), and asking for it separately would be a second lookup of the same key that could answer about
-	// a different declaration if anything refiled the name in between.
 	// ⭐⭐ **EVERY DECLARATION FILED UNDER `key`, IN DECLARATION ORDER** — what a call site scores an overload
 	// set against while its own file is being parsed. A key with one declaration (which is nearly every key in
 	// every program) answers a one-entry list and a key with none answers the shared empty one, so the caller
@@ -35487,6 +35701,56 @@ export type ProgramSignatures
 	export function overloadedDeclsOf(key ByteArray) returns OverloadedDeclArray
 		return try self.settledDeclarations().overloadedDecls.get(key) otherwise sharedNoOverloadedDecls
 	end 'overloadedDeclsOf'
+
+	function declarationIsVisibleFrom(declaration OverloadedDecl, readerFilePath FilePath) returns bool
+		return self.isVisibleFrom(declaration.visibility, declFilePath: declaration.declFilePath, readerFilePath: readerFilePath)
+	end 'declarationIsVisibleFrom'
+
+	function templateIsVisibleFrom(template GenericFunctionTemplate, readerFilePath FilePath) returns bool
+		return self.isVisibleFrom(template.visibility, declFilePath: template.declFilePath, readerFilePath: readerFilePath)
+	end 'templateIsVisibleFrom'
+
+	// Every declaration rather than the last, because the members of one key may state different tiers.
+	export function declaresAFunctionVisibleFrom(key ByteArray, readerFilePath FilePath) returns bool
+		for declaration in self.overloadedDeclsOf(key) 'eachDeclaration'
+			if self.declarationIsVisibleFrom(declaration, readerFilePath: readerFilePath) 'nameableHere'
+				return true
+			end 'nameableHere'
+		end 'eachDeclaration'
+
+		return false
+	end 'declaresAFunctionVisibleFrom'
+
+	export function declarationsVisibleFrom(callee ByteArray, readerFilePath FilePath) returns OverloadedDeclArray
+		var visible = OverloadedDeclArray.create()
+
+		for declaration in self.overloadedDeclsOf(callee) 'eachDeclaration'
+			if self.declarationIsVisibleFrom(declaration, readerFilePath: readerFilePath) 'thisReaderMeansIt'
+				visible.push(declaration)
+			end 'thisReaderMeansIt'
+		end 'eachDeclaration'
+
+		return visible
+	end 'declarationsVisibleFrom'
+
+	export function soleVisibleDeclarationOf(callee ByteArray, readerFilePath FilePath) returns OverloadedDecl throws MapError
+		view declarations = self.overloadedDeclsOf(callee)
+		var soleIndex = 0 as ElementIndex
+		var visibleCount = 0 as ElementIndex
+
+		for (iter, declaration) in declarations.withIterator() 'eachDeclaration'
+			if self.declarationIsVisibleFrom(declaration, readerFilePath: readerFilePath) 'thisReaderMeansIt'
+				soleIndex = iter.index()
+				visibleCount = visibleCount + 1
+			end 'thisReaderMeansIt'
+		end 'eachDeclaration'
+
+		if visibleCount != 1 'noSingleDeclaration'
+			throw MapError.keyNotFound
+		end 'noSingleDeclaration'
+
+		return try declarations.get(soleIndex) otherwise panic("ProgramSignatures.soleVisibleDeclarationOf: get({soleIndex}) on the {declarations.count()}-declaration array the loop above indexed")
+	end 'soleVisibleDeclarationOf'
 
 	// The append `record` makes. Its own routine because the first declaration of a key has to CREATE the
 	// array, and because this is the one registry here that keeps every declaration rather than the last.
@@ -35521,9 +35785,38 @@ export type ProgramSignatures
 		self.mainThreadSettled().overloadedDecls.upsert(key, value: wearingThisKey)
 	end 'recordOverloadedDecl'
 
+	// ⭐⭐ **MAY `readerFilePath` NAME `callee`?** The function half of `Visibility`, answered off the sweep's
+	// declarations and generic templates, which exist before `FunctionNameIndex` — what
+	// `SemanticCheck.calleeVisibleFrom` reads for a call in a BODY. An initializer's call, which
+	// `__module_init` makes on no file's behalf, is held to this answer by
+	// `SemanticCheck.checkInitializerCalls`. The rule the tiers are fed to is the one `isVisibleFrom` already
+	// owns, so the two askers can disagree about no declaration they both see.
+	//
+	// A callee no file declares is VISIBLE: "there is no such function" is a different mistake, and the
+	// caller reports it with its own sentence.
+	//
+	// The refusing TIER rides back with the verdict because the diagnostic's CODE is chosen by it (E3008 vs
+	// E3088), and asking for it separately would be a second lookup of the same key that could answer about
+	// a different declaration if anything refiled the name in between.
 	export function calleeVisibilityFrom(callee ByteArray, readerFilePath FilePath) returns SymbolVisibility
-		let site = try self.settledDeclarations().funcDeclSites.get(callee) otherwise return SymbolVisibility.visible
-		return self.symbolVisibility(site.visibility, declFilePath: site.declFilePath, readerFilePath: readerFilePath)
+		view declarations = self.overloadedDeclsOf(callee)
+		view templates = self.genericTemplatesOf(callee)
+
+		if declarations.count() == 0 and templates.count() == 0 'aRegisteredMemberName'
+			let site = try self.settledDeclarations().funcDeclSites.get(callee) otherwise return SymbolVisibility.visible
+			return self.symbolVisibility(site.visibility, declFilePath: site.declFilePath, readerFilePath: readerFilePath)
+		end 'aRegisteredMemberName'
+
+		if self.declaresAFunctionVisibleFrom(callee, readerFilePath: readerFilePath) or self.declaresAGenericTemplateVisibleFrom(callee, readerFilePath: readerFilePath) 'someDeclarationIsNameable'
+			return SymbolVisibility.visible
+		end 'someDeclarationIsNameable'
+
+		if let first = try declarations.get(0) 'firstDeclaration'
+			return SymbolVisibility.hidden(first.visibility)
+		end 'firstDeclaration'
+
+		let firstTemplate = try templates.get(0) otherwise panic("calleeVisibilityFrom: '{String.from(callee)}' has neither a declaration nor a template, which the count test above ruled out")
+		return SymbolVisibility.hidden(firstTemplate.visibility)
 	end 'calleeVisibilityFrom'
 
 	// How a diagnostic spells a callee it has resolved: the name the source wrote, qualified by its
@@ -44836,17 +45129,86 @@ export type ProgramSignatures
 		return self.settledDeclarations().returnTypes.contains(callee)
 	end 'declaresCallee'
 
-	export function declaresCalleeVisibleFrom(callee ByteArray, readerFilePath FilePath) returns bool
-		if self.isContestedFreeFunction(callee) 'severalDirectoriesDeclareIt'
-			return match self.resolveBareFunctionName(callee, readerFilePath: readerFilePath) 'resolution'
-				declaration or
-				ambiguous gives true
-				undeclared gives false
+	// The checks run in the order `Parser.parseCallNamed`'s callers dispatch a body call by. An initializer's
+	// verdict is this answer, so a different order would refuse a call its body form binds.
+	export function bareCallKindFrom(written ByteArray, readerFilePath FilePath, enclosingTypeName ByteArray, mayUseReserved bool, bindings BindingTypes) returns BareCallKind
+		if bindings.aFunctionTypedBindingIsCalled(self, name: written, readerFilePath: readerFilePath) 'aFunctionTypedBinding'
+			return BareCallKind.topLevelBinding
+		end 'aFunctionTypedBinding'
+
+		match self.siblingKindFrom(written, enclosingTypeName: enclosingTypeName, walked: WalkedSibling.notWalked) 'sibling'
+			staticSibling then return BareCallKind.staticSibling
+			instanceSibling then return BareCallKind.instanceSibling
+			notASibling then break
+		end 'sibling'
+
+		if not mayUseReserved and reservedCalleeReasonOf(written) != ReservedCalleeReason.notReserved 'aReservedName'
+			return BareCallKind.reserved
+		end 'aReservedName'
+
+		return self.bareNameKindFrom(written, readerFilePath: readerFilePath)
+	end 'bareCallKindFrom'
+
+	export function functionTypedBindingVisibleFrom(name ByteArray, readerFilePath FilePath, into TypeNameInterner) returns bool
+		if not self.topLevelBindingVisibleFrom(name, readerFilePath: readerFilePath) 'noBindingOfThisName'
+			return false
+		end 'noBindingOfThisName'
+
+		return match self.globalDeclFor(name, readerFilePath: readerFilePath, into: into) 'binding'
+			found(_, valueType, _, _) gives maxonTypeTag(valueType) == ValueTypeTag.function
+			notFound or
+			poisoned gives false
+		end 'binding'
+	end 'functionTypedBindingVisibleFrom'
+
+	export function siblingKindFrom(written ByteArray, enclosingTypeName ByteArray, walked WalkedSibling) returns SiblingKind
+		if enclosingTypeName.isEmpty() 'notInATypeBody'
+			return SiblingKind.notASibling
+		end 'notInATypeBody'
+
+		match walked 'walked'
+			takesReceiver then return SiblingKind.instanceSibling
+			takesNoReceiver then return SiblingKind.staticSibling
+			notWalked then break
+		end 'walked'
+
+		let sibling = qualifiedMethodName(enclosingTypeName, methodName: written)
+
+		if self.declaresCallee(sibling) 'indexedSibling'
+			return SiblingKind.instanceSibling if self.declaredMethodTakesReceiver(sibling) else SiblingKind.staticSibling
+		end 'indexedSibling'
+
+		let template = try self.genericTemplatesOf(sibling).get(0) otherwise return SiblingKind.notASibling
+		return SiblingKind.instanceSibling if template.takesReceiver else SiblingKind.staticSibling
+	end 'siblingKindFrom'
+
+	export function bareNameKindFrom(written ByteArray, readerFilePath FilePath) returns BareCallKind
+		if self.isContestedFreeFunction(written) 'severalDirectoriesDeclareIt'
+			return match self.resolveBareFunctionName(written, readerFilePath: readerFilePath) 'resolution'
+				declaration gives BareCallKind.declaredVisible
+				ambiguous gives BareCallKind.ambiguous
+				undeclared gives self.invisibleBareNameKind(written, readerFilePath: readerFilePath)
 			end 'resolution'
 		end 'severalDirectoriesDeclareIt'
 
-		return self.declaresCallee(callee) and self.keyDeclaresAFunctionVisibleFrom(callee, readerFilePath: readerFilePath)
-	end 'declaresCalleeVisibleFrom'
+		if self.declaresCallee(written) and self.declaresAFunctionVisibleFrom(written, readerFilePath: readerFilePath) 'aVisibleDeclaration'
+			return BareCallKind.declaredVisible
+		end 'aVisibleDeclaration'
+
+		return self.invisibleBareNameKind(written, readerFilePath: readerFilePath)
+	end 'bareNameKindFrom'
+
+	function invisibleBareNameKind(written ByteArray, readerFilePath FilePath) returns BareCallKind
+		if self.declaresAGenericTemplateVisibleFrom(written, readerFilePath: readerFilePath) 'aVisibleTemplate'
+			return BareCallKind.genericTemplate
+		end 'aVisibleTemplate'
+
+		if isBareBuiltinCallee(written) 'aBuiltin'
+			return BareCallKind.builtin
+		end 'aBuiltin'
+
+		return BareCallKind.declaredHidden if self.declaresCallee(written) or self.isGenericFunctionKey(written) else BareCallKind.undeclared
+	end 'invisibleBareNameKind'
 
 	// The one answer to "does a call to this name have a definition", for the parser's deferral doors
 	// and SemanticCheck's deferral trace alike. `declaresCallee` goes first: it is one map lookup, and
@@ -45440,6 +45802,28 @@ export type ProgramSignatures
 	export function genericTemplatesOf(key ByteArray) returns GenericFunctionTemplateArray
 		return try self.settledDeclarations().genericTemplates.get(key) otherwise GenericFunctionTemplateArray.create()
 	end 'genericTemplatesOf'
+
+	function declaresAGenericTemplateVisibleFrom(key ByteArray, readerFilePath FilePath) returns bool
+		for template in self.genericTemplatesOf(key) 'eachTemplate'
+			if self.templateIsVisibleFrom(template, readerFilePath: readerFilePath) 'visible'
+				return true
+			end 'visible'
+		end 'eachTemplate'
+
+		return false
+	end 'declaresAGenericTemplateVisibleFrom'
+
+	export function genericTemplatesVisibleFrom(key ByteArray, readerFilePath FilePath) returns GenericFunctionTemplateArray
+		var visible = GenericFunctionTemplateArray.create()
+
+		for template in self.genericTemplatesOf(key) 'eachTemplate'
+			if self.templateIsVisibleFrom(template, readerFilePath: readerFilePath) 'visible'
+				visible.push(template)
+			end 'visible'
+		end 'eachTemplate'
+
+		return visible
+	end 'genericTemplatesVisibleFrom'
 
 	export function genericInstanceCountAt(siteKey ByteArray) returns ElementIndex
 		let filed = try self.settledDeclarations().genericInstancesBySite.get(siteKey) otherwise return 0
@@ -46071,6 +46455,7 @@ export type ProgramSignatures
 		self.typeNames.noteFingerprint(fingerprint, group: "typeNames")
 		fingerprint.note("decls", value: declarations.decls.count() as EntryCount)
 		fingerprint.note("crossFileConstantReads", value: self.crossFileConstantReads.count() as EntryCount)
+		fingerprint.note("initializerCallSites", value: declarations.initializerCallSites.count() as EntryCount)
 		fingerprint.note("declIndex", value: declarations.declIndex.count())
 		fingerprint.note("funcParamConsumes", value: declarations.funcParamConsumes.count())
 		fingerprint.note("declParamConsumes", value: declarations.declParamConsumes.count())

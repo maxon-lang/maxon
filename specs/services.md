@@ -16480,3 +16480,32 @@ end 'main'
 ```exitcode
 0
 ```
+
+
+<!-- test: error.a-spawn-of-a-hidden-generic-factory-is-not-exported -->
+`Box.create` is private to `box.maxon`, so `main.maxon` cannot spawn through it, as it could not call it.
+```maxon
+// --- file: main.maxon
+function main() returns ExitCode
+	let h = spawn Box.create(9 as Whole)
+	return try await h.peek() otherwise 0 as ExitCode
+end 'main'
+
+// --- file: box.maxon
+export typealias Whole = int(i64.min to i64.max)
+
+export type Box uses T
+	export var n as Whole
+
+	static function create(x T) returns Self
+		return Self{n: 1}
+	end 'create'
+
+	export function peek() returns Whole
+		return self.n
+	end 'peek'
+end 'Box'
+```
+```maxoncstderr
+error E3008: <fragment>:4:20: function 'Box.create' is not exported
+```

@@ -300,7 +300,7 @@ end 'main'
   **E3134**, in a `default` as anywhere else. The type may be [qualified](/docs/language/namespaces/#qualified-names), at any length:
   `spawn sub.Calc.create()` starts a type declared in `sub/`, `spawn outer.inner.Calc.create()` one two
   directories down, and `spawn stdlib.Range.create(1, finish: 4)` the library's `Range` in a program that
-  declares its own.
+  declares its own. A factory the spawning file cannot see is **E3008** (**E3088** for a `module` one).
 - **Generic services.** A generic type can be spawned; its handle type is spelled through an alias,
   `typealias StringBoxHandle = Box.handle with String`.
 - Services that `await` each other in a cycle are **E3139**.

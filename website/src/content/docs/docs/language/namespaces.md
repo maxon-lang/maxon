@@ -215,7 +215,9 @@ calls the nearer one cannot take.
 **Only a declaration the file can see counts**, for every kind of name. A project type named like a
 primitive (`byte`, say) and declared where a file cannot see it leaves that name the primitive in that file.
 What a call knows about its callee comes from the declaration it binds, too: whether the callee never
-returns (its body ends in `panic`) or can only throw, and which generic template it instantiates.
+returns (its body ends in `panic`) or can only throw, and which generic template it instantiates. A function
+value (`let f = helper`) is the one declaration of its name the file can see, with that declaration's
+parameters and return type, whatever other files declare under the name.
 
 **Every candidate is nameable.** Two type declarations of one name that can both be named from outside
 their files may not share a directory: two typealiases are **E3061** and a pair involving a type, enum,

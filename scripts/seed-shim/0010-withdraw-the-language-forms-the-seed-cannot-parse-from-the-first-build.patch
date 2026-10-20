@@ -1790,10 +1790,10 @@ index 59f0a5f..3194798 100644
  			if not blamed.synthesized 'theAuthorWroteThisName'
  				reportPositioned(project, code: ErrorCode.duplicateDefinition, message: duplicateFunctionMessage(project, name: blamed.name, declFilePath: blamed.sourceFilePath), line: blamed.nameLine, column: blamed.nameColumn, filePath: blamed.sourceFilePath)
 diff --git a/maxon-bin/Compiler/Parser.maxon b/maxon-bin/Compiler/Parser.maxon
-index b26e740..a303f4f 100644
+index 6a32c84..171ef5a 100644
 --- a/maxon-bin/Compiler/Parser.maxon
 +++ b/maxon-bin/Compiler/Parser.maxon
-@@ -20598,7 +20598,7 @@ export type Parser
+@@ -20672,7 +20672,7 @@ export type Parser
  			return false
  		end 'notAFromConstruction'
  
@@ -1802,7 +1802,7 @@ index b26e740..a303f4f 100644
  		return fromHeadIsTheBareBase(head, container: container) or self.namesContainerInstanceAlias(head, container: container)
  	end 'atContainerFromConstruction'
  
-@@ -22058,7 +22058,7 @@ export type Parser
+@@ -22132,7 +22132,7 @@ export type Parser
  			// SECOND O(tokens) walk of the body plus two arrays, per such body. It stands because the
  			// alternative — carrying the names bound so far through the first walk — costs a per-body set and
  			// an insert per binder, which is more than one allocation-free re-walk.
@@ -1811,7 +1811,7 @@ index b26e740..a303f4f 100644
  
  			// Asked a second time because the FILTER can empty the name column: a body whose only `return` named
  			// a local of its own states nothing after all, and must not reach the map.
-@@ -23554,7 +23554,7 @@ export type Parser
+@@ -23628,7 +23628,7 @@ export type Parser
  	end 'constraintDispatchNamesOf'
  
  	function appendReceiverRequirementNames(names NameRoster, iface IrInterface)
@@ -1820,7 +1820,7 @@ index b26e740..a303f4f 100644
  
  		for slotIndex in 0 upto slots.count() 'eachSlot'
  			let method = (try slots.get(slotIndex) otherwise panic("appendReceiverRequirementNames: slots.get OOB at {slotIndex} below count {slots.count()}")).method
-@@ -26825,7 +26825,7 @@ export type Parser
+@@ -26899,7 +26899,7 @@ export type Parser
  		var members = OverloadMemberArray.create()
  
  		if self.fileClaimsFuncName(base) 'thisFileHoldsTheIncumbent'
@@ -1829,7 +1829,7 @@ index b26e740..a303f4f 100644
  			members.push(OverloadMember.create(base, typeSuffix: self.overloadTypeSuffix(incumbent.paramTypes, takesReceiver: incumbent.takesReceiver()), labelSuffix: overloadLabelSuffix(incumbent.paramNames, takesReceiver: incumbent.takesReceiver())))
  		end 'thisFileHoldsTheIncumbent'
  
-@@ -27601,7 +27601,7 @@ export type Parser
+@@ -27675,7 +27675,7 @@ export type Parser
  	// the positioned diagnostic to the real parse.
  	export function publishExtensionInnerAliases(index ProgramSignatures, site ExtensionDeclSite)
  		self.pos = site.tokenPos
@@ -1838,7 +1838,7 @@ index b26e740..a303f4f 100644
  
  		var members = NameRoster.create()
  		self.collectNestedAliasMembersInBody(members)
-@@ -27763,7 +27763,7 @@ export type Parser
+@@ -27837,7 +27837,7 @@ export type Parser
  					// `unpublished` owner is the "READ ALWAYS, PUBLISH ONLY WHEN THE EXTENSION IS THIS CONFORMER'S"
  					// rule below, applied to the one alias form the READER publishes rather than the caller
  					// (see `TupleAliasOwner`). Every other form is filed after the withheld test; this one cannot be.
@@ -1847,7 +1847,7 @@ index b26e740..a303f4f 100644
  					var nested = try self.readNestedTypeAlias(memberVisibility, recordFunctionSignature: false, tupleOwner: nestedTupleOwner) otherwise break
  
  					// ⚠ **READ ALWAYS, PUBLISH ONLY WHEN THE EXTENSION IS THIS CONFORMER'S** — the withheld
-@@ -29328,7 +29328,7 @@ export type Parser
+@@ -29402,7 +29402,7 @@ export type Parser
  		// directly and throwing the arm's binding crashes the compiled compiler with
  		// `mm_incref called with NULL pointer`, because the temporary scrutinee's box is dropped while
  		// the payload it lent out is still in flight.
@@ -1856,7 +1856,7 @@ index b26e740..a303f4f 100644
  
  		match outcome 'outcome'
  			// Nothing a top-level binding can fold to is unstorable: a scalar occupies its `.data` slot as a
-@@ -30333,7 +30333,7 @@ export type Parser
+@@ -30407,7 +30407,7 @@ export type Parser
  		// the caller under its base-qualified name so a same-named inner alias of another generic type stays
  		// distinct, exactly as a ranged inner alias is.
  		if form == TypeDeclKind.genericAlias 'genericInstance'
@@ -1865,7 +1865,7 @@ index b26e740..a303f4f 100644
  			self.recordInnerAliasName(entry.aliasName)
  			return NestedAliasResult.genericInstance(entry)
  		end 'genericInstance'
-@@ -30365,7 +30365,7 @@ export type Parser
+@@ -30439,7 +30439,7 @@ export type Parser
  			panic("readNestedTypeAlias: `readTypeAliasDeclaration` read the form '{form.rawValue}', which this reader routes nowhere — every RHS form it can return needs an arm here or a nested declaration of it is silently dropped")
  		end 'unroutedForm'
  
@@ -1874,7 +1874,7 @@ index b26e740..a303f4f 100644
  		self.recordInnerAliasName(alias.name)
  		return NestedAliasResult.ranged(alias)
  	end 'readNestedTypeAlias'
-@@ -30436,7 +30436,7 @@ export type Parser
+@@ -30510,7 +30510,7 @@ export type Parser
  
  	export function methodKeysOfAnUndeclaredExtension(site ExtensionDeclSite, into NameRoster)
  		self.pos = site.tokenPos
@@ -1883,7 +1883,7 @@ index b26e740..a303f4f 100644
  
  		match header.target 'target'
  			undeclaredTarget then break
-@@ -30732,7 +30732,7 @@ export type Parser
+@@ -30806,7 +30806,7 @@ export type Parser
  		// `canonicalGenericBaseName`. The SPELLING is kept only as `baseIsBuffer`, which decides the member
  		// surface every declared position naming this alias takes.
  		let baseIsBuffer = base.written.equals(ManagedMemoryTypeName)
@@ -1892,7 +1892,7 @@ index b26e740..a303f4f 100644
  		var args = GenericArgNodeArray.create()
  		let argsStart = self.pos
  		let (argCount, qualified) = try self.parseGenericArgNodes(args, baseName: baseName, inlineElement: self.baseStoresArgumentsInline(baseName), bareCommaList: true, slot: self.genericArgSlotOf(baseName))
-@@ -31187,7 +31187,7 @@ export type Parser
+@@ -31261,7 +31261,7 @@ export type Parser
  
  			// The canonical base, for the top-level arm's reason: a nested `__ManagedMemory with T` must
  			// intern to the same instance a nested `Array with T` does, or one record has two ids.
@@ -1901,7 +1901,7 @@ index b26e740..a303f4f 100644
  			var subNodes = GenericArgNodeArray.create()
  			let (subCount, subQualified) = try self.parseGenericArgNodes(subNodes, baseName: subBaseName, inlineElement: self.baseStoresArgumentsInline(subBaseName), bareCommaList: false, slot: self.genericArgSlotOf(subBaseName))
  			self.checkGenericInstance(base, argCount: subCount)
-@@ -31400,7 +31400,7 @@ export type Parser
+@@ -31474,7 +31474,7 @@ export type Parser
  		// ⭐ **ASKED ABOUT THE CANONICAL BASE AND BLAMED ON THE WRITTEN ONE** — `__ManagedMemory with T`
  		// is an `Array` instance (`canonicalGenericBaseName`), so it must be checked against `Array`'s arity;
  		// the sentence still quotes the spelling the author actually wrote, because that is the word to change.
@@ -1910,7 +1910,7 @@ index b26e740..a303f4f 100644
  
  		if self.signatures.isBuiltinGenericBaseName(baseName) 'builtinGeneric'
  			let expected = self.signatures.builtinGenericTypeParamCount(baseName)
-@@ -31561,7 +31561,7 @@ export type Parser
+@@ -31635,7 +31635,7 @@ export type Parser
  				end 'collectParam'
  
  				// The one parameter fact the sweep cannot read identically, for `returnAggregateName`'s reason below.
@@ -1919,7 +1919,7 @@ index b26e740..a303f4f 100644
  
  				// ⭐ **BOTH PASSES RECORD THE SLOT, EACH AS IT READS IT** — the return slot's arrangement. The sweep's
  				// copy is the only one a call site in ANOTHER file can reach while that file is parsed, and a closure
-@@ -31580,7 +31580,7 @@ export type Parser
+@@ -31654,7 +31654,7 @@ export type Parser
  
  		try self.consume(TokenKind.rightParen)
  
@@ -1928,7 +1928,7 @@ index b26e740..a303f4f 100644
  
  		writtenEnds.push(writtenNames.count())
  		let written = sharedEmptyWrittenTypeNames if writtenNames.isEmpty() else WrittenTypeNames.create(writtenNames, ends: writtenEnds)
-@@ -31612,7 +31612,7 @@ export type Parser
+@@ -31686,7 +31686,7 @@ export type Parser
  		// because it is the one fact of the four the sweep cannot read identically: `erasedAggregateNameOf`
  		// classifies through `self.signatures`, the registry the sweep is still filling. The sweep's copy
  		// of an alias carries the return TAG and no identity, which is exactly what it can honestly say.
@@ -1937,7 +1937,7 @@ index b26e740..a303f4f 100644
  
  		// ⭐ UNCONDITIONAL, unlike the aggregate name above, and that is the digest's whole property: the
  		// token is a pure function of two SOURCE SPELLINGS (`ProgramSignatures.typeParamTokenFor`), so the
-@@ -32374,7 +32374,7 @@ export type Parser
+@@ -32448,7 +32448,7 @@ export type Parser
  	// The READING is `readInterfaceDeclaration`'s, shared with the declaration sweep's second pass; what this
  	// arm owns is the artifact, which the sweep has none of. See that function for why the two are split.
  	function parseInterfaceDeclaration() throws SourceParseError
@@ -1946,7 +1946,7 @@ index b26e740..a303f4f 100644
  		try self.requireNoUnstorableRequirementType()
  		self.artifact.recordInterface(iface)
  		self.contributeInterfaceSendErrors(iface.name)
-@@ -32699,7 +32699,7 @@ export type Parser
+@@ -32773,7 +32773,7 @@ export type Parser
  
  		for i in 0 upto paramTypes.count() 'each'
  			let paramType = try paramTypes.get(i) otherwise panic("renderInterfaceParamTypes: paramTypes.get OOB at {i}")
@@ -1955,7 +1955,7 @@ index b26e740..a303f4f 100644
  			out.push(brand if not brand.isEmpty() else self.renderInterfaceParamType(paramType, typeStart: paramTypeStartAt(paramTypeStarts, position: i), interfaceName: interfaceName))
  		end 'each'
  
-@@ -35187,11 +35187,11 @@ export type Parser
+@@ -35261,11 +35261,11 @@ export type Parser
  			end 'declaration' else if self.opensBlockAt(q) or (self.kindAt(q) == TokenKind.if and self.kindAt(q - 1) == TokenKind.then) 'opens'
  				open.push(self.blockHeaderLabelAt(q))
  			end 'opens' else if self.closesBlockAt(q) 'closes'
@@ -1969,7 +1969,7 @@ index b26e740..a303f4f 100644
  
  					if not self.closerRepeats(label, openingLabel: expected) 'misclosed'
  						return BlockCloserScan.misclosed(expected, closer: q)
-@@ -35388,7 +35388,7 @@ export type Parser
+@@ -35462,7 +35462,7 @@ export type Parser
  	end 'rangedReturnAlias'
  
  	function rangeCheckedDeclaredAlias(t MaxonType) returns DeclaredAlias
@@ -1978,7 +1978,7 @@ index b26e740..a303f4f 100644
  		return DeclaredAlias.declared(alias.clone())
  	end 'rangeCheckedDeclaredAlias'
  
-@@ -35428,7 +35428,7 @@ export type Parser
+@@ -35502,7 +35502,7 @@ export type Parser
  
  		for i in 0 upto paramTypes.count() 'eachParam'
  			let paramType = try paramTypes.get(i) otherwise panic("rangedParamSites: paramTypes.get OOB at {i}")
@@ -1987,7 +1987,7 @@ index b26e740..a303f4f 100644
  
  			let nameRange = try paramRanges.get(i) otherwise panic("rangedParamSites: paramRanges.get OOB at {i} — one range is pushed per parameter name token, so the two lists have the same length")
  			sites.push(RangeCheckParamSite.create(i as ParamCount, alias: alias.clone(), line: nameRange.line, column: nameRange.column))
-@@ -35690,7 +35690,7 @@ export type Parser
+@@ -35764,7 +35764,7 @@ export type Parser
  	// suppression is structural and needs no rule of its own.
  	function reportUnusedBindings(methodName ByteArray) returns bool
  		for candidateIndex in 0 upto self.bodyState.unusedCandidates.count() 'eachCandidate'
@@ -1996,7 +1996,7 @@ index b26e740..a303f4f 100644
  
  			if self.bindingNameWasMentioned(candidate.binding) 'wasMentioned'
  				continue
-@@ -36093,7 +36093,7 @@ export type Parser
+@@ -36167,7 +36167,7 @@ export type Parser
  	end 'existentialClaimOf'
  
  	function declaredReturnExistentialClaim(callee ByteArray, declFilePath FilePath) returns ExistentialClaim throws AbsentError
@@ -2005,7 +2005,7 @@ index b26e740..a303f4f 100644
  
  		if let declaringType = try declaringTypeOf(callee) 'aMethod'
  			let nested = joinQualifiedName(declaringType, member: aliasName)
-@@ -36804,7 +36804,7 @@ export type Parser
+@@ -36878,7 +36878,7 @@ export type Parser
  			// ⭐ THE BRAND THE DECLARATION SPELLED (`xs Xs`), stamped on the parameter's own slot and carried by the
  			// binding: the callee's body reads it at every door, and the caller's half is the signature's
  			// `paramDeclaredNames` column (`paramDeclaredNamesOf`), read off the same token.
@@ -2014,7 +2014,7 @@ index b26e740..a303f4f 100644
  			self.brandValue(paramId, brand: paramBrand)
  			var binding = try self.declareParameterOrCellBinding(paramName, paramType: paramType, paramKind: paramKind, paramIsByRef: paramIsByRef, paramValue: paramValue, brandId: self.brandIdOf(paramId)) otherwise throw SourceParseError.localShadowsSelfField(String.from(paramName), typeName: String.from(self.enclosingTypeName()), line: paramRange.line, column: paramRange.column)
  
-@@ -37799,7 +37799,7 @@ export type Parser
+@@ -37873,7 +37873,7 @@ export type Parser
  		end 'thisBodysOwnFunctionAlias'
  
  		try self.requireUnambiguousTypeName(name, anchor: tok)
@@ -2023,7 +2023,7 @@ index b26e740..a303f4f 100644
  
  		// ⭐⭐ **AN `interface` NAME IN A TYPE POSITION IS AN EXISTENTIAL** —
  		// `function useIt(b Backend)`, `let t as Tagged`, `returns Producer`. It resolves to
-@@ -38220,7 +38220,7 @@ export type Parser
+@@ -38294,7 +38294,7 @@ export type Parser
  		// this runs at every method call in the program whose result names a declared type, and the answer is a
  		// UNION Maxon heap-boxes even for its payload-free arm. A NON-GENERIC declaring type binds nothing, so
  		// every call in the generics-free corpus leaves here rather than allocating to be told so.
@@ -2032,7 +2032,7 @@ index b26e740..a303f4f 100644
  
  		if scopeParamNames.isEmpty() 'calleeDeclaresNoTypeParameters'
  			return
-@@ -39867,7 +39867,7 @@ export type Parser
+@@ -39941,7 +39941,7 @@ export type Parser
  		try self.consume(TokenKind.equals)
  		let rhsStart = self.pos
  		let value = try self.parseBindingInitializer(func, block: block, kind: kind)
@@ -2041,7 +2041,7 @@ index b26e740..a303f4f 100644
  
  		if not mutable 'anImmutableTuple'
  			self.freezeLiteralTuple(value)
-@@ -40026,7 +40026,7 @@ export type Parser
+@@ -40100,7 +40100,7 @@ export type Parser
  			discardedCallee = self.directCallProducing(value, opFloor: opFloor)
  		end 'nothingTookAnElement'
  
@@ -2050,7 +2050,7 @@ index b26e740..a303f4f 100644
  
  		match source 'source'
  			tuple(layout) then try self.requireAssignsEveryElement(layout, targetIndices: targetIndices, openTok: openTok)
-@@ -40207,7 +40207,7 @@ export type Parser
+@@ -40281,7 +40281,7 @@ export type Parser
  	// An overloaded name is filed whatever the parser typed it as: it may have typed the call from another
  	// member, and `SemanticCheck.resolveCallSite` drops the site if the member reached returns nothing.
  	function recordDiscardedCallResult(value ValueId, opFloor ElementIndex, anchor Token, door DiscardDoor)
@@ -2059,7 +2059,7 @@ index b26e740..a303f4f 100644
  
  		if self.tagOf(value) == ValueTypeTag.void and not self.producerIsOverloaded(producer) 'theCallPromisedNothing'
  			return
-@@ -40426,7 +40426,7 @@ export type Parser
+@@ -40501,7 +40501,7 @@ export type Parser
  	// allocation, the size and the per-slot offsets come from the one layout both routines read. The result
  	// is an OWNED temporary of the statement, like any freshly built box.
  	function copyTupleValue(value ValueId, range SourceRange) returns ValueId
@@ -2068,7 +2068,7 @@ index b26e740..a303f4f 100644
  		let box = self.emitOwnedStructBox(layout, range: range)
  
  		for i in 0 upto layout.fieldCount() 'eachElement'
-@@ -40520,8 +40520,8 @@ export type Parser
+@@ -40595,8 +40595,8 @@ export type Parser
  	// index currently maps to this position. `openBlock`/`closeBlock` are the only things that move
  	// the height, and they nest, so it is; a mid-stack removal would desync the index instead.
  	function popMutableVar()
@@ -2079,7 +2079,7 @@ index b26e740..a303f4f 100644
  
  		var byName = self.mutableVarIndexForWrite()
  
-@@ -40772,8 +40772,8 @@ export type Parser
+@@ -40847,8 +40847,8 @@ export type Parser
  		// ⚠ The two names decide the verdict and do not spell it: for a generic instance they are the
  		// canonical `Box_Leaf`, which no source line holds. The message renders through
  		// `displayTypeNameOf`, as the argument voice does, so the author's `LeafBox` is what both say.
@@ -2090,7 +2090,7 @@ index b26e740..a303f4f 100644
  		let declaredBrand = self.internedName(binding.brandId)
  
  		if self.signatures.aggregatesConflict(declaredAggregate, expectedTag: declaredTag, expectedNameId: typeNameIdOf(binding.varType), expectedBrand: declaredBrand, got: assignedAggregate, gotTag: valueTag, gotNameId: self.valueNameId(value), gotBrand: self.brandOf(value), readerFilePath: self.job.path) 'aggregateReassignMismatch'
-@@ -40888,8 +40888,8 @@ export type Parser
+@@ -40963,8 +40963,8 @@ export type Parser
  
  	function storedValueNamedByBinding(value ValueId, binding VarInfo, nameTok Token, sourceIsBareLocal bool) returns ValueId
  		let declaredType = self.bindingDeclaredType(binding)
@@ -2101,7 +2101,7 @@ index b26e740..a303f4f 100644
  		self.recordRangedTargetSite(value, target: alias, line: nameTok.line, column: nameTok.column)
  		return self.nameValueAsDeclaredType(value, targetType: declaredType, targetAlias: declaredAlias, opTok: nameTok, sourceIsBareLocal: sourceIsBareLocal, mustCarryTargetType: false)
  	end 'storedValueNamedByBinding'
-@@ -42548,7 +42548,7 @@ export type Parser
+@@ -42624,7 +42624,7 @@ export type Parser
  			return
  		end 'notCapturing'
  
@@ -2110,7 +2110,7 @@ index b26e740..a303f4f 100644
  		self.recordDebugRebind(binding.debugLocalSlot, recorded: binding.debugLocalRecorded, current: binding.boundValue, value: value)
  	end 'recordDebugRebindByName'
  
-@@ -42570,7 +42570,7 @@ export type Parser
+@@ -42646,7 +42646,7 @@ export type Parser
  
  		for i in 0 upto self.bodyState.debugLocals.count() 'eachRecord'
  			var record = try self.bodyState.debugLocals.get(i) otherwise panic("publishDebugLocals: debugLocals.get OOB at {i} despite the upto bound")
@@ -2119,7 +2119,7 @@ index b26e740..a303f4f 100644
  			requireDebugRecordIsCurrent(record, current: binding.boundValue)
  			self.noteFoldedBinding(record, binding: binding)
  		end 'eachRecord'
-@@ -42597,7 +42597,7 @@ export type Parser
+@@ -42673,7 +42673,7 @@ export type Parser
  		end 'carriesNoBrandToAdopt'
  
  		let stored = self.authoredBrandOf(value)
@@ -2128,7 +2128,7 @@ index b26e740..a303f4f 100644
  
  		if stored.isEmpty() and origin.isEmpty() 'storesNothingToAdopt'
  			return
-@@ -42635,7 +42635,7 @@ export type Parser
+@@ -42711,7 +42711,7 @@ export type Parser
  	end 'readOfAnUnadoptedLocal'
  
  	function recordUnadoptedBrandDoor(value ValueId, expected ByteArray, door FunctionTypeDoor, placeName ByteArray, owner SlotOwner, anchor Token)
@@ -2137,7 +2137,7 @@ index b26e740..a303f4f 100644
  		self.artifact.recordBrandRecord(PendingBrandRecord.create(key, kind: BrandRecordKind.assignDoor, brand: expected, opIndex: 0, argIndex: 0, label: EmptySourceText, phrase: brandedPlacePhrase(door, name: placeName, owner: owner).toByteArray(), line: anchor.line, column: anchor.column, filePath: self.job.path))
  	end 'recordUnadoptedBrandDoor'
  
-@@ -42648,7 +42648,7 @@ export type Parser
+@@ -42724,7 +42724,7 @@ export type Parser
  		var phiOriginNoted = false
  
  		for i in 0 upto arms.count() 'eachArm'
@@ -2146,7 +2146,7 @@ index b26e740..a303f4f 100644
  			self.noteBrandOrigin(phi, key: key.clone())
  			phiOriginNoted = true
  			break
-@@ -42661,7 +42661,7 @@ export type Parser
+@@ -42737,7 +42737,7 @@ export type Parser
  		for i in 0 upto arms.count() 'eachRecordedArm'
  			let arm = try arms.get(i) otherwise panic("carryMergeOrigin: arms.get OOB at {i}")
  			let authored = self.authoredBrandOf(arm)
@@ -2155,7 +2155,7 @@ index b26e740..a303f4f 100644
  
  			if not authored.isEmpty() or not key.isEmpty() 'anArmThatHoldsABrand'
  				self.artifact.recordBrandRecord(PendingBrandRecord.create(key, kind: BrandRecordKind.mergeArms, brand: authored, opIndex: 0, argIndex: 0, label: EmptySourceText, phrase: EmptySourceText, line: anchor.line, column: anchor.column, filePath: self.job.path))
-@@ -43074,8 +43074,8 @@ export type Parser
+@@ -43150,8 +43150,8 @@ export type Parser
  	// ⚠ **ASKED AFTER `requireBinOpOperands`**, so a genuine class mismatch (`3 + true`) keeps its own
  	// wording — this rule is about two values that are already both numbers.
  	function operandAliasIdentity(lhs ValueId, rhs ValueId, opName String, opTok Token) returns OperandAlias throws SourceParseError
@@ -2166,7 +2166,7 @@ index b26e740..a303f4f 100644
  
  		if left.equals(right) or right.isEmpty() 'theLeftDecides'
  			return self.operandAliasOf(lhs)
-@@ -43116,7 +43116,7 @@ export type Parser
+@@ -43192,7 +43192,7 @@ export type Parser
  			return value
  		end 'notAMixedExpression'
  
@@ -2175,7 +2175,7 @@ index b26e740..a303f4f 100644
  
  		if slot.equals(self.aggregateNameOf(self.tagOf(value), nameId: self.valueNameId(value))) 'alreadyTheDestinationsType'
  			self.shedOperandAliasSet(value)
-@@ -43273,7 +43273,7 @@ export type Parser
+@@ -43349,7 +43349,7 @@ export type Parser
  			return counted
  		end 'aCountedNumber'
  
@@ -2184,7 +2184,7 @@ index b26e740..a303f4f 100644
  
  		if aliasIsFloat(ranged) or rangeIsUnsignedTopped(ranged.low, high: ranged.high) 'notASignedInterval'
  			throw AbsentError.absent
-@@ -44379,9 +44379,9 @@ export type Parser
+@@ -44456,9 +44456,9 @@ export type Parser
  	function admitReturnedAggregate(func IrFunction, returned ValueId, retTag ValueTypeTag, declaredTag ValueTypeTag, declaredNameId TypeNameId, retStart ElementIndex, anchor Token) returns ValueId throws SourceParseError
  		let declaredType = maxonReturnTypeInner(func.maxonReturnType)
  		let value = try self.destinationTemporary(returned, declared: declaredType, anchor: anchor)
@@ -2197,7 +2197,7 @@ index b26e740..a303f4f 100644
  
  		if not returnBrand.isEmpty() and retTag == ValueTypeTag.genericInstance 'aBrandedReturnMayMeetAnUnadoptedRead'
  			self.recordUnadoptedBrandDoor(value, expected: returnBrand, door: FunctionTypeDoor.returned, placeName: func.name, owner: SlotOwner.unowned, anchor: anchor)
-@@ -45548,7 +45548,7 @@ export type Parser
+@@ -45625,7 +45625,7 @@ export type Parser
  	end 'rewriteLastCallToTryCall'
  
  	function commitTryTargetRewrite(opIdx ElementIndex, tryTok Token) returns (TryTarget, ValueId) throws SourceParseError
@@ -2206,7 +2206,7 @@ index b26e740..a303f4f 100644
  
  		match op 'rewrite'
  			send then return self.rewriteSendToTryChannel(opIdx)
-@@ -45565,7 +45565,7 @@ export type Parser
+@@ -45642,7 +45642,7 @@ export type Parser
  
  	function rewriteSendToTryChannel(opIdx ElementIndex) returns (TryTarget, ValueId)
  		let sent = recordedSendOf(self.lastSend, opIdx: opIdx)
@@ -2215,7 +2215,7 @@ index b26e740..a303f4f 100644
  		let status = self.sendStatusOf(opIdx)
  		self.unsettledSend = UnsettledSend.settled
  		let range = self.artifact.opRanges.get(opIdx)
-@@ -45658,7 +45658,7 @@ export type Parser
+@@ -45735,7 +45735,7 @@ export type Parser
  	end 'holdPendingSendLeg'
  
  	function takeSentLeg() returns SentLegSlot
@@ -2224,7 +2224,7 @@ index b26e740..a303f4f 100644
  		self.sentLeg = SentLegSlot.none
  		return taken
  	end 'takeSentLeg'
-@@ -46556,7 +46556,7 @@ export type Parser
+@@ -46633,7 +46633,7 @@ export type Parser
  			_ = self.enrollAnonymousCaughtBox(flag, eType: eType, anchor: tryTok)
  		end 'enrolBox'
  
@@ -2233,7 +2233,7 @@ index b26e740..a303f4f 100644
  		self.dropArmScopedOwned(ownedFloor, exitBlock: self.bodyState.currentBlock, anchor: tryTok)
  		return handler
  	end 'parseOtherwiseHandler'
-@@ -46580,7 +46580,7 @@ export type Parser
+@@ -46657,7 +46657,7 @@ export type Parser
  		end 'nothingBoxed'
  
  		if let name = try binder.boundName() 'aNamedBinding'
@@ -2242,7 +2242,7 @@ index b26e740..a303f4f 100644
  			self.enrolOwnedBinding(VarInfo.createErrorMatchObligation(name, varType: caught.varType, flag: caught.boundValue))
  		end 'aNamedBinding' else 'anAnonymousBinding'
  			self.releaseCombinedErrorBox(func, form: form, flag: flag, anchor: binder.anchor)
-@@ -46789,8 +46789,8 @@ export type Parser
+@@ -46866,8 +46866,8 @@ export type Parser
  		//
  		// ⚠ The two names decide the verdict and do not spell it, as at the return and reassignment
  		// doors: the message renders the author's alias, not the canonical instance name.
@@ -2253,7 +2253,7 @@ index b26e740..a303f4f 100644
  
  		if self.signatures.aggregatesConflict(resultAggregate, expectedTag: self.tagOf(result), expectedNameId: self.valueNameId(result), expectedBrand: self.brandOf(result), got: fallbackAggregate, gotTag: self.tagOf(otherwiseValue), gotNameId: self.valueNameId(otherwiseValue), gotBrand: self.brandOf(otherwiseValue), readerFilePath: self.job.path) 'aggregateOtherwiseMismatch'
  			try self.refuseOtherwiseMismatch(self.valueDisplayTypeName(otherwiseValue), expectedType: self.valueDisplayTypeName(result), fallback: otherwiseValue, tryTok: tryTok)
-@@ -47075,7 +47075,7 @@ export type Parser
+@@ -47152,7 +47152,7 @@ export type Parser
  
  	// Refuse the held broken obligation, if there is one — asked where a handler ends, the last door its paths reach.
  	function requireNoHeldErrorMatchRefusal() throws SourceParseError
@@ -2262,7 +2262,7 @@ index b26e740..a303f4f 100644
  		self.errorMatchRefusal = ErrorMatchRefusal.none
  
  		match refusal 'r'
-@@ -47224,7 +47224,7 @@ export type Parser
+@@ -47301,7 +47301,7 @@ export type Parser
  		self.bodyState.scope.popScope()
  
  		let matchedTheBinding = self.bodyState.tryBindingMatched
@@ -2271,7 +2271,7 @@ index b26e740..a303f4f 100644
  		self.bodyState.tryBindingName = savedBindingName
  		self.bodyState.tryBindingMatched = savedBindingMatched
  
-@@ -48341,9 +48341,9 @@ export type Parser
+@@ -48418,9 +48418,9 @@ export type Parser
  				continue
  			end 'agrees'
  
@@ -2283,7 +2283,7 @@ index b26e740..a303f4f 100644
  
  			if isObligation 'matchedBetweenEdges'
  				self.holdErrorMatchRefusal(name, reason: ErrorMatchPathsDisagreeReason, anchor: ctx.tryTok)
-@@ -48683,7 +48683,7 @@ export type Parser
+@@ -48760,7 +48760,7 @@ export type Parser
  	end 'ownedBindingAt'
  
  	function releaseShapeAt(position ElementIndex) returns ReleaseShape
@@ -2292,7 +2292,7 @@ index b26e740..a303f4f 100644
  
  		if not binding.isCellBinding 'aRecord'
  			return ReleaseShape.plain
-@@ -48787,7 +48787,7 @@ export type Parser
+@@ -48864,7 +48864,7 @@ export type Parser
  	end 'emitChainJump'
  
  	function swapCurrentBlock(block IrBlock) returns IrBlock
@@ -2301,7 +2301,7 @@ index b26e740..a303f4f 100644
  		self.bodyState.currentBlock = block
  		return previous
  	end 'swapCurrentBlock'
-@@ -48949,7 +48949,7 @@ export type Parser
+@@ -49026,7 +49026,7 @@ export type Parser
  
  		while index > 0 'eachLaneBinding'
  			index = index - 1
@@ -2310,7 +2310,7 @@ index b26e740..a303f4f 100644
  
  			if not held.isEnrolled or held.enrolledAt >= top or not (self.ownedBindingAt(held.enrolledAt) is held) 'noLongerInScope'
  				chain.unmarkLane(held)
-@@ -49512,7 +49512,7 @@ export type Parser
+@@ -49589,7 +49589,7 @@ export type Parser
  			return
  		end 'existential'
  
@@ -2319,7 +2319,7 @@ index b26e740..a303f4f 100644
  
  		// ⭐ **A RECORD THIS SHARED BODY GAVE A DESCRIPTOR-MEDIATED REFERENCE RELEASES IT BEFORE ITS BOX GOES.**
  		// Its own cascade cannot: the layout's `T` field is not managed in the DECLARATION view,
-@@ -49563,7 +49563,7 @@ export type Parser
+@@ -49640,7 +49640,7 @@ export type Parser
  	// The descriptor is guaranteed: the store that set the mark went through `__retain_type_param`, which owes
  	// the same descriptor and records its absence itself, so this cannot be the first site to need one.
  	function emitOpaqueSlotReleases(box ValueId, range SourceRange)
@@ -2328,7 +2328,7 @@ index b26e740..a303f4f 100644
  
  		for i in 0 upto layout.fieldCount() 'eachField'
  			let declared = self.signatures.fieldTypeOf(layout, index: i, into: self.artifact.typeNames)
-@@ -49637,7 +49637,7 @@ export type Parser
+@@ -49714,7 +49714,7 @@ export type Parser
  		var awaiting = MoveSlotIndexColumn.create()
  
  		for position in positions 'eachPosition'
@@ -2337,7 +2337,7 @@ index b26e740..a303f4f 100644
  			moved.push(binding.movedFrom)
  			values.push(binding.moveStateValue())
  			awaiting.push(binding.awaitingMoveReads)
-@@ -49850,9 +49850,9 @@ export type Parser
+@@ -49927,9 +49927,9 @@ export type Parser
  			end 'liveHere'
  		end 'scan'
  
@@ -2349,7 +2349,7 @@ index b26e740..a303f4f 100644
  		let joinedIsCell = joined.isCellBinding
  
  		if joinedIsCell 'aCellKeepsItsOwnRelease'
-@@ -49965,7 +49965,7 @@ export type Parser
+@@ -50042,7 +50042,7 @@ export type Parser
  
  	function claimPendingMergeGives(binding VarInfo, phi ValueId)
  		for position in 0 upto self.bodyState.pendingMergeGives.count() 'eachPending'
@@ -2358,7 +2358,7 @@ index b26e740..a303f4f 100644
  
  			if pending.binding is binding 'thisBinding'
  				let handoffs = pending.handoffs.clone()
-@@ -50080,7 +50080,7 @@ export type Parser
+@@ -50157,7 +50157,7 @@ export type Parser
  			return MmDecrefName
  		end 'notUnion'
  
@@ -2367,7 +2367,7 @@ index b26e740..a303f4f 100644
  
  		if enumMatchIsDeclared(decl) 'union'
  			// The drop callee is decided INSIDE `ProgramSignatures`, over the layout's own interner —
-@@ -50458,7 +50458,7 @@ export type Parser
+@@ -50535,7 +50535,7 @@ export type Parser
  	end 'noteCellOccupantCoOwned'
  
  	function raiseCellOccupantExclusivity(value ValueId, to CellOccupantExclusivity)
@@ -2376,7 +2376,7 @@ index b26e740..a303f4f 100644
  		self.raiseCellEpochExclusivity(read.epoch, to: to)
  	end 'raiseCellOccupantExclusivity'
  
-@@ -50704,7 +50704,7 @@ export type Parser
+@@ -50781,7 +50781,7 @@ export type Parser
  		// A scope-lifetime record is the SOURCE of a borrow, never a handed-off value — releasing one of those would
  		// free what the transfer below still reads.
  		for i in ownedFloor upto self.bodyState.ownedBindings.count() 'eachHeldForTheBuild'
@@ -2385,7 +2385,7 @@ index b26e740..a303f4f 100644
  
  			if handedOff.contains(held.boundValue) 'handedOffIsHeld'
  				panic("releaseHandOffBuildTemps: handed-off v{held.boundValue} is held by the scope-lifetime binding `{String.from(held.name)}` enrolled while its hand-off was built")
-@@ -52557,7 +52557,7 @@ export type Parser
+@@ -52634,7 +52634,7 @@ export type Parser
  		// a co-own that READS one of these temporaries — so it gets them back here and releases them per edge
  		// (see `takeCatchingForkTemps`). The list is empty for every other condition, and each of the two edges
  		// below drops it exactly once.
@@ -2394,7 +2394,7 @@ index b26e740..a303f4f 100644
  
  		// E3087 — `if x.contains(k)` guarding a `try x.get(k)` on the same key. Asked HERE, with the cursor
  		// still on the then-label, because this is the first point that holds both halves the check needs: the
-@@ -52616,7 +52616,7 @@ export type Parser
+@@ -52693,7 +52693,7 @@ export type Parser
  		// two-block and three-block merge shapes. A PLAIN `if` with no `else` is untouched and keeps the
  		// direct false edge.
  		if not self.at(TokenKind.else) and not ifConditionCatches(cond) 'noElse'
@@ -2403,7 +2403,7 @@ index b26e740..a303f4f 100644
  			self.assertScanAligned("parseIfStatement", predictedEnd: ifEnd)
  			return cont
  		end 'noElse'
-@@ -52642,7 +52642,7 @@ export type Parser
+@@ -52719,7 +52719,7 @@ export type Parser
  		self.noteArmLeavingTheFunction(func, block: elseEnd, start: elseStart, finish: self.pos)
  		let elseVals = self.snapshotBindings(assignedBindings)
  		let elseMoveMark = self.captureMoveMark()
@@ -2412,7 +2412,7 @@ index b26e740..a303f4f 100644
  		self.assertScanAligned("parseIfStatement", predictedEnd: ifEnd)
  		return cont
  	end 'parseIfStatement'
-@@ -53742,7 +53742,7 @@ export type Parser
+@@ -53819,7 +53819,7 @@ export type Parser
  	// dozen locals it still needs afterwards, and inline every one of them would be live across this
  	// loop and owed a register for its whole body. Behind a call they spill around it at no cost.
  	function declareDestructuredLoopVariables(func IrFunction, nameToks TokenArray, loopValue ValueId, claimsWithIteratorPromise bool, patternTok Token, forTok Token, writable bool, readOnlyElement bool, firstStoredKey StoredKeyCursor) throws SourceParseError
@@ -2421,7 +2421,7 @@ index b26e740..a303f4f 100644
  
  		for i in 0 upto nameToks.count() 'eachName'
  			let nameTok = try nameToks.get(i) otherwise panic("declareDestructuredLoopVariables: nameToks.get OOB at {i} below count {nameToks.count()}")
-@@ -54578,7 +54578,7 @@ export type Parser
+@@ -54655,7 +54655,7 @@ export type Parser
  
  		// A recorded interval answers where no type does, and that is the case that carries the corpus: a
  		// `count()` result is minted UNNAMED, so its ceiling can only ever come from here.
@@ -2430,7 +2430,7 @@ index b26e740..a303f4f 100644
  		return rangeIsWithinSignedNonNegative(proven.low, high: proven.high)
  	end 'limitKeepsTheCounterNonNegative'
  
-@@ -54625,7 +54625,7 @@ export type Parser
+@@ -54702,7 +54702,7 @@ export type Parser
  		var loopVals = ValueIdArray.create()
  
  		for k in 0 upto phiVars.count() 'exitEdge'
@@ -2439,7 +2439,7 @@ index b26e740..a303f4f 100644
  			self.pushMergedEdgeValue(loopVals, binding: pv.binding, value: pv.binding.boundValue)
  		end 'exitEdge'
  
-@@ -54708,7 +54708,7 @@ export type Parser
+@@ -54785,7 +54785,7 @@ export type Parser
  	end 'forSourceIsHeldByItsName'
  
  	function noteLoopHeldBinding(sourceStart ElementIndex)
@@ -2448,7 +2448,7 @@ index b26e740..a303f4f 100644
  		self.bodyState.loopHeldBindings.push(info.name)
  	end 'noteLoopHeldBinding'
  
-@@ -56260,11 +56260,11 @@ export type Parser
+@@ -56341,11 +56341,11 @@ export type Parser
  
  	module function takeBlockExtents() returns BlockExtents
  		self.buildBlockExtentIndex()
@@ -2463,7 +2463,7 @@ index b26e740..a303f4f 100644
  		self.declaredNameKeywords = TokenIndexArray.create()
  		return BlockExtents.create(self.tokens, extentEnds: movedExtentEnds, keywordNames: movedKeywordNames, declaredNameKeywords: movedDeclaredNames)
  	end 'takeBlockExtents'
-@@ -56607,10 +56607,10 @@ export type Parser
+@@ -56688,10 +56688,10 @@ export type Parser
  
  	function settleBackEdgesOf(func IrFunction, scan LoopMoveScan, position ElementIndex, movedAtTheHeader ValueMarkSet, givenAtTheHeader ConditionalGiveArray, anchor Token) throws SourceParseError
  		let headerValue = scan.entryMark.valueAt(position)
@@ -2476,7 +2476,7 @@ index b26e740..a303f4f 100644
  
  		if ownedIsCell 'aCellBinding'
  			try self.settleCellBackEdges(scan, position: position, headerEpoch: headerValue, movedAtTheHeader: movedAtTheHeader)
-@@ -56811,7 +56811,7 @@ export type Parser
+@@ -56892,7 +56892,7 @@ export type Parser
  			self.recordBrandHandOver(box, kind: BrandRecordKind.handOver, opIndex: opIndex, argIndex: argIndex, label: label, range: range)
  
  			let varType = try self.handedCellTypeOf(box) otherwise continue
@@ -2485,7 +2485,7 @@ index b26e740..a303f4f 100644
  
  			if self.signatures.declarationsMayNotFitWithin(varAlias, callee: callee, argIndex: argIndex, label: label) 'aWiderParameter'
  				self.emitCopyBackGuard(box, varType: varType, alias: varAlias, range: range)
-@@ -56820,13 +56820,13 @@ export type Parser
+@@ -56901,13 +56901,13 @@ export type Parser
  	end 'guardCellsTheCalleeMayWiden'
  
  	function guardCellsAFunctionValueMayWiden(callee ValueId, places PlaceArgumentArray, opIndex ElementIndex, range SourceRange)
@@ -2501,7 +2501,7 @@ index b26e740..a303f4f 100644
  			let param = try shape.paramTypes.get(place.column) otherwise panic("guardCellsAFunctionValueMayWiden: shape.paramTypes.get OOB at {place.column} — an indirect call's arity was checked against its function type")
  
  			if not rangeCoversDenotedRange(varAlias, source: self.indirectParamAlias(param, scope: shape.scopeFilePath)) 'aWiderParameter'
-@@ -56902,7 +56902,7 @@ export type Parser
+@@ -56983,7 +56983,7 @@ export type Parser
  	end 'refuseAReadOfTheMovedHeader'
  
  	function headerDependents(func IrFunction, scan LoopMoveScan, headerValue ValueId) returns HeaderDependents
@@ -2510,7 +2510,7 @@ index b26e740..a303f4f 100644
  		var dependents = HeaderDependents.create(headerValue)
  		var next = 0 as ElementIndex
  
-@@ -56910,7 +56910,7 @@ export type Parser
+@@ -56991,7 +56991,7 @@ export type Parser
  			let value = try dependents.values.get(next) otherwise panic("headerDependents: values.get OOB at {next} below its own count")
  			next = next + 1
  
@@ -2519,7 +2519,7 @@ index b26e740..a303f4f 100644
  
  			for use in recorded.slotUses 'eachUse'
  				let phi = (try self.loopBlockAt(func, id: use.block).blockArgs.get(use.slot) otherwise panic("headerDependents: block {use.block} holds fewer phis than the slot {use.slot} an edge into it carries")).valueId
-@@ -57094,7 +57094,7 @@ export type Parser
+@@ -57175,7 +57175,7 @@ export type Parser
  		self.retargetBranch(from, from: to, to: edgeBlock.id)
  
  		for position in 0 upto from.branchEdges.count() 'eachEdge'
@@ -2528,7 +2528,7 @@ index b26e740..a303f4f 100644
  
  			if edge.targetBlockId == to 'theSplitEdge'
  				var moved = try from.branchEdges.remove(position) otherwise panic("splitEdge: branchEdges.remove OOB at {position}")
-@@ -57289,7 +57289,7 @@ export type Parser
+@@ -57370,7 +57370,7 @@ export type Parser
  	// increment must run before the header or the counter never advances — see `LoopContext`.
  	function parseContinueStatement(block IrBlock) throws SourceParseError
  		let continueTok = try self.consume(TokenKind.continue)
@@ -2537,7 +2537,7 @@ index b26e740..a303f4f 100644
  
  		match target 'target'
  			loopExit(ctx) then self.jumpToLoopBlock(block, ctx: ctx, targetId: ctx.continueTargetId, anchor: continueTok)
-@@ -57392,7 +57392,7 @@ export type Parser
+@@ -57473,7 +57473,7 @@ export type Parser
  		// Matches first, innermost out — a labelled break names its target directly. `break 'check'` inside
  		// `match … 'check'` says exactly what the bare `break` says, so it is E2048.
  		for i in 0 upto matchDepth 'matchSearch'
@@ -2546,7 +2546,7 @@ index b26e740..a303f4f 100644
  
  			if ctx.label.equals(labelTok.value) 'foundMatch'
  				if i == 0 'ownMatch'
-@@ -57404,7 +57404,7 @@ export type Parser
+@@ -57485,7 +57485,7 @@ export type Parser
  		end 'matchSearch'
  
  		for i in 0 upto loopDepth 'loopSearch'
@@ -2555,7 +2555,7 @@ index b26e740..a303f4f 100644
  
  			if ctx.label.equals(labelTok.value) 'foundLoop'
  				// E2048 — the label says nothing the bare keyword would not. ⚠ The `matchDepth == 0` conjunct
-@@ -57676,7 +57676,7 @@ export type Parser
+@@ -57757,7 +57757,7 @@ export type Parser
  	// The STATEMENT form: `match <expr> 'l' <arms> end 'l'`. Returns the continuation control
  	// resumes in — reachable when an arm falls through to it, `dead` when every arm terminates.
  	function parseMatchStatement(func IrFunction, block IrBlock) returns IrBlock throws SourceParseError
@@ -2564,7 +2564,7 @@ index b26e740..a303f4f 100644
  		return outcome.cont
  	end 'parseMatchStatement'
  
-@@ -57684,7 +57684,7 @@ export type Parser
+@@ -57765,7 +57765,7 @@ export type Parser
  	// leaves control in the merge, exactly as `emitShortCircuit` does — so the climber continues
  	// from `currentBlock` after it.
  	function parseMatchExpression(func IrFunction) returns ValueId throws SourceParseError
@@ -2573,7 +2573,7 @@ index b26e740..a303f4f 100644
  
  		match outcome.result 'r'
  			value(id) then return id
-@@ -57810,7 +57810,7 @@ export type Parser
+@@ -57891,7 +57891,7 @@ export type Parser
  		var enumCovered = BoolArray.create()
  
  		if isEnumMatch 'initEnumCoverage'
@@ -2582,7 +2582,7 @@ index b26e740..a303f4f 100644
  
  			for _ in 0 upto layout.caseCount() 'eachCase'
  				enumCovered.push(false)
-@@ -58025,8 +58025,8 @@ export type Parser
+@@ -58106,8 +58106,8 @@ export type Parser
  				// boxed member is in flight (`enterErrorUnionArm`), after the fallthrough phis, which belong to the
  				// block the edges actually branch to.
  				if isErrorUnionMatch 'errorUnionDefaultEntry'
@@ -2593,7 +2593,7 @@ index b26e740..a303f4f 100644
  					planMissBlockId = entry.targetId
  					planMissArgs = entry.args.clone()
  					defaultBody = try self.artifact.module.getBlockByIdIn(func, id: entry.bodyId) otherwise panic("parseMatchCommon: the default body block {entry.bodyId} is not in its own function")
-@@ -58087,7 +58087,7 @@ export type Parser
+@@ -58168,7 +58168,7 @@ export type Parser
  					end 'errorUnionPlainDefault'
  
  					if isEnumMatch 'enumPlainDefault'
@@ -2602,7 +2602,7 @@ index b26e740..a303f4f 100644
  						throw SourceParseError.matchDefaultEnumMustThrow(layout.kindWord(), typeName: String.from(layout.name), line: defTok.line, column: defTok.column)
  					end 'enumPlainDefault'
  
-@@ -58231,7 +58231,7 @@ export type Parser
+@@ -58312,7 +58312,7 @@ export type Parser
  				// `dropArmScopedOwned`) rather than accumulating there to be decref'd in the continuation,
  				// where a value defined in only one arm's block is garbage on every other arm's path.
  				let armOwnedFloor = self.bodyState.ownedBindings.count()
@@ -2611,7 +2611,7 @@ index b26e740..a303f4f 100644
  				let hasPayloadBindings = arm.bindings.count() > 0 or deferredBindings.count() > 0
  				let opensArmScope = armOwnsMemberBox or hasPayloadBindings
  				var payloadBox = scrut
-@@ -58426,7 +58426,7 @@ export type Parser
+@@ -58507,7 +58507,7 @@ export type Parser
  			end 'eachBreakExit'
  		end 'drainBreakExits'
  
@@ -2620,7 +2620,7 @@ index b26e740..a303f4f 100644
  		self.bodyState.currentBlock = outcome.cont
  		return outcome
  	end 'parseMatchCommon'
-@@ -58519,7 +58519,7 @@ export type Parser
+@@ -58600,7 +58600,7 @@ export type Parser
  	function bindingIsPartiallyMoved(owner ValueId) returns bool
  		let index = try self.liveOwnerIndexOf(owner) otherwise return false
  
@@ -2629,7 +2629,7 @@ index b26e740..a303f4f 100644
  		return owned.partiallyMoved
  	end 'bindingIsPartiallyMoved'
  
-@@ -58555,7 +58555,7 @@ export type Parser
+@@ -58636,7 +58636,7 @@ export type Parser
  	function scrutineeBindingIsMutable(scrut ValueId, isAParameter bool) returns bool
  		let index = try self.liveOwnerIndexOf(scrut) otherwise return isAParameter
  
@@ -2638,7 +2638,7 @@ index b26e740..a303f4f 100644
  		return owner.isMutable()
  	end 'scrutineeBindingIsMutable'
  
-@@ -58768,7 +58768,7 @@ export type Parser
+@@ -58849,7 +58849,7 @@ export type Parser
  		// against the baseline instead — the first arm whose give is known — because a deferred give
  		// agrees with anything and cannot type the phi; a ternary's diagnostic still names its arms by
  		// position through `firstArm`.
@@ -2647,7 +2647,7 @@ index b26e740..a303f4f 100644
  		let baselineIndex = self.baselineGiveIndex(reachingArms) if isExpression else 0
  
  		// Cross-register-class arms are unified to float, not refused. Every arm's `gives` value feeds
-@@ -58789,7 +58789,7 @@ export type Parser
+@@ -58870,7 +58870,7 @@ export type Parser
  
  					if not tagIsFloat(self.tagOf(give)) and not self.valueIsDeferred(give) 'notYetFloat'
  						if not self.giveIsPromotableToFloat(give) 'nonNumericArm'
@@ -2656,7 +2656,7 @@ index b26e740..a303f4f 100644
  							throw self.valueMergeGiveMismatch(construct, reachingArms: reachingArms, firstArm: firstArm if construct == MergeConstruct.ternary else floatArm, gotArm: arm, matchTok: matchTok)
  						end 'nonNumericArm'
  
-@@ -58822,14 +58822,14 @@ export type Parser
+@@ -58903,14 +58903,14 @@ export type Parser
  		var joinedAlias = ArmAliasJoin.create(EmptySourceText)
  
  		if isExpression 'checkGiveTypes'
@@ -2674,7 +2674,7 @@ index b26e740..a303f4f 100644
  				let giveVal = self.giveValueOf(arm.give)
  
  				if i == baselineIndex or self.valueIsDeferred(giveVal) 'theBaselineOrADeferredGive'
-@@ -58838,7 +58838,7 @@ export type Parser
+@@ -58919,7 +58919,7 @@ export type Parser
  
  				let giveTag = self.tagOf(giveVal)
  				let giveNameId = self.valueNameId(giveVal)
@@ -2683,7 +2683,7 @@ index b26e740..a303f4f 100644
  
  				let classDisagrees = not typesAgree(giveTag, right: firstTag)
  				let nameDisagrees = self.signatures.aggregatesConflict(firstAggregate, expectedTag: firstTag, expectedNameId: firstNameId, expectedBrand: self.brandOf(firstGive), got: giveAggregate, gotTag: giveTag, gotNameId: giveNameId, gotBrand: self.brandOf(giveVal), readerFilePath: self.job.path)
-@@ -58872,7 +58872,7 @@ export type Parser
+@@ -58953,7 +58953,7 @@ export type Parser
  				var armNames = NameRoster.create()
  
  				for i in 0 upto reachingArms.count() 'collectArmNames'
@@ -2692,7 +2692,7 @@ index b26e740..a303f4f 100644
  					armNames.push(self.internedName(self.functionValueGoverningId(self.giveValueOf(arm.give))))
  				end 'collectArmNames'
  
-@@ -58919,7 +58919,7 @@ export type Parser
+@@ -59000,7 +59000,7 @@ export type Parser
  			var anyDiff = false
  
  			for i in 1 upto reachingArms.count() 'eachArm'
@@ -2701,7 +2701,7 @@ index b26e740..a303f4f 100644
  				let vi = try arm.exitVals.get(k) otherwise panic("finalizeMatchMerge: exitVals.get OOB at {k}")
  
  				if vi != v0 'diff'
-@@ -59032,7 +59032,7 @@ export type Parser
+@@ -59113,7 +59113,7 @@ export type Parser
  				var incoming = ValueIdArray.create()
  
  				for i in 0 upto reachingArms.count() 'eachArm'
@@ -2710,7 +2710,7 @@ index b26e740..a303f4f 100644
  					incoming.push(try arm.exitVals.get(k) otherwise panic("finalizeMatchMerge: exitVals.get OOB at {k}"))
  				end 'eachArm'
  
-@@ -59354,7 +59354,7 @@ export type Parser
+@@ -59435,7 +59435,7 @@ export type Parser
  			return false
  		end 'declaredByThisArm'
  
@@ -2719,7 +2719,7 @@ index b26e740..a303f4f 100644
  		return not owner.isMutable() or self.bodyState.viewArmsOpen
  	end 'giveAliasesAnOutlivingImmutableBinding'
  
-@@ -60133,7 +60133,7 @@ export type Parser
+@@ -60214,7 +60214,7 @@ export type Parser
  	end 'deferredCasePattern'
  
  	function takeDeferredPatternBindings() returns TokenArray
@@ -2728,7 +2728,7 @@ index b26e740..a303f4f 100644
  		self.deferredPatternBindings = TokenArray.create()
  
  		return taken
-@@ -60212,7 +60212,7 @@ export type Parser
+@@ -60293,7 +60293,7 @@ export type Parser
  			return false
  		end 'notNamed'
  
@@ -2737,7 +2737,7 @@ index b26e740..a303f4f 100644
  
  		if not enumMatchIsDeclared(decl) 'notEnum'
  			return false
-@@ -60242,7 +60242,7 @@ export type Parser
+@@ -60323,7 +60323,7 @@ export type Parser
  			end 'answer'
  		end 'mayHaveAsked'
  
@@ -2746,7 +2746,7 @@ index b26e740..a303f4f 100644
  		let boxed = enumMatchIsDeclared(decl) and requireEnumLayout(decl).isBoxed()
  
  		if self.boxedUnionAnswers is self.anchors.boxedUnionAnswers 'firstAnswer'
-@@ -60333,13 +60333,13 @@ export type Parser
+@@ -60414,13 +60414,13 @@ export type Parser
  			return
  		end 'nothingToFold'
  
@@ -2762,7 +2762,7 @@ index b26e740..a303f4f 100644
  
  			// Only an untouched run of POINT intervals folds; anything wider is already a range.
  			if seg.lo != seg.hi or seg.targetBlockId != bodyBlockId 'notAPointOfThisArm'
-@@ -60770,7 +60770,7 @@ export type Parser
+@@ -60851,7 +60851,7 @@ export type Parser
  	// args.
  	function enterErrorUnionArm(func IrFunction, members TryBlockErrorMemberArray, fused ValueId, fallenInto bool, body IrBlock, edgeArgs ValueIdArray, flag ValueId, anchor Token) returns ErrorUnionArmEntry
  		if not fallenInto 'dispatchedOnly'
@@ -2771,7 +2771,7 @@ index b26e740..a303f4f 100644
  			return ErrorUnionArmEntry.create(body.id, args: edgeArgs, bodyId: releasedBody.id)
  		end 'dispatchedOnly'
  
-@@ -62286,8 +62286,8 @@ export type Parser
+@@ -62367,8 +62367,8 @@ export type Parser
  			return
  		end 'bothOperandsFold'
  
@@ -2782,7 +2782,7 @@ index b26e740..a303f4f 100644
  		let range = try floatRangeOfBinOp(op, left: left, right: right) otherwise return
  		self.recordFloatRange(result, range: range)
  	end 'knowFloatBinOp'
-@@ -63156,7 +63156,7 @@ export type Parser
+@@ -63237,7 +63237,7 @@ export type Parser
  		var trueExit = try self.artifact.module.getBlockByIdIn(func, id: trueExitId) otherwise panic("parseTernaryExpression: the true arm's exit block {trueExitId} is not in its own function")
  		reachingArms.push(MatchArmExit.create(trueExit, exitVals: ValueIdArray.create(), give: settledTrue, moveMark: trueMoveMark, blame: trueBlame))
  		reachingArms.push(MatchArmExit.create(falseExit, exitVals: ValueIdArray.create(), give: settledFalse, moveMark: falseMoveMark, blame: falseBlame))
@@ -2791,7 +2791,7 @@ index b26e740..a303f4f 100644
  
  		self.emitCondBranch(condExit, cond: cond, thenId: trueBranch.id, elseId: falseBranch.id, ifTok: ifTok)
  
-@@ -63876,7 +63876,7 @@ export type Parser
+@@ -63957,7 +63957,7 @@ export type Parser
  
  			// Asked of the literal before the cast: the cast's result denotes the target alias itself, so it
  			// would admit an out-of-range literal too.
@@ -2800,7 +2800,7 @@ index b26e740..a303f4f 100644
  			var admittingLetCast = self.aliasAdmittingLiteral(current, targetType: targetType) if castReadsAwait else self.anchors.undeclaredAlias
  			let literalConstant = self.foldedConstantOf(current) if currentIsALiteral else LetCastConstant.unknown
  			current = try self.applyCast(current, targetType: targetType, asTok: asTok, targetTok: targetTok, sourceIsBareLocal: currentIsBareLocal)
-@@ -63913,7 +63913,7 @@ export type Parser
+@@ -63994,7 +63994,7 @@ export type Parser
  	end 'literalPastItsSign'
  
  	function aliasAdmittingLiteral(literal ValueId, targetType MaxonType) returns DeclaredAlias
@@ -2809,7 +2809,7 @@ index b26e740..a303f4f 100644
  
  		if not (self.edgeProvesAlias(literal, alias: alias) or self.integerLiteralWidensInto(literal, alias: alias)) 'theLiteralFallsOutside'
  			return self.anchors.undeclaredAlias
-@@ -64054,7 +64054,7 @@ export type Parser
+@@ -64135,7 +64135,7 @@ export type Parser
  			return
  		end 'aConstantThatConvertsOrExceedsTheSignedTop'
  
@@ -2818,7 +2818,7 @@ index b26e740..a303f4f 100644
  
  		if binding.isCellBinding or binding.isSelfField 'readsThroughMemory'
  			return
-@@ -64209,7 +64209,7 @@ export type Parser
+@@ -64290,7 +64290,7 @@ export type Parser
  	end 'settleLetCastArithmetic'
  
  	function operandLetCastConstant(operand ValueId, reads LetCastRoster) returns LetCastConstant
@@ -2827,7 +2827,7 @@ index b26e740..a303f4f 100644
  
  		if let derivation = try state.derived.get(operand) 'aDerivedOperand'
  			if not rosterIsEmpty(reads) 'itsWholeExpression'
-@@ -64261,7 +64261,7 @@ export type Parser
+@@ -64342,7 +64342,7 @@ export type Parser
  			return
  		end 'noTypedPartner'
  
@@ -2836,7 +2836,7 @@ index b26e740..a303f4f 100644
  
  		if identity.isEmpty() or not identity.equals(self.operandAliasName(tracked)) 'aDifferentType'
  			return
-@@ -64303,7 +64303,7 @@ export type Parser
+@@ -64384,7 +64384,7 @@ export type Parser
  			return TypeNameVerdict.nameable
  		end 'theIndexIsStillBeingBuilt'
  
@@ -2845,7 +2845,7 @@ index b26e740..a303f4f 100644
  
  		if not anchor.value.equals(name) 'notTheAuthorsSpellingOfTheName'
  			return TypeNameVerdict.nameable
-@@ -64832,7 +64832,7 @@ export type Parser
+@@ -64914,7 +64914,7 @@ export type Parser
  	// three diagnostics at the same site; a second copy of these arms would be a second chance for the two
  	// asks to report one verdict two ways.
  	function requireServiceRosterIsDispatchable(typeName ByteArray, knowledge ServiceRosterKnowledge, spawnTok Token) throws SourceParseError
@@ -2854,7 +2854,7 @@ index b26e740..a303f4f 100644
  
  		match roster 'roster'
  			rosterIsDispatchable then return
-@@ -64886,7 +64886,7 @@ export type Parser
+@@ -64968,7 +64968,7 @@ export type Parser
  		let mailbox = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
  		self.artifact.emitOp(self.bodyState.currentBlock, op: MaxonOp.serviceSpawn(mailbox, typeName: typeName, state: moved, capacity: capacity), range: range)
  
@@ -2863,7 +2863,7 @@ index b26e740..a303f4f 100644
  		let handleType = self.serviceHandleValueType(handle, instance: instance)
  		let box = self.emitBoxAllocWithDestructor(self.emitLiteral(handle.sizeBytes() as FullRangeInt, valueType: MaxonType.integer, range: range), destructor: self.emitCodeAddress(MboxHandleDestructName, range: range), resultTag: maxonTypeTag(handleType), resultNameId: typeNameIdOf(handleType), range: range, tag: MmTag.Untagged)
  		self.trackOwnedTemp(box, exclusivity: OwnedHeapExclusivity.sole)
-@@ -64995,7 +64995,7 @@ export type Parser
+@@ -65077,7 +65077,7 @@ export type Parser
  			// The anchor is the `.` itself — a postfix receiver is bound to no name, so there is no earlier
  			// token the read can honestly be said to span from.
  			if self.atEnumAccessorHopOn(current) 'enumAccessorHop'
@@ -2872,7 +2872,7 @@ index b26e740..a303f4f 100644
  				let hopAnchor = self.current()
  				current = try self.consumeEnumAccessorHop(hopLayout, tag: try self.emitEnumTagOf(current, layout: hopLayout, anchor: self.tokenAt(self.pos + 1), range: SourceRange.ofToken(hopAnchor)), anchorTok: hopAnchor)
  				continue
-@@ -65060,7 +65060,7 @@ export type Parser
+@@ -65142,7 +65142,7 @@ export type Parser
  		//
  		// ⚠ It reads the RESOLVED target type and not the target TOKEN, which is what makes a qualified
  		// `x as Wrapper.Idx` ask about the joined name rather than about `Wrapper`.
@@ -2881,7 +2881,7 @@ index b26e740..a303f4f 100644
  
  		if let ownType = try self.ownTypeNamedByCast(value, targetType: targetType) 'aCastToTheValuesOwnType'
  			if not self.castIsTheWholeOfAFieldDefault(asTok) 'theCastGivesTheFieldItsType'
-@@ -65082,7 +65082,7 @@ export type Parser
+@@ -65164,7 +65164,7 @@ export type Parser
  		// target's. A widening cast between two names answers "no" here and "elide the guard" there, which is
  		// exactly the pair `a-widening-cast-emits-no-guard` pins: a real door, and no instruction behind it.
  		if not self.castIsTheWholeOfAFieldDefault(asTok) 'theCastGivesTheFieldItsType'
@@ -2890,7 +2890,7 @@ index b26e740..a303f4f 100644
  			self.reportUnneededCast(self.unneededCastSourceAlias(value, target: castTarget), target: castTarget, asTok: asTok)
  		end 'theCastGivesTheFieldItsType'
  
-@@ -65259,7 +65259,7 @@ export type Parser
+@@ -65341,7 +65341,7 @@ export type Parser
  			return true
  		end 'aConversion'
  
@@ -2899,7 +2899,7 @@ index b26e740..a303f4f 100644
  		return self.castRetags(value, targetType: targetType, targetAlias: targetAlias, sourceIsBareLocal: sourceIsBareLocal) and not self.castRenamesInPlace(value, targetType: targetType, targetAlias: targetAlias, sourceIsBareLocal: sourceIsBareLocal)
  	end 'castEmitsAnOp'
  
-@@ -65354,7 +65354,7 @@ export type Parser
+@@ -65436,7 +65436,7 @@ export type Parser
  			return
  		end 'noIntegerToCarry'
  
@@ -2908,7 +2908,7 @@ index b26e740..a303f4f 100644
  		self.recordProvenIntRange(result, low: proven.low, high: proven.high)
  	end 'carryProvenIntRange'
  
-@@ -65388,7 +65388,7 @@ export type Parser
+@@ -65470,7 +65470,7 @@ export type Parser
  			undeclared then break
  		end 'denoted'
  
@@ -2917,7 +2917,7 @@ index b26e740..a303f4f 100644
  
  		match claimed 'declaredType'
  			declared(alias) then return claimed if self.fullRangeCheckCannotFail(value, alias: alias, target: target) else DeclaredAlias.undeclared
-@@ -65582,7 +65582,7 @@ export type Parser
+@@ -65664,7 +65664,7 @@ export type Parser
  			return
  		end 'notNamed'
  
@@ -2926,7 +2926,7 @@ index b26e740..a303f4f 100644
  
  		if not enumMatchIsDeclared(decl) 'notAnEnum'
  			return
-@@ -65631,13 +65631,13 @@ export type Parser
+@@ -65713,13 +65713,13 @@ export type Parser
  	end 'requireCastTargetIsNotAnEnumOrUnion'
  
  	function requireCastTargetNameIsNotAnEnumOrUnion(sourceTag ValueTypeTag, name ByteArray, asTok Token) throws SourceParseError
@@ -2942,7 +2942,7 @@ index b26e740..a303f4f 100644
  		let written = self.signatures.aliasIdentityDisplay(name)
  
  		let remedy = "a union value is built by its case constructor" if layout.isUnion else "an integer is not a case; use '{written}.fromRawValue(raw)', which throws '{String.from(EnumLookupNoSuchRawValueCaseName)}' for a value no case carries"
-@@ -66109,14 +66109,14 @@ export type Parser
+@@ -66191,14 +66191,14 @@ export type Parser
  	// records. Where a folded constant DOES carry an alias it got it from a cast, whose own site reported
  	// the E3005 already; a range inside the destination cannot then put it outside the destination.
  	function recordRangeCheckSite(value ValueId, destination MaxonType, line LineNumber, column ColumnNumber)
@@ -2959,7 +2959,7 @@ index b26e740..a303f4f 100644
  		self.recordRangedTargetSite(value, target: alias, line: opTok.line, column: opTok.column)
  	end 'recordCastRangeCheckSite'
  
-@@ -66641,7 +66641,7 @@ export type Parser
+@@ -66723,7 +66723,7 @@ export type Parser
  	// `and` result exactly where it is without this rule: a bare `int`.
  	function aliasIdClosedUnderBitAnd(value ValueId) returns TypeNameId throws MapError
  		let aliasId = try self.denotedAliasId(value)
@@ -2968,7 +2968,7 @@ index b26e740..a303f4f 100644
  
  		if aliasIsFloat(alias) or not rangeIsClosedUnderBitAnd(alias.low) 'notClosedUnderBitAnd'
  			throw MapError.keyNotFound
-@@ -67706,7 +67706,7 @@ export type Parser
+@@ -67788,7 +67788,7 @@ export type Parser
  	// (`BuiltinConformanceRuntime.installBuiltinConformanceRuntime`), so the producer and the consumer of
  	// this tag cannot come to number the cases differently.
  	function emitOrderingVerdict(orderingResult ValueId, op MaxonCmpOp, opTok Token) returns ValueId
@@ -2977,7 +2977,7 @@ index b26e740..a303f4f 100644
  		let lessThanTag = ordering.tagOfCase(OrderingLessThanCaseName)
  		let greaterThanTag = ordering.tagOfCase(OrderingGreaterThanCaseName)
  
-@@ -68563,7 +68563,7 @@ export type Parser
+@@ -68642,7 +68642,7 @@ export type Parser
  		end 'eachElement'
  
  		let closeTok = try self.consume(TokenKind.rightParen)
@@ -2986,7 +2986,7 @@ index b26e740..a303f4f 100644
  		try self.requireAliasedTupleColumns(layout, elementValues: elementValues, elementStarts: elementStarts, anchor: openTok)
  
  		let literal = try self.emitStructLiteral(layout, fieldValues: elementValues, fieldBareLocal: elementBareLocal, anchor: openTok, range: SourceRange.between(openTok, last: closeTok))
-@@ -69732,7 +69732,7 @@ export type Parser
+@@ -69803,7 +69803,7 @@ export type Parser
  		// returns a union VALUE, so asking it of the `int` and `String` holes that are almost every hole in
  		// the corpus would box a `DeclaredEnum.undeclared` per hole.
  		if self.tagOf(value) == ValueTypeTag.named 'possiblyAnEnum'
@@ -2995,7 +2995,7 @@ index b26e740..a303f4f 100644
  
  			if enumMatchIsDeclared(decl) 'anEnumPart'
  				try self.materializeEnumPart(requireEnumLayout(decl), value: value, exprTok: exprTok, format: format, partBufs: partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
-@@ -70285,7 +70285,7 @@ export type Parser
+@@ -70356,7 +70356,7 @@ export type Parser
  			return try self.parseInnerAliasLiteral(typeTok)
  		end 'innerAliasLiteral'
  
@@ -3004,7 +3004,7 @@ index b26e740..a303f4f 100644
  
  		// ⭐ **E3086 ANCHORS ON THE `{`, WHERE THE MISSING FIELD WOULD BE WRITTEN** — not on the type
  		// name, which is not the thing that is wrong.
-@@ -70866,7 +70866,7 @@ export type Parser
+@@ -70937,7 +70937,7 @@ export type Parser
  			return not self.valueIsSolelyOwnedHere(value)
  		end 'notABareLocal'
  
@@ -3013,7 +3013,7 @@ index b26e740..a303f4f 100644
  		return not binding.isMutable() and not binding.isParameter and not binding.isSelfField
  	end 'storeMayReachAnImmutableName'
  
-@@ -71176,8 +71176,8 @@ export type Parser
+@@ -71247,8 +71247,8 @@ export type Parser
  		// value in that body (`self.value = Label.create(77)` inside `Box uses T`) is a genuine mismatch the
  		// shared body cannot justify for every instantiation, and it is refused here: unguarded it had compiled
  		// and exited **101, a leak**, printing a box pointer as an integer.
@@ -3024,7 +3024,7 @@ index b26e740..a303f4f 100644
  
  		if not placeBrand.isEmpty() and got == ValueTypeTag.genericInstance 'aBrandedPlaceMayMeetAnUnadoptedRead'
  			self.recordUnadoptedBrandDoor(value, expected: placeBrand, door: placeDoor, placeName: placeName, owner: placeOwner, anchor: anchor)
-@@ -71805,7 +71805,7 @@ export type Parser
+@@ -71876,7 +71876,7 @@ export type Parser
  
  		// A declaration with no type parameter is `Holder`'s case, above: it is not this refusal's subject,
  		// and its element name — which the sentence has to spell — does not exist to be spelled.
@@ -3033,7 +3033,7 @@ index b26e740..a303f4f 100644
  
  		throw SourceParseError.unsupported("`{String.from(layout.name)}` implements `{String.from(BuiltinArrayLiteralInterfaceName)}` over the parameter `{String.from(element)}` it declares, so its record IS a `{String.from(ManagedMemoryTypeName)} with {String.from(element)}` and its literal is an identity on that buffer — but its first field is not one. A value whose bytes are the buffer's and whose declared fields say otherwise has those fields discarded at construction and read back past the record's end when it is cloned or destroyed. Declare exactly one field, `{String.from(InlineManagedFieldName)} as {String.from(ManagedMemoryTypeName)} with {String.from(element)}`, or drop the marker so the declaration keeps the box its fields describe", line: anchor.line, column: anchor.column)
  	end 'requireArrayMarkerDeclaresTheBuffer'
-@@ -72570,7 +72570,7 @@ export type Parser
+@@ -72643,7 +72643,7 @@ export type Parser
  		// ⚠ **THE ANCHOR STAYS `typeTok`**, i.e. `Shape` and not `unionCases`: a diagnostic about a case the
  		// companion does not have names the type the reader wrote, which is what E3034's position means for
  		// every other enum reference.
@@ -3042,7 +3042,7 @@ index b26e740..a303f4f 100644
  
  		// ⭐ **`<Enum>.allCaseNames` IS A STATIC MEMBER, NOT A CASE** — it is claimed here, ahead of the case
  		// lookup, because that lookup's answer for it is E3034 and there is nothing further along this path
-@@ -73139,7 +73139,7 @@ export type Parser
+@@ -73212,7 +73212,7 @@ export type Parser
  		args.push(self.emitStringLiteral(caseName, range: SourceRange.ofToken(nameTok)))
  
  		for i in 0 upto arity 'moveIn'
@@ -3051,7 +3051,7 @@ index b26e740..a303f4f 100644
  			let arg = try slotValues.get(i) otherwise panic("parseEnumFromNameCase: slotValues.get OOB at {i} after the validation pass")
  			let bareLocal = try slotBareLocal.get(i) otherwise panic("parseEnumFromNameCase: slotBareLocal.get OOB at {i} — captured in lockstep with the values")
  			let moved = try self.moveInPayload(class, arg: arg, argBareLocal: bareLocal, owner: result, anchor: memberTok, range: range)
-@@ -73450,7 +73450,7 @@ export type Parser
+@@ -73523,7 +73523,7 @@ export type Parser
  			end 'storedWithItsValue'
  
  			let arg = try args.get(i) otherwise panic("emitEnumBox: args.get OOB at {i} after the arity check")
@@ -3060,7 +3060,7 @@ index b26e740..a303f4f 100644
  			let bareLocal = try argsBareLocal.get(i) otherwise panic("emitEnumBox: argsBareLocal.get OOB at {i} — captured in lockstep with the args")
  			let stored = try self.storedPayloadValue(fill, class: class, arg: arg, argBareLocal: bareLocal, owner: box, caseTok: caseTok, range: range)
  			self.emitIndirectStore(box, offset: layout.payloadSlotOffset(i as PayloadSlotIndex), value: stored, storageType: payloadStorageOf(class), range: range)
-@@ -73509,7 +73509,7 @@ export type Parser
+@@ -73582,7 +73582,7 @@ export type Parser
  			return
  		end 'namesNoAlias'
  
@@ -3069,7 +3069,7 @@ index b26e740..a303f4f 100644
  		self.recordRangedTargetSite(value, target: alias, line: anchor.line, column: anchor.column)
  	end 'recordPayloadRangeCheck'
  
-@@ -73561,7 +73561,7 @@ export type Parser
+@@ -73634,7 +73634,7 @@ export type Parser
  			end 'theAuthorsArgument'
  		end 'eachAuthored'
  
@@ -3078,7 +3078,7 @@ index b26e740..a303f4f 100644
  		var handBack = SharedSlotHandBackArray.create()
  
  		for _ in 0 upto payloads.count() 'eachSlot'
-@@ -75016,7 +75016,7 @@ export type Parser
+@@ -75089,7 +75089,7 @@ export type Parser
  	function spawnFactoryConstructorInstance(supplied ConstructorInstance, inferInstanceOf FactoryInference, callee ByteArray, args ValueIdArray, argLabels NameRoster, anchor Token, spawned bool) returns ConstructorInstance throws SourceParseError
  		let base = try inferInstanceOf.baseName() otherwise return supplied
  
@@ -3087,16 +3087,16 @@ index b26e740..a303f4f 100644
  
  		if params.isEmpty() 'aPlainType'
  			return supplied
-@@ -75034,7 +75034,7 @@ export type Parser
+@@ -75107,7 +75107,7 @@ export type Parser
  		//
  		// ⇒ **REFUSED HERE RATHER THAN GUESSED.** The `spawn` road says so with a sentence; the ordinary road
  		// keeps the base `structRef` it had before this inference existed, so nothing legal is lost either way.
--		view decls = self.signatures.overloadedDeclsOf(callee)
-+		let decls = self.signatures.overloadedDeclsOf(callee)
+-		view visible = self.signatures.declarationsVisibleFrom(callee, readerFilePath: self.job.path)
++		let visible = self.signatures.declarationsVisibleFrom(callee, readerFilePath: self.job.path)
  
- 		if decls.count() > 1 'anOverloadedFactory'
- 			return try self.uninferredFactoryInstance(supplied, reason: UninferredFactoryReason.theFactoryIsOverloaded(decls.count()), typeName: base, callee: callee, anchor: anchor, spawned: spawned)
-@@ -75044,7 +75044,7 @@ export type Parser
+ 		if visible.isEmpty() and spawned 'noDeclarationIsNameable'
+ 			throw self.unnameableFactoryRefusal(callee, anchor: anchor)
+@@ -75125,7 +75125,7 @@ export type Parser
  		var typeArgs = MaxonTypeArray.create()
  
  		for position in 0 upto params.count() 'eachTypeParam'
@@ -3105,7 +3105,7 @@ index b26e740..a303f4f 100644
  
  			match self.factoryTypeArgumentAt(base, paramName: paramName, position: position, decl: decl, args: args, argLabels: argLabels) 'argument'
  				found(t) then typeArgs.push(try self.requireInferableTypeArgument(t, anchor: anchor))
-@@ -75597,7 +75597,7 @@ export type Parser
+@@ -75686,7 +75686,7 @@ export type Parser
  			// door needs it TWICE — once to admit the field, once to say which instance the record's buffer
  			// surface wears. `StructLayout.fieldIsTheInlineManagedRecord` is that admission's one home, so
  			// asking it directly is the SAME question and not a second reading of it.
@@ -3114,7 +3114,7 @@ index b26e740..a303f4f 100644
  
  			if layout.fieldIsTheInlineManagedRecord(binding.fieldIndex) 'inlineManagedServesTheRecord'
  				try self.requireFieldAccessible(layout, index: binding.fieldIndex, fieldTok: baseTok)
-@@ -75619,7 +75619,7 @@ export type Parser
+@@ -75708,7 +75708,7 @@ export type Parser
  		end 'aCalledManagedFieldMember'
  
  		let box = try self.baseBoxOf(binding, baseTok: baseTok)
@@ -3123,7 +3123,7 @@ index b26e740..a303f4f 100644
  
  		self.advance()
  		let result = try self.dispatchMethodOnReceiver(func, recv: MethodReceiver.create(box, tag: maxonTypeTag(held.varType), nameId: typeNameIdOf(held.varType), anchor: baseTok, immutableName: self.immutableReceiverNameOf(held, baseTok: baseTok), subjectName: subjectName, owner: owner, selfFieldName: selfFieldName), resultUsed: resultUsed)
-@@ -76135,7 +76135,7 @@ export type Parser
+@@ -76224,7 +76224,7 @@ export type Parser
  		// variable's name (`d`), a `.` for a temporary, and `self` is not even an identifier.
  		let memberTok = self.current()
  		let enumName = self.internedName(recv.nameId)
@@ -3132,7 +3132,7 @@ index b26e740..a303f4f 100644
  		try self.requireMethodReachable(func, typeName: enumName, visibility: enumLayout.visibility, declFilePath: enumLayout.declFilePath, methodName: memberTok.value, anchor: memberTok)
  		let callee = qualifiedMethodName(enumName, methodName: memberTok.value)
  
-@@ -76623,8 +76623,8 @@ export type Parser
+@@ -76714,8 +76714,8 @@ export type Parser
  	// `clone`, whose whole point is the value it hands back. What separates them is that nothing declares
  	// what `shutdown` returns — see `emitServiceShutdown`, which carries the argument.
  	function dispatchOnServiceHandle(func IrFunction, base StructBase, baseTok Token, memberTok Token, resultUsed bool) returns ValueId throws SourceParseError
@@ -3143,7 +3143,7 @@ index b26e740..a303f4f 100644
  
  		if let caseIndex = try request.indexOfCase(memberTok.value) 'aMessage'
  			return try self.emitServiceSend(func, base: base, baseTok: baseTok, memberTok: memberTok, typeName: typeName, request: request, caseIndex: caseIndex, route: MessageRoute.mailbox, resultUsed: resultUsed)
-@@ -76652,7 +76652,7 @@ export type Parser
+@@ -76743,7 +76743,7 @@ export type Parser
  				continue
  			end 'theSender'
  
@@ -3152,7 +3152,7 @@ index b26e740..a303f4f 100644
  			let message = qualifiedMethodName(service, methodName: member)
  
  			// An implementer lacking the message does not conform, which `ConformanceCheck` reports (E3016)
-@@ -76668,9 +76668,9 @@ export type Parser
+@@ -76759,9 +76759,9 @@ export type Parser
  	end 'requireImplementersAnswerAlike'
  
  	function dispatchOnInterfaceHandle(func IrFunction, base StructBase, baseTok Token, memberTok Token, resultUsed bool) returns ValueId throws SourceParseError
@@ -3165,7 +3165,7 @@ index b26e740..a303f4f 100644
  
  		if let caseIndex = try request.indexOfCase(memberTok.value) 'aRequirement'
  			let (sender, _) = try interfaceMessageRepresentative(self.signatures, interfaceName: interfaceName, member: memberTok.value) otherwise panic("dispatchOnInterfaceHandle: `union {String.from(serviceRequestCompanionName(interfaceName))}` lists `{String.from(memberTok.value)}`, and `buildInterfaceRequestUnion` lists a requirement only when an implementer declares it as a message")
-@@ -77285,7 +77285,7 @@ export type Parser
+@@ -77376,7 +77376,7 @@ export type Parser
  	// the forward is index-aligned to. Comparing against the extension's clause alone is right only when the
  	// two coincide, i.e. only for a target type that declares no `where` of its own.
  	function requireReceiverSatisfiesExtensionConstraints(typeName ByteArray, callee ByteArray, receiver ValueId, memberTok Token) throws SourceParseError
@@ -3174,7 +3174,7 @@ index b26e740..a303f4f 100644
  
  		if constraints.isEmpty() 'notAConditionalTypeExtensionMethod'
  			return
-@@ -77681,7 +77681,7 @@ export type Parser
+@@ -77772,7 +77772,7 @@ export type Parser
  		self.advance()
  
  		let baseName = self.baseBindingName(baseTok)
@@ -3183,7 +3183,7 @@ index b26e740..a303f4f 100644
  
  		match self.deferralSourceOfBinding(binding, frame: self.capturedFrame(frame).funcIndex) 'deferredBase'
  			value(sourceFuncIndex, sourceId) then return try self.deferredUnresolvedMemberResult(func, sourceFuncIndex: sourceFuncIndex, sourceId: sourceId)
-@@ -77693,7 +77693,7 @@ export type Parser
+@@ -77784,7 +77784,7 @@ export type Parser
  
  		if capturedTag == ValueTypeTag.interfaceRef or self.typeIsEnumOrUnion(capturedTag, nameId: capturedNameId) 'aReceiverWithoutAStructLayout'
  			let value = try self.emitCaptureRead(baseName, enclosing: enclosing, frame: frame, anchor: baseTok)
@@ -3192,7 +3192,7 @@ index b26e740..a303f4f 100644
  			return try self.dispatchMethodOnReceiver(func, recv: MethodReceiver.create(value, tag: capturedTag, nameId: capturedNameId, anchor: baseTok, immutableName: self.immutableReceiverNameOf(receiver, baseTok: baseTok), subjectName: StorageSubject.none, owner: NoParamPositions, selfFieldName: SelfFieldAlias.none), resultUsed: resultUsed)
  		end 'aReceiverWithoutAStructLayout'
  
-@@ -77719,7 +77719,7 @@ export type Parser
+@@ -77810,7 +77810,7 @@ export type Parser
  	// fix: ask the predicate rather than answer for yourself.
  	function capturedStructBase(baseTok Token, enclosing Scope, frame ElementIndex) returns StructBase throws SourceParseError
  		let baseName = self.baseBindingName(baseTok)
@@ -3201,7 +3201,7 @@ index b26e740..a303f4f 100644
  		let capturedTag = maxonTypeTag(binding.varType)
  		let capturedTypeNameId = typeNameIdOf(binding.varType)
  
-@@ -77736,7 +77736,7 @@ export type Parser
+@@ -77827,7 +77827,7 @@ export type Parser
  		// binding of the enclosing body.
  		var layout = try self.structLayoutOfType(BaseAccessKind.member, tag: capturedTag, nameId: capturedTypeNameId, baseTok: baseTok)
  		let box = try self.emitCaptureRead(baseName, enclosing: enclosing, frame: frame, anchor: baseTok)
@@ -3210,7 +3210,7 @@ index b26e740..a303f4f 100644
  		return StructBase.create(layout, box: box, immutableName: self.immutableReceiverNameOf(receiver, baseTok: baseTok), subjectName: StorageSubject.none)
  	end 'capturedStructBase'
  
-@@ -77771,7 +77771,7 @@ export type Parser
+@@ -77862,7 +77862,7 @@ export type Parser
  		// and is not yours to call" are different statements, and the gate must not turn the second into the
  		// first. `stdlib-only-string-methods.md` pins both directions — the real name gets the visibility
  		// refusal, a near miss of it gets this roster.
@@ -3219,7 +3219,7 @@ index b26e740..a303f4f 100644
  
  		// ⚠ A member reaches this dispatcher only by being on `stringSurfaceMemberNames`; striking it there is
  		// the whole of retiring an arm, and the byte/ASCII family — `startsWith`, `endsWith`, `toLower`,
-@@ -77991,7 +77991,7 @@ export type Parser
+@@ -78082,7 +78082,7 @@ export type Parser
  		let range = SourceRange.between(recv.anchor, last: methodTok)
  
  		// The roster gate, `dispatchStringMethod`'s twin — see there for why it is asked ahead of every arm.
@@ -3228,7 +3228,7 @@ index b26e740..a303f4f 100644
  
  		if methodTok.value.equals(ByteViewMethod) 'bytes'
  			return try self.parseByteView(recv.value, methodTok: methodTok, range: range)
-@@ -78762,7 +78762,7 @@ export type Parser
+@@ -78853,7 +78853,7 @@ export type Parser
  
  	function pairedDisplays(value ValueId, declaredTag ValueTypeTag, declaredNameId TypeNameId, declaredBrand ByteArray, declaredIdentity ByteArray, declaredShown String) returns PairedDisplays
  		let gotShown = self.valueDisplayTypeName(value)
@@ -3237,7 +3237,7 @@ index b26e740..a303f4f 100644
  		let gotNote = self.signatures.contestedTypeNote(self.tagOf(value), nameId: self.valueNameId(value), brand: self.brandOf(value), identity: gotIdentity, shown: gotShown, otherShown: declaredShown)
  		let declaredNote = self.signatures.contestedTypeNote(declaredTag, nameId: declaredNameId, brand: declaredBrand, identity: declaredIdentity, shown: declaredShown, otherShown: gotShown)
  		return PairedDisplays.create(self.signatures.tupleDisplayNoted(gotShown, identity: gotIdentity, otherShown: declaredShown, otherIdentity: declaredIdentity), gotNote: gotNote, declared: self.signatures.tupleDisplayNoted(declaredShown, identity: declaredIdentity, otherShown: gotShown, otherIdentity: gotIdentity), declaredNote: declaredNote)
-@@ -78869,7 +78869,7 @@ export type Parser
+@@ -78960,7 +78960,7 @@ export type Parser
  		let range = SourceRange.between(recv.anchor, last: methodTok)
  
  		// The roster gate, `dispatchStringMethod`'s twin — see there for why it is asked ahead of every arm.
@@ -3246,7 +3246,7 @@ index b26e740..a303f4f 100644
  
  		if methodTok.value.equals(StringIndexCharIndexMethod) 'charIndex'
  			try self.consumeEmptyArgList()
-@@ -79376,7 +79376,7 @@ export type Parser
+@@ -79467,7 +79467,7 @@ export type Parser
  		// single element is parsed, because an element may itself be a call whose own arguments overwrite the
  		// request (`total([f([1, 2]), 3])`); spent past the empty check and the map fork, because `[]` states
  		// no elements for a slot to type and `["a": 1]` is not this container at all.
@@ -3255,7 +3255,7 @@ index b26e740..a303f4f 100644
  		let openTok = try self.consume(TokenKind.leftBracket)
  		let range = SourceRange.ofToken(openTok)
  		self.skipNewlines()
-@@ -79629,7 +79629,7 @@ export type Parser
+@@ -79720,7 +79720,7 @@ export type Parser
  			return
  		end 'aFrozenElement'
  
@@ -3264,7 +3264,7 @@ index b26e740..a303f4f 100644
  		self.applyColumnBounds(read, bounds: pair.boundsOf(LiteralColumn.first if index == EntryKeyFieldIndex else LiteralColumn.second))
  	end 'noteFrozenTupleFieldRead'
  
-@@ -79773,7 +79773,7 @@ export type Parser
+@@ -79864,7 +79864,7 @@ export type Parser
  	end 'markFloatBounds'
  
  	function noteLiteralColumnRead(read ValueId, container ValueId, column LiteralColumn)
@@ -3273,7 +3273,7 @@ index b26e740..a303f4f 100644
  		self.applyColumnBounds(read, bounds: pair.boundsOf(column))
  	end 'noteLiteralColumnRead'
  
-@@ -79783,7 +79783,7 @@ export type Parser
+@@ -79874,7 +79874,7 @@ export type Parser
  
  		for i in 1 upto incoming.count() 'eachGive'
  			let give = try incoming.get(i) otherwise panic("joinLiteralColumns: incoming.get OOB at {i}")
@@ -3282,7 +3282,7 @@ index b26e740..a303f4f 100644
  			joined = joined.joinedWith(next)
  		end 'eachGive'
  
-@@ -79867,7 +79867,7 @@ export type Parser
+@@ -79958,7 +79958,7 @@ export type Parser
  
  		for i in 1 upto incoming.count() 'eachGive'
  			let give = try incoming.get(i) otherwise panic("recordFloatRangeOfMerge: incoming.get OOB at {i}")
@@ -3291,7 +3291,7 @@ index b26e740..a303f4f 100644
  			hull = try floatRangeHull(hull, b: next) otherwise return
  		end 'eachGive'
  
-@@ -79922,7 +79922,7 @@ export type Parser
+@@ -80013,7 +80013,7 @@ export type Parser
  			return value
  		end 'targetElementNamesNoAlias'
  
@@ -3300,7 +3300,7 @@ index b26e740..a303f4f 100644
  		let elementType = MaxonType.float if tagIsFloat(maxonTypeTag(self.signatures.containerElementType(self.valueInstanceId(value)))) else MaxonType.integer
  		var elements = ValueIdArray.create()
  
-@@ -80037,7 +80037,7 @@ export type Parser
+@@ -80128,7 +80128,7 @@ export type Parser
  	// oracle has no answer here to match: `ByteArray from ["a", "b"]` crashes it with an internal E9001.)
  	function admitArrayLiteralElement(value ValueId, giid GenericInstanceId, elemTok Token, valueStart ElementIndex) returns ValueId throws SourceParseError
  		let indexSpaceElement = self.signatures.containerElementType(giid)
@@ -3309,7 +3309,7 @@ index b26e740..a303f4f 100644
  
  		// ⚠ **THE ELEMENT TYPE HAS TO BE RE-SPELLED IN THIS FILE'S INTERNER BEFORE ANY DOOR BELOW SEES IT.**
  		// The instance's argument was interned by `ProgramSignatures`, and every step from here mints or reads
-@@ -80248,7 +80248,7 @@ export type Parser
+@@ -80339,7 +80339,7 @@ export type Parser
  			return tupleTargetNamed(named)
  		end 'declaredThroughTheCallsInstance'
  
@@ -3318,7 +3318,7 @@ index b26e740..a303f4f 100644
  		return tupleTargetNamed(name)
  	end 'tupleTargetForArgument'
  
-@@ -80480,7 +80480,7 @@ export type Parser
+@@ -80567,7 +80567,7 @@ export type Parser
  	end 'stateTupleColumnTargetAt'
  
  	function declaredTupleColumnTarget(declaredName ByteArray, column FieldIndex) returns DeclaredTupleTarget
@@ -3327,7 +3327,7 @@ index b26e740..a303f4f 100644
  
  		if column >= layout.fieldCount() 'pastTheDeclaredColumns'
  			return NoDeclaredTupleTarget
-@@ -80553,7 +80553,7 @@ export type Parser
+@@ -80640,7 +80640,7 @@ export type Parser
  	end 'declaredTupleColumnBrand'
  
  	function declaredTupleColumnType(value ValueId, declaredName ByteArray, column FieldIndex, anchor Token) returns MaxonType
@@ -3336,7 +3336,7 @@ index b26e740..a303f4f 100644
  
  		if self.tagOf(value) != ValueTypeTag.function 'adoptsItsOwnType'
  			return self.numericColumnType(value, layout: layout, column: column)
-@@ -81600,7 +81600,7 @@ export type Parser
+@@ -81662,7 +81662,7 @@ export type Parser
  		end 'anEnteredQualifiedBase'
  
  		let headTok = try self.consume(TokenKind.identifier)
@@ -3345,7 +3345,7 @@ index b26e740..a303f4f 100644
  		return TypeNameHead.create(headTok, identity: self.signatures.bareWrittenKey(headTok.value, readerFilePath: self.job.path), verdict: verdict)
  	end 'typeNameHeadAtCursor'
  
-@@ -81747,7 +81747,7 @@ export type Parser
+@@ -81809,7 +81809,7 @@ export type Parser
  
  		let declaredType = self.resolvedSlotType(keyType)
  		let declared = maxonTypeTag(declaredType)
@@ -3354,7 +3354,7 @@ index b26e740..a303f4f 100644
  
  		while try self.atAnotherLiteralEntry() 'moreMembers'
  			let memberTok = self.current()
-@@ -81900,7 +81900,7 @@ export type Parser
+@@ -81962,7 +81962,7 @@ export type Parser
  		let parsed = try self.integerizedOperand(try self.parseExpression(func, block: self.bodyState.currentBlock), expected: declared, start: valueStart, pastEnd: self.pos)
  
  		let valueTag = self.tagOf(parsed)
@@ -3363,7 +3363,7 @@ index b26e740..a303f4f 100644
  
  		if not tagIsUnresolved(valueTag) and not columnValueMatches(declared, declaredIdentity: self.declaredColumnIdentity(declaredType), valueTag: valueTag, valueIdentity: valueIdentity) 'mismatch'
  			throw SourceParseError.unsupported("{columnSubject} — got a '{columnTypeName(valueTag, identity: valueIdentity)}' value", line: valueTok.line, column: valueTok.column)
-@@ -82684,7 +82684,7 @@ export type Parser
+@@ -82746,7 +82746,7 @@ export type Parser
  		let methodTok = try self.consume(TokenKind.identifier)
  		let range = SourceRange.ofToken(methodTok)
  		try self.requireCursorMemberIsNotRawSurface(methodTok)
@@ -3372,7 +3372,7 @@ index b26e740..a303f4f 100644
  
  		// ⭐ **THE TWO INFALLIBLE READS.** `current()` yields the ELEMENT and goes through
  		// `emitContainerElementAccessor` — the compiler-emitted element-read door, one of the two the language
-@@ -83368,7 +83368,7 @@ export type Parser
+@@ -83430,7 +83430,7 @@ export type Parser
  			let box = try args.get(position) otherwise panic("guardCellsTheRequirementMayWiden: args.get OOB at {position}")
  			self.recordBrandHandOver(box, kind: BrandRecordKind.handOverWitness, opIndex: opIndex, argIndex: position as ParamCount, label: EmptySourceText, range: range)
  			let varType = try self.handedCellTypeOf(box) otherwise continue
@@ -3381,7 +3381,7 @@ index b26e740..a303f4f 100644
  			let formalName = try target.paramTypeNames.get(position - WitnessReceiverArgCount) otherwise panic("guardCellsTheRequirementMayWiden: paramTypeNames.get OOB at {position - WitnessReceiverArgCount}")
  
  			if self.interfaceFormalMayNotFitWithin(varAlias, target: target, formalName: formalName) 'aWiderFormal'
-@@ -83555,7 +83555,7 @@ export type Parser
+@@ -83617,7 +83617,7 @@ export type Parser
  		// argument slotting, the arity selection, the result typing, the emitted op — is shared verbatim,
  		// which is the whole reason `WitnessDispatchTarget` names a witness VALUE rather than a constraint.
  		if self.tagOf(receiver) == ValueTypeTag.interfaceRef 'existentialReceiver'
@@ -3390,7 +3390,7 @@ index b26e740..a303f4f 100644
  			self.appendInterfaceDispatchCandidates(candidates, iface: iface, witness: self.witnessOfValue(receiver), methodName: methodName)
  			return candidates
  		end 'existentialReceiver'
-@@ -83577,7 +83577,7 @@ export type Parser
+@@ -83639,7 +83639,7 @@ export type Parser
  				continue
  			end 'otherParam'
  
@@ -3399,7 +3399,7 @@ index b26e740..a303f4f 100644
  
  			if i as ParamCount >= self.declaringWitnessParamCount 'noTableToDispatchThrough'
  				if self.interfaceRequiresReceiverMethod(iface, methodName: methodName) 'dispatchHasNoTable'
-@@ -83722,7 +83722,7 @@ export type Parser
+@@ -83784,7 +83784,7 @@ export type Parser
  	end 'witnessSlotIndicesNamed'
  
  	function interfaceRequiresReceiverMethod(iface IrInterface, methodName ByteArray) returns bool
@@ -3408,7 +3408,7 @@ index b26e740..a303f4f 100644
  
  		for slotIndex in self.witnessSlotIndicesNamed(slots, methodName: methodName) 'eachNamedSlot'
  			if not (try slots.get(slotIndex) otherwise panic("interfaceRequiresReceiverMethod: slots.get OOB at {slotIndex} below count {slots.count()}")).method.isStatic 'takesAReceiver'
-@@ -83745,7 +83745,7 @@ export type Parser
+@@ -83807,7 +83807,7 @@ export type Parser
  	// name), so applying it uniformly costs an empty scan and keeps the rule stated once. See
  	// `witnessCandidateAlreadyCollected` for why a requirement reached twice is one requirement, not a rival.
  	function appendInterfaceDispatchCandidates(candidates WitnessDispatchTargetArray, iface IrInterface, witness ValueId, methodName ByteArray)
@@ -3417,7 +3417,7 @@ index b26e740..a303f4f 100644
  
  		// The handle that makes `methodIndex` meaningful downstream — read ONCE per interface here rather than
  		// per candidate, and off the very interface whose slot list is being numbered, so the index and the
-@@ -83940,7 +83940,7 @@ export type Parser
+@@ -84002,7 +84002,7 @@ export type Parser
  	// numbered against a list that is not this interface's, and a site binding fewer arguments than the
  	// interface declares is E3016's to report and claims nothing here.
  	function associatedReturnThroughReceiverInstance(target WitnessDispatchTarget, claim ExistentialClaim) returns MaxonType throws MapError
@@ -3426,7 +3426,7 @@ index b26e740..a303f4f 100644
  
  		if not target.declaringInterfaceName.equals(dispatched) 'aProjectedParentRequirement'
  			throw MapError.keyNotFound
-@@ -83983,7 +83983,7 @@ export type Parser
+@@ -84045,7 +84045,7 @@ export type Parser
  			throw MapError.keyNotFound
  		end 'notAConstrainedParameter'
  
@@ -3435,7 +3435,7 @@ index b26e740..a303f4f 100644
  
  		if not target.declaringInterfaceName.equals(dispatched) 'aProjectedParentRequirement'
  			throw MapError.keyNotFound
-@@ -84048,7 +84048,7 @@ export type Parser
+@@ -84110,7 +84110,7 @@ export type Parser
  	// slot for the parent's position — a witness for the wrong conformance, silently. Refused rather than
  	// guessed: the answer is `notHeld`, which leaves the return typed as the interface declares it.
  	function heldAssociatedReturnOf(target WitnessDispatchTarget) returns HeldAssociatedReturn throws AbsentError
@@ -3444,7 +3444,7 @@ index b26e740..a303f4f 100644
  
  		if not target.declaringInterfaceName.equals(dispatched) 'aProjectedParentRequirement'
  			throw AbsentError.absent
-@@ -84410,7 +84410,7 @@ export type Parser
+@@ -84472,7 +84472,7 @@ export type Parser
  			return
  		end 'oneArrayDeclarationInThisCompile'
  
@@ -3453,7 +3453,7 @@ index b26e740..a303f4f 100644
  
  		if roster.contains(methodTok.value) 'theSynthesizedSurfaceServesIt'
  			return
-@@ -84958,7 +84958,7 @@ export type Parser
+@@ -85020,7 +85020,7 @@ export type Parser
  		// ⭐ **THE NOUN IS THE RECEIVER'S OWN DECLARATION, AND THIS IS THE ONLY DOOR THAT KNOWS IT.** A
  		// buffer is the compiler's own `__ManagedMemory`; an array is whichever `BuiltinArrayLiteral` conformer
  		// the value's instance was built from, which may be a `Bag` the program declared.
@@ -3462,7 +3462,7 @@ index b26e740..a303f4f 100644
  
  		// ⚠ **THE BUFFER-ONLY MEMBERS ARE GATED ON THAT ANSWER HERE TOO, or the E3159 rule names methods the
  		// receiver does not have.** `let a = IntArray.create()` followed by `a.setLength(2)` must be refused
-@@ -87180,7 +87180,7 @@ export type Parser
+@@ -87242,7 +87242,7 @@ export type Parser
  		end 'aMachineWordNotAStdlibAlias'
  
  		let receiverName = self.arrayReceiverDeclaredName(giid)
@@ -3471,7 +3471,7 @@ index b26e740..a303f4f 100644
  
  		// A program's own array record may leave a roster member undeclared; its synthesized surface
  		// carries no alias to enforce.
-@@ -87196,7 +87196,7 @@ export type Parser
+@@ -87258,7 +87258,7 @@ export type Parser
  
  		let paramName = try decl.paramNames.get(0) otherwise panic("requireArmServedIndexArgument: {String.from(receiverName)}.{String.from(member)} is declared with no first parameter")
  
@@ -3480,7 +3480,7 @@ index b26e740..a303f4f 100644
  		try self.requireArgumentFitsDeclaredAlias(value, alias: alias, paramName: paramName, anchor: anchor)
  	end 'requireArmServedIndexArgument'
  
-@@ -87214,7 +87214,7 @@ export type Parser
+@@ -87276,7 +87276,7 @@ export type Parser
  	end 'mintArrayCountResult'
  
  	function requireArgumentFitsDeclaredAlias(value ValueId, alias RangedTypeAlias, paramName ByteArray, anchor Token) throws SourceParseError
@@ -3489,7 +3489,7 @@ index b26e740..a303f4f 100644
  		let gotTag = self.tagOf(value)
  		let gotNameId = self.valueNameId(value)
  
-@@ -88159,7 +88159,7 @@ export type Parser
+@@ -88223,7 +88223,7 @@ export type Parser
  	// slot 0 to name. `Project.maxon`'s `VarInfo.isSelfField` states the rule; this is where it is
  	// obeyed.
  	function parseSelfFieldRead(nameTok Token, site CellArgumentToken, binding VarInfo) returns ValueId throws SourceParseError
@@ -3498,7 +3498,7 @@ index b26e740..a303f4f 100644
  		try self.requireFieldAccessible(layout, index: binding.fieldIndex, fieldTok: nameTok)
  
  		return self.selfFieldReference(try self.requireReceiverValue(nameTok), site: site, layout: layout, index: binding.fieldIndex, range: SourceRange.ofToken(nameTok))
-@@ -88179,7 +88179,7 @@ export type Parser
+@@ -88243,7 +88243,7 @@ export type Parser
  	end 'handOverPlaceStorage'
  
  	function takeHandedPlaceStorage() returns PlaceStorage
@@ -3507,7 +3507,7 @@ index b26e740..a303f4f 100644
  		self.handedPlaceStorage = noHandedPlaceStorage
  		return handed
  	end 'takeHandedPlaceStorage'
-@@ -88257,7 +88257,7 @@ export type Parser
+@@ -88321,7 +88321,7 @@ export type Parser
  	// same diagnostic `c.version = 2` gets, because it is the same question. Anchored at the name
  	// token, which is the only token there is.
  	function parseSelfFieldAssignment(func IrFunction, block IrBlock, nameTok Token, binding VarInfo) throws SourceParseError
@@ -3516,7 +3516,7 @@ index b26e740..a303f4f 100644
  		try self.requireFieldAccessible(layout, index: binding.fieldIndex, fieldTok: nameTok)
  
  		try self.emitCheckedSelfFieldStore(func, block: block, receiver: try self.requireReceiverValue(nameTok), layout: layout, index: binding.fieldIndex, fieldTok: nameTok, range: SourceRange.ofToken(nameTok))
-@@ -88376,7 +88376,7 @@ export type Parser
+@@ -88440,7 +88440,7 @@ export type Parser
  		try self.consume(TokenKind.dot)
  		let fieldTok = try self.consume(TokenKind.identifier)
  		let fieldIndex = self.lastConsumedTokenIndex()
@@ -3525,7 +3525,7 @@ index b26e740..a303f4f 100644
  		let index = try self.requireFieldIndex(layout, name: fieldTok.value, anchor: fieldTok)
  		try self.requireFieldAccessible(layout, index: index, fieldTok: fieldTok)
  		return self.selfFieldReference(try self.requireReceiverValue(selfTok), site: CellArgumentToken.at(fieldIndex), layout: layout, index: index, range: SourceRange.between(selfTok, last: fieldTok))
-@@ -88402,7 +88402,7 @@ export type Parser
+@@ -88466,7 +88466,7 @@ export type Parser
  		// The receiver first, so `self.x = 1` in a `static function` reports what is actually wrong
  		// rather than tripping over the enclosing type's layout.
  		let receiver = try self.requireReceiverValue(selfTok)
@@ -3534,7 +3534,7 @@ index b26e740..a303f4f 100644
  		let index = try self.requireFieldIndex(layout, name: fieldTok.value, anchor: fieldTok)
  		try self.requireFieldAccessible(layout, index: index, fieldTok: fieldTok)
  		try self.emitCheckedSelfFieldStore(func, block: block, receiver: receiver, layout: layout, index: index, fieldTok: fieldTok, range: SourceRange.between(selfTok, last: fieldTok))
-@@ -88422,7 +88422,7 @@ export type Parser
+@@ -88486,7 +88486,7 @@ export type Parser
  	// literal? — and that is `validateNascentSelfAssignments`, after the body, over the blocks the parse
  	// actually built.
  	function parseNascentSelfAssignment(func IrFunction, selfTok Token, fieldTok Token) throws SourceParseError
@@ -3543,7 +3543,7 @@ index b26e740..a303f4f 100644
  		let index = try self.requireFieldIndex(layout, name: fieldTok.value, anchor: fieldTok)
  		try self.requireFieldAccessible(layout, index: index, fieldTok: fieldTok)
  		let fieldType = self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames)
-@@ -88472,7 +88472,7 @@ export type Parser
+@@ -88536,7 +88536,7 @@ export type Parser
  		// MEASURED: `seedInUse: value 3 is live-in to block 0 but was never colored`.
  		self.bodyState.currentBlock = block
  
@@ -3552,7 +3552,7 @@ index b26e740..a303f4f 100644
  		let bodyStart = self.pos
  		let bodyEnd = self.bodyEndTokenIndex(bodyStart)
  		let range = SourceRange.ofToken(nameTok)
-@@ -88940,7 +88940,7 @@ export type Parser
+@@ -89004,7 +89004,7 @@ export type Parser
  		self.resolveSelfFieldTypes(layout)
  
  		for i in 0 upto layout.fieldCount() 'eachField'
@@ -3561,7 +3561,7 @@ index b26e740..a303f4f 100644
  			let fieldType = try self.selfFieldTypes.get(i) otherwise panic("declareSelfFieldAliases: selfFieldTypes.get OOB at {i} for `type {String.from(layout.name)}` — `resolveSelfFieldTypes` resolves every one of its {layout.fieldCount()} fields")
  			self.bodyState.scope.declareSelfField(fieldName, varType: fieldType, fieldIndex: i)
  		end 'eachField'
-@@ -90587,7 +90587,7 @@ export type Parser
+@@ -90651,7 +90651,7 @@ export type Parser
  		if self.bodyState.scope.isSelfField(tok.value) 'selfField'
  			// A self field's writability is the FIELD's own `var`/`let`, exactly as it is for a self-field
  			// method receiver (`baseBindingOf`) — the receiver is a parameter and is never `isMutable()`.
@@ -3570,7 +3570,7 @@ index b26e740..a303f4f 100644
  			let writable = try self.selfFieldIsWritable(binding, nameTok: tok)
  			self.publishBareBindingName(tok, holder: WriteBlameHolder.letField, blamed: not writable)
  			return try self.parseSelfFieldRead(tok, site: site, binding: binding)
-@@ -90675,7 +90675,7 @@ export type Parser
+@@ -90739,7 +90739,7 @@ export type Parser
  	end 'captureEnclosing'
  
  	function readCapturedName(name ByteArray, enclosing Scope, frame ElementIndex, tok Token, site CellArgumentToken) returns ValueId throws SourceParseError
@@ -3579,7 +3579,7 @@ index b26e740..a303f4f 100644
  
  		if not binding.isSelfField 'aBindingOfTheEnclosingFrame'
  			self.lastBareBindingImmutableName = self.immutableReceiverNameOf(binding, baseTok: tok)
-@@ -90831,7 +90831,7 @@ export type Parser
+@@ -90895,7 +90895,7 @@ export type Parser
  			return
  		end 'notAFloat'
  
@@ -3588,7 +3588,7 @@ index b26e740..a303f4f 100644
  		let enclosingTag = try enclosing.valueTags.get(binding.boundValue) otherwise panic("wearCapturedFloatAlias: the enclosing function has no type slot for v{binding.boundValue} — a binding's value is minted in the function that declared it")
  		let aliasId = try enclosing.valueNameIds.get(binding.boundValue) otherwise panic("wearCapturedFloatAlias: the enclosing function has no type-name slot for v{binding.boundValue} — the two type columns are filled in lockstep")
  
-@@ -90867,7 +90867,7 @@ export type Parser
+@@ -90931,7 +90931,7 @@ export type Parser
  	// name and, more importantly, keeps a name read twice from storing — and later dropping — two slots.
  	function captureSlotFor(name ByteArray, captureType MaxonType, anchor Token) returns EnvSlotIndex
  		for k in 0 upto self.bodyState.captureNames.count() 'existing'
@@ -3597,7 +3597,7 @@ index b26e740..a303f4f 100644
  
  			if seen == name 'reuse'
  				return k
-@@ -92021,7 +92021,7 @@ export type Parser
+@@ -92162,7 +92162,7 @@ export type Parser
  	// parse is undisturbed.
  	function parseClosureExpression(func IrFunction) returns ValueId throws SourceParseError
  		let closureStart = self.pos
@@ -3606,7 +3606,7 @@ index b26e740..a303f4f 100644
  		let functionTok = try self.consume(TokenKind.function)
  		try self.consume(TokenKind.leftParen)
  
-@@ -92171,10 +92171,10 @@ export type Parser
+@@ -92312,10 +92312,10 @@ export type Parser
  		// `var`, because `fillInheritedWitnessCaptures` WRITES into it (E3159) — the inherited-witness slots are
  		// claimed during the body parse and can only be valued after the restore.
  		var capturedValuesSnapshot = self.bodyState.captureValues.clone()
@@ -3621,7 +3621,7 @@ index b26e740..a303f4f 100644
  
  		lifted.closureLayout = closureCaptureSourceOf(captureNamesSnapshot, word: ClosureHiddenWord.descriptor)
  		lifted.closureFixedElementCount = closureCaptureSourceOf(captureNamesSnapshot, word: ClosureHiddenWord.fixedElementCount)
-@@ -92379,7 +92379,7 @@ export type Parser
+@@ -92520,7 +92520,7 @@ export type Parser
  
  	function closureBodyReads(lifted IrFunction, word ClosureHiddenWord) returns bool
  		for blockRef in lifted.blockRefs 'eachBlock'
@@ -3630,7 +3630,7 @@ index b26e740..a303f4f 100644
  
  			for opIdx in block.bodyOps() 'eachOp'
  				if self.opReads(try self.artifact.module.ops.get(opIdx) otherwise panic("closureBodyReads: opIdx {opIdx} not in module.ops"), word: word) 'aReader'
-@@ -92767,7 +92767,7 @@ export type Parser
+@@ -92909,7 +92909,7 @@ export type Parser
  			return ConstInitializerValue.factoryCall(calls, root: root)
  		end 'deferredNodeInitializer'
  
@@ -3639,7 +3639,7 @@ index b26e740..a303f4f 100644
  
  		// ⭐ **ONE CONSUMED CHECK FOR EVERY FORM.** Spelled once per arm below it is four identical copies of
  		// the rule that an initializer is the WHOLE token range, and a fifth arm that forgot it would silently
-@@ -93763,7 +93763,7 @@ export type Parser
+@@ -93969,7 +93969,7 @@ export type Parser
  		let typeHead = try self.consumeConstTypeNameHead(TypeNameHeadForm.reference)
  		let typeTok = typeHead.token
  
@@ -3648,7 +3648,7 @@ index b26e740..a303f4f 100644
  			throw ConstEvalError.defective(err)
  		end 'notConstructibleHere'
  
-@@ -93809,9 +93809,9 @@ export type Parser
+@@ -94015,9 +94015,9 @@ export type Parser
  		try self.consumeConstToken(TokenKind.dot)
  		let caseTok = try self.consumeConst(TokenKind.identifier)
  
@@ -3660,7 +3660,7 @@ index b26e740..a303f4f 100644
  
  		// Parallel to the CASE's declared slots, not to the source — `evalConstStructConstructionInto`'s columns,
  		// for its reason. The seeded value is a placeholder for a slot nothing has written yet, and `filled` is
-@@ -94350,7 +94350,7 @@ export type Parser
+@@ -94556,7 +94556,7 @@ export type Parser
  
  		let headTok = self.current()
  
@@ -3669,7 +3669,7 @@ index b26e740..a303f4f 100644
  			throw ConstEvalError.defective(err)
  		end 'ambiguous'
  
-@@ -95365,7 +95365,7 @@ export type Parser
+@@ -95595,7 +95595,7 @@ export type Parser
  			// false of the compiler too the moment an empty container and a `create()` factory were admitted — both are
  			// heap objects — which is the tell that it described a tier, not a rule.
  			if self.constEnumCaseOfLayout(tok, memberTok: memberTok, boxed: false) 'payloadFreeEnumCase'
@@ -3678,7 +3678,7 @@ index b26e740..a303f4f 100644
  				_ = try self.consumeConstTypeNameHead(TypeNameHeadForm.reference)
  				try self.consumeConstToken(TokenKind.dot)
  				self.advance()
-@@ -96173,7 +96173,7 @@ export type Parser
+@@ -96383,7 +96383,7 @@ export type Parser
  
  				// Converted to the alias `__proc_alive` declares its parameter at, which is private to
  				// `runtime/Process.maxon`: the index resolved it there, since no caller's file can name it.
@@ -3687,7 +3687,7 @@ index b26e740..a303f4f 100644
  
  				let probeType = match probeAlias 'probeParam'
  					declared(alias) gives alias.underlying
-@@ -98025,7 +98025,7 @@ export type Parser
+@@ -98235,7 +98235,7 @@ export type Parser
  					end 'aCellNameHandedOver'
  				end 'aCellWasHandedOver'
  
@@ -3696,7 +3696,7 @@ index b26e740..a303f4f 100644
  
  				if offersAClosure 'anOfferMustNotOutliveItsArgument'
  					self.pendingClosureParamOffer = PendingClosureParamOffer.none
-@@ -98805,7 +98805,7 @@ export type Parser
+@@ -99015,7 +99015,7 @@ export type Parser
  		// is what makes the consume transfer, the drop enrollment and `slotCallArgs`' arity gate correct for
  		// it with no change to any of them.
  		let argDefaultSlots = try self.fillOmittedArgDefaults(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, receiverSlots: NoReceiverSlots)
@@ -3705,7 +3705,7 @@ index b26e740..a303f4f 100644
  		let placeBindings = try self.bindPlaceArguments(places, declarations: declarations, args: args, argLabels: argLabels)
  		self.widenArgsToInterfaceHandles(callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots, anchor: anchor, rparenTok: rparenTok)
  		try self.admitOperandAliasSetArgs(callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots, anchor: anchor)
-@@ -98990,7 +98990,7 @@ export type Parser
+@@ -99200,7 +99200,7 @@ export type Parser
  			return callee
  		end 'anExactNonGenericDeclaration'
  
@@ -3714,7 +3714,7 @@ index b26e740..a303f4f 100644
  		let refuse = templates.count() == 1 and not self.signatures.declaresCallee(callee)
  		var inferred = GenericFunctionInstanceArray.create()
  
-@@ -99001,7 +99001,7 @@ export type Parser
+@@ -99211,7 +99211,7 @@ export type Parser
  			end 'inference'
  		end 'eachTemplate'
  
@@ -3723,7 +3723,7 @@ index b26e740..a303f4f 100644
  
  		if chosen.count() > 1 'twoGenericDeclarationsInfer'
  			throw SourceParseError.genericCallAmbiguous((bareMethodName(callee)), candidates: chosen.count(), line: anchor.line, column: anchor.column)
-@@ -99261,7 +99261,7 @@ export type Parser
+@@ -99447,7 +99447,7 @@ export type Parser
  			undeclared then break
  		end 'enumeration'
  
@@ -3732,7 +3732,7 @@ index b26e740..a303f4f 100644
  
  		if identity.isEmpty() 'notARangedAlias'
  			return plain
-@@ -99690,7 +99690,7 @@ export type Parser
+@@ -99876,7 +99876,7 @@ export type Parser
  		end 'initSlots'
  
  		for i in 0 upto args.count() 'markSupplied'
@@ -3741,7 +3741,7 @@ index b26e740..a303f4f 100644
  			let suppliedSlot = try argSlotPosition(info.paramNames, argIndex: (i as ParamCount) + receiverSlots, label: label) otherwise return NoDefaultArgSlots
  			try filled.set(suppliedSlot, value: true) otherwise panic("fillArgsFromParamDefaults: filled.set OOB at {suppliedSlot} — filled holds one entry per parameter name")
  		end 'markSupplied'
-@@ -100323,7 +100323,7 @@ export type Parser
+@@ -100509,7 +100509,7 @@ export type Parser
  			return
  		end 'notThisTypesMethod'
  
@@ -3750,7 +3750,7 @@ index b26e740..a303f4f 100644
  
  		if not opaque.declaresATypeParameterParam() 'everyParameterIsConcrete'
  			return
-@@ -100348,7 +100348,7 @@ export type Parser
+@@ -100534,7 +100534,7 @@ export type Parser
  			// a name id that means something else (the trap `slotTypeThroughReceiver` and
  			// `requireContainerElementType` both cross through this same door).
  			let substituted = self.resolvedSlotType(self.signatures.substitutedInstanceArg(gid, position: position))
@@ -3759,7 +3759,7 @@ index b26e740..a303f4f 100644
  			let argValue = try args.get(i) otherwise panic("recordSubstitutedArgRangeChecks: args.get OOB at {i} inside its own count()")
  			let handedValue = self.argumentValueOf(argValue, anchor: anchor)
  			self.recordRangedTargetSite(handedValue, target: alias, line: anchor.line, column: anchor.column)
-@@ -100713,7 +100713,7 @@ export type Parser
+@@ -100899,7 +100899,7 @@ export type Parser
  			handed.push(HandedOffArgument.create(i, value: try args.get(i) otherwise panic("transferAsyncSpawnArgs: args.get OOB at {i}"), anchor: self.handOffArgumentAnchor(argAnchors, index: i, fallback: anchor), door: ThreadHandOffDoor.coroutine(callee)))
  		end 'eachArgument'
  
@@ -3768,16 +3768,7 @@ index b26e740..a303f4f 100644
  
  		for plan in plans 'eachHandedOver'
  			let position = plan.argument.position
-@@ -100790,7 +100790,7 @@ export type Parser
- 	end 'handOffArgumentAnchor'
- 
- 	function declaredInterfaceParamAt(callee ByteArray, argIndex ParamCount, label ByteArray) returns InterfaceParam throws MapError
--		view decls = self.signatures.overloadedDeclsOf(callee)
-+		let decls = self.signatures.overloadedDeclsOf(callee)
- 
- 		if decls.count() != 1 'notOneDeclaration'
- 			throw MapError.keyNotFound
-@@ -100813,7 +100813,7 @@ export type Parser
+@@ -100993,7 +100993,7 @@ export type Parser
  
  	function ownedValueLeavesThisFrame(value ValueId) returns bool
  		let owner = try self.liveOwnerIndexOf(value) otherwise return self.pendingTempsContain(value)
@@ -3786,7 +3777,7 @@ index b26e740..a303f4f 100644
  		return not binding.isParameter and not binding.isSelfField
  	end 'ownedValueLeavesThisFrame'
  
-@@ -100838,8 +100838,8 @@ export type Parser
+@@ -101018,8 +101018,8 @@ export type Parser
  	end 'takeCellOccupant'
  
  	function cellOccupantTakeOf(value ValueId) returns CellOccupantTake
@@ -3797,7 +3788,7 @@ index b26e740..a303f4f 100644
  
  		if not self.cellOccupantMoves(binding, value: value) 'theCellKeepsIt'
  			return CellOccupantTake.notACellOccupant
-@@ -101958,7 +101958,7 @@ export type Parser
+@@ -102138,7 +102138,7 @@ export type Parser
  	end 'useAfterMoveRefusal'
  
  	function requireCellIsNotLentToAnOpenCall(value ValueId) throws SourceParseError
@@ -3806,7 +3797,7 @@ index b26e740..a303f4f 100644
  		let funcIndex = self.artifact.currentFuncIndex
  
  		for handOff in self.openByRefHandOffs 'eachOpenHandOff'
-@@ -102218,7 +102218,7 @@ export type Parser
+@@ -102398,7 +102398,7 @@ export type Parser
  	function transferSourceClause(value ValueId) returns String
  		let index = try self.liveOwnerIndexOf(value) otherwise return NoTransferSourceClause
  
@@ -3815,7 +3806,7 @@ index b26e740..a303f4f 100644
  		return serviceTransferSourceClause(String.from(owner.name))
  	end 'transferSourceClause'
  
-@@ -102366,7 +102366,7 @@ export type Parser
+@@ -102546,7 +102546,7 @@ export type Parser
  	end 'overloadedCallResultType'
  
  	function returnDecidingDeclaration(callee ByteArray, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray) returns SweptDeclarationPick
@@ -3824,16 +3815,16 @@ index b26e740..a303f4f 100644
  
  		if candidates.count() < 2 'oneDeclarationWearsThisName'
  			return sharedUndecidedDeclarationPick
-@@ -102380,7 +102380,7 @@ export type Parser
+@@ -102560,7 +102560,7 @@ export type Parser
  	end 'returnDecidingDeclaration'
  
  	function sweptDeclarationOf(callee ByteArray, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray) returns SweptDeclarationPick
--		view candidates = self.signatures.overloadedDeclsOf(callee)
-+		let candidates = self.signatures.overloadedDeclsOf(callee)
+-		view candidates = self.signatures.declarationsVisibleFrom(callee, readerFilePath: self.job.path)
++		let candidates = self.signatures.declarationsVisibleFrom(callee, readerFilePath: self.job.path)
  
  		if candidates.count() == 1 'oneDeclaration'
  			return SweptDeclarationPick.chosen(try candidates.get(0) otherwise panic("sweptDeclarationOf: one declaration was just counted"))
-@@ -102807,7 +102807,7 @@ export type Parser
+@@ -103032,7 +103032,7 @@ export type Parser
  		end 'carriesNoStructName'
  
  		let name = self.internedName(typeNameIdOf(repaired))
@@ -3842,7 +3833,7 @@ index b26e740..a303f4f 100644
  
  		if canonical.equals(name) 'theSweepSpelledItCanonically'
  			return repaired
-@@ -102860,7 +102860,7 @@ export type Parser
+@@ -103085,7 +103085,7 @@ export type Parser
  
  		let name = self.internedName(typeNameIdOf(repaired))
  
@@ -3851,7 +3842,7 @@ index b26e740..a303f4f 100644
  
  		if not slotRange.equals(self.signatures.rangeScopedDeclaredName(name, readerFilePath: self.job.path)) 'theTwoFilesMeanTwoRanges'
  			return MaxonType.named(self.artifact.typeNames.intern(slotRange))
-@@ -103079,7 +103079,7 @@ export type Parser
+@@ -103304,7 +103304,7 @@ export type Parser
  			return true
  		end 'nothingOwed'
  
@@ -3860,7 +3851,7 @@ index b26e740..a303f4f 100644
  
  		for (position, given) in args.withIterator() 'eachArg'
  			if not self.argOwesTheQuantityDoor(given) 'owesNothing'
-@@ -103146,7 +103146,7 @@ export type Parser
+@@ -103371,7 +103371,7 @@ export type Parser
  				continue
  			end 'owesNothing'
  
@@ -3869,7 +3860,7 @@ index b26e740..a303f4f 100644
  			self.recordQuantityDoor(value, alias: alias, anchor: anchor)
  		end 'eachSlot'
  
-@@ -103169,7 +103169,7 @@ export type Parser
+@@ -103394,7 +103394,7 @@ export type Parser
  				continue
  			end 'owesNothing'
  
@@ -3878,7 +3869,7 @@ index b26e740..a303f4f 100644
  			self.recordQuantityDoor(given, alias: alias, anchor: anchor)
  		end 'eachFormal'
  
-@@ -103208,7 +103208,7 @@ export type Parser
+@@ -103433,7 +103433,7 @@ export type Parser
  			let value = try self.parseValueExpression(func)
  			self.cellArgumentToken = CellArgumentToken.none
  			self.cellArgumentWantsAPlace = false
@@ -3887,7 +3878,7 @@ index b26e740..a303f4f 100644
  			args.push(self.holdStorageReadForStatement(value, kind: operandHoldKindOf(OperandPassing.intoPlace if readsAPlace else OperandPassing.asValue, valueKind: HoldKind.callOperand), range: SourceRange.ofToken(valueTok), position: OperandSuccession.alwaysFollowed))
  			names.push(self.expressionImmutableBlame(valueTok, valueStart: valueStart, value: value))
  
-@@ -103256,7 +103256,7 @@ export type Parser
+@@ -103481,7 +103481,7 @@ export type Parser
  			return
  		end 'noLiteralToType'
  
@@ -3896,7 +3887,7 @@ index b26e740..a303f4f 100644
  		let param = try shape.paramTypes.get(position) otherwise return
  
  		if opening == TokenKind.leftBracket 'anArrayLiteral'
-@@ -103283,7 +103283,7 @@ export type Parser
+@@ -103508,7 +103508,7 @@ export type Parser
  	// void value; every value position (`resultUsed: true` — a binding, `return`, an operand, an argument)
  	// reports E2004 HERE, at the call, the same anchor and text the direct-call diagnostic uses.
  	function mintIndirectCallResult(callee ValueId, resultUsed bool, anchor Token) returns ValueId throws SourceParseError
@@ -3905,16 +3896,16 @@ index b26e740..a303f4f 100644
  
  		match recovered.returnType 'r'
  			value(inner) then return self.mintSettledCallResult(inner, scopeFilePath: recovered.scopeFilePath)
-@@ -103364,7 +103364,7 @@ export type Parser
+@@ -103595,7 +103595,7 @@ export type Parser
+ 			return member
+ 		end 'theOneThisFileNames'
  
- 	function declaredFunctionParamTypes(name ByteArray) returns MaxonTypeArray
- 		var paramTypes = MaxonTypeArray.create()
--		view decls = self.signatures.overloadedDeclsOf(name)
-+		let decls = self.signatures.overloadedDeclsOf(name)
+-		view declarations = self.signatures.overloadedDeclsOf(name)
++		let declarations = self.signatures.overloadedDeclsOf(name)
  
- 		if decls.count() != 1 'notOneDeclaration'
- 			return paramTypes
-@@ -103424,7 +103424,7 @@ export type Parser
+ 		if declarations.count() != 1 'noSingleDeclaration'
+ 			panic("declarationBehindFunctionValue: '{String.from(name)}' has {declarations.count()} declarations and this file means none of them alone — `resolvedFunctionValueName` refuses an ambiguous name and `requireNameIsUsableAsFunctionValue` an invisible one before a value is minted")
+@@ -103659,7 +103659,7 @@ export type Parser
  			return
  		end 'notAnUnsignedLiteral'
  
@@ -3923,7 +3914,7 @@ index b26e740..a303f4f 100644
  		self.admitUnsignedLiteralInto(value, slot: slot, alias: alias)
  	end 'admitUnsignedLiteralIntoSlot'
  
-@@ -103457,8 +103457,8 @@ export type Parser
+@@ -103692,8 +103692,8 @@ export type Parser
  	end 'admitUnsignedLiteralsAcross'
  
  	function reportBareUnsignedLiterals()
@@ -3934,7 +3925,7 @@ index b26e740..a303f4f 100644
  
  		for site in sites 'eachLiteral'
  			if not valueIsMarked(admitted, value: site.value) 'noContextAdmitsIt'
-@@ -104612,7 +104612,7 @@ export type Parser
+@@ -104847,7 +104847,7 @@ export type Parser
  			return false
  		end 'notAnEnumValue'
  
@@ -3943,7 +3934,7 @@ index b26e740..a303f4f 100644
  
  		if not enumMatchIsDeclared(declaredEnum) 'notADeclaredEnum'
  			return false
-@@ -104683,7 +104683,7 @@ export type Parser
+@@ -104918,7 +104918,7 @@ export type Parser
  		// loaded twice, and the second load is not merely wasteful — the two would be different SSA values
  		// describing one enum.
  		let baseValue = try self.enumAccessorBaseValue(base, baseTok: baseTok)
@@ -3952,7 +3943,7 @@ index b26e740..a303f4f 100644
  
  		// QUESTION 1 — where the tag is, asked through the door the `match` dispatch asks it through, and the
  		// one thing this spelling knows that the type-qualified one does not: there IS a value here.
-@@ -105045,7 +105045,7 @@ export type Parser
+@@ -105280,7 +105280,7 @@ export type Parser
  			return EnumBackingLeaf.create(path, fieldType: fieldType, domain: domain)
  		end 'reachedAScalar'
  
@@ -3961,7 +3952,7 @@ index b26e740..a303f4f 100644
  
  		if not self.atEnumBackingFieldHop() 'noFieldFollows'
  			throw SourceParseError.unsupported("field '{String.from(struct.fieldNameAt(field))}' of the `{String.from(struct.name)}` backing read as a whole value — it is declared `{String.from(nested.name)}`, a record, and the compiler selects one SCALAR field of a struct backing at a time (`.{String.from(struct.fieldNameAt(field))}.<field>`) rather than materializing one. That is the refusal `{String.from(EnumRawValueMemberName)}` itself carries, one level in: a materialized record is an owned heap value minted inside an expression", line: memberTok.line, column: memberTok.column)
-@@ -105142,7 +105142,7 @@ export type Parser
+@@ -105377,7 +105377,7 @@ export type Parser
  			return selected
  		end 'noAccessorHop'
  
@@ -4038,7 +4029,7 @@ index b50da29..18fa47c 100644
  	if let memo = try project.shadowRespellingMemos.get(path.toString()) 'memoized'
  		if memo.contentHash == entry.contentHash 'currentForThisContent'
 diff --git a/maxon-bin/Compiler/Queries.maxon b/maxon-bin/Compiler/Queries.maxon
-index 272770c..9c1e812 100644
+index f5dc6ba..6da24ee 100644
 --- a/maxon-bin/Compiler/Queries.maxon
 +++ b/maxon-bin/Compiler/Queries.maxon
 @@ -40,7 +40,7 @@ end 'settleProjectInlineRecordGeometry'
@@ -4230,7 +4221,7 @@ index 272770c..9c1e812 100644
  	return ParseQuery.needed(job, tokens: tokens, overrides: overrides.clone(), stamp: ParseStamp.create(keyHash, sharing: sharing))
  end 'parseQueryOf'
  
-@@ -2000,7 +2000,7 @@ end 'reportFailedParse'
+@@ -2004,7 +2004,7 @@ end 'reportParseFailure'
  // withheld; in the misclosed file, an error the parse met outside the block gives way to the label
  // refusal, which is the cause.
  function reportParseErrorBesideAMisclosedBlock(project Project, path FilePath, error SourceParseError)
@@ -4239,7 +4230,7 @@ index 272770c..9c1e812 100644
  
  	if not signatures.hasMisclosedBlocks() 'everyBlockClosesWhereItOpened'
  		reportParseError(project, path: path, error: error)
-@@ -2104,7 +2104,7 @@ function finishLibraryCache(project Project)
+@@ -2108,7 +2108,7 @@ function finishLibraryCache(project Project)
  	persistSharedEntries(project)
  	persistStashedParses(project)
  
@@ -4248,7 +4239,7 @@ index 272770c..9c1e812 100644
  
  	if compilerLogEnabled(CompilerLogGroup.compiler, level: LogLevel.debug) 'debugging'
  		logCompilerDebugSettled("library cache — baseline {project.db.libraryBaseline.name}, {tally.loaded} loaded, {tally.written} written, {tally.rejected} rejected, {tally.swept} library file(s) swept, {tally.parsed} library file(s) parsed")
-@@ -2130,7 +2130,7 @@ end 'refuseUnnameableNamespaceDirectories'
+@@ -2134,7 +2134,7 @@ end 'refuseUnnameableNamespaceDirectories'
  // collision therefore reports E3006 alone.
  function refuseCollidingNominalDeclarations(project Project, pool FrontEndPool) throws CompileError
  	try pool.lexEveryFile(project)
@@ -4257,7 +4248,7 @@ index 272770c..9c1e812 100644
  
  	if collisions.isEmpty() 'noNameIsDeclaredTwice'
  		return
-@@ -2326,7 +2326,7 @@ end 'EmissionSlot'
+@@ -2330,7 +2330,7 @@ end 'EmissionSlot'
  typealias EmissionSlotArray = Array with EmissionSlot
  
  function sourceTierOf(project Project, path FilePath) returns SourceTier
@@ -4266,7 +4257,7 @@ index 272770c..9c1e812 100644
  
  	if provenance.isStdlibSource 'theStdlib'
  		return SourceTier.stdlib
-@@ -2656,7 +2656,7 @@ function collectRequestedTupleLayout(project Project, name ByteArray, into Struc
+@@ -2660,7 +2660,7 @@ function collectRequestedTupleLayout(project Project, name ByteArray, into Struc
  		end 'alreadyFiled'
  	end 'eachFiled'
  
@@ -4540,7 +4531,7 @@ index 6cf7ee3..e89e2cf 100644
  	buildRegistryServiceRegister(module, released: released)
  	buildRegistryServiceReplace(module, released: released)
 diff --git a/maxon-bin/Compiler/SemanticCheck.maxon b/maxon-bin/Compiler/SemanticCheck.maxon
-index 93a67a6..78d1162 100644
+index fdbe3a8..d7837d7 100644
 --- a/maxon-bin/Compiler/SemanticCheck.maxon
 +++ b/maxon-bin/Compiler/SemanticCheck.maxon
 @@ -205,7 +205,7 @@ function resolveOverloadedCallsInFunc(project Project, module MaxonModule, signa
@@ -4686,7 +4677,7 @@ index 93a67a6..78d1162 100644
  
  	match slotCallArgs(sig.paramNames, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) 'slot'
  		ordered(argIds) then checkSlottedCall(project, func: func, result: result, callee: callee, sig: sig, args: args, argRanges: argRanges, argLabels: argLabels, argImmutableNames: argImmutableNames, argIds: argIds, argDefaultSlots: argDefaultSlots, mutationSummary: mutationSummary, provenance: provenance, callRange: callRange, filePath: filePath, overloadRefused: project.refusedOverloadCalls.contains(opIndex))
-@@ -4291,7 +4291,7 @@ function checkIndirectCallArgs(project Project, module MaxonModule, calls CallSu
+@@ -4367,7 +4367,7 @@ function checkIndirectCallArgs(project Project, module MaxonModule, calls CallSu
  	// which resolves the same governing name against the same three producers (a lifted closure, a function
  	// alias, a declared function) and panics if it is none of them. So an `indirectCall` op cannot exist
  	// with a callee whose type nothing declares.
@@ -4695,7 +4686,7 @@ index 93a67a6..78d1162 100644
  
  	// The trailing function-record argument is the compiler's, not the program's (see FunctionRecordArgCount).
  	let suppliedCount = userArityOfIndirectCall(args)
-@@ -4320,7 +4320,7 @@ function checkIndirectCallArgs(project Project, module MaxonModule, calls CallSu
+@@ -4396,7 +4396,7 @@ function checkIndirectCallArgs(project Project, module MaxonModule, calls CallSu
  		checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: shapeParamIdentity(shape, index: i as ParamCount), declaredParamName: EmptySourceText, param: ArgumentParameter.unnamed, position: i as ParamCount, argId: argId, callInstanceSubject: CallSubject.heldBy(callee), paramExistentialSites: sharedEmptyParamExistentialSites, callRange: callRange, handedAt: callRange, filePath: authoredFileOf(project, func: func, opIndex: opIndex), provenance: provenance, overloadRefused: false)
  	end 'eachArg'
  
@@ -4704,7 +4695,7 @@ index 93a67a6..78d1162 100644
  	checkIndirectArgBrands(project, module: module, func: func, bodies: bodies, args: args, suppliedCount: suppliedCount, callRange: callRange, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
  	var ownedAtSites = NoParamPositions
  
-@@ -4511,7 +4511,7 @@ end 'functionValueOwnTypeName'
+@@ -4587,7 +4587,7 @@ end 'functionValueOwnTypeName'
  // `PendingFunctionTypeDoor` and `Parser.recordFunctionTypeDoor`.
  function checkFunctionTypeDoors(project Project, provenance ProvenanceTracer)
  	for doorIndex in 0 upto project.pendingFunctionTypeDoors.count() 'eachDoor'
@@ -4713,7 +4704,7 @@ index 93a67a6..78d1162 100644
  
  		let shapesAgree = doorShapesAgree(project, door: door)
  
-@@ -4526,8 +4526,8 @@ function checkFunctionTypeDoors(project Project, provenance ProvenanceTracer)
+@@ -4602,8 +4602,8 @@ function checkFunctionTypeDoors(project Project, provenance ProvenanceTracer)
  end 'checkFunctionTypeDoors'
  
  function doorShapesAgree(project Project, door PendingFunctionTypeDoor) returns bool
@@ -4724,7 +4715,7 @@ index 93a67a6..78d1162 100644
  	return functionShapesAgree(functionTypeRegistryOf(project), signatures: programSignaturesIn(project, asker: "doorShapesAgree"), declared: declared, got: got, readerFilePath: door.filePath)
  end 'doorShapesAgree'
  
-@@ -4538,12 +4538,12 @@ function checkValueKeepsTheBoundary(project Project, provenance ProvenanceTracer
+@@ -4614,12 +4614,12 @@ function checkValueKeepsTheBoundary(project Project, provenance ProvenanceTracer
  		return false
  	end 'declaresNoBoundary'
  
@@ -4740,7 +4731,7 @@ index 93a67a6..78d1162 100644
  
  		if let position = try firstKeptButUndeclared(kept, capabilities: declared.paramCapabilities, firstPosition: 0) 'keptUndeclared'
  			reportPositioned(project, code: ErrorCode.semanticCapabilityDeclarationBroken, message: keptUndeclaredMessage("function value for '{aliasDisplayOf(project, name: declaredName)}'", parameter: displayParamName(try sig.paramNames.get(position) otherwise panic("checkValueKeepsTheBoundary: paramNames.get OOB at {position}")), boundary: aliasDisplayOf(project, name: declaredName)), line: line, column: column, filePath: filePath)
-@@ -4558,7 +4558,7 @@ function checkValueKeepsTheBoundary(project Project, provenance ProvenanceTracer
+@@ -4634,7 +4634,7 @@ function checkValueKeepsTheBoundary(project Project, provenance ProvenanceTracer
  		return false
  	end 'aFunctionOrClosure'
  
@@ -4749,7 +4740,7 @@ index 93a67a6..78d1162 100644
  
  	if got.paramTypes.count() != declared.paramTypes.count() 'shapesDiffer'
  		panic("checkValueKeepsTheBoundary: '{String.from(gotName)}' and '{String.from(declaredName)}' have different arities — the caller agreed the shapes first")
-@@ -4603,7 +4603,7 @@ function checkDeclaredResultsHold(project Project, funcNames FunctionNameIndex,
+@@ -4679,7 +4679,7 @@ function checkDeclaredResultsHold(project Project, funcNames FunctionNameIndex,
  			continue
  		end 'nothingToJudge'
  
@@ -4758,7 +4749,7 @@ index 93a67a6..78d1162 100644
  
  		if provenance.resultMeetsCapability(index, capability: sig.returnCapability) 'theBodyKeepsIt'
  			continue
-@@ -4622,7 +4622,7 @@ function checkConformersKeepTheirRequirements(project Project, signatures Progra
+@@ -4698,7 +4698,7 @@ function checkConformersKeepTheirRequirements(project Project, signatures Progra
  
  		for requirement in iface.methods 'eachRequirement'
  			for conformer in conformers 'eachConformer'
@@ -4767,7 +4758,7 @@ index 93a67a6..78d1162 100644
  				let implIndex = try funcNames.byName.get(implName) otherwise continue
  				checkImplKeepsItsRequirement(project, impl: try funcNames.functions.get(implIndex) otherwise panic("checkConformersKeepTheirRequirements: functions.get OOB at {implIndex}"), implIndex: implIndex, iface: iface, requirement: requirement, provenance: provenance)
  			end 'eachConformer'
-@@ -4636,7 +4636,7 @@ function checkImplKeepsItsRequirement(project Project, impl IrFunction, implInde
+@@ -4712,7 +4712,7 @@ function checkImplKeepsItsRequirement(project Project, impl IrFunction, implInde
  	end 'nothingToJudge'
  
  	let kept = provenance.keptParameters(implIndex, paramCount: impl.paramCount)
@@ -4776,7 +4767,7 @@ index 93a67a6..78d1162 100644
  	let requirementName = "{String.from(iface.name)}.{String.from(requirement.name)}"
  
  	if let position = try firstKeptButUndeclared(kept, capabilities: requirement.paramCapabilities, firstPosition: requirementFirstPosition(requirement)) 'keptUndeclared'
-@@ -4666,8 +4666,8 @@ end 'contestedBrandNote'
+@@ -4742,8 +4742,8 @@ end 'contestedBrandNote'
  
  // One door. Both governing names resolve — see `TypeResolution.requireFunctionShapeOf`.
  function checkOneFunctionTypeDoor(project Project, door PendingFunctionTypeDoor, shapesAgree bool)
@@ -4787,7 +4778,7 @@ index 93a67a6..78d1162 100644
  	var signatures = programSignaturesIn(project, asker: "checkOneFunctionTypeDoor")
  
  	// A FUNCTION TYPEALIAS IS ITS OWN TYPE, AND A `cast` IS THE DOOR BETWEEN TWO OF THEM. Every other door
-@@ -5004,7 +5004,7 @@ end 'reportDiscardVerdict'
+@@ -5080,7 +5080,7 @@ end 'reportDiscardVerdict'
  // Where a discard diagnostic points, for either code — the site's own anchor, which is the position the two
  // arms share.
  function reportAtDiscardSite(project Project, siteIndex ElementIndex, code ErrorCode, message String)
@@ -4796,7 +4787,7 @@ index 93a67a6..78d1162 100644
  	let line = site.line
  	let column = site.column
  	reportPositioned(project, code: code, message: message, line: line, column: column, filePath: (try project.pendingDiscardedResults.get(siteIndex) otherwise panic("reportAtDiscardSite: siteIndex {siteIndex} is below project.pendingDiscardedResults.count()")).filePath)
-@@ -5911,7 +5911,7 @@ end 'checkFunctionRef'
+@@ -5987,7 +5987,7 @@ end 'checkFunctionRef'
  // The FIRST offending parameter is named and the walk stops, the shape `Parser.firstExistentialParam` gives
  // the closure and requirement positions: one sentence per declaration is what the author has to act on.
  function requireFunctionValueTargetTakesNoWitness(project Project, func IrFunction, opIndex ElementIndex, callee ByteArray)
@@ -4805,7 +4796,7 @@ index 93a67a6..78d1162 100644
  
  	for i in 0 upto sig.paramTypes.count() 'eachParam'
  		let paramType = try sig.paramTypes.get(i) otherwise panic("requireFunctionValueTargetTakesNoWitness: paramTypes.get OOB at {i} for '{String.from(callee)}'")
-@@ -5920,7 +5920,7 @@ function requireFunctionValueTargetTakesNoWitness(project Project, func IrFuncti
+@@ -5996,7 +5996,7 @@ function requireFunctionValueTargetTakesNoWitness(project Project, func IrFuncti
  			continue
  		end 'notAnExistential'
  
@@ -4814,7 +4805,7 @@ index 93a67a6..78d1162 100644
  		let refRange = project.opRanges.get(opIndex)
  		reportPositioned(project, code: ErrorCode.interfaceParameterInFunctionValueTarget, message: "cannot use '{String.from(callee)}' as a function value: its parameter '{String.from(paramName)}' is declared at the interface type '{String.from(interfaceNameOfType(paramType, typeNames: project.typeNames))}' — {ExistentialIsFatPointerReason}, and {IndirectCallHasNoWitnessSlotReason}. Call '{String.from(callee)}' DIRECTLY, whose signature reserves that slot, or declare the parameter at a concrete type", line: refRange.line, column: refRange.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
  		return
-@@ -6249,7 +6249,7 @@ end 'immutableArgAtTheCallMessage'
+@@ -6325,7 +6325,7 @@ end 'immutableArgAtTheCallMessage'
  
  function checkComparisonMethodsDoNotWrite(project Project, module MaxonModule, mutationSummary ParamMutationSummary, provenance ProvenanceTracer)
  	for func in module.functions 'eachFunc'
@@ -4823,7 +4814,7 @@ index 93a67a6..78d1162 100644
  
  		if not sig.takesReceiver() or sig.paramCount() != ComparisonMethodParamCount or not namesAComparisonMethod(func.name) 'notAComparisonMethod'
  			continue
-@@ -6260,7 +6260,7 @@ function checkComparisonMethodsDoNotWrite(project Project, module MaxonModule, m
+@@ -6336,7 +6336,7 @@ function checkComparisonMethodsDoNotWrite(project Project, module MaxonModule, m
  		let written = mask or recordWriteMask or provenance.keptParameters(calleeIndex, paramCount: sig.paramCount())
  
  		if maskHasParam(written, param: WitnessReceiverArgCount) 'writesItsOperand'
@@ -4832,7 +4823,7 @@ index 93a67a6..78d1162 100644
  			reportAtFunctionName(project, func: func, code: ErrorCode.comparisonMethodWritesItsParameter, message: "'{functionSourceName(project, func: func)}' writes its parameter '{displayParamName(operand)}', but a method behind the comparison operators may not modify its operand — `==`, `!=`, `<`, `<=`, `>` and `>=` pass it by value")
  			continue
  		end 'writesItsOperand'
-@@ -6351,7 +6351,7 @@ function noteSharedArgsToKeepingParams(func IrFunction, result ValueId, callee B
+@@ -6427,7 +6427,7 @@ function noteSharedArgsToKeepingParams(func IrFunction, result ValueId, callee B
  			continue
  		end 'keptWithoutAWriter'
  
@@ -4841,7 +4832,7 @@ index 93a67a6..78d1162 100644
  
  		let refusal = KeptRefusal.wording(keptWordingOf(func, callee: callee, sig: sig, args: args, position: pos)) if maskHasParam(masks.mutable, param: pos) else KeptRefusal.none
  
-@@ -6515,11 +6515,11 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
+@@ -6591,11 +6591,11 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
  		// doors for the programs each refused unresolved; they are disjoint (a name is one kind of alias or
  		// the other, never both), so their order between themselves says nothing.
  		let substituted = signatures.floatAliasResolved(signatures.functionAliasResolved(signatures.canonicalTypeArg(signatures.substitutedInstanceArg(gid, position: position))), readerFilePath: filePath)
@@ -4855,7 +4846,7 @@ index 93a67a6..78d1162 100644
  
  		// Hoisted out of the failure branch because BOTH halves below want it now, and one unconditional read
  		// is cheaper than threading it into two. It is a dense array read on a path that already does four,
-@@ -6768,7 +6768,7 @@ function checkPerInstanceArgsWith(project Project, signatures ProgramSignatures,
+@@ -6844,7 +6844,7 @@ function checkPerInstanceArgsWith(project Project, signatures ProgramSignatures,
  		let argId = try argIds.get(i) otherwise panic("checkPerInstanceArgsWith: argIds.get OOB at {i}")
  		let argTag = try func.valueTags.get(argId) otherwise panic("checkPerInstanceArgsWith: value v{argId} of function '{String.from(func.name)}' has no recorded type")
  		let argNameId = try func.valueNameIds.get(argId) otherwise panic("checkPerInstanceArgsWith: value v{argId} of function '{String.from(func.name)}' has no recorded type name")
@@ -4864,7 +4855,7 @@ index 93a67a6..78d1162 100644
  
  		if got.isEmpty() 'decays'
  			continue
-@@ -7413,7 +7413,7 @@ function existentialSiteClaimAgainst(project Project, signatures ProgramSignatur
+@@ -7489,7 +7489,7 @@ function existentialSiteClaimAgainst(project Project, signatures ProgramSignatur
  		end 'heldAtAnInterface'
  
  		let associatedName = try iface.associatedTypeNames.get(position) otherwise panic("existentialSiteClaimAgainst: associatedTypeNames.get OOB at {position} below the count this loop is bounded by")
@@ -4873,7 +4864,7 @@ index 93a67a6..78d1162 100644
  
  		// ⚠ **AN ARGUMENT STILL OPAQUE AFTER SUBSTITUTION HAS NO ANSWER, AND SILENCE WOULD BE THE WRONG ONE.**
  		// The caller substituted the site's instance through the call's own; a `typeParameter` that survived that
-@@ -7642,7 +7642,7 @@ end 'wideningPlaceHandOverAdvice'
+@@ -7718,7 +7718,7 @@ end 'wideningPlaceHandOverAdvice'
  // ⭐ **A CONCRETE CONFORMER AGAINST A CLAIM ALREADY SUBSTITUTED THROUGH ITS POSITION'S INSTANCE — E3127 for both
  // positions that have one.**
  function checkConformerAgainstSiteClaim(project Project, signatures ProgramSignatures, site GenericInstanceId, conformerTag ValueTypeTag, conformerNameId TypeNameId, interfaceName ByteArray, place WideningPlace, line LineNumber, column ColumnNumber, filePath FilePath)
@@ -4882,7 +4873,7 @@ index 93a67a6..78d1162 100644
  	let conformer = typeDisplayName(project, tag: conformerTag, nameId: conformerNameId, readerFilePath: filePath)
  	let noun = wideningPlaceNoun(place)
  
-@@ -7662,7 +7662,7 @@ end 'checkConformerAgainstSiteClaim'
+@@ -7738,7 +7738,7 @@ end 'checkConformerAgainstSiteClaim'
  // The `disagrees` arm cannot be reached and is not swept into the pass: the conformer lookup is keyed by the
  // ARRIVING type's name, which here is an INTERFACE's, and no `type` may share a name with an interface (E3006).
  function checkDeferredClaimAgainstExistentialValue(project Project, signatures ProgramSignatures, declaredSite GenericInstanceId, valueTag ValueTypeTag, valueNameId TypeNameId, interfaceName ByteArray, place WideningPlace, line LineNumber, column ColumnNumber, filePath FilePath)
@@ -4891,7 +4882,7 @@ index 93a67a6..78d1162 100644
  	let iface = String.from(interfaceName)
  
  	match claim 'declared'
-@@ -7687,7 +7687,7 @@ function checkExistentialSiteClaimAtReturn(project Project, func IrFunction, ret
+@@ -7763,7 +7763,7 @@ function checkExistentialSiteClaimAtReturn(project Project, func IrFunction, ret
  
  	let site = try returnExistentialSites.get(0) otherwise return
  	var signatures = programSignaturesIn(project, asker: "checkExistentialSiteClaimAtReturn")
@@ -4900,7 +4891,7 @@ index 93a67a6..78d1162 100644
  	let funcName = functionSourceName(project, func: func)
  	let conformer = typeDisplayName(project, tag: valueTag, nameId: valueNameId, readerFilePath: func.sourceFilePath)
  
-@@ -7748,13 +7748,13 @@ function checkReturnsAgainstInterface(project Project, module MaxonModule, signa
+@@ -7824,13 +7824,13 @@ function checkReturnsAgainstInterface(project Project, module MaxonModule, signa
  	// `return`: they are a property of the DECLARATION, and this walk visits every `ret` in the body.
  	// A function with no registered signature — none, since the parser records one per function it
  	// builds — claims nothing.
@@ -4916,7 +4907,7 @@ index 93a67a6..78d1162 100644
  
  		match op 'op'
  			ret(value) then noteReturnOp(retOpIndices, retValues: retValues, opIdx: opIdx, value: value, deadReturn: returnIsDead(project, literalRanges: literalRanges, opIdx: opIdx, value: value))
-@@ -7803,7 +7803,7 @@ function checkReturnsAgainstInterface(project Project, module MaxonModule, signa
+@@ -7879,7 +7879,7 @@ function checkReturnsAgainstInterface(project Project, module MaxonModule, signa
  		end 'op'
  	end 'eachOp'
  
@@ -4925,7 +4916,7 @@ index 93a67a6..78d1162 100644
  
  	for (position, value) in retValues.withIterator() 'eachReturn'
  		checkReturnedValueAtItsSites(project, module: module, signatures: signatures, func: func, funcIndex: funcIndex, value: value, retOpIndex: try retOpIndices.get(position.index()) otherwise panic("checkReturnsAgainstInterface: retOpIndices.get OOB at {position.index()}"), exitChains: exitChains, interfaceName: interfaceName, returnExistentialSites: returnExistentialSites)
-@@ -8015,8 +8015,8 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType,
+@@ -8091,8 +8091,8 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType,
  	// The comparison RULE is `namedAggregatesConflict`, shared verbatim with the parser's coercion
  	// sites; only the name EXTRACTION is local. The ARG side always resolves live, because an argument
  	// keeps its `named`/`structRef` tag (`aggregateNameFor` handles both).
@@ -4936,7 +4927,7 @@ index 93a67a6..78d1162 100644
  
  	// ⚠ The ask is NOT gated on the DECLARED side being an aggregate: that skips the
  	// quadrant where a SCALAR parameter meets an AGGREGATE argument — which the tag check cannot refuse
-@@ -8024,7 +8024,7 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType,
+@@ -8100,7 +8100,7 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType,
  	// `tagAdmitsNoAggregate` is what keeps that safe for a `T` parameter, and `argAggregateCannotDecay` what
  	// keeps it off a byte enum or a per-instance alias, both of which legitimately coerce to an int.
  	if not expectedAggregate.isEmpty() or (tagAdmitsNoAggregate(paramTag) and argAggregateCannotDecay(project, tag: argTag, nameId: argNameId)) 'aggregateComparable'
@@ -4945,7 +4936,7 @@ index 93a67a6..78d1162 100644
  
  		// ⭐⭐ **THE BYTE-ELEMENT BOUNDARY — the one place two DIFFERENT named aggregates denote one
  		// record, and the reason the DECLARED-function door has to ask what the BUILTIN door already
-@@ -8120,7 +8120,7 @@ end 'calleeParamAlias'
+@@ -8196,7 +8196,7 @@ end 'calleeParamAlias'
  // exactly the group a function type is not in.
  function checkFunctionArgShape(project Project, func IrFunction, declaredShape FunctionShape, declaredBrand ByteArray, argId ValueId, param ArgumentParameter, position ParamCount, callRange SourceRange, handedAt SourceRange, filePath FilePath, provenance ProvenanceTracer) returns bool
  	let gotBrand = functionValueGoverningName(project, func: func, value: argId)
@@ -4954,7 +4945,7 @@ index 93a67a6..78d1162 100644
  	var signatures = programSignaturesIn(project, asker: "checkFunctionArgShape")
  
  	// The brand rule `checkOneFunctionTypeDoor` states, at the one door that records nothing: an argument's
-@@ -8263,7 +8263,7 @@ function argAggregateCannotDecay(project Project, tag ValueTypeTag, nameId TypeN
+@@ -8339,7 +8339,7 @@ function argAggregateCannotDecay(project Project, tag ValueTypeTag, nameId TypeN
  		return false
  	end 'notEnum'
  
@@ -4963,7 +4954,7 @@ index 93a67a6..78d1162 100644
  	return layout.isBoxed()
  end 'argAggregateCannotDecay'
  
-@@ -8423,7 +8423,7 @@ function returnsExitCode(returnType MaxonReturnType) returns bool
+@@ -8499,7 +8499,7 @@ function returnsExitCode(returnType MaxonReturnType) returns bool
  end 'returnsExitCode'
  
  function entryReturnsAnExitCodeDeclaration(project Project) returns bool
@@ -5082,10 +5073,10 @@ index b2837fc..d4826b1 100644
  	implementers.push(recorded)
  
 diff --git a/maxon-bin/Compiler/SignatureIndex.maxon b/maxon-bin/Compiler/SignatureIndex.maxon
-index 9b54bfb..28cd305 100644
+index 22ea244..e58f45f 100644
 --- a/maxon-bin/Compiler/SignatureIndex.maxon
 +++ b/maxon-bin/Compiler/SignatureIndex.maxon
-@@ -7932,7 +7932,7 @@ export function managedFieldDropCallee(signatures ProgramSignatures, typeNames T
+@@ -8165,7 +8165,7 @@ export function managedFieldDropCallee(signatures ProgramSignatures, typeNames T
  	// the `isGenericAlias` test below reads the RAW name on one side and the RESOLVED one on the other —
  	// agreeing only because a tuple alias is never also a generic alias, which nothing enforces. A value
  	// cloned by one strategy is dropped by the callee the other returns, so the two must resolve at ONE tier.
@@ -5094,7 +5085,7 @@ index 9b54bfb..28cd305 100644
  	return managedNameDropCallee(signatures, declaredName: name)
  end 'managedFieldDropCallee'
  
-@@ -8539,7 +8539,7 @@ module function managedFieldCascadeStrategy(signatures ProgramSignatures, typeNa
+@@ -8772,7 +8772,7 @@ module function managedFieldCascadeStrategy(signatures ProgramSignatures, typeNa
  	// Resolved through `denotedAggregateName` for `managedFieldDropCallee`'s reason, and it must be the SAME
  	// resolution: a value cloned by this strategy is dropped by the callee that one returns, so a name the two
  	// resolved differently would clone one type and drop another.
@@ -5103,7 +5094,7 @@ index 9b54bfb..28cd305 100644
  	return managedNameCascadeStrategy(signatures, declaredName: name, asElement: asElement, action: action)
  end 'managedFieldCascadeStrategy'
  
-@@ -18986,7 +18986,7 @@ export type ProgramSignatures
+@@ -19221,7 +19221,7 @@ export type ProgramSignatures
  	end 'recordTypeClaims'
  
  	export function settleAliasFamiliesBesideNominals()
@@ -5112,7 +5103,7 @@ index 9b54bfb..28cd305 100644
  		var ownDeclarations = self.mainThreadSettled()
  		ownDeclarations.writtenTypeClaims = TypeNameClaimLog.create()
  
-@@ -19968,7 +19968,7 @@ export type ProgramSignatures
+@@ -20203,7 +20203,7 @@ export type ProgramSignatures
  
  		for position in 0 upto declaredNames.count() 'eachDeclaredName'
  			let name = try declaredNames.get(position) otherwise panic("stdlibShadowSpellings: declaredNames.get OOB at {position} below count {declaredNames.count()}")
@@ -5121,7 +5112,7 @@ index 9b54bfb..28cd305 100644
  
  			if minted.equals(name) or spelled.contains(minted) 'nothingNewToSpell'
  				continue
-@@ -20319,7 +20319,7 @@ export type ProgramSignatures
+@@ -20554,7 +20554,7 @@ export type ProgramSignatures
  		// helper and only this array knows which declarations have one; a program that declares no default
  		// does not enter the loop at all.
  		for entry in paramDefaults 'eachDeclarationThatDefaultsSomething'
@@ -5130,7 +5121,7 @@ index 9b54bfb..28cd305 100644
  
  			if key.equals(entry.name) 'theHelperKeepsTheNameTheScanMintedForIt'
  				continue
-@@ -21608,7 +21608,7 @@ export type ProgramSignatures
+@@ -21843,7 +21843,7 @@ export type ProgramSignatures
  
  	function computedWitnessByRefMasks() returns WitnessByRefMaskMap
  		var masks = WitnessByRefMaskMap.create()
@@ -5139,7 +5130,7 @@ index 9b54bfb..28cd305 100644
  
  		for (site, info) in self.settledDeclarations().funcParamReassigns 'eachRecorded'
  			let conformer = try info.callability.methodTypeName() otherwise continue
-@@ -21643,7 +21643,7 @@ export type ProgramSignatures
+@@ -21878,7 +21878,7 @@ export type ProgramSignatures
  	end 'noteWitnessRequirementsWrittenBy'
  
  	export function interfaceFormalBrand(interfaceName ByteArray, formalName ByteArray) returns ByteArray
@@ -5148,7 +5139,7 @@ index 9b54bfb..28cd305 100644
  
  		return match self.scopedGenericAliasDecl(formalName, readerFilePath: declaring.declFilePath) 'alias'
  			declared gives brandOfDeclaredSpelling(formalName)
-@@ -21705,7 +21705,7 @@ export type ProgramSignatures
+@@ -21940,7 +21940,7 @@ export type ProgramSignatures
  	end 'bareNameTakesATypeParameterByRef'
  
  	export function calleeTakesATypeParameterByRefAt(callee ByteArray, argIndex ElementIndex, label ByteArray) returns bool
@@ -5157,7 +5148,7 @@ index 9b54bfb..28cd305 100644
  
  		if not positions.declaresATypeParameterParam() 'noTypeParameterParam'
  			return false
-@@ -21729,7 +21729,7 @@ export type ProgramSignatures
+@@ -21964,7 +21964,7 @@ export type ProgramSignatures
  			panic("ProgramSignatures.byRefOf: '{String.from(callee)}' names a generic function instance that no parse filed — its template's by-reference facts cannot be reached, and answering 'all by value' would pass a value where the instance's body reads a cell")
  		end 'anInstanceNothingFiled'
  
@@ -5166,7 +5157,7 @@ index 9b54bfb..28cd305 100644
  		var declarations = ByRefDeclarationArray.create()
  
  		for site in sites 'eachDeclaration'
-@@ -21825,7 +21825,7 @@ export type ProgramSignatures
+@@ -22060,7 +22060,7 @@ export type ProgramSignatures
  	end 'programTakesAParamByRef'
  
  	export function reassignsAnOpaqueParameter(callee ByteArray) returns bool
@@ -5175,7 +5166,7 @@ index 9b54bfb..28cd305 100644
  		let convention = self.byRefOf(callee)
  
  		for index in 0 upto positions.count() 'eachParam'
-@@ -22197,7 +22197,7 @@ export type ProgramSignatures
+@@ -22432,7 +22432,7 @@ export type ProgramSignatures
  
  		while ready.count() > 0 'publishSettled'
  			let forwarder = try ready.pop() otherwise panic("closeFreshReturnForwards: pop from a non-empty worklist")
@@ -5184,7 +5175,7 @@ index 9b54bfb..28cd305 100644
  			self.publishSweptBodyFact(name, marked: self.mainThreadSettled().funcReturnsFreshRecord, counts: self.mainThreadSettled().funcFreshReturningDeclarationCounts)
  
  			if not self.keyReturnsFreshRecord(name) or not waiters.contains(name) 'nothingWakes'
-@@ -23937,7 +23937,7 @@ export type ProgramSignatures
+@@ -24160,7 +24160,7 @@ export type ProgramSignatures
  
  	export function evaluateInitializers(anchors ParserAnchors)
  		for i in 0 upto self.mainThreadSettled().decls.count() 'eachDecl'
@@ -5193,7 +5184,7 @@ index 9b54bfb..28cd305 100644
  
  			match decl.outcome 'state'
  				// Already settled by an earlier decl's DFS — it referenced this one. A managed constant is
-@@ -23961,7 +23961,7 @@ export type ProgramSignatures
+@@ -24184,7 +24184,7 @@ export type ProgramSignatures
  		// inside the loop above: a decl's outcome is not final until every DFS that could reach it has
  		// run (a cycle rewrites its members' outcomes from the inside).
  		for j in 0 upto self.mainThreadSettled().decls.count() 'eachOutcome'
@@ -5202,7 +5193,7 @@ index 9b54bfb..28cd305 100644
  			self.attributeHashEventsTo(HashEventSource.library if self.declaredByTheCorpus(decl.declFilePath) else HashEventSource.author)
  			self.hash = self.mixConstant(self.hash, decl: decl)
  		end 'eachOutcome'
-@@ -24447,7 +24447,7 @@ export type ProgramSignatures
+@@ -24683,7 +24683,7 @@ export type ProgramSignatures
  	// `LowerMaxonToStd.ensureImmortalBoxNode` reaches only what the root names, exactly as
  	// `Parser.pushConstNode`'s header records for the fold arena one tier up.
  	function describeConstStructBox(typeName ByteArray, fields ConstFactoryArgumentValueArray, calls ConstFactoryCallArray, below ElementIndex, declName ByteArray, elementFilePath FilePath, nodes ImmortalBoxNodeArray) returns ConstStructBoxOutcome
@@ -5211,7 +5202,7 @@ index 9b54bfb..28cd305 100644
  
  		if fields.count() != layout.fieldCount() 'notLayoutParallel'
  			panic("ProgramSignatures.describeConstStructBox: '{String.from(declName)}' constructs `{String.from(typeName)}` with {fields.count()} field value(s) against a layout of {layout.fieldCount()} — the fold tier fills one entry per DECLARED field (`Parser.evalConstStructConstructionInto`), from the literal or from the field's default, and refuses the declaration otherwise")
-@@ -24903,7 +24903,7 @@ export type ProgramSignatures
+@@ -25139,7 +25139,7 @@ export type ProgramSignatures
  	end 'concreteColumnSlot'
  
  	function nestedRecordBoxSlot(layout StructLayout, index FieldIndex, declared MaxonType, walk BoxImageWalk) returns ContainerBoxSlot
@@ -5220,7 +5211,7 @@ index 9b54bfb..28cd305 100644
  
  		if walk.isInside(nested.name) 'aRecordThatContainsItself'
  			return ContainerBoxSlot.notImageable
-@@ -25162,7 +25162,7 @@ export type ProgramSignatures
+@@ -25399,7 +25399,7 @@ export type ProgramSignatures
  				names = "{names}, "
  			end 'separator'
  
@@ -5229,7 +5220,7 @@ index 9b54bfb..28cd305 100644
  			names = "{names}{String.from(memberDecl.name)}"
  
  			if member > owner 'laterDeclaration'
-@@ -25301,7 +25301,7 @@ export type ProgramSignatures
+@@ -25540,7 +25540,7 @@ export type ProgramSignatures
  	end 'letCastDeclarationOf'
  
  	function noteCrossFileConstantRead(index ElementIndex, name ByteArray, readerFilePath FilePath)
@@ -5238,7 +5229,7 @@ index 9b54bfb..28cd305 100644
  
  		if decl.declFilePath.toString().equals(readerFilePath.toString()) 'sameFile'
  			return
-@@ -25390,7 +25390,7 @@ export type ProgramSignatures
+@@ -25629,7 +25629,7 @@ export type ProgramSignatures
  	// declaration's own diagnostic has already failed the build, and a slot with no value is a slot
  	// with no bytes to emit.
  	function resolvedGlobalOf(index ElementIndex, into TypeNameInterner) returns TopLevelGlobalLookup
@@ -5247,7 +5238,7 @@ index 9b54bfb..28cd305 100644
  
  		match decl.outcome 'state'
  			// ⚠ **A FOLDED ENUM OR UNION CASE IS TAGGED `named`, SO THIS ARM INTERNS INTO `into` TOO.** The
-@@ -25508,7 +25508,7 @@ export type ProgramSignatures
+@@ -25747,7 +25747,7 @@ export type ProgramSignatures
  
  	export function addImagedModuleLetKinds(into HeldRecordKinds)
  		for i in 0 upto self.settledDeclarations().decls.count() 'eachDecl'
@@ -5256,7 +5247,7 @@ index 9b54bfb..28cd305 100644
  			into.kinds.insert(kind)
  		end 'eachDecl'
  	end 'addImagedModuleLetKinds'
-@@ -25822,7 +25822,7 @@ export type ProgramSignatures
+@@ -26061,7 +26061,7 @@ export type ProgramSignatures
  		var callees = NameRoster.create()
  
  		for i in 0 upto self.settledDeclarations().decls.count() 'each'
@@ -5265,7 +5256,7 @@ index 9b54bfb..28cd305 100644
  
  			if decl.declaredByTheCorpus 'creditedAtTheRead'
  				continue
-@@ -25884,7 +25884,7 @@ export type ProgramSignatures
+@@ -26123,7 +26123,7 @@ export type ProgramSignatures
  	end 'appendConstructedFieldInterfaces'
  
  	function appendFieldInterfacesOf(names NameRoster, typeName ByteArray)
@@ -5274,7 +5265,7 @@ index 9b54bfb..28cd305 100644
  			undeclared panic("ProgramSignatures.appendFieldInterfacesOf: an initializer constructs `{String.from(typeName)}`, which no file declares — the fold tier builds a `construct` only from a layout it resolved")
  			declared(found) gives found
  		end 'declared'
-@@ -26093,7 +26093,7 @@ export type ProgramSignatures
+@@ -26332,7 +26332,7 @@ export type ProgramSignatures
  		var need = ModuleInitNeed.none
  
  		for i in 0 upto self.settledDeclarations().decls.count() 'each'
@@ -5283,7 +5274,7 @@ index 9b54bfb..28cd305 100644
  
  			if decl.declaredByTheCorpus 'theLibrarys'
  				continue
-@@ -26434,9 +26434,9 @@ export type ProgramSignatures
+@@ -26673,9 +26673,9 @@ export type ProgramSignatures
  	// same one `boxedUnionCaseBoxOf` follows for the payload-free spelling. Both reach the declaration through
  	// `unionCaseLayoutOf`, so the two builds cannot disagree about which cases exist or how wide the box is.
  	function globalUnionCaseConstruct(typeName ByteArray, caseName ByteArray, payloads ConstFactoryArgumentValueArray, calls ConstFactoryCallArray, declName ByteArray, elementFilePath FilePath) returns GlobalInitCall
@@ -5295,7 +5286,7 @@ index 9b54bfb..28cd305 100644
  
  		if payloads.count() != declared.count() 'notSlotParallel'
  			panic("ProgramSignatures.globalUnionCaseConstruct: '{String.from(declName)}' builds `{String.from(typeName)}.{String.from(caseName)}` with {payloads.count()} payload value(s) against a case of arity {declared.count()} — the fold tier fills one entry per DECLARED slot (`Parser.evalConstUnionCaseInto`) and refuses the declaration otherwise")
-@@ -26583,8 +26583,8 @@ export type ProgramSignatures
+@@ -26822,8 +26822,8 @@ export type ProgramSignatures
  	end 'arrayElementRangedAlias'
  
  	export function instancesDifferOnlyByElementDeclaration(source GenericInstanceId, target GenericInstanceId, readerFilePath FilePath) returns bool
@@ -5306,7 +5297,7 @@ index 9b54bfb..28cd305 100644
  
  		if not self.instanceNameStem(source).equals(self.instanceNameStem(target)) or sourceArgs.count() != targetArgs.count() or not self.genericInstances.instanceShape(source).sameAs(self.genericInstances.instanceShape(target)) 'notOneContainerShape'
  			return false
-@@ -26619,8 +26619,8 @@ export type ProgramSignatures
+@@ -26858,8 +26858,8 @@ export type ProgramSignatures
  			return false
  		end 'notTwoNamedElements'
  
@@ -5317,7 +5308,7 @@ index 9b54bfb..28cd305 100644
  
  		if not sourceSpelledAliasName(sourceElement.name).equals(sourceSpelledAliasName(targetElement.name)) 'twoNames'
  			return false
-@@ -27341,7 +27341,7 @@ export type ProgramSignatures
+@@ -27580,7 +27580,7 @@ export type ProgramSignatures
  	// The arena node one empty declared container's box IS — the same walk whether the box is a `let`'s own
  	// record or a FIELD of one, so a `Map` global and a `Map` field lay down one description.
  	function declaredContainerBoxNode(giid GenericInstanceId, nodes ImmortalBoxNodeArray) returns ElementIndex
@@ -5326,7 +5317,7 @@ index 9b54bfb..28cd305 100644
  		var walk = BoxImageWalk.over(nodes)
  
  		match self.recordBoxNode(BoxOwner.generic(giid), layout: layout, size: self.genericInstanceBoxSize(giid), walk: walk) 'outcome'
-@@ -28073,11 +28073,11 @@ export type ProgramSignatures
+@@ -28312,11 +28312,11 @@ export type ProgramSignatures
  	end 'rangedIdentityOfKey'
  
  	export function settleAliasImplementsClauses()
@@ -5340,7 +5331,7 @@ index 9b54bfb..28cd305 100644
  				self.mainThreadSettled().implementsVerdicts.upsert(key, value: AliasImplementsVerdict.notARangedAlias)
  				continue
  			end 'noRangedAliasOfThatName'
-@@ -28131,7 +28131,7 @@ export type ProgramSignatures
+@@ -28370,7 +28370,7 @@ export type ProgramSignatures
  	end 'implementsLinkKeys'
  
  	function linkedToParentIdentity(clause AliasImplementsClause) returns AliasImplementsClause
@@ -5349,7 +5340,7 @@ index 9b54bfb..28cd305 100644
  		return AliasImplementsClause.create(clause.name, parentName: identity, visibility: clause.visibility, declFilePath: clause.declFilePath, isFloat: clause.isFloat, low: clause.low, high: clause.high)
  	end 'linkedToParentIdentity'
  
-@@ -28152,13 +28152,13 @@ export type ProgramSignatures
+@@ -28391,13 +28391,13 @@ export type ProgramSignatures
  	// Every verdict, not only a link, moves the hash: it is the parse memo's key, and a verdict that
  	// changes a diagnostic must re-parse the files that report it.
  	function mixImplementsVerdict(clause AliasImplementsClause)
@@ -5365,7 +5356,7 @@ index 9b54bfb..28cd305 100644
  		return self.aliasAncestorsOf(own, readerFilePath: clause.declFilePath).contains(own)
  	end 'implementsLinkReturnsTo'
  
-@@ -28184,9 +28184,9 @@ export type ProgramSignatures
+@@ -28423,9 +28423,9 @@ export type ProgramSignatures
  		var reader = readerFilePath
  
  		while ancestors.count() <= self.settledDeclarations().implementsParents.count() 'eachAncestor'
@@ -5378,7 +5369,7 @@ index 9b54bfb..28cd305 100644
  
  			if parent.isEmpty() 'aLinkWithNoParent'
  				panic("ProgramSignatures.aliasAncestorsOf: '{String.from(link.name)}' in {link.declFilePath} is linked to '{String.from(link.parentName)}', which that file does not mean as a ranged typealias — only a resolved clause is linked")
-@@ -28522,7 +28522,7 @@ export type ProgramSignatures
+@@ -28751,7 +28751,7 @@ export type ProgramSignatures
  	end 'arrayInstanceOrNone'
  
  	export function ambiguousAliasCandidates(name ByteArray, readerFilePath FilePath) returns AmbiguousCandidates
@@ -5387,7 +5378,7 @@ index 9b54bfb..28cd305 100644
  
  		if not severalMeanings(self.readerMeaningsOf(name, claims: claims, readerFilePath: readerFilePath)) 'atMostOneMeaning'
  			return AmbiguousCandidates.create(sharedEmptyCandidateNames, ownDeclarationUnqualifiable: false)
-@@ -28549,7 +28549,7 @@ export type ProgramSignatures
+@@ -28778,7 +28778,7 @@ export type ProgramSignatures
  
  	function ambiguityClaimsOf(name ByteArray) returns TypeNameClaimArray
  		if self.settledDeclarations().interfaces.hasLibraryRenames() 'aLibraryTypeMayHaveMoved'
@@ -5396,7 +5387,7 @@ index 9b54bfb..28cd305 100644
  
  			if not moved.equals(name) 'theLibrarysDeclarationMoved'
  				return self.movedTypeNameClaims(name, moved: moved)
-@@ -28560,7 +28560,7 @@ export type ProgramSignatures
+@@ -28789,7 +28789,7 @@ export type ProgramSignatures
  			return claims
  		end 'severalKindsHoldTheName'
  
@@ -5405,7 +5396,7 @@ index 9b54bfb..28cd305 100644
  
  		if contested.count() == 0 'noRangedAliasOfThisNameIsContested'
  			return self.otherFormAmbiguityClaims(name)
-@@ -28610,7 +28610,7 @@ export type ProgramSignatures
+@@ -28839,7 +28839,7 @@ export type ProgramSignatures
  	end 'offerAmbiguousCandidate'
  
  	function otherFormAmbiguityClaims(name ByteArray) returns TypeNameClaimArray
@@ -5414,7 +5405,7 @@ index 9b54bfb..28cd305 100644
  
  		if functionAliases.count() > 0 'severalFilesDeclareTheFunctionAlias'
  			var claims = TypeNameClaimArray.create()
-@@ -28643,10 +28643,10 @@ export type ProgramSignatures
+@@ -28872,10 +28872,10 @@ export type ProgramSignatures
  		self.indexGenericAliasDeclarations()
  
  		var claims = TypeNameClaimArray.create()
@@ -5427,7 +5418,7 @@ index 9b54bfb..28cd305 100644
  			claims.push(self.genericAliasDeclClaim(decl))
  		end 'eachDeclaration'
  
-@@ -28685,8 +28685,8 @@ export type ProgramSignatures
+@@ -28914,8 +28914,8 @@ export type ProgramSignatures
  	end 'namespaceMemberOf'
  
  	function namespaceMemberIn(qualified ByteArray, member ByteArray, readerFilePath FilePath) returns NamespaceMember
@@ -5438,7 +5429,7 @@ index 9b54bfb..28cd305 100644
  		var reached = MeaningsReached.none
  		var chosenAt = 0 as ElementIndex
  		var hiddenAt = claims.count()
-@@ -28758,7 +28758,7 @@ export type ProgramSignatures
+@@ -28987,7 +28987,7 @@ export type ProgramSignatures
  				continue
  			end 'alreadyIndexed'
  
@@ -5447,7 +5438,7 @@ index 9b54bfb..28cd305 100644
  
  			if spelled.count() < 2 'heldOnce'
  				continue
-@@ -28965,7 +28965,7 @@ export type ProgramSignatures
+@@ -29194,7 +29194,7 @@ export type ProgramSignatures
  			return
  		end 'noOtherKindHoldsIt'
  
@@ -5456,7 +5447,7 @@ index 9b54bfb..28cd305 100644
  
  		if not everyClaimMayCoexist(name, claims: claims, directories: self.settledDeclarations().fileModuleDirectories) 'thePairIsADuplicateDeclaration'
  			return
-@@ -29009,7 +29009,7 @@ export type ProgramSignatures
+@@ -29238,7 +29238,7 @@ export type ProgramSignatures
  		end 'anInterface'
  
  		let aliasKey = self.aliasFamilyIdentity(name)
@@ -5465,7 +5456,7 @@ index 9b54bfb..28cd305 100644
  
  		if contestedAliases.count() > 0 'severalFilesDeclareTheRangedAlias'
  			for (_, alias) in contestedAliases 'eachDeclaringFile'
-@@ -29022,7 +29022,7 @@ export type ProgramSignatures
+@@ -29251,7 +29251,7 @@ export type ProgramSignatures
  			end 'theSoleRangedAlias'
  		end 'atMostOneFileDoes'
  
@@ -5474,7 +5465,7 @@ index 9b54bfb..28cd305 100644
  
  		if contestedFunctionAliases.count() > 0 'severalFilesDeclareTheFunctionAlias'
  			for (_, alias) in contestedFunctionAliases 'eachDeclaringFile'
-@@ -29136,7 +29136,7 @@ export type ProgramSignatures
+@@ -29365,7 +29365,7 @@ export type ProgramSignatures
  			return TypeNameHiding.notHidden
  		end 'theCompilerWroteTheReference'
  
@@ -5483,7 +5474,7 @@ index 9b54bfb..28cd305 100644
  
  		if claims.isEmpty() 'noDeclarationHoldsTheName'
  			return TypeNameHiding.notHidden
-@@ -29332,14 +29332,14 @@ export type ProgramSignatures
+@@ -29561,14 +29561,14 @@ export type ProgramSignatures
  	// Every declaration index is filed per name, unlike `indexInterfaceDeclarationSites`, because the
  	// reader-scoped door ranks a name's claimants against each other and so needs all of them.
  	function indexGenericAliasDeclarations()
@@ -5500,7 +5491,7 @@ index 9b54bfb..28cd305 100644
  			var held = try self.mainThreadSettled().genericAliasDeclIndexByName.get(decl.aliasName) otherwise GenericAliasDeclIndexArray.create()
  			held.push(at)
  			self.mainThreadSettled().genericAliasDeclIndexByName.upsert(decl.aliasName, value: held)
-@@ -29352,7 +29352,7 @@ export type ProgramSignatures
+@@ -29581,7 +29581,7 @@ export type ProgramSignatures
  	module function scopedGenericAliasDecl(name ByteArray, readerFilePath FilePath) returns ScopedGenericAliasDecl
  		self.indexGenericAliasDeclarations()
  
@@ -5509,7 +5500,7 @@ index 9b54bfb..28cd305 100644
  
  		if held.count() == 0 'noDeclarationHeld'
  			return ScopedGenericAliasDecl.undeclared
-@@ -29398,7 +29398,7 @@ export type ProgramSignatures
+@@ -29627,7 +29627,7 @@ export type ProgramSignatures
  		end 'everySiteIndexed'
  
  		for at in self.settledDeclarations().interfaceDeclSitesIndexedThrough upto self.settledDeclarations().interfaceDeclSites.count() 'eachUnindexedSite'
@@ -5518,7 +5509,7 @@ index 9b54bfb..28cd305 100644
  
  			let name = try site.name.declaredName() otherwise continue
  
-@@ -29414,7 +29414,7 @@ export type ProgramSignatures
+@@ -29643,7 +29643,7 @@ export type ProgramSignatures
  	function interfaceDeclaredIn(name ByteArray) returns DeclaredTypeName
  		self.indexInterfaceDeclarationSites()
  		let at = try self.settledDeclarations().interfaceDeclSiteIndexByName.get(name) otherwise return DeclaredTypeName.undeclared
@@ -5527,7 +5518,7 @@ index 9b54bfb..28cd305 100644
  		return DeclaredTypeName.declared(TypeDeclKind.interfaceType, visibility: site.visibility, declFilePath: site.path)
  	end 'interfaceDeclaredIn'
  
-@@ -29719,8 +29719,8 @@ export type ProgramSignatures
+@@ -29948,8 +29948,8 @@ export type ProgramSignatures
  	end 'identitiesConflict'
  
  	function tuplesConflict(expected ByteArray, got ByteArray) returns bool
@@ -5538,7 +5529,7 @@ index 9b54bfb..28cd305 100644
  
  		if expectedLayout.fieldCount() != gotLayout.fieldCount() 'differentArity'
  			return true
-@@ -30389,7 +30389,7 @@ export type ProgramSignatures
+@@ -30618,7 +30618,7 @@ export type ProgramSignatures
  	export function genericInstanceDeclaringFiles(id GenericInstanceId) returns FilePathArray
  		var files = FilePathArray.create()
  
@@ -5547,16 +5538,7 @@ index 9b54bfb..28cd305 100644
  
  		for entry in declared 'eachDeclaration'
  			if not self.genericAliasSpellingIsSuperseded(entry.aliasName) 'theNameIsNotContested'
-@@ -30647,7 +30647,7 @@ export type ProgramSignatures
- 	// there. This refuses a second time rather than trusting that, because what it would hand back is a
- 	// parameter list, and the wrong member's list is a silently wrong field mapping.
- 	export function constFactoryConstructionOf(callee ByteArray) returns ConstFactoryConstruction
--		view overloads = self.overloadedDeclsOf(callee)
-+		let overloads = self.overloadedDeclsOf(callee)
- 
- 		if overloads.count() != 1 'notExactlyOneDeclaration'
- 			return ConstFactoryConstruction.unfoldable
-@@ -30694,7 +30694,7 @@ export type ProgramSignatures
+@@ -30921,7 +30921,7 @@ export type ProgramSignatures
  			return self.settledDeclarations().conformerIndex
  		end 'alreadyBuilt'
  
@@ -5565,7 +5547,7 @@ index 9b54bfb..28cd305 100644
  		var index = DeclaredConformerIndex.over(self.settledDeclarations().structNamesInDeclOrder, enumNames: self.declaredEnumNames(), swept: swept, interfaces: self.settledDeclarations().interfaces)
  		var ownDeclarations = self.mainThreadSettled()
  		ownDeclarations.conformerIndex = index
-@@ -30789,7 +30789,7 @@ export type ProgramSignatures
+@@ -31016,7 +31016,7 @@ export type ProgramSignatures
  		var declared = DeclaredConformanceMap.create()
  
  		for name in self.settledDeclarations().structNamesInDeclOrder 'eachDeclaredType'
@@ -5574,7 +5556,7 @@ index 9b54bfb..28cd305 100644
  			recordSweptConformances(declared, name: name, conformsTo: layout.conformsTo)
  		end 'eachDeclaredType'
  
-@@ -31633,7 +31633,7 @@ export type ProgramSignatures
+@@ -31860,7 +31860,7 @@ export type ProgramSignatures
  			return false
  		end 'closesTheCycle'
  
@@ -5583,7 +5565,7 @@ index 9b54bfb..28cd305 100644
  
  		visiting.insert(name)
  
-@@ -31650,7 +31650,7 @@ export type ProgramSignatures
+@@ -31877,7 +31877,7 @@ export type ProgramSignatures
  
  			// LOAD-BEARING TWICE: it skips the slots that name no struct at all (a ranged alias, an enum, a
  			// generic alias), and it is what proves the recursion's precondition.
@@ -5592,7 +5574,7 @@ index 9b54bfb..28cd305 100644
  
  			if self.hasRegisteredLayout(fieldStruct) and not self.structIsConstructibleWithin(fieldStruct, visiting: visiting, proven: proven) 'fieldCannotBeBuilt'
  				return false
-@@ -32453,7 +32453,7 @@ export type ProgramSignatures
+@@ -32680,7 +32680,7 @@ export type ProgramSignatures
  
  	function rangeScopedTupleElement(element MaxonType, slotScopeFilePath FilePath) returns MaxonType
  		let name = self.nameOfId(typeNameIdOf(element))
@@ -5601,7 +5583,7 @@ index 9b54bfb..28cd305 100644
  
  		if scoped.equals(name) 'thisFileNamesTheBareDeclaration'
  			return element
-@@ -32493,7 +32493,7 @@ export type ProgramSignatures
+@@ -32720,7 +32720,7 @@ export type ProgramSignatures
  		end 'notStruct'
  
  		let name = self.nameOfId(typeNameIdOf(element))
@@ -5610,7 +5592,7 @@ index 9b54bfb..28cd305 100644
  
  		if canonical.equals(name) 'alreadyCanonical'
  			return element
-@@ -32511,7 +32511,7 @@ export type ProgramSignatures
+@@ -32738,7 +32738,7 @@ export type ProgramSignatures
  			return name if memoized.isEmpty() else memoized
  		end 'alreadyDerived'
  
@@ -5619,7 +5601,7 @@ index 9b54bfb..28cd305 100644
  
  		// ⚠⚠ **SEEDED BEFORE THE WALK WITH AN EMPTY NAME, WHICH A HIT READS AS THE NAME ITSELF — THE MEMO IS
  		// ALSO THIS WALK'S RE-ENTRY MARKER.**
-@@ -32713,7 +32713,7 @@ export type ProgramSignatures
+@@ -32940,7 +32940,7 @@ export type ProgramSignatures
  	// what the parser needs to build the artifact's own copy of the layout (`ParseStaging.rewriteTypeIds` rewrites
  	// an artifact layout's field types in place, so the index's copy may never be shared with it).
  	export function adoptTupleLayout(name ByteArray, into TypeNameInterner) returns StructLayout
@@ -5628,7 +5610,7 @@ index 9b54bfb..28cd305 100644
  		var adopted = MaxonTypeArray.create()
  
  		for element in layout.fieldTypes 'eachElement'
-@@ -32884,7 +32884,7 @@ export type ProgramSignatures
+@@ -33111,7 +33111,7 @@ export type ProgramSignatures
  			return false
  		end 'cannotNameAGenericAlias'
  
@@ -5637,7 +5619,7 @@ index 9b54bfb..28cd305 100644
  		return self.isGenericAliasInAnyFile(name) and self.genericAliasSpellingIsSuperseded(name)
  	end 'typeArgSpellingIsSuperseded'
  
-@@ -32924,7 +32924,7 @@ export type ProgramSignatures
+@@ -33151,7 +33151,7 @@ export type ProgramSignatures
  	end 'genericAliasInstanceUnder'
  
  	function genericAliasMintFor(name ByteArray, readerFilePath FilePath) returns ByteArray
@@ -5646,7 +5628,7 @@ index 9b54bfb..28cd305 100644
  		let mints = try self.settledDeclarations().genericAliasMints.get(name) otherwise panic("ProgramSignatures.genericAliasMintFor: '{String.from(name)}' is contested and its mints were never recorded — `recordGenericAliasContest` files both together")
  
  		match self.declaringFileMeantBy(name, byFile: byFile, readerFilePath: readerFilePath) 'meant'
-@@ -33113,7 +33113,7 @@ export type ProgramSignatures
+@@ -33340,7 +33340,7 @@ export type ProgramSignatures
  
  		// A NON-GENERIC declared type, and every name no `type` declares at all, answer the shared empty here —
  		// so the whole generics-free corpus pays one map probe and allocates nothing.
@@ -5655,7 +5637,7 @@ index 9b54bfb..28cd305 100644
  
  		if baseParams.isEmpty() or not scopeBindsEveryTypeParam(baseParams, scopeParamNames: scopeParamNames) 'notBoundByThisScope'
  			return ScopedGenericInstance.notInScope
-@@ -33336,7 +33336,7 @@ export type ProgramSignatures
+@@ -33563,7 +33563,7 @@ export type ProgramSignatures
  			return false
  		end 'anotherBase'
  
@@ -5664,7 +5646,7 @@ index 9b54bfb..28cd305 100644
  
  		if args.count() != paramNames.count() 'anotherArity'
  			return false
-@@ -34424,7 +34424,7 @@ export type ProgramSignatures
+@@ -34651,7 +34651,7 @@ export type ProgramSignatures
  		// The cycle break is `declaredInstanceSupportsDeepClone`'s, for its reason and in its set: the mangled
  		// instance name lives behind the reserved `__` prefix no declaration may take. A cycle answers "owns
  		// nothing" because a type that owns itself is E4014's to refuse, not this refusal's to guess at.
@@ -5673,7 +5655,7 @@ index 9b54bfb..28cd305 100644
  
  		if visited.contains(mangled) 'alreadyWalked'
  			return false
-@@ -34455,7 +34455,7 @@ export type ProgramSignatures
+@@ -34682,7 +34682,7 @@ export type ProgramSignatures
  			return self.instanceOwnsASlotOfKind(genericInstanceIdOf(slot), kind: kind, visited: visited)
  		end 'aNestedInstance'
  
@@ -5682,7 +5664,7 @@ index 9b54bfb..28cd305 100644
  
  		for element in elements 'eachTupleElement'
  			if self.slotOwnsASlotOfKind(element, kind: kind, visited: visited) 'anElementOwnsIt'
-@@ -34491,8 +34491,8 @@ export type ProgramSignatures
+@@ -34718,8 +34718,8 @@ export type ProgramSignatures
  			return shown
  		end 'nothingToTellApart'
  
@@ -5693,7 +5675,7 @@ index 9b54bfb..28cd305 100644
  
  		if layout.fieldCount() != otherLayout.fieldCount() 'twoShapesPrintAlike'
  			panic("ProgramSignatures.tupleDisplayNoted: '{shown}' and '{otherShown}' print alike, so both tuples hold one element count — these hold {layout.fieldCount()} and {otherLayout.fieldCount()}")
-@@ -34524,7 +34524,7 @@ export type ProgramSignatures
+@@ -34751,7 +34751,7 @@ export type ProgramSignatures
  	end 'elementNote'
  
  	export function typeDisplayName(t MaxonType) returns String
@@ -5702,7 +5684,27 @@ index 9b54bfb..28cd305 100644
  		var names = StringArray.create()
  
  		for i in 0 upto layout.fieldCount() 'eachElement'
-@@ -35964,7 +35964,7 @@ export type ProgramSignatures
+@@ -35734,7 +35734,7 @@ export type ProgramSignatures
+ 	end 'declarationsVisibleFrom'
+ 
+ 	export function soleVisibleDeclarationOf(callee ByteArray, readerFilePath FilePath) returns OverloadedDecl throws MapError
+-		view declarations = self.overloadedDeclsOf(callee)
++		let declarations = self.overloadedDeclsOf(callee)
+ 		var soleIndex = 0 as ElementIndex
+ 		var visibleCount = 0 as ElementIndex
+ 
+@@ -35799,8 +35799,8 @@ export type ProgramSignatures
+ 	// E3088), and asking for it separately would be a second lookup of the same key that could answer about
+ 	// a different declaration if anything refiled the name in between.
+ 	export function calleeVisibilityFrom(callee ByteArray, readerFilePath FilePath) returns SymbolVisibility
+-		view declarations = self.overloadedDeclsOf(callee)
+-		view templates = self.genericTemplatesOf(callee)
++		let declarations = self.overloadedDeclsOf(callee)
++		let templates = self.genericTemplatesOf(callee)
+ 
+ 		if declarations.count() == 0 and templates.count() == 0 'aRegisteredMemberName'
+ 			let site = try self.settledDeclarations().funcDeclSites.get(callee) otherwise return SymbolVisibility.visible
+@@ -36257,7 +36257,7 @@ export type ProgramSignatures
  	end 'argMayNeedScoping'
  
  	function anyGenericAliasNeedsScoping() returns bool
@@ -5711,7 +5713,7 @@ index 9b54bfb..28cd305 100644
  
  		for entry in declared 'eachDeclaration'
  			if self.argsMayNeedScoping(self.genericInstances.instanceArgs(entry.internedInstance())) 'itsInstanceNeedsScoping'
-@@ -36029,7 +36029,7 @@ export type ProgramSignatures
+@@ -36322,7 +36322,7 @@ export type ProgramSignatures
  		// declaration keeps the bare name, which the reader-free cascade resolves to that declaration
  		// (`declaredFormInAnyFile`, whose struct arm is first). Transparent to a pure RANGE contest, where
  		// every declaration of the name is an alias and this always answers true.
@@ -5720,7 +5722,7 @@ index 9b54bfb..28cd305 100644
  
  		if scoped.equals(name) 'thisFileNamesTheBareDeclaration'
  			return arg
-@@ -36044,7 +36044,7 @@ export type ProgramSignatures
+@@ -36337,7 +36337,7 @@ export type ProgramSignatures
  
  	function nameIsDeclaredOnce(name ByteArray) returns bool
  		var authors = 0 as Count
@@ -5729,7 +5731,7 @@ index 9b54bfb..28cd305 100644
  
  		for claim in claims 'eachClaim'
  			if not claim.declaredByTheCorpus 'anAuthorsDeclaration'
-@@ -36219,7 +36219,7 @@ export type ProgramSignatures
+@@ -36512,7 +36512,7 @@ export type ProgramSignatures
  
  		var disagreeing = DisagreeingAliasNameSet.create()
  
@@ -5738,7 +5740,7 @@ index 9b54bfb..28cd305 100644
  
  		for entry in declared 'eachDeclaration'
  			// Only a name a SECOND declaration mentions can disagree with anything, so the walk narrows to
-@@ -36267,7 +36267,7 @@ export type ProgramSignatures
+@@ -36560,7 +36560,7 @@ export type ProgramSignatures
  	function recordGenericAliasContests(disagreeing DisagreeingAliasNameSet) returns bool
  		var byName = GenericAliasDeclarationGroupMap.create()
  
@@ -5747,7 +5749,7 @@ index 9b54bfb..28cd305 100644
  
  		for entry in declared 'eachDeclaration'
  			if not disagreeing.contains(entry.aliasName) 'itsDeclarationsAgree'
-@@ -36314,7 +36314,7 @@ export type ProgramSignatures
+@@ -36607,7 +36607,7 @@ export type ProgramSignatures
  			return
  		end 'nothingInThisProgramNeedsScoping'
  
@@ -5756,7 +5758,7 @@ index 9b54bfb..28cd305 100644
  
  		for entry in declared 'eachDeclaration'
  			self.mainThreadSettled().genericAliases.upsert(entry.aliasName, value: self.fileScopedInstance(entry.internedInstance(), filePath: entry.filePath))
-@@ -36322,7 +36322,7 @@ export type ProgramSignatures
+@@ -36615,7 +36615,7 @@ export type ProgramSignatures
  
  		var scoped = GenericInstantiationSiteArray.create()
  
@@ -5765,7 +5767,7 @@ index 9b54bfb..28cd305 100644
  
  		for site in sites 'eachSite'
  			scoped.push(GenericInstantiationSite.create(self.fileScopedInstance(site.gid, filePath: site.filePath), nameLine: site.nameLine, nameColumn: site.nameColumn, filePath: site.filePath))
-@@ -36485,7 +36485,7 @@ export type ProgramSignatures
+@@ -36778,7 +36778,7 @@ export type ProgramSignatures
  		end 'eachReturnType'
  
  		for i in 0 upto rewrittenCallees.count() 'applyEach'
@@ -5774,7 +5776,7 @@ index 9b54bfb..28cd305 100644
  			let rewritten = try rewrittenReturns.get(i) otherwise panic("ProgramSignatures.rewriteRecordedReturnTypes: rewrittenReturns.get OOB at {i} — the two columns are pushed in lockstep")
  			self.mainThreadSettled().returnTypes.upsert(callee, value: MaxonReturnType.value(rewritten))
  		end 'applyEach'
-@@ -36523,7 +36523,7 @@ export type ProgramSignatures
+@@ -36816,7 +36816,7 @@ export type ProgramSignatures
  		end 'eachKey'
  
  		for i in 0 upto rewrittenKeys.count() 'applyEach'
@@ -5783,7 +5785,7 @@ index 9b54bfb..28cd305 100644
  			var rebuilt = try rewrittenDecls.get(i) otherwise panic("ProgramSignatures.rewriteOverloadedDeclReturnTypes: rewrittenDecls.get OOB at {i} — the two columns are pushed in lockstep")
  			self.mainThreadSettled().overloadedDecls.upsert(key, value: rebuilt)
  		end 'applyEach'
-@@ -36684,7 +36684,7 @@ export type ProgramSignatures
+@@ -36977,7 +36977,7 @@ export type ProgramSignatures
  		// drop router and every managed classifier reach the same tuple through the project layout
  		// `declaredSlotType` built, which is the door the type check reads too — so a tuple this re-tag and
  		// those routes could disagree about is one the type check has already refused.
@@ -5792,7 +5794,7 @@ index 9b54bfb..28cd305 100644
  
  		// ⚠ **AND NOT WHERE AN ALIAS ANSWERS FOR THE DECLARING FILE.** `containsStruct` is bare and
  		// whole-program, so once a `type Box` and a `typealias Box` in two files may both stand this re-tag
-@@ -37035,7 +37035,7 @@ export type ProgramSignatures
+@@ -37328,7 +37328,7 @@ export type ProgramSignatures
  	// One union case's payload slots, rewritten by the rule above. Split out because a payload array is
  	// replaced wholesale (`PayloadField` holds `let` columns), where a struct field column is retyped in place.
  	function rewriteRecordedPayloadTypes(rule RecordedReturnTypeRule, layout EnumLayout, caseIndex CaseIndex)
@@ -5801,7 +5803,7 @@ index 9b54bfb..28cd305 100644
  		var rewritten = PayloadFieldArray.create()
  		var changed = false
  
-@@ -37091,7 +37091,7 @@ export type ProgramSignatures
+@@ -37384,7 +37384,7 @@ export type ProgramSignatures
  		end 'namesNoAlias'
  
  		let name = self.nameOfId(typeNameIdOf(declared))
@@ -5810,7 +5812,7 @@ index 9b54bfb..28cd305 100644
  
  		if identity.equals(name) or not self.identityStandsForEveryReader(name, identity: identity) 'noIdentityOfItsOwn'
  			throw MapError.keyNotFound
-@@ -37755,7 +37755,7 @@ export type ProgramSignatures
+@@ -38048,7 +38048,7 @@ export type ProgramSignatures
  		end 'noFromHeads'
  
  		for i in 0 upto self.settledDeclarations().genericAliasDecls.count() 'eachAliasDecl'
@@ -5819,7 +5821,7 @@ index 9b54bfb..28cd305 100644
  			let giid = decl.internedInstance()
  
  			if self.settledDeclarations().fromHeadNames.contains(decl.aliasName) and self.isVectorInstance(giid) 'aVectorAliasHead'
-@@ -37840,7 +37840,7 @@ export type ProgramSignatures
+@@ -38133,7 +38133,7 @@ export type ProgramSignatures
  	// which a single-slot descriptor cannot carry — `parseSizeof` rejects `sizeof` of a multi-parameter
  	// generic's type parameter (a clean E2015), so a call site never asks this of one.
  	export function genericInstanceSoleArgLogicalSize(id GenericInstanceId) returns ByteOffset
@@ -5828,7 +5830,7 @@ index 9b54bfb..28cd305 100644
  
  		if args.count() != 1 'notSingle'
  			panic("genericInstanceSoleArgLogicalSize: instance {id} has {args.count()} type arguments — ask `genericInstanceSoleArgLogicalSizeOrNone` if the caller builds a descriptor for instances of any arity; this door answers only where `sizeof(T)` has one T to mean")
-@@ -37864,7 +37864,7 @@ export type ProgramSignatures
+@@ -38157,7 +38157,7 @@ export type ProgramSignatures
  	// every two-parameter generic holding a container over one of its own parameters uncompilable —
  	// `type Map uses Key, Value` with `var keys as Array with Key`, which is `stdlib/Map.maxon`'s own shape.
  	export function genericInstanceSoleArgLogicalSizeOrNone(id GenericInstanceId) returns ByteOffset
@@ -5837,7 +5839,7 @@ index 9b54bfb..28cd305 100644
  
  		if args.count() != 1 'noSingleElement'
  			return LAYOUT_NO_SOLE_ELEMENT
-@@ -38621,7 +38621,7 @@ export type ProgramSignatures
+@@ -38914,7 +38914,7 @@ export type ProgramSignatures
  	// round one claimed is already in the map, so `anEarlierDeclarationAlreadyNamedThisType` is
  	// exactly the "an unscoped name exists" test, and no second index has to be built to answer it.
  	function nameInstancesFromDeclarations(round DisplayNameRound, libraryTier bool)
@@ -5846,7 +5848,7 @@ index 9b54bfb..28cd305 100644
  
  		for entry in declared 'eachDeclaration'
  			let entryRound = DisplayNameRound.typeScoped if entry.typeScoped else DisplayNameRound.unscoped
-@@ -38931,7 +38931,7 @@ export type ProgramSignatures
+@@ -39224,7 +39224,7 @@ export type ProgramSignatures
  		let onCycle = nodesOnACycle(self.buildInstanceArgGraph())
  
  		for i in 0 upto self.settledDeclarations().genericAliasDecls.count() 'eachDecl'
@@ -5855,7 +5857,7 @@ index 9b54bfb..28cd305 100644
  
  			// ⚠ **THIS DECLARATION'S OWN INSTANCE, NOT THE BARE MAP'S.** Re-probing
  			// `genericAliases` by name is last-wins across files — so for a name two files declare
-@@ -38994,7 +38994,7 @@ export type ProgramSignatures
+@@ -39287,7 +39287,7 @@ export type ProgramSignatures
  		for gid in shortestCycleThrough(self.buildInstanceArgGraph(), start: self.genericAliasDeclAt(index).internedInstance() as CsrIndex) 'eachNodeOnTheCycle'
  			// A NESTED instance (`Box with (Box with A)`) is interned but no `typealias` spells it, so it
  			// has no name to contribute — the path names the declarations the author can go and edit.
@@ -5864,7 +5866,7 @@ index 9b54bfb..28cd305 100644
  
  			names.push(name)
  		end 'eachNodeOnTheCycle'
-@@ -39392,7 +39392,7 @@ export type ProgramSignatures
+@@ -39685,7 +39685,7 @@ export type ProgramSignatures
  	end 'readOnlyArgsCarriedThrough'
  
  	function substituteInstanceArgsThrough(nested GenericInstanceId, through GenericInstanceId, aliasHops AliasHopCount) returns MaxonType
@@ -5873,7 +5875,7 @@ index 9b54bfb..28cd305 100644
  		var substituted = MaxonTypeArray.create()
  		var moved = false
  
-@@ -39541,7 +39541,7 @@ export type ProgramSignatures
+@@ -39834,7 +39834,7 @@ export type ProgramSignatures
  	end 'tupleLayouts'
  
  	export function substituteTupleThroughInstance(tupleName ByteArray, id GenericInstanceId) returns ByteArray
@@ -5882,7 +5884,7 @@ index 9b54bfb..28cd305 100644
  
  		var substituted = MaxonTypeArray.create()
  		var substitutedBrands = NameRoster.create()
-@@ -39633,7 +39633,7 @@ export type ProgramSignatures
+@@ -39926,7 +39926,7 @@ export type ProgramSignatures
  	// registry that already had to respect it. A bare generic NAME carries no such bit, so it may be recorded
  	// resolved; an alias may only be resolved at the door that needs the type.
  	export function substituteInstanceFieldType(id GenericInstanceId, index FieldIndex) returns MaxonType
@@ -5891,7 +5893,7 @@ index 9b54bfb..28cd305 100644
  		let fieldType = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.substituteInstanceFieldType: field {index} out of range for instance {id}'s base struct")
  		return self.substituteThroughInstanceInterned(self.declaredSlotType(fieldType, into: self.typeNames, slotScopeFilePath: layout.declFilePath), id: id, interner: self.typeNames)
  	end 'substituteInstanceFieldType'
-@@ -39771,7 +39771,7 @@ export type ProgramSignatures
+@@ -40064,7 +40064,7 @@ export type ProgramSignatures
  			return try self.firstTypeParameterInInstanceArgs(genericInstanceIdOf(resolved))
  		end 'aNestedInstance'
  
@@ -5900,7 +5902,7 @@ index 9b54bfb..28cd305 100644
  
  		for element in elements 'eachElement'
  			if let found = try self.firstTypeParameterIn(element) 'mentionsOne'
-@@ -39804,7 +39804,7 @@ export type ProgramSignatures
+@@ -40097,7 +40097,7 @@ export type ProgramSignatures
  			return self.instanceArgsMentionTypeParameter(genericInstanceIdOf(resolved), param: param)
  		end 'aNestedInstance'
  
@@ -5909,7 +5911,7 @@ index 9b54bfb..28cd305 100644
  
  		for element in elements 'eachElement'
  			if self.typeMentionsTypeParameter(element, param: param) 'mentionsIt'
-@@ -39836,7 +39836,7 @@ export type ProgramSignatures
+@@ -40129,7 +40129,7 @@ export type ProgramSignatures
  	end 'tupleLayoutNamed'
  
  	export function aggregateNameIsBuiltOnATypeParameter(name ByteArray) returns bool
@@ -5918,7 +5920,7 @@ index 9b54bfb..28cd305 100644
  
  		for element in layout.fieldTypes 'eachElement'
  			if self.typeIsBuiltOnATypeParameter(element) 'mentionsOne'
-@@ -40012,7 +40012,7 @@ export type ProgramSignatures
+@@ -40305,7 +40305,7 @@ export type ProgramSignatures
  	// properly contain the ones it was reached with? Such a type needs a larger instance at every
  	// depth (E3184).
  	export function fieldTypeGrowsItsOwner(owner ByteArray, fieldName ByteArray) returns bool
@@ -5927,7 +5929,7 @@ index 9b54bfb..28cd305 100644
  
  		if paramNames.isEmpty() 'notGeneric'
  			return false
-@@ -40119,7 +40119,7 @@ export type ProgramSignatures
+@@ -40412,7 +40412,7 @@ export type ProgramSignatures
  	end 'typeGrowsOwner'
  
  	function instanceGrowsOwner(id GenericInstanceId, owner ByteArray, path GrowthPath, visited ClonerSet) returns bool
@@ -5936,7 +5938,7 @@ index 9b54bfb..28cd305 100644
  
  		if visited.contains(key) 'alreadyWalked'
  			return false
-@@ -40352,7 +40352,7 @@ export type ProgramSignatures
+@@ -40645,7 +40645,7 @@ export type ProgramSignatures
  		// the exact program the other walk order compiles and runs to exit 0; both false, the reassign
  		// stores over the old value with no drop, a silent leak. The consume boundary and the drop
  		// boundary have to read one name.
@@ -5945,7 +5947,7 @@ index 9b54bfb..28cd305 100644
  
  		// ⭐⭐ **A GENERIC-INSTANCE ALIAS ANSWERS AS ITS INSTANCE.** `typealias N0 = Box with S0` mints no
  		// identity of its own, so `structSlots` and `enumTypes` both miss it, while `typeIsManaged`'s own
-@@ -40518,7 +40518,7 @@ export type ProgramSignatures
+@@ -40811,7 +40811,7 @@ export type ProgramSignatures
  						continue
  					end 'nothingNamedIt'
  
@@ -5954,7 +5956,7 @@ index 9b54bfb..28cd305 100644
  
  					if position >= args.count() 'noArgumentAtThePosition'
  						continue
-@@ -40937,7 +40937,7 @@ export type ProgramSignatures
+@@ -41230,7 +41230,7 @@ export type ProgramSignatures
  	// A base with no `where` clause — the whole non-generic-witness corpus — reads the SHARED empty
  	// constraint list and iterates zero times.
  	function instantiationViolatesItsOwnWhereClause(id GenericInstanceId) returns bool
@@ -5963,7 +5965,7 @@ index 9b54bfb..28cd305 100644
  
  		for i in 0 upto constraints.count() 'eachConstraint'
  			let constraint = try constraints.get(i) otherwise panic("ProgramSignatures.instantiationViolatesItsOwnWhereClause: whereConstraints.get OOB at {i} below count {constraints.count()}")
-@@ -41035,7 +41035,7 @@ export type ProgramSignatures
+@@ -41328,7 +41328,7 @@ export type ProgramSignatures
  	end 'instanceHoldsAnOpaqueIndexedElement'
  
  	function declaredSlotTypeOfField(structName ByteArray, fieldName ByteArray) returns MaxonType throws AbsentError
@@ -5972,7 +5974,7 @@ index 9b54bfb..28cd305 100644
  		let index = try layout.indexOfField(fieldName) otherwise throw AbsentError.absent
  
  		return self.declaredSlotType(try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.declaredSlotTypeOfField: fieldTypes.get OOB at {index} despite index < fieldCount"), into: self.typeNames, slotScopeFilePath: layout.declFilePath)
-@@ -41288,7 +41288,7 @@ export type ProgramSignatures
+@@ -41581,7 +41581,7 @@ export type ProgramSignatures
  	// the `typeArgIsOwned` boundary the destructor drops on, so the consumed set equals the dropped set by
  	// construction — no double-free, no leak.
  	export function genericInstanceArgIsOwned(id GenericInstanceId, position ElementIndex) returns bool
@@ -5981,7 +5983,7 @@ index 9b54bfb..28cd305 100644
  
  		if position >= args.count() 'oob'
  			return false
-@@ -42210,7 +42210,7 @@ export type ProgramSignatures
+@@ -42503,7 +42503,7 @@ export type ProgramSignatures
  	// control of 11. The IR diff is one line, `call $__mm_decref` becoming
  	// `call $__destruct___UnsignedDigitStep`.
  	export function structFieldIsManaged(structName ByteArray, index FieldIndex) returns bool
@@ -5990,7 +5992,7 @@ index 9b54bfb..28cd305 100644
  		return self.typeIsManagedFor(self.fieldTypeOf(layout, structName: structName, index: index), from: self.typeNames, readerFilePath: layout.declFilePath)
  	end 'structFieldIsManaged'
  
-@@ -42221,7 +42221,7 @@ export type ProgramSignatures
+@@ -42514,7 +42514,7 @@ export type ProgramSignatures
  	// Reader-aware for the same reason and by the same file as `structFieldIsManaged` above — the two must
  	// agree about a contested name or a slot is dropped by nobody, or by everybody twice.
  	export function structFieldOwesDrop(structName ByteArray, index FieldIndex) returns bool
@@ -5999,7 +6001,7 @@ index 9b54bfb..28cd305 100644
  		return self.typeOwesDropFor(self.fieldTypeOf(layout, structName: structName, index: index), from: self.typeNames, readerFilePath: layout.declFilePath)
  	end 'structFieldOwesDrop'
  
-@@ -42281,7 +42281,7 @@ export type ProgramSignatures
+@@ -42574,7 +42574,7 @@ export type ProgramSignatures
  	// A slot counts whether it stands at a bare parameter or rests one through a nested declaration view
  	// (`restingSlotOwnerName`); the view's parameter names the declaration either way.
  	export function recordOpaqueSlotDeclaration(structName ByteArray) returns OpaqueSlotDeclaration
@@ -6008,7 +6010,7 @@ index 9b54bfb..28cd305 100644
  
  		for i in 0 upto layout.fieldCount() 'firstRestingSlot'
  			if let owner = try self.restingSlotOwnerName(structName, index: i) 'restsASlot'
-@@ -42362,7 +42362,7 @@ export type ProgramSignatures
+@@ -42655,7 +42655,7 @@ export type ProgramSignatures
  	// assumed, because two owners would mean one descriptor laying out two `uses` lists, and the cascade would
  	// release half the record against the wrong one: a wild free with no diagnostic anywhere.
  	function requireRemainingOpaqueSlotsAgree(structName ByteArray, from FieldIndex, owner ByteArray)
@@ -6017,7 +6019,7 @@ index 9b54bfb..28cd305 100644
  
  		for i in from upto layout.fieldCount() 'eachLaterField'
  			let other = try self.restingSlotOwnerName(structName, index: i) otherwise continue
-@@ -42601,7 +42601,7 @@ export type ProgramSignatures
+@@ -42894,7 +42894,7 @@ export type ProgramSignatures
  			return false
  		end 'noFields'
  
@@ -6026,7 +6028,7 @@ index 9b54bfb..28cd305 100644
  
  		for i in 0 upto layout.fieldCount() 'eachField'
  			let fieldType = try layout.fieldTypes.get(i) otherwise panic("ProgramSignatures.instanceHoldsAnOpaqueColumnAt: fieldTypes.get OOB at {i}")
-@@ -42869,7 +42869,7 @@ export type ProgramSignatures
+@@ -43162,7 +43162,7 @@ export type ProgramSignatures
  	// Does a value of the tuple `name` carry a promise in some element, at any nesting depth? A tuple that does
  	// hands a green thread over exactly as the promise itself would.
  	export function tupleCarriesAGreenThreadHandle(name ByteArray) returns bool
@@ -6035,7 +6037,7 @@ index 9b54bfb..28cd305 100644
  
  		for element in layout.fieldTypes 'eachElement'
  			if self.typeIsAGreenThreadHandle(element, from: self.typeNames) 'aPromise'
-@@ -42963,7 +42963,7 @@ export type ProgramSignatures
+@@ -43256,7 +43256,7 @@ export type ProgramSignatures
  	function indexCanonicalInstanceNames()
  		while self.canonicalNamesIndexedThrough < self.genericInstances.count() 'eachNewInstance'
  			let id = self.genericInstances.idAtPosition(self.canonicalNamesIndexedThrough)
@@ -6044,7 +6046,7 @@ index 9b54bfb..28cd305 100644
  
  			if self.baseline.settled 'pastTheBaseline'
  				self.journal.noteCanonicalIndexWrite(name, prior: priorInstanceAt(self.canonicalInstanceNameIndex, name: name))
-@@ -43115,7 +43115,7 @@ export type ProgramSignatures
+@@ -43408,7 +43408,7 @@ export type ProgramSignatures
  	// times and each copy carried its own two panic messages saying the same two things"*). A third ownership
  	// question later adds an arm here rather than a fourth copy of the loop.
  	function structHasFieldSatisfying(structName ByteArray, owning FieldOwnershipQuestion) returns bool
@@ -6053,7 +6055,7 @@ index 9b54bfb..28cd305 100644
  
  		for i in 0 upto layout.fieldCount() 'eachField'
  			let holds = match owning 'question'
-@@ -43155,7 +43155,7 @@ export type ProgramSignatures
+@@ -43448,7 +43448,7 @@ export type ProgramSignatures
  	// The union is a precondition, not a case: the sole caller reached here through an `enumOf` that answered
  	// `declared`.
  	export function unionHasManagedPayload(unionName ByteArray) returns bool
@@ -6062,7 +6064,7 @@ index 9b54bfb..28cd305 100644
  		return unionHasManagedField(self, typeNames: self.typeNames, layout: layout)
  	end 'unionHasManagedPayload'
  
-@@ -43173,7 +43173,7 @@ export type ProgramSignatures
+@@ -43466,7 +43466,7 @@ export type ProgramSignatures
  	end 'fieldAtOffsetIsALet'
  
  	export function fieldNameAtOffset(name ByteArray, offset ByteOffset) returns ByteArray throws AbsentError
@@ -6071,7 +6073,7 @@ index 9b54bfb..28cd305 100644
  		return layout.fieldNameAt(try layoutFieldAtOffset(layout, offset: offset)).clone()
  	end 'fieldNameAtOffset'
  
-@@ -43199,10 +43199,10 @@ export type ProgramSignatures
+@@ -43492,10 +43492,10 @@ export type ProgramSignatures
  
  	export function letPayloadKindsAt(unionName ByteArray, offset ByteOffset) returns HeldRecordKinds
  		var kinds = HeldRecordKinds.create()
@@ -6084,7 +6086,7 @@ index 9b54bfb..28cd305 100644
  
  			for slot in 0 upto payloads.count() 'eachSlot'
  				let field = try payloads.get(slot) otherwise panic("ProgramSignatures.letPayloadKindsAt: payloadsAt returned fewer fields than its own count at {slot}")
-@@ -43239,7 +43239,7 @@ export type ProgramSignatures
+@@ -43532,7 +43532,7 @@ export type ProgramSignatures
  		end 'noRecordOfItsOwn'
  
  		let name = try self.typeNames.nameOf(typeNameIdOf(type)) otherwise panic("ProgramSignatures.addOwnRecordKindOfType: type name {typeNameIdOf(type)} is not interned in this index's own table")
@@ -6093,7 +6095,7 @@ index 9b54bfb..28cd305 100644
  			within.anything = true
  			return
  		end 'superseded'
-@@ -43599,7 +43599,7 @@ export type ProgramSignatures
+@@ -43892,7 +43892,7 @@ export type ProgramSignatures
  			return self.uncloneableExistentialInUnion(name, visited: visited)
  		end 'notAStruct'
  
@@ -6102,7 +6104,7 @@ index 9b54bfb..28cd305 100644
  
  		for i in 0 upto layout.fieldCount() 'eachField'
  			if not self.structFieldIsManaged(name, index: i) 'scalar'
-@@ -43618,10 +43618,10 @@ export type ProgramSignatures
+@@ -43911,10 +43911,10 @@ export type ProgramSignatures
  	end 'uncloneableExistentialInAggregate'
  
  	function uncloneableExistentialInUnion(name ByteArray, visited ClonerSet) returns UncloneableExistentialSlot
@@ -6115,7 +6117,7 @@ index 9b54bfb..28cd305 100644
  
  			for fi in 0 upto payloads.count() 'eachPayload'
  				let field = try payloads.get(fi) otherwise panic("ProgramSignatures.uncloneableExistentialInUnion: payloadsAt count disagrees with get at {fi}")
-@@ -43685,7 +43685,7 @@ export type ProgramSignatures
+@@ -43978,7 +43978,7 @@ export type ProgramSignatures
  			return self.osHandleInUnion(name, visited: visited)
  		end 'notAStruct'
  
@@ -6124,7 +6126,7 @@ index 9b54bfb..28cd305 100644
  
  		for i in 0 upto layout.fieldCount() 'eachField'
  			var nested = self.osHandleInSlot(fieldTypeOf(layout, structName: name, index: i), visited: visited)
-@@ -43739,10 +43739,10 @@ export type ProgramSignatures
+@@ -44032,10 +44032,10 @@ export type ProgramSignatures
  	end 'osHandleInInstance'
  
  	function osHandleInUnion(name ByteArray, visited ClonerSet) returns OwnedOsHandle
@@ -6137,7 +6139,7 @@ index 9b54bfb..28cd305 100644
  
  			for fi in 0 upto payloads.count() 'eachPayload'
  				let field = try payloads.get(fi) otherwise panic("ProgramSignatures.osHandleInUnion: payloadsAt count disagrees with get at {fi}")
-@@ -43850,7 +43850,7 @@ export type ProgramSignatures
+@@ -44143,7 +44143,7 @@ export type ProgramSignatures
  			return false
  		end 'notAnAggregate'
  
@@ -6146,7 +6148,7 @@ index 9b54bfb..28cd305 100644
  
  		if self.isFunctionAliasInAnyFile(name) 'aFunctionAlias'
  			return false
-@@ -43922,7 +43922,7 @@ export type ProgramSignatures
+@@ -44215,7 +44215,7 @@ export type ProgramSignatures
  	end 'instanceReachesAPromise'
  
  	function structFieldsReachAPromise(structName ByteArray, visited ClonerSet) returns bool
@@ -6155,7 +6157,7 @@ index 9b54bfb..28cd305 100644
  
  		for i in 0 upto layout.fieldCount() 'eachField'
  			let fieldType = try layout.fieldTypes.get(i) otherwise panic("ProgramSignatures.structFieldsReachAPromise: fieldTypes.get OOB at {i}")
-@@ -44103,7 +44103,7 @@ export type ProgramSignatures
+@@ -44396,7 +44396,7 @@ export type ProgramSignatures
  		// Resolved through `denotedSlotAggregateName`, the same door the clone strategy this gate admits reads
  		// (`managedFieldCascadeStrategy`) — a name the gate and the strategy disagreed about would admit a clone
  		// nobody can emit.
@@ -6164,7 +6166,7 @@ index 9b54bfb..28cd305 100644
  
  		if self.isFunctionAliasInAnyFile(name) 'aFunctionAlias'
  			return purposeCrossesAFunctionValue(purpose)
-@@ -44306,7 +44306,7 @@ export type ProgramSignatures
+@@ -44599,7 +44599,7 @@ export type ProgramSignatures
  	end 'elementTypeSupportsCascade'
  
  	function structFieldsSupportDeepClone(structName ByteArray, visited ClonerSet, purpose GraphCascadePurpose) returns bool
@@ -6173,7 +6175,7 @@ index 9b54bfb..28cd305 100644
  
  		for i in 0 upto layout.fieldCount() 'eachField'
  			if not self.structFieldOwesDrop(structName, index: i) 'scalar'
-@@ -44355,7 +44355,7 @@ export type ProgramSignatures
+@@ -44648,7 +44648,7 @@ export type ProgramSignatures
  
  	function walkRecordKindsWithinAggregate(name ByteArray, visited ClonerSet, settledFree ClonerSet) returns HeldRecordKinds
  		var within = HeldRecordKinds.create()
@@ -6182,7 +6184,7 @@ index 9b54bfb..28cd305 100644
  
  		if self.isGenericAliasInAnyFile(denoted) 'anInstanceByItsAlias'
  			self.addRecordKindsWithinGenericAlias(denoted, within: within, visited: visited, settledFree: settledFree)
-@@ -44465,7 +44465,7 @@ export type ProgramSignatures
+@@ -44758,7 +44758,7 @@ export type ProgramSignatures
  			return
  		end 'aScalar'
  
@@ -6191,7 +6193,7 @@ index 9b54bfb..28cd305 100644
  
  		// The compiler-minted byte element is declared nowhere, so the lookup below would report it as
  		// holding anything.
-@@ -44581,7 +44581,7 @@ export type ProgramSignatures
+@@ -44874,7 +44874,7 @@ export type ProgramSignatures
  			return
  		end 'aHandle'
  
@@ -6200,7 +6202,7 @@ index 9b54bfb..28cd305 100644
  
  		if settledFree.contains(key) or not self.cloneWalkMayDescendInto(key, visited: visited) 'alreadyWalked'
  			return
-@@ -45709,7 +45709,7 @@ export type ProgramSignatures
+@@ -46093,7 +46093,7 @@ export type ProgramSignatures
  			bandAliases.push(TupleAliasRecord.create(write.name.clone(), alias: (try self.tupleAliases.get(write.name) otherwise panic("ProgramSignatures.closeParseBand: the journal lists tuple alias `{String.from(write.name)}` and the map does not hold it")).clone()))
  		end 'eachAliasWrite'
  
@@ -6209,7 +6211,7 @@ index 9b54bfb..28cd305 100644
  		self.rowSetLog = RowSetLog.closed()
  		let band = self.genericInstances.closeParseBand()
  		self.restoreJournaledWrites()
-@@ -46511,7 +46511,7 @@ function groupConformersByInterface(names NameRoster, swept DeclaredConformanceM
+@@ -46896,7 +46896,7 @@ function groupConformersByInterface(names NameRoster, swept DeclaredConformanceM
  	var slotCursors = ConformerPairArray.create()
  
  	for name in names 'eachDeclaredName'
@@ -8111,7 +8113,7 @@ index ce1e462..bd6dd40 100644
  	end 'eachWrittenTuple'
  end 'checkWrittenTupleTypes'
 diff --git a/maxon-bin/Compiler/UnusedExportCheck.maxon b/maxon-bin/Compiler/UnusedExportCheck.maxon
-index 9398da7..807b293 100644
+index f0ca694..bd79c08 100644
 --- a/maxon-bin/Compiler/UnusedExportCheck.maxon
 +++ b/maxon-bin/Compiler/UnusedExportCheck.maxon
 @@ -473,7 +473,7 @@ end 'namesAMethodOnATrackedType'

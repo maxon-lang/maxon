@@ -1170,3 +1170,36 @@ end 'main'
 a 7
 b 9
 ```
+
+
+<!-- test: a-bare-call-in-a-type-body-reaches-a-generic-static-its-extension-declares -->
+A generic static an `extension` declares is a sibling of the type's own methods, so a bare call to it in the
+type body means it, as the qualified call does. Returns 18.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var n as Integer
+
+	static function use() returns Integer
+		return pick(3 as Integer, b: 9 as Integer)
+	end 'use'
+
+	static function useQualified() returns Integer
+		return Box.pick(3 as Integer, b: 9 as Integer)
+	end 'useQualified'
+end 'Box'
+
+extension Box
+	static function pick(a T, b T) uses T returns T where T is Comparable
+		return a if a > b else b
+	end 'pick'
+end 'Box'
+
+function main() returns ExitCode
+	return (Box.use() + Box.useQualified()) as ExitCode
+end 'main'
+```
+```exitcode
+18
+```
