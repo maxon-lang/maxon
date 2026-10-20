@@ -35,7 +35,6 @@ wasm32-wasi has no green threads, so a program naming it is refused at the call 
 
 <!-- test: builtins-gt-quiesce.waits-for-a-service-that-was-shut-down -->
 <!-- tier: stdlib -->
-<!-- unsupported-targets: wasm32-wasi -->
 The service prints from its own green thread after `main` has asked for the shutdown, and the print precedes the
 line that follows the wait.
 ```maxon
@@ -75,7 +74,6 @@ quiesced 0
 
 <!-- test: builtins-gt-quiesce.with-nothing-outstanding-answers-zero-at-once -->
 <!-- tier: stdlib -->
-<!-- unsupported-targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let outstanding = __Builtins.gtQuiesce()
@@ -92,7 +90,6 @@ outstanding 0
 
 <!-- test: builtins-gt-quiesce.answers-what-nothing-can-finish -->
 <!-- tier: stdlib -->
-<!-- unsupported-targets: wasm32-wasi -->
 The service waits on its mailbox for a message that only `main` could send, so nothing can ever finish it. The wait answers the one green thread that is left instead of ending the program, and a second wait after the
 shutdown finds none.
 ```maxon
@@ -135,7 +132,6 @@ outstanding 0
 
 <!-- test: builtins-gt-quiesce.a-second-waiter-aborts -->
 <!-- tier: stdlib -->
-<!-- unsupported-targets: wasm32-wasi -->
 The service waits for every green thread while `main` waits too. One waiter at a time is all the scheduler holds,
 so whichever arrives second ends the program with runtime abort 123.
 ```maxon
@@ -168,7 +164,6 @@ fatal error: runtime abort 123 (schedulerQuiesceWaiterTaken)
 
 <!-- test: builtins-gt-quiesce.races-coroutine-completion-across-many-rounds -->
 <!-- tier: stdlib -->
-<!-- unsupported-targets: wasm32-wasi -->
 <!-- procs: 4 -->
 ⭐⭐ **A WAIT THAT REGISTERS WHILE THE LAST GREEN THREADS' COROUTINES ARE STILL COMPLETING.** Each round spawns
 three services, sends each one `work` and then `linger`, and then shuts it down. Both messages run three
@@ -266,7 +261,6 @@ outstanding=0 sum=30000
 
 <!-- test: builtins-gt-quiesce.races-coroutine-completion-at-one-processor -->
 <!-- tier: stdlib -->
-<!-- unsupported-targets: wasm32-wasi -->
 <!-- procs: 1 -->
 **THE ONE-PROCESSOR TWIN OF `races-coroutine-completion-across-many-rounds`.** With one processor nothing
 runs beside `main`, so the wait's registration and the last worker's exit never overlap. Each round registers
@@ -348,7 +342,6 @@ outstanding=0 sum=30000
 ```
 
 <!-- test: builtins-gt-quiesce.a-dropped-coroutine-parked-in-the-wait-is-not-the-waiter-afterwards -->
-<!-- unsupported-targets: wasm32-wasi -->
 A coroutine that calls `Scheduler.quiesce()` parks as the scheduler's one waiter while `main` awaits a sibling. `main` then
 returns with the quiescing coroutine un-awaited, so scope exit drops its promise while it is parked in the wait. The
 drop must withdraw the waiter registration before the coroutine can be reclaimed: the deadlock check claims that
@@ -379,7 +372,6 @@ end 'main'
 ```
 
 <!-- test: builtins-gt-quiesce.waits-for-a-renounced-coroutine-to-finish-unwinding -->
-<!-- unsupported-targets: wasm32-wasi -->
 <!-- procs: 1 -->
 The wait answers at the moment every machine is idle, so a coroutine whose promise was dropped holds it open until
 it has run out. `sleeper` is parked on its timer when `startAndDrop` returns and scope exit drops its promise. The
@@ -429,7 +421,6 @@ after the wait
 ```
 
 <!-- test: builtins-gt-quiesce.answers-while-a-pinned-thread-waits-for-its-machine -->
-<!-- unsupported-targets: wasm32-wasi -->
 `main` pins itself to its machine, so while it is parked in the wait that machine blocks for `main`'s next turn and
 joins no idle list. The wait still answers when every other machine is idle, as a machine waiting for its pinned
 thread counts as idle: the one green thread that is left, then none once the service has been shut down.

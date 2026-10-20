@@ -238,11 +238,11 @@ vendored wasmtime. By hand, for ONE program:
 
 ⚠ **THE wasm LANE IS NOT "SCALAR ONLY".** Heap, `String`, `print`, structs, arrays, closures,
 interfaces and **floats** (arithmetic AND shortest-round-trip printing) all work there; the two lanes
-run within a few hundred cases of each other. The families it does not run carry an explicit
-`<!-- unsupported-targets: … -->` exclusion: **async / green threads, the clock builtins, argv**, plus
-the x64-only CODEGEN cases (register pressure, `.rdata`, emitted symbol names), which are about x64's
-output rather than about wasm. ⇒ **a float or String case failing on wasm is a BUG on that lane, not
-an out-of-slice case to refuse.**
+run within a few hundred cases of each other. The families it has no substrate for (**async / green
+threads, the clock builtins, argv**) answer E3104 and are counted SKIPs (see the rule below). The
+x64-only CODEGEN cases (register pressure, `.rdata`, emitted symbol names), which are about x64's
+output rather than about wasm, carry an `<!-- unsupported-targets: … -->` exclusion. ⇒ **a float or
+String case failing on wasm is a BUG on that lane, not an out-of-slice case to refuse.**
 
 ⭐ **THE MARKER NAMES THE LANES THAT CANNOT SERVE A CASE, NEVER THE ONES THAT CAN**, so a backend that
 lands inherits every unmarked case instead of being excluded from all of them at once. The harness
