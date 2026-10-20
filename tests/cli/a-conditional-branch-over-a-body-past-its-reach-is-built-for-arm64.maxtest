@@ -26,25 +26,25 @@ test 'an arm64 function whose conditional branch spans more than its 1 MiB reach
 	stageProgram(dir, name: ProgramName, source: wideBodySource())
 
 	let metricsFileName = "{ProgramName}-metrics.tsv"
-	let armLinux = runDriver([BuildCommandWord, ProgramName, ArmLinuxTarget, "{OutputOptionPrefix}{dir.join(ArmLinuxOutputName).toString()}", "{MetricsOptionPrefix}{metricsFileName}"], workingDirectory: dir)
+	let armLinux = spawnCompiler([BuildCommandWord, ProgramName, ArmLinuxTarget, "{OutputOptionPrefix}{dir.join(ArmLinuxOutputName).toString()}", "{MetricsOptionPrefix}{metricsFileName}"], staged: dir)
 	Expect.equal(armLinux.exitCode(), expected: 0, message: "a function with a {BodyStatementCount}-statement body under one `if` did not build for arm64-linux. It said: {armLinux.stdout}{armLinux.stderr}")
 
-	let table = try File.readText(dir.join(metricsFileName)) otherwise panic("the build wrote no metrics table at {metricsFileName}")
+	let table = fileText(dir.join(metricsFileName))
 	let codeBytes = metricsCell(table, kind: MetricsCodeKind, name: MetricsUnnamedRow, field: MetricsBytesField)
 	Expect.isTrue(codeBytes > ConditionalBranchReachBytes + ConditionalBranchReachBytes / 2, message: "the generated program compiled to only {codeBytes} bytes of code, so its `if` no longer spans {ConditionalBranchReachBytes} bytes and the case proves nothing")
 
 	let hostProgram = dir.join("{HostOutputName}{executableSuffix()}")
-	let host = runDriver([BuildCommandWord, ProgramName, "{OutputOptionPrefix}{hostProgram.toString()}"], workingDirectory: dir)
+	let host = spawnCompiler([BuildCommandWord, ProgramName, "{OutputOptionPrefix}{hostProgram.toString()}"], staged: dir)
 	Expect.equal(host.exitCode(), expected: 0, message: "the same program did not build for this host. It said: {host.stdout}{host.stderr}")
 
 	let expected = enteredBodyAnswer()
 	Expect.isTrue(expected != SkippedBodyAnswer, message: "the body's answer {expected} equals the answer when it is skipped, so the two runs could not tell the branch's directions apart")
 
-	let skipped = runDriver(ListedWordArray.create(), binary: hostProgram, workingDirectory: dir)
+	let skipped = spawnCompiler(StringArray.create(), binary: hostProgram, staged: dir)
 	Expect.equal(skipped.exitCode(), expected: 0, message: "the program failed with the body skipped. It said: {skipped.stdout}{skipped.stderr}")
 	Expect.equal(skipped.stdout.trim(), expected: "{SkippedBodyAnswer}", message: "the program, run so that the `if` is not entered, did not answer {SkippedBodyAnswer}. It said: {skipped.stdout}{skipped.stderr}")
 
-	let entered = runDriver([EnterBodyArgument], binary: hostProgram, workingDirectory: dir)
+	let entered = spawnCompiler([EnterBodyArgument], binary: hostProgram, staged: dir)
 	Expect.equal(entered.exitCode(), expected: 0, message: "the program failed with the body entered. It said: {entered.stdout}{entered.stderr}")
 	Expect.equal(entered.stdout.trim(), expected: "{expected}", message: "the program, run so that the `if` is entered, did not answer {expected}. It said: {entered.stdout}{entered.stderr}")
 end 'an arm64 function whose conditional branch spans more than its 1 MiB reach is built and runs both ways'

@@ -45,10 +45,10 @@ type StepOverPauseSession implements DapSession
 end 'StepOverPauseSession'
 
 test 'a pause sent while next walks over a long call is answered at once and stops the program'
-	let staged = dapStagedFixture(StepOverPauseCaseLabel, fixture: SpinFixtureName)
-	let executable = dapBuildFixture(staged)
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: StepOverPauseCaseLabel, fixture: SpinFixtureName)
+	let executable = buildStagedSource(staged.join(StagedProgramFileName), staged: staged)
 	let launchArguments = "\{\"program\":{Json.quote(executable.toString())},\"stopTimeoutSeconds\":{StepWalkBudgetSeconds}\}"
-	var session = StepOverPauseSession.create(launchArguments, source: dapStagedSource(staged), anchored: dapAnchorLine(staged, anchor: MainGrindAnchor))
+	var session = StepOverPauseSession.create(launchArguments, source: staged.join(StagedProgramFileName), anchored: anchorLine(staged.join(StagedProgramFileName), anchor: MainGrindAnchor))
 	try dapRunSession(session, completing: "complete")
 
 	try Expect.equal(session.breakpointReason, expected: BreakpointReason, message: "the session must first stop on the breakpoint at the call; it stopped for `{session.breakpointReason}`")

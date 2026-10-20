@@ -3,7 +3,6 @@ let InitCommandWord = "init"
 let ScaffoldedDirName = "scaffolded"
 let ProjectFileExtension = ".maxproj"
 let OldManifestFileName = "project.maxon"
-let EntryFileName = "main.maxon"
 let ProductsDirName = ".maxon"
 let OutputArgumentWord = "output"
 
@@ -19,7 +18,7 @@ type ScaffoldedAsAMaxproj implements OutsideCheckoutCase
 	export function requireHeldIn(dir FilePath) throws TestFailure
 		let project = dir.join(ScaffoldedDirName)
 
-		let scaffolded = runDriver([InitCommandWord, project.toString()])
+		let scaffolded = spawnCompiler([InitCommandWord, project.toString()])
 		let said = "It wrote to stdout: {scaffolded.stdout} and to stderr: {scaffolded.stderr}"
 
 		try Expect.equal(scaffolded.exitCode(), expected: 0, message: "`maxon {InitCommandWord} <directory>` did not succeed. {said}")
@@ -27,12 +26,12 @@ type ScaffoldedAsAMaxproj implements OutsideCheckoutCase
 		let manifest = project.join("{ScaffoldedDirName}{ProjectFileExtension}")
 		try Expect.isTrue(File.exists(manifest), message: "`maxon {InitCommandWord}` wrote no {manifest.toString()}. {said}")
 		try Expect.isFalse(File.exists(project.join(OldManifestFileName)), message: "`maxon {InitCommandWord}` wrote a `{OldManifestFileName}`, which is an ordinary source file and marks no project. {said}")
-		try Expect.isTrue(File.exists(project.join(EntryFileName)), message: "`maxon {InitCommandWord}` wrote no {EntryFileName}. {said}")
+		try Expect.isTrue(File.exists(project.join(StagedProgramFileName)), message: "`maxon {InitCommandWord}` wrote no {StagedProgramFileName}. {said}")
 
-		let manifestText = try File.readText(manifest) otherwise panic("init-writes-a-maxproj-named-for-the-directory: the gate could not run - could not read {manifest.toString()} back")
+		let manifestText = fileText(manifest)
 		try Expect.isFalse(manifestText.contains(OutputArgumentWord), message: "the scaffolded `{manifest.filename()}` names an `{OutputArgumentWord}`: its target states none, so the build is named for the project. It reads: {manifestText}")
 
-		let built = runDriver([BuildCommandWord], workingDirectory: project)
+		let built = spawnCompiler([BuildCommandWord], staged: project)
 		let builtSaid = "It wrote to stdout: {built.stdout} and to stderr: {built.stderr}"
 		try Expect.equal(built.exitCode(), expected: 0, message: "the scaffolded project did not build with a bare `maxon {BuildCommandWord}`. {builtSaid}")
 

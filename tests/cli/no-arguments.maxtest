@@ -5,7 +5,7 @@
 // finding out what the binary is. The text and the code are two questions, and both are asked here.
 
 test 'no arguments prints the version and the short command list, exit 0'
-	let run = runWithNoArguments()
+	let run = spawnCompiler(StringArray.create())
 
 	let observedExit = run.exitCode()
 	Expect.equal(observedExit, expected: 0, message: "`maxon` with no arguments is a QUESTION, not a mistake: it is what a caller with nothing to go on runs to find out what this binary is. It printed: {run.stdout}{run.stderr}")
@@ -17,12 +17,12 @@ test 'no arguments prints the version and the short command list, exit 0'
 	// ⭐ The whole point of the short form: it names the commands and NOT their options. An overview that
 	// grew back into the full reference is exactly the thing this shape exists to stop.
 	let labels = labelledWordsIn(run.stdout)
-	let options = listed(labelsWhereOptionhoodIs(labels, isOption: true))
+	let options = joined(labelsWhereOptionhoodIs(labels, isOption: true), separator: Space)
 	Expect.isEmpty(options, message: "`maxon` with no arguments listed OPTIONS. The short list names commands only; the options belong to `maxon {HelpCommandWord}`.")
 
 	// ⚠ Without this, a reading that found no labels at all would satisfy every assertion above.
 	let missing = anchorsMissingFrom(labels)
-	Expect.isEmpty(missing, message: "the short list did not advertise these commands: {missing}. It showed: {listed(labels)}")
+	Expect.isEmpty(missing, message: "the short list did not advertise these commands: {missing}. It showed: {joined(labels, separator: Space)}")
 
 	// ⭐ Alphabetical is the order this driver chose BECAUSE a gate can check it. Unchecked it would be a
 	// convention, and a convention decays the first time a command is added by someone who never read it.

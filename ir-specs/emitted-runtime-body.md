@@ -5489,7 +5489,7 @@ the emitted runtime unless its case names it, and this case is the one that does
 — a pipe, never a console — so every suite run takes the NOT-A-CONSOLE road from end to end, and a case
 could not ask which road it took in any event: a program cannot see which API carried its own writes. Which
 MECHANISM an image was built with is answerable from the image's bytes and is gated in
-`tests/console-write/`; whether the conversion is CORRECT is covered by hand against a real console, and by
+`tests/consoleWrite/`; whether the conversion is CORRECT is covered by hand against a real console, and by
 nothing automated. Do not read a green suite as evidence about it.
 
 ```maxon

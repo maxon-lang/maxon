@@ -22,9 +22,9 @@ test 'cache with a word that is not a verb and cache with an option both refuse,
 	expectCacheUsageRefusal([OptionAnotherCommandReads, CacheCommandWord])
 end 'cache with a word that is not a verb and cache with an option both refuse, naming clear'
 
-function expectCacheUsageRefusal(arguments ListedWordArray) throws TestFailure
-	let typed = listed(arguments)
-	let run = runDriver(arguments)
+function expectCacheUsageRefusal(arguments StringArray) throws TestFailure
+	let typed = joined(arguments, separator: Space)
+	let run = spawnCompiler(arguments)
 	let said = "It wrote to stdout: {run.stdout} and to stderr: {run.stderr}"
 
 	try Expect.equal(run.exitCode(), expected: 1, message: "`maxon {typed}` did not exit 1. A word the command does not have names nothing to do, and a flag it never reads is a command line only partly understood. {said}")
@@ -32,5 +32,5 @@ function expectCacheUsageRefusal(arguments ListedWordArray) throws TestFailure
 	let usage = linesOpeningIn(run.stderr, prefix: UsageLinePrefix)
 	try Expect.isFalse(usage.count() == 0, message: "`maxon {typed}` printed no `{UsageLinePrefix}` line on STDERR. A refusal says everything on stderr; a usage line on stdout is read by a script as the command's answer. {said}")
 
-	try Expect.contains(listed(usage), needle: CacheClearVerb, message: "the `{UsageLinePrefix}` line `maxon {typed}` printed does not name `{CacheClearVerb}`, the one verb the command has, so its reader still does not know what to type. {said}")
+	try Expect.contains(joined(usage, separator: Space), needle: CacheClearVerb, message: "the `{UsageLinePrefix}` line `maxon {typed}` printed does not name `{CacheClearVerb}`, the one verb the command has, so its reader still does not know what to type. {said}")
 end 'expectCacheUsageRefusal'

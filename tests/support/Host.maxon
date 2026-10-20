@@ -1,0 +1,66 @@
+public let TestedCompilerStem = "maxon-bin/.maxon/maxon"
+
+#if os(Windows)
+	public let HostTempVariable = "TEMP"
+#else
+	public let HostTempVariable = "TMPDIR"
+	public let PosixLastResortTempDir = "/tmp"
+#endif
+
+public function executableSuffix() returns String
+	#if os(Windows)
+		return ".exe"
+	#else
+		return ""
+	#endif
+end 'executableSuffix'
+
+public function executableIn(dir FilePath, stem String) returns FilePath
+	return dir.join("{stem}{executableSuffix()}")
+end 'executableIn'
+
+public function testedCompilerPath() returns FilePath
+	let spelled = "{TestedCompilerStem}{executableSuffix()}"
+	let relative = try FilePath.from(spelled) otherwise panic("the gate could not run — '{spelled}' is not a spellable path")
+	let binary = relative.resolve(Directory.currentPath())
+
+	if not File.exists(binary) 'noBinary'
+		panic("the gate could not run — there is no compiler at {binary.toString()}. Every path a corpus names is relative to the CHECKOUT ROOT; run it from there, and build `{TestedCompilerStem}` first.")
+	end 'noBinary'
+
+	return binary
+end 'testedCompilerPath'
+
+public function hostTempDir() returns FilePath
+	#if os(Windows)
+		let spelled = try Process.environmentVariable(HostTempVariable) otherwise panic("the gate could not run — {HostTempVariable} is not set, and it names the only temp area outside the checkout a case can stage in.")
+	#else
+		let spelled = try Process.environmentVariable(HostTempVariable) otherwise PosixLastResortTempDir
+	#endif
+
+	return try FilePath.from(spelled) otherwise panic("the gate could not run — the host temp area '{spelled}' is not a spellable path")
+end 'hostTempDir'
+
+public function requireNoCheckoutAbove(dir FilePath)
+	var level = dir
+
+	while true 'eachLevel'
+		let marker = level.join(StdlibDirName)
+
+		if Directory.isDirectory(marker) 'checkoutFound'
+			panic("the gate could not run — {marker.toString()} sits above {dir.toString()}, so a compiler command run there would take that checkout's tree lock and every concurrent case would be refused.")
+		end 'checkoutFound'
+
+		let above = try level.parent() otherwise break
+
+		level = above
+	end 'eachLevel'
+end 'requireNoCheckoutAbove'
+
+public function foldedVariable(name String) returns String
+	#if os(Windows)
+		return name.toLower()
+	#else
+		return name
+	#endif
+end 'foldedVariable'

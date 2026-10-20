@@ -4,24 +4,24 @@ let AnchorName = "after-await"
 let TracedBuildLabel = "debugstream"
 
 test 'trace at a stop shows the scheduler events the program committed before it'
-	let staged = stagedFixture(TraceSliceCaseLabel, fixture: TracedFixtureName)
-	let build = spawnBuild(staged.join(StagedProgramFileName), staged: staged, label: TracedBuildLabel, extraArguments: [DebugStreamBuildOption])
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: TraceSliceCaseLabel, fixture: TracedFixtureName)
+	let build = spawnBuild(staged.join(StagedProgramFileName), staged: staged, output: staged.join(OutputFileStem), label: TracedBuildLabel, extraArguments: [DebugStreamBuildOption])
 
 	if build.exitCode() != 0 'didNotBuild'
 		panic("{TraceSliceCaseLabel}: the gate could not run — the `{DebugStreamBuildOption}` build exited {build.exitCode()}: {build.stdout}{build.stderr}")
 	end 'didNotBuild'
 
 	let undebugged = runBuiltProgram(staged)
-	let stopLine = anchorLine(staged, anchor: AnchorName)
+	let stopLine = anchorLine(staged.join(StagedProgramFileName), anchor: AnchorName)
 	let commands = debugCommandLine(["{BreakCommand} {lineTarget(stopLine)}", RunCommand, TraceCommand, ContinueCommand])
 	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: [DebugTraceOption])
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 
-	Expect.atLeast(eventsOfKind(events, kind: StopEventName).count(), than: 1, message: "the breakpoint after the await never stopped, so there is no stop to take a trace slice at. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.atLeast(eventsOfKind(events, kind: StopEventName).count(), than: 1, message: "the breakpoint after the await never stopped, so there is no stop to take a trace slice at. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let slices = eventsOfKind(events, kind: TraceEventName)
-	Expect.equal(slices.count(), expected: 1, message: "`{TraceCommand}` printed no `{TraceEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(slices.count(), expected: 1, message: "`{TraceCommand}` printed no `{TraceEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let slice = eventAt(slices, index: 0)
 	Expect.equal(textOf(slice, node: slice.root, key: EventsUnavailableKey), expected: AbsentEventText, message: "the program was built with `{DebugStreamBuildOption}` and the session was run with `{DebugTraceOption}`, so the slice is available and must carry no `{EventsUnavailableKey}`. It said '{textOf(slice, node: slice.root, key: EventsUnavailableKey)}'. {said}")

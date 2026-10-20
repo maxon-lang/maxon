@@ -5,17 +5,17 @@ let ChurnedInstructions = 150
 test 'a step that plants several points after more breakpoints came and went than any fixed table would hold runs the splice between its calls'
 	let staged = builtFixture(WalkAfterChurnCaseLabel, fixture: TableChurnFixtureName)
 	let offsets = statementOffsetsOfTheProgram(builtExecutable(staged), staged: staged, atMost: ChurnedInstructions)
-	let scanLine = anchorLine(staged, anchor: "spliced-scan")
-	let afterLine = anchorLine(staged, anchor: "after-scan")
+	let scanLine = anchorLine(staged.join(StagedProgramFileName), anchor: "spliced-scan")
+	let afterLine = anchorLine(staged.join(StagedProgramFileName), anchor: "after-scan")
 	let commands = debugCommandLine(appendedCommands(armedAndClearedAtEvery(offsets), rest: ["{BreakCommand} {lineTarget(scanLine)}", RunCommand, StepCommand]))
 	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 
-	try Expect.equal(eventsOfKind(events, kind: TimeoutEventName).count(), expected: 0, message: "⛔ A WALK'S OWN POINTS NEED THE ROOM THE CLEARED BREAKPOINTS GAVE BACK. `bytes.contains(urlIsDigit)` is spliced into `{MainFunctionName}`, so the `{StepCommand}` plants the splice's exit and its call through a value; if a breakpoint long cleared still counted against what the driver can hold, neither point could be planted and the loop is walked one instruction at a time. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(eventsOfKind(events, kind: TimeoutEventName).count(), expected: 0, message: "⛔ A WALK'S OWN POINTS NEED THE ROOM THE CLEARED BREAKPOINTS GAVE BACK. `bytes.contains(urlIsDigit)` is spliced into `{MainFunctionName}`, so the `{StepCommand}` plants the splice's exit and its call through a value; if a breakpoint long cleared still counted against what the driver can hold, neither point could be planted and the loop is walked one instruction at a time. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let stops = eventsOfKind(events, kind: StopEventName)
-	try Expect.equal(stops.count(), expected: 2, message: "the breakpoint on the scan line and the `{StepCommand}` are two stops. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(stops.count(), expected: 2, message: "the breakpoint on the scan line and the `{StepCommand}` are two stops. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let landed = eventAt(stops, index: 1)
 	try Expect.equal(textOf(landed, node: landed.root, key: ReasonKey), expected: StepStopReason, message: "the landing is the step's own. {said}")

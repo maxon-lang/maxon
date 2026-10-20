@@ -14,7 +14,6 @@ let VendorDirName = "vendor"
 let DeepDirName = "deep"
 let NamedRootSpelling = "vendor/deep"
 let IgnoreMarkerFileName = ".maxonignore"
-let ProgramSourceName = "main.maxon"
 let ProgramSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
 
 test 'a named directory under a .maxonignore is built'
@@ -31,13 +30,13 @@ type NamedDirectoryUnderAMarkerBuilt implements OutsideCheckoutCase
 	end 'create'
 
 	export function requireHeldIn(dir FilePath) throws TestFailure
-		let vendor = createdStagedDirectory(dir.join(VendorDirName))
-		let deep = createdStagedDirectory(vendor.join(DeepDirName))
+		let vendor = stagingDir(dir.join(VendorDirName).toString())
+		let deep = stagingDir(vendor.join(DeepDirName).toString())
 
 		writeStagedFile(vendor.join(IgnoreMarkerFileName), content: "")
-		writeStagedFile(deep.join(ProgramSourceName), content: ProgramSource)
+		writeStagedFile(deep.join(StagedProgramFileName), content: ProgramSource)
 
-		let build = runDriver([BuildCommandWord, NamedRootSpelling], workingDirectory: dir)
+		let build = spawnCompiler([BuildCommandWord, NamedRootSpelling], staged: dir)
 		let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
 
 		try Expect.equal(build.exitCode(), expected: 0, message: "`maxon build {NamedRootSpelling}` did not build a directory the caller NAMED, though the marker sits above it in {VendorDirName}/. {said}")
@@ -53,12 +52,12 @@ type MarkedDirectoryBuiltWhenNamed implements OutsideCheckoutCase
 	end 'create'
 
 	export function requireHeldIn(dir FilePath) throws TestFailure
-		let vendor = createdStagedDirectory(dir.join(VendorDirName))
+		let vendor = stagingDir(dir.join(VendorDirName).toString())
 
 		writeStagedFile(vendor.join(IgnoreMarkerFileName), content: "")
-		writeStagedFile(vendor.join(ProgramSourceName), content: ProgramSource)
+		writeStagedFile(vendor.join(StagedProgramFileName), content: ProgramSource)
 
-		let build = runDriver([BuildCommandWord, VendorDirName], workingDirectory: dir)
+		let build = spawnCompiler([BuildCommandWord, VendorDirName], staged: dir)
 		let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
 
 		try Expect.equal(build.exitCode(), expected: 0, message: "`maxon build {VendorDirName}` did not build the directory the caller NAMED, though the marker it carries excludes only a directory the walk DISCOVERS. {said}")

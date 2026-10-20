@@ -1,0 +1,70 @@
+let UntrustedProjectDirName = "diagnostics-project-untrusted"
+let UntrustedProjectSubdirName = "proj"
+let UntrustedManifestFileName = "app.maxproj"
+let UntrustedMarkerFileName = "manifest-ran.txt"
+let UntrustedManifestSource = "export function build() returns ExitCode\n\tlet marker = try FilePath.from(\"manifest-ran.txt\") otherwise return 1\n\ttry File.writeText(marker, content: \"ran\") otherwise return 1\n\tBuild.buildWithConfig(BuildConfig.create([\".\", \"../shared\"], output: \"program\"))\n\treturn 0\nend 'build'\n"
+let UntrustedNoteNeedle = "once the workspace is trusted"
+let InformationSeverity = 3
+
+union UntrustedProbe
+	published(items PublishedDiagnosticArray)
+	broke(detail String)
+end 'UntrustedProbe'
+
+test 'project diagnostics: an untrusted workspace never runs the project file and says its source list waits for trust'
+	let staged = freshOutsideCheckoutDir(UntrustedProjectDirName)
+	let project = staged.join(UntrustedProjectSubdirName)
+
+	if not Directory.create(project) 'couldNotCreate'
+		panic("the test could not run: could not create {project.toString()}")
+	end 'couldNotCreate'
+
+	writeCorpusFile(project, fileName: UntrustedManifestFileName, content: UntrustedManifestSource)
+
+	let probe = probeUntrustedManifest(project)
+	let ran = File.exists(project.join(UntrustedMarkerFileName))
+
+	discardOutsideCheckoutDir(staged)
+
+	match probe 'probe'
+		broke(detail) then Expect.fail("the session did not complete: {detail}")
+		published(items) then expectOneInformationNote(items)
+	end 'probe'
+
+	Expect.isFalse(ran, message: "an untrusted workspace never runs `{UntrustedManifestFileName}`, but it wrote `{UntrustedMarkerFileName}` beside itself")
+end 'project diagnostics: an untrusted workspace never runs the project file and says its source list waits for trust'
+
+function expectOneInformationNote(items PublishedDiagnosticArray) throws TestFailure
+	try Expect.equal(items.count(), expected: 1, message: "an untrusted workspace publishes ONE diagnostic on the project file. It published {items.count()}")
+
+	let note = try items.get(0) otherwise 'noItem'
+		try Expect.fail("the count above was 1, so element 0 exists.")
+		panic("expectOneInformationNote: `Expect.fail` always throws")
+	end 'noItem'
+
+	try Expect.equal(note.severity, expected: InformationSeverity, message: "the note is informational, not an error: {note.message}")
+	try Expect.contains(note.message, needle: UntrustedNoteNeedle, message: "the note does not say the source list applies once the workspace is trusted: {note.message}")
+end 'expectOneInformationNote'
+
+function probeUntrustedManifest(project FilePath) returns UntrustedProbe
+	var client = LspClient.start()
+	let uri = fileUriOf(project.join(UntrustedManifestFileName))
+	var probe = UntrustedProbe.broke(UnreportedSessionEnding)
+
+	try 'session'
+		_ = client.initializeAtRootWithTrust(project, trusted: false)
+		client.initialized()
+		client.openDocument(uri, content: UntrustedManifestSource)
+		probe = UntrustedProbe.published(client.awaitPublishedDiagnostics(uri).items)
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed or
+			malformedResponse or
+			serverRefused then probe = UntrustedProbe.broke(e.explained())
+		end 'reason'
+	end 'failed'
+
+	client.release()
+
+	return probe
+end 'probeUntrustedManifest'

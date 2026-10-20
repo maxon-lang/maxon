@@ -4,7 +4,7 @@ let MainFunctionName = "main"
 
 test 'a breakpoint inside a library function stops at the program frame that called into it'
 	let staged = builtFixture(LibraryStopCaseLabel, fixture: WalksFixtureName)
-	let callLine = anchorLine(staged, anchor: "library-call")
+	let callLine = anchorLine(staged.join(StagedProgramFileName), anchor: "library-call")
 	let executable = builtExecutable(staged)
 	let libraryStart = functionCodeStart(executable, staged: staged, name: LibraryFunctionName)
 	let commands = debugCommandLine(["{BreakCommand} {exactOffsetTarget(libraryStart)}", RunCommand, BacktraceCommand])
@@ -13,7 +13,7 @@ test 'a breakpoint inside a library function stops at the program frame that cal
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let stops = eventsOfKind(events, kind: StopEventName)
 
-	try Expect.equal(stops.count(), expected: 1, message: "the breakpoint at `{LibraryFunctionName}`'s entry stops the one sort. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(stops.count(), expected: 1, message: "the breakpoint at `{LibraryFunctionName}`'s entry stops the one sort. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let stopped = eventAt(stops, index: 0)
 	try Expect.atLeast(childrenOf(stopped, node: stopped.root, key: BacktraceKey).count(), than: 1, message: "a stop in library code is a stop inside the program's own call; its frames start at the program frame that made the call, and a stop with none has nowhere to show. {said}")

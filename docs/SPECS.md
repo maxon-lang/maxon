@@ -137,7 +137,7 @@ Three things pin what the compiler emits:
   stderr block.
 - **A `tests/` case over `--emit-ir` or `--emit-ir-runtime=<name>` output**, which spawns the compiler at
   a fixture and reads the printed IR itself. This is where an emitted-code property that must go RED
-  belongs; `tests/emitted-runtime/` is the corpus, and `tests/README.md` states what each one costs.
+  belongs; `tests/emittedRuntime/` is the corpus, and `tests/README.md` states what each one costs.
 
 `--update-required --filter=<spec>/` re-mints the `TargetIr:<lane>` block of this run's lane in the spec
 file, in place: it replaces a case's block, or adds one after the case's last block. A spec that holds any

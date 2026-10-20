@@ -15,27 +15,27 @@ type LiveHolderRefusesEveryBuild implements OutsideCheckoutCase
 
 	export function requireHeldIn(dir FilePath) throws TestFailure
 		stageSettledProgram(dir, name: SettledProgramDirName, source: TrivialProgramSource)
-		try requireBuilt(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: ListedWordArray.create()), which: "the first build under an empty cache root")
+		try requireBuilt(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: StringArray.create()), which: "the first build under an empty cache root")
 
 		let record = try soleBuildRecordIn(dir)
 
 		let lock = outputLockOf(record)
 
 		plantLockOfALiveHolder(lock)
-		let planted = plantedLockText(lock)
+		let planted = fileText(lock)
 
-		try requireRefusedWhileHeld(dir, options: ListedWordArray.create(), which: "a plain build")
+		try requireRefusedWhileHeld(dir, options: StringArray.create(), which: "a plain build")
 		try requireRefusedWhileHeld(dir, options: [RebuildFlag], which: "a build with `{RebuildFlag}`")
 		try requireRefusedWhileHeld(dir, options: [EmitIrFlag], which: "a build with `{EmitIrFlag}`")
-		try Expect.equal(plantedLockText(lock), expected: planted, message: "a refused build rewrote or removed the lock a live process holds.")
+		try Expect.equal(fileText(lock), expected: planted, message: "a refused build rewrote or removed the lock a live process holds.")
 
 		removePlantedLock(lock)
 
-		try requireUpToDate(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: ListedWordArray.create()), which: "the build after the lock was released, which the refused builds must not have disturbed")
+		try requireUpToDate(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: StringArray.create()), which: "the build after the lock was released, which the refused builds must not have disturbed")
 	end 'requireHeldIn'
 end 'LiveHolderRefusesEveryBuild'
 
-function requireRefusedWhileHeld(dir FilePath, options ListedWordArray, which String) throws TestFailure
+function requireRefusedWhileHeld(dir FilePath, options StringArray, which String) throws TestFailure
 	let build = runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: options)
 	let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
 

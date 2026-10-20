@@ -1,0 +1,196 @@
+public let StoredFixtureSuffix = ".fixture"
+public let StoredDotPrefix = "dot-"
+public let ScriptlibDirName = "scriptlib"
+public let PortablePathSeparator = "/"
+public let ProjectProductsDirName = ".maxon"
+
+public function listing(dir FilePath) returns FilePathArray
+	return try Directory.list(dir) otherwise panic("the gate could not run — could not list {dir.toString()}")
+end 'listing'
+
+public function fixtureDir(spelled String) returns FilePath
+	let path = try FilePath.from(spelled) otherwise panic("the gate could not run — '{spelled}' is not a spellable path")
+
+	if not Directory.isDirectory(path) 'notThere'
+		panic("the gate could not run — there is no directory at '{spelled}'. Every path a corpus names is relative to the CHECKOUT ROOT, which is the working directory a test binary inherits from `maxon test`; a run started anywhere else finds nothing.")
+	end 'notThere'
+
+	return path
+end 'fixtureDir'
+
+public function stagingDir(spelled String) returns FilePath
+	let path = try FilePath.from(spelled) otherwise panic("the gate could not run — '{spelled}' is not a spellable path")
+
+	if not Directory.create(path) 'couldNotCreate'
+		panic("the gate could not run — could not create '{spelled}'. It is where a case's runnable copy is built; nothing can be staged without it.")
+	end 'couldNotCreate'
+
+	return path.resolve(Directory.currentPath())
+end 'stagingDir'
+
+public function clearStagedFiles(dir FilePath)
+	for entry in listing(dir) 'eachEntry'
+		if Directory.isDirectory(entry) 'aDirectory'
+			clearStagedFiles(entry)
+			continue
+		end 'aDirectory'
+
+		try File.delete(entry) otherwise panic("the gate could not run — could not clear {entry.toString()} from a previous run's staging tree.")
+	end 'eachEntry'
+end 'clearStagedFiles'
+
+// The directories go too: a case asserting a directory is absent holds only if no earlier run left
+// one standing.
+public function clearStagedTree(dir FilePath)
+	for entry in listing(dir) 'eachEntry'
+		if Directory.isDirectory(entry) 'aDirectory'
+			clearStagedTree(entry)
+			try Directory.delete(entry) otherwise panic("the gate could not run — could not clear the staged directory {entry.toString()}.")
+			continue
+		end 'aDirectory'
+
+		try File.delete(entry) otherwise panic("the gate could not run — could not clear the staged file {entry.toString()}.")
+	end 'eachEntry'
+end 'clearStagedTree'
+
+// ⚠ `tests/fmt/generate-expectations.py`'s `stored_to_real` spells this mapping again, and the two
+// stage the same trees: a disagreement mints expectations for a tree no case stages.
+public function storedNameUnwrapped(name String) returns String
+	var real = name
+
+	if real.endsWith(StoredFixtureSuffix) 'inertSource'
+		let suffixStart = try real.findLast(StoredFixtureSuffix) otherwise panic("the gate could not run — '{real}' ends with {StoredFixtureSuffix} and yet does not contain it.")
+		real = real.slice(real.startIndex(), endIndex: suffixStart)
+	end 'inertSource'
+
+	if real.startsWith(StoredDotPrefix) 'hiddenName'
+		real = ".{real.replaceFirst(StoredDotPrefix, with: "")}"
+	end 'hiddenName'
+
+	return real
+end 'storedNameUnwrapped'
+
+public function stageStoredTree(stored FilePath, into FilePath)
+	for entry in listing(stored) 'eachEntry'
+		let target = into.join(storedNameUnwrapped(entry.filename()))
+
+		if Directory.isDirectory(entry) 'aDirectory'
+			if not Directory.create(target) 'couldNotCreate'
+				panic("the gate could not run — could not create the staging directory {target.toString()}.")
+			end 'couldNotCreate'
+
+			stageStoredTree(entry, into: target)
+			continue
+		end 'aDirectory'
+
+		let body = try File.readText(entry) otherwise panic("the gate could not run — could not read the stored fixture file {entry.toString()}.")
+		try File.writeText(target, content: body) otherwise panic("the gate could not run — could not stage {target.toString()}.")
+	end 'eachEntry'
+end 'stageStoredTree'
+
+public function freshStagingDir(spelled String) returns FilePath
+	let staged = stagingDir(spelled)
+	clearStagedFiles(staged)
+
+	return staged
+end 'freshStagingDir'
+
+public function stagedFixtureTree(fixturesDir String, stagingRootDir String, caseLabel String, fixture String) returns FilePath
+	let staged = freshStagingDir("{stagingRootDir}/{caseLabel}")
+	stageStoredTree(fixtureDir("{fixturesDir}/{fixture}"), into: staged)
+
+	return staged
+end 'stagedFixtureTree'
+
+public function writeStagedFile(path FilePath, content String)
+	try File.writeText(path, content: content) otherwise panic("the gate could not run — could not write {path.toString()}")
+end 'writeStagedFile'
+
+public function writeScriptlibPackageFile(tier FilePath, package String, fileName String, content String)
+	let packageDir = stagingDir(tier.join(ScriptlibDirName).join(package).toString())
+	writeStagedFile(packageDir.join(fileName), content: content)
+end 'writeScriptlibPackageFile'
+
+// `.maxon/` is skipped: `maxon test` stages a copy of the corpus there, which a walk would report
+// as the corpus's own sources.
+public function sourcesUnder(root FilePath) returns FilePathArray
+	var found = FilePathArray.create()
+
+	for entry in listing(root) 'eachEntry'
+		if Directory.isDirectory(entry) 'aDirectory'
+			if entry.filename() == ProjectProductsDirName 'buildProducts'
+				continue
+			end 'buildProducts'
+
+			for nested in sourcesUnder(entry) 'eachNested'
+				found.push(nested)
+			end 'eachNested'
+
+			continue
+		end 'aDirectory'
+
+		found.push(entry)
+	end 'eachEntry'
+
+	return found
+end 'sourcesUnder'
+
+public function sourcePathsEndingWith(root FilePath, suffixes StringArray) returns StringArray
+	var matching = StringArray.create()
+
+	for source in sourcesUnder(root) 'eachSource'
+		for suffix in suffixes 'eachSuffix'
+			if source.filename().endsWith(suffix) 'aMatch'
+				matching.push(source.toString())
+				break
+			end 'aMatch'
+		end 'eachSuffix'
+	end 'eachSource'
+
+	return matching
+end 'sourcePathsEndingWith'
+
+public function freshCaseRoot(caseRoot String) returns FilePath
+	let root = stagingDir(caseRoot)
+	clearStagedTree(root)
+	_ = stagingDir("{caseRoot}/{StdlibDirName}")
+
+	return root
+end 'freshCaseRoot'
+
+public function caseRootOf(staged FilePath) returns FilePath
+	return try staged.parent() otherwise panic("the gate could not run — {staged.toString()} has no parent, which is the checkout its tree lock lives in.")
+end 'caseRootOf'
+
+public function filesUnder(dir FilePath) returns FilePathArray
+	var found = FilePathArray.create()
+
+	if not Directory.isDirectory(dir) 'nothingThere'
+		return found
+	end 'nothingThere'
+
+	for entry in listing(dir) 'eachEntry'
+		if Directory.isDirectory(entry) 'aDirectory'
+			for nested in filesUnder(entry) 'eachNested'
+				found.push(nested)
+			end 'eachNested'
+
+			continue
+		end 'aDirectory'
+
+		found.push(entry)
+	end 'eachEntry'
+
+	return found
+end 'filesUnder'
+
+public function retainedAside(path FilePath, aside FilePath) returns FilePath
+	try File.writeBinary(aside, content: fileBytes(path)) otherwise panic("the gate could not run — could not retain {path.toString()} as {aside.toString()}.")
+	try File.delete(path) otherwise panic("the gate could not run — could not clear {path.toString()}, so the next build cannot be handed that path.")
+
+	return aside
+end 'retainedAside'
+
+public function greetingPackageSource(answer String) returns String
+	return "public function greeting() returns String\n\treturn \"{answer}\"\nend 'greeting'\n"
+end 'greetingPackageSource'

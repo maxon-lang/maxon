@@ -11,13 +11,13 @@ test 'a task whose name leads with an underscore is listed by a word that runs i
 	let dir = freshCaseDir(CaseDirName)
 	writeStagedFile(dir.join(TaskFileName), content: TasksSource)
 
-	let listed = runDriver([RunCommandWord], workingDirectory: dir)
+	let listed = spawnCompiler([RunCommandWord], staged: dir)
 	let listedSaid = "It wrote to stdout: {listed.stdout} and to stderr: {listed.stderr}"
 
 	Expect.equal(listed.exitCode(), expected: 0, message: "a bare `maxon {RunCommandWord}` beside `{TaskFileName}` did not succeed. {listedSaid}")
 	Expect.contains(listed.stdout, needle: ListedWord, message: "the listing did not offer `{ListedWord}`: a leading `_` stays one, because a word leading with `-` is read as an option. {listedSaid}")
 
-	let ran = runDriver([RunCommandWord, ListedWord], workingDirectory: dir)
+	let ran = spawnCompiler([RunCommandWord, ListedWord], staged: dir)
 	let ranSaid = "It wrote to stdout: {ran.stdout} and to stderr: {ran.stderr}"
 
 	Expect.equal(ran.exitCode(), expected: TaskExitCode, message: "`maxon {RunCommandWord} {ListedWord}`, the word the listing offered, did not run `_warm_up`. {ranSaid}")

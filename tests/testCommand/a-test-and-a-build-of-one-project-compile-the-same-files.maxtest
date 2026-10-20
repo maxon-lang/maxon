@@ -1,0 +1,23 @@
+let SameFilesCase = "a-test-and-a-build-of-one-project-compile-the-same-files"
+let ListedSourceTestName = "the listed source is compiled"
+let StrayDirName = "stray"
+let StrayOutputName = "stray-program"
+let BuiltProgramName = "program"
+let BuiltCleanly = 0
+let StrayDiagnostic = "undefinedStrayValue"
+
+test 'a test and a build of one project compile the same files'
+	let project = stagedCaseProject(SameFilesCase)
+
+	let tested = runTestCommandOn(project, caseName: SameFilesCase)
+	expectRanOnePassingTest(tested, testName: ListedSourceTestName, caseName: SameFilesCase)
+
+	let built = runManifestBuildIn(project, caseName: SameFilesCase)
+	Expect.equal(built.exitCode(), expected: BuiltCleanly, message: "`{BuildCommandName}` of the project compiles only what its `.maxproj` lists, which leaves out `{StrayDirName}/`. It printed: {built.stdout}{built.stderr}")
+	Expect.isTrue(File.exists(executableIn(project, stem: BuiltProgramName)), message: "`{BuildCommandName}` of the project writes the `{BuiltProgramName}` its `.maxproj` names, beside it in {project.toString()}")
+
+	let strayOutput = caseRootOf(project).join(StrayOutputName)
+	let stray = spawnCompiler([BuildCommandName, project.join(StrayDirName).toString(), "{OutputOptionPrefix}{strayOutput.toString()}"], staged: Directory.currentPath(), what: "the control build of {StrayDirName}")
+	Expect.notEqual(stray.exitCode(), expected: BuiltCleanly, message: "the control: `{StrayDirName}/` does not compile on its own, so a run that compiled it could not have succeeded. It printed: {stray.stdout}{stray.stderr}")
+	Expect.contains(stray.stderr, needle: StrayDiagnostic, message: "the control: `{StrayDirName}/` fails for the undefined name it holds. It printed: {stray.stdout}{stray.stderr}")
+end 'a test and a build of one project compile the same files'

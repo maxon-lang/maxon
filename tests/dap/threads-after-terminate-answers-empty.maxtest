@@ -37,8 +37,8 @@ type TerminatedSession implements DapSession
 end 'TerminatedSession'
 
 test 'threads sent after a terminate answer an empty list, and only an adapter that never launched says so'
-	let staged = dapStagedFixture(TerminatedCaseLabel, fixture: SteppingFixtureName)
-	var session = TerminatedSession.create(dapBuildFixture(staged), source: dapStagedSource(staged), anchored: dapAnchorLine(staged, anchor: OuterCallAnchor))
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: TerminatedCaseLabel, fixture: SteppingFixtureName)
+	var session = TerminatedSession.create(buildStagedSource(staged.join(StagedProgramFileName), staged: staged), source: staged.join(StagedProgramFileName), anchored: anchorLine(staged.join(StagedProgramFileName), anchor: OuterCallAnchor))
 	try dapRunSession(session, completing: "complete")
 
 	try Expect.isFalse(dapSuccess(session.beforeLaunch), message: "the control: `{ThreadsCommand}` before any `{LaunchCommand}` is refused, because there is no program to have threads")

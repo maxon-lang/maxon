@@ -10,7 +10,6 @@
 
 let CliReferenceDocument = "docs/CLI_REFERENCE.md"
 let McpSectionHeading = "## MCP Server"
-let WordUnderscore = "_"
 
 test 'the CLI reference MCP section names every tool and every argument'
 	let tools = listTools(true)
@@ -28,12 +27,12 @@ test 'the CLI reference MCP section names every tool and every argument'
 			pushOnce(required, name: property)
 		end 'eachProperty'
 
-		roster.push("{tool}({spaced(properties)})")
+		roster.push("{tool}({joined(properties, separator: Space)})")
 	end 'eachTool'
 
 	let section = sectionOf(checkoutDocumentText(CliReferenceDocument), heading: McpSectionHeading)
 
-	Expect.isFalse(section.isEmpty(), message: "{CliReferenceDocument} has no `{McpSectionHeading}` section. It must exist and name every tool and argument the server declares: {spaced(roster)}")
+	Expect.isFalse(section.isEmpty(), message: "{CliReferenceDocument} has no `{McpSectionHeading}` section. It must exist and name every tool and argument the server declares: {joined(roster, separator: Space)}")
 
 	let documented = wordsIn(section)
 	var missing = StringArray.create()
@@ -44,46 +43,11 @@ test 'the CLI reference MCP section names every tool and every argument'
 		end 'undocumented'
 	end 'eachName'
 
-	Expect.isEmpty(spaced(missing), message: "{CliReferenceDocument}'s `{McpSectionHeading}` section does not name these tools or arguments: {spaced(missing)}")
+	Expect.isEmpty(joined(missing, separator: Space), message: "{CliReferenceDocument}'s `{McpSectionHeading}` section does not name these tools or arguments: {joined(missing, separator: Space)}")
 end 'the CLI reference MCP section names every tool and every argument'
-
-function wordsIn(text String) returns StringArray
-	var words = StringArray.create()
-	var current = ""
-
-	for c in text 'eachCharacter'
-		let spelled = c.toString()
-
-		if Ascii.isAlphanumeric(c) or spelled == WordUnderscore 'insideAWord'
-			current.append(spelled)
-			continue
-		end 'insideAWord'
-
-		if not current.isEmpty() 'wordEnds'
-			pushOnce(words, name: current)
-			current = ""
-		end 'wordEnds'
-	end 'eachCharacter'
-
-	if not current.isEmpty() 'wordAtTheEnd'
-		pushOnce(words, name: current)
-	end 'wordAtTheEnd'
-
-	return words
-end 'wordsIn'
 
 function pushOnce(names StringArray, name String)
 	if not names.contains(name) 'unseen'
 		names.push(name)
 	end 'unseen'
 end 'pushOnce'
-
-function spaced(names StringArray) returns String
-	var rendered = ""
-
-	for name in names 'eachName'
-		rendered.append("{name} ")
-	end 'eachName'
-
-	return rendered.trim()
-end 'spaced'

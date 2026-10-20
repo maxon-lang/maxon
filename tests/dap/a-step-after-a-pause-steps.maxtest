@@ -40,13 +40,13 @@ type StepAfterPauseSession implements DapSession
 end 'StepAfterPauseSession'
 
 test 'next and stepIn from a pause stop each stop as a step in the paused frame'
-	let staged = dapStagedFixture(StepAfterPauseCaseLabel, fixture: SpinSignalFixtureName)
-	var session = StepAfterPauseSession.create(dapBuildFixture(staged))
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: StepAfterPauseCaseLabel, fixture: SpinSignalFixtureName)
+	var session = StepAfterPauseSession.create(buildStagedSource(staged.join(StagedProgramFileName), staged: staged))
 	try dapRunSession(session, completing: "complete the steps after the pause")
 
 	try Expect.equal(session.pauseReason, expected: PauseReason, message: "the first stop is the pause; it said `{session.pauseReason}`")
 	try Expect.equal(session.nextReason, expected: StepReason, message: "⛔ A `{NextCommand}` FROM A PAUSE STOP MUST STEP, not let the program run on; the stop said `{session.nextReason}`")
-	try Expect.equal(dapFrameNameAt(session.framesAfterNext, frame: 0), expected: GrindFunctionName, message: "`{NextCommand}` stays in the loop the pause interrupted; it landed in {dapRendered(session.framesAfterNext)}")
+	try Expect.equal(dapFrameNameAt(session.framesAfterNext, frame: 0), expected: GrindFunctionName, message: "`{NextCommand}` stays in the loop the pause interrupted; it landed in {joined(session.framesAfterNext, separator: Space)}")
 	try Expect.equal(session.stepInReason, expected: StepReason, message: "a `{StepInCommand}` after it is a step too; the stop said `{session.stepInReason}`")
-	try Expect.equal(dapFrameNameAt(session.framesAfterStepIn, frame: 0), expected: GrindFunctionName, message: "`{StepInCommand}` in a loop that calls nothing stays in it; it landed in {dapRendered(session.framesAfterStepIn)}")
+	try Expect.equal(dapFrameNameAt(session.framesAfterStepIn, frame: 0), expected: GrindFunctionName, message: "`{StepInCommand}` in a loop that calls nothing stays in it; it landed in {joined(session.framesAfterStepIn, separator: Space)}")
 end 'next and stepIn from a pause stop each stop as a step in the paused frame'

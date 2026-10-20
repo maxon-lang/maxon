@@ -4,16 +4,16 @@ let CalleeFunctionName = "rest"
 
 test 'a next and a finish out of a function that parks on a sleep land at the call in its caller'
 	let staged = builtFixture(ParkingReturnCaseLabel, fixture: ParkingCallFixtureName)
-	let returnLine = anchorLine(staged, anchor: "rest-return")
-	let firstCallLine = anchorLine(staged, anchor: "first-call")
-	let secondCallLine = anchorLine(staged, anchor: "second-call")
+	let returnLine = anchorLine(staged.join(StagedProgramFileName), anchor: "rest-return")
+	let firstCallLine = anchorLine(staged.join(StagedProgramFileName), anchor: "first-call")
+	let secondCallLine = anchorLine(staged.join(StagedProgramFileName), anchor: "second-call")
 	let commands = debugCommandLine(["{BreakCommand} {lineTarget(returnLine)}", RunCommand, NextCommand, ContinueCommand, FinishCommand])
 	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let stops = eventsOfKind(events, kind: StopEventName)
 
-	try Expect.equal(stops.count(), expected: 4, message: "the breakpoint, the `{NextCommand}`, the breakpoint of the second call and the `{FinishCommand}` are four stops. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(stops.count(), expected: 4, message: "the breakpoint, the `{NextCommand}`, the breakpoint of the second call and the `{FinishCommand}` are four stops. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let firstReturn = eventAt(stops, index: 0)
 	try Expect.equal(textOf(firstReturn, node: firstReturn.root, key: FunctionKey), expected: CalleeFunctionName, message: "the breakpoint on the return line stops in `{CalleeFunctionName}`, after its sleeps parked and resumed it. {said}")

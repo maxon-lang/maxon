@@ -1,0 +1,43 @@
+module union LspArrival
+	framed(body String)
+	endOfStream
+	framingError(detail String)
+	projectResolved(dir FilePath, answer ProjectInputsAnswer, ticket ResolutionTicket)
+end 'LspArrival'
+
+typealias LspArrivalPromise = Promise with LspArrival
+
+module typealias LspArrivalPromiseArray = Array with LspArrivalPromise
+
+module typealias ResolutionTicket = int(0 to u64.max)
+
+module let LspFrameSlot = 0 as ElementIndex
+
+module type LspStdinReader
+	var stdin as Stdin
+
+	module static function create() returns LspStdinReader
+		return Self{stdin: Console.stdin()}
+	end 'create'
+
+	export function next() returns LspArrival
+		return match readLspMessage(self.stdin) 'incoming'
+			message(body) gives LspArrival.framed(body)
+			endOfStream gives LspArrival.endOfStream
+			framingError(detail) gives LspArrival.framingError(detail)
+		end 'incoming'
+	end 'next'
+end 'LspStdinReader'
+
+// Runs a `.maxproj` off the session loop, which answers every other request while a manifest
+// compiles and runs. ⚠ One resolver serves every project in turn, so a slow `.maxproj` delays the
+// answer for every project asked about after it.
+module type LspProjectResolver
+	module static function create() returns LspProjectResolver
+		return Self{}
+	end 'create'
+
+	export function resolve(dir FilePath, ticket ResolutionTicket) returns LspArrival
+		return LspArrival.projectResolved(dir.clone(), answer: resolvedProjectInputs(dir), ticket: ticket)
+	end 'resolve'
+end 'LspProjectResolver'

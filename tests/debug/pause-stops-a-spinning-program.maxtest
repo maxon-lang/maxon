@@ -11,10 +11,10 @@ test 'pause stops a program that has no breakpoint in it and never ends'
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 
-	Expect.equal(eventsOfKind(events, kind: TimeoutEventName).count(), expected: 1, message: "the `{RunCommand}` over a program with nothing armed must answer one `{TimeoutEventName}`. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(eventsOfKind(events, kind: TimeoutEventName).count(), expected: 1, message: "the `{RunCommand}` over a program with nothing armed must answer one `{TimeoutEventName}`. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let stops = eventsOfKind(events, kind: StopEventName)
-	Expect.equal(stops.count(), expected: 1, message: "⭐⭐ THIS IS THE ONLY WAY INTO A PROGRAM THAT PLANTS NO TRAP OF ITS OWN. `{PauseCommand}` has the driver interrupt the process from outside it, whatever its threads are running, so a session that timed out is not a session that has lost the program. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(stops.count(), expected: 1, message: "⭐⭐ THIS IS THE ONLY WAY INTO A PROGRAM THAT PLANTS NO TRAP OF ITS OWN. `{PauseCommand}` has the driver interrupt the process from outside it, whatever its threads are running, so a session that timed out is not a session that has lost the program. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let stopped = eventAt(stops, index: 0)
 	Expect.equal(textOf(stopped, node: stopped.root, key: ReasonKey), expected: PauseStopReason, message: "a stop the driver asked for is reported `{PauseStopReason}`, never as a breakpoint the program does not carry. {said}")

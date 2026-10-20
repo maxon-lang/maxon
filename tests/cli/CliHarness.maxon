@@ -34,17 +34,12 @@ export typealias ReportedTally = int(i64.min to i64.max)
 // ⛔ **THIS FILE'S PATHS ARE RELATIVE TO THE CHECKOUT ROOT**, which is the working directory a test binary
 // inherits from `maxon test`. A run started anywhere else fails loudly rather than finding nothing.
 
-// The binary under test, relative to the checkout root and without its host suffix. It is the compiler
-// under test AND the driver under test.
-let TestedCompilerStem = "maxon-bin/.maxon/maxon"
-
 export let HelpCommandWord = "help"
 
 export let BuildCommandWord = "build"
 export let ScaleTestCommandWord = "scale-test"
 export let TestCommandWord = "test"
 export let VersionCommandWord = "version"
-export let OutputOptionPrefix = "--output="
 
 // The command that fills the cache, the command that empties it, and the variable naming the directory
 // the cache is kept under. Respelled here because this corpus is a separate program and cannot read the
@@ -52,7 +47,6 @@ export let OutputOptionPrefix = "--output="
 export let ExecuteCommandWord = "execute"
 export let CacheCommandWord = "cache"
 export let CacheClearVerb = "clear"
-export let CacheRootVariable = "MAXON_RUN_CACHE_ROOT"
 
 // ⭐ **THE ONE DIRECTORY MAXON OWNS UNDER THE ROOT THAT VARIABLE NAMES.** Everything the cache holds sits
 // below it and nothing else in that root is Maxon's, so a case asks about THIS directory rather than
@@ -65,12 +59,9 @@ export let CacheVendorDirName = "maxon"
 // case fills the cache one of them names, or points two of them at one directory.
 #if os(Windows)
 	export let HomeDirectoryVariable = "USERPROFILE"
-	export let HostTempVariable = "TEMP"
 	let WindowsCacheRootVariable = "LOCALAPPDATA"
 #else
 	export let HomeDirectoryVariable = "HOME"
-	export let HostTempVariable = "TMPDIR"
-	let PosixLastResortTempDir = "/tmp"
 #endif
 
 // What the driver owns under a HOME directory: its own directory beside the `bin/` and `stdlib/` an
@@ -84,7 +75,7 @@ export let EarlyPreviewWords = "early preview"
 
 // ⭐ THREE WORDS THAT PROVE A READING IS NOT VACUOUS — see the header. Not a census: a command added to
 // the driver belongs in neither this list nor any other list in this corpus.
-function anchorCommands() returns ListedWordArray
+function anchorCommands() returns StringArray
 	return [BuildCommandWord, VersionCommandWord, HelpCommandWord]
 end 'anchorCommands'
 
@@ -113,11 +104,6 @@ export let DevFlag = "--dev"
 // directory per case under it, because `maxon test` runs files concurrently.
 let StagingRootDirName = "temp/cli"
 
-// What an install calls the compiler and the library it keeps beside it. The basename is kept for the
-// copy because macOS takes an ad-hoc signature's identifier from the FILENAME.
-let CompilerBaseName = "maxon"
-export let StdlibDirName = "stdlib"
-
 // The directory a script install keeps its binary in - `<root>/bin/maxon` beside `<root>/stdlib` - and the
 // spelling a staging call uses for the case's own directory. Respelled from the install script, which this
 // corpus cannot read.
@@ -130,7 +116,6 @@ export let InstallScriptAddress = "maxon.dev/install"
 // The library root the compiler loads beside `stdlib/`, copied with it into an install-shaped stage.
 let RuntimeDirName = "runtime"
 
-let ScriptlibDirName = "scriptlib"
 let CheckScriptlibCommandWord = "check-scriptlib"
 
 // Where a case keeps the cache it is about, under its own staging directory, and the program it caches a
@@ -141,15 +126,7 @@ let CachedProgramSource = "function main() returns ExitCode\n\treturn 0\nend 'ma
 
 // A case that must stage outside the checkout goes under the host's temp area. The variable naming
 // that area is `HostTempVariable`, which the driver's cache reads too.
-let OutsideCheckoutStagingDirNamePrefix = "maxon_tests_cli"
 let VendorDirName = "vendor"
-
-// A path component that climbs out of the directory it is joined under.
-let ParentComponent = ".."
-
-// The separator this file's own paths are spelled with, folded into the host's by `FilePath`.
-let PathSeparator = "/"
-let WindowsPathSeparator = "\\"
 
 // How the reference is laid out, and the whole of what these cases read it by. A COMMAND SECTION sits at
 // the left margin of `maxon help`; a LABEL — a command under `Commands:`, an option under its section — is
@@ -191,15 +168,12 @@ export let CliReferenceDocument = "docs/CLI_REFERENCE.md"
 // How that document spells an invocation, and the mark around inline code.
 export let DriverInvocation = "maxon "
 export let CodeSpanMark = "`"
-let CarriageReturn = "\r"
 
 // The last byte that means the same thing under every code page a console might be set to.
 let LastAsciiByte = 127
 
 // A list of the words one listing showed, and how many of them a case is asking for.
-export typealias ListedWordArray = Array with String
 export typealias WordTally = int(0 to u32.max)
-export typealias PathArray = Array with FilePath
 
 // What a case's private directory for one candidate cache-root variable is called, named after the
 // variable so a child's environment can be read back off the tree it wrote into.
@@ -208,7 +182,6 @@ let PrivateRootPrefix = "env-"
 // Reading a decimal count out of a report.
 let AsciiZero = 48
 let AsciiNine = 57
-let DecimalBase = 10
 
 // A report is one line per subject, and what a line says about its subject follows the path naming it.
 let ReportLineSeparator = "\n"
@@ -222,48 +195,9 @@ export enum ReportReadingError implements Error
 	namesNoSuchDirectory
 end 'ReportReadingError'
 
-// Spawn `binary` - this checkout's `maxon` unless a case staged a copy - with `arguments` in `environment`,
-// and collect everything it said.
-export function runDriver(arguments ListedWordArray, binary FilePath = testedCompilerPath(), environment Environment = Environment.inherit, workingDirectory FilePath = Directory.currentPath()) returns CollectedOutput
-	var argv = StringArray.create()
-
-	for argument in arguments 'eachArgument'
-		argv.push(argument)
-	end 'eachArgument'
-
-	var config = Configuration.create(Executable.path(binary))
-	config.arguments = argv
-	config.environment = environment
-	config.workingDirectory = workingDirectory
-
-	return try config.run() otherwise (e) 'spawnFailed'
-		panic("CliHarness: the gate could not run - could not spawn {binary.toString()} ({e.displayReason()}). These cases pin what it prints, and a report nothing compares is a claim.")
-	end 'spawnFailed'
-end 'runDriver'
-
-// One run with no arguments at all — the overview.
-export function runWithNoArguments() returns CollectedOutput
-	return runDriver(ListedWordArray.create())
-end 'runWithNoArguments'
-
-// One run of a single word or flag, which is every remaining shape this corpus needs.
-export function runOneArgument(argument String) returns CollectedOutput
-	var arguments = ListedWordArray.create()
-	arguments.push(argument)
-	return runDriver(arguments)
-end 'runOneArgument'
-
-// `maxon help <command>`.
-export function runHelpFor(command String) returns CollectedOutput
-	var arguments = ListedWordArray.create()
-	arguments.push(HelpCommandWord)
-	arguments.push(command)
-	return runDriver(arguments)
-end 'runHelpFor'
-
 // What `maxon version` prints: the line the header opens with.
 export function versionLine() returns String
-	let line = runOneArgument(VersionCommandWord).stdout.trim()
+	let line = spawnCompiler([VersionCommandWord]).stdout.trim()
 
 	if line.isEmpty() 'noVersion'
 		panic("CliHarness: the gate could not run - `maxon {VersionCommandWord}` printed nothing to compare a header with.")
@@ -283,29 +217,6 @@ export function requireVersionHeader(stdout String, which String) throws TestFai
 	try Expect.contains(second, needle: EarlyPreviewWords, message: "{which} does not warn, on its second line, that Maxon is an early preview. Its stdout was: {stdout}")
 end 'requireVersionHeader'
 
-// The binary under test, absolute and with the suffix this host can actually spawn.
-function testedCompilerPath() returns FilePath
-	let spelled = "{TestedCompilerStem}{executableSuffix()}"
-	let relative = try FilePath.from(spelled) otherwise panic("CliHarness: the gate could not run - '{spelled}' is not a spellable path")
-	let binary = relative.resolve(Directory.currentPath())
-
-	if not File.exists(binary) 'noBinary'
-		panic("CliHarness: the gate could not run — there is no compiler at {binary.toString()}. This corpus's paths are relative to the CHECKOUT ROOT; run it from there, and build `{TestedCompilerStem}` first.")
-	end 'noBinary'
-
-	return binary
-end 'testedCompilerPath'
-
-export function executableSuffix() returns String
-	#if os(Windows)
-		let suffix = ".exe"
-	#else
-		let suffix = ""
-	#endif
-
-	return suffix
-end 'executableSuffix'
-
 // **A COPY OF THE COMPILER UNDER TEST, PLACED THE WAY AN INSTALL PLACES ONE, WITH AN EMPTY `stdlib/`.**
 // The compiler takes the NEAREST `stdlib/` above its own executable, so the staged one is found before the
 // checkout's, and whatever the copy concludes about how it was installed it reads off where it sits.
@@ -320,9 +231,9 @@ export function stageCompiler(caseDirName String, binaryIn String, stdlibIn Stri
 	end 'eachSpelling'
 
 	_ = freshCaseDir(caseDirName)
-	_ = stagingDir("{caseRelative(caseDirName, relative: stdlibIn)}{PathSeparator}{StdlibDirName}")
+	_ = stagingDir("{caseRelative(caseDirName, relative: stdlibIn)}{PortablePathSeparator}{StdlibDirName}")
 
-	let staged = stagingDir(caseRelative(caseDirName, relative: binaryIn)).join("{CompilerBaseName}{executableSuffix()}")
+	let staged = stagingDir(caseRelative(caseDirName, relative: binaryIn)).join(testedCompilerPath().filename())
 	let original = testedCompilerPath()
 	copyFile(original, into: staged, mode: FilePermission.executable)
 
@@ -332,14 +243,13 @@ end 'stageCompiler'
 // A case's own staging directory, absolute, with the previous run's files cleared so a rerun starts from
 // the same tree.
 export function freshCaseDir(caseDirName String) returns FilePath
-	requireOneCaseDirName(caseDirName)
+	requireOneDirectoryName(caseDirName)
 
 	let dir = stagingDir(caseRelative(caseDirName, relative: CaseDirItself))
-	clearStagedFiles(dir)
+	clearStagedTree(dir)
 	return dir
 end 'freshCaseDir'
 
-let BesideAProgramMainFileName = "main.maxon"
 let BesideAProgramMainSource = "function main() returns ExitCode\n\tlet started = WallClock.nowUnixSeconds()\n\treturn 0 if started > 0 else 1\nend 'main'\n"
 let BesideAProgramOutputStem = "program"
 let DuplicateDefinitionCode = "E3006"
@@ -353,12 +263,12 @@ export type ProgramBuiltBesideALibraryFile
 	end 'create'
 end 'ProgramBuiltBesideALibraryFile'
 
-export function buildAProgramBesideALibraryFile(caseDirName String, libraryFile String, options ListedWordArray) returns ProgramBuiltBesideALibraryFile
+export function buildAProgramBesideALibraryFile(caseDirName String, libraryFile String, options StringArray) returns ProgramBuiltBesideALibraryFile
 	let dir = freshCaseDir(caseDirName)
-	let main = dir.join(BesideAProgramMainFileName)
+	let main = dir.join(StagedProgramFileName)
 	writeStagedFile(main, content: BesideAProgramMainSource)
 
-	var arguments = ListedWordArray.create()
+	var arguments = StringArray.create()
 	arguments.push(BuildCommandWord)
 	arguments.push(main.toString())
 	arguments.push(libraryFile)
@@ -369,11 +279,11 @@ export function buildAProgramBesideALibraryFile(caseDirName String, libraryFile 
 
 	arguments.push("{OutputOptionPrefix}{dir.join(BesideAProgramOutputStem).toString()}")
 
-	return ProgramBuiltBesideALibraryFile.create(dir.join("{BesideAProgramOutputStem}{executableSuffix()}"), build: runDriver(arguments))
+	return ProgramBuiltBesideALibraryFile.create(dir.join("{BesideAProgramOutputStem}{executableSuffix()}"), build: spawnCompiler(arguments))
 end 'buildAProgramBesideALibraryFile'
 
 export function expectALibraryFileBesideAProgramIsReadOnce(caseDirName String, libraryFile String, whoseFile String) throws TestFailure
-	let built = buildAProgramBesideALibraryFile(caseDirName, libraryFile: libraryFile, options: ListedWordArray.create())
+	let built = buildAProgramBesideALibraryFile(caseDirName, libraryFile: libraryFile, options: StringArray.create())
 	let build = built.build
 	let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
 
@@ -388,7 +298,7 @@ export interface OutsideCheckoutCase
 end 'OutsideCheckoutCase'
 
 export function requireHeldOutsideCheckout(caseDirName String, check OutsideCheckoutCase) throws TestFailure
-	try requireHeldThenDiscard(freshOutsideCheckoutDir(caseDirName), check: check)
+	try requireHeldThenDiscard(freshOutsideCheckoutDirWithoutVendor(caseDirName), check: check)
 end 'requireHeldOutsideCheckout'
 
 // An install-shaped copy of the compiler under test: `<dir>/bin/maxon` beside a full
@@ -396,57 +306,32 @@ end 'requireHeldOutsideCheckout'
 // nothing it walks to — from its own image or from a working directory under `<dir>` — is the
 // checkout.
 export function requireHeldInAnInstallOutsideCheckout(caseDirName String, check OutsideCheckoutCase) throws TestFailure
-	let dir = freshOutsideCheckoutDir(caseDirName)
+	let dir = freshOutsideCheckoutDirWithoutVendor(caseDirName)
 
 	for library in [StdlibDirName, RuntimeDirName] 'eachLibrary'
-		copyTree(checkoutDir(library), into: dir.join(library))
+		copyTree(fixtureDir(library).resolve(Directory.currentPath()), into: dir.join(library))
 	end 'eachLibrary'
 
-	_ = createdStagedDirectory(dir.join(ScriptInstallBinDirName))
+	_ = stagingDir(dir.join(ScriptInstallBinDirName).toString())
 	copyFile(testedCompilerPath(), into: installedCompilerIn(dir), mode: FilePermission.executable)
 
 	try requireHeldThenDiscard(dir, check: check)
 end 'requireHeldInAnInstallOutsideCheckout'
 
 export function installedCompilerIn(installDir FilePath) returns FilePath
-	return installDir.join(ScriptInstallBinDirName).join("{CompilerBaseName}{executableSuffix()}")
+	return installDir.join(ScriptInstallBinDirName).join(testedCompilerPath().filename())
 end 'installedCompilerIn'
-
-export function writeScriptlibPackageFile(installDir FilePath, package String, fileName String, content String)
-	writeStagedFile(createdStagedDirectory(installDir.join(ScriptlibDirName).join(package)).join(fileName), content: content)
-end 'writeScriptlibPackageFile'
 
 export function runCheckScriptlib(installDir FilePath) returns CollectedOutput
 	return runWithCacheRoot([CheckScriptlibCommandWord], cacheRoot: cacheRootIn(installDir), workingDirectory: installDir, binary: installedCompilerIn(installDir))
 end 'runCheckScriptlib'
 
-export function createdStagedDirectory(path FilePath) returns FilePath
-	if not Directory.create(path) 'couldNotCreate'
-		panic("CliHarness: the gate could not run - could not create {path.toString()}.")
-	end 'couldNotCreate'
-
-	return path
-end 'createdStagedDirectory'
-
-export function writeStagedFile(path FilePath, content String)
-	try File.writeText(path, content: content) otherwise panic("CliHarness: the gate could not run - could not write {path.toString()}")
-end 'writeStagedFile'
-
-// For a child that must find nothing the checkout holds above its working directory — `vendor/`
-// above all, which the driver walks up to from there — so a `vendor/` above it is refused rather
-// than let the case pass or fail about a toolchain it was built to be without. Named per process,
-// because two runs on one machine sharing a name would clear each other's directories mid-run.
-// Private, so no case stages here without the removal `requireHeldThenDiscard` makes; a case that
-// panics or times out still leaves its directory behind.
-function freshOutsideCheckoutDir(caseDirName String) returns FilePath
-	requireOneCaseDirName(caseDirName)
-
-	let dir = createdStagedDirectory(hostTempDir().join("{OutsideCheckoutStagingDirNamePrefix}{CaseDirectoryWordSeparator}{Process.id()}{CaseDirectoryWordSeparator}{caseDirectoryName(caseDirName)}"))
-
-	clearStagedFiles(dir)
+function freshOutsideCheckoutDirWithoutVendor(caseDirName String) returns FilePath
+	let dir = freshOutsideCheckoutDir(caseDirectoryName(caseDirName))
 	requireNoVendorAbove(dir)
+
 	return dir
-end 'freshOutsideCheckoutDir'
+end 'freshOutsideCheckoutDirWithoutVendor'
 
 function requireHeldThenDiscard(dir FilePath, check OutsideCheckoutCase) throws TestFailure
 	try check.requireHeldIn(dir) otherwise (failure) 'failed'
@@ -457,15 +342,10 @@ function requireHeldThenDiscard(dir FilePath, check OutsideCheckoutCase) throws 
 	discardOutsideCheckoutDir(dir)
 end 'requireHeldThenDiscard'
 
-function discardOutsideCheckoutDir(dir FilePath)
-	clearStagedFiles(dir)
-	try Directory.delete(dir) otherwise panic("CliHarness: the gate could not run - could not remove {dir.toString()}, where a case staged outside the checkout.")
-end 'discardOutsideCheckoutDir'
-
 // The cache root a case hands the driver: a directory under the case's own staging directory, so nothing
 // here reads the developer's real cache or writes into it.
 export function cacheRootIn(dir FilePath) returns FilePath
-	return createdStagedDirectory(dir.join(CaseCacheDirName))
+	return stagingDir(dir.join(CaseCacheDirName).toString())
 end 'cacheRootIn'
 
 // ⭐ **WHERE THE DRIVER CACHES UNDER A HOME DIRECTORY.** Respelled here for the reason the variables above
@@ -490,7 +370,7 @@ export function rosterWithHighestRootBlocked(dir FilePath) returns EnvMap
 	let blocked = blockedHighestRoot(dir)
 	blockCacheRootAt(blocked)
 
-	let fallThrough = createdStagedDirectory(dir.join(FallThroughRootDirName))
+	let fallThrough = stagingDir(dir.join(FallThroughRootDirName).toString())
 
 	var naming = EnvMap.create()
 	naming.upsert(HomeDirectoryVariable, value: blocked.toString())
@@ -515,12 +395,12 @@ end 'fallThroughCacheRoot'
 // ⭐ **EVERY ROOT THE DRIVER CONSULTS IS ONE A VARIABLE NAMES, WHICH IS WHAT MAKES THE CONFINEMENT
 // COMPLETE**: a child here can reach no cache directory outside the case's own tree, so no case can count
 // or remove anything of the developer's.
-export function runWithCacheRoots(arguments ListedWordArray, naming EnvMap, workingDirectory FilePath, binary FilePath = testedCompilerPath()) returns CollectedOutput
-	return runDriver(arguments, binary: binary, environment: confinedCacheEnvironment(workingDirectory, naming: naming), workingDirectory: workingDirectory)
+export function runWithCacheRoots(arguments StringArray, naming EnvMap, workingDirectory FilePath, binary FilePath = testedCompilerPath()) returns CollectedOutput
+	return spawnCompiler(arguments, binary: binary, environment: confinedCacheEnvironment(workingDirectory, naming: naming), staged: workingDirectory)
 end 'runWithCacheRoots'
 
 // One driver run whose cache is confined to `cacheRoot`.
-export function runWithCacheRoot(arguments ListedWordArray, cacheRoot FilePath, workingDirectory FilePath, binary FilePath = testedCompilerPath()) returns CollectedOutput
+export function runWithCacheRoot(arguments StringArray, cacheRoot FilePath, workingDirectory FilePath, binary FilePath = testedCompilerPath()) returns CollectedOutput
 	var naming = EnvMap.create()
 	naming.upsert(CacheRootVariable, value: cacheRoot.toString())
 
@@ -587,7 +467,7 @@ end 'confinedCacheEnvironment'
 // ⭐ **THE CANDIDATES A CASE MAY POINT SOMEWHERE ELSE.** The override is not one of them: a case that
 // names nothing must reach a child that sees none, which is the only way to fill the cache a lower-ranked
 // candidate keeps.
-export function confinableCacheVariables() returns ListedWordArray
+export function confinableCacheVariables() returns StringArray
 	#if os(Windows)
 		let variables = [HomeDirectoryVariable, WindowsCacheRootVariable, HostTempVariable]
 	#else
@@ -597,8 +477,8 @@ export function confinableCacheVariables() returns ListedWordArray
 	return variables
 end 'confinableCacheVariables'
 
-function variablesACallerCanSet() returns ListedWordArray
-	var variables = ListedWordArray.create()
+function variablesACallerCanSet() returns StringArray
+	var variables = StringArray.create()
 
 	for variable in confinableCacheVariables() 'eachCandidate'
 		variables.push(variable)
@@ -654,20 +534,10 @@ function namesACacheRoot(name String) returns bool
 	return false
 end 'namesACacheRoot'
 
-function foldedVariable(name String) returns String
-	#if os(Windows)
-		let folded = name.toLower()
-	#else
-		let folded = name
-	#endif
-
-	return folded
-end 'foldedVariable'
-
 // A directory of the case's own for one candidate variable. Created, because a child handed a temp area
 // that is not there can fail at something other than the cache.
 function privateRootFor(dir FilePath, variable String) returns FilePath
-	return createdStagedDirectory(dir.join("{PrivateRootPrefix}{variable}"))
+	return stagingDir(dir.join("{PrivateRootPrefix}{variable}").toString())
 end 'privateRootFor'
 
 // ⭐ **A CACHE WITH A REAL BUILD IN IT, PUT THERE BY THE DRIVER.** Only the driver knows the layout it
@@ -707,28 +577,6 @@ function publishCachedBuildUnder(dir FilePath, naming EnvMap, owned FilePath, pr
 		panic("CliHarness: the gate could not run - `maxon {ExecuteCommandWord}` left nothing under {owned.toString()}, so a case about clearing the cache would be about an empty one.")
 	end 'nothingCached'
 end 'publishCachedBuildUnder'
-
-// Every file at any depth under `dir`, so a case can count what the driver published without respelling
-// the layout it published into.
-export function filesUnder(dir FilePath) returns PathArray
-	var found = PathArray.create()
-	collectFiles(dir, into: found)
-
-	return found
-end 'filesUnder'
-
-function collectFiles(dir FilePath, into PathArray)
-	let entries = try Directory.list(dir) otherwise return
-
-	for entry in entries 'eachEntry'
-		if Directory.isDirectory(entry) 'aDirectory'
-			collectFiles(entry, into: into)
-			continue
-		end 'aDirectory'
-
-		into.push(entry)
-	end 'eachEntry'
-end 'collectFiles'
 
 // ⭐ **WHAT A REPORT SAYS IT REMOVED, read as the first run of digits in it.** A case comparing the
 // clear's answer against what was on disk asks the number and never the wording around it.
@@ -773,16 +621,6 @@ export function reportedStateOf(report String, directory FilePath) returns Strin
 	throw ReportReadingError.namesNoSuchDirectory
 end 'reportedStateOf'
 
-function hostTempDir() returns FilePath
-	#if os(Windows)
-		let spelled = try Process.environmentVariable(HostTempVariable) otherwise panic("CliHarness: the gate could not run - {HostTempVariable} is not set, and it names the only temp area outside the checkout a case can stage in.")
-	#else
-		let spelled = try Process.environmentVariable(HostTempVariable) otherwise PosixLastResortTempDir
-	#endif
-
-	return try FilePath.from(spelled) otherwise panic("CliHarness: the gate could not run - the host temp area '{spelled}' is not a spellable path")
-end 'hostTempDir'
-
 function requireNoVendorAbove(dir FilePath)
 	var level = dir
 
@@ -801,22 +639,10 @@ function requireNoVendorAbove(dir FilePath)
 	end 'eachLevel'
 end 'requireNoVendorAbove'
 
-// A directory of the checkout, from the checkout root.
-function checkoutDir(spelled String) returns FilePath
-	let path = try FilePath.from(spelled) otherwise panic("CliHarness: the gate could not run - '{spelled}' is not a spellable path")
-	let resolved = path.resolve(Directory.currentPath())
-
-	if not Directory.isDirectory(resolved) 'notThere'
-		panic("CliHarness: the gate could not run - there is no {resolved.toString()}. This corpus's paths are relative to the CHECKOUT ROOT; run it from there.")
-	end 'notThere'
-
-	return resolved
-end 'checkoutDir'
-
 function copyTree(from FilePath, into FilePath)
-	_ = createdStagedDirectory(into)
+	_ = stagingDir(into.toString())
 
-	let entries = try Directory.list(from) otherwise panic("CliHarness: the gate could not run - could not list {from.toString()}")
+	let entries = listing(from)
 
 	for entry in entries 'eachEntry'
 		let destination = into.join(entry.filename())
@@ -831,27 +657,13 @@ function copyTree(from FilePath, into FilePath)
 end 'copyTree'
 
 function copyFile(from FilePath, into FilePath, mode FilePermission)
-	rewrittenFile(into, bytes: bytesOf(from), mode: mode)
+	rewrittenFile(into, bytes: fileBytes(from), mode: mode)
 end 'copyFile'
-
-function requireStaysInStaging(component String)
-	if component.contains(ParentComponent) 'climbsOut'
-		panic("CliHarness: the gate could not run - '{component}' climbs out of the staging directory it names, and a staging call clears files under what it names.")
-	end 'climbsOut'
-end 'requireStaysInStaging'
-
-function requireOneCaseDirName(caseDirName String)
-	requireStaysInStaging(caseDirName)
-
-	if caseDirName.isEmpty() or caseDirName.contains(PathSeparator) or caseDirName.contains(WindowsPathSeparator) 'notOneDirectory'
-		panic("CliHarness: the gate could not run - '{caseDirName}' is not one directory name. Every case stages under a directory of its own, and this is the one whose files are cleared.")
-	end 'notOneDirectory'
-end 'requireOneCaseDirName'
 
 // A case's staging directory, or a directory under it, spelled from the checkout root.
 function caseRelative(caseDirName String, relative String) returns String
-	let caseDir = "{StagingRootDirName}{PathSeparator}{caseDirectoryName(caseDirName)}"
-	return caseDir if relative.isEmpty() else "{caseDir}{PathSeparator}{relative}"
+	let caseDir = "{StagingRootDirName}{PortablePathSeparator}{caseDirectoryName(caseDirName)}"
+	return caseDir if relative.isEmpty() else "{caseDir}{PortablePathSeparator}{relative}"
 end 'caseRelative'
 
 let CaseNameWordSeparator = "-"
@@ -861,39 +673,11 @@ function caseDirectoryName(caseDirName String) returns String
 	return caseDirName.replace(CaseNameWordSeparator, with: CaseDirectoryWordSeparator)
 end 'caseDirectoryName'
 
-// A directory this run writes into, created with its missing ancestors so a fresh checkout without `temp/`
-// is not a failure, and absolute because what is staged in it is spawned.
-function stagingDir(spelled String) returns FilePath
-	let path = try FilePath.from(spelled) otherwise panic("CliHarness: the gate could not run - '{spelled}' is not a spellable path")
-
-	if not Directory.create(path) 'couldNotCreate'
-		panic("CliHarness: the gate could not run - could not create '{spelled}', which is where a case stages its copy of the compiler.")
-	end 'couldNotCreate'
-
-	return path.resolve(Directory.currentPath())
-end 'stagingDir'
-
-// The directories go too, not only the files: a case asserting a directory is absent is only
-// correct if no previous run left one standing.
-function clearStagedFiles(dir FilePath)
-	let entries = try Directory.list(dir) otherwise panic("CliHarness: the gate could not run - could not list {dir.toString()}")
-
-	for entry in entries 'eachEntry'
-		if Directory.isDirectory(entry) 'aDirectory'
-			clearStagedFiles(entry)
-			try Directory.delete(entry) otherwise panic("CliHarness: the gate could not run - could not clear the staged directory {entry.toString()}.")
-			continue
-		end 'aDirectory'
-
-		try File.delete(entry) otherwise panic("CliHarness: the gate could not run - could not clear the staged file {entry.toString()}.")
-	end 'eachEntry'
-end 'clearStagedFiles'
-
 // ⭐ **THE LABELS A LISTING SHOWS**, read off its layout: a label is indented exactly two spaces, so
 // wrapped prose — which starts far to the right — is never mistaken for one. In the short list these are
 // the COMMANDS; in a reference section they are that command's OPTIONS.
-export function labelledWordsIn(listing String) returns ListedWordArray
-	var words = ListedWordArray.create()
+export function labelledWordsIn(listing String) returns StringArray
+	var words = StringArray.create()
 
 	for label in labelsIn(listing) 'eachLabel'
 		words.push(firstWordOf(label))
@@ -904,8 +688,8 @@ end 'labelledWordsIn'
 
 // Each label whole — every spelling an option line gives, such as `--bail, --bail=N` — which
 // ends where the gap before the description column starts.
-function labelsIn(listing String) returns ListedWordArray
-	var labels = ListedWordArray.create()
+function labelsIn(listing String) returns StringArray
+	var labels = StringArray.create()
 
 	for line in listing.split("\n") 'eachLine'
 		if not line.startsWith(LabelIndent) 'notALabel'
@@ -926,8 +710,8 @@ end 'labelsIn'
 // ⭐ **EVERY OPTION SPELLING A LISTING SHOWS, ONCE EACH**, cut the way a reader types them: a label's
 // comma-separated alternatives each give their flag, and a flag taking a value keeps its `=` and drops the
 // placeholder — `--output=<path>` gives `--output=`, `--bail, --bail=N` gives both.
-export function optionSpellingsIn(listing String) returns ListedWordArray
-	var spellings = ListedWordArray.create()
+export function optionSpellingsIn(listing String) returns StringArray
+	var spellings = StringArray.create()
 
 	for label in labelsIn(listing) 'eachLabel'
 		if not label.startsWith(OptionPrefix) 'aCommand'
@@ -970,8 +754,8 @@ end 'spellingOfAlternative'
 // ⭐ **THE UNITS AN OPTION IS SPELLED IN, READ OUT OF FREE TEXT**: maximal runs of letters, digits, `-` and
 // `_`, each carrying an `=` that directly follows it. Membership in this list is what "the text names
 // `--output=`" means, so `--output-dir` and `x--output=` never count as naming it.
-export function spellingsIn(text String) returns ListedWordArray
-	var spellings = ListedWordArray.create()
+export function spellingsIn(text String) returns StringArray
+	var spellings = StringArray.create()
 	var current = ""
 
 	for c in text 'eachCharacter'
@@ -1001,8 +785,8 @@ export function spellingsIn(text String) returns ListedWordArray
 	return spellings
 end 'spellingsIn'
 
-export function linesOpeningIn(text String, prefix String) returns ListedWordArray
-	var lines = ListedWordArray.create()
+export function linesOpeningIn(text String, prefix String) returns StringArray
+	var lines = StringArray.create()
 
 	for line in text.split("\n") 'eachLine'
 		if line.startsWith(prefix) 'opensWithIt'
@@ -1016,19 +800,15 @@ end 'linesOpeningIn'
 // The CLI reference document, with Windows line endings folded so a line is the same line on every host.
 export function cliReferenceText() returns String
 	let path = try FilePath.from(CliReferenceDocument) otherwise panic("CliHarness: the gate could not run - '{CliReferenceDocument}' is not a spellable path")
-	let text = try File.readText(path) otherwise panic("CliHarness: the gate could not run - could not read '{CliReferenceDocument}'. This corpus's paths are relative to the CHECKOUT ROOT; run it from there.")
+	let text = fileText(path)
 
 	return withoutCarriageReturns(text)
 end 'cliReferenceText'
 
-export function withoutCarriageReturns(text String) returns String
-	return text.replace(CarriageReturn, with: "")
-end 'withoutCarriageReturns'
-
 // ⭐ **THE COMMANDS THE FULL REFERENCE HAS A SECTION FOR**, read off ITS layout: a section label is the
 // only thing at the left margin apart from the `Usage:` line.
-export function sectionedCommandsIn(reference String) returns ListedWordArray
-	var words = ListedWordArray.create()
+export function sectionedCommandsIn(reference String) returns StringArray
+	var words = StringArray.create()
 
 	for line in reference.split("\n") 'eachLine'
 		if line.trim().isEmpty() 'blank'
@@ -1052,8 +832,8 @@ end 'sectionedCommandsIn'
 // The labels that ARE option spellings, or the ones that are not — which is what tells the short list
 // apart from the reference without either being pinned to the byte. ONE selector taking the answer it
 // wants, because the two questions are one question and its negation.
-export function labelsWhereOptionhoodIs(words ListedWordArray, isOption bool) returns ListedWordArray
-	var selected = ListedWordArray.create()
+export function labelsWhereOptionhoodIs(words StringArray, isOption bool) returns StringArray
+	var selected = StringArray.create()
 
 	for word in words 'eachWord'
 		if word.startsWith(OptionPrefix) == isOption 'wanted'
@@ -1066,7 +846,7 @@ end 'labelsWhereOptionhoodIs'
 
 // The anchors a listing did NOT advertise, as one string — named rather than counted, because a reader
 // looking at a red gate needs to know which word went missing. Empty is the pass.
-export function anchorsMissingFrom(words ListedWordArray) returns String
+export function anchorsMissingFrom(words StringArray) returns String
 	var missing = ""
 
 	for anchor in anchorCommands() 'eachAnchor'
@@ -1081,8 +861,8 @@ end 'anchorsMissingFrom'
 // The words in `left` that `right` does not have, IN ORDER. Both a set difference a case asserts is
 // empty and the hidden run one asserts is not, so it returns the words rather than a count or a
 // rendering — `listed` is what turns it into a report.
-export function wordsNotIn(left ListedWordArray, right ListedWordArray) returns ListedWordArray
-	var missing = ListedWordArray.create()
+export function wordsNotIn(left StringArray, right StringArray) returns StringArray
+	var missing = StringArray.create()
 
 	for word in left 'eachWord'
 		if not right.contains(word) 'absent'
@@ -1094,8 +874,8 @@ export function wordsNotIn(left ListedWordArray, right ListedWordArray) returns 
 end 'wordsNotIn'
 
 // The first `count` words, which is how a case takes the run a listing prints FIRST.
-export function firstFew(words ListedWordArray, count WordTally) returns ListedWordArray
-	var taken = ListedWordArray.create()
+export function firstFew(words StringArray, count WordTally) returns StringArray
+	var taken = StringArray.create()
 
 	for word in words 'eachWord'
 		if taken.count() >= count as ElementIndex 'enough'
@@ -1110,7 +890,7 @@ end 'firstFew'
 
 // ⭐ **THE PAIRS THAT BREAK ASCENDING ORDER**, named rather than counted. Empty is the pass, and the
 // listing being sorted is the one ordering rule a gate can check — see this file's header.
-export function outOfOrderIn(words ListedWordArray) returns String
+export function outOfOrderIn(words StringArray) returns String
 	var broken = ""
 	var previous = ""
 
@@ -1129,8 +909,8 @@ end 'outOfOrderIn'
 // record with NO ordering in this language (E3005) — `==` and `!=` are its only comparisons — so the
 // order this corpus asserts has to be spelled somewhere, and one place is better than each case's own.
 function sortsAhead(before String, after String) returns bool
-	let left = bytesOf(before)
-	let right = bytesOf(after)
+	let left = bytesOfText(before)
+	let right = bytesOfText(after)
 
 	// ⚠ NOT the `min` builtin: it promotes to float, and a counted `for` needs an integer bound.
 	let shared = left.count() if left.count() <= right.count() else right.count()
@@ -1149,7 +929,7 @@ function sortsAhead(before String, after String) returns bool
 	return left.count() < right.count()
 end 'sortsAhead'
 
-function bytesOf(text String) returns ByteArray
+function bytesOfText(text String) returns ByteArray
 	var collected = ByteArray.create()
 
 	for one in text.bytes() 'eachByte'
@@ -1157,18 +937,7 @@ function bytesOf(text String) returns ByteArray
 	end 'eachByte'
 
 	return collected
-end 'bytesOf'
-
-// The words of a list, for a report that has to show them all.
-export function listed(words ListedWordArray) returns String
-	var rendered = ""
-
-	for word in words 'eachWord'
-		rendered.append("{word} ")
-	end 'eachWord'
-
-	return rendered.trim()
-end 'listed'
+end 'bytesOfText'
 
 // The first line carrying a byte outside ASCII, or empty when there is none.
 //
@@ -1208,9 +977,7 @@ end 'firstWordOf'
 export let CompilerDebugLogFlag = "--log=compiler:debug"
 export let TargetOptionPrefix = "--target="
 export let LibraryCacheDirName = "library"
-export let SidecarSuffix = ".mxdbg"
 export let TrivialProgramSource = "function main() returns ExitCode\n\treturn 42\nend 'main'\n"
-let StagedProgramFileName = "main.maxon"
 let ColdImageName = "cold-image"
 let ColdSidecarName = "cold-sidecar"
 
@@ -1250,7 +1017,7 @@ export type LibraryCacheReport
 end 'LibraryCacheReport'
 
 export function stageProgram(dir FilePath, name String, source String)
-	_ = createdStagedDirectory(dir.join(name))
+	_ = stagingDir(dir.join(name).toString())
 	writeStagedFile(stagedProgramSource(dir, name: name), content: source)
 end 'stageProgram'
 
@@ -1267,8 +1034,8 @@ export function libraryCacheDirIn(dir FilePath) returns FilePath
 	return cacheRootIn(dir).join(CacheVendorDirName).join(LibraryCacheDirName)
 end 'libraryCacheDirIn'
 
-export function runLibraryCacheBuild(dir FilePath, program String, output String, options ListedWordArray) returns CollectedOutput
-	var logged = ListedWordArray.create()
+export function runLibraryCacheBuild(dir FilePath, program String, output String, options StringArray) returns CollectedOutput
+	var logged = StringArray.create()
 	logged.push(CompilerDebugLogFlag)
 
 	for option in options 'eachOption'
@@ -1297,8 +1064,8 @@ let ClockPollLimit = 100 as ClockPollTally
 
 export let SettledProgramDirName = "app"
 
-export function runRecordedBuild(dir FilePath, program String, output String, options ListedWordArray, binary FilePath = testedCompilerPath()) returns CollectedOutput
-	var arguments = ListedWordArray.create()
+export function runRecordedBuild(dir FilePath, program String, output String, options StringArray, binary FilePath = testedCompilerPath()) returns CollectedOutput
+	var arguments = StringArray.create()
 	arguments.push(BuildCommandWord)
 	arguments.push(program)
 	arguments.push("{OutputOptionPrefix}{dir.join(output).toString()}")
@@ -1343,7 +1110,7 @@ let BuildRecordDirName = "build"
 let BuildRecordExtension = ".mxbr"
 
 export function soleBuildRecordIn(dir FilePath) returns FilePath throws TestFailure
-	var records = PathArray.create()
+	var records = FilePathArray.create()
 
 	for file in filesUnder(cacheRootIn(dir).join(CacheVendorDirName).join(BuildRecordDirName)) 'eachCachedFile'
 		if file.filename().endsWith(BuildRecordExtension) 'aRecord'
@@ -1401,10 +1168,6 @@ export function plantLockOfAnEndedHolder(lock FilePath)
 	plantOutputLock(lock, content: lockRecordOf(endedVersionRunProcessId(), host: thisLockHostIdentity()))
 end 'plantLockOfAnEndedHolder'
 
-export function plantedLockText(lock FilePath) returns String
-	return try File.readText(lock) otherwise panic("CliHarness: the gate could not run - could not read {lock.toString()}.")
-end 'plantedLockText'
-
 export function removePlantedLock(lock FilePath)
 	try File.delete(lock) otherwise panic("CliHarness: the gate could not run - could not delete {lock.toString()}, which a case planted.")
 end 'removePlantedLock'
@@ -1414,7 +1177,7 @@ function plantOutputLock(lock FilePath, content String)
 
 	_ = Directory.create(locks)
 
-	try File.writeText(lock, content: content) otherwise panic("CliHarness: the gate could not run - could not plant {lock.toString()}.")
+	writeStagedFile(lock, content: content)
 end 'plantOutputLock'
 
 function lockRecordOf(pid Pid, host String) returns String
@@ -1422,7 +1185,7 @@ function lockRecordOf(pid Pid, host String) returns String
 end 'lockRecordOf'
 
 export function endedVersionRunProcessId() returns Pid
-	return runDriver([VersionCommandWord]).pid
+	return spawnCompiler([VersionCommandWord]).pid
 end 'endedVersionRunProcessId'
 
 function thisLockHostIdentity() returns String
@@ -1441,7 +1204,7 @@ function thisLockHostIdentity() returns String
 end 'thisLockHostIdentity'
 
 #if os(Linux)
-	function firstNamedIn(locations ListedWordArray) returns String
+	function firstNamedIn(locations StringArray) returns String
 		for location in locations 'eachLocation'
 			let path = try FilePath.from(location) otherwise panic("CliHarness: '{location}' is not a valid path")
 			let text = try File.readText(path) otherwise continue
@@ -1455,7 +1218,7 @@ end 'thisLockHostIdentity'
 	end 'firstNamedIn'
 #endif
 
-function hostIdentityOf(parts ListedWordArray) returns String
+function hostIdentityOf(parts StringArray) returns String
 	var identity = HostOsName
 
 	for part in parts 'eachPart'
@@ -1465,7 +1228,7 @@ function hostIdentityOf(parts ListedWordArray) returns String
 	return identity
 end 'hostIdentityOf'
 
-export function requireASecondBuildIsUpToDate(dir FilePath, output String, options ListedWordArray) throws TestFailure
+export function requireASecondBuildIsUpToDate(dir FilePath, output String, options StringArray) throws TestFailure
 	stageSettledProgram(dir, name: SettledProgramDirName, source: TrivialProgramSource)
 
 	try requireCompiled(runRecordedBuild(dir, program: SettledProgramDirName, output: output, options: options), reason: FirstBuildReason, which: "the first build under an empty cache root")
@@ -1504,7 +1267,7 @@ export function waitPastTheModificationOf(file FilePath, probeIn FilePath)
 end 'waitPastTheModificationOf'
 
 export function requireLibraryCacheBuild(dir FilePath, program String, output String, which String) returns CollectedOutput throws TestFailure
-	let built = runLibraryCacheBuild(dir, program: program, output: output, options: ListedWordArray.create())
+	let built = runLibraryCacheBuild(dir, program: program, output: output, options: StringArray.create())
 	try Expect.equal(built.exitCode(), expected: 0, message: "{which} did not succeed. It wrote to stdout: {built.stdout} and to stderr: {built.stderr}")
 
 	return built
@@ -1527,7 +1290,7 @@ export function requireWarmBuildMatchesCold(dir FilePath, program String, output
 	let coldImage = retainedAside(image, aside: dir.join(ColdImageName))
 	let coldSidecar = retainedAside(sidecar, aside: dir.join(ColdSidecarName))
 
-	let warm = try libraryCacheReportOf(runLibraryCacheBuild(dir, program: program, output: output, options: ListedWordArray.create()), which: "the warm build of {subject}")
+	let warm = try libraryCacheReportOf(runLibraryCacheBuild(dir, program: program, output: output, options: StringArray.create()), which: "the warm build of {subject}")
 	try Expect.equal(warm.baseline, expected: LibraryBaseline.loaded, message: "the warm build of {subject} did not load the library baseline the cold build wrote, so comparing its bytes with the cold build's compares two cold builds. It wrote: {warm.line}")
 	try Expect.greaterThan(warm.loaded, than: 0, message: "the warm build of {subject} loaded no library cache entry, so comparing its bytes with the cold build's compares two cold builds. It wrote: {warm.line}")
 
@@ -1607,16 +1370,9 @@ function libraryCacheLabelOf(field LibraryCacheField) returns String
 	end 'label'
 end 'libraryCacheLabelOf'
 
-export function retainedAside(path FilePath, aside FilePath) returns FilePath
-	copyFile(path, into: aside, mode: FilePermission.normal)
-	try File.delete(path) otherwise panic("CliHarness: the gate could not run - could not clear {path.toString()}, so the next build cannot be handed that path.")
-
-	return aside
-end 'retainedAside'
-
 export function requireSameBytes(first FilePath, second FilePath, why String) throws TestFailure
-	let firstBytes = bytesOf(first)
-	let secondBytes = bytesOf(second)
+	let firstBytes = fileBytes(first)
+	let secondBytes = fileBytes(second)
 
 	try Expect.notEqual(firstBytes.count(), expected: 0, message: "positive control: {first.toString()} is empty, and two empty files agree about nothing.")
 	try Expect.isTrue(firstBytes.equals(secondBytes), message: "{why} {first.toString()} holds {firstBytes.count()} bytes and {second.toString()} {secondBytes.count()}, and they differ.")
@@ -1750,10 +1506,6 @@ export function rewrittenFile(path FilePath, bytes ByteArray, mode FilePermissio
 	try File.writeBinary(path, content: bytes, mode: mode) otherwise panic("CliHarness: the gate could not run - could not write {path.toString()}.")
 end 'rewrittenFile'
 
-export function bytesOf(path FilePath) returns ByteArray
-	return try File.readBinary(path) otherwise panic("CliHarness: the gate could not run - could not read {path.toString()}.")
-end 'bytesOf'
-
 export typealias MetricsField = int(0 to 11)
 
 let MetricsFileSuffix = "-metrics.tsv"
@@ -1775,11 +1527,11 @@ export function stagedProgramMetrics(dir FilePath, name String, source String, d
 	stageProgram(dir, name: name, source: source)
 
 	let metricsFileName = "{name}{MetricsFileSuffix}"
-	let built = runDriver([BuildCommandWord, name, "{MetricsOptionPrefix}{metricsFileName}"], workingDirectory: dir)
+	let built = spawnCompiler([BuildCommandWord, name, "{MetricsOptionPrefix}{metricsFileName}"], staged: dir)
 
 	try Expect.equal(built.exitCode(), expected: 0, message: "{described} did not build, so it was never measured. It wrote to stderr: {built.stderr}")
 
-	return try File.readText(dir.join(metricsFileName)) otherwise panic("CliHarness: the gate could not run - the build of {described} wrote no metrics table at {metricsFileName}")
+	return fileText(dir.join(metricsFileName))
 end 'stagedProgramMetrics'
 
 export function metricsCell(table String, kind String, name String, field MetricsField) returns ReportedTally
@@ -2103,7 +1855,7 @@ export function requireDeclarationRefused(caseDirName String, source String, ref
 	let dir = freshCaseDir(caseDirName)
 	let sourcePath = dir.join("{DeclarationStem}{DeclarationSourceExtension}")
 	writeStagedFile(sourcePath, content: source)
-	let run = runDriver([BuildCommandWord, sourcePath.toString(), "{OutputOptionPrefix}{dir.join(DeclarationStem).toString()}"])
+	let run = spawnCompiler([BuildCommandWord, sourcePath.toString(), "{OutputOptionPrefix}{dir.join(DeclarationStem).toString()}"])
 
 	try Expect.equal(run.exitCode(), expected: 1, message: "a declaration of {DeclaredMemberCount} members ({caseDirName}) was not refused. It said: {run.stdout}{run.stderr}")
 	try Expect.isFalse(run.stderr.contains(CompilerPanicPhrase), message: "a declaration of {DeclaredMemberCount} members ({caseDirName}) panicked the compiler. It said: {run.stderr}")

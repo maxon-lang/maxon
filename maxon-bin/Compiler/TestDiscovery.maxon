@@ -107,17 +107,17 @@ end 'testDisplayName'
 
 let TestKeywordSpelling = "test"
 
-// ⭐⭐ **EVERY `test` IN `subject`**, a project directory or one `.maxtest` file. Loads it WITH its test
-// files (the one selection an ordinary build does not make — see `Compiler.SourceSelection`) and runs
-// the declaration sweep over it.
+// ⭐⭐ **EVERY `test` IN `inputPaths`**, a project's sources or one `.maxtest` file. Loads them WITH
+// their test files (the one selection an ordinary build does not make — see
+// `Compiler.SourceSelection`) and runs the declaration sweep over it.
 //
 // ⚠ **THE TARGET IS A PARAMETER AND IS NOT DEFAULTED TO THE HOST**: the sweep resolves
 // `#if os(…)` / `arch(…)`, so a test behind one
 // exists for some targets and not others. Discovering for the host and building for `--target` would
 // drop a test from the report without saying so, and emit a dispatcher call to one the real compile
 // cannot resolve.
-export function discoverTests(subject FilePath, target Target) returns DiscoveredTestArray throws CompileError
-	var project = try loadProject([subject], target: target, scriptlib: ScriptlibLoad.omitted, sourceSelection: SourceSelection.productionAndTests)
+export function discoverTests(inputPaths MaxonSourcePathArray, target Target) returns DiscoveredTestArray throws CompileError
+	var project = try loadProject(inputPaths, target: target, scriptlib: ScriptlibLoad.omitted, sourceSelection: SourceSelection.productionAndTests)
 	view signatures = try queryProgramSignatures(project)
 
 	// Nothing downstream refuses these: stopping at the declaration sweep makes this the last holder of

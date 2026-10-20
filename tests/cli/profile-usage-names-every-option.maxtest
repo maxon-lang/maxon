@@ -12,7 +12,7 @@
 
 	test 'profile usage line names every option its body documents'
 		// No verb: the refusal that prints the usage.
-		let run = runOneArgument(ProfileCommandWord)
+		let run = spawnCompiler([ProfileCommandWord])
 
 		let observedExit = run.exitCode()
 		try Expect.equal(observedExit, expected: 1, message: "`maxon {ProfileCommandWord}` with no verb was not refused. It said: {run.stdout}{run.stderr}")
@@ -24,7 +24,7 @@
 		let documented = labelsWhereOptionhoodIs(labelledWordsIn(run.stderr), isOption: true)
 		try Expect.isTrue(documented.count() > 0, message: "no option was read off `maxon {ProfileCommandWord}`'s usage body, so the comparison below would be vacuous. It said: {run.stderr}")
 
-		var missing = ListedWordArray.create()
+		var missing = StringArray.create()
 
 		// The two halves give a value-taking option different placeholders, so they are compared by spelling.
 		for option in documented 'eachOption'
@@ -35,6 +35,6 @@
 			end 'absent'
 		end 'eachOption'
 
-		try Expect.isEmpty(listed(missing), message: "`maxon {ProfileCommandWord}` documents these options on lines of their own and leaves them out of its usage line: {listed(missing)}. The usage line is: {usageLine}")
+		try Expect.isEmpty(joined(missing, separator: Space), message: "`maxon {ProfileCommandWord}` documents these options on lines of their own and leaves them out of its usage line: {joined(missing, separator: Space)}. The usage line is: {usageLine}")
 	end 'profile usage line names every option its body documents'
 #endif

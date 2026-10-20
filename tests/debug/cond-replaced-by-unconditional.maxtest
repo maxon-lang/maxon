@@ -8,7 +8,7 @@ let ContinuesPastEveryHit = 200
 test 'a plain break over a line already carrying a condition drops the condition and stops on every hit'
 	let staged = builtFixture(CondReplacedCaseLabel, fixture: ConditionFixtureName)
 	let undebugged = runBuiltProgram(staged)
-	let hitLine = anchorLine(staged, anchor: AnchorName)
+	let hitLine = anchorLine(staged.join(StagedProgramFileName), anchor: AnchorName)
 	let iterations = linesStartingWith(undebugged.stdout, prefix: CountedLinePrefix)
 
 	Expect.atLeast(iterations, than: 2, message: "the fixture must run the anchored line more than once, or `every hit` and `the one the condition names` would be the same count. It ran it {iterations} times.")
@@ -25,7 +25,7 @@ test 'a plain break over a line already carrying a condition drops the condition
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 
 	let breakpoints = eventsOfKind(events, kind: BreakpointEventName)
-	Expect.equal(breakpoints.count(), expected: 2, message: "arming the line twice is two `{BreakpointEventName}` events. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(breakpoints.count(), expected: 2, message: "arming the line twice is two `{BreakpointEventName}` events. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let conditioned = eventAt(breakpoints, index: 0)
 	Expect.equal(textOf(conditioned, node: conditioned.root, key: ActionKey), expected: SetAction, message: "the conditional arming must succeed first, or the replacement below has nothing to replace. {said}")

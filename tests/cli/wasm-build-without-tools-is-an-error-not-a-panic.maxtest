@@ -8,10 +8,8 @@
 
 let CaseDirName = "wasm-build-without-tools"
 let WorkDirName = "work"
-let SourceFileName = "main.maxon"
 let OutputStem = "main"
 let WasmExtension = ".wasm"
-let WasmTargetOption = "--target=wasm32-wasi"
 let Source = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
 
 let MissingToolWording = "wasm-tools"
@@ -27,13 +25,13 @@ type AnErrorNotAPanic implements OutsideCheckoutCase
 	end 'create'
 
 	export function requireHeldIn(dir FilePath) throws TestFailure
-		let work = createdStagedDirectory(dir.join(WorkDirName))
+		let work = stagingDir(dir.join(WorkDirName).toString())
 
-		let sourcePath = work.join(SourceFileName)
-		try File.writeText(sourcePath, content: Source) otherwise panic("wasm-build-without-tools: the gate could not run - could not write {sourcePath.toString()}")
+		let sourcePath = work.join(StagedProgramFileName)
+		writeStagedFile(sourcePath, content: Source)
 
 		let output = work.join(OutputStem)
-		let build = runDriver([BuildCommandWord, sourcePath.toString(), "{OutputOptionPrefix}{output.toString()}", WasmTargetOption], binary: installedCompilerIn(dir), workingDirectory: work)
+		let build = spawnCompiler([BuildCommandWord, sourcePath.toString(), "{OutputOptionPrefix}{output.toString()}", WasmTargetOption], binary: installedCompilerIn(dir), staged: work)
 		let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
 
 		try Expect.equal(build.exitCode(), expected: 1, message: "a wasm build with no `wasm-tools` anywhere exited {build.exitCode()}, where an ordinary error exits 1. {said}")

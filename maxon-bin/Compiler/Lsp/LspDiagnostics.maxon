@@ -21,9 +21,14 @@ let DiagnosticSourceKey = "source"
 let DiagnosticMessageKey = "message"
 
 // ⭐ **EVERY DIAGNOSTIC THIS COMPILER PRODUCES IS AN ERROR, AND THAT IS A PROPERTY OF `Diagnostic`
-// RATHER THAN A CHOICE MADE HERE.** It carries no severity field, and `projectHasErrors` fails a build
-// on a non-empty sink — so there is no warning tier for a second case to read.
+// RATHER THAN A CHOICE MADE HERE.** It carries no severity field, and `projectHasErrors` fails a
+// build on a non-empty sink — so there is no warning tier for a second case to read. The
+// information item is the server's own notice on a `.maxproj` (`projectNoticeNode`), which no
+// compile produces.
 let LspErrorSeverity = 1
+let LspInformationSeverity = 3
+
+typealias LspSeverity = int(1 to 4)
 
 // What an editor groups and filters these by.
 let DiagnosticSourceName = "maxon"
@@ -100,7 +105,8 @@ extension Project
 		let tokens = lspDocumentTokens(text, keywords: self.keywords)
 
 		view fast = self.documentDiagnostics(reader, root: root, path: path, text: text, tokens: tokens)
-		submitToLspWriter(reader.workspace.writer, command: LspWriterCommand.write(documentDiagnosticsText(uri, text: text, tokens: tokens, diagnostics: fast, path: path, unbuilt: StringArray.create())))
+		let (refusal, notice) = projectFileSaid(reader, path: path)
+		submitToLspWriter(reader.workspace.writer, command: LspWriterCommand.write(documentDiagnosticsText(uri, text: text, tokens: tokens, diagnostics: fast, path: path, unbuilt: refusal, notices: notice)))
 
 		return BufferPublish.published(reader, root: root, path: path, fast: fast)
 	end 'publishDocumentDiagnostics'
@@ -232,7 +238,23 @@ extension Project
 	end 'unsuppressedRefusals'
 end 'Project'
 
-module function documentDiagnosticsText(uri String, text String, tokens TokenArray, diagnostics DiagnosticArray, path FilePath, unbuilt StringArray) returns String
+function projectFileSaid(reader LspReaderSearch, path FilePath) returns (StringArray, StringArray)
+	if not isProjectFileName(path.filename()) 'notAProjectFile'
+		return (StringArray.create(), StringArray.create())
+	end 'notAProjectFile'
+
+	match projectLayoutOf(reader) 'layout'
+		nestedIn then return (StringArray.create(), StringArray.create())
+		standsAlone then break
+	end 'layout'
+
+	let dir = try path.resolve(reader.workingDirectory).parent() otherwise return (StringArray.create(), StringArray.create())
+	let answer = reader.workspace.projectInputsOf(dir)
+
+	return (answer.refusal.clone(), answer.notice.clone())
+end 'projectFileSaid'
+
+module function documentDiagnosticsText(uri String, text String, tokens TokenArray, diagnostics DiagnosticArray, path FilePath, unbuilt StringArray, notices StringArray) returns String
 	var doc = JsonDoc.create()
 	let index = LspLineIndex.build(text)
 	var items = JsonNodeIdArray.create()
@@ -244,6 +266,10 @@ module function documentDiagnosticsText(uri String, text String, tokens TokenArr
 	for failure in unbuilt 'eachFailure'
 		items.push(unbuiltProjectNode(doc, failure: failure, source: text, index: index))
 	end 'eachFailure'
+
+	for notice in notices 'eachNotice'
+		items.push(projectNoticeNode(doc, notice: notice, source: text, index: index))
+	end 'eachNotice'
 
 	return diagnosticsNotificationText(uri, items: items, doc: doc)
 end 'documentDiagnosticsText'
@@ -545,20 +571,24 @@ end 'namesTheSameFile'
 // A line `maxon build` prints for a project it could not load (`Main.reportCompileError`). It is no
 // `Diagnostic`, so it carries no code and no position, and sits at the document's start.
 function unbuiltProjectNode(doc JsonDoc, failure String, source String, index LspLineIndex) returns JsonNodeId
-	return errorItemAt(doc, span: documentStartSpan(), message: failure, source: source, index: index).finish()
+	return itemAt(doc, span: documentStartSpan(), severity: LspErrorSeverity, message: failure, source: source, index: index).finish()
 end 'unbuiltProjectNode'
 
-function errorItemAt(doc JsonDoc, span LspSpan, message String, source String, index LspLineIndex) returns LspJsonObject
+function projectNoticeNode(doc JsonDoc, notice String, source String, index LspLineIndex) returns JsonNodeId
+	return itemAt(doc, span: documentStartSpan(), severity: LspInformationSeverity, message: notice, source: source, index: index).finish()
+end 'projectNoticeNode'
+
+function itemAt(doc JsonDoc, span LspSpan, severity LspSeverity, message String, source String, index LspLineIndex) returns LspJsonObject
 	var item = LspJsonObject.create(doc)
 	item.putNode(LspRangeKey, value: lspSpanRangeNode(doc, source: source, index: index, span: span))
-	item.put(DiagnosticSeverityKey, value: JsonNode.numberNode(LspErrorSeverity as JsonFloat))
+	item.put(DiagnosticSeverityKey, value: JsonNode.numberNode(severity as JsonFloat))
 	item.put(DiagnosticSourceKey, value: JsonNode.stringNode(DiagnosticSourceName))
 	item.put(DiagnosticMessageKey, value: JsonNode.stringNode(message))
 	return item
-end 'errorItemAt'
+end 'itemAt'
 
 function diagnosticNode(doc JsonDoc, diagnostic Diagnostic, source String, index LspLineIndex, tokens TokenArray) returns JsonNodeId
-	var item = errorItemAt(doc, span: diagnosticSpan(diagnostic, source: source, index: index, tokens: tokens), message: diagnostic.message, source: source, index: index)
+	var item = itemAt(doc, span: diagnosticSpan(diagnostic, source: source, index: index, tokens: tokens), severity: LspErrorSeverity, message: diagnostic.message, source: source, index: index)
 
 	// The code, because it is the field a Maxon author can act on: `E3005` can be looked up in the
 	// error code reference, where the message alone cannot. `rawValue` is the registry's own spelling

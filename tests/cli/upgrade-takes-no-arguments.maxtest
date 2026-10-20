@@ -9,7 +9,7 @@ let ExtraArgument = "extra"
 let OtherCommandsFlag = "--emit-ir"
 
 test 'upgrade refuses a positional argument and an option it does not take'
-	let positional = runDriver([UpgradeCommandWord, ExtraArgument])
+	let positional = spawnCompiler([UpgradeCommandWord, ExtraArgument])
 
 	let positionalExit = positional.exitCode()
 	Expect.equal(positionalExit, expected: 1, message: "`maxon {UpgradeCommandWord} {ExtraArgument}` was answered. `{UpgradeCommandWord}` takes no arguments. It said: {positional.stdout}{positional.stderr}")
@@ -18,8 +18,8 @@ test 'upgrade refuses a positional argument and an option it does not take'
 
 	let staged = stageCompiler("upgrade-options-root", binaryIn: ScriptInstallBinDirName, stdlibIn: CaseDirItself)
 	let optionLine = [UpgradeCommandWord, DryRunFlag, OtherCommandsFlag]
-	let typed = listed(optionLine)
-	let option = runDriver(optionLine, binary: staged)
+	let typed = joined(optionLine, separator: Space)
+	let option = spawnCompiler(optionLine, binary: staged)
 
 	let optionExit = option.exitCode()
 	Expect.equal(optionExit, expected: 1, message: "`maxon {typed}` from a script install was answered. A flag consumed on its way past is a command line only partly understood. It said: {option.stdout}{option.stderr}")

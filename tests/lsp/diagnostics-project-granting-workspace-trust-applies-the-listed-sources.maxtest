@@ -1,0 +1,81 @@
+let GrantedTrustDirName = "diagnostics-project-granted-trust"
+let GrantedTrustProjectDirName = "proj"
+let GrantedTrustSharedDirName = "shared"
+let GrantedTrustManifestFileName = "app.maxproj"
+let GrantedTrustMainFileName = "main.maxon"
+let GrantedTrustSharedFileName = "answer.maxon"
+let GrantedTrustManifestSource = "export function build() returns ExitCode\n\tBuild.buildWithConfig(BuildConfig.create([\".\", \"../shared\"], output: \"program\"))\n\treturn 0\nend 'build'\n"
+let GrantedTrustMainSource = "function main() returns ExitCode\n\treturn sharedAnswer()\nend 'main'\n"
+let GrantedTrustSharedSource = "export function sharedAnswer() returns ExitCode\n\treturn 0\nend 'sharedAnswer'\n"
+let GrantedTrustUndefinedCode = "E3004"
+
+union GrantedTrustProbe
+	published(untrustedFast ProjectDiagnosticsProbe, untrustedChecked ProjectDiagnosticsProbe, trustedChecked ProjectDiagnosticsProbe)
+	broke(detail String)
+end 'GrantedTrustProbe'
+
+test 'project diagnostics: granting workspace trust applies the sources the project file lists'
+	let staged = freshOutsideCheckoutDir(GrantedTrustDirName)
+	let project = staged.join(GrantedTrustProjectDirName)
+	let shared = staged.join(GrantedTrustSharedDirName)
+
+	for directory in [project, shared] 'eachDirectory'
+		if not Directory.create(directory) 'couldNotCreate'
+			panic("the test could not run: could not create {directory.toString()}")
+		end 'couldNotCreate'
+	end 'eachDirectory'
+
+	writeCorpusFile(project, fileName: GrantedTrustManifestFileName, content: GrantedTrustManifestSource)
+	writeCorpusFile(project, fileName: GrantedTrustMainFileName, content: GrantedTrustMainSource)
+	writeCorpusFile(shared, fileName: GrantedTrustSharedFileName, content: GrantedTrustSharedSource)
+
+	let probe = probeGrantedTrust(project)
+
+	discardOutsideCheckoutDir(staged)
+
+	match probe 'probe'
+		broke(detail) then Expect.fail("the session did not complete: {detail}")
+		published(untrustedFast, untrustedChecked, trustedChecked) then expectTrustApplied(untrustedFast, untrustedChecked: untrustedChecked, trustedChecked: trustedChecked)
+	end 'probe'
+end 'project diagnostics: granting workspace trust applies the sources the project file lists'
+
+function expectTrustApplied(untrustedFast ProjectDiagnosticsProbe, untrustedChecked ProjectDiagnosticsProbe, trustedChecked ProjectDiagnosticsProbe) throws TestFailure
+	let walked = "In an untrusted workspace the project is its directory, so `{GrantedTrustMainFileName}` cannot see `{GrantedTrustSharedDirName}/{GrantedTrustSharedFileName}`"
+
+	for probe in [untrustedFast, untrustedChecked] 'eachUntrusted'
+		let only = try onlyProjectDiagnostic(probe, note: "{walked}, and the undefined call stays reported.")
+		try Expect.equal(only.code.describe(), expected: GrantedTrustUndefinedCode, message: "{walked}: {only.message}")
+	end 'eachUntrusted'
+
+	let applied = "Once trust is granted the project file's source list applies, so `{GrantedTrustMainFileName}` sees `{GrantedTrustSharedDirName}/{GrantedTrustSharedFileName}`."
+
+	try expectNoProjectDiagnostics(trustedChecked, note: applied)
+end 'expectTrustApplied'
+
+function probeGrantedTrust(project FilePath) returns GrantedTrustProbe
+	var client = LspClient.start()
+	let uri = fileUriOf(project.join(GrantedTrustMainFileName))
+	var probe = GrantedTrustProbe.broke(UnreportedSessionEnding)
+
+	try 'session'
+		_ = client.initializeAtRootWithTrust(project, trusted: false)
+		client.initialized()
+		client.openDocument(uri, content: GrantedTrustMainSource)
+		var untrustedFast = ProjectDiagnosticsProbe.published(client.awaitPublishedDiagnostics(uri).items)
+		var untrustedChecked = ProjectDiagnosticsProbe.published(client.awaitProjectCheckPublishAfterTheFastOne(uri).items)
+		client.discardProjectCheckReports(uri)
+		client.grantWorkspaceTrust()
+		var trustedChecked = ProjectDiagnosticsProbe.published(client.awaitSettledProjectCheckSet(uri).items)
+		probe = GrantedTrustProbe.published(untrustedFast, untrustedChecked: untrustedChecked, trustedChecked: trustedChecked)
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed or
+			malformedResponse or
+			serverRefused then probe = GrantedTrustProbe.broke(e.explained())
+		end 'reason'
+	end 'failed'
+
+	client.release()
+
+	return probe
+end 'probeGrantedTrust'

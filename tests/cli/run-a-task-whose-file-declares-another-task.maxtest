@@ -8,9 +8,9 @@ let TasksSource = "export typealias ExitCode = int(0 to 255)\n\nexport function 
 test 'a task runs while its file declares another task nothing calls'
 	let dir = freshCaseDir(CaseDirName)
 	let tasks = dir.join(TaskFileName)
-	try File.writeText(tasks, content: TasksSource) otherwise panic("run-a-task-whose-file-declares-another-task: the gate could not run - could not write {tasks.toString()}")
+	writeStagedFile(tasks, content: TasksSource)
 
-	let ran = runDriver([RunCommandWord, "report"], workingDirectory: dir)
+	let ran = spawnCompiler([RunCommandWord, "report"], staged: dir)
 	let said = "It wrote to stdout: {ran.stdout} and to stderr: {ran.stderr}"
 
 	Expect.equal(ran.exitCode(), expected: TaskExitCode, message: "`maxon {RunCommandWord} report` did not exit with the code the task returned. `tidy` is a task of the same file, which the runner enters by name exactly as it entered `report`, so it is no unused export. {said}")

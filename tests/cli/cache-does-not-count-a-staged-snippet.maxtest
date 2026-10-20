@@ -16,7 +16,6 @@ let CaseDirName = "cache-does-not-count-a-staged-snippet"
 // What the MCP server calls the directory it stages into and the file it stages there, respelled here
 // because this corpus is a separate program and cannot read the driver's own constants.
 let SnippetStem = "mcp-snippet"
-let SnippetExtension = ".maxon"
 let SnippetProcessAndSerial = "-1-1"
 let SnippetSource = "// an inline snippet a tool call staged\n"
 
@@ -56,8 +55,8 @@ end 'a snippet staged under the cache root is not counted as a build'
 // A snippet where the MCP server stages one: its own directory under the root Maxon owns, and one source
 // file in it.
 function stageSnippetUnder(owned FilePath)
-	let staged = createdStagedDirectory(owned.join(SnippetStem))
+	let staged = stagingDir(owned.join(SnippetStem).toString())
 
-	let file = staged.join("{SnippetStem}{SnippetProcessAndSerial}{SnippetExtension}")
-	try File.writeText(file, content: SnippetSource) otherwise panic("{CaseDirName}: the gate could not run - could not write {file.toString()}, the snippet source a staged tool call leaves under the cache root.")
+	let file = staged.join("{SnippetStem}{SnippetProcessAndSerial}{MaxonSourceSuffix}")
+	writeStagedFile(file, content: SnippetSource)
 end 'stageSnippetUnder'

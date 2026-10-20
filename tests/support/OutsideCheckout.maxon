@@ -1,0 +1,42 @@
+let OutsideCheckoutStagingDirNamePrefix = "maxon-tests"
+let ParentComponent = ".."
+let PosixPathSeparator = "/"
+let WindowsPathSeparator = "\\"
+
+public function requireStaysInStaging(component String)
+	if component.contains(ParentComponent) 'climbsOut'
+		panic("the gate could not run — '{component}' climbs out of the directory it names, and a staging call clears files under what it names.")
+	end 'climbsOut'
+end 'requireStaysInStaging'
+
+public function requireOneDirectoryName(name String)
+	requireStaysInStaging(name)
+
+	if name.isEmpty() or name.contains(PosixPathSeparator) or name.contains(WindowsPathSeparator) 'notOneDirectory'
+		panic("the gate could not run — '{name}' is not one directory name. Every case stages under a directory of its own, and a staging call clears the files in it.")
+	end 'notOneDirectory'
+end 'requireOneDirectoryName'
+
+// Named per process: two runs on one machine sharing a name would clear each other's directories
+// mid-run.
+public function outsideCheckoutDirName(caseDirName String) returns String
+	requireOneDirectoryName(caseDirName)
+
+	return "{OutsideCheckoutStagingDirNamePrefix}-{Process.id()}-{caseDirName}"
+end 'outsideCheckoutDirName'
+
+public function freshOutsideCheckoutDir(caseDirName String) returns FilePath
+	let dir = hostTempDir().join(outsideCheckoutDirName(caseDirName))
+	requireNoCheckoutAbove(dir)
+
+	if Directory.isDirectory(dir) 'leftByAnEndedProcess'
+		discardOutsideCheckoutDir(dir)
+	end 'leftByAnEndedProcess'
+
+	return stagingDir(dir.toString())
+end 'freshOutsideCheckoutDir'
+
+public function discardOutsideCheckoutDir(dir FilePath)
+	clearStagedTree(dir)
+	try Directory.delete(dir) otherwise panic("the gate could not run — could not remove {dir.toString()}, where a case staged outside the checkout.")
+end 'discardOutsideCheckoutDir'

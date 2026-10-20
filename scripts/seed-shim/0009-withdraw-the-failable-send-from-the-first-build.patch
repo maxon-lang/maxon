@@ -1,5 +1,5 @@
 diff --git a/maxon-bin/Compiler/CompilerLogHandler.maxon b/maxon-bin/Compiler/CompilerLogHandler.maxon
-index eda950d99..be1abd974 100644
+index 44c10cf0b..6b4bb4e27 100644
 --- a/maxon-bin/Compiler/CompilerLogHandler.maxon
 +++ b/maxon-bin/Compiler/CompilerLogHandler.maxon
 @@ -78,13 +78,7 @@ end 'installCompilerLogHandler'
@@ -32,7 +32,7 @@ index eda950d99..be1abd974 100644
  
  module function logCompilerDebugSettled(message String)
 diff --git a/maxon-bin/Compiler/FrontEndPool.maxon b/maxon-bin/Compiler/FrontEndPool.maxon
-index c208153d8..86173509b 100644
+index 7088f6484..a7c23d8f4 100644
 --- a/maxon-bin/Compiler/FrontEndPool.maxon
 +++ b/maxon-bin/Compiler/FrontEndPool.maxon
 @@ -32,9 +32,9 @@
@@ -124,11 +124,24 @@ index 30d39dea7..e3c3c663d 100644
  end 'dispatchOneStdJob'
  
  function announceAndSummarizeSteps(members StdFanOutStepArray, tallies StdPassTallyArray, funcCount ElementIndex, reducesDivision bool)
+diff --git a/maxon-bin/Compiler/Lsp/LspArrivals.maxon b/maxon-bin/Compiler/Lsp/LspArrivals.maxon
+index 7b294d438..95d28831e 100644
+--- a/maxon-bin/Compiler/Lsp/LspArrivals.maxon
++++ b/maxon-bin/Compiler/Lsp/LspArrivals.maxon
+@@ -5,7 +5,7 @@ module union LspArrival
+ 	projectResolved(dir FilePath, answer ProjectInputsAnswer, ticket ResolutionTicket)
+ end 'LspArrival'
+ 
+-typealias LspArrivalPromise = Promise with LspArrival
++typealias LspArrivalPromise = Promise with (LspArrival, ServiceError)
+ 
+ module typealias LspArrivalPromiseArray = Array with LspArrivalPromise
+ 
 diff --git a/maxon-bin/Compiler/Lsp/LspDiagnostics.maxon b/maxon-bin/Compiler/Lsp/LspDiagnostics.maxon
-index 95bef4e76..6ff997533 100644
+index f5964f157..e3c6a6a92 100644
 --- a/maxon-bin/Compiler/Lsp/LspDiagnostics.maxon
 +++ b/maxon-bin/Compiler/Lsp/LspDiagnostics.maxon
-@@ -87,7 +87,7 @@ typealias SiblingVerdictMap = Map with (ByteArray, bool)
+@@ -89,7 +89,7 @@ typealias SiblingVerdictMap = Map with (ByteArray, bool)
  
  // Tell the editor this document has nothing on it — the notification a closed document is owed.
  module function clearPublishedDiagnostics(writer LspStdoutWriter.handle, uri String)
@@ -137,12 +150,12 @@ index 95bef4e76..6ff997533 100644
  end 'clearPublishedDiagnostics'
  
  extension Project
-@@ -103,7 +103,7 @@ extension Project
- 		let tokens = lspDocumentTokens(text, keywords: self.keywords)
+@@ -106,7 +106,7 @@ extension Project
  
  		view fast = self.documentDiagnostics(reader, root: root, path: path, text: text, tokens: tokens)
--		submitToLspWriter(reader.workspace.writer, command: LspWriterCommand.write(documentDiagnosticsText(uri, text: text, tokens: tokens, diagnostics: fast, path: path, unbuilt: StringArray.create())))
-+		reader.workspace.writer.write(documentDiagnosticsText(uri, text: text, tokens: tokens, diagnostics: fast, path: path, unbuilt: StringArray.create()))
+ 		let (refusal, notice) = projectFileSaid(reader, path: path)
+-		submitToLspWriter(reader.workspace.writer, command: LspWriterCommand.write(documentDiagnosticsText(uri, text: text, tokens: tokens, diagnostics: fast, path: path, unbuilt: refusal, notices: notice)))
++		reader.workspace.writer.write(documentDiagnosticsText(uri, text: text, tokens: tokens, diagnostics: fast, path: path, unbuilt: refusal, notices: notice))
  
  		return BufferPublish.published(reader, root: root, path: path, fast: fast)
  	end 'publishDocumentDiagnostics'
@@ -259,12 +272,12 @@ index 3e5a9ed30..5d8294ad9 100644
  			return
  		end 'noClientToTell'
 diff --git a/maxon-bin/Compiler/Lsp/LspProjectCheck.maxon b/maxon-bin/Compiler/Lsp/LspProjectCheck.maxon
-index aabc43aea..16811b8f2 100644
+index 2dbedc2b0..857467444 100644
 --- a/maxon-bin/Compiler/Lsp/LspProjectCheck.maxon
 +++ b/maxon-bin/Compiler/Lsp/LspProjectCheck.maxon
-@@ -81,11 +81,11 @@ module type LspProjectChecker
+@@ -100,11 +100,11 @@ module type LspProjectChecker
  		let tokens = lspDocumentTokens(request.text, keywords: KeywordTable.create())
- 		let body = documentDiagnosticsText(request.uri, text: request.text, tokens: tokens, diagnostics: diagnostics, path: request.path, unbuilt: unbuilt)
+ 		let body = documentDiagnosticsText(request.uri, text: request.text, tokens: tokens, diagnostics: diagnostics, path: request.path, unbuilt: unbuilt, notices: StringArray.create())
  
 -		submitToLspWriter(self.writer, command: LspWriterCommand.publishIfCurrent(request.uri.clone(), version: request.version, clientVersion: request.clientVersion.clone(), outcome: outcome, body: body))
 +		self.writer.publishIfCurrent(request.uri.clone(), version: request.version, clientVersion: request.clientVersion.clone(), outcome: outcome, body: body)
@@ -276,7 +289,7 @@ index aabc43aea..16811b8f2 100644
  	end 'report'
  
  	function interestIn(request LspProjectCheckRequest) returns CompileInterest
-@@ -93,16 +93,6 @@ module type LspProjectChecker
+@@ -112,16 +112,6 @@ module type LspProjectChecker
  	end 'interestIn'
  end 'LspProjectChecker'
  
@@ -294,11 +307,11 @@ index aabc43aea..16811b8f2 100644
  	checked(diagnostics DiagnosticArray)
  	unbuilt(failures StringArray)
 diff --git a/maxon-bin/Compiler/Lsp/LspServer.maxon b/maxon-bin/Compiler/Lsp/LspServer.maxon
-index 021a00fb2..d840ea796 100644
+index 072d0659a..d77dbce0a 100644
 --- a/maxon-bin/Compiler/Lsp/LspServer.maxon
 +++ b/maxon-bin/Compiler/Lsp/LspServer.maxon
-@@ -87,7 +87,7 @@ type LspSession
- 			end 'incoming'
+@@ -92,13 +92,13 @@ type LspSession
+ 			self.dispatch(self.workspace.nextArrival())
  		end 'pump'
  
 -		submitToLspWriter(self.workspace.writer, command: LspWriterCommand.endSession)
@@ -306,7 +319,14 @@ index 021a00fb2..d840ea796 100644
  
  		return exitCode()
  	end 'run'
-@@ -96,7 +96,7 @@ type LspSession
+ 
+ 	function awaitNextFrame()
+-		self.workspace.arrivals.insert(LspFrameSlot, value: try self.stdinReader.next(sendTimeout: ForeverMs) otherwise panic("LspSession.awaitNextFrame: a send that waits forever for room, to a reader this session holds, was refused"))
++		self.workspace.arrivals.insert(LspFrameSlot, value: self.stdinReader.next())
+ 	end 'awaitNextFrame'
+ 
+ 	function dispatch(arrival LspArrival)
+@@ -147,7 +147,7 @@ type LspSession
  		self.documents.upsert(uri, value: text)
  		self.nextDocumentVersion = self.nextDocumentVersion + 1
  		let version = self.nextDocumentVersion
@@ -315,16 +335,16 @@ index 021a00fb2..d840ea796 100644
  
  		match publishBufferDiagnostics(self.workspace, uri: uri, text: text, arrival: arrival) 'publish'
  			unchecked then return
-@@ -107,7 +107,7 @@ type LspSession
- 	function requestProjectCheck(request LspProjectCheckRequest, reader LspReaderSearch, root WorkspaceRoot)
- 		match lspProjectCheckRoot(reader, root: root) 'root'
- 			none then return
--			at(dir) then submitProjectCheck(lspProjectCheckerFor(self.workspace, dir: dir, tiers: reader.tiers), request: request)
-+			at(dir) then lspProjectCheckerFor(self.workspace, dir: dir, tiers: reader.tiers).check(request.clone())
- 		end 'root'
- 	end 'requestProjectCheck'
+@@ -169,7 +169,7 @@ type LspSession
+ 			return
+ 		end 'stillResolving'
  
-@@ -273,7 +273,7 @@ type LspSession
+-		submitProjectCheck(lspProjectCheckerFor(self.workspace, dir: dir, tiers: reader.tiers), request: LspProjectCheckRequest.create(uri.clone(), path: path.clone(), text: text.clone(), version: version, clientVersion: clientVersion, alone: alone.clone(), inputs: inputs))
++		lspProjectCheckerFor(self.workspace, dir: dir, tiers: reader.tiers).check(LspProjectCheckRequest.create(uri.clone(), path: path.clone(), text: text.clone(), version: version, clientVersion: clientVersion, alone: alone.clone(), inputs: inputs))
+ 	end 'requestCheckOnceResolved'
+ 
+ 	function exitCode() returns ExitCode
+@@ -341,7 +341,7 @@ type LspSession
  	function closeDocument(doc JsonDoc) throws LspParamsError
  		let (_, _, uri) = try notifiedDocument(doc)
  		_ = self.documents.remove(uri)
@@ -333,11 +353,31 @@ index 021a00fb2..d840ea796 100644
  		clearPublishedDiagnostics(self.workspace.writer, uri: uri)
  	end 'closeDocument'
  
+diff --git a/maxon-bin/Compiler/Lsp/LspWorkspace.maxon b/maxon-bin/Compiler/Lsp/LspWorkspace.maxon
+index 39aee6560..f251a124c 100644
+--- a/maxon-bin/Compiler/Lsp/LspWorkspace.maxon
++++ b/maxon-bin/Compiler/Lsp/LspWorkspace.maxon
+@@ -351,13 +351,13 @@ module type LspWorkspaceState
+ 		let taken = LspFrameSlot if frame.isComplete() else ready
+ 		let arrival = try self.arrivals.remove(taken) otherwise panic("LspWorkspaceState.nextArrival: awaitAny named a slot of the array it was asked about")
+ 
+-		return await arrival
++		return try await arrival otherwise panic("LspWorkspaceState.nextArrival: the reader or resolver this workspace holds stopped answering")
+ 	end 'nextArrival'
+ 
+ 	function requestResolution(dir FilePath) returns ResolutionTicket
+ 		self.nextResolutionTicket = self.nextResolutionTicket + 1
+ 		let ticket = self.nextResolutionTicket
+-		self.arrivals.push(try self.resolver.resolve(dir.clone(), ticket: ticket, sendTimeout: ForeverMs) otherwise panic("LspWorkspaceState.requestResolution: a send that waits forever for room, to a resolver this workspace holds, was refused"))
++		self.arrivals.push(self.resolver.resolve(dir.clone(), ticket: ticket))
+ 
+ 		return ticket
+ 	end 'requestResolution'
 diff --git a/maxon-bin/Compiler/Project.maxon b/maxon-bin/Compiler/Project.maxon
-index 0f8a542a6..f7868e14b 100644
+index 9f468ea60..b50da293e 100644
 --- a/maxon-bin/Compiler/Project.maxon
 +++ b/maxon-bin/Compiler/Project.maxon
-@@ -12472,7 +12472,7 @@ export union CompileInterest
+@@ -12532,7 +12532,7 @@ export union CompileInterest
  	export function stillWanted() returns bool
  		match self 'interest'
  			always then return true
@@ -347,7 +387,7 @@ index 0f8a542a6..f7868e14b 100644
  	end 'stillWanted'
  end 'CompileInterest'
 diff --git a/maxon-bin/Compiler/Targets/Shared/BackendPool.maxon b/maxon-bin/Compiler/Targets/Shared/BackendPool.maxon
-index d47d8f5ea..3865e1f6a 100644
+index a3dc07097..7ab233a22 100644
 --- a/maxon-bin/Compiler/Targets/Shared/BackendPool.maxon
 +++ b/maxon-bin/Compiler/Targets/Shared/BackendPool.maxon
 @@ -47,8 +47,10 @@

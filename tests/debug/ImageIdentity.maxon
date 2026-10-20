@@ -26,25 +26,20 @@ export type ImageIdentityCase
 	export let sidecar as FilePath
 
 	export static function staging(caseLabel String, fixture String) returns ImageIdentityCase
-		let staged = stagedFixture(caseLabel, fixture: fixture)
+		let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: caseLabel, fixture: fixture)
 		let image = builtExecutable(staged)
-		let sidecar = try FilePath.from("{image.toString()}{SidecarSuffix}") otherwise panic("{caseLabel}: the gate could not run — could not spell the sidecar path beside {image.toString()}.")
+		let sidecar = sidecarOf(image)
 
 		return ImageIdentityCase{caseLabel: caseLabel, staged: staged, source: staged.join(StagedProgramFileName), image: image, sidecar: sidecar}
 	end 'staging'
 
 	export function built(label String, extraArguments StringArray, retainedAs String) returns BuiltImage
-		let build = spawnBuild(self.source, staged: self.staged, label: label, extraArguments: extraArguments)
+		let build = spawnBuild(self.source, staged: self.staged, output: self.staged.join(OutputFileStem), label: label, extraArguments: extraArguments)
 
-		if build.exitCode() != 0 'didNotBuild'
-			panic("{self.caseLabel}: the gate could not run — {label} build exited {build.exitCode()}, so there is no image to compare. It wrote to stderr: {build.stderr}")
-		end 'didNotBuild'
+		requireBuiltOrPanic(build, output: self.image, what: "{self.caseLabel}: the '{label}' build, which leaves the image to compare,")
 
 		let wroteASidecar = File.exists(self.sidecar)
-		let retained = self.staged.join(retainedAs)
-
-		try File.writeBinary(retained, content: self.bytesOf(self.image)) otherwise panic("{self.caseLabel}: the gate could not run — could not retain {self.image.toString()} as {retained.toString()}.")
-		try File.delete(self.image) otherwise panic("{self.caseLabel}: the gate could not run — could not clear {self.image.toString()}, so the next build cannot be handed that path.")
+		let retained = retainedAside(self.image, aside: self.staged.join(retainedAs))
 
 		if wroteASidecar 'thereWasOne'
 			try File.delete(self.sidecar) otherwise panic("{self.caseLabel}: the gate could not run — could not clear {self.sidecar.toString()}, so the next build's sidecar assertion would read this one.")
@@ -54,41 +49,29 @@ export type ImageIdentityCase
 	end 'built'
 
 	export function requireSameImage(first FilePath, second FilePath, why String) throws TestFailure
-		let firstBytes = self.bytesOf(first)
-		let secondBytes = self.bytesOf(second)
+		let firstBytes = fileBytes(first)
+		let secondBytes = fileBytes(second)
 
 		try Expect.notEqual(firstBytes.count(), expected: 0, message: "positive control: {first.toString()} is empty, and two empty files agree about nothing.")
-		try Expect.isTrue(imagesAgree(firstBytes, second: secondBytes), message: "{why} The two images differ ({firstBytes.count()} bytes against {secondBytes.count()}).")
+
+		match compareBytes(firstBytes, second: secondBytes) 'compared'
+			identical then break
+			differentLengths or
+			differsAt then try Expect.fail("{why} The two images differ ({firstBytes.count()} bytes against {secondBytes.count()}).")
+		end 'compared'
 	end 'requireSameImage'
 
 	export function requireDifferentImage(first FilePath, second FilePath, why String) throws TestFailure
-		let firstBytes = self.bytesOf(first)
-		let secondBytes = self.bytesOf(second)
+		let firstBytes = fileBytes(first)
+		let secondBytes = fileBytes(second)
 
 		try Expect.notEqual(firstBytes.count(), expected: 0, message: "positive control: {first.toString()} is empty, so this comparison would report a difference whatever the other side held.")
 		try Expect.notEqual(secondBytes.count(), expected: 0, message: "positive control: {second.toString()} is empty, so this comparison would report a difference whatever the other side held.")
-		try Expect.isFalse(imagesAgree(firstBytes, second: secondBytes), message: "{why}")
+
+		match compareBytes(firstBytes, second: secondBytes) 'compared'
+			identical then try Expect.fail("{why}")
+			differentLengths or
+			differsAt then break
+		end 'compared'
 	end 'requireDifferentImage'
-
-	export function bytesOf(path FilePath) returns ByteArray
-		if not File.exists(path) 'notWritten'
-			panic("{self.caseLabel}: the gate could not run — there is no executable at {path.toString()}, so there is nothing to compare.")
-		end 'notWritten'
-
-		return try File.readBinary(path) otherwise panic("{self.caseLabel}: the gate could not run — could not read {path.toString()}.")
-	end 'bytesOf'
 end 'ImageIdentityCase'
-
-function imagesAgree(first ByteArray, second ByteArray) returns bool
-	if first.count() != second.count() 'differentLengths'
-		return false
-	end 'differentLengths'
-
-	for (iter, octet) in first.withIterator() 'eachByte'
-		if octet != (try second.get(iter.index()) otherwise return false) 'differs'
-			return false
-		end 'differs'
-	end 'eachByte'
-
-	return true
-end 'imagesAgree'

@@ -282,12 +282,12 @@ facts worth knowing before you get there:
 - ⭐ **RUN EACH CORPUS AND READ ITS PASS/FAIL COUNT.** A runner broken badly enough to report green
   having run nothing cannot detect itself, so the count is what closes the circularity.
   ```
-  ./maxon-bin/.maxon/maxon.exe test tests/test-command
+  ./maxon-bin/.maxon/maxon.exe test tests/testCommand
   ```
-  ⚠ **CI runs eight of them on every lane** — `tests/lsp`, `tests/fmt`, `tests/spec-harness`, `tests/ladders`, `tests/examples`, `tests/build-manifest`,
-  `tests/emitted-runtime` and `tests/cli` — plus `tests/debug`,
-  `tests/dap` and `tests/mcp` on every native lane, each through its own host's debug backend, and `/land`'s battery runs `fmt`, `spec-harness`,
-  `ladders`, `examples` and `emitted-runtime` beside the suite and the self-compile. Every other corpus runs only when someone names it.
+  ⚠ **CI runs eight of them on every lane** — `tests/lsp`, `tests/fmt`, `tests/specHarness`, `tests/ladders`, `tests/examples`, `tests/buildManifest`,
+  `tests/emittedRuntime` and `tests/cli` — plus `tests/debug`,
+  `tests/dap` and `tests/mcp` on every native lane, each through its own host's debug backend, and `/land`'s battery runs `fmt`, `specHarness`,
+  `ladders`, `examples` and `emittedRuntime` beside the suite and the self-compile. Every other corpus runs only when someone names it.
   Both also run `scripts/multicore-stress/compile-all.sh`, which builds every torture program in that directory.
 - ⛔ **EXPECTATIONS ARE GENERATED, NEVER HAND-WRITTEN** — e.g. `python
   tests/fmt/generate-expectations.py` runs the compiler and records its real answers, so a corpus

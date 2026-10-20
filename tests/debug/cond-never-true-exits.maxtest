@@ -7,7 +7,7 @@ let ConditionText = "i == 99"
 test 'a breakpoint whose condition is never satisfied never stops, and the program runs to its own end'
 	let staged = builtFixture(CondNeverTrueCaseLabel, fixture: ConditionFixtureName)
 	let undebugged = runBuiltProgram(staged)
-	let hitLine = anchorLine(staged, anchor: AnchorName)
+	let hitLine = anchorLine(staged.join(StagedProgramFileName), anchor: AnchorName)
 	let iterations = linesStartingWith(undebugged.stdout, prefix: CountedLinePrefix)
 
 	Expect.atLeast(iterations, than: 1, message: "the anchored line must run at least once, or this case would be about a breakpoint nothing reaches. It ran it {iterations} times.")
@@ -18,7 +18,7 @@ test 'a breakpoint whose condition is never satisfied never stops, and the progr
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 
 	let armings = eventsOfKind(events, kind: BreakpointEventName)
-	Expect.equal(armings.count(), expected: 1, message: "the conditional `{BreakCommand}` printed no `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(armings.count(), expected: 1, message: "the conditional `{BreakCommand}` printed no `{BreakpointEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let armed = eventAt(armings, index: 0)
 	Expect.equal(textOf(armed, node: armed.root, key: ActionKey), expected: SetAction, message: "the condition is one the driver can evaluate at the stop, so the breakpoint IS armed — a condition that never holds is not a breakpoint that was refused, and the two must not read the same. {said}")

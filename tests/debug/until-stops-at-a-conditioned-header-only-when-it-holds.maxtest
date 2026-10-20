@@ -4,8 +4,8 @@ let HeaderStopsWhenTheConditionIsJudged = 1
 
 test 'an until that single-steps onto a conditioned loop header stops there only on the pass whose condition holds'
 	let staged = builtFixture(UntilConditionCaseLabel, fixture: LoopsFixtureName)
-	let incrementLine = anchorLine(staged, anchor: "while-increment")
-	let headerLine = anchorLine(staged, anchor: "while-header")
+	let incrementLine = anchorLine(staged.join(StagedProgramFileName), anchor: "while-increment")
+	let headerLine = anchorLine(staged.join(StagedProgramFileName), anchor: "while-header")
 	var commands = StringArray.create()
 	commands.push("{BreakCommand} {lineTarget(incrementLine)}")
 	commands.push(RunCommand)
@@ -20,7 +20,7 @@ test 'an until that single-steps onto a conditioned loop header stops there only
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 
-	try Expect.equal(stopsAtLine(events, line: headerLine), expected: HeaderStopsWhenTheConditionIsJudged, message: "⛔ A SINGLE STEP THAT LANDS ON A CONDITIONED BYTE MUST JUDGE ITS CONDITION. The `{UntilCommand}` steps the back edge onto the header on the pass where `round` is 1, where `round == {HeldRound}` is false; a step taken as a hit whatever the condition stops there, and the `{ContinueCommand}` then stops again at the pass that holds. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(stopsAtLine(events, line: headerLine), expected: HeaderStopsWhenTheConditionIsJudged, message: "⛔ A SINGLE STEP THAT LANDS ON A CONDITIONED BYTE MUST JUDGE ITS CONDITION. The `{UntilCommand}` steps the back edge onto the header on the pass where `round` is 1, where `round == {HeldRound}` is false; a step taken as a hit whatever the condition stops there, and the `{ContinueCommand}` then stops again at the pass that holds. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let values = eventsOfKind(events, kind: ValueEventName)
 	try Expect.equal(values.count(), expected: 1, message: "`{PrintCommand} round` at the header stop printed no value. {said}")

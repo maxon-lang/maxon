@@ -1,0 +1,73 @@
+let UnionProjectDirName = "diagnostics-project-union-of-targets"
+let UnionProjectSubdirName = "proj"
+let UnionAlphaDirName = "alpha"
+let UnionBetaDirName = "beta"
+let UnionManifestFileName = "app.maxproj"
+let UnionMainFileName = "main.maxon"
+let UnionManifestSource = "export function alpha() returns ExitCode\n\tBuild.buildWithConfig(BuildConfig.create([\".\", \"../alpha\"], output: \"alpha\"))\n\treturn 0\nend 'alpha'\n\nexport function beta() returns ExitCode\n\tBuild.buildWithConfig(BuildConfig.create([\".\", \"../beta\"], output: \"beta\"))\n\treturn 0\nend 'beta'\n"
+let UnionMainSource = "function main() returns ExitCode\n\treturn alphaAnswer() + betaAnswer()\nend 'main'\n"
+let UnionAlphaSource = "export function alphaAnswer() returns ExitCode\n\treturn 0\nend 'alphaAnswer'\n"
+let UnionBetaSource = "export function betaAnswer() returns ExitCode\n\treturn 0\nend 'betaAnswer'\n"
+let UnionSourceFileName = "answer.maxon"
+
+union UnionProbe
+	published(checked ProjectDiagnosticsProbe)
+	broke(detail String)
+end 'UnionProbe'
+
+test 'project diagnostics: a .maxproj with several targets holds the union of their sources'
+	let staged = freshOutsideCheckoutDir(UnionProjectDirName)
+	let project = staged.join(UnionProjectSubdirName)
+	let alpha = staged.join(UnionAlphaDirName)
+	let beta = staged.join(UnionBetaDirName)
+
+	for directory in [project, alpha, beta] 'eachDirectory'
+		if not Directory.create(directory) 'couldNotCreate'
+			panic("the test could not run: could not create {directory.toString()}")
+		end 'couldNotCreate'
+	end 'eachDirectory'
+
+	writeCorpusFile(project, fileName: UnionManifestFileName, content: UnionManifestSource)
+	writeCorpusFile(project, fileName: UnionMainFileName, content: UnionMainSource)
+	writeCorpusFile(alpha, fileName: UnionSourceFileName, content: UnionAlphaSource)
+	writeCorpusFile(beta, fileName: UnionSourceFileName, content: UnionBetaSource)
+
+	let probe = probeUnion(project)
+
+	discardOutsideCheckoutDir(staged)
+
+	match probe 'probe'
+		broke(detail) then Expect.fail("the session did not complete: {detail}")
+		published(checked) then expectUnionPublishedNothing(checked)
+	end 'probe'
+end 'project diagnostics: a .maxproj with several targets holds the union of their sources'
+
+function expectUnionPublishedNothing(checked ProjectDiagnosticsProbe) throws TestFailure
+	let note = "`{UnionMainFileName}` calls `alphaAnswer`, which only the `alpha` target lists `{UnionAlphaDirName}/` for, and `betaAnswer`, which only the `beta` target lists `{UnionBetaDirName}/` for. A project with several targets holds every target's sources, since any of its tests may need any of them."
+
+	try expectNoProjectDiagnostics(checked, note: note)
+end 'expectUnionPublishedNothing'
+
+function probeUnion(project FilePath) returns UnionProbe
+	var client = LspClient.start()
+	let uri = fileUriOf(project.join(UnionMainFileName))
+	var probe = UnionProbe.broke(UnreportedSessionEnding)
+
+	try 'session'
+		_ = client.initializeAtRoot(project)
+		client.initialized()
+		client.openDocument(uri, content: UnionMainSource)
+		var checked = ProjectDiagnosticsProbe.published(client.awaitSettledProjectCheckSet(uri).items)
+		probe = UnionProbe.published(checked)
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed or
+			malformedResponse or
+			serverRefused then probe = UnionProbe.broke(e.explained())
+		end 'reason'
+	end 'failed'
+
+	client.release()
+
+	return probe
+end 'probeUnion'

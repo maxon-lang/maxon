@@ -38,8 +38,8 @@ type EndedSession implements DapSession
 end 'EndedSession'
 
 test 'after the program ended, the listings answer empty and every other request says the program has ended'
-	let staged = dapStagedFixture(EndedCaseLabel, fixture: HeaplessFixtureName)
-	var session = EndedSession.create(dapBuildFixture(staged))
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: EndedCaseLabel, fixture: HeaplessFixtureName)
+	var session = EndedSession.create(buildStagedSource(staged.join(StagedProgramFileName), staged: staged))
 	try dapRunSession(session, completing: "complete")
 
 	try Expect.isTrue(dapSuccess(session.threads), message: "an editor asks for the threads at any moment, including after the program has gone; refusing it shows the user an error for a program that simply finished. It answered {dapDescribed(session.threads)}")

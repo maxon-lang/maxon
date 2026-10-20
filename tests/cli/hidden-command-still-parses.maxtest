@@ -11,7 +11,7 @@
 // refuser stands in for it here. Both are hidden, which is the property under test.
 
 test 'a command the short list hides is still accepted by the parser'
-	let run = runOneArgument(HiddenCheapCommand)
+	let run = spawnCompiler([HiddenCheapCommand])
 
 	// It refused for want of an argument, which is the point: it got as far as the COMMAND.
 	let observedExit = run.exitCode()
@@ -24,7 +24,7 @@ test 'a command the short list hides is still accepted by the parser'
 	Expect.isFalse(refusedAsUnknown, message: "`maxon {HiddenCheapCommand}` was refused as an unknown command. It is left out of the short LIST on purpose; leaving it out of the PARSER withdraws it. It said: {run.stderr}")
 
 	// And the short list really does leave it out — otherwise this case is about an ordinary command.
-	let advertised = labelledWordsIn(runWithNoArguments().stdout)
+	let advertised = labelledWordsIn(spawnCompiler(StringArray.create()).stdout)
 	let advertisedAfterAll = advertised.contains(HiddenCheapCommand)
 	Expect.isFalse(advertisedAfterAll, message: "`{HiddenCheapCommand}` is advertised by the short list, so this case is no longer about a hidden command. Name a hidden one that refuses instantly, or drop the case.")
 end 'a command the short list hides is still accepted by the parser'

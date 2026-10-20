@@ -19,16 +19,16 @@ type ReplacedOutputRecompiles implements OutsideCheckoutCase
 		let sidecar = dir.join("{OutputStem}{executableSuffix()}{SidecarSuffix}")
 
 		stageSettledProgram(dir, name: SettledProgramDirName, source: TrivialProgramSource)
-		try requireBuilt(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: ListedWordArray.create()), which: "the first build under an empty cache root")
+		try requireBuilt(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: StringArray.create()), which: "the first build under an empty cache root")
 
 		deleteBuilt(executable)
-		try requireCompiled(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: ListedWordArray.create()), reason: OutputMissingReason, which: "a build after its executable was deleted")
+		try requireCompiled(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: StringArray.create()), reason: OutputMissingReason, which: "a build after its executable was deleted")
 
 		writeStagedFile(executable, content: ReplacementContent)
-		try requireCompiled(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: ListedWordArray.create()), reason: OutputReplacedReason, which: "a build after its executable was overwritten")
+		try requireCompiled(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: StringArray.create()), reason: OutputReplacedReason, which: "a build after its executable was overwritten")
 
 		deleteBuilt(sidecar)
-		try requireCompiled(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: ListedWordArray.create()), reason: SidecarMissingReason, which: "a build after its debug-info sidecar was deleted")
+		try requireCompiled(runRecordedBuild(dir, program: SettledProgramDirName, output: OutputStem, options: StringArray.create()), reason: SidecarMissingReason, which: "a build after its debug-info sidecar was deleted")
 	end 'requireHeldIn'
 end 'ReplacedOutputRecompiles'
 

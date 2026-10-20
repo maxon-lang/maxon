@@ -8,16 +8,14 @@
 
 let TypeErrorDirName = "temp/mcp-check-reports-a-type-error"
 let WellFormedDirName = "temp/mcp-check-well-formed"
-let ProgramFileName = "main.maxon"
 
 let TypeErrorSource = "typealias Byte = int(0 to u8.max)\n\nfunction main() returns ExitCode\n\tlet x = 256 as Byte\n\treturn 0\nend 'main'\n"
 let TypeErrorCode = "E3005"
 let WarmRebuildGateName = "verify-warm-rebuild"
 let WellFormedSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
-let StdlibDirName = "stdlib"
 
 test 'check answers a type error with its code, and writes nothing'
-	let broken = stagedProgram(TypeErrorDirName, fileName: ProgramFileName, source: TypeErrorSource)
+	let broken = stagedProgram(TypeErrorDirName, fileName: StagedProgramFileName, source: TypeErrorSource)
 	let brokenAnswer = callTool("check", argumentsJson: pathArgument(broken))
 	let brokenText = toolCallText(brokenAnswer)
 
@@ -25,7 +23,7 @@ test 'check answers a type error with its code, and writes nothing'
 	Expect.contains(brokenText, needle: TypeErrorCode, message: "`check` over a type error did not carry its diagnostic code {TypeErrorCode}: {brokenText}")
 	Expect.isEmpty(filesWrittenBeside(broken, dir: try broken.parent() otherwise panic("a staged program sits in a directory")), message: "`check` over a type error wrote files.")
 
-	let wellFormed = stagedProgram(WellFormedDirName, fileName: ProgramFileName, source: WellFormedSource)
+	let wellFormed = stagedProgram(WellFormedDirName, fileName: StagedProgramFileName, source: WellFormedSource)
 	let wellFormedAnswer = callTool("check", argumentsJson: pathArgument(wellFormed))
 
 	let wellFormedText = toolCallText(wellFormedAnswer)

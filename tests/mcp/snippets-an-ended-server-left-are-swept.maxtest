@@ -1,7 +1,6 @@
 let SnippetSweepStagingDir = "temp/mcp-snippet-sweep"
 let SnippetDirName = "mcp-snippet"
 let SnippetStem = "mcp-snippet"
-let SnippetSourceSuffix = ".maxon"
 let PlantedText = "not really a program"
 let StagedSnippetSerial = 1
 let OrphanedSnippetSerial = 2
@@ -10,7 +9,7 @@ typealias PlantedSerial = int(1 to 2)
 
 function plantedSnippetFile(directory FilePath, owner Pid, serial PlantedSerial, suffix String) returns String
 	let name = "{SnippetStem}-{owner}-{serial}{suffix}"
-	try File.writeText(directory.join(name), content: PlantedText) otherwise panic("mcp snippet sweep test: could not plant {name} in {directory.path}")
+	writeStagedFile(directory.join(name), content: PlantedText)
 
 	return name
 end 'plantedSnippetFile'
@@ -24,12 +23,12 @@ test 'a server sweeps the snippets and snippet builds whose server has ended, an
 	let ended = endedProcessId()
 	let live = Process.id()
 	var endedFiles = StringArray.create()
-	endedFiles.push(plantedSnippetFile(snippets, owner: ended, serial: StagedSnippetSerial, suffix: SnippetSourceSuffix))
+	endedFiles.push(plantedSnippetFile(snippets, owner: ended, serial: StagedSnippetSerial, suffix: MaxonSourceSuffix))
 	endedFiles.push(plantedSnippetFile(snippets, owner: ended, serial: StagedSnippetSerial, suffix: executableSuffix()))
 	endedFiles.push(plantedSnippetFile(snippets, owner: ended, serial: StagedSnippetSerial, suffix: "{executableSuffix()}{SidecarSuffix}"))
 	let orphanedProduct = plantedSnippetFile(snippets, owner: ended, serial: OrphanedSnippetSerial, suffix: executableSuffix())
 	var liveFiles = StringArray.create()
-	liveFiles.push(plantedSnippetFile(snippets, owner: live, serial: StagedSnippetSerial, suffix: SnippetSourceSuffix))
+	liveFiles.push(plantedSnippetFile(snippets, owner: live, serial: StagedSnippetSerial, suffix: MaxonSourceSuffix))
 	liveFiles.push(plantedSnippetFile(snippets, owner: live, serial: StagedSnippetSerial, suffix: executableSuffix()))
 
 	var environment = EnvMap.create()

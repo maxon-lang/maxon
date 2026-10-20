@@ -5,8 +5,9 @@ let TypedMintCallCode = "E3004"
 
 test 'a scriptlib package calling a type by its minted name is refused, even when the script makes the compiler mint it'
 	let staged = stageScriptlibCase(TypedMintCallCaseLabel)
-	writeScriptlibPackageFile(TypedMintCallCaseLabel, package: MintProbePackageName, fileName: MintProbePackageFileName, content: TypedMintCallPackageSource)
-	let script = writeStagedFile(staged.sources, fileName: ScriptFileName, content: shadowingScriptSource(ShadowedClockTypeName, packageFunction: TypedMintCallFunction))
+	writeScriptlibPackageFile(stagedTier(TypedMintCallCaseLabel), package: MintProbePackageName, fileName: MintProbePackageFileName, content: TypedMintCallPackageSource)
+	let script = staged.sources.join(ScriptFileName)
+	writeStagedFile(script, content: shadowingScriptSource(ShadowedClockTypeName, packageFunction: TypedMintCallFunction))
 
 	let run = runProgram(staged, program: script)
 

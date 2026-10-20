@@ -54,7 +54,8 @@ The extension looks in this order:
    `stdlib/`, `runtime/` and `maxon-bin/`), at `maxon-bin/.maxon/maxon`. The compiler reads `stdlib/`
    and `runtime/` from beside its own executable, so a checkout is served by the compiler built from
    it. With several checkouts open, the first in folder order is used. A checkout with no build yet is
-   noted in the output channel ("build it with `maxon run build`") and the search goes on.
+   noted in the output channel ("build it with `maxon run build`") and the search goes on. In an
+   untrusted workspace the checkout's build is passed over, and the output channel says so.
 3. `maxon` on your `PATH`.
 4. `~/.maxon/bin` (`%USERPROFILE%\.maxon\bin` on Windows), or `$MAXON_INSTALL/bin` — where the install
    script puts it. Searched directly, because a VS Code started from the dock or the Start menu gets the
@@ -99,6 +100,21 @@ in PATH**).
 - `.maxproj`, `.maxtasks` and `.maxtest` files are Maxon documents too. A `.maxtest` file is checked with its project's other test files in view, and a `.maxon` file with the production sources only.
 - A `.test` file (a spec fragment in the Maxon checkout) is highlighted as Maxon and sent to the language server whole, exactly like a `.maxon` file.
 - If you only want syntax highlighting, no LSP server is required.
+
+## Restricted Mode
+
+A test run, a debug session and a project's `.maxproj` file each run the workspace's code, so in an
+untrusted workspace (VS Code's Restricted Mode) the extension keeps to the features that read it:
+
+- **The language server reads each project as its directory.** A `.maxproj` whose targets would be
+  run carries one information diagnostic saying its source list applies once the workspace is trusted.
+- **A test the Test Explorer or the spec suite is asked to run** is marked with a refusal that names
+  trust, and **a debug launch** is answered with the same refusal.
+- **The compiler comes from your user `maxon.serverPath`, `PATH` or the install.** A checkout's own
+  build and a `maxon.serverPath` set in the workspace are passed over.
+
+Trusting the workspace tells the running language server, which then reads each project's `.maxproj`,
+and searches for the compiler again.
 
 ## Development
 - Use the `watch` script during development to compile TypeScript and auto-emit changes:
@@ -188,8 +204,10 @@ refresh button in the Test Explorer re-reads every test file.
 ### Which project a test runs in
 
 A test file's project is the nearest directory holding a `.maxproj`, from the file's own directory up to
-the workspace folder, and the test runs as `maxon test <that directory>`, which compiles every `.maxon`
-file beneath it together with its tests as one program. A test file with no `.maxproj` there runs alone,
+the workspace folder, and the test runs as `maxon test <that directory>`, which compiles the project's
+sources together with their tests as one program: the `sources` its `.maxproj` target lists, or every
+`.maxon` file beneath the directory when the `.maxproj` declares no target. A project with several
+targets is refused there, listing them, because the run names none. A test file with no `.maxproj` there runs alone,
 as `maxon test <file>`: it is compiled with the library tiers and nothing else, as the language server
 checks it. So `lib/math.maxtest` runs with the whole project when an `app.maxproj` sits at the root, and
 by itself when nothing marks a project.

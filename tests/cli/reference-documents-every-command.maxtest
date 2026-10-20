@@ -11,7 +11,7 @@
 let SectionHeadingPrefix = "### "
 
 test 'the CLI reference has a section for every command and names every option help lists'
-	let reference = runOneArgument(HelpCommandWord)
+	let reference = spawnCompiler([HelpCommandWord])
 
 	let observedExit = reference.exitCode()
 	Expect.equal(observedExit, expected: 0, message: "`maxon {HelpCommandWord}` printed the reference and then failed. It said: {reference.stdout}{reference.stderr}")
@@ -20,14 +20,14 @@ test 'the CLI reference has a section for every command and names every option h
 
 	// ⚠ Both differences below are vacuous over an empty reading, so this comes first.
 	let missingAnchors = anchorsMissingFrom(commands)
-	Expect.isEmpty(missingAnchors, message: "`maxon {HelpCommandWord}` has no section for these commands: {missingAnchors}. It showed: {listed(commands)}")
+	Expect.isEmpty(missingAnchors, message: "`maxon {HelpCommandWord}` has no section for these commands: {missingAnchors}. It showed: {joined(commands, separator: Space)}")
 
 	let options = optionSpellingsIn(reference.stdout)
 	Expect.isTrue(options.count() > 0, message: "no option was read off `maxon {HelpCommandWord}`, so the comparison below would be vacuous. It said: {reference.stdout}")
 
 	let document = cliReferenceText()
 	let headings = sectionHeadingsIn(document)
-	var unsectioned = ListedWordArray.create()
+	var unsectioned = StringArray.create()
 
 	for command in commands 'eachCommand'
 		if not anyHeadingNames(headings, command: command) 'noSection'
@@ -41,18 +41,18 @@ test 'the CLI reference has a section for every command and names every option h
 	var findings = ""
 
 	if unsectioned.count() > 0 'missingSections'
-		findings.append("these commands have no `{SectionHeadingPrefix}{CodeSpanMark}{DriverInvocation}<command>{CodeSpanMark}` heading: {listed(unsectioned)}. ")
+		findings.append("these commands have no `{SectionHeadingPrefix}{CodeSpanMark}{DriverInvocation}<command>{CodeSpanMark}` heading: {joined(unsectioned, separator: Space)}. ")
 	end 'missingSections'
 
 	if unnamed.count() > 0 'missingOptions'
-		findings.append("these option spellings appear nowhere: {listed(unnamed)}.")
+		findings.append("these option spellings appear nowhere: {joined(unnamed, separator: Space)}.")
 	end 'missingOptions'
 
 	Expect.isEmpty(findings, message: "{CliReferenceDocument} does not document everything `maxon {HelpCommandWord}` lists - {findings}")
 end 'the CLI reference has a section for every command and names every option help lists'
 
-function sectionHeadingsIn(document String) returns ListedWordArray
-	var headings = ListedWordArray.create()
+function sectionHeadingsIn(document String) returns StringArray
+	var headings = StringArray.create()
 
 	for line in document.split("\n") 'eachLine'
 		if line.startsWith(SectionHeadingPrefix) 'aSectionHeading'
@@ -63,7 +63,7 @@ function sectionHeadingsIn(document String) returns ListedWordArray
 	return headings
 end 'sectionHeadingsIn'
 
-function anyHeadingNames(headings ListedWordArray, command String) returns bool
+function anyHeadingNames(headings StringArray, command String) returns bool
 	for heading in headings 'eachHeading'
 		if heading.contains("{CodeSpanMark}{DriverInvocation}{command}{CodeSpanMark}") 'namesIt'
 			return true

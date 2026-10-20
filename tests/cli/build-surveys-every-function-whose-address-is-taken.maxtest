@@ -2,7 +2,6 @@ let AddressTakenCaseDirName = "address-taken-survey"
 
 let AddressTakenLogFlag = "--log=codegen:debug"
 
-let AddressTakenMainFileName = "main.maxon"
 let AddressTakenMainSource = "function work(name String) returns ExitCode\n\treturn 1 if name.isEmpty() else 0\nend 'work'\n\nfunction main() returns ExitCode\n\tlet pending = async work(\"alpha\")\n\treturn await pending\nend 'main'\n"
 
 let AddressTakenLinePrefix = "function whose address is taken: '"
@@ -23,9 +22,9 @@ type SurveysAddressTakenFunctions implements OutsideCheckoutCase
 	end 'create'
 
 	export function requireHeldIn(dir FilePath) throws TestFailure
-		writeStagedFile(dir.join(AddressTakenMainFileName), content: AddressTakenMainSource)
+		writeStagedFile(dir.join(StagedProgramFileName), content: AddressTakenMainSource)
 
-		let built = runDriver([BuildCommandWord, AddressTakenMainFileName, AddressTakenLogFlag], workingDirectory: dir)
+		let built = spawnCompiler([BuildCommandWord, StagedProgramFileName, AddressTakenLogFlag], staged: dir)
 		let said = "It wrote to stderr: {built.stderr}"
 
 		try Expect.equal(built.exitCode(), expected: 0, message: "an `async` program did not build under {AddressTakenLogFlag}. {said}")

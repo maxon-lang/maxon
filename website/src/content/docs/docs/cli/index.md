@@ -35,7 +35,7 @@ agents, and reads back what a program did.
 | `maxon profile run <exe>` | Sample a running program and report where its CPU time went ([Debugging and Profiling](/docs/cli/debugging/)) |
 | `maxon execute <file\|directory> [args...]` | Compile a program, or reuse a cached build of it, and run it |
 | `maxon run [<task> [args...]]` | Run a task declared in the directory's `.maxtasks` file, or list the tasks |
-| `maxon test [directory\|file.maxtest]` | Run a project's own `test` declarations, or one test file's alone |
+| `maxon test [<target>] [directory\|file.maxtest]` | Run a project's own `test` declarations, or one test file's alone |
 | `maxon upgrade [--dry-run]` | Update this compiler's install to the newest release |
 | `maxon version` | Print the version, the commit it was built from, and the host target |
 
@@ -653,14 +653,30 @@ Runs a project's unit tests: every `test` declaration in its `*.maxtest` files, 
 the project's `.maxon` sources. How to write tests is covered in [Testing](/docs/language/testing/).
 
 ```bash
-maxon test [directory | file.maxtest] [options]
+maxon test [<target>] [directory | file.maxtest] [options]
 ```
 
 `[directory]` is the project to test (default: the working directory). A `.maxtest` file named in its
 place is run alone: it is compiled with the library tiers and nothing else, as the editor checks a file
 no `.maxproj` marks, so its siblings and any project around it stay out of the run. A path naming
 nothing is refused with ``test: no such directory or `.maxtest` file: <path>``, and any other file with
-``test: not a directory or a `.maxtest` file: <path>``; both exit 2 with the usage line. A second positional is refused.
+``test: not a directory or a `.maxtest` file: <path>``; both exit 2 with the usage line. A third positional is refused.
+
+**The project's sources are the ones `maxon build` compiles for it.** When the directory's `.maxproj`
+file declares a target, the run compiles that target's `sources`: the project file is run as
+[`maxon build`](/docs/cli/project-structure/#the-project-file) runs it, delegation included, and the description's `sources` are
+read, with every `.maxtest` file beneath them. A directory with no `.maxproj` file, or one whose file
+declares no target, is every source beneath it. The target is chosen as `maxon build` chooses one:
+
+- **One target** is used.
+- **`<target>`** names one, each `_` written `-`, before the directory: `maxon test gen-tool tools/`.
+  A target word with a `.maxtest` file is refused, and so is a word the project declares no target for,
+  which lists the targets it does declare.
+- **A lone word** naming a target of the working directory's project is that target, and it outranks a
+  directory of the same name ([Several targets](/docs/cli/project-structure/#several-targets)). Any other lone word is a path.
+- **Several targets and no word** are listed, and the run exits 2.
+
+A project file that does not compile, fails, or describes no build ends the run with its error and exit 2.
 
 All discovered tests are compiled into **one binary** with a generated entry point, and which of them
 run is a runtime argument. Changing `--filter` between runs therefore recompiles nothing. The project's
@@ -712,7 +728,7 @@ process from the start.
 |------|---------|
 | `0` | Every test passed |
 | `1` | A test failed, crashed, timed out, leaked or did not run, **or no tests were found** |
-| `2` | The run could not happen: a bad option, a compile error, no source files, no such project |
+| `2` | The run could not happen: a bad option, a compile error, no source files, no such project, a project file that gave no sources, or several targets and no target word |
 
 A run that finds no tests exits 1 on purpose, so a suite that silently stopped containing tests does
 not read as green. A source file that does not tokenize is a compile error like any other: the run

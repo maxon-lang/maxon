@@ -1,0 +1,21 @@
+// WarmRebuildHarness.maxon — the shared half every case under `tests/warmRebuild/` reaches for:
+// running `verify-warm-rebuild` at a staged fixture.
+//
+// ⛔ **EVERYTHING THAT WOULD STOP A CASE RUNNING AT ALL PANICS RATHER THAN FAILING AN ASSERTION** — a missing
+// compiler, an unspellable path, a spawn that never happened.
+//
+// ⛔ **THIS FILE'S PATHS ARE RELATIVE TO THE CHECKOUT ROOT**, the working directory a test binary inherits from
+// `maxon test`; everything handed to the child is made absolute first.
+
+export let FixturesDirName = "tests/warmRebuild/fixtures"
+export let StagingRootDirName = "temp/warmRebuild"
+
+export let VerifyCommandName = "verify-warm-rebuild"
+
+// What the driver prints for the verdict over every property.
+export let VerdictPassLine = "verify-warm-rebuild: PASS"
+
+// `<compiler> verify-warm-rebuild <staged>`, run in the staging tree.
+export function spawnVerify(staged FilePath) returns CollectedOutput
+	return spawnCompiler([VerifyCommandName, staged.toString()], staged: staged, what: "`{VerifyCommandName}`")
+end 'spawnVerify'

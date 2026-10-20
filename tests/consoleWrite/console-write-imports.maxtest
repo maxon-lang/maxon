@@ -1,0 +1,142 @@
+// console-write-imports.maxtest — WHICH WRITE MECHANISM an x64-windows program is built with.
+//
+// A Windows console decodes what a program writes, and there are two ways to make it decode UTF-8 text
+// correctly. One switches the console's OUTPUT CODE PAGE at startup — a process-wide setting on a shared
+// object the program does not own, which outlives the program on a console it did not create and which
+// says nothing at all when the stream is a pipe or a file. The other asks, per standard stream, whether
+// the handle IS a console, and writes UTF-16 through `WriteConsoleW` when it is. This corpus gates which
+// of the two an emitted image was built with.
+//
+// ⭐⭐ **THE SUBJECT IS THE EMITTED IMAGE, NOT THIS HOST.** The bytes of the file the compiler just wrote
+// answer both questions below — without running it, and without a console to run it on. That is the only
+// place they ARE answerable: a running program's writes look the same from outside whichever API carried
+// them, so no program can report how it was built.
+//
+// ⛔⛔ **WHAT IS GATED HERE, EXACTLY — AND WHAT IS NOT.** Two claims, and neither is about the conversion:
+//
+//   • **THE NEW MECHANISM IS PRESENT** — the image carries the SYMBOL `mrt_write_stream`, the emitted chunk
+//     the whole write path goes through. A chunk's name reaches `__symtable` (the backtrace symbolizer's
+//     table) only because the chunk was EMITTED, so the name is in the file when the mechanism is built in
+//     and nowhere in it when it is not.
+//   • **THE OLD MECHANISM IS ABSENT** — the image does not import `SetConsoleOutputCP`.
+//
+// ⛔ **AN IMPORT NAME COULD NOT CARRY THE FIRST CLAIM, AND AN EARLIER CUT OF THIS CASE TRIED.**
+// `GetConsoleMode` and `WriteConsoleW` sit in kernel32's MANDATORY band (`PeWriter.isOptionalTrailingImport`),
+// which every x64-windows image emits whether or not anything calls them — MEASURED: a hello-world that
+// touches no file still imports `FindFirstFileW` and `CreateDirectoryW`. Asserting those names present
+// would therefore assert that two enum cases exist, and would stay green with the write path reverted
+// whole. The ABSENCE assertion has teeth for the same reason read the other way: a `SetConsoleOutputCP`
+// that still existed would be in every image, so its absence proves the case is gone from the enum.
+//
+// ⛔ **THE IMPLEMENTATION MEANS ARE NOT PINNED.** `MultiByteToWideChar` is one way to get UTF-16 and it is
+// not the behaviour; a case naming it would forbid an encoder written in Maxon that is just as correct.
+// The chunk's NAME is pinned instead, which is a claim about the write path existing rather than about how
+// it converts.
+//
+// ⛔⛔ **AND THE CONVERSION ITSELF IS GATED BY NOTHING, ANYWHERE.** Whether the bytes reaching a console are
+// the right UTF-16 is decided by a road that runs only when a standard stream IS a console, and no
+// automated gate in this repository ever puts one there: `maxon test` and `spec-test` both collect a
+// child's output through a PIPE, which takes the NOT-A-CONSOLE road end to end. A spec case cannot ask
+// either — it is a program, and a program cannot see which API carried its own writes. So the console road
+// is covered by HAND, against a real console, and by nothing else; do not read a green run here as
+// evidence that it converts correctly.
+//
+// ⛔ **EVERYTHING THAT WOULD STOP THE CASE RUNNING AT ALL PANICS RATHER THAN FAILING AN ASSERTION** — a
+// missing compiler, an unspellable path, a spawn that never happened, a BUILD that produced no image.
+// None of those is an image built with the wrong mechanism, so none may reach a reader as though it were.
+//
+// ⛔ **THIS FILE'S PATHS ARE RELATIVE TO THE CHECKOUT ROOT**, which is the working directory a test binary
+// inherits from `maxon test`. Everything handed to the child is made absolute first, because a relative
+// path resolves against the child's directory on POSIX and the parent's on Windows.
+//
+// ⛔ **ONE SPAWNING `test`, ONE FILE, ONE COMPILE**, which is what keeps this inside the per-file
+// deadline; staging goes to a directory named for this case, because `maxon test` runs files concurrently.
+
+// Where the corpus lives and where the runnable copy is built, both relative to the checkout root. Staging
+// goes to gitignored `temp/`: a live `.maxon` under `tests/` is one `maxon fmt` over the checkout rewrites.
+let FixturesDirName = "tests/consoleWrite/fixtures"
+let HelloFixtureName = "hello"
+let StagingRootDirName = "temp/consoleWrite"
+let CaseLabel = "console-write-imports"
+
+// The command line the one build is run from. The output name carries `.exe` because the TARGET does, not
+// because this host might.
+let WindowsTargetName = "x64-windows"
+let TargetOptionPrefix = "--target="
+let OutputFileName = "out.exe"
+
+// The two names this corpus is about, and why each one is where it is.
+//
+// ⚠ They are read the SAME way — a byte search over the image — but they are not the same KIND of name.
+// One is a chunk the compiler EMITS, so its presence is decided by the emitter; the other is a kernel32
+// import, so its presence is decided by the `IatSlot` enum. See the header for why only that pairing
+// gives each assertion teeth.
+let WriteChunkName = "mrt_write_stream"
+let WriteChunkReason = "It is the one chunk `print`, `printError` and the panic writer all reach, and the only place the per-stream console probe and the UTF-16 conversion exist. Its name is in `__symtable` because the chunk was emitted, so a build that reverted to writing raw bytes at the handle would not carry it."
+let CodepageSwitchName = "SetConsoleOutputCP"
+let CodepageSwitchReason = "It mutates a console the program does not own and cannot restore, it outlives the process on a console the process did not create, and it answers nothing at all when the stream is a pipe or a file. It is a MANDATORY kernel32 slot, so an image that still declared it would import it whether or not anything called it — which is what makes this absence a real reading."
+
+// ============================================================================================
+// THE CONTRACT
+// ============================================================================================
+
+test 'an x64-windows image carries the per-stream console writer and no code-page switch'
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: CaseLabel, fixture: HelloFixtureName)
+	let image = fileBytes(buildStagedProgram(staged))
+
+	// The control: an empty image would satisfy every ABSENCE demand below by holding nothing at all.
+	Expect.greaterThan(image.count(), than: 0, message: "the {WindowsTargetName} build wrote an EMPTY file, so nothing read out of it means anything — an absent name and an absent image read alike.")
+
+	var findings = StringArray.create()
+	noteName(findings, image: image, name: WriteChunkName, present: true, why: WriteChunkReason)
+	noteName(findings, image: image, name: CodepageSwitchName, present: false, why: CodepageSwitchReason)
+
+	Expect.isTrue(findings.isEmpty(), message: "the {WindowsTargetName} image the compiler just emitted was built with the wrong write mechanism:{renderedFindings(findings)}")
+end 'an x64-windows image carries the per-stream console writer and no code-page switch'
+
+// One name's presence, RECORDED rather than asserted, so one run reports the whole state of the image: an
+// assertion per name stops at the first disagreement, and the one behind it is exactly what says whether
+// the change landed halfway — a new writer beside a code-page switch nobody removed.
+//
+// What is read is a byte search, which serves both names because both reach the file as plain ASCII: a
+// chunk's name through `__symtable`, an import's through the idata name table.
+function noteName(findings StringArray, image ByteArray, name String, present bool, why String)
+	let found = image.contains(asciiBytes(name))
+
+	if found == present 'asDemanded'
+		return
+	end 'asDemanded'
+
+	let demand = "must carry" if present else "must NOT carry"
+	let observed = "the name is nowhere in the image" if present else "the name is still in the image"
+
+	findings.push("a freshly built {WindowsTargetName} program {demand} `{name}`, and {observed}. {why}")
+end 'noteName'
+
+// A name as the image holds it: ASCII, one byte per character.
+function asciiBytes(name String) returns ByteArray
+	var bytes = ByteArray.create()
+
+	for octet in name.bytes() 'eachByte'
+		bytes.push(octet)
+	end 'eachByte'
+
+	return bytes
+end 'asciiBytes'
+
+// ============================================================================================
+// STAGING, BUILDING AND READING THE IMAGE
+// ============================================================================================
+
+// Compile the staged program for Windows and hand back the image. `--output=` is what keeps the build
+// out of the tree lock. A build that fails is not this corpus's subject — there is simply nothing to
+// read — so both of its failure shapes panic.
+function buildStagedProgram(staged FilePath) returns FilePath
+	let executable = staged.join("{OutputFileName}")
+
+	let build = spawnBuild(staged.join(StagedProgramFileName), staged: staged, output: executable, label: CaseLabel, extraArguments: ["{TargetOptionPrefix}{WindowsTargetName}"])
+
+	requireBuiltOrPanic(build, output: executable, what: "`{BuildCommandName} … {TargetOptionPrefix}{WindowsTargetName}`, which emits the image to read,")
+
+	return executable
+end 'buildStagedProgram'

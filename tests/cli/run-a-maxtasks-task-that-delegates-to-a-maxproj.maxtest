@@ -4,7 +4,6 @@ let RunCommandWord = "run"
 let AskedFor = "build"
 let ProjectDirName = "app"
 let ProjectFileName = "app.maxproj"
-let MainFileName = "main.maxon"
 let ProductsDirName = ".maxon"
 
 let TasksSource = "export function build() returns ExitCode\n\tBuild.delegate(\"app\")\n\treturn 0\nend 'build'\n"
@@ -23,11 +22,11 @@ type DelegatedToTheProject implements OutsideCheckoutCase
 	export function requireHeldIn(dir FilePath) throws TestFailure
 		writeStagedFile(dir.join(TaskFileName), content: TasksSource)
 
-		let project = createdStagedDirectory(dir.join(ProjectDirName))
+		let project = stagingDir(dir.join(ProjectDirName).toString())
 		writeStagedFile(project.join(ProjectFileName), content: ProjectSource)
-		writeStagedFile(project.join(MainFileName), content: MainSource)
+		writeStagedFile(project.join(StagedProgramFileName), content: MainSource)
 
-		let ran = runDriver([RunCommandWord, AskedFor], workingDirectory: dir)
+		let ran = spawnCompiler([RunCommandWord, AskedFor], staged: dir)
 		let said = "It wrote to stdout: {ran.stdout} and to stderr: {ran.stderr}"
 
 		try Expect.equal(ran.exitCode(), expected: 0, message: "`maxon {RunCommandWord} {AskedFor}`, whose task delegates to `{ProjectDirName}/`, did not succeed. {said}")

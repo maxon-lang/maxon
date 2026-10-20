@@ -4,15 +4,15 @@ let InnerFunctionName = "inner"
 
 test 'a next that steps over a call stops at a breakpoint inside it'
 	let staged = builtFixture(NextInnerCaseLabel, fixture: SteppingFixtureName)
-	let innerLine = anchorLine(staged, anchor: "inner-loop")
-	let outerCallLine = anchorLine(staged, anchor: "outer-call")
+	let innerLine = anchorLine(staged.join(StagedProgramFileName), anchor: "inner-loop")
+	let outerCallLine = anchorLine(staged.join(StagedProgramFileName), anchor: "outer-call")
 	let commands = debugCommandLine(["{BreakCommand} {lineTarget(outerCallLine)}", RunCommand, "{BreakCommand} {lineTarget(innerLine)}", NextCommand])
 	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let stops = eventsOfKind(events, kind: StopEventName)
 
-	Expect.equal(stops.count(), expected: 2, message: "the breakpoint on the call line and the stop the `{NextCommand}` ran into are two stops. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(stops.count(), expected: 2, message: "the breakpoint on the call line and the stop the `{NextCommand}` ran into are two stops. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let landed = eventAt(stops, index: 1)
 	Expect.equal(textOf(landed, node: landed.root, key: FunctionKey), expected: InnerFunctionName, message: "`{NextCommand}` steps OVER a call, which means it does not report the callee's LINES — but a breakpoint inside the callee is a place the author asked to stop, and running through it is the same defect as never arming it. {said}")

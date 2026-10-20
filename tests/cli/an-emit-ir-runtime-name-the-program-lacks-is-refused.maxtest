@@ -1,5 +1,4 @@
 let CaseDirName = "an-emit-ir-runtime-name-the-program-lacks-is-refused"
-let MainFileName = "main.maxon"
 let MainSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
 let EmitIrRuntimeOptionPrefix = "--emit-ir-runtime="
 let UnknownRuntimeName = "noSuchRuntimeFunction"
@@ -8,11 +7,11 @@ let StackTraceMarker = "Stack trace:"
 
 test 'an --emit-ir-runtime= name the program does not contain is refused, not a panic'
 	let dir = freshCaseDir(CaseDirName)
-	let source = dir.join(MainFileName)
+	let source = dir.join(StagedProgramFileName)
 	writeStagedFile(source, content: MainSource)
 
 	let option = "{EmitIrRuntimeOptionPrefix}{UnknownRuntimeName}"
-	let build = runDriver([BuildCommandWord, source.toString(), option], workingDirectory: dir)
+	let build = spawnCompiler([BuildCommandWord, source.toString(), option], staged: dir)
 	let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
 
 	Expect.equal(build.exitCode(), expected: 1, message: "`maxon {BuildCommandWord} main.maxon {option}` did not exit 1. {said}")

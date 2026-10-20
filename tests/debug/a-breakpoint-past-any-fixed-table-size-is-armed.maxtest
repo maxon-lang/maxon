@@ -13,12 +13,12 @@ test 'more breakpoints than any fixed table would hold are all armed at once, an
 
 	Expect.atLeast(PastTheTableAnchors, than: MoreThanAFixedTableWouldHold, message: "this case arms more breakpoints at once than a fixed-size table would hold, and the fixture only offers {PastTheTableAnchors} anchored lines to arm.")
 
-	var lastArmed = anchorLine(staged, anchor: "{PastTheTableAnchorPrefix}01")
+	var lastArmed = anchorLine(staged.join(StagedProgramFileName), anchor: "{PastTheTableAnchorPrefix}01")
 	var commands = StringArray.create()
 
 	for n in 1 to PastTheTableAnchors 'eachAnchor'
 		let anchor = "{PastTheTableAnchorPrefix}{n}" if n >= FirstTwoDigitAnchor else "{PastTheTableAnchorPrefix}0{n}"
-		lastArmed = anchorLine(staged, anchor: anchor)
+		lastArmed = anchorLine(staged.join(StagedProgramFileName), anchor: anchor)
 		commands.push("{BreakCommand} {lineTarget(lastArmed)}")
 	end 'eachAnchor'
 
@@ -30,11 +30,11 @@ test 'more breakpoints than any fixed table would hold are all armed at once, an
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 
 	Expect.equal(breakpointAnswersWithAction(events, action: RefusedAction), expected: 0, message: "⛔ HOW MANY BREAKPOINTS A SESSION HOLDS IS NOT A PROPERTY OF THE PROGRAM. Every one of these {PastTheTableAnchors} lines is a distinct instruction and all of them are live at once, so a refusal here is a table with a fixed number of rows in it — a limit a reader hits in the middle of a debugging session and cannot do anything about. {said}")
-	Expect.equal(breakpointAnswersWithAction(events, action: SetAction), expected: PastTheTableAnchors, message: "every anchored line answers one armed breakpoint. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(breakpointAnswersWithAction(events, action: SetAction), expected: PastTheTableAnchors, message: "every anchored line answers one armed breakpoint. It printed: {listedLines(eventKinds(events))}. {said}")
 	Expect.atLeast(stopsAtLine(events, line: lastArmed), than: 1, message: "⭐ THE LAST ONE ARMED IS THE ONE THAT PROVES IT. The fixture executes every anchored line once, so the breakpoint on the last of them must be hit; a session that armed it and never stopped on it accepted the arming and dropped it. {said}")
 
 	let exits = eventsOfKind(events, kind: ExitEventName)
-	Expect.equal(exits.count(), expected: 1, message: "the continues run the program past every stop to its end. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(exits.count(), expected: 1, message: "the continues run the program past every stop to its end. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let exited = eventAt(exits, index: 0)
 	Expect.equal(numberOf(exited, node: exited.root, key: CodeKey), expected: undebugged.exitCode() as EventNumber, message: "a program stopped {PastTheTableAnchors} times answered a different exit code than the same image run with nothing attached. {said}")

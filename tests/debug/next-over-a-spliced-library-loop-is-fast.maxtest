@@ -2,17 +2,17 @@ let SplicedLoopCaseLabel = "next-over-a-spliced-library-loop-is-fast"
 
 test 'a next over a line whose library loop is spliced into the frame runs the loop rather than stepping it'
 	let staged = builtFixture(SplicedLoopCaseLabel, fixture: SplicedLoopFixtureName)
-	let scanLine = anchorLine(staged, anchor: "spliced-scan")
-	let afterLine = anchorLine(staged, anchor: "after-scan")
+	let scanLine = anchorLine(staged.join(StagedProgramFileName), anchor: "spliced-scan")
+	let afterLine = anchorLine(staged.join(StagedProgramFileName), anchor: "after-scan")
 	let commands = debugCommandLine(["{BreakCommand} {lineTarget(scanLine)}", RunCommand, NextCommand])
 	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 
-	try Expect.equal(eventsOfKind(events, kind: TimeoutEventName).count(), expected: 0, message: "⛔ LIBRARY CODE SPLICED INTO THE PROGRAM'S OWN FRAME IS RUN TO THE END OF THE SPLICE, NOT SINGLE-STEPPED. The scan visits three hundred thousand elements, and one trap per instruction of it outlasts the stop timeout. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(eventsOfKind(events, kind: TimeoutEventName).count(), expected: 0, message: "⛔ LIBRARY CODE SPLICED INTO THE PROGRAM'S OWN FRAME IS RUN TO THE END OF THE SPLICE, NOT SINGLE-STEPPED. The scan visits three hundred thousand elements, and one trap per instruction of it outlasts the stop timeout. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let stops = eventsOfKind(events, kind: StopEventName)
-	try Expect.equal(stops.count(), expected: 2, message: "the breakpoint on the scan and the `{NextCommand}` are two stops. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(stops.count(), expected: 2, message: "the breakpoint on the scan and the `{NextCommand}` are two stops. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let landed = eventAt(stops, index: 1)
 	try Expect.equal(numberOf(landed, node: landed.root, key: LineKey), expected: afterLine as EventNumber, message: "the `{NextCommand}` lands on the line after the scan. {said}")

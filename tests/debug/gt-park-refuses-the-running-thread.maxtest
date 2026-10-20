@@ -8,7 +8,7 @@ let ContinuesPastEveryWorker = 60
 test 'gt-park of the thread that is running is refused by reason, and the program runs on'
 	let staged = builtFixture(GtParkRunningCaseLabel, fixture: WorkersFixtureName)
 	let undebugged = runBuiltProgram(staged)
-	let loopLine = anchorLine(staged, anchor: AnchorName)
+	let loopLine = anchorLine(staged.join(StagedProgramFileName), anchor: AnchorName)
 	let onAMachine = threadSelector(RunningThreadStatus, functionName: "")
 
 	var acting = StringArray.create()
@@ -23,13 +23,13 @@ test 'gt-park of the thread that is running is refused by reason, and the progra
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 
 	let rosters = eventsOfKind(events, kind: ThreadsEventName)
-	Expect.equal(rosters.count(), expected: 1, message: "`{ThreadsCommand}` printed no `{ThreadsEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(rosters.count(), expected: 1, message: "`{ThreadsCommand}` printed no `{ThreadsEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let roster = eventAt(rosters, index: 0)
 	Expect.equal(countThreadsWhere(roster, key: StatusKey, value: RunningThreadStatus), expected: 1, message: "⛔ THE STOP IS STOP-THE-WORLD AND THIS RUN HAS ONE PROCESSOR, so exactly one green thread is `{RunningThreadStatus}` — the one that took the trap, which is the thread `{onAMachine}` names. The roster held: {renderedThreads(roster)}. {said}")
 
 	let holds = eventsOfKind(events, kind: GtParkEventName)
-	Expect.equal(holds.count(), expected: 1, message: "a refusal is an answer, so `{selectorCommand(GtParkCommand, selector: onAMachine)}` must print one `{GtParkEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(holds.count(), expected: 1, message: "a refusal is an answer, so `{selectorCommand(GtParkCommand, selector: onAMachine)}` must print one `{GtParkEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let refused = eventAt(holds, index: 0)
 	let chosen = reportedThreadId(refused)

@@ -1,0 +1,58 @@
+let NoSourcesMaxprojDirName = "diagnostics-maxproj-naming-no-sources"
+let NoSourcesMaxprojFileName = "app.maxproj"
+let NoSourcesMaxprojSource = "export function build() returns ExitCode\n\tBuild.buildWithConfig(BuildConfig.create(StringArray.create(), output: \"program\"))\n\treturn 0\nend 'build'\n"
+let NoSourcesRefusalNeedle = "named no sources to compile"
+let NoSourcesOneDiagnostic = 1
+
+union NoSourcesProbe
+	published(items PublishedDiagnosticArray)
+	broke(detail String)
+end 'NoSourcesProbe'
+
+test 'project diagnostics: a .maxproj whose build names no sources reports it on itself'
+	let root = freshOutsideCheckoutDir(NoSourcesMaxprojDirName)
+	writeCorpusFile(root, fileName: NoSourcesMaxprojFileName, content: NoSourcesMaxprojSource)
+
+	let probe = probeNoSources(root)
+
+	discardOutsideCheckoutDir(root)
+
+	match probe 'probe'
+		broke(detail) then Expect.fail("the session did not complete: {detail}")
+		published(items) then expectTheRefusalOnTheProjectFile(items)
+	end 'probe'
+end 'project diagnostics: a .maxproj whose build names no sources reports it on itself'
+
+function expectTheRefusalOnTheProjectFile(items PublishedDiagnosticArray) throws TestFailure
+	try Expect.equal(items.count(), expected: NoSourcesOneDiagnostic, message: "`{NoSourcesMaxprojFileName}` has one target and it describes a build of no sources, which `maxon build` refuses, so the editor owes that refusal where the file's author is looking rather than a project quietly read as its whole directory.")
+
+	let reported = try items.get(0) otherwise 'noItem'
+		try Expect.fail("the count above was 1, so element 0 exists.")
+		panic("expectTheRefusalOnTheProjectFile: `Expect.fail` always throws")
+	end 'noItem'
+
+	try Expect.contains(reported.message, needle: NoSourcesRefusalNeedle, message: "the one diagnostic published on the project file does not say the build names no sources: {reported.message}")
+end 'expectTheRefusalOnTheProjectFile'
+
+function probeNoSources(root FilePath) returns NoSourcesProbe
+	var client = LspClient.start()
+	let uri = fileUriOf(root.join(NoSourcesMaxprojFileName))
+	var probe = NoSourcesProbe.broke(UnreportedSessionEnding)
+
+	try 'session'
+		_ = client.initializeAtRoot(root)
+		client.initialized()
+		client.openDocument(uri, content: NoSourcesMaxprojSource)
+		probe = NoSourcesProbe.published(client.awaitPublishOfSize(uri, size: NoSourcesOneDiagnostic).items)
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed or
+			malformedResponse or
+			serverRefused then probe = NoSourcesProbe.broke(e.explained())
+		end 'reason'
+	end 'failed'
+
+	client.release()
+
+	return probe
+end 'probeNoSources'

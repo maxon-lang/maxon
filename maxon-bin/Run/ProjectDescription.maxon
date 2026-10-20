@@ -1,0 +1,797 @@
+// The fields of `stdlib/Build.maxon`'s JSON that this reads back.
+let ManifestOutputKey = "output"
+let ManifestSourcesKey = "sources"
+export let ManifestVersionKey = "version"
+export let ManifestDefinesKey = "defines"
+export let ManifestDebugInfoKey = "debug_info"
+let ManifestDirectoryKey = "directory"
+let ManifestDelegateTargetKey = "target"
+let ManifestRebuildWithOutputKey = "rebuild_with_output"
+
+export let DebugInfoWhenUnstated = true
+let RebuildWithOutputWhenUnstated = false
+
+let CompilerVariable = "MAXON_COMPILER"
+
+// The channel a manifest describes its build over, so that its stdout stays the task's own. The
+// compiler cannot read a stdlib constant, so `stdlib/Build.maxon` spells this name too: the two
+// copies must agree, or every manifest describes nothing and every path-less build refuses.
+let BuildDescriptionVariable = "MAXON_BUILD_DESCRIPTION"
+
+let BuildDescriptionSuffix = ".build.json"
+
+let MaxDelegationDepth = 8 as DelegationDepth
+
+let DescribedBuildsOpen = "["
+let DescribedBuildsClose = "]"
+
+// One resolver runs every project file the editor asks about (`LspProjectResolver`), so a
+// `.maxproj` that never exits would leave every later project's answer pending for the rest of the
+// session.
+let EditorManifestRunTimeoutMs = 30000
+
+export typealias DelegationDepth = int(0 to 64)
+
+export union ManifestBase
+	workingDirectory
+	directory(dir FilePath)
+end 'ManifestBase'
+
+export union ManifestProgramRun
+	described(text String)
+	describedNothing(code ExitCode)
+	notRun
+end 'ManifestProgramRun'
+
+export enum ManifestAudience
+	commandLine
+	editor
+end 'ManifestAudience'
+
+export type ManifestVoice
+	export let speaker as String
+	export let announce as bool
+	export let audience as ManifestAudience
+	export let logOverridden as bool
+	var said as StringArray
+	var fileBroken as bool
+
+	export static function forCommandLine(speaker String, announce bool, logOverridden bool) returns ManifestVoice
+		return Self{speaker: speaker, announce: announce, audience: ManifestAudience.commandLine, logOverridden: logOverridden, said: StringArray.create(), fileBroken: false}
+	end 'forCommandLine'
+
+	export static function forEditor(speaker String) returns ManifestVoice
+		return Self{speaker: speaker, announce: false, audience: ManifestAudience.editor, logOverridden: false, said: StringArray.create(), fileBroken: false}
+	end 'forEditor'
+
+	export function say(line String)
+		match self.audience 'audience'
+			commandLine then printError("{line}\n")
+			editor then self.said.push(line)
+		end 'audience'
+	end 'say'
+
+	export function sayEntryWords(declared TaskNameArray)
+		match self.audience 'audience'
+			commandLine then printEntryWords(declared)
+			editor then self.sayWords(entryWordsOf(declared))
+		end 'audience'
+	end 'sayEntryWords'
+
+	export function asOneMessage() returns StringArray
+		var message = StringArray.create()
+		message.push(joinedWith(self.said, separator: "\n"))
+		return message
+	end 'asOneMessage'
+
+	function sayAll(lines CapturedDiagnosticTextArray)
+		for line in lines 'eachLine'
+			self.say(line)
+		end 'eachLine'
+	end 'sayAll'
+
+	function sayWords(words StringArray)
+		for word in words 'eachWord'
+			self.say(word)
+		end 'eachWord'
+	end 'sayWords'
+
+	function reportCompile(e CompileError)
+		match self.audience 'audience'
+			commandLine then reportCompileError(e)
+			editor then self.sayAll(capturedCompileError(e))
+		end 'audience'
+	end 'reportCompile'
+
+	export function projectFileIsBroken() returns bool
+		return self.fileBroken
+	end 'projectFileIsBroken'
+
+	export function markFileBroken()
+		self.fileBroken = true
+	end 'markFileBroken'
+
+	function reportRoster(e EntryRosterError)
+		self.fileBroken = true
+
+		match self.audience 'audience'
+			commandLine then reportEntryRosterError(e)
+			editor then self.sayAll(capturedRosterError(e))
+		end 'audience'
+	end 'reportRoster'
+
+	function compileSession() returns CompileSession
+		return match self.audience 'audience'
+			commandLine gives CompileSession.printing()
+			editor gives CompileSession.create(DiagnosticSink.capturing(), fileMemos: SharedFileMemoMap.forOneCompile(), treeLock: LockHold.none())
+		end 'audience'
+	end 'compileSession'
+
+	function adopt(session CompileSession)
+		match self.audience 'audience'
+			commandLine then return
+			editor then self.sayAll(session.diagnostics.emitted())
+		end 'audience'
+	end 'adopt'
+
+	function runChild(executable FilePath, arguments StringArray, environment Environment, workingDirectory FilePath) returns ExitCode
+		return match self.audience 'audience'
+			commandLine gives spawnForwarding(Executable.path(executable), arguments: arguments, environment: environment, standardInput: InputSource.inherit, workingDirectory: workingDirectory, speaker: self.speaker)
+			editor gives self.collectedChild(executable, arguments: arguments, environment: environment, workingDirectory: workingDirectory)
+		end 'audience'
+	end 'runChild'
+
+	function collectedChild(executable FilePath, arguments StringArray, environment Environment, workingDirectory FilePath) returns ExitCode
+		var config = Configuration.create(Executable.path(executable))
+		config.arguments = arguments
+		config.environment = environment
+		config.workingDirectory = workingDirectory
+		config.timeoutMs = EditorManifestRunTimeoutMs
+
+		let ran = try config.run() otherwise (e) 'unspawnable'
+			self.say("{self.speaker}: could not run {executable.filename()} ({e.displayReason()})")
+			return OwnFailureExit
+		end 'unspawnable'
+
+		if ran.succeeded() 'succeeded'
+			return SucceededExit
+		end 'succeeded'
+
+		for line in ran.stdout.split("\n") 'eachOutputLine'
+			if not line.isEmpty() 'aLine'
+				self.say(line)
+			end 'aLine'
+		end 'eachOutputLine'
+
+		for line in ran.stderr.split("\n") 'eachErrorLine'
+			if not line.isEmpty() 'aLine'
+				self.say(line)
+			end 'aLine'
+		end 'eachErrorLine'
+
+		let code = ran.exitCode() as ExitCode
+		return OwnFailureExit if exitSucceeded(code) else code
+	end 'collectedChild'
+end 'ManifestVoice'
+
+function capturedCompileError(e CompileError) returns CapturedDiagnosticTextArray
+	var sink = DiagnosticSink.capturing()
+	reportCompileError(e, sink: sink)
+	return sink.emitted()
+end 'capturedCompileError'
+
+function capturedRosterError(e EntryRosterError) returns CapturedDiagnosticTextArray
+	var sink = DiagnosticSink.capturing()
+	reportEntryRosterError(e, sink: sink)
+	return sink.emitted()
+end 'capturedRosterError'
+
+export type DescribedBuild
+	export let doc as JsonDoc
+	export let node as JsonNodeId
+	export let manifest as FilePath
+	export let base as ManifestBase
+	export let output as StatedText
+	export let sources as MaxonSourcePathArray
+	export let rebuildWithOutput as bool
+
+	static function create(doc JsonDoc, node JsonNodeId, manifest FilePath, base ManifestBase, output StatedText, sources MaxonSourcePathArray, rebuildWithOutput bool) returns DescribedBuild
+		return Self{doc: doc, node: node, manifest: manifest, base: base, output: output, sources: sources, rebuildWithOutput: rebuildWithOutput}
+	end 'create'
+end 'DescribedBuild'
+
+export union DescriptionResolution
+	resolved(described DescribedBuild)
+	refused(code ExitCode)
+end 'DescriptionResolution'
+
+export union ProjectInputs
+	walked
+	listed(paths MaxonSourcePathArray)
+	ambiguous(projectFile FilePath, targets TaskNameArray)
+	unbuilt
+	refused(code ExitCode)
+end 'ProjectInputs'
+
+export function reportSeveralTargets(projectFile FilePath, targets TaskNameArray, voice ManifestVoice)
+	voice.say("error: {projectFile.filename()} declares {targets.count()} targets, and `maxon {voice.speaker}` compiles the sources of a project's one target:")
+	voice.sayEntryWords(targets)
+end 'reportSeveralTargets'
+
+export enum SeveralTargets
+	refuse
+	holdEvery
+end 'SeveralTargets'
+
+// Which files form the project in `projectDir`, the one answer `maxon build`, `maxon test` and the
+// editor all take. A project file declaring no target states no sources, and a directory with no
+// project file is not a project: both are walked. A project file with one target is that target's
+// build, run as `maxon build` runs it, and its `sources` are the project's roots. `word` names one
+// target of a project with several; with none, `severalTargets` says whether a project with several is
+// refused or holds the union of every target's roots.
+export function projectInputs(projectDir FilePath, word StatedText, severalTargets SeveralTargets, voice ManifestVoice) returns ProjectInputs
+	match projectRosterIn(projectDir, voice: voice) 'roster'
+		noProjectFile then return inputsWithoutAProjectFile(projectDir, word: word, voice: voice)
+		failed(inputs) then return inputs
+		declared(projectFile, targets) then return declaredInputs(projectFile, projectDir: projectDir, declared: targets, word: word, severalTargets: severalTargets, voice: voice)
+	end 'roster'
+end 'projectInputs'
+
+export union RunNeed
+	settled(inputs ProjectInputs)
+	needsARun
+end 'RunNeed'
+
+export function projectNeedsARun(projectDir FilePath, voice ManifestVoice) returns RunNeed
+	return match projectRosterIn(projectDir, voice: voice) 'roster'
+		noProjectFile gives RunNeed.settled(inputsWithoutAProjectFile(projectDir, word: StatedText.unstated, voice: voice))
+		failed(inputs) gives RunNeed.settled(inputs)
+		declared(_, targets) gives needOfTargets(targets)
+	end 'roster'
+end 'projectNeedsARun'
+
+export union ProjectRoster
+	noProjectFile
+	declared(projectFile FilePath, targets TaskNameArray)
+	failed(inputs ProjectInputs)
+end 'ProjectRoster'
+
+export function projectRosterIn(projectDir FilePath, voice ManifestVoice) returns ProjectRoster
+	let search = try driverFileIn(projectDir, extension: ProjectFileExtension) otherwise (e) 'unreadableLayout'
+		voice.reportCompile(e)
+		return ProjectRoster.failed(ProjectInputs.refused(OwnFailureExit))
+	end 'unreadableLayout'
+
+	match search 'search'
+		found(projectFile) then return rosterOf(projectFile, voice: voice)
+		none then return ProjectRoster.noProjectFile
+	end 'search'
+end 'projectRosterIn'
+
+function rosterOf(projectFile FilePath, voice ManifestVoice) returns ProjectRoster
+	let declared = try entryNamesDeclaredIn(projectFile) otherwise (e) 'noRoster'
+		voice.reportRoster(e)
+		return ProjectRoster.failed(ProjectInputs.unbuilt)
+	end 'noRoster'
+
+	return ProjectRoster.declared(projectFile, targets: declared)
+end 'rosterOf'
+
+function needOfTargets(targets TaskNameArray) returns RunNeed
+	if targets.count() == 0 'statesNoBuild'
+		return RunNeed.settled(ProjectInputs.walked)
+	end 'statesNoBuild'
+
+	return RunNeed.needsARun
+end 'needOfTargets'
+
+function inputsWithoutAProjectFile(projectDir FilePath, word StatedText, voice ManifestVoice) returns ProjectInputs
+	match word 'word'
+		unstated then return ProjectInputs.walked
+		stated(spelled) then voice.say("error: {projectDir.toString()} holds no `{ProjectFileExtension}` file, so `{spelled}` names no target")
+	end 'word'
+
+	return ProjectInputs.refused(OwnFailureExit)
+end 'inputsWithoutAProjectFile'
+
+export union WordReading
+	aTarget(projectFile FilePath, name String)
+	aPath
+	refused(code ExitCode)
+end 'WordReading'
+
+// The one reading of a lone word that `maxon build` and `maxon test` share. A word that is not a
+// target is not an error: `<x>` may mean the path x, so a project declaring no `x` answers `aPath`
+// and the caller falls back to path semantics. Refusing would let a project break builds it was
+// never part of.
+export function readingOfWord(dir FilePath, word String, voice ManifestVoice) returns WordReading
+	match projectRosterIn(dir, voice: voice) 'roster'
+		noProjectFile then return WordReading.aPath
+		failed(inputs) then return WordReading.refused(rosterRefusalCode(inputs))
+		declared(projectFile, targets) then return readingIn(projectFile, word: word, declared: targets)
+	end 'roster'
+end 'readingOfWord'
+
+export function rosterRefusalCode(inputs ProjectInputs) returns ExitCode
+	match inputs 'inputs'
+		refused(code) then return code
+		unbuilt then return OwnFailureExit
+		walked or
+		listed or
+		ambiguous then panic("rosterRefusalCode: a roster fails as a refusal or an unbuilt project file, never as a source set")
+	end 'inputs'
+end 'rosterRefusalCode'
+
+function readingIn(projectFile FilePath, word String, declared TaskNameArray) returns WordReading
+	match declaredTargetNamed(word, declared: declared) 'named'
+		named(name) then return WordReading.aTarget(projectFile, name: name)
+		notDeclared then return WordReading.aPath
+		refused(code) then return WordReading.refused(code)
+	end 'named'
+end 'readingIn'
+
+function declaredInputs(projectFile FilePath, projectDir FilePath, declared TaskNameArray, word StatedText, severalTargets SeveralTargets, voice ManifestVoice) returns ProjectInputs
+	match word 'aTargetNamed'
+		stated(spelled) then return namedInputs(projectFile, projectDir: projectDir, spelled: spelled, declared: declared.clone(), voice: voice)
+		unstated then break
+	end 'aTargetNamed'
+
+	match needOfTargets(declared) 'need'
+		settled(inputs) then return inputs
+		needsARun then break
+	end 'need'
+
+	if declared.count() > 1 'severalBuilds'
+		return severalTargetsInputs(projectFile, projectDir: projectDir, declared: declared, severalTargets: severalTargets, voice: voice)
+	end 'severalBuilds'
+
+	let target = try declared.get(0) otherwise panic("declaredInputs: the count was just held to one")
+
+	return targetInputs(projectFile, projectDir: projectDir, target: target, voice: voice)
+end 'declaredInputs'
+
+function namedInputs(projectFile FilePath, projectDir FilePath, spelled String, declared TaskNameArray, voice ManifestVoice) returns ProjectInputs
+	match declaredTargetNamed(spelled, declared: declared) 'named'
+		named(name) then return targetInputs(projectFile, projectDir: projectDir, target: name, voice: voice)
+		notDeclared(word, offered) then return ProjectInputs.refused(refuseUndeclaredDelegatedTarget(projectFile, word: word, offered: offered, voice: voice))
+		refused(code) then return ProjectInputs.refused(code)
+	end 'named'
+end 'namedInputs'
+
+function severalTargetsInputs(projectFile FilePath, projectDir FilePath, declared TaskNameArray, severalTargets SeveralTargets, voice ManifestVoice) returns ProjectInputs
+	match severalTargets 'severalTargets'
+		refuse then return ProjectInputs.ambiguous(projectFile, targets: declared)
+		holdEvery then return everyTargetInputs(projectFile, projectDir: projectDir, declared: declared, voice: voice)
+	end 'severalTargets'
+end 'severalTargetsInputs'
+
+function everyTargetInputs(projectFile FilePath, projectDir FilePath, declared TaskNameArray, voice ManifestVoice) returns ProjectInputs
+	var everyRoot = MaxonSourcePathArray.create()
+	var held = MaxonSourcePathSet.create()
+
+	for target in declared 'eachTarget'
+		match targetInputs(projectFile, projectDir: projectDir, target: target, voice: voice) 'inputs'
+			listed(paths) then holdNew(paths, into: everyRoot, held: held)
+			walked or
+			ambiguous then panic("everyTargetInputs: a target named by the roster is run, and a run lists its sources or is refused")
+			unbuilt then return ProjectInputs.unbuilt
+			refused(code) then return ProjectInputs.refused(code)
+		end 'inputs'
+	end 'eachTarget'
+
+	return ProjectInputs.listed(everyRoot)
+end 'everyTargetInputs'
+
+function holdNew(paths MaxonSourcePathArray, into MaxonSourcePathArray, held MaxonSourcePathSet)
+	for path in paths 'eachPath'
+		if held.contains(path) 'alreadyHeld'
+			continue
+		end 'alreadyHeld'
+
+		held.insert(path)
+		into.push(path)
+	end 'eachPath'
+end 'holdNew'
+
+function targetInputs(projectFile FilePath, projectDir FilePath, target String, voice ManifestVoice) returns ProjectInputs
+	match describedThroughProject(projectFile, target: target, base: ManifestBase.directory(projectDir), depth: 0, voice: voice) 'resolution'
+		resolved(described) then return ProjectInputs.listed(absolutePaths(described.sources))
+		refused(code) then return ProjectInputs.unbuilt if voice.projectFileIsBroken() else ProjectInputs.refused(code)
+	end 'resolution'
+end 'targetInputs'
+
+function absolutePaths(paths MaxonSourcePathArray) returns MaxonSourcePathArray
+	var absolute = MaxonSourcePathArray.create()
+
+	for path in paths 'eachPath'
+		absolute.push(path.resolve(Directory.currentPath()))
+	end 'eachPath'
+
+	return absolute
+end 'absolutePaths'
+
+export function describedThroughProject(projectFile FilePath, target String, base ManifestBase, depth DelegationDepth, voice ManifestVoice) returns DescriptionResolution
+	let outcome = runManifestProgram(projectFile, entry: target.toByteArray(), base: base, arguments: StringArray.create(), voice: voice)
+
+	return match outcome 'outcome'
+		described(text) gives resolveDescription(text, manifest: projectFile, base: base, depth: depth, voice: voice)
+		describedNothing(code) gives DescriptionResolution.refused(describedNoBuild(projectFile, code: code, voice: voice))
+		notRun gives DescriptionResolution.refused(OwnFailureExit)
+	end 'outcome'
+end 'describedThroughProject'
+
+function describedNoBuild(manifest FilePath, code ExitCode, voice ManifestVoice) returns ExitCode
+	voice.say("error: {manifest.filename()} exited {code} and described no build")
+	return OwnFailureExit if exitSucceeded(code) else code
+end 'describedNoBuild'
+
+// Built for this host whatever `--target` says: this machine is about to run it, and the flag
+// describes the program the manifest asks for. Kept in the run cache and never in the project: a
+// path inside the project is written by every concurrent build of it, and which lock would apply is
+// known only once the manifest has run.
+//
+// Only this compile is silenced, and the level goes back before the next one. The build the manifest
+// goes on to describe is what the caller asked for, and its own report is their answer.
+export function runManifestProgram(manifest FilePath, entry ByteArray, base ManifestBase, arguments StringArray, voice ManifestVoice) returns ManifestProgramRun
+	let spoke = quietTheBuildChatter(voice.logOverridden)
+	var session = voice.compileSession()
+
+	let runner = try cachedBuild(manifest, isProject: false, target: detectHostTarget(), entryFunction: entry, speaker: voice.speaker, session: session) otherwise 'manifestNotBuilt'
+		Log.setLevel(spoke)
+		voice.markFileBroken()
+		voice.adopt(session)
+		voice.say("error: {manifest.filename()} could not be built — the reason is above")
+		return ManifestProgramRun.notRun
+	end 'manifestNotBuilt'
+
+	Log.setLevel(spoke)
+
+	if voice.announce 'tellTheReader'
+		reportBuildRunner(runner.compiled, manifest: manifest)
+	end 'tellTheReader'
+
+	let description = buildDescriptionPath(runner)
+	discardDescription(description)
+
+	var overrides = EnvMap.create()
+	overrides.upsert(BuildDescriptionVariable, value: description.toString())
+	overrides.upsert(CompilerVariable, value: runningCompilerPath().toString())
+
+	let code = voice.runChild(runner.executable, arguments: arguments, environment: Environment.inheritUpdating(overrides), workingDirectory: baseDirectory(base))
+
+	if not exitSucceeded(code) 'taskFailed'
+		discardDescription(description)
+		return ManifestProgramRun.describedNothing(code)
+	end 'taskFailed'
+
+	if not File.exists(description) 'describedNothing'
+		return ManifestProgramRun.describedNothing(SucceededExit)
+	end 'describedNothing'
+
+	let text = try File.readText(description) otherwise 'unreadable'
+		discardDescription(description)
+		voice.say("error: {manifest.filename()} described a build that could not be read back from {description.toString()}")
+		return ManifestProgramRun.notRun
+	end 'unreadable'
+
+	discardDescription(description)
+	return ManifestProgramRun.described(text)
+end 'runManifestProgram'
+
+export function runningCompilerPath() returns FilePath
+	return try Process.executablePath() otherwise panic("runningCompilerPath: this compiler found its stdlib by walking up from its own executable, so the host has already named that executable")
+end 'runningCompilerPath'
+
+// The name carries this process's id because two concurrent builds of one manifest share the cache
+// slot the runner lives in, and each would otherwise read back the other's description.
+function buildDescriptionPath(runner CachedProgram) returns FilePath
+	return try FilePath.from("{runner.executable.toString()}.{Process.id()}{BuildDescriptionSuffix}") otherwise panic("buildDescriptionPath: '{runner.executable.toString()}' is a path, so it is one with a suffix on the end")
+end 'buildDescriptionPath'
+
+function discardDescription(description FilePath)
+	try File.delete(description) otherwise ignore
+end 'discardDescription'
+
+function baseDirectory(base ManifestBase) returns FilePath
+	return match base 'base'
+		workingDirectory gives inheritedWorkingDirectory()
+		directory(dir) gives dir
+	end 'base'
+end 'baseDirectory'
+
+// A relative path a delegated manifest states is its own directory's, because that is the directory
+// it was run in. Rebasing a manifest run in the working directory would make an absolute path of
+// every output the caller spelled, which is what `Compiled -> <path>` and the tree lock read.
+export function rebasedOnManifest(spelling String, base ManifestBase) returns String
+	return match base 'base'
+		workingDirectory gives spelling
+		directory(dir) gives anchoredUnder(spelling, dir: dir)
+	end 'base'
+end 'rebasedOnManifest'
+
+function anchoredUnder(spelling String, dir FilePath) returns String
+	let stated = try FilePath.from(spelling) otherwise return spelling
+
+	return stated.anchoredAt(dir).toString()
+end 'anchoredUnder'
+
+// One line on stdout, ahead of the build's own report: which of the two things happened to the
+// program that describes the build. A reader waiting on a cold manifest compile is otherwise told
+// nothing at all.
+function reportBuildRunner(compiled bool, manifest FilePath)
+	let said = "Compiled the build runner" if compiled else "Used the cached build runner"
+	print("{said} ({manifest.filename()})\n")
+end 'reportBuildRunner'
+
+function refuseWhatIsNotABuild(described String, manifest FilePath, voice ManifestVoice) returns ExitCode
+	voice.say("error: {manifest.filename()} described something that is not a build.")
+	voice.say("It must write what `Build.build(source)` or `Build.buildWithConfig(config)` writes. It wrote:")
+	voice.say(described)
+	return OwnFailureExit
+end 'refuseWhatIsNotABuild'
+
+// A field the description states and this cannot use is an error, never a default: a guess is how a
+// build compiles the wrong thing while reporting success.
+export function resolveDescription(described String, manifest FilePath, base ManifestBase, depth DelegationDepth, voice ManifestVoice) returns DescriptionResolution
+	var doc = try Json.parse("{DescribedBuildsOpen}{described}{DescribedBuildsClose}") otherwise return DescriptionResolution.refused(refuseWhatIsNotABuild(described, manifest: manifest, voice: voice))
+	let describedCount = try doc.arrayLength(doc.root) otherwise panic("resolveDescription: the description is parsed inside brackets, so its root is an array")
+
+	if describedCount > 1 'severalBuilds'
+		voice.say("error: {manifest.filename()} described {describedCount} builds in one run, and a target or a task describes one. Give each build its own.")
+		return DescriptionResolution.refused(OwnFailureExit)
+	end 'severalBuilds'
+
+	let chosen = try doc.arrayAt(doc.root, index: 0) otherwise return DescriptionResolution.refused(refuseWhatIsNotABuild(described, manifest: manifest, voice: voice))
+
+	let delegateDirectory = try manifestStatedText(doc, build: chosen, key: ManifestDirectoryKey) otherwise (e) 'badDirectory'
+		return DescriptionResolution.refused(reportMalformedManifestField(ManifestDirectoryKey, error: e, manifest: manifest, voice: voice))
+	end 'badDirectory'
+
+	let output = try manifestOutput(doc, build: chosen) otherwise (e) 'badOutput'
+		return DescriptionResolution.refused(reportMalformedManifestField(ManifestOutputKey, error: e, manifest: manifest, voice: voice))
+	end 'badOutput'
+
+	var statedSources = try manifestSources(doc, build: chosen, base: base) otherwise (e) 'badSources'
+		return DescriptionResolution.refused(reportMalformedManifestField(ManifestSourcesKey, error: e, manifest: manifest, voice: voice))
+	end 'badSources'
+
+	let rebuildWithOutput = try manifestBool(doc, build: chosen, key: ManifestRebuildWithOutputKey, unstated: RebuildWithOutputWhenUnstated) otherwise (e) 'badRebuildWithOutput'
+		return DescriptionResolution.refused(reportMalformedManifestField(ManifestRebuildWithOutputKey, error: e, manifest: manifest, voice: voice))
+	end 'badRebuildWithOutput'
+
+	match delegateDirectory 'delegated'
+		unstated then break
+		stated(directory) then return resolveDelegatedDescription(doc, build: chosen, directory: directory, statedSources: statedSources, rebuildWithOutput: rebuildWithOutput, manifest: manifest, base: base, depth: depth, voice: voice)
+	end 'delegated'
+
+	// An empty `sources` is refused, not read as this directory: that would compile the whole tree
+	// under a command that named nothing. `Build.build(".")` says so explicitly.
+	if statedSources.count() == 0 'noPaths'
+		voice.say("error: {manifest.filename()} named no sources to compile.")
+		voice.say("Use `Build.buildWithConfig` with a non-empty `{ManifestSourcesKey}`.")
+		return DescriptionResolution.refused(OwnFailureExit)
+	end 'noPaths'
+
+	return DescriptionResolution.resolved(DescribedBuild.create(doc, node: chosen, manifest: manifest, base: base, output: output, sources: statedSources, rebuildWithOutput: rebuildWithOutput))
+end 'resolveDescription'
+
+function resolveDelegatedDescription(doc JsonDoc, build JsonNodeId, directory String, statedSources MaxonSourcePathArray, rebuildWithOutput bool, manifest FilePath, base ManifestBase, depth DelegationDepth, voice ManifestVoice) returns DescriptionResolution
+	if statedSources.count() != 0 'bothWays'
+		return DescriptionResolution.refused(refuseDelegatedWith(ManifestSourcesKey, manifest: manifest, voice: voice))
+	end 'bothWays'
+
+	// Only the delegated project knows the output path, so at this level there is no program to
+	// repeat and an ignored key would drop the request silently.
+	if rebuildWithOutput 'delegatedRebuild'
+		return DescriptionResolution.refused(refuseDelegatedWith(ManifestRebuildWithOutputKey, manifest: manifest, voice: voice))
+	end 'delegatedRebuild'
+
+	let delegateTarget = try manifestStatedText(doc, build: build, key: ManifestDelegateTargetKey) otherwise (e) 'badDelegateTarget'
+		return DescriptionResolution.refused(reportMalformedManifestField(ManifestDelegateTargetKey, error: e, manifest: manifest, voice: voice))
+	end 'badDelegateTarget'
+
+	return resolveDelegation(directory, targetWord: delegateTarget, manifest: manifest, base: base, depth: depth, voice: voice)
+end 'resolveDelegatedDescription'
+
+function refuseDelegatedWith(key String, manifest FilePath, voice ManifestVoice) returns ExitCode
+	voice.say("error: {manifest.filename()} states both a `{ManifestDirectoryKey}` and `{key}`.")
+	voice.say("A delegated build hands the whole description to that directory's `{ProjectFileExtension}` file; it cannot also state `{key}` of its own.")
+	return OwnFailureExit
+end 'refuseDelegatedWith'
+
+// `output` and `sources` are required; any other absent field reads as what `Build` writes when its
+// caller says nothing.
+export union ManifestFieldError implements Error
+	missing
+	empty
+	notABool
+	notAString
+	notAListOfStrings
+	notAPath(entry String)
+	notADefinePair(entry String)
+	notStampable(problem ProductVersionError)
+end 'ManifestFieldError'
+
+export function reportMalformedManifestField(key String, error ManifestFieldError, manifest FilePath, voice ManifestVoice) returns ExitCode
+	let problem = match error 'whatIsWrong'
+		missing gives "is missing"
+		empty gives "is empty"
+		notABool gives "is not true or false"
+		notAString gives "is not a string"
+		notAListOfStrings gives "is not a list of strings"
+		notAPath(entry) gives "holds `{entry}`, which is not a path"
+		notADefinePair(entry) gives "holds `{entry}`, which is not a `<name>{DefineNameValueSeparator}<value>` pair"
+		notStampable(versionProblem) gives productVersionProblem(versionProblem)
+	end 'whatIsWrong'
+
+	voice.say("error: {manifest.filename()}'s `{key}` {problem}")
+	return OwnFailureExit
+end 'reportMalformedManifestField'
+
+// The readers below look a key up with `getChild`, whose one failure besides an absent key is a
+// description that is not an object, which has none of the keys either.
+
+function manifestOutput(doc JsonDoc, build JsonNodeId) returns StatedText throws ManifestFieldError
+	let valueId = try doc.getChild(build, key: ManifestOutputKey) otherwise throw ManifestFieldError.missing
+	let output = try manifestString(doc.get(valueId))
+	return StatedText.unstated if output.isEmpty() else StatedText.stated(output)
+end 'manifestOutput'
+
+function manifestStatedText(doc JsonDoc, build JsonNodeId, key String) returns StatedText throws ManifestFieldError
+	let valueId = try doc.getChild(build, key: key) otherwise return StatedText.unstated
+	let text = try manifestString(doc.get(valueId))
+
+	if text.isEmpty() 'statedEmpty'
+		throw ManifestFieldError.empty
+	end 'statedEmpty'
+
+	return StatedText.stated(text)
+end 'manifestStatedText'
+
+function manifestSources(doc JsonDoc, build JsonNodeId, base ManifestBase) returns MaxonSourcePathArray throws ManifestFieldError
+	let listId = try doc.getChild(build, key: ManifestSourcesKey) otherwise throw ManifestFieldError.missing
+	var sources = MaxonSourcePathArray.create()
+
+	for spelling in try manifestStrings(doc, list: doc.get(listId)) 'eachSource'
+		let stated = rebasedOnManifest(spelling, base: base)
+		sources.push(try FilePath.from(stated) otherwise throw ManifestFieldError.notAPath(spelling))
+	end 'eachSource'
+
+	return sources
+end 'manifestSources'
+
+// The depth bound is what ends a cycle: two manifests delegating to each other would otherwise
+// recurse until the process died with nothing said.
+function resolveDelegation(directory String, targetWord StatedText, manifest FilePath, base ManifestBase, depth DelegationDepth, voice ManifestVoice) returns DescriptionResolution
+	if depth >= MaxDelegationDepth 'tooDeep'
+		voice.say("error: {manifest.filename()} delegates more than {MaxDelegationDepth} deep, which is a cycle.")
+		return DescriptionResolution.refused(OwnFailureExit)
+	end 'tooDeep'
+
+	let stated = try FilePath.from(rebasedOnManifest(directory, base: base)) otherwise 'notAPath'
+		voice.say("error: {manifest.filename()}'s `{ManifestDirectoryKey}` holds `{directory}`, which is not a path")
+		return DescriptionResolution.refused(OwnFailureExit)
+	end 'notAPath'
+
+	match projectRosterIn(stated, voice: voice) 'roster'
+		noProjectFile then return DescriptionResolution.refused(refuseDelegationToNoProject(manifest, directory: directory, voice: voice))
+		failed(inputs) then return DescriptionResolution.refused(rosterRefusalCode(inputs))
+		declared(projectFile, targets) then return resolveDelegatedTarget(projectFile, declared: targets, word: targetWord, directory: stated, depth: depth, voice: voice)
+	end 'roster'
+end 'resolveDelegation'
+
+function refuseDelegationToNoProject(manifest FilePath, directory String, voice ManifestVoice) returns ExitCode
+	voice.say("error: {manifest.filename()} delegates to `{directory}`, which holds no `{ProjectFileExtension}` file")
+	return OwnFailureExit
+end 'refuseDelegationToNoProject'
+
+function resolveDelegatedTarget(projectFile FilePath, declared TaskNameArray, word StatedText, directory FilePath, depth DelegationDepth, voice ManifestVoice) returns DescriptionResolution
+	match chosenTarget(projectFile, declared: declared, word: word, voice: voice) 'chosen'
+		named(name) then return describedThroughProject(projectFile, target: name, base: ManifestBase.directory(directory), depth: depth + 1, voice: voice)
+		notDeclared(spelled, offered) then return DescriptionResolution.refused(refuseUndeclaredDelegatedTarget(projectFile, word: spelled, offered: offered, voice: voice))
+		refused(code) then return DescriptionResolution.refused(code)
+	end 'chosen'
+end 'resolveDelegatedTarget'
+
+function refuseUndeclaredDelegatedTarget(projectFile FilePath, word String, offered TaskNameArray, voice ManifestVoice) returns ExitCode
+	voice.say("error: {projectFile.toString()} declares no target `{word}`.")
+	voice.sayEntryWords(offered)
+	return OwnFailureExit
+end 'refuseUndeclaredDelegatedTarget'
+
+export union TargetChoice
+	named(name String)
+	notDeclared(word String, offered TaskNameArray)
+	refused(code ExitCode)
+end 'TargetChoice'
+
+// Several targets and no name are listed rather than guessed at: picking the first would report
+// success for a build nobody asked for.
+export function chosenTarget(projectFile FilePath, declared TaskNameArray, word StatedText, voice ManifestVoice) returns TargetChoice
+	match word 'aTargetNamed'
+		stated(spelled) then return declaredTargetNamed(spelled, declared: declared)
+		unstated then break
+	end 'aTargetNamed'
+
+	if declared.count() == 0 'noTargets'
+		voice.say("error: {projectFile.filename()} declares no targets.")
+		return TargetChoice.refused(OwnFailureExit)
+	end 'noTargets'
+
+	if declared.count() > 1 'severalTargets'
+		voice.say("error: {projectFile.filename()} declares {declared.count()} targets. Name one:")
+		voice.sayEntryWords(declared)
+		return TargetChoice.refused(OwnFailureExit)
+	end 'severalTargets'
+
+	return TargetChoice.named(try declared.get(0) otherwise panic("chosenTarget: the count was just held to one"))
+end 'chosenTarget'
+
+function declaredTargetNamed(word String, declared TaskNameArray) returns TargetChoice
+	let named = entryNameOf(word)
+	return TargetChoice.named(named) if declared.contains(named) else TargetChoice.notDeclared(word, offered: declared)
+end 'declaredTargetNamed'
+
+export function manifestBool(doc JsonDoc, build JsonNodeId, key String, unstated bool) returns bool throws ManifestFieldError
+	let valueId = try doc.getChild(build, key: key) otherwise return unstated
+	let value = doc.get(valueId)
+
+	if value.kind != JsonKind.jsonBool 'notABool'
+		throw ManifestFieldError.notABool
+	end 'notABool'
+
+	return value.boolValue
+end 'manifestBool'
+
+// Absent reads as "unversioned". Checked against the target's version field here, before the build, so a
+// version the binary cannot carry refuses the build rather than being stamped as something else.
+export function manifestVersion(doc JsonDoc, build JsonNodeId, target Target) returns VersionComponentArray throws ManifestFieldError
+	let valueId = try doc.getChild(build, key: ManifestVersionKey) otherwise return VersionComponentArray.create()
+	let dotted = try manifestString(doc.get(valueId))
+	return try productVersionFor(dotted, target: target) otherwise (e) 'unstampable'
+		throw ManifestFieldError.notStampable(e)
+	end 'unstampable'
+end 'manifestVersion'
+
+// Refused whole on the first bad entry: a build missing a define its manifest computed is a binary
+// claiming the constant's written-out default, and nothing would say so.
+export function manifestDefines(doc JsonDoc, build JsonNodeId) returns DefineArray throws ManifestFieldError
+	var defines = DefineArray.create()
+	let listId = try doc.getChild(build, key: ManifestDefinesKey) otherwise return defines
+
+	for pair in try manifestStrings(doc, list: doc.get(listId)) 'eachDefine'
+		defines.push(try defineFromPair(pair) otherwise throw ManifestFieldError.notADefinePair(pair))
+	end 'eachDefine'
+
+	return defines
+end 'manifestDefines'
+
+function manifestString(value JsonNode) returns String throws ManifestFieldError
+	if value.kind != JsonKind.jsonString 'notAString'
+		throw ManifestFieldError.notAString
+	end 'notAString'
+
+	return value.stringValue
+end 'manifestString'
+
+function manifestStrings(doc JsonDoc, list JsonNode) returns ManifestStringArray throws ManifestFieldError
+	if list.kind != JsonKind.jsonArray 'notAList'
+		throw ManifestFieldError.notAListOfStrings
+	end 'notAList'
+
+	var strings = ManifestStringArray.create()
+
+	for entryId in list.children 'eachEntry'
+		let entry = doc.get(entryId)
+
+		if entry.kind != JsonKind.jsonString 'notAString'
+			throw ManifestFieldError.notAListOfStrings
+		end 'notAString'
+
+		strings.push(entry.stringValue)
+	end 'eachEntry'
+
+	return strings
+end 'manifestStrings'
+
+typealias ManifestStringArray = Array with String

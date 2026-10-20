@@ -14,11 +14,11 @@ type SecondBuildReusesTheLibrary implements OutsideCheckoutCase
 	export function requireHeldIn(dir FilePath) throws TestFailure
 		stageProgram(dir, name: ProgramDirName, source: TrivialProgramSource)
 
-		let cold = try libraryCacheReportOf(runLibraryCacheBuild(dir, program: ProgramDirName, output: OutputName, options: ListedWordArray.create()), which: "the first build under an empty cache root")
+		let cold = try libraryCacheReportOf(runLibraryCacheBuild(dir, program: ProgramDirName, output: OutputName, options: StringArray.create()), which: "the first build under an empty cache root")
 		try Expect.equal(cold.baseline, expected: LibraryBaseline.built, message: "the first build under an empty cache root did not report building the library baseline itself. It wrote: {cold.line}")
 		try Expect.greaterThan(cold.written, than: 0, message: "the first build under an empty cache root wrote nothing to the library cache, so no later build has anything to load. It wrote: {cold.line}")
 
-		let warm = try libraryCacheReportOf(runLibraryCacheBuild(dir, program: ProgramDirName, output: OutputName, options: ListedWordArray.create()), which: "the second build under the same cache root")
+		let warm = try libraryCacheReportOf(runLibraryCacheBuild(dir, program: ProgramDirName, output: OutputName, options: StringArray.create()), which: "the second build under the same cache root")
 		try Expect.equal(warm.baseline, expected: LibraryBaseline.loaded, message: "the second build did not load the library baseline the first build wrote. It wrote: {warm.line}")
 		try Expect.greaterThan(warm.loaded, than: 0, message: "the second build loaded no library cache entry. It wrote: {warm.line}")
 		try Expect.equal(warm.written, expected: 0, message: "the second build wrote library cache entries the first build had already written. It wrote: {warm.line}")

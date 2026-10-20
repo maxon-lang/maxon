@@ -4489,7 +4489,8 @@ declares is reported as `stdlib.ParseError.invalidFormat`.
 
 ### Running Tests
 
-`maxon test [directory]` discovers every `test` under the directory, runs them and exits `0` when all pass,
+`maxon test [directory]` discovers every `test` in the project's sources — the directory, or the `sources`
+its `.maxproj` target lists, as `maxon build` compiles them — runs them and exits `0` when all pass,
 `1` when any fails (or there are none), and `2` when the tests do not compile. `--list` prints the tests
 without running them. A test binary's heap is checked for leaks like any program's, and a leaking test is
 reported as such. `maxon test <file>.maxtest` runs that one file's tests, compiled with the library tiers

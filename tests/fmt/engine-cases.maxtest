@@ -6,7 +6,6 @@ let EngineTreeDescription = "the engine corpus's staged copies"
 
 let CaseSourceExtension = ".in"
 let CaseExpectedExtension = ".expected"
-let StagedSourceExtension = ".maxon"
 
 let UnlexableCasePrefix = "Unterminated"
 let NoSuchLine = "no such line"
@@ -22,7 +21,7 @@ type EngineCorpus
 		var sources = StringArray.create()
 		var expectations = StringArray.create()
 
-		for entry in listing(readableDir(EngineCasesDirName)) 'eachEntry'
+		for entry in listing(fixtureDir(EngineCasesDirName)) 'eachEntry'
 			let storedExtension = entry.fileExtension()
 
 			if storedExtension == CaseSourceExtension 'aSource'
@@ -48,7 +47,7 @@ type EngineCorpus
 	end 'pairedCases'
 
 	function caseText(caseName String, storedExtension String) returns String
-		return fileBody(readableDir(EngineCasesDirName).join("{caseName}{storedExtension}"))
+		return fileText(fixtureDir(EngineCasesDirName).join("{caseName}{storedExtension}"))
 	end 'caseText'
 end 'EngineCorpus'
 
@@ -136,7 +135,7 @@ test 'formatting the engine corpus reproduces every oracle, keeps every comment 
 	var changedContent = StringArray.create()
 
 	for engineCase in staged 'eachCase'
-		let formatted = fileBody(engineCase.path)
+		let formatted = fileText(engineCase.path)
 		firstPass.upsert(engineCase.name, value: formatted)
 
 		if corpus.expectations.contains(engineCase.name) 'hasOracle'
@@ -160,7 +159,7 @@ test 'formatting the engine corpus reproduces every oracle, keeps every comment 
 
 	for engineCase in staged 'eachCase'
 		let once = try firstPass.get(engineCase.name) otherwise panic("engine-cases.test: the gate could not run — '{engineCase.name}' was staged and has no first-run text, though every staged case recorded one.")
-		let twice = fileBody(engineCase.path)
+		let twice = fileText(engineCase.path)
 
 		if twice != once 'notAFixedPoint'
 			movedAgain.push("{engineCase.name}: {FirstRunLabel} wrote{LineFeed}{once}and {SecondRunLabel} wrote{LineFeed}{twice}")
@@ -211,8 +210,8 @@ function stageEngineCases(corpus EngineCorpus) returns StagedEngineCaseArray
 
 	for caseName in corpus.sources 'eachSource'
 		let source = corpus.caseText(caseName, storedExtension: CaseSourceExtension)
-		let target = stagingDir.join("{caseName}{StagedSourceExtension}")
-		try File.writeText(target, content: source) otherwise panic("engine-cases.test: the gate could not run — could not stage {caseName}{CaseSourceExtension} at {target.toString()}.")
+		let target = stagingDir.join("{caseName}{MaxonSourceSuffix}")
+		writeStagedFile(target, content: source)
 
 		staged.push(StagedEngineCase.create(caseName, path: target, source: source))
 	end 'eachSource'

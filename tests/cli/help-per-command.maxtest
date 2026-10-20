@@ -7,18 +7,18 @@
 // Walking the reference covers the advertised ones too, since it documents both.
 
 test 'every documented command answers help for itself'
-	let documented = sectionedCommandsIn(runOneArgument(HelpCommandWord).stdout)
+	let documented = sectionedCommandsIn(spawnCompiler([HelpCommandWord]).stdout)
 
 	// ⚠ An empty roster would make every assertion in the loop below vacuous, and a vacuous loop reports
 	// exactly what a loop that checked everything reports.
 	let missing = anchorsMissingFrom(documented)
-	Expect.isEmpty(missing, message: "the reference has no section for these commands: {missing}. It sectioned: {listed(documented)}")
+	Expect.isEmpty(missing, message: "the reference has no section for these commands: {missing}. It sectioned: {joined(documented, separator: Space)}")
 
 	let hiddenIsThere = documented.contains(HiddenAnchorCommand)
-	Expect.isTrue(hiddenIsThere, message: "the reference has no section for `{HiddenAnchorCommand}`, which the short list does not advertise either — so nothing in this binary documents it. It sectioned: {listed(documented)}")
+	Expect.isTrue(hiddenIsThere, message: "the reference has no section for `{HiddenAnchorCommand}`, which the short list does not advertise either — so nothing in this binary documents it. It sectioned: {joined(documented, separator: Space)}")
 
 	for command in documented 'eachCommand'
-		let run = runHelpFor(command)
+		let run = spawnCompiler([HelpCommandWord, command])
 
 		let observedExit = run.exitCode()
 		Expect.equal(observedExit, expected: 0, message: "`maxon {HelpCommandWord} {command}` was refused, for a command the reference itself documents. It said: {run.stdout}{run.stderr}")

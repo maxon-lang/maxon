@@ -223,7 +223,7 @@ index 2af584d..033a038 100644
  		if tagRowRank(ahead, against: row, order: order) == Ordering.lessThan 'inPlace'
  			break
 diff --git a/maxon-bin/Compiler/Compiler.maxon b/maxon-bin/Compiler/Compiler.maxon
-index 5c1c60c..5b859bd 100644
+index 56dec4e..37364b7 100644
 --- a/maxon-bin/Compiler/Compiler.maxon
 +++ b/maxon-bin/Compiler/Compiler.maxon
 @@ -657,7 +657,7 @@ end 'CheckedCompile'
@@ -553,7 +553,7 @@ index 27d02be..f9a8f0f 100644
  
  		return SourceComments.create(byLine, inPlace: anchored)
 diff --git a/maxon-bin/Compiler/FrontEndPool.maxon b/maxon-bin/Compiler/FrontEndPool.maxon
-index 8617350..a7d5f40 100644
+index a7c23d8..000b068 100644
 --- a/maxon-bin/Compiler/FrontEndPool.maxon
 +++ b/maxon-bin/Compiler/FrontEndPool.maxon
 @@ -259,7 +259,7 @@ type FrontEndWorkerState
@@ -1321,7 +1321,7 @@ index e3c3c66..4e8d101 100644
  	end 'foldOriginsInIndexOrder'
  
 diff --git a/maxon-bin/Compiler/IR/Std/StdUnit.maxon b/maxon-bin/Compiler/IR/Std/StdUnit.maxon
-index 6ae277c..590be6e 100644
+index 794e071..ca3af5d 100644
 --- a/maxon-bin/Compiler/IR/Std/StdUnit.maxon
 +++ b/maxon-bin/Compiler/IR/Std/StdUnit.maxon
 @@ -162,7 +162,7 @@ end 'copiedOp'
@@ -1640,19 +1640,19 @@ index 16a3af3..027b6e8 100644
  
  		return definitionLocationAnswer(lspFileUri(declFile), source: text, lines: LspLineIndex.build(text), name: declared)
 diff --git a/maxon-bin/Compiler/Lsp/LspDiagnostics.maxon b/maxon-bin/Compiler/Lsp/LspDiagnostics.maxon
-index 2bdaa4e..a063f0b 100644
+index e3c6a6a..12946a9 100644
 --- a/maxon-bin/Compiler/Lsp/LspDiagnostics.maxon
 +++ b/maxon-bin/Compiler/Lsp/LspDiagnostics.maxon
-@@ -99,7 +99,7 @@ extension Project
+@@ -104,7 +104,7 @@ extension Project
  		let root = workspaceRootOf(reader, purpose: RootPurpose.readsTheDocument)
  		let tokens = lspDocumentTokens(text, keywords: self.keywords)
  
 -		view fast = self.documentDiagnostics(reader, root: root, path: path, text: text, tokens: tokens)
 +		let fast = self.documentDiagnostics(reader, root: root, path: path, text: text, tokens: tokens)
- 		reader.workspace.writer.write(documentDiagnosticsText(uri, text: text, tokens: tokens, diagnostics: fast, path: path, unbuilt: StringArray.create()))
+ 		let (refusal, notice) = projectFileSaid(reader, path: path)
+ 		reader.workspace.writer.write(documentDiagnosticsText(uri, text: text, tokens: tokens, diagnostics: fast, path: path, unbuilt: refusal, notices: notice))
  
- 		return BufferPublish.published(reader, root: root, path: path, fast: fast)
-@@ -176,7 +176,7 @@ extension Project
+@@ -182,7 +182,7 @@ extension Project
  	end 'correctedRefusal'
  
  	function refusalCorrectedBy(corpus Project, signatures ProgramSignatures, reader FilePath, buffer FilePath, reported DiagnosticArray, text String, tokens TokenArray) returns DiagnosticArray
@@ -1661,7 +1661,7 @@ index 2bdaa4e..a063f0b 100644
  
  		match corpus.sweptParseDiagnostics(reader, live: live) 'sweptParse'
  			parsed(published) then return published
-@@ -186,13 +186,13 @@ extension Project
+@@ -192,13 +192,13 @@ extension Project
  	end 'refusalCorrectedBy'
  
  	function sweptParseDiagnostics(reader FilePath, live TokenArray) returns SweptParse
@@ -1677,7 +1677,7 @@ index 2bdaa4e..a063f0b 100644
  
  		return match query 'query'
  			memoized(artifact) gives SweptParse.parsed(artifact.diagnostics)
-@@ -203,7 +203,7 @@ extension Project
+@@ -209,7 +209,7 @@ extension Project
  	function landedSweptParse(job ParseJob, tokens TokenArray, overrides RowSetOverrideTable, stamp ParseStamp, reader FilePath) returns SweptParse
  		self.diagnostics.clear()
  
@@ -1702,10 +1702,19 @@ index c1dd175..348780d 100644
  		var declaring = HoverDocument.ofTokens(entry.content, tokens: declTokens, keywords: reading, corpus: corpus)
  
 diff --git a/maxon-bin/Compiler/Lsp/LspWorkspace.maxon b/maxon-bin/Compiler/Lsp/LspWorkspace.maxon
-index 8bbf7a5..440e9d8 100644
+index f251a12..9539585 100644
 --- a/maxon-bin/Compiler/Lsp/LspWorkspace.maxon
 +++ b/maxon-bin/Compiler/Lsp/LspWorkspace.maxon
-@@ -771,7 +771,7 @@ extension Project
+@@ -243,7 +243,7 @@ type HeldWorkspace
+ 
+ 	function announcedSwept(root WorkspaceRoot, key String, selection SourceSelection, tiers LibraryTiers, request SweepRequest, workspace LspWorkspaceState) returns SweptProject
+ 		writeProjectLoadingNotification(workspace.writer, rootPath: key, loading: true)
+-		var swept = self.builtSwept(root, selection: selection, tiers: tiers, request: request, workspace: workspace)
++		let swept = self.builtSwept(root, selection: selection, tiers: tiers, request: request, workspace: workspace)
+ 		writeProjectLoadingNotification(workspace.writer, rootPath: key, loading: false)
+ 
+ 		return swept
+@@ -1145,7 +1145,7 @@ extension Project
  	function sweptForReader(walk SourceSweep, readerPath FilePath) returns SweptProject
  		let reader = try self.refreshFromWalk(walk, readerPath: readerPath, unreadable: UnreadableSource.skipped) otherwise panic("sweptForReader: a corpus skips a source it cannot read, so its refresh refuses nothing")
  
@@ -5073,7 +5082,7 @@ index 2503025..2eb9c58 100644
  	implementers.push(recorded)
  
 diff --git a/maxon-bin/Compiler/SignatureIndex.maxon b/maxon-bin/Compiler/SignatureIndex.maxon
-index e3aa5ec..f8aad3e 100644
+index a99cb9b..53caf8c 100644
 --- a/maxon-bin/Compiler/SignatureIndex.maxon
 +++ b/maxon-bin/Compiler/SignatureIndex.maxon
 @@ -8167,7 +8167,7 @@ export function managedFieldDropCallee(signatures ProgramSignatures, typeNames T
@@ -7431,7 +7440,7 @@ index 54c085b..078c64f 100644
  
  	// The queue is shared with `augmentValue`, which has finished by the time this runs (the matching
 diff --git a/maxon-bin/Compiler/Targets/Shared/RdataRequests.maxon b/maxon-bin/Compiler/Targets/Shared/RdataRequests.maxon
-index 4fa5475..2f6e0b8 100644
+index edfd94b..255c5cc 100644
 --- a/maxon-bin/Compiler/Targets/Shared/RdataRequests.maxon
 +++ b/maxon-bin/Compiler/Targets/Shared/RdataRequests.maxon
 @@ -128,7 +128,7 @@ function patchRdataLabels(module TargetModule, func IrFunction, labels RdataLabe
@@ -8054,13 +8063,13 @@ index 75b2bde..777ffdd 100644
  			condBranch(condId, _, _) gives self.settleFloatEqualityCondition(blockRef, condId: condId)
  			const or
 diff --git a/maxon-bin/Compiler/TestDiscovery.maxon b/maxon-bin/Compiler/TestDiscovery.maxon
-index 7a34a01..8ce66d7 100644
+index 1963383..379da18 100644
 --- a/maxon-bin/Compiler/TestDiscovery.maxon
 +++ b/maxon-bin/Compiler/TestDiscovery.maxon
 @@ -118,7 +118,7 @@ let TestKeywordSpelling = "test"
  // cannot resolve.
- export function discoverTests(subject FilePath, target Target) returns DiscoveredTestArray throws CompileError
- 	var project = try loadProject([subject], target: target, scriptlib: ScriptlibLoad.omitted, sourceSelection: SourceSelection.productionAndTests)
+ export function discoverTests(inputPaths MaxonSourcePathArray, target Target) returns DiscoveredTestArray throws CompileError
+ 	var project = try loadProject(inputPaths, target: target, scriptlib: ScriptlibLoad.omitted, sourceSelection: SourceSelection.productionAndTests)
 -	view signatures = try queryProgramSignatures(project)
 +	let signatures = try queryProgramSignatures(project)
  
@@ -8397,7 +8406,7 @@ index 260fb60..5848157 100644
  		self.heldBytes = 0
  		self.dropped = 0
 diff --git a/maxon-bin/Main.maxon b/maxon-bin/Main.maxon
-index 5d1c183..68d4df3 100644
+index 061663b..a21a288 100644
 --- a/maxon-bin/Main.maxon
 +++ b/maxon-bin/Main.maxon
 @@ -302,7 +302,7 @@ function main() returns ExitCode

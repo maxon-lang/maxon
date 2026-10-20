@@ -5,15 +5,15 @@ let MainFunctionName = "main"
 
 test 'a finish out of a frame with fifty million iterations left returns to the caller within the stop timeout'
 	let staged = builtFixture(FinishOutOfLongCallCaseLabel, fixture: LongCallFixtureName)
-	let callLine = anchorLine(staged, anchor: "main-long-call")
+	let callLine = anchorLine(staged.join(StagedProgramFileName), anchor: "main-long-call")
 	let commands = debugCommandLine(["{BreakCommand} {lineTarget(callLine)}", RunCommand, StepCommand, FinishCommand])
 	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let stops = eventsOfKind(events, kind: StopEventName)
 
-	try Expect.equal(eventsOfKind(events, kind: TimeoutEventName).count(), expected: 0, message: "a `{FinishCommand}` runs the rest of its frame at full speed and stops at the frame's return address; one that single-steps fifty million iterations cannot return inside the stop timeout. It printed: {renderedRows(eventKinds(events))}. {said}")
-	try Expect.equal(stops.count(), expected: 3, message: "the breakpoint, the step into `{ChurnFunctionName}` and the finish are three stops. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(eventsOfKind(events, kind: TimeoutEventName).count(), expected: 0, message: "a `{FinishCommand}` runs the rest of its frame at full speed and stops at the frame's return address; one that single-steps fifty million iterations cannot return inside the stop timeout. It printed: {listedLines(eventKinds(events))}. {said}")
+	try Expect.equal(stops.count(), expected: 3, message: "the breakpoint, the step into `{ChurnFunctionName}` and the finish are three stops. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let entered = eventAt(stops, index: 1)
 	try Expect.equal(textOf(entered, node: entered.root, key: FunctionKey), expected: ChurnFunctionName, message: "`{StepCommand}` at the call line enters the callee. {said}")

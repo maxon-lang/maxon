@@ -4,15 +4,16 @@ let EditedAnswer = "two"
 
 test 'an edit to a scriptlib package recompiles the script that calls it'
 	let staged = stageScriptlibCase(EditRecompilesCaseLabel)
-	writeScriptlibPackageFile(EditRecompilesCaseLabel, package: GreetingPackageName, fileName: GreetingPackageFileName, content: greetingPackageSource(FirstAnswer))
-	let script = writeStagedFile(staged.sources, fileName: ScriptFileName, content: greetingScriptSource())
+	writeScriptlibPackageFile(stagedTier(EditRecompilesCaseLabel), package: GreetingPackageName, fileName: GreetingPackageFileName, content: greetingPackageSource(FirstAnswer))
+	let script = staged.sources.join(ScriptFileName)
+	writeStagedFile(script, content: greetingScriptSource())
 
 	let first = runProgram(staged, program: script)
 	let firstExit = first.exitCode()
 	Expect.equal(firstExit, expected: 0, message: "the first run failed, so there is no build for an edit to invalidate. It said: {first.stdout}{first.stderr}")
 	Expect.equal(withoutCarriageReturns(first.stdout), expected: "{FirstAnswer}{LineFeed}", message: "the first run did not print what the package returns")
 
-	writeScriptlibPackageFile(EditRecompilesCaseLabel, package: GreetingPackageName, fileName: GreetingPackageFileName, content: greetingPackageSource(EditedAnswer))
+	writeScriptlibPackageFile(stagedTier(EditRecompilesCaseLabel), package: GreetingPackageName, fileName: GreetingPackageFileName, content: greetingPackageSource(EditedAnswer))
 
 	let second = runProgram(staged, program: script)
 	let secondExit = second.exitCode()

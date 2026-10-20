@@ -11,7 +11,7 @@ test 'a program with more green threads than any fixed record window would hold 
 	let staged = builtFixture(RosterPastTheWindowCaseLabel, fixture: ManyWorkersFixtureName)
 	let undebugged = runBuiltProgram(staged)
 	let workers = stagedLinesContaining(staged, needle: WorkerSpawnSpelling)
-	let loopLine = anchorLine(staged, anchor: WorkerLoopAnchorName)
+	let loopLine = anchorLine(staged.join(StagedProgramFileName), anchor: WorkerLoopAnchorName)
 
 	Expect.atLeast(workers, than: MoreThanAFixedWindowWouldHold, message: "this case is about a roster longer than any fixed window over the thread records, and the fixture spawns {workers}.")
 
@@ -21,7 +21,7 @@ test 'a program with more green threads than any fixed record window would hold 
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let rosters = eventsOfKind(events, kind: ThreadsEventName)
 
-	Expect.equal(rosters.count(), expected: 1, message: "`{ThreadsCommand}` at a stop printed no `{ThreadsEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(rosters.count(), expected: 1, message: "`{ThreadsCommand}` at a stop printed no `{ThreadsEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let roster = eventAt(rosters, index: 0)
 	let listed = renderedThreads(roster)
@@ -34,7 +34,7 @@ test 'a program with more green threads than any fixed record window would hold 
 	Expect.isFalse(flagOf(roster, node: roster.root, key: TruncatedKey), message: "the roster reports itself truncated, which is the positive statement that entries were lost. A roster read whole cannot be truncated at any length. It held: {listed}. {said}")
 
 	let exits = eventsOfKind(events, kind: ExitEventName)
-	Expect.equal(exits.count(), expected: 1, message: "the breakpoint is cleared at the one stop, so the program runs on to its end. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(exits.count(), expected: 1, message: "the breakpoint is cleared at the one stop, so the program runs on to its end. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let exited = eventAt(exits, index: 0)
 	Expect.equal(numberOf(exited, node: exited.root, key: CodeKey), expected: undebugged.exitCode() as EventNumber, message: "the debugged program answered a different exit code than the same image run with nothing attached. {said}")

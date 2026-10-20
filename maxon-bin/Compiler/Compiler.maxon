@@ -1935,12 +1935,6 @@ end 'reportBindingHygieneDiagnostics'
 // and nothing below it may. A canonical order imposed by the loader would hide an order dependence
 // rather than surface it (see `StdlibLoader`'s header); where an order matters it is canonicalized
 // at the point of emission.
-//
-// A path named twice — directly and again through a directory that contains it — is registered
-// once, at its first position, because `fileChanged` upserts by path. That is what lets `build
-// a.maxon b.maxon <theirDirectory>` mean "these two first, then whatever else is under there", the
-// form the spec runner uses to state a case's file order while rooting the project at the case's
-// own directory.
 function loadSourceFiles(project Project, paths MaxonSourcePathArray, selection SourceSelection) throws CompileError
 	for path in try namedSourceFiles(paths, selection: selection) 'eachSource'
 		try loadOneSourceFile(project, path: path)
@@ -1951,14 +1945,24 @@ function loadSourceFiles(project Project, paths MaxonSourcePathArray, selection 
 	end 'noFiles'
 end 'loadSourceFiles'
 
-export function namedSourceFiles(paths MaxonSourcePathArray, selection SourceSelection = SourceSelection.productionOnly) returns MaxonSourcePathArray throws CompileError
+// A path named twice — directly and again through a directory that contains it — is listed once,
+// at its first position. That is what lets `build a.maxon b.maxon <theirDirectory>` mean "these two
+// first, then whatever else is under there", the form the spec runner uses to state a case's file
+// order while rooting the project at the case's own directory.
+export function namedSourceFiles(paths MaxonSourcePathArray, selection SourceSelection = SourceSelection.productionOnly, nestedProjects NestedProjectRule = NestedProjectRule.refused) returns MaxonSourcePathArray throws CompileError
 	var files = MaxonSourcePathArray.create()
+	var registered = MaxonSourcePathSet.create()
 
 	for path in paths 'eachNamed'
 		if File.exists(path) 'isFile'
-			files.push(path)
+			appendOnce(files, registered: registered, path: path)
 		end 'isFile' else if Directory.exists(path) 'isDir'
-			_ = try collectMaxonSources(path, into: files, selection: selection)
+			var below = MaxonSourcePathArray.create()
+			_ = try collectMaxonSources(path, into: below, selection: selection, nestedProjects: nestedProjects)
+
+			for source in below 'eachBelow'
+				appendOnce(files, registered: registered, path: source)
+			end 'eachBelow'
 		end 'isDir' else 'notFound'
 			throw CompileError.fileNotFound(path)
 		end 'notFound'
@@ -1966,6 +1970,15 @@ export function namedSourceFiles(paths MaxonSourcePathArray, selection SourceSel
 
 	return files
 end 'namedSourceFiles'
+
+function appendOnce(files MaxonSourcePathArray, registered MaxonSourcePathSet, path FilePath)
+	if registered.contains(path) 'namedTwice'
+		return
+	end 'namedTwice'
+
+	registered.insert(path)
+	files.push(path)
+end 'appendOnce'
 
 // ⭐⭐ **THE PROJECT ROOT OF A BUILD THAT NAMED SEVERAL PATHS — the ONE directory every one of them
 // lies under.** It is what `Project.rootPath` becomes, and through it what

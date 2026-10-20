@@ -1,0 +1,328 @@
+export let FixturesDirName = "tests/emittedRuntime/fixtures"
+export let SpawnFixtureName = "spawn"
+export let PinnedMachineFixtureName = "pinned-machine"
+export let PinnedMachineBlockedFixtureName = "pinned-machine-blocked"
+export let StagingRootDirName = "temp/emittedRuntime"
+
+let TargetOptionPrefix = "--target="
+let EmitIrRuntimeOptionPrefix = "--emit-ir-runtime="
+let DebugStreamOption = "--debugstream"
+export let EmittedNameSeparator = ","
+let IrFileSuffix = ".ir"
+
+export let MacosTargetName = "arm64-macos"
+export let LinuxTargetName = "arm64-linux"
+
+let FunctionHeaderPrefix = "func @"
+let FunctionHeaderSuffix = " \{"
+let FunctionBodyEndLine = "\}"
+
+export let PlainLoadPrefix = "arm64.loadRegBaseDisp.word64 "
+export let PlainStorePrefix = "arm64.storeBaseDispReg.word64 "
+export let AcquireLoadMnemonic = "arm64.ldar.word64"
+export let ReleaseStoreMnemonic = "arm64.stlr.word64"
+let AtomicClaimMnemonic = "arm64.arm64AtomicCas"
+export let RegisterMovePrefix = "arm64.movRegReg "
+export let GlobalAddressPrefix = "arm64.leaGlobal "
+export let ArgumentSeparator = ", "
+export let NoFurtherDemand = ""
+let WordSeparator = " "
+let OperandSeparator = ","
+let LineSeparator = "\n"
+let DisplacedAddressInfix = " + "
+let DestinationWordIndex = 1
+
+export typealias ProcessorCount = int(1 to 1024)
+
+export typealias FieldOffset = int(0 to 65535)
+export typealias LineIndex = int(0 to u64.max)
+export typealias LineTally = int(0 to u64.max)
+export typealias AccessTally = int(0 to 65535)
+
+export enum IrScanError implements Error
+	noSuchLine
+	noDestinationRegister
+end 'IrScanError'
+
+export enum RegisterUse
+	plainLoad
+	plainStore
+	acquireLoad
+	releaseStore
+	atomicClaim
+	otherAccess
+	copiedOut
+	untouched
+end 'RegisterUse'
+
+export type RegisterEvent
+	export let use as RegisterUse
+	export let overwrites as bool
+	export let line as String
+	export let index as LineIndex
+
+	export static function create(use RegisterUse, overwrites bool, line String, index LineIndex) returns RegisterEvent
+		return Self{use: use, overwrites: overwrites, line: line, index: index}
+	end 'create'
+end 'RegisterEvent'
+
+export typealias RegisterEventArray = Array with RegisterEvent
+
+export type WordAccesses
+	export var plainLoads as StringArray
+	export var plainStores as StringArray
+	export var acquires as AccessTally
+	export var releases as AccessTally
+
+	export static function create() returns Self
+		return Self{plainLoads: StringArray.create(), plainStores: StringArray.create(), acquires: 0, releases: 0}
+	end 'create'
+
+	export function record(line String, register String, target String, functionName String, word String)
+		match registerUseIn(line, register: register) 'use'
+			plainLoad then self.plainLoads.push(line)
+			plainStore then self.plainStores.push(line)
+			acquireLoad then self.acquires = self.acquires + 1
+			releaseStore then self.releases = self.releases + 1
+			atomicClaim then self.claimAccess()
+
+			otherAccess or
+			copiedOut or
+			untouched then panic("emitted-runtime tests: the gate could not run — on {target}, `{functionName}` reaches {word} through `{register}` with `{line}`, which is none of the five shapes this case can read: `{PlainStorePrefix.trim()}`, `{PlainLoadPrefix.trim()}`, `{ReleaseStoreMnemonic}`, `{AcquireLoadMnemonic}` or `{AtomicClaimMnemonic}` through that register. An access this case cannot classify would satisfy every absence demand by being none of them.")
+		end 'use'
+	end 'record'
+
+	function claimAccess()
+		self.acquires = self.acquires + 1
+		self.releases = self.releases + 1
+	end 'claimAccess'
+end 'WordAccesses'
+
+export function buildStagedProgram(staged FilePath, caseLabel String, target String, functionName String, debugStream bool = false) returns FilePath
+	let executable = staged.join("{OutputFileStem}-{caseLabel}-{target}")
+	let ir = staged.join("{OutputFileStem}-{caseLabel}-{target}{IrFileSuffix}")
+
+	var extraArguments = StringArray.create()
+	extraArguments.push("{TargetOptionPrefix}{target}")
+	extraArguments.push("{EmitIrRuntimeOptionPrefix}{functionName}")
+
+	if debugStream 'withTheProducer'
+		extraArguments.push(DebugStreamOption)
+	end 'withTheProducer'
+
+	let build = spawnBuild(staged.join(StagedProgramFileName), staged: staged, output: executable, label: caseLabel, extraArguments: extraArguments)
+
+	requireBuiltOrPanic(build, output: ir, what: "`{BuildCommandName} … {TargetOptionPrefix}{target} {EmitIrRuntimeOptionPrefix}{functionName}`, which writes the Target IR to read,")
+
+	return ir
+end 'buildStagedProgram'
+
+export function buildStagedForHost(staged FilePath, caseLabel String) returns FilePath
+	let executable = staged.join("{OutputFileStem}-{caseLabel}{executableSuffix()}")
+
+	let build = spawnBuild(staged.join(StagedProgramFileName), staged: staged, output: executable, label: caseLabel, extraArguments: StringArray.create())
+
+	requireBuiltOrPanic(build, output: executable, what: "`{BuildCommandName} {StagedProgramFileName}` for the host")
+
+	return executable
+end 'buildStagedForHost'
+
+export function runStagedForHost(executable FilePath, staged FilePath, procs ProcessorCount, deadlineMs DurationMs, standardInput InputSource) returns CollectedOutput
+	var overrides = EnvMap.create()
+	try overrides.insert(MaxProcsVariableName, value: "{procs}") otherwise panic("emitted-runtime tests: the gate could not run — could not name {MaxProcsVariableName} in the child's environment.")
+
+	return spawnIn(Executable.path(executable), arguments: StringArray.create(), staged: staged, what: "the staged program at {executable.toString()}", environment: Environment.inheritUpdating(overrides), standardInput: standardInput, timeoutMs: deadlineMs)
+end 'runStagedForHost'
+
+export function irLines(path FilePath) returns StringArray
+	return fileText(path).split(LineSeparator)
+end 'irLines'
+
+export function functionBody(lines StringArray, functionName String, target String) returns StringArray
+	let header = "{FunctionHeaderPrefix}{functionName}{FunctionHeaderSuffix}"
+	var body = StringArray.create()
+	var found = false
+
+	for line in lines 'eachLine'
+		let text = line.trim()
+
+		if not found 'beforeTheFunction'
+			found = text == header
+			continue
+		end 'beforeTheFunction'
+
+		if text == FunctionBodyEndLine 'theEnd'
+			break
+		end 'theEnd'
+
+		body.push(text)
+	end 'eachLine'
+
+	if not found 'neverRendered'
+		panic("emitted-runtime tests: the gate could not run — the {target} Target IR holds no `{header}`, so that runtime body was never rendered. `{EmitIrRuntimeOptionPrefix}{functionName}` is what opts a withheld runtime body into that text, and a name nothing emits is refused rather than skipped.")
+	end 'neverRendered'
+
+	if body.isEmpty() 'renderedEmpty'
+		panic("emitted-runtime tests: the gate could not run — the {target} Target IR renders `{functionName}` with an EMPTY body, and an empty body satisfies every absence demand a case makes by holding nothing at all.")
+	end 'renderedEmpty'
+
+	return body
+end 'functionBody'
+
+export function bodyLineCount(body StringArray, startingWith String, containing String, endingWith String) returns LineTally
+	var found = 0 as LineTally
+
+	for text in body 'eachLine'
+		if lineMatches(text, startingWith: startingWith, containing: containing, endingWith: endingWith) 'theLine'
+			found = found + 1
+		end 'theLine'
+	end 'eachLine'
+
+	return found
+end 'bodyLineCount'
+
+export function firstLineIndex(body StringArray, startingWith String, containing String, endingWith String) returns LineIndex throws IrScanError
+	for (iter, text) in body.withIterator() 'eachLine'
+		if lineMatches(text, startingWith: startingWith, containing: containing, endingWith: endingWith) 'theLine'
+			return iter.index()
+		end 'theLine'
+	end 'eachLine'
+
+	throw IrScanError.noSuchLine
+end 'firstLineIndex'
+
+// Every line that touches `register`, in body order, carrying TWO facts about each: what the line does
+// through the register, and whether it overwrites it. `ldr x1, [x1 + 48]` is both, and an event that had to
+// pick one would hide the other from whichever caller wanted it.
+export function registerEvents(body StringArray, register String) returns RegisterEventArray
+	var events = RegisterEventArray.create()
+
+	for (iter, text) in body.withIterator() 'eachLine'
+		let use = registerUseIn(text, register: register)
+		let overwrites = writesRegister(text, register: register)
+
+		if use == RegisterUse.untouched and not overwrites 'anotherLine'
+			continue
+		end 'anotherLine'
+
+		events.push(RegisterEvent.create(use, overwrites: overwrites, line: text, index: iter.index() as LineIndex))
+	end 'eachLine'
+
+	return events
+end 'registerEvents'
+
+function registerUseIn(text String, register String) returns RegisterUse
+	if text.startsWith(RegisterMovePrefix) and text.endsWith("{ArgumentSeparator}{register}") 'aCopy'
+		return RegisterUse.copiedOut
+	end 'aCopy'
+
+	if not text.contains("[{register}{DisplacedAddressInfix}") and not text.contains("[{register}]") 'untouched'
+		return RegisterUse.untouched
+	end 'untouched'
+
+	if text.startsWith(PlainLoadPrefix) 'aPlainLoad'
+		return RegisterUse.plainLoad
+	end 'aPlainLoad'
+
+	if text.startsWith(PlainStorePrefix) 'aPlainStore'
+		return RegisterUse.plainStore
+	end 'aPlainStore'
+
+	if text.startsWith(AcquireLoadMnemonic) 'anAcquireLoad'
+		return RegisterUse.acquireLoad
+	end 'anAcquireLoad'
+
+	if text.startsWith(ReleaseStoreMnemonic) 'aReleaseStore'
+		return RegisterUse.releaseStore
+	end 'aReleaseStore'
+
+	if text.startsWith(AtomicClaimMnemonic) 'anAtomicClaim'
+		return RegisterUse.atomicClaim
+	end 'anAtomicClaim'
+
+	return RegisterUse.otherAccess
+end 'registerUseIn'
+
+function writesRegister(text String, register String) returns bool
+	let written = try destinationRegisterOf(text) otherwise return false
+
+	return written == register
+end 'writesRegister'
+
+export function firstWriteOfRegister(body StringArray, register String) returns LineIndex throws IrScanError
+	for event in registerEvents(body, register: register) 'eachEvent'
+		if event.overwrites 'theWrite'
+			return event.index
+		end 'theWrite'
+	end 'eachEvent'
+
+	throw IrScanError.noSuchLine
+end 'firstWriteOfRegister'
+
+export function registerHoldingArgument(body StringArray, argument String) returns String throws IrScanError
+	for event in registerEvents(body, register: argument) 'eachEvent'
+		if event.use != RegisterUse.copiedOut 'notACopy'
+			continue
+		end 'notACopy'
+
+		return try destinationRegisterOf(event.line)
+	end 'eachEvent'
+
+	throw IrScanError.noSuchLine
+end 'registerHoldingArgument'
+
+export function accessThrough(body StringArray, site LineIndex, register String) returns RegisterEvent throws IrScanError
+	for event in registerEvents(body, register: register) 'eachEvent'
+		if event.index <= site 'atOrBeforeTheMaterialisation'
+			continue
+		end 'atOrBeforeTheMaterialisation'
+
+		if event.use == RegisterUse.copiedOut 'carriedElsewhere'
+			continue
+		end 'carriedElsewhere'
+
+		if event.use == RegisterUse.untouched 'overwritten'
+			throw IrScanError.noSuchLine
+		end 'overwritten'
+
+		return event
+	end 'eachEvent'
+
+	throw IrScanError.noSuchLine
+end 'accessThrough'
+
+export function notePlainFieldLoad(findings StringArray, body StringArray, target String, register String, offset FieldOffset, functionName String, field String)
+	let addressed = "[{register} + {offset}]"
+	let index = try firstLineIndex(body, startingWith: PlainLoadPrefix, containing: addressed, endingWith: NoFurtherDemand) otherwise return
+
+	findings.push("on {target}, `{functionName}` still reads {field} with a plain load — `{lineAt(body, index: index)}`")
+end 'notePlainFieldLoad'
+
+export function oneLine(raw String) returns String
+	return withoutCarriageReturns(raw).replace("\n", with: " ").trim()
+end 'oneLine'
+
+function lineMatches(text String, startingWith String, containing String, endingWith String) returns bool
+	if not text.startsWith(startingWith) 'anotherOp'
+		return false
+	end 'anotherOp'
+
+	if not containing.isEmpty() and not text.contains(containing) 'anotherOperand'
+		return false
+	end 'anotherOperand'
+
+	return endingWith.isEmpty() or text.endsWith(endingWith)
+end 'lineMatches'
+
+export function lineAt(body StringArray, index LineIndex) returns String
+	return try body.get(index as ElementIndex) otherwise panic("emitted-runtime tests: the gate could not run — line {index} was read out of a body of {body.count()} lines, and every line a case reads is one a scan of that same body found or the one after it, which a function body always holds.")
+end 'lineAt'
+
+// The destination is read off the line's own second word rather than off a roster of the ops that write, so
+// a line that merely CARRIES the register there — a compare — reads as a write. That is the direction that
+// costs a caller a refusal rather than a pass it did not earn.
+export function destinationRegisterOf(text String) returns String throws IrScanError
+	let spelled = try text.split(WordSeparator).get(DestinationWordIndex) otherwise throw IrScanError.noDestinationRegister
+
+	return try spelled.split(OperandSeparator).get(0) otherwise throw IrScanError.noDestinationRegister
+end 'destinationRegisterOf'

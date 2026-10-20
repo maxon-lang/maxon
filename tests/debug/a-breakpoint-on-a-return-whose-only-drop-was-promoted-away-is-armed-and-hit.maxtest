@@ -4,20 +4,20 @@ let CallsTakingTheReturn = 1
 
 test 'a breakpoint on a void return whose only drop was a stack-promoted record arms at code and stops on the call that takes it'
 	let staged = builtFixture(PromotedDropReturnCaseLabel, fixture: PromotedDropFixtureName)
-	let returnLine = anchorLine(staged, anchor: "promoted-drop-return")
+	let returnLine = anchorLine(staged.join(StagedProgramFileName), anchor: "promoted-drop-return")
 	let commands = debugCommandLine(["{BreakCommand} {lineTarget(returnLine)}", RunCommand, ContinueCommand])
 	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let answers = eventsOfKind(events, kind: BreakpointEventName)
 
-	try Expect.equal(answers.count(), expected: 1, message: "`{BreakCommand} {lineTarget(returnLine)}` answers one `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(answers.count(), expected: 1, message: "`{BreakCommand} {lineTarget(returnLine)}` answers one `{BreakpointEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let armed = eventAt(answers, index: 0)
 	try Expect.equal(textOf(armed, node: armed.root, key: ActionKey), expected: SetAction, message: "the `return` on line {returnLine} runs when `{ShowFunctionName}(5)` takes the `if`, so its line has code to arm; `{NoCodeAction}` means the line's only code was the drop of the stack-promoted `p`, and once that drop was deleted the exit block was threaded away with no instruction left under the line. {said}")
 
 	let stops = eventsOfKind(events, kind: StopEventName)
-	try Expect.equal(stops.count(), expected: CallsTakingTheReturn, message: "only `{ShowFunctionName}(5)` takes the `return` on line {returnLine}, so the breakpoint stops {CallsTakingTheReturn} time. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(stops.count(), expected: CallsTakingTheReturn, message: "only `{ShowFunctionName}(5)` takes the `return` on line {returnLine}, so the breakpoint stops {CallsTakingTheReturn} time. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	for (iter, stop) in stops.withIterator() 'eachStop'
 		try Expect.equal(textOf(stop, node: stop.root, key: ReasonKey), expected: BreakpointStopReason, message: "stop {iter.index()} is the breakpoint's. {said}")
@@ -26,7 +26,7 @@ test 'a breakpoint on a void return whose only drop was a stack-promoted record 
 	end 'eachStop'
 
 	let exits = eventsOfKind(events, kind: ExitEventName)
-	try Expect.equal(exits.count(), expected: 1, message: "the `{ContinueCommand}` runs the program to its exit. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(exits.count(), expected: 1, message: "the `{ContinueCommand}` runs the program to its exit. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let exited = eventAt(exits, index: 0)
 	try Expect.equal(numberOf(exited, node: exited.root, key: CodeKey), expected: 0, message: "the program exits 0. {said}")

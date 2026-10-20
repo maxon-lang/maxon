@@ -1,0 +1,106 @@
+public let StagedFixtureLabel = "staged fixture"
+public let AnchorMarker = "// anchor: "
+
+public let TestCommandName = "test"
+public let TestListOption = "--list"
+public let TestBuildOption = "--build"
+public let TestJsonOption = "--json"
+public let WindowsExecutableSuffix = ".exe"
+public let FirstSourceLine = 1 as SourceLine
+public let FirstSourceColumn = 1
+let TestBinaryKey = "binary"
+
+public typealias SourceLine = int(1 to u32.max)
+public typealias SourceColumn = int(1 to u32.max)
+
+public function linesOfStagedSource(path FilePath) returns StringArray
+	return outputLines(fileText(path))
+end 'linesOfStagedSource'
+
+public function anchorLine(program FilePath, anchor String) returns SourceLine
+	let marker = "{AnchorMarker}{anchor}"
+	var found = 0 as ElementIndex
+	var carriers = 0 as Count
+
+	for (iter, line) in linesOfStagedSource(program).withIterator() 'eachLine'
+		if line.trim().endsWith(marker) 'thisAnchor'
+			found = iter.index() + 1
+			carriers = carriers + 1
+		end 'thisAnchor'
+	end 'eachLine'
+
+	if carriers != 1 'notExactlyOne'
+		panic("the gate could not run — {carriers} lines of {program.toString()} carry '{marker}'; exactly one must, or the case names a line it is not about.")
+	end 'notExactlyOne'
+
+	return found as SourceLine
+end 'anchorLine'
+
+public function declarationLine(staged FilePath, needle String) returns SourceLine
+	var lineNumber = FirstSourceLine
+
+	for line in linesOfStagedSource(staged.join(StagedProgramFileName)) 'eachLine'
+		if line.startsWith(needle) 'found'
+			return lineNumber
+		end 'found'
+
+		lineNumber = lineNumber + 1
+	end 'eachLine'
+
+	panic("the gate could not run — the staged source under {staged.toString()} has no line beginning `{needle}`.")
+end 'declarationLine'
+
+public function sourceColumnOf(staged FilePath, line SourceLine, spelling String) returns SourceColumn
+	let program = staged.join(StagedProgramFileName)
+	let text = try linesOfStagedSource(program).get((line - FirstSourceLine) as ElementIndex) otherwise panic("the gate could not run — {program.toString()} has no line {line}.")
+	let before = try text.split(spelling).get(0) otherwise panic("the gate could not run — splitting a line always answers its first piece.")
+
+	if before == text 'notOnTheLine'
+		panic("the gate could not run — line {line} of {program.toString()} does not spell '{spelling}'.")
+	end 'notOnTheLine'
+
+	return (before.count() + FirstSourceColumn) as SourceColumn
+end 'sourceColumnOf'
+
+// The build asks for the bare stem and this asks the filesystem which spelling arrived: the
+// compiler appends an executable suffix of its own accord, and which one is not a function of
+// either triple alone.
+public function builtExecutable(staged FilePath) returns FilePath
+	let suffixed = staged.join("{OutputFileStem}{WindowsExecutableSuffix}")
+
+	if File.exists(suffixed) 'aPortableExecutable'
+		return suffixed
+	end 'aPortableExecutable'
+
+	if File.exists(staged.join(OutputFileStem)) 'anElfOrAMachO'
+		return staged.join(OutputFileStem)
+	end 'anElfOrAMachO'
+
+	return staged.join("{OutputFileStem}{executableSuffix()}")
+end 'builtExecutable'
+
+public function sidecarOf(executable FilePath) returns FilePath
+	return try FilePath.from("{executable.toString()}{SidecarSuffix}") otherwise panic("the gate could not run — could not spell the sidecar path beside {executable.toString()}.")
+end 'sidecarOf'
+
+public function buildStagedSource(source FilePath, staged FilePath, what String = StagedFixtureLabel, extraArguments StringArray = StringArray.create(), binary FilePath = testedCompilerPath()) returns FilePath
+	let build = spawnBuild(source, staged: staged, output: staged.join(OutputFileStem), label: what, extraArguments: extraArguments, binary: binary)
+	let executable = builtExecutable(staged)
+
+	requireBuiltOrPanic(build, output: executable, what: "the '{what}' build")
+
+	return executable
+end 'buildStagedSource'
+
+public function builtTestBinary(staged FilePath, what String) returns FilePath
+	let listed = spawnCompiler([TestCommandName, TestListOption, TestBuildOption, TestJsonOption], staged: staged, what: "the '{what}' test build")
+
+	if listed.exitCode() != 0 'didNotBuild'
+		panic("the gate could not run — the test build for '{what}' exited {listed.exitCode()}, so there is no test binary. It wrote to stdout: {listed.stdout} and to stderr: {listed.stderr}")
+	end 'didNotBuild'
+
+	let doc = try Json.parse(listed.stdout.trim()) otherwise panic("the gate could not run — `{TestCommandName} {TestListOption} {TestBuildOption} {TestJsonOption}` wrote a listing that does not parse: {listed.stdout}")
+	let binary = try doc.getString(doc.root, key: TestBinaryKey) otherwise panic("the gate could not run — the listing names no `{TestBinaryKey}`: {listed.stdout}")
+
+	return try FilePath.from(binary) otherwise panic("the gate could not run — the listing names a binary '{binary}' that is not a spellable path.")
+end 'builtTestBinary'

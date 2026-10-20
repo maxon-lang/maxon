@@ -9,7 +9,7 @@ test 'threads asked after the program has exited says the program is gone, not t
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 
 	let exits = eventsOfKind(events, kind: ExitEventName)
-	Expect.equal(exits.count(), expected: 1, message: "the program must run to its end before this case asks anything, or the answer below would be about a live program. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(exits.count(), expected: 1, message: "the program must run to its end before this case asks anything, or the answer below would be about a live program. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let exited = eventAt(exits, index: 0)
 	Expect.equal(numberOf(exited, node: exited.root, key: CodeKey), expected: undebugged.exitCode() as EventNumber, message: "the debugged program answered a different exit code than the same program run with nothing attached. {said}")
@@ -17,7 +17,7 @@ test 'threads asked after the program has exited says the program is gone, not t
 	Expect.equal(eventsOfKind(events, kind: ThreadsEventName).count(), expected: 0, message: "there is no process to hold a roster, so `{ThreadsCommand}` must not answer one. {said}")
 
 	let errors = eventsOfKind(events, kind: ErrorEventName)
-	Expect.equal(errors.count(), expected: 1, message: "a command issued after the program has exited is answered with one `{ErrorEventName}`. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(errors.count(), expected: 1, message: "a command issued after the program has exited is answered with one `{ErrorEventName}`. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let answered = eventAt(errors, index: 0)
 	let message = textOf(answered, node: answered.root, key: MessageKey)

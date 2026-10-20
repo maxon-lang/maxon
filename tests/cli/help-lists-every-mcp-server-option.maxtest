@@ -1,12 +1,12 @@
 let McpServerOptions = ["--dev", "--http", "--idle-timeout", "--max-sessions", "--exit-on-stdin-eof"]
 
 test 'help mcp-server lists every option the parser accepts'
-	let run = runHelpFor(McpServerCommandWord)
+	let run = spawnCompiler([HelpCommandWord, McpServerCommandWord])
 
 	let observedExit = run.exitCode()
 	try Expect.equal(observedExit, expected: 0, message: "`maxon {HelpCommandWord} {McpServerCommandWord}` was refused. It said: {run.stdout}{run.stderr}")
 
-	var undocumented = ListedWordArray.create()
+	var undocumented = StringArray.create()
 
 	for option in McpServerOptions 'eachOption'
 		if not run.stdout.contains(option) 'unlisted'
@@ -14,5 +14,5 @@ test 'help mcp-server lists every option the parser accepts'
 		end 'unlisted'
 	end 'eachOption'
 
-	try Expect.isEmpty(listed(undocumented), message: "`maxon {HelpCommandWord} {McpServerCommandWord}` does not list these options the parser accepts: {listed(undocumented)}. It said: {run.stdout}")
+	try Expect.isEmpty(joined(undocumented, separator: Space), message: "`maxon {HelpCommandWord} {McpServerCommandWord}` does not list these options the parser accepts: {joined(undocumented, separator: Space)}. It said: {run.stdout}")
 end 'help mcp-server lists every option the parser accepts'

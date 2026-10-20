@@ -11,6 +11,7 @@ import {
 	SpecTestMarker
 } from './specParser';
 import { appendRunOutput, childList, pipeLines } from './testItems';
+import { untrustedRefusal } from './workspaceTrust';
 
 interface ProfileBinding {
 	profile: vscode.TestRunProfile;
@@ -139,6 +140,14 @@ export function registerSpecTestController(workspaceRoot: string): vscode.Dispos
 		binding: ProfileBinding
 	): Promise<void> {
 		const run = controller.createTestRun(request);
+		const requested = collectRequested(request, controller, testItemById, specItems);
+
+		const refusal = untrustedRefusal(vscode.workspace.isTrusted);
+		if (refusal) {
+			failAllRequested(run, requested, refusal);
+			run.end();
+			return;
+		}
 
 		if (!fs.existsSync(binding.binary)) {
 			const msg = `Compiler binary not found: ${binding.binary}`;
@@ -148,7 +157,6 @@ export function registerSpecTestController(workspaceRoot: string): vscode.Dispos
 			return;
 		}
 
-		const requested = collectRequested(request, controller, testItemById, specItems);
 		if (requested.items.length === 0) {
 			run.end();
 			return;

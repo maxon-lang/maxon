@@ -5,14 +5,14 @@ let NotLiveHereReason = "not-live-here"
 
 test 'a local whose last use is behind the stop reports itself unavailable rather than a number'
 	let staged = builtFixture(OptimizedOutCaseLabel, fixture: ValuesFixtureName)
-	let renderedAt = anchorLine(staged, anchor: "rendered")
+	let renderedAt = anchorLine(staged.join(StagedProgramFileName), anchor: "rendered")
 	let commands = debugCommandLine(["{BreakCommand} {lineTarget(renderedAt)}", RunCommand, "{PrintCommand} {DeadLocalName}"])
 	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let answers = eventsOfKind(events, kind: ValueEventName)
 
-	Expect.equal(answers.count(), expected: 1, message: "`{PrintCommand} {DeadLocalName}` printed no `{ValueEventName}` event. A local that cannot be read is still an ANSWER about that local, and an error would be the wrong one: the name IS declared here. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(answers.count(), expected: 1, message: "`{PrintCommand} {DeadLocalName}` printed no `{ValueEventName}` event. A local that cannot be read is still an ANSWER about that local, and an error would be the wrong one: the name IS declared here. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let answered = eventAt(answers, index: 0)
 	let value = memberOf(answered, node: answered.root, key: ValueKey)

@@ -22,11 +22,11 @@ type ShadowingProgramSweepsCold implements OutsideCheckoutCase
 
 		_ = try requireLibraryCacheBuild(dir, program: TrivialProgramDirName, output: TrivialOutputName, which: "the build that fills the library cache")
 
-		let shadowing = try libraryCacheReportOf(runLibraryCacheBuild(dir, program: ShadowingProgramDirName, output: ShadowingOutputName, options: ListedWordArray.create()), which: "the build of a program declaring its own `{ShadowedTypeName}`")
+		let shadowing = try libraryCacheReportOf(runLibraryCacheBuild(dir, program: ShadowingProgramDirName, output: ShadowingOutputName, options: StringArray.create()), which: "the build of a program declaring its own `{ShadowedTypeName}`")
 		try Expect.equal(shadowing.baseline, expected: LibraryBaseline.unused, message: "a program declaring its own `{ShadowedTypeName}` did not leave the library baseline unused, and that baseline resolves `{ShadowedTypeName}` to the library's. It wrote: {shadowing.line}")
 		try Expect.greaterThan(shadowing.swept, than: 0, message: "a program declaring its own `{ShadowedTypeName}` swept no library file itself. It wrote: {shadowing.line}")
 
-		let ran = runDriver(ListedWordArray.create(), binary: dir.join("{ShadowingOutputName}{executableSuffix()}"), workingDirectory: dir)
+		let ran = spawnCompiler(StringArray.create(), binary: dir.join("{ShadowingOutputName}{executableSuffix()}"), staged: dir)
 		try Expect.equal(ran.exitCode(), expected: ShadowingProgramExitCode, message: "the program declaring its own `{ShadowedTypeName}` did not answer what its own type holds. It wrote to stdout: {ran.stdout} and to stderr: {ran.stderr}")
 	end 'requireHeldIn'
 end 'ShadowingProgramSweepsCold'

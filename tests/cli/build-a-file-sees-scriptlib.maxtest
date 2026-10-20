@@ -17,20 +17,16 @@ type BuildAFileSeesScriptlib implements OutsideCheckoutCase
 	end 'create'
 
 	export function requireHeldIn(dir FilePath) throws TestFailure
-		writeScriptlibPackageFile(dir, package: GreetingPackageName, fileName: GreetingPackageFileName, content: greetingPackageSource())
+		writeScriptlibPackageFile(dir, package: GreetingPackageName, fileName: GreetingPackageFileName, content: greetingPackageSource(ScriptlibGreeting))
 		writeStagedFile(dir.join(ScriptFileName), content: GreetingScriptSource)
 
-		try requireBuilt(runRecordedBuild(dir, program: ScriptFileName, output: OutputStem, options: ListedWordArray.create(), binary: installedCompilerIn(dir)), which: "a build of `{ScriptFileName}`, which calls `greeting()` from `scriptlib/{GreetingPackageName}/{GreetingPackageFileName}`")
+		try requireBuilt(runRecordedBuild(dir, program: ScriptFileName, output: OutputStem, options: StringArray.create(), binary: installedCompilerIn(dir)), which: "a build of `{ScriptFileName}`, which calls `greeting()` from `scriptlib/{GreetingPackageName}/{GreetingPackageFileName}`")
 
 		let executable = dir.join("{OutputStem}{executableSuffix()}")
-		let run = runDriver(ListedWordArray.create(), binary: executable, workingDirectory: dir)
+		let run = spawnCompiler(StringArray.create(), binary: executable, staged: dir)
 		let said = "It wrote to stdout: {run.stdout} and to stderr: {run.stderr}"
 
 		try Expect.equal(run.exitCode(), expected: 0, message: "the built script did not exit 0. {said}")
 		try Expect.equal(withoutCarriageReturns(run.stdout), expected: "{ScriptlibGreeting}{PrintedLineEnd}", message: "the built script did not print the answer the scriptlib package returns. {said}")
 	end 'requireHeldIn'
 end 'BuildAFileSeesScriptlib'
-
-function greetingPackageSource() returns String
-	return "public function greeting() returns String\n\treturn \"{ScriptlibGreeting}\"\nend 'greeting'\n"
-end 'greetingPackageSource'

@@ -71,8 +71,8 @@ end 'ArmLookup'
 // ============================================================================================
 
 test 'every branch arm is counted, including the implicit else and the case no run reached'
-	let staged = stagedProgram(BranchArmsCaseLabel, fixture: StatesFixtureName)
-	let executable = builtExecutable(staged, stem: CoveredOutputStem)
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: BranchArmsCaseLabel, fixture: StatesFixtureName)
+	let executable = executableIn(staged, stem: CoveredOutputStem)
 	requireCoverageBuild(staged, output: executable)
 
 	let report = requireCoverageRunReport(staged, executable: executable)
@@ -107,7 +107,7 @@ end 'requireSummaryCountsArms'
 // The arm with no source text. Its count comes from instrumentation or from nowhere, and the fixture
 // drives the false edge on purpose, so a report that mints the arm and never increments it is caught too.
 function requireImplicitElseCounted(rows StringArray, staged FilePath, report String) throws TestFailure
-	let line = anchoredLineNumber(staged, anchor: ImplicitElseAnchor)
+	let line = anchorLine(staged.join(StagedProgramFileName), anchor: ImplicitElseAnchor)
 
 	match branchRowAt(rows, line: line) 'listed'
 		none then try Expect.fail("no branch is reported at line {line}, where the staged fixture writes an `if` with no `else`. A branch that is not reported is one whose untaken arm cannot be found by reading the report at all. The report reads:{LineFeed}{report}")
@@ -115,7 +115,7 @@ function requireImplicitElseCounted(rows StringArray, staged FilePath, report St
 	end 'listed'
 end 'requireImplicitElseCounted'
 
-function requireIfArms(row String, line FixtureLineNumber) throws TestFailure
+function requireIfArms(row String, line SourceLine) throws TestFailure
 	let arms = armsOf(row)
 	try Expect.equal(arms.count(), expected: 2, message: "the `if` at line {line} reports {arms.count()} arms. An `if` has two whether or not the source writes the second — an arm roster that only holds the arms with source text can never report the edge that was not taken. Its row reads: {row}")
 
@@ -126,12 +126,12 @@ function requireIfArms(row String, line FixtureLineNumber) throws TestFailure
 
 	match armWithKind(arms, kind: ThenArmKind) 'taken'
 		none then try Expect.fail("the `if` at line {line} reports no `{ThenArmKind}` arm. Its row reads: {row}")
-		found(arm) then try Expect.equal(armLine(arm), expected: line, message: "the `{ThenArmKind}` arm of the `if` at line {line} names line {armLine(arm)} instead. Every arm names the line to LOOK at, and for an `if` that is the `if` itself. Its row reads: {row}")
+		found(arm) then try Expect.equal(armLine(arm), expected: line as PrintedNumber, message: "the `{ThenArmKind}` arm of the `if` at line {line} names line {armLine(arm)} instead. Every arm names the line to LOOK at, and for an `if` that is the `if` itself. Its row reads: {row}")
 	end 'taken'
 end 'requireIfArms'
 
-function requireImplicitArm(arm String, line FixtureLineNumber, row String) throws TestFailure
-	try Expect.equal(armLine(arm), expected: line, message: "the implicit `else` of the `if` at line {line} names line {armLine(arm)}. An arm with no source text still has a line to send a reader to, and it is the `if`'s. Its row reads: {row}")
+function requireImplicitArm(arm String, line SourceLine, row String) throws TestFailure
+	try Expect.equal(armLine(arm), expected: line as PrintedNumber, message: "the implicit `else` of the `if` at line {line} names line {armLine(arm)}. An arm with no source text still has a line to send a reader to, and it is the `if`'s. Its row reads: {row}")
 
 	// ⭐ THE HEADLINE. The fixture calls `classify` with values that fall through the `if`, so this edge is
 	// taken and no line table anywhere can say so.
@@ -145,7 +145,7 @@ end 'requireImplicitArm'
 // Every case of the dispatch is an arm, the one the run reaches is positive, and the one it never reaches
 // is exactly 0 — not blank, and not absent.
 function requireDispatchArmsCounted(rows StringArray, staged FilePath, report String) throws TestFailure
-	let line = anchoredLineNumber(staged, anchor: DispatchAnchor)
+	let line = anchorLine(staged.join(StagedProgramFileName), anchor: DispatchAnchor)
 
 	match branchRowAt(rows, line: line) 'listed'
 		none then try Expect.fail("no branch is reported at line {line}, where the staged fixture writes a three-way `match`. `match` is Maxon's primary dispatch construct: a report that does not mint arms for it reports a program made of `match`es as having no branches at all. The report reads:{LineFeed}{report}")
@@ -153,7 +153,7 @@ function requireDispatchArmsCounted(rows StringArray, staged FilePath, report St
 	end 'listed'
 end 'requireDispatchArmsCounted'
 
-function requireMatchArms(row String, line FixtureLineNumber, staged FilePath) throws TestFailure
+function requireMatchArms(row String, line SourceLine, staged FilePath) throws TestFailure
 	let arms = armsOf(row)
 	let declared = declaredMatchArmCount(staged)
 	try Expect.equal(arms.count(), expected: declared as ElementIndex, message: "the `match` at line {line} reports {arms.count()} arms where the staged fixture declares {declared} cases. A branch summary that can only hold a PAIR has to report every `match` as two-way or as nothing at all. Its row reads: {row}")
@@ -163,7 +163,7 @@ function requireMatchArms(row String, line FixtureLineNumber, staged FilePath) t
 		try Expect.equal(kind, expected: CaseArmKind, message: "an arm of the `match` at line {line} is reported as `{kind}` rather than `{CaseArmKind}`. One shape names every arm — `then`, `else` and `case` alike — and the kind is what tells a reader which construct they are looking at. Its row reads: {row}")
 	end 'eachArm'
 
-	let takenLine = anchoredLineNumber(staged, anchor: TakenArmAnchor)
+	let takenLine = anchorLine(staged.join(StagedProgramFileName), anchor: TakenArmAnchor)
 
 	match armAtLine(arms, line: takenLine) 'taken'
 		none then try Expect.fail("the `match` at line {line} reports no arm at line {takenLine}, which the staged fixture anchors as the case its run reaches. Each case arm names its OWN line, so a reader can see which case was missed. Its row reads: {row}")
@@ -172,7 +172,7 @@ function requireMatchArms(row String, line FixtureLineNumber, staged FilePath) t
 
 	// ⭐ THE HEADLINE. A zero here is the whole point; blank, absent, or folded into the taken tally are
 	// three different ways of reporting an untested arm as though nothing were missing.
-	let untakenLine = anchoredLineNumber(staged, anchor: UntakenArmAnchor)
+	let untakenLine = anchorLine(staged.join(StagedProgramFileName), anchor: UntakenArmAnchor)
 
 	match armAtLine(arms, line: untakenLine) 'untaken'
 		none then try Expect.fail("the `match` at line {line} reports no arm at line {untakenLine}, which the staged fixture anchors as the case NOTHING reaches. An arm roster built from the arms that ran cannot contain the one that did not, which is the only arm anyone needed the report for. Its row reads: {row}")
@@ -183,10 +183,10 @@ end 'requireMatchArms'
 // How many cases the fixture's `match` declares. Counted out of the staged source so a fixture that grows
 // a case grows what is demanded of the report; refused loudly at zero, because a roster nobody found
 // would make the comparison above assert nothing.
-function declaredMatchArmCount(staged FilePath) returns CoverageTally
-	var declared = 0 as CoverageTally
+function declaredMatchArmCount(staged FilePath) returns PrintedNumber
+	var declared = 0 as PrintedNumber
 
-	for line in stagedSourceLines(staged) 'eachLine'
+	for line in linesOfStagedSource(staged.join(StagedProgramFileName)) 'eachLine'
 		if line.contains(MatchArmKeyword) 'anArm'
 			declared = declared + 1
 		end 'anArm'
@@ -227,9 +227,9 @@ end 'branchSectionRows'
 
 // The branch row whose CONSTRUCT sits at `line`. A branch is identified by its own token position, so two
 // `if`s or two `match`es can never share one row.
-function branchRowAt(rows StringArray, line FixtureLineNumber) returns BranchRowLookup
+function branchRowAt(rows StringArray, line SourceLine) returns BranchRowLookup
 	for row in rows 'eachRow'
-		if branchRowLine(row) == line 'theRow'
+		if branchRowLine(row) == line as PrintedNumber 'theRow'
 			return BranchRowLookup.found(row)
 		end 'theRow'
 	end 'eachRow'
@@ -240,7 +240,7 @@ end 'branchRowAt'
 // The LINE of a row's leading `<file>:<line>:<col>` token, read from the end so a path that spells the
 // separator itself does not shift the columns. A row spelling no position reads 0, which matches no
 // anchored line and fails the caller's lookup rather than standing in for a branch nobody reported.
-function branchRowLine(row String) returns FixtureLineNumber
+function branchRowLine(row String) returns PrintedNumber
 	let position = try whitespaceTokens(row).get(PositionColumn) otherwise ""
 	let pieces = position.split(PositionSeparator)
 
@@ -250,7 +250,7 @@ function branchRowLine(row String) returns FixtureLineNumber
 
 	let numbered = try pieces.get(pieces.count() - LineFromEnd) otherwise ""
 
-	return decimalValue(numbered) as FixtureLineNumber
+	return decimalValue(numbered)
 end 'branchRowLine'
 
 // A row's arms, in the order it printed them — which is MINT order, and therefore source order.
@@ -289,9 +289,9 @@ function armWithKindSuffix(arms StringArray, suffix String) returns ArmLookup
 	return ArmLookup.none
 end 'armWithKindSuffix'
 
-function armAtLine(arms StringArray, line FixtureLineNumber) returns ArmLookup
+function armAtLine(arms StringArray, line SourceLine) returns ArmLookup
 	for arm in arms 'eachArm'
-		if armLine(arm) == line 'theArm'
+		if armLine(arm) == line as PrintedNumber 'theArm'
 			return ArmLookup.found(arm)
 		end 'theArm'
 	end 'eachArm'
@@ -305,14 +305,14 @@ function armKind(arm String) returns String
 	return try arm.split(ArmLineSeparator).get(0) otherwise ""
 end 'armKind'
 
-function armLine(arm String) returns FixtureLineNumber
+function armLine(arm String) returns PrintedNumber
 	let tail = try arm.split(ArmLineSeparator).get(1) otherwise ""
 	let numbered = try tail.split(ArmCountSeparator).get(0) otherwise ""
 
-	return decimalValue(numbered) as FixtureLineNumber
+	return decimalValue(numbered)
 end 'armLine'
 
-function armCount(arm String) returns CoverageTally
+function armCount(arm String) returns PrintedNumber
 	let counted = try arm.split(ArmCountSeparator).get(1) otherwise ""
 
 	return decimalValue(counted)

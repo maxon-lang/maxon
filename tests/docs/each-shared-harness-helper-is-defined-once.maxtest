@@ -1,0 +1,140 @@
+let TestsDir = "tests"
+let SupportDir = "tests/support"
+let HelperDeclarationPrefix = "public function "
+let FunctionKeyword = "function "
+let CallOpener = "("
+let FileSeparator = ", "
+let HelperSeparator = "\n  "
+let WindowsSeparator = "\\"
+let DeclaredOnce = 1
+
+typealias DeclaringFiles = Map with String, StringArray
+
+function declarationModifiers() returns StringArray
+	return ["export ", "public ", "module ", "static "]
+end 'declarationModifiers'
+
+test 'each shared harness helper is defined once'
+	let support = try FilePath.from(SupportDir) otherwise panic("shared-helpers: '{SupportDir}' is not a spellable path")
+	Expect.isTrue(Directory.isDirectory(support), message: "there is no {SupportDir}/ directory, so no shared harness helper exists to be defined once. Every path here is relative to the CHECKOUT ROOT; run it from there.")
+
+	var helpers = StringArray.create()
+
+	for source in sourcesUnder(support) 'eachSupportSource'
+		if not source.filename().endsWith(MaxonSourceSuffix) 'notAHelperSource'
+			continue
+		end 'notAHelperSource'
+
+		for name in helperNamesIn(withoutCarriageReturns(fileText(source))) 'eachHelper'
+			if not helpers.contains(name) 'firstSighting'
+				helpers.push(name)
+			end 'firstSighting'
+		end 'eachHelper'
+	end 'eachSupportSource'
+
+	Expect.isTrue(helpers.count() > 0, message: "{SupportDir}/*{MaxonSourceSuffix} declares no `{HelperDeclarationPrefix}<name>(`, so the comparison below would be vacuous.")
+
+	var declaring = DeclaringFiles.create()
+
+	for helper in helpers 'eachHelperName'
+		declaring.upsert(helper, value: StringArray.create())
+	end 'eachHelperName'
+
+	let tests = try FilePath.from(TestsDir) otherwise panic("shared-helpers: '{TestsDir}' is not a spellable path")
+
+	for source in sourcesUnder(tests) 'eachSource'
+		let fileName = source.filename()
+
+		if not fileName.endsWith(MaxonSourceSuffix) and not fileName.endsWith(TestSourceSuffix) 'notASource'
+			continue
+		end 'notASource'
+
+		for name in functionNamesIn(withoutCarriageReturns(fileText(source))) 'eachDeclared'
+			if not declaring.contains(name) 'notAHelper'
+				continue
+			end 'notAHelper'
+
+			var files = try declaring.get(name) otherwise panic("shared-helpers: '{name}' was found in the map just above")
+
+			if not files.contains(source.toString()) 'newFile'
+				files.push(source.toString())
+				declaring.upsert(name, value: files)
+			end 'newFile'
+		end 'eachDeclared'
+	end 'eachSource'
+
+	var misdeclared = StringArray.create()
+
+	for helper in helpers 'eachHelperChecked'
+		view files = try declaring.get(helper) otherwise panic("shared-helpers: every helper was entered into the map")
+		let onlyInSupport = files.count() == DeclaredOnce and allUnderSupport(files)
+
+		if not onlyInSupport 'misplaced'
+			misdeclared.push("{helper}: {joined(files, separator: FileSeparator)}")
+		end 'misplaced'
+	end 'eachHelperChecked'
+
+	Expect.isEmpty(joined(misdeclared, separator: HelperSeparator), message: "each helper {SupportDir}/ makes public is declared by exactly one file under {TestsDir}/, the one in {SupportDir}/. These break that rule, each named with every file that declares it:")
+end 'each shared harness helper is defined once'
+
+function allUnderSupport(files StringArray) returns bool
+	for file in files 'eachFile'
+		if not file.replace(WindowsSeparator, with: PortablePathSeparator).startsWith("{SupportDir}{PortablePathSeparator}") 'elsewhere'
+			return false
+		end 'elsewhere'
+	end 'eachFile'
+
+	return true
+end 'allUnderSupport'
+
+function helperNamesIn(source String) returns StringArray
+	var names = StringArray.create()
+
+	for line in source.split(LineFeed) 'eachLine'
+		let declaration = line.trim()
+
+		if declaration.startsWith(HelperDeclarationPrefix) 'aHelper'
+			names.push(nameBeforeCall(declaration.replaceFirst(HelperDeclarationPrefix, with: "")))
+		end 'aHelper'
+	end 'eachLine'
+
+	return names
+end 'helperNamesIn'
+
+function functionNamesIn(source String) returns StringArray
+	var names = StringArray.create()
+
+	for line in source.split(LineFeed) 'eachLine'
+		let declaration = withoutModifiers(line.trim())
+
+		if declaration.startsWith(FunctionKeyword) 'aFunction'
+			names.push(nameBeforeCall(declaration.replaceFirst(FunctionKeyword, with: "")))
+		end 'aFunction'
+	end 'eachLine'
+
+	return names
+end 'functionNamesIn'
+
+function withoutModifiers(declaration String) returns String
+	var rest = declaration
+	var stripped = true
+
+	while stripped 'eachModifier'
+		stripped = false
+
+		for modifier in declarationModifiers() 'tryModifier'
+			if rest.startsWith(modifier) 'leadsWithIt'
+				rest = rest.replaceFirst(modifier, with: "")
+				stripped = true
+			end 'leadsWithIt'
+		end 'tryModifier'
+	end 'eachModifier'
+
+	return rest
+end 'withoutModifiers'
+
+function nameBeforeCall(text String) returns String
+	let parts = text.split(CallOpener)
+	let head = try parts.get(0) otherwise panic("shared-helpers: a split always yields a first part")
+	return head.trim()
+end 'nameBeforeCall'

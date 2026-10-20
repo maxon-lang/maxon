@@ -7,14 +7,14 @@ let TimedOutSessionExitCode = 1
 
 test 'a breakpoint armed while the program is running is placed, and the next continue stops on it'
 	let staged = builtFixture(BreakWhileRunningCaseLabel, fixture: LiveSpinFixtureName)
-	let tickLine = anchorLine(staged, anchor: AnchorName)
+	let tickLine = anchorLine(staged.join(StagedProgramFileName), anchor: AnchorName)
 	let oneSecondStopTimeout = "{DebugStopTimeoutOptionPrefix}{OneSecond}"
 	let commands = debugCommandLine([RunCommand, "{BreakCommand} {lineTarget(tickLine)}", ContinueCommand, QuitCommand])
 	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: [oneSecondStopTimeout])
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 
-	Expect.atLeast(eventsOfKind(events, kind: TimeoutEventName).count(), than: 1, message: "the `{RunCommand}` with nothing armed must answer a `{TimeoutEventName}` and leave the program running — that running program is what this case then arms a breakpoint into. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.atLeast(eventsOfKind(events, kind: TimeoutEventName).count(), than: 1, message: "the `{RunCommand}` with nothing armed must answer a `{TimeoutEventName}` and leave the program running — that running program is what this case then arms a breakpoint into. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let armings = eventsOfKind(events, kind: BreakpointEventName)
 	Expect.equal(armings.count(), expected: 1, message: "`{BreakCommand}` after a timeout printed no `{BreakpointEventName}` event. {said}")
@@ -23,7 +23,7 @@ test 'a breakpoint armed while the program is running is placed, and the next co
 	Expect.equal(textOf(armed, node: armed.root, key: ActionKey), expected: SetAction, message: "⭐⭐ THE PROGRAM IS RUNNING AND IS NOT STOPPED AT ANYTHING. A `{BreakCommand}` here is served by the driver out of process, which writes the byte into the running program's code without stopping it at all, and it must report `{SetAction}` — a driver that answered anything else is one that can only be spoken to at a stop. {said}")
 
 	let stops = eventsOfKind(events, kind: StopEventName)
-	Expect.atLeast(stops.count(), than: 1, message: "⛔ A SUCCESSFUL WRITE IS NOT A PLACED BREAKPOINT. The loop reaches the anchored line again within its own sleep interval, so a breakpoint written into running code must be HIT. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.atLeast(stops.count(), than: 1, message: "⛔ A SUCCESSFUL WRITE IS NOT A PLACED BREAKPOINT. The loop reaches the anchored line again within its own sleep interval, so a breakpoint written into running code must be HIT. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let stopped = eventAt(stops, index: 0)
 	Expect.equal(textOf(stopped, node: stopped.root, key: FunctionKey), expected: TickFunctionName, message: "the stop does not name the function the anchored line is in. {said}")

@@ -39,7 +39,7 @@ export function runExecute(args MaxonArgs) returns ExitCode
 		return OwnFailureExit
 	end 'nothingThere'
 
-	_ = quietTheBuildChatter(args)
+	_ = quietTheBuildChatter(args.logOverridden)
 
 	return runProgram(program, isProject: isProject, arguments: programArguments(args.paths))
 end 'runExecute'
@@ -47,9 +47,9 @@ end 'runExecute'
 // The one sentence a cache failure reaches a reader through: the arm IS the fact and its payload is the
 // sentence, so there is nothing to decide here. `module` so `CacheCommand` reports a cache it cannot
 // locate in the same words `execute` and `build` do.
-module function reportCacheError(e RunCacheError, speaker String)
+module function reportCacheError(e RunCacheError, speaker String, sink DiagnosticSink = DiagnosticSink.printing())
 	match e 'why'
-		unavailable(reason) then printError("{speaker}: {reason}\n")
+		unavailable(reason) then sink.emit("{speaker}: {reason}")
 	end 'why'
 end 'reportCacheError'
 
@@ -100,9 +100,9 @@ end 'CachedProgram'
 //
 // A hit is the file being THERE. Its name is the key, so there is nothing beside it to read and nothing
 // to compare — a build under that name was made from these very inputs.
-export function cachedBuild(program FilePath, isProject bool, target Target, entryFunction ByteArray, speaker String) returns CachedProgram throws CachedBuildError
+export function cachedBuild(program FilePath, isProject bool, target Target, entryFunction ByteArray, speaker String, session CompileSession = CompileSession.printing()) returns CachedProgram throws CachedBuildError
 	let slot = try locateRunSlot(program, isProject: isProject, target: target, entryFunction: entryFunction) otherwise (e) 'noCache'
-		reportCacheError(e, speaker: speaker)
+		reportCacheError(e, speaker: speaker, sink: session.diagnostics)
 		throw CachedBuildError.notBuilt
 	end 'noCache'
 
@@ -110,7 +110,7 @@ export function cachedBuild(program FilePath, isProject bool, target Target, ent
 		return CachedProgram.create(slot.executable, compiled: false)
 	end 'alreadyCached'
 
-	try fillSlot(slot, target: target, entryFunction: entryFunction, speaker: speaker)
+	try fillSlot(slot, target: target, entryFunction: entryFunction, speaker: speaker, session: session)
 
 	return CachedProgram.create(slot.executable, compiled: true)
 end 'cachedBuild'
@@ -127,26 +127,26 @@ end 'cachedBuild'
 // ⚠ **`debugInfo` DEFAULTS TO FALSE ON `compileToProduct` AND MUST NOT HERE.** A program launched this way
 // is one somebody is developing, and a crash with no sidecar beside the binary is a stack trace nobody can
 // read.
-function fillSlot(slot RunSlot, target Target, entryFunction ByteArray, speaker String) throws CachedBuildError
+function fillSlot(slot RunSlot, target Target, entryFunction ByteArray, speaker String, session CompileSession) throws CachedBuildError
 	let program = slot.program
 
 	var inputPaths = MaxonSourcePathArray.create()
 	inputPaths.push(program)
 
-	let product = try compileToProduct(inputPaths, target: target, outputOverride: StatedText.stated(slot.pending.toString()), runtimeIrNames: RuntimeFunctionNameArray.create(), debugInfo: true, entryFunction: entryFunction) otherwise (e) 'compileFailed'
-		reportCompileError(e)
+	let product = try compileToProduct(inputPaths, target: target, outputOverride: StatedText.stated(slot.pending.toString()), runtimeIrNames: RuntimeFunctionNameArray.create(), debugInfo: true, entryFunction: entryFunction, session: session) otherwise (e) 'compileFailed'
+		reportCompileError(e, sink: session.diagnostics)
 		throw CachedBuildError.notBuilt
 	end 'compileFailed'
 
 	// A successful return is a claim about the BUILD; what the spawn needs is a claim about the FILE.
 	// Absent it, the spawn reports "could not run" about a compiler defect.
 	if not File.exists(product.outputPath) 'nothingWritten'
-		printError("{speaker}: compiling {program.toString()} reported success but left no {product.outputPath.toString()}\n")
+		session.diagnostics.emit("{speaker}: compiling {program.toString()} reported success but left no {product.outputPath.toString()}")
 		throw CachedBuildError.notBuilt
 	end 'nothingWritten'
 
 	try publishSlotBuild(slot, built: product.outputPath) otherwise (e) 'notPublished'
-		reportCacheError(e, speaker: speaker)
+		reportCacheError(e, speaker: speaker, sink: session.diagnostics)
 		throw CachedBuildError.notBuilt
 	end 'notPublished'
 end 'fillSlot'

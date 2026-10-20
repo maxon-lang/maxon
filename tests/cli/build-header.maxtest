@@ -8,7 +8,6 @@
 let CaseDirName = "build-header"
 let GoodStem = "good"
 let BadStem = "bad"
-let SourceExtension = ".maxon"
 let GoodSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
 let BadSource = "function main() returns ExitCode\n\treturn undeclaredName\nend 'main'\n"
 
@@ -30,7 +29,7 @@ test 'build opens with the version and the early-preview warning, and keeps them
 end 'build opens with the version and the early-preview warning, and keeps them off stderr'
 
 function buildSource(dir FilePath, stem String, source String) returns CollectedOutput
-	let sourcePath = dir.join("{stem}{SourceExtension}")
+	let sourcePath = dir.join("{stem}{MaxonSourceSuffix}")
 	writeStagedFile(sourcePath, content: source)
-	return runDriver([BuildCommandWord, sourcePath.toString(), "{OutputOptionPrefix}{dir.join(stem).toString()}"])
+	return spawnCompiler([BuildCommandWord, sourcePath.toString(), "{OutputOptionPrefix}{dir.join(stem).toString()}"])
 end 'buildSource'

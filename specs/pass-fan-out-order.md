@@ -21,7 +21,7 @@ contract has two lines:
 2. The emitted binary does not depend on how many workers ran the passes.
 
 The first line is pinned here. The second is a property of a spawned compiler's output file, which a spec
-case cannot observe, so it is gated by the driver corpus `tests/parallel-compile/`
+case cannot observe, so it is gated by the driver corpus `tests/parallelCompile/`
 (`byte-identical.maxtest`).
 
 **Which pass the case exercises, and why.** None of the passes from `pruneDeadBlockArgs` through

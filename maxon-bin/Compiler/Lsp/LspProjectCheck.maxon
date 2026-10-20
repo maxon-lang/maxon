@@ -8,9 +8,10 @@ module type LspProjectCheckRequest
 	export let version as LspDocumentVersion
 	export let clientVersion as ClientDocumentVersion
 	export let alone as DiagnosticArray
+	module let inputs as ProjectInputsAnswer
 
-	module static function create(uri String, path FilePath, text String, version LspDocumentVersion, clientVersion ClientDocumentVersion, alone DiagnosticArray) returns LspProjectCheckRequest
-		return Self{uri: uri, path: path, text: text, version: version, clientVersion: clientVersion, alone: alone}
+	module static function create(uri String, path FilePath, text String, version LspDocumentVersion, clientVersion ClientDocumentVersion, alone DiagnosticArray, inputs ProjectInputsAnswer) returns LspProjectCheckRequest
+		return Self{uri: uri, path: path, text: text, version: version, clientVersion: clientVersion, alone: alone, inputs: inputs}
 	end 'create'
 end 'LspProjectCheckRequest'
 
@@ -51,19 +52,36 @@ module type LspProjectChecker
 
 		match warmed 'warm'
 			notBuilt then self.buildCold(request)
-			held(project) then self.publish(request, check: project.checkedAgainst(request, interest: self.interestIn(request)))
+			held(project) then self.checkWarm(request, project: project)
 		end 'warm'
 	end 'check'
 
+	function checkWarm(request LspProjectCheckRequest, project Project)
+		let check = project.checkedAgainst(request, interest: self.interestIn(request), sources: self.sourcesFor(request))
+
+		match check 'check'
+			rerooted then self.buildCold(request)
+			checked or
+			unbuilt or
+			unlisted or
+			abandoned then self.publish(request, check: check)
+		end 'check'
+	end 'checkWarm'
+
+	function sourcesFor(request LspProjectCheckRequest) returns EditorSources
+		return projectSourcesIn(self.root, selection: SourceSelection.productionOnly, answer: request.inputs)
+	end 'sourcesFor'
+
 	function buildCold(request LspProjectCheckRequest)
-		var project = createProject(self.root, target: detectHostTarget(), stdlibDir: self.stdlibDir, runtimeDir: self.runtimeDir, scriptlib: ScriptlibTier.absent, debugStream: false, session: CompileSession.discarding())
+		let sources = self.sourcesFor(request)
+		var project = createProject(sources.root, target: detectHostTarget(), stdlibDir: self.stdlibDir, runtimeDir: self.runtimeDir, scriptlib: ScriptlibTier.absent, debugStream: false, session: CompileSession.discarding())
 
 		try loadLibrarySources(project) otherwise (e) 'noLibrary'
 			self.publish(request, check: projectCheckFailedWith(e))
 			return
 		end 'noLibrary'
 
-		let check = project.checkedAgainst(request, interest: self.interestIn(request))
+		let check = project.checkedAgainst(request, interest: self.interestIn(request), sources: sources)
 		self.warm = WarmProject.held(project)
 		self.publish(request, check: check)
 	end 'buildCold'
@@ -74,12 +92,13 @@ module type LspProjectChecker
 			unbuilt(failures) then self.publishDiagnostics(request, diagnostics: request.alone, unbuilt: failures, outcome: ProjectCheckOutcome.unloadable)
 			unlisted then self.publishDiagnostics(request, diagnostics: request.alone, unbuilt: StringArray.create(), outcome: ProjectCheckOutcome.unlisted)
 			abandoned then self.report(request, outcome: ProjectCheckOutcome.abandoned)
+			rerooted then panic("LspProjectChecker.publish: a cold build roots its project at the sources it checks against, and a warm check that moved the root rebuilds cold before it publishes")
 		end 'check'
 	end 'publish'
 
 	function publishDiagnostics(request LspProjectCheckRequest, diagnostics DiagnosticArray, unbuilt StringArray, outcome ProjectCheckOutcome)
 		let tokens = lspDocumentTokens(request.text, keywords: KeywordTable.create())
-		let body = documentDiagnosticsText(request.uri, text: request.text, tokens: tokens, diagnostics: diagnostics, path: request.path, unbuilt: unbuilt)
+		let body = documentDiagnosticsText(request.uri, text: request.text, tokens: tokens, diagnostics: diagnostics, path: request.path, unbuilt: unbuilt, notices: StringArray.create())
 
 		submitToLspWriter(self.writer, command: LspWriterCommand.publishIfCurrent(request.uri.clone(), version: request.version, clientVersion: request.clientVersion.clone(), outcome: outcome, body: body))
 	end 'publishDiagnostics'
@@ -108,19 +127,22 @@ union ProjectCheck
 	unbuilt(failures StringArray)
 	unlisted
 	abandoned
+	rerooted
 end 'ProjectCheck'
 
 extension Project
-	function checkedAgainst(request LspProjectCheckRequest, interest CompileInterest) returns ProjectCheck
+	function checkedAgainst(request LspProjectCheckRequest, interest CompileInterest, sources EditorSources) returns ProjectCheck
 		self.session.wantedBy(interest)
 
-		let refresh = try self.refreshFromDisk(request.path) otherwise (e) 'unreadable'
+		let refresh = try self.refreshFromDisk(sources, readerPath: request.path) otherwise (e) 'unreadable'
 			return projectCheckFailedWith(e)
 		end 'unreadable'
 
 		match refresh 'refresh'
 			listed(reader) then return self.checkedWithTheBuffer(request, reader: reader)
 			unlisted then return ProjectCheck.unlisted
+			unresolved(lines) then return ProjectCheck.unbuilt(lines)
+			rerooted then return ProjectCheck.rerooted
 		end 'refresh'
 	end 'checkedAgainst'
 
@@ -143,7 +165,7 @@ function projectCheckFailedWith(failure CompileError) returns ProjectCheck
 	end 'failure'
 end 'projectCheckFailedWith'
 
-function projectFailureLines(failure CompileError) returns StringArray
+module function projectFailureLines(failure CompileError) returns StringArray
 	var sink = DiagnosticSink.capturing()
 	reportCompileError(failure, sink: sink)
 

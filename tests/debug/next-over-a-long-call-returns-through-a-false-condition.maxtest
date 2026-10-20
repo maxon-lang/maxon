@@ -3,17 +3,17 @@ let NeverTrueCondition = "marker == 99"
 
 test 'a next over a long call whose return lands on a conditional breakpoint that is false still returns at once'
 	let staged = builtFixture(FalseConditionReturnCaseLabel, fixture: VoidCallFixtureName)
-	let callLine = anchorLine(staged, anchor: "main-long-call")
-	let afterLine = anchorLine(staged, anchor: "main-after")
+	let callLine = anchorLine(staged.join(StagedProgramFileName), anchor: "main-long-call")
+	let afterLine = anchorLine(staged.join(StagedProgramFileName), anchor: "main-after")
 	let commands = debugCommandLine(["{BreakCommand} {lineTarget(callLine)}", RunCommand, conditionalBreak(lineTarget(afterLine), condition: NeverTrueCondition), NextCommand])
 	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 
-	try Expect.equal(eventsOfKind(events, kind: TimeoutEventName).count(), expected: 0, message: "⛔ THE WALK'S RETURN POINT SHARES ITS BYTE WITH A CONDITIONAL BREAKPOINT, AND THE CONDITION MUST NOT SILENCE IT. Refused as a return point, the `{NextCommand}` single-steps fifty million iterations and times out. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(eventsOfKind(events, kind: TimeoutEventName).count(), expected: 0, message: "⛔ THE WALK'S RETURN POINT SHARES ITS BYTE WITH A CONDITIONAL BREAKPOINT, AND THE CONDITION MUST NOT SILENCE IT. Refused as a return point, the `{NextCommand}` single-steps fifty million iterations and times out. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let stops = eventsOfKind(events, kind: StopEventName)
-	try Expect.equal(stops.count(), expected: 2, message: "the breakpoint on the call and the `{NextCommand}` are two stops. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(stops.count(), expected: 2, message: "the breakpoint on the call and the `{NextCommand}` are two stops. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let landed = eventAt(stops, index: 1)
 	try Expect.equal(numberOf(landed, node: landed.root, key: LineKey), expected: afterLine as EventNumber, message: "the `{NextCommand}` lands on the line after the call. {said}")

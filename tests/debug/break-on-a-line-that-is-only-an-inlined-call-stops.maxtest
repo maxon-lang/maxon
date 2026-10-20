@@ -5,9 +5,9 @@ let LeafFunctionName = "double"
 
 test 'a line whose whole statement is an inlined call arms, stops at the call line, next runs over the body and step enters it'
 	let staged = builtFixture(InlinedCallLineCaseLabel, fixture: LeafPairFixtureName)
-	let callLine = anchorLine(staged, anchor: "first-call")
-	let followingLine = anchorLine(staged, anchor: "second-call")
-	let bodyLine = anchorLine(staged, anchor: "double-body")
+	let callLine = anchorLine(staged.join(StagedProgramFileName), anchor: "first-call")
+	let followingLine = anchorLine(staged.join(StagedProgramFileName), anchor: "second-call")
+	let bodyLine = anchorLine(staged.join(StagedProgramFileName), anchor: "double-body")
 	let executable = builtExecutable(staged)
 
 	let overSession = spawnDebugBatch(executable, staged: staged, commands: debugCommandLine(["{BreakCommand} {lineTarget(callLine)}", RunCommand, NextCommand]), extraOptions: StringArray.create())
@@ -15,13 +15,13 @@ test 'a line whose whole statement is an inlined call arms, stops at the call li
 	let overSaid = renderedEvents(overSession.stdout, stderr: overSession.stderr)
 	let answers = eventsOfKind(overEvents, kind: BreakpointEventName)
 
-	try Expect.equal(answers.count(), expected: 1, message: "`{BreakCommand} {lineTarget(callLine)}` answers one `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(overEvents))}. {overSaid}")
+	try Expect.equal(answers.count(), expected: 1, message: "`{BreakCommand} {lineTarget(callLine)}` answers one `{BreakpointEventName}` event. It printed: {listedLines(eventKinds(overEvents))}. {overSaid}")
 
 	let armed = eventAt(answers, index: 0)
 	try Expect.equal(textOf(armed, node: armed.root, key: ActionKey), expected: SetAction, message: "control passes through the call line — its code is the inlined body — so the line arms at the body's first instruction rather than answering that it has no code. {overSaid}")
 
 	let overStops = eventsOfKind(overEvents, kind: StopEventName)
-	try Expect.equal(overStops.count(), expected: 2, message: "the breakpoint on the call line and the `{NextCommand}` from it are two stops. It printed: {renderedRows(eventKinds(overEvents))}. {overSaid}")
+	try Expect.equal(overStops.count(), expected: 2, message: "the breakpoint on the call line and the `{NextCommand}` from it are two stops. It printed: {listedLines(eventKinds(overEvents))}. {overSaid}")
 
 	let atTheCall = eventAt(overStops, index: 0)
 	try Expect.equal(textOf(atTheCall, node: atTheCall.root, key: ReasonKey), expected: BreakpointStopReason, message: "the first stop is the breakpoint's. {overSaid}")
@@ -42,7 +42,7 @@ test 'a line whose whole statement is an inlined call arms, stops at the call li
 	let intoSaid = renderedEvents(intoSession.stdout, stderr: intoSession.stderr)
 	let intoStops = eventsOfKind(intoEvents, kind: StopEventName)
 
-	try Expect.equal(intoStops.count(), expected: 2, message: "the breakpoint on the call line and the `{StepCommand}` from it are two stops. It printed: {renderedRows(eventKinds(intoEvents))}. {intoSaid}")
+	try Expect.equal(intoStops.count(), expected: 2, message: "the breakpoint on the call line and the `{StepCommand}` from it are two stops. It printed: {listedLines(eventKinds(intoEvents))}. {intoSaid}")
 
 	let entered = eventAt(intoStops, index: 1)
 	try Expect.equal(textOf(entered, node: entered.root, key: FunctionKey), expected: LeafFunctionName, message: "`{StepCommand}` from the call line enters the inlined body. {intoSaid}")

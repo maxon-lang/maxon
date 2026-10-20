@@ -6,17 +6,12 @@ let InternerLogFlag = "--log=compiler:debug"
 let InternerLinePrefix = "[CMP] DEBUG: typeNames "
 let InternerNoRegrowthsSuffix = "regrowths 0"
 
-let InternerMainFileName = "main.maxon"
 let InternerShapeFileName = "shape.maxon"
 let InternerLabelFileName = "label.maxon"
 
 let InternerMainSource = "function main() returns ExitCode\n\tlet shape = Shape.create(3)\n\tlet label = Label.create(3)\n\n\tif label.rank == 3 and shape.side == 3 'matched'\n\t\treturn 0\n\tend 'matched'\n\n\treturn 1\nend 'main'\n"
 let InternerShapeSource = "export typealias ShapeSide = int(0 to 4096)\n\nexport type Shape\n\texport var side as ShapeSide\n\n\texport static function create(side ShapeSide) returns Shape\n\t\treturn Shape\{side: side\}\n\tend 'create'\nend 'Shape'\n"
 let InternerLabelSource = "export typealias LabelRank = int(0 to 4096)\n\nexport type Label\n\texport var rank as LabelRank\n\n\texport static function create(rank LabelRank) returns Label\n\t\treturn Label\{rank: rank\}\n\tend 'create'\nend 'Label'\n"
-
-function writeInternerFixture(directory FilePath, name String, content String)
-	try File.writeText(directory.join(name), content: content) otherwise panic("interner-presize: the gate could not run - could not write {name}")
-end 'writeInternerFixture'
 
 test 'the type-name interner is pre-sized and never regrows'
 	requireHeldOutsideCheckout(InternerCaseDirName, check: InternerNeverRegrows.create())
@@ -28,13 +23,13 @@ type InternerNeverRegrows implements OutsideCheckoutCase
 	end 'create'
 
 	export function requireHeldIn(dir FilePath) throws TestFailure
-		let app = createdStagedDirectory(dir.join(InternerAppDirName))
+		let app = stagingDir(dir.join(InternerAppDirName).toString())
 
-		writeInternerFixture(app, name: InternerMainFileName, content: InternerMainSource)
-		writeInternerFixture(app, name: InternerShapeFileName, content: InternerShapeSource)
-		writeInternerFixture(app, name: InternerLabelFileName, content: InternerLabelSource)
+		writeStagedFile(app.join(StagedProgramFileName), content: InternerMainSource)
+		writeStagedFile(app.join(InternerShapeFileName), content: InternerShapeSource)
+		writeStagedFile(app.join(InternerLabelFileName), content: InternerLabelSource)
 
-		let built = runDriver([BuildCommandWord, InternerAppDirName, InternerLogFlag], workingDirectory: dir)
+		let built = spawnCompiler([BuildCommandWord, InternerAppDirName, InternerLogFlag], staged: dir)
 		let said = "It wrote to stderr: {built.stderr}"
 
 		try Expect.equal(built.exitCode(), expected: 0, message: "a three-file directory did not build under {InternerLogFlag}. {said}")

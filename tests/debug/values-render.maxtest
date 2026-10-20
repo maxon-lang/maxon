@@ -15,17 +15,17 @@ let CarryingCaseName = "carrying"
 
 test 'every kind of local renders as itself, and an enum shows the case name its raw tag stands for'
 	let staged = builtFixture(ValuesRenderCaseLabel, fixture: ValuesFixtureName)
-	let renderedAt = anchorLine(staged, anchor: "rendered")
+	let renderedAt = anchorLine(staged.join(StagedProgramFileName), anchor: "rendered")
 	let commands = debugCommandLine(["{BreakCommand} {lineTarget(renderedAt)}", RunCommand, LocalsCommand])
 	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let listings = eventsOfKind(events, kind: LocalsEventName)
 
-	Expect.equal(listings.count(), expected: 1, message: "`{LocalsCommand}` at a stop printed no `{LocalsEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(listings.count(), expected: 1, message: "`{LocalsCommand}` at a stop printed no `{LocalsEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let listed = eventAt(listings, index: 0)
-	let rows = renderedRows(valueRows(listed, node: listed.root, key: LocalsKey))
+	let rows = listedLines(valueRows(listed, node: listed.root, key: LocalsKey))
 
 	Expect.contains(rows, needle: WholeLocalRendering, message: "an integer renders in decimal. The locals were: {rows}. {said}")
 	Expect.contains(rows, needle: LevelLocalRendering, message: "a RANGED integer is still an integer and renders as its value, not as its range. The locals were: {rows}. {said}")
@@ -38,14 +38,14 @@ test 'every kind of local renders as itself, and an enum shows the case name its
 	let parcelValues = valueNamed(listed, node: listed.root, key: LocalsKey, name: ParcelLocalName)
 	Expect.equal(parcelValues.count(), expected: 1, message: "the struct local `{ParcelLocalName}` is not in the listing. The locals were: {rows}. {said}")
 
-	let parcelFields = renderedRows(valueRows(listed, node: nodeAt(parcelValues, index: 0), key: ChildrenKey))
+	let parcelFields = listedLines(valueRows(listed, node: nodeAt(parcelValues, index: 0), key: ChildrenKey))
 	Expect.contains(parcelFields, needle: "width=3", message: "a struct renders its FIELDS as children, each under its own name. `{ParcelLocalName}`'s children were: {parcelFields}. {said}")
 	Expect.contains(parcelFields, needle: "height=4", message: "`{ParcelLocalName}`'s children were: {parcelFields}. {said}")
 
 	let itemValues = valueNamed(listed, node: listed.root, key: LocalsKey, name: ItemsLocalName)
 	Expect.equal(itemValues.count(), expected: 1, message: "the Array local `{ItemsLocalName}` is not in the listing. The locals were: {rows}. {said}")
 
-	let itemElements = renderedRows(valueRows(listed, node: nodeAt(itemValues, index: 0), key: ChildrenKey))
+	let itemElements = listedLines(valueRows(listed, node: nodeAt(itemValues, index: 0), key: ChildrenKey))
 	Expect.contains(itemElements, needle: "=1", message: "an Array renders its ELEMENTS as children. `{ItemsLocalName}`'s children were: {itemElements}. {said}")
 	Expect.contains(itemElements, needle: "=2", message: "`{ItemsLocalName}`'s children were: {itemElements}. {said}")
 

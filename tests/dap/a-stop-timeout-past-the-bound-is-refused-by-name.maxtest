@@ -26,8 +26,8 @@ type OversizedTimeoutSession implements DapSession
 end 'OversizedTimeoutSession'
 
 test 'a launch whose stop timeout is past every bound the debugger keeps is refused by name'
-	let staged = dapStagedFixture(OversizedTimeoutCaseLabel, fixture: SteppingFixtureName)
-	var session = OversizedTimeoutSession.create(dapBuildFixture(staged))
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: OversizedTimeoutCaseLabel, fixture: SteppingFixtureName)
+	var session = OversizedTimeoutSession.create(buildStagedSource(staged.join(StagedProgramFileName), staged: staged))
 	try dapRunSession(session, completing: "answer the launch")
 
 	try Expect.isFalse(session.launched, message: "`{StopTimeoutArgument}` of {PastTheBound} seconds is past the bound the CLI's `--stop-timeout` keeps, and the two doors share one validator")

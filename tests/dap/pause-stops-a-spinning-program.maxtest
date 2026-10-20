@@ -30,8 +30,8 @@ type PauseSession implements DapSession
 end 'PauseSession'
 
 test 'pause stops a program that would otherwise never stop'
-	let staged = dapStagedFixture(PauseCaseLabel, fixture: SpinFixtureName)
-	var session = PauseSession.create(dapBuildFixture(staged))
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: PauseCaseLabel, fixture: SpinFixtureName)
+	var session = PauseSession.create(buildStagedSource(staged.join(StagedProgramFileName), staged: staged))
 	try dapRunSession(session, completing: "complete")
 
 	try Expect.isTrue(session.pauseAnswered, message: "`{PauseCommand}` must answer its own request successfully, before the stop arrives")

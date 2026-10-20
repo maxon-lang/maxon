@@ -35,8 +35,6 @@ let NeverAnchor = "never"
 let EliminatedAnchor = "eliminated"
 let NoCodeAnchor = "nocode"
 
-// The two markers that are spellings rather than numbers, in the report's own words.
-
 // The summary key this case reads its elimination tally off.
 let EliminatedSummaryKey = "eliminated: "
 
@@ -60,8 +58,8 @@ end 'ListingRowLookup'
 // ============================================================================================
 
 test 'the four line states are told apart and each marker names its own line'
-	let staged = stagedProgram(LineStatesCaseLabel, fixture: StatesFixtureName)
-	let executable = builtExecutable(staged, stem: CoveredOutputStem)
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: LineStatesCaseLabel, fixture: StatesFixtureName)
+	let executable = executableIn(staged, stem: CoveredOutputStem)
 	requireCoverageBuild(staged, output: executable)
 
 	let report = requireCoverageRunReport(staged, executable: executable)
@@ -127,18 +125,18 @@ end 'anchorsUnderTest'
 // row are derived from the same point table, so only asking one about the other can catch a walk that is
 // one row out — which otherwise reads as a complete, plausible listing.
 function requireRowNamesItsOwnLine(report String, staged FilePath, anchor String) throws TestFailure
-	let line = anchoredLineNumber(staged, anchor: anchor)
+	let line = anchorLine(staged.join(StagedProgramFileName), anchor: anchor)
 
 	match listingRow(report, line: line) 'listed'
 		none then try Expect.fail("the annotated listing prints no row for line {line}, which the staged fixture anchors as `{anchor}`. The listing prints EVERY line of a reported file — that is what makes a blank marker mean 'no coverage point' rather than 'not shown' — so a missing line is one whose state a reader cannot ask about at all. The report reads:{LineFeed}{report}")
-		found(row) then try Expect.contains(rowSourceText(row), needle: "{AnchorPrefix}{anchor}", message: "the listing's row for line {line} does not print the source line the staged fixture anchors as `{anchor}`. The marker column and the line-number column come from the same point table, so a listing walk that is one row out prints a full, plausible set of markers against the wrong lines. The row reads: {row}")
+		found(row) then try Expect.contains(rowSourceText(row), needle: "{AnchorMarker}{anchor}", message: "the listing's row for line {line} does not print the source line the staged fixture anchors as `{anchor}`. The marker column and the line-number column come from the same point table, so a listing walk that is one row out prints a full, plausible set of markers against the wrong lines. The row reads: {row}")
 	end 'listed'
 end 'requireRowNamesItsOwnLine'
 
 // The marker column of an anchored line's row. The caller has already asserted the row is there, so its
 // absence here is that assertion broken rather than a state to report.
 function anchoredMarker(report String, staged FilePath, anchor String) returns String
-	let line = anchoredLineNumber(staged, anchor: anchor)
+	let line = anchorLine(staged.join(StagedProgramFileName), anchor: anchor)
 
 	match listingRow(report, line: line) 'listed'
 		none then panic("coverage tests: `{anchor}` has no listing row, which `requireRowNamesItsOwnLine` refuses before any marker is read.")
@@ -149,7 +147,7 @@ end 'anchoredMarker'
 // The listing row for one source line. Rows are told from headers, the legend and the branch section by
 // SHAPE — a listing row is the only line of a report that spells the column separator twice — rather than
 // by a section walk, so a report that grows a section does not silently change what this reads.
-function listingRow(report String, line FixtureLineNumber) returns ListingRowLookup
+function listingRow(report String, line SourceLine) returns ListingRowLookup
 	for text in outputLines(report) 'eachLine'
 		let columns = text.split(ColumnSeparator)
 
@@ -159,7 +157,7 @@ function listingRow(report String, line FixtureLineNumber) returns ListingRowLoo
 
 		let numbered = try columns.get(LineNumberColumn) otherwise continue
 
-		if decimalValue(numbered) as FixtureLineNumber == line 'theRow'
+		if decimalValue(numbered) == line as PrintedNumber 'theRow'
 			return ListingRowLookup.found(text)
 		end 'theRow'
 	end 'eachLine'

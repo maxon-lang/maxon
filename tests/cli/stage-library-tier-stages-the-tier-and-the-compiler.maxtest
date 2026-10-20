@@ -11,7 +11,7 @@ test 'stage-library-tier copies both tiers and the compiler into the directory i
 	let dir = freshCaseDir(CaseDirName)
 	let tier = dir.join(TierDirName)
 
-	let staged = runDriver([StageCommandWord, tier.toString()], workingDirectory: dir)
+	let staged = spawnCompiler([StageCommandWord, tier.toString()], staged: dir)
 	let said = "It wrote to stdout: {staged.stdout} and to stderr: {staged.stderr}"
 
 	Expect.equal(staged.exitCode(), expected: 0, message: "`maxon {StageCommandWord} {tier.toString()}` did not exit 0. {said}")
@@ -21,7 +21,7 @@ test 'stage-library-tier copies both tiers and the compiler into the directory i
 end 'stage-library-tier copies both tiers and the compiler into the directory it is given'
 
 test 'stage-library-tier with no directory prints its usage and exits 1'
-	let refused = runDriver([StageCommandWord])
+	let refused = spawnCompiler([StageCommandWord])
 	let said = "It wrote to stdout: {refused.stdout} and to stderr: {refused.stderr}"
 
 	Expect.equal(refused.exitCode(), expected: 1, message: "`maxon {StageCommandWord}` with no directory did not exit 1. {said}")

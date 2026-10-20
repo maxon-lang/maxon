@@ -39,7 +39,7 @@ type FaultStepOutSession implements DapSession
 end 'FaultStepOutSession'
 
 test 'a stepOut and a next from a fault in a callee answer failure and leave the stop walkable'
-	var session = FaultStepOutSession.create(dapBuildLibraryTierFixture(FaultStepOutCaseLabel, fixture: FaultCalleeFixtureName))
+	var session = FaultStepOutSession.create(builtExecutable(builtLibraryTierFixture(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: FaultStepOutCaseLabel, fixture: FaultCalleeFixtureName)))
 	try dapRunSession(session, completing: "refuse both walks from the fault and walk the stop")
 
 	try Expect.equal(session.stopReason, expected: ExceptionReason, message: "the program's first stop is its fault; it said `{session.stopReason}`")
@@ -47,5 +47,5 @@ test 'a stepOut and a next from a fault in a callee answer failure and leave the
 	try Expect.contains(session.stepOutRefusal, needle: FaultIsTerminalText, message: "the refused `{StepOutCommand}` names why; it said `{session.stepOutRefusal}`")
 	try Expect.isFalse(session.nextAnswered, message: "a `{NextCommand}` from the fault is refused as well")
 	try Expect.contains(session.nextRefusal, needle: FaultIsTerminalText, message: "the refused `{NextCommand}` names why; it said `{session.nextRefusal}`")
-	try Expect.isFalse(session.framesAfterRefusals.count() == 0, message: "the refused walks leave the program stopped at its fault, so `{StackTraceCommand}` still walks it; it answered {dapRendered(session.framesAfterRefusals)}")
+	try Expect.isFalse(session.framesAfterRefusals.count() == 0, message: "the refused walks leave the program stopped at its fault, so `{StackTraceCommand}` still walks it; it answered {joined(session.framesAfterRefusals, separator: Space)}")
 end 'a stepOut and a next from a fault in a callee answer failure and leave the stop walkable'

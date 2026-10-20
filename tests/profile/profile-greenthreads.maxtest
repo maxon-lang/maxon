@@ -48,8 +48,8 @@ let PinnedProcessorCount = "MAXON_MAX_PROCS=2"
 let GreenThreadStackCount = 2
 
 test 'two green threads are profiled as themselves and the scheduler is not'
-	let staged = stagedProgram("profile-greenthreads", fixture: GreenThreadsFixtureName)
-	buildProgram(staged, label: GreenThreadsFixtureName, extraArguments: StringArray.create())
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: "profile-greenthreads", fixture: GreenThreadsFixtureName)
+	_ = buildStagedSource(staged.join(StagedProgramFileName), staged: staged, what: GreenThreadsFixtureName)
 
 	var pinned = StringArray.create()
 	pinned.push("{TargetEnvFlagPrefix}{PinnedProcessorCount}")
@@ -77,12 +77,12 @@ test 'two green threads are profiled as themselves and the scheduler is not'
 
 	let busierColumn = nameColumn(treeRowFor(treeRows, names: treeNames, wanted: BusierTaskName))
 	let quieterColumn = nameColumn(treeRowFor(treeRows, names: treeNames, wanted: QuieterTaskName))
-	Expect.equal(busierColumn, expected: quieterColumn, message: "the call tree indents `{BusierTaskName}` and `{QuieterTaskName}` differently, though neither called the other: two green threads are siblings under the frame that spawned them. A difference here means one task's stack was walked into the other's. It printed:{LineFeed}{renderedRows(treeRows)}")
+	Expect.equal(busierColumn, expected: quieterColumn, message: "the call tree indents `{BusierTaskName}` and `{QuieterTaskName}` differently, though neither called the other: two green threads are siblings under the frame that spawned them. A difference here means one task's stack was walked into the other's. It printed:{LineFeed}{terminatedLines(treeRows)}")
 
 	// ⭐ CLAIM 2 — two stacks, because two green threads ran. Nothing enumerated them; their stack allocations
 	// did.
 	let stackNames = rowNames(significantRows(sectionRows(lines, header: StacksHeader), totalSamples: samples))
-	Expect.equal(stackNames.count(), expected: GreenThreadStackCount, message: "the report lists {stackNames.count()} stack(s) above this corpus's floor, and the fixture runs {GreenThreadStackCount} green threads on {PinnedProcessorCount}. ONE would mean both tasks were folded onto the worker that happened to run them, which is the whole failure this case exists to catch. It listed:{LineFeed}{renderedRows(stackNames)}")
+	Expect.equal(stackNames.count(), expected: GreenThreadStackCount, message: "the report lists {stackNames.count()} stack(s) above this corpus's floor, and the fixture runs {GreenThreadStackCount} green threads on {PinnedProcessorCount}. ONE would mean both tasks were folded onto the worker that happened to run them, which is the whole failure this case exists to catch. It listed:{LineFeed}{terminatedLines(stackNames)}")
 
 	// ⭐⭐ CLAIM 3 — and the scheduler is nowhere, at any floor, in any section. Asserted over the WHOLE report
 	// rather than over the rows above a floor: a scheduler summarized into a "not shown" count is still a
@@ -92,11 +92,11 @@ end 'two green threads are profiled as themselves and the scheduler is not'
 
 // Both tasks present, and the busier one first — asked of two sections, so it is written once.
 function requireBothTasksRanked(names StringArray, section String, report String) throws TestFailure
-	try Expect.isTrue(names.contains(BusierTaskName), message: "'{section}' does not list `{BusierTaskName}`, a green thread that spends the run doing arithmetic. A profiler that saw only OS threads would name the worker that ran it instead. It listed:{LineFeed}{renderedRows(names)}{LineFeed}The whole report was:{LineFeed}{report}")
-	try Expect.isTrue(names.contains(QuieterTaskName), message: "'{section}' does not list `{QuieterTaskName}`, the second green thread — half the work of `{BusierTaskName}`, which is several times this corpus's floor rather than a rounding error. A report naming only one of two tasks is one that folded them together. It listed:{LineFeed}{renderedRows(names)}{LineFeed}The whole report was:{LineFeed}{report}")
+	try Expect.isTrue(names.contains(BusierTaskName), message: "'{section}' does not list `{BusierTaskName}`, a green thread that spends the run doing arithmetic. A profiler that saw only OS threads would name the worker that ran it instead. It listed:{LineFeed}{terminatedLines(names)}{LineFeed}The whole report was:{LineFeed}{report}")
+	try Expect.isTrue(names.contains(QuieterTaskName), message: "'{section}' does not list `{QuieterTaskName}`, the second green thread — half the work of `{BusierTaskName}`, which is several times this corpus's floor rather than a rounding error. A report naming only one of two tasks is one that folded them together. It listed:{LineFeed}{terminatedLines(names)}{LineFeed}The whole report was:{LineFeed}{report}")
 	let busierPosition = positionOf(names, wanted: BusierTaskName)
 	let quieterPosition = positionOf(names, wanted: QuieterTaskName)
-	try Expect.lessThan(busierPosition, than: quieterPosition, message: "'{section}' ranks `{QuieterTaskName}` above `{BusierTaskName}`, though the fixture gives `{BusierTaskName}` twice the work. The ratio is deliberate: with equal work this ordering would be a coin flip, and with it the ordering is a fact about the program. It listed:{LineFeed}{renderedRows(names)}")
+	try Expect.lessThan(busierPosition, than: quieterPosition, message: "'{section}' ranks `{QuieterTaskName}` above `{BusierTaskName}`, though the fixture gives `{BusierTaskName}` twice the work. The ratio is deliberate: with equal work this ordering would be a coin flip, and with it the ordering is a fact about the program. It listed:{LineFeed}{terminatedLines(names)}")
 end 'requireBothTasksRanked'
 
 // The call-tree row a name was found on. The name's presence has already been asserted, so the lookup cannot

@@ -1,8 +1,6 @@
 let CompilerSourceRoot = "maxon-bin"
-let CompilerSourceExtension = ".maxon"
 let HiddenEntryPrefix = "."
 let LineComment = "//"
-let LineFeed = "\n"
 let MovedFromWrite = ".movedFrom = "
 let BoundValueWrite = ".boundValue = "
 let SetterMovedFromWrite = "self.movedFrom = "
@@ -28,7 +26,7 @@ function compilerSourceRoot() returns FilePath
 end 'compilerSourceRoot'
 
 function collectDirectWrites(dir FilePath, into StringArray)
-	let entries = try Directory.list(dir) otherwise panic("owned-binding-move-state: the gate could not run - could not list {dir.toString()}. Every path in this file is relative to the CHECKOUT ROOT, which is the working directory a test binary inherits from `maxon test`.")
+	let entries = listing(dir)
 
 	for entry in entries 'eachEntry'
 		if entry.filename().startsWith(HiddenEntryPrefix) 'aBuildOutputDirectory'
@@ -37,14 +35,14 @@ function collectDirectWrites(dir FilePath, into StringArray)
 
 		if Directory.isDirectory(entry) 'aSubdirectory'
 			collectDirectWrites(entry, into: into)
-		end 'aSubdirectory' else if entry.filename().endsWith(CompilerSourceExtension) 'aSource'
+		end 'aSubdirectory' else if entry.filename().endsWith(MaxonSourceSuffix) 'aSource'
 			collectDirectWritesIn(entry, into: into)
 		end 'aSource'
 	end 'eachEntry'
 end 'collectDirectWrites'
 
 function collectDirectWritesIn(source FilePath, into StringArray)
-	let text = try File.readText(source) otherwise panic("owned-binding-move-state: the gate could not run - could not read {source.toString()}")
+	let text = fileText(source)
 	var number = 0 as LineNumber
 
 	for line in text.split(LineFeed) 'eachLine'

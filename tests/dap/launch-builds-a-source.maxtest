@@ -30,8 +30,8 @@ type SourceLaunchSession implements DapSession
 end 'SourceLaunchSession'
 
 test 'a launch naming a maxon source builds it and stops in what it built'
-	let staged = dapStagedFixture(SourceLaunchCaseLabel, fixture: SteppingFixtureName)
-	var session = SourceLaunchSession.create(dapStagedSource(staged), anchored: dapAnchorLine(staged, anchor: OuterCallAnchor))
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: SourceLaunchCaseLabel, fixture: SteppingFixtureName)
+	var session = SourceLaunchSession.create(staged.join(StagedProgramFileName), anchored: anchorLine(staged.join(StagedProgramFileName), anchor: OuterCallAnchor))
 	try dapRunSession(session, completing: "complete")
 
 	try Expect.isTrue(dapSuccess(session.launch), message: "`{LaunchCommand}` refused a `.maxon` source. A build failure answers the request with the compiler's diagnostics, so this is what it said: {dapDescribed(session.launch)}")

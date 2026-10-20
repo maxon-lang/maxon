@@ -19,6 +19,11 @@
 // root would load everything under it for a program `maxon build <file>` compiles from its own
 // directory. A client that names no root leaves the climb uncapped.
 //
+// The ladder names a project's directory and nothing more. Which files the project holds, and the
+// root its namespaces are measured from, is `projectSourcesIn`'s answer: the `sources` its
+// `.maxproj` lists, as `maxon build` reads them, or the directory's walk. The `.maxproj` is run
+// only in a trusted workspace, and off the session loop (`LspProjectResolver`).
+//
 // The named roots change mid-session: `workspace/didChangeWorkspaceFolders` adds and removes them, and
 // a removed root takes every project held under it. The sweep under a root prunes a directory holding
 // a `.maxproj`: projects do not nest, and a nested one must not change the outer project's index.
@@ -112,7 +117,7 @@ end 'TierMembership'
 // result is what decides which files are unregistered, and one folder that cannot be listed — a
 // branch switch, a build in the same tree, a denied ACL — would otherwise unregister every file
 // of the project.
-union SourceSweep
+module union SourceSweep
 	swept(sources MaxonSourcePathArray)
 	walkFailed
 end 'SourceSweep'
@@ -125,35 +130,47 @@ end 'SourceSweep'
 // A file created on disk and a file deleted from it are both noticed at that walk and not before,
 // while a file's content is re-read every request.
 //
+// A walk whose source set roots elsewhere answers `rerooted` and the corpus is rebuilt: a
+// `Project`'s root fixes every file's namespace for its whole life.
+//
 // `tests/lsp/definition-notices-a-file-created-on-disk.maxtest` holds the re-walk in place.
 type HeldCorpus
 	var project as Project
 	let selection as SourceSelection
+	let buildRoot as FilePath
 	module var sweep as SourceSweep
 	var sweptAtMs as InstantMs
 
-	static function create(project Project, selection SourceSelection, sweep SourceSweep, sweptAtMs InstantMs) returns HeldCorpus
-		return Self{project: project, selection: selection, sweep: sweep, sweptAtMs: sweptAtMs}
+	static function create(project Project, selection SourceSelection, sources EditorSources, sweptAtMs InstantMs) returns HeldCorpus
+		return Self{project: project, selection: selection, buildRoot: sources.root.clone(), sweep: sources.sweep.clone(), sweptAtMs: sweptAtMs}
 	end 'create'
 
-	function sweptFor(root WorkspaceRoot, request SweepRequest) returns SweptProject
-		resweep(root)
+	function sweptFor(root WorkspaceRoot, request SweepRequest, workspace LspWorkspaceState) returns SweptProject
+		if self.resweepMovesTheRoot(root, readerPath: documentOf(request), workspace: workspace) 'rerooted'
+			return SweptProject.rerooted
+		end 'rerooted'
 
 		return self.project.sweptOver(self.sweep, request: request)
 	end 'sweptFor'
 
-	function resweep(root WorkspaceRoot)
-		if sweepIsFresh() 'sweptRecently'
-			return
+	function resweepMovesTheRoot(root WorkspaceRoot, readerPath FilePath, workspace LspWorkspaceState) returns bool
+		if self.sweepIsFresh() 'sweptRecently'
+			return false
 		end 'sweptRecently'
 
-		let walk = sourcesUnder(root, selection: self.selection)
+		let sources = sourcesUnder(root, selection: self.selection, readerPath: readerPath, workspace: workspace)
 
-		match walk 'walk'
-			swept then holdCompletedWalk(walk)
-			walkFailed then return
+		if not sources.root.equals(self.buildRoot) 'rootMoved'
+			return true
+		end 'rootMoved'
+
+		match sources.sweep 'walk'
+			swept then self.holdCompletedWalk(sources)
+			walkFailed then break
 		end 'walk'
-	end 'resweep'
+
+		return false
+	end 'resweepMovesTheRoot'
 
 	function sweepIsFresh() returns bool
 		return match self.sweep 'sweep'
@@ -162,8 +179,8 @@ type HeldCorpus
 		end 'sweep'
 	end 'sweepIsFresh'
 
-	function holdCompletedWalk(walk SourceSweep)
-		self.sweep = walk
+	function holdCompletedWalk(sources EditorSources)
+		self.sweep = sources.sweep.clone()
 		self.sweptAtMs = Clock.nowMs()
 	end 'holdCompletedWalk'
 
@@ -207,7 +224,14 @@ type HeldWorkspace
 		if self.corpora.contains(selection) 'heldAlready'
 			var held = try self.corpora.get(selection) otherwise panic("HeldWorkspace.sweptFor: the corpus for this selection was found one line above")
 
-			return held.sweptFor(root, request: request)
+			var swept = held.sweptFor(root, request: request, workspace: workspace)
+
+			match swept 'outcome'
+				rerooted then _ = self.corpora.remove(selection)
+				read or
+				loaded or
+				unavailable then return swept
+			end 'outcome'
 		end 'heldAlready'
 
 		match root 'root'
@@ -219,7 +243,7 @@ type HeldWorkspace
 
 	function announcedSwept(root WorkspaceRoot, key String, selection SourceSelection, tiers LibraryTiers, request SweepRequest, workspace LspWorkspaceState) returns SweptProject
 		writeProjectLoadingNotification(workspace.writer, rootPath: key, loading: true)
-		let swept = self.builtSwept(root, selection: selection, tiers: tiers, request: request, workspace: workspace)
+		var swept = self.builtSwept(root, selection: selection, tiers: tiers, request: request, workspace: workspace)
 		writeProjectLoadingNotification(workspace.writer, rootPath: key, loading: false)
 
 		return swept
@@ -228,15 +252,17 @@ type HeldWorkspace
 	// Every return here reaches the `loading: false` in `announcedSwept`; one that skipped it would leave
 	// the client showing this project as loading for the rest of the session.
 	function builtSwept(root WorkspaceRoot, selection SourceSelection, tiers LibraryTiers, request SweepRequest, workspace LspWorkspaceState) returns SweptProject
-		var project = try libraryTierProject(buildRootOf(root, readerPath: documentOf(request)), tiers: tiers, buffer: OpenBuffer.none, fileMemos: workspace.fileMemos) otherwise return SweptProject.unavailable
-		var fresh = HeldCorpus.create(project, selection: selection, sweep: sourcesUnder(root, selection: selection), sweptAtMs: Clock.nowMs())
+		let sources = sourcesUnder(root, selection: selection, readerPath: documentOf(request), workspace: workspace)
+		var project = try libraryTierProject(sources.root, tiers: tiers, buffer: OpenBuffer.none, fileMemos: workspace.fileMemos) otherwise return SweptProject.unavailable
+		var fresh = HeldCorpus.create(project, selection: selection, sources: sources, sweptAtMs: Clock.nowMs())
 
-		var swept = fresh.sweptFor(root, request: request)
+		var swept = fresh.sweptFor(root, request: request, workspace: workspace)
 
 		match swept 'outcome'
 			read or
 			loaded then self.corpora.upsert(selection, value: fresh)
 			unavailable then return SweptProject.unavailable
+			rerooted then panic("HeldWorkspace.builtSwept: a corpus built a moment ago holds the root its own sweep named")
 		end 'outcome'
 
 		return swept
@@ -269,6 +295,7 @@ union SweptProject
 	read(project Project, signatures ProgramSignatures, readerPath FilePath)
 	loaded
 	unavailable
+	rerooted
 end 'SweptProject'
 
 typealias HeldProjectKeyArray = Array with String
@@ -284,18 +311,56 @@ let HeldProjectCapacity = 8
 
 let WorkspaceResweepIntervalMs = 1000
 
+// How long an unbuilt or refused answer holds while the `.maxproj` text and the trust are
+// unchanged. Any other answer holds until one of the two changes
+// (`ProjectInputsAnswer.stillAnswers`).
+let UnresolvedProjectRetryMs = 10000
+
 let ProjectLoadingMethod = "maxon/projectLoading"
 let ProjectLoadingKey = "loading"
 
 module type LspWorkspaceState
 	module var held as RecentHeldRoots
+	module var trusted as bool
 	module var namedRoots as LspClientRootArray
 	module var fileMemos as SharedFileMemoMap
 	module let writer as LspStdoutWriter.handle
+	module let resolver as LspProjectResolver.handle
+	module var arrivals as LspArrivalPromiseArray
+	var nextResolutionTicket as ResolutionTicket
 
-	module static function create(writer LspStdoutWriter.handle) returns LspWorkspaceState
-		return Self{held: RecentHeldRoots.create(), namedRoots: LspClientRootArray.create(), fileMemos: SharedFileMemoMap.create(), writer: writer}
+	module static function create(writer LspStdoutWriter.handle, resolver LspProjectResolver.handle) returns LspWorkspaceState
+		return Self{held: RecentHeldRoots.create(), trusted: true, namedRoots: LspClientRootArray.create(), fileMemos: SharedFileMemoMap.create(), writer: writer, resolver: resolver, arrivals: LspArrivalPromiseArray.create(), nextResolutionTicket: 0}
 	end 'create'
+
+	module function projectInputsOf(dir FilePath) returns ProjectInputsAnswer
+		var root = self.held.rootAt(dir.toString())
+
+		return root.inputs.answerFor(dir, workspace: self)
+	end 'projectInputsOf'
+
+	module function projectResolved(dir FilePath, answer ProjectInputsAnswer, ticket ResolutionTicket) returns bool
+		var root = try self.held.peek(dir.toString()) otherwise return false
+
+		return root.inputs.hold(answer, ticket: ticket)
+	end 'projectResolved'
+
+	module function nextArrival() returns LspArrival
+		let ready = self.arrivals.awaitAny()
+		let frame = try self.arrivals.get(LspFrameSlot) otherwise panic("LspWorkspaceState.nextArrival: a session that is still serving awaits a frame in its first slot")
+		let taken = LspFrameSlot if frame.isComplete() else ready
+		let arrival = try self.arrivals.remove(taken) otherwise panic("LspWorkspaceState.nextArrival: awaitAny named a slot of the array it was asked about")
+
+		return await arrival
+	end 'nextArrival'
+
+	function requestResolution(dir FilePath) returns ResolutionTicket
+		self.nextResolutionTicket = self.nextResolutionTicket + 1
+		let ticket = self.nextResolutionTicket
+		self.arrivals.push(try self.resolver.resolve(dir.clone(), ticket: ticket, sendTimeout: ForeverMs) otherwise panic("LspWorkspaceState.requestResolution: a send that waits forever for room, to a resolver this workspace holds, was refused"))
+
+		return ticket
+	end 'requestResolution'
 end 'LspWorkspaceState'
 
 module function lspRememberClientRoots(workspace LspWorkspaceState, roots LspClientRootArray)
@@ -492,6 +557,7 @@ function sweptWorkspace(workspace LspWorkspaceState, root WorkspaceRoot, tiers L
 		read(project, signatures, reader) then return LspCorpus.loaded(project, signatures: signatures, readerPath: reader)
 		unavailable then return LspCorpus.unavailable
 		loaded then panic("sweptWorkspace: a request that reads is answered with the reader's corpus or not at all")
+		rerooted then panic("sweptWorkspace: a held workspace rebuilds a corpus whose root moved before it answers")
 	end 'swept'
 end 'sweptWorkspace'
 
@@ -514,6 +580,7 @@ function heldProjectSwept(workspace LspWorkspaceState, root WorkspaceRoot, tiers
 		read or
 		loaded then workspace.held.holdWorkspace(key, workspace: fresh)
 		unavailable then break
+		rerooted then panic("heldProjectSwept: a held workspace rebuilds a corpus whose root moved before it answers")
 	end 'outcome'
 
 	return swept
@@ -559,15 +626,16 @@ end 'HeldCheckerSlot'
 type HeldRoot
 	module var workspace as HeldWorkspaceSlot
 	module var checker as HeldCheckerSlot
+	module var inputs as ProjectInputsMemo
 
 	static function create() returns HeldRoot
-		return Self{workspace: HeldWorkspaceSlot.notBuilt, checker: HeldCheckerSlot.notSpawned}
+		return Self{workspace: HeldWorkspaceSlot.notBuilt, checker: HeldCheckerSlot.notSpawned, inputs: ProjectInputsMemo.create()}
 	end 'create'
 end 'HeldRoot'
 
 typealias HeldRootMap = Map with (String, HeldRoot)
 
-type RecentHeldRoots
+module type RecentHeldRoots
 	var roots as HeldRootMap
 	var order as HeldProjectKeyArray
 
@@ -589,6 +657,13 @@ type RecentHeldRoots
 
 		return held
 	end 'recentAt'
+
+	module function forgetCorpora()
+		for key in self.order 'eachKey'
+			var held = try self.roots.get(key) otherwise continue
+			held.workspace = HeldWorkspaceSlot.notBuilt
+		end 'eachKey'
+	end 'forgetCorpora'
 
 	function holdWorkspace(key String, workspace HeldWorkspace)
 		var held = self.rootAt(key)
@@ -660,13 +735,311 @@ module function lspBufferRootOf(reader LspReaderSearch) returns FilePath
 	end 'tier'
 end 'lspBufferRootOf'
 
-function sourcesUnder(root WorkspaceRoot, selection SourceSelection) returns SourceSweep
+module type EditorSources
+	module let sweep as SourceSweep
+	module let root as FilePath
+	module let refusal as StringArray
+
+	module static function walked(sweep SourceSweep, root FilePath) returns EditorSources
+		return Self{sweep: sweep, root: root, refusal: StringArray.create()}
+	end 'walked'
+
+	module static function refused(root FilePath, lines StringArray) returns EditorSources
+		return Self{sweep: SourceSweep.walkFailed, root: root, refusal: lines}
+	end 'refused'
+end 'EditorSources'
+
+function sourcesUnder(root WorkspaceRoot, selection SourceSelection, readerPath FilePath, workspace LspWorkspaceState) returns EditorSources
 	return match root 'root'
-		projectDirectory(dir) gives maxonSourcesIn(dir, selection: selection)
-		libraryTier(dir) gives maxonSourcesIn(dir, selection: selection)
-		singleFile gives SourceSweep.swept(MaxonSourcePathArray.create())
+		projectDirectory(dir) gives projectSourcesIn(dir, selection: selection, answer: workspace.projectInputsOf(dir))
+		libraryTier(dir) gives EditorSources.walked(maxonSourcesIn(dir, selection: selection), root: buildRootOf(root, readerPath: readerPath))
+		singleFile gives EditorSources.walked(SourceSweep.swept(MaxonSourcePathArray.create()), root: buildRootOf(root, readerPath: readerPath))
 	end 'root'
 end 'sourcesUnder'
+
+module function projectSourcesIn(dir FilePath, selection SourceSelection, answer ProjectInputsAnswer) returns EditorSources
+	match answer.inputs 'inputs'
+		walked or
+		ambiguous or
+		unbuilt then return EditorSources.walked(maxonSourcesIn(dir, selection: selection), root: dir)
+		listed(paths) then return listedSources(paths, selection: selection, projectDir: dir)
+		refused then return EditorSources.refused(dir, lines: answer.refusal.clone())
+	end 'inputs'
+end 'projectSourcesIn'
+
+function listedSources(paths MaxonSourcePathArray, selection SourceSelection, projectDir FilePath) returns EditorSources
+	let root = try commonAncestorOf(paths) otherwise (e) 'noCommonRoot'
+		return EditorSources.refused(projectDir, lines: projectFailureLines(e))
+	end 'noCommonRoot'
+
+	let sources = try namedSourceFiles(paths, selection: selection, nestedProjects: NestedProjectRule.pruned) otherwise (e) 'unlistable'
+		return EditorSources.refused(projectDir, lines: projectFailureLines(e))
+	end 'unlistable'
+
+	return EditorSources.walked(SourceSweep.swept(sources), root: root)
+end 'listedSources'
+
+// ⚠ An answer is keyed on the `.maxproj` text alone, so a project file whose sources depend on
+// another file holds a stale answer until its own text changes. `unknown` equals no stamp, itself
+// included.
+export union ProjectFileStamp
+	absent
+	present(file FilePath, content String)
+	unknown
+end 'ProjectFileStamp'
+
+function projectFileStampIn(dir FilePath) returns ProjectFileStamp
+	let search = try driverFileIn(dir, extension: ProjectFileExtension) otherwise return ProjectFileStamp.unknown
+
+	return match search 'search'
+		found(file) gives stampOfFile(file)
+		none gives ProjectFileStamp.absent
+	end 'search'
+end 'projectFileStampIn'
+
+function stampOfFile(file FilePath) returns ProjectFileStamp
+	let content = try File.readText(file) otherwise return ProjectFileStamp.unknown
+
+	return ProjectFileStamp.present(file, content: content)
+end 'stampOfFile'
+
+function stampsEqual(held ProjectFileStamp, current ProjectFileStamp) returns bool
+	return match current 'current'
+		absent gives holdsNoProjectFile(held)
+		present(file, content) gives holdsThisProjectFile(held, file: file, content: content)
+		unknown gives false
+	end 'current'
+end 'stampsEqual'
+
+function holdsNoProjectFile(stamp ProjectFileStamp) returns bool
+	return match stamp 'stamp'
+		absent gives true
+		present or
+		unknown gives false
+	end 'stamp'
+end 'holdsNoProjectFile'
+
+function holdsThisProjectFile(stamp ProjectFileStamp, file FilePath, content String) returns bool
+	return match stamp 'stamp'
+		present(heldFile, heldContent) gives heldFile.equals(file) and heldContent == content
+		absent or
+		unknown gives false
+	end 'stamp'
+end 'holdsThisProjectFile'
+
+export type ProjectInputsAnswer
+	module let inputs as ProjectInputs
+	module let refusal as StringArray
+	module let notice as StringArray
+	module let trusted as bool
+	module let resolved as bool
+	module let stamp as ProjectFileStamp
+	module let askedAtMs as InstantMs
+
+	module static function create(inputs ProjectInputs, refusal StringArray, notice StringArray, trusted bool, resolved bool, stamp ProjectFileStamp, askedAtMs InstantMs) returns ProjectInputsAnswer
+		return Self{inputs: inputs, refusal: refusal, notice: notice, trusted: trusted, resolved: resolved, stamp: stamp, askedAtMs: askedAtMs}
+	end 'create'
+
+	module function whilePending() returns ProjectInputsAnswer
+		return Self{inputs: self.inputs.clone(), refusal: self.refusal.clone(), notice: self.notice.clone(), trusted: self.trusted, resolved: false, stamp: self.stamp.clone(), askedAtMs: self.askedAtMs}
+	end 'whilePending'
+
+	module function isSettled() returns bool
+		return match self.inputs 'inputs'
+			walked or
+			listed or
+			ambiguous gives true
+			unbuilt or
+			refused gives false
+		end 'inputs'
+	end 'isSettled'
+
+	module function stillAnswers(current ProjectFileStamp, askerTrusts bool) returns bool
+		if self.trusted != askerTrusts 'trustChanged'
+			return false
+		end 'trustChanged'
+
+		if not self.isSettled() and Clock.elapsedMs(self.askedAtMs) >= UnresolvedProjectRetryMs 'unsettledAndExpired'
+			return false
+		end 'unsettledAndExpired'
+
+		return stampsEqual(self.stamp, current: current)
+	end 'stillAnswers'
+
+	module function answersTheRequestFor(current ProjectFileStamp, askerTrusts bool) returns bool
+		return self.trusted == askerTrusts and stampsEqual(self.stamp, current: current)
+	end 'answersTheRequestFor'
+end 'ProjectInputsAnswer'
+
+union HeldProjectInputs
+	nothingAsked
+	asked(answer ProjectInputsAnswer)
+end 'HeldProjectInputs'
+
+union RequestedInputs
+	noRequest
+	requested(provisional ProjectInputsAnswer, ticket ResolutionTicket)
+end 'RequestedInputs'
+
+union InputsDecision
+	settled(answer ProjectInputsAnswer)
+	needsARun(provisional ProjectInputsAnswer)
+end 'InputsDecision'
+
+type ProjectInputsMemo
+	var held as HeldProjectInputs
+	var requested as RequestedInputs
+
+	static function create() returns ProjectInputsMemo
+		return Self{held: HeldProjectInputs.nothingAsked, requested: RequestedInputs.noRequest}
+	end 'create'
+
+	function answerFor(dir FilePath, workspace LspWorkspaceState) returns ProjectInputsAnswer
+		let current = projectFileStampIn(dir)
+
+		match self.reusable(current, trusted: workspace.trusted) 'reusable'
+			asked(answer) then return answer
+			nothingAsked then break
+		end 'reusable'
+
+		match self.outstanding(current, trusted: workspace.trusted) 'outstanding'
+			requested(provisional, _) then return self.shownMeanwhile(provisional)
+			noRequest then break
+		end 'outstanding'
+
+		return self.decided(dir, current: current, workspace: workspace)
+	end 'answerFor'
+
+	function reusable(current ProjectFileStamp, trusted bool) returns HeldProjectInputs
+		return match self.held 'held'
+			nothingAsked gives HeldProjectInputs.nothingAsked
+			asked(answer) gives reusedWhileCurrent(answer, current: current, trusted: trusted)
+		end 'held'
+	end 'reusable'
+
+	function outstanding(current ProjectFileStamp, trusted bool) returns RequestedInputs
+		return match self.requested 'requested'
+			noRequest gives RequestedInputs.noRequest
+			requested(provisional, ticket) gives requestWhileCurrent(provisional, ticket: ticket, current: current, trusted: trusted)
+		end 'requested'
+	end 'outstanding'
+
+	function shownMeanwhile(provisional ProjectInputsAnswer) returns ProjectInputsAnswer
+		return match self.held 'held'
+			nothingAsked gives provisional
+			asked(answer) gives answer.whilePending()
+		end 'held'
+	end 'shownMeanwhile'
+
+	function decided(dir FilePath, current ProjectFileStamp, workspace LspWorkspaceState) returns ProjectInputsAnswer
+		match decisionFor(dir, stamp: current, trusted: workspace.trusted) 'decision'
+			settled(answer) then return self.settle(answer)
+			needsARun(provisional) then return self.request(dir, provisional: provisional, workspace: workspace)
+		end 'decision'
+	end 'decided'
+
+	function settle(answer ProjectInputsAnswer) returns ProjectInputsAnswer
+		self.held = HeldProjectInputs.asked(answer.clone())
+		self.requested = RequestedInputs.noRequest
+
+		return answer
+	end 'settle'
+
+	function request(dir FilePath, provisional ProjectInputsAnswer, workspace LspWorkspaceState) returns ProjectInputsAnswer
+		let ticket = workspace.requestResolution(dir)
+		self.requested = RequestedInputs.requested(provisional.clone(), ticket: ticket)
+
+		return self.shownMeanwhile(provisional)
+	end 'request'
+
+	// A reply carrying any ticket but the awaited one answers a request made before the `.maxproj`
+	// text or the trust last changed, and is dropped.
+	function hold(answer ProjectInputsAnswer, ticket ResolutionTicket) returns bool
+		if not self.awaits(ticket) 'superseded'
+			return false
+		end 'superseded'
+
+		self.held = HeldProjectInputs.asked(answer)
+		self.requested = RequestedInputs.noRequest
+
+		return true
+	end 'hold'
+
+	function awaits(ticket ResolutionTicket) returns bool
+		return match self.requested 'requested'
+			noRequest gives false
+			requested(_, awaited) gives awaited == ticket
+		end 'requested'
+	end 'awaits'
+end 'ProjectInputsMemo'
+
+function reusedWhileCurrent(answer ProjectInputsAnswer, current ProjectFileStamp, trusted bool) returns HeldProjectInputs
+	if not answer.stillAnswers(current, askerTrusts: trusted) 'outdated'
+		return HeldProjectInputs.nothingAsked
+	end 'outdated'
+
+	return HeldProjectInputs.asked(answer)
+end 'reusedWhileCurrent'
+
+function requestWhileCurrent(provisional ProjectInputsAnswer, ticket ResolutionTicket, current ProjectFileStamp, trusted bool) returns RequestedInputs
+	if not provisional.answersTheRequestFor(current, askerTrusts: trusted) 'outdated'
+		return RequestedInputs.noRequest
+	end 'outdated'
+
+	return RequestedInputs.requested(provisional, ticket: ticket)
+end 'requestWhileCurrent'
+
+let UntrustedProjectNotice = "this project's source list applies once the workspace is trusted; until then the project is its directory"
+
+function decisionFor(dir FilePath, stamp ProjectFileStamp, trusted bool) returns InputsDecision
+	var voice = ManifestVoice.forEditor(LspServerCommandName)
+	let need = projectNeedsARun(dir, voice: voice)
+
+	if not trusted 'neverRunsTheProjectFile'
+		return InputsDecision.settled(ProjectInputsAnswer.create(ProjectInputs.walked, refusal: StringArray.create(), notice: untrustedNoticeFor(need), trusted: false, resolved: true, stamp: stamp, askedAtMs: Clock.nowMs()))
+	end 'neverRunsTheProjectFile'
+
+	match need 'need'
+		settled(inputs) then return InputsDecision.settled(answerFrom(inputs.clone(), voice: voice, stamp: stamp))
+		needsARun then return InputsDecision.needsARun(ProjectInputsAnswer.create(ProjectInputs.walked, refusal: StringArray.create(), notice: StringArray.create(), trusted: true, resolved: false, stamp: stamp, askedAtMs: Clock.nowMs()))
+	end 'need'
+end 'decisionFor'
+
+// Stamped before the run and checked after it: a file edited during the run is stamped `unknown`,
+// so the next ask runs it again rather than holding an answer about text that is gone.
+module function resolvedProjectInputs(dir FilePath) returns ProjectInputsAnswer
+	let before = projectFileStampIn(dir)
+	var voice = ManifestVoice.forEditor(LspServerCommandName)
+	let inputs = projectInputs(dir, word: StatedText.unstated, severalTargets: SeveralTargets.holdEvery, voice: voice)
+	let after = projectFileStampIn(dir)
+
+	return answerFrom(inputs, voice: voice, stamp: before if stampsEqual(before, current: after) else ProjectFileStamp.unknown)
+end 'resolvedProjectInputs'
+
+function answerFrom(inputs ProjectInputs, voice ManifestVoice, stamp ProjectFileStamp) returns ProjectInputsAnswer
+	return ProjectInputsAnswer.create(inputs, refusal: refusalOf(inputs, voice: voice), notice: StringArray.create(), trusted: true, resolved: true, stamp: stamp, askedAtMs: Clock.nowMs())
+end 'answerFrom'
+
+function untrustedNoticeFor(need RunNeed) returns StringArray
+	var notice = StringArray.create()
+
+	match need 'need'
+		needsARun then notice.push(UntrustedProjectNotice)
+		settled then break
+	end 'need'
+
+	return notice
+end 'untrustedNoticeFor'
+
+function refusalOf(inputs ProjectInputs, voice ManifestVoice) returns StringArray
+	return match inputs 'inputs'
+		refused gives voice.asOneMessage()
+		walked or
+		listed or
+		ambiguous or
+		unbuilt gives StringArray.create()
+	end 'inputs'
+end 'refusalOf'
 
 function maxonSourcesIn(dir FilePath, selection SourceSelection) returns SourceSweep
 	var sources = MaxonSourcePathArray.create()
@@ -680,7 +1053,8 @@ end 'maxonSourcesIn'
 // file climbing for a `.maxproj` would root its project at whatever tree the tier sits in and sweep
 // every source in it to answer one jump.
 //
-// A `.maxproj` is only a marker here, never read or run; a `.maxtasks` beside it marks nothing.
+// This function only finds the `.maxproj` that marks a project; which files the project holds is
+// `projectSourcesIn`'s answer. A `.maxtasks` beside it marks nothing.
 module function workspaceRootOf(reader LspReaderSearch, purpose RootPurpose) returns WorkspaceRoot
 	match reader.tier 'tier'
 		inTier(dir) then return WorkspaceRoot.libraryTier(dir)
@@ -792,8 +1166,16 @@ extension Project
 		return try queryProgramSignatures(self)
 	end 'foldedSignatures'
 
-	module function refreshFromDisk(readerPath FilePath) returns DiskRefresh throws CompileError
-		let walk = maxonSourcesIn(self.rootPath, selection: SourceSelection.productionOnly)
+	module function refreshFromDisk(sources EditorSources, readerPath FilePath) returns DiskRefresh throws CompileError
+		if not sources.root.equals(self.rootPath) 'rootMoved'
+			return DiskRefresh.rerooted
+		end 'rootMoved'
+
+		if not sources.refusal.isEmpty() 'unresolved'
+			return DiskRefresh.unresolved(sources.refusal)
+		end 'unresolved'
+
+		let walk = sources.sweep
 
 		if not walkLists(walk, path: readerPath) 'notInTheBuild'
 			return DiskRefresh.unlisted
@@ -867,6 +1249,8 @@ end 'isTheRequestsReader'
 module union DiskRefresh
 	listed(reader FilePath)
 	unlisted
+	unresolved(lines StringArray)
+	rerooted
 end 'DiskRefresh'
 
 function walkLists(walk SourceSweep, path FilePath) returns bool

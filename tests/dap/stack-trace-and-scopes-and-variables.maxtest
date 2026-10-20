@@ -42,12 +42,12 @@ type ValuesSession implements DapSession
 end 'ValuesSession'
 
 test 'a stop answers its frames, its scopes and the variables of its Locals scope'
-	let staged = dapStagedFixture(ValuesCaseLabel, fixture: ValuesFixtureName)
-	var session = ValuesSession.create(dapBuildFixture(staged), source: dapStagedSource(staged), anchored: dapAnchorLine(staged, anchor: RenderedAnchor))
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: ValuesCaseLabel, fixture: ValuesFixtureName)
+	var session = ValuesSession.create(buildStagedSource(staged.join(StagedProgramFileName), staged: staged), source: staged.join(StagedProgramFileName), anchored: anchorLine(staged.join(StagedProgramFileName), anchor: RenderedAnchor))
 	try dapRunSession(session, completing: "complete")
 
-	try Expect.equal(dapFrameNameAt(session.frameNames, frame: 0), expected: RenderFunctionName, message: "frame 0 is the INNERMOST frame and the stop is inside `{RenderFunctionName}`; the frames were {dapRendered(session.frameNames)}")
-	try Expect.isTrue(session.scopeNames.contains(LocalsScopeName), message: "an editor's Variables pane is built from the scopes; without a `{LocalsScopeName}` scope it is empty. The scopes were {dapRendered(session.scopeNames)}")
-	try Expect.isTrue(session.variableNames.contains(LabelLocalName), message: "the `{LocalsScopeName}` scope of `{RenderFunctionName}` must name its local `{LabelLocalName}`; it named {dapRendered(session.variableNames)}")
+	try Expect.equal(dapFrameNameAt(session.frameNames, frame: 0), expected: RenderFunctionName, message: "frame 0 is the INNERMOST frame and the stop is inside `{RenderFunctionName}`; the frames were {joined(session.frameNames, separator: Space)}")
+	try Expect.isTrue(session.scopeNames.contains(LocalsScopeName), message: "an editor's Variables pane is built from the scopes; without a `{LocalsScopeName}` scope it is empty. The scopes were {joined(session.scopeNames, separator: Space)}")
+	try Expect.isTrue(session.variableNames.contains(LabelLocalName), message: "the `{LocalsScopeName}` scope of `{RenderFunctionName}` must name its local `{LabelLocalName}`; it named {joined(session.variableNames, separator: Space)}")
 	try Expect.contains(session.labelValue, needle: LabelLocalText, message: "`{LabelLocalName}` holds `{LabelLocalText}` at that line. A variables list that names the right locals with the WRONG values is what an off-by-one frame chain produces; it said {session.labelValue}")
 end 'a stop answers its frames, its scopes and the variables of its Locals scope'

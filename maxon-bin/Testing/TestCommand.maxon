@@ -9,7 +9,7 @@
 // ⛔ A test run takes no tree lock, and that is a requirement. Under `Main.acquireBuildTreeLock`'s
 // rule a project build with no `--output=`, inside a checkout with a `stdlib/` above it, locks the
 // whole checkout, and every case under `tests/test-fixtures/` is such a build, spawned from a
-// `test` that is itself running inside one (`tests/test-command/`); each would come back as exit 2
+// `test` that is itself running inside one (`tests/testCommand/`); each would come back as exit 2
 // with an empty stdout. This command never goes through `runBuild`: it calls
 // `Compiler.compileToProduct` directly, which locks nothing, and it names its own output.
 
@@ -47,7 +47,7 @@ let TestBinaryStem = "maxon-test"
 
 // The usage line a refusal prints under itself.
 function testUsageLine() returns String
-	return "maxon {TestCommandName} [<directory> | <file{TestSourceExtension}>] [{FilterFlagPrefix}PATTERN]... [{TestListFlag} [{TestBuildFlag}]] [--json] [options]"
+	return "maxon {TestCommandName} [target] [<directory> | <file{TestSourceExtension}>] [{FilterFlagPrefix}PATTERN]... [{TestListFlag} [{TestBuildFlag}]] [--json] [options]"
 end 'testUsageLine'
 
 // ============================================================================================
@@ -55,11 +55,11 @@ end 'testUsageLine'
 // ============================================================================================
 
 export function runTest(args MaxonArgs) returns ExitCode
-	if refusedPositionalBeyond(args, allowed: 1, usage: testUsageLine()) 'tooManyPaths'
+	if refusedPositionalBeyond(args, allowed: 2, usage: testUsageLine()) 'tooManyPaths'
 		return NothingRanExitCode
 	end 'tooManyPaths'
 
-	let subject = try testSubject(args) otherwise (e) 'badSubject'
+	let place = try testPlace(args) otherwise (e) 'badSubject'
 		return refuseTestRun(subjectRefusalReason(e))
 	end 'badSubject'
 
@@ -73,10 +73,15 @@ export function runTest(args MaxonArgs) returns ExitCode
 		return refuseTestRun(filterValueRefusalReason(e))
 	end 'emptyFilterValue'
 
-	_ = quietTheBuildChatter(args)
+	let subject = try subjectAt(place, args: args) otherwise (e) 'sourcesRefused'
+		return reportedNotRun(e, args: args)
+	end 'sourcesRefused'
 
-	// The same `subject` reaches discovery and staging, which `TestDispatcher.stageTestBuild` requires.
-	let tests = try discoverTests(testSubjectPath(subject), target: target) otherwise (e) 'discoveryFailed'
+	_ = quietTheBuildChatter(args.logOverridden)
+
+	// The same `subject`'s inputs reach discovery and staging, which `TestDispatcher.stageTestBuild`
+	// requires.
+	let tests = try discoverTests(testSubjectInputs(subject), target: target) otherwise (e) 'discoveryFailed'
 		reportCompileError(e)
 		return NothingRanExitCode
 	end 'discoveryFailed'
@@ -108,14 +113,110 @@ union TestSubjectRefusal implements Error
 	notAPath(spelled String)
 	missing(path FilePath)
 	notATestFile(path FilePath)
+	targetForAFile(word String, path FilePath)
+	unreadTargets(word String)
 end 'TestSubjectRefusal'
 
-function testSubject(args MaxonArgs) returns TestSubject throws TestSubjectRefusal
-	let spelled = try args.positionalAt(SolePositionalIndex) otherwise return TestSubject.projectDirectory(Directory.currentPath())
+union TestLocation
+	projectDirectory(dir FilePath)
+	singleFile(path FilePath)
+end 'TestLocation'
+
+union SubjectNotResolved implements Error
+	notResolved
+	severalTargets(projectFile FilePath, targets TaskNameArray)
+end 'SubjectNotResolved'
+
+function reportedNotRun(refusal SubjectNotResolved, args MaxonArgs) returns ExitCode
+	match refusal 'why'
+		notResolved then return NothingRanExitCode
+		severalTargets(projectFile, targets) then return severalTargetsNotRun(projectFile, targets: targets, args: args)
+	end 'why'
+end 'reportedNotRun'
+
+function severalTargetsNotRun(projectFile FilePath, targets TaskNameArray, args MaxonArgs) returns ExitCode
+	var voice = testVoice(args)
+	reportSeveralTargets(projectFile, targets: targets, voice: voice)
+
+	return NothingRanExitCode
+end 'severalTargetsNotRun'
+
+type TestPlace
+	export let location as TestLocation
+	export let target as StatedText
+
+	static function create(location TestLocation, target StatedText) returns TestPlace
+		return Self{location: location, target: target}
+	end 'create'
+end 'TestPlace'
+
+function subjectAt(place TestPlace, args MaxonArgs) returns TestSubject throws SubjectNotResolved
+	match place.location 'location'
+		projectDirectory(dir) then return try projectSubject(dir, target: place.target, args: args)
+		singleFile(path) then return TestSubject.singleFile(path)
+	end 'location'
+end 'subjectAt'
+
+function projectSubject(dir FilePath, target StatedText, args MaxonArgs) returns TestSubject throws SubjectNotResolved
+	var voice = testVoice(args)
+
+	match projectInputs(dir, word: target, severalTargets: SeveralTargets.refuse, voice: voice) 'inputs'
+		walked then return TestSubject.projectDirectory(dir, sources: MaxonSourcePathArray from [dir])
+		listed(paths) then return TestSubject.projectDirectory(dir, sources: paths)
+		ambiguous(projectFile, targets) then throw SubjectNotResolved.severalTargets(projectFile, targets: targets)
+		unbuilt or
+		refused then throw SubjectNotResolved.notResolved
+	end 'inputs'
+end 'projectSubject'
+
+let TestTargetWordIndex = 0
+let TestSubjectAfterTargetIndex = 1
+
+function testPlace(args MaxonArgs) returns TestPlace throws TestSubjectRefusal
+	let place = try placeNamedBy(args)
+
+	match place.location 'location'
+		singleFile(path) then try requireNoTargetFor(path, target: place.target)
+		projectDirectory then return place
+	end 'location'
+
+	return place
+end 'testPlace'
+
+function requireNoTargetFor(path FilePath, target StatedText) throws TestSubjectRefusal
+	match target 'target'
+		stated(word) then throw TestSubjectRefusal.targetForAFile(word, path: path)
+		unstated then return
+	end 'target'
+end 'requireNoTargetFor'
+
+function placeNamedBy(args MaxonArgs) returns TestPlace throws TestSubjectRefusal
+	if args.paths.count() == 2 'targetAndSubject'
+		let word = try args.positionalAt(TestTargetWordIndex) otherwise panic("placeNamedBy: two positional words were counted")
+		let spelled = try args.positionalAt(TestSubjectAfterTargetIndex) otherwise panic("placeNamedBy: two positional words were counted")
+
+		return TestPlace.create(try testLocation(spelled), target: StatedText.stated(word))
+	end 'targetAndSubject'
+
+	let spelled = try args.positionalAt(SolePositionalIndex) otherwise return TestPlace.create(TestLocation.projectDirectory(Directory.currentPath()), target: StatedText.unstated)
+	var voice = testVoice(args)
+
+	match readingOfWord(Directory.currentPath(), word: spelled, voice: voice) 'reading'
+		aTarget then return TestPlace.create(TestLocation.projectDirectory(Directory.currentPath()), target: StatedText.stated(spelled))
+		aPath then return TestPlace.create(try testLocation(spelled), target: StatedText.unstated)
+		refused then throw TestSubjectRefusal.unreadTargets(spelled)
+	end 'reading'
+end 'placeNamedBy'
+
+function testVoice(args MaxonArgs) returns ManifestVoice
+	return ManifestVoice.forCommandLine(TestCommandName, announce: false, logOverridden: args.logOverridden)
+end 'testVoice'
+
+function testLocation(spelled String) returns TestLocation throws TestSubjectRefusal
 	let path = try FilePath.from(spelled) otherwise throw TestSubjectRefusal.notAPath(spelled)
 
 	if Directory.isDirectory(path) 'aProject'
-		return TestSubject.projectDirectory(path)
+		return TestLocation.projectDirectory(path)
 	end 'aProject'
 
 	if not File.exists(path) 'nothingThere'
@@ -126,20 +227,22 @@ function testSubject(args MaxonArgs) returns TestSubject throws TestSubjectRefus
 		throw TestSubjectRefusal.notATestFile(path)
 	end 'notATestFile'
 
-	return TestSubject.singleFile(path)
-end 'testSubject'
+	return TestLocation.singleFile(path)
+end 'testLocation'
 
 function subjectRefusalReason(error TestSubjectRefusal) returns String
 	return match error 'reason'
 		notAPath(spelled) gives "'{spelled}' is not a valid path"
 		missing(path) gives "no such directory or `{TestSourceExtension}` file: {reportPathDisplay(path)}"
 		notATestFile(path) gives "not a directory or a `{TestSourceExtension}` file: {reportPathDisplay(path)}"
+		targetForAFile(word, path) gives "'{word}' names a target of a project, and {reportPathDisplay(path)} is a `{TestSourceExtension}` file, which no target holds"
+		unreadTargets(word) gives "the targets of the `{ProjectFileExtension}` file here could not be read, so `{word}` could not be told apart from a path"
 	end 'reason'
 end 'subjectRefusalReason'
 
 function noTestsFoundReason(subject TestSubject) returns String
 	return match subject 'where'
-		projectDirectory(dir) gives "no `test` declarations found under {reportPathDisplay(dir)}"
+		projectDirectory(dir, _) gives "no `test` declarations found under {reportPathDisplay(dir)}"
 		singleFile(path) gives "no `test` declarations found in {reportPathDisplay(path)}"
 	end 'where'
 end 'noTestsFoundReason'
@@ -481,7 +584,7 @@ end 'prepareTestBuildRoot'
 
 function directoryHolding(subject TestSubject) returns FilePath throws TestStagingError
 	match subject 'where'
-		projectDirectory(dir) then return dir
+		projectDirectory(dir, _) then return dir
 		singleFile(path) then return try path.resolve(Directory.currentPath()).parent() otherwise throw TestStagingError.refused("could not derive the directory holding {reportPathDisplay(path)}")
 	end 'where'
 end 'directoryHolding'

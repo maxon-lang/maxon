@@ -5,8 +5,6 @@ let LadderScriptExtension = ".sh"
 let TableCellSeparator = "|"
 let CodeQuote = "`"
 let UsageArgumentSeparator = " "
-let LineFeed = "\n"
-let ListedNameIndent = "\n  "
 
 union IndexedRow
 	named(script String)
@@ -18,7 +16,7 @@ test 'every ladder script has a row in the index'
 	Expect.isFalse(scripts.isEmpty(), message: "{LaddersDirName} holds no `*{LadderScriptExtension}` script, so the index is compared against nothing.")
 
 	let unindexed = namesMissingFrom(scripts, other: indexedScriptNames())
-	Expect.isEmpty(listedNames(unindexed), message: "these ladder scripts have no row in {LaddersDirName}/{LadderIndexFileName}. A ladder nobody can find is a measurement nobody will re-run: add a row giving its SHAPE and the QUESTION IT ANSWERS, read out of the script's own header.")
+	Expect.isEmpty(listedLines(unindexed), message: "these ladder scripts have no row in {LaddersDirName}/{LadderIndexFileName}. A ladder nobody can find is a measurement nobody will re-run: add a row giving its SHAPE and the QUESTION IT ANSWERS, read out of the script's own header.")
 end 'every ladder script has a row in the index'
 
 test 'every row in the ladder index names a script on disk'
@@ -26,20 +24,16 @@ test 'every row in the ladder index names a script on disk'
 	Expect.isFalse(indexed.isEmpty(), message: "{LaddersDirName}/{LadderIndexFileName} has no row whose first cell opens with a backticked `*{LadderScriptExtension}` name, so no script is compared against it.")
 
 	let stale = namesMissingFrom(indexed, other: ladderScriptNames())
-	Expect.isEmpty(listedNames(stale), message: "{LaddersDirName}/{LadderIndexFileName} has rows naming these scripts, and none of them is in {LaddersDirName}. A reader is sent after a generator that was renamed or deleted: move the row with it, or delete it.")
+	Expect.isEmpty(listedLines(stale), message: "{LaddersDirName}/{LadderIndexFileName} has rows naming these scripts, and none of them is in {LaddersDirName}. A reader is sent after a generator that was renamed or deleted: move the row with it, or delete it.")
 end 'every row in the ladder index names a script on disk'
 
 test 'no ladder script is named by two rows of the index'
 	let repeated = namesRepeatedIn(indexedScriptNames())
-	Expect.isEmpty(listedNames(repeated), message: "{LaddersDirName}/{LadderIndexFileName} names each of these scripts in more than one row: two descriptions of one ladder, free to disagree. Merge them.")
+	Expect.isEmpty(listedLines(repeated), message: "{LaddersDirName}/{LadderIndexFileName} names each of these scripts in more than one row: two descriptions of one ladder, free to disagree. Merge them.")
 end 'no ladder script is named by two rows of the index'
 
-function laddersDir() returns FilePath
-	return try FilePath.from(LaddersDirName) otherwise panic("ladder-index.test: the gate could not run — '{LaddersDirName}' is not a spellable path")
-end 'laddersDir'
-
 function ladderScriptNames() returns StringArray
-	let entries = try Directory.list(laddersDir()) otherwise panic("ladder-index.test: the gate could not run — could not list {LaddersDirName}. Every path in this file is relative to the CHECKOUT ROOT, which is the working directory a test binary inherits from `maxon test`.")
+	let entries = listing(fixtureDir(LaddersDirName))
 
 	var names = StringArray.create()
 
@@ -56,7 +50,7 @@ end 'ladderScriptNames'
 
 function indexedScriptNames() returns StringArray
 	let indexFile = try FilePath.from(LadderIndexFileName) otherwise panic("ladder-index.test: the gate could not run — '{LadderIndexFileName}' is not a spellable path component")
-	let text = try File.readText(laddersDir().join(indexFile)) otherwise panic("ladder-index.test: the gate could not run — could not read {LaddersDirName}/{LadderIndexFileName}. Every path in this file is relative to the CHECKOUT ROOT, which is the working directory a test binary inherits from `maxon test`.")
+	let text = fileText(fixtureDir(LaddersDirName).join(indexFile))
 
 	var names = StringArray.create()
 
@@ -119,13 +113,3 @@ function namesRepeatedIn(names StringArray) returns StringArray
 
 	return repeated
 end 'namesRepeatedIn'
-
-function listedNames(names StringArray) returns String
-	var listed = ""
-
-	for name in names 'eachName'
-		listed.append("{ListedNameIndent}{name}")
-	end 'eachName'
-
-	return listed
-end 'listedNames'

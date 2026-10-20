@@ -1,5 +1,4 @@
 let CaseDirName = "an-option-of-another-command-is-refused"
-let MainFileName = "main.maxon"
 let MainSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
 let OutputStem = "program"
 let VersionCommand = "version"
@@ -16,10 +15,10 @@ type ForeignOption
 	export var command as String
 	export var option as String
 	export var owner as String
-	export var commandLine as ListedWordArray
+	export var commandLine as StringArray
 
-	static function trailing(command String, option String, owner String, arguments ListedWordArray) returns ForeignOption
-		var commandLine = ListedWordArray.create()
+	static function trailing(command String, option String, owner String, arguments StringArray) returns ForeignOption
+		var commandLine = StringArray.create()
 		commandLine.append(arguments)
 		commandLine.push(option)
 
@@ -35,7 +34,7 @@ typealias ForeignOptionArray = Array with ForeignOption
 
 test 'a command refuses an option only another command takes, naming the option, itself and the taker'
 	let dir = freshCaseDir(CaseDirName)
-	let source = dir.join(MainFileName)
+	let source = dir.join(StagedProgramFileName)
 	writeStagedFile(source, content: MainSource)
 
 	let build = [BuildCommandWord, source.toString(), "{OutputOptionPrefix}{dir.join(OutputStem).toString()}"]
@@ -58,8 +57,8 @@ test 'a command refuses an option only another command takes, naming the option,
 	cases.push(ForeignOption.trailing(McpServerCommandWord, option: EmitIrFlag, owner: BuildCommandWord, arguments: [McpServerCommandWord]))
 
 	for foreign in cases 'eachCase'
-		let run = runDriver(foreign.commandLine)
-		let typed = "`maxon {listed(foreign.commandLine)}`"
+		let run = spawnCompiler(foreign.commandLine)
+		let typed = "`maxon {joined(foreign.commandLine, separator: Space)}`"
 		let said = "It wrote to stdout: {run.stdout} and to stderr: {run.stderr}"
 
 		Expect.equal(run.exitCode(), expected: RefusedExitCode, message: "{typed} was not refused. Only `{foreign.owner}` takes it, and a command that ignores it answers a question nobody asked. {said}")

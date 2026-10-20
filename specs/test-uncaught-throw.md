@@ -136,7 +136,7 @@ invoke one without the runner, and here it cannot.
 observe without a runner: it admits a bare `try` on a foreign error inside a `test`, and it admits
 one NOWHERE ELSE. The runtime half — the `__TestReport.threw` report itself — is visible in the
 emitted code of the first TWO cases below, and is pinned end to end through `maxon test` by
-`tests/test-command`'s `uncaught-throw` and `implied-try` fixtures.
+`tests/testCommand`'s `uncaught-throw` and `implied-try` fixtures.
 
 <!-- test: bare-try-on-a-foreign-error-compiles -->
 The whole relaxation in one program, and the exact counterpart of `error.function-does-not-relax`

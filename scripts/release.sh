@@ -269,7 +269,7 @@ if [ "$mode" = "package" ]; then
 			grep -E "passed, .* failed" "$DIST/spec-test-ir-$host.log" | tail -1
 
 			# The tree-level gates `spec-test` does not run.
-			for corpus in fmt spec-harness ladders; do
+			for corpus in fmt specHarness ladders; do
 				log="$DIST/test-$corpus-$host.log"
 				"$maxon" test "tests/$corpus" > "$log" 2>&1 \
 					|| { echo "release.sh: tests/$corpus FAILED on $host — see $log; nothing packaged" >&2; exit 1; }

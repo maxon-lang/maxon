@@ -11,7 +11,7 @@ let ContinuesPastEveryWorker = 60
 test 'a held green thread runs nothing until it is released, and then runs on'
 	let staged = builtFixture(GtParkResumeCaseLabel, fixture: WorkersFixtureName)
 	let undebugged = runBuiltProgram(staged)
-	let loopLine = anchorLine(staged, anchor: AnchorName)
+	let loopLine = anchorLine(staged.join(StagedProgramFileName), anchor: AnchorName)
 	let options = [targetEnvOption(MaxProcsVariableName, value: OneProcessor), "{DebugStopTimeoutOptionPrefix}{FourSecondStopTimeout}"]
 	let parked = threadSelector(WaitingThreadStatus, functionName: WorkerFunctionName)
 
@@ -30,13 +30,13 @@ test 'a held green thread runs nothing until it is released, and then runs on'
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 
 	let rosters = eventsOfKind(events, kind: ThreadsEventName)
-	Expect.equal(rosters.count(), expected: 1, message: "`{ThreadsCommand}` printed no `{ThreadsEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(rosters.count(), expected: 1, message: "`{ThreadsCommand}` printed no `{ThreadsEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let roster = eventAt(rosters, index: 0)
 	Expect.atLeast(countThreadsWhere(roster, key: StatusKey, value: WaitingThreadStatus), than: 1, message: "⛔ THE PRECONDITION THE SELECTOR NEEDS. Each worker sleeps inside its loop for far longer than a stop-and-continue takes, so by the {ContinuesBeforeTheHold}rd stop at least one of them is parked on a timer and `{parked}` names it. The roster held: {renderedThreads(roster)}. {said}")
 
 	let holds = eventsOfKind(events, kind: GtParkEventName)
-	Expect.equal(holds.count(), expected: 1, message: "`{selectorCommand(GtParkCommand, selector: parked)}` printed no `{GtParkEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(holds.count(), expected: 1, message: "`{selectorCommand(GtParkCommand, selector: parked)}` printed no `{GtParkEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let requested = eventAt(holds, index: 0)
 	let chosen = reportedThreadId(requested)

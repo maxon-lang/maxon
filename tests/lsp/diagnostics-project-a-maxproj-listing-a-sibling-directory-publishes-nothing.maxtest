@@ -1,0 +1,67 @@
+let ListedSiblingDirName = "diagnostics-project-maxproj-listing-a-sibling-directory"
+let ListedSiblingProjectDirName = "proj"
+let ListedSiblingSharedDirName = "shared"
+let ListedSiblingManifestFileName = "app.maxproj"
+let ListedSiblingMainFileName = "main.maxon"
+let ListedSiblingSharedFileName = "answer.maxon"
+let ListedSiblingManifestSource = "export function build() returns ExitCode\n\tBuild.buildWithConfig(BuildConfig.create([\".\", \"../shared\"], output: \"program\"))\n\treturn 0\nend 'build'\n"
+let ListedSiblingMainSource = "function main() returns ExitCode\n\treturn sharedAnswer()\nend 'main'\n"
+let ListedSiblingSharedSource = "export function sharedAnswer() returns ExitCode\n\treturn 0\nend 'sharedAnswer'\n"
+
+union ListedSiblingProbe
+	published(checked ProjectDiagnosticsProbe)
+	broke(detail String)
+end 'ListedSiblingProbe'
+
+test 'project diagnostics: a file calling a directory its .maxproj lists beside the project publishes nothing'
+	let staged = freshOutsideCheckoutDir(ListedSiblingDirName)
+	let project = staged.join(ListedSiblingProjectDirName)
+	let shared = staged.join(ListedSiblingSharedDirName)
+
+	for directory in [project, shared] 'eachDirectory'
+		if not Directory.create(directory) 'couldNotCreate'
+			panic("the test could not run: could not create {directory.toString()}")
+		end 'couldNotCreate'
+	end 'eachDirectory'
+
+	writeCorpusFile(project, fileName: ListedSiblingManifestFileName, content: ListedSiblingManifestSource)
+	writeCorpusFile(project, fileName: ListedSiblingMainFileName, content: ListedSiblingMainSource)
+	writeCorpusFile(shared, fileName: ListedSiblingSharedFileName, content: ListedSiblingSharedSource)
+
+	let probe = probeListedSibling(project)
+
+	discardOutsideCheckoutDir(staged)
+
+	match probe 'probe'
+		broke(detail) then Expect.fail("the session did not complete: {detail}")
+		published(checked) then expectListedSiblingPublishedNothing(checked)
+	end 'probe'
+end 'project diagnostics: a file calling a directory its .maxproj lists beside the project publishes nothing'
+
+function expectListedSiblingPublishedNothing(checked ProjectDiagnosticsProbe) throws TestFailure
+	try expectNoProjectDiagnostics(checked, note: "`{ListedSiblingMainFileName}` calls `sharedAnswer`, which `{ListedSiblingSharedDirName}/{ListedSiblingSharedFileName}` declares. The project's `.maxproj` lists `{ListedSiblingSharedDirName}/` beside the project, so `maxon build` compiles it with the project and an editor reading the project must see it once the project file has been run.")
+end 'expectListedSiblingPublishedNothing'
+
+function probeListedSibling(project FilePath) returns ListedSiblingProbe
+	var client = LspClient.start()
+	let uri = fileUriOf(project.join(ListedSiblingMainFileName))
+	var probe = ListedSiblingProbe.broke(UnreportedSessionEnding)
+
+	try 'session'
+		_ = client.initializeAtRoot(project)
+		client.initialized()
+		client.openDocument(uri, content: ListedSiblingMainSource)
+		var checked = ProjectDiagnosticsProbe.published(client.awaitSettledProjectCheckSet(uri).items)
+		probe = ListedSiblingProbe.published(checked)
+	end 'session' otherwise (e) 'failed'
+		match e 'reason'
+			transportFailed or
+			malformedResponse or
+			serverRefused then probe = ListedSiblingProbe.broke(e.explained())
+		end 'reason'
+	end 'failed'
+
+	client.release()
+
+	return probe
+end 'probeListedSibling'

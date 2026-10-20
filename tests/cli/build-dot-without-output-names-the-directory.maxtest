@@ -21,11 +21,11 @@ type DotNamedForTheDirectory implements OutsideCheckoutCase
 	end 'create'
 
 	export function requireHeldIn(dir FilePath) throws TestFailure
-		let app = createdStagedDirectory(dir.join(AppDirName))
+		let app = stagingDir(dir.join(AppDirName).toString())
 
 		writeStagedFile(app.join(MainSourceFileName), content: MainSource)
 
-		let build = runDriver([BuildCommandWord, CurrentDirectorySpelling], workingDirectory: app)
+		let build = spawnCompiler([BuildCommandWord, CurrentDirectorySpelling], staged: app)
 		let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
 		try Expect.equal(build.exitCode(), expected: 0, message: "a one-file directory did not build as `.`. {said}")
 

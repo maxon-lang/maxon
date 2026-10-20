@@ -14,8 +14,8 @@
 //   added by someone who did not know about it.
 
 test 'the reference documents the short list first, in order, then what it hides'
-	let overview = runWithNoArguments()
-	let reference = runOneArgument(HelpCommandWord)
+	let overview = spawnCompiler(StringArray.create())
+	let reference = spawnCompiler([HelpCommandWord])
 
 	let observedExit = reference.exitCode()
 	Expect.equal(observedExit, expected: 0, message: "`maxon {HelpCommandWord}` printed the reference and then failed. It said: {reference.stdout}{reference.stderr}")
@@ -25,18 +25,18 @@ test 'the reference documents the short list first, in order, then what it hides
 
 	// ⚠ Every comparison below is vacuous over an empty reading, so this comes first.
 	let missingAnchors = anchorsMissingFrom(advertised)
-	Expect.isEmpty(missingAnchors, message: "the short list did not advertise these commands: {missingAnchors}. It showed: {listed(advertised)}")
+	Expect.isEmpty(missingAnchors, message: "the short list did not advertise these commands: {missingAnchors}. It showed: {joined(advertised, separator: Space)}")
 
-	let undocumented = listed(wordsNotIn(advertised, right: documented))
+	let undocumented = joined(wordsNotIn(advertised, right: documented), separator: Space)
 	Expect.isEmpty(undocumented, message: "`maxon` advertises these commands and `maxon {HelpCommandWord}` has no section for them: {undocumented}")
 
-	let leadingRun = listed(firstFew(documented, count: advertised.count() as WordTally))
-	Expect.equal(leadingRun, expected: listed(advertised), message: "the reference's first sections are not the short list, in the short list's order. A reader who read one and then the other has to find the same commands in the same place.")
+	let leadingRun = joined(firstFew(documented, count: advertised.count() as WordTally), separator: Space)
+	Expect.equal(leadingRun, expected: joined(advertised, separator: Space), message: "the reference's first sections are not the short list, in the short list's order. A reader who read one and then the other has to find the same commands in the same place.")
 
 	// What the short list leaves out — the commands for working on the compiler itself.
 	let hidden = wordsNotIn(documented, right: advertised)
 	let hiddenIsReal = hidden.contains(HiddenAnchorCommand)
-	Expect.isTrue(hiddenIsReal, message: "`{HiddenAnchorCommand}` is a command for working on the compiler, so the short list must not advertise it and the reference must document it. The short list showed: {listed(advertised)}")
+	Expect.isTrue(hiddenIsReal, message: "`{HiddenAnchorCommand}` is a command for working on the compiler, so the short list must not advertise it and the reference must document it. The short list showed: {joined(advertised, separator: Space)}")
 
 	let bothSorted = "{outOfOrderIn(advertised)}{outOfOrderIn(hidden)}"
 	Expect.isEmpty(bothSorted, message: "a run of commands is out of alphabetical order: {bothSorted}. Declaration order in `MaxonCommand` IS the printed order, so the fix is to move the case.")

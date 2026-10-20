@@ -3,15 +3,15 @@ let WorkerFunctionName = "worker"
 
 test 'a next over a call that other green threads also return through lands on the thread it was issued on'
 	let staged = builtFixture(OtherThreadCaseLabel, fixture: WorkersFixtureName)
-	let sleepLine = anchorLine(staged, anchor: "worker-sleep")
-	let afterLine = anchorLine(staged, anchor: "worker-after-sleep")
+	let sleepLine = anchorLine(staged.join(StagedProgramFileName), anchor: "worker-sleep")
+	let afterLine = anchorLine(staged.join(StagedProgramFileName), anchor: "worker-after-sleep")
 	let commands = debugCommandLine(["{BreakCommand} {lineTarget(sleepLine)}", RunCommand, "{ClearCommand} {lineTarget(sleepLine)}", NextCommand])
 	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let stops = eventsOfKind(events, kind: StopEventName)
 
-	try Expect.equal(stops.count(), expected: 2, message: "the breakpoint on the sleep and the `{NextCommand}` are two stops. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(stops.count(), expected: 2, message: "the breakpoint on the sleep and the `{NextCommand}` are two stops. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let first = eventAt(stops, index: 0)
 	let landed = eventAt(stops, index: 1)

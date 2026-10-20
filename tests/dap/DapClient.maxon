@@ -1,8 +1,7 @@
-// Stages `tests/debug/fixtures/` by path rather than from a copy: `maxon test` compiles one
-// directory, so this corpus cannot import `DebugHarness` and repeats its staging, and a second copy
-// of an anchored fixture would drift from the first.
+// Stages `tests/debug/fixtures/` by path rather than from a copy, because a second copy of an
+// anchored fixture would drift from the first. This corpus does not list `tests/debug`, so it cannot
+// import `DebugHarness`; the staging both share lives in `tests/support/`.
 
-let TestedCompilerStem = "maxon-bin/.maxon/maxon"
 let DapServerCommandName = "dap-server"
 
 // Kept under the per-file test deadline, so an adapter that ignores its closed stdin is terminated
@@ -14,13 +13,10 @@ let AdapterExitDeadlineMs = 3000
 export typealias DapNumber = int(i64.min to i64.max)
 export typealias DapReference = int(i64.min to i64.max)
 
-export typealias SourceLine = int(1 to u32.max)
-
 export typealias JsonDocArray = Array with JsonDoc
 
 typealias DapSequenceNumber = int(1 to i64.max)
 typealias StashedMessageTally = int(0 to i64.max)
-typealias PathArray = Array with FilePath
 
 let FirstSequenceNumber = 1
 
@@ -87,25 +83,8 @@ function dapBroke(reason DapClientError) returns String
 	end 'why'
 end 'dapBroke'
 
-let FixturesDirName = "tests/debug/fixtures"
-let StagingRootDirName = "temp/dap"
-let StdlibDirName = "stdlib"
-let LibraryTierDirName = "tier"
-let LibraryTierBinDirName = "bin"
-let LibraryTierProgramDirName = "__fixture__"
-let StageLibraryTierCommandName = "stage-library-tier"
-let StoredFixtureSuffix = ".fixture"
-let StagedProgramFileName = "main.maxon"
-let BuildCommandName = "build"
-let OutputOptionPrefix = "--output="
-let TestCommandName = "test"
-let TestListOption = "--list"
-let TestBuildOption = "--build"
-let TestJsonOption = "--json"
-let TestBinaryKey = "binary"
-let OutputFileStem = "out"
-let PathSeparator = "/"
-let AnchorMarker = "// anchor: "
+export let FixturesDirName = "tests/debug/fixtures"
+export let StagingRootDirName = "temp/dap"
 
 export let SteppingFixtureName = "stepping"
 export let ValuesFixtureName = "values"
@@ -122,246 +101,6 @@ export let TestBodyFixtureName = "testbody"
 export let LeafPairFixtureName = "leafpair"
 export let FaultCalleeFixtureName = "faultcallee"
 
-// `maxon test` runs case files concurrently, so `caseLabel` must be unique to the case: two cases
-// sharing one would share a staging tree and an output path.
-export function dapStagedFixture(caseLabel String, fixture String) returns FilePath
-	let staged = dapStagingDir("{StagingRootDirName}{PathSeparator}{caseLabel}")
-	dapClearStagedFiles(staged)
-	dapStageStoredTree(dapFixtureDir("{FixturesDirName}{PathSeparator}{fixture}"), into: staged)
-
-	return staged
-end 'dapStagedFixture'
-
-function dapStageStoredTree(stored FilePath, into FilePath)
-	for entry in dapListing(stored) 'eachStored'
-		let storedName = entry.filename()
-
-		if Directory.isDirectory(entry) 'aStoredDirectory'
-			let stagedDirectory = into.join(storedName)
-
-			if not Directory.create(stagedDirectory) 'unusable'
-				panic("dap tests: the gate could not run — could not create {stagedDirectory.toString()} to stage {entry.toString()} into")
-			end 'unusable'
-
-			dapStageStoredTree(entry, into: stagedDirectory)
-			continue
-		end 'aStoredDirectory'
-
-		if not storedName.endsWith(StoredFixtureSuffix) 'notAStoredSource'
-			continue
-		end 'notAStoredSource'
-
-		let stagedName = storedName.replace(StoredFixtureSuffix, with: "")
-		let body = try File.readText(entry) otherwise panic("dap tests: the gate could not run — could not read the stored fixture {entry.toString()}")
-		try File.writeText(into.join(stagedName), content: body) otherwise panic("dap tests: the gate could not run — could not stage {stagedName} into {into.toString()}")
-	end 'eachStored'
-end 'dapStageStoredTree'
-
-export function dapStagedSource(staged FilePath, file String = StagedProgramFileName) returns FilePath
-	return staged.join(file)
-end 'dapStagedSource'
-
-export enum DapBuildScope
-	mainFile
-	wholeDirectory
-end 'DapBuildScope'
-
-function dapBuiltExecutable(staged FilePath) returns FilePath
-	return staged.join("{OutputFileStem}{dapExecutableSuffix()}")
-end 'dapBuiltExecutable'
-
-export function dapBuildFixture(staged FilePath, scope DapBuildScope = DapBuildScope.mainFile) returns FilePath
-	let source = match scope 'what'
-		mainFile gives dapStagedSource(staged)
-		wholeDirectory gives staged
-	end 'what'
-
-	return dapBuiltFrom(source, staged: staged, compiler: dapTestedCompilerPath())
-end 'dapBuildFixture'
-
-export function dapBuildLibraryTierFixture(caseLabel String, fixture String) returns FilePath
-	let staged = dapStagingDir("{StagingRootDirName}{PathSeparator}{caseLabel}")
-	dapClearStagedFiles(staged)
-
-	let compiler = dapStagedLibraryTier(staged)
-	let program = dapStagingDir(staged.join(LibraryTierDirName).join(StdlibDirName).join(LibraryTierProgramDirName).toString())
-	dapStageStoredTree(dapFixtureDir("{FixturesDirName}{PathSeparator}{fixture}"), into: program)
-
-	return dapBuiltFrom(program, staged: staged, compiler: compiler)
-end 'dapBuildLibraryTierFixture'
-
-function dapStagedLibraryTier(staged FilePath) returns FilePath
-	let tier = staged.join(LibraryTierDirName)
-	let compiler = dapTestedCompilerPath()
-
-	var config = Configuration.create(Executable.path(compiler))
-	config.arguments = [StageLibraryTierCommandName, tier.toString()]
-	config.workingDirectory = staged
-
-	let out = try config.run() otherwise (e) 'spawnFailed'
-		panic("dap tests: the gate could not run — could not stage the library tier: {e.displayReason()}")
-	end 'spawnFailed'
-
-	if out.exitCode() != 0 'didNotStage'
-		panic("dap tests: the gate could not run — staging the library tier exited {out.exitCode()}: {out.stdout} {out.stderr}")
-	end 'didNotStage'
-
-	return tier.join(LibraryTierBinDirName).join(compiler.filename())
-end 'dapStagedLibraryTier'
-
-function dapBuiltFrom(source FilePath, staged FilePath, compiler FilePath) returns FilePath
-	let executable = dapBuiltExecutable(staged)
-
-	var config = Configuration.create(Executable.path(compiler))
-	config.arguments = [BuildCommandName, source.toString(), "{OutputOptionPrefix}{executable.toString()}"]
-	config.workingDirectory = staged
-
-	let out = try config.run() otherwise (e) 'spawnFailed'
-		panic("dap tests: the gate could not run — could not build the staged fixture: {e.displayReason()}")
-	end 'spawnFailed'
-
-	if out.exitCode() != 0 'buildFailed'
-		panic("dap tests: the gate could not run — the staged fixture did not build: {out.stdout} {out.stderr}")
-	end 'buildFailed'
-
-	return executable
-end 'dapBuiltFrom'
-
-export function dapBuildTestBinary(staged FilePath) returns FilePath
-	var config = Configuration.create(Executable.path(dapTestedCompilerPath()))
-	config.arguments = [TestCommandName, TestListOption, TestBuildOption, TestJsonOption]
-	config.workingDirectory = staged
-
-	let out = try config.run() otherwise (e) 'spawnFailed'
-		panic("dap tests: the gate could not run — could not build the staged test binary: {e.displayReason()}")
-	end 'spawnFailed'
-
-	if out.exitCode() != 0 'buildFailed'
-		panic("dap tests: the gate could not run — the staged tests did not build: {out.stdout} {out.stderr}")
-	end 'buildFailed'
-
-	let doc = try Json.parse(out.stdout.trim()) otherwise panic("dap tests: the gate could not run — `{TestCommandName} {TestListOption} {TestBuildOption} {TestJsonOption}` wrote a listing that does not parse: {out.stdout}")
-	let binary = try doc.getString(doc.root, key: TestBinaryKey) otherwise panic("dap tests: the gate could not run — the listing names no `{TestBinaryKey}`: {out.stdout}")
-
-	return try FilePath.from(binary) otherwise panic("dap tests: the gate could not run — the listing names a binary '{binary}' that is not a spellable path")
-end 'dapBuildTestBinary'
-
-export function dapAnchorLine(staged FilePath, anchor String, file String = StagedProgramFileName) returns SourceLine
-	let marker = "{AnchorMarker}{anchor}"
-	var found = 0 as ElementIndex
-	var carriers = 0 as Count
-
-	for (iter, line) in dapStagedLines(staged, file: file).withIterator() 'eachLine'
-		if line.trim().endsWith(marker) 'thisAnchor'
-			found = iter.index() + 1
-			carriers = carriers + 1
-		end 'thisAnchor'
-	end 'eachLine'
-
-	if carriers != 1 'notExactlyOne'
-		panic("dap tests: {carriers} lines of {file} under {staged.toString()} carry `{marker}`; exactly one must, or the case names a line it is not about")
-	end 'notExactlyOne'
-
-	return found as SourceLine
-end 'dapAnchorLine'
-
-let FirstSourceLine = 1 as SourceLine
-let LineFeed = "\n"
-
-export function dapDeclarationLine(staged FilePath, needle String) returns SourceLine
-	var lineNumber = FirstSourceLine
-
-	for line in dapStagedLines(staged) 'eachLine'
-		if line.startsWith(needle) 'found'
-			return lineNumber
-		end 'found'
-
-		lineNumber = lineNumber + 1
-	end 'eachLine'
-
-	panic("dap tests: the staged source under {staged.toString()} has no line beginning `{needle}`")
-end 'dapDeclarationLine'
-
-export function dapSourceColumnOf(staged FilePath, line SourceLine, spelling String) returns DapNumber
-	let text = try dapStagedLines(staged).get((line - FirstSourceLine) as ElementIndex) otherwise panic("dap tests: the staged source under {staged.toString()} has no line {line}")
-	let before = try text.split(spelling).get(0) otherwise panic("dap tests: splitting a line always answers its first piece")
-
-	if before == text 'notOnTheLine'
-		panic("dap tests: line {line} of the staged source under {staged.toString()} does not spell `{spelling}`")
-	end 'notOnTheLine'
-
-	return (before.count() + FirstSourceColumn) as DapNumber
-end 'dapSourceColumnOf'
-
-let FirstSourceColumn = 1
-
-function dapStagedLines(staged FilePath, file String = StagedProgramFileName) returns StringArray
-	let body = try File.readText(dapStagedSource(staged, file: file)) otherwise panic("dap tests: could not read the staged source under {staged.toString()}")
-
-	return body.split(LineFeed)
-end 'dapStagedLines'
-
-function dapStagingDir(spelled String) returns FilePath
-	let relative = try FilePath.from(spelled) otherwise panic("dap tests: '{spelled}' is not a spellable path")
-	let resolved = relative.resolve(Directory.currentPath())
-
-	if not Directory.create(resolved) 'unusable'
-		panic("dap tests: could not create {resolved.toString()}, where a case stages what it debugs")
-	end 'unusable'
-
-	return resolved
-end 'dapStagingDir'
-
-function dapFixtureDir(spelled String) returns FilePath
-	let relative = try FilePath.from(spelled) otherwise panic("dap tests: '{spelled}' is not a spellable path")
-	let resolved = relative.resolve(Directory.currentPath())
-
-	if not Directory.isDirectory(resolved) 'missing'
-		panic("dap tests: the gate could not run — there is no fixture directory at {resolved.toString()}. Paths here are spelled from the CHECKOUT ROOT, which is the working directory `maxon test` hands a test binary")
-	end 'missing'
-
-	return resolved
-end 'dapFixtureDir'
-
-function dapListing(dir FilePath) returns PathArray
-	return try Directory.list(dir) otherwise panic("dap tests: could not list {dir.toString()}")
-end 'dapListing'
-
-// A previous run's executable or sidecar left in place would let a build that wrote neither pass as
-// one that did.
-function dapClearStagedFiles(dir FilePath)
-	for entry in dapListing(dir) 'eachEntry'
-		if Directory.isDirectory(entry) 'aDirectory'
-			dapClearStagedFiles(entry)
-			continue
-		end 'aDirectory'
-
-		try File.delete(entry) otherwise panic("dap tests: could not clear {entry.toString()} from a previous run's staging")
-	end 'eachEntry'
-end 'dapClearStagedFiles'
-
-function dapExecutableSuffix() returns String
-	#if os(Windows)
-		let suffix = ".exe"
-	#else
-		let suffix = ""
-	#endif
-
-	return suffix
-end 'dapExecutableSuffix'
-
-function dapTestedCompilerPath() returns FilePath
-	let spelled = "{TestedCompilerStem}{dapExecutableSuffix()}"
-	let relative = try FilePath.from(spelled) otherwise panic("dap tests: '{spelled}' is not a spellable path")
-	let binary = relative.resolve(Directory.currentPath())
-
-	if not File.exists(binary) 'noBinary'
-		panic("dap tests: the gate could not run — there is no compiler at {binary.toString()}. Paths here are spelled from the CHECKOUT ROOT; run from there, and build `{TestedCompilerStem}` first")
-	end 'noBinary'
-
-	return binary
-end 'dapTestedCompilerPath'
-
 export type DapClient
 	var server as StreamingSubprocess
 	var nextSequenceNumber as DapSequenceNumber
@@ -374,7 +113,7 @@ export type DapClient
 	// Nothing drains the adapter's stderr, and this client has no thread to do it: an adapter that
 	// writes enough there fills the pipe and both sides block until the file times out.
 	export static function start() returns DapClient
-		let binary = dapTestedCompilerPath()
+		let binary = testedCompilerPath()
 
 		let spawned = try StreamingSubprocess.spawn(Executable.path(binary), arguments: [DapServerCommandName]) otherwise (e) 'spawnFailed'
 			panic("dap tests: the gate could not run — `{TestedCompilerStem} {DapServerCommandName}` did not spawn ({e.displayReason()})")
@@ -802,7 +541,7 @@ export function dapThreadIds(doc JsonDoc) returns DapNumberArray
 end 'dapThreadIds'
 
 export function dapFrameNameAt(names StringArray, frame FramePosition) returns String
-	return try names.get(frame as ElementIndex) otherwise panic("dap tests: a stack of {names.count()} frames holds no frame {frame}: {dapRendered(names)}")
+	return try names.get(frame as ElementIndex) otherwise panic("dap tests: a stack of {names.count()} frames holds no frame {frame}: {joined(names, separator: Space)}")
 end 'dapFrameNameAt'
 
 export typealias FramePosition = int(0 to 1000)
@@ -862,16 +601,6 @@ end 'dapVariableValue'
 export function dapListLength(doc JsonDoc, key String) returns DapNumber
 	return dapListNodes(doc, key: key).count() as DapNumber
 end 'dapListLength'
-
-export function dapRendered(values StringArray) returns String
-	var rendered = ""
-
-	for value in values 'eachValue'
-		rendered.append("{value} ")
-	end 'eachValue'
-
-	return rendered
-end 'dapRendered'
 
 export function dapInitializeArguments(countsFromOne bool = true) returns String
 	return "\{\"adapterID\":\"maxon\",\"clientID\":\"maxon-tests\",\"linesStartAt1\":{countsFromOne},\"columnsStartAt1\":{countsFromOne},\"pathFormat\":\"path\"\}"

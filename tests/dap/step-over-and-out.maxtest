@@ -44,15 +44,15 @@ type StepSession implements DapSession
 end 'StepSession'
 
 test 'next answers at once and stops on the next line, and stepOut lands in the caller'
-	let staged = dapStagedFixture(StepCaseLabel, fixture: SteppingFixtureName)
-	var session = StepSession.create(dapBuildFixture(staged), source: dapStagedSource(staged), anchored: dapAnchorLine(staged, anchor: InnerLoopAnchor))
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: StepCaseLabel, fixture: SteppingFixtureName)
+	var session = StepSession.create(buildStagedSource(staged.join(StagedProgramFileName), staged: staged), source: staged.join(StagedProgramFileName), anchored: anchorLine(staged.join(StagedProgramFileName), anchor: InnerLoopAnchor))
 	try dapRunSession(session, completing: "complete the stepping")
 
 	try Expect.isTrue(session.nextAnswered, message: "`{NextCommand}` must answer its own request successfully, before the stop arrives")
 	try Expect.equal(session.nextReason, expected: StepReason, message: "a step's stop must say `{StepReason}`, which is how an editor tells it from a breakpoint it happened to pass; it said `{session.nextReason}`")
-	try Expect.equal(dapFrameNameAt(session.framesAfterNext, frame: 0), expected: InnerFunctionName, message: "`{NextCommand}` steps OVER calls and stays in the frame it was in — `{InnerFunctionName}`; it landed in {dapRendered(session.framesAfterNext)}")
+	try Expect.equal(dapFrameNameAt(session.framesAfterNext, frame: 0), expected: InnerFunctionName, message: "`{NextCommand}` steps OVER calls and stays in the frame it was in — `{InnerFunctionName}`; it landed in {joined(session.framesAfterNext, separator: Space)}")
 
 	try Expect.isTrue(session.stepOutAnswered, message: "`{StepOutCommand}` must answer its own request successfully, before the stop arrives")
 	try Expect.equal(session.stepOutReason, expected: StepReason, message: "`{StepOutCommand}`'s stop must say `{StepReason}`; it said `{session.stepOutReason}`")
-	try Expect.equal(dapFrameNameAt(session.framesAfterStepOut, frame: 0), expected: OuterFunctionName, message: "`{StepOutCommand}` from `{InnerFunctionName}` lands in its caller `{OuterFunctionName}`; it landed in {dapRendered(session.framesAfterStepOut)}")
+	try Expect.equal(dapFrameNameAt(session.framesAfterStepOut, frame: 0), expected: OuterFunctionName, message: "`{StepOutCommand}` from `{InnerFunctionName}` lands in its caller `{OuterFunctionName}`; it landed in {joined(session.framesAfterStepOut, separator: Space)}")
 end 'next answers at once and stops on the next line, and stepOut lands in the caller'

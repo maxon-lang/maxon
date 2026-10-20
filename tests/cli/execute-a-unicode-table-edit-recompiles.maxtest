@@ -40,7 +40,7 @@ function executedBy(compiler FilePath, program FilePath, dir FilePath) returns C
 end 'executedBy'
 
 function singleSlotNameIn(dir FilePath) returns String throws TestFailure
-	var names = ListedWordArray.create()
+	var names = StringArray.create()
 
 	for file in filesUnder(cacheRootIn(dir).join(CacheVendorDirName).join(RunCacheDirName)) 'eachCachedFile'
 		if not file.filename().endsWith(SidecarSuffix) 'notASidecar'
@@ -48,13 +48,13 @@ function singleSlotNameIn(dir FilePath) returns String throws TestFailure
 		end 'notASidecar'
 	end 'eachCachedFile'
 
-	try Expect.equal(names.count(), expected: 1, message: "the run cache holds {names.count()} builds ({listed(names)}), where one program run twice leaves exactly one.")
+	try Expect.equal(names.count(), expected: 1, message: "the run cache holds {names.count()} builds ({joined(names, separator: Space)}), where one program run twice leaves exactly one.")
 
 	return try names.get(0) otherwise panic("{CaseDirName}: a list holding one name has a first")
 end 'singleSlotNameIn'
 
 function flipTheLastByteOf(file FilePath)
-	var bytes = try File.readBinary(file) otherwise panic("{CaseDirName}: the gate could not run - could not read {file.toString()}.")
+	var bytes = fileBytes(file)
 	let last = bytes.count() - 1
 	let was = try bytes.get(last) otherwise panic("{CaseDirName}: the gate could not run - {file.toString()} is empty.")
 	let flipped = (1 as Byte) if was == 0 else (0 as Byte)

@@ -9,9 +9,9 @@ let TasksSource = "export typealias ExitCode = int(0 to 255)\n\nexport function 
 test 'a task prints on the callers stdout and its exit code is the commands'
 	let dir = freshCaseDir(CaseDirName)
 	let tasks = dir.join(TaskFileName)
-	try File.writeText(tasks, content: TasksSource) otherwise panic("run-streams-a-task-and-forwards-its-exit-code: the gate could not run - could not write {tasks.toString()}")
+	writeStagedFile(tasks, content: TasksSource)
 
-	let ran = runDriver([RunCommandWord, "report", "alpha"], workingDirectory: dir)
+	let ran = spawnCompiler([RunCommandWord, "report", "alpha"], staged: dir)
 	let said = "It wrote to stdout: {ran.stdout} and to stderr: {ran.stderr}"
 
 	Expect.equal(ran.exitCode(), expected: TaskExitCode, message: "`maxon {RunCommandWord} report` did not exit with the code the task returned. {said}")

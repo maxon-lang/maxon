@@ -59,10 +59,10 @@ let InteriorFrameName = "work"
 typealias FoldedPathPosition = int(0 to 1)
 
 test 'collapsed stacks carry every path the fixture runs, whatever floor the tool was given'
-	let staged = stagedProgram("profile-folded", fixture: HotWarmFixtureName)
-	buildProgram(staged, label: HotWarmFixtureName, extraArguments: StringArray.create())
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: "profile-folded", fixture: HotWarmFixtureName)
+	_ = buildStagedSource(staged.join(StagedProgramFileName), staged: staged, what: HotWarmFixtureName)
 
-	var arguments = profileRunArguments(builtExecutable(staged).toString())
+	var arguments = profileRunArguments(executableIn(staged, stem: OutputFileStem).toString())
 	arguments.push(FoldedFlag)
 	arguments.push("{MinPercentFlagPrefix}{FoldedIgnoredFloorShare}")
 
@@ -111,7 +111,7 @@ function foldedPathsAboveFloor(report String) returns StringArray throws TestFai
 		let samples = try tokens.get(tokens.count() - 1) otherwise panic("profile-folded.test: a list whose count was just asserted has a last element")
 		let path = foldedPathIn(tokens)
 
-		if decimalValue(samples, what: "the sample count on the collapsed path '{path}'") >= FoldedSampleFloor 'worthAsserting'
+		if wholeDecimalValue(samples, what: "the sample count on the collapsed path '{path}'") >= FoldedSampleFloor 'worthAsserting'
 			paths.push(path)
 		end 'worthAsserting'
 	end 'eachLine'

@@ -9,7 +9,6 @@ typealias UnitValue = int(0 to u32.max)
 
 let CaseDirName = "regalloc-split-past-65536"
 let AppDirName = "app"
-let MainFileName = "main.maxon"
 let LogFlag = "--log=codegen:debug"
 let ValuesSplitFieldPrefix = "valuesSplit="
 
@@ -86,10 +85,10 @@ type SplitPast65536 implements OutsideCheckoutCase
 	end 'create'
 
 	export function requireHeldIn(dir FilePath) throws TestFailure
-		let app = createdStagedDirectory(dir.join(AppDirName))
-		writeStagedFile(app.join(MainFileName), content: fixtureSource())
+		let app = stagingDir(dir.join(AppDirName).toString())
+		writeStagedFile(app.join(StagedProgramFileName), content: fixtureSource())
 
-		let built = runDriver([BuildCommandWord, AppDirName, LogFlag], workingDirectory: dir)
+		let built = spawnCompiler([BuildCommandWord, AppDirName, LogFlag], staged: dir)
 		try Expect.equal(built.exitCode(), expected: 0, message: "a function of {Units} units, each holding {ValuesPerUnit} call results live across a call, did not build. It wrote to stderr: {built.stderr}")
 
 		let splits = valuesSplitIn(built.stderr)
@@ -98,7 +97,7 @@ type SplitPast65536 implements OutsideCheckoutCase
 			panic("regalloc-split-past-65536: the gate could not run - the fixture split only {splits} values, under the {SplitsTheFixtureMustNeed} it exists to exceed. Raise `Units`.")
 		end 'tooFewSplits'
 
-		let ran = runDriver(ListedWordArray.create(), binary: app.join("{AppDirName}{executableSuffix()}"), workingDirectory: dir)
+		let ran = spawnCompiler(StringArray.create(), binary: app.join("{AppDirName}{executableSuffix()}"), staged: dir)
 		try Expect.equal(ran.exitCode(), expected: 0, message: "the program built from {splits} splits exited {ran.exitCode()}. It wrote to stderr: {ran.stderr}")
 		try Expect.equal(ran.stdout.trim(), expected: "{expectedAnswer()}", message: "the program built from {splits} splits computed the wrong answer.")
 	end 'requireHeldIn'

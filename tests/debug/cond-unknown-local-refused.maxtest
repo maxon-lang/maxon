@@ -8,7 +8,7 @@ let ConditionText = "nothere == 1"
 test 'a condition naming a local the stop pc has no record for is refused, and the breakpoint is not armed'
 	let staged = builtFixture(CondUnknownCaseLabel, fixture: ConditionFixtureName)
 	let undebugged = runBuiltProgram(staged)
-	let hitLine = anchorLine(staged, anchor: AnchorName)
+	let hitLine = anchorLine(staged.join(StagedProgramFileName), anchor: AnchorName)
 	let iterations = linesStartingWith(undebugged.stdout, prefix: CountedLinePrefix)
 
 	Expect.equal(stagedLinesContaining(staged, needle: UnknownLocalName), expected: 0, message: "this case is about a name the fixture does not declare, and the staged source spells `{UnknownLocalName}`.")
@@ -20,7 +20,7 @@ test 'a condition naming a local the stop pc has no record for is refused, and t
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 
 	let armings = eventsOfKind(events, kind: BreakpointEventName)
-	Expect.equal(armings.count(), expected: 1, message: "a refused condition is still an answer and must print one `{BreakpointEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(armings.count(), expected: 1, message: "a refused condition is still an answer and must print one `{BreakpointEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let armed = eventAt(armings, index: 0)
 	Expect.equal(textOf(armed, node: armed.root, key: ActionKey), expected: ConditionUnsupportedAction, message: "a condition is compiled from the local record covering the breakpoint pc, and there is no record for `{UnknownLocalName}` — so it is refused as `{ConditionUnsupportedAction}` rather than compiled against whatever slot happens to be nearby. {said}")

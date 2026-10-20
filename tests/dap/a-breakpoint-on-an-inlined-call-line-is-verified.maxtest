@@ -36,13 +36,13 @@ type InlinedCallLineSession implements DapSession
 end 'InlinedCallLineSession'
 
 test 'a source breakpoint on a line whose whole statement is an inlined call is verified and stops at that line'
-	let staged = dapStagedFixture(InlinedCallLineCaseLabel, fixture: LeafPairFixtureName)
-	let anchored = dapAnchorLine(staged, anchor: FirstCallAnchor)
-	var session = InlinedCallLineSession.create(dapBuildFixture(staged), source: dapStagedSource(staged), anchored: anchored)
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: InlinedCallLineCaseLabel, fixture: LeafPairFixtureName)
+	let anchored = anchorLine(staged.join(StagedProgramFileName), anchor: FirstCallAnchor)
+	var session = InlinedCallLineSession.create(buildStagedSource(staged.join(StagedProgramFileName), staged: staged), source: staged.join(StagedProgramFileName), anchored: anchored)
 	try dapRunSession(session, completing: "complete")
 
 	try Expect.isTrue(dapBreakpointVerified(session.placed, index: 0), message: "control passes through a line whose code is an inlined body, so a breakpoint on it binds; it was left unverified: {dapDescribed(session.placed)}")
 	try Expect.equal(session.stopReason, expected: BreakpointReason, message: "the program must stop on the breakpoint at the call line")
-	try Expect.equal(dapFrameNameAt(session.frameNames, frame: 0), expected: CallerFunctionName, message: "the top frame is the caller, standing at its call. Frames: {dapRendered(session.frameNames)}")
-	try Expect.equal(dapFrameNumberAt(session.frameLines, frame: 0), expected: anchored as DapNumber, message: "the top frame stands on the call line. Frames: {dapRendered(session.frameNames)}")
+	try Expect.equal(dapFrameNameAt(session.frameNames, frame: 0), expected: CallerFunctionName, message: "the top frame is the caller, standing at its call. Frames: {joined(session.frameNames, separator: Space)}")
+	try Expect.equal(dapFrameNumberAt(session.frameLines, frame: 0), expected: anchored as DapNumber, message: "the top frame stands on the call line. Frames: {joined(session.frameNames, separator: Space)}")
 end 'a source breakpoint on a line whose whole statement is an inlined call is verified and stops at that line'

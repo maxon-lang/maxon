@@ -7,9 +7,9 @@ let TasksSource = "export typealias ExitCode = int(0 to 255)\n\nexport function 
 test 'a bare run lists the exported tasks and nothing else'
 	let dir = freshCaseDir(CaseDirName)
 	let tasks = dir.join(TaskFileName)
-	try File.writeText(tasks, content: TasksSource) otherwise panic("run-lists-the-tasks-a-directory-declares: the gate could not run - could not write {tasks.toString()}")
+	writeStagedFile(tasks, content: TasksSource)
 
-	let listed = runDriver([RunCommandWord], workingDirectory: dir)
+	let listed = spawnCompiler([RunCommandWord], staged: dir)
 	let said = "It wrote to stdout: {listed.stdout} and to stderr: {listed.stderr}"
 
 	Expect.equal(listed.exitCode(), expected: 0, message: "a bare `maxon {RunCommandWord}` over a {TaskFileName} declaring two tasks did not succeed. {said}")

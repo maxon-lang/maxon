@@ -9,7 +9,7 @@ test 'a session that arms and clears every instruction of a program in turn stil
 
 	try Expect.atLeast(offsets.count(), than: MoreThanTheTableHolds, message: "the churn this case measures is arming and clearing each of these in turn, so the fixture must offer at least {MoreThanTheTableHolds} distinct statements to arm")
 
-	let scanLine = anchorLine(staged, anchor: "spliced-scan")
+	let scanLine = anchorLine(staged.join(StagedProgramFileName), anchor: "spliced-scan")
 	let commands = debugCommandLine(appendedCommands(armedAndClearedAtEvery(offsets), rest: ["{BreakCommand} {lineTarget(scanLine)}", RunCommand]))
 	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
 	let events = batchEvents(session.stdout)
@@ -20,7 +20,7 @@ test 'a session that arms and clears every instruction of a program in turn stil
 	try Expect.equal(breakpointAnswersWithAction(events, action: ClearedAction), expected: offsets.count() as EventTally, message: "every instruction is cleared again. {said}")
 
 	let stops = eventsOfKind(events, kind: StopEventName)
-	try Expect.equal(stops.count(), expected: 1, message: "the breakpoint armed after the churn is the one stop. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(stops.count(), expected: 1, message: "the breakpoint armed after the churn is the one stop. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let hit = eventAt(stops, index: 0)
 	try Expect.equal(textOf(hit, node: hit.root, key: ReasonKey), expected: BreakpointStopReason, message: "the stop is that breakpoint's. {said}")

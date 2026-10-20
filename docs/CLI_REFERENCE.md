@@ -32,7 +32,7 @@ agents, and reads back what a program did.
 | `maxon profile run <exe>` | Sample a running program and report where its CPU time went ([Debugging and Profiling](#debugging-and-profiling)) |
 | `maxon execute <file\|directory> [args...]` | Compile a program, or reuse a cached build of it, and run it |
 | `maxon run [<task> [args...]]` | Run a task declared in the directory's `.maxtasks` file, or list the tasks |
-| `maxon test [directory\|file.maxtest]` | Run a project's own `test` declarations, or one test file's alone |
+| `maxon test [<target>] [directory\|file.maxtest]` | Run a project's own `test` declarations, or one test file's alone |
 | `maxon upgrade [--dry-run]` | Update this compiler's install to the newest release |
 | `maxon version` | Print the version, the commit it was built from, and the host target |
 
@@ -650,14 +650,30 @@ Runs a project's unit tests: every `test` declaration in its `*.maxtest` files, 
 the project's `.maxon` sources. How to write tests is covered in [Testing](LANGUAGE_REFERENCE.md#testing).
 
 ```bash
-maxon test [directory | file.maxtest] [options]
+maxon test [<target>] [directory | file.maxtest] [options]
 ```
 
 `[directory]` is the project to test (default: the working directory). A `.maxtest` file named in its
 place is run alone: it is compiled with the library tiers and nothing else, as the editor checks a file
 no `.maxproj` marks, so its siblings and any project around it stay out of the run. A path naming
 nothing is refused with ``test: no such directory or `.maxtest` file: <path>``, and any other file with
-``test: not a directory or a `.maxtest` file: <path>``; both exit 2 with the usage line. A second positional is refused.
+``test: not a directory or a `.maxtest` file: <path>``; both exit 2 with the usage line. A third positional is refused.
+
+**The project's sources are the ones `maxon build` compiles for it.** When the directory's `.maxproj`
+file declares a target, the run compiles that target's `sources`: the project file is run as
+[`maxon build`](#the-project-file) runs it, delegation included, and the description's `sources` are
+read, with every `.maxtest` file beneath them. A directory with no `.maxproj` file, or one whose file
+declares no target, is every source beneath it. The target is chosen as `maxon build` chooses one:
+
+- **One target** is used.
+- **`<target>`** names one, each `_` written `-`, before the directory: `maxon test gen-tool tools/`.
+  A target word with a `.maxtest` file is refused, and so is a word the project declares no target for,
+  which lists the targets it does declare.
+- **A lone word** naming a target of the working directory's project is that target, and it outranks a
+  directory of the same name ([Several targets](#several-targets)). Any other lone word is a path.
+- **Several targets and no word** are listed, and the run exits 2.
+
+A project file that does not compile, fails, or describes no build ends the run with its error and exit 2.
 
 All discovered tests are compiled into **one binary** with a generated entry point, and which of them
 run is a runtime argument. Changing `--filter` between runs therefore recompiles nothing. The project's
@@ -709,7 +725,7 @@ process from the start.
 |------|---------|
 | `0` | Every test passed |
 | `1` | A test failed, crashed, timed out, leaked or did not run, **or no tests were found** |
-| `2` | The run could not happen: a bad option, a compile error, no source files, no such project |
+| `2` | The run could not happen: a bad option, a compile error, no source files, no such project, a project file that gave no sources, or several targets and no target word |
 
 A run that finds no tests exits 1 on purpose, so a suite that silently stopped containing tests does
 not read as green. A source file that does not tokenize is a compile error like any other: the run
@@ -1955,7 +1971,8 @@ Explorer, a Test Explorer and, on every native target, debugging. `.maxon` sourc
 2. `maxon-bin/.maxon/maxon` in a workspace folder that is a Maxon source checkout (it holds `specs/`,
    `stdlib/`, `runtime/` and `maxon-bin/`), the first such folder in folder order. The compiler reads
    `stdlib/` and `runtime/` from beside its own executable, so a checkout is served by its own build. A
-   checkout with no build yet is noted in the output channel and the search goes on;
+   checkout with no build yet is noted in the output channel and the search goes on. In an untrusted
+   workspace a checkout's own build is noted the same way and passed over;
 3. `maxon` on `PATH`;
 4. `$MAXON_INSTALL/bin/maxon` when `MAXON_INSTALL` is set, otherwise `~/.maxon/bin/maxon` (the install
    script's default location);
@@ -2015,6 +2032,14 @@ directory, and debugs each selected test in turn under that copy (see
 [Running the test binary](#running-the-test-binary)); cancelling the run stops the session. The extension's
 README describes the launch attributes and the panes.
 
+**Restricted mode.** A test run, a debug session and a project file each run the workspace's code, so
+an untrusted workspace gets the features that only read it. The language server is started untrusted
+and reads each project as its directory (see [`maxon lsp-server`](#maxon-lsp-server)); the Test
+Explorer and the spec suite mark every requested test with a refusal that names trust; the debugger
+answers every launch with that refusal; and the compiler comes from the user's `maxon.serverPath`,
+`PATH` or the install, with a checkout's own build and a workspace's `maxon.serverPath` passed over.
+Trusting the workspace tells the running language server and searches for the compiler again.
+
 ### `maxon lsp-server`
 
 ```bash
@@ -2036,7 +2061,7 @@ in-memory text, for the host target.
 
 **Every feature reads the project, where the document has one, and diagnostics are checked per
 buffer and then across the project.** Hover, definition and completion resolve names through a separate index built by lexing every
-source under the document's project root and folding its declarations — a lexing pass, far lighter than
+source of the document's project (see the project's files below) and folding its declarations — a lexing pass, far lighter than
 a compile — so a name declared in another file resolves, and a type declared there offers its members.
 The index matches what the matching command compiles: for a `.maxon` document it holds the project's
 `.maxon` sources, and for a `.maxtest` document the project's `.maxtest` files as well, so a test file
@@ -2095,6 +2120,34 @@ handles `workspace/didChangeWorkspaceFolders`: a folder added to the window caps
 once, and a folder removed from it stops capping it, with no restart of the editor. Nothing else in the
 workspace is renegotiated.
 
+**A project holds the files its `.maxproj` file describes, as `maxon build` reads them.** The ladder
+names the project's directory. When its `.maxproj` declares targets, the server runs the project file
+as [`maxon build`](#the-project-file) runs it and holds the `sources` the target describes, rooted at
+the one directory they all lie under, so a file's namespace is the one the build gives it. With several
+targets the project holds the sources of every one. A `.maxproj` that declares no target, a directory
+with no `.maxproj`, and a project file that does not compile are each their directory's walk.
+
+The project file runs beside the session, for up to 30 seconds, and every request is answered
+meanwhile. The project check of a document in that project starts once the answer arrives, and every
+open document is then checked again. An answer holds until the `.maxproj` text changes; a project file
+that failed to compile, failed, or was refused is run again after ten seconds. A project file that fails
+or describes no usable build — no build, or no `sources` — is a refusal: the line `maxon build` prints
+for it is published on the `.maxproj` document, and with the project check of each document in the
+project, at the document's first character.
+
+**The server runs a project file only in a trusted workspace.** `initialize`'s
+`initializationOptions.trustedWorkspace` states the trust, and a client that sends none is trusted.
+The `maxon/workspaceTrust` notification changes it for the rest of the session, and every open document
+is then checked again:
+
+```json
+{ "trusted": true }
+```
+
+In an untrusted workspace every project is its directory's walk, and a `.maxproj` whose targets would
+be run carries one Information diagnostic at its first character:
+`this project's source list applies once the workspace is trusted; until then the project is its directory`.
+
 **A project is built when a document in it opens.** On `didOpen` the server builds the index that
 document reads, before it publishes the document's diagnostics, when the document's root is a known
 project: a directory holding a `.maxproj`, `stdlib/` or `runtime/`. A single-file document has only
@@ -2113,7 +2166,7 @@ it as gone.
 
 **Diagnostics** are published with `textDocument/publishDiagnostics` after every `didOpen` and
 `didChange`, and cleared on `didClose`. Each has the error code (for example `E3005`) as `code`,
-`source: "maxon"` and severity Error. "No `main` function" (E3001) and the unused-export diagnostics
+`source: "maxon"` and severity Error; the untrusted-workspace notice above has severity Information. "No `main` function" (E3001) and the unused-export diagnostics
 (E3092, E3093, E3094) appear in `maxon build`'s output alone.
 
 **A `.maxon` document in a project is published twice per version: the buffer check's set, then the

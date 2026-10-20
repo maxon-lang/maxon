@@ -10,7 +10,7 @@ test 'threads at a stop lists every green thread the program has, with exactly o
 	let staged = builtFixture(GtThreadsListCaseLabel, fixture: WorkersFixtureName)
 	let undebugged = runBuiltProgram(staged)
 	let workers = stagedLinesContaining(staged, needle: SpawnSpelling)
-	let loopLine = anchorLine(staged, anchor: AnchorName)
+	let loopLine = anchorLine(staged.join(StagedProgramFileName), anchor: AnchorName)
 
 	Expect.atLeast(workers, than: 2, message: "this case is about a roster with several threads on it, and the fixture spawns {workers}.")
 
@@ -25,7 +25,7 @@ test 'threads at a stop lists every green thread the program has, with exactly o
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 
 	let rosters = eventsOfKind(events, kind: ThreadsEventName)
-	Expect.equal(rosters.count(), expected: 1, message: "`{ThreadsCommand}` at a stop printed no `{ThreadsEventName}` event. In stage 1 it answered an `{ErrorEventName}` saying green threads arrive later; here it must answer a roster. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(rosters.count(), expected: 1, message: "`{ThreadsCommand}` at a stop printed no `{ThreadsEventName}` event. In stage 1 it answered an `{ErrorEventName}` saying green threads arrive later; here it must answer a roster. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let roster = eventAt(rosters, index: 0)
 	let listed = renderedThreads(roster)

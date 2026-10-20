@@ -34,6 +34,7 @@ function searchIn(world: World, overrides: Partial<CompilerSearch>): CompilerSea
 	return {
 		configuredPath: '',
 		workspaceFolders: [],
+		trustedWorkspace: true,
 		extensionCheckout: EXTENSION_CHECKOUT,
 		installRoot: INSTALL_ROOT,
 		binaryName: BINARY_NAME,
@@ -58,6 +59,13 @@ suite('locateCompiler', () => {
 
 		assert.deepStrictEqual(found.choice, { executable: slotCompilerOf(CHECKOUT, BINARY_NAME), source: 'checkout' });
 		assert.deepStrictEqual(found.notices, []);
+	});
+
+	test('an untrusted checkout\'s own build is never run, and the search goes on to PATH', async () => {
+		const found = await locateCompiler(searchIn(builtCheckoutWorld(), { workspaceFolders: [CHECKOUT], trustedWorkspace: false }));
+
+		assert.deepStrictEqual(found.choice, { executable: ON_PATH, source: 'path' });
+		assert.deepStrictEqual(found.notices, [{ kind: 'checkoutUntrusted', checkout: CHECKOUT }]);
 	});
 
 	test('a checkout folder with a built slot wins over the installed compiler', async () => {

@@ -3,17 +3,16 @@
 // compiler panic. A URL whose scheme is not `file` is not a path on any host.
 
 let CaseDirName = "build-output-that-is-not-a-path"
-let MainFileName = "main.maxon"
 let MainSource = "function main() returns ExitCode\n\treturn 0\nend 'main'\n"
 let UnspellableOutput = "http://example.com/program"
 let PanicMarker = "panic"
 
 test 'an --output= value that is not a path is an error, not a panic'
 	let dir = freshCaseDir(CaseDirName)
-	let source = dir.join(MainFileName)
+	let source = dir.join(StagedProgramFileName)
 	writeStagedFile(source, content: MainSource)
 
-	let build = runDriver([BuildCommandWord, source.toString(), "{OutputOptionPrefix}{UnspellableOutput}"])
+	let build = spawnCompiler([BuildCommandWord, source.toString(), "{OutputOptionPrefix}{UnspellableOutput}"])
 	let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
 
 	Expect.equal(build.exitCode(), expected: 1, message: "`{OutputOptionPrefix}{UnspellableOutput}` did not exit 1. {said}")

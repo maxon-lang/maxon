@@ -1,0 +1,35 @@
+public let StageLibraryTierCommandName = "stage-library-tier"
+public let StagedTierBinDirName = "bin"
+public let LibraryTierDirName = "tier"
+public let LibraryTierProgramDirName = "__fixture__"
+
+public function stagedLibraryTierCompiler(tier FilePath, staged FilePath) returns FilePath
+	let compiler = testedCompilerPath()
+	let stager = spawnCompiler([StageLibraryTierCommandName, tier.resolve(Directory.currentPath()).toString()], staged: staged, what: "`{StageLibraryTierCommandName}`", binary: compiler)
+
+	if stager.exitCode() != 0 'didNotStage'
+		panic("the gate could not run — `{StageLibraryTierCommandName} {tier.toString()}` exited {stager.exitCode()}. It wrote to stderr: {stager.stderr}")
+	end 'didNotStage'
+
+	return tier.join(StagedTierBinDirName).join(compiler.filename())
+end 'stagedLibraryTierCompiler'
+
+public function libraryTierProgramDir(staged FilePath) returns FilePath
+	return staged.join(LibraryTierDirName).join(StdlibDirName).join(LibraryTierProgramDirName)
+end 'libraryTierProgramDir'
+
+public function libraryTierProgramFile() returns String
+	return "{LibraryTierDirName}{PortablePathSeparator}{StdlibDirName}{PortablePathSeparator}{LibraryTierProgramDirName}{PortablePathSeparator}{StagedProgramFileName}"
+end 'libraryTierProgramFile'
+
+public function builtLibraryTierFixture(fixturesDir String, stagingRootDir String, caseLabel String, fixture String) returns FilePath
+	let staged = freshStagingDir("{stagingRootDir}{PortablePathSeparator}{caseLabel}")
+
+	let compiler = stagedLibraryTierCompiler(staged.join(LibraryTierDirName), staged: staged)
+	let program = stagingDir(libraryTierProgramDir(staged).toString())
+	stageStoredTree(fixtureDir("{fixturesDir}{PortablePathSeparator}{fixture}"), into: program)
+
+	_ = buildStagedSource(program, staged: staged, what: "library-tier {fixture} for case {caseLabel}", binary: compiler)
+
+	return staged
+end 'builtLibraryTierFixture'

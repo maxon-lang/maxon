@@ -19,26 +19,26 @@ SERVER its tests spawn.
 | corpus | read by | the constant it is reached through |
 |---|---|---|
 | `fmt/` | its own `fixtures.maxtest` and `engine-cases.maxtest` | `generate-expectations.py` + those two files |
-| `test-fixtures/` | `test-command/fixtures.maxtest` | `FixturesDir` |
-| `test-command/` | `maxon test`, under the compiler | `ProjectDir` |
-| `spec-harness/` | `maxon test`, under the compiler | `TestedCompilerStem` in `SpecHarness.maxon` — the binary it spawns: the compiler under test, which is also the `spec-test` harness whose refusals and gates are under test |
+| `test-fixtures/` | `testCommand/fixtures.maxtest` | `FixturesDir` |
+| `testCommand/` | `maxon test`, under the compiler | `ProjectDir` |
+| `specHarness/` | `maxon test`, under the compiler | `TestedCompilerStem` in `support/Host.maxon` — the binary it spawns: the compiler under test, which is also the `spec-test` harness whose refusals and gates are under test |
 | `lsp/` | `maxon test`, under the compiler | `TestedCompilerStem` — the server, not the dir |
-| `mcp/` | `maxon test`, under the compiler | `testedCompilerPath()` in `McpHarness.maxon` — the server it spawns |
+| `mcp/` | `maxon test`, under the compiler | `testedCompilerPath()` in `support/Host.maxon` — the server it spawns |
 | `ladders/` | `maxon test`, under the compiler | `LaddersDirName` in `index.maxtest` |
-| `parallel-compile/` | `maxon test`, under the compiler | `TestedCompilerStem` — the compiler it spawns |
-| `debug/` | `maxon test`, under the compiler | `TestedCompilerStem` in `DebugHarness.maxon` — the binary it spawns: the compiler under test, which is also what the sidecar case builds with |
-| `dap/` | `maxon test`, under the compiler | `TestedCompilerStem` in `DapClient.maxon` — the binary it spawns: the compiler under test, which is also the DAP adapter under test and what builds every fixture it debugs |
+| `parallelCompile/` | `maxon test`, under the compiler | `TestedCompilerStem` — the compiler it spawns |
+| `debug/` | `maxon test`, under the compiler | `TestedCompilerStem` in `support/Host.maxon` — the binary it spawns: the compiler under test, which is also what the sidecar case builds with |
+| `dap/` | `maxon test`, under the compiler | `TestedCompilerStem` in `support/Host.maxon` — the binary it spawns: the compiler under test, which is also the DAP adapter under test and what builds every fixture it debugs |
 | `define/` | `maxon test`, under the compiler | `TestedCompilerStem` — the compiler it spawns, which is also the one whose `--define` is under test |
-| `build-manifest/` | `maxon test`, under the compiler | `TestedCompilerStem` in `BuildManifestHarness.maxon` — the binary it spawns: the compiler under test, which is also the driver that runs each fixture's `.maxproj` target and builds what it describes |
-| `coverage/` | `maxon test`, under the compiler | `TestedCompilerStem` in `CoverageHarness.maxon` — the binary it spawns: the compiler under test, which builds every binary it measures |
-| `cli/` | `maxon test`, under the compiler | `TestedCompilerStem` in `CliHarness.maxon` — the binary it spawns: the compiler under test, which is also the DRIVER under test, or a copy of it staged under `temp/cli/` where an install would put it |
-| `profile/` | `maxon test`, under the compiler | `TestedCompilerStem` in `ProfileHarness.maxon` — the binary it spawns: the compiler under test, which is also the PROFILER under test and what every fixture here is built with |
-| `execute/` | `maxon test`, under the compiler | `TestedCompilerStem` in `ExecuteHarness.maxon` — the binary it spawns: the compiler under test, which is also the `execute` DRIVER under test and what every cached build is made by |
-| `console-write/` | `maxon test`, under the compiler | `TestedCompilerStem` in `console-write-imports.maxtest` — the binary it spawns: the compiler under test, which is also what EMITS the image the case reads |
-| `emitted-runtime/` | `maxon test`, under the compiler | `TestedCompilerStem` in `EmittedRuntimeHarness.maxon` — the binary it spawns: the compiler under test, which is also what PRINTS the Target IR its cases read |
+| `buildManifest/` | `maxon test`, under the compiler | `TestedCompilerStem` in `support/Host.maxon` — the binary it spawns: the compiler under test, which is also the driver that runs each fixture's `.maxproj` target and builds what it describes |
+| `coverage/` | `maxon test`, under the compiler | `TestedCompilerStem` in `support/Host.maxon` — the binary it spawns: the compiler under test, which builds every binary it measures |
+| `cli/` | `maxon test`, under the compiler | `TestedCompilerStem` in `support/Host.maxon` — the binary it spawns: the compiler under test, which is also the DRIVER under test, or a copy of it staged under `temp/cli/` where an install would put it |
+| `profile/` | `maxon test`, under the compiler | `TestedCompilerStem` in `support/Host.maxon` — the binary it spawns: the compiler under test, which is also the PROFILER under test and what every fixture here is built with |
+| `execute/` | `maxon test`, under the compiler | `TestedCompilerStem` in `support/Host.maxon` — the binary it spawns: the compiler under test, which is also the `execute` DRIVER under test and what every cached build is made by |
+| `consoleWrite/` | `maxon test`, under the compiler | `TestedCompilerStem` in `support/Host.maxon` — the binary it spawns: the compiler under test, which is also what EMITS the image the case reads |
+| `emittedRuntime/` | `maxon test`, under the compiler | `TestedCompilerStem` in `support/Host.maxon` — the binary it spawns: the compiler under test, which is also what PRINTS the Target IR its cases read |
 | `docs/` | `maxon test`, under the compiler | `StdlibReferenceDocument` in `stdlib-reference-documents-every-public-api.maxtest` — the document it reads; it spawns nothing, and reads `stdlib/` through `StdlibDir` |
-| `examples/` | `maxon test`, under the compiler | `TestedCompilerStem` in `ExamplesHarness.maxon` — the binary it spawns: the compiler under test, which builds every program in the checkout's `examples/` (reached through `ExamplesDirName`) and every complete program a document shows a reader |
-| `warm-rebuild/` | `maxon test`, under the compiler | `TestedCompilerStem` in `WarmRebuildHarness.maxon` — the binary it spawns: the compiler under test, which is also the `verify-warm-rebuild` driver whose properties are under test |
+| `examples/` | `maxon test`, under the compiler | `TestedCompilerStem` in `support/Host.maxon` — the binary it spawns: the compiler under test, which builds every program in the checkout's `examples/` (reached through `ExamplesDirName`) and every complete program a document shows a reader |
+| `warmRebuild/` | `maxon test`, under the compiler | `TestedCompilerStem` in `support/Host.maxon` — the binary it spawns: the compiler under test, which is also the `verify-warm-rebuild` driver whose properties are under test |
 
 ⚠ **`ladders/` is cited from outside the code that reads it.** Roughly twenty
 measurement-provenance comments across the compiler and
@@ -53,6 +53,15 @@ them, and `lsp/` stores a live `LspClient.maxon` the tests import.
 
 ```
 tests/
+  support/                       not a corpus: the helpers every corpus shares, all `public`, listed by each `<corpus>.maxproj`
+    Host.maxon                   the compiler under test (`TestedCompilerStem`, `testedCompilerPath`), the host's suffix and temp area
+    Staging.maxon                `stagingDir`, `clearStagedFiles`/`clearStagedTree`, `stageStoredTree`, `stagedFixtureTree`, `filesUnder`
+    Spawn.maxon                  `spawnIn`, `spawnCompiler`, `spawnBuild`, `runSystemTool`, `requireBuiltOrPanic`, `endedProcessId`
+    OutsideCheckout.maxon        directories under the host's temp area, outside any checkout
+    LibraryTier.maxon            `stagedLibraryTierCompiler`, `builtLibraryTierFixture`
+    Text.maxon                   the folds of a captured stream and the readers of a printed number, `joined`, `compareBytes`
+    StagedSource.maxon           `anchorLine`, `sourceColumnOf`, `linesOfStagedSource`, `buildStagedSource`, `builtTestBinary`, `sidecarOf`
+    RepositoryFacts.maxon        the names of the repository's own files and variables every corpus spells: `SidecarSuffix`, `MaxonSourceSuffix`, `TestSourceSuffix`, `StagedProgramFileName`, `CacheRootVariable`, `StdlibDirName`
   fmt/
     fixtures.maxtest             the fixture corpus: the harness, the guards and 30 tests
     engine-cases.maxtest         the engine corpus: 5 tests, on the staging and spawn the file above exports
@@ -64,15 +73,19 @@ tests/
       input/                     stored names only  — see rule 1
       expected-tree/             stored names only  — see rule 1
       expected-stdout.txt  expected-stderr.txt  expected-exit.txt  argv.txt?
-  test-command/
-    fixtures.maxtest             the shared half: paths, argv, the two corpus guards
+  testCommand/
+    fixtures.maxtest             the shared half: paths, argv, the staging under `temp/testCommand/`, the two corpus guards
     <case>.maxtest               ONE spawning `test` per file - see rule 5
     list-build.maxtest           `--list --build --json` names an absolute binary with its sidecar; each listed `select` runs one test
     no-debug-info.maxtest        `--list --build --json --no-debug-info` builds the binary with no sidecar beside it
+    a-test-project-compiles-the-sources-its-project-lists.maxtest      `maxon test` of a project whose `.maxproj` lists `.` and `../shared` compiles the sibling, and its test passes
+    a-test-and-a-build-of-one-project-compile-the-same-files.maxtest   a `.maxproj` listing only `src`: `maxon test` and `maxon build` both leave out a `stray/` that does not compile
   test-fixtures/<case>/
     <name>.maxtest               a LIVE source: `maxon test` is what compiles it
     expected.txt  expected-exit.txt  argv.txt?
-  spec-harness/
+  test-fixtures/<staged case>/   the two `.maxproj` cases above: stored names only (rule 1), staged into `temp/testCommand/<case>/`
+    proj/<name>.fixture  <sibling>/<name>.fixture
+  specHarness/
     SpecHarness.maxon            the shared half: the staging outside the checkout, the spawn, the report literals
     corpus.maxtest               every fixture has its test file, and every test file its fixture
     refusals/<case>.maxtest      one malformed spec `spec-test` must REFUSE, found through `__file__`
@@ -84,12 +97,12 @@ tests/
     <area>.maxtest               one LSP method area per file
   ladders/                       hand-built scaling generators + the README indexing them
     index.maxtest                the README's rows against the scripts beside it
-  parallel-compile/
-    parallel.maxtest             the shared half: the spawn, the staging, the counts
+  parallelCompile/
+    parallel.maxtest             the shared half: the pinned spawn, the counts
     <contract>.maxtest           ONE contract per file - see its README section
     fixtures/<program>/main.maxon.fixture   stored name only - see rule 1
   define/
-    DefineHarness.maxon                     the shared half: the spawn, the tree staging, the built program's run
+    DefineHarness.maxon                     the shared half: the `--define` builds, the built program's run
     override.maxtest                        a define replaces the default, and without one the default stands
     value-with-separator.maxtest            a value may contain `=`; the split is at the first one
     unknown-name-refused.maxtest            a define naming nothing is an error
@@ -98,7 +111,7 @@ tests/
     reported-once.maxtest                   a refused define is reported once when a parse settles the index again
     reported-on-recheck.maxtest             a refused define is reported by the second check of one project too
     fixtures/<program>/...                  stored names only - see rule 1
-  build-manifest/
+  buildManifest/
     BuildManifestHarness.maxon                          the shared half: the staging, the path-less `build` spawn, the sidecar reader, the held tree lock, the refusal check
     manifest-debug-info-false-writes-no-sidecar.maxtest       `debugInfo: false` in the manifest: an executable and no `.mxdbg`
     manifest-debug-info-false-refuses-coverage.maxtest        `--coverage` over that manifest is refused, and writes nothing
@@ -322,7 +335,7 @@ tests/
     green-thread-ids-never-name-the-main-thread.maxtest      the id a program with no scheduler runs under belongs to no green thread, and every listed green thread id walks
     stderr-is-not-starved-behind-a-stdout-backlog.maxtest      a stderr line written behind a stdout backlog arrives ahead of the stdout written after it
   coverage/
-    CoverageHarness.maxon                   the shared half: the spawn, the staging, the report readers
+    CoverageHarness.maxon                   the shared half: the instrumented build, the report readers
     coverage-line-states.maxtest            the four line states, each attached to its own line
     coverage-branch-arms.maxtest            the implicit `else` and the `match` case no run reached
     coverage-byte-identical.maxtest         instrumentation reaches the flagged build and no other
@@ -422,7 +435,7 @@ tests/
     check-scriptlib-reports-a-broken-package.maxtest        `check-scriptlib` builds a package body nothing calls, exits 1 and names `bad/Bad.maxon`
     check-scriptlib-passes-clean-packages.maxtest           `check-scriptlib` over two clean packages and no `main` exits 0 with nothing on stderr
   profile/
-    ProfileHarness.maxon                    the shared half: the spawn, the staging, the report readers
+    ProfileHarness.maxon                    the shared half: the profiler run, the report readers
     profile-hot-ordering.maxtest            the busier function ranks first in every section
     profile-folded.maxtest                  collapsed stacks carry every path, whatever the floor
     profile-greenthreads.maxtest            two green threads as themselves, the scheduler absent
@@ -458,11 +471,11 @@ tests/
     scriptlib-a-package-names-another-packages-type-by-its-qualified-name.maxtest   a package builds `scriptlib.shapes.Square` from another package, and the script prints `9`
     scriptlib-a-script-shadowing-a-package-type-leaves-the-package-whole.maxtest   a script declaring `type Widget` beside a package whose `use()` reads its own `Widget.make()` prints `7`
     fixtures/<program>/main.maxon.fixture   stored names only - see rule 1
-  console-write/
+  consoleWrite/
     console-write-imports.maxtest           which console API an emitted x64-windows image imports
     fixtures/hello/main.maxon.fixture       stored name only - see rule 1
-  emitted-runtime/
-    EmittedRuntimeHarness.maxon             the shared half: the staging, the spawn, the printed body, the line scan, the plain-load reading
+  emittedRuntime/
+    EmittedRuntimeHarness.maxon             the shared half: the build, the printed body, the line scan, the plain-load reading
     steal-reads-the-victim-ring-with-acquire-loads.maxtest     the thief reads another P's runqHead, runqTail and runnext with `ldar`, on both arm64 lanes
     locked-relist-doors-recheck-the-owner-with-an-acquire-load.maxtest     both doors that finish a slot free under `__slab_lock` re-read the span's owner word with `ldar`, on both arm64 lanes
     the-debug-stream-ring-is-published-with-a-release-and-its-read-cursor-loaded-with-an-acquire.maxtest     `__ds_reserve` publishes `write_cursor` with `stlr` and reads `read_cursor` with `ldar`, and `__ds_commit` commits the entry header with `stlr`, on both arm64 lanes
@@ -500,8 +513,8 @@ tests/
     bench-concurrency-spawn-many.maxtest    1000 services at MAXON_MAX_PROCS=1 and 4 print Go's sum of doubled indices
     bench-concurrency-thread-ring.maxtest   1000 passes round 503 services at MAXON_MAX_PROCS=1 and 4 name Go's holder, 498
     bench-concurrency-worker-pool.maxtest   16 tasks of 1000 kernel rounds at MAXON_MAX_PROCS=1 and 4 print Go's sum
-  warm-rebuild/
-    WarmRebuildHarness.maxon                the shared half: the staging and the spawn
+  warmRebuild/
+    WarmRebuildHarness.maxon                the shared half: the `verify-warm-rebuild` spawn
     warm-equals-cold.maxtest                `verify-warm-rebuild` holds on a program whose parses mint instances
     filed-type-reuse.maxtest                a bytes-only edit re-parses one file when a parse files a type
     a-second-program-reuses-library-parses.maxtest    a second program in one session reuses every library parse and equals its cold compile
@@ -563,6 +576,7 @@ tests/
     build-rebuild-compiles-an-up-to-date-output.maxtest  `build` given `rebuild: true` compiles a program its last call left up to date
   docs/
     stdlib-reference-documents-every-public-api.maxtest      docs/STDLIB_REFERENCE.md names every `public` declaration in `stdlib/*.maxon`
+    each-shared-harness-helper-is-defined-once.maxtest       every `public function` in `tests/support/*.maxon` is declared by that one file and by no other `.maxon` or `.maxtest` under `tests/`
 ```
 
 ## The six rules, and the hazard each one answers
@@ -574,7 +588,7 @@ Every one of these is here because the obvious alternative fails **silently**.
 Stored as `<name>.fixture`; a directory that must be `.git` is stored as `dot-git/`.
 The mapping is `<name>.fixture -> <name>` and `dot-<name> -> .<name>`, implemented in
 exactly two places that must agree: `generate-expectations.py` and
-`fmt/fixtures.maxtest`.
+`support/Staging.maxon`'s `storedNameUnwrapped`, which every corpus stages through.
 
 Two independent reasons, and the second is the one that bites:
 
@@ -590,9 +604,9 @@ Two independent reasons, and the second is the one that bites:
 `.maxtest` drivers.** `lsp/LspClient.maxon` is an ordinary source — a JSON-RPC client the `lsp/` tests
 import — and `debug/DebugHarness.maxon`, `debug/ImageIdentity.maxon`, `dap/DapClient.maxon`,
 `coverage/CoverageHarness.maxon`, `profile/ProfileHarness.maxon`, `execute/ExecuteHarness.maxon`,
-`cli/CliHarness.maxon`, `define/DefineHarness.maxon`, `build-manifest/BuildManifestHarness.maxon`,
-`examples/ExamplesHarness.maxon`, `warm-rebuild/WarmRebuildHarness.maxon`,
-`emitted-runtime/EmittedRuntimeHarness.maxon`, `spec-harness/SpecHarness.maxon` and `mcp/McpHarness.maxon`
+`cli/CliHarness.maxon`, `define/DefineHarness.maxon`, `buildManifest/BuildManifestHarness.maxon`,
+`examples/ExamplesHarness.maxon`, `warmRebuild/WarmRebuildHarness.maxon`,
+`emittedRuntime/EmittedRuntimeHarness.maxon`, `specHarness/SpecHarness.maxon` and `mcp/McpHarness.maxon`
 are their corpora's shared halves, `.maxon` files that `maxon test` compiles beside the `.maxtest` files
 as helpers. That follows from the rule's own reason: the hazard above is `fmt` rewriting an ORACLE, and
 these corpora keep their oracles elsewhere — `lsp/`'s are `b"…"` byte literals inside its test files,
@@ -601,19 +615,37 @@ these corpora keep their oracles elsewhere — `lsp/`'s are `b"…"` byte litera
 a stored expectation"**, a weaker rule than "every Maxon file here is stored". `fmt/` states it the
 strong way because every one of ITS fixtures is a stored expectation.
 
-Each corpus holding `.maxtest` files also holds an empty `<corpus>.maxproj`. Only a `.maxproj` marks a
-project, so without one the editor checks each test file alone and the VS Code Test Explorer runs it as
-`maxon test <file>`, where a test that calls its corpus's shared half cannot compile. The marker is
-an empty file, so `fmt` has nothing to rewrite in it, and `fmt/fixtures.maxtest` exempts `fmt.maxproj`
-by name.
+Each corpus holding `.maxtest` files also holds a `<corpus>.maxproj` whose single `build` target lists
+two source directories, `.` and `../support`, and `maxon test <corpus>` compiles exactly that source
+set, as `maxon build` does. Only a `.maxproj` marks a project, so without one the editor checks each test
+file alone and the VS Code Test Explorer runs it as `maxon test <file>`, where a test that calls its
+corpus's shared half cannot compile. `fmt/fixtures.maxtest` exempts `fmt.maxproj` by name.
+
+⭐ **`support/` HOLDS EVERY HELPER MORE THAN ONE CORPUS NEEDS, ONCE.** It is not a corpus: it has no cases,
+and its `support.maxproj` is an empty marker so the editor checks its files as one project. Its files are
+plain `.maxon` helpers like the `*Harness.maxon` files above — never a stored fixture — and `fmt` formats
+them. Four facts shape it:
+
+- **Every declaration in it is `public`.** A corpus compiles all of `support/` but calls part of it, and
+  an `export` nothing in that compilation uses is E3092; `public` is the tier exempt from that check.
+- **A corpus directory's name is its namespace**, because the project root is the common ancestor of the
+  listed directories (`tests/`). A name that is not an identifier is E3182, which is why every corpus
+  is named as an identifier: `buildManifest`, `emittedRuntime` and so on.
+- **A helper has one name and one home.** A corpus file-private function of the same name still compiles
+  and shadows the shared one, so `docs/each-shared-harness-helper-is-defined-once.maxtest` is what refuses
+  a copy: it fails when any `public function` of `support/` is declared by another `.maxon` or `.maxtest`
+  under `tests/`.
+- **A helper that is not generic stays in its corpus.** `support/` holds the compiler's path, staging,
+  spawning, outside-checkout directories, the library tier, and the folds of a captured stream; what a
+  corpus knows about its own subject stays in its `*Harness.maxon`.
 
 ⛔ **No `.maxonignore` in this directory.** A marker excludes its subtree from every walk that
 honours it — `maxon test`'s, `fmt`'s and the build's — so a marker at a corpus root removes the
-very files the corpus stages: every `test-command` case finds no sources and exits 2.
+very files the corpus stages: every `testCommand` case finds no sources and exits 2.
 
 ### 2. stderr is compared, not just stdout
 
-`test-command/reserved-name-refused.maxtest` shows the trap: its fixture's `expected.txt` holds
+`testCommand/reserved-name-refused.maxtest` shows the trap: its fixture's `expected.txt` holds
 stdout, and the compile error that case is about goes to stderr, so the case reads stderr itself.
 **Every `fmt` refusal writes to stderr and leaves stdout empty**, so a stdout-only corpus has zero
 coverage of the refusals that exist to prevent a destructive default.
@@ -626,14 +658,14 @@ an unexpected extra write is red even when stdout is right.
 
 ### 4. The working directory is the staging directory, never the checkout root
 
-This inverts `test-command`'s contract deliberately. The flag-refusal cases exist
+This inverts `testCommand`'s contract deliberately. The flag-refusal cases exist
 because a regression makes `fmt` fall back to the current directory and rewrite it in
 place — **run from the checkout root, the fixture that gates that incident would
 reproduce it.**
 
 ### 5. Two files, one per corpus, and the per-file deadline is the only thing that would split them further
 
-`test-command/` puts each spawning `test` in its own file because a file is what
+`testCommand/` puts each spawning `test` in its own file because a file is what
 ONE process runs, under one deadline, and its fixtures each compile a project. These format a
 tiny staged tree. `fixtures.maxtest` holds the fixture corpus and the real-sources census (30
 tests), and `engine-cases.maxtest` the engine corpus (5 tests); **both files together measured
@@ -646,8 +678,7 @@ The engine corpus's parity, content and idempotence checks share ONE test, becau
 two `fmt` runs, and two spawns fit the deadline where a test per property would not.
 
 The engine file declares no staging, spawning or run check of its own: it calls the ones
-`fixtures.maxtest` exports, and a second copy of a free function in this directory would not
-compile (see the note under `debug/`).
+`fixtures.maxtest` exports and the ones `support/` holds.
 
 ### 6. Expectations are GENERATED, never hand-written
 
@@ -682,10 +713,10 @@ Written down because a limit nobody states gets mistaken for coverage.
   like one that was already perfect. One fixture pins that for one file; nothing tells
   you it is happening to two hundred.
 
-## Staging outside the checkout — `spec-harness/`, `cli/` and `lsp/`
+## Staging outside the checkout — `specHarness/`, `cli/` and `lsp/`
 
 Three corpora stage under the host temp area (`TEMP` on Windows; `TMPDIR`, else `/tmp`, elsewhere),
-outside `temp/`, each for a premise the checkout would falsify: `spec-harness/` runs
+outside `temp/`, each for a premise the checkout would falsify: `specHarness/` runs
 `spec-test` where no tree lock is taken, `cli/` needs a working directory with no `vendor/` above it,
 and `lsp/` a tree with no `.maxproj` file above it.
 
@@ -701,7 +732,7 @@ whether the case passed or threw. The staging function itself is private, so no 
 the checkout without that removal. An interface rather than a closure, because a closure may not throw
 (E3101). In `lsp/` each case discards its directory once its session is a value, before it asserts.
 
-## `spec-harness/` — the spec harness's own refusals and gates
+## `specHarness/` — the spec harness's own refusals and gates
 
 `spec-test` refuses a malformed spec by PANICKING while it parses its own corpus, so a refusal is
 observable only from outside the process: every case here spawns `spec-test` at a fixture and reads its
@@ -757,7 +788,7 @@ or `SpecBatch` fails this corpus, which `spec-test` does not run.
 no row, a row naming no script, a script named by two rows — and fails when either side is empty,
 because a comparison against nothing passes. It spawns nothing and runs at the default deadline.
 
-## `parallel-compile/` — the compiler's worker pools
+## `parallelCompile/` — the compiler's worker pools
 
 It gates a COMPILER phase rather than a driver command, and it lives here for the same reason `fmt/` does: what it asserts is what `maxon build`
 REPORTS and EMITS at two processor counts or across two identical builds, which a `specs` program cannot observe about
@@ -780,7 +811,7 @@ and for the backend pool's jobs:
 rule 1's `.fixture` half only (no `dot-` names), rule 4 (the child runs in its staging directory),
 and departs from rule 5 on rule 5's own terms: most contracts need more than one compile, and `maxon
 test` runs files concurrently, so every case stages into a directory named for ITSELF under
-`temp/parallel-compile/`. Its expectations are not generated — they are properties (a pinned
+`temp/parallelCompile/`. Its expectations are not generated — they are properties (a pinned
 report prefix, byte identity, stderr equality between two runs, equal memory rows between two
 runs), each guarded by a positive
 control so two runs that both failed to build cannot read as agreement.
@@ -795,15 +826,17 @@ the corpus — what `maxon debug` can do to it while it is RUNNING.
 the compiler that builds each fixture, the driver that debugs it, and the program running the case. A
 runner broken badly enough to report green having run nothing cannot detect itself — READ THE PASS COUNT.
 
-⛔ **THE SHARED HALF IS A PLAIN `.maxon`, AND ONLY THE CASES ARE `.maxtest` FILES.** `TestedCompilerStem`,
-the staging, the spawning and the stream folds live in `DebugHarness.maxon`, which the runner compiles
-beside the cases and runs as none of them — so the corpus has one home for them, declared whichever case
-file runs. `coverage/` and `profile/` below are shaped the same way.
+⛔ **THE SHARED HALF IS A PLAIN `.maxon`, AND ONLY THE CASES ARE `.maxtest` FILES.** What is the debugger's
+lives in `DebugHarness.maxon`, which the runner compiles beside the cases and runs as none of them; the
+compiler's path, the staging, the spawning and the stream folds live in `support/`, which every corpus's
+`.maxproj` lists. `coverage/` and `profile/` below are shaped the same way.
 
 ⚠ **THE COMPILER ENFORCES HALF OF THAT AND NO MORE.** Every free FUNCTION in a directory shares one
-namespace whatever its visibility (E3006, measured here), so a second copy of a helper will not compile.
-A file-private `let` does NOT collide — two case files may each declare `TypesSectionName` and both are
-accepted — so duplicated CONSTANTS are the half nothing catches for you, and a name renamed to dodge a
+namespace whatever its visibility (E3006, measured here), so a second copy of a helper beside it in the
+same directory will not compile. A function in another directory does not collide: a file-private copy of
+a `support/` helper shadows it, which is why `each-shared-harness-helper-is-defined-once.maxtest` exists.
+A file-private `let` does NOT collide either — two case files may each declare `TypesSectionName` and both
+are accepted — so duplicated CONSTANTS are the half nothing catches for you, and a name renamed to dodge a
 collision is the shape that duplication takes here.
 
 **A FAULT FIXTURE IS BUILT AS LIBRARY TIER.** `crash` and `faultcallee` reach a hardware fault through
@@ -925,7 +958,7 @@ A case drives its session into values first and asserts after `dapRunSession` ha
 because an unreleased adapter process is a leak and exits the run 101.
 
 The runner, the compiler that builds each fixture and the adapter are one binary, named by
-`TestedCompilerStem` in `DapClient.maxon`, so the `debug/` corpus's warning holds here too: read the pass
+`TestedCompilerStem` in `support/Host.maxon`, so the `debug/` corpus's warning holds here too: read the pass
 count. The debugger it drives runs on every native host, so the corpus runs on all four of them, and
 like `debug/` each case spends a compile plus a debugged run.
 
@@ -934,9 +967,8 @@ like `debug/` each case spends a compile plus a debugged run.
 Three cases over one subject: `maxon build --coverage` instruments, the program counts and writes
 `<exe>.mxcov` on its way out, and `maxon coverage <run|report> <exe>` joins three artifacts produced at
 three different moments — the binary's `.text` hash, the `.mxdbg` sidecar's coverage-point table, and
-those counters. The shared half — `TestedCompilerStem`, the staging, the spawning, the stream folds,
-the summary reader and the anchor lookup — lives in `CoverageHarness.maxon`; see the note under
-`debug/`.
+those counters. The shared half — the instrumented build, the tool's run and the summary reader —
+lives in `CoverageHarness.maxon`, and the rest in `support/`; see the note under `debug/`.
 
 ⭐ **A COUNTER IS AN ANONYMOUS INDEX.** That is the whole reason this corpus is shaped the way it is: a
 join that is off by one stride does not fail, it produces a full report of real counts on the wrong
@@ -976,9 +1008,9 @@ test` runs files concurrently, and a tree is what an output path lives in.
 ## `profile/` — where a program's CPU time went, measured from outside it
 
 Three cases over one subject: `maxon profile run` samples a RUNNING program by suspending its threads
-from another process, and reports where the samples landed. The shared half — the driver stem, the
-staging, the spawning, the folds every reader applies and the corpus's own reporting floor — lives in
-`ProfileHarness.maxon`; see the note under `debug/`.
+from another process, and reports where the samples landed. The shared half — the profiler's run, the
+report readers and the corpus's own reporting floor — lives in `ProfileHarness.maxon`, and the rest in
+`support/`; see the note under `debug/`.
 
 ⭐⭐ **THIS CORPUS PINS NO NUMBER, AND THAT IS NOT TIDINESS — IT IS WHAT A SAMPLING PROFILER IS.** Two
 runs of one program do not agree on a count, a percentage or a sample total, so every assertion here is
@@ -1011,8 +1043,8 @@ directory under `temp/profile/`), and it keeps rule 5: one spawning `test`, one 
 
 Twenty-eight cases in twenty-seven files over one subject: `maxon execute <file|directory> [args...]` compiles a program (or reuses a
 cached build of it) and runs it, forwarding stdin, stdout, stderr and the exit code. The shared half —
-the driver stem, the staging, the per-case cache root, the two spawners and the slot readers — lives in
-`ExecuteHarness.maxon`; see the note under `debug/`.
+the staging, the per-case cache root, the two spawners and the slot readers — lives in
+`ExecuteHarness.maxon`, and the rest in `support/`; see the note under `debug/`.
 
 ⭐⭐ **EVERY CASE POINTS THE DRIVER AT A CACHE OF ITS OWN**, through `MAXON_RUN_CACHE_ROOT` in the child's
 environment, and that is two facts at once: `maxon test` runs files CONCURRENTLY, so two cases sharing a
@@ -1071,7 +1103,7 @@ the exception and spawns nothing — it holds the two guards that are about the 
 driver: every fixture directory is one the harness's roster names and every name in that roster is a
 directory, and no ordinary `.maxon` sits beside the case files nor any live one under `fixtures/`.
 
-## `build-manifest/` — what a `.maxproj` target says about the build, honoured as the command line's flags are
+## `buildManifest/` — what a `.maxproj` target says about the build, honoured as the command line's flags are
 
 One subject: `maxon build` with NO path (or with a target word) runs a target of the staged project's
 `.maxproj` file and builds what it describes. A described build is a second way to say what a flag says,
@@ -1092,7 +1124,7 @@ one spawning `test`, one file. Each case root holds an empty `stdlib/` directory
 build takes is the case's own and never the real checkout's; the tree-lock cases plant their records,
 claims and leftovers there.
 
-## `console-write/` — which console API an emitted x64-windows image imports
+## `consoleWrite/` — which console API an emitted x64-windows image imports
 
 One case, and its subject is a program the compiler WROTE rather than one it ran. A Windows console
 decodes what a program writes, and the two ways to make it decode UTF-8 differ in what they touch:
@@ -1125,9 +1157,9 @@ collects its findings and fails once, listing every one. Its own red output is w
 works in both directions: a name that IS imported is found, and one that is not is not.
 
 It applies rule 1's `.fixture` half only (no `dot-` names) and rule 4 (the child runs in a staging
-directory under `temp/console-write/`), and it keeps rule 5: one spawning `test`, one file, one compile.
+directory under `temp/consoleWrite/`), and it keeps rule 5: one spawning `test`, one file, one compile.
 
-## `emitted-runtime/` — the ORDERING an emitted runtime body reads another thread's word with, and the machine a pinned green thread runs on
+## `emittedRuntime/` — the ORDERING an emitted runtime body reads another thread's word with, and the machine a pinned green thread runs on
 
 Seven cases. Five read the Target IR, and each one's subject there is a body no author wrote: one the back end synthesizes into every
 program that spawns, two into every program that allocates, fifteen scheduler, timer and poller
@@ -1137,7 +1169,7 @@ bodies, and the two shared-segment word accessors. Each of the five builds a fix
 `arm64-linux` with `--emit-ir-runtime=`, cut
 `func @<function>` out of the printed Target IR, and ask how that body reads a word another thread
 published — with `ldar` or with a plain `ldr` — and how it writes one, with `stlr` or a plain `str`.
-The shared half — the staging, the spawn, the cut, the line scan and the plain-access reading — lives
+The shared half — the build, the cut, the line scan and the plain-access reading — lives
 in `EmittedRuntimeHarness.maxon`; see the note under `debug/`. The harness holds three scans of the cut
 body: `firstLineIndex` where an ORDER is demanded and `bodyLineCount` where a TALLY is, both selecting a
 line by the op it starts with, an operand it contains and an operand it ends with; and `registerEvents`,
@@ -1253,9 +1285,9 @@ corpora. The arm64 cases cross-build with `--target=`, so every host reads the s
 pinned-machine cases build and run for the host, so each lane's own scheduler is what they test.
 
 It applies rule 1's `.fixture` half only (no `dot-` names) and rule 4 (every child runs in a staging
-directory under `temp/emitted-runtime/`, named for the CASE, because `maxon test` runs files
+directory under `temp/emittedRuntime/`, named for the CASE, because `maxon test` runs files
 concurrently and one fixture staged twice would be two runs over one tree), and it keeps rule 5 at the
-budget `parallel-compile/` prices: one spawning `test` per file, then one compile per BODY per lane for
+budget `parallelCompile/` prices: one spawning `test` per file, then one compile per BODY per lane for
 the two cases that ask for one body at a time — two for the steal case, four for the relist doors —
 against one compile per LANE for the published words, whose fifteen bodies are named in a single
 comma-separated `--emit-ir-runtime=`. The widest case MEASURED at 2.7 s on a Windows host, against the
@@ -1270,7 +1302,7 @@ of bodies takes the single compile; one being extended asks for its bodies one a
 ## `examples/` — every program in `examples/`, and every complete program the docs show, still builds and still computes its known answer
 
 One case per program: build it with the compiler under test and, where its answer is known, run it and
-compare. The shared half — the compiler stem, the build, the run and the answer check — lives in
+compare. The shared half — the build, the run and the answer check — lives in
 `ExamplesHarness.maxon`; see the note under `debug/`.
 
 A complete program a document shows a reader — one with a `main`: the README and homepage heroes, the
@@ -1314,7 +1346,7 @@ clears what a previous run staged, so staging follows the build.
 ⚠ **A PATH THE PROGRAM PRINTS WEARS THE HOST'S SEPARATOR**; the harness folds `\r` and nothing else, so an
 expectation containing one is built from `FilePath.separator()`.
 
-## `warm-rebuild/` — a compile that reuses memos emits what a cold one emits, and reuses what it should
+## `warmRebuild/` — a compile that reuses memos emits what a cold one emits, and reuses what it should
 
 Every case runs `maxon verify-warm-rebuild <dir>` over one fixture: the driver compiles one project cold, edits the last file
 the author wrote by bytes alone, compiles the same project warm, and compares what that emits with a cold
@@ -1340,7 +1372,7 @@ per-case directories, which `stdlib/Sleep.maxon` also declares, and its case ass
 (`library parsed cold (namesOverlap)`).
 
 The driver compiles the program several times. It applies rule 1's `.fixture` half only and rule 4 (the child runs in a staging
-directory under `temp/warm-rebuild/`).
+directory under `temp/warmRebuild/`).
 
 ## `mcp/` — JSON-RPC MCP server for end users and compiler contributors
 

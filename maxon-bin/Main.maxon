@@ -30,7 +30,7 @@ module let BuildSubcommandName = "build"
 // twice can be renamed in one place and stay documented under the other.
 let VerifyWarmRebuildCommandName = "verify-warm-rebuild"
 let VerifyRecheckCommandName = "verify-recheck"
-let LspServerCommandName = "lsp-server"
+module let LspServerCommandName = "lsp-server"
 let DapServerCommandName = "dap-server"
 let DevFlag = "--dev"
 let McpHttpFlag = "--http"
@@ -246,7 +246,7 @@ module let MetricsFlagPrefix = "--metrics="
 // The value may contain `=` and the name may not, so the split is at the first one: a description
 // or a URL needs it, and a mangled value would be found only by reading the emitted binary.
 let DefineFlagPrefix = "--define="
-let DefineNameValueSeparator = "="
+module let DefineNameValueSeparator = "="
 
 module let RungsFlagPrefix = "--rungs="
 module let RepeatFlagPrefix = "--repeat="
@@ -258,7 +258,7 @@ module let EmitCorpusFlagPrefix = "--emit-corpus="
 // project reads.
 let RuntimeNameSeparator = ","
 
-enum DefinePairError implements Error
+module enum DefinePairError implements Error
 	noSeparator
 end 'DefinePairError'
 
@@ -267,7 +267,7 @@ end 'DefinePairError'
 //
 // The value is every piece after the first, rejoined: `Url=https://x/?a=b` splits into four pieces.
 // Slicing at a byte offset is not simpler, because a `String` index is a grapheme cursor.
-function defineFromPair(pair String) returns Define throws DefinePairError
+module function defineFromPair(pair String) returns Define throws DefinePairError
 	let cut = pair.split(DefineNameValueSeparator)
 
 	if cut.count() < 2 'noValueGiven'
@@ -288,7 +288,7 @@ end 'defineFromPair'
 
 function main() returns ExitCode
 	// First, so every line the compiler logs takes the `[CMP] LEVEL: msg` shape
-	// `tests/parallel-compile` pins.
+	// `tests/parallelCompile` pins.
 	installCompilerLogHandler()
 
 	var args = MaxonArgs.parse()
@@ -439,243 +439,68 @@ module function commandLineTarget(stated StatedText) returns Target throws Targe
 	throw TargetFlagError.unrecognized
 end 'commandLineTarget'
 
-// The fields of `stdlib/Build.maxon`'s JSON that this reads back.
-let ManifestOutputKey = "output"
-let ManifestSourcesKey = "sources"
-let ManifestVersionKey = "version"
-let ManifestDefinesKey = "defines"
-let ManifestDebugInfoKey = "debug_info"
-let ManifestDirectoryKey = "directory"
-let ManifestDelegateTargetKey = "target"
-let ManifestRebuildWithOutputKey = "rebuild_with_output"
-
-let DebugInfoWhenUnstated = true
-let RebuildWithOutputWhenUnstated = false
-
-let CompilerVariable = "MAXON_COMPILER"
 let SecondStageVariable = "MAXON_SECOND_STAGE"
 let SecondStageValue = "1"
 let NotRepeatedPrefix = "Not repeating this build with the program it wrote:"
 
-// The channel a manifest describes its build over, so that its stdout stays the task's own. The
-// compiler cannot read a stdlib constant, so `stdlib/Build.maxon` spells this name too: the two
-// copies must agree, or every manifest describes nothing and every path-less build refuses.
-let BuildDescriptionVariable = "MAXON_BUILD_DESCRIPTION"
-
-let BuildDescriptionSuffix = ".build.json"
-
-let MaxDelegationDepth = 8 as DelegationDepth
-
 let ProductPathSeparator = "/"
 
-let DescribedBuildsOpen = "["
-let DescribedBuildsClose = "]"
+function runProjectBuild(args MaxonArgs) returns ExitCode
+	var voice = buildVoice(args)
 
-module typealias DelegationDepth = int(0 to 64)
-
-module union ManifestBase
-	workingDirectory
-	directory(dir FilePath)
-end 'ManifestBase'
-
-module union ManifestProgramRun
-	described(text String)
-	describedNothing(code ExitCode)
-	notRun
-end 'ManifestProgramRun'
-
-// A name that is not a target is not an error: `maxon build <x>` may mean the path x, so a project
-// declaring no `x` answers `noSuchTarget` and the caller falls back to path semantics. Refusing
-// would let a project break builds it was never part of.
-union ProjectRun
-	ran(code ExitCode)
-	noSuchTarget
-end 'ProjectRun'
-
-union TargetChoice
-	named(name String)
-	notDeclared(word String, offered TaskNameArray)
-	refused(code ExitCode)
-end 'TargetChoice'
-
-function runProjectBuild(args MaxonArgs, targetWord StatedText) returns ProjectRun
-	let search = try driverFileIn(Directory.currentPath(), extension: ProjectFileExtension) otherwise (e) 'unreadableLayout'
-		reportCompileError(e)
-		return ProjectRun.ran(1)
-	end 'unreadableLayout'
-
-	match search 'search'
-		found(projectFile) then return buildNamedTarget(projectFile, word: targetWord, args: args)
-		none then return withoutAProjectFile(targetWord)
-	end 'search'
+	match projectRosterIn(Directory.currentPath(), voice: voice) 'roster'
+		noProjectFile then return withoutAProjectFile()
+		failed(inputs) then return rosterRefusalCode(inputs)
+		declared(projectFile, targets) then return buildSoleTarget(projectFile, declared: targets, args: args, voice: voice)
+	end 'roster'
 end 'runProjectBuild'
 
-function withoutAProjectFile(targetWord StatedText) returns ProjectRun
-	match targetWord 'nameWithoutAProject'
-		stated then return ProjectRun.noSuchTarget
-		unstated then break
-	end 'nameWithoutAProject'
-
+function withoutAProjectFile() returns ExitCode
 	printError("Usage: maxon build <file|directory|target>... [{OutputFlagPrefix}<output>] [--emit-ir] [--emit-ir-runtime=<name>,...] [--target=<cpu>-<os>]\n")
 	printError("\n")
 	printError("With no path, `maxon build` builds a target of the `{ProjectFileExtension}` file in the current directory. There is none here.\n")
-	return ProjectRun.ran(1)
+	return OwnFailureExit
 end 'withoutAProjectFile'
 
-function buildNamedTarget(projectFile FilePath, word StatedText, args MaxonArgs) returns ProjectRun
-	match chosenTarget(projectFile, word: word) 'chosen'
-		named(name) then return ProjectRun.ran(buildThroughProject(projectFile, target: name, args: args, base: ManifestBase.workingDirectory, depth: 0))
-		notDeclared then return ProjectRun.noSuchTarget
-		refused(code) then return ProjectRun.ran(code)
+function buildSoleTarget(projectFile FilePath, declared TaskNameArray, args MaxonArgs, voice ManifestVoice) returns ExitCode
+	match chosenTarget(projectFile, declared: declared, word: StatedText.unstated, voice: voice) 'chosen'
+		named(name) then return buildThroughProject(projectFile, target: name, args: args, base: ManifestBase.workingDirectory, depth: 0)
+		notDeclared then panic("buildSoleTarget: the project was asked for no target, and only a stated word can name one it does not declare")
+		refused(code) then return code
 	end 'chosen'
-end 'buildNamedTarget'
+end 'buildSoleTarget'
 
-// Several targets and no name are listed rather than guessed at: picking the first would report
-// success for a build nobody asked for.
-function chosenTarget(projectFile FilePath, word StatedText) returns TargetChoice
-	var declared = try entryNamesDeclaredIn(projectFile) otherwise (e) 'noRoster'
-		reportEntryRosterError(e)
-		return TargetChoice.refused(OwnFailureExit)
-	end 'noRoster'
+function runWordBuild(args MaxonArgs, word String) returns ExitCode
+	var voice = buildVoice(args)
 
-	match word 'aTargetNamed'
-		stated(spelled) then return declaredTargetNamed(spelled, declared: declared)
-		unstated then break
-	end 'aTargetNamed'
-
-	if declared.count() == 0 'noTargets'
-		printError("error: {projectFile.filename()} declares no targets.\n")
-		return TargetChoice.refused(OwnFailureExit)
-	end 'noTargets'
-
-	if declared.count() > 1 'severalTargets'
-		printError("error: {projectFile.filename()} declares {declared.count()} targets. Name one:\n")
-		printEntryWords(declared)
-		return TargetChoice.refused(OwnFailureExit)
-	end 'severalTargets'
-
-	return TargetChoice.named(try declared.get(0) otherwise panic("chosenTarget: the count was just held to one"))
-end 'chosenTarget'
-
-function declaredTargetNamed(word String, declared TaskNameArray) returns TargetChoice
-	let named = entryNameOf(word)
-	return TargetChoice.named(named) if declared.contains(named) else TargetChoice.notDeclared(word, offered: declared)
-end 'declaredTargetNamed'
+	match readingOfWord(Directory.currentPath(), word: word, voice: voice) 'reading'
+		aTarget(projectFile, name) then return buildThroughProject(projectFile, target: name, args: args, base: ManifestBase.workingDirectory, depth: 0)
+		aPath then return runBuildPaths(args)
+		refused(code) then return code
+	end 'reading'
+end 'runWordBuild'
 
 function buildThroughProject(projectFile FilePath, target String, args MaxonArgs, base ManifestBase, depth DelegationDepth) returns ExitCode
-	let outcome = runManifestProgram(projectFile, entry: target.toByteArray(), speaker: BuildSubcommandName, base: base, arguments: StringArray.create(), args: args, announce: true)
+	var voice = buildVoice(args)
 
-	return match outcome 'outcome'
-		described(text) gives buildFromManifestOutput(text, args: args, manifest: projectFile, base: base, depth: depth)
-		describedNothing(code) gives describedNoBuild(projectFile, code: code)
-		notRun gives OwnFailureExit
-	end 'outcome'
+	return buildResolved(describedThroughProject(projectFile, target: target, base: base, depth: depth, voice: voice), args: args, voice: voice)
 end 'buildThroughProject'
 
-function describedNoBuild(manifest FilePath, code ExitCode) returns ExitCode
-	printError("error: {manifest.filename()} exited {code} and described no build\n")
-	return OwnFailureExit if exitSucceeded(code) else code
-end 'describedNoBuild'
+function buildVoice(args MaxonArgs) returns ManifestVoice
+	return ManifestVoice.forCommandLine(BuildSubcommandName, announce: true, logOverridden: args.logOverridden)
+end 'buildVoice'
 
-// Built for this host whatever `--target` says: this machine is about to run it, and the flag
-// describes the program the manifest asks for. Kept in the run cache and never in the project: a
-// path inside the project is written by every concurrent build of it, and which lock would apply is
-// known only once the manifest has run.
-//
-// Only this compile is silenced, and the level goes back before the next one. The build the manifest
-// goes on to describe is what the caller asked for, and its own report is their answer.
-module function runManifestProgram(manifest FilePath, entry ByteArray, speaker String, base ManifestBase, arguments StringArray, args MaxonArgs, announce bool) returns ManifestProgramRun
-	let spoke = quietTheBuildChatter(args)
-
-	let runner = try cachedBuild(manifest, isProject: false, target: detectHostTarget(), entryFunction: entry, speaker: speaker) otherwise 'manifestNotBuilt'
-		Log.setLevel(spoke)
-		printError("error: {manifest.filename()} could not be built — the reason is above\n")
-		return ManifestProgramRun.notRun
-	end 'manifestNotBuilt'
-
-	Log.setLevel(spoke)
-
-	if announce 'tellTheReader'
-		reportBuildRunner(runner.compiled, manifest: manifest)
-	end 'tellTheReader'
-
-	let description = buildDescriptionPath(runner)
-	discardDescription(description)
-
-	var overrides = EnvMap.create()
-	overrides.upsert(BuildDescriptionVariable, value: description.toString())
-	overrides.upsert(CompilerVariable, value: runningCompilerPath().toString())
-
-	let code = spawnForwarding(Executable.path(runner.executable), arguments: arguments, environment: Environment.inheritUpdating(overrides), standardInput: InputSource.inherit, workingDirectory: baseDirectory(base), speaker: speaker)
-
-	if not exitSucceeded(code) 'taskFailed'
-		discardDescription(description)
-		return ManifestProgramRun.describedNothing(code)
-	end 'taskFailed'
-
-	if not File.exists(description) 'describedNothing'
-		return ManifestProgramRun.describedNothing(SucceededExit)
-	end 'describedNothing'
-
-	let text = try File.readText(description) otherwise 'unreadable'
-		discardDescription(description)
-		printError("error: {manifest.filename()} described a build that could not be read back from {description.toString()}\n")
-		return ManifestProgramRun.notRun
-	end 'unreadable'
-
-	discardDescription(description)
-	return ManifestProgramRun.described(text)
-end 'runManifestProgram'
-
-function runningCompilerPath() returns FilePath
-	return try Process.executablePath() otherwise panic("runningCompilerPath: this compiler found its stdlib by walking up from its own executable, so the host has already named that executable")
-end 'runningCompilerPath'
-
-// The name carries this process's id because two concurrent builds of one manifest share the cache
-// slot the runner lives in, and each would otherwise read back the other's description.
-function buildDescriptionPath(runner CachedProgram) returns FilePath
-	return try FilePath.from("{runner.executable.toString()}.{Process.id()}{BuildDescriptionSuffix}") otherwise panic("buildDescriptionPath: '{runner.executable.toString()}' is a path, so it is one with a suffix on the end")
-end 'buildDescriptionPath'
-
-function discardDescription(description FilePath)
-	try File.delete(description) otherwise ignore
-end 'discardDescription'
-
-function baseDirectory(base ManifestBase) returns FilePath
-	return match base 'base'
-		workingDirectory gives inheritedWorkingDirectory()
-		directory(dir) gives dir
-	end 'base'
-end 'baseDirectory'
+function buildResolved(resolution DescriptionResolution, args MaxonArgs, voice ManifestVoice) returns ExitCode
+	return match resolution 'resolution'
+		resolved(described) gives buildDescribed(described, args: args, voice: voice)
+		refused(code) gives code
+	end 'resolution'
+end 'buildResolved'
 
 // The empty path is `Subprocess.Configuration`'s sentinel for "inherit this process's directory".
 module function inheritedWorkingDirectory() returns FilePath
 	return try FilePath.from("") otherwise panic("inheritedWorkingDirectory: the empty path is the inherit-cwd sentinel and always parses")
 end 'inheritedWorkingDirectory'
-
-// A relative path a delegated manifest states is its own directory's, because that is the directory
-// it was run in. Rebasing a manifest run in the working directory would make an absolute path of
-// every output the caller spelled, which is what `Compiled -> <path>` and the tree lock read.
-function rebasedOnManifest(spelling String, base ManifestBase) returns String
-	return match base 'base'
-		workingDirectory gives spelling
-		directory(dir) gives anchoredUnder(spelling, dir: dir)
-	end 'base'
-end 'rebasedOnManifest'
-
-function anchoredUnder(spelling String, dir FilePath) returns String
-	let stated = try FilePath.from(spelling) otherwise return spelling
-
-	return stated.anchoredAt(dir).toString()
-end 'anchoredUnder'
-
-// One line on stdout, ahead of the build's own report: which of the two things happened to the
-// program that describes the build. A reader waiting on a cold manifest compile is otherwise told
-// nothing at all.
-function reportBuildRunner(compiled bool, manifest FilePath)
-	let said = "Compiled the build runner" if compiled else "Used the cached build runner"
-	print("{said} ({manifest.filename()})\n")
-end 'reportBuildRunner'
 
 // A function rather than a reassignment, which would clone a `String` neither branch changes.
 function chosenOutput(fromManifest String, fromFlag StatedText) returns StatedText
@@ -685,13 +510,6 @@ function chosenOutput(fromManifest String, fromFlag StatedText) returns StatedTe
 	end 'flag'
 end 'chosenOutput'
 
-function refuseWhatIsNotABuild(described String, manifest FilePath) returns ExitCode
-	printError("error: {manifest.filename()} described something that is not a build.\n")
-	printError("It must write what `Build.build(source)` or `Build.buildWithConfig(config)` writes. It wrote:\n")
-	printError("{described}\n")
-	return OwnFailureExit
-end 'refuseWhatIsNotABuild'
-
 function statedOrDefaultOutput(stated StatedText, manifest FilePath) returns String
 	return try stated.text() otherwise "{ProjectProductsDirName}{ProductPathSeparator}{manifest.stem()}"
 end 'statedOrDefaultOutput'
@@ -699,106 +517,47 @@ end 'statedOrDefaultOutput'
 // A field the description states and this cannot use is an error, never a default: a guess is how a
 // build compiles the wrong thing while reporting success.
 module function buildFromManifestOutput(described String, args MaxonArgs, manifest FilePath, base ManifestBase, depth DelegationDepth) returns ExitCode
-	var doc = try Json.parse("{DescribedBuildsOpen}{described}{DescribedBuildsClose}") otherwise return refuseWhatIsNotABuild(described, manifest: manifest)
-	let describedCount = try doc.arrayLength(doc.root) otherwise panic("buildFromManifestOutput: the description is parsed inside brackets, so its root is an array")
+	var voice = buildVoice(args)
 
-	if describedCount > 1 'severalBuilds'
-		printError("error: {manifest.filename()} described {describedCount} builds in one run, and a target or a task describes one. Give each build its own.\n")
-		return OwnFailureExit
-	end 'severalBuilds'
+	return buildResolved(resolveDescription(described, manifest: manifest, base: base, depth: depth, voice: voice), args: args, voice: voice)
+end 'buildFromManifestOutput'
 
-	let chosen = try doc.arrayAt(doc.root, index: 0) otherwise return refuseWhatIsNotABuild(described, manifest: manifest)
-
-	let delegateDirectory = try manifestStatedText(doc, build: chosen, key: ManifestDirectoryKey) otherwise (e) 'badDirectory'
-		return reportMalformedManifestField(ManifestDirectoryKey, error: e, manifest: manifest)
-	end 'badDirectory'
-
-	let output = try manifestOutput(doc, build: chosen) otherwise (e) 'badOutput'
-		return reportMalformedManifestField(ManifestOutputKey, error: e, manifest: manifest)
-	end 'badOutput'
-
-	var statedSources = try manifestSources(doc, build: chosen, base: base) otherwise (e) 'badSources'
-		return reportMalformedManifestField(ManifestSourcesKey, error: e, manifest: manifest)
-	end 'badSources'
-
-	let rebuildWithOutput = try manifestBool(doc, build: chosen, key: ManifestRebuildWithOutputKey, unstated: RebuildWithOutputWhenUnstated) otherwise (e) 'badRebuildWithOutput'
-		return reportMalformedManifestField(ManifestRebuildWithOutputKey, error: e, manifest: manifest)
-	end 'badRebuildWithOutput'
-
-	match delegateDirectory 'delegated'
-		unstated then break
-		stated(directory) then return buildDelegatedManifest(doc, build: chosen, directory: directory, statedSources: statedSources, rebuildWithOutput: rebuildWithOutput, args: args, manifest: manifest, base: base, depth: depth)
-	end 'delegated'
-
-	var inputPaths = statedSources
-
-	// An empty `sources` is refused, not read as this directory: that would compile the whole tree
-	// under a command that named nothing. `Build.build(".")` says so explicitly.
-	if inputPaths.count() == 0 'noPaths'
-		printError("error: {manifest.filename()} named no sources to compile.\n")
-		printError("Use `Build.buildWithConfig` with a non-empty `{ManifestSourcesKey}`.\n")
-		return OwnFailureExit
-	end 'noPaths'
-
+function buildDescribed(described DescribedBuild, args MaxonArgs, voice ManifestVoice) returns ExitCode
 	// `--output=` outranks the manifest: the person typing answers a narrower question than the file
 	// does.
-	let outputOverride = chosenOutput(rebasedOnManifest(statedOrDefaultOutput(output, manifest: manifest), base: base), fromFlag: args.outputOverride)
+	let outputOverride = chosenOutput(rebasedOnManifest(statedOrDefaultOutput(described.output, manifest: described.manifest), base: described.base), fromFlag: args.outputOverride)
 
 	let target = try commandLineTarget(args.targetSpec) otherwise return OwnFailureExit
 
 	// Either side can turn the sidecar off and neither can force it on: `--no-debug-info` has no
 	// positive twin, and a manifest saying `false` means the project never wants one.
-	let manifestWantsDebugInfo = try manifestBool(doc, build: chosen, key: ManifestDebugInfoKey, unstated: DebugInfoWhenUnstated) otherwise (e) 'badDebugInfo'
-		return reportMalformedManifestField(ManifestDebugInfoKey, error: e, manifest: manifest)
+	let manifestWantsDebugInfo = try manifestBool(described.doc, build: described.node, key: ManifestDebugInfoKey, unstated: DebugInfoWhenUnstated) otherwise (e) 'badDebugInfo'
+		return reportMalformedManifestField(ManifestDebugInfoKey, error: e, manifest: described.manifest, voice: voice)
 	end 'badDebugInfo'
 
-	var productVersion = try manifestVersion(doc, build: chosen, target: target) otherwise (e) 'badVersion'
-		return reportMalformedManifestField(ManifestVersionKey, error: e, manifest: manifest)
+	var productVersion = try manifestVersion(described.doc, build: described.node, target: target) otherwise (e) 'badVersion'
+		return reportMalformedManifestField(ManifestVersionKey, error: e, manifest: described.manifest, voice: voice)
 	end 'badVersion'
 
 	// The manifest's defines come first, so a command-line `--define` overrides one it computed: a
 	// later stamp replaces an earlier one, so order expresses the precedence.
-	var defines = try manifestDefines(doc, build: chosen) otherwise (e) 'badDefines'
-		return reportMalformedManifestField(ManifestDefinesKey, error: e, manifest: manifest)
+	var defines = try manifestDefines(described.doc, build: described.node) otherwise (e) 'badDefines'
+		return reportMalformedManifestField(ManifestDefinesKey, error: e, manifest: described.manifest, voice: voice)
 	end 'badDefines'
 
 	for supplied in args.defines 'eachCommandLineDefine'
 		defines.push(supplied)
 	end 'eachCommandLineDefine'
 
-	let outcome = buildAndReport(inputPaths, target: target, args: args, outputOverride: outputOverride, debugInfo: manifestWantsDebugInfo and args.debugInfo, productVersion: productVersion, defines: defines)
+	let outcome = buildAndReport(described.sources, target: target, args: args, outputOverride: outputOverride, debugInfo: manifestWantsDebugInfo and args.debugInfo, productVersion: productVersion, defines: defines)
 
 	// An up-to-date output is repeated too: a second stage builds its own running image and keeps no
 	// record, so a record that still matches means the second stage never ran over this output.
 	return match outcome 'outcome'
-		built(written) gives repeatedWithOutput(written, target: target) if rebuildWithOutput else SucceededExit
+		built(written) gives repeatedWithOutput(written, target: target) if described.rebuildWithOutput else SucceededExit
 		failed(code) gives code
 	end 'outcome'
-end 'buildFromManifestOutput'
-
-function buildDelegatedManifest(doc JsonDoc, build JsonNodeId, directory String, statedSources MaxonSourcePathArray, rebuildWithOutput bool, args MaxonArgs, manifest FilePath, base ManifestBase, depth DelegationDepth) returns ExitCode
-	if statedSources.count() != 0 'bothWays'
-		return refuseDelegatedWith(ManifestSourcesKey, manifest: manifest)
-	end 'bothWays'
-
-	// Only the delegated project knows the output path, so at this level there is no program to
-	// repeat and an ignored key would drop the request silently.
-	if rebuildWithOutput 'delegatedRebuild'
-		return refuseDelegatedWith(ManifestRebuildWithOutputKey, manifest: manifest)
-	end 'delegatedRebuild'
-
-	let delegateTarget = try manifestStatedText(doc, build: build, key: ManifestDelegateTargetKey) otherwise (e) 'badDelegateTarget'
-		return reportMalformedManifestField(ManifestDelegateTargetKey, error: e, manifest: manifest)
-	end 'badDelegateTarget'
-
-	return delegateBuild(directory, args: args, targetWord: delegateTarget, manifest: manifest, base: base, depth: depth)
-end 'buildDelegatedManifest'
-
-function refuseDelegatedWith(key String, manifest FilePath) returns ExitCode
-	printError("error: {manifest.filename()} states both a `{ManifestDirectoryKey}` and `{key}`.\n")
-	printError("A delegated build hands the whole description to that directory's `{ProjectFileExtension}` file; it cannot also state `{key}` of its own.\n")
-	return OwnFailureExit
-end 'refuseDelegatedWith'
+end 'buildDescribed'
 
 // Called after `buildAndReport` has released the tree lock and the output's build lock, which the second
 // stage takes again.
@@ -847,110 +606,6 @@ function invocationArguments() returns StringArray
 	return try words.slice(1, endIndex: words.count()) otherwise panic("invocationArguments: this process was dispatched on the command word after its program name, so both are present")
 end 'invocationArguments'
 
-// `output` and `sources` are required; any other absent field reads as what `Build` writes when its
-// caller says nothing.
-union ManifestFieldError implements Error
-	missing
-	empty
-	notABool
-	notAString
-	notAListOfStrings
-	notAPath(entry String)
-	notADefinePair(entry String)
-	notStampable(problem ProductVersionError)
-end 'ManifestFieldError'
-
-function reportMalformedManifestField(key String, error ManifestFieldError, manifest FilePath) returns ExitCode
-	let problem = match error 'whatIsWrong'
-		missing gives "is missing"
-		empty gives "is empty"
-		notABool gives "is not true or false"
-		notAString gives "is not a string"
-		notAListOfStrings gives "is not a list of strings"
-		notAPath(entry) gives "holds `{entry}`, which is not a path"
-		notADefinePair(entry) gives "holds `{entry}`, which is not a `<name>{DefineNameValueSeparator}<value>` pair"
-		notStampable(versionProblem) gives productVersionProblem(versionProblem)
-	end 'whatIsWrong'
-
-	printError("error: {manifest.filename()}'s `{key}` {problem}\n")
-	return OwnFailureExit
-end 'reportMalformedManifestField'
-
-// The readers below look a key up with `getChild`, whose one failure besides an absent key is a
-// description that is not an object, which has none of the keys either.
-
-function manifestOutput(doc JsonDoc, build JsonNodeId) returns StatedText throws ManifestFieldError
-	let valueId = try doc.getChild(build, key: ManifestOutputKey) otherwise throw ManifestFieldError.missing
-	let output = try manifestString(doc.get(valueId))
-	return StatedText.unstated if output.isEmpty() else StatedText.stated(output)
-end 'manifestOutput'
-
-function manifestStatedText(doc JsonDoc, build JsonNodeId, key String) returns StatedText throws ManifestFieldError
-	let valueId = try doc.getChild(build, key: key) otherwise return StatedText.unstated
-	let text = try manifestString(doc.get(valueId))
-
-	if text.isEmpty() 'statedEmpty'
-		throw ManifestFieldError.empty
-	end 'statedEmpty'
-
-	return StatedText.stated(text)
-end 'manifestStatedText'
-
-function manifestSources(doc JsonDoc, build JsonNodeId, base ManifestBase) returns MaxonSourcePathArray throws ManifestFieldError
-	let listId = try doc.getChild(build, key: ManifestSourcesKey) otherwise throw ManifestFieldError.missing
-	var sources = MaxonSourcePathArray.create()
-
-	for spelling in try manifestStrings(doc, list: doc.get(listId)) 'eachSource'
-		let stated = rebasedOnManifest(spelling, base: base)
-		sources.push(try FilePath.from(stated) otherwise throw ManifestFieldError.notAPath(spelling))
-	end 'eachSource'
-
-	return sources
-end 'manifestSources'
-
-// The depth bound is what ends a cycle: two manifests delegating to each other would otherwise
-// recurse until the process died with nothing said.
-function delegateBuild(directory String, args MaxonArgs, targetWord StatedText, manifest FilePath, base ManifestBase, depth DelegationDepth) returns ExitCode
-	if depth >= MaxDelegationDepth 'tooDeep'
-		printError("error: {manifest.filename()} delegates more than {MaxDelegationDepth} deep, which is a cycle.\n")
-		return OwnFailureExit
-	end 'tooDeep'
-
-	let stated = try FilePath.from(rebasedOnManifest(directory, base: base)) otherwise 'notAPath'
-		printError("error: {manifest.filename()}'s `{ManifestDirectoryKey}` holds `{directory}`, which is not a path\n")
-		return OwnFailureExit
-	end 'notAPath'
-
-	let search = try driverFileIn(stated, extension: ProjectFileExtension) otherwise (e) 'unreadableLayout'
-		reportCompileError(e)
-		return OwnFailureExit
-	end 'unreadableLayout'
-
-	match search 'search'
-		found(projectFile) then return buildDelegatedTarget(projectFile, word: targetWord, args: args, directory: stated, depth: depth)
-		none then return refuseDelegationToNoProject(manifest, directory: directory)
-	end 'search'
-end 'delegateBuild'
-
-function refuseDelegationToNoProject(manifest FilePath, directory String) returns ExitCode
-	printError("error: {manifest.filename()} delegates to `{directory}`, which holds no `{ProjectFileExtension}` file\n")
-	return OwnFailureExit
-end 'refuseDelegationToNoProject'
-
-function buildDelegatedTarget(projectFile FilePath, word StatedText, args MaxonArgs, directory FilePath, depth DelegationDepth) returns ExitCode
-	match chosenTarget(projectFile, word: word) 'chosen'
-		named(name) then return buildThroughProject(projectFile, target: name, args: args, base: ManifestBase.directory(directory), depth: depth + 1)
-		notDeclared(spelled, offered) then return refuseUndeclaredDelegatedTarget(projectFile, word: spelled, offered: offered)
-		refused(code) then return code
-	end 'chosen'
-end 'buildDelegatedTarget'
-
-function refuseUndeclaredDelegatedTarget(projectFile FilePath, word String, offered TaskNameArray) returns ExitCode
-	printError("error: {projectFile.toString()} declares no target `{word}`.\n")
-	printEntryWords(offered)
-	return OwnFailureExit
-end 'refuseUndeclaredDelegatedTarget'
-
 module function reportEntryRosterError(e EntryRosterError, sink DiagnosticSink = DiagnosticSink.printing())
 	match e 'why'
 		unreadable(driverFile) then reportCompileError(CompileError.readError(driverFile), sink: sink)
@@ -958,79 +613,12 @@ module function reportEntryRosterError(e EntryRosterError, sink DiagnosticSink =
 	end 'why'
 end 'reportEntryRosterError'
 
-function manifestBool(doc JsonDoc, build JsonNodeId, key String, unstated bool) returns bool throws ManifestFieldError
-	let valueId = try doc.getChild(build, key: key) otherwise return unstated
-	let value = doc.get(valueId)
-
-	if value.kind != JsonKind.jsonBool 'notABool'
-		throw ManifestFieldError.notABool
-	end 'notABool'
-
-	return value.boolValue
-end 'manifestBool'
-
-// Absent reads as "unversioned". Checked against the target's version field here, before the build, so a
-// version the binary cannot carry refuses the build rather than being stamped as something else.
-function manifestVersion(doc JsonDoc, build JsonNodeId, target Target) returns VersionComponentArray throws ManifestFieldError
-	let valueId = try doc.getChild(build, key: ManifestVersionKey) otherwise return VersionComponentArray.create()
-	let dotted = try manifestString(doc.get(valueId))
-	return try productVersionFor(dotted, target: target) otherwise (e) 'unstampable'
-		throw ManifestFieldError.notStampable(e)
-	end 'unstampable'
-end 'manifestVersion'
-
-// Refused whole on the first bad entry: a build missing a define its manifest computed is a binary
-// claiming the constant's written-out default, and nothing would say so.
-function manifestDefines(doc JsonDoc, build JsonNodeId) returns DefineArray throws ManifestFieldError
-	var defines = DefineArray.create()
-	let listId = try doc.getChild(build, key: ManifestDefinesKey) otherwise return defines
-
-	for pair in try manifestStrings(doc, list: doc.get(listId)) 'eachDefine'
-		defines.push(try defineFromPair(pair) otherwise throw ManifestFieldError.notADefinePair(pair))
-	end 'eachDefine'
-
-	return defines
-end 'manifestDefines'
-
-function manifestString(value JsonNode) returns String throws ManifestFieldError
-	if value.kind != JsonKind.jsonString 'notAString'
-		throw ManifestFieldError.notAString
-	end 'notAString'
-
-	return value.stringValue
-end 'manifestString'
-
-function manifestStrings(doc JsonDoc, list JsonNode) returns ManifestStringArray throws ManifestFieldError
-	if list.kind != JsonKind.jsonArray 'notAList'
-		throw ManifestFieldError.notAListOfStrings
-	end 'notAList'
-
-	var strings = ManifestStringArray.create()
-
-	for entryId in list.children 'eachEntry'
-		let entry = doc.get(entryId)
-
-		if entry.kind != JsonKind.jsonString 'notAString'
-			throw ManifestFieldError.notAListOfStrings
-		end 'notAString'
-
-		strings.push(entry.stringValue)
-	end 'eachEntry'
-
-	return strings
-end 'manifestStrings'
-
-typealias ManifestStringArray = Array with String
-
 // The header goes to stdout, so a failing build's stderr is still exactly its diagnostics.
 function runBuild(args MaxonArgs) returns ExitCode
 	printVersionHeader()
 
 	if args.paths.count() == 0 'noPath'
-		match runProjectBuild(args, targetWord: StatedText.unstated) 'bareBuild'
-			ran(code) then return code
-			noSuchTarget then panic("runBuild: the project was asked for no target and cannot answer noSuchTarget")
-		end 'bareBuild'
+		return runProjectBuild(args)
 	end 'noPath'
 
 	// A target name outranks a path of the same spelling: a target also names an output, so resolving
@@ -1039,10 +627,7 @@ function runBuild(args MaxonArgs) returns ExitCode
 	if args.paths.count() == 1 'maybeTargetName'
 		let only = try args.paths.get(0) otherwise panic("runBuild: paths.get OOB — count is 1")
 
-		match runProjectBuild(args, targetWord: StatedText.stated(only)) 'namedBuild'
-			ran(code) then return code
-			noSuchTarget then return runBuildPaths(args)
-		end 'namedBuild'
+		return runWordBuild(args, word: only)
 	end 'maybeTargetName'
 
 	return runBuildPaths(args)
@@ -1752,22 +1337,22 @@ module function refusedPositionalBeyond(args MaxonArgs, allowed PositionalCount,
 	return true
 end 'refusedPositionalBeyond'
 
-module typealias PositionalCount = int(0 to 1) implements ElementIndex
+module typealias PositionalCount = int(0 to 2) implements ElementIndex
 
 // A command's streams belong to its subject: at the default INFO level every compile announces the
 // bytes it wrote, which is noise on `test`'s fixture-compared stdout, on `run`'s program streams,
 // and on the report a path-less `build` makes about the build it was actually asked for. Silenced
-// unless the caller asked for logging. `module` so `Testing/` and `Run/` share one rule.
+// unless the caller asked for logging.
 //
 // ⚠ **SILENCED IS NOT SILENT — the ERROR level is deliberately left speaking**, so a compile that
 // fails still says why.
 //
 // It answers the level it found, so a caller quieting ONE compile of several can put that level
 // back and let the rest be heard.
-module function quietTheBuildChatter(args MaxonArgs) returns LogLevel
+module function quietTheBuildChatter(logOverridden bool) returns LogLevel
 	let inForce = Log.level()
 
-	if args.logOverridden 'theCallerAskedForLogging'
+	if logOverridden 'theCallerAskedForLogging'
 		return inForce
 	end 'theCallerAskedForLogging'
 
@@ -2263,7 +1848,7 @@ function commandReference(command MaxonCommand) returns CommandReference throws 
 		scaleTest gives CommandReference.create(ScaleTestCommandName, arguments: "", summary: "Measure how this compiler scales, on a doubling ladder of programs.", detail: "Each rung is compiled and its per-phase cost reported. The MEMORY columns (allocations, frees and bytes) are exact and reproducible; the CPU column is the ticks the compiling thread spent. It does NOT collect WALL time: wall time counts every other process on the box, so a dated table of it would compare a loaded machine in July against an idle one in August. The ladder doubles, so the ratio between rungs IS the growth (x2.00 linear, x4.00 quadratic) and nothing is fitted.{ParagraphSeparator}An INSTRUMENT, not a gate: it renders no verdict, and it exits non-zero only when the RUN broke. The trend it feeds is {OptimizationLogRelativePath}.", audience: CommandAudience.workingOnTheCompiler)
 		specTest gives CommandReference.create(SpecTestCommandName, arguments: "[dir]", summary: "Run the specs suite (default dir: {DefaultSpecDir}).", detail: "Every selected case is compiled IN THIS PROCESS, so the compiler under test is this executable's own code and no path can name a different one.", audience: CommandAudience.workingOnTheCompiler)
 		stageLibraryTier gives CommandReference.create(StageLibraryTierCommandName, arguments: "<directory>", summary: "Stage a private copy of this compiler's library tiers and its binary under a directory.", detail: "Writes `<directory>/{StdlibDirName}`, `<directory>/{RuntimeDirName}` and `<directory>/{LibraryTierBinDirName}/<compiler>`: the sources this compiler loads, the unicode tables it embeds, and a copy of its executable. A program placed under `<directory>/{StdlibDirName}` and built by that copy is compiled as library tier. Anything already under `<directory>` is removed first.{ParagraphSeparator}Exit 0 the tier is staged; 1 it could not be.", audience: CommandAudience.workingOnTheCompiler)
-		test gives CommandReference.create(TestCommandName, arguments: "[<directory|file.maxtest>]", summary: "Run a PROJECT's own `test` declarations (default: the working dir), or one `.maxtest` file alone.", detail: "Every test found is compiled into ONE binary with a generated entry point and run; which of them RUN is a runtime argument, so a filter change costs no recompile. A `.maxtest` file named instead of a directory is compiled alone, with the library tiers. NOT specs: that is `{SpecTestCommandName}`.{ParagraphSeparator}Exit 0 every test passed; 1 a test failed, crashed, timed out, leaked, did not run, or NO TESTS WERE FOUND, which is never reported as success; {NothingRanExitCode} the run could not happen.", audience: CommandAudience.usingTheCompiler)
+		test gives CommandReference.create(TestCommandName, arguments: "[<target>] [<directory|file.maxtest>]", summary: "Run a PROJECT's own `test` declarations (default: the working dir), or one `.maxtest` file alone.", detail: "A project whose `{ProjectFileExtension}` file declares targets is the sources its target lists, chosen as `{BuildSubcommandName}` chooses one: its only target, or the one a word names, each `_` written `-`; with several and no word, the targets are listed. A lone word that names a target of the working directory's project is that target, and any other word is a path.{ParagraphSeparator}Every test found is compiled into ONE binary with a generated entry point and run; which of them RUN is a runtime argument, so a filter change costs no recompile. A `.maxtest` file named instead of a directory is compiled alone, with the library tiers. NOT specs: that is `{SpecTestCommandName}`.{ParagraphSeparator}Exit 0 every test passed; 1 a test failed, crashed, timed out, leaked, did not run, or NO TESTS WERE FOUND, which is never reported as success; {NothingRanExitCode} the run could not happen.", audience: CommandAudience.usingTheCompiler)
 		upgrade gives CommandReference.create(UpgradeCommandName, arguments: "[{DryRunFlag}]", summary: "Update this compiler's install to the newest release.", detail: "It runs the published install script again, against the install this binary sits in, whatever {InstallRootVariable} says. A Homebrew keg, a container image and a source checkout are refused, each naming the command that does update it.", audience: CommandAudience.usingTheCompiler)
 		verifyRecheck gives CommandReference.create(VerifyRecheckCommandName, arguments: "<file|dir>", summary: "Assert ONE Project can be re-checked.", detail: "Two checks over unchanged input agree, and a diagnostic introduced by an edit CLEARS when the edit is undone. `{VerifyWarmRebuildCommandName}` gates the query spine without ever running the pipeline; this gates the pipeline over it, which is what an editor holding one project open for hours actually does.", audience: CommandAudience.workingOnTheCompiler)
 		verifyWarmRebuild gives CommandReference.create(VerifyWarmRebuildCommandName, arguments: "<file>", summary: "Assert the query spine is deterministic + incremental.", detail: "It exits 0 iff both properties hold, and never runs the pipeline over the spine it gates: `{VerifyRecheckCommandName}` is the command that does.", audience: CommandAudience.workingOnTheCompiler)

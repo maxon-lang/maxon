@@ -40,7 +40,8 @@ function runTaskFrom(taskFile FilePath, args MaxonArgs) returns ExitCode
 end 'runTaskFrom'
 
 function runDeclaredTask(taskFile FilePath, named String, args MaxonArgs) returns ExitCode
-	let outcome = runManifestProgram(taskFile, entry: named.toByteArray(), speaker: RunCommandName, base: ManifestBase.workingDirectory, arguments: taskArguments(args.paths), args: args, announce: false)
+	var voice = ManifestVoice.forCommandLine(RunCommandName, announce: false, logOverridden: args.logOverridden)
+	let outcome = runManifestProgram(taskFile, entry: named.toByteArray(), base: ManifestBase.workingDirectory, arguments: taskArguments(args.paths), voice: voice)
 
 	return match outcome 'outcome'
 		described(text) gives buildDescribedByTask(text, args: args, taskFile: taskFile)

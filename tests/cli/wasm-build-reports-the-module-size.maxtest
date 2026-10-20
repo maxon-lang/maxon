@@ -4,9 +4,7 @@
 // Built from the checkout, whose `vendor/` holds the tools the component wrap needs.
 
 let CaseDirName = "wasm-build-reports-the-module-size"
-let SourceFileName = "main.maxon"
 let OutputStem = "main"
-let WasmTargetOption = "--target=wasm32-wasi"
 let CompilerInfoLogOption = "--log=compiler:info"
 let Source = "function main() returns ExitCode\n\tprint(\"hello\\n\")\n\treturn 0\nend 'main'\n"
 
@@ -18,10 +16,10 @@ typealias ReportedBytes = int(i64.min to i64.max)
 
 test 'a wasm build reports the size of the module it wrote'
 	let dir = freshCaseDir(CaseDirName)
-	let sourcePath = dir.join(SourceFileName)
-	try File.writeText(sourcePath, content: Source) otherwise panic("wasm-build-reports-the-module-size: the gate could not run - could not write {sourcePath.toString()}")
+	let sourcePath = dir.join(StagedProgramFileName)
+	writeStagedFile(sourcePath, content: Source)
 
-	let build = runDriver([BuildCommandWord, sourcePath.toString(), "{OutputOptionPrefix}{dir.join(OutputStem).toString()}", WasmTargetOption, CompilerInfoLogOption])
+	let build = spawnCompiler([BuildCommandWord, sourcePath.toString(), "{OutputOptionPrefix}{dir.join(OutputStem).toString()}", WasmTargetOption, CompilerInfoLogOption])
 	let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
 	Expect.equal(build.exitCode(), expected: 0, message: "a one-line program did not build for wasm32-wasi. {said}")
 

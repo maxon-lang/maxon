@@ -5,7 +5,7 @@ let FramesOfTheOutermostCall = 2
 test 'a next from a stop between push rbp and mov rbp, rsp lands on the first positioned row of that same frame'
 	let staged = builtFixture(NextInPrologueCaseLabel, fixture: RecursionFixtureName)
 	let executable = builtExecutable(staged)
-	let declarationLine = anchorLine(staged, anchor: "countdown-declaration")
+	let declarationLine = anchorLine(staged.join(StagedProgramFileName), anchor: "countdown-declaration")
 	let afterThePush = exactOffsetTarget(functionCodeStart(executable, staged: staged, name: CalleeFunctionName) + PushedFramePointerBytes)
 	let commands = debugCommandLine(["{BreakCommand} {afterThePush}", RunCommand, "{ClearCommand} {afterThePush}", NextCommand])
 	let session = spawnDebugBatch(executable, staged: staged, commands: commands, extraOptions: StringArray.create())
@@ -13,7 +13,7 @@ test 'a next from a stop between push rbp and mov rbp, rsp lands on the first po
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let stops = eventsOfKind(events, kind: StopEventName)
 
-	try Expect.equal(stops.count(), expected: 2, message: "the exact-offset breakpoint and the `{NextCommand}` are two stops. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(stops.count(), expected: 2, message: "the exact-offset breakpoint and the `{NextCommand}` are two stops. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let landed = eventAt(stops, index: 1)
 	try Expect.equal(textOf(landed, node: landed.root, key: FunctionKey), expected: CalleeFunctionName, message: "`{NextCommand}` stays in the frame it was issued from. {said}")

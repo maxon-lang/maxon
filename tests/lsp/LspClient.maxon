@@ -41,18 +41,11 @@
 // THE SUBJECT
 // ============================================================================================
 
-// The server under test, relative to the checkout root, without its host suffix. ONE constant, because
-// the SUBJECT axis must not move when the RUNNER does.
-let TestedCompilerStem = "maxon-bin/.maxon/maxon"
-
 // The subcommand that starts a session. Both compilers spell it the same way, which is what lets these
 // tests run under either runner against one server.
 let LspServerCommandName = "lsp-server"
 
-let StageLibraryTierCommandName = "stage-library-tier"
-let StagedTierDirName = "tier"
-let StagedTierBinDirName = "bin"
-let ScriptlibDirName = "scriptlib"
+export let StagedTierDirName = "tier"
 
 // How long the server is given to exit once its stdin is closed or `exit` has been sent. It is well
 // under `maxon test`'s 5000 ms shard deadline on purpose: a server that hangs should be reported by this
@@ -440,6 +433,7 @@ let FastPublishesPerDocumentVersion = 1
 // runs it out.
 let ProjectCheckPublishFailureBoundMs = 15000 as DurationMs
 let ProjectCheckPollPauseMs = 50
+let ProjectCheckPublishedOutcome = "published"
 
 union StashTake
 	first
@@ -529,11 +523,7 @@ public type LspClient
 	//
 	// ⛔ Everything that would stop the session happening at all PANICS rather than throwing: neither a
 	// missing binary nor a refused spawn is the server answering wrongly.
-	public static function start(binary FilePath = testedServerPath()) returns LspClient
-		if not File.exists(binary) 'noBinary'
-			panic("LspClient: the test could not run — there is no compiler at {binary.toString()}. Paths here are relative to the CHECKOUT ROOT, which is the working directory a test binary inherits from `maxon test`; run it from there, and build `{TestedCompilerStem}` first.")
-		end 'noBinary'
-
+	public static function start(binary FilePath = testedCompilerPath()) returns LspClient
 		var argv = StringArray.create()
 		argv.push(LspServerCommandName)
 
@@ -580,27 +570,52 @@ public type LspClient
 	end 'initializeAtRoot'
 
 	public function initializeAtRootUri(uri String) returns InitializeResult throws LspClientError
-		return try self.initializeRooted([uri], rootUri: InitializeRootUri.named(uri), declaresWorkspaceFolders: false)
+		return try self.initializeRooted([uri], rootUri: InitializeRootUri.named(uri), declaresWorkspaceFolders: false, trust: WorkspaceTrustOption.unstated)
 	end 'initializeAtRootUri'
 
 	public function initializeAtRootUriOnly(root FilePath) returns InitializeResult throws LspClientError
-		return try self.initializeRooted(StringArray.create(), rootUri: InitializeRootUri.named(fileUriOf(root)), declaresWorkspaceFolders: false)
+		return try self.initializeRooted(StringArray.create(), rootUri: InitializeRootUri.named(fileUriOf(root)), declaresWorkspaceFolders: false, trust: WorkspaceTrustOption.unstated)
 	end 'initializeAtRootUriOnly'
 
 	public function initializeAtWorkspaceFolder(root FilePath) returns InitializeResult throws LspClientError
-		return try self.initializeRooted([fileUriOf(root)], rootUri: InitializeRootUri.absent, declaresWorkspaceFolders: false)
+		return try self.initializeRooted([fileUriOf(root)], rootUri: InitializeRootUri.absent, declaresWorkspaceFolders: false, trust: WorkspaceTrustOption.unstated)
 	end 'initializeAtWorkspaceFolder'
 
 	public function initializeAtWorkspaceFolders(roots WorkspaceFolderRootArray) returns InitializeResult throws LspClientError
-		return try self.initializeRooted(folderUrisOf(roots), rootUri: InitializeRootUri.absent, declaresWorkspaceFolders: true)
+		return try self.initializeRooted(folderUrisOf(roots), rootUri: InitializeRootUri.absent, declaresWorkspaceFolders: true, trust: WorkspaceTrustOption.unstated)
 	end 'initializeAtWorkspaceFolders'
 
-	function initializeRooted(folderUris StringArray, rootUri InitializeRootUri, declaresWorkspaceFolders bool) returns InitializeResult throws LspClientError
+	public function initializeAtRootWithTrust(root FilePath, trusted bool) returns InitializeResult throws LspClientError
+		let uri = fileUriOf(root)
+		return try self.initializeRooted([uri], rootUri: InitializeRootUri.named(uri), declaresWorkspaceFolders: false, trust: WorkspaceTrustOption.stated(trusted))
+	end 'initializeAtRootWithTrust'
+
+	public function grantWorkspaceTrust() throws LspClientError
+		try self.notifyWorkspaceTrust(true)
+	end 'grantWorkspaceTrust'
+
+	function notifyWorkspaceTrust(trusted bool) throws LspClientError
+		var doc = JsonDoc.create()
+		var message = beginMessage(doc, method: MethodWorkspaceTrust)
+
+		var params = JsonObjectBuilder.create(doc)
+		params.putBool(TrustedKey, value: trusted)
+		message.putNode(JsonRpcParamsKey, value: params.finish())
+
+		try self.sendNotification(doc, message: message)
+	end 'notifyWorkspaceTrust'
+
+	function initializeRooted(folderUris StringArray, rootUri InitializeRootUri, declaresWorkspaceFolders bool, trust WorkspaceTrustOption) returns InitializeResult throws LspClientError
 		var doc = JsonDoc.create()
 		var message = beginMessage(doc, method: MethodInitialize)
 
 		var params = JsonObjectBuilder.create(doc)
 		params.putNull(ProcessIdKey)
+
+		match trust 'trustOption'
+			stated(trusted) then params.putNode(InitializationOptionsKey, value: trustOptionsNode(doc, trusted: trusted))
+			unstated then break
+		end 'trustOption'
 
 		match rootUri 'alsoRootUri'
 			named(uri) then params.putString(RootUriKey, value: uri)
@@ -805,6 +820,55 @@ public type LspClient
 
 		return notices
 	end 'takeProjectLoadingNotices'
+
+	public function discardProjectCheckReports(uri String) throws LspClientError
+		_ = try self.takeProjectCheckReports(projectCheckReportPrefix(uri))
+	end 'discardProjectCheckReports'
+
+	public function awaitSettledProjectCheckSet(uri String) returns PublishedDiagnostics throws LspClientError
+		let started = Clock.nowMs()
+		let prefix = projectCheckReportPrefix(uri)
+		var latest = PublishedDiagnostics.of(uri.clone(), items: PublishedDiagnosticArray.create())
+
+		while Clock.elapsedMs(started) < ProjectCheckPublishFailureBoundMs 'untilChecked'
+			_ = try self.documentSymbols(uri)
+
+			for doc in try self.takeStashedWhere(function(candidate JsonDoc) gives publishesFor(candidate, uri: uri), take: StashTake.every) 'eachPublish'
+				latest = try readPublishedDiagnostics(doc, uri: uri)
+			end 'eachPublish'
+
+			for report in try self.takeProjectCheckReports(prefix) 'eachReport'
+				if report.outcome == ProjectCheckPublishedOutcome 'checked'
+					return latest
+				end 'checked'
+			end 'eachReport'
+
+			sleep(ProjectCheckPollPauseMs)
+		end 'untilChecked'
+
+		throw LspClientError.transportFailed("no project check set was published for {uri} within {ProjectCheckPublishFailureBoundMs} ms; the last publish held {latest.items.count()} diagnostic(s)")
+	end 'awaitSettledProjectCheckSet'
+
+	public function awaitPublishOfSize(uri String, size ElementIndex) returns PublishedDiagnostics throws LspClientError
+		let started = Clock.nowMs()
+		var latest = PublishedDiagnostics.of(uri.clone(), items: PublishedDiagnosticArray.create())
+
+		while Clock.elapsedMs(started) < ProjectCheckPublishFailureBoundMs 'untilPublished'
+			_ = try self.documentSymbols(uri)
+
+			for doc in try self.takeStashedWhere(function(candidate JsonDoc) gives publishesFor(candidate, uri: uri), take: StashTake.every) 'eachPublish'
+				latest = try readPublishedDiagnostics(doc, uri: uri)
+			end 'eachPublish'
+
+			if latest.items.count() == size 'sized'
+				return latest
+			end 'sized'
+
+			sleep(ProjectCheckPollPauseMs)
+		end 'untilPublished'
+
+		throw LspClientError.transportFailed("no publish for {uri} held {size} diagnostic(s) within {ProjectCheckPublishFailureBoundMs} ms; the last held {latest.items.count()}")
+	end 'awaitPublishOfSize'
 
 	public function awaitProjectCheckReports(uri String, through DocumentVersion) returns ProjectCheckReportArray throws LspClientError
 		let started = Clock.nowMs()
@@ -1221,46 +1285,6 @@ function headerReadFailure(e SubprocessError) returns String
 	return "the server's stdout ended before a message's headers did" if e.endedTheStream() else "reading a message header failed: {e.displayReason()}"
 end 'headerReadFailure'
 
-// The server binary with the suffix this host can actually spawn.
-export function testedServerPath() returns FilePath
-	#if os(Windows)
-		let spelled = "{TestedCompilerStem}.exe"
-	#else
-		let spelled = "{TestedCompilerStem}"
-	#endif
-
-	return try FilePath.from(spelled) otherwise panic("LspClient: the test could not run — '{TestedCompilerStem}' is not a spellable path")
-end 'testedServerPath'
-
-export function stagedLibraryTierCompiler(dir FilePath) returns FilePath
-	let tier = dir.join(StagedTierDirName)
-
-	var config = Configuration.create(Executable.path(testedServerPath().resolve(Directory.currentPath())))
-	config.arguments = [StageLibraryTierCommandName, tier.toString()]
-	config.workingDirectory = dir
-
-	let stager = try config.run() otherwise (e) 'spawnFailed'
-		panic("LspClient: the test could not run — `{StageLibraryTierCommandName}` did not spawn ({e.displayReason()}).")
-	end 'spawnFailed'
-
-	if stager.exitCode() != 0 'didNotStage'
-		panic("LspClient: the test could not run — `{StageLibraryTierCommandName} {tier.toString()}` exited {stager.exitCode()}. It wrote to stderr: {stager.stderr}")
-	end 'didNotStage'
-
-	return tier.join(StagedTierBinDirName).join(testedServerPath().filename())
-end 'stagedLibraryTierCompiler'
-
-export function writeScriptlibPackageFile(dir FilePath, package String, fileName String, content String)
-	let packageDir = dir.join(StagedTierDirName).join(ScriptlibDirName).join(package)
-
-	if not Directory.create(packageDir) 'couldNotCreate'
-		panic("LspClient: the test could not run — could not create {packageDir.toString()}.")
-	end 'couldNotCreate'
-
-	let file = packageDir.join(fileName)
-	try File.writeText(file, content: content) otherwise panic("LspClient: the test could not run — could not write {file.toString()}.")
-end 'writeScriptlibPackageFile'
-
 export function fileUriOf(file FilePath) returns String
 	let slashed = file.toString().replace(WindowsPathSeparator, with: UriPathSeparator)
 	return "{FileUriScheme}{slashed}" if slashed.startsWith(UriPathSeparator) else "{FileUriScheme}{UriPathSeparator}{slashed}"
@@ -1294,66 +1318,6 @@ function lastUriSegment(uri String) returns String
 
 	return name
 end 'lastUriSegment'
-
-let OutsideCheckoutStagingDirNamePrefix = "maxon-tests-lsp"
-let PosixPathSeparator = "/"
-
-#if os(Windows)
-	let HostTempVariable = "TEMP"
-#else
-	let HostTempVariable = "TMPDIR"
-	let PosixLastResortTempDir = "/tmp"
-#endif
-
-// Named per process, because two runs on one machine sharing a name would delete each other's
-// directories mid-run. A case discards its directory once its session is a value, before it
-// asserts; one that panics leaves it behind.
-export function outsideCheckoutDirName(caseDirName String) returns String
-	if caseDirName.contains(PosixPathSeparator) or caseDirName.contains(WindowsPathSeparator) 'nested'
-		panic("LspClient: the test could not run — '{caseDirName}' names a nested path. A case's staging directory is ONE directory directly under the host temp area; stage anything below it inside that directory.")
-	end 'nested'
-
-	return "{OutsideCheckoutStagingDirNamePrefix}-{Process.id()}-{caseDirName}"
-end 'outsideCheckoutDirName'
-
-export function freshOutsideCheckoutDir(caseDirName String) returns FilePath
-	let dir = hostTempDir().join(outsideCheckoutDirName(caseDirName))
-
-	if Directory.isDirectory(dir) 'leftByAnEndedProcess'
-		discardOutsideCheckoutDir(dir)
-	end 'leftByAnEndedProcess'
-
-	if not Directory.create(dir) 'couldNotCreate'
-		panic("LspClient: the test could not run — could not create {dir.toString()}, where a case stages outside the checkout.")
-	end 'couldNotCreate'
-
-	return dir
-end 'freshOutsideCheckoutDir'
-
-export function discardOutsideCheckoutDir(dir FilePath)
-	let entries = try Directory.list(dir) otherwise panic("LspClient: the test could not run — could not list {dir.toString()}, where a case staged outside the checkout.")
-
-	for entry in entries 'eachEntry'
-		if Directory.isDirectory(entry) 'aDirectory'
-			discardOutsideCheckoutDir(entry)
-			continue
-		end 'aDirectory'
-
-		try File.delete(entry) otherwise panic("LspClient: the test could not run — could not remove the staged file {entry.toString()}.")
-	end 'eachEntry'
-
-	try Directory.delete(dir) otherwise panic("LspClient: the test could not run — could not remove {dir.toString()}, where a case staged outside the checkout.")
-end 'discardOutsideCheckoutDir'
-
-function hostTempDir() returns FilePath
-	#if os(Windows)
-		let spelled = try Process.environmentVariable(HostTempVariable) otherwise panic("LspClient: the test could not run — {HostTempVariable} is not set, and it names the only area outside this checkout a case can stage in.")
-	#else
-		let spelled = try Process.environmentVariable(HostTempVariable) otherwise PosixLastResortTempDir
-	#endif
-
-	return try FilePath.from(spelled) otherwise panic("LspClient: the test could not run — the host temp area '{spelled}' is not a spellable path")
-end 'hostTempDir'
 
 // ============================================================================================
 // BUILDING A MESSAGE
@@ -1419,6 +1383,17 @@ union InitializeRootUri
 	named(uri String)
 	absent
 end 'InitializeRootUri'
+
+union WorkspaceTrustOption
+	stated(trusted bool)
+	unstated
+end 'WorkspaceTrustOption'
+
+function trustOptionsNode(doc JsonDoc, trusted bool) returns JsonNodeId
+	var options = JsonObjectBuilder.create(doc)
+	options.putBool(TrustedWorkspaceKey, value: trusted)
+	return options.finish()
+end 'trustOptionsNode'
 
 function workspaceFolderNodes(doc JsonDoc, uris StringArray) returns JsonNodeIdArray
 	var folders = JsonNodeIdArray.create()
@@ -1902,6 +1877,7 @@ let MethodRename = "textDocument/rename"
 let MethodCodeAction = "textDocument/codeAction"
 let MethodSemanticTokensFull = "textDocument/semanticTokens/full"
 let MethodDidChangeWorkspaceFolders = "workspace/didChangeWorkspaceFolders"
+let MethodWorkspaceTrust = "maxon/workspaceTrust"
 let MethodGenerateIr = "maxon/generateIR"
 let MethodListProjects = "maxon/listProjects"
 
@@ -1935,6 +1911,9 @@ let WorkspaceFoldersKey = "workspaceFolders"
 let DynamicRegistrationKey = "dynamicRegistration"
 let ProcessIdKey = "processId"
 let RootUriKey = "rootUri"
+let InitializationOptionsKey = "initializationOptions"
+let TrustedWorkspaceKey = "trustedWorkspace"
+let TrustedKey = "trusted"
 
 let FileUriScheme = "file://"
 let UriPathSeparator = "/"

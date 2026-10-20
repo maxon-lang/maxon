@@ -77,19 +77,6 @@ export function createdStagingDirectory(dirName String, under FilePath) returns 
 	return resolved
 end 'createdStagingDirectory'
 
-function clearStagedFiles(directory FilePath)
-	let entries = try Directory.list(directory) otherwise panic("definition corpus: the test could not run — could not list {directory.toString()}")
-
-	for entry in entries 'eachEntry'
-		if Directory.isDirectory(entry) 'aDirectory'
-			clearStagedFiles(entry)
-			continue
-		end 'aDirectory'
-
-		try File.delete(entry) otherwise panic("definition corpus: the test could not run — could not clear {entry.toString()} from a previous run's staging tree")
-	end 'eachEntry'
-end 'clearStagedFiles'
-
 export function writeCorpusFile(directory FilePath, fileName String, content String)
 	let file = directory.join(fileName)
 	try File.writeText(file, content: content) otherwise panic("definition corpus: the test could not run — could not write {file.toString()}")

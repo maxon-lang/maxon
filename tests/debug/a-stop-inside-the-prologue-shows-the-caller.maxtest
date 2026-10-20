@@ -12,7 +12,7 @@ test 'a stop after the callee pushed its frame pointer and before it set the new
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let walks = eventsOfKind(events, kind: BacktraceEventName)
 
-	try Expect.equal(walks.count(), expected: 1, message: "the `{BacktraceCommand}` at `{afterThePush}` printed no walk. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(walks.count(), expected: 1, message: "the `{BacktraceCommand}` at `{afterThePush}` printed no walk. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let walked = eventAt(walks, index: 0)
 	let frames = childrenOf(walked, node: walked.root, key: FramesKey)
@@ -22,5 +22,5 @@ test 'a stop after the callee pushed its frame pointer and before it set the new
 		names.push(textOf(walked, node: frame, key: FunctionKey))
 	end 'eachFrame'
 
-	try Expect.equal(renderedRows(names), expected: renderedRows([CalleeFunctionName, CallerFunctionName]), message: "⛔ BETWEEN `push rbp` AND `mov rbp, rsp` THE FRAME CHAIN STILL STARTS AT THE CALLER'S RECORD, so a walk from rbp names the caller's caller and the return address into `{CallerFunctionName}` sits one word above the stack pointer. {said}")
+	try Expect.equal(listedLines(names), expected: listedLines([CalleeFunctionName, CallerFunctionName]), message: "⛔ BETWEEN `push rbp` AND `mov rbp, rsp` THE FRAME CHAIN STILL STARTS AT THE CALLER'S RECORD, so a walk from rbp names the caller's caller and the return address into `{CallerFunctionName}` sits one word above the stack pointer. {said}")
 end 'a stop after the callee pushed its frame pointer and before it set the new one still names the caller'

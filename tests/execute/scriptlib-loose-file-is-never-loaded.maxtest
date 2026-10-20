@@ -4,9 +4,10 @@ let LooseFileSource = "public function broken() returns Count\n\treturn thereIsN
 
 test 'a maxon file directly in scriptlib is never loaded'
 	let staged = stageScriptlibCase(LooseFileCaseLabel)
-	writeScriptlibPackageFile(LooseFileCaseLabel, package: GreetingPackageName, fileName: GreetingPackageFileName, content: greetingPackageSource(ScriptlibGreeting))
+	writeScriptlibPackageFile(stagedTier(LooseFileCaseLabel), package: GreetingPackageName, fileName: GreetingPackageFileName, content: greetingPackageSource(ScriptlibGreeting))
 	writeLooseScriptlibFile(LooseFileCaseLabel, fileName: LooseFileName, content: LooseFileSource)
-	let script = writeStagedFile(staged.sources, fileName: ScriptFileName, content: greetingScriptSource())
+	let script = staged.sources.join(ScriptFileName)
+	writeStagedFile(script, content: greetingScriptSource())
 
 	let run = runProgram(staged, program: script)
 

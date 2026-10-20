@@ -19,7 +19,8 @@ export interface CompilerChoice {
 
 export type LookupNotice =
 	| { kind: 'settingPointsAtNothing'; configured: string; }
-	| { kind: 'checkoutHasNoBuild'; checkout: string; slot: string; };
+	| { kind: 'checkoutHasNoBuild'; checkout: string; slot: string; }
+	| { kind: 'checkoutUntrusted'; checkout: string; };
 
 export interface CompilerLookup {
 	choice: CompilerChoice | undefined;
@@ -29,6 +30,7 @@ export interface CompilerLookup {
 export interface CompilerSearch {
 	configuredPath: string;
 	workspaceFolders: readonly string[];
+	trustedWorkspace: boolean;
 	extensionCheckout: string;
 	installRoot: string;
 	binaryName: string;
@@ -92,6 +94,11 @@ export async function locateCompiler(search: CompilerSearch): Promise<CompilerLo
 
 	for (const folder of search.workspaceFolders) {
 		if (!search.isCheckout(folder)) {
+			continue;
+		}
+
+		if (!search.trustedWorkspace) {
+			notices.push({ kind: 'checkoutUntrusted', checkout: folder });
 			continue;
 		}
 

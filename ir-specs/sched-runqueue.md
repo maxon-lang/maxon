@@ -43,7 +43,7 @@ their pins cannot show the ordering. What the run checks is `hits=1` and exit 0 
 still answers its one message.
 
 ⇒ **THE ORDERING IS ALSO GATED TWICE OUTSIDE THIS FILE.**
-`tests/emitted-runtime/steal-reads-the-victim-ring-with-acquire-loads.maxtest` cross-builds this
+`tests/emittedRuntime/steal-reads-the-victim-ring-with-acquire-loads.maxtest` cross-builds this
 same shape for `arm64-macos` and `arm64-linux`, cuts `func @__sched_steal` out of the printed Target
 IR and FAILS on a plain `ldr` of any of the three words, naming it. And the compiler refuses one
 before it is ever emitted, on every target and so on lanes no pin here can show:

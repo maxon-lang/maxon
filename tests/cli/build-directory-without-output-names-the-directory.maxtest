@@ -10,7 +10,6 @@ let CaseDirName = "build-directory-without-output"
 let AppDirName = "app"
 let MainSourceStem = "zeta"
 let HelperSourceStem = "alpha"
-let SourceExtension = ".maxon"
 let MainSource = "function main() returns ExitCode\n\treturn helperAnswer()\nend 'main'\n"
 let HelperSource = "export function helperAnswer() returns ExitCode\n\treturn 0\nend 'helperAnswer'\n"
 
@@ -24,12 +23,12 @@ type NamedForTheDirectory implements OutsideCheckoutCase
 	end 'create'
 
 	export function requireHeldIn(dir FilePath) throws TestFailure
-		let app = createdStagedDirectory(dir.join(AppDirName))
+		let app = stagingDir(dir.join(AppDirName).toString())
 
-		writeStagedFile(app.join("{MainSourceStem}{SourceExtension}"), content: MainSource)
-		writeStagedFile(app.join("{HelperSourceStem}{SourceExtension}"), content: HelperSource)
+		writeStagedFile(app.join("{MainSourceStem}{MaxonSourceSuffix}"), content: MainSource)
+		writeStagedFile(app.join("{HelperSourceStem}{MaxonSourceSuffix}"), content: HelperSource)
 
-		let build = runDriver([BuildCommandWord, AppDirName], workingDirectory: dir)
+		let build = spawnCompiler([BuildCommandWord, AppDirName], staged: dir)
 		let said = "It wrote to stdout: {build.stdout} and to stderr: {build.stderr}"
 		try Expect.equal(build.exitCode(), expected: 0, message: "a two-file directory did not build. {said}")
 

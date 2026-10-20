@@ -12,9 +12,9 @@ test 'a sidecar describing another build is refused rather than read for line nu
 
 	Expect.equal(accepted.exitCode(), expected: AcceptedSessionExitCode, message: "this program with its OWN sidecar beside it is the CONTROL: a refusal that is equally happy to refuse a good build says nothing at all about the foreign one below. {renderedEvents(accepted.stdout, stderr: accepted.stderr)}")
 
-	let donorSidecar = try FilePath.from("{builtExecutable(donor).toString()}{SidecarSuffix}") otherwise panic("debug-refuses-foreign-sidecar: the gate could not run — could not spell the donor's sidecar path.")
-	let subjectSidecar = try FilePath.from("{builtExecutable(subject).toString()}{SidecarSuffix}") otherwise panic("debug-refuses-foreign-sidecar: the gate could not run — could not spell the subject's sidecar path.")
-	let donorImage = try File.readBinary(donorSidecar) otherwise panic("debug-refuses-foreign-sidecar: the gate could not run — the donor build wrote no sidecar at {donorSidecar.toString()}.")
+	let donorSidecar = sidecarOf(builtExecutable(donor))
+	let subjectSidecar = sidecarOf(builtExecutable(subject))
+	let donorImage = fileBytes(donorSidecar)
 
 	try File.writeBinary(subjectSidecar, content: donorImage) otherwise panic("debug-refuses-foreign-sidecar: the gate could not run — could not put the donor's sidecar beside the subject's executable.")
 

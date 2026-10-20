@@ -23,7 +23,7 @@ let DeclarationEnd = ";"
 test 'upgrade from an unrecognised layout refuses, giving the install one-liner'
 	let published = publishedOneLiner()
 	let staged = stageCompiler("upgrade-flat", binaryIn: CaseDirItself, stdlibIn: CaseDirItself)
-	let run = runDriver([UpgradeCommandWord], binary: staged)
+	let run = spawnCompiler([UpgradeCommandWord], binary: staged)
 
 	let observedExit = run.exitCode()
 	Expect.equal(observedExit, expected: 1, message: "`maxon {UpgradeCommandWord}` from {staged.toString()} did not refuse. Nothing installed it that `upgrade` can run again. It said: {run.stdout}{run.stderr}")
@@ -37,7 +37,7 @@ end 'upgrade from an unrecognised layout refuses, giving the install one-liner'
 // half-read.
 function publishedOneLiner() returns String
 	let path = try FilePath.from(PublishedCommandsFile) otherwise panic("upgrade-refuses-an-unrecognised-layout: '{PublishedCommandsFile}' is a relative path with no character a path refuses")
-	let source = try File.readText(path) otherwise panic("upgrade-refuses-an-unrecognised-layout: the gate could not run - could not read {PublishedCommandsFile}. This corpus's paths are relative to the CHECKOUT ROOT; run it from there.")
+	let source = fileText(path)
 	let declared = "export const {PublishedOneLinerName} = "
 
 	for line in source.split("\n") 'eachLine'

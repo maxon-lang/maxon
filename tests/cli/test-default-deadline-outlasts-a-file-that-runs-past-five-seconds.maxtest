@@ -15,10 +15,10 @@ type SlowFileOutlastsTheDefaultDeadline implements OutsideCheckoutCase
 	end 'create'
 
 	export function requireHeldIn(dir FilePath) throws TestFailure
-		let project = createdStagedDirectory(dir.join(ProjectDirName))
+		let project = stagingDir(dir.join(ProjectDirName).toString())
 		writeStagedFile(project.join(SlowTestFileName), content: SlowTestSource)
 
-		let tested = runDriver([TestCommandWord, project.toString()], workingDirectory: dir)
+		let tested = spawnCompiler([TestCommandWord, project.toString()], staged: dir)
 		let said = "the default deadline killed a test file that runs ~7 s; the default must outlast every file in the tree's corpora, so no corpus needs --timeout=. It wrote to stdout: {tested.stdout} and to stderr: {tested.stderr}"
 
 		try Expect.equal(tested.exitCode(), expected: 0, message: said)

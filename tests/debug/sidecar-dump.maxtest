@@ -65,20 +65,8 @@ typealias FixtureLineNumber = int(0 to u64.max)
 // ============================================================================================
 
 test 'the sidecar names this build, this source and every function the fixture declares'
-	let staged = stagedFixture(DumpCaseLabel, fixture: SpansFixtureName)
-	let noArguments = StringArray.create()
-
-	let build = spawnBuild(staged.join(StagedProgramFileName), staged: staged, label: DumpBuildLabel, extraArguments: noArguments)
-
-	if build.exitCode() != 0 'didNotBuild'
-		panic("sidecar-dump.test: the gate could not run — the build of the staged program exited {build.exitCode()}, so there is no binary and no sidecar to ask anything about. It wrote to stderr: {build.stderr}")
-	end 'didNotBuild'
-
-	let executable = builtExecutable(staged)
-
-	if not File.exists(executable) 'wroteNothing'
-		panic("sidecar-dump.test: the gate could not run — the build exited 0 and wrote no executable to {executable.toString()}.")
-	end 'wroteNothing'
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: DumpCaseLabel, fixture: SpansFixtureName)
+	let executable = buildStagedSource(staged.join(StagedProgramFileName), staged: staged, what: DumpBuildLabel)
 
 	let noSections = StringArray.create()
 	let dumpRun = spawnDumpInfo(executable, staged: staged, sections: noSections)
@@ -98,7 +86,7 @@ test 'the sidecar names this build, this source and every function the fixture d
 
 	// The fixture's own source file, listed as a file this sidecar knows about.
 	let listedSources = dumpSectionRows(dump, heading: DumpFilesHeading)
-	Expect.isTrue(anyRowNames(listedSources, name: StagedProgramFileName), message: "the dump's `{DumpFilesHeading}…)` section does not list `{StagedProgramFileName}`, the only source this program was built from. Line rows that point at no file resolve to nothing. The section held: {renderedRows(listedSources)}")
+	Expect.isTrue(anyRowNames(listedSources, name: StagedProgramFileName), message: "the dump's `{DumpFilesHeading}…)` section does not list `{StagedProgramFileName}`, the only source this program was built from. Line rows that point at no file resolve to nothing. The section held: {listedLines(listedSources)}")
 
 	// Every function the FIXTURE declares — read out of the staged source, so a fixture that grows a
 	// function grows this roster with it — listed with a code range that is not empty.
@@ -122,8 +110,8 @@ test 'the sidecar names this build, this source and every function the fixture d
 		end 'emptyRange'
 	end 'eachDeclaredFunction'
 
-	Expect.isEmpty(renderedRows(missing), message: "the dump's `{DumpFunctionsHeading}…)` section lists no row for these functions, which the staged fixture DECLARES. A debugger cannot stop inside a function the sidecar does not know exists. The section held: {renderedRows(functionRows)}")
-	Expect.isEmpty(renderedRows(degenerate), message: "these functions are listed with a code range whose end does not exceed its start, so the sidecar says they occupy no code and no offset can ever fall inside one.")
+	Expect.isEmpty(listedLines(missing), message: "the dump's `{DumpFunctionsHeading}…)` section lists no row for these functions, which the staged fixture DECLARES. A debugger cannot stop inside a function the sidecar does not know exists. The section held: {listedLines(functionRows)}")
+	Expect.isEmpty(listedLines(degenerate), message: "these functions are listed with a code range whose end does not exceed its start, so the sidecar says they occupy no code and no offset can ever fall inside one.")
 
 	// ⭐ THE JOIN — an offset the dump published INSIDE one named function, asked of the other table.
 	let probeName = try declared.get(0) otherwise panic("sidecar-dump.test: a roster asserted non-empty has a first element")
@@ -217,7 +205,7 @@ end 'carriesCodeRange'
 
 // One bound of a row's code range — the START, or the END past the separator. A row carrying no range
 // reads 0 for both, which fails the caller's `end exceeds start` assertion rather than passing it.
-function codeRangeBound(row String, upper bool) returns SidecarNumber
+function codeRangeBound(row String, upper bool) returns PrintedNumber
 	if not carriesCodeRange(row) 'noRange'
 		return 0
 	end 'noRange'
@@ -237,7 +225,7 @@ end 'codeRangeBound'
 
 // The FIRST line-table row inside `[atLeast, below)`, as the dump spelled its offset — handed straight back
 // to `--symbolize` so nothing here re-spells a number the driver published. EMPTY when no row falls inside.
-function firstLineRowTokenWithin(dump String, atLeast SidecarNumber, below SidecarNumber) returns String
+function firstLineRowTokenWithin(dump String, atLeast PrintedNumber, below PrintedNumber) returns String
 	for row in dumpSectionRows(dump, heading: DumpLineTableHeading) 'eachRow'
 		let tokens = whitespaceTokens(row)
 		let first = try tokens.get(0) otherwise continue

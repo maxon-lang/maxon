@@ -38,16 +38,16 @@ type FullPathSession implements DapSession
 end 'FullPathSession'
 
 test 'a source breakpoint arms the file its full path names, and not another file of the same base name'
-	let staged = dapStagedFixture(FullPathCaseLabel, fixture: TwoDirsFixtureName)
-	let source = dapStagedSource(staged, file: SecondUtilFile)
-	let anchored = dapAnchorLine(staged, anchor: UtilBodyAnchor, file: SecondUtilFile)
-	var session = FullPathSession.create(dapBuildFixture(staged, scope: DapBuildScope.wholeDirectory), source: source, anchored: anchored)
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: FullPathCaseLabel, fixture: TwoDirsFixtureName)
+	let source = staged.join(SecondUtilFile)
+	let anchored = anchorLine(staged.join(SecondUtilFile), anchor: UtilBodyAnchor)
+	var session = FullPathSession.create(buildStagedSource(staged, staged: staged), source: source, anchored: anchored)
 	try dapRunSession(session, completing: "complete")
 
 	try Expect.isTrue(session.verified, message: "the breakpoint on `{source.toString()}:{anchored}` was not verified")
 	try Expect.equal(session.stoppedIn.count(), expected: RoundsTheProgramRuns, message: "`{SecondFunctionName}` runs {RoundsTheProgramRuns} times; the session stopped {session.stoppedIn.count()} times")
 
 	for name in session.stoppedIn 'eachStop'
-		try Expect.equal(name, expected: SecondFunctionName, message: "the breakpoint names `{source.toString()}` by its full path, so every stop is in `{SecondFunctionName}`; the stops were in {dapRendered(session.stoppedIn)}")
+		try Expect.equal(name, expected: SecondFunctionName, message: "the breakpoint names `{source.toString()}` by its full path, so every stop is in `{SecondFunctionName}`; the stops were in {joined(session.stoppedIn, separator: Space)}")
 	end 'eachStop'
 end 'a source breakpoint arms the file its full path names, and not another file of the same base name'

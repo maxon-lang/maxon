@@ -4,19 +4,19 @@ let MainFunctionName = "main"
 
 test 'a stop in a function the library calls back still shows main below the library frames'
 	let staged = builtFixture(LibraryCallbackCaseLabel, fixture: LibraryCallbackFixtureName)
-	let rankLine = anchorLine(staged, anchor: "rank-body")
+	let rankLine = anchorLine(staged.join(StagedProgramFileName), anchor: "rank-body")
 	let commands = debugCommandLine(["{BreakCommand} {lineTarget(rankLine)}", RunCommand, BacktraceCommand])
 	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let walks = eventsOfKind(events, kind: BacktraceEventName)
 
-	try Expect.equal(walks.count(), expected: 1, message: "the `{BacktraceCommand}` at the comparator's breakpoint printed no walk. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(walks.count(), expected: 1, message: "the `{BacktraceCommand}` at the comparator's breakpoint printed no walk. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let walked = eventAt(walks, index: 0)
 	let names = framesNamed(walked)
-	try Expect.equal(try names.get(0) otherwise "", expected: RankFunctionName, message: "the innermost frame is the comparator the breakpoint is in. Frames: {renderedRows(names)}. {said}")
-	try Expect.equal(try names.get(names.count() - 1) otherwise "", expected: MainFunctionName, message: "⛔ THE WALK CROSSES THE LIBRARY'S SORT TO REACH `main`. The sort's frames are not the program's, and a walk that stopped at the first of them loses every program frame beneath it. Frames: {renderedRows(names)}. {said}")
+	try Expect.equal(try names.get(0) otherwise "", expected: RankFunctionName, message: "the innermost frame is the comparator the breakpoint is in. Frames: {listedLines(names)}. {said}")
+	try Expect.equal(try names.get(names.count() - 1) otherwise "", expected: MainFunctionName, message: "⛔ THE WALK CROSSES THE LIBRARY'S SORT TO REACH `main`. The sort's frames are not the program's, and a walk that stopped at the first of them loses every program frame beneath it. Frames: {listedLines(names)}. {said}")
 end 'a stop in a function the library calls back still shows main below the library frames'
 
 function framesNamed(walked JsonDoc) returns StringArray

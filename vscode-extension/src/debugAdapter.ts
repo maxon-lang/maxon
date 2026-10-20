@@ -4,6 +4,7 @@ import * as vscode from 'vscode';
 import { log } from './logger';
 import { registerAll } from './registration';
 import { holdsProjectFile, isProgramSource } from './unitTestModel';
+import { untrustedRefusal } from './workspaceTrust';
 
 export const MaxonDebugType = 'maxon';
 const LaunchRequest = 'launch';
@@ -137,6 +138,12 @@ function debugTargets(folder: vscode.WorkspaceFolder | undefined): DebugTarget[]
 
 class MaxonDebugConfigurationProvider implements vscode.DebugConfigurationProvider {
 	resolveDebugConfiguration(folder: vscode.WorkspaceFolder | undefined, config: vscode.DebugConfiguration): vscode.DebugConfiguration | undefined {
+		const refusal = untrustedRefusal(vscode.workspace.isTrusted);
+		if (refusal) {
+			vscode.window.showErrorMessage(refusal);
+			return undefined;
+		}
+
 		if (typeof config.program === 'string' && config.program.trim() !== '') {
 			return config;
 		}
@@ -162,6 +169,11 @@ class MaxonDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory {
 	constructor(private readonly compilerExecutable: () => string | undefined) { }
 
 	createDebugAdapterDescriptor(session: vscode.DebugSession): vscode.DebugAdapterDescriptor {
+		const refusal = untrustedRefusal(vscode.workspace.isTrusted);
+		if (refusal) {
+			throw new Error(refusal);
+		}
+
 		const compiler = this.compilerExecutable();
 		if (!compiler) {
 			throw new Error(NoCompilerMessage);

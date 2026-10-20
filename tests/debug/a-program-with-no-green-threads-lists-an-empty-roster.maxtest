@@ -17,27 +17,27 @@ test 'a program that carves no green thread publishes no roster word and answers
 	let printed = withoutCarriageReturns(dump.stdout)
 	let globals = dumpSectionRows(printed, heading: DumpGlobalsSectionHeading)
 
-	Expect.isEmpty(renderedRows(sidecarTableNames(globals, names: [RosterGlobalName, RosterLengthGlobalName, DebugStreamGlobalName], published: true)), message: "⭐⭐ AN ABSENT ENTRY IS THE ANSWER, NOT A GAP IN THE ANSWER. This program carves no green thread and was built without `{DebugStreamBuildOption}`, so its `.data` holds none of these words and the `{DumpGlobalsSectionHeading}…)` section must name none of them. A row here is a word forced into the image for a debugger that may never attach, in every binary the compiler emits. The section held: {renderedRows(globals)}")
+	Expect.isEmpty(listedLines(sidecarTableNames(globals, names: [RosterGlobalName, RosterLengthGlobalName, DebugStreamGlobalName], published: true)), message: "⭐⭐ AN ABSENT ENTRY IS THE ANSWER, NOT A GAP IN THE ANSWER. This program carves no green thread and was built without `{DebugStreamBuildOption}`, so its `.data` holds none of these words and the `{DumpGlobalsSectionHeading}…)` section must name none of them. A row here is a word forced into the image for a debugger that may never attach, in every binary the compiler emits. The section held: {listedLines(globals)}")
 
 	let layout = dumpSectionRows(printed, heading: DumpLayoutSectionHeading)
 
-	Expect.isTrue(sidecarTableRowsName(layout, name: StoppedFrameOffsetField), message: "⛔ THE ABSENCE ABOVE IS ONLY READABLE BESIDE THIS PRESENCE. The `{DumpLayoutSectionHeading}…)` section does not name `{StoppedFrameOffsetField}`, so this sidecar publishes no runtime contract at all — and a reader could not tell *this program has no green threads* from *this compiler publishes no rosters*. The section held: {renderedRows(layout)}")
+	Expect.isTrue(sidecarTableRowsName(layout, name: StoppedFrameOffsetField), message: "⛔ THE ABSENCE ABOVE IS ONLY READABLE BESIDE THIS PRESENCE. The `{DumpLayoutSectionHeading}…)` section does not name `{StoppedFrameOffsetField}`, so this sidecar publishes no runtime contract at all — and a reader could not tell *this program has no green threads* from *this compiler publishes no rosters*. The section held: {listedLines(layout)}")
 
-	let hotLine = anchorLine(staged, anchor: HotAnchorName)
+	let hotLine = anchorLine(staged.join(StagedProgramFileName), anchor: HotAnchorName)
 	let commands = debugCommandLine(appendedCommands(["{BreakCommand} {lineTarget(hotLine)}", RunCommand, ThreadsCommand], rest: repeatedCommand(ContinueCommand, times: ContinuesPastEveryHit)))
 	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let stops = eventsOfKind(events, kind: StopEventName)
 
-	Expect.atLeast(stops.count(), than: 1, message: "a program with no scheduler in it never stopped. Attaching, planting the byte and reading the sidecar must all work on a program the runtime contract is mostly absent from. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.atLeast(stops.count(), than: 1, message: "a program with no scheduler in it never stopped. Attaching, planting the byte and reading the sidecar must all work on a program the runtime contract is mostly absent from. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let stopped = eventAt(stops, index: 0)
 	Expect.equal(numberOf(stopped, node: stopped.root, key: LineKey), expected: hotLine as EventNumber, message: "the stop is not on the anchored line. {said}")
 	Expect.equal(textOf(stopped, node: stopped.root, key: ReasonKey), expected: BreakpointStopReason, message: "the stop does not name a breakpoint as its reason. {said}")
 
 	let rosters = eventsOfKind(events, kind: ThreadsEventName)
-	Expect.equal(rosters.count(), expected: 1, message: "`{ThreadsCommand}` printed no `{ThreadsEventName}` event. A program with no green threads answers the roster it HAS — an empty one — rather than refusing the question or failing the session. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(rosters.count(), expected: 1, message: "`{ThreadsCommand}` printed no `{ThreadsEventName}` event. A program with no green threads answers the roster it HAS — an empty one — rather than refusing the question or failing the session. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let roster = eventAt(rosters, index: 0)
 	Expect.equal(threadRows(roster).count(), expected: 0, message: "the roster of a program that carves no green thread is not empty: it held {renderedThreads(roster)}. A row here is a record read at an address the sidecar never published. {said}")

@@ -9,7 +9,7 @@ let ContinuesPastEveryWorker = 60
 test 'gt-backtrace walks the stack of a worker that is parked on another green thread'
 	let staged = builtFixture(GtBacktraceCaseLabel, fixture: WorkersFixtureName)
 	let undebugged = runBuiltProgram(staged)
-	let loopLine = anchorLine(staged, anchor: AnchorName)
+	let loopLine = anchorLine(staged.join(StagedProgramFileName), anchor: AnchorName)
 	let parked = threadSelector(WaitingThreadStatus, functionName: WorkerFunctionName)
 
 	var acting = StringArray.create()
@@ -24,7 +24,7 @@ test 'gt-backtrace walks the stack of a worker that is parked on another green t
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 
 	let rosters = eventsOfKind(events, kind: ThreadsEventName)
-	Expect.equal(rosters.count(), expected: 1, message: "`{ThreadsCommand}` printed no `{ThreadsEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(rosters.count(), expected: 1, message: "`{ThreadsCommand}` printed no `{ThreadsEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let roster = eventAt(rosters, index: 0)
 	Expect.atLeast(countThreadsWhere(roster, key: StatusKey, value: WaitingThreadStatus), than: 1, message: "⛔ THE CASE NAMES ITS THREAD BY A SELECTOR AND THIS IS THE PRECONDITION THE SELECTOR NEEDS. Each worker sleeps inside its loop for far longer than a stop-and-continue takes, so by the {ContinuesBeforeTheRoster}rd stop at least one of them is parked on a timer. The roster held: {renderedThreads(roster)}. {said}")

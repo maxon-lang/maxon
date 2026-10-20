@@ -12,18 +12,13 @@
 // ⛔ A `public` LINE WHOSE NAME CANNOT BE READ PANICS, naming its file and line: a declaration shape the
 // scanner does not know would otherwise drop out of the roster and read as documented.
 
-let StdlibDir = "stdlib"
 let StdlibReferenceDocument = "docs/STDLIB_REFERENCE.md"
-let MaxonSourceSuffix = ".maxon"
 
 let PublicKeyword = "public "
 let StaticKeyword = "static "
 let ReservedNamePrefix = "__"
 let BlockEndKeyword = "end "
-let WordUnderscore = "_"
 let WordSeparator = " "
-let CarriageReturn = "\r"
-let LineFeed = "\n"
 
 // Top-level sources that are not the library's surface, one reason each.
 function excludedSources() returns StringArray
@@ -55,11 +50,11 @@ end 'PublicDeclaration'
 
 test 'the stdlib reference names every public declaration'
 	let documentPath = try FilePath.from(StdlibReferenceDocument) otherwise panic("stdlib-reference: '{StdlibReferenceDocument}' is not a spellable path")
-	let document = try File.readText(documentPath) otherwise panic("stdlib-reference: could not read '{StdlibReferenceDocument}'. This corpus's paths are relative to the CHECKOUT ROOT; run it from there.")
+	let document = fileText(documentPath)
 	let documented = wordsIn(document)
 
-	let stdlib = try FilePath.from(StdlibDir) otherwise panic("stdlib-reference: '{StdlibDir}' is not a spellable path")
-	let entries = try Directory.list(stdlib) otherwise panic("stdlib-reference: could not list '{StdlibDir}'. This corpus's paths are relative to the CHECKOUT ROOT; run it from there.")
+	let stdlib = fixtureDir(StdlibDirName)
+	let entries = listing(stdlib)
 
 	var declared = 0 as Count
 	var missing = StringArray.create()
@@ -72,11 +67,11 @@ test 'the stdlib reference names every public declaration'
 			continue
 		end 'notASurfaceSource'
 
-		let source = try File.readText(entry) otherwise panic("stdlib-reference: could not read '{entry.toString()}'")
+		let source = fileText(entry)
 
 		var missingHere = StringArray.create()
 
-		for name in publicNamesIn(source.replace(CarriageReturn, with: ""), fileName: fileName) 'eachName'
+		for name in publicNamesIn(withoutCarriageReturns(source), fileName: fileName) 'eachName'
 			declared = declared + 1
 
 			if not documented.contains(name) and not missing.contains(name) 'undocumented'
@@ -86,12 +81,12 @@ test 'the stdlib reference names every public declaration'
 		end 'eachName'
 
 		if missingHere.count() > 0 'fileOwesNames'
-			missingByFile.push("{fileName}: {spaced(missingHere)};")
+			missingByFile.push("{fileName}: {joined(missingHere, separator: Space)};")
 		end 'fileOwesNames'
 	end 'eachEntry'
 
-	Expect.isTrue(declared > 0, message: "no public declaration was read out of '{StdlibDir}', so the comparison below would be vacuous.")
-	Expect.isEmpty(spaced(missing), message: "{StdlibReferenceDocument} does not name these public stdlib declarations, by the file declaring each: {spaced(missingByFile)}")
+	Expect.isTrue(declared > 0, message: "no public declaration was read out of '{StdlibDirName}', so the comparison below would be vacuous.")
+	Expect.isEmpty(joined(missing, separator: Space), message: "{StdlibReferenceDocument} does not name these public stdlib declarations, by the file declaring each: {joined(missingByFile, separator: Space)}")
 end 'the stdlib reference names every public declaration'
 
 // The name each `public` declaration line in `source` declares. A name in the reserved band, and everything
@@ -115,7 +110,7 @@ function publicNamesIn(source String, fileName String) returns StringArray
 			continue
 		end 'notAPublicDeclaration'
 
-		let read = readDeclaration(declaration, at: "{StdlibDir}/{fileName}:{iter.index() + 1}")
+		let read = readDeclaration(declaration, at: "{StdlibDirName}/{fileName}:{iter.index() + 1}")
 
 		if not read.name.startsWith(ReservedNamePrefix) 'surface'
 			names.push(read.name)
@@ -125,7 +120,7 @@ function publicNamesIn(source String, fileName String) returns StringArray
 	end 'eachLine'
 
 	if not reservedScopeEnd.isEmpty() 'neverClosed'
-		panic("stdlib-reference: {StdlibDir}/{fileName} never reaches `{reservedScopeEnd}`, so every declaration after its opening was skipped as reserved.")
+		panic("stdlib-reference: {StdlibDirName}/{fileName} never reaches `{reservedScopeEnd}`, so every declaration after its opening was skipped as reserved.")
 	end 'neverClosed'
 
 	return names
@@ -169,41 +164,3 @@ function leadingWord(text String) returns String
 
 	return word
 end 'leadingWord'
-
-// Every whole word in `text`, once each.
-function wordsIn(text String) returns StringSet
-	var words = StringSet.create()
-	var current = ""
-
-	for c in text 'eachCharacter'
-		let spelled = c.toString()
-
-		if Ascii.isAlphanumeric(c) or spelled == WordUnderscore 'insideAWord'
-			current.append(spelled)
-			continue
-		end 'insideAWord'
-
-		if not current.isEmpty() 'wordEnds'
-			words.insert(current)
-			current = ""
-		end 'wordEnds'
-	end 'eachCharacter'
-
-	if not current.isEmpty() 'wordAtTheEnd'
-		words.insert(current)
-	end 'wordAtTheEnd'
-
-	return words
-end 'wordsIn'
-
-typealias StringSet = Set with String
-
-function spaced(names StringArray) returns String
-	var rendered = ""
-
-	for name in names 'eachName'
-		rendered.append("{name} ")
-	end 'eachName'
-
-	return rendered.trim()
-end 'spaced'

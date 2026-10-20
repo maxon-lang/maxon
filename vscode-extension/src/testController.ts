@@ -33,6 +33,7 @@ import {
 	TestVerdict,
 	verdictFor
 } from './unitTestModel';
+import { untrustedRefusal } from './workspaceTrust';
 
 const IGNORE_MARKER_GLOB = '**/.maxonignore';
 const COMMAND_ECHO_PREFIX = '> ';
@@ -195,6 +196,12 @@ function registerUnitTestController(compilerExecutable: () => string | undefined
 		try {
 			const requested = requestedTests(request);
 			if (requested.length === 0) return;
+
+			const refusal = untrustedRefusal(vscode.workspace.isTrusted);
+			if (refusal) {
+				erroredAll(run, requested, refusal);
+				return;
+			}
 
 			const compiler = compilerExecutable();
 			if (!compiler) {

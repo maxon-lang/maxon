@@ -40,7 +40,7 @@ DOT_PREFIX = "dot-"
 #
 #     <name>.fixture -> <name>            dot-<name> -> .<name>
 #
-# `tests/fmt/fixtures.maxtest` implements the identical two rules so the harness
+# `tests/support/Staging.maxon`'s `storedNameUnwrapped` implements the identical two rules so the harness
 # and this generator stage the same tree. They must agree.
 def stored_to_real(name):
     trimmed = name[: -len(FIXTURE_SUFFIX)] if name.endswith(FIXTURE_SUFFIX) else name

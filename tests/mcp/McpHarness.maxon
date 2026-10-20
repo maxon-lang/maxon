@@ -1,56 +1,15 @@
 // Shared harness for `maxon mcp-server`: spawns the compiler under test and drives it over stdio
 // (newline-delimited JSON-RPC) or over the `--http` transport.
 
-let MaxonBinDirName = "maxon-bin"
-let SlotDirName = ".maxon"
-let CompilerBaseName = "maxon"
 export let CacheVendorDirName = "maxon"
-export let CacheRootVariable = "MAXON_RUN_CACHE_ROOT"
 export let CacheDirName = "cache"
 export let DebugBuildDirName = "debug-builds"
-export let SidecarSuffix = ".mxdbg"
 export let SpecTempDirName = ".spec-tmp"
 export let ResultFlagPrefix = "--result-json="
 export let MessageByteBound = 4000
 export let TruncationMarkerOpen = "\n["
 export let TruncationMarkerClose = " bytes truncated]"
 export let SpecResultStem = "spec-result"
-
-export function executableSuffix() returns String
-	#if os(Windows)
-		return ".exe"
-	#else
-		return ""
-	#endif
-end 'executableSuffix'
-
-export function testedCompilerPath() returns FilePath
-	let spelled = "{MaxonBinDirName}/{SlotDirName}/{CompilerBaseName}{executableSuffix()}"
-	let relative = try FilePath.from(spelled) otherwise panic("McpHarness: '{spelled}' is not a valid path")
-	let binary = relative.resolve(Directory.currentPath())
-
-	if not File.exists(binary) 'noBinary'
-		panic("McpHarness: compiler binary not found at {binary.path}")
-	end 'noBinary'
-
-	return binary
-end 'testedCompilerPath'
-
-function requireDirectory(dir FilePath, purpose String)
-	if not Directory.create(dir) 'unusable'
-		panic("McpHarness: could not create {dir.path}, where {purpose}")
-	end 'unusable'
-end 'requireDirectory'
-
-// Absolute, because paths inside it are handed to a child.
-export function stagingDir(spelled String) returns FilePath
-	let dir = try FilePath.from(spelled) otherwise panic("McpHarness: '{spelled}' is not a valid path")
-	let resolved = dir.resolve(Directory.currentPath())
-
-	requireDirectory(resolved, purpose: "a case stages its compiler copy")
-
-	return resolved
-end 'stagingDir'
 
 export function resultPathNamedBy(command String) returns FilePath
 	let after = try command.split(ResultFlagPrefix).get(1) otherwise panic("the command line names no {ResultFlagPrefix}: {command}")
@@ -59,42 +18,26 @@ export function resultPathNamedBy(command String) returns FilePath
 end 'resultPathNamedBy'
 
 export function fakeCheckoutWithCompiler(root FilePath, compiler FilePath)
-	for name in [CheckoutMarkerDirName, CheckoutRuntimeDirName] 'eachCheckoutDir'
-		requireDirectory(root.join(name), purpose: "a fake checkout holds its library tiers")
+	for name in [StdlibDirName, CheckoutRuntimeDirName] 'eachCheckoutDir'
+		_ = stagingDir(root.join(name).toString())
 	end 'eachCheckoutDir'
 
-	let slot = root.join(MaxonBinDirName).join(SlotDirName)
-	requireDirectory(slot, purpose: "a fake checkout keeps its compiler")
+	let installed = root.join(TestedCompilerStem)
+	let slotParent = try installed.parent() otherwise panic("a compiler slot has a directory: {installed.toString()}")
+	let slot = stagingDir(slotParent.toString())
 
-	_ = stagedCopyOf(compiler, dir: slot, name: CompilerBaseName)
+	_ = stagedCopyOf(compiler, dir: slot, name: installed.filename())
 end 'fakeCheckoutWithCompiler'
 
 // A case that replaces a compiler image on disk replaces a COPY: doing it to the tree's own slot would
 // rebuild the checkout's compiler as a side effect.
 export function stagedCopyOf(binary FilePath, dir FilePath, name String) returns FilePath
 	let target = dir.join("{name}{executableSuffix()}")
-	let bytes = try File.readBinary(binary) otherwise panic("McpHarness: could not read {binary.path}")
+	let bytes = fileBytes(binary)
 	try File.writeBinary(target, content: bytes, mode: FilePermission.executable) otherwise panic("McpHarness: could not write {target.path}")
 
 	return target
 end 'stagedCopyOf'
-
-export let BuildCommandName = "build"
-export let OutputOptionPrefix = "--output="
-
-// Files only: a held file here would be a previous run's server still alive, which is a harness problem.
-export function clearStagedFiles(dir FilePath)
-	let entries = try Directory.list(dir) otherwise panic("McpHarness: could not list {dir.path}")
-
-	for entry in entries 'eachEntry'
-		if Directory.isDirectory(entry) 'aDirectory'
-			clearStagedFiles(entry)
-			continue
-		end 'aDirectory'
-
-		try File.delete(entry) otherwise panic("McpHarness: could not clear {entry.path} from a previous run's staging")
-	end 'eachEntry'
-end 'clearStagedFiles'
 
 // A staging directory under `temp/` holding ONE program, the previous run's files cleared, so every file a
 // tool call leaves there afterwards is one the call wrote.
@@ -103,7 +46,7 @@ export function stagedProgram(dirName String, fileName String, source String) re
 	clearStagedFiles(dir)
 
 	let program = dir.join(fileName)
-	try File.writeText(program, content: source) otherwise panic("McpHarness: could not write {program.path}")
+	writeStagedFile(program, content: source)
 	return program
 end 'stagedProgram'
 
@@ -123,37 +66,8 @@ export function filesWrittenBeside(kept FilePath, dir FilePath) returns String
 		end 'written'
 	end 'eachFile'
 
-	return renderedPaths(written)
+	return spacedPaths(written)
 end 'filesWrittenBeside'
-
-export function filesUnder(dir FilePath) returns FilePathArray
-	var found = FilePathArray.create()
-	let entries = try Directory.list(dir) otherwise panic("McpHarness: could not list {dir.path}")
-
-	for entry in entries 'eachEntry'
-		if Directory.isDirectory(entry) 'aDirectory'
-			for nested in filesUnder(entry) 'eachNested'
-				found.push(nested)
-			end 'eachNested'
-
-			continue
-		end 'aDirectory'
-
-		found.push(entry)
-	end 'eachEntry'
-
-	return found
-end 'filesUnder'
-
-export function renderedPaths(paths FilePathArray) returns String
-	var rendered = ""
-
-	for path in paths 'eachPath'
-		rendered.append("{path.path} ")
-	end 'eachPath'
-
-	return rendered
-end 'renderedPaths'
 
 // A program that prints `line` and exits 0, written into `temp/` by a case so no live `.maxon` sits under
 // `tests/`.
@@ -161,19 +75,9 @@ export function printingProgramSource(line String) returns String
 	return "function main() returns ExitCode\n\tprint(\"{line}\\n\")\n\treturn 0\nend 'main'\n"
 end 'printingProgramSource'
 
-export function runIn(dir FilePath, binary FilePath, arguments StringArray) returns CollectedOutput
-	var config = Configuration.create(Executable.path(binary))
-	config.arguments = arguments
-	config.workingDirectory = dir
-
-	return try config.run() otherwise (e) 'spawnFailed'
-		panic("McpHarness: could not spawn {binary.path}: {e.displayReason()}")
-	end 'spawnFailed'
-end 'runIn'
-
 // `compiler` builds `program` over its own image.
 export function rebuildOwnImage(dir FilePath, compiler FilePath, program FilePath) returns CollectedOutput
-	return runIn(dir, binary: compiler, arguments: [BuildCommandName, program.toString(), "{OutputOptionPrefix}{compiler.toString()}"])
+	return spawnCompiler([BuildCommandName, program.toString(), "{OutputOptionPrefix}{compiler.toString()}"], staged: dir, what: "the rebuild of its own image", binary: compiler)
 end 'rebuildOwnImage'
 
 export typealias JsonDocArray = Array with JsonDoc
@@ -226,14 +130,7 @@ export function runMcp(requests StringArray, devMode bool = false, environment E
 		stdin = "{stdin}{r}\n"
 	end 'each'
 
-	var config = Configuration.create(Executable.path(testedCompilerPath()))
-	config.arguments = argv
-	config.standardInput = InputSource.bytes(stdin)
-	config.environment = environment
-
-	let out = try config.run() otherwise (e) 'fail'
-		panic("runMcp: failed to spawn: {e.displayReason()}")
-	end 'fail'
+	let out = spawnCompiler(argv, what: "the MCP server", environment: environment, standardInput: InputSource.bytes(stdin))
 
 	return McpRun.create(out.stdout, stderr: out.stderr, exitCode: out.exitCode())
 end 'runMcp'
@@ -421,41 +318,11 @@ export function payloadInt(doc JsonDoc, key String) returns JsonInt
 	return try payload.getInt(payload.root, key: key) otherwise panic("tool payload has no number `{key}`: {toolCallText(doc)}")
 end 'payloadInt'
 
-let CarriageReturn = "\r"
-export let TopLevelHeadingPrefix = "## "
-
 export function checkoutDocumentText(spelled String) returns String
 	let path = try FilePath.from(spelled) otherwise panic("McpHarness: '{spelled}' is not a spellable path")
-	let document = try File.readText(path) otherwise panic("McpHarness: could not read '{spelled}'. This corpus's paths are relative to the CHECKOUT ROOT; run it from there.")
 
-	return document.replace(CarriageReturn, with: "")
+	return withoutCarriageReturns(fileText(path))
 end 'checkoutDocumentText'
-
-// The section's text from its heading on, so it is empty exactly when the document has no such heading.
-export function sectionOf(document String, heading String) returns String
-	var section = ""
-	var inSection = false
-
-	for line in document.split(LineFeed) 'eachLine'
-		if not inSection and line == heading 'opens'
-			inSection = true
-			section.append("{line}{LineFeed}")
-			continue
-		end 'opens'
-
-		if not inSection 'notYet'
-			continue
-		end 'notYet'
-
-		if line.startsWith(TopLevelHeadingPrefix) 'closes'
-			break
-		end 'closes'
-
-		section.append("{line}{LineFeed}")
-	end 'eachLine'
-
-	return section
-end 'sectionOf'
 
 let SpecFileExtension = ".md"
 
@@ -489,74 +356,10 @@ export function stageSpecFile(dir FilePath, specName String, cases StringArray)
 	end 'eachCase'
 
 	let path = dir.join("{specName}{SpecFileExtension}")
-	try File.writeText(path, content: source) otherwise panic("McpHarness: could not stage {path.path}")
+	writeStagedFile(path, content: source)
 end 'stageSpecFile'
 
-let OutsideCheckoutStagingDirNamePrefix = "maxon-tests-mcp"
-let CheckoutMarkerDirName = "stdlib"
 let CheckoutRuntimeDirName = "runtime"
-
-#if os(Windows)
-	let HostTempVariable = "TEMP"
-#else
-	let HostTempVariable = "TMPDIR"
-	let PosixLastResortTempDir = "/tmp"
-#endif
-
-// `maxon test tests/mcp` compiles only this directory, so the outside-checkout helpers `CliHarness` and
-// `LspClient` define are copied here rather than imported.
-export function freshOutsideCheckoutDir(caseDirName String) returns FilePath
-	let dir = hostTempDir().join("{OutsideCheckoutStagingDirNamePrefix}-{Process.id()}-{caseDirName}")
-	requireNoCheckoutAbove(dir)
-
-	if Directory.isDirectory(dir) 'leftByAnEndedProcess'
-		discardOutsideCheckoutDir(dir)
-	end 'leftByAnEndedProcess'
-
-	requireDirectory(dir, purpose: "a case stages outside the checkout")
-	return dir
-end 'freshOutsideCheckoutDir'
-
-export function discardOutsideCheckoutDir(dir FilePath)
-	let entries = try Directory.list(dir) otherwise panic("McpHarness: could not list {dir.path}")
-
-	for entry in entries 'eachEntry'
-		if Directory.isDirectory(entry) 'aDirectory'
-			discardOutsideCheckoutDir(entry)
-			continue
-		end 'aDirectory'
-
-		try File.delete(entry) otherwise panic("McpHarness: could not remove the staged file {entry.path}")
-	end 'eachEntry'
-
-	try Directory.delete(dir) otherwise panic("McpHarness: could not remove {dir.path}, where a case staged outside the checkout")
-end 'discardOutsideCheckoutDir'
-
-function requireNoCheckoutAbove(dir FilePath)
-	var level = dir
-
-	while true 'eachLevel'
-		let marker = level.join(CheckoutMarkerDirName)
-
-		if Directory.isDirectory(marker) 'checkoutFound'
-			panic("McpHarness: {marker.path} sits above {dir.path}, so a command run there would take that checkout's tree lock")
-		end 'checkoutFound'
-
-		let above = try level.parent() otherwise break
-
-		level = above
-	end 'eachLevel'
-end 'requireNoCheckoutAbove'
-
-function hostTempDir() returns FilePath
-	#if os(Windows)
-		let spelled = try Process.environmentVariable(HostTempVariable) otherwise panic("McpHarness: {HostTempVariable} is not set, and it names the only area outside this checkout a case can stage in")
-	#else
-		let spelled = try Process.environmentVariable(HostTempVariable) otherwise PosixLastResortTempDir
-	#endif
-
-	return try FilePath.from(spelled) otherwise panic("McpHarness: the host temp area '{spelled}' is not a spellable path")
-end 'hostTempDir'
 
 // Drive one request against a server started in the given mode and return its response.
 export function callTool(name String, argumentsJson String = "\{\}", devMode bool = false) returns JsonDoc
@@ -586,8 +389,6 @@ export typealias HttpAnswerStatus = int(100 to 599)
 let LowestHttpAnswerStatus = 100 as FullRangeInt
 let HighestHttpAnswerStatus = 599 as FullRangeInt
 
-export typealias SourceLine = int(1 to u32.max)
-
 export let McpHttpOption = "--http"
 export let McpExitOnStdinEofOption = "--exit-on-stdin-eof"
 export let McpIdleTimeoutOptionPrefix = "--idle-timeout="
@@ -604,8 +405,6 @@ let RecvChunkBytes = 65536
 let RecvAttemptBudget = 4096
 let ServerExitDeadlineMs = 5000
 let TerminateWaitMs = 1
-let AnchorMarker = "// anchor: "
-export let LineFeed = "\n"
 let ContentLengthHeaderName = "content-length"
 let NoContentStatus = 204
 let NotModifiedStatus = 304
@@ -899,20 +698,6 @@ end 'StreamingHttpMcpServer'
 export let RpcInvalidParamsCode = -32602
 export let RpcMethodNotFoundCode = -32601
 
-export function endedProcessId() returns Pid
-	#if os(Windows)
-		let exe = Executable.name("cmd")
-		let argv = ["/c", "exit", "0"]
-	#else
-		let exe = Executable.path(try FilePath.from("/bin/sh") otherwise panic("mcp tests: /bin/sh is a spellable path"))
-		let argv = ["-c", "exit 0"]
-	#endif
-
-	let finished = try Subprocess.run(exe, arguments: argv) otherwise panic("mcp tests: could not run a child to learn an ended process's id")
-
-	return finished.pid
-end 'endedProcessId'
-
 export typealias ProgramSleepMillis = int(0 to 60000)
 
 export let SleepingProgramStartedLine = "started sleeping"
@@ -955,13 +740,7 @@ export function debuggableProgramSource() returns String
 	lines.push("\treturn 0")
 	lines.push("end 'main'")
 
-	var source = ""
-
-	for line in lines 'eachLine'
-		source.append("{line}\n")
-	end 'eachLine'
-
-	return source
+	return terminatedLines(lines)
 end 'debuggableProgramSource'
 
 export let DebuggableProgramLocalName = "total"
@@ -986,34 +765,14 @@ export function stdioHandshake(session StreamingMcpSession)
 	end 'readFailed'
 end 'stdioHandshake'
 
-export function anchorLineIn(program FilePath, anchor String) returns SourceLine
-	let body = try File.readText(program) otherwise panic("McpHarness: could not read {program.path}")
-	let marker = "{AnchorMarker}{anchor}"
-	var found = 0 as ElementIndex
-	var carriers = 0 as Count
-
-	for (iter, line) in body.split(LineFeed).withIterator() 'eachLine'
-		if line.trim().endsWith(marker) 'thisAnchor'
-			found = iter.index() + 1
-			carriers = carriers + 1
-		end 'thisAnchor'
-	end 'eachLine'
-
-	if carriers != 1 'notExactlyOne'
-		panic("McpHarness: {carriers} lines of {program.path} carry `{marker}`; exactly one must, or the case names a line it is not about")
-	end 'notExactlyOne'
-
-	return found as SourceLine
-end 'anchorLineIn'
+let DebuggedBuildLabel = "debuggee"
 
 export function buildStagedProgram(program FilePath) returns FilePath
 	let directory = try program.parent() otherwise panic("McpHarness: {program.path} has no directory to build into")
 	let executable = directory.join("debuggee{executableSuffix()}")
-	let out = runIn(directory, binary: testedCompilerPath(), arguments: [BuildCommandName, program.toString(), "{OutputOptionPrefix}{executable.toString()}"])
+	let build = spawnBuild(program, staged: directory, output: executable, label: DebuggedBuildLabel, extraArguments: StringArray.create())
 
-	if out.exitCode() != 0 'buildFailed'
-		panic("McpHarness: could not build {program.path} for a debug session: {out.stdout} {out.stderr}")
-	end 'buildFailed'
+	requireBuiltOrPanic(build, output: executable, what: "the build of {program.path} for a debug session")
 
 	return executable
 end 'buildStagedProgram'
@@ -1180,16 +939,6 @@ end 'sourceArgument'
 export function debugBreakTargetArgument(line SourceLine) returns String
 	return argumentsOf([targetMember("main.maxon:{line}")])
 end 'debugBreakTargetArgument'
-
-export function renderedStrings(values StringArray) returns String
-	var rendered = ""
-
-	for value in values 'eachValue'
-		rendered.append("{value} ")
-	end 'eachValue'
-
-	return rendered
-end 'renderedStrings'
 
 export function httpToolCall(server StreamingHttpMcpServer, sessionId McpSession, id RequestId, name String, argumentsJson String = "\{\}") returns JsonDoc
 	let answer = server.post(toolCallRequest(id, name: name, argumentsJson: argumentsJson), sessionId: sessionId)

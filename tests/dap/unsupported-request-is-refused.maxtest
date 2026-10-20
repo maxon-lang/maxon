@@ -26,8 +26,8 @@ type RefusalSession implements DapSession
 end 'RefusalSession'
 
 test 'an unsupported request is refused by name, and a served one still succeeds'
-	let staged = dapStagedFixture(RefusalCaseLabel, fixture: SteppingFixtureName)
-	var session = RefusalSession.create(dapBuildFixture(staged))
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: RefusalCaseLabel, fixture: SteppingFixtureName)
+	var session = RefusalSession.create(buildStagedSource(staged.join(StagedProgramFileName), staged: staged))
 	try dapRunSession(session, completing: "complete. An adapter that DROPS a command it does not know leaves the client waiting for ever, which is the worse half of this failure")
 
 	try Expect.isFalse(dapSuccess(session.refused), message: "`{UnservedCommand}` is not implemented and must answer `success: false`, never a successful response with an empty body")

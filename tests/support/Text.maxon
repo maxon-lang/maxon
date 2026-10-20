@@ -1,0 +1,207 @@
+public let CarriageReturn = "\r"
+public let LineFeed = "\n"
+public let DecimalBase = 10
+
+public typealias PrintedNumber = int(0 to u64.max)
+
+public let Space = " "
+public let Tab = "\t"
+let AsciiDigitZero = 48
+
+public function withoutCarriageReturns(text String) returns String
+	return text.replace(CarriageReturn, with: "")
+end 'withoutCarriageReturns'
+
+public function outputLines(raw String) returns StringArray
+	return withoutCarriageReturns(raw).split(LineFeed)
+end 'outputLines'
+
+public function whitespaceTokens(row String) returns StringArray
+	var tokens = StringArray.create()
+
+	for piece in row.replace(Tab, with: Space).split(Space) 'eachPiece'
+		if not piece.isEmpty() 'aWord'
+			tokens.push(piece)
+		end 'aWord'
+	end 'eachPiece'
+
+	return tokens
+end 'whitespaceTokens'
+
+public function digitValue(c Character) returns PrintedNumber
+	let code = try c.asciiValue() otherwise panic("digitValue is reached only past a digit test")
+
+	return code - AsciiDigitZero
+end 'digitValue'
+
+public function decimalValue(token String) returns PrintedNumber
+	var value = 0 as PrintedNumber
+
+	for c in token.trim() 'eachCharacter'
+		if not Ascii.isDigit(c) 'pastTheDigits'
+			break
+		end 'pastTheDigits'
+
+		value = value * DecimalBase + digitValue(c)
+	end 'eachCharacter'
+
+	return value
+end 'decimalValue'
+
+public function wholeDecimalValue(token String, what String) returns PrintedNumber
+	if token.isEmpty() 'noDigits'
+		panic("the gate could not run — {what} is empty.")
+	end 'noDigits'
+
+	var value = 0 as PrintedNumber
+
+	for c in token 'eachCharacter'
+		if not Ascii.isDigit(c) 'notADigit'
+			panic("the gate could not run — {what} is '{token}', which is not written in digits.")
+		end 'notADigit'
+
+		value = value * DecimalBase + digitValue(c)
+	end 'eachCharacter'
+
+	return value
+end 'wholeDecimalValue'
+
+public function listedLines(paths StringArray) returns String
+	var listed = ""
+
+	for path in paths 'eachPath'
+		listed.append("{LineFeed}  {path}")
+	end 'eachPath'
+
+	return listed
+end 'listedLines'
+
+public function fileBytes(path FilePath) returns ByteArray
+	if not File.exists(path) 'notWritten'
+		panic("the gate could not run — there is no file at {path.toString()}, so there is nothing to read.")
+	end 'notWritten'
+
+	return try File.readBinary(path) otherwise panic("the gate could not run — could not read {path.toString()}.")
+end 'fileBytes'
+
+public function joined(items StringArray, separator String) returns String
+	var text = ""
+
+	for item in items 'eachItem'
+		text.append(item if text.isEmpty() else "{separator}{item}")
+	end 'eachItem'
+
+	return text
+end 'joined'
+
+public function terminatedLines(lines StringArray) returns String
+	var text = ""
+
+	for line in lines 'eachLine'
+		text.append("{line}{LineFeed}")
+	end 'eachLine'
+
+	return text
+end 'terminatedLines'
+
+public function spacedPaths(paths FilePathArray) returns String
+	var names = StringArray.create()
+
+	for path in paths 'eachPath'
+		names.push(path.toString())
+	end 'eachPath'
+
+	return joined(names, separator: Space)
+end 'spacedPaths'
+
+public union ByteComparison
+	identical
+	differentLengths
+	differsAt(offset ElementIndex)
+end 'ByteComparison'
+
+public function compareBytes(first ByteArray, second ByteArray) returns ByteComparison
+	if first.count() != second.count() 'differentLengths'
+		return ByteComparison.differentLengths
+	end 'differentLengths'
+
+	for (iter, octet) in first.withIterator() 'eachByte'
+		let other = try second.get(iter.index()) otherwise panic("the gate could not run — offset {iter.index()} is inside the first image and outside the second after their lengths were found equal.")
+
+		if octet != other 'differs'
+			return ByteComparison.differsAt(iter.index())
+		end 'differs'
+	end 'eachByte'
+
+	return ByteComparison.identical
+end 'compareBytes'
+
+public function fileText(path FilePath) returns String
+	return try File.readText(path) otherwise panic("the gate could not run — could not read {path.toString()}.")
+end 'fileText'
+
+public let WordUnderscore = "_"
+
+public typealias StringSet = Set with String
+
+public function wordsIn(text String) returns StringSet
+	var words = StringSet.create()
+	var current = ""
+
+	for c in text 'eachCharacter'
+		let spelled = c.toString()
+
+		if Ascii.isAlphanumeric(c) or spelled == WordUnderscore 'insideAWord'
+			current.append(spelled)
+			continue
+		end 'insideAWord'
+
+		if not current.isEmpty() 'wordEnds'
+			words.insert(current)
+			current = ""
+		end 'wordEnds'
+	end 'eachCharacter'
+
+	if not current.isEmpty() 'wordAtTheEnd'
+		words.insert(current)
+	end 'wordAtTheEnd'
+
+	return words
+end 'wordsIn'
+
+public let TopLevelHeadingPrefix = "## "
+
+public function sectionOf(document String, heading String) returns String
+	var section = ""
+	var inSection = false
+
+	for line in document.split(LineFeed) 'eachLine'
+		if not inSection and line == heading 'opens'
+			inSection = true
+			section.append("{line}{LineFeed}")
+			continue
+		end 'opens'
+
+		if not inSection 'notYet'
+			continue
+		end 'notYet'
+
+		if line.startsWith(TopLevelHeadingPrefix) 'closes'
+			break
+		end 'closes'
+
+		section.append("{line}{LineFeed}")
+	end 'eachLine'
+
+	return section
+end 'sectionOf'
+
+public function renderedFindings(findings StringArray) returns String
+	var rendered = ""
+
+	for finding in findings 'eachFinding'
+		rendered.append("\n  • {finding}")
+	end 'eachFinding'
+
+	return rendered
+end 'renderedFindings'

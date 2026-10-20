@@ -13,9 +13,9 @@ let UnexpectedPhrase = "unexpected extra argument: "
 let UsagePhrase = "Usage: "
 let PanicPhrase = "panic at"
 
-function requireRefusal(line ListedWordArray, naming String, exitsWith ExitInt) throws TestFailure
-	let typed = listed(line)
-	let refused = runDriver(line)
+function requireRefusal(line StringArray, naming String, exitsWith ExitInt) throws TestFailure
+	let typed = joined(line, separator: Space)
+	let refused = spawnCompiler(line)
 	let said = "It said: {refused.stdout}{refused.stderr}"
 
 	try Expect.equal(refused.exitCode(), expected: exitsWith, message: "`maxon {typed}` did not exit {exitsWith}. {said}")
@@ -29,7 +29,7 @@ test 'a command given more positionals than it reads refuses the first beyond th
 		requireRefusal([command, FirstWord, SecondWord, FirstWord], naming: SecondWord, exitsWith: OwnFailureExitCode)
 	end 'readsOne'
 
-	requireRefusal([TestCommandWord, FirstWord, SecondWord, FirstWord], naming: SecondWord, exitsWith: NothingRanExitCode)
+	requireRefusal([TestCommandWord, FirstWord, SecondWord, FirstWord, SecondWord], naming: FirstWord, exitsWith: NothingRanExitCode)
 
 	for command in [VersionCommandWord, UpgradeCommandWord] 'readsNone'
 		requireRefusal([command, FirstWord, SecondWord], naming: FirstWord, exitsWith: OwnFailureExitCode)

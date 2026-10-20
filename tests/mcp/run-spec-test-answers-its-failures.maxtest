@@ -12,8 +12,8 @@ test 'run_spec_test answers every failure under the default cap'
 	discardOutsideCheckoutDir(dir)
 
 	Expect.equal(payloadInt(answer, key: "failed"), expected: 3, message: "the staged spec has three failing cases. It answered: {toolCallText(answer)}")
-	Expect.equal(renderedStrings(payloadArrayFields(answer, key: "failures", field: "test")), expected: renderedStrings(FailingCases), message: "`failures` must name each failing case, in run order. It answered: {toolCallText(answer)}")
-	Expect.equal(renderedStrings(payloadArrayFields(answer, key: "failures", field: "spec")), expected: renderedStrings([StagedSpec, StagedSpec, StagedSpec]), message: "each failure must name its spec. It answered: {toolCallText(answer)}")
+	Expect.equal(joined(payloadArrayFields(answer, key: "failures", field: "test"), separator: Space), expected: joined(FailingCases, separator: Space), message: "`failures` must name each failing case, in run order. It answered: {toolCallText(answer)}")
+	Expect.equal(joined(payloadArrayFields(answer, key: "failures", field: "spec"), separator: Space), expected: joined([StagedSpec, StagedSpec, StagedSpec], separator: Space), message: "each failure must name its spec. It answered: {toolCallText(answer)}")
 
 	for message in payloadArrayFields(answer, key: "failures", field: "message") 'eachMessage'
 		Expect.isFalse(message.isEmpty(), message: "a failure must carry its reason. It answered: {toolCallText(answer)}")

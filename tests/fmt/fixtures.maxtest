@@ -14,19 +14,19 @@
 // author expected of it. Never hand-edit one; re-run the generator.
 //
 // ⛔⛔ **THE WORKING DIRECTORY OF THE SPAWNED `fmt` IS THE STAGED TREE, NEVER THE CHECKOUT ROOT.**
-// This inverts `tests/test-command/`'s contract deliberately, and it is the one rule here
+// This inverts `tests/testCommand/`'s contract deliberately, and it is the one rule here
 // whose violation would do damage rather than report a wrong answer: `flag-refused` and
 // `flag-refused-no-path` exist because a regression makes `fmt` fall back to the CURRENT DIRECTORY and
 // rewrite it in place — the incident that once rewrote 92 files across two agent worktrees. Run from
 // the checkout root, those two fixtures would REPRODUCE it.
 //
-// ⛔⛔ **THIS FILE'S OWN PATHS, on the other hand, are relative to the CHECKOUT ROOT**, because that is
-// what a test binary inherits from `maxon test` (`TestExecutor.launchTests` passes
-// `inheritedWorkingDir()` and the command never chdirs). The two contracts live side by side: the
-// HARNESS reads the corpus relative to the root, and the CHILD is given the staged tree. Everything
-// handed to the child — the compiler path and the staged directory — is made absolute first, because a
-// relative program path resolves against the child's new working directory on POSIX and against the
-// parent's on Windows, and a gate must not depend on which.
+// ⛔⛔ **THIS FILE'S OWN PATHS, on the other hand, are relative to the CHECKOUT ROOT**, because that
+// is what a test binary inherits from `maxon test` (`TestExecutor.launchTests` passes
+// `inheritedWorkingDirectory()` and the command never chdirs). The two contracts live side by side:
+// the HARNESS reads the corpus relative to the root, and the CHILD is given the staged tree.
+// Everything handed to the child — the compiler path and the staged directory — is made absolute
+// first, because a relative program path resolves against the child's new working directory on
+// POSIX and against the parent's on Windows, and a gate must not depend on which.
 //
 // ⚠ A test file is the unit one process runs (`TestExecutor.shardsOf` puts a whole file in one
 // launch), so every test here shares one deadline. Each case formats a tiny staged
@@ -49,9 +49,6 @@ let SharedHelperFileName = "fixtures.maxtest"
 // two cases can never see each other's tree.
 let StagingRootDirName = "temp/fmt-fixtures"
 
-// The binary under test, relative to the checkout root, without its host suffix.
-let TestedCompilerStem = "maxon-bin/.maxon/maxon"
-
 // The command being exercised. `fmt` takes no options at all — that refusal is itself under test — so
 // there is no reproducibility flag to add here the way `test`'s corpus needs two.
 let TestedCommandName = "fmt"
@@ -67,27 +64,10 @@ let ExpectedStderrFileName = "expected-stderr.txt"
 let ExpectedExitFileName = "expected-exit.txt"
 let ExtraArgvFileName = "argv.txt"
 
-// ⛔ **THE STORED-NAME MAPPING, AND IT IS WRITTEN DOWN IN EXACTLY TWO PLACES THAT MUST AGREE** — here
-// and in `generate-expectations.py`'s `stored_to_real` / `real_to_stored`. They stage the same trees,
-// so a disagreement is silent: the generator would mint an expectation for a tree this harness never
-// builds, and every case would fail for a reason having nothing to do with `fmt`.
-//
-//     <name>.fixture -> <name>        dot-<name> -> .<name>
-//
-// A DIRECTORY takes only the `dot-` half — appending `.fixture` to one would not round-trip.
-let StoredFixtureSuffix = ".fixture"
-let StoredDotPrefix = "dot-"
-
 // The suffixes of a file that `maxon fmt` over the checkout would rewrite, which the corpus guard
 // below refuses under this project. A `.maxtest` driver is formatted too, and is the one exemption.
-let MaxonSourceSuffix = ".maxon"
 let ProjectFileSuffix = ".maxproj"
 let TaskFileSuffix = ".maxtasks"
-
-// The per-project build-products directory. The corpus walk refuses to descend into one: `maxon test`
-// stages a COPY of this project under `tests/fmt/.maxon/test/staged/` and writes a generated entry
-// source beside it, so a walk that went in would report the compiler's own output as a corpus offence.
-let ProjectProductsDirName = ".maxon"
 
 // ⚠ **THE THREE SUBSTITUTIONS, WHICH MUST MATCH `generate-expectations.py`'s `normalize` EXACTLY** —
 // CR, the host path separator, and the absolute staging path. That file carries the reasoning for each
@@ -95,9 +75,6 @@ let ProjectProductsDirName = ".maxon"
 // directory, in the same order (the tree is matched in its forward-slash form, so the separator has to
 // go first). A divergence between the two is silent: every pin would be minted in a shape this file
 // never produces.
-let CarriageReturn = "\r"
-export let LineFeed = "\n"
-let PortablePathSeparator = "/"
 let StagingTreeToken = "<TREE>"
 
 // ⭐ **THE SUMMARY LINE'S GRAMMAR, WRITTEN ONCE AND USED THREE WAYS** — to parse the first run's two
@@ -141,8 +118,6 @@ typealias RunExitCode = int(i64.min to i64.max)
 // trap instead of the assertion failure a reader can act on.
 export typealias FileTally = int(i64.min to i64.max)
 
-export typealias FixturePathArray = Array with FilePath
-
 // The relative paths one tree holds, asked as a membership question rather than read as a list.
 typealias RelativePathSet = Set with String
 
@@ -159,7 +134,7 @@ typealias RelativePathSet = Set with String
 // `checkFixture("…")` call asks whether each case is invoked, however the tests are arranged in
 // files.
 test 'every fixture case is invoked by name'
-	let source = try File.readText(readableFile("{ProjectDirName}/{SharedHelperFileName}")) otherwise panic("fmt-fixtures.test: the gate could not run — this file could not read its own source at {ProjectDirName}/{SharedHelperFileName}. Paths here are relative to the CHECKOUT ROOT; run from there.")
+	let source = fileText(readableFile("{ProjectDirName}/{SharedHelperFileName}"))
 
 	var uninvoked = StringArray.create()
 
@@ -181,7 +156,7 @@ end 'every fixture case is invoked by name'
 // name back at staging time.
 //
 // ⚠ **THE USUAL CURE — a `.maxonignore` at the corpus root — IS FORBIDDEN HERE**, and for a reason
-// this directory owns rather than one borrowed from `test-command`: two of these fixtures
+// this directory owns rather than one borrowed from `testCommand`: two of these fixtures
 // (`maxonignore-pruned`, `maxonignore-above-root`) are ABOUT how `fmt` reads that marker, and a real
 // one above them would hide the corpus from the walk under test as well as from the fixtures
 // themselves. `tests/README.md` states it as a rule of the directory.
@@ -190,8 +165,17 @@ end 'every fixture case is invoked by name'
 // them out. So is the corpus's own `fmt.maxproj`, an empty marker that makes the drivers one project
 // for the editor and the Test Explorer.
 test 'no fixture is stored as a source maxon fmt would rewrite'
-	let corpus = readableDir(ProjectDirName)
-	let live = listedLines(liveSourcesUnder(corpus, corpusMarker: corpus.join(CorpusProjectFileName)))
+	let corpus = fixtureDir(ProjectDirName)
+	let marker = corpus.join(CorpusProjectFileName).toString()
+	var offending = StringArray.create()
+
+	for source in sourcePathsEndingWith(corpus, suffixes: [MaxonSourceSuffix, ProjectFileSuffix, TaskFileSuffix]) 'eachLive'
+		if source != marker 'notTheMarker'
+			offending.push(source)
+		end 'notTheMarker'
+	end 'eachLive'
+
+	let live = listedLines(offending)
 	Expect.isEmpty(live, message: "these files under {ProjectDirName} are LIVE Maxon sources, so `maxon fmt` over this checkout would rewrite them — and under {FixturesDirName} that means the tool under test editing its own oracle. Store a fixture source as `<name>{StoredFixtureSuffix}`; do NOT add a `.maxonignore`, which would hide the corpus from the command it exists to gate and break the two `maxonignore` cases outright.")
 end 'no fixture is stored as a source maxon fmt would rewrite'
 
@@ -215,18 +199,18 @@ end 'no fixture is stored as a source maxon fmt would rewrite'
 // succeed, and it must NOT have written anything.
 test 'an option ahead of the command word is still refused'
 	let staged = freshStagingDir("{StagingRootDirName}/option-ahead-of-command")
-	copyStagedTree(readableDir("{FixturesDirName}/flag-refused-implemented-option/{InputDirName}"), into: staged)
+	stageStoredTree(fixtureDir("{FixturesDirName}/flag-refused-implemented-option/{InputDirName}"), into: staged)
 
-	let before = fileBody(staged.join("Ugly.maxon"))
+	let before = fileText(staged.join("Ugly.maxon"))
 
 	var arguments = StringArray.create()
 	arguments.push("--emit-ir")
 	arguments.push(TestedCommandName)
-	let run = spawnCompiler(arguments, workingDirectory: staged, what: "the option-ahead-of-command probe")
+	let run = spawnCompiler(arguments, staged: staged, what: "the option-ahead-of-command probe")
 
 	Expect.notEqual(run.exitCode(), expected: 0, message: "`--emit-ir fmt` SUCCEEDED. An option this driver implements was swallowed by its own arm before `fmt` could refuse it, so `fmt` ran on a command line whose flag went unread — which for this command means rewriting a directory in place. See MaxonArgs.anyOption.")
 
-	let after = fileBody(staged.join("Ugly.maxon"))
+	let after = fileText(staged.join("Ugly.maxon"))
 	Expect.equal(after, expected: before, message: "`--emit-ir fmt` was refused but WROTE ANYWAY. The refusal has to happen before the walk, not after it: a non-zero status over an already-rewritten tree is the incident with a better exit code.")
 end 'an option ahead of the command word is still refused'
 
@@ -236,17 +220,17 @@ test 'an empty source and an empty .maxproj are left empty and counted unchanged
 	let empties = [staged.join("Empty.maxon"), staged.join("marker.maxproj")]
 
 	for path in empties 'eachStaged'
-		try File.writeText(path, content: "") otherwise panic("fmt-fixtures.test: the gate could not run — could not stage {path.toString()}.")
+		writeStagedFile(path, content: "")
 	end 'eachStaged'
 
 	let run = spawnFmtOverStagedTree(stagingDirName, what: "the empty-file walk")
 	let said = "It wrote to stdout: {run.stdout} and to stderr: {run.stderr}"
 
 	Expect.equal(run.exitCode(), expected: SuccessExitCode, message: "`{TestedCommandName} .` over two empty files did not succeed. {said}")
-	Expect.equal(lastNonBlankLine(run.stdout.replace(CarriageReturn, with: "")), expected: summaryLine(0, unchanged: 2), message: "`{TestedCommandName} .` must count both empty files unchanged. {said}")
+	Expect.equal(lastNonBlankLine(withoutCarriageReturns(run.stdout)), expected: summaryLine(0, unchanged: 2), message: "`{TestedCommandName} .` must count both empty files unchanged. {said}")
 
 	for path in empties 'eachEmpty'
-		Expect.equal(fileBody(path), expected: "", message: "`{path.filename()}` was empty and must stay empty, but `fmt` wrote into it. {said}")
+		Expect.equal(fileText(path), expected: "", message: "`{path.filename()}` was empty and must stay empty, but `fmt` wrote into it. {said}")
 	end 'eachEmpty'
 end 'an empty source and an empty .maxproj are left empty and counted unchanged'
 
@@ -255,13 +239,13 @@ test 'a CRLF source formats to LF lines, inside a block comment too'
 	let staged = freshStagingDir(stagingDirName)
 	let source = staged.join("Crlf.maxon")
 
-	try File.writeText(source, content: "/* x\r\n   y */\r\nlet b = 2\r\n") otherwise panic("fmt-fixtures.test: the gate could not run — could not stage {source.toString()}.")
+	writeStagedFile(source, content: "/* x\r\n   y */\r\nlet b = 2\r\n")
 
 	let run = spawnFmtOverStagedTree(stagingDirName, what: "the CRLF block-comment walk")
 	let said = "It wrote to stdout: {run.stdout} and to stderr: {run.stderr}"
 
 	Expect.equal(run.exitCode(), expected: SuccessExitCode, message: "`{TestedCommandName} .` over a CRLF source did not succeed. {said}")
-	Expect.equal(fileBody(source), expected: "/* x\n   y */\nlet b = 2\n", message: "a CRLF source must come out with LF line endings everywhere, a block comment's interior included. {said}")
+	Expect.equal(fileText(source), expected: "/* x\n   y */\nlet b = 2\n", message: "a CRLF source must come out with LF line endings everywhere, a block comment's interior included. {said}")
 end 'a CRLF source formats to LF lines, inside a block comment too'
 
 test 'a directory walk formats a .maxproj, a .maxtasks and a .maxtest beside its sources'
@@ -272,23 +256,23 @@ test 'a directory walk formats a .maxproj, a .maxtasks and a .maxtest beside its
 	let source = staged.join("Main.maxon")
 	let companions = [staged.join("app.maxproj"), staged.join("dev.maxtasks"), staged.join("pricing.maxtest")]
 
-	try File.writeText(source, content: unformatted) otherwise panic("fmt-fixtures.test: the gate could not run — could not stage {source.toString()}.")
+	writeStagedFile(source, content: unformatted)
 
 	for path in companions 'eachStaged'
-		try File.writeText(path, content: unformatted) otherwise panic("fmt-fixtures.test: the gate could not run — could not stage {path.toString()}.")
+		writeStagedFile(path, content: unformatted)
 	end 'eachStaged'
 
 	let run = spawnFmtOverStagedTree(stagingDirName, what: "the .maxproj, .maxtasks and .maxtest walk")
 	let said = "It wrote to stdout: {run.stdout} and to stderr: {run.stderr}"
 
 	Expect.equal(run.exitCode(), expected: SuccessExitCode, message: "`{TestedCommandName} .` over a tree holding a .maxproj, a .maxtasks and a .maxtest did not succeed. {said}")
-	Expect.equal(lastNonBlankLine(run.stdout.replace(CarriageReturn, with: "")), expected: summaryLine(4, unchanged: 0), message: "`{TestedCommandName} .` did not format all four files: the walk must select `app.maxproj`, `dev.maxtasks` and `pricing.maxtest` as it selects `Main.maxon`. {said}")
+	Expect.equal(lastNonBlankLine(withoutCarriageReturns(run.stdout)), expected: summaryLine(4, unchanged: 0), message: "`{TestedCommandName} .` did not format all four files: the walk must select `app.maxproj`, `dev.maxtasks` and `pricing.maxtest` as it selects `Main.maxon`. {said}")
 
-	let formatted = fileBody(source)
+	let formatted = fileText(source)
 	Expect.notEqual(formatted, expected: unformatted, message: "`Main.maxon` was left unformatted, so the walk formatted nothing to compare the others against. {said}")
 
 	for path in companions 'eachCompanion'
-		Expect.equal(fileBody(path), expected: formatted, message: "`{path.filename()}` did not come out as `Main.maxon` did from the same text. {said}")
+		Expect.equal(fileText(path), expected: formatted, message: "`{path.filename()}` did not come out as `Main.maxon` did from the same text. {said}")
 	end 'eachCompanion'
 end 'a directory walk formats a .maxproj, a .maxtasks and a .maxtest beside its sources'
 
@@ -315,9 +299,9 @@ type FixtureCase
 	// directory — an emptied `.git` left from a previous run would still prune a walk. Delete the
 	// staging root by hand after removing one.
 	static function stage(caseName String) returns FixtureCase
-		let caseDir = readableDir("{FixturesDirName}/{caseName}")
+		let caseDir = fixtureDir("{FixturesDirName}/{caseName}")
 		let staged = freshStagingDir("{StagingRootDirName}/{caseName}")
-		copyStagedTree(readableDir("{FixturesDirName}/{caseName}/{InputDirName}"), into: staged)
+		stageStoredTree(fixtureDir("{FixturesDirName}/{caseName}/{InputDirName}"), into: staged)
 
 		return FixtureCase{name: caseName, dir: caseDir, staged: staged, tree: portableSpelling(staged)}
 	end 'stage'
@@ -327,7 +311,7 @@ type FixtureCase
 	// but two spellings of one normalization is exactly the shape that drifts, and the CR fold also
 	// defends against a checkout that handed the pin back with Windows endings.
 	function normalized(text String) returns String
-		let folded = text.replace(CarriageReturn, with: "").replace(FilePath.separator(), with: PortablePathSeparator)
+		let folded = withoutCarriageReturns(text).replace(FilePath.separator(), with: PortablePathSeparator)
 		let anonymized = folded.replace(self.tree, with: StagingTreeToken)
 
 		if anonymized.isEmpty() or anonymized.endsWith(LineFeed) 'alreadyNormalized'
@@ -348,7 +332,7 @@ type FixtureCase
 			panic("fmt-fixtures.test: the gate could not run — the '{self.name}' case has no {fileName}, so nothing says {holds}. Mint it with `python tests/fmt/generate-expectations.py {self.name}`; a case directory with no expectation proves nothing, and reads exactly like one that passed.")
 		end 'noPin'
 
-		let text = try File.readText(path) otherwise panic("fmt-fixtures.test: the gate could not run — the '{self.name}' case's {fileName} exists but could not be read.")
+		let text = fileText(path)
 		return normalized(text)
 	end 'pinned'
 
@@ -362,7 +346,7 @@ type FixtureCase
 	// argument is trimmed, so a checkout that handed back CRLF cannot turn `--check` into `--check\r`
 	// — an argument `fmt` would refuse for a reason having nothing to do with the case.
 	//
-	// ⚠ An ABSENT file and an EMPTY one both mean "no arguments", and unlike `test-command`'s corpus
+	// ⚠ An ABSENT file and an EMPTY one both mean "no arguments", and unlike `testCommand`'s corpus
 	// that is not a half-written fixture: `no-argument-defaults-to-cwd` is precisely the case where
 	// `fmt` is given nothing and must fall back to the working directory.
 	function argv() returns StringArray
@@ -374,7 +358,7 @@ type FixtureCase
 			return extras
 		end 'takesNoArguments'
 
-		let text = try File.readText(path) otherwise panic("fmt-fixtures.test: the gate could not run — the '{self.name}' case has an {ExtraArgvFileName} that could not be read. A case whose arguments cannot be recovered would be run as some OTHER case, silently.")
+		let text = fileText(path)
 
 		for line in text.split(LineFeed) 'eachLine'
 			let argument = line.trim()
@@ -403,7 +387,7 @@ type FixtureCase
 			arguments.push(extra)
 		end 'eachExtra'
 
-		return spawnCompiler(arguments, workingDirectory: self.staged, what: "the '{self.name}' case")
+		return spawnCompiler(arguments, staged: self.staged, what: "the '{self.name}' case")
 	end 'spawn'
 
 	// The three streams a case pins, asserted against one run.
@@ -465,7 +449,7 @@ type FixtureCase
 	// not a report: a formatter that started writing CRLF, or that dropped a file's final newline, must be
 	// caught rather than normalized away.
 	function checkTree(runLabel String) throws TestFailure
-		let expectedTree = readableDir("{self.dir.toString()}/{ExpectedTreeDirName}")
+		let expectedTree = fixtureDir("{self.dir.toString()}/{ExpectedTreeDirName}")
 
 		var missing = StringArray.create()
 		var different = StringArray.create()
@@ -482,8 +466,8 @@ type FixtureCase
 				continue
 			end 'notWritten'
 
-			let want = fileBody(joinRelative(expectedTree, relative: storedRelative))
-			let got = fileBody(stagedFile)
+			let want = fileText(joinRelative(expectedTree, relative: storedRelative))
+			let got = fileText(stagedFile)
 
 			if want != got 'differentBytes'
 				different.push(relative)
@@ -521,20 +505,6 @@ function checkFixture(caseName String) throws TestFailure
 	try fixture.checkIdempotence(secondRun)
 	try fixture.checkTree(SecondRunLabel)
 end 'checkFixture'
-
-// The binary under test, absolute and with the suffix this host can actually spawn. ABSOLUTE because
-// the child is given a different working directory: a relative program path resolves against the
-// child's new directory on POSIX and against the parent's on Windows.
-function testedCompilerPath() returns FilePath
-	#if os(Windows)
-		let spelled = "{TestedCompilerStem}.exe"
-	#else
-		let spelled = "{TestedCompilerStem}"
-	#endif
-
-	let relative = try FilePath.from(spelled) otherwise panic("fmt-fixtures.test: the gate could not run — '{TestedCompilerStem}' is not a spellable path")
-	return relative.resolve(Directory.currentPath())
-end 'testedCompilerPath'
 
 // ============================================================================================
 // THE SUMMARY LINE
@@ -597,43 +567,6 @@ end 'lastNonBlankLine'
 // STAGING
 // ============================================================================================
 
-// Copy one stored tree into a runnable one, mapping every name on the way.
-function copyStagedTree(stored FilePath, into FilePath)
-	for entry in listing(stored) 'eachEntry'
-		let target = into.join("{storedToReal(entry.filename())}")
-
-		if Directory.isDirectory(entry) 'aDirectory'
-			if not Directory.create(target) 'couldNotCreate'
-				panic("fmt-fixtures.test: the gate could not run — could not create the staging directory {target.toString()}.")
-			end 'couldNotCreate'
-
-			copyStagedTree(entry, into: target)
-			continue
-		end 'aDirectory'
-
-		let body = try File.readText(entry) otherwise panic("fmt-fixtures.test: the gate could not run — could not read the stored fixture file {entry.toString()}.")
-		try File.writeText(target, content: body) otherwise panic("fmt-fixtures.test: the gate could not run — could not stage {target.toString()}.")
-	end 'eachEntry'
-end 'copyStagedTree'
-
-// ⛔ **THE STORED-NAME MAPPING — the harness half of the pair `generate-expectations.py` holds.** One
-// function serves files and directories both: a directory carries only the `dot-` half, and a name
-// carrying neither marker is already what it will be called.
-function storedToReal(stored String) returns String
-	var real = stored
-
-	if real.endsWith(StoredFixtureSuffix) 'inertSource'
-		let suffixStart = try real.findLast(StoredFixtureSuffix) otherwise panic("fmt-fixtures.test: the gate could not run — '{real}' ends with {StoredFixtureSuffix} and yet does not contain it.")
-		real = real.slice(real.startIndex(), endIndex: suffixStart)
-	end 'inertSource'
-
-	if real.startsWith(StoredDotPrefix) 'hiddenName'
-		real = ".{real.replaceFirst(StoredDotPrefix, with: "")}"
-	end 'hiddenName'
-
-	return real
-end 'storedToReal'
-
 // The same mapping applied to a whole relative path, so a stored tree's walk can be compared against a
 // staged tree's walk without staging anything twice.
 function storedPathToReal(stored String) returns String
@@ -641,7 +574,7 @@ function storedPathToReal(stored String) returns String
 	var atFirstComponent = true
 
 	for component in stored.split(PortablePathSeparator) 'eachComponent'
-		var mapped = storedToReal(component)
+		var mapped = storedNameUnwrapped(component)
 
 		if atFirstComponent 'firstComponent'
 			real = mapped
@@ -654,26 +587,6 @@ function storedPathToReal(stored String) returns String
 
 	return real
 end 'storedPathToReal'
-
-export function freshStagingDir(spelled String) returns FilePath
-	let dir = writableDir(spelled)
-	purgeFilesIn(dir)
-
-	return dir
-end 'freshStagingDir'
-
-// Delete every file under a directory, leaving the directories themselves. The same shape, for the
-// same reason, as `SpecTestRunner.purgeFilesIn`.
-function purgeFilesIn(dir FilePath)
-	for entry in listing(dir) 'eachEntry'
-		if Directory.isDirectory(entry) 'aDirectory'
-			purgeFilesIn(entry)
-			continue
-		end 'aDirectory'
-
-		try File.delete(entry) otherwise panic("fmt-fixtures.test: the gate could not run — could not clear {entry.toString()} from a previous run's staging tree. Left there, it would be compared as though `fmt` had written it.")
-	end 'eachEntry'
-end 'purgeFilesIn'
 
 // A path as the pins spell one: forward slashes whatever the host uses.
 function portableSpelling(path FilePath) returns String
@@ -742,40 +655,9 @@ function joinRelative(root FilePath, relative String) returns FilePath
 	return path
 end 'joinRelative'
 
-// One file's bytes as text. A file that cannot be read is the instrument being broken: both trees are
-// on this machine and one of them was written moments ago.
-export function fileBody(path FilePath) returns String
-	return try File.readText(path) otherwise panic("fmt-fixtures.test: the gate could not run — could not read {path.toString()} while comparing a case's tree.")
-end 'fileBody'
-
 // ============================================================================================
 // WALKING THE CORPUS
 // ============================================================================================
-
-// A directory this file's paths name, refused loudly when it is not there. ONE speller, because every
-// such refusal is really the same one — the working-directory contract in the header was not met — and
-// each site repeating it is how the sentence explaining it comes to exist in only some of them.
-export function readableDir(spelled String) returns FilePath
-	let path = try FilePath.from(spelled) otherwise panic("fmt-fixtures.test: the gate could not run — '{spelled}' is not a spellable path")
-
-	if not Directory.isDirectory(path) 'notThere'
-		panic("fmt-fixtures.test: the gate could not run — there is no directory at '{spelled}'. Every path in this file is relative to the CHECKOUT ROOT, which is the working directory a test binary inherits from `maxon test`; a run started anywhere else finds nothing.")
-	end 'notThere'
-
-	return path
-end 'readableDir'
-
-// A directory this run WRITES into, created if it is not there yet, and ABSOLUTE because the staging
-// tree is handed to a child process as its working directory.
-function writableDir(spelled String) returns FilePath
-	let path = try FilePath.from(spelled) otherwise panic("fmt-fixtures.test: the gate could not run — '{spelled}' is not a spellable path")
-
-	if not Directory.create(path) 'couldNotCreate'
-		panic("fmt-fixtures.test: the gate could not run — could not create '{spelled}'. It is where a case's runnable copy is built; nothing can be staged without it.")
-	end 'couldNotCreate'
-
-	return path.resolve(Directory.currentPath())
-end 'writableDir'
 
 // ⭐⭐ **THE ROSTER IS READ FROM THE FILESYSTEM, NEVER FROM A CONSTANT.** A hand-written list is a
 // guard only while somebody maintains it: adding a fixture without adding its name would leave the
@@ -787,7 +669,7 @@ end 'writableDir'
 function fixtureCaseNames() returns StringArray
 	var names = StringArray.create()
 
-	for entry in listing(readableDir(FixturesDirName)) 'eachEntry'
+	for entry in listing(fixtureDir(FixturesDirName)) 'eachEntry'
 		if Directory.isDirectory(entry) 'aCase'
 			names.push(entry.filename())
 		end 'aCase'
@@ -796,7 +678,7 @@ function fixtureCaseNames() returns StringArray
 	return names
 end 'fixtureCaseNames'
 
-// A file this harness must be able to read, resolved with the same loud failure `readableDir` gives a
+// A file this harness must be able to read, resolved with the same loud failure `fixtureDir` gives a
 // directory — and for its reason: every path here is relative to the CHECKOUT ROOT, so a run started
 // anywhere else finds nothing and must say so rather than reporting an empty corpus as agreement.
 function readableFile(spelled String) returns FilePath
@@ -809,64 +691,12 @@ function readableFile(spelled String) returns FilePath
 	return path
 end 'readableFile'
 
-// Every `.maxon`, `.maxproj` and `.maxtasks` file under `root`, skipping `.maxon/` product
-// directories — `maxon test` stages a copy of this project there and writes a generated entry
-// source beside it, so a walk that went in would report the compiler's own output as a corpus
-// offence.
-function liveSourcesUnder(root FilePath, corpusMarker FilePath) returns StringArray
-	var live = StringArray.create()
-
-	for entry in listing(root) 'eachEntry'
-		let name = entry.filename()
-
-		if Directory.isDirectory(entry) 'aDirectory'
-			if name == ProjectProductsDirName 'buildProducts'
-				continue
-			end 'buildProducts'
-
-			for nested in liveSourcesUnder(entry, corpusMarker: corpusMarker) 'eachNested'
-				live.push(nested)
-			end 'eachNested'
-
-			continue
-		end 'aDirectory'
-
-		if entry.equals(corpusMarker) 'theCorpusMarker'
-			continue
-		end 'theCorpusMarker'
-
-		if name.endsWith(MaxonSourceSuffix) or name.endsWith(ProjectFileSuffix) or name.endsWith(TaskFileSuffix) 'aLiveSource'
-			live.push(entry.toString())
-		end 'aLiveSource'
-	end 'eachEntry'
-
-	return live
-end 'liveSourcesUnder'
-
-// The paths a refusal lists, one per line — empty when there are none, which is what makes the
-// assertions above an `isEmpty` on the very text a reader has to act on.
-export function listedLines(paths StringArray) returns String
-	var listed = ""
-
-	for path in paths 'eachPath'
-		listed.append("{LineFeed}  {path}")
-	end 'eachPath'
-
-	return listed
-end 'listedLines'
-
-// What one directory holds. A listing that fails is the instrument being broken — the corpus is
-// checked into this repository, and the staging tree was written by this process moments ago.
-export function listing(dir FilePath) returns FixturePathArray
-	return try Directory.list(dir) otherwise panic("fmt-fixtures.test: the gate could not run — could not list {dir.toString()}")
-end 'listing'
-
 // ============================================================================================
 // THE CASES
 // ============================================================================================
 
 // ⚠ **ONE FILE, NOT ONE PER CASE — AND THE RULE IT DEPARTS FROM IS A DEADLINE, NOT A STYLE.**
-// `tests/test-command/` gives each spawning `test` its own file because a file is what
+// `tests/testCommand/` gives each spawning `test` its own file because a file is what
 // ONE process runs and that process has one deadline, and ITS fixtures each COMPILE A PROJECT
 // at roughly half a second apiece. These format a tiny staged tree instead.
 //
@@ -1154,7 +984,7 @@ let CensusSourceListFileName = "tests/fmt/census-sources.txt"
 let CensusNotePrefix = "#"
 
 // Where the copies are built. A second staging root beside `StagingRootDirName` rather than a case
-// directory under it: `purgeFilesIn` clears a whole root, and sharing one with the fixtures would have
+// directory under it: `clearStagedFiles` clears a whole root, and sharing one with the fixtures would have
 // this test delete a case's staged tree out from under it.
 let CensusStagingDirName = "temp/fmt-census"
 
@@ -1186,7 +1016,7 @@ type CensusSource
 	// than a loop body reading three fields, because what a failure has to name — the ORIGIN path — is
 	// the field a caller outside the type would have to be handed in order to say it.
 	function requireNothingWasLost() throws TestFailure
-		match contentChange(self.before, after: fileBody(self.staged)) 'verdict'
+		match contentChange(self.before, after: fileText(self.staged)) 'verdict'
 			same then return
 			differs(detail) then try Expect.fail("formatting changed what {self.origin} CONTAINS, not merely how it is laid out: {detail}. A comment that was lost, duplicated, moved, joined or reordered, a word that was glued or dropped, or a code token that changed, shows here; moving whitespace around is the formatter's to do and nothing else is.")
 		end 'verdict'
@@ -1226,9 +1056,9 @@ function stageEveryCensusSource() returns CensusSourceArray
 	var staged = CensusSourceArray.create()
 
 	for origin in censusRosterPaths() 'eachOrigin'
-		let body = fileBody(censusSourcePath(origin))
+		let body = fileText(censusSourcePath(origin))
 		let target = stagingRoot.join("{stagedCensusNameFor(origin)}")
-		try File.writeText(target, content: body) otherwise panic("fmt-fixtures.test: the gate could not run — could not stage a copy of {origin} at {target.toString()}. The ORIGINAL is never formatted, so without the copy there is nothing to format.")
+		writeStagedFile(target, content: body)
 
 		staged.push(CensusSource.create(origin, staged: target, before: body))
 	end 'eachOrigin'
@@ -1244,7 +1074,7 @@ end 'stageEveryCensusSource'
 // so that the reason each source is on the list sits beside the path, where whoever adds one reads it.
 function censusRosterPaths() returns StringArray
 	let path = try FilePath.from(CensusSourceListFileName) otherwise panic("fmt-fixtures.test: the gate could not run — '{CensusSourceListFileName}' is not a spellable path")
-	let text = try File.readText(path) otherwise panic("fmt-fixtures.test: the gate could not run — could not read {CensusSourceListFileName}. Every path in this file is relative to the CHECKOUT ROOT (see the header); a run started anywhere else finds nothing.")
+	let text = fileText(path)
 
 	var paths = StringArray.create()
 
@@ -1284,24 +1114,8 @@ export function spawnFmtOverStagedTree(stagingDirName String, what String) retur
 	arguments.push(TestedCommandName)
 	arguments.push(StagedTreeArgument)
 
-	return spawnCompiler(arguments, workingDirectory: writableDir(stagingDirName), what: what)
+	return spawnCompiler(arguments, staged: stagingDir(stagingDirName), what: what)
 end 'spawnFmtOverStagedTree'
-
-// Every spawn in this corpus goes through here, because what the callers share is the contract that
-// a missing binary or a spawn that never happened is the gate being broken, never `fmt` answering
-// wrongly. It panics rather than failing an assertion for that reason: a reader sent looking for a
-// formatter defect would find nothing there.
-function spawnCompiler(arguments StringArray, workingDirectory FilePath, what String) returns CollectedOutput
-	let binary = testedCompilerPath()
-
-	if not File.exists(binary) 'noBinary'
-		panic("fmt-fixtures.test: the gate could not run — there is no compiler at {binary.toString()}, which {what} needs. This file's paths are relative to the CHECKOUT ROOT (see the header); run it from there, and build `{TestedCompilerStem}` first.")
-	end 'noBinary'
-
-	return try Subprocess.run(Executable.path(binary), arguments: arguments, workingDirectory: workingDirectory) otherwise (e) 'spawnFailed'
-		panic("fmt-fixtures.test: the gate could not run — could not spawn {what} ({e.displayReason()}). It pins what `{TestedCommandName}` reports AND what it writes, and a tree nothing compares is a claim.")
-	end 'spawnFailed'
-end 'spawnCompiler'
 
 // Asked before anything the run left is compared, for the reason its message gives.
 export function requireFmtRunSucceeded(run CollectedOutput, runLabel String, over String) throws TestFailure
@@ -1311,7 +1125,7 @@ export function requireFmtRunSucceeded(run CollectedOutput, runLabel String, ove
 end 'requireFmtRunSucceeded'
 
 export function requireSecondRunFoundNothingToDo(run CollectedOutput, stagedCount FileTally, over String) throws TestFailure
-	let observedStdout = run.stdout.replace(CarriageReturn, with: "")
+	let observedStdout = withoutCarriageReturns(run.stdout)
 	let expectedStdout = "{summaryLine(IdempotentChangedCount, unchanged: stagedCount)}{LineFeed}"
 	try Expect.equal(observedStdout, expected: expectedStdout, message: "a second `{TestedCommandName}` over the tree the first one left in {over} did not report that it had nothing to do. Formatting a formatted file must be a fixed point; anything else means the tool moves a source a little further every time it is run over it.")
 end 'requireSecondRunFoundNothingToDo'

@@ -6,10 +6,11 @@
 // `TestedCompilerStem` and by nothing else — so a runner broken badly enough to report green having run
 // nothing cannot detect itself. READ THE PASS COUNT.
 //
-// ⛔ **EVERY FREE FUNCTION IN A DIRECTORY SHARES ONE NAMESPACE, whatever its visibility** (E3006). So the
-// corpus gets ONE shared half, exported from this file, and a case file beside it declares only what that
-// case alone uses. A file-private `let` does NOT collide, so a constant declared twice is the half nothing
-// catches: every constant this corpus shares is declared here.
+// ⛔ **EVERY FREE FUNCTION IN A DIRECTORY SHARES ONE NAMESPACE, whatever its visibility** (E3006).
+// So the corpus gets ONE shared half, exported from this file, and a case file beside it declares
+// only what that case alone uses. A file-private `let` does NOT collide, so a constant declared
+// twice is the half nothing catches: every constant this corpus shares is declared here or in
+// `tests/support/`.
 //
 // ⛔ **EVERYTHING THAT WOULD STOP A CASE RUNNING AT ALL PANICS RATHER THAN FAILING AN ASSERTION**: a
 // missing compiler, an unspellable path, a spawn that never happened. None of those is a driver answering
@@ -25,31 +26,10 @@
 
 // Where the corpus lives and where a runnable copy is built, both relative to the checkout root. Staging
 // goes to gitignored `temp/`: a live `.maxon` under `tests/` is one `maxon fmt` over the checkout rewrites.
-let FixturesDirName = "tests/debug/fixtures"
+export let FixturesDirName = "tests/debug/fixtures"
 export let SpansFixtureName = "spans"
 export let GreenThreadFixtureName = "greenthread"
-let StagingRootDirName = "temp/debug"
-let StdlibDirName = "stdlib"
-let LibraryTierDirName = "tier"
-let LibraryTierBinDirName = "bin"
-let LibraryTierProgramDirName = "__fixture__"
-let StageLibraryTierCommandName = "stage-library-tier"
-
-// The stored-name mapping, `tests/README.md` rule 1: `<name>.fixture -> <name>`.
-let StoredFixtureSuffix = ".fixture"
-export let StagedProgramFileName = "main.maxon"
-let StagedSourceSuffix = ".maxon"
-
-// The binary this directory spawns, relative to the checkout root and without its host suffix. It is the
-// compiler under test AND the debug driver under test. ONE constant, so the SUBJECT axis cannot move when
-// the RUNNER does.
-export let TestedCompilerStem = "maxon-bin/.maxon/maxon"
-
-// The command line one build is run from: `build <staged>/main.maxon --output=<staged>/out[.exe]`.
-// `--output=` is what keeps the build out of the tree lock, so two case files can compile at once.
-let BuildCommandName = "build"
-let OutputOptionPrefix = "--output="
-let OutputFileStem = "out"
+export let StagingRootDirName = "temp/debug"
 
 // How a declaration is recognized in the staged fixture source.
 export let FunctionDeclarationPrefix = "function "
@@ -59,131 +39,14 @@ export let DeclarationNameEnd = "("
 export let DebugSubcommandName = "debug"
 export let DumpInfoOptionName = "--dump-info"
 
-// The folds every reader in this directory applies to a captured stream: CR dropped, so a Windows
-// console's line endings do not decide what a row says or where one ends; tabs folded to spaces, so a
-// column written with either separates two words.
-export let LineFeed = "\n"
-let CarriageReturn = "\r"
-let Space = " "
-let Tab = "\t"
-
-// The separator this file's own paths are spelled with, folded into the host's by `stagingDir`.
-let PathSeparator = "/"
-
 // How the dump writes its numbers, and the ASCII runs their digits come from. Spelled as numbers rather
 // than as character literals, which a receiver position cannot carry.
 export let HexPrefix = "0x"
 let HexBase = 16
-export let DecimalBase = 10
-let AsciiDigitZero = 48
-let AsciiDigitNine = 57
-
-// A number the dump printed — a code offset, a size, a tally.
-export typealias SidecarNumber = int(0 to u64.max)
-
-typealias PathArray = Array with FilePath
 
 // ============================================================================================
 // STAGING AND SPAWNING
 // ============================================================================================
-
-// A runnable copy of every source of one fixture under a directory named for the CASE, so concurrent case
-// files never share a staging tree. Absolute, because it is handed to a child as its working directory. The
-// previous run's files go first: a stale executable or a stale sidecar would let a build that produced
-// neither be read as though it had.
-//
-// The FIXTURE is a required parameter and the CASE LABEL is not the fixture's name: two cases staging the
-// same program still need two trees, and one case may need a fixture another has no use for.
-export function stagedFixture(caseLabel String, fixture String) returns FilePath
-	let staged = stagingDir("{StagingRootDirName}{PathSeparator}{caseLabel}")
-	clearStagedFiles(staged)
-	stageStoredTree(fixtureDir("{FixturesDirName}{PathSeparator}{fixture}"), into: staged)
-
-	return staged
-end 'stagedFixture'
-
-function stageStoredTree(stored FilePath, into FilePath)
-	for entry in listing(stored) 'eachStored'
-		let storedName = entry.filename()
-
-		if Directory.isDirectory(entry) 'aStoredDirectory'
-			let stagedDirectory = into.join(storedName)
-
-			if not Directory.create(stagedDirectory) 'couldNotCreate'
-				panic("debug tests: the gate could not run — could not create {stagedDirectory.toString()} to stage {entry.toString()} into.")
-			end 'couldNotCreate'
-
-			stageStoredTree(entry, into: stagedDirectory)
-			continue
-		end 'aStoredDirectory'
-
-		if not storedName.endsWith(StoredFixtureSuffix) 'notAStoredSource'
-			continue
-		end 'notAStoredSource'
-
-		let stagedName = storedName.replace(StoredFixtureSuffix, with: "")
-		let body = try File.readText(entry) otherwise panic("debug tests: the gate could not run — could not read the stored fixture {entry.toString()}.")
-		try File.writeText(into.join(stagedName), content: body) otherwise panic("debug tests: the gate could not run — could not stage {stagedName} into {into.toString()}.")
-	end 'eachStored'
-end 'stageStoredTree'
-
-// Compile `source` — one staged file, or the staged directory as one project — with whatever extra flag this
-// build is asking about.
-export function spawnBuild(source FilePath, staged FilePath, label String, extraArguments StringArray, binary FilePath = testedCompilerPath()) returns CollectedOutput
-	var arguments = StringArray.create()
-	arguments.push(BuildCommandName)
-	arguments.push(source.toString())
-	arguments.push("{OutputOptionPrefix}{requestedExecutable(staged).toString()}")
-
-	for extra in extraArguments 'eachExtra'
-		arguments.push(extra)
-	end 'eachExtra'
-
-	return spawnCompiler(arguments, staged: staged, what: "the '{label}' build", binary: binary)
-end 'spawnBuild'
-
-// One child compiler, run in the staging tree. A binary that is not there and a spawn that never happened
-// both stop a case running at all, so both panic naming what was being asked for.
-export function spawnCompiler(arguments StringArray, staged FilePath, what String, binary FilePath = testedCompilerPath()) returns CollectedOutput
-	if not File.exists(binary) 'noBinary'
-		panic("debug tests: the gate could not run — {what} needs a compiler at {binary.toString()} and there is none. This file's paths are relative to the CHECKOUT ROOT (see the header); run it from there, and build `{TestedCompilerStem}` first.")
-	end 'noBinary'
-
-	var config = Configuration.create(Executable.path(binary))
-	config.arguments = arguments
-	config.workingDirectory = staged
-
-	return try config.run() otherwise (e) 'spawnFailed'
-		panic("debug tests: the gate could not run — could not spawn {what} ({e.displayReason()}).")
-	end 'spawnFailed'
-end 'spawnCompiler'
-
-// Where a build's executable lands: ONE path per staging directory, never one per run, because the output
-// basename reaches the emitted image — on Mach-O it is the ad-hoc signature's identifier, whose length
-// moves the `__LINKEDIT` sizes. The host suffix is spelled INTO the `--output=` argument rather than
-// left for the compiler to append, so the path handed to the child and the path read back are one
-// spelling.
-// ⛔ The name the build ASKS for and the name it WROTE are two questions: the compiler appends the
-// platform's executable suffix of its own accord, and which one it appends is not a function of either
-// triple alone — a cross build for the other OS has been seen to carry `.exe` from each side. So the
-// request is the bare stem and every reader asks the filesystem which spelling arrived.
-function requestedExecutable(staged FilePath) returns FilePath
-	return staged.join(OutputFileStem)
-end 'requestedExecutable'
-
-export function builtExecutable(staged FilePath) returns FilePath
-	let suffixed = staged.join("{OutputFileStem}{WindowsExecutableSuffix}")
-
-	if File.exists(suffixed) 'aPortableExecutable'
-		return suffixed
-	end 'aPortableExecutable'
-
-	if File.exists(staged.join(OutputFileStem)) 'anElfOrAMachO'
-		return staged.join(OutputFileStem)
-	end 'anElfOrAMachO'
-
-	return staged.join("{OutputFileStem}{hostExecutableSuffix()}")
-end 'builtExecutable'
 
 // `<compiler> debug --dump-info <exe> [section...]`. The sections ride as trailing arguments because that
 // is what the command line takes — naming none prints the whole sidecar, which is the default this corpus
@@ -200,64 +63,6 @@ export function spawnDumpInfo(executable FilePath, staged FilePath, sections Str
 
 	return spawnCompiler(arguments, staged: staged, what: "`{TestedCompilerStem} {DebugSubcommandName} {DumpInfoOptionName}`")
 end 'spawnDumpInfo'
-
-// The compiler under test, absolute and with the suffix this host can spawn.
-function testedCompilerPath() returns FilePath
-	let spelled = "{TestedCompilerStem}{hostExecutableSuffix()}"
-	let relative = try FilePath.from(spelled) otherwise panic("debug tests: the gate could not run — '{spelled}' is not a spellable path")
-
-	return relative.resolve(Directory.currentPath())
-end 'testedCompilerPath'
-
-function hostExecutableSuffix() returns String
-	#if os(Windows)
-		let suffix = WindowsExecutableSuffix
-	#endif
-
-	#if not os(Windows)
-		let suffix = ""
-	#endif
-
-	return suffix
-end 'hostExecutableSuffix'
-
-// ============================================================================================
-// READING A CAPTURED STREAM — the folds every case in this directory shares
-// ============================================================================================
-
-export function withoutCarriageReturns(raw String) returns String
-	return raw.replace(CarriageReturn, with: "")
-end 'withoutCarriageReturns'
-
-function outputLines(raw String) returns StringArray
-	return withoutCarriageReturns(raw).split(LineFeed)
-end 'outputLines'
-
-// A list of rows as the text a failure report shows, so a disagreement reads as a listing rather than as
-// an array identity. EMPTY for an empty list, which is what lets a roster assertion be an `isEmpty` over
-// the very text a reader has to act on.
-export function renderedRows(rows StringArray) returns String
-	var rendered = ""
-
-	for row in rows 'eachRow'
-		rendered.append("{LineFeed}  {row}")
-	end 'eachRow'
-
-	return rendered
-end 'renderedRows'
-
-// A row's words, with the runs of spacing the dump lays its columns out with dropped.
-export function whitespaceTokens(row String) returns StringArray
-	var tokens = StringArray.create()
-
-	for piece in row.replace(Tab, with: Space).split(Space) 'eachPiece'
-		if not piece.isEmpty() 'aWord'
-			tokens.push(piece)
-		end 'aWord'
-	end 'eachPiece'
-
-	return tokens
-end 'whitespaceTokens'
 
 // ============================================================================================
 // THE DUMP'S SECTIONS
@@ -345,12 +150,12 @@ end 'opensASection'
 // A hex token's value. An optional `0x` opens it and the digits are read until the first character that
 // is not one, so a token carrying no digits reads 0 — which fails the assertion that consumes it rather
 // than standing in for a number nobody published.
-export function hexValue(token String) returns SidecarNumber
-	var value = 0 as SidecarNumber
+export function hexValue(token String) returns PrintedNumber
+	var value = 0 as PrintedNumber
 
 	for c in token.trim().replace(HexPrefix, with: "") 'eachCharacter'
 		match hexDigitOf(c) 'digit'
-			value(digit) then value = value * HexBase + (digit as SidecarNumber)
+			value(digit) then value = value * HexBase + (digit as PrintedNumber)
 			notAHexDigit then break 'eachCharacter'
 		end 'digit'
 	end 'eachCharacter'
@@ -374,7 +179,7 @@ export function everyStagedSourceLine(staged FilePath) returns StringArray
 	var lines = StringArray.create()
 
 	for entry in listing(staged) 'eachEntry'
-		if not entry.filename().endsWith(StagedSourceSuffix) 'notASource'
+		if not entry.filename().endsWith(MaxonSourceSuffix) 'notASource'
 			continue
 		end 'notASource'
 
@@ -385,14 +190,6 @@ export function everyStagedSourceLine(staged FilePath) returns StringArray
 
 	return lines
 end 'everyStagedSourceLine'
-
-// One staged source's lines, CR folded. Read on demand rather than held: every case that wants them has
-// already paid for a spawned compile.
-export function linesOfStagedSource(path FilePath) returns StringArray
-	let body = try File.readText(path) otherwise panic("debug tests: the gate could not run — could not read the staged source at {path.toString()}, which this process wrote moments ago.")
-
-	return outputLines(body)
-end 'linesOfStagedSource'
 
 // The functions the staged program DECLARES, in source order. Derived from the source rather than listed
 // in a case file, so a fixture that grows a function grows every roster checked against it.
@@ -419,58 +216,6 @@ function declaredNameIn(line String) returns String
 end 'declaredNameIn'
 
 // ============================================================================================
-// DIRECTORIES
-// ============================================================================================
-
-// Delete every file under a staging directory, leaving the directories. Enough for a re-run: a case stages
-// the same shape every time, and the previous run's products must not survive into a comparison.
-function clearStagedFiles(dir FilePath)
-	for entry in listing(dir) 'eachEntry'
-		if Directory.isDirectory(entry) 'aDirectory'
-			clearStagedFiles(entry)
-			continue
-		end 'aDirectory'
-
-		try File.delete(entry) otherwise panic("debug tests: the gate could not run — could not clear {entry.toString()} from a previous run's staging tree.")
-	end 'eachEntry'
-end 'clearStagedFiles'
-
-// A directory this corpus's paths name, refused loudly when it is not there: every such refusal is the
-// working-directory contract in the header not being met.
-function fixtureDir(spelled String) returns FilePath
-	let path = try FilePath.from(spelled) otherwise panic("debug tests: the gate could not run — '{spelled}' is not a spellable path")
-
-	if not Directory.isDirectory(path) 'notThere'
-		panic("debug tests: the gate could not run — there is no directory at '{spelled}'. Every path in this corpus is relative to the CHECKOUT ROOT, which is the working directory a test binary inherits from `maxon test`; a run started anywhere else finds nothing.")
-	end 'notThere'
-
-	return path
-end 'fixtureDir'
-
-// A directory this run writes into, created ancestor by ancestor so a fresh checkout without `temp/` is not
-// a failure, and absolute because it is handed to a child process as its working directory.
-function stagingDir(spelled String) returns FilePath
-	var prefix = ""
-
-	for component in spelled.split(PathSeparator) 'eachComponent'
-		prefix = component if prefix.isEmpty() else "{prefix}{PathSeparator}{component}"
-		let ancestor = try FilePath.from(prefix) otherwise panic("debug tests: the gate could not run — '{prefix}' is not a spellable path")
-
-		if not Directory.create(ancestor) 'couldNotCreate'
-			panic("debug tests: the gate could not run — could not create '{prefix}'. It is where a case's runnable copy is built; nothing can be staged without it.")
-		end 'couldNotCreate'
-	end 'eachComponent'
-
-	let path = try FilePath.from(spelled) otherwise panic("debug tests: the gate could not run — '{spelled}' is not a spellable path")
-	return path.resolve(Directory.currentPath())
-end 'stagingDir'
-
-// What one directory holds.
-function listing(dir FilePath) returns PathArray
-	return try Directory.list(dir) otherwise panic("debug tests: the gate could not run — could not list {dir.toString()}")
-end 'listing'
-
-// ============================================================================================
 // THE DEBUGGER: FIXTURES, THE `maxon debug` FACES, AND THE EVENTS ONE PRINTS
 // ============================================================================================
 
@@ -493,11 +238,6 @@ export let CastLineFixtureName = "castline"
 export let ClosuresFixtureName = "closures"
 export let TestBodyTestFileName = "doubling.maxtest"
 export let TestBodyLibraryFileName = "doubling.maxon"
-let TestCommandName = "test"
-let TestListOption = "--list"
-let TestBuildOption = "--build"
-let TestJsonOption = "--json"
-let TestBinaryKey = "binary"
 export let GenericsFixtureName = "generics"
 export let SplicedFixtureName = "spliced"
 export let TwoPassFixtureName = "twopass"
@@ -530,15 +270,8 @@ export let DebugCompleteOptionPrefix = "--complete="
 export let DebugStopTimeoutOptionPrefix = "--stop-timeout="
 let DebugTargetEnvOptionPrefix = "--target-env="
 export let NoDebugAgentOption = "--no-debug-agent"
-export let MaxProcsVariableName = "MAXON_MAX_PROCS"
 let CommandSeparator = ";"
 
-export let SidecarSuffix = ".mxdbg"
-
-// A line of a staged fixture, found by the `// anchor: <name>` comment exactly one line carries.
-let AnchorMarker = "// anchor: "
-
-export typealias SourceLine = int(1 to u32.max)
 export typealias EventIndex = int(0 to u32.max)
 export typealias EventTally = int(0 to u32.max)
 export typealias EventNumber = int(i64.min to i64.max)
@@ -553,7 +286,7 @@ let JsonObjectOpen = "\{"
 
 export union CodeRangeLookup
 	none
-	range(start SidecarNumber, limit SidecarNumber)
+	range(start PrintedNumber, limit PrintedNumber)
 end 'CodeRangeLookup'
 
 // ============================================================================================
@@ -586,44 +319,8 @@ end 'spawnDebugComplete'
 
 // The REPL face: no `--batch`, the script on the driver's own stdin, one command per line.
 export function spawnDebugRepl(executable FilePath, staged FilePath, script String) returns CollectedOutput
-	let binary = testedDebugDriverPath()
-
-	if not File.exists(binary) 'noBinary'
-		panic("debug tests: the gate could not run — the REPL case needs a compiler at {binary.toString()} and there is none. Build `{TestedCompilerStem}` first, from the CHECKOUT ROOT.")
-	end 'noBinary'
-
-	var arguments = StringArray.create()
-	arguments.push(DebugSubcommandName)
-	arguments.push(executable.toString())
-
-	var config = Configuration.create(Executable.path(binary))
-	config.arguments = arguments
-	config.workingDirectory = staged
-	config.standardInput = InputSource.bytes(script)
-
-	return try config.run() otherwise (e) 'spawnFailed'
-		panic("debug tests: the gate could not run — could not spawn the `{DebugSubcommandName}` REPL ({e.displayReason()}).")
-	end 'spawnFailed'
+	return spawnCompiler([DebugSubcommandName, executable.toString()], staged: staged, what: "the `{DebugSubcommandName}` REPL", standardInput: InputSource.bytes(script))
 end 'spawnDebugRepl'
-
-// The same path `spawnCompiler` resolves, reachable from the one spawn that does not go through it
-// because it feeds the child a stdin of its own.
-function testedDebugDriverPath() returns FilePath
-	let spelled = "{TestedCompilerStem}{debugExecutableSuffix()}"
-	let relative = try FilePath.from(spelled) otherwise panic("debug tests: the gate could not run — '{spelled}' is not a spellable path")
-
-	return relative.resolve(Directory.currentPath())
-end 'testedDebugDriverPath'
-
-function debugExecutableSuffix() returns String
-	#if os(Windows)
-		let suffix = ".exe"
-	#else
-		let suffix = ""
-	#endif
-
-	return suffix
-end 'debugExecutableSuffix'
 
 // `--target-env=NAME=VALUE`, the one option that reaches the DEBUGGEE's environment rather than the
 // driver's.
@@ -737,46 +434,12 @@ end 'childrenOf'
 
 // The whole stream as the text a failure report shows.
 export function renderedEvents(stdout String, stderr String) returns String
-	return "It wrote to stdout:{renderedRows(withoutCarriageReturns(stdout).split(LineFeed))}{LineFeed}and to stderr:{renderedRows(withoutCarriageReturns(stderr).split(LineFeed))}"
+	return "It wrote to stdout:{listedLines(withoutCarriageReturns(stdout).split(LineFeed))}{LineFeed}and to stderr:{listedLines(withoutCarriageReturns(stderr).split(LineFeed))}"
 end 'renderedEvents'
 
 // ============================================================================================
 // THE STAGED SOURCE — every line a case names is found by its anchor, never written down
 // ============================================================================================
-
-export function anchorLine(staged FilePath, anchor String, file String = StagedProgramFileName) returns SourceLine
-	let program = staged.join(file)
-	let marker = "{AnchorMarker}{anchor}"
-	var found = 0 as ElementIndex
-	var carriers = 0 as Count
-
-	for (iter, line) in linesOfStagedSource(program).withIterator() 'eachLine'
-		if line.trim().endsWith(marker) 'thisAnchor'
-			found = iter.index() + 1
-			carriers = carriers + 1
-		end 'thisAnchor'
-	end 'eachLine'
-
-	if carriers != 1 'notExactlyOne'
-		panic("debug tests: the gate could not run — {carriers} lines of {program.toString()} carry '{marker}'; exactly one must, or the case names a line it is not about.")
-	end 'notExactlyOne'
-
-	return found as SourceLine
-end 'anchorLine'
-
-export function sourceColumnOf(staged FilePath, line SourceLine, spelling String) returns EventNumber
-	let program = staged.join(StagedProgramFileName)
-	let text = try linesOfStagedSource(program).get((line - FirstSourcePosition) as ElementIndex) otherwise panic("debug tests: the gate could not run — {program.toString()} has no line {line}.")
-	let before = try text.split(spelling).get(0) otherwise panic("debug tests: the gate could not run — splitting a line always answers its first piece.")
-
-	if before == text 'notOnTheLine'
-		panic("debug tests: the gate could not run — line {line} of {program.toString()} does not spell '{spelling}'.")
-	end 'notOnTheLine'
-
-	return (before.count() + FirstSourcePosition) as EventNumber
-end 'sourceColumnOf'
-
-let FirstSourcePosition = 1
 
 export function stagedLinesContaining(staged FilePath, needle String) returns EventTally
 	var tally = 0 as EventTally
@@ -896,7 +559,7 @@ export function firstToken(row String) returns String
 end 'firstToken'
 
 // The `lines=` column of a function row, as a number.
-export function columnValueIn(row String, column String) returns SidecarNumber
+export function columnValueIn(row String, column String) returns PrintedNumber
 	for token in whitespaceTokens(row) 'eachToken'
 		if token.startsWith(column) 'thisColumn'
 			return decimalValue(token.replace(column, with: ""))
@@ -905,22 +568,6 @@ export function columnValueIn(row String, column String) returns SidecarNumber
 
 	return 0
 end 'columnValueIn'
-
-function decimalValue(token String) returns SidecarNumber
-	var value = 0 as SidecarNumber
-
-	for c in token.trim() 'eachCharacter'
-		let code = try c.asciiValue() otherwise break
-
-		if code < AsciiDigitZero or code > AsciiDigitNine 'pastTheDigits'
-			break
-		end 'pastTheDigits'
-
-		value = value * DecimalBase + ((code - AsciiDigitZero) as SidecarNumber)
-	end 'eachCharacter'
-
-	return value
-end 'decimalValue'
 
 // A `[0xSTART, 0xLIMIT)` pair anywhere in a row: the function row's code range, or the scope range a
 // local row carries. A location column spells `[rbp-0x18]`, which opens no pair because it does not
@@ -1020,78 +667,11 @@ end 'lineTarget'
 // that failed stops the case running at all, so it panics naming the fixture rather than failing an
 // assertion about a debugger that was never handed a program.
 export function builtFixture(caseLabel String, fixture String, extraArguments StringArray = StringArray.create()) returns FilePath
-	let staged = stagedFixture(caseLabel, fixture: fixture)
-	let build = spawnBuild(staged.join(StagedProgramFileName), staged: staged, label: fixture, extraArguments: extraArguments)
-
-	if build.exitCode() != 0 'didNotBuild'
-		panic("debug tests: the gate could not run — the '{fixture}' build for case '{caseLabel}' exited {build.exitCode()}, so there is no program to debug. It wrote to stderr: {build.stderr}")
-	end 'didNotBuild'
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: caseLabel, fixture: fixture)
+	_ = buildStagedSource(staged.join(StagedProgramFileName), staged: staged, what: "{fixture} for case {caseLabel}", extraArguments: extraArguments)
 
 	return staged
 end 'builtFixture'
-
-export function builtLibraryTierFixture(caseLabel String, fixture String) returns FilePath
-	let staged = stagingDir("{StagingRootDirName}{PathSeparator}{caseLabel}")
-	clearStagedFiles(staged)
-
-	let compiler = stagedLibraryTier(staged)
-	let program = libraryTierProgramDir(staged)
-	createDirectory(program)
-	stageStoredTree(fixtureDir("{FixturesDirName}{PathSeparator}{fixture}"), into: program)
-
-	let build = spawnBuild(program, staged: staged, label: fixture, extraArguments: StringArray.create(), binary: compiler)
-
-	if build.exitCode() != 0 'didNotBuild'
-		panic("debug tests: the gate could not run — the library-tier '{fixture}' build for case '{caseLabel}' exited {build.exitCode()}, so there is no program to debug. It wrote to stderr: {build.stderr}")
-	end 'didNotBuild'
-
-	return staged
-end 'builtLibraryTierFixture'
-
-export function libraryTierProgramFile() returns String
-	return "{LibraryTierDirName}{PathSeparator}{StdlibDirName}{PathSeparator}{LibraryTierProgramDirName}{PathSeparator}{StagedProgramFileName}"
-end 'libraryTierProgramFile'
-
-function libraryTierProgramDir(staged FilePath) returns FilePath
-	return staged.join(LibraryTierDirName).join(StdlibDirName).join(LibraryTierProgramDirName)
-end 'libraryTierProgramDir'
-
-function stagedLibraryTier(staged FilePath) returns FilePath
-	let tier = staged.join(LibraryTierDirName)
-	let compiler = testedCompilerPath()
-	let absolute = Directory.currentPath()
-
-	var arguments = StringArray.create()
-	arguments.push(StageLibraryTierCommandName)
-	arguments.push(tier.resolve(absolute).toString())
-
-	let stager = spawnCompiler(arguments, staged: staged, what: "the library-tier stager", binary: compiler)
-
-	if stager.exitCode() != 0 'didNotStage'
-		panic("debug tests: the gate could not run — staging the library tier exited {stager.exitCode()}. It wrote to stderr: {stager.stderr}")
-	end 'didNotStage'
-
-	return tier.join(LibraryTierBinDirName).join(compiler.filename())
-end 'stagedLibraryTier'
-
-function createDirectory(path FilePath)
-	if not Directory.create(path) and not Directory.isDirectory(path) 'couldNotCreate'
-		panic("debug tests: the gate could not run — could not create {path.toString()}.")
-	end 'couldNotCreate'
-end 'createDirectory'
-
-export function builtTestBinary(caseLabel String, staged FilePath) returns FilePath
-	let listing = spawnCompiler([TestCommandName, TestListOption, TestBuildOption, TestJsonOption], staged: staged, what: "the '{caseLabel}' test build")
-
-	if listing.exitCode() != 0 'didNotBuild'
-		panic("debug tests: the gate could not run — the test build for case '{caseLabel}' exited {listing.exitCode()}, so there is no test binary to debug. It wrote to stderr: {listing.stderr}")
-	end 'didNotBuild'
-
-	let doc = try Json.parse(listing.stdout.trim()) otherwise panic("debug tests: the gate could not run — `{TestCommandName} {TestListOption} {TestBuildOption} {TestJsonOption}` wrote a listing that does not parse: {listing.stdout}")
-	let binary = textOf(doc, node: doc.root, key: TestBinaryKey)
-
-	return try FilePath.from(binary) otherwise panic("debug tests: the gate could not run — the listing names a binary '{binary}' that is not a spellable path")
-end 'builtTestBinary'
 
 // The program run with nothing attached — the control every case comparing a debugged run with an
 // undebugged one needs, because "the answer looks right" is not the claim; "the answer is the SAME" is.
@@ -1102,13 +682,7 @@ export function runBuiltProgram(staged FilePath, arguments StringArray = StringA
 		panic("debug tests: the gate could not run — there is no program at {program.toString()} to run undebugged.")
 	end 'noProgram'
 
-	var config = Configuration.create(Executable.path(program))
-	config.arguments = arguments
-	config.workingDirectory = staged
-
-	return try config.run() otherwise (e) 'spawnFailed'
-		panic("debug tests: the gate could not run — could not run {program.toString()} undebugged ({e.displayReason()}).")
-	end 'spawnFailed'
+	return spawnIn(Executable.path(program), arguments: arguments, staged: staged, what: "{program.toString()} undebugged")
 end 'runBuiltProgram'
 
 // A command repeated: the only honest way to drive a session past a breakpoint whose hit count is a
@@ -1191,20 +765,20 @@ export let ChildrenKey = "children"
 
 // A row whose code range is a PRECONDITION rather than the claim — a function row, whose
 // `[0xSTART, 0xLIMIT)` the dump has printed since `sidecar-dump` first pinned it.
-export function requiredCodeRange(row String, what String) returns (SidecarNumber, SidecarNumber)
+export function requiredCodeRange(row String, what String) returns (PrintedNumber, PrintedNumber)
 	match codeRangeIn(row) 'theRange'
 		none then panic("debug tests: the gate could not run — {what} carries no `[0xSTART, 0xLIMIT)` code range: {row}")
 		range(start, limit) then return (start, limit)
 	end 'theRange'
 end 'requiredCodeRange'
 
-export function functionCodeStart(executable FilePath, staged FilePath, name String) returns SidecarNumber
+export function functionCodeStart(executable FilePath, staged FilePath, name String) returns PrintedNumber
 	let (start, _) = requiredCodeRange(dumpedFunctionRow(executable, staged: staged, name: name), what: "`{name}`'s function row")
 
 	return start
 end 'functionCodeStart'
 
-export function functionPrologueStart(executable FilePath, staged FilePath, name String) returns SidecarNumber
+export function functionPrologueStart(executable FilePath, staged FilePath, name String) returns PrintedNumber
 	let row = dumpedFunctionRow(executable, staged: staged, name: name)
 	let (start, _) = requiredCodeRange(row, what: "`{name}`'s function row")
 
@@ -1230,16 +804,14 @@ end 'dumpedFunctionRow'
 let PrologueColumn = "prologue=+"
 
 #if arch(arm64)
-	export let PushedFramePointerBytes = 4 as SidecarNumber
+	export let PushedFramePointerBytes = 4 as PrintedNumber
 #endif
 
 #if not arch(arm64)
-	export let PushedFramePointerBytes = 1 as SidecarNumber
+	export let PushedFramePointerBytes = 1 as PrintedNumber
 #endif
 
 // What `--target` defaults to on this host, spelled `<arch>-<os>`.
-let WindowsExecutableSuffix = ".exe"
-
 export function hostTargetTriple() returns String
 	#if arch(x64)
 		let archName = "x64"
@@ -1262,7 +834,7 @@ export function hostTargetTriple() returns String
 	return "{archName}-{osName}"
 end 'hostTargetTriple'
 
-export typealias SidecarNumberArray = Array with SidecarNumber
+export typealias SidecarNumberArray = Array with PrintedNumber
 
 let LinesSectionName = "lines"
 let StatementRowTag = "statement"
@@ -1277,10 +849,10 @@ export let RefusedAction = "refused"
 export let OutOfTextReason = "out-of-text"
 
 export type DumpedLineRow
-	export let offset as SidecarNumber
+	export let offset as PrintedNumber
 	export let tags as StringArray
 
-	static function create(offset SidecarNumber, tags StringArray) returns DumpedLineRow
+	static function create(offset PrintedNumber, tags StringArray) returns DumpedLineRow
 		return Self{offset: offset, tags: tags}
 	end 'create'
 end 'DumpedLineRow'
@@ -1292,7 +864,7 @@ export union DumpedRowScope
 	line(number SourceLine)
 end 'DumpedRowScope'
 
-export function lowestOffsetOf(offsets SidecarNumberArray) returns SidecarNumber
+export function lowestOffsetOf(offsets SidecarNumberArray) returns PrintedNumber
 	var lowest = try offsets.get(0) otherwise panic("debug tests: a line of code has at least one statement row")
 
 	for offset in offsets 'eachOffset'
@@ -1389,11 +961,11 @@ function lineRowTagsIn(row String) returns StringArray
 	return tags
 end 'lineRowTagsIn'
 
-export function exactOffsetTarget(offset SidecarNumber) returns String
+export function exactOffsetTarget(offset PrintedNumber) returns String
 	return "{ExactOffsetMarker}{hexSpelling(offset)}"
 end 'exactOffsetTarget'
 
-export function hexSpelling(offset SidecarNumber) returns String
+export function hexSpelling(offset PrintedNumber) returns String
 	return "{HexPrefix}{offset:x}"
 end 'hexSpelling'
 
@@ -1519,7 +1091,7 @@ export function renderedThreads(doc JsonDoc) returns String
 		rows.push("#{numberOf(doc, node: row, key: IdKey)} {textOf(doc, node: row, key: StatusKey)} {textOf(doc, node: row, key: FunctionKey)}")
 	end 'eachRow'
 
-	return renderedRows(rows)
+	return listedLines(rows)
 end 'renderedThreads'
 
 export function stopsAtLine(events JsonDocArray, line SourceLine) returns EventTally
@@ -1612,7 +1184,7 @@ export function tracedEventTexts(doc JsonDoc) returns String
 		rows.push(textOf(doc, node: event, key: TextKey))
 	end 'eachEvent'
 
-	return renderedRows(rows)
+	return listedLines(rows)
 end 'tracedEventTexts'
 
 export function tracedEventCount(doc JsonDoc) returns EventTally

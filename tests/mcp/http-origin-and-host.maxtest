@@ -63,12 +63,8 @@ test 'a request target that is not a path cannot carry a loopback authority past
 end 'a request target that is not a path cannot carry a loopback authority past a foreign Host'
 
 test 'an HTTP-only option without --http is refused by the CLI'
-	let binary = testedCompilerPath()
-
 	for option in ["{McpIdleTimeoutOptionPrefix}5", "{McpMaxSessionsOptionPrefix}2"] 'eachHttpOnlyOption'
-		let out = try Subprocess.run(Executable.path(binary), arguments: ["mcp-server", option], workingDirectory: Directory.currentPath(), timeoutMs: CliDeadlineMs) otherwise (e) 'spawnFailed'
-			panic("mcp http tests: the gate could not run — `mcp-server {option}` did not run: {e.displayReason()}")
-		end 'spawnFailed'
+		let out = spawnCompiler(["mcp-server", option], what: "`mcp-server {option}`", timeoutMs: CliDeadlineMs)
 
 		try Expect.equal(out.exitCode(), expected: RefusedExitCode, message: "`{option}` governs HTTP sessions and must be refused without `{McpHttpOption}` rather than ignored over stdio. It exited {out.exitCode()} saying {out.stdout} {out.stderr}")
 		try Expect.contains(out.stderr, needle: McpHttpOption, message: "the refusal must name `{McpHttpOption}`, the option `{option}` needs; it said {out.stderr}")
@@ -86,10 +82,7 @@ test 'the endpoint the server prints is on loopback'
 end 'the endpoint the server prints is on loopback'
 
 test 'a host spelling given to --http is refused by the CLI'
-	let binary = testedCompilerPath()
-	let out = try Subprocess.run(Executable.path(binary), arguments: ["mcp-server", HostSpelledOption], workingDirectory: Directory.currentPath(), timeoutMs: CliDeadlineMs) otherwise (e) 'spawnFailed'
-		panic("mcp http tests: the gate could not run — `mcp-server {HostSpelledOption}` did not run: {e.displayReason()}")
-	end 'spawnFailed'
+	let out = spawnCompiler(["mcp-server", HostSpelledOption], what: "`mcp-server {HostSpelledOption}`", timeoutMs: CliDeadlineMs)
 
 	try Expect.equal(out.exitCode(), expected: RefusedExitCode, message: "`{HostSpelledOption}` must be refused: the transport binds {LoopbackAddress} only and there is no host option. It exited {out.exitCode()} saying {out.stdout} {out.stderr}")
 	try Expect.contains("{out.stdout}{out.stderr}".toLower(), needle: LoopbackWord, message: "the refusal must say WHY there is no host to choose — that the transport is {LoopbackWord}-only — or the reader tries another spelling")

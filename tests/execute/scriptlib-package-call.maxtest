@@ -5,9 +5,10 @@ let UnusedPackageSource = "public function neverCalled() returns Count\n\treturn
 
 test 'a script calls a function a scriptlib package declares, and an unused package beside it costs nothing'
 	let staged = stageScriptlibCase(PackageCallCaseLabel)
-	writeScriptlibPackageFile(PackageCallCaseLabel, package: GreetingPackageName, fileName: GreetingPackageFileName, content: greetingPackageSource(ScriptlibGreeting))
-	writeScriptlibPackageFile(PackageCallCaseLabel, package: UnusedPackageName, fileName: UnusedPackageFileName, content: UnusedPackageSource)
-	let script = writeStagedFile(staged.sources, fileName: ScriptFileName, content: greetingScriptSource())
+	writeScriptlibPackageFile(stagedTier(PackageCallCaseLabel), package: GreetingPackageName, fileName: GreetingPackageFileName, content: greetingPackageSource(ScriptlibGreeting))
+	writeScriptlibPackageFile(stagedTier(PackageCallCaseLabel), package: UnusedPackageName, fileName: UnusedPackageFileName, content: UnusedPackageSource)
+	let script = staged.sources.join(ScriptFileName)
+	writeStagedFile(script, content: greetingScriptSource())
 
 	let run = runProgram(staged, program: script)
 

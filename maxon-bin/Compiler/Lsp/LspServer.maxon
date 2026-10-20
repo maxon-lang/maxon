@@ -35,6 +35,7 @@ let MethodDidOpen = "textDocument/didOpen"
 let MethodDidChange = "textDocument/didChange"
 let MethodDidClose = "textDocument/didClose"
 let MethodDidChangeWorkspaceFolders = "workspace/didChangeWorkspaceFolders"
+let MethodWorkspaceTrust = "maxon/workspaceTrust"
 
 let CapabilitiesKey = "capabilities"
 let ServerInfoKey = "serverInfo"
@@ -52,10 +53,16 @@ let WorkspaceFoldersChangeNotificationsKey = "changeNotifications"
 let FolderEventKey = "event"
 let FoldersAddedKey = "added"
 let FoldersRemovedKey = "removed"
+let InitializationOptionsKey = "initializationOptions"
+let TrustedWorkspaceKey = "trustedWorkspace"
+let TrustedKey = "trusted"
 
 // Run the server until the client ends the session, and report how it ended.
 export function runLspServer() returns ExitCode
-	var session = LspSession.create(spawn LspStdoutWriter.create())
+	let writer = spawn LspStdoutWriter.create()
+	let resolver = spawn LspProjectResolver.create()
+	let stdinReader = spawn LspStdinReader.create()
+	var session = LspSession.create(writer, stdinReader: stdinReader, resolver: resolver)
 	return session.run()
 end 'runLspServer'
 
@@ -65,32 +72,76 @@ type LspSession
 	var shutdownRequested = false
 	var stopped = false
 	var streamBroken = false
-	var stdin as Stdin
+	let stdinReader as LspStdinReader.handle
 	var workspace as LspWorkspaceState
 
 	// Minted here rather than read from the client, which may state no `version`: every arrival needs
 	// one of its own for a project check to learn it was superseded.
 	var nextDocumentVersion as LspDocumentVersion
 
-	static function create(writer LspStdoutWriter.handle) returns LspSession
-		return Self{documents: LspDocumentTextMap.create(), keywords: KeywordTable.create(), stdin: Console.stdin(), workspace: LspWorkspaceState.create(writer), nextDocumentVersion: 0}
+	static function create(writer LspStdoutWriter.handle, stdinReader LspStdinReader.handle, resolver LspProjectResolver.handle) returns LspSession
+		return Self{documents: LspDocumentTextMap.create(), keywords: KeywordTable.create(), stdinReader: stdinReader, workspace: LspWorkspaceState.create(writer, resolver: resolver), nextDocumentVersion: 0}
 	end 'create'
 
 	// The message pump. One turn reads one framed message; the session ends when the client says so
 	// (`exit`), when it closes the stream, or when a message arrives this server cannot frame.
 	export function run() returns ExitCode
+		self.awaitNextFrame()
+
 		while not self.stopped 'pump'
-			match readLspMessage(self.stdin) 'incoming'
-				message(body) then handleMessage(body)
-				endOfStream then self.stopped = true
-				framingError(detail) then failOnBrokenStream(detail)
-			end 'incoming'
+			self.dispatch(self.workspace.nextArrival())
 		end 'pump'
 
 		submitToLspWriter(self.workspace.writer, command: LspWriterCommand.endSession)
 
 		return exitCode()
 	end 'run'
+
+	function awaitNextFrame()
+		self.workspace.arrivals.insert(LspFrameSlot, value: try self.stdinReader.next(sendTimeout: ForeverMs) otherwise panic("LspSession.awaitNextFrame: a send that waits forever for room, to a reader this session holds, was refused"))
+	end 'awaitNextFrame'
+
+	function dispatch(arrival LspArrival)
+		match arrival 'arrival'
+			framed(body) then self.frameArrived(body)
+			endOfStream then self.stopped = true
+			framingError(detail) then self.failOnBrokenStream(detail)
+			projectResolved(dir, answer, ticket) then self.projectResolved(dir, answer: answer, ticket: ticket)
+		end 'arrival'
+	end 'dispatch'
+
+	function frameArrived(body String)
+		let doc = try Json.parse(body) otherwise 'notJson'
+			self.awaitNextFrame()
+			writeLspError(self.workspace.writer, id: LspRequestId.absent, code: LspJsonRpcErrorCode.parseError, message: "Parse error - request body is not valid JSON")
+			return
+		end 'notJson'
+
+		if endsTheSession(doc) 'exit'
+			self.stopped = true
+			return
+		end 'exit'
+
+		self.awaitNextFrame()
+		self.handleMessage(doc)
+	end 'frameArrived'
+
+	function projectResolved(dir FilePath, answer ProjectInputsAnswer, ticket ResolutionTicket)
+		if self.workspace.projectResolved(dir, answer: answer, ticket: ticket) 'awaitedAnswer'
+			self.projectInputsChanged()
+		end 'awaitedAnswer'
+	end 'projectResolved'
+
+	function projectInputsChanged()
+		self.workspace.held.forgetCorpora()
+		self.rearriveEveryDocument()
+	end 'projectInputsChanged'
+
+	function rearriveEveryDocument()
+		for (uri, text) in self.documents.clone() 'eachOpenDocument'
+			self.documentArrived(uri, text: text, arrival: BufferArrival.edited, clientVersion: ClientDocumentVersion.unstated)
+		end 'eachOpenDocument'
+	end 'rearriveEveryDocument'
 
 	function documentArrived(uri String, text String, arrival BufferArrival, clientVersion ClientDocumentVersion)
 		self.documents.upsert(uri, value: text)
@@ -100,16 +151,26 @@ type LspSession
 
 		match publishBufferDiagnostics(self.workspace, uri: uri, text: text, arrival: arrival) 'publish'
 			unchecked then return
-			published(reader, root, path, fast) then self.requestProjectCheck(LspProjectCheckRequest.create(uri.clone(), path: path.clone(), text: text.clone(), version: version, clientVersion: clientVersion, alone: fast.clone()), reader: reader, root: root)
+			published(reader, root, path, fast) then self.requestProjectCheck(uri, path: path, text: text, version: version, clientVersion: clientVersion, alone: fast, reader: reader, root: root)
 		end 'publish'
 	end 'documentArrived'
 
-	function requestProjectCheck(request LspProjectCheckRequest, reader LspReaderSearch, root WorkspaceRoot)
+	function requestProjectCheck(uri String, path FilePath, text String, version LspDocumentVersion, clientVersion ClientDocumentVersion, alone DiagnosticArray, reader LspReaderSearch, root WorkspaceRoot)
 		match lspProjectCheckRoot(reader, root: root) 'root'
 			none then return
-			at(dir) then submitProjectCheck(lspProjectCheckerFor(self.workspace, dir: dir, tiers: reader.tiers), request: request)
+			at(dir) then self.requestCheckOnceResolved(dir, uri: uri, path: path, text: text, version: version, clientVersion: clientVersion, alone: alone, reader: reader)
 		end 'root'
 	end 'requestProjectCheck'
+
+	function requestCheckOnceResolved(dir FilePath, uri String, path FilePath, text String, version LspDocumentVersion, clientVersion ClientDocumentVersion, alone DiagnosticArray, reader LspReaderSearch)
+		let inputs = self.workspace.projectInputsOf(dir)
+
+		if not inputs.resolved 'stillResolving'
+			return
+		end 'stillResolving'
+
+		submitProjectCheck(lspProjectCheckerFor(self.workspace, dir: dir, tiers: reader.tiers), request: LspProjectCheckRequest.create(uri.clone(), path: path.clone(), text: text.clone(), version: version, clientVersion: clientVersion, alone: alone.clone(), inputs: inputs))
+	end 'requestCheckOnceResolved'
 
 	function exitCode() returns ExitCode
 		if self.streamBroken 'brokenStream'
@@ -128,12 +189,7 @@ type LspSession
 		self.stopped = true
 	end 'failOnBrokenStream'
 
-	function handleMessage(body String)
-		let doc = try Json.parse(body) otherwise 'notJson'
-			writeLspError(self.workspace.writer, id: LspRequestId.absent, code: LspJsonRpcErrorCode.parseError, message: "Parse error - request body is not valid JSON")
-			return
-		end 'notJson'
-
+	function handleMessage(doc JsonDoc)
 		let id = readRequestId(doc)
 
 		let method = try doc.getString(doc.root, key: JsonRpcMethodKey) otherwise 'noMethod'
@@ -241,10 +297,22 @@ type LspSession
 			try self.closeDocument(doc) otherwise ignore
 		end 'didClose' else if method == MethodDidChangeWorkspaceFolders 'workspaceFolders'
 			try changeWorkspaceFolders(self.workspace, doc: doc) otherwise ignore
-		end 'workspaceFolders' else if method == MethodExit 'exit'
-			self.stopped = true
-		end 'exit'
+		end 'workspaceFolders' else if method == MethodWorkspaceTrust 'workspaceTrust'
+			try self.changeWorkspaceTrust(doc) otherwise ignore
+		end 'workspaceTrust'
 	end 'handleNotification'
+
+	function changeWorkspaceTrust(doc JsonDoc) throws LspParamsError
+		let params = try lspMember(doc, of: doc.root, key: JsonRpcParamsKey)
+		let trusted = try doc.getBool(params, key: TrustedKey) otherwise throw LspParamsError.malformed
+
+		if trusted == self.workspace.trusted 'unchanged'
+			return
+		end 'unchanged'
+
+		self.workspace.trusted = trusted
+		self.projectInputsChanged()
+	end 'changeWorkspaceTrust'
 
 	function openDocument(doc JsonDoc) throws LspParamsError
 		let (_, textDocument, uri) = try notifiedDocument(doc)
@@ -288,6 +356,18 @@ type LspSession
 	end 'refuse'
 end 'LspSession'
 
+function endsTheSession(doc JsonDoc) returns bool
+	match readRequestId(doc) 'addressee'
+		absent then break
+		number or
+		text then return false
+	end 'addressee'
+
+	let method = try doc.getString(doc.root, key: JsonRpcMethodKey) otherwise return false
+
+	return method == MethodExit
+end 'endsTheSession'
+
 // ⭐⭐ **EXACTLY WHAT THIS SERVER SERVES — THE SAME `servedMethods` THE DISPATCHER ROUTES ON, AND
 // NOTHING ELSE NARROWING IT.** A capability is a promise an editor acts on, and the two ways to break it
 // are symmetric: advertising a method that answers `-32601`, and answering one that was never advertised.
@@ -299,6 +379,7 @@ end 'LspSession'
 // nothing get a hover it was never told about.
 function respondInitialize(workspace LspWorkspaceState, id LspRequestId, doc JsonDoc)
 	lspRememberClientRoots(workspace, roots: clientRootsOf(doc))
+	workspace.trusted = trustedByInitializationOptions(doc)
 
 	var reply = JsonDoc.create()
 	var capabilities = LspJsonObject.create(reply)
@@ -315,6 +396,15 @@ function respondInitialize(workspace LspWorkspaceState, id LspRequestId, doc Jso
 	result.putNode(ServerInfoKey, value: serverInfoNode(reply))
 	writeLspResult(workspace.writer, doc: reply, id: id, result: result.finish())
 end 'respondInitialize'
+
+// A client that states no trust is trusted: the option is sent by a client with a trust model of
+// its own, the VS Code extension, and any other client runs a `.maxproj` as `maxon build` would.
+function trustedByInitializationOptions(doc JsonDoc) returns bool
+	let params = try lspMember(doc, of: doc.root, key: JsonRpcParamsKey) otherwise return true
+	let options = try lspMember(doc, of: params, key: InitializationOptionsKey) otherwise return true
+
+	return try doc.getBool(options, key: TrustedWorkspaceKey) otherwise true
+end 'trustedByInitializationOptions'
 
 function serverInfoNode(doc JsonDoc) returns JsonNodeId
 	var info = LspJsonObject.create(doc)

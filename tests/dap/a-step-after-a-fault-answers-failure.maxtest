@@ -35,11 +35,11 @@ type FaultStepSession implements DapSession
 end 'FaultStepSession'
 
 test 'a next from a fault stop answers failure and leaves the stop walkable'
-	var session = FaultStepSession.create(dapBuildLibraryTierFixture(FaultStepCaseLabel, fixture: CrashFixtureName))
+	var session = FaultStepSession.create(builtExecutable(builtLibraryTierFixture(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: FaultStepCaseLabel, fixture: CrashFixtureName)))
 	try dapRunSession(session, completing: "refuse the step from the fault and walk the stop")
 
 	try Expect.equal(session.stopReason, expected: ExceptionReason, message: "the program's first stop is its fault; it said `{session.stopReason}`")
 	try Expect.isFalse(session.nextAnswered, message: "a fault is terminal: `{NextCommand}` from it must answer `success: false` rather than success followed by no `{StoppedEvent}`")
 	try Expect.isFalse(session.refusal.isEmpty(), message: "a refused `{NextCommand}` must say why in its `message`")
-	try Expect.isFalse(session.framesAfterRefusal.count() == 0, message: "the refused step leaves the program stopped at its fault, so `{StackTraceCommand}` still walks it; it answered {dapRendered(session.framesAfterRefusal)}")
+	try Expect.isFalse(session.framesAfterRefusal.count() == 0, message: "the refused step leaves the program stopped at its fault, so `{StackTraceCommand}` still walks it; it answered {joined(session.framesAfterRefusal, separator: Space)}")
 end 'a next from a fault stop answers failure and leaves the stop walkable'

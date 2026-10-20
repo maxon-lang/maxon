@@ -25,7 +25,7 @@ test 'upgrade --dry-run from a script install names that install and runs nothin
 		panic("upgrade dry run: the gate could not run - the staged root {installRoot.toString()} itself contains '{DecoyWord}', so its absence from the output could never be asserted.")
 	end 'rootLooksLikeTheDecoy'
 
-	let run = runDriver([UpgradeCommandWord, DryRunFlag], binary: staged, environment: Environment.inheritUpdating([InstallVariable: decoy]))
+	let run = spawnCompiler([UpgradeCommandWord, DryRunFlag], binary: staged, environment: Environment.inheritUpdating([InstallVariable: decoy]))
 
 	let observedExit = run.exitCode()
 	Expect.equal(observedExit, expected: 0, message: "`maxon {UpgradeCommandWord} {DryRunFlag}` from the script install at {installRoot.toString()} did not succeed. It said: {run.stdout}{run.stderr}")
@@ -46,6 +46,6 @@ test 'upgrade --dry-run from a script install names that install and runs nothin
 
 	// The install script fills `<root>/stdlib`, so a dry run that ran it leaves the staged one non-empty.
 	let stdlib = installRoot.join("{StdlibDirName}")
-	let installed = try Directory.list(stdlib) otherwise panic("upgrade dry run: the gate could not run - could not list {stdlib.toString()}, which this case staged moments ago")
+	let installed = listing(stdlib)
 	Expect.equal(installed.count(), expected: 0, message: "`maxon {UpgradeCommandWord} {DryRunFlag}` wrote into {stdlib.toString()}; a dry run runs nothing")
 end 'upgrade --dry-run from a script install names that install and runs nothing'

@@ -26,6 +26,7 @@ import { RestartCoordinator, systemTimers } from './restartCoordinator';
 import { CompilerExplorerViewProvider } from './compilerExplorerPanel';
 import { registerTestControllers, UnitTestController } from './testController';
 import { registerDebugging } from './debugAdapter';
+import { trustGrantedParams, trustInitializationOptions, WorkspaceTrustNotificationMethod } from './workspaceTrust';
 
 interface ExtensionState {
 	client: LanguageClient;
@@ -55,6 +56,17 @@ const isWindows = os.platform() === 'win32';
 
 export function getClient(): LanguageClient | undefined {
 	return state?.client;
+}
+
+function workspaceTrustGranted(): void {
+	const client = state?.client;
+	if (client && client.state !== State.Stopped) {
+		client.sendNotification(WorkspaceTrustNotificationMethod, trustGrantedParams()).catch(
+			error => log(`Could not tell the language server the workspace is trusted: ${error}`)
+		);
+	}
+
+	void reconsiderCompiler();
 }
 
 interface ProjectInfo {
@@ -340,6 +352,7 @@ function searchFor(ctx: vscode.ExtensionContext): CompilerSearch {
 	return {
 		configuredPath: vscode.workspace.getConfiguration('maxon').get<string>('serverPath')?.trim() ?? '',
 		workspaceFolders: workspaceFolderPaths(),
+		trustedWorkspace: vscode.workspace.isTrusted,
 		extensionCheckout: path.join(ctx.extensionPath, '..'),
 		installRoot: installRoot(),
 		binaryName: compilerBinaryName,
@@ -381,6 +394,9 @@ function reportLookupNotice(notice: LookupNotice): void {
 			return;
 		case 'checkoutHasNoBuild':
 			log(`${notice.checkout} is a Maxon checkout with no compiler built at ${notice.slot}; build it with 'maxon run build'. Using another compiler meanwhile.`);
+			return;
+		case 'checkoutUntrusted':
+			log(`${notice.checkout} is a Maxon checkout, and its own compiler runs only in a trusted workspace. Using another compiler meanwhile.`);
 			return;
 		default:
 			throw new Error(`reportLookupNotice: unhandled notice ${JSON.stringify(notice)}`);
@@ -645,6 +661,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
 	// Registered before the compiler is looked for, so the Test Explorer and the debugger exist even
 	// when none is found and activation returns early; each asks for the compiler when it runs.
 	registerCompilerIndependentFeatures(ctx);
+	ctx.subscriptions.push(vscode.workspace.onDidGrantWorkspaceTrust(workspaceTrustGranted));
 
 	await removeServerCopy(ctx.globalStorageUri.fsPath);
 
@@ -676,6 +693,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
 			fileEvents: vscode.workspace.createFileSystemWatcher('**/*.{maxon,maxproj,maxtasks,maxtest,test}'),
 			configurationSection: 'maxon'
 		},
+		initializationOptions: () => trustInitializationOptions(vscode.workspace.isTrusted),
 		outputChannel: outputChannel,
 		revealOutputChannelOn: RevealOutputChannelOn.Never,
 		// Without a handler the client shows a failed `initialize` with `window.showErrorMessage`.

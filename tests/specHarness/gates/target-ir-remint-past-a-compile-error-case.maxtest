@@ -1,0 +1,57 @@
+let RemintPastErrorSpecName = "remint-past-error"
+let RemintPastErrorSpecFileName = "remint-past-error.md"
+let RemintPastErrorRejectedCase = "remint-past-error.rejected"
+let RemintPastErrorPinnedCase = "remint-past-error.pinned"
+let RemintPastErrorFilter = "--filter=remint-past-error/"
+let RemintPastErrorPinnedMarker = "<!-- test: remint-past-error.pinned -->"
+let RemintPastErrorPinCount = 1
+
+test 'update-required over a spec holding a pin re-mints it and passes the compile-error case beside it, leaving that case unpinned'
+	let staged = stagedGateFixture()
+	let specPath = staged.join(RemintPastErrorSpecFileName)
+	plantBogusTargetIrPin(specPath)
+
+	var arguments = StringArray.create()
+	arguments.push(UpdateRequiredFlag)
+	arguments.push(RemintPastErrorFilter)
+
+	let remint = runSpecTest(staged, includeNetwork: false, extraArguments: arguments)
+	let written = fileText(specPath)
+	let rerun = runSpecTest(staged, includeNetwork: false)
+	discardOutsideCheckoutDir(staged)
+
+	let said = "The file now reads:\n{written}\nThe re-mint run said:\n{everythingSaid(remint)}\nThe plain run said:\n{everythingSaid(rerun)}"
+	let lines = written.split("\n")
+	let pins = linesOpening(lines, prefix: hostTargetIrFence())
+	let pinnedAt = firstLineOpening(lines, prefix: RemintPastErrorPinnedMarker, said: said)
+	var broken = StringArray.create()
+	let caseNames = [RemintPastErrorRejectedCase, RemintPastErrorPinnedCase]
+
+	collectNotPassed(everythingSaid(remint), specName: RemintPastErrorSpecName, testNames: caseNames, broken: broken)
+
+	if remint.exitCode() != SuccessExitCode 'remintFailed'
+		broken.push("the re-mint run exited {remint.exitCode()}. {said}\n")
+	end 'remintFailed'
+
+	if pins.count() != RemintPastErrorPinCount 'wrongPinCount'
+		broken.push("the re-mint left {pins.count()} {hostTargetIrFence()} block(s), not {RemintPastErrorPinCount}: the one replacing the planted pin, and none for the case expecting a compile error. {said}\n")
+	end 'wrongPinCount'
+
+	if written.contains(PlantedTargetIrLine) 'plantSurvived'
+		broken.push("the planted line '{PlantedTargetIrLine}' survived the re-mint. {said}\n")
+	end 'plantSurvived'
+
+	for pin in pins 'eachPin'
+		if pin < pinnedAt 'pinInTheRejectedCase'
+			broken.push("a pin landed at line {pin + 1}, inside the case expecting a compile error (the pinned case's marker is at line {pinnedAt + 1}). {said}\n")
+		end 'pinInTheRejectedCase'
+	end 'eachPin'
+
+	collectNotPassed(everythingSaid(rerun), specName: RemintPastErrorSpecName, testNames: caseNames, broken: broken)
+
+	if rerun.exitCode() != SuccessExitCode 'rerunFailed'
+		broken.push("the plain run after the re-mint exited {rerun.exitCode()}. {said}\n")
+	end 'rerunFailed'
+
+	requireNothingBroken(broken, headline: "`{UpdateRequiredFlag}` re-mints a spec's pins without owing one to a case that expects a compile error")
+end 'update-required over a spec holding a pin re-mints it and passes the compile-error case beside it, leaving that case unpinned'

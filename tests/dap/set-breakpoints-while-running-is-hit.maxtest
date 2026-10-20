@@ -33,9 +33,9 @@ type LiveBreakpointSession implements DapSession
 end 'LiveBreakpointSession'
 
 test 'a breakpoint placed while the program runs is verified and then hit'
-	let staged = dapStagedFixture(LiveCaseLabel, fixture: LiveSpinFixtureName)
-	let anchored = dapAnchorLine(staged, anchor: TickAnchor)
-	var session = LiveBreakpointSession.create(dapBuildFixture(staged), source: dapStagedSource(staged), anchored: anchored)
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: LiveCaseLabel, fixture: LiveSpinFixtureName)
+	let anchored = anchorLine(staged.join(StagedProgramFileName), anchor: TickAnchor)
+	var session = LiveBreakpointSession.create(buildStagedSource(staged.join(StagedProgramFileName), staged: staged), source: staged.join(StagedProgramFileName), anchored: anchored)
 	try dapRunSession(session, completing: "complete")
 
 	try Expect.isTrue(session.verified, message: "a breakpoint armed into running code must be verified; it was not, on `main.maxon:{anchored}`")

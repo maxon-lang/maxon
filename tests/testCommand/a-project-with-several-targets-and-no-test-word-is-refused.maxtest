@@ -1,0 +1,15 @@
+let UnnamedTargetCase = "a-project-with-several-targets-and-no-test-word-is-refused"
+let UnnamedTargetNothingRanExit = 2
+let UnnamedTargetOffered = ["alpha", "beta"]
+
+test 'a project with several targets and no test word is refused, listing them'
+	let project = stagedCaseProject(UnnamedTargetCase)
+	let run = runTestCommandOn(project, caseName: UnnamedTargetCase)
+	let report = "{run.stdout}{run.stderr}"
+
+	Expect.equal(run.exitCode(), expected: UnnamedTargetNothingRanExit, message: "`{TestCommandName}` exits {UnnamedTargetNothingRanExit} when the run could not happen. It printed: {report}")
+
+	for offered in UnnamedTargetOffered 'eachTarget'
+		Expect.contains(report, needle: offered, message: "the refusal names the target `{offered}` a word could pick. It printed: {report}")
+	end 'eachTarget'
+end 'a project with several targets and no test word is refused, listing them'

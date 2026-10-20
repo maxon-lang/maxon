@@ -5,14 +5,14 @@ let HotLocalValue = "84"
 
 test 'a local the allocator kept in a register is read out of the stop register file'
 	let staged = builtFixture(RegisterLocalCaseLabel, fixture: ValuesFixtureName)
-	let renderedAt = anchorLine(staged, anchor: "rendered")
+	let renderedAt = anchorLine(staged.join(StagedProgramFileName), anchor: "rendered")
 	let commands = debugCommandLine(["{BreakCommand} {lineTarget(renderedAt)}", RunCommand, "{PrintCommand} {HotLocalName}"])
 	let session = spawnDebugBatch(builtExecutable(staged), staged: staged, commands: commands, extraOptions: StringArray.create())
 	let events = batchEvents(session.stdout)
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let answers = eventsOfKind(events, kind: ValueEventName)
 
-	Expect.equal(answers.count(), expected: 1, message: "`{PrintCommand} {HotLocalName}` printed no `{ValueEventName}` event. It printed: {renderedRows(eventKinds(events))}. {said}")
+	Expect.equal(answers.count(), expected: 1, message: "`{PrintCommand} {HotLocalName}` printed no `{ValueEventName}` event. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let answered = eventAt(answers, index: 0)
 	let value = memberOf(answered, node: answered.root, key: ValueKey)

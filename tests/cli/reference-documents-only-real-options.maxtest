@@ -21,12 +21,12 @@
 	// ⭐ SUBCOMMANDS WHOSE BARE INVOCATION REFUSES WITH A USAGE OF THEIR OWN, listing options `maxon help`
 	// does not. Not derivable from help: a bare `build`, `fmt`, `test` or `spec-test` does real work in the
 	// checkout instead of refusing.
-	function usageCarryingCommands() returns ListedWordArray
+	function usageCarryingCommands() returns StringArray
 		return ["coverage", "debug", "monitor", "profile"]
 	end 'usageCarryingCommands'
 
 	// Options the reference legitimately shows that no listing names, one reason each.
-	function optionsNoListingNames() returns ListedWordArray
+	function optionsNoListingNames() returns StringArray
 		return [
 			// The driver's own logging flag, accepted ahead of any command word and so under no command's section.
 			"--log=",
@@ -36,7 +36,7 @@
 	end 'optionsNoListingNames'
 
 	test 'every option the CLI reference shows is one the driver lists'
-		let reference = runOneArgument(HelpCommandWord)
+		let reference = spawnCompiler([HelpCommandWord])
 
 		let observedExit = reference.exitCode()
 		try Expect.equal(observedExit, expected: 0, message: "`maxon {HelpCommandWord}` printed the reference and then failed. It said: {reference.stdout}{reference.stderr}")
@@ -45,7 +45,7 @@
 		try Expect.isTrue(listedOptions.count() > 0, message: "no option was read off `maxon {HelpCommandWord}`, so every option the reference shows would read as unknown. It said: {reference.stdout}")
 
 		for command in usageCarryingCommands() 'eachCommand'
-			let refusal = runOneArgument(command)
+			let refusal = spawnCompiler([command])
 			let usage = linesOpeningIn(refusal.stderr, prefix: UsageLinePrefix)
 			try Expect.isTrue(usage.count() > 0, message: "`maxon {command}` with no arguments printed no `{UsageLinePrefix}` line, so its options have no roster here. It said: {refusal.stdout}{refusal.stderr}")
 
@@ -61,7 +61,7 @@
 		let claims = optionNamesIn(spellingsIn(claimedText(cliReferenceText())))
 		try Expect.isTrue(claims.count() > 0, message: "no option claim was read off {CliReferenceDocument}, so the comparison below would be vacuous.")
 
-		var unknown = ListedWordArray.create()
+		var unknown = StringArray.create()
 
 		for claim in claims 'eachClaim'
 			if not listedOptions.contains(claim) and not unknown.contains(claim) 'listedNowhere'
@@ -69,13 +69,13 @@
 			end 'listedNowhere'
 		end 'eachClaim'
 
-		try Expect.isEmpty(listed(unknown), message: "{CliReferenceDocument} shows these options and no listing of the driver names them: {listed(unknown)}. Either the document names an option that does not exist, or the driver's listing is missing it.")
+		try Expect.isEmpty(joined(unknown, separator: Space), message: "{CliReferenceDocument} shows these options and no listing of the driver names them: {joined(unknown, separator: Space)}. Either the document names an option that does not exist, or the driver's listing is missing it.")
 	end 'every option the CLI reference shows is one the driver lists'
 
 	// The long options among `spellings`, compared by name: whether a document writes `--rungs` or
 	// `--rungs=<n>` it names the same option.
-	function optionNamesIn(spellings ListedWordArray) returns ListedWordArray
-		var names = ListedWordArray.create()
+	function optionNamesIn(spellings StringArray) returns StringArray
+		var names = StringArray.create()
 
 		for spelling in spellings 'eachSpelling'
 			if not spelling.startsWith(LongOptionPrefix) or spelling.startsWith(TableRuleSpelling) 'notALongOption'

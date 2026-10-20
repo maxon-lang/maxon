@@ -9,9 +9,9 @@ test 'a step main posted, overtaken by a service hitting its breakpoint, still r
 
 	try Expect.equal(stagedLinesContaining(staged, needle: SpawnSpelling), expected: 1, message: "this case is about ANOTHER machine's breakpoint overtaking main's step, so the fixture must start its hot loop as a service, which runs on a green thread of its own and on another processor.")
 
-	let startLine = anchorLine(staged, anchor: "main-start")
-	let nextLine = anchorLine(staged, anchor: "main-next")
-	let hotLine = anchorLine(staged, anchor: "hot-body")
+	let startLine = anchorLine(staged.join(StagedProgramFileName), anchor: "main-start")
+	let nextLine = anchorLine(staged.join(StagedProgramFileName), anchor: "main-next")
+	let hotLine = anchorLine(staged.join(StagedProgramFileName), anchor: "hot-body")
 	let first = lowestOffsetOf(statementOffsetsOfLine(builtExecutable(staged), staged: staged, line: startLine))
 	let last = lowestOffsetOf(statementOffsetsOfLine(builtExecutable(staged), staged: staged, line: nextLine))
 
@@ -40,7 +40,7 @@ test 'a step main posted, overtaken by a service hitting its breakpoint, still r
 		end 'anInstructionOfMain'
 	end 'eachAnswer'
 
-	try Expect.atLeast(armed.count(), than: 3, message: "every instruction start from the start line to the next line's first is armed, and a line of arithmetic is several instructions. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.atLeast(armed.count(), than: 3, message: "every instruction start from the start line to the next line's first is armed, and a line of arithmetic is several instructions. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	var reached = SidecarNumberArray.create()
 
@@ -60,5 +60,5 @@ function renderedOffsets(offsets SidecarNumberArray) returns String
 		spelled.push(hexSpelling(offset))
 	end 'eachOffset'
 
-	return renderedRows(spelled)
+	return listedLines(spelled)
 end 'renderedOffsets'

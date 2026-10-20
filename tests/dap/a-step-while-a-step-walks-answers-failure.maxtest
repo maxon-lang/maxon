@@ -41,8 +41,8 @@ type WalkingSession implements DapSession
 end 'WalkingSession'
 
 test 'a next sent while a next still walks answers failure, and the first next still lands'
-	let staged = dapStagedFixture(WalkingCaseLabel, fixture: LongCallFixtureName)
-	var session = WalkingSession.create(dapBuildFixture(staged), source: dapStagedSource(staged), anchored: dapAnchorLine(staged, anchor: LongCallAnchor))
+	let staged = stagedFixtureTree(FixturesDirName, stagingRootDir: StagingRootDirName, caseLabel: WalkingCaseLabel, fixture: LongCallFixtureName)
+	var session = WalkingSession.create(buildStagedSource(staged.join(StagedProgramFileName), staged: staged), source: staged.join(StagedProgramFileName), anchored: anchorLine(staged.join(StagedProgramFileName), anchor: LongCallAnchor))
 	try dapRunSession(session, completing: "refuse the second next and land the first")
 
 	try Expect.isTrue(session.firstAnswered, message: "the first `{NextCommand}` starts a walk over a long call and must answer success at once")

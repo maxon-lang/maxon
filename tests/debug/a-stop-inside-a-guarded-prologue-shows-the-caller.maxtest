@@ -17,7 +17,7 @@ test 'a stop after a green-thread callee passed its stack guard and pushed its f
 	let said = renderedEvents(session.stdout, stderr: session.stderr)
 	let walks = eventsOfKind(events, kind: BacktraceEventName)
 
-	try Expect.equal(walks.count(), expected: 1, message: "the `{BacktraceCommand}` at `{afterThePush}` printed no walk. It printed: {renderedRows(eventKinds(events))}. {said}")
+	try Expect.equal(walks.count(), expected: 1, message: "the `{BacktraceCommand}` at `{afterThePush}` printed no walk. It printed: {listedLines(eventKinds(events))}. {said}")
 
 	let walked = eventAt(walks, index: 0)
 	var names = StringArray.create()
@@ -26,5 +26,5 @@ test 'a stop after a green-thread callee passed its stack guard and pushed its f
 		names.push(textOf(walked, node: frame, key: FunctionKey))
 	end 'eachFrame'
 
-	try Expect.equal(renderedRows(names), expected: renderedRows([GuardedCalleeName, GuardedCallerName]), message: "⛔ THE STACK GUARD IS NOT PART OF THE PROLOGUE. A scan that starts at the function's entry reads the guard's first instruction as neither a push nor `mov rbp, rsp`, finds no prologue at all, and walks from the caller's rbp — naming the caller's caller. {said}")
+	try Expect.equal(listedLines(names), expected: listedLines([GuardedCalleeName, GuardedCallerName]), message: "⛔ THE STACK GUARD IS NOT PART OF THE PROLOGUE. A scan that starts at the function's entry reads the guard's first instruction as neither a push nor `mov rbp, rsp`, finds no prologue at all, and walks from the caller's rbp — naming the caller's caller. {said}")
 end 'a stop after a green-thread callee passed its stack guard and pushed its frame pointer still names the caller'
