@@ -246,19 +246,43 @@ end 'cacheReadDefaultKeyNameSet'
 
 // @generated library-cache end
 
-module function spawnGatesAgree(gate SpawnGate, other SpawnGate) returns bool
-	return match gate 'gate'
-		always gives match other 'other'
-			always gives true
-			defaultOf gives false
-		end 'other'
+let SpawnCandidateKeySeparator = "|"
+let SpawnCandidateAlwaysTag = "always"
+let SpawnCandidateDefaultTag = "default"
 
-		defaultOf(declaration) gives match other 'other'
-			always gives false
-			defaultOf(otherDeclaration) gives declaration.isTheSameDeclaration(otherDeclaration)
-		end 'other'
+export typealias ServiceSpawnCandidateKeySet = Set with ByteArray
+
+// @generated library-cache begin
+module function cacheWriteServiceSpawnCandidateKeySet(writer LibraryCacheWriter, value ServiceSpawnCandidateKeySet)
+	writer.unsigned(value.count() as CacheUnsigned)
+
+	for item in value 'eachItem'
+		writer.bytes(item)
+	end 'eachItem'
+end 'cacheWriteServiceSpawnCandidateKeySet'
+
+module function cacheReadServiceSpawnCandidateKeySet(reader LibraryCacheReader) returns ServiceSpawnCandidateKeySet throws LibraryCacheDamage
+	let count = try reader.count()
+	var result = ServiceSpawnCandidateKeySet.create()
+
+	for _ in 0 upto count 'eachItem'
+		let item = try reader.bytes()
+		result.insert(item)
+	end 'eachItem'
+
+	return result
+end 'cacheReadServiceSpawnCandidateKeySet'
+
+// @generated library-cache end
+
+module function spawnCandidateKey(typeName ByteArray, member ByteArray, gate SpawnGate) returns ByteArray
+	let gateKey = match gate 'gate'
+		always gives SpawnCandidateAlwaysTag
+		defaultOf(declaration) gives "{SpawnCandidateDefaultTag}{SpawnCandidateKeySeparator}{declaration.keyLine}{SpawnCandidateKeySeparator}{declaration.keyColumn}{SpawnCandidateKeySeparator}{declaration.declFilePath.comparisonSpelling()}"
 	end 'gate'
-end 'spawnGatesAgree'
+
+	return "{String.from(typeName)}{SpawnCandidateKeySeparator}{String.from(member)}{SpawnCandidateKeySeparator}{gateKey}".toByteArray()
+end 'spawnCandidateKey'
 
 export type LiveDefaultKeys
 	export var names as DefaultKeyNameSet
