@@ -183,6 +183,8 @@ end 'main'
 <!-- test: managed-directory.next-without-try -->
 <!-- tier: stdlib -->
 <!-- unsupported-targets: wasm32-wasi -->
+On wasm32-wasi this case's expected diagnostic is displaced by E3104 (this construct lowers to the runtime entry '__md_open_search', which has no wasm32-wasi implementation), so the lane is excluded.
+
 ```maxon
 function main() returns ExitCode
 	let dir = try __ManagedDirectory.openSearch("./*".toByteArray().managed) otherwise return 1

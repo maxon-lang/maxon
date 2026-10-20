@@ -587,6 +587,8 @@ error E3078: <fragment>:130:19: cannot pass 'a', which is read-only (a `let` bin
 
 <!-- test: let-escape.error.a-let-kept-by-a-callee-while-a-task-runs-and-read-again-is-refused -->
 <!-- unsupported-targets: wasm32-wasi -->
+On wasm32-wasi this case's expected diagnostic is displaced by E3104 ('sleep' lowers to the runtime entry '__gt_sleep', which has no wasm32-wasi implementation), so the lane is excluded.
+
 `register` keeps its parameter in a module container and `a` is read afterwards, so the call is refused whatever the task does.
 
 ```maxon
@@ -1028,6 +1030,8 @@ a7
 
 <!-- test: let-escape.error.a-let-kept-in-a-module-container-across-a-yield-and-read-again-is-refused -->
 <!-- unsupported-targets: wasm32-wasi -->
+On wasm32-wasi the expected diagnostic is followed by an extra E3104 ('Scheduler.yield' lowers to the runtime entry '__gt_resched', which has no wasm32-wasi implementation) that the pinned output does not list, so the lane is excluded.
+
 `register` keeps its parameter in a module container and `b` is read afterwards, so the call is refused, whatever type the spawned task writes.
 
 ```maxon
@@ -3282,6 +3286,8 @@ a7
 
 <!-- test: let-escape.error.a-yielding-call-lets-a-spawned-task-write-a-record-stored-in-a-module-container -->
 <!-- unsupported-targets: wasm32-wasi -->
+On wasm32-wasi the expected diagnostic is followed by an extra E3104 ('Scheduler.yield' lowers to the runtime entry '__gt_resched', which has no wasm32-wasi implementation) that the pinned output does not list, so the lane is excluded.
+
 `register` keeps its parameter in a module container, and `b` is read after the yield, so the call is refused.
 
 ```maxon

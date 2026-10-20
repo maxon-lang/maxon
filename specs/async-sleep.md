@@ -263,6 +263,8 @@ end 'main'
 
 <!-- test: async-sleep.float-arg-rejected -->
 <!-- unsupported-targets: wasm32-wasi -->
+On wasm32-wasi this case's expected diagnostic is displaced by E3104 ('sleep' lowers to the runtime entry '__gt_sleep', which has no wasm32-wasi implementation), so the lane is excluded.
+
 `sleep` requires an integer millisecond count; a float is refused at compile time — by the ORDINARY
 argument rule against `milliseconds Milliseconds`, which is why the rejection names the parameter and offers
 the conversion, and is the same sentence every other narrowing site speaks.

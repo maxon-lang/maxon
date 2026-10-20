@@ -1299,6 +1299,8 @@ what receives one must admit every value a byte has.
 <!-- test: a-narrow-byte-does-not-admit-a-compiler-synthesized-buffer -->
 <!-- tier: stdlib -->
 <!-- unsupported-targets: wasm32-wasi -->
+On wasm32-wasi this case's expected diagnostic is displaced by E3104 (this construct lowers to the runtime entry '__md_current_path', which has no wasm32-wasi implementation), so the lane is excluded.
+
 ### A one-byte slot that cannot hold 255 is refused at the boundary
 ```maxon
 typealias Byte = int(0 to 200)

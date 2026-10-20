@@ -102,6 +102,8 @@ false
 
 <!-- test: error.a-let-sample-timer-cannot-be-closed -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
+wasm32-wasi declares no SampleTimer, so the call is refused with E3004 (call to undefined function 'SampleTimer.create'), not E3104.
+
 A `SampleTimer` closes its handle, so a `let` timer refuses `close()`.
 `SampledProcess` and `SampleTimer` exist only on x64-windows, so the other lanes do not compile the program.
 

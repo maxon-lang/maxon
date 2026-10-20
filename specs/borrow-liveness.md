@@ -3137,7 +3137,6 @@ end 'main'
 ```
 
 <!-- test: a-closure-capturing-a-borrowed-field-is-run-by-a-coroutine-after-its-block -->
-<!-- unsupported-targets: wasm32-wasi -->
 ### A coroutine runs a closure capturing a field read after the closure's block
 The coroutine owns the closure, whose environment holds `inner` past the rebind of `b`.
 ```maxon

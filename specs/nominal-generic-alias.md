@@ -2543,7 +2543,6 @@ error E3005: <fragment>:17:10: the arms of this merge hold 'Xs' and 'Ys', so the
 ```
 
 <!-- test: error.a-service-message-argument-of-another-brand-is-refused -->
-<!-- unsupported-targets: wasm32-wasi -->
 The message parameter is a `Ys`; the argument is an `Xs`.
 ```maxon
 typealias Xs = Array with String
@@ -2576,6 +2575,8 @@ error E3005: <fragment>:22:13: argument type mismatch for 'ys': expected 'Ys', g
 
 <!-- test: error.a-service-message-argument-adopted-later-is-judged-against-the-parameter-brand -->
 <!-- unsupported-targets: wasm32-wasi -->
+On wasm32-wasi the expected diagnostic is followed by an extra E3104 ('spawn' lowers to the runtime entry '__svc_spawn', which has no wasm32-wasi implementation) that the pinned output does not list, so the lane is excluded.
+
 `a` takes the brand `Xs` from the call that follows its creation, and the message parameter is a `Ys`.
 ```maxon
 typealias Xs = Array with String

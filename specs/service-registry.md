@@ -1211,6 +1211,8 @@ typealias Integer = int(i64.min to i64.max)
 
 <!-- test: error.an-await-cycle-through-a-second-implementer -->
 <!-- unsupported-targets: wasm32-wasi -->
+On wasm32-wasi this case's expected diagnostic is displaced by E3104 ('spawn' lowers to the runtime entry '__svc_spawn', which has no wasm32-wasi implementation), so the lane is excluded.
+
 `Innocent`, the first implementer of `Echo`, awaits nothing. `Relay`, the second, awaits `Bouncer`, and
 `Bouncer` awaits through an `Echo.handle`, which may hold a `Relay`, so the two can wait on each other. The
 cycle is found through every implementer of the interface, not only the first.
@@ -1403,6 +1405,8 @@ typealias Integer = int(i64.min to i64.max)
 
 <!-- test: error.an-argument-that-could-convert-to-two-interface-handles -->
 <!-- unsupported-targets: wasm32-wasi -->
+On wasm32-wasi the expected diagnostic is followed by an extra E3104 (an awaited message send lowers to the runtime entry '__gt_cell_alloc', which has no wasm32-wasi implementation) that the pinned output does not list, so the lane is excluded.
+
 `Counter` implements both interfaces, so its handle converts to either overload's parameter equally well; the
 call is ambiguous rather than resolved by declaration order.
 ```maxon
@@ -1448,7 +1452,6 @@ error E3007: <fragment>:35:9: Ambiguous overload for 'probe': multiple overloads
 ```
 
 <!-- test: error.implementers-of-one-interface-that-disagree-on-a-reply -->
-<!-- unsupported-targets: wasm32-wasi -->
 A send through `Worker.handle` builds one request and awaits one reply for whichever implementer the handle
 holds. `Left` and `Right` both satisfy the abstract `throws Error`, but each throws its own enum, so their
 replies differ and no one send can serve both.
@@ -2301,7 +2304,6 @@ note: <fragment>:15:9: the other `default` for `Config`
 ```
 
 <!-- test: error.a-default-whose-service-does-not-implement-its-key -->
-<!-- unsupported-targets: wasm32-wasi -->
 `Stranger` has a `greet` of the right shape, but it does not declare `implements Greeter`.
 ```maxon
 interface Greeter

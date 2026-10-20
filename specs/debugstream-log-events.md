@@ -124,7 +124,7 @@ log_phase_end compile unit=7
 ```
 
 <!-- test: debugstream-log-events.a-green-thread-program-logs-before-its-scheduler-exists -->
-<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 ⛔⛔ **THE CASE THAT CATCHES A PRE-INITIALIZED SCHEDULER READ, WHICH IS A SEGFAULT.** Every log
 entry stamps the green thread that authored it, which is `M->currentGt` (`sched-processor.md`) —
 reached through this OS thread's TLS slot, at a byte offset `__sched_init_procs`

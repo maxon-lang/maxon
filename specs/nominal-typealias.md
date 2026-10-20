@@ -339,7 +339,6 @@ same
 ```
 
 <!-- test: a-processor-count-compares-with-an-array-count -->
-<!-- unsupported-targets: wasm32-wasi -->
 A processor count and an array count are both `Count`s, so they compare with no cast.
 ```maxon
 typealias Narrow = int(0 to 1000)

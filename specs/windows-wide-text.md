@@ -204,6 +204,8 @@ end 'main'
 
 <!-- test: an-environment-variable-handed-to-a-child-reaches-it-in-utf16 -->
 <!-- unsupported-targets: x64-linux, arm64-linux, arm64-macos, wasm32-wasi -->
+A subprocess is refused on wasm32-wasi with E3074, ahead of E3104, which the harness does not count as a SKIP.
+
 The program starts PowerShell with `MAXON_WIDE_TEXT` set to `日本` through `Environment.inheritUpdating`,
 and PowerShell reads the two characters U+65E5 U+672C.
 ```maxon
@@ -518,6 +520,8 @@ current directory 26085,26412 6
 
 <!-- test: a-child-started-in-a-utf8-working-directory-sees-it-in-utf16 -->
 <!-- unsupported-targets: x64-linux, arm64-linux, arm64-macos, wasm32-wasi -->
+A subprocess is refused on wasm32-wasi with E3074, ahead of E3104, which the harness does not count as a SKIP.
+
 PowerShell makes a directory `日本`, and the program starts PowerShell again with that directory as its
 working directory. PowerShell finds itself in a directory named U+65E5 U+672C.
 ```maxon
@@ -854,6 +858,8 @@ found
 
 <!-- test: a-redirect-file-with-a-utf8-name-is-written-and-read -->
 <!-- unsupported-targets: x64-linux, arm64-linux, arm64-macos, wasm32-wasi -->
+A subprocess is refused on wasm32-wasi with E3074, ahead of E3104, which the harness does not count as a SKIP.
+
 PowerShell writes `ping` into `本日.txt`. The program starts PowerShell again with its standard input
 read from `本日.txt` (`InputSource.file`) and its standard output written to `日本.txt`
 (`OutputDestination.file`), and the child copies one to the other. PowerShell then finds both names on
@@ -926,6 +932,8 @@ ping
 
 <!-- test: a-redirect-to-a-utf8-name-that-cannot-open-reports-the-failure -->
 <!-- unsupported-targets: x64-linux, arm64-linux, arm64-macos, wasm32-wasi -->
+A subprocess is refused on wasm32-wasi with E3074, ahead of E3104, which the harness does not count as a SKIP.
+
 PowerShell makes a directory `日本` holding two directories, `in.txt` and `out.txt`. A standard input
 read from `日本\in.txt` and a standard output written to `日本\out.txt` both name a directory, which no
 stream can open: the spawn fails as `spawnFailed`, carrying the access-denied code (5) Windows answers
@@ -1055,7 +1063,7 @@ published 7
 ```
 
 <!-- test: a-path-holding-a-nul-names-no-file -->
-<!-- unsupported-targets: x64-linux, arm64-linux, arm64-macos, wasm32-wasi -->
+<!-- unsupported-targets: x64-linux, arm64-linux, arm64-macos -->
 Windows names no file with a NUL in it, so a path holding one names nothing at all — never the file named by
 the characters before the NUL. `FilePath.from` refuses such a spelling as an invalid character, and a path
 that reaches one through `join` is a file that does not exist.

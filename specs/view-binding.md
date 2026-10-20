@@ -493,7 +493,6 @@ end 'main'
 ```
 
 <!-- test: view-binding.error.a-view-sent-to-a-service-is-refused -->
-<!-- unsupported-targets: wasm32-wasi -->
 A `view` names data its own green thread may write, so it can be neither moved nor shared with a service.
 wasm32-wasi has no services, so it answers `E3104` for the `spawn` before it reaches this refusal; the case is pinned on the native lanes.
 

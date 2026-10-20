@@ -539,7 +539,7 @@ first
 ```
 
 <!-- test: read-text-of-a-file-that-reports-no-size -->
-<!-- unsupported-targets: x64-windows, arm64-macos, wasm32-wasi -->
+<!-- unsupported-targets: x64-windows, arm64-macos -->
 A Linux `/proc` file reports a size of 0 and still holds text, so `File.readText` reads to the end of the file
 rather than stopping at the size it was told. `/proc/self/smaps` is longer than one 4096-byte read, so the
 whole file arrives only when the read continues past the first chunk: its last line is the last mapping's

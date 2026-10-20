@@ -76,6 +76,8 @@ in exactly one thing: the NAME.
 
 <!-- test: runtime-chunk-name -->
 <!-- unsupported-targets: wasm32-wasi -->
+On wasm32-wasi compilation succeeds where the case pins the collision error.
+
 The silent miscompile: with the refusal removed from `recordChunkLabel`, this exact program returns
 **127** instead of **7**, with the build exiting 0. Every native lane lays `mrt_runtime_init` and refuses the declaration alike.
 ```maxon
@@ -96,6 +98,8 @@ error E4015: <fragment>:4:10: declaration of 'mrt_runtime_init' collides with a 
 
 <!-- test: entry-stub-name -->
 <!-- unsupported-targets: wasm32-wasi -->
+On wasm32-wasi compilation succeeds where the case pins the collision error.
+
 The ENTRY STUB's own name — **the case that spans all four native targets**, because every one of them
 lays a `mrt_start` chunk down (x64 as a module function via `prependEntryStub`, arm64 as a hand-assembled
 chunk via `appendArm64RuntimeChunks`), and therefore the one that keeps arm64's half of the shared

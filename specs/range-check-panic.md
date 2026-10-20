@@ -2561,6 +2561,8 @@ end 'main'
 
 <!-- test: a-negative-value-sent-to-a-service-handler-is-refused-at-the-send -->
 <!-- unsupported-targets: wasm32-wasi -->
+On wasm32-wasi this case's expected diagnostic is displaced by E3104 ('spawn' lowers to the runtime entry '__svc_spawn', which has no wasm32-wasi implementation), so the lane is excluded.
+
 `i - 1` is arithmetic over a counted loop's counter, so the `-1` it reaches is known at compile time and
 the handler's `Count` parameter refuses it at the send with E3005.
 ```maxon

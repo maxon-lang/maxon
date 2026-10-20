@@ -1341,6 +1341,8 @@ Stack trace:
 <!-- test: force-segfault -->
 <!-- tier: stdlib -->
 <!-- unsupported-targets: arm64-macos, wasm32-wasi -->
+On wasm32-wasi the run exits 0 where the case pins exit 1.
+
 ⭐⭐ **THE ONLY CASE THAT CAN REACH THE FAULT HANDLER ON PURPOSE.** Every other route into
 `mrt_fault_thunk` is a compiler BUG, so without `__Builtins.forceSegfault()` the whole thunk would be code
 no suite could exercise: green everywhere, and unmeasured. The intrinsic lowers to
@@ -1375,6 +1377,8 @@ Stack trace:
 <!-- test: force-segfault-macos -->
 <!-- tier: stdlib -->
 <!-- unsupported-targets: x64-windows, x64-linux, arm64-linux, wasm32-wasi -->
+On wasm32-wasi the run exits 0 where the case pins exit 1.
+
 ### Deliberate access violation produces a clean panic (arm64-macOS)
 ⚠⚠ **A Mach-O RUNS ONLY ON macOS**, so on any other host the runner reports this NOT RUN and refuses to
 count it — which is why its target list excludes every other lane rather than marking it as a restriction

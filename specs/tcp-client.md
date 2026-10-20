@@ -154,7 +154,7 @@ refused resolveFailed
 
 <!-- test: tcp-client.a-non-ascii-host-name-resolves-through-its-unicode-form -->
 <!-- network: live -->
-<!-- unsupported-targets: x64-linux, arm64-linux, arm64-macos, wasm32-wasi -->
+<!-- unsupported-targets: x64-linux, arm64-linux, arm64-macos -->
 A host name holding non-ASCII characters reaches the Windows resolver as the characters it spells, so
 `münchen.de` resolves as its IDNA form `xn--mnchen-3ya.de` does; the ASCII form is the control that proves
 the network answers. The other lanes pass the name's bytes to the resolver unchanged and no POSIX resolver

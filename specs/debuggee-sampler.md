@@ -321,6 +321,8 @@ ready false
 
 <!-- test: a-debug-port-with-no-debuggee-times-out -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
+On wasm32-wasi the debug-port call panics (windowsDebugCall asks a host with no Win32 debug port), so the run exits 1 where the case pins 0.
+
 On Windows a port with nothing attached has no event to wait for.
 `DebugPort` drives the Win32 debug API, which only Windows provides, so the other lanes do not run the program.
 
@@ -432,6 +434,8 @@ unknownThread
 
 <!-- test: a-sample-timer-ticks-and-closes -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
+wasm32-wasi declares no SampleTimer, so the call is refused with E3004 (call to undefined function 'SampleTimer.create'), not E3104.
+
 A timer waits for its next deadline, and `close` releases its handle once.
 `SampledProcess` and `SampleTimer` exist only on x64-windows, so the other lanes do not compile the program.
 
@@ -456,6 +460,8 @@ closed
 
 <!-- test: a-closed-sample-timer-panics-when-it-waits -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
+wasm32-wasi declares no SampleTimer, so the call is refused with E3004 (call to undefined function 'SampleTimer.create'), not E3104.
+
 A wait on a closed timer is a bug in the caller, so it panics.
 `SampledProcess` and `SampleTimer` exist only on x64-windows, so the other lanes do not compile the program.
 
@@ -537,7 +543,6 @@ true 4096
 
 <!-- test: a-function-reading-a-page-reservations-base-accepts-a-let-holder -->
 <!-- tier: stdlib -->
-<!-- unsupported-targets: wasm32-wasi -->
 Reading the base of a reservation writes nothing, so a function that does it may be handed a `let` holder.
 wasm32-wasi has no page reservations.
 
@@ -570,7 +575,6 @@ true
 
 <!-- test: error.a-function-lending-a-page-reservations-address-is-refused-a-let-holder -->
 <!-- tier: stdlib -->
-<!-- unsupported-targets: wasm32-wasi -->
 Lending the address of a reservation hands foreign code a way to write the pages, so the function that lends it writes
 its holder, and a `let` holder is refused at the call exactly as it is for a function that writes a word.
 wasm32-wasi has no page reservations.
@@ -639,6 +643,8 @@ ready true
 
 <!-- test: a-sample-timer-dropped-without-close-leaks-nothing -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
+wasm32-wasi declares no SampleTimer, so the call is refused with E3004 (call to undefined function 'SampleTimer.create'), not E3104.
+
 A `SampleTimer` that is never closed is dropped like any record: its timer handle is closed with it and the leak
 gate finds nothing.
 `SampledProcess` and `SampleTimer` exist only on x64-windows, so the other lanes do not compile the program.
@@ -794,7 +800,7 @@ dropped false
 
 <!-- test: a-released-timer-reads-as-empty-and-releases-once -->
 <!-- tier: stdlib -->
-<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 `release` closes the timer early and is idempotent: the handle reads back `0` afterwards and the drop that follows
 frees only the box.
 `__ManagedHandle.timer()` opens a Win32 timer, which only x64-windows provides, so the other lanes do not run the program.

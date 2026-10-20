@@ -237,6 +237,8 @@ end 'main'
 
 <!-- test: both-bounds-are-reachable-values -->
 <!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
+On wasm32-wasi the wide exit value this case computes is outside ExitCode (int(0 to 255)): refused at compile time (E3005) or a range-check panic at run time.
+
 ⭐ **THE CLAIM IS "BOTH ENDS ARE ORDINARY VALUES", AND THE TOP END IS A DIFFERENT NUMBER PER
 PLATFORM — so this is a TWIN PAIR, not one case with a marker.** A single case would have to pick one
 platform's top bound and would then be asserting the claim on one lane only; two cases assert it on all

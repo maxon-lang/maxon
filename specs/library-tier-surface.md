@@ -1110,7 +1110,7 @@ declared
 
 <!-- test: a-managed-handle-static-compiles-in-the-library-tier -->
 <!-- tier: stdlib -->
-<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux, wasm32-wasi -->
+<!-- unsupported-targets: x64-linux, arm64-macos, arm64-linux -->
 The same program in the library tier.
 `__ManagedHandle.timer()` opens a Win32 timer, which only x64-windows provides, so the other lanes do not run the program.
 ```maxon

@@ -3160,7 +3160,6 @@ error E3094: k/<fragment>:21:13: module type 'Handler' is never referenced outsi
 
 
 <!-- test: error.crossfile-a-service-throws-a-contested-name -->
-<!-- unsupported-targets: wasm32-wasi -->
 ⭐ **A SERVICE MESSAGE IS A SIGNATURE, AND IT ANSWERS AT THE SAME DOOR.** `divide` is on `Calc`'s message
 surface, so whoever spawns a `Calc` has to be able to name what the message takes, returns and throws —
 and `b.maxon` writes all three over declarations of its own that no other file can see. Four positions,
@@ -3264,6 +3263,8 @@ end 'main'
 
 <!-- test: error.a-service-throws-the-alias-its-own-directory-declares -->
 <!-- unsupported-targets: wasm32-wasi -->
+On wasm32-wasi the expected diagnostic is followed by an extra E3104 ('spawn' lowers to the runtime entry '__svc_spawn', which has no wasm32-wasi implementation) that the pinned output does not list, so the lane is excluded.
+
 The same pair, with the message's clause naming `calc.Fault` — the ranged alias. That names no enum or union,
 so the clause is refused, whatever `faults/` declares under the same name.
 ```maxon

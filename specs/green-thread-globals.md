@@ -544,6 +544,8 @@ held=1600000 names=4
 
 <!-- test: error.a-message-may-not-read-a-let-no-share-walk-can-mark -->
 <!-- unsupported-targets: wasm32-wasi -->
+On wasm32-wasi this case's expected diagnostic is displaced by E3104 ('TcpListener.bind' lowers to the runtime entry '__ml_bind', which has no wasm32-wasi implementation), so the lane is excluded.
+
 **AND A `let` THE MARK CANNOT REACH IS REFUSED WHERE A MESSAGE READS IT.** An OS handle has a destructor and no
 walk, so nothing can make the counts on a record holding one atomic. The refusal sits at the read the message
 reaches, and the note is the declaration.
@@ -695,6 +697,8 @@ n=10
 
 <!-- test: error.a-spawn-a-global-initializer-reaches-is-refused -->
 <!-- unsupported-targets: wasm32-wasi -->
+On wasm32-wasi this case's expected diagnostic is displaced by E3104 ('spawn' lowers to the runtime entry '__svc_spawn', which has no wasm32-wasi implementation), so the lane is excluded.
+
 **A GLOBAL INITIALIZER MAY NOT START A SERVICE.** `Box.start` spawns `Reader` while `box` is being built, before
 `roster` is marked shared, so `Reader.read` could step `roster`'s plain count from another OS thread.
 ```maxon

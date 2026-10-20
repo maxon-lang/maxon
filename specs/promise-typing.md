@@ -96,6 +96,8 @@ error E2004: <fragment>:11:18: Cannot operate on struct and int
 
 <!-- test: promise-typing.error.a-promise-in-an-integer-parameter -->
 <!-- unsupported-targets: wasm32-wasi -->
+On wasm32-wasi this case's expected diagnostic is displaced by E3104 ('File.exists' lowers to the runtime entry '__mf_exists', which has no wasm32-wasi implementation), so the lane is excluded.
+
 An `Integer` parameter does not take a promise. The cure is to `await` it and pass the RESULT — which is
 also the only spelling that keeps the thread's one owner intact.
 ```maxon

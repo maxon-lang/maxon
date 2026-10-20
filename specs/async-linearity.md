@@ -88,6 +88,8 @@ error E3142: <fragment>:10:16: this promise was already consumed by an earlier '
 
 <!-- test: async-linearity.error.double-await-in-loop -->
 <!-- unsupported-targets: wasm32-wasi -->
+On wasm32-wasi this case's expected diagnostic is displaced by E3104 ('Scheduler.yield' lowers to the runtime entry '__gt_resched', which has no wasm32-wasi implementation), so the lane is excluded.
+
 The check is flow-sensitive, and this is why it must be. There is exactly ONE `await` here lexically, so
 a "have I seen this promise awaited before?" check finds nothing — but it sits in a loop over a promise
 spawned OUTSIDE the loop, so it awaits the same green thread every iteration. Reachability catches it:

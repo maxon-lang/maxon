@@ -352,7 +352,7 @@ Stack trace:
 ```
 
 <!-- test: a-hardware-fault-inside-a-spliced-body-names-the-callee -->
-<!-- unsupported-targets: arm64-macos, arm64-linux, wasm32-wasi -->
+<!-- unsupported-targets: arm64-macos, arm64-linux -->
 ⭐ **A FAULT HAS NO PANIC BLOCK TO TAG — ONLY AN ADDRESS.** `specs/safety.md`'s
 `integer-overflow-fault-from-int-min-over-minus-one`, with the dividing function given a store loop
 so it is no leaf and called exactly once, so it is spliced. `i64.min / -1` reaches a bare `idiv` that the
