@@ -431,7 +431,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3088: app/specs/namespace-qualified-resolution/error.multi-segment-qualified-call-to-module-scoped-function.maxon:15:9: function 'scopedHelper' is module-scoped and not visible from this directory
+error E3088: app/specs/namespace-qualified-resolution/error.multi-segment-qualified-call-to-module-scoped-function.maxon:15:19: function 'scopedHelper' is module-scoped and not visible from this directory
 ```
 
 

@@ -72278,8 +72278,6 @@ export type Parser
 	// allocates nothing and cannot disagree with the recognizer, and an `else if` predicate has nowhere to
 	// bind a value for its own body.
 	function parseNamespaceQualifiedCall(func IrFunction, chain ChainResolution, resultUsed bool) returns ValueId throws SourceParseError
-		let headTok = self.current()
-
 		// Bound BEFORE the loop, which moves the cursor: re-reading it from `self.pos` on each iteration
 		// would count a chain that is one segment shorter every time round.
 		let qualifierDots = self.dottedChainLengthAt(self.pos)
@@ -72295,11 +72293,7 @@ export type Parser
 			try self.consume(TokenKind.dot)
 		end 'eachQualifierSegment'
 
-		// A one-dot call is positioned at its member and a longer one at its head, each pinned by
-		// `specs/namespace-qualified-resolution.md`.
-		let anchor = headTok if qualifierDots > MethodQualifierDots else self.current()
-
-		return try self.parseCallNamed(func, callee: callee, anchor: anchor, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
+		return try self.parseCallNamed(func, callee: callee, anchor: self.current(), receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
 	end 'parseNamespaceQualifiedCall'
 
 	// `beta.helper` and `lib.inner.helper` READ AS A VALUE — the value door's directory-qualified spelling, the
