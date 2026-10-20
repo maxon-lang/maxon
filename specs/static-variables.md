@@ -1115,7 +1115,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:5:6: cannot assign a value read out of a module-level `let` to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+error E3078: <fragment>:5:6: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'b'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: error.top-level-let-array-var-reassign-alias -->
@@ -1133,7 +1133,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:6:2: cannot assign a value read out of a module-level `let` to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+error E3078: <fragment>:6:2: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'b'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: error.top-level-let-field-map-var-alias -->
@@ -1163,7 +1163,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:19:6: cannot assign a value read out of a module-level `let` to mutable binding 'm'; use 'let' instead of 'var', or use clone()
+error E3078: <fragment>:19:6: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'm'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: top-level-let-field-accessor-read-only -->
@@ -1247,7 +1247,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:6:6: cannot assign a value read out of a module-level `let` to mutable binding 'pick'; use 'let' instead of 'var', or use clone()
+error E3078: <fragment>:6:6: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'pick'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: error.top-level-let-array-match-arm-alias -->
@@ -1273,7 +1273,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:12:6: cannot assign a value read out of a module-level `let` to mutable binding 'pick'; use 'let' instead of 'var', or use clone()
+error E3078: <fragment>:12:6: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'pick'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: error.top-level-let-array-handed-back-as-a-map-miss-fallback -->
@@ -1301,7 +1301,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:17:6: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'mine'; use 'let' instead of 'var', or use clone()
+error E3078: <fragment>:17:6: cannot assign the result of 'pick', which may share storage with a module-level `let`, to mutable binding 'mine'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: top-level-array-merge-of-mutable-globals-shares -->
@@ -1445,7 +1445,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:19:6: cannot assign a value read out of a module-level `let` to mutable binding 'a'; use 'let' instead of 'var', or use clone()
+error E3078: <fragment>:19:6: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'a'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: error.let-global-accessor-result-two-hops-of-return -->
@@ -1482,7 +1482,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:23:6: cannot assign a value read out of a module-level `let` to mutable binding 'a'; use 'let' instead of 'var', or use clone()
+error E3078: <fragment>:23:6: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'a'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: error.let-global-passed-to-field-writing-callee -->
@@ -1743,7 +1743,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:23:6: cannot assign a value read out of a module-level `let` to mutable binding 'a'; use 'let' instead of 'var', or use clone()
+error E3078: <fragment>:23:6: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'a'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: error.let-global-to-callee-that-forwards-the-write -->
@@ -1841,7 +1841,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3078: <fragment>:16:2: cannot assign a value read out of a module-level `let` to mutable binding 'xs'; use 'let' instead of 'var', or use clone()
+error E3078: <fragment>:16:2: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'xs'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: error.let-global-read-reassigned-into-a-cell-keeps-its-mark -->
@@ -1870,7 +1870,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3078: <fragment>:12:2: cannot assign a value read out of a module-level `let` to mutable binding 'xs'; use 'let' instead of 'var', or use clone()
+error E3078: <fragment>:12:2: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'xs'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: error.let-global-alias-captured-by-a-closure -->
@@ -1906,7 +1906,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3159: <fragment>:21:37: cannot pass a value read out of a module-level `let`, which is read-only, to a function that writes parameter 'xs' (in main$closure_0); pass a clone()
+error E3159: <fragment>:21:37: cannot pass the result of 'expose', which may share storage with a module-level `let`, to a function that writes parameter 'xs' (in main$closure_0); pass a clone()
 ```
 
 <!-- test: error.let-global-alias-across-an-if-merge -->
@@ -1941,7 +1941,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3078: <fragment>:18:3: cannot assign a value read out of a module-level `let` to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+error E3078: <fragment>:18:3: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'b'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: error.let-global-alias-carried-by-a-loop -->
@@ -1978,7 +1978,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3078: <fragment>:18:3: cannot assign a value read out of a module-level `let` to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+error E3078: <fragment>:18:3: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'b'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: error.top-level-array-empty -->
@@ -2424,7 +2424,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3078: <fragment>:14:15: cannot store a value read out of a module-level `let` into mutable place 'Wrap.box'; use clone()
+error E3078: <fragment>:14:15: cannot store 'a', which is read-only (a module-level `let`), into mutable place 'Wrap.box'; use clone()
 ```
 
 <!-- test: a-var-initializer-may-take-a-record-holding-a-lets-record-in-a-let-field -->
@@ -2573,7 +2573,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3078: <fragment>:17:6: cannot assign a value read out of a module-level `let` to mutable binding 'w'; use 'let' instead of 'var', or use clone()
+error E3078: <fragment>:17:6: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'w'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: a-var-initializer-may-build-fresh-from-a-lets-scalars -->
@@ -2653,7 +2653,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3159: <fragment>:25:2: cannot pass a value read out of a module-level `let`, which is read-only, to a function that writes parameter 'b' (in main); pass a clone()
+error E3159: <fragment>:25:2: cannot pass the result of 'current', which may share storage with a module-level `let`, to a function that writes parameter 'b' (in main); pass a clone()
 ```
 
 <!-- test: error.a-local-var-may-not-write-through-a-lets-record-an-await-hands-back -->
@@ -2728,7 +2728,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 ```
 ```maxoncstderr
-error E3078: <fragment>:25:6: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+error E3078: <fragment>:25:6: cannot assign the result of 'pick', which may share storage with a module-level `let`, to mutable binding 'b'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: a-var-initializer-may-take-a-number-read-through-a-nested-call -->
@@ -3086,7 +3086,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:14:6: cannot assign a value read out of a module-level `let` to mutable binding 'pick'; use 'let' instead of 'var', or use clone()
+error E3078: <fragment>:14:6: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'pick'; use 'let' instead of 'var', or use clone()
 ```
 
 ### The returned-shape sweep — the INLINE CONDITIONAL
@@ -3333,7 +3333,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:13:12: cannot pass a value read out of a module-level `let`, which is read-only, to a function that writes parameter 'names' (in main); pass a clone()
+error E3159: <fragment>:13:12: cannot pass a value, which may share storage with a module-level `let`, to a function that writes parameter 'names' (in main); pass a clone()
 ```
 
 <!-- test: a-defaulted-accessor-call-may-not-reach-a-mutating-parameter -->
@@ -3365,7 +3365,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:17:12: cannot pass a value read out of a module-level `let`, which is read-only, to a function that writes parameter 'names' (in main); pass a clone()
+error E3159: <fragment>:17:12: cannot pass a value, which may share storage with a module-level `let`, to a function that writes parameter 'names' (in main); pass a clone()
 ```
 
 <!-- test: a-field-default-naming-a-let-global-is-still-refused -->
@@ -4722,7 +4722,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:23:4: cannot store a value read out of a module-level `let` into mutable place 'Bag.cfg'; use clone()
+error E3078: <fragment>:23:4: cannot store 'G', which is read-only (a module-level `let`), into mutable place 'Bag.cfg'; use clone()
 ```
 
 <!-- test: a-clone-of-a-let-global-stored-into-a-var-field-may-be-written -->

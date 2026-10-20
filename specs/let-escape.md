@@ -733,7 +733,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:17:11: cannot store a value read out of a module-level `let` into mutable place 'an element of the container push writes'; use clone()
+error E3078: <fragment>:17:11: cannot store 'shared', which is read-only (a module-level `let`), into mutable place 'an element of the container push writes'; use clone()
 ```
 
 <!-- test: let-escape.error.a-module-lets-record-handed-to-a-callee-that-keeps-it-is-refused -->
@@ -847,7 +847,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:17:8: cannot store a value read out of a module-level `let` into mutable place 'an element of the container push writes'; use clone()
+error E3078: <fragment>:17:8: cannot store 'shared', which is read-only (a module-level `let`), into mutable place 'an element of the container push writes'; use clone()
 ```
 
 <!-- test: let-escape.error.a-module-lets-record-in-a-literal-a-map-and-a-global-field-is-refused -->
@@ -901,9 +901,9 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:25:11: cannot store a value read out of a module-level `let` into mutable place 'Holder.box'; use clone()
-error E3078: <fragment>:33:13: cannot store a value read out of a module-level `let` into mutable place 'an element of the array literal'; use clone()
-error E3078: <fragment>:38:4: cannot store a value read out of a module-level `let` into mutable place 'an element of the container upsert writes'; use clone()
+error E3078: <fragment>:25:11: cannot store 'shared', which is read-only (a module-level `let`), into mutable place 'Holder.box'; use clone()
+error E3078: <fragment>:33:13: cannot store 'shared', which is read-only (a module-level `let`), into mutable place 'an element of the array literal'; use clone()
+error E3078: <fragment>:38:4: cannot store 'shared', which is read-only (a module-level `let`), into mutable place 'an element of the container upsert writes'; use clone()
 ```
 
 <!-- test: let-escape.error.a-module-lets-record-in-a-literal-and-a-map-value-is-refused -->
@@ -938,8 +938,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:16:13: cannot store a value read out of a module-level `let` into mutable place 'an element of the array literal'; use clone()
-error E3078: <fragment>:21:4: cannot store a value read out of a module-level `let` into mutable place 'an element of the container upsert writes'; use clone()
+error E3078: <fragment>:16:13: cannot store 'shared', which is read-only (a module-level `let`), into mutable place 'an element of the array literal'; use clone()
+error E3078: <fragment>:21:4: cannot store 'shared', which is read-only (a module-level `let`), into mutable place 'an element of the container upsert writes'; use clone()
 ```
 
 <!-- test: let-escape.error.a-captured-let-pushed-into-a-holder-is-refused-though-nothing-writes-its-type -->
@@ -3364,7 +3364,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:27:4: cannot store a value read out of a module-level `let` into mutable place 'Holder.box'; use clone()
+error E3078: <fragment>:27:4: cannot store the result of 'pick', which may share storage with a module-level `let`, into mutable place 'Holder.box'; use clone()
 ```
 
 <!-- test: let-escape.error.a-callee-two-calls-down-writes-the-module-holder -->

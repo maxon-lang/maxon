@@ -729,7 +729,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:11:6: cannot assign a value read out of a module-level `let` to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+error E3078: <fragment>:11:6: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'b'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: a-let-declared-global-returned-by-a-call-is-read -->

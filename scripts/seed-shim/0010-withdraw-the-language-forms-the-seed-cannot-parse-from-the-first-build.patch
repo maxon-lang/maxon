@@ -223,7 +223,7 @@ index 2af584d..033a038 100644
  		if tagRowRank(ahead, against: row, order: order) == Ordering.lessThan 'inPlace'
  			break
 diff --git a/maxon-bin/Compiler/Compiler.maxon b/maxon-bin/Compiler/Compiler.maxon
-index 56dec4e..37364b7 100644
+index 16e0dbd..494852a 100644
 --- a/maxon-bin/Compiler/Compiler.maxon
 +++ b/maxon-bin/Compiler/Compiler.maxon
 @@ -657,7 +657,7 @@ end 'CheckedCompile'
@@ -939,7 +939,7 @@ index 20ba58d..3b02625 100644
  
  			if shadowed 'restoreOuter'
 diff --git a/maxon-bin/Compiler/IR/Std/DeadFunctionElimination.maxon b/maxon-bin/Compiler/IR/Std/DeadFunctionElimination.maxon
-index 46cbf3c..1e702de 100644
+index 00660bf..2caa3cf 100644
 --- a/maxon-bin/Compiler/IR/Std/DeadFunctionElimination.maxon
 +++ b/maxon-bin/Compiler/IR/Std/DeadFunctionElimination.maxon
 @@ -90,8 +90,8 @@
@@ -1799,7 +1799,7 @@ index 59f0a5f..3194798 100644
  			if not blamed.synthesized 'theAuthorWroteThisName'
  				reportPositioned(project, code: ErrorCode.duplicateDefinition, message: duplicateFunctionMessage(project, name: blamed.name, declFilePath: blamed.sourceFilePath), line: blamed.nameLine, column: blamed.nameColumn, filePath: blamed.sourceFilePath)
 diff --git a/maxon-bin/Compiler/Parser.maxon b/maxon-bin/Compiler/Parser.maxon
-index ffb284c..ce86d4d 100644
+index cf9f5ca..ea8b8c5 100644
 --- a/maxon-bin/Compiler/Parser.maxon
 +++ b/maxon-bin/Compiler/Parser.maxon
 @@ -20664,7 +20664,7 @@ export type Parser
@@ -3597,7 +3597,7 @@ index ffb284c..ce86d4d 100644
  		let enclosingTag = try enclosing.valueTags.get(binding.boundValue) otherwise panic("wearCapturedFloatAlias: the enclosing function has no type slot for v{binding.boundValue} — a binding's value is minted in the function that declared it")
  		let aliasId = try enclosing.valueNameIds.get(binding.boundValue) otherwise panic("wearCapturedFloatAlias: the enclosing function has no type-name slot for v{binding.boundValue} — the two type columns are filled in lockstep")
  
-@@ -90913,7 +90913,7 @@ export type Parser
+@@ -90917,7 +90917,7 @@ export type Parser
  	// name and, more importantly, keeps a name read twice from storing — and later dropping — two slots.
  	function captureSlotFor(name ByteArray, captureType MaxonType, anchor Token) returns EnvSlotIndex
  		for k in 0 upto self.bodyState.captureNames.count() 'existing'
@@ -3606,7 +3606,7 @@ index ffb284c..ce86d4d 100644
  
  			if seen == name 'reuse'
  				return k
-@@ -92162,7 +92162,7 @@ export type Parser
+@@ -92166,7 +92166,7 @@ export type Parser
  	// parse is undisturbed.
  	function parseClosureExpression(func IrFunction) returns ValueId throws SourceParseError
  		let closureStart = self.pos
@@ -3615,7 +3615,7 @@ index ffb284c..ce86d4d 100644
  		let functionTok = try self.consume(TokenKind.function)
  		try self.consume(TokenKind.leftParen)
  
-@@ -92312,10 +92312,10 @@ export type Parser
+@@ -92316,10 +92316,10 @@ export type Parser
  		// `var`, because `fillInheritedWitnessCaptures` WRITES into it (E3159) — the inherited-witness slots are
  		// claimed during the body parse and can only be valued after the restore.
  		var capturedValuesSnapshot = self.bodyState.captureValues.clone()
@@ -3630,7 +3630,7 @@ index ffb284c..ce86d4d 100644
  
  		lifted.closureLayout = closureCaptureSourceOf(captureNamesSnapshot, word: ClosureHiddenWord.descriptor)
  		lifted.closureFixedElementCount = closureCaptureSourceOf(captureNamesSnapshot, word: ClosureHiddenWord.fixedElementCount)
-@@ -92520,7 +92520,7 @@ export type Parser
+@@ -92524,7 +92524,7 @@ export type Parser
  
  	function closureBodyReads(lifted IrFunction, word ClosureHiddenWord) returns bool
  		for blockRef in lifted.blockRefs 'eachBlock'
@@ -3639,7 +3639,7 @@ index ffb284c..ce86d4d 100644
  
  			for opIdx in block.bodyOps() 'eachOp'
  				if self.opReads(try self.artifact.module.ops.get(opIdx) otherwise panic("closureBodyReads: opIdx {opIdx} not in module.ops"), word: word) 'aReader'
-@@ -92909,7 +92909,7 @@ export type Parser
+@@ -92913,7 +92913,7 @@ export type Parser
  			return ConstInitializerValue.factoryCall(calls, root: root)
  		end 'deferredNodeInitializer'
  
@@ -3648,7 +3648,7 @@ index ffb284c..ce86d4d 100644
  
  		// ⭐ **ONE CONSUMED CHECK FOR EVERY FORM.** Spelled once per arm below it is four identical copies of
  		// the rule that an initializer is the WHOLE token range, and a fifth arm that forgot it would silently
-@@ -93969,7 +93969,7 @@ export type Parser
+@@ -93973,7 +93973,7 @@ export type Parser
  		let typeHead = try self.consumeConstTypeNameHead(TypeNameHeadForm.reference)
  		let typeTok = typeHead.token
  
@@ -3657,7 +3657,7 @@ index ffb284c..ce86d4d 100644
  			throw ConstEvalError.defective(err)
  		end 'notConstructibleHere'
  
-@@ -94015,9 +94015,9 @@ export type Parser
+@@ -94019,9 +94019,9 @@ export type Parser
  		try self.consumeConstToken(TokenKind.dot)
  		let caseTok = try self.consumeConst(TokenKind.identifier)
  
@@ -3669,7 +3669,7 @@ index ffb284c..ce86d4d 100644
  
  		// Parallel to the CASE's declared slots, not to the source — `evalConstStructConstructionInto`'s columns,
  		// for its reason. The seeded value is a placeholder for a slot nothing has written yet, and `filled` is
-@@ -94556,7 +94556,7 @@ export type Parser
+@@ -94560,7 +94560,7 @@ export type Parser
  
  		let headTok = self.current()
  
@@ -3678,7 +3678,7 @@ index ffb284c..ce86d4d 100644
  			throw ConstEvalError.defective(err)
  		end 'ambiguous'
  
-@@ -95595,7 +95595,7 @@ export type Parser
+@@ -95599,7 +95599,7 @@ export type Parser
  			// false of the compiler too the moment an empty container and a `create()` factory were admitted — both are
  			// heap objects — which is the tell that it described a tier, not a rule.
  			if self.constEnumCaseOfLayout(tok, memberTok: memberTok, boxed: false) 'payloadFreeEnumCase'
@@ -3687,7 +3687,7 @@ index ffb284c..ce86d4d 100644
  				_ = try self.consumeConstTypeNameHead(TypeNameHeadForm.reference)
  				try self.consumeConstToken(TokenKind.dot)
  				self.advance()
-@@ -96383,7 +96383,7 @@ export type Parser
+@@ -96387,7 +96387,7 @@ export type Parser
  
  				// Converted to the alias `__proc_alive` declares its parameter at, which is private to
  				// `runtime/Process.maxon`: the index resolved it there, since no caller's file can name it.
@@ -3696,7 +3696,7 @@ index ffb284c..ce86d4d 100644
  
  				let probeType = match probeAlias 'probeParam'
  					declared(alias) gives alias.underlying
-@@ -98235,7 +98235,7 @@ export type Parser
+@@ -98239,7 +98239,7 @@ export type Parser
  					end 'aCellNameHandedOver'
  				end 'aCellWasHandedOver'
  
@@ -3705,7 +3705,7 @@ index ffb284c..ce86d4d 100644
  
  				if offersAClosure 'anOfferMustNotOutliveItsArgument'
  					self.pendingClosureParamOffer = PendingClosureParamOffer.none
-@@ -99015,7 +99015,7 @@ export type Parser
+@@ -99019,7 +99019,7 @@ export type Parser
  		// is what makes the consume transfer, the drop enrollment and `slotCallArgs`' arity gate correct for
  		// it with no change to any of them.
  		let argDefaultSlots = try self.fillOmittedArgDefaults(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, receiverSlots: NoReceiverSlots)
@@ -3714,7 +3714,7 @@ index ffb284c..ce86d4d 100644
  		let placeBindings = try self.bindPlaceArguments(places, declarations: declarations, args: args, argLabels: argLabels)
  		self.widenArgsToInterfaceHandles(callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots, anchor: anchor, rparenTok: rparenTok)
  		try self.admitOperandAliasSetArgs(callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots, anchor: anchor)
-@@ -99200,7 +99200,7 @@ export type Parser
+@@ -99204,7 +99204,7 @@ export type Parser
  			return callee
  		end 'anExactNonGenericDeclaration'
  
@@ -3723,7 +3723,7 @@ index ffb284c..ce86d4d 100644
  		let refuse = templates.count() == 1 and not self.signatures.declaresCallee(callee)
  		var inferred = GenericFunctionInstanceArray.create()
  
-@@ -99211,7 +99211,7 @@ export type Parser
+@@ -99215,7 +99215,7 @@ export type Parser
  			end 'inference'
  		end 'eachTemplate'
  
@@ -3732,7 +3732,7 @@ index ffb284c..ce86d4d 100644
  
  		if chosen.count() > 1 'twoGenericDeclarationsInfer'
  			throw SourceParseError.genericCallAmbiguous((bareMethodName(callee)), candidates: chosen.count(), line: anchor.line, column: anchor.column)
-@@ -99447,7 +99447,7 @@ export type Parser
+@@ -99451,7 +99451,7 @@ export type Parser
  			undeclared then break
  		end 'enumeration'
  
@@ -3741,7 +3741,7 @@ index ffb284c..ce86d4d 100644
  
  		if identity.isEmpty() 'notARangedAlias'
  			return plain
-@@ -99876,7 +99876,7 @@ export type Parser
+@@ -99880,7 +99880,7 @@ export type Parser
  		end 'initSlots'
  
  		for i in 0 upto args.count() 'markSupplied'
@@ -3750,7 +3750,7 @@ index ffb284c..ce86d4d 100644
  			let suppliedSlot = try argSlotPosition(info.paramNames, argIndex: (i as ParamCount) + receiverSlots, label: label) otherwise return NoDefaultArgSlots
  			try filled.set(suppliedSlot, value: true) otherwise panic("fillArgsFromParamDefaults: filled.set OOB at {suppliedSlot} — filled holds one entry per parameter name")
  		end 'markSupplied'
-@@ -100505,7 +100505,7 @@ export type Parser
+@@ -100509,7 +100509,7 @@ export type Parser
  			return
  		end 'notThisTypesMethod'
  
@@ -3759,7 +3759,7 @@ index ffb284c..ce86d4d 100644
  
  		if not opaque.declaresATypeParameterParam() 'everyParameterIsConcrete'
  			return
-@@ -100530,7 +100530,7 @@ export type Parser
+@@ -100534,7 +100534,7 @@ export type Parser
  			// a name id that means something else (the trap `slotTypeThroughReceiver` and
  			// `requireContainerElementType` both cross through this same door).
  			let substituted = self.resolvedSlotType(self.signatures.substitutedInstanceArg(gid, position: position))
@@ -3768,7 +3768,7 @@ index ffb284c..ce86d4d 100644
  			let argValue = try args.get(i) otherwise panic("recordSubstitutedArgRangeChecks: args.get OOB at {i} inside its own count()")
  			let handedValue = self.argumentValueOf(argValue, anchor: anchor)
  			self.recordRangedTargetSite(handedValue, target: alias, line: anchor.line, column: anchor.column)
-@@ -100895,7 +100895,7 @@ export type Parser
+@@ -100899,7 +100899,7 @@ export type Parser
  			handed.push(HandedOffArgument.create(i, value: try args.get(i) otherwise panic("transferAsyncSpawnArgs: args.get OOB at {i}"), anchor: self.handOffArgumentAnchor(argAnchors, index: i, fallback: anchor), door: ThreadHandOffDoor.coroutine(callee)))
  		end 'eachArgument'
  
@@ -3777,7 +3777,7 @@ index ffb284c..ce86d4d 100644
  
  		for plan in plans 'eachHandedOver'
  			let position = plan.argument.position
-@@ -100989,7 +100989,7 @@ export type Parser
+@@ -100993,7 +100993,7 @@ export type Parser
  
  	function ownedValueLeavesThisFrame(value ValueId) returns bool
  		let owner = try self.liveOwnerIndexOf(value) otherwise return self.pendingTempsContain(value)
@@ -3786,7 +3786,7 @@ index ffb284c..ce86d4d 100644
  		return not binding.isParameter and not binding.isSelfField
  	end 'ownedValueLeavesThisFrame'
  
-@@ -101014,8 +101014,8 @@ export type Parser
+@@ -101018,8 +101018,8 @@ export type Parser
  	end 'takeCellOccupant'
  
  	function cellOccupantTakeOf(value ValueId) returns CellOccupantTake
@@ -3797,7 +3797,7 @@ index ffb284c..ce86d4d 100644
  
  		if not self.cellOccupantMoves(binding, value: value) 'theCellKeepsIt'
  			return CellOccupantTake.notACellOccupant
-@@ -102132,7 +102132,7 @@ export type Parser
+@@ -102136,7 +102136,7 @@ export type Parser
  	end 'useAfterMoveRefusal'
  
  	function requireCellIsNotLentToAnOpenCall(value ValueId) throws SourceParseError
@@ -3806,7 +3806,7 @@ index ffb284c..ce86d4d 100644
  		let funcIndex = self.artifact.currentFuncIndex
  
  		for handOff in self.openByRefHandOffs 'eachOpenHandOff'
-@@ -102392,7 +102392,7 @@ export type Parser
+@@ -102396,7 +102396,7 @@ export type Parser
  	function transferSourceClause(value ValueId) returns String
  		let index = try self.liveOwnerIndexOf(value) otherwise return NoTransferSourceClause
  
@@ -3815,7 +3815,7 @@ index ffb284c..ce86d4d 100644
  		return serviceTransferSourceClause(String.from(owner.name))
  	end 'transferSourceClause'
  
-@@ -102540,7 +102540,7 @@ export type Parser
+@@ -102544,7 +102544,7 @@ export type Parser
  	end 'overloadedCallResultType'
  
  	function returnDecidingDeclaration(callee ByteArray, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray) returns SweptDeclarationPick
@@ -3824,7 +3824,7 @@ index ffb284c..ce86d4d 100644
  
  		if candidates.count() < 2 'oneDeclarationWearsThisName'
  			return sharedUndecidedDeclarationPick
-@@ -102554,7 +102554,7 @@ export type Parser
+@@ -102558,7 +102558,7 @@ export type Parser
  	end 'returnDecidingDeclaration'
  
  	function sweptDeclarationOf(callee ByteArray, args ValueIdArray, argLabels NameRoster, argDefaultSlots ParamCountArray) returns SweptDeclarationPick
@@ -3833,7 +3833,7 @@ index ffb284c..ce86d4d 100644
  
  		if candidates.count() == 1 'oneDeclaration'
  			return SweptDeclarationPick.chosen(try candidates.get(0) otherwise panic("sweptDeclarationOf: one declaration was just counted"))
-@@ -103026,7 +103026,7 @@ export type Parser
+@@ -103030,7 +103030,7 @@ export type Parser
  		end 'carriesNoStructName'
  
  		let name = self.internedName(typeNameIdOf(repaired))
@@ -3842,7 +3842,7 @@ index ffb284c..ce86d4d 100644
  
  		if canonical.equals(name) 'theSweepSpelledItCanonically'
  			return repaired
-@@ -103079,7 +103079,7 @@ export type Parser
+@@ -103083,7 +103083,7 @@ export type Parser
  
  		let name = self.internedName(typeNameIdOf(repaired))
  
@@ -3851,7 +3851,7 @@ index ffb284c..ce86d4d 100644
  
  		if not slotRange.equals(self.signatures.rangeScopedDeclaredName(name, readerFilePath: self.job.path)) 'theTwoFilesMeanTwoRanges'
  			return MaxonType.named(self.artifact.typeNames.intern(slotRange))
-@@ -103298,7 +103298,7 @@ export type Parser
+@@ -103302,7 +103302,7 @@ export type Parser
  			return true
  		end 'nothingOwed'
  
@@ -3860,7 +3860,7 @@ index ffb284c..ce86d4d 100644
  
  		for (position, given) in args.withIterator() 'eachArg'
  			if not self.argOwesTheQuantityDoor(given) 'owesNothing'
-@@ -103365,7 +103365,7 @@ export type Parser
+@@ -103369,7 +103369,7 @@ export type Parser
  				continue
  			end 'owesNothing'
  
@@ -3869,7 +3869,7 @@ index ffb284c..ce86d4d 100644
  			self.recordQuantityDoor(value, alias: alias, anchor: anchor)
  		end 'eachSlot'
  
-@@ -103388,7 +103388,7 @@ export type Parser
+@@ -103392,7 +103392,7 @@ export type Parser
  				continue
  			end 'owesNothing'
  
@@ -3878,7 +3878,7 @@ index ffb284c..ce86d4d 100644
  			self.recordQuantityDoor(given, alias: alias, anchor: anchor)
  		end 'eachFormal'
  
-@@ -103427,7 +103427,7 @@ export type Parser
+@@ -103431,7 +103431,7 @@ export type Parser
  			let value = try self.parseValueExpression(func)
  			self.cellArgumentToken = CellArgumentToken.none
  			self.cellArgumentWantsAPlace = false
@@ -3887,7 +3887,7 @@ index ffb284c..ce86d4d 100644
  			args.push(self.holdStorageReadForStatement(value, kind: operandHoldKindOf(OperandPassing.intoPlace if readsAPlace else OperandPassing.asValue, valueKind: HoldKind.callOperand), range: SourceRange.ofToken(valueTok), position: OperandSuccession.alwaysFollowed))
  			names.push(self.expressionImmutableBlame(valueTok, valueStart: valueStart, value: value))
  
-@@ -103475,7 +103475,7 @@ export type Parser
+@@ -103479,7 +103479,7 @@ export type Parser
  			return
  		end 'noLiteralToType'
  
@@ -3896,7 +3896,7 @@ index ffb284c..ce86d4d 100644
  		let param = try shape.paramTypes.get(position) otherwise return
  
  		if opening == TokenKind.leftBracket 'anArrayLiteral'
-@@ -103502,7 +103502,7 @@ export type Parser
+@@ -103506,7 +103506,7 @@ export type Parser
  	// void value; every value position (`resultUsed: true` — a binding, `return`, an operand, an argument)
  	// reports E2004 HERE, at the call, the same anchor and text the direct-call diagnostic uses.
  	function mintIndirectCallResult(callee ValueId, resultUsed bool, anchor Token) returns ValueId throws SourceParseError
@@ -3905,7 +3905,7 @@ index ffb284c..ce86d4d 100644
  
  		match recovered.returnType 'r'
  			value(inner) then return self.mintSettledCallResult(inner, scopeFilePath: recovered.scopeFilePath)
-@@ -103589,7 +103589,7 @@ export type Parser
+@@ -103593,7 +103593,7 @@ export type Parser
  			return member
  		end 'theOneThisFileNames'
  
@@ -3914,7 +3914,7 @@ index ffb284c..ce86d4d 100644
  
  		if declarations.count() != 1 'noSingleDeclaration'
  			panic("declarationBehindFunctionValue: '{String.from(name)}' has {declarations.count()} declarations and this file means none of them alone — `resolvedFunctionValueName` refuses an ambiguous name and `requireNameIsUsableAsFunctionValue` an invisible one before a value is minted")
-@@ -103653,7 +103653,7 @@ export type Parser
+@@ -103657,7 +103657,7 @@ export type Parser
  			return
  		end 'notAnUnsignedLiteral'
  
@@ -3923,7 +3923,7 @@ index ffb284c..ce86d4d 100644
  		self.admitUnsignedLiteralInto(value, slot: slot, alias: alias)
  	end 'admitUnsignedLiteralIntoSlot'
  
-@@ -103686,8 +103686,8 @@ export type Parser
+@@ -103690,8 +103690,8 @@ export type Parser
  	end 'admitUnsignedLiteralsAcross'
  
  	function reportBareUnsignedLiterals()
@@ -3934,7 +3934,7 @@ index ffb284c..ce86d4d 100644
  
  		for site in sites 'eachLiteral'
  			if not valueIsMarked(admitted, value: site.value) 'noContextAdmitsIt'
-@@ -104841,7 +104841,7 @@ export type Parser
+@@ -104845,7 +104845,7 @@ export type Parser
  			return false
  		end 'notAnEnumValue'
  
@@ -3943,7 +3943,7 @@ index ffb284c..ce86d4d 100644
  
  		if not enumMatchIsDeclared(declaredEnum) 'notADeclaredEnum'
  			return false
-@@ -104912,7 +104912,7 @@ export type Parser
+@@ -104916,7 +104916,7 @@ export type Parser
  		// loaded twice, and the second load is not merely wasteful — the two would be different SSA values
  		// describing one enum.
  		let baseValue = try self.enumAccessorBaseValue(base, baseTok: baseTok)
@@ -3952,7 +3952,7 @@ index ffb284c..ce86d4d 100644
  
  		// QUESTION 1 — where the tag is, asked through the door the `match` dispatch asks it through, and the
  		// one thing this spelling knows that the type-qualified one does not: there IS a value here.
-@@ -105274,7 +105274,7 @@ export type Parser
+@@ -105278,7 +105278,7 @@ export type Parser
  			return EnumBackingLeaf.create(path, fieldType: fieldType, domain: domain)
  		end 'reachedAScalar'
  
@@ -3961,7 +3961,7 @@ index ffb284c..ce86d4d 100644
  
  		if not self.atEnumBackingFieldHop() 'noFieldFollows'
  			throw SourceParseError.unsupported("field '{String.from(struct.fieldNameAt(field))}' of the `{String.from(struct.name)}` backing read as a whole value — it is declared `{String.from(nested.name)}`, a record, and the compiler selects one SCALAR field of a struct backing at a time (`.{String.from(struct.fieldNameAt(field))}.<field>`) rather than materializing one. That is the refusal `{String.from(EnumRawValueMemberName)}` itself carries, one level in: a materialized record is an owned heap value minted inside an expression", line: memberTok.line, column: memberTok.column)
-@@ -105371,7 +105371,7 @@ export type Parser
+@@ -105375,7 +105375,7 @@ export type Parser
  			return selected
  		end 'noAccessorHop'
  
@@ -3971,7 +3971,7 @@ index ffb284c..ce86d4d 100644
  		// The selected leaf is a value of `fieldLayout` — the `enumWord` domain, which
  		// `enumBackingNamedFieldDomain` admits only for an UNBOXED declaration, so `emitEnumTagOf` is the
 diff --git a/maxon-bin/Compiler/Project.maxon b/maxon-bin/Compiler/Project.maxon
-index b50da29..18fa47c 100644
+index 9d4aed6..61f0b93 100644
 --- a/maxon-bin/Compiler/Project.maxon
 +++ b/maxon-bin/Compiler/Project.maxon
 @@ -2789,7 +2789,7 @@ export type ClaimantProvenance
@@ -4028,7 +4028,7 @@ index b50da29..18fa47c 100644
  		// ⚠ Names no module either, for `BuiltinErrorOrdinalCheck.refuse`'s reason directly above: SEVERAL
  		// families reach this and they are declared across several different files. No COUNT of either is
  		// written here, and one would go stale in either direction: the set is a consequence of which
-@@ -12676,7 +12676,7 @@ function respelledForItsReaders(project Project, diagnostic Diagnostic) returns
+@@ -12680,7 +12680,7 @@ function respelledForItsReaders(project Project, diagnostic Diagnostic) returns
  end 'respelledForItsReaders'
  
  function shadowRespellingsFor(project Project, path FilePath) returns ShadowRespellingArray
@@ -4038,7 +4038,7 @@ index b50da29..18fa47c 100644
  	if let memo = try project.shadowRespellingMemos.get(path.toString()) 'memoized'
  		if memo.contentHash == entry.contentHash 'currentForThisContent'
 diff --git a/maxon-bin/Compiler/Queries.maxon b/maxon-bin/Compiler/Queries.maxon
-index f5dc6ba..6da24ee 100644
+index 6cccd82..27a52c7 100644
 --- a/maxon-bin/Compiler/Queries.maxon
 +++ b/maxon-bin/Compiler/Queries.maxon
 @@ -40,7 +40,7 @@ end 'settleProjectInlineRecordGeometry'
@@ -4322,10 +4322,10 @@ index 61be856..f6252d9 100644
  		// The path is folded beside the content hash: the digest is a function of the (path, content)
  		// sequence, not of the contents alone. A rename moves no content, so a fold over contents alone
 diff --git a/maxon-bin/Compiler/Runtime/GtRuntime.maxon b/maxon-bin/Compiler/Runtime/GtRuntime.maxon
-index 5b6bdc8..a0c2974 100644
+index 26c4378..2acd98a 100644
 --- a/maxon-bin/Compiler/Runtime/GtRuntime.maxon
 +++ b/maxon-bin/Compiler/Runtime/GtRuntime.maxon
-@@ -3549,7 +3549,7 @@ function emitGtHandOffGate(module StdModule, func IrFunction, hand IrBlock, foun
+@@ -3574,7 +3574,7 @@ function emitGtHandOffGate(module StdModule, func IrFunction, hand IrBlock, foun
  	emitSchedLockLeave(module, block: noOwner, ids: ids)
  	module.setTerminator(noOwner, op: StdOp.branch(backOff.id))
  
@@ -4334,7 +4334,7 @@ index 5b6bdc8..a0c2974 100644
  
  	_ = emitNetpoll(module, block: backOff, verb: NetpollVerb.shortSleep, operands: argsOf(emitConst(module, block: backOff, value: GtRestrainedRefusePauseUs, ids: ids)), ids: ids)
  
-@@ -7755,7 +7755,7 @@ function buildGtIoPark(module StdModule)
+@@ -7783,7 +7783,7 @@ function buildGtIoPark(module StdModule)
  	// ⭐ The tags are asked of the MODULE rather than taken as a parameter, because the park's call sites, in
  	// other files, have no way to be handed them and must ask the same question there (see `emitIoPark` and
  	// `GtTracing`). One reader, one answer.
@@ -4343,7 +4343,7 @@ index 5b6bdc8..a0c2974 100644
  	let traced = tracing.isTraced()
  
  	// The arity IS the gating: a traced park is handed its operation's suffix by the site that called it, an
-@@ -10273,7 +10273,7 @@ function emitSubpCloseStdinWriteOwned(module StdModule, func IrFunction, ids Val
+@@ -10276,7 +10276,7 @@ function emitSubpCloseStdinWriteOwned(module StdModule, func IrFunction, ids Val
  	var contended = module.addBlock(func, label: b"rlsstdinwait", heat: BlockHeat.normal)
  
  	module.setTerminator(cur, op: StdOp.branch(attempt.id))
@@ -4405,10 +4405,10 @@ index ecc2224..35d406d 100644
  	match shape 'shape'
  		polled then emitSocketPolledTransfer(module, func: func, ids: ids, attempt: attempt, socket: socket, pollKey: pollKey, gen: gen, buffer: buffer, length: length, direction: direction, mode: mode, ok: ok, failed: failed, timedOut: timedOut, target: target)
 diff --git a/maxon-bin/Compiler/Runtime/MmRuntime.maxon b/maxon-bin/Compiler/Runtime/MmRuntime.maxon
-index 615bec7..6cdcf1e 100644
+index 81c93f4..df452d5 100644
 --- a/maxon-bin/Compiler/Runtime/MmRuntime.maxon
 +++ b/maxon-bin/Compiler/Runtime/MmRuntime.maxon
-@@ -2968,7 +2968,7 @@ function declareDestructorCascadeNeeds(usage RuntimeUsage, project Project, sign
+@@ -2966,7 +2966,7 @@ function declareDestructorCascadeNeeds(usage RuntimeUsage, project Project, sign
  	// mangles to; that instance is minted as `__Array_Foo` instead (`reservedIfDeclared`), so the two cannot
  	// meet. The guard is the walk's structural precondition regardless of which route reaches it.
  	for id in 0 upto signatures.genericInstanceCount() 'eachInstance'
@@ -4417,7 +4417,7 @@ index 615bec7..6cdcf1e 100644
  
  		if usage.neededDestructors.contains(destructorSymbol(mangled)) 'referenced'
  			usage.usesHeap = true
-@@ -3210,7 +3210,7 @@ function closeDestructorNeeds(usage RuntimeUsage, project Project, signatures Pr
+@@ -3208,7 +3208,7 @@ function closeDestructorNeeds(usage RuntimeUsage, project Project, signatures Pr
  	// disjointness (`reservedIfDeclared`) means a declaration and an instance cannot produce one symbol, and
  	// only two INSTANCES can — which is E3006 and fails the build before this runs.
  	for id in 0 upto signatures.genericInstanceCount() 'eachInstance'
@@ -4426,7 +4426,7 @@ index 615bec7..6cdcf1e 100644
  		work.register(destructorSymbol(mangled), node: CascadeNode.genericInstance(id))
  
  		// The DICTIONARY destructor is a second node over the same instance, registered unconditionally for
-@@ -4479,7 +4479,7 @@ end 'ownMeetingOfShareWalk'
+@@ -4477,7 +4477,7 @@ end 'ownMeetingOfShareWalk'
  // exactly as the clone emits no field copy and the destructor no field drop.
  function synthesizeGenericInstanceCascade(module StdModule, id GenericInstanceId, project Project, signatures ProgramSignatures, action CascadeAction)
  	let specs = instanceManagedFieldCascades(id, signatures: signatures, action: action)
@@ -4435,7 +4435,7 @@ index 615bec7..6cdcf1e 100644
  
  	match action 'action'
  		clone then emitFieldCascadeCloner(module, symbolName: clonerSymbol(mangled), boxSize: signatures.genericInstanceBoxSize(id), tagName: mangled, clones: specs, project: project)
-@@ -4508,7 +4508,7 @@ function synthesizeUnionCloner(module StdModule, layout EnumLayout, project Proj
+@@ -4506,7 +4506,7 @@ function synthesizeUnionCloner(module StdModule, layout EnumLayout, project Proj
  	emitMmAllocCall(module, block: entry, result: newBox, size: size, destructor: zeroDtor, tag: userTagIndex(project.globalData, name: layout.name, debugStream: module.debugStream), ids: ids)
  	var copied = emitForwardCopy(module, func: func, cur: entry, dest: newBox, src: src, byteCount: size, ids: ids)
  	var start = CascadeCursor.create(copied, carried: ValueIdArray.create())
@@ -4445,10 +4445,10 @@ index 615bec7..6cdcf1e 100644
  	var fellThrough = emitUnionManagedCaseChain(module, func: func, cur: start, box: newBox, layout: layout, dest: finish, project: project, signatures: signatures, action: CascadeAction.clone, ids: ids)
  
 diff --git a/maxon-bin/Compiler/Runtime/SchedRuntime.maxon b/maxon-bin/Compiler/Runtime/SchedRuntime.maxon
-index 959ffb3..1fa6d6d 100644
+index 9c7281e..5ac071a 100644
 --- a/maxon-bin/Compiler/Runtime/SchedRuntime.maxon
 +++ b/maxon-bin/Compiler/Runtime/SchedRuntime.maxon
-@@ -7917,7 +7917,7 @@ function buildGtPreemptSafe(module StdModule, target Target)
+@@ -7941,7 +7941,7 @@ function buildGtPreemptSafe(module StdModule, target Target)
  	let safeGranules = emitBin(module, block: pastTheGuard, a: safeFrom, b: emitConst(module, block: pastTheGuard, value: SymtabSafeFromBias, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
  	let firstSafe = emitBin(module, block: pastTheGuard, a: safeGranules, b: emitConst(module, block: pastTheGuard, value: safePointGranuleOf(target) as FullRangeInt, ids: ids), opcode: StdBinOpcode.mul, ids: ids)
  	let insideTheGuard = emitCmp(module, block: pastTheGuard, a: intoFunc, b: firstSafe, pred: StdCmpPred.lt, ids: ids)
@@ -4518,7 +4518,7 @@ index 0026f57..6821b1a 100644
  	reclaimReassignedPayloads(fn, cells: cells, args: args, site: site)
  
 diff --git a/maxon-bin/Compiler/Runtime/ServiceRegistryRuntime.maxon b/maxon-bin/Compiler/Runtime/ServiceRegistryRuntime.maxon
-index 6cf7ee3..e89e2cf 100644
+index d844eaf..9e47683 100644
 --- a/maxon-bin/Compiler/Runtime/ServiceRegistryRuntime.maxon
 +++ b/maxon-bin/Compiler/Runtime/ServiceRegistryRuntime.maxon
 @@ -65,7 +65,7 @@ export function installSharedValueRuntime(module StdModule, globalData GlobalDat
@@ -4540,7 +4540,7 @@ index 6cf7ee3..e89e2cf 100644
  	buildRegistryServiceRegister(module, released: released)
  	buildRegistryServiceReplace(module, released: released)
 diff --git a/maxon-bin/Compiler/SemanticCheck.maxon b/maxon-bin/Compiler/SemanticCheck.maxon
-index fdbe3a8..d7837d7 100644
+index 3cb5a7b..8b63b32 100644
 --- a/maxon-bin/Compiler/SemanticCheck.maxon
 +++ b/maxon-bin/Compiler/SemanticCheck.maxon
 @@ -205,7 +205,7 @@ function resolveOverloadedCallsInFunc(project Project, module MaxonModule, signa
@@ -4787,7 +4787,7 @@ index fdbe3a8..d7837d7 100644
  	var signatures = programSignaturesIn(project, asker: "checkOneFunctionTypeDoor")
  
  	// A FUNCTION TYPEALIAS IS ITS OWN TYPE, AND A `cast` IS THE DOOR BETWEEN TWO OF THEM. Every other door
-@@ -5080,7 +5080,7 @@ end 'reportDiscardVerdict'
+@@ -5082,7 +5082,7 @@ end 'reportDiscardVerdict'
  // Where a discard diagnostic points, for either code — the site's own anchor, which is the position the two
  // arms share.
  function reportAtDiscardSite(project Project, siteIndex ElementIndex, code ErrorCode, message String)
@@ -4796,7 +4796,7 @@ index fdbe3a8..d7837d7 100644
  	let line = site.line
  	let column = site.column
  	reportPositioned(project, code: code, message: message, line: line, column: column, filePath: (try project.pendingDiscardedResults.get(siteIndex) otherwise panic("reportAtDiscardSite: siteIndex {siteIndex} is below project.pendingDiscardedResults.count()")).filePath)
-@@ -5987,7 +5987,7 @@ end 'checkFunctionRef'
+@@ -5993,7 +5993,7 @@ end 'checkFunctionRef'
  // The FIRST offending parameter is named and the walk stops, the shape `Parser.firstExistentialParam` gives
  // the closure and requirement positions: one sentence per declaration is what the author has to act on.
  function requireFunctionValueTargetTakesNoWitness(project Project, func IrFunction, opIndex ElementIndex, callee ByteArray)
@@ -4805,7 +4805,7 @@ index fdbe3a8..d7837d7 100644
  
  	for i in 0 upto sig.paramTypes.count() 'eachParam'
  		let paramType = try sig.paramTypes.get(i) otherwise panic("requireFunctionValueTargetTakesNoWitness: paramTypes.get OOB at {i} for '{String.from(callee)}'")
-@@ -5996,7 +5996,7 @@ function requireFunctionValueTargetTakesNoWitness(project Project, func IrFuncti
+@@ -6002,7 +6002,7 @@ function requireFunctionValueTargetTakesNoWitness(project Project, func IrFuncti
  			continue
  		end 'notAnExistential'
  
@@ -4814,7 +4814,7 @@ index fdbe3a8..d7837d7 100644
  		let refRange = project.opRanges.get(opIndex)
  		reportPositioned(project, code: ErrorCode.interfaceParameterInFunctionValueTarget, message: "cannot use '{String.from(callee)}' as a function value: its parameter '{String.from(paramName)}' is declared at the interface type '{String.from(interfaceNameOfType(paramType, typeNames: project.typeNames))}' — {ExistentialIsFatPointerReason}, and {IndirectCallHasNoWitnessSlotReason}. Call '{String.from(callee)}' DIRECTLY, whose signature reserves that slot, or declare the parameter at a concrete type", line: refRange.line, column: refRange.column, filePath: authoredFileOf(project, func: func, opIndex: opIndex))
  		return
-@@ -6325,7 +6325,7 @@ end 'immutableArgAtTheCallMessage'
+@@ -6331,7 +6331,7 @@ end 'immutableArgAtTheCallMessage'
  
  function checkComparisonMethodsDoNotWrite(project Project, module MaxonModule, mutationSummary ParamMutationSummary, provenance ProvenanceTracer)
  	for func in module.functions 'eachFunc'
@@ -4823,7 +4823,7 @@ index fdbe3a8..d7837d7 100644
  
  		if not sig.takesReceiver() or sig.paramCount() != ComparisonMethodParamCount or not namesAComparisonMethod(func.name) 'notAComparisonMethod'
  			continue
-@@ -6336,7 +6336,7 @@ function checkComparisonMethodsDoNotWrite(project Project, module MaxonModule, m
+@@ -6342,7 +6342,7 @@ function checkComparisonMethodsDoNotWrite(project Project, module MaxonModule, m
  		let written = mask or recordWriteMask or provenance.keptParameters(calleeIndex, paramCount: sig.paramCount())
  
  		if maskHasParam(written, param: WitnessReceiverArgCount) 'writesItsOperand'
@@ -4832,7 +4832,7 @@ index fdbe3a8..d7837d7 100644
  			reportAtFunctionName(project, func: func, code: ErrorCode.comparisonMethodWritesItsParameter, message: "'{functionSourceName(project, func: func)}' writes its parameter '{displayParamName(operand)}', but a method behind the comparison operators may not modify its operand — `==`, `!=`, `<`, `<=`, `>` and `>=` pass it by value")
  			continue
  		end 'writesItsOperand'
-@@ -6427,7 +6427,7 @@ function noteSharedArgsToKeepingParams(func IrFunction, result ValueId, callee B
+@@ -6432,7 +6432,7 @@ function noteSharedArgsToKeepingParams(func IrFunction, result ValueId, callee B
  			continue
  		end 'keptWithoutAWriter'
  
@@ -4841,7 +4841,7 @@ index fdbe3a8..d7837d7 100644
  
  		let refusal = KeptRefusal.wording(keptWordingOf(func, callee: callee, sig: sig, args: args, position: pos)) if maskHasParam(masks.mutable, param: pos) else KeptRefusal.none
  
-@@ -6591,11 +6591,11 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
+@@ -6596,11 +6596,11 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
  		// doors for the programs each refused unresolved; they are disjoint (a name is one kind of alias or
  		// the other, never both), so their order between themselves says nothing.
  		let substituted = signatures.floatAliasResolved(signatures.functionAliasResolved(signatures.canonicalTypeArg(signatures.substitutedInstanceArg(gid, position: position))), readerFilePath: filePath)
@@ -4855,7 +4855,7 @@ index fdbe3a8..d7837d7 100644
  
  		// Hoisted out of the failure branch because BOTH halves below want it now, and one unconditional read
  		// is cheaper than threading it into two. It is a dense array read on a path that already does four,
-@@ -6844,7 +6844,7 @@ function checkPerInstanceArgsWith(project Project, signatures ProgramSignatures,
+@@ -6849,7 +6849,7 @@ function checkPerInstanceArgsWith(project Project, signatures ProgramSignatures,
  		let argId = try argIds.get(i) otherwise panic("checkPerInstanceArgsWith: argIds.get OOB at {i}")
  		let argTag = try func.valueTags.get(argId) otherwise panic("checkPerInstanceArgsWith: value v{argId} of function '{String.from(func.name)}' has no recorded type")
  		let argNameId = try func.valueNameIds.get(argId) otherwise panic("checkPerInstanceArgsWith: value v{argId} of function '{String.from(func.name)}' has no recorded type name")
@@ -4864,7 +4864,7 @@ index fdbe3a8..d7837d7 100644
  
  		if got.isEmpty() 'decays'
  			continue
-@@ -7489,7 +7489,7 @@ function existentialSiteClaimAgainst(project Project, signatures ProgramSignatur
+@@ -7494,7 +7494,7 @@ function existentialSiteClaimAgainst(project Project, signatures ProgramSignatur
  		end 'heldAtAnInterface'
  
  		let associatedName = try iface.associatedTypeNames.get(position) otherwise panic("existentialSiteClaimAgainst: associatedTypeNames.get OOB at {position} below the count this loop is bounded by")
@@ -4873,7 +4873,7 @@ index fdbe3a8..d7837d7 100644
  
  		// ⚠ **AN ARGUMENT STILL OPAQUE AFTER SUBSTITUTION HAS NO ANSWER, AND SILENCE WOULD BE THE WRONG ONE.**
  		// The caller substituted the site's instance through the call's own; a `typeParameter` that survived that
-@@ -7718,7 +7718,7 @@ end 'wideningPlaceHandOverAdvice'
+@@ -7723,7 +7723,7 @@ end 'wideningPlaceHandOverAdvice'
  // ⭐ **A CONCRETE CONFORMER AGAINST A CLAIM ALREADY SUBSTITUTED THROUGH ITS POSITION'S INSTANCE — E3127 for both
  // positions that have one.**
  function checkConformerAgainstSiteClaim(project Project, signatures ProgramSignatures, site GenericInstanceId, conformerTag ValueTypeTag, conformerNameId TypeNameId, interfaceName ByteArray, place WideningPlace, line LineNumber, column ColumnNumber, filePath FilePath)
@@ -4882,7 +4882,7 @@ index fdbe3a8..d7837d7 100644
  	let conformer = typeDisplayName(project, tag: conformerTag, nameId: conformerNameId, readerFilePath: filePath)
  	let noun = wideningPlaceNoun(place)
  
-@@ -7738,7 +7738,7 @@ end 'checkConformerAgainstSiteClaim'
+@@ -7743,7 +7743,7 @@ end 'checkConformerAgainstSiteClaim'
  // The `disagrees` arm cannot be reached and is not swept into the pass: the conformer lookup is keyed by the
  // ARRIVING type's name, which here is an INTERFACE's, and no `type` may share a name with an interface (E3006).
  function checkDeferredClaimAgainstExistentialValue(project Project, signatures ProgramSignatures, declaredSite GenericInstanceId, valueTag ValueTypeTag, valueNameId TypeNameId, interfaceName ByteArray, place WideningPlace, line LineNumber, column ColumnNumber, filePath FilePath)
@@ -4891,7 +4891,7 @@ index fdbe3a8..d7837d7 100644
  	let iface = String.from(interfaceName)
  
  	match claim 'declared'
-@@ -7763,7 +7763,7 @@ function checkExistentialSiteClaimAtReturn(project Project, func IrFunction, ret
+@@ -7768,7 +7768,7 @@ function checkExistentialSiteClaimAtReturn(project Project, func IrFunction, ret
  
  	let site = try returnExistentialSites.get(0) otherwise return
  	var signatures = programSignaturesIn(project, asker: "checkExistentialSiteClaimAtReturn")
@@ -4900,7 +4900,7 @@ index fdbe3a8..d7837d7 100644
  	let funcName = functionSourceName(project, func: func)
  	let conformer = typeDisplayName(project, tag: valueTag, nameId: valueNameId, readerFilePath: func.sourceFilePath)
  
-@@ -7824,13 +7824,13 @@ function checkReturnsAgainstInterface(project Project, module MaxonModule, signa
+@@ -7829,13 +7829,13 @@ function checkReturnsAgainstInterface(project Project, module MaxonModule, signa
  	// `return`: they are a property of the DECLARATION, and this walk visits every `ret` in the body.
  	// A function with no registered signature — none, since the parser records one per function it
  	// builds — claims nothing.
@@ -4916,7 +4916,7 @@ index fdbe3a8..d7837d7 100644
  
  		match op 'op'
  			ret(value) then noteReturnOp(retOpIndices, retValues: retValues, opIdx: opIdx, value: value, deadReturn: returnIsDead(project, literalRanges: literalRanges, opIdx: opIdx, value: value))
-@@ -7879,7 +7879,7 @@ function checkReturnsAgainstInterface(project Project, module MaxonModule, signa
+@@ -7884,7 +7884,7 @@ function checkReturnsAgainstInterface(project Project, module MaxonModule, signa
  		end 'op'
  	end 'eachOp'
  
@@ -4925,7 +4925,7 @@ index fdbe3a8..d7837d7 100644
  
  	for (position, value) in retValues.withIterator() 'eachReturn'
  		checkReturnedValueAtItsSites(project, module: module, signatures: signatures, func: func, funcIndex: funcIndex, value: value, retOpIndex: try retOpIndices.get(position.index()) otherwise panic("checkReturnsAgainstInterface: retOpIndices.get OOB at {position.index()}"), exitChains: exitChains, interfaceName: interfaceName, returnExistentialSites: returnExistentialSites)
-@@ -8091,8 +8091,8 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType,
+@@ -8096,8 +8096,8 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType,
  	// The comparison RULE is `namedAggregatesConflict`, shared verbatim with the parser's coercion
  	// sites; only the name EXTRACTION is local. The ARG side always resolves live, because an argument
  	// keeps its `named`/`structRef` tag (`aggregateNameFor` handles both).
@@ -4936,7 +4936,7 @@ index fdbe3a8..d7837d7 100644
  
  	// ⚠ The ask is NOT gated on the DECLARED side being an aggregate: that skips the
  	// quadrant where a SCALAR parameter meets an AGGREGATE argument — which the tag check cannot refuse
-@@ -8100,7 +8100,7 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType,
+@@ -8105,7 +8105,7 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType,
  	// `tagAdmitsNoAggregate` is what keeps that safe for a `T` parameter, and `argAggregateCannotDecay` what
  	// keeps it off a byte enum or a per-instance alias, both of which legitimately coerce to an int.
  	if not expectedAggregate.isEmpty() or (tagAdmitsNoAggregate(paramTag) and argAggregateCannotDecay(project, tag: argTag, nameId: argNameId)) 'aggregateComparable'
@@ -4945,7 +4945,7 @@ index fdbe3a8..d7837d7 100644
  
  		// ⭐⭐ **THE BYTE-ELEMENT BOUNDARY — the one place two DIFFERENT named aggregates denote one
  		// record, and the reason the DECLARED-function door has to ask what the BUILTIN door already
-@@ -8196,7 +8196,7 @@ end 'calleeParamAlias'
+@@ -8201,7 +8201,7 @@ end 'calleeParamAlias'
  // exactly the group a function type is not in.
  function checkFunctionArgShape(project Project, func IrFunction, declaredShape FunctionShape, declaredBrand ByteArray, argId ValueId, param ArgumentParameter, position ParamCount, callRange SourceRange, handedAt SourceRange, filePath FilePath, provenance ProvenanceTracer) returns bool
  	let gotBrand = functionValueGoverningName(project, func: func, value: argId)
@@ -4954,7 +4954,7 @@ index fdbe3a8..d7837d7 100644
  	var signatures = programSignaturesIn(project, asker: "checkFunctionArgShape")
  
  	// The brand rule `checkOneFunctionTypeDoor` states, at the one door that records nothing: an argument's
-@@ -8339,7 +8339,7 @@ function argAggregateCannotDecay(project Project, tag ValueTypeTag, nameId TypeN
+@@ -8344,7 +8344,7 @@ function argAggregateCannotDecay(project Project, tag ValueTypeTag, nameId TypeN
  		return false
  	end 'notEnum'
  
@@ -4963,7 +4963,7 @@ index fdbe3a8..d7837d7 100644
  	return layout.isBoxed()
  end 'argAggregateCannotDecay'
  
-@@ -8499,7 +8499,7 @@ function returnsExitCode(returnType MaxonReturnType) returns bool
+@@ -8504,7 +8504,7 @@ function returnsExitCode(returnType MaxonReturnType) returns bool
  end 'returnsExitCode'
  
  function entryReturnsAnExitCodeDeclaration(project Project) returns bool
@@ -6328,10 +6328,10 @@ index 808bf65..9561f57 100644
  	for conformerName in conformersMintedWithoutTheirOwnMethods(signatures) 'eachSeededConformer'
  		if index.contains(conformerName) 'declaresOne'
 diff --git a/maxon-bin/Compiler/StorageProvenance.maxon b/maxon-bin/Compiler/StorageProvenance.maxon
-index 8ed27ec..bfc4bab 100644
+index 13594e5..f9664f8 100644
 --- a/maxon-bin/Compiler/StorageProvenance.maxon
 +++ b/maxon-bin/Compiler/StorageProvenance.maxon
-@@ -1461,12 +1461,12 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -1506,12 +1506,12 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  	end 'create'
  
  	function tracesFirst(index ElementIndex) returns bool
@@ -6346,7 +6346,7 @@ index 8ed27ec..bfc4bab 100644
  		self.traceParameters(func, index: index)
  		self.stageParamEdges(func, index: index)
  		return self.widenSummary(index)
-@@ -1551,8 +1551,8 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -1596,8 +1596,8 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  			return NoParamPositions
  		end 'aBindingsTrace'
  
@@ -6357,7 +6357,7 @@ index 8ed27ec..bfc4bab 100644
  		return self.elementKeptParameters(func, calleeIndex: calleeIndex, callee: callee, sig: sig, args: args)
  	end 'readOnlyElementParametersOfCall'
  
-@@ -1574,7 +1574,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -1619,7 +1619,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  	end 'flowDeclaredResult'
  
  	function resultOfRuntimeCall(func IrFunction, op MaxonOp, opIdx ElementIndex, result ValueId, args ValueIdArray, site ElementIndex)
@@ -6366,7 +6366,7 @@ index 8ed27ec..bfc4bab 100644
  
  		if sites.isBookkeepingAt(site) 'theOperandsRecordOrACopy'
  			self.flowThroughBookkeeping(func, op: op, result: result)
-@@ -1755,7 +1755,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -1800,7 +1800,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  
  		for (iter, value) in sites.writableValues.withIterator() 'eachVar'
  			let rank = try self.writableRankOf(value) otherwise continue
@@ -6375,7 +6375,7 @@ index 8ed27ec..bfc4bab 100644
  			let lastUse = info.lastReadToken if info.lastReadToken > info.declaredToken else info.declaredToken
  			let deadFrom = liveUntilAcrossLoops(info.declaredToken, lastUse: lastUse, loops: sites.loops)
  
-@@ -1858,7 +1858,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -1903,7 +1903,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  	end 'varGoneBeforeDoor'
  
  	function markImmutableBindingValues(func IrFunction)
@@ -6384,7 +6384,7 @@ index 8ed27ec..bfc4bab 100644
  
  		for i in 0 upto bindings.values.count() 'eachName'
  			if not (try bindings.moduleLets.get(i) otherwise panic("ProvenanceTracer.markImmutableBindingValues: moduleLets.get OOB at {i}")) 'aLocalName'
-@@ -1870,7 +1870,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -1915,7 +1915,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  	// An imaged `let` has no slot, so its read carries no label for `immutableGlobalLabels` to match:
  	// its module-let identity is seeded from the immutable binding it was read through.
  	function seedModuleLetReads(func IrFunction)
@@ -6393,7 +6393,7 @@ index 8ed27ec..bfc4bab 100644
  
  		for i in 0 upto bindings.values.count() 'eachName'
  			let value = try bindings.values.get(i) otherwise panic("ProvenanceTracer.seedModuleLetReads: values.get OOB at {i}")
-@@ -1983,7 +1983,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -2028,7 +2028,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  
  			if let first = try self.bindingRankOf(value) 'aSecondName'
  				try self.rootAliased.set(first, value: true) otherwise panic("ProvenanceTracer.traceImmutableBindings: rootAliased.set OOB at {first}")
@@ -6402,7 +6402,7 @@ index 8ed27ec..bfc4bab 100644
  				let before = try self.rootAliasLastUse.get(first) otherwise panic("ProvenanceTracer.traceImmutableBindings: rootAliasLastUse.get OOB at {first}")
  
  				if alias.lastReadToken > before 'readLater'
-@@ -2081,7 +2081,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -2126,7 +2126,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  		self.rootLiveUntil.refill(bindingCount, value: 0)
  		self.rootMovedAt.refill(bindingCount, value: NeverMovedToken)
  		self.rootCaptured.refill(bindingCount, value: false)
@@ -6411,7 +6411,7 @@ index 8ed27ec..bfc4bab 100644
  
  		for captured in func.provenanceSites(self.noSites).letCaptures.values 'eachCapture'
  			let rank = try self.bindingRankOf(captured) otherwise continue
-@@ -2104,7 +2104,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -2149,7 +2149,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  			end 'liveEverywhere'
  
  			let declared = try self.rootDeclTokens.get(rank) otherwise panic("ProvenanceTracer.settleBindingRoots: rootDeclTokens.get OOB at {rank}")
@@ -6420,7 +6420,7 @@ index 8ed27ec..bfc4bab 100644
  			let aliasLastUse = try self.rootAliasLastUse.get(rank) otherwise panic("ProvenanceTracer.settleBindingRoots: rootAliasLastUse.get OOB at {rank}")
  			let named = info.lastReadToken if info.lastReadToken > aliasLastUse else aliasLastUse
  			let lastUse = named if named > declared else declared
-@@ -2117,7 +2117,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -2162,7 +2162,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  
  	// Each root's reads out of the body's `LetReads`, grouped by rank.
  	function gatherRootReads(func IrFunction, bindingCount ElementIndex)
@@ -6429,7 +6429,7 @@ index 8ed27ec..bfc4bab 100644
  		self.rootReadStarts.refill(bindingCount + 1, value: 0)
  		self.rootReads.refill(reads.values.count(), value: 0)
  
-@@ -2420,7 +2420,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -2469,7 +2469,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  		for i in 0 upto argCount 'eachArg'
  			if bodies.unresolvedMayStore or maskHasParam(written, param: i) 'written'
  				let value = try args.get(i) otherwise panic("ProvenanceTracer.noteLandingArgumentsWritten: args.get OOB at {i}")
@@ -6438,7 +6438,7 @@ index 8ed27ec..bfc4bab 100644
  				self.landingNotedPositions.push(i)
  				self.landingNotedRows.push(self.writtenArgJudged.count())
  				self.noteArgumentWritten(value, call: call, parameter: firstArgumentParameter(parameters))
-@@ -2470,7 +2470,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -2519,7 +2519,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  		end 'noBodyToJudge'
  
  		let masks = KeptMasks.create(letKeeps, letPayload: payloadKeeps, readOnlyElement: elementKeeps, mutable: keeps.keptOr(mutablyKept), anyPosition: bodies.unresolvedMayStore and not declaredByBoundary)
@@ -6447,7 +6447,7 @@ index 8ed27ec..bfc4bab 100644
  
  		for i in 0 upto argCount 'eachArg'
  			let value = try args.get(i) otherwise panic("ProvenanceTracer.noteLandingArgumentsKept: args.get OOB at {i}")
-@@ -2479,7 +2479,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -2528,7 +2528,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  				continue
  			end 'keptWithoutAWriter'
  
@@ -6456,7 +6456,7 @@ index 8ed27ec..bfc4bab 100644
  			let refusal = KeptRefusal.wording(declaredKeptWording(keeps, position: i, callee: calleeText)) if declaredByBoundary else KeptRefusal.none
  			let refused = self.noteArgumentKept(func, value: value, call: call, parameter: parameter, callee: noteCallee, position: i, masks: masks, refusal: refusal)
  
-@@ -2517,7 +2517,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -2566,7 +2566,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  	end 'noteArgumentKept'
  
  	module function calleeValueName(func IrFunction, callee ValueId) returns String
@@ -6465,7 +6465,7 @@ index 8ed27ec..bfc4bab 100644
  
  		if callee < valueIdAtParamPosition(func.paramCount) 'aParameter'
  			return self.parameterNameAt(func, position: paramPositionOfValueId(callee))
-@@ -2543,7 +2543,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -2592,7 +2592,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  	function fieldNameLoadedBy(func IrFunction, value ValueId) returns ByteArray throws AbsentError
  		self.indexDefinitions(func, ir: self.module)
  		let defining = try self.definingOpIndexOf(value)
@@ -6474,18 +6474,16 @@ index 8ed27ec..bfc4bab 100644
  
  		match slotReadOfOp(op, opIndex: defining) 'read'
  			load(_, addr, offset) then return try self.fieldNameAt(func, record: addr, offset: offset)
-@@ -2575,8 +2575,8 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -2624,7 +2624,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  	end 'resultMeetsCapability'
  
  	function refuseAnImmutableWrittenArgument(func IrFunction, value ValueId, call SourceRange, parameters ArgumentParameterArray) returns bool
 -		view blamed = self.immutableRootWrittenThrough(func, value: value, call: call)
--		view blamedName = try blamed.blamedName() otherwise return false
 +		let blamed = self.immutableRootWrittenThrough(func, value: value, call: call)
-+		let blamedName = try blamed.blamedName() otherwise return false
- 		self.noteLastArgumentJudged()
  
- 		for parameter in parameters 'eachWritersName'
-@@ -3296,7 +3296,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+ 		if not blamed.isBlamed() 'nothingBlamed'
+ 			return false
+@@ -3337,7 +3337,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  	end 'traceStore'
  
  	function slotIsALetPayload(func IrFunction, box ValueId, offset ByteOffset, held ValueId) returns bool
@@ -6494,7 +6492,7 @@ index 8ed27ec..bfc4bab 100644
  
  		if kinds.holdsNothing() 'noLetPayloadHere'
  			return false
-@@ -4233,12 +4233,12 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -4274,12 +4274,12 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  			return
  		end 'nothingOfItsOwnToWrite'
  
@@ -6509,7 +6507,7 @@ index 8ed27ec..bfc4bab 100644
  
  		for site in sites.receiverWrites 'eachWrite'
  			written = written or self.parametersReachedBy(func, arg: site.receiver, asksIdentity: true)
-@@ -4254,10 +4254,10 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -4295,10 +4295,10 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  
  		for position in callSiteWalkOrder(ir, func: func) 'eachBlock'
  			let blockRef = try func.blockRefs.get(position) otherwise panic("ProvenanceTracer.stageParamEdges: position {position} from the walk order is past func.blockRefs")
@@ -6522,7 +6520,7 @@ index 8ed27ec..bfc4bab 100644
  				self.addParameterRecordEdgesAt(func, op: op, callerIndex: index)
  				writesARawResource = writesARawResource or opWritesARawResource(op)
  			end 'eachOp'
-@@ -4477,9 +4477,9 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -4518,9 +4518,9 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  	end 'beginStorageDoors'
  
  	module function checkFunctionDoors(i ElementIndex, mutationSummary ParamMutationSummary)
@@ -6534,7 +6532,7 @@ index 8ed27ec..bfc4bab 100644
  		self.readOnlyKeptBases.clear()
  		self.readOnlyKeptAt.clear()
  
-@@ -4720,7 +4720,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -4761,7 +4761,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  		if var chunk = try self.sets.first(set) 'hasWords'
  			while true 'eachWord'
  				let word = self.sets.indexOf(chunk)
@@ -6543,7 +6541,7 @@ index 8ed27ec..bfc4bab 100644
  				let shared = self.sets.wordOf(chunk) and self.sets.wordAt(other, word: word)
  
  				for bit in 0 upto RootBitIndexMask + 1 'eachBit'
-@@ -4816,7 +4816,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -4857,7 +4857,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  			return
  		end 'theOnlyHolder'
  
@@ -6552,16 +6550,16 @@ index 8ed27ec..bfc4bab 100644
  		reportPositionedWithNote(self.project, code: ErrorCode.semanticServiceReplyAliasesState, message: serviceReplyAliasesStateRefusal(site.destination, methodName: site.source), line: site.line, column: site.column, filePath: func.sourceFilePath, note: DiagnosticNote.at(serviceSpawnNoteText(site.destination), line: spawnSite.line, column: spawnSite.column, filePath: spawnSite.declFilePath))
  	end 'decideServiceReply'
  
-@@ -4835,7 +4835,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -4876,7 +4876,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  		end 'callersOwnOrNoWriter'
  
  		_ = self.bindingsTraceOf(func, index: index)
 -		view blamed = self.firstKeptRoot(func, value: site.value, token: site.token, names: RootCondition.aStoredName)
 +		let blamed = self.firstKeptRoot(func, value: site.value, token: site.token, names: RootCondition.aStoredName)
- 		let subject = try self.storedValueSubject(func, value: site.value, blamed: blamed) otherwise return
+ 		let subject = try self.storedValueSubject(func, value: site.value, blamed: blamed, token: site.token) otherwise return
  
  		if self.deferToInstantiation(func, value: site.value, owner: index) 'decidedWhereItIsInstantiated'
-@@ -4868,19 +4868,19 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -4909,19 +4909,19 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  			return WriteBlame.unblamed
  		end 'aVarHoldsAWritableRecord'
  
@@ -6585,7 +6583,7 @@ index 8ed27ec..bfc4bab 100644
  		end 'notOneBindingsOwn'
  
  		self.leaveDoor()
-@@ -4962,10 +4962,10 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -5003,10 +5003,10 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  		self.traceParameters(init, index: initIndex)
  
  		for blockRef in init.blockRefs 'eachBlock'
@@ -6598,7 +6596,7 @@ index 8ed27ec..bfc4bab 100644
  
  				if not opLoadsOrStoresASlot(op) 'neitherLoadsNorStores'
  					continue
-@@ -4996,7 +4996,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -5037,7 +5037,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  			return
  		end 'takesNoSharedRecord'
  
@@ -6607,7 +6605,7 @@ index 8ed27ec..bfc4bab 100644
  
  		if not maxonOpNamesAGlobalLabel(addressOp) 'notAGlobalsSlot'
  			return
-@@ -5007,7 +5007,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -5048,7 +5048,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  		end 'notAVarsSlot'
  
  		let varName = String.from(global.declName)
@@ -6616,7 +6614,7 @@ index 8ed27ec..bfc4bab 100644
  
  		if maxonOpCalleeKind(producer) == MaxonCalleeKind.direct and self.bodyWasRefused(maxonOpCalleeName(producer)) 'theProducerAlreadyAnswered'
  			return
-@@ -5037,10 +5037,10 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -5078,10 +5078,10 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  
  	function callMayHandBackAModuleLetsRecord(func IrFunction) returns bool
  		for blockRef in func.blockRefs 'eachBlock'
@@ -6629,7 +6627,7 @@ index 8ed27ec..bfc4bab 100644
  
  				if self.opLoadsALetFieldRecord(func, op: op) 'readsALetField'
  					return true
-@@ -5093,10 +5093,10 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -5134,10 +5134,10 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  	// within another name's record or is a module-level `let` cannot move, and is refused at the door. A `var`'s
  	// door is asked only for E3077 (`varIsNeededMutable`).
  	function checkMoveSites(func IrFunction)
@@ -6642,7 +6640,7 @@ index 8ed27ec..bfc4bab 100644
  
  			if not site.sourceIsMutable and site.destinationKind == MoveDestinationKind.mutableName 'aLetsDoor'
  				self.decideMoveSite(func, site: site)
-@@ -5187,7 +5187,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -5228,7 +5228,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  			return false
  		end 'notItsOwn'
  
@@ -6651,7 +6649,7 @@ index 8ed27ec..bfc4bab 100644
  		let value = self.rootValueAt(rank)
  		self.indexDefinitions(func, ir: ir)
  		let defining = try self.definingOpIndexOf(value) otherwise return false
-@@ -5209,7 +5209,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -5250,7 +5250,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  		end 'eachOtherName'
  
  		for blockRef in func.blockRefs 'eachBlock'
@@ -6660,7 +6658,7 @@ index 8ed27ec..bfc4bab 100644
  
  			for opIdx in block.bodyOps() 'eachOp'
  				if opIdx == defining or not self.opLiesBetween(opIdx, bound: bound, door: door) 'outsideTheSpan'
-@@ -5485,7 +5485,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -5519,7 +5519,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  				continue
  			end 'queuedByAnEarlierTrace'
  
@@ -6669,7 +6667,7 @@ index 8ed27ec..bfc4bab 100644
  			self.refuse(info.declaredLine, column: info.declaredColumn, code: ErrorCode.semanticLetBindsWritableState, message: letBindsWritableStateMessage(String.from(self.rootNameAt(rank)), through: self.writableRootName(func, rank: reached)))
  		end 'eachBinding'
  
-@@ -5531,8 +5531,8 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -5565,8 +5565,8 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  
  	function lowestWritableRankPlacedByTheCall(func IrFunction, value ValueId, rank ElementIndex, skipped ElementIndex, bound ElementIndex) returns ElementIndex
  		let defining = try self.definingOpIndexOf(value) otherwise return bound
@@ -6680,7 +6678,7 @@ index 8ed27ec..bfc4bab 100644
  		let calleeIndex = try self.calls.resolution.summarizedCalleeIndex(callee) otherwise return bound
  		let placed = self.summary.placedWithinAt(calleeIndex)
  
-@@ -5540,7 +5540,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -5574,7 +5574,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  			return bound
  		end 'placesNothingInItsArguments'
  
@@ -6689,36 +6687,25 @@ index 8ed27ec..bfc4bab 100644
  		var lowest = bound
  
  		for position in 0 upto sig.paramCount() 'eachParameter'
-@@ -5690,7 +5690,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
- 			end 'answeredElsewhere'
- 
- 			self.askAtDoor(site.token)
--			view blamed = self.firstRootWrittenThrough(func, target: site.receiver)
-+			let blamed = self.firstRootWrittenThrough(func, target: site.receiver)
- 			self.leaveDoor()
- 
- 			if let blamedName = try blamed.blamedName() 'aBindingsRecord'
-@@ -5799,7 +5799,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
- 			return
- 		end 'noNamedRecord'
- 
--		view blamedName = try blamed.blamedName() otherwise panic("ProvenanceTracer.refuseAWriteThrough: every road to here names the record the write reaches")
-+		let blamedName = try blamed.blamedName() otherwise panic("ProvenanceTracer.refuseAWriteThrough: every road to here names the record the write reaches")
- 		let kind = self.rootKindOfBlame(blamed)
- 		self.refuse(line, column: column, code: ErrorCode.semanticWriteThroughImmutableRecord, message: deepLetWriteMessage(String.from(place), root: String.from(blamedName), kind: kind))
- 	end 'refuseAWriteThrough'
-@@ -6360,8 +6360,8 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -6469,7 +6469,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  				continue
  			end 'noNamedRecord'
  
--			view blamedName = try blamed.blamedName() otherwise panic("ProvenanceTracer.checkWrittenArguments: every road to here names the record the write reaches")
 -			view parameter = try self.writtenArgParams.get(k) otherwise panic("ProvenanceTracer.checkWrittenArguments: writtenArgParams.get OOB at {k}")
-+			let blamedName = try blamed.blamedName() otherwise panic("ProvenanceTracer.checkWrittenArguments: every road to here names the record the write reaches")
 +			let parameter = try self.writtenArgParams.get(k) otherwise panic("ProvenanceTracer.checkWrittenArguments: writtenArgParams.get OOB at {k}")
- 			let kind = self.rootKindOfBlame(blamed)
- 			let message = writtenArgumentMessage(String.from(blamedName), kind: kind, parameter: parameter, functionName: self.signatures.sourceNameOfFunction(func.name))
+ 			let message = writtenArgumentMessage(self.blamedSubject(func, value: value, blamed: blamed, call: call), parameter: parameter, functionName: self.signatures.sourceNameOfFunction(func.name))
  			self.refuse(callLine, column: callColumn, code: ErrorCode.semanticWriteThroughImmutableRecord, message: message)
-@@ -6767,10 +6767,10 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+ 			self.leaveDoor()
+@@ -6511,7 +6511,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+ 
+ 	function accessRootOfStop(func IrFunction, ir MaxonModule, value ValueId) returns AccessRoot
+ 		let opIndex = try self.definingOpIndexOf(value) otherwise panic("ProvenanceTracer.accessRootOfStop: a value that takes a stop hop has a defining op")
+-		view op = try ir.ops.get(opIndex) otherwise panic("ProvenanceTracer.accessRootOfStop: op {opIndex} not in module.ops")
++		let op = try ir.ops.get(opIndex) otherwise panic("ProvenanceTracer.accessRootOfStop: op {opIndex} not in module.ops")
+ 		return AccessRoot.computed if self.producerOfOp(func, op: op).isACall() else AccessRoot.ground
+ 	end 'accessRootOfStop'
+ 
+@@ -6894,10 +6894,10 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  			return true
  		end 'aLetWouldBeRefused'
  
@@ -6731,7 +6718,7 @@ index 8ed27ec..bfc4bab 100644
  
  			if not site.sourceIsMutable or site.destinationKind == MoveDestinationKind.keptArgument or site.sourceValue != value or not site.source.equals(name) 'anotherDoor'
  				continue
-@@ -6786,7 +6786,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -6913,7 +6913,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  		end 'aLetWouldBeWrittenThrough'
  
  		for k in 0 upto sites.moveSites.count() 'eachStore'
@@ -6740,7 +6727,16 @@ index 8ed27ec..bfc4bab 100644
  
  			if site.destinationKind == MoveDestinationKind.mutablePlace and liveUntil > site.token and self.valueReachesRank(site.value, rank: rank) 'aLetWouldBeStoredAndReadAgain'
  				return true
-@@ -7143,7 +7143,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -6972,7 +6972,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+ 		let produced = self.producingValueOf(func, ir: ir, value: value)
+ 
+ 		let opIndex = try self.definingOpIndexOf(produced) otherwise return self.sharedStorageClause(func, producer: UnattributedProducer, value: produced, producerOperands: singletonValue(produced))
+-		view op = try ir.ops.get(opIndex) otherwise panic("ProvenanceTracer.sharedStorageSubjectAtTheDoor: opIndex {opIndex} not in module.ops")
++		let op = try ir.ops.get(opIndex) otherwise panic("ProvenanceTracer.sharedStorageSubjectAtTheDoor: opIndex {opIndex} not in module.ops")
+ 		return self.sharedStorageClause(func, producer: self.producerOfOp(func, op: op).subject(), value: produced, producerOperands: self.producerOperandsOf(op, value: produced))
+ 	end 'sharedStorageSubjectAtTheDoor'
+ 
+@@ -7376,7 +7376,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  			return self.nameIdOf(func, value: value) == self.nameIdOf(func, value: other)
  		end 'oneRepresentation'
  
@@ -6749,7 +6745,7 @@ index 8ed27ec..bfc4bab 100644
  		return kind.equals(try self.heldRecordKindOf(func, value: other) otherwise return true)
  	end 'valuesMayBeOneRecord'
  
-@@ -7365,7 +7365,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -7594,7 +7594,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  		self.freshReturns.refill(funcCount, value: false)
  
  		for index in 0 upto funcCount 'eachFunction'
@@ -6758,16 +6754,16 @@ index 8ed27ec..bfc4bab 100644
  
  			if bodyIsUnreadable(func) or not self.resultMayHandBackAModuleLetsRecord(func) 'returnsNoRecord'
  				continue
-@@ -7406,7 +7406,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -7635,7 +7635,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  	end 'settleFreshReturns'
  
  	function returnsAFreshGraph(func IrFunction) returns bool
 -		view ir = self.module
 +		let ir = self.module
  		self.indexDefinitions(func, ir: ir)
- 		ir.refillBlockIndexById(func, into: self.blockIndex)
  		let valueCount = func.valueTags.count()
-@@ -7417,7 +7417,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+ 		self.freshMember.refill(valueCount, value: false)
+@@ -7645,7 +7645,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  		var returnsARecord = false
  
  		for blockRef in func.blockRefs 'eachBlock'
@@ -6776,7 +6772,7 @@ index 8ed27ec..bfc4bab 100644
  
  			if block.hasTerminatorOp() 'terminated'
  				returnsARecord = self.seedReturnedFreshGraph(func, terminator: try ir.ops.get(block.terminatorIndex()) otherwise panic("ProvenanceTracer.returnsAFreshGraph: terminatorIndex not in module.ops")) or returnsARecord
-@@ -7466,7 +7466,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -7694,7 +7694,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  
  	function returnsARecordValue(func IrFunction) returns bool
  		for blockRef in func.blockRefs 'eachBlock'
@@ -6785,7 +6781,7 @@ index 8ed27ec..bfc4bab 100644
  
  			if not block.hasTerminatorOp() 'unterminated'
  				continue
-@@ -7643,7 +7643,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -7865,7 +7865,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  	end 'sweepFreshCall'
  
  	function sweepFreshDescribedCall(func IrFunction, calleeIndex ElementIndex, callee ByteArray, result ValueId, args ValueIdArray, argLabels NameRoster) returns bool
@@ -6794,7 +6790,7 @@ index 8ed27ec..bfc4bab 100644
  		let escapesOrBinds = self.summary.escapesAt(calleeIndex) or self.summary.bindsAt(calleeIndex)
  		let letKept = self.summary.anyKeepsAt(calleeIndex)
  		let shares = self.summary.sharesAt(calleeIndex)
-@@ -7820,7 +7820,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -8042,7 +8042,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  	end 'acceptsAsSole'
  
  	function valueIsSwappedOut(func IrFunction, value ValueId) returns bool
@@ -6803,7 +6799,7 @@ index 8ed27ec..bfc4bab 100644
  		self.indexDefinitions(func, ir: ir)
  		let swapped = self.baseIsSwappedOut(func, base: self.sameRecordBase(func, ir: ir, value: value), depth: 0)
  		self.indexDefinitions(func, ir: ir)
-@@ -7834,7 +7834,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -8056,7 +8056,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  
  		self.indexDefinitions(func, ir: self.module)
  		let defining = try self.definingOpIndexOf(base) otherwise return false
@@ -6812,7 +6808,7 @@ index 8ed27ec..bfc4bab 100644
  
  		if let callee = try freshCalleeOf(op) 'aCall'
  			return self.callResultIsSwappedOut(callee, depth: depth)
-@@ -7867,11 +7867,11 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -8089,11 +8089,11 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  	end 'callResultIsSwappedOut'
  
  	function functionReturnsOnlySwappedOutRecords(func IrFunction, depth ElementIndex) returns bool
@@ -6826,7 +6822,7 @@ index 8ed27ec..bfc4bab 100644
  
  			if not block.hasTerminatorOp() 'unterminated'
  				continue
-@@ -7914,7 +7914,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -8136,7 +8136,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  	end 'loadMovesOutOfAnOwner'
  
  	function ownerIsDeadAfterTheLoad(func IrFunction, loadOp ElementIndex, addr ValueId, key StoreSlotKey) returns bool
@@ -6835,7 +6831,7 @@ index 8ed27ec..bfc4bab 100644
  		self.indexDefinitions(func, ir: ir)
  		let ownerBase = self.sameRecordBase(func, ir: ir, value: addr)
  		let mint = try self.definingOpIndexOf(ownerBase) otherwise return false
-@@ -7922,13 +7922,13 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -8144,13 +8144,13 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  	end 'ownerIsDeadAfterTheLoad'
  
  	function ownerIsUntouchedFrom(func IrFunction, byId BlockIndexById, loadOp ElementIndex, mint ElementIndex, ownerBase ValueId, key StoreSlotKey) returns bool
@@ -6851,7 +6847,7 @@ index 8ed27ec..bfc4bab 100644
  
  			for at in 0 upto block.bodyOpCount() 'eachOp'
  				if (try block.bodyOpAt(at) otherwise panic("ProvenanceTracer.ownerIsUntouchedFrom: bodyOpAt OOB at {at}")) != loadOp 'anotherOp'
-@@ -7960,7 +7960,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -8182,7 +8182,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  			try visited.set(blockId, value: true) otherwise panic("ProvenanceTracer.ownerIsUntouchedFrom: visited.set OOB at block {blockId}")
  			let position = try byId.get(blockId) otherwise panic("ProvenanceTracer.ownerIsUntouchedFrom: successor {blockId} is not a block of '{String.from(func.name)}'")
  			let blockRef = try func.blockRefs.get(position) otherwise panic("ProvenanceTracer.ownerIsUntouchedFrom: blockIndexById placed a block at {position}, past func.blockRefs")
@@ -6860,7 +6856,7 @@ index 8ed27ec..bfc4bab 100644
  
  			match self.scanOwnerBlock(func, block: block, from: 0, mint: mint, ownerBase: ownerBase, key: key) 'body'
  				touched then return false
-@@ -7973,7 +7973,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -8195,7 +8195,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  	end 'ownerIsUntouchedFrom'
  
  	function scanOwnerBlock(func IrFunction, block IrBlock, from ElementIndex, mint ElementIndex, ownerBase ValueId, key StoreSlotKey) returns OwnerBlockScan
@@ -6869,7 +6865,7 @@ index 8ed27ec..bfc4bab 100644
  
  		for at in from upto block.bodyOpCount() 'eachOp'
  			let opIdx = try block.bodyOpAt(at) otherwise panic("ProvenanceTracer.scanOwnerBlock: bodyOpAt OOB at {at}")
-@@ -8062,16 +8062,16 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -8284,16 +8284,16 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  	end 'varsOwnValues'
  
  	function loadIsSwappedOut(func IrFunction, loadOp ElementIndex, result ValueId, addr ValueId, key StoreSlotKey) returns bool
@@ -6889,7 +6885,7 @@ index 8ed27ec..bfc4bab 100644
  			var inWindow = false
  
  			for opIdx in block.bodyOps() 'eachOp'
-@@ -8084,7 +8084,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -8306,7 +8306,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  					continue
  				end 'beforeTheLoad'
  
@@ -6898,7 +6894,7 @@ index 8ed27ec..bfc4bab 100644
  				let stepResult = self.windowStepOf(func, op: stepOp, ownerBase: ownerBase, ownerKind: ownerKind, key: key, aliases: aliases)
  
  				match stepResult 'step'
-@@ -8213,7 +8213,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -8435,7 +8435,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  				return WindowStep.touches
  			end 'namesTheRecordOrItsOwner'
  
@@ -6907,7 +6903,7 @@ index 8ed27ec..bfc4bab 100644
  
  			if kind.equals(ownerKind) or self.recordKindsWithinValue(func, value: operand).mayHold(ownerKind) 'mayReachTheOwner'
  				return WindowStep.touches
-@@ -8243,7 +8243,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -8465,7 +8465,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  	end 'addAlias'
  
  	function storedValueIsFreshAndUnshared(func IrFunction, value ValueId) returns bool
@@ -6916,7 +6912,7 @@ index 8ed27ec..bfc4bab 100644
  		self.indexDefinitions(func, ir: ir)
  
  		if self.valueReadsAnInertModuleLet(func, value: value) or self.baseIsAnImageRecord(self.sameRecordBase(func, ir: ir, value: value)) 'nothingToShare'
-@@ -8290,18 +8290,18 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -8512,18 +8512,18 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  	end 'slotIsExclusive'
  
  	function indexSlotAccesses()
@@ -6938,7 +6934,7 @@ index 8ed27ec..bfc4bab 100644
  
  				for opIdx in block.bodyOps() 'eachOp'
  					self.indexSlotAccess(func, functionIndex: index, opIdx: opIdx)
-@@ -8311,7 +8311,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -8533,7 +8533,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  	end 'indexSlotAccesses'
  
  	function indexSlotAccess(func IrFunction, functionIndex ElementIndex, opIdx ElementIndex)
@@ -6947,7 +6943,7 @@ index 8ed27ec..bfc4bab 100644
  
  		if not opLoadsOrStoresASlot(op) 'neitherLoadsNorStores'
  			return
-@@ -8370,7 +8370,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -8592,7 +8592,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  
  		while position != NoSlotAccess 'eachAccess'
  			let packed = try self.slotAccessPacked.get(position) otherwise panic("ProvenanceTracer.everyAccessKeepsSlotExclusive: slotAccessPacked.get OOB at {position}")
@@ -6956,7 +6952,7 @@ index 8ed27ec..bfc4bab 100644
  			self.indexDefinitions(func, ir: self.module)
  
  			if not self.accessKeepsSlotExclusive(func, opIdx: packed and SlotAccessOpMask, key: key) 'aLeakingAccess'
-@@ -8384,7 +8384,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -8606,7 +8606,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  	end 'everyAccessKeepsSlotExclusive'
  
  	function accessKeepsSlotExclusive(func IrFunction, opIdx ElementIndex, key StoreSlotKey) returns bool
@@ -6965,7 +6961,7 @@ index 8ed27ec..bfc4bab 100644
  
  		return match slotReadOfOp(op, opIndex: opIdx) 'access'
  			load(loadOp, addr, offset) gives self.loadKeepsSlotExclusive(func, op: op, loadOp: loadOp, addr: addr, offset: offset, key: key)
-@@ -8417,7 +8417,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -8639,7 +8639,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  	end 'storeKeepsSlotExclusive'
  
  	function recordUseOf(func IrFunction, root ValueId) returns RecordUse
@@ -6974,7 +6970,7 @@ index 8ed27ec..bfc4bab 100644
  		self.indexDefinitions(func, ir: ir)
  		var aliases = BoolArray.create()
  		aliases.refill(func.valueTags.count(), value: false)
-@@ -8429,7 +8429,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -8651,7 +8651,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  			self.aliasesGrew = false
  
  			for blockRef in func.blockRefs 'eachBlock'
@@ -6983,31 +6979,7 @@ index 8ed27ec..bfc4bab 100644
  
  				for opIdx in block.bodyOps() 'eachOp'
  					worst = worseRecordUse(worst, next: self.useOfAliasIn(func, op: try ir.ops.get(opIdx) otherwise panic("ProvenanceTracer.recordUseOf: opIdx {opIdx} not in module.ops"), aliases: aliases))
-@@ -8622,12 +8622,12 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
- 		end 'tooDeep'
- 
- 		let blockId = try self.mergingBlockOf(phi) otherwise return false
--		view ir = self.module
-+		let ir = self.module
- 		var position = 0 as ElementIndex
- 		var found = false
- 
- 		for blockRef in func.blockRefs 'eachBlock'
--			view block = try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.mergeMeetsClaim: blockRef from func.blockRefs not in module.blocks")
-+			let block = try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.mergeMeetsClaim: blockRef from func.blockRefs not in module.blocks")
- 
- 			if block.id != blockId 'anotherBlock'
- 				continue
-@@ -8648,7 +8648,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
- 		var sawAnIncoming = false
- 
- 		for blockRef in func.blockRefs 'eachPredecessor'
--			view block = try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.mergeMeetsClaim: blockRef from func.blockRefs not in module.blocks")
-+			let block = try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.mergeMeetsClaim: blockRef from func.blockRefs not in module.blocks")
- 
- 			for edge in block.branchEdges 'eachEdge'
- 				if edge.targetBlockId != blockId 'anotherTarget'
-@@ -8691,7 +8691,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -8905,7 +8905,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  		end 'aMerge'
  
  		let defining = try self.definingOpIndexOf(base) otherwise return false
@@ -7016,7 +6988,7 @@ index 8ed27ec..bfc4bab 100644
  
  		if opProducesAnImage(op) or (maxonOpNamesAGlobalLabel(op) and self.immutableGlobalLabels.contains(maxonOpGlobalLabelName(op))) 'neverWritten'
  			return true
-@@ -8704,7 +8704,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -8918,7 +8918,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  			retainOf then return false
  		end 'read'
  
@@ -7025,7 +6997,7 @@ index 8ed27ec..bfc4bab 100644
  		return self.callResultIsPermanentlyReadOnly(func, op: op, callee: callee, depth: depth, allowFresh: allowFresh)
  	end 'recordIsPermanentlyReadOnly'
  
-@@ -8775,7 +8775,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -8989,7 +8989,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  	end 'permanentWhateverItIsHanded'
  
  	function callResultIsPermanentGivenArguments(func IrFunction, op MaxonOp, calleeIndex ElementIndex, callee ByteArray, depth ElementIndex, allowFresh bool) returns bool
@@ -7034,7 +7006,7 @@ index 8ed27ec..bfc4bab 100644
  
  		if not (try answers.get(calleeIndex) otherwise false) 'notPermanentWhateverItIsHanded'
  			return false
-@@ -8786,7 +8786,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -9000,7 +9000,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  		end 'aSettlingPass'
  
  		let wanted = summaryMaskAt(self.permanentOrFreshGivenParams if allowFresh else self.permanentGivenParams, index: calleeIndex)
@@ -7043,7 +7015,7 @@ index 8ed27ec..bfc4bab 100644
  
  		for position in 0 upto sig.paramCount() 'eachParameter'
  			if not maskHasParam(wanted, param: position) 'notReturned'
-@@ -8890,7 +8890,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -9104,7 +9104,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  		wanted.refill(funcCount, value: NoParamPositions)
  
  		for index in 0 upto funcCount 'eachFunction'
@@ -7052,7 +7024,7 @@ index 8ed27ec..bfc4bab 100644
  
  			if bodyIsUnreadable(func) or not self.resultMayHandBackAModuleLetsRecord(func) or self.permanentWhateverItIsHanded(index, allowFresh: allowFresh) 'settledWithoutArguments'
  				continue
-@@ -8955,7 +8955,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -9169,7 +9169,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  		self.permanentSettling = mode
  
  		for index in 0 upto funcCount 'eachFunction'
@@ -7061,7 +7033,7 @@ index 8ed27ec..bfc4bab 100644
  			self.permanentNeeds.clear()
  
  			if bodyIsUnreadable(func) or not self.resultMayHandBackAModuleLetsRecord(func) 'returnsNoRecord'
-@@ -8998,12 +8998,12 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -9212,12 +9212,12 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  	end 'settlePermanence'
  
  	function returnsOnlyPermanentRecords(func IrFunction, allowFresh bool) returns bool
@@ -7076,7 +7048,7 @@ index 8ed27ec..bfc4bab 100644
  
  			if not block.hasTerminatorOp() 'unterminated'
  				continue
-@@ -9056,7 +9056,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -9270,7 +9270,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  	function addressNamesAnInertModuleLet(func IrFunction, addr ValueId) returns bool
  		let owner = self.sameRecordBase(func, ir: self.module, value: addr)
  		let defining = try self.definingOpIndexOf(owner) otherwise return false
@@ -7085,7 +7057,7 @@ index 8ed27ec..bfc4bab 100644
  		return maxonOpNamesAGlobalLabel(op) and self.inertGlobalLabels.contains(maxonOpGlobalLabelName(op))
  	end 'addressNamesAnInertModuleLet'
  
-@@ -9076,7 +9076,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -9290,7 +9290,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  	function keptArgumentSiteOf(func IrFunction, value ValueId, call SourceRange) returns ElementIndex throws AbsentError
  		self.indexKeptArgumentSites(func)
  		let wanted = self.sameRecordBase(func, ir: self.module, value: value)
@@ -7094,7 +7066,7 @@ index 8ed27ec..bfc4bab 100644
  		var next = try self.keptSiteHeads.get(positionKey(call.line, column: call.column)) otherwise throw AbsentError.absent
  
  		while true 'eachSiteOfTheCall'
-@@ -9095,13 +9095,13 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -9309,13 +9309,13 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  			return
  		end 'alreadyIndexed'
  
@@ -7110,7 +7082,7 @@ index 8ed27ec..bfc4bab 100644
  
  			if site.destinationKind != MoveDestinationKind.keptArgument 'notAnArgument'
  				continue
-@@ -9150,7 +9150,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -9364,7 +9364,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  		var parserRefused = false
  
  		if let siteIndex = try self.keptArgumentSiteOf(func, value: value, call: call) 'aNamedVar'
@@ -7119,7 +7091,7 @@ index 8ed27ec..bfc4bab 100644
  
  			if site.readAfter 'readOnceMoved'
  				self.reportReadAfterMove(site)
-@@ -9203,7 +9203,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -9417,7 +9417,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  		end 'alsoHandedOut'
  
  		if let siteIndex = try self.keptArgumentSiteOf(func, value: value, call: call) 'aNamedVar'
@@ -7128,7 +7100,7 @@ index 8ed27ec..bfc4bab 100644
  
  			if site.readAfter or site.readInALaterIteration 'readAgain'
  				self.refuseLetFieldKeptArgument(func, note: note, value: value, into: into, subject: "the `var` '{String.from(site.source)}', which is read again,")
-@@ -9292,12 +9292,12 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -9506,12 +9506,12 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  	end 'rootIsKeptReadOnlyBefore'
  
  	function scanHandedOutValues(func IrFunction)
@@ -7143,37 +7115,16 @@ index 8ed27ec..bfc4bab 100644
  
  			for opIdx in block.bodyOps() 'eachOp'
  				match slotReadOfOp(try ir.ops.get(opIdx) otherwise panic("ProvenanceTracer.scanHandedOutValues: opIdx {opIdx} not in module.ops"), opIndex: opIdx) 'access'
-@@ -9338,15 +9338,15 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
- 	end 'noteValueHandedOut'
- 
- 	function handOutThroughMerges(func IrFunction) returns bool
--		view ir = self.module
-+		let ir = self.module
- 		var grew = false
- 
- 		for blockRef in func.blockRefs 'eachBlock'
--			view source = try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.handOutThroughMerges: blockRef from func.blockRefs not in module.blocks")
-+			let source = try ir.blocks.get(blockRef) otherwise panic("ProvenanceTracer.handOutThroughMerges: blockRef from func.blockRefs not in module.blocks")
- 
- 			for edge in source.branchEdges 'eachEdge'
- 				let position = try self.blockIndex.get(edge.targetBlockId) otherwise panic("ProvenanceTracer.handOutThroughMerges: edge target {edge.targetBlockId} is not a block of '{String.from(func.name)}'")
--				view target = try ir.blocks.get(try func.blockRefs.get(position) otherwise panic("ProvenanceTracer.handOutThroughMerges: blockRefs.get OOB at {position}")) otherwise panic("ProvenanceTracer.handOutThroughMerges: blockRef not in module.blocks")
-+				let target = try ir.blocks.get(try func.blockRefs.get(position) otherwise panic("ProvenanceTracer.handOutThroughMerges: blockRefs.get OOB at {position}")) otherwise panic("ProvenanceTracer.handOutThroughMerges: blockRef not in module.blocks")
- 
- 				for k in 0 upto target.blockArgs.count() 'eachArg'
- 					let merge = (try target.blockArgs.get(k) otherwise panic("ProvenanceTracer.handOutThroughMerges: blockArgs.get OOB at {k}")).valueId
-@@ -9406,8 +9406,8 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -9612,7 +9612,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  			return false
  		end 'noImmutableRootToBlame'
  
 -		view blamed = self.firstKeptRoot(func, value: value, token: self.callTokenAtPosition(func, line: call.line, column: call.column), names: RootCondition.aKeptName)
--		view blamedName = try blamed.blamedName() otherwise return false
 +		let blamed = self.firstKeptRoot(func, value: value, token: self.callTokenAtPosition(func, line: call.line, column: call.column), names: RootCondition.aKeptName)
-+		let blamedName = try blamed.blamedName() otherwise return false
  
- 		if self.deferToInstantiation(func, value: value, owner: self.enteredIndex) 'decidedWhereItIsInstantiated'
+ 		if not blamed.isBlamed() 'nothingBlamed'
  			return false
-@@ -9507,21 +9507,21 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -9716,21 +9716,21 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  	end 'opaqueBoundCalleeNamed'
  
  	function judgeInstantiationsIn(callerIndex ElementIndex, reporting bool) returns bool
@@ -7199,7 +7150,7 @@ index 8ed27ec..bfc4bab 100644
  
  				match op 'op'
  					call(result, callee, args, argLabels, _, _, _, _) then grew = self.judgeNamedInstantiation(caller, callerIndex: callerIndex, opIdx: opIdx, result: result, called: callee, args: args, argLabels: argLabels, reporting: reporting) or grew
-@@ -9593,7 +9593,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -9802,7 +9802,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  			return false
  		end 'notGeneric'
  
@@ -7208,7 +7159,7 @@ index 8ed27ec..bfc4bab 100644
  			found(iface) gives iface.methods
  			notFound gives InterfaceMethodSigArray.create()
  		end 'lookup'
-@@ -9634,8 +9634,8 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -9843,8 +9843,8 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  
  	function judgeInterfaceArguments(caller IrFunction, callerIndex ElementIndex, opIdx ElementIndex, called ByteArray, args ValueIdArray, argLabels NameRoster, reporting bool) returns bool
  		let calleeIndex = try self.calls.resolution.functionIndexNamed(called) otherwise return false
@@ -7219,7 +7170,7 @@ index 8ed27ec..bfc4bab 100644
  		var grew = false
  
  		for i in 0 upto args.count() 'eachArg'
-@@ -9660,7 +9660,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -9869,7 +9869,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  			return grewByConversion
  		end 'itself'
  
@@ -7228,7 +7179,7 @@ index 8ed27ec..bfc4bab 100644
  		var filled = ValueIdArray.create()
  		var positions = ParamCountArray.create()
  
-@@ -9709,7 +9709,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
+@@ -9918,7 +9918,7 @@ module type ProvenanceTracer implements SummaryCallWalker, SummarizedBodies
  	end 'judgeLandingInstantiation'
  
  	function judgeInstantiation(caller IrFunction, callerIndex ElementIndex, opIdx ElementIndex, calleeIndex ElementIndex, result ValueId, filled ValueIdArray, positions ParamCountArray, reporting bool, door InstantiationDoor) returns bool
@@ -7377,10 +7328,10 @@ index 5692f4e..de9e1cf 100644
  	end 'afterRunning'
  end 'BackendUnitReply'
 diff --git a/maxon-bin/Compiler/Targets/Shared/BacktraceFormat.maxon b/maxon-bin/Compiler/Targets/Shared/BacktraceFormat.maxon
-index 43622a8..1fb9085 100644
+index cfa1e3a..3fc139c 100644
 --- a/maxon-bin/Compiler/Targets/Shared/BacktraceFormat.maxon
 +++ b/maxon-bin/Compiler/Targets/Shared/BacktraceFormat.maxon
-@@ -584,7 +584,7 @@ export function recordChunkSymbol(symbols DebugSymbolArray, chunk FunctionCodeCh
+@@ -585,7 +585,7 @@ export function recordChunkSymbol(symbols DebugSymbolArray, chunk FunctionCodeCh
  		panic("recordChunkSymbol: '{String.from(MainThreadEntryName)}' is laid out after {symbols.count()} symbols — it must directly follow '{String.from(EntryPointName)}', whose name its frames are reported under")
  	end 'notSecond'
  

@@ -9928,7 +9928,7 @@ function rawIntrinsicResultTag(intrinsic RawIntrinsic) returns ValueTypeTag
 	end 'kind'
 end 'rawIntrinsicResultTag'
 
-function calleeMintIsDefaultHelper(mint CalleeMint) returns bool
+module function calleeMintIsDefaultHelper(mint CalleeMint) returns bool
 	return mint == CalleeMint.paramDefaultHelper or mint == CalleeMint.fieldDefaultHelper
 end 'calleeMintIsDefaultHelper'
 
@@ -39731,7 +39731,7 @@ export type Parser
 
 		let sourceLocal = try sourceName.localName() otherwise 'noNamedSource'
 			if valueIsMarked(self.bodyState.derivedImmutableGlobalReads, value: value) and not bindingCopiesIt 'aRecordOutOfAnImmutableGlobal'
-				throw SourceParseError.deepLet(ErrorCode.semanticVarFromImmutable, message: deepLetBindMessage("a value read out of a module-level `let`", binding: String.from(nameTok.value)), line: nameTok.line, column: nameTok.column)
+				throw SourceParseError.deepLet(ErrorCode.semanticVarFromImmutable, message: deepLetBindMessage(readOutOfSubject(ReadOnlyRootKind.moduleLet), binding: String.from(nameTok.value)), line: nameTok.line, column: nameTok.column)
 			end 'aRecordOutOfAnImmutableGlobal'
 
 			if not bindingCopiesIt 'mayNameSharedStorage'
@@ -39782,11 +39782,11 @@ export type Parser
 		// A FIELD of an immutable name is not the name, so it cannot move: the mutable binding would reach a record
 		// another name holds. The chain is blamed without a name.
 		if sourceReadsAField 'aFieldCannotMove'
-			throw SourceParseError.deepLet(ErrorCode.semanticVarFromImmutable, message: deepLetBindMessage("a value read out of the read-only '{String.from(sourceLocal)}'", binding: String.from(nameTok.value)), line: nameTok.line, column: nameTok.column)
+			throw SourceParseError.deepLet(ErrorCode.semanticVarFromImmutable, message: deepLetBindMessage(readOutOfPlaceSubject(readOnlyNameSubject(String.from(sourceLocal))), binding: String.from(nameTok.value)), line: nameTok.line, column: nameTok.column)
 		end 'aFieldCannotMove'
 
 		if source.rootKind == ReadOnlyRootKind.letBinding 'aLetIsNeverMovedIntoAVar'
-			throw SourceParseError.deepLet(ErrorCode.semanticVarFromImmutable, message: deepLetBindMessage("the read-only '{String.from(sourceLocal)}'", binding: String.from(nameTok.value)), line: nameTok.line, column: nameTok.column)
+			throw SourceParseError.deepLet(ErrorCode.semanticVarFromImmutable, message: deepLetBindMessage(readOnlyNameSubject(String.from(sourceLocal)), binding: String.from(nameTok.value)), line: nameTok.line, column: nameTok.column)
 		end 'aLetIsNeverMovedIntoAVar'
 
 		self.noteMoveSite(func, value: value, binding: source, destination: nameTok.value, anchor: nameTok)
@@ -39798,7 +39798,7 @@ export type Parser
 		end 'nothingReadOnlyToAlias'
 
 		let holder = WriteBlameHolder.moduleLet if self.valueMayAliasAnImmutableGlobal(value) else self.readOnlyFieldHolderOf(value)
-		throw SourceParseError.deepLet(ErrorCode.semanticVarFromImmutable, message: deepLetBindMessage("a value read out of {readOnlyRootDescription(rootKindOfHolder(holder))}", binding: String.from(nameTok.value)), line: nameTok.line, column: nameTok.column)
+		throw SourceParseError.deepLet(ErrorCode.semanticVarFromImmutable, message: deepLetBindMessage(readOutOfSubject(rootKindOfHolder(holder)), binding: String.from(nameTok.value)), line: nameTok.line, column: nameTok.column)
 	end 'refuseReadOnlyRecordIntoName'
 
 	function requireRebindTakesNoReadOnlyRecord(nameTok Token, value ValueId) throws SourceParseError
@@ -40937,7 +40937,7 @@ export type Parser
 		end 'aParametersRecord'
 
 		if not self.bindingStorageIsWritable(source) and source.rootKind == ReadOnlyRootKind.letBinding and self.tagOf(value) != ValueTypeTag.function 'aLetIsNeverMovedIntoAVar'
-			throw SourceParseError.deepLet(ErrorCode.semanticVarFromImmutable, message: deepLetBindMessage("the read-only '{String.from(source.name)}'", binding: String.from(place)), line: anchor.line, column: anchor.column)
+			throw SourceParseError.deepLet(ErrorCode.semanticVarFromImmutable, message: deepLetBindMessage(readOnlyNameSubject(String.from(source.name)), binding: String.from(place)), line: anchor.line, column: anchor.column)
 		end 'aLetIsNeverMovedIntoAVar'
 
 		self.noteMoveSite(func, value: value, binding: source, destination: place, anchor: anchor)
@@ -70870,7 +70870,7 @@ export type Parser
 			end 'decidedWhereItIsInstantiated'
 
 			if binding.isSelfField 'aFieldOfTheReceiver'
-				try self.refuseStoreIntoALetField(place, into: into, subject: "a value read out of the field '{String.from(localName)}'", anchor: anchor)
+				try self.refuseStoreIntoALetField(place, into: into, subject: readOutOfPlaceSubject("the field '{String.from(localName)}'"), anchor: anchor)
 				return
 			end 'aFieldOfTheReceiver'
 
@@ -70953,7 +70953,7 @@ export type Parser
 
 	function refuseStoreOfReadOnly(value ValueId, place String, anchor Token) throws SourceParseError
 		let kind = ReadOnlyRootKind.moduleLet if self.valueMayAliasAnImmutableGlobal(value) else rootKindOfHolder(self.readOnlyFieldHolderOf(value))
-		throw SourceParseError.deepLet(ErrorCode.semanticVarFromImmutable, message: deepLetStoreMessage("a value read out of {readOnlyRootDescription(kind)}", place: place), line: anchor.line, column: anchor.column)
+		throw SourceParseError.deepLet(ErrorCode.semanticVarFromImmutable, message: deepLetStoreMessage(readOutOfSubject(kind), place: place), line: anchor.line, column: anchor.column)
 	end 'refuseStoreOfReadOnly'
 
 	function refuseStoreIntoALetField(place String, into ReadOnlyRootKind, subject String, anchor Token) throws SourceParseError
@@ -85588,15 +85588,15 @@ export type Parser
 	end 'noteReceiverWrite'
 
 	function noteWriteThroughRefusal(func IrFunction, blame WriteBlame, place String, anchor Token)
-		let root = try blame.blamedName() otherwise panic("Parser.noteWriteThroughRefusal: handed a write nothing was blamed for")
-		let kind = rootKindOfHolder(try blame.blamedHolder() otherwise panic("Parser.noteWriteThroughRefusal: handed a write nothing was blamed for"))
+		let root = blame.rootName().toByteArray()
+		let kind = blame.rootKind()
 		var deferred = self.deferredProvenanceOf(func)
 		deferred.noteWriteRefusal(WriteRefusalSite.create(root, kind: kind, place: place.toByteArray(), line: anchor.line, column: anchor.column))
 	end 'noteWriteThroughRefusal'
 
 	function refuseWriteThrough(blame WriteBlame, place String, line LineNumber, column ColumnNumber) throws SourceParseError
-		let root = String.from(try blame.blamedName() otherwise panic("Parser.refuseWriteThrough: handed a write nothing was blamed for"))
-		let kind = rootKindOfHolder(try blame.blamedHolder() otherwise panic("Parser.refuseWriteThrough: handed a write nothing was blamed for"))
+		let root = blame.rootName()
+		let kind = blame.rootKind()
 		throw SourceParseError.deepLet(ErrorCode.semanticWriteThroughImmutableRecord, message: deepLetWriteMessage(place, root: root, kind: kind), line: line, column: column)
 	end 'refuseWriteThrough'
 
@@ -90889,12 +90889,16 @@ export type Parser
 	function carryImmutableGlobalMarkToRead(source ValueId, read ValueId)
 		if self.valueMayAliasAnImmutableGlobal(source) and self.valueIsNonTextAggregate(read) 'aRecordOutOfAnImmutableGlobal'
 			self.markDerivedImmutableGlobalRead(read)
-
-			if self.valueIsAnImmortalImageRecord(source) 'outOfAnImageRecord'
-				self.markReadOnly(read, mark: ReadOnlyMark.imageRecord)
-			end 'outOfAnImageRecord'
 		end 'aRecordOutOfAnImmutableGlobal'
+
+		self.carryImageRecordMarkToRead(source, read: read)
 	end 'carryImmutableGlobalMarkToRead'
+
+	function carryImageRecordMarkToRead(source ValueId, read ValueId)
+		if self.valueIsAnImmortalImageRecord(source) and self.valueIsNonTextAggregate(read) 'outOfAnImageRecord'
+			self.markReadOnly(read, mark: ReadOnlyMark.imageRecord)
+		end 'outOfAnImageRecord'
+	end 'carryImageRecordMarkToRead'
 
 	function markDerivedImmutableGlobalRead(value ValueId)
 		self.markReadOnly(value, mark: ReadOnlyMark.immutableGlobal)
@@ -100025,7 +100029,7 @@ export type Parser
 		try self.settleCorpusPromiseRead(result, callee: callee, args: args, returnType: returnType, anchor: anchor)
 		let reading = self.retypeOpaqueReturn(result, receiver: receiver, returnType: returnType, scopeFilePath: self.signatures.recordedReturnDeclFileOf(callee))
 
-		// After the retype: the result is tagged `typeParameter` until then, and the module-`let` carry marks
+		// After the retype: the result is tagged `typeParameter` until then, and the image-record carry marks
 		// only a non-text aggregate, so marking first leaves the `let`'s element writable through a `var`.
 		self.markStoredElementResult(result, receiver: receiver, callee: callee, returnType: returnType)
 		return reading
@@ -100039,7 +100043,7 @@ export type Parser
 	end 'markStoredElementResult'
 
 	function markStoredElementRead(result ValueId, container ValueId, elementIsReadOnly bool)
-		self.carryImmutableGlobalMarkToRead(container, read: result)
+		self.carryImageRecordMarkToRead(container, read: result)
 		self.carryReadOnlyFieldMark(container, read: result, fromALetField: false)
 
 		if elementIsReadOnly 'aReadOnlyElementType'

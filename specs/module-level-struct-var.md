@@ -257,5 +257,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:19:5: cannot store a value read out of a module-level `let` into mutable place 'an element of the container push writes'; use clone()
+error E3078: <fragment>:19:5: cannot store 'SharedFacts', which is read-only (a module-level `let`), into mutable place 'an element of the container push writes'; use clone()
 ```

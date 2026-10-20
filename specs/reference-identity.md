@@ -378,7 +378,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:10:4: cannot store a value read out of a module-level `let` into mutable place 'an element of the container push writes'; use clone()
+error E3078: <fragment>:10:4: cannot store 'Anchor', which is read-only (a module-level `let`), into mutable place 'an element of the container push writes'; use clone()
 ```
 
 <!-- test: a-durable-store-of-a-cloned-constant-is-its-own-object -->
@@ -483,7 +483,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:10:6: cannot store a value read out of a module-level `let` into mutable place 'an element of the container push writes'; use clone()
+error E3078: <fragment>:10:6: cannot store 'Shared', which is read-only (a module-level `let`), into mutable place 'an element of the container push writes'; use clone()
 ```
 
 <!-- test: a-durable-store-of-a-cloned-let-map-copies-it -->

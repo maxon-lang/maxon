@@ -2860,7 +2860,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:25:22: cannot pass a value read out of a module-level `let`, which is read-only, to a function that writes parameter 'p' (in main); pass a clone()
+error E3159: <fragment>:25:22: cannot pass the result of 'get', which may share storage with a module-level `let`, to a function that writes parameter 'p' (in main); pass a clone()
 ```
 
 <!-- test: async-await.error.a-let-naming-an-immutable-global-is-handed-to-neither-a-reassigning-function-nor-a-coroutine -->
@@ -2902,7 +2902,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3159: <fragment>:30:6: cannot pass 'b', which is read-only (a module-level `let`), to a function that writes parameter 'p' (in main); pass a clone()
+error E3159: <fragment>:30:6: cannot pass a value, which may share storage with a module-level `let`, to a function that writes parameter 'p' (in main); pass a clone()
 error E3159: <fragment>:31:22: cannot pass 'b', which is read-only (a module-level `let`), to a function that writes parameter 'p' (in main); pass a clone()
 ```
 
@@ -2969,7 +2969,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:21:6: cannot assign a value read out of a module-level `let` to mutable binding 'b'; use 'let' instead of 'var', or use clone()
+error E3078: <fragment>:21:6: cannot assign a value, which may share storage with a module-level `let`, to mutable binding 'b'; use 'let' instead of 'var', or use clone()
 ```
 
 <!-- test: async-await.a-cell-resident-co-owner-is-shared-with-a-reading-coroutine -->

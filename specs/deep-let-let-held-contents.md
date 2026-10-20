@@ -275,7 +275,7 @@ end 'main'
 ```
 ```maxoncstderr
 error E3078: <fragment>:34:9: cannot pass 'Named', which is read-only (a module-level `let`), to parameter 'next' of 'Walker.aim', which keeps it where something may write it; pass a clone()
-error E3078: <fragment>:35:9: cannot pass a value read out of a module-level `let`, which is read-only, to parameter 'next' of 'Walker.aim', which keeps it where something may write it; pass a clone()
+error E3078: <fragment>:35:9: cannot pass the result of 'fallback', which may share storage with a module-level `let`, to parameter 'next' of 'Walker.aim', which keeps it where something may write it; pass a clone()
 error E3078: <fragment>:37:9: cannot pass 'chosen', which is read-only (a module-level `let`), to parameter 'next' of 'Walker.aim', which keeps it where something may write it; pass a clone()
 ```
 

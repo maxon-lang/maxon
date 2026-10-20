@@ -81,21 +81,53 @@ function kindIsAPartOfItsHolder(kind ReadOnlyRootKind) returns bool
 	return kind == ReadOnlyRootKind.letField
 end 'kindIsAPartOfItsHolder'
 
-function readOnlyRootClause(root String, kind ReadOnlyRootKind) returns String
+export let UnattributedProducer = "a value"
+
+// Every subject that ends in a `which` clause carries its closing comma, so each message interpolates a subject
+// bare. These wordings are pinned byte-for-byte by the specs' `maxoncstderr` blocks.
+export function sharingStorageSubject(producer String, storage String) returns String
+	return "{producer}, which may share storage with {storage},"
+end 'sharingStorageSubject'
+
+export function unattributedSharingSubject(kind ReadOnlyRootKind) returns String
+	return sharingStorageSubject(UnattributedProducer, storage: readOnlyRootDescription(kind))
+end 'unattributedSharingSubject'
+
+export function readOutOfSubject(kind ReadOnlyRootKind) returns String
+	if kind == ReadOnlyRootKind.moduleLet 'sharesAModuleLetsStorage'
+		return unattributedSharingSubject(kind)
+	end 'sharesAModuleLetsStorage'
+
+	return readOutOfPlaceSubject(readOnlyRootDescription(kind))
+end 'readOutOfSubject'
+
+export function readOutOfPlaceSubject(place String) returns String
+	return "a value read out of {place}"
+end 'readOutOfPlaceSubject'
+
+export function readOnlyNameSubject(name String) returns String
+	return "the read-only '{name}'"
+end 'readOnlyNameSubject'
+
+export function readOnlyRootSubject(root String, kind ReadOnlyRootKind) returns String
+	if root.isEmpty() and kind == ReadOnlyRootKind.moduleLet 'aModuleLetsStorageWithNoName'
+		return readOutOfSubject(kind)
+	end 'aModuleLetsStorageWithNoName'
+
 	if root.isEmpty() 'aValueWithNoName'
-		return "a value read out of {readOnlyRootDescription(kind)}, which is read-only"
+		return "{readOutOfSubject(kind)}, which is read-only,"
 	end 'aValueWithNoName'
 
 	if kindIsAPartOfItsHolder(kind) 'aPartOfTheNamedHolder'
-		return "{readOnlyRootDescription(kind)} of '{root}', which is read-only"
+		return "{readOnlyRootDescription(kind)} of '{root}', which is read-only,"
 	end 'aPartOfTheNamedHolder'
 
-	return "'{root}', which is read-only ({readOnlyRootDescription(kind)})"
-end 'readOnlyRootClause'
+	return "'{root}', which is read-only ({readOnlyRootDescription(kind)}),"
+end 'readOnlyRootSubject'
 
 function readOnlyRootStatement(root String, kind ReadOnlyRootKind) returns String
 	if root.isEmpty() 'aValueWithNoName'
-		return "a value read out of {readOnlyRootDescription(kind)} is read-only"
+		return "{readOutOfSubject(kind)} is read-only"
 	end 'aValueWithNoName'
 
 	return "'{root}' is read-only ({readOnlyRootDescription(kind)})"
@@ -104,15 +136,23 @@ end 'readOnlyRootStatement'
 export function deepLetWriteMessage(place String, root String, kind ReadOnlyRootKind) returns String
 	let named = place if kindIsAPartOfItsHolder(kind) else root
 
-	return "cannot write through '{place}': {readOnlyRootStatement(named, kind: kind)} and nothing reachable through it may be written; use 'var', or write a clone()"
+	return deepLetWriteStatementMessage(place, statement: readOnlyRootStatement(named, kind: kind))
 end 'deepLetWriteMessage'
+
+export function deepLetWriteSharedStorageMessage(place String, subject String) returns String
+	return deepLetWriteStatementMessage(place, statement: "{subject} is read-only")
+end 'deepLetWriteSharedStorageMessage'
+
+function deepLetWriteStatementMessage(place String, statement String) returns String
+	return "cannot write through '{place}': {statement} and nothing reachable through it may be written; use 'var', or write a clone()"
+end 'deepLetWriteStatementMessage'
 
 export function deepLetConsumeMessage(door ByteArray, kind ReadOnlyRootKind) returns String
 	return "cannot consume with '{String.from(door)}' a promise held in {readOnlyRootDescription(kind)}: consuming a promise empties the slot it was read from, and nothing reachable through a read-only value may be written; hold it in a `var` field"
 end 'deepLetConsumeMessage'
 
-export function deepLetCallMessage(root String, kind ReadOnlyRootKind, paramName String, functionName String) returns String
-	return "cannot pass {readOnlyRootClause(root, kind: kind)}, to a function that writes parameter '{paramName}' (in {functionName}); pass a clone()"
+export function deepLetCallMessage(subject String, paramName String, functionName String) returns String
+	return "cannot pass {subject} to a function that writes parameter '{paramName}' (in {functionName}); pass a clone()"
 end 'deepLetCallMessage'
 
 export function deepLetConversionMessage(calleeText String, interfaceName String) returns String
@@ -131,6 +171,7 @@ export function deepLetStoredRootSubject(name String, kind ReadOnlyRootKind) ret
 	return match kind 'kind'
 		letBinding gives "`let` '{name}'"
 		view gives "view '{name}'"
+		moduleLet gives readOnlyRootSubject(name, kind: kind)
 		forElement or
 		loopVariable or
 		ifLetBinding or
@@ -140,14 +181,13 @@ export function deepLetStoredRootSubject(name String, kind ReadOnlyRootKind) ret
 		readOnlyElement or
 		storedMapKey or
 		storedSetElement or
-		moduleLet or
 		destructuredTuple or
-		sharedView gives "a value read out of {readOnlyRootDescription(kind)}"
+		sharedView gives readOutOfSubject(kind)
 	end 'kind'
 end 'deepLetStoredRootSubject'
 
-export function deepLetElementKeptMessage(name String, kind ReadOnlyRootKind, method String) returns String
-	return deepLetStoreMessage(deepLetStoredRootSubject(name, kind: kind), place: "an element of the container {method} writes")
+export function deepLetElementKeptMessage(subject String, method String) returns String
+	return deepLetStoreMessage(subject, place: "an element of the container {method} writes")
 end 'deepLetElementKeptMessage'
 
 export function viewReturnedMessage(name String) returns String
@@ -333,21 +373,19 @@ export function holderIsPermanent(holder WriteBlameHolder) returns bool
 	end 'holder'
 end 'holderIsPermanent'
 
-function deepLetPassedMessage(root String, kind ReadOnlyRootKind, paramName String, functionName String, fate String) returns String
-	return "cannot pass {readOnlyRootClause(root, kind: kind)}, to parameter '{paramName}' of '{functionName}', which {fate}; pass a clone()"
+export enum ArgumentFate
+	keptWhereWritable
+	consumed
+end 'ArgumentFate'
+
+export function deepLetPassedMessage(subject String, paramName String, functionName String, fate ArgumentFate) returns String
+	let outcome = match fate 'fate'
+		keptWhereWritable gives "keeps it where something may write it"
+		consumed gives "consumes it"
+	end 'fate'
+
+	return "cannot pass {subject} to parameter '{paramName}' of '{functionName}', which {outcome}; pass a clone()"
 end 'deepLetPassedMessage'
-
-export function deepLetKeptMessage(root String, kind ReadOnlyRootKind, paramName String, functionName String) returns String
-	return deepLetPassedMessage(root, kind: kind, paramName: paramName, functionName: functionName, fate: "keeps it where something may write it")
-end 'deepLetKeptMessage'
-
-export function deepLetConsumedMessage(root String, kind ReadOnlyRootKind, paramName String, functionName String) returns String
-	return deepLetPassedMessage(root, kind: kind, paramName: paramName, functionName: functionName, fate: "consumes it")
-end 'deepLetConsumedMessage'
-
-export function deepLetConsumedArgumentMessage(subject String, paramName String, functionName String) returns String
-	return "cannot pass {subject} to parameter '{paramName}' of '{functionName}', which consumes it; pass a clone()"
-end 'deepLetConsumedArgumentMessage'
 
 export function deepLetKeptArgumentMessage(into ReadOnlyRootKind, subject String, paramName String, functionName String) returns String
 	return "cannot pass {subject} to parameter '{paramName}' of '{functionName}', which stores it into a {deepLetKeptSlotName(into)}: {deepLetNoOtherWriterReason(into)}"

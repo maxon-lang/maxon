@@ -645,7 +645,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:8:5: cannot store a value read out of a module-level `let` into mutable place 'an element of the container push writes'; use clone()
+error E3078: <fragment>:8:5: cannot store 'Keyword', which is read-only (a module-level `let`), into mutable place 'an element of the container push writes'; use clone()
 ```
 
 <!-- test: error.byte-string-literal.constant-handed-to-a-factory-that-keeps-it-is-refused -->
@@ -695,7 +695,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3078: <fragment>:8:5: cannot store a value read out of a module-level `let` into mutable place 'an element of the container append writes'; use clone()
+error E3078: <fragment>:8:5: cannot store 'Keyword', which is read-only (a module-level `let`), into mutable place 'an element of the container append writes'; use clone()
 ```
 
 <!-- test: error.byte-string-literal.negative-resize-is-refused -->

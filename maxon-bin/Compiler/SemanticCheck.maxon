@@ -6307,10 +6307,10 @@ function refuseImmutableArgAtWrittenParam(project Project, func IrFunction, argI
 		provenance.noteLastArgumentJudged()
 	end 'judgedHere'
 
-	let root = String.from(try blamed.blamedName() otherwise panic("refuseImmutableArgAtWrittenParam: a blamed argument names its root"))
+	let root = blamed.rootName()
 
 	match report 'where'
-		atTheCall then reportPositioned(project, code: ErrorCode.semanticWriteThroughImmutableRecord, message: immutableArgAtTheCallMessage(root, blamed: blamed, parameter: parameter, functionName: functionSourceName(project, func: func)), line: callRange.line, column: callRange.column, filePath: filePath)
+		atTheCall then reportPositioned(project, code: ErrorCode.semanticWriteThroughImmutableRecord, message: immutableArgAtTheCallMessage(root, provenance: provenance, func: func, argId: argId, call: callRange, blamed: blamed, parameter: parameter, functionName: functionSourceName(project, func: func)), line: callRange.line, column: callRange.column, filePath: filePath)
 		handedIn(range, writer, callee) then reportPositioned(project, code: ErrorCode.semanticWriteThroughImmutableRecord, message: callbackWritesHandedValueMessage(writer, parameter: parameter, callee: callee, blamed: root), line: range.line, column: range.column, filePath: filePath)
 		dispatchedTo(writer, via) then reportPositioned(project, code: ErrorCode.semanticWriteThroughImmutableRecord, message: callbackWritesHandedValueMessage(writer, parameter: parameter, callee: via, blamed: root), line: callRange.line, column: callRange.column, filePath: filePath)
 	end 'where'
@@ -6318,7 +6318,7 @@ function refuseImmutableArgAtWrittenParam(project Project, func IrFunction, argI
 	return true
 end 'refuseImmutableArgAtWrittenParam'
 
-function immutableArgAtTheCallMessage(root String, blamed WriteBlame, parameter ArgumentParameter, functionName String) returns String
+function immutableArgAtTheCallMessage(root String, provenance ProvenanceTracer, func IrFunction, argId ValueId, call SourceRange, blamed WriteBlame, parameter ArgumentParameter, functionName String) returns String
 	if blamed.isHeldByAClosure() 'aClosuresOwnCopy'
 		match parameter 'parameter'
 			named(name) then return capturedCopyMutatingCallMessage(root, paramName: displayParamName(name), functionName: functionName)
@@ -6326,7 +6326,7 @@ function immutableArgAtTheCallMessage(root String, blamed WriteBlame, parameter 
 		end 'parameter'
 	end 'aClosuresOwnCopy'
 
-	return writtenArgumentMessage(root, kind: rootKindOfHolder(try blamed.blamedHolder() otherwise panic("immutableArgAtTheCallMessage: a blamed argument has a holder")), parameter: parameter, functionName: functionName)
+	return writtenArgumentMessage(provenance.blamedSubject(func, value: argId, blamed: blamed, call: call), parameter: parameter, functionName: functionName)
 end 'immutableArgAtTheCallMessage'
 
 function checkComparisonMethodsDoNotWrite(project Project, module MaxonModule, mutationSummary ParamMutationSummary, provenance ProvenanceTracer)
@@ -6398,11 +6398,10 @@ function checkReadOnlyArgToKeepingParam(func IrFunction, result ValueId, callee 
 			continue
 		end 'notKeptOrDefaulted'
 
-		let root = String.from(try blamed.blamedName() otherwise panic("checkReadOnlyArgToKeepingParam: a blamed argument names its root"))
-		let kind = rootKindOfHolder(holder)
 		let paramName = displayParamName(try sig.paramNames.get(pos) otherwise panic("checkReadOnlyArgToKeepingParam: paramNames.get OOB at {pos} inside paramCount()"))
+		let wording = keptWordingOf(func, callee: callee, sig: sig, args: args, position: pos)
 		provenance.noteKeptRefused(argId, line: callRange.line, column: callRange.column)
-		provenance.refuse(callRange.line, column: callRange.column, code: ErrorCode.semanticVarFromImmutable, message: keptArgumentMessage(keptWordingOf(func, callee: callee, sig: sig, args: args, position: pos), root: root, kind: kind, paramName: paramName))
+		provenance.refuse(callRange.line, column: callRange.column, code: ErrorCode.semanticVarFromImmutable, message: keptArgumentMessage(wording, subject: provenance.keptArgumentSubject(func, value: argId, blamed: blamed, wording: wording, call: callRange), paramName: paramName))
 		return maskWithParam(NoParamPositions, param: pos)
 	end 'eachArg'
 
